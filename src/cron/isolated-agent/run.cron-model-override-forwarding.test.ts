@@ -380,6 +380,11 @@ describe("runCronIsolatedAgentTurn — cron model override forwarding (#58065)",
           model: "claude-opus-4-6",
           sessionId: "",
           clearCliSessionBinding: true,
+          cliSessionAuthIdentity: {
+            authProfileId: "anthropic:cron",
+            authEpoch: "epoch-cron",
+            authEpochVersion: 1,
+          },
           usage: { input: 10, output: 20 },
         },
       },
@@ -392,7 +397,16 @@ describe("runCronIsolatedAgentTurn — cron model override forwarding (#58065)",
     );
 
     expect(result.status).toBe("ok");
-    expect(clearCliSessionMock).toHaveBeenCalledWith(cronSession.sessionEntry, "claude-cli");
+    // The cron lane forwards the run's own auth identity, so a cleared binding
+    // that recorded none still leaves an auth-boundary tombstone.
+    expect(clearCliSessionMock).toHaveBeenCalledWith(cronSession.sessionEntry, "claude-cli", {
+      kind: "current",
+      identity: {
+        authProfileId: "anthropic:cron",
+        authEpoch: "epoch-cron",
+        authEpochVersion: 1,
+      },
+    });
   });
 
   it("persists complete CLI bindings after cron runs", async () => {

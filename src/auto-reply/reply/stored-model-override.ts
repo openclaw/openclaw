@@ -22,8 +22,10 @@ export function normalizeStoredRuntimeModelRef(
   normalization: RuntimeModelNormalization = RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
 ) {
   const normalized = normalizeModelRef(provider, model, normalization);
+  // Gate on the session id, not on the record: a cleared binding leaves an
+  // auth-boundary tombstone behind and that session is no longer CLI-bound.
   const hasCliSessionBinding =
-    sessionEntry?.cliSessionBindings?.[normalized.provider] !== undefined;
+    sessionEntry?.cliSessionBindings?.[normalized.provider]?.sessionId !== undefined;
   const canonicalProvider =
     cfg && hasCliSessionBinding
       ? resolveCliRuntimeCanonicalProvider({

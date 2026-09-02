@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../../../test/helpers/temp-dir.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
-import { resolveSessionEntryResetFreshness } from "./entry-freshness.js";
+import { hasProviderOwnedSession, resolveSessionEntryResetFreshness } from "./entry-freshness.js";
 import {
   appendTranscriptEvent,
   replaceSessionEntry,
@@ -133,6 +133,61 @@ describe("resolveSessionEntryResetFreshness", () => {
 
     expect(result.state).toBe("fresh");
     expect(result.freshness).toMatchObject({ fresh: true });
+  });
+
+  it("does not treat a cleared auth-boundary tombstone as a provider-owned session", async () => {
+    const now = new Date("2026-01-02T12:00:00Z").getTime();
+    const lastTouchedAt = new Date("2026-01-01T08:00:00Z").getTime();
+    const tombstoneKey = "agent:main:main:thread:provider-tombstone";
+    const liveKey = "agent:main:main:thread:provider-live";
+    await upsertSessionEntryCore(
+      { sessionKey: tombstoneKey, storePath },
+      {
+        sessionId: "session-provider-tombstone",
+        updatedAt: lastTouchedAt,
+        providerOverride: "claude-cli",
+        // What `clearCliSession` leaves behind: the auth identity the transcript
+        // was written under, with the resumable handle destroyed.
+        cliSessionBindings: {
+          "claude-cli": { authProfileId: "anthropic:old", authEpoch: "epoch-1" },
+        },
+      },
+    );
+    await upsertSessionEntryCore(
+      { sessionKey: liveKey, storePath },
+      {
+        sessionId: "session-provider-live",
+        updatedAt: lastTouchedAt,
+        providerOverride: "claude-cli",
+        cliSessionBindings: { "claude-cli": { sessionId: "cli-session-live" } },
+      },
+    );
+
+    const read = (sessionKey: string) =>
+      resolveSessionEntryResetFreshness({
+        sessionKey,
+        storePath,
+        sessionCfg: {},
+        resetType: "thread",
+        now,
+      });
+
+    // A tombstone owns no resumable native session, so it must not stand in for
+    // one when callers decide whether to skip implicit expiry.
+    //
+    // Only the predicate can be asserted here: an unconfigured policy resolves to
+    // mode "none", which reports every entry fresh, so both entries stay fresh no
+    // matter which way the predicate goes. The predicate still has to be right --
+    // the `configured !== true && hasProviderOwnedSession(...)` short circuit in
+    // the callers skips `evaluateSessionFreshness` outright, including its
+    // `updatedAt === 0` pending-reset marker.
+    const tombstoneResult = read(tombstoneKey);
+    expect(hasProviderOwnedSession(tombstoneResult.entry)).toBe(false);
+    expect(tombstoneResult.state).toBe("fresh");
+
+    const liveResult = read(liveKey);
+    expect(hasProviderOwnedSession(liveResult.entry)).toBe(true);
+    expect(liveResult.state).toBe("fresh");
   });
 
   it("applies configured reset policies to provider-owned sessions", async () => {

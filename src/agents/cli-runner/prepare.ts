@@ -6,6 +6,7 @@ import { ensureSystemPromptCacheBoundary } from "@openclaw/ai/internal/shared";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { messageToolOwnsVisibleReply } from "../../auto-reply/source-reply-delivery-mode.js";
 import { getRuntimeConfig } from "../../config/config.js";
+import { runWithSessionTranscriptReadFence } from "../../config/sessions/session-transcript-read-fence.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   assertContextEngineHostSupport,
@@ -455,8 +456,31 @@ function buildCliAuthProfileResolutionError(params: {
   });
 }
 
-/** Builds the complete context required to execute a CLI-backed agent run. */
+/**
+ * Builds the complete context required to execute a CLI-backed agent run.
+ *
+ * Every transcript read below — hook history and the reseed history prompt —
+ * must observe the conversation as it stood *before* this turn's user row. A
+ * model/provider fallback rebuilds preparation after the first attempt already
+ * persisted that row (`run-embedded-attempt` then suppresses re-persisting it),
+ * so an unfenced read returns it and the prompt carries the same text twice:
+ * once inside recovered history and again as the explicit next user message.
+ * This is the recorder admission fence the native harness path already
+ * establishes in `context-engine-lifecycle`, not a second mechanism — the
+ * SQLite readers hold the matching `beforeRawSeq` guard, they were simply never
+ * entered from the CLI lane. Absent a recorder or before admission the receipt
+ * is undefined and the read stays unfenced, exactly as before.
+ */
 export async function prepareCliRunContext(
+  inputParams: RunCliAgentParams,
+): Promise<PreparedCliRunContext> {
+  return await runWithSessionTranscriptReadFence(
+    inputParams.userTurnTranscriptRecorder?.getAdmissionReceipt(),
+    async () => await prepareCliRunContextWithinReadFence(inputParams),
+  );
+}
+
+async function prepareCliRunContextWithinReadFence(
   inputParams: RunCliAgentParams,
 ): Promise<PreparedCliRunContext> {
   let params = inputParams.config ? inputParams : { ...inputParams, config: getRuntimeConfig() };
@@ -1500,6 +1524,13 @@ export async function prepareCliRunContext(
       authProfileId: effectiveAuthProfileId,
       skipLocalCredential: skipLocalCredentialEpoch,
     });
+    // Published before the process starts so a turn that dies mid-run can still
+    // tell its clear paths which identity the run belonged to.
+    params.onCliSessionAuthIdentity?.({
+      ...(effectiveAuthProfileId ? { authProfileId: effectiveAuthProfileId } : {}),
+      ...(authEpoch ? { authEpoch } : {}),
+      authEpochVersion: CLI_AUTH_EPOCH_VERSION,
+    });
     const authBindingFingerprint = params.onSuccessfulAuthBinding
       ? resolveCliAuthBindingFingerprint({
           provider: params.provider,
@@ -1604,7 +1635,7 @@ export async function prepareCliRunContext(
     // Native controls target the already-owned transcript without rebuilding its turn-time MCP
     // topology. Re-validating that topology here would discard the session being compacted.
     const controlOperationCliSessionId = isControlOperation
-      ? params.cliSessionBinding?.sessionId.trim() || params.cliSessionId?.trim()
+      ? params.cliSessionBinding?.sessionId?.trim() || params.cliSessionId?.trim()
       : undefined;
     const reusableCliSessionCandidate: CliReusableSession = ignoreCliSessionCandidate
       ? { mode: "none" }
@@ -1849,7 +1880,21 @@ export async function prepareCliRunContext(
     }
     const allowRawTranscriptReseed =
       backendResolved.config.reseedFromRawTranscriptWhenUncompacted === true;
-    const rawTranscriptReseedReason = reusableCliSessionId ? "session-expired" : invalidatedReason;
+    // A session with no stored binding at all (`resolveCliSessionReuse` -> `{mode:"none"}`,
+    // e.g. after an aborted turn clears it) has neither a reusable session id nor an
+    // invalidation reason, so the reseed would be refused for lack of a reason and the
+    // conversation would silently restart with no history. This default stays safe only
+    // because `clearCliSession` — the single owner every clear path lands on — leaves an
+    // auth-boundary tombstone instead of erasing the binding: `{mode:"none"}` therefore
+    // never stands for an erased auth boundary, which still resolves here as
+    // `auth-profile`/`auth-epoch`, or as `auth-unknown` when the clear ran outside a
+    // turn's resolved auth and could not name an identity at all. Those three reasons
+    // are refused by `loadCliSessionReseedMessages` for every branch it has -- the raw
+    // tail via the allowlist, and the compacted summary plus tail via the auth-crossing
+    // check that runs before the load.
+    const rawTranscriptReseedReason = reusableCliSessionId
+      ? "session-expired"
+      : (invalidatedReason ?? "missing-transcript");
     // Node placement keeps this: the history prompt is built from the
     // gateway-side OpenClaw transcript, so a fresh remote CLI session still
     // receives prior conversation context via stdin.

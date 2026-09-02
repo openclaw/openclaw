@@ -162,15 +162,26 @@ export async function finalizeCronRun(params: {
     if (isCliProvider(providerUsed, prepared.cfgWithAgentDefaults)) {
       const cliSessionBinding = finalRunResult.meta?.agentMeta?.cliSessionBinding;
       const cliSessionId = finalRunResult.meta?.agentMeta?.sessionId?.trim();
+      const cliSessionAuthIdentity = finalRunResult.meta?.agentMeta?.cliSessionAuthIdentity;
       if (finalRunResult.meta?.agentMeta?.clearCliSessionBinding === true) {
-        const { clearCliSession } = await import("../../agents/cli-runner.runtime.js");
-        clearCliSession(prepared.cronSession.sessionEntry, providerUsed);
+        const { clearCliSession, cliSessionClearAuthFromRun } =
+          await import("../../agents/cli-runner.runtime.js");
+        clearCliSession(
+          prepared.cronSession.sessionEntry,
+          providerUsed,
+          cliSessionClearAuthFromRun(cliSessionAuthIdentity),
+        );
       } else if (cliSessionBinding?.sessionId?.trim()) {
         const { setCliSessionBinding } = await import("../../agents/cli-runner.runtime.js");
         setCliSessionBinding(prepared.cronSession.sessionEntry, providerUsed, cliSessionBinding);
       } else if (cliSessionId) {
         const { setCliSessionId } = await import("../../agents/cli-runner.runtime.js");
-        setCliSessionId(prepared.cronSession.sessionEntry, providerUsed, cliSessionId);
+        setCliSessionId(
+          prepared.cronSession.sessionEntry,
+          providerUsed,
+          cliSessionId,
+          cliSessionAuthIdentity,
+        );
       }
     }
   }

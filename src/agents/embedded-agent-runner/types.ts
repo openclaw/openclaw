@@ -3,6 +3,7 @@
  */
 import type { HeartbeatToolResponse } from "../../auto-reply/heartbeat-tool-response.js";
 import type {
+  CliSessionAuthIdentitySnapshot,
   CliSessionBinding,
   SessionContextBudgetStatus,
   SessionSystemPromptReport,
@@ -53,6 +54,13 @@ export type EmbeddedAgentMeta = {
   credentialSource?: AgentRuntimeCredentialSource;
   fallbackAttempts?: FallbackAttempt[];
   cliSessionBinding?: CliSessionBinding;
+  /**
+   * Auth identity this CLI run resolved, reported whether or not the run kept a
+   * binding. Store writers hand it to `clearCliSession` so a cleared record that
+   * carried no identity of its own still leaves an auth-boundary tombstone, and
+   * to `setCliSessionId` so the bare-id fallback stops writing one.
+   */
+  cliSessionAuthIdentity?: CliSessionAuthIdentitySnapshot;
   clearCliSessionBinding?: boolean;
   compactionCount?: number;
   /**

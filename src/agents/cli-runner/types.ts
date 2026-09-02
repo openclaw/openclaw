@@ -23,7 +23,10 @@ import type {
 } from "../../config/sessions.js";
 import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.js";
 import type { PrepareAssistantTranscriptMessage } from "../../config/sessions/transcript-assistant-delivery.js";
-import type { SessionSystemPromptReport } from "../../config/sessions/types.js";
+import type {
+  CliSessionAuthIdentitySnapshot,
+  SessionSystemPromptReport,
+} from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ContextEngine } from "../../context-engine/types.js";
 import type { CronScheduledToolCallerOrigin } from "../../cron/scheduled-tool-policy.js";
@@ -220,6 +223,16 @@ export type RunCliAgentParams = {
     skipLocalCredential?: true;
   }) => void;
   onBeforeFreshCliSessionRetry?: (params: CliSessionRetryParams) => boolean | Promise<boolean>;
+  /**
+   * Report the auth identity this run resolved, as soon as it is resolved.
+   *
+   * The result-bearing store writers read the same identity off `agentMeta`.
+   * This seam exists for the clear paths that never see a result — the caller's
+   * own error and retry handlers — so they can still hand `clearCliSession` the
+   * identity the turn was running under instead of erasing a binding that
+   * recorded none.
+   */
+  onCliSessionAuthIdentity?: (identity: CliSessionAuthIdentitySnapshot) => void;
   bootstrapPromptWarningSignaturesSeen?: string[];
   bootstrapPromptWarningSignature?: string;
   bootstrapContextMode?: BootstrapContextMode;

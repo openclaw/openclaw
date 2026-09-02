@@ -1060,9 +1060,17 @@ describe("runCliTurnCompactionLifecycle", () => {
     expect(maintenance).not.toHaveBeenCalled();
     expect(recordCliCompactionInStore).not.toHaveBeenCalled();
     expect(updatedEntry?.compactionCount).toBeUndefined();
-    expect(updatedEntry?.cliSessionBindings?.codex).toBeUndefined();
+    // This repair runs before the turn resolves its auth, so it clears with
+    // unknown provenance: the stale native handle and its legacy mirror go, and
+    // the record stays behind as an unknown-provenance tombstone so the next
+    // turn cannot read the session as never-bound and reseed prior history.
+    expect(updatedEntry?.cliSessionBindings?.codex).toStrictEqual({
+      clearedAuthProvenance: "unknown",
+    });
     expect(updatedEntry?.cliSessionIds?.codex).toBeUndefined();
-    expect(sessionStore[sessionKey]?.cliSessionBindings?.codex).toBeUndefined();
+    expect(sessionStore[sessionKey]?.cliSessionBindings?.codex).toStrictEqual({
+      clearedAuthProvenance: "unknown",
+    });
     expect(sessionStore[sessionKey]?.cliSessionIds?.codex).toBeUndefined();
   });
 

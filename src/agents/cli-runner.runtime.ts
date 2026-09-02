@@ -3,6 +3,7 @@
 export { runCliAgent } from "./cli-runner.js";
 export {
   clearCliSession,
+  cliSessionClearAuthFromRun,
   getCliSessionBinding,
   getCliSessionId,
   setCliSessionBinding,

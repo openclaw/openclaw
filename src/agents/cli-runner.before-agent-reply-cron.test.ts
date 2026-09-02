@@ -657,6 +657,12 @@ describe("runCliAgent before_agent_reply seam", () => {
 
     expect(result.meta.agentMeta?.sessionId).toBe("");
     expect(result.meta.agentMeta?.clearCliSessionBinding).toBe(true);
+    // The clear is requested before `prepareCliRunContext` resolves any auth, so
+    // this meta carries no `cliSessionAuthIdentity` and never can. That is what
+    // makes the resulting `clearCliSession` unknown-provenance, and it is the
+    // premise `session-history.reseed-unknown-provenance.test.ts` starts from:
+    // if this ever begins reporting an identity, that suite's fixture is stale.
+    expect(result.meta.agentMeta?.cliSessionAuthIdentity).toBeUndefined();
     expect(prepareCliRunContextMock).not.toHaveBeenCalled();
     expect(executePreparedCliRunMock).not.toHaveBeenCalled();
   });

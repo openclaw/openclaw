@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { withTestAdmittedRunContext } from "../../agents/admitted-run-context.test-support.js";
+import { CLI_SESSION_CLEAR_AUTH_UNKNOWN } from "../../agents/cli-session.js";
 import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
 import { FailoverError } from "../../agents/failover-error.js";
 import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
@@ -693,16 +694,25 @@ describe("clearCliSessionBindingForRun", () => {
       sessionStore: { main: storedEntry },
       storePath,
       activeSessionEntry: activeEntry,
+      clearAuthProvenance: CLI_SESSION_CLEAR_AUTH_UNKNOWN,
     });
 
+    // The resumable handle is what a clear must destroy — the session id and
+    // both legacy mirrors. The record itself stays as an unknown-provenance
+    // tombstone: this binding recorded no identity and the clear resolved none,
+    // so erasing it would let the next turn read the session as never-bound.
     for (const entry of [activeEntry, storedEntry]) {
-      expect(entry.cliSessionBindings?.["claude-cli"]).toBeUndefined();
+      expect(entry.cliSessionBindings?.["claude-cli"]).toStrictEqual({
+        clearedAuthProvenance: "unknown",
+      });
       expect(entry.cliSessionIds?.["claude-cli"]).toBeUndefined();
       expect(entry.claudeCliSessionId).toBeUndefined();
       expect(entry.updatedAt).toBeGreaterThan(1);
     }
     const persisted = loadSessionEntry({ storePath, sessionKey: "main" });
-    expect(persisted?.cliSessionBindings?.["claude-cli"]).toBeUndefined();
+    expect(persisted?.cliSessionBindings?.["claude-cli"]).toStrictEqual({
+      clearedAuthProvenance: "unknown",
+    });
     expect(persisted?.cliSessionIds?.["claude-cli"]).toBeUndefined();
     expect(persisted?.claudeCliSessionId).toBeUndefined();
   });
@@ -720,6 +730,7 @@ describe("clearCliSessionBindingForRun", () => {
       provider: "claude-cli",
       expectedSessionId: "stale-session",
       activeSessionEntry: entry,
+      clearAuthProvenance: CLI_SESSION_CLEAR_AUTH_UNKNOWN,
     });
 
     expect(entry.cliSessionBindings["claude-cli"].sessionId).toBe("replacement-session");

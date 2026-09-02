@@ -594,6 +594,15 @@ export function requireMockCallArgWithFields(
   return requireRecord(found, label);
 }
 
+/**
+ * A cleared CLI binding keeps an unknown-provenance tombstone: the resumable
+ * handle is destroyed, but the record survives so the next turn cannot mistake
+ * the session for one that was never bound.
+ */
+export function expectClearedAuthTombstone(binding: unknown) {
+  expect(binding).toStrictEqual({ clearedAuthProvenance: "unknown" });
+}
+
 export function expectBlockReplyCall(
   onBlockReply: unknown,
   index: number,

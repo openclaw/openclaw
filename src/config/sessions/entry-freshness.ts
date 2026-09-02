@@ -45,9 +45,18 @@ type ResolvedSessionEntryResetFreshness =
       resetType: SessionResetType;
     };
 
+/**
+ * True when the provider still owns a resumable native session for this entry.
+ *
+ * Gates on `sessionId`, not on the binding record: a cleared binding leaves an
+ * auth-boundary tombstone behind (see `clearCliSession`), and a tombstone owns
+ * nothing resumable. Callers use this to skip `evaluateSessionFreshness`
+ * outright, so a truthy answer also suppresses that function's `updatedAt === 0`
+ * pending-reset marker -- which a cleared session has no claim to.
+ */
 export function hasProviderOwnedSession(entry: SessionEntry | undefined): boolean {
   const provider = normalizeOptionalString(entry?.providerOverride ?? entry?.modelProvider);
-  return Boolean(provider && getCliSessionBinding(entry, provider));
+  return Boolean(provider && getCliSessionBinding(entry, provider)?.sessionId);
 }
 
 /** Resolves one session entry's reset freshness using the runtime lifecycle rules. */

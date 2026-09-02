@@ -123,8 +123,31 @@ export type SessionDiffBaseline = {
   truncated?: true;
 };
 
+/**
+ * The auth identity one CLI turn actually ran under.
+ *
+ * A binding records this when it is written; `clearCliSession` records it when
+ * the outgoing binding never did, so the tombstone still states which identity
+ * the transcript on disk belongs to. Every field may be absent: an install with
+ * neither an auth profile nor a resolvable credential epoch has an empty
+ * identity, and recording that faithfully is what lets the next turn tell
+ * "still the same (empty) identity" from "an identity appeared".
+ */
+export type CliSessionAuthIdentitySnapshot = {
+  authProfileId?: string;
+  authEpoch?: string;
+  authEpochVersion?: number;
+};
+
 export type CliSessionBinding = {
-  sessionId: string;
+  /**
+   * Absent only on an auth-boundary tombstone left by `clearCliSession`: the
+   * resumable handle is gone, but the auth identity the transcript was written
+   * under survives so the next turn can still tell "never bound" apart from
+   * "bound under a different auth identity". Reuse resolution never resumes a
+   * binding without this field.
+   */
+  sessionId?: string;
   /** Last successful assistant boundary accepted by the backend's resume contract. */
   resumeCheckpointId?: string;
   /** Resume with the backend's fork argument once, then clear before process start. */
@@ -134,6 +157,16 @@ export type CliSessionBinding = {
   authProfileId?: string;
   authEpoch?: string;
   authEpochVersion?: number;
+  /**
+   * Present only on the tombstone `clearCliSession` writes when it cannot honestly
+   * name the auth identity the cleared transcript belonged to: the outgoing binding
+   * recorded none, and the clearing path ran outside a turn's resolved auth. It is
+   * deliberately distinguishable from a real identity boundary — an identity-shaped
+   * tombstone would be compared against the next turn's identity and could match,
+   * whereas this one must always refuse. Reuse resolution maps it to `auth-unknown`,
+   * which every transcript-reseed branch refuses.
+   */
+  clearedAuthProvenance?: "unknown";
   extraSystemPromptHash?: string;
   messageToolPolicyHash?: string;
   promptToolNamesHash?: string;

@@ -13,10 +13,12 @@ import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import {
   loadSessionEntryReadOnly,
   loadTranscriptEventsSync,
+  upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { registerContextEngineForOwner } from "../../context-engine/registry.js";
 import type { ContextEngine } from "../../context-engine/types.js";
+import { appendSessionTranscriptMessageByIdentity } from "../../plugin-sdk/session-transcript-runtime.js";
 import { CliBackendAuthProfilePreparationError } from "../../plugins/cli-backend-errors.js";
 import type {
   CliBackendExecuteContext,
@@ -4509,6 +4511,75 @@ describe("prepareCliRunContext", () => {
     expect(context.openClawHistoryPrompt).toContain(
       "<next_user_message>\nlatest ask\n</next_user_message>",
     );
+  });
+
+  it("fences the transcript-store reseed read to the turn before the current one", async () => {
+    // A provider/model fallback rebuilds CLI preparation after the first attempt
+    // already persisted this turn's user row, and the retry suppresses
+    // re-persisting it. Without the recorder admission fence the store read
+    // returns that row, so the same text lands inside recovered history AND
+    // again as <next_user_message>. Only the SQLite path can show this: the
+    // legacy file loader has no current-turn row to leak.
+    const { dir } = fixture.session;
+    const storePath = path.join(dir, "agents", "main", "sessions", "sessions.json");
+    const scope = {
+      agentId: "main",
+      sessionId: "session-test",
+      sessionKey: "agent:main:main",
+      storePath,
+    };
+    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 10 });
+    const priorUser = await appendSessionTranscriptMessageByIdentity({
+      ...scope,
+      message: { role: "user", content: "prior fenced ask" },
+      now: 1_000,
+    });
+    const priorAssistant = await appendSessionTranscriptMessageByIdentity({
+      ...scope,
+      message: { role: "assistant", content: "prior fenced answer" },
+      parentId: priorUser?.messageId,
+      now: 2_000,
+    });
+    const admitted = await appendSessionTranscriptMessageByIdentity({
+      ...scope,
+      message: { role: "user", content: "latest ask" },
+      parentId: priorAssistant?.messageId,
+      now: 3_000,
+    });
+    if (!admitted?.anchor) {
+      throw new Error("expected an admitted transcript anchor");
+    }
+    const admissionReceipt = {
+      ...admitted.anchor,
+      logicalTurnId: scope.sessionId,
+      role: "user" as const,
+    };
+    setCliBackendForPrepareTest({ reseedFromRawTranscriptWhenUncompacted: true });
+    setCliRunnerPrepareTestDeps({
+      claudeCliSessionTranscriptHasContent: vi.fn(async () => false),
+      claudeCliSessionTranscriptHasOrphanedToolUse: vi.fn(async () => false),
+    });
+
+    const context = await fixture.prepare({
+      sessionKey: scope.sessionKey,
+      provider: "claude-cli",
+      model: "opus",
+      config: { session: { store: storePath } } as OpenClawConfig,
+      cliSessionBinding: { sessionId: "stale-claude-sid" },
+      cliSessionId: "stale-claude-sid",
+      // SAFETY: prepare reads only getAdmissionReceipt() off the recorder.
+      userTurnTranscriptRecorder: {
+        getAdmissionReceipt: () => admissionReceipt,
+      } as unknown as RunCliAgentParams["userTurnTranscriptRecorder"],
+    });
+
+    expect(context.openClawHistoryPrompt).toContain("prior fenced ask");
+    expect(context.openClawHistoryPrompt).toContain("prior fenced answer");
+    expect(context.openClawHistoryPrompt).toContain(
+      "<next_user_message>\nlatest ask\n</next_user_message>",
+    );
+    // Exactly once, in the next-message block — never also in recovered history.
+    expect(context.openClawHistoryPrompt?.split("latest ask").length).toBe(2);
   });
 
   it("prepares node-placed Claude resumes without Gateway MCP, skills, or transcript checks", async () => {

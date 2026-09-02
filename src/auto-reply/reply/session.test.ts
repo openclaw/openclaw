@@ -5769,7 +5769,13 @@ describe("persistSessionUsageUpdate", () => {
         modelProvider: "openai",
         model: "gpt-5.4",
         cliSessionIds: { "codex-cli": "codex-cli-session" },
-        cliSessionBindings: { "codex-cli": { sessionId: "codex-cli-session" } },
+        cliSessionBindings: {
+          // The cleared provider keeps an unknown-provenance tombstone: this
+          // update carries no `cliSessionAuthIdentity` and the outgoing binding
+          // recorded none, so no identity can be attributed to its transcript.
+          "claude-cli": { clearedAuthProvenance: "unknown" },
+          "codex-cli": { sessionId: "codex-cli-session" },
+        },
         claudeCliSessionId: undefined,
       },
     },
@@ -5819,7 +5825,15 @@ describe("persistSessionUsageUpdate", () => {
       },
       expected: {
         cliSessionIds: { "codex-cli": "codex-session" },
-        cliSessionBindings: { "codex-cli": { sessionId: "codex-session" } },
+        // The clear destroys the resumable handle and the legacy mirrors, and
+        // leaves the auth-boundary tombstone `clearCliSession` owns: the auth
+        // identity this transcript was written under has to survive the clear,
+        // or the next turn reads the session as never bound and raw-reseeds
+        // prior-auth history under `missing-transcript`.
+        cliSessionBindings: {
+          "claude-cli": { authProfileId: "anthropic:old" },
+          "codex-cli": { sessionId: "codex-session" },
+        },
         claudeCliSessionId: undefined,
       },
     },

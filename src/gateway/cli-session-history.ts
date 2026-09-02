@@ -34,7 +34,10 @@ function resolveEligibleCliSessionBinding(params: CliSessionHistoryParams) {
     params.localMessages.length === 0 ||
     provider === CLAUDE_CLI_PROVIDER ||
     provider === ANTHROPIC_PROVIDER;
-  return binding?.sessionId && eligible ? binding : undefined;
+  // An auth-boundary tombstone left by `clearCliSession` carries no session id and
+  // therefore imports nothing: it is a provenance record, not a readable transcript.
+  const sessionId = binding?.sessionId;
+  return binding && sessionId && eligible ? { ...binding, sessionId } : undefined;
 }
 
 /** Resolves chat history plus whether a bound external transcript was actually incorporated. */

@@ -3,7 +3,11 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { runCliAgent } from "../../agents/cli-runner.js";
 import type { RunCliAgentParams } from "../../agents/cli-runner/types.js";
-import { clearCliSession, getCliSessionBinding } from "../../agents/cli-session.js";
+import {
+  clearCliSession,
+  getCliSessionBinding,
+  type CliSessionClearAuthProvenance,
+} from "../../agents/cli-session.js";
 import type { MediaImageLayout } from "../../agents/embedded-agent-runner/run/prompt-image-metadata.js";
 import { extractToolResultText } from "../../agents/embedded-agent-tool-results.js";
 import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent.js";
@@ -230,6 +234,8 @@ export async function clearCliSessionBindingForRun(params: {
   sessionStore?: Record<string, SessionEntry>;
   storePath?: string;
   activeSessionEntry?: SessionEntry;
+  /** Auth identity the clearing turn resolved; see `clearCliSession`. */
+  clearAuthProvenance: CliSessionClearAuthProvenance;
 }): Promise<void> {
   const updatedAt = Date.now();
   const clearEntry = (entry: SessionEntry | undefined) => {
@@ -244,7 +250,7 @@ export async function clearCliSessionBindingForRun(params: {
     ) {
       return;
     }
-    clearCliSession(entry, params.provider);
+    clearCliSession(entry, params.provider, params.clearAuthProvenance);
     entry.updatedAt = updatedAt;
   };
   clearEntry(params.activeSessionEntry);

@@ -1,5 +1,6 @@
 import { setReplyPayloadMetadata, type ReplyPayload } from "../../auto-reply/reply-payload.js";
 import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
+import type { CliSessionAuthIdentitySnapshot } from "../../config/sessions/types.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
@@ -31,6 +32,27 @@ const log = createSubsystemLogger("agents/cli-runner");
 /** Formats the visible terminal reason for an interrupted turn that retained partial output. */
 export function formatCliTerminalInterruption(interruption: CliTerminalInterruption): string {
   return `CLI turn ${interruption.reason} after partial output`;
+}
+
+/**
+ * The auth identity this run resolved, as the store writers need it.
+ *
+ * Reported on every CLI result, including the ones that ask for a binding
+ * clear: a clear whose outgoing record carried no identity has nothing else to
+ * build an auth-boundary tombstone from. `authEpochVersion` is always present,
+ * so an install with neither a profile nor a resolvable epoch still reports a
+ * distinguishable empty identity rather than nothing at all.
+ */
+function resolveRunCliSessionAuthIdentity(
+  context: PreparedCliRunContext,
+): CliSessionAuthIdentitySnapshot {
+  return {
+    ...(context.effectiveAuthProfileId ? { authProfileId: context.effectiveAuthProfileId } : {}),
+    ...(context.authEpoch ? { authEpoch: context.authEpoch } : {}),
+    ...(typeof context.authEpochVersion === "number" && Number.isFinite(context.authEpochVersion)
+      ? { authEpochVersion: context.authEpochVersion }
+      : {}),
+  };
 }
 
 export const cliRunSettlementDeps = {
@@ -332,6 +354,7 @@ export function buildBlockedCliRunResult(params: {
         provider: runParams.provider,
         model: context.modelId,
         ...preparedContextAgentMeta,
+        cliSessionAuthIdentity: resolveRunCliSessionAuthIdentity(context),
         ...(sessionBindingDisabled ? { clearCliSessionBinding: true } : {}),
       },
     },
@@ -403,6 +426,7 @@ export function buildCliDeliveredFailure(params: {
         provider: runParams.provider,
         model: context.modelId,
         ...preparedContextAgentMeta,
+        cliSessionAuthIdentity: resolveRunCliSessionAuthIdentity(context),
         ...(sessionBindingDisabled || reusableCliSessionId ? { clearCliSessionBinding: true } : {}),
       },
     },
@@ -609,6 +633,7 @@ export function buildCliRunResult(params: {
         provider: runParams.provider,
         model: context.modelId,
         ...preparedContextAgentMeta,
+        cliSessionAuthIdentity: resolveRunCliSessionAuthIdentity(context),
         usage: output.usage,
         ...(output.usage ? { lastCallUsage: output.usage } : {}),
         ...(output.diagnosticUsage ? { diagnosticUsage: output.diagnosticUsage } : {}),
@@ -644,6 +669,9 @@ export function buildCliRunResult(params: {
               },
             }
           : {}),
+        // Safe to request unconditionally: `clearCliSession`, the single owner every
+        // clear path lands on, keeps an auth-boundary tombstone when it drops the
+        // binding, so this never erases the record of a crossed auth identity.
         ...(cliSessionBindingCleared ? { clearCliSessionBinding: true } : {}),
       },
     },

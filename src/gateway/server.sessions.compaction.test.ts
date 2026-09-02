@@ -1129,6 +1129,65 @@ test("sessions.compact targets the persisted native CLI session", async () => {
   }
 });
 
+test("sessions.compact stays generic when the only CLI binding is an auth tombstone", async () => {
+  const { storePath } = await createSessionStoreDir();
+  await seedSessionEntry({
+    entry: sessionStoreEntry("sess-codex-tombstone", {
+      providerOverride: "openai",
+      modelOverride: "gpt-test",
+      // `codex-app-server` normalizes to `codex`, whose binding `clearCliSession`
+      // reduced to an auth-boundary tombstone: provenance, no resumable thread.
+      cliSessionIds: { "codex-app-server": "thread-cleared" },
+      cliSessionBindings: { codex: { authProfileId: "openai:work", authEpochVersion: 1 } },
+    }),
+    sessionKey: "agent:main:main",
+    storePath,
+  });
+  await seedTranscriptRows({
+    sessionId: "sess-codex-tombstone",
+    sessionKey: "agent:main:main",
+    storePath,
+    totalLines: 3,
+  });
+  const storedEntry = loadAccessorSessionEntry({ sessionKey: "agent:main:main", storePath });
+  const cfg = (await getGatewayConfigModule()).loadConfig();
+  const selectedModel = resolveSessionModelRef(cfg, storedEntry, "main");
+  expect(selectedModel.provider).toBe("openai");
+  // A tombstone owns no native transcript, so manual compaction must fall through
+  // to the generic path instead of demanding a resumable native session that a
+  // cleared binding can never supply.
+  expect(
+    resolveManualCompactionCliTarget({ provider: selectedModel.provider, entry: storedEntry, cfg }),
+  ).toEqual({});
+  embeddedRunMock.compactEmbeddedAgentSession.mockResolvedValueOnce({
+    ok: true,
+    compacted: true,
+  });
+
+  const { ws } = await openClient();
+  try {
+    await rpcReq(ws, "sessions.subscribe", {});
+    const compacted = await rpcReq<{ ok: true; key: string; compacted: boolean }>(
+      ws,
+      "sessions.compact",
+      { key: "main" },
+    );
+
+    expectMainCompactionResult(compacted, true);
+    expect(embeddedRunMock.compactEmbeddedAgentSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentHarnessId: undefined,
+        cliSessionBinding: undefined,
+        cliSessionId: undefined,
+        trigger: "manual",
+      }),
+      expect.objectContaining({ onCommitted: expect.any(Function) }),
+    );
+  } finally {
+    ws.close();
+  }
+});
+
 test("sessions.compact emits a terminal operation event when persistence fails", async () => {
   const { storePath } = await createSessionStoreDir();
   const sessionId = "sess-compact-write-failure";

@@ -356,6 +356,9 @@ vi.mock("./run-subagent-registry.runtime.js", () => ({
 
 vi.mock("../../agents/cli-runner.runtime.js", () => ({
   clearCliSession: clearCliSessionMock,
+  cliSessionClearAuthFromRun: (
+    identity: { authProfileId?: string; authEpoch?: string; authEpochVersion?: number } | undefined,
+  ) => (identity ? { kind: "current", identity } : { kind: "unknown" }),
   setCliSessionBinding: setCliSessionBindingMock,
   setCliSessionId: vi.fn(),
 }));

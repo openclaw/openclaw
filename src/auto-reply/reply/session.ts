@@ -186,9 +186,10 @@ function resolveStaleSessionEndReason(params: {
   return params.entry ? params.freshness?.staleReason : undefined;
 }
 
+/** Mirrors `hasProviderOwnedSession` in config/sessions/entry-freshness.ts. */
 function hasProviderOwnedSession(entry: SessionEntry | undefined): boolean {
   const provider = normalizeOptionalString(entry?.providerOverride ?? entry?.modelProvider);
-  return Boolean(provider && getCliSessionBinding(entry, provider));
+  return Boolean(provider && getCliSessionBinding(entry, provider)?.sessionId);
 }
 
 export type SessionInitResult = {

@@ -26,6 +26,7 @@ import {
   resolveEffectiveCompactionMode,
 } from "../agent-settings.js";
 import { resolveCliBackendConfig as resolveCliBackendConfigImpl } from "../cli-backends.js";
+import { CLI_SESSION_CLEAR_AUTH_UNKNOWN } from "../cli-session.js";
 import {
   isBenignCompactionSkipReason,
   isBenignCompactionSkipResult,
@@ -814,6 +815,12 @@ export async function runCliTurnCompactionLifecycle(
         sessionStore: params.sessionStore,
         storePath: params.storePath,
         expectedSessionId: params.sessionId,
+        // Pre-turn repair after the native harness failed to bind: the
+        // compaction run reports no resolved auth identity, and the turn's own
+        // run has not resolved one yet. `params.authProfileId` is the requested
+        // profile, not the one a run resolves, so recording it would attribute
+        // an identity nobody established.
+        clearAuthProvenance: CLI_SESSION_CLEAR_AUTH_UNKNOWN,
       })) ?? params.sessionEntry
     );
   }

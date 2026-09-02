@@ -132,31 +132,6 @@ export function loadTranscriptHeaderSync(scope: SessionTranscriptReadScope): unk
   return row ? (JSON.parse(row.event_json) as TranscriptEvent) : undefined;
 }
 
-/** Loads a bounded newest tail in storage order for hot-path accounting. */
-export function loadTranscriptTailEventsSync(
-  scope: SessionTranscriptReadScope,
-  maxEvents: number,
-): TranscriptEvent[] {
-  const limit = Number.isFinite(maxEvents) ? Math.max(0, Math.floor(maxEvents)) : 0;
-  if (limit === 0) {
-    return [];
-  }
-  const resolved = resolveSqliteTranscriptReadScope(scope);
-  const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
-  const db = getSessionKysely(database.db);
-  return executeSqliteQuerySync(
-    database.db,
-    db
-      .selectFrom("transcript_events")
-      .select("event_json")
-      .where("session_id", "=", resolved.sessionId)
-      .orderBy("seq", "desc")
-      .limit(limit),
-  )
-    .rows.toReversed()
-    .map((row) => JSON.parse(row.event_json) as TranscriptEvent);
-}
-
 /** Loads additive transcript rows after one durable sequence checkpoint. */
 export function loadTranscriptEventRowsAfterSeqSync(
   scope: SessionTranscriptReadScope,

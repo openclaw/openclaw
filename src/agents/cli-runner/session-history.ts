@@ -48,6 +48,7 @@ type HistoryMessage = {
 type RawTranscriptReseedReason =
   | "auth-profile"
   | "auth-epoch"
+  | "auth-unknown"
   | "message-policy"
   | "system-prompt"
   | "cwd"
@@ -64,6 +65,28 @@ const RAW_TRANSCRIPT_RESEED_ALLOWED_REASONS = new Set<RawTranscriptReseedReason>
   "cwd",
   "mcp",
   "session-expired",
+]);
+
+/**
+ * Reseed reasons that refuse every transcript-derived reseed on auth grounds:
+ * either this turn resolved a different auth identity than the one the stored
+ * transcript was written under (`auth-profile`, `auth-epoch`), or nobody can say
+ * which identity it was written under at all (`auth-unknown`, the tombstone a
+ * clear leaves when it runs outside a turn's resolved auth). The last one fails
+ * closed by construction: an unattributable transcript is treated as if it were
+ * known to be someone else's.
+ *
+ * All three are also absent from `RAW_TRANSCRIPT_RESEED_ALLOWED_REASONS`, which
+ * is what refuses a raw tail across the boundary. They are named again here
+ * because the compacted branch needs the same answer for its own reason, and
+ * "absent from the raw allowlist" is the wrong test to reuse: a reason may be
+ * kept off that allowlist for reasons that have nothing to do with auth, and the
+ * compacted branch would then refuse content it has no cause to refuse.
+ */
+const AUTH_CROSSING_RESEED_REASONS = new Set<RawTranscriptReseedReason>([
+  "auth-profile",
+  "auth-epoch",
+  "auth-unknown",
 ]);
 
 /** Resolves how much prior transcript text may reseed a fresh CLI session. */
@@ -403,6 +426,21 @@ export async function loadCliSessionReseedMessages(
     rawTranscriptReseedReason?: RawTranscriptReseedReason;
   },
 ): Promise<unknown[]> {
+  if (
+    params.rawTranscriptReseedReason &&
+    AUTH_CROSSING_RESEED_REASONS.has(params.rawTranscriptReseedReason)
+  ) {
+    // Nothing transcript-derived crosses an auth boundary. The raw tail was
+    // already refused below by the allowlist, but the compacted branch returned
+    // a summary plus the post-compaction tail without consulting any reason at
+    // all -- and both are derived from turns the previous identity ran, the
+    // summary no less than the messages it was summarized from. Refusing here,
+    // before the load, also keeps a crossing from reading the transcript store.
+    cliBackendLog.warn(
+      `cli session history refused across auth boundary: reason=${params.rawTranscriptReseedReason} session=${params.sessionTarget?.sessionId}`,
+    );
+    return [];
+  }
   const entries = await loadCliSessionEntries(params);
   // This freshly loaded branch is reseed-owned; use persistence rather than provider timestamps.
   for (const entry of entries) {

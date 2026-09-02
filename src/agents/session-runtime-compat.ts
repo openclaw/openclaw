@@ -104,12 +104,18 @@ export function resolveManualCompactionCliTarget(params: {
   entry?: ManualCompactionRuntimeEntry;
   cfg?: OpenClawConfig;
 }): ManualCompactionCliTarget {
+  // Every ownership test below gates on `sessionId`, never on binding truthiness:
+  // a cleared binding leaves an auth-boundary tombstone that carries provenance
+  // and no resumable transcript, and admitting one here routes manual compaction
+  // into the native path that then hard-fails for want of a session to resume.
   const runtimeOverride = normalizeOptionalAgentRuntimeId(params.entry?.agentRuntimeOverride);
   const runtimeConfig =
-    runtimeOverride && getCliSessionBinding(params.entry, runtimeOverride) ? params.cfg : undefined;
+    runtimeOverride && getCliSessionBinding(params.entry, runtimeOverride)?.sessionId
+      ? params.cfg
+      : undefined;
   const historicalRuntime = normalizeOptionalAgentRuntimeId(params.entry?.agentHarnessId);
   const historicalRuntimeConfig =
-    historicalRuntime && getCliSessionBinding(params.entry, historicalRuntime)
+    historicalRuntime && getCliSessionBinding(params.entry, historicalRuntime)?.sessionId
       ? params.cfg
       : undefined;
   const selectedRuntime = resolveSessionRuntimeOverrideForProvider({
@@ -143,7 +149,11 @@ export function resolveManualCompactionCliTarget(params: {
   // the native bindings themselves, but only when exactly one runtime can
   // serve the selected provider; ambiguity must not compact the wrong history.
   const boundRuntimeIds = new Set([
-    ...Object.keys(params.entry?.cliSessionBindings ?? {}),
+    // Only entries that still hold a session id count as bound: a cleared
+    // binding leaves an auth-boundary tombstone whose runtime owns nothing.
+    ...Object.entries(params.entry?.cliSessionBindings ?? {}).flatMap(([runtime, binding]) =>
+      binding?.sessionId ? [runtime] : [],
+    ),
     ...Object.keys(params.entry?.cliSessionIds ?? {}),
     ...(params.entry?.claudeCliSessionId ? ["claude-cli"] : []),
   ]);
@@ -153,10 +163,13 @@ export function resolveManualCompactionCliTarget(params: {
       runtime,
       cfg: params.cfg,
     });
+    // `boundRuntimeIds` gated the *recorded* runtime, but normalization can map it
+    // onto a different canonical runtime whose own binding is a tombstone, so this
+    // second lookup has to re-check for a live session id rather than trust the set.
     const binding = compatibleRuntime
       ? getCliSessionBinding(params.entry, compatibleRuntime)
       : undefined;
-    return compatibleRuntime && binding ? [{ runtime: compatibleRuntime, binding }] : [];
+    return compatibleRuntime && binding?.sessionId ? [{ runtime: compatibleRuntime, binding }] : [];
   });
   const compatibleBinding = compatibleBindings.length === 1 ? compatibleBindings[0] : undefined;
   if (!compatibleBinding) {

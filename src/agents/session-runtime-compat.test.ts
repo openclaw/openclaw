@@ -256,6 +256,181 @@ describe("resolveManualCompactionCliTarget", () => {
     });
   });
 
+  it("does not unlock setup discovery for an explicit runtime holding only an auth tombstone", () => {
+    cliBackendsTesting.setDepsForTest({
+      resolveRuntimeCliBackends: () => [],
+      resolvePluginSetupCliBackend: ({ backend }) =>
+        backend === "claude-cli"
+          ? ({
+              pluginId: "anthropic",
+              backend: {
+                id: "claude-cli",
+                modelProvider: "anthropic",
+                config: { command: "claude" },
+                bundleMcp: false,
+              },
+            } as never)
+          : undefined,
+    });
+
+    expect(
+      resolveManualCompactionCliTarget({
+        provider: "anthropic",
+        cfg: {} as OpenClawConfig,
+        entry: {
+          agentRuntimeOverride: "claude-cli",
+          cliSessionBindings: {
+            "claude-cli": { authProfileId: "anthropic:subscription", authEpoch: "epoch-1" },
+          },
+        },
+      }),
+    ).toEqual({});
+  });
+
+  it("still unlocks setup discovery for an explicit runtime holding a live session id", () => {
+    cliBackendsTesting.setDepsForTest({
+      resolveRuntimeCliBackends: () => [],
+      resolvePluginSetupCliBackend: ({ backend }) =>
+        backend === "claude-cli"
+          ? ({
+              pluginId: "anthropic",
+              backend: {
+                id: "claude-cli",
+                modelProvider: "anthropic",
+                config: { command: "claude" },
+                bundleMcp: false,
+              },
+            } as never)
+          : undefined,
+    });
+
+    expect(
+      resolveManualCompactionCliTarget({
+        provider: "anthropic",
+        cfg: {} as OpenClawConfig,
+        entry: {
+          agentRuntimeOverride: "claude-cli",
+          cliSessionBindings: {
+            "claude-cli": { sessionId: "native-claude-session", authEpoch: "epoch-1" },
+          },
+        },
+      }),
+    ).toMatchObject({
+      agentHarnessId: "claude-cli",
+      cliSessionId: "native-claude-session",
+    });
+  });
+
+  it("does not revive a historical harness whose binding is only an auth tombstone", () => {
+    cliBackendsTesting.setDepsForTest({
+      resolveRuntimeCliBackends: () => [],
+      resolvePluginSetupCliBackend: ({ backend }) =>
+        backend === "claude-cli"
+          ? ({
+              pluginId: "anthropic",
+              backend: {
+                id: "claude-cli",
+                modelProvider: "anthropic",
+                config: { command: "claude" },
+                bundleMcp: false,
+              },
+            } as never)
+          : undefined,
+    });
+
+    expect(
+      resolveManualCompactionCliTarget({
+        provider: "anthropic",
+        cfg: {} as OpenClawConfig,
+        entry: {
+          agentHarnessId: "claude-cli",
+          cliSessionBindings: {
+            "claude-cli": { authProfileId: "anthropic:subscription" },
+          },
+        },
+      }),
+    ).toEqual({});
+  });
+
+  it("still selects a historical harness whose binding holds a live session id", () => {
+    cliBackendsTesting.setDepsForTest({
+      resolveRuntimeCliBackends: () => [],
+      resolvePluginSetupCliBackend: ({ backend }) =>
+        backend === "claude-cli"
+          ? ({
+              pluginId: "anthropic",
+              backend: {
+                id: "claude-cli",
+                modelProvider: "anthropic",
+                config: { command: "claude" },
+                bundleMcp: false,
+              },
+            } as never)
+          : undefined,
+    });
+
+    expect(
+      resolveManualCompactionCliTarget({
+        provider: "anthropic",
+        cfg: {} as OpenClawConfig,
+        entry: {
+          agentHarnessId: "claude-cli",
+          cliSessionBindings: {
+            "claude-cli": { sessionId: "native-claude-session" },
+          },
+        },
+      }),
+    ).toMatchObject({
+      agentHarnessId: "claude-cli",
+      cliSessionId: "native-claude-session",
+    });
+  });
+
+  it("does not select a normalized runtime whose own binding is an auth tombstone", () => {
+    // The legacy map records `codex-app-server`, which normalizes to `codex`; the
+    // canonical `codex` binding is a tombstone, so nothing here is resumable.
+    expect(
+      resolveManualCompactionCliTarget({
+        provider: "openai",
+        entry: {
+          cliSessionIds: { "codex-app-server": "legacy-codex-session" },
+          cliSessionBindings: {
+            codex: { authProfileId: "openai:work", authEpochVersion: 1 },
+          },
+        },
+      }),
+    ).toEqual({});
+  });
+
+  it("still selects a normalized runtime whose binding holds a live session id", () => {
+    expect(
+      resolveManualCompactionCliTarget({
+        provider: "openai",
+        entry: {
+          cliSessionBindings: {
+            codex: { sessionId: "native-codex-session", authProfileId: "openai:work" },
+          },
+        },
+      }),
+    ).toMatchObject({
+      agentHarnessId: "codex",
+      cliSessionId: "native-codex-session",
+    });
+  });
+
+  it("ignores an implicit binding that is only an auth tombstone", () => {
+    expect(
+      resolveManualCompactionCliTarget({
+        provider: "anthropic",
+        entry: {
+          cliSessionBindings: {
+            "claude-cli": { authProfileId: "anthropic:subscription" },
+          },
+        },
+      }),
+    ).toEqual({});
+  });
+
   it("preserves the selected auth profile on the native binding", () => {
     expect(
       resolveManualCompactionCliTarget({

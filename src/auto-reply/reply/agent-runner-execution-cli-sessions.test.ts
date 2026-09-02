@@ -23,6 +23,7 @@ import {
   requireRecord,
   requireMockCall,
   expectMockCallArgFields,
+  expectClearedAuthTombstone,
   initialFallbackAttemptOptions,
   createMinimalRunAgentTurnParams,
   makeTestSessionStorePath,
@@ -711,7 +712,10 @@ describe("executeAgentTurn: CLI session routing", () => {
       assertCompactionSuccessorAllowed: rejectUnexpectedCompactionSuccessor,
       executeLocalTurn: async (_claim, runLocal) => {
         const resultLocal = await runLocal();
-        expect(activeSessionStore.main.cliSessionBindings?.["codex-cli"]).toBeUndefined();
+        // The resumable handle must already be gone while placement is still
+        // held; what remains is the unknown-provenance tombstone this PR keeps
+        // so the next turn cannot mistake the session for one never bound.
+        expectClearedAuthTombstone(activeSessionStore.main.cliSessionBindings?.["codex-cli"]);
         cleanupObservedBeforePlacementRelease = true;
         return resultLocal;
       },
@@ -744,7 +748,11 @@ describe("executeAgentTurn: CLI session routing", () => {
     expect(result.runResult.meta?.agentMeta?.sessionId).toBe("");
     expect(result.runResult.meta?.agentMeta?.cliSessionBinding).toBeUndefined();
     expect(result.runResult.meta?.agentMeta?.clearCliSessionBinding).toBeUndefined();
-    expect(activeSessionStore.main.cliSessionBindings?.["codex-cli"]).toBeUndefined();
+    // What a clear must destroy is the resumable handle. The record survives as
+    // an unknown-provenance tombstone whenever the outgoing binding recorded no
+    // identity and the clearing path resolved none either, so the next turn
+    // cannot mistake the session for one that was never bound.
+    expectClearedAuthTombstone(activeSessionStore.main.cliSessionBindings?.["codex-cli"]);
   });
 
   it("keeps room-event CLI bindings when synthetic hooks return no CLI binding", async () => {
@@ -840,7 +848,7 @@ describe("executeAgentTurn: CLI session routing", () => {
     expect(result.runResult.meta?.agentMeta?.sessionId).toBe("");
     expect(result.runResult.meta?.agentMeta?.cliSessionBinding).toBeUndefined();
     expect(result.runResult.meta?.agentMeta?.clearCliSessionBinding).toBeUndefined();
-    expect(activeSessionStore.main.cliSessionBindings?.["codex-cli"]).toBeUndefined();
+    expectClearedAuthTombstone(activeSessionStore.main.cliSessionBindings?.["codex-cli"]);
   });
 
   it("clears a fork-marked Claude CLI binding when the channel turn fails", async () => {
@@ -885,7 +893,7 @@ describe("executeAgentTurn: CLI session routing", () => {
     });
 
     expect(result.kind).toBe("final");
-    expect(sessionEntry.cliSessionBindings?.["claude-cli"]).toBeUndefined();
+    expectClearedAuthTombstone(sessionEntry.cliSessionBindings?.["claude-cli"]);
     expect(sessionEntry.cliSessionIds?.["claude-cli"]).toBeUndefined();
     expect(sessionEntry.claudeCliSessionId).toBeUndefined();
   });
@@ -999,7 +1007,7 @@ describe("executeAgentTurn: CLI session routing", () => {
       const result = await runPromise;
 
       expect(result.kind).toBe("final");
-      expect(sessionEntry.cliSessionBindings?.["claude-cli"]).toBeUndefined();
+      expectClearedAuthTombstone(sessionEntry.cliSessionBindings?.["claude-cli"]);
       expect(sessionEntry.cliSessionIds?.["claude-cli"]).toBeUndefined();
       expect(sessionEntry.claudeCliSessionId).toBeUndefined();
     } finally {
@@ -1053,7 +1061,7 @@ describe("executeAgentTurn: CLI session routing", () => {
     expect(state.runCliAgentMock.mock.calls[0]?.[0]).toMatchObject({
       cliSessionId: "stale-cli-session",
     });
-    expect(sessionEntry.cliSessionBindings?.["claude-cli"]).toBeUndefined();
+    expectClearedAuthTombstone(sessionEntry.cliSessionBindings?.["claude-cli"]);
     expect(sessionEntry.cliSessionIds?.["claude-cli"]).toBeUndefined();
     expect(sessionEntry.claudeCliSessionId).toBeUndefined();
   }, 15_000);
