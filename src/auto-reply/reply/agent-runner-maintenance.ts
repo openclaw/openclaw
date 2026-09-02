@@ -4,6 +4,7 @@ import {
   scheduleSessionMaintenance,
 } from "../../agents/session-maintenance/run.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
+import { runAgentRequestedCompactionIfNeeded } from "./agent-runner-memory.js";
 import type { AccountedAgentTurn } from "./agent-runner-result-accounting.js";
 import type { FinalizeReplyAgentRunInput } from "./agent-runner-result.types.js";
 
@@ -70,4 +71,43 @@ export function scheduleReplySessionMaintenance(params: {
       () => replyOperation.result?.kind === "completed" && !replyOperation.abortSignal.aborted,
     ),
   );
+}
+
+/**
+ * Runs an agent-requested compaction (session_compact tool) after the reply's
+ * delivery settlement: the response is delivered first, and the turn's
+ * deferred lifecycle has already released the embedded active-run handle by
+ * then, so the manual compaction pipeline cannot reject with `active_run`.
+ */
+export function scheduleReplyRequestedTurnCompaction(params: {
+  context: FinalizeReplyAgentRunInput;
+}): void {
+  const { context } = params;
+  const request = context.execution.agentCompactionRequest;
+  const { replyOperation } = context;
+  if (!request || !replyOperation.ownerSettlement) {
+    return;
+  }
+  void replyOperation.ownerSettlement
+    .then(async () => {
+      if (replyOperation.abortSignal.aborted) {
+        return;
+      }
+      await runAgentRequestedCompactionIfNeeded({
+        cfg: context.cfg,
+        followupRun: context.followupRun,
+        request,
+        sessionEntry: context.activeSessionEntry,
+        sessionStore: context.activeSessionStore,
+        sessionKey: context.sessionKey,
+        runtimePolicySessionKey: context.runtimePolicySessionKey,
+        storePath: context.storePath,
+        isHeartbeat: context.isHeartbeat,
+        abortSignal: context.opts?.abortSignal,
+      });
+    })
+    .catch(() => {
+      // The helper swallows its own failures; this only guards the settlement
+      // chain itself from surfacing as an unhandled rejection.
+    });
 }

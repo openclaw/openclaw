@@ -352,6 +352,7 @@ export async function getExecuteAgentTurnForTest() {
         directBlockDeliveries: outcome.directBlockDeliveries,
         terminalFailurePayload: outcome.terminalFailurePayload,
         postCompactionModelFailure: outcome.postCompactionModelFailure,
+        agentCompactionRequest: outcome.agentCompactionRequest,
       };
     }
     if (outcome.kind === "rejected") {
@@ -406,6 +407,7 @@ export type EmbeddedAgentParams = {
   lifecycleGeneration?: string;
   onDeferredLifecycleOwner?: (owner: DeferredEmbeddedRunLifecycleOwner) => void;
   onCompactionAccounting?: RunEmbeddedAgentInternalParams["onCompactionAccounting"];
+  onRequestSessionCompaction?: RunEmbeddedAgentInternalParams["onRequestSessionCompaction"];
   onExecutionStarted?: (info?: { lifecycleGeneration?: string }) => void;
   onExecutionPhase?: (info: {
     phase:

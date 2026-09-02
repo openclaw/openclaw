@@ -95,6 +95,18 @@ automatic compaction requires the complete replacement to fit the estimated targ
 Early required preflight runs before those request facts are available and still
 uses history-based sizing; it does not guarantee this preferred headroom.
 
+## Agent-initiated compaction
+
+The model can also request compaction itself through the built-in `session_compact` tool. This covers cases that token pressure cannot see: when a topic concludes and a new one begins, the model can ask OpenClaw to summarize and archive the older discussion instead of carrying it into the new topic.
+
+The tool accepts an optional `focus` with the same semantics as the `/compact` focus text, records the request, and returns immediately. OpenClaw runs the compaction after the reply is delivered, through the same manual compaction pipeline as `/compact`: recent turns are kept, the summary is stored in the session transcript, and the full conversation history stays on disk.
+
+Behavior details:
+
+- The tool is only offered when the runtime can service the request (the built-in OpenClaw runtime for normal chat turns). Other surfaces do not show it.
+- Heartbeat turns and runtimes that own native compaction, such as CLI-backed sessions, ignore agent compaction requests.
+- A failed agent-requested compaction never fails the reply; OpenClaw logs the outcome.
+
 ## Configuration
 
 Configure compaction under `agents.defaults.compaction` in your `openclaw.json`. The most common knobs are listed below; for the full reference, see [Session management deep dive](/reference/session-management-compaction).

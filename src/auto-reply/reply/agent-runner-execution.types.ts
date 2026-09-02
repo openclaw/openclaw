@@ -62,6 +62,13 @@ export type AgentTurnInternalResult =
       /** Prepared terminal failure, appended only after delivery evidence settles. */
       terminalFailurePayload?: ReplyPayload;
       postCompactionModelFailure?: true;
+      /**
+       * Agent-requested compaction recorded by the session_compact tool.
+       * Surfaced only on non-terminal-failure completion; the finalize side
+       * schedules it after delivery settlement (owner settlement is strictly
+       * later than this function's deferred lifecycle completion).
+       */
+      agentCompactionRequest?: { focus?: string };
     }
   | {
       kind: "final";
@@ -74,6 +81,13 @@ type SettledAgentTurnBase = {
   kind: "settled";
   maintenanceAuthProfile?: CompletedAgentAuthSelection;
   compactionRequestBudget?: CompactionRequestBudget;
+  /**
+   * Agent-requested compaction recorded by the session_compact tool. The
+   * finalize side schedules execution after delivery settlement; the turn
+   * itself must not await it (delivery latency) and the deferred lifecycle
+   * has already released the embedded active-run handle by then.
+   */
+  agentCompactionRequest?: { focus?: string };
   result: Awaited<ReturnType<typeof runEmbeddedAgent>>;
   resolved: { provider: string; model: string };
   fallback: { exhausted: boolean; attempts: RuntimeFallbackAttempt[] };
