@@ -44,6 +44,7 @@ describe("AcpSessionManager turn results", () => {
   it("emits prompt_submitted only after the runtime confirms prompt submission", async () => {
     const { runtimeState, sessionKey } = setupPromptStartedRuntime();
     const transitions: string[] = [];
+    const lifecycleEvents: Array<{ type: string; authoritative: boolean }> = [];
     runtimeState.runtime.startTurn = vi.fn((input) => {
       transitions.push("turn-created");
       const promptStarted = Promise.resolve().then(() => {
@@ -69,7 +70,8 @@ describe("AcpSessionManager turn results", () => {
       onBeforePrompt: () => {
         transitions.push("admission-accepted");
       },
-      onLifecycle: () => {
+      onLifecycle: (event) => {
+        lifecycleEvents.push(event);
         transitions.push("prompt-submitted");
       },
     });
@@ -79,6 +81,34 @@ describe("AcpSessionManager turn results", () => {
       "turn-created",
       "prompt-started",
       "prompt-submitted",
+    ]);
+    expect(lifecycleEvents).toEqual([
+      expect.objectContaining({ type: "prompt_submitted", authoritative: true }),
+    ]);
+  });
+
+  it("marks legacy runtimes without prompt readiness as non-authoritative", async () => {
+    const { runtimeState, sessionKey } = setupPromptStartedRuntime();
+    runtimeState.runtime.startTurn = undefined;
+    runtimeState.runtime.runTurn.mockImplementation(async function* () {
+      yield { type: "done" as const };
+    });
+    const lifecycleEvents: Array<{ type: string; authoritative: boolean }> = [];
+
+    await new AcpSessionManager().runTurn({
+      provenance: "system",
+      cfg: baseCfg,
+      sessionKey,
+      text: "legacy prompt",
+      mode: "prompt",
+      requestId: "legacy-prompt-readiness",
+      onLifecycle: (event) => {
+        lifecycleEvents.push(event);
+      },
+    });
+
+    expect(lifecycleEvents).toEqual([
+      expect.objectContaining({ type: "prompt_submitted", authoritative: false }),
     ]);
   });
 

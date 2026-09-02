@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { SessionEvent } from "@github/copilot-sdk";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import { createAgentHarnessHostCapabilitiesForTest } from "openclaw/plugin-sdk/plugin-test-runtime";
 import type {
   TranscriptEntryAnchor,
   SessionTranscriptTargetParams,
@@ -15,6 +15,7 @@ import type { AttemptParamsLike } from "./attempt-types.js";
 import { attachEventBridge, type SessionLike } from "./event-bridge.js";
 
 const tempDirs: string[] = [];
+const hostClosers: Array<() => void> = [];
 
 export type FakeSession = SessionLike & {
   emit: (event: SessionEvent) => void;
@@ -30,13 +31,19 @@ type TranscriptRecorder = NonNullable<AttemptParamsLike["userTurnTranscriptRecor
   >;
 };
 
+type ExactTranscriptTarget = SessionTranscriptTargetParams &
+  Required<
+    Pick<SessionTranscriptTargetParams, "agentId" | "sessionId" | "sessionKey" | "storePath">
+  >;
+
 type AttemptTranscriptJournalFixture = {
   attempt: AttemptParamsLike;
   bridge: ReturnType<typeof attachEventBridge>;
+  closeHost: () => void;
   journal: ReturnType<typeof createAttemptTranscriptJournal>;
   recorder: TranscriptRecorder;
   session: FakeSession;
-  target: SessionTranscriptTargetParams;
+  target: ExactTranscriptTarget;
   tempDir: string;
 };
 
@@ -78,12 +85,13 @@ export function event(
 export async function createFixture(
   trigger?: string,
   resultContentSourceByToolName?: ReadonlyMap<string, "network">,
+  providerToolResultsOwned = false,
 ): Promise<AttemptTranscriptJournalFixture> {
   const tempDir = await fs.mkdtemp(
     path.join(resolvePreferredOpenClawTmpDir(), "openclaw-copilot-journal-"),
   );
   tempDirs.push(tempDir);
-  const target: SessionTranscriptTargetParams = {
+  const target: ExactTranscriptTarget = {
     agentId: "main",
     sessionId: "session-1",
     sessionKey: "agent:main:session-1",
@@ -138,12 +146,25 @@ export async function createFixture(
     trigger,
     userTurnTranscriptRecorder: recorder,
   } as unknown as AttemptParamsLike;
-  await upsertSessionEntry({
-    agentId: "main",
-    entry: { sessionId: target.sessionId, updatedAt: 1 },
-    sessionKey: target.sessionKey,
-    storePath: target.storePath,
+  const host = await createAgentHarnessHostCapabilitiesForTest({
+    attempt,
+    pluginId: "copilot",
+    transcriptAuthority: {
+      scope: target,
+      lifecycleRevision: "revision-1",
+      writerRunId: "run-1",
+    },
   });
+  let hostActive = true;
+  const closeHost = () => {
+    if (!hostActive) {
+      return;
+    }
+    hostActive = false;
+    host.close();
+  };
+  hostClosers.push(closeHost);
+  attempt.hostCapabilities = host.capabilities;
   const session = createFakeSession();
   const journal = createAttemptTranscriptJournal({
     abortSession: () => session.abort(),
@@ -158,10 +179,11 @@ export async function createFixture(
       journal,
       modelRef: { api: "openai-responses", id: "gpt-5", provider: "github-copilot" },
       now: () => 2,
+      providerToolResultsOwned,
       ...(resultContentSourceByToolName ? { resultContentSourceByToolName } : {}),
     },
   });
-  return { attempt, bridge, journal, recorder, session, target, tempDir };
+  return { attempt, bridge, closeHost, journal, recorder, session, target, tempDir };
 }
 
 export function transcriptMessages(events: unknown[]) {
@@ -179,5 +201,6 @@ export function transcriptMessages(events: unknown[]) {
 }
 
 export async function cleanupAttemptTranscriptJournalFixtures(): Promise<void> {
+  hostClosers.splice(0).forEach((close) => close());
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { force: true, recursive: true })));
 }

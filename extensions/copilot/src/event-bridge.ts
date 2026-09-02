@@ -1,4 +1,5 @@
 // Copilot plugin module implements event bridge behavior.
+import { createHash } from "node:crypto";
 import type { MessageOptions, SessionEvent, SessionEventType } from "@github/copilot-sdk";
 import type {
   AgentHarnessAttemptResult,
@@ -75,6 +76,7 @@ interface EventBridgeOptions {
     journal: AttemptTranscriptJournalProjection;
     modelRef: { api?: string; id: string; provider: string };
     now: () => number;
+    providerToolResultsOwned?: boolean;
     resultContentSourceByToolName?: ReadonlyMap<string, "network">;
   };
 }
@@ -125,6 +127,14 @@ type AssistantProjectionGroup = {
   chunks: AssistantProjectionChunk[];
 };
 type PromptErrorWithCode = Error & { code?: string; cause?: unknown };
+
+function fingerprintAssistantProjectionGroup(group: AssistantProjectionGroup): string {
+  // Hash immutable SDK envelopes before projection; canonical hooks may rewrite
+  // the stored assistant without changing the provider source event group.
+  return `sha256:${createHash("sha256")
+    .update(JSON.stringify(group.chunks.map((chunk) => chunk.event)))
+    .digest("hex")}`;
+}
 
 export function attachEventBridge(
   session: SessionLike,
@@ -366,7 +376,12 @@ export function attachEventBridge(
     if (projection && isDurableRootCompletion && isUserRequested) {
       projection.journal.markReplayIncomplete();
     }
-    if (projection && isDurableRootCompletion && !isUserRequested) {
+    if (
+      projection &&
+      isDurableRootCompletion &&
+      !isUserRequested &&
+      projection.providerToolResultsOwned !== true
+    ) {
       const resultText = event.data.success
         ? (event.data.result?.content ?? "")
         : (event.data.error?.message ?? "Tool execution failed");
@@ -755,6 +770,7 @@ export function attachEventBridge(
       eventId,
       message,
       replayIncomplete,
+      sourceFingerprint: fingerprintAssistantProjectionGroup(group),
       toolCallIds,
     });
   }

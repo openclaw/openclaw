@@ -47,18 +47,26 @@ export async function cleanupCodexAttempt(
   // Finalization can throw before freezing. Close cancellation admission before
   // any teardown await so it cannot replace the cleanup promise being joined.
   freezeRunTerminalOutcome();
+  let firstCleanupFailure: Error | undefined;
   // Finalization already owns the bounded checkpoint join. Exceptional exits
   // still fence immediately, without restarting a timed-out settlement's wait.
   const projectionClose = state.projectionClosed
     ? undefined
-    : activeTurn.activeProjector.closeProjection();
+    : activeTurn.activeProjector.closeProjection().catch((error: unknown) => {
+        firstCleanupFailure ??= error instanceof Error ? error : new Error(String(error));
+        throw error;
+      });
   state.projectionClosed = true;
   const checkpointCleanup = projectionClose
     ? runCleanupStep("codex-transcript-checkpoint", () => projectionClose)
     : undefined;
   // Join late cancellation before releasing the subscription, but do not let a
   // failed terminal RPC skip resource cleanup. Surface that failure below.
-  await state.abortCleanup.catch(() => undefined);
+  const abortCleanupFailure = await state.abortCleanup.then(
+    () => undefined,
+    (error: unknown) => (error instanceof Error ? error : new Error(String(error))),
+  );
+  firstCleanupFailure ??= abortCleanupFailure;
   try {
     steeringQueueRef.current?.cancel();
     if (params.isFinalFallbackAttempt !== false) {
@@ -209,5 +217,7 @@ export async function cleanupCodexAttempt(
       clearActiveEmbeddedRun(params.sessionId, handle, params.sessionKey, params.sessionFile);
     });
   }
-  await state.abortCleanup;
+  if (firstCleanupFailure) {
+    throw firstCleanupFailure;
+  }
 }

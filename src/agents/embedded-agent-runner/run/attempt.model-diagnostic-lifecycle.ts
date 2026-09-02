@@ -52,6 +52,7 @@ export type ModelCallDiagnosticContext = {
   nextCallId: () => string;
   ownerGeneration?: CoreModelRequestOwnerGeneration;
   onStarted?: () => void;
+  onAccepted?: (acceptance: ProviderAcceptance) => void;
   suppressPluginHooks?: boolean;
   requestTimeoutMs?: number;
 };
@@ -371,6 +372,7 @@ function withDiagnosticRequestContext(
   trace: DiagnosticTraceContext,
   observer: ModelCallObserver,
   callId: string,
+  onAccepted?: (acceptance: ProviderAcceptance) => void,
 ): ModelCallStreamOptions {
   const traceparent = formatPropagatedDiagnosticTraceparent(trace);
   const originalOnPayload = options?.onPayload;
@@ -419,6 +421,7 @@ function withDiagnosticRequestContext(
     if (acceptance.kind === "http_response") {
       observer.state.responseStatus = acceptance.status;
     }
+    onAccepted?.(acceptance);
   });
 }
 
@@ -443,7 +446,13 @@ export function createModelLifecycle(params: {
   }
   params.ctx.onStarted?.();
   const startedAt = Date.now();
-  const propagatedOptions = withDiagnosticRequestContext(params.options, trace, observer, callId);
+  const propagatedOptions = withDiagnosticRequestContext(
+    params.options,
+    trace,
+    observer,
+    callId,
+    params.ctx.onAccepted,
+  );
   return {
     eventBase,
     observer,

@@ -18,6 +18,7 @@ export interface AttemptTranscriptJournalProjection {
     eventId: string;
     message: AssistantMessage;
     replayIncomplete?: boolean;
+    sourceFingerprint: string;
     toolCallIds: string[];
   }): void;
   recordSdkUser(input: {

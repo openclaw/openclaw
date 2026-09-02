@@ -87,6 +87,7 @@ export type AcpRunTurnInput = {
 type AcpTurnLifecycleEvent = {
   type: "prompt_submitted";
   at: number;
+  authoritative: boolean;
 };
 
 /** Input for closing, resetting, or cleaning up an ACP session. */

@@ -224,6 +224,7 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents lifecycle", () => {
   });
 
   it("records provider acceptance when an SDK hides HTTP metadata", async () => {
+    const onAccepted = vi.fn();
     const wrapped = wrapStreamFnWithDiagnosticModelCallEvents(
       ((
         _model: Parameters<StreamFn>[0],
@@ -237,6 +238,7 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents lifecycle", () => {
         api: "google-generative-ai",
         trace: createDiagnosticTraceContext(),
         nextCallId: () => "call-timeline-accepted",
+        onAccepted,
       },
     );
 
@@ -253,6 +255,35 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents lifecycle", () => {
       },
     });
     expect(events[0]?.status).toBeUndefined();
+    expect(onAccepted).toHaveBeenCalledExactlyOnceWith({ kind: "provider_stream_opened" });
+  });
+
+  it("does not accept a model call rejected before provider transport acceptance", async () => {
+    const onStarted = vi.fn();
+    const onAccepted = vi.fn();
+    const rejection = Object.assign(new Error("getaddrinfo ENOTFOUND api.example.invalid"), {
+      code: "ENOTFOUND",
+    });
+    const wrapped = wrapStreamFnWithDiagnosticModelCallEvents(
+      (() => {
+        throw rejection;
+      }) as unknown as StreamFn,
+      {
+        runId: "run-transport-rejected",
+        provider: "openai",
+        model: "gpt-5.6",
+        api: "openai-responses",
+        transport: "http",
+        trace: createDiagnosticTraceContext(),
+        nextCallId: () => "call-transport-rejected",
+        onStarted,
+        onAccepted,
+      },
+    );
+
+    expect(() => wrapped({} as never, {} as never, {} as never)).toThrow(rejection);
+    expect(onStarted).toHaveBeenCalledOnce();
+    expect(onAccepted).not.toHaveBeenCalled();
   });
 
   it("writes Unicode-safe bounded attributes to the provider timeline JSONL", async () => {

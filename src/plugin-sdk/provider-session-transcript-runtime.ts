@@ -16,6 +16,17 @@ export function commitProviderSessionTranscriptPrefix(
   }
   return commit({
     baseAnchor,
-    entries: entries.map(({ eventId, identity, message }) => ({ eventId, identity, message })),
+    entries: entries.map(({ eventId, identity, message, sourceFingerprint }) => ({
+      eventId,
+      identity,
+      message,
+      sourceFingerprint,
+    })),
   });
+}
+
+export function hasProviderSessionTranscriptCapability(
+  hostCapabilities: AgentHarnessHostCapabilities,
+): boolean {
+  return resolveAgentHarnessTranscriptPrefixCommit(hostCapabilities) !== undefined;
 }

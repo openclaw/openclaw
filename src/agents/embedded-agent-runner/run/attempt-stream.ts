@@ -400,6 +400,13 @@ export function installEmbeddedAttemptStreamGuards(input: {
         firstModelCallStarted: true,
       });
     },
+    onAccepted: () => {
+      attempt.onExecutionPhase?.({
+        phase: "turn_accepted",
+        provider: attempt.provider,
+        model: attempt.modelId,
+      });
+    },
     suppressPluginHooks: attempt.operation === "settled-tool-finalization",
   });
   if (input.codeModeExecToolNames?.size) {

@@ -1,3 +1,5 @@
+/* oxlint-disable eslint/curly -- Journal state stays co-located with its queue. */
+import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
@@ -5,19 +7,19 @@ import {
   runAgentHarnessBeforeMessageWriteHook,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { commitProviderSessionTranscriptPrefix } from "openclaw/plugin-sdk/provider-session-transcript-runtime";
 import {
   appendSessionTranscriptMessageByIdentityStrict,
-  appendSessionTranscriptMessagesByIdentity,
   publishSessionTranscriptUpdateByIdentity,
-  readVisibleSessionTranscriptMessageEntries,
   type SessionTranscriptTargetParams,
   type TranscriptEntryAnchor,
 } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
-  isCompatibleSingletonRewrite,
   isCompleteToolGroup,
+  isCompatibleSingletonRewrite,
   projectReplayPayload,
+  transcriptUserText,
   type AttemptTranscriptMessage as TranscriptMessage,
 } from "./attempt-transcript-replay.js";
 import type { AttemptParamsLike } from "./attempt-types.js";
@@ -35,6 +37,8 @@ type PendingWrite = {
   eventId?: string;
   message: TranscriptMessage;
   recorder?: TranscriptRecorder;
+  receipt?: PersistenceReceipt;
+  sourceFingerprint?: string;
 };
 type ToolGroup = {
   assistant: PendingWrite;
@@ -45,6 +49,9 @@ type ToolGroup = {
 type PersistenceReceipt = ReturnType<typeof createDeferred<void>>;
 
 type TurnTaintMetadata = { resultContentSource?: "network"; turnTainted?: true };
+
+const hasSameReplayPayload = (left: TranscriptMessage, right: TranscriptMessage) =>
+  isDeepStrictEqual(projectReplayPayload(left), projectReplayPayload(right));
 
 function readTurnTaintMetadata(message: AgentMessage): TurnTaintMetadata | undefined {
   const metadata = (message as unknown as Record<string, unknown>)["__openclaw"];
@@ -135,6 +142,7 @@ export function createAttemptTranscriptJournal(params: {
   let firstFailure: Error | undefined;
   const sdkUserPersistenceReceipts = new Map<string, PersistenceReceipt>();
   const sdkUserRecorders = new Map<string, TranscriptRecorder>();
+  const providerPersistenceReceipts = new Set<PersistenceReceipt>();
   let abortPromise: Promise<void> | undefined;
   let replayInvalid = false;
   let initialSdkUserObserved = false;
@@ -155,6 +163,10 @@ export function createAttemptTranscriptJournal(params: {
     for (const receipt of sdkUserPersistenceReceipts.values()) {
       receipt.reject(firstFailure);
     }
+    for (const receipt of providerPersistenceReceipts) {
+      receipt.reject(firstFailure);
+    }
+    providerPersistenceReceipts.clear();
     abortPromise = params.abortSession().catch(() => undefined);
   };
   const sdkUserPersistenceReceipt = (eventId: string) => {
@@ -177,8 +189,6 @@ export function createAttemptTranscriptJournal(params: {
     if (firstFailure) {
       return;
     }
-    // The SDK checkpoint can advance before this queue. SQLite closes the window inside a
-    // complete group; a crash between groups leaves a structurally valid prefix.
     queue = queue.then(() => (firstFailure ? undefined : task())).catch(captureFailure);
   };
 
@@ -243,12 +253,7 @@ export function createAttemptTranscriptJournal(params: {
     if (outcome.kind === "rejected") {
       throw new Error("Transcript session changed before singleton append");
     }
-    if (
-      !isDeepStrictEqual(
-        projectReplayPayload(write.message),
-        projectReplayPayload(outcome.result.message as TranscriptMessage),
-      )
-    ) {
+    if (!hasSameReplayPayload(write.message, outcome.result.message as TranscriptMessage)) {
       replayInvalid = true;
     }
     if (outcome.result.message.role === "user") {
@@ -259,61 +264,36 @@ export function createAttemptTranscriptJournal(params: {
 
   const appendToolGroup = async (group: ToolGroup) => {
     const writes = [group.assistant, ...group.order.map((id) => group.results.get(id)!)];
-    const keys = writes.map((write) => readIdempotencyKey(write.message));
-    const persistedKeys = new Set(
-      (await readVisibleSessionTranscriptMessageEntries(target)).flatMap((entry) =>
-        entry.idempotencyKey ? [entry.idempotencyKey] : [],
-      ),
-    );
-    const persistedCount = keys.filter((key) => key && persistedKeys.has(key)).length;
-    if (persistedCount > 0 && persistedCount < writes.length) {
-      // The pre-atomic journal was never shipped. Partial identity is corruption,
-      // not a runtime compatibility shape; recovery stays fail-closed.
-      throw new Error("Copilot transcript found a partial persisted tool group");
-    }
-    // Hooks must finish before BEGIN. This skips steady-state replay hooks; the
-    // transaction still revalidates all identities against cross-process races.
-    const messages =
-      persistedCount === writes.length
-        ? writes.map((write) => write.message)
-        : writes.map((write) => prepare(write));
-    // Hook omission belongs to policy, but the journal owns structure: one block or
-    // structurally destructive rewrite suppresses the complete assistant/result group.
-    if (
-      messages.some((message) => !message) ||
-      !isCompleteToolGroup(messages as TranscriptMessage[], group.order)
-    ) {
-      return undefined;
-    }
-    const results = await appendSessionTranscriptMessagesByIdentity({
-      ...target,
-      ...(config ? { config } : {}),
-      messages: writes.map((write, index) => ({
+    if (!params.attempt.hostCapabilities)
+      throw new Error("Copilot provider transcript commit requires host capabilities");
+    const outcome = await commitProviderSessionTranscriptPrefix({
+      hostCapabilities: params.attempt.hostCapabilities,
+      baseAnchor: terminalAnchor,
+      entries: writes.map((write) => ({
         eventId: write.eventId!,
-        idempotencyLookup: "scan" as const,
-        message: messages[index]!,
+        identity: readIdempotencyKey(write.message)!,
+        message: write.message,
+        sourceFingerprint: write.sourceFingerprint,
       })),
     });
-    if (
-      !isCompleteToolGroup(
-        results.map((result) => result.message),
-        group.order,
-      )
-    ) {
-      throw new Error("Copilot transcript replayed an invalid tool group");
-    }
-    if (
-      results.some(
-        (result, index) =>
-          !isDeepStrictEqual(
-            projectReplayPayload(writes[index]!.message),
-            projectReplayPayload(result.message as TranscriptMessage),
-          ),
-      )
-    ) {
-      replayInvalid = true;
-    }
-    return results;
+    if (outcome.kind === "suppressed") return undefined;
+    if (outcome.kind !== "committed" && outcome.kind !== "replayed")
+      throw new Error(`Copilot provider transcript commit ${outcome.kind}`);
+    const { anchors, messages } = outcome;
+    if (!anchors || !messages)
+      throw new Error("Copilot provider transcript commit omitted canonical messages");
+    const canonicalMessages = messages as TranscriptMessage[];
+    if (!isCompleteToolGroup(canonicalMessages, group.order))
+      throw new Error("Copilot provider transcript commit changed tool group topology");
+    replayInvalid ||= canonicalMessages.some(
+      (message, index) => !hasSameReplayPayload(writes[index]!.message, message),
+    );
+    return canonicalMessages.map((message, index) => ({
+      anchor: anchors[index]!,
+      appended: outcome.kind === "committed",
+      message,
+      messageId: writes[index]!.eventId!,
+    }));
   };
 
   const publish = async (appended: boolean) => {
@@ -470,7 +450,8 @@ export function createAttemptTranscriptJournal(params: {
         initialSdkUserObserved = true;
         if (
           !persistedInitialUser ||
-          userText(persistedInitialUser.content) !== userText(input.message.content)
+          transcriptUserText(persistedInitialUser.content) !==
+            transcriptUserText(input.message.content)
         ) {
           replayInvalid = true;
         } else {
@@ -508,6 +489,7 @@ export function createAttemptTranscriptJournal(params: {
       eventId: string;
       message: Extract<AgentMessage, { role: "assistant" }>;
       replayIncomplete?: boolean;
+      sourceFingerprint: string;
       toolCallIds: string[];
     }) {
       if (!claim(input.eventId)) {
@@ -527,6 +509,7 @@ export function createAttemptTranscriptJournal(params: {
         const write = {
           eventId: input.eventId,
           message: { ...message, idempotencyKey: key } as TranscriptMessage,
+          sourceFingerprint: input.sourceFingerprint,
         };
         if (input.toolCallIds.length > 0) {
           pendingTools = {
@@ -605,6 +588,69 @@ export function createAttemptTranscriptJournal(params: {
         }
       });
     },
+    recordProviderToolResult(input: {
+      message: Extract<AgentMessage, { role: "toolResult" }>;
+      providerResult: unknown;
+    }): Promise<void> {
+      const eventId = `copilot-sdk:${params.sdkSessionId}:tool:${input.message.toolCallId}`;
+      const receipt = createDeferred<void>();
+      void receipt.promise.catch(() => undefined);
+      providerPersistenceReceipts.add(receipt);
+      if (firstFailure) {
+        receipt.reject(firstFailure);
+        providerPersistenceReceipts.delete(receipt);
+        return receipt.promise;
+      }
+      if (!claim(eventId)) {
+        receipt.resolve();
+        providerPersistenceReceipts.delete(receipt);
+        return receipt.promise;
+      }
+      const sourceFingerprint = `sha256:${createHash("sha256")
+        .update(
+          JSON.stringify([
+            params.sdkSessionId,
+            input.message.toolCallId,
+            input.message.toolName,
+            input.providerResult,
+          ]),
+        )
+        .digest("hex")}`;
+      turnTainted ||= readTurnTaintMetadata(input.message)?.resultContentSource === "network";
+      schedule(async () => {
+        const group = pendingTools;
+        if (!group || !group.order.includes(input.message.toolCallId)) {
+          throw new Error(`Copilot emitted an unmatched tool result: ${input.message.toolCallId}`);
+        }
+        group.results.set(input.message.toolCallId, {
+          eventId,
+          message: { ...input.message, idempotencyKey: eventId } as TranscriptMessage,
+          receipt,
+          sourceFingerprint,
+        });
+        if (!group.order.every((toolCallId) => group.results.has(toolCallId))) {
+          return;
+        }
+        const results = await appendToolGroup(group);
+        let appended = false;
+        if (!results) {
+          replayInvalid = true;
+          ownAssistant(group.assistantKey, false);
+        } else {
+          for (const result of results) {
+            appended ||= accept(result as AppendResult);
+          }
+          ownAssistant(group.assistantKey, true, results.at(-1)?.anchor);
+        }
+        pendingTools = undefined;
+        await publish(appended);
+        for (const result of group.results.values()) {
+          result.receipt?.resolve();
+          if (result.receipt) providerPersistenceReceipts.delete(result.receipt);
+        }
+      });
+      return receipt.promise;
+    },
     waitForSdkUserPersisted(eventId: string) {
       return sdkUserPersistenceReceipt(eventId).promise;
     },
@@ -681,19 +727,6 @@ function isSameUserTurn(
   // and stamps it with this recorder timestamp; historical turns are ineligible.
   return (
     candidate.timestamp === current.timestamp &&
-    userText(candidate.content) === userText(current.content)
+    transcriptUserText(candidate.content) === transcriptUserText(current.content)
   );
-}
-
-function userText(content: unknown): string {
-  if (typeof content === "string") {
-    return content;
-  }
-  if (Array.isArray(content) && content.length === 1) {
-    const part = content[0] as { text?: unknown; type?: unknown };
-    if (part?.type === "text" && typeof part.text === "string") {
-      return part.text;
-    }
-  }
-  return JSON.stringify(content) ?? "";
 }

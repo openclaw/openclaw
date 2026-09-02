@@ -12,10 +12,12 @@ import {
   commitExpectedSessionTranscriptPrefix,
   type SessionTranscriptPrefixEntry,
 } from "../config/sessions/session-accessor.sqlite-transcript-prefix.js";
+import { readMessageIdempotencyKey } from "../config/sessions/session-accessor.sqlite-transcript-store.js";
 import type {
   CodeModeWaitingClaimIntent,
   SessionTranscriptRuntimeTarget,
 } from "../config/sessions/session-accessor.types.js";
+import { sessionTranscriptIndexNeedsReconcile } from "../config/sessions/session-transcript-index.js";
 import type { TranscriptEntryAnchor } from "../config/sessions/transcript-entry-anchor.js";
 import type { CodeModeWaitingClaim, InternalSessionEntry } from "../config/sessions/types.js";
 import {
@@ -54,6 +56,26 @@ function attachCodeModeResultIdentity(
   return { ...message, idempotencyKey: `code-mode-result:${toolCallId}` };
 }
 
+function attachProviderSourceFingerprint(
+  message: AgentMessage,
+  sourceFingerprint: string | undefined,
+): AgentMessage {
+  if (!sourceFingerprint) return message;
+  if (!/^sha256:[a-f0-9]{64}$/u.test(sourceFingerprint))
+    throw new Error("provider transcript source fingerprint must be a full sha256 digest");
+  const metadata = asOptionalRecord(Reflect.get(message, "__openclaw")) ?? {};
+  return Object.assign({}, message, {
+    __openclaw: { ...metadata, providerSourceFingerprint: sourceFingerprint },
+  }) as AgentMessage; // SAFETY: Object.assign preserves AgentMessage fields and adds metadata.
+}
+
+function readProviderSourceFingerprint(message: unknown): string | undefined {
+  const metadata = asOptionalRecord(Reflect.get(asOptionalRecord(message) ?? {}, "__openclaw"));
+  return typeof metadata?.providerSourceFingerprint === "string"
+    ? metadata.providerSourceFingerprint
+    : undefined;
+}
+
 export class CodeModeTranscriptAuthority {
   readonly #target: Readonly<
     SessionTranscriptRuntimeTarget & { lifecycleRevision: string; writerRunId: string }
@@ -88,7 +110,7 @@ export class CodeModeTranscriptAuthority {
         ? readSessionEntryRow(database, resolveSqliteTranscriptScope(this.#target).sessionKey)
             ?.entry
         : loadExactSessionEntry({ ...this.#target, clone: false })?.entry
-    ) as InternalSessionEntry | undefined;
+    ) as InternalSessionEntry | undefined; // SAFETY: both accessors return canonical session entries.
     if (
       !entry ||
       entry.sessionId !== this.#target.sessionId ||
@@ -186,7 +208,7 @@ export class CodeModeTranscriptAuthority {
       baseAnchor?: TranscriptEntryAnchor;
       entries: readonly Pick<
         SessionTranscriptPrefixEntry<AgentMessage>,
-        "eventId" | "identity" | "message"
+        "eventId" | "identity" | "message" | "sourceFingerprint"
       >[];
     },
     prepareMessage: (message: AgentMessage) => AgentMessage | null,
@@ -195,10 +217,102 @@ export class CodeModeTranscriptAuthority {
     this.#current();
     const pending: CodeModeTranscriptReservation[] = [];
     const entries: SessionTranscriptPrefixEntry<AgentMessage>[] = [];
-    for (const entry of params.entries) {
+    const candidates = params.entries.map((entry) => {
       const reservation = this.reserve(entry.message);
-      const message = prepareMessage(entry.message);
-      if (!message) return Promise.resolve({ kind: "suppressed" as const });
+      const message = attachProviderSourceFingerprint(entry.message, entry.sourceFingerprint);
+      const source = asOptionalRecord(entry.message);
+      const replay =
+        !reservation &&
+        source?.role === "toolResult" &&
+        typeof source.toolCallId === "string" &&
+        typeof source.toolName === "string"
+          ? attachCodeModeResultIdentity(message, source.toolCallId, source.toolName)
+          : undefined;
+      return { entry, message, replay, reservation };
+    });
+    const replayIdentities = candidates.flatMap(({ entry, replay, reservation }) =>
+      reservation ? [] : [entry.identity, ...(replay ? [replay.idempotencyKey] : [])],
+    );
+    const replayScope = resolveSqliteTranscriptScope(this.#target);
+    const replayDatabase = openOpenClawAgentDatabase(toDatabaseOptions(replayScope));
+    // A dirty projection cannot prove an active replay cheaply. Let the canonical
+    // prefix transaction rebuild it once instead of adding another full scan.
+    const replayFacts =
+      replayIdentities.length > 0 &&
+      !sessionTranscriptIndexNeedsReconcile(replayDatabase.db, replayScope.sessionId)
+        ? readTranscriptMirrorFacts(replayDatabase, replayScope, replayIdentities)
+        : undefined;
+    // Prepared bytes may differ from provider input. Only immutable source evidence and
+    // stored topology may bypass host preparation; the commit transaction revalidates both.
+    const exactReplay = (
+      eventId: string,
+      identity: string,
+      sourceMessage: AgentMessage,
+      sourceFingerprint: string | undefined,
+    ):
+      | {
+          anchor: TranscriptEntryAnchor;
+          identity: string;
+          message: AgentMessage;
+        }
+      | undefined => {
+      const anchor = replayFacts?.anchorsByIdempotencyKey.get(identity);
+      const stored = replayFacts?.messagesByIdempotencyKey.get(identity);
+      const source = asOptionalRecord(sourceMessage);
+      const storedRecord = asOptionalRecord(stored);
+      const sourceMatches =
+        sourceFingerprint !== undefined
+          ? readProviderSourceFingerprint(stored) === sourceFingerprint
+          : isDeepStrictEqual(stored, sourceMessage);
+      return anchor?.entryId === eventId &&
+        readMessageIdempotencyKey(stored) === identity &&
+        sourceMatches &&
+        (source?.role !== "toolResult" ||
+          (storedRecord?.role === "toolResult" &&
+            storedRecord.toolCallId === source.toolCallId &&
+            storedRecord.toolName === source.toolName))
+        ? {
+            anchor,
+            identity,
+            // SAFETY: the role and required tool-result identity fields were validated above.
+            message: stored as AgentMessage,
+          }
+        : undefined;
+    };
+    let replayPrefix = true;
+    let replayParentId = params.baseAnchor?.entryId;
+    let replayPosition = params.baseAnchor?.activeMessagePosition;
+    for (const { entry, message: sourceMessage, replay, reservation } of candidates) {
+      if (replayPrefix && !reservation) {
+        const stored =
+          exactReplay(entry.eventId, entry.identity, sourceMessage, entry.sourceFingerprint) ??
+          (replay
+            ? exactReplay(entry.eventId, replay.idempotencyKey, replay, entry.sourceFingerprint)
+            : undefined);
+        if (
+          stored &&
+          (replayParentId === undefined || stored.anchor.effectiveParentId === replayParentId) &&
+          (replayPosition === undefined ||
+            stored.anchor.activeMessagePosition === replayPosition + 1)
+        ) {
+          entries.push({
+            ...(stored.identity !== entry.identity
+              ? { codeModeReplay: { identity: stored.identity, message: stored.message } }
+              : {}),
+            eventId: entry.eventId,
+            identity: entry.identity,
+            message: stored.message,
+            sourceFingerprint: entry.sourceFingerprint,
+          });
+          replayParentId = stored.anchor.entryId;
+          replayPosition = stored.anchor.activeMessagePosition;
+          continue;
+        }
+      }
+      replayPrefix = false;
+      const prepared = prepareMessage(entry.message);
+      if (!prepared) return Promise.resolve({ kind: "suppressed" as const });
+      const message = attachProviderSourceFingerprint(prepared, entry.sourceFingerprint);
       if (reservation) {
         const attached = reservation.attach(message);
         entries.push({
@@ -206,22 +320,31 @@ export class CodeModeTranscriptAuthority {
           eventId: entry.eventId,
           identity: attached.idempotencyKey,
           message: attached,
+          sourceFingerprint: entry.sourceFingerprint,
         });
         pending.push(reservation);
         continue;
       }
       const source = asOptionalRecord(entry.message);
-      const replay =
+      const preparedReplay =
         source?.role === "toolResult" &&
         typeof source.toolCallId === "string" &&
         typeof source.toolName === "string"
           ? attachCodeModeResultIdentity(message, source.toolCallId, source.toolName)
           : undefined;
       entries.push({
-        ...(replay ? { codeModeReplay: { identity: replay.idempotencyKey, message: replay } } : {}),
+        ...(preparedReplay
+          ? {
+              codeModeReplay: {
+                identity: preparedReplay.idempotencyKey,
+                message: preparedReplay,
+              },
+            }
+          : {}),
         eventId: entry.eventId,
         identity: entry.identity,
         message,
+        sourceFingerprint: entry.sourceFingerprint,
       });
     }
     return commitExpectedSessionTranscriptPrefix(this.#target, {

@@ -65,3 +65,17 @@ export function isCompleteToolGroup(
     )
   );
 }
+
+export function transcriptUserText(content: unknown): string {
+  if (typeof content === "string") {
+    return content;
+  }
+  if (Array.isArray(content) && content.length === 1) {
+    // SAFETY: the array guard makes indexed access unknown data that is inspected before use.
+    const part = content[0] as { text?: unknown; type?: unknown };
+    if (part?.type === "text" && typeof part.text === "string") {
+      return part.text;
+    }
+  }
+  return JSON.stringify(content) ?? "";
+}

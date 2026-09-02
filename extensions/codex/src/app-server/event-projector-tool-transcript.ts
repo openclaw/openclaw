@@ -65,8 +65,6 @@ const CODE_MODE_NATIVE_PATCH_SOURCE_RE =
   /^\s*(?:\/\/[^\r\n]*\r?\n\s*)?(?:const|let)\s+([A-Za-z_$][\w$]*)\s*=\s*await\s+tools\.apply_patch\(\s*("(?:\\[\s\S]|[^"\\])*")\s*\)\s*;?\s*text\(\s*\1\s*\)\s*;?\s*$/u;
 const CODE_MODE_NATIVE_PATCH_RESULT_RE =
   /^\s*Script (completed|failed)\s*\r?\nWall time\s+\d+(?:\.\d+)?\s+seconds\s*\r?\nOutput:\s*([\s\S]*?)\s*$/iu;
-const MAX_TOOL_APPROVAL_REVIEWS = 16;
-
 type ToolApprovalReviewOutcome = "approved" | "denied" | "reviewing";
 
 type ToolApprovalReviewState = {
@@ -185,12 +183,12 @@ export class CodexToolTranscriptProjection {
     state.reviews = [
       ...state.reviews.filter((candidate) => candidate.id !== reviewId),
       review,
-    ].slice(-MAX_TOOL_APPROVAL_REVIEWS);
+    ].slice(-16);
     state.denied ||= ["denied", "timed_out", "aborted"].includes(status);
     const unresolved = state.unresolvedReviewIds;
     if (status === "in_progress") {
       state.unresolvedReviewIds =
-        unresolved && (unresolved.size < MAX_TOOL_APPROVAL_REVIEWS || unresolved.has(reviewId))
+        unresolved && (unresolved.size < 16 || unresolved.has(reviewId))
           ? unresolved.add(reviewId)
           : null;
     } else {
@@ -209,11 +207,17 @@ export class CodexToolTranscriptProjection {
     return toolApprovalReviewOutcome(state);
   }
 
-  recordDynamicToolCall(params: { callId: string; tool: string; arguments?: JsonValue }): void {
+  recordDynamicToolCall(params: {
+    callId: string;
+    tool: string;
+    arguments?: JsonValue;
+    sourceFingerprint?: string;
+  }): void {
     this.recordToolCall({
       id: params.callId,
       name: params.tool,
       arguments: sanitizeCodexToolArguments(params.arguments),
+      sourceFingerprint: params.sourceFingerprint,
     });
   }
 
@@ -224,6 +228,7 @@ export class CodexToolTranscriptProjection {
       success: boolean;
       contentItems: CodexDynamicToolCallOutputContentItem[];
       details?: unknown;
+      sourceFingerprint?: string;
     },
     resultContentSource?: "network",
   ): void {
@@ -234,6 +239,7 @@ export class CodexToolTranscriptProjection {
       isError: !params.success,
       details: params.details,
       ...(resultContentSource ? { resultContentSource } : {}),
+      sourceFingerprint: params.sourceFingerprint,
     });
   }
 
@@ -611,7 +617,10 @@ export class CodexToolTranscriptProjection {
       `${this.turnId}:tool:${params.id}:call`,
     );
     this.messages.push(message);
-    this.options.checkpointMessage?.({ read: () => message });
+    this.options.checkpointMessage?.({
+      read: () => message,
+      sourceFingerprint: params.sourceFingerprint,
+    });
   }
 
   private recordToolResult(params: ToolTranscriptResultInput): void {
@@ -630,6 +639,7 @@ export class CodexToolTranscriptProjection {
       // A linked raw patch output enriches FileChange after item/completed.
       // Keep that result mutable only until the promised raw output arrives.
       ready: () => !this.pendingRawPatchOutputIds.has(params.id),
+      sourceFingerprint: params.sourceFingerprint,
     });
   }
 

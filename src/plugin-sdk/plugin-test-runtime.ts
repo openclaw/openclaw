@@ -4,8 +4,10 @@ import {
   createOperationalRunInstanceRef,
   prepareAgentRunAdmission,
 } from "../agents/admitted-run-context.js";
+import { CodeModeTranscriptAuthority } from "../agents/code-mode-waiting-claim.js";
 import type { EmbeddedRunAttemptParams } from "../agents/embedded-agent-runner/run/types.js";
 import { createAgentHarnessHostCapabilities } from "../agents/harness/host-capability.js";
+import { replaceSessionEntrySync } from "../config/sessions/session-accessor.sqlite-entry.js";
 
 type AgentHarnessHostTestAttempt = Omit<
   EmbeddedRunAttemptParams,
@@ -16,6 +18,7 @@ type AgentHarnessHostTestAttempt = Omit<
 export async function createAgentHarnessHostCapabilitiesForTest(params: {
   attempt: AgentHarnessHostTestAttempt;
   pluginId: string;
+  transcriptAuthority?: ConstructorParameters<typeof CodeModeTranscriptAuthority>[0];
 }) {
   const admission = prepareAgentRunAdmission({
     cfg: params.attempt.config ?? {},
@@ -27,14 +30,30 @@ export async function createAgentHarnessHostCapabilitiesForTest(params: {
     operationalRunInstance: createOperationalRunInstanceRef(params.attempt.runId),
   });
   const admittedRunContext = await admission.admit("plugin-harness", params.pluginId);
+  if (params.transcriptAuthority) {
+    replaceSessionEntrySync(params.transcriptAuthority.scope, {
+      activeWriterRunId: params.transcriptAuthority.writerRunId,
+      lifecycleRevision: params.transcriptAuthority.lifecycleRevision,
+      sessionId: params.transcriptAuthority.scope.sessionId,
+      updatedAt: Date.now(),
+    });
+  }
+  const transcriptAuthority = params.transcriptAuthority
+    ? new CodeModeTranscriptAuthority(params.transcriptAuthority)
+    : undefined;
   const host = createAgentHarnessHostCapabilities({
-    attempt: { ...params.attempt, admittedRunContext },
+    attempt: {
+      ...params.attempt,
+      admittedRunContext,
+      ...(transcriptAuthority ? { codeModeTranscriptAuthority: transcriptAuthority } : {}),
+    },
     pluginId: params.pluginId,
   });
   return {
     capabilities: host.capabilities,
     close: () => {
       host.close();
+      transcriptAuthority?.close();
       admission.close();
     },
   };

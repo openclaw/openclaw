@@ -1,3 +1,4 @@
+/* oxlint-disable eslint/curly -- Keep provider completion ownership in the attempt. */
 import type {
   AgentMessage,
   AnyAgentTool,
@@ -25,9 +26,13 @@ import {
   isSdkSendAndWaitTimeoutError,
   readNonEmptyString,
   readResolvedAttemptPath,
-  resolvePoolAcquire,
   toCopilotError,
 } from "./attempt-config.js";
+import {
+  createCopilotAbortLifecycle,
+  createCopilotToolTerminalObserver,
+  resolveCopilotExecutionPoolAcquire,
+} from "./attempt-execution-lifecycle.js";
 import { completeCopilotAttempt } from "./attempt-finalize.js";
 import { resolveCopilotAttemptSandbox } from "./attempt-prepare.js";
 import { createCopilotSessionSetup } from "./attempt-session-setup.js";
@@ -45,6 +50,7 @@ import type {
   CopilotAttemptParams,
 } from "./attempt-types.js";
 import { createCopilotByokProxy } from "./byok-proxy.js";
+import { sanitizeToolDetailText } from "./event-bridge-transcript.js";
 import { attachEventBridge, type SessionLike } from "./event-bridge.js";
 import { createCopilotNativeSubagentTaskMirror } from "./native-subagent-task-mirror.js";
 import { classifyResumeFailure, decideReplayAction } from "./replay-shim.js";
@@ -127,29 +133,21 @@ export async function runCopilotExecution(context: {
   let yieldAcknowledgment: string | undefined;
   const acceptedSessionSpawns: NonNullable<AgentHarnessAttemptResult["acceptedSessionSpawns"]> = [];
   let lastToolError: AgentHarnessAttemptResult["lastToolError"];
-  const hostObserveToolTerminal = input.observeToolTerminal;
-  const observeToolTerminal = hostObserveToolTerminal
-    ? (observation: Parameters<typeof hostObserveToolTerminal>[0]) => {
-        const terminal = hostObserveToolTerminal(observation);
-        lastToolError = terminal.lastToolError;
-        return terminal;
-      }
-    : undefined;
-  const markExternalAbort = () => {
-    abortRequested = true;
-    externalAbort = true;
-    aborted = true;
-  };
-  const abortActiveSession = () => {
-    markExternalAbort();
-    if (settled || !sentTurnStarted || !session) {
-      return;
-    }
-    void session.abort().catch(() => undefined);
-  };
-  const onAbort = () => {
-    abortActiveSession();
-  };
+  const observeToolTerminal = createCopilotToolTerminalObserver(
+    input.observeToolTerminal,
+    (error) => {
+      lastToolError = error;
+    },
+  );
+  const { abortActiveSession, onAbort } = createCopilotAbortLifecycle({
+    markExternalAbort: () => {
+      abortRequested = true;
+      externalAbort = true;
+      aborted = true;
+    },
+    shouldAbortSession: () => !settled && sentTurnStarted,
+    session: () => session,
+  });
   params.abortSignal?.addEventListener("abort", onAbort, { once: true });
   let sandbox: SandboxContext | null = null;
   let effectiveWorkspaceDir = resolvedWorkspaceForSandbox;
@@ -220,16 +218,7 @@ export async function runCopilotExecution(context: {
         resolvedWorkspace: resolvedWorkspaceForSandbox,
       })
     : undefined;
-  const resolvedPoolAcquire = resolvePoolAcquire(input);
-  const poolAcquire = settledToolFinalization
-    ? {
-        ...resolvedPoolAcquire,
-        options: {
-          ...resolvedPoolAcquire.options,
-          mode: "empty" as const,
-        },
-      }
-    : resolvedPoolAcquire;
+  const poolAcquire = resolveCopilotExecutionPoolAcquire(input, settledToolFinalization);
   let byokProxy: Awaited<ReturnType<typeof createCopilotByokProxy>>;
   try {
     byokProxy = await createCopilotByokProxy(poolAcquire.provider);
@@ -283,7 +272,7 @@ export async function runCopilotExecution(context: {
             yieldDetected = true;
             yieldAcknowledgment = acknowledgment;
           },
-          onToolCompleted: async ({ args, error, result, startedAt, toolCallId, toolName }) => {
+          onToolObserved: async ({ args, error, result, startedAt, toolCallId, toolName }) => {
             const acceptedSessionSpawnDetails =
               toolName === "sessions_spawn" && !error
                 ? asOptionalRecord(asOptionalRecord(result)?.details)
@@ -312,6 +301,31 @@ export async function runCopilotExecution(context: {
               ...(result !== undefined ? { result } : {}),
               ...(error ? { error } : {}),
               startedAt,
+            });
+          },
+          onProviderToolCompleted: async ({ providerResult, result, toolCallId, toolName }) => {
+            if (!providerResult || typeof providerResult.resultType !== "string")
+              throw new Error("Copilot provider completion requires providerResult");
+            if (!transcriptJournal)
+              throw new Error("Copilot provider result arrived before transcript journal");
+            const resultContentSource = resultContentSourceByToolName.get(toolName);
+            await transcriptJournal.recordProviderToolResult({
+              providerResult,
+              message: {
+                role: "toolResult",
+                toolCallId,
+                toolName,
+                content: [
+                  {
+                    type: "text",
+                    text: sanitizeToolDetailText(providerResult.textResultForLlm),
+                  },
+                ],
+                ...(result !== undefined ? { details: result } : {}),
+                isError: providerResult.resultType !== "success",
+                timestamp: now(),
+                ...(resultContentSource ? { __openclaw: { resultContentSource } } : {}),
+              },
             });
           },
         });
@@ -477,6 +491,7 @@ export async function runCopilotExecution(context: {
         journal: transcriptJournal,
         modelRef,
         now,
+        providerToolResultsOwned: input.disableTools !== true,
         resultContentSourceByToolName,
       },
     });

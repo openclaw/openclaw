@@ -170,6 +170,9 @@ const transcriptRuntimeMock = vi.hoisted(() => ({
   }),
   readVisible: vi.fn(async () => []),
 }));
+const providerTranscriptRuntimeMock = vi.hoisted(() => ({
+  commit: vi.fn(),
+}));
 vi.mock("openclaw/plugin-sdk/session-transcript-runtime", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("openclaw/plugin-sdk/session-transcript-runtime")>();
@@ -182,6 +185,10 @@ vi.mock("openclaw/plugin-sdk/session-transcript-runtime", async (importOriginal)
     readVisibleSessionTranscriptMessageEntries: transcriptRuntimeMock.readVisible,
   };
 });
+vi.mock("openclaw/plugin-sdk/provider-session-transcript-runtime", () => ({
+  commitProviderSessionTranscriptPrefix: (params: unknown) =>
+    providerTranscriptRuntimeMock.commit(params),
+}));
 
 async function appendPreparedTranscriptMessage(params: Record<string, unknown>) {
   const prepare = params.prepareMessageAfterIdempotencyCheck as
@@ -195,6 +202,48 @@ async function appendPreparedTranscriptMessage(params: Record<string, unknown>) 
         messageId: (params.eventId as string | undefined) ?? "transcript-message",
       }
     : undefined;
+}
+
+async function commitPreparedProviderPrefix(params: {
+  entries: Array<{
+    eventId: string;
+    identity: string;
+    message: AgentMessage;
+    sourceFingerprint?: string;
+  }>;
+}) {
+  const prepared = params.entries.map((entry) =>
+    agentHarnessRuntime.runAgentHarnessBeforeMessageWriteHook({
+      agentId: "agent-1",
+      message: structuredClone(entry.message),
+      sessionKey: "agent:agent-1:session-1",
+    }),
+  );
+  if (prepared.some((message) => !message)) {
+    return { kind: "suppressed" as const };
+  }
+  const results = await transcriptRuntimeMock.appendBatch({
+    messages: params.entries.map((entry, index) => ({
+      eventId: entry.eventId,
+      message: prepared[index],
+    })),
+  });
+  return {
+    kind: "committed" as const,
+    anchors: results.map((result, index) => ({
+      activeMessagePosition: index,
+      agentId: "agent-1",
+      effectiveParentId: index > 0 ? results[index - 1]!.messageId : null,
+      entryId: result.messageId,
+      generation: "test-generation",
+      idempotencyKey: params.entries[index]!.identity,
+      rawSeq: index + 1,
+      sessionId: "session-1",
+      sessionKey: "agent:agent-1:session-1",
+      storePath: "openclaw-agent.sqlite",
+    })),
+    messages: results.map((result) => result.message),
+  };
 }
 
 // Mock the workspace-bootstrap loader so attempt tests do not perform
@@ -550,6 +599,11 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+beforeEach(() => {
+  providerTranscriptRuntimeMock.commit.mockReset();
+  providerTranscriptRuntimeMock.commit.mockImplementation(commitPreparedProviderPrefix);
+});
+
 describe("runCopilotAttempt", () => {
   it("happy path", async () => {
     const sdk = makeFakeSdk((session) => {
@@ -558,7 +612,6 @@ describe("runCopilotAttempt", () => {
     const pool = makeFakePool(sdk);
 
     const result = await runCopilotAttempt(makeParams(), { pool });
-
     expect(sdk.createSession).toHaveBeenCalledTimes(1);
     expect(sdk.sessions[0]?.sendAndWait).toHaveBeenCalledTimes(1);
     expect(result.terminal).toEqual({ kind: "ok" });
@@ -740,7 +793,7 @@ describe("runCopilotAttempt", () => {
       session.sendAndWait.mockResolvedValueOnce(makeAssistantMessageEvent("done"));
     });
     const createToolBridge = vi.fn(async (input: CopilotToolBridgeInput) => {
-      await input.onToolCompleted?.({
+      await input.onToolObserved?.({
         args: { path: "README.md" },
         result: { content: [{ text: "read result", type: "text" }] },
         startedAt: Date.now(),
@@ -1894,7 +1947,7 @@ describe("runCopilotAttempt", () => {
     const pool = makeFakePool(sdk);
     const createToolBridge = vi.fn(
       async (input: {
-        onToolCompleted?: (completion: {
+        onToolObserved?: (completion: {
           args: Record<string, unknown>;
           result: unknown;
           startedAt: number;
@@ -1903,7 +1956,7 @@ describe("runCopilotAttempt", () => {
         }) => void | Promise<void>;
         onYieldDetected?: (message?: string, acknowledgment?: string) => void;
       }) => {
-        await input.onToolCompleted?.({
+        await input.onToolObserved?.({
           args: { task: "review" },
           result: {
             details: {
@@ -1986,6 +2039,29 @@ describe("runCopilotAttempt", () => {
       }),
       expect.objectContaining({ sessionId: "session-1" }),
     );
+  });
+
+  it("rejects provider completion without a provider result before opening a session", async () => {
+    const sdk = makeFakeSdk();
+    const pool = makeFakePool(sdk);
+    const createToolBridge = vi.fn(async (input: CopilotToolBridgeInput) => {
+      await input.onProviderToolCompleted?.({
+        args: {},
+        startedAt: Date.now(),
+        toolCallId: "call-1",
+        toolName: "read",
+      } as never);
+      return createStubToolBridge();
+    });
+
+    const result = await runCopilotAttempt(makeParams(), { createToolBridge, pool });
+
+    expect(getPromptErrorCode(result)).toBe("tool_bridge_failure");
+    expect(
+      (projectAgentRunAttemptTerminal(result.terminal).promptError as Error | undefined)?.message,
+    ).toContain("Copilot provider completion requires providerResult");
+    expect(sdk.createSession).not.toHaveBeenCalled();
+    expect(pool["acquire"]).not.toHaveBeenCalled();
   });
 
   it("unsupported providers skip injected tool bridge wiring", async () => {
@@ -3495,7 +3571,7 @@ describe("runCopilotAttempt", () => {
   });
 
   describe("canonical transcript journal", () => {
-    afterEach(() => {
+    beforeEach(() => {
       transcriptRuntimeMock.append.mockClear();
       transcriptRuntimeMock.appendBatch.mockClear();
       transcriptRuntimeMock.appendStrict.mockClear();
@@ -3812,7 +3888,7 @@ describe("runCopilotAttempt", () => {
     it("fails closed when an ordered tool-result append rejects", async () => {
       const appendError = new Error("tool append failed");
       transcriptRuntimeMock.append.mockImplementationOnce(appendPreparedTranscriptMessage);
-      transcriptRuntimeMock.appendBatch.mockRejectedValueOnce(appendError);
+      providerTranscriptRuntimeMock.commit.mockRejectedValueOnce(appendError);
       const sdk = makeFakeSdk((session) => {
         session.sendAndWait.mockImplementationOnce(async () => {
           session.emit("assistant.message", {
@@ -3846,25 +3922,28 @@ describe("runCopilotAttempt", () => {
       });
       expect(requireSession(sdk).abort).toHaveBeenCalledTimes(1);
       expect(transcriptRuntimeMock.append).toHaveBeenCalledOnce();
-      expect(transcriptRuntimeMock.appendBatch).toHaveBeenCalledOnce();
+      expect(providerTranscriptRuntimeMock.commit).toHaveBeenCalledOnce();
       expect(result.assistantTranscriptOwned).toBeUndefined();
       expect(result.replayMetadata.replaySafe).toBe(false);
     });
 
     it("invalidates replay when storage rewrites a tool-group payload", async () => {
-      transcriptRuntimeMock.appendBatch.mockImplementationOnce(async (params) =>
-        params.messages.map((message, index) => ({
-          appended: true,
-          message:
+      providerTranscriptRuntimeMock.commit.mockImplementationOnce(async (params) => {
+        const outcome = await commitPreparedProviderPrefix(params);
+        if (outcome.kind !== "committed") {
+          return outcome;
+        }
+        return {
+          ...outcome,
+          messages: outcome.messages.map((message, index) =>
             index === 1
-              ? {
-                  ...(message.message as object),
+              ? Object.assign({}, message, {
                   content: [{ type: "text", text: "[storage-redacted]" }],
-                }
-              : message.message,
-          messageId: (message.eventId as string | undefined) ?? "transcript-message",
-        })),
-      );
+                })
+              : message,
+          ),
+        };
+      });
       const sdk = makeFakeSdk((session) => {
         session.sendAndWait.mockImplementationOnce(async () => {
           session.emit("assistant.message", {

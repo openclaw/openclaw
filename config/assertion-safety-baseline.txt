@@ -273,7 +273,7 @@ extensions/copilot/src/provider-bridge.ts	1
 extensions/copilot/src/replay-shim.ts	3
 extensions/copilot/src/runtime.ts	1
 extensions/copilot/src/sdk-loader.ts	2
-extensions/copilot/src/tool-bridge.ts	6
+extensions/copilot/src/tool-bridge.ts	3
 extensions/copilot/src/workspace-bootstrap.ts	1
 extensions/crabbox/src/crabbox-worker-inspect.ts	3
 extensions/crabbox/src/crabbox-worker-provider.ts	1

@@ -1,15 +1,12 @@
-// Copilot plugin module implements tool bridge behavior.
+/* oxlint-disable eslint/curly -- Keep provider execution claims beside tool wrapping. */
+import { createHash } from "node:crypto";
 import {
   convertMcpCallToolResult,
   type Tool as SdkTool,
   type ToolInvocation,
   type ToolResultObject,
 } from "@github/copilot-sdk";
-import type {
-  AnyAgentTool,
-  EmbeddedRunAttemptParamsV2,
-  SandboxContext,
-} from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { AnyAgentTool, SandboxContext } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   applyEmbeddedAttemptToolsAllow,
   buildEmbeddedAttemptToolRunContext,
@@ -26,6 +23,18 @@ import {
 import { createAgentHarnessToolSurfaceRuntime } from "openclaw/plugin-sdk/agent-harness-tool-runtime";
 import { toStringifiedError as toCopilotToolError } from "openclaw/plugin-sdk/error-runtime";
 import { isRawCopilotModelRun } from "./attempt-mode.js";
+import {
+  createError,
+  createFailureResult,
+  filterCopilotToolsForConstructionPlan,
+  findDuplicateToolNames,
+  readInlinePluginToolMeta,
+  shouldForceCopilotMessageTool,
+  toToolStartArgs,
+  type CopilotToolAttemptParams,
+} from "./tool-bridge-helpers.js";
+
+export { shouldForceCopilotMessageTool };
 
 type CreateOpenClawCodingTools =
   (typeof import("openclaw/plugin-sdk/agent-harness"))["createOpenClawCodingTools"];
@@ -64,11 +73,9 @@ interface CopilotSessionHolder {
  * fixtures can use the flat fields below for minimal-config wiring, but every
  * constructed tool surface still requires the host-bound capability.
  */
-type CopilotToolAttemptParams = Partial<Omit<EmbeddedRunAttemptParamsV2, "hostCapabilities">> &
-  Pick<EmbeddedRunAttemptParamsV2, "hostCapabilities">;
 type CopilotToolTerminalObserver = CopilotToolAttemptParams["observeToolTerminal"];
 
-type CopilotToolCompletion = {
+export type CopilotToolObservation = {
   toolName: string;
   toolCallId: string;
   args: Record<string, unknown>;
@@ -76,6 +83,42 @@ type CopilotToolCompletion = {
   error?: string;
   startedAt: number;
 };
+export type CopilotProviderToolCompletion = CopilotToolObservation & {
+  providerResult: ToolResultObject;
+};
+
+type CopilotProviderExecutionRegistry = ReturnType<typeof createCopilotProviderExecutionRegistry>;
+
+function createCopilotProviderExecutionRegistry() {
+  const executions = new Map<string, { fingerprint: string; result: Promise<ToolResultObject> }>();
+  return {
+    run(
+      input: { args: unknown; invocation: ToolInvocation; toolName: string },
+      start: () => Promise<ToolResultObject>,
+    ) {
+      const key = JSON.stringify([input.invocation.sessionId, input.invocation.toolCallId]);
+      const fingerprint = `sha256:${createHash("sha256")
+        .update(
+          JSON.stringify([
+            input.invocation.sessionId,
+            input.invocation.toolCallId,
+            input.toolName,
+            input.args,
+          ]),
+        )
+        .digest("hex")}`;
+      const existing = executions.get(key);
+      if (existing) {
+        if (existing.fingerprint !== fingerprint)
+          throw new Error("Copilot tool call identity was reused with a changed request");
+        return existing.result;
+      }
+      const result = start();
+      executions.set(key, { fingerprint, result });
+      return result;
+    },
+  };
+}
 
 interface CopilotToolBridgeInput {
   allowModelTools?: boolean;
@@ -139,7 +182,8 @@ interface CopilotToolBridgeInput {
    * `extensions/codex/src/app-server/run-attempt.ts:539-541`.
    */
   onYieldDetected?: (message?: string, acknowledgment?: string) => void;
-  onToolCompleted?: (completion: CopilotToolCompletion) => void | Promise<void>;
+  onToolObserved?: (completion: CopilotToolObservation) => void | Promise<void>;
+  onProviderToolCompleted?: (completion: CopilotProviderToolCompletion) => void | Promise<void>;
   createOpenClawCodingTools?: CreateOpenClawCodingToolsForBridge;
   beforeExecute?: (ctx: {
     toolName: string;
@@ -167,9 +211,6 @@ const EMPTY_PROMPT_TOOL_POLICY: CopilotToolBridge["promptToolPolicy"] = {
 };
 
 const SUPPORTED_TOOL_PROVIDERS: ReadonlySet<string> = new Set(["github-copilot"]);
-const BASE_COPILOT_CODING_TOOL_NAMES = new Set(["edit", "read", "write"]);
-const SHELL_COPILOT_CODING_TOOL_NAMES = new Set(["apply_patch", "exec", "process"]);
-
 export async function createCopilotToolBridge(
   input: CopilotToolBridgeInput,
 ): Promise<CopilotToolBridge> {
@@ -283,21 +324,21 @@ export async function createCopilotToolBridge(
   }
   const exposedTools = compactedTools.tools.map((tool) => newlyBoundTools.get(tool) ?? tool);
 
-  // Run duplicate detection after filtering so a duplicate in a
-  // suppressed tool does not fail a narrow run (PI parity: PI never
-  // sees the duplicate either when the allowlist excludes it).
   const duplicateNames = findDuplicateToolNames(exposedTools);
   if (duplicateNames.length > 0) {
     throw new Error(`[copilot-tool-bridge] duplicate tool names: ${duplicateNames.join(", ")}`);
   }
 
+  const executionRegistry = createCopilotProviderExecutionRegistry();
   const sdkTools = exposedTools.map((sourceTool) =>
     convertOpenClawToolToSdkTool(sourceTool, {
       abortSignal: input.abortSignal,
       beforeExecute: input.beforeExecute,
       onAgentToolResult: input.attemptParams?.onAgentToolResult,
-      onToolCompleted: input.onToolCompleted,
+      onProviderToolCompleted: input.onProviderToolCompleted,
+      onToolObserved: input.onToolObserved,
       observeToolTerminal: input.attemptParams?.observeToolTerminal,
+      executionRegistry,
     }),
   );
   return {
@@ -492,8 +533,10 @@ function convertOpenClawToolToSdkTool(
     abortSignal?: AbortSignal;
     beforeExecute?: CopilotToolBridgeInput["beforeExecute"];
     onAgentToolResult?: CopilotToolAttemptParams["onAgentToolResult"];
-    onToolCompleted?: CopilotToolBridgeInput["onToolCompleted"];
+    onProviderToolCompleted?: CopilotToolBridgeInput["onProviderToolCompleted"];
+    onToolObserved?: CopilotToolBridgeInput["onToolObserved"];
     observeToolTerminal?: CopilotToolTerminalObserver;
+    executionRegistry: CopilotProviderExecutionRegistry;
   },
 ): SdkTool {
   if (typeof sourceTool.name !== "string" || sourceTool.name.trim().length === 0) {
@@ -516,23 +559,24 @@ function convertOpenClawToolToSdkTool(
       console.warn("[copilot-tool-bridge] onAgentToolResult handler threw; continuing", error);
     }
   };
-  const notifyToolCompleted = (completion: CopilotToolCompletion) => {
-    try {
-      void Promise.resolve(ctx.onToolCompleted?.(completion)).catch((error: unknown) => {
-        console.warn("[copilot-tool-bridge] onToolCompleted handler threw; continuing", error);
-      });
-    } catch (error) {
-      console.warn("[copilot-tool-bridge] onToolCompleted handler threw; continuing", error);
-    }
+  const notifyProviderToolCompleted = async (completion: CopilotProviderToolCompletion) => {
+    let firstError: Error | undefined;
+    await Promise.resolve(ctx.onToolObserved?.(completion)).catch((error: unknown) => {
+      firstError = toCopilotToolError(error);
+    });
+    await Promise.resolve(ctx.onProviderToolCompleted?.(completion)).catch((error: unknown) => {
+      firstError ??= toCopilotToolError(error);
+    });
+    if (firstError) throw firstError;
   };
-  const failureResult = (
+  const failureResult = async (
     executedArgs: unknown,
     invocation: ToolInvocation,
     startedAt: number,
     message: string,
     error: unknown,
     executionStarted: boolean,
-  ): ToolResultObject => {
+  ): Promise<ToolResultObject> => {
     const errorMessage = toCopilotToolError(error).message;
     ctx.observeToolTerminal?.({
       toolCallId: invocation.toolCallId,
@@ -550,14 +594,16 @@ function convertOpenClawToolToSdkTool(
       }),
       true,
     );
-    notifyToolCompleted({
+    const providerResult = createFailureResult(message, error);
+    await notifyProviderToolCompleted({
       toolName: sourceTool.name,
       toolCallId: invocation.toolCallId,
       args: toToolStartArgs(executedArgs),
       error: errorMessage,
+      providerResult,
       startedAt,
     });
-    return createFailureResult(message, error);
+    return providerResult;
   };
   const executeOnce = async (
     args: unknown,
@@ -639,31 +685,31 @@ function convertOpenClawToolToSdkTool(
       ...(ownerMutation ? { ownerMutation } : {}),
     });
     notifyToolResult(sanitizedResult, resultIsError);
-    notifyToolCompleted({
+    await notifyProviderToolCompleted({
       toolName: sourceTool.name,
       toolCallId: invocation.toolCallId,
       args: toToolStartArgs(preparedArgs),
       result: sanitizedResult,
       ...(resultError ? { error: resultError } : {}),
+      providerResult: sdkResult,
       startedAt,
     });
     return sdkResult;
   };
 
-  const handler =
-    sourceTool.executionMode === "sequential"
-      ? (args: unknown, invocation: ToolInvocation) => {
-          const run = sequentialLock.then(
-            () => executeOnce(args, invocation),
-            () => executeOnce(args, invocation),
-          );
-          sequentialLock = run.then(
-            () => undefined,
-            () => undefined,
-          );
-          return run;
-        }
-      : executeOnce;
+  const handler = (args: unknown, invocation: ToolInvocation) =>
+    ctx.executionRegistry.run({ args, invocation, toolName: sourceTool.name }, () => {
+      if (sourceTool.executionMode !== "sequential") return executeOnce(args, invocation);
+      const run = sequentialLock.then(
+        () => executeOnce(args, invocation),
+        () => executeOnce(args, invocation),
+      );
+      sequentialLock = run.then(
+        () => undefined,
+        () => undefined,
+      );
+      return run;
+    });
 
   return {
     description: sourceTool.description,
@@ -738,7 +784,7 @@ async function executeCatalogTool(
       result: sanitizedResult,
       isError,
     });
-    await input.onToolCompleted?.({
+    await input.onToolObserved?.({
       toolName: params.toolName,
       toolCallId: params.toolCallId,
       args: toToolStartArgs(preparedArgs),
@@ -751,17 +797,16 @@ async function executeCatalogTool(
     const message = toCopilotToolError(error).message;
     // Completion hooks can throw after the tool terminal outcome. Do not
     // rewrite that recorded outcome as a second, contradictory tool failure.
-    if (!terminalObserved) {
-      input.attemptParams?.observeToolTerminal?.({
-        toolCallId: params.toolCallId,
-        toolName: params.toolName,
-        arguments: preparedArgs,
-        executionStarted,
-        outcome: "failure",
-        failure: { error: message },
-        ...(ownerMutation ? { ownerMutation } : {}),
-      });
-    }
+    if (terminalObserved) throw error;
+    input.attemptParams?.observeToolTerminal?.({
+      toolCallId: params.toolCallId,
+      toolName: params.toolName,
+      arguments: preparedArgs,
+      executionStarted,
+      outcome: "failure",
+      failure: { error: message },
+      ...(ownerMutation ? { ownerMutation } : {}),
+    });
     const failure = sanitizeToolResult({
       content: [{ type: "text", text: message }],
       details: { status: "failed", error: message },
@@ -771,7 +816,7 @@ async function executeCatalogTool(
       result: failure,
       isError: true,
     });
-    await input.onToolCompleted?.({
+    await input.onToolObserved?.({
       toolName: params.toolName,
       toolCallId: params.toolCallId,
       args: toToolStartArgs(preparedArgs),
@@ -780,86 +825,4 @@ async function executeCatalogTool(
     });
     throw error;
   }
-}
-
-function toToolStartArgs(args: unknown): Record<string, unknown> {
-  return args && typeof args === "object" && !Array.isArray(args)
-    ? (args as Record<string, unknown>)
-    : { value: args };
-}
-
-function createFailureResult(message: string, error: unknown): ToolResultObject {
-  // ToolResultObject.error is typed as `string | undefined` in the SDK contract
-  // (see `node_modules/@github/copilot-sdk/dist/types.d.ts`). Returning an
-  // Error object would produce a non-serializable JSON-RPC payload, so we
-  // surface the message string instead.
-  return {
-    error: toCopilotToolError(error).message,
-    resultType: "failure",
-    textResultForLlm: message,
-  };
-}
-
-function createError(message: string, cause: unknown): Error {
-  const error = new Error(message) as Error & { cause?: unknown };
-  error.cause = cause;
-  return error;
-}
-
-/**
- * Mirrors PI's `shouldForceMessageTool` semantics: a message tool is
- * forced when the caller asked for it explicitly or when the source
- * reply delivery mode is `message_tool_only`, but never when
- * `disableMessageTool` is set (the suppress flag always wins). Compare
- * `src/agents/pi-embedded-runner/run/attempt.ts:1361-1366` and the
- * codex equivalent at
- * `extensions/codex/src/app-server/run-attempt.ts:4253-4258`.
- */
-export function shouldForceCopilotMessageTool(params: CopilotToolAttemptParams): boolean {
-  if (params.disableMessageTool === true) {
-    return false;
-  }
-  return params.forceMessageTool === true || params.sourceReplyDeliveryMode === "message_tool_only";
-}
-
-function filterCopilotToolsForConstructionPlan<T extends { name: string }>(
-  tools: T[],
-  plan: ReturnType<typeof resolveEmbeddedAttemptToolConstructionPlan>["codingToolConstructionPlan"],
-  options: { preserveToolNames?: readonly string[] } = {},
-): T[] {
-  if (plan.includeBaseCodingTools && plan.includeShellTools) {
-    return tools;
-  }
-  const preserveToolNames = new Set(options.preserveToolNames);
-  return tools.filter((tool) => {
-    if (preserveToolNames.has(tool.name)) {
-      return true;
-    }
-    if (!plan.includeBaseCodingTools && BASE_COPILOT_CODING_TOOL_NAMES.has(tool.name)) {
-      return false;
-    }
-    if (!plan.includeShellTools && SHELL_COPILOT_CODING_TOOL_NAMES.has(tool.name)) {
-      return false;
-    }
-    return true;
-  });
-}
-
-function readInlinePluginToolMeta(tool: { name: string }): { pluginId: string } | undefined {
-  const pluginId = (tool as { pluginId?: unknown }).pluginId;
-  return typeof pluginId === "string" && pluginId.trim() ? { pluginId } : undefined;
-}
-
-function findDuplicateToolNames(sourceTools: AnyAgentTool[]): string[] {
-  const counts = new Map<string, number>();
-  for (const sourceTool of sourceTools) {
-    if (typeof sourceTool.name !== "string" || sourceTool.name.length === 0) {
-      continue;
-    }
-    counts.set(sourceTool.name, (counts.get(sourceTool.name) ?? 0) + 1);
-  }
-  return [...counts.entries()]
-    .filter(([, count]) => count > 1)
-    .map(([name]) => name)
-    .toSorted();
 }

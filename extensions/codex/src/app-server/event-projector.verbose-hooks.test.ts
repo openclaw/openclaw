@@ -8,6 +8,7 @@ import {
   THREAD_ID,
   TURN_ID,
   createParams,
+  createMockPluginRegistry,
   createProjector,
   createProjectorWithHooks,
   buildEmptyToolTelemetry,
@@ -16,6 +17,7 @@ import {
   mockCallArg,
   findAgentEvent,
   forCurrentTurn,
+  initializeGlobalHookRunner,
   turnCompleted,
 } from "./event-projector.test-harness.js";
 
@@ -400,6 +402,41 @@ describe("CodexAppServerEventProjector verbose output and hook projection", () =
     expect(afterContext.runId).toBe("run-1");
     expect(afterContext.sessionId).toBe("session-1");
     expect(afterContext).toMatchObject(agentHookContext);
+  });
+
+  it("flushes the prefix before compaction callbacks and commits the marker before end", async () => {
+    const order: string[] = [];
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([
+        { hookName: "after_compaction", handler: () => order.push("after") },
+      ]),
+    );
+    const projector = await createProjector(await createParams(), {
+      onContextCompacted: async () => {
+        order.push("context");
+      },
+    });
+    vi.spyOn(projector.transcriptCheckpoint, "usesProviderCapability").mockReturnValue(true);
+    vi.spyOn(projector.transcriptCheckpoint, "enqueue").mockImplementation(() => {
+      order.push("marker");
+    });
+    vi.spyOn(projector.transcriptCheckpoint, "flush").mockImplementation(async () => {
+      order.push("flush");
+    });
+    await projector.handleNotification(
+      forCurrentTurn("item/started", {
+        item: { type: "contextCompaction", id: "compact-order" },
+      }),
+    );
+    order.length = 0;
+
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: { type: "contextCompaction", id: "compact-order" },
+      }),
+    );
+
+    expect(order.slice(0, 5)).toEqual(["flush", "context", "after", "marker", "flush"]);
   });
 
   it("projects codex hook started and completed notifications into agent events", async () => {

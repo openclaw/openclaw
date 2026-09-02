@@ -545,6 +545,14 @@ export async function executePluginOwnedProcess(params: {
       ...(run.executionMode ? { executionMode: run.executionMode } : {}),
       ...(run.cliToolAvailability ? { toolAvailability: run.cliToolAvailability } : {}),
       ...(liveSession ? { liveSession } : {}),
+      onProviderAccepted: () => {
+        run.onExecutionPhase?.({
+          phase: "turn_accepted",
+          provider: run.provider,
+          model: params.context.modelId,
+          backend: params.context.backendResolved.id,
+        });
+      },
       requestToolPermission: createPluginToolPermissionHandler({
         context: params.context,
         abortSignal: signal,

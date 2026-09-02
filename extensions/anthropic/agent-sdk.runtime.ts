@@ -4,6 +4,7 @@ import type {
   Options as ClaudeAgentSdkOptions,
   PermissionResult as ClaudeAgentSdkPermissionResult,
   Query as ClaudeAgentSdkQuery,
+  SDKUserMessage as ClaudeAgentSdkUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
 import type {
   CliBackendExecuteContext,
@@ -83,6 +84,11 @@ type ClaudeAgentSdkLiveTurn = ClaudeAgentSdkTurn & {
   error?: Error;
 };
 
+type ClaudeAgentSdkPrompt = {
+  message: ClaudeAgentSdkUserMessage;
+  onAccepted?: () => void;
+};
+
 type ClaudeAgentSdkSession = {
   handle: CliBackendLiveSessionHandle;
   capability: CliBackendLiveSessionCapability;
@@ -99,6 +105,23 @@ type ClaudeAgentSdkSession = {
 };
 
 const claudeAgentSdkSessions = new WeakMap<CliBackendLiveSessionHandle, ClaudeAgentSdkSession>();
+
+async function* observeClaudeAgentSdkPromptAcceptance(
+  prompts: AsyncIterable<ClaudeAgentSdkPrompt>,
+): AsyncIterable<ClaudeAgentSdkUserMessage> {
+  for await (const prompt of prompts) {
+    yield prompt.message;
+    // The SDK requests the next item only after its awaited transport write completes.
+    prompt.onAccepted?.();
+  }
+}
+
+async function* createClaudeAgentSdkPrompt(
+  context: CliBackendExecuteContext,
+): AsyncIterable<ClaudeAgentSdkUserMessage> {
+  yield createClaudeAgentSdkUserMessage(context);
+  context.onProviderAccepted?.();
+}
 
 async function authorizeClaudeAgentSdkTool(params: {
   currentTurn: () => ClaudeAgentSdkTurn | undefined;
@@ -597,13 +620,19 @@ async function* executeClaudeAgentSdkLiveTurn(
         () => session.currentTurn,
         session.process,
       );
-      session.query = query({ prompt: session.prompts, options });
+      session.query = query({
+        prompt: observeClaudeAgentSdkPromptAcceptance(session.prompts),
+        options,
+      });
       void consumeClaudeAgentSdkSession(session, session.query);
     }
     if (session.closed || session.currentTurn !== turn) {
       throw new Error("Claude Agent SDK live session closed before its prompt was accepted.");
     }
-    session.prompts.write(createClaudeAgentSdkUserMessage(context));
+    session.prompts.write({
+      message: createClaudeAgentSdkUserMessage(context),
+      onAccepted: context.onProviderAccepted,
+    } satisfies ClaudeAgentSdkPrompt);
 
     for await (const record of turn.events) {
       yield record;
@@ -654,7 +683,7 @@ export async function* executeClaudeAgentSdk(
       () => activeTurn,
       processOwner,
     );
-    for await (const message of query({ prompt: context.prompt, options })) {
+    for await (const message of query({ prompt: createClaudeAgentSdkPrompt(context), options })) {
       if (message.type === "result") {
         sawTerminalResult = true;
       }

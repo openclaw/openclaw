@@ -5,7 +5,7 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { isJsonObject, type CodexThreadItem, type JsonObject, type JsonValue } from "./protocol.js";
 
-export { normalizeOptionalString as normalizeNonEmptyString };
+export { normalizeOptionalString as normalizeNonEmptyString, readStringField as readString };
 
 export function readNonEmptyString(record: JsonObject, key: string): string | undefined {
   return normalizeOptionalString(record[key]);
@@ -39,7 +39,7 @@ export function readNonNegativeInteger(record: JsonObject, key: string): number 
   return value !== undefined && Number.isInteger(value) && value >= 0 ? value : undefined;
 }
 
-export function readCodexErrorNotificationMessage(record: JsonObject): string | undefined {
+export function readErrorMessage(record: JsonObject): string | undefined {
   const error = record.error;
   return isJsonObject(error) ? readStringField(error, "message") : undefined;
 }

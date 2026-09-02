@@ -65,6 +65,7 @@ export type ToolTranscriptCallInput = {
   id: string;
   name: string;
   arguments?: unknown;
+  sourceFingerprint?: string;
 };
 
 export type ToolTranscriptResultInput = {
@@ -74,6 +75,7 @@ export type ToolTranscriptResultInput = {
   isError: boolean;
   details?: unknown;
   resultContentSource?: "network";
+  sourceFingerprint?: string;
 };
 
 type ToolProgressRawSignature = { length: number; prefix: string };

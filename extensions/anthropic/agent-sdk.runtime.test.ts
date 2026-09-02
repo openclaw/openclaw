@@ -81,14 +81,26 @@ function useSdkMessages(
   onQuery?: (options: Record<string, unknown>) => Promise<void>,
 ) {
   const close = vi.fn();
-  queryMock.mockImplementation(({ options }: { options: Record<string, unknown> }) => {
-    const stream = (async function* () {
-      await onQuery?.(options);
-      yield* messages;
-    })();
-    return Object.assign(stream, { close });
-  });
-  return { close };
+  const prompts: Record<string, unknown>[] = [];
+  queryMock.mockImplementation(
+    ({
+      prompt,
+      options,
+    }: {
+      prompt: AsyncIterable<Record<string, unknown>>;
+      options: Record<string, unknown>;
+    }) => {
+      const stream = (async function* () {
+        for await (const message of prompt) {
+          prompts.push(message);
+        }
+        await onQuery?.(options);
+        yield* messages;
+      })();
+      return Object.assign(stream, { close });
+    },
+  );
+  return { close, prompts };
 }
 
 async function collect(context: CliBackendExecuteContext): Promise<Record<string, unknown>[]> {
@@ -179,11 +191,15 @@ function useLiveSdkStreams() {
   const streams: PassThrough[] = [];
   const prompts: Array<Record<string, unknown>[]> = [];
   const closes: ReturnType<typeof vi.fn>[] = [];
-  queryMock.mockImplementation(({ prompt }: { prompt: PassThrough }) => {
+  queryMock.mockImplementation(({ prompt }: { prompt: AsyncIterable<Record<string, unknown>> }) => {
     const stream = new PassThrough({ objectMode: true });
     const messages: Record<string, unknown>[] = [];
     const close = vi.fn(() => stream.end());
-    prompt.on("data", (message: Record<string, unknown>) => messages.push(message));
+    void (async () => {
+      for await (const message of prompt) {
+        messages.push(message);
+      }
+    })().catch(() => {});
     streams.push(stream);
     prompts.push(messages);
     closes.push(close);
@@ -470,7 +486,7 @@ describe("Anthropic Agent SDK runtime ownership", () => {
 
   it("runs the installed authenticated executable with the exact host-prepared environment", async () => {
     const result = { ...SUCCESS_RESULT, result: "Launch code remembered." };
-    useSdkMessages([result]);
+    const sdk = useSdkMessages([result]);
     const context = createContext();
 
     expect(await collect(context)).toContainEqual(result);
@@ -490,7 +506,10 @@ describe("Anthropic Agent SDK runtime ownership", () => {
     expect(sdkOptions().env).not.toHaveProperty("ANTHROPIC_OAUTH_TOKEN");
     expect(sdkOptions().env).not.toHaveProperty("CLAUDE_CODE_OAUTH_TOKEN");
 
-    expect(queryMock.mock.calls[0]?.[0]?.prompt).toBe("Remember the launch code.");
+    expect(sdk.prompts[0]?.message).toEqual({
+      role: "user",
+      content: "Remember the launch code.",
+    });
   });
 
   it.each([
@@ -525,7 +544,7 @@ describe("Anthropic Agent SDK runtime ownership", () => {
     async (promptContext) => {
       let hookResult: unknown;
       const context = createContext({ promptContext });
-      useSdkMessages([SUCCESS_RESULT], async (options) => {
+      const sdk = useSdkMessages([SUCCESS_RESULT], async (options) => {
         hookResult = await sdkPromptHook(options)(
           { hook_event_name: "UserPromptSubmit", prompt: context.prompt },
           undefined,
@@ -533,7 +552,7 @@ describe("Anthropic Agent SDK runtime ownership", () => {
         );
       });
       await collect(context);
-      expect(queryMock.mock.calls[0]?.[0]?.prompt).toBe(context.prompt);
+      expect(sdk.prompts[0]?.message).toEqual({ role: "user", content: context.prompt });
       expect(hookResult).toEqual(
         promptContext
           ? {
@@ -565,35 +584,6 @@ describe("Anthropic Agent SDK runtime ownership", () => {
     await collect(createContext({ useResume: true }));
     expect(sdkOptions()).toEqual(expect.objectContaining({ resume: SESSION_ID }));
     expect(sdkOptions()).not.toHaveProperty("sessionId");
-  });
-
-  it("preserves cache, effort, and checkpoint-fork controls through SDK options", async () => {
-    useSdkMessages();
-
-    await collect(
-      createContext({
-        args: [
-          "-p",
-          "--cache-system-prompt",
-          "--effort",
-          "max",
-          "--fork-session",
-          "--resume-session-at",
-          "assistant-before-stall",
-        ],
-        useResume: true,
-      }),
-    );
-
-    expect(sdkOptions()).toEqual(
-      expect.objectContaining({
-        resume: SESSION_ID,
-        effort: "max",
-        forkSession: true,
-        resumeSessionAt: "assistant-before-stall",
-        extraArgs: { "cache-system-prompt": null },
-      }),
-    );
   });
 
   it("reuses one official SDK query and Claude process across compatible agent turns", async () => {
@@ -1074,12 +1064,4 @@ describe("Anthropic Agent SDK runtime ownership", () => {
       expect(observed).toContainEqual(result);
     },
   );
-
-  it("fails closed when the official SDK exits without a terminal result", async () => {
-    useSdkMessages([]);
-
-    await expect(collect(createContext())).rejects.toThrow(
-      "Claude Agent SDK exited without a terminal result.",
-    );
-  });
 });

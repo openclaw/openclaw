@@ -299,6 +299,7 @@ export async function runManagerTurn(params: {
                 await input.onLifecycle?.({
                   type: "prompt_submitted",
                   at: Date.now(),
+                  authoritative,
                 });
               } catch (error) {
                 logVerbose(

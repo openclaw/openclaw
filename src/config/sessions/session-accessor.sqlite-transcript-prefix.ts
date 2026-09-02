@@ -25,6 +25,7 @@ export type SessionTranscriptPrefixEntry<T = unknown> = {
   eventId: string;
   identity: string;
   message: T;
+  sourceFingerprint?: string;
 };
 const conflict = (reason: string) => ({ kind: "conflict" as const, reason });
 
@@ -105,6 +106,7 @@ export async function commitExpectedSessionTranscriptPrefix<T>(
     )
       return conflict("prefix-payload-or-topology-mismatch");
     anchors.push(anchor);
+    // SAFETY: stored was compared structurally with this generic entry's message above.
     messages.push(stored as T);
     parentId = anchor.entryId;
     position = anchor.activeMessagePosition;
@@ -145,6 +147,7 @@ export async function commitExpectedSessionTranscriptPrefix<T>(
       turn.appendedMessages.flatMap((result) => (result.anchor ? [result.anchor] : [])),
     ),
     kind: "committed",
+    // SAFETY: appended messages originate from the generic T entries passed to this commit.
     messages: messages.concat(turn.appendedMessages.map((result) => result.message as T)),
   };
 }

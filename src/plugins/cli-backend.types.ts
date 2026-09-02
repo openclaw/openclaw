@@ -256,6 +256,8 @@ export type CliBackendExecuteContext = {
   toolAvailability?: CliBackendToolAvailability;
   /** Exact host-owned reusable process lifecycle and current-turn admission. */
   liveSession?: CliBackendLiveSessionCapability;
+  /** Records dependency-owned acceptance after the prepared prompt reaches its transport. */
+  onProviderAccepted?: () => void;
   /** Closure-bound approval capability; retained copies fail after the run closes. */
   requestToolPermission: (
     request: CliBackendToolPermissionRequest,

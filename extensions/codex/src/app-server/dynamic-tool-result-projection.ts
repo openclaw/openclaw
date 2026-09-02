@@ -8,6 +8,7 @@ export function recordCodexDynamicToolResult(
   call: CodexDynamicToolCallParams,
   response: CodexDynamicToolRuntimeResponse,
   protocolResponse: CodexDynamicToolCallResponse,
+  sourceFingerprint?: string,
 ): void {
   projector?.recordDynamicToolResult({
     callId: call.callId,
@@ -22,5 +23,6 @@ export function recordCodexDynamicToolResult(
       response.terminalResolution?.sideEffectEvidence === true,
     contentItems: protocolResponse.contentItems,
     details: response.transcriptDetails,
+    sourceFingerprint,
   });
 }

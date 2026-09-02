@@ -306,16 +306,21 @@ describe("provider session transcript runtime", () => {
       writerRunId: "writer-a",
     });
     const source = captureClaim(authority, "call-a");
+    const sourceFingerprint = `sha256:${"a".repeat(64)}`;
+    let rewriteHookCalls = 0;
     initializeGlobalHookRunner(
       createMockPluginRegistry([
         {
           hookName: "before_message_write",
-          handler: ({ message }: { message: AgentMessage }) => ({
-            message: {
-              ...message,
-              content: [{ type: "text", text: "hook replacement" }],
-            },
-          }),
+          handler: ({ message }: { message: AgentMessage }) => {
+            rewriteHookCalls += 1;
+            return {
+              message: {
+                ...message,
+                content: [{ type: "text", text: "hook replacement" }],
+              },
+            };
+          },
         },
       ]),
     );
@@ -327,7 +332,14 @@ describe("provider session transcript runtime", () => {
       await expect(
         commitProviderSessionTranscriptPrefix({
           hostCapabilities: host.capabilities,
-          entries: [{ eventId: "call-a-result", identity: "provider-call-a", message: source }],
+          entries: [
+            {
+              eventId: "call-a-result",
+              identity: "provider-call-a",
+              message: source,
+              sourceFingerprint,
+            },
+          ],
         }),
       ).resolves.toMatchObject({ kind: "committed" });
       const messages = transcriptMessages(target);
@@ -341,14 +353,36 @@ describe("provider session transcript runtime", () => {
         }),
       ]);
       const afterFirst = loadSessionEntryReadOnly(target) as InternalSessionEntry;
+      expect(rewriteHookCalls).toBe(1);
       expect(authority.reserve(source)).toBeUndefined();
 
+      let replayHookSideEffects = 0;
+      resetGlobalHookRunner();
+      initializeGlobalHookRunner(
+        createMockPluginRegistry([
+          {
+            hookName: "before_message_write",
+            handler: () => {
+              replayHookSideEffects += 1;
+              return { block: true };
+            },
+          },
+        ]),
+      );
       await expect(
         commitProviderSessionTranscriptPrefix({
           hostCapabilities: host.capabilities,
-          entries: [{ eventId: "call-a-result", identity: "provider-call-a", message: source }],
+          entries: [
+            {
+              eventId: "call-a-result",
+              identity: "provider-call-a",
+              message: source,
+              sourceFingerprint,
+            },
+          ],
         }),
-      ).resolves.toMatchObject({ kind: "replayed" });
+      ).resolves.toMatchObject({ kind: "replayed", messages });
+      expect(replayHookSideEffects).toBe(0);
       expect(transcriptMessages(target)).toEqual(messages);
       expect(
         (loadSessionEntryReadOnly(target) as InternalSessionEntry).codeModeWaitingClaims,
@@ -396,9 +430,45 @@ describe("provider session transcript runtime", () => {
       await expect(
         commitProviderSessionTranscriptPrefix({
           hostCapabilities: host.capabilities,
-          entries: [{ eventId: "ordinary-a", identity: "provider-result-a", message: first }],
+          entries: [
+            {
+              eventId: "ordinary-a",
+              identity: "provider-result-a",
+              message: first,
+              sourceFingerprint: `sha256:${"a".repeat(64)}`,
+            },
+          ],
         }),
       ).resolves.toMatchObject({ kind: "committed" });
+      await expect(
+        commitProviderSessionTranscriptPrefix({
+          hostCapabilities: host.capabilities,
+          entries: [
+            {
+              eventId: "ordinary-a",
+              identity: "provider-result-a",
+              message: first,
+              sourceFingerprint: `sha256:${"a".repeat(64)}`,
+            },
+          ],
+        }),
+      ).resolves.toMatchObject({ kind: "replayed" });
+      await expect(
+        commitProviderSessionTranscriptPrefix({
+          hostCapabilities: host.capabilities,
+          entries: [
+            {
+              eventId: "ordinary-a",
+              identity: "provider-result-a",
+              message: first,
+              sourceFingerprint: `sha256:${"b".repeat(64)}`,
+            },
+          ],
+        }),
+      ).resolves.toMatchObject({
+        kind: "conflict",
+        reason: "prefix-payload-or-topology-mismatch",
+      });
       await expect(
         commitProviderSessionTranscriptPrefix({
           hostCapabilities: host.capabilities,

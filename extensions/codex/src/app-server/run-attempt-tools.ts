@@ -1,3 +1,5 @@
+/* oxlint-disable eslint/curly -- Keep execution identity guards compact. */
+import { createHash } from "node:crypto";
 import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { isSystemAgentOnlyCodexDynamicToolAllowlist } from "./dynamic-tool-profile.js";
@@ -46,17 +48,48 @@ function formatUnsupportedCodexDynamicToolOutput(type: unknown): string {
 
 type CodexDynamicToolExecutionIdentity = Pick<
   CodexDynamicToolCallParams,
-  "threadId" | "turnId" | "callId"
+  "namespace" | "threadId" | "turnId" | "callId" | "tool" | "arguments"
 >;
 
+function fingerprint(value: unknown): string {
+  return `sha256:${createHash("sha256").update(JSON.stringify(value)).digest("hex")}`;
+}
+
+export function fingerprintCodexDynamicToolRequest(
+  call: CodexDynamicToolExecutionIdentity,
+): string {
+  return fingerprint([
+    call.namespace ?? null,
+    call.threadId,
+    call.turnId,
+    call.callId,
+    call.tool,
+    call.arguments,
+  ]);
+}
+
+export function fingerprintCodexDynamicToolResponse(
+  call: CodexDynamicToolExecutionIdentity,
+  response: CodexDynamicToolCallResponse,
+): string {
+  return fingerprint([fingerprintCodexDynamicToolRequest(call), response]);
+}
+
 export function createCodexDynamicToolExecutionRegistry() {
-  const executions = new Map<string, Promise<CodexDynamicToolRuntimeResponse>>();
+  const executions = new Map<
+    string,
+    { fingerprint: string; execution: Promise<CodexDynamicToolRuntimeResponse> }
+  >();
   const keyFor = (call: CodexDynamicToolExecutionIdentity) =>
     JSON.stringify([call.threadId, call.turnId, call.callId]);
 
   return {
     get(call: CodexDynamicToolExecutionIdentity) {
-      return executions.get(keyFor(call));
+      const existing = executions.get(keyFor(call));
+      if (!existing) return undefined;
+      if (existing.fingerprint !== fingerprintCodexDynamicToolRequest(call))
+        throw new Error("Codex dynamic tool call identity was reused with a changed request");
+      return existing.execution;
     },
     claim(
       call: CodexDynamicToolExecutionIdentity,
@@ -64,10 +97,15 @@ export function createCodexDynamicToolExecutionRegistry() {
     ) {
       const existing = executions.get(keyFor(call));
       if (existing) {
-        return { execution: existing, replayed: true } as const;
+        if (existing.fingerprint !== fingerprintCodexDynamicToolRequest(call))
+          throw new Error("Codex dynamic tool call identity was reused with a changed request");
+        return { execution: existing.execution, replayed: true } as const;
       }
       const execution = start();
-      executions.set(keyFor(call), execution);
+      executions.set(keyFor(call), {
+        execution,
+        fingerprint: fingerprintCodexDynamicToolRequest(call),
+      });
       return { execution, replayed: false } as const;
     },
   };

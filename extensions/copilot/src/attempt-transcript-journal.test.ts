@@ -1139,12 +1139,29 @@ describe("Copilot attempt transcript journal", () => {
   });
 
   it("does not rerun group hooks for an idempotent replay", async () => {
-    const hook = vi.fn(() => undefined);
+    const hook = vi.fn((input: unknown) => {
+      const message = (input as { message: AgentMessage }).message;
+      return message.role === "assistant"
+        ? {
+            message: {
+              ...message,
+              content: message.content.map((part) =>
+                part.type === "text"
+                  ? Object.assign({}, part, { text: `${part.text} [rewritten]` })
+                  : part,
+              ),
+            },
+          }
+        : undefined;
+    });
     initializeGlobalHookRunner(
       createMockPluginRegistry([{ hookName: "before_message_write", handler: hook }]),
     );
-    const { attempt, journal, session, target } = await createFixture();
-    const emitGroup = (targetSession: FakeSession) => {
+    const { attempt, journal, session, target } = await createFixture(undefined, undefined, true);
+    const emitGroup = async (
+      targetSession: FakeSession,
+      targetJournal: ReturnType<typeof createAttemptTranscriptJournal>,
+    ) => {
       targetSession.emit(event("user.message", "initial-user", { content: "inspect both files" }));
       targetSession.emit(
         event("assistant.message", "assistant-replay", {
@@ -1153,21 +1170,31 @@ describe("Copilot attempt transcript journal", () => {
           toolRequests: [{ arguments: {}, name: "read", toolCallId: "call-replay" }],
         }),
       );
-      targetSession.emit(
-        event("tool.execution_complete", "result-replay", {
-          result: { content: "done" },
-          success: true,
+      await targetJournal.recordProviderToolResult({
+        providerResult: { resultType: "success", textResultForLlm: "done" },
+        message: {
+          role: "toolResult",
           toolCallId: "call-replay",
-        }),
-      );
+          toolName: "read",
+          content: [{ type: "text", text: "done" }],
+          isError: false,
+          timestamp: 3,
+        },
+      });
     };
     await journal.persistInitialUser();
-    emitGroup(session);
+    await emitGroup(session, journal);
     await journal.barrier("first commit");
     expect(hook).toHaveBeenCalledTimes(3);
-    const existingMessages = transcriptMessages(await readSessionTranscriptEvents(target)).map(
-      (row) => row.message,
-    );
+    const existingRows = transcriptMessages(await readSessionTranscriptEvents(target));
+    const existingMessages = existingRows.map((row) => row.message);
+    expect(existingMessages[1]).toMatchObject({
+      content: [
+        { text: "checking [rewritten]", type: "text" },
+        { id: "call-replay", name: "read", type: "toolCall" },
+      ],
+      role: "assistant",
+    });
 
     const replaySession = createFakeSession();
     const replayJournal = createAttemptTranscriptJournal({
@@ -1183,15 +1210,21 @@ describe("Copilot attempt transcript journal", () => {
         journal: replayJournal,
         modelRef: { api: "openai-responses", id: "gpt-5", provider: "github-copilot" },
         now: () => 2,
+        providerToolResultsOwned: true,
       },
     });
+    resetGlobalHookRunner();
+    const replayHook = vi.fn(() => ({ block: true }));
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "before_message_write", handler: replayHook }]),
+    );
     await replayJournal.persistInitialUser();
-    emitGroup(replaySession);
+    await emitGroup(replaySession, replayJournal);
     await replayJournal.barrier("replay");
 
-    expect(hook).toHaveBeenCalledTimes(3);
-    expect(transcriptMessages(await readSessionTranscriptEvents(target))).toHaveLength(3);
-    expect(replayJournal.snapshot().messagesSnapshot).toHaveLength(3);
+    expect(replayHook).not.toHaveBeenCalled();
+    expect(transcriptMessages(await readSessionTranscriptEvents(target))).toEqual(existingRows);
+    expect(replayJournal.snapshot().messagesSnapshot).toEqual(existingMessages);
   });
 
   it("rolls back the complete group when SQLite fails mid-group", async () => {
