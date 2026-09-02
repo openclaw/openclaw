@@ -918,11 +918,21 @@ function releaseQueueSummaryDeliveryForRetry(
     const sourceIndex = queue.summarySources.indexOf(source);
     if (sourceIndex >= 0) {
       queue.summarySources[sourceIndex] = createOverflowSummaryRetrySource(source);
+      // Transfer staging ownership to the retry clone so completing the old source
+      // does not unregister the staging directory before the retry settles.
+      delete source.hostWorkspaceStagingDir;
     }
     if (!source.turnAdoptionLifecycle) {
       completeFollowupRunLifecycle(source);
     }
   }
+}
+
+if (process.env.NODE_ENV === "test" || process.env.VITEST) {
+  // SAFETY: test-only global API hook for lifecycle unit test access
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.queueDrainTestApi")] = {
+    releaseQueueSummaryDeliveryForRetry,
+  };
 }
 
 function dropAbortedQueueSummarySources(queue: FollowupQueueSummaryState): number {
@@ -1170,6 +1180,12 @@ export function createOverflowSummaryRetrySource(source: FollowupRun): FollowupR
     abortSignal: source.abortSignal,
     turnAdoptionLifecycle: source.turnAdoptionLifecycle,
     queuedFollowupReplyDisposition: source.queuedFollowupReplyDisposition,
+    // Preserve the host-mode staging directory so the cloned retry's terminal
+    // settlement removes the original empty staging directory instead of
+    // orphaning it.
+    ...(source.hostWorkspaceStagingDir
+      ? { hostWorkspaceStagingDir: source.hostWorkspaceStagingDir }
+      : {}),
     ...(source.currentInboundEventKind === "room_event"
       ? { currentInboundEventKind: "room_event" }
       : {}),

@@ -33,6 +33,7 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { ApplyMediaUnderstandingResult } from "../../media-understanding/apply.js";
 import type { ExtractedFileImage } from "../../media-understanding/extracted-file-images.js";
 import { hasStagedMediaFacts, normalizeMediaFacts } from "../../media/media-facts.js";
+import { registerProducedStagingDirectory } from "../../media/staged-inputs.js";
 import { defaultRuntime } from "../../runtime.js";
 import {
   isModelSelectionLocked,
@@ -87,6 +88,7 @@ import {
 } from "./pending-final-delivery.js";
 import { getPreparedReplyDispatchRuntime } from "./prepared-reply-dispatch-context.js";
 import { attachProgressNarratorToReplyOptions } from "./progress-narrator.js";
+import { cleanHostWorkspaceStaging } from "./queue.js";
 import { createReplyTimingTracker } from "./reply-timing-tracker.js";
 import { resolveRuntimePolicySessionKey } from "./runtime-policy-session-key.js";
 import { initSessionState, resolveReplySessionPreprocessingState } from "./session.js";
@@ -316,6 +318,9 @@ export async function getReplyFromConfig(
   opts?: GetReplyOptions,
   configOverride?: OpenClawConfig,
 ): Promise<ReplyPayload | ReplyPayload[] | undefined> {
+  if (opts && typeof opts === "object") {
+    Reflect.deleteProperty(opts, "hostWorkspaceStagingDir");
+  }
   const isFastTestEnv = isFastTestRuntimeEnv();
   const preparedReplyDispatchRuntime = configOverride
     ? undefined
@@ -1176,7 +1181,6 @@ export async function getReplyFromConfig(
   cleanedBody = inlineActionResult.cleanedBody;
   const explicitSkillSelections = inlineActionResult.explicitSkillSelections;
   const queueModeOverride = inlineActionResult.queueModeOverride;
-  const preparedReplyOpts = withExtractedFileImages(resolvedOpts, extractedFileImages);
   abortedLastRun = inlineActionResult.abortedLastRun ?? abortedLastRun;
   const runAutoFallbackPrimaryProbe = directives.hasModelDirective
     ? undefined
@@ -1257,6 +1261,7 @@ export async function getReplyFromConfig(
   let stagedAttachmentPaths = hasStagedMediaFacts(finalized.media)
     ? collectStagedAttachmentPaths(finalized)
     : new Map<number, string>();
+  let hostWorkspaceStagingDir: string | undefined;
   // Already-staged facts or SDK projections must remain a single-stage contract.
   if (
     !useFastTestBootstrap &&
@@ -1277,6 +1282,10 @@ export async function getReplyFromConfig(
       }),
     );
     stagedAttachmentPaths = stageResult.staged;
+    if (stageResult.hostWorkspaceStagingDir) {
+      hostWorkspaceStagingDir = stageResult.hostWorkspaceStagingDir;
+      registerProducedStagingDirectory(hostWorkspaceStagingDir);
+    }
   }
 
   if (
@@ -1303,7 +1312,7 @@ export async function getReplyFromConfig(
   }
 
   logResolverTiming("milestone", "before_run_prepared_reply");
-  const replyResult = await traceGetReplyPhase("reply.run_prepared_reply", () =>
+  const runPreparedReplyPromise = traceGetReplyPhase("reply.run_prepared_reply", () =>
     runPreparedReply({
       ctx,
       sessionCtx,
@@ -1341,7 +1350,15 @@ export async function getReplyFromConfig(
       perMessageQueueMode,
       perMessageQueueOptions,
       typing,
-      opts: queueModeOverride ? { ...preparedReplyOpts, queueModeOverride } : preparedReplyOpts,
+      opts: {
+        ...(queueModeOverride
+          ? { ...withExtractedFileImages(resolvedOpts, extractedFileImages), queueModeOverride }
+          : withExtractedFileImages(resolvedOpts, extractedFileImages)),
+        ...(hostWorkspaceStagingDir ? { hostWorkspaceStagingDir } : {}),
+        onHostStagingDelegated: () => {
+          hostWorkspaceStagingDir = undefined;
+        },
+      },
       defaultModel,
       timeoutMs,
       isNewSession,
@@ -1358,7 +1375,15 @@ export async function getReplyFromConfig(
       autoFallbackPrimaryProbe: runAutoFallbackPrimaryProbe,
     }),
   );
-  logResolverTiming("completed", "prepared_reply");
-  return replyResult;
+
+  try {
+    return await runPreparedReplyPromise;
+  } finally {
+    if (hostWorkspaceStagingDir) {
+      cleanHostWorkspaceStaging({ hostWorkspaceStagingDir });
+      hostWorkspaceStagingDir = undefined;
+    }
+    logResolverTiming("completed", "prepared_reply");
+  }
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

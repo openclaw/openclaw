@@ -57,6 +57,7 @@ vi.mock("./agent-runner-core.js", () => ({
 
 vi.mock("./queue.js", () => ({
   refreshQueuedFollowupSession: (...args: unknown[]) => mocks.refreshQueuedFollowupSession(...args),
+  completeFollowupRunLifecycle: vi.fn(),
 }));
 
 vi.mock("./reply-usage-state.js", () => ({

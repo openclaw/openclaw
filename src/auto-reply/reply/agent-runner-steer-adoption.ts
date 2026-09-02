@@ -9,6 +9,7 @@ import {
 } from "./agent-runner-core.js";
 import {
   admitFollowupRunLifecycle,
+  completeFollowupRunLifecycle,
   parkSteerCandidate,
   resolveFollowupAbortSignal,
   scheduleFollowupDrain,
@@ -21,6 +22,7 @@ import {
   type ReplyOperation,
   replyRunRegistry,
 } from "./reply-run-registry.js";
+import { runAfterReplyOperationClear } from "./reply-run-registry.state.js";
 import { refreshReplyOperationTyping } from "./reply-run-typing.js";
 import { buildChannelSourceTurnId } from "./source-turn-id.js";
 import type { TypingSignaler } from "./typing-mode.js";
@@ -178,7 +180,32 @@ export async function runActiveReplySteer(params: ActiveReplySteerParams): Promi
     if (finalization.status === "rejected") {
       return await fallback(finalization.outcome.reason);
     }
+    // Transfer staging ownership to the active operation so the producer
+    // no longer sees the directory and cannot delete media owned by the steer.
+    params.opts?.onHostStagingDelegated?.();
+    // Save staging properties for deferred cleanup after owner settlement
+    const hostStagingDir = followupRun.hostWorkspaceStagingDir;
+    const turnAdoptionLifecycle = followupRun.turnAdoptionLifecycle;
+    // Clear the staging properties on the followupRun so lifecycle doesn't double-clean
+    delete followupRun.hostWorkspaceStagingDir;
+    delete followupRun.turnAdoptionLifecycle;
     parked.consume();
+    // Set up deferred cleanup after owner settlement
+    if (activeReplyOperation?.ownerSettlement) {
+      void activeReplyOperation.ownerSettlement.then(() => {
+        completeFollowupRunLifecycle({
+          hostWorkspaceStagingDir: hostStagingDir,
+          turnAdoptionLifecycle,
+        });
+      });
+    } else if (activeReplyOperation) {
+      runAfterReplyOperationClear(activeReplyOperation, () => {
+        completeFollowupRunLifecycle({
+          hostWorkspaceStagingDir: hostStagingDir,
+          turnAdoptionLifecycle,
+        });
+      });
+    }
     const transcriptCommitUnconfirmed =
       finalization.outcome.result?.transcriptCommit === "unconfirmed";
     if (finalization.aborted) {

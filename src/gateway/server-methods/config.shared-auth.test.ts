@@ -14,15 +14,24 @@ import {
   flushConfigHandlerMicrotasks,
 } from "./config.test-helpers.js";
 
-const readConfigFileSnapshotForWriteMock = vi.fn();
-const writeConfigFileMock = vi.fn();
-const persistedConfigResultMock = vi.fn((config: OpenClawConfig) => config);
-const validateConfigObjectWithPluginsMock = vi.fn();
-const prepareSecretsRuntimeSnapshotMock = vi.fn();
-const scheduleGatewaySigusr1RestartMock = vi.fn(() => ({
-  scheduled: true,
-  delayMs: 1_000,
-  coalesced: false,
+const {
+  readConfigFileSnapshotForWriteMock,
+  writeConfigFileMock,
+  persistedConfigResultMock,
+  validateConfigObjectWithPluginsMock,
+  prepareSecretsRuntimeSnapshotMock,
+  scheduleGatewaySigusr1RestartMock,
+} = vi.hoisted(() => ({
+  readConfigFileSnapshotForWriteMock: vi.fn(),
+  writeConfigFileMock: vi.fn(),
+  persistedConfigResultMock: vi.fn((config: OpenClawConfig) => config),
+  validateConfigObjectWithPluginsMock: vi.fn(),
+  prepareSecretsRuntimeSnapshotMock: vi.fn(),
+  scheduleGatewaySigusr1RestartMock: vi.fn(() => ({
+    scheduled: true,
+    delayMs: 1_000,
+    coalesced: false,
+  })),
 }));
 const restartSentinelMocks = vi.hoisted(() => ({
   writeRestartSentinel: vi.fn(async (_payload: RestartSentinelPayload) => undefined),

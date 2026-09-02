@@ -9,3 +9,4 @@ export type { FollowupRun, QueueSettings } from "./queue/types.js";
 export { isFollowupRunAborted, resolveFollowupAbortSignal } from "./queue/types.js";
 export { admitFollowupRunLifecycle, completeFollowupRunLifecycle } from "./queue/types.js";
 export { FollowupRunDeferredError } from "./queue/types.js";
+export { cleanEmptyStagingDirectorySafely, cleanHostWorkspaceStaging } from "./queue/types.js";

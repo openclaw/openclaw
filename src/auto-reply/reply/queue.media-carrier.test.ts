@@ -382,6 +382,7 @@ describe("followup prompt metadata carrier", () => {
       channelId: "test",
       participantId: "person-1",
     });
+    source.hostWorkspaceStagingDir = "/tmp/openclaw-staged-overflow-retry";
 
     const retry = createOverflowSummaryRetrySource(source);
 
@@ -391,6 +392,9 @@ describe("followup prompt metadata carrier", () => {
     expect(retry.media).toEqual(source.media);
     expect(retry.explicitSkillSelections).toEqual(source.explicitSkillSelections);
     expect(retry.channelAdmissionEvidence).toBe(source.channelAdmissionEvidence);
+    // The host-mode staging directory must survive the overflow retry clone so
+    // the cloned run's terminal settlement removes the original empty dir.
+    expect(retry.hostWorkspaceStagingDir).toBe(source.hostWorkspaceStagingDir);
     expectCombinedCarrierFacts(retry);
   });
 });

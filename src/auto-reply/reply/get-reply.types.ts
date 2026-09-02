@@ -55,6 +55,10 @@ type InternalReplySessionOptions = {
   /** Gateway-private optimistic-concurrency constraint for an operator-requested proposal revision. */
   skillWorkshopProposalRevision?: SkillWorkshopProposalRevisionConstraint;
   skillLibraryAuthoring?: import("../../skills/library/authoring.js").SkillLibraryAuthoringCapability;
+  /** Host workspace staging directory (full path) to clean up after session settlement. */
+  hostWorkspaceStagingDir?: string;
+  /** Transfer staging ownership to the active operation. */
+  onHostStagingDelegated?: () => void;
 };
 
 export type InternalGetReplyOptions = GetReplyOptions &

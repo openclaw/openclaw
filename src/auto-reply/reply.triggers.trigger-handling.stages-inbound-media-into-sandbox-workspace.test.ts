@@ -588,9 +588,18 @@ describe("stageSandboxMedia", () => {
       });
 
       const inboundDir = join(sandboxDir, "media", "inbound");
-      const directories = await fs.readdir(inboundDir);
-      expect(directories).toEqual([expect.stringMatching(/^openclaw-staged-[0-9a-f-]+$/)]);
-      await expect(fs.readdir(join(inboundDir, directories[0]!))).resolves.toEqual([".gitignore"]);
+      const directories = await fs.readdir(inboundDir).catch((e: unknown) => {
+        if (
+          typeof e === "object" &&
+          e !== null &&
+          "code" in e &&
+          (e as { code?: string }).code === "ENOENT"
+        ) {
+          return [];
+        }
+        throw e;
+      });
+      expect(directories).toEqual([]);
       expect(result.staged).toEqual(new Map());
       expect(ctx.media?.[0]?.path).toBe(mediaPath);
       expect(sessionCtx.media?.[0]?.path).toBe(mediaPath);

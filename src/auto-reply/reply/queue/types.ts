@@ -21,6 +21,10 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { GroupToolPolicyConfig } from "../../../config/types.tools.js";
 import type { MediaFact } from "../../../media/media-facts.js";
 import type { PromptImageOrderEntry } from "../../../media/prompt-image-order.js";
+import {
+  cleanEmptyStagingDirectorySafely,
+  cleanHostWorkspaceStaging,
+} from "../../../media/staged-inputs.js";
 import type { PluginHookChannelContext } from "../../../plugins/hook-types.js";
 import type { RuntimePluginToolGrant } from "../../../plugins/runtime/tool-grant.js";
 import type { InputProvenance } from "../../../sessions/input-provenance.js";
@@ -114,6 +118,8 @@ export type FollowupRun = {
   deliveryCorrelations?: QueuedReplyDeliveryCorrelation[];
   /** Canonical ownership lifecycle for durable ingress / reply-lane transfer. */
   turnAdoptionLifecycle?: TurnAdoptionLifecycle;
+  /** Host workspace staging directory (full path) to clean up after session settlement. */
+  hostWorkspaceStagingDir?: string;
   /** Records terminal queue-cap outcomes at the queue owner before lifecycle cleanup. */
   onQueueDisposition?: (disposition: FollowupQueueDisposition) => void;
   /** Keep delivery bound to the source that owned admission, not later runner defaults. */
@@ -279,7 +285,10 @@ const retiredTurnAdoptionCancellationLifecycles = new WeakSet<TurnAdoptionLifecy
 const completedTurnAdoptionLifecycles = new WeakSet<TurnAdoptionLifecycle>();
 const completedTurnAdoptionLifecycleCallbacks = new WeakSet<TurnAdoptionLifecycle>();
 
-type FollowupLifecycleRun = Pick<FollowupRun, "steerPending" | "turnAdoptionLifecycle">;
+type FollowupLifecycleRun = Pick<
+  FollowupRun,
+  "steerPending" | "turnAdoptionLifecycle" | "hostWorkspaceStagingDir"
+>;
 
 export function markFollowupRunEnqueued(run: FollowupLifecycleRun): boolean {
   const lifecycle = run.turnAdoptionLifecycle;
@@ -330,8 +339,12 @@ export async function admitFollowupRunLifecycle(run: FollowupLifecycleRun): Prom
   }
 }
 
+export { cleanEmptyStagingDirectorySafely, cleanHostWorkspaceStaging };
+
 export function completeFollowupRunLifecycle(run: FollowupLifecycleRun): void {
   run.steerPending?.settle(false);
+  // Clean up host workspace staging directory (removes empty dir, preserves non-empty)
+  cleanHostWorkspaceStaging(run);
   const lifecycle = run.turnAdoptionLifecycle;
 
   const finish = () => {
