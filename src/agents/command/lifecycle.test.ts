@@ -435,6 +435,95 @@ describe("createAgentCommandLifecycle", () => {
     }
   });
 
+  it("drops malformed nested terminal receipts before publishing lifecycle events", () => {
+    emitAgentEvent.mockClear();
+    const secret = ["sk", "abcdefghijklmnopqrstuv"].join("-");
+    const lifecycle = createAgentCommandLifecycle({
+      runId: "malformed-receipt-owner",
+      lifecycleGeneration: () => "test-generation",
+      startedAt: 100,
+      state: {
+        currentTurnUserMessagePersisted: true,
+        lifecycleFinishing: false,
+        lifecycleEnded: false,
+      },
+    });
+
+    lifecycle.emitEnd({
+      metadata: {
+        terminalReceipt: {
+          runId: "malformed-receipt-owner",
+          sessionId: "session-1",
+          turnId: "turn-1",
+          requested: { provider: "provider-1", model: { secret } },
+          effective: { provider: "provider-1", model: "model-1", responseModel: "model-1" },
+          successfulToolNames: ["read"],
+          rerouted: false,
+          terminalDisposition: "visible",
+        },
+      },
+      outcome: buildAgentRunTerminalOutcome({ status: "ok", stopReason: "end_turn" }),
+    });
+
+    const event = emitAgentEvent.mock.calls[0]?.[0];
+    expect(event.data).not.toHaveProperty("terminalReceipt");
+    expect(JSON.stringify(event)).not.toContain(secret);
+  });
+
+  it("publishes only allowlisted fields from valid terminal receipts", () => {
+    emitAgentEvent.mockClear();
+    const secret = ["sk", "abcdefghijklmnopqrstuv"].join("-");
+    const successfulToolNames = Object.assign(["read"], { secret });
+    const lifecycle = createAgentCommandLifecycle({
+      runId: "bounded-receipt-owner",
+      lifecycleGeneration: () => "test-generation",
+      startedAt: 100,
+      state: {
+        currentTurnUserMessagePersisted: true,
+        lifecycleFinishing: false,
+        lifecycleEnded: false,
+      },
+    });
+
+    lifecycle.emitEnd({
+      metadata: {
+        terminalReceipt: {
+          runId: "bounded-receipt-owner",
+          sessionId: "session-1",
+          turnId: "turn-1",
+          requested: { provider: "provider-1", model: "model-1", secret },
+          effective: {
+            provider: "provider-1",
+            model: "model-1",
+            responseModel: "model-1",
+            secret,
+          },
+          successfulToolNames,
+          rerouted: false,
+          terminalDisposition: "visible",
+          secret,
+        },
+      },
+      outcome: buildAgentRunTerminalOutcome({ status: "ok", stopReason: "end_turn" }),
+    });
+
+    const event = emitAgentEvent.mock.calls[0]?.[0];
+    expect(event.data.terminalReceipt).toEqual({
+      runId: "bounded-receipt-owner",
+      sessionId: "session-1",
+      turnId: "turn-1",
+      requested: { provider: "provider-1", model: "model-1" },
+      effective: { provider: "provider-1", model: "model-1", responseModel: "model-1" },
+      successfulToolNames: ["read"],
+      rerouted: false,
+      terminalDisposition: "visible",
+    });
+    successfulToolNames.push("mutated-after-publication");
+    expect(event.data.terminalReceipt.successfulToolNames).not.toHaveProperty("secret");
+    expect(event.data.terminalReceipt.successfulToolNames).toEqual(["read"]);
+    expect(JSON.stringify(event)).not.toContain(secret);
+  });
+
   it.each(["finishing", "end", "error"] as const)(
     "rejects malformed canonical metadata on %s events",
     (phase) => {
