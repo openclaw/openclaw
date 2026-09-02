@@ -65,6 +65,7 @@ export function createMSTeamsReplyDispatcher(params: {
   onSentMessageIds?: (ids: string[]) => void;
   tokenProvider?: MSTeamsAccessTokenProvider;
   sharePointSiteId?: string;
+  sharePointFolder?: string;
 }) {
   const core = getMSTeamsRuntime();
   const msteamsCfg = params.cfg.channels?.msteams;
@@ -252,6 +253,7 @@ export function createMSTeamsReplyDispatcher(params: {
       },
       tokenProvider: params.tokenProvider,
       sharePointSiteId: params.sharePointSiteId,
+      sharePointFolder: params.sharePointFolder,
       mediaMaxBytes,
       feedbackLoopEnabled,
       serviceUrlBoundary: resolveMSTeamsSdkCloudOptions(msteamsCfg),
