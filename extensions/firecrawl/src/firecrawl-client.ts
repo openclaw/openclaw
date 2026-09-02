@@ -147,10 +147,8 @@ async function validateFirecrawlBaseUrl(
   if (isBlockedHostnameOrIp(url.hostname)) {
     return "selfHosted";
   }
-  // The allow-private-network policy skips every private-network check inside
-  // the resolver, so a failure there can only be a hostname-resolution failure —
-  // never a resolvable public endpoint. Report it as one instead of falling
-  // back to the private-network policy message.
+  // Private addresses are allowed during resolution; a lookup failure must not
+  // become a public-endpoint policy error.
   const pinned = await resolvePinnedHostnameWithPolicy(url.hostname, {
     lookupFn,
     policy: { allowPrivateNetwork: true },
