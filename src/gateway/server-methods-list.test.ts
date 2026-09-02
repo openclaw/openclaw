@@ -155,10 +155,11 @@ describe("listGatewayMethods", () => {
   });
 
   it("appends new methods after model probing without shifting older method indices", () => {
-    expect(listGatewayMethods().slice(-expectedMethodsAfterModelProbe.length)).toEqual(
+    const methods = listGatewayMethods();
+    expect(methods.slice(-(expectedMethodsAfterModelProbe.length + 1), -1)).toEqual(
       expectedMethodsAfterModelProbe,
     );
-    const methods = listGatewayMethods();
+    expect(methods.at(-1)).toBe("update.report");
     expect(methods.indexOf("node.pluginSurface.refresh")).toBe(
       methods.indexOf("node.describe") + 1,
     );
@@ -298,8 +299,10 @@ describe("listGatewayMethods", () => {
       "sessions.dispatch",
       "sessions.reclaim",
       ...expectedMethodsAfterModelProbe,
+      "update.report",
     ];
     expect(coreMethods.slice(-expectedCoreSuffix.length)).toEqual(expectedCoreSuffix);
+    expect(coreMethods.at(-1)).toBe("update.report");
     expect(methods.indexOf("approval.get")).toBeGreaterThan(methods.indexOf("tts.speak"));
     expect(methods.indexOf("approval.resolve")).toBe(methods.indexOf("approval.get") + 1);
     expect(methods.indexOf("audit.run.inspect")).toBe(methods.indexOf("tasks.dismiss") + 1);

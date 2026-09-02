@@ -21,12 +21,14 @@ type RestartSentinelStep = {
   cwd?: string | null;
   durationMs?: number | null;
   log?: RestartSentinelLog | null;
+  advisory?: boolean;
 };
 
 type RestartSentinelStats = {
   recovery?: UpdateRecovery;
   mode?: string;
   root?: string;
+  target?: string;
   requiresRestart?: boolean;
   handoffId?: string;
   before?: Record<string, unknown> | null;
@@ -73,7 +75,7 @@ export type RestartSentinel = RestartSentinelEnvelope & {
   revision: number;
 };
 
-type RestartSentinelRowState =
+export type RestartSentinelRowState =
   | { kind: "missing" }
   | { kind: "invalid"; revision: number }
   | { kind: "valid"; sentinel: RestartSentinel };
@@ -153,10 +155,12 @@ function parseRestartSentinelStep(value: unknown): RestartSentinelStep | null {
   const cwd = parseOptionalNullableString(value, "cwd");
   const durationMs = value.durationMs;
   const log = value.log;
+  const advisory = value.advisory;
   if (
     cwd === false ||
     (durationMs !== undefined && durationMs !== null && !isFiniteNumber(durationMs)) ||
-    (log !== undefined && log !== null && !parseRestartSentinelLog(log))
+    (log !== undefined && log !== null && !parseRestartSentinelLog(log)) ||
+    (advisory !== undefined && typeof advisory !== "boolean")
   ) {
     return null;
   }
@@ -170,6 +174,9 @@ function parseRestartSentinelStep(value: unknown): RestartSentinelStep | null {
   if (log !== undefined) {
     result.log = log === null ? null : parseRestartSentinelLog(log);
   }
+  if (advisory !== undefined) {
+    result.advisory = advisory;
+  }
   return result;
 }
 
@@ -179,6 +186,7 @@ function parseRestartSentinelStats(value: unknown): RestartSentinelStats | null 
   }
   const mode = parseOptionalNullableString(value, "mode");
   const root = parseOptionalNullableString(value, "root");
+  const target = parseOptionalNullableString(value, "target");
   const handoffId = parseOptionalNullableString(value, "handoffId");
   const reason = parseOptionalNullableString(value, "reason");
   const before = value.before;
@@ -193,6 +201,8 @@ function parseRestartSentinelStats(value: unknown): RestartSentinelStats | null 
     mode === null ||
     root === false ||
     root === null ||
+    target === false ||
+    target === null ||
     handoffId === false ||
     handoffId === null ||
     reason === false ||
@@ -214,6 +224,9 @@ function parseRestartSentinelStats(value: unknown): RestartSentinelStats | null 
   }
   if (root !== undefined) {
     result.root = root;
+  }
+  if (target !== undefined) {
+    result.target = target;
   }
   if (value.requiresRestart !== undefined) {
     result.requiresRestart = value.requiresRestart as boolean;
@@ -434,7 +447,7 @@ function decodeRestartSentinelRow(row: {
   return payload ? { version: 1, payload, revision: row.updated_at_ms } : null;
 }
 
-function readRestartSentinelRowForKeySync(
+export function readRestartSentinelRowForKeySync(
   db: DatabaseSync,
   sentinelKey: string,
 ): RestartSentinelRowState {
@@ -485,7 +498,7 @@ function requireValidPayload(payload: RestartSentinelPayload): RestartSentinelPa
   return parsed;
 }
 
-function nextRevision(currentRevision: number | null): number {
+export function nextRevision(currentRevision: number | null): number {
   if (currentRevision !== null && !Number.isSafeInteger(currentRevision)) {
     throw new Error("Restart sentinel revision is outside the safe integer range");
   }
@@ -526,7 +539,7 @@ function maxRevision(left: number | null, right: number | null): number | null {
   return Math.max(left, right);
 }
 
-function buildRestartSentinelRow(
+export function buildRestartSentinelRow(
   payload: RestartSentinelPayload,
   revision: number,
   sentinelKey = RESTART_SENTINEL_KEY,

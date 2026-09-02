@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { createPrefilledGithubIssueUrl } from "../infra/github-issue.js";
 import { VERSION } from "../version.js";
 import {
   readSessionSqliteMigrationManifest,
@@ -100,18 +101,6 @@ export function createSessionSqliteMigrationFailureIssue(
     title,
     url: createPrefilledGithubIssueUrl(title, boundedBody),
   };
-}
-
-function createPrefilledGithubIssueUrl(title: string, body: string): string {
-  const urlBody =
-    body.length > 6_000
-      ? `${truncateUtf16Safe(body, 6_000)}\n\n...(truncated for URL; see local failure report for the full sanitized body)`
-      : body;
-  const params = new URLSearchParams({
-    body: urlBody,
-    title,
-  });
-  return `https://github.com/openclaw/openclaw/issues/new?${params.toString()}`;
 }
 
 function renderFailureMarkdown(payload: {

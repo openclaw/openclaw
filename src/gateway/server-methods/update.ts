@@ -69,6 +69,7 @@ import {
 } from "../server-restart-sentinel.js";
 import { parseRestartRequestParams } from "./restart-request.js";
 import type { GatewayRequestHandlers } from "./types.js";
+import { updateReportHandler } from "./update-report.js";
 import { assertValidParams } from "./validation.js";
 
 const MANAGED_HANDOFF_RESTART_DELAY_MS = 2000;
@@ -165,6 +166,7 @@ export const updateHandlers: GatewayRequestHandlers = {
     }
     respond(true, result);
   },
+  "update.report": updateReportHandler,
   "update.hold": ({ params, respond, client, context }) => {
     if (!assertValidParams(params, validateUpdateHoldParams, "update.hold", respond)) {
       return;
@@ -304,6 +306,11 @@ export const updateHandlers: GatewayRequestHandlers = {
         );
       }
       const devTarget = explicitDevTarget ?? adoptedDevTarget;
+      sentinelMeta.target = devTarget
+        ? `${devTarget.upstreamRef}@${devTarget.upstreamSha}`
+        : adoptedPackageTargetVersion
+          ? `version ${adoptedPackageTargetVersion}`
+          : `${effectiveChannel} channel`;
       const supervisor = detectRespawnSupervisor(process.env, process.platform, {
         includeLinuxOpenClawGatewayServiceMarker: true,
       });

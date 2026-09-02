@@ -822,6 +822,40 @@ describe("restart success continuation", () => {
 });
 
 describe("control-plane update restart sentinel", () => {
+  it("preserves advisory step classification through the typed sentinel round trip", async () => {
+    await withRestartSentinelStateDir(async () => {
+      await writeRestartSentinel(
+        buildUpdateRestartSentinelPayload({
+          result: {
+            status: "error",
+            mode: "npm",
+            steps: [
+              {
+                name: "post-install doctor",
+                command: "openclaw doctor",
+                cwd: "/tmp/openclaw",
+                durationMs: 1,
+                exitCode: 86,
+                advisory: {
+                  kind: "package-post-install-doctor",
+                  message: "private advisory detail",
+                },
+              },
+            ],
+            durationMs: 1,
+          },
+          meta: {},
+        }),
+      );
+
+      const steps = (await readRestartSentinel())?.payload.stats?.steps;
+      expect(steps).toEqual([
+        expect.objectContaining({ name: "post-install doctor", advisory: true }),
+      ]);
+      expect(JSON.stringify(steps)).not.toContain("private advisory detail");
+    });
+  });
+
   it.each([
     { serviceRestartSafe: false, reason: "runtime-verification-failed" },
     { serviceRestartSafe: true, version: "1.0.0", service: "failed" },
@@ -917,8 +951,10 @@ describe("control-plane update restart sentinel", () => {
       after: { version: "2026.4.24" },
       steps: [],
       durationMs: 42,
+      recovery: { serviceRestartSafe: true, version: "2026.4.24" } as const,
     };
     const meta = {
+      target: "version 2026.4.24",
       sessionKey: "agent:main:webchat:dm:user-123",
       continuationMessage: "Check the running version and finish the update report.",
     };
@@ -942,6 +978,10 @@ describe("control-plane update restart sentinel", () => {
     });
 
     expect(finalPayload.status).toBe("ok");
+    expect(finalPayload.stats).toMatchObject({
+      target: "version 2026.4.24",
+      recovery: { serviceRestartSafe: true },
+    });
     expect(finalPayload.continuation).toEqual({
       kind: "agentTurn",
       message: "Check the running version and finish the update report.",

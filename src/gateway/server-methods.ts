@@ -717,6 +717,9 @@ export async function handleGatewayRequest(
       respond,
       context,
       ...(signal ? { signal } : {}),
+      ...(opts.hasCurrentClientAuthority
+        ? { hasCurrentClientAuthority: opts.hasCurrentClientAuthority }
+        : {}),
       ...(opts.sessionMutationCommitGuard
         ? { sessionMutationCommitGuard: opts.sessionMutationCommitGuard }
         : {}),

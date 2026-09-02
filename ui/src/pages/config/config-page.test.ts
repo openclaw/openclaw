@@ -891,6 +891,76 @@ describe("ConfigPage Updates integration", () => {
     restoreDialogPolyfill();
     container.remove();
   });
+
+  it("shows the report action to a connected administrator when the method catalog is stale", () => {
+    const page = new ConfigPage();
+    const state = page as unknown as { context: ApplicationContext };
+    page.pageId = "updates";
+    state.context = {
+      config: {
+        current: { assistantIdentity: { name: "OpenClaw" }, serverVersion: "2026.8.1" },
+      },
+      runtimeConfig: {
+        canSet: true,
+        state: {
+          connected: true,
+          configLoading: false,
+          configSaving: false,
+          configApplying: false,
+          configForm: { update: { channel: "stable", auto: { enabled: false } } },
+          configSnapshot: null,
+        },
+        patchForm: vi.fn(),
+      },
+      gateway: {
+        snapshot: {
+          client: {},
+          phase: "connected",
+          hello: {
+            auth: { role: "operator", scopes: ["operator.admin"] },
+            features: { methods: ["update.status"] },
+          },
+        },
+        subscribe: () => () => undefined,
+      },
+      overlays: {
+        snapshot: {
+          updateAvailable: null,
+          updateSchedule: null,
+          updateRunning: false,
+          updateReconciliationPending: false,
+          updateStatusBanner: { tone: "danger", text: "Update failed" },
+          recordedUpdateAttempt: {
+            timestampMs: 500,
+            status: "error",
+            reason: "build-failed",
+            installKind: "git",
+            beforeVersion: "2026.8.1",
+            beforeSha: null,
+            afterVersion: null,
+            afterSha: null,
+            failure: null,
+          },
+          reportableUpdateFailureId: "handoff-failed",
+          updateFailureReportBusy: false,
+          updateFailureReportNotice: null,
+          heldUpdateCampaignId: null,
+        },
+        subscribe: () => () => undefined,
+        reportUpdateFailure: vi.fn(async () => undefined),
+        refreshUpdateStatus: vi.fn(async () => undefined),
+        runUpdate: vi.fn(),
+      },
+    } as unknown as ApplicationContext;
+    const container = document.createElement("div");
+    render(page.render(), container);
+
+    const report = [...container.querySelectorAll<HTMLButtonElement>("button")].find(
+      (button) => button.textContent?.trim() === "Report update failure",
+    );
+    expect(report).toBeDefined();
+    expect(report?.disabled).toBe(false);
+  });
 });
 
 describe("ConfigPage runtime config lifecycle", () => {

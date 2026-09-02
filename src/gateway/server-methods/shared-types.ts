@@ -404,6 +404,8 @@ export type GatewayRequestOptions = {
   sessionMutationCommitGuard?: () => void;
   /** In-process caller lifetime; never serialized into a Gateway request frame. */
   signal?: AbortSignal;
+  /** Live transport authority; in-process only and never derived from request data. */
+  hasCurrentClientAuthority?: () => boolean;
 };
 
 /** Commit-time guard captured by the pre-dispatch session participation check. */
@@ -430,6 +432,8 @@ export type GatewayRequestHandlerOptions = {
   sessionMutationAuthorization?: SessionMutationAuthorization;
   /** In-process caller lifetime; absent for ordinary transport requests. */
   signal?: AbortSignal;
+  /** Live transport authority; in-process only and never derived from request data. */
+  hasCurrentClientAuthority?: () => boolean;
 };
 
 /** Single gateway method implementation. */

@@ -93,6 +93,8 @@ export const PluginLifecycleProtocolSchemas = {
   UpdateHoldParams: config.UpdateHoldParamsSchema,
   UpdateHoldResult: config.UpdateHoldResultSchema,
   UpdateRunParams: config.UpdateRunParamsSchema,
+  UpdateReportParams: config.UpdateReportParamsSchema,
+  UpdateReportResult: config.UpdateReportResultSchema,
   TickEvent: frames.TickEventSchema,
   ShutdownEvent: frames.ShutdownEventSchema,
 } as const;

@@ -42,6 +42,22 @@ launcher scripts).
 Failed update and repair attempts enter [recovery triage](/cli/update#recover-a-failed-update)
 after service recovery and cleanup finish.
 
+After a final interactive update failure, **Diagnose update failure** and
+**Report update failure** are separate choices. Reporting first shows the exact
+sanitized issue body and defaults confirmation to **No**. After confirmation,
+OpenClaw checks the GitHub CLI's active `github.com` account with a silent,
+read-only request before issue creation. Fallback and pending outcomes retain the
+sanitized report locally; a confirmed issue keeps only its durable issue URL.
+If the CLI is missing or that check cannot confirm authentication, OpenClaw
+provides a prefilled issue link without starting issue creation. A definitely
+unstarted CLI submission returns to the action menu, where the same failed
+attempt can be chosen and confirmed again. In the Control UI, an interrupted
+pre-create preparation becomes retryable after its local reservation expires.
+Once issue creation starts, a result without a verified issue URL
+stays pending and offers no replay link because an issue may already exist.
+`--yes`, `--json`, non-interactive runs, and managed-service handoffs never
+submit a report.
+
 ## Options
 
 | Flag                                             | Description                                                                                                                                                                                                                                                                                                                                   |

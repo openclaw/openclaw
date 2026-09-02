@@ -186,13 +186,36 @@ async function maybeCreateSessionSqliteGithubIssue(
     }
     return;
   }
-  const { createSessionSqliteGithubIssue } =
-    await import("./doctor-session-sqlite-github-issue.js");
-  const created = createSessionSqliteGithubIssue(report.supportIssue);
+  const { createGithubIssue } = await import("../infra/github-issue.js");
+  const created = createGithubIssue(report.supportIssue);
   if (created.ok) {
     report.supportIssue.github = { status: "created", url: created.url };
     if (shouldLog) {
       runtime.log(`session-sqlite recover: created GitHub issue ${created.url}`);
+    }
+    return;
+  }
+  if (created.ambiguous) {
+    report.supportIssue.github = {
+      message: created.message,
+      status: "failed",
+    };
+    if (shouldLog) {
+      runtime.log(
+        `session-sqlite recover: GitHub issue submission outcome is unknown: ${created.message}`,
+      );
+    }
+    return;
+  }
+  if (!("fallbackUrl" in created)) {
+    report.supportIssue.github = {
+      message: created.message,
+      status: "failed",
+    };
+    if (shouldLog) {
+      runtime.log(
+        `session-sqlite recover: GitHub issue creation can be retried: ${created.message}`,
+      );
     }
     return;
   }
