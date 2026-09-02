@@ -114,6 +114,7 @@ describe("sessions_spawn tool", () => {
       status: "accepted",
       context: "isolated",
       childSessionKey: "agent:main:subagent:1",
+      sessionId: "11111111-1111-4111-8111-111111111111",
       runId: "run-subagent",
     });
     hoisted.spawnAcpDirectMock.mockReset().mockResolvedValue({
@@ -534,6 +535,9 @@ describe("sessions_spawn tool", () => {
     expect(tool.description).toContain("session URL on the first line");
     expect(tool.description).toContain("`Owner: <label>` on the second line");
     expect(tool.description).toContain("`tools.sessions.visibility`");
+    expect(tool.description).toContain("Hidden native accepts include durable `sessionId`");
+    expect(tool.description).toContain("`visible=true` accepts omit it");
+    expect(tool.description).not.toContain("ACP and `visible=true`");
     expect(schema.properties?.runtime?.description).toContain("visible=true");
     expect(schema.properties?.mode?.description).toContain('accept omitted/default "run"');
     expect(schema.properties?.lightContext?.description).toContain("unavailable with visible=true");
@@ -601,6 +605,7 @@ describe("sessions_spawn tool", () => {
         runId: "run-visible",
         cleanup: "keep",
       });
+      expect(result.details).not.toHaveProperty("sessionId");
       expect(callGateway).toHaveBeenCalledWith("sessions.create", {
         agentId: "main",
         label: "Issue review",
@@ -1759,6 +1764,7 @@ describe("sessions_spawn tool", () => {
     expectDetailFields(result.details, {
       status: "accepted",
       childSessionKey: "agent:main:subagent:1",
+      sessionId: "11111111-1111-4111-8111-111111111111",
       runId: "run-subagent",
     });
     expect(result.details).not.toHaveProperty("role");
