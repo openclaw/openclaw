@@ -122,6 +122,7 @@ type WorkerPlacementDispatchOptions = WorkerPlacementReclaimBarriers & {
   resolveGitAuthor?: (agentId: string) => { name?: string; email?: string } | undefined;
   resolveDevicePlacementRequirement?: WorkerDevicePlacementRequirementResolver;
   isCurrentNodePlacement?: WorkerNodePlacementAuthority;
+  isInterruptedDelegatedChild?: (sessionKey: string) => boolean;
 };
 
 export function createWorkerPlacementDispatchService(options: WorkerPlacementDispatchOptions) {
@@ -132,6 +133,7 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
     ...options,
     failure,
     reportTransition: reportPlacementTransition,
+    isInterruptedDelegatedChild: options.isInterruptedDelegatedChild,
   });
 
   const recovery = createPlacementRecoveryActions({
@@ -145,6 +147,7 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
       : {}),
     resolveWorkspaceResultConflict: options.resolveWorkspaceResultConflict,
     recoverPlacementMoves: (environmentId) => moveService.recoverAll(environmentId),
+    isInterruptedDelegatedChild: options.isInterruptedDelegatedChild,
     workspaceOperations: options.workspaceOperations,
     ...(options.prepareAcceptedWorkspacePublication
       ? { prepareAcceptedWorkspacePublication: options.prepareAcceptedWorkspacePublication }
@@ -234,6 +237,7 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
             request.executionMode,
             localPath,
             signal,
+            authorize,
           )
         : await environments.create(
             request.profileId,
@@ -242,6 +246,7 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
             request.executionMode,
             localPath,
             signal,
+            authorize,
           );
       return await startup.continueProvisionedDispatch({
         request,
@@ -426,6 +431,7 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
           const tunnel = await environments.startTunnel({
             environmentId: current.environmentId,
             ownerEpoch: current.activeOwnerEpoch,
+            ...(reauthorize ? { authorize: reauthorize } : {}),
           });
           const reclaimed = await options.workspaceOperations.run(
             current.environmentId,
@@ -705,7 +711,6 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
   };
 
   const abandonment = createWorkerPlacementMoveAbandonment(options);
-
   const moveService = createWorkerPlacementMoveService({
     placements,
     environments,
@@ -717,7 +722,6 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
     abandonSource: abandonment.abandonSource,
     resolveDestination: options.resolveMoveDestination,
   });
-
   return {
     dispatch,
     forceDestroyEnvironment: abandonment.forceDestroyEnvironment,
@@ -728,7 +732,3 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
     resumeProvisioning: startup.resumeProvisioning,
   };
 }
-
-export type WorkerPlacementDispatchService = ReturnType<
-  typeof createWorkerPlacementDispatchService
->;

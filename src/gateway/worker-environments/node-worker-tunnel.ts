@@ -91,9 +91,10 @@ type NodeWorkerTunnelStartRequest = {
   deviceId: string;
   sessionId: string;
   expectedBuild: WorkerAdmissionHandshake;
+  authorize?: () => void;
 };
 
-type NodeEnvironmentOwner = Omit<NodeWorkerTunnelStartRequest, "expectedBuild"> & {
+type NodeEnvironmentOwner = Omit<NodeWorkerTunnelStartRequest, "expectedBuild" | "authorize"> & {
   stopPromise?: Promise<void>;
   stopReason?: WorkerTunnelStopReason;
 };
@@ -511,6 +512,7 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
           throw new Error("node worker tunnel owner epoch is stale");
         }
         if (request.ownerEpoch === current.ownerEpoch) {
+          request.authorize?.();
           if (
             current.abortController.signal.aborted ||
             current.executionMode !== request.executionMode ||
@@ -526,7 +528,12 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
       const readiness = createDeferredCore<WorkerTurnTunnelHandle>();
       void readiness.promise.catch(() => undefined);
       const entry: NodeTunnelEntry = {
-        ...request,
+        executionMode: request.executionMode,
+        environmentId: request.environmentId,
+        ownerEpoch: request.ownerEpoch,
+        deviceId: request.deviceId,
+        sessionId: request.sessionId,
+        expectedBuild: request.expectedBuild,
         abortController: new AbortController(),
         launchTasks: new Set(),
         readiness,
@@ -539,6 +546,7 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
           await stopEntry(current);
         }
         await Promise.all(retiring.map((owner) => stopEnvironmentOwner(owner)));
+        request.authorize?.();
         if (!isLiveEntry(entry)) {
           return;
         }
@@ -552,11 +560,13 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
               entry.abortController.signal,
             )
           : undefined;
+        request.authorize?.();
         if (!isLiveEntry(entry)) {
           return;
         }
         const created = createHandle(entry, restoredWorkspace);
         await created.validateRestoredWorkspace();
+        request.authorize?.();
         if (!isLiveEntry(entry)) {
           return;
         }

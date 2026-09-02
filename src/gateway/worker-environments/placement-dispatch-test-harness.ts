@@ -82,6 +82,9 @@ export function createHarness(
     isCurrentNodePlacement?: Parameters<
       typeof createWorkerPlacementDispatchService
     >[0]["isCurrentNodePlacement"];
+    isInterruptedDelegatedChild?: Parameters<
+      typeof createWorkerPlacementDispatchService
+    >[0]["isInterruptedDelegatedChild"];
   } = {},
 ) {
   const reconciledManifestRef = MANIFEST_REF.replaceAll("b", "c");
@@ -468,6 +471,7 @@ export function createHarness(
           }
         : { requiredNodeCommands: [], consumesWorkerSlot: true },
     isCurrentNodePlacement: options.isCurrentNodePlacement ?? (() => true),
+    isInterruptedDelegatedChild: options.isInterruptedDelegatedChild,
     runReclaimBarrier:
       options.runReclaimBarrier ??
       (async ({ sessionId, sessionKey, authorize, beforeDrain, begin, reclaim }) =>

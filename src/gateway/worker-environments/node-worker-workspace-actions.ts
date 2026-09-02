@@ -280,6 +280,10 @@ export function createNodeWorkerWorkspaceActions(params: {
     syncWorkspace: async (request) => {
       workspaceReady = true;
       try {
+        const isAuthorized = () => {
+          request.authorize?.();
+          return params.isOwnerCurrent();
+        };
         const prepared = await params.workspaceTransfer.prepareSync({
           environmentId: params.environmentId,
           ownerEpoch: params.ownerEpoch,
@@ -287,7 +291,7 @@ export function createNodeWorkerWorkspaceActions(params: {
           generation: params.ownerEpoch,
           localPath: request.localPath,
           // Durable owner state is revalidated by the transfer service after every awaited I/O.
-          isAuthorized: params.isOwnerCurrent,
+          isAuthorized,
           signal: params.ownerSignal,
         });
         try {
@@ -316,6 +320,7 @@ export function createNodeWorkerWorkspaceActions(params: {
             },
             timeoutMs: 10 * 60_000,
             transportRetry: "never",
+            assertCurrent: request.authorize,
           });
           if (
             transferred.termination !== "exit" ||
