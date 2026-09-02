@@ -138,7 +138,6 @@ function createLoopbackRuntime(): PluginRuntime {
       },
       text: {
         chunkMarkdownText,
-        resolveTextChunkLimit: () => 5000,
       },
     },
   } as unknown as PluginRuntime;
