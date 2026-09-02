@@ -162,9 +162,11 @@ export async function executeMutableUpdate(params: {
         throw err;
       }
       params.stop();
-      throw new Error(`Failed to stop managed gateway service before update: ${String(err)}`, {
-        cause: err,
-      });
+      throw new UpdatePreMutationError(
+        "managed-service-stop-failed",
+        `Failed to stop managed gateway service before update: ${String(err)}`,
+        { cause: err },
+      );
     }
 
     if (phase === "inspect" && preManagedServiceStop?.serviceUpdateVerdict?.kind === "foreign") {

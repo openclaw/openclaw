@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 import { resolveGatewayInstallEntrypoint } from "../../daemon/gateway-entrypoint.js";
 import type { GatewayService } from "../../daemon/service.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
+import { UpdatePreMutationError } from "./shared.js";
 import {
   updatePluginsAfterCoreUpdate,
   type PostCorePluginUpdateResult,
@@ -964,5 +965,29 @@ describe("buildInvalidConfigPostCoreUpdateResult", () => {
     expect(built.message).toBe(
       "Plugin post-update convergence skipped because the config is invalid; refusing to restart the gateway with an unverified plugin set.",
     );
+  });
+});
+
+describe("UpdatePreMutationError", () => {
+  it("preserves the cause chain so callers can inspect the original failure", () => {
+    const original = new Error("launchctl bootout failed");
+    const err = new UpdatePreMutationError(
+      "managed-service-stop-failed",
+      `Failed to stop managed gateway service before update: ${String(original)}`,
+      { cause: original },
+    );
+
+    expect(err).toBeInstanceOf(UpdatePreMutationError);
+    expect(err).toBeInstanceOf(Error);
+    expect(err.reason).toBe("managed-service-stop-failed");
+    expect(err.cause).toBe(original);
+    expect(err.name).toBe("UpdatePreMutationError");
+  });
+
+  it("works without a cause for backward compatibility", () => {
+    const err = new UpdatePreMutationError("database-schema-preflight", "schema is incompatible");
+
+    expect(err.reason).toBe("database-schema-preflight");
+    expect(err.cause).toBeUndefined();
   });
 });

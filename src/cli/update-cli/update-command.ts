@@ -75,7 +75,10 @@ import {
   type UpdateCommandOptions,
 } from "./shared.js";
 import { suppressDeprecations } from "./suppress-deprecations.js";
-import { maybeRepairLegacyConfigForUpdateChannel } from "./update-command-config.js";
+import {
+  maybeRepairLegacyConfigForUpdateChannel,
+  persistRequestedUpdateChannel,
+} from "./update-command-config.js";
 import { printUpdateDryRun } from "./update-command-dry-run.js";
 import { reportPreMutationUpdateFailure, UpdateCommandFailure } from "./update-command-result.js";
 import { resolveServiceRefreshEnv, withUpdateInProgressEnv } from "./update-command-service-env.js";
@@ -299,6 +302,19 @@ async function updateCommandInternal(
       ["Config is invalid; cannot set update channel.", ...issues].join("\n"),
     );
     return;
+  }
+
+  // Persist the requested channel before any mutable work so the user's
+  // intent survives update failures (schema preflight, stop failure, etc.).
+  // finishUpdate calls persistRequestedUpdateChannel again; that is idempotent
+  // when the stored channel already matches.
+  if (
+    requestedChannel &&
+    !opts.dryRun &&
+    configSnapshot.valid &&
+    requestedChannel !== storedChannel
+  ) {
+    configSnapshot = await persistRequestedUpdateChannel({ configSnapshot, requestedChannel });
   }
 
   const channel =
