@@ -1,9 +1,12 @@
 // Line plugin module implements bot message context behavior.
 import type { webhook } from "@line/bot-sdk";
+import { resolveAccessGroupAllowFromState } from "openclaw/plugin-sdk/access-groups";
+import { isSenderIdAllowed } from "openclaw/plugin-sdk/allow-from";
 import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runtime";
 import {
   buildChannelInboundEventContext,
   formatInboundMediaUnavailableText,
+  resolveInboundSupplementalSenderAllowed,
   formatInboundEnvelope,
   formatLocationText,
   resolveInboundSessionEnvelopeContext,
@@ -16,7 +19,8 @@ import type {
   ChannelIngressContextBinding,
   ResolvedChannelMessageIngress,
 } from "openclaw/plugin-sdk/channel-ingress-runtime";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { GroupPolicy, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { resolveChannelContextVisibilityMode } from "openclaw/plugin-sdk/context-visibility-runtime";
 import {
   ensureConfiguredBindingRouteReady,
   resolvePinnedMainDmOwnerFromAllowlist,
@@ -32,9 +36,14 @@ import {
   readNonEmptyStringPreservingWhitespace,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
-import { normalizeAllowFrom } from "./bot-access.js";
+import { normalizeAllowFrom, normalizeLineAllowEntry } from "./bot-access.js";
 import { resolveLineGroupConfigEntry } from "./group-keys.js";
 import { resolveLineMentionStrippedText } from "./mentions.js";
+import {
+  readLineQuotedMessageId,
+  resolveLineQuotedMessage,
+  type LineQuotedMessage,
+} from "./quoted-messages.js";
 import { getLineGroupName, getUserProfile } from "./send.js";
 import type { ResolvedLineAccount } from "./types.js";
 
@@ -59,6 +68,9 @@ interface BuildLineMessageContextParams {
   resolveChannelIngress?: (
     contextBinding: ChannelIngressContextBinding,
   ) => Promise<ResolvedChannelMessageIngress>;
+  /** Group gate the event was admitted under, re-read for a quoted sender. */
+  groupPolicy: GroupPolicy;
+  groupAllowFrom: readonly string[];
   inboundHistory?: HistoryEntry[];
   mentions?: LineInboundMentionAccess;
   buildContext?: typeof buildChannelInboundEventContext;
@@ -90,7 +102,8 @@ export function getLineSourceInfo(source: EventSource): LineSourceInfo {
   return { userId, groupId, roomId, isGroup };
 }
 
-function buildPeerId(source: EventSource): string {
+/** The chat a LINE event belongs to: its group, its room, or the direct peer. */
+export function resolveLineConversationId(source: EventSource): string {
   if (!source) {
     return "unknown";
   }
@@ -125,7 +138,7 @@ async function resolveLineInboundRoute(params: {
   });
 
   const { userId, groupId, roomId, isGroup } = getLineSourceInfo(params.source);
-  const peerId = buildPeerId(params.source);
+  const peerId = resolveLineConversationId(params.source);
   let route = resolveAgentRoute({
     cfg: params.cfg,
     channel: "line",
@@ -256,6 +269,37 @@ function extractNativeMediaKind(
 type LineRouteInfo = ReturnType<typeof resolveAgentRoute>;
 type LineSourceInfoWithPeerId = LineSourceInfo & { peerId: string };
 
+function isLineSenderNamedBy(allowFrom: readonly string[], senderId: string | undefined): boolean {
+  // An empty group allowlist under an allowlist policy names nobody, so an
+  // unresolvable sender stays out rather than defaulting open.
+  return isSenderIdAllowed(
+    normalizeAllowFrom([...allowFrom]),
+    senderId ? normalizeLineAllowEntry(senderId) : undefined,
+    false,
+  );
+}
+
+/**
+ * Matches a quoted message's author against the group allowlist as configured
+ * right now. The bot's own message needs no entry; an id the store no longer
+ * resolves has no author to match and stays out of a restricted prompt.
+ * `viaAccessGroup` carries the same group expansion admission ran for the
+ * turn's own sender, which an exact-match list cannot do on a symbolic entry.
+ */
+function isLineQuoteSenderAllowed(
+  allowFrom: readonly string[],
+  quoted: LineQuotedMessage | undefined,
+  viaAccessGroup: boolean,
+): boolean {
+  if (!quoted) {
+    return false;
+  }
+  if (quoted.fromBot || viaAccessGroup) {
+    return true;
+  }
+  return isLineSenderNamedBy(allowFrom, quoted.senderId);
+}
+
 async function finalizeLineInboundContext(params: {
   cfg: OpenClawConfig;
   account: ResolvedLineAccount;
@@ -271,6 +315,11 @@ async function finalizeLineInboundContext(params: {
   channelIngress?: ResolvedChannelMessageIngress;
   media: readonly ChannelInboundMediaInput[];
   locationContext?: ReturnType<typeof toLocationContext>;
+  /**
+   * An inbound quote and the group gate its sender must still pass. Absent on
+   * paths that cannot carry a quote, so there is no policy-free quote to build.
+   */
+  quote?: { messageId: string; groupPolicy: GroupPolicy; allowFrom: readonly string[] };
   verboseLog: { kind: "inbound" | "postback"; mediaCount?: number };
   inboundHistory?: Pick<HistoryEntry, "sender" | "body" | "timestamp">[];
   mentions?: LineInboundMentionAccess;
@@ -282,19 +331,74 @@ async function finalizeLineInboundContext(params: {
     accountId: params.account.accountId,
     channelAccessToken: params.account.channelAccessToken,
   };
+  // LINE names a quoted message by id alone, so its text and author come from
+  // what this account already saw. An id it no longer holds still reaches the
+  // agent as a bare quote under the default visibility mode; a restrictive mode
+  // has no sender to clear and drops the quote with it.
+  const quoted = resolveLineQuotedMessage(
+    params.account.accountId,
+    params.quote?.messageId,
+    params.source.peerId,
+  );
   // A LINE webhook carries no display name and no group name, so both are
   // separate lookups. They are cached, they run in parallel, and either one
   // failing degrades to the raw id rather than failing the turn.
-  const [senderName, groupName] = await Promise.all([
-    params.source.userId
-      ? getUserProfile(params.source.userId, {
+  const resolveDisplayName = (userId: string | undefined) =>
+    userId
+      ? getUserProfile(userId, {
           ...clientOpts,
           groupId: params.source.groupId,
           roomId: params.source.roomId,
         }).then((profile) => profile?.displayName)
-      : undefined,
+      : undefined;
+  // `groupAllowFrom` can name a group instead of a person. Admission expands
+  // that for the turn's own sender, so the quoted author needs the same
+  // expansion or a member authorized only through their group reads as unnamed.
+  const resolveQuotedSenderAccessGroup = async () => {
+    if (!params.quote || !quoted?.senderId || quoted.fromBot) {
+      return false;
+    }
+    const state = await resolveAccessGroupAllowFromState({
+      accessGroups: params.cfg.accessGroups,
+      allowFrom: [...params.quote.allowFrom],
+      channel: "line",
+      accountId: params.account.accountId,
+      senderId: quoted.senderId,
+      isSenderAllowed: (memberId, groupMembers) => isLineSenderNamedBy(groupMembers, memberId),
+    });
+    return state.hasMatch;
+  };
+  const [senderName, groupName, quotedSenderName, quotedSenderViaAccessGroup] = await Promise.all([
+    resolveDisplayName(params.source.userId),
     params.source.groupId ? getLineGroupName(params.source.groupId, clientOpts) : undefined,
+    resolveDisplayName(quoted?.senderId),
+    resolveQuotedSenderAccessGroup(),
   ]);
+  // An unreachable LINE profile must not erase the author: the quoted sender
+  // degrades to the raw id the same way the turn's own sender does below.
+  const quotedSenderLabel =
+    quotedSenderName ?? (quoted?.senderId ? `user:${quoted.senderId}` : undefined);
+  // Admission only proves the quoted sender passed the gate when the message was
+  // stored. That gate can narrow while the store still holds their text, so the
+  // active allowlist decides again here.
+  const quoteFacts = params.quote
+    ? {
+        id: params.quote.messageId,
+        isQuote: true,
+        senderAllowed: resolveInboundSupplementalSenderAllowed({
+          isGroup: params.source.isGroup,
+          groupPolicy: params.quote.groupPolicy,
+          allowFrom: params.quote.allowFrom,
+          isSenderAllowed: (allowFrom) =>
+            isLineQuoteSenderAllowed(allowFrom, quoted, quotedSenderViaAccessGroup),
+        }),
+        // A quote of the bot's own message keeps its linkage without a body:
+        // the store holds no outbound text, matching the core default that
+        // never repeats an assistant message the transcript already carries.
+        ...(quoted?.body ? { body: quoted.body } : {}),
+        ...(quotedSenderLabel ? { sender: quotedSenderLabel } : {}),
+      }
+    : undefined;
   const senderLabel =
     senderName ?? (params.source.userId ? `user:${params.source.userId}` : "unknown");
   const conversationLabel = params.source.isGroup
@@ -370,6 +474,12 @@ async function finalizeLineInboundContext(params: {
     },
     access: { commands: { authorized: params.commandAuthorized }, mentions: params.mentions },
     media,
+    contextVisibility: resolveChannelContextVisibilityMode({
+      cfg: params.cfg,
+      channel: "line",
+      accountId: params.account.accountId,
+    }),
+    supplemental: quoteFacts ? { quote: quoteFacts } : undefined,
     extra: {
       ...params.locationContext,
       GroupSubject: params.source.isGroup
@@ -459,6 +569,7 @@ export async function buildLineMessageContext(params: BuildLineMessageContextPar
 
   const message = event.message;
   const messageId = message.id;
+  const quotedMessageId = readLineQuotedMessageId(message);
   const timestamp = event.timestamp;
 
   const textContent = extractMessageText(message);
@@ -517,6 +628,13 @@ export async function buildLineMessageContext(params: BuildLineMessageContextPar
     buildContext: params.buildContext,
     media: mediaFacts,
     locationContext,
+    quote: quotedMessageId
+      ? {
+          messageId: quotedMessageId,
+          groupPolicy: params.groupPolicy,
+          allowFrom: params.groupAllowFrom,
+        }
+      : undefined,
     verboseLog: { kind: "inbound", mediaCount: allMedia.length },
     inboundHistory,
   });
