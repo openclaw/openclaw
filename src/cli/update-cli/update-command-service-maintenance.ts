@@ -29,6 +29,8 @@ import {
 import { readGatewayServiceState, resolveGatewayService } from "../../daemon/service.js";
 import { resolveSystemdServiceName } from "../../daemon/systemd-service-files.js";
 import { sha256Hex } from "../../infra/crypto-digest.js";
+import { readActiveGatewayLockIdentity } from "../../infra/gateway-lock.js";
+import { probePortUsage } from "../../infra/ports-probe.js";
 import { getSelfAndAncestorPidsSync } from "../../infra/restart-stale-pids.js";
 import { parseTcpPortFromArgs } from "../../infra/tcp-port.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -109,7 +111,13 @@ async function inspectManagedGatewayServiceBeforeUpdate(params: {
     return !state.installed &&
       state.loadState.status === "not-loaded" &&
       !state.running &&
-      state.runtime?.missingUnit
+      state.runtime?.missingUnit &&
+      (await readActiveGatewayLockIdentity({ env: state.env, requireInspection: true }).then(
+        (identity) => !identity,
+        () => false,
+      )) &&
+      (await probePortUsage(await resolveUpdatedGatewayRestartPort({ serviceEnv: state.env }))) ===
+        "free"
       ? { kind: "absent" }
       : unavailable();
   }
@@ -480,7 +488,15 @@ export async function maybeStopManagedServiceBeforeMutableUpdate(params: {
         "Gateway service management skipped: the service belongs to a different OpenClaw installation and was left untouched.",
     };
   }
-  if (serviceUpdateVerdict.kind === "absent" || params.phase === "inspect") {
+  if (serviceUpdateVerdict.kind === "absent") {
+    return {
+      ...inspected,
+      serviceMutationAllowed: false,
+      serviceMutationSkipMessage:
+        "Gateway restart skipped: no Gateway service or listener is running.",
+    };
+  }
+  if (params.phase === "inspect") {
     return inspected;
   }
   const suspendTask = () =>
@@ -683,6 +699,8 @@ export async function resolveUpdatedGatewayRestartPort(params: {
     if (port !== null) {
       return port;
     }
+  }
+  if (params.serviceCommand || !config) {
     config = await createConfigIO({
       env,
       observe: false,
