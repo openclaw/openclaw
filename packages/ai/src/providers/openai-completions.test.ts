@@ -4,7 +4,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { configureAiTransportHost } from "../host.js";
 import type { Context, Model, SimpleStreamOptions, TextContent } from "../types.js";
 import { onLlmRequestActivity } from "../utils/llm-request-activity.js";
-import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../utils/system-prompt-cache-boundary.js";
+import {
+  SYSTEM_PROMPT_CACHE_BOUNDARY,
+  SYSTEM_PROMPT_RELOCATABLE_BOUNDARY,
+} from "../utils/system-prompt-cache-boundary.js";
 
 type DeepPartial<T> = { [P in keyof T]?: DeepPartial<T[P]> };
 type OpenAICompatibleDelta = DeepPartial<ChatCompletionChunk["choices"][number]["delta"]> & {
@@ -1040,7 +1043,7 @@ describe("OpenAI-compatible completions params", () => {
     const stream = streamOpenAICompletions(
       createModel(32_000),
       {
-        systemPrompt: `Stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic suffix`,
+        systemPrompt: `Stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic suffix${SYSTEM_PROMPT_RELOCATABLE_BOUNDARY}Runtime facts`,
         messages: [{ role: "user", content: "hi", timestamp: 1 }],
       },
       {
@@ -1059,12 +1062,12 @@ describe("OpenAI-compatible completions params", () => {
     // The stable prefix must not fork; tool schemas are serialized after it.
     expect(messages[0]).toEqual({
       role: "system",
-      content: "Stable prefix",
+      content: "Stable prefix\nDynamic suffix",
     });
-    // The volatile suffix rides behind the tools on the trailing user turn.
+    // Only the non-behavioral tail rides behind the tools on the user turn.
     expect(messages[1]).toEqual({
       role: "user",
-      content: "hi\n\nDynamic suffix",
+      content: "hi\n\nRuntime facts",
     });
     // The internal marker must never reach the provider.
     expect(JSON.stringify(messages)).not.toContain("OPENCLAW_CACHE_BOUNDARY");

@@ -18,7 +18,7 @@ import type { ResolvedOpenAICompletionsCompat } from "./transports/openai-comple
 import type { Context, Model, TextContent, ThinkingContent, ToolCall } from "./types.js";
 import { sanitizeSurrogates } from "./utils/sanitize-unicode.js";
 import {
-  splitSystemPromptCacheBoundary,
+  splitSystemPromptRelocatableBoundary,
   stripSystemPromptCacheBoundary,
 } from "./utils/system-prompt-cache-boundary.js";
 
@@ -92,7 +92,7 @@ export function convertMessages(
   // tools on the trailing user turn instead. The system message keeps the full
   // prompt until a carrier turn is actually emitted, so a transcript whose only
   // user turn projects away cannot drop the suffix.
-  let cacheBoundarySplit: { stablePrefix: string; dynamicSuffix: string } | undefined;
+  let relocatableSplit: { stablePrefix: string; relocatableSuffix: string } | undefined;
   let systemParamIndex: number | undefined;
   if (context.systemPrompt) {
     const useDeveloperRole = model.reasoning && compat.supportsDeveloperRole;
@@ -101,9 +101,9 @@ export function convertMessages(
     if (options.preserveSystemPromptCacheBoundary) {
       systemPrompt = context.systemPrompt;
     } else {
-      const split = splitSystemPromptCacheBoundary(context.systemPrompt);
-      if (split && split.dynamicSuffix.length > 0) {
-        cacheBoundarySplit = split;
+      const split = splitSystemPromptRelocatableBoundary(context.systemPrompt);
+      if (split && split.relocatableSuffix.length > 0) {
+        relocatableSplit = split;
       }
       systemPrompt = stripSystemPromptCacheBoundary(context.systemPrompt);
     }
@@ -318,11 +318,11 @@ export function convertMessages(
     lastRole = msg.role;
   }
 
-  if (cacheBoundarySplit !== undefined && systemParamIndex !== undefined) {
-    relocateCacheBoundarySuffix({
+  if (relocatableSplit !== undefined && systemParamIndex !== undefined) {
+    relocateNonBehavioralSuffix({
       params,
       systemParamIndex,
-      split: cacheBoundarySplit,
+      split: relocatableSplit,
       cacheOptOutIndexes: options.cacheOptOutIndexes,
     });
   }
@@ -341,13 +341,13 @@ export function convertMessages(
  * Moving it behind the last user turn keeps the system message and the tool
  * definitions byte-identical across sessions.
  */
-function relocateCacheBoundarySuffix(args: {
+function relocateNonBehavioralSuffix(args: {
   params: ChatCompletionMessageParam[];
   systemParamIndex: number;
-  split: { stablePrefix: string; dynamicSuffix: string };
+  split: { stablePrefix: string; relocatableSuffix: string };
   cacheOptOutIndexes?: Set<number>;
 }): void {
-  const text = sanitizeSurrogates(args.split.dynamicSuffix);
+  const text = sanitizeSurrogates(args.split.relocatableSuffix);
   for (let index = args.params.length - 1; index > args.systemParamIndex; index--) {
     const param = args.params[index];
     if (!param || param.role !== "user") {
@@ -367,7 +367,9 @@ function relocateCacheBoundarySuffix(args: {
     // projected-away user turn leaves the suffix where it already is.
     const systemParam = args.params[args.systemParamIndex];
     if (systemParam) {
-      systemParam.content = sanitizeSurrogates(args.split.stablePrefix);
+      systemParam.content = sanitizeSurrogates(
+        stripSystemPromptCacheBoundary(args.split.stablePrefix),
+      );
     }
     // The turn now carries volatile text, so it must not anchor a cache breakpoint.
     args.cacheOptOutIndexes?.add(index);

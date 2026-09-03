@@ -8,6 +8,7 @@ import {
   normalizePromptCapabilityIds,
   normalizeStructuredPromptSection,
   SYSTEM_PROMPT_CACHE_BOUNDARY,
+  SYSTEM_PROMPT_RELOCATABLE_BOUNDARY,
 } from "@openclaw/ai/internal/shared";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -1537,6 +1538,12 @@ export function buildAgentSystemPrompt(params: {
   if (providerDynamicSuffix) {
     lines.push(providerDynamicSuffix, "");
   }
+
+  // Nothing below this point carries behavioral guidance: watched sessions and
+  // runtime facts only. Transports whose tool schemas serialize after the system
+  // message relocate this tail behind them, so the cacheable prefix stays
+  // byte-identical across sessions without demoting the guidance above it.
+  lines.push(SYSTEM_PROMPT_RELOCATABLE_BOUNDARY);
 
   // Watched sessions change rarely but per-session; keep them below the cache
   // boundary so the shared stable prefix stays byte-identical across sessions.

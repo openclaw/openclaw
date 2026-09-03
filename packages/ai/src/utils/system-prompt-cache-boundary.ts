@@ -7,8 +7,37 @@ import { normalizeStructuredPromptSection } from "./prompt-cache-stability.js";
 
 export const SYSTEM_PROMPT_CACHE_BOUNDARY = "\n<!-- OPENCLAW_CACHE_BOUNDARY -->\n";
 
+/**
+ * Marks the tail of the dynamic suffix that carries no behavioral guidance:
+ * watched sessions and runtime facts. Transports whose tool schemas serialize
+ * after the system message may move this tail behind them so the cacheable
+ * prefix stays byte-identical across sessions, without lowering the authority
+ * of the behavioral guidance that sits above it.
+ */
+export const SYSTEM_PROMPT_RELOCATABLE_BOUNDARY = "\n<!-- OPENCLAW_RELOCATABLE_BOUNDARY -->\n";
+
 export function stripSystemPromptCacheBoundary(text: string): string {
-  return text.replaceAll(SYSTEM_PROMPT_CACHE_BOUNDARY, "\n");
+  // Both internal markers are stripped here so every existing caller keeps the
+  // guarantee that no marker reaches a provider.
+  return text
+    .replaceAll(SYSTEM_PROMPT_CACHE_BOUNDARY, "\n")
+    .replaceAll(SYSTEM_PROMPT_RELOCATABLE_BOUNDARY, "\n");
+}
+
+/** Split off the non-behavioral tail a transport may carry past its tool schemas. */
+export function splitSystemPromptRelocatableBoundary(
+  text: string,
+): { stablePrefix: string; relocatableSuffix: string } | undefined {
+  const boundaryIndex = text.indexOf(SYSTEM_PROMPT_RELOCATABLE_BOUNDARY);
+  if (boundaryIndex === -1) {
+    return undefined;
+  }
+  return {
+    stablePrefix: text.slice(0, boundaryIndex).trimEnd(),
+    relocatableSuffix: text
+      .slice(boundaryIndex + SYSTEM_PROMPT_RELOCATABLE_BOUNDARY.length)
+      .trimStart(),
+  };
 }
 
 // Append the cache boundary when a prompt has none (e.g. a hook systemPrompt override),
