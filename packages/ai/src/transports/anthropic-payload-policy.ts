@@ -8,6 +8,7 @@ import { isAnthropicOAuthApiKey } from "../providers/anthropic-auth-headers.js";
 import { resolveCacheRetention } from "../providers/cache-retention.js";
 import {
   splitSystemPromptCacheBoundary,
+  stripSystemPromptRelocatableBoundary,
   stripSystemPromptCacheBoundary,
 } from "../utils/system-prompt-cache-boundary.js";
 /**
@@ -189,6 +190,9 @@ function applyAnthropicCacheControlToSystem(
       normalizedBlocks.push(block);
       continue;
     }
+    // This transport relocates nothing, so the relocatable marker must not
+    // survive into the payload; the cache boundary stays for the breakpoint.
+    record.text = stripSystemPromptRelocatableBoundary(record.text);
     const split = splitSystemPromptCacheBoundary(record.text);
     if (!split) {
       if (record.cache_control === undefined) {

@@ -216,6 +216,20 @@ describe("convertMessages relocatable suffix", () => {
     expect(converted[1]?.content).toBe("hi");
   });
 
+  it("leaves a trailing structural marker in the system prompt", () => {
+    // The attempt-section marker closes a region of the system prompt; it must
+    // not ride onto the user turn with the relocated facts.
+    const context = {
+      systemPrompt: `Stable prefix${SYSTEM_PROMPT_RELOCATABLE_BOUNDARY}Runtime: session=alpha\n<!-- /openclaw:attempt:DYNAMIC -->`,
+      messages: [{ role: "user", content: "hi", timestamp: 1 }],
+    } as unknown as Context;
+
+    const converted = convertMessages(model, context, compat());
+
+    expect(converted[0]?.content).toBe("Stable prefix\n<!-- /openclaw:attempt:DYNAMIC -->");
+    expect(converted[1]?.content).toBe("hi\n\nRuntime: session=alpha");
+  });
+
   it("marks the carrying turn as cache opt-out", () => {
     const cacheOptOutIndexes = new Set<number>();
 

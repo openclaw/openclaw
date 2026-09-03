@@ -28,11 +28,27 @@ export function stripSystemPromptCacheBoundary(text: string): string {
 }
 
 /** Split off the non-behavioral tail a transport may carry past its tool schemas. */
+/** Structural comment markers that frame the prompt itself, not relocatable content. */
+const TRAILING_PROMPT_MARKERS = /(?:\s*<!--[^>]*-->)+\s*$/u;
+
 export function splitSystemPromptRelocatableBoundary(
   text: string,
 ): { stablePrefix: string; relocatableSuffix: string } | undefined {
   const split = splitOnBoundary(text, SYSTEM_PROMPT_RELOCATABLE_BOUNDARY);
-  return split ? { stablePrefix: split.prefix, relocatableSuffix: split.suffix } : undefined;
+  if (!split) {
+    return undefined;
+  }
+  // A trailing structural marker closes a section of the system prompt, so it
+  // has to stay there; relocating it would both strip the system prompt of its
+  // own framing and put an internal marker on a user turn.
+  const trailing = TRAILING_PROMPT_MARKERS.exec(split.suffix);
+  if (!trailing || trailing.index === 0) {
+    return { stablePrefix: split.prefix, relocatableSuffix: split.suffix };
+  }
+  return {
+    stablePrefix: `${split.prefix}\n${trailing[0].trim()}`,
+    relocatableSuffix: split.suffix.slice(0, trailing.index).trimEnd(),
+  };
 }
 
 // Append the cache boundary when a prompt has none (e.g. a hook systemPrompt override),
