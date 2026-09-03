@@ -4,6 +4,7 @@ import {
   applyToolCatalogCompaction,
   collectUniqueCatalogToolNames,
   isDirectVisibleCatalogTool,
+  isTrustedCoreCodingSurfaceTool,
   resolveCatalog,
   visibleCatalogEntries,
 } from "./tool-search-catalog.js";
@@ -66,6 +67,7 @@ export function applyToolSchemaDirectoryCatalog(params: {
     // shared trust check runs.
     isVisibleCatalogTool: (tool) =>
       uniqueCatalogToolNames.has(tool.name) && isDirectVisibleCatalogTool(tool, directToolNames),
+    shouldCatalogTool: (tool) => !isTrustedCoreCodingSurfaceTool(tool),
   });
 }
 
@@ -75,7 +77,9 @@ export function buildToolSchemaDirectoryPrompt(
 ): string {
   const config = resolveToolSearchConfig(ctx.runtimeConfig ?? ctx.config);
   const catalog = resolveCatalog(ctx);
-  const cacheKey = `${config.mode}:${options?.includeMcp === false ? "without-mcp" : "all"}`;
+  const directCoreToolNames = catalog.directCoreToolNames ?? [];
+  const mcpKey = options?.includeMcp === false ? "without-mcp" : "all";
+  const cacheKey = `${config.mode}:${mcpKey}:${directCoreToolNames.join(",")}`;
   let cachedPrompts = toolSchemaDirectoryPromptCache.get(catalog.entries);
   const cachedPrompt = cachedPrompts?.get(cacheKey);
   if (cachedPrompt !== undefined) {
@@ -84,6 +88,7 @@ export function buildToolSchemaDirectoryPrompt(
   const prompt = formatToolSearchCatalogDirectory(
     visibleCatalogEntries(catalog, options),
     config.mode,
+    directCoreToolNames,
   );
   if (!cachedPrompts) {
     cachedPrompts = new Map<string, string>();
@@ -145,18 +150,34 @@ function formatToolDirectoryEntry(entry: ToolSearchCatalogEntry): string | undef
   return `- ${name}${owner}: ${description || "No description."}`;
 }
 
+function formatDirectCallGuidance(names: readonly string[]): string {
+  if (names.length === 0) {
+    return "";
+  }
+  if (names.length === 1) {
+    return `Call ${names[0]} directly.`;
+  }
+  if (names.length === 2) {
+    return `Call ${names[0]} and ${names[1]} directly.`;
+  }
+  return `Call ${names.slice(0, -1).join(", ")}, and ${names[names.length - 1]} directly.`;
+}
+
 function renderToolSearchCatalogDirectory(
   lines: string[],
   total: number,
   mode: ToolSearchMode,
+  directCoreToolNames: readonly string[],
 ): string {
   const omitted = total - lines.length;
-  const guidance =
+  const direct = formatDirectCallGuidance(directCoreToolNames);
+  const search =
     mode === "code"
       ? "Use tool_search_code with openclaw.tools.search(query), openclaw.tools.describe(id), and openclaw.tools.call(id, args)."
       : omitted > 0
-        ? "Use tool_search to find them, then tool_describe to load a full schema before tool_call."
-        : "Call tool_describe with a listed tool name to load its full schema before using tool_call.";
+        ? "Use tool_search for remaining tools, then tool_describe before tool_call."
+        : "Call tool_describe with a listed deferred tool name before tool_call.";
+  const guidance = direct ? `${direct} ${search}` : search;
   const footer = omitted > 0 ? `${omitted} additional tools omitted. ${guidance}` : guidance;
   return [
     "Available deferred-schema tools:",
@@ -170,9 +191,13 @@ function renderToolSearchCatalogDirectory(
 function formatToolSearchCatalogDirectory(
   entries: ToolSearchCatalogEntry[],
   mode: ToolSearchMode,
+  directCoreToolNames: readonly string[],
 ): string {
   if (entries.length === 0) {
-    return "Available deferred-schema tools: none.";
+    const direct = formatDirectCallGuidance(directCoreToolNames);
+    return direct
+      ? `Available deferred-schema tools: none.\n\n${direct}`
+      : "Available deferred-schema tools: none.";
   }
   const nameCounts = new Map<string, number>();
   for (const entry of entries) {
@@ -187,7 +212,12 @@ function formatToolSearchCatalogDirectory(
     )
     .map(formatToolDirectoryEntry)
     .filter((line): line is string => Boolean(line));
-  const fullDirectory = renderToolSearchCatalogDirectory(lines, entries.length, mode);
+  const fullDirectory = renderToolSearchCatalogDirectory(
+    lines,
+    entries.length,
+    mode,
+    directCoreToolNames,
+  );
   if (fullDirectory.length <= MAX_TOOL_SCHEMA_DIRECTORY_PROMPT_CHARS) {
     return fullDirectory;
   }
@@ -196,13 +226,22 @@ function formatToolSearchCatalogDirectory(
   while (low < high) {
     const middle = Math.ceil((low + high) / 2);
     if (
-      renderToolSearchCatalogDirectory(lines.slice(0, middle), entries.length, mode).length <=
-      MAX_TOOL_SCHEMA_DIRECTORY_PROMPT_CHARS
+      renderToolSearchCatalogDirectory(
+        lines.slice(0, middle),
+        entries.length,
+        mode,
+        directCoreToolNames,
+      ).length <= MAX_TOOL_SCHEMA_DIRECTORY_PROMPT_CHARS
     ) {
       low = middle;
     } else {
       high = middle - 1;
     }
   }
-  return renderToolSearchCatalogDirectory(lines.slice(0, low), entries.length, mode);
+  return renderToolSearchCatalogDirectory(
+    lines.slice(0, low),
+    entries.length,
+    mode,
+    directCoreToolNames,
+  );
 }

@@ -57,9 +57,8 @@ describe("tool name allowlists", () => {
   });
 
   it("keeps hidden core names available for client conflict admission", () => {
-    // Tool Search hides many built-ins from the visible tool list (core coding
-    // tools like exec stay visible), but conflict checks still need the
-    // original core names to reject duplicate client tools.
+    // Tool Search code mode catalogs core coding tools; conflict checks still
+    // need the original uncompacted core names to reject duplicate client tools.
     const uncompactedTools = [
       createStubTool(TOOL_SEARCH_CODE_MODE_TOOL_NAME),
       createStubTool("exec"),
@@ -74,10 +73,7 @@ describe("tool name allowlists", () => {
     const names = collectCoreBuiltinToolNames(uncompactedTools);
 
     expect([...names]).toEqual([TOOL_SEARCH_CODE_MODE_TOOL_NAME, "exec", "message"]);
-    expect(compacted.tools.map((tool) => tool.name)).toEqual([
-      TOOL_SEARCH_CODE_MODE_TOOL_NAME,
-      "exec",
-    ]);
+    expect(compacted.tools.map((tool) => tool.name)).toEqual([TOOL_SEARCH_CODE_MODE_TOOL_NAME]);
     expect(
       findClientToolNameConflicts({
         tools: [
@@ -200,7 +196,7 @@ describe("tool name allowlists", () => {
       }),
     );
 
-    expect(visibleAllowlist).toEqual(["exec", TOOL_SEARCH_CODE_MODE_TOOL_NAME]);
+    expect(visibleAllowlist).toEqual([TOOL_SEARCH_CODE_MODE_TOOL_NAME]);
     expect(replayAllowlist).toEqual([
       "client_pick_file",
       "exec",

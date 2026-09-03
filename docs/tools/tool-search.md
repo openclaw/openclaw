@@ -255,7 +255,9 @@ Directory mode exposes:
 - `tool_call`
 
 It also keeps core file and shell primitives, client-provided tools, direct-only
-tools, and policy-required delivery tools directly visible. Other authorized
+tools, and policy-required delivery tools directly visible. Core
+read/write/edit/apply_patch/exec/process tools are not added to the deferred
+catalog; call them by name instead of wrapping them in tool_call. Other authorized
 tool schemas stay deferred rather than changing with each user prompt. MCP tools
 cannot impersonate a directly visible core or policy-required delivery tool. If
 the bounded directory omits entries, use `tool_search` to find them and
