@@ -8,7 +8,6 @@ import {
   acquireOpenAIQuicksilverBrowserSessionBroker,
   releaseOpenAIQuicksilverBrowserSessionBroker,
 } from "./realtime-quicksilver-session-owner.js";
-import { OPENAI_GPT_LIVE_MODELS } from "./realtime-quicksilver.js";
 import {
   createBroker,
   createCallResponse,
@@ -20,6 +19,7 @@ import {
 } from "./realtime-quicksilver.test-helpers.js";
 
 const AUDIO_ONLY_SDP = "v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\n";
+const OPAQUE_REALTIME_MODEL = "gpt-live-test-canary";
 
 describe("GPT-Live browser session lifecycle", () => {
   it("rejects negotiated native control without the modern host binding before reserving", async () => {
@@ -30,7 +30,7 @@ describe("GPT-Live browser session lifecycle", () => {
           // @ts-expect-error JavaScript callers must still fail before reserving a native session.
           {
             providerConfig: {},
-            model: OPENAI_GPT_LIVE_MODELS[0],
+            model: OPAQUE_REALTIME_MODEL,
             runAgentConsult,
             clientControl: { owner: "gateway" },
             gatewayControl: { bindBridge: vi.fn() },
@@ -186,7 +186,7 @@ describe("GPT-Live browser session lifecycle", () => {
         const reservation = await realtime.broker.createBrowserSession(
           {
             providerConfig: {},
-            model: OPENAI_GPT_LIVE_MODELS[0],
+            model: OPAQUE_REALTIME_MODEL,
             runAgentConsult,
             clientControl: { owner: "gateway" },
             ownerConnId: "native-media-owner",
@@ -228,7 +228,7 @@ describe("GPT-Live browser session lifecycle", () => {
       realtime.broker.createBrowserSession(
         {
           providerConfig: {},
-          model: OPENAI_GPT_LIVE_MODELS[0],
+          model: OPAQUE_REALTIME_MODEL,
           runAgentConsult,
           ownerConnId,
           clientControl: { owner: "gateway" },
@@ -263,7 +263,7 @@ describe("GPT-Live browser session lifecycle", () => {
       const reservation = await realtime.broker.createBrowserSession(
         {
           providerConfig: {},
-          model: OPENAI_GPT_LIVE_MODELS[0],
+          model: OPAQUE_REALTIME_MODEL,
           runAgentConsult,
           ownerConnId: "native-control-owner",
           clientControl: { owner: "gateway" },
@@ -960,7 +960,7 @@ describe("GA Realtime call retirement", () => {
           ? current.broker.createBrowserSession(
               {
                 providerConfig: {},
-                model: OPENAI_GPT_LIVE_MODELS[0],
+                model: OPAQUE_REALTIME_MODEL,
                 ownerConnId: clientOwner,
                 runAgentConsult: vi.fn(async () => ({ text: "Done" })),
                 clientControl: { owner: "gateway" },
