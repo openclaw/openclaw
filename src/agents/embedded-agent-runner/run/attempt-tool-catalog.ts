@@ -51,7 +51,10 @@ type ProviderRuntimeHandle = Parameters<typeof logAgentRuntimeToolDiagnostics>[0
 export function prepareEmbeddedAttemptToolCatalog(input: {
   attempt: EmbeddedRunAttemptParams;
   preparedToolBase: PreparedToolBase;
-  bundleTools: Pick<PreparedBundleTools, "clientTools" | "uncompactedEffectiveTools">;
+  bundleTools: Pick<
+    PreparedBundleTools,
+    "clientTools" | "mcpDiagnostics" | "uncompactedEffectiveTools"
+  >;
   effectiveCwd: string;
   effectiveWorkspace: string;
   sessionAgentId: string;
@@ -74,7 +77,7 @@ export function prepareEmbeddedAttemptToolCatalog(input: {
       toolSearchRuntimeConfig,
       toolsEnabled,
     } = preparedToolBase;
-    const { clientTools, uncompactedEffectiveTools } = input.bundleTools;
+    const { clientTools, mcpDiagnostics, uncompactedEffectiveTools } = input.bundleTools;
     const abortSignal = preparedToolBase.toolAbortSignal ?? input.abortSignal;
     // Detached skill review keeps every foreground schema for prompt-cache reuse
     // but executes only the allowed tools. Wrap before catalog compaction so a
@@ -133,6 +136,7 @@ export function prepareEmbeddedAttemptToolCatalog(input: {
       catalogRef: preparedToolBase.toolSearchCatalogRef,
       toolHookContext: catalogToolHookContext,
       toolExecutionAllow: attempt.toolExecutionAllow,
+      mcpDiagnostics,
       codeModeSkills,
     });
     const projectedToolSearchTools = filterLocalModelLeanTools({

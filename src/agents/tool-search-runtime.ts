@@ -24,6 +24,7 @@ import {
   visibleCatalogEntries,
 } from "./tool-search-catalog.js";
 import { renderToolSearchControlText } from "./tool-search-control-result.js";
+import { formatToolLookupMissError } from "./tool-search-lookup-miss.js";
 import {
   buildLexicalIndex,
   readParameterText,
@@ -31,11 +32,7 @@ import {
   tokenizeDocument,
   tokenizeQuery,
 } from "./tool-search-ranking.js";
-import {
-  formatCatalogInputError,
-  formatUnknownToolIdError,
-  type ToolLookupErrorOptions,
-} from "./tool-search-recovery.js";
+import { formatCatalogInputError, type ToolLookupErrorOptions } from "./tool-search-recovery.js";
 import { readToolSearchLimit } from "./tool-search-request.js";
 import { snapshotToolSearchTargetTranscriptResult } from "./tool-search-transcript.js";
 import type {
@@ -95,7 +92,7 @@ function findEntry(
   }
   const namedEntry = namedEntries[0];
   if (!namedEntry) {
-    throw new ToolInputError(formatUnknownToolIdError(needle, entries, options));
+    throw new ToolInputError(formatToolLookupMissError(needle, catalog, entries, options));
   }
   return namedEntry;
 }
@@ -109,7 +106,10 @@ function findEntryByExactId(
   const entry = catalog.entries.find((candidate) => candidate.id === needle);
   if (!entry) {
     throw new ToolInputError(
-      formatUnknownToolIdError(needle, catalog.entries, { ...errorOptions, exactIdOnly: true }),
+      formatToolLookupMissError(needle, catalog, catalog.entries, {
+        ...errorOptions,
+        exactIdOnly: true,
+      }),
     );
   }
   return entry;
