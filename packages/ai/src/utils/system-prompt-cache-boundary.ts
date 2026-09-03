@@ -14,7 +14,10 @@ export const SYSTEM_PROMPT_CACHE_BOUNDARY = "\n<!-- OPENCLAW_CACHE_BOUNDARY -->\
  * prefix stays byte-identical across sessions, without lowering the authority
  * of the behavioral guidance that sits above it.
  */
-export const SYSTEM_PROMPT_RELOCATABLE_BOUNDARY = "\n<!-- OPENCLAW_RELOCATABLE_BOUNDARY -->\n";
+// The marker text is hyphenated rather than underscored on purpose: an
+// `OPENCLAW_*` token here would register as a new environment-variable name in
+// the `config/env-var-count-budget.txt` ratchet, which is meant to ratchet down.
+export const SYSTEM_PROMPT_RELOCATABLE_BOUNDARY = "\n<!-- OPENCLAW-RELOCATABLE-BOUNDARY -->\n";
 
 export function stripSystemPromptCacheBoundary(text: string): string {
   // Both internal markers are stripped here so every existing caller keeps the

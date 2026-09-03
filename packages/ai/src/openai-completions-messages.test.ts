@@ -204,7 +204,7 @@ describe("convertMessages relocatable suffix", () => {
     const converted = convertMessages(model, contextForSession("alpha"), compat());
 
     expect(JSON.stringify(converted)).not.toContain("OPENCLAW_CACHE_BOUNDARY");
-    expect(JSON.stringify(converted)).not.toContain("OPENCLAW_RELOCATABLE_BOUNDARY");
+    expect(JSON.stringify(converted)).not.toContain("OPENCLAW-RELOCATABLE-BOUNDARY");
   });
 
   it("leaves the boundary in place when the caller preserves it", () => {
