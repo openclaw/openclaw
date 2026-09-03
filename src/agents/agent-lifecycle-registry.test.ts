@@ -873,6 +873,82 @@ describe("agent lifecycle registry", () => {
     expect(readAgentDeletionJournal("cleanup-recovery-agent", options)).toBeUndefined();
   });
 
+  it("round-trips NTFS file ids that exceed Number.MAX_SAFE_INTEGER", async () => {
+    const options = createOptions();
+    // 0x1000000000000123, which no double can represent.
+    const exactIno = "1152921504606847267";
+    const cleanupPaths = [
+      {
+        path: "/real/workspace",
+        canonicalPath: "/real/workspace",
+        parentPath: "/real",
+        kind: "target" as const,
+        sourcePaths: ["/linked/workspace"],
+        dev: 3,
+        ino: Number(exactIno),
+        devExact: "3",
+        inoExact: exactIno,
+        coversDescendants: true,
+        done: false,
+      },
+    ];
+    await withAgentDeletion(
+      "ntfs-inode-agent",
+      async (begin) => {
+        const deletion = await begin(createEntry("ntfs-inode-agent"));
+        await deletion.fenceCleanupPaths(cleanupPaths);
+      },
+      options,
+    );
+    await withAgentDeletion(
+      "ntfs-inode-agent",
+      async (begin) => {
+        const recovery = await begin(createEntry("ntfs-inode-agent"));
+        expect(recovery.entry.cleanupPaths).toEqual(cleanupPaths);
+        const persisted = readAgentDeletionJournal("ntfs-inode-agent", options)?.cleanupPaths;
+        expect(persisted).toEqual(cleanupPaths);
+        expect(persisted?.[0]?.inoExact).toBe(exactIno);
+        expect(String(persisted?.[0]?.ino)).not.toBe(exactIno);
+        await recovery.rollback();
+      },
+      options,
+    );
+  });
+
+  it("keeps a legacy numeric-only journal readable", async () => {
+    const options = createOptions();
+    const cleanupPaths = [
+      {
+        path: "/real/workspace",
+        canonicalPath: "/real/workspace",
+        parentPath: "/real",
+        kind: "target" as const,
+        sourcePaths: ["/linked/workspace"],
+        dev: 1,
+        ino: 42,
+        coversDescendants: true,
+        done: false,
+      },
+    ];
+    await withAgentDeletion(
+      "legacy-inode-agent",
+      async (begin) => {
+        const deletion = await begin(createEntry("legacy-inode-agent"));
+        await deletion.fenceCleanupPaths(cleanupPaths);
+      },
+      options,
+    );
+    await withAgentDeletion(
+      "legacy-inode-agent",
+      async (begin) => {
+        const recovery = await begin(createEntry("legacy-inode-agent"));
+        expect(recovery.entry.cleanupPaths).toEqual(cleanupPaths);
+        await recovery.rollback();
+      },
+      options,
+    );
+  });
+
   it("allows refusal without a journal and revokes retained admission after settlement", async () => {
     const options = createOptions();
     const retained = await withAgentDeletion("main", async (begin) => begin, options);
