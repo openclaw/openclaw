@@ -1,6 +1,5 @@
 import type { Chat, Message } from "grammy/types";
 import { firstDefined, isSenderIdAllowed } from "openclaw/plugin-sdk/allow-from";
-import { formatLocationText } from "openclaw/plugin-sdk/channel-inbound";
 import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import type {
   OpenClawConfig,
@@ -33,6 +32,7 @@ import {
   isBinaryContent,
   joinTelegramTextParts,
   normalizeForwardedContext,
+  resolveTelegramNonTextBody,
   resolveTelegramPrimaryMedia,
   resolveTelegramRichMessageBody,
   resolveTelegramTextContent,
@@ -532,10 +532,7 @@ export function describeReplyTarget(msg: Message): TelegramReplyTarget | null {
     filteredReplyText = hadUnsafeTelegramText(rawReplyText, replyBody);
     body = replyBody;
     if (!body) {
-      const locationData = extractTelegramLocation(replyLike);
-      if (locationData) {
-        body = formatLocationText(locationData);
-      }
+      body = resolveTelegramNonTextBody(replyLike)?.text ?? "";
     }
   }
   if (!body && !replyLike) {
