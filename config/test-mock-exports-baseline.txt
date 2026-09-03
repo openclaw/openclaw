@@ -1211,7 +1211,6 @@
 ["src/acp/server.startup.test.ts","../infra/net/proxy/proxy-lifecycle.js","8881d6990556d86dda05ccbbeb0192737e28e4668ebea49e7a396023fe871f89",1]
 ["src/acp/server.startup.test.ts","../state/openclaw-state-db.js","35c6f9f17af2930a439c496c8dcf9b91b75ef6b00652bc93fd059d2a56805bab",1]
 ["src/acp/server.startup.test.ts","./event-ledger.js","e8a64a0856ec77278351260b54d0b98c1af49773eff4f6d0e3569c9512a0cd1b",1]
-["src/acp/server.startup.test.ts","./translator.js","4eb3e6d0af4427b793af7885a22f6c46cba2d12b1cd03ceb005bc8601cce2add",1]
 ["src/agents/agent-auth-discovery.external-cli.test.ts","../plugins/provider-runtime.js","ea3d6c79f6f836412ddd1ff059fbdfe2e069048685c981080ea9f977fbd8e528",1]
 ["src/agents/agent-auth-discovery.external-cli.test.ts","../plugins/synthetic-auth.runtime.js","b89ecd766c161795cbf9e9bedf1c5d9c2b87034cf1f36e62a565cd2216803be6",1]
 ["src/agents/agent-auth-discovery.external-cli.test.ts","./agent-auth-credentials.js","d64277911fd7332e28c481a52b843b15762f2f544f6f0b114413da95b98b346c",1]
