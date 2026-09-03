@@ -29,6 +29,7 @@ type WorkerEnvironmentAccessOptions = {
     record: WorkerEnvironmentRecord,
     provider: WorkerProvider,
     leaseId: string,
+    authorize?: () => void,
   ) => Parameters<WorkerTunnelManager["start"]>[0]["resolveIdentity"];
   inState: (record: WorkerEnvironmentRecord, ...states: WorkerEnvironmentState[]) => boolean;
   isStopping: () => boolean;
@@ -183,7 +184,7 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
         bundleHash: currentBundle.bundleHash,
         ssh: record.sshEndpoint,
         sharedHost: record.sharedHost,
-        resolveIdentity: identityResolverFor(record, provider, record.leaseId),
+        resolveIdentity: identityResolverFor(record, provider, record.leaseId, request.authorize),
         authorize: request.authorize,
       });
       stopStartup = async () => await tunnels.stop(record.environmentId, record.ownerEpoch);
