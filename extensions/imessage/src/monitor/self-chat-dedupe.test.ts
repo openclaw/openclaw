@@ -90,6 +90,56 @@ function useFakeTimersAt(iso = DEFAULT_FAKE_TIME): void {
   vi.setSystemTime(new Date(iso));
 }
 
+describe("echo cache — reply_to_guid reflections", () => {
+  it.each([
+    {
+      label: "drops matching parent GUID, text, and scope",
+      sender: "+15555550123",
+      text: "Reflected reply",
+      expectedKind: "drop",
+    },
+    {
+      label: "keeps a reply with different text",
+      sender: "+15555550123",
+      text: "User response",
+      expectedKind: "dispatch",
+    },
+    {
+      label: "keeps matching text in a different scope",
+      sender: "+15555550124",
+      text: "Reflected reply",
+      expectedKind: "dispatch",
+    },
+  ] as const)("$label", async ({ sender, text, expectedKind }) => {
+    const outboundGuid = "p:0/outbound-guid";
+    rememberPersistedIMessageEcho({
+      scope: "default:imessage:+15555550123",
+      text: "Reflected reply",
+      messageId: outboundGuid,
+    });
+    const echoCache = createSentMessageCache();
+
+    const decision = await resolveDecision({
+      message: {
+        id: 200,
+        guid: "p:0/reflected-row-guid",
+        reply_to_guid: outboundGuid,
+        sender,
+        text,
+        is_from_me: false,
+        is_group: false,
+      },
+      echoCache,
+    });
+
+    if (expectedKind === "drop") {
+      expect(decision).toEqual({ kind: "drop", reason: "echo" });
+    } else {
+      expect(decision.kind).toBe("dispatch");
+    }
+  });
+});
+
 describe("self-chat dedupe — #47830", () => {
   it("does NOT drop a user message that matches recently-sent agent text (self-chat scope collision)", async () => {
     useFakeTimersAt();

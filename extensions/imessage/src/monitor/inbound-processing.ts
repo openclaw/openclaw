@@ -395,6 +395,7 @@ export async function resolveIMessageInboundDecision(params: {
     ].filter((value): value is string => Boolean(value)),
   );
   const inboundMessageId = inboundMessageIds[0];
+  const replyToGuid = normalizeReplyField(params.message.reply_to_guid);
   const hasInboundGuid = Boolean(normalizeReplyField(params.message.guid));
   // Outbound sends persist one target shape; inbound rows must probe every
   // equivalent shape so a GUID-keyed send also matches a chat_id-bearing echo.
@@ -608,15 +609,31 @@ export async function resolveIMessageInboundDecision(params: {
   // Echo detection: check if the received message matches a recently sent message.
   // Scope by conversation so same text in different chats is not conflated.
   if (params.echoCache && (messageText || inboundMessageId || mediaFacts.length > 0)) {
+    const echoCache = params.echoCache;
+    const hasReplyToEcho =
+      params.message.is_from_me === false && isSelfChat && replyToGuid && bodyText
+        ? (
+            await Promise.all(
+              echoScope.map((scope) =>
+                echoCache.has(
+                  scope,
+                  { text: bodyText, messageId: replyToGuid },
+                  { requireMessageIdTextMatch: true },
+                ),
+              ),
+            )
+          ).some(Boolean)
+        : false;
     if (
-      await hasIMessageEchoMatch({
+      hasReplyToEcho ||
+      (await hasIMessageEchoMatch({
         echoCache: params.echoCache,
         scope: echoScope,
         text: bodyText || undefined,
         media: mediaFacts[0],
         messageIds: inboundMessageIds,
         includePendingText: isSelfChat,
-      })
+      }))
     ) {
       params.logVerbose?.(
         `imessage: skipping echo message${inboundMessageId ? ` id=${inboundMessageId}` : ""}`,
