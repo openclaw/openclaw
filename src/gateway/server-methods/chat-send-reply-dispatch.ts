@@ -8,6 +8,7 @@ import {
 } from "../../auto-reply/reply-payload.js";
 import type { ReplyDispatcherOptions } from "../../auto-reply/reply/reply-dispatcher.js";
 import { readSessionTranscriptWatermark } from "../../config/sessions/session-accessor.js";
+import { stripInternalRuntimeScaffolding } from "../../infra/outbound/protocol-scaffolding.js";
 import {
   recordAssistantManagedMediaUrls,
   type PrepareAssistantTranscriptMessage,
@@ -78,7 +79,9 @@ export function buildTranscriptReplyText(payloads: ReplyPayload[]): string {
       } else if (payload.replyToCurrent || parsedText?.replyToCurrent) {
         lines.push("[[reply_to_current]]");
       }
-      const text = payload.text ? stripInlineDirectiveTagsForDelivery(payload.text).text : "";
+      const text = payload.text
+        ? stripInlineDirectiveTagsForDelivery(stripInternalRuntimeScaffolding(payload.text)).text
+        : "";
       if (text.trim() && !isSuppressedControlReplyText(text)) {
         lines.push(text);
       }

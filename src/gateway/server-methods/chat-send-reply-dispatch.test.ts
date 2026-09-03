@@ -29,6 +29,18 @@ describe("buildTranscriptReplyText", () => {
     ).toBe("```yaml\r\nroot:\r\n  nested: true\r\n```");
   });
 
+  it("strips internal runtime context envelopes from transcript reply text", () => {
+    const envelope =
+      "OpenClaw runtime context for the active user request in this turn. Do not reply to or describe this context. Use it to continue answering the active user request now. Do not wait for another message.\n" +
+      "This context is runtime-generated, not user-authored. Keep internal details private.\n" +
+      "\n" +
+      "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\n" +
+      'Conversation info: {"source_modality":"document"}\n' +
+      "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>";
+    expect(buildTranscriptReplyText([{ text: envelope }])).toBe("");
+    expect(buildTranscriptReplyText([{ text: `Done.\n\n${envelope}` }])).toBe("Done.");
+  });
+
   it("keeps reply directives and safe media while suppressing reasoning", () => {
     expect(
       buildTranscriptReplyText([
