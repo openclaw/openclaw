@@ -186,14 +186,16 @@ function applyAnthropicCacheControlToSystem(
       continue;
     }
     const record = block as Record<string, unknown>;
-    if (record.type !== "text" || typeof record.text !== "string") {
+    const blockText = record.text;
+    if (record.type !== "text" || typeof blockText !== "string") {
       normalizedBlocks.push(block);
       continue;
     }
     // This transport relocates nothing, so the relocatable marker must not
     // survive into the payload; the cache boundary stays for the breakpoint.
-    record.text = stripSystemPromptRelocatableBoundary(record.text);
-    const split = splitSystemPromptCacheBoundary(record.text);
+    const text = stripSystemPromptRelocatableBoundary(blockText);
+    record.text = text;
+    const split = splitSystemPromptCacheBoundary(text);
     if (!split) {
       if (record.cache_control === undefined) {
         record.cache_control = cacheControl;
