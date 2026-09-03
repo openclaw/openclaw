@@ -120,7 +120,9 @@ describe("iMessage sent-message echo cache", () => {
     expect(await cache.has("acct:imessage:+1555", { messageId: "ok" })).toBe(false);
   });
 
-  it("requires matching text for text-bound message-id lookups", async () => {
+  it("requires matching text and the reflection window for text-bound message-id lookups", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-02-25T00:00:00Z"));
     const cache = createSentMessageCache();
     const scope = "acct:imessage:+1555";
     const options = { requireMessageIdTextMatch: true };
@@ -136,6 +138,13 @@ describe("iMessage sent-message echo cache", () => {
     expect(
       await cache.has("acct:imessage:+1666", { text: "Reflected reply", messageId: "guid-1" }, options),
     ).toBe(false);
+
+    vi.advanceTimersByTime(4_001);
+
+    expect(
+      await cache.has(scope, { text: "Reflected reply", messageId: "guid-1" }, options),
+    ).toBe(false);
+    expect(await cache.has(scope, { messageId: "guid-1" })).toBe(true);
   });
 
   it("keeps message-id lookups longer than text fallback", async () => {
