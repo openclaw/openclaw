@@ -246,8 +246,14 @@ export async function deleteGatewayAgent(
                     parentPath: cleanupPath.parentPath,
                     kind: cleanupPath.kind,
                     sourcePaths: cleanupPath.sourcePaths,
-                    dev: cleanupPath.preparedIdentity?.dev ?? null,
-                    ino: cleanupPath.preparedIdentity?.ino ?? null,
+                    dev: cleanupPath.preparedIdentity
+                      ? Number(cleanupPath.preparedIdentity.dev)
+                      : null,
+                    ino: cleanupPath.preparedIdentity
+                      ? Number(cleanupPath.preparedIdentity.ino)
+                      : null,
+                    devExact: cleanupPath.preparedIdentity?.dev ?? null,
+                    inoExact: cleanupPath.preparedIdentity?.ino ?? null,
                     coversDescendants: cleanupPath.trashCoversDescendants,
                     done: cleanupPath.done,
                   };
