@@ -23,7 +23,13 @@ import {
 } from "../agents/tools/image-tool.helpers.js";
 import { isSecretRef } from "../config/types.secrets.js";
 import { complete } from "../llm/stream.js";
-import type { AssistantMessage, Context, Model, ProviderStreamOptions } from "../llm/types.js";
+import type {
+  AssistantMessage,
+  Context,
+  KnownApi,
+  Model,
+  ProviderStreamOptions,
+} from "../llm/types.js";
 import { getResolvedImageRuntimeContext, resolveImageRuntime } from "./image-model-runtime.js";
 import type {
   ImageDescriptionRequest,
@@ -177,25 +183,65 @@ function shouldPlaceImagePromptInUserContent(model: Model): boolean {
 /**
  * Shared-runtime completion request. `promptDelivery: "system-required"` marks
  * the prompt as an instruction that must travel in the model's system channel:
- * routes that can only carry it inside user content beside the image are
- * refused instead of degraded, because the callers that set it (structured
- * extraction) persist the model output. `userText` is caller data that belongs
- * in user content, never in the system prompt.
+ * routes that cannot carry it there are refused instead of degraded, because
+ * the callers that set it (structured extraction) persist the model output.
+ * `userText` is caller data that belongs in user content, never in the prompt.
  */
 export type ImagesCompletionRequest = ImagesDescriptionRequest & {
   promptDelivery?: "system-required";
   userText?: readonly string[];
 };
 
+/**
+ * Transports whose adapter in this repo turns `Context.systemPrompt` into a
+ * dedicated instruction field rather than another user turn: openai-completions
+ * and mistral-conversations emit a system/developer role message, the responses
+ * families emit instructions, anthropic-messages and bedrock-converse-stream
+ * emit system blocks, and the google families emit systemInstruction.
+ *
+ * The gate is an allowlist on purpose. `Api` is an open union, so a plugin can
+ * register a transport whose egress this repo cannot see; admitting it by
+ * default would let persisted screenshot extraction run without the instruction
+ * boundary it promises. Adding a transport here requires reading its adapter.
+ */
+const SYSTEM_INSTRUCTION_TRANSPORTS: ReadonlySet<string> = new Set<KnownApi>([
+  "anthropic-messages",
+  "azure-openai-responses",
+  "bedrock-converse-stream",
+  "google-generative-ai",
+  "google-vertex",
+  "mistral-conversations",
+  "openai-chatgpt-responses",
+  "openai-completions",
+  "openai-responses",
+]);
+
+function resolveSystemInstructionRefusal(route: {
+  api?: string;
+  promptInUserContent: boolean;
+}): string | undefined {
+  if (route.promptInUserContent) {
+    return "the prompt is delivered as user content";
+  }
+  if (!route.api || !SYSTEM_INSTRUCTION_TRANSPORTS.has(route.api)) {
+    return `transport ${JSON.stringify(route.api ?? "unknown")} has no verified system-instruction channel`;
+  }
+  return undefined;
+}
+
 function assertPromptDeliverable(
   params: ImagesCompletionRequest,
-  route: { provider: string; model: string; promptInUserContent: boolean },
+  route: { provider: string; model: string; api?: string; promptInUserContent: boolean },
 ): void {
-  if (params.promptDelivery !== "system-required" || !route.promptInUserContent) {
+  if (params.promptDelivery !== "system-required") {
+    return;
+  }
+  const refusal = resolveSystemInstructionRefusal(route);
+  if (!refusal) {
     return;
   }
   throw new Error(
-    `Provider does not accept system instructions for image requests: ${route.provider}/${route.model}`,
+    `Provider does not accept system instructions for image requests: ${route.provider}/${route.model} (${refusal})`,
   );
 }
 
@@ -534,6 +580,7 @@ export async function completeImagesWithModel(
     assertPromptDeliverable(params, {
       provider: model.provider,
       model: model.id,
+      api: model.api,
       promptInUserContent,
     });
 

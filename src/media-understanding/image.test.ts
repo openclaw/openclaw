@@ -486,7 +486,7 @@ describe("describeImageWithModelCore", () => {
     });
 
     expect(result).toEqual({ text: '{"total":42}', model: "claude-sonnet-5" });
-    const [, context] = requireFirstMockCall(completeMock, "complete");
+    const [, context] = expectDefined(completeMock.mock.calls[0], "complete call 0");
     // The instruction never appears in user content; caller text never reaches
     // the system prompt.
     expect(context).toEqual({
@@ -519,6 +519,17 @@ describe("describeImageWithModelCore", () => {
         input: ["text", "image"],
         api: "openai-responses",
         baseUrl: "https://api.githubcopilot.com",
+      },
+    },
+    {
+      // Fail closed: `Api` is an open union, so a plugin-supplied transport this
+      // repo cannot read must not carry a persisted extraction.
+      route: "acme/vision-1",
+      model: {
+        provider: "acme",
+        id: "vision-1",
+        input: ["text", "image"],
+        api: "acme-custom-stream",
       },
     },
     {

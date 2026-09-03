@@ -32,7 +32,7 @@
     "visionModel": {
       "label": "Vision Model",
       "placeholder": "codex/gpt-5.6-sol",
-      "help": "provider/model used to read snapshots. Any image-capable media provider whose route accepts system instructions works; providers without their own structured-extraction hook use the shared model-backed path. Routes that only take the prompt inside the user message (Alibaba Model Studio, GitHub Copilot, OpenRouter) and MiniMax-VL-01 are refused. Defaults to the first image-capable Codex entry under tools.media."
+      "help": "provider/model used to read snapshots. Needs an image-capable provider on a transport that delivers system instructions (the OpenAI completions/responses families, Anthropic Messages, Bedrock Converse, Google Generative AI/Vertex, Mistral Conversations); providers without their own structured-extraction hook use the shared model-backed path. Refused: routes that carry the prompt as user content (Alibaba Model Studio, GitHub Copilot, OpenRouter), MiniMax-VL-01, and transports OpenClaw cannot inspect. Defaults to the first image-capable Codex entry under tools.media."
     },
     "captureEnabled": {
       "label": "Capture Enabled",

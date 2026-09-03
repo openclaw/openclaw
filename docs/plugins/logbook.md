@@ -183,17 +183,30 @@ Step 2 stays Codex-only: the borrowed default is drawn from image-capable Codex
 entries under `tools.media.models`, and other providers are not borrowed
 automatically.
 
-An explicit `visionModel` can name any image-capable media provider whose route
-accepts the extraction instructions as a system message. Providers that ship
-their own structured-extraction implementation use it; the rest run through the
-shared model-backed path, the same fallback that already backs `describeImage`
-and `describeImages`, with the no-secrets instruction pinned to the system
-channel. Routes that only accept the prompt inside the user message beside the
-image (currently Alibaba Model Studio, GitHub Copilot, and OpenRouter endpoints)
-and the MiniMax `MiniMax-VL-01` endpoint are refused before any request is sent.
+An explicit `visionModel` can name an image-capable media provider on a route
+that delivers the extraction instructions in the model's system channel.
+Providers that ship their own structured-extraction implementation use it; the
+rest run through the shared model-backed path, the same fallback that already
+backs `describeImage` and `describeImages`, with the no-secrets instruction
+pinned to the system channel.
+
+Because the extraction output is persisted, that route check fails closed. A
+route is accepted only when the model's transport is one whose adapter turns the
+system prompt into a dedicated instruction field: the OpenAI completions and
+responses families (including Azure and ChatGPT), Anthropic Messages, Amazon
+Bedrock Converse, Google Generative AI and Vertex, and Mistral Conversations.
+That covers the bundled providers. Refused before any request is sent:
+
+- routes that carry the prompt inside the user message beside the image, which
+  today means the Alibaba Model Studio, GitHub Copilot, and OpenRouter endpoint
+  classes;
+- the MiniMax `MiniMax-VL-01` endpoint, which takes a single prompt field;
+- any provider-supplied transport OpenClaw cannot inspect.
+
 The batch records
-`Provider does not accept system instructions for image requests: <provider>/<model>`;
-point `visionModel` at another route.
+`Provider does not accept system instructions for image requests: <provider>/<model> (<reason>)`;
+point `visionModel` at another route. Plain image description is unaffected on
+every one of these routes.
 
 Setting `tools.media.image.enabled: false` disables borrowed media defaults, but
 an explicit Logbook `visionModel` still applies.
