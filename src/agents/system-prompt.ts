@@ -1539,24 +1539,23 @@ export function buildAgentSystemPrompt(params: {
     lines.push(providerDynamicSuffix, "");
   }
 
-  // Nothing below this point carries behavioral guidance: watched sessions and
-  // runtime facts only. Transports whose tool schemas serialize after the system
-  // message relocate this tail behind them, so the cacheable prefix stays
-  // byte-identical across sessions without demoting the guidance above it.
-  lines.push(SYSTEM_PROMPT_RELOCATABLE_BOUNDARY);
-
   // Watched sessions change rarely but per-session; keep them below the cache
   // boundary so the shared stable prefix stays byte-identical across sessions.
   lines.push(...buildWatchedSessionsPromptLines(params.preparedWatchedSessions));
 
   lines.push(
     "## Runtime",
-    buildRuntimeLine(runtimeInfo, runtimeChannel, runtimeCapabilities, params.defaultThinkLevel),
     ...(modelIdentityLine ? [modelIdentityLine] : []),
     ...(hasProcess
       ? buildActiveProcessSessionReferenceLines(runtimeInfo?.activeProcessSessions)
       : []),
     `Reasoning=${reasoningLevel}; hidden unless on/stream. Toggle /reasoning; /status shows when enabled.`,
+    // Only the per-session facts line sits below this marker. It states session
+    // identity and host facts and directs the model to do nothing, so a transport
+    // whose tool schemas serialize after the system message may carry it past
+    // them without moving any instruction out of its authoring role.
+    SYSTEM_PROMPT_RELOCATABLE_BOUNDARY,
+    buildRuntimeLine(runtimeInfo, runtimeChannel, runtimeCapabilities, params.defaultThinkLevel),
   );
 
   return lines.filter(Boolean).join("\n");

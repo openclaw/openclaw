@@ -75,6 +75,7 @@ import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
 import {
   splitSystemPromptCacheBoundary,
   stripSystemPromptCacheBoundary,
+  stripSystemPromptRelocatableBoundary,
 } from "../utils/system-prompt-cache-boundary.js";
 import {
   isAnthropicOAuthApiKey,
@@ -1399,18 +1400,19 @@ function buildSystemPromptBlocks(
   systemPrompt: string,
   cacheControl: CacheControlEphemeral | undefined,
 ): TextBlockParam[] {
+  // This transport relocates nothing, so the relocatable marker must never reach
+  // the payload. The cache boundary is kept for the breakpoint split below.
+  const prompt = stripSystemPromptRelocatableBoundary(systemPrompt);
   if (!cacheControl) {
-    return [
-      { type: "text", text: sanitizeSurrogates(stripSystemPromptCacheBoundary(systemPrompt)) },
-    ];
+    return [{ type: "text", text: sanitizeSurrogates(stripSystemPromptCacheBoundary(prompt)) }];
   }
 
-  const split = splitSystemPromptCacheBoundary(systemPrompt);
+  const split = splitSystemPromptCacheBoundary(prompt);
   if (!split) {
     return [
       {
         type: "text",
-        text: sanitizeSurrogates(systemPrompt),
+        text: sanitizeSurrogates(prompt),
         cache_control: cacheControl,
       },
     ];
