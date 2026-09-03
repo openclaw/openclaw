@@ -60,7 +60,7 @@ const directMessage = (id: number, text: string, guid?: string) => ({
 
 describe("resolveIMessageInboundDecision echo detection", () => {
   it("drops inbound messages when outbound message id matches echo cache", async () => {
-    const echoHas = vi.fn<EchoHas>((_scope, lookup) => lookup.messageId === "42");
+    const echoHas = vi.fn<EchoHas>(async (_scope, lookup) => lookup.messageId === "42");
     const runtimeEnv = await import("openclaw/plugin-sdk/runtime-env");
     const logVerbose = vi.spyOn(runtimeEnv, "logVerbose").mockImplementation(() => {});
     onTestFinished(() => logVerbose.mockRestore());
@@ -81,7 +81,7 @@ describe("resolveIMessageInboundDecision echo detection", () => {
 
   it("matches attachment-only echoes by structured media fact", async () => {
     const echoHas = vi.fn<EchoHas>(
-      (_scope, lookup) => lookup.media?.kind === "image" && lookup.messageId === "42",
+      async (_scope, lookup) => lookup.media?.kind === "image" && lookup.messageId === "42",
     );
 
     const decision = await resolveDecision({
@@ -134,7 +134,7 @@ describe("resolveIMessageInboundDecision echo detection", () => {
 
   it("does not drop a group inbound when echo cache holds an unrelated chat_guid", async () => {
     const echoHas = vi.fn<EchoHas>(
-      (scope, lookup) =>
+      async (scope, lookup) =>
         scope === "default:chat_guid:iMessage;+;OTHER" && lookup.messageId === "9001",
     );
 
@@ -181,7 +181,7 @@ describe("resolveIMessageInboundDecision echo detection", () => {
   });
 
   it("returns a reaction decision for tapbacks on bot-authored messages by default", async () => {
-    const echoHas = vi.fn<EchoHas>((_scope, lookup) => lookup.messageId === "target-guid");
+    const echoHas = vi.fn<EchoHas>(async (_scope, lookup) => lookup.messageId === "target-guid");
 
     const decision = await resolveDecision({
       message: {
@@ -233,7 +233,7 @@ describe("resolveIMessageInboundDecision echo detection", () => {
         chat_guid: "any;-;+15555550123",
         chat_identifier: "+15555550123",
       },
-      echoCache: { has: () => false },
+      echoCache: { has: async () => false },
       isKnownFromMeMessageId: undefined,
     });
 
@@ -251,7 +251,7 @@ describe("resolveIMessageInboundDecision echo detection", () => {
         reacted_to_guid: "someone-else",
         text: "",
       },
-      echoCache: { has: () => false },
+      echoCache: { has: async () => false },
     });
 
     expect(decision).toEqual({ kind: "drop", reason: "reaction target not sent by agent" });
