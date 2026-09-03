@@ -24,6 +24,7 @@ vi.mock("../infra/tailscale.js", () => ({
   hasTailscaleFunnelRouteForPort: mocks.hasTailscaleFunnelRouteForPort,
 }));
 
+import { TailscaleRouteOwnershipConflictError } from "../infra/tailscale-route-ownership-error.js";
 import { resolveControlUiIdentity } from "./control-ui-identity.js";
 import { startGatewayTailscaleExposure as startGatewayTailscaleExposureBase } from "./server-tailscale.js";
 import {
@@ -50,6 +51,7 @@ function resetTailscalePublishedOrigin() {
 }
 
 afterEach(() => {
+  vi.useRealTimers();
   resetTailscalePublishedOrigin();
   for (const fn of Object.values(mocks)) {
     fn.mockReset();
@@ -245,16 +247,22 @@ describe("startGatewayTailscaleExposure", () => {
     ).toBeUndefined();
   });
 
-  it("clears the published origin and warns when the foreground claim exits", async () => {
+  function createControlledClaim() {
     let resolveExit!: () => void;
     const exited = new Promise<void>((resolve) => {
       resolveExit = resolve;
     });
-    mocks.claimTailscaleRoute.mockResolvedValue({
+    mocks.claimTailscaleRoute.mockResolvedValueOnce({
       exited,
       isActive: () => true,
       stop: mocks.stopRouteClaim,
     });
+    return resolveExit;
+  }
+
+  it("re-claims the route and republishes the origin after the foreground claim exits", async () => {
+    vi.useFakeTimers();
+    const resolveExit = createControlledClaim();
     mocks.getTailnetHostnameAfterServe.mockResolvedValue("node.tailnet.ts.net");
     const logTailscale = createLogger();
 
@@ -275,6 +283,76 @@ describe("startGatewayTailscaleExposure", () => {
         { mode: "token", allowTailscale: true },
       ),
     ).toBeUndefined();
+    expect(mocks.claimTailscaleRoute).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(2_000);
+
+    expect(mocks.claimTailscaleRoute).toHaveBeenCalledTimes(2);
+    expect(getTailscalePublishedOrigin()).toMatchObject({
+      origin: "https://node.tailnet.ts.net",
+      mode: "serve",
+    });
+    expect(logTailscale.info).toHaveBeenLastCalledWith(expect.stringContaining("serve enabled"));
+  });
+
+  it("keeps retrying a failed re-claim until the route comes back", async () => {
+    vi.useFakeTimers();
+    const resolveExit = createControlledClaim();
+    mocks.claimTailscaleRoute.mockRejectedValueOnce(new Error("tailscaled restarting"));
+    const logTailscale = createLogger();
+
+    await startGatewayTailscaleExposure({
+      tailscaleMode: "serve",
+      port: 18789,
+      logTailscale,
+    });
+    resolveExit();
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(mocks.claimTailscaleRoute).toHaveBeenCalledTimes(2);
+
+    await vi.advanceTimersByTimeAsync(4_000);
+
+    expect(mocks.claimTailscaleRoute).toHaveBeenCalledTimes(3);
+    expect(logTailscale.info).toHaveBeenLastCalledWith(expect.stringContaining("serve enabled"));
+  });
+
+  it("stops re-claiming when a route owned elsewhere rejects the claim", async () => {
+    vi.useFakeTimers();
+    const resolveExit = createControlledClaim();
+    mocks.claimTailscaleRoute.mockRejectedValueOnce(new TailscaleRouteOwnershipConflictError());
+    const logTailscale = createLogger();
+
+    await startGatewayTailscaleExposure({
+      tailscaleMode: "serve",
+      port: 18789,
+      logTailscale,
+    });
+    resolveExit();
+    await vi.advanceTimersByTimeAsync(120_000);
+
+    expect(mocks.claimTailscaleRoute).toHaveBeenCalledTimes(2);
+    expect(logTailscale.warn).toHaveBeenLastCalledWith(expect.stringContaining("owned elsewhere"));
+  });
+
+  it("does not re-claim once cleanup has released the route", async () => {
+    vi.useFakeTimers();
+    const resolveExit = createControlledClaim();
+    const logTailscale = createLogger();
+
+    const cleanup = await startGatewayTailscaleExposure({
+      tailscaleMode: "serve",
+      port: 18789,
+      logTailscale,
+    });
+    resolveExit();
+    await vi.waitFor(() => {
+      expect(logTailscale.warn).toHaveBeenCalledWith(expect.stringContaining("claim exited"));
+    });
+    await cleanup?.();
+    await vi.advanceTimersByTimeAsync(120_000);
+
+    expect(mocks.claimTailscaleRoute).toHaveBeenCalledTimes(1);
+    expect(mocks.stopRouteClaim).toHaveBeenCalledOnce();
   });
 
   it("does not publish an origin for an externally preserved Funnel", async () => {
