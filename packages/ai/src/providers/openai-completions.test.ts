@@ -1115,6 +1115,59 @@ describe("OpenAI-compatible completions params", () => {
     });
   });
 
+  it("keeps the relocatable marker out of the OpenRouter Anthropic cache-control payload", async () => {
+    // This route preserves the cache boundary for its breakpoint and relocates
+    // nothing, so the relocatable marker must not survive into the payload.
+    let capturedMessages: unknown;
+    const stream = streamOpenAICompletions(
+      {
+        ...createModel(32_000),
+        id: "anthropic/claude-sonnet-4.6",
+        provider: "openrouter",
+        baseUrl: "https://openrouter.ai/api/v1",
+      },
+      {
+        systemPrompt: `Stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}Reactions guidance${SYSTEM_PROMPT_RELOCATABLE_BOUNDARY}## Runtime\nRuntime: session=alpha`,
+        messages: [{ role: "user", content: "hi", timestamp: 1 }],
+      },
+      {
+        apiKey: "sk-test",
+        onPayload(payload) {
+          capturedMessages = (payload as { messages?: unknown }).messages;
+          throw new Error("stop before network");
+        },
+      },
+    );
+
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("error");
+    const messages = capturedMessages as Array<{ role: string; content: unknown }>;
+    const serialized = JSON.stringify(messages);
+    expect(serialized).not.toContain("OPENCLAW_CACHE_BOUNDARY");
+    expect(serialized).not.toContain("OPENCLAW-RELOCATABLE-BOUNDARY");
+    // The breakpoint still lands on the stable prefix, and nothing is relocated.
+    expect(messages[0]).toEqual({
+      role: "system",
+      content: [
+        {
+          type: "text",
+          text: "Stable prefix",
+          cache_control: { type: "ephemeral" },
+        },
+        {
+          type: "text",
+          text: "Reactions guidance\n## Runtime\nRuntime: session=alpha",
+        },
+      ],
+    });
+    // The user turn carries the conversation breakpoint and nothing relocated.
+    expect(messages[1]).toEqual({
+      role: "user",
+      content: [{ type: "text", text: "hi", cache_control: { type: "ephemeral" } }],
+    });
+  });
+
   it("anchors the OpenRouter Anthropic cache marker on the last stable user turn, skipping a trailing runtime-context carrier", async () => {
     let capturedMessages: unknown;
     const stream = streamOpenAICompletions(

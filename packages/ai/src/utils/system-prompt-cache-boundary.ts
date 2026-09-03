@@ -31,16 +31,8 @@ export function stripSystemPromptCacheBoundary(text: string): string {
 export function splitSystemPromptRelocatableBoundary(
   text: string,
 ): { stablePrefix: string; relocatableSuffix: string } | undefined {
-  const boundaryIndex = text.indexOf(SYSTEM_PROMPT_RELOCATABLE_BOUNDARY);
-  if (boundaryIndex === -1) {
-    return undefined;
-  }
-  return {
-    stablePrefix: text.slice(0, boundaryIndex).trimEnd(),
-    relocatableSuffix: text
-      .slice(boundaryIndex + SYSTEM_PROMPT_RELOCATABLE_BOUNDARY.length)
-      .trimStart(),
-  };
+  const split = splitOnBoundary(text, SYSTEM_PROMPT_RELOCATABLE_BOUNDARY);
+  return split ? { stablePrefix: split.prefix, relocatableSuffix: split.suffix } : undefined;
 }
 
 // Append the cache boundary when a prompt has none (e.g. a hook systemPrompt override),
@@ -54,17 +46,35 @@ export function ensureSystemPromptCacheBoundary(systemPrompt: string): string {
     : `${systemPrompt}${SYSTEM_PROMPT_CACHE_BOUNDARY}`;
 }
 
-export function splitSystemPromptCacheBoundary(
+/** Shared marker split so both boundaries stay on one implementation. */
+function splitOnBoundary(
   text: string,
-): { stablePrefix: string; dynamicSuffix: string } | undefined {
-  const boundaryIndex = text.indexOf(SYSTEM_PROMPT_CACHE_BOUNDARY);
+  marker: string,
+): { prefix: string; suffix: string } | undefined {
+  const boundaryIndex = text.indexOf(marker);
   if (boundaryIndex === -1) {
     return undefined;
   }
   return {
-    stablePrefix: text.slice(0, boundaryIndex).trimEnd(),
-    dynamicSuffix: text.slice(boundaryIndex + SYSTEM_PROMPT_CACHE_BOUNDARY.length).trimStart(),
+    prefix: text.slice(0, boundaryIndex).trimEnd(),
+    suffix: text.slice(boundaryIndex + marker.length).trimStart(),
   };
+}
+
+export function splitSystemPromptCacheBoundary(
+  text: string,
+): { stablePrefix: string; dynamicSuffix: string } | undefined {
+  const split = splitOnBoundary(text, SYSTEM_PROMPT_CACHE_BOUNDARY);
+  return split ? { stablePrefix: split.prefix, dynamicSuffix: split.suffix } : undefined;
+}
+
+/**
+ * Remove only the relocatable marker, leaving the cache boundary in place for
+ * transports that anchor a cache breakpoint on it. Those transports do not
+ * relocate anything, so the marker must not survive into their payload.
+ */
+export function stripSystemPromptRelocatableBoundary(text: string): string {
+  return text.replaceAll(SYSTEM_PROMPT_RELOCATABLE_BOUNDARY, "\n");
 }
 
 export function prependSystemPromptAdditionAfterCacheBoundary(params: {

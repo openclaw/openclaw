@@ -20,6 +20,7 @@ import { sanitizeSurrogates } from "./utils/sanitize-unicode.js";
 import {
   splitSystemPromptRelocatableBoundary,
   stripSystemPromptCacheBoundary,
+  stripSystemPromptRelocatableBoundary,
 } from "./utils/system-prompt-cache-boundary.js";
 
 const EMPTY_TOOL_RESULT_TEXT = "(no output)";
@@ -99,7 +100,10 @@ export function convertMessages(
     const role = useDeveloperRole ? "developer" : "system";
     let systemPrompt: string;
     if (options.preserveSystemPromptCacheBoundary) {
-      systemPrompt = context.systemPrompt;
+      // The cache boundary stays so the caller can anchor its breakpoint on it,
+      // but nothing downstream relocates, so the relocatable marker would
+      // otherwise survive into the payload.
+      systemPrompt = stripSystemPromptRelocatableBoundary(context.systemPrompt);
     } else {
       const split = splitSystemPromptRelocatableBoundary(context.systemPrompt);
       if (split && split.relocatableSuffix.length > 0) {
