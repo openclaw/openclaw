@@ -363,7 +363,7 @@ export async function extractStructuredWithModel(params: ExtractStructuredWithMo
   }
   const provider = getMediaUnderstandingProvider(
     params.provider,
-    buildMediaUnderstandingRegistry(undefined, params.cfg),
+    buildMediaUnderstandingRegistry(undefined, params.cfg, undefined, params.provider),
   );
   if (!provider?.extractStructured) {
     throw new Error(`Provider does not support structured extraction: ${params.provider}`);
@@ -381,7 +381,10 @@ export async function extractStructuredWithModel(params: ExtractStructuredWithMo
     authStore: params.authStore,
     timeoutMs,
     cfg: params.cfg,
-    agentDir: params.agentDir ?? "",
+    // An empty agentDir resolves to process.cwd(), which matches none of the
+    // prepared-model-runtime owners a long-lived gateway holds for its configured
+    // agent directories; default it the way describePreparedImageWithModel does.
+    agentDir: params.agentDir || resolveDefaultAgentDir(params.cfg),
   });
 }
 

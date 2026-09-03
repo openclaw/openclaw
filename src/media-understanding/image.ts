@@ -127,16 +127,17 @@ function composeImageDescriptionPayloadHandlers(
 function buildImageContext(
   prompt: string,
   images: Array<{ buffer: Buffer; mime?: string }>,
-  opts?: { promptInUserContent?: boolean },
+  opts?: { promptInUserContent?: boolean; userText?: readonly string[] },
 ): Context {
   const imageContent = images.map((image) => ({
     type: "image" as const,
     data: image.buffer.toString("base64"),
     mimeType: image.mime ?? "image/jpeg",
   }));
+  const userTextContent = (opts?.userText ?? []).map((text) => ({ type: "text" as const, text }));
   const content = opts?.promptInUserContent
-    ? [{ type: "text" as const, text: prompt }, ...imageContent]
-    : imageContent;
+    ? [{ type: "text" as const, text: prompt }, ...userTextContent, ...imageContent]
+    : [...userTextContent, ...imageContent];
 
   return {
     ...(opts?.promptInUserContent ? {} : { systemPrompt: prompt }),
@@ -170,6 +171,31 @@ function shouldPlaceImagePromptInUserContent(model: Model): boolean {
     capabilities.endpointClass === "openrouter" ||
     capabilities.endpointClass === "modelstudio-native" ||
     (model.provider.toLowerCase() === "openrouter" && capabilities.endpointClass === "default")
+  );
+}
+
+/**
+ * Shared-runtime completion request. `promptDelivery: "system-required"` marks
+ * the prompt as an instruction that must travel in the model's system channel:
+ * routes that can only carry it inside user content beside the image are
+ * refused instead of degraded, because the callers that set it (structured
+ * extraction) persist the model output. `userText` is caller data that belongs
+ * in user content, never in the system prompt.
+ */
+export type ImagesCompletionRequest = ImagesDescriptionRequest & {
+  promptDelivery?: "system-required";
+  userText?: readonly string[];
+};
+
+function assertPromptDeliverable(
+  params: ImagesCompletionRequest,
+  route: { provider: string; model: string; promptInUserContent: boolean },
+): void {
+  if (params.promptDelivery !== "system-required" || !route.promptInUserContent) {
+    return;
+  }
+  throw new Error(
+    `Provider does not accept system instructions for image requests: ${route.provider}/${route.model}`,
   );
 }
 
@@ -409,8 +435,9 @@ async function withImageDescriptionTimeout<T>(params: {
   }
 }
 
-async function describeImagesWithModelInternal(
-  params: ImagesDescriptionRequest,
+/** Runs one image completion through the shared model runtime. */
+export async function completeImagesWithModel(
+  params: ImagesCompletionRequest,
   options: { onPayload?: ProviderStreamOptions["onPayload"] } = {},
 ): Promise<ImagesDescriptionResult> {
   const prompt = params.prompt ?? "Describe the image.";
@@ -453,6 +480,11 @@ async function describeImagesWithModelInternal(
     if (!isMinimaxVlmModel(params.provider, params.model) || !isUnknownModelError(err)) {
       throw err;
     }
+    assertPromptDeliverable(params, {
+      provider: params.provider,
+      model: params.model,
+      promptInUserContent: true,
+    });
     const fallback = await withImageDescriptionTimeout({
       controller,
       signal: params.signal,
@@ -480,6 +512,11 @@ async function describeImagesWithModelInternal(
     const setupDurationMs = Date.now() - startedAtMs;
 
     if (isMinimaxVlmModel(model.provider, model.id)) {
+      assertPromptDeliverable(params, {
+        provider: model.provider,
+        model: model.id,
+        promptInUserContent: true,
+      });
       return await describeImagesWithMinimax({
         runtimeValue,
         provider: model.provider,
@@ -492,6 +529,13 @@ async function describeImagesWithModelInternal(
         signal: params.signal,
       });
     }
+
+    const promptInUserContent = shouldPlaceImagePromptInUserContent(model);
+    assertPromptDeliverable(params, {
+      provider: model.provider,
+      model: model.id,
+      promptInUserContent,
+    });
 
     const resolvedRuntimeContext = getResolvedImageRuntimeContext(model);
     // Prepared auth may carry sentinel-protected request headers. Resolve them only at this
@@ -512,7 +556,8 @@ async function describeImagesWithModelInternal(
     });
 
     const context = buildImageContext(prompt, params.images, {
-      promptInUserContent: shouldPlaceImagePromptInUserContent(model),
+      promptInUserContent,
+      userText: params.userText,
     });
 
     const maxTokens = resolveImageToolMaxTokens(model.maxTokens, params.maxTokens);
@@ -603,14 +648,14 @@ function toImagesDescriptionRequest(params: ImageDescriptionRequest): ImagesDesc
 export async function describeImagesWithModelCore(
   params: ImagesDescriptionRequest,
 ): Promise<ImagesDescriptionResult> {
-  return await describeImagesWithModelInternal(params);
+  return await completeImagesWithModel(params);
 }
 
 export async function describeImagesWithModelPayloadTransformCore(
   params: ImagesDescriptionRequest,
   onPayload: ProviderStreamOptions["onPayload"],
 ): Promise<ImagesDescriptionResult> {
-  return await describeImagesWithModelInternal(params, { onPayload });
+  return await completeImagesWithModel(params, { onPayload });
 }
 
 export async function describeImageWithModelCore(

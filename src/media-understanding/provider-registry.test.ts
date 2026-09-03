@@ -1,17 +1,37 @@
 // Provider registry tests cover runtime provider loading, normalization aliases,
 // manifest-only hook hydration, and config-derived image providers.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { describeImageWithModel, describeImagesWithModel } from "./image-runtime.js";
+import {
+  describeImageWithModel,
+  describeImageWithModelPayloadTransform,
+  describeImagesWithModel,
+  describeImagesWithModelPayloadTransform,
+  extractStructuredWithImageModel,
+  extractStructuredWithImageModelPayloadTransform,
+} from "./image-runtime.js";
 import {
   buildMediaUnderstandingRegistry,
   getMediaUnderstandingProvider,
 } from "./provider-registry.js";
 import type { MediaUnderstandingProvider } from "./types.js";
 
+const resolvePluginCapabilityProviderMock = vi.hoisted(() => vi.fn());
 const resolvePluginCapabilityProvidersMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../plugins/capability-provider-runtime.js", () => ({
+  resolvePluginCapabilityProvider: resolvePluginCapabilityProviderMock,
   resolvePluginCapabilityProviders: resolvePluginCapabilityProvidersMock,
+}));
+
+// Identity assertions below compare against these stand-ins; the transform
+// variants also record the (request, transform) pair hydration hands them.
+vi.mock("./image-runtime.js", () => ({
+  describeImageWithModel: vi.fn(),
+  describeImageWithModelPayloadTransform: vi.fn(),
+  describeImagesWithModel: vi.fn(),
+  describeImagesWithModelPayloadTransform: vi.fn(),
+  extractStructuredWithImageModel: vi.fn(),
+  extractStructuredWithImageModelPayloadTransform: vi.fn(),
 }));
 
 function createMediaProvider(
@@ -34,6 +54,8 @@ function requireMediaProvider(
 
 describe("media-understanding provider registry", () => {
   beforeEach(() => {
+    resolvePluginCapabilityProviderMock.mockReset();
+    resolvePluginCapabilityProviderMock.mockReturnValue(undefined);
     resolvePluginCapabilityProvidersMock.mockReset();
     resolvePluginCapabilityProvidersMock.mockReturnValue([]);
   });
@@ -71,6 +93,138 @@ describe("media-understanding provider registry", () => {
     expect(provider.defaultModels?.image).toBe("glm-4.6v");
     expect(provider.describeImage).toBe(describeImageWithModel);
     expect(provider.describeImages).toBe(describeImagesWithModel);
+    expect(provider.extractStructured).toBe(extractStructuredWithImageModel);
+  });
+
+  it("hydrates structured extraction from the shared runtime, never a provider's own describeImages", () => {
+    // Shared extraction pins its instructions to the system channel inside the
+    // shared completion; routing it through a bespoke describeImages would lose
+    // that guarantee.
+    const describeImage = vi.fn();
+    const describeImages = vi.fn();
+    resolvePluginCapabilityProvidersMock.mockReturnValue([
+      createMediaProvider({
+        id: "anthropic",
+        capabilities: ["image"],
+        describeImage,
+        describeImages,
+      }),
+    ]);
+
+    const provider = requireMediaProvider(buildMediaUnderstandingRegistry(), "anthropic");
+
+    expect(provider.describeImage).toBe(describeImage);
+    expect(provider.describeImages).toBe(describeImages);
+    expect(provider.extractStructured).toBe(extractStructuredWithImageModel);
+  });
+
+  it("applies a declared payload transform to every hydrated shared hook", async () => {
+    const imagePayloadTransform = vi.fn();
+    resolvePluginCapabilityProvidersMock.mockReturnValue([
+      createMediaProvider({ id: "opencode", capabilities: ["image"], imagePayloadTransform }),
+    ]);
+
+    const provider = requireMediaProvider(buildMediaUnderstandingRegistry(), "opencode");
+    await provider.describeImage?.({} as never);
+    await provider.describeImages?.({} as never);
+    await provider.extractStructured?.({} as never);
+
+    expect(describeImageWithModelPayloadTransform).toHaveBeenCalledWith({}, imagePayloadTransform);
+    expect(describeImagesWithModelPayloadTransform).toHaveBeenCalledWith({}, imagePayloadTransform);
+    expect(extractStructuredWithImageModelPayloadTransform).toHaveBeenCalledWith(
+      {},
+      imagePayloadTransform,
+    );
+  });
+
+  it("keeps a provider's bespoke structured extraction implementation", () => {
+    const extractStructured = vi.fn();
+    resolvePluginCapabilityProvidersMock.mockReturnValue([
+      createMediaProvider({ id: "codex", capabilities: ["image"], extractStructured }),
+    ]);
+
+    const provider = requireMediaProvider(buildMediaUnderstandingRegistry(), "codex");
+
+    expect(provider.extractStructured).toBe(extractStructured);
+  });
+
+  it("does not hydrate structured extraction for providers without image capability", () => {
+    resolvePluginCapabilityProvidersMock.mockReturnValue([
+      createMediaProvider({ id: "deepgram", capabilities: ["audio"] }),
+    ]);
+
+    const provider = requireMediaProvider(buildMediaUnderstandingRegistry(), "deepgram");
+
+    expect(provider.extractStructured).toBeUndefined();
+  });
+
+  it("resolves the requested provider by id when another provider is already active", () => {
+    // A warm gateway keeps another media provider active, Logbook's visionModel
+    // names anthropic, and anthropic is in neither the active set nor
+    // tools.media.models: it must still load (#119772).
+    const describeImages = vi.fn();
+    resolvePluginCapabilityProvidersMock.mockReturnValue([
+      createMediaProvider({ id: "openai", capabilities: ["image"] }),
+    ]);
+    resolvePluginCapabilityProviderMock.mockReturnValue(
+      createMediaProvider({ id: "anthropic", capabilities: ["image"], describeImages }),
+    );
+
+    const registry = buildMediaUnderstandingRegistry(undefined, undefined, undefined, "anthropic");
+
+    const anthropic = requireMediaProvider(registry, "anthropic");
+    expect(anthropic.describeImages).toBe(describeImages);
+    expect(anthropic.extractStructured).toBe(extractStructuredWithImageModel);
+    expect(requireMediaProvider(registry, "openai").id).toBe("openai");
+    expect(resolvePluginCapabilityProviderMock).toHaveBeenCalledWith({
+      key: "mediaUnderstandingProviders",
+      providerId: "anthropic",
+      cfg: undefined,
+    });
+  });
+
+  it("does not re-resolve a requested provider already registered under an alias", () => {
+    resolvePluginCapabilityProvidersMock.mockReturnValue([
+      createMediaProvider({ id: "google", capabilities: ["image"] }),
+    ]);
+
+    const registry = buildMediaUnderstandingRegistry(undefined, undefined, undefined, "gemini");
+
+    expect(requireMediaProvider(registry, "gemini").id).toBe("google");
+    expect(resolvePluginCapabilityProviderMock).not.toHaveBeenCalled();
+  });
+
+  it("prefers the resolved provider's own hooks over a config-derived image entry", () => {
+    // Same ordering as the cold path: plugin providers land before config
+    // synthetics, so a provider's request-transforming describeImages survives.
+    const describeImages = vi.fn();
+    resolvePluginCapabilityProvidersMock.mockReturnValue([
+      createMediaProvider({ id: "openai", capabilities: ["image"] }),
+    ]);
+    resolvePluginCapabilityProviderMock.mockReturnValue(
+      createMediaProvider({ id: "anthropic", capabilities: ["image"], describeImages }),
+    );
+    const cfg = {
+      models: {
+        providers: {
+          anthropic: { models: [{ id: "claude-sonnet-5", input: ["text", "image"] }] },
+        },
+      },
+    } as never;
+
+    const registry = buildMediaUnderstandingRegistry(undefined, cfg, undefined, "anthropic");
+
+    expect(requireMediaProvider(registry, "anthropic").describeImages).toBe(describeImages);
+  });
+
+  it("leaves an unresolvable requested provider out of the registry", () => {
+    resolvePluginCapabilityProvidersMock.mockReturnValue([
+      createMediaProvider({ id: "openai", capabilities: ["image"] }),
+    ]);
+
+    const registry = buildMediaUnderstandingRegistry(undefined, undefined, undefined, "anthropic");
+
+    expect(getMediaUnderstandingProvider("anthropic", registry)).toBeUndefined();
   });
 
   it("resets earlier custom hooks when a prepared owner explicitly requests generic hooks", () => {

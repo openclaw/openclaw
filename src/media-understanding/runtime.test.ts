@@ -927,7 +927,13 @@ describe("media-understanding runtime", () => {
       contentType: "json",
     });
 
-    expect(mocks.buildMediaUnderstandingRegistry).toHaveBeenCalledWith(undefined, {});
+    // The raw caller id is forwarded for by-id resolution; the registry normalizes.
+    expect(mocks.buildMediaUnderstandingRegistry).toHaveBeenCalledWith(
+      undefined,
+      {},
+      undefined,
+      "Vision-Plugin",
+    );
     expect(mocks.getMediaUnderstandingProvider).toHaveBeenCalledWith(
       "Vision-Plugin",
       providerRegistry,

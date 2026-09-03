@@ -155,7 +155,8 @@ vi.mock("../infra/net/fetch-guard.js", async () => {
   };
 });
 
-const { describeImageWithModelCore, describeImagesWithModelCore } = await import("./image.js");
+const { completeImagesWithModel, describeImageWithModelCore, describeImagesWithModelCore } =
+  await import("./image.js");
 
 describe("describeImageWithModelCore", () => {
   afterEach(() => {
@@ -450,6 +451,103 @@ describe("describeImageWithModelCore", () => {
       agentDir: "/tmp/openclaw-agent",
     });
     expect(completeMock).toHaveBeenCalledOnce();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps a system-required prompt in the system channel and user text beside the image", async () => {
+    discoverModelsMock.mockReturnValue({
+      find: vi.fn(() => ({
+        provider: "anthropic",
+        id: "claude-sonnet-5",
+        input: ["text", "image"],
+        api: "anthropic-messages",
+      })),
+    });
+    completeMock.mockResolvedValue({
+      role: "assistant",
+      api: "anthropic-messages",
+      provider: "anthropic",
+      model: "claude-sonnet-5",
+      stopReason: "stop",
+      timestamp: Date.now(),
+      content: [{ type: "text", text: '{"total":42}' }],
+    });
+
+    const result = await completeImagesWithModel({
+      cfg: {},
+      agentDir: "/tmp/openclaw-agent",
+      provider: "anthropic",
+      model: "claude-sonnet-5",
+      images: [{ buffer: Buffer.from("png-bytes"), fileName: "receipt.png", mime: "image/png" }],
+      prompt: "Extract the total as JSON.",
+      promptDelivery: "system-required",
+      userText: ["Prefer the printed total."],
+      timeoutMs: 1000,
+    });
+
+    expect(result).toEqual({ text: '{"total":42}', model: "claude-sonnet-5" });
+    const [, context] = requireFirstMockCall(completeMock, "complete");
+    // The instruction never appears in user content; caller text never reaches
+    // the system prompt.
+    expect(context).toEqual({
+      systemPrompt: "Extract the total as JSON.",
+      messages: [
+        {
+          role: "user",
+          content: [
+            { type: "text", text: "Prefer the printed total." },
+            {
+              type: "image",
+              data: Buffer.from("png-bytes").toString("base64"),
+              mimeType: "image/png",
+            },
+          ],
+          timestamp: expect.any(Number),
+        },
+      ],
+    });
+  });
+
+  it.each([
+    {
+      // GitHub Copilot rejects system-only image requests, so the shared runtime
+      // moves the prompt into user content there.
+      route: "github-copilot/gpt-5.6-luna",
+      model: {
+        provider: "github-copilot",
+        id: "gpt-5.6-luna",
+        input: ["text", "image"],
+        api: "openai-responses",
+        baseUrl: "https://api.githubcopilot.com",
+      },
+    },
+    {
+      // The MiniMax VLM endpoint takes a single prompt field: no system channel.
+      route: "minimax-portal/MiniMax-VL-01",
+      model: {
+        provider: "minimax-portal",
+        id: "MiniMax-VL-01",
+        input: ["text", "image"],
+        baseUrl: "https://api.minimax.io/anthropic",
+      },
+    },
+  ])("refuses a system-required prompt on $route before any request", async ({ route, model }) => {
+    discoverModelsMock.mockReturnValue({ find: vi.fn(() => model) });
+
+    await expect(
+      completeImagesWithModel({
+        cfg: {},
+        agentDir: "/tmp/openclaw-agent",
+        provider: model.provider,
+        model: model.id,
+        images: [{ buffer: Buffer.from("png-bytes"), fileName: "image.png", mime: "image/png" }],
+        prompt: "Extract the total as JSON.",
+        promptDelivery: "system-required",
+        timeoutMs: 1000,
+      }),
+    ).rejects.toThrow(`Provider does not accept system instructions for image requests: ${route}`);
+    expect(registerProviderStreamForModelMock).not.toHaveBeenCalled();
+    expect(completeMock).not.toHaveBeenCalled();
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
