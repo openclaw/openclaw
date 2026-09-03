@@ -7,12 +7,20 @@ import {
   type JsonRpcId,
 } from "@agentclientprotocol/sdk";
 import type { AcpSessionStore } from "@openclaw/acp-core/session";
+import type { AcpServerOptions } from "@openclaw/acp-core/types";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { resolveGatewayClientBootstrap } from "../gateway/client-bootstrap.js";
 
+type OpenClawConfig = import("../config/config.js").OpenClawConfig;
+type AgentOptions = AcpServerOptions & {
+  config?: OpenClawConfig;
+  sessionStore: AcpSessionStore;
+};
+
 type GatewayOptions = {
+  url: string;
   onEvent?: (event: { event: string; payload?: unknown }) => void;
   onHelloOk?: () => void;
   onConnectError?: (error: Error) => void;
@@ -22,6 +30,8 @@ type GatewayOptions = {
 type SessionLocation = { sessionId: string; cwd: string };
 const state = vi.hoisted(() => ({
   input: [] as Uint8Array[],
+  agentOptions: new Array<AgentOptions>(),
+  loadConfig: vi.fn<() => OpenClawConfig>().mockReturnValue({ gateway: { mode: "local" } }),
   output: [] as AnyMessage[],
   entered: [] as string[],
   enqueue: undefined as ((bytes: Uint8Array) => void) | undefined,
@@ -76,7 +86,7 @@ vi.mock("../gateway/client-bootstrap.js", () => ({
 }));
 // mock-isolation: startup uses fixture config without reading the operator's configuration.
 vi.mock("../config/config.js", () => {
-  const loadConfig = () => ({ gateway: { mode: "local" } });
+  const loadConfig = state.loadConfig;
   return { getRuntimeConfig: loadConfig, loadConfig, resolveGatewayPort: () => 18_789 };
 });
 // mock-isolation: readiness is immediate so startup ordering does not depend on event-loop probes.
@@ -101,8 +111,9 @@ vi.mock("./translator.js", () => ({
     constructor(
       private connection: AgentSideConnection,
       _gateway: unknown,
-      private options: { sessionStore: AcpSessionStore },
+      private options: AgentOptions,
     ) {
+      state.agentOptions.push(options);
       state.connection = connection;
       state.store = options.sessionStore;
     }
@@ -222,6 +233,7 @@ afterAll(() => {
 });
 beforeEach(() => {
   state.input.length = state.output.length = state.entered.length = 0;
+  state.agentOptions.length = 0;
   state.connection = state.gateway = undefined;
   state.enqueue = state.store = undefined;
   state.maxSessions = 10;
@@ -235,12 +247,14 @@ beforeEach(() => {
     state.logs,
     state.closeDb,
     state.bootstrap,
+    state.loadConfig,
   ]) {
     mock.mockReset();
   }
   state.stop.mockResolvedValue(undefined);
   state.closeDb.mockResolvedValue(undefined);
   state.bootstrap.mockResolvedValue(bootstrap());
+  state.loadConfig.mockReturnValue({ gateway: { mode: "local" } });
   // Keep stdin open until server cancellation; feed real SDK NDJSON bytes.
   vi.spyOn(Readable, "toWeb").mockImplementation(
     () =>
@@ -286,6 +300,73 @@ it("routes logs before bootstrap and waits for hello on the TLS-configured Gatew
     expect(state.gateway?.tlsFingerprint).toBe("sha256:local");
   });
 });
+
+function explicitAgentConfig(mode: "local" | "remote" = "local"): OpenClawConfig {
+  return {
+    gateway: { mode },
+    agents: { ownership: "explicit", entries: { ops: {}, research: {} } },
+  };
+}
+
+it("normalizes the selected bridge agent and passes runtime config to the translator", async () => {
+  const config = explicitAgentConfig();
+  state.loadConfig.mockReturnValue(config);
+  await run(
+    async () => {
+      await ready();
+      expect(state.agentOptions[0]).toMatchObject({ agentId: "ops", config });
+    },
+    { agentId: " Ops " },
+  );
+});
+
+it("defers unknown --agent roster validation to the generated-session path", async () => {
+  state.loadConfig.mockReturnValue(explicitAgentConfig());
+  await run(
+    async () => {
+      await ready();
+      expect(state.agentOptions[0]).toMatchObject({ agentId: "not-in-roster" });
+      expect(state.agentOptions[0]).not.toHaveProperty("skipAgentOwnerRosterValidation");
+    },
+    { agentId: "not-in-roster" },
+  );
+});
+
+it("rejects an unrepresentable --agent id instead of selecting main", async () => {
+  state.loadConfig.mockReturnValue(explicitAgentConfig());
+  await expect(serve({ agentId: "!!!" })).rejects.toThrow(/no valid id characters/i);
+});
+
+it.each(["cli", "env", "config"] as const)(
+  "defers agent ownership to the remote Gateway selected by %s",
+  async (source) => {
+    state.loadConfig.mockReturnValue(explicitAgentConfig(source === "config" ? "remote" : "local"));
+    const url = "wss://gateway-host:18789";
+    const urlSource =
+      source === "cli" ? "cli --url" : source === "env" ? "env OPENCLAW_GATEWAY_URL" : "config";
+    state.bootstrap.mockResolvedValue({
+      url,
+      urlSource,
+      connectionDetails: { url, urlSource, message: `Gateway target: ${url}` },
+      ...(source !== "config" ? { urlOverrideSource: source } : {}),
+      auth: {},
+    });
+    await run(
+      async () => {
+        await ready();
+        expect(state.gateway?.url).toBe(url);
+        expect(state.agentOptions[0]).toMatchObject({
+          agentId: "not-in-roster",
+          skipAgentOwnerRosterValidation: true,
+        });
+      },
+      {
+        agentId: "not-in-roster",
+        ...(source === "cli" ? { gatewayUrl: url } : {}),
+      },
+    );
+  },
+);
 
 it("contains rejected gateway event handling with verbose logging", async () => {
   const writes: string[] = [];

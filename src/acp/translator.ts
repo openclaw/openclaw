@@ -30,12 +30,19 @@ import { resolveIntegerOption } from "@openclaw/normalization-core/number-coerci
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { EventFrame } from "../../packages/gateway-protocol/src/index.js";
+import {
+  resolveAgentOperationAgentId,
+  resolveConfiguredAgentId,
+} from "../agents/agent-scope-config.js";
+import { resolvePersistedSessionStoreOwnerForKey } from "../config/sessions/session-store-owner.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayClient } from "../gateway/client.js";
 import type { SessionsListResult } from "../gateway/session-utils.js";
 import {
   createFixedWindowBudget,
   type FixedWindowRateLimiter,
 } from "../infra/fixed-window-rate-limit.js";
+import { toAgentStoreSessionKey } from "../routing/session-key.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import type { AcpEventLedger, AcpEventLedgerReplay } from "./event-ledger.js";
 import { parseSessionMeta } from "./session-mapper.js";
@@ -130,6 +137,7 @@ export class AcpGatewayAgent implements Agent {
     connection: AgentSideConnection,
     private readonly gateway: GatewayClient,
     private readonly opts: AcpServerOptions & {
+      config?: OpenClawConfig;
       eventLedger: AcpEventLedger;
       sessionStore?: AcpSessionStore;
     },
@@ -243,7 +251,7 @@ export class AcpGatewayAgent implements Agent {
     );
     const sessionKey = hasExplicitRouting
       ? await this.resolveSessionKeyFromMeta({ meta, fallbackKey })
-      : fallbackKey;
+      : this.resolveGeneratedBridgeSessionKey(fallbackKey);
     if (!hasExplicitRouting) {
       // Gateway owns execution cwd and its authorization. Adopted sessions keep
       // their existing directory; a fresh key needs no reset before creation.
@@ -524,6 +532,41 @@ export class AcpGatewayAgent implements Agent {
       throw new Error(`Session ${sessionId} not found`);
     }
     return session;
+  }
+
+  private resolveGeneratedBridgeSessionKey(sessionKey: string): string {
+    const config = this.opts.config ?? {};
+    // Remote Gateway targets own session-owner resolution: a local roster that
+    // cannot name an owner must not invent one. Scope the key only when the
+    // caller explicitly selected an agent; otherwise keep the bare bridge key so
+    // the Gateway resolves its own configured or sole agent, which may not
+    // exist in the client's roster (`--agent` is normalized before this point).
+    if (this.opts.skipAgentOwnerRosterValidation) {
+      if (!this.opts.agentId) {
+        return sessionKey;
+      }
+      return toAgentStoreSessionKey({
+        agentId: this.opts.agentId,
+        requestKey: sessionKey,
+      });
+    }
+    // Keep fixed-store keys unqualified so Gateway preserves their persisted
+    // owner, including refusal for a retired owner instead of a system fallback.
+    if (
+      !this.opts.agentId &&
+      resolvePersistedSessionStoreOwnerForKey(config, sessionKey).kind !== "none"
+    ) {
+      return sessionKey;
+    }
+    const agentId = resolveAgentOperationAgentId(config, this.opts.agentId, {
+      surface: "ACP bridge session",
+      hint: "Pass --agent <id>, set agents.defaults.systemAgent.agentId, or provide an agent-owned session key or label.",
+    });
+    // Local bridges validate the owner early against the configured roster.
+    return toAgentStoreSessionKey({
+      agentId: resolveConfiguredAgentId(config, agentId),
+      requestKey: sessionKey,
+    });
   }
 
   private async resolveSessionKeyFromMeta(params: {

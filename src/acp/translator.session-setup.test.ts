@@ -1,5 +1,7 @@
+import { createInMemorySessionStore } from "@openclaw/acp-core/session";
 import type { NewSessionResponse, SessionUpdate } from "@agentclientprotocol/sdk";
-import { expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isAcpSessionKey } from "../sessions/session-key-utils.js";
 import {
   createNewSessionRequest,
@@ -15,6 +17,14 @@ import {
 } from "./translator.bridge-test-helpers.js";
 import type { GatewaySessionPresentationRow } from "./translator.presentation.js";
 import { createPromptScenario } from "./translator.scenario.test-support.js";
+import { createAcpConnection, createAcpGateway, createAcpGatewayAgent } from "./translator.test-helpers.js";
+
+const explicitMultiAgentConfig = {
+  agents: {
+    ownership: "explicit",
+    entries: { ops: {}, research: {} },
+  },
+} satisfies OpenClawConfig;
 
 const sessionId = "bridge-session";
 const row: GatewaySessionPresentationRow = {
@@ -77,7 +87,7 @@ it("creates bridge sessions outside the runtime namespace with initial controls"
   const { agent, sessionStore } = harness();
   const result = await agent.newSession(createNewSessionRequest());
   const key = sessionStore.getSession(result.sessionId)?.sessionKey;
-  expect(key).toMatch(/^acp-bridge:/);
+  expect(key).toBe(`agent:main:acp-bridge:${result.sessionId}`);
   expect(isAcpSessionKey(key)).toBe(false);
   expectModes(result.modes, "adaptive", ["off", "minimal", "low", "medium", "high", "adaptive"]);
   expectConfigOption(result.configOptions, "thought_level", {
@@ -273,4 +283,158 @@ it("rejects non-string ACP config option values", async () => {
     'ACP bridge does not support non-string session config option values for "thought_level".',
   );
   expect(request.mock.calls.some(([method]) => method === "sessions.patch")).toBe(false);
+});
+
+describe("acp session UX bridge behavior", () => {
+  it("scopes generated bridge sessions to the selected agent without reusing keys", async () => {
+    const sessionStore = createInMemorySessionStore();
+    const agent = createAcpGatewayAgent(createAcpConnection(), createAcpGateway(), {
+      agentId: "ops",
+      config: explicitMultiAgentConfig,
+      sessionStore,
+    });
+
+    const first = await agent.newSession(createNewSessionRequest());
+    const second = await agent.newSession(createNewSessionRequest());
+    const firstKey = sessionStore.getSession(first.sessionId)?.sessionKey;
+    const secondKey = sessionStore.getSession(second.sessionId)?.sessionKey;
+
+    expect(firstKey).toMatch(/^agent:ops:acp-bridge:/);
+    expect(secondKey).toMatch(/^agent:ops:acp-bridge:/);
+    expect(secondKey).not.toBe(firstKey);
+    expect(isAcpSessionKey(firstKey)).toBe(false);
+  });
+
+  it("rejects generated sessions when an explicit multi-agent fleet has no owner", async () => {
+    const agent = createAcpGatewayAgent(createAcpConnection(), createAcpGateway(), {
+      config: explicitMultiAgentConfig,
+    });
+
+    await expect(agent.newSession(createNewSessionRequest())).rejects.toThrow(
+      /ACP bridge session has no explicit owner.*--agent <id>/i,
+    );
+  });
+
+  it.each([
+    { storeOwner: "ops", systemOwner: undefined, selected: undefined, owner: undefined },
+    { storeOwner: "ops", systemOwner: "research", selected: undefined, owner: undefined },
+    { storeOwner: "retired", systemOwner: "research", selected: undefined, owner: undefined },
+    { storeOwner: "ops", systemOwner: undefined, selected: "research", owner: "research" },
+  ])(
+    "preserves fixed-store routing with store=$storeOwner system=$systemOwner selected=$selected",
+    async ({ storeOwner, systemOwner, selected, owner }) => {
+      const sessionStore = createInMemorySessionStore();
+      const agent = createAcpGatewayAgent(createAcpConnection(), createAcpGateway(), {
+        agentId: selected,
+        config: {
+          session: { store: "/tmp/shared.sqlite" },
+          agents: {
+            ...explicitMultiAgentConfig.agents,
+            defaults: {
+              sessionStore: { agentId: storeOwner },
+              ...(systemOwner ? { systemAgent: { agentId: systemOwner } } : {}),
+            },
+          },
+        },
+        sessionStore,
+      });
+
+      const result = await agent.newSession(createNewSessionRequest());
+
+      // Bare keys preserve Gateway fixed-store ownership, including retired-owner refusal.
+      expect(sessionStore.getSession(result.sessionId)?.sessionKey).toBe(
+        `${owner ? `agent:${owner}:` : ""}acp-bridge:${result.sessionId}`,
+      );
+    },
+  );
+
+  it("rejects an unknown explicitly selected agent", async () => {
+    const agent = createAcpGatewayAgent(createAcpConnection(), createAcpGateway(), {
+      agentId: "missing",
+      config: explicitMultiAgentConfig,
+    });
+
+    await expect(agent.newSession(createNewSessionRequest())).rejects.toThrow(
+      'Unknown agent id "missing"',
+    );
+  });
+
+  it("scopes generated sessions to a remote-only owner without a local roster entry", async () => {
+    const sessionStore = createInMemorySessionStore();
+    const agent = createAcpGatewayAgent(createAcpConnection(), createAcpGateway(), {
+      agentId: "remote-only",
+      skipAgentOwnerRosterValidation: true,
+      config: explicitMultiAgentConfig,
+      sessionStore,
+    });
+
+    const result = await agent.newSession(createNewSessionRequest());
+
+    expect(sessionStore.getSession(result.sessionId)?.sessionKey).toMatch(
+      /^agent:remote-only:acp-bridge:/,
+    );
+  });
+
+  it("keeps the bare bridge key for remote targets with an ambiguous local roster", async () => {
+    const sessionStore = createInMemorySessionStore();
+    const agent = createAcpGatewayAgent(createAcpConnection(), createAcpGateway(), {
+      skipAgentOwnerRosterValidation: true,
+      config: explicitMultiAgentConfig,
+      sessionStore,
+    });
+
+    const result = await agent.newSession(createNewSessionRequest());
+
+    // The remote Gateway owns owner resolution here: its sole agent may be
+    // neither `main` nor any local entry, so the key must stay unscoped.
+    expect(sessionStore.getSession(result.sessionId)?.sessionKey).toMatch(/^acp-bridge:/);
+  });
+
+  it("keeps the bare bridge key when the local sole owner is absent from a remote Gateway", async () => {
+    const sessionStore = createInMemorySessionStore();
+    const agent = createAcpGatewayAgent(createAcpConnection(), createAcpGateway(), {
+      skipAgentOwnerRosterValidation: true,
+      // The client's only agent is `ops`, but the remote Gateway may run a
+      // different roster (or a sole owner such as `research`), so the client
+      // must not prefix the key with a local identity.
+      config: {
+        agents: { ownership: "explicit", entries: { ops: {} } },
+      } satisfies OpenClawConfig,
+      sessionStore,
+    });
+
+    const result = await agent.newSession(createNewSessionRequest());
+
+    expect(sessionStore.getSession(result.sessionId)?.sessionKey).toMatch(/^acp-bridge:/);
+  });
+
+  it("preserves explicit session routing without an ambient owner", async () => {
+    const sessionStore = createInMemorySessionStore();
+    const agent = createAcpGatewayAgent(createAcpConnection(), createAcpGateway(), {
+      config: explicitMultiAgentConfig,
+      defaultSessionKey: "agent:research:default",
+      sessionStore,
+    });
+
+    const result = await agent.newSession({
+      ...createNewSessionRequest(),
+      _meta: { sessionKey: "agent:ops:override" },
+    });
+
+    expect(sessionStore.getSession(result.sessionId)?.sessionKey).toBe("agent:ops:override");
+  });
+
+  it("keeps explicit session routing precedence when --agent is not in the local roster", async () => {
+    const sessionStore = createInMemorySessionStore();
+    const agent = createAcpGatewayAgent(createAcpConnection(), createAcpGateway(), {
+      agentId: "missing",
+      config: explicitMultiAgentConfig,
+      defaultSessionKey: "agent:research:default",
+      sessionStore,
+    });
+
+    const result = await agent.newSession(createNewSessionRequest());
+
+    expect(sessionStore.getSession(result.sessionId)?.sessionKey).toBe("agent:research:default");
+  });
 });

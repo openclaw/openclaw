@@ -87,7 +87,7 @@ it.each<Route>([
     }
     const { newSession } = agent;
     const result = await newSession({ ...createNewSessionRequest(cwd), _meta: metadata });
-    const selectedKey = expected ?? `acp-bridge:${result.sessionId}`;
+    const selectedKey = expected ?? `agent:main:acp-bridge:${result.sessionId}`;
     expect(sessionStore.getSession(result.sessionId)?.sessionKey).toBe(selectedKey);
     expect(request.mock.calls).toEqual([
       ...(lookup ? [["sessions.resolve", lookup]] : []),
@@ -340,7 +340,7 @@ it("drains only its own pending work and sessions during shutdown", async () => 
   await agentA.shutdown();
   await expect(pending).resolves.toEqual({ stopReason: "cancelled" });
   expect(request.mock.calls.find(([method]) => method === "chat.abort")?.[1]).toEqual({
-    sessionKey: `acp-bridge:${sessionA.sessionId}`,
+    sessionKey: `agent:main:acp-bridge:${sessionA.sessionId}`,
     runId: send?.[1]?.idempotencyKey,
   });
   for (const agent of [agentA, agentB]) {
