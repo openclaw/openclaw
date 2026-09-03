@@ -17,7 +17,10 @@ import {
 import type { ResolvedOpenAICompletionsCompat } from "./transports/openai-completions-compat.js";
 import type { Context, Model, TextContent, ThinkingContent, ToolCall } from "./types.js";
 import { sanitizeSurrogates } from "./utils/sanitize-unicode.js";
-import { stripSystemPromptCacheBoundary } from "./utils/system-prompt-cache-boundary.js";
+import {
+  splitSystemPromptCacheBoundary,
+  stripSystemPromptCacheBoundary,
+} from "./utils/system-prompt-cache-boundary.js";
 
 const EMPTY_TOOL_RESULT_TEXT = "(no output)";
 type ChatCompletionContentPartVideo = {
@@ -83,12 +86,31 @@ export function convertMessages(
     normalizeToolCallId(id),
   ) as ProviderMessage[];
 
+  // Chat templates serialize `tools` after the system message, so a volatile
+  // suffix left inside the system message still sits ahead of the tool schemas
+  // and forks the cacheable prefix on every new conversation. Carry it past the
+  // tools on the trailing user turn instead. Only relocate when there is a user
+  // turn to carry it, so the suffix is never dropped.
+  let relocatedCacheSuffix: string | undefined;
   if (context.systemPrompt) {
     const useDeveloperRole = model.reasoning && compat.supportsDeveloperRole;
     const role = useDeveloperRole ? "developer" : "system";
-    const systemPrompt = options.preserveSystemPromptCacheBoundary
-      ? context.systemPrompt
-      : stripSystemPromptCacheBoundary(context.systemPrompt);
+    let systemPrompt: string;
+    if (options.preserveSystemPromptCacheBoundary) {
+      systemPrompt = context.systemPrompt;
+    } else {
+      const split = splitSystemPromptCacheBoundary(context.systemPrompt);
+      const canRelocate =
+        split !== undefined &&
+        split.dynamicSuffix.length > 0 &&
+        transformedMessages.some((message) => message.role === "user");
+      if (split && canRelocate) {
+        systemPrompt = split.stablePrefix;
+        relocatedCacheSuffix = split.dynamicSuffix;
+      } else {
+        systemPrompt = stripSystemPromptCacheBoundary(context.systemPrompt);
+      }
+    }
     params.push({ role, content: sanitizeSurrogates(systemPrompt) });
   }
 
@@ -299,5 +321,51 @@ export function convertMessages(
     lastRole = msg.role;
   }
 
+  if (relocatedCacheSuffix !== undefined) {
+    appendCacheBoundarySuffixToLastUserTurn({
+      params,
+      suffix: relocatedCacheSuffix,
+      cacheOptOutIndexes: options.cacheOptOutIndexes,
+    });
+  }
+
   return params;
+}
+
+/**
+ * Attach the post-cache-boundary system suffix to the trailing user turn.
+ *
+ * The suffix holds per-turn and per-session guidance that the system prompt
+ * deliberately keeps below `SYSTEM_PROMPT_CACHE_BOUNDARY`. That placement only
+ * stabilizes the prefix for providers that anchor a cache breakpoint on the
+ * boundary; for Chat Completions the tool schemas are serialized after the
+ * whole system message, so the suffix still divides the prefix ahead of them.
+ * Moving it behind the last user turn keeps the system message and the tool
+ * definitions byte-identical across sessions.
+ */
+function appendCacheBoundarySuffixToLastUserTurn(args: {
+  params: ChatCompletionMessageParam[];
+  suffix: string;
+  cacheOptOutIndexes?: Set<number>;
+}): void {
+  const text = sanitizeSurrogates(args.suffix);
+  for (let index = args.params.length - 1; index >= 0; index--) {
+    const param = args.params[index];
+    if (!param || param.role !== "user") {
+      continue;
+    }
+    if (typeof param.content === "string") {
+      param.content = `${param.content}\n\n${text}`;
+    } else if (Array.isArray(param.content)) {
+      param.content = [
+        ...param.content,
+        { type: "text", text } satisfies ChatCompletionContentPartText,
+      ];
+    } else {
+      continue;
+    }
+    // The turn now carries volatile text, so it must not anchor a cache breakpoint.
+    args.cacheOptOutIndexes?.add(index);
+    return;
+  }
 }

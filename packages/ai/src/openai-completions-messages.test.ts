@@ -3,6 +3,7 @@ import { convertMessages } from "./openai-completions-messages.js";
 import type { ProviderContext, ProviderModel } from "./provider-types.js";
 import { resolveOpenAICompletionsCompat } from "./transports/openai-completions-compat.js";
 import type { AssistantMessage, Context, Model } from "./types.js";
+import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "./utils/system-prompt-cache-boundary.js";
 
 const model: Model<"openai-completions"> = {
   id: "test-model",
@@ -131,5 +132,74 @@ describe("convertMessages assistant text replay", () => {
     expect(oversizedId.slice(0, 40).charCodeAt(39)).toBe(0xd83d);
     expect(normalizedAssistantId).toBe(prefix);
     expect(normalizedToolResultId).toBe(prefix);
+  });
+});
+
+describe("convertMessages cache boundary relocation", () => {
+  const contextForSession = (sessionId: string): Context =>
+    ({
+      systemPrompt: `Stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}## Runtime\nRuntime: session=${sessionId}`,
+      messages: [{ role: "user", content: "hi", timestamp: 1 }],
+    }) as unknown as Context;
+
+  it("carries the dynamic suffix on the trailing user turn", () => {
+    const converted = convertMessages(
+      model,
+      contextForSession("alpha"),
+      resolveOpenAICompletionsCompat(model),
+    );
+
+    expect(converted[0]).toEqual({ role: "system", content: "Stable prefix" });
+    expect(converted[1]?.content).toBe("hi\n\n## Runtime\nRuntime: session=alpha");
+  });
+
+  it("keeps the system message byte-identical across sessions", () => {
+    const first = convertMessages(
+      model,
+      contextForSession("alpha"),
+      resolveOpenAICompletionsCompat(model),
+    );
+    const second = convertMessages(
+      model,
+      contextForSession("beta"),
+      resolveOpenAICompletionsCompat(model),
+    );
+
+    // The stable prefix plus the tool schemas that follow it must not fork.
+    expect(first[0]).toEqual(second[0]);
+    expect(first[1]?.content).not.toEqual(second[1]?.content);
+  });
+
+  it("retains the suffix in the system message when no user turn can carry it", () => {
+    const context = {
+      systemPrompt: `Stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic suffix`,
+      messages: [],
+    } as unknown as Context;
+
+    const converted = convertMessages(model, context, resolveOpenAICompletionsCompat(model));
+
+    expect(converted[0]?.content).toBe("Stable prefix\nDynamic suffix");
+  });
+
+  it("leaves the boundary in place when the caller preserves it", () => {
+    const converted = convertMessages(
+      model,
+      contextForSession("alpha"),
+      resolveOpenAICompletionsCompat(model),
+      { preserveSystemPromptCacheBoundary: true },
+    );
+
+    expect(String(converted[0]?.content)).toContain(SYSTEM_PROMPT_CACHE_BOUNDARY.trim());
+    expect(converted[1]?.content).toBe("hi");
+  });
+
+  it("marks the carrying turn as cache opt-out", () => {
+    const cacheOptOutIndexes = new Set<number>();
+
+    convertMessages(model, contextForSession("alpha"), resolveOpenAICompletionsCompat(model), {
+      cacheOptOutIndexes,
+    });
+
+    expect(cacheOptOutIndexes.has(1)).toBe(true);
   });
 });

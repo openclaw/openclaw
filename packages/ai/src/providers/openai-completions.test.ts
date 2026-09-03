@@ -1035,7 +1035,7 @@ describe("OpenAI-compatible completions params", () => {
     expect(capturedRetention).toBe("24h");
   });
 
-  it("strips the internal cache boundary from OpenAI-compatible system prompts", async () => {
+  it("carries the cache-boundary suffix on the trailing user turn for OpenAI-compatible providers", async () => {
     let capturedMessages: unknown;
     const stream = streamOpenAICompletions(
       createModel(32_000),
@@ -1056,10 +1056,18 @@ describe("OpenAI-compatible completions params", () => {
 
     expect(result.stopReason).toBe("error");
     const messages = capturedMessages as Array<{ role: string; content: unknown }>;
+    // The stable prefix must not fork; tool schemas are serialized after it.
     expect(messages[0]).toEqual({
       role: "system",
-      content: "Stable prefix\nDynamic suffix",
+      content: "Stable prefix",
     });
+    // The volatile suffix rides behind the tools on the trailing user turn.
+    expect(messages[1]).toEqual({
+      role: "user",
+      content: "hi\n\nDynamic suffix",
+    });
+    // The internal marker must never reach the provider.
+    expect(JSON.stringify(messages)).not.toContain("OPENCLAW_CACHE_BOUNDARY");
   });
 
   it("splits the cache boundary before applying Anthropic cache control for OpenRouter Anthropic models", async () => {
