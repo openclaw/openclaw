@@ -844,18 +844,22 @@ public struct BoardWidgetGeneratedIdentity: Codable, Sendable {
 public struct BoardGetParams: Codable, Sendable {
     public let sessionkey: String
     public let agentid: String?
+    public let prepareviews: Bool?
 
     public init(
         sessionkey: String,
-        agentid: String? = nil)
+        agentid: String? = nil,
+        prepareviews: Bool? = nil)
     {
         self.sessionkey = sessionkey
         self.agentid = agentid
+        self.prepareviews = prepareviews
     }
 
     private enum CodingKeys: String, CodingKey {
         case sessionkey = "sessionKey"
         case agentid = "agentId"
+        case prepareviews = "prepareViews"
     }
 }
 

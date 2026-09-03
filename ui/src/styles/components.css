@@ -612,6 +612,8 @@ openclaw-session-owner-chip {
   /* Labels never break mid-text; tight clusters wrap whole buttons instead
      (see .settings-row--actions). */
   white-space: nowrap;
+  /* Anchors styled as buttons must not inherit the global link underline. */
+  text-decoration: none;
   transition:
     border-color var(--duration-fast) var(--ease-out),
     background var(--duration-fast) var(--ease-out),

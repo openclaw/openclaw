@@ -4,6 +4,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { registerActivityEnglish } from "../../ui/src/i18n/locales/en-activity.ts";
+import { registerDashboardsEnglish } from "../../ui/src/i18n/locales/en-dashboards.ts";
 import { registerDebugEnglish } from "../../ui/src/i18n/locales/en-debug.ts";
 import { registerDevicesEnglish } from "../../ui/src/i18n/locales/en-devices.ts";
 import { registerMeetingsEnglish } from "../../ui/src/i18n/locales/en-meetings.ts";
@@ -28,6 +29,7 @@ const sourceFiles = [
   "en.ts",
   "en-agents.ts",
   "en-activity.ts",
+  "en-dashboards.ts",
   "en-debug.ts",
   "en-devices.ts",
   "en-meetings.ts",
@@ -49,6 +51,7 @@ export function loadControlUiSourceCatalog(): TranslationMap {
     // Preserve Debug key order while keeping only its title eager.
     { ...en, debug: registerDebugEnglish.catalog.debug },
     registerActivityEnglish.catalog,
+    registerDashboardsEnglish.catalog,
     registerDevicesEnglish.catalog,
     registerMeetingsEnglish.catalog,
     registerMemoryImportEnglish.catalog,

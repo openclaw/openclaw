@@ -309,6 +309,20 @@ describe("board gateway runtime boundaries", () => {
 
   it.each([
     {
+      name: "metadata-only board read before snapshot",
+      run: async () => {
+        const harness = createHarness();
+        const response = await runWithGatewayRootWorkAdmissionForTest(async () => {
+          resetGatewayWorkAdmission();
+          return await harness.invoke("board.get", {
+            sessionKey: "session",
+            prepareViews: false,
+          });
+        });
+        return { response, verify: () => undefined };
+      },
+    },
+    {
       name: "layout update before applyOps",
       run: async () => {
         const harness = createHarness();

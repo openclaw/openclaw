@@ -19,11 +19,17 @@ core feature, owned by the thread, stored with the agent, and they survive
 
 ## Find your dashboards
 
-Open `/dashboards` to browse dashboard-enabled threads as a card gallery. Search
-by thread or author, filter by author, and sort by recent activity or title.
-Select a card to open its owning chat with the dashboard panel expanded. An open
-Dashboards page updates as threads are renamed, archived, or deleted, including
-after a Gateway reconnect.
+Open `/dashboards` to browse dashboard-enabled threads as a card gallery. Each
+card carries a thumbnail drawn from the board's own layout — the widgets on its
+first tab, at their stored sizes and positions, labeled by title — so a dashboard
+is recognizable before it opens. Thumbnails load as cards scroll into view and
+need no extra setup. Search by thread or author, filter by author, and sort by
+last update, creation time, or title. The **View** toggle in the page header
+switches between cards and a compact list with the thumbnail on the right; the
+choice is remembered per browser. Select a card to open its owning chat with the
+dashboard panel expanded, or choose **Open in focus mode** to show only the
+dashboard. An open Dashboards page updates as threads are renamed, archived, or
+deleted, including after a Gateway reconnect.
 If a refresh fails, the page keeps the last loaded dashboards visible with a
 stale-data warning. Choose **Retry** to load the list again.
 

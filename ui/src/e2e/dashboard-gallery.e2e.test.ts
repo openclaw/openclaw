@@ -1,4 +1,5 @@
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -31,7 +32,30 @@ const boardSnapshot = {
   sessionKey: selectedSessionKey,
   revision: 1,
   tabs: [{ tabId: "main", title: "Main", position: 0, chatDock: "right" }],
-  widgets: [],
+  widgets: [
+    {
+      name: "release-readiness",
+      tabId: "main",
+      title: "Release readiness",
+      contentKind: "html",
+      sizeW: 8,
+      sizeH: 4,
+      position: 0,
+      grantState: "none",
+      revision: 1,
+    },
+    {
+      name: "release-trend",
+      tabId: "main",
+      title: "Release trend",
+      contentKind: "html",
+      sizeW: 4,
+      sizeH: 3,
+      position: 1,
+      grantState: "none",
+      revision: 1,
+    },
+  ],
 };
 
 suite.define(() => {
@@ -43,7 +67,7 @@ suite.define(() => {
     });
     const page = await context.newPage();
     try {
-      await installMockGateway(page, {
+      const gateway = await installMockGateway(page, {
         sessionKey: selectedSessionKey,
         featureMethods: ["board.get", "chat.metadata", "chat.startup", "sessions.resolve"],
         methodResponses: {
@@ -78,35 +102,78 @@ suite.define(() => {
         hasText: "Release health",
       });
       await releaseCard.waitFor();
+      await releaseCard.locator(".dashboard-preview svg").waitFor();
       expect(await gallery.locator("[data-dashboard-session]").count()).toBe(6);
       expect(await gallery.getByText("By Mira", { exact: true }).count()).toBe(3);
-      expect(await releaseCard.locator("a").getAttribute("href")).toBe(
+      expect(await releaseCard.locator(".dashboard-card__main").getAttribute("href")).toBe(
         "/chat/main/release-health-12345678?dashboard=expanded",
       );
+      expect(await releaseCard.locator("[data-dashboard-fullscreen]").getAttribute("href")).toBe(
+        "/focus/dashboard/main/release-health-12345678",
+      );
+      const releaseRequests = () =>
+        gateway
+          .getRequests("board.get")
+          .then((requests) =>
+            requests.filter(
+              (request) =>
+                isRecord(request.params) && request.params.sessionKey === selectedSessionKey,
+            ),
+          );
+      expect(await releaseRequests()).toHaveLength(1);
+      expect((await releaseRequests())[0]?.params).toMatchObject({ prepareViews: false });
       if (proofDir) {
         await page.screenshot({ path: path.join(proofDir, "01-gallery.png") });
       }
 
-      await releaseCard.locator("a").click();
+      await gallery.getByRole("button", { name: "List", exact: true }).click();
+      await gallery.locator(".dashboards-list").waitFor();
+      await releaseCard.locator(".dashboard-preview svg").waitFor();
+      expect(await releaseRequests()).toHaveLength(1);
+      if (proofDir) {
+        await page.screenshot({ path: path.join(proofDir, "02-list.png") });
+      }
+
+      await gallery.getByRole("button", { name: "Cards", exact: true }).click();
+      await gallery.locator(".dashboards-cards").waitFor();
+      await gateway.setMethodResponse("board.get", {
+        ...boardSnapshot,
+        revision: 2,
+        widgets: [
+          { ...boardSnapshot.widgets[0], title: "Fresh release readiness", revision: 2 },
+          boardSnapshot.widgets[1],
+        ],
+      });
+      await gateway.emitGatewayEvent("board.changed", {
+        sessionKey: selectedSessionKey,
+        revision: 2,
+      });
+      await releaseCard.getByText("Fresh release readiness", { exact: true }).waitFor();
+      expect(await releaseRequests()).toHaveLength(2);
+      if (proofDir) {
+        await page.screenshot({ path: path.join(proofDir, "03-board-changed.png") });
+      }
+
+      await releaseCard.locator(".dashboard-card__main").click();
       await page.waitForURL(/\/chat\/main\/release-health-12345678\?dashboard=expanded$/u);
       await page.locator(".board-session-surface").waitFor();
       await expect.poll(() => page.locator(".sidebar-region--expanded").count()).toBe(1);
       await expect.poll(() => page.locator(".chat-thread").isHidden()).toBe(true);
       if (proofDir) {
-        await page.screenshot({ path: path.join(proofDir, "02-expanded-dashboard.png") });
+        await page.screenshot({ path: path.join(proofDir, "04-expanded-dashboard.png") });
       }
 
       await page.getByRole("button", { name: "Collapse", exact: true }).click();
       await expect.poll(() => page.locator(".sidebar-region--expanded").count()).toBe(0);
       await page.locator(".chat-thread").waitFor();
       if (proofDir) {
-        await page.screenshot({ path: path.join(proofDir, "03-split-dashboard.png") });
+        await page.screenshot({ path: path.join(proofDir, "05-split-dashboard.png") });
       }
       await page.locator(".side-panel__minimize").click();
       await expect.poll(() => page.locator(".board-session-surface").count()).toBe(0);
       await page.locator(".chat-thread").waitFor();
       if (proofDir) {
-        await page.screenshot({ path: path.join(proofDir, "04-chat-only.png") });
+        await page.screenshot({ path: path.join(proofDir, "06-chat-only.png") });
       }
 
       await page.setViewportSize({ width: 390, height: 844 });
@@ -122,14 +189,14 @@ suite.define(() => {
         .toEqual({ documentWidth: 390, viewportWidth: 390 });
       expect(
         await gallery
-          .locator(".dashboards-grid")
+          .locator(".dashboards-cards")
           .evaluate(
             (element) =>
               getComputedStyle(element).gridTemplateColumns.split(" ").filter(Boolean).length,
           ),
       ).toBe(1);
       if (proofDir) {
-        await page.screenshot({ path: path.join(proofDir, "05-gallery-mobile.png") });
+        await page.screenshot({ path: path.join(proofDir, "07-gallery-mobile.png") });
       }
     } finally {
       await context.close();

@@ -1708,32 +1708,78 @@ async function createChatPickerScenario(
       ? [
           sessionRow("agent:main:dashboard:release-health", "Release health", baseTime - 3_000, {
             boardFace: "dashboard",
+            createdAt: baseTime - 86_400_000,
             createdActor: MOCK_ACTOR_MIRA,
             hasActiveRun: true,
             status: "running",
           }),
           sessionRow("agent:main:dashboard:model-spend", "Model spend", baseTime - 8_000, {
             boardFace: "dashboard",
+            createdAt: baseTime - 7 * 86_400_000,
             createdActor: MOCK_ACTOR_PETER,
           }),
           sessionRow("agent:main:dashboard:support-radar", "Support radar", baseTime - 18_000, {
             boardFace: "dashboard",
+            createdAt: baseTime - 2 * 86_400_000,
             createdActor: MOCK_ACTOR_MIRA,
           }),
           sessionRow("agent:main:dashboard:ci-signal", "CI signal", baseTime - 42_000, {
             boardFace: "dashboard",
+            createdAt: baseTime - 14 * 86_400_000,
             createdActor: MOCK_ACTOR_PETER,
           }),
           sessionRow("agent:main:dashboard:community-pulse", "Community pulse", baseTime - 75_000, {
             boardFace: "dashboard",
+            createdAt: baseTime - 4 * 86_400_000,
             createdActor: MOCK_ACTOR_MIRA,
           }),
           sessionRow("agent:main:dashboard:gateway-fleet", "Gateway fleet", baseTime - 130_000, {
             boardFace: "dashboard",
+            createdAt: baseTime - 30 * 86_400_000,
             createdActor: MOCK_ACTOR_PETER,
           }),
         ]
       : [];
+  const dashboardGalleryWidgetTitles = [
+    "Release readiness",
+    "Daily spend",
+    "Support volume",
+    "CI throughput",
+    "Community growth",
+    "Gateway health",
+  ];
+  const dashboardGalleryBoardCases = dashboardGallerySessions.map((session, index) => ({
+    match: { sessionKey: session.key },
+    response: {
+      sessionKey: session.key,
+      revision: 1,
+      tabs: [{ tabId: "main", title: "Overview", position: 0, chatDock: "right" }],
+      widgets: [
+        {
+          name: "headline",
+          tabId: "main",
+          title: dashboardGalleryWidgetTitles[index] ?? "Dashboard status",
+          contentKind: "html",
+          sizeW: index % 2 === 0 ? 8 : 5,
+          sizeH: 4,
+          position: 0,
+          grantState: "none",
+          revision: 1,
+        },
+        {
+          name: "details",
+          tabId: "main",
+          title: index % 2 === 0 ? "Trend" : "Recent activity",
+          contentKind: "html",
+          sizeW: index % 2 === 0 ? 4 : 7,
+          sizeH: index % 3 === 0 ? 2 : 3,
+          position: 1,
+          grantState: "none",
+          revision: 1,
+        },
+      ],
+    },
+  }));
   const activeGoal = {
     schemaVersion: 1 as const,
     id: "goal-mobile-parity",
@@ -2101,6 +2147,7 @@ async function createChatPickerScenario(
       "environments.list",
       "terminal.open",
       ...(updateFixture ? ["update.hold", "update.run", "update.status"] : []),
+      ...(fixture === "dashboards" ? ["board.get"] : []),
       ...(fixture === "workboard"
         ? [
             "board.get",
@@ -3083,10 +3130,17 @@ async function createChatPickerScenario(
             ...searchPrefixes("claude-sonnet-4-6"),
             ...searchPrefixes("anthropic"),
           ]),
-          ...buildSessionListCases([...sessions, ...archivedSessions], {}, MOCK_SESSION_OWNERS),
+          ...buildSessionListCases(
+            fixture === "dashboards"
+              ? dashboardGallerySessions
+              : [...sessions, ...archivedSessions],
+            {},
+            MOCK_SESSION_OWNERS,
+          ),
         ],
       },
       "sessions.search": { results: [] },
+      ...(fixture === "dashboards" ? { "board.get": { cases: dashboardGalleryBoardCases } } : {}),
       ...(fixture === "workboard" ? workboardMocks.methodResponses : {}),
     },
     models: modelProviders.models,

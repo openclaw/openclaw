@@ -15,24 +15,18 @@ type DashboardsPageElement = HTMLElement & {
   updateComplete: Promise<boolean>;
 };
 
-function result(sessionRow: GatewaySessionRow): SessionsListResult {
+function results(sessions: GatewaySessionRow[]): SessionsListResult {
   return {
     ts: 1,
     path: "(multiple)",
-    count: 1,
+    count: sessions.length,
     defaults: { modelProvider: null, model: null, contextTokens: null },
-    sessions: [sessionRow],
+    sessions,
   };
 }
 
-function results(sessionRows: GatewaySessionRow[]): SessionsListResult {
-  return {
-    ts: 1,
-    path: "(multiple)",
-    count: sessionRows.length,
-    defaults: { modelProvider: null, model: null, contextTokens: null },
-    sessions: sessionRows,
-  };
+function result(sessionRow: GatewaySessionRow): SessionsListResult {
+  return results([sessionRow]);
 }
 
 function row(key: string, displayName: string): GatewaySessionRow {
@@ -55,6 +49,67 @@ function routeData(sessionRow: GatewaySessionRow): DashboardsRouteData {
   };
 }
 
+function connectedContext(
+  request: (method: string, params: unknown) => Promise<unknown>,
+  methods: string[] = ["board.get"],
+  events?: {
+    listener?: Parameters<ApplicationContext["gateway"]["subscribeEvents"]>[0];
+    snapshotListener?: Parameters<ApplicationContext["gateway"]["subscribe"]>[0];
+  },
+): ApplicationContext {
+  return {
+    basePath: "",
+    gateway: {
+      snapshot: {
+        client: { request },
+        phase: "connected",
+        hello: { features: { methods } },
+      },
+      subscribe: (listener: Parameters<ApplicationContext["gateway"]["subscribe"]>[0]) => {
+        if (events) {
+          events.snapshotListener = listener;
+        }
+        return () => {
+          if (events?.snapshotListener === listener) {
+            events.snapshotListener = undefined;
+          }
+        };
+      },
+      subscribeEvents: (
+        listener: Parameters<ApplicationContext["gateway"]["subscribeEvents"]>[0],
+      ) => {
+        if (events) {
+          events.listener = listener;
+        }
+        return () => {
+          if (events?.listener === listener) {
+            events.listener = undefined;
+          }
+        };
+      },
+    },
+    sessions: {
+      listSnapshot: () => ({ result: null, agentId: null, loading: false, error: null }),
+      subscribeList: () => () => undefined,
+      refreshList: vi.fn(async () => undefined),
+    },
+    agentSelection: {
+      state: { selectedId: "main", scopeId: null },
+      subscribe: () => () => undefined,
+    },
+    agents: { state: { agentsList: null } },
+  } as unknown as ApplicationContext;
+}
+
+function mountPage(context: ApplicationContext, data: DashboardsRouteData): DashboardsPageElement {
+  const element = document.createElement("openclaw-dashboards-page") as DashboardsPageElement;
+  element.routeData = data;
+  const provider = createApplicationContextProvider(context);
+  provider.append(element);
+  document.body.append(provider);
+  return element;
+}
+
 describe("DashboardsPage", () => {
   beforeEach(async () => {
     await i18n.setLocale("en");
@@ -62,6 +117,7 @@ describe("DashboardsPage", () => {
 
   afterEach(() => {
     document.body.replaceChildren();
+    localStorage.clear();
     vi.restoreAllMocks();
   });
 
@@ -84,7 +140,11 @@ describe("DashboardsPage", () => {
     const selectionState = { selectedId: "main", scopeId: null as string | null };
     const context = {
       basePath: "",
-      gateway: { snapshot: { client: {}, phase: "connected", hello: null } },
+      gateway: {
+        snapshot: { client: {}, phase: "connected", hello: null },
+        subscribe: () => () => undefined,
+        subscribeEvents: () => () => undefined,
+      },
       sessions: {
         listSnapshot(query: SessionListOptions) {
           return snapshots.get(queryKey(query))!;
@@ -101,11 +161,7 @@ describe("DashboardsPage", () => {
       },
       agents: { state: { agentsList: null } },
     } as unknown as ApplicationContext;
-    const element = document.createElement("openclaw-dashboards-page") as DashboardsPageElement;
-    element.routeData = routeData(row("agent:main:before", "Before"));
-    const provider = createApplicationContextProvider(context);
-    provider.append(element);
-    document.body.append(provider);
+    const element = mountPage(context, routeData(row("agent:main:before", "Before")));
     await element.updateComplete;
 
     expect(subscribeList).toHaveBeenCalledWith(
@@ -194,7 +250,11 @@ describe("DashboardsPage", () => {
     const list = vi.fn(async () => second);
     const context = {
       basePath: "",
-      gateway: { snapshot: { client: {}, phase: "connected", hello: null } },
+      gateway: {
+        snapshot: { client: {}, phase: "connected", hello: null },
+        subscribe: () => () => undefined,
+        subscribeEvents: () => () => undefined,
+      },
       sessions: {
         list,
         listSnapshot: () => snapshot,
@@ -207,17 +267,13 @@ describe("DashboardsPage", () => {
       },
       agents: { state: { agentsList: null } },
     } as unknown as ApplicationContext;
-    const element = document.createElement("openclaw-dashboards-page") as DashboardsPageElement;
-    element.routeData = {
+    const element = mountPage(context, {
       result: first,
       error: null,
       basePath: "",
       fallbackAgentId: "main",
       mainKey: "main",
-    };
-    const provider = createApplicationContextProvider(context);
-    provider.append(element);
-    document.body.append(provider);
+    });
 
     await vi.waitFor(() =>
       expect(element.querySelectorAll("[data-dashboard-session]")).toHaveLength(2),
@@ -300,5 +356,195 @@ describe("DashboardsPage", () => {
         heading.textContent?.trim(),
       ),
     ).toEqual(["Alpha signals", "Bravo health", "Zulu monitor"]);
+  });
+
+  it("remembers the list view per browser", async () => {
+    const context = connectedContext(async () => null, []);
+    const element = mountPage(context, routeData(row("agent:main:dashboard:one", "One")));
+    await element.updateComplete;
+    expect(element.querySelector(".dashboard-card")).not.toBeNull();
+
+    element.querySelector<HTMLButtonElement>('[data-dashboards-view="list"]')?.click();
+    await element.updateComplete;
+    expect(element.querySelector(".dashboard-row")).not.toBeNull();
+    expect(element.querySelector(".dashboard-card")).toBeNull();
+    expect(localStorage.getItem("openclaw:dashboards:view")).toBe("list");
+
+    element.remove();
+    const revisited = mountPage(context, routeData(row("agent:main:dashboard:one", "One")));
+    await revisited.updateComplete;
+    expect(revisited.querySelector(".dashboard-row")).not.toBeNull();
+    expect(
+      revisited.querySelector('[data-dashboards-view="list"]')?.getAttribute("aria-pressed"),
+    ).toBe("true");
+  });
+
+  it("fetches each dashboard board once and reuses it across view changes", async () => {
+    const board = {
+      sessionKey: "agent:main:dashboard:one",
+      revision: 1,
+      tabs: [{ tabId: "main", title: "Main", position: 0, chatDock: "hidden" }],
+      widgets: [
+        {
+          name: "hero",
+          tabId: "main",
+          title: "Hero",
+          contentKind: "html",
+          sizeW: 12,
+          sizeH: 3,
+          position: 0,
+          grantState: "none",
+          revision: 1,
+        },
+      ],
+    };
+    const request = vi.fn(async () => board);
+    const context = connectedContext(request);
+    const element = mountPage(context, {
+      ...routeData({ ...row("agent:main:dashboard:one", "One"), agentId: "main" }),
+    });
+
+    await vi.waitFor(() => expect(element.querySelectorAll("svg g")).toHaveLength(1));
+    expect(request).toHaveBeenCalledWith("board.get", {
+      sessionKey: "agent:main:dashboard:one",
+      agentId: "main",
+      prepareViews: false,
+    });
+
+    element.querySelector<HTMLButtonElement>('[data-dashboards-view="list"]')?.click();
+    await element.updateComplete;
+    await vi.waitFor(() =>
+      expect(element.querySelectorAll(".dashboard-row svg g")).toHaveLength(1),
+    );
+    expect(request).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries a transient preview failure instead of caching it", async () => {
+    const board = {
+      sessionKey: "agent:main:dashboard:one",
+      revision: 1,
+      tabs: [{ tabId: "main", title: "Main", position: 0, chatDock: "hidden" }],
+      widgets: [
+        {
+          name: "recovered",
+          tabId: "main",
+          title: "Recovered",
+          contentKind: "html",
+          sizeW: 12,
+          sizeH: 3,
+          position: 0,
+          grantState: "none",
+          revision: 1,
+        },
+      ],
+    };
+    const request = vi
+      .fn<(method: string, params: unknown) => Promise<unknown>>()
+      .mockRejectedValueOnce(new Error("disconnected"))
+      .mockResolvedValue(board);
+    const element = mountPage(
+      connectedContext(request),
+      routeData(row("agent:main:dashboard:one", "One")),
+    );
+
+    await vi.waitFor(() => expect(element.textContent).toContain("Preview unavailable"));
+    element.querySelector<HTMLButtonElement>('[data-dashboards-view="list"]')?.click();
+    await vi.waitFor(() => expect(element.textContent).toContain("Recovered"));
+    expect(request).toHaveBeenCalledTimes(2);
+  });
+
+  it("clears preview snapshots across a same-client reconnect", async () => {
+    const firstWidget = {
+      name: "status",
+      tabId: "main",
+      title: "Before reconnect",
+      contentKind: "html",
+      sizeW: 12,
+      sizeH: 3,
+      position: 0,
+      grantState: "none",
+      revision: 1,
+    };
+    const firstBoard = {
+      sessionKey: "agent:main:dashboard:one",
+      revision: 1,
+      tabs: [{ tabId: "main", title: "Main", position: 0, chatDock: "hidden" }],
+      widgets: [firstWidget],
+    };
+    const secondBoard = {
+      ...firstBoard,
+      revision: 2,
+      widgets: [{ ...firstWidget, title: "After reconnect", revision: 2 }],
+    };
+    let currentBoard = firstBoard;
+    const request = vi.fn(async () => currentBoard);
+    const events: {
+      snapshotListener?: Parameters<ApplicationContext["gateway"]["subscribe"]>[0];
+    } = {};
+    const context = connectedContext(request, ["board.get"], events);
+    const element = mountPage(context, routeData(row("agent:main:dashboard:one", "One")));
+
+    await vi.waitFor(() => expect(element.textContent).toContain("Before reconnect"));
+    currentBoard = secondBoard;
+    context.gateway.snapshot.phase = "reconnecting";
+    context.gateway.snapshot.hello = null;
+    events.snapshotListener?.(context.gateway.snapshot);
+    context.gateway.snapshot.phase = "connected";
+    context.gateway.snapshot.hello = { features: { methods: ["board.get"] } } as never;
+    events.snapshotListener?.(context.gateway.snapshot);
+    await vi.waitFor(() => expect(element.textContent).toContain("After reconnect"));
+    expect(request).toHaveBeenCalledTimes(2);
+  });
+
+  it("refreshes a global board preview from its observer-scoped board.changed event", async () => {
+    const events: {
+      listener?: Parameters<ApplicationContext["gateway"]["subscribeEvents"]>[0];
+      snapshotListener?: Parameters<ApplicationContext["gateway"]["subscribe"]>[0];
+    } = {};
+    const firstWidget = {
+      name: "status",
+      tabId: "main",
+      title: "Old layout",
+      contentKind: "html",
+      sizeW: 12,
+      sizeH: 3,
+      position: 0,
+      grantState: "none",
+      revision: 1,
+    };
+    const firstBoard = {
+      sessionKey: "agent:work:global",
+      revision: 1,
+      tabs: [{ tabId: "main", title: "Main", position: 0, chatDock: "hidden" }],
+      widgets: [firstWidget],
+    };
+    const secondBoard = {
+      ...firstBoard,
+      revision: 2,
+      widgets: [{ ...firstWidget, title: "Fresh layout", revision: 2 }],
+    };
+    const request = vi.fn().mockResolvedValueOnce(firstBoard).mockResolvedValue(secondBoard);
+    const element = mountPage(
+      connectedContext(request, ["board.get"], events),
+      routeData({ ...row("global", "Global"), agentId: "work" }),
+    );
+
+    await vi.waitFor(() => expect(element.textContent).toContain("Old layout"));
+    events.listener?.({
+      type: "event",
+      event: "board.changed",
+      payload: { sessionKey: "agent:work:global", revision: 2 },
+    });
+    await vi.waitFor(() => expect(element.textContent).toContain("Fresh layout"));
+    expect(request).toHaveBeenCalledTimes(2);
+  });
+
+  it("falls back to a placeholder when the gateway does not serve boards", async () => {
+    const request = vi.fn(async () => null);
+    const context = connectedContext(request, ["sessions.list"]);
+    const element = mountPage(context, routeData(row("agent:main:dashboard:one", "One")));
+
+    await vi.waitFor(() => expect(element.textContent).toContain("Preview unavailable"));
+    expect(request).not.toHaveBeenCalled();
   });
 });

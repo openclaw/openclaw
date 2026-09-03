@@ -206,12 +206,9 @@ describe("board gateway methods", () => {
     );
   });
 
-  it("starts the shared sandbox host only when an admitted widget needs it", async () => {
+  it("starts the shared sandbox host only when prepared view metadata needs it", async () => {
     let sandboxPort: number | undefined;
-    const ensureSandboxHostPort = vi.fn(async () => {
-      sandboxPort = 18790;
-      return sandboxPort;
-    });
+    const ensureSandboxHostPort = vi.fn(async () => (sandboxPort = 18790));
     const { invoke } = createHarness(undefined, undefined, undefined, {
       getMcpAppSandboxPort: () => sandboxPort,
       ensureSandboxHostPort,
@@ -221,6 +218,14 @@ describe("board gateway methods", () => {
       name: "status",
       content: { kind: "html", html: "<p>ok</p>" },
     });
+
+    const metadataResponse = await invoke("board.get", {
+      sessionKey: "agent:main:main",
+      prepareViews: false,
+    });
+    const metadataSnapshot = metadataResponse.mock.calls[0]?.[1] as BoardSnapshot;
+    expect(metadataSnapshot.widgets[0]).not.toHaveProperty("frameUrl");
+    expect(ensureSandboxHostPort).not.toHaveBeenCalled();
 
     const response = await invoke("board.get", { sessionKey: "agent:main:main" });
     const snapshot = response.mock.calls[0]?.[1] as BoardSnapshot;

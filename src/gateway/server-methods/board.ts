@@ -145,6 +145,16 @@ export function createBoardHandlers(
           if (!boardSession) {
             return;
           }
+          authority.assertActive();
+          // Metadata-only consumers must not mint view tickets or start the
+          // sandbox host merely to inspect stored board layout.
+          if (boardParams.prepareViews === false) {
+            respond(
+              true,
+              projectBoardSnapshot(store.getSnapshot(boardSession), boardSession.agentId),
+            );
+            return;
+          }
           const { snapshot, htmlViewMetadata } =
             store.getSnapshotWithHtmlViewMetadata(boardSession);
           let sandboxPort = context.getMcpAppSandboxPort?.();

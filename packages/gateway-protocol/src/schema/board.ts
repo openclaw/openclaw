@@ -165,6 +165,7 @@ export type BoardOp = Static<typeof BoardOpSchema>;
 export const BoardGetParamsSchema = closedObject({
   sessionKey: NonEmptyString,
   agentId: Type.Optional(NonEmptyString),
+  prepareViews: Type.Optional(Type.Boolean()),
 });
 export type BoardGetParams = Static<typeof BoardGetParamsSchema>;
 
