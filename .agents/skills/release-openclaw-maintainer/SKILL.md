@@ -352,8 +352,9 @@ complete until `main` carries the actual shipped release state.
    shipped version and changelog after stable publication, then binds immutable
    evidence to the published tag. App assets may still be pending; record
    `appPlatforms` states for macOS, Windows, and Android, with aggregate
-   `apps: attached` only when every canonical platform asset contract is
-   complete. Otherwise record `apps: pending`. Require `appcast: verified`
+   `apps: attached` only when every canonical platform asset contract has exact
+   names and lowercase `sha256:<64hex>` digests. Missing or malformed digests
+   remain pending. Require `appcast: verified`
    only once the complete macOS zip/DMG/dSYM set is attached; record
    `appcast: pending` otherwise. Later canonical app attachments do not
    invalidate the immutable closeout snapshot. Do not declare stable complete
@@ -1148,8 +1149,9 @@ node --import tsx scripts/openclaw-npm-postpublish-verify.ts <published-version>
 22. Wait for npm postpublish verification, Docker publication, dependency and
     release evidence upload, and GitHub finalization. App readiness never holds
     this gate. Optional Windows promotion starts afterward as a detached child;
-    Android approval/build/publication remains independent. Report app failures
-    and recover only the failed platform. For a failed required publish stage,
+    Android publication is dispatched after core npm succeeds and may finish
+    after GitHub finalization. Report app failures and recover only the failed
+    platform. For a failed required publish stage,
     keep immutable child evidence and use the standalone recovery probe:
     `node --import tsx scripts/openclaw-npm-postpublish-verify.ts <published-version>`.
     For a failed parent after successful children, run
