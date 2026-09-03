@@ -189,7 +189,7 @@ describe("convertMessages cache boundary relocation", () => {
       { preserveSystemPromptCacheBoundary: true },
     );
 
-    expect(String(converted[0]?.content)).toContain(SYSTEM_PROMPT_CACHE_BOUNDARY.trim());
+    expect(converted[0]?.content).toContain(SYSTEM_PROMPT_CACHE_BOUNDARY.trim());
     expect(converted[1]?.content).toBe("hi");
   });
 
