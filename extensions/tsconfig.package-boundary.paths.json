@@ -476,9 +476,6 @@
       "openclaw/plugin-sdk/provider-catalog-shared": [
         "../packages/plugin-sdk/dist/src/plugin-sdk/provider-catalog-shared.d.ts"
       ],
-      "openclaw/plugin-sdk/provider-entry": [
-        "../packages/plugin-sdk/dist/src/plugin-sdk/provider-entry.d.ts"
-      ],
       "openclaw/plugin-sdk/provider-env-vars": [
         "../packages/plugin-sdk/dist/src/plugin-sdk/provider-env-vars.d.ts"
       ],

@@ -639,76 +639,59 @@ function writeProviderPluginScaffold(params: { rootDir: string; id: string; name
   const noteMessageLiteral = jsStringLiteral(
     `Replace https://api.example.com/v1 with your ${params.name} API base URL.`,
   );
-  const indexSource = `import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
-import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth";
+  const indexSource = `import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
 
 const PLUGIN_ID = ${idLiteral};
 const PROVIDER_ID = PLUGIN_ID;
 const DEFAULT_MODEL_ID = ${defaultModelIdLiteral};
 const DEFAULT_MODEL_REF = ${defaultModelRefLiteral};
 
-export default definePluginEntry({
+export default defineSingleProviderPluginEntry({
   id: PLUGIN_ID,
   name: ${nameLiteral},
   description: ${descriptionLiteral},
-  register(api) {
-    api.registerProvider({
-      id: PROVIDER_ID,
-      label: ${nameLiteral},
-      docsPath: "/providers/${params.id}",
-      envVars: [${envVarLiteral}],
-      auth: [
-        createProviderApiKeyAuthMethod({
-          providerId: PROVIDER_ID,
-          methodId: "api-key",
-          label: ${apiKeyLabelLiteral},
-          hint: "OpenAI-compatible API endpoint",
-          optionKey: ${optionKeyLiteral},
-          flagName: ${flagNameLiteral},
-          envVar: ${envVarLiteral},
-          promptMessage: ${promptMessageLiteral},
-          defaultModel: DEFAULT_MODEL_REF,
-          expectedProviders: [PROVIDER_ID],
-          noteTitle: ${nameLiteral},
-          noteMessage: ${noteMessageLiteral},
-        }),
-      ],
-      catalog: {
-        order: "simple",
-        run: async (ctx) => {
-          const apiKey = ctx.resolveProviderApiKey(PROVIDER_ID).apiKey;
-          if (!apiKey) {
-            return null;
-          }
-          const configuredProvider = Object.entries(ctx.config.models?.providers ?? {}).find(
-            ([providerId]) => providerId.trim().toLowerCase() === PROVIDER_ID.toLowerCase(),
-          )?.[1];
-          return {
-            provider: {
-              api: "openai-completions",
-              models: [
-                {
-                  id: DEFAULT_MODEL_ID,
-                  name: "Example Chat",
-                  reasoning: false,
-                  input: ["text"],
-                  cost: {
-                    input: 0,
-                    output: 0,
-                    cacheRead: 0,
-                    cacheWrite: 0,
-                  },
-                  contextWindow: 128000,
-                  maxTokens: 8192,
-                },
-              ],
-              apiKey,
-              baseUrl: configuredProvider?.baseUrl?.trim() || "https://api.example.com/v1",
-            },
-          };
-        },
+  provider: {
+    id: PROVIDER_ID,
+    label: ${nameLiteral},
+    docsPath: "/providers/${params.id}",
+    envVars: [${envVarLiteral}],
+    auth: [
+      {
+        methodId: "api-key",
+        label: ${apiKeyLabelLiteral},
+        hint: "OpenAI-compatible API endpoint",
+        optionKey: ${optionKeyLiteral},
+        flagName: ${flagNameLiteral},
+        envVar: ${envVarLiteral},
+        promptMessage: ${promptMessageLiteral},
+        defaultModel: DEFAULT_MODEL_REF,
+        noteTitle: ${nameLiteral},
+        noteMessage: ${noteMessageLiteral},
       },
-    });
+    ],
+    catalog: {
+      allowExplicitBaseUrl: true,
+      buildProvider: () => ({
+        api: "openai-completions",
+        baseUrl: "https://api.example.com/v1",
+        models: [
+          {
+            id: DEFAULT_MODEL_ID,
+            name: "Example Chat",
+            reasoning: false,
+            input: ["text"],
+            cost: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+            },
+            contextWindow: 128000,
+            maxTokens: 8192,
+          },
+        ],
+      }),
+    },
   },
 });
 `;
@@ -723,6 +706,7 @@ describe(${idLiteral}, () => {
       registerProvider(provider: ProviderPlugin) {
         providers.push(provider);
       },
+      registerModelCatalogProvider() {},
     } as Partial<OpenClawPluginApi>;
 
     entry.register(api as OpenClawPluginApi);

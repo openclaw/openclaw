@@ -1902,6 +1902,20 @@ function runControlUiI18nSourceFixture(options: {
 }
 
 describe("ci workflow guards", () => {
+  it("keeps provider scaffold validation on its documented build budget", () => {
+    const workflow = parse(
+      readFileSync(".github/workflows/plugin-init-scaffold-validation.yml", "utf8"),
+    );
+    const job = workflow.jobs["validate-provider-scaffold"];
+    const validation = job.steps.find(
+      (step: WorkflowStep) => step.name === "Generate and validate provider scaffold",
+    );
+
+    expect(job["runs-on"]).toContain("blacksmith-16vcpu-ubuntu-2404");
+    expect(validation.env.NODE_OPTIONS).toBe("--max-old-space-size=16384");
+    expect(validation.run).toBe("pnpm test:plugins:init-provider-scaffold");
+  });
+
   it("isolates mutations between workflow fixtures", () => {
     const workflow = readCiWorkflow();
     const expected = structuredClone(workflow);

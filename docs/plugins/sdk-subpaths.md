@@ -47,7 +47,7 @@ For the plugin authoring guide, see [Plugin SDK overview](/plugins/sdk-overview)
 | ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `plugin-sdk/plugin-entry`           | `definePluginEntry`                                                                                                                                                                                     |
 | `plugin-sdk/core`                   | `defineChannelPluginEntry`, `createChatChannelPlugin`, `createChannelPluginBase`, `defineSetupPluginEntry`, `buildChannelConfigSchema`, `buildJsonChannelConfigSchema`, `resolveTailscalePublishedHost` |
-| `plugin-sdk/provider-entry`         | Private-local after July 2026; `defineSingleProviderPluginEntry`                                                                                                                                        |
+| `plugin-sdk/provider-entry`         | `defineSingleProviderPluginEntry` for one-provider API-key/catalog plugins                                                                                                                              |
 | `plugin-sdk/migration`              | Private-local after July 2026; Migration provider item helpers such as `createMigrationItem`, reason constants, item status markers, redaction helpers, and `summarizeMigrationItems`                   |
 | `plugin-sdk/migration-runtime`      | Private-local after July 2026; Runtime migration helpers such as `copyMigrationFileItem`, `resolvePlannedMigrationTargets`, `withCachedMigrationConfigRuntime`, and `writeMigrationReport`              |
 | `plugin-sdk/health`                 | Doctor health-check registration, detection, repair, selection, severity, and finding types for bundled health consumers                                                                                |
@@ -157,7 +157,7 @@ runtime splinters have been removed; bundled-only helpers are private-local.
   <Accordion title="Provider subpaths">
     | Subpath | Key exports |
     | --- | --- |
-    | `plugin-sdk/provider-entry` | Private-local after July 2026; `defineSingleProviderPluginEntry` |
+    | `plugin-sdk/provider-entry` | `defineSingleProviderPluginEntry` for one-provider API-key/catalog plugins |
     | `plugin-sdk/provider-setup` | Private-local after July 2026; Curated local/self-hosted provider setup helpers |
     | `plugin-sdk/cli-backend` | Private-local after July 2026; CLI backend defaults + watchdog constants |
     | `plugin-sdk/provider-auth-runtime` | Private-local after July 2026; provider auth runtime helpers including `startProviderOAuthLoopbackCallbackServer`, token exchange, auth persistence, and API-key resolution |

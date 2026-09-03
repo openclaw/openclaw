@@ -71,6 +71,16 @@ lanes serially. The job is part of `openclaw/ci-gate`. It adds at
 most one runner registration during an affected pull-request window and adds no
 registrations for unrelated pull requests.
 
+The standalone provider-scaffold validator builds the complete candidate
+package and Plugin SDK declarations, installs those packed artifacts into a
+fresh generated plugin, and runs that plugin's build and tests. Trusted
+same-repository runs use one 16-vCPU Blacksmith runner and a 16-GiB Node heap so
+the declaration build is not constrained by the ordinary 4-vCPU job's memory
+envelope. Forks, retries, and the explicit GitHub backend retain the hosted
+runner route. The workflow guard test owns both the runner class and heap value;
+changes require updating this policy and revalidating the end-to-end scaffold
+lifecycle.
+
 Standalone Periphery workflows enforce zero dead-code findings for the iOS and macOS apps. The shared OpenClawKit workflow scans both consumers in parallel and reports a declaration only when Periphery emits the same Swift USR from both builds. Its generated `OpenClawProtocol/GatewayModels.swift` schema contract is retained as generator-owned code rather than treated as app-local dead code.
 
 All four scans use `scripts/install-periphery.sh` to install the checksum-pinned Periphery 3.8.0 OSS release, including its adjacent `libIndexStore.dylib`, in a dedicated runner-temporary directory. The installer rejects download, checksum, and version failures without falling back to Homebrew. Installer changes select all three native workflows.

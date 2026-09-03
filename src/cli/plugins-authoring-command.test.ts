@@ -825,10 +825,14 @@ describe("plugin authoring commands", () => {
     });
 
     const indexSource = fs.readFileSync(path.join(projectDir, "src/index.ts"), "utf8");
-    expect(indexSource).toContain("definePluginEntry");
-    expect(indexSource).toContain("api.registerProvider");
-    for (const [, subpath] of indexSource.matchAll(/from "openclaw\/plugin-sdk\/([^"]+)"/g)) {
+    expect(indexSource).toContain("defineSingleProviderPluginEntry");
+    expect(indexSource).not.toContain("resolveProviderApiKey");
+    const hostPackage = JSON.parse(
+      fs.readFileSync(new URL("../../package.json", import.meta.url), "utf8"),
+    ) as { exports: Record<string, { types?: string }> };
+    for (const [, subpath] of indexSource.matchAll(/from "openclaw\/plugin-sdk\/([^"]+)"/gu)) {
       expect(publicPluginSdkSubpaths).toContain(subpath);
+      expect(hostPackage.exports[`./plugin-sdk/${subpath}`], subpath).toHaveProperty("types");
     }
 
     expect(fs.readFileSync(path.join(projectDir, "src/index.test.ts"), "utf8")).toContain(

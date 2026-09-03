@@ -10,11 +10,11 @@ import type {
   ProviderNormalizeResolvedModelContext,
   ProviderRuntimeModel,
 } from "openclaw/plugin-sdk/plugin-entry";
+import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
 import {
   buildManifestModelProviderConfig,
   type ProviderCatalogResult,
 } from "openclaw/plugin-sdk/provider-catalog-shared";
-import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-entry";
 import {
   buildProviderReplayFamilyHooks,
   cloneFirstTemplateModel,

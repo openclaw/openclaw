@@ -475,7 +475,7 @@ catalog, API-key auth, and dynamic model resolution.
     transport. `output` rewrites assistant text deltas and final text before
     OpenClaw parses its own control markers or channel delivery.
 
-    For bundled providers that only register one text provider with API-key
+    For provider plugins that only register one text provider with API-key
     auth plus a single catalog-backed runtime, prefer the narrower
     `defineSingleProviderPluginEntry(...)` helper:
 
