@@ -11,31 +11,23 @@ import {
 } from "../../daemon/schtasks-runtime.js";
 import { ScheduledTaskAutoStartRecoveryError } from "../../daemon/schtasks-update-recovery.js";
 import {
-  resumeScheduledTaskAutoStartAfterUpdate,
-  suspendScheduledTaskAutoStartForUpdate,
-} from "../../daemon/schtasks.js";
-import {
   resolveManagedGatewayServiceCommand,
   type GatewayServiceState,
 } from "../../daemon/service-types.js";
 import { readGatewayServiceState, resolveGatewayService } from "../../daemon/service.js";
+import { renderSystemdErrorHints } from "../../daemon/systemd-hints.js";
 import { resolveSystemdServiceName } from "../../daemon/systemd-service-files.js";
 import { sha256Hex } from "../../infra/crypto-digest.js";
 import { readActiveGatewayLockIdentity } from "../../infra/gateway-lock.js";
 import { probePortUsage } from "../../infra/ports-probe.js";
-import { finishUpdateRun, recordUpdateRunPhase } from "../../infra/update-run-ledger.js";
+import { recordUpdateRunPhase } from "../../infra/update-run-ledger.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
 import { defaultRuntime } from "../../runtime.js";
 import {
   renderRestartDiagnostics,
   waitForGatewayHealthyRestart,
 } from "../daemon-cli/restart-health.js";
-import {
-  registerSignalExitBarrier,
-  registerSignalExitGate,
-  waitForSignalExitBarriers,
-} from "../signal-exit-barrier.js";
-import { UpdatePreMutationError, type UpdateCommandOptions } from "./shared.js";
+import { UpdateCommandAbort, UpdatePreMutationError, type UpdateCommandOptions } from "./shared.js";
 import { gatewayAncestryBlockMessage } from "./update-command-handoff.js";
 import { runUpdatedInstallGatewayCommand } from "./update-command-service-command.js";
 import {
@@ -45,6 +37,11 @@ import {
   resolveGatewayServiceManagementBlockMessageForUpdate,
   resolveUpdatedGatewayRestartPort,
 } from "./update-command-service-plan.js";
+import {
+  abortWindowsTaskUpdateIfInterrupted,
+  maybeSuspendWindowsTaskAutoStartForUpdate,
+  type WindowsTaskAutoStartRecovery,
+} from "./update-command-windows-task-recovery.js";
 
 const GATEWAY_SERVICE_INSPECTION_UNAVAILABLE_MESSAGE =
   "Gateway service management skipped: inspection is unavailable. Run `openclaw gateway status --deep` and restart the gateway manually when service access is restored.";
@@ -67,6 +64,8 @@ export type PreManagedServiceStop = {
   serviceMutationSkipMessage?: string;
   serviceUpdateVerdict?: ManagedGatewayUpdateVerdict;
   blockMessage?: string;
+  /** Classified service-manager repair hints behind an unavailable inspection; Doctor appends them to its own refusal. */
+  serviceInspectionHints?: string[];
   serviceEnv?: NodeJS.ProcessEnv;
   serviceDefinitionEnv?: NodeJS.ProcessEnv;
   windowsTaskAutoStartRecovery?: WindowsTaskAutoStartRecovery;
@@ -226,177 +225,13 @@ export async function revalidateManagedGatewayServiceAfterUpdate(params: {
     : inspection;
 }
 
-type WindowsTaskAutoStartRecovery = {
-  beginMutation: () => void;
-  restore: (restartSafe?: boolean) => Promise<void>;
-  complete: (restartSafe?: boolean) => void;
-  interrupted: () => boolean;
-};
-
 export type UpdateCommandRecoveryState = {
   windowsTaskAutoStartRecovery?: WindowsTaskAutoStartRecovery;
   triageTarget: import("./update-command-triage.js").UpdateTriageTarget;
 };
 
-export class UpdateCommandAbort extends Error {
-  constructor() {
-    super("openclaw-update-abort");
-    this.name = "UpdateCommandAbort";
-  }
-}
-
 function serviceControlStdoutForMode(jsonMode: boolean): NodeJS.WritableStream {
   return jsonMode ? JSON_MODE_SERVICE_STDOUT : process.stdout;
-}
-
-async function maybeSuspendWindowsTaskAutoStartForUpdate(params: {
-  serviceEnv: NodeJS.ProcessEnv | undefined;
-  assertCurrentService?: () => Promise<void>;
-  updateRun?: UpdateCommandOptions["run"];
-}): Promise<WindowsTaskAutoStartRecovery | undefined> {
-  const { serviceEnv, assertCurrentService, updateRun } = params;
-  if (process.platform !== "win32" || !serviceEnv) {
-    return undefined;
-  }
-  let restorePromise: Promise<void> | undefined;
-  let restorationFailed = false;
-  let restoreAllowed = true;
-  let unregisterSignalExitBarrier = () => {};
-  let finishUpdate: (() => void) | undefined;
-  let interrupted = false;
-  const updateFinished = new Promise<void>((resolve) => {
-    finishUpdate = resolve;
-  });
-  const unregisterSignalExitGate = registerSignalExitGate(updateFinished);
-  // Cancellation can restore the task before mutation. Once lifecycle work
-  // starts, only an explicit safe result may re-enable persistent autostart.
-  const onSignal = (exitCode: number) => {
-    interrupted = true;
-    void waitForSignalExitBarriers()
-      .catch((err: unknown) => {
-        defaultRuntime.error(`Failed to complete update shutdown cleanup: ${String(err)}`);
-      })
-      .finally(() => {
-        process.exit(exitCode);
-      });
-  };
-  const onSigint = () => onSignal(130);
-  const onSigterm = () => onSignal(143);
-  const onSigbreak = () => onSignal(130);
-  const removeSignalHandlers = () => {
-    process.off("SIGINT", onSigint);
-    process.off("SIGTERM", onSigterm);
-    process.off("SIGBREAK", onSigbreak);
-    unregisterSignalExitBarrier();
-  };
-  const complete = (restartSafe = true) => {
-    try {
-      // Native preparation may abort before returning its recovery handle.
-      // Persist that outcome before releasing the signal's process-exit gate.
-      if (finishUpdate && interrupted && updateRun && (restoreAllowed || restorationFailed)) {
-        const failed = restorationFailed || !restartSafe;
-        finishUpdateRun(
-          updateRun.runId,
-          {
-            status: failed ? "failed" : "skipped",
-            reason: restorationFailed
-              ? "windows-task-autostart-restore-failed"
-              : failed
-                ? "update-failed"
-                : "cancelled",
-          },
-          { env: updateRun.env },
-        );
-      }
-    } finally {
-      if (!restartSafe) {
-        // Re-enabling a rejected installation would let a login trigger bypass
-        // the updater's unsafe-stop decision after this process has exited.
-        restoreAllowed = false;
-        removeSignalHandlers();
-      }
-      finishUpdate?.();
-      finishUpdate = undefined;
-      unregisterSignalExitGate();
-    }
-  };
-  const restore = (restartSafe?: boolean) => {
-    // Finalization has already reported this lifecycle's outcome. A retained
-    // cleanup handle cannot reopen it or replay its settled restoration error.
-    if (!finishUpdate) {
-      return Promise.resolve();
-    }
-    if (restartSafe === true) {
-      restoreAllowed = true;
-    }
-    restorePromise ??= suspensionPromise
-      .then(async (suspended) => {
-        if (suspended && restoreAllowed) {
-          // Enabling a replaced task would activate an owner this operation never
-          // stopped. Revalidate even on failure and signal recovery paths.
-          await assertCurrentService?.();
-          await resumeScheduledTaskAutoStartAfterUpdate(serviceEnv);
-        }
-      })
-      .catch((error: unknown) => {
-        restorationFailed = true;
-        throw error;
-      })
-      .finally(removeSignalHandlers);
-    return restorePromise;
-  };
-  process.on("SIGINT", onSigint);
-  process.on("SIGTERM", onSigterm);
-  process.on("SIGBREAK", onSigbreak);
-  unregisterSignalExitBarrier = registerSignalExitBarrier(restore);
-  // Arm recovery before starting the persistent state change. A signal arriving
-  // while schtasks is still returning waits for that result before restoring.
-  const suspensionPromise = suspendScheduledTaskAutoStartForUpdate(serviceEnv);
-  const recovery: WindowsTaskAutoStartRecovery = {
-    beginMutation: () => {
-      // Async preflight may outlive a signal or settled recovery. Admit mutation
-      // only while this owner can still keep native autostart suspended.
-      if (interrupted || !finishUpdate) {
-        throw new UpdateCommandAbort();
-      }
-      restoreAllowed = false;
-    },
-    restore,
-    complete,
-    interrupted: () => interrupted,
-  };
-  let suspended: boolean;
-  try {
-    suspended = await suspensionPromise;
-  } catch (err) {
-    await recovery.restore().catch(() => undefined);
-    recovery.complete(!(err instanceof ScheduledTaskAutoStartRecoveryError));
-    throw err;
-  }
-  await abortWindowsTaskUpdateIfInterrupted(recovery);
-  if (!suspended) {
-    try {
-      await recovery.restore();
-    } finally {
-      recovery.complete();
-    }
-    return undefined;
-  }
-  return recovery;
-}
-
-async function abortWindowsTaskUpdateIfInterrupted(
-  recovery: WindowsTaskAutoStartRecovery,
-): Promise<void> {
-  if (!recovery.interrupted()) {
-    return;
-  }
-  try {
-    await recovery.restore();
-  } finally {
-    recovery.complete();
-  }
-  throw new UpdateCommandAbort();
 }
 
 export async function maybeResumeWindowsTaskAutoStartAfterPackageUpdate(
@@ -424,17 +259,25 @@ export async function maybeStopManagedServiceBeforeMutableUpdate(params: {
   timeoutMs?: number;
 }): Promise<PreManagedServiceStop> {
   const uninspected = { stopped: false, inspected: false, runtimeInspected: false, running: false };
+  // Only the classified systemd family reaches operator text; raw inspection
+  // errors stay out of update output, which chat-triggered updates relay verbatim.
   const markInspectionUnavailable = (
     base: PreManagedServiceStop,
-    message: string,
-  ): PreManagedServiceStop =>
-    params.shouldRestart
-      ? {
-          ...base,
-          serviceMutationAllowed: false,
-          blockMessage: GATEWAY_SERVICE_INSPECTION_BLOCK_MESSAGE,
-        }
-      : { ...base, serviceMutationAllowed: false, serviceMutationSkipMessage: message };
+    hints: string[] = [],
+  ): PreManagedServiceStop => {
+    const policy = params.shouldRestart
+      ? GATEWAY_SERVICE_INSPECTION_BLOCK_MESSAGE
+      : GATEWAY_SERVICE_INSPECTION_UNAVAILABLE_MESSAGE;
+    const message = [policy, ...hints].join("\n");
+    return {
+      ...base,
+      serviceMutationAllowed: false,
+      ...(hints.length > 0 ? { serviceInspectionHints: hints } : {}),
+      ...(params.shouldRestart
+        ? { blockMessage: message }
+        : { serviceMutationSkipMessage: message }),
+    };
+  };
   const serviceMutationSkipMessage = resolveGatewayServiceManagementBlockMessageForUpdate(
     process.env,
   );
@@ -455,7 +298,7 @@ export async function maybeStopManagedServiceBeforeMutableUpdate(params: {
     if (err instanceof GatewayServiceUpdateOwnershipError) {
       return { ...uninspected, serviceMutationAllowed: false, blockMessage: err.message };
     }
-    return markInspectionUnavailable(uninspected, GATEWAY_SERVICE_INSPECTION_UNAVAILABLE_MESSAGE);
+    return markInspectionUnavailable(uninspected, await renderSystemdErrorHints(err));
   }
   const serviceUpdateVerdict = await revalidateManagedGatewayServiceAfterUpdate({
     root: params.root,
@@ -486,7 +329,7 @@ export async function maybeStopManagedServiceBeforeMutableUpdate(params: {
     serviceUpdateVerdict,
   };
   if (serviceUpdateVerdict.kind === "unavailable") {
-    return markInspectionUnavailable(inspected, serviceUpdateVerdict.message);
+    return markInspectionUnavailable(inspected);
   }
   if (serviceUpdateVerdict.kind === "foreign") {
     return {

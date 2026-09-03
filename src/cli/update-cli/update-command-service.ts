@@ -60,10 +60,10 @@ export {
   revalidateManagedGatewayServiceAfterUpdate,
   resolvePreparedGatewayUpdatePolicy,
   shouldBlockMutableUpdateFromGatewayServiceEnv,
-  UpdateCommandAbort,
   type PreManagedServiceStop,
   type UpdateCommandRecoveryState,
 } from "./update-command-service-maintenance.js";
+export { UpdateCommandAbort } from "./shared.js";
 export { resolveUpdatedGatewayRestartPort } from "./update-command-service-plan.js";
 
 const CLI_NAME = resolveCliName();
