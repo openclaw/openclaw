@@ -89,9 +89,11 @@ export function convertMessages(
   // Chat templates serialize `tools` after the system message, so a volatile
   // suffix left inside the system message still sits ahead of the tool schemas
   // and forks the cacheable prefix on every new conversation. Carry it past the
-  // tools on the trailing user turn instead. Only relocate when there is a user
-  // turn to carry it, so the suffix is never dropped.
-  let relocatedCacheSuffix: string | undefined;
+  // tools on the trailing user turn instead. The system message keeps the full
+  // prompt until a carrier turn is actually emitted, so a transcript whose only
+  // user turn projects away cannot drop the suffix.
+  let cacheBoundarySplit: { stablePrefix: string; dynamicSuffix: string } | undefined;
+  let systemParamIndex: number | undefined;
   if (context.systemPrompt) {
     const useDeveloperRole = model.reasoning && compat.supportsDeveloperRole;
     const role = useDeveloperRole ? "developer" : "system";
@@ -100,17 +102,12 @@ export function convertMessages(
       systemPrompt = context.systemPrompt;
     } else {
       const split = splitSystemPromptCacheBoundary(context.systemPrompt);
-      const canRelocate =
-        split !== undefined &&
-        split.dynamicSuffix.length > 0 &&
-        transformedMessages.some((message) => message.role === "user");
-      if (split && canRelocate) {
-        systemPrompt = split.stablePrefix;
-        relocatedCacheSuffix = split.dynamicSuffix;
-      } else {
-        systemPrompt = stripSystemPromptCacheBoundary(context.systemPrompt);
+      if (split && split.dynamicSuffix.length > 0) {
+        cacheBoundarySplit = split;
       }
+      systemPrompt = stripSystemPromptCacheBoundary(context.systemPrompt);
     }
+    systemParamIndex = params.length;
     params.push({ role, content: sanitizeSurrogates(systemPrompt) });
   }
 
@@ -321,10 +318,11 @@ export function convertMessages(
     lastRole = msg.role;
   }
 
-  if (relocatedCacheSuffix !== undefined) {
-    appendCacheBoundarySuffixToLastUserTurn({
+  if (cacheBoundarySplit !== undefined && systemParamIndex !== undefined) {
+    relocateCacheBoundarySuffix({
       params,
-      suffix: relocatedCacheSuffix,
+      systemParamIndex,
+      split: cacheBoundarySplit,
       cacheOptOutIndexes: options.cacheOptOutIndexes,
     });
   }
@@ -343,13 +341,14 @@ export function convertMessages(
  * Moving it behind the last user turn keeps the system message and the tool
  * definitions byte-identical across sessions.
  */
-function appendCacheBoundarySuffixToLastUserTurn(args: {
+function relocateCacheBoundarySuffix(args: {
   params: ChatCompletionMessageParam[];
-  suffix: string;
+  systemParamIndex: number;
+  split: { stablePrefix: string; dynamicSuffix: string };
   cacheOptOutIndexes?: Set<number>;
 }): void {
-  const text = sanitizeSurrogates(args.suffix);
-  for (let index = args.params.length - 1; index >= 0; index--) {
+  const text = sanitizeSurrogates(args.split.dynamicSuffix);
+  for (let index = args.params.length - 1; index > args.systemParamIndex; index--) {
     const param = args.params[index];
     if (!param || param.role !== "user") {
       continue;
@@ -363,6 +362,12 @@ function appendCacheBoundarySuffixToLastUserTurn(args: {
       ];
     } else {
       continue;
+    }
+    // Shrink the system message only once a carrier turn is secured, so a
+    // projected-away user turn leaves the suffix where it already is.
+    const systemParam = args.params[args.systemParamIndex];
+    if (systemParam) {
+      systemParam.content = sanitizeSurrogates(args.split.stablePrefix);
     }
     // The turn now carries volatile text, so it must not anchor a cache breakpoint.
     args.cacheOptOutIndexes?.add(index);

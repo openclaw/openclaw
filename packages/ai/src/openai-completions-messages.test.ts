@@ -193,6 +193,20 @@ describe("convertMessages cache boundary relocation", () => {
     expect(converted[1]?.content).toBe("hi");
   });
 
+  it("keeps the suffix in the system prompt when the only user turn projects away", () => {
+    // Media projection can leave a user turn with no renderable content, and the
+    // converter skips it. The suffix must survive rather than vanish with it.
+    const context = {
+      systemPrompt: `Stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic suffix`,
+      messages: [{ role: "user", content: [], timestamp: 1 }],
+    } as unknown as Context;
+
+    const converted = convertMessages(model, context, resolveOpenAICompletionsCompat(model));
+
+    expect(converted).toHaveLength(1);
+    expect(converted[0]?.content).toBe("Stable prefix\nDynamic suffix");
+  });
+
   it("marks the carrying turn as cache opt-out", () => {
     const cacheOptOutIndexes = new Set<number>();
 
