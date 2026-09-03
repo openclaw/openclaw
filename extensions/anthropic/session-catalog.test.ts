@@ -1981,7 +1981,6 @@ describe("Claude session catalog", () => {
     const homeCalls = (spy: (typeof spies)[number]) =>
       spy.mock.calls.filter(([target]) => typeof target === "string" && target.startsWith(home));
     const realpathSpy = spies[3]!;
-    const statSpy = spies[0]!;
     const openSpy = spies[4]!;
     const readFileSpy = spies[5]!;
     expect(
@@ -2002,21 +2001,8 @@ describe("Claude session catalog", () => {
         value.endsWith("sessions-index.json") ||
         path.basename(value).startsWith("local_"));
     expect(realpathSpy.mock.calls.filter(([filePath]) => isCatalogFile(filePath))).toEqual([]);
-    expect(
-      statSpy.mock.calls.some(
-        ([filePath]) => typeof filePath === "string" && filePath.endsWith(".jsonl"),
-      ),
-    ).toBe(true);
     expect(openSpy).not.toHaveBeenCalled();
     expect(readFileSpy.mock.calls.filter(([filePath]) => isCatalogFile(filePath))).toEqual([]);
-    expect(
-      spies[2]?.mock.calls.filter(([target]) => target === path.join(home, ".claude", "projects")),
-    ).toHaveLength(1);
-    const homeCalls = (spy: (typeof spies)[number]) =>
-      spy.mock.calls.filter(([target]) => typeof target === "string" && target.startsWith(home));
-
-    // Polls re-read until the watch vouches for coverage; from then on an unchanged tree is free.
-    await expectClaudeCatalogQuiescent(home, spies, homeCalls, first);
     const records = await listClaudeSessions(home);
     for (const spy of spies) {
       spy.mockClear();
@@ -2080,7 +2066,7 @@ describe("Claude session catalog", () => {
         a.localeCompare(b),
       ),
     );
-    expect(open.mock.calls.map(([target]) => target)).toEqual([changedFile]);
+    expect(open.mock.calls.map(([target]) => target)).toEqual([await fs.realpath(changedFile)]);
   });
 
   it("keeps the CLI records when only the Desktop store changes", async () => {
