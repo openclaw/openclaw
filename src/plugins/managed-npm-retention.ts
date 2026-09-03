@@ -3,7 +3,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { safePathSegmentHashed } from "../infra/install-safe-path.js";
-import { resolveDefaultPluginNpmDir, resolvePluginNpmProjectsDir } from "./install-paths.js";
+import {
+  isPluginNpmProjectDir,
+  resolveDefaultPluginNpmDir,
+  resolvePluginNpmProjectsDir,
+} from "./install-paths.js";
 import { listManagedPluginNpmRootsSync } from "./npm-project-roots.js";
 
 export const RETAINED_MANAGED_NPM_INSTALL_MARKER = ".openclaw-retained-npm-install.json";
@@ -154,6 +158,25 @@ function listManagedNpmPackageDirs(npmRoot: string): string[] {
   });
 }
 
+function isOwnedManagedNpmProject(params: {
+  markerNames: ReadonlySet<string>;
+  npmDir: string;
+  projectRoot: string;
+}): boolean {
+  return listManagedNpmPackageDirs(params.projectRoot).some((packageDir) => {
+    const info = resolveRetainedManagedNpmInstallPackageInfo(packageDir);
+    return Boolean(
+      info &&
+      params.markerNames.has(path.basename(info.markerPath)) &&
+      isPluginNpmProjectDir({
+        npmDir: params.npmDir,
+        packageName: info.packageName,
+        projectDir: params.projectRoot,
+      }),
+    );
+  });
+}
+
 async function cleanupRetainedLegacyNpmPackages(params: {
   npmRoot: string;
   activeInstallPaths: string[];
@@ -223,6 +246,11 @@ export async function cleanupRetainedManagedNpmInstallGenerations(
         markerPreservesPackageFiles(path.join(markerDir, entry.name)),
       ) ||
       !isPathEqualOrInside(projectsDir, projectRoot) ||
+      !isOwnedManagedNpmProject({
+        markerNames: new Set(markerEntries.map((entry) => entry.name)),
+        npmDir,
+        projectRoot,
+      }) ||
       activeInstallPaths.some((installPath) => isPathEqualOrInside(projectRoot, installPath))
     ) {
       continue;

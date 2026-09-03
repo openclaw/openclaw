@@ -2,7 +2,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { resolvePluginNpmGenerationProjectDir } from "./install-paths.js";
+import {
+  resolvePluginNpmGenerationProjectDir,
+  resolvePluginNpmProjectDir,
+} from "./install-paths.js";
 import {
   cleanupRetainedManagedNpmInstallGenerations,
   hasRetainedManagedNpmInstallMarker,
@@ -72,6 +75,56 @@ describe("managed npm retention", () => {
       expect(hasRetainedManagedNpmInstallMarker(packageDir)).toBe(false);
     } finally {
       fs.rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves a noncanonical project root even when it has a retained marker", async () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-retention-noncanonical-"));
+    const npmDir = path.join(stateDir, "npm");
+    const projectRoot = path.join(npmDir, "projects", "noncanonical-sibling");
+    const packageDir = path.join(projectRoot, "node_modules", "@openclaw", "codex");
+    const siblingFile = path.join(projectRoot, "must-remain.txt");
+    fs.mkdirSync(packageDir, { recursive: true });
+    fs.writeFileSync(siblingFile, "preserve me", "utf8");
+    await markRetainedManagedNpmInstall({
+      packageDir,
+      pluginId: "codex",
+      reason: "test-retired-generation",
+    });
+
+    try {
+      await expect(cleanupRetainedManagedNpmInstallGenerations({ npmDir })).resolves.toBe(0);
+      expect(fs.readFileSync(siblingFile, "utf8")).toBe("preserve me");
+    } finally {
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not follow a substituted managed projects directory", async () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-retention-symlink-"));
+    const npmDir = path.join(stateDir, "npm");
+    const outsideProjectsDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), "openclaw-retention-outside-"),
+    );
+    fs.mkdirSync(npmDir, { recursive: true });
+    fs.symlinkSync(outsideProjectsDir, path.join(npmDir, "projects"), "dir");
+    const projectRoot = resolvePluginNpmProjectDir({ npmDir, packageName: "@openclaw/codex" });
+    const packageDir = path.join(projectRoot, "node_modules", "@openclaw", "codex");
+    const sentinel = path.join(projectRoot, "must-remain.txt");
+    fs.mkdirSync(packageDir, { recursive: true });
+    fs.writeFileSync(sentinel, "preserve me", "utf8");
+    await markRetainedManagedNpmInstall({
+      packageDir,
+      pluginId: "codex",
+      reason: "test-retired-generation",
+    });
+
+    try {
+      await expect(cleanupRetainedManagedNpmInstallGenerations({ npmDir })).resolves.toBe(0);
+      expect(fs.readFileSync(sentinel, "utf8")).toBe("preserve me");
+    } finally {
+      fs.rmSync(stateDir, { recursive: true, force: true });
+      fs.rmSync(outsideProjectsDir, { recursive: true, force: true });
     }
   });
 
