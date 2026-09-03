@@ -9,6 +9,8 @@ import {
   sessionProgressCardsForGateway,
   type SessionProgressCardStore,
 } from "../../session-progress-cards.ts";
+import { isSessionRunActive } from "../../session-run-state.ts";
+import { dashboardSessionListQuery } from "../../sessions/index.ts";
 import type { BoardWidget } from "../types.ts";
 import type { PluginBoardWidgetRenderer } from "./index.ts";
 
@@ -27,6 +29,7 @@ class OpenClawSessionProgressWidget extends OpenClawLightDomElement {
 
   private store?: SessionProgressCardStore;
   private targetSessionKey = "";
+  private sessionListQueryKey = "";
   private unsubscribe?: () => void;
   private unsubscribeSessions?: () => void;
 
@@ -79,9 +82,17 @@ class OpenClawSessionProgressWidget extends OpenClawLightDomElement {
         ${t("sessionProgressCard.widgetEmpty")}
       </p>`;
     }
-    const row = this.context?.sessions?.state.result?.sessions.find(
-      (entry) => entry.key === this.targetSessionKey,
-    );
+    const context = this.context;
+    const sessionListQuery = context
+      ? dashboardSessionListQuery(context.agentSelection?.state.scopeId)
+      : undefined;
+    const sessions = context?.sessions;
+    const row =
+      sessions && sessionListQuery && typeof sessions.listSnapshot === "function"
+        ? sessions
+            .listSnapshot(sessionListQuery)
+            .result?.sessions.find((entry) => entry.key === this.targetSessionKey)
+        : sessions?.state.result?.sessions.find((entry) => entry.key === this.targetSessionKey);
     return renderSessionProgressCard(
       card,
       "board",
@@ -89,25 +100,54 @@ class OpenClawSessionProgressWidget extends OpenClawLightDomElement {
       row?.status,
       row?.startedAt,
       row?.endedAt,
+      row ? isSessionRunActive(row) : true,
     );
   }
 
   private syncStore(): void {
     const targetSessionKey = readSessionKeyProp(this.widget) ?? this.sessionKey.trim();
+    const sessionListQuery = this.context
+      ? dashboardSessionListQuery(this.context.agentSelection?.state.scopeId)
+      : undefined;
+    const sessionListQueryKey = sessionListQuery ? JSON.stringify(sessionListQuery) : "";
     const store =
       this.active && this.context
         ? sessionProgressCardsForGateway(this.context.gateway)
         : undefined;
-    if (store === this.store && targetSessionKey === this.targetSessionKey) {
+    if (
+      store === this.store &&
+      targetSessionKey === this.targetSessionKey &&
+      sessionListQueryKey === this.sessionListQueryKey
+    ) {
       return;
     }
     this.releaseStore();
     this.store = store;
     this.targetSessionKey = targetSessionKey;
+    this.sessionListQueryKey = sessionListQueryKey;
     if (store && targetSessionKey) {
       store.watch(this, [targetSessionKey]);
       this.unsubscribe = store.subscribe(() => this.requestUpdate());
-      this.unsubscribeSessions = this.context?.sessions?.subscribe(() => this.requestUpdate());
+      const sessions = this.context?.sessions;
+      if (
+        sessions &&
+        sessionListQuery &&
+        typeof sessions.subscribeList === "function" &&
+        typeof sessions.listSnapshot === "function"
+      ) {
+        this.unsubscribeSessions = sessions.subscribeList(sessionListQuery, () =>
+          this.requestUpdate(),
+        );
+        const snapshot = sessions.listSnapshot(sessionListQuery);
+        if (
+          !snapshot.result &&
+          !snapshot.loading &&
+          !snapshot.error &&
+          this.context?.gateway.snapshot.phase === "connected"
+        ) {
+          void sessions.refreshList({ ...sessionListQuery, force: true });
+        }
+      }
     }
   }
 
