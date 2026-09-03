@@ -260,7 +260,6 @@ CREATE INDEX IF NOT EXISTS idx_web_push_approval_deliveries_subscription
       "worker_environments.node_device_id TEXT",
       "worker_session_placements.terminal_reason TEXT",
       "worker_session_placements.terminal_at_ms INTEGER",
-      "worker_session_tool_operations.child_placement_identity_json TEXT",
       "worker_session_placement_moves.abandon_source INTEGER",
       "worker_session_placement_moves.target_machine_class TEXT",
       "worktrees.run_end_cleanup_json TEXT",
