@@ -1,4 +1,5 @@
 /** Executes isolated cron prompts with model fallbacks and interim-ack retries. */
+import { normalizeOptionalStringifiedId } from "@openclaw/normalization-core/string-coerce";
 import { resolveGroupToolPolicy } from "../../agents/agent-tools.policy.js";
 import { resolveCliBackendConfig } from "../../agents/cli-backends.js";
 import {
@@ -451,6 +452,14 @@ function createCronPromptExecutor(
             suppressNextUserMessagePersistence:
               userTurnTranscriptRecorder.hasPersisted() || userTurnTranscriptRecorder.isBlocked(),
           }) satisfies Partial<Parameters<CronEmbeddedRuntime["runEmbeddedAgent"]>[0]>;
+        // Both runners get the same resolved route: this channel-native id
+        // carries the originating thread/topic that detached tool completions
+        // (exec notify-on-exit) inherit; without it they land in the owner DM.
+        const currentChannelId = await resolveCurrentChannelTarget({
+          channel: messageChannel,
+          to: params.resolvedDelivery.to,
+          threadId: params.resolvedDelivery.threadId,
+        });
         if (cliExecution) {
           const allowCliAuthProfileForwarding = cliBackendAcceptsAuthProfileForwarding({
             provider: executionProvider,
@@ -519,6 +528,10 @@ function createCronPromptExecutor(
                   authProfileId,
                   cliSessionId: cliSessionBinding?.sessionId,
                   cliSessionBinding: guardedCliSessionBinding,
+                  currentChannelId,
+                  // The CLI runner has no messageThreadId; currentThreadTs is the
+                  // thread half of the same resolved route.
+                  currentThreadTs: normalizeOptionalStringifiedId(params.resolvedDelivery.threadId),
                   cliSessionBindingFacts: {
                     extraSystemPromptStatic: params.deliverySystemPrompt,
                     sourceReplyDeliveryMode,
@@ -579,11 +592,6 @@ function createCronPromptExecutor(
           agentSessionKey: params.agentSessionKey,
           provider: providerOverride,
           model: modelOverride,
-        });
-        const currentChannelId = await resolveCurrentChannelTarget({
-          channel: messageChannel,
-          to: params.resolvedDelivery.to,
-          threadId: params.resolvedDelivery.threadId,
         });
         // Embedded runs receive both the explicit route and the current-channel
         // id so message-tool policy can target the same chat as fallback delivery.
