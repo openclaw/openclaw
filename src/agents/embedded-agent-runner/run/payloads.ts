@@ -28,6 +28,7 @@ import { hasReplyPayloadContent } from "../../../interactive/payload.js";
 import type { AssistantMessage } from "../../../llm/types.js";
 import {
   extractAssistantTextForPhase,
+  isAssistantTextContentType,
   parseAssistantTextSignature,
 } from "../../../shared/chat-message-content.js";
 import {
@@ -57,9 +58,6 @@ import type { ToolErrorSummary } from "../../tool-error-summary.js";
 import { buildSourceReplyPayloadState } from "./source-reply-payloads.js";
 import { buildFailureWarning } from "./tool-error-warning.js";
 
-function isAssistantTextContentBlockType(value: unknown): boolean {
-  return value === "text" || value === "input_text" || value === "output_text";
-}
 function resolveRawAssistantAnswerText(lastAssistant: AssistantMessage | undefined): string {
   if (!lastAssistant) {
     return "";
@@ -78,7 +76,7 @@ function resolveRawAssistantAnswerText(lastAssistant: AssistantMessage | undefin
       }
       const record = block as { type?: unknown; textSignature?: unknown };
       return (
-        isAssistantTextContentBlockType(record.type) &&
+        isAssistantTextContentType(record.type) &&
         Boolean(parseAssistantTextSignature(record)?.phase)
       );
     });
@@ -91,7 +89,7 @@ function resolveRawAssistantAnswerText(lastAssistant: AssistantMessage | undefin
           const record = block as { type?: unknown; text?: unknown; textSignature?: unknown };
           const signature = parseAssistantTextSignature(record);
           if (
-            !isAssistantTextContentBlockType(record.type) ||
+            !isAssistantTextContentType(record.type) ||
             typeof record.text !== "string" ||
             !signature?.id ||
             signature.phase

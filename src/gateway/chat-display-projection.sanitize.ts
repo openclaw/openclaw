@@ -3,6 +3,7 @@ import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
 import { parseInboundMediaUri, buildInboundMediaUriFromPath } from "../media/media-reference.js";
 import {
+  isAssistantTextContentType,
   parseAssistantTextSignature,
   resolveAssistantMessagePhase,
 } from "../shared/chat-message-content.js";
@@ -16,7 +17,6 @@ import {
   DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
   extractAssistantTextForSilentCheck,
   hasAssistantDisplayableNonTextContent,
-  isAssistantTextContentType,
   isProjectedSessionsSendForwardedMessage,
   shouldPreserveAssistantControlReplyText,
   stripAssistantMediaDirectivesForDisplay,

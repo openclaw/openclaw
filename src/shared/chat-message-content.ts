@@ -33,7 +33,8 @@ const assistantTextSignatureCache = new WeakMap<
   { text: unknown; result: AssistantTextSignature }
 >();
 
-function isAssistantTextContentBlockType(value: unknown): boolean {
+/** Keeps native and persisted Responses blocks on one assistant-text type contract. */
+export function isAssistantTextContentType(value: unknown): boolean {
   return value === "text" || value === "input_text" || value === "output_text";
 }
 
@@ -95,7 +96,7 @@ export function resolveAssistantMessagePhase(message: unknown): AssistantPhase |
       continue;
     }
     const record = block as { type?: unknown; textSignature?: unknown };
-    if (!isAssistantTextContentBlockType(record.type)) {
+    if (!isAssistantTextContentType(record.type)) {
       continue;
     }
     const phase = parseAssistantTextSignature(record)?.phase;
@@ -181,7 +182,7 @@ export function extractAssistantTextForPhase(
       return false;
     }
     const record = block as { type?: unknown; textSignature?: unknown };
-    if (!isAssistantTextContentBlockType(record.type)) {
+    if (!isAssistantTextContentType(record.type)) {
       return false;
     }
     return Boolean(parseAssistantTextSignature(record)?.phase);
@@ -198,7 +199,7 @@ export function extractAssistantTextForPhase(
         return null;
       }
       const record = block as { type?: unknown; text?: unknown; textSignature?: unknown };
-      if (!isAssistantTextContentBlockType(record.type) || typeof record.text !== "string") {
+      if (!isAssistantTextContentType(record.type) || typeof record.text !== "string") {
         return null;
       }
       const signature = parseAssistantTextSignature(record);
