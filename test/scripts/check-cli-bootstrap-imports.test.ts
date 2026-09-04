@@ -150,6 +150,10 @@ describe("check-cli-bootstrap-imports", () => {
     expect(collectWorkerDeployArtifactErrors({ rootDir: root })).toEqual([]);
   });
 
+  it("accepts a frozen target with no worker deploy contract", () => {
+    expect(collectWorkerDeployArtifactErrors({ workerDeployEntrypoints: [] })).toEqual([]);
+  });
+
   it("rejects worker package imports and dependency manifests", () => {
     const root = makeTempRoot();
     writeFixture(

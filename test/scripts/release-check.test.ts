@@ -23,6 +23,7 @@ import {
   createPackedTarballInstallArgs,
   prepareReleaseCheckLocalPackageTarballs,
   RELEASE_CHECK_LOCAL_PACKAGE_TARBALL_DIR_ENV,
+  requiresWorkerDeployArtifacts,
   resolveReleaseCheckLocalPackageTarballs,
   writePackedTarballInstallManifest,
   writePackedBundledPluginActivationConfig,
@@ -36,6 +37,12 @@ function requirePluginEntries(config: { plugins?: { entries?: Record<string, unk
 }
 
 describe("release-check", () => {
+  it("skips worker deploy artifacts only for the exact historical package", () => {
+    expect(requiresWorkerDeployArtifacts("2026.7.33")).toBe(false);
+    expect(requiresWorkerDeployArtifacts("2026.7.33-beta.1")).toBe(true);
+    expect(requiresWorkerDeployArtifacts("2026.8.1")).toBe(true);
+  });
+
   it("loads sparse release tooling and checks the separate target SDK and worker inventories", () => {
     const root = mkdtempSync(join(tmpdir(), "openclaw-release-check-target-"));
     try {

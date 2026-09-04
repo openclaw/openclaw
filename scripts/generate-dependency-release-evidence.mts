@@ -127,6 +127,19 @@ export function resolveReleaseTag({
   return releaseRef;
 }
 
+/** Trusted compatibility capability for the first frozen 2026.7 extended-stable release. */
+export function dependencyGateCompatibilityArgs({
+  packageVersion,
+  npmDistTag,
+}: {
+  packageVersion: string;
+  npmDistTag: string;
+}): string[] {
+  return packageVersion === "2026.7.33" && npmDistTag === "extended-stable"
+    ? ["--allow-missing-release-tool-lockfiles"]
+    : [];
+}
+
 /**
  * Resolves the previous reachable release tag for dependency diffs.
  */
@@ -356,6 +369,7 @@ async function runEvidenceReports(
   baseRef: string,
   execFileSyncImpl: ExecFileSyncLike,
   packageVersion: string,
+  npmDistTag: string,
 ) {
   let riskAcceptance: ReturnType<typeof resolveReleaseDependencyRiskAcceptance> = null;
   const toolingRoot = path.resolve(import.meta.dirname, "..");
@@ -370,6 +384,9 @@ async function runEvidenceReports(
           "--",
           "--root",
           rootDir,
+          ...(report.json === "dependency-vulnerability-gate.json"
+            ? dependencyGateCompatibilityArgs({ packageVersion, npmDistTag })
+            : []),
           ...(report.json === "dependency-changes-report.json" ? ["--base-ref", baseRef] : []),
           "--json",
           reportPath(outputDir, report.json),
@@ -469,6 +486,7 @@ async function generateDependencyReleaseEvidence({
     dependencyChangeBaseRef,
     execFileSyncImpl,
     packageVersion,
+    npmDistTag,
   );
 
   const manifest = {

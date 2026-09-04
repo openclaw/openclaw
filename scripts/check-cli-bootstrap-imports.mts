@@ -359,6 +359,11 @@ export function collectWorkerDeployArtifactErrors(params: CliBootstrapCheckParam
   const entrypoints = (params.workerDeployEntrypoints ?? WORKER_DEPLOY_ENTRYPOINTS).map(
     (entrypoint) => path.resolve(rootDir, entrypoint),
   );
+  // Frozen targets that predate the deploy worker pass an empty target-owned
+  // entrypoint set. Absence there is compatibility, not a missing build.
+  if (entrypoints.length === 0) {
+    return [];
+  }
   const artifactDir = path.dirname(entrypoints[0]!);
   const artifactNames = new Set(
     entrypoints.flatMap((entrypoint) => {

@@ -9,6 +9,7 @@ import {
   DEPENDENCY_EVIDENCE_REPORTS,
   collectDependencyEvidenceSummaryCounts,
   createDependencyEvidenceManifest,
+  dependencyGateCompatibilityArgs,
   parseArgs,
   renderDependencyEvidenceStepSummary,
   renderDependencyEvidenceSummary,
@@ -42,6 +43,24 @@ function expectNoNodeStack(stderr: string) {
 }
 
 describe("generate-dependency-release-evidence", () => {
+  it("grants missing release-tool locks only to the exact frozen target", () => {
+    expect(
+      dependencyGateCompatibilityArgs({
+        packageVersion: "2026.7.33",
+        npmDistTag: "extended-stable",
+      }),
+    ).toEqual(["--allow-missing-release-tool-lockfiles"]);
+    expect(
+      dependencyGateCompatibilityArgs({ packageVersion: "2026.7.33", npmDistTag: "latest" }),
+    ).toEqual([]);
+    expect(
+      dependencyGateCompatibilityArgs({
+        packageVersion: "2026.8.33",
+        npmDistTag: "extended-stable",
+      }),
+    ).toEqual([]);
+  });
+
   function acceptedRiskInput(): Parameters<typeof resolveReleaseDependencyRiskAcceptance>[0] {
     return {
       packageVersion: "2026.9.1",

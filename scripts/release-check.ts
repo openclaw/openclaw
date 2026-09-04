@@ -1402,18 +1402,22 @@ async function main() {
 async function verifyPackedContents(results: NpmPackResult[], packedRoot: string): Promise<void> {
   // WORKER_BUNDLE_*_PATH exports declare the target's sealed deploy artifacts.
   // Trusted tooling may be newer than the frozen target in the working directory.
-  const workerBundle = await tsImport(
-    pathToFileURL(resolve("src/shared/worker-bundle-hash.ts")).href,
-    import.meta.url,
-  );
-  const workerDeployEntrypoints = Object.entries(workerBundle)
-    .filter(([name]) => /^WORKER_BUNDLE_.*_PATH$/u.test(name))
-    .map(([name, value]) => {
-      if (typeof value !== "string") {
-        throw new Error(`release-check: target worker artifact ${name} must be a path string.`);
-      }
-      return `dist/worker/${value}`;
-    });
+  const packageVersion = JSON.parse(readFileSync(resolve("package.json"), "utf8")).version;
+  const workerDeployEntrypoints = !requiresWorkerDeployArtifacts(packageVersion)
+    ? []
+    : Object.entries(
+        await tsImport(
+          pathToFileURL(resolve("src/shared/worker-bundle-hash.ts")).href,
+          import.meta.url,
+        ),
+      )
+        .filter(([name]) => /^WORKER_BUNDLE_.*_PATH$/u.test(name))
+        .map(([name, value]) => {
+          if (typeof value !== "string") {
+            throw new Error(`release-check: target worker artifact ${name} must be a path string.`);
+          }
+          return `dist/worker/${value}`;
+        });
   checkCliBootstrapExternalImports({
     rootDir: packedRoot,
     workerDeployEntrypoints,
@@ -1473,6 +1477,11 @@ async function verifyPackedContents(results: NpmPackResult[], packedRoot: string
     }
     throw new Error("release-check: final npm tarball content checks failed.");
   }
+}
+
+/** The first 2026.7 extended-stable package predates npm worker deploy artifacts. */
+export function requiresWorkerDeployArtifacts(packageVersion: string): boolean {
+  return packageVersion !== "2026.7.33";
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
