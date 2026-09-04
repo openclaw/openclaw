@@ -42,6 +42,59 @@ describe("renderChatComposer context usage", () => {
     );
   });
 
+  it("measures context usage against the effective budget", () => {
+    const container = renderComposer({
+      selectedSession: {
+        key: "main",
+        kind: "direct",
+        updatedAt: null,
+        totalTokens: 49_152,
+        contextTokens: 262_144,
+        contextBudgetStatus: {
+          schemaVersion: 1,
+          source: "pre-prompt-estimate",
+          updatedAt: 1_700_000_000_000,
+          provider: "anthropic",
+          model: "claude-opus-5",
+          route: "fits",
+          shouldCompact: false,
+          estimatedPromptTokens: 49_152,
+          contextTokenBudget: 98_304,
+          promptBudgetBeforeReserve: 98_304,
+          reserveTokens: 32_768,
+          effectiveReserveTokens: 32_768,
+          remainingPromptBudgetTokens: 16_384,
+          overflowTokens: 0,
+          toolResultReducibleChars: 0,
+          messageCount: 12,
+          unwindowedMessageCount: 12,
+        },
+      },
+      sessions: { sessions: [], defaults: { contextTokens: 262_144 } } as never,
+    });
+
+    expect(container.querySelector(".context-ring")?.getAttribute("aria-label")).toBe(
+      "Session context usage: 49.2k of 98.3k (50%)",
+    );
+  });
+
+  it("falls back to the catalog window when no budget snapshot exists", () => {
+    const container = renderComposer({
+      selectedSession: {
+        key: "main",
+        kind: "direct",
+        updatedAt: null,
+        totalTokens: 49_152,
+        contextTokens: 262_144,
+      },
+      sessions: { sessions: [], defaults: { contextTokens: 262_144 } } as never,
+    });
+
+    expect(container.querySelector(".context-ring")?.getAttribute("aria-label")).toBe(
+      "Session context usage: 49.2k of 262.1k (19%)",
+    );
+  });
+
   it("renders only the current session provider's plan usage", () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_700_000_000_000);

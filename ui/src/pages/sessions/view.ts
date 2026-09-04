@@ -47,6 +47,7 @@ import { isCronSessionKey } from "../../lib/session-display.ts";
 import { formatGoalDetail, formatGoalSummary } from "../../lib/session-goal.ts";
 import { sessionModelMatchesDefaults } from "../../lib/session-model-defaults.ts";
 import { isSessionRunActive } from "../../lib/session-run-state.ts";
+import { resolveEffectiveContextTokens } from "../../lib/sessions/context-budget.ts";
 import { SESSION_DRAG_MIME } from "../../lib/sessions/drag.ts";
 import {
   groupSessionRows,
@@ -315,8 +316,8 @@ function renderTokensCell(row: GatewaySessionRow) {
   // composer's context-usage convention.
   const fresh = row.totalTokensFresh !== false;
   const totalLabel = `${fresh ? "" : "~"}${formatCompactTokenCount(total)}`;
-  const context =
-    typeof row.contextTokens === "number" && row.contextTokens > 0 ? row.contextTokens : null;
+  const effectiveContext = resolveEffectiveContextTokens(row);
+  const context = effectiveContext > 0 ? effectiveContext : null;
   if (!context) {
     return html`<span class="session-tokens__value">${totalLabel}</span>`;
   }

@@ -25,7 +25,10 @@ import type {
 } from "../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { PresenceEntry as ProtocolPresenceEntry } from "../../../packages/gateway-protocol/src/schema/snapshot.js";
 import type { SessionAgentStatus } from "../../../packages/gateway-protocol/src/session-agent-status.js";
-import type { SessionGoal } from "../../../src/config/sessions/types.js";
+import type {
+  SessionContextBudgetStatus,
+  SessionGoal,
+} from "../../../src/config/sessions/types.js";
 import type { ConfigUiHints } from "../../../src/shared/config-ui-hints-types.js";
 import type { FastModeSource } from "../../../src/shared/fast-mode.js";
 import type {
@@ -378,6 +381,7 @@ export type GatewaySessionRow = SessionRow & {
   contextWindow?: string;
   contextWindows?: GatewayContextWindowOption[];
   contextWindowDefault?: string;
+  contextBudgetStatus?: SessionContextBudgetStatus;
   thinkingLevels?: GatewayThinkingLevelOption[];
   thinkingOptions?: string[];
   thinkingDefault?: string;

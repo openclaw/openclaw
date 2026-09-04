@@ -16,6 +16,7 @@ import {
   type QuotaBudgetSummary,
   type QuotaLimitSummary,
 } from "../../../lib/provider-quota-summary.ts";
+import { resolveEffectiveContextTokens } from "../../../lib/sessions/context-budget.ts";
 import { handleChatComposerDetailsToggle } from "./chat-picker-overlay.ts";
 
 const CONTEXT_NOTICE_RATIO = 0.85;
@@ -129,7 +130,7 @@ function getContextNoticeViewModel(
   approximate: boolean;
 } | null {
   const used = session?.totalTokens;
-  const limit = session?.contextTokens ?? defaultContextTokens ?? 0;
+  const limit = resolveEffectiveContextTokens(session, defaultContextTokens);
   if (typeof used !== "number" || !Number.isFinite(used) || used < 0 || !limit) {
     return null;
   }

@@ -10,6 +10,7 @@ import {
   formatMs,
   formatUnknownText,
 } from "../lib/format.ts";
+import { resolveEffectiveContextTokens } from "../lib/sessions/context-budget.ts";
 
 export function formatNextRun(ms?: number | null) {
   if (!ms) {
@@ -27,7 +28,7 @@ export function formatSessionTokens(row: GatewaySessionRow) {
     return t("common.na");
   }
   const total = row.totalTokens ?? 0;
-  const ctx = row.contextTokens ?? 0;
+  const ctx = resolveEffectiveContextTokens(row);
   return ctx ? `${total} / ${ctx}` : String(total);
 }
 
