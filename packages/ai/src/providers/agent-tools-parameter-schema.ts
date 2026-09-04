@@ -15,6 +15,16 @@ import { cleanSchemaForLlamacppGbnf } from "./clean-for-llamacpp-gbnf.js";
 import { stripUnsupportedSchemaKeywords } from "./schema-keyword-strip.js";
 
 /**
+ * Tool schemas are external/MCP-controllable but normalize through deep recursion. Legit schemas
+ * nest far below this cap, so it only bounds hostile or malformed input that would otherwise
+ * overflow the stack as a RangeError while a normalizer walks it.
+ */
+export const MAX_TOOL_SCHEMA_NESTING_DEPTH = 256;
+
+/** Thrown when a tool schema nests deeper than {@link MAX_TOOL_SCHEMA_NESTING_DEPTH}. */
+export class ToolSchemaDepthLimitError extends Error {}
+
+/**
  * Narrow structural view of the host's model compat config. packages/ai must stay
  * config-agnostic, so only tool-schema-relevant fields are modeled here; the host's
  * ModelCompatConfig remains structurally assignable.
@@ -798,10 +808,36 @@ function normalizeOpenApiSchemaKeywords(schema: unknown): unknown {
   return changed || nullable ? normalized : schema;
 }
 
+/**
+ * Iteratively checks JSON-container nesting depth so normalize can fail fast (typed error) instead
+ * of overflowing the stack on a hostile deep schema. Only real container depth counts; the walker is
+ * iterative, so even pathological input cannot overflow it either.
+ */
+function assertToolSchemaDepthWithinLimit(schema: unknown): void {
+  const pending: Array<{ value: unknown; depth: number }> = [{ value: schema, depth: 0 }];
+  let frame: { value: unknown; depth: number } | undefined;
+  while ((frame = pending.pop()) !== undefined) {
+    const { value, depth } = frame;
+    if (depth > MAX_TOOL_SCHEMA_NESTING_DEPTH) {
+      throw new ToolSchemaDepthLimitError();
+    }
+    if (Array.isArray(value)) {
+      for (const entry of value) {
+        pending.push({ value: entry, depth: depth + 1 });
+      }
+    } else if (value && typeof value === "object") {
+      for (const child of Object.values(value as Record<string, unknown>)) {
+        pending.push({ value: child, depth: depth + 1 });
+      }
+    }
+  }
+}
+
 function normalizeToolParameterSchemaUncached(
   schema: unknown,
   options?: ToolParameterSchemaOptions,
 ): TSchema {
+  assertToolSchemaDepthWithinLimit(schema);
   const inlinedSchema = normalizeOpenApiSchemaKeywords(inlineLocalToolSchemaRefs(schema));
   const schemaRecord =
     inlinedSchema && typeof inlinedSchema === "object"

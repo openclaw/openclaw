@@ -4,8 +4,10 @@
  * Caches normalized object inputs by provider compatibility so repeated inventory builds preserve identity.
  */
 import {
+  MAX_TOOL_SCHEMA_NESTING_DEPTH,
   normalizeToolParameterSchema,
   shouldOmitEmptyArrayItems,
+  ToolSchemaDepthLimitError,
   type ToolSchemaModelCompat,
 } from "./agent-tools-parameter-schema.js";
 import type { OpenAIToolProjection } from "./openai-tool-projection.js";
@@ -107,10 +109,15 @@ export function normalizeStrictOpenAIJsonSchema(
 }
 
 function normalizeStrictOpenAIJsonSchemaRecursive(schema: unknown, depth: number): unknown {
+  // Every container descent (array element or object entry) deepens the recursion by one level;
+  // a hostile MCP schema nested past the cap would otherwise overflow the stack as a RangeError.
+  if (depth > MAX_TOOL_SCHEMA_NESTING_DEPTH) {
+    throw new ToolSchemaDepthLimitError();
+  }
   if (Array.isArray(schema)) {
     let changed = false;
     const normalized = schema.map((entry) => {
-      const next = normalizeStrictOpenAIJsonSchemaRecursive(entry, depth);
+      const next = normalizeStrictOpenAIJsonSchemaRecursive(entry, depth + 1);
       changed ||= next !== entry;
       return next;
     });
@@ -124,10 +131,7 @@ function normalizeStrictOpenAIJsonSchemaRecursive(schema: unknown, depth: number
   let changed = false;
   const normalized = Object.fromEntries<unknown>(
     Object.entries(record).map(([key, value]) => {
-      const next = normalizeStrictOpenAIJsonSchemaRecursive(
-        value,
-        key === "properties" ? depth : depth + 1,
-      );
+      const next = normalizeStrictOpenAIJsonSchemaRecursive(value, depth + 1);
       changed ||= next !== value;
       return [key, next];
     }),
@@ -168,7 +172,7 @@ export function normalizeOpenAIStrictToolParameters<T>(
 
 /** Returns whether a schema already satisfies OpenAI strict tool-schema constraints. */
 export function isStrictOpenAIJsonSchemaCompatible(schema: unknown): boolean {
-  return isStrictOpenAIJsonSchemaCompatibleRecursive(normalizeStrictOpenAIJsonSchema(schema));
+  return isStrictOpenAIJsonSchemaCompatibleRecursive(normalizeStrictOpenAIJsonSchema(schema), 0);
 }
 
 type OpenAIStrictToolSchemaDiagnostic = {
@@ -199,9 +203,12 @@ export function findOpenAIStrictToolProjectionDiagnostics(
   ];
 }
 
-function isStrictOpenAIJsonSchemaCompatibleRecursive(schema: unknown): boolean {
+function isStrictOpenAIJsonSchemaCompatibleRecursive(schema: unknown, depth: number): boolean {
+  if (depth > MAX_TOOL_SCHEMA_NESTING_DEPTH) {
+    throw new ToolSchemaDepthLimitError();
+  }
   if (Array.isArray(schema)) {
-    return schema.every((entry) => isStrictOpenAIJsonSchemaCompatibleRecursive(entry));
+    return schema.every((entry) => isStrictOpenAIJsonSchemaCompatibleRecursive(entry, depth + 1));
   }
   if (!schema || typeof schema !== "object") {
     return true;
@@ -239,10 +246,10 @@ function isStrictOpenAIJsonSchemaCompatibleRecursive(schema: unknown): boolean {
   return Object.entries(record).every(([key, entry]) => {
     if (key === "properties" && entry && typeof entry === "object" && !Array.isArray(entry)) {
       return Object.values(entry as Record<string, unknown>).every((value) =>
-        isStrictOpenAIJsonSchemaCompatibleRecursive(value),
+        isStrictOpenAIJsonSchemaCompatibleRecursive(value, depth + 1),
       );
     }
-    return isStrictOpenAIJsonSchemaCompatibleRecursive(entry);
+    return isStrictOpenAIJsonSchemaCompatibleRecursive(entry, depth + 1);
   });
 }
 
