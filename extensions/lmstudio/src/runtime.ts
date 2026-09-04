@@ -1,4 +1,5 @@
 // Lmstudio plugin module implements runtime behavior.
+import { formatCliCommand } from "openclaw/plugin-sdk/cli-runtime";
 import {
   CUSTOM_LOCAL_AUTH_MARKER,
   isKnownEnvApiKeyMarker,
@@ -229,7 +230,7 @@ export async function resolveLmstudioRuntimeApiKey(params: {
       [
         "LM Studio API key is required.",
         `Set models.providers.lmstudio.apiKey (for example "${envMarker}")`,
-        'or run "openclaw models auth lmstudio".',
+        `or run "${formatCliCommand("openclaw models auth login --provider lmstudio")}".`,
       ].join(" "),
     );
   };
