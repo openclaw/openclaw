@@ -826,6 +826,7 @@ function assertToolSchemaDepthWithinLimit(schema: unknown): void {
         pending.push({ value: entry, depth: depth + 1 });
       }
     } else if (value && typeof value === "object") {
+      // SAFETY: branch condition narrows value to a non-null object.
       for (const child of Object.values(value as Record<string, unknown>)) {
         pending.push({ value: child, depth: depth + 1 });
       }
