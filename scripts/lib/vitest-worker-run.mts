@@ -5,10 +5,12 @@ import { fileURLToPath } from "node:url";
 import { runManagedCommand } from "./managed-child-process.mts";
 import {
   verifyVitestWorkerArtifacts,
+  vitestArtifactDirectory,
   VITEST_WORKER_PREPARE_REQUEST,
   VITEST_WORKER_PREPARE_REPLY,
   type VitestWorkerDescriptor,
   type VitestWorkerManifest,
+  type VitestArtifactDemand,
 } from "./vitest-worker-artifacts.mts";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
@@ -24,22 +26,38 @@ function createVitestWorkerDirectory() {
 /** The invocation owns preparation and waits for every real borrower before disposal. */
 export function createVitestWorkerRun() {
   const directory = createVitestWorkerDirectory();
-  let preparation: Promise<VitestWorkerManifest> | undefined;
+  const preparations = new Map<VitestArtifactDemand, Promise<VitestWorkerManifest>>();
   let disposal: Promise<void> | undefined;
   const borrowers: Promise<unknown>[] = [];
   let channelError: Error | undefined;
   const compilerAbort = new AbortController();
   let compilerJoined = true;
 
-  function prepare(): Promise<VitestWorkerManifest> {
+  function prepare(demand: VitestArtifactDemand): Promise<VitestWorkerManifest> {
     if (disposal) {
       return Promise.reject(new Error("Compiled subprocess owner is closing"));
     }
-    return (preparation ??= (async () => {
+    const existing = preparations.get(demand);
+    if (existing) {
+      return existing;
+    }
+    const preparation = (async () => {
+      // Members are immutable. Workers reference the already sealed small member;
+      // mixed requests never extend a manifest or compile a second handoff closure.
+      if (demand === "workers") {
+        await prepare("handoff");
+      }
+      if (disposal) {
+        throw new Error("Compiled subprocess owner is closing");
+      }
       compilerJoined = false;
       const code = await runManagedCommand({
         bin: process.execPath,
-        args: [fileURLToPath(new URL("./vitest-worker-compiler.mts", import.meta.url)), directory],
+        args: [
+          fileURLToPath(new URL("./vitest-worker-compiler.mts", import.meta.url)),
+          directory,
+          demand,
+        ],
         cwd: root,
         shell: false,
         // Match the native declaration owner: POSIX group/output join; Windows close/taskkill.
@@ -69,39 +87,68 @@ export function createVitestWorkerRun() {
         throw new Error(`Compiled subprocess build failed with exit code ${code}`);
       }
       const manifest: VitestWorkerManifest = JSON.parse(
-        fs.readFileSync(path.join(directory, "manifest.json"), "utf8"),
+        fs.readFileSync(
+          path.join(vitestArtifactDirectory(directory, demand), "manifest.json"),
+          "utf8",
+        ),
       );
       console.error(
-        `[vitest-workers] prepared ${manifest.identity.slice(0, 12)} in ${Math.round(manifest.durationMs)}ms (${Object.keys(manifest.inputs).length} inputs, ${Object.keys(manifest.outputs).length} outputs)`,
+        `[vitest-${demand}] prepared ${manifest.identity.slice(0, 12)} in ${Math.round(manifest.durationMs)}ms (${Object.keys(manifest.inputs).length} inputs, ${Object.keys(manifest.outputs).length} outputs)`,
       );
       return manifest;
-    })());
+    })();
+    preparations.set(demand, preparation);
+    return preparation;
   }
   return {
     descriptor: { directory } satisfies VitestWorkerDescriptor,
     borrow<T>(child: ChildProcess, completion: Promise<T>): Promise<T> {
-      let request: Promise<void> | undefined;
+      const requests = new Map<VitestArtifactDemand, Promise<void>>();
       const onMessage = (message: unknown) => {
-        if (message !== VITEST_WORKER_PREPARE_REQUEST || request) {
+        if (
+          !message ||
+          typeof message !== "object" ||
+          !("type" in message) ||
+          message.type !== VITEST_WORKER_PREPARE_REQUEST ||
+          !("demand" in message) ||
+          (message.demand !== "workers" && message.demand !== "handoff") ||
+          requests.has(message.demand)
+        ) {
           return;
         }
-        request = (async () => {
-          let reply: { type: string; error?: string } = { type: VITEST_WORKER_PREPARE_REPLY };
-          try {
-            const manifest = await prepare();
-            await verifyVitestWorkerArtifacts(directory, manifest);
-            if (disposal) {
-              throw new Error("Compiled subprocess owner is closing");
+        const demand = message.demand;
+        requests.set(
+          demand,
+          (async () => {
+            let reply: { type: string; demand: VitestArtifactDemand; error?: string } = {
+              type: VITEST_WORKER_PREPARE_REPLY,
+              demand,
+            };
+            try {
+              const manifest = await prepare(demand);
+              await verifyVitestWorkerArtifacts(
+                vitestArtifactDirectory(directory, demand),
+                manifest,
+              );
+              if (demand === "workers") {
+                await verifyVitestWorkerArtifacts(
+                  vitestArtifactDirectory(directory, "handoff"),
+                  await prepare("handoff"),
+                );
+              }
+              if (disposal) {
+                throw new Error("Compiled subprocess owner is closing");
+              }
+            } catch (error) {
+              reply = { type: VITEST_WORKER_PREPARE_REPLY, demand, error: String(error) };
             }
-          } catch (error) {
-            reply = { type: VITEST_WORKER_PREPARE_REPLY, error: String(error) };
-          }
-          if (child.connected) {
-            child.send(reply, (error) => {
-              channelError ??= error ?? undefined;
-            });
-          }
-        })();
+            if (child.connected) {
+              child.send(reply, (error) => {
+                channelError ??= error ?? undefined;
+              });
+            }
+          })(),
+        );
       };
       child.on("message", onMessage);
       // Existing Windows completion observes exit; artifact ownership additionally
@@ -120,10 +167,11 @@ export function createVitestWorkerRun() {
       // Child completion must let callers reach disposal to cancel compilation.
       // The owner still joins admission reads before releasing their generation.
       const ownedCompletion = (async () => {
-        try {
-          await joined;
-        } finally {
-          await request;
+        const completed = await Promise.allSettled([joined]);
+        const admissions = await Promise.allSettled(requests.values());
+        const failed = [...completed, ...admissions].find((result) => result.status === "rejected");
+        if (failed?.status === "rejected") {
+          throw failed.reason;
         }
       })();
       borrowers.push(ownedCompletion);
@@ -136,16 +184,24 @@ export function createVitestWorkerRun() {
         const settled = await Promise.allSettled(borrowers);
         const uncertain = settled.find((result) => result.status === "rejected");
         try {
-          await preparation;
+          const prepared = await Promise.allSettled(preparations.values());
+          const failed = prepared.find((result) => result.status === "rejected");
+          if (failed?.status === "rejected") {
+            throw failed.reason;
+          }
           if (uncertain?.status === "rejected") {
             throw uncertain.reason;
           }
           if (channelError) {
             throw channelError;
           }
-          if (fs.existsSync(path.join(directory, "manifest.json"))) {
+          for (const demand of ["handoff", "workers"] as const) {
+            const member = vitestArtifactDirectory(directory, demand);
+            if (!fs.existsSync(path.join(member, "manifest.json"))) {
+              continue;
+            }
             console.error("[vitest-workers] verifying completed generation before cleanup");
-            await verifyVitestWorkerArtifacts(directory);
+            await verifyVitestWorkerArtifacts(member);
           }
         } finally {
           if (uncertain || !compilerJoined) {

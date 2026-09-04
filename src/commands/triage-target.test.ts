@@ -137,12 +137,14 @@ describe.skipIf(process.platform === "win32")("embedded triage installation targ
     });
   });
   it.each([
-    { layout: "split" as const, fails: false, workspaceSelector: "custom" },
-    { layout: "home" as const, fails: false, workspaceSelector: "default" },
-    { layout: "split" as const, fails: true, workspaceSelector: "default" },
+    { layout: "split" as const, fails: false, workspaceSelector: "custom", automatic: false },
+    { layout: "home" as const, fails: false, workspaceSelector: "default", automatic: false },
+    { layout: "split" as const, fails: true, workspaceSelector: "default", automatic: false },
+    { layout: "split" as const, fails: false, workspaceSelector: "custom", automatic: true },
+    { layout: "home" as const, fails: true, workspaceSelector: "default", automatic: true },
   ])(
-    "keeps the $layout installation and $workspaceSelector workspace addressable (fails=$fails)",
-    async ({ layout, fails, workspaceSelector }) => {
+    "keeps the $layout installation and $workspaceSelector workspace addressable (fails=$fails, automatic=$automatic)",
+    async ({ layout, fails, workspaceSelector, automatic }) => {
       const previousSnapshot = getRuntimeConfigSnapshot();
       const temporaryRoot = os.tmpdir();
       // Clear inherited credentials and selectors through the tracked helper. Only
@@ -186,7 +188,7 @@ describe.skipIf(process.platform === "win32")("embedded triage installation targ
                 Object.getOwnPropertyDescriptor(stream, "isTTY"),
               );
               for (const stream of [process.stdin, process.stdout]) {
-                Object.defineProperty(stream, "isTTY", { configurable: true, value: true });
+                Object.defineProperty(stream, "isTTY", { configurable: true, value: !automatic });
               }
               try {
                 await state.writeConfig({
@@ -220,7 +222,15 @@ describe.skipIf(process.platform === "win32")("embedded triage installation targ
                   },
                 ]);
                 mocks.writeDiagnosticSupportExport.mockResolvedValue({ path: archivePath });
-                mocks.verifySetupInference.mockResolvedValue({ ok: true });
+                const target = resolveInstallationTarget();
+                const observedTargets: Record<
+                  string,
+                  ReturnType<typeof getInstallationTarget>
+                > = {};
+                mocks.verifySetupInference.mockImplementation(async () => {
+                  observedTargets.preflight = getInstallationTarget();
+                  return { ok: true };
+                });
                 const runtime = {
                   log: vi.fn(),
                   error: vi.fn(),
@@ -249,7 +259,10 @@ describe.skipIf(process.platform === "win32")("embedded triage installation targ
                 let runStateDir = "";
                 let shellLookup = "";
                 let childTarget: ChildTarget | undefined;
+                const controller = new AbortController();
+                const runFailure = new Error("synthetic run failure");
                 mocks.agentCommand.mockImplementation(async (opts: Record<string, unknown>) => {
+                  observedTargets.repair = getInstallationTarget();
                   const prompt = String(opts.message);
                   const archiveReference = /^Sanitized ZIP: (.+)$/mu.exec(prompt)?.[1];
                   expect(archiveReference).toBe(
@@ -298,8 +311,17 @@ describe.skipIf(process.platform === "win32")("embedded triage installation targ
                   );
                   shellLookup = shell.stdout;
                   childTarget = await inspectChildTarget(toolEnv, state.workspaceDir);
+                  if (automatic) {
+                    expect(opts.abortSignal).toBe(controller.signal);
+                    expect(prompt).toContain("## Triggering failure");
+                    expect(prompt).toContain("openclaw health --json");
+                    if (fails) {
+                      controller.abort(runFailure);
+                      controller.signal.throwIfAborted();
+                    }
+                  }
                   if (fails) {
-                    throw new Error("synthetic run failure");
+                    throw runFailure;
                   }
                   return {
                     payloads: [{ text: "Synthetic boundary probes completed." }],
@@ -307,17 +329,33 @@ describe.skipIf(process.platform === "win32")("embedded triage installation targ
                   };
                 });
 
+                const run = triageCommand(
+                  runtime,
+                  automatic ? {} : { run: true },
+                  automatic
+                    ? {
+                        failure: {
+                          kind: "update",
+                          phase: "restart-unhealthy",
+                          error: `Synthetic startup failure; Authorization: Bearer ${secret}`,
+                          expectedVersion: marker,
+                          gateway: "verify-running",
+                        },
+                        signal: controller.signal,
+                        assertCurrent: vi.fn(),
+                      }
+                    : undefined,
+                );
                 if (fails) {
-                  await expect(triageCommand(runtime, { run: true })).rejects.toMatchObject({
-                    code: 1,
-                  });
+                  await expect(run).rejects.toMatchObject({ code: 1 });
                 } else {
-                  await triageCommand(runtime, { run: true });
+                  await run;
                 }
 
                 expect(runtime.error.mock.calls).toEqual(fails ? [["synthetic run failure"]] : []);
                 expect(runtime.exit.mock.calls).toEqual(fails ? [[1]] : []);
                 expect(getInstallationTarget()).toBeUndefined();
+                expect(observedTargets).toEqual({ preflight: target, repair: target });
                 expect(mocks.agentCommand).toHaveBeenCalledOnce();
                 expect(execSpy).toHaveBeenCalledOnce();
                 expect(execSpy.mock.calls[0]?.[1].stateDir).toBeUndefined();

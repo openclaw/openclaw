@@ -16,6 +16,7 @@ import {
   TSDOWN_UNIFIED_DTS_CONFIG_GROUPS,
 } from "../../scripts/lib/tsdown-config-groups.mts";
 import { WORKER_DEPLOY_OPTIONAL_NATIVE_MODULE_ID } from "../../scripts/lib/worker-deploy-build-plugin.mts";
+import { MANAGED_HANDOFF_RUNTIME_ENTRY } from "../../src/infra/update-managed-service-handoff-runtime-assets.js";
 import { importFreshModule } from "../../src/plugin-sdk/test-helpers/import-fresh.js";
 import buildConfigs from "../../tsdown.config.ts";
 import { copyFsSafePackageFixture } from "./fs-safe-package.test-support.js";
@@ -83,6 +84,125 @@ if (loaded.length) assert(loaded[0].startsWith(path.dirname(rootDir) + path.sep)
 `;
 
 describe("tsdown config", () => {
+  it("stages the canonical handoff closure from relocated output before package removal", async () => {
+    const root = fs.realpathSync(createTempDir("openclaw-tsdown-handoff-"));
+    const packageRoot = path.join(root, "package");
+    const relocated = path.join(root, "relocated");
+    const stage = path.join(root, "handoff");
+    fs.mkdirSync(packageRoot);
+    fs.mkdirSync(stage);
+    fs.writeFileSync(path.join(packageRoot, "package.json"), '{"type":"module"}');
+    const selected = configs.find((config) => config.name === TSDOWN_UNIFIED_CONFIG_GROUP);
+    const sealed = configs.find((config) =>
+      hasWorkerEntry(
+        config,
+        "managed-handoff-runtime",
+        path.resolve("src/infra/update-managed-service-handoff-sealed.ts"),
+      ),
+    );
+    expect(sealed).toBeDefined();
+    const bundles = await build({
+      ...selected,
+      config: false,
+      cwd: path.resolve(),
+      entry: { stage: "src/infra/update-managed-service-handoff-runtime.ts" },
+      outDir: path.join(packageRoot, "dist"),
+      dts: false,
+      logLevel: "warn",
+    });
+    try {
+      bundles.push(
+        ...(await build({
+          ...sealed,
+          config: false,
+          cwd: path.resolve(),
+          outDir: path.join(packageRoot, "dist"),
+          clean: false,
+          logLevel: "warn",
+        })),
+      );
+      expect(
+        fs.statSync(path.join(packageRoot, "dist", MANAGED_HANDOFF_RUNTIME_ENTRY)).size,
+      ).toBeGreaterThan(0);
+      fs.renameSync(packageRoot, relocated);
+      const script = `
+        import assert from "node:assert/strict";
+        import fs from "node:fs";
+        import path from "node:path";
+        import { pathToFileURL } from "node:url";
+        import { spawnSync } from "node:child_process";
+        const [root, stage, entry] = process.argv.slice(1);
+        const { stageManagedHandoffRuntime } = await import(pathToFileURL(path.join(root, "dist/stage.js")));
+        const files = stageManagedHandoffRuntime(stage);
+        assert.equal(files.length, 1);
+        if (process.platform !== "win32") assert.equal(fs.statSync(files[0]).mode & 0o777, 0o600);
+        const invoke = () => {
+          const result = spawnSync(process.execPath, ["--input-type=module", "-e",
+            ${JSON.stringify(`
+              import assert from "node:assert/strict";
+              import path from "node:path";
+              import {DatabaseSync} from "node:sqlite";
+              import {createRequire, registerHooks, isBuiltin} from "node:module";
+              import {pathToFileURL} from "node:url";
+              const entry = pathToFileURL(process.argv[1]).href;
+              registerHooks({resolve(specifier, context, next) {
+                if (!isBuiltin(specifier) && specifier !== process.argv[1] && specifier !== entry)
+                  throw new Error("nonbuiltin resolution denied: " + specifier);
+                return next(specifier, context);
+              }});
+              const {createManagedHandoffLeaseRuntime}=createRequire(import.meta.url)(process.argv[1]);
+              const databasePath=path.join(process.cwd(),"lease","state.sqlite"), root=process.cwd();
+              const warnings=[];
+              const store=createManagedHandoffLeaseRuntime({databasePath,serviceManagerEnv:{PATH:process.env.PATH}}, {warn:(message, metadata)=>warnings.push({message, metadata})});
+              const first=store.acquire(root,"initial",{kind:"update"}); assert.equal(first.kind,"acquired");
+              const db=new DatabaseSync(databasePath);
+              const clock=Date.now;
+              let elapsed=0;
+              Date.now=()=>clock()+elapsed;
+              try { store.transact(db,()=>{elapsed+=1500;}); } finally {Date.now=clock;}
+              assert(warnings.some(w=>w.message==='slow SQLite transaction hold' && w.metadata.elapsedMs>=1500));
+              const exec=db.exec.bind(db);
+              db.exec=sql=>{if(sql==='BEGIN IMMEDIATE')throw Object.assign(new Error('busy'),{errcode:5});return exec(sql);};
+              assert.throws(()=>store.transact(db,()=>{}),/busy/);
+              db.exec=exec;
+              assert(warnings.some(w=>w.message==='SQLite transaction lock wait failed' && w.metadata.failureKind==='lock-contention'));
+              assert.throws(()=>store.transact(db,()=>{db.prepare('DELETE FROM managed_update_handoffs').run();throw new Error('rollback');}),/rollback/);
+              assert(store.current(first.lease));
+              db.prepare("UPDATE managed_update_handoffs SET payload_json = ? WHERE install_root = ?").run(JSON.stringify({version:1,pid:process.pid,startIdentity:"0"}),root);db.close();
+              assert.equal(store.read(root).kind,"unreadable");
+              const next=store.acquire(root,"successor",{kind:"update"});assert.equal(next.kind,"acquired");
+              assert.equal(next.lease.version,2);assert(store.owns(next.lease));assert(store.release(next.lease));assert.equal(store.read(root).kind,"absent");
+            `)},
+            path.join(stage, "runtime", entry)], {cwd:stage,encoding:"utf8",timeout:5000,
+              env:{PATH:process.env.PATH,SystemRoot:process.env.SystemRoot,HOME:stage,USERPROFILE:stage,TMPDIR:stage,TMP:stage,TEMP:stage,
+                OPENCLAW_STATE_DIR:path.join(stage,"state"),OPENCLAW_CONFIG_PATH:path.join(stage,"config.json5")}});
+          assert.equal(result.status, 0, result.stderr);
+        };
+        fs.writeFileSync(path.join(stage,"config.json5"),"{logging:{level:'warn',file:"+JSON.stringify(path.join(stage,"diagnostic.log"))+",},}");
+        invoke();
+        fs.rmSync(root, {recursive:true});
+        invoke();
+        console.log("staged closure survives package removal");
+      `;
+      const result = await new Promise<{ error: Error | null; stdout: string; stderr: string }>(
+        (resolve) => {
+          execFile(
+            process.execPath,
+            ["--input-type=module", "-e", script, relocated, stage, MANAGED_HANDOFF_RUNTIME_ENTRY],
+            { cwd: root, timeout: 15000 },
+            (error, stdout, stderr) => resolve({ error, stdout, stderr }),
+          );
+        },
+      );
+      expect(result.error, result.stderr).toBeNull();
+      expect(result.stdout.trim()).toBe("staged closure survives package removal");
+    } finally {
+      for (const bundle of bundles) {
+        await bundle[Symbol.asyncDispose]();
+      }
+    }
+  });
+
   it.each([false, true])(
     "runs the Docker-selected memory store with only production dependencies (verbose=%s)",
     async (verbose) => {
@@ -561,6 +681,8 @@ describe("tsdown config", () => {
         ...selected,
         config: false,
         cwd: root,
+        // This graph contains only synthetic dependencies; real asset copying is covered above.
+        copy: undefined,
         entry: [entry],
         outDir: path.join(root, "dist"),
         tsconfig: false,
@@ -703,6 +825,7 @@ describe("tsdown config", () => {
     ).version;
     expect(workerConfig?.define).toEqual({
       WORKER_DEPLOY_BUILD: "true",
+      SEALED_RUNTIME_BUILD: "true",
       WORKER_DEPLOY_VERSION: JSON.stringify(packageVersion),
     });
     expect(workerConfig?.alias).toMatchObject({

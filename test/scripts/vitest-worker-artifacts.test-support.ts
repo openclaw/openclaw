@@ -4,7 +4,11 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { convertPathToPattern } from "tinyglobby";
 import { expect, it, vi, type TestContext } from "vitest";
-import type { VitestWorkerManifest } from "../../scripts/lib/vitest-worker-artifacts.mts";
+import {
+  vitestArtifactDirectory,
+  type VitestArtifactDemand,
+  type VitestWorkerManifest,
+} from "../../scripts/lib/vitest-worker-artifacts.mts";
 import type { VitestWorkerRun } from "../../scripts/lib/vitest-worker-run.mts";
 import { resolveVitestSpawnParams, spawnWatchedVitestProcess } from "../../scripts/run-vitest.mts";
 import { createVitestProcessCompletion } from "../../scripts/vitest-process-group.mts";
@@ -102,9 +106,16 @@ function createWorkerArtifactFixtures({
       };
     }
 
-    async function prepareWorkers(owner: VitestWorkerRun): Promise<VitestWorkerManifest> {
+    async function prepareWorkers(
+      owner: VitestWorkerRun,
+      demand: VitestArtifactDemand = "workers",
+    ): Promise<VitestWorkerManifest> {
       commandSignal.throwIfAborted();
-      const child = spawn(process.execPath, ["--input-type=module", "--eval", preparationClient], {
+      const client = preparationClient.replace(
+        "requestVitestWorkerArtifacts();",
+        `requestVitestWorkerArtifacts(${JSON.stringify(demand)});`,
+      );
+      const child = spawn(process.execPath, ["--input-type=module", "--eval", client], {
         detached: process.platform !== "win32",
         stdio: ["ignore", "ignore", "pipe", "ipc"],
       });
@@ -128,7 +139,10 @@ function createWorkerArtifactFixtures({
       const result = await completion;
       expect(result.code, stderr).toBe(0);
       return JSON.parse(
-        fs.readFileSync(path.join(owner.descriptor.directory, "manifest.json"), "utf8"),
+        fs.readFileSync(
+          path.join(vitestArtifactDirectory(owner.descriptor.directory, demand), "manifest.json"),
+          "utf8",
+        ),
       );
     }
 

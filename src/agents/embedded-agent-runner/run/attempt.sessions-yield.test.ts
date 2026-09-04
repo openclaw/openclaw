@@ -90,7 +90,7 @@ describe("waitForSessionsYieldAbortSettle", () => {
     await wait;
 
     expect(log.warn).toHaveBeenCalledWith(
-      `sessions_yield abort settle timed out: runId=run-1 sessionId=session-1 timeoutMs=${timeoutMs}`,
+      `agent cleanup timed out: runId=run-1 sessionId=session-1 step=sessions_yield-abort-settle timeoutMs=${timeoutMs}`,
     );
     expect(vi.getTimerCount()).toBe(0);
   });
@@ -106,7 +106,7 @@ describe("waitForSessionsYieldAbortSettle", () => {
     });
 
     expect(log.warn).toHaveBeenCalledWith(
-      "sessions_yield abort settle failed: runId=run-1 sessionId=session-1 err=Error: settle failed",
+      "agent cleanup failed: runId=run-1 sessionId=session-1 step=sessions_yield-abort-settle error=settle failed",
     );
     expect(vi.getTimerCount()).toBe(0);
   });

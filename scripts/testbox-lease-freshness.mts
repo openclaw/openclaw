@@ -19,6 +19,7 @@ const ENVIRONMENT_INPUTS = [
   ".github/workflows/ci-check-testbox.yml",
   ".node-version",
   "scripts/crabbox-wrapper.mjs",
+  "scripts/crabbox-wrapper.mts",
 ];
 
 function optionValue(args: readonly string[], name: string, fallback = "") {

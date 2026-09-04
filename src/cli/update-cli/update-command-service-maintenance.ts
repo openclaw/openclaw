@@ -40,7 +40,7 @@ import {
   waitForSignalExitBarriers,
 } from "../signal-exit-barrier.js";
 import { UpdatePreMutationError } from "./shared.js";
-import { gatewayAncestryBlockMessage } from "./update-command-handoff.js";
+import { gatewayMaintenanceBlockMessage } from "./update-command-handoff.js";
 import { runUpdatedInstallGatewayCommand } from "./update-command-service-command.js";
 import {
   assertGatewayServiceManagementAllowedForUpdate,
@@ -246,10 +246,6 @@ export class UpdateCommandAbort extends Error {
     super("openclaw-update-abort");
     this.name = "UpdateCommandAbort";
   }
-}
-
-function serviceControlStdoutForMode(jsonMode: boolean): NodeJS.WritableStream {
-  return jsonMode ? JSON_MODE_SERVICE_STDOUT : process.stdout;
 }
 
 function armWindowsTaskAutoStartRecovery(
@@ -480,9 +476,17 @@ export async function maybeStopManagedServiceBeforeMutableUpdate(params: {
     serviceUpdateVerdict.kind === "owned" &&
     params.shouldRestart &&
     serviceState.running &&
-    (await params.handoffFromGateway?.(serviceState))
+    params.handoffFromGateway
   ) {
-    throw new UpdateCommandAbort();
+    // A handoff delegates a stop. Refuse triage self-stop here, not through a
+    // competing helper's busy lease; genuine Gateway ancestry may still transfer.
+    const blockMessage = gatewayMaintenanceBlockMessage(serviceState, params.root, "handoff");
+    if (blockMessage) {
+      return { ...inspected, blockMessage };
+    }
+    if (await params.handoffFromGateway(serviceState)) {
+      throw new UpdateCommandAbort();
+    }
   }
   if (serviceUpdateVerdict.kind === "absent") {
     return {
@@ -536,9 +540,9 @@ export async function maybeStopManagedServiceBeforeMutableUpdate(params: {
       ...(windowsTaskAutoStartRecovery ? { windowsTaskAutoStartRecovery } : {}),
     };
   }
-  const blockMessage = gatewayAncestryBlockMessage(serviceState.runtime?.pid);
+  const blockMessage = gatewayMaintenanceBlockMessage(serviceState, params.root);
   if (blockMessage) {
-    return { ...inspected, running: true, blockMessage };
+    return { ...inspected, blockMessage };
   }
 
   if (!params.jsonMode) {
@@ -566,13 +570,13 @@ export async function maybeStopManagedServiceBeforeMutableUpdate(params: {
             : serviceUpdateVerdict,
       },
     });
-    const currentBlockMessage = gatewayAncestryBlockMessage(currentState.runtime?.pid);
+    const currentBlockMessage = gatewayMaintenanceBlockMessage(currentState, params.root);
     if (currentBlockMessage) {
       throw new UpdatePreMutationError("managed-service-preflight", currentBlockMessage);
     }
     await service.stop({
       env: currentState.env,
-      stdout: serviceControlStdoutForMode(params.jsonMode),
+      stdout: params.jsonMode ? JSON_MODE_SERVICE_STDOUT : process.stdout,
     });
     if (windowsTaskAutoStartRecovery) {
       await abortWindowsTaskUpdateIfInterrupted(windowsTaskAutoStartRecovery);

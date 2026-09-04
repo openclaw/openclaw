@@ -1,5 +1,7 @@
 // Update failures and control-plane results share one reporting boundary.
+import { PLUGIN_CAPABILITY_CONSENT_REQUIRED } from "../../../packages/gateway-protocol/src/capability-consent-error-details.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
+import type { TriageFailureContext } from "../../commands/triage-prompt.js";
 import {
   markControlPlaneUpdateRestartSentinelFailure,
   resolveManagedServiceUpdateFailureExitCode,
@@ -12,6 +14,7 @@ import type { UpdateRunResult } from "../../infra/update-runner.js";
 import { defaultRuntime } from "../../runtime.js";
 import { printResult } from "./progress.js";
 import type { UpdateCommandOptions } from "./shared.js";
+import type { PreManagedServiceStop } from "./update-command-service-maintenance.js";
 
 /** Unwind update ownership before diagnostics or an interactive agent can run. */
 export class UpdateCommandFailure extends Error {
@@ -20,10 +23,54 @@ export class UpdateCommandFailure extends Error {
     readonly exitCode = 1,
     readonly detail?: string,
     options?: ErrorOptions,
+    readonly automaticTriage?: TriageFailureContext,
   ) {
     super(detail ?? result.reason ?? "Update failed", options);
     this.name = "UpdateCommandFailure";
   }
+}
+
+export function resolveAutomaticUpdateTriage(
+  result: UpdateRunResult,
+  detail: string | undefined,
+  params: {
+    mutationStarted: boolean;
+    root: string;
+    installKindChanged: boolean;
+    expectedVersion?: string;
+    gateway: TriageFailureContext["gateway"];
+    preManagedServiceStop?: Pick<PreManagedServiceStop, "serviceMutationAllowed">;
+  },
+): TriageFailureContext | undefined {
+  const eligible =
+    (params.mutationStarted || result.reason === "restart-unhealthy") &&
+    result.reason !== "service-revalidation-failed" &&
+    !(
+      result.recovery?.serviceRestartSafe === false &&
+      result.recovery.reason === "rollback-checkout-dirty"
+    ) &&
+    !result.postUpdate?.plugins?.capabilityConsentRequired &&
+    !result.postUpdate?.plugins?.npm.outcomes.some(
+      (outcome) => outcome.code === PLUGIN_CAPABILITY_CONSENT_REQUIRED,
+    ) &&
+    params.preManagedServiceStop?.serviceMutationAllowed !== false &&
+    !result.steps.some((step) => step.termination === "signal");
+  const failedStep = result.steps.find((step) => step.exitCode !== 0 && !step.advisory);
+  const phase = result.reason ?? "update";
+  return eligible
+    ? {
+        kind: "update",
+        phase,
+        error: detail ?? failedStep?.stderrTail ?? failedStep?.stdoutTail ?? phase,
+        // Global exposure, not the candidate checkout, identifies a package-to-Git target.
+        installationRoot:
+          params.installKindChanged && result.mode === "git"
+            ? params.root
+            : (result.root ?? params.root),
+        expectedVersion: params.expectedVersion ?? result.after?.version ?? undefined,
+        gateway: params.gateway,
+      }
+    : undefined;
 }
 
 export async function reportPreMutationUpdateFailure(params: {

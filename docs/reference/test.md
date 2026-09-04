@@ -29,7 +29,10 @@ After the first successful reuse, the wrapper records the lease's base,
 dependency, and Testbox workflow fingerprint under `.crabbox/testbox-leases/`.
 Source-only edits keep reusing the warmed box. A changed merge base, lockfile,
 package-manager input, wrapper, or Testbox workflow fails closed and requires a
-fresh lease. Every run still syncs the current checkout.
+fresh lease. Every Testbox wrapper run syncs the current checkout, reconstructs the final
+candidate when needed, then runs `corepack pnpm install --frozen-lockfile` before
+the requested command. pnpm handles dependency alignment and its normal warm
+install path; a preparation failure prevents the command from running.
 `OPENCLAW_TESTBOX_ALLOW_STALE=1` is only for intentional diagnostics, not
 release proof.
 
@@ -86,6 +89,12 @@ enable Windows support. Blacksmith CLI 0.4.57 targets `runner` and has no native
 username override, so supported CLI sync/run on this Windows image remains
 blocked. Native SSH inspection with the per-Testbox key is not CLI end-to-end
 proof.
+
+For Testbox, the wrapper installs from the final synced repository root, so Corepack selects
+that candidate's `packageManager`. Preparation output goes to stderr, preserving
+the requested command's stdout and exit status. The maintained `testbox-changed`
+named job also runs a frozen install before its checks. Arbitrary raw
+`blacksmith testbox run` commands do not receive this consumer preparation.
 
 The wrapper checks an executable sibling `../crabbox/bin/crabbox`, then `PATH`,
 then the sibling of the Git common checkout. Verify the selected binary and
@@ -244,6 +253,11 @@ The session-title and child-link retention tests declare their title-reader,
 session-utils, and listing roots in this same generation. Each fresh
 heap-measurement child runs their JavaScript without spending its execution
 deadline on TypeScript imports.
+
+Automatic-triage process fixtures also share this generation for admission,
+failure handling, execution, process identity, and respawn checks. Compilation
+finishes before readiness deadlines begin, so children load prepared JavaScript
+instead of transforming those source graphs separately.
 
 Preparation is lazy across both projects and shards. Config imports, listing
 tests, and tiny tests that do not import these declarations do not load the

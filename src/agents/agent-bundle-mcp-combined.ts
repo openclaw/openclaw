@@ -8,6 +8,7 @@ import type {
   McpToolCatalogDiagnostic,
   SessionMcpRuntime,
 } from "./agent-bundle-mcp-types.js";
+import { recordAgentCleanupFailure } from "./run-cleanup-timeout.js";
 
 const COMBINED_SESSION_MCP_RUNTIME = Symbol.for("openclaw.combinedSessionMcpRuntime");
 
@@ -87,6 +88,8 @@ export function createCombinedSessionMcpRuntime(params: {
   let cachedCatalog: McpToolCatalog | null = null;
   let mergedSourceCatalogs: ReadonlyArray<McpToolCatalog> | null = null;
   let catalogInFlight: Promise<McpToolCatalog> | undefined;
+  let disposal: Promise<void> | undefined;
+  let cleanupFailure: PromiseRejectedResult | undefined;
   const serverOwner = new Map<string, SessionMcpRuntime>();
   const requesterConnect = parts.find((part) => part.requesterConnect)?.requesterConnect;
 
@@ -251,8 +254,34 @@ export function createCombinedSessionMcpRuntime(params: {
       }
       return await owner.getPrompt(serverName, name, args);
     },
+    async joinCleanup() {
+      await disposal;
+      const outcomes = await Promise.allSettled(
+        parts.map(async (part) => {
+          if (!part.joinCleanup) {
+            throw new Error("MCP runtime does not expose cleanup ownership");
+          }
+          await part.joinCleanup();
+        }),
+      );
+      cleanupFailure ??= outcomes.find((outcome) => outcome.status === "rejected");
+      if (cleanupFailure) {
+        recordAgentCleanupFailure();
+        throw cleanupFailure.reason;
+      }
+    },
     async dispose() {
-      await Promise.allSettled(parts.map((part) => part.dispose()));
+      // SDK parts may throw without retaining their own failure. The facade owns
+      // that result across callers while Gateway disposal stays best effort.
+      disposal ??= Promise.allSettled(parts.map(async (part) => await part.dispose())).then(
+        (outcomes) => {
+          cleanupFailure ??= outcomes.find((outcome) => outcome.status === "rejected");
+        },
+      );
+      await disposal;
+      if (cleanupFailure) {
+        recordAgentCleanupFailure();
+      }
     },
   };
   return combined;

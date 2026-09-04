@@ -2,20 +2,30 @@
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { createManagedHandoffBuildConfig } from "./managed-handoff-build-config.mts";
 import { createStateSchemaInlinePlugin } from "./state-schema-inline-plugin.mts";
 import {
   hashVitestWorkerArtifact,
+  vitestArtifactDirectory,
+  vitestHandoffDeclarationEntries,
+  type VitestArtifactDemand,
   verifyVitestWorkerArtifacts,
   vitestWorkerDeclarationEntries,
   type VitestWorkerManifest,
 } from "./vitest-worker-artifacts.mts";
-import { vitestWorkerBuildEntries } from "./vitest-worker-build-entries.mts";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const require = createRequire(import.meta.url);
 
-async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
+async function compileVitestWorkerArtifacts(
+  directory: string,
+  demand: VitestArtifactDemand,
+): Promise<void> {
+  const member = vitestArtifactDirectory(directory, demand);
+  if (demand === "handoff") {
+    fs.mkdirSync(member);
+  }
   const started = performance.now();
   // The native child owns the compiler module graph for this one preparation.
   const { build }: typeof import("tsdown") = require("tsdown");
@@ -50,17 +60,33 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
     "scripts/lib/vitest-worker-build-entries.mts",
     "scripts/lib/state-schema-inline-plugin.mts",
     "scripts/lib/vitest-cli-mode.mts",
+    "src/infra/update-managed-service-handoff-runtime-assets.ts",
+    "scripts/lib/managed-handoff-build-config.mts",
   ]) {
     recordInput(path.join(root, name));
   }
-  const entry = {
-    ...vitestWorkerBuildEntries,
-    ...vitestWorkerDeclarationEntries,
-  };
+  const {
+    vitestWorkerBuildEntries,
+    vitestMaintenanceBuildEntries,
+  }: {
+    vitestWorkerBuildEntries: Record<string, string>;
+    vitestMaintenanceBuildEntries: Record<string, string>;
+  } =
+    demand === "workers"
+      ? await import("./vitest-worker-build-entries.mts")
+      : { vitestWorkerBuildEntries: {}, vitestMaintenanceBuildEntries: {} };
+  const entry =
+    demand === "handoff"
+      ? vitestHandoffDeclarationEntries
+      : {
+          ...vitestWorkerBuildEntries,
+          ...vitestWorkerDeclarationEntries,
+          ...vitestMaintenanceBuildEntries,
+        };
   const schemaPlugin = createStateSchemaInlinePlugin(root);
-  const outDir = path.join(directory, "dist");
-  await build({
-    config: false,
+  const outDir = path.join(member, "dist");
+  const serviceUrl = pathToFileURL(path.join(outDir, "triage-maintenance/service.js")).href;
+  const metadataConfig = {
     cwd: root,
     entry,
     outDir,
@@ -80,6 +106,43 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
     },
     logLevel: "warn",
     plugins: [
+      {
+        name: "openclaw:maintenance-service-boundary",
+        resolveId(id, importer) {
+          if (
+            importer &&
+            id.startsWith(".") &&
+            path.resolve(path.dirname(importer), id).replace(/\.js$/u, ".ts") ===
+              path.join(
+                root,
+                vitestHandoffDeclarationEntries[
+                  "infra/update-managed-service-handoff-runtime-assets"
+                ],
+              )
+          ) {
+            return {
+              id: pathToFileURL(
+                path.join(
+                  vitestArtifactDirectory(directory, "handoff"),
+                  "dist/infra/update-managed-service-handoff-runtime-assets.js",
+                ),
+              ).href,
+              external: "absolute",
+            };
+          }
+          // Native mocks bind this generation's URL, not bundled local functions.
+          // All real consumers keep the same service edge in the shared graph.
+          if (
+            importer &&
+            id.startsWith(".") &&
+            path.resolve(path.dirname(importer), id).replace(/\.js$/u, ".ts") ===
+              vitestMaintenanceBuildEntries["triage-maintenance/service"]
+          ) {
+            return { id: serviceUrl, external: "absolute" };
+          }
+          return null;
+        },
+      },
       {
         name: "openclaw:worker-build-inputs",
         load(id) {
@@ -120,9 +183,22 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
         },
       },
     ],
-  });
+  } satisfies import("tsdown").UserConfig;
+  if (demand === "handoff") {
+    await build({
+      ...createManagedHandoffBuildConfig(),
+      config: false,
+      cwd: root,
+      outDir,
+      tsconfig: path.join(root, "tsconfig.json"),
+      clean: false,
+      logLevel: "warn",
+      plugins: [metadataConfig.plugins[1]],
+    });
+  }
+  await build({ ...metadataConfig, config: false });
   for (const name of Object.keys(entry)) {
-    fs.accessSync(path.join(directory, "dist", `${name}.js`));
+    fs.accessSync(path.join(outDir, `${name}.js`));
   }
   const sortedInputs = Object.fromEntries(
     Object.entries(inputs).toSorted(([a], [b]) => a.localeCompare(b)),
@@ -136,9 +212,9 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
     outputs: sortedOutputs,
     durationMs: performance.now() - started,
   };
-  await verifyVitestWorkerArtifacts(directory, manifest);
+  await verifyVitestWorkerArtifacts(member, manifest);
   manifest.durationMs = performance.now() - started;
-  fs.writeFileSync(path.join(directory, "manifest.json"), `${JSON.stringify(manifest)}\n`, {
+  fs.writeFileSync(path.join(member, "manifest.json"), `${JSON.stringify(manifest)}\n`, {
     flag: "wx",
   });
 }
@@ -147,15 +223,19 @@ if (import.meta.main) {
   try {
     const directory = fs.realpathSync(process.argv[2]!);
     const parent = fs.realpathSync(path.join(root, ".artifacts/vitest-workers"));
+    const demand = process.argv[3] ?? "workers";
     if (
-      process.argv.length !== 3 ||
+      ![3, 4].includes(process.argv.length) ||
+      (demand !== "workers" && demand !== "handoff") ||
       path.dirname(directory) !== parent ||
       !path.basename(directory).startsWith("run-") ||
-      fs.readdirSync(directory).some((name) => name !== "package.json")
+      fs
+        .readdirSync(directory)
+        .some((name) => name !== "package.json" && (demand !== "workers" || name !== "handoff"))
     ) {
       throw new Error("Compiled subprocess compiler requires a fresh invocation directory");
     }
-    await compileVitestWorkerArtifacts(directory);
+    await compileVitestWorkerArtifacts(directory, demand);
   } catch (error) {
     console.error(error);
     process.exitCode = 1;

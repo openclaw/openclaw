@@ -333,6 +333,7 @@ writeFileSync("dist/.runtime-postbuildstamp", "");
       OPENCLAW_FAKE_GATEWAY_TRACE: tracePath,
       OPENCLAW_FAKE_GATEWAY_CONTROL: control?.url,
     },
+    gatewayReadinessProbe: ({ port, signal }) => probeHttpReadiness(port, signal),
     startTimeoutMs,
     stopTimeoutMs,
   });
@@ -365,6 +366,13 @@ async function expectPathMissing(targetPath: string): Promise<void> {
     return;
   }
   throw new Error(`Expected missing path: ${targetPath}`);
+}
+
+// Lifecycle fixtures own real HTTP timing; the built CLI suite proves boot identity.
+async function probeHttpReadiness(port: number, signal: AbortSignal, fetchImpl = fetch) {
+  const response = await fetchImpl(`http://127.0.0.1:${port}/readyz`, { signal });
+  const result = await response.json();
+  return response.ok && result.ready === true;
 }
 
 function createGatewayProcessState(
@@ -1501,7 +1509,7 @@ describe("openclaw test instance", () => {
       // A synchronous regression must be killed and joined outside the Vitest event loop.
       const script = `
       import assert from "node:assert/strict";
-      import { testing } from ${JSON.stringify(new URL("./openclaw-test-instance.ts", import.meta.url).href)};
+      import * as testing from ${JSON.stringify(new URL("./bounded-child-output.ts", import.meta.url).href)};
       process.stderr.write("loaded actual log helper; waiting to start UTF-8 cases\\n");
       await (await fetch(${JSON.stringify(`${control.url}/wait`)})).text();
       for (const { chunks, limit, expected } of JSON.parse(process.argv[1])) {
@@ -1560,6 +1568,7 @@ describe("openclaw test instance", () => {
         [],
         1,
         10_000,
+        async () => false,
       ),
     ).rejects.toThrow("gateway exited before readiness");
   });
@@ -1573,7 +1582,9 @@ describe("openclaw test instance", () => {
       .mockResolvedValueOnce(new Response('{"ready":true,"failing":[]}', { status: 200 }));
 
     await expect(
-      testing.waitForGatewayReady(createGatewayProcessState(), [], [], 12345, 1_000, fetchImpl),
+      testing.waitForGatewayReady(createGatewayProcessState(), [], [], 12345, 1_000, (signal) =>
+        probeHttpReadiness(12345, signal, fetchImpl),
+      ),
     ).resolves.toBeUndefined();
 
     expect(fetchImpl).toHaveBeenCalledTimes(2);
@@ -1596,7 +1607,9 @@ describe("openclaw test instance", () => {
     const startedAt = Date.now();
 
     await expect(
-      testing.waitForGatewayReady(createGatewayProcessState(), [], [], 12345, 25, fetchImpl),
+      testing.waitForGatewayReady(createGatewayProcessState(), [], [], 12345, 25, (signal) =>
+        probeHttpReadiness(12345, signal, fetchImpl),
+      ),
     ).rejects.toThrow("timeout waiting for gateway readiness");
 
     expect(fetchImpl).toHaveBeenCalledOnce();
@@ -1624,7 +1637,9 @@ describe("openclaw test instance", () => {
     }, 25);
 
     await expect(
-      testing.waitForGatewayReady(processState, [], [], 12345, 5_000, fetchImpl),
+      testing.waitForGatewayReady(processState, [], [], 12345, 5_000, (signal) =>
+        probeHttpReadiness(12345, signal, fetchImpl),
+      ),
     ).rejects.toThrow("gateway exited before readiness");
 
     expect(fetchImpl).toHaveBeenCalledOnce();

@@ -58,6 +58,18 @@ export function exitResult(overrides: Partial<RunExit> = {}): RunExit {
   };
 }
 
+export function createCronStreamSupervisor<Spawn extends ProcessSupervisor["spawn"]>(spawn: Spawn) {
+  return {
+    acquireScopeCleanup: vi.fn(() => {
+      throw new Error("Cron stream fixture does not own a cleanup scope");
+    }),
+    spawn,
+    cancel: vi.fn(),
+    cancelScope: vi.fn(),
+    getRecord: vi.fn(),
+  } satisfies ProcessSupervisor;
+}
+
 export function fakeSupervisor() {
   const inputs: SpawnInput[] = [];
   const runs: ManagedRun[] = [];
@@ -80,12 +92,7 @@ export function fakeSupervisor() {
     exits.push(resolveWait);
     return run;
   });
-  const supervisor = {
-    spawn,
-    cancel: vi.fn(),
-    cancelScope: vi.fn(),
-    getRecord: vi.fn(),
-  } satisfies ProcessSupervisor;
+  const supervisor = createCronStreamSupervisor(spawn);
   return { inputs, runs, exits, spawn, supervisor };
 }
 

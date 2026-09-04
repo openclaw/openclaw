@@ -28,8 +28,14 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../src/test-utils/openclaw-test-state.js";
-import { sleep } from "../../src/utils.js";
-import { decodeUtf8Tail } from "./bounded-child-output.js";
+import { sleep } from "../../src/utils/sleep.js";
+import {
+  appendLogChunk,
+  createBoundedStringLog,
+  formatLogs,
+  readLogBuffer,
+} from "./bounded-child-output.js";
+import type { probeOwnedGatewayReadiness } from "./gateway-readiness-probe.js";
 import { runQaGatewayFixture } from "./qa-gateway-cleanup.js";
 
 type OpenClawTestStateOptions = NonNullable<Parameters<typeof createOpenClawTestState>[0]>;
@@ -47,6 +53,7 @@ type OpenClawTestInstanceOptions = {
   gatewayCommandPrefix?: string[];
   startTimeoutMs?: number;
   stopTimeoutMs?: number;
+  gatewayReadinessProbe?: typeof probeOwnedGatewayReadiness;
 };
 
 type OpenClawTestInstanceCommandResult = {
@@ -87,19 +94,12 @@ const GATEWAY_START_TIMEOUT_MS = 60_000;
 const GATEWAY_STOP_TIMEOUT_MS = 1_500;
 const GATEWAY_ENTRYPOINT_PREPARE_TIMEOUT_MS = 120_000;
 const COMMAND_TIMEOUT_MS = 30_000;
-const LOG_TAIL_MAX_BYTES = 256 * 1024;
 const GATEWAY_MIGRATION_CONVERGENCE_MAX_RESTARTS = 1;
 const GATEWAY_MIGRATION_CONVERGENCE_REFUSAL_PREFIX =
   "OpenClaw plugin migration inputs changed during startup convergence;";
 const GATEWAY_MIGRATION_CONVERGENCE_RESTART_MARKER =
   "[openclaw-test-instance] restarting gateway after migration convergence refusal\n";
 const entrypointPromises = new Map<string, Promise<string[]>>();
-
-type BoundedStringLog = string[] & {
-  maxBytes?: number;
-  byteLength?: number;
-  truncated?: boolean;
-};
 
 type OpenClawTestProcessReadiness = Pick<OpenClawTestProcess, "exitCode" | "signalCode"> & {
   once: (event: "exit", listener: () => void) => unknown;
@@ -114,57 +114,6 @@ type TaskkillResult = Exclude<
 > & {
   signal?: NodeJS.Signals | null;
 };
-
-function createBoundedStringLog(maxBytes = LOG_TAIL_MAX_BYTES): string[] {
-  const log = [] as BoundedStringLog;
-  log.maxBytes = Math.max(1, maxBytes);
-  log.byteLength = 0;
-  log.truncated = false;
-  return log;
-}
-
-function appendLogChunk(log: string[], chunk: unknown): void {
-  const chunks = log as BoundedStringLog;
-  const limit = chunks.maxBytes ?? LOG_TAIL_MAX_BYTES;
-  const text = String(chunk);
-  const textBytes = Buffer.byteLength(text);
-  if (textBytes > limit) {
-    const buffer = Buffer.from(text);
-    const tail = decodeUtf8Tail(buffer.subarray(buffer.length - limit));
-    chunks.splice(0, chunks.length, tail);
-    chunks.byteLength = Buffer.byteLength(tail);
-    chunks.truncated = true;
-    return;
-  }
-
-  chunks.push(text);
-  chunks.byteLength = (chunks.byteLength ?? 0) + textBytes;
-  while ((chunks.byteLength ?? 0) > limit && chunks.length > 0) {
-    const first = chunks[0] ?? "";
-    const firstBytes = Buffer.byteLength(first);
-    const overflow = (chunks.byteLength ?? 0) - limit;
-    if (firstBytes <= overflow) {
-      chunks.shift();
-      chunks.byteLength = (chunks.byteLength ?? 0) - firstBytes;
-      chunks.truncated = true;
-      continue;
-    }
-
-    const buffer = Buffer.from(first);
-    // Drop a split prefix instead of expanding it into replacement bytes that can stall trimming.
-    const tail = decodeUtf8Tail(buffer.subarray(overflow));
-    chunks[0] = tail;
-    chunks.byteLength = chunks.reduce((total, entry) => total + Buffer.byteLength(entry), 0);
-    chunks.truncated = true;
-  }
-}
-
-function readLogBuffer(log: string[]): string {
-  const text = log.join("");
-  return (log as BoundedStringLog).truncated
-    ? `[output truncated to last ${(log as BoundedStringLog).maxBytes ?? LOG_TAIL_MAX_BYTES} bytes]\n${text}`
-    : text;
-}
 
 function isGatewayMigrationConvergenceRefusal(
   code: number | null,
@@ -253,7 +202,7 @@ async function waitForGatewayReady(
   chunksErr: string[],
   port: number,
   timeoutMs: number,
-  fetchImpl: typeof fetch = fetch,
+  probe: (signal: AbortSignal) => Promise<boolean>,
 ) {
   const exitedBeforeReadinessError = () =>
     new Error(
@@ -288,23 +237,11 @@ async function waitForGatewayReady(
       }, attemptTimeoutMs);
       attemptTimeout.unref?.();
     });
+    let ready = false;
+    const probing = probe(probeAbort.signal);
     try {
-      // A dead child cannot complete readiness. Race the owner lifecycle against
-      // both HTTP headers and body parsing so a stuck probe never hides its exit.
-      const ready = await Promise.race([
-        (async () => {
-          const response = await fetchImpl(`http://127.0.0.1:${port}/readyz`, {
-            signal: probeAbort.signal,
-          });
-          const readiness: unknown = await response.json();
-          return response.ok && isRecord(readiness) && readiness.ready === true;
-        })(),
-        exitPromise,
-        timeoutPromise,
-      ]);
-      if (ready) {
-        return;
-      }
+      // Exit/deadline covers HTTP headers, body, and the same-connection hello.
+      ready = await Promise.race([probing, exitPromise, timeoutPromise]);
     } catch {
       if (hasChildExited(proc)) {
         throw exitedBeforeReadinessError();
@@ -315,6 +252,14 @@ async function waitForGatewayReady(
         clearTimeout(attemptTimeout);
       }
       proc.off("exit", handleExit);
+      probeAbort.abort();
+      await probing.catch(() => undefined);
+    }
+    if (hasChildExited(proc)) {
+      throw exitedBeforeReadinessError();
+    }
+    if (ready && Date.now() - startedAt < timeoutMs) {
+      return;
     }
 
     const delayMs = Math.min(10, timeoutMs - (Date.now() - startedAt));
@@ -508,20 +453,6 @@ function mergeConfig(
   return result;
 }
 
-function formatLogs(stdout: string[], stderr: string[]): string {
-  const diagnosticTail = (log: string[]): string => {
-    const tail = createBoundedStringLog(
-      Math.min((log as BoundedStringLog).maxBytes ?? LOG_TAIL_MAX_BYTES, LOG_TAIL_MAX_BYTES),
-    ) as BoundedStringLog;
-    for (const chunk of log) {
-      appendLogChunk(tail, chunk);
-    }
-    tail.truncated ||= (log as BoundedStringLog).truncated;
-    return readLogBuffer(tail);
-  };
-  return `--- stdout ---\n${diagnosticTail(stdout)}\n--- stderr ---\n${diagnosticTail(stderr)}`;
-}
-
 function createInstanceEnv(params: {
   stateEnv: NodeJS.ProcessEnv;
   extraEnv: Record<string, string | undefined>;
@@ -589,7 +520,7 @@ export async function createOpenClawTestInstance(
     stateEnv: state.env,
     extraEnv: options.env ?? {},
   });
-  let child: { process: OpenClawTestProcess; ready: boolean } | undefined;
+  let child: { process: OpenClawTestProcess; ready: boolean; startedAt: number } | undefined;
   const commands = new Set<Promise<OpenClawTestInstanceCommandResult>>();
   let acceptingWork = true;
   let cleanupPromise: Promise<void> | undefined;
@@ -616,6 +547,22 @@ export async function createOpenClawTestInstance(
     return next.promise;
   };
   const stopTimeoutMs = options.stopTimeoutMs ?? GATEWAY_STOP_TIMEOUT_MS;
+  const waitForOwnedGateway = (
+    owner: NonNullable<typeof child>,
+    timeoutMs: number,
+    probe: typeof probeOwnedGatewayReadiness,
+  ) =>
+    waitForGatewayReady(owner.process, stdout, stderr, port, timeoutMs, (signal) =>
+      probe({
+        port,
+        configPath: state.configPath,
+        env,
+        stateDir: state.stateDir,
+        pid: owner.process.pid,
+        startedAt: owner.startedAt,
+        signal,
+      }),
+    );
   const spawnGatewayProcess = (args: string[], attemptStderr: string[]): OpenClawTestProcess => {
     const [command = "node", ...prefixArgs] = options.gatewayCommandPrefix ?? [];
     const next = spawn(command, [...prefixArgs, ...args], {
@@ -713,10 +660,22 @@ export async function createOpenClawTestInstance(
         return Promise.reject(new Error("test instance no longer accepts Gateway starts"));
       }
       return enqueue("start", async () => {
+        const entrypoint = await resolveGatewayEntrypoint(cwd);
+        // Protocol/SQLite preparation belongs to Gateway starts, not CLI output
+        // capture. Finish loading before admitting a timed child lifecycle.
+        const readinessProbe =
+          options.gatewayReadinessProbe ??
+          (await import("./gateway-readiness-probe.js")).probeOwnedGatewayReadiness;
         if (child?.ready && !hasChildExited(child.process)) {
+          // A still-live CLI can restart its server in process. Re-prove its
+          // current boot rather than retaining the previous generation's readiness.
+          await waitForOwnedGateway(
+            child,
+            options.startTimeoutMs ?? GATEWAY_START_TIMEOUT_MS,
+            readinessProbe,
+          );
           return;
         }
-        const entrypoint = await resolveGatewayEntrypoint(cwd);
         const gatewayArgs = [
           ...entrypoint,
           "gateway",
@@ -739,11 +698,12 @@ export async function createOpenClawTestInstance(
             );
           }
           const attemptStderr = createBoundedStringLog();
+          const startedAt = Date.now();
           const attempt = spawnGatewayProcess(gatewayArgs, attemptStderr);
-          const owner = { process: attempt, ready: false };
+          const owner = { process: attempt, ready: false, startedAt };
           child = owner;
           try {
-            await waitForGatewayReady(attempt, stdout, stderr, port, remainingMs);
+            await waitForOwnedGateway(owner, remainingMs, readinessProbe);
             owner.ready = true;
             return;
           } catch (err) {

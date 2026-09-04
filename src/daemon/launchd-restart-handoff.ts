@@ -5,11 +5,12 @@ import path from "node:path";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { formatErrorMessage } from "../infra/errors.js";
-import { sanitizeHostExecEnv } from "../infra/host-env-security.js";
+import { mergeProcessEnv } from "../infra/process-env.js";
 import { resolveLaunchAgentLabel } from "./launchd-label.js";
 import { LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS } from "./launchd-plist.js";
 import { renderSystemLaunchDaemonOwnershipShellProbe } from "./launchd-system.js";
 import { renderPosixRestartLogSetup } from "./restart-logs.js";
+import { resolveServiceManagerEnv } from "./service-process-env.js";
 
 type LaunchdRestartHandoffMode = "kickstart" | "reload" | "start-after-exit";
 type LaunchdHandoffMode = LaunchdRestartHandoffMode | "park";
@@ -43,17 +44,6 @@ function resolveGuiDomain(): string {
     return "gui/501";
   }
   return `gui/${process.getuid()}`;
-}
-
-function collectStringEnvOverrides(
-  env?: Record<string, string | undefined>,
-): Record<string, string> | undefined {
-  const overrides = Object.fromEntries(
-    Object.entries(env ?? {}).filter(
-      (entry): entry is [string, string] => typeof entry[1] === "string",
-    ),
-  );
-  return Object.keys(overrides).length > 0 ? overrides : undefined;
 }
 
 function collectRestartLogEnv(env?: Record<string, string | undefined>): LaunchdRestartLogEnv {
@@ -260,10 +250,11 @@ function scheduleDetachedLaunchdHandoff(params: {
       ? Math.floor(params.waitForPid)
       : 0;
   const restartLogEnv = collectRestartLogEnv(params.env);
-  const restartEnv = sanitizeHostExecEnv({
-    baseEnv: process.env,
-    overrides: collectStringEnvOverrides(params.env),
-  });
+  // Keep the caller's executable search path: service overrides must not redirect
+  // the detached control shell's launchctl, as with the previous host sanitizer.
+  const restartEnv = resolveServiceManagerEnv(
+    mergeProcessEnv([process.env, params.env, { PATH: process.env.PATH }]),
+  );
   try {
     const child = spawn(
       "/bin/sh",

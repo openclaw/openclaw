@@ -2345,6 +2345,7 @@ describe("scripts/test-projects changed-target routing", () => {
         forwardedArgs: [
           "test/scripts/doctor-config-preflight-plugin-index.built-cli.e2e.test.ts",
           "test/scripts/mcp-channels-seed.built-cli.e2e.test.ts",
+          "test/scripts/openclaw-test-instance.built-cli.e2e.test.ts",
           "test/scripts/sqlite-sessions-transcripts-flip-proof.built-cli.e2e.test.ts",
           "test/scripts/sqlite-sessions-transcripts-flip-proof.e2e.test.ts",
         ],
@@ -3386,10 +3387,14 @@ describe("scripts/test-projects changed-target routing", () => {
     ]);
   });
 
-  it("routes isolated ui test targets to the isolated project", () => {
-    expectSingleVitestRunPlan(buildVitestRunPlans(["ui/src/pages/workboard/view.test.ts"]), {
+  it.each([
+    "ui/src/pages/workboard/view.test.ts",
+    "ui/src/components/mcp-app-view.test.ts",
+    "ui/src/pages/chat/chat-page.test.ts",
+  ])("routes isolated ui test %s to the isolated project", (testFile) => {
+    expectSingleVitestRunPlan(buildVitestRunPlans([testFile]), {
       config: "test/vitest/vitest.ui-isolated.config.ts",
-      includePatterns: ["ui/src/pages/workboard/view.test.ts"],
+      includePatterns: [testFile],
     });
   });
 

@@ -13054,14 +13054,18 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     }
   });
 
-  it.each([
-    { selected: false, exitCode: 0 },
-    { selected: true, exitCode: 0 },
-    { selected: true, exitCode: 1 },
-    { selected: true, exitCode: 143 },
-  ])(
-    "runs the built SQLite verifier (selected=$selected, exit=$exitCode)",
-    ({ selected, exitCode }) => {
+  it.each(
+    [
+      { selected: false, exitCode: 0 },
+      { selected: true, exitCode: 0 },
+      { selected: true, exitCode: 1 },
+      { selected: true, exitCode: 143 },
+    ].flatMap(({ selected, exitCode }) =>
+      [false, true].map((readiness) => ({ selected, exitCode, readiness })),
+    ),
+  )(
+    "runs the built SQLite verifier (selected=$selected, exit=$exitCode, readiness=$readiness)",
+    ({ selected, exitCode, readiness }) => {
       const workflow = readCiWorkflow();
       const additionalJob = workflow.jobs["check-additional-shard"];
       const additionalRunStep = additionalJob.steps.find(
@@ -13097,6 +13101,11 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       );
       const root = tempDirs.make("openclaw-sqlite-verifier-");
       mkdirSync(path.join(root, "scripts"));
+      const readinessFile = "test/scripts/openclaw-test-instance.built-cli.e2e.test.ts";
+      if (readiness) {
+        mkdirSync(path.join(root, "test/scripts"), { recursive: true });
+        writeFileSync(path.join(root, readinessFile), "");
+      }
       writeFileSync(
         path.join(root, "scripts/run-vitest.mjs"),
         `
@@ -13134,6 +13143,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
             "--config",
             "test/vitest/vitest.e2e.config.ts",
             "test/scripts/sqlite-sessions-transcripts-flip-proof.built-cli.e2e.test.ts",
+            ...(readiness ? [readinessFile] : []),
           ],
           prebuilt: "1",
           watchdog: "660000",

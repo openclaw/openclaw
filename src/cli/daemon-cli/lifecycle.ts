@@ -48,7 +48,11 @@ import {
   appendGatewayLifecycleAudit,
   createGatewayLifecycleMutationAudit,
 } from "./lifecycle-audit.js";
-import { resolveGatewayConfigPorts, resolveGatewayLifecycleContext } from "./lifecycle-context.js";
+import {
+  resolveGatewayConfigPorts,
+  resolveGatewayLifecycleContext,
+  shouldStopUnloadedSystemdService,
+} from "./lifecycle-context.js";
 import {
   runServiceRestart,
   runServiceStart,
@@ -488,18 +492,14 @@ export async function runDaemonStop(opts: DaemonLifecycleOptions = {}) {
     opts,
     stopWhenNotLoaded: process.platform === "darwin" && Boolean(opts.disable),
     onNotLoaded: async ({ stdout }) => {
-      if (process.platform === "linux") {
-        const runtime = await service.readRuntime(process.env).catch(() => null);
-        if (runtime?.status === "running") {
-          // systemd can run a disabled unit with Restart=always. Stop it through
-          // systemctl so a process-level SIGTERM cannot trigger a respawn.
-          await service.stop({
-            env: process.env,
-            stdout,
-            onMutation: createGatewayLifecycleMutationAudit({ action: "stop" }),
-          });
-          return { result: "stopped" };
-        }
+      if (process.platform === "linux" && (await shouldStopUnloadedSystemdService(service))) {
+        // Native STOP cancels disabled-unit respawn and stopped-unit recovery scopes.
+        await service.stop({
+          env: process.env,
+          stdout,
+          onMutation: createGatewayLifecycleMutationAudit({ action: "stop" }),
+        });
+        return { result: "stopped" };
       }
       // An unmanaged run loop keeps its lock port across config edits, so use it
       // for discovery the way restart already does; otherwise a valid port
@@ -622,7 +622,8 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
       }
       return null;
     },
-    postRestartCheck: async ({ warnings, fail, stdout, warn }) => {
+    postRestartCheck: async ({ warnings, fail, stdout, warn, activationAccepted: accepted }) => {
+      let activationAccepted = accepted;
       if (restartedWithoutServiceManager) {
         // Unmanaged restarts have no service-manager state to watch; use listener health and,
         // when targeted delivery required it, prove the previous lock owner was replaced.
@@ -656,6 +657,7 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
         fail(
           `Gateway restart timed out after ${unmanagedRestartWaitSeconds}s waiting for health checks.`,
           [formatCliCommand("openclaw gateway status --deep"), formatCliCommand("openclaw doctor")],
+          activationAccepted ? "restart-health-failed" : undefined,
         );
         throw new Error("unreachable after gateway restart health failure");
       }
@@ -693,6 +695,7 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
         if (retryRestart.outcome === "scheduled") {
           return retryRestart;
         }
+        activationAccepted = true;
         health = await waitForHealthy();
       }
 
@@ -726,10 +729,11 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
         warnings.push(...diagnostics);
       }
 
-      fail(failure.failMessage, [
-        formatCliCommand("openclaw gateway status --deep"),
-        formatCliCommand("openclaw doctor"),
-      ]);
+      fail(
+        failure.failMessage,
+        [formatCliCommand("openclaw gateway status --deep"), formatCliCommand("openclaw doctor")],
+        activationAccepted ? "restart-health-failed" : undefined,
+      );
       throw new Error("unreachable after gateway restart failure");
     },
   });

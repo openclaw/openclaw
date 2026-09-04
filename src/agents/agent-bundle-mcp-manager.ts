@@ -354,6 +354,7 @@ export function createSessionMcpRuntimeManager(
         ...store.runtimesBySessionId.keys(),
         ...store.createInFlight.keys(),
         ...store.requesterWorkChains.keys(),
+        ...store.pendingDisposals.keys(),
       ]);
       store.sessionIdBySessionKey.clear();
       store.deferredRetirementSessionIds.clear();

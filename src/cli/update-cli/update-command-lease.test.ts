@@ -23,7 +23,9 @@ const mocks = vi.hoisted(() => ({
   entrypoint: vi.fn(),
   root: vi.fn(),
   plugins: vi.fn<typeof import("./update-command-plugins.js").updatePluginsAfterCoreUpdate>(),
-  restart: vi.fn(async () => true),
+  restart: vi.fn<typeof import("./update-command-service.js").maybeRestartService>(
+    async () => "ok",
+  ),
   print: vi.fn(),
 }));
 
@@ -32,6 +34,9 @@ vi.mock("../../daemon/gateway-entrypoint.js", () => ({
 }));
 vi.mock("./update-command-plugins.js", () => ({ updatePluginsAfterCoreUpdate: mocks.plugins }));
 vi.mock("./progress.js", () => ({ printResult: mocks.print }));
+vi.mock("../../commands/triage-failure.js", () => ({
+  triageAfterFailure: vi.fn(async () => undefined),
+}));
 vi.mock("./shared.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./shared.js")>()),
   resolveUpdateRoot: mocks.root,
@@ -132,6 +137,7 @@ async function invoke(lane: Lane): Promise<void> {
     });
   }
   return finishUpdate({
+    mutationStarted: true,
     result: {
       status: "ok",
       mode: "npm",

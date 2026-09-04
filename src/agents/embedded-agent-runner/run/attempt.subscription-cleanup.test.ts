@@ -78,7 +78,7 @@ describe("cleanupEmbeddedAttemptResources", () => {
 
     expect(order).toEqual(["flush", "dispose"]);
     expect(log.warn).toHaveBeenCalledWith(
-      `embedded abort settle timed out: runId=run-1 sessionId=session-1 timeoutMs=${abortSettleTimeoutMs}`,
+      `agent cleanup timed out: runId=run-1 sessionId=session-1 step=embedded-abort-settle timeoutMs=${abortSettleTimeoutMs}`,
     );
   });
 

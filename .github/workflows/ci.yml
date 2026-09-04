@@ -2320,10 +2320,15 @@ jobs:
           run_verifier "doctor-plugin-index" run_doctor_plugin_index
 
           if [ "$RUN_SQLITE_SESSION_LIFECYCLE" = "true" ]; then
+            sqlite_lifecycle_tests=(test/scripts/sqlite-sessions-transcripts-flip-proof.built-cli.e2e.test.ts)
+            # Frozen targets may predate the Gateway readiness regression.
+            if [ -f test/scripts/openclaw-test-instance.built-cli.e2e.test.ts ]; then
+              sqlite_lifecycle_tests+=(test/scripts/openclaw-test-instance.built-cli.e2e.test.ts)
+            fi
             run_verifier "sqlite-session-lifecycle" env \
               OPENCLAW_E2E_USE_PREBUILT_DIST=1 OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS=660000 \
               node scripts/run-vitest.mjs run --config test/vitest/vitest.e2e.config.ts \
-              test/scripts/sqlite-sessions-transcripts-flip-proof.built-cli.e2e.test.ts
+              "${sqlite_lifecycle_tests[@]}"
           fi
 
           if [ "$RUN_CHANNELS" = "true" ]; then

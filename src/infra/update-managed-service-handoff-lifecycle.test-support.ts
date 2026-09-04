@@ -1,3 +1,6 @@
+import fs from "node:fs/promises";
+import { createRequire } from "node:module";
+import { pathToFileURL } from "node:url";
 import type { TriageUpdateFailure } from "../commands/triage-update.js";
 import { buildUpdateRestartSentinelPayload } from "./update-restart-sentinel-payload.js";
 import type { UpdateRunResult } from "./update-runner-types.js";
@@ -215,7 +218,7 @@ if (${JSON.stringify(kind)} === "systemd") {
       try { process.kill(${parentPid}, 0); sleep(10); } catch { break; }
     }
     sleep(${options?.systemdStopDelayMs ?? 0});
-    ${options?.revokeOwner ? `fs.writeFileSync(process.env.OPENCLAW_CONFIG_PATH, JSON.stringify({ commands: { ownerAllowFrom: [] } })); state.ownerRevokedAfterExit = true;` : ""}
+    ${options?.revokeOwner ? `fs.writeFileSync(require("node:path").join(require("node:path").dirname(statePath), "openclaw.json"), JSON.stringify({ commands: { ownerAllowFrom: [] } })); state.ownerRevokedAfterExit = true;` : ""}
     state.stopCompleted = true;
   }
   if (action === "reset-failed") state.reset = true;
@@ -424,12 +427,76 @@ export function createManagedServiceLaunchdClockPreload(params: {
     "  }",
     "  const child = actualSpawn(command, args, options);",
     // Advance only when the exact guarded restart closes, before the helper resumes.
-    `  if (command === process.execPath && args.at(-1) === ${JSON.stringify(JSON.stringify(params.recoveryCommandArgv))}) {`,
+    `  if (command === ${JSON.stringify(params.recoveryCommandArgv[0])} && JSON.stringify(args.slice(-${params.recoveryCommandArgv.length - 1})) === ${JSON.stringify(JSON.stringify(params.recoveryCommandArgv.slice(1)))}) {`,
     `    child.once("close", () => { elapsed += ${params.recoveryClockAdvanceMs ?? 0}; });`,
     "  }",
     "  return child;",
     "};",
   ].join("\n");
+}
+
+export async function prepareManagedHandoffRecoveryFixture(params: {
+  recoveryModulePath: string;
+  configPath: string;
+  statePath: string;
+  stateDatabasePath: string;
+  consumeNotification: string;
+  options?: ManagedServiceManagerBoundaryOptions;
+}): Promise<void> {
+  const {
+    recoveryModulePath,
+    configPath,
+    statePath,
+    stateDatabasePath,
+    consumeNotification,
+    options,
+  } = params;
+  await fs.writeFile(
+    recoveryModulePath,
+    `
+    import fs from "node:fs";
+    import { createRequire } from "node:module";
+    const require = createRequire(import.meta.url);
+    export async function waitForGatewayUpdateRecovery(expectedVersion, expectedBuildId) {
+      const state = JSON.parse(fs.readFileSync(${JSON.stringify(statePath)}, "utf8"));
+      state.healthProbed = true;
+      state.healthProbeCount = (state.healthProbeCount || 0) + 1;
+      state.expectedVersion = expectedVersion;
+      state.expectedBuildId = expectedBuildId;
+      fs.writeFileSync(${JSON.stringify(statePath)}, JSON.stringify(state));
+      ${options?.updaterNotification === "consumed" ? consumeNotification : ""}
+      ${options?.diagnosticReadFailure === "after-recovery" ? `{ const db = new (require("node:sqlite").DatabaseSync)(${JSON.stringify(stateDatabasePath)}); db.exec("ALTER TABLE gateway_restart_sentinel RENAME COLUMN thread_id TO unreadable_thread_id"); db.close(); }` : ""}
+      const fault = ${JSON.stringify(options?.gatewayHealth)};
+      return { healthy: !["unready", "wrong-version", "wrong-build", "exited"].includes(fault),
+        runtime: { status: fault === "exited" ? "stopped" : "running" },
+        gatewayVersion: fault === "wrong-version" ? "0.0.1" : expectedVersion,
+        gatewayBuildId: fault === "wrong-build" ? "another-build-same-version" : expectedBuildId };
+    }
+  `,
+  );
+  if (options?.requester) {
+    await fs.writeFile(
+      configPath,
+      JSON.stringify({
+        commands: { ownerAllowFrom: ["slack:owner"] },
+        channels: { slack: { enabled: true } },
+      }),
+    );
+    await fs.appendFile(
+      recoveryModulePath,
+      `
+      export async function isManagedUpdateRequesterOwner(requester) {
+        const state = JSON.parse(fs.readFileSync(${JSON.stringify(statePath)}, "utf8"));
+        state.ownerChecked = true;
+        fs.writeFileSync(${JSON.stringify(statePath)}, JSON.stringify(state));
+        const { register } = await import(${JSON.stringify(pathToFileURL(createRequire(import.meta.url).resolve("tsx/esm/api")).href)});
+        register();
+        const runtime = await import(${JSON.stringify(new URL("../cli/daemon-cli/lifecycle-context.ts", import.meta.url).href)});
+        return runtime.isManagedUpdateRequesterOwner(requester);
+      }
+    `,
+    );
+  }
 }
 
 export function registerManagedHandoffOwnerTests(
@@ -476,6 +543,18 @@ export function registerManagedHandoffOwnerTests(
               ]),
             },
           },
+        });
+        expect(state).toMatchObject({
+          triageCalls: 1,
+          triageObservedRestored: true,
+          triageInput: { error: expect.stringContaining("owner_required") },
+          triageArgs: [
+            "triage",
+            "--json",
+            "--non-interactive",
+            "--update-result",
+            expect.any(String),
+          ],
         });
         expect(log).toContain("owner_required");
         expect(log).not.toContain("starting managed update command");

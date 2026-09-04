@@ -172,6 +172,8 @@ const rootEntries = [
   ...Object.values(runtimeProcessBuildEntries).map(
     (source) => `${path.relative(".", source).replaceAll("\\", "/")}!`,
   ),
+  // createManagedHandoffBuildConfig seals this entry outside the normal runtime build graph.
+  "src/infra/update-managed-service-handoff-sealed.ts!",
   // Knip loads these audit configurations directly by command-line path.
   "config/knip.config.ts!",
   "config/knip.all-exports.config.ts!",

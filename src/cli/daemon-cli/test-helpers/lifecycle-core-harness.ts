@@ -85,3 +85,15 @@ export function stubEmptyGatewayEnv() {
   vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", "");
   vi.stubEnv("OPENCLAW_GATEWAY_URL", "");
 }
+
+export async function withUnsupportedGatewayService(
+  run: (unsupportedService: GatewayService) => Promise<void>,
+) {
+  const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("aix");
+  try {
+    const { resolveGatewayService } = await import("../../../daemon/service.js");
+    await run(resolveGatewayService());
+  } finally {
+    platformSpy.mockRestore();
+  }
+}

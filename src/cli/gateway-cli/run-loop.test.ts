@@ -2,6 +2,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { HostedGatewayStop } from "../../daemon/hosted-stop.js";
 import type { GatewayServer } from "../../gateway/server-public.js";
@@ -823,9 +824,14 @@ describe("runGatewayLoop", () => {
         });
       const { runtime, exited } = createRuntimeWithExitSignal();
       const { runGatewayLoop } = await import("./run-loop.js");
+      const onRestartStartupFailure = vi.fn(async (error: unknown) => {
+        expect(error).toBe(replacementError);
+        expect(closeSecond).toHaveBeenCalled();
+      });
       void runGatewayLoop({
         start: start as unknown as Parameters<typeof runGatewayLoop>[0]["start"],
         runtime: runtime as unknown as Parameters<typeof runGatewayLoop>[0]["runtime"],
+        onRestartStartupFailure,
       });
       await waitForLoopCondition(
         () => start.mock.calls.length === 1,
@@ -843,6 +849,7 @@ describe("runGatewayLoop", () => {
         "expected replacement deferred startup failure",
       );
       expect(closeSecond).toHaveBeenCalledWith({ reason: "gateway startup failed" });
+      expect(onRestartStartupFailure).toHaveBeenCalledOnce();
       expect(gatewayLog.warn).toHaveBeenCalledWith(expect.stringContaining(cleanupError.message));
 
       sigusr1();
@@ -851,6 +858,41 @@ describe("runGatewayLoop", () => {
 
       sigterm();
       await expect(exited).resolves.toBe(0);
+    });
+  });
+
+  it("cancels and joins triage before stopping a failed in-process restart", async () => {
+    await withIsolatedSignals(async ({ captureSignal }) => {
+      const startedTriage = createDeferred();
+      const cleanup = createDeferred();
+      let triageSignal: AbortSignal | undefined;
+      const start = vi
+        .fn()
+        .mockResolvedValueOnce(createGatewayServer(createCloseMock()))
+        .mockRejectedValueOnce(new Error("replacement startup failed"));
+      const { runtime, exited } = createRuntimeWithExitSignal();
+      const { runGatewayLoop } = await import("./run-loop.js");
+      void runGatewayLoop({
+        start,
+        runtime,
+        onRestartStartupFailure: async (_error, signal) => {
+          triageSignal = signal;
+          startedTriage.resolve();
+          await cleanup.promise;
+        },
+      });
+      await waitForLoopCondition(() => start.mock.calls.length === 1, "expected initial Gateway");
+      captureSignal("SIGUSR1")();
+      await startedTriage.promise;
+      captureSignal("SIGINT")();
+      try {
+        expect(triageSignal?.aborted).toBe(true);
+        expect(runtime.exit).not.toHaveBeenCalled();
+      } finally {
+        cleanup.resolve();
+      }
+      await expect(exited).resolves.toBe(0);
+      expect(start).toHaveBeenCalledTimes(2);
     });
   });
 

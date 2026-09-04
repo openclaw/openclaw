@@ -2,13 +2,12 @@
  * Tests managed-service update handoff behavior exposed by gateway methods.
  */
 import { EventEmitter } from "node:events";
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
-import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { PassThrough } from "node:stream";
-import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { writeTriageUpdateFailure } from "../commands/triage-update.js";
 import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
@@ -38,6 +37,7 @@ import {
   createManagedServiceManagerFixtureScript,
   registerManagedSystemdHandoffConvergenceTests,
   registerManagedHandoffOwnerTests,
+  prepareManagedHandoffRecoveryFixture,
   type ManagedServiceCommandTiming,
   type ManagedServiceManagerBoundaryOptions,
   type ManagedServiceManagerBoundaryResult,
@@ -46,6 +46,7 @@ import {
   registerManagedRecoveryOutcomeTests,
   registerManagedTerminalResultTests,
 } from "./update-managed-service-handoff-result.test-support.js";
+import { stageManagedHandoffRuntime } from "./update-managed-service-handoff-runtime.js";
 import { registerManagedUpdateHandoffTriageTests } from "./update-managed-service-handoff-triage.test-support.js";
 import { signalMockManagedUpdateHandoffReady } from "./update-managed-service-handoff.test-support.js";
 
@@ -162,34 +163,20 @@ async function runManagedServiceManagerBoundary(
   const updaterPath = path.join(root, "updater-ran");
   const commandTimingsPath = path.join(root, "manager-command-timings.jsonl");
   const recoveryModulePath = path.join(root, "recovery-health.mjs");
+  const configPath = path.join(root, "openclaw.json");
   const stateDatabasePath = resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: root });
   const consumeNotification = `const db = new (require("node:sqlite").DatabaseSync)(${JSON.stringify(stateDatabasePath)}); const cleared = db.prepare("DELETE FROM gateway_restart_sentinel WHERE sentinel_key = 'current'").run(); db.close(); if (cleared.changes !== 1) throw new Error("expected one published notification before recovery consumed it"); { const state = JSON.parse(fs.readFileSync(${JSON.stringify(statePath)}, "utf8")); state.consumedNotifications = Number(cleared.changes); fs.writeFileSync(${JSON.stringify(statePath)}, JSON.stringify(state)); }`;
   if (options?.updaterNotification) {
     openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
   }
-  await fs.writeFile(
+  await prepareManagedHandoffRecoveryFixture({
     recoveryModulePath,
-    `
-    import fs from "node:fs";
-    import { createRequire } from "node:module";
-    const require = createRequire(import.meta.url);
-    export async function waitForGatewayUpdateRecovery(expectedVersion, expectedBuildId) {
-      const state = JSON.parse(fs.readFileSync(${JSON.stringify(statePath)}, "utf8"));
-      state.healthProbed = true;
-      state.healthProbeCount = (state.healthProbeCount || 0) + 1;
-      state.expectedVersion = expectedVersion;
-      state.expectedBuildId = expectedBuildId;
-      fs.writeFileSync(${JSON.stringify(statePath)}, JSON.stringify(state));
-      ${options?.updaterNotification === "consumed" ? consumeNotification : ""}
-      ${options?.diagnosticReadFailure === "after-recovery" ? `{ const db = new (require("node:sqlite").DatabaseSync)(${JSON.stringify(stateDatabasePath)}); db.exec("ALTER TABLE gateway_restart_sentinel RENAME COLUMN thread_id TO unreadable_thread_id"); db.close(); }` : ""}
-      const fault = ${JSON.stringify(options?.gatewayHealth)};
-      return { healthy: !["unready", "wrong-version", "wrong-build", "exited"].includes(fault),
-        runtime: { status: fault === "exited" ? "stopped" : "running" },
-        gatewayVersion: fault === "wrong-version" ? "0.0.1" : expectedVersion,
-        gatewayBuildId: fault === "wrong-build" ? "another-build-same-version" : expectedBuildId };
-    }
-  `,
-  );
+    configPath,
+    statePath,
+    stateDatabasePath,
+    consumeNotification,
+    options,
+  });
   const invocationCwd = options?.relativeInput ? path.join(root, "invoking-directory") : undefined;
   if (invocationCwd) {
     await fs.mkdir(invocationCwd);
@@ -220,32 +207,9 @@ async function runManagedServiceManagerBoundary(
   const env = {
     ...process.env,
     OPENCLAW_STATE_DIR: root,
-    OPENCLAW_CONFIG_PATH: path.join(root, "openclaw.json"),
+    OPENCLAW_CONFIG_PATH: configPath,
     PATH: `${root}${path.delimiter}${process.env.PATH ?? ""}`,
   };
-  if (options?.requester) {
-    await fs.writeFile(
-      env.OPENCLAW_CONFIG_PATH,
-      JSON.stringify({
-        commands: { ownerAllowFrom: ["slack:owner"] },
-        channels: { slack: { enabled: true } },
-      }),
-    );
-    await fs.appendFile(
-      recoveryModulePath,
-      `
-      export async function isManagedUpdateRequesterOwner(requester) {
-        const state = JSON.parse(fs.readFileSync(${JSON.stringify(statePath)}, "utf8"));
-        state.ownerChecked = true;
-        fs.writeFileSync(${JSON.stringify(statePath)}, JSON.stringify(state));
-        const { register } = await import(${JSON.stringify(pathToFileURL(createRequire(import.meta.url).resolve("tsx/esm/api")).href)});
-        register();
-        const runtime = await import(${JSON.stringify(new URL("../cli/daemon-cli/lifecycle-context.ts", import.meta.url).href)});
-        return runtime.isManagedUpdateRequesterOwner(requester);
-      }
-    `,
-    );
-  }
   let helper: import("node:child_process").ChildProcess | undefined;
   try {
     await startManagedServiceUpdateHandoff({
@@ -387,9 +351,10 @@ async function runManagedServiceManagerBoundary(
       }
     };
     expect(readLease()).toEqual({
-      version: 1,
-      pid: runningHelper.pid,
-      startIdentity: expect.any(String),
+      version: 2,
+      executor: { pid: runningHelper.pid, startIdentity: expect.any(String) },
+      helper: { pid: runningHelper.pid, startIdentity: expect.any(String) },
+      action: { kind: "update" },
     });
     await expect(pathExists(commandsPath)).resolves.toBe(false);
     if (options?.controlDisconnect) {
@@ -585,8 +550,40 @@ describe("managed service update handoff", () => {
     },
   );
 
+  it("removes a partially staged runtime before any helper is spawned", async () => {
+    const { startManagedServiceUpdateHandoff } =
+      await import("./update-managed-service-handoff.js");
+    const write = fsSync.writeFileSync;
+    let directory = "";
+    const fault = vi.spyOn(fsSync, "writeFileSync").mockImplementation((file, ...args) => {
+      if (typeof file !== "number" && String(file).endsWith("managed-handoff-runtime.mjs")) {
+        directory = path.resolve(String(file), "../..");
+        write(file, ...args);
+        expect(fsSync.existsSync(file)).toBe(true);
+        throw Object.assign(new Error("staging failed"), { code: "EIO" });
+      }
+      return write(file, ...args);
+    });
+    try {
+      await expect(
+        startManagedServiceUpdateHandoff({
+          root: MOCK_INSTALL_ROOT,
+          restartDrainTimeoutMs: 300_000,
+          parentPid: process.pid,
+          meta: {},
+        }),
+      ).rejects.toThrow("staging failed");
+      expect(directory).not.toBe("");
+      expect(spawnMock).not.toHaveBeenCalled();
+      await expect(pathExists(directory)).resolves.toBe(false);
+    } finally {
+      fault.mockRestore();
+    }
+  });
+
   it("rejects failed helper spawns and removes the sensitive handoff directory", async () => {
     const child = createSpawnMock();
+    Reflect.deleteProperty(child, "pid");
     // Fire after spawn installs readiness listeners; preparation has no one-second deadline.
     spawnMock.mockImplementationOnce(() => {
       process.nextTick(() => {
@@ -1020,6 +1017,8 @@ describe("managed service update handoff", () => {
     await fs.mkdir(staleDir, { recursive: true });
     await fs.mkdir(freshDir, { recursive: true });
     await fs.mkdir(unrelatedDir, { recursive: true });
+    const staleFiles = stageManagedHandoffRuntime(staleDir);
+    const freshFiles = stageManagedHandoffRuntime(freshDir);
     const now = Date.now();
     const staleTime = new Date(now - 25 * 60 * 60_000);
     await fs.utimes(staleDir, staleTime, staleTime);
@@ -1033,6 +1032,8 @@ describe("managed service update handoff", () => {
     ).resolves.toBe(1);
 
     await expect(pathExists(staleDir)).resolves.toBe(false);
+    expect(await Promise.all(staleFiles.map(pathExists))).toEqual(staleFiles.map(() => false));
+    expect(await Promise.all(freshFiles.map(pathExists))).toEqual(freshFiles.map(() => true));
     await expect(pathExists(freshDir)).resolves.toBe(true);
     await expect(pathExists(unrelatedDir)).resolves.toBe(true);
   });

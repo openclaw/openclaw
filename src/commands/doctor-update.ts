@@ -306,7 +306,7 @@ export async function maybeOfferUpdateBeforeDoctor(params: {
           requireRunningServiceAfterRestart: true,
           timeoutMs: UPDATE_RUNNER_TIMEOUT_MS,
         });
-        if (!activated) {
+        if (activated !== "ok") {
           throw new Error(
             "Gateway restart was not verified; run `openclaw gateway status --deep` before restarting manually.",
           );

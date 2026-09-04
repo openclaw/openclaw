@@ -4,6 +4,7 @@ import {
   makeRegistry,
 } from "../../../config/plugin-auto-enable.test-helpers.js";
 import { setPluginToolMeta } from "../../../plugins/tool-metadata.js";
+import { withAgentCleanupOutcome } from "../../run-cleanup-timeout.js";
 import { attachToolAllowlistIntersection } from "../../tool-policy.js";
 
 const mocks = vi.hoisted(() => ({
@@ -374,53 +375,68 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
     });
   });
 
-  it("disposes prepared bundle runtimes when later policy setup fails", async () => {
-    const disposeMcp = vi.fn(async () => {});
-    const disposeLsp = vi.fn(async () => {});
-    mocks.getOrCreateSessionMcpRuntime.mockResolvedValue({});
-    mocks.materializeBundleMcpToolsForRun.mockResolvedValue({
-      tools: [],
-      dispose: disposeMcp,
-    });
-    mocks.createBundleLspToolRuntime.mockResolvedValue({
-      tools: [],
-      dispose: disposeLsp,
-    });
-    mocks.applyFinalEffectiveToolPolicy.mockImplementation(() => {
-      throw new Error("bundle policy failed");
-    });
+  it.each([undefined, "MCP", "LSP"])(
+    "disposes prepared runtimes after policy failure and retains %s cleanup failure",
+    async (failedCleanup) => {
+      const disposeMcp = vi.fn(async () => {
+        if (failedCleanup === "MCP") {
+          throw new Error("MCP disposal failed");
+        }
+      });
+      const disposeLsp = vi.fn(async () => {
+        if (failedCleanup === "LSP") {
+          throw new Error("LSP disposal failed");
+        }
+      });
+      mocks.getOrCreateSessionMcpRuntime.mockResolvedValue({});
+      mocks.materializeBundleMcpToolsForRun.mockResolvedValue({
+        tools: [],
+        dispose: disposeMcp,
+      });
+      mocks.createBundleLspToolRuntime.mockResolvedValue({
+        tools: [],
+        dispose: disposeLsp,
+      });
+      mocks.applyFinalEffectiveToolPolicy.mockImplementation(() => {
+        throw new Error("bundle policy failed");
+      });
 
-    const input = {
-      agentDir: "/tmp/agent",
-      attempt: {
-        config: {},
-        model: {},
-        modelId: "model",
-        provider: "provider",
-        runId: "run",
-        runtimePlan: {},
-        sessionId: "session",
-      },
-      effectiveWorkspace: "/tmp/workspace",
-      getCurrentAttemptPluginMetadataSnapshot: () => undefined,
-      getProviderRuntimeHandle: () => undefined,
-      isRawModelRun: false,
-      preparedToolBase: {
-        cronCreatorToolAllowlist: [],
-        effectiveToolsAllow: undefined,
-        localModelLeanPreserveToolNames: [],
-        runtimeCapabilityProfile: undefined,
-        toolsEnabled: true,
-        toolsRaw: [],
-      },
-      sessionAgentId: "main",
-    } as unknown as Parameters<typeof prepareEmbeddedAttemptBundleTools>[0];
+      const input = {
+        agentDir: "/tmp/agent",
+        attempt: {
+          config: {},
+          model: {},
+          modelId: "model",
+          provider: "provider",
+          runId: "run",
+          runtimePlan: {},
+          sessionId: "session",
+        },
+        effectiveWorkspace: "/tmp/workspace",
+        getCurrentAttemptPluginMetadataSnapshot: () => undefined,
+        getProviderRuntimeHandle: () => undefined,
+        isRawModelRun: false,
+        preparedToolBase: {
+          cronCreatorToolAllowlist: [],
+          effectiveToolsAllow: undefined,
+          localModelLeanPreserveToolNames: [],
+          runtimeCapabilityProfile: undefined,
+          toolsEnabled: true,
+          toolsRaw: [],
+        },
+        sessionAgentId: "main",
+      } as unknown as Parameters<typeof prepareEmbeddedAttemptBundleTools>[0];
 
-    await expect(prepareEmbeddedAttemptBundleTools(input)).rejects.toThrow("bundle policy failed");
-    expect(mocks.applyFinalEffectiveToolPolicy).toHaveBeenCalledWith(
-      expect.objectContaining({ workspaceDir: "/tmp/workspace" }),
-    );
-    expect(disposeMcp).toHaveBeenCalledOnce();
-    expect(disposeLsp).toHaveBeenCalledOnce();
-  });
+      const finish = vi.fn(async (_outcome: "closed" | "uncertain") => {});
+      await expect(
+        withAgentCleanupOutcome(() => prepareEmbeddedAttemptBundleTools(input), finish),
+      ).rejects.toThrow("bundle policy failed");
+      expect(finish).toHaveBeenCalledExactlyOnceWith(failedCleanup ? "uncertain" : "closed");
+      expect(mocks.applyFinalEffectiveToolPolicy).toHaveBeenCalledWith(
+        expect.objectContaining({ workspaceDir: "/tmp/workspace" }),
+      );
+      expect(disposeMcp).toHaveBeenCalledOnce();
+      expect(disposeLsp).toHaveBeenCalledOnce();
+    },
+  );
 });

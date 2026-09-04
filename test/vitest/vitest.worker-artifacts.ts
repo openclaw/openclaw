@@ -8,17 +8,22 @@ import {
   requestVitestWorkerArtifacts,
   resolveVitestWorkerDeclaration,
   vitestWorkerDeclarationEntries,
+  vitestHandoffDeclarationEntries,
+  vitestWorkerDeclarationDemand,
+  type VitestArtifactDemand,
 } from "../../scripts/lib/vitest-worker-artifacts.mts";
 import { getVitestWorkerDescriptor } from "../../scripts/lib/vitest-worker-bootstrap.mts";
 
 // Configs may be separately bundled per project. The Vitest instance, not a
 // module singleton or project globalSetup, owns their one preparation request.
 const declarationNames = new Set(
-  Object.values(vitestWorkerDeclarationEntries).map((source) => path.basename(source, ".ts")),
+  Object.values({ ...vitestWorkerDeclarationEntries, ...vitestHandoffDeclarationEntries }).map(
+    (source) => path.basename(source, ".ts"),
+  ),
 );
 const ownerKey = Symbol.for("openclaw.vitest.compiled-subprocess-owner");
 const declarationPrefix = "\0openclaw:compiled-subprocess:";
-type WorkerOwner = { acquire: () => Promise<string> };
+type WorkerOwner = { acquire: (demand: VitestArtifactDemand) => Promise<string> };
 type WorkerVitest = Vitest & { [ownerKey]?: WorkerOwner };
 
 export function compiledSubprocessesPlugin(): Plugin {
@@ -43,7 +48,7 @@ export function compiledSubprocessesPlugin(): Plugin {
         // share parent transforms. Keep Vitest's source/config hashing intact.
         experimental_defineCacheKeyGenerator(() => "openclaw:compiled-subprocesses");
         const directory = supplied.directory;
-        let preparation: Promise<string> | undefined;
+        const preparations = new Map<VitestArtifactDemand, Promise<string>>();
         let failure: unknown;
         const ownerDisconnected = () => {
           failure = new Error("Compiled subprocess owner disconnected before Vitest closed");
@@ -58,14 +63,20 @@ export function compiledSubprocessesPlugin(): Plugin {
         process.once("disconnect", ownerDisconnected);
         process.channel?.unref();
         instance[ownerKey] = {
-          acquire() {
-            return (preparation ??= (async () => {
-              await requestVitestWorkerArtifacts().catch((error: unknown) => {
+          acquire(demand) {
+            const existing = preparations.get(demand);
+            if (existing) {
+              return existing;
+            }
+            const preparation = (async () => {
+              await requestVitestWorkerArtifacts(demand).catch((error: unknown) => {
                 failure = error;
                 throw error;
               });
               return directory;
-            })());
+            })();
+            preparations.set(demand, preparation);
+            return preparation;
           },
         };
         process.once("exit", () => {
@@ -103,6 +114,7 @@ export function compiledSubprocessesPlugin(): Plugin {
       if (
         importer.endsWith("/scripts/lib/runtime-process-build-entries.mts") ||
         importer.endsWith("/scripts/lib/runtime-process-core-build-entries.mts") ||
+        importer.endsWith("/scripts/lib/managed-handoff-build-config.mts") ||
         importer.endsWith("/scripts/lib/vitest-worker-build-entries.mts")
       ) {
         return `${resolved.id}?openclaw-build-source`;
@@ -114,7 +126,11 @@ export function compiledSubprocessesPlugin(): Plugin {
         return null;
       }
       const declaration = id.slice(declarationPrefix.length);
-      const compiled = resolveVitestWorkerDeclaration(declaration, await owner.acquire());
+      const demand = vitestWorkerDeclarationDemand(declaration);
+      if (!demand) {
+        throw new Error(`Unknown subprocess declaration: ${declaration}`);
+      }
+      const compiled = resolveVitestWorkerDeclaration(declaration, await owner.acquire(demand));
       // Vitest hashes virtual load content on every invocation. Only this tiny
       // bridge embeds the disposable path; cached parents retain a stable ID.
       return `export * from ${JSON.stringify(compiled)};`;

@@ -14,11 +14,14 @@ import {
   isVitestWorkerDeclaration,
   resolveVitestWorkerDeclaration,
   verifyVitestWorkerArtifacts,
+  vitestArtifactDirectory,
+  type VitestWorkerManifest,
 } from "../../scripts/lib/vitest-worker-artifacts.mts";
 import { createVitestWorkerRun } from "../../scripts/lib/vitest-worker-run.mts";
 import { resolveVitestSpawnParams, spawnWatchedVitestProcess } from "../../scripts/run-vitest.mts";
 import { createVitestProcessCompletion } from "../../scripts/vitest-process-group.mts";
 import { resolveRuntimeWorkerArgv } from "../../src/infra/runtime-worker-url.js";
+import { MANAGED_HANDOFF_RUNTIME_ENTRY } from "../../src/infra/update-managed-service-handoff-runtime-assets.js";
 import { createDeferred, withTestTimeout } from "../helpers/promise.js";
 import { copyFsSafePackageFixture } from "./fs-safe-package.test-support.js";
 import {
@@ -213,6 +216,7 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
       const directory=${JSON.stringify(directory)}, mode=${JSON.stringify(mode)};
       const record=(name,value)=>fs.writeFileSync(path.join(directory,name),value);
       const write=fs.writeFileSync;
+      let intercepted=false;
       const gate=()=>new Promise(resolve=>{
         const poll=setInterval(()=>{
           if(fs.existsSync(path.join(directory,'release'))) {clearInterval(poll);resolve();}
@@ -224,6 +228,9 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
       });
       export async function build(options) {
         const result=await compile(options);
+        // The sealed member emits code and metadata separately; one fault owns one child.
+        if(intercepted) return result;
+        intercepted=true;
         if(mode==='cancel while compiling') {
           record('compiling',String(process.pid));
           await gate();
@@ -288,8 +295,8 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
       syncBuiltinESMExports();
       const {createVitestWorkerRun}=await import(${JSON.stringify(pathToFileURL(path.join(root, compilerModule)).href)});
       const {createVitestProcessCompletion}=await import(${JSON.stringify(pathToFileURL(path.join(root, "scripts/vitest-process-group.mts")).href)});
-      const owner=createVitestWorkerRun(), generation=owner.descriptor.directory;
-      const child=spawn(process.execPath,['--input-type=module','--eval',${JSON.stringify(preparationClient.replace("await requestVitestWorkerArtifacts();", 'await requestVitestWorkerArtifacts();process.send("borrower-ready");'))}],{detached:true,stdio:['ignore','ignore','pipe','ipc']});
+      const owner=createVitestWorkerRun(), generation=path.join(owner.descriptor.directory,"handoff");
+      const child=spawn(process.execPath,['--input-type=module','--eval',${JSON.stringify(preparationClient.replace("await requestVitestWorkerArtifacts();", 'await requestVitestWorkerArtifacts("handoff");process.send("borrower-ready");'))}],{detached:true,stdio:['ignore','ignore','pipe','ipc']});
       child.stderr.resume();
       child.on('message',message=>{if(message==='borrower-ready'){ready=true;readyClosed=closed;}});
       const completion=owner.borrow(child,createVitestProcessCompletion({child,detached:true}));
@@ -354,7 +361,7 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
             while(inspectManagedProcessGroup({pid:leafPid,exitCode:0},{errorPolicy:'indeterminate'})!=='dead') await tick(5);
           }
         }
-        fs.rmSync(generation,{recursive:true,force:true});
+        fs.rmSync(owner.descriptor.directory,{recursive:true,force:true});
         console.log(JSON.stringify({mode,cleanup:'joined',generationRemoved:!fs.existsSync(generation)}));
       }
     `,
@@ -1231,6 +1238,23 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
       const initialDirectory = initial.descriptor.directory;
       try {
         const manifest = await prepareWorkers(initial);
+        const handoff: VitestWorkerManifest = JSON.parse(
+          fs.readFileSync(
+            path.join(vitestArtifactDirectory(initialDirectory, "handoff"), "manifest.json"),
+            "utf8",
+          ),
+        );
+        expect(handoff.outputs[MANAGED_HANDOFF_RUNTIME_ENTRY]).toBeDefined();
+        expect(
+          handoff.inputs[
+            path.join(root, "src/infra/update-managed-service-handoff-lease-runtime.ts")
+          ],
+        ).toBeDefined();
+        expect(
+          manifest.inputs[
+            path.join(root, "src/infra/update-managed-service-handoff-runtime-assets.ts")
+          ],
+        ).toBeDefined();
         expect(fs.existsSync(path.join(initialDirectory, "dist/native"))).toBe(false);
         expect(Object.keys(manifest.outputs).some((name) => name.endsWith(".node"))).toBe(false);
         // Observe the installed config before/after a real compiled parent import.
@@ -1260,7 +1284,7 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
           },
         );
         expect(policy.code, policy.stderr + policy.stdout).toBe(0);
-        for (const filename of Object.keys(manifest.inputs)) {
+        for (const filename of Object.keys({ ...manifest.inputs, ...handoff.inputs })) {
           const target = path.join(fixture, path.relative(root, filename));
           fs.mkdirSync(path.dirname(target), { recursive: true });
           fs.copyFileSync(filename, target);
@@ -1351,19 +1375,13 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
           } catch(error) {await owner.dispose();throw error;}
         });
       `;
-        const builds = await Promise.all(
-          [0, 1].map(() => node(["--input-type=module", "-e", buildScript], fixture)),
-        );
-        const directories: string[] = [];
-        for (const build of builds) {
-          expect(build.code, build.stderr).toBe(0);
-          directories.push(JSON.parse(build.stdout));
-        }
-        expect(new Set(directories).size).toBe(2);
-        const freshWorker = path.join(
-          directories[0]!,
-          "dist/infra/sqlite-readonly-location.worker.js",
-        );
+        // Fresh-generation isolation is also covered by the multi-project and
+        // transform suites. One changed-source generation owns these fault probes.
+        const build = await node(["--input-type=module", "-e", buildScript], fixture);
+        expect(build.code, build.stderr).toBe(0);
+        const directory: string = JSON.parse(build.stdout);
+        expect(directory).not.toBe(initialDirectory);
+        const freshWorker = path.join(directory, "dist/infra/sqlite-readonly-location.worker.js");
         const fresh = await node([freshWorker, ...childArgs]);
         expect(fresh.code).toBe(1);
         expect(JSON.parse(fresh.stdout)).toMatchObject({
@@ -1372,17 +1390,39 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
         });
         const changedSource = fs.readFileSync(dependency, "utf8");
         fs.appendFileSync(dependency, "\n// changed after preparation\n");
-        await expect(verifyVitestWorkerArtifacts(directories[1]!)).rejects.toThrow(
+        await expect(verifyVitestWorkerArtifacts(directory)).rejects.toThrow(
           "Source changed during compiled subprocess invocation",
         );
         fs.writeFileSync(dependency, changedSource);
         const tuiDeclaration = path.join(fixture, "src/tui/tui-pty-runtime-test-support.ts");
         const originalDeclaration = fs.readFileSync(tuiDeclaration, "utf8");
         fs.appendFileSync(tuiDeclaration, "\n// declaration changed after preparation\n");
-        await expect(verifyVitestWorkerArtifacts(directories[1]!)).rejects.toThrow(
+        await expect(verifyVitestWorkerArtifacts(directory)).rejects.toThrow(
           "Source changed during compiled subprocess invocation",
         );
         fs.writeFileSync(tuiDeclaration, originalDeclaration);
+        const copiedSource = path.join(
+          fixture,
+          "src/infra/update-managed-service-handoff-lease-runtime.ts",
+        );
+        const handoffDirectory = vitestArtifactDirectory(directory, "handoff");
+        const copiedOutput = path.join(handoffDirectory, "dist", MANAGED_HANDOFF_RUNTIME_ENTRY);
+        for (const [filename, message] of [
+          [copiedSource, "Source changed during compiled subprocess invocation"],
+          [copiedOutput, "Compiled subprocess artifact changed"],
+        ]) {
+          const original = fs.readFileSync(filename!);
+          try {
+            fs.appendFileSync(filename!, "\n// changed sealed closure\n");
+            await expect(verifyVitestWorkerArtifacts(handoffDirectory)).rejects.toThrow(message);
+            fs.unlinkSync(filename!);
+            await expect(verifyVitestWorkerArtifacts(handoffDirectory)).rejects.toThrow("ENOENT");
+          } finally {
+            fs.writeFileSync(filename!, original);
+          }
+        }
+        await verifyVitestWorkerArtifacts(directory);
+        await verifyVitestWorkerArtifacts(handoffDirectory);
         const parent = path.join(fixture, ".artifacts/vitest-workers");
         const before = fs.readdirSync(parent).toSorted();
         writeFixture(fixture, "dist/source-input.js", changedSource);

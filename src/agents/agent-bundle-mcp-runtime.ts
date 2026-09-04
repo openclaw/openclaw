@@ -59,6 +59,7 @@ import { collectMcpPaginatedItems } from "./mcp-pagination.js";
 import { isMcpToolAllowed, normalizeMcpToolFilter } from "./mcp-tool-filter.js";
 import { normalizeMcpToolCatalog, type McpToolCatalogMetadata } from "./mcp-tool-metadata.js";
 import { resolveMcpTransport } from "./mcp-transport.js";
+import { recordAgentCleanupFailure } from "./run-cleanup-timeout.js";
 
 type BundleMcpSession = {
   serverName: string;
@@ -71,6 +72,7 @@ type BundleMcpSession = {
   disconnectReason?: string;
   retiring: boolean;
   connectPromise?: Promise<void>;
+  disposePromise?: Promise<void>;
   detachStderr?: () => void;
   toolMetadata?: McpToolCatalogMetadata;
 };
@@ -195,7 +197,7 @@ function setBundleMcpDisposeTimeoutMsForTest(timeoutMs?: number): void {
       : undefined;
 }
 
-function disposeBundleMcpSession(session: BundleMcpSession): Promise<void> {
+function disposeBundleMcpSession(session: BundleMcpSession): Promise<"closed" | "uncertain"> {
   return disposeMcpClient(
     session,
     getBundleMcpTestState().disposeTimeoutMs ?? BUNDLE_MCP_DISPOSE_TIMEOUT_MS,
@@ -281,7 +283,8 @@ export function createSessionMcpRuntime(params: {
   const createdAt = Date.now();
   let lastUsedAt = createdAt;
   let activeLeases = 0;
-  let disposed = false;
+  let disposal: Promise<void> | undefined;
+  let cleanupFailed = false;
   const lifecycleAbortController = new AbortController();
   let catalog: McpToolCatalog | null = null;
   let catalogRetryAfterMs: number | undefined;
@@ -329,6 +332,28 @@ export function createSessionMcpRuntime(params: {
   const catalogRetryIsDue = (): boolean =>
     catalogRetryAfterMs !== undefined && Date.now() >= catalogRetryAfterMs;
   const sessions = new Map<string, BundleMcpSession>();
+  const pendingDisposals = new Set<Promise<void>>();
+  const disposeSession = (session: BundleMcpSession): Promise<void> => {
+    if (session.disposePromise) {
+      return session.disposePromise;
+    }
+    const closing = disposeBundleMcpSession(session)
+      .then((outcome) => {
+        if (outcome === "uncertain") {
+          cleanupFailed = true;
+          recordAgentCleanupFailure();
+        }
+      })
+      .catch((error: unknown) => {
+        cleanupFailed = true;
+        recordAgentCleanupFailure();
+        throw error;
+      })
+      .finally(() => pendingDisposals.delete(closing));
+    session.disposePromise = closing;
+    pendingDisposals.add(closing);
+    return closing;
+  };
   const serverBackoff = new Map<string, McpServerBackoffState>();
   const recordServerToolFailure = (
     serverName: string,
@@ -348,7 +373,7 @@ export function createSessionMcpRuntime(params: {
     return failures;
   };
   const failIfDisposed = () => {
-    if (disposed) {
+    if (lifecycleAbortController.signal.aborted) {
       throw createDisposedError(params.sessionId);
     }
   };
@@ -404,7 +429,7 @@ export function createSessionMcpRuntime(params: {
     }
     session.retiring = true;
     sessions.delete(serverName);
-    await disposeBundleMcpSession(session);
+    await disposeSession(session);
     return true;
   };
   const localRequestTimeouts = new WeakSet<object>();
@@ -714,7 +739,7 @@ export function createSessionMcpRuntime(params: {
                   // already belong to catalog loading, and retirement must not start a rebuild.
                   if (
                     wasConnected &&
-                    !disposed &&
+                    !lifecycleAbortController.signal.aborted &&
                     !createdSession.retiring &&
                     sessions.get(serverName) === createdSession
                   ) {
@@ -850,7 +875,7 @@ export function createSessionMcpRuntime(params: {
                 };
               } catch (error) {
                 const message = redactMcpDiagnosticError(error);
-                if (!disposed) {
+                if (!lifecycleAbortController.signal.aborted) {
                   const action = reusedSession ? "refresh" : "start";
                   logWarn(
                     `bundle-mcp: failed to ${action} server "${serverName}" (${launchDescription}): ${message}`,
@@ -924,7 +949,7 @@ export function createSessionMcpRuntime(params: {
         };
       } catch (error) {
         await Promise.allSettled(
-          Array.from(sessions.values(), (session) => disposeBundleMcpSession(session)),
+          Array.from(sessions.values(), (session) => disposeSession(session)),
         );
         sessions.clear();
         throw error;
@@ -968,7 +993,11 @@ export function createSessionMcpRuntime(params: {
     const staleCatalog = catalog;
     catalogRetryAfterMs = undefined;
     void loadCatalog(staleCatalog).catch(() => {
-      if (!disposed && catalog === staleCatalog && catalogRetryAfterMs === undefined) {
+      if (
+        !lifecycleAbortController.signal.aborted &&
+        catalog === staleCatalog &&
+        catalogRetryAfterMs === undefined
+      ) {
         catalogRetryAfterMs = Date.now() + BUNDLE_MCP_CATALOG_FAILURE_RETRY_MS;
       }
     });
@@ -1089,18 +1118,37 @@ export function createSessionMcpRuntime(params: {
         ),
       );
     },
-    async dispose() {
-      if (disposed) {
-        return;
+    async joinCleanup() {
+      await disposal;
+      await Promise.allSettled(pendingDisposals);
+      if (cleanupFailed) {
+        recordAgentCleanupFailure();
+        throw new Error("MCP runtime cleanup could not confirm closure");
       }
-      disposed = true;
-      lifecycleAbortController.abort(createDisposedError(params.sessionId));
-      catalog = null;
-      catalogRetryAfterMs = undefined;
-      catalogInFlight = undefined;
-      const sessionsToClose = Array.from(sessions.values());
-      sessions.clear();
-      await Promise.allSettled(sessionsToClose.map((session) => disposeBundleMcpSession(session)));
+    },
+    dispose() {
+      if (!disposal) {
+        lifecycleAbortController.abort(createDisposedError(params.sessionId));
+        catalog = null;
+        catalogRetryAfterMs = undefined;
+        const pendingCatalog = catalogInFlight;
+        const sessionsToClose = Array.from(sessions.values());
+        sessions.clear();
+        disposal = (async () => {
+          await Promise.allSettled(sessionsToClose.map((session) => disposeSession(session)));
+          // Recycling unpublishes a session before cleanup, and catalog startup
+          // may still be admitting children. Both remain owned until settled.
+          await pendingCatalog?.catch(() => undefined);
+          await Promise.allSettled(pendingDisposals);
+        })();
+      }
+      // Preserve best-effort replacement while replaying facts in each caller's scope.
+      void disposal.then(() => {
+        if (cleanupFailed) {
+          recordAgentCleanupFailure();
+        }
+      });
+      return disposal;
     },
   };
   return runtime;

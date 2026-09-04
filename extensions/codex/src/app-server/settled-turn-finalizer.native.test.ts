@@ -52,7 +52,7 @@ type Cleanup = () => Promise<void>;
 type NativePhase = "probe" | "action" | "summary" | "health";
 
 async function closeNativeClient(client: CodexAppServerClient): Promise<void> {
-  expect(await client.closeAndWait()).toBe(true);
+  expect(await client.closeAndWait()).toMatchObject({ exited: true });
 }
 
 async function createNativeFixture(cleanups: Cleanup[], failures: unknown[]) {

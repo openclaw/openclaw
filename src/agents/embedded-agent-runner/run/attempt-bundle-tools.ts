@@ -8,6 +8,7 @@ import {
 } from "../../agent-bundle-mcp-tools.js";
 import { wrapToolWithAbortSignal } from "../../agent-tools.abort.js";
 import { filterLocalModelLeanTools } from "../../local-model-lean.js";
+import { recordAgentCleanupFailure } from "../../run-cleanup-timeout.js";
 import { normalizeAgentRuntimeTools } from "../../runtime-plan/tools.js";
 import { createRuntimeToolMatcher } from "../../tool-policy-match.js";
 import { replaceWithEffectiveToolAllowlist } from "../../tool-policy.js";
@@ -264,11 +265,13 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
       await bundleMcpRuntime?.dispose();
     } catch {
       // Preserve the preparation error; cleanup is best-effort.
+      recordAgentCleanupFailure();
     }
     try {
       await bundleLspRuntime?.dispose();
     } catch {
       // Preserve the preparation error; cleanup is best-effort.
+      recordAgentCleanupFailure();
     }
     throw error;
   }

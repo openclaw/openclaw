@@ -2,6 +2,9 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { withTriageTerminal } from "../../commands/triage.test-support.js";
+import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
+import { triageTestRuntimeEntrypoints } from "../../infra/triage-runtime.test-support.js";
 import { CONTROL_PLANE_UPDATE_SENTINEL_META_ENV } from "../../infra/update-control-plane-sentinel.js";
 import { POST_CORE_UPDATE_ENV } from "../../infra/update-post-core-context.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
@@ -42,14 +45,14 @@ async function createInstalledTriage(exitCode = 0) {
     const path = require("node:path");
     const args = process.argv.slice(2);
     const input = args[args.indexOf("--update-result") + 1];
-    fs.writeFileSync(path.join(process.cwd(), "receipt.json"), JSON.stringify({
+    fs.writeFileSync(path.join(${JSON.stringify(root)}, "receipt.json"), JSON.stringify({
       args,
       failure: JSON.parse(fs.readFileSync(input, "utf8")),
       stateDir: process.env.OPENCLAW_STATE_DIR,
       configPath: process.env.OPENCLAW_CONFIG_PATH,
       updateInProgress: process.env.OPENCLAW_UPDATE_IN_PROGRESS,
       serviceMarker: process.env.OPENCLAW_SERVICE_MARKER,
-      released: fs.existsSync(path.join(process.cwd(), "released")),
+      released: fs.existsSync(path.join(${JSON.stringify(root)}, "released")),
     }));
     process.stdout.write(args.includes("--json")
       ? JSON.stringify({promptPath: path.join(process.cwd(), "prompt.md"), bundlePath: null, bundleError: null}) + "\\n"
@@ -103,26 +106,6 @@ async function createManagedTriageTarget() {
   return { target, contextPath };
 }
 
-async function withTerminal(run: () => Promise<void>) {
-  const streams = [process.stdin, process.stdout];
-  const descriptors = streams.map((stream) => Object.getOwnPropertyDescriptor(stream, "isTTY"));
-  for (const stream of streams) {
-    Object.defineProperty(stream, "isTTY", { configurable: true, value: true });
-  }
-  try {
-    await run();
-  } finally {
-    streams.forEach((stream, index) => {
-      const descriptor = descriptors[index];
-      if (descriptor) {
-        Object.defineProperty(stream, "isTTY", descriptor);
-      } else {
-        Reflect.deleteProperty(stream, "isTTY");
-      }
-    });
-  }
-}
-
 beforeEach(() => {
   vi.spyOn(defaultRuntime, "exit").mockImplementation(() => undefined);
   vi.spyOn(defaultRuntime, "log").mockImplementation(() => undefined);
@@ -165,6 +148,71 @@ describe("update failure triage boundary", () => {
       expect(defaultRuntime.writeJson).toHaveBeenCalledExactlyOnceWith(failedUpdate);
       expect(defaultRuntime.log).not.toHaveBeenCalled();
       expect(defaultRuntime.error).toHaveBeenCalledWith(expect.stringContaining('"promptPath":'));
+    },
+  );
+
+  it.each(["preserve", "verify-running"] as const)(
+    "admits exactly one owned repair after cleanup with unchanged JSON failure (%s)",
+    async (gateway) => {
+      const result: UpdateRunResult = {
+        ...failedUpdate,
+        reason: gateway === "preserve" ? "global-install-failed" : "restart-unhealthy",
+        recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
+        ...(gateway === "verify-running" && { steps: [] }),
+      };
+      const target = await createInstalledTriage();
+      const entry = path.join(target.root, "dist", "index.js");
+      const receiptPath = path.join(target.root, "attempts.jsonl");
+      const installed = await fs.readFile(entry, "utf8");
+      await fs.writeFile(
+        entry,
+        `
+      (async () => {
+        const { acceptTriageContinuation } = await import(${JSON.stringify(resolveRuntimeWorkerUrl(triageTestRuntimeEntrypoints.continuation).href)});
+        const admission = await acceptTriageContinuation();
+        ${installed}
+        fs.appendFileSync(${JSON.stringify(receiptPath)}, JSON.stringify({ admitted: Boolean(admission), failure: admission?.failure }) + "\\n");
+        if (admission) await admission.finish("closed");
+      })().catch(error => { console.error(error); process.exitCode = 1; });
+    `,
+      );
+      const automaticTriage = {
+        kind: "update" as const,
+        phase: result.reason!,
+        error: "ENOSPC",
+        installationRoot: target.root,
+        gateway,
+      };
+      await expect(
+        withUpdateFailureTriage({ json: true }, target, async () => {
+          try {
+            defaultRuntime.writeJson(result);
+            throw new UpdateCommandFailure(result, 1, undefined, undefined, automaticTriage);
+          } finally {
+            await fs.writeFile(path.join(target.root, "released"), "done");
+          }
+        }),
+      ).rejects.toMatchObject({ code: 1 });
+      const attempts = (await fs.readFile(receiptPath, "utf8"))
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+      expect(attempts).toEqual([{ admitted: true, failure: automaticTriage }]);
+      const receipt = await readReceipt(target);
+      expect(receipt).toMatchObject({
+        released: true,
+        failure: {
+          result: {
+            reason: result.reason,
+            recovery: result.recovery,
+            steps: gateway === "preserve" ? [{ stderrTail: "ENOSPC" }] : [],
+          },
+        },
+      });
+      expect(receipt.args).toEqual(["triage", "--update-result", expect.any(String)]);
+      expect(defaultRuntime.writeJson).toHaveBeenCalledExactlyOnceWith(result);
+      expect(defaultRuntime.log).not.toHaveBeenCalled();
+      expect(defaultRuntime.error).toHaveBeenCalledWith(expect.stringContaining("triage report"));
     },
   );
 
@@ -398,7 +446,7 @@ describe("update failure triage boundary", () => {
               OPENCLAW_WORKSPACE_DIR: state.workspaceDir,
             },
             () =>
-              withTerminal(async () => {
+              withTriageTerminal(true, async () => {
                 const target: UpdateTriageTarget = { env: { ...process.env } };
                 await expect(
                   withUpdateFailureTriage({ invocationCwd }, target, async () => {

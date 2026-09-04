@@ -65,7 +65,8 @@ it
 import fs from 'node:fs';
 import path from 'node:path';
 import {createHash} from 'node:crypto';
-const directory=process.argv[2];
+const directory=path.join(process.argv[2],'handoff');
+fs.mkdirSync(directory);
 if(${JSON.stringify(phase)}==='compilation') {
   const keepAlive=setInterval(()=>{},1000);
   await new Promise(resolve=>{
@@ -102,7 +103,7 @@ if(${JSON.stringify(phase)}==='admission') {
   exitCheck();
 }
 try {
-  await requestVitestWorkerArtifacts();
+  await requestVitestWorkerArtifacts('handoff');
   console.log('fixture borrower completed');
 } catch(error) {
   console.error(error);process.exitCode=1;
@@ -253,7 +254,7 @@ syncBuiltinESMExports();
           .pid;
         if (phase === "compilation") {
           expect(isProcessAlive(compilerPid)).toBe(true);
-          expect(fs.existsSync(path.join(owner.generation, "manifest.json"))).toBe(false);
+          expect(fs.existsSync(path.join(owner.generation, "handoff/manifest.json"))).toBe(false);
           // Only the borrower dies. Its completion must let the invocation cancel
           // the compiler, rather than waiting for that compiler before disposal.
           process.kill(owner.borrower, shutdownSignal);
@@ -275,7 +276,7 @@ syncBuiltinESMExports();
           }
           expect(isProcessAlive(owner.borrower)).toBe(false);
           expect(isProcessAlive(compilerPid)).toBe(false);
-          expect(fs.existsSync(path.join(owner.generation, "manifest.json"))).toBe(true);
+          expect(fs.existsSync(path.join(owner.generation, "handoff/manifest.json"))).toBe(true);
 
           process.kill(owner.owner, shutdownSignal);
           fs.writeFileSync(loopRequest, "probe");

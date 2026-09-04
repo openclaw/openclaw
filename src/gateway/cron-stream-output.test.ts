@@ -1,13 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import type {
-  ManagedRun,
-  ProcessSupervisor,
-  RunExit,
-  SpawnInput,
-} from "../process/supervisor/types.js";
+import type { ManagedRun, RunExit, SpawnInput } from "../process/supervisor/types.js";
 import {
   createCronStreamMatchingJob,
+  createCronStreamSupervisor,
   createCronStreamWatcherFixture,
   createWatchers,
   exitResult,
@@ -219,12 +215,7 @@ describe("cron stream output", () => {
       input.onStdout?.("early\n");
       return run;
     });
-    const supervisor = {
-      spawn,
-      cancel: vi.fn(),
-      cancelScope: vi.fn(),
-      getRecord: vi.fn(),
-    } satisfies ProcessSupervisor;
+    const supervisor = createCronStreamSupervisor(spawn);
     const fireBatch = vi.fn(async () => "fired" as const);
     const watchers = createWatchers({
       getProcessSupervisor: () => supervisor,

@@ -1,4 +1,3 @@
-/** Orchestrates one embedded-agent attempt from prompt setup through stream result. */
 import {
   assertContextEngineHostSupport,
   OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST,
@@ -14,6 +13,8 @@ import {
   type AgentRunAttemptTerminal,
 } from "../../agent-run-terminal-outcome.js";
 import { resolveAgentDir } from "../../agent-scope.js";
+/** Orchestrates one embedded-agent attempt from prompt setup through stream result. */
+import { recordAgentCleanupFailure, runOwnedAgentCleanup } from "../../run-cleanup-timeout.js";
 import type { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
 import type { AgentSession } from "../../sessions/index.js";
 import {
@@ -102,6 +103,8 @@ export async function runEmbeddedAttempt(
   let toolSearchCatalogRef: ToolSearchCatalogRef | undefined;
   let toolSearchCatalogApplied = false;
   let runCleanups: Array<(reason: string) => Promise<void>> = [];
+  const cleanupStep = (step: string, cleanup: () => Promise<void>) =>
+    runOwnedAgentCleanup({ ...params, step, cleanup, log });
   const cleanupEmbeddedPrepResourcesAfterEarlyExit = async () => {
     if (toolSearchCatalogApplied) {
       clearToolSearchCatalog({
@@ -116,14 +119,14 @@ export async function runEmbeddedAttempt(
     try {
       await bundleMcpRuntime?.dispose();
     } catch {
-      /* best-effort */
+      recordAgentCleanupFailure();
     } finally {
       bundleMcpRuntime = undefined;
     }
     try {
       await bundleLspRuntime?.dispose();
     } catch {
-      /* best-effort */
+      recordAgentCleanupFailure();
     } finally {
       bundleLspRuntime = undefined;
     }
@@ -544,28 +547,37 @@ export async function runEmbeddedAttempt(
       };
     } finally {
       const terminal = projectAgentRunAttemptTerminal(executionState.terminal);
-      await cleanupEmbeddedAttemptSessionPhase({
-        attempt: params,
-        session,
-        sessionManager,
-        transcriptLifecycle,
-        bundleMcpRuntime,
-        bundleLspRuntime,
-        removeToolResultContextGuard,
-        toolSearchCatalogRef,
-        sandboxSessionKey,
-        sessionAgentId,
-        buildAbortSettlePromise,
-        trajectoryRecorder,
-        trajectoryEndRecorded: executionState.trajectoryEndRecorded,
-        deferredLifecycleOwner: executionState.deferredLifecycleOwner,
-        cleanupYieldAborted: terminal.cleanupYieldAborted,
-        emitDiagnosticRunCompleted,
-        readState: () => ({
-          ...projectAgentRunAttemptTerminal(executionState.terminal),
-          beforeAgentRunBlockedBy: executionState.beforeAgentRunBlockedBy,
+      // Transfer resources to the session cleanup owner before awaiting it. A
+      // bounded timeout must not let outer early-exit cleanup dispose them twice.
+      const sessionMcpRuntime = bundleMcpRuntime;
+      const sessionLspRuntime = bundleLspRuntime;
+      bundleMcpRuntime = undefined;
+      bundleLspRuntime = undefined;
+      toolSearchCatalogApplied = false;
+      await cleanupStep("embedded-session", () =>
+        cleanupEmbeddedAttemptSessionPhase({
+          attempt: params,
+          session,
+          sessionManager,
+          transcriptLifecycle,
+          bundleMcpRuntime: sessionMcpRuntime,
+          bundleLspRuntime: sessionLspRuntime,
+          removeToolResultContextGuard,
+          toolSearchCatalogRef,
+          sandboxSessionKey,
+          sessionAgentId,
+          buildAbortSettlePromise,
+          trajectoryRecorder,
+          trajectoryEndRecorded: executionState.trajectoryEndRecorded,
+          deferredLifecycleOwner: executionState.deferredLifecycleOwner,
+          cleanupYieldAborted: terminal.cleanupYieldAborted,
+          emitDiagnosticRunCompleted,
+          readState: () => ({
+            ...projectAgentRunAttemptTerminal(executionState.terminal),
+            beforeAgentRunBlockedBy: executionState.beforeAgentRunBlockedBy,
+          }),
         }),
-      });
+      );
     }
   } catch (error) {
     const terminalOutcome = buildAgentRunTerminalOutcomeFromAttempt({
@@ -589,12 +601,20 @@ export async function runEmbeddedAttempt(
             ? "error"
             : "completion";
     const cleanups = runCleanups.splice(0);
-    await Promise.allSettled(cleanups.map(async (cleanup) => await cleanup(cleanupReason)));
+    await cleanupStep("embedded-registered-resources", async () => {
+      const settled = await Promise.allSettled(
+        cleanups.map(async (cleanup) => await cleanup(cleanupReason)),
+      );
+      if (settled.some((result) => result.status === "rejected")) {
+        recordAgentCleanupFailure();
+      }
+    });
     externalAbortController.dispose();
     clearToolActivityRun(params.runId);
     try {
-      await cleanupEmbeddedPrepResourcesAfterEarlyExit();
+      await cleanupStep("embedded-preparation", cleanupEmbeddedPrepResourcesAfterEarlyExit);
     } catch (cleanupErr) {
+      recordAgentCleanupFailure();
       log.warn(
         `failed to clean up embedded prep resources after early attempt exit: runId=${params.runId} ${String(cleanupErr)}`,
       );

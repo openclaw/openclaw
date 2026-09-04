@@ -16,7 +16,6 @@ import { defaultRuntime } from "../../runtime.js";
 import { replaceCliName, resolveCliName } from "../cli-name.js";
 import { formatCliCommand } from "../command-format.js";
 import { installCompletion } from "../completion-runtime.js";
-import { runDaemonRestart } from "../daemon-cli.js";
 import {
   renderRestartDiagnostics,
   terminateStaleGatewayPids,
@@ -27,6 +26,7 @@ import type { UpdateCommandOptions } from "./shared.js";
 import { createUpdateConfigSnapshot } from "./update-command-config-snapshot.js";
 import {
   DEFINITION_DENIAL,
+  GatewayRestartHealthError,
   runUpdatedInstallGatewayCommand,
 } from "./update-command-service-command.js";
 import { resolveServiceRefreshEnv } from "./update-command-service-env.js";
@@ -45,7 +45,6 @@ import {
   hasLoadedLaunchdKeepAliveSupervisor,
   isPackageManagerUpdateMode,
   recoverLaunchAgentAndRecheckGatewayHealth,
-  shouldUseLegacyProcessRestartAfterUpdate,
 } from "./update-command-service-recovery.js";
 
 export {
@@ -55,8 +54,6 @@ export {
   revalidateManagedGatewayServiceAfterUpdate,
   resolvePreparedGatewayUpdatePolicy,
   resolveUpdatedGatewayRestartPort,
-  shouldBlockMutableUpdateFromGatewayServiceEnv,
-  UpdateCommandAbort,
   type PreManagedServiceStop,
   type UpdateCommandRecoveryState,
 } from "./update-command-service-maintenance.js";
@@ -173,7 +170,7 @@ export async function maybeRestartService(params: {
   requireRunningServiceAfterRestart?: boolean;
   serviceMutationSkipMessage?: string;
   timeoutMs: number;
-}): Promise<boolean> {
+}): Promise<"ok" | "failed" | "restart-health-failed"> {
   const invocationEnv = resolveServiceRefreshEnv(process.env, params.invocationCwd);
   const serviceEnv = resolveServiceRefreshEnv(
     params.serviceEnv ?? invocationEnv,
@@ -185,7 +182,7 @@ export async function maybeRestartService(params: {
       resolveGatewayServiceManagementBlockMessageForUpdate(serviceEnv);
     if (message) {
       defaultRuntime.error(message);
-      return false;
+      return "failed";
     }
   }
   let activation = { ...params, invocationEnv, serviceEnv };
@@ -210,8 +207,10 @@ export async function maybeRestartService(params: {
   }
   if (activation.serviceMutationSkipMessage) {
     defaultRuntime.error(activation.serviceMutationSkipMessage);
-    return true;
+    return "ok";
   }
+  let activationAccepted = false;
+  let updatedInstallRestartNeedsServiceRootProof = false;
   const verifyRestartedGateway = async (
     expectedGatewayVersion: string | undefined,
     expectedGatewayBuildId: string | undefined,
@@ -242,10 +241,10 @@ export async function maybeRestartService(params: {
         );
       }
       await terminateStaleGatewayPids(health.staleGatewayPids);
-      if (canRestartUpdatedInstall()) {
-        await runUpdatedInstallGatewayCommand(activation, "restart", preserveDefinition);
-      } else if (shouldUseLegacyProcessRestartAfterUpdate({ updateMode: activation.result.mode })) {
-        await runDaemonRestart();
+      if (canRestartUpdatedInstall() || !isPackageUpdate) {
+        activationAccepted =
+          (await runUpdatedInstallGatewayCommand(activation, "restart", preserveDefinition)) ===
+          "accepted";
       }
       health = await waitForHealthy();
     }
@@ -262,6 +261,7 @@ export async function maybeRestartService(params: {
     health = recoveryVerification.health;
     const launchAgentRecovery = recoveryVerification.launchAgentRecovery;
     if (launchAgentRecovery?.attempted) {
+      activationAccepted = launchAgentRecovery.recovered;
       defaultRuntime.error(
         launchAgentRecovery.recovered ? launchAgentRecovery.message : launchAgentRecovery.detail,
       );
@@ -321,7 +321,7 @@ export async function maybeRestartService(params: {
       defaultRuntime.error(
         "The updated installation requires a writable gateway service definition.",
       );
-      return false;
+      return "failed";
     }
     if (!activation.opts.json) {
       defaultRuntime.log("");
@@ -342,7 +342,6 @@ export async function maybeRestartService(params: {
       let restarted = false;
       let restartInitiated = false;
       let refreshedGatewayAlreadyHealthy = false;
-      let updatedInstallRestartNeedsServiceRootProof = false;
       let restartScriptPath = preserveDefinition ? null : activation.restartScriptPath;
       if (activation.refreshServiceEnv && activation.serviceInstallEnv !== null) {
         try {
@@ -360,6 +359,7 @@ export async function maybeRestartService(params: {
               settle: { probes: 12 },
             });
             refreshedGatewayAlreadyHealthy = health.healthy;
+            activationAccepted = health.healthy;
             if (refreshedGatewayAlreadyHealthy && !activation.opts.json) {
               defaultRuntime.log(
                 theme.muted(
@@ -419,7 +419,7 @@ export async function maybeRestartService(params: {
           defaultRuntime.error(
             "Gateway service did not point at the updated install after refresh.",
           );
-          return false;
+          return "failed";
         }
       }
       // Refresh can start the service directly. Once its version and source
@@ -428,17 +428,22 @@ export async function maybeRestartService(params: {
         if (!preserveDefinition) {
           await createUpdateConfigSnapshot();
         }
-        await runRestartScript(restartScriptPath);
+        activationAccepted = await runRestartScript(restartScriptPath, activation.timeoutMs);
         restartInitiated = true;
-      } else if (!refreshedGatewayAlreadyHealthy && canRestartUpdatedInstall()) {
+      } else if (
+        !refreshedGatewayAlreadyHealthy &&
+        (canRestartUpdatedInstall() || (!isPackageUpdate && !activation.skipLegacyServiceRestart))
+      ) {
         if (!preserveDefinition) {
           await createUpdateConfigSnapshot();
         }
-        restarted = await runUpdatedInstallGatewayCommand(
+        const restart = await runUpdatedInstallGatewayCommand(
           activation,
           "restart",
           preserveDefinition,
         );
+        restarted = true;
+        activationAccepted = restart === "accepted";
         if (
           updatedInstallRestartNeedsServiceRootProof &&
           (await gatewayServiceCommandUsesRoot({
@@ -451,17 +456,8 @@ export async function maybeRestartService(params: {
               theme.warn("Gateway service did not point at the updated install after restart."),
             );
           }
-          return false;
+          return "failed";
         }
-      } else if (
-        !refreshedGatewayAlreadyHealthy &&
-        shouldUseLegacyProcessRestartAfterUpdate({ updateMode: activation.result.mode }) &&
-        !activation.skipLegacyServiceRestart
-      ) {
-        if (!preserveDefinition) {
-          await createUpdateConfigSnapshot();
-        }
-        restarted = await runDaemonRestart();
       } else if (!refreshedGatewayAlreadyHealthy && !activation.opts.json) {
         defaultRuntime.log(theme.muted("Gateway: restart skipped (no installed service found)."));
       }
@@ -487,7 +483,7 @@ export async function maybeRestartService(params: {
           if (!activation.opts.json) {
             defaultRuntime.log("");
           }
-          return false;
+          return activationAccepted ? "restart-health-failed" : "failed";
         }
         if (!activation.opts.json && restartInitiated) {
           defaultRuntime.log(theme.success("Daemon restart completed."));
@@ -504,11 +500,14 @@ export async function maybeRestartService(params: {
         `Gateway: restart failed: ${String(err)}. Code update remains installed; a service stopped for update may still be stopped. ` +
           "Run `openclaw gateway status --deep` and ask its service owner to restart it manually.",
       );
+      if (err instanceof GatewayRestartHealthError && !updatedInstallRestartNeedsServiceRootProof) {
+        return "restart-health-failed";
+      }
       if (requiresVerifiedRestart()) {
-        return false;
+        return "failed";
       }
     }
-    return true;
+    return "ok";
   }
 
   if (!activation.opts.json) {
@@ -528,5 +527,5 @@ export async function maybeRestartService(params: {
       );
     }
   }
-  return true;
+  return "ok";
 }

@@ -2,7 +2,14 @@
 import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Result } from "@openclaw/normalization-core/result";
+import { tryResolveAmbientOwnerAgentId } from "../agents/agent-scope-config.js";
+import { resolveAgentEffectiveModelPrimary } from "../agents/agent-scope.js";
+import {
+  recordAgentCleanupFailure,
+  withAgentCleanupOutcome,
+} from "../agents/run-cleanup-timeout.js";
 import { callGatewayFromCliWithTransport } from "../cli/gateway-rpc.js";
 import { formatInstallationTargetCommand } from "../cli/installation-target-format.js";
 import { exitCliAfterOutput } from "../cli/one-shot-exit.js";
@@ -10,6 +17,7 @@ import { resolveSubprocessExitCode } from "../cli/subprocess-exit-code.js";
 import { isNodeRuntime } from "../daemon/runtime-binary.js";
 import { scrubDoctorErrorMessage } from "../flows/doctor-error-message.js";
 import type { HealthFinding, HealthFindingSeverity } from "../flows/health-checks.js";
+import { createEmbeddedStateSignalBridge } from "../infra/embedded-state-lock.js";
 import { resolveExecutablePath } from "../infra/executable-path.js";
 import {
   installationTargetEnv,
@@ -18,14 +26,19 @@ import {
   type InstallationTarget,
 } from "../infra/installation-target-context.js";
 import { readRestartSentinelReadOnly } from "../infra/restart-sentinel.js";
+import { acceptTriageContinuation } from "../infra/triage-continuation.js";
 import {
   redactSupportString,
   type SupportRedactionContext,
 } from "../logging/diagnostic-support-redaction.js";
 import { resolveWindowsSpawnProgramCandidate } from "../plugin-sdk/windows-spawn.js";
-import { writeRuntimeJson, type RuntimeEnv } from "../runtime.js";
+import { ExitError, writeRuntimeJson, type RuntimeEnv } from "../runtime.js";
 import { classifyUpdateOutcome } from "../shared/update-outcome.js";
-import { renderTriagePrompt, type TriageBundle } from "./triage-prompt.js";
+import {
+  renderTriagePrompt,
+  type TriageBundle,
+  type TriageFailureContext,
+} from "./triage-prompt.js";
 import {
   readTriageUpdateFailure,
   sanitizeTriageUpdateFailure,
@@ -131,14 +144,59 @@ async function readPendingTriageUpdateFailure(
 export async function triageCommand(
   runtime: RuntimeEnv,
   options: TriageOptions = {},
+  automatic?: { failure: TriageFailureContext; signal: AbortSignal } & (
+    | { diagnosticOnly: true }
+    | { diagnosticOnly?: false; assertCurrent: () => void }
+  ),
 ): Promise<void> {
-  const isCurrent = () => options.recovery?.isCurrent?.() !== false;
+  if (
+    !automatic &&
+    !options.json &&
+    !options.run &&
+    !options.noExport &&
+    !options.nonInteractive &&
+    !options.agent
+  ) {
+    const continuation = await acceptTriageContinuation();
+    if (continuation) {
+      const bridge = createEmbeddedStateSignalBridge();
+      try {
+        const automaticRuntime: RuntimeEnv = {
+          ...runtime,
+          exit: (code) => {
+            throw new ExitError(code);
+          },
+        };
+        return await withAgentCleanupOutcome(
+          () =>
+            triageCommand(automaticRuntime, options, {
+              failure: continuation.failure,
+              signal: AbortSignal.any([continuation.signal, bridge.signal]),
+              assertCurrent: continuation.assertCurrent,
+            }),
+          continuation.finish,
+        );
+      } finally {
+        bridge.dispose();
+      }
+    }
+  }
+  const isCurrent = () => {
+    automatic?.signal.throwIfAborted();
+    if (automatic && !automatic.diagnosticOnly) {
+      automatic.assertCurrent();
+    }
+    return options.recovery?.isCurrent?.() !== false;
+  };
   if (!isCurrent()) {
     return;
   }
   const interactive = process.stdin.isTTY && process.stdout.isTTY;
-  const allowAgent = options.json !== true && options.nonInteractive !== true && interactive;
-  const deferDiagnostics = allowAgent && Boolean(options.recovery || options.updateResult);
+  const allowAgent = automatic
+    ? !automatic.diagnosticOnly
+    : options.json !== true && options.nonInteractive !== true && interactive;
+  const deferDiagnostics =
+    !automatic && allowAgent && Boolean(options.recovery || options.updateResult);
   let findings: readonly HealthFinding[] = [];
   if (!deferDiagnostics) {
     try {
@@ -172,7 +230,13 @@ export async function triageCommand(
   const bundle: TriageBundle = deferDiagnostics
     ? { kind: "deferred" }
     : await collectTriageBundle(options.noExport === true, redaction);
-  const prompt = renderTriagePrompt({ findings, bundle, redaction, updateFailure });
+  const prompt = renderTriagePrompt({
+    findings,
+    bundle,
+    redaction,
+    updateFailure,
+    failure: automatic?.failure,
+  });
   // Packaged OpenClaw/Bun hosts cannot interpret npm shim entrypoints. Reuse the
   // active Node runtime or require an installed node.exe before choosing a shim.
   const nodeExecutable = isNodeRuntime(process.execPath)
@@ -198,9 +262,27 @@ export async function triageCommand(
     const launchable =
       program.resolution !== "unresolved-wrapper" &&
       (program.resolution !== "node-entrypoint" || nodeExecutable !== undefined);
-    return launchable && (options.agent === undefined || agent === options.agent);
+    return (
+      launchable &&
+      (automatic
+        ? agent === "claude" || agent === "codex"
+        : options.agent === undefined || agent === options.agent)
+    );
   });
-  const canStartAgent = allowAgent && (options.run === true || handoff !== undefined);
+  let runEmbedded = options.run === true;
+  if (automatic && !automatic.diagnosticOnly) {
+    const { readConfigFileSnapshot } = await import("../config/config.js");
+    const snapshot = await readConfigFileSnapshot({ observe: false });
+    const config = snapshot.runtimeConfig ?? snapshot.config;
+    const agentId = tryResolveAmbientOwnerAgentId(config);
+    runEmbedded = Boolean(
+      snapshot.exists &&
+      snapshot.valid &&
+      agentId &&
+      resolveAgentEffectiveModelPrimary(config, agentId),
+    );
+  }
+  const canStartAgent = allowAgent && (runEmbedded || handoff !== undefined);
   const now = new Date().toISOString().replace(/[:.]/gu, "-");
   const outputDir = path.join(target.stateDir, "logs", "support");
   let updateResultPath: string | undefined;
@@ -232,26 +314,12 @@ export async function triageCommand(
   const promptPath = promptArtifact.ok ? promptArtifact.value : null;
   const stdin = promptPath ? { stdinPath: promptPath, env: targetEnv } : { env: targetEnv };
   const suggestedCommands = [
-    formatInstallationTargetCommand(
-      ["claude", "-p", ...(promptPath ? [] : [prompt])],
-      target,
-      stdin,
-    ),
-    formatInstallationTargetCommand(
-      ["codex", "exec", "--skip-git-repo-check", promptPath ? "-" : prompt],
-      target,
-      stdin,
-    ),
-    formatInstallationTargetCommand(
-      ["opencode", "run", ...(promptPath ? [] : [prompt])],
-      target,
-      stdin,
-    ),
-    formatInstallationTargetCommand(
-      ["pi", "--print", ...(promptPath ? [] : [prompt])],
-      target,
-      stdin,
-    ),
+    ["claude", "-p", ...(promptPath ? [] : [prompt])],
+    ["codex", "exec", "--skip-git-repo-check", promptPath ? "-" : prompt],
+    ["opencode", "run", ...(promptPath ? [] : [prompt])],
+    ["pi", "--print", ...(promptPath ? [] : [prompt])],
+  ].map((command) => formatInstallationTargetCommand(command, target, stdin));
+  suggestedCommands.push(
     formatInstallationTargetCommand(
       [
         "openclaw",
@@ -262,7 +330,7 @@ export async function triageCommand(
       target,
       { env: targetEnv },
     ),
-  ];
+  );
   const findingCounts: Record<HealthFindingSeverity, number> = { error: 0, warning: 0, info: 0 };
   for (const finding of findings) {
     findingCounts[finding.severity] += 1;
@@ -290,22 +358,28 @@ export async function triageCommand(
   } else if (bundle.kind === "unavailable") {
     runtime.log(`Diagnostics export unavailable: ${bundle.reason}`);
   }
-  if (!allowAgent || options.run === true || !handoff) {
+  if (!allowAgent || runEmbedded || !handoff) {
     runtime.log("Ready-to-run agent handoffs:");
     for (const command of suggestedCommands) {
       runtime.log(`  ${command}`);
     }
-    if (!allowAgent && options.run !== true) {
+    if (!allowAgent && !runEmbedded) {
       return;
     }
   }
-  if (options.run !== true) {
+  if (!runEmbedded) {
     if (!handoff) {
       if (options.agent) {
         runtime.error(`${options.agent} is not found or unavailable for direct launch on PATH.`);
         exitCliAfterOutput(runtime, 1);
       }
-      runtime.log("No coding agent can be launched directly; use a handoff command above.");
+      if (automatic) {
+        runtime.error(
+          "No configured embedded agent or directly launchable external agent is available. Use a handoff command above.",
+        );
+      } else {
+        runtime.log("No coding agent can be launched directly; use a handoff command above.");
+      }
       return;
     }
     runtime.log(`Starting ${handoff.agent}; use --agent <name> to select another coding agent.`);
@@ -317,16 +391,65 @@ export async function triageCommand(
     }
     let exitCode: number;
     try {
-      exitCode = await new Promise<number>((resolve, reject) => {
-        const child = spawn(handoff.program.command, [...handoff.program.leadingArgv, ...args], {
-          stdio: "inherit",
-          env: targetEnv,
-          ...agentOptions,
+      if (automatic) {
+        const { runUtf8CommandWithTimeout } = await import("../process/exec.js");
+        const automaticArgs =
+          handoff.agent === "claude"
+            ? ["--safe-mode", "-p"]
+            : ["exec", "--skip-git-repo-check", "-"];
+        if (!isCurrent()) {
+          return;
+        }
+        const result = await runUtf8CommandWithTimeout(
+          [handoff.program.command, ...handoff.program.leadingArgv, ...automaticArgs],
+          {
+            input: prompt,
+            env: { ...targetEnv, OPENCLAW_SHELL: "exec" },
+            ...agentOptions,
+            signal: automatic.signal,
+            timeoutMs: 600_000,
+            killProcessTree: true,
+            killSignal: "SIGINT",
+            outputCapture: "tail",
+            maxOutputBytes: 32 * 1024,
+          },
+        );
+        // External runtimes own native commands in independent process groups.
+        // Their root/group exit is not a descendant-cleanup receipt.
+        recordAgentCleanupFailure();
+        for (const output of [result.stdout, result.stderr]) {
+          if (output.trim()) {
+            runtime.log(redactSupportString(output, redaction, { maxLength: 32 * 1024 }));
+          }
+        }
+        exitCode = result.termination === "exit" ? (result.code ?? 1) : 1;
+        if (exitCode !== 0) {
+          runtime.error(
+            `${handoff.agent} triage failed (${result.termination}, exit ${result.code ?? "unknown"}).`,
+          );
+          runtime.log(
+            `Run manually: ${suggestedCommands[TRIAGE_EXTERNAL_AGENTS.indexOf(handoff.agent)]}`,
+          );
+        }
+      } else {
+        exitCode = await new Promise<number>((resolve, reject) => {
+          const child = spawn(handoff.program.command, [...handoff.program.leadingArgv, ...args], {
+            stdio: "inherit",
+            env: targetEnv,
+            ...agentOptions,
+          });
+          child.once("error", reject);
+          child.once("exit", (code, signal) => resolve(resolveSubprocessExitCode(code, signal)));
         });
-        child.once("error", reject);
-        child.once("exit", (code, signal) => resolve(resolveSubprocessExitCode(code, signal)));
-      });
+      }
     } catch (error) {
+      if (
+        automatic &&
+        isRecord(error) &&
+        (error.cleanup === "uncertain" || error.cleanup === "forced")
+      ) {
+        recordAgentCleanupFailure();
+      }
       runtime.error(
         `Failed to launch ${handoff.agent}: ${triageCollectionError(error, redaction)}`,
       );
@@ -346,27 +469,36 @@ export async function triageCommand(
     );
   }
 
-  const { verifySetupInference } = await import("../system-agent/setup-inference.js");
-  if (!isCurrent()) {
-    return;
-  }
-  const inference = await verifySetupInference({ runtime, timeoutMs: 15_000 });
-  if (!isCurrent()) {
-    return;
-  }
-  if (!inference.ok) {
-    const reason = triageCollectionError(inference.error, redaction);
-    throw new Error(
-      `Embedded agent unavailable: ${reason}. Run \`openclaw onboard\` or use a suggested handoff command.`,
+  // Preflight and repair must validate the same local transport and installation.
+  const result = await withInstallationTarget(target, async () => {
+    const { verifySetupInference } = await import("../system-agent/setup-inference.js");
+    if (!isCurrent()) {
+      return { exitCode: 1 };
+    }
+    const inference = await verifySetupInference({
+      runtime,
+      timeoutMs: 15_000,
+    });
+    if (!isCurrent()) {
+      return { exitCode: 1 };
+    }
+    if (!inference.ok) {
+      const reason = triageCollectionError(inference.error, redaction);
+      throw new Error(
+        `Embedded agent unavailable: ${reason}. Run \`openclaw onboard\` or use a suggested handoff command.`,
+      );
+    }
+    const { agentExecCommand } = await import("./agent-exec.js");
+    if (!isCurrent()) {
+      return { exitCode: 1 };
+    }
+    return agentExecCommand(
+      prompt,
+      agentOptions,
+      runtime,
+      automatic ? { abortSignal: automatic.signal } : {},
     );
-  }
-  const { agentExecCommand } = await import("./agent-exec.js");
-  if (!isCurrent()) {
-    return;
-  }
-  const result = await withInstallationTarget(target, () =>
-    agentExecCommand(prompt, agentOptions, runtime),
-  );
+  });
   if (result.exitCode !== 0) {
     exitCliAfterOutput(runtime, result.exitCode);
   }

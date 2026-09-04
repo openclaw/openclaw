@@ -137,6 +137,7 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
                 1,
                 `${failure.error.message}; Windows autostart recovery: ${formatErrorMessage(error)}`,
                 { cause: error },
+                failure.error.automaticTriage,
               ),
             };
           } else {
@@ -655,6 +656,7 @@ async function updateCommandInternal(
   const preUpdatePluginInstallRecords = await loadInstalledPluginIndexInstallRecords();
 
   const execution = await executeMutableUpdate({
+    expectedVersion: targetVersion ?? undefined,
     root,
     installKind,
     updateInstallKind,
@@ -692,6 +694,8 @@ async function updateCommandInternal(
     ownedManagedUpdateContext?.pluginInstallRecords ?? preUpdatePluginInstallRecords;
   stop();
   await finishUpdate({
+    mutationStarted: execution.mutationStarted,
+    expectedVersion: targetVersion ?? undefined,
     result,
     failure: execution.failure,
     root,

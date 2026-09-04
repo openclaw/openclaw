@@ -3765,10 +3765,12 @@ function injectRemoteTestboxBootstrap(commandArgs: string[], providerName: strin
   if (invocation.start < 0) {
     return commandArgs;
   }
-  const snapshot = `if [ -n "$(git status --porcelain=v1)" ]; then git add -A && git -c user.name=OpenClaw -c user.email=ci@openclaw.local -c commit.gpgsign=false commit --no-verify -qm remote-testbox-sync || exit $?; fi; `;
+  const snapshot = `if [ -n "$(git status --porcelain=v1)" ]; then git add -A && git -c user.name=OpenClaw -c user.email=ci@openclaw.local -c commit.gpgsign=false commit --no-verify -qm remote-testbox-sync || exit $?; fi >&2; `;
+  // Hydration predates sync. Reconcile against the final candidate before any payload,
+  // including shell compounds; preparation must leave payload stdout untouched.
   return replaceRunCommandWithShell(
     invocation,
-    `${snapshot}export CI=true; ${renderRunShellCommand(invocation)}`,
+    `${snapshot}export CI=true; corepack pnpm install --frozen-lockfile >&2 || exit $?; ${renderRunShellCommand(invocation)}`,
   );
 }
 
@@ -3811,6 +3813,8 @@ function applyRunTransforms(
     facts,
     options.provider,
   );
+  // Reconstruction wraps preparation so Corepack sees the candidate's packageManager.
+  transformedArgs = injectRemoteTestboxBootstrap(transformedArgs, options.provider);
   if (options.childCwd !== repoRoot) {
     transformedArgs = injectRemoteChangedGateGitBootstrap(
       transformedArgs,
@@ -3821,7 +3825,7 @@ function applyRunTransforms(
   invocation = parseCommandInvocation(help.text, transformedArgs);
   transformedArgs = injectRemotePosixHydratedNodeModulesBootstrap(invocation);
   return {
-    args: injectRemoteTestboxBootstrap(transformedArgs, options.provider),
+    args: transformedArgs,
     wsl2ScriptBootstrap,
   };
 }

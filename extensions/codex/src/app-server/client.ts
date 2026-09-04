@@ -33,6 +33,7 @@ import {
   closeCodexAppServerTransport,
   closeCodexAppServerTransportAndWait,
   hasCodexAppServerNaturalExit,
+  type CodexAppServerCloseResult,
   type CodexAppServerTransport,
 } from "./transport.js";
 import { CODEX_APP_SERVER_VERSION, MIN_SUPPORTED_CODEX_APP_SERVER_VERSION } from "./version.js";
@@ -749,7 +750,7 @@ export class CodexAppServerClient {
   async closeAndWait(options?: {
     exitTimeoutMs?: number;
     forceKillDelayMs?: number;
-  }): Promise<boolean> {
+  }): Promise<CodexAppServerCloseResult> {
     this.markClosed(new Error("codex app-server client is closed"));
     return await closeCodexAppServerTransportAndWait(this.child, options);
   }
@@ -770,10 +771,7 @@ export class CodexAppServerClient {
     }
     this.child.once("exit", runOnExit);
     try {
-      if (await this.closeAndWait()) {
-        this.child.off?.("exit", runOnExit);
-        runOnExit();
-      }
+      await this.closeAndWait();
     } catch (closeError) {
       embeddedAgentLog.warn("codex app-server shutdown after indeterminate request failed", {
         closeError,

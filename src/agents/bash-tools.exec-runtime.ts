@@ -966,6 +966,7 @@ export async function runExecProcess({
       runId: sessionId,
       sessionId: opts.sessionKey?.trim() || sessionId,
       backendId: opts.sandbox ? "exec-sandbox" : "exec-host",
+      ...(opts.sandbox ? { cleanupOwnership: "external" as const } : {}),
       scopeKey: opts.scopeKey,
       cwd: opts.workdir,
       env: spawnSpec.env,

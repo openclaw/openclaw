@@ -1,17 +1,46 @@
 /**
  * Agent cleanup timeout guard.
  *
- * Bounds cleanup steps so run completion cannot hang forever while preserving late-failure diagnostics.
+ * Bounds cleanup without certifying automatic ownership after timeout or failure.
  */
+import { AsyncLocalStorage } from "node:async_hooks";
 import {
   parseStrictPositiveInteger,
   resolveOptionalIntegerOption,
 } from "@openclaw/normalization-core/number-coercion";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { formatErrorMessage } from "../infra/errors.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
-// Cleanup steps must not block run completion forever. This module bounds each
-// cleanup step and logs enough context to debug late failures.
+// Automatic one-shot callers need actual settlement, including errors normally
+// logged by best-effort cleanup. This carries an outcome, never another registry.
+const oneShotCleanup = resolveGlobalSingleton(
+  Symbol.for("openclaw.oneShotCleanupOutcome"),
+  () => new AsyncLocalStorage<{ uncertain: boolean }>(),
+);
+
+export function recordAgentCleanupFailure(): void {
+  const receipt = oneShotCleanup.getStore();
+  if (receipt) {
+    receipt.uncertain = true;
+  }
+}
+
+export async function withAgentCleanupOutcome<T>(
+  operation: () => Promise<T>,
+  finish: (outcome: "closed" | "uncertain") => Promise<void>,
+): Promise<T> {
+  const receipt = { uncertain: false };
+  return await oneShotCleanup.run(receipt, async () => {
+    try {
+      return await operation();
+    } finally {
+      await finish(receipt.uncertain ? "uncertain" : "closed");
+    }
+  });
+}
+
+// The budget bounds reporting, not resource closure; automatic timeout stays uncertain.
 const AGENT_CLEANUP_STEP_TIMEOUT_MS = 10_000;
 const AGENT_CLEANUP_STEP_TIMEOUT_ENV = "OPENCLAW_AGENT_CLEANUP_TIMEOUT_MS";
 const TRAJECTORY_FLUSH_TIMEOUT_ENV = "OPENCLAW_TRAJECTORY_FLUSH_TIMEOUT_MS";
@@ -74,8 +103,47 @@ function resolveAgentCleanupStepTimeoutMs(params: {
   return parseTimeoutEnvValue(env[AGENT_CLEANUP_STEP_TIMEOUT_ENV]) ?? AGENT_CLEANUP_STEP_TIMEOUT_MS;
 }
 
-/** Run one cleanup step with timeout logging and late-rejection handling. */
-export async function runAgentCleanupStep(params: {
+/** Preserve the owner's errors while bounding automatic one-shot resource settlement. */
+export async function runOwnedAgentCleanup(params: {
+  runId: string;
+  sessionId: string;
+  oneShotCliRun?: boolean;
+  settlement?: "required";
+  step: string;
+  cleanup: () => Promise<void>;
+  log: AgentCleanupLogger;
+}): Promise<void> {
+  let failed: { error: unknown } | undefined;
+  const settle = async () => {
+    try {
+      await params.cleanup();
+    } catch (error) {
+      recordAgentCleanupFailure();
+      failed = { error };
+      throw error;
+    }
+  };
+  if (!params.oneShotCliRun) {
+    return await settle();
+  }
+  const outcome = await settleAgentCleanupStep({
+    runId: params.runId,
+    sessionId: params.sessionId,
+    step: params.step,
+    log: params.log,
+    cleanup: settle,
+  });
+  if (failed) {
+    throw failed.error;
+  }
+  if (outcome === "timeout" && params.settlement === "required") {
+    throw new Error(
+      `Agent cleanup timed out before ${params.step} settled; resource replacement refused.`,
+    );
+  }
+}
+
+type AgentCleanupStepParams = {
   runId: string;
   sessionId: string;
   step: string;
@@ -84,7 +152,14 @@ export async function runAgentCleanupStep(params: {
   log: AgentCleanupLogger;
   env?: NodeJS.ProcessEnv;
   timeoutMs?: number;
-}): Promise<void> {
+};
+
+/** Run one cleanup step with timeout logging and late-rejection handling. */
+export async function runAgentCleanupStep(params: AgentCleanupStepParams): Promise<void> {
+  await settleAgentCleanupStep(params);
+}
+
+async function settleAgentCleanupStep(params: AgentCleanupStepParams): Promise<"done" | "timeout"> {
   const timeoutMs = resolveAgentCleanupStepTimeoutMs({
     step: params.step,
     timeoutMs: params.timeoutMs,
@@ -94,6 +169,7 @@ export async function runAgentCleanupStep(params: {
   let timedOut = false;
   const cleanupPromise = Promise.resolve().then(params.cleanup);
   const observedCleanupPromise = cleanupPromise.catch((error: unknown) => {
+    recordAgentCleanupFailure();
     if (!timedOut) {
       params.log.warn(
         `agent cleanup failed: runId=${params.runId} sessionId=${params.sessionId} step=${params.step} error=${formatErrorMessage(error)}`,
@@ -115,6 +191,7 @@ export async function runAgentCleanupStep(params: {
     clearTimeout(timeoutHandle);
   }
   if (result === "timeout") {
+    recordAgentCleanupFailure();
     const details = resolveCleanupTimeoutDetails(params.getTimeoutDetails);
     params.log.warn(
       `agent cleanup timed out: runId=${params.runId} sessionId=${params.sessionId} step=${params.step} timeoutMs=${timeoutMs}${details}`,
@@ -127,4 +204,5 @@ export async function runAgentCleanupStep(params: {
       );
     });
   }
+  return result;
 }

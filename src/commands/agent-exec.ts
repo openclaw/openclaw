@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/number-coercion";
 import { findAgentRunTerminalOutcome } from "../agents/agent-run-terminal-error.js";
+import { recordAgentCleanupFailure } from "../agents/run-cleanup-timeout.js";
 import { isExecutionIdentityCollectionEnabled } from "../audit/audit-config.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type {
@@ -37,6 +38,7 @@ type AgentExecCommandResult = {
 };
 
 type AgentExecCommandDeps = {
+  abortSignal?: AbortSignal;
   stdin?: AsyncIterable<unknown>;
   process?: EmbeddedStateSignalProcess;
   gatewayLockOptions?: GatewayLockOptions;
@@ -207,6 +209,7 @@ export async function agentExecCommand(
   let configIo: typeof import("../config/io.js") | undefined;
   let stopLocalAuditWriter: (() => Promise<void>) | undefined;
   let stateLock: EmbeddedStateLockHandle | null | undefined;
+  let abortSignal = deps.abortSignal;
   let signalBridge:
     | ReturnType<
         (typeof import("../infra/embedded-state-lock.js"))["createEmbeddedStateSignalBridge"]
@@ -307,9 +310,13 @@ export async function agentExecCommand(
       const { acquireEmbeddedStateLock, createEmbeddedStateSignalBridge } =
         await import("../infra/embedded-state-lock.js");
       signalBridge = createEmbeddedStateSignalBridge(deps.process ?? process);
+      // Retained-state signals and caller cancellation both own the turn's lifetime.
+      abortSignal = abortSignal
+        ? AbortSignal.any([abortSignal, signalBridge.signal])
+        : signalBridge.signal;
       stateLock = await acquireEmbeddedStateLock({
         options: deps.gatewayLockOptions,
-        signal: signalBridge.signal,
+        signal: abortSignal,
         formatActiveGatewayRefusal: formatActiveGatewayExecRefusal,
       });
     }
@@ -349,8 +356,9 @@ export async function agentExecCommand(
       error: (...args) => runtime.error(...args),
       exit: (code, exitOpts) => runtime.exit(code, exitOpts),
     };
-    const invoke = async () =>
-      await runAgent(
+    const invoke = async () => {
+      abortSignal?.throwIfAborted();
+      return await runAgent(
         {
           message: prompt,
           sessionId,
@@ -365,7 +373,7 @@ export async function agentExecCommand(
           cleanupBundleMcpOnRunEnd: true,
           cleanupCliLiveSessionOnRunEnd: true,
           oneShotCliRun: true,
-          abortSignal: signalBridge?.signal,
+          abortSignal,
           onModelFallbackExhausted: () => {
             fallbackExhausted = true;
           },
@@ -375,6 +383,7 @@ export async function agentExecCommand(
         },
         silentRuntime,
       );
+    };
     // Stored credentials are the default so a folder-scoped run reaches the
     // same logins as the rest of the CLI; `--auth-env-only` opts back into an
     // environment-only scope for automation.
@@ -436,6 +445,7 @@ export async function agentExecCommand(
     }
   }
   if (cleanupError) {
+    recordAgentCleanupFailure();
     const cleanupFailure = new Error(
       `Agent exec cleanup failed: ${formatErrorMessage(cleanupError)}`,
     );

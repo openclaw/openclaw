@@ -1,5 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
+import type { TriageFailureContext } from "../../commands/triage-prompt.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
 import { resolveStateDir } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -43,6 +44,7 @@ import {
 } from "./update-command-post-core.js";
 import {
   markControlPlaneUpdateRestartSentinelFailureBestEffort,
+  resolveAutomaticUpdateTriage,
   UpdateCommandFailure,
   writeControlPlaneUpdateRestartSentinelBestEffort,
 } from "./update-command-result.js";
@@ -74,6 +76,7 @@ const CLI_NAME = resolveCliName();
 export async function finishUpdate(params: {
   result: UpdateRunResult;
   failure?: { cause: unknown; detail: string };
+  mutationStarted: boolean;
   root: string;
   previousInstallRoot?: string;
   installKindChanged: boolean;
@@ -93,12 +96,31 @@ export async function finishUpdate(params: {
   packageUpdateNodeRunner?: string;
   updateStepTimeoutMs: number;
   invocationCwd?: string;
+  expectedVersion?: string;
 }): Promise<void> {
   // Finalization owns the complete outcome, including recovery, restart, and completion work.
   const completedResult = (result: UpdateRunResult): UpdateRunResult => ({
     ...result,
     durationMs: Math.max(0, Date.now() - params.startedAt),
   });
+  let triageAllowed = true;
+  let gateway: TriageFailureContext["gateway"] = "preserve";
+  const createFailure = (
+    result: UpdateRunResult,
+    exitCode = 1,
+    detail?: string,
+    options?: ErrorOptions,
+  ) => {
+    return new UpdateCommandFailure(
+      result,
+      exitCode,
+      detail,
+      options,
+      triageAllowed
+        ? resolveAutomaticUpdateTriage(result, detail, { ...params, gateway })
+        : undefined,
+    );
+  };
   const printFinalResult = (result: UpdateRunResult) => {
     printResult(result, { ...params.opts, hideSteps: params.showProgress });
     if (result.status === "error" && !params.opts.json) {
@@ -166,6 +188,9 @@ export async function finishUpdate(params: {
       });
       if (service) {
         finalResult.recovery = { ...finalResult.recovery, service };
+        if (service === "healthy" && params.shouldRestart) {
+          gateway = "verify-running";
+        }
         if (service === "failed") {
           finalResult.status = "error";
         }
@@ -186,7 +211,7 @@ export async function finishUpdate(params: {
             cause: restoreFailure.cause,
           })
         : restoreFailure.cause;
-      throw new UpdateCommandFailure(
+      throw createFailure(
         reportedResult,
         resolveManagedServiceUpdateFailureExitCode(reportedResult),
         detail,
@@ -226,7 +251,7 @@ export async function finishUpdate(params: {
           }
         }
       }
-      throw new UpdateCommandFailure(
+      throw createFailure(
         reported,
         resolveManagedServiceUpdateFailureExitCode(reported),
         params.failure?.detail,
@@ -264,7 +289,7 @@ export async function finishUpdate(params: {
           ),
         );
       }
-      throw new UpdateCommandFailure(
+      throw createFailure(
         reported,
         classifyUpdateOutcome(reported) === "failed"
           ? resolveManagedServiceUpdateFailureExitCode(reported)
@@ -325,6 +350,7 @@ export async function finishUpdate(params: {
           }),
       );
       if (freshProcessResult.exitCode !== undefined) {
+        triageAllowed = freshProcessResult.exitCode !== 130 && freshProcessResult.exitCode !== 143;
         const reported = await reportResult({
           ...params.result,
           status: "error",
@@ -332,7 +358,7 @@ export async function finishUpdate(params: {
         });
         // A nested child status cannot authorize recovery. Only the final
         // owner may emit the unsafe recovery code.
-        throw new UpdateCommandFailure(
+        throw createFailure(
           reported,
           resolveManagedServiceUpdateFailureExitCode(reported),
           freshProcessResult.error,
@@ -440,10 +466,7 @@ export async function finishUpdate(params: {
       // Post-core validation can mutate config and state. Only its complete success
       // permits activation; a healthy-looking config cannot override Doctor failure.
       const reported = await reportResult(resultWithPostUpdate);
-      throw new UpdateCommandFailure(
-        reported,
-        resolveManagedServiceUpdateFailureExitCode(reported),
-      );
+      throw createFailure(reported, resolveManagedServiceUpdateFailureExitCode(reported));
     }
 
     const restartConfigSnapshot =
@@ -561,7 +584,7 @@ export async function finishUpdate(params: {
             status: "error",
             reason: "service-revalidation-failed",
           });
-          throw new UpdateCommandFailure(
+          throw createFailure(
             reported,
             resolveManagedServiceUpdateFailureExitCode(reported),
             message,
@@ -582,7 +605,7 @@ export async function finishUpdate(params: {
     });
 
     await restoreWindowsAutoStart(resultWithPostUpdate);
-    const restartOk = await withOwnedManagedUpdateEnv(params.ownedManagedUpdateEnv, async () =>
+    const restartOutcome = await withOwnedManagedUpdateEnv(params.ownedManagedUpdateEnv, async () =>
       maybeRestartService({
         shouldRestart: params.shouldRestart && serviceMutationAllowed,
         result: resultWithPostUpdate,
@@ -602,7 +625,18 @@ export async function finishUpdate(params: {
         timeoutMs: params.updateStepTimeoutMs,
       }),
     );
-    if (!restartOk) {
+    if (restartOutcome !== "ok") {
+      triageAllowed = serviceMutationAllowed;
+      // Failed health retains the intended post-repair goal, never restore safety.
+      if (
+        restartOutcome === "restart-health-failed" &&
+        params.shouldRestart &&
+        serviceMutationAllowed &&
+        (params.preManagedServiceStop?.running !== false || params.preManagedServiceStop.stopped) &&
+        !skipLegacyServiceRestart
+      ) {
+        gateway = "verify-running";
+      }
       // The Gateway may already have consumed the notification. Mark only an
       // existing sentinel; recreating it would deliver the update twice.
       await markControlPlaneUpdateRestartSentinelFailureBestEffort({
@@ -618,10 +652,7 @@ export async function finishUpdate(params: {
           recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
         }),
       );
-      throw new UpdateCommandFailure(
-        reported,
-        resolveManagedServiceUpdateFailureExitCode(reported),
-      );
+      throw createFailure(reported, resolveManagedServiceUpdateFailureExitCode(reported));
     }
 
     // Restart and health verification own recovery of the service stopped for this update.
@@ -664,7 +695,7 @@ export async function finishUpdate(params: {
             reason: "wrapper-retirement-failed",
           }),
         );
-        throw new UpdateCommandFailure(reported, 1, retirement.error);
+        throw createFailure(reported, 1, retirement.error);
       }
     }
 
@@ -699,11 +730,8 @@ export async function finishUpdate(params: {
         },
       ],
     });
-    throw new UpdateCommandFailure(
-      reported,
-      resolveManagedServiceUpdateFailureExitCode(reported),
-      message,
-      { cause: error },
-    );
+    throw createFailure(reported, resolveManagedServiceUpdateFailureExitCode(reported), message, {
+      cause: error,
+    });
   }
 }

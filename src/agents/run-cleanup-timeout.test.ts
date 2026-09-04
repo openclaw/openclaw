@@ -1,6 +1,6 @@
 // Verifies agent cleanup steps time out with bounded diagnostic logging.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { runAgentCleanupStep } from "./run-cleanup-timeout.js";
+import { runAgentCleanupStep, withAgentCleanupOutcome } from "./run-cleanup-timeout.js";
 
 const AGENT_CLEANUP_STEP_TIMEOUT_MS = 10_000;
 const CLEANUP_TIMEOUT_DETAILS_MAX_CHARS = 512;
@@ -325,4 +325,47 @@ describe("agent cleanup timeout", () => {
       "agent cleanup failed: runId=run-2 sessionId=session-2 step=context-engine-dispose error=dispose failed",
     );
   });
+  it.each([
+    { label: "completed", settles: true, fails: false, outcome: "closed" },
+    { label: "failed", settles: true, fails: true, outcome: "uncertain" },
+    { label: "stalled", settles: false, fails: false, outcome: "uncertain" },
+    { label: "late rejection", settles: false, fails: true, outcome: "uncertain" },
+  ])(
+    "bounds automatic cleanup and records $label ownership",
+    async ({ settles, fails, outcome }) => {
+      let settle!: () => void;
+      const held = new Promise<void>((resolve) => {
+        settle = resolve;
+      });
+      const finish = vi.fn(async (_outcome: "closed" | "uncertain") => {});
+      const result = withAgentCleanupOutcome(
+        () =>
+          runAgentCleanupStep({
+            runId: "automatic",
+            sessionId: "isolated",
+            step: "registered-owner",
+            log,
+            timeoutMs: 5,
+            cleanup: async () => {
+              await held;
+              if (fails) {
+                throw new Error("teardown failed");
+              }
+            },
+          }),
+        finish,
+      );
+      try {
+        if (settles) {
+          settle();
+        }
+        await vi.advanceTimersByTimeAsync(5);
+        expect(finish).toHaveBeenCalledExactlyOnceWith(outcome);
+        await expect(result).resolves.toBeUndefined();
+      } finally {
+        settle();
+        await result;
+      }
+    },
+  );
 });

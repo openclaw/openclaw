@@ -1606,7 +1606,7 @@ describe("maybeCompactCodexAppServerSession", () => {
       autoCompleteCompaction: false,
       rejectInterrupt: true,
     });
-    fake.closeAndWait.mockResolvedValueOnce(false);
+    fake.closeAndWait.mockResolvedValueOnce({ exited: false, cleanup: "uncertain" });
     const pluginConfig = {
       supervision: { enabled: true },
       appServer: { transport: "websocket" as const, url: "ws://127.0.0.1:45001" },
@@ -1962,7 +1962,7 @@ describe("maybeCompactCodexAppServerSession", () => {
   it("keeps the lifecycle fence when an unconfirmed stdio process does not stop", async () => {
     const fake = createFakeCodexClient({ retainedThreadId: "thread-stuck-stdio" });
     fake.request.mockRejectedValueOnce(new Error("thread/compact/start timed out"));
-    fake.closeAndWait.mockResolvedValueOnce(false);
+    fake.closeAndWait.mockResolvedValueOnce({ exited: false, cleanup: "uncertain" });
     setCodexAppServerClientFactoryForTest(async () => fake.client);
     const sessionFile = await writeTestBinding({ threadId: "thread-stuck-stdio" });
 
@@ -1981,7 +1981,7 @@ describe("maybeCompactCodexAppServerSession", () => {
   it("detaches a guarded remote start after releasing the binding lock", async () => {
     const fake = createFakeCodexClient();
     fake.request.mockRejectedValueOnce(new Error("thread/compact/start timed out"));
-    fake.closeAndWait.mockResolvedValueOnce(false);
+    fake.closeAndWait.mockResolvedValueOnce({ exited: false, cleanup: "uncertain" });
     const sessionFile = await writeTestBinding();
 
     const result = requireCompactResult(
@@ -2410,7 +2410,7 @@ function createFakeCodexClient(
   });
   const closeAndWait = vi.fn(async () => {
     close();
-    return true;
+    return { exited: true, cleanup: "closed" };
   });
   const addNotificationHandler = vi.fn(
     (handler: (notification: CodexServerNotification) => void) => {

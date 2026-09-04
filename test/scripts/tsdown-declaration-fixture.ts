@@ -168,6 +168,7 @@ export function createFixture(
   });
   // These owners derive runtime inputs from import.meta.url; keep that graph inside the fixture.
   const runtimeEntryOwners = new Set([
+    "src/infra/update-managed-service-handoff-runtime-assets.ts",
     "src/infra/runtime-process-entrypoints.ts",
     "extensions/memory-core/src/memory/manager-search-knn-entrypoint.ts",
     "packages/normalization-core/src/mountinfo-path.ts",

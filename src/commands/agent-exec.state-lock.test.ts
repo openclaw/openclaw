@@ -115,37 +115,51 @@ describe("agent exec retained-state ownership", () => {
     await expect(fs.stat(stateLockPath)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
-  it("releases the embedded state lock when SIGTERM aborts the run", async () => {
-    const stateDir = tempDirs.make("openclaw-agent-exec-signal-owner-");
-    const lockOptions = createGatewayLockOptions(stateDir);
-    const stateLockPath = path.join(lockOptions.lockDir!, "gateway.state.lock");
-    const signals = createSignalProcess();
-    const { runtime } = createRuntime();
-    const runAgent = vi.fn(async (opts: Record<string, unknown>) => {
-      const signal = opts.abortSignal as AbortSignal;
-      return await new Promise<ReturnType<typeof successResult>>((_, reject) => {
-        signal.addEventListener(
-          "abort",
-          () => {
-            const error = new Error("agent exec aborted");
-            error.name = "AbortError";
-            reject(error);
-          },
-          { once: true },
-        );
+  it.each([false, true])(
+    "releases the state lock on SIGTERM (caller signal=%s)",
+    async (callerSignal) => {
+      const stateDir = tempDirs.make("openclaw-agent-exec-signal-owner-");
+      const lockOptions = createGatewayLockOptions(stateDir);
+      const stateLockPath = path.join(lockOptions.lockDir!, "gateway.state.lock");
+      const signals = createSignalProcess();
+      const controller = new AbortController();
+      const { runtime } = createRuntime();
+      const runAgent = vi.fn(async (opts: Record<string, unknown>) => {
+        const signal = opts.abortSignal as AbortSignal;
+        return await new Promise<ReturnType<typeof successResult>>((_, reject) => {
+          signal.addEventListener(
+            "abort",
+            () => {
+              const error = new Error("agent exec aborted");
+              error.name = "AbortError";
+              reject(error);
+            },
+            { once: true },
+          );
+        });
       });
-    });
 
-    const run = agentExecCommand("inspect", { stateDir }, runtime, {
-      gatewayLockOptions: lockOptions,
-      process: signals.processLike,
-      runAgent,
-    });
-    await vi.waitFor(() => expect(runAgent).toHaveBeenCalledOnce());
-    signals.emit("SIGTERM");
-    await run;
+      const run = agentExecCommand("inspect", { stateDir }, runtime, {
+        gatewayLockOptions: lockOptions,
+        process: signals.processLike,
+        abortSignal: callerSignal ? controller.signal : undefined,
+        runAgent,
+      });
+      await vi.waitFor(() => expect(runAgent).toHaveBeenCalledOnce());
+      try {
+        const signal = runAgent.mock.calls[0]?.[0].abortSignal;
+        if (!(signal instanceof AbortSignal)) {
+          throw new Error("Expected the running agent's cancellation signal");
+        }
+        signals.emit("SIGTERM");
+        await vi.waitFor(() => expect(signal.aborted).toBe(true));
+      } finally {
+        controller.abort();
+        await run;
+      }
 
-    await expect(fs.stat(stateLockPath)).rejects.toMatchObject({ code: "ENOENT" });
-    expect(runtime.exit).toHaveBeenCalledWith(143, { resetStream: process.stderr });
-  });
+      await expect(fs.stat(stateLockPath)).rejects.toMatchObject({ code: "ENOENT" });
+      expect(runtime.exit).toHaveBeenCalledWith(143, { resetStream: process.stderr });
+    },
+  );
 });

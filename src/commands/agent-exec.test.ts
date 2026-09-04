@@ -330,6 +330,26 @@ describe("agent exec command composition", () => {
     await expect(fs.stat(observedStateDir)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
+  it("cancels a failure-owned turn and removes its temporary state", async () => {
+    const { runtime } = createRuntime();
+    const controller = new AbortController();
+    let stateDir = "";
+    const result = await agentExecCommand("inspect", { authEnvOnly: true }, runtime, {
+      abortSignal: controller.signal,
+      runAgent: async (invocation) => {
+        stateDir = process.env.OPENCLAW_STATE_DIR!;
+        const signal = invocation.abortSignal as AbortSignal;
+        expect(signal).toBe(controller.signal);
+        controller.abort(new Error("operator stopped the Gateway"));
+        signal.throwIfAborted();
+        return successResult();
+      },
+    });
+    expect(result.exitCode).toBe(1);
+    expect(result.envelope.error?.message).toContain("operator stopped the Gateway");
+    await expect(fs.stat(stateDir)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
   it("flushes opted-in identity evidence through its owned direct-local writer", async () => {
     const root = tempDirs.make("openclaw-agent-exec-audit-");
     const admittedAt = Date.now();

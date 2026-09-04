@@ -704,7 +704,6 @@ src/infra/state-migrations.session-store.ts
 src/infra/state-migrations.storage.ts
 src/infra/state-migrations.test.ts
 src/infra/update-global.ts
-src/infra/update-managed-service-handoff.ts
 src/infra/update-runner.test.ts
 src/infra/update-startup.test.ts
 src/infra/update-startup.ts

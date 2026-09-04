@@ -6,6 +6,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { formatErrorMessage } from "../infra/errors.js";
 import { runCommandWithTimeout, runExec } from "../process/exec.js";
+import { resolveServiceManagerEnv } from "./service-process-env.js";
 
 function resolveLoginctlUser(env: Record<string, string | undefined>): string | null {
   const fromEnv = normalizeOptionalString(env.USER) || normalizeOptionalString(env.LOGNAME);
@@ -35,6 +36,7 @@ export async function readSystemdUserLingerStatus(params: {
   }
   try {
     const { stdout } = await runExec("loginctl", ["show-user", user, "-p", "Linger"], {
+      baseEnv: resolveServiceManagerEnv(),
       timeoutMs: 5_000,
     });
     const line = stdout
@@ -70,7 +72,10 @@ export async function enableSystemdUserLinger(params: {
       : [];
   const argv = [...sudoArgs, "loginctl", "enable-linger", user];
   try {
-    const result = await runCommandWithTimeout(argv, { timeoutMs: 30_000 });
+    const result = await runCommandWithTimeout(argv, {
+      baseEnv: resolveServiceManagerEnv(),
+      timeoutMs: 30_000,
+    });
     return {
       ok: result.code === 0,
       stdout: result.stdout,

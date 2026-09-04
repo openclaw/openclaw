@@ -1,9 +1,10 @@
+import { formatErrorMessage, toErrorObject } from "../../../infra/errors.js";
+import type { createTrajectoryRuntimeRecorder } from "../../../trajectory/runtime.js";
 /**
  * Tracks prompt and abort settlement, then finalizes session-owned resources.
  * It may assume the active session and transcript lifecycle are established.
  */
-import { formatErrorMessage, toErrorObject } from "../../../infra/errors.js";
-import type { createTrajectoryRuntimeRecorder } from "../../../trajectory/runtime.js";
+import { recordAgentCleanupFailure } from "../../run-cleanup-timeout.js";
 import type { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
 import type { AgentSession } from "../../sessions/index.js";
 import { clearToolSearchCatalog, type ToolSearchCatalogRef } from "../../tool-search.js";
@@ -27,6 +28,7 @@ export function createEmbeddedAttemptSessionSettleTracker(
 } {
   const inFlightPromptSettlePromises = new Set<Promise<void>>();
   const inFlightAbortSettlePromises = new Set<Promise<void>>();
+  let abortCleanupFailed = false;
   const trackSettlePromise = (
     promises: Set<Promise<void>>,
     promise: Promise<void>,
@@ -46,10 +48,27 @@ export function createEmbeddedAttemptSessionSettleTracker(
   const trackPromptSettlePromise = (promise: Promise<void>): Promise<void> =>
     trackSettlePromise(inFlightPromptSettlePromises, promise);
   const abortActiveSession = (reason?: unknown): Promise<void> =>
-    trackSettlePromise(inFlightAbortSettlePromises, Promise.resolve(activeSession.abort(reason)));
+    trackSettlePromise(
+      inFlightAbortSettlePromises,
+      Promise.resolve(activeSession.abort(reason)).catch((error: unknown) => {
+        abortCleanupFailed = true;
+        throw error;
+      }),
+    );
   const buildAbortSettlePromise = (): Promise<void> | null => {
+    // Abort callbacks can run outside the caller's async context. Preserve their
+    // result here, then record it from the cleanup owner that joins settlement.
+    if (abortCleanupFailed) {
+      recordAgentCleanupFailure();
+    }
     const promises = [...inFlightPromptSettlePromises, ...inFlightAbortSettlePromises];
-    return promises.length === 0 ? null : Promise.allSettled(promises).then(() => undefined);
+    return promises.length === 0
+      ? null
+      : Promise.allSettled(promises).then(() => {
+          if (abortCleanupFailed) {
+            recordAgentCleanupFailure();
+          }
+        });
   };
 
   return {
@@ -170,11 +189,13 @@ export async function cleanupEmbeddedAttemptSessionPhase(
       sessionId: attempt.sessionId,
     });
   } catch (err) {
+    recordAgentCleanupFailure();
     cleanupError = err;
   } finally {
     try {
       await input.transcriptLifecycle.dispose();
     } catch (err) {
+      recordAgentCleanupFailure();
       cleanupError ??= err;
     }
   }

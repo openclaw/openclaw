@@ -23,6 +23,7 @@ import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import type { getProcessSupervisor } from "../../process/supervisor/index.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
+import { prepareSystemAgentRunAdmission } from "../admitted-run-context.js";
 import { createTestAdmittedRunContext } from "../admitted-run-context.test-support.js";
 import { hashCliImageTurnEntryId } from "../cli-image-turn-correlation.js";
 import { findCliTerminalStopError } from "../failover-error.js";
@@ -826,7 +827,9 @@ describe("executePreparedCliRun supervisor output capture", () => {
     },
   );
 
-  it("preserves max-turn failure through fork successor persistence errors", async () => {
+  it("preserves max-turn failure through fork successor persistence errors", async ({
+    onTestFinished,
+  }) => {
     const stdout = `${JSON.stringify({
       type: "result",
       subtype: "error_max_turns",
@@ -859,6 +862,9 @@ describe("executePreparedCliRun supervisor output capture", () => {
     context.preparedBackend.backend.resumeArgs = ["--resume", "{sessionId}"];
     context.preparedBackend.backend.forkArg = "--fork-session";
     context.params.forkCliSessionOnResume = true;
+    const admission = prepareSystemAgentRunAdmission({}, context.params.runId, "main", "fork-test");
+    onTestFinished(admission.close);
+    context.params.admittedRunContext = await admission.admit("embedded");
     context.params.claimCliSessionFork = vi.fn().mockResolvedValue(true);
     context.params.persistCliSessionForkSuccessor = persistCliSessionForkSuccessor;
     context.params.restoreCliSessionFork = restoreCliSessionFork;
@@ -990,7 +996,9 @@ describe("executePreparedCliRun supervisor output capture", () => {
     }
   });
 
-  it("persists plugin-owned successor session ids for forked resumes", async () => {
+  it("persists plugin-owned successor session ids for forked resumes", async ({
+    onTestFinished,
+  }) => {
     const parseJsonlEvent: CliBackendParseJsonlEvent = (line) => {
       const event = JSON.parse(line) as { type: string; session?: string; text?: string };
       return event.type === "session"
@@ -1026,6 +1034,9 @@ describe("executePreparedCliRun supervisor output capture", () => {
     context.preparedBackend.backend.resumeArgs = ["--resume", "{sessionId}"];
     context.preparedBackend.backend.forkArg = "--fork-session";
     context.params.forkCliSessionOnResume = true;
+    const admission = prepareSystemAgentRunAdmission({}, context.params.runId, "main", "fork-test");
+    onTestFinished(admission.close);
+    context.params.admittedRunContext = await admission.admit("embedded");
     context.params.claimCliSessionFork = vi.fn().mockResolvedValue(true);
     context.params.persistCliSessionForkSuccessor = persistCliSessionForkSuccessor;
 

@@ -10,6 +10,7 @@ import {
   collectSourceCheckoutPluginBuildEntries,
 } from "./scripts/lib/bundled-plugin-build-entries.mjs";
 import { createClaudeAgentSdkAssetPlugin } from "./scripts/lib/claude-agent-sdk-assets.mts";
+import { createManagedHandoffBuildConfig } from "./scripts/lib/managed-handoff-build-config.mts";
 import {
   buildPluginSdkEntrySources,
   pluginSdkEntrypoints,
@@ -186,6 +187,7 @@ function workerDeployBuildConfig(): UserConfig {
     env,
     define: {
       WORKER_DEPLOY_BUILD: "true",
+      SEALED_RUNTIME_BUILD: "true",
       WORKER_DEPLOY_VERSION: JSON.stringify(workerDeployVersion),
     },
     alias: {
@@ -814,6 +816,7 @@ const configs = [
     false,
   ),
   workerDeployBuildConfig(),
+  { ...createManagedHandoffBuildConfig(), name: TSDOWN_UNIFIED_CONFIG_GROUP, env },
   nodeBuildConfig(
     {
       name: TSDOWN_UNIFIED_CONFIG_GROUP,

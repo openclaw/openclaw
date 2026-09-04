@@ -1,4 +1,5 @@
 import { ScheduledTaskAutoStartRecoveryError } from "../../daemon/schtasks-update-recovery.js";
+import { isAbortError } from "../../infra/abort-signal.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { DevUpdateTarget } from "../../infra/update-dev-target.js";
 import {
@@ -6,7 +7,7 @@ import {
   type ResolvedGlobalInstallTarget,
 } from "../../infra/update-global.js";
 import { readCurrentGitUpdateRecovery } from "../../infra/update-runner-git-recovery.js";
-import type { UpdateRunResult } from "../../infra/update-runner.js";
+import type { UpdateRunResult, UpdateStepInfo } from "../../infra/update-runner.js";
 import { defaultRuntime } from "../../runtime.js";
 import type { OpenClawSchemaVersions } from "../../state/openclaw-schema-versions.js";
 import { replaceCliName, resolveCliName } from "../cli-name.js";
@@ -33,7 +34,6 @@ import {
   type OwnedManagedUpdateContext,
 } from "./update-command-managed-context.js";
 import { runPackageInstallUpdate } from "./update-command-package.js";
-import type { ManagedServiceRootRedirect } from "./update-command-service-plan.js";
 import {
   maybeRestartServiceAfterFailedMutableUpdate,
   maybeStopManagedServiceBeforeMutableUpdate,
@@ -42,11 +42,13 @@ import {
   UpdateCommandAbort,
   type PreManagedServiceStop,
   type UpdateCommandRecoveryState,
-} from "./update-command-service.js";
+} from "./update-command-service-maintenance.js";
+import type { ManagedServiceRootRedirect } from "./update-command-service-plan.js";
 
 const CLI_NAME = resolveCliName();
 
 type MutableUpdateExecutionResult = {
+  mutationStarted: boolean;
   result: UpdateRunResult;
   failure?: { cause: unknown; detail: string };
   preManagedServiceStop: PreManagedServiceStop | undefined;
@@ -78,6 +80,7 @@ export async function executeMutableUpdate(params: {
   managedServiceRootRedirect: ManagedServiceRootRedirect | null;
   invocationCwd?: string;
   recoveryState: UpdateCommandRecoveryState;
+  expectedVersion?: string;
 }): Promise<MutableUpdateExecutionResult | null> {
   let preManagedServiceStop: PreManagedServiceStop | undefined;
   let ownedManagedUpdateContext: OwnedManagedUpdateContext | undefined;
@@ -95,6 +98,15 @@ export async function executeMutableUpdate(params: {
       timeoutMs: params.updateStepTimeoutMs,
       invocationCwd: params.invocationCwd,
     });
+  let mutationStarted = false;
+  const progress = {
+    ...params.progress,
+    onStepStart: (step: UpdateStepInfo) => {
+      // Package update emits this step only after its ownership/schema preflights.
+      mutationStarted ||= step.name === "global update";
+      params.progress?.onStepStart?.(step);
+    },
+  };
   const gitMutationRoots =
     params.updateInstallKind === "git"
       ? params.switchToGit
@@ -245,7 +257,7 @@ export async function executeMutableUpdate(params: {
             installSpec: params.packageInstallSpec ?? undefined,
             timeoutMs: params.updateStepTimeoutMs,
             startedAt: params.startedAt,
-            progress: params.progress,
+            progress,
             jsonMode: Boolean(params.opts.json),
             ...resolvePreparedGatewayUpdatePolicy(preManagedServiceStop, params.shouldRestart),
             managedServiceEnv: preManagedServiceStop?.serviceEnv,
@@ -263,19 +275,23 @@ export async function executeMutableUpdate(params: {
             installKind: params.installKind,
             timeoutMs: params.timeoutMs,
             startedAt: params.startedAt,
-            progress: params.progress,
+            progress,
             channel: params.channel,
             tag: params.tag,
             devTarget: params.devTarget,
             beforeGitMutation:
               params.updateInstallKind === "git"
-                ? createBeforeGitMutation({
-                    roots: gitMutationRoots ?? [params.root],
-                    shouldRestart: params.shouldRestart,
-                    stopManagedService: stopManagedServiceBeforeMutableUpdate,
-                    getPreManagedServiceStop: () => preManagedServiceStop,
-                    switchToGit: params.switchToGit,
-                  })
+                ? async (target) => {
+                    const policy = await createBeforeGitMutation({
+                      roots: gitMutationRoots ?? [params.root],
+                      shouldRestart: params.shouldRestart,
+                      stopManagedService: stopManagedServiceBeforeMutableUpdate,
+                      getPreManagedServiceStop: () => preManagedServiceStop,
+                      switchToGit: params.switchToGit,
+                    })(target);
+                    mutationStarted = true;
+                    return policy;
+                  }
                 : undefined,
             allowGatewayServiceRepair: false,
             allowGatewayActivation: false,
@@ -311,6 +327,7 @@ export async function executeMutableUpdate(params: {
           cwd: params.root,
           durationMs,
           exitCode: 1,
+          ...(isAbortError(err) ? { termination: "signal" as const } : {}),
           stderrTail: message,
         },
       ],
@@ -318,5 +335,12 @@ export async function executeMutableUpdate(params: {
     };
   }
 
-  return { result, failure, preManagedServiceStop, ownedManagedUpdateContext, recoveryEnv };
+  return {
+    result,
+    failure,
+    mutationStarted,
+    preManagedServiceStop,
+    ownedManagedUpdateContext,
+    recoveryEnv,
+  };
 }

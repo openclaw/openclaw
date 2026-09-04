@@ -5,6 +5,7 @@ import {
   resolveManagedGatewayServiceCommand,
   type GatewayServiceState,
 } from "../../daemon/service-types.js";
+import { resolveSystemdServiceName } from "../../daemon/systemd-service-files.js";
 import { resolveInstallationTarget } from "../../infra/installation-target-context.js";
 import { writeRestartSentinel } from "../../infra/restart-sentinel.js";
 import { getSelfAndAncestorPidsSync } from "../../infra/restart-stale-pids.js";
@@ -13,6 +14,11 @@ import { detectRespawnSupervisor } from "../../infra/supervisor-markers.js";
 import { normalizeUpdateChannel } from "../../infra/update-channels.js";
 import { CONTROL_PLANE_UPDATE_HANDOFF_STARTED_REASON } from "../../infra/update-control-plane-sentinel.js";
 import type { DevUpdateTarget } from "../../infra/update-dev-target.js";
+import { resolveUpdateInstallRoot } from "../../infra/update-install-root.js";
+import {
+  readManagedHandoffProcessStartTime,
+  readManagedServiceUpdateHandoffLease,
+} from "../../infra/update-managed-service-handoff-lease.js";
 import {
   cancelManagedServiceUpdateHandoff,
   startManagedServiceUpdateHandoff,
@@ -21,6 +27,7 @@ import {
 import { buildUpdateRestartSentinelPayload } from "../../infra/update-restart-sentinel-payload.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
 import { defaultRuntime } from "../../runtime.js";
+import { isPidAlive } from "../../shared/pid-alive.js";
 import { formatInstallationTargetCommand } from "../installation-target-format.js";
 import { resolveNodeRunner, UpdatePreMutationError, type UpdateCommandOptions } from "./shared.js";
 import { resolveOwnedManagedUpdateEnv } from "./update-command-service-env.js";
@@ -33,7 +40,7 @@ function parsePositivePid(value: unknown): number | null {
   return /^\d+$/u.test(trimmed) ? (parseStrictPositiveInteger(trimmed) ?? null) : null;
 }
 
-export function gatewayAncestryBlockMessage(pid: unknown): string | undefined {
+function gatewayAncestryBlockMessage(pid: unknown): string | undefined {
   const gatewayPid = parsePositivePid(pid);
   if (gatewayPid === null) {
     return undefined;
@@ -59,6 +66,34 @@ export function formatUpdateAncestryBlockMessage(blockMessage: string): string {
     return blockMessage;
   }
   return `${blockMessage}\nFrom chat, the OpenClaw owner can start the update with the gateway update action or /update, which hands it to a managed helper.`;
+}
+
+export function gatewayMaintenanceBlockMessage(
+  state: GatewayServiceState,
+  root: string,
+  operation: "stop" | "handoff" = "stop",
+): string | undefined {
+  const ancestors = getSelfAndAncestorPidsSync();
+  const lease = readManagedServiceUpdateHandoffLease(resolveUpdateInstallRoot(root));
+  // PartOf makes a primary stop terminal for its separately supervised fixer.
+  // A current lease plus exact live ancestry only refuses self-stop; copied
+  // environment or claims never grant maintenance or cancellation exemptions.
+  if (
+    lease?.action.kind === "triage" &&
+    lease.action.phase === "running" &&
+    lease.action.lifetime.kind === "native" &&
+    lease.action.lifetime.placement.kind === "attached" &&
+    lease.action.lifetime.unit === `${resolveSystemdServiceName(state.env)}.service` &&
+    [lease.executor, lease.helper].every(
+      (owner) =>
+        ancestors.has(owner.pid) &&
+        isPidAlive(owner.pid) &&
+        readManagedHandoffProcessStartTime(owner.pid)?.toString() === owner.startIdentity,
+    )
+  ) {
+    return "This maintenance command cannot stop the Gateway from inside its automatic triage process tree: stopping the service would cancel this repair. Use read-only diagnosis or safe offline artifact repair followed by an atomic `openclaw gateway restart`, or run stop-requiring maintenance from a shell outside automatic triage. Report this blocker if repair cannot proceed safely.";
+  }
+  return operation === "handoff" ? undefined : gatewayAncestryBlockMessage(state.runtime?.pid);
 }
 
 export async function handoffUpdateFromGateway(params: {

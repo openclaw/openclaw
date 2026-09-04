@@ -4,6 +4,7 @@ import { mockSystemAccountHome } from "../../daemon/service.test-helpers.js";
 import { captureEnv } from "../../test-utils/env.js";
 import {
   expectRestartError,
+  registerDisabledSystemdStopTests,
   requireMockCallArg,
   type RestartParams,
 } from "./lifecycle.test-helpers.js";
@@ -189,6 +190,12 @@ describe("runDaemonRestart health checks", () => {
   let runDaemonStop: typeof import("./lifecycle.js").runDaemonStop;
   let envSnapshot: ReturnType<typeof captureEnv>;
 
+  function failRestartCheck(message: string, hints?: string[]) {
+    const err = new Error(message) as Error & { hints?: string[] };
+    err.hints = hints;
+    throw err;
+  }
+
   function mockUnmanagedRestart({
     runPostRestartCheck = false,
   }: {
@@ -196,15 +203,14 @@ describe("runDaemonRestart health checks", () => {
   } = {}) {
     runServiceRestart.mockImplementation(
       async (params: RestartParams & { onNotLoaded?: () => Promise<unknown> }) => {
-        await params.onNotLoaded?.();
+        const activationAccepted = Boolean(await params.onNotLoaded?.());
         if (runPostRestartCheck) {
           await params.postRestartCheck?.({
+            activationAccepted,
             json: Boolean(params.opts?.json),
             stdout: process.stdout,
             warnings: [],
-            fail: (message: string) => {
-              throw new Error(message);
-            },
+            fail: failRestartCheck,
           });
         }
         return true;
@@ -288,16 +294,12 @@ describe("runDaemonRestart health checks", () => {
     stopSystemdService.mockReset().mockResolvedValue(undefined);
 
     runServiceRestart.mockImplementation(async (params: RestartParams) => {
-      const fail = (message: string, hints?: string[]) => {
-        const err = new Error(message) as Error & { hints?: string[] };
-        err.hints = hints;
-        throw err;
-      };
       await params.postRestartCheck?.({
+        activationAccepted: true,
         json: Boolean(params.opts?.json),
         stdout: process.stdout,
         warnings: [],
-        fail,
+        fail: failRestartCheck,
       });
       return true;
     });
@@ -436,12 +438,11 @@ describe("runDaemonRestart health checks", () => {
         issues: [{ code: "port-mismatch", message: "service port is stale" }],
       });
       await params.postRestartCheck?.({
+        activationAccepted: false,
         json: true,
         stdout: process.stdout,
         warnings: [],
-        fail: (message: string) => {
-          throw new Error(message);
-        },
+        fail: failRestartCheck,
       });
       return true;
     });
@@ -753,16 +754,11 @@ describe("runDaemonRestart health checks", () => {
     expect(stopParams.stopWhenNotLoaded).toBe(true);
   });
 
-  it("stops a running disabled systemd unit through the service manager", async () => {
-    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
-    service.readRuntime.mockResolvedValue({ status: "running" });
-
-    await runUnmanagedStop();
-
-    expect(service.stop).toHaveBeenCalledWith(
-      expect.objectContaining({ env: process.env, stdout: process.stdout }),
-    );
-    expect(findVerifiedGatewayListenerPidsOnPortSync).not.toHaveBeenCalled();
+  registerDisabledSystemdStopTests({
+    service,
+    findInstalledSystemdGatewayScope,
+    findVerifiedGatewayListenerPidsOnPortSync,
+    runUnmanagedStop,
   });
 
   it("skips gateway port resolution on stop when the service manager handles the stop", async () => {
@@ -982,14 +978,13 @@ describe("runDaemonRestart health checks", () => {
     findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([]);
     runServiceRestart.mockImplementation(
       async (params: RestartParams & { onNotLoaded?: () => Promise<unknown> }) => {
-        await params.onNotLoaded?.();
+        const activationAccepted = Boolean(await params.onNotLoaded?.());
         await params.postRestartCheck?.({
+          activationAccepted,
           json: Boolean(params.opts?.json),
           stdout: process.stdout,
           warnings: [],
-          fail: (message: string) => {
-            throw new Error(message);
-          },
+          fail: failRestartCheck,
         });
         return true;
       },
@@ -1030,6 +1025,8 @@ describe("runDaemonRestart health checks", () => {
 
   function mockSystemdScope(unit: string) {
     vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    service.readRuntime.mockResolvedValue({ status: "stopped", state: "failed" });
+    service.stop.mockImplementation(stopSystemdService);
     findInstalledSystemdGatewayScope.mockResolvedValue({
       scope: "system" as const,
       unitName: unit,

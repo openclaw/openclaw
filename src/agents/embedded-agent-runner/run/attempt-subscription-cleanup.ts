@@ -1,4 +1,5 @@
 /** Cleans up embedded attempt subscription resources. */
+import { recordAgentCleanupFailure, runAgentCleanupStep } from "../../run-cleanup-timeout.js";
 import { log } from "../logger.js";
 import { resolveEmbeddedAbortSettleTimeoutMs } from "./attempt-finalize.js";
 
@@ -24,31 +25,16 @@ export async function waitForEmbeddedAbortSettle(params: {
     return;
   }
 
-  const reason = params.reason ?? "embedded";
-  let timeout: NodeJS.Timeout | undefined;
-  // Abort settlement is advisory cleanup; timeout or errors are logged but do
-  // not block disposing attempt-owned resources.
-  const outcome = await Promise.race([
-    params.promise
-      .then(() => "settled" as const)
-      .catch((err: unknown) => {
-        log.warn(
-          `${reason} abort settle failed: runId=${params.runId} sessionId=${params.sessionId} err=${String(err)}`,
-        );
-        return "errored" as const;
-      }),
-    new Promise<"timed_out">((resolve) => {
-      timeout = setTimeout(() => resolve("timed_out"), EMBEDDED_ABORT_SETTLE_TIMEOUT_MS);
-    }),
-  ]);
-  if (timeout) {
-    clearTimeout(timeout);
-  }
-  if (outcome === "timed_out") {
-    log.warn(
-      `${reason} abort settle timed out: runId=${params.runId} sessionId=${params.sessionId} timeoutMs=${EMBEDDED_ABORT_SETTLE_TIMEOUT_MS}`,
-    );
-  }
+  await runAgentCleanupStep({
+    runId: params.runId,
+    sessionId: params.sessionId,
+    step: `${params.reason ?? "embedded"}-abort-settle`,
+    log,
+    timeoutMs: EMBEDDED_ABORT_SETTLE_TIMEOUT_MS,
+    cleanup: async () => {
+      await params.promise;
+    },
+  });
 }
 
 /**
@@ -74,7 +60,7 @@ export async function cleanupEmbeddedAttemptResources(params: {
   try {
     params.removeToolResultContextGuard?.();
   } catch {
-    /* best-effort */
+    recordAgentCleanupFailure();
   }
   if (params.aborted && params.abortSettlePromise) {
     await waitForEmbeddedAbortSettle({
@@ -90,22 +76,22 @@ export async function cleanupEmbeddedAttemptResources(params: {
       ...(params.aborted ? { timeoutMs: 0 } : {}),
     });
   } catch {
-    /* best-effort */
+    recordAgentCleanupFailure();
   }
 
   try {
     params.session?.dispose();
   } catch {
-    /* best-effort */
+    recordAgentCleanupFailure();
   }
   try {
     await params.bundleMcpRuntime?.dispose();
   } catch {
-    /* best-effort */
+    recordAgentCleanupFailure();
   }
   try {
     await params.bundleLspRuntime?.dispose();
   } catch {
-    /* best-effort */
+    recordAgentCleanupFailure();
   }
 }

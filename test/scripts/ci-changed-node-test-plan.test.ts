@@ -442,11 +442,13 @@ describe("CI changed Node test plan", () => {
       hasSqliteSessionLifecycleAffectingChange(["src/sessions/session-lifecycle-admission.ts"]),
     ).toBe(true);
     expect(hasSqliteSessionLifecycleAffectingChange(["src/config/sessions.ts"])).toBe(true);
-    expect(
-      hasSqliteSessionLifecycleAffectingChange([
-        "test/scripts/sqlite-sessions-transcripts-flip-proof.built-cli.e2e.test.ts",
-      ]),
-    ).toBe(true);
+    for (const source of [
+      "test/helpers/gateway-readiness-probe.ts",
+      "test/scripts/openclaw-test-instance.built-cli.e2e.test.ts",
+      "test/scripts/sqlite-sessions-transcripts-flip-proof.built-cli.e2e.test.ts",
+    ]) {
+      expect(hasSqliteSessionLifecycleAffectingChange([source]), source).toBe(true);
+    }
     expect(
       hasSqliteSessionLifecycleAffectingChange([
         "packages/media-understanding-common/src/provider-id.ts",

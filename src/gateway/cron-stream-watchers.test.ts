@@ -2,9 +2,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { CronJob } from "../cron/types.js";
 import { createProcessSupervisor } from "../process/supervisor/supervisor.js";
-import type { ManagedRun, ProcessSupervisor, RunExit } from "../process/supervisor/types.js";
+import type { ManagedRun, RunExit, SpawnInput } from "../process/supervisor/types.js";
 import { resolveStreamStopReason } from "./cron-stream-watchers.js";
 import {
+  createCronStreamSupervisor,
   createCronStreamWatcherFixture,
   createWatchers,
   exitResult,
@@ -137,12 +138,7 @@ describe("cron stream watchers", () => {
         wait: () => wait,
       } satisfies ManagedRun;
     });
-    const supervisor = {
-      spawn,
-      cancel: vi.fn(),
-      cancelScope: vi.fn(),
-      getRecord: vi.fn(),
-    } as unknown as ProcessSupervisor;
+    const supervisor = createCronStreamSupervisor(spawn);
     const watchers = createWatchers({
       getProcessSupervisor: () => supervisor,
       minIntervalMs: 1,
@@ -169,7 +165,10 @@ describe("cron stream watchers", () => {
   it("continues reconciling after a stubborn schedule replacement fails", async () => {
     vi.useFakeTimers();
     const cancels: Record<string, ReturnType<typeof vi.fn>> = {};
-    const spawn = vi.fn(async (input: { sessionId: string; argv: string[] }) => {
+    const spawn = vi.fn(async (input: SpawnInput) => {
+      if (input.mode !== "child") {
+        throw new Error("Cron stream fixture expects a child process");
+      }
       const jobId = input.sessionId.replace("cron-stream:", "");
       const stubborn = jobId === "stubborn-job" && input.argv[0] === "stream-source";
       const { promise: wait, resolve: resolveWait } = createDeferred<RunExit>();
@@ -187,12 +186,7 @@ describe("cron stream watchers", () => {
         wait: () => wait,
       } satisfies ManagedRun;
     });
-    const supervisor = {
-      spawn,
-      cancel: vi.fn(),
-      cancelScope: vi.fn(),
-      getRecord: vi.fn(),
-    } as unknown as ProcessSupervisor;
+    const supervisor = createCronStreamSupervisor(spawn);
     const watchers = createWatchers({
       getProcessSupervisor: () => supervisor,
       minIntervalMs: 1,
@@ -257,12 +251,7 @@ describe("cron stream watchers", () => {
         wait: async () => result,
       } satisfies ManagedRun;
     });
-    const supervisor = {
-      spawn,
-      cancel: vi.fn(),
-      cancelScope: vi.fn(),
-      getRecord: vi.fn(),
-    } satisfies ProcessSupervisor;
+    const supervisor = createCronStreamSupervisor(spawn);
     const recordFailure = vi.fn(async () => {});
     const watchers = createWatchers({
       getProcessSupervisor: () => supervisor,
@@ -435,12 +424,7 @@ describe("cron stream watchers", () => {
         detachOutput: vi.fn(),
         wait: () => wait,
       };
-      const supervisor = {
-        spawn: vi.fn(async () => await spawned),
-        cancel: vi.fn(),
-        cancelScope: vi.fn(),
-        getRecord: vi.fn(),
-      } satisfies ProcessSupervisor;
+      const supervisor = createCronStreamSupervisor(vi.fn(async () => await spawned));
       const watchers = createWatchers({
         getProcessSupervisor: () => supervisor,
         updateState: vi.fn(async () => {}),

@@ -20,12 +20,6 @@ export function isPackageManagerUpdateMode(
   return mode === "npm" || mode === "pnpm" || mode === "bun";
 }
 
-export function shouldUseLegacyProcessRestartAfterUpdate(params: {
-  updateMode: UpdateRunResult["mode"];
-}): boolean {
-  return !isPackageManagerUpdateMode(params.updateMode);
-}
-
 type PostUpdateGatewayHealthRecoveryDeps = {
   recoverLaunchAgent?: typeof recoverInstalledLaunchAgentAfterUpdate;
   waitForHealthy?: typeof waitForGatewayHealthyRestart;

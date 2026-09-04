@@ -238,7 +238,11 @@ export function activateCodexAttemptTurn(
       }
       // Native terminal receipt leaves background terminals alive. Cancellation,
       // budget expiry, and policy replacement close that thread's execution too.
-      await terminateCodexBackgroundTerminals(resourceState.client, resourceState.thread.threadId);
+      await terminateCodexBackgroundTerminals(
+        resourceState.client,
+        resourceState.thread.threadId,
+        params.oneShotCliRun,
+      );
       if (state.permissionChangeRestart) {
         state.permissionChangeRestart = "confirmed";
       }

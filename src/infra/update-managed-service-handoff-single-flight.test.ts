@@ -74,8 +74,9 @@ beforeEach(async () => {
   let pid = 24680;
   const liveChildren = new Set<number>();
   const processIdentity = await import("../shared/pid-alive.js");
+  const handoffIdentity = await import("./update-managed-service-handoff-lease.js");
   const parentStartIdentity = processIdentity.getFileLockProcessStartTime(process.pid);
-  vi.spyOn(processIdentity, "getFileLockProcessStartTime").mockImplementation((targetPid) =>
+  vi.spyOn(handoffIdentity, "readManagedHandoffProcessStartTime").mockImplementation((targetPid) =>
     targetPid === process.pid ? parentStartIdentity : liveChildren.has(targetPid) ? 17 : null,
   );
   vi.spyOn(processIdentity, "isPidAlive").mockImplementation(
@@ -272,9 +273,10 @@ describe("managed service update handoff single-flight", () => {
         if (helperStartIdentity === null) {
           throw new Error("expected the real detached helper to have a process identity");
         }
-        vi.spyOn(processIdentity, "getFileLockProcessStartTime").mockReturnValue(
-          failure === "reused" ? helperStartIdentity + 1 : null,
-        );
+        vi.spyOn(
+          await import("./update-managed-service-handoff-lease.js"),
+          "readManagedHandoffProcessStartTime",
+        ).mockReturnValue(failure === "reused" ? helperStartIdentity + 1 : null);
       }
       expect(claimManagedServiceUpdateHandoff(identity)).toBe(false);
       vi.restoreAllMocks();
@@ -288,8 +290,10 @@ describe("managed service update handoff single-flight", () => {
   });
 
   it("terminates the exact helper when its initial start identity is unavailable", async () => {
-    const processIdentity = await import("../shared/pid-alive.js");
-    vi.mocked(processIdentity.getFileLockProcessStartTime)
+    vi.mocked(
+      (await import("./update-managed-service-handoff-lease.js"))
+        .readManagedHandoffProcessStartTime,
+    )
       .mockReturnValueOnce(17)
       .mockReturnValueOnce(null);
     const { claimManagedServiceUpdateHandoff, startManagedServiceUpdateHandoff } =
@@ -380,9 +384,10 @@ describe("managed service update handoff single-flight", () => {
       const initialLease = readLease();
       expect(initialLease?.owner).toBe(started.handoffId);
       expect(JSON.parse(initialLease?.payload_json ?? "null")).toEqual({
-        version: 1,
-        pid: started.pid,
-        startIdentity: String(helperStartIdentity),
+        version: 2,
+        executor: { pid: started.pid, startIdentity: String(helperStartIdentity) },
+        helper: { pid: started.pid, startIdentity: String(helperStartIdentity) },
+        action: { kind: "update" },
       });
 
       const helperExited = new Promise<void>((resolve) => {
@@ -397,9 +402,10 @@ describe("managed service update handoff single-flight", () => {
         throw new Error("expected complete live-parent and dead-helper lease identities");
       }
       const originalPayload = {
-        version: 1,
-        pid: started.pid,
-        startIdentity: String(helperStartIdentity),
+        version: 2,
+        executor: { pid: started.pid, startIdentity: String(helperStartIdentity) },
+        helper: { pid: started.pid, startIdentity: String(helperStartIdentity) },
+        action: { kind: "update" },
       };
       const rejectedOwners = [
         {
@@ -412,19 +418,27 @@ describe("managed service update handoff single-flight", () => {
           owner: started.handoffId,
           payload: {
             ...originalPayload,
-            pid: process.pid,
-            startIdentity: String(ownStartIdentity),
+            executor: { pid: process.pid, startIdentity: String(ownStartIdentity) },
           },
         },
         {
           label: "different recorded start identity",
           owner: started.handoffId,
-          payload: { ...originalPayload, startIdentity: `${helperStartIdentity}-reused` },
+          payload: {
+            ...originalPayload,
+            executor: {
+              ...originalPayload.executor,
+              startIdentity: `${helperStartIdentity}-reused`,
+            },
+          },
         },
         {
           label: "malformed process identity",
           owner: started.handoffId,
-          payload: { ...originalPayload, startIdentity: null },
+          payload: {
+            ...originalPayload,
+            executor: { ...originalPayload.executor, startIdentity: null },
+          },
         },
         {
           label: "noncanonical process identity",
@@ -457,7 +471,13 @@ describe("managed service update handoff single-flight", () => {
         });
       }
       writeLease(started.handoffId, originalPayload);
-      const unknownDeath = vi.spyOn(processIdentity, "isPidDefinitelyDead").mockReturnValue(false);
+      const kill = process.kill.bind(process);
+      const unknownDeath = vi.spyOn(process, "kill").mockImplementation((pid, signal) => {
+        if (pid === started.pid && signal === 0) {
+          throw Object.assign(new Error("process visibility denied"), { code: "EPERM" });
+        }
+        return kill(pid, signal);
+      });
       await expect(cancelManagedServiceUpdateHandoff(identity)).resolves.toBe(false);
       expect(readLease()).toEqual(initialLease);
       unknownDeath.mockRestore();
@@ -705,9 +725,10 @@ describe("managed service update handoff single-flight", () => {
             root,
             "replacement",
             JSON.stringify({
-              version: 1,
-              pid: process.pid,
-              startIdentity: String(replacementStartIdentity),
+              version: 2,
+              executor: { pid: process.pid, startIdentity: String(replacementStartIdentity) },
+              helper: { pid: process.pid, startIdentity: String(replacementStartIdentity) },
+              action: { kind: "update" },
             }),
             Date.now(),
           );
