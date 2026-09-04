@@ -413,7 +413,24 @@ async function executeJobCoreWithTimeoutUnfinalized(
       if (settled) {
         return settled;
       }
-      await cleanupTimedOutCronAgentRun(state, job, jobTimeoutMs, activeExecution);
+      // Log the timeout event before cleanup; the original execution may still be running.
+      // This helps diagnose #137215 where abort-ignoring executions continue after timeout.
+      state.deps.log.warn(
+        {
+          jobId: job.id,
+          jobName: job.name,
+          timeoutMs: jobTimeoutMs,
+          executionPhase: activeExecution?.phase,
+          executionProvider: activeExecution?.provider,
+        },
+        "cron: timeout fired; watchdog triggered cleanup but original execution may continue",
+      );
+      const cleanupConfirmed = await cleanupTimedOutCronAgentRun(
+        state,
+        job,
+        jobTimeoutMs,
+        activeExecution,
+      );
       const error = timeoutReason ?? timeoutErrorMessage(activeExecution);
       const observedLaneWait = watchdog.observedLaneWait();
       const isolatedAgentSetupTimeout =
@@ -431,6 +448,9 @@ async function executeJobCoreWithTimeoutUnfinalized(
         diagnostics: createCronRunDiagnosticsFromError("cron-setup", error, {
           nowMs: state.deps.nowMs,
         }),
+        // #137215: when cleanup cannot confirm the original execution stopped,
+        // hold the retry instead of overlapping the still-running work.
+        ...(cleanupConfirmed ? {} : { timeoutCleanupUnconfirmed: true }),
         ...(isolatedAgentSetupTimeout ? { isolatedAgentSetupTimeout } : {}),
       };
       return withPrimaryWebhookInterruption({
