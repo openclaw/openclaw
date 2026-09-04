@@ -10,7 +10,6 @@ import { ServiceInspectionError } from "./service-inspection-error.js";
 import type { GatewayServiceEnv } from "./service-types.js";
 import {
   classifySystemdUnavailableDetail,
-  isSystemctlMissingDetail,
   isSystemdUserBusUnavailableDetail,
 } from "./systemd-unavailable.js";
 
@@ -67,10 +66,13 @@ export function systemdInspectionError(
 }
 
 export function isSystemctlMissing(result: ExecResult): boolean {
+  // A missing user bus reports the same ENOENT wording as a missing binary, so only
+  // the classifier's precedence and a launch failure prove the binary is unreachable.
+  const kind = classifySystemdUnavailableDetail(readSystemctlDetail(result));
   return (
     result.errorCode === "ENOENT" ||
     result.errorCode === "EACCES" ||
-    (result.termination === "exit" && isSystemctlMissingDetail(readSystemctlDetail(result)))
+    (result.termination === "exit" && kind === "missing_systemctl")
   );
 }
 
