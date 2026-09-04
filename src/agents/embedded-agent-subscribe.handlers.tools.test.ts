@@ -2821,6 +2821,7 @@ describe("handleToolExecutionEnd exec approval prompts", () => {
           command: "npm view diver name version description",
           cwd: "/tmp/work",
           warningText: "Warning: heredoc execution requires explicit approval in allowlist mode.",
+          nativeRouteActive: false,
         },
       },
     });
@@ -2837,6 +2838,7 @@ describe("handleToolExecutionEnd exec approval prompts", () => {
         approvalSlug: "12345678",
         approvalKind: "exec",
         allowedDecisions: ["allow-once", "allow-always", "deny"],
+        nativeRouteActive: false,
       },
     );
     expectInteractiveApprovalButtons(result, [

@@ -112,7 +112,6 @@ function buildExecApprovalRequestToolParams(
 }
 
 type ParsedDecision = { present: boolean; value: string | null };
-
 function parseDecision(value: unknown): ParsedDecision {
   if (!value || typeof value !== "object") {
     return { present: false, value: null };
@@ -130,6 +129,10 @@ function parseExpiresAtMs(value: unknown): number | undefined {
   return asDateTimestampMs(value);
 }
 
+function parseOptionalBoolean(value: unknown): boolean | undefined {
+  return typeof value === "boolean" ? value : undefined;
+}
+
 function resolveDefaultExecApprovalExpiresAtMs(): number {
   return resolveExpiresAtMsFromDurationMs(DEFAULT_APPROVAL_TIMEOUT_MS) ?? 0;
 }
@@ -139,6 +142,8 @@ export type ExecApprovalRegistration = {
   id: string;
   expiresAtMs: number;
   finalDecision?: string | null;
+  approvalClientConnected?: boolean;
+  originNativeRouteActive?: boolean;
 };
 
 class ExecApprovalRunAbortedError extends Error {
@@ -169,10 +174,19 @@ async function registerExecApprovalRequest(
   const id = parseString(registrationResult?.id) ?? params.id;
   const expiresAtMs =
     parseExpiresAtMs(registrationResult?.expiresAtMs) ?? resolveDefaultExecApprovalExpiresAtMs();
-  if (decision.present) {
-    return { id, expiresAtMs, finalDecision: decision.value };
-  }
-  return { id, expiresAtMs };
+  // Remote Gateways can lag the local agent during an upgrade. Their shipped
+  // winner-only route is safe only when the independent availability fact is absent.
+  const approvalClientConnected =
+    parseOptionalBoolean(registrationResult?.approvalClientConnected) ??
+    (registrationResult?.deliveryRoute === "approval-client" ? true : undefined);
+  const originNativeRouteActive = parseOptionalBoolean(registrationResult?.originNativeRouteActive);
+  const registration = {
+    id,
+    expiresAtMs,
+    ...(approvalClientConnected === undefined ? {} : { approvalClientConnected }),
+    ...(originNativeRouteActive === undefined ? {} : { originNativeRouteActive }),
+  };
+  return decision.present ? { ...registration, finalDecision: decision.value } : registration;
 }
 
 /** Uses a pre-resolved decision or waits for the registered approval id. */

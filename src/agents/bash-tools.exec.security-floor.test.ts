@@ -91,7 +91,7 @@ function mockPendingApprovalGateway(): string[] {
   vi.mocked(callGatewayTool).mockImplementation(async (method) => {
     calls.push(method);
     if (method === "exec.approval.request") {
-      return { status: "accepted", id: "approval-id" };
+      return { status: "accepted", id: "approval-id", approvalClientConnected: true };
     }
     if (method === "exec.approval.waitDecision") {
       return { decision: null };
@@ -532,7 +532,9 @@ describe("exec security floor", () => {
       if (approved) {
         vi.mocked(callGatewayTool).mockImplementation(async (method) => {
           calls.push(method);
-          return { decision: "allow-once" };
+          return method === "exec.approval.request"
+            ? { status: "accepted", id: "approval-id", approvalClientConnected: true }
+            : { decision: "allow-once" };
         });
       }
       const tool = createExecTool({
@@ -631,7 +633,11 @@ describe("exec security floor", () => {
         return completion.promise;
       })
       .mockRejectedValueOnce(new Error("synthetic completion unavailable"));
-    vi.mocked(callGatewayTool).mockResolvedValue({ decision: "deny" });
+    vi.mocked(callGatewayTool).mockImplementation(async (method) =>
+      method === "exec.approval.request"
+        ? { status: "accepted", id: "approval-id", approvalClientConnected: true }
+        : { decision: "deny" },
+    );
     const tool = createExecTool({
       host: "gateway",
       mode: "auto",
@@ -683,7 +689,11 @@ describe("exec security floor", () => {
       throw new Error("synthetic reviewer import failure");
     });
     vi.doMock("./exec-auto-reviewer.js", loadReviewer);
-    vi.mocked(callGatewayTool).mockResolvedValue({ decision: "deny" });
+    vi.mocked(callGatewayTool).mockImplementation(async (method) =>
+      method === "exec.approval.request"
+        ? { status: "accepted", id: "approval-id", approvalClientConnected: true }
+        : { decision: "deny" },
+    );
     try {
       const tool = createExecTool({
         host: "gateway",

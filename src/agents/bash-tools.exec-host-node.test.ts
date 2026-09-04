@@ -195,6 +195,19 @@ const createAndRegisterDefaultExecApprovalRequestMock = vi.hoisted(() =>
       undefined,
   ),
 );
+function mockNodeOriginNativeRouteActiveOnce(active: boolean): void {
+  const register = createAndRegisterDefaultExecApprovalRequestMock.getMockImplementation();
+  if (!register) {
+    throw new Error("expected approval registration mock");
+  }
+  createAndRegisterDefaultExecApprovalRequestMock.mockImplementationOnce(async (params) => {
+    const registration = await register(params);
+    if (!registration) {
+      throw new Error("expected approval registration");
+    }
+    return { ...registration, originNativeRouteActive: active };
+  });
+}
 const runAbortedApprovalError = vi.hoisted(() => new Error("approval owning run aborted"));
 const resolveApprovalDecisionOrUndefinedMock = vi.hoisted(() =>
   vi.fn(
@@ -774,6 +787,8 @@ describe("executeNodeHostCommand", () => {
       return {
         approvalId: "approval-1",
         approvalSlug: "slug-1",
+        approvalClientConnected: true,
+        originNativeRouteActive: false,
         warningText: "",
         expiresAtMs: Date.now() + 60_000,
         preResolvedDecision: null,
@@ -1242,7 +1257,25 @@ describe("executeNodeHostCommand", () => {
     }
   });
 
+  it("returns the Telegram approval prompt when only a generic approval client is active", async () => {
+    mockNodeOriginNativeRouteActiveOnce(false);
+    resolveApprovalDecisionOrUndefinedMock.mockResolvedValueOnce("deny");
+    resolveExecHostApprovalContextMock.mockReturnValue({
+      approvals: { allowlist: [], file: { version: 1, agents: {} } },
+      hostSecurity: "full",
+      hostAsk: "always",
+      askFallback: "deny",
+    });
+
+    const result = await executeNodeHostCommand(
+      createNodeHostRequest({ turnSourceChannel: "telegram" }),
+    );
+
+    expect(result.details?.status).toBe("approval-pending");
+  });
+
   it("forwards prepared systemRunPlan within the native turn after approval", async () => {
+    mockNodeOriginNativeRouteActiveOnce(true);
     resolveExecHostApprovalContextMock.mockReturnValue({
       approvals: { allowlist: [], file: { version: 1, agents: {} } },
       hostSecurity: "full",

@@ -426,6 +426,7 @@ describe("exec approval reply helpers", () => {
       approvalSlug: "slug-meta",
       agentId: "ops-agent",
       sessionKey: "agent:ops-agent:matrix:channel:!room:example.org",
+      nativeRouteActive: true,
       command: "echo ok",
       host: "gateway",
     });
@@ -438,6 +439,7 @@ describe("exec approval reply helpers", () => {
         agentId: "ops-agent",
         allowedDecisions: ["allow-once", "allow-always", "deny"],
         sessionKey: "agent:ops-agent:matrix:channel:!room:example.org",
+        nativeRouteActive: true,
       },
     });
   });

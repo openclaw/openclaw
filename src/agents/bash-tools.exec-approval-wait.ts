@@ -1,7 +1,8 @@
-import { isNativeApprovalChannel, normalizeMessageChannel } from "../utils/message-channel.js";
-
+import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../utils/message-channel.js";
 export function shouldAwaitExecApprovalInline(params: {
   turnSourceChannel?: string;
+  approvalClientConnected?: boolean;
+  originNativeRouteActive?: boolean;
   approvalFollowupMode?: "agent" | "direct";
   trigger?: string;
 }): boolean {
@@ -17,11 +18,14 @@ export function shouldAwaitExecApprovalInline(params: {
   if (params.trigger === "cron") {
     return true;
   }
-  // Native chat approval clients (Telegram /approve, Discord buttons,
-  // etc.) resolve the approval back into the same session, so the agent can
-  // wait inline and return the real exec output as the tool result. This
-  // mirrors the webchat path that PR #85239 fixed; without it the agent run
-  // terminates on the "approval-pending" tool result and the operator must
-  // send a follow-up chat message to recover the turn (issue #93918).
-  return isNativeApprovalChannel(normalizeMessageChannel(params.turnSourceChannel));
+  const turnSourceChannel = normalizeMessageChannel(params.turnSourceChannel);
+  if (!turnSourceChannel) {
+    return false;
+  }
+  // Webchat itself is the approval client. External chat channels may wait only
+  // when the Gateway selected that exact originating channel/account runtime;
+  // a generic connected Control UI is not evidence that the origin can surface it.
+  return turnSourceChannel === INTERNAL_MESSAGE_CHANNEL
+    ? params.approvalClientConnected === true
+    : params.originNativeRouteActive === true;
 }

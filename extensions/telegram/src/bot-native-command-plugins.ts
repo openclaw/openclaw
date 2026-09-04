@@ -25,7 +25,6 @@ import {
 } from "./bot/helpers.js";
 import type { TelegramGetChat } from "./bot/types.js";
 import type { TelegramInlineButtons } from "./button-types.js";
-import { shouldSuppressLocalTelegramExecApprovalPrompt } from "./exec-approvals.js";
 import { buildInlineKeyboard } from "./inline-keyboard.js";
 import { recordSentMessage } from "./sent-message-cache.js";
 
@@ -234,13 +233,7 @@ export async function executeTelegramPluginCommand(
       messageThreadId: dispatch.threadSpec.id,
     }),
   );
-  const suppressReply =
-    shouldSuppressLocalTelegramExecApprovalPrompt({
-      cfg: dispatch.runtimeCfg,
-      accountId: dispatch.route.accountId,
-      payload: result,
-    }) || result.suppressReply === true;
-  if (suppressReply) {
+  if (result.suppressReply === true) {
     await cleanupTelegramProgressPlaceholder({
       bot: dispatch.bot,
       chatId: dispatch.chatId,

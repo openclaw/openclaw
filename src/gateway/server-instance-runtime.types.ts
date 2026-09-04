@@ -24,6 +24,7 @@ export type GatewayInstanceAgentDispatchOptions = {
 };
 
 export type GatewayApprovalEventPublisher = {
+  hasSelectedOriginRoute?: (kind: ChannelApprovalKind, request: unknown) => boolean;
   publishRequested: (kind: ChannelApprovalKind, request: unknown) => number;
   publishResolved: (kind: ChannelApprovalKind, resolved: unknown) => void;
 };

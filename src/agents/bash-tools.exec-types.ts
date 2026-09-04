@@ -182,6 +182,7 @@ export type ExecToolDetails = {
       cwd?: string;
       nodeId?: string;
       warningText?: string;
+      nativeRouteActive?: boolean;
     }
   | {
       status: "approval-unavailable";

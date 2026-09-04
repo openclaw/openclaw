@@ -1,6 +1,7 @@
 /** Registry-bound plugin command selection and execution for native/channel surfaces. */
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { shouldSuppressLocalExecApprovalPrompt } from "../channels/plugins/exec-approval-local.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { redactToolPayloadTextWithConfig } from "../logging/redact.js";
 import type { RegisteredPluginCommand } from "./command-registry-state.js";
@@ -183,11 +184,19 @@ async function executeSelectedPluginCommand(
   if (isPluginRegistryRetired(selected.registry)) {
     return { ...RETIRED_SELECTION_REPLY };
   }
-  return await executeRegisteredPluginCommand(selected.registry, {
+  const result = await executeRegisteredPluginCommand(selected.registry, {
     ...context,
     args: selection.args,
     command: selection.command,
   });
+  return shouldSuppressLocalExecApprovalPrompt({
+    channel,
+    cfg: context.config,
+    accountId: context.accountId,
+    payload: result,
+  })
+    ? { ...result, suppressReply: true }
+    : result;
 }
 
 /** Validates and executes a dispatch carried through the core reply pipeline. */

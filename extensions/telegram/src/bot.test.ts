@@ -871,7 +871,7 @@ describe("dispatchTelegramMessage reply settlement", () => {
     await expect(bufferedSettlement).resolves.toEqual({ status: "rejected", error });
   });
 
-  it("keeps a suppressed exec-approval final in the fallback ledger", async () => {
+  it("delivers an exec-approval final when no native route is active", async () => {
     const telegramCfg = {
       execApprovals: { enabled: true, approvers: ["123"], target: "dm" as const },
     };
@@ -887,6 +887,7 @@ describe("dispatchTelegramMessage reply settlement", () => {
       }
       suppressedResult = await deliver(
         {
+          text: "Approval required. /approve req-1 allow-once",
           channelData: {
             execApproval: { approvalId: "req-1", approvalSlug: "req-1" },
           },
@@ -902,11 +903,8 @@ describe("dispatchTelegramMessage reply settlement", () => {
 
     await dispatchDirectTelegramTurn({ cfg, deliverReplies, telegramCfg });
 
-    expect(suppressedResult).toEqual({
-      visibleReplySent: false,
-      suppression: { reason: "no_visible_result" },
-    });
-    expect(deliverReplies).not.toHaveBeenCalled();
+    expect(suppressedResult).toEqual({ visibleReplySent: true });
+    expect(deliverReplies).toHaveBeenCalledTimes(1);
   });
 });
 

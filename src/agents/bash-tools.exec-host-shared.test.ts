@@ -641,6 +641,7 @@ describe("buildExecApprovalPendingToolResult", () => {
       },
       sentApproverDms: false,
       unavailableReason: params.unavailableReason,
+      nativeRouteActive: false,
       ...(params.allowedDecisions ? { allowedDecisions: params.allowedDecisions } : {}),
     });
   }
@@ -691,6 +692,28 @@ describe("buildExecApprovalPendingToolResult", () => {
     await expect(createRoute(finalDecision, channel)).resolves.toMatchObject({ kind: "wait" });
   });
 
+  it("preserves the gateway-selected route facts", async () => {
+    await expect(
+      createExecApprovalRequestRoute({
+        warnings: [],
+        approvalRunningNoticeMs: 1_000,
+        createApprovalSlug: (approvalId) => approvalId,
+        register: async (approvalId) => ({
+          id: approvalId,
+          expiresAtMs: 60_000,
+          approvalClientConnected: false,
+          originNativeRouteActive: false,
+        }),
+        askFallback: "deny",
+        requiresExplicitApproval: false,
+      }),
+    ).resolves.toMatchObject({
+      kind: "wait",
+      approvalClientConnected: false,
+      originNativeRouteActive: false,
+    });
+  });
+
   it("applies strict approval ordering to an inline route", async () => {
     await expect(
       createExecApprovalRequestRoute({
@@ -720,6 +743,7 @@ describe("buildExecApprovalPendingToolResult", () => {
     });
 
     expect(result.details.status).toBe("approval-pending");
+    expect(result.details).toMatchObject({ nativeRouteActive: false });
     const text = result.content.find((part) => part.type === "text")?.text ?? "";
     expect(text).toContain("/approve approval-slug allow-once");
     expect(text).not.toContain("native chat exec approvals are not configured on Discord");

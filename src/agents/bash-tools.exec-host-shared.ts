@@ -90,6 +90,8 @@ type ExecApprovalUnavailableReason =
 type RegisteredExecApprovalRequestContext = {
   approvalId: string;
   approvalSlug: string;
+  approvalClientConnected: ExecApprovalRegistration["approvalClientConnected"];
+  originNativeRouteActive: ExecApprovalRegistration["originNativeRouteActive"];
   warningText: string;
   expiresAtMs: number;
   preResolvedDecision: string | null | undefined;
@@ -313,6 +315,8 @@ async function createAndRegisterDefaultExecApprovalRequest(
   return {
     approvalId,
     approvalSlug,
+    approvalClientConnected: registration.approvalClientConnected,
+    originNativeRouteActive: registration.originNativeRouteActive,
     warningText,
     expiresAtMs: registration.expiresAtMs ?? defaultExpiresAtMs,
     preResolvedDecision:
@@ -601,6 +605,7 @@ export function buildExecApprovalPendingToolResult(params: {
   unavailableReason: ExecApprovalUnavailableReason | null;
   allowedDecisions?: readonly ExecApprovalDecision[];
   nodeId?: string;
+  nativeRouteActive?: boolean;
   processContinuationAvailable?: boolean;
 }): AgentToolResult<ExecToolDetails> {
   const allowedDecisions = params.allowedDecisions ?? resolveExecApprovalAllowedDecisions();
@@ -659,6 +664,9 @@ export function buildExecApprovalPendingToolResult(params: {
             cwd: params.cwd,
             nodeId: params.nodeId,
             warningText: params.warningText,
+            ...(params.nativeRouteActive === undefined
+              ? {}
+              : { nativeRouteActive: params.nativeRouteActive }),
           } satisfies ExecToolDetails),
   };
 }

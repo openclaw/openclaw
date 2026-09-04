@@ -130,7 +130,10 @@ function createNativeApprovalTestConfig(channel: NativeApprovalTestChannel): Ope
       } as OpenClawConfig);
 }
 
-function createNativeApprovalReplyResolver(channel: NativeApprovalTestChannel) {
+function createNativeApprovalReplyResolver(
+  channel: NativeApprovalTestChannel,
+  nativeRouteActive: boolean,
+) {
   return vi.fn(async (_ctx: MsgContext, options?: GetReplyOptions) => {
     await options?.onToolResult?.({
       text: "Approval required.",
@@ -138,6 +141,7 @@ function createNativeApprovalReplyResolver(channel: NativeApprovalTestChannel) {
         execApproval: {
           approvalId: "12345678-1234-1234-1234-123456789012",
           approvalSlug: "12345678",
+          nativeRouteActive,
           ...(channel === "signal"
             ? { approvalKind: "exec" as const, sessionKey: "agent:main:signal:+15551230000" }
             : {}),
@@ -1641,23 +1645,33 @@ describe("dispatchReplyFromConfig", () => {
       name: "keeps local discord exec approval tool prompts when the native runtime is inactive",
       channel: "discord" as const,
       nativeActive: false,
+      nativeRouteActive: false,
     },
     {
       name: "suppresses local discord exec approval tool prompts when the native runtime is active",
       channel: "discord" as const,
       nativeActive: true,
+      nativeRouteActive: true,
+    },
+    {
+      name: "keeps local discord exec approval tool prompts when the active runtime is ineligible",
+      channel: "discord" as const,
+      nativeActive: true,
+      nativeRouteActive: false,
     },
     {
       name: "keeps local signal exec approval tool prompts when the native runtime is inactive",
       channel: "signal" as const,
       nativeActive: false,
+      nativeRouteActive: false,
     },
     {
       name: "suppresses local signal exec approval tool prompts when the native runtime is active",
       channel: "signal" as const,
       nativeActive: true,
+      nativeRouteActive: true,
     },
-  ])("$name", async ({ channel, nativeActive }) => {
+  ])("$name", async ({ channel, nativeActive, nativeRouteActive }) => {
     setNoAbort();
     const reporter = nativeActive
       ? createApprovalNativeRouteReporter({
@@ -1682,10 +1696,10 @@ describe("dispatchReplyFromConfig", () => {
         }),
         cfg: createNativeApprovalTestConfig(channel),
         dispatcher,
-        replyResolver: createNativeApprovalReplyResolver(channel),
+        replyResolver: createNativeApprovalReplyResolver(channel, nativeRouteActive),
       });
 
-      if (nativeActive) {
+      if (nativeRouteActive) {
         expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
       } else {
         expect(firstToolResultPayload(dispatcher)?.text).toBe("Approval required.");

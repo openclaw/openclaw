@@ -274,13 +274,13 @@ describe("handlePendingApprovalRequest", () => {
     ).toBe(false);
   });
 
-  it("reports an active approval client instead of the manual turn-source route", async () => {
+  it("reports an inactive origin-native route alongside a generic approval client", async () => {
     const manager = new ExecApprovalManager();
     const record = manager.create(
       {
         command: "echo ok",
-        turnSourceChannel: "feishu",
-        turnSourceAccountId: "work",
+        turnSourceChannel: "telegram",
+        turnSourceAccountId: "default",
       },
       60_000,
       "approval-with-client",
@@ -315,10 +315,51 @@ describe("handlePendingApprovalRequest", () => {
         id: "approval-with-client",
         status: "accepted",
         deliveryRoute: "approval-client",
+        approvalClientConnected: true,
+        originNativeRouteActive: false,
       }),
       undefined,
     );
 
+    expect(manager.resolve(record.id, "allow-once")).toBe(true);
+    await requestPromise;
+  });
+
+  it("reports a connected approval client independently from forwarding", async () => {
+    const manager = new ExecApprovalManager();
+    const record = manager.create({ command: "echo ok" }, 60_000, "forwarded-with-client");
+    const decisionPromise = manager.register(record, 60_000);
+    const respond = vi.fn();
+    const requestPromise = handlePendingApprovalRequest({
+      manager,
+      record,
+      decisionPromise,
+      respond,
+      context: {
+        broadcast: vi.fn(),
+        hasExecApprovalClients: () => true,
+      } as unknown as GatewayRequestContext,
+      requestEventName: "exec.approval.requested",
+      requestEvent: {
+        id: record.id,
+        request: record.request,
+        createdAtMs: record.createdAtMs,
+        expiresAtMs: record.expiresAtMs,
+      },
+      twoPhase: true,
+      deliverRequest: () => true,
+    });
+
+    await Promise.resolve();
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        status: "accepted",
+        deliveryRoute: "forwarder",
+        approvalClientConnected: true,
+      }),
+      undefined,
+    );
     expect(manager.resolve(record.id, "allow-once")).toBe(true);
     await requestPromise;
   });
@@ -329,6 +370,7 @@ describe("handlePendingApprovalRequest", () => {
     const decisionPromise = manager.register(record, 60_000);
     const respond = vi.fn();
     const publishRequested = vi.fn(() => 1);
+    const hasSelectedOriginRoute = vi.fn(() => true);
     const requestPromise = handlePendingApprovalRequest({
       manager,
       record,
@@ -339,6 +381,7 @@ describe("handlePendingApprovalRequest", () => {
         hasExecApprovalClients: () => false,
         approvalEvents: {
           publishRequested,
+          hasSelectedOriginRoute,
           publishResolved: vi.fn(),
         },
       } as unknown as GatewayRequestContext,
@@ -354,13 +397,21 @@ describe("handlePendingApprovalRequest", () => {
     });
 
     await Promise.resolve();
+    expect(hasSelectedOriginRoute).toHaveBeenCalledWith(
+      "exec",
+      expect.objectContaining({ id: record.id }),
+    );
     expect(publishRequested).toHaveBeenCalledWith(
       "exec",
       expect.objectContaining({ id: record.id }),
     );
     expect(respond).toHaveBeenCalledWith(
       true,
-      expect.objectContaining({ status: "accepted", deliveryRoute: "approval-client" }),
+      expect.objectContaining({
+        status: "accepted",
+        deliveryRoute: "approval-client",
+        originNativeRouteActive: true,
+      }),
       undefined,
     );
     expect(manager.resolve(record.id, "allow-once")).toBe(true);

@@ -255,6 +255,39 @@ describe("telegram channel message adapter", () => {
     });
   });
 
+  it("keeps local exec approval prompts without an active native route", () => {
+    const suppress = telegramPlugin.outbound?.shouldSuppressLocalPayloadPrompt;
+    const cfg = {
+      channels: {
+        telegram: {
+          botToken: "tok",
+          execApprovals: { enabled: true, approvers: ["123"] },
+        },
+      },
+    } as never;
+    const payload = {
+      text: "Approval required. /approve req-1 allow-once",
+      channelData: {
+        execApproval: { approvalId: "req-1", approvalSlug: "req-1" },
+      },
+    };
+
+    expect(
+      suppress?.({
+        cfg,
+        payload,
+        hint: { kind: "approval-pending", approvalKind: "exec", nativeRouteActive: false },
+      }),
+    ).toBe(false);
+    expect(
+      suppress?.({
+        cfg,
+        payload,
+        hint: { kind: "approval-pending", approvalKind: "exec", nativeRouteActive: true },
+      }),
+    ).toBe(true);
+  });
+
   it("keeps implicit first replies on the first delivered payload media", async () => {
     const adapter = requireTelegramMessageAdapter();
     sendMessageTelegramMock

@@ -40,6 +40,7 @@ export type ExecApprovalReplyMetadata = {
   agentId?: string;
   allowedDecisions?: readonly ExecApprovalReplyDecision[];
   sessionKey?: string;
+  nativeRouteActive?: boolean;
 };
 
 export type ExecApprovalActionDescriptor = {
@@ -71,6 +72,7 @@ export type ExecApprovalPendingReplyParams = {
   nodeId?: string;
   scope?: ApprovalScope | null;
   sessionKey?: string | null;
+  nativeRouteActive?: boolean;
   expiresAtMs?: number;
   nowMs?: number;
 };
@@ -384,6 +386,8 @@ export function getExecApprovalReplyMetadata(
     : undefined;
   const agentId = normalizeOptionalString(record.agentId);
   const sessionKey = normalizeOptionalString(record.sessionKey);
+  const nativeRouteActive =
+    typeof record.nativeRouteActive === "boolean" ? record.nativeRouteActive : undefined;
   return {
     approvalId,
     approvalSlug,
@@ -391,6 +395,7 @@ export function getExecApprovalReplyMetadata(
     agentId,
     allowedDecisions,
     sessionKey,
+    ...(nativeRouteActive === undefined ? {} : { nativeRouteActive }),
   };
 }
 
@@ -458,6 +463,9 @@ export function buildExecApprovalPendingReplyPayload(
         agentId: normalizeOptionalString(params.agentId),
         allowedDecisions,
         sessionKey: normalizeOptionalString(params.sessionKey),
+        ...(params.nativeRouteActive === undefined
+          ? {}
+          : { nativeRouteActive: params.nativeRouteActive }),
       },
     },
   };

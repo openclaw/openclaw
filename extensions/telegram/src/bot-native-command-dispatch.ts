@@ -48,7 +48,6 @@ import {
   resolveTelegramConversationRoute,
   resolveTelegramTargetSession,
 } from "./conversation-route.js";
-import { shouldSuppressLocalTelegramExecApprovalPrompt } from "./exec-approvals.js";
 import {
   evaluateTelegramGroupBaseAccess,
   evaluateTelegramGroupPolicyAccess,
@@ -618,16 +617,6 @@ export async function dispatchTelegramBuiltinTurn(params: {
     },
     delivery: {
       deliverWithProviderMessageSending: async (payload, info) => {
-        if (
-          shouldSuppressLocalTelegramExecApprovalPrompt({
-            cfg: dispatch.runtimeCfg,
-            accountId: dispatch.route.accountId,
-            payload,
-          })
-        ) {
-          deliveryState.delivered = true;
-          return { visibleReplySent: false, suppression: { reason: "no_visible_result" } };
-        }
         const targetedPayload = payload.replyToId
           ? payload
           : { ...payload, replyToId: String(dispatch.msg.message_id) };

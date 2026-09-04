@@ -415,6 +415,8 @@ export async function executeNodeHostCommand(
       const {
         approvalId,
         approvalSlug,
+        approvalClientConnected,
+        originNativeRouteActive,
         warningText,
         expiresAtMs,
         preResolvedDecision,
@@ -442,7 +444,14 @@ export async function executeNodeHostCommand(
         inlineFallbackPolicy = currentFallback;
         inlineApprovalDecision = null;
         inlineApprovalId = approvalId;
-      } else if (unavailableReason === null && shouldAwaitExecApprovalInline(params)) {
+      } else if (
+        unavailableReason === null &&
+        shouldAwaitExecApprovalInline({
+          ...params,
+          approvalClientConnected,
+          originNativeRouteActive,
+        })
+      ) {
         // Keep the admitted turn alive while its approval is pending. Returning
         // approval-pending here closes the authority before the operator can act.
         const outcome = await execHostShared.resolveExecApprovalWaitOutcome({
@@ -656,6 +665,7 @@ export async function executeNodeHostCommand(
           unavailableReason,
           allowedDecisions,
           nodeId: target.nodeId,
+          nativeRouteActive: originNativeRouteActive,
           processContinuationAvailable: params.processContinuationAvailable,
         });
       }

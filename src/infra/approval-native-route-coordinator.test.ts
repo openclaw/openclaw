@@ -97,6 +97,67 @@ describe("createApprovalNativeRouteReporter", () => {
     coordinator.close();
   });
 
+  it("reports liveness only for the selected originating runtime", () => {
+    const coordinator = createApprovalNativeRouteCoordinator();
+    let telegramEligible = false;
+    const telegramReporter = coordinator.createReporter({
+      handledKinds: new Set(["exec"]),
+      channel: "telegram",
+      accountId: "default",
+      requestGateway: createGatewayRequestMock(),
+      shouldHandle: () => telegramEligible,
+      classifyRoute: () => "bound-or-explicit",
+    });
+    const discordReporter = coordinator.createReporter({
+      ...defaultRouteSelector,
+      handledKinds: new Set(["exec"]),
+      channel: "discord",
+      accountId: "default",
+      requestGateway: createGatewayRequestMock(),
+    });
+    telegramReporter.start();
+    discordReporter.start();
+    const createRequest = (id: string, accountId = "default") =>
+      ({
+        id,
+        request: {
+          command: "echo hi",
+          turnSourceChannel: "telegram",
+          turnSourceAccountId: accountId,
+        },
+        createdAtMs: 0,
+        expiresAtMs: Date.now() + 60_000,
+      }) as const;
+
+    expect(
+      coordinator.hasActiveRuntime({
+        approvalKind: "exec",
+        channel: "telegram",
+        accountId: "default",
+        request: createRequest("approval-inactive-origin"),
+      }),
+    ).toBe(false);
+
+    telegramEligible = true;
+    expect(
+      coordinator.hasActiveRuntime({
+        approvalKind: "exec",
+        channel: "telegram",
+        accountId: "default",
+        request: createRequest("approval-active-origin"),
+      }),
+    ).toBe(true);
+    expect(
+      coordinator.hasActiveRuntime({
+        approvalKind: "exec",
+        channel: "telegram",
+        accountId: "ops",
+        request: createRequest("approval-wrong-account", "ops"),
+      }),
+    ).toBe(false);
+    coordinator.close();
+  });
+
   it("keeps each channel's sole eligible runtime independent", () => {
     const coordinator = createApprovalNativeRouteCoordinator();
     const requestGateway = createGatewayRequestMock();

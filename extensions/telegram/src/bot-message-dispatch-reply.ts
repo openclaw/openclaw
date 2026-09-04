@@ -54,7 +54,6 @@ import {
   resolveTelegramErrorPolicy,
   shouldSuppressTelegramError,
 } from "./error-policy.js";
-import { shouldSuppressLocalTelegramExecApprovalPrompt } from "./exec-approvals.js";
 import { createTelegramReasoningStepState } from "./reasoning-lane-coordinator.js";
 import { resolveTelegramTargetChatType } from "./targets.js";
 
@@ -237,16 +236,6 @@ export async function deliverReply(
   }
   const controls = resolvePayloadTelegramControls(turn, deduped);
   const effectivePayload = controls.payload;
-  if (
-    shouldSuppressLocalTelegramExecApprovalPrompt({
-      cfg: turn.cfg,
-      accountId: turn.context.route.accountId,
-      payload: effectivePayload,
-    })
-  ) {
-    turn.queuedFinal = true;
-    return await settleTerminalNoVisibleDelivery(turn, info);
-  }
   const telegramButtons = controls.buttons;
   const lanePayload =
     info.kind === "block" &&

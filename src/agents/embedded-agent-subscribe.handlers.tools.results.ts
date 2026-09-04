@@ -515,6 +515,7 @@ function readExecApprovalPendingDetails(result: unknown): {
   cwd?: string;
   nodeId?: string;
   warningText?: string;
+  nativeRouteActive?: boolean;
 } | null {
   if (!result || typeof result !== "object") {
     return null;
@@ -549,6 +550,8 @@ function readExecApprovalPendingDetails(result: unknown): {
     cwd: readStringValue(details.cwd),
     nodeId: readStringValue(details.nodeId),
     warningText: readStringValue(details.warningText),
+    nativeRouteActive:
+      typeof details.nativeRouteActive === "boolean" ? details.nativeRouteActive : undefined,
   };
 }
 
@@ -647,6 +650,7 @@ export async function emitToolResultOutput(params: {
           nodeId: approvalPending.nodeId,
           expiresAtMs: approvalPending.expiresAtMs,
           warningText: approvalPending.warningText,
+          nativeRouteActive: approvalPending.nativeRouteActive,
         }),
       );
       ctx.state.deterministicApprovalPromptSent = true;

@@ -234,6 +234,16 @@ export function createGatewayInstanceRuntime(
   return {
     createAgentTurnFacade,
     approvalEvents: {
+      hasSelectedOriginRoute: (kind, request) => {
+        // SAFETY: approval publication receives normalized approval request events only.
+        const approvalRequest = request as GatewayApprovalRequest;
+        return routeCoordinator.hasActiveRuntime({
+          approvalKind: kind,
+          channel: approvalRequest.request.turnSourceChannel,
+          accountId: approvalRequest.request.turnSourceAccountId,
+          request: approvalRequest,
+        });
+      },
       publishRequested: (kind, request) =>
         publish(
           kind,

@@ -61,8 +61,6 @@ vi.mock("../utils/message-channel.js", () => {
   const isGatewayMessageChannel = (value: string) => Boolean(normalizeMessageChannel(value));
   return {
     INTERNAL_MESSAGE_CHANNEL,
-    isNativeApprovalChannel: (value?: string | null) =>
-      value === INTERNAL_MESSAGE_CHANNEL || value === "discord",
     isDeliverableMessageChannel: (value: string) => {
       const channel = normalizeMessageChannel(value);
       return Boolean(channel && channel !== INTERNAL_MESSAGE_CHANNEL && channel !== "tui");
@@ -207,8 +205,18 @@ async function writeExecApprovalsConfig(config: Record<string, unknown>) {
   saveExecApprovals(config as ExecApprovalsFile);
 }
 
-function acceptedApprovalResponse(params: unknown) {
-  return { status: "accepted", id: (params as { id?: string })?.id };
+function acceptedApprovalResponse(
+  params: unknown,
+  deliveryRoute?: "approval-client" | "forwarder",
+  approvalClientConnected = deliveryRoute === "approval-client",
+) {
+  return {
+    status: "accepted",
+    id: (params as { id?: string })?.id,
+    deliveryRoute,
+    approvalClientConnected,
+    originNativeRouteActive: deliveryRoute === "approval-client",
+  };
 }
 
 function getResultText(result: { content: Array<{ type?: string; text?: string }> }) {
@@ -340,10 +348,16 @@ async function expectGatewayAskAlwaysPrompt(options: {
 function mockAcceptedApprovalFlow(options: {
   onAgent?: (params: Record<string, unknown>) => void;
   onNodeInvoke?: (params: unknown) => unknown;
+  deliveryRoute?: "approval-client" | "forwarder";
+  approvalClientConnected?: boolean;
 }) {
   vi.mocked(callGatewayTool).mockImplementation(async (method, _opts, params) => {
     if (method === "exec.approval.request") {
-      return acceptedApprovalResponse(params);
+      return acceptedApprovalResponse(
+        params,
+        options.deliveryRoute,
+        options.approvalClientConnected,
+      );
     }
     if (method === "exec.approval.waitDecision") {
       return { decision: "allow-once" };
@@ -844,7 +858,7 @@ describe("exec approvals", () => {
     vi.mocked(callGatewayTool).mockImplementation(async (method, _opts, params) => {
       calls.push(method);
       if (method === "exec.approval.request") {
-        return acceptedApprovalResponse(params);
+        return acceptedApprovalResponse(params, "approval-client");
       }
       if (method === "exec.approval.waitDecision") {
         return { decision: "allow-always" };
@@ -1145,7 +1159,7 @@ describe("exec approvals", () => {
 
     vi.mocked(callGatewayTool).mockImplementation(async (method, _opts, params) => {
       if (method === "exec.approval.request") {
-        return acceptedApprovalResponse(params);
+        return acceptedApprovalResponse(params, "approval-client");
       }
       if (method === "exec.approval.waitDecision") {
         return await decisionPromise;
@@ -1199,6 +1213,7 @@ describe("exec approvals", () => {
       onAgent: (params) => {
         agentCalls.push(params);
       },
+      deliveryRoute: "approval-client",
     });
 
     const tool = createExecTool({
@@ -1218,6 +1233,30 @@ describe("exec approvals", () => {
     expect(result.details.status).toBe("completed");
     expect(getResultText(result)).toContain("webchat-ok");
     expect(agentCalls).toHaveLength(0);
+  });
+
+  it("keeps webchat inline when forwarding wins route precedence", async () => {
+    mockAcceptedApprovalFlow({
+      deliveryRoute: "forwarder",
+      approvalClientConnected: true,
+    });
+
+    const tool = createExecTool({
+      host: "gateway",
+      ask: "always",
+      approvalRunningNoticeMs: 0,
+      sessionKey: "agent:main:main",
+      elevated: { enabled: true, allowed: true, defaultLevel: "ask" },
+      messageProvider: "webchat",
+    });
+
+    const result = await tool.execute("call-gw-forwarded-webchat", {
+      command: "printf webchat-ok",
+      workdir: process.cwd(),
+    });
+
+    expect(result.details.status).toBe("completed");
+    expect(getResultText(result)).toContain("webchat-ok");
   });
 
   it("keeps approved internal commands asynchronous without a webchat turn source", async () => {

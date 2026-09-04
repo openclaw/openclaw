@@ -63,7 +63,11 @@ beforeEach(async () => {
       return readExecApprovalsSnapshot();
     }
     if (method === "exec.approval.request") {
-      return { id: params.id, expiresAtMs: Date.now() + 60000 };
+      return {
+        id: params.id,
+        expiresAtMs: Date.now() + 60000,
+        approvalClientConnected: true,
+      };
     }
     if (method === "exec.approval.waitDecision") {
       decisionEntered.resolve();

@@ -91,7 +91,7 @@ describe("Telegram native command dispatch delivery", () => {
     expect(deliveredPayload?.["channelData"]).toBeUndefined();
   });
 
-  it("suppresses local structured exec approval replies for native commands", async () => {
+  it("preserves local structured exec approval replies when no native route is active", async () => {
     replyMocks.dispatchReplyWithBufferedBlockDispatcher.mockImplementationOnce(
       async ({ dispatcherOptions }: DispatchReplyWithBufferedBlockDispatcherParams) => {
         await dispatcherOptions.deliver(
@@ -126,7 +126,13 @@ describe("Telegram native command dispatch delivery", () => {
     });
     await handler(createTelegramPrivateCommandContext());
 
-    expect(deliveryMocks.deliverReplies).not.toHaveBeenCalled();
+    expect(deliveryMocks.deliverReplies).toHaveBeenCalledTimes(1);
+    expect(
+      (firstMockArg(deliveryMocks.deliverReplies, "deliverReplies") as DeliverRepliesParams)
+        .replies[0],
+    ).toMatchObject({
+      text: expect.stringContaining("/approve 7f423fdc allow-once"),
+    });
   });
 
   it("does not emit the empty fallback when reply-payload hooks cancel a native reply", async () => {

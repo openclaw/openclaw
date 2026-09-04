@@ -25,6 +25,7 @@ import {
   resolveTelegramExecApprovalTarget,
   shouldHandleTelegramExecApprovalRequest,
   shouldInjectTelegramExecApprovalButtons,
+  shouldSuppressLocalTelegramExecApprovalPrompt,
 } from "./exec-approvals.js";
 
 const tempWorkspaces: TempWorkspaceSync[] = [];
@@ -445,6 +446,43 @@ describe("telegram exec approvals", () => {
     expect(shouldInjectTelegramExecApprovalButtons({ cfg: channelCfg, to: "123" })).toBe(false);
     expect(shouldInjectTelegramExecApprovalButtons({ cfg: bothCfg, to: "123" })).toBe(true);
     expect(shouldInjectTelegramExecApprovalButtons({ cfg: bothCfg, to: "-100123" })).toBe(true);
+  });
+
+  it("suppresses the local prompt only while the native approval route is active", () => {
+    const cfg = buildConfig({ enabled: true, approvers: ["123"] });
+    const payload = {
+      text: "Approval required. /approve req-1 allow-once",
+      channelData: {
+        execApproval: {
+          approvalId: "req-1",
+          approvalSlug: "req-1",
+          allowedDecisions: ["allow-once", "allow-always", "deny"] as const,
+        },
+      },
+    };
+
+    expect(
+      shouldSuppressLocalTelegramExecApprovalPrompt({
+        cfg,
+        payload,
+        hint: {
+          kind: "approval-pending",
+          approvalKind: "exec",
+          nativeRouteActive: false,
+        },
+      }),
+    ).toBe(false);
+    expect(
+      shouldSuppressLocalTelegramExecApprovalPrompt({
+        cfg,
+        payload,
+        hint: {
+          kind: "approval-pending",
+          approvalKind: "exec",
+          nativeRouteActive: true,
+        },
+      }),
+    ).toBe(true);
   });
 
   describe("isTelegramExecApprovalTargetRecipient", () => {

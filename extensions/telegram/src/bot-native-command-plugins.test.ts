@@ -449,7 +449,7 @@ describe("registerTelegramNativeCommands", () => {
     expect(replyAt(firstDeliverRepliesParams()).text).toBe("Command completed successfully");
   });
 
-  it("cleans up the progress placeholder when Telegram suppresses a local exec approval reply", async () => {
+  it("keeps the local exec approval reply when no native route is active", async () => {
     const { handler, sendMessage, deleteMessage } = registerPlugCommand({
       args: "now",
       command: {
@@ -481,9 +481,13 @@ describe("registerTelegramNativeCommands", () => {
     await handler(createPrivateCommandContext({ match: "now" }));
 
     expect(sendMessage).toHaveBeenCalledWith(100, "Working on it...", undefined);
-    expect(deleteMessage).toHaveBeenCalledWith(100, 999);
-    expect(editMessageTelegram).not.toHaveBeenCalled();
-    expect(deliverReplies).not.toHaveBeenCalled();
+    expect(editMessageTelegram).toHaveBeenCalledWith(
+      100,
+      999,
+      expect.stringContaining("/approve 7f423fdc allow-once"),
+      expect.any(Object),
+    );
+    expect(deleteMessage).not.toHaveBeenCalled();
   });
 
   it("sends plugin command error replies silently when silentErrorReplies is enabled", async () => {
