@@ -15,6 +15,7 @@ import { isRecord } from "../utils.js";
 import { configIncludeOwnsAgentRosterValues } from "./agent-roster-provenance.js";
 import { containsEnvVarReference } from "./env-substitution.js";
 import { coerceConfig } from "./io.read-helpers.js";
+import { createConfigIncludeOwnershipError } from "./io.write-errors.js";
 import { parseLegacyAgentRoster, projectLegacyAgentRosterEntries } from "./legacy.roster.js";
 import { applyMergePatch, createMergePatch } from "./merge-patch.js";
 import { normalizeAgentModelMapForConfig, normalizeAgentModelRefForConfig } from "./model-input.js";
@@ -580,6 +581,17 @@ function projectRootAuthoredIncludeSibling(params: {
   return { ok: true, present: true, value };
 }
 
+function includeOwnershipError(rootAuthoredConfig: unknown, includePath: string[]): Error {
+  const directive = getPathValue(rootAuthoredConfig, [...includePath, "$include"]);
+  const includeTargets = (Array.isArray(directive) ? directive : [directive]).filter(
+    (entry): entry is string => typeof entry === "string",
+  );
+  return createConfigIncludeOwnershipError({
+    ownedConfigPath: formatConfigPath(includePath),
+    ...(includeTargets.length > 0 ? { includeTargets } : {}),
+  });
+}
+
 function preserveUntouchedIncludes(params: {
   runtimeConfig: unknown;
   sourceConfig: unknown;
@@ -610,11 +622,7 @@ function preserveUntouchedIncludes(params: {
       getPathValue(params.runtimeConfig, comparisonPath),
     );
     if (!isDeepStrictEqual(nextValue, sourceValue) && !isDeepStrictEqual(nextValue, runtimeValue)) {
-      throw new Error(
-        `Config write would flatten $include-owned config at ${formatConfigPath(
-          includePath,
-        )}; edit that include file directly or remove the $include first.`,
-      );
+      throw includeOwnershipError(params.rootAuthoredConfig, includePath);
     }
     if (includeIsArrayEntry) {
       const index = parseArrayIndexPathSegment(includePath.at(-1) ?? "");
@@ -628,11 +636,7 @@ function preserveUntouchedIncludes(params: {
           hasNewEquivalentArraySibling(sourceArray, nextArray, index) ||
           hasNewEquivalentArraySibling(runtimeArray, nextArray, index))
       ) {
-        throw new Error(
-          `Config write would flatten $include-owned config at ${formatConfigPath(
-            includePath,
-          )}; edit that include file directly or remove the $include first.`,
-        );
+        throw includeOwnershipError(params.rootAuthoredConfig, includePath);
       }
     }
     let authoredIncludeValue = getPathValue(params.rootAuthoredConfig, includePath);
@@ -652,11 +656,7 @@ function preserveUntouchedIncludes(params: {
         ? sourceProjection
         : projectAgainst(params.runtimeConfig);
       if (!projection.ok) {
-        throw new Error(
-          `Config write would flatten $include-owned config at ${formatConfigPath(
-            includePath,
-          )}; edit that include file directly or remove the $include first.`,
-        );
+        throw includeOwnershipError(params.rootAuthoredConfig, includePath);
       }
       authoredIncludeValue = projection.present
         ? setPathValue(authoredIncludeValue, relativeSiblingPath, projection.value)
@@ -771,11 +771,7 @@ function injectExplicitlySetPaths(params: {
       pathStartsWith(path, includeOwnedPath) &&
       params.allowIncludeAncestorExplicitSetPaths === true;
     if (includeOwnedPath && !preserveDescendantInclude && !allowIncludeAncestorOverride) {
-      throw new Error(
-        `Config write would flatten $include-owned config at ${formatConfigPath(
-          includeOwnedPath,
-        )}; edit that include file directly or remove the $include first.`,
-      );
+      throw includeOwnershipError(params.rootAuthoredConfig, includeOwnedPath);
     }
     const nextValue = getPathValue(params.valueSource, [...path]);
     if (nextValue === undefined) {
@@ -801,6 +797,36 @@ function pathTouchesAgentRoster(path: readonly string[]): boolean {
 
 function pathTargetsAgentRoster(path: readonly string[]): boolean {
   return AGENT_ROSTER_PATHS.some((rosterPath) => pathStartsWith(path, rosterPath));
+}
+
+function hasOnlyPreparedKeyedAgentEntryRosterIncludes(
+  rootAuthoredConfig: unknown,
+  preparedIncludePaths: readonly (readonly string[])[] | undefined,
+): boolean {
+  const authoredEntries = getPathValue(rootAuthoredConfig, ["agents", "entries"]);
+  if (!isRecord(authoredEntries) || !preparedIncludePaths || preparedIncludePaths.length === 0) {
+    return false;
+  }
+  const rosterIncludePaths = collectIncludeOwnedPaths(rootAuthoredConfig).filter((path) =>
+    pathTouchesAgentRoster(path),
+  );
+  // Whole-entry includes can be restored independently while their containing map accepts siblings.
+  // Broader or nested include paths still own the roster boundary and must fail closed.
+  return (
+    rosterIncludePaths.length > 0 &&
+    rosterIncludePaths.every(
+      (path) =>
+        path.length === 3 &&
+        path[0] === "agents" &&
+        path[1] === "entries" &&
+        preparedIncludePaths.some(
+          (prepared) =>
+            prepared.length === path.length &&
+            path.every((segment, index) => segment === prepared[index]),
+        ),
+    ) &&
+    preparedIncludePaths.length === rosterIncludePaths.length
+  );
 }
 
 function canCanonicalizeAgentRoster(value: unknown): boolean {
@@ -1500,6 +1526,7 @@ export function resolvePersistCandidateForWrite(params: {
   nextConfig: unknown;
   rootAuthoredConfig?: unknown;
   agentRosterIncludeOwned?: boolean;
+  keyedAgentEntryIncludePaths?: readonly (readonly string[])[];
   unsetPaths?: readonly string[][];
   explicitSetPaths?: readonly (readonly string[])[];
   explicitSetValueSource?: unknown;
@@ -1516,21 +1543,28 @@ export function resolvePersistCandidateForWrite(params: {
     explicitSetValueSource: params.explicitSetValueSource ?? params.nextConfig,
   });
   const rootAuthoredConfig = params.rootAuthoredConfig ?? params.sourceConfig;
-  const persistCanonicalRoster = shouldPersistCanonicalAgentRoster(params);
+  const wantsCanonicalRoster = shouldPersistCanonicalAgentRoster(params);
   const includeOwnsRoster =
-    persistCanonicalRoster &&
+    wantsCanonicalRoster &&
     configIncludeOwnsAgentRosterValues({
       parsed: rootAuthoredConfig,
       sourceConfigBeforeMigrations: params.sourceConfigBeforeMigrations ?? params.sourceConfig,
       includeContributesRoster: params.agentRosterIncludeOwned,
     });
-  if (includeOwnsRoster) {
+  const preserveKeyedEntryIncludes =
+    includeOwnsRoster &&
+    hasOnlyPreparedKeyedAgentEntryRosterIncludes(
+      rootAuthoredConfig,
+      params.keyedAgentEntryIncludePaths,
+    );
+  if (includeOwnsRoster && !preserveKeyedEntryIncludes) {
     // Canonical roster writes replace the whole roster atomically. Any included contribution
     // therefore owns this boundary; flattening only its root-authored siblings is not safe.
-    throw new Error(
-      "Config write would flatten $include-owned config at agents; edit that include file directly or remove the $include first.",
-    );
+    // The owning directive may sit at agents, agents.entries, agents.list, or an entry, so
+    // the refusal names the boundary without guessing which included file owns it.
+    throw createConfigIncludeOwnershipError({ ownedConfigPath: "agents" });
   }
+  const persistCanonicalRoster = wantsCanonicalRoster && !preserveKeyedEntryIncludes;
   const projectedAuthoredRoster = persistCanonicalRoster
     ? projectAuthoredAgentRosterForWrite({
         rootAuthoredConfig,
@@ -1557,7 +1591,11 @@ export function resolvePersistCandidateForWrite(params: {
         ...(params.explicitSetPaths ?? []).filter((path) => !pathTargetsAgentRoster(path)),
         ["agents", "entries"],
       ]
-    : params.explicitSetPaths;
+    : preserveKeyedEntryIncludes
+      ? (params.explicitSetPaths ?? []).filter(
+          (path) => !isIncludeOwnedPath(includeProjectionRootAuthoredConfig, [...path]),
+        )
+      : params.explicitSetPaths;
   const explicitSetValueSource = persistCanonicalRoster
     ? canonicalizeAgentRosterForExplicitWrite({
         valueSource: params.explicitSetValueSource ?? params.nextConfig,
@@ -1596,10 +1634,10 @@ export function resolvePersistCandidateForWrite(params: {
   const preserveAuthoredRoster =
     canCanonicalizeAgentRoster(params.nextConfig) || params.preserveLegacyAgentRoster === true;
   const withAuthoredRoster =
-    persistCanonicalRoster || !preserveAuthoredRoster
+    wantsCanonicalRoster || !preserveAuthoredRoster
       ? withPreservedIncludes
       : restoreAuthoredAgentRoster(withPreservedIncludes, rootAuthoredConfig);
-  if (persistCanonicalRoster) {
+  if (wantsCanonicalRoster) {
     // A roster rewrite must never drop entries the mutation did not explicitly delete.
     // A 2026-07-25 production incident lost agents.entries.main twice through silent rewrites.
     assertCanonicalAgentRosterRetainsEntries({

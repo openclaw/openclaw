@@ -44,6 +44,7 @@ function snapshot(
                 path: ["plugins"],
                 kind: "single",
                 hasSiblingOverrides: false,
+                hasArrayAncestor: false,
                 targetPath: pluginsIncludePath,
               },
             ],
