@@ -170,6 +170,7 @@ export type PreparedModelRuntimeOwner = {
   pendingPluginGeneration?: PreparedModelRuntimePluginGeneration;
   pending?: Promise<PreparedModelRuntimeSnapshot>;
   buildCompletion?: Promise<void>;
+  admissionCount?: number;
   leaseCount?: number;
 };
 
