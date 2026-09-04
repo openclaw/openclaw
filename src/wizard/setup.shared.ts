@@ -140,6 +140,15 @@ export async function writeWizardConfigFile(
   const explicitNullPaths = opts.mergeBase
     ? collectChangedWizardNullPaths(opts.mergeBase, config)
     : [];
+  const explicitSetValueSource =
+    explicitNullPaths.length > 0
+      ? structuredClone(opts.writeOptions?.explicitSetValueSource ?? config)
+      : undefined;
+  if (explicitSetValueSource) {
+    for (const path of explicitNullPaths) {
+      setConfigValueAtPath(explicitSetValueSource, path, null);
+    }
+  }
   return await transformConfigWithPendingPluginInstalls({
     ...(opts.baseHash !== undefined ? { baseHash: opts.baseHash } : {}),
     // Caller-owned snapshots are one-shot CAS preconditions, not retry baselines.
@@ -153,7 +162,7 @@ export async function writeWizardConfigFile(
               ...(opts.writeOptions?.explicitSetPaths ?? []),
               ...explicitNullPaths,
             ],
-            explicitSetValueSource: config,
+            explicitSetValueSource,
           }
         : {}),
       ...(opts.allowConfigSizeDrop !== undefined
