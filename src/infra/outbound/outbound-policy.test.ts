@@ -104,6 +104,20 @@ describe("outbound policy helpers", () => {
     });
   });
 
+  it("guards a dice roll like any other target-addressed send", () => {
+    // A roll is recipient-visible and addressed by `to`, so it clears the same guard.
+    expectCrossContextPolicyResult(/target="C999" while bound to "C123"/, {
+      cfg: {
+        channels: { workspace: { botToken: "workspace-test", appToken: "workspace-app-test" } },
+        tools: { message: { crossContext: { allowWithinProvider: false } } },
+      } as OpenClawConfig,
+      channel: "workspace",
+      action: "dice",
+      args: { to: "C999" },
+      toolContext: { currentChannelId: "C123", currentChannelProvider: "workspace" },
+    });
+  });
+
   it("enforces the agent's cross-context policy", () => {
     expectCrossContextPolicyResult(/target="C999" while bound to "C123"/, {
       cfg: {
