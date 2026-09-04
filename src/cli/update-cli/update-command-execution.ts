@@ -35,6 +35,7 @@ import {
 import { runPackageInstallUpdate } from "./update-command-package.js";
 import type { ManagedServiceRootRedirect } from "./update-command-service-plan.js";
 import {
+  ManagedServiceStopFailure,
   maybeRestartServiceAfterFailedMutableUpdate,
   maybeStopManagedServiceBeforeMutableUpdate,
   resolvePreparedGatewayUpdatePolicy,
@@ -164,10 +165,15 @@ export async function executeMutableUpdate(params: {
       if (err instanceof UpdateCommandAbort || err instanceof UpdatePreMutationError) {
         throw err;
       }
+      if (err instanceof ManagedServiceStopFailure) {
+        preManagedServiceStop = err.inspectedState;
+      }
       params.stop();
-      throw new Error(`Failed to stop managed gateway service before update: ${String(err)}`, {
-        cause: err,
-      });
+      throw new UpdatePreMutationError(
+        "managed-service-stop-failed",
+        `Failed to stop managed gateway service before update: ${String(err)}`,
+        { cause: err },
+      );
     }
 
     if (phase === "inspect" && preManagedServiceStop?.serviceUpdateVerdict?.kind === "foreign") {
