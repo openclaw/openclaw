@@ -272,4 +272,16 @@ describe("transcripts CLI", () => {
     expect(artifact).toMatchObject({ path: path.join(sessionDir, "summary.md"), exists: true });
     expect(ownershipReads, "standalone export ownership SQL on the caller thread").toEqual([]);
   });
+
+  it.each([
+    ["--dir", "--metadata"],
+    ["--dir", "--transcript"],
+    ["--metadata", "--transcript"],
+  ])("rejects conflicting artifact selectors %s and %s", async (...selectors) => {
+    await writeSession(stateDir, "design-review");
+
+    await expect(runTranscriptsCli(["path", "design-review", ...selectors])).rejects.toThrow(
+      `transcripts path accepts only one artifact selector; received ${selectors.join(", ")}`,
+    );
+  });
 });
