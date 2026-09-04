@@ -359,6 +359,14 @@ export function renderSessionProgressCard(
     sessionStatus && TERMINAL_OUTCOME_LABEL_KEYS[sessionStatus] && !terminalTimestamp
       ? undefined
       : sessionStatus;
+  // A persisted card can predate a later active run; its in-progress step is
+  // not live until the card has been updated within that run.
+  const hasCurrentRunActivity =
+    hasActiveRun &&
+    (validUpdatedAt === undefined ||
+      (validStartedAt === undefined
+        ? sessionStatus === undefined
+        : validUpdatedAt >= validStartedAt));
   const activityTimestamp = terminalTimestamp ?? validUpdatedAt ?? Date.now();
   const activityKey = terminalTimestamp
     ? ACTIVITY_LABEL_KEYS[sessionStatus!]
@@ -410,7 +418,7 @@ export function renderSessionProgressCard(
         })
       : nothing;
     const presentedCurrentStatus =
-      currentStep?.status === "in_progress" && !hasActiveRun && !terminalOutcomeKey
+      currentStep?.status === "in_progress" && !hasCurrentRunActivity && !terminalOutcomeKey
         ? "paused"
         : currentStep?.status;
     const summaryIndicator =
@@ -483,7 +491,7 @@ export function renderSessionProgressCard(
       </summary>
       <div class="session-progress-card__body" role="region" aria-label=${composerCountLabel}>
         ${renderProgressCardMarkdown(card.markdown)}
-        ${renderSteps(card, hasActiveRun, effectiveSessionStatus)}
+        ${renderSteps(card, hasCurrentRunActivity, effectiveSessionStatus)}
       </div>
     </details>`;
   }
@@ -500,6 +508,6 @@ export function renderSessionProgressCard(
         >${dismiss}
       </span>
     </div>
-    ${renderBody(card, hasActiveRun, effectiveSessionStatus)}
+    ${renderBody(card, hasCurrentRunActivity, effectiveSessionStatus)}
   </section>`;
 }

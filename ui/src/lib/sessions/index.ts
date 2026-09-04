@@ -39,7 +39,11 @@ export type {
   SessionMessageSubscription,
 } from "./session-capability.ts";
 export type { SessionPatch, SessionPatchResult } from "./patch.ts";
-export { DEFAULT_SESSION_LIST_QUERY, SESSIONS_PAGE_DEFAULT_LIMIT } from "./session-requests.ts";
+export {
+  dashboardSessionListQuery,
+  DEFAULT_SESSION_LIST_QUERY,
+  SESSIONS_PAGE_DEFAULT_LIMIT,
+} from "./session-requests.ts";
 export { reconcileSessionRunTerminal, type SessionRunTerminal } from "./reconcile.ts";
 export { requestSessionCreate } from "./create.ts";
 export { resolveSessionKey } from "./navigation.ts";

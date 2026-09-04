@@ -33,6 +33,16 @@ export const DEFAULT_SESSION_LIST_QUERY = {
   limit: SIDEBAR_SESSION_ROSTER_LIMIT,
 } as const satisfies SessionListOptions;
 
+export function dashboardSessionListQuery(agentId?: string | null): SessionListOptions {
+  const normalizedAgentId = agentId?.trim();
+  return {
+    ...DEFAULT_SESSION_LIST_QUERY,
+    hasBoard: true,
+    archivedFilter: "all",
+    ...(normalizedAgentId ? { agentId: normalizedAgentId } : {}),
+  };
+}
+
 /** Starting page size for the Sessions page's explicit, user-editable limit
  *  field, kept separate from the roster page so tuning one never moves the other. */
 export const SESSIONS_PAGE_DEFAULT_LIMIT = 50;
