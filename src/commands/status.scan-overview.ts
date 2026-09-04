@@ -130,7 +130,6 @@ export async function collectStatusScanOverview(params: {
   includeLocalStatusRpcFallback?: boolean;
   gatewayProbeTimeoutMs?: number | StatusGatewayProbeTimeoutResolver;
   includeChannelSetupRuntimeFallback?: boolean;
-  channelCredentialResolutionSkipped?: boolean;
   useGatewayCallOverridesForChannelsStatus?: boolean;
   includeChannelSecretTargets?: boolean;
   includeAdvertisedControlUiLinks?: boolean;
@@ -163,6 +162,14 @@ export async function collectStatusScanOverview(params: {
   const loadedConfig = skipMissingConfig ? {} : snapshot.runtimeConfig;
   const configDiagnostics =
     skipMissingConfig || snapshot.valid ? null : { path: snapshot.path, issues: snapshot.issues };
+  const resolvedGatewayProbeTimeoutMs =
+    typeof params.gatewayProbeTimeoutMs === "function"
+      ? params.gatewayProbeTimeoutMs(loadedConfig)
+      : params.gatewayProbeTimeoutMs;
+  // Keep secrets.resolve inside the same budget as the gateway probe so a
+  // nonresponding gateway falls back to local resolution quickly.
+  const gatewaySecretResolveTimeoutMs =
+    resolvedGatewayProbeTimeoutMs ?? params.opts.timeoutMs ?? (params.opts.all ? 5000 : 2500);
   const { resolvedConfig: cfg, diagnostics } = skipMissingConfig
     ? { resolvedConfig: loadedConfig, diagnostics: [] }
     : await commandConfigResolutionModuleLoader
@@ -177,6 +184,7 @@ export async function collectStatusScanOverview(params: {
               includeChannelTargets: params.includeChannelSecretTargets,
             }),
             mode: "read_only_status",
+            gatewaySecretResolveTimeoutMs,
             ...(params.runtime ? { runtime: params.runtime } : {}),
           }),
         );
@@ -195,10 +203,6 @@ export async function collectStatusScanOverview(params: {
         }),
       );
   const osSummary = resolveOsSummary();
-  const gatewayProbeTimeoutMs =
-    typeof params.gatewayProbeTimeoutMs === "function"
-      ? params.gatewayProbeTimeoutMs(cfg)
-      : params.gatewayProbeTimeoutMs;
   const bootstrap = await createStatusScanCoreBootstrap<
     Awaited<ReturnType<typeof getAgentLocalStatusesFn>>
   >({
@@ -212,7 +216,7 @@ export async function collectStatusScanOverview(params: {
     fetchGitUpdate: params.fetchGitUpdate,
     includeRegistryUpdate: params.includeRegistryUpdate,
     includeLocalStatusRpcFallback: params.includeLocalStatusRpcFallback,
-    gatewayProbeTimeoutMs,
+    gatewayProbeTimeoutMs: resolvedGatewayProbeTimeoutMs,
     getTailnetHostname: async (runner) => {
       return await statusScanDepsRuntimeModuleLoader
         .load()
@@ -317,9 +321,6 @@ export async function collectStatusScanOverview(params: {
           sourceConfig,
           includeSetupFallbackPlugins: params.includeChannelSetupRuntimeFallback !== false,
           liveChannelStatus: channelsStatusLocal,
-          ...(params.channelCredentialResolutionSkipped === true
-            ? { credentialResolutionSkipped: true }
-            : {}),
         });
         params.progress?.tick();
         return {

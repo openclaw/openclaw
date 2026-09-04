@@ -101,8 +101,8 @@ export async function scanStatusJsonWithPolicy(
     allowMissingConfigFastPath: policy.allowMissingConfigFastPath,
     resolveHasConfiguredChannels: policy.resolveHasConfiguredChannels,
     includeChannelsData: false,
-    // Fast JSON only needs to know whether channels may exist; it does not render channel tables.
-    includeChannelSecretTargets: false,
+    // Channel tables stay off the lean JSON path, but the heartbeat owner-route
+    // probe still consumes channel credentials resolved read-only (#137217).
     fetchGitUpdate: policy.fetchGitUpdate,
     includeRegistryUpdate: policy.includeRegistryUpdate,
     includeLocalStatusRpcFallback: policy.includeLocalStatusRpcFallback,

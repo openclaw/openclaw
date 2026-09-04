@@ -124,12 +124,11 @@ describe("scanStatus", () => {
         includeSetupFallbackPlugins: false,
         sourceConfig,
         liveChannelStatus: null,
-        credentialResolutionSkipped: true,
       },
     ]);
   });
 
-  it("keeps default text status off live channel status and channel setup fallback for fast path", async () => {
+  it("keeps default text status off live channel status and setup fallback while resolving channel credentials", async () => {
     const cfg = createStatusScanConfig();
     configureScanStatus({
       hasConfiguredChannels: true,
@@ -162,7 +161,7 @@ describe("scanStatus", () => {
       updateConfigChannel: null,
     });
     expect(mocks.getStatusCommandSecretTargetIds).toHaveBeenCalledWith(cfg, process.env, {
-      includeChannelTargets: false,
+      includeChannelTargets: undefined,
     });
     expect(mocks.buildChannelsTable).toHaveBeenCalledOnce();
     expect(firstBuildChannelsTableCall()).toStrictEqual([
@@ -172,9 +171,18 @@ describe("scanStatus", () => {
         includeSetupFallbackPlugins: false,
         sourceConfig: cfg,
         liveChannelStatus: null,
-        credentialResolutionSkipped: true,
       },
     ]);
+  });
+
+  it("bounds gateway secret resolution by the fast status probe budget", async () => {
+    configureScanStatus();
+
+    await scanStatus({ json: false }, {} as never);
+
+    expect(mocks.resolveCommandSecretRefsViaGateway).toHaveBeenCalledWith(
+      expect.objectContaining({ gatewaySecretResolveTimeoutMs: 2500 }),
+    );
   });
 
   it("uses live channel status and setup fallback for deep text status", async () => {

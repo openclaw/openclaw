@@ -89,7 +89,7 @@ describe("scanStatusJsonFast", () => {
     expect(mocks.getStatusCommandSecretTargetIds).toHaveBeenCalledWith(
       createStatusMemorySearchConfig(),
       process.env,
-      { includeChannelTargets: false },
+      { includeChannelTargets: undefined },
     );
     expect(mocks.hasConfiguredChannelsForReadOnlyScope).not.toHaveBeenCalled();
     expect(mocks.ensurePluginRegistryLoaded).not.toHaveBeenCalled();
@@ -147,6 +147,22 @@ describe("scanStatusJsonFast", () => {
 
     expect(mocks.ensurePluginRegistryLoaded).not.toHaveBeenCalled();
     expect(mocks.resolveCommandSecretRefsViaGateway).toHaveBeenCalled();
+  });
+
+  it("bounds gateway secret resolution by the fast JSON probe budget", async () => {
+    await scanStatusJsonFast({}, {} as never);
+
+    expect(mocks.resolveCommandSecretRefsViaGateway).toHaveBeenCalledWith(
+      expect.objectContaining({ gatewaySecretResolveTimeoutMs: 1000 }),
+    );
+
+    vi.clearAllMocks();
+    configureFastJsonStatus();
+    await scanStatusJsonFast({ timeoutMs: 1500 }, {} as never);
+
+    expect(mocks.resolveCommandSecretRefsViaGateway).toHaveBeenCalledWith(
+      expect.objectContaining({ gatewaySecretResolveTimeoutMs: 1500 }),
+    );
   });
 
   it("skips plugin compatibility loading even when configured channels are present", async () => {
