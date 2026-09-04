@@ -13,6 +13,8 @@ it("does not serialize transcript batches when the extended sparse byte guard is
       sessionKey: `agent:main:${sessionId}`,
       storePath: `${state.sessionsDir()}/sessions.json`,
     };
+    // Wide records exceed the initial 1 MiB byte cap, so the ordinary window
+    // needs additional pages even though it stays below the message-count limit.
     const events = Array.from({ length: 400 }, (_, index) => ({
       type: "message",
       id: `row-${index}`,
@@ -38,6 +40,7 @@ it("does not serialize transcript batches when the extended sparse byte guard is
         max: 800,
         maxBytes: 1024,
       });
+      expect(tail.readPage.messages.length).toBeLessThan(events.length);
       expect(tail.rawPageMessages).toBe(events.length);
       expect(tail.projected).toHaveLength(events.length);
       expect(tail.projected.at(-1)).toMatchObject({ __openclaw: { id: "row-399", seq: 400 } });
