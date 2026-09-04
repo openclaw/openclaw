@@ -12,6 +12,7 @@ import {
   resetSessionEntryLifecycle,
   upsertSessionEntryCore,
 } from "../../../../src/config/sessions/session-accessor.js";
+import { serializeJsonlLines } from "../../../../src/config/sessions/transcript-jsonl.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../../../src/state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../../../src/state/openclaw-state-db.js";
 import { buildSessionEntry, type SessionFileEntry } from "./session-files.js";
@@ -110,7 +111,10 @@ describe("SQLite session snapshots and reset content revision", () => {
       await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: observedAt });
       expect(replaceTranscriptEventsSync(scope, records)).toBe(true);
       const archivePath = path.join(tmpDir, "parity.jsonl.deleted.2026-07-01T10-00-00.000Z");
-      fsSync.writeFileSync(archivePath, records.map((record) => JSON.stringify(record)).join("\n"));
+      fsSync.writeFileSync(
+        archivePath,
+        serializeJsonlLines(records.map((record) => JSON.stringify(record))),
+      );
       fsSync.utimesSync(archivePath, observedAt / 1000, observedAt / 1000);
       const options = {
         generatedByCronRun: kind === "cron",

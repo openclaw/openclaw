@@ -1,6 +1,7 @@
 // SQLite trajectory runtime store owns session-scoped runtime event rows.
 
 import { parseDateStringTimestampMs } from "@openclaw/normalization-core/number-coercion";
+import { sql } from "kysely";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import {
   executeSqliteQuerySync,
@@ -41,7 +42,23 @@ export type SqliteTrajectoryRuntimeScope = {
 type SqliteTrajectoryRuntimeReadScope = Omit<
   SqliteTrajectoryRuntimeScope,
   "maxGlobalRuntimeBytes" | "maxRuntimeBytes"
->;
+> & {
+  /**
+   * Optional byte budget enforced before parsing runtime event rows. When set,
+   * the reader sums event_json byte lengths via SQL and rejects with a typed
+   * error before materializing parsed entries, mirroring the file-path stat-size
+   * guard. Ignored for tail-bounded reads.
+   */
+  maxEventBytes?: number;
+  /**
+   * Optional row-count budget enforced before parsing runtime event rows. When
+   * set, the reader counts matching rows via SQL and rejects with a typed error
+   * before materializing parsed entries, so the documented export cap protects
+   * memory rather than only reporting after allocation. Ignored for tail-bounded
+   * reads.
+   */
+  maxEventCount?: number;
+};
 
 type SqliteTrajectoryRuntimeEventRow = {
   event: TrajectoryEvent;
@@ -149,12 +166,64 @@ export function loadSqliteTrajectoryRuntimeEventRowsSync(
       scope.tailEvents !== undefined && Number.isFinite(scope.tailEvents)
         ? Math.max(0, Math.floor(scope.tailEvents))
         : undefined;
+    const afterSeq = scope.afterSeq;
+    if (
+      tailEvents === undefined &&
+      scope.maxEventCount !== undefined &&
+      Number.isFinite(scope.maxEventCount) &&
+      scope.maxEventCount >= 0
+    ) {
+      const eventLimit = Math.floor(scope.maxEventCount);
+      const countRow: { event_count: number | null } | undefined = executeSqliteQueryTakeFirstSync(
+        database.db,
+        db
+          .selectFrom("trajectory_runtime_events")
+          .select((eb) => [eb.fn.countAll<number>().as("event_count")])
+          .where("session_id", "=", scope.sessionId)
+          .$if(afterSeq !== undefined && Number.isFinite(afterSeq), (query) =>
+            query.where("seq", ">", Math.floor(afterSeq!)),
+          ),
+      );
+      const eventCount = countRow?.event_count ?? 0;
+      if (eventCount > eventLimit) {
+        throw new Error(
+          `Trajectory runtime store has too many events to export (${eventCount}; limit ${eventLimit})`,
+        );
+      }
+    }
+    if (
+      scope.maxEventBytes !== undefined &&
+      Number.isFinite(scope.maxEventBytes) &&
+      scope.maxEventBytes >= 0 &&
+      tailEvents === undefined
+    ) {
+      const budget = Math.floor(scope.maxEventBytes);
+      const aggregate: { total_bytes: number | null } | undefined = executeSqliteQueryTakeFirstSync(
+        database.db,
+        db
+          .selectFrom("trajectory_runtime_events")
+          .select(
+            /* kysely-allow-raw: byte budget uses metadata-only octet length (casting to BLOB loads overflow payloads) plus a per-row JSONL separator to match file-path stat.size. */
+            sql<number>`COALESCE(SUM(OCTET_LENGTH(event_json)), 0)
+              + COUNT(*)`.as("total_bytes"),
+          )
+          .where("session_id", "=", scope.sessionId)
+          .$if(afterSeq !== undefined && Number.isFinite(afterSeq), (query) =>
+            query.where("seq", ">", Math.floor(afterSeq!)),
+          ),
+      );
+      const totalBytes = aggregate?.total_bytes ?? 0;
+      if (totalBytes > budget) {
+        throw new Error(
+          `Trajectory runtime store is too large to export (${totalBytes} bytes; limit ${budget})`,
+        );
+      }
+    }
     let query = db
       .selectFrom("trajectory_runtime_events")
       .select(["seq", "event_json"])
       .where("session_id", "=", scope.sessionId)
       .orderBy("seq", tailEvents === undefined ? "asc" : "desc");
-    const afterSeq = scope.afterSeq;
     if (afterSeq !== undefined && Number.isFinite(afterSeq)) {
       query = query.where("seq", ">", Math.floor(afterSeq));
     }

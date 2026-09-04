@@ -314,6 +314,117 @@ describe("SQLite trajectory runtime store", () => {
   }
 });
 
+describe("SQLite trajectory runtime reader byte and count budgets", () => {
+  let tempDir: string;
+  let storePath: string;
+
+  beforeEach(async () => {
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-trajectory-sqlite-"));
+    storePath = path.join(tempDir, "agents", "main", "sessions", "sessions.json");
+    await replaceSessionEntry(
+      { sessionKey: "agent:main:session-1", storePath },
+      { sessionId: "session-1", updatedAt: 10 },
+    );
+  });
+
+  afterEach(() => {
+    closeOpenClawAgentDatabasesForTest();
+    closeOpenClawStateDatabaseForTest();
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  it("rejects oversized SQLite runtime store rows before parsing them", () => {
+    appendSqliteTrajectoryRuntimeEvents({ sessionId: "session-1", storePath }, [
+      createTrajectoryEvent({ seq: 1, type: "budget-row-1", payloadSize: 256 }),
+      createTrajectoryEvent({ seq: 2, type: "budget-row-2", payloadSize: 256 }),
+    ]);
+
+    expect(() =>
+      loadSqliteTrajectoryRuntimeEventRowsSync({
+        sessionId: "session-1",
+        storePath,
+        maxEventBytes: 64,
+      }),
+    ).toThrow(/runtime store is too large to export/u);
+  });
+
+  it("rejects SQLite runtime store event count before parsing rows", () => {
+    appendSqliteTrajectoryRuntimeEvents({ sessionId: "session-1", storePath }, [
+      createTrajectoryEvent({ seq: 1, type: "count-row-1" }),
+      createTrajectoryEvent({ seq: 2, type: "count-row-2" }),
+    ]);
+
+    expect(() =>
+      loadSqliteTrajectoryRuntimeEventRowsSync({
+        sessionId: "session-1",
+        storePath,
+        maxEventCount: 1,
+      }),
+    ).toThrow(/runtime store has too many events to export/u);
+  });
+
+  it("accepts a SQLite runtime event-count budget equal to the row count and rejects one over", () => {
+    appendSqliteTrajectoryRuntimeEvents({ sessionId: "session-1", storePath }, [
+      createTrajectoryEvent({ seq: 1, type: "boundary-row-1" }),
+      createTrajectoryEvent({ seq: 2, type: "boundary-row-2" }),
+    ]);
+
+    expect(
+      loadSqliteTrajectoryRuntimeEventRowsSync({
+        sessionId: "session-1",
+        storePath,
+        maxEventCount: 2,
+      }).length,
+    ).toBe(2);
+    expect(() =>
+      loadSqliteTrajectoryRuntimeEventRowsSync({
+        sessionId: "session-1",
+        storePath,
+        maxEventCount: 1,
+      }),
+    ).toThrow(/runtime store has too many events to export/u);
+  });
+
+  it("counts JSONL row separators in the runtime byte budget", () => {
+    const events: TrajectoryEvent[] = [];
+    const ROWS = 50;
+    for (let i = 0; i < ROWS; i += 1) {
+      events.push({
+        traceSchema: "openclaw-trajectory",
+        schemaVersion: 1,
+        traceId: "session-1",
+        source: "runtime",
+        type: "sqlite-runtime",
+        ts: "2026-04-01T05:46:41.000Z",
+        seq: i + 1,
+        sourceSeq: i + 1,
+        sessionId: "session-1",
+        data: { payload: "s" },
+      });
+    }
+    appendSqliteTrajectoryRuntimeEvents({ sessionId: "session-1", storePath }, [...events]);
+    const rawSum = events.reduce(
+      (total, event) => total + Buffer.byteLength(JSON.stringify(event), "utf8"),
+      0,
+    );
+    const jsonlSize = rawSum + ROWS;
+    expect(() =>
+      loadSqliteTrajectoryRuntimeEventRowsSync({
+        sessionId: "session-1",
+        storePath,
+        maxEventBytes: rawSum,
+      }),
+    ).toThrow(/runtime store is too large to export/u);
+    expect(
+      loadSqliteTrajectoryRuntimeEventRowsSync({
+        sessionId: "session-1",
+        storePath,
+        maxEventBytes: jsonlSize,
+      }).length,
+    ).toBe(ROWS);
+  });
+});
+
 function createTrajectoryEvent(options: {
   payloadSize?: number;
   runId?: string;
