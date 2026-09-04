@@ -120,6 +120,24 @@ describe("scheduled task runtime derivation", () => {
     });
   });
 
+  it("treats not-yet-run result code (0x41303) as unknown, not stopped", async () => {
+    await expect(
+      readRuntimeFromQueryOutput(taskQueryOutput(["Status: Ready", "Last Run Result: 0x41303"])),
+    ).resolves.toMatchObject({
+      status: "unknown",
+      detail: "Task Last Run Result=0x41303; task has not run yet.",
+    });
+  });
+
+  it("treats not-yet-run decimal result code (267011) as unknown, not stopped", async () => {
+    await expect(
+      readRuntimeFromQueryOutput(taskQueryOutput(["Status: Ready", "Last Run Result: 267011"])),
+    ).resolves.toMatchObject({
+      status: "unknown",
+      detail: "Task Last Run Result=267011; task has not run yet.",
+    });
+  });
+
   it("detects running via result code when status is localized (German)", async () => {
     await expect(
       readRuntimeFromQueryOutput(

@@ -95,12 +95,19 @@ function deriveScheduledTaskRuntimeStatus(parsed: ScheduledTaskInfo): {
 } {
   const normalizedResult = normalizeTaskResultCode(parsed.lastRunResult);
   if (normalizedResult != null) {
-    return RUNNING_RESULT_CODES.has(normalizedResult)
-      ? { status: "running" }
-      : {
-          status: "stopped",
-          detail: `Task Last Run Result=${parsed.lastRunResult}; treating as not running.`,
-        };
+    if (RUNNING_RESULT_CODES.has(normalizedResult)) {
+      return { status: "running" };
+    }
+    if (NOT_YET_RUN_RESULT_CODES.has(normalizedResult)) {
+      return {
+        status: "unknown",
+        detail: `Task Last Run Result=${parsed.lastRunResult}; task has not run yet.`,
+      };
+    }
+    return {
+      status: "stopped",
+      detail: `Task Last Run Result=${parsed.lastRunResult}; treating as not running.`,
+    };
   }
   return parsed.status?.trim()
     ? { status: "unknown", detail: UNKNOWN_STATUS_DETAIL }
