@@ -638,7 +638,7 @@ export async function resolveIMessageInboundDecision(params: {
       params.logVerbose?.(
         `imessage: skipping echo message${inboundMessageId ? ` id=${inboundMessageId}` : ""}`,
       );
-      return { kind: "drop", reason: "echo" };
+      return { kind: "drop", reason: hasReplyToEcho ? "self-chat echo" : "echo" };
     }
   }
 
