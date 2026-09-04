@@ -619,7 +619,7 @@ async function compactResolvedContextEngine(
   });
   const contextEngineOwnsCompaction = contextEngine.info.ownsCompaction === true;
   let requiredPreflightNativeCapabilityUsed = false;
-  const harnessResult =
+  const rawHarnessResult =
     attemptNativeHarnessCompaction &&
     !transcriptBytePreflightAuthority &&
     (!contextEngineOwnsCompaction || lockedNativeHarness)
@@ -649,6 +649,21 @@ async function compactResolvedContextEngine(
           );
         })
       : undefined;
+  // `nativeHarnessBindingRecoveryReason` is an owner-minted authorization marker:
+  // the turn layer treats its mere presence as license to safe-continue a required
+  // preflight (`isNativeHarnessBindingRecoverySkip`). Only the explicit stamp below
+  // may set it, and the harness result is the one value returned here that is
+  // spread verbatim, so strip any marker it carries before a return path can hand
+  // the turn layer a forged skip (#119977). The context-engine returns below cannot
+  // carry it: `deferOwningContextEngineBudgetCompaction` and
+  // `executeQueuedContextEngineCompaction` both reconstruct their result field by
+  // field rather than spreading the plugin result. No production harness sets it —
+  // this keeps that impossible by construction.
+  let harnessResult = rawHarnessResult;
+  if (harnessResult?.nativeHarnessBindingRecoveryReason !== undefined) {
+    const { nativeHarnessBindingRecoveryReason: _forged, ...sanitized } = harnessResult;
+    harnessResult = sanitized;
+  }
   // A model-locked native harness is terminal: it has no context-engine
   // credentials, so a recoverable binding failure must never fall through to the
   // generic engine (that route fails and drops the turn, #119977). Stamp the typed

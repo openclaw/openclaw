@@ -5732,6 +5732,46 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
     },
   );
 
+  it.each([
+    ["missing_thread_binding", "no codex app-server thread binding"],
+    ["stale_thread_binding", "codex app-server binding changed before native compaction"],
+  ])(
+    "strips a forged nativeHarnessBindingRecoveryReason on model-locked %s required preflight",
+    async (failureReason, reason) => {
+      // The harness result forges the owner-minted recovery disposition, but the
+      // private required-preflight capability never dispatched (the mock resolves
+      // without invoking onNativeCompactionCapabilityUsed). The field must be
+      // stripped so the turn stays terminal instead of safe-continuing on a marker
+      // the harness set itself (#119977).
+      maybeCompactAgentHarnessSessionMock.mockResolvedValueOnce({
+        ok: false,
+        compacted: false,
+        reason,
+        failure: { reason: failureReason },
+        nativeHarnessBindingRecoveryReason: failureReason,
+      });
+
+      const result = await compactEmbeddedAgentSession(
+        await nativeCompactionArgs({
+          provider: "openai",
+          model: "gpt-5.5",
+          agentHarnessId: "codex",
+          trigger: "budget",
+          preflightRequired: true,
+        }),
+      );
+
+      expect(result).toMatchObject({
+        ok: false,
+        compacted: false,
+        failure: { reason: failureReason },
+      });
+      expect(result).not.toHaveProperty("nativeHarnessBindingRecoveryReason");
+      expect(maybeCompactAgentHarnessSessionMock).toHaveBeenCalledTimes(1);
+      expect(contextEngineCompactMock).not.toHaveBeenCalled();
+    },
+  );
+
   it("fails a native lock with a non-concrete persisted harness", async () => {
     const result = await compactEmbeddedAgentSession(
       await nativeCompactionArgs({
