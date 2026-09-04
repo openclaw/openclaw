@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import { createTestConfigFileStore } from "../commands/test-runtime-config-helpers.js";
+import type { ConfigWriteOptions } from "../config/io.js";
+import { resolvePersistCandidateForWrite } from "../config/io.write-prepare.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import type { WizardPrompter } from "./prompts.js";
 
@@ -236,6 +238,77 @@ describe("writeWizardConfigFile", () => {
         gateway: { port: 19001 },
         plugins: { entries: { demo: { enabled: true } } },
       },
+    });
+  });
+
+  it("preserves literal nulls added by the wizard", async () => {
+    const base: OpenClawConfig = {
+      plugins: {
+        entries: {
+          demo: {
+            enabled: true,
+            config: { choice: 1, unchangedNull: null, nested: { existing: true } },
+          },
+        },
+      },
+    };
+    const next: OpenClawConfig = {
+      plugins: {
+        entries: {
+          demo: {
+            enabled: true,
+            config: {
+              choice: null,
+              unchangedNull: null,
+              nested: { existing: true, optional: null },
+            },
+          },
+        },
+      },
+    };
+    mocks.currentConfig = {
+      plugins: {
+        entries: {
+          demo: {
+            enabled: true,
+            config: { choice: 1, unchangedNull: "concurrent", nested: { existing: true } },
+          },
+        },
+      },
+      gateway: { port: 19001 },
+    };
+    mocks.transformConfigWithPendingPluginInstalls.mockImplementationOnce(
+      async (params: {
+        transform: (current: OpenClawConfig) => { nextConfig: OpenClawConfig };
+        writeOptions?: ConfigWriteOptions;
+      }) => {
+        const nextConfig = params.transform(mocks.currentConfig).nextConfig;
+        return {
+          nextConfig: resolvePersistCandidateForWrite({
+            runtimeConfig: mocks.currentConfig,
+            sourceConfig: mocks.currentConfig,
+            nextConfig,
+            ...params.writeOptions,
+          }) as OpenClawConfig,
+        };
+      },
+    );
+
+    const committed = await writeWizardConfigFile(next, { mergeBase: base });
+    expect(committed.nextConfig).toEqual({
+      plugins: {
+        entries: {
+          demo: {
+            enabled: true,
+            config: {
+              choice: null,
+              unchangedNull: "concurrent",
+              nested: { existing: true, optional: null },
+            },
+          },
+        },
+      },
+      gateway: { port: 19001 },
     });
   });
 });
