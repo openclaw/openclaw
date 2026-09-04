@@ -5,7 +5,7 @@ import { cronStoreKey } from "../store/key.js";
 import {
   deleteCronJobRowInDatabase,
   loadedCronStoreFromRows,
-  loadCronRows,
+  loadCronRowsByIds,
   upsertCronJobRow,
 } from "../store/row-codec.js";
 import {
@@ -64,7 +64,7 @@ export function commitCronRuntimeRows<T>(params: {
   const jobIds = new Set(params.jobIds);
   const committed = runOpenClawStateWriteTransaction(
     ({ db }) => {
-      const rows = loadCronRows(db, storeKey).filter((row) => jobIds.has(row.job_id));
+      const rows = loadCronRowsByIds(db, storeKey, jobIds);
       const rowsByJobId = new Map(rows.map((row) => [row.job_id, row] as const));
       const loadedJobs = loadedCronStoreFromRows(rows).store.jobs;
       const { repairJobIds } = loadCronRuntimeAuthorities({ db, storeKey, jobs: loadedJobs });

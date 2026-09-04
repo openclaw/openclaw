@@ -213,6 +213,41 @@ export function readCronJobsFingerprint(db: DatabaseSync, storeKey: string): str
   return sha256Hex(JSON.stringify(rows));
 }
 
+/**
+ * Maximum number of job IDs to expand into a single SQLite `IN (...)` predicate.
+ * Mirrors the 500-bind limit used by `session-accessor.sqlite-entry-cache.ts` to
+ * stay below SQLite's variable cap. Larger sets fall back to a full-store scan
+ * filtered in JavaScript, which is the pre-existing behavior.
+ */
+const MAX_CRON_IN_QUERY_IDS = 500;
+
+/** Loads only the rows for the given job IDs, avoiding a full-store scan. */
+export function loadCronRowsByIds(
+  db: DatabaseSync,
+  storeKey: string,
+  jobIds: Iterable<string>,
+): CronJobRow[] {
+  const ids = [...new Set(jobIds)];
+  if (ids.length === 0) {
+    return [];
+  }
+  if (ids.length > MAX_CRON_IN_QUERY_IDS) {
+    const idSet = new Set(ids);
+    return loadCronRows(db, storeKey).filter((row) => idSet.has(row.job_id));
+  }
+  return executeSqliteQuerySync(
+    db,
+    getCronStoreKysely(db)
+      .selectFrom("cron_jobs")
+      .selectAll()
+      .where("store_key", "=", storeKey)
+      .where("job_id", "in", ids)
+      .orderBy("sort_order", "asc")
+      .orderBy("updated_at", "asc")
+      .orderBy("job_id", "asc"),
+  ).rows;
+}
+
 /** Materializes retired ownership within the caller's write transaction. */
 export function materializeCronRowAgentOwners(
   db: DatabaseSync,
