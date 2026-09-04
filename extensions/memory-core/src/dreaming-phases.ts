@@ -1343,7 +1343,9 @@ export async function runDreamingSweepPhases(params: {
         data,
         nowMs: sweepNowMs,
         timezone: config.timezone,
-        model: config.execution?.model,
+        // Line-neutral spread: forwards model + timeoutMs from the execution config
+        // without growing this over-cap file (line-cap ratchet).
+        ...config.execution,
         logger: params.logger,
         runInBackground: params.runInBackground,
       });
