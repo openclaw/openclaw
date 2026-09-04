@@ -263,6 +263,7 @@ const APPROVAL_RUNTIME_METHODS = new Set<string>([
 const AGENT_RUNTIME_IDENTITY_METHODS = new Set<string>([
   "exec.approval.request",
   "plugin.approval.request",
+  "openclaw.chat",
   "wake",
   "cron.list",
   "cron.get",
@@ -476,7 +477,9 @@ async function resolveAgentRuntimeIdentityForGatewayTool(params: {
     try {
       // A request lifetime narrows inherited tool lifetimes; neither may replace the other.
       const approvalSignals =
-        params.method === "exec.approval.request" || params.method === "plugin.approval.request"
+        params.method === "exec.approval.request" ||
+        params.method === "plugin.approval.request" ||
+        params.method === "openclaw.chat"
           ? [...(identity.approvalSignals ?? []), ...(params.signal ? [params.signal] : [])]
           : undefined;
       const approvalAuthority =
@@ -487,6 +490,7 @@ async function resolveAgentRuntimeIdentityForGatewayTool(params: {
         ...identity,
         operationalRunInstance: identity.operationalRunInstance,
         approvalAuthority,
+        fullPermission: params.method === "openclaw.chat" && identity.fullPermission === true,
         ...(lineageHandoff ? { executionIdentityToken: undefined } : {}),
         ...(lineageHandoff
           ? { executionLineageHandoffId: lineageHandoff.id }
