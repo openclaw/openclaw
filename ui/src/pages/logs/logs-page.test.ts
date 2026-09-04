@@ -121,6 +121,25 @@ describe("LogsPage lifecycle", () => {
     expect(scheduleScroll).toHaveBeenCalledWith(true);
   });
 
+  it("does not restart a pending initial load for metadata-only gateway snapshots", async () => {
+    const pending = deferred<{ cursor: number; lines: string[]; reset: boolean }>();
+    const request = vi.fn(() => pending.promise);
+    const client = { request } as unknown as GatewayBrowserClient;
+    const page = document.createElement("openclaw-logs-page") as TestLogsPage;
+    const context = contextWithClient(client, true);
+    page.context = context;
+    document.body.append(page);
+    await page.updateComplete;
+    await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
+
+    context.gateway.publish({ client, phase: "connected" } as ApplicationGatewaySnapshot);
+    await Promise.resolve();
+
+    expect(request).toHaveBeenCalledOnce();
+    pending.resolve({ cursor: 1, lines: ["initial"], reset: true });
+    await vi.waitFor(() => expect(page.logsEntries).toHaveLength(1));
+  });
+
   it("discards a log response from a replaced gateway source that reuses its client", async () => {
     const pending = deferred<{ cursor: number; lines: string[]; reset: boolean }>();
     const client = {
