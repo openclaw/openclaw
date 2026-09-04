@@ -92,7 +92,7 @@ const CHANNEL_MESSAGE_ACTION_DEFINITIONS = [
     ...RETRIEVAL,
     readPolicy: { kind: "conversation-read", targetlessCache: "bundled-current-context" },
   },
-  { name: "dice", ...TARGETED_ACTION },
+  { name: "dice", ...GUARDED_ACTION },
   { name: "member-info", ...RETRIEVAL },
   { name: "role-info", ...RETRIEVAL },
   { name: "emoji-list", ...RETRIEVAL },
