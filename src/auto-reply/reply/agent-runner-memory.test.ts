@@ -1637,7 +1637,7 @@ describe("runMemoryFlushIfNeeded", () => {
     ).toBeUndefined();
   });
 
-  it("skips memory flush for CLI providers", async () => {
+  it("runs memory flush for CLI providers", async () => {
     const registry = createEmptyPluginRegistry();
     registry.cliBackends.push({
       pluginId: "test-codex-cli",
@@ -1668,8 +1668,10 @@ describe("runMemoryFlushIfNeeded", () => {
       replyOperation: createReplyOperation(),
     });
 
-    expect(result).toEqual({ sessionEntry, outcome: "skipped" });
-    expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
+    // CLI backends used to be excluded outright. They now attempt the flush;
+    // resolveCliMemoryFlushRearmBucket keeps the dedup honest for them.
+    expect(result.outcome).not.toBe("skipped");
+    expect(runEmbeddedAgentMock).toHaveBeenCalled();
   });
 
   it("skips memory flush for incognito sessions", async () => {
@@ -1706,7 +1708,7 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
   });
 
-  it("skips memory flush for compatible CLI session runtime pins", async () => {
+  it("runs memory flush for compatible CLI session runtime pins", async () => {
     registerClaudeCliBackend();
     const sessionEntry: SessionEntry = {
       sessionId: "session",
@@ -1735,8 +1737,8 @@ describe("runMemoryFlushIfNeeded", () => {
       replyOperation: createReplyOperation(),
     });
 
-    expect(result).toEqual({ sessionEntry, outcome: "skipped" });
-    expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
+    expect(result.outcome).not.toBe("skipped");
+    expect(runEmbeddedAgentMock).toHaveBeenCalled();
   });
 
   it.each([
