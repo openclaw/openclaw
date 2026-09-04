@@ -31,6 +31,7 @@ import {
 } from "./lib/managed-child-process.mts";
 import { parsePositiveInt } from "./lib/numeric-options.mjs";
 import { assertRealOutputRoot } from "./lib/output-root-guard.mjs";
+import { sanitizeBundlerHelperDtsExportTree } from "./lib/sanitize-bundler-helper-dts-exports.mts";
 import {
   TSDOWN_PACKAGE_CONFIG_GROUP,
   TSDOWN_UNIFIED_CONFIG_GROUP,
@@ -560,6 +561,12 @@ export function resolveTsdownCleanOutputRoots(args: string[] = []) {
     return [aiRoot, ...selectedMainRoots];
   }
   return listTsdownOutputRoots();
+}
+
+export function sanitizeTsdownBuildOutputRoots(args: string[] = [], cwd = process.cwd()): void {
+  for (const root of resolveTsdownCleanOutputRoots(args)) {
+    sanitizeBundlerHelperDtsExportTree(path.resolve(cwd, root));
+  }
 }
 
 function wrapperOwnsTsdownCleanup(args: string[]) {
@@ -1886,28 +1893,43 @@ export async function executeTsdownBuildPlan(
   return 1;
 }
 
-export async function runTsdownBuild(argv: string[] = process.argv.slice(2)): Promise<number> {
+export async function runTsdownBuild(
+  argv: string[] = process.argv.slice(2),
+  options: {
+    cwd?: string;
+    executeBuild?: (forwardedArgs: string[]) => Promise<number>;
+  } = {},
+): Promise<number> {
   const args = parseTsdownBuildArgs(argv);
   if (args.help) {
     console.log(tsdownBuildUsage());
     return 0;
   }
-  const plan = prepareTsdownBuildExecution(
-    { args: args.forwardedArgs },
-    {
-      reportShortfall(shortfall) {
-        if (shortfall.fatal) {
-          console.error(shortfall.message);
-        } else {
-          console.warn(shortfall.message);
-        }
+  let code: number;
+  if (options.executeBuild) {
+    code = await options.executeBuild(args.forwardedArgs);
+  } else {
+    const plan = prepareTsdownBuildExecution(
+      { args: args.forwardedArgs },
+      {
+        reportShortfall(shortfall) {
+          if (shortfall.fatal) {
+            console.error(shortfall.message);
+          } else {
+            console.warn(shortfall.message);
+          }
+        },
       },
-    },
-  );
-  if (!plan) {
-    return 1;
+    );
+    if (!plan) {
+      return 1;
+    }
+    code = await executeTsdownBuildPlan(plan);
   }
-  return executeTsdownBuildPlan(plan);
+  if (code === 0) {
+    sanitizeTsdownBuildOutputRoots(args.forwardedArgs, options.cwd);
+  }
+  return code;
 }
 
 if (isDirectRunUrl(process.argv[1], import.meta.url)) {
