@@ -1,6 +1,7 @@
 // Detects Windows console/OEM code pages and decodes console output encodings.
 import { spawnSync } from "node:child_process";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import iconv from "iconv-lite";
 import { resolveDiagnosticProcessEnv } from "./process-env.js";
 import { getWindowsCmdExePath, queryWindowsRegistryValue } from "./windows-install-roots.js";
 
@@ -82,12 +83,14 @@ export function resolveWindowsConsoleEncoding(): string | null {
   if (cachedWindowsConsoleEncoding !== undefined) {
     return cachedWindowsConsoleEncoding;
   }
-  cachedWindowsConsoleEncoding = probeWindowsEncoding(getWindowsCmdExePath, [
-    "/d",
-    "/s",
-    "/c",
-    "chcp",
-  ]);
+  // Consoles outside East Asia default to an OEM page (850 on Spanish and
+  // German hosts). Those pages are absent from the ANSI map, and Node ICU
+  // cannot decode their cp### labels; decoding falls through to iconv-lite.
+  cachedWindowsConsoleEncoding = probeWindowsEncoding(
+    getWindowsCmdExePath,
+    ["/d", "/s", "/c", "chcp"],
+    WINDOWS_OEM_CODEPAGE_ENCODING_MAP,
+  );
   return cachedWindowsConsoleEncoding;
 }
 
@@ -106,7 +109,11 @@ function resolveWindowsSystemEncoding(): string | null {
   return cachedWindowsSystemEncoding;
 }
 
-function probeWindowsEncoding(command: () => string, args: string[]): string | null {
+function probeWindowsEncoding(
+  command: () => string,
+  args: string[],
+  fallbackEncodingMap?: Record<number, string>,
+): string | null {
   try {
     const result = spawnSync(command(), args, {
       env: resolveDiagnosticProcessEnv(),
@@ -117,7 +124,10 @@ function probeWindowsEncoding(command: () => string, args: string[]): string | n
       timeout: WINDOWS_ENCODING_PROBE_TIMEOUT_MS,
     });
     const codePage = parseWindowsCodePage(`${result.stdout ?? ""}\n${result.stderr ?? ""}`);
-    return codePage !== null ? (WINDOWS_CODEPAGE_ENCODING_MAP[codePage] ?? null) : null;
+    if (codePage === null) {
+      return null;
+    }
+    return WINDOWS_CODEPAGE_ENCODING_MAP[codePage] ?? fallbackEncodingMap?.[codePage] ?? null;
   } catch {
     return null;
   }
@@ -206,10 +216,35 @@ function decodeWindowsBufferWithFallback(params: {
     return params.buffer.toString("utf8");
   }
   try {
-    return new TextDecoder(encoding).decode(params.buffer);
+    return (
+      createLegacyTextDecoder(encoding)?.decode(params.buffer) ?? params.buffer.toString("utf8")
+    );
   } catch {
     return params.buffer.toString("utf8");
   }
+}
+
+type LegacyTextDecoder = {
+  decode(buffer?: Buffer, options?: { stream?: boolean }): string;
+};
+
+/** Decoder for one legacy code page: Node ICU when it knows the label, iconv-lite for OEM pages. */
+function createLegacyTextDecoder(encoding: string): LegacyTextDecoder | null {
+  try {
+    return new TextDecoder(encoding);
+  } catch {
+    // Not a WHATWG label. ICU has no cp437/cp850-style OEM pages at all.
+  }
+  if (!iconv.encodingExists(encoding)) {
+    return null;
+  }
+  const decoder = iconv.getDecoder(encoding);
+  return {
+    decode(buffer, options) {
+      const text = buffer && buffer.length > 0 ? decoder.write(buffer) : "";
+      return options?.stream ? text : `${text}${decoder.end() ?? ""}`;
+    },
+  };
 }
 
 /** Creates a streaming decoder for subprocess output chunks that may split multibyte characters. */
@@ -227,10 +262,11 @@ export function createWindowsOutputDecoder(params?: {
   const normalizedEncoding = normalizeLowercaseStringOrEmpty(encoding);
   const legacyDecoder =
     platform === "win32" && encoding && normalizedEncoding !== "utf-8"
-      ? new TextDecoder(encoding)
+      ? createLegacyTextDecoder(encoding)
       : null;
   const preserveUtf8Bom = params?.preserveUtf8Bom === true;
-  let decoder = new TextDecoder(
+  // Starts as strict UTF-8, then becomes the OEM/ANSI decoder after invalid UTF-8.
+  let decoder: LegacyTextDecoder = new TextDecoder(
     "utf-8",
     legacyDecoder
       ? {
