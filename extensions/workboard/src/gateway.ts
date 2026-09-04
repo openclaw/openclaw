@@ -39,7 +39,8 @@ export function registerWorkboardGatewayMethods(params: {
   store?: WorkboardStore;
 }) {
   const { api } = params;
-  const store = params.store ?? WorkboardStore.openSqlite();
+  const store =
+    params.store ?? WorkboardStore.openSqlite({ worktrees: params.api.runtime.worktrees });
   const dispatchCards = createWorkboardDispatchHandler({
     api,
     store,

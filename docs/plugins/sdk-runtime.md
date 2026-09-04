@@ -626,6 +626,29 @@ snapshots; OpenClaw owns all persistence and lifecycle coordination.
     confines; wildcard prefixes do not prove tool ownership.
 
   </Accordion>
+  <Accordion title="api.runtime.worktrees">
+    Manage Workboard-owned Git worktrees without importing core worktree internals.
+
+    When a card persists a local artifact inside its managed worktree, activate a durable
+    retention claim before committing that artifact reference. Deactivate the same stable
+    claim id after the reference is removed, archived, or replaced by an external URL:
+
+    ```typescript
+    const retained = await api.runtime.worktrees.setRetentionClaim({
+      path: workspace.path,
+      ownerKind: "workboard",
+      ownerId: card.id,
+      claimId: "persisted-local-artifacts",
+      active: true,
+    });
+    ```
+
+    The call returns `false` when the path is not a live managed worktree owned by that
+    card. Active claims survive Gateway restarts and protect the worktree from automatic
+    run-end, idle, count, and size cleanup. They do not prevent an explicit operator removal.
+    Claim ids are idempotent within a worktree; reuse the same id for deactivation.
+
+  </Accordion>
   <Accordion title="api.runtime.nodes">
     List connected nodes and invoke a node-host command from Gateway-loaded plugin code or from plugin CLI commands. Use this when a plugin owns local work on a paired device, for example a browser or audio bridge on another Mac.
 

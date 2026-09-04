@@ -9,9 +9,12 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
+import { findWorktreeRetentionClaimId } from "./registry-retention.js";
+import { ensureWorktreeRetentionClaimsSchema } from "./retention-schema.js";
 import {
   collectLiveRunLeases,
   WORKTREE_REMOVING_LEASE_KEY,
+  worktreeRunLeaseScope,
   type RunLeaseOwnerChecks,
 } from "./run-lease-owner.js";
 import type {
@@ -20,6 +23,12 @@ import type {
   ManagedWorktreeRunEndCleanup,
   ProvisionedFileState,
 } from "./types.js";
+
+export {
+  deleteRegistryWorktree,
+  hasWorktreeRetentionClaimRow,
+  setWorktreeRetentionClaimRow,
+} from "./registry-retention.js";
 
 type WorktreesTable = OpenClawStateKyselyDatabase["worktrees"];
 type WorktreeRow = Selectable<WorktreesTable>;
@@ -353,6 +362,21 @@ export function findLiveRegistryWorktreeByPath(
   return row ? rowToRecord(row) : undefined;
 }
 
+export function findRegistryWorktreeByPath(
+  env: NodeJS.ProcessEnv,
+  worktreePath: string,
+): ManagedWorktreeRecord | undefined {
+  const db = dbFor(env);
+  const query = kyselyFor(db)
+    .selectFrom("worktrees")
+    .selectAll()
+    .where("path", "=", worktreePath)
+    .orderBy("created_at", "desc")
+    .limit(1);
+  const row = executeSqliteQuerySync(db, query).rows[0];
+  return row ? rowToRecord(row) : undefined;
+}
+
 export function findLiveRegistryWorktreeByOwner(
   env: NodeJS.ProcessEnv,
   ownerKind: ManagedWorktreeOwnerKind,
@@ -437,21 +461,6 @@ export function updateRegistryWorktree(
   });
 }
 
-export function deleteRegistryWorktree(env: NodeJS.ProcessEnv, id: string): void {
-  const db = dbFor(env);
-  runOpenClawStateWriteTransaction(() => {
-    executeSqliteQuerySync(
-      db,
-      kyselyProvisionedFor(db)
-        .deleteFrom("worktree_provisioned_file_chunks")
-        .where("worktree_id", "=", id),
-    );
-    executeSqliteQuerySync(db, kyselyFor(db).deleteFrom("worktrees").where("id", "=", id));
-  });
-}
-
-const WORKTREE_RUN_LEASE_SCOPE_PREFIX = "worktree-run:";
-
 export class WorktreeRemovalContentionError extends Error {
   constructor(
     readonly kind: "busy" | "finalized",
@@ -460,10 +469,6 @@ export class WorktreeRemovalContentionError extends Error {
     super(message);
     this.name = "WorktreeRemovalContentionError";
   }
-}
-
-function worktreeRunLeaseScope(worktreeId: string): string {
-  return `${WORKTREE_RUN_LEASE_SCOPE_PREFIX}${worktreeId}`;
 }
 
 export function admitWorktreeRunLeaseRow(
@@ -539,8 +544,12 @@ export function claimWorktreeRemovalRow(
     startTime: number | null;
     now: number;
     checks?: RunLeaseOwnerChecks;
+    respectRetentionClaims?: boolean;
   },
 ): void {
+  if (params.respectRetentionClaims) {
+    ensureWorktreeRetentionClaimsSchema(env);
+  }
   runOpenClawStateWriteTransaction(
     (database) => {
       const db = database.db;
@@ -558,6 +567,15 @@ export function claimWorktreeRemovalRow(
           "finalized",
           `managed worktree was removed: ${record?.path ?? params.worktreeId}`,
         );
+      }
+      if (params.respectRetentionClaims) {
+        const retentionClaimId = findWorktreeRetentionClaimId(db, params.worktreeId);
+        if (retentionClaimId !== undefined) {
+          throw new WorktreeRemovalContentionError(
+            "busy",
+            `worktree is retained by durable claim ${retentionClaimId}`,
+          );
+        }
       }
       const { livePids, removingToken } = collectLiveRunLeases(db, k, scope, params.checks ?? {});
       if (livePids.length > 0) {
