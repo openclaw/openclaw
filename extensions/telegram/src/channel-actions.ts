@@ -42,6 +42,7 @@ const telegramMessageActionRuntime = {
 
 const TELEGRAM_MESSAGE_ACTION_MAP = {
   delete: "deleteMessage",
+  dice: "sendDice",
   edit: "editMessage",
   "emoji-list": "emoji-list",
   poll: "poll",
@@ -64,7 +65,9 @@ const TELEGRAM_TOOL_DELIVERY_ACTIONS = new Set([
   "react",
   "send",
   "sendMessage",
+  "sendDice",
   "sendSticker",
+  "dice",
   "sticker",
   "topic-create",
   "topic-edit",
@@ -174,6 +177,9 @@ function describeTelegramMessageTool({
   const actions = new Set<ChannelMessageActionName>();
   if (discovery.isEnabled("sendMessage")) {
     actions.add("send");
+    // A roll is an ordinary outbound message to a chat the bot may already post in, so it
+    // rides the send gate instead of a dedicated toggle.
+    actions.add("dice");
   }
   if (discovery.pollEnabled) {
     actions.add("poll");
