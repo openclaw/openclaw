@@ -886,6 +886,7 @@ export async function runExecProcess({
         workdir: opts.containerWorkdir ?? opts.sandbox.containerWorkdir,
         env: shellRuntimeEnv,
         usePty: opts.usePty,
+        signal: startupSignal,
       });
       sandboxFinalizeToken = backendExecSpec.finalizeToken;
       // Cleanup ownership transfers only after buildExecSpec resolves: moving this earlier can
