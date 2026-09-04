@@ -18,6 +18,22 @@ const restartLogMocks = vi.hoisted(() => ({
   resolveGatewayRestartLogPath: vi.fn<() => string>(() => "/tmp/gateway-restart.log"),
 }));
 
+const launchdStdioMocks = vi.hoisted(() => ({
+  readPersistedLaunchdStderrPath: vi.fn(() => "/Users/test/Library/Logs/openclaw/gateway.err.log"),
+}));
+
+vi.mock("../../daemon/launchd-stdio.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../daemon/launchd-stdio.js")>();
+  return {
+    ...actual,
+    readPersistedLaunchdStderrPath: launchdStdioMocks.readPersistedLaunchdStderrPath,
+    resolveAdvertisedLaunchdStderr: (persistedStderrPath: string | null) =>
+      !persistedStderrPath || persistedStderrPath === "/dev/null"
+        ? { kind: "suppressed" as const }
+        : { kind: "file" as const, path: persistedStderrPath },
+  };
+});
+
 const gatewayMocks = vi.hoisted(() => ({
   readFileTailLines: vi.fn<(filePath: string, maxLines: number) => Promise<string[]>>(
     async () => [],
@@ -104,6 +120,9 @@ describe("status-all diagnosis port checks", () => {
     restartLogMocks.resolveGatewayRestartLogPath.mockReturnValue("/tmp/gateway-restart.log");
     gatewayMocks.readFileTailLines.mockResolvedValue([]);
     gatewayMocks.summarizeLogTail.mockImplementation((lines: string[]) => lines);
+    launchdStdioMocks.readPersistedLaunchdStderrPath
+      .mockReset()
+      .mockReturnValue("/Users/test/Library/Logs/openclaw/gateway.err.log");
   });
 
   it("retains queue warnings from a successful gateway health snapshot", async () => {
@@ -534,7 +553,7 @@ describe("status-all diagnosis port checks", () => {
     expect(output).not.toContain("Retry: openclaw gateway stability");
   });
 
-  it("does not read or display stale stderr tails on Darwin", async () => {
+  it("reads Darwin supervisor stderr after launchd writes gateway.err.log", async () => {
     const originalPlatform = process.platform;
     Object.defineProperty(process, "platform", { value: "darwin" });
     try {
@@ -551,7 +570,7 @@ describe("status-all diagnosis port checks", () => {
           return ["gateway stdout current"];
         }
         if (filePath.endsWith("gateway.err.log")) {
-          return ["failed to bind gateway socket stale"];
+          return ["failed to bind gateway socket EADDRINUSE"];
         }
         return [];
       });
@@ -560,14 +579,14 @@ describe("status-all diagnosis port checks", () => {
       await appendStatusAllDiagnosis(params);
 
       const output = params.lines.join("\n");
-      expect(gatewayMocks.readFileTailLines).not.toHaveBeenCalledWith(
+      expect(gatewayMocks.readFileTailLines).toHaveBeenCalledWith(
         "/Users/test/Library/Logs/openclaw/gateway.err.log",
         40,
       );
+      expect(output).toContain("# stderr: /Users/test/Library/Logs/openclaw/gateway.err.log");
+      expect(output).toContain("failed to bind gateway socket EADDRINUSE");
       expect(output).toContain("# stdout: /Users/test/Library/Logs/openclaw/gateway.log");
       expect(output).toContain("gateway stdout current");
-      expect(output).not.toContain("# stderr:");
-      expect(output).not.toContain("failed to bind gateway socket stale");
     } finally {
       Object.defineProperty(process, "platform", { value: originalPlatform });
     }

@@ -21,6 +21,18 @@ vi.mock("./restart-logs.js", () => ({
   resolveGatewayRestartLogPath: resolveGatewayRestartLogPathMock,
 }));
 
+const readPersistedLaunchdStderrPathMock = vi.fn(
+  () => "C:\\Users\\test\\Library\\Logs\\openclaw\\gateway.err.log",
+);
+
+vi.mock("./launchd-stdio.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./launchd-stdio.js")>();
+  return {
+    ...actual,
+    readPersistedLaunchdStderrPath: readPersistedLaunchdStderrPathMock,
+  };
+});
+
 let buildPlatformRuntimeLogHints: typeof import("./runtime-hints.js").buildPlatformRuntimeLogHints;
 
 describe("buildPlatformRuntimeLogHints", () => {
@@ -37,7 +49,7 @@ describe("buildPlatformRuntimeLogHints", () => {
       }),
     ).toEqual([
       "Launchd stdout (if installed): /Users/test/Library/Logs/openclaw/gateway.log",
-      "Launchd stderr (if installed): suppressed",
+      "Launchd stderr (if installed): /Users/test/Library/Logs/openclaw/gateway.err.log",
       "Restart attempts: /tmp/openclaw-state/logs/gateway-restart.log",
     ]);
   });

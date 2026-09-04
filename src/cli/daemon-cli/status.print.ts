@@ -8,6 +8,11 @@ import {
 import { formatGatewayHeapLimitReport } from "../../daemon/gateway-heap.js";
 import { renderGatewayServiceCleanupHints } from "../../daemon/inspect.js";
 import {
+  formatLaunchdStderrRewriteGuidance,
+  resolveAdvertisedLaunchdStderr,
+  readPersistedLaunchdStderrPath,
+} from "../../daemon/launchd-stdio.js";
+import {
   resolveGatewayRestartLogPath,
   resolveGatewaySupervisorLogPaths,
 } from "../../daemon/restart-logs.js";
@@ -535,8 +540,17 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
       );
     } else if (process.platform === "darwin") {
       const logs = resolveGatewaySupervisorLogPaths(serviceEnv, { platform: "darwin" });
+      const advertisedStderr = resolveAdvertisedLaunchdStderr(
+        readPersistedLaunchdStderrPath(serviceEnv),
+      );
       defaultRuntime.error(`${errorText("Logs:")} ${shortenHomePath(logs.stdoutPath)}`);
-      defaultRuntime.error(`${errorText("Errors:")} suppressed`);
+      if (advertisedStderr.kind === "file") {
+        defaultRuntime.error(`${errorText("Errors:")} ${shortenHomePath(advertisedStderr.path)}`);
+      } else {
+        defaultRuntime.error(
+          `${errorText("Errors:")} suppressed (/dev/null). ${formatLaunchdStderrRewriteGuidance(serviceEnv)}`,
+        );
+      }
     }
     defaultRuntime.error(
       `${errorText("Restart log:")} ${shortenHomePath(resolveGatewayRestartLogPath(serviceEnv))}`,
