@@ -76,7 +76,7 @@ describe("renderChatComposer context usage", () => {
       container.querySelector(".context-ring")?.classList.contains("context-ring--warning"),
     ).toBe(true);
     expect(container.querySelector(".context-usage__title")?.textContent?.trim()).toBe(
-      "Context before compaction",
+      "Before compaction",
     );
   });
 
