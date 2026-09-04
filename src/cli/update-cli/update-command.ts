@@ -56,27 +56,25 @@ import { VERSION } from "../../version.js";
 import { resolveCliName } from "../cli-name.js";
 import { createUpdateProgress } from "./progress.js";
 import {
-  checkTargetDatabaseSchemas,
-  formatSchemaRefusalLines,
-  hasSchemaRefusal,
-} from "./schema-preflight.js";
-import {
   DEFAULT_PACKAGE_NAME,
   createGlobalCommandRunner,
   normalizeTag,
   parseTimeoutMsOrExit,
   readPackageName,
   readPackageVersion,
+  resolveGitInstallDir,
   resolveGlobalManager,
   resolveNodeRunner,
   resolveTargetVersion,
   resolveUpdateRoot,
   tryResolveInvocationCwd,
+  UpdatePreMutationError,
   type UpdateCommandOptions,
 } from "./shared.js";
 import { suppressDeprecations } from "./suppress-deprecations.js";
 import { maybeRepairLegacyConfigForUpdateChannel } from "./update-command-config.js";
 import { printUpdateDryRun } from "./update-command-dry-run.js";
+import { withOwnedManagedUpdateEnv } from "./update-command-managed-context.js";
 import { reportPreMutationUpdateFailure, UpdateCommandFailure } from "./update-command-result.js";
 import { resolveServiceRefreshEnv, withUpdateInProgressEnv } from "./update-command-service-env.js";
 import {
@@ -529,14 +527,35 @@ async function updateCommandInternal(
     }
   }
 
-  const packageSchemaPreflight = checkTargetDatabaseSchemas(packageTargetSchemaVersions);
-  if (!opts.dryRun && hasSchemaRefusal(packageSchemaPreflight)) {
-    await refuseUpdate(
-      "database-schema-preflight",
-      formatSchemaRefusalLines(packageSchemaPreflight).join("\n"),
-    );
-    return;
-  }
+  const callerDatabaseSchemaContext = {
+    configSnapshot,
+    env: resolveServiceRefreshEnv(process.env, invocationCwd),
+  };
+  const packageSchemaPreflight = opts.dryRun
+    ? await import("./update-execution.runtime.js").then(
+        async ({ inspectDryRunTargetDatabaseSchemas }) =>
+          await inspectDryRunTargetDatabaseSchemas({
+            root,
+            updateInstallKind,
+            shouldRestart,
+            jsonMode: Boolean(opts.json),
+            timeoutMs: updateStepTimeoutMs,
+            invocationCwd,
+            supportedVersions: packageTargetSchemaVersions,
+            channel,
+            devTarget,
+            gitTargetRoot: switchToGit ? resolveGitInstallDir() : root,
+            callerDatabaseSchemaContext,
+            managedServiceRootRedirect,
+          }).catch(async (error: unknown) => {
+            if (!(error instanceof UpdatePreMutationError)) {
+              throw error;
+            }
+            await refuseUpdate(error.reason, error.message);
+            return { incompatible: [], indeterminate: [] };
+          }),
+      )
+    : { incompatible: [], indeterminate: [] };
 
   if (opts.dryRun) {
     printUpdateDryRun({
@@ -635,16 +654,6 @@ async function updateCommandInternal(
   // Preload execution and recovery before the package swap can remove these chunks.
   const { executeMutableUpdate, finishUpdate } = await import("./update-execution.runtime.js");
 
-  // Cleanup deletes handoff directories, so previews and rejected invocations must never run it.
-  await cleanupStaleManagedServiceUpdateHandoffs().catch(() => undefined);
-
-  // Startup migrations belong to the freshly installed Doctor. Admit shared-state
-  // mutation only after every pre-install refusal has passed.
-  await assertOpenClawStateWriteAllowedAtPath({
-    databasePath: resolveOpenClawStateSqlitePath(process.env),
-  });
-  await disableCurrentOpenClawUpdateLaunchdJob().catch(() => undefined);
-
   const showProgress = !opts.json;
   if (!opts.json) {
     defaultRuntime.log(theme.heading("Updating OpenClaw..."));
@@ -653,6 +662,22 @@ async function updateCommandInternal(
 
   const { progress, stop } = createUpdateProgress(showProgress);
   const preUpdatePluginInstallRecords = await loadInstalledPluginIndexInstallRecords();
+  let mutableUpdatePrepared = false;
+  const prepareMutableUpdate = async (env?: NodeJS.ProcessEnv) => {
+    if (mutableUpdatePrepared) {
+      return;
+    }
+    // These operations can delete handoffs, touch shared state, or disable a service job.
+    // Defer them until the exact package/Git target and every owned database have passed.
+    await withOwnedManagedUpdateEnv(env, async () => {
+      await cleanupStaleManagedServiceUpdateHandoffs().catch(() => undefined);
+      await assertOpenClawStateWriteAllowedAtPath({
+        databasePath: resolveOpenClawStateSqlitePath(process.env),
+      });
+      await disableCurrentOpenClawUpdateLaunchdJob().catch(() => undefined);
+    });
+    mutableUpdatePrepared = true;
+  };
 
   const execution = await executeMutableUpdate({
     root,
@@ -678,6 +703,8 @@ async function updateCommandInternal(
     managedServiceRootRedirect,
     invocationCwd,
     recoveryState,
+    callerDatabaseSchemaContext,
+    prepareMutableUpdate,
   });
   if (!execution) {
     return;

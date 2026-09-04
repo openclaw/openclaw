@@ -49,10 +49,8 @@ import {
   resolveGatewayServiceManagementBlockMessageForUpdate,
 } from "./update-command-service-plan.js";
 
-const GATEWAY_SERVICE_INSPECTION_UNAVAILABLE_MESSAGE =
-  "Gateway service management skipped: inspection is unavailable. Run `openclaw gateway status --deep` and restart the gateway manually when service access is restored.";
 const GATEWAY_SERVICE_INSPECTION_BLOCK_MESSAGE =
-  "Gateway service inspection is unavailable. Refusing to mutate code while automatic restart is enabled; run `openclaw gateway status --deep` and retry when service access is restored. To use `--no-restart`, stop the Gateway manually before the update, then restart it manually afterward.";
+  "Gateway service inspection is unavailable. Refusing to mutate code because managed service ownership cannot be verified. Restore service access, then retry.";
 const JSON_MODE_SERVICE_STDOUT = new Writable({
   write(_chunk, _encoding, callback) {
     callback();
@@ -107,7 +105,7 @@ async function inspectManagedGatewayServiceBeforeUpdate(params: {
   const { command } = state;
   const unavailable = (): ManagedGatewayUpdateVerdict => ({
     kind: "unavailable",
-    message: GATEWAY_SERVICE_INSPECTION_UNAVAILABLE_MESSAGE,
+    message: GATEWAY_SERVICE_INSPECTION_BLOCK_MESSAGE,
   });
   if (!command) {
     return !state.installed &&
@@ -402,17 +400,11 @@ export async function maybeStopManagedServiceBeforeMutableUpdate(params: {
   timeoutMs?: number;
 }): Promise<PreManagedServiceStop> {
   const uninspected = { stopped: false, inspected: false, runtimeInspected: false, running: false };
-  const markInspectionUnavailable = (
-    base: PreManagedServiceStop,
-    message: string,
-  ): PreManagedServiceStop =>
-    params.shouldRestart
-      ? {
-          ...base,
-          serviceMutationAllowed: false,
-          blockMessage: GATEWAY_SERVICE_INSPECTION_BLOCK_MESSAGE,
-        }
-      : { ...base, serviceMutationAllowed: false, serviceMutationSkipMessage: message };
+  const markInspectionUnavailable = (base: PreManagedServiceStop): PreManagedServiceStop => ({
+    ...base,
+    serviceMutationAllowed: false,
+    blockMessage: GATEWAY_SERVICE_INSPECTION_BLOCK_MESSAGE,
+  });
   const serviceMutationSkipMessage = resolveGatewayServiceManagementBlockMessageForUpdate(
     process.env,
   );
@@ -433,7 +425,7 @@ export async function maybeStopManagedServiceBeforeMutableUpdate(params: {
     if (err instanceof GatewayServiceUpdateOwnershipError) {
       return { ...uninspected, serviceMutationAllowed: false, blockMessage: err.message };
     }
-    return markInspectionUnavailable(uninspected, GATEWAY_SERVICE_INSPECTION_UNAVAILABLE_MESSAGE);
+    return markInspectionUnavailable(uninspected);
   }
   const serviceUpdateVerdict = await revalidateManagedGatewayServiceAfterUpdate({
     root: params.root,
@@ -461,10 +453,12 @@ export async function maybeStopManagedServiceBeforeMutableUpdate(params: {
               ?.status === "stopped"
           : process.platform === "linux"),
     serviceEnv: serviceState.env,
+    serviceDefinitionEnv:
+      resolveManagedGatewayServiceCommand(serviceState.command)?.environment ?? {},
     serviceUpdateVerdict,
   };
   if (serviceUpdateVerdict.kind === "unavailable") {
-    return markInspectionUnavailable(inspected, serviceUpdateVerdict.message);
+    return markInspectionUnavailable(inspected);
   }
   if (serviceUpdateVerdict.kind === "foreign") {
     return {
@@ -473,16 +467,6 @@ export async function maybeStopManagedServiceBeforeMutableUpdate(params: {
       serviceMutationSkipMessage:
         "Gateway service management skipped: the service belongs to a different OpenClaw installation and was left untouched.",
     };
-  }
-  // Transfer before either inspection-only Git planning or native shutdown can
-  // return control to an updater still owned by this service.
-  if (
-    serviceUpdateVerdict.kind === "owned" &&
-    params.shouldRestart &&
-    serviceState.running &&
-    (await params.handoffFromGateway?.(serviceState))
-  ) {
-    throw new UpdateCommandAbort();
   }
   if (serviceUpdateVerdict.kind === "absent") {
     return {
@@ -494,6 +478,17 @@ export async function maybeStopManagedServiceBeforeMutableUpdate(params: {
   }
   if (params.phase === "inspect") {
     return inspected;
+  }
+  // Inspection captures the service-owned config/database context. Handoff must
+  // wait for that context's schema preflight, while prepare still transfers
+  // before native shutdown returns control to a service-owned updater.
+  if (
+    serviceUpdateVerdict.kind === "owned" &&
+    params.shouldRestart &&
+    serviceState.running &&
+    (await params.handoffFromGateway?.(serviceState))
+  ) {
+    throw new UpdateCommandAbort();
   }
   const suspendTask = () =>
     maybeSuspendWindowsTaskAutoStartForUpdate({
@@ -540,7 +535,6 @@ export async function maybeStopManagedServiceBeforeMutableUpdate(params: {
   if (blockMessage) {
     return { ...inspected, running: true, blockMessage };
   }
-
   if (!params.jsonMode) {
     const message = `Stopping managed gateway service before ${params.updateInstallKind} update...`;
     defaultRuntime.log(theme.muted(message));
@@ -604,8 +598,6 @@ export async function maybeStopManagedServiceBeforeMutableUpdate(params: {
   return {
     ...inspected,
     stopped: true,
-    serviceDefinitionEnv:
-      resolveManagedGatewayServiceCommand(serviceState.command)?.environment ?? {},
     ...(windowsTaskAutoStartRecovery ? { windowsTaskAutoStartRecovery } : {}),
   };
 }

@@ -595,6 +595,7 @@ const runPostCorePluginConvergenceSpy = vi.spyOn(
 );
 const { registerUpdateCli } = await import("./update-cli.js");
 const { updateCommand } = await import("./update-cli/update-command.js");
+const { inspectGitDryRunTargetSchemaVersions } = await import("./update-cli/update-command-git.js");
 
 async function invokeUpdateCli(opts: Parameters<typeof updateCommand>[0]) {
   const program = new Command();
@@ -2046,35 +2047,19 @@ describe("update-cli", () => {
       serviceReadCommand.mockRejectedValue(new Error("inspection-secret-canary"));
 
       const command = invokeUpdateCli({ yes: true, json: true, restart });
-      if (restart) {
-        await expect(command).rejects.toEqual(new ExitError(1));
-      } else {
-        await command;
-      }
+      await expect(command).rejects.toEqual(new ExitError(1));
 
-      if (restart) {
-        expect(runGatewayUpdate).not.toHaveBeenCalled();
-        expect(packageInstallCommandCall()).toBeUndefined();
-        expect(defaultRuntime.exit).not.toHaveBeenCalled();
-        expect(getErrorOutput()).toContain(
-          "Gateway service inspection is unavailable. Refusing to mutate code",
-        );
-        expect(getErrorOutput()).toContain("gateway status --deep");
-        expect(getErrorOutput()).toContain("stop the Gateway manually before the update");
-        expect(lastWriteJsonCall()).not.toMatchObject({ status: "ok" });
-      } else {
-        if (kind === "package") {
-          expectPackageInstallSpec("openclaw@9999.0.0");
-        } else {
-          expect(runGatewayUpdate).toHaveBeenCalledOnce();
-        }
-        expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
-        expect(getErrorOutput()).toContain(
-          "Gateway service management skipped: inspection is unavailable",
-        );
-        expect(getErrorOutput()).toContain("gateway status --deep");
-        expect(lastWriteJsonCall()).toMatchObject({ status: "ok" });
-      }
+      expect(runGatewayUpdate).not.toHaveBeenCalled();
+      expect(packageInstallCommandCall()).toBeUndefined();
+      expect(defaultRuntime.exit).not.toHaveBeenCalled();
+      expect(getErrorOutput()).toContain(
+        "Gateway service inspection is unavailable. Refusing to mutate code",
+      );
+      expect(getErrorOutput()).toContain("managed service ownership cannot be verified");
+      expect(getErrorOutput()).toContain("retry");
+      expect(getErrorOutput()).not.toContain("--no-restart");
+      expect(getErrorOutput()).not.toContain("stop the Gateway manually");
+      expect(lastWriteJsonCall()).not.toMatchObject({ status: "ok" });
       expectNoSideEffects(
         serviceStop,
         serviceStart,
@@ -2478,6 +2463,17 @@ describe("update-cli", () => {
     loadInstalledPluginIndexInstallRecords.mockImplementation(async (options = {}) =>
       options.env?.OPENCLAW_PROFILE === "work" ? managedRecords : {},
     );
+    const preparationProfiles: Array<string | undefined> = [];
+    vi.mocked(cleanupStaleManagedServiceUpdateHandoffs).mockImplementationOnce(async () => {
+      preparationProfiles.push(process.env.OPENCLAW_PROFILE);
+      return 0;
+    });
+    launchdUpdateCleanupMocks.disableCurrentOpenClawUpdateLaunchdJob.mockImplementationOnce(
+      async () => {
+        preparationProfiles.push(process.env.OPENCLAW_PROFILE);
+        return false;
+      },
+    );
     let handedConfig: unknown;
     let handedRecords: unknown;
     spawn.mockImplementationOnce((_node, _argv, options) => {
@@ -2519,6 +2515,12 @@ describe("update-cli", () => {
     expect(spawnCall()?.[2]?.env?.[GATEWAY_SERVICE_RUNTIME_PID_ENV]).toBeUndefined();
     expect(handedConfig).toEqual({ sourceConfig: managedConfig, authoredConfig: managedConfig });
     expect(handedRecords).toEqual(managedRecords);
+    expect(preparationProfiles).toEqual(["work", "work"]);
+    const { assertOpenClawStateWriteAllowedAtPath } =
+      await import("../state/openclaw-state-ownership.js");
+    expect(assertOpenClawStateWriteAllowedAtPath).toHaveBeenCalledWith({
+      databasePath: path.join(managedState, "state", "openclaw.sqlite"),
+    });
   });
 
   it("keeps foreign-service updates in the caller profile", async () => {
@@ -2550,6 +2552,17 @@ describe("update-cli", () => {
       async (candidate: string) =>
         entrypoints.includes(candidate) || candidate.endsWith("package.json"),
     );
+    const preparationProfiles: Array<string | undefined> = [];
+    vi.mocked(cleanupStaleManagedServiceUpdateHandoffs).mockImplementationOnce(async () => {
+      preparationProfiles.push(process.env.OPENCLAW_PROFILE);
+      return 0;
+    });
+    launchdUpdateCleanupMocks.disableCurrentOpenClawUpdateLaunchdJob.mockImplementationOnce(
+      async () => {
+        preparationProfiles.push(process.env.OPENCLAW_PROFILE);
+        return false;
+      },
+    );
 
     await withEnvAsync(
       {
@@ -2568,6 +2581,12 @@ describe("update-cli", () => {
       OPENCLAW_PROFILE: "personal",
       OPENCLAW_STATE_DIR: personalState,
       OPENCLAW_GATEWAY_PORT: "19111",
+    });
+    expect(preparationProfiles).toEqual(["personal", "personal"]);
+    const { assertOpenClawStateWriteAllowedAtPath } =
+      await import("../state/openclaw-state-ownership.js");
+    expect(assertOpenClawStateWriteAllowedAtPath).toHaveBeenCalledWith({
+      databasePath: path.join(personalState, "state", "openclaw.sqlite"),
     });
   });
 
@@ -4633,10 +4652,14 @@ describe("update-cli", () => {
 
     await expect(updateCommand({ yes: true })).rejects.toEqual(new ExitError(1));
 
-    expect(databasePreflightMocks.preflightOpenClawDatabaseSchemas).toHaveBeenCalledWith({
-      env: process.env,
-      supportedVersions: { state: 3, agent: 9 },
-    });
+    expect(databasePreflightMocks.preflightOpenClawDatabaseSchemas).toHaveBeenCalledWith(
+      expect.objectContaining({
+        env: expect.objectContaining({ OPENCLAW_UPDATE_IN_PROGRESS: "1" }),
+        supportedVersions: { state: 3, agent: 9 },
+        configuredAgentDatabaseTargets: expect.any(Function),
+        configuredAgentDatabaseCandidatePaths: expect.any(Array),
+      }),
+    );
     expect(serviceStop).not.toHaveBeenCalled();
     expect(packageInstallCommandCall()).toBeUndefined();
     expect(defaultRuntime.error).toHaveBeenCalledWith(
@@ -4849,6 +4872,220 @@ describe("update-cli", () => {
     expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
   });
 
+  it("uses the selected Git target schema metadata during dry-run", async () => {
+    const targetSha = "b".repeat(40);
+    const targetSchemas = { state: 3, agent: 9 };
+    vi.mocked(runCommandWithTimeout).mockImplementation(async (argv) => {
+      if (
+        argv[0] === "git" &&
+        argv[3] === "rev-parse" &&
+        argv[4] === "--abbrev-ref" &&
+        argv[5] === "--symbolic-full-name"
+      ) {
+        return commandResult({ stdout: "origin/main\n" });
+      }
+      if (argv[0] === "git" && argv[3] === "rev-parse" && argv[4] === "--abbrev-ref") {
+        return commandResult({ stdout: "main\n" });
+      }
+      if (argv[0] === "git" && argv[3] === "remote") {
+        return commandResult({ stdout: "origin\n" });
+      }
+      if (argv[0] === "git" && argv[3] === "ls-remote") {
+        return commandResult({ stdout: `${targetSha}\trefs/heads/main\n` });
+      }
+      if (argv[0] === "git" && argv[3] === "rev-parse" && argv[4] === "@{upstream}") {
+        return commandResult({ stdout: `${targetSha}\n` });
+      }
+      if (argv[0] === "git" && argv[3] === "show" && argv[4] === `${targetSha}:package.json`) {
+        return commandResult({
+          stdout: JSON.stringify({ openclaw: { schemaVersions: targetSchemas } }),
+        });
+      }
+      return commandResult();
+    });
+    databasePreflightMocks.preflightOpenClawDatabaseSchemas.mockImplementation(
+      ({ supportedVersions }) =>
+        supportedVersions.agent === targetSchemas.agent
+          ? {
+              incompatible: [
+                {
+                  kind: "agent",
+                  path: "/tmp/openclaw/agents/main/agent/openclaw-agent.sqlite",
+                  agentId: "main",
+                  foundVersion: 11,
+                  supportedVersion: targetSchemas.agent,
+                },
+              ],
+              indeterminate: [],
+            }
+          : { incompatible: [], indeterminate: [] },
+    );
+
+    await updateCommand({ dryRun: true, channel: "dev" });
+
+    expect(databasePreflightMocks.preflightOpenClawDatabaseSchemas).toHaveBeenCalledWith(
+      expect.objectContaining({ supportedVersions: targetSchemas }),
+    );
+    expect(getLogOutput()).toContain("Would refuse update: agent database");
+    expect(runGatewayUpdate).not.toHaveBeenCalled();
+    expectNoSideEffects(serviceStop, serviceRestart);
+  });
+
+  it("refuses Git dry-run when the selected remote target is not locally inspectable", async () => {
+    const localSha = "b".repeat(40);
+    const remoteSha = "c".repeat(40);
+    vi.mocked(runCommandWithTimeout).mockImplementation(async (argv) => {
+      if (
+        argv[0] === "git" &&
+        argv[3] === "rev-parse" &&
+        argv[4] === "--abbrev-ref" &&
+        argv[5] === "--symbolic-full-name"
+      ) {
+        return commandResult({ stdout: "origin/main\n" });
+      }
+      if (argv[0] === "git" && argv[3] === "rev-parse" && argv[4] === "--abbrev-ref") {
+        return commandResult({ stdout: "main\n" });
+      }
+      if (argv[0] === "git" && argv[3] === "remote") {
+        return commandResult({ stdout: "origin\n" });
+      }
+      if (argv[0] === "git" && argv[3] === "ls-remote") {
+        return commandResult({ stdout: `${remoteSha}\trefs/heads/main\n` });
+      }
+      if (argv[0] === "git" && argv[3] === "rev-parse" && argv[4] === "@{upstream}") {
+        return commandResult({ stdout: `${localSha}\n` });
+      }
+      return commandResult();
+    });
+
+    await expect(updateCommand({ dryRun: true, channel: "dev" })).rejects.toEqual(new ExitError(1));
+
+    expect(getErrorOutput()).toContain("current remote target origin/main is not available");
+    expect(databasePreflightMocks.preflightOpenClawDatabaseSchemas).not.toHaveBeenCalled();
+    expect(runGatewayUpdate).not.toHaveBeenCalled();
+    expectNoSideEffects(serviceStop, serviceRestart);
+  });
+
+  it("uses the newest remote release tag during a detached stable dry-run", async () => {
+    const oldSha = "a".repeat(40);
+    const tagObjectSha = "b".repeat(40);
+    const targetSha = "c".repeat(40);
+    const targetSchemas = { state: 3, agent: 11 };
+    vi.mocked(runCommandWithTimeout).mockImplementation(async (argv) => {
+      if (argv[0] === "git" && argv[3] === "remote") {
+        return commandResult({ stdout: "origin\n" });
+      }
+      if (argv[0] === "git" && argv[3] === "ls-remote" && argv[4] === "--tags") {
+        return commandResult({
+          stdout: [
+            `${oldSha}\trefs/tags/v2026.8.1`,
+            `${tagObjectSha}\trefs/tags/v2026.9.1`,
+            `${targetSha}\trefs/tags/v2026.9.1^{}`,
+          ].join("\n"),
+        });
+      }
+      if (argv[0] === "git" && argv[3] === "show" && argv[4] === `${targetSha}:package.json`) {
+        return commandResult({
+          stdout: JSON.stringify({ openclaw: { schemaVersions: targetSchemas } }),
+        });
+      }
+      return commandResult();
+    });
+
+    await expect(
+      inspectGitDryRunTargetSchemaVersions({
+        root: process.cwd(),
+        timeoutMs: 1_000,
+        channel: "stable",
+      }),
+    ).resolves.toEqual({ schemaVersions: targetSchemas });
+
+    expect(
+      commandCalls().some(
+        ([argv]) =>
+          argv[0] === "git" &&
+          argv.includes("ls-remote") &&
+          argv.includes("--tags") &&
+          argv.includes("origin") &&
+          argv.includes("refs/tags/v*"),
+      ),
+    ).toBe(true);
+    expect(
+      commandCalls().some(
+        ([argv]) => argv[0] === "git" && argv.includes("tag") && argv.includes("--list"),
+      ),
+    ).toBe(false);
+    expect(commandCalls().some(([argv]) => argv[0] === "git" && argv.includes("@{upstream}"))).toBe(
+      false,
+    );
+    expectNoSideEffects(
+      databasePreflightMocks.preflightOpenClawDatabaseSchemas,
+      serviceStop,
+      serviceRestart,
+    );
+  });
+
+  it("does not fall through after the preferred remote branch changes", async () => {
+    const staleSha = "b".repeat(40);
+    const originSha = "c".repeat(40);
+    const alternateSha = "d".repeat(40);
+    vi.mocked(runCommandWithTimeout).mockImplementation(async (argv) => {
+      if (
+        argv[0] === "git" &&
+        argv[3] === "rev-parse" &&
+        argv[4] === "--abbrev-ref" &&
+        argv[5] === "HEAD"
+      ) {
+        return commandResult({ stdout: "feature\n" });
+      }
+      if (
+        argv[0] === "git" &&
+        argv[3] === "rev-parse" &&
+        argv[4] === "--abbrev-ref" &&
+        argv[5] === "--symbolic-full-name"
+      ) {
+        if (argv[6] === "main@{upstream}") {
+          return commandResult({ stdout: "origin/main\n" });
+        }
+        if (argv[6] === "refs/remotes/upstream/main") {
+          return commandResult({ stdout: "upstream/main\n" });
+        }
+      }
+      if (argv[0] === "git" && argv[3] === "remote") {
+        return commandResult({ stdout: "origin\nupstream\n" });
+      }
+      if (argv[0] === "git" && argv[3] === "ls-remote" && argv[5] === "origin") {
+        return commandResult({ stdout: `${originSha}\trefs/heads/main\n` });
+      }
+      if (argv[0] === "git" && argv[3] === "ls-remote" && argv[5] === "upstream") {
+        return commandResult({ stdout: `${alternateSha}\trefs/heads/main\n` });
+      }
+      if (argv[0] === "git" && argv[3] === "rev-parse" && argv[4] === "main@{upstream}") {
+        return commandResult({ stdout: `${staleSha}\n` });
+      }
+      if (
+        argv[0] === "git" &&
+        argv[3] === "rev-parse" &&
+        argv[4] === "refs/remotes/upstream/main"
+      ) {
+        return commandResult({ stdout: `${alternateSha}\n` });
+      }
+      return commandResult();
+    });
+
+    await expect(updateCommand({ dryRun: true, channel: "dev" })).rejects.toEqual(new ExitError(1));
+
+    expect(getErrorOutput()).toContain("current remote target origin/main is not available");
+    expect(
+      commandCalls().some(
+        ([argv]) => argv[0] === "git" && argv.includes("refs/remotes/upstream/main"),
+      ),
+    ).toBe(false);
+    expect(databasePreflightMocks.preflightOpenClawDatabaseSchemas).not.toHaveBeenCalled();
+    expect(runGatewayUpdate).not.toHaveBeenCalled();
+    expectNoSideEffects(serviceStop, serviceRestart);
+  });
+
   it("refuses an incompatible git target before stopping the service", async () => {
     mockOwnedGitService();
     serviceLoaded.mockResolvedValue(true);
@@ -4894,61 +5131,806 @@ describe("update-cli", () => {
     );
   });
 
-  it("refuses a package target that changes after the service stops", async () => {
-    const { pkgRoot } = await setupInstalledPackageRoot(createCaseDir("schema-package"), "1.0.0");
-    const entrypoint = path.join(pkgRoot, "dist", "index.js");
-    const nodeRunner = path.join(fixtureRoot, "managed", "node");
-    vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValue(entrypoint);
-    mockOwnedGitService(pkgRoot);
-    primeServiceCommand([nodeRunner, entrypoint, "gateway", "run"], {
-      OPENCLAW_STATE_DIR: profileStateDir(),
+  it("refuses a stopped work-service update when the caller-only database is newer", async () => {
+    const tempDir = tempDirs.make("openclaw-update-owned-schema-profile-");
+    const { nodeModules, entryPath } = await setupInstalledPackageRoot(tempDir);
+    const managedState = profileStateDir("work");
+    const callerState = profileStateDir("personal");
+    const managedConfigPath = path.join(managedState, "openclaw.json");
+    primeServiceCommand(["node", entryPath, "gateway", "run"], {
+      OPENCLAW_SERVICE_MARKER: "openclaw",
+      OPENCLAW_SERVICE_KIND: "gateway",
+      OPENCLAW_PROFILE: "work",
+      OPENCLAW_STATE_DIR: managedState,
+      OPENCLAW_CONFIG_PATH: managedConfigPath,
     });
     serviceLoaded.mockResolvedValue(true);
+    serviceReadRuntime.mockResolvedValue({ status: "stopped", state: "stopped" });
+    mockFileBackedPathExists();
+    mockNpmGlobalRoot(nodeModules);
     vi.mocked(fetchNpmPackageTargetStatus).mockResolvedValue(
       packageTargetStatus({ schemaVersions: { state: 3, agent: 11 } }),
     );
-    databasePreflightMocks.preflightOpenClawDatabaseSchemas
-      .mockReturnValueOnce({ incompatible: [], indeterminate: [] })
-      .mockReturnValueOnce({
-        incompatible: [
-          {
-            kind: "agent",
-            path: "/tmp/openclaw/agents/main/agent/openclaw-agent.sqlite",
-            foundVersion: 12,
-            supportedVersion: 11,
+    vi.mocked(readConfigFileSnapshot).mockImplementation(async () =>
+      process.env.OPENCLAW_PROFILE === "work"
+        ? configSnapshot(baseConfig, { path: managedConfigPath })
+        : configSnapshot(baseConfig, { path: path.join(callerState, "openclaw.json") }),
+    );
+    const preflightStateDirs: Array<string | undefined> = [];
+    databasePreflightMocks.preflightOpenClawDatabaseSchemas.mockImplementation(({ env }) => {
+      preflightStateDirs.push(env.OPENCLAW_STATE_DIR);
+      return env.OPENCLAW_STATE_DIR === callerState
+        ? {
+            incompatible: [
+              {
+                kind: "state",
+                path: path.join(callerState, "state", "openclaw.sqlite"),
+                foundVersion: 4,
+                supportedVersion: 3,
+              },
+            ],
+            indeterminate: [],
+          }
+        : { incompatible: [], indeterminate: [] };
+    });
+
+    await withEnvAsync(
+      {
+        OPENCLAW_PROFILE: "personal",
+        OPENCLAW_STATE_DIR: callerState,
+        OPENCLAW_CONFIG_PATH: path.join(callerState, "openclaw.json"),
+      },
+      async () => {
+        await expect(updateCommand({ yes: true })).rejects.toEqual(new ExitError(1));
+      },
+    );
+
+    expect(preflightStateDirs).toEqual([callerState, managedState]);
+    expect(packageInstallCommandCall()).toBeUndefined();
+    expect(serviceStop).not.toHaveBeenCalled();
+    expect(getErrorOutput()).toContain(path.join(callerState, "state", "openclaw.sqlite"));
+    expect(defaultRuntime.exit).not.toHaveBeenCalled();
+  });
+
+  it("updates a stopped work service when caller and managed stores are compatible", async () => {
+    const tempDir = tempDirs.make("openclaw-update-compatible-schema-profiles-");
+    const { nodeModules, entryPath } = await setupInstalledPackageRoot(tempDir);
+    const managedState = profileStateDir("work");
+    const callerState = profileStateDir("personal");
+    const managedConfigPath = path.join(managedState, "openclaw.json");
+    primeServiceCommand(["node", entryPath, "gateway", "run"], {
+      OPENCLAW_SERVICE_MARKER: "openclaw",
+      OPENCLAW_SERVICE_KIND: "gateway",
+      OPENCLAW_PROFILE: "work",
+      OPENCLAW_STATE_DIR: managedState,
+      OPENCLAW_CONFIG_PATH: managedConfigPath,
+    });
+    serviceLoaded.mockResolvedValue(true);
+    serviceReadRuntime.mockResolvedValue({ status: "stopped", state: "stopped" });
+    mockFileBackedPathExists();
+    mockNpmGlobalRoot(nodeModules);
+    vi.mocked(fetchNpmPackageTargetStatus).mockResolvedValue(
+      packageTargetStatus({ schemaVersions: { state: 3, agent: 11 } }),
+    );
+    vi.mocked(readConfigFileSnapshot).mockImplementation(async () =>
+      process.env.OPENCLAW_PROFILE === "work"
+        ? configSnapshot(baseConfig, { path: managedConfigPath })
+        : configSnapshot(baseConfig, { path: path.join(callerState, "openclaw.json") }),
+    );
+    const preflightStateDirs: Array<string | undefined> = [];
+    databasePreflightMocks.preflightOpenClawDatabaseSchemas.mockImplementation(({ env }) => {
+      preflightStateDirs.push(env.OPENCLAW_STATE_DIR);
+      return { incompatible: [], indeterminate: [] };
+    });
+
+    await withEnvAsync(
+      {
+        OPENCLAW_PROFILE: "personal",
+        OPENCLAW_STATE_DIR: callerState,
+        OPENCLAW_CONFIG_PATH: path.join(callerState, "openclaw.json"),
+      },
+      async () => {
+        await updateCommand({ yes: true });
+      },
+    );
+
+    expect(preflightStateDirs).toEqual([callerState, managedState, callerState, managedState]);
+    expect(packageInstallCommandCall()).toBeDefined();
+    expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
+  });
+
+  it.each([
+    {
+      name: "unreadable",
+      snapshot: { raw: null, readError: { code: "EACCES" }, issues: [] },
+    },
+    {
+      name: "invalid",
+      snapshot: {
+        raw: "{\n",
+        readError: undefined,
+        issues: [{ path: "session.store", message: "invalid external store" }],
+      },
+    },
+  ])("refuses shared-root admission with $name caller config", async (testCase) => {
+    const tempDir = tempDirs.make(`openclaw-update-caller-config-${testCase.name}-`);
+    const { nodeModules, entryPath } = await setupInstalledPackageRoot(tempDir);
+    const managedState = profileStateDir("work");
+    const callerState = profileStateDir("personal");
+    const managedConfigPath = path.join(managedState, "openclaw.json");
+    const callerConfigPath = path.join(callerState, "openclaw.json");
+    primeServiceCommand(["node", entryPath, "gateway", "run"], {
+      OPENCLAW_SERVICE_MARKER: "openclaw",
+      OPENCLAW_SERVICE_KIND: "gateway",
+      OPENCLAW_PROFILE: "work",
+      OPENCLAW_STATE_DIR: managedState,
+      OPENCLAW_CONFIG_PATH: managedConfigPath,
+    });
+    serviceLoaded.mockResolvedValue(true);
+    serviceReadRuntime.mockResolvedValue({ status: "stopped", state: "stopped" });
+    mockFileBackedPathExists();
+    mockNpmGlobalRoot(nodeModules);
+    vi.mocked(fetchNpmPackageTargetStatus).mockResolvedValue(
+      packageTargetStatus({ schemaVersions: { state: 3, agent: 11 } }),
+    );
+    vi.mocked(readConfigFileSnapshot).mockImplementation(async () =>
+      process.env.OPENCLAW_PROFILE === "work"
+        ? configSnapshot(baseConfig, { path: managedConfigPath })
+        : configSnapshot(
+            {
+              session: { store: "/external/caller/{agentId}/sessions.json" },
+            } as OpenClawConfig,
+            {
+              path: callerConfigPath,
+              valid: false,
+              ...testCase.snapshot,
+            },
+          ),
+    );
+
+    await withEnvAsync(
+      {
+        OPENCLAW_PROFILE: "personal",
+        OPENCLAW_STATE_DIR: callerState,
+        OPENCLAW_CONFIG_PATH: callerConfigPath,
+      },
+      async () => {
+        await expect(updateCommand({ yes: true })).rejects.toEqual(new ExitError(1));
+      },
+    );
+
+    expect(getErrorOutput()).toContain("caller OpenClaw config");
+    expect(databasePreflightMocks.preflightOpenClawDatabaseSchemas).not.toHaveBeenCalled();
+    expect(packageInstallCommandCall()).toBeUndefined();
+    expectNoSideEffects(serviceStop, cleanupStaleManagedServiceUpdateHandoffs);
+  });
+
+  it.each(["changed", "unreadable"] as const)(
+    "refuses %s caller config after service stop and restores the service",
+    async (finalState) => {
+      const tempDir = tempDirs.make("openclaw-update-caller-config-drift-");
+      const { nodeModules, entryPath } = await setupInstalledPackageRoot(tempDir);
+      const managedState = profileStateDir("work");
+      const callerState = profileStateDir("personal");
+      const managedConfigPath = path.join(managedState, "openclaw.json");
+      const callerConfigPath = path.join(callerState, "openclaw.json");
+      primeServiceCommand(["node", entryPath, "gateway", "run"], {
+        OPENCLAW_SERVICE_MARKER: "openclaw",
+        OPENCLAW_SERVICE_KIND: "gateway",
+        OPENCLAW_PROFILE: "work",
+        OPENCLAW_STATE_DIR: managedState,
+        OPENCLAW_CONFIG_PATH: managedConfigPath,
+      });
+      serviceLoaded.mockResolvedValue(true);
+      serviceReadRuntime.mockResolvedValue({
+        status: "running",
+        pid: gatewayFixturePid,
+        state: "running",
+      });
+      serviceStop.mockImplementationOnce(async () => {
+        serviceReadRuntime.mockResolvedValue({ status: "stopped", state: "stopped" });
+      });
+      mockFileBackedPathExists();
+      mockNpmGlobalRoot(nodeModules);
+      vi.mocked(fetchNpmPackageTargetStatus).mockResolvedValue(
+        packageTargetStatus({ schemaVersions: { state: 3, agent: 11 } }),
+      );
+      let callerReads = 0;
+      vi.mocked(readConfigFileSnapshot).mockImplementation(async () => {
+        if (process.env.OPENCLAW_PROFILE === "work") {
+          return configSnapshot(baseConfig, { path: managedConfigPath, hash: "managed-hash" });
+        }
+        callerReads += 1;
+        if (callerReads > 1 && finalState === "unreadable") {
+          return configSnapshot(baseConfig, {
+            path: callerConfigPath,
+            valid: false,
+            raw: null,
+            readError: { code: "EACCES" },
+          });
+        }
+        const changed = callerReads > 1;
+        const config = {
+          session: {
+            store: changed
+              ? "/external/caller-after/{agentId}/sessions.json"
+              : "/external/caller-before/{agentId}/sessions.json",
           },
-        ],
+        } as OpenClawConfig;
+        return configSnapshot(config, {
+          path: callerConfigPath,
+          raw: JSON.stringify(config),
+          hash: changed ? "caller-after" : "caller-before",
+        });
+      });
+      databasePreflightMocks.preflightOpenClawDatabaseSchemas.mockReturnValue({
+        incompatible: [],
         indeterminate: [],
       });
 
-    await withEnvAsync({ OPENCLAW_GATEWAY_PORT: "19999" }, async () => {
-      await expect(updateCommand({ yes: true, json: true, timeout: "17" })).rejects.toEqual(
-        new ExitError(1),
+      await withEnvAsync(
+        {
+          OPENCLAW_PROFILE: "personal",
+          OPENCLAW_STATE_DIR: callerState,
+          OPENCLAW_CONFIG_PATH: callerConfigPath,
+        },
+        async () => {
+          await expect(updateCommand({ yes: true })).rejects.toEqual(new ExitError(1));
+        },
       );
+
+      expect(callerReads).toBe(2);
+      expect(serviceStop).toHaveBeenCalledOnce();
+      expect(freshRestartCalls()).toHaveLength(1);
+      expect(packageInstallCommandCall()).toBeUndefined();
+      expect(getErrorOutput()).toContain(
+        finalState === "changed"
+          ? "caller OpenClaw config changed during update admission"
+          : "could not safely inspect caller OpenClaw config",
+      );
+    },
+  );
+
+  it.each(["changed", "unreadable"] as const)(
+    "refuses %s managed config during final admission and restores the service",
+    async (finalState) => {
+      const tempDir = tempDirs.make("openclaw-update-managed-config-drift-");
+      const { nodeModules, entryPath } = await setupInstalledPackageRoot(tempDir);
+      const managedState = profileStateDir("work");
+      const callerState = profileStateDir("personal");
+      const managedConfigPath = path.join(managedState, "openclaw.json");
+      const callerConfigPath = path.join(callerState, "openclaw.json");
+      primeServiceCommand(["node", entryPath, "gateway", "run"], {
+        OPENCLAW_SERVICE_MARKER: "openclaw",
+        OPENCLAW_SERVICE_KIND: "gateway",
+        OPENCLAW_PROFILE: "work",
+        OPENCLAW_STATE_DIR: managedState,
+        OPENCLAW_CONFIG_PATH: managedConfigPath,
+      });
+      serviceLoaded.mockResolvedValue(true);
+      serviceReadRuntime.mockResolvedValue({
+        status: "running",
+        pid: gatewayFixturePid,
+        state: "running",
+      });
+      serviceStop.mockImplementationOnce(async () => {
+        serviceReadRuntime.mockResolvedValue({ status: "stopped", state: "stopped" });
+      });
+      mockFileBackedPathExists();
+      mockNpmGlobalRoot(nodeModules);
+      vi.mocked(fetchNpmPackageTargetStatus).mockResolvedValue(
+        packageTargetStatus({ schemaVersions: { state: 3, agent: 11 } }),
+      );
+      let managedReads = 0;
+      vi.mocked(readConfigFileSnapshot).mockImplementation(async () => {
+        if (process.env.OPENCLAW_PROFILE !== "work") {
+          return configSnapshot(baseConfig, { path: callerConfigPath, hash: "caller-hash" });
+        }
+        managedReads += 1;
+        if (managedReads > 2 && finalState === "unreadable") {
+          return configSnapshot(baseConfig, {
+            path: managedConfigPath,
+            valid: false,
+            raw: null,
+            readError: { code: "EACCES" },
+          });
+        }
+        const changed = managedReads > 2;
+        const config = {
+          session: {
+            store: changed
+              ? "/external/managed-after/{agentId}/sessions.json"
+              : "/external/managed-before/{agentId}/sessions.json",
+          },
+        } as OpenClawConfig;
+        return configSnapshot(config, {
+          path: managedConfigPath,
+          raw: JSON.stringify(config),
+          hash: changed ? "managed-after" : "managed-before",
+        });
+      });
+      databasePreflightMocks.preflightOpenClawDatabaseSchemas.mockReturnValue({
+        incompatible: [],
+        indeterminate: [],
+      });
+
+      await withEnvAsync(
+        {
+          OPENCLAW_PROFILE: "personal",
+          OPENCLAW_STATE_DIR: callerState,
+          OPENCLAW_CONFIG_PATH: callerConfigPath,
+        },
+        async () => {
+          await expect(updateCommand({ yes: true })).rejects.toEqual(new ExitError(1));
+        },
+      );
+
+      expect(managedReads).toBe(3);
+      expect(serviceStop).toHaveBeenCalledOnce();
+      expect(freshRestartCalls()).toHaveLength(1);
+      expect(packageInstallCommandCall()).toBeUndefined();
+      expectNoSideEffects(
+        cleanupStaleManagedServiceUpdateHandoffs,
+        launchdUpdateCleanupMocks.disableCurrentOpenClawUpdateLaunchdJob,
+      );
+      expect(getErrorOutput()).toContain(
+        finalState === "changed"
+          ? "managed Gateway config changed during update admission"
+          : "could not safely inspect managed Gateway config",
+      );
+    },
+  );
+
+  it("uses the same caller-plus-managed store admission during dry-run", async () => {
+    const tempDir = tempDirs.make("openclaw-update-dry-run-schema-profiles-");
+    const { entryPath } = await setupInstalledPackageRoot(tempDir);
+    const managedState = profileStateDir("work");
+    const callerState = profileStateDir("personal");
+    const managedConfigPath = path.join(managedState, "openclaw.json");
+    primeServiceCommand(["node", entryPath, "gateway", "run"], {
+      OPENCLAW_SERVICE_MARKER: "openclaw",
+      OPENCLAW_SERVICE_KIND: "gateway",
+      OPENCLAW_PROFILE: "work",
+      OPENCLAW_STATE_DIR: managedState,
+      OPENCLAW_CONFIG_PATH: managedConfigPath,
+    });
+    serviceLoaded.mockResolvedValue(true);
+    serviceReadRuntime.mockResolvedValue({ status: "stopped", state: "stopped" });
+    mockFileBackedPathExists();
+    vi.mocked(fetchNpmPackageTargetStatus).mockResolvedValue(
+      packageTargetStatus({ schemaVersions: { state: 3, agent: 11 } }),
+    );
+    vi.mocked(readConfigFileSnapshot).mockImplementation(async () =>
+      process.env.OPENCLAW_PROFILE === "work"
+        ? configSnapshot(baseConfig, { path: managedConfigPath })
+        : configSnapshot(baseConfig, { path: path.join(callerState, "openclaw.json") }),
+    );
+    const preflightStateDirs: Array<string | undefined> = [];
+    databasePreflightMocks.preflightOpenClawDatabaseSchemas.mockImplementation(({ env }) => {
+      preflightStateDirs.push(env.OPENCLAW_STATE_DIR);
+      return env.OPENCLAW_STATE_DIR === managedState
+        ? {
+            incompatible: [
+              {
+                kind: "state",
+                path: path.join(managedState, "state", "openclaw.sqlite"),
+                foundVersion: 4,
+                supportedVersion: 3,
+              },
+            ],
+            indeterminate: [],
+          }
+        : { incompatible: [], indeterminate: [] };
     });
 
-    expect(serviceStop).toHaveBeenCalledOnce();
-    expect(databasePreflightMocks.preflightOpenClawDatabaseSchemas.mock.calls[1]?.[0].env).toEqual(
-      expect.objectContaining({ OPENCLAW_STATE_DIR: profileStateDir() }),
+    await withEnvAsync(
+      {
+        OPENCLAW_PROFILE: "personal",
+        OPENCLAW_STATE_DIR: callerState,
+        OPENCLAW_CONFIG_PATH: path.join(callerState, "openclaw.json"),
+      },
+      async () => {
+        await updateCommand({ dryRun: true });
+      },
+    );
+
+    expect(preflightStateDirs).toEqual([callerState, managedState]);
+    expect(getLogOutput()).toContain(
+      `Would refuse update: state database ${path.join(managedState, "state", "openclaw.sqlite")}`,
+    );
+    expectNoSideEffects(
+      serviceStop,
+      cleanupStaleManagedServiceUpdateHandoffs,
+      launchdUpdateCleanupMocks.disableCurrentOpenClawUpdateLaunchdJob,
     );
     expect(packageInstallCommandCall()).toBeUndefined();
-    expect(freshRestartCalls()).toEqual([
-      [
-        [nodeRunner, entrypoint, "gateway", "restart", "--preserve-definition", "--json"],
-        expect.objectContaining({
-          cwd: pkgRoot,
-          timeoutMs: 17_000,
-          baseEnv: {},
-          env: expect.objectContaining({
-            OPENCLAW_STATE_DIR: profileStateDir(),
-            NODE_DISABLE_COMPILE_CACHE: "1",
+  });
+
+  it("dry-run inspects managed config when target schema metadata is absent", async () => {
+    const tempDir = tempDirs.make("openclaw-update-dry-run-no-schema-metadata-");
+    const { entryPath } = await setupInstalledPackageRoot(tempDir);
+    const managedState = profileStateDir("work");
+    const callerState = profileStateDir("personal");
+    const managedConfigPath = path.join(managedState, "openclaw.json");
+    primeServiceCommand(["node", entryPath, "gateway", "run"], {
+      OPENCLAW_SERVICE_MARKER: "openclaw",
+      OPENCLAW_SERVICE_KIND: "gateway",
+      OPENCLAW_PROFILE: "work",
+      OPENCLAW_STATE_DIR: managedState,
+      OPENCLAW_CONFIG_PATH: managedConfigPath,
+    });
+    serviceLoaded.mockResolvedValue(true);
+    serviceReadRuntime.mockResolvedValue({ status: "stopped", state: "stopped" });
+    mockFileBackedPathExists();
+    vi.mocked(fetchNpmPackageTargetStatus).mockResolvedValue(packageTargetStatus());
+    vi.mocked(readConfigFileSnapshot).mockImplementation(async () =>
+      process.env.OPENCLAW_PROFILE === "work"
+        ? configSnapshot(baseConfig, {
+            path: managedConfigPath,
+            valid: false,
+            raw: null,
+            readError: { code: "EACCES" },
+          })
+        : configSnapshot(baseConfig, { path: path.join(callerState, "openclaw.json") }),
+    );
+
+    await withEnvAsync(
+      {
+        OPENCLAW_PROFILE: "personal",
+        OPENCLAW_STATE_DIR: callerState,
+        OPENCLAW_CONFIG_PATH: path.join(callerState, "openclaw.json"),
+      },
+      async () => {
+        await expect(updateCommand({ dryRun: true })).rejects.toEqual(new ExitError(1));
+      },
+    );
+
+    expect(getErrorOutput()).toContain("could not safely inspect managed Gateway config");
+    expect(databasePreflightMocks.preflightOpenClawDatabaseSchemas).not.toHaveBeenCalled();
+    expectNoSideEffects(serviceStop, cleanupStaleManagedServiceUpdateHandoffs);
+  });
+
+  it("excludes caller stores when package planning redirects to another install root", async () => {
+    const shellRoot = createCaseDir("openclaw-schema-redirect-shell-root");
+    const serviceRoot = tempDirs.make("openclaw-schema-redirect-service-root-");
+    const entryPath = await writeOpenClawPackageFixture(serviceRoot, "2026.5.18", {
+      entrySource: "export {};\n",
+      inventory: true,
+    });
+    const managedState = profileStateDir("work");
+    const callerState = profileStateDir("personal");
+    const managedConfigPath = path.join(managedState, "openclaw.json");
+    mockPackageInstallStatus(shellRoot);
+    primeServiceCommand([process.execPath, entryPath, "gateway", "run"], {
+      OPENCLAW_SERVICE_MARKER: "openclaw",
+      OPENCLAW_SERVICE_KIND: "gateway",
+      OPENCLAW_PROFILE: "work",
+      OPENCLAW_STATE_DIR: managedState,
+      OPENCLAW_CONFIG_PATH: managedConfigPath,
+    });
+    serviceLoaded.mockResolvedValue(true);
+    serviceReadRuntime.mockResolvedValue({ status: "stopped", state: "stopped" });
+    vi.mocked(fetchNpmPackageTargetStatus).mockResolvedValue(
+      packageTargetStatus({ schemaVersions: { state: 3, agent: 11 } }),
+    );
+    vi.mocked(readConfigFileSnapshot).mockImplementation(async () =>
+      process.env.OPENCLAW_PROFILE === "work"
+        ? configSnapshot(baseConfig, { path: managedConfigPath })
+        : configSnapshot(baseConfig, {
+            path: path.join(callerState, "openclaw.json"),
+            valid: false,
+            raw: null,
+            readError: { code: "EACCES" },
           }),
-        }),
-      ],
-    ]);
-    const restartOptions = freshRestartCalls()[0]?.[1];
-    expect(typeof restartOptions === "object" ? restartOptions.env : undefined).not.toHaveProperty(
-      "OPENCLAW_GATEWAY_PORT",
+    );
+    const preflightStateDirs: Array<string | undefined> = [];
+    databasePreflightMocks.preflightOpenClawDatabaseSchemas.mockImplementation(({ env }) => {
+      preflightStateDirs.push(env.OPENCLAW_STATE_DIR);
+      return env.OPENCLAW_STATE_DIR === callerState
+        ? {
+            incompatible: [
+              {
+                kind: "state",
+                path: path.join(callerState, "state", "openclaw.sqlite"),
+                foundVersion: 4,
+                supportedVersion: 3,
+              },
+            ],
+            indeterminate: [],
+          }
+        : { incompatible: [], indeterminate: [] };
+    });
+
+    await withEnvAsync(
+      {
+        OPENCLAW_PROFILE: "personal",
+        OPENCLAW_STATE_DIR: callerState,
+        OPENCLAW_CONFIG_PATH: path.join(callerState, "openclaw.json"),
+      },
+      async () => {
+        await updateCommand({ dryRun: true });
+      },
+    );
+
+    expect(preflightStateDirs).toEqual([managedState]);
+    expect(getLogOutput()).not.toContain("Would refuse update: state database");
+    expectNoSideEffects(serviceStop, cleanupStaleManagedServiceUpdateHandoffs);
+  });
+
+  it("refuses a redirected package update when the managed service disappears before admission", async () => {
+    const shellRoot = createCaseDir("openclaw-schema-redirect-drift-shell-root");
+    const serviceRoot = tempDirs.make("openclaw-schema-redirect-drift-service-root-");
+    const entryPath = await writeOpenClawPackageFixture(serviceRoot, "2026.5.18", {
+      entrySource: "export {};\n",
+      inventory: true,
+    });
+    const managedState = profileStateDir("work");
+    const managedDefinition = {
+      programArguments: [process.execPath, entryPath, "gateway", "run"],
+      environment: {
+        OPENCLAW_SERVICE_MARKER: "openclaw",
+        OPENCLAW_SERVICE_KIND: "gateway",
+        OPENCLAW_PROFILE: "work",
+        OPENCLAW_STATE_DIR: managedState,
+        OPENCLAW_CONFIG_PATH: path.join(managedState, "openclaw.json"),
+      },
+    };
+    mockPackageInstallStatus(shellRoot);
+    serviceReadCommand
+      .mockResolvedValueOnce({ ...managedDefinition, managedDefinition })
+      .mockResolvedValue(null);
+    vi.mocked(fetchNpmPackageTargetStatus).mockResolvedValue(
+      packageTargetStatus({ schemaVersions: { state: 3, agent: 11 } }),
+    );
+
+    await expect(updateCommand({ dryRun: true })).rejects.toEqual(new ExitError(1));
+
+    expect(getErrorOutput()).toContain("managed Gateway service changed before update admission");
+    expect(serviceReadCommand).toHaveBeenCalledTimes(2);
+    expect(databasePreflightMocks.preflightOpenClawDatabaseSchemas).not.toHaveBeenCalled();
+    expectNoSideEffects(
+      serviceStop,
+      cleanupStaleManagedServiceUpdateHandoffs,
+      launchdUpdateCleanupMocks.disableCurrentOpenClawUpdateLaunchdJob,
+    );
+    expect(packageInstallCommandCall()).toBeUndefined();
+  });
+
+  it("refuses a redirected package update when the managed service disappears after preflight", async () => {
+    const shellRoot = createCaseDir("openclaw-schema-redirect-late-drift-shell-root");
+    const serviceRoot = tempDirs.make("openclaw-schema-redirect-late-drift-service-root-");
+    const entryPath = await writeOpenClawPackageFixture(serviceRoot, "2026.5.18", {
+      entrySource: "export {};\n",
+      inventory: true,
+    });
+    const managedState = profileStateDir("work");
+    const managedDefinition = {
+      programArguments: [process.execPath, entryPath, "gateway", "run"],
+      environment: {
+        OPENCLAW_SERVICE_MARKER: "openclaw",
+        OPENCLAW_SERVICE_KIND: "gateway",
+        OPENCLAW_PROFILE: "work",
+        OPENCLAW_STATE_DIR: managedState,
+        OPENCLAW_CONFIG_PATH: path.join(managedState, "openclaw.json"),
+      },
+    };
+    mockPackageInstallStatus(shellRoot);
+    serviceReadCommand
+      .mockResolvedValueOnce({ ...managedDefinition, managedDefinition })
+      .mockResolvedValueOnce({ ...managedDefinition, managedDefinition })
+      .mockResolvedValueOnce({ ...managedDefinition, managedDefinition })
+      .mockResolvedValue(null);
+    serviceLoaded.mockResolvedValue(true);
+    serviceReadRuntime.mockResolvedValue({ status: "stopped", state: "stopped" });
+    vi.mocked(fetchNpmPackageTargetStatus).mockResolvedValue(
+      packageTargetStatus({ schemaVersions: { state: 3, agent: 11 } }),
+    );
+    databasePreflightMocks.preflightOpenClawDatabaseSchemas.mockReturnValue({
+      incompatible: [],
+      indeterminate: [],
+    });
+
+    await expect(updateCommand({ yes: true })).rejects.toEqual(new ExitError(1));
+
+    expect(serviceReadCommand).toHaveBeenCalledTimes(4);
+    expect(getErrorOutput()).toContain("Gateway service ownership or manager identity changed");
+    expect(databasePreflightMocks.preflightOpenClawDatabaseSchemas).toHaveBeenCalledOnce();
+    expectNoSideEffects(
+      serviceStop,
+      cleanupStaleManagedServiceUpdateHandoffs,
+      launchdUpdateCleanupMocks.disableCurrentOpenClawUpdateLaunchdJob,
+    );
+    expect(packageInstallCommandCall()).toBeUndefined();
+  });
+
+  it("refuses a redirected package update when another service replaces the owner after preflight", async () => {
+    const shellRoot = createCaseDir("openclaw-schema-redirect-owner-drift-shell-root");
+    const serviceRoot = tempDirs.make("openclaw-schema-redirect-owner-drift-service-root-");
+    const entryPath = await writeOpenClawPackageFixture(serviceRoot, "2026.5.18", {
+      entrySource: "export {};\n",
+      inventory: true,
+    });
+    const replacementRoot = tempDirs.make("openclaw-schema-redirect-replacement-root-");
+    const replacementEntryPath = await writeOpenClawPackageFixture(replacementRoot, "2026.5.18", {
+      entrySource: "export {};\n",
+      inventory: true,
+    });
+    const managedState = profileStateDir("work");
+    const managedDefinition = {
+      programArguments: [process.execPath, entryPath, "gateway", "run"],
+      environment: {
+        OPENCLAW_SERVICE_MARKER: "openclaw",
+        OPENCLAW_SERVICE_KIND: "gateway",
+        OPENCLAW_PROFILE: "work",
+        OPENCLAW_STATE_DIR: managedState,
+        OPENCLAW_CONFIG_PATH: path.join(managedState, "openclaw.json"),
+      },
+    };
+    const replacementDefinition = {
+      programArguments: [process.execPath, replacementEntryPath, "gateway", "run"],
+      environment: managedDefinition.environment,
+    };
+    mockPackageInstallStatus(shellRoot);
+    serviceReadCommand
+      .mockResolvedValueOnce({ ...managedDefinition, managedDefinition })
+      .mockResolvedValueOnce({ ...managedDefinition, managedDefinition })
+      .mockResolvedValueOnce({ ...managedDefinition, managedDefinition })
+      .mockResolvedValue({ ...replacementDefinition, managedDefinition: replacementDefinition });
+    serviceLoaded.mockResolvedValue(true);
+    serviceReadRuntime.mockResolvedValue({ status: "stopped", state: "stopped" });
+    vi.mocked(fetchNpmPackageTargetStatus).mockResolvedValue(
+      packageTargetStatus({ schemaVersions: { state: 3, agent: 11 } }),
+    );
+    databasePreflightMocks.preflightOpenClawDatabaseSchemas.mockReturnValue({
+      incompatible: [],
+      indeterminate: [],
+    });
+
+    await expect(updateCommand({ yes: true })).rejects.toEqual(new ExitError(1));
+
+    expect(getErrorOutput()).toContain("Gateway service ownership or manager identity changed");
+    expect(databasePreflightMocks.preflightOpenClawDatabaseSchemas).toHaveBeenCalledOnce();
+    expectNoSideEffects(
+      serviceStop,
+      cleanupStaleManagedServiceUpdateHandoffs,
+      launchdUpdateCleanupMocks.disableCurrentOpenClawUpdateLaunchdJob,
+    );
+    expect(packageInstallCommandCall()).toBeUndefined();
+  });
+
+  it.each([
+    {
+      name: "unreadable",
+      snapshot: { raw: null, readError: { code: "EACCES" }, issues: [] },
+    },
+    {
+      name: "invalid",
+      snapshot: {
+        raw: "{\n",
+        readError: undefined,
+        issues: [{ path: "agents.defaults.memory", message: "invalid store configuration" }],
+      },
+    },
+  ])("refuses an owned service with $name config before store preflight", async (testCase) => {
+    const tempDir = tempDirs.make(`openclaw-update-owned-config-${testCase.name}-`);
+    const { nodeModules, entryPath } = await setupInstalledPackageRoot(tempDir);
+    const managedState = profileStateDir("work");
+    const callerState = profileStateDir("personal");
+    const managedConfigPath = path.join(managedState, "openclaw.json");
+    primeServiceCommand(["node", entryPath, "gateway", "run"], {
+      OPENCLAW_SERVICE_MARKER: "openclaw",
+      OPENCLAW_SERVICE_KIND: "gateway",
+      OPENCLAW_PROFILE: "work",
+      OPENCLAW_STATE_DIR: managedState,
+      OPENCLAW_CONFIG_PATH: managedConfigPath,
+    });
+    serviceLoaded.mockResolvedValue(true);
+    serviceReadRuntime.mockResolvedValue({ status: "stopped", state: "stopped" });
+    mockFileBackedPathExists();
+    mockNpmGlobalRoot(nodeModules);
+    vi.mocked(fetchNpmPackageTargetStatus).mockResolvedValue(
+      packageTargetStatus({ schemaVersions: { state: 3, agent: 11 } }),
+    );
+    vi.mocked(readConfigFileSnapshot).mockImplementation(async () =>
+      process.env.OPENCLAW_PROFILE === "work"
+        ? configSnapshot({} as OpenClawConfig, {
+            path: managedConfigPath,
+            valid: false,
+            ...testCase.snapshot,
+          })
+        : configSnapshot(baseConfig, { path: path.join(callerState, "openclaw.json") }),
+    );
+
+    await withEnvAsync(
+      {
+        OPENCLAW_PROFILE: "personal",
+        OPENCLAW_STATE_DIR: callerState,
+        OPENCLAW_CONFIG_PATH: path.join(callerState, "openclaw.json"),
+      },
+      async () => {
+        await expect(updateCommand({ yes: true })).rejects.toEqual(new ExitError(1));
+      },
+    );
+
+    expect(getErrorOutput()).toContain("managed Gateway config");
+    expect(databasePreflightMocks.preflightOpenClawDatabaseSchemas).not.toHaveBeenCalled();
+    expect(packageInstallCommandCall()).toBeUndefined();
+    expectNoSideEffects(
+      cleanupStaleManagedServiceUpdateHandoffs,
+      launchdUpdateCleanupMocks.disableCurrentOpenClawUpdateLaunchdJob,
+      serviceStop,
+    );
+  });
+
+  it("refuses a service-profile package target before any mutation", async () => {
+    const { nodeModules, entryPath } = await setupInstalledPackageRoot(
+      createCaseDir("schema-package"),
+      "1.0.0",
+    );
+    const nodeRunner = path.join(fixtureRoot, "managed", "node");
+    const managedState = profileStateDir("work");
+    const callerState = profileStateDir("personal");
+    const managedConfigPath = path.join(managedState, "openclaw.json");
+    vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValue(entryPath);
+    primeServiceCommand([nodeRunner, entryPath, "gateway", "run"], {
+      OPENCLAW_SERVICE_MARKER: "openclaw",
+      OPENCLAW_SERVICE_KIND: "gateway",
+      OPENCLAW_PROFILE: "work",
+      OPENCLAW_STATE_DIR: managedState,
+      OPENCLAW_CONFIG_PATH: managedConfigPath,
+    });
+    serviceLoaded.mockResolvedValue(true);
+    serviceReadRuntime.mockResolvedValue({ status: "stopped", state: "stopped" });
+    mockFileBackedPathExists();
+    mockNpmGlobalRoot(nodeModules);
+    vi.mocked(readConfigFileSnapshot).mockImplementation(async () =>
+      process.env.OPENCLAW_PROFILE === "work"
+        ? configSnapshot(baseConfig, { path: managedConfigPath })
+        : configSnapshot(baseConfig, { path: path.join(callerState, "openclaw.json") }),
+    );
+    vi.mocked(fetchNpmPackageTargetStatus).mockResolvedValue(
+      packageTargetStatus({ schemaVersions: { state: 3, agent: 11 } }),
+    );
+    const preflightStateDirs: Array<string | undefined> = [];
+    databasePreflightMocks.preflightOpenClawDatabaseSchemas.mockImplementation(({ env }) => {
+      preflightStateDirs.push(env.OPENCLAW_STATE_DIR);
+      return env.OPENCLAW_STATE_DIR === managedState
+        ? {
+            incompatible: [
+              {
+                kind: "agent",
+                path: "/tmp/openclaw/agents/main/agent/openclaw-agent.sqlite",
+                foundVersion: 12,
+                supportedVersion: 11,
+              },
+            ],
+            indeterminate: [],
+          }
+        : { incompatible: [], indeterminate: [] };
+    });
+
+    await withEnvAsync(
+      {
+        OPENCLAW_GATEWAY_PORT: "19999",
+        OPENCLAW_PROFILE: "personal",
+        OPENCLAW_STATE_DIR: callerState,
+        OPENCLAW_CONFIG_PATH: path.join(callerState, "openclaw.json"),
+      },
+      async () => {
+        await expect(updateCommand({ yes: true, json: true, timeout: "17" })).rejects.toEqual(
+          new ExitError(1),
+        );
+      },
+    );
+
+    expect(serviceStop).not.toHaveBeenCalled();
+    expect(preflightStateDirs).toEqual([callerState, managedState]);
+    expect(packageInstallCommandCall()).toBeUndefined();
+    expect(freshRestartCalls()).toEqual([]);
+    expectNoSideEffects(
+      cleanupStaleManagedServiceUpdateHandoffs,
+      launchdUpdateCleanupMocks.disableCurrentOpenClawUpdateLaunchdJob,
+      managedUpdateHandoff.start,
     );
     expectNoSideEffects(serviceStart, serviceRestart);
     expect(lastWriteJsonCall()).toMatchObject({
@@ -4971,7 +5953,78 @@ describe("update-cli", () => {
     expect(defaultRuntime.exit).not.toHaveBeenCalled();
   });
 
-  it("refuses a git target that changes after the service stops", async () => {
+  it("refuses a package target that changes after service stop before preparation", async () => {
+    const tempDir = tempDirs.make("openclaw-update-package-schema-race-");
+    const { nodeModules, entryPath } = await setupInstalledPackageRoot(tempDir);
+    primeServiceCommand(["node", entryPath, "gateway", "run"], {
+      OPENCLAW_SERVICE_MARKER: "openclaw",
+      OPENCLAW_SERVICE_KIND: "gateway",
+      OPENCLAW_STATE_DIR: profileStateDir(),
+    });
+    serviceLoaded.mockResolvedValue(true);
+    serviceReadRuntime.mockResolvedValue({
+      status: "running",
+      pid: gatewayFixturePid,
+      state: "running",
+    });
+    serviceStop.mockImplementationOnce(async () => {
+      serviceReadRuntime.mockResolvedValue({ status: "stopped", state: "stopped" });
+    });
+    mockFileBackedPathExists();
+    mockNpmGlobalRoot(nodeModules);
+    vi.mocked(fetchNpmPackageTargetStatus).mockResolvedValue(
+      packageTargetStatus({ schemaVersions: { state: 3, agent: 11 } }),
+    );
+    databasePreflightMocks.preflightOpenClawDatabaseSchemas.mockImplementation(() =>
+      serviceStop.mock.calls.length === 0
+        ? { incompatible: [], indeterminate: [] }
+        : {
+            incompatible: [],
+            indeterminate: [
+              { kind: "state", path: "/tmp/openclaw.sqlite", reason: "database busy" },
+            ],
+          },
+    );
+
+    await expect(updateCommand({ yes: true })).rejects.toEqual(new ExitError(1));
+
+    expect(serviceStop).toHaveBeenCalledOnce();
+    expect(packageInstallCommandCall()).toBeUndefined();
+    expect(freshRestartCalls()).toHaveLength(1);
+    await expect(serviceReadRuntime()).resolves.toMatchObject({ status: "running" });
+    const stopOrder = requireValue(
+      serviceStop.mock.invocationCallOrder[0],
+      "managed service stop call order",
+    );
+    const restartCallIndex = vi
+      .mocked(runCommandWithTimeout)
+      .mock.calls.findIndex(([argv]) => argv[2] === "gateway" && argv[3] === "restart");
+    const restartOrder = requireValue(
+      vi.mocked(runCommandWithTimeout).mock.invocationCallOrder[restartCallIndex],
+      "managed service recovery restart call order",
+    );
+    const schemaOrders =
+      databasePreflightMocks.preflightOpenClawDatabaseSchemas.mock.invocationCallOrder;
+    expect(schemaOrders.some((order) => order < stopOrder)).toBe(true);
+    expect(schemaOrders.some((order) => order > stopOrder && order < restartOrder)).toBe(true);
+    expect(runUpdateFailureTriage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        failure: expect.objectContaining({
+          result: expect.objectContaining({
+            status: "error",
+            reason: "database-schema-preflight",
+            recovery: expect.objectContaining({ service: "healthy" }),
+          }),
+        }),
+      }),
+    );
+    expectNoSideEffects(
+      cleanupStaleManagedServiceUpdateHandoffs,
+      launchdUpdateCleanupMocks.disableCurrentOpenClawUpdateLaunchdJob,
+    );
+  });
+
+  it("refuses a service-profile git target before any mutation", async () => {
     const root = createCaseDir("schema-git");
     const sha = "a".repeat(40);
     await writeOpenClawPackageFixture(root, "1.0.0", {
@@ -4981,41 +6034,151 @@ describe("update-cli", () => {
     });
     vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue(root);
     vi.mocked(runCommandWithTimeout).mockResolvedValue(commandResult({ stdout: sha }));
-    mockOwnedGitService(root);
-    mockGatewayHealth("1.0.0", "restored", "fixture-original-build");
     const entrypoint = path.join(root, "dist", "index.js");
+    const managedState = profileStateDir("work");
+    const callerState = profileStateDir("personal");
+    const managedConfigPath = path.join(managedState, "openclaw.json");
     vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValue(entrypoint);
+    primeServiceCommand([process.execPath, entrypoint, "gateway", "run"], {
+      OPENCLAW_SERVICE_MARKER: "openclaw",
+      OPENCLAW_SERVICE_KIND: "gateway",
+      OPENCLAW_PROFILE: "work",
+      OPENCLAW_STATE_DIR: managedState,
+      OPENCLAW_CONFIG_PATH: managedConfigPath,
+    });
 
     serviceLoaded.mockResolvedValue(true);
+    serviceReadRuntime.mockResolvedValue({ status: "stopped", state: "stopped" });
+    mockFileBackedPathExists();
+    vi.mocked(readConfigFileSnapshot).mockImplementation(async () =>
+      process.env.OPENCLAW_PROFILE === "work"
+        ? configSnapshot(baseConfig, { path: managedConfigPath })
+        : configSnapshot(baseConfig, { path: path.join(callerState, "openclaw.json") }),
+    );
     vi.mocked(runGatewayUpdate).mockImplementationOnce(async (options) => {
       await options?.beforeGitMutation?.({ schemaVersions: { state: 3, agent: 11 } });
       return makeOkUpdateResult({ mode: "git" });
     });
-    databasePreflightMocks.preflightOpenClawDatabaseSchemas
-      .mockReturnValueOnce({ incompatible: [], indeterminate: [] })
-      .mockReturnValueOnce({
-        incompatible: [],
-        indeterminate: [
-          { kind: "agent", path: "/tmp/openclaw-agent.sqlite", reason: "database busy" },
-        ],
-      });
+    const preflightStateDirs: Array<string | undefined> = [];
+    databasePreflightMocks.preflightOpenClawDatabaseSchemas.mockImplementation(({ env }) => {
+      preflightStateDirs.push(env.OPENCLAW_STATE_DIR);
+      return env.OPENCLAW_STATE_DIR === managedState
+        ? {
+            incompatible: [],
+            indeterminate: [
+              { kind: "agent", path: "/tmp/openclaw-agent.sqlite", reason: "database busy" },
+            ],
+          }
+        : { incompatible: [], indeterminate: [] };
+    });
 
-    await expect(updateCommand({ yes: true, timeout: "17" })).rejects.toEqual(new ExitError(1));
+    await withEnvAsync(
+      {
+        OPENCLAW_PROFILE: "personal",
+        OPENCLAW_STATE_DIR: callerState,
+        OPENCLAW_CONFIG_PATH: path.join(callerState, "openclaw.json"),
+      },
+      async () => {
+        await expect(updateCommand({ yes: true, timeout: "17" })).rejects.toEqual(new ExitError(1));
+      },
+    );
 
-    expect(serviceStop).toHaveBeenCalledOnce();
-    expect(freshRestartCalls()).toEqual([
-      [
-        [process.execPath, entrypoint, "gateway", "restart", "--preserve-definition"],
-        expect.objectContaining({ cwd: root, timeoutMs: 17_000, baseEnv: {} }),
-      ],
-    ]);
+    expect(serviceStop).not.toHaveBeenCalled();
+    expect(preflightStateDirs).toEqual([callerState, managedState]);
+    expect(freshRestartCalls()).toEqual([]);
+    expectNoSideEffects(
+      cleanupStaleManagedServiceUpdateHandoffs,
+      launchdUpdateCleanupMocks.disableCurrentOpenClawUpdateLaunchdJob,
+      managedUpdateHandoff.start,
+    );
     expectNoSideEffects(serviceStart, serviceRestart);
     expect(defaultRuntime.exit).not.toHaveBeenCalled();
-    expect(vi.mocked(runCommandWithTimeout).mock.invocationCallOrder.at(-1)).toBeLessThan(
-      requireValue(
-        vi.mocked(runUpdateFailureTriage).mock.invocationCallOrder.at(-1),
-        "triage after service recovery",
-      ),
+  });
+
+  it("refuses caller config drift after stopping a Git-owned service", async () => {
+    const root = createCaseDir("schema-git-caller-config-drift");
+    const sha = "a".repeat(40);
+    await writeOpenClawPackageFixture(root, "1.0.0", {
+      git: true,
+      builtSha: sha,
+      entrySource: "export {};\n",
+    });
+    vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue(root);
+    vi.mocked(runCommandWithTimeout).mockResolvedValue(commandResult({ stdout: sha }));
+    const entrypoint = path.join(root, "dist", "index.js");
+    const managedState = profileStateDir("work");
+    const callerState = profileStateDir("personal");
+    const managedConfigPath = path.join(managedState, "openclaw.json");
+    const callerConfigPath = path.join(callerState, "openclaw.json");
+    vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValue(entrypoint);
+    primeServiceCommand([process.execPath, entrypoint, "gateway", "run"], {
+      OPENCLAW_SERVICE_MARKER: "openclaw",
+      OPENCLAW_SERVICE_KIND: "gateway",
+      OPENCLAW_PROFILE: "work",
+      OPENCLAW_STATE_DIR: managedState,
+      OPENCLAW_CONFIG_PATH: managedConfigPath,
+    });
+    serviceLoaded.mockResolvedValue(true);
+    serviceReadRuntime.mockResolvedValue({
+      status: "running",
+      pid: gatewayFixturePid,
+      state: "running",
+    });
+    serviceStop.mockImplementationOnce(async () => {
+      serviceReadRuntime.mockResolvedValue({ status: "stopped", state: "stopped" });
+    });
+    mockFileBackedPathExists();
+    let callerReads = 0;
+    vi.mocked(readConfigFileSnapshot).mockImplementation(async () => {
+      if (process.env.OPENCLAW_PROFILE === "work") {
+        return configSnapshot(baseConfig, { path: managedConfigPath, hash: "managed-hash" });
+      }
+      callerReads += 1;
+      const changed = callerReads > 1;
+      const config = {
+        session: {
+          store: changed
+            ? "/external/caller-after/{agentId}/sessions.json"
+            : "/external/caller-before/{agentId}/sessions.json",
+        },
+      } as OpenClawConfig;
+      return configSnapshot(config, {
+        path: callerConfigPath,
+        raw: JSON.stringify(config),
+        hash: changed ? "caller-after" : "caller-before",
+      });
+    });
+    let gitMutationStarted = false;
+    vi.mocked(runGatewayUpdate).mockImplementationOnce(async (options) => {
+      await options?.beforeGitMutation?.({ schemaVersions: { state: 3, agent: 11 } });
+      gitMutationStarted = true;
+      return makeOkUpdateResult({ mode: "git" });
+    });
+    databasePreflightMocks.preflightOpenClawDatabaseSchemas.mockReturnValue({
+      incompatible: [],
+      indeterminate: [],
+    });
+
+    await withEnvAsync(
+      {
+        OPENCLAW_PROFILE: "personal",
+        OPENCLAW_STATE_DIR: callerState,
+        OPENCLAW_CONFIG_PATH: callerConfigPath,
+      },
+      async () => {
+        await expect(updateCommand({ yes: true })).rejects.toEqual(new ExitError(1));
+      },
+    );
+
+    expect(callerReads).toBe(2);
+    expect(serviceStop).toHaveBeenCalledOnce();
+    expect(gitMutationStarted).toBe(false);
+    expect(freshRestartCalls()).toHaveLength(1);
+    expect(getErrorOutput()).toContain("caller OpenClaw config changed during update admission");
+    expectNoSideEffects(
+      cleanupStaleManagedServiceUpdateHandoffs,
+      launchdUpdateCleanupMocks.disableCurrentOpenClawUpdateLaunchdJob,
+      managedUpdateHandoff.start,
     );
   });
 
@@ -5034,6 +6197,10 @@ describe("update-cli", () => {
     await expect(updateCommand({ yes: true })).rejects.toEqual(new ExitError(1));
 
     expectNoSideEffects(serviceStop, serviceRestart);
+    expectNoSideEffects(
+      cleanupStaleManagedServiceUpdateHandoffs,
+      launchdUpdateCleanupMocks.disableCurrentOpenClawUpdateLaunchdJob,
+    );
     expect(defaultRuntime.exit).not.toHaveBeenCalled();
   });
 
@@ -5495,8 +6662,62 @@ describe("update-cli", () => {
   const packageUpdateInGatewayMessage = [
     "Package updates cannot run from inside the gateway service process.",
     "That path replaces the active OpenClaw dist tree while the live gateway may still lazy-load old chunks.",
-    "Run `openclaw update` from a terminal outside the gateway service.",
+    "From chat, the OpenClaw owner can start the update with the gateway update action or /update, which hands it to a managed helper.",
   ].join("\n");
+
+  it("reports a profile-scoped dry-run service refusal through the visible chat handoff", async () => {
+    await mockPackageInstallAtCaseDir();
+    primeServiceCommand(["openclaw", "gateway", "run"], {
+      OPENCLAW_SERVICE_MARKER: "openclaw",
+      OPENCLAW_SERVICE_KIND: "gateway",
+      OPENCLAW_PROFILE: "work",
+    });
+    serviceReadRuntime.mockRejectedValue(new Error("runtime probe failed"));
+
+    await expect(
+      withEnvAsync({ OPENCLAW_PROFILE: "work" }, () =>
+        runWithGatewayServiceEnv({ dryRun: true, json: true }),
+      ),
+    ).rejects.toEqual(new ExitError(1));
+
+    expect(getErrorOutput()).toContain("gateway update action or /update");
+    expect(getErrorOutput()).not.toContain("shell outside");
+    expect(getErrorOutput()).not.toContain("terminal");
+    expect(getErrorOutput()).not.toContain("stop the gateway service first");
+    expect(lastWriteJsonCall()).toMatchObject({
+      status: "error",
+      reason: "managed-service-preflight",
+    });
+    expectNoSideEffects(managedUpdateHandoff.start, serviceStop, runGatewayUpdate);
+  });
+
+  it("preflights a profile-scoped service-less dry run without starting a handoff", async () => {
+    await mockPackageInstallAtCaseDir();
+    const workState = profileStateDir("work");
+    vi.mocked(fetchNpmPackageTargetStatus).mockResolvedValue(
+      packageTargetStatus({ schemaVersions: { state: 3, agent: 11 } }),
+    );
+    serviceReadCommand.mockResolvedValue(null);
+    serviceReadRuntime.mockResolvedValue({
+      status: "stopped",
+      state: "stopped",
+      missingUnit: true,
+    });
+    const preflightStateDirs: Array<string | undefined> = [];
+    databasePreflightMocks.preflightOpenClawDatabaseSchemas.mockImplementation(({ env }) => {
+      preflightStateDirs.push(env.OPENCLAW_STATE_DIR);
+      return { incompatible: [], indeterminate: [] };
+    });
+
+    await withEnvAsync({ OPENCLAW_PROFILE: "work", OPENCLAW_STATE_DIR: workState }, () =>
+      runWithGatewayServiceEnv({ dryRun: true, json: true }),
+    );
+
+    expect(preflightStateDirs).toEqual([workState]);
+    expectNoSideEffects(managedUpdateHandoff.start, serviceStop, runGatewayUpdate);
+    expect(packageInstallCommandCall()).toBeUndefined();
+    expect(getErrorOutput()).not.toContain("terminal");
+  });
 
   it("allows package updates from inherited gateway service env when the managed gateway is not running", async () => {
     await mockPackageInstallAtCaseDir();
@@ -5576,23 +6797,28 @@ describe("update-cli", () => {
     expect(packageInstallCommandCall()).toBeUndefined();
   });
 
-  it("refuses package updates from inside the active gateway process tree", async () => {
+  it("refuses a package update from inside the active gateway process tree", async () => {
     await mockPackageInstallAtCaseDir();
     serviceLoaded.mockResolvedValue(true);
     mockGetSelfAndAncestorPidsSync.mockReturnValue(
       new Set<number>([process.pid, gatewayFixturePid]),
     );
 
-    await expect(invokeUpdateCli({ yes: true })).rejects.toEqual(new ExitError(1));
+    await expect(invokeUpdateCli({ yes: true, json: true })).rejects.toEqual(new ExitError(1));
 
     const errors = getErrorOutput();
     expect(errors).toContain(
       `This command is running inside the gateway process tree (gateway PID ${gatewayFixturePid}).`,
     );
-    expect(errors).toContain("Run this command from a shell outside the gateway service.");
     expect(errors).toContain("would kill this command");
     expect(errors).toContain("gateway update action or /update");
+    expect(errors).not.toContain("shell outside");
+    expect(errors).not.toContain("terminal");
     expect(errors).not.toContain("stop the gateway service first");
+    expect(lastWriteJsonCall()).toMatchObject({
+      status: "error",
+      reason: "managed-service-preflight",
+    });
     expect(defaultRuntime.exit).not.toHaveBeenCalled();
     expect(serviceStop).not.toHaveBeenCalled();
     expect(packageInstallCommandCall()).toBeUndefined();
@@ -5651,6 +6877,10 @@ describe("update-cli", () => {
       if (git) {
         vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue(root);
         vi.mocked(runCommandWithTimeout).mockResolvedValue(commandResult({ stdout: sha }));
+        vi.mocked(runGatewayUpdate).mockImplementationOnce(async (updateOptions) => {
+          await updateOptions?.beforeGitMutation?.({ schemaVersions: { state: 3, agent: 11 } });
+          return makeOkUpdateResult({ mode: "git", root });
+        });
       }
       mockFileBackedPathExists();
       mockRunningManagedGateway([process.execPath, entryPath, "gateway", "run"]);
@@ -5691,7 +6921,36 @@ describe("update-cli", () => {
         handoffId: "test-handoff",
         installRoot: root,
       });
-      expectNoSideEffects(serviceStop, serviceRestart, runRestartScript, runGatewayUpdate);
+      expect(serviceReadCommand).toHaveBeenCalledTimes(git ? 2 : 3);
+      const serviceStateCommandReads = serviceReadCommand.mock.calls.filter(
+        ([readOptions]) =>
+          typeof readOptions === "object" &&
+          readOptions !== null &&
+          "requireEffective" in readOptions,
+      );
+      expect(serviceStateCommandReads).toEqual([
+        [{ requireEffective: true }],
+        [{ requireEffective: true }],
+      ]);
+      expect(serviceReadRuntime).toHaveBeenCalledTimes(2);
+      expect(managedUpdateHandoff.start).toHaveBeenCalledTimes(1);
+      const handoffOrder = requireValue(
+        managedUpdateHandoff.start.mock.invocationCallOrder[0],
+        "managed handoff start call order",
+      );
+      expect(
+        databasePreflightMocks.preflightOpenClawDatabaseSchemas.mock.invocationCallOrder.every(
+          (order) => order < handoffOrder,
+        ),
+      ).toBe(true);
+      expectNoSideEffects(serviceStop, serviceRestart, runRestartScript);
+      if (git) {
+        expect(runGatewayUpdate).toHaveBeenCalledWith(
+          expect.objectContaining({ beforeGitMutation: expect.any(Function) }),
+        );
+      } else {
+        expect(runGatewayUpdate).not.toHaveBeenCalled();
+      }
       expect(packageInstallCommandCall()).toBeUndefined();
       expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
       expect(lastWriteJsonCall()).toMatchObject({
@@ -5704,6 +6963,7 @@ describe("update-cli", () => {
         ],
       });
       expect(JSON.stringify(lastWriteJsonCall())).toContain("gateway status --deep");
+      expect(JSON.stringify(lastWriteJsonCall())).not.toContain("terminal");
     },
   );
 
@@ -5776,9 +7036,10 @@ describe("update-cli", () => {
     expect(errors).toContain(
       `This command is running inside the gateway process tree (gateway PID ${gatewayFixturePid}).`,
     );
-    expect(errors).toContain("Run this command from a shell outside the gateway service.");
     expect(errors).toContain("would kill this command");
     expect(errors).toContain("gateway update action or /update");
+    expect(errors).not.toContain("shell outside");
+    expect(errors).not.toContain("terminal");
     expect(errors).not.toContain("stop the gateway service first");
     expect(defaultRuntime.exit).not.toHaveBeenCalled();
     expect(serviceStop).not.toHaveBeenCalled();
@@ -6472,6 +7733,29 @@ describe("update-cli", () => {
       }
     },
   );
+
+  it("refuses Windows package updates from gateway ancestry before changing task autostart", async () => {
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    suspendScheduledTaskAutoStartForUpdate.mockResolvedValue(true);
+    await mockPackageInstallAtCaseDir("openclaw-update-windows-ancestry-refusal");
+    mockRunningManagedGateway();
+    mockFileBackedPathExists();
+    mockGetSelfAndAncestorPidsSync.mockReturnValue(
+      new Set<number>([process.pid, gatewayFixturePid]),
+    );
+    try {
+      await expect(invokeUpdateCli({ yes: true })).rejects.toEqual(new ExitError(1));
+
+      expect(getErrorOutput()).toContain(`gateway PID ${gatewayFixturePid}`);
+      expect(getErrorOutput()).toContain("gateway update action or /update");
+      expect(suspendScheduledTaskAutoStartForUpdate).not.toHaveBeenCalled();
+      expect(resumeScheduledTaskAutoStartAfterUpdate).not.toHaveBeenCalled();
+      expectNoSideEffects(serviceStop, serviceStart, serviceRestart);
+      expect(packageInstallCommandCall()).toBeUndefined();
+    } finally {
+      platformSpy.mockRestore();
+    }
+  });
 
   it("stops a running managed gateway before package replacement", async () => {
     const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
@@ -7652,6 +8936,87 @@ describe("update-cli", () => {
     expect(updateCall?.beforeGitMutation).toEqual(expect.any(Function));
   });
 
+  it("refuses a package-to-Git target from the package service profile before preparation or stop", async () => {
+    const prefix = tempDirs.make("openclaw-update-package-service-schema-");
+    const nodeModules = path.join(prefix, "lib", "node_modules");
+    const packageRoot = path.join(nodeModules, "openclaw");
+    const packageEntrypoint = await writeOpenClawPackageFixture(packageRoot, "2026.4.20", {
+      entrySource: "export {};\n",
+    });
+    const gitRoot = tempDirs.make("openclaw-update-git-schema-target-");
+    const sha = "a".repeat(40);
+    await writeOpenClawPackageFixture(gitRoot, "2026.4.21", {
+      entrySource: "export {};\n",
+      git: true,
+      builtSha: sha,
+    });
+    const canonicalGitRoot = await fs.realpath(gitRoot);
+    const managedState = profileStateDir("work");
+    const callerState = profileStateDir("personal");
+    mockPackageInstallStatus(packageRoot);
+    mockFileBackedPathExists();
+    mockNpmGlobalCommands(nodeModules, undefined, canonicalGitRoot);
+    mockRunningManagedGateway([process.execPath, packageEntrypoint, "gateway", "run"]);
+    primeServiceCommand([process.execPath, packageEntrypoint, "gateway", "run"], {
+      OPENCLAW_SERVICE_MARKER: "openclaw",
+      OPENCLAW_SERVICE_KIND: "gateway",
+      OPENCLAW_PROFILE: "work",
+      OPENCLAW_STATE_DIR: managedState,
+    });
+    const { gatewayServiceCommandUsesRoot } =
+      await import("./update-cli/update-command-service-plan.js");
+    await expect(
+      gatewayServiceCommandUsesRoot({ root: packageRoot, command: await serviceReadCommand() }),
+    ).resolves.toBe(true);
+    vi.mocked(runGatewayUpdate).mockImplementationOnce(async (options) => {
+      await options?.beforeGitMutation?.({ schemaVersions: { state: 3, agent: 11 } });
+      throw new Error("refused Git target must not mutate");
+    });
+    const schemaPreflightStateDirs: Array<string | undefined> = [];
+    databasePreflightMocks.preflightOpenClawDatabaseSchemas.mockImplementation(({ env }) => {
+      schemaPreflightStateDirs.push(env.OPENCLAW_STATE_DIR);
+      return env.OPENCLAW_STATE_DIR === managedState
+        ? {
+            incompatible: [
+              {
+                kind: "agent",
+                path: path.join(managedState, "agents", "worker", "agent", "openclaw-agent.sqlite"),
+                agentId: "worker",
+                foundVersion: 12,
+                supportedVersion: 11,
+              },
+            ],
+            indeterminate: [],
+          }
+        : { incompatible: [], indeterminate: [] };
+    });
+
+    await withEnvAsync(
+      {
+        OPENCLAW_GIT_DIR: gitRoot,
+        OPENCLAW_PROFILE: "personal",
+        OPENCLAW_STATE_DIR: callerState,
+      },
+      async () => {
+        await expect(updateCommand({ channel: "dev", yes: true, json: true })).rejects.toEqual(
+          new ExitError(1),
+        );
+      },
+    );
+
+    expect(schemaPreflightStateDirs).toEqual([callerState, managedState]);
+    expect(getErrorOutput()).toContain("agent database (agent worker)");
+    expect(runGatewayUpdate).toHaveBeenCalledOnce();
+    expectNoSideEffects(
+      cleanupStaleManagedServiceUpdateHandoffs,
+      managedUpdateHandoff.start,
+      serviceStop,
+      serviceRestart,
+      runRestartScript,
+    );
+    expect(defaultRuntime.exit).not.toHaveBeenCalled();
+  });
+
   it.runIf(process.platform !== "win32")(
     "continues package-to-Git updates from the published checkout after its alias is retargeted",
     async () => {
@@ -7831,6 +9196,7 @@ describe("update-cli", () => {
     vi.mocked(readConfigFileSnapshot)
       .mockResolvedValueOnce(baseSnapshot)
       .mockResolvedValueOnce(baseSnapshot)
+      .mockResolvedValueOnce(baseSnapshot)
       .mockResolvedValueOnce(invalidPostUpdateSnapshot);
     mockRunningManagedGateway(["node", serviceEntrypoint, "gateway", "run"]);
     mockGitUpdateAfterMutation();
@@ -7887,7 +9253,7 @@ describe("update-cli", () => {
     expect(serviceStop).toHaveBeenCalled();
   });
 
-  it("disarms legacy launchd updater jobs before stopping the gateway", async () => {
+  it("disarms legacy launchd updater jobs after schema-safe stop and before replacement", async () => {
     const tempDir = tempDirs.make("openclaw-update-launchd-loop-");
     const { nodeModules } = await setupInstalledPackageRoot(tempDir);
     mockRunningManagedGateway();
@@ -7900,8 +9266,17 @@ describe("update-cli", () => {
     const cleanupOrder =
       launchdUpdateCleanupMocks.disableCurrentOpenClawUpdateLaunchdJob.mock.invocationCallOrder[0];
     const serviceStopOrder = serviceStop.mock.invocationCallOrder[0];
-    expect(requireValue(cleanupOrder, "launchd updater cleanup order")).toBeLessThan(
-      requireValue(serviceStopOrder, "service stop order"),
+    const npmInstallCallIndex = vi
+      .mocked(runCommandWithTimeout)
+      .mock.calls.findIndex(
+        (call) => Array.isArray(call[0]) && call[0][0] === "npm" && call[0][1] === "i",
+      );
+    const npmInstallOrder =
+      vi.mocked(runCommandWithTimeout).mock.invocationCallOrder[npmInstallCallIndex];
+    const requiredCleanupOrder = requireValue(cleanupOrder, "launchd updater cleanup order");
+    expect(requireValue(serviceStopOrder, "service stop order")).toBeLessThan(requiredCleanupOrder);
+    expect(requiredCleanupOrder).toBeLessThan(
+      requireValue(npmInstallOrder, "package replacement order"),
     );
   });
 
@@ -8178,7 +9553,7 @@ describe("update-cli", () => {
 
     await updateCommand({ dryRun: true });
 
-    expect(serviceReadCommand).toHaveBeenCalledOnce();
+    expect(serviceReadCommand).toHaveBeenCalledTimes(2);
     const logs = getLogOutput();
     expect(logs).toContain(`Targeting managed gateway service package root: ${serviceRoot}`);
     expect(logs).toContain(
@@ -8262,7 +9637,7 @@ describe("update-cli", () => {
     { scenario: "non-Gateway command", command: "agent", sameNode: false, selected: false },
     { scenario: "symlink to current Node", command: "gateway", sameNode: true, selected: false },
   ])(
-    "plans service Node selection from one inspection ($scenario)",
+    "preserves planned service Node selection through admission reinspection ($scenario)",
     async ({ command, sameNode, selected }) => {
       const root = createCaseDir("openclaw-same-root");
       const entrypoint = await writeOpenClawPackageFixture(root, "2026.5.18");
@@ -8281,7 +9656,7 @@ describe("update-cli", () => {
 
       await updateCommand({ dryRun: true });
 
-      expect(serviceReadCommand).toHaveBeenCalledOnce();
+      expect(serviceReadCommand).toHaveBeenCalledTimes(2);
       const logs = getLogOutput();
       expect(logs).not.toContain("Targeting managed gateway service package root");
       if (selected) {
@@ -8590,6 +9965,12 @@ describe("update-cli", () => {
       meta: { lastTouchedVersion: "2026.5.14" },
     } as OpenClawConfig;
     vi.mocked(readConfigFileSnapshot)
+      .mockResolvedValueOnce({
+        ...baseSnapshot,
+        sourceConfig: preUpdateConfig,
+        config: preUpdateConfig,
+        hash: "pre-update-hash",
+      })
       .mockResolvedValueOnce({
         ...baseSnapshot,
         sourceConfig: preUpdateConfig,

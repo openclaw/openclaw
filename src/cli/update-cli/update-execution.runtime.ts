@@ -3,6 +3,9 @@
 // after a rebuild removes the old hashed chunk. Preload that closure before mutation.
 import "../../config/io.write.js";
 
-export { executeMutableUpdate } from "./update-command-execution.js";
+export {
+  executeMutableUpdate,
+  inspectDryRunTargetDatabaseSchemas,
+} from "./update-command-execution.js";
 export { finishUpdate } from "./update-command-post-update.js";
 export { resumePostCoreUpdate } from "./update-command-resume.js";

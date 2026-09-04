@@ -7,11 +7,11 @@ import { isBetaTag, isStableTag, type UpdateChannel } from "./update-channels.js
 import { compareSemverStrings } from "./update-check.js";
 import type { CommandRunner, UpdateRunnerOptions } from "./update-runner-types.js";
 
-type GitTargetSchemaMetadata =
+export type GitTargetSchemaMetadata =
   | { status: "ok"; schemaVersions?: OpenClawSchemaVersions }
   | { status: "unreadable"; reason: string };
 
-async function readGitTargetSchemaVersions(params: {
+export async function readGitTargetSchemaVersions(params: {
   runCommand: CommandRunner;
   root: string;
   revision: string;
@@ -91,9 +91,20 @@ export async function resolveChannelTag(
   channel: Exclude<UpdateChannel, "dev">,
 ): Promise<string | null> {
   const tags = await listGitTags(runCommand, root, timeoutMs);
+  return selectChannelTag(tags, channel);
+}
+
+export function selectChannelTag(
+  tags: readonly string[],
+  channel: Exclude<UpdateChannel, "dev">,
+): string | null {
+  const orderedTags = normalizeStringEntries(tags).toSorted((left, right) => {
+    const comparison = compareSemverStrings(left, right);
+    return comparison == null ? right.localeCompare(left) : -comparison;
+  });
   if (channel === "beta") {
-    const betaTag = tags.find((tag) => isBetaTag(tag)) ?? null;
-    const stableTag = tags.find((tag) => isStableTag(tag)) ?? null;
+    const betaTag = orderedTags.find((tag) => isBetaTag(tag)) ?? null;
+    const stableTag = orderedTags.find((tag) => isStableTag(tag)) ?? null;
     if (!betaTag) {
       return stableTag;
     }
@@ -103,5 +114,5 @@ export async function resolveChannelTag(
     const comparison = compareSemverStrings(betaTag, stableTag);
     return comparison != null && comparison < 0 ? stableTag : betaTag;
   }
-  return tags.find((tag) => isStableTag(tag)) ?? null;
+  return orderedTags.find((tag) => isStableTag(tag)) ?? null;
 }
