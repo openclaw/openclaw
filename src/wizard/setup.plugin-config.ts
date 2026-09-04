@@ -243,7 +243,7 @@ async function promptPluginFields(params: {
     if (schemaProp?.enum && Array.isArray(schemaProp.enum)) {
       const options = schemaProp.enum.map((configValue, index) => ({
         value: String(index),
-        label: String(configValue),
+        label: JSON.stringify(configValue) ?? String(configValue),
       }));
       if (hasValue) {
         options.unshift({

@@ -360,51 +360,79 @@ describe("setupPluginConfig", () => {
   });
 
   it.each([
-    { name: "number", values: [1, 2], selectedIndex: 1, expected: 2 },
-    { name: "boolean", values: [true, false], selectedIndex: 1, expected: false },
     {
-      name: "object with a duplicate label",
+      name: "number",
+      values: [1, 2],
+      selectedIndex: 1,
+      expected: 2,
+      expectedLabels: ["1", "2"],
+    },
+    {
+      name: "boolean",
+      values: [true, false],
+      selectedIndex: 1,
+      expected: false,
+      expectedLabels: ["true", "false"],
+    },
+    {
+      name: "object",
       values: [{ mode: "first" }, { mode: "second" }],
       selectedIndex: 1,
       expected: { mode: "second" },
+      expectedLabels: ['{"mode":"first"}', '{"mode":"second"}'],
     },
-  ])("preserves a selected $name enum value", async ({ values, selectedIndex, expected }) => {
-    const pluginId = "typed-enum";
-    loadPluginManifestRegistryCore.mockReturnValue({
-      plugins: [
-        makeManifestPlugin(
-          pluginId,
-          { choice: { label: "Choice" } },
-          {
-            type: "object",
-            properties: {
-              choice: { enum: values },
+    {
+      name: "mixed type",
+      values: [1, "1", null],
+      selectedIndex: 1,
+      expected: "1",
+      expectedLabels: ["1", '"1"', "null"],
+    },
+  ])(
+    "preserves and labels a selected $name enum value",
+    async ({ values, selectedIndex, expected, expectedLabels }) => {
+      const pluginId = "typed-enum";
+      loadPluginManifestRegistryCore.mockReturnValue({
+        plugins: [
+          makeManifestPlugin(
+            pluginId,
+            { choice: { label: "Choice" } },
+            {
+              type: "object",
+              properties: {
+                choice: { enum: values },
+              },
             },
-          },
-        ),
-      ],
-    });
-    const select = vi.fn(
-      async (params: { options: Array<{ value: unknown }> }) =>
-        params.options[selectedIndex]?.value,
-    );
+          ),
+        ],
+      });
+      const select = vi.fn(
+        async (params: { options: Array<{ value: unknown }> }) =>
+          params.options[selectedIndex]?.value,
+      );
 
-    const result = await setupPluginConfig({
-      config: { plugins: { entries: { [pluginId]: { enabled: true } } } },
-      prompter: {
-        intro: vi.fn(async () => {}),
-        outro: vi.fn(async () => {}),
-        note: vi.fn(async () => {}),
-        select: select as unknown as WizardPrompter["select"],
-        multiselect: vi.fn(async () => [pluginId]) as unknown as WizardPrompter["multiselect"],
-        text: vi.fn(async () => ""),
-        confirm: vi.fn(async () => true),
-        progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
-      },
-    });
+      const result = await setupPluginConfig({
+        config: { plugins: { entries: { [pluginId]: { enabled: true } } } },
+        prompter: {
+          intro: vi.fn(async () => {}),
+          outro: vi.fn(async () => {}),
+          note: vi.fn(async () => {}),
+          select: select as unknown as WizardPrompter["select"],
+          multiselect: vi.fn(async () => [pluginId]) as unknown as WizardPrompter["multiselect"],
+          text: vi.fn(async () => ""),
+          confirm: vi.fn(async () => true),
+          progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
+        },
+      });
 
-    expect(result.plugins?.entries?.[pluginId]?.config).toEqual({ choice: expected });
-  });
+      expect(select).toHaveBeenCalledWith({
+        message: "Choice",
+        options: expectedLabels.map((label, index) => ({ value: String(index), label })),
+        initialValue: undefined,
+      });
+      expect(result.plugins?.entries?.[pluginId]?.config).toEqual({ choice: expected });
+    },
+  );
 
   it.each([
     {
