@@ -16,7 +16,7 @@ import {
   type QuotaBudgetSummary,
   type QuotaLimitSummary,
 } from "../../../lib/provider-quota-summary.ts";
-import { resolveEffectiveContextTokens } from "../../../lib/sessions/context-budget.ts";
+import { resolveEffectiveContextLimit } from "../../../lib/sessions/context-budget.ts";
 import { handleChatComposerDetailsToggle } from "./chat-picker-overlay.ts";
 
 const CONTEXT_NOTICE_RATIO = 0.85;
@@ -128,9 +128,13 @@ function getContextNoticeViewModel(
   bg: string;
   warning: boolean;
   approximate: boolean;
+  reserveAdjusted: boolean;
 } | null {
   const used = session?.totalTokens;
-  const limit = resolveEffectiveContextTokens(session, defaultContextTokens);
+  const { tokens: limit, reserveAdjusted } = resolveEffectiveContextLimit(
+    session,
+    defaultContextTokens,
+  );
   if (typeof used !== "number" || !Number.isFinite(used) || used < 0 || !limit) {
     return null;
   }
@@ -165,6 +169,7 @@ function getContextNoticeViewModel(
       bg: "color-mix(in srgb, var(--muted) 8%, transparent)",
       warning,
       approximate,
+      reserveAdjusted,
     };
   }
   const { warnRgb, dangerRgb } = getThemeNoticeColors();
@@ -185,6 +190,7 @@ function getContextNoticeViewModel(
     bg,
     warning,
     approximate,
+    reserveAdjusted,
   };
 }
 
@@ -412,7 +418,11 @@ export function renderContextNotice(
               ? html`
                   <div class="context-usage__header">
                     <span class="context-usage__title"
-                      >${t("chat.composer.contextUsage.contextWindow")}</span
+                      >${t(
+                        model.reserveAdjusted
+                          ? "chat.composer.contextUsage.promptBudget"
+                          : "chat.composer.contextUsage.contextWindow",
+                      )}</span
                     >
                     <strong class="context-usage__context-value"
                       >${model.detail} · ${percentage}</strong

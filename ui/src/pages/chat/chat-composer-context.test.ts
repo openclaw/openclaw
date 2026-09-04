@@ -2,6 +2,13 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import {
+  CATALOG_CONTEXT_TOKENS,
+  COMPACTION_RESERVE_TOKENS,
+  createContextBudgetStatusFixture,
+  PRESSURED_PROMPT_TOKENS,
+  SESSION_CONTEXT_TOKEN_BUDGET,
+} from "../../test-helpers/context-budget-status-fixture.ts";
 import { renderComposerFixture, resetComposerFixture } from "./chat-composer.test-support.ts";
 
 type ComposerOverrides = Parameters<typeof renderComposerFixture>[0];
@@ -42,39 +49,60 @@ describe("renderChatComposer context usage", () => {
     );
   });
 
-  it("measures context usage against the effective budget", () => {
+  it("measures context usage against the budget compaction triggers on", () => {
     const container = renderComposer({
       selectedSession: {
         key: "main",
         kind: "direct",
         updatedAt: null,
-        totalTokens: 49_152,
-        contextTokens: 262_144,
-        contextBudgetStatus: {
-          schemaVersion: 1,
-          source: "pre-prompt-estimate",
-          updatedAt: 1_700_000_000_000,
-          provider: "anthropic",
-          model: "claude-opus-5",
-          route: "fits",
-          shouldCompact: false,
-          estimatedPromptTokens: 49_152,
-          contextTokenBudget: 98_304,
-          promptBudgetBeforeReserve: 98_304,
-          reserveTokens: 32_768,
-          effectiveReserveTokens: 32_768,
-          remainingPromptBudgetTokens: 16_384,
-          overflowTokens: 0,
-          toolResultReducibleChars: 0,
-          messageCount: 12,
-          unwindowedMessageCount: 12,
-        },
+        totalTokens: PRESSURED_PROMPT_TOKENS,
+        contextTokens: CATALOG_CONTEXT_TOKENS,
+        contextBudgetStatus: createContextBudgetStatusFixture({
+          contextTokenBudget: SESSION_CONTEXT_TOKEN_BUDGET,
+          reserveTokens: COMPACTION_RESERVE_TOKENS,
+          estimatedPromptTokens: PRESSURED_PROMPT_TOKENS,
+        }),
       },
-      sessions: { sessions: [], defaults: { contextTokens: 262_144 } } as never,
+      sessions: { sessions: [], defaults: { contextTokens: CATALOG_CONTEXT_TOKENS } } as never,
+    });
+
+    // 160k of the 180k prompt budget. The same session reads 61% against the
+    // catalog window and 80% against contextTokenBudget: both stay under the
+    // 85% warning threshold this one crosses.
+    expect(container.querySelector(".context-ring")?.getAttribute("aria-label")).toBe(
+      "Session context usage: 160k of 180k (89%)",
+    );
+    expect(
+      container.querySelector(".context-ring")?.classList.contains("context-ring--warning"),
+    ).toBe(true);
+    expect(container.querySelector(".context-usage__title")?.textContent?.trim()).toBe(
+      "Context before compaction",
+    );
+  });
+
+  it("reads full when the runtime is already over the prompt budget", () => {
+    const overflowingPromptTokens = 181_000;
+    const status = createContextBudgetStatusFixture({
+      contextTokenBudget: SESSION_CONTEXT_TOKEN_BUDGET,
+      reserveTokens: COMPACTION_RESERVE_TOKENS,
+      estimatedPromptTokens: overflowingPromptTokens,
+    });
+    expect(status.shouldCompact).toBe(true);
+
+    const container = renderComposer({
+      selectedSession: {
+        key: "main",
+        kind: "direct",
+        updatedAt: null,
+        totalTokens: overflowingPromptTokens,
+        contextTokens: CATALOG_CONTEXT_TOKENS,
+        contextBudgetStatus: status,
+      },
+      sessions: { sessions: [], defaults: { contextTokens: CATALOG_CONTEXT_TOKENS } } as never,
     });
 
     expect(container.querySelector(".context-ring")?.getAttribute("aria-label")).toBe(
-      "Session context usage: 49.2k of 98.3k (50%)",
+      "Session context usage: 181k of 180k (100%)",
     );
   });
 
@@ -84,14 +112,17 @@ describe("renderChatComposer context usage", () => {
         key: "main",
         kind: "direct",
         updatedAt: null,
-        totalTokens: 49_152,
-        contextTokens: 262_144,
+        totalTokens: PRESSURED_PROMPT_TOKENS,
+        contextTokens: CATALOG_CONTEXT_TOKENS,
       },
-      sessions: { sessions: [], defaults: { contextTokens: 262_144 } } as never,
+      sessions: { sessions: [], defaults: { contextTokens: CATALOG_CONTEXT_TOKENS } } as never,
     });
 
     expect(container.querySelector(".context-ring")?.getAttribute("aria-label")).toBe(
-      "Session context usage: 49.2k of 262.1k (19%)",
+      "Session context usage: 160k of 262.1k (61%)",
+    );
+    expect(container.querySelector(".context-usage__title")?.textContent?.trim()).toBe(
+      "Context window",
     );
   });
 
