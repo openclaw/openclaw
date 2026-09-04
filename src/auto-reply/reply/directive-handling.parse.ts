@@ -98,8 +98,6 @@ export type InlineDirectives = {
   rawModelProfile?: string;
   rawModelRuntime?: string;
   modelDirectiveSource?: "alias" | "model";
-  /** True when the model directive shares its message with prompt prose (mid-message mention). */
-  modelDirectiveMixed?: boolean;
   modelScope?: ModelSelectionScope;
   modelScopeConflict: boolean;
   hasQueueDirective: boolean;

@@ -132,17 +132,6 @@ export function resolveModelSelectionFromDirective(params: {
     rawRuntime: params.directives.rawModelRuntime,
   });
   if (resolved.error) {
-    // A mid-message model mention that fails to resolve is far more likely
-    // prose than a switch attempt: default-provider-constructed refs like
-    // "deepseek/bzw." built from ordinary sentences must not abort the whole
-    // turn (#137197). Directive-only messages and alias-sourced directives
-    // keep their explicit errors.
-    if (
-      params.directives.modelDirectiveMixed &&
-      params.directives.modelDirectiveSource !== "alias"
-    ) {
-      return {};
-    }
     return { errorText: resolved.error };
   }
   const modelSelection = resolved.selection;

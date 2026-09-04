@@ -111,15 +111,13 @@ export function resolveReplyDirectiveRouting(params: {
       noMentions.trim() &&
       parseInlineSessionDirectives(noMentions, { modelAliases: params.modelAliases }).cleaned.trim()
     ) {
-      const mixedModelDirective = isModelSelectionDirective(parsed);
-      const mixed = mixedModelDirective
+      const mixed = isModelSelectionDirective(parsed)
         ? preserveMixedModelDirective(parsed, parsed.cleaned)
         : clearInlineDirectives(parsed.cleaned);
       // Exec policy belongs to this message; placement keeps its directive-only persistence path.
       const hasExecPolicy = parsed.rawExecSecurity !== undefined || parsed.rawExecAsk !== undefined;
       parsed = {
         ...mixed,
-        ...(mixedModelDirective ? { modelDirectiveMixed: true } : {}),
         hasExecDirective: hasExecPolicy,
         hasExecOptions: hasExecPolicy,
         execSecurity: parsed.execSecurity,
