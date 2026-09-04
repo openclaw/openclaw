@@ -23,6 +23,10 @@ import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import { isImageMediaFact, readPersistedMediaFacts } from "../media/media-facts.js";
 import { stripInlineDirectiveTagsForDisplay } from "../utils/directive-tags.js";
+import {
+  createCliAssistantCoverage,
+  isCliAssistantAggregateMessage,
+} from "./cli-session-history.merge-aggregates.js";
 
 const INDEX_INSERT_BATCH_ROWS = 65;
 const INDEX_ORDINAL_BATCH_ROWS = 256;
@@ -131,6 +135,22 @@ function resolveImportedExternalIdentityKey(
     : undefined;
 }
 
+function decodeIndexedHistoryText(value: string | null): string | null {
+  if (value === null) {
+    return null;
+  }
+  const parsed = JSON.parse(value);
+  return typeof parsed === "string" ? parsed : null;
+}
+
+function isClaudeCliAssistantImport(role: string | null, metadata: string | null): boolean {
+  if (role !== "assistant" || !metadata) {
+    return false;
+  }
+  const meta = asOptionalRecord(JSON.parse(metadata));
+  return normalizeOptionalString(meta?.importedFrom) === "claude-cli";
+}
+
 type HistoryRow = {
   id: number;
   local_seq: number | null;
@@ -169,6 +189,7 @@ export class CliSessionHistoryIndex {
   private nextLocal = 0;
   private nextImport = 0;
   private expanded = false;
+  private readonly coverage = createCliAssistantCoverage();
   count = 0;
 
   constructor(memoryOnly = false) {
@@ -322,7 +343,15 @@ export class CliSessionHistoryIndex {
         .map(({ message, seq }) => {
           const id = seq - 1;
           this.nextLocal = Math.max(this.nextLocal, id + 1);
-          return this.row(message, id, seq);
+          const row = this.row(message, id, seq);
+          this.coverage.noteLocal({
+            id,
+            role: row.role,
+            text: decodeIndexedHistoryText(row.text),
+            timestamp: row.timestamp,
+            aggregate: isCliAssistantAggregateMessage(message, row.role ?? undefined),
+          });
+          return row;
         });
       runSqliteImmediateTransactionSync(this.database, () => {
         for (const row of rows) {
@@ -342,6 +371,19 @@ export class CliSessionHistoryIndex {
     if (this.pendingImports.length >= INDEX_INSERT_BATCH_ROWS) {
       this.flushImports();
     }
+  }
+
+  private noteImportedCoverage(
+    imported: Pick<HistoryRow, "role" | "text" | "timestamp" | "metadata">,
+    duplicate: boolean,
+  ): void {
+    this.coverage.noteImported({
+      role: imported.role,
+      text: decodeIndexedHistoryText(imported.text),
+      timestamp: imported.timestamp,
+      duplicate,
+      claudeAssistant: isClaudeCliAssistantImport(imported.role, imported.metadata),
+    });
   }
 
   private flushImports(): void {
@@ -516,6 +558,7 @@ export class CliSessionHistoryIndex {
         for (const imported of batch) {
           let duplicate = imported.external_key ? matchExternal(imported.external_key) : undefined;
           if (duplicate) {
+            this.noteImportedCoverage(imported, true);
             advance(imported, duplicate);
             continue;
           }
@@ -543,6 +586,7 @@ export class CliSessionHistoryIndex {
               }
             }
           }
+          this.noteImportedCoverage(imported, Boolean(duplicate));
           if (duplicate) {
             const meta: Record<string, unknown> = duplicate.metadata
               ? JSON.parse(duplicate.metadata)
@@ -578,10 +622,11 @@ export class CliSessionHistoryIndex {
       });
     }
     // Preserve the existing stable comparator even for mixed/missing timestamps.
+    const droppedAggregates = this.coverage.coveredAggregateIds();
     const order = executeSqliteQuerySync(
       this.database,
       this.db.selectFrom("messages").select(["id", "timestamp"]).orderBy("id"),
-    ).rows;
+    ).rows.filter((row) => !droppedAggregates.has(row.id));
     if (this.expanded) {
       order.sort((a, b) =>
         a.timestamp !== null && b.timestamp !== null && a.timestamp !== b.timestamp
