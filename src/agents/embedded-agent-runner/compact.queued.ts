@@ -28,7 +28,10 @@ import { enqueueCommandInLane } from "../../process/command-queue.js";
 import { resolveSessionPinnedHarnessId } from "../../sessions/agent-harness-session-key.js";
 import { resolveUserPath } from "../../utils.js";
 import { resolveAgentDir, resolveSessionAgentIds } from "../agent-scope.js";
-import { isRecoverableNativeHarnessBindingFailure } from "../harness/compaction-recovery.js";
+import {
+  classifyRecoverableNativeHarnessBindingFailure,
+  isRecoverableNativeHarnessBindingFailure,
+} from "../harness/compaction-recovery.js";
 import { maybeCompactAgentHarnessSession } from "../harness/compaction.js";
 import { ensureSelectedAgentHarnessPlugin } from "../harness/runtime-plugin.js";
 import {
@@ -646,18 +649,25 @@ async function compactResolvedContextEngine(
           );
         })
       : undefined;
-  // Only the private dispatched native capability may authorize required-preflight
-  // fallback for a locked harness; public result fields cannot escape the lock.
-  if (
-    lockedNativeHarness &&
-    !transcriptBytePreflightAuthority &&
-    !(
-      preparedParams.preflightRequired === true &&
-      requiredPreflightNativeCapabilityUsed &&
-      isRecoverableNativeHarnessBindingFailure(harnessResult)
-    )
-  ) {
-    return harnessResult ?? lockedCompactionRuntimeFailure(selectedHarnessRuntime);
+  // A model-locked native harness is terminal: it has no context-engine
+  // credentials, so a recoverable binding failure must never fall through to the
+  // generic engine (that route fails and drops the turn, #119977). Stamp the typed
+  // recovery disposition only when the private required-preflight capability
+  // dispatched and returned a recoverable binding failure, so the turn layer can
+  // safe-continue (#119971); every other locked outcome stays an honest ok:false.
+  // The transcript-byte preflight authority owns its own host-driven route, so a
+  // locked harness under that authority still defers to the context engine below.
+  if (lockedNativeHarness && !transcriptBytePreflightAuthority) {
+    if (!harnessResult) {
+      return lockedCompactionRuntimeFailure(selectedHarnessRuntime);
+    }
+    const bindingRecoveryReason =
+      preparedParams.preflightRequired === true && requiredPreflightNativeCapabilityUsed
+        ? classifyRecoverableNativeHarnessBindingFailure(harnessResult)
+        : undefined;
+    return bindingRecoveryReason
+      ? { ...harnessResult, nativeHarnessBindingRecoveryReason: bindingRecoveryReason }
+      : harnessResult;
   }
   if (harnessResult) {
     if (!isRecoverableNativeHarnessBindingFailure(harnessResult)) {
