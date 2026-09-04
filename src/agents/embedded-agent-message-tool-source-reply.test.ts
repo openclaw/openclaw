@@ -388,6 +388,30 @@ describe("isDeliveredMessageToolOnlySourceReplyResult", () => {
     }).toBe(true);
   });
 
+  it("accepts a confirmed native send the reply-action name list does not enumerate", () => {
+    // The producer already proved the roll reached this run's own conversation.
+    expectSourceReplyDelivery({
+      sourceReplyDeliveryMode: "message_tool_only",
+      toolName: "message",
+      args: { action: "dice", to: "direct:user-1", diceEmoji: "\u{1F3B2}" },
+      result: {
+        details: {
+          ok: true,
+          sourceReplyRoute: "current-source",
+        },
+      },
+    }).toBe(true);
+  });
+
+  it("rejects an unconfirmed native send outside the reply-action name list", () => {
+    expectSourceReplyDelivery({
+      sourceReplyDeliveryMode: "message_tool_only",
+      toolName: "message",
+      args: { action: "dice", to: "direct:someone-else", diceEmoji: "\u{1F3B2}" },
+      result: { details: { ok: true } },
+    }).toBe(false);
+  });
+
   it("accepts a confirmed current-source poll delivery", () => {
     expectSourceReplyDelivery({
       sourceReplyDeliveryMode: "message_tool_only",

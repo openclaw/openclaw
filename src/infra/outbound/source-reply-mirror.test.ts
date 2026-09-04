@@ -248,6 +248,18 @@ it.each(["thread-reply", "upload-file", "sendAttachment", "sendWithEffect"])(
   },
 );
 
+// Dice shares the no-mirroring rule but not the rest of the table's: a roll does deliver
+// visible content, so it stays a current-source delivery while carrying no transcript text.
+it("keeps a dice delivery out of the transcript while it carries ignored send text", async () => {
+  const params = source("testchat", "direct:user-1", {
+    action: "dice",
+    actionParams: { to: "direct:user-1", message: "You rolled a six" },
+    deliveredPayload: { ok: true, messageId: "dice-1" },
+  });
+  await expect(mirrorDeliveredSourceReplyToTranscript(params)).resolves.toBe(false);
+  expect(transcriptMocks.append).not.toHaveBeenCalled();
+});
+
 it.each([
   {
     name: "topic reply",
