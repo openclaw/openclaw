@@ -149,7 +149,7 @@
                   "timeoutMs": {
                     "type": "integer",
                     "minimum": 1,
-                    "description": "Completion timeout in milliseconds for phase runs and dream diary narrative generation."
+                    "description": "Completion timeout in milliseconds for Dream Diary narrative generation only. Other dreaming work (e.g. deep consolidation) keeps its own fixed timeouts."
                   }
                 }
               }
@@ -189,7 +189,7 @@
                       "timeoutMs": {
                         "type": "integer",
                         "minimum": 1,
-                        "description": "Completion timeout in milliseconds for phase runs and dream diary narrative generation."
+                        "description": "Completion timeout in milliseconds for Dream Diary narrative generation only. Other dreaming work (e.g. deep consolidation) keeps its own fixed timeouts."
                       }
                     }
                   }
@@ -251,7 +251,7 @@
                       "timeoutMs": {
                         "type": "integer",
                         "minimum": 1,
-                        "description": "Completion timeout in milliseconds for phase runs and dream diary narrative generation."
+                        "description": "Completion timeout in milliseconds for Dream Diary narrative generation only. Other dreaming work (e.g. deep consolidation) keeps its own fixed timeouts."
                       }
                     }
                   }
@@ -287,7 +287,7 @@
                       "timeoutMs": {
                         "type": "integer",
                         "minimum": 1,
-                        "description": "Completion timeout in milliseconds for phase runs and dream diary narrative generation."
+                        "description": "Completion timeout in milliseconds for Dream Diary narrative generation only. Other dreaming work (e.g. deep consolidation) keeps its own fixed timeouts."
                       }
                     }
                   }
