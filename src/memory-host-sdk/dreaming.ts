@@ -269,7 +269,7 @@ function resolveExecutionConfig(
 ): MemoryDreamingExecutionConfig {
   const record = asNullableRecord(value);
   const maxOutputTokens = normalizeOptionalPositiveInt(record?.maxOutputTokens);
-  const timeoutMs = normalizeOptionalPositiveInt(record?.timeoutMs);
+  const timeoutMs = normalizeOptionalPositiveInt(record?.timeoutMs) ?? fallback.timeoutMs;
   const temperatureRaw = record?.temperature;
   const temperature =
     typeof temperatureRaw === "number" && Number.isFinite(temperatureRaw) && temperatureRaw >= 0
