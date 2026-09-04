@@ -301,36 +301,40 @@ function createAssistantMediaTicket(source: string, nowMs = Date.now()) {
   };
 }
 
-function verifyAssistantMediaTicket(ticket: string | null, source: string, nowMs = Date.now()) {
+function verifyAssistantMediaTicket(
+  ticket: string | null,
+  source: string,
+  nowMs = Date.now(),
+): number | undefined {
   const now = asDateTimestampMs(nowMs);
   if (now === undefined) {
-    return false;
+    return undefined;
   }
   const parts = ticket?.split(".");
   if (!parts || parts.length !== 3 || parts[0] !== "v1") {
-    return false;
+    return undefined;
   }
   const [, encodedPayload, sig] = parts;
   if (!encodedPayload || !sig) {
-    return false;
+    return undefined;
   }
   const expectedSig = signAssistantMediaTicketPayload(encodedPayload);
   if (!safeEqualSecret(sig, expectedSig)) {
-    return false;
+    return undefined;
   }
   try {
     const payload = JSON.parse(
       Buffer.from(encodedPayload, "base64url").toString("utf8"),
     ) as Partial<AssistantMediaTicketPayload>;
-    return (
-      payload.scope === CONTROL_UI_ASSISTANT_MEDIA_TICKET_SCOPE &&
+    return payload.scope === CONTROL_UI_ASSISTANT_MEDIA_TICKET_SCOPE &&
       payload.source === source &&
       typeof payload.exp === "number" &&
       Number.isFinite(payload.exp) &&
       payload.exp >= now
-    );
+      ? payload.exp
+      : undefined;
   } catch {
-    return false;
+    return undefined;
   }
 }
 
@@ -463,8 +467,10 @@ export async function handleControlUiAssistantMediaRequest(
     return true;
   }
   const isMetaRequest = url.searchParams.get("meta") === "1";
-  const hasValidMediaTicket =
-    !isMetaRequest && verifyAssistantMediaTicket(url.searchParams.get("mediaTicket"), source);
+  const mediaTicketExpiresAt = isMetaRequest
+    ? undefined
+    : verifyAssistantMediaTicket(url.searchParams.get("mediaTicket"), source);
+  const hasValidMediaTicket = mediaTicketExpiresAt !== undefined;
   if (
     !hasValidMediaTicket &&
     !(await authorizeControlUiReadRequestOrReply({
@@ -549,7 +555,16 @@ export async function handleControlUiAssistantMediaRequest(
       "Content-Disposition",
       buildAssistantMediaContentDisposition(filename, contentType),
     );
-    res.setHeader("Cache-Control", "no-cache");
+    // Canonical inbound refs are immutable. A private cache may reuse those bytes only
+    // while the URL's signed ticket remains valid; mutable local paths still revalidate.
+    const cacheMaxAge =
+      resolvedReference.kind === "inbound" && mediaTicketExpiresAt !== undefined
+        ? Math.max(0, Math.floor((mediaTicketExpiresAt - Date.now()) / 1000))
+        : undefined;
+    res.setHeader(
+      "Cache-Control",
+      cacheMaxAge === undefined ? "no-cache" : `private, max-age=${cacheMaxAge}`,
+    );
     const byteResponse = resolveByteResponse({
       file: opened.stat,
       method: req.method,

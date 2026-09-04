@@ -65,6 +65,7 @@ export type ChatMediaResource<Value> = {
   unavailableAt: number | undefined;
   abortController: AbortController | undefined;
   refresh: { at: number; timer: ReturnType<typeof setTimeout> } | undefined;
+  retainWhileIdle: boolean;
 };
 
 type ChatMediaSubscriber = {
@@ -81,7 +82,7 @@ type ManagedImageBlobUrl = {
 const chatMediaResources = new Map<string, ChatMediaResource<unknown>>();
 const chatMediaSubscribers = new Map<() => void, ChatMediaSubscriber>();
 const managedImageBlobUrls = new Map<string, ManagedImageBlobUrl>();
-const MANAGED_IMAGE_BLOB_URL_CACHE_MAX_ENTRIES = 64;
+const CHAT_MEDIA_CACHE_MAX_ENTRIES = 64;
 let chatMediaRenderVersion = 0;
 
 function chatMediaResourceKey(kind: ChatMediaResourceKind, cacheKey: string): string {
@@ -118,6 +119,12 @@ function detachChatMediaResourceSubscriber(
   const resourceKey = chatMediaResourceKey(resource.kind, resource.cacheKey);
   if (chatMediaResources.get(resourceKey) === resource) {
     chatMediaResources.delete(resourceKey);
+    // Virtual rows release every subscriber while offscreen. Keep only settled
+    // successes so remounts reuse their signed URL without retaining failed work.
+    if (resource.retainWhileIdle && !resource.pending) {
+      chatMediaResources.set(resourceKey, resource);
+      trimIdleChatMediaResources();
+    }
   }
   resource.abortController?.abort();
   resource.abortController = undefined;
@@ -142,6 +149,7 @@ export function observeChatMediaResource<Value>(
       unavailableAt: undefined,
       abortController: undefined,
       refresh: undefined,
+      retainWhileIdle: false,
     };
     chatMediaResources.set(resourceKey, resource as ChatMediaResource<unknown>);
   }
@@ -156,6 +164,15 @@ export function observeChatMediaResource<Value>(
     resource.subscribers.add(subscriber);
   }
   return resource;
+}
+
+function trimIdleChatMediaResources() {
+  const retained = [...chatMediaResources.entries()].filter(
+    ([, resource]) => resource.retainWhileIdle && resource.subscribers.size === 0,
+  );
+  for (const [resourceKey] of retained.slice(0, -CHAT_MEDIA_CACHE_MAX_ENTRIES)) {
+    chatMediaResources.delete(resourceKey);
+  }
 }
 
 export function isChatMediaResourceCurrent<Value>(resource: ChatMediaResource<Value>): boolean {
@@ -259,7 +276,7 @@ export function trimManagedImageMissResources() {
       resource.subscribers.size === 0 &&
       !resource.pending,
   );
-  for (const [resourceKey] of misses.slice(0, -MANAGED_IMAGE_BLOB_URL_CACHE_MAX_ENTRIES)) {
+  for (const [resourceKey] of misses.slice(0, -CHAT_MEDIA_CACHE_MAX_ENTRIES)) {
     chatMediaResources.delete(resourceKey);
   }
 }
@@ -275,7 +292,7 @@ export function readManagedImageBlobUrl(cacheKey: string): string | undefined {
 }
 
 function trimManagedImageBlobUrlCache() {
-  while (managedImageBlobUrls.size > MANAGED_IMAGE_BLOB_URL_CACHE_MAX_ENTRIES) {
+  while (managedImageBlobUrls.size > CHAT_MEDIA_CACHE_MAX_ENTRIES) {
     const evictable = [...managedImageBlobUrls].find(([, cached]) => cached.retainCount === 0);
     if (!evictable) {
       return;

@@ -47,6 +47,7 @@ export function resolveAssistantAttachmentAvailability(
   resourceBasePath: string | undefined,
   authToken: string | null | undefined,
   onRequestUpdate: (() => void) | undefined,
+  connectionEpoch = 0,
 ): AssistantAttachmentAvailability {
   if (!isLocalAssistantAttachmentSource(source)) {
     return { status: "available" };
@@ -65,7 +66,8 @@ export function resolveAssistantAttachmentAvailability(
     );
   }
   const normalizedAuthToken = authToken?.trim() ?? "";
-  const cacheKey = `${resourceBasePath ?? ""}::${normalizedAuthToken}::${source}`;
+  const connectionScope = connectionEpoch === 0 ? "" : `${connectionEpoch}::`;
+  const cacheKey = `${connectionScope}${resourceBasePath ?? ""}::${normalizedAuthToken}::${source}`;
   const resource = observeChatMediaResource<AssistantAttachmentAvailability>(
     "assistant-attachment",
     cacheKey,
@@ -243,13 +245,15 @@ export function retryAssistantAttachmentAvailability(
   resourceBasePath: string | undefined,
   authToken: string | null | undefined,
   onRequestUpdate: (() => void) | undefined,
+  connectionEpoch = 0,
 ): void {
   if (!isLocalAssistantAttachmentSource(source)) {
     onRequestUpdate?.();
     return;
   }
   const normalizedAuthToken = authToken?.trim() ?? "";
-  const cacheKey = `${resourceBasePath ?? ""}::${normalizedAuthToken}::${source}`;
+  const connectionScope = connectionEpoch === 0 ? "" : `${connectionEpoch}::`;
+  const cacheKey = `${connectionScope}${resourceBasePath ?? ""}::${normalizedAuthToken}::${source}`;
   const resource = observeChatMediaResource<AssistantAttachmentAvailability>(
     "assistant-attachment",
     cacheKey,
@@ -260,6 +264,7 @@ export function retryAssistantAttachmentAvailability(
   resource.abortController = undefined;
   resource.pending = undefined;
   resource.value = undefined;
+  resource.retainWhileIdle = false;
   resource.retryAttempted = false;
   scheduleAssistantAttachmentRefresh(resource, { status: "checking" });
   notifyChatMediaResourceSubscribers(resource);
@@ -294,6 +299,7 @@ function setAssistantAttachmentAvailability(
     return;
   }
   resource.value = availability;
+  resource.retainWhileIdle = availability.status === "available";
   scheduleAssistantAttachmentRefresh(resource, availability);
 }
 

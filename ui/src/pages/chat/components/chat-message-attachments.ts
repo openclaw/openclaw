@@ -327,6 +327,7 @@ function resolveAttachmentSource(
     resourceBasePath,
     authToken,
     onRequestUpdate,
+    connectionEpoch,
   );
   if (assistantAvailability.status !== "available") {
     return {
@@ -341,6 +342,7 @@ function resolveAttachmentSource(
                 resourceBasePath,
                 authToken,
                 onRequestUpdate,
+                connectionEpoch,
               )
           : undefined,
     };
