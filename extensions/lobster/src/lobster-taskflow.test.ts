@@ -173,6 +173,36 @@ describe("runManagedLobsterFlow", () => {
     });
   });
 
+  it("fails instead of finishing when Lobster requests structured input", async () => {
+    const taskFlow = createFakeTaskFlow();
+    const runner = createRunner({
+      ok: true,
+      status: "needs_input",
+      output: [],
+      requiresApproval: null,
+      requiresInput: {
+        type: "input_request",
+        prompt: "Choose a destination",
+        responseSchema: { type: "string" },
+        resumeToken: "input-token-1",
+      },
+    });
+
+    const result = expectManagedFlowFailure(
+      await runManagedLobsterFlow(createRunFlowParams(taskFlow, runner)),
+    );
+
+    expect(result.error.message).toBe(
+      "managed TaskFlow mode does not support structured input requests",
+    );
+    expect(taskFlow.fail).toHaveBeenCalledWith({
+      flowId: "flow-1",
+      expectedRevision: 1,
+    });
+    expect(taskFlow.finish).not.toHaveBeenCalled();
+    expect(taskFlow.setWaiting).not.toHaveBeenCalled();
+  });
+
   it("fails the flow when the runner throws", async () => {
     const taskFlow = createFakeTaskFlow();
     const runner: LobsterRunner = {

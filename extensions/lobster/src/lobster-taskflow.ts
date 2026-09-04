@@ -149,6 +149,15 @@ async function executeManagedLobsterFlow(
       const mutation = params.taskFlow.fail(flowMutation);
       return { ok: false, flow, mutation, error: new Error(envelope.error.message) };
     }
+    if (envelope.status === "needs_input") {
+      const mutation = params.taskFlow.fail(flowMutation);
+      return {
+        ok: false,
+        flow,
+        mutation,
+        error: new Error("managed TaskFlow mode does not support structured input requests"),
+      };
+    }
     const mutation =
       envelope.status === "needs_approval"
         ? params.taskFlow.setWaiting({

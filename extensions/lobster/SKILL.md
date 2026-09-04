@@ -1,6 +1,6 @@
 # Lobster
 
-Lobster executes multi-step workflows with approval checkpoints. Use it when:
+Lobster executes multi-step workflows with approval checkpoints and structured input requests. Use it when:
 
 - User wants a repeatable automation (triage, monitor, sync)
 - Actions need human approval before executing (send, post, delete)
@@ -65,6 +65,27 @@ Present the prompt to the user. If they approve:
 }
 ```
 
+Approval tokens and IDs retain Lobster's existing resume behavior.
+
+### Handle structured input
+
+An `ask` step pauses with `status: "needs_input"`. Present `requiresInput.prompt`
+and use `requiresInput.responseSchema` to collect a valid JSON response. Resume
+with the returned token and `responseJson`, not `approve`:
+
+```json
+{
+  "action": "resume",
+  "token": "<resumeToken>",
+  "responseJson": "{\"decision\":\"approve\"}"
+}
+```
+
+Use ordinary Lobster mode for structured input. Managed Task Flow mode remains
+approval-only. Resume from the same OpenClaw session within seven days. Input
+tokens cannot be moved across sessions or reused after execution starts; a
+response rejected by pre-execution validation may be corrected and retried.
+
 ## Example workflows
 
 ### Email triage
@@ -87,7 +108,8 @@ Same as above, but halts for approval before returning.
 
 - **Deterministic**: Same input → same output (no LLM variance in pipeline execution)
 - **Approval gates**: `approve` command halts execution, returns token
-- **Resumable**: Use `resume` action with token to continue
+- **Resumable**: Use `resume` with `approve` for approval gates or `responseJson` for input requests
+- **Session-bound input**: Structured-input tokens are valid for seven days only in the creating session and cannot replay execution
 - **Structured output**: Always returns JSON envelope with `protocolVersion`
 
 ## Don't use Lobster for

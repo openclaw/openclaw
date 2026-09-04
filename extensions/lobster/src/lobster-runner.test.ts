@@ -134,6 +134,78 @@ describe("createEmbeddedLobsterRunner", () => {
   );
 
   it.each([
+    [
+      "prompt",
+      { prompt: "x".repeat(4097) },
+      "lobster input request prompt exceeded its model-context limit",
+    ],
+    [
+      "responseSchema",
+      { responseSchema: { type: "string", description: "x".repeat(8193) } },
+      "lobster input request responseSchema exceeded its model-context limit",
+    ],
+    [
+      "defaults",
+      { defaults: "x".repeat(4097) },
+      "lobster input request defaults exceeded its model-context limit",
+    ],
+    [
+      "subject",
+      { subject: "x".repeat(2049) },
+      "lobster input request subject exceeded its model-context limit",
+    ],
+    [
+      "resume token",
+      { resumeToken: "x".repeat(4097) },
+      "lobster input request resumeToken exceeded its model-context limit",
+    ],
+    [
+      "complete envelope",
+      {
+        prompt: "x".repeat(4090),
+        responseSchema: { type: "string", description: "x".repeat(7900) },
+        defaults: "x".repeat(3900),
+        subject: "x".repeat(1900),
+        resumeToken: "x".repeat(300),
+      },
+      "lobster input request exceeded its model-context limit",
+    ],
+  ])(
+    "rejects an oversized structured-input %s with a fixed model budget",
+    async (_field, patch, expectedError) => {
+      const runtime = {
+        runToolRequest: vi.fn().mockResolvedValue({
+          ok: true,
+          status: "needs_input",
+          output: [],
+          requiresApproval: null,
+          requiresInput: {
+            type: "input_request",
+            prompt: "Choose an outcome",
+            responseSchema: { type: "string" },
+            resumeToken: "input-token",
+            ...patch,
+          },
+        }),
+        resumeToolRequest: vi.fn(),
+      };
+      const runner = createEmbeddedLobsterRunner({
+        loadRuntime: vi.fn().mockResolvedValue(runtime),
+      });
+
+      await expect(
+        runner.run({
+          action: "run",
+          pipeline: "ask --prompt 'Choose an outcome'",
+          cwd: process.cwd(),
+          timeoutMs: 2000,
+          maxStdoutBytes: 1_000_000,
+        }),
+      ).rejects.toThrow(expectedError);
+    },
+  );
+
+  it.each([
     "exec --json=true cat data.json",
     "exec --json=true cat config.yaml",
     "exec --json=true cat flow.lobster",
@@ -348,7 +420,20 @@ describe("createEmbeddedLobsterRunner", () => {
     ).rejects.toThrow("boom");
   });
 
-  it("fails closed when the embedded runtime requests unsupported input", async () => {
+  it("returns structured input requests and resumes them with a response", async () => {
+    const requiresInput = {
+      type: "input_request" as const,
+      prompt: "Review this draft?",
+      responseSchema: {
+        type: "object",
+        properties: { decision: { type: "string", enum: ["approve", "reject"] } },
+        required: ["decision"],
+        additionalProperties: false,
+      },
+      defaults: { decision: "approve" },
+      subject: { text: "draft body" },
+      resumeToken: "input-resume-token",
+    };
     const runtime = {
       runToolRequest: vi.fn().mockResolvedValue({
         ok: true,
@@ -356,12 +441,16 @@ describe("createEmbeddedLobsterRunner", () => {
         status: "needs_input",
         output: [],
         requiresApproval: null,
-        requiresInput: {
-          prompt: "Need more data",
-          schema: { type: "string" },
-        },
+        requiresInput,
       }),
-      resumeToolRequest: vi.fn(),
+      resumeToolRequest: vi.fn().mockResolvedValue({
+        ok: true,
+        protocolVersion: 1,
+        status: "ok",
+        output: [{ decision: "approve", subject: "draft body" }],
+        requiresApproval: null,
+        requiresInput: null,
+      }),
     };
 
     const runner = createEmbeddedLobsterRunner({
@@ -371,12 +460,41 @@ describe("createEmbeddedLobsterRunner", () => {
     await expect(
       runner.run({
         action: "run",
-        pipeline: "exec --json=true echo hi",
+        pipeline: "ask --prompt 'Review this draft?'",
         cwd: process.cwd(),
         timeoutMs: 2000,
         maxStdoutBytes: 4096,
       }),
-    ).rejects.toThrow("Lobster input requests are not supported by the OpenClaw Lobster tool yet");
+    ).resolves.toEqual({
+      ok: true,
+      status: "needs_input",
+      output: [],
+      requiresApproval: null,
+      requiresInput,
+    });
+
+    await expect(
+      runner.run({
+        action: "resume",
+        token: "input-resume-token",
+        response: { decision: "approve" },
+        cwd: process.cwd(),
+        timeoutMs: 2000,
+        maxStdoutBytes: 4096,
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      status: "ok",
+      output: [{ decision: "approve", subject: "draft body" }],
+    });
+    expect(runtime.resumeToolRequest).toHaveBeenCalledOnce();
+    const request = requireRecord(
+      requireFirstCallParam(runtime.resumeToolRequest.mock.calls, "input resume tool request"),
+      "input resume tool request",
+    );
+    expect(request.token).toBe("input-resume-token");
+    expect(request.response).toEqual({ decision: "approve" });
+    expect(request.approved).toBeUndefined();
   });
 
   it("routes resume through the embedded runtime", async () => {
@@ -569,7 +687,7 @@ describe("createEmbeddedLobsterRunner", () => {
     ).rejects.toThrow(/pipeline required/);
   });
 
-  it("requires token and approve for resume", async () => {
+  it("requires a token and exactly one resume decision", async () => {
     const runner = createEmbeddedLobsterRunner({
       loadRuntime: vi.fn().mockResolvedValue({
         runToolRequest: vi.fn(),
@@ -595,7 +713,19 @@ describe("createEmbeddedLobsterRunner", () => {
         timeoutMs: 2000,
         maxStdoutBytes: 4096,
       }),
-    ).rejects.toThrow(/approve required/);
+    ).rejects.toThrow(/exactly one of approve or response required/);
+
+    await expect(
+      runner.run({
+        action: "resume",
+        token: "resume-token",
+        approve: true,
+        response: { decision: "approve" },
+        cwd: process.cwd(),
+        timeoutMs: 2000,
+        maxStdoutBytes: 4096,
+      }),
+    ).rejects.toThrow(/exactly one of approve or response required/);
   });
 
   it("aborts long-running embedded work", async () => {

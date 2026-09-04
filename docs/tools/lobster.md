@@ -1,13 +1,14 @@
 ---
-summary: "Typed workflow runtime for OpenClaw with resumable approval gates."
+summary: "Typed workflow runtime for OpenClaw with resumable approval and input gates."
 title: Lobster
 read_when:
   - You want deterministic multi-step workflows with explicit approvals
   - You need to resume a workflow without re-running earlier steps
+  - Your workflow needs a schema-validated operator response
 ---
 
 Lobster runs multi-step tool pipelines as one deterministic tool call, with
-explicit approval checkpoints and resume tokens. It sits one layer above
+explicit approval or structured-input checkpoints and resume tokens. It sits one layer above
 detached background work: for orchestrating flows across many detached tasks,
 see [Task Flow](/automation/taskflow) (`openclaw tasks flow`); for the task
 activity ledger, see [Background Tasks](/automation/tasks).
@@ -22,6 +23,8 @@ runtime:
   result for the whole pipeline.
 - **Approvals built in**: side effects (send, post, delete) halt the workflow
   until explicitly approved.
+- **Structured input built in**: an `ask` step can halt until the operator sends
+  a response matching its JSON Schema.
 - **Resumable**: a halted workflow returns a token; approve and resume without
   re-running earlier steps.
 
@@ -71,8 +74,13 @@ With Lobster, the same job is one call that halts for approval and resumes:
 OpenClaw runs Lobster workflows **in-process** using the bundled
 `@clawdbot/lobster` package as an embedded runner. No external `lobster`
 subprocess is spawned; the tool call returns a JSON envelope directly. If the
-pipeline halts for approval, the envelope carries a resume token (or a short
-approval ID) so you can continue later.
+pipeline halts for approval or input, the envelope carries a resume token so
+you can continue later. Approval requests may also carry a short approval ID.
+OpenClaw binds each structured-input checkpoint to the exact session that
+created it for seven days. Its token cannot be resumed after `/new`, `/reset`,
+from another session, or again after the continuation starts executing. A
+response rejected by Lobster's pre-execution validation may be corrected and
+retried. Approval tokens and IDs retain Lobster's existing resume behavior.
 
 ## Enable
 
@@ -143,6 +151,19 @@ If the pipeline requests approval, resume with the token:
   "action": "resume",
   "token": "<resumeToken>",
   "approve": true
+}
+```
+
+If an `ask` step returns `status: "needs_input"`, present
+`requiresInput.prompt` and collect a response matching
+`requiresInput.responseSchema`. Resume with the same token and a JSON-encoded
+response:
+
+```json
+{
+  "action": "resume",
+  "token": "<resumeToken>",
+  "responseJson": "{\"decision\":\"approve\"}"
 }
 ```
 
@@ -310,9 +331,11 @@ Run a workflow file with args:
 }
 ```
 
-`resume` accepts either `token` (the full resume token from `requiresApproval`)
-or `approvalId` (the short id from the same object) - use whichever the halted
-run returned. `approve` is required.
+For approval gates, `resume` accepts either `token` or the short `approvalId`
+from `requiresApproval`, and `approve` is required. For structured input,
+provide the `token` from `requiresInput` and a `responseJson` value matching its
+schema. Supply exactly one of `approve` or `responseJson`. Structured-input
+tokens must be resumed from the same OpenClaw session within seven days.
 
 ### Managed Task Flow mode
 
@@ -324,14 +347,18 @@ Lobster envelope to it (`waiting` on approval, `succeeded`/`failed`/`cancelled` 
 completion), and returns `{ ok, envelope, flow, mutation }`. This mode requires
 a bound Task Flow runtime and is intended for plugin/controller code that needs
 durable flow state across gateway restarts, not typical ad hoc agent use.
+Managed Task Flow mode currently persists approval checkpoints only. Run
+structured-input workflows without the managed flow fields.
 
 ## Output envelope
 
-Lobster returns a JSON envelope with one of three statuses:
+Lobster returns a JSON envelope with one of four statuses:
 
 - `ok` - finished successfully
 - `needs_approval` - paused; `requiresApproval` carries a `resumeToken` and a
   short `approvalId`, either of which can resume the run
+- `needs_input` - paused; `requiresInput` carries the prompt, response schema,
+  optional subject/defaults, and a `resumeToken`
 - `cancelled` - explicitly denied or cancelled
 
 The tool surfaces the envelope in both `content` (pretty JSON) and `details`
@@ -357,17 +384,22 @@ pointer to that state, not the full pipeline state.
 - **No secrets** - Lobster doesn't manage OAuth; it calls OpenClaw tools that
   do.
 - **Sandbox-aware** - disabled when the tool context is sandboxed.
+- **Session-bound input resume** - structured-input credentials are stored as
+  seven-day redacted SQLite bindings and atomically claimed before Lobster
+  resumes; only pre-execution parse failures release the claim for correction.
 - **Hardened** - timeouts and output caps enforced by the embedded runner.
 
 ## Troubleshooting
 
-| Error                                                         | Cause / fix                                                                      |
-| ------------------------------------------------------------- | -------------------------------------------------------------------------------- |
-| `lobster runtime timed out`                                   | Pipeline exceeded `timeoutMs`. Increase it or split the pipeline.                |
-| `lobster stdout exceeded maxStdoutBytes` (or `stderr`)        | Captured output exceeded the cap. Raise `maxStdoutBytes` or reduce output.       |
-| `lobster runtime result exceeded maxStdoutBytes`              | The JSON result exceeded the cap. Raise `maxStdoutBytes` or reduce output.       |
-| `run --args-json must be valid JSON`                          | `argsJson` (workflow-file runs) failed to parse. Fix the JSON string.            |
-| `lobster runtime failed` (or another `runtime_error` message) | The embedded runtime returned an error envelope. Check gateway logs for details. |
+| Error                                                           | Cause / fix                                                                      |
+| --------------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| `lobster runtime timed out`                                     | Pipeline exceeded `timeoutMs`. Increase it or split the pipeline.                |
+| `lobster stdout exceeded maxStdoutBytes` (or `stderr`)          | Captured output exceeded the cap. Raise `maxStdoutBytes` or reduce output.       |
+| `lobster runtime result exceeded maxStdoutBytes`                | The JSON result exceeded the cap. Raise `maxStdoutBytes` or reduce output.       |
+| `run --args-json must be valid JSON`                            | `argsJson` (workflow-file runs) failed to parse. Fix the JSON string.            |
+| `Lobster continuation belongs to another OpenClaw session`      | Resume from the session that created the checkpoint.                             |
+| `Lobster continuation is unavailable, expired, or already used` | The checkpoint was claimed or has no current binding. Run the workflow again.    |
+| `lobster runtime failed` (or another `runtime_error` message)   | The embedded runtime returned an error envelope. Check gateway logs for details. |
 
 ## Learn more
 

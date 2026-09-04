@@ -24,6 +24,7 @@ function fakeCtx(overrides: Partial<OpenClawPluginToolContext> = {}): OpenClawPl
     agentDir: "/tmp",
     agentId: "main",
     sessionKey: "main",
+    sessionId: "session-a",
     messageChannel: undefined,
     agentAccountId: undefined,
     sandboxed: false,
@@ -106,6 +107,28 @@ describe("lobster plugin tool", () => {
     expect(approval.resumeToken).toBe("resume-token-1");
   });
 
+  it("rejects invalid or ambiguous structured input responses", async () => {
+    const runner = { run: vi.fn() };
+    const tool = createLobsterTool(fakeApi(), { runner });
+
+    await expect(
+      tool.execute("call-invalid-input-response", {
+        action: "resume",
+        token: "input-token-1",
+        responseJson: "{bad",
+      }),
+    ).rejects.toThrow("responseJson must be valid JSON");
+    await expect(
+      tool.execute("call-ambiguous-input-response", {
+        action: "resume",
+        token: "input-token-1",
+        approve: true,
+        responseJson: '{"destination":"archive"}',
+      }),
+    ).rejects.toThrow(/exactly one of approve or response required/);
+    expect(runner.run).not.toHaveBeenCalled();
+  });
+
   it("keeps ordinary run on the runner for neutral flow defaults and ignores resume credentials", async () => {
     const runner = {
       run: vi.fn().mockResolvedValue({
@@ -122,7 +145,10 @@ describe("lobster plugin tool", () => {
     };
     const taskFlow = createFakeTaskFlow();
 
-    const tool = createLobsterTool(fakeApi(), { runner, taskFlow });
+    const tool = createLobsterTool(fakeApi(), {
+      runner,
+      taskFlow,
+    });
     const res = await tool.execute("call-default-flow-run", {
       action: "run",
       pipeline: "noop",
@@ -173,16 +199,36 @@ describe("lobster plugin tool", () => {
 
   it("keeps ordinary resume on the runner for neutral flow defaults", async () => {
     const runner = {
-      run: vi.fn().mockResolvedValue({
-        ok: true,
-        status: "ok",
-        output: [{ approved: true }],
-        requiresApproval: null,
-      }),
+      run: vi
+        .fn()
+        .mockResolvedValueOnce({
+          ok: true,
+          status: "needs_approval",
+          output: [],
+          requiresApproval: {
+            type: "approval_request",
+            prompt: "Continue?",
+            items: [],
+            resumeToken: "resume-token-1",
+          },
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          status: "ok",
+          output: [{ approved: true }],
+          requiresApproval: null,
+        }),
     };
     const taskFlow = createFakeTaskFlow();
 
-    const tool = createLobsterTool(fakeApi(), { runner, taskFlow });
+    const tool = createLobsterTool(fakeApi(), {
+      runner,
+      taskFlow,
+    });
+    await tool.execute("call-default-flow-run", {
+      action: "run",
+      pipeline: "noop",
+    });
     const res = await tool.execute("call-default-flow-resume", {
       action: "resume",
       token: "resume-token-1",
@@ -550,6 +596,24 @@ describe("lobster plugin tool", () => {
     expect(details.status).toBe("ok");
     const mutation = requireRecord(details.mutation, "managed resume mutation details");
     expect(mutation.applied).toBe(true);
+  });
+
+  it("keeps managed TaskFlow resumes approval-only", async () => {
+    const runner = { run: vi.fn() };
+    const taskFlow = createFakeTaskFlow();
+    const tool = createLobsterTool(fakeApi(), { runner, taskFlow });
+
+    await expect(
+      tool.execute("call-managed-input-resume", {
+        action: "resume",
+        token: "input-token-1",
+        responseJson: '{"destination":"archive"}',
+        flowId: "flow-1",
+        flowExpectedRevision: 1,
+      }),
+    ).rejects.toThrow("managed TaskFlow resume mode only supports approval decisions");
+    expect(taskFlow.resume).not.toHaveBeenCalled();
+    expect(runner.run).not.toHaveBeenCalled();
   });
 
   it("normalizes numeric string flowExpectedRevision before managed resume", async () => {

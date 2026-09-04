@@ -79,6 +79,8 @@ Notes:
 
 - Runs Lobster in process via the published `@clawdbot/lobster/core` runtime.
 - Does not manage OAuth/tokens.
+- Binds structured-input checkpoints to the creating OpenClaw session for seven
+  days and atomically claims each token before continuing the workflow.
 - Uses timeouts, stdout caps, and strict JSON envelope parsing.
 
 ## Docs
