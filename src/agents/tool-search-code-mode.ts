@@ -39,15 +39,13 @@ export async function runCodeMode(params: {
     signal: params.signal,
     onUpdate: params.onUpdate,
   });
-  return withUnavailableMcpServers(
-    {
-      ok: true,
-      value: toToolSearchJsonSafe(value),
-      logs,
-      telemetry: runtime.telemetry(),
-    },
-    params.ctx,
-  );
+  const result = {
+    ok: true,
+    value: toToolSearchJsonSafe(value),
+    logs,
+    telemetry: runtime.telemetry(),
+  };
+  return withUnavailableMcpServers(result, params.ctx);
 }
 
 function buildCodeModeChildArgs(): string[] {

@@ -243,12 +243,8 @@ export function createCodeModeTools(ctx: CodeModeToolContext): AnyAgentTool[] {
         }),
       );
       markCodeModePermissionChangeResult(result, signal);
-      return formatToolSearchControlResult(
-        withUnavailableMcpServers(result, ctx),
-        runtime,
-        undefined,
-        result.status,
-      );
+      const outcome = withUnavailableMcpServers(result, ctx);
+      return formatToolSearchControlResult(outcome, runtime, undefined, result.status);
     },
   } as AnyAgentTool);
   const waitTool = markCodeModeControlTool({
@@ -284,12 +280,8 @@ export function createCodeModeTools(ctx: CodeModeToolContext): AnyAgentTool[] {
         }),
       );
       markCodeModePermissionChangeResult(result, signal);
-      return formatToolSearchControlResult(
-        withUnavailableMcpServers(result, ctx),
-        runtime,
-        undefined,
-        result.status,
-      );
+      const outcome = withUnavailableMcpServers(result, ctx);
+      return formatToolSearchControlResult(outcome, runtime, undefined, result.status);
     },
   } as AnyAgentTool);
   return [execTool, waitTool];
