@@ -9,6 +9,8 @@ import { resolveSandboxHostPort } from "../agents/sandbox-host.js";
 import { isCoreCanvasHostEnabled } from "../canvas/config.js";
 import { resolveCanvasNodeCapability } from "../canvas/constants.js";
 import type { CliDeps } from "../cli/deps.types.js";
+import { formatErrorMessage } from "../infra/errors.js";
+import { isTailscaleRouteOwnershipConflictError } from "../infra/tailscale-route-ownership-error.js";
 import type { GatewayTlsRuntime } from "../infra/tls/gateway.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import type { PluginRegistry } from "../plugins/registry.js";
@@ -504,7 +506,51 @@ export async function createGatewayHttpTransport(params: {
         }
         tailscaleIngressEndpoint = { host: "127.0.0.1", port: address.port };
         // Publish the private target before ordinary ingress can accept requests.
-        await params.prepareManagedTailscaleIngress?.(tailscaleIngressEndpoint);
+        // Tailscale exposure is optional: a degraded tailnet (e.g. Serve not enabled)
+        // must not take down the otherwise-ready loopback gateway (issue #133827).
+        try {
+          await params.prepareManagedTailscaleIngress?.(tailscaleIngressEndpoint);
+        } catch (err) {
+          if (isTailscaleRouteOwnershipConflictError(err)) {
+            // Port 443 ownership conflicts are fatal config errors (exit 78) to avoid
+            // a systemd restart loop with an unproven route. Close the private
+            // ingress before bubbling the 78 path.
+            await new Promise<void>((resolve) => {
+              if (!tailscaleHttpServer.listening) {
+                resolve();
+                return;
+              }
+              tailscaleHttpServer.close(() => resolve());
+            });
+            const conflictIdx = httpServers.indexOf(tailscaleHttpServer);
+            if (conflictIdx >= 0) {
+              httpServers.splice(conflictIdx, 1);
+            }
+            tailscaleIngressEndpoint = undefined;
+            throw err;
+          }
+          // Degrade: keep loopback gateway alive, disable tailscale exposure.
+          const detail = formatErrorMessage(err);
+          params.log.warn(
+            `Tailscale ${managedTailscaleMode} exposure failed — continuing with loopback gateway only: ${detail}`,
+          );
+          params.log.warn(
+            `Tailscale integration is degraded; gateway remains available on loopback at 127.0.0.1:${params.port}. ` +
+              `Fix tailnet Serve/Funnel or set gateway.tailscale.mode=off, then restart. Health: degraded tailscale.`,
+          );
+          await new Promise<void>((resolve) => {
+            if (!tailscaleHttpServer.listening) {
+              resolve();
+              return;
+            }
+            tailscaleHttpServer.close(() => resolve());
+          });
+          const idx = httpServers.indexOf(tailscaleHttpServer);
+          if (idx >= 0) {
+            httpServers.splice(idx, 1);
+          }
+          tailscaleIngressEndpoint = undefined;
+        }
       }
       const requiredAlias =
         params.bindHost !== "127.0.0.1" && bindHosts.includes("127.0.0.1")
