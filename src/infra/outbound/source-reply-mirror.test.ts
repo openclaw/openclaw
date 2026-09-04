@@ -342,6 +342,27 @@ describe("source reply receipts", () => {
     },
   );
 
+  // Dice shares the no-mirroring rule but not the rest: the message tool's argument object is
+  // flat, so a roll can carry send-payload text the channel ignores, and mirroring it would
+  // record assistant text no recipient ever saw. Terminal-receipt ownership is deliberately
+  // not asserted here, because a roll does deliver visible content to the current conversation
+  // and stays a current-source delivery, unlike the actions in the table above.
+  it("keeps a dice delivery out of the transcript while it carries ignored send text", async () => {
+    const params = source("testchat", "direct:user-1", {
+      action: "dice",
+      actionParams: { to: "direct:user-1", message: "You rolled a six" },
+      sessionKey: "agent:main:testchat:direct:user-1",
+      toolContext: {
+        currentChannelProvider: "testchat",
+        currentChannelId: "direct:user-1",
+      },
+      deliveredPayload: { ok: true, messageId: "dice-1" },
+    });
+
+    await expect(mirrorDeliveredSourceReplyToTranscript(params)).resolves.toBe(false);
+    expect(transcriptMocks.append).not.toHaveBeenCalled();
+  });
+
   it.each([
     {
       name: "topic reply",
