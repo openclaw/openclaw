@@ -17,7 +17,11 @@ import {
 import type { ResolvedOpenAICompletionsCompat } from "./transports/openai-completions-compat.js";
 import type { Context, Model, TextContent, ThinkingContent, ToolCall } from "./types.js";
 import { sanitizeSurrogates } from "./utils/sanitize-unicode.js";
-import { stripSystemPromptCacheBoundary } from "./utils/system-prompt-cache-boundary.js";
+import {
+  splitSystemPromptRelocatableBoundary,
+  stripSystemPromptCacheBoundary,
+  stripSystemPromptRelocatableBoundary,
+} from "./utils/system-prompt-cache-boundary.js";
 
 const EMPTY_TOOL_RESULT_TEXT = "(no output)";
 type ChatCompletionContentPartVideo = {
@@ -83,12 +87,31 @@ export function convertMessages(
     normalizeToolCallId(id),
   ) as ProviderMessage[];
 
+  // Chat templates serialize `tools` after the system message, so a volatile
+  // suffix left inside the system message still sits ahead of the tool schemas
+  // and forks the cacheable prefix on every new conversation. Carry it past the
+  // tools on the trailing user turn instead. The system message keeps the full
+  // prompt until a carrier turn is actually emitted, so a transcript whose only
+  // user turn projects away cannot drop the suffix.
+  let relocatableSplit: { stablePrefix: string; relocatableSuffix: string } | undefined;
+  let systemParamIndex: number | undefined;
   if (context.systemPrompt) {
     const useDeveloperRole = model.reasoning && compat.supportsDeveloperRole;
     const role = useDeveloperRole ? "developer" : "system";
-    const systemPrompt = options.preserveSystemPromptCacheBoundary
-      ? context.systemPrompt
-      : stripSystemPromptCacheBoundary(context.systemPrompt);
+    let systemPrompt: string;
+    if (options.preserveSystemPromptCacheBoundary) {
+      // The cache boundary stays so the caller can anchor its breakpoint on it,
+      // but nothing downstream relocates, so the relocatable marker would
+      // otherwise survive into the payload.
+      systemPrompt = stripSystemPromptRelocatableBoundary(context.systemPrompt);
+    } else {
+      const split = splitSystemPromptRelocatableBoundary(context.systemPrompt);
+      if (split && split.relocatableSuffix.length > 0) {
+        relocatableSplit = split;
+      }
+      systemPrompt = stripSystemPromptCacheBoundary(context.systemPrompt);
+    }
+    systemParamIndex = params.length;
     params.push({ role, content: sanitizeSurrogates(systemPrompt) });
   }
 
@@ -299,5 +322,61 @@ export function convertMessages(
     lastRole = msg.role;
   }
 
+  if (relocatableSplit !== undefined && systemParamIndex !== undefined) {
+    relocateNonBehavioralSuffix({
+      params,
+      systemParamIndex,
+      split: relocatableSplit,
+      cacheOptOutIndexes: options.cacheOptOutIndexes,
+    });
+  }
+
   return params;
+}
+
+/**
+ * Attach the post-cache-boundary system suffix to the trailing user turn.
+ *
+ * The suffix holds per-turn and per-session guidance that the system prompt
+ * deliberately keeps below `SYSTEM_PROMPT_CACHE_BOUNDARY`. That placement only
+ * stabilizes the prefix for providers that anchor a cache breakpoint on the
+ * boundary; for Chat Completions the tool schemas are serialized after the
+ * whole system message, so the suffix still divides the prefix ahead of them.
+ * Moving it behind the last user turn keeps the system message and the tool
+ * definitions byte-identical across sessions.
+ */
+function relocateNonBehavioralSuffix(args: {
+  params: ChatCompletionMessageParam[];
+  systemParamIndex: number;
+  split: { stablePrefix: string; relocatableSuffix: string };
+  cacheOptOutIndexes?: Set<number>;
+}): void {
+  const text = sanitizeSurrogates(args.split.relocatableSuffix);
+  for (let index = args.params.length - 1; index > args.systemParamIndex; index--) {
+    const param = args.params[index];
+    if (!param || param.role !== "user") {
+      continue;
+    }
+    if (typeof param.content === "string") {
+      param.content = `${param.content}\n\n${text}`;
+    } else if (Array.isArray(param.content)) {
+      param.content = [
+        ...param.content,
+        { type: "text", text } satisfies ChatCompletionContentPartText,
+      ];
+    } else {
+      continue;
+    }
+    // Shrink the system message only once a carrier turn is secured, so a
+    // projected-away user turn leaves the suffix where it already is.
+    const systemParam = args.params[args.systemParamIndex];
+    if (systemParam) {
+      systemParam.content = sanitizeSurrogates(
+        stripSystemPromptCacheBoundary(args.split.stablePrefix),
+      );
+    }
+    // The turn now carries volatile text, so it must not anchor a cache breakpoint.
+    args.cacheOptOutIndexes?.add(index);
+    return;
+  }
 }

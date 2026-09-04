@@ -3,6 +3,10 @@ import { convertMessages } from "./openai-completions-messages.js";
 import type { ProviderContext, ProviderModel } from "./provider-types.js";
 import { resolveOpenAICompletionsCompat } from "./transports/openai-completions-compat.js";
 import type { AssistantMessage, Context, Model } from "./types.js";
+import {
+  SYSTEM_PROMPT_CACHE_BOUNDARY,
+  SYSTEM_PROMPT_RELOCATABLE_BOUNDARY,
+} from "./utils/system-prompt-cache-boundary.js";
 
 const model: Model<"openai-completions"> = {
   id: "test-model",
@@ -131,5 +135,106 @@ describe("convertMessages assistant text replay", () => {
     expect(oversizedId.slice(0, 40).charCodeAt(39)).toBe(0xd83d);
     expect(normalizedAssistantId).toBe(prefix);
     expect(normalizedToolResultId).toBe(prefix);
+  });
+});
+
+describe("convertMessages relocatable suffix", () => {
+  const compat = () => resolveOpenAICompletionsCompat(model);
+  const contextForSession = (sessionId: string): Context =>
+    ({
+      systemPrompt: `Stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}Reactions guidance${SYSTEM_PROMPT_RELOCATABLE_BOUNDARY}## Runtime\nRuntime: session=${sessionId}`,
+      messages: [{ role: "user", content: "hi", timestamp: 1 }],
+    }) as unknown as Context;
+
+  it("carries the non-behavioral tail on the trailing user turn", () => {
+    const converted = convertMessages(model, contextForSession("alpha"), compat());
+
+    expect(converted[0]).toEqual({
+      role: "system",
+      content: "Stable prefix\nReactions guidance",
+    });
+    expect(converted[1]?.content).toBe("hi\n\n## Runtime\nRuntime: session=alpha");
+  });
+
+  it("keeps behavioral guidance at system authority", () => {
+    // Only the tail below the relocatable marker moves. Everything above it,
+    // including guidance that merely sits below the cache boundary, stays in
+    // the system message.
+    const converted = convertMessages(model, contextForSession("alpha"), compat());
+
+    expect(converted[0]?.content).toContain("Reactions guidance");
+    expect(converted[1]?.content).not.toContain("Reactions guidance");
+  });
+
+  it("does not relocate when only the cache boundary is present", () => {
+    const context = {
+      systemPrompt: `Stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}Reactions guidance`,
+      messages: [{ role: "user", content: "hi", timestamp: 1 }],
+    } as unknown as Context;
+
+    const converted = convertMessages(model, context, compat());
+
+    expect(converted[0]?.content).toBe("Stable prefix\nReactions guidance");
+    expect(converted[1]?.content).toBe("hi");
+  });
+
+  it("keeps the system message byte-identical across sessions", () => {
+    const first = convertMessages(model, contextForSession("alpha"), compat());
+    const second = convertMessages(model, contextForSession("beta"), compat());
+
+    expect(first[0]).toEqual(second[0]);
+    expect(first[1]?.content).not.toEqual(second[1]?.content);
+  });
+
+  it("keeps the tail in the system prompt when the only user turn projects away", () => {
+    // Media projection can leave a user turn with no renderable content, and the
+    // converter skips it. The tail must survive rather than vanish with it.
+    const context = {
+      systemPrompt: `Stable prefix${SYSTEM_PROMPT_RELOCATABLE_BOUNDARY}Runtime facts`,
+      messages: [{ role: "user", content: [], timestamp: 1 }],
+    } as unknown as Context;
+
+    const converted = convertMessages(model, context, compat());
+
+    expect(converted).toHaveLength(1);
+    expect(converted[0]?.content).toBe("Stable prefix\nRuntime facts");
+  });
+
+  it("never leaks an internal marker to the provider", () => {
+    const converted = convertMessages(model, contextForSession("alpha"), compat());
+
+    expect(JSON.stringify(converted)).not.toContain("OPENCLAW_CACHE_BOUNDARY");
+    expect(JSON.stringify(converted)).not.toContain("OPENCLAW-RELOCATABLE-BOUNDARY");
+  });
+
+  it("leaves the boundary in place when the caller preserves it", () => {
+    const converted = convertMessages(model, contextForSession("alpha"), compat(), {
+      preserveSystemPromptCacheBoundary: true,
+    });
+
+    expect(converted[0]?.content).toContain(SYSTEM_PROMPT_CACHE_BOUNDARY.trim());
+    expect(converted[1]?.content).toBe("hi");
+  });
+
+  it("leaves a trailing structural marker in the system prompt", () => {
+    // The attempt-section marker closes a region of the system prompt; it must
+    // not ride onto the user turn with the relocated facts.
+    const context = {
+      systemPrompt: `Stable prefix${SYSTEM_PROMPT_RELOCATABLE_BOUNDARY}Runtime: session=alpha\n<!-- /openclaw:attempt:DYNAMIC -->`,
+      messages: [{ role: "user", content: "hi", timestamp: 1 }],
+    } as unknown as Context;
+
+    const converted = convertMessages(model, context, compat());
+
+    expect(converted[0]?.content).toBe("Stable prefix\n<!-- /openclaw:attempt:DYNAMIC -->");
+    expect(converted[1]?.content).toBe("hi\n\nRuntime: session=alpha");
+  });
+
+  it("marks the carrying turn as cache opt-out", () => {
+    const cacheOptOutIndexes = new Set<number>();
+
+    convertMessages(model, contextForSession("alpha"), compat(), { cacheOptOutIndexes });
+
+    expect(cacheOptOutIndexes.has(1)).toBe(true);
   });
 });
