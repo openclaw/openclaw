@@ -698,6 +698,7 @@ async function runShortTermDreamingPromotionIfTriggered(params: {
             nowMs: sweepNowMs,
             timezone: params.config.timezone,
             model: params.config.execution?.model,
+            timeoutMs: params.config.execution?.timeoutMs,
             logger: params.logger,
             detached: detachNarratives,
           });

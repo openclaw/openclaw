@@ -80,7 +80,7 @@ type Logger = Pick<OpenClawPluginApi["logger"], "info" | "warn" | "error">;
 type DreamingPhaseStorageConfig = {
   timezone?: string;
   storage: { mode: "inline" | "separate" | "both"; separateReports: boolean };
-  execution?: { model?: string };
+  execution?: { model?: string; timeoutMs?: number };
 };
 type LightDreamingConfig = DreamingPhaseStorageConfig & {
   enabled: boolean;
@@ -1451,6 +1451,7 @@ async function runLightDreaming(
       nowMs,
       timezone: params.config.timezone,
       model: params.config.execution?.model,
+      timeoutMs: params.config.execution?.timeoutMs,
       logger: params.logger,
       detached: params.detachNarratives,
     });
@@ -1543,6 +1544,7 @@ async function runRemDreaming(
       nowMs,
       timezone: params.config.timezone,
       model: params.config.execution?.model,
+      timeoutMs: params.config.execution?.timeoutMs,
       logger: params.logger,
       detached: params.detachNarratives,
     });
