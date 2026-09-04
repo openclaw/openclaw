@@ -742,9 +742,11 @@ describe("isSystemdServiceEnabled", () => {
         err.code = 1;
         cb(err, "", "permission denied");
       });
-    await expect(
-      isSystemdServiceEnabled({ env: { HOME: "/tmp/openclaw-test-home" } }),
-    ).rejects.toThrow("systemctl is-enabled unavailable: permission denied");
+    const enabled = isSystemdServiceEnabled({ env: { HOME: "/tmp/openclaw-test-home" } });
+    await expect(enabled).rejects.toThrow(
+      "systemctl is-enabled unavailable: Failed to connect to bus",
+    );
+    await expect(enabled).rejects.toThrow("permission denied");
   });
 
   it("returns false when systemctl is-enabled exits with code 4 (not-found)", async () => {
@@ -1736,6 +1738,32 @@ describe("readSystemdServiceExecStart", () => {
     await expect(
       readSystemdServiceExecStart({ HOME: TEST_SERVICE_HOME }, { requireEffective: true }),
     ).rejects.toThrow("unreadable-service-secret-canary");
+  });
+
+  it("keeps the user-bus diagnostic when the machine-scope retry also fails", async () => {
+    // Non-root accounts always have a machine scope to retry, and that retry fails
+    // with an unclassifiable transport error. The direct --user stderr is the only
+    // detail that names the missing user bus, so it must survive the retry.
+    const userScopeStderr =
+      "Failed to connect to user scope bus via local transport: No such file or directory";
+    const machineScopeStderr =
+      "Failed to connect to system scope bus via machine transport: Permission denied\nCall failed: Transport endpoint is not connected";
+    mockReadGatewayServiceFile(["[Service]", "ExecStart=/usr/bin/openclaw gateway run"]);
+    execFileMock.mockReset();
+    execFileMock.mockImplementation((_command, args, _options, callback) => {
+      const stderr = args[0] === "--machine" ? machineScopeStderr : userScopeStderr;
+      callback(createExecFileError(stderr, { stderr }), "", stderr);
+    });
+
+    await expect(
+      readSystemdServiceExecStart({ HOME: TEST_SERVICE_HOME }, { requireEffective: true }),
+    ).rejects.toMatchObject({ reason: "systemd-user-bus-unavailable" });
+    expect(execFileMock).toHaveBeenCalledWith(
+      "busctl",
+      expect.arrayContaining(["--machine"]),
+      expect.anything(),
+      expect.anything(),
+    );
   });
 
   it.each([false, true])(
