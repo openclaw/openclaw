@@ -454,8 +454,8 @@ async function writeMainSessionTranscript(
 async function writeCompletedToolTranscript(sessionsDir: string): Promise<void> {
   await writeTranscript(sessionsDir, "main-session", [
     makeUserMessage("run the tool"),
-    { role: "assistant", content: [{ type: "toolCall", id: "call-1", name: "exec" }] },
-    makeToolResultMessage(),
+    { role: "assistant", content: [{ type: "toolCall", id: "call-1", name: "read" }] },
+    makeToolResultMessage("done", { toolName: "read", toolCallId: "call-1" }),
   ]);
 }
 
@@ -1296,11 +1296,14 @@ describe("main-session-restart-recovery", () => {
     });
     await writeTranscript(sessionsDir, fixture.sessionId, [
       fixture.userMessage,
-      { role: "assistant", content: [{ type: "toolCall", id: "call-1", name: "exec" }] },
-      { role: "toolResult", content: "done" },
+      { role: "assistant", content: [{ type: "toolCall", id: "call-1", name: "read" }] },
+      { role: "toolResult", toolName: "read", toolCallId: "call-1", content: "done" },
     ]);
 
-    await expectRecovery({ started: 0, settled: 0, failed: 0, skipped: 1 });
+    await expectRecovery(
+      { started: 0, settled: 0, failed: 0, skipped: 1 },
+      { gateway: { tailscale: { mode: "off" } } },
+    );
     expect(callGateway).not.toHaveBeenCalled();
     expect(loadSessionEntry({ sessionKey: fixture.sessionKey, storePath })).toMatchObject({
       status: "killed",
@@ -1330,8 +1333,8 @@ describe("main-session-restart-recovery", () => {
           sourceTool: "subagent_announce",
         },
       },
-      { role: "assistant", content: [{ type: "toolCall", id: "call-1", name: "exec" }] },
-      { role: "toolResult", content: "done" },
+      { role: "assistant", content: [{ type: "toolCall", id: "call-1", name: "read" }] },
+      { role: "toolResult", toolName: "read", toolCallId: "call-1", content: "done" },
     ]);
 
     await expectRecovery({ started: 1, settled: 0, failed: 0, skipped: 0 });
@@ -1357,8 +1360,8 @@ describe("main-session-restart-recovery", () => {
     });
     await writeTranscript(sessionsDir, "topic-41819-session", [
       { role: "user", content: "earlier human request" },
-      { role: "assistant", content: [{ type: "toolCall", id: "call-1", name: "exec" }] },
-      { role: "toolResult", content: "done" },
+      { role: "assistant", content: [{ type: "toolCall", id: "call-1", name: "read" }] },
+      { role: "toolResult", toolName: "read", toolCallId: "call-1", content: "done" },
     ]);
     const updateSessionEntry = sessionAccessor.updateSessionEntry;
     let injectedHumanRun = false;
@@ -1861,8 +1864,10 @@ describe("main-session-restart-recovery", () => {
       makeUserMessage("first restart continuation", {
         idempotencyKey: `${previousRecoveryRunId}:user`,
       }),
-      makeMessageToolCall("later-tool-call"),
-      makeMessageToolResult("later-tool-call"),
+      createAssistantToolCallMessage([
+        { type: "toolCall", id: "later-read", name: "read", arguments: { path: "README.md" } },
+      ]),
+      makeToolResultMessage("done", { toolCallId: "later-read", toolName: "read" }),
     ]);
     let dispatchedRunId: string | undefined;
     let dispatchError: unknown;
@@ -2373,9 +2378,16 @@ describe("main-session-restart-recovery", () => {
   it("resumes stale approval-pending exec tool results with restart-safe tools", async () => {
     const sessionsDir = await writeMainSessionTranscript([
       { role: "user", content: "run a command that needs approval" },
-      { role: "assistant", content: [{ type: "toolCall", id: "call-1", name: "exec" }] },
+      {
+        role: "assistant",
+        content: [
+          { type: "toolCall", id: "call-1", name: "exec", arguments: { command: "echo stale" } },
+        ],
+      },
       {
         role: "toolResult",
+        toolCallId: "call-1",
+        toolName: "exec",
         content: "Approval required (id stale, full stale-approval-id).",
         details: {
           status: "approval-pending",
@@ -2428,8 +2440,8 @@ describe("main-session-restart-recovery", () => {
       });
       await writeTranscript(sessionsDir, "main-session", [
         { role: "user", content: "calculate the answer" },
-        { role: "assistant", content: [{ type: "toolCall", id: "call-1", name: "calc" }] },
-        { role: "toolResult", content: "42" },
+        { role: "assistant", content: [{ type: "toolCall", id: "call-1", name: "read" }] },
+        { role: "toolResult", toolName: "read", toolCallId: "call-1", content: "42" },
       ]);
 
       await expectRecovery({ started: 1, settled: 0, failed: 0, skipped: 0 }, {});
@@ -2842,8 +2854,8 @@ describe("main-session-restart-recovery", () => {
     });
     await writeTranscript(sessionsDir, "main-session", [
       { role: "user", content: "calculate the answer" },
-      { role: "assistant", content: [{ type: "toolCall", id: "call-1", name: "calc" }] },
-      { role: "toolResult", content: "42" },
+      { role: "assistant", content: [{ type: "toolCall", id: "call-1", name: "read" }] },
+      { role: "toolResult", toolName: "read", toolCallId: "call-1", content: "42" },
     ]);
 
     await expectRecovery({ started: 1, settled: 0, failed: 0, skipped: 0 });
@@ -4021,6 +4033,36 @@ describe("main-session-restart-recovery", () => {
     });
   });
 
+  it.each(["suppressed", "failed"] as const)(
+    "writes the recovery notice to the transcript when channel delivery is %s",
+    async (outcome) => {
+      const { storePath, sessionKey } = await makeMainSessionFixture({
+        sessionKey: "agent:main:discord:direct:123",
+        mainRestartRecovery: {
+          cycleId: "cycle-exhausted",
+          revision: 1,
+          chargedAttempts: 3,
+        },
+        restartRecoveryDeliveryContext: discordDeliveryContext,
+      });
+      if (outcome === "suppressed") {
+        sendRecoveryNotice.mockResolvedValueOnce({ suppressed: true });
+      } else {
+        sendRecoveryNotice.mockRejectedValueOnce(new Error("channel unavailable"));
+      }
+
+      await expectRecovery({ started: 0, settled: 0, failed: 0, skipped: 1 });
+
+      const transcript = await loadTestTranscript(sessionKey, storePath);
+      expect(transcript.at(-1)?.message?.content).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ text: expect.stringContaining("couldn't continue") }),
+        ]),
+      );
+      expect(loadSessionEntry({ sessionKey, storePath })?.status).toBe("failed");
+    },
+  );
+
   it("rejects foreground takeover while tombstoning exhausted recovery", async () => {
     const { sessionsDir, storePath, sessionKey } = await makeMainSessionFixture({
       mainRestartRecovery: {
@@ -5156,16 +5198,6 @@ describe("main-session-restart-recovery", () => {
       }),
       false,
     ],
-    [
-      "a dangling side-effecting call",
-      {
-        role: "assistant",
-        content: [{ type: "toolCall", id: "call-1", name: "write", arguments: {} }],
-        stopReason: "aborted",
-        errorMessage: "Worker inference aborted.",
-      },
-      true,
-    ],
   ])(
     "resumes an aborted tail persisted with %s",
     async (_label, assistantMessage, forceRestartSafeTools) => {
@@ -5283,8 +5315,8 @@ describe("main-session-restart-recovery", () => {
     },
     {
       replaySafe: false,
-      expected: { started: 1, settled: 0, failed: 0, skipped: 0 },
-      gatewayCalls: 1,
+      expected: { started: 0, settled: 0, failed: 0, skipped: 1 },
+      gatewayCalls: 0,
     },
   ])(
     "classifies a direct waiting checkpoint with replaySafe=$replaySafe",
@@ -5309,9 +5341,8 @@ describe("main-session-restart-recovery", () => {
 
       await expectRecovery(expected);
       expect(callGateway).toHaveBeenCalledTimes(gatewayCalls);
-      expect(gatewayParams()).toMatchObject({ forceRestartSafeTools: true });
-      if (!replaySafe) {
-        expect(gatewayParams()).not.toHaveProperty("forceCodeModeTools");
+      if (replaySafe) {
+        expect(gatewayParams()).toMatchObject({ forceRestartSafeTools: true });
       }
     },
   );
@@ -5432,7 +5463,7 @@ describe("main-session-restart-recovery", () => {
     expect(gatewayParams()).toMatchObject({ forceRestartSafeTools: true });
   });
 
-  it("keeps restart safety after the recovery prompt leaves the recent transcript window", async () => {
+  it("tombstones when the recovery prompt leaves the recent transcript window", async () => {
     await writeMainSessionTranscript(
       [
         { role: "user", content: "do the thing" },
@@ -5445,8 +5476,29 @@ describe("main-session-restart-recovery", () => {
       { restartRecoveryForceSafeTools: true },
     );
 
-    await expectRecovery({ started: 1, settled: 0, failed: 0, skipped: 0 });
-    expect(gatewayParams()).toMatchObject({ forceRestartSafeTools: true });
+    await expectRecovery({ started: 0, settled: 0, failed: 0, skipped: 1 });
+    expect(callGateway).not.toHaveBeenCalled();
+  });
+
+  it("does not assume a truncated interrupted turn was read-only", async () => {
+    const sessionsDir = await writeMainSessionTranscript([
+      { role: "user", content: "update the system and report back" },
+      createAssistantToolCallMessage([
+        { type: "toolCall", id: "call-write", name: "write", arguments: { path: "state" } },
+      ]),
+      ...Array.from({ length: 24 }, (_, index) => ({
+        role: "toolResult",
+        toolName: "read",
+        content: [{ type: "text", text: `later read ${index}` }],
+      })),
+    ]);
+
+    await expectRecovery({ started: 0, settled: 0, failed: 0, skipped: 1 });
+    expect(callGateway).not.toHaveBeenCalled();
+    expect(readStore(path.join(sessionsDir, "sessions.json"))["agent:main:main"]).toMatchObject({
+      status: "failed",
+      mainRestartRecovery: { tombstone: expect.any(Object) },
+    });
   });
 
   it("resumes an in-flight safe tool call across a repeated restart", async () => {
@@ -5496,7 +5548,7 @@ describe("main-session-restart-recovery", () => {
     expect(gatewayParams()).not.toHaveProperty("forceRestartSafeTools");
   });
 
-  it("resumes safely without replaying visible assistant text beside a Code Mode wait", async () => {
+  it("tombstones a Code Mode wait mixed with visible assistant text", async () => {
     await writeMainSessionTranscript([
       { role: "user", content: "do the thing" },
       codeModeCheckpointMessage("exec"),
@@ -5511,10 +5563,8 @@ describe("main-session-restart-recovery", () => {
       ]),
     ]);
 
-    await expectRecovery({ started: 1, settled: 0, failed: 0, skipped: 0 });
-    expect(callGateway).toHaveBeenCalledOnce();
-    expect(gatewayParams()).toMatchObject({ forceRestartSafeTools: true });
-    expect(gatewayParams()).not.toHaveProperty("forceCodeModeTools");
+    await expectRecovery({ started: 0, settled: 0, failed: 0, skipped: 1 });
+    expect(callGateway).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -5581,79 +5631,46 @@ describe("main-session-restart-recovery", () => {
     expect(callGateway).toHaveBeenCalledTimes(1);
   });
 
-  it("resumes a side-effecting tool call restricted to restart-safe tools", async () => {
-    await writeMainSessionTranscript([
-      { role: "user", content: "do the thing" },
+  it("does not resume a mutating turn after newer operator remediation", async () => {
+    const sessionsDir = await writeMainSessionTranscript([
+      { role: "user", content: "enable the gateway integration" },
       createAssistantToolCallMessage([
-        { type: "text", text: "Running the check now." },
-        { type: "toolCall", id: "call-bash-1", name: "bash", arguments: { command: "true" } },
+        {
+          type: "toolCall",
+          id: "call-bash-1",
+          name: "exec",
+          arguments: { command: "openclaw config set gateway.tailscale.mode serve" },
+        },
       ]),
-    ]);
-
-    await expectRecovery({ started: 1, settled: 0, failed: 0, skipped: 0 });
-    expect(callGateway).toHaveBeenCalledTimes(1);
-    expect(gatewayParams()).toMatchObject({ forceRestartSafeTools: true });
-  });
-
-  it("reports an interrupted native tool outcome as unknown", async () => {
-    await writeMainSessionTranscript([
-      { role: "user", content: "run the command" },
-      createAssistantToolCallMessage([
-        { type: "toolCall", id: "call-bash-1", name: "bash", arguments: { command: "true" } },
-      ]),
-      {
-        role: "toolResult",
-        toolName: "bash",
+      makeToolResultMessage("Config updated", {
         toolCallId: "call-bash-1",
-        content: "native tool call had no matching result",
-        details: { reason: "missing_tool_result" },
-        isError: true,
-      },
+        toolName: "exec",
+      }),
     ]);
 
-    await expectRecovery({ started: 1, settled: 0, failed: 0, skipped: 0 });
-    expect(gatewayParams().message).toContain("unknown outcome");
-    expect(gatewayParams().message).toContain("never claim completion or success");
-    expect(gatewayParams()).toMatchObject({ forceRestartSafeTools: true });
-  });
-
-  it("keeps a confirmed native tool failure distinct from an unknown outcome", async () => {
-    await writeMainSessionTranscript([
-      { role: "user", content: "run the command" },
-      createAssistantToolCallMessage([
-        { type: "toolCall", id: "call-bash-1", name: "bash", arguments: { command: "false" } },
+    await expectRecovery(
+      { started: 0, settled: 0, failed: 0, skipped: 1 },
+      { gateway: { tailscale: { mode: "off" } } },
+    );
+    expect(callGateway).not.toHaveBeenCalled();
+    expect(readStore(path.join(sessionsDir, "sessions.json"))["agent:main:main"]).toMatchObject({
+      status: "failed",
+      abortedLastRun: false,
+      mainRestartRecovery: {
+        tombstone: {
+          reason: "interrupted turn included mutating tool work",
+        },
+      },
+    });
+    const transcript = await loadTestTranscript(
+      "agent:main:main",
+      path.join(sessionsDir, "sessions.json"),
+    );
+    expect(transcript.at(-1)?.message?.content).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ text: expect.stringContaining("couldn't continue") }),
       ]),
-      {
-        role: "toolResult",
-        toolName: "bash",
-        toolCallId: "call-bash-1",
-        content: "command failed with exit code 1",
-        details: { reason: "nonzero_exit" },
-        isError: true,
-      },
-    ]);
-
-    await expectRecovery({ started: 1, settled: 0, failed: 0, skipped: 0 });
-    expect(gatewayParams()).not.toHaveProperty("forceRestartSafeTools");
-  });
-
-  it("keeps a dangling side-effecting call in an aborted tail restricted", async () => {
-    await writeMainSessionTranscript([
-      { role: "user", content: "do the thing" },
-      {
-        role: "assistant",
-        content: [
-          { type: "text", text: "Kicking that off." },
-          { type: "toolCall", id: "call-bash-1", name: "bash", arguments: { command: "true" } },
-        ],
-        stopReason: "aborted",
-        errorMessage: "This operation was aborted",
-      },
-    ]);
-
-    await expectRecovery({ started: 1, settled: 0, failed: 0, skipped: 0 });
-    expect(callGateway).toHaveBeenCalledTimes(1);
-    expect(gatewayParams()).toMatchObject({ forceRestartSafeTools: true });
+    );
   });
 
   it("resumes an interrupted replay-safe tool call without restricting tools", async () => {
@@ -5787,12 +5804,13 @@ describe("main-session-restart-recovery", () => {
         })),
       ]);
 
-      await expectRecovery({ started: 1, settled: 0, failed: 0, skipped: 0 });
-      expect(gatewayParams()).toMatchObject({ forceRestartSafeTools: true });
       if (restoresCodeModeTools) {
+        await expectRecovery({ started: 1, settled: 0, failed: 0, skipped: 0 });
+        expect(gatewayParams()).toMatchObject({ forceRestartSafeTools: true });
         expect(gatewayParams()).toMatchObject({ forceCodeModeTools: true });
       } else {
-        expect(gatewayParams()).not.toHaveProperty("forceCodeModeTools");
+        await expectRecovery({ started: 0, settled: 0, failed: 0, skipped: 1 });
+        expect(callGateway).not.toHaveBeenCalled();
       }
     },
   );
@@ -5816,43 +5834,15 @@ describe("main-session-restart-recovery", () => {
         replaySafe: true,
       },
     },
-  ])("resumes a Code Mode wait safely after a $label", async ({ checkpoint }) => {
+  ])("tombstones a Code Mode wait after a $label", async ({ checkpoint }) => {
     await writeMainSessionTranscript([
       { role: "user", content: "do the thing" },
       codeModeCheckpointMessage("wait", checkpoint),
       codeModeWaitCallMessage(),
     ]);
 
-    await expectRecovery({ started: 1, settled: 0, failed: 0, skipped: 0 });
-    expect(callGateway).toHaveBeenCalledOnce();
-    expect(gatewayParams()).toMatchObject({ forceRestartSafeTools: true });
-    expect(gatewayParams()).not.toHaveProperty("forceCodeModeTools");
-  });
-
-  it("resumes a mixed Code Mode wait and side-effecting tool tail safely", async () => {
-    await writeMainSessionTranscript([
-      { role: "user", content: "do the thing" },
-      codeModeCheckpointMessage("exec"),
-      createAssistantToolCallMessage([
-        {
-          type: "toolCall",
-          id: "call-wait-1",
-          name: "wait",
-          arguments: { runId: "cm_interrupted" },
-        },
-        {
-          type: "toolCall",
-          id: "call-write-1",
-          name: "write",
-          arguments: { path: "result.txt", content: "done" },
-        },
-      ]),
-    ]);
-
-    await expectRecovery({ started: 1, settled: 0, failed: 0, skipped: 0 });
-    expect(callGateway).toHaveBeenCalledOnce();
-    expect(gatewayParams()).toMatchObject({ forceRestartSafeTools: true });
-    expect(gatewayParams()).not.toHaveProperty("forceCodeModeTools");
+    await expectRecovery({ started: 0, settled: 0, failed: 0, skipped: 1 });
+    expect(callGateway).not.toHaveBeenCalled();
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

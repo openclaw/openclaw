@@ -1,11 +1,12 @@
+import fs from "node:fs/promises";
 import path from "node:path";
 import { buildAgentSessionKey } from "openclaw/plugin-sdk/routing";
+import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { afterEach, describe, expect, it } from "vitest";
 import { startQaBusServer } from "./bus-server.js";
 import { createQaBusState } from "./bus-state.js";
 import { createQaGatewayChild } from "./gateway-child.js";
 import { isQaPosixProcessGroupAlive, signalQaPosixProcessGroup } from "./posix-process-group.js";
-import { QA_REPEATED_REQUEST_QUEUED_REPLY_MARKER } from "./providers/mock-openai/mock-openai-contracts.js";
 import { startQaMockOpenAiServer } from "./providers/mock-openai/server.js";
 import { createQaChannelTransport } from "./qa-channel-transport.js";
 import { waitForQaTransportCondition } from "./qa-transport.js";
@@ -32,7 +33,7 @@ describe.skipIf(process.platform === "win32")("gateway hard-kill recovery", () =
     }
   });
 
-  it("reconciles an orphaned run and replies to a new inbound send after SIGKILL", async () => {
+  it("tombstones orphaned mutating work without overwriting newer config", async () => {
     const state = createQaBusState();
     const transport = createQaChannelTransport(state);
     const bus = await startQaBusServer({ state });
@@ -65,8 +66,7 @@ describe.skipIf(process.platform === "win32")("gateway hard-kill recovery", () =
         tools: {
           ...cfg.tools,
           alsoAllow: ["qa_restart_wait", "qa_restart_unsafe_probe"],
-          // Suspend the 30-second tool so the model's wait is pending at SIGKILL.
-          codeMode: { enabled: true, timeoutMs: 10_000 },
+          codeMode: { enabled: false },
         },
       }),
     });
@@ -85,7 +85,7 @@ describe.skipIf(process.platform === "win32")("gateway hard-kill recovery", () =
         accountId: transport.accountId,
         conversation,
         senderId: conversation.id,
-        text: "Code Mode restart wait QA check. Original prompt marker: KILL-RESTART-PROMPT.",
+        text: "Mutating restart wait QA check. Original prompt marker: KILL-RESTART-MUTATING-PROMPT.",
       });
       const pending = await transport.waitForCondition(
         async () => {
@@ -94,8 +94,8 @@ describe.skipIf(process.platform === "win32")("gateway hard-kill recovery", () =
             return undefined;
           }
           const transcript = await readSessionTranscriptSummary({ gateway }, sessionKey);
-          return (transcript.assistantToolCallCounts.wait ?? 0) >
-            (transcript.completedToolCallCounts.wait ?? 0)
+          return (transcript.assistantToolCallCounts.qa_restart_wait ?? 0) >
+            (transcript.completedToolCallCounts.qa_restart_wait ?? 0)
             ? { entry, transcript }
             : undefined;
         },
@@ -111,53 +111,60 @@ describe.skipIf(process.platform === "win32")("gateway hard-kill recovery", () =
         30_000,
         25,
       );
-      await gateway.restartAfterStateMutation(async () => {
+      await gateway.restartAfterStateMutation(async ({ configPath }) => {
         const orphan = (await readRawQaSessionStore({ gateway }))[sessionKey];
         expect(orphan).toMatchObject({ sessionId: pending.entry.sessionId, status: "running" });
         expect(orphan?.abortedLastRun).not.toBe(true);
+        const cfg = asOptionalRecord(JSON.parse(await fs.readFile(configPath, "utf8"))) ?? {};
+        const agents = asOptionalRecord(cfg.agents) ?? {};
+        const next = {
+          ...cfg,
+          agents: {
+            ...agents,
+            defaults: {
+              ...asOptionalRecord(agents.defaults),
+              timeoutSeconds: 654,
+            },
+          },
+        };
+        await fs.writeFile(configPath, `${JSON.stringify(next, null, 2)}\n`, "utf8");
       });
       expect(gateway.pid).not.toBe(pid);
       await transport.waitReady({ gateway });
       await transport.waitForCondition(
         async () => {
-          if (!gateway.logs().includes("dispatching restart-safe recovery")) {
+          if (!gateway.logs().includes("tombstoned main-session restart recovery")) {
             return undefined;
           }
-          const transcript = await readSessionTranscriptSummary({ gateway }, sessionKey);
-          return transcript.eventCursor > pending.transcript.eventCursor ? true : undefined;
+          const entry = (await readRawQaSessionStore({ gateway }))[sessionKey];
+          return entry?.status === "failed" ? true : undefined;
         },
         120_000,
         25,
       );
       expect(gateway.logs()).toContain("marked 1 startup-orphaned main session(s)");
-
-      const sinceIndex = state
-        .getSnapshot()
-        .messages.filter((message) => message.direction === "outbound").length;
-      const second = await transport.sendInbound({
-        accountId: transport.accountId,
-        conversation,
-        senderId: conversation.id,
-        // This current-turn fixture takes precedence over the restart prompt in history.
-        text: "repeated request queued reply gateway qa check",
-      });
-      const reply = await transport.waitForOutbound({
-        conversation,
-        sinceIndex,
-        textIncludes: QA_REPEATED_REQUEST_QUEUED_REPLY_MARKER,
-        timeoutMs: 180_000,
-      });
-      expect(reply.replyToId).toBe(second.id);
-      expect(reply.accountId).toBe(transport.accountId);
+      expect(gateway.logs()).not.toContain("dispatching restart-safe recovery");
+      const repairedConfig = asOptionalRecord(
+        JSON.parse(await fs.readFile(gateway.configPath, "utf8")),
+      );
+      expect(
+        asOptionalRecord(asOptionalRecord(repairedConfig?.agents)?.defaults)?.timeoutSeconds,
+      ).toBe(654);
       const settled = await transport.waitForCondition(
         async () => {
           const entry = (await readRawQaSessionStore({ gateway }))[sessionKey];
-          return entry?.status === "done" ? entry : undefined;
+          return entry?.status === "failed" ? entry : undefined;
         },
         30_000,
         25,
       );
       expect(settled.sessionId).toBe(pending.entry.sessionId);
+      await transport.waitForOutbound({
+        conversation,
+        sinceIndex: 0,
+        textIncludes: "couldn't continue this session after a gateway restart",
+        timeoutMs: 30_000,
+      });
     } catch (error) {
       const diagnostics = await Promise.allSettled([
         readRawQaSessionStore({ gateway }),

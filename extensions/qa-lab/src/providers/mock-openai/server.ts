@@ -108,6 +108,7 @@ import {
   QA_RESTART_CODE_MODE_WAIT_PROMPT_RE,
   QA_RESTART_RECOVERY_PROMPT_RE,
   QA_KILL_RESTART_PROMPT_RE,
+  QA_KILL_RESTART_MUTATING_PROMPT_RE,
   QA_KILL_RESTART_RECOVERED_MARKER,
   QA_MCP_CODE_MODE_API_FILE_PROMPT_RE,
   type MockScenarioState,
@@ -937,6 +938,19 @@ async function buildResponsesPayload(
     QA_RESTART_RECOVERY_PROMPT_RE.test(allInputText)
   ) {
     return buildAssistantEvents(QA_KILL_RESTART_RECOVERED_MARKER);
+  }
+  if (QA_KILL_RESTART_MUTATING_PROMPT_RE.test(allInputText)) {
+    const mutationCompleted = input.some(
+      (item) =>
+        (item.type === "function_call_output" || item.type === "custom_tool_call_output") &&
+        stringifyScenarioToolOutput(item.output).includes("unsafe-probe-executed"),
+    );
+    if (mutationCompleted) {
+      return buildToolCallEventsWithArgs("qa_restart_wait", {});
+    }
+    if (hasToolDefinition(body, "qa_restart_unsafe_probe")) {
+      return buildToolCallEventsWithArgs("qa_restart_unsafe_probe", {});
+    }
   }
   if (QA_RESTART_CODE_MODE_WAIT_PROMPT_RE.test(allInputText)) {
     const progress = readRestartCheckpointProgress(input);

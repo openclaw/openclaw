@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { createNestedToolActivity } from "../../sessions/nested-tool-activity.js";
 import { resolveMainSessionResumePolicy } from "./main-session-restart-recovery-resume-policy.js";
 
 vi.mock("../code-mode-control-tools.js", () => ({
@@ -68,6 +69,7 @@ function codeModeCheckpoint(params: {
   return {
     role: "toolResult",
     toolName: "exec",
+    toolCallId: "exec-call",
     content: [
       {
         type: "text",
@@ -89,6 +91,32 @@ function codeModeWait(runId = "code-run") {
   };
 }
 
+function nestedToolActivity(toolName: string, parentToolCallId = "exec-call") {
+  return createNestedToolActivity({
+    runId: "code-run",
+    scopeId: "code-scope",
+    afterEntryId: null,
+    startOrder: 0,
+    parentToolCallId,
+    toolCallId: `${toolName}-call`,
+    toolName,
+    input: {},
+    result: { content: [{ type: "text", text: "done" }] },
+    isError: false,
+    startedAt: 1,
+    timestamp: 2,
+  });
+}
+
+function missingToolResult(toolName: string) {
+  return {
+    role: "toolResult",
+    toolName,
+    details: { reason: "missing_tool_result" },
+    content: [{ type: "text", text: "outcome unknown" }],
+  };
+}
+
 describe("resolveMainSessionResumePolicy former terminal states", () => {
   it.each([
     {
@@ -99,7 +127,10 @@ describe("resolveMainSessionResumePolicy former terminal states", () => {
     {
       label: "delivered receipt without tool-call correlation",
       params: { deliveryReceiptState: "delivered-terminal" as const },
-      expected: { action: "resume", forceRestartSafeTools: true },
+      expected: {
+        action: "resume",
+        forceRestartSafeTools: true,
+      },
     },
     ...(["pending", "handled-reply", "handled-unrecoverable"] as const).map((state) => ({
       label: `before_agent_reply ${state}`,
@@ -134,7 +165,10 @@ describe("resolveMainSessionResumePolicy former terminal states", () => {
           },
         ],
       },
-      expected: { action: "resume", forceRestartSafeTools: true },
+      expected: {
+        action: "resume",
+        forceRestartSafeTools: true,
+      },
     },
     {
       label: "non-replay-safe Code Mode checkpoint",
@@ -144,7 +178,10 @@ describe("resolveMainSessionResumePolicy former terminal states", () => {
           codeModeCheckpoint({ replaySafe: false, runId: "code-run" }),
         ],
       },
-      expected: { action: "resume", forceRestartSafeTools: true },
+      expected: {
+        action: "tombstone",
+        reason: "interrupted turn included mutating tool work",
+      },
     },
     {
       label: "Code Mode wait with an unmatched checkpoint",
@@ -155,7 +192,10 @@ describe("resolveMainSessionResumePolicy former terminal states", () => {
           codeModeWait(),
         ],
       },
-      expected: { action: "resume", forceRestartSafeTools: true },
+      expected: {
+        action: "tombstone",
+        reason: "interrupted turn included mutating tool work",
+      },
     },
     {
       label: "mixed Code Mode wait and side-effecting call",
@@ -173,7 +213,10 @@ describe("resolveMainSessionResumePolicy former terminal states", () => {
           },
         ],
       },
-      expected: { action: "resume", forceRestartSafeTools: true },
+      expected: {
+        action: "tombstone",
+        reason: "interrupted turn included mutating tool work",
+      },
     },
   ])("maps $label to $expected", ({ params, expected }) => {
     expect(resolvePolicy(params)).toEqual(expected);
@@ -192,6 +235,184 @@ describe("resolveMainSessionResumePolicy former terminal states", () => {
       action: "resume",
       forceRestartSafeTools: true,
       forceCodeModeTools: true,
+    });
+  });
+
+  it("trusts nested Code Mode work only behind a replay-safe checkpoint", () => {
+    const nested = nestedToolActivity("plugin_lookup");
+    expect(
+      resolvePolicy({
+        messages: [
+          { role: "user", content: "continue the code run" },
+          codeModeCheckpoint({ replaySafe: true, runId: "code-run" }),
+          nested,
+          codeModeWait(),
+        ],
+      }),
+    ).toEqual({
+      action: "tombstone",
+      reason: "interrupted turn included mutating tool work",
+    });
+    expect(
+      resolvePolicy({
+        messages: [
+          { role: "user", content: "continue the code run" },
+          codeModeCheckpoint({ replaySafe: false, runId: "code-run" }),
+          nested,
+          codeModeWait(),
+        ],
+      }),
+    ).toEqual({
+      action: "tombstone",
+      reason: "interrupted turn included mutating tool work",
+    });
+  });
+
+  it("does not let an earlier Code Mode checkpoint cover later nested work", () => {
+    expect(
+      resolvePolicy({
+        messages: [
+          { role: "user", content: "continue the code run" },
+          codeModeCheckpoint({ replaySafe: true, runId: "code-run" }),
+          nestedToolActivity("write", "later-exec-call"),
+        ],
+      }),
+    ).toEqual({
+      action: "tombstone",
+      reason: "interrupted turn included mutating tool work",
+    });
+  });
+
+  it("does not let a checkpoint cover later nested work from the same call", () => {
+    expect(
+      resolvePolicy({
+        messages: [
+          { role: "user", content: "continue the code run" },
+          codeModeCheckpoint({ replaySafe: true, runId: "code-run" }),
+          nestedToolActivity("write"),
+        ],
+      }),
+    ).toEqual({
+      action: "tombstone",
+      reason: "interrupted turn included mutating tool work",
+    });
+  });
+
+  it("requires a checkpoint even when nested Code Mode work is read-only", () => {
+    expect(
+      resolvePolicy({
+        messages: [
+          { role: "user", content: "continue the code run" },
+          nestedToolActivity("read", "uncheckpointed-exec"),
+        ],
+      }),
+    ).toEqual({
+      action: "tombstone",
+      reason: "interrupted turn included mutating tool work",
+    });
+  });
+
+  it("distinguishes approval-pending from an unknown mutating outcome", () => {
+    const execCall = {
+      role: "assistant",
+      stopReason: "toolUse",
+      content: [
+        { type: "toolCall", id: "exec-call", name: "exec", arguments: { command: "touch x" } },
+      ],
+    };
+    expect(
+      resolvePolicy({
+        messages: [
+          { role: "user", content: "run it" },
+          execCall,
+          {
+            ...missingToolResult("exec"),
+            toolCallId: "exec-call",
+            details: { status: "approval-pending" },
+          },
+        ],
+      }),
+    ).toEqual({ action: "resume", forceRestartSafeTools: true });
+    expect(
+      resolvePolicy({
+        messages: [{ role: "user", content: "run it" }, execCall, missingToolResult("exec")],
+      }),
+    ).toEqual({
+      action: "tombstone",
+      reason: "interrupted turn included mutating tool work",
+    });
+  });
+
+  it("does not let a later approval hide an earlier mutation", () => {
+    expect(
+      resolvePolicy({
+        messages: [
+          { role: "user", content: "update both settings" },
+          {
+            role: "assistant",
+            stopReason: "toolUse",
+            content: [
+              { type: "toolCall", id: "write-call", name: "write", arguments: { path: "x" } },
+            ],
+          },
+          { role: "toolResult", toolName: "write", toolCallId: "write-call", content: "done" },
+          {
+            role: "assistant",
+            stopReason: "toolUse",
+            content: [
+              {
+                type: "toolCall",
+                id: "exec-call",
+                name: "exec",
+                arguments: { command: "touch y" },
+              },
+            ],
+          },
+          {
+            ...missingToolResult("exec"),
+            toolCallId: "exec-call",
+            details: { status: "approval-pending" },
+          },
+        ],
+      }),
+    ).toEqual({
+      action: "tombstone",
+      reason: "interrupted turn included mutating tool work",
+    });
+  });
+
+  it("does not apply a replay-safe checkpoint to another Code Mode call", () => {
+    expect(
+      resolvePolicy({
+        messages: [
+          { role: "user", content: "continue both code runs" },
+          nestedToolActivity("write"),
+          codeModeCheckpoint({ replaySafe: false, runId: "code-run-b" }),
+          {
+            ...codeModeCheckpoint({ replaySafe: true, runId: "code-run-a" }),
+            toolCallId: "other-exec-call",
+          },
+        ],
+      }),
+    ).toEqual({
+      action: "tombstone",
+      reason: "interrupted turn included mutating tool work",
+    });
+  });
+
+  it("rejects a non-tail unproven Code Mode call before hook resume", () => {
+    expect(
+      resolvePolicy({
+        beforeAgentReplyState: "handled-reply",
+        messages: [
+          { role: "user", content: "continue the code run" },
+          codeModeCheckpoint({ replaySafe: false, runId: "code-run" }),
+          { role: "assistant", content: [{ type: "text", text: "partial" }] },
+        ],
+      }),
+    ).toEqual({
+      action: "tombstone",
+      reason: "interrupted turn included mutating tool work",
     });
   });
 });
@@ -263,7 +484,7 @@ describe("resolveMainSessionResumePolicy progress tails", () => {
     ).toEqual({ action: "resume", forceRestartSafeTools: false });
   });
 
-  it("retains replay restrictions when final-phase async delivery follows a side-effecting call", () => {
+  it("terminalizes a side-effecting call even when async delivery follows it", () => {
     expect(
       resolveMainSessionResumePolicy([
         { role: "user", content: "finish the interrupted work" },
@@ -276,7 +497,10 @@ describe("resolveMainSessionResumePolicy progress tails", () => {
         },
         asyncDeliveryMessage("The background check finished.", "async-after-exec"),
       ]),
-    ).toEqual({ action: "resume", forceRestartSafeTools: true });
+    ).toEqual({
+      action: "tombstone",
+      reason: "interrupted turn included mutating tool work",
+    });
   });
 
   it("never treats unkeyed stream fallbacks as authoritative progress", () => {

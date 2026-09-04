@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   type InternalSessionEntry as SessionEntry,
@@ -13,7 +14,7 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { GatewayRecoveryRuntime } from "../../gateway/server-instance-runtime.types.js";
-import { readSessionMessagesAsync } from "../../gateway/session-transcript-readers.js";
+import { readRecentSessionMessagesWithStatsAsync } from "../../gateway/session-transcript-readers.js";
 import { resolveGatewaySessionStoreTarget } from "../../gateway/session-utils.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { findDeliveryIntentOwner } from "../../infra/outbound/delivery-queue-storage.js";
@@ -509,30 +510,9 @@ export async function recoverStore(params: {
       result[completed ? "settled" : "skipped"]++;
       continue;
     }
-    if (pendingAction === "fail") {
-      await resumeCurrent({
-        ...(entry.pendingFinalDelivery?.kind === "replayable"
-          ? { pendingFinalDeliveryText: entry.pendingFinalDelivery.text }
-          : {}),
-        forceRestartSafeTools: true,
-      });
-      continue;
-    }
-
-    if (
-      entry.pendingFinalDelivery?.kind === "replayable" &&
-      entry.restartRecoveryForceSafeTools === true
-    ) {
-      await resumeCurrent({
-        pendingFinalDeliveryText: entry.pendingFinalDelivery.text,
-        forceRestartSafeTools: true,
-      });
-      continue;
-    }
-
-    let messages: unknown[];
+    let transcript;
     try {
-      messages = await readSessionMessagesAsync(
+      transcript = await readRecentSessionMessagesWithStatsAsync(
         {
           agentId,
           sessionEntry: entry,
@@ -541,7 +521,6 @@ export async function recoverStore(params: {
           storePath: params.storePath,
         },
         {
-          mode: "recent",
           maxMessages: 20,
           maxBytes: 256 * 1024,
         },
@@ -550,31 +529,42 @@ export async function recoverStore(params: {
       if (stopped()) {
         return result;
       }
-      if (entry.pendingFinalDelivery?.kind === "replayable") {
-        mainSessionRecoveryLog.warn(
-          `transcript unavailable for ${sessionKey}; resuming its durable pending final delivery`,
-        );
-        await resumeCurrent({
-          pendingFinalDeliveryText: entry.pendingFinalDelivery.text,
-        });
-        continue;
-      }
-      mainSessionRecoveryLog.warn(`failed to read transcript for ${sessionKey}: ${String(err)}`);
-      result.failed++;
+      mainSessionRecoveryLog.warn(`transcript unavailable for ${sessionKey}: ${String(err)}`);
+      const tombstone = await tombstoneMainRestartRecoveryWithNotice({
+        agentId,
+        cfg: params.cfg,
+        entry,
+        gatewayRuntime: params.gatewayRuntime,
+        observation: recoveryView.observation,
+        reason: "interrupted turn transcript is unavailable",
+        sessionKey,
+        storePath: params.storePath,
+      });
+      result[tombstone === "notice_failed" ? "failed" : "skipped"]++;
       continue;
     }
+    const messages = transcript.messages;
+    const currentTurnBoundaryVisible =
+      transcript.totalMessages === messages.length ||
+      messages.some((message) => asOptionalRecord(message)?.role === "user");
 
     if (stopped()) {
       return result;
     }
-    if (entry.pendingFinalDelivery?.kind === "replayable") {
-      await resumeCurrent({
-        pendingFinalDeliveryText: entry.pendingFinalDelivery.text,
-        forceRestartSafeTools: hasReplaySafeCodeModeCheckpointInCurrentTurn(messages),
+    if (!currentTurnBoundaryVisible) {
+      const tombstone = await tombstoneMainRestartRecoveryWithNotice({
+        agentId,
+        cfg: params.cfg,
+        entry,
+        gatewayRuntime: params.gatewayRuntime,
+        observation: recoveryView.observation,
+        reason: "interrupted turn exceeded the bounded recovery transcript",
+        sessionKey,
+        storePath: params.storePath,
       });
+      result[tombstone === "notice_failed" ? "failed" : "skipped"]++;
       continue;
     }
-
     // Completion reports are delivery turns, not human work. Same-process
     // rotation retains their announce run ids; a full restart can recover the
     // same fact from the already-persisted user-message provenance.
@@ -644,10 +634,30 @@ export async function recoverStore(params: {
       }
       continue;
     }
+    if (resumePolicy.action === "tombstone") {
+      const tombstone = await tombstoneMainRestartRecoveryWithNotice({
+        agentId,
+        cfg: params.cfg,
+        entry,
+        gatewayRuntime: params.gatewayRuntime,
+        observation: recoveryView.observation,
+        reason: resumePolicy.reason,
+        sessionKey,
+        storePath: params.storePath,
+      });
+      result[tombstone === "notice_failed" ? "failed" : "skipped"]++;
+      continue;
+    }
 
     await resumeCurrent({
+      ...(entry.pendingFinalDelivery?.kind === "replayable"
+        ? { pendingFinalDeliveryText: entry.pendingFinalDelivery.text }
+        : {}),
       forceRestartSafeTools:
-        entry.restartRecoveryForceSafeTools === true || resumePolicy.forceRestartSafeTools,
+        entry.restartRecoveryForceSafeTools === true ||
+        pendingAction === "fail" ||
+        hasReplaySafeCodeModeCheckpointInCurrentTurn(messages) ||
+        resumePolicy.forceRestartSafeTools,
       forceCodeModeTools: resumePolicy.forceCodeModeTools === true,
     });
   }

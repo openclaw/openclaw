@@ -37,9 +37,9 @@ async function sendRestartRecoveryTombstoneNotice(params: {
   gatewayRuntime: GatewayRecoveryRuntime;
   reason: string;
   sessionKey: string;
-}): Promise<void> {
+}): Promise<"failed" | "sent" | "suppressed"> {
   try {
-    await params.gatewayRuntime.sendRecoveryNotice({
+    const result = await params.gatewayRuntime.sendRecoveryNotice({
       channel: params.deliveryContext.channel,
       to: params.deliveryContext.to,
       accountId: params.deliveryContext.accountId,
@@ -47,13 +47,18 @@ async function sendRestartRecoveryTombstoneNotice(params: {
       text: TOMBSTONED_SESSION_NOTICE,
       idempotencyKey: buildRestartRecoveryTombstoneNoticeKey(params.entry),
     });
+    if (result.suppressed) {
+      return "suppressed";
+    }
     mainSessionRecoveryLog.info(
       `sent restart recovery tombstone notice: ${params.sessionKey} (${params.reason})`,
     );
+    return "sent";
   } catch (error) {
     mainSessionRecoveryLog.warn(
       `failed to send restart recovery tombstone notice ${params.sessionKey}: ${String(error)}`,
     );
+    return "failed";
   }
 }
 
@@ -63,7 +68,7 @@ async function writeRestartRecoveryTombstoneNotice(params: {
   sessionKey: string;
   storePath: string;
   expectedSessionState: SessionTranscriptTurnExpectedState;
-  sessionLifecyclePatch: SessionTranscriptTurnLifecyclePatch;
+  sessionLifecyclePatch?: SessionTranscriptTurnLifecyclePatch;
 }): Promise<"failed" | "stale" | "written"> {
   const result = await appendAssistantMessageToSessionTranscript({
     agentId: params.agentId,
@@ -199,12 +204,23 @@ export async function tombstoneMainRestartRecoveryWithNotice(params: {
   if (!tombstonedEntry) {
     return "skipped";
   }
-  await sendRestartRecoveryTombstoneNotice({
+  const notice = await sendRestartRecoveryTombstoneNotice({
     deliveryContext,
     entry: tombstonedEntry,
     gatewayRuntime: params.gatewayRuntime,
     reason: params.reason,
     sessionKey: params.sessionKey,
   });
+  if (notice !== "sent") {
+    return (await writeRestartRecoveryTombstoneNotice({
+      agentId: params.agentId,
+      entry: tombstonedEntry,
+      expectedSessionState: buildRestartRecoveryExpectedState(tombstonedEntry),
+      sessionKey: params.sessionKey,
+      storePath: params.storePath,
+    })) === "written"
+      ? "tombstoned"
+      : "notice_failed";
+  }
   return "tombstoned";
 }

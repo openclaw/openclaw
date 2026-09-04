@@ -202,11 +202,20 @@ Three complementary mechanisms mark sessions whose turn did not finish:
 
 ## Automatic resume
 
-A few seconds after startup, the gateway re-dispatches each marked session
-with a synthetic system message telling the agent its previous turn was
-interrupted by a restart and to continue from the existing transcript. If a
-final reply had already been produced but not delivered, its text is included
-so the agent can deliver it instead of redoing the work.
+A few seconds after startup, the gateway classifies each marked session before
+deciding whether to continue it. Turns that contain only model work, audited
+read-only tools, or a replay-safe Code Mode checkpoint may be re-dispatched
+with a synthetic system message telling the agent to continue from the existing
+transcript. If a final reply had already been produced but not delivered, its
+text is included so the agent can deliver it instead of redoing the work.
+
+An interrupted turn that called a mutating or otherwise non-replay-safe tool is
+not resumed automatically. OpenClaw marks the session failed, preserves its
+transcript, and records a notice directing the operator to resume in a new
+session or use `/new` or `/reset`. This also prevents old intent from overwriting
+configuration or other remediation applied while the Gateway was offline. If a
+long turn exceeds the bounded recovery transcript and its read-only status
+cannot be proved, recovery fails closed in the same way.
 
 Startup reconciliation retries transient failures up to three times with
 exponential backoff. Separately, each interrupted main-session cycle has a
@@ -360,6 +369,8 @@ channels.start --params '{"channel":"<id>"}'`
   See also [Gateway](/gateway) (safe mode paragraph) for the same control-plane
   vs channel-autostart split.
 
+- **Main-session mutation boundary:** mutating or unprovable interrupted turns
+  are tombstoned with a visible recovery notice instead of being re-dispatched.
 - **Main-session attempt budget:** three charged automatic dispatch attempts
   per interrupted cycle; exhaustion tombstones that session until it is
   inspected and replaced.

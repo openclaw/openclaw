@@ -1,5 +1,7 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
+import { readNestedToolActivity } from "../../sessions/nested-tool-activity.js";
 import { CODE_MODE_EXEC_TOOL_NAME, CODE_MODE_WAIT_TOOL_NAME } from "../code-mode-control-tools.js";
 import {
   getTranscriptMessageRole as getMessageRole,
@@ -11,6 +13,7 @@ import {
   AGENT_RUN_RESTART_ABORT_ERROR,
   AGENT_RUN_RESTART_ABORT_ERROR_CODE,
 } from "../run-termination.js";
+import { buildToolMutationState } from "../tool-mutation.js";
 import { isAgentToolReplaySafe } from "../tool-replay-safety.js";
 
 function readDeliveredTerminalSourceReplyToolCallId(
@@ -125,6 +128,17 @@ type DanglingToolCallClassification =
   | { kind: "code-mode" }
   | { kind: "resumable"; forceRestartSafeTools: boolean };
 
+function isCodeModeControlCall(block: Record<string, unknown>, name: string): boolean {
+  if (name === CODE_MODE_WAIT_TOOL_NAME) {
+    return true;
+  }
+  if (name !== CODE_MODE_EXEC_TOOL_NAME) {
+    return false;
+  }
+  const args = block.arguments ?? block.input;
+  return Boolean(args && typeof args === "object" && Object.hasOwn(args, "code"));
+}
+
 // A dangling call may have committed before its result persisted, so anything
 // outside the audited replay-safe allowlist keeps the restart-safe tool
 // restriction: the continuation can inspect and report, but never silently
@@ -135,6 +149,7 @@ function classifyDanglingToolCalls(content: unknown): DanglingToolCallClassifica
     return undefined;
   }
   let allReplaySafe = true;
+  let hasCodeModeControl = false;
   let hasToolCall = false;
   for (const block of content) {
     if (!block || typeof block !== "object") {
@@ -145,17 +160,21 @@ function classifyDanglingToolCalls(content: unknown): DanglingToolCallClassifica
       continue;
     }
     const name = normalizeOptionalString((block as { name?: unknown }).name);
-    if (name === CODE_MODE_EXEC_TOOL_NAME || name === CODE_MODE_WAIT_TOOL_NAME) {
-      return { kind: "code-mode" };
-    }
-    if (!isAgentToolReplaySafe({ name })) {
+    if (name && isCodeModeControlCall(asOptionalRecord(block) ?? {}, name)) {
+      hasCodeModeControl = true;
+    } else if (!isAgentToolReplaySafe({ name })) {
       allReplaySafe = false;
     }
     hasToolCall = true;
   }
-  return hasToolCall
-    ? { kind: "resumable", forceRestartSafeTools: !allReplaySafe }
-    : { kind: "none" };
+  if (!hasToolCall) {
+    return { kind: "none" };
+  }
+  return !allReplaySafe
+    ? { kind: "resumable", forceRestartSafeTools: true }
+    : hasCodeModeControl
+      ? { kind: "code-mode" }
+      : { kind: "resumable", forceRestartSafeTools: false };
 }
 
 // Unlike isPendingAssistantToolCall, visible text beside the call is fine —
@@ -178,7 +197,7 @@ function readResumablePendingToolCallTail(
 
 function readCodeModeCheckpoint(
   message: unknown,
-): { replaySafe: boolean; runId?: string } | undefined {
+): { replaySafe: boolean; runId?: string; toolCallId?: string } | undefined {
   if (!message || typeof message !== "object") {
     return undefined;
   }
@@ -207,12 +226,13 @@ function readCodeModeCheckpoint(
       replaySafe?: unknown;
       runId?: unknown;
     };
+    const toolCallId = normalizeOptionalString(asOptionalRecord(message)?.toolCallId);
     if (result.status === "completed" || result.status === "failed") {
-      return { replaySafe: result.replaySafe === true };
+      return { replaySafe: result.replaySafe === true, ...(toolCallId ? { toolCallId } : {}) };
     }
     const runId = normalizeOptionalString(result.runId);
     return result.status === "waiting" && runId
-      ? { replaySafe: result.replaySafe === true, runId }
+      ? { replaySafe: result.replaySafe === true, runId, ...(toolCallId ? { toolCallId } : {}) }
       : undefined;
   } catch {
     return undefined;
@@ -351,6 +371,116 @@ function requiresRestartSafeToolResult(message: unknown): boolean {
   return status.reason === "missing_tool_result" || status.status === "approval-pending";
 }
 
+function isApprovalPendingToolResult(message: unknown): boolean {
+  if (!message || typeof message !== "object" || getMessageRole(message) !== "toolResult") {
+    return false;
+  }
+  return asOptionalRecord(asOptionalRecord(message)?.details)?.status === "approval-pending";
+}
+
+function resolveApprovalPendingToolCallId(
+  messages: readonly unknown[],
+  message: unknown,
+): string | undefined {
+  const explicitId = normalizeOptionalString(asOptionalRecord(message)?.toolCallId);
+  if (explicitId) {
+    return explicitId;
+  }
+  const toolName = normalizeOptionalString(asOptionalRecord(message)?.toolName);
+  if (!toolName) {
+    return undefined;
+  }
+  const latestUserIndex = messages.findLastIndex(
+    (candidate) => getMessageRole(candidate) === "user",
+  );
+  const matchingIds = messages.slice(Math.max(0, latestUserIndex)).flatMap((candidate) => {
+    if (getMessageRole(candidate) !== "assistant") {
+      return [];
+    }
+    const content = asOptionalRecord(candidate)?.content;
+    return Array.isArray(content)
+      ? content.flatMap((block) => {
+          const record = asOptionalRecord(block);
+          return normalizeOptionalString(record?.name) === toolName
+            ? [normalizeOptionalString(record?.id)].filter((id): id is string => Boolean(id))
+            : [];
+        })
+      : [];
+  });
+  return matchingIds.length === 1 ? matchingIds[0] : undefined;
+}
+
+function hasUnprovenToolWorkInCurrentTurn(
+  messages: readonly unknown[],
+  ignoredToolCallId?: string,
+): boolean {
+  const latestUserIndex = messages.findLastIndex((message) => getMessageRole(message) === "user");
+  const currentTurnStart = Math.max(0, latestUserIndex);
+  const checkpoints = messages.flatMap((message, index) => {
+    if (index < currentTurnStart) {
+      return [];
+    }
+    if (isRestartAbortedWaitFailure(message)) {
+      return [];
+    }
+    const checkpoint = readCodeModeCheckpoint(message);
+    return checkpoint ? [{ ...checkpoint, index }] : [];
+  });
+  if (checkpoints.some((checkpoint) => !checkpoint.replaySafe)) {
+    return true;
+  }
+  for (let index = currentTurnStart; index < messages.length; index += 1) {
+    const message = messages[index];
+    const nested = readNestedToolActivity(message);
+    const nestedCheckpoint = nested?.details.parentToolCallId
+      ? checkpoints.find(
+          (checkpoint) =>
+            checkpoint.toolCallId === nested.details.parentToolCallId && checkpoint.index >= index,
+        )
+      : undefined;
+    if (nested && !nestedCheckpoint) {
+      return true;
+    }
+    if (getMessageRole(message) !== "assistant") {
+      continue;
+    }
+    const content = asOptionalRecord(message)?.content;
+    if (!Array.isArray(content)) {
+      continue;
+    }
+    for (const block of content) {
+      const record = asOptionalRecord(block);
+      const type = normalizeOptionalString(record?.type);
+      const name = normalizeOptionalString(record?.name);
+      if (!name || (type !== "toolCall" && type !== "toolUse" && type !== "tool_use")) {
+        continue;
+      }
+      if (normalizeOptionalString(record?.id) === ignoredToolCallId) {
+        continue;
+      }
+      const args = record?.arguments ?? record?.input;
+      if (isCodeModeControlCall(record ?? {}, name)) {
+        const toolCallId = normalizeOptionalString(record?.id);
+        const runId = normalizeOptionalString(asOptionalRecord(args)?.runId);
+        const checkpoint = checkpoints.find((candidate) =>
+          name === CODE_MODE_EXEC_TOOL_NAME
+            ? candidate.toolCallId === toolCallId && candidate.index >= index
+            : candidate.runId === runId && candidate.index <= index,
+        );
+        if (!checkpoint) {
+          return true;
+        }
+        continue;
+      }
+      const mutation = buildToolMutationState(name, args);
+      if (mutation.mutatingAction || !mutation.replaySafe) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 type MainSessionResumePolicy =
   | {
       action: "complete";
@@ -358,6 +488,7 @@ type MainSessionResumePolicy =
       toolCallId: string;
     }
   | { action: "complete"; reason: "handled-silent" }
+  | { action: "tombstone"; reason: "interrupted turn included mutating tool work" }
   | {
       action: "resume";
       forceRestartSafeTools: boolean;
@@ -380,28 +511,16 @@ export function resolveMainSessionResumePolicy(
     return { action: "complete", reason: "delivered-terminal", toolCallId: mirroredToolCallId };
   }
   if (deliveryReceiptState === "delivered-terminal") {
-    return deliveryToolCallId
-      ? {
-          action: "complete",
-          reason: "delivered-terminal-receipt",
-          toolCallId: deliveryToolCallId,
-        }
-      : { action: "resume", forceRestartSafeTools: true };
-  }
-  if (deliveryReceiptState === "terminal-pending") {
-    return { action: "resume", forceRestartSafeTools: true };
+    if (deliveryToolCallId) {
+      return {
+        action: "complete",
+        reason: "delivered-terminal-receipt",
+        toolCallId: deliveryToolCallId,
+      };
+    }
   }
   if (beforeAgentReplyState === "handled-silent") {
     return { action: "complete", reason: "handled-silent" };
-  }
-  if (beforeAgentReplyState === "pending") {
-    return { action: "resume", forceRestartSafeTools: true };
-  }
-  if (beforeAgentReplyState === "handled-reply") {
-    return { action: "resume", forceRestartSafeTools: true };
-  }
-  if (beforeAgentReplyState === "handled-unrecoverable") {
-    return { action: "resume", forceRestartSafeTools: true };
   }
   // Progress can commit after the recovery mark while the old run is winding
   // down. It is not a terminal turn boundary; preserve it in the transcript
@@ -433,24 +552,44 @@ export function resolveMainSessionResumePolicy(
     meaningfulMessages.shift();
   }
   const lastMeaningful = meaningfulMessages[0];
+  if (isApprovalPendingToolResult(lastMeaningful)) {
+    const approvalCallId = resolveApprovalPendingToolCallId(messages, lastMeaningful);
+    if (approvalCallId && !hasUnprovenToolWorkInCurrentTurn(messages, approvalCallId)) {
+      return { action: "resume", forceRestartSafeTools: true };
+    }
+  }
+  if (hasUnprovenToolWorkInCurrentTurn(messages)) {
+    return { action: "tombstone", reason: "interrupted turn included mutating tool work" };
+  }
+  if (requiresRestartSafeToolResult(lastMeaningful)) {
+    return { action: "resume", forceRestartSafeTools: true };
+  }
+  if (
+    deliveryReceiptState !== undefined ||
+    beforeAgentReplyState === "pending" ||
+    beforeAgentReplyState === "handled-reply" ||
+    beforeAgentReplyState === "handled-unrecoverable"
+  ) {
+    return { action: "resume", forceRestartSafeTools: true };
+  }
   if (forceRestartSafeTools && isPendingAssistantToolCall(lastMeaningful)) {
     return { action: "resume", forceRestartSafeTools: true };
   }
   if (isRestartAbortedWaitFailure(lastMeaningful)) {
-    return { action: "resume", forceRestartSafeTools: true };
+    return { action: "tombstone", reason: "interrupted turn included mutating tool work" };
   }
   const waitCall = readCodeModeWaitCall(lastMeaningful);
   if (waitCall) {
     const checkpoint = readCodeModeCheckpoint(meaningfulMessages[1]);
     return checkpoint?.replaySafe === true && checkpoint.runId === waitCall.runId
       ? { action: "resume", forceRestartSafeTools: true, forceCodeModeTools: true }
-      : { action: "resume", forceRestartSafeTools: true };
+      : { action: "tombstone", reason: "interrupted turn included mutating tool work" };
   }
   const tailCheckpoint = readCodeModeCheckpoint(lastMeaningful);
   if (tailCheckpoint) {
     return tailCheckpoint.replaySafe
       ? { action: "resume", forceRestartSafeTools: true, forceCodeModeTools: true }
-      : { action: "resume", forceRestartSafeTools: true };
+      : { action: "tombstone", reason: "interrupted turn included mutating tool work" };
   }
   // A tool call interrupted mid-execution resumes like the manual re-send the
   // failure notice used to demand: the dangling call is dropped from the next
@@ -465,15 +604,10 @@ export function resolveMainSessionResumePolicy(
       ? classifyDanglingToolCalls((lastMeaningful as { content?: unknown }).content)
       : undefined;
   if (danglingControlCalls?.kind === "code-mode") {
-    // Without an exact replay-safe checkpoint, Code Mode controls stay unavailable.
-    // The model can inspect the transcript under the ordinary restart-safe restriction.
-    return { action: "resume", forceRestartSafeTools: true };
+    return { action: "tombstone", reason: "interrupted turn included mutating tool work" };
   }
   if (!lastMeaningful || !isResumableTailMessage(lastMeaningful)) {
     return { action: "resume", forceRestartSafeTools: false };
-  }
-  if (requiresRestartSafeToolResult(lastMeaningful)) {
-    return { action: "resume", forceRestartSafeTools: true };
   }
   // A later tool result can hide the checkpoint at the transcript tail; keep
   // the interrupted turn restricted without borrowing an earlier turn's state.
