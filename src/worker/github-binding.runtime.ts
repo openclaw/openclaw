@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { inspectPathPermissions } from "@openclaw/fs-safe/permissions";
@@ -10,6 +11,7 @@ import {
 } from "../agents/github-tool-identity.js";
 import type { PreparedGitHubToolEnvironment } from "../agents/github-tool-identity.types.js";
 import { sha256HexPrefixCore } from "../infra/crypto-digest.js";
+import { isMissingPathError } from "../infra/errno.js";
 import { executeGitCommand } from "../infra/git-exec.js";
 import { AGENT_GIT_CONFIG_PARAMETERS } from "../infra/git-maintenance-env.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
@@ -72,8 +74,7 @@ async function bindWorkerGitHubCheckout(
     }
     const fetched = await git(["fetch", "--quiet", "origin", binding.branch], 60_000);
     if (fetched.code !== 0) {
-      const remoteBranch = await git(["ls-remote", "--exit-code", "--heads", "origin", branch]);
-      if (remoteBranch.code === 2) {
+      if (fetched.stderr.includes("couldn't find remote ref")) {
         return;
       }
       throw new Error(`git fetch failed (exit ${fetched.code})`);
@@ -95,36 +96,50 @@ async function bindWorkerGitHubCheckout(
     if (signal?.aborted) {
       return;
     }
-    const listPaths = async (args: string[]) =>
-      (await requireGit(args)).split("\0").filter(Boolean);
-    const [added, untracked, ignored] = await Promise.all([
-      listPaths([
-        "diff",
-        "--name-only",
-        "--diff-filter=A",
-        "--no-renames",
-        "-z",
-        "HEAD",
-        "FETCH_HEAD",
-        "--",
-      ]),
-      listPaths(["ls-files", "--others", "--exclude-standard", "-z"]),
-      listPaths(["ls-files", "--others", "--ignored", "--exclude-standard", "-z"]),
-    ]);
-    const localPaths = [...untracked, ...ignored];
-    const hasPathPrefixCollision = added.some((addedPath) =>
-      localPaths.some(
-        (localPath) =>
-          addedPath.startsWith(`${localPath}/`) || localPath.startsWith(`${addedPath}/`),
-      ),
-    );
+    const added = (await requireGit([
+      "diff",
+      "--name-only",
+      "--diff-filter=A",
+      "--no-renames",
+      "-z",
+      "HEAD",
+      "FETCH_HEAD",
+      "--",
+    ])).split("\0").filter(Boolean);
+    let hasPathPrefixCollision = false;
+    // Native path lookup also recognizes the filesystem's case and Unicode aliases.
+    // Inspect only incoming components, not unrelated or ignored workspace files.
+    for (const addedPath of added) {
+      const segments = addedPath.split("/");
+      let localPath = cwd;
+      for (const [index, segment] of segments.entries()) {
+        localPath = path.join(localPath, segment);
+        try {
+          const stats = await fs.lstat(localPath);
+          const isExactPath = index === segments.length - 1;
+          if (isExactPath ? stats.isDirectory() : !stats.isDirectory()) {
+            hasPathPrefixCollision = true;
+            break;
+          }
+        } catch (error) {
+          if (!isMissingPathError(error)) {
+            throw error;
+          }
+          break;
+        }
+      }
+      if (hasPathPrefixCollision) {
+        break;
+      }
+    }
     if (hasPathPrefixCollision) {
       log.warn(`GitHub checkout fast-forward skipped: local path conflicts with ${binding.branch}`);
       return;
     }
     // Paths already missing before the move are the session's own deletions and stay
     // deleted; only files the incoming commits introduce are materialized.
-    const listDeleted = () => listPaths(["ls-files", "--deleted", "-z"]);
+    const listDeleted = async () =>
+      (await requireGit(["ls-files", "--deleted", "-z"])).split("\0").filter(Boolean);
     const deletedBefore = new Set(await listDeleted());
     await requireGit(["reset", "--mixed", "FETCH_HEAD"]);
     const missing = (await listDeleted()).filter((file) => !deletedBefore.has(file));

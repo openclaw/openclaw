@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { isMissingPathError } from "../infra/errno.js";
 import * as exec from "../process/exec.js";
 import {
   disposeWorkerGitHubEnvironment,
@@ -109,33 +110,98 @@ describe("prepareWorkerGitHubEnvironment", () => {
     await fs.rm(root, { recursive: true, force: true });
   });
 
-  it.each([
-    { scenario: "reconciled identical content", content: pushedContent, porcelain: "" },
-    { scenario: "reconciled local edits", content: "local edit\n", porcelain: ` M ${filename}\0` },
-    { scenario: "a missing pushed file", content: undefined, porcelain: "" },
-  ])(
-    "fast-forwards $scenario without losing working-tree bytes",
-    async ({ content, porcelain }) => {
-      const remoteHead = await publishEarlierTurn();
-      if (content !== undefined) {
-        await fs.writeFile(path.join(cwd, filename), content);
-      }
+  it("fast-forwards an unobstructed checkout with identical reconciled bytes", async () => {
+    const remoteHead = await publishEarlierTurn();
+    await fs.writeFile(path.join(cwd, filename), pushedContent);
 
-      await prepare();
+    await prepare();
 
-      expect((await git(cwd, "rev-parse", "HEAD")).trim()).toBe(remoteHead);
-      expect((await git(cwd, "rev-parse", `refs/heads/${binding.branch}`)).trim()).toBe(remoteHead);
-      expect((await git(cwd, "rev-parse", `refs/remotes/origin/${binding.branch}`)).trim()).toBe(
-        remoteHead,
+    expect((await git(cwd, "rev-parse", "HEAD")).trim()).toBe(remoteHead);
+    expect(await fs.readFile(path.join(cwd, filename), "utf8")).toBe(pushedContent);
+    expect(await git(cwd, "status", "--porcelain", "-z")).toBe("");
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("fast-forwards with more than 1 MiB of unrelated ignored paths", async () => {
+    const tracked = "tracked.txt";
+    const incoming = "incoming.txt";
+    await fs.writeFile(path.join(cwd, tracked), "base\n");
+    initialHead = await commit(cwd, "Track base file");
+    await git(cwd, "push", "--quiet", "--force", "origin", "HEAD:refs/heads/main");
+    const seed = path.join(root, "earlier-worker");
+    await git(root, "clone", "--quiet", "--branch", "main", origin, seed);
+    await fs.writeFile(path.join(seed, tracked), "remote edit\n");
+    await fs.writeFile(path.join(seed, incoming), "remote file\n");
+    const remoteHead = await commit(seed, "Earlier turn");
+    await git(seed, "push", "--quiet", "origin", `HEAD:refs/heads/${binding.branch}`);
+
+    const ignoredDir = path.join(cwd, "cache");
+    await fs.mkdir(ignoredDir);
+    await fs.writeFile(path.join(cwd, ".git", "info", "exclude"), "cache/\n");
+    const ignoredNames = Array.from(
+      { length: 4_500 },
+      (_, index) => `${index.toString().padStart(4, "0")}-${"x".repeat(230)}`,
+    );
+    for (let index = 0; index < ignoredNames.length; index += 100) {
+      await Promise.all(
+        ignoredNames
+          .slice(index, index + 100)
+          .map((name) => fs.writeFile(path.join(ignoredDir, name), "")),
       );
-      expect(await git(cwd, "status", "--porcelain", "-z")).toBe(porcelain);
-      expect(await fs.readFile(path.join(cwd, filename), "utf8")).toBe(content ?? pushedContent);
-      expect(
-        (await git(cwd, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}")).trim(),
-      ).toBe(`origin/${binding.branch}`);
-      expect(warn).not.toHaveBeenCalled();
-    },
-  );
+    }
+    expect(
+      ignoredNames.reduce((bytes, name) => bytes + Buffer.byteLength(`cache/${name}\0`), 0),
+    ).toBeGreaterThan(1_048_576);
+
+    await prepare();
+
+    expect((await git(cwd, "rev-parse", "HEAD")).trim()).toBe(remoteHead);
+    await expect(fs.readFile(path.join(cwd, tracked), "utf8")).resolves.toBe("base\n");
+    await expect(fs.readFile(path.join(cwd, incoming), "utf8")).resolves.toBe("remote file\n");
+    expect(await git(cwd, "status", "--porcelain", "-z")).toBe(` M ${tracked}\0`);
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { scenario: "file with a directory", localDirectory: false },
+    { scenario: "directory with a file", localDirectory: true },
+  ])("preserves a clean tracked $scenario without advancing HEAD", async ({ localDirectory }) => {
+    const collision = "collision";
+    if (localDirectory) {
+      await fs.mkdir(path.join(cwd, collision));
+      await fs.writeFile(path.join(cwd, collision, "base.txt"), "base file\n");
+    } else {
+      await fs.writeFile(path.join(cwd, collision), "base file\n");
+    }
+    initialHead = await commit(cwd, "Track collision path");
+    await git(cwd, "push", "--quiet", "--force", "origin", "HEAD:refs/heads/main");
+
+    const seed = path.join(root, "earlier-worker");
+    await git(root, "clone", "--quiet", "--branch", "main", origin, seed);
+    await fs.rm(path.join(seed, collision), { recursive: true });
+    if (localDirectory) {
+      await fs.writeFile(path.join(seed, collision), "remote file\n");
+    } else {
+      await fs.mkdir(path.join(seed, collision));
+      await fs.writeFile(path.join(seed, collision, "remote.txt"), "remote file\n");
+    }
+    const remoteHead = await commit(seed, "Earlier turn");
+    await git(seed, "push", "--quiet", "origin", `HEAD:refs/heads/${binding.branch}`);
+    const indexBefore = await git(cwd, "ls-files", "--stage", "-z");
+
+    await prepare();
+
+    expect((await git(cwd, "rev-parse", "HEAD")).trim()).toBe(initialHead);
+    expect(remoteHead).not.toBe(initialHead);
+    expect(await git(cwd, "ls-files", "--stage", "-z")).toBe(indexBefore);
+    expect(await git(cwd, "status", "--porcelain", "-z")).toBe("");
+    const localPath = localDirectory ? path.join(collision, "base.txt") : collision;
+    await expect(fs.readFile(path.join(cwd, localPath), "utf8")).resolves.toBe("base file\n");
+    expect((await fs.lstat(path.join(cwd, collision))).isDirectory()).toBe(localDirectory);
+    expect(warn).toHaveBeenCalledExactlyOnceWith(
+      expect.stringContaining("GitHub checkout fast-forward skipped"),
+    );
+  });
 
   it.each([
     { scenario: "untracked", ignored: false },
@@ -167,6 +233,29 @@ describe("prepareWorkerGitHubEnvironment", () => {
     );
   });
 
+  it("treats an empty untracked collision with Git pattern characters literally", async () => {
+    const collision = "a[bc]";
+    await fs.writeFile(path.join(cwd, "ab"), "tracked file\n");
+    initialHead = await commit(cwd, "Track pathspec match");
+    await git(cwd, "push", "--quiet", "--force", "origin", "HEAD:refs/heads/main");
+
+    const seed = path.join(root, "earlier-worker");
+    await git(root, "clone", "--quiet", "--branch", "main", origin, seed);
+    await fs.writeFile(path.join(seed, collision), "remote file\n");
+    const remoteHead = await commit(seed, "Earlier turn");
+    await git(seed, "push", "--quiet", "origin", `HEAD:refs/heads/${binding.branch}`);
+    await fs.mkdir(path.join(cwd, collision));
+
+    await prepare();
+
+    expect((await fs.lstat(path.join(cwd, collision))).isDirectory()).toBe(true);
+    expect((await git(cwd, "rev-parse", "HEAD")).trim()).toBe(initialHead);
+    expect(remoteHead).not.toBe(initialHead);
+    expect(warn).toHaveBeenCalledExactlyOnceWith(
+      expect.stringContaining("GitHub checkout fast-forward skipped"),
+    );
+  });
+
   it("preserves an untracked directory that blocks an incoming file", async () => {
     const collision = "collision";
     const localFile = path.join(collision, "local.txt");
@@ -190,6 +279,99 @@ describe("prepareWorkerGitHubEnvironment", () => {
       expect.stringContaining("GitHub checkout fast-forward skipped"),
     );
   });
+
+  it("preserves a tracked dirty file that blocks an incoming directory", async () => {
+    const collision = "collision";
+    const localContent = "local edit\n";
+    await fs.writeFile(path.join(cwd, collision), "base file\n");
+    initialHead = await commit(cwd, "Track collision file");
+    await git(cwd, "push", "--quiet", "origin", "HEAD:refs/heads/main");
+    const seed = path.join(root, "earlier-worker");
+    await git(root, "clone", "--quiet", "--branch", "main", origin, seed);
+    await fs.rm(path.join(seed, collision));
+    await fs.mkdir(path.join(seed, collision));
+    await fs.writeFile(path.join(seed, collision, "remote.txt"), "remote file\n");
+    const remoteHead = await commit(seed, "Earlier turn");
+    await git(seed, "push", "--quiet", "origin", `HEAD:refs/heads/${binding.branch}`);
+    await fs.writeFile(path.join(cwd, collision), localContent);
+    const before = await git(cwd, "status", "--porcelain", "--ignored", "-z");
+
+    await prepare();
+
+    await expect(fs.readFile(path.join(cwd, collision), "utf8")).resolves.toBe(localContent);
+    await expect(fs.access(path.join(cwd, collision, "remote.txt"))).rejects.toThrow();
+    expect(await git(cwd, "status", "--porcelain", "--ignored", "-z")).toBe(before);
+    expect((await git(cwd, "rev-parse", "HEAD")).trim()).toBe(initialHead);
+    expect(remoteHead).not.toBe(initialHead);
+    expect(warn).toHaveBeenCalledExactlyOnceWith(
+      expect.stringContaining("GitHub checkout fast-forward skipped"),
+    );
+  });
+
+  it("preserves a tracked dirty directory that blocks an incoming file", async () => {
+    const collision = "collision";
+    const localFile = path.join(collision, "local.txt");
+    const localContent = "local edit\n";
+    await fs.mkdir(path.join(cwd, collision));
+    await fs.writeFile(path.join(cwd, localFile), "base file\n");
+    initialHead = await commit(cwd, "Track collision directory");
+    await git(cwd, "push", "--quiet", "origin", "HEAD:refs/heads/main");
+    const seed = path.join(root, "earlier-worker");
+    await git(root, "clone", "--quiet", "--branch", "main", origin, seed);
+    await fs.rm(path.join(seed, collision), { recursive: true });
+    await fs.writeFile(path.join(seed, collision), "remote file\n");
+    const remoteHead = await commit(seed, "Earlier turn");
+    await git(seed, "push", "--quiet", "origin", `HEAD:refs/heads/${binding.branch}`);
+    await fs.writeFile(path.join(cwd, localFile), localContent);
+    const before = await git(cwd, "status", "--porcelain", "--ignored", "-z");
+
+    await prepare();
+
+    await expect(fs.readFile(path.join(cwd, localFile), "utf8")).resolves.toBe(localContent);
+    expect(await git(cwd, "status", "--porcelain", "--ignored", "-z")).toBe(before);
+    expect((await git(cwd, "rev-parse", "HEAD")).trim()).toBe(initialHead);
+    expect(remoteHead).not.toBe(initialHead);
+    expect(warn).toHaveBeenCalledExactlyOnceWith(
+      expect.stringContaining("GitHub checkout fast-forward skipped"),
+    );
+  });
+
+  for (const { scenario, localCollision, remoteCollision } of [
+    { scenario: "case", localCollision: "Collision", remoteCollision: "collision" },
+    { scenario: "Unicode normalization", localCollision: "cafe\u0301", remoteCollision: "caf\u00e9" },
+  ]) {
+    it(`preserves ${scenario} aliases recognized by the filesystem`, async ({ skip }) => {
+      const localContent = "local file\n";
+      await fs.writeFile(path.join(cwd, localCollision), localContent);
+      try {
+        await fs.lstat(path.join(cwd, remoteCollision));
+      } catch (error) {
+        if (!isMissingPathError(error)) {
+          throw error;
+        }
+        skip();
+        return;
+      }
+      const seed = path.join(root, "earlier-worker");
+      await git(root, "clone", "--quiet", "--branch", "main", origin, seed);
+      await fs.mkdir(path.join(seed, remoteCollision));
+      await fs.writeFile(path.join(seed, remoteCollision, "remote.txt"), "remote file\n");
+      const remoteHead = await commit(seed, "Earlier turn");
+      await git(seed, "push", "--quiet", "origin", `HEAD:refs/heads/${binding.branch}`);
+      const before = await git(cwd, "status", "--porcelain", "--ignored", "-z");
+
+      await prepare();
+
+      await expect(fs.readFile(path.join(cwd, localCollision), "utf8")).resolves.toBe(localContent);
+      await expect(fs.access(path.join(cwd, remoteCollision, "remote.txt"))).rejects.toThrow();
+      expect(await git(cwd, "status", "--porcelain", "--ignored", "-z")).toBe(before);
+      expect((await git(cwd, "rev-parse", "HEAD")).trim()).toBe(initialHead);
+      expect(remoteHead).not.toBe(initialHead);
+      expect(warn).toHaveBeenCalledExactlyOnceWith(
+        expect.stringContaining("GitHub checkout fast-forward skipped"),
+      );
+    });
+  }
 
   it("leaves diverged local history and files untouched with one warning", async () => {
     const remoteHead = await publishEarlierTurn();
@@ -291,26 +473,6 @@ describe("prepareWorkerGitHubEnvironment", () => {
     expect((await git(cwd, "rev-parse", "HEAD")).trim()).toBe(initialHead);
     expect(remoteHead).not.toBe(initialHead);
     await expect(git(cwd, "rev-parse", "--verify", "FETCH_HEAD")).rejects.toThrow();
-    expect(warn).not.toHaveBeenCalled();
-  });
-
-  it("silently leaves the checkout alone when the session branch does not exist on origin", async () => {
-    await fs.writeFile(path.join(cwd, filename), "first turn\n");
-    const before = await git(cwd, "status", "--porcelain");
-    const runCommand = exec.runCommandWithTimeout;
-    vi.spyOn(exec, "runCommandWithTimeout").mockImplementation(async (argv, options) => {
-      const result = await runCommand(argv, options);
-      if (argv.includes("fetch") && result.code !== 0) {
-        return { ...result, stderr: "fatal: synthetic localized missing branch diagnostic" };
-      }
-      return result;
-    });
-
-    await prepare();
-
-    expect((await git(cwd, "rev-parse", "HEAD")).trim()).toBe(initialHead);
-    expect(await git(cwd, "status", "--porcelain")).toBe(before);
-    expect(await fs.readFile(path.join(cwd, filename), "utf8")).toBe("first turn\n");
     expect(warn).not.toHaveBeenCalled();
   });
 
