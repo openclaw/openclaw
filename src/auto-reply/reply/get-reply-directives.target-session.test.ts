@@ -87,6 +87,7 @@ async function resolveHelloWithModelDefaults(params: {
   opts?: Parameters<typeof resolveReplyDirectives>[0]["opts"];
   modelError?: unknown;
 }) {
+  const cfg = params.cfg ?? {};
   const resolveDefaultThinkingLevel = vi.fn(
     async (selection?: { model?: string }) =>
       (selection?.model ? params.defaultThinkingByModel?.[selection.model] : undefined) ??
@@ -116,7 +117,16 @@ async function resolveHelloWithModelDefaults(params: {
       CommandBody: params.body ?? "hello",
       ...params.ctx,
     }),
-    cfg: params.cfg ?? {},
+    cfg: {
+      ...cfg,
+      tools: {
+        ...cfg.tools,
+        elevated: {
+          ...cfg.tools?.elevated,
+          allowFrom: { whatsapp: ["*"], ...cfg.tools?.elevated?.allowFrom },
+        },
+      },
+    },
     agentId: "main",
     agentDir: "/tmp/main-agent",
     workspaceDir: "/tmp",
@@ -157,7 +167,8 @@ async function resolveHelloWithModelDefaults(params: {
   return { result, resolveDefaultThinkingLevel, resolveDefaultReasoningLevel, typing };
 }
 
-vi.mock("../../agents/agent-scope.js", () => ({
+vi.mock("../../agents/agent-scope.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../agents/agent-scope.js")>()),
   listAgentEntries: (...args: unknown[]) => mocks.listAgentEntries(...args),
 }));
 
@@ -187,7 +198,8 @@ vi.mock("../../agents/thinking-runtime.js", () => ({
     (provider === "openai" ? "codex" : "openclaw"),
 }));
 
-vi.mock("../../routing/session-key.js", () => ({
+vi.mock("../../routing/session-key.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../routing/session-key.js")>()),
   normalizeAgentId: vi.fn((value: string) => value),
 }));
 
@@ -252,15 +264,6 @@ vi.mock("./model-selection.js", () => ({
   createFastTestModelSelectionState: vi.fn(),
   createModelSelectionState: (...args: unknown[]) => mocks.createModelSelectionState(...args),
   resolveContextTokens: vi.fn(() => 4096),
-}));
-
-vi.mock("./reply-elevated.js", () => ({
-  formatElevatedUnavailableMessage: vi.fn(() => "elevated unavailable"),
-  resolveElevatedPermissions: vi.fn(() => ({
-    enabled: true,
-    allowed: true,
-    failures: [],
-  })),
 }));
 
 describe("resolveReplyDirectives", () => {
@@ -547,7 +550,7 @@ describe("resolveReplyDirectives", () => {
         CommandBody: "hello",
         ParentSessionKey: "ctx-parent",
       }),
-      cfg: {},
+      cfg: { tools: { elevated: { allowFrom: { whatsapp: ["*"] } } } },
       agentId: "main",
       agentDir: "/tmp/main-agent",
       workspaceDir: "/tmp",
