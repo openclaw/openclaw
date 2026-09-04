@@ -20,6 +20,7 @@ import { authorizeGatewaySessionCreation, resolveCreatorSandbox } from "../opera
 import { ADMIN_SCOPE } from "../operator-scopes.js";
 import { resolvePluginSessionOwnershipError } from "../session-plugin-ownership.js";
 import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-request-agent.js";
+import { hasSessionReadAccessChanged } from "../session-sharing-policy.js";
 import { projectSessionPatchResult } from "../session-utils-model.js";
 import {
   resolveCanonicalGatewaySessionStoreKey,
@@ -71,7 +72,13 @@ type PreparedPatchTarget = SessionPatchArchiveTarget & {
 };
 
 type MutationOutcome =
-  | { ok: true; applied: boolean; entry: SessionEntry; cleanupError?: ErrorShape }
+  | {
+      ok: true;
+      applied: boolean;
+      accessChanged: boolean;
+      entry: SessionEntry;
+      cleanupError?: ErrorShape;
+    }
   | { ok: false; error: ErrorShape };
 
 type ModelCatalog = Awaited<ReturnType<GatewayRequestContext["loadGatewayModelCatalog"]>>;
@@ -468,6 +475,7 @@ async function executeSessionPatchMutations(params: {
                           projectedOutcomes.push({
                             ok: true,
                             applied: false,
+                            accessChanged: false,
                             entry: unreadAck.entry,
                           });
                           continue;
@@ -558,6 +566,12 @@ async function executeSessionPatchMutations(params: {
                         projectedOutcomes.push({
                           ok: true,
                           applied: true,
+                          // The replacement writer validates this row snapshot at COMMIT.
+                          // Unknown generations and canonical moves still invalidate access.
+                          accessChanged:
+                            primaryKey !== target.canonicalKey ||
+                            previousSessionKeys.length > 0 ||
+                            hasSessionReadAccessChanged(existingEntry, projected.entry),
                           entry: cloned,
                         });
                       } catch (error) {
@@ -618,7 +632,9 @@ async function executeSessionPatchMutations(params: {
     category: params.patch.category,
     targets: prepared.flatMap((target) => {
       const outcome = outcomes[target.index];
-      return outcome?.ok && outcome.applied ? [{ target, entry: outcome.entry }] : [];
+      return outcome?.ok && outcome.applied
+        ? [{ target, entry: outcome.entry, accessChanged: outcome.accessChanged }]
+        : [];
     }),
   });
 
@@ -667,19 +683,10 @@ export async function executeSessionPatchMany(params: {
   }
   const outcomes: SessionsPatchManyResult["outcomes"] = [];
   for (const [index, outcome] of executed.outcomes.entries()) {
-    const target = params.targets[index]!;
-    if (outcome.ok) {
-      outcomes.push(
-        target.agentId
-          ? { ok: true, key: target.key, agentId: target.agentId }
-          : { ok: true, key: target.key },
-      );
-      continue;
-    }
+    const { key, agentId } = params.targets[index]!;
+    const identity = { key, ...(agentId ? { agentId } : {}) };
     outcomes.push(
-      target.agentId
-        ? { ok: false, key: target.key, agentId: target.agentId, error: outcome.error }
-        : { ok: false, key: target.key, error: outcome.error },
+      outcome.ok ? { ok: true, ...identity } : { ok: false, ...identity, error: outcome.error },
     );
   }
   return { ok: true, outcomes };
