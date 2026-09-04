@@ -316,6 +316,7 @@ export function resolveSourcePackageAliasesForVite(): ControlUiViteAlias[] {
   return [
     sourcePackageAlias("normalization-core", "agent-id"),
     sourcePackageAlias("normalization-core", "json-schema"),
+    sourcePackageAlias("normalization-core", "json-value"),
     sourcePackageAlias("normalization-core", "markdown-plain-text"),
     sourcePackageAlias("normalization-core", "number-coercion"),
     sourcePackageAlias("normalization-core", "phone-presentation"),

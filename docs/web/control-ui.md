@@ -515,6 +515,7 @@ This label does not change which request the approval buttons resolve.
     - Form saves discard stale redacted placeholders that cannot be restored from the saved config, while preserving redacted values that still map to saved secrets.
     - Sensitive string fields that are empty or contain only whitespace remain editable after reloading. Concrete secrets stay masked; entries containing stored secrets cannot be renamed in the form.
     - Schema and form rendering come from `config.schema` / `config.schema.lookup`, including field `title`/`description`, matched UI hints, immediate child summaries, docs metadata on nested object/wildcard/array/composition nodes, plus plugin and channel schemas when available. Raw JSON editor is available only when the snapshot has a safe raw round-trip; otherwise Control UI forces Form mode.
+    - Invalid text and numeric values show a reason below the field, linked to the input for assistive technology. The form keeps the invalid draft visible and submits only valid values.
     - Raw JSON editor "Reset to saved" preserves the raw-authored shape (formatting, comments, `$include` layout) instead of re-rendering a flattened snapshot, so external edits survive a reset when the snapshot can safely round-trip.
     - Structured SecretRef object values render read-only in form text inputs, to prevent accidental object-to-string corruption.
 

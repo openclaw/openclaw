@@ -728,12 +728,14 @@ class GatewayBootstrapAuthTest {
     armSavedActiveManualGateway(prefs)
     val endpoint = gatewayEndpoint()
     runtime.connect(endpoint)
+    val original = waitForDesiredConnection(runtime, "nodeSession")
 
     runtime.setCameraEnabled(true)
 
+    val cameraConnection = waitForDesiredConnection(runtime, "nodeSession", previous = original)
     val cameraOptions =
       readField<GatewayConnectOptions>(
-        waitForDesiredConnection(runtime, "nodeSession"),
+        cameraConnection,
         "options",
       )
     assertTrue(cameraOptions.commands.contains(OpenClawCameraCommand.Snap.rawValue))
@@ -743,7 +745,7 @@ class GatewayBootstrapAuthTest {
 
     val locationOptions =
       readField<GatewayConnectOptions>(
-        waitForDesiredConnection(runtime, "nodeSession"),
+        waitForDesiredConnection(runtime, "nodeSession", previous = cameraConnection),
         "options",
       )
     assertTrue(locationOptions.commands.contains(OpenClawCameraCommand.Snap.rawValue))
@@ -767,7 +769,7 @@ class GatewayBootstrapAuthTest {
 
     val options =
       readField<GatewayConnectOptions>(
-        waitForDesiredConnection(runtime, "nodeSession"),
+        waitForDesiredConnection(runtime, "nodeSession", previous = original),
         "options",
       )
     assertTrue(options.permissions.getValue("camera"))
@@ -1445,9 +1447,11 @@ class GatewayBootstrapAuthTest {
   private fun waitForDesiredConnection(
     runtime: NodeRuntime,
     sessionFieldName: String,
+    previous: Any? = null,
   ): Any {
     repeat(50) {
-      desiredConnection(runtime, sessionFieldName)?.let { return it }
+      val desired = desiredConnection(runtime, sessionFieldName)
+      if (desired != null && desired !== previous) return desired
       Thread.sleep(10)
     }
     error("Expected desired connection for $sessionFieldName")

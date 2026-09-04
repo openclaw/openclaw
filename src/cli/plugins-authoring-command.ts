@@ -1,7 +1,7 @@
 // Plugin authoring commands for init/build/validate manifest generation.
 import fs from "node:fs";
 import path from "node:path";
-import { jsonSchemaValuesEqual } from "@openclaw/normalization-core/json-schema";
+import { jsonSchemaValuesEqual } from "@openclaw/normalization-core/json-value";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { formatCwdRelativePathOrAbsolute as formatOutputPath } from "../infra/safe-cwd.js";
 import { getToolPluginMetadata, type ToolPluginMetadata } from "../plugin-sdk/tool-plugin.js";
