@@ -1316,6 +1316,7 @@ async function runLightDreaming(
       nowMs,
       timezone: params.config.timezone,
       model: params.config.execution?.model,
+      timeoutMs: params.config.execution?.timeoutMs,
       logger: params.logger,
       detached: params.detachNarratives,
     });
@@ -1407,6 +1408,7 @@ async function runRemDreaming(
       nowMs,
       timezone: params.config.timezone,
       model: params.config.execution?.model,
+      timeoutMs: params.config.execution?.timeoutMs,
       logger: params.logger,
       detached: params.detachNarratives,
     });
