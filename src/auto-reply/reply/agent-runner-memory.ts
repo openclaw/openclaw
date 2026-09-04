@@ -13,6 +13,7 @@ import { resolveDefaultAgentId } from "../../agents/agent-scope-config.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import { resolveCliBackendConfig } from "../../agents/cli-backends.js";
 import { estimateMessagesTokens } from "../../agents/compaction.js";
+import { resolveBundledStaticCatalogContext } from "../../agents/context.js";
 import { isBenignCompactionSkipResult } from "../../agents/embedded-agent-runner/compact-reasons.js";
 import type { AcceptedCompactionSuccessor } from "../../agents/embedded-agent-runner/compaction-successor.js";
 import { runEmbeddedAgentEntry } from "../../agents/embedded-agent-runner/run-entry.js";
@@ -762,16 +763,22 @@ export async function runSessionCompactionIfNeeded(params: {
     params.followupRun.run.provider,
     params.followupRun.run.model ?? params.defaultModel,
   );
+  const contextConfigProvider = resolveContextConfigProviderForRuntime({
+    provider: params.followupRun.run.provider,
+    runtimeId,
+    config: params.cfg,
+  });
+  const staticCatalogContext = await resolveBundledStaticCatalogContext({
+    cfg: params.cfg,
+    provider: contextConfigProvider,
+    model: params.followupRun.run.model ?? params.defaultModel,
+  });
   const contextWindowTokens = resolveContextTokens({
     cfg: params.cfg,
-    provider: resolveContextConfigProviderForRuntime({
-      provider: params.followupRun.run.provider,
-      runtimeId,
-      config: params.cfg,
-    }),
+    provider: contextConfigProvider,
     model: params.followupRun.run.model ?? params.defaultModel,
-    modelContextWindow: catalogModel?.contextWindow,
-    modelContextTokens: catalogModel?.contextTokens,
+    modelContextWindow: catalogModel?.contextWindow ?? staticCatalogContext?.modelContextWindow,
+    modelContextTokens: catalogModel?.contextTokens ?? staticCatalogContext?.modelContextTokens,
   });
   const memoryFlushPlan = resolveMemoryFlushPlan({ cfg: params.cfg, contextWindowTokens });
   const reserveTokensFloor =
@@ -1308,16 +1315,22 @@ export async function runMemoryFlushIfNeeded(params: {
     params.followupRun.run.provider,
     params.followupRun.run.model ?? params.defaultModel,
   );
+  const contextConfigProvider = resolveContextConfigProviderForRuntime({
+    provider: params.followupRun.run.provider,
+    runtimeId,
+    config: params.cfg,
+  });
+  const staticCatalogContext = await resolveBundledStaticCatalogContext({
+    cfg: params.cfg,
+    provider: contextConfigProvider,
+    model: params.followupRun.run.model ?? params.defaultModel,
+  });
   const contextWindowTokens = resolveContextTokens({
     cfg: params.cfg,
-    provider: resolveContextConfigProviderForRuntime({
-      provider: params.followupRun.run.provider,
-      runtimeId,
-      config: params.cfg,
-    }),
+    provider: contextConfigProvider,
     model: params.followupRun.run.model ?? params.defaultModel,
-    modelContextWindow: catalogModel?.contextWindow,
-    modelContextTokens: catalogModel?.contextTokens,
+    modelContextWindow: catalogModel?.contextWindow ?? staticCatalogContext?.modelContextWindow,
+    modelContextTokens: catalogModel?.contextTokens ?? staticCatalogContext?.modelContextTokens,
   });
   let memoryFlushPlan: MemoryFlushPlan | null;
   try {
