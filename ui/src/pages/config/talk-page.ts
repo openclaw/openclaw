@@ -10,6 +10,7 @@ import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import {
   isTalkGptLiveModel,
+  resolveTalkTranscriptionSelection,
   resolveTalkRealtimeSelection,
   talkProviderRejectsTransport,
 } from "./talk-schema.ts";
@@ -20,6 +21,8 @@ import {
   talkProviderConfigKeys,
   type TalkCatalogState,
   type TalkRealtimeProviderOption,
+  type TalkTranscriptionCatalogState,
+  type TalkTranscriptionProviderOption,
 } from "./talk.ts";
 
 type GatewayClient = NonNullable<ApplicationContext["gateway"]["snapshot"]["client"]>;
@@ -57,6 +60,19 @@ function toProviderOption(
   };
 }
 
+function toTranscriptionProviderOption(
+  provider: TalkCatalogResult["transcription"]["providers"][number],
+): TalkTranscriptionProviderOption {
+  return {
+    id: provider.id,
+    label: provider.label,
+    configured: provider.configured,
+    aliases: provider.aliases ?? [],
+    models: provider.models ?? [],
+    defaultModel: provider.defaultModel ?? null,
+  };
+}
+
 /** Transports whose sessions are client-owned (`talk.client.create`). */
 const TALK_CLIENT_OWNED_TRANSPORTS = new Set(["webrtc", "provider-websocket"]);
 
@@ -73,6 +89,7 @@ class TalkSettingsPage extends OpenClawLightDomElement {
   @property({ attribute: false }) buildEditor: TalkPageProps["buildEditor"] = () => html``;
 
   @state() private catalog: TalkCatalogState = { kind: "unavailable" };
+  @state() private transcription: TalkTranscriptionCatalogState = { kind: "unavailable" };
 
   private connection: CatalogConnection | null = null;
   private catalogRequestId = 0;
@@ -126,6 +143,7 @@ class TalkSettingsPage extends OpenClawLightDomElement {
     this.connection = connection;
     if (!client || !connected) {
       this.catalog = { kind: "unavailable" };
+      this.transcription = { kind: "unavailable" };
       return;
     }
     this.catalog = { kind: "loading" };
@@ -145,11 +163,33 @@ class TalkSettingsPage extends OpenClawLightDomElement {
         activeProvider: result.realtime.activeProvider ?? null,
         providers: result.realtime.providers.map(toProviderOption),
       });
+      this.applyTranscriptionCatalog(connection, requestId, {
+        kind: "ready",
+        ready: result.transcription.ready === true,
+        activeProvider: result.transcription.activeProvider ?? null,
+        providers: result.transcription.providers.map(toTranscriptionProviderOption),
+      });
     } catch {
       // The catalog only powers the pickers; the page still renders the raw
       // configured values when it cannot be read.
       this.applyCatalog(connection, requestId, { kind: "unavailable" });
+      this.applyTranscriptionCatalog(connection, requestId, { kind: "unavailable" });
     }
+  }
+
+  private applyTranscriptionCatalog(
+    connection: CatalogConnection,
+    requestId: number,
+    catalog: TalkTranscriptionCatalogState,
+  ) {
+    if (
+      !this.isConnected ||
+      this.connection !== connection ||
+      this.catalogRequestId !== requestId
+    ) {
+      return;
+    }
+    this.transcription = catalog;
   }
 
   private applyCatalog(
@@ -329,6 +369,58 @@ class TalkSettingsPage extends OpenClawLightDomElement {
     }
   }
 
+  private liveTranscriptionSelection() {
+    const form = this.context.runtimeConfig.state.configForm;
+    const configObject =
+      form && typeof form === "object" ? (form as Record<string, unknown>) : this.configObject;
+    return resolveTalkTranscriptionSelection(configObject);
+  }
+
+  private selectedTranscriptionProviderKeys(): string[] {
+    const selection = this.liveTranscriptionSelection();
+    const catalog = this.transcription;
+    if (catalog.kind !== "ready") {
+      return selection.provider ? [selection.provider] : [];
+    }
+    const provider = selection.provider
+      ? catalog.providers.find(
+          (entry) =>
+            entry.id === selection.provider || entry.aliases.includes(selection.provider ?? ""),
+        )
+      : catalog.providers.find((entry) => entry.id === catalog.activeProvider);
+    return [selection.provider, provider?.id, ...(provider?.aliases ?? [])].filter(
+      (value, index, values): value is string => Boolean(value) && values.indexOf(value) === index,
+    );
+  }
+
+  private changeTranscriptionModel(model: string | null) {
+    if (this.mutationDisabled) {
+      return;
+    }
+    const runtimeConfig = this.context.runtimeConfig;
+    if (model !== null) {
+      runtimeConfig.patchForm(["talk", "transcription", "model"], model);
+      return;
+    }
+    runtimeConfig.removeFormValue(["talk", "transcription", "model"]);
+    for (const key of this.selectedTranscriptionProviderKeys()) {
+      runtimeConfig.removeFormValue(["talk", "transcription", "providers", key, "model"]);
+    }
+  }
+
+  private changeTranscriptionProvider(providerId: string | null) {
+    if (this.mutationDisabled) {
+      return;
+    }
+    const runtimeConfig = this.context.runtimeConfig;
+    runtimeConfig.removeFormValue(["talk", "transcription", "model"]);
+    if (providerId === null) {
+      runtimeConfig.removeFormValue(["talk", "transcription", "provider"]);
+      return;
+    }
+    runtimeConfig.patchForm(["talk", "transcription", "provider"], providerId);
+  }
+
   override render() {
     const runtimeState = this.context.runtimeConfig.state;
     return renderTalk({
@@ -342,6 +434,10 @@ class TalkSettingsPage extends OpenClawLightDomElement {
       onProviderChange: (providerId) => this.changeProvider(providerId),
       onModelChange: (model) => this.changeModel(model),
       onVoiceChange: (voice) => this.changeVoice(voice),
+      transcription: this.transcription,
+      transcriptionSelection: resolveTalkTranscriptionSelection(this.configObject),
+      onTranscriptionProviderChange: (providerId) => this.changeTranscriptionProvider(providerId),
+      onTranscriptionModelChange: (model) => this.changeTranscriptionModel(model),
       editor: this.buildEditor(),
     });
   }

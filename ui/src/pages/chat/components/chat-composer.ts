@@ -532,6 +532,7 @@ export function renderChatComposer(props: ChatComposerProps) {
         onOpenDictationSettings: props.onOpenDictationSettings,
       })
     : nothing;
+  const dictationOnly = props.composerVoiceInputMode === "dictation";
   const dictationOptions = {
     client: props.gatewayClient ?? null,
     connected: props.connected,
@@ -591,15 +592,17 @@ export function renderChatComposer(props: ChatComposerProps) {
     // With an initial empty composer, this button retains the existing
     // send-after-typing behavior until the host rerenders the primary actions.
     // Once a draft is rendered, the separate voice control starts Talk directly.
-    onTap:
-      visibleDraft.trim() || props.attachments?.length
+    onTap: dictationOnly
+      ? undefined
+      : visibleDraft.trim() || props.attachments?.length
         ? startRealtimeTalk
         : handleVoicePrimaryAction,
   };
   state.dictation ??= new ComposerDictationController(dictationOptions);
   state.dictation.update(dictationOptions);
   const dictation =
-    props.onToggleRealtimeTalk && props.composerHoldToRecord !== false
+    (props.onToggleRealtimeTalk || (dictationOnly && props.gatewayClient)) &&
+    props.composerHoldToRecord !== false
       ? state.dictation
       : undefined;
   const handleDictationPointerDown = (event: PointerEvent) => {
@@ -642,7 +645,8 @@ export function renderChatComposer(props: ChatComposerProps) {
     voiceVideoPending: props.realtimeTalkVideoPending,
     onAbort: props.onAbort,
     onSend: handleSend,
-    onToggleVoice: props.onToggleRealtimeTalk ? handleVoicePrimaryAction : undefined,
+    onToggleVoice:
+      props.onToggleRealtimeTalk && !dictationOnly ? handleVoicePrimaryAction : undefined,
     onToggleCamera: props.onToggleRealtimeCamera,
     microphonePicker,
     dictation,

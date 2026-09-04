@@ -20,7 +20,7 @@ import { REALTIME_VOICE_DESCRIBE_VIEW_TOOL_NAME } from "../../talk/describe-view
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { resolveSessionMutationAuthorization } from "../session-sharing.js";
 import { prepareTalkAgentConsultTranscript } from "../talk-agent-consult-transcript.js";
-import { buildTalkRealtimeConfig } from "./talk-shared.js";
+import { buildTalkRealtimeConfig, buildTalkTranscriptionConfig } from "./talk-shared.js";
 import { talkHandlers } from "./talk.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
 
@@ -1033,6 +1033,49 @@ describe("talk.catalog handler", () => {
     expect(mockCallArg(respond, 0, 1)).toMatchObject({
       transcription: { ready: false, activeProvider: "transcription" },
       realtime: { ready: false, activeProvider: "realtime" },
+    });
+  });
+});
+
+describe("buildTalkTranscriptionConfig", () => {
+  it("prefers talk.transcription over legacy voice-call streaming settings", () => {
+    const localProvider = {
+      id: "local-stt",
+      label: "Local STT",
+      aliases: ["local"],
+      isConfigured: vi.fn(() => true),
+    };
+    mocks.listRealtimeTranscriptionProviders.mockReturnValue([localProvider] as never);
+
+    expect(
+      buildTalkTranscriptionConfig({
+        plugins: {
+          entries: {
+            "voice-call": {
+              config: {
+                streaming: {
+                  provider: "legacy-stt",
+                  providers: { "legacy-stt": { endpoint: "https://legacy.invalid" } },
+                },
+              },
+            },
+          },
+        },
+        talk: {
+          transcription: {
+            provider: "local-stt",
+            providers: { "local-stt": { endpoint: "https://stt.example.test" } },
+            model: "large-v3-turbo",
+          },
+        },
+      }),
+    ).toEqual({
+      provider: "local-stt",
+      providers: {
+        "legacy-stt": { endpoint: "https://legacy.invalid" },
+        "local-stt": { endpoint: "https://stt.example.test" },
+      },
+      model: "large-v3-turbo",
     });
   });
 });

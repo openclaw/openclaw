@@ -2744,6 +2744,22 @@ export const en: TranslationMap & {
       hint: "GPT-Live works with a ChatGPT subscription: sign in once with “openclaw models auth login --provider openai”. No Platform API key needed for browser or Gateway-relay Talk. Delegated work can be steered while running and requires exact spoken confirmation for high-impact actions.",
       ready: "Ready",
     },
+    transcription: {
+      sectionTitle: "Dictation and transcription",
+      sectionDescription:
+        "Choose the realtime transcription provider and model used by browser dictation. Local providers can be supplied by plugins; provider credentials stay in the Gateway.",
+      statusTitle: "Status",
+      ready: "Ready",
+      notReady: "Not configured",
+      unavailable: "Unavailable",
+      unavailableHint: "Connect to the Gateway to check transcription readiness.",
+      activeProvider: "Active provider: {provider}",
+      noProvider: "No realtime transcription provider is configured yet.",
+      providerTitle: "Provider",
+      providerDescription: "Auto picks the first configured realtime transcription provider.",
+      modelTitle: "Model",
+      modelDescription: "Realtime transcription model for browser dictation.",
+    },
   },
   memoryPage: {
     intro: "Choose how OpenClaw stores, searches, and maintains agent memory.",
@@ -6074,6 +6090,11 @@ export const en: TranslationMap & {
       openRealtimeTalkSettings: "Talk settings",
       openDictationSettings: "Transcription setup",
       configureCapability: "Configure",
+      voiceInputMode: "Microphone action",
+      voiceInputModeDescription:
+        "Choose what a click on the main microphone button does. Gesture keeps tap-to-talk and hold-to-dictate; Dictation starts transcription directly.",
+      voiceInputModeGesture: "Gesture (tap Talk, hold Dictation)",
+      voiceInputModeDictation: "Dictation",
       holdToRecordSetting: "Hold microphone button to start dictation",
       holdToDictate: "Hold to start dictation",
       holdToRecordSettingDescription:

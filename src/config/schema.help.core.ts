@@ -245,6 +245,16 @@ export const CORE_FIELD_HELP: Record<string, string> = {
     "Talk reasoning strategy: agent-consult for Gateway-mediated agent help, direct-tools for local tool calls, or none.",
   "talk.realtime.consultRouting":
     "Gateway relay fallback for final user transcripts when the realtime provider skips openclaw_agent_consult. provider-direct preserves provider replies; force-agent-consult routes through OpenClaw.",
+  "talk.transcription":
+    "Realtime transcription provider and model used by browser dictation and transcription-only Talk sessions. Provider-specific credentials stay in the provider entry.",
+  "talk.transcription.provider": "Active realtime transcription provider id.",
+  "talk.transcription.providers":
+    "Provider-specific realtime transcription settings keyed by provider id.",
+  "talk.transcription.providers.*":
+    "Provider-owned realtime transcription config for the matching provider id.",
+  "talk.transcription.providers.*.apiKey": "Provider API key for realtime transcription.", // pragma: allowlist secret
+  "talk.transcription.model":
+    "Realtime transcription model id override for browser dictation or transcription-only Talk sessions.",
   "talk.consultThinkingLevel":
     "Use this to override the thinking level for the regular agent run behind Talk realtime consults.",
   "talk.consultFastMode":

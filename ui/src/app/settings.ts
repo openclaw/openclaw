@@ -23,9 +23,38 @@ import { normalizeChatSplitLayout } from "../pages/chat/split-layout-persistence
 import type { ChatSplitLayout } from "../pages/chat/split-layout-types.ts";
 import { resolveControlUiPaths } from "./browser.ts";
 import { parseImportedCustomTheme, type ImportedCustomTheme } from "./custom-theme.ts";
+import {
+  normalizeCatalogOpenTarget,
+  normalizeChatFollowUpMode,
+  normalizeChatFollowUpModeOverride,
+  normalizeChatSendShortcut,
+  normalizeChatWorkspaceDock,
+  type CatalogOpenTarget,
+  type ChatFollowUpMode,
+  type ChatSendShortcut,
+  type ChatWorkspaceDock,
+} from "./settings-choice-values.ts";
 import { parseThemeSelection, type ThemeMode, type ThemeName } from "./theme.ts";
 import { normalizeTypefaceOverride, type TypefaceId } from "./typography.ts";
 import { normalizeLocalUserIdentity, type LocalUserIdentity } from "./user-identity.ts";
+import {
+  DEFAULT_COMPOSER_VOICE_INPUT_MODE,
+  normalizeComposerAudioPreferences,
+  serializeComposerAudioPreferences,
+  type ComposerAudioPreferences,
+} from "./voice-input-settings.ts";
+
+export {
+  normalizeCatalogOpenTarget,
+  normalizeChatFollowUpMode,
+  normalizeChatFollowUpModeOverride,
+  normalizeChatSendShortcut,
+  normalizeChatWorkspaceDock,
+  type CatalogOpenTarget,
+  type ChatFollowUpMode,
+  type ChatSendShortcut,
+  type ChatWorkspaceDock,
+};
 
 // Control UI module implements storage behavior.
 const SETTINGS_KEY_PREFIX = "openclaw.control.settings.v1:";
@@ -127,39 +156,6 @@ export function normalizeChatMessageMaxWidth(value: unknown): string | undefined
   return /^(?:calc|clamp|fit-content|max|min)\(.+\)$/i.test(normalized) ? normalized : undefined;
 }
 
-const CHAT_SEND_SHORTCUTS = ["enter", "modifier-enter"] as const;
-export type ChatSendShortcut = (typeof CHAT_SEND_SHORTCUTS)[number];
-
-function normalizeChoice<T extends string>(
-  values: readonly T[],
-  fallback: T,
-): (value: unknown) => T {
-  return (value) => (values.includes(value as T) ? (value as T) : fallback);
-}
-
-export const normalizeChatSendShortcut = normalizeChoice(CHAT_SEND_SHORTCUTS, "enter");
-
-const CHAT_FOLLOW_UP_MODES = ["queue", "steer"] as const;
-export type ChatFollowUpMode = (typeof CHAT_FOLLOW_UP_MODES)[number];
-
-export const normalizeChatFollowUpMode = normalizeChoice(CHAT_FOLLOW_UP_MODES, "steer");
-
-export function normalizeChatFollowUpModeOverride(value: unknown): ChatFollowUpMode | undefined {
-  return CHAT_FOLLOW_UP_MODES.includes(value as ChatFollowUpMode)
-    ? (value as ChatFollowUpMode)
-    : undefined;
-}
-
-const CATALOG_OPEN_TARGETS = ["viewer", "terminal"] as const;
-export type CatalogOpenTarget = (typeof CATALOG_OPEN_TARGETS)[number];
-
-export const normalizeCatalogOpenTarget = normalizeChoice(CATALOG_OPEN_TARGETS, "viewer");
-
-const CHAT_WORKSPACE_DOCKS = ["right", "bottom"] as const;
-export type ChatWorkspaceDock = (typeof CHAT_WORKSPACE_DOCKS)[number];
-
-export const normalizeChatWorkspaceDock = normalizeChoice(CHAT_WORKSPACE_DOCKS, "right");
-
 export function normalizeAccentColor(value: unknown): string | undefined {
   return typeof value === "string" && /^#[0-9a-f]{6}$/i.test(value)
     ? value.toLowerCase()
@@ -191,6 +187,7 @@ export const UI_APPEARANCE_DEFAULTS = {
   chatCollapseTaskProgress: false,
   chatSendShortcut: "enter",
   catalogOpenTarget: "viewer",
+  composerVoiceInputMode: DEFAULT_COMPOSER_VOICE_INPUT_MODE,
   composerHoldToRecord: true,
   lobsterPetVisits: true,
   lobsterPetSounds: false,
@@ -217,8 +214,6 @@ export type UiSettings = {
   chatSendShortcut?: ChatSendShortcut;
   chatFollowUpMode?: ChatFollowUpMode; // Default handling for messages sent while a run is active
   catalogOpenTarget?: CatalogOpenTarget;
-  realtimeTalkInputDeviceId?: string;
-  realtimeTalkVideoDeviceId?: string;
   composerHoldToRecord?: boolean;
   // Camera intent is device-local, not per-agent or synced through config ui.prefs.
   talkCameraAutoEnable?: boolean;
@@ -245,7 +240,7 @@ export type UiSettings = {
   sessionDeleteConfirm?: boolean;
   // Device-local opt-in: route eligible external links into the Gateway browser panel.
   openLinksInControlUiBrowser?: boolean;
-};
+} & ComposerAudioPreferences;
 
 export type UiPreferences = Omit<UiSettings, "token">;
 
@@ -484,6 +479,7 @@ export function loadUiPreferences(targetGatewayUrl?: string): UiPreferences {
     chatCollapseTaskProgress: UI_APPEARANCE_DEFAULTS.chatCollapseTaskProgress,
     chatSendShortcut: UI_APPEARANCE_DEFAULTS.chatSendShortcut,
     catalogOpenTarget: UI_APPEARANCE_DEFAULTS.catalogOpenTarget,
+    composerVoiceInputMode: UI_APPEARANCE_DEFAULTS.composerVoiceInputMode,
     navCollapsed: false,
     navWidth: NAV_WIDTH_DEFAULT,
     sidebarEntries: [...DEFAULT_SIDEBAR_ENTRIES],
@@ -561,8 +557,7 @@ export function loadUiPreferences(targetGatewayUrl?: string): UiPreferences {
       chatSendShortcut: normalizeChatSendShortcut(parsed.chatSendShortcut),
       chatFollowUpMode: normalizeChatFollowUpModeOverride(parsed.chatFollowUpMode),
       catalogOpenTarget: normalizeCatalogOpenTarget(parsed.catalogOpenTarget),
-      realtimeTalkInputDeviceId: normalizeOptionalString(parsed.realtimeTalkInputDeviceId),
-      realtimeTalkVideoDeviceId: normalizeOptionalString(parsed.realtimeTalkVideoDeviceId),
+      ...normalizeComposerAudioPreferences(parsed),
       composerHoldToRecord:
         typeof parsed.composerHoldToRecord === "boolean"
           ? parsed.composerHoldToRecord
@@ -717,12 +712,7 @@ function persistSettings(next: UiSettings, options: { selectGateway?: boolean } 
     ...(normalizeCatalogOpenTarget(next.catalogOpenTarget) === "terminal"
       ? { catalogOpenTarget: "terminal" as const }
       : {}),
-    ...(normalizeOptionalString(next.realtimeTalkInputDeviceId)
-      ? { realtimeTalkInputDeviceId: normalizeOptionalString(next.realtimeTalkInputDeviceId) }
-      : {}),
-    ...(normalizeOptionalString(next.realtimeTalkVideoDeviceId)
-      ? { realtimeTalkVideoDeviceId: normalizeOptionalString(next.realtimeTalkVideoDeviceId) }
-      : {}),
+    ...serializeComposerAudioPreferences(next),
     ...(next.composerHoldToRecord === false ? { composerHoldToRecord: false } : {}),
     ...(typeof next.talkCameraAutoEnable === "boolean"
       ? { talkCameraAutoEnable: next.talkCameraAutoEnable }

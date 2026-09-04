@@ -82,6 +82,15 @@ export type TalkRealtimeConfig = {
   consultRouting?: "provider-direct" | "force-agent-consult";
 };
 
+export type TalkTranscriptionConfig = {
+  /** Active realtime transcription provider. */
+  provider?: string;
+  /** Provider-specific realtime transcription config keyed by provider id. */
+  providers?: Record<string, TalkProviderConfig>;
+  /** Provider model override for dictation and transcription-only sessions. */
+  model?: string;
+};
+
 export type ResolvedTalkConfig = {
   /** Active Talk TTS provider resolved from the current config payload. */
   provider: string;
@@ -98,6 +107,8 @@ export type TalkConfig = {
   providers?: Record<string, TalkProviderConfig>;
   /** Realtime Talk provider, model, voice, mode, transport, and brain config. */
   realtime?: TalkRealtimeConfig;
+  /** Realtime transcription provider, model, and provider config for dictation. */
+  transcription?: TalkTranscriptionConfig;
   /** Optional thinking level override for the agent run behind Talk realtime consults. */
   consultThinkingLevel?:
     | "off"

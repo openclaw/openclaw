@@ -459,6 +459,30 @@ describe("settings preference persistence", () => {
     expect(loadSettings().composerHoldToRecord).toBe(true);
   });
 
+  it("defaults the primary microphone to gesture mode and persists dictation mode", () => {
+    setTestLocation({
+      protocol: "https:",
+      host: "gateway.example:8443",
+      pathname: "/",
+    });
+
+    const gwUrl = expectedGatewayUrl("");
+    const scopedKey = `openclaw.control.settings.v1:${gwUrl}`;
+    expect(loadSettings().composerVoiceInputMode).toBe("gesture");
+
+    saveSettings({ ...loadSettings(), composerVoiceInputMode: "dictation" });
+    expect(JSON.parse(localStorage.getItem(scopedKey) ?? "{}").composerVoiceInputMode).toBe(
+      "dictation",
+    );
+    expect(loadSettings().composerVoiceInputMode).toBe("dictation");
+
+    saveSettings({ ...loadSettings(), composerVoiceInputMode: "gesture" });
+    expect(JSON.parse(localStorage.getItem(scopedKey) ?? "{}")).not.toHaveProperty(
+      "composerVoiceInputMode",
+    );
+    expect(loadSettings().composerVoiceInputMode).toBe("gesture");
+  });
+
   it("normalizes and persists the device-local talk camera preference", () => {
     setTestLocation({
       protocol: "https:",

@@ -205,6 +205,46 @@ describe("renderChatComposer controls", () => {
     },
   );
 
+  it("starts direct dictation from a click without arming the gesture handler", () => {
+    const container = document.createElement("div");
+    const handlePointerDown = vi.fn();
+    const startDirect = vi.fn(() => true);
+    const dictation = {
+      active: false,
+      connecting: false,
+      finalizing: false,
+      locksComposer: false,
+      arming: false,
+      startDirect,
+      handlePointerDown,
+      handleClick: vi.fn(),
+      handleContextMenu: vi.fn(),
+    } as unknown as ComposerDictationController;
+
+    render(
+      renderChatPrimaryActions({
+        canAbort: false,
+        canSend: false,
+        connected: true,
+        draft: "",
+        isBusy: false,
+        sending: false,
+        dictation,
+        onDictationPointerDown: handlePointerDown,
+      }),
+      container,
+    );
+
+    const microphone = button(container, t("chat.composer.dictationCapability"));
+    microphone.dispatchEvent(
+      new PointerEvent("pointerdown", { bubbles: true, button: 0, pointerId: 1 }),
+    );
+    microphone.click();
+
+    expect(handlePointerDown).not.toHaveBeenCalled();
+    expect(startDirect).toHaveBeenCalledOnce();
+  });
+
   it.each([
     [undefined, t("chat.composer.voiceGestureHint")],
     [false, t("chat.composer.startVoiceInput")],
