@@ -137,7 +137,7 @@ export async function updateCommand(inputOpts: UpdateCommandOptions): Promise<vo
               };
             }
           } finally {
-            recoveryState.windowsTaskAutoStartRecovery?.complete();
+            await recoveryState.windowsTaskAutoStartRecovery?.complete();
           }
           if (failure) {
             if (!prepared.postCoreUpdateResume && !recoveryState.ledgerHandoffOwned) {
