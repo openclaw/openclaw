@@ -85,10 +85,26 @@ export function collectConfiguredModelRefs(
     );
     if (isRecord(agent.compaction)) {
       pushModelRef(`${path}.compaction.model`, agent.compaction.model);
-      pushModelRef(
-        `${path}.compaction.memoryFlush.model`,
-        isRecord(agent.compaction.memoryFlush) ? agent.compaction.memoryFlush.model : undefined,
-      );
+      const memoryFlush = isRecord(agent.compaction.memoryFlush)
+        ? agent.compaction.memoryFlush
+        : undefined;
+      const memoryFlushModel = memoryFlush?.model;
+      pushModelRef(`${path}.compaction.memoryFlush.model`, memoryFlushModel);
+      // Dispatchable only once memoryFlush.model is set, so a provider named
+      // here still needs validation, plugin auto-enable, and prepared catalog
+      // setup — otherwise the fallback fails exactly when the primary is
+      // unavailable, which is the case it exists for. Without the override the
+      // setting is ignored at runtime, so it must not reach provider setup
+      // either.
+      if (
+        typeof memoryFlushModel === "string" &&
+        memoryFlushModel.trim() &&
+        Array.isArray(memoryFlush?.fallbacks)
+      ) {
+        memoryFlush.fallbacks.forEach((fallbackRef, index) => {
+          pushModelRef(`${path}.compaction.memoryFlush.fallbacks.${index}`, fallbackRef);
+        });
+      }
     }
     if (isRecord(agent.models)) {
       for (const modelRef of Object.keys(agent.models)) {

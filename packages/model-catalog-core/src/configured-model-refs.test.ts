@@ -27,7 +27,12 @@ describe("configured model refs", () => {
             model: { primary: "openai/gpt-5.5", fallbacks: ["anthropic/claude-sonnet-4-6"] },
             utilityModel: "google/gemini-3.1-flash-lite-preview",
             mediaModels: { image: "openai/gpt-image-2" },
-            compaction: { memoryFlush: { model: "openai/gpt-5.5-mini" } },
+            compaction: {
+              memoryFlush: {
+                model: "openai/gpt-5.5-mini",
+                fallbacks: ["anthropic/claude-haiku-4-5", "  ", "openai/gpt-5.4"],
+              },
+            },
           },
           entries: {
             custom: {
@@ -57,6 +62,11 @@ describe("configured model refs", () => {
       },
       { path: "agents.defaults.mediaModels.image", value: "openai/gpt-image-2" },
       { path: "agents.defaults.compaction.memoryFlush.model", value: "openai/gpt-5.5-mini" },
+      {
+        path: "agents.defaults.compaction.memoryFlush.fallbacks.0",
+        value: "anthropic/claude-haiku-4-5",
+      },
+      { path: "agents.defaults.compaction.memoryFlush.fallbacks.2", value: "openai/gpt-5.4" },
       { path: "agents.entries.custom.model", value: "xai/grok-4-fast" },
       { path: "agents.entries.custom.utilityModel", value: "openai/gpt-5.5-nano" },
       { path: "channels.modelByChannel.discord.guild", value: "anthropic/claude-opus-4-8" },
@@ -265,5 +275,18 @@ describe("configured model refs", () => {
         },
       }),
     ).toEqual([]);
+  });
+
+  it("ignores memory-flush fallbacks without a flush-model override", () => {
+    // The setting is ignored at runtime without `model`, so it must not reach
+    // validation, provider auto-enable, or catalog preparation either.
+    const refs = collectConfiguredModelRefs({
+      agents: {
+        defaults: {
+          compaction: { memoryFlush: { fallbacks: ["anthropic/claude-haiku-4-5"] } },
+        },
+      },
+    } as never);
+    expect(refs.some((ref) => ref.path.includes("memoryFlush.fallbacks"))).toBe(false);
   });
 });
