@@ -620,9 +620,9 @@ describe("prepareDelegatedSystemAgentApproval", () => {
           undefined,
         );
       } else {
-        expect(resolveOperatorApproval.mock.calls.some(([decision]) => decision === "allow-once")).toBe(
-          false,
-        );
+        expect(
+          resolveOperatorApproval.mock.calls.some(([decision]) => decision === "allow-once"),
+        ).toBe(false);
       }
     },
   );
