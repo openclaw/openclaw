@@ -8,6 +8,7 @@ import {
 } from "../../agent-bundle-mcp-tools.js";
 import { wrapToolWithAbortSignal } from "../../agent-tools.abort.js";
 import { filterLocalModelLeanTools } from "../../local-model-lean.js";
+import { mcpToolFilterCouldExposeTool } from "../../mcp-tool-filter.js";
 import { normalizeAgentRuntimeTools } from "../../runtime-plan/tools.js";
 import { createRuntimeToolMatcher } from "../../tool-policy-match.js";
 import { replaceWithEffectiveToolAllowlist } from "../../tool-policy.js";
@@ -266,8 +267,10 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
       // along because a prompt hook narrows this surface again later, and only
       // all layers together decide whether any tool of that server survives.
       mcpDiagnostics: bundleMcpRuntime?.diagnostics && {
-        diagnostics: bundleMcpRuntime.diagnostics.filter((diagnostic) =>
-          admitsMcpServer(diagnostic.safeServerName),
+        diagnostics: bundleMcpRuntime.diagnostics.filter(
+          (diagnostic) =>
+            admitsMcpServer(diagnostic.safeServerName) &&
+            mcpToolFilterCouldExposeTool(diagnostic.toolFilter),
         ),
         policyLayers: mcpPolicyLayers,
       },
