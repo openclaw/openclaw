@@ -2,6 +2,7 @@ import { defineChannelSetupContract } from "openclaw/plugin-sdk/channel-setup";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
 import { fingerprint } from "../protocol/index.js";
 import {
+  OpenAiOAuthProfileIdSchema,
   parseReefRelayUrl,
   ReefChannelConfigSchema,
   type ReefChannelConfig,
@@ -36,6 +37,7 @@ type Prompt = {
     options: Array<{ value: T; label: string; hint?: string }>;
     initialValue?: T;
   }): Promise<T>;
+  confirm(params: { message: string; initialValue?: boolean }): Promise<boolean>;
 };
 
 const reefSetupAdapter = {
@@ -216,29 +218,141 @@ export const reefSetupWizard = {
         { value: "openai" as const, label: "OpenAI" },
       ],
     });
+    const authMode =
+      provider === "openai"
+        ? await prompter.select({
+            message: "OpenAI guard authentication",
+            options: [
+              {
+                value: "oauth" as const,
+                label: "Existing OpenClaw OAuth profile",
+                hint: "Uses host-managed OAuth without exposing tokens to Reef",
+              },
+              { value: "api-key" as const, label: "API key environment variable" },
+            ],
+          })
+        : ("api-key" as const);
     const pinnedModel = await prompter.text({ message: "Pinned guard model snapshot" });
-    const apiKeyEnv = await prompter.text({
-      message: "Guard API key environment variable name",
-      initialValue: provider === "anthropic" ? "ANTHROPIC_API_KEY" : "OPENAI_API_KEY",
-    });
+    if (authMode === "oauth") {
+      await confirmReefOAuthAgentRuntime({ cfg, pinnedModel, prompter });
+    }
+    const authProfileId =
+      authMode === "oauth"
+        ? await prompter.text({
+            message: "OpenAI OAuth auth profile id",
+            initialValue: "openai:default",
+            validate: (value) =>
+              OpenAiOAuthProfileIdSchema.safeParse(value).success
+                ? undefined
+                : "Enter an OpenAI profile id without spaces or slashes",
+          })
+        : undefined;
+    const apiKeyEnv =
+      authMode === "api-key"
+        ? await prompter.text({
+            message: "Guard API key environment variable name",
+            initialValue: provider === "anthropic" ? "ANTHROPIC_API_KEY" : "OPENAI_API_KEY",
+          })
+        : undefined;
     const policyVersion = await prompter.text({
       message: "Guard policy version",
       initialValue: "reef-v1",
     });
+    const guard =
+      authMode === "oauth"
+        ? {
+            provider: "openai" as const,
+            authMode,
+            authProfileId,
+            pinnedModel,
+            policyVersion,
+            // ChatGPT OAuth can include profile refresh and a reasoning-model
+            // cold start. Keep the hard fail-closed deadline, but give that
+            // host-owned path the full bounded budget accepted by the schema.
+            timeoutMs: 120_000,
+          }
+        : { provider, pinnedModel, apiKeyEnv, policyVersion, timeoutMs: 30_000 };
     const reef: ReefChannelConfig = ReefChannelConfigSchema.parse({
       relayUrl,
       handle,
       email,
       requestPolicy: effectiveRequestPolicy,
-      guard: { provider, pinnedModel, apiKeyEnv, policyVersion, timeoutMs: 30_000 },
+      guard,
     });
     await prompter.note(
       fingerprint(keys.signing.publicKey, keys.encryption.publicKey),
       "Reef safety fingerprint — share out of band",
     );
+    const nextConfig = { ...cfg, channels: { ...cfg.channels, reef } } as OpenClawConfig;
     return {
-      cfg: { ...cfg, channels: { ...cfg.channels, reef } } as OpenClawConfig,
+      cfg:
+        authMode === "oauth" ? authorizeReefOAuthGuardModel(nextConfig, pinnedModel) : nextConfig,
       accountId: "default",
     };
   },
 };
+
+async function confirmReefOAuthAgentRuntime(params: {
+  cfg: OpenClawConfig;
+  pinnedModel: string;
+  prompter: Prompt;
+}): Promise<void> {
+  const modelRef = `openai/${params.pinnedModel}`;
+  const configuredRuntimeId =
+    params.cfg.agents?.defaults?.models?.[modelRef]?.agentRuntime?.id?.trim();
+  if (!configuredRuntimeId || configuredRuntimeId === "codex") {
+    return;
+  }
+  const replaceRuntime = await params.prompter.confirm({
+    message: `${modelRef} currently uses the ${configuredRuntimeId} agent runtime. Reef OAuth requires codex; change this shared model runtime?`,
+    initialValue: false,
+  });
+  if (!replaceRuntime) {
+    throw new Error(
+      `Reef OAuth setup left ${modelRef} on the ${configuredRuntimeId} agent runtime. Choose another guard model or change the shared model runtime explicitly.`,
+    );
+  }
+}
+
+function authorizeReefOAuthGuardModel(cfg: OpenClawConfig, pinnedModel: string): OpenClawConfig {
+  const modelRef = `openai/${pinnedModel}`;
+  const entry = cfg.plugins?.entries?.reef ?? {};
+  const llm = entry.llm ?? {};
+  const configuredModel = cfg.agents?.defaults?.models?.[modelRef] ?? {};
+  const addModel = (values: string[] | undefined): string[] =>
+    values?.includes(modelRef) ? values : [...(values ?? []), modelRef];
+  const addPlugin = (values: string[] | undefined, pluginId: string): string[] | undefined =>
+    values ? (values.includes(pluginId) ? values : [...values, pluginId]) : undefined;
+  return {
+    ...cfg,
+    agents: {
+      ...cfg.agents,
+      defaults: {
+        ...cfg.agents?.defaults,
+        models: {
+          ...cfg.agents?.defaults?.models,
+          [modelRef]: {
+            ...configuredModel,
+            agentRuntime: { ...configuredModel.agentRuntime, id: "codex" },
+          },
+        },
+      },
+    },
+    plugins: {
+      ...cfg.plugins,
+      allow: addPlugin(cfg.plugins?.allow, "codex"),
+      entries: {
+        ...cfg.plugins?.entries,
+        reef: {
+          ...entry,
+          llm: {
+            ...llm,
+            allowModelOverride: true,
+            allowedModels: addModel(llm.allowedModels),
+            allowedCompletionModels: addModel(llm.allowedCompletionModels),
+          },
+        },
+      },
+    },
+  };
+}

@@ -444,6 +444,13 @@ snapshots; OpenClaw owns all persistence and lifecycle coordination.
     result includes provider/model/agent attribution plus normalized token,
     cache, and estimated cost usage when available.
 
+    Direct completions can set `responseFormat` for provider-native constrained
+    output. When the provider exposes them, the result also includes the concrete
+    `responseModel` and terminal `stopReason`. Security-sensitive callers can set
+    `requiredAuthMode: "oauth"`; the host then rejects a selected non-OAuth
+    credential before dispatch. These direct-provider controls are not accepted
+    by isolated agent-runtime completions.
+
     Set `reasoning` to request a reasoning effort for the selected model. The
     host normalizes the canonical thinking levels (`off`, `minimal`, `low`,
     `medium`, `high`, `xhigh`, `adaptive`, `max`, and `ultra`) for the selected

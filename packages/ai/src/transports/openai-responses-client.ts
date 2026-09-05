@@ -73,6 +73,7 @@ import {
   resolveCodeModeResponsesVisibleToolNames,
 } from "./openai-transport-params.js";
 import {
+  createResponseModelTracker,
   createOpenAIProviderAcceptanceHook,
   log,
   resolveOpenAIClientBaseUrl,
@@ -384,6 +385,7 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
             `baseUrl=${formatModelTransportDebugBaseUrl(model.baseUrl)} timeoutMs=${safeDebugValue(requestOptions?.timeout)} ` +
             `apiKey=${apiKey ? "present" : "missing"} ${summarizeResponsesPayload(params)}`,
         );
+        const responseModelTracker = createResponseModelTracker(isOpenAICodexResponsesModel(model));
         let continuationBaseline: ResponsesContinuationRequest | undefined;
         const createSseStream = async (
           initialRequest = (continuationClaim?.request ?? params) as typeof params,
@@ -408,8 +410,9 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
                   ? (params as ResponsesContinuationRequest)
                   : (attempt.request as ResponsesContinuationRequest);
               }
+              const trackedResponseStream = responseModelTracker.track(response, rawResponseStream);
               return withProviderResponseHook({
-                stream: observeResponsesStream(rawResponseStream, model, requestStartedAt),
+                stream: observeResponsesStream(trackedResponseStream, model, requestStartedAt),
                 signal: firstEvent.signal,
                 abort: firstEvent.abort,
                 hook: createOpenAIProviderAcceptanceHook(options, response, model),
@@ -480,11 +483,12 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
                 `sessionIdHash=${redactIdentifier(options?.sessionId)} ` +
                 `headersHash=${redactIdentifier(JSON.stringify(Object.entries(websocketHeaders ?? {}).toSorted(([a], [b]) => a.localeCompare(b))))}`,
             );
+            const trackedWebSocketStream = responseModelTracker.track(undefined, websocket.stream);
             responseStream = {
               async *[Symbol.asyncIterator]() {
                 let providerAccepted = false;
                 try {
-                  for await (const event of websocket.stream) {
+                  for await (const event of trackedWebSocketStream) {
                     if (!providerAccepted) {
                       providerAccepted = true;
                       await notifyProviderStreamOpened({
@@ -559,6 +563,7 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
               sessionId: options?.sessionId,
             }),
             asyncToolExecution: asyncTools,
+            ...responseModelTracker.terminalOptions,
           });
           finishWebSocket?.();
           if (options?.signal?.aborted) {

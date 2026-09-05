@@ -244,7 +244,7 @@ function ensureOpenAIResponsesNonEmptyInput(messages: ResponseInput, context: Co
   );
 }
 
-function resolveOpenAIResponsesTextFormat(
+export function resolveOpenAIResponsesTextFormat(
   responseFormat: Record<string, unknown>,
 ): ResponseFormatTextConfig {
   if (
