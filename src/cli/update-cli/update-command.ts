@@ -651,7 +651,10 @@ async function updateCommandInternal(
     managedServiceRootRedirect,
     invocationCwd,
     recoveryState,
-    onActivation: progress.deferLedgerWrites,
+    onActivation: () => {
+      presentation.suspend();
+      progress.deferLedgerWrites();
+    },
   });
   if (!execution) {
     return;
@@ -718,5 +721,6 @@ async function updateCommandInternal(
     return;
   }
   progress.flushLedgerWrites();
+  presentation.resume();
   await finishUpdate(finalization);
 }
