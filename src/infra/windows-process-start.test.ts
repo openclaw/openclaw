@@ -1,6 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { getWindowsPowerShellExePath, getWindowsWmicExePath } from "./windows-install-roots.js";
-import { readWindowsProcessStartTimeSync } from "./windows-process-start.js";
+import {
+  isWindowsProcessDefinitelyAbsentSync,
+  readWindowsProcessStartTimeSync,
+} from "./windows-process-start.js";
 
 const spawnSyncMock = vi.hoisted(() => vi.fn());
 
@@ -101,5 +104,55 @@ describe("readWindowsProcessStartTimeSync", () => {
 
     expect(readWindowsProcessStartTimeSync(789, 1000)).toBeNull();
     expect(readWindowsProcessStartTimeSync(0, 1000)).toBeNull();
+  });
+});
+
+describe("isWindowsProcessDefinitelyAbsentSync", () => {
+  beforeEach(() => {
+    spawnSyncMock.mockReset();
+  });
+
+  it("returns true only for an exact successful zero-row result", () => {
+    spawnSyncMock.mockReturnValue({ status: 0, stdout: "COUNT=0" } as never);
+    expect(isWindowsProcessDefinitelyAbsentSync(123)).toBe(true);
+
+    expect(spawnSyncMock).toHaveBeenCalledWith(
+      getWindowsPowerShellExePath(),
+      [
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        expect.stringMatching(
+          /\$rows = @\(Get-CimInstance Win32_Process -Filter "ProcessId = 123" -ErrorAction Stop\); \[Console\]::Out\.Write\("COUNT=\$\(\$rows\.Count\)"\)/,
+        ),
+      ],
+      expect.objectContaining({
+        encoding: "utf8",
+        timeout: 2000,
+        windowsHide: true,
+      }),
+    );
+  });
+
+  it.each([
+    { label: "provider failure", result: { status: 1, stdout: "" } },
+    { label: "spawn failure", result: { error: new Error("spawn failed"), status: null } },
+    { label: "active process", result: { status: 0, stdout: "COUNT=1" } },
+    { label: "malformed output", result: { status: 0, stdout: "not-count" } },
+    { label: "multiple rows", result: { status: 0, stdout: "COUNT=2" } },
+    { label: "extra output", result: { status: 0, stdout: "COUNT=0\nwarning" } },
+    { label: "whitespace stderr", result: { status: 0, stdout: "COUNT=0", stderr: "\n" } },
+    { label: "trailing newline stdout", result: { status: 0, stdout: "COUNT=0\n" } },
+    { label: "leading whitespace stdout", result: { status: 0, stdout: " COUNT=0" } },
+    { label: "stderr only", result: { status: 0, stdout: "", stderr: "warning" } },
+    { label: "stderr with zero rows", result: { status: 0, stdout: "COUNT=0", stderr: "warning" } },
+  ])("stays fail-closed for $label", ({ result }) => {
+    spawnSyncMock.mockReturnValue(result as never);
+    expect(isWindowsProcessDefinitelyAbsentSync(123)).toBe(false);
+  });
+
+  it("rejects invalid PIDs without spawning PowerShell", () => {
+    expect(isWindowsProcessDefinitelyAbsentSync(0)).toBe(false);
+    expect(spawnSyncMock).not.toHaveBeenCalled();
   });
 });

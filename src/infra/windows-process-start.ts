@@ -5,6 +5,7 @@ import { resolveDiagnosticProcessEnv } from "./process-env.ts";
 
 const DEFAULT_TIMEOUT_MS = 5_000;
 const DEFAULT_PROCESS_START_TIMEOUT_MS = 10_000;
+const DEFAULT_PROCESS_ENUMERATION_TIMEOUT_MS = 2_000;
 const DEFAULT_WINDOWS_SYSTEM_ROOT = "C:\\Windows";
 
 function windowsSystemRoot(): string {
@@ -73,6 +74,37 @@ function parseWindowsProcessStartTime(raw: Buffer | string): number | null {
   );
   const offsetMs = Number(offset) * 60_000 * (offsetSign === "+" ? 1 : -1);
   return localTimeMs - offsetMs;
+}
+
+/** Returns true only when CIM successfully proves that this PID has no active process row. */
+export function isWindowsProcessDefinitelyAbsentSync(
+  pid: number,
+  timeoutMs = DEFAULT_PROCESS_ENUMERATION_TIMEOUT_MS,
+): boolean {
+  if (!Number.isInteger(pid) || pid <= 0) {
+    return false;
+  }
+  const powershell = spawnSync(
+    windowsPowerShellPath(),
+    [
+      "-NoProfile",
+      "-NonInteractive",
+      "-Command",
+      `$rows = @(Get-CimInstance Win32_Process -Filter "ProcessId = ${pid}" -ErrorAction Stop); [Console]::Out.Write("COUNT=$($rows.Count)")`,
+    ],
+    {
+      env: resolveDiagnosticProcessEnv(),
+      encoding: "utf8",
+      timeout: Math.min(timeoutMs, DEFAULT_TIMEOUT_MS),
+      windowsHide: true,
+    },
+  );
+  return (
+    !powershell.error &&
+    powershell.status === 0 &&
+    decodeWindowsProcessOutput(powershell.stderr ?? "") === "" &&
+    decodeWindowsProcessOutput(powershell.stdout) === "COUNT=0"
+  );
 }
 
 /** Read a stable Windows process creation time for lock-owner identity checks. */
