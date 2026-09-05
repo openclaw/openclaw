@@ -137,8 +137,8 @@ assert.equal(
 const requireFromFsSafe = createRequire(fsSafeManifestPath);
 const installedPlatformPackages = platformPackageNames.flatMap((name) => {
   try {
-    const entryPath = requireFromFsSafe.resolve(name);
-    const platformPackage = findOwningPackage(entryPath, name);
+    const manifestPath = requireFromFsSafe.resolve(`${name}/package.json`);
+    const platformPackage = findOwningPackage(manifestPath, name);
     return [{ name, root: platformPackage.root }];
   } catch (error) {
     if (error?.code === "MODULE_NOT_FOUND") {

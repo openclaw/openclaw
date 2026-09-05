@@ -107,7 +107,6 @@ function createFixture(options: FixtureOptions = {}) {
         main: "fs-safe-native.node",
       }),
     );
-    writeModule(path.join(platformRoot, "fs-safe-native.node"), "");
     if (options.pnpmLayout) {
       linkDirectory(
         platformRoot,
