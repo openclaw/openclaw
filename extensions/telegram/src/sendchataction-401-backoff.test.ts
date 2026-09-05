@@ -41,7 +41,7 @@ describe("createTelegramSendChatActionHandler", () => {
     expect(handler.isSuspended()).toBe(false);
   });
 
-  it("coalesces duplicate chat actions while one for the chat is pending", async () => {
+  it("sends typing actions for different forum topics independently", async () => {
     let resolveSend: ((value: true) => void) | undefined;
     const send = new Promise<true>((resolve) => {
       resolveSend = resolve;
@@ -56,6 +56,30 @@ describe("createTelegramSendChatActionHandler", () => {
 
     const first = handler.sendChatAction(-100, "typing", { message_thread_id: 1 });
     await handler.sendChatAction(-100, "typing", { message_thread_id: 2 });
+
+    expect(fn).toHaveBeenCalledTimes(2);
+    expect(fn).toHaveBeenNthCalledWith(1, -100, "typing", { message_thread_id: 1 });
+    expect(fn).toHaveBeenNthCalledWith(2, -100, "typing", { message_thread_id: 2 });
+
+    resolveSend?.(true);
+    await first;
+  });
+
+  it("still coalesces repeated typing actions within the same forum topic", async () => {
+    let resolveSend: ((value: true) => void) | undefined;
+    const send = new Promise<true>((resolve) => {
+      resolveSend = resolve;
+    });
+    const fn = vi.fn(() => send);
+    const logger = vi.fn();
+    const handler = createTelegramSendChatActionHandler({
+      sendChatActionFn: fn,
+      logger,
+      minIntervalMs: 4000,
+    });
+
+    const first = handler.sendChatAction(-100, "typing", { message_thread_id: 1 });
+    await handler.sendChatAction(-100, "typing", { message_thread_id: 1 });
 
     expect(fn).toHaveBeenCalledTimes(1);
     expect(fn).toHaveBeenCalledWith(-100, "typing", { message_thread_id: 1 });

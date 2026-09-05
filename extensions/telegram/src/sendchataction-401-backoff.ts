@@ -158,7 +158,14 @@ export function createTelegramSendChatActionHandler({
       );
     }
 
-    const key = minIntervalMs > 0 ? `${String(chatId)}:${action}` : undefined;
+    // Forum topics share a chat id, so the coalescing key must include the
+    // topic thread; otherwise one topic's typing window swallows concurrent
+    // topics' indicators (see #138763).
+    const threadId = threadParams?.message_thread_id;
+    const key =
+      minIntervalMs > 0
+        ? `${String(chatId)}:${action}:${threadId === undefined ? "" : String(threadId)}`
+        : undefined;
     if (key) {
       const blockedUntil = blockedUntilByKey.get(key);
       if (blockedUntil !== undefined && attemptedAt < blockedUntil) {
