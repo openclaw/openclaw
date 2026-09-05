@@ -3,7 +3,7 @@
  * requests.
  */
 import fsPromises from "node:fs/promises";
-import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+import { addTimerTimeoutGraceMs, resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import {
   asNullableRecord,
   normalizeStringEntries,
@@ -81,6 +81,10 @@ function readOwnedTabCloseRequest(value: unknown) {
 }
 
 const DEFAULT_BROWSER_PROXY_TIMEOUT_MS = 20_000;
+// Matches the Gateway node-invoke slack so a navigation that consumes its full
+// action budget can still finish target setup/cleanup without the node-host
+// watchdog turning a valid late result into a generic proxy timeout.
+const BROWSER_PROXY_DISPATCH_SLACK_MS = 5_000;
 const BROWSER_PROXY_STATUS_TIMEOUT_MS = 750;
 // Leave one MiB for the fixed node.invoke.result frame around payloadJSON.
 const BROWSER_PROXY_MAX_ENCODED_PAYLOAD_BYTES = 24 * 1024 * 1024;
@@ -186,6 +190,13 @@ function decodeParams<T>(raw?: string | null): T {
 
 function resolveBrowserProxyTimeout(timeoutMs?: number): number {
   return resolveTimerTimeoutMs(timeoutMs, DEFAULT_BROWSER_PROXY_TIMEOUT_MS);
+}
+
+function resolveBrowserProxyDispatchTimeoutMs(remainingTimeoutMs: number): number {
+  return (
+    addTimerTimeoutGraceMs(remainingTimeoutMs, BROWSER_PROXY_DISPATCH_SLACK_MS) ??
+    remainingTimeoutMs
+  );
 }
 
 function isBrowserProxyTimeoutError(err: unknown): boolean {
@@ -447,7 +458,7 @@ export async function runBrowserProxyCommand(
           body,
           signal: combineBrowserProxySignals(timeoutSignal, invocationSignal),
         }),
-      remainingTimeoutMs,
+      resolveBrowserProxyDispatchTimeoutMs(remainingTimeoutMs),
       "browser proxy request",
     );
   } catch (err) {
