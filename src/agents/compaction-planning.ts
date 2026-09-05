@@ -21,6 +21,22 @@ export const MIN_CHUNK_RATIO = 0.15;
 /** Buffer for estimateTokens() inaccuracy. */
 export const SAFETY_MARGIN = 1.2;
 const DEFAULT_PARTS = 2;
+/** Matches the estimator's chars-per-token ratio so both sides stay comparable. */
+const CHARS_PER_TOKEN = 4;
+/** Measured cost of the role label and separator serializeConversation() adds. */
+/**
+ * Exact serialization framing per emitted section, mirroring serializeConversation():
+ * `[User]: ` is 8 chars, `[Tool result]: ` is 15, `[Assistant]: ` is 13 and
+ * `[Assistant tool calls]: ` is 24. Every section is joined by a 2-char separator,
+ * and one assistant message emits *both* assistant sections when the turn carries
+ * text and tool calls together.
+ */
+const SERIALIZED_FRAMING_CHARS = {
+  assistant: 13 + 2,
+  assistantToolCalls: 24 + 2,
+  toolResult: 15 + 2,
+  user: 8 + 2,
+} as const;
 
 /**
  * Overhead reserved for summary prompt, system prompt, prior summary, wrapper
@@ -32,6 +48,10 @@ export const SUMMARIZATION_OVERHEAD_TOKENS = 4096;
 export type StageSplitPlan =
   | {
       mode: "single";
+      // True only when the whole history was verified to fit one request. Legacy
+      // single-stage shortcuts (too few messages, parts<=1) leave this false and
+      // must keep their bounded chunk budget.
+      fitsWholeRequest?: boolean;
     }
   | {
       mode: "split";
@@ -226,6 +246,61 @@ export function computeAdaptiveChunkRatio(messages: AgentMessage[], contextWindo
   return BASE_CHUNK_RATIO;
 }
 
+/**
+ * Serialization overhead the estimator never sees: convertToLlm() prefixes every
+ * message with a role label and separates it with a blank line. It scales with
+ * message *count*, not content size, so on short conversations it dominates:
+ * 5,000 user/assistant pairs of "ok" carry 125,000 chars of framing against
+ * 20,000 chars of content.
+ *
+ * This is deliberately additive rather than a serialized measurement of the
+ * planning projection. Long histories reach the planner already shortened, with
+ * the discarded content restored through omittedChars accounting. Serializing
+ * that projection would measure the truncated text, and no Math.max() can
+ * recombine a restored content cost with a truncated overhead cost.
+ */
+function estimateSerializationOverheadTokens(messages: AgentMessage[]): number {
+  let chars = 0;
+  for (const message of messages) {
+    const role = (message as { role?: string }).role;
+    if (role === "assistant") {
+      // One assistant turn can emit two sections, so charge whichever it will emit.
+      const blocks = (message as { content?: unknown }).content;
+      const parts = Array.isArray(blocks) ? blocks : [];
+      const hasToolCalls = parts.some(
+        (block) => (block as { type?: string })?.type === "toolCall",
+      );
+      const hasText = parts.length === 0 || !hasToolCalls
+        ? true
+        : parts.some((block) => (block as { type?: string })?.type === "text");
+      if (hasText) {
+        chars += SERIALIZED_FRAMING_CHARS.assistant;
+      }
+      if (hasToolCalls) {
+        chars += SERIALIZED_FRAMING_CHARS.assistantToolCalls;
+      }
+    } else if (role === "toolResult") {
+      chars += SERIALIZED_FRAMING_CHARS.toolResult;
+    } else {
+      chars += SERIALIZED_FRAMING_CHARS.user;
+    }
+  }
+  return Math.ceil(chars / CHARS_PER_TOKEN);
+}
+
+function fitsSingleSummarizationRequest(params: {
+  inputTokens: number;
+  contextWindow: number;
+  summaryOutputTokens?: number;
+}): boolean {
+  return (
+    params.inputTokens * SAFETY_MARGIN +
+      SUMMARIZATION_OVERHEAD_TOKENS +
+      (params.summaryOutputTokens ?? 0) <=
+    params.contextWindow
+  );
+}
+
 /** Builds sanitized chunks for summarization prompts. */
 export function buildSummaryChunks(params: {
   messages: AgentMessage[];
@@ -286,6 +361,8 @@ export function buildStageSplitPlan(params: {
   maxChunkTokens: number;
   parts?: number;
   minMessagesForSplit?: number;
+  contextWindow?: number;
+  summaryOutputTokens?: number;
 }): StageSplitPlan {
   const minMessagesForSplit = Math.max(2, params.minMessagesForSplit ?? 4);
   const parts = normalizeCompactionParts(params.parts ?? DEFAULT_PARTS, params.messages.length);
@@ -296,13 +373,34 @@ export function buildStageSplitPlan(params: {
     params.messages.length < minMessagesForSplit ||
     totalTokens <= params.maxChunkTokens
   ) {
-    return { mode: "single" };
+    // These shortcuts predate the fit check and say nothing about window capacity,
+    // so callers must keep chunking within maxChunkTokens.
+    return { mode: "single", fitsWholeRequest: false };
+  }
+
+  // maxChunkTokens is a per-chunk share of the window, so it can force map-reduce
+  // even when one call would hold the whole history. Splitting then costs extra
+  // cold prefills and forfeits prefix-cache reuse for no budget benefit.
+  if (
+    params.contextWindow !== undefined &&
+    fitsSingleSummarizationRequest({
+      // Content estimate plus serialization overhead. The two are additive: the
+      // estimate already restores content omitted by the planning projection,
+      // while the overhead depends only on how many messages get serialized.
+      inputTokens: totalTokens + estimateSerializationOverheadTokens(params.messages),
+      contextWindow: params.contextWindow,
+      summaryOutputTokens: params.summaryOutputTokens,
+    })
+  ) {
+    return { mode: "single", fitsWholeRequest: true };
   }
 
   const chunks = splitMessagesByTokenShare(params.messages, parts).filter(
     (chunk) => chunk.length > 0,
   );
-  return chunks.length > 1 ? { mode: "split", chunks } : { mode: "single" };
+  return chunks.length > 1
+    ? { mode: "split", chunks }
+    : { mode: "single", fitsWholeRequest: false };
 }
 
 /** Drops oldest token-share chunks until history fits the requested context share. */
