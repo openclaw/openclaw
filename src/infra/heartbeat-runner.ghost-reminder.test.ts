@@ -729,26 +729,6 @@ describe("Ghost reminder bug (issue #13317)", () => {
     expect(sendTelegram).toHaveBeenCalled();
   });
 
-  it("consumes exec completion entries without dropping later generic events", async () => {
-    const { result, calledCtx, sessionKey } = await runHeartbeatCase({
-      tmpPrefix: "openclaw-exec-preserve-generic-",
-      replyText: "Deploy succeeded",
-      reason: "exec-event",
-      enqueue: (key) => {
-        enqueueSystemEvent("Exec finished (gateway id=abc12345, code 0)\ndeploy succeeded", {
-          sessionKey: key,
-        });
-        enqueueSystemEvent("Node connected", { sessionKey: key });
-      },
-    });
-
-    expect(result.status).toBe("ran");
-    expect(calledCtx?.InternalTurnSource).toBe("exec");
-    expect(calledCtx?.Body).toContain("deploy succeeded");
-    expect(calledCtx?.Body).not.toContain("Node connected");
-    expect(peekSystemEvents(sessionKey)).toEqual(["Node connected"]);
-  });
-
   it("ignores an acknowledged exec-event wake without consuming unrelated events", async () => {
     const { result, sendTelegram, calledCtx, replyCallCount, sessionKey } = await runHeartbeatCase({
       tmpPrefix: "openclaw-exec-acknowledged-",
@@ -809,6 +789,27 @@ describe("Ghost reminder bug (issue #13317)", () => {
     expect(sendTelegram).not.toHaveBeenCalled();
   });
 
+  it("consumes surfaced generic wake context while deferring base-session exec completions", async () => {
+    const execCompletion = "exec finished: webhook-triggered backup completed";
+    const { result, calledCtx, sessionKey } = await runHeartbeatCase({
+      tmpPrefix: "openclaw-hook-mixed-isolated-",
+      replyText: "Handled internally",
+      reason: "hook:wake",
+      target: "none",
+      isolatedSession: true,
+      enqueue: (key) => {
+        enqueueSystemEvent("Gateway restart ok", { sessionKey: key });
+        enqueueSystemEvent(execCompletion, { sessionKey: key });
+      },
+    });
+
+    expect(result.status).toBe("ran");
+    expect(calledCtx?.InternalTurnSource).toBe("heartbeat");
+    expect(calledCtx?.Body).toContain("Gateway restart ok");
+    expect(calledCtx?.Body).not.toContain(execCompletion);
+    expect(peekSystemEvents(sessionKey)).toEqual([execCompletion]);
+  });
+
   it("routes wake-triggered heartbeat replies using queued system-event delivery context", async () => {
     await withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
       const cfg: OpenClawConfig = {
@@ -854,11 +855,13 @@ describe("Ghost reminder bug (issue #13317)", () => {
       });
 
       expect(result.status).toBe("ran");
+      expect(getFirstReplyContext(replySpy).Body).toContain("Gateway restart ok");
       expectTelegramSend(sendTelegram, {
         to: "-100155462274",
         text: "Restart complete",
         messageThreadId: 42,
       });
+      expect(peekSystemEvents(sessionKey)).toEqual([]);
     });
   });
 
@@ -895,6 +898,7 @@ describe("Ghost reminder bug (issue #13317)", () => {
       });
 
       expect(result.status).toBe("ran");
+      expect(getFirstReplyContext(replySpy).Body).toContain("Gateway restart ok");
       expect(getFirstReplyContext(replySpy).SessionKey).toBe(`${sessionKey}:heartbeat`);
       expectTelegramSend(sendTelegram, {
         to: "-100155462274",

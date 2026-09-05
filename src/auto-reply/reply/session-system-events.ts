@@ -11,6 +11,7 @@ import {
   resolveTimezone,
 } from "../../infra/format-time/format-datetime.ts";
 import {
+  compactSystemEvent,
   isExecCompletionEvent,
   isHeartbeatDeliveryAwarenessEvent,
 } from "../../infra/heartbeat-events-filter.js";
@@ -42,28 +43,6 @@ function selectGenericSystemEvents(
         (isCronContextSystemEvent(event) || isHeartbeatDeliveryAwarenessEvent(event))
       ),
   );
-}
-
-function compactSystemEvent(line: string): string | null {
-  const trimmed = line.trim();
-  if (!trimmed) {
-    return null;
-  }
-  const lower = normalizeLowercaseStringOrEmpty(trimmed);
-  if (lower.includes("reason periodic")) {
-    return null;
-  }
-  // Keep retired heartbeat prompts out of replayed legacy system events.
-  if (lower.startsWith("read heartbeat.md")) {
-    return null;
-  }
-  if (lower.includes("heartbeat poll") || lower.includes("heartbeat wake")) {
-    return null;
-  }
-  if (trimmed.startsWith("Node:")) {
-    return trimmed.replace(/ · last input [^·]+/i, "").trim();
-  }
-  return trimmed;
 }
 
 function resolveSystemEventTimezone(cfg: OpenClawConfig) {

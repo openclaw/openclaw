@@ -1,12 +1,17 @@
 // Covers heartbeat event prompt filtering.
 import { describe, expect, it } from "vitest";
 import {
-  buildCronEventPrompt,
-  buildExecEventPrompt,
   isCronSystemEvent,
   isExecCompletionEvent,
   isRelayableExecCompletionEvent,
+  resolveHeartbeatEventPrompt,
 } from "./heartbeat-events-filter.js";
+
+function buildHeartbeatEventPrompt(
+  params: Parameters<typeof resolveHeartbeatEventPrompt>[0],
+): string {
+  return resolveHeartbeatEventPrompt(params).prompt;
+}
 
 describe("heartbeat event prompts", () => {
   it.each([
@@ -37,7 +42,7 @@ describe("heartbeat event prompts", () => {
       unexpected: ["Please relay this reminder to the user"],
     },
   ])("$name", ({ events, opts, expected, unexpected }) => {
-    const prompt = buildCronEventPrompt(events, opts);
+    const prompt = buildHeartbeatEventPrompt({ cronEvents: events, ...opts });
     for (const part of expected) {
       expect(prompt).toContain(part);
     }
@@ -96,7 +101,7 @@ describe("heartbeat event prompts", () => {
       unexpected: ["Please relay the command output to the user"],
     },
   ])("$name", ({ events, opts, expected, unexpected }) => {
-    const prompt = buildExecEventPrompt(events, opts);
+    const prompt = buildHeartbeatEventPrompt({ execEvents: events, ...opts });
     for (const part of expected) {
       expect(prompt).toContain(part);
     }
@@ -106,14 +111,19 @@ describe("heartbeat event prompts", () => {
   });
 
   it("truncates oversized user-relay exec prompt output", () => {
-    const prompt = buildExecEventPrompt([`Exec finished: ${"x".repeat(8_100)}`]);
+    const prompt = buildHeartbeatEventPrompt({
+      execEvents: [`Exec finished: ${"x".repeat(8_100)}`],
+    });
 
     expect(prompt).toContain("[truncated]");
     expect(prompt.length).toBeLessThan(8_500);
   });
 
   it("uses heartbeat_respond for empty cron events in response-tool mode", () => {
-    const prompt = buildCronEventPrompt([""], { useHeartbeatResponseTool: true });
+    const prompt = buildHeartbeatEventPrompt({
+      cronEvents: [""],
+      useHeartbeatResponseTool: true,
+    });
 
     expect(prompt).toContain("heartbeat_respond");
     expect(prompt).toContain("notify=false");
@@ -121,11 +131,126 @@ describe("heartbeat event prompts", () => {
   });
 
   it("uses heartbeat_respond for quiet exec completion events in response-tool mode", () => {
-    const prompt = buildExecEventPrompt([""], { useHeartbeatResponseTool: true });
+    const prompt = buildHeartbeatEventPrompt({
+      execEvents: [""],
+      useHeartbeatResponseTool: true,
+    });
 
     expect(prompt).toContain("heartbeat_respond");
     expect(prompt).toContain("notify=false");
     expect(prompt).not.toContain("HEARTBEAT_OK");
+  });
+
+  it("composes generic, exec, and cron events in one heartbeat prompt", () => {
+    const prompt = buildHeartbeatEventPrompt({
+      execEvents: ["Exec failed (backup, code 1) :: backup failed"],
+      cronEvents: ["Cron: send the overnight report"],
+      genericEvents: ["Gateway restart ok"],
+    });
+
+    expect(prompt).toContain("Multiple heartbeat events were triggered");
+    expect(prompt).toContain("backup failed");
+    expect(prompt).toContain("Cron: send the overnight report");
+    expect(prompt).toContain("Gateway restart ok");
+  });
+
+  it("bounds mixed heartbeat event prompts with one aggregate limit", () => {
+    const prompt = buildHeartbeatEventPrompt({
+      execEvents: [`Exec failed (backup, code 1) :: ${"e".repeat(9_000)}`],
+      cronEvents: [`Reminder: ${"c".repeat(9_000)}`],
+      genericEvents: [`Gateway restart ${"g".repeat(9_000)}`],
+    });
+
+    expect(prompt.length).toBeLessThanOrEqual(16_000);
+    expect(prompt).toContain("[truncated]");
+    expect(prompt).toContain("An async command");
+    expect(prompt).toContain("A scheduled reminder");
+    expect(prompt).toContain("A system event");
+  });
+
+  it("bounds a single untagged cron event prompt", () => {
+    const prompt = buildHeartbeatEventPrompt({
+      cronEvents: [`Reminder: ${"c".repeat(20_000)}`],
+    });
+
+    expect(prompt.length).toBeLessThanOrEqual(16_000);
+    expect(prompt).toContain("[truncated]");
+    expect(prompt).toContain("Please relay this reminder to the user");
+  });
+
+  it.each([
+    {
+      name: "exec",
+      params: {
+        execEvents: [`Exec finished: ${"e".repeat(8_100)}`, "Exec finished: omitted"],
+      },
+      kind: "exec" as const,
+    },
+    {
+      name: "generic",
+      params: {
+        genericEvents: [`Gateway startup ${"g".repeat(8_100)}`, "Gateway restart omitted"],
+      },
+      kind: "generic" as const,
+    },
+  ])("tracks the $name entries retained by its class budget", ({ params, kind }) => {
+    const resolution = resolveHeartbeatEventPrompt(params);
+
+    expect(resolution.prompt).toContain("[truncated]");
+    expect(resolution.prompt).not.toContain("omitted");
+    expect(resolution.handledEventIndexes[kind]).toEqual([0]);
+  });
+
+  it("tracks cron entries retained by aggregate head and tail truncation", () => {
+    const resolution = resolveHeartbeatEventPrompt({
+      cronEvents: [
+        `First reminder ${"a".repeat(12_000)}`,
+        "Middle reminder omitted",
+        `Last reminder ${"z".repeat(12_000)}`,
+      ],
+    });
+
+    expect(resolution.prompt).toContain("[truncated]");
+    expect(resolution.prompt).not.toContain("Middle reminder omitted");
+    expect(resolution.handledEventIndexes.cron).toEqual([0, 2]);
+  });
+
+  it("keeps metadata-only exec completions explicitly handled", () => {
+    const resolution = resolveHeartbeatEventPrompt({
+      execEvents: ["Exec completed (abc12345, code 0)"],
+    });
+
+    expect(resolution.prompt).toContain("no command output was found");
+    expect(resolution.handledEventIndexes.exec).toEqual([0]);
+  });
+
+  it("embeds generic system events in the heartbeat prompt", () => {
+    const prompt = buildHeartbeatEventPrompt({ genericEvents: ["Gateway restart ok"] });
+
+    expect(prompt).toContain("Gateway restart ok");
+    expect(prompt).toContain("user-facing follow-up");
+  });
+
+  it("keeps generic system prompt output bounded", () => {
+    const prompt = buildHeartbeatEventPrompt({ genericEvents: ["x".repeat(8_100)] });
+
+    expect(prompt).toContain("[truncated]");
+    expect(prompt.length).toBeLessThan(8_500);
+  });
+
+  it("compacts legacy heartbeat metadata in generic system prompts", () => {
+    const prompt = buildHeartbeatEventPrompt({
+      genericEvents: [
+        "Node: connected · last input 2026-08-29T00:00:00Z",
+        "heartbeat poll: noop",
+        "Gateway restart ok",
+      ],
+    });
+
+    expect(prompt).toContain("Node: connected");
+    expect(prompt).not.toContain("last input");
+    expect(prompt).not.toContain("heartbeat poll");
+    expect(prompt).toContain("Gateway restart ok");
   });
 });
 
@@ -217,14 +342,14 @@ describe("isExecCompletionEvent", () => {
 describe("buildExecEventPrompt truncation", () => {
   it("does not split surrogate pairs in long event text", () => {
     const safePrefix = "x".repeat(7_999);
-    const result = buildExecEventPrompt([`${safePrefix}🚀tail`]);
+    const result = buildHeartbeatEventPrompt({ execEvents: [`${safePrefix}🚀tail`] });
 
     expect(result).toContain(`${safePrefix}\n\n[truncated]`);
     expect(result).not.toContain("🚀tail");
   });
 
   it("passes through short event text unchanged", () => {
-    const result = buildExecEventPrompt(["hello"]);
+    const result = buildHeartbeatEventPrompt({ execEvents: ["hello"] });
     expect(result).toContain("hello");
     expect(result).not.toContain("[truncated]");
   });
