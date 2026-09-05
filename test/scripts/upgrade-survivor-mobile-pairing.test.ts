@@ -16,7 +16,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   MOBILE_PAIRING_AUDIT_CLIENT,
   MOBILE_PAIRING_APPROVAL_SCOPES,
-  MOBILE_PAIRING_BASELINE_COMMAND_ALLOWLIST,
   MOBILE_PAIRING_CLIENT,
   MOBILE_PAIRING_NODE_CAPS,
   MOBILE_PAIRING_NODE_COMMANDS,
@@ -805,73 +804,6 @@ describe("upgrade survivor mobile pairing client", () => {
     expect(result.status).toBe(1);
     expect(`${result.stdout}${result.stderr}`).not.toContain(password);
     expect(result.stderr).toContain("unknown mobile pairing client command");
-  });
-
-  it("prints the baseline command allowlist without watch relay commands", () => {
-    const result = spawnSync(
-      process.execPath,
-      ["--import", "./scripts/tsx.mjs", CLIENT_PATH, "print-baseline-command-allowlist"],
-      {
-        cwd: process.cwd(),
-        encoding: "utf8",
-        env: { ...process.env, GATEWAY_AUTH_PASSWORD_REF: "" },
-      },
-    );
-
-    expect(result.status).toBe(0);
-    expect(JSON.parse(result.stdout)).toEqual(MOBILE_PAIRING_BASELINE_COMMAND_ALLOWLIST);
-    expect(MOBILE_PAIRING_BASELINE_COMMAND_ALLOWLIST).toContain("camera.snap");
-    expect(MOBILE_PAIRING_BASELINE_COMMAND_ALLOWLIST).not.toContain("watch.notify");
-    expect(MOBILE_PAIRING_BASELINE_COMMAND_ALLOWLIST).not.toContain("watch.status");
-  });
-
-  it("stages the baseline mobile command surface through the supported config path", () => {
-    const source = readFileSync(RUNNER_PATH, "utf8");
-    const helper = source.slice(
-      source.indexOf("configure_mobile_pairing_baseline_command_surface()"),
-      source.indexOf("\nconfigure_watchos_tls_fixture()"),
-    );
-    const run = (canonicalStatus: number) =>
-      execFileSync(
-        "bash",
-        [
-          "-c",
-          `set -eu
-exec 3>&1
-SCENARIO=mobile-pairing-reconnect
-${helper}
-run_mobile_pairing_client() { printf '%s' '["camera.snap"]'; }
-openclaw() {
-  printf '%s\n' "$*" >&3
-  if [ "$3" = "gateway.nodes.commands.allow" ]; then
-    return "$CANONICAL_STATUS"
-  fi
-}
-CANONICAL_STATUS="$1"
-configure_mobile_pairing_baseline_command_surface
-`,
-          "mobile-baseline-config",
-          String(canonicalStatus),
-        ],
-        { encoding: "utf8" },
-      )
-        .trim()
-        .split("\n");
-
-    expect(run(0)).toEqual([
-      'config set gateway.nodes.commands.allow ["camera.snap"] --strict-json',
-    ]);
-    expect(run(1)).toEqual([
-      'config set gateway.nodes.commands.allow ["camera.snap"] --strict-json',
-      'config set gateway.nodes.allowCommands ["camera.snap"] --strict-json',
-    ]);
-    const orchestration = source.slice(source.indexOf("phase install-baseline install_baseline"));
-    expect(orchestration.indexOf("phase apply-baseline-config-recipe")).toBeLessThan(
-      orchestration.indexOf("phase configure-mobile-pairing-baseline-command-surface"),
-    );
-    expect(
-      orchestration.indexOf("phase configure-mobile-pairing-baseline-command-surface"),
-    ).toBeLessThan(orchestration.indexOf("phase validate-baseline-config"));
   });
 
   it("checks both candidate starts before Doctor and the final phase after Doctor", () => {

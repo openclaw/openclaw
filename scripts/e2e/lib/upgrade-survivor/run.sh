@@ -894,19 +894,6 @@ apply_baseline_config_recipe() {
     --baseline-version "$baseline_version"
 }
 
-configure_mobile_pairing_baseline_command_surface() {
-  [ "$SCENARIO" = "mobile-pairing-reconnect" ] || return 0
-  local command_allowlist
-  command_allowlist="$(run_mobile_pairing_client print-baseline-command-allowlist)"
-  # The config path changed across shipped baselines. Stage the same non-watch
-  # declaration through the path accepted by the installed baseline.
-  if openclaw config set gateway.nodes.commands.allow "$command_allowlist" --strict-json \
-    >/dev/null 2>&1; then
-    return 0
-  fi
-  openclaw config set gateway.nodes.allowCommands "$command_allowlist" --strict-json >/dev/null
-}
-
 configure_watchos_tls_fixture() {
   [ "${SCENARIO:-}" = "watchos-direct-node" ] || return 0
   command -v openssl >/dev/null || {
@@ -1617,8 +1604,6 @@ phase reset-run-state reset_run_state
 phase install-baseline install_baseline
 phase initialize-state initialize_state
 phase apply-baseline-config-recipe apply_baseline_config_recipe
-phase configure-mobile-pairing-baseline-command-surface \
-  configure_mobile_pairing_baseline_command_surface
 if [ "$SCENARIO" = "watchos-direct-node" ]; then
   phase configure-watchos-tls configure_watchos_tls_fixture
 fi
