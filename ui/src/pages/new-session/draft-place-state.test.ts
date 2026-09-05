@@ -93,6 +93,16 @@ function createRepositoryFixture(
   return { state, browser, persistPreference, readPreference, request, requestUpdate };
 }
 
+// Shape of the Gateway client's thrown request error for a workspace-containment refusal.
+const ADMIN_SCOPE_DENIAL = Object.assign(new Error("missing scope: operator.admin"), {
+  code: "FORBIDDEN",
+  details: {
+    code: "MISSING_SCOPE",
+    missingScope: "operator.admin",
+    requiredScopes: ["operator.admin"],
+  },
+});
+
 describe("DraftPlaceState repository selection", () => {
   it.each(["local", "device", "cloud"] as const)(
     "closes after selecting Auto and clears Auto when choosing %s",
@@ -121,6 +131,24 @@ describe("DraftPlaceState repository selection", () => {
       expect(browser.popoverOpen("where")).toBe(destination === "cloud");
     },
   );
+
+  it("keeps a refused folder distinct from an unreachable Git check", async () => {
+    const { state, request } = createRepositoryFixture({ workspaceGit: true });
+    request.mockImplementation(async (method) =>
+      method === "worktrees.branches"
+        ? Promise.reject(ADMIN_SCOPE_DENIAL)
+        : { path: "/plain", entries: [] },
+    );
+    state.adoptAgentDefaults();
+    await vi.waitFor(() =>
+      expect(state.repository).toEqual({
+        kind: "forbidden",
+        repoRoot: "/workspace",
+        missingScope: "operator.admin",
+      }),
+    );
+    expect(state.worktreeAvailable()).toBe(false);
+  });
 
   it.each(["git", "unavailable", "rejected"] as const)(
     "preserves an edited base branch through reconnect discovery (%s)",
