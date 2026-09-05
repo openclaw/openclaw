@@ -5,6 +5,7 @@ import { prettifyPlatform } from "./platform-label.ts";
 describe("prettifyPlatform", () => {
   it.each([
     ["darwin", "macOS"],
+    ["MacIntel", "macOS"],
     ["iOS 26.4", "iOS 26.4"],
     ["freebsd", "Freebsd"],
     ["Haiku", "Haiku"],

@@ -1,6 +1,7 @@
 const PLATFORM_DISPLAY_NAMES: Record<string, string> = {
   macos: "macOS",
   darwin: "macOS",
+  macintel: "macOS",
   win32: "Windows",
   windows: "Windows",
   linux: "Linux",
