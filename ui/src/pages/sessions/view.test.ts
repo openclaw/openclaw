@@ -3,6 +3,14 @@
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import type { SessionsListResult } from "../../api/types.ts";
+import {
+  CATALOG_CONTEXT_TOKENS,
+  COMPACTION_RESERVE_TOKENS,
+  createContextBudgetStatusFixture,
+  PRESSURED_PROMPT_TOKENS,
+  SESSION_CONTEXT_TOKEN_BUDGET,
+  STALE_CONTEXT_TOKEN_BUDGET,
+} from "../../test-helpers/context-budget-status-fixture.ts";
 import { renderSessions, type SessionsProps } from "./view.ts";
 
 function buildResult(
@@ -1801,6 +1809,74 @@ describe("sessions view", () => {
     expect(container.querySelector(".session-token-cell")?.textContent?.trim()).toBe(
       "~180k / 200k",
     );
+  });
+
+  it("measures the context meter against the budget compaction triggers on", async () => {
+    const container = document.createElement("div");
+    render(
+      renderSessions(
+        buildProps(
+          buildResult({
+            key: "agent:main:main",
+            kind: "direct",
+            updatedAt: Date.now(),
+            totalTokens: PRESSURED_PROMPT_TOKENS,
+            contextTokens: CATALOG_CONTEXT_TOKENS,
+            contextBudgetStatus: createContextBudgetStatusFixture({
+              contextTokenBudget: SESSION_CONTEXT_TOKEN_BUDGET,
+              reserveTokens: COMPACTION_RESERVE_TOKENS,
+              estimatedPromptTokens: PRESSURED_PROMPT_TOKENS,
+            }),
+          }),
+        ),
+      ),
+      container,
+    );
+    await Promise.resolve();
+
+    // Against the catalog window the same row reads 61% and stays "ok", one
+    // tone below the 65% warn threshold it is actually past.
+    const meter = container.querySelector(".session-context-meter");
+    expect(meter?.classList.contains("session-context-meter--danger")).toBe(true);
+    expect(meter?.getAttribute("aria-label")).toBe(
+      `89% of context used (${PRESSURED_PROMPT_TOKENS.toLocaleString()} / ${(180_000).toLocaleString()} tokens)`,
+    );
+    expect(container.querySelector(".session-token-cell")?.textContent?.trim()).toBe("160k / 180k");
+  });
+
+  it("re-measures an idle session against a cap lowered under its snapshot", async () => {
+    const container = document.createElement("div");
+    render(
+      renderSessions(
+        buildProps(
+          buildResult({
+            key: "agent:main:main",
+            kind: "direct",
+            updatedAt: Date.now(),
+            totalTokens: PRESSURED_PROMPT_TOKENS,
+            // The row already carries the lowered cap; the snapshot predates it
+            // and nothing refreshes it until the session runs again.
+            contextTokens: SESSION_CONTEXT_TOKEN_BUDGET,
+            contextBudgetStatus: createContextBudgetStatusFixture({
+              contextTokenBudget: STALE_CONTEXT_TOKEN_BUDGET,
+              reserveTokens: COMPACTION_RESERVE_TOKENS,
+              estimatedPromptTokens: PRESSURED_PROMPT_TOKENS,
+            }),
+          }),
+        ),
+      ),
+      container,
+    );
+    await Promise.resolve();
+
+    // Taken at face value the retained snapshot reads 16% and stays "ok" for a
+    // row the next run compacts.
+    const meter = container.querySelector(".session-context-meter");
+    expect(meter?.classList.contains("session-context-meter--danger")).toBe(true);
+    expect(meter?.getAttribute("aria-label")).toBe(
+      `89% of context used (${PRESSURED_PROMPT_TOKENS.toLocaleString()} / ${(180_000).toLocaleString()} tokens)`,
+    );
+    expect(container.querySelector(".session-token-cell")?.textContent?.trim()).toBe("160k / 180k");
   });
 
   it("omits the context meter when a session reports no context window", async () => {

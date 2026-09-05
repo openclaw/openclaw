@@ -5578,6 +5578,7 @@ export const en: TranslationMap & {
         open: "Open context usage details",
         summary: "Session context usage: {used} of {limit} ({pct}%)",
         contextWindow: "Context window",
+        promptBudget: "Before compaction",
         latestRunTokens: "Latest run tokens",
         estimatedCost: "Est. cost",
         planUsage: "Plan usage",
