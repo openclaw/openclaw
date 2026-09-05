@@ -760,20 +760,26 @@ export function validatePairingAudit(params: {
   if (!isRecord(pendingNode) || pendingNode.nodeId !== params.deviceId) {
     throw new Error("mobile node pairing pending identity changed");
   }
-  const pendingCommands = requireStringArray(pendingNode.commands ?? [], "pending node commands");
+  const pendingCommands = normalizeCommandSurface(
+    pendingNode.commands ?? [],
+    "pending node commands",
+  );
+  const expectedPendingCommands = [
+    ...new Set([...pairedNodeCommands, ...EXPECTED_UPGRADE_COMMAND_ADDITIONS]),
+  ].toSorted();
+  if (JSON.stringify(pendingCommands) !== JSON.stringify(expectedPendingCommands)) {
+    throw new Error("mobile node pairing pending command surface changed");
+  }
   const commandAdditions = pendingCommands
     .filter((command) => !pairedCommands.has(command))
     .toSorted();
   if (JSON.stringify(commandAdditions) !== JSON.stringify(EXPECTED_UPGRADE_COMMAND_ADDITIONS)) {
     throw new Error("mobile node pairing pending command expansion changed");
   }
-  const pairedCaps = new Set(requireStringArray(pairedNode.caps ?? [], "paired node caps"));
-  const capabilityAdditions = requireStringArray(
-    pendingNode.caps ?? [],
-    "pending node caps",
-  ).filter((capability) => !pairedCaps.has(capability));
-  if (capabilityAdditions.length !== 0) {
-    throw new Error("mobile node pairing pending capability expansion changed");
+  const pairedCaps = normalizeCommandSurface(pairedNode.caps ?? [], "paired node caps");
+  const pendingCaps = normalizeCommandSurface(pendingNode.caps ?? [], "pending node caps");
+  if (JSON.stringify(pendingCaps) !== JSON.stringify(pairedCaps)) {
+    throw new Error("mobile node pairing pending capability surface changed");
   }
   const pairedPermissions = isRecord(pairedNode.permissions) ? pairedNode.permissions : {};
   const pendingPermissions = isRecord(pendingNode.permissions) ? pendingNode.permissions : {};
@@ -783,6 +789,13 @@ export function validatePairingAudit(params: {
     )
   ) {
     throw new Error("mobile node pairing pending permission expansion changed");
+  }
+  if (
+    Object.entries(pairedPermissions).some(
+      ([permission, enabled]) => enabled === true && pendingPermissions[permission] !== true,
+    )
+  ) {
+    throw new Error("mobile node pairing pending permission surface narrowed");
   }
   return {
     pendingDevicePairingCount: 0,

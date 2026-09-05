@@ -460,11 +460,14 @@ describe("upgrade survivor mobile pairing client", () => {
         }),
       ).toThrow();
     }
-    for (const narrowedPending of [
-      { ...pendingNode, commands: ["watch.notify", "watch.status"] },
-      { ...pendingNode, caps: [] },
-      { ...pendingNode, permissions: { camera: false } },
-    ]) {
+    for (const [narrowedPending, expectedError] of [
+      [
+        { ...pendingNode, commands: ["watch.notify", "watch.status"] },
+        /pending command surface changed/,
+      ],
+      [{ ...pendingNode, caps: [] }, /pending capability surface changed/],
+      [{ ...pendingNode, permissions: { camera: false } }, /pending permission surface narrowed/],
+    ] as const) {
       expect(() =>
         validatePairingAudit({
           devicePairing: { pending: [], paired: [{ deviceId: "device-1" }] },
@@ -473,7 +476,7 @@ describe("upgrade survivor mobile pairing client", () => {
           mobileWatchReapprovalMode: "required",
           baselinePairedNodeCommands: ["camera.snap"],
         }),
-      ).not.toThrow();
+      ).toThrow(expectedError);
     }
     expect(() =>
       validatePairingAudit({
