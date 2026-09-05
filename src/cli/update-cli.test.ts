@@ -6859,6 +6859,7 @@ describe("update-cli", () => {
         OPENCLAW_SERVICE_MARKER: "openclaw",
         OPENCLAW_SERVICE_KIND: "gateway",
       }),
+      expect.objectContaining({ beforeMutation: expect.any(Function) }),
     );
     expect(sigintListenerOrder).toBeLessThan(suspendOrder);
     expect(suspendOrder).toBeLessThan(requiredServiceStopCallOrder);
