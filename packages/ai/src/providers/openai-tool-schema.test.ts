@@ -1,7 +1,10 @@
 // Verifies OpenAI strict tool schema normalization and cache behavior.
 import { deepStrictEqual } from "node:assert/strict";
 import { describe, expect, it } from "vitest";
-import { ToolSchemaDepthLimitError } from "./agent-tools-parameter-schema.js";
+import {
+  normalizeToolParameterSchema,
+  ToolSchemaDepthLimitError,
+} from "./agent-tools-parameter-schema.js";
 import { projectOpenAITools } from "./openai-tool-projection.js";
 import { normalizeOpenAIStrictCompatSchema } from "./openai-tool-schema-compat.js";
 import {
@@ -336,5 +339,31 @@ describe("tool schema depth guard", () => {
   it("normalizes a deeply nested but legitimate object schema without rejecting it", () => {
     const schema = deepPropertiesChain(80);
     expect(() => normalizeStrictOpenAIJsonSchema(schema)).not.toThrow();
+  });
+
+  it("bounds local $ref expansion depth, not only raw document depth", () => {
+    // A flat $defs map is shallow as a document, but each entry links to the next, so expansion
+    // recurses once per link — a pre-expansion document check cannot see this depth.
+    const defs: Record<string, unknown> = {};
+    for (let i = 0; i < 3000; i += 1) {
+      defs[`s${i}`] = { $ref: `#/$defs/s${i + 1}` };
+    }
+    defs.s3000 = { type: "string" };
+    const schema = { $defs: defs, $ref: "#/$defs/s0" };
+    expect(() => normalizeToolParameterSchema(schema)).toThrow(ToolSchemaDepthLimitError);
+  });
+
+  it("keeps deeply nested opaque literal values without rejecting the schema", () => {
+    // const/default/enum/examples are literal payloads, not schema edges: normalizers preserve
+    // them without recursion, so their depth must not trip the guard.
+    let literal: unknown = "leaf";
+    for (let i = 0; i < 3000; i += 1) {
+      literal = { nested: literal };
+    }
+    const schema = { type: "object", properties: { field: { type: "object", default: literal } } };
+    const normalized = normalizeToolParameterSchema(schema) as {
+      properties: { field: { default: unknown } };
+    };
+    expect(normalized.properties.field.default).toEqual(literal);
   });
 });

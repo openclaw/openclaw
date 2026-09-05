@@ -15,9 +15,12 @@ import { cleanSchemaForLlamacppGbnf } from "./clean-for-llamacpp-gbnf.js";
 import { stripUnsupportedSchemaKeywords } from "./schema-keyword-strip.js";
 
 /**
- * Tool schemas are external/MCP-controllable but normalize through deep recursion. Legit schemas
- * nest far below this cap, so it only bounds hostile or malformed input that would otherwise
- * overflow the stack as a RangeError while a normalizer walks it.
+ * Tool schemas are external/MCP-controllable but normalize through deep recursion. The budget is
+ * enforced inside the schema-edge recursion itself (see inlineLocalSchemaRefsWithDefs), so it covers
+ * both raw document nesting and local-$ref expansion depth. Legit schemas nest far below this cap;
+ * it only bounds hostile or malformed input that would otherwise overflow the stack as a RangeError.
+ * Opaque literal values (const/default/enum/examples) never count: normalizers preserve them without
+ * recursion, so their depth can neither overflow the stack nor reject a valid schema.
  */
 export const MAX_TOOL_SCHEMA_NESTING_DEPTH = 256;
 
@@ -554,13 +557,21 @@ function inlineLocalSchemaRefsWithDefs(
   refStack: Set<string> | undefined,
   state: { unresolvedLocalRefs: boolean },
   rootDocument: unknown,
+  depth: number,
 ): unknown {
+  // The depth budget lives here because every normalizer recursion funnels through schema-edge
+  // descent: raw nesting deepens via the map/object/array branches below, and $ref expansion
+  // deepens via the resolution call. A flat $defs chain is shallow as a document but recurses once
+  // per resolved link, so a pre-expansion document check cannot bound it — this can.
+  if (depth > MAX_TOOL_SCHEMA_NESTING_DEPTH) {
+    throw new ToolSchemaDepthLimitError();
+  }
   if (!schema || typeof schema !== "object") {
     return schema;
   }
   if (Array.isArray(schema)) {
     return schema.map((entry) =>
-      inlineLocalSchemaRefsWithDefs(entry, defs, refStack, state, rootDocument),
+      inlineLocalSchemaRefsWithDefs(entry, defs, refStack, state, rootDocument, depth + 1),
     );
   }
 
@@ -587,6 +598,7 @@ function inlineLocalSchemaRefsWithDefs(
       nextRefStack,
       state,
       rootDocument,
+      depth + 1,
     );
     if (!inlined || typeof inlined !== "object" || Array.isArray(inlined)) {
       return inlined;
@@ -615,7 +627,14 @@ function inlineLocalSchemaRefsWithDefs(
         Object.fromEntries(
           Object.entries(value).map(([entryKey, entryValue]) => [
             entryKey,
-            inlineLocalSchemaRefsWithDefs(entryValue, nextDefs, refStack, state, rootDocument),
+            inlineLocalSchemaRefsWithDefs(
+              entryValue,
+              nextDefs,
+              refStack,
+              state,
+              rootDocument,
+              depth + 1,
+            ),
           ]),
         ),
       );
@@ -625,7 +644,7 @@ function inlineLocalSchemaRefsWithDefs(
       setOwnSchemaProperty(
         result,
         key,
-        inlineLocalSchemaRefsWithDefs(value, nextDefs, refStack, state, rootDocument),
+        inlineLocalSchemaRefsWithDefs(value, nextDefs, refStack, state, rootDocument, depth + 1),
       );
       continue;
     }
@@ -634,7 +653,7 @@ function inlineLocalSchemaRefsWithDefs(
         result,
         key,
         value.map((entry) =>
-          inlineLocalSchemaRefsWithDefs(entry, nextDefs, refStack, state, rootDocument),
+          inlineLocalSchemaRefsWithDefs(entry, nextDefs, refStack, state, rootDocument, depth + 1),
         ),
       );
       continue;
@@ -669,6 +688,7 @@ function inlineLocalToolSchemaRefs(schema: unknown): TSchema {
       unresolvedLocalRefs: false,
     },
     schema,
+    0,
   ) as TSchema;
 }
 
@@ -808,37 +828,10 @@ function normalizeOpenApiSchemaKeywords(schema: unknown): unknown {
   return changed || nullable ? normalized : schema;
 }
 
-/**
- * Iteratively checks JSON-container nesting depth so normalize can fail fast (typed error) instead
- * of overflowing the stack on a hostile deep schema. Only real container depth counts; the walker is
- * iterative, so even pathological input cannot overflow it either.
- */
-function assertToolSchemaDepthWithinLimit(schema: unknown): void {
-  const pending: Array<{ value: unknown; depth: number }> = [{ value: schema, depth: 0 }];
-  let frame: { value: unknown; depth: number } | undefined;
-  while ((frame = pending.pop()) !== undefined) {
-    const { value, depth } = frame;
-    if (depth > MAX_TOOL_SCHEMA_NESTING_DEPTH) {
-      throw new ToolSchemaDepthLimitError();
-    }
-    if (Array.isArray(value)) {
-      for (const entry of value) {
-        pending.push({ value: entry, depth: depth + 1 });
-      }
-    } else if (value && typeof value === "object") {
-      // SAFETY: branch condition narrows value to a non-null object.
-      for (const child of Object.values(value as Record<string, unknown>)) {
-        pending.push({ value: child, depth: depth + 1 });
-      }
-    }
-  }
-}
-
 function normalizeToolParameterSchemaUncached(
   schema: unknown,
   options?: ToolParameterSchemaOptions,
 ): TSchema {
-  assertToolSchemaDepthWithinLimit(schema);
   const inlinedSchema = normalizeOpenApiSchemaKeywords(inlineLocalToolSchemaRefs(schema));
   const schemaRecord =
     inlinedSchema && typeof inlinedSchema === "object"
