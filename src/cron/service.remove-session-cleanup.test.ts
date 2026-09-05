@@ -2,7 +2,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { loadExactSessionEntry, replaceSessionEntry } from "../config/sessions/session-accessor.js";
+import {
+  applySessionEntryLifecycleMutation,
+  loadExactSessionEntry,
+  replaceSessionEntry as replaceSessionEntryCore,
+} from "../config/sessions/session-accessor.js";
 import {
   resolveSqliteScope,
   runExclusiveSqliteSessionWrite,
@@ -15,11 +19,85 @@ import { clearCronJobActive, markCronJobActive } from "./active-jobs.js";
 import { CronService } from "./service.js";
 import { setupCronServiceSuite } from "./service.test-harness.js";
 
+const gatewayTestState = vi.hoisted(() => ({
+  callGateway: vi.fn(),
+  targetBySessionKey: new Map<string, { agentId: string; storePath: string }>(),
+}));
+
+vi.mock("../gateway/call.runtime.js", () => ({
+  callGateway: gatewayTestState.callGateway,
+}));
+
+gatewayTestState.callGateway.mockImplementation(
+  async (request: { method: string; params?: unknown }) => {
+    const params = request.params;
+    if (request.method !== "sessions.delete" || typeof params !== "object" || params === null) {
+      return { deleted: false };
+    }
+    const { key, expectedSessionId, expectedLifecycleRevision, expectedSessionUpdatedAt } =
+      params as {
+        key?: unknown;
+        expectedSessionId?: unknown;
+        expectedLifecycleRevision?: unknown;
+        expectedSessionUpdatedAt?: unknown;
+      };
+    if (typeof key !== "string" || typeof expectedSessionId !== "string") {
+      return { deleted: false };
+    }
+    const target = gatewayTestState.targetBySessionKey.get(key);
+    const existing = target
+      ? loadExactSessionEntry({
+          storePath: target.storePath,
+          sessionKey: key,
+        })?.entry
+      : undefined;
+    if (
+      !target ||
+      !existing ||
+      existing.sessionId !== expectedSessionId ||
+      existing.lifecycleRevision !== expectedLifecycleRevision ||
+      existing.updatedAt !== expectedSessionUpdatedAt
+    ) {
+      return { deleted: false };
+    }
+    const result = await applySessionEntryLifecycleMutation({
+      agentId: target.agentId,
+      storePath: target.storePath,
+      removals: [
+        {
+          sessionKey: key,
+          expectedEntry: existing,
+          expectedSessionId,
+          ...(typeof expectedLifecycleRevision === "string" ? { expectedLifecycleRevision } : {}),
+          ...(typeof expectedSessionUpdatedAt === "number"
+            ? { expectedUpdatedAt: expectedSessionUpdatedAt }
+            : {}),
+          archiveRemovedTranscript: true,
+        },
+      ],
+    });
+    return { deleted: result.removedEntries > 0 };
+  },
+);
+
+function replaceSessionEntry(...args: Parameters<typeof replaceSessionEntryCore>) {
+  const target = args[0];
+  if (!target.agentId || !target.storePath) {
+    throw new Error("cron cleanup tests require an explicit agent and session store");
+  }
+  gatewayTestState.targetBySessionKey.set(target.sessionKey, {
+    agentId: target.agentId,
+    storePath: target.storePath,
+  });
+  return replaceSessionEntryCore(...args);
+}
+
 const { logger, makeStorePath } = setupCronServiceSuite({
   prefix: "cron-remove-session-cleanup-",
 });
 
 afterEach(() => {
+  gatewayTestState.targetBySessionKey.clear();
   closeOpenClawAgentDatabasesForTest();
 });
 
