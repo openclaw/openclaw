@@ -1,3 +1,4 @@
+import type { GatewayProtocolRequestOptions } from "@openclaw/gateway-client/browser";
 import type { SessionsDeleteResult } from "../../../../packages/gateway-protocol/src/index.js";
 import { SESSION_ARCHIVE_REQUEST_OPTIONS } from "../../../../src/shared/session-archive-timeout.ts";
 import { SIDEBAR_SESSION_ROSTER_LIMIT } from "../../../../src/shared/session-list-limits.ts";
@@ -208,9 +209,10 @@ export function requestSessionReset(
   client: SessionRequestClient,
   key: string,
   options: SessionResetOptions = {},
+  requestOptions?: GatewayProtocolRequestOptions,
 ): Promise<void> {
   return client
-    .request("sessions.reset", buildSessionRequestParams(key, options.agentId))
+    .request("sessions.reset", buildSessionRequestParams(key, options.agentId), requestOptions)
     .then(() => undefined);
 }
 

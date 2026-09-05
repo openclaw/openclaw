@@ -22,17 +22,21 @@ export class CriticalObserverNoticeTracker {
     this.seen.clear();
   }
 
+  // A reset that replaces the observer lifecycle must retire the prior
+  // revision floor for that session, otherwise the new lifecycle's revision 1
+  // is rejected as stale against the pre-reset floor. Scoped to one key so
+  // other sessions keep their floors.
+  forget(params: { sessionKey: string; agentId?: string }): void {
+    this.seen.delete(resolveTrackerKey(params.sessionKey, params.agentId));
+  }
+
   record(params: {
     sessionKey: string;
     agentId?: string;
     health: string;
     revision: number;
   }): boolean {
-    const sessionKey = normalizeSessionKeyForUiComparison(params.sessionKey);
-    const key =
-      isUiGlobalSessionKey(sessionKey) && params.agentId
-        ? `${sessionKey}:${normalizeAgentId(params.agentId)}`
-        : sessionKey;
+    const key = resolveTrackerKey(params.sessionKey, params.agentId);
     const previous = this.seen.get(key);
     // Gateway revision floors keep revisions session-monotonic across run
     // rollover, so a gap reliably means this connection missed digest state.
@@ -52,6 +56,16 @@ export class CriticalObserverNoticeTracker {
     this.seen.set(key, { health: params.health, revision: params.revision });
     return shouldAnnounce;
   }
+}
+
+// Shared by record() and forget() so a reset retires the exact key record()
+// would consult. Global session keys are namespaced by agentId to match the
+// dedup contract in record().
+function resolveTrackerKey(sessionKey: string, agentId?: string): string {
+  const normalized = normalizeSessionKeyForUiComparison(sessionKey);
+  return isUiGlobalSessionKey(normalized) && agentId
+    ? `${normalized}:${normalizeAgentId(agentId)}`
+    : normalized;
 }
 
 export function showCriticalSessionObserverNotice(params: {

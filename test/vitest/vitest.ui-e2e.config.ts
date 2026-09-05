@@ -29,6 +29,7 @@ export const uiE2eRealGatewayTestFiles = [
   "ui/src/e2e/chat-loading-performance.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-project-media.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-widget-sandbox.real-gateway.e2e.test.ts",
+  "ui/src/e2e/critical-observer-notice.real-gateway.e2e.test.ts",
   "ui/src/e2e/control-ui-auth-transports.e2e.test.ts",
   "ui/src/e2e/cron-duration-save.real-gateway.e2e.test.ts",
   "ui/src/e2e/device-alias-rename.real-gateway.e2e.test.ts",

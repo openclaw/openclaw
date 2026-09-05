@@ -1,8 +1,8 @@
-import { mkdir, rm } from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { createControlUiE2eSuite } from "../../e2e/control-ui-e2e-suite.test-support.ts";
+import { createControlUiE2eArtifactDir } from "../../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   controlUiSessionPath,
   controlUiSessionUrl,
@@ -15,10 +15,6 @@ const suite = createControlUiE2eSuite({
     `Playwright Chromium is not installed at ${executablePath}. Run \`pnpm --dir ui exec playwright install chromium\`, or set OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM=1 only when intentionally skipping this lane.`,
 });
 
-const artifactDir = path.resolve(
-  process.cwd(),
-  ".artifacts/control-ui-e2e/critical-observer-notice",
-);
 const selectedSessionKey = "agent:main:main";
 const backgroundSessionKey = "agent:main:other";
 const baseTime = Date.parse("2026-07-25T18:00:00.000Z");
@@ -227,8 +223,7 @@ suite.define(() => {
   });
 
   it("announces critical background sessions, navigates, and dedupes after dismissal", async () => {
-    await rm(artifactDir, { force: true, recursive: true });
-    await mkdir(artifactDir, { recursive: true });
+    const artifactDir = createControlUiE2eArtifactDir("critical-observer-notice");
     await suite.withPage(
       {
         locale: "en-US",
@@ -489,6 +484,101 @@ suite.define(() => {
           await waitForToastUpdate(page);
           expect(await toast.count()).toBe(0);
         }
+      },
+    );
+  });
+
+  it("real-browser /clear resets the critical-notice floor so a new lifecycle revision 1 announces (#137125)", async () => {
+    const artifactDir = createControlUiE2eArtifactDir("critical-observer-notice");
+    await suite.withPage(
+      {
+        locale: "en-US",
+        serviceWorkers: "block",
+        viewport: { height: 900, width: 1440 },
+      },
+      async ({ page }) => {
+        const gateway = await installMockGateway(page, {
+          historyMessages: [
+            {
+              content: [{ type: "text", text: "Selected session is ready." }],
+              role: "assistant",
+              timestamp: baseTime,
+            },
+          ],
+          methodResponses: {
+            "sessions.list": sessionsListResponse(),
+            "sessions.reset": {},
+          },
+          sessionKey: selectedSessionKey,
+        });
+
+        const response = await page.goto(
+          controlUiSessionUrl(suite.server.baseUrl, selectedSessionKey),
+        );
+        expect(response?.status()).toBe(200);
+        await page.getByText("Selected session is ready.").waitFor({ state: "visible" });
+
+        // Step 1: background session emits a critical digest at revision 10.
+        const preResetHeadline = "Background investigation is stuck";
+        const preResetToast = await emitObserverAndReadToast(
+          page,
+          observerDigest({
+            sessionKey: backgroundSessionKey,
+            health: "stuck",
+            headline: preResetHeadline,
+            revision: 10,
+          }),
+          "dismiss",
+        );
+        expect(preResetToast.visible).toBe(true);
+        expect(preResetToast.message).toContain(preResetHeadline);
+        await page.screenshot({
+          fullPage: true,
+          path: path.join(artifactDir, "01-pre-reset-revision-10-toast.png"),
+        });
+
+        // Step 2: trigger sessions.reset for the background session through the
+        // production session capability (the same /clear code path). The hook
+        // fires and retires the revision floor for this session key.
+        const resetResult = await page.evaluate(async (targetKey) => {
+          const app = document.querySelector("openclaw-app-shell") as
+            | (HTMLElement & {
+                context?: {
+                  sessions?: {
+                    reset: (key: string, opts?: { agentId?: string }) => Promise<string>;
+                  };
+                };
+              })
+            | null;
+          if (!app?.context?.sessions) {
+            throw new Error("Session capability is unavailable");
+          }
+          return app.context.sessions.reset(targetKey);
+        }, backgroundSessionKey);
+        expect(resetResult).toBe("completed");
+
+        // Verify sessions.reset was sent to the Gateway.
+        const resetRequests = await gateway.getRequests("sessions.reset");
+        expect(resetRequests.length).toBeGreaterThanOrEqual(1);
+
+        // Step 3: the reset session's new lifecycle emits revision 1 — without
+        // the fix this is silently rejected against the retained floor of 10.
+        const postResetHeadline = "Background investigation is stuck again";
+        const postResetToast = await emitObserverAndReadToast(
+          page,
+          observerDigest({
+            sessionKey: backgroundSessionKey,
+            health: "stuck",
+            headline: postResetHeadline,
+            revision: 1,
+          }),
+        );
+        expect(postResetToast.visible).toBe(true);
+        expect(postResetToast.message).toContain(postResetHeadline);
+        await page.screenshot({
+          fullPage: true,
+          path: path.join(artifactDir, "02-post-reset-revision-1-toast.png"),
+        });
       },
     );
   });

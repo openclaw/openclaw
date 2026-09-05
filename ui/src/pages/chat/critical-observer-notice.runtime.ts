@@ -18,3 +18,12 @@ export function handleCriticalObserverDigest(params: HandleParams): void {
 export function resetCriticalObserverTracker(): void {
   tracker.clear();
 }
+
+// Retire the revision floor for one session after /clear replaces its observer
+// lifecycle, so the new lifecycle's revision 1 is not rejected as stale.
+export function forgetCriticalObserverTracker(params: {
+  sessionKey: string;
+  agentId?: string;
+}): void {
+  tracker.forget(params);
+}

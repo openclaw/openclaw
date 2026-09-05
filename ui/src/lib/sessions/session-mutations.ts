@@ -20,6 +20,7 @@ import type {
   SessionConnectionScope,
   SessionCreateReconciliation,
   SessionResetOptions,
+  SessionResetIdentity,
   SessionResetResult,
   SessionState,
 } from "./session-capability.ts";
@@ -44,6 +45,15 @@ type SessionMutationsHost = {
   clearThink: (key: string, agentId?: string | null) => void;
   claimPermissionProjection: (key: string, agentId?: string | null) => () => boolean;
   retirePullRequestSummary: (key: string) => void;
+  // A reset replaces the observer lifecycle; the prior critical-notice revision
+  // floor for that session must be retired so the new lifecycle's revision 1 is
+  // not rejected as stale. Optional because the UI tracker lives outside this
+  // module; injected by the app layer that owns the tracker singleton.
+  // Identity is resolved before the RPC so a disconnect mid-reset (which clears
+  // hello/agentsList) cannot prevent alias-to-canonical mapping on the
+  // completion path.
+  resolveSessionResetIdentity?: (key: string, agentId?: string | null) => SessionResetIdentity;
+  onSessionLifecycleReset?: (identity: SessionResetIdentity) => void;
 };
 
 function createOptimisticRowPatches<T>(
@@ -112,6 +122,12 @@ function createOptimisticRowPatches<T>(
     clear: () => pending.clear(),
   };
 }
+
+/** Hooks for the app layer to resolve and retire the critical-notice floor on /clear. */
+export type SessionResetHooks = {
+  resolveSessionResetIdentity?: (key: string, agentId?: string | null) => SessionResetIdentity;
+  onSessionLifecycleReset?: (identity: SessionResetIdentity) => void;
+};
 
 export function createSessionMutations(host: SessionMutationsHost) {
   const pendingModelPatches = new Map<
@@ -571,14 +587,46 @@ export function createSessionMutations(host: SessionMutationsHost) {
     if (!scope) {
       return "not-started";
     }
+    // Capture the canonical identity before the RPC so a disconnect mid-reset
+    // (which clears hello/agentsList) cannot prevent alias-to-canonical mapping
+    // on the completion path.
+    const identity = host.resolveSessionResetIdentity?.(key, options.agentId) ?? {
+      sessionKey: key,
+      ...(options.agentId ? { agentId: options.agentId } : {}),
+    };
+    // Track whether the reset request reached the transport so the catch
+    // path only retires the floor when the lifecycle may actually have been
+    // replaced. A local no-socket rejection rejects before send — the
+    // lifecycle is unchanged, so retiring there would permit a duplicate.
+    let requestSent = false;
     try {
-      await requestSessionReset(scope.client, key, options);
+      await requestSessionReset(scope.client, key, options, {
+        onSent: () => {
+          requestSent = true;
+        },
+      });
+      // Reset is destructive once issued: the observer lifecycle is replaced
+      // even when completion is uncertain, so retire the prior revision floor
+      // before the new lifecycle's first digest arrives. Forgetting when the
+      // RPC did not commit at worst re-announces a still-valid notice (the
+      // old lifecycle's next revision exceeds the floor anyway); the silent
+      // suppression we are fixing is strictly worse.
+      host.onSessionLifecycleReset?.(identity);
       return host.connection.isCurrent(scope) ? "completed" : "uncertain";
     } catch (error) {
       if (host.connection.isCurrent(scope)) {
         host.publish({ ...host.readState(), error: formatUiError(error) }, "operation");
       }
-      // Reset can commit before awaited lifecycle work rejects; never infer safe retry.
+      // A correlated Gateway error (ok:false) does not prove the reset was
+      // uncommitted — the Gateway writes the new lifecycle before awaited hooks
+      // and unbinding can fail and return ok:false. Once the request reached the
+      // transport, the lifecycle may have been replaced, so retire the floor;
+      // re-announcing a still-valid notice is strictly better than the silent
+      // suppression being fixed. A before-send rejection (no socket) has
+      // requestSent=false, so the floor is retained there.
+      if (requestSent) {
+        host.onSessionLifecycleReset?.(identity);
+      }
       return "uncertain";
     }
   };

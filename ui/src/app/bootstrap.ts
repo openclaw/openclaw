@@ -25,7 +25,10 @@ import { createAgentCapability } from "../lib/agents/index.ts";
 import { createChannelCapability } from "../lib/channels/index.ts";
 import { createRuntimeConfigCapability } from "../lib/config/runtime-config-capability.ts";
 import { createSessionCapability } from "../lib/sessions/index.ts";
-import { parseAgentSessionKey } from "../lib/sessions/session-key.ts";
+import {
+  parseAgentSessionKey,
+  resolveUiConversationIdentity,
+} from "../lib/sessions/session-key.ts";
 import { loadChatObserverDisplayPreference } from "../pages/chat/chat-observer-display.ts";
 import { sendSessionObserverVisibility } from "../pages/chat/chat-observer.ts";
 import {
@@ -270,7 +273,31 @@ export function bootstrapApplication(): ApplicationRuntime {
       password: gateway.connection.password,
     }),
   });
-  const sessions = createSessionCapability(gateway, agentSelection);
+  const sessions = createSessionCapability(gateway, agentSelection, {
+    // /clear replaces the observer lifecycle; retire the prior critical-notice
+    // revision floor so the new lifecycle's revision 1 is not silently dropped
+    // as stale. The raw key may be a configured alias (e.g. agent:work:main)
+    // that the Gateway resolves to global; canonicalize via the UI identity
+    // helper so the tracker's dedup key matches what record() uses for digests.
+    // Identity is resolved before the RPC so a disconnect mid-reset (which
+    // clears hello/agentsList) cannot prevent alias-to-canonical mapping on
+    // the completion path.
+    resolveSessionResetIdentity: (key, agentId) =>
+      resolveUiConversationIdentity(
+        {
+          assistantAgentId: gateway.snapshot.assistantAgentId,
+          agentsList: agents.state.agentsList,
+          hello: gateway.snapshot.hello,
+        },
+        key,
+        agentId ?? undefined,
+      ),
+    onSessionLifecycleReset: (identity) => {
+      void import("../pages/chat/critical-observer-notice.runtime.ts").then((runtime) =>
+        runtime.forgetCriticalObserverTracker(identity),
+      );
+    },
+  });
   const runtimeConfig = createRuntimeConfigCapability(gateway);
   const overlays = createApplicationOverlays(gateway, {
     connectionBootstrap,

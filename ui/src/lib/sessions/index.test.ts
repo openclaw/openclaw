@@ -657,7 +657,6 @@ describe("createSessionCapability", () => {
     expect(sessions.state.error).toContain("post-commit lifecycle failed");
     sessions.dispose();
   });
-
   it("passes transcript fork parameters to sessions.create", async () => {
     const request = vi.fn(async (method: string, _params?: unknown) => {
       if (method === "sessions.create") {

@@ -121,6 +121,10 @@ export type SessionResetOptions = {
   agentId?: string | null;
 };
 
+/** Canonical session identity captured before a reset RPC so the completion
+ *  path forgets the correct tracker key even if a disconnect clears defaults. */
+export type SessionResetIdentity = { sessionKey: string; agentId?: string };
+
 export type SessionResetResult = "completed" | "not-started" | "uncertain";
 
 export type SessionGateway = {

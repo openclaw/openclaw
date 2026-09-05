@@ -112,6 +112,7 @@ const realGatewayFiles = [
   "chat-loading-performance.real-gateway",
   "chat-project-media.real-gateway",
   "chat-widget-sandbox.real-gateway",
+  "critical-observer-notice.real-gateway",
   "control-ui-auth-transports",
   "cron-duration-save.real-gateway",
   "device-alias-rename.real-gateway",
@@ -539,10 +540,10 @@ describe("Control UI E2E resource ownership", () => {
         },
       ]);
       const parallel = result.files.filter((entry) => entry.phase === 2);
-      expect(parallel).toHaveLength(13);
+      expect(parallel).toHaveLength(14);
       expect(parallel.every((entry) => entry.fileParallelism)).toBe(true);
       expect(parallel.every((entry) => entry.workers === result.rootWorkers)).toBe(true);
-      expect(parallel.filter((entry) => entry.project === "ui-e2e-real-gateway")).toHaveLength(9);
+      expect(parallel.filter((entry) => entry.project === "ui-e2e-real-gateway")).toHaveLength(10);
       expect(
         parallel.filter((entry) => entry.project === "ui-e2e-real-gateway-standalone"),
       ).toHaveLength(4);
