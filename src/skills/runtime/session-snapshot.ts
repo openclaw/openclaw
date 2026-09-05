@@ -16,7 +16,7 @@ import type { SkillEligibilityContext, SkillSnapshot } from "../types.js";
 import { getSkillsSnapshotVersion, shouldRefreshSnapshotForVersion } from "./refresh-state.js";
 import { ensureSkillsWatcher } from "./refresh.js";
 import { fingerprintSkillSnapshotConfig } from "./snapshot-config-fingerprint.js";
-import { hydrateResolvedSkills } from "./snapshot-hydration.js";
+import { hydrateRuntimeSkillFields } from "./snapshot-hydration.js";
 
 // Full snapshots let fresh sessions and runtime-only hydration share one versioned rebuild.
 const skillSnapshotCache = new Map<string, SkillSnapshot>();
@@ -169,6 +169,6 @@ export function resolveReusableWorkspaceSkillSnapshot(
       ? cachedRebuild()
       : params.hydrateExisting === false
         ? params.existingSnapshot
-        : hydrateResolvedSkills(params.existingSnapshot, cachedRebuild);
+        : hydrateRuntimeSkillFields(params.existingSnapshot, cachedRebuild);
   return { snapshot, shouldRefresh, snapshotVersion };
 }

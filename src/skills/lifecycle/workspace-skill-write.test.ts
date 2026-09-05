@@ -41,6 +41,34 @@ describe("workspace skill mutations", () => {
     await expect(isWorkspaceSkillMutationRestored(mutation)).resolves.toBe(false);
   });
 
+  it("revalidates authority inside the write owner immediately before I/O", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-workspace-skill-write-authority-");
+    const skillDir = path.join(workspaceDir, "skills", "revoked-create");
+    const skillFile = path.join(skillDir, "SKILL.md");
+    const mutation = await prepareWorkspaceSkillMutation({
+      workspaceDir,
+      skillDir,
+      skillFile,
+      content: "# Must Not Write\n",
+      mode: "create",
+      symlinkPolicy,
+    });
+    let checks = 0;
+
+    await expect(
+      applyWorkspaceSkillMutation(mutation, {
+        assertMutationAuthorized: () => {
+          checks += 1;
+          if (checks === 2) {
+            throw new Error("admitted authority closed before write");
+          }
+        },
+      }),
+    ).rejects.toThrow("admitted authority closed before write");
+    expect(checks).toBe(2);
+    await expect(fs.access(skillFile)).rejects.toThrow();
+  });
+
   it("restores the complete previous update bundle", async () => {
     const workspaceDir = await tempDirs.make("openclaw-workspace-skill-write-update-");
     const skillDir = path.join(workspaceDir, "skills", "reversible-update");
@@ -84,13 +112,15 @@ describe("workspace skill mutations", () => {
       symlinkPolicy,
     });
     await expect(
-      applyWorkspaceSkillMutation(mutation, async (file) => {
-        const targetPath = path.join(file.rootDir, file.relativePath);
-        await fs.mkdir(path.dirname(targetPath), { recursive: true });
-        await fs.writeFile(targetPath, file.content, "utf8");
-        if (targetPath === supportFile) {
-          throw new Error("injected post-commit write failure");
-        }
+      applyWorkspaceSkillMutation(mutation, {
+        writeFile: async (file) => {
+          const targetPath = path.join(file.rootDir, file.relativePath);
+          await fs.mkdir(path.dirname(targetPath), { recursive: true });
+          await fs.writeFile(targetPath, file.content, "utf8");
+          if (targetPath === supportFile) {
+            throw new Error("injected post-commit write failure");
+          }
+        },
       }),
     ).rejects.toThrow("injected post-commit write failure");
     await expect(fs.access(skillFile)).rejects.toThrow();
@@ -116,13 +146,15 @@ describe("workspace skill mutations", () => {
       symlinkPolicy,
     });
     await expect(
-      applyWorkspaceSkillMutation(mutation, async (file) => {
-        const targetPath = path.join(file.rootDir, file.relativePath);
-        await fs.mkdir(path.dirname(targetPath), { recursive: true });
-        await fs.writeFile(targetPath, file.content, "utf8");
-        if (targetPath === skillFile) {
-          throw new Error("injected post-commit write failure");
-        }
+      applyWorkspaceSkillMutation(mutation, {
+        writeFile: async (file) => {
+          const targetPath = path.join(file.rootDir, file.relativePath);
+          await fs.mkdir(path.dirname(targetPath), { recursive: true });
+          await fs.writeFile(targetPath, file.content, "utf8");
+          if (targetPath === skillFile) {
+            throw new Error("injected post-commit write failure");
+          }
+        },
       }),
     ).rejects.toThrow("injected post-commit write failure");
     await expect(isWorkspaceSkillMutationRestored(mutation)).resolves.toBe(true);

@@ -240,6 +240,7 @@ export async function writeSkillProposal(params: {
   ownerAgentId?: string;
   maxPending: number;
   event: NewSkillProposalEvent;
+  assertMutationAuthorized?: () => void;
   store?: SkillWorkshopStoreOptions;
 }): Promise<SkillProposalEvent> {
   assertProposalId(params.record.id);
@@ -248,6 +249,9 @@ export async function writeSkillProposal(params: {
   await stageSkillProposalGeneration(params);
 
   try {
+    // Generation staging is asynchronous. Revalidate at the owner of the durable
+    // effect so a run that closes while staging cannot commit a proposal row.
+    params.assertMutationAuthorized?.();
     return runOpenClawStateWriteTransaction(
       ({ db }) => {
         const kysely = getNodeSqliteKysely<SkillWorkshopDatabase>(db);

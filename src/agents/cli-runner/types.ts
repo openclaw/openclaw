@@ -42,7 +42,7 @@ import type { PluginHookChannelContext } from "../../plugins/hook-types.js";
 import type { SpawnSecretInput } from "../../process/supervisor/types.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
-import type { SkillSnapshot } from "../../skills/types.js";
+import type { ExplicitSkillSelection, SkillSnapshot } from "../../skills/types.js";
 import type { SkillWorkshopProposalRevisionConstraint } from "../../skills/workshop/types.js";
 import type { AdmittedRunContext, PreparedAgentRunAdmission } from "../admitted-run-context.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
@@ -233,6 +233,8 @@ export type RunCliAgentParams = {
   /** Ordered facts represented by attachment text in the current prompt. */
   media?: MediaFact[];
   skillsSnapshot?: SkillSnapshot;
+  /** Resolver-owned explicit selections frozen before runtime dispatch. */
+  explicitSkillSelections?: ExplicitSkillSelection[];
   messageChannel?: string;
   messageProvider?: string;
   /** Capabilities declared by the gateway client that originated this run. */

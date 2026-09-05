@@ -252,6 +252,46 @@ describe("skill workshop proposals", () => {
     });
   });
 
+  it("does not persist an update proposal when authority closes during generation staging", async () => {
+    const workspaceDir = await makeWorkspace();
+    const skillDir = path.join(workspaceDir, "skills", "revoked-proposal");
+    const skillFile = path.join(skillDir, "SKILL.md");
+    await writeSkill({
+      dir: skillDir,
+      name: "revoked-proposal",
+      description: "Keep the original skill when proposal authority closes",
+      body: "# Revoked Proposal\n\nOriginal body.\n",
+    });
+    let authorized = true;
+    let checks = 0;
+
+    await expect(
+      proposeUpdateSkill({
+        workspaceDir,
+        env: testEnv,
+        skillName: "revoked-proposal",
+        content: "# Revoked Proposal\n\nForbidden replacement.\n",
+        assertMutationAuthorized: () => {
+          checks += 1;
+          if (checks === 1) {
+            queueMicrotask(() => {
+              authorized = false;
+            });
+          }
+          if (!authorized) {
+            throw new Error("admitted authority closed during proposal staging");
+          }
+        },
+      }),
+    ).rejects.toThrow("admitted authority closed during proposal staging");
+
+    expect(checks).toBe(2);
+    await expect(listSkillProposals({ workspaceDir, env: testEnv })).resolves.toMatchObject({
+      proposals: [],
+    });
+    await expect(fs.readFile(skillFile, "utf8")).resolves.toContain("Original body.");
+  });
+
   it("lets only an operator apply an update to a user-authored skill", async () => {
     const workspaceDir = await makeWorkspace();
     const skillDir = path.join(workspaceDir, "skills", "handwritten");

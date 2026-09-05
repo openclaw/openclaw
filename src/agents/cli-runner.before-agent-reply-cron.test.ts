@@ -7,25 +7,35 @@ import {
   withAgentRunLifecycleGeneration,
 } from "../infra/agent-events.js";
 import {
+  claimAgentRunDelegatedAuthority,
+  releaseAgentRunDelegatedAuthority,
+  type AgentRunDelegatedAuthority,
+} from "../infra/agent-run-registry.js";
+import {
   onTrustedInternalDiagnosticEvent,
   resetDiagnosticEventsForTest,
   type DiagnosticEventPayload,
 } from "../infra/diagnostic-events.js";
 import type { HookRunner } from "../plugins/hooks.js";
+import type { OperationalRunInstanceRef } from "./admitted-run-context.js";
 import { wrapRunWithTestPreparedAdmission } from "./admitted-run-context.test-support.js";
 import { getOrCreateSessionMcpRuntime } from "./agent-bundle-mcp-manager.test-support.js";
 import { testing as cliBackendsTesting } from "./cli-backends.test-support.js";
 import type { CliOutput } from "./cli-output-contracts.js";
+import {
+  hasStubSkillReceipt,
+  readStubRunInstance,
+  selectedSkillFile,
+  skillsSnapshot,
+  type StubPreparedContext,
+  unselectedSkillFile,
+} from "./cli-runner.skill-selection.test-support.js";
 import { CliAuthProfilePreparationError } from "./cli-runner/auth-profile-preparation-error.js";
 import { cliBackendLog } from "./cli-runner/log.js";
 import { FailoverError } from "./failover-error.js";
 
-// vi.mock factories are hoisted above imports, so any references inside them
-// must come from vi.hoisted() so they exist at hoist time (otherwise they'd
-// be TDZ-undefined and the mocks would silently misbehave). This test only
-// exercises the hook-gate decision at the runCliAgent entry point — we mock
-// the prepareCliRunContext + executePreparedCliRun seams so no broader CLI
-// runtime needs to load.
+// Hoisted mock factories may only capture vi.hoisted values. This focused seam
+// mocks preparation and execution so the broad CLI runtime does not load.
 type BeforeAgentReplyResult =
   | undefined
   | {
@@ -117,6 +127,7 @@ type TestRunCliAgent = (
 let runCliAgent: TestRunCliAgent;
 let restoreCliRunnerTestDeps: typeof import("./cli-runner.js").restoreCliRunnerTestDeps;
 let setCliRunnerTestDeps: typeof import("./cli-runner.js").setCliRunnerTestDeps;
+const delegatedAuthorities: AgentRunDelegatedAuthority[] = [];
 
 async function captureRejectedClaudeRun(
   params: Parameters<typeof runCliAgent>[0],
@@ -141,10 +152,22 @@ async function captureRejectedClaudeRun(
   return { error, events };
 }
 
-function makeStubContext(params: typeof baseRunParams & { trigger?: string }) {
+function makeStubContext(
+  params: typeof baseRunParams & {
+    trigger?: string;
+    admittedRunContext?: { operationalRunInstance: OperationalRunInstanceRef };
+    preparedRunAdmission?: { operationalRunInstance: OperationalRunInstanceRef };
+  },
+) {
   // Stub only the prepared context shape runCliAgent needs after the hook gate.
+  const operationalRunInstance =
+    params.admittedRunContext?.operationalRunInstance ??
+    params.preparedRunAdmission?.operationalRunInstance;
+  if (!operationalRunInstance) {
+    throw new Error("stub CLI preparation requires run admission");
+  }
   return {
-    params,
+    params: { ...params, admittedRunContext: { operationalRunInstance } },
     started: Date.now(),
     workspaceDir: params.workspaceDir,
     modelId: params.model,
@@ -168,9 +191,11 @@ beforeEach(() => {
   executePreparedCliRunMock.mockReset();
   executePreparedCliRunMock.mockResolvedValue({ text: "" });
   prepareCliRunContextMock.mockReset();
-  prepareCliRunContextMock.mockImplementation(async (params) =>
-    makeStubContext(params as typeof baseRunParams & { trigger?: string }),
-  );
+  prepareCliRunContextMock.mockImplementation(async (params) => {
+    const context = makeStubContext(params as typeof baseRunParams & { trigger?: string });
+    delegatedAuthorities.push(claimAgentRunDelegatedAuthority(readStubRunInstance(context)));
+    return context;
+  });
   closeCliSessionMock.mockReset();
   closeMcpLoopbackServerMock.mockReset();
   retireSessionMcpRuntimeForSessionKeyMock.mockReset();
@@ -194,6 +219,7 @@ beforeAll(async () => {
 });
 
 afterEach(() => {
+  delegatedAuthorities.splice(0).forEach(releaseAgentRunDelegatedAuthority);
   restoreCliRunnerTestDeps();
   cliBackendsTesting.resetDepsForTest();
   vi.clearAllMocks();
@@ -201,6 +227,53 @@ afterEach(() => {
 });
 
 describe("runCliAgent before_agent_reply seam", () => {
+  it("arms only the selected workspace skill during a configured CLI run", async () => {
+    const runId = "cli-explicit-selection";
+    let operationalRunInstance: OperationalRunInstanceRef | undefined;
+    executePreparedCliRunMock.mockImplementationOnce(async (context) => {
+      operationalRunInstance = readStubRunInstance(context);
+      expect(hasStubSkillReceipt(operationalRunInstance, selectedSkillFile)).toBe(true);
+      expect(hasStubSkillReceipt(operationalRunInstance, unselectedSkillFile)).toBe(false);
+      return { text: "done" };
+    });
+
+    await runCliAgent({
+      ...baseRunParams,
+      runId,
+      skillsSnapshot,
+      explicitSkillSelections: [{ name: "selected", path: selectedSkillFile }],
+    });
+
+    expect(hasStubSkillReceipt(operationalRunInstance, selectedSkillFile)).toBe(false);
+  });
+
+  it("revokes a failed CLI receipt before the same run ID is reused without a selection", async () => {
+    const runId = "cli-failed-selection-reuse";
+    let failedRunInstance: OperationalRunInstanceRef | undefined;
+    executePreparedCliRunMock.mockImplementationOnce(async (context) => {
+      failedRunInstance = readStubRunInstance(context);
+      expect(hasStubSkillReceipt(failedRunInstance, selectedSkillFile)).toBe(true);
+      throw new Error("backend failed after receipt");
+    });
+
+    await expect(
+      runCliAgent({
+        ...baseRunParams,
+        runId,
+        skillsSnapshot,
+        explicitSkillSelections: [{ name: "selected", path: selectedSkillFile }],
+      }),
+    ).rejects.toThrow("backend failed after receipt");
+    expect(hasStubSkillReceipt(failedRunInstance, selectedSkillFile)).toBe(false);
+
+    executePreparedCliRunMock.mockImplementationOnce(async (context) => {
+      const replacementInstance = readStubRunInstance(context);
+      expect(hasStubSkillReceipt(replacementInstance, selectedSkillFile)).toBe(false);
+      return { text: "unselected run" };
+    });
+    await runCliAgent({ ...baseRunParams, runId, skillsSnapshot });
+  });
+
   it.each([
     ["claude-cli", "user"],
     ["google-gemini-cli", "cron"],
@@ -302,18 +375,21 @@ describe("runCliAgent before_agent_reply seam", () => {
         [profileId]: { cooldownUntil: Date.now() + 60_000, cooldownReason: "session_expired" },
       },
     };
-    prepareCliRunContextMock.mockImplementationOnce(async (params) => ({
-      ...(makeStubContext(params as typeof baseRunParams & { trigger?: string }) as object),
-      effectiveAuthProfileId: profileId,
-      authProfileStore: store,
-      agentDir: "/tmp/agent",
-      openClawHistoryPrompt: "history",
-      reusableCliSession: { mode: "reuse", sessionId: "stale-session" },
-      params: {
-        ...(params as typeof baseRunParams),
-        onBeforeFreshCliSessionRetry: vi.fn(async () => true),
-      },
-    }));
+    prepareCliRunContextMock.mockImplementationOnce(async (params) => {
+      const context = makeStubContext(params as typeof baseRunParams & { trigger?: string });
+      return {
+        ...(context as object),
+        effectiveAuthProfileId: profileId,
+        authProfileStore: store,
+        agentDir: "/tmp/agent",
+        openClawHistoryPrompt: "history",
+        reusableCliSession: { mode: "reuse", sessionId: "stale-session" },
+        params: {
+          ...(context as StubPreparedContext).params,
+          onBeforeFreshCliSessionRetry: vi.fn(async () => true),
+        },
+      };
+    });
     executePreparedCliRunMock
       .mockRejectedValueOnce(
         new FailoverError("stale session", {

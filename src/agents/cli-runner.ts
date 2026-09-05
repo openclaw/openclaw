@@ -82,6 +82,7 @@ import {
   runAgentHarnessLlmInputHook,
   runAgentHarnessLlmOutputHook,
 } from "./harness/lifecycle-hook-helpers.js";
+import { recordExplicitSkillSelectionsForRun } from "./skill-selection-usage.js";
 
 const log = createSubsystemLogger("agents/cli-runner");
 const cliRunnerDeps = cliRunSettlementDeps;
@@ -234,6 +235,13 @@ async function runCliAgentInternal(
     await settleCliPreparationError(error, params);
     throw error;
   }
+  // Preparation freezes the CLI tool surface. Record only after it succeeds,
+  // then retain the receipt through the runner's internal recovery attempts.
+  recordExplicitSkillSelectionsForRun({
+    operationalRunInstance: context.params.admittedRunContext.operationalRunInstance,
+    selections: context.params.explicitSkillSelections,
+    skillsSnapshot: context.params.skillsSnapshot,
+  });
   return await settlePreparedCliRun({
     context,
     diagnosticLifecycle,

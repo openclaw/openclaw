@@ -3,6 +3,15 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import {
+  claimAgentRunDelegatedAuthority,
+  releaseAgentRunDelegatedAuthority,
+} from "../../infra/agent-run-registry.js";
+import {
+  bindWorkspaceSkillUsage,
+  consumeRunSkillUsage,
+  discardRunWorkspaceSkillUsage,
+} from "../../skills/runtime/run-usage.js";
+import {
   prepareSystemAgentRunAdmission,
   type AdmittedRunContext,
 } from "../admitted-run-context.js";
@@ -20,6 +29,10 @@ const mocks = vi.hoisted(() => ({
   runAttempt: vi.fn(),
   settleRequesterAfterSessionSpawns: vi.fn(),
 }));
+
+function hasRunWorkspaceSkillUsage(params: Parameters<typeof bindWorkspaceSkillUsage>[0]): boolean {
+  return bindWorkspaceSkillUsage(params)?.() === true;
+}
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 vi.mock("../delegation-capability.js", () => ({
@@ -159,6 +172,7 @@ function makeDispatchInput(
 describe("embedded run retry dispatch", () => {
   let admission: ReturnType<typeof prepareSystemAgentRunAdmission>;
   beforeEach(async () => {
+    consumeRunSkillUsage("run-1");
     mocks.runAttempt.mockReset().mockResolvedValue({ terminal: { kind: "ok" } });
     mocks.settleRequesterAfterSessionSpawns.mockReset();
     admission = prepareSystemAgentRunAdmission({}, "run-1", "main", "dispatch-test");
@@ -193,6 +207,78 @@ describe("embedded run retry dispatch", () => {
       expect(mocks.runAttempt).toHaveBeenCalledTimes(1);
       expect(mocks.runAttempt.mock.calls[0]?.[0]).toEqual(result.preparedAttempt);
       expect(mocks.runAttempt.mock.calls[0]?.[1]).toBeUndefined();
+    },
+  );
+
+  it.each(["openclaw", "codex", "third-party"])(
+    "records only snapshot-matched explicit skill selections for the admitted %s run",
+    async (agentHarnessId) => {
+      const skillFile = "/tmp/workspace/skills/release/SKILL.md";
+      const bundledSkillFile = "/tmp/bundled/skills/lint/SKILL.md";
+      const input = makeDispatchInput({}, createEmbeddedRunReplayState());
+      const runAdmission = input.params.admittedRunContext;
+      if (!runAdmission) {
+        throw new Error("expected admitted run context");
+      }
+      const operationalRunInstance = runAdmission.operationalRunInstance;
+      const authority = claimAgentRunDelegatedAuthority(operationalRunInstance);
+      input.runtime.agentHarnessId = agentHarnessId;
+      input.params.explicitSkillSelections = [
+        { name: "release_alias", path: skillFile },
+        { name: "spoofed_workspace", path: bundledSkillFile },
+        { name: "unmatched", path: "/tmp/workspace/skills/unmatched/SKILL.md" },
+      ];
+      input.params.skillsSnapshot = {
+        prompt: "",
+        skills: [],
+        resolvedSkillCommands: [
+          {
+            selectionPath: skillFile,
+            skillFile,
+            skillName: "release",
+            skillSource: "workspace",
+          },
+          {
+            selectionPath: bundledSkillFile,
+            skillFile: bundledSkillFile,
+            skillName: "lint",
+            skillSource: "bundled",
+          },
+        ],
+      };
+
+      await dispatchEmbeddedRunAttempt(input);
+      await dispatchEmbeddedRunAttempt(input);
+
+      expect(
+        hasRunWorkspaceSkillUsage({
+          operationalRunInstance,
+          skillFile,
+        }),
+      ).toBe(true);
+      expect(
+        hasRunWorkspaceSkillUsage({
+          operationalRunInstance,
+          skillFile: bundledSkillFile,
+        }),
+      ).toBe(false);
+      expect(
+        hasRunWorkspaceSkillUsage({
+          operationalRunInstance,
+          skillFile: "/tmp/workspace/skills/unmatched/SKILL.md",
+        }),
+      ).toBe(false);
+      expect(consumeRunSkillUsage("run-1")).toEqual([
+        { name: "release", source: "workspace", activation: "command", skillFile },
+        {
+          name: "lint",
+          source: "bundled",
+          activation: "command",
+          skillFile: bundledSkillFile,
+        },
+      ]);
+      discardRunWorkspaceSkillUsage(operationalRunInstance);
+      releaseAgentRunDelegatedAuthority(authority);
     },
   );
 

@@ -269,6 +269,8 @@ export type SkillProposalUpdateInput = {
   origin?: SkillProposalOrigin;
   goal?: string;
   evidence?: string;
+  /** Runtime-only final authority check invoked at the proposal persistence boundary. */
+  assertMutationAuthorized?: () => void;
 };
 
 export type SkillProposalReviseInput = {
@@ -298,6 +300,8 @@ export type SkillProposalActionInput = {
   expectedRevisionHash?: string;
   correlationId?: string;
   reason?: string;
+  /** Runtime-only final authority check invoked at the live artifact persistence boundary. */
+  assertMutationAuthorized?: () => void;
 };
 
 export type SkillProposalEvaluateInput = {

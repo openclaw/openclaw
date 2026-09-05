@@ -185,13 +185,17 @@ export function projectCanonicalSessionEntryShape(value: Record<string, unknown>
   return canonicalValue as unknown as SessionEntry;
 }
 
-/** Removes the runtime-only skill catalog without mutating the live session snapshot. */
+/** Removes runtime-only skill catalogs without mutating the live session snapshot. */
 export function stripRuntimeOnlySessionSkillsFields(entry: SessionEntry): SessionEntry {
   const snapshot = entry.skillsSnapshot;
-  if (snapshot?.resolvedSkills === undefined) {
+  if (snapshot?.resolvedSkills === undefined && snapshot?.resolvedSkillCommands === undefined) {
     return entry;
   }
-  const { resolvedSkills: _drop, ...skillsSnapshot } = snapshot;
+  const {
+    resolvedSkills: _dropResolvedSkills,
+    resolvedSkillCommands: _dropResolvedSkillCommands,
+    ...skillsSnapshot
+  } = snapshot;
   return { ...entry, skillsSnapshot };
 }
 

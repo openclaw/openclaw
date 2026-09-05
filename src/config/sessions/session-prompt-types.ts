@@ -1,4 +1,5 @@
 import type { Skill } from "../../skills/loading/skill-contract.js";
+import type { ResolvedSkillCommand } from "../../skills/types.js";
 
 export type SessionSkillPromptRef = {
   version: 1;
@@ -25,5 +26,7 @@ export type SessionSkillSnapshot = {
    * src/skills/runtime/embedded-run-entries.ts rebuilds it from disk.
    */
   resolvedSkills?: Skill[];
+  /** Runtime-only command identities, hydrated with resolvedSkills and never persisted. */
+  resolvedSkillCommands?: ResolvedSkillCommand[];
   version?: number;
 };

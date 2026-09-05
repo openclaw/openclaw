@@ -15,9 +15,11 @@ import {
 } from "../../test-utils/openclaw-test-state.js";
 import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
 import { createSkillWorkshopTool } from "./skill-workshop-tool.js";
+import { createTrackedSkillWorkshopRunAuthorities } from "./skill-workshop-tool.test-support.js";
 
 const tempDirs = createTrackedTempDirs();
 let testState: OpenClawTestState;
+const runAuthorities = createTrackedSkillWorkshopRunAuthorities();
 
 beforeEach(async () => {
   testState = await createOpenClawTestState({
@@ -27,6 +29,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  runAuthorities.cleanup();
   await testState.cleanup();
   await tempDirs.cleanup();
 });
@@ -58,6 +61,7 @@ describe("skill_workshop review mode", () => {
   it("keeps an autonomous foreground repair pending for a user-authored skill", async () => {
     const workspaceDir = await tempDirs.make("openclaw-skill-workshop-user-repair-");
     const runId = "user-authored-repair";
+    const operationalRunInstance = runAuthorities.admit(runId);
     const skillName = "operator-runbook";
     const skillFile = path.join(workspaceDir, "skills", skillName, "SKILL.md");
     await writeWorkspaceSkills(workspaceDir, [
@@ -67,14 +71,17 @@ describe("skill_workshop review mode", () => {
         body: `# Operator Runbook\n\n${"Detailed operator step.\n".repeat(200)}Check the old prerequisite.\n`,
       },
     ]);
-    const tool = createSkillWorkshopTool({
-      workspaceDir,
-      config: { skills: { workshop: { autonomous: { mode: "auto" } } } },
-      env: testState.env,
-      agentId: "main",
-      origin: { agentId: "main", runId },
-      modelContextWindowTokens: 8_192,
-    });
+    const tool = runAuthorities.bind(
+      createSkillWorkshopTool({
+        workspaceDir,
+        config: { skills: { workshop: { autonomous: { mode: "auto" } } } },
+        env: testState.env,
+        agentId: "main",
+        origin: { agentId: "main", runId },
+        modelContextWindowTokens: 8_192,
+      }),
+      operationalRunInstance,
+    );
     const read = await tool.execute("user-repair-read", {
       action: "read",
       skill_name: skillName,
@@ -87,6 +94,7 @@ describe("skill_workshop review mode", () => {
     });
     recordRunSkillUsage({
       runId,
+      operationalRunInstance,
       name: skillName,
       source: "workspace",
       activation: "read",

@@ -21,6 +21,7 @@ export async function applyAutonomousSkillProposal(params: {
   eventActor?: Parameters<typeof applySkillProposal>[0]["eventActor"];
   proposal: AutonomousSkillProposal;
   reason: string;
+  assertMutationAuthorized?: () => void;
 }): Promise<AutonomousSkillProposalResult> {
   const store = params.env ? { env: params.env } : {};
   // Decides pending-vs-apply only; the apply transition rechecks ownership under its commit lock.
@@ -46,6 +47,7 @@ export async function applyAutonomousSkillProposal(params: {
           updatedAt: new Date().toISOString(),
           statusReason: USER_AUTHORED_PENDING_REASON,
         };
+        params.assertMutationAuthorized?.();
         await updateSkillProposalRecord({ record: pending, store });
         return pending;
       },
@@ -62,6 +64,9 @@ export async function applyAutonomousSkillProposal(params: {
     proposalId: params.proposal.record.id,
     expectedRevisionHash: params.proposal.revisionHash,
     reason: params.reason,
+    ...(params.assertMutationAuthorized
+      ? { assertMutationAuthorized: params.assertMutationAuthorized }
+      : {}),
   });
   return { status: "applied", ...applied };
 }

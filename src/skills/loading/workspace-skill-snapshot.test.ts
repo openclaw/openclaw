@@ -387,6 +387,11 @@ describe("buildSkillSnapshot", () => {
     expect(snapshot.prompt).not.toContain("hidden-skill");
     expect(snapshot.skills.map((skill) => skill.name)).toContain("hidden-skill");
     expect(snapshot.skills.map((skill) => skill.name)).toContain("visible-skill");
+    expect(snapshot.resolvedSkills?.map((skill) => skill.name)).toEqual(["visible-skill"]);
+    expect(snapshot.resolvedSkillCommands?.map((command) => command.skillName)).toEqual([
+      "hidden-skill",
+      "visible-skill",
+    ]);
   });
 
   it("keeps prompt output stable across equivalent snapshot builds", async () => {

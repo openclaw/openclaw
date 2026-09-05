@@ -20,6 +20,7 @@ import {
   createUserTurnTranscriptRecorder,
   type UserTurnTranscriptRecorder,
 } from "../sessions/user-turn-transcript.js";
+import type { SkillCommandSpec } from "../skills/types.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
@@ -137,7 +138,13 @@ const state = vi.hoisted(() => ({
   resolveThinkingDefaultMock: vi.fn((_args: unknown) => "low"),
   loadManifestModelCatalogMock: vi.fn((): ModelCatalogSnapshot["entries"] => []),
   resolvePluginMetadataSnapshotMock: vi.fn(),
-  listSkillCommandsForWorkspaceMock: vi.fn((_params: unknown) => []),
+  listSkillCommandsForWorkspaceMock: vi.fn((_params: unknown): SkillCommandSpec[] => []),
+  expandExplicitSkillReferencesMock: vi.fn(
+    ({ text }: { text: string }): { body: string; skills: SkillCommandSpec[] } => ({
+      body: text,
+      skills: [],
+    }),
+  ),
   loadProviderScopedThinkingCatalogMock: vi.fn(
     async (_params: unknown): Promise<ModelCatalogSnapshot["entries"] | undefined> => undefined,
   ),
@@ -422,7 +429,8 @@ vi.mock("../plugins/plugin-metadata-snapshot.js", async (importOriginal) => {
 });
 
 vi.mock("../skills/discovery/chat-commands.runtime.js", () => ({
-  expandExplicitSkillReferences: ({ text }: { text: string }) => ({ body: text, skills: [] }),
+  expandExplicitSkillReferences: (params: unknown) =>
+    state.expandExplicitSkillReferencesMock(params as { text: string }),
   hasSkillReferenceCandidate: () => true,
   listSkillCommandsForWorkspace: (params: unknown) =>
     state.listSkillCommandsForWorkspaceMock(params),
@@ -1031,6 +1039,10 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     state.resolveAgentSkillsFilterMock.mockReturnValue(undefined);
     state.loadManifestModelCatalogMock.mockReturnValue([]);
     state.resolvePluginMetadataSnapshotMock.mockReturnValue(manifestMetadataSnapshot);
+    state.expandExplicitSkillReferencesMock.mockImplementation(({ text }: { text: string }) => ({
+      body: text,
+      skills: [],
+    }));
     state.loadProviderScopedThinkingCatalogMock.mockReset().mockResolvedValue(undefined);
     state.loadFullModelCatalogMock.mockClear();
     state.loadPreparedModelCatalogSnapshotMock.mockResolvedValue({
@@ -1231,6 +1243,31 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       expect.objectContaining({ pluginMetadataSnapshot: manifestMetadataSnapshot }),
     );
     expect(state.resolvePluginMetadataSnapshotMock).not.toHaveBeenCalled();
+  });
+
+  it("carries CLI-resolved explicit skill selections into the embedded attempt", async () => {
+    const skillFile = "/tmp/workspace/skills/receipt-proof/SKILL.md";
+    const skill = {
+      name: "receipt-proof",
+      skillName: "receipt-proof",
+      skillFile,
+      description: "Receipt proof",
+    };
+    state.listSkillCommandsForWorkspaceMock.mockReturnValue([skill]);
+    state.expandExplicitSkillReferencesMock.mockReturnValue({
+      body: "expanded receipt-proof prompt",
+      skills: [skill],
+    });
+    setupSuccessfulAttempt();
+
+    await agentCommand({
+      message: "$receipt-proof apply the repair",
+      to: "+1234567890",
+    });
+
+    expectRecordFields(mockCallArg(state.runAgentAttemptMock), {
+      explicitSkillSelections: [{ name: "receipt-proof", path: skillFile }],
+    });
   });
 
   it("retries with the switched provider/model when LiveSessionModelSwitchError is thrown", async () => {

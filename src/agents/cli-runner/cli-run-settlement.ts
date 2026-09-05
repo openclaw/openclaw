@@ -3,6 +3,10 @@ import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
+  discardRunSkillUsage,
+  discardRunWorkspaceSkillUsage,
+} from "../../skills/runtime/run-usage.js";
+import {
   externalCliDiscoveryForProviderAuth,
   loadAuthProfileStoreForRuntime,
   markAuthProfileFailure,
@@ -174,6 +178,10 @@ export async function settlePreparedCliRun(params: {
   } catch (error) {
     runError = error;
   }
+  // The CLI runner owns recovery for this logical execution. Revoke only after
+  // recovery settles, before fallible cleanup can leave reusable run IDs armed.
+  discardRunSkillUsage(runParams.runId);
+  discardRunWorkspaceSkillUsage(runParams.admittedRunContext.operationalRunInstance);
   const terminalRunError = runError;
   let cleanupError: unknown;
   const recordCleanupError = (error: unknown) => {

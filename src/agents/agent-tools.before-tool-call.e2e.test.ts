@@ -13,6 +13,10 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { GatewayClientRequestError } from "../gateway/client.js";
 import { createAbortError } from "../infra/abort-signal.js";
 import {
+  claimAgentRunDelegatedAuthority,
+  releaseAgentRunDelegatedAuthority,
+} from "../infra/agent-run-registry.js";
+import {
   onInternalDiagnosticEvent,
   onDiagnosticEvent,
   onTrustedInternalDiagnosticEvent,
@@ -42,9 +46,14 @@ import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { setPluginToolMeta } from "../plugins/tool-metadata.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { consumeRunSkillUsage } from "../skills/runtime/run-usage.js";
+import {
+  bindWorkspaceSkillUsage,
+  consumeRunSkillUsage,
+  discardRunWorkspaceSkillUsage,
+} from "../skills/runtime/run-usage.js";
 import { createCanonicalFixtureSkill } from "../skills/test-support/test-helpers.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
+import { createOperationalRunInstanceRef } from "./admitted-run-context.js";
 import {
   getBeforeToolCallFailureDisposition,
   getBeforeToolCallPolicyDiagnosticState,
@@ -54,7 +63,12 @@ import {
 import { createOpenClawCodingTools } from "./agent-tools.js";
 import { createExecTool } from "./bash-tools.exec-run.js";
 import { createWriteTool } from "./sessions/index.js";
+
+function hasRunWorkspaceSkillUsage(params: Parameters<typeof bindWorkspaceSkillUsage>[0]): boolean {
+  return bindWorkspaceSkillUsage(params)?.() === true;
+}
 import type { AnyAgentTool } from "./tools/common.js";
+import { wrapToolWithGatewayCallerIdentity } from "./tools/gateway-caller-context.js";
 import { callGatewayTool } from "./tools/gateway.js";
 
 const CRITICAL_THRESHOLD = 20;
@@ -1540,27 +1554,32 @@ describe("before_tool_call loop detection behavior", () => {
     const skillBaseDir = path.join(workspaceDir, ".agents", "skills", "demo-skill");
     const skillFilePath = path.join(skillBaseDir, "SKILL.md");
     const execute = vi.fn().mockResolvedValue({ content: [{ type: "text", text: "skill" }] });
-    const tool = wrapToolWithBeforeToolCallHook(asAgentTool({ name: "read", execute }), {
-      agentId: "main",
-      sessionKey: "session-key",
-      sessionId: "session-id",
-      runId: "run-1",
-      workspaceDir,
-      skillsSnapshot: {
-        prompt: "",
-        skills: [{ name: "demo-skill" }],
-        resolvedSkills: [
-          createCanonicalFixtureSkill({
-            name: "demo-skill",
-            description: "Demo",
-            filePath: skillFilePath,
-            baseDir: skillBaseDir,
-            source: "workspace",
-          }),
-        ],
-      },
-      loopDetection: { enabled: false },
-    });
+    const operationalRunInstance = createOperationalRunInstanceRef("run-1");
+    const authority = claimAgentRunDelegatedAuthority(operationalRunInstance);
+    const tool = wrapToolWithGatewayCallerIdentity(
+      wrapToolWithBeforeToolCallHook(asAgentTool({ name: "read", execute }), {
+        agentId: "main",
+        sessionKey: "session-key",
+        sessionId: "session-id",
+        runId: "run-1",
+        workspaceDir,
+        skillsSnapshot: {
+          prompt: "",
+          skills: [{ name: "demo-skill" }],
+          resolvedSkills: [
+            createCanonicalFixtureSkill({
+              name: "demo-skill",
+              description: "Demo",
+              filePath: skillFilePath,
+              baseDir: skillBaseDir,
+              source: "workspace",
+            }),
+          ],
+        },
+        loopDetection: { enabled: false },
+      }),
+      { agentId: "main", sessionKey: "session-key", operationalRunInstance },
+    );
 
     await withSkillUsageDiagnosticEvents(async (emitted, privateData, flush) => {
       await tool.execute(
@@ -1592,6 +1611,12 @@ describe("before_tool_call loop detection behavior", () => {
       expect(JSON.stringify(emitted)).not.toContain("SKILL.md");
       expect(JSON.stringify(emitted)).not.toContain(skillBaseDir);
       expect(privateData[0]?.skillUsage?.skillFile).toBe(skillFilePath);
+      expect(
+        hasRunWorkspaceSkillUsage({
+          operationalRunInstance,
+          skillFile: skillFilePath,
+        }),
+      ).toBe(true);
       expect(consumeRunSkillUsage("run-1")).toEqual([
         {
           name: "demo-skill",
@@ -1602,6 +1627,8 @@ describe("before_tool_call loop detection behavior", () => {
       ]);
       expect(consumeRunSkillUsage("run-1")).toEqual([]);
     });
+    discardRunWorkspaceSkillUsage(operationalRunInstance);
+    releaseAgentRunDelegatedAuthority(authority);
   });
 
   it("matches home-compacted skill instruction paths from prompts", async () => {

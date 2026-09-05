@@ -66,6 +66,15 @@ export type ExplicitSkillSelection = {
   path: string;
 };
 
+export type ResolvedSkillCommand = {
+  /** Canonical SKILL.md path carried by an admitted explicit selection. */
+  selectionPath: string;
+  /** Snapshot-time SKILL.md path used as the lifecycle and repair identity. */
+  skillFile: string;
+  skillName: string;
+  skillSource: SkillTelemetrySource;
+};
+
 export type SkillCommandSpec = {
   name: string;
   /** Human-readable skill title for display surfaces. */
@@ -145,6 +154,8 @@ export type SkillSnapshot = {
   /** Effective node-exec eligibility used to select connected node-hosted skills. */
   nodeSkillsEligibility?: SkillEligibilityContext["nodeSkills"];
   resolvedSkills?: Skill[];
+  /** Runtime-only identities for every eligible user-invocable workspace skill. */
+  resolvedSkillCommands?: ResolvedSkillCommand[];
   /** Present only when a session merges skills from distinct agent and execution roots. */
   skillRoots?: {
     agentWorkspaceDir: string;
