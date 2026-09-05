@@ -481,6 +481,7 @@ export async function spawnAcpDirect(
         resumeSessionId: params.resumeSessionId,
         runtimeOptions: runtimeOptionsResult.runtimeOptions,
         modelExplicit: runtimeOptionsResult.modelExplicit,
+        thinkingExplicit: runtimeOptionsResult.thinkingExplicit,
         cwd: runtimeCwd,
       });
       closeRuntimeOnFailure = initializedSession.initialized.closeRuntimeOnFailure;
