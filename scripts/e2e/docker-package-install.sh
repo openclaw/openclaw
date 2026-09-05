@@ -157,7 +157,8 @@ DOCKER_COMMAND_TIMEOUT="$DOCKER_RUN_TIMEOUT" docker_e2e_docker_run_cmd run -d \
     set -eu
     npm install -g /tmp/openclaw-current.tgz --no-fund --no-audit
     node /tmp/verify-fs-safe-native.mjs --package-root /usr/local/lib/node_modules/openclaw --mode require \
-      --allow-pre-native-contract "$OPENCLAW_ALLOW_PRE_NATIVE_FS_SAFE_CONTRACT"
+      --allow-pre-native-contract "$OPENCLAW_ALLOW_PRE_NATIVE_FS_SAFE_CONTRACT" \
+      --result-path /tmp/openclaw-fs-safe-result.json
     touch /tmp/openclaw-proof-ready
     exec sleep infinity
   ' >/dev/null
@@ -195,6 +196,14 @@ BUN_INSTALLED_VERSION="$(
   docker exec "$BUN_PROOF_CONTAINER" \
     node -p 'JSON.parse(require("node:fs").readFileSync("/tmp/openclaw-bun-proof.json", "utf8")).openclawVersion'
 )"
+MUSL_FS_SAFE_OUTCOME="$(
+  docker exec "$MUSL_PROOF_CONTAINER" \
+    node -p 'JSON.parse(require("node:fs").readFileSync("/tmp/openclaw-fs-safe-result.json", "utf8")).outcome'
+)"
+case "$MUSL_FS_SAFE_OUTCOME" in
+  native-verified | authorized-pre-native-omission) ;;
+  *) echo "unexpected musl fs-safe verifier outcome: $MUSL_FS_SAFE_OUTCOME" >&2; exit 1 ;;
+esac
 PACKAGE_VERSION="$(docker exec "$NPM_PROOF_CONTAINER" node -p "require('$NPM_PACKAGE_ROOT/package.json').version")"
 test "$PNPM_PACKAGE_VERSION" = "$PACKAGE_VERSION"
 for installed_version in "$NPM_INSTALLED_VERSION" "$PNPM_INSTALLED_VERSION" "$BUN_INSTALLED_VERSION"; do
@@ -219,7 +228,7 @@ node --import tsx "$ROOT_DIR/scripts/e2e/lib/docker-artifact-proof/write-identit
   --detail "npm:openclawPath=/usr/local/bin/openclaw" \
   --detail "npm:helpCommand=passed" \
   --detail "npm:nonRootExecution=passed" \
-  --detail "musl:fsSafeNative=passed" \
+  --detail "musl:fsSafeNativeOutcome=$MUSL_FS_SAFE_OUTCOME" \
   --detail "pnpm:installedPackageRoot=$PNPM_PACKAGE_ROOT" \
   --detail "pnpm:installedPackageVersion=$PNPM_PACKAGE_VERSION" \
   --detail "pnpm:openclawVersion=$PNPM_INSTALLED_VERSION" \

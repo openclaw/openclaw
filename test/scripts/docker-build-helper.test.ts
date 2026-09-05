@@ -6138,6 +6138,12 @@ source "$ROOT_DIR/scripts/lib/docker-e2e-logs.sh"
     ).toHaveLength(3);
     expect(packageRunner.match(/verify-fs-safe-native\.mjs[^\n]+--mode require/gu)).toHaveLength(3);
     expect(packageRunner).toContain("bash scripts/e2e/bun-global-install-smoke.sh");
+    expect(packageRunner).toContain("--result-path /tmp/openclaw-fs-safe-result.json");
+    expect(packageRunner).toContain(
+      'JSON.parse(require("node:fs").readFileSync("/tmp/openclaw-fs-safe-result.json", "utf8")).outcome',
+    );
+    expect(packageRunner).toContain('--detail "musl:fsSafeNativeOutcome=$MUSL_FS_SAFE_OUTCOME"');
+    expect(packageRunner).not.toContain('--detail "musl:fsSafeNative=passed"');
     expect(bunRunner).toContain(
       '--allow-pre-native-contract "$OPENCLAW_ALLOW_PRE_NATIVE_FS_SAFE_CONTRACT"',
     );

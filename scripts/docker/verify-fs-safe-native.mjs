@@ -9,6 +9,7 @@ import { pathToFileURL } from "node:url";
 function parseArgs(argv) {
   let allowPreNativeContract = false;
   let packageRoot;
+  let resultPath;
   let mode;
   for (let index = 0; index < argv.length; index += 2) {
     const key = argv[index];
@@ -20,6 +21,8 @@ function parseArgs(argv) {
       allowPreNativeContract = value === "1";
     } else if (key === "--package-root") {
       packageRoot = value;
+    } else if (key === "--result-path") {
+      resultPath = value;
     } else if (key === "--mode") {
       mode = value;
     } else {
@@ -28,10 +31,20 @@ function parseArgs(argv) {
   }
   if (!packageRoot || (mode !== "require" && mode !== "fallback")) {
     throw new Error(
-      "usage: verify-fs-safe-native.mjs --package-root <path> --mode <require|fallback> [--allow-pre-native-contract <0|1>]",
+      "usage: verify-fs-safe-native.mjs --package-root <path> --mode <require|fallback> [--allow-pre-native-contract <0|1>] [--result-path <path>]",
     );
   }
-  return { allowPreNativeContract, mode, packageRoot: path.resolve(packageRoot) };
+  return { allowPreNativeContract, mode, packageRoot: path.resolve(packageRoot), resultPath };
+}
+
+function writeResult(resultPath, outcome) {
+  if (!resultPath) {
+    return;
+  }
+  fs.mkdirSync(path.dirname(resultPath), { recursive: true });
+  const temporaryPath = `${resultPath}.${process.pid}.tmp`;
+  fs.writeFileSync(temporaryPath, `${JSON.stringify({ outcome }, null, 2)}\n`, "utf8");
+  fs.renameSync(temporaryPath, resultPath);
 }
 
 function nativeGeneration(version) {
@@ -87,7 +100,8 @@ function hasResolvablePackageEntry(packageRoot, packageName) {
   }
 }
 
-const { allowPreNativeContract, mode, packageRoot } = parseArgs(process.argv.slice(2));
+const { allowPreNativeContract, mode, packageRoot, resultPath } = parseArgs(process.argv.slice(2));
+void (resultPath && fs.rmSync(resultPath, { force: true }));
 const requireFromPackage = createRequire(path.join(packageRoot, "package.json"));
 const configPath = requireFromPackage.resolve("@openclaw/fs-safe/config");
 const {
@@ -137,6 +151,7 @@ if (!hasNativeConfiguration) {
     "pre-native fs-safe unexpectedly contains bundled native bindings",
   );
   console.log("Skipping fs-safe native proof: authorized package predates native bindings.");
+  writeResult(resultPath, "authorized-pre-native-omission");
   process.exit(0);
 }
 
@@ -231,3 +246,5 @@ try {
 } finally {
   await fsPromises.rm(temporaryRoot, { recursive: true, force: true });
 }
+
+writeResult(resultPath, mode === "require" ? "native-verified" : "fallback-verified");

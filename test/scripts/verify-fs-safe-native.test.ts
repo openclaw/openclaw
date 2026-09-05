@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -137,8 +137,9 @@ function createFixture(options: FixtureOptions = {}) {
 function runVerifier(
   packageRoot: string,
   options: { allowPreNative?: boolean; mode?: "fallback" | "require" } = {},
+  resultPath = path.join(tempDirs.make("openclaw-fs-safe-result-"), "result.json"),
 ) {
-  return spawnSync(
+  const result = spawnSync(
     process.execPath,
     [
       verifierPath,
@@ -148,9 +149,16 @@ function runVerifier(
       options.mode ?? "require",
       "--allow-pre-native-contract",
       options.allowPreNative ? "1" : "0",
+      "--result-path",
+      resultPath,
     ],
     { encoding: "utf8" },
   );
+  return Object.assign(result, { resultPath });
+}
+
+function readOutcome(resultPath: string): string {
+  return JSON.parse(readFileSync(resultPath, "utf8")).outcome;
 }
 
 describe("pre-native fs-safe packages", () => {
@@ -163,6 +171,7 @@ describe("pre-native fs-safe packages", () => {
 
       expect(result.status, result.stderr).toBe(0);
       expect(result.stdout).toContain("authorized package predates native bindings");
+      expect(readOutcome(result.resultPath)).toBe("authorized-pre-native-omission");
     },
   );
 
@@ -173,15 +182,18 @@ describe("pre-native fs-safe packages", () => {
 
     expect(result.status, result.stderr).toBe(0);
     expect(result.stdout).toContain("authorized package predates native bindings");
+    expect(readOutcome(result.resultPath)).toBe("authorized-pre-native-omission");
   });
 
   it.each(["0.3.0", "0.4.1"])("rejects version %s without authorization", (version) => {
     const fixture = createFixture({ version });
 
-    const result = runVerifier(fixture.packageRoot);
+    const authorized = runVerifier(fixture.packageRoot, { allowPreNative: true });
+    const result = runVerifier(fixture.packageRoot, {}, authorized.resultPath);
 
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain("requires explicit frozen-target authorization");
+    expect(existsSync(result.resultPath)).toBe(false);
   });
 
   it.each([
@@ -218,6 +230,7 @@ describe("bundled-native fs-safe packages", () => {
     const result = runVerifier(fixture.packageRoot);
 
     expect(result.status, result.stderr).toBe(0);
+    expect(readOutcome(result.resultPath)).toBe("native-verified");
   });
 
   it("rejects a bundled binding outside the installed fs-safe package", () => {
@@ -264,6 +277,7 @@ describe("split-package fs-safe packages", () => {
     const result = runVerifier(fixture.packageRoot);
 
     expect(result.status, result.stderr).toBe(0);
+    expect(readOutcome(result.resultPath)).toBe("native-verified");
   });
 
   it("accepts fallback mode when optional platform packages are absent", () => {
@@ -277,6 +291,7 @@ describe("split-package fs-safe packages", () => {
     const result = runVerifier(fixture.packageRoot, { mode: "fallback" });
 
     expect(result.status, result.stderr).toBe(0);
+    expect(readOutcome(result.resultPath)).toBe("fallback-verified");
   });
 
   it("accepts fallback with a dangling omitted platform package link", () => {
