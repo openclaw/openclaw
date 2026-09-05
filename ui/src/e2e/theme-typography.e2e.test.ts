@@ -244,7 +244,7 @@ suite.define(() => {
     async (theme, body, chat, faces, chatSmoothing) => {
       const timestamp = Date.now();
       const text =
-        "Typography carries the theme: chat prose renders in the reading face while chrome, chips, and code keep their own.";
+        "Typography carries the theme: chat prose renders in the reading face while chrome, chips, and `code` keep their own.";
       const { themeRequests, page } = await openThemedChat(theme, "dark", {
         historyMessages: [
           {
@@ -263,6 +263,12 @@ suite.define(() => {
       await expect
         .poll(() => page.locator(".chat-text").last().textContent())
         .toContain("Typography");
+
+      const code = page.locator(".chat-text").last().locator("code");
+      await code.waitFor({ state: "visible" });
+      expect(await code.evaluate((element) => getComputedStyle(element).fontFamily)).toMatch(
+        /^"?JetBrains Mono/u,
+      );
 
       const report = await page.evaluate(async () => {
         await document.fonts.ready;
@@ -304,7 +310,7 @@ suite.define(() => {
       // Serif chat faces opt out of the app-wide `antialiased` thinning
       // (applyChatFontSmoothing) so their hairlines stay crisp.
       expect(report.chatFontSmoothing).toBe(chatSmoothing);
-      // Mono glyphs on the page pull the always-declared JetBrains Mono face.
+      // The visible code specimen pulls the always-declared JetBrains Mono face.
       expect(new Set(report.loaded)).toEqual(new Set([body, chat, "JetBrains Mono"]));
       expect(themeRequests.every((entry) => entry.endsWith(" 200"))).toBe(true);
 
