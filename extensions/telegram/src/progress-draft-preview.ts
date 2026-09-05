@@ -145,13 +145,13 @@ function buildProgressRichBlocks(parts: RichText[]): InputRichBlock[] {
   return [paragraphBlock(joinRichText(parts, "\n"))];
 }
 
-function isStatusHeadlineWorkLine(
+function isStatusHeadlineVisibleLine(
   line: ChannelProgressDraftCompositorLine,
 ): line is Exclude<ChannelProgressDraftCompositorLine, string> {
   if (typeof line === "string") {
     return false;
   }
-  return !line.id?.startsWith("reasoning:") && !line.id?.startsWith("commentary:");
+  return !line.id?.startsWith("reasoning:");
 }
 
 export function renderTelegramProgressDraftPreview(
@@ -159,6 +159,7 @@ export function renderTelegramProgressDraftPreview(
   lines: readonly ChannelProgressDraftCompositorLine[],
   richMessages: boolean,
   statusHeadlineActive = false,
+  commentaryProgressEnabled = false,
 ): TelegramDraftPreview {
   const trimmed = text.trimEnd();
   if (statusHeadlineActive) {
@@ -166,8 +167,12 @@ export function renderTelegramProgressDraftPreview(
       .split(/\r?\n/u)
       .map((line) => line.trim())
       .filter(Boolean);
-    const workLines = lines.filter(isStatusHeadlineWorkLine);
-    const renderedLines = workLines.map(renderTelegramProgressLine).filter(Boolean);
+    // Only headline-only mode hides buffered reasoning. Commentary history keeps
+    // its reasoning rows even when a preamble supplies the headline.
+    const visibleLines = commentaryProgressEnabled
+      ? lines
+      : lines.filter(isStatusHeadlineVisibleLine);
+    const renderedLines = visibleLines.map(renderTelegramProgressLine).filter(Boolean);
     if (!richMessages) {
       const renderedStatusLines =
         statusLines.length > 1
@@ -182,11 +187,11 @@ export function renderTelegramProgressDraftPreview(
       statusLines.length > 1
         ? [boldRichText(statusLines[0] ?? ""), ...statusLines.slice(1).map(markdownLineToRichText)]
         : statusLines.map(markdownLineToRichText);
-    const richLineParts = workLines
+    const richLineParts = visibleLines
       .map(progressLineToRichText)
       .filter((part): part is RichText => part !== undefined);
-    const plainLineTexts = workLines
-      .map((line) => line.text)
+    const plainLineTexts = visibleLines
+      .map((line) => (typeof line === "string" ? line : line.text))
       .map((line) => line.trim())
       .filter(Boolean);
     const plainText = [...statusLines, ...plainLineTexts].join("\n");

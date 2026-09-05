@@ -108,6 +108,7 @@ export function createProgressState(
           options?.lines ?? [],
           config.telegramCfg.richMessages === true,
           progressCompositor.hasStatusHeadline || progressCompositor.hasPlanProgress,
+          progressCompositor.commentaryProgressEnabled,
         ),
       );
       if (options?.flush) {
@@ -258,12 +259,17 @@ export async function handleItemEvent(
     if (turn.streamMode === "progress") {
       rendered = await turn.progressCompositor.pushPreambleHeadline(payload.progressText, {
         itemId: payload.itemId,
+        deferRender: turn.progressCompositor.commentaryProgressEnabled,
       });
     }
     if (turn.streamMode === "progress" && turn.progressCompositor.commentaryProgressEnabled) {
-      rendered ||= await turn.progressCompositor.pushCommentaryProgress(payload.progressText, {
-        itemId: payload.itemId,
-      });
+      const commentaryRendered = await turn.progressCompositor.pushCommentaryProgress(
+        payload.progressText,
+        {
+          itemId: payload.itemId,
+        },
+      );
+      rendered = commentaryRendered || rendered;
     }
     return rendered;
   }
