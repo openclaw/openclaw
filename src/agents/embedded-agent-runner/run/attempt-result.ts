@@ -125,16 +125,27 @@ type CompleteEmbeddedAttemptResultInput = {
  * app-server harness already does the same for its own attempts.
  */
 function resolveSettledTurnFinalizationContext(params: {
+  assistant: EmbeddedRunAttemptResult["currentAttemptCompletedAssistant"];
   assistantTexts: readonly string[];
   messagesSnapshot: EmbeddedRunAttemptResult["messagesSnapshot"];
   terminal: EmbeddedRunAttemptResult["terminal"];
 }): EmbeddedRunAttemptResult["settledTurnFinalizationContext"] {
-  // Only a transient final provider call can safely recover an already settled tool turn.
+  const terminal = projectAgentRunAttemptTerminal(params.terminal);
+  const failure =
+    terminal.promptErrorSource === "prompt"
+      ? terminal.promptError
+      : params.assistant?.stopReason === "error"
+        ? { message: params.assistant.errorMessage, code: params.assistant.errorCode }
+        : undefined;
+  // Providers can report their terminal failure either by throwing or through
+  // the completed assistant. Both forms must use the same transient policy.
   if (
-    params.terminal.kind !== "failed" ||
-    params.terminal.source !== "prompt" ||
-    params.terminal.timeoutObservation ||
-    !isTransientNetworkError(params.terminal.error)
+    terminal.aborted ||
+    terminal.timedOut ||
+    terminal.timedOutDuringCompaction ||
+    terminal.timedOutDuringToolExecution ||
+    (terminal.promptErrorSource !== null && terminal.promptErrorSource !== "prompt") ||
+    !isTransientNetworkError(failure)
   ) {
     return undefined;
   }
@@ -449,6 +460,7 @@ export function completeEmbeddedAttemptResult(
     },
   });
   const settledTurnFinalizationContext = resolveSettledTurnFinalizationContext({
+    assistant: state.currentAttemptCompletedAssistant ?? state.currentAttemptAssistant,
     assistantTexts,
     messagesSnapshot: state.messagesSnapshot,
     terminal: state.terminal,
