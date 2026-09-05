@@ -181,6 +181,11 @@ const GATEWAY_PROTOCOL_VERSION = 4;
 const GATEWAY_MIN_NODE_PROTOCOL_VERSION = 3;
 const PAIRING_AUDIT_SCOPES = ["operator.pairing"];
 const EXPECTED_UPGRADE_COMMAND_ADDITIONS = ["watch.notify", "watch.status"];
+export const MOBILE_PAIRING_BASELINE_COMMAND_ALLOWLIST = Object.freeze(
+  MOBILE_PAIRING_NODE_COMMANDS.filter(
+    (command) => !EXPECTED_UPGRADE_COMMAND_ADDITIONS.includes(command),
+  ),
+);
 const MOBILE_WATCH_REAPPROVAL_REASONS: Record<MobileWatchReapprovalMode, string> = {
   "not-applicable": "baseline-before-candidate",
   required: "selected-gateway-admits-ios-iphone-watch-relay",
@@ -1169,6 +1174,10 @@ function readBaselinePairingSurface(file: string): MobilePairingSurface {
 
 async function main(): Promise<void> {
   const { command, options } = parseArgs(process.argv.slice(2));
+  if (command === "print-baseline-command-allowlist") {
+    process.stdout.write(JSON.stringify(MOBILE_PAIRING_BASELINE_COMMAND_ALLOWLIST));
+    return;
+  }
   const packageRoot = option(options, "--package-root");
   const credentialsFile = option(options, "--credentials");
   const evidenceFile = option(options, "--evidence");
