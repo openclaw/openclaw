@@ -5,6 +5,7 @@ import type { ProjectCloneFailureCause } from "../../packages/gateway-protocol/s
 import { runCommandWithTimeout } from "../process/exec.js";
 
 const PROJECT_CLONE_TIMEOUT_MS = 10 * 60_000;
+const PROJECT_FETCH_TIMEOUT_MS = 60_000;
 
 export class ProjectCloneError extends Error {
   constructor(
@@ -48,8 +49,9 @@ function cloneCommandEnv(token: string | undefined, env: NodeJS.ProcessEnv): Nod
   return gitEnv;
 }
 
-function classifyCloneFailure(params: {
+function classifyProjectGitFailure(params: {
   output: string;
+  operation: "clone" | "fetch";
   tokenConfigured: boolean;
   timedOut?: boolean;
 }): ProjectCloneError {
@@ -60,7 +62,7 @@ function classifyCloneFailure(params: {
   ) {
     return new ProjectCloneError(
       "network",
-      "Git clone could not reach GitHub. Check the Gateway network connection and retry.",
+      `Git ${params.operation} could not reach GitHub. Check the Gateway network connection and retry.`,
     );
   }
   if (
@@ -86,7 +88,7 @@ function classifyCloneFailure(params: {
   }
   return new ProjectCloneError(
     "clone_failed",
-    "Git could not clone that repository. Check the URL and Gateway Git configuration, then retry.",
+    `Git could not ${params.operation === "clone" ? "clone" : "refresh"} that repository. Check the URL and Gateway Git configuration, then retry.`,
   );
 }
 
@@ -126,8 +128,41 @@ export async function cloneProjectCheckout(
     return;
   }
   await fs.rm(input.target, { recursive: true, force: true }).catch(() => {});
-  throw classifyCloneFailure({
+  throw classifyProjectGitFailure({
     output: `${result.stderr}\n${result.stdout}`,
+    operation: "clone",
+    tokenConfigured: Boolean(options.token),
+    timedOut: result.termination === "timeout" || result.termination === "no-output-timeout",
+  });
+}
+
+/** Refreshes refs in an existing Gateway-managed project checkout. */
+export async function refreshProjectCheckout(
+  input: { target: string },
+  options: {
+    env?: NodeJS.ProcessEnv;
+    signal?: AbortSignal;
+    timeoutMs?: number;
+    token?: string;
+  } = {},
+): Promise<void> {
+  const env = options.env ?? process.env;
+  const result = await runCommandWithTimeout(
+    ["git", "-C", input.target, "fetch", "--prune", "origin"],
+    {
+      env: cloneCommandEnv(options.token, env),
+      timeoutMs: options.timeoutMs ?? PROJECT_FETCH_TIMEOUT_MS,
+      signal: options.signal,
+      killProcessTree: true,
+      maxOutputBytes: 256 * 1024,
+    },
+  );
+  if (result.code === 0 && result.termination === "exit") {
+    return;
+  }
+  throw classifyProjectGitFailure({
+    output: `${result.stderr}\n${result.stdout}`,
+    operation: "fetch",
     tokenConfigured: Boolean(options.token),
     timedOut: result.termination === "timeout" || result.termination === "no-output-timeout",
   });

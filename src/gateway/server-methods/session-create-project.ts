@@ -4,11 +4,15 @@ import {
   errorShape,
   type ErrorShape,
 } from "../../../packages/gateway-protocol/src/index.js";
+import {
+  InvalidWorktreeBaseRefError,
+  resolveWorktreeBase,
+} from "../../agents/worktrees/base-ref.js";
 import { loadSessionEntry, patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-events.js";
 import { emitAgentRunStatusEvent } from "../../infra/agent-run-status-events.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
-import { materializeProjectClone } from "../../projects/project-clone.js";
+import { materializeProjectClone, refreshProjectClone } from "../../projects/project-clone.js";
 import { parseProjectGitUrl } from "../../projects/project-git-url.js";
 import { resolveProjectDirectory } from "../../projects/project-registry.js";
 import { githubApiToken } from "../control-ui-github-api.js";
@@ -122,7 +126,18 @@ export async function prepareSessionWorkspace(params: {
     if (!saved || saved.sessionId !== entry.sessionId) {
       throw new Error(SESSION_PROJECT_OWNERSHIP_ERROR);
     }
-    const pending = saved.pendingWorktree;
+    let pending = saved.pendingWorktree;
+    const assertSavedWorkspaceIntent = (current: typeof saved) => {
+      assertRunOwnership();
+      if (
+        current.sessionId !== entry.sessionId ||
+        current.projectId !== saved.projectId ||
+        current.pendingProjectGitUrl !== saved.pendingProjectGitUrl ||
+        !isDeepStrictEqual(current.pendingWorktree, pending)
+      ) {
+        throw new Error(SESSION_PROJECT_OWNERSHIP_ERROR);
+      }
+    };
     const gitUrl = normalizeSessionProjectGitUrl(saved.pendingProjectGitUrl);
     if (
       Object.hasOwn(saved, "pendingProjectGitUrl") &&
@@ -190,12 +205,74 @@ export async function prepareSessionWorkspace(params: {
       sessionRoot: root.value.sessionRoot,
     };
     if (pending) {
+      const persistPending = async (next: NonNullable<typeof pending>) => {
+        const updated = await patchSessionEntryCore(
+          target,
+          (current) => {
+            assertSavedWorkspaceIntent(current);
+            return { pendingWorktree: next };
+          },
+          {
+            assertCommitAllowed: assertRunOwnership,
+            requireWriteSuccess: true,
+            skipMaintenance: true,
+          },
+        );
+        if (!updated) {
+          throw new Error(SESSION_PROJECT_OWNERSHIP_ERROR);
+        }
+        Object.assign(saved, updated);
+        pending = next;
+      };
+      let baseRef = pending.baseRef;
+      let baseCommit = pending.baseCommit;
+      if (baseRef && pending.baseRefPolicy !== "strict") {
+        let resolved;
+        try {
+          resolved = await resolveWorktreeBase(directory, baseRef, signal);
+        } catch (error) {
+          if (!(error instanceof InvalidWorktreeBaseRefError)) {
+            throw error;
+          }
+          if (pending.baseRefPolicy === "validate") {
+            if (project?.source === "cloned") {
+              await refreshProjectClone(project, {
+                signal,
+                token: githubApiToken(process.env, cfg),
+              });
+              assertRunOwnership();
+              resolved = await resolveWorktreeBase(directory, baseRef, signal);
+              // The refreshed ref is accepted below and promoted to strict.
+            } else {
+              // The remote ref may appear after this attempt (for example, after a push).
+              // Keep the explicit intent unvalidated so retries re-check it without
+              // silently switching the session to a different revision.
+              throw error;
+            }
+          } else {
+            // Older builds persisted unchecked refs before starting Git work.
+            // Resume those sessions from the normal default instead of trapping every retry.
+            context.logGateway.warn(
+              "discarded invalid saved worktree base ref; using repository default",
+            );
+            baseRef = undefined;
+            baseCommit = undefined;
+          }
+        }
+        if (baseRef && resolved) {
+          // Pin the accepted commit across later setup failures and retries while
+          // retaining the selected ref as user-facing publication metadata.
+          baseCommit = resolved.commit;
+          await persistPending({ ...pending, baseCommit, baseRefPolicy: "strict" });
+        }
+      }
       // Retries inherit workspace intent, not a previous caller's setup authority.
       const result = await prepareSessionWorktree({
         target: { ...target, key: sessionKey, entry: saved },
         workspace: directory,
         name: pending.name,
-        baseRef: pending.baseRef,
+        baseRef,
+        baseCommit,
         label: title ?? resolveExplicitSessionName(saved) ?? pending.titleSource,
         runSetupScript: client?.connect?.scopes?.includes(ADMIN_SCOPE) === true,
         signal,
@@ -212,15 +289,7 @@ export async function prepareSessionWorkspace(params: {
       bound = await patchSessionEntryCore(
         target,
         (current) => {
-          assertRunOwnership();
-          if (
-            current.sessionId !== entry.sessionId ||
-            current.projectId !== saved.projectId ||
-            current.pendingProjectGitUrl !== saved.pendingProjectGitUrl ||
-            !isDeepStrictEqual(current.pendingWorktree, pending)
-          ) {
-            throw new Error(SESSION_PROJECT_OWNERSHIP_ERROR);
-          }
+          assertSavedWorkspaceIntent(current);
           return {
             ...(project ? { projectId: project.id } : {}),
             sessionRoot: prepared.sessionRoot,

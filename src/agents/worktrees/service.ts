@@ -930,7 +930,7 @@ export class ManagedWorktreeService {
     params.signal?.throwIfAborted();
     params.commitGuard?.();
     let gitBase = base.gitOperand;
-    let recordBase = base.recordRef;
+    let recordBase = params.recordBaseRef ?? base.recordRef;
     const worktreeAddArgs = () => ["worktree", "add", "-b", branch, "--", worktreePath, gitBase];
     let added = await runGit(repository.repoRoot, worktreeAddArgs(), {
       timeoutMs: WORKTREE_CHECKOUT_TIMEOUT_MS,

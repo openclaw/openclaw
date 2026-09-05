@@ -10,6 +10,10 @@ import {
   validateSessionsCreateParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
+import {
+  InvalidWorktreeBaseRefError,
+  resolveWorktreeBase,
+} from "../../agents/worktrees/base-ref.js";
 import { insideGitCheckout } from "../../agents/worktrees/git.js";
 import { resolveAgentMainSessionKey } from "../../config/sessions/main-session.js";
 import { sessionEntryForkedFromParent } from "../../config/sessions/session-entry-lineage.js";
@@ -382,9 +386,8 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     if (p.worktree === true) {
       // Workspace-contained cwd and registry-authorized projects stay at operator.write;
       // arbitrary host paths still require operator.admin before reaching this block.
-      const explicitKey = explicitlyRequestedKey;
       const agentId = explicitlyRequestedAgent.agentId;
-      let targetKey = explicitKey;
+      let targetKey = explicitlyRequestedKey;
       let preservesUnspecifiedKey = false;
       if (
         !targetKey &&
@@ -431,8 +434,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
         requestedCwd ??
         inheritedSource?.workspace ??
         resolveAgentWorkspaceDir(cfg, target.agentId);
-      // Subdirectory workspaces are valid: the worktree service resolves the repo root
-      // via git discovery, so the preflight must accept ancestor .git entries too.
+      // Git discovery lets subdirectory workspaces use an ancestor .git entry.
       if (!requestedProjectGitUrl && !insideGitCheckout(workspace)) {
         respond(
           false,
@@ -441,13 +443,36 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
         );
         return;
       }
+      let baseCommit: string | undefined;
+      if (requestedWorktreeBaseRef && !requestedProjectGitUrl) {
+        try {
+          baseCommit = (await resolveWorktreeBase(workspace, requestedWorktreeBaseRef)).commit;
+        } catch (error) {
+          respond(
+            false,
+            undefined,
+            errorShape(
+              error instanceof InvalidWorktreeBaseRefError
+                ? ErrorCodes.INVALID_REQUEST
+                : ErrorCodes.UNAVAILABLE,
+              formatErrorMessage(error),
+            ),
+          );
+          return;
+        }
+      }
       if (deferWorktree) {
-        // Persist intent before slow naming/Git/setup. The admitted turn binds the
-        // checkout, so failed or interrupted preparation can retry in this session.
+        // Persist intent before slow setup so the admitted turn can retry it.
         pendingWorktree = {
           ...(requestedProjectGitUrl ? {} : { workspace }),
           name: requestedWorktreeName,
           baseRef: requestedWorktreeBaseRef,
+          baseCommit,
+          ...(requestedWorktreeBaseRef
+            ? {
+                baseRefPolicy: requestedProjectGitUrl ? ("validate" as const) : ("strict" as const),
+              }
+            : {}),
           titleSource: buildDashboardSessionTitleSource({
             message: initialMessage ?? "",
             attachments: initialAttachments,
@@ -459,8 +484,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
             message: initialMessage ?? "",
             attachments: initialAttachments,
           });
-          // New prompt-bearing sessions use pendingWorktree. Empty creates have no
-          // title source or persisted generation until the lifecycle owner commits.
+          // Empty creates have no persisted generation until the lifecycle owner commits.
           const title =
             !requestedWorktreeName &&
             !explicitSessionLabel &&
@@ -497,6 +521,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
             workspace,
             name: requestedWorktreeName,
             baseRef: requestedWorktreeBaseRef,
+            baseCommit,
             label:
               explicitSessionLabel ??
               preparedDisplayName ??

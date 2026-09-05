@@ -631,6 +631,10 @@ export type InternalSessionEntryCore = SessionEntryCore & {
     workspace?: string;
     name?: string;
     baseRef?: string;
+    /** Verified commit used for checkout while baseRef remains user-facing metadata. */
+    baseCommit?: string;
+    /** New remote refs validate after clone; accepted refs fail closed; unmarked rows are legacy. */
+    baseRefPolicy?: "validate" | "strict";
     titleSource: string;
   };
   /** Suppresses repeated byte-triggered compaction after an oversized successor was observed. */

@@ -3,6 +3,7 @@ import path from "node:path";
 import { err, ok } from "@openclaw/normalization-core/result";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { ErrorCodes, errorShape } from "../../packages/gateway-protocol/src/index.js";
+import { InvalidWorktreeBaseRefError } from "../agents/worktrees/base-ref.js";
 import { slugifyWorktreeTitle } from "../agents/worktrees/name.js";
 import { managedWorktrees, WorktreeRepositoryError } from "../agents/worktrees/service.js";
 import type { CreateManagedWorktreeParams } from "../agents/worktrees/types.js";
@@ -54,6 +55,7 @@ export async function prepareSessionWorktree(params: {
   workspace: string;
   name?: string;
   baseRef?: string;
+  baseCommit?: string;
   label?: string;
   runSetupScript: boolean;
   signal?: AbortSignal;
@@ -109,7 +111,8 @@ export async function prepareSessionWorktree(params: {
       ownerId: target.key,
       name: params.name,
       suggestedName: slugifyWorktreeTitle(params.label ?? ""),
-      baseRef: params.baseRef,
+      baseRef: params.baseCommit ?? params.baseRef,
+      recordBaseRef: params.baseCommit ? params.baseRef : undefined,
       runSetupScript: params.runSetupScript,
       signal: params.signal,
       commitGuard,
@@ -151,11 +154,11 @@ export async function prepareSessionWorktree(params: {
   } catch (error) {
     // Closed delegated authority remains an exception for its admission owner.
     commitGuard?.();
+    const invalidRequest =
+      error instanceof WorktreeRepositoryError || error instanceof InvalidWorktreeBaseRefError;
     return err(
       errorShape(
-        error instanceof WorktreeRepositoryError
-          ? ErrorCodes.INVALID_REQUEST
-          : ErrorCodes.UNAVAILABLE,
+        invalidRequest ? ErrorCodes.INVALID_REQUEST : ErrorCodes.UNAVAILABLE,
         error instanceof WorktreeRepositoryError
           ? "agent workspace is not a git checkout"
           : formatErrorMessage(error),

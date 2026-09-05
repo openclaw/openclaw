@@ -6,7 +6,11 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { sha256HexPrefixCore } from "../infra/crypto-digest.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import { withOpenClawStateLease } from "../state/openclaw-state-lease.js";
-import { cloneProjectCheckout, ProjectCloneError } from "./project-clone-runtime.js";
+import {
+  cloneProjectCheckout,
+  ProjectCloneError,
+  refreshProjectCheckout,
+} from "./project-clone-runtime.js";
 import { parseProjectGitUrl } from "./project-git-url.js";
 import {
   listProjectRegistry,
@@ -103,6 +107,25 @@ export async function materializeProjectClone(
       }
     },
   );
+}
+
+/** Refreshes an existing project clone while holding its checkout lifecycle lease. */
+export async function refreshProjectClone(
+  project: ProjectRegistryRecord,
+  options: OpenClawStateDatabaseOptions & {
+    env?: NodeJS.ProcessEnv;
+    signal?: AbortSignal;
+    timeoutMs?: number;
+    token?: string;
+  } = {},
+): Promise<void> {
+  if (project.source !== "cloned") {
+    return;
+  }
+  await withProjectCheckoutLifecycle(project.repoRoot, options, async (lease) => {
+    await refreshProjectCheckout({ target: project.repoRoot }, options);
+    lease.assertOwned();
+  });
 }
 
 async function resolveClonedProjectCheckout(
