@@ -46,6 +46,7 @@ Put config under `plugins.entries.memory-wiki.config`:
     indexDailyNotes: true,
     indexMemoryRoot: true,
     followMemoryEvents: true,
+    ownership: "sandboxed-only",
   },
 
   unsafeLocal: {
@@ -117,6 +118,35 @@ Configuration validation rejects agent scope with either
 `vaultMode: "unsafe-local"` or `obsidian.useOfficialCli: true`. Obsidian-friendly
 Markdown rendering still works with agent vaults when official CLI actions are
 disabled.
+
+## Bridge page ownership in a shared vault
+
+`vault.scope: "agent"` separates vaults. `bridge.ownership` instead decides who
+may read an imported bridge page when several agents share one global vault:
+
+- `sandboxed-only` (default): only sandboxed callers are scoped, to the pages
+  they own; every other caller reads the whole vault. Leaving it unset changes
+  nothing.
+- `owner`: a caller reads bridge pages it owns. Non-bridge pages and bridge
+  pages carrying no owner metadata stay visible to everyone.
+- `delegation`: as `owner`, plus the bridge pages of the agents the caller may
+  already target with `sessions_spawn`. The scope comes from the same policy
+  `sessions_spawn` enforces (`resolveSubagentAllowedTargetIds`), so per-agent
+  `subagents.allowAgents`, inherited `agents.defaults.subagents.allowAgents`,
+  `"*"`, and intersection with the configured registry behave identically. It is
+  not transitive.
+
+A caller whose identity cannot be resolved is not filtered: an empty vault is
+indistinguishable from an empty knowledge base and would report as no error.
+
+This is read-time visibility filtering for wiki tools, **not filesystem access
+control**. Every mode reads the same vault directory on disk, so any plugin,
+unsandboxed tool, shell command, or operator with host filesystem access reads
+those pages regardless of this setting. `openclaw wiki search` and
+`openclaw wiki get` also run as the default agent unless `--agent <agentId>` is
+passed, so operator CLI reads are scoped to that agent under `owner` and
+`delegation`. Use sandboxing or separate Gateway profiles when agents must not
+be able to reach each other's data.
 
 Changing scope does not copy or split existing pages. Back up the vault and
 move or import content deliberately. Per-agent paths are a same-process
