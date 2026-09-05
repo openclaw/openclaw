@@ -1,5 +1,4 @@
 import type { Context, Model } from "@openclaw/llm-core";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type {
   FunctionTool,
   ResponseFormatTextConfig,
@@ -14,6 +13,7 @@ import {
   type OpenAIApiReasoningEffort,
 } from "../providers/openai-reasoning-effort.js";
 import {
+  hasResponsesWebSearchTool,
   projectOpenAITools,
   reconcileOpenAIResponsesToolChoice,
   type OpenAIToolProjection,
@@ -92,25 +92,6 @@ function resolveOpenAIReasoningEffort(
   return normalizeOpenAIReasoningEffort(
     options?.reasoningEffort ?? options?.reasoning ?? "high",
   ) as OpenAIApiReasoningEffort;
-}
-
-function hasResponsesWebSearchTool(tools: unknown): boolean {
-  if (!Array.isArray(tools)) {
-    return false;
-  }
-  return tools.some((tool) => {
-    if (!isRecord(tool)) {
-      return false;
-    }
-    if (tool.type === "web_search") {
-      return true;
-    }
-    if (tool.type === "function" && tool.name === "web_search") {
-      return true;
-    }
-    const fn = tool.function;
-    return isRecord(fn) && fn.name === "web_search";
-  });
 }
 
 function raiseMinimalReasoningForResponsesWebSearch(params: {

@@ -138,6 +138,7 @@ const compatibility = {
       "readResponsesToolCallItemIdentity",
       "createResponsesToolCallTracker",
       "mapOpenAIStopReason",
+      "hasResponsesWebSearchTool",
       "projectOpenAITools",
       "reconcileOpenAIResponsesToolChoice",
       "reconcileOpenAICompletionsToolChoice",

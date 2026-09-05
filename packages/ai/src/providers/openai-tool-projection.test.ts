@@ -1,11 +1,41 @@
 import { describe, expect, it } from "vitest";
 import {
+  hasResponsesWebSearchTool,
   projectOpenAITools,
   reconcileOpenAICompletionsToolChoice,
   reconcileOpenAIResponsesToolChoice,
 } from "./openai-tool-projection.js";
 
 describe("OpenAI tool projection", () => {
+  it.each([
+    ["native tool", [{ type: "web_search" }], true],
+    ["function tool", [{ type: "function", name: "web_search" }], true],
+    ["nested function", [{ type: "file_search", function: { name: "web_search" } }], true],
+    ["preview tool", [{ type: "web_search_preview" }], false],
+    ["dated tool", [{ type: "web_search_2025_08_26" }], false],
+    ["direct name", [{ name: "web_search" }], false],
+    ["non-array inventory", { type: "web_search" }, false],
+    ["nested array", [[{ type: "web_search" }]], false],
+  ])("detects Responses web search for %s", (_label, tools, expected) => {
+    expect(hasResponsesWebSearchTool(tools)).toBe(expected);
+  });
+
+  it("preserves inherited reads and throwing getters", () => {
+    expect(hasResponsesWebSearchTool([Object.create({ type: "web_search" })])).toBe(true);
+    expect(hasResponsesWebSearchTool([Object.create({ function: { name: "web_search" } })])).toBe(
+      true,
+    );
+    expect(() =>
+      hasResponsesWebSearchTool([
+        {
+          get type(): never {
+            throw new Error("type exploded");
+          },
+        },
+      ]),
+    ).toThrow("type exploded");
+  });
+
   it("keeps healthy tools when sibling descriptors or schemas are unreadable", () => {
     const projection = projectOpenAITools([
       {
