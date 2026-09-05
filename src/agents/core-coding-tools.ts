@@ -14,6 +14,7 @@ import {
   wrapToolWorkspaceRootGuardWithOptions,
 } from "./agent-tools.read.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
+import type { ApplyPatchContainmentSource } from "./apply-patch-containment-hint.js";
 import { createApplyPatchTool } from "./apply-patch.js";
 import type { ExecToolDefaults } from "./bash-tools.exec-types.js";
 import type { ProcessToolDefaults } from "./bash-tools.process.js";
@@ -78,6 +79,7 @@ type CoreCodingToolsOptions = {
   memoryWriteProvenance?: MemoryWriteProvenanceObserver;
   applyPatchEnabled: boolean;
   applyPatchWorkspaceOnly: boolean;
+  applyPatchContainmentSource?: ApplyPatchContainmentSource;
   execDefaults: ExecToolDefaults;
   processDefaults: ProcessToolDefaults;
   recordToolPrepStage?: (name: string) => void;
@@ -218,6 +220,7 @@ export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgent
               ? { root: sandboxRoot, bridge: sandboxFsBridge! }
               : undefined,
           workspaceOnly: options.applyPatchWorkspaceOnly,
+          containmentSource: options.applyPatchContainmentSource,
           memoryWriteProvenance: options.memoryWriteProvenance,
           abortSignal: options.abortSignal,
         }),

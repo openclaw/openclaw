@@ -38,6 +38,7 @@ import {
   getInternalToolExecutionPreparer,
 } from "./runtime/internal-hooks.js";
 import type { ToolDefinition } from "./sessions/index.js";
+import { readToolOperatorHint } from "./tool-operator-hint.js";
 import { normalizeToolPolicyName } from "./tool-policy.js";
 import { jsonResult, payloadTextResult, ToolInputError } from "./tools/common.js";
 
@@ -90,10 +91,12 @@ function isLegacyToolExecuteArgs(args: ToolExecuteArgsAny): args is ToolExecuteA
 function describeToolExecutionError(err: unknown): {
   message: string;
   stack?: string;
+  operatorHint?: string;
 } {
+  const operatorHint = readToolOperatorHint(err);
   if (err instanceof Error) {
     const message = err.message?.trim() ? err.message : String(err);
-    return { message, stack: err.stack };
+    return { message, stack: err.stack, ...(operatorHint ? { operatorHint } : {}) };
   }
   return { message: String(err) };
 }
@@ -299,7 +302,12 @@ async function executeAdaptedToolOperation(params: {
       rawParams: params.rawParams,
       effectiveParams: params.getEffectiveParams(),
     });
-    logError(`[tools] ${params.normalizedToolName} failed: ${described.message} ${inputPreview}`);
+    const operatorHint = described.operatorHint ? ` ${described.operatorHint}` : "";
+    // Operator-only: the hint names containment configuration and stays out of the
+    // model-visible result below.
+    logError(
+      `[tools] ${params.normalizedToolName} failed: ${described.message}${operatorHint} ${inputPreview}`,
+    );
     return buildToolExecutionErrorResult({
       toolName: params.normalizedToolName,
       message: described.message,
