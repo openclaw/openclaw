@@ -13,10 +13,12 @@ type AgentCallResponse = {
   disposition?: "ambiguous";
 };
 
-const agentSpy = vi.fn(async (_req: AgentCallRequest): Promise<AgentCallResponse> => ({
-  runId: "run-main",
-  status: "ok",
-}));
+const agentSpy = vi.fn(
+  async (_req: AgentCallRequest): Promise<AgentCallResponse> => ({
+    runId: "run-main",
+    status: "ok",
+  }),
+);
 const sessionsDeleteSpy = vi.fn((_req: AgentCallRequest) => undefined);
 const callGatewayMock = vi.fn(async (_request: unknown) => ({}));
 const loadSessionStoreMock = vi.fn((_storePath: string) => ({}));
@@ -240,7 +242,12 @@ function requireAgentCall() {
 describe("subagent wait outcome timing", () => {
   it.each([
     { wait: { status: "ok" }, expected: { status: "ok" } },
-    { wait: { status: "timeout" }, expected: { status: "timeout" } },
+    // A bare wait timeout carries no terminal snapshot, so it records the
+    // waiter giving up rather than the run ending.
+    {
+      wait: { status: "timeout" },
+      expected: { status: "timeout", disposition: "still-running" },
+    },
     {
       wait: { status: "error", error: "boom" },
       expected: { status: "error", error: "boom" },

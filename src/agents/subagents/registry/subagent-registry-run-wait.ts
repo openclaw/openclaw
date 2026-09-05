@@ -185,6 +185,11 @@ export type SubagentManagerOptions = {
     provisionalKill?: boolean;
   }): void;
   completeSubagentRun(args: SubagentCompletionRequest): Promise<void>;
+  reportSubagentWaitExpiry(args: {
+    entry: SubagentRunRecord;
+    observedAt: number;
+    startedAt?: number;
+  }): Promise<void>;
   resolveSubagentTask(entry: SubagentRunRecord): DetachedTaskFindResult;
 };
 
@@ -246,6 +251,7 @@ export class SubagentWaitManager {
     capWaitToStoredDeadline = false,
   ): Promise<void> => {
     let completionForRetry: Parameters<typeof this.options.completeSubagentRun>[0] | undefined;
+    let waitExpiryForRetry: Parameters<typeof this.options.reportSubagentWaitExpiry>[0] | undefined;
     const scheduleWaitRetry = (entry: SubagentRunRecord, reason: string, error?: string) => {
       this.options.scheduleSweep({ delayMs: 1_000 });
       const scheduledEntry = entry;
@@ -321,7 +327,7 @@ export class SubagentWaitManager {
       const completeAsRunTimeout = async (endedAt?: number, startedAt?: number) => {
         const timeoutCompletion: Parameters<typeof this.options.completeSubagentRun>[0] = {
           runId,
-          outcome: { status: "timeout" },
+          outcome: { status: "timeout", disposition: "exited" },
           reason: SUBAGENT_ENDED_REASON_COMPLETE,
           sendFarewell: true,
           accountId: entry.requesterOrigin?.accountId,
@@ -389,6 +395,23 @@ export class SubagentWaitManager {
           });
           if (timeoutAfterDeadline !== undefined) {
             timeoutEndedAt = timeoutAfterDeadline;
+          }
+          // Only `isTerminalWaitTimeout` carries evidence that the run stopped.
+          // Reaching the stored deadline is clock arithmetic on our own budget:
+          // it earns the parent a wake, but must stay outside terminal completion
+          // because that path owns browser/MCP/session cleanup.
+          if (!isTerminalWaitTimeout) {
+            waitExpiryForRetry = {
+              entry,
+              observedAt: timeoutEndedAt ?? now,
+              startedAt: observedStartedAt,
+            };
+            await this.options.reportSubagentWaitExpiry(waitExpiryForRetry);
+            // Do not keep a second long-poll alive after the parent has been
+            // notified. The periodic registry sweeper remains the settlement
+            // backstop: once the run context disappears, it reconciles the
+            // persisted terminal session state or records a lost-context error.
+            return;
           }
           await completeAsRunTimeout(timeoutEndedAt, observedStartedAt);
           return;
@@ -464,6 +487,14 @@ export class SubagentWaitManager {
             error: retryError,
           });
         }
+      }
+      if (waitExpiryForRetry && typeof current.execution.endedAt !== "number") {
+        scheduleWaitRetry(
+          current,
+          "failed to publish subagent wait expiry; scheduling recovery",
+          error instanceof Error ? error.message : String(error),
+        );
+        return;
       }
       if (
         typeof current.execution.endedAt === "number" &&
