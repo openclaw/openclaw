@@ -920,7 +920,7 @@ function assertUpdateRunSelfUpgrade(summary: ReturnType<typeof createUpdateRunSe
 }
 
 describe("upgrade survivor assertions", () => {
-  it("omits the exec-approval fixture only in the resolved frozen-target mode", () => {
+  it("selects the exec-approval assertion owner without dropping the fixture", () => {
     const root = mkdtempSync(join(tmpdir(), "openclaw-upgrade-survivor-exec-mode-"));
     try {
       const run = (mode: string | undefined, command: string) => {
@@ -953,10 +953,33 @@ describe("upgrade survivor assertions", () => {
         "survivor-used-command",
       );
 
+      const legacySeed = run("legacy-json", "seed");
+      expect(legacySeed.result.status, legacySeed.result.stderr).toBe(0);
+      expect(readFileSync(join(legacySeed.stateDir, "exec-approvals.json"), "utf8")).toContain(
+        "survivor-used-command",
+      );
+      for (const stage of ["baseline", "survival"]) {
+        const legacyAssertion = spawnSync(
+          process.execPath,
+          [ASSERTIONS_PATH, "assert-exec-approvals"],
+          {
+            encoding: "utf8",
+            env: {
+              ...process.env,
+              OPENCLAW_STATE_DIR: legacySeed.stateDir,
+              OPENCLAW_TEST_WORKSPACE_DIR: join(root, "legacy-json", "workspace"),
+              OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE: stage,
+              OPENCLAW_UPGRADE_SURVIVOR_EXEC_APPROVALS_MODE: "legacy-json",
+            },
+          },
+        );
+        expect(legacyAssertion.status, legacyAssertion.stderr).toBe(0);
+      }
+
       const malformed = run("legacy", "assert-exec-approvals").result;
       expect(malformed.status).not.toBe(0);
       expect(malformed.stderr).toContain(
-        "OPENCLAW_UPGRADE_SURVIVOR_EXEC_APPROVALS_MODE must be required or omitted",
+        "OPENCLAW_UPGRADE_SURVIVOR_EXEC_APPROVALS_MODE must be required, legacy-json, or omitted",
       );
     } finally {
       rmSync(root, { force: true, recursive: true });

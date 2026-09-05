@@ -502,7 +502,7 @@ const allow = new Set(
 
     const legacy = createSource("legacy");
     expect(run(legacy, "1").stdout.trim()).toBe(
-      "omitted|legacy|jsonl|omitted-gateway-unsupported|local-basic,remote-non-interactive,reset,channels,skills|interactive|legacy|legacy|agent|jsonl|legacy",
+      "legacy-json|legacy|jsonl|omitted-gateway-unsupported|local-basic,remote-non-interactive,reset,channels,skills|interactive|legacy|legacy|agent|jsonl|legacy",
     );
     expect(run(legacy, "0").stdout.trim()).toBe(
       "required|current|sqlite|required||required|current|current|current|sqlite|current",

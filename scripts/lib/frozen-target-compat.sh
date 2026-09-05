@@ -117,7 +117,7 @@ openclaw_resolve_frozen_upgrade_survivor_capabilities() {
   if ! git -C "$source_root" cat-file -e "$OPENCLAW_SELECTED_SHA:src/infra/exec-approvals-sqlite.ts" 2>/dev/null &&
     git -C "$source_root" show "$OPENCLAW_SELECTED_SHA:src/infra/exec-approvals.ts" 2>/dev/null |
       grep -Fq 'const EXEC_APPROVALS_FILE = "exec-approvals.json";'; then
-    export OPENCLAW_UPGRADE_SURVIVOR_EXEC_APPROVALS_MODE="omitted"
+    export OPENCLAW_UPGRADE_SURVIVOR_EXEC_APPROVALS_MODE="legacy-json"
   fi
 
   if ! git -C "$source_root" cat-file -e "$OPENCLAW_SELECTED_SHA:src/infra/clawhub-install-trust.ts" 2>/dev/null &&

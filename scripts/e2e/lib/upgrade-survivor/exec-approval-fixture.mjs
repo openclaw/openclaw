@@ -70,9 +70,9 @@ function parsePolicy(raw) {
   }
 }
 
-export function assertExecApprovalPolicySurvived(stateDir, stage) {
+export function assertExecApprovalPolicySurvived(stateDir, stage, mode = "required") {
   let policy;
-  if (stage === "baseline") {
+  if (stage === "baseline" || mode === "legacy-json") {
     policy = parsePolicy(fs.readFileSync(path.join(stateDir, "exec-approvals.json"), "utf8"));
   } else {
     // Observe the canonical owner directly. Runtime readers or an approvals CLI
@@ -90,7 +90,8 @@ export function assertExecApprovalPolicySurvived(stateDir, stage) {
       db.close();
     }
   }
-  const expected = stage === "baseline" ? legacyPolicy() : expectedPolicy();
+  const expected =
+    stage === "baseline" || mode === "legacy-json" ? legacyPolicy() : expectedPolicy();
   // Socket credentials are runtime-owned; compare the complete authored policy
   // without printing command text or any other state values on failure.
   for (const field of ["version", "defaults", "agents"]) {
