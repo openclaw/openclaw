@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { withEnv } from "../test-utils/env.js";
 import {
   DEFAULT_REDACT_PATTERNS,
@@ -1685,6 +1685,83 @@ describe("redactSensitiveText", () => {
     ].join(" ");
     const output = redactSensitiveText(input, { mode: "tools" });
     expect(output).toBe(input);
+  });
+
+  it("redacts a large payload with no default-pattern matches quickly", () => {
+    // "npm_telegram_package_spec" trips the outer prefilter (couldMatchDefaultRedactPatterns)
+    // without matching any real DEFAULT_REDACT_PATTERNS entry, so the full per-pattern walk
+    // below runs against every pattern in the table for a payload above the chunk threshold.
+    const benignTrigger = "npm_telegram_package_spec";
+    const filler = "the quick brown fox jumps over the lazy dog ".repeat(40_000);
+    const input = `${benignTrigger} ${filler}`;
+    expect(input.length).toBeGreaterThan(32_768);
+
+    const startedAt = performance.now();
+    const output = redactSensitiveText(input, { mode: "tools" });
+    expect(performance.now() - startedAt).toBeLessThan(200);
+    expect(output).toBe(input);
+  });
+
+  it("skips the whole-text prefilter test() for payloads under the chunk threshold", () => {
+    // Below the chunk threshold, replacePatternBounded already falls through to a single
+    // text.replace() with no chunking to skip, so the prefilter's whole-text pattern.test()
+    // would be a redundant extra scan; it must not run for sub-threshold payloads.
+    const input = "the quick brown fox jumps over the lazy dog ".repeat(100);
+    expect(input.length).toBeLessThan(32_768);
+    const testSpy = vi.spyOn(RegExp.prototype, "test");
+    try {
+      redactSensitiveText(input, { mode: "tools", patterns: [/NEVER_MATCHES_ANYTHING/g] });
+      expect(testSpy).not.toHaveBeenCalled();
+    } finally {
+      testSpy.mockRestore();
+    }
+  });
+
+  it("masks a configured sticky pattern that only matches at a chunk boundary", () => {
+    // A sticky (`y`) configured pattern only matches at the regex's current lastIndex, so a
+    // whole-text test() proves nothing beyond position 0; it must still fall through to bounded
+    // replacement, which retries the pattern at every chunk start (here, offset 16_384).
+    const chunkSize = 16_384;
+    const secret = "SECRETVALUE12345";
+    const input = `${"x".repeat(chunkSize)}${secret}${"y".repeat(20_000)}`;
+    expect(input.length).toBeGreaterThan(32_768);
+    const output = redactSensitiveText(input, {
+      mode: "tools",
+      patterns: [/SECRETVALUE\d+/y],
+    });
+    expect(output).not.toContain(secret);
+  });
+
+  it("masks a configured non-sticky anchored pattern that only matches at a chunk boundary", () => {
+    // An anchored (`^`) configured pattern only matches at the start of the whole text (no `m`
+    // flag), so a whole-text test() proves nothing about a later chunk; it must still fall
+    // through to bounded replacement, which gives `^` a fresh chunk-local start at every chunk
+    // (here, offset 16_384) since it is not part of the vetted default/tool-payload table.
+    const chunkSize = 16_384;
+    const secret = "SECRETVALUE12345";
+    const input = `${"x".repeat(chunkSize)}${secret}${"y".repeat(20_000)}`;
+    expect(input.length).toBeGreaterThan(32_768);
+    const output = redactSensitiveText(input, {
+      mode: "tools",
+      patterns: [/^SECRETVALUE\d+/g],
+    });
+    expect(output).not.toContain(secret);
+  });
+
+  it("masks a default anchored assignment pattern that only matches at a chunk boundary", () => {
+    // STANDALONE_ASSIGNMENT_REDACT_PATTERN (`(^|[\s,;])token=...`) is a DEFAULT_REDACT_PATTERNS
+    // entry, not a user-configured one, so it must stay out of the whole-text prefilter allowlist
+    // for the same reason as the configured case above: `token=` here is preceded by a plain
+    // letter, not a boundary, so it never matches on the whole text, but a chunk boundary landing
+    // right before it gives replacePatternBounded's per-chunk `.replace()` a fresh `^` start.
+    const chunkSize = 16_384;
+    const secret = "SECRETVALUE12345";
+    const prefix = `${"x".repeat(chunkSize - "unsafe".length)}unsafe`;
+    expect(prefix.length).toBe(chunkSize);
+    const input = `${prefix}token=${secret}${"y".repeat(20_000)}`;
+    expect(input.length).toBeGreaterThan(32_768);
+    const output = redactSensitiveText(input, { mode: "tools" });
+    expect(output).not.toContain(secret);
   });
 
   it("masks Fireworks tokens that cross bounded-replacement chunk boundaries", () => {

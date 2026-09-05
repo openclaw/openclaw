@@ -9,7 +9,7 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { compileConfigRegex } from "../security/config-regex.js";
 import { readLoggingConfig } from "./config.js";
-import { replacePatternBounded } from "./redact-bounded.js";
+import { REDACT_REGEX_CHUNK_THRESHOLD, replacePatternBounded } from "./redact-bounded.js";
 import { isFullContextToolPayloadRedaction } from "./redact-internal.js";
 import {
   AWS_SECRET_ACCESS_KEY_FIELD_KEYS,
@@ -42,6 +42,20 @@ const shellReferencePreservingPatterns = new WeakSet<RegExp>();
 // Patterns whose left-context assertions or complete token can cross a chunk boundary must run
 // against the full string; chunking can invent a `^` boundary or split the secret itself.
 const chunkUnsafePatterns = new WeakSet<RegExp>();
+// Whole-text prefilter eligibility is an allowlist, not "anything not chunkUnsafePatterns":
+// chunkUnsafePatterns only classifies the fixed default/tool-payload table, so an arbitrary
+// user-configured `logging.redactPatterns` entry (e.g. an anchored `/^SECRET.../g`) would
+// otherwise skip the prefilter's whole-text test() even though replacePatternBounded gives `^`
+// a fresh chunk-local start and would still redact it later in the string.
+const chunkSafePatterns = new WeakSet<RegExp>();
+const CHUNK_SAFE_PATTERN_SOURCES = new Set(DEFAULT_REDACT_PATTERNS);
+// A `(^|...)` boundary alternative matches "start of string", which chunking legitimately
+// re-invents at every chunk start; replacePatternBounded relies on that to catch a real match
+// that only happens to land at a chunk boundary. A whole-text test() cannot observe that
+// chunk-local match, so it is not a valid superset check for these patterns even though they are
+// otherwise default/vetted — exclude them from the prefilter allowlist, not from bounded
+// replacement itself.
+const START_OF_STRING_ALTERNATION = "(^|";
 const formAwareEqualsAssignmentPatterns = new WeakSet<RegExp>();
 const sourceAssignmentPatterns = new WeakSet<RegExp>();
 let defaultResolvedPatterns: RegExp[] | undefined;
@@ -188,6 +202,15 @@ function parsePattern(raw: RedactPattern): RegExp | null {
       CHUNK_UNSAFE_PATTERN_SOURCES.has(raw))
   ) {
     chunkUnsafePatterns.add(pattern);
+  }
+  if (
+    pattern &&
+    typeof raw === "string" &&
+    CHUNK_SAFE_PATTERN_SOURCES.has(raw) &&
+    !chunkUnsafePatterns.has(pattern) &&
+    !raw.includes(START_OF_STRING_ALTERNATION)
+  ) {
+    chunkSafePatterns.add(pattern);
   }
   return pattern;
 }
@@ -775,6 +798,28 @@ function redactText(
     next = redactFormBody(next);
   }
   for (const pattern of patterns) {
+    const isChunkUnsafe = options?.fullContext || chunkUnsafePatterns.has(pattern);
+    // Bounded patterns are vetted to never match a chunk without also matching the full,
+    // unchunked text, so a cheap whole-text test() first lets non-matching patterns (the
+    // common case across a large default pattern table) skip the chunked replace entirely.
+    // Only patterns from the vetted default/tool-payload table (chunkSafePatterns) get this
+    // shortcut: an arbitrary configured pattern may be `^`-anchored, and replacePatternBounded
+    // gives `^` a fresh chunk-local start that a whole-text test() cannot see. Sticky (`y`)
+    // patterns only match at the regex's current lastIndex, so a whole-text test() only proves
+    // a match at position 0 and can miss a match bounded replacement would still find at a later
+    // chunk start; exempt them too. Below the chunk threshold, replacePatternBounded already
+    // falls through to a single text.replace() with no chunking to skip, so the prefilter's
+    // extra test() only adds a redundant scan; skip it.
+    const canChunk = next.length > REDACT_REGEX_CHUNK_THRESHOLD;
+    if (
+      !isChunkUnsafe &&
+      canChunk &&
+      chunkSafePatterns.has(pattern) &&
+      !pattern.sticky &&
+      !pattern.test(next)
+    ) {
+      continue;
+    }
     const replacer = (...args: unknown[]) => {
       const hasNamedGroups =
         args.length > 0 &&
@@ -794,10 +839,9 @@ function redactText(
         preserveSourceAssignment: options?.preserveSourceAssignment,
       });
     };
-    next =
-      options?.fullContext || chunkUnsafePatterns.has(pattern)
-        ? next.replace(pattern, replacer)
-        : replacePatternBounded(next, pattern, replacer);
+    next = isChunkUnsafe
+      ? next.replace(pattern, replacer)
+      : replacePatternBounded(next, pattern, replacer);
   }
   return next;
 }
