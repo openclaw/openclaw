@@ -524,7 +524,8 @@ function resolveLocalJsonPointer(rootDocument: unknown, ref: string): unknown {
   return resolveJsonPointerPath(rootDocument, ref.slice(2).split("/"));
 }
 
-const SCHEMA_MAP_KEYS = new Set([
+/** Keywords whose values are maps of user-named subschemas — entry names are never schema keywords. */
+export const SCHEMA_MAP_KEYS: ReadonlySet<string> = new Set([
   "$defs",
   "definitions",
   "dependentSchemas",

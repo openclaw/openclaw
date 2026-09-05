@@ -7,6 +7,7 @@ import {
   MAX_TOOL_SCHEMA_NESTING_DEPTH,
   normalizeToolParameterSchema,
   SCHEMA_LITERAL_KEYS,
+  SCHEMA_MAP_KEYS,
   shouldOmitEmptyArrayItems,
   ToolSchemaDepthLimitError,
   type ToolSchemaModelCompat,
@@ -132,6 +133,21 @@ function normalizeStrictOpenAIJsonSchemaRecursive(schema: unknown, depth: number
   let changed = false;
   const normalized = Object.fromEntries<unknown>(
     Object.entries(record).map(([key, value]) => {
+      // Schema-map entries are user-named subschemas — a property can be called "default" — so
+      // traverse each entry value before the literal-keyword exemption below can apply.
+      if (SCHEMA_MAP_KEYS.has(key) && value && typeof value === "object" && !Array.isArray(value)) {
+        let mapChanged = false;
+        const nextMap = Object.fromEntries(
+          // SAFETY: value is narrowed to a non-null, non-array object above.
+          Object.entries(value as Record<string, unknown>).map(([entryKey, entryValue]) => {
+            const nextEntry = normalizeStrictOpenAIJsonSchemaRecursive(entryValue, depth + 1);
+            mapChanged ||= nextEntry !== entryValue;
+            return [entryKey, nextEntry];
+          }),
+        );
+        changed ||= mapChanged;
+        return [key, mapChanged ? nextMap : value];
+      }
       // Literal payloads (const/default/enum/examples) are values, not schemas: preserve them
       // without recursion so their depth can neither trip the cap nor abort request construction.
       if (SCHEMA_LITERAL_KEYS.has(key)) {
@@ -253,7 +269,9 @@ function isStrictOpenAIJsonSchemaCompatibleRecursive(schema: unknown, depth: num
     if (SCHEMA_LITERAL_KEYS.has(key)) {
       return true;
     }
-    if (key === "properties" && entry && typeof entry === "object" && !Array.isArray(entry)) {
+    // Schema-map entry names are user-chosen, never keywords; check each subschema value.
+    if (SCHEMA_MAP_KEYS.has(key) && entry && typeof entry === "object" && !Array.isArray(entry)) {
+      // SAFETY: entry is narrowed to a non-null, non-array object above.
       return Object.values(entry as Record<string, unknown>).every((value) =>
         isStrictOpenAIJsonSchemaCompatibleRecursive(value, depth + 1),
       );

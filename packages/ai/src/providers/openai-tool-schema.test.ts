@@ -407,4 +407,23 @@ describe("tool schema depth guard", () => {
     expect(error.message).toContain("256");
     expect(error.message).toContain("nesting");
   });
+
+  it.each(["default", "const", "enum", "examples"])(
+    "repairs a keyword-named property (%s) during strict normalization",
+    (name) => {
+      // Inside a properties map these are user-chosen property names, not schema keywords:
+      // the nested empty-object schema must still receive its required: [] repair, or the
+      // strict compatibility check downgrades the whole tool inventory to strict: false.
+      const schema = {
+        type: "object",
+        properties: { [name]: { type: "object", properties: {}, additionalProperties: false } },
+        required: [name],
+      };
+      const normalized = normalizeStrictOpenAIJsonSchema(schema) as {
+        properties: Record<string, { required?: unknown[] }>;
+      };
+      expect(normalized.properties[name]?.required).toEqual([]);
+      expect(isStrictOpenAIJsonSchemaCompatible(schema)).toBe(true);
+    },
+  );
 });
