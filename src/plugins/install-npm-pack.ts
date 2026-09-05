@@ -1,5 +1,6 @@
+import { randomUUID } from "node:crypto";
+import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { sha256HexPrefixCore } from "../infra/crypto-digest.js";
 import {
@@ -10,7 +11,6 @@ import { resolveNpmIntegrityDriftWithDefaultMessage } from "../infra/npm-integri
 import { parseRegistryNpmSpec, validateRegistryNpmSpec } from "../infra/npm-registry-spec.js";
 import { resolveUserPath } from "../utils.js";
 import {
-  removeEmptyDirectoryIfPresent,
   resolveManagedNpmGenerationUseForInstall,
   resolveManagedNpmRootForInstall,
   resolveManagedNpmRootPackageDir,
@@ -75,11 +75,7 @@ async function stageNpmPackArchiveInManagedRoot(params: {
   integrity?: string;
   shasum?: string;
   tarballName: string;
-}): Promise<
-  {
-    stableArchivePath: string;
-  } & ManagedNpmRootPreparedDependency
-> {
+}): Promise<ManagedNpmRootPreparedDependency> {
   const archiveStoreDir = path.join(params.npmRoot, MANAGED_NPM_PACK_ARCHIVE_DIR);
   const identity = params.integrity ?? params.shasum ?? params.tarballName;
   const identitySlug = sha256HexPrefixCore(identity, 16);
@@ -87,73 +83,16 @@ async function stageNpmPackArchiveInManagedRoot(params: {
   const versionSlug = safePluginInstallFileName(params.version ?? "pack") || "pack";
   const archiveFileName = `${packageSlug}-${versionSlug}-${identitySlug}.tgz`;
   const stableArchivePath = path.join(archiveStoreDir, archiveFileName);
-  const tempArchivePath = path.join(
-    archiveStoreDir,
-    `.${archiveFileName}.${process.pid}.${Date.now()}.tmp`,
-  );
-  let archiveStoreExisted = true;
-  let backupTempDir: string | undefined;
-  let previousArchiveBackupPath: string | undefined;
-  const cleanupBackup = async () => {
-    if (!backupTempDir) {
-      return;
-    }
-    const tempDir = backupTempDir;
-    backupTempDir = undefined;
-    previousArchiveBackupPath = undefined;
-    await fs.rm(tempDir, { recursive: true, force: true });
-  };
-
-  try {
-    await fs.access(archiveStoreDir);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-      throw error;
-    }
-    archiveStoreExisted = false;
+  // The managed installer owns this private stage; publication and rollback move the whole root.
+  await fs.mkdir(archiveStoreDir, { recursive: true });
+  if (!(await fs.lstat(archiveStoreDir)).isDirectory()) {
+    throw new Error(`Managed npm archive store is not a directory: ${archiveStoreDir}`);
   }
-
-  try {
-    await fs.access(stableArchivePath);
-    backupTempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-npm-pack-archive-"));
-    previousArchiveBackupPath = path.join(backupTempDir, archiveFileName);
-    await fs.copyFile(stableArchivePath, previousArchiveBackupPath);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-      await cleanupBackup();
-      throw error;
-    }
-  }
-
-  try {
-    await fs.mkdir(archiveStoreDir, { recursive: true });
-    await fs.copyFile(params.archivePath, tempArchivePath);
-    await fs.rename(tempArchivePath, stableArchivePath);
-  } catch (error) {
-    await fs.rm(tempArchivePath, { force: true });
-    await cleanupBackup();
-    if (!archiveStoreExisted) {
-      await removeEmptyDirectoryIfPresent(archiveStoreDir);
-    }
-    throw error;
-  }
-
+  const tempArchivePath = path.join(archiveStoreDir, `.${archiveFileName}.${randomUUID()}.tmp`);
+  await fs.copyFile(params.archivePath, tempArchivePath, fsConstants.COPYFILE_EXCL);
+  await fs.rename(tempArchivePath, stableArchivePath);
   return {
-    stableArchivePath,
     dependencySpec: `file:./${path.posix.join(MANAGED_NPM_PACK_ARCHIVE_DIR, archiveFileName)}`,
-    rollback: async () => {
-      if (previousArchiveBackupPath) {
-        await fs.mkdir(archiveStoreDir, { recursive: true });
-        await fs.copyFile(previousArchiveBackupPath, stableArchivePath);
-      } else {
-        await fs.rm(stableArchivePath, { force: true });
-      }
-      await cleanupBackup();
-      if (!archiveStoreExisted) {
-        await removeEmptyDirectoryIfPresent(archiveStoreDir);
-      }
-    },
-    cleanup: cleanupBackup,
   };
 }
 
@@ -171,6 +110,7 @@ export async function installPluginFromNpmPackArchive(
     expectedIntegrity?: string;
     onIntegrityDrift?: (params: PluginNpmIntegrityDriftParams) => boolean | Promise<boolean>;
     onBeforePluginArtifactCommit?: PluginInstallArtifactConsentHandler;
+    beforePersistentApply?: () => void;
   },
 ): Promise<InstallPluginResult & { npmTarballName?: string }> {
   const runtime = await loadPluginInstallRuntime();
@@ -280,6 +220,7 @@ export async function installPluginFromNpmPackArchive(
       dryRun,
       expectedPluginId: params.expectedPluginId,
       onBeforePluginArtifactCommit: params.onBeforePluginArtifactCommit,
+      beforePersistentApply: params.beforePersistentApply,
       npmResolution,
       ...(driftResult.integrityDrift ? { integrityDrift: driftResult.integrityDrift } : {}),
     }),

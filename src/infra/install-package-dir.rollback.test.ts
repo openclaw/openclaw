@@ -27,6 +27,70 @@ describe("installPackageDir rollback", () => {
     await fixtureRootTracker.cleanup();
   });
 
+  it("preserves the canonical tree when ownership closes after backup copy publication", async () => {
+    await fixtureRootTracker.setup();
+    const fixtureRoot = await fixtureRootTracker.make("backup-copy-owner");
+    const { sourceDir, targetDir } = await createExistingInstallFixture(fixtureRoot);
+    const expired = new Error("install owner expired after backup publication");
+    let ownerActive = true;
+    let revoked = false;
+    let treeAtRevocation: Record<string, string> | undefined;
+    const readTargetTree = async () => {
+      const entries = await fs.readdir(targetDir, { recursive: true, withFileTypes: true });
+      return Object.fromEntries(
+        await Promise.all(
+          entries
+            .filter((entry) => entry.isFile())
+            .map(async (entry) => {
+              const file = path.join(entry.parentPath, entry.name);
+              return [path.relative(targetDir, file), await fs.readFile(file, "utf8")];
+            }),
+        ),
+      );
+    };
+    const realRename = fs.rename.bind(fs);
+    vi.spyOn(fs, "rename").mockImplementation(async (...args: Parameters<typeof fs.rename>) => {
+      await realRename(...args);
+      if (
+        !revoked &&
+        path.basename(String(args[0])).startsWith(".fs-safe-move-") &&
+        path.basename(path.dirname(String(args[1]))) === ".openclaw-install-backups"
+      ) {
+        await fs.mkdir(targetDir, { recursive: true });
+        await fs.writeFile(path.join(targetDir, "successor.txt"), "successor-owned");
+        treeAtRevocation = await readTargetTree();
+        ownerActive = false;
+        revoked = true;
+      }
+    });
+
+    const result = await installPackageDir(
+      requestDeferredPackageDirInstall(
+        {
+          sourceDir,
+          targetDir,
+          mode: "update",
+          timeoutMs: 1_000,
+          copyErrorPrefix: "failed to copy plugin",
+          hasDeps: false,
+          depsLogMessage: "",
+        },
+        () => {
+          if (!ownerActive) {
+            throw expired;
+          }
+        },
+      ),
+    );
+
+    expect(revoked).toBe(true);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toContain(expired.message);
+    }
+    expect(await readTargetTree()).toEqual(treeAtRevocation);
+  });
+
   it.each(["install", "update"] as const)(
     "preserves a successor when an earlier %s rollback finishes delayed removal",
     async (mode) => {
@@ -196,7 +260,15 @@ describe("installPackageDir rollback", () => {
         });
       }
 
-      await expect(transaction.rollback()).rejects.toBe(ioError);
+      const rollback = transaction.rollback();
+      if (failure === "restoration") {
+        await expect(rollback).rejects.toMatchObject({
+          cause: ioError,
+          message: expect.stringContaining(backupDir),
+        });
+      } else {
+        await expect(rollback).rejects.toBe(ioError);
+      }
       expect(await fs.readFile(path.join(backupDir, "marker.txt"), "utf8")).toBe("old");
       await transaction.rollback();
       expect(await fs.readFile(path.join(targetDir, "marker.txt"), "utf8")).toBe("old");

@@ -2,15 +2,19 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import {
+  requestDeferredPackageDirInstall,
+  resolvePackageDirInstallTransaction,
+} from "../infra/install-package-dir.js";
+import {
   buildNpmResolutionFields,
   formatNpmCommandFailureOutput,
+  withInstallWorkspace,
   type NpmIntegrityDrift,
   type NpmSpecResolution,
 } from "../infra/install-source-utils.js";
 import {
   listMissingRequiredPlatformPackages,
   readManagedNpmRootInstalledDependency,
-  readManagedNpmRootPeerDependencySnapshot,
   readOpenClawManagedNpmRootOverrides,
   repairManagedNpmRootOpenClawPeer,
   syncManagedNpmRootPeerDependencies,
@@ -25,24 +29,18 @@ import { runCommandWithTimeout } from "../process/exec.js";
 import { resolveUserPath } from "../utils.js";
 import { installPluginFromInstalledPackageDir } from "./install-installed-package.js";
 import {
-  cleanupManagedNpmPluginInstallRollbackSnapshot,
-  cleanupManagedNpmRootPreparedDependency,
-  createManagedNpmPluginInstallRollbackSnapshot,
   formatManagedNpmProjectQuarantineArtifacts,
   isManagedNpmProjectCorruptionInstallFailure,
   isNpmAliasOverrideCompatibilityError,
   listManagedNpmRootPackageNames,
   listNewManagedNpmRootPackageDirs,
   quarantineManagedNpmProjectRebuildArtifacts,
-  removeEmptyDirectoryIfPresent,
   resolveManagedNpmGenerationUseForInstall,
   resolveManagedNpmInstallRoot,
   resolveManagedNpmRootDependencySpecForInstall,
   resolveManagedNpmRootPackageDir,
   resolveRequiredPlatformPackageNames,
-  rollbackManagedNpmPluginInstall,
-  rollbackManagedNpmRootPreparedDependency,
-  type ManagedNpmPluginInstallRollbackSnapshot,
+  shouldCopyManagedNpmProjectEntry,
   type ManagedNpmProjectQuarantine,
   type ManagedNpmRootDependencySpecPreparation,
   type ManagedNpmRootPreparedDependency,
@@ -102,8 +100,13 @@ export async function installPluginFromManagedNpmRoot(
     expectedReplacementPluginId?: string;
     integrityDrift?: NpmIntegrityDrift;
     onBeforePluginArtifactCommit?: PluginInstallArtifactConsentHandler;
+    beforePersistentApply?: () => void;
   },
 ): Promise<InstallPluginResult> {
+  const transactionRequest = resolvePluginInstallTransactionRequest(params);
+  const assertOwned = transactionRequest?.assertOwned;
+  const signal = params.signal;
+  const beforePersistentApply = params.beforePersistentApply;
   const runtime = await loadPluginInstallRuntime();
   const { logger, timeoutMs, mode, dryRun } = runtime.resolveTimedInstallModeOptions(
     params,
@@ -118,20 +121,20 @@ export async function installPluginFromManagedNpmRoot(
     requestedMode: mode,
     npmResolution: params.npmResolution,
   });
-  const npmRoot = resolveManagedNpmInstallRoot({
+  const targetNpmRoot = resolveManagedNpmInstallRoot({
     npmBaseDir,
     packageName: params.packageName,
     npmResolution: params.npmResolution,
     useGeneration: generationUse !== "none",
   });
-  const installRoot = resolveManagedNpmRootPackageDir(npmRoot, params.packageName);
+  const targetInstallRoot = resolveManagedNpmRootPackageDir(targetNpmRoot, params.packageName);
   const targetMode =
-    generationUse === "retained-install" && hasRetainedManagedNpmInstallMarker(installRoot)
+    generationUse === "retained-install" && hasRetainedManagedNpmInstallMarker(targetInstallRoot)
       ? "update"
       : await resolveEffectiveInstallMode({
           runtime,
           requestedMode: mode,
-          targetPath: installRoot,
+          targetPath: targetInstallRoot,
         });
   const policyMode =
     generationUse === "update"
@@ -141,7 +144,7 @@ export async function installPluginFromManagedNpmRoot(
         : targetMode;
   const availability = await ensureInstallTargetAvailableForMode({
     runtime,
-    targetPath: installRoot,
+    targetPath: targetInstallRoot,
     mode: targetMode,
   });
   if (!availability.ok) {
@@ -165,7 +168,7 @@ export async function installPluginFromManagedNpmRoot(
           ...(expectedPluginId ? { pluginId: expectedPluginId } : {}),
           requestedSpecifier: params.installPolicyRequest.requestedSpecifier ?? params.displaySpec,
           source: params.installPolicyRequest.source,
-          sourcePath: params.policyPreflightSourcePath ?? npmRoot,
+          sourcePath: params.policyPreflightSourcePath ?? targetNpmRoot,
           sourcePathKind: params.policyPreflightSourcePathKind ?? "directory",
         }),
     });
@@ -178,7 +181,7 @@ export async function installPluginFromManagedNpmRoot(
     return {
       ok: true,
       pluginId: expectedPluginId ?? params.packageName,
-      targetDir: installRoot,
+      targetDir: targetInstallRoot,
       extensions: [],
       npmResolution: params.npmResolution,
       ...(params.integrityDrift ? { integrityDrift: params.integrityDrift } : {}),
@@ -186,32 +189,19 @@ export async function installPluginFromManagedNpmRoot(
   }
   params.signal?.throwIfAborted();
 
-  let rollbackSnapshot: ManagedNpmPluginInstallRollbackSnapshot;
-  let preparedDependency: ManagedNpmRootPreparedDependency | undefined;
-  let rollbackPeerDependencySnapshot:
-    | Awaited<ReturnType<typeof readManagedNpmRootPeerDependencySnapshot>>
-    | undefined;
   let recovery:
     | {
         cause: { kind: "npm-corruption" | "incomplete-metadata"; error: string };
         quarantine: ManagedNpmProjectQuarantine;
       }
     | undefined;
-  let deferredTransaction = false;
-  let installSucceeded = false;
-  try {
-    rollbackSnapshot = await createManagedNpmPluginInstallRollbackSnapshot({ npmRoot });
-  } catch (error) {
-    return {
-      ok: false,
-      error: `Failed to snapshot managed npm root before installing ${params.packageName}: ${String(error)}`,
-    };
-  }
 
   const runManagedNpmInstall = async (
+    npmRoot: string,
     prepared: ManagedNpmRootPreparedDependency,
   ): Promise<InstallPluginResult> => {
-    logger.info?.(`Installing ${params.displaySpec} into ${npmRoot}…`);
+    const installRoot = resolveManagedNpmRootPackageDir(npmRoot, params.packageName);
+    logger.info?.(`Installing ${params.displaySpec} into ${targetNpmRoot}…`);
     if (params.packageName !== "openclaw") {
       const repairedOpenClawPeer = await repairManagedNpmRootOpenClawPeer({
         npmRoot,
@@ -224,12 +214,14 @@ export async function installPluginFromManagedNpmRoot(
       }
     }
     const managedOverrides = await readOpenClawManagedNpmRootOverrides();
-    rollbackPeerDependencySnapshot ??= await readManagedNpmRootPeerDependencySnapshot({ npmRoot });
     const quarantineForRecovery = async (
       cause: NonNullable<typeof recovery>["cause"],
     ): Promise<Extract<InstallPluginResult, { ok: false }> | null> => {
       try {
-        const quarantine = await quarantineManagedNpmProjectRebuildArtifacts({ npmRoot });
+        const quarantine = await quarantineManagedNpmProjectRebuildArtifacts({
+          npmRoot,
+          recoveryRoot: path.dirname(targetNpmRoot),
+        });
         recovery = { cause, quarantine };
       } catch (error) {
         return {
@@ -330,7 +322,7 @@ export async function installPluginFromManagedNpmRoot(
       if (recoveryFailure) {
         return recoveryFailure;
       }
-      return await runManagedNpmInstall(prepared);
+      return await runManagedNpmInstall(npmRoot, prepared);
     }
     if (install.code !== 0) {
       const error = recovery
@@ -527,7 +519,7 @@ export async function installPluginFromManagedNpmRoot(
         if (recoveryFailure) {
           return recoveryFailure;
         }
-        return await runManagedNpmInstall(prepared);
+        return await runManagedNpmInstall(npmRoot, prepared);
       }
       return {
         ok: false,
@@ -581,7 +573,7 @@ export async function installPluginFromManagedNpmRoot(
     }
     await params.onBeforePluginArtifactCommit?.({
       pluginId: result.pluginId,
-      ...(policyMode === "update" ? { currentArtifactDir: installRoot } : {}),
+      ...(policyMode === "update" ? { currentArtifactDir: targetInstallRoot } : {}),
       stagedArtifactDir: installRoot,
       mode: policyMode,
       ...(params.installPolicyRequest.source?.kind === "npm"
@@ -596,88 +588,65 @@ export async function installPluginFromManagedNpmRoot(
     });
     return {
       ...result,
+      targetDir: targetInstallRoot,
       npmResolution: params.npmResolution,
       ...(params.integrityDrift ? { integrityDrift: params.integrityDrift } : {}),
     };
   };
 
-  const rollback = async () => {
-    await rollbackManagedNpmPluginInstall({
-      npmRoot,
-      packageName: params.packageName,
-      targetDir: installRoot,
+  return await withInstallWorkspace("openclaw-npm-project-", async (emptySourceDir) => {
+    const projectExists = await runtime.fileExists(targetNpmRoot);
+    let stagingFailure: { error: unknown } | undefined;
+    const publishParams = {
+      sourceDir: projectExists ? targetNpmRoot : emptySourceDir,
+      targetDir: targetNpmRoot,
+      mode: projectExists ? ("update" as const) : ("install" as const),
       timeoutMs,
       logger,
-      peerDependencySnapshot: rollbackPeerDependencySnapshot,
-      // Restoring a quarantined tree would recreate the corruption being repaired.
-      snapshot: recovery ? undefined : rollbackSnapshot,
-    });
-    if (preparedDependency) {
-      await rollbackManagedNpmRootPreparedDependency({
-        packageName: params.packageName,
-        preparedDependency,
-        logger,
-      });
-    }
-  };
-  const cleanup = async () => {
-    await cleanupManagedNpmRootPreparedDependency({
-      packageName: params.packageName,
-      preparedDependency,
-      logger,
-    });
-    await cleanupManagedNpmPluginInstallRollbackSnapshot({ snapshot: rollbackSnapshot, logger });
-    // Prepared npm-pack archives must be gone before retiring an empty failed project.
-    await removeEmptyDirectoryIfPresent(npmRoot).catch((error: unknown) =>
-      logger.warn?.(`Failed to remove empty managed npm project ${npmRoot}: ${String(error)}`),
-    );
-  };
-
-  try {
-    const dependencyResult = await resolveManagedNpmRootDependencySpecForInstall({
-      npmRoot,
-      packageName: params.packageName,
-      dependencySpec: params.dependencySpec,
-      prepareDependencySpec: params.prepareDependencySpec,
-    });
-    if (!dependencyResult.ok) {
-      return dependencyResult;
-    }
-    preparedDependency = dependencyResult;
-    const result = await runManagedNpmInstall(preparedDependency);
-    installSucceeded = result.ok;
-    if (!result.ok || !resolvePluginInstallTransactionRequest(params)) {
-      return result;
-    }
-    deferredTransaction = true;
-    let settled = false;
-    return attachPluginInstallTransaction(
-      { ...result },
-      {
-        async commit() {
-          if (settled) {
-            return;
-          }
-          settled = true;
-          await cleanup();
-        },
-        async rollback() {
-          if (settled) {
-            return;
-          }
-          settled = true;
-          await rollback();
-          await cleanup();
-        },
+      copyErrorPrefix: "Failed to install managed npm project",
+      hasDeps: false,
+      sourceHardlinks: "package-manager" as const,
+      copyFilter: (sourcePath: string) =>
+        shouldCopyManagedNpmProjectEntry({
+          nodeModulesDir: path.join(targetNpmRoot, "node_modules"),
+          sourcePath,
+        }),
+      depsLogMessage: "Installing plugin dependencies…",
+      beforePersistentApply: () => {
+        beforePersistentApply?.();
+        signal?.throwIfAborted();
       },
+      afterInstall: async (npmRoot: string): Promise<InstallPluginResult> => {
+        const dependency = await resolveManagedNpmRootDependencySpecForInstall({
+          npmRoot,
+          packageName: params.packageName,
+          dependencySpec: params.dependencySpec,
+          prepareDependencySpec: params.prepareDependencySpec,
+        });
+        if (!dependency.ok) {
+          return dependency;
+        }
+        try {
+          return await runManagedNpmInstall(npmRoot, dependency);
+        } catch (error) {
+          // The directory publisher returns failures; preserve typed consent/authority errors.
+          stagingFailure = { error };
+          throw error;
+        }
+      },
+    };
+    const published = await runtime.installPackageDir(
+      transactionRequest
+        ? requestDeferredPackageDirInstall(publishParams, assertOwned)
+        : publishParams,
     );
-  } finally {
-    if (!deferredTransaction) {
-      // Returned failures and throws must restore the snapshot before cleanup discards it.
-      if (!installSucceeded && preparedDependency) {
-        await rollback();
+    if (!published.ok) {
+      if (stagingFailure) {
+        throw stagingFailure.error;
       }
-      await cleanup();
+      return published;
     }
-  }
+    const transaction = resolvePackageDirInstallTransaction(published);
+    return transaction ? attachPluginInstallTransaction(published, transaction) : published;
+  });
 }
