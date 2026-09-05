@@ -40,6 +40,7 @@ import {
   logAnthropicContextEdits,
   resolveAnthropicContextManagementBetaHeader,
 } from "../transports/anthropic-payload-policy.js";
+import { isOpencodeEndpoint } from "../transports/session-affinity.js";
 import {
   assignTransportErrorDetails,
   finalizeTerminalToolCallArguments,
@@ -404,7 +405,10 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicComp
         }
 
         const cacheRetention = requestOptions?.cacheRetention ?? resolveCacheRetention();
-        const cacheSessionId = cacheRetention === "none" ? undefined : requestOptions?.sessionId;
+        const cacheSessionId =
+          cacheRetention === "none" && !isOpencodeEndpoint(model.baseUrl)
+            ? undefined
+            : requestOptions?.sessionId;
 
         const created = createClient(
           model,
@@ -1026,10 +1030,14 @@ function createClient(
   if (serverSideFallback) {
     betaFeatures.push(ANTHROPIC_SERVER_SIDE_FALLBACK_BETA);
   }
-  const sessionAffinityHeaders: Record<string, string | null> =
-    sessionId && getAnthropicCompat(model).sendSessionAffinityHeaders
-      ? { "x-session-affinity": sessionId }
-      : {};
+  const isOpenCodeHost = isOpencodeEndpoint(model.baseUrl);
+  const sessionAffinityHeaders: Record<string, string | null> = sessionId
+    ? isOpenCodeHost
+      ? { "x-opencode-session": sessionId }
+      : getAnthropicCompat(model).sendSessionAffinityHeaders
+        ? { "x-session-affinity": sessionId }
+        : {}
+    : {};
   const defaultHeaders = mergeHeaders(
     {
       accept: "application/json",

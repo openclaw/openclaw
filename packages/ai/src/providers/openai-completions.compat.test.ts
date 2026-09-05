@@ -911,6 +911,16 @@ describe("OpenAI-compatible completions compatibility", () => {
       }),
       expectedHeaders: { "x-session-id": "session-123" },
     },
+    {
+      name: "OpenCode Go",
+      model: createModel({ baseUrl: "https://opencode.ai/zen/go/v1" }),
+      expectedHeaders: { "x-opencode-session": "session-123" },
+    },
+    {
+      name: "OpenCode Zen",
+      model: createModel({ baseUrl: "https://opencode.ai/zen/v1" }),
+      expectedHeaders: { "x-opencode-session": "session-123" },
+    },
   ])("sends exact $name session-affinity headers", async ({ model, expectedHeaders }) => {
     await streamOpenAICompletions(model, context, {
       apiKey: "test",

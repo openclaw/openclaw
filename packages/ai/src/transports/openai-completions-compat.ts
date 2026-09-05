@@ -8,10 +8,11 @@ import type { Model, OpenAICompletionsCompat } from "@openclaw/llm-core";
 import type { AiProviderRequestCapabilities, AiProviderRequestPolicyInput } from "../host.js";
 import { isKnownOpenAIJsonSchemaModelId } from "../providers/openai-response-format.js";
 import { resolveProviderRequestCapabilities as resolveModelProviderRequestCapabilities } from "./host-policy.js";
+import { isOpencodeEndpoint } from "./session-affinity.js";
 
 type ProviderEndpointClass = string;
 type ProviderRequestCapabilities = AiProviderRequestCapabilities;
-type OpenAICompletionsSessionAffinity = "none" | "openai" | "openrouter";
+type OpenAICompletionsSessionAffinity = "none" | "openai" | "openrouter" | "opencode";
 
 type OpenAICompletionsCompatDefaultsInput = {
   provider?: string;
@@ -227,9 +228,12 @@ export function detectOpenAICompletionsCompat(
 }
 
 function resolveSessionAffinity(
-  model: Pick<Model<"openai-completions">, "compat">,
+  model: Pick<Model<"openai-completions">, "compat" | "baseUrl">,
   detectedFormat: OpenAICompletionsCompatDefaults["sessionAffinityFormat"],
 ): OpenAICompletionsSessionAffinity {
+  if (isOpencodeEndpoint(model.baseUrl)) {
+    return "opencode";
+  }
   if (model.compat?.sendSessionAffinityHeaders !== true) {
     return "none";
   }
