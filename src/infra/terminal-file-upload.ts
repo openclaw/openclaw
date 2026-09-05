@@ -13,6 +13,9 @@ const TERMINAL_UPLOAD_PREFIX = "openclaw-terminal-upload-";
 const TERMINAL_UPLOAD_RETENTION_MS = 24 * 60 * 60 * 1000;
 const TERMINAL_UPLOAD_CLEANUP_RETRY_MS = 60 * 60 * 1000;
 const MAX_STAGED_NAME_BYTES = 180;
+// ponytail: mirrors browser-proxy staging budget (256MiB/64 dirs); per-root lock if concurrent bypass matters.
+const TERMINAL_UPLOAD_MAX_RETAINED_BYTES = 16 * MAX_TERMINAL_UPLOAD_BYTES;
+const TERMINAL_UPLOAD_MAX_RETAINED_DIRECTORIES = 64;
 const PORTABLE_NAME_FORBIDDEN = new RegExp(String.raw`[\u0000-\u001f\u007f<>:"/\\|?*%!]`, "g");
 const WINDOWS_RESERVED_NAME = /^(?:con|prn|aux|nul|com[1-9¹²³]|lpt[1-9¹²³])(?:\.|$)/iu;
 const cleanupTimers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -224,6 +227,46 @@ export function ensureTerminalUploadCleanup(options?: {
   return defaultCleanupPromise;
 }
 
+async function readRetainedStagingUsage(
+  tempRoot: string,
+): Promise<{ directories: number; bytes: number }> {
+  let entries;
+  try {
+    entries = await readdir(tempRoot, { withFileTypes: true });
+  } catch (error) {
+    // SAFETY: fs.readdir rejects with ErrnoException; code read is ENOENT-only here.
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return { directories: 0, bytes: 0 };
+    }
+    throw error;
+  }
+  let directories = 0;
+  let bytes = 0;
+  for (const entry of entries) {
+    if (!entry.isDirectory() || !entry.name.startsWith(TERMINAL_UPLOAD_PREFIX)) {
+      continue;
+    }
+    directories += 1;
+    let files: import("node:fs").Dirent[];
+    try {
+      files = await readdir(path.join(tempRoot, entry.name), { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const file of files) {
+      if (!file.isFile()) {
+        continue;
+      }
+      try {
+        bytes += (await lstat(path.join(tempRoot, entry.name, file.name))).size;
+      } catch {
+        /* ignore transient */
+      }
+    }
+  }
+  return { directories, bytes };
+}
+
 /** Stages one browser-selected file in a private, expiring temporary directory. */
 export async function stageTerminalUpload(
   file: TerminalUploadFile,
@@ -238,6 +281,16 @@ export async function stageTerminalUpload(
   if (platform === "win32" && !options?.tempRoot) {
     // The user profile supplies the restrictive DACL; this mode protects POSIX-compatible hosts.
     await mkdir(tempRoot, { recursive: true, mode: 0o700 });
+  }
+  const retained = await readRetainedStagingUsage(tempRoot).catch(() => ({
+    directories: 0,
+    bytes: 0,
+  }));
+  if (
+    retained.directories >= TERMINAL_UPLOAD_MAX_RETAINED_DIRECTORIES ||
+    retained.bytes + bytes.length > TERMINAL_UPLOAD_MAX_RETAINED_BYTES
+  ) {
+    throw new Error("terminal upload staging limit reached");
   }
   const directory = await mkdtemp(path.join(tempRoot, TERMINAL_UPLOAD_PREFIX));
   const targetPath = path.join(directory, sanitizeTerminalUploadName(file.name));
