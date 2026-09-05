@@ -16,9 +16,12 @@ import {
   assertRestartRecoverySnapshotCurrent,
   buildRestartRecoveryIdempotencyKey,
   buildRestartRecoveryResumeMessage,
+  captureShippedRestartTimeout,
   getRestartRecoveryReplayError,
   isRetiredRunningSubagent,
   isRestartRecoveryLifecycleCurrent,
+  reclassifyShippedRestartTimeout,
+  restoreShippedRestartTimeout,
 } from "./subagent-registry-restart-recovery-helpers.js";
 import { readSubagentRecoveryTranscriptMessage } from "./subagent-registry-restart-recovery-message.js";
 import {
@@ -220,19 +223,8 @@ export async function recoverInterruptedSubagentRow(
     if (typeof params.entry.execution.endedAt === "number" && !legacyRestartTimeout) {
       return { status: "ignored" };
     }
-    if (legacyRestartTimeout) {
-      const interruptedAt = params.entry.execution.endedAt;
-      params.entry.execution = {
-        ...params.entry.execution,
-        status: "interrupted",
-        interruptedAt,
-        interruptionReason: "gateway-restart",
-        endedAt: undefined,
-        outcome: undefined,
-      };
-      params.entry.endedReason = undefined;
-      params.entry.terminalOwner = undefined;
-    }
+    const timeoutSnapshot = captureShippedRestartTimeout(params.entry);
+    reclassifyShippedRestartTimeout(params.entry);
     if (isStaleUnendedSubagentRun(params.entry, params.now)) {
       const age = Math.round(
         (params.now - (getSubagentSessionStartedAt(params.entry) ?? params.now)) / 1_000,
@@ -301,6 +293,7 @@ export async function recoverInterruptedSubagentRow(
         childSessionKey,
         reason: blockedReason,
       });
+      restoreShippedRestartTimeout(params.entry, timeoutSnapshot);
       return { status: "handled" };
     }
     if (!params.gatewayRuntime) {
