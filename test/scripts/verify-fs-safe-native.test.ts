@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -13,6 +13,7 @@ type FixtureOptions = {
   installPlatformPackage?: boolean;
   native?: boolean;
   platformPackage?: boolean;
+  pnpmLayout?: boolean;
   version?: string | undefined;
 };
 
@@ -21,12 +22,33 @@ function writeModule(pathname: string, contents: string): void {
   writeFileSync(pathname, contents);
 }
 
+function linkDirectory(target: string, link: string): void {
+  mkdirSync(path.dirname(link), { recursive: true });
+  symlinkSync(
+    process.platform === "win32" ? target : path.relative(path.dirname(link), target),
+    link,
+    process.platform === "win32" ? "junction" : "dir",
+  );
+}
+
 function createFixture(options: FixtureOptions = {}) {
   const root = tempDirs.make("openclaw-fs-safe-");
   const packageRoot = path.join(root, "app");
   const modulesRoot = path.join(packageRoot, "node_modules");
-  const fsSafeRoot = path.join(modulesRoot, "@openclaw", "fs-safe");
-  const platformRoot = path.join(modulesRoot, "@openclaw", "fs-safe-linux-x64-gnu");
+  const virtualStore = path.join(modulesRoot, ".pnpm");
+  const fsSafeDependencyRoot = options.pnpmLayout
+    ? path.join(virtualStore, "@openclaw+fs-safe@0.8.1", "node_modules")
+    : modulesRoot;
+  const fsSafeRoot = path.join(fsSafeDependencyRoot, "@openclaw", "fs-safe");
+  const platformRoot = options.pnpmLayout
+    ? path.join(
+        virtualStore,
+        "@openclaw+fs-safe-linux-x64-gnu@0.8.1",
+        "node_modules",
+        "@openclaw",
+        "fs-safe-linux-x64-gnu",
+      )
+    : path.join(modulesRoot, "@openclaw", "fs-safe-linux-x64-gnu");
   const outsideRoot = path.join(root, "outside");
   const bindingPath =
     options.binding === "platform"
@@ -36,6 +58,9 @@ function createFixture(options: FixtureOptions = {}) {
         : path.join(fsSafeRoot, "dist", "native", "linux-x64-gnu", "fs-safe-native.node");
 
   mkdirSync(fsSafeRoot, { recursive: true });
+  if (options.pnpmLayout) {
+    linkDirectory(fsSafeRoot, path.join(modulesRoot, "@openclaw", "fs-safe"));
+  }
   writeFileSync(path.join(packageRoot, "package.json"), JSON.stringify({ type: "module" }));
   writeFileSync(
     path.join(fsSafeRoot, "package.json"),
@@ -76,8 +101,18 @@ function createFixture(options: FixtureOptions = {}) {
   if (options.installPlatformPackage || options.binding === "platform") {
     writeModule(
       path.join(platformRoot, "package.json"),
-      JSON.stringify({ name: "@openclaw/fs-safe-linux-x64-gnu", version: "0.8.1" }),
+      JSON.stringify({
+        name: "@openclaw/fs-safe-linux-x64-gnu",
+        version: "0.8.1",
+        main: "fs-safe-native.node",
+      }),
     );
+    if (options.pnpmLayout) {
+      linkDirectory(
+        platformRoot,
+        path.join(fsSafeDependencyRoot, "@openclaw", "fs-safe-linux-x64-gnu"),
+      );
+    }
   }
   return { packageRoot };
 }
@@ -182,6 +217,21 @@ describe("split-package fs-safe packages", () => {
       native: true,
       installPlatformPackage: true,
       platformPackage: true,
+      version: "0.8.1",
+    });
+
+    const result = runVerifier(fixture.packageRoot);
+
+    expect(result.status, result.stderr).toBe(0);
+  });
+
+  it("resolves a platform package beside the canonical fs-safe pnpm location", () => {
+    const fixture = createFixture({
+      binding: "platform",
+      durability: true,
+      native: true,
+      platformPackage: true,
+      pnpmLayout: true,
       version: "0.8.1",
     });
 

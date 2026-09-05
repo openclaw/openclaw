@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import fsPromises from "node:fs/promises";
-import { createRequire, findPackageJSON } from "node:module";
+import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -46,16 +46,33 @@ function nativeGeneration(version) {
   return major > 0 || minor >= 6 ? "split" : minor === 5 ? "bundled" : "pre";
 }
 
+function findOwningPackage(resolvedPath, expectedName) {
+  let current = fs.realpathSync(path.dirname(resolvedPath));
+  while (true) {
+    const manifestPath = path.join(current, "package.json");
+    if (fs.existsSync(manifestPath)) {
+      const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+      if (manifest.name === expectedName) {
+        return { manifest, manifestPath, root: current };
+      }
+    }
+    const parent = path.dirname(current);
+    if (parent === current) {
+      throw new Error(`could not find the installed ${expectedName} package`);
+    }
+    current = parent;
+  }
+}
+
 const { allowPreNativeContract, mode, packageRoot } = parseArgs(process.argv.slice(2));
 const requireFromPackage = createRequire(path.join(packageRoot, "package.json"));
-const fsSafeManifestPath = findPackageJSON(
-  "@openclaw/fs-safe",
-  pathToFileURL(path.join(packageRoot, "package.json")),
-);
-assert.ok(fsSafeManifestPath, "expected an installed @openclaw/fs-safe package");
-const fsSafeManifest = JSON.parse(await fsPromises.readFile(fsSafeManifestPath, "utf8"));
+const configPath = requireFromPackage.resolve("@openclaw/fs-safe/config");
+const {
+  manifest: fsSafeManifest,
+  manifestPath: fsSafeManifestPath,
+  root: fsSafeRoot,
+} = findOwningPackage(configPath, "@openclaw/fs-safe");
 assert.equal(fsSafeManifest.name, "@openclaw/fs-safe", "resolved an unexpected fs-safe package");
-const fsSafeRoot = fs.realpathSync(path.dirname(fsSafeManifestPath));
 const fsSafeExports = fsSafeManifest.exports;
 assert.ok(
   fsSafeExports !== null && typeof fsSafeExports === "object" && !Array.isArray(fsSafeExports),
@@ -74,7 +91,6 @@ assert.ok(
   "expected @openclaw/fs-safe optionalDependencies to be an object",
 );
 const generation = nativeGeneration(fsSafeManifest.version);
-const configPath = requireFromPackage.resolve("@openclaw/fs-safe/config");
 const fsSafeConfig = await import(pathToFileURL(configPath).href);
 const platformPackageNames = Object.keys(optionalDependencies ?? {}).filter((name) =>
   name.startsWith("@openclaw/fs-safe-"),
@@ -118,12 +134,14 @@ assert.equal(
     : "fs-safe platform packages predate the split-native contract",
 );
 
+const requireFromFsSafe = createRequire(fsSafeManifestPath);
 const installedPlatformPackages = platformPackageNames.flatMap((name) => {
   try {
-    const manifest = findPackageJSON(name, pathToFileURL(fsSafeManifestPath));
-    return manifest ? [{ name, root: fs.realpathSync(path.dirname(manifest)) }] : [];
+    const entryPath = requireFromFsSafe.resolve(name);
+    const platformPackage = findOwningPackage(entryPath, name);
+    return [{ name, root: platformPackage.root }];
   } catch (error) {
-    if (error?.code === "ERR_MODULE_NOT_FOUND") {
+    if (error?.code === "MODULE_NOT_FOUND") {
       return [];
     }
     throw error;
