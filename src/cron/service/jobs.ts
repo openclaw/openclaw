@@ -7,6 +7,7 @@ import {
 import type { CronConfig } from "../../config/types.cron.js";
 import { normalizeOptionalAccountId } from "../../routing/account-id.js";
 import { resolveCronDeliveryPlan } from "../delivery-plan.js";
+import { normalizeCronJobPrecheck } from "../job-precheck-normalize.js";
 import { assertCronJobStateTimestamps } from "../persisted-shape.js";
 import type { CronScheduledToolPolicy } from "../scheduled-tool-policy.js";
 import { normalizeCronScriptPayload } from "../script-payload.js";
@@ -43,6 +44,7 @@ import {
   assertScriptPayloadSupport,
   assertStreamScheduleSupport,
   assertSupportedJobSpec,
+  assertPrecheckSupport,
   assertTriggerSupport,
 } from "./jobs-validation.js";
 import { normalizeOptionalAgentId, normalizeRequiredName } from "./normalize.js";
@@ -125,81 +127,7 @@ function normalizeDeclarativeLabel(
   return normalized;
 }
 
-type JobValidationContext =
-  | { kind: "create"; cronConfig?: CronConfig; defaultAgentId?: string; nowMs: number }
-  | {
-      kind: "patch";
-      patch: CronJobPatch;
-      defaultAgentId?: string;
-      nowMs?: number;
-      cronConfig?: CronConfig;
-    }
-  | {
-      kind: "declarative";
-      input: CronJobCreate;
-      defaultAgentId?: string;
-      nowMs: number;
-      cronConfig?: CronConfig;
-    };
 
-function validateFullJob(
-  job: CronStoredJob,
-  context: JobValidationContext,
-  configuredChannels?: readonly string[],
-) {
-  const cronConfig = context.cronConfig;
-  const triggerTouched =
-    context.kind === "create"
-      ? job.trigger !== undefined
-      : context.kind === "patch"
-        ? context.patch.trigger != null
-        : context.input.trigger !== undefined;
-  const scriptTouched =
-    context.kind === "create"
-      ? job.payload.kind === "script"
-      : context.kind === "patch"
-        ? context.patch.payload?.kind === "script"
-        : context.input.payload.kind === "script";
-  const streamTouched =
-    context.kind !== "patch" ||
-    context.patch.enabled === true ||
-    context.patch.schedule?.kind === "stream";
-  const validateCapabilities = () => {
-    assertTriggerSupport(job, {
-      cronConfig,
-      validateAuthoredTrigger: triggerTouched,
-    });
-    assertScriptPayloadSupport(job, {
-      cronConfig,
-      requireEnabled: scriptTouched,
-      ...(context.kind === "patch" ? { validateSyntax: context.patch.payload !== undefined } : {}),
-    });
-    assertStreamScheduleSupport(job, { cronConfig, requireEnabled: streamTouched });
-  };
-  if (context.kind === "declarative") {
-    validateCapabilities();
-  }
-  assertSupportedJobSpec(job);
-  assertPacingSupport(job);
-  if (context.kind !== "declarative") {
-    validateCapabilities();
-  }
-  assertMainSessionAgentId(job, context.defaultAgentId);
-  assertDeliverySupport(job);
-  assertAnnounceDeliveryChannelSupport(
-    job,
-    configuredChannels,
-    context.kind === "patch" ? context.patch : undefined,
-  );
-  assertFailureDestinationSupport(job);
-  const scheduleTouched =
-    context.kind !== "patch" ||
-    context.patch.schedule !== undefined ||
-    context.patch.enabled === true;
-  if (context.nowMs !== undefined && scheduleTouched) {
-    assertTimeScheduleSatisfiable(job, context.nowMs, computeJobNextRunAtMs);
-  }
-}
 /** Creates a normalized cron job row from public add input and computes its initial schedule. */
 export function createJob(
   state: CronServiceState,
@@ -260,6 +188,15 @@ export function createJob(
       input.payload.kind === "script"
         ? normalizeCronScriptPayload(structuredClone(input.payload))
         : structuredClone(input.payload),
+    ...(input.precheck
+      ? (() => {
+          const precheck = normalizeCronJobPrecheck(input.precheck);
+          if (!precheck) {
+            throw new Error("invalid cron job precheck");
+          }
+          return { precheck };
+        })()
+      : {}),
     delivery: resolveInitialCronDelivery(input),
     failureAlert: input.failureAlert,
     ...(input.trigger ? { trigger: structuredClone(input.trigger) } : {}),
@@ -371,6 +308,17 @@ export function applyJobPatch(
     job.payload = mergeCronPayload(job.payload, patch.payload);
     if (job.payload.kind === "script") {
       job.payload = normalizeCronScriptPayload(job.payload);
+    }
+  }
+  if ("precheck" in patch) {
+    if (patch.precheck === null || patch.precheck === undefined) {
+      delete job.precheck;
+    } else {
+      const precheck = normalizeCronJobPrecheck(patch.precheck);
+      if (!precheck) {
+        throw new Error("invalid cron job precheck");
+      }
+      job.precheck = precheck;
     }
   }
   if (cronJobUsesToolRuntime(job) && (!previouslyUsedToolRuntime || explicitlyClearsToolsAllow)) {
@@ -510,6 +458,17 @@ export function applyDeclarativeJobSpec(
     job.trigger = structuredClone(input.trigger);
   } else {
     delete job.trigger;
+  }
+  // Converge host-shell precheck with the declaration (add/change/clear), same
+  // ownership model as trigger — omitting precheck clears a prior gate.
+  if (input.precheck) {
+    const precheck = normalizeCronJobPrecheck(input.precheck);
+    if (!precheck) {
+      throw new Error("invalid cron job precheck");
+    }
+    job.precheck = precheck;
+  } else {
+    delete job.precheck;
   }
   if (cronJobUsesToolRuntime(job) && job.payload.toolsAllow === undefined) {
     if (previousToolsAllow !== undefined) {
