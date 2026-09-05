@@ -1300,7 +1300,7 @@ process.stdout.write(sessionDir + "\\n");
             ? "selected-gateway-admits-ios-iphone-watch-relay"
             : "baseline-before-candidate",
         nodeSurfaceCommandAdditions: scopedNodeSurfaceReapproval
-          ? ["watch.notify", "watch.status"]
+          ? ["camera.clip", "watch.notify", "watch.status"]
           : [],
         missingPasswordReason: true,
         missingPasswordClose1008: true,
@@ -1341,7 +1341,10 @@ process.stdout.write(sessionDir + "\\n");
       writeJson(finalEvidenceFile, stale);
       expect(verify).toThrow(/newest stored token/);
       stale.credentials.node.usedTokenHash = hashes[2];
-      stale.nodeSurfaceCommandAdditions = ["watch.status", "system.run"];
+      stale.nodeSurfaceCommandAdditions = ["watch.notify", "watch.status"];
+      writeJson(finalEvidenceFile, stale);
+      expect(verify).toThrow(/command additions changed across reconnects/);
+      stale.nodeSurfaceCommandAdditions = ["camera.clip", "watch.notify"];
       writeJson(finalEvidenceFile, stale);
       expect(verify).toThrow(/known command-surface reapproval/);
       stale.nodeSurfaceCommandAdditions = [];

@@ -1742,8 +1742,10 @@ function assertMobilePairingEvidence(files) {
       value?.pendingPairingCount === 1 &&
       value?.pendingNodePairingCount === 1 &&
       value?.nodeSurfaceReapprovalRequired === true &&
-      JSON.stringify(value?.nodeSurfaceCommandAdditions) ===
-        JSON.stringify(expectedNodeSurfaceAdditions);
+      isCanonicalStringSurface(value?.nodeSurfaceCommandAdditions) &&
+      expectedNodeSurfaceAdditions.every((requiredCommand) =>
+        value.nodeSurfaceCommandAdditions.includes(requiredCommand),
+      );
     const mode = value?.nodeSurfaceReapprovalMode;
     assert(
       mode === "not-applicable" || Object.hasOwn(expectedReasons, mode),
@@ -1817,6 +1819,18 @@ function assertMobilePairingEvidence(files) {
       .every((value) => JSON.stringify(value?.pairedNodePermissions) === baselinePermissions),
     "candidate mobile node pairing permission surface changed without reapproval",
   );
+  if (candidateMode === "required") {
+    const candidateCommandAdditions = JSON.stringify(evidence[1]?.nodeSurfaceCommandAdditions);
+    assert(
+      evidence
+        .slice(2)
+        .every(
+          (value) =>
+            JSON.stringify(value?.nodeSurfaceCommandAdditions) === candidateCommandAdditions,
+        ),
+      "candidate mobile node pairing command additions changed across reconnects",
+    );
+  }
   if (candidateMode === "not-applicable") {
     assert(
       expectedNodeSurfaceAdditions.every((nodeCommand) =>
