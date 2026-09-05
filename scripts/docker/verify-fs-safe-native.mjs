@@ -34,7 +34,8 @@ function parseArgs(argv) {
       "usage: verify-fs-safe-native.mjs --package-root <path> --mode <require|fallback> [--allow-pre-native-contract <0|1>] [--result-path <path>]",
     );
   }
-  return { allowPreNativeContract, mode, packageRoot: path.resolve(packageRoot), resultPath };
+  packageRoot = fs.realpathSync(path.resolve(packageRoot));
+  return { allowPreNativeContract, mode, packageRoot, resultPath };
 }
 
 function writeResult(resultPath, outcome) {

@@ -17,6 +17,7 @@ type FixtureOptions = {
   platformPackage?: boolean;
   platformDependencyVersion?: string;
   platformVersion?: string;
+  pnpmGlobalLayout?: boolean;
   pnpmLayout?: boolean;
   version?: string | undefined;
 };
@@ -37,17 +38,29 @@ function linkDirectory(target: string, link: string): void {
 
 function createFixture(options: FixtureOptions = {}) {
   const root = tempDirs.make("openclaw-fs-safe-");
-  const packageRoot = path.join(root, "app");
-  const modulesRoot = path.join(packageRoot, "node_modules");
-  const virtualStore = path.join(modulesRoot, ".pnpm");
-  const fsSafeDependencyRoot = options.pnpmLayout
-    ? path.join(virtualStore, "@openclaw+fs-safe@0.8.1", "node_modules")
+  const fixtureVersion = options.version ?? "0.8.1";
+  const globalRoot = path.join(root, "global", "5");
+  const physicalPackageRoot = options.pnpmGlobalLayout
+    ? path.join(globalRoot, ".pnpm", "openclaw@2026.9.1", "node_modules", "openclaw")
+    : path.join(root, "app");
+  const packageRoot = options.pnpmGlobalLayout
+    ? path.join(globalRoot, "node_modules", "openclaw")
+    : physicalPackageRoot;
+  const modulesRoot = options.pnpmGlobalLayout
+    ? path.dirname(physicalPackageRoot)
+    : path.join(packageRoot, "node_modules");
+  const virtualStore = options.pnpmGlobalLayout
+    ? path.join(globalRoot, ".pnpm")
+    : path.join(modulesRoot, ".pnpm");
+  const pnpmLayout = options.pnpmLayout || options.pnpmGlobalLayout;
+  const fsSafeDependencyRoot = pnpmLayout
+    ? path.join(virtualStore, `@openclaw+fs-safe@${fixtureVersion}`, "node_modules")
     : modulesRoot;
   const fsSafeRoot = path.join(fsSafeDependencyRoot, "@openclaw", "fs-safe");
-  const platformRoot = options.pnpmLayout
+  const platformRoot = pnpmLayout
     ? path.join(
         virtualStore,
-        "@openclaw+fs-safe-linux-x64-gnu@0.8.1",
+        `@openclaw+fs-safe-linux-x64-gnu@${fixtureVersion}`,
         "node_modules",
         "@openclaw",
         "fs-safe-linux-x64-gnu",
@@ -62,7 +75,11 @@ function createFixture(options: FixtureOptions = {}) {
         : path.join(fsSafeRoot, "dist", "native", "linux-x64-gnu", "fs-safe-native.node");
 
   mkdirSync(fsSafeRoot, { recursive: true });
-  if (options.pnpmLayout) {
+  if (options.pnpmGlobalLayout) {
+    mkdirSync(physicalPackageRoot, { recursive: true });
+    linkDirectory(physicalPackageRoot, packageRoot);
+  }
+  if (pnpmLayout) {
     linkDirectory(fsSafeRoot, path.join(modulesRoot, "@openclaw", "fs-safe"));
   }
   writeFileSync(path.join(packageRoot, "package.json"), JSON.stringify({ type: "module" }));
@@ -119,13 +136,13 @@ function createFixture(options: FixtureOptions = {}) {
           : {}),
       }),
     );
-    if (options.pnpmLayout) {
+    if (pnpmLayout) {
       linkDirectory(
         platformRoot,
         path.join(fsSafeDependencyRoot, "@openclaw", "fs-safe-linux-x64-gnu"),
       );
     }
-  } else if (options.danglingPlatformPackage && options.pnpmLayout) {
+  } else if (options.danglingPlatformPackage && pnpmLayout) {
     linkDirectory(
       path.join(virtualStore, "@openclaw+fs-safe-linux-x64-gnu@0.8.1", "missing"),
       path.join(fsSafeDependencyRoot, "@openclaw", "fs-safe-linux-x64-gnu"),
@@ -182,6 +199,18 @@ describe("pre-native fs-safe packages", () => {
 
     expect(result.status, result.stderr).toBe(0);
     expect(result.stdout).toContain("authorized package predates native bindings");
+    expect(readOutcome(result.resultPath)).toBe("authorized-pre-native-omission");
+  });
+
+  it.each([
+    ["0.3.0", false],
+    ["0.4.7", true],
+  ])("resolves authorized version %s from a pnpm global package symlink", (version, durability) => {
+    const fixture = createFixture({ durability, pnpmGlobalLayout: true, version });
+
+    const result = runVerifier(fixture.packageRoot, { allowPreNative: true });
+
+    expect(result.status, result.stderr).toBe(0);
     expect(readOutcome(result.resultPath)).toBe("authorized-pre-native-omission");
   });
 
@@ -271,6 +300,22 @@ describe("split-package fs-safe packages", () => {
       native: true,
       platformPackage: true,
       pnpmLayout: true,
+      version: "0.8.1",
+    });
+
+    const result = runVerifier(fixture.packageRoot);
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(readOutcome(result.resultPath)).toBe("native-verified");
+  });
+
+  it("keeps strict native verification through a pnpm global package symlink", () => {
+    const fixture = createFixture({
+      binding: "platform",
+      durability: true,
+      native: true,
+      platformPackage: true,
+      pnpmGlobalLayout: true,
       version: "0.8.1",
     });
 
