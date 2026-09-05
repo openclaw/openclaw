@@ -1,7 +1,6 @@
 import { stableStringify } from "@openclaw/normalization-core";
 import { generateSecureHex } from "../infra/secure-random.js";
 import { getPluginToolMeta, type PluginToolMcpMeta } from "../plugins/tool-metadata.js";
-import type { McpToolCatalogDiagnostic } from "./agent-bundle-mcp-types.js";
 import { finalizeAgentToolAvailability } from "./agent-tool-availability.js";
 import type { HookContext } from "./agent-tools.before-tool-call.js";
 import {
@@ -18,6 +17,7 @@ import {
   type CatalogSource,
   type CatalogTool,
   type CatalogVisibilityOptions,
+  type McpCatalogOutageRecord,
   type ToolSearchCatalogApplyResult,
   type ToolSearchCatalogCompactionParams,
   type ToolSearchCatalogEntry,
@@ -272,7 +272,7 @@ function registerToolSearchCatalog(params: {
   entries: ToolSearchCatalogEntry[];
   append?: boolean;
   toolExecutionAllow?: readonly string[];
-  mcpDiagnostics?: readonly McpToolCatalogDiagnostic[];
+  mcpDiagnostics?: McpCatalogOutageRecord;
 }): void {
   const prior = params.append ? params.catalogRef.current : undefined;
   // Appending client definitions cannot widen the current run's execution policy.
@@ -286,7 +286,7 @@ function registerToolSearchCatalog(params: {
   const mcpDiagnostics = params.mcpDiagnostics ?? prior?.mcpDiagnostics;
   const next = {
     entries: finalizeCatalogAvailability(Array.from(byId.values()), toolExecutionAllow),
-    ...(mcpDiagnostics?.length ? { mcpDiagnostics } : {}),
+    ...(mcpDiagnostics?.diagnostics.length ? { mcpDiagnostics } : {}),
     // Appended client tools extend the same counter lifetime. A replacement
     // gets a new scope so telemetry consumers never infer resets from values.
     counterScope: prior?.counterScope ?? generateCounterScope(),
@@ -334,10 +334,10 @@ export function clearToolSearchCatalog(params: {
 
 function setCatalogMcpDiagnostics(
   catalog: ToolSearchCatalogSession,
-  diagnostics: readonly McpToolCatalogDiagnostic[],
+  outage: McpCatalogOutageRecord,
 ): void {
-  if (diagnostics.length > 0) {
-    catalog.mcpDiagnostics = diagnostics;
+  if (outage.diagnostics.length > 0) {
+    catalog.mcpDiagnostics = outage;
   } else {
     delete catalog.mcpDiagnostics;
   }
@@ -349,7 +349,7 @@ export function restrictToolSearchCatalog(params: {
   allowedToolNames: ReadonlySet<string>;
   baselineEntries?: readonly ToolSearchCatalogEntry[];
   /** Recorded outages that survive the same narrowing; a failed server has no entry to filter. */
-  mcpDiagnostics?: readonly McpToolCatalogDiagnostic[];
+  mcpDiagnostics?: McpCatalogOutageRecord;
 }): number {
   const current = params.catalogRef?.current;
   if (!current) {

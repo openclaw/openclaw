@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
   materializeBundleMcpToolsForRun: vi.fn(),
   applyFinalEffectiveToolPolicy: vi.fn(),
   admitsMcpServer: vi.fn(),
+  buildBundleMcpPolicyLayers: vi.fn(),
   createBundleMcpServerPolicyMatcher: vi.fn(),
   filterRuntimeCompatibleTools: vi.fn(),
 }));
@@ -40,10 +41,14 @@ vi.mock("../../tool-schema-projection.js", () => ({
 
 vi.mock("../effective-tool-policy.js", () => ({
   applyFinalEffectiveToolPolicy: mocks.applyFinalEffectiveToolPolicy,
+  buildBundleMcpPolicyLayers: mocks.buildBundleMcpPolicyLayers,
   createBundleMcpServerPolicyMatcher: mocks.createBundleMcpServerPolicyMatcher,
 }));
 
 import { prepareEmbeddedAttemptBundleTools } from "./attempt-bundle-tools.js";
+
+/** Stand-in for the run's resolved allow/deny layers, recorded with the diagnostics. */
+const runPolicyLayers = [{ allow: ["memos__read_note"] }];
 
 describe("prepareEmbeddedAttemptBundleTools", () => {
   beforeEach(() => {
@@ -55,6 +60,7 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
       .mockReset()
       .mockImplementation(({ bundledTools }: { bundledTools: unknown[] }) => bundledTools);
     mocks.admitsMcpServer.mockReset().mockReturnValue(true);
+    mocks.buildBundleMcpPolicyLayers.mockReset().mockReturnValue(runPolicyLayers);
     mocks.createBundleMcpServerPolicyMatcher.mockReset().mockReturnValue(mocks.admitsMcpServer);
     mocks.filterRuntimeCompatibleTools
       .mockReset()
@@ -312,7 +318,9 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
 
     const result = await prepareEmbeddedAttemptBundleTools(input);
 
-    expect(result.mcpDiagnostics).toEqual(diagnostics);
+    // The layers that admitted them ride along: a later prompt-hook cap can only
+    // judge the failed server against its own cap and these together.
+    expect(result.mcpDiagnostics).toEqual({ diagnostics, policyLayers: runPolicyLayers });
     // Server-level visibility is decided by the safe server name the tool
     // namespace is built from, not by a fabricated stand-in tool.
     expect(mocks.admitsMcpServer).toHaveBeenCalledWith("memos");
@@ -337,7 +345,7 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
 
     const result = await prepareEmbeddedAttemptBundleTools(input);
 
-    expect(result.mcpDiagnostics).toEqual([]);
+    expect(result.mcpDiagnostics).toEqual({ diagnostics: [], policyLayers: runPolicyLayers });
   });
 
   it("never exposes client functions when the attempt disables every tool", async () => {
