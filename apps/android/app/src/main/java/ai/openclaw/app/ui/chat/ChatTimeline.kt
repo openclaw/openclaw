@@ -206,7 +206,7 @@ private fun isRecoveryOutboxItem(item: ChatOutboxItem): Boolean {
     parkedMainAlias
 }
 
-private fun stableMessageVersion(message: ChatMessage): String {
+internal fun stableMessageVersion(message: ChatMessage): String {
   val role = message.role.trim().lowercase()
   val idempotencyKey = message.idempotencyKey?.trim().orEmpty()
   if (idempotencyKey.isNotEmpty()) return "$role:idempotency:$idempotencyKey"

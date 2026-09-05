@@ -16,6 +16,10 @@ import ai.openclaw.app.chat.ChatPermissionMode
 import ai.openclaw.app.chat.ChatProgressCard
 import ai.openclaw.app.chat.ChatQuestionDraft
 import ai.openclaw.app.chat.ChatQuestionPrompt
+import ai.openclaw.app.chat.ChatReaderPosition
+import ai.openclaw.app.chat.ChatReaderPositionBinding
+import ai.openclaw.app.chat.ChatReaderPositionScope
+import ai.openclaw.app.chat.ChatReaderPositionStore
 import ai.openclaw.app.chat.ChatSessionDeletion
 import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.chat.ChatSwarmGroup
@@ -797,6 +801,7 @@ internal fun gatewayConnectionDisplay(
 private data class AndroidChatStores(
   val transcriptCache: ChatTranscriptCache,
   val commandOutbox: ChatCommandOutbox,
+  val readerPositionStore: ChatReaderPositionStore,
   val clientDatabases: AndroidClientDatabases,
   val externalTranscriptCache: ChatTranscriptCache? = null,
 )
@@ -860,6 +865,7 @@ private fun openAndroidChatStores(
   return AndroidChatStores(
     transcriptCache = databases.transcriptCache(),
     commandOutbox = databases.commandOutbox(),
+    readerPositionStore = databases.readerPositionStore(),
     clientDatabases = databases,
   )
 }
@@ -885,6 +891,7 @@ class NodeRuntime private constructor(
 ) {
   private val chatTranscriptCache = chatStores.transcriptCache
   private val chatCommandOutbox = chatStores.commandOutbox
+  private val chatReaderPositionStore = chatStores.readerPositionStore
   private val clientDatabases = chatStores.clientDatabases
   private val externalTranscriptCache = chatStores.externalTranscriptCache
   private val screenshotRequester by lazy { AndroidScreenshotFixture.createRequester() }
@@ -2077,6 +2084,21 @@ class NodeRuntime private constructor(
 
   private fun publishChatSessionDeletion(deletion: ChatSessionDeletion) {
     synchronized(gatewayDataScopeLock) { chatSelectionSeq.incrementAndGet() }
+    val readerScope =
+      deletion.gatewayId?.let { gatewayId ->
+        deletion.sessionId?.let { sessionId ->
+          ChatReaderPositionScope(gatewayId, deletion.agentId, deletion.sessionKey, sessionId)
+        }
+      }
+    // A delete without the durable session ID cannot identify an instance safely. Leave its
+    // bounded LRU entry to expire rather than letting a delayed event delete a replacement.
+    readerScope?.let { readerPositionScope ->
+      // Enter the store fence before listeners can bind a replacement with the same key;
+      // the database delete may finish asynchronously, but newer state cannot be retired by it.
+      scope.launch(start = CoroutineStart.UNDISPATCHED) {
+        runCatching { chatReaderPositionStore.deleteSession(readerPositionScope) }
+      }
+    }
     chatSessionDeletionListeners.values.forEach { listener -> listener(deletion) }
   }
 
@@ -3061,6 +3083,15 @@ class NodeRuntime private constructor(
   val chatCommands: StateFlow<List<ChatCommandEntry>> = chat.commands
   val chatOutboxItems: StateFlow<List<ChatOutboxItem>> = chat.outboxItems
   val chatOutboxPresentationRestored: StateFlow<Boolean> = chat.outboxPresentationRestored
+
+  internal suspend fun loadChatReaderPosition(scope: ChatReaderPositionScope): ChatReaderPositionBinding = chatReaderPositionStore.bind(scope)
+
+  internal suspend fun saveChatReaderPosition(
+    binding: ChatReaderPositionBinding,
+    position: ChatReaderPosition,
+  ) = chatReaderPositionStore.save(binding, position)
+
+  internal suspend fun clearChatReaderPosition(binding: ChatReaderPositionBinding) = chatReaderPositionStore.clear(binding)
 
   suspend fun listBackgroundTasks(agentId: String): List<BackgroundTask> = chat.listBackgroundTasks(agentId)
 

@@ -148,6 +148,7 @@ internal data class ChatSessionDeletion(
   val gatewayId: String?,
   val agentId: String,
   val sessionKey: String,
+  val sessionId: String?,
   val mainSessionKey: String,
 )
 
@@ -1431,6 +1432,14 @@ class ChatController internal constructor(
         ?: return null
     val requestCacheScope = currentCacheScope()
     val requestMainSessionKey = appliedMainSessionKey
+    val requestSessionId =
+      _sessions.value
+        .firstOrNull { entry ->
+          entry.key == sessionKey && (entry.ownerAgentId == null || entry.ownerAgentId == capturedOwnerAgentId)
+        }?.sessionId
+        ?: _sessionId.value.takeIf {
+          _sessionKey.value == sessionKey && resolveAgentIdForSessionKey(sessionKey) == capturedOwnerAgentId
+        }
     val deleted =
       try {
         val params =
@@ -1454,7 +1463,12 @@ class ChatController internal constructor(
       }
     try {
       if (deleted) {
-        removeSessionEntry(sessionKey, ownerAgentId = capturedOwnerAgentId, cacheScope = requestCacheScope)
+        removeSessionEntry(
+          sessionKey,
+          ownerAgentId = capturedOwnerAgentId,
+          sessionId = requestSessionId,
+          cacheScope = requestCacheScope,
+        )
       }
       fetchSessionsForCurrentWindow()
     } catch (err: Throwable) {
@@ -1465,6 +1479,7 @@ class ChatController internal constructor(
         gatewayId = requestCacheScope?.gatewayId,
         agentId = capturedOwnerAgentId,
         sessionKey = sessionKey,
+        sessionId = requestSessionId,
         mainSessionKey = requestMainSessionKey,
       )
     } else {
@@ -6528,9 +6543,10 @@ class ChatController internal constructor(
     }
     if (reason == "delete") {
       val sessionKey = payload["sessionKey"].asStringOrNull() ?: payload["key"].asStringOrNull()
+      val sessionId = payload["sessionId"].asStringOrNull()
       val ownerAgentId = payload["agentId"].asStringOrNull()
       if (
-        !removeSessionEntry(sessionKey, ownerAgentId = ownerAgentId) &&
+        !removeSessionEntry(sessionKey, ownerAgentId = ownerAgentId, sessionId = sessionId) &&
         sessionKey != null &&
         resolveAgentIdFromMainSessionKey(sessionKey) == null &&
         ownerAgentId == null
@@ -8065,6 +8081,7 @@ class ChatController internal constructor(
   private fun removeSessionEntry(
     sessionKey: String?,
     ownerAgentId: String? = null,
+    sessionId: String? = null,
     cacheScope: ChatCacheScope? = currentCacheScope(),
   ): Boolean {
     val key = sessionKey?.trim()?.takeIf { it.isNotEmpty() } ?: return false
@@ -8083,7 +8100,7 @@ class ChatController internal constructor(
     retiredSettings.forEach { it.complete(false) }
     // Gateway-side deletes must also purge the offline copy, or the deleted transcript would
     // reappear on the next offline cold open. Queued commands for the session die with it too.
-    if (owner != null) purgeSessionOwnedState(key, owner, cacheScope)
+    if (owner != null) purgeSessionOwnedState(key, owner, sessionId, cacheScope)
     if (removesVisibleEntry) fallBackFromRetiredActiveSession(key)
     return removesVisibleEntry
   }
@@ -8091,6 +8108,7 @@ class ChatController internal constructor(
   private fun purgeSessionOwnedState(
     sessionKey: String,
     ownerAgentId: String,
+    sessionId: String?,
     cacheScope: ChatCacheScope?,
   ) {
     synchronized(gatewayScopeApplyLock) {
@@ -8103,6 +8121,7 @@ class ChatController internal constructor(
         gatewayId = cacheScope.gatewayId,
         agentId = ownerAgentId,
         sessionKey = sessionKey,
+        sessionId = sessionId,
         mainSessionKey = appliedMainSessionKey,
       ),
     )

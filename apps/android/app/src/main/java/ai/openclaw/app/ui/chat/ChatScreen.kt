@@ -26,6 +26,9 @@ import ai.openclaw.app.chat.ChatPlanStepStatus
 import ai.openclaw.app.chat.ChatProgressCard
 import ai.openclaw.app.chat.ChatQuestionDraft
 import ai.openclaw.app.chat.ChatQuestionPrompt
+import ai.openclaw.app.chat.ChatReaderPosition
+import ai.openclaw.app.chat.ChatReaderPositionBinding
+import ai.openclaw.app.chat.ChatReaderPositionScope
 import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.chat.ChatSubagentActivity
 import ai.openclaw.app.chat.ChatThinkingLevelOption
@@ -311,6 +314,7 @@ fun ChatScreen(
   val canAdminSessionSettings = operatorScopesAllowAdmin(operatorScopes)
   val activeGatewayStableId by viewModel.activeGatewayStableId.collectAsState()
   val sessionKey by viewModel.chatSessionKey.collectAsState()
+  val sessionId by viewModel.chatSessionId.collectAsState()
   val selectionGeneration by viewModel.chatSelectionGeneration.collectAsState()
   val gatewayCatalogRevision by viewModel.gatewayCatalogRevision.collectAsState()
   val sessionOwnerAgentId by viewModel.chatSessionOwnerAgentId.collectAsState()
@@ -724,7 +728,9 @@ fun ChatScreen(
     verticalArrangement = Arrangement.spacedBy(8.dp),
   ) {
     ChatMessageList(
+      gatewayId = activeGatewayStableId,
       sessionKey = sessionKey,
+      sessionId = sessionId,
       fullMessageOwner = composerOwner,
       selectionGeneration = selectionGeneration,
       gatewayCatalogRevision = gatewayCatalogRevision,
@@ -733,6 +739,9 @@ fun ChatScreen(
       messages = messages,
       transcriptAnchor = transcriptAnchor,
       historyLoading = historyLoading,
+      loadReaderPosition = viewModel::loadChatReaderPosition,
+      saveReaderPosition = viewModel::saveChatReaderPosition,
+      clearReaderPosition = viewModel::clearChatReaderPosition,
       activeRunCount = selectedActiveRun.count,
       activeRunId = selectedActiveRun.runId,
       activeRunClockKey = selectedActiveRun.clockKey,
@@ -1316,7 +1325,9 @@ private fun HeaderIcon(
 
 @Composable
 private fun ChatMessageList(
+  gatewayId: String?,
   sessionKey: String,
+  sessionId: String?,
   fullMessageOwner: ChatComposerOwner,
   selectionGeneration: Long,
   gatewayCatalogRevision: Long,
@@ -1325,6 +1336,9 @@ private fun ChatMessageList(
   messages: List<ChatMessage>,
   transcriptAnchor: ChatTranscriptAnchorState?,
   historyLoading: Boolean,
+  loadReaderPosition: suspend (ChatReaderPositionScope) -> ChatReaderPositionBinding,
+  saveReaderPosition: suspend (ChatReaderPositionBinding, ChatReaderPosition) -> Unit,
+  clearReaderPosition: suspend (ChatReaderPositionBinding) -> Unit,
   activeRunCount: Int,
   activeRunId: String?,
   activeRunClockKey: String?,
@@ -1396,9 +1410,16 @@ private fun ChatMessageList(
   val timeline = remember(baseTimeline, turnRecap) { baseTimeline.withTurnRecap(turnRecap) }
   val readerScroll =
     rememberChatReaderScrollController(
+      gatewayId = gatewayId,
+      ownerAgentId = fullMessageOwner.agentId,
       sessionKey = sessionKey,
+      sessionId = sessionId,
       timeline = timeline,
       historyLoading = historyLoading,
+      historyResolved = transcriptAnchor?.sessionKey == sessionKey,
+      loadPosition = loadReaderPosition,
+      savePosition = saveReaderPosition,
+      clearPosition = clearReaderPosition,
     )
   DisposableEffect(sessionKey, turnRecapResolver) {
     onDispose { turnRecapResolver.abandonActiveWatch(sessionKey) }

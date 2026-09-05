@@ -3,9 +3,17 @@ package ai.openclaw.app.ui.chat
 import ai.openclaw.app.chat.ChatMessage
 import ai.openclaw.app.chat.ChatMessageContent
 import ai.openclaw.app.chat.ChatQuestionPrompt
+import ai.openclaw.app.chat.ChatReaderPosition
 import ai.openclaw.app.gateway.QuestionAnswers
 import ai.openclaw.app.gateway.QuestionRecord
 import androidx.compose.runtime.saveable.SaverScope
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.yield
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
@@ -14,6 +22,53 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ChatReaderScrollControllerTest {
+  @Test
+  fun cancellingViewportDebounceFlushesLatestPosition() =
+    runTest {
+      val expected = ChatReaderPosition(messageId = "message-1", itemOffset = 37)
+      val expectedWrite = ChatReaderPositionWrite.Save(expected)
+      val positions =
+        flow {
+          emit(true to expectedWrite)
+          awaitCancellation()
+        }
+      val saved = mutableListOf<ChatReaderPositionWrite>()
+      val collector =
+        launch(start = CoroutineStart.UNDISPATCHED) {
+          collectChatReaderPositionSaves(positions) { write -> saved += write }
+        }
+
+      yield()
+      collector.cancelAndJoin()
+
+      assertEquals(listOf(expectedWrite), saved)
+    }
+
+  @Test
+  fun volatileRowAtScrollEndPersistsLastStableAnchor() =
+    runTest {
+      val expectedWrite =
+        ChatReaderPositionWrite.Save(
+          ChatReaderPosition(messageId = "message-1", itemOffset = 37),
+        )
+      val positions =
+        flow {
+          emit(true to expectedWrite)
+          emit(false to ChatReaderPositionWrite.None)
+          awaitCancellation()
+        }
+      val saved = mutableListOf<ChatReaderPositionWrite>()
+      val collector =
+        launch(start = CoroutineStart.UNDISPATCHED) {
+          collectChatReaderPositionSaves(positions) { write -> saved += write }
+        }
+
+      yield()
+      collector.cancelAndJoin()
+
+      assertEquals(listOf(expectedWrite), saved)
+    }
+
   @Test
   fun initialHistoryRestoresLatestContentAtLiveEdge() {
     val timeline = timeline(user("user-1"), assistant("assistant-1"))
@@ -25,6 +80,118 @@ class ChatReaderScrollControllerTest {
     assertEquals(ChatScrollFollowTarget.LatestContent, transition.state.followTarget)
     assertFalse(transition.state.hasNewerContent)
     assertEquals("user-1", transition.state.latestUserMessageId)
+  }
+
+  @Test
+  fun persistedViewportRestoresStableMessageAndOffsetAfterNewContent() {
+    val before =
+      timeline(
+        user("user-1"),
+        assistant("assistant-1"),
+        user("user-2"),
+        assistant("assistant-2"),
+      )
+    val saved = requireNotNull(before.readerPosition(index = 3, offset = 47))
+    val after =
+      timeline(
+        user("user-1"),
+        assistant("assistant-1"),
+        user("user-2"),
+        assistant("assistant-2"),
+        user("user-3"),
+        assistant("assistant-3"),
+      )
+
+    val restored = requireNotNull(restoredChatReaderTransition(after, saved, "session-1"))
+
+    assertEquals("user-1", saved.messageId)
+    assertEquals(5, restored.scrollIndex)
+    assertEquals(47, restored.scrollOffset)
+    assertNull(restored.state.followTarget)
+    assertTrue(restored.state.hasNewerContent)
+    assertEquals(after.latestContentVersion, restored.state.latestContentVersion)
+  }
+
+  @Test
+  fun persistedLiveEdgeRestoresFollowingWithoutNewerContent() {
+    val timeline = timeline(user("user-1"), assistant("assistant-1"))
+    val saved = requireNotNull(timeline.readerPosition(index = 0, offset = 0))
+
+    val restored = requireNotNull(restoredChatReaderTransition(timeline, saved))
+
+    assertEquals(0, restored.scrollIndex)
+    assertEquals(ChatScrollFollowTarget.LatestContent, restored.state.followTarget)
+    assertFalse(restored.state.hasNewerContent)
+  }
+
+  @Test
+  fun persistedOffsetInsideLatestMessageDoesNotResumeFollowing() {
+    val timeline = timeline(user("user-1"), assistant("assistant-1"))
+    val saved = requireNotNull(timeline.readerPosition(index = 0, offset = 120))
+
+    val restored = requireNotNull(restoredChatReaderTransition(timeline, saved))
+
+    assertEquals(0, restored.scrollIndex)
+    assertEquals(120, restored.scrollOffset)
+    assertNull(restored.state.followTarget)
+    assertTrue(restored.state.hasNewerContent)
+  }
+
+  @Test
+  fun persistedViewportRebindsRegeneratedMessageId() {
+    val before =
+      timeline(
+        user("user-before", text = "prompt", timestampMs = 1_000, idempotencyKey = "run-1:user"),
+        assistant("assistant-before"),
+      )
+    val saved = requireNotNull(before.readerPosition(index = 1, offset = 29))
+    val after =
+      timeline(
+        user("user-after", text = "prompt", timestampMs = 2_000, idempotencyKey = "run-1:user"),
+        assistant("assistant-after"),
+        user("user-new"),
+        assistant("assistant-new"),
+      )
+
+    val restored = requireNotNull(restoredChatReaderTransition(after, saved))
+
+    assertEquals("user-before", saved.messageId)
+    assertEquals(3, restored.scrollIndex)
+    assertEquals(29, restored.scrollOffset)
+    assertTrue(restored.state.hasNewerContent)
+  }
+
+  @Test
+  fun volatileTimelineRowsDoNotProducePersistedPositions() {
+    val timeline = activeTimeline(user("user-1"), stream = "partial reply")
+
+    assertNull(timeline.readerPosition(index = 0, offset = 21))
+    assertEquals(ChatReaderPositionWrite.Clear, timeline.readerPositionWrite(index = 0, offset = 21))
+  }
+
+  @Test
+  fun volatileRowsChangingStillRestoreTheStableMessageAnchor() {
+    val active = activeTimeline(user("user-1"), stream = "partial reply")
+    val saved = requireNotNull(active.readerPosition(index = 2, offset = 31))
+    val settled = timeline(user("user-1"), assistant("assistant-1"))
+
+    val restored = requireNotNull(restoredChatReaderTransition(settled, saved))
+
+    assertEquals("user-1", saved.messageId)
+    assertEquals(1, restored.scrollIndex)
+    assertEquals(31, restored.scrollOffset)
+  }
+
+  @Test
+  fun missingPersistedMessageUsesUnchangedInitialPolicy() {
+    val timeline = timeline(user("user-1"), assistant("assistant-1"))
+    val missing = ChatReaderPosition(messageId = "removed", itemOffset = 31)
+
+    val restored = restoredChatReaderTransition(timeline, missing)
+    val reopened = restored ?: initialChatReaderTransition(timeline)
+
+    assertNull(restored)
+    assertEquals(initialChatReaderTransition(timeline), reopened)
   }
 
   @Test
