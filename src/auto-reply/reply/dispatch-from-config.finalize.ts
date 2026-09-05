@@ -14,9 +14,9 @@ import {
 import { isDispatchReplyOperationAbortedError } from "./dispatch-from-config.abort.js";
 import type { executeDispatch } from "./dispatch-from-config.execute.js";
 import {
+  buildNoVisibleReplyFallbackText,
   createFinalDispatchPayloadDedupeKey,
   formatSuppressedReplyPayloadForLog,
-  NO_VISIBLE_REPLY_FALLBACK_TEXT,
   QUEUE_CAP_REJECTION_TEXT,
   shouldDeliverDespiteSourceReplySuppression,
 } from "./dispatch-from-config.payloads.js";
@@ -371,9 +371,11 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
   if (queuedSettleResult === "settled" && noVisibleReplyFallbackAllowed()) {
     try {
       throwIfDispatchOperationAborted();
-      const fallbackPayload: ReplyPayload = {
-        text: queueCapRejected ? QUEUE_CAP_REJECTION_TEXT : NO_VISIBLE_REPLY_FALLBACK_TEXT,
-      };
+      const fallbackPayload: ReplyPayload = queueCapRejected
+        ? { text: QUEUE_CAP_REJECTION_TEXT }
+        : {
+            text: buildNoVisibleReplyFallbackText(state.params.replyOptions?.runId),
+          };
       const result = await routeReplyToOriginating(fallbackPayload, {
         abortSignal: getDispatchAbortSignal(),
         kind: "final",

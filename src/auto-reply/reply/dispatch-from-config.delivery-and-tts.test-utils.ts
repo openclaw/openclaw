@@ -17,6 +17,7 @@ import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-paylo
 import type { MsgContext } from "../templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { needsTtsFallback } from "./dispatch-from-config.finalize.js";
+import { buildNoVisibleReplyFallbackText } from "./dispatch-from-config.payloads.js";
 import {
   createDispatcher,
   diagnosticMocks,
@@ -46,6 +47,8 @@ import { getPreparedReplyDispatchRuntime } from "./prepared-reply-dispatch-conte
 import { usesFullReplyRuntime } from "./reply-config-runtime-mode.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
 import { buildTestCtx } from "./test-ctx.js";
+
+const NO_VISIBLE_REPLY_FALLBACK_TEXT = buildNoVisibleReplyFallbackText();
 
 beforeAll(globalBeforeAll0);
 
@@ -154,9 +157,9 @@ describe("dispatchReplyFromConfig", () => {
     expect(
       delivered.filter((payload) => payload.text === "checked:channel_transform"),
     ).toHaveLength(outcomes.includes("channel_transform") ? 1 : 0);
-    expect(delivered.some((payload) => payload.text?.includes("No reply was generated"))).toBe(
-      fallback,
-    );
+    expect(
+      delivered.some((payload) => payload.text?.includes(NO_VISIBLE_REPLY_FALLBACK_TEXT)),
+    ).toBe(fallback);
     expect(result.noVisibleReplyFallbackEligible === true).toBe(fallback);
     expect(receipt?.anyVisibleDelivered).toBe(false);
   });
