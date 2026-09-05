@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { buildJsonPluginConfigSchema } from "openclaw/plugin-sdk/core";
 import type { JsonSchemaObject } from "openclaw/plugin-sdk/json-schema-runtime";
 import { describe, expect, it } from "vitest";
+import { buildGoogleStaticCatalogProvider } from "./provider-catalog.js";
 
 type GoogleManifest = {
   setup?: {
@@ -30,6 +31,24 @@ type GoogleManifest = {
     >;
   };
   modelCatalog?: {
+    providers?: Record<
+      string,
+      {
+        api?: string;
+        baseUrl?: string;
+        models?: Array<{
+          id: string;
+          name?: string;
+          reasoning?: boolean;
+          input?: string[];
+          cost?: Record<string, unknown>;
+          contextWindow?: number;
+          maxTokens?: number;
+          thinkingLevelMap?: Record<string, unknown>;
+          compat?: Record<string, unknown>;
+        }>;
+      }
+    >;
     suppressions?: Array<{
       provider?: string;
       model?: string;
@@ -210,5 +229,36 @@ describe("google manifest webSearch headers", () => {
     });
     expect(manifest.uiHints?.["webSearch.headers"]?.sensitive).not.toBe(true);
     expect(manifest.uiHints?.["webSearch.headers.*"]?.sensitive).not.toBe(true);
+  });
+  it("declares the Gemini static model families in the manifest catalog", () => {
+    const manifest = loadManifest();
+    const models = manifest.modelCatalog?.providers?.google?.models ?? [];
+    const ids = new Set(models.map((m: { id: string }) => m.id));
+    // These mirror the runtime GOOGLE_GEMINI_TEXT_MODEL_ROWS so the doctor
+    // recognizes google/* references without a live discovery round-trip.
+    for (const id of [
+      "gemini-2.5-pro",
+      "gemini-2.5-flash",
+      "gemini-2.5-flash-lite",
+      "gemini-3.5-flash",
+      "gemini-3.7-flash",
+      "gemini-3.1-pro-preview",
+    ]) {
+      expect(ids.has(id)).toBe(true);
+    }
+    expect(models.length).toBeGreaterThanOrEqual(10);
+  });
+
+  it("keeps the manifest static model ids in parity with the runtime catalog", () => {
+    // Catalog-parity guard (#139255 ClawSweeper P1): the static manifest
+    // rows are a second representation of the runtime GOOGLE_GEMINI_TEXT_MODEL_ROWS.
+    // Fail loudly if either side drifts so the doctor known-set and the live
+    // discovery catalog never disagree.
+    const runtimeIds = buildGoogleStaticCatalogProvider().models.map((m: { id: string }) => m.id);
+    const manifest = loadManifest();
+    const manifestIds = (manifest.modelCatalog?.providers?.google?.models ?? []).map(
+      (m: { id: string }) => m.id,
+    );
+    expect(new Set(manifestIds)).toEqual(new Set(runtimeIds));
   });
 });

@@ -612,4 +612,38 @@ describe("manifest model catalog suppression planner", () => {
       },
     ]);
   });
+  it("includes manifest static models for a runtime-discovered provider (doctor known-set)", () => {
+    // Mirrors the google plugin: discovery=runtime AND providers.google.models are
+    // both declared. The doctor calls planEffectiveModelCatalogRows without a
+    // selection, so manifest static rows must survive without a runtime refresh.
+    const plan = planManifestModelCatalogRows({
+      registry: {
+        plugins: [
+          {
+            id: "google",
+            providers: ["google"],
+            modelCatalog: {
+              discovery: { google: "runtime" },
+              providers: {
+                google: {
+                  api: "google-generative-ai",
+                  baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+                  models: [
+                    { id: "gemini-2.5-flash", name: "Gemini 2.5 Flash" },
+                    { id: "gemini-3.5-flash", name: "Gemini 3.5 Flash" },
+                  ],
+                },
+              },
+            },
+          },
+        ],
+      },
+    });
+    const flashRows = plan.rows.filter((row) => row.id === "gemini-2.5-flash");
+    expect(flashRows).toHaveLength(1);
+    // noUncheckedIndexedAccess: toHaveLength does not narrow flashRows[0];
+    // dereference via optional chaining so tsgo treats the source access safely.
+    expect(flashRows[0]?.source).toBe("manifest");
+    expect(plan.rows.map((row) => row.id)).toContain("gemini-3.5-flash");
+  });
 });
