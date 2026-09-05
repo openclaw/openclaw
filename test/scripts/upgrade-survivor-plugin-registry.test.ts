@@ -136,6 +136,50 @@ describe("standalone upgrade survivor plugin registry", () => {
         expect(args.at(-2)).toBe("-lc");
       });
 
+      it("rejects mobile pairing without a published baseline before setup", () => {
+        const { captureDir, result } = runSurvivor(
+          {
+            OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE: "0",
+            OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: "mobile-pairing-reconnect",
+          },
+          shell,
+        );
+
+        expect(result.status).toBe(1);
+        expect(result.stderr).toContain(
+          "mobile-pairing-reconnect requires OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1",
+        );
+        expect(existsSync(join(captureDir, "node-args"))).toBe(false);
+        expect(existsSync(join(captureDir, "docker-args"))).toBe(false);
+      });
+
+      it.each([
+        ["automatic restart", { OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE: "auto-auth" }],
+        ["root-managed VPS", { OPENCLAW_UPGRADE_SURVIVOR_ROOT_MANAGED_VPS: "1" }],
+        [
+          "live provider",
+          {
+            OPENAI_API_KEY: "sk-openclaw-upgrade-survivor",
+            OPENCLAW_UPGRADE_SURVIVOR_LIVE_OPENAI: "1",
+          },
+        ],
+      ])("rejects mobile pairing with the %s fixture before setup", (_name, overrides) => {
+        const { captureDir, result } = runSurvivor(
+          {
+            ...overrides,
+            OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: "mobile-pairing-reconnect",
+          },
+          shell,
+        );
+
+        expect(result.status).toBe(1);
+        expect(result.stderr).toContain(
+          "mobile-pairing-reconnect requires the isolated manual-restart fixture without live provider credentials",
+        );
+        expect(existsSync(join(captureDir, "node-args"))).toBe(false);
+        expect(existsSync(join(captureDir, "docker-args"))).toBe(false);
+      });
+
       it("rejects a nounset preflight failure even when Bash reports zero to EXIT", () => {
         const prelude = join(tempDirs.make("survivor-preflight-fault-"), "bash-env");
         writeFileSync(

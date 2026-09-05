@@ -73,13 +73,8 @@ wait_for_log() {
   local start_s
   start_s="$(date +%s)"
   while true; do
-    if [ -f "$ONBOARD_LOG" ]; then
-      if grep -a -F -q "$needle" "$ONBOARD_LOG"; then
-        return 0
-      fi
-      if node scripts/e2e/lib/onboard/log-contains.mjs "$ONBOARD_LOG" "$needle"; then
-        return 0
-      fi
+    if onboarding_log_contains "$needle"; then
+      return 0
     fi
     if [ $(($(date +%s) - start_s)) -ge "$timeout_s" ]; then
       echo "Timeout waiting for log: $needle" >&2
@@ -88,6 +83,50 @@ wait_for_log() {
     fi
     sleep 0.2
   done
+}
+
+onboarding_log_contains() {
+  local needle="$1"
+  [ -f "$ONBOARD_LOG" ] &&
+    { grep -a -F -q "$needle" "$ONBOARD_LOG" ||
+      node scripts/e2e/lib/onboard/log-contains.mjs "$ONBOARD_LOG" "$needle"; }
+}
+
+drive_typed_onboarding() {
+  local hook_mode="${OPENCLAW_FROZEN_TARGET_ONBOARD_SESSION_MEMORY_HOOK_MODE:-}"
+  local next_prompt="" prompt
+  wait_for_log "Continue?" 60
+  send $'y\r' 0.4
+  for _ in $(seq 1 300); do
+    for prompt in \
+      "What should we call your first agent?" \
+      "Enable hooks?" \
+      "Help make OpenClaw better?" \
+      "to search"; do
+      onboarding_log_contains "$prompt" && { next_prompt="$prompt"; break 2; }
+    done
+    sleep 0.2
+  done
+  case "$hook_mode:$next_prompt" in
+    "required:Help make OpenClaw better?")
+      send $'\r' 0.4
+      wait_for_log "What should we call your first agent?" 60
+      send $'\r' 0.4
+      wait_for_log "to search" 60
+      send $'ollama\r' 0.4
+      ;;
+    "interactive:to search")
+      send $'ollama\r' 0.4
+      wait_for_log "Enable hooks?" 60
+      send $' \r' 0.4
+      send $'\r' 0.4
+      ;;
+    *)
+      echo "unexpected typed onboarding transition before telemetry or search" >&2
+      tail -n 120 "$ONBOARD_LOG" >&2 2>/dev/null || true
+      return 1
+      ;;
+  esac
 }
 
 openclaw_e2e_install_package "$INSTALL_LOG"
@@ -109,14 +148,7 @@ openclaw_e2e_run_script_with_pty "node \"$entry\" onboard --flow quickstart --mo
 wizard_pid="$!"
 exec 3>"$input_fifo"
 
-wait_for_log "Continue?" 60
-send $'y\r' 0.4
-wait_for_log "Help make OpenClaw better?" 60
-send $'\r' 0.4
-wait_for_log "What should we call your first agent?" 60
-send $'\r' 0.4
-wait_for_log "to search" 60
-send $'ollama\r' 0.4
+drive_typed_onboarding
 
 wait "$wizard_pid"
 wizard_pid=""

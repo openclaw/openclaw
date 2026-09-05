@@ -1,5 +1,5 @@
 // Live Docker Stage tests cover live docker stage script behavior.
-import { spawnSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { chmodSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -9,6 +9,7 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const stageScriptPath = path.join(repoRoot, "scripts/lib/live-docker-stage.sh");
+const frozenTargetCompatPath = path.join(repoRoot, "scripts/lib/frozen-target-compat.sh");
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("live Docker state staging", () => {
@@ -354,6 +355,172 @@ export function parseRegistryNpmSpec(spec: string) {
     });
     expect(malformed.status).toBe(2);
     expect(malformed.stderr).toContain("invalid OPENCLAW_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS");
+  });
+
+  it("derives frozen harness capabilities from the selected source checkout", () => {
+    const createSource = (kind: "legacy" | "modern" | "unknown") => {
+      const root = tempDirs.make(`openclaw-frozen-source-${kind}-`);
+      if (kind === "legacy") {
+        mkdirSync(path.join(root, "src", "infra"), { recursive: true });
+        mkdirSync(path.join(root, "src", "plugins"), { recursive: true });
+        mkdirSync(path.join(root, "src", "agents"), { recursive: true });
+        mkdirSync(path.join(root, "scripts", "e2e"), { recursive: true });
+        mkdirSync(path.join(root, "scripts", "e2e", "lib", "plugins"), { recursive: true });
+        writeFileSync(
+          path.join(root, "src", "infra", "exec-approvals.ts"),
+          'const EXEC_APPROVALS_FILE = "exec-approvals.json";\n',
+        );
+        writeFileSync(
+          path.join(root, "src", "plugins", "clawhub.ts"),
+          'import { fetchClawHubPackageArtifact } from "../infra/clawhub.js";\n',
+        );
+        writeFileSync(
+          path.join(root, "src", "agents", "memory-search.ts"),
+          "const defaults = cfg.agents?.defaults?.memorySearch;\n",
+        );
+        writeFileSync(path.join(root, "src", "agents", "agent-bundle-mcp-runtime.ts"), "\n");
+        writeFileSync(
+          path.join(root, "src", "agents", "code-mode-namespaces.ts"),
+          'const reserved = ["ALL_TOOLS"];\n',
+        );
+        writeFileSync(
+          path.join(root, "scripts", "e2e", "agent-bundle-mcp-tools-docker-client.ts"),
+          "\n",
+        );
+        writeFileSync(
+          path.join(root, "scripts", "e2e", "lib", "plugins", "assertions.mjs"),
+          "function assertPluginTgzRemoved() {}\n",
+        );
+        mkdirSync(path.join(root, "src", "config"), { recursive: true });
+        mkdirSync(path.join(root, "src", "commands"), { recursive: true });
+        writeFileSync(
+          path.join(root, "src", "config", "zod-schema.ts"),
+          "lastRunAt: z.string(),\n",
+        );
+        writeFileSync(
+          path.join(root, "src", "commands", "onboard-hooks.ts"),
+          "export async function setupInternalHooks() {}\n",
+        );
+        writeFileSync(
+          path.join(root, "src", "commands", "doctor-session-transcripts.ts"),
+          'const backup = ".pre-doctor-branch-repair-";\n',
+        );
+      } else if (kind === "modern") {
+        mkdirSync(path.join(root, "src", "infra"), { recursive: true });
+        mkdirSync(path.join(root, "src", "agents"), { recursive: true });
+        mkdirSync(path.join(root, "src", "commands"), { recursive: true });
+        mkdirSync(path.join(root, "src", "config"), { recursive: true });
+        mkdirSync(path.join(root, "src", "state"), { recursive: true });
+        writeFileSync(path.join(root, "src", "infra", "exec-approvals-sqlite.ts"), "\n");
+        writeFileSync(path.join(root, "src", "infra", "clawhub-install-trust.ts"), "\n");
+        writeFileSync(path.join(root, "src", "agents", "memory-search.ts"), "\n");
+        writeFileSync(path.join(root, "src", "commands", "onboard-guided-consent.ts"), "\n");
+        writeFileSync(
+          path.join(root, "src", "commands", "onboard-hooks.ts"),
+          "export function enableDefaultOnboardingInternalHooks() {}\n",
+        );
+        writeFileSync(
+          path.join(root, "src", "config", "zod-schema.ts"),
+          "securityAcknowledgedAt: z.string(),\n",
+        );
+        writeFileSync(
+          path.join(root, "src", "state", "openclaw-agent-db-session-migrations.ts"),
+          "\n",
+        );
+        writeFileSync(path.join(root, "src", "agents", "agent-bundle-mcp-manager-api.ts"), "\n");
+        writeFileSync(
+          path.join(root, "src", "agents", "code-mode-namespaces.ts"),
+          'const reserved = ["ALL_TOOLS", "catalog"];\n',
+        );
+        mkdirSync(path.join(root, "src", "gateway"), { recursive: true });
+        writeFileSync(
+          path.join(root, "src", "gateway", "node-command-policy.ts"),
+          `const IOS_WATCH_RELAY_COMMANDS = ["watch.status", "watch.notify"];
+const watchRelayCommands =
+  platformId === "ios" && normalizeDeviceMetadataForPolicy(node?.deviceFamily) === "iphone"
+    ? IOS_WATCH_RELAY_COMMANDS
+    : [];
+const allow = new Set(
+  [...base, ...watchRelayCommands],
+);
+`,
+        );
+        mkdirSync(path.join(root, "scripts", "e2e", "lib", "plugins"), { recursive: true });
+        writeFileSync(
+          path.join(root, "scripts", "e2e", "lib", "plugins", "assertions.mjs"),
+          "function assertPluginUninstallConfigState() {}\n",
+        );
+      } else {
+        mkdirSync(path.join(root, "src", "gateway"), { recursive: true });
+      }
+      if (kind === "legacy") {
+        mkdirSync(path.join(root, "src", "gateway"), { recursive: true });
+        writeFileSync(path.join(root, "src", "gateway", "node-command-policy.ts"), "\n");
+      }
+      execFileSync("git", ["init", "-q", root]);
+      execFileSync("git", ["-C", root, "config", "user.email", "test@example.invalid"]);
+      execFileSync("git", ["-C", root, "config", "user.name", "OpenClaw Test"]);
+      execFileSync("git", ["-C", root, "add", "-A"]);
+      execFileSync("git", ["-C", root, "commit", "--allow-empty", "-qm", kind]);
+      return {
+        root,
+        sha: execFileSync("git", ["-C", root, "rev-parse", "HEAD"], {
+          encoding: "utf8",
+        }).trim(),
+      };
+    };
+    const run = (
+      source: ReturnType<typeof createSource>,
+      allow: "0" | "1",
+      selectedSha = source.sha,
+    ) =>
+      spawnSync(
+        "bash",
+        [
+          "-c",
+          [
+            'set -euo pipefail; source "$1"',
+            'openclaw_resolve_frozen_upgrade_survivor_capabilities "$2"',
+            'openclaw_resolve_frozen_core_harness_capabilities "$2"',
+            'openclaw_resolve_frozen_plugin_harness_capabilities "$2"',
+            'printf "%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s\\n" "$OPENCLAW_UPGRADE_SURVIVOR_EXEC_APPROVALS_MODE" "$OPENCLAW_UPGRADE_SURVIVOR_CLAWHUB_REQUEST_DIALECT" "$OPENCLAW_UPGRADE_SURVIVOR_SESSION_REPAIR_MODE" "$OPENCLAW_UPGRADE_SURVIVOR_MOBILE_WATCH_REAPPROVAL_MODE" "$OPENCLAW_FROZEN_TARGET_ONBOARD_CASES" "$OPENCLAW_FROZEN_TARGET_ONBOARD_SESSION_MEMORY_HOOK_MODE" "$OPENCLAW_FROZEN_TARGET_AGENT_BUNDLE_MCP_MODE" "$OPENCLAW_FROZEN_TARGET_MCP_CODE_MODE_CATALOG_MODE" "$OPENCLAW_FROZEN_TARGET_MCP_MEMORY_CONFIG_MODE" "$OPENCLAW_FROZEN_TARGET_SESSION_REPAIR_MODE" "$OPENCLAW_FROZEN_TARGET_PLUGIN_UNINSTALL_MODE"',
+          ].join("; "),
+          "test",
+          frozenTargetCompatPath,
+          source.root,
+        ],
+        {
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            OPENCLAW_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS: allow,
+            OPENCLAW_SELECTED_SHA: selectedSha,
+            OPENCLAW_TOOLING_SHA: "f".repeat(40),
+          },
+        },
+      );
+
+    const legacy = createSource("legacy");
+    expect(run(legacy, "1").stdout.trim()).toBe(
+      "legacy-json|legacy|jsonl|omitted-gateway-unsupported|local-basic,remote-non-interactive,reset,channels,skills|interactive|legacy|legacy|agent|jsonl|legacy",
+    );
+    expect(run(legacy, "0").stdout.trim()).toBe(
+      "required|current|sqlite|required||required|current|current|current|sqlite|current",
+    );
+
+    const modern = createSource("modern");
+    expect(run(modern, "1").stdout.trim()).toBe(
+      "required|current|sqlite|required||required|current|current|current|sqlite|current",
+    );
+
+    const unknown = createSource("unknown");
+    const unknownResult = run(unknown, "1");
+    expect(unknownResult.status).toBe(2);
+    expect(unknownResult.stderr).toContain("failed to read selected Gateway node command policy");
+
+    const mismatched = run(legacy, "1", "e".repeat(40));
+    expect(mismatched.status).toBe(2);
+    expect(mismatched.stderr).toContain("selected source checkout");
   });
 
   it.each([

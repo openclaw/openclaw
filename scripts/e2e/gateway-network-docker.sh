@@ -4,6 +4,9 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "$ROOT_DIR/scripts/lib/docker-e2e-image.sh"
 source "$ROOT_DIR/scripts/lib/frozen-target-compat.sh"
+SOURCE_ROOT="${OPENCLAW_DOCKER_E2E_REPO_ROOT:-$ROOT_DIR}"
+export OPENCLAW_SELECTED_SHA="${OPENCLAW_SELECTED_SHA:-${OPENCLAW_DOCKER_E2E_SELECTED_SHA:-$(git -C "$SOURCE_ROOT" rev-parse HEAD)}}"
+export OPENCLAW_TOOLING_SHA="${OPENCLAW_TOOLING_SHA:-$(git -C "$ROOT_DIR" rev-parse HEAD)}"
 IMAGE_NAME="$(docker_e2e_resolve_image "openclaw-gateway-network-e2e" OPENCLAW_GATEWAY_NETWORK_E2E_IMAGE)"
 SKIP_BUILD="${OPENCLAW_GATEWAY_NETWORK_E2E_SKIP_BUILD:-0}"
 

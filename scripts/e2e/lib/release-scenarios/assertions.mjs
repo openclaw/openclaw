@@ -127,6 +127,10 @@ function assertSessionMemoryHookEnabled() {
   if (cfg?.hooks?.internal?.entries?.["session-memory"]?.enabled === true) {
     return;
   }
+  if (process.env.OPENCLAW_FROZEN_TARGET_ONBOARD_SESSION_MEMORY_HOOK_MODE === "interactive") {
+    process.stdout.write("session-memory hook unavailable in selected interactive onboarding\n");
+    return;
+  }
   throw new Error(
     `session-memory hook was not enabled. Onboarding config projection: ${JSON.stringify(
       sessionMemoryHookConfigProjection(cfg),

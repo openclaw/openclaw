@@ -45,7 +45,45 @@ describe("upgrade survivor config recipe command resolution", () => {
         const candidateRoot = join(root, "candidate");
         const binDir = join(root, "bin");
         const candidate = join(candidateRoot, "candidate.tgz");
+        const legacyDoctorPath = "src/commands/doctor-session-transcripts.ts";
+        const legacyClawHubPath = "src/plugins/clawhub.ts";
+        const legacyGatewayPolicyPath = "src/gateway/node-command-policy.ts";
         const stateScript = "scripts/lib/openclaw-test-state.mts";
+        mkdirSync(join(candidateRoot, dirname(legacyDoctorPath)), { recursive: true });
+        writeFileSync(
+          join(candidateRoot, legacyDoctorPath),
+          'const archiveSuffix = ".pre-doctor-branch-repair-";\n',
+        );
+        mkdirSync(join(candidateRoot, dirname(legacyClawHubPath)), { recursive: true });
+        writeFileSync(join(candidateRoot, legacyClawHubPath), 'from "../infra/clawhub.js";\n');
+        mkdirSync(join(candidateRoot, dirname(legacyGatewayPolicyPath)), { recursive: true });
+        writeFileSync(join(candidateRoot, legacyGatewayPolicyPath), "\n");
+        execFileSync("git", ["init", "--quiet"], { cwd: candidateRoot });
+        execFileSync("git", ["add", legacyDoctorPath, legacyClawHubPath, legacyGatewayPolicyPath], {
+          cwd: candidateRoot,
+        });
+        execFileSync(
+          "git",
+          [
+            "-c",
+            "user.name=OpenClaw Test",
+            "-c",
+            "user.email=test@openclaw.invalid",
+            "commit",
+            "--quiet",
+            "-m",
+            "test: create legacy selected source",
+          ],
+          { cwd: candidateRoot },
+        );
+        const selectedSha = execFileSync("git", ["rev-parse", "HEAD"], {
+          cwd: candidateRoot,
+          encoding: "utf8",
+        }).trim();
+        const toolingSha = execFileSync("git", ["rev-parse", "HEAD"], {
+          cwd: harnessRoot,
+          encoding: "utf8",
+        }).trim();
         mkdirSync(join(candidateRoot, dirname(stateScript)), { recursive: true });
         cpSync(stateScript, join(candidateRoot, stateScript));
         writeFileSync(candidate, "unused by the Docker boundary stub");
@@ -72,6 +110,9 @@ esac
             PATH: [binDir, dirname(process.execPath), process.env.PATH ?? ""].join(delimiter),
             OPENCLAW_SKIP_DOCKER_BUILD: "1",
             OPENCLAW_DOCKER_E2E_REPO_ROOT: candidateRoot,
+            OPENCLAW_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS: "1",
+            OPENCLAW_SELECTED_SHA: selectedSha,
+            OPENCLAW_TOOLING_SHA: toolingSha,
             OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_DIR: join(root, "artifacts"),
             OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE: "1",
             OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC: "openclaw@2026.7.1-2",
@@ -99,6 +140,11 @@ esac
         ]);
         expect(args).toContain(
           "OPENCLAW_UPGRADE_SURVIVOR_CANDIDATE_SPEC=/tmp/openclaw-current.tgz",
+        );
+        expect(args).toContain("OPENCLAW_UPGRADE_SURVIVOR_CLAWHUB_REQUEST_DIALECT=legacy");
+        expect(args).toContain("OPENCLAW_UPGRADE_SURVIVOR_SESSION_REPAIR_MODE=jsonl");
+        expect(args).toContain(
+          "OPENCLAW_UPGRADE_SURVIVOR_MOBILE_WATCH_REAPPROVAL_MODE=omitted-gateway-unsupported",
         );
         expect(args.slice(-5)).toEqual([
           "timeout",

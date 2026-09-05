@@ -118,6 +118,7 @@ const PREPUBLISH_PLUGIN_REGISTRY_HELPER_PATH = "scripts/e2e/lib/prepublish-plugi
 const UPDATE_CHANNEL_SWITCH_DOCKER_E2E_PATH = "scripts/e2e/update-channel-switch-docker.sh";
 const UPDATE_CHANNEL_SWITCH_ASSERTIONS_PATH =
   "scripts/e2e/lib/update-channel-switch/assertions.mjs";
+const FROZEN_TARGET_COMPAT_PATH = "scripts/lib/frozen-target-compat.sh";
 const RELEASE_UPGRADE_USER_JOURNEY_SCENARIO_PATH =
   "scripts/e2e/lib/release-upgrade-user-journey/scenario.sh";
 const RELEASE_TYPED_ONBOARDING_SCENARIO_PATH =
@@ -157,6 +158,62 @@ function extractUpgradeSurvivorPayload(script: string) {
     throw new Error("upgrade survivor bash -lc payload not found");
   }
   return quoted.slice(1, end + 1).replaceAll(`'"'"'`, "'");
+}
+
+function runTypedOnboardingDriver(mode: "interactive" | "required", dialect: string) {
+  const source = readFileSync(RELEASE_TYPED_ONBOARDING_SCENARIO_PATH, "utf8");
+  const start = source.indexOf("send() {");
+  const end = source.indexOf("\nopenclaw_e2e_install_package", start);
+  expect(start).toBeGreaterThanOrEqual(0);
+  expect(end).toBeGreaterThan(start);
+  const root = tempDirs.make("openclaw-typed-onboarding-driver-");
+  const functionsPath = join(root, "driver.sh");
+  const transcriptPath = join(root, "onboard.log");
+  writeFileSync(functionsPath, source.slice(start, end));
+  const prompt =
+    dialect === "current"
+      ? "Help make OpenClaw better?"
+      : dialect === "legacy"
+        ? "to search"
+        : "What should we call your first agent?";
+  writeFileSync(transcriptPath, `fixture onboarding transcript\n${prompt}\n`);
+
+  return spawnSync(
+    "/bin/bash",
+    [
+      "-c",
+      String.raw`
+set -Eeuo pipefail
+source "$1"
+shift
+export ONBOARD_LOG="$OPENCLAW_TEST_ONBOARD_LOG"
+wait_for_log() {
+  return 0
+}
+send() {
+  case "$1" in
+    $'y\r') printf 'continue\n' ;;
+    $'ollama\r') printf 'search\n' ;;
+    $' \r') printf 'hooks\n' ;;
+    $'\r') printf 'enter\n' ;;
+    *) printf 'unknown:%q\n' "$1" ;;
+  esac
+}
+drive_typed_onboarding
+`,
+      "test",
+      functionsPath,
+    ],
+    {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        OPENCLAW_FROZEN_TARGET_ONBOARD_SESSION_MEMORY_HOOK_MODE: mode,
+        OPENCLAW_TEST_ONBOARD_LOG: transcriptPath,
+      },
+    },
+  );
 }
 
 // Prompt-driving scripts must consume public prompts in the order the CLI renders them.
@@ -2894,6 +2951,130 @@ docker_e2e_docker_run_cmd run demo
     expect(inner.status, inner.stderr).toBe(0);
   });
 
+  it.each([
+    [
+      "supported",
+      `
+export const IOS_WATCH_RELAY_COMMANDS = [
+  "watch.status",
+  "watch.notify",
+];
+const watchRelayCommands =
+  platformId === "ios" &&
+  normalizeDeviceMetadataForPolicy(node?.deviceFamily) === "iphone"
+    ? IOS_WATCH_RELAY_COMMANDS
+    : [];
+const allow = new Set(
+  [...base, ...watchRelayCommands, ...extra],
+);
+`,
+      "required",
+    ],
+    [
+      "missing the resolved allowlist contribution",
+      `
+export const IOS_WATCH_RELAY_COMMANDS = ["watch.status", "watch.notify"];
+const watchRelayCommands =
+  platformId === "ios" &&
+  normalizeDeviceMetadataForPolicy(node?.deviceFamily) === "iphone"
+    ? IOS_WATCH_RELAY_COMMANDS
+    : [];
+const allow = new Set([...base, ...extra]);
+`,
+      "omitted-gateway-unsupported",
+    ],
+    ["unsupported", "export const PLATFORM_DEFAULTS = {};\n", "omitted-gateway-unsupported"],
+  ])(
+    "derives mobile watch reapproval from the selected Gateway source: %s",
+    (_label, source, expected) => {
+      const root = tempDirs.make("openclaw-frozen-watch-capability-");
+      const sourceRoot = join(root, "source");
+      const policyPath = join(sourceRoot, "src", "gateway", "node-command-policy.ts");
+      mkdirSync(dirname(policyPath), { recursive: true });
+      writeFileSync(policyPath, source);
+      execFileSync("git", ["init", "-q", sourceRoot]);
+      execFileSync("git", ["-C", sourceRoot, "config", "user.email", "test@example.invalid"]);
+      execFileSync("git", ["-C", sourceRoot, "config", "user.name", "OpenClaw Test"]);
+      execFileSync("git", ["-C", sourceRoot, "add", "-A"]);
+      execFileSync("git", ["-C", sourceRoot, "commit", "-qm", "selected-gateway-policy"]);
+      const selectedSha = execFileSync("git", ["-C", sourceRoot, "rev-parse", "HEAD"], {
+        encoding: "utf8",
+      }).trim();
+
+      const result = spawnSync(
+        "bash",
+        [
+          "-c",
+          `
+set -euo pipefail
+source "$1"
+export OPENCLAW_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS=1
+export OPENCLAW_SELECTED_SHA="$2"
+export OPENCLAW_TOOLING_SHA=1111111111111111111111111111111111111111
+openclaw_resolve_frozen_upgrade_survivor_capabilities "$3"
+printf '%s\\n' "$OPENCLAW_UPGRADE_SURVIVOR_MOBILE_WATCH_REAPPROVAL_MODE"
+`,
+          "test",
+          FROZEN_TARGET_COMPAT_PATH,
+          selectedSha,
+          sourceRoot,
+        ],
+        { cwd: process.cwd(), encoding: "utf8" },
+      );
+
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout.trim()).toBe(expected);
+    },
+  );
+
+  it("fails closed when an authorized selected Gateway policy cannot be read", () => {
+    const root = tempDirs.make("openclaw-frozen-watch-read-failure-");
+    execFileSync("git", ["init", "-q", root]);
+    execFileSync("git", ["-C", root, "config", "user.email", "test@example.invalid"]);
+    execFileSync("git", ["-C", root, "config", "user.name", "OpenClaw Test"]);
+    writeFileSync(join(root, "README.md"), "fixture\n");
+    execFileSync("git", ["-C", root, "add", "-A"]);
+    execFileSync("git", ["-C", root, "commit", "-qm", "selected-without-policy"]);
+    const selectedSha = execFileSync("git", ["-C", root, "rev-parse", "HEAD"], {
+      encoding: "utf8",
+    }).trim();
+    const result = spawnSync(
+      "bash",
+      [
+        "-c",
+        `
+set -u
+source "$1"
+export OPENCLAW_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS=1
+export OPENCLAW_SELECTED_SHA="$2"
+export OPENCLAW_TOOLING_SHA=1111111111111111111111111111111111111111
+openclaw_resolve_frozen_upgrade_survivor_capabilities "$3"
+`,
+        "test",
+        FROZEN_TARGET_COMPAT_PATH,
+        selectedSha,
+        root,
+      ],
+      { cwd: process.cwd(), encoding: "utf8" },
+    );
+
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain("failed to read selected Gateway node command policy");
+  });
+
+  it("forwards only the resolved mobile watch mode into upgrade survivor containers", () => {
+    const runner = readFileSync(UPGRADE_SURVIVOR_DOCKER_E2E_PATH, "utf8");
+
+    expect(
+      runner.match(
+        /-e OPENCLAW_UPGRADE_SURVIVOR_MOBILE_WATCH_REAPPROVAL_MODE="\$OPENCLAW_UPGRADE_SURVIVOR_MOBILE_WATCH_REAPPROVAL_MODE"/gu,
+      ),
+    ).toHaveLength(2);
+    expect(runner).not.toContain("-e OPENCLAW_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS");
+    expect(runner).not.toContain("-e OPENCLAW_SELECTED_SHA");
+    expect(runner).not.toContain("-e OPENCLAW_TOOLING_SHA");
+  });
+
   it("routes staged live suites through the candidate entrypoint resolver", () => {
     for (const scriptPath of [
       "scripts/test-live-acp-bind-docker.sh",
@@ -2953,16 +3134,23 @@ docker_e2e_docker_run_cmd run demo
   });
 
   it("keeps real-TTY onboarding drivers aligned with the guided prompt sequence", () => {
-    expectOrderedScriptFragments(readFileSync(RELEASE_TYPED_ONBOARDING_SCENARIO_PATH, "utf8"), [
-      'wait_for_log "Continue?"',
-      "send $'y\\r'",
-      'wait_for_log "Help make OpenClaw better?"',
-      "send $'\\r'",
-      'wait_for_log "What should we call your first agent?"',
-      "send $'\\r'",
-      'wait_for_log "to search"',
-      "send $'ollama\\r'",
-    ]);
+    const current = runTypedOnboardingDriver("required", "current");
+    expect(current.status, current.stderr).toBe(0);
+    expect(current.stdout.trim().split("\n")).toEqual(["continue", "enter", "enter", "search"]);
+
+    const requiredLegacy = runTypedOnboardingDriver("required", "legacy");
+    expect(requiredLegacy.status).not.toBe(0);
+    expect(requiredLegacy.stderr).toContain("unexpected typed onboarding transition");
+
+    const legacy = runTypedOnboardingDriver("interactive", "legacy");
+    expect(legacy.status, legacy.stderr).toBe(0);
+    expect(legacy.stdout.trim().split("\n")).toEqual(["continue", "search", "hooks", "enter"]);
+
+    const unknown = runTypedOnboardingDriver("required", "unknown");
+    expect(unknown.status).not.toBe(0);
+    expect(unknown.stderr).toContain("unexpected typed onboarding transition");
+    expect(unknown.stderr).toContain("fixture onboarding transcript");
+
     expectOrderedScriptFragments(readFileSync(ONBOARD_SCENARIO_PATH, "utf8"), [
       'wait_for_log "Help make OpenClaw better?"',
       "send $'\\r'",
@@ -6216,6 +6404,102 @@ source "$ROOT_DIR/scripts/lib/docker-e2e-logs.sh"
     expect(pluginBinding).not.toContain('readFileSync(logPath, "utf8")');
   });
 
+  it("mounts the committed frozen bundle-MCP client tree and cleans its extraction", () => {
+    const root = tempDirs.make("openclaw-frozen-agent-bundle-mcp-tools-");
+    const sourceRoot = join(root, "source");
+    const clientPath = join(sourceRoot, "scripts/e2e/agent-bundle-mcp-tools-docker-client.ts");
+    const runtimePath = join(sourceRoot, "src/agents/agent-bundle-mcp-runtime.ts");
+    mkdirSync(dirname(clientPath), { recursive: true });
+    mkdirSync(dirname(runtimePath), { recursive: true });
+    writeFileSync(clientPath, "COMMITTED\n");
+    writeFileSync(runtimePath, "");
+    execFileSync("git", ["init", "-q"], { cwd: sourceRoot });
+    execFileSync("git", ["add", "."], { cwd: sourceRoot });
+    execFileSync(
+      "git",
+      [
+        "-c",
+        "user.name=OpenClaw Test",
+        "-c",
+        "user.email=test@openclaw.invalid",
+        "commit",
+        "-q",
+        "-m",
+        "fixture",
+      ],
+      { cwd: sourceRoot },
+    );
+    const selectedSha = execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd: sourceRoot,
+      encoding: "utf8",
+    }).trim();
+    writeFileSync(clientPath, "DIRTY\n");
+
+    const binDir = join(root, "bin");
+    const markerLog = join(root, "marker.log");
+    const mountLog = join(root, "mount.log");
+    const taskTmp = join(root, "tmp");
+    mkdirSync(taskTmp);
+    writeExecutables(binDir, {
+      docker: `#!/bin/bash
+set -euo pipefail
+if [[ "$1" == "image" && "$2" == "inspect" ]]; then
+  exit 0
+fi
+if [[ "$1" == "rm" ]]; then
+  exit 0
+fi
+if [[ "$1" != "run" ]]; then
+  echo "unexpected fake Docker command: $*" >&2
+  exit 2
+fi
+mounted_scripts=""
+for arg in "$@"; do
+  case "$arg" in
+    *:/tmp/openclaw-frozen-agent-bundle-mcp-tools/scripts/e2e:ro)
+      mounted_scripts="\${arg%:/tmp/openclaw-frozen-agent-bundle-mcp-tools/scripts/e2e:ro}"
+      ;;
+  esac
+done
+if [[ -z "$mounted_scripts" ]]; then
+  echo "legacy scripts/e2e mount not found" >&2
+  exit 2
+fi
+marker="$(cat "$mounted_scripts/agent-bundle-mcp-tools-docker-client.ts")"
+printf '%s\\n' "$marker" >"$OPENCLAW_TEST_MARKER_LOG"
+printf '%s\\n' "$mounted_scripts" >"$OPENCLAW_TEST_MOUNT_LOG"
+if [[ "$marker" != "COMMITTED" ]]; then
+  echo "expected committed legacy client marker COMMITTED, got $marker" >&2
+  exit 42
+fi
+`,
+    });
+
+    const result = spawnSync("bash", [AGENT_BUNDLE_MCP_TOOLS_DOCKER_E2E_PATH], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        PATH: `${binDir}:${process.env.PATH}`,
+        TMPDIR: taskTmp,
+        OPENCLAW_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS: "1",
+        OPENCLAW_DOCKER_E2E_DISABLE_RESOURCE_LIMITS: "1",
+        OPENCLAW_DOCKER_E2E_REPO_ROOT: sourceRoot,
+        OPENCLAW_DOCKER_E2E_SELECTED_SHA: selectedSha,
+        OPENCLAW_SKIP_DOCKER_BUILD: "1",
+        OPENCLAW_TEST_MARKER_LOG: markerLog,
+        OPENCLAW_TEST_MOUNT_LOG: mountLog,
+        OPENCLAW_TOOLING_SHA: "f".repeat(40),
+      },
+    });
+
+    expect(readFileSync(markerLog, "utf8")).toBe("COMMITTED\n");
+    expect(result.status, result.stderr || result.stdout).toBe(0);
+    const mountedScripts = readFileSync(mountLog, "utf8").trim();
+    expect(mountedScripts).not.toBe(join(sourceRoot, "scripts/e2e"));
+    expect(existsSync(mountedScripts)).toBe(false);
+  });
+
   it("keeps Open WebUI Docker E2E resource-guarded", () => {
     const runner = readFileSync(OPENWEBUI_DOCKER_E2E_PATH, "utf8");
     expectTextToIncludeAll(runner, [
@@ -7811,5 +8095,55 @@ done
       'openclaw_e2e_maybe_timeout "$OPENCLAW_PLUGINS_CLI_TIMEOUT"',
       "clawhub:@openclaw/kitchen-sink",
     ]);
+  });
+
+  it("forwards the selected-source-derived plugin profile into the plugins container", () => {
+    const root = tempDirs.make("openclaw-plugins-docker-env-");
+    const binDir = join(root, "bin");
+    const dockerLog = join(root, "docker.log");
+    writeExecutables(binDir, {
+      docker: `#!/bin/bash
+printf '%s\\n' "$*" >>"$OPENCLAW_TEST_DOCKER_LOG"
+printf 'profile=%s\\n' "$OPENCLAW_FROZEN_TARGET_PLUGIN_UNINSTALL_MODE" >>"$OPENCLAW_TEST_DOCKER_LOG"
+exit 0
+`,
+    });
+    const sourceRoot = join(root, "source");
+    const assertionsPath = join(sourceRoot, "scripts", "e2e", "lib", "plugins", "assertions.mjs");
+    mkdirSync(dirname(assertionsPath), { recursive: true });
+    writeFileSync(assertionsPath, "function assertPluginTgzRemoved() {}\\n");
+    execFileSync("git", ["init", "-q", sourceRoot]);
+    execFileSync("git", ["-C", sourceRoot, "config", "user.email", "test@example.invalid"]);
+    execFileSync("git", ["-C", sourceRoot, "config", "user.name", "OpenClaw Test"]);
+    execFileSync("git", ["-C", sourceRoot, "add", "-A"]);
+    execFileSync("git", ["-C", sourceRoot, "commit", "-qm", "legacy-plugin-profile"]);
+    const selectedSha = execFileSync("git", ["-C", sourceRoot, "rev-parse", "HEAD"], {
+      encoding: "utf8",
+    }).trim();
+
+    const result = spawnSync("bash", [PLUGINS_DOCKER_E2E_PATH], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        PATH: `${binDir}:${process.env.PATH}`,
+        OPENCLAW_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS: "1",
+        OPENCLAW_DOCKER_E2E_DISABLE_RESOURCE_LIMITS: "1",
+        OPENCLAW_DOCKER_E2E_REPO_ROOT: sourceRoot,
+        OPENCLAW_DOCKER_E2E_SELECTED_SHA: selectedSha,
+        OPENCLAW_SKIP_DOCKER_BUILD: "1",
+        OPENCLAW_TEST_DOCKER_LOG: dockerLog,
+      },
+    });
+
+    expect(result.status, result.stderr || result.stdout).toBe(0);
+    const run = readFileSync(dockerLog, "utf8")
+      .split("\n")
+      .find((line) => line.startsWith("run "));
+    expect(run).toContain("-e OPENCLAW_FROZEN_TARGET_PLUGIN_UNINSTALL_MODE=legacy");
+    expect(run).not.toContain("OPENCLAW_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS");
+    expect(run).not.toContain("OPENCLAW_SELECTED_SHA");
+    expect(run).not.toContain("OPENCLAW_TOOLING_SHA");
+    expect(readFileSync(dockerLog, "utf8")).toContain("profile=legacy");
   });
 });

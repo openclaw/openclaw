@@ -18,15 +18,15 @@ async function assertPrepublishRequests(
   baseUrl,
   requestedPackage,
   version,
-  securityMode = "required",
+  requestDialect = "current",
   attempts = "1",
   minimumAttempts = "1",
 ) {
   if (!baseUrl || !requestedPackage || !version) {
     throw new Error("assert-prepublish-requests requires <base-url> <package-name> <version>");
   }
-  if (securityMode !== "required" && securityMode !== "absent") {
-    throw new Error("assert-prepublish-requests security mode must be required or absent");
+  if (requestDialect !== "current" && requestDialect !== "legacy") {
+    throw new Error("assert-prepublish-requests dialect must be current or legacy");
   }
   if (attempts !== "1" && attempts !== "2" && attempts !== "complete") {
     throw new Error("assert-prepublish-requests attempts must be 1, 2, or complete");
@@ -48,7 +48,7 @@ async function assertPrepublishRequests(
   const expected = [
     `GET ${packagePath}`,
     `GET ${versionPath}/artifact`,
-    ...(securityMode === "required" ? [`GET ${versionPath}/security`] : []),
+    ...(requestDialect === "current" ? [`GET ${versionPath}/security`] : []),
     `GET ${versionPath}/artifact/download`,
   ];
   // Multi-command upgrade recovery can stage an artifact in several convergence

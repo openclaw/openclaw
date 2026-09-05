@@ -6,6 +6,11 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "$ROOT_DIR/scripts/lib/docker-e2e-image.sh"
 source "$ROOT_DIR/scripts/e2e/lib/prepublish-plugin-registry.sh"
+source "$ROOT_DIR/scripts/lib/frozen-target-compat.sh"
+SOURCE_ROOT="${OPENCLAW_DOCKER_E2E_REPO_ROOT:-$ROOT_DIR}"
+export OPENCLAW_SELECTED_SHA="${OPENCLAW_SELECTED_SHA:-${OPENCLAW_DOCKER_E2E_SELECTED_SHA:-$(git -C "$SOURCE_ROOT" rev-parse HEAD)}}"
+export OPENCLAW_TOOLING_SHA="${OPENCLAW_TOOLING_SHA:-$(git -C "$ROOT_DIR" rev-parse HEAD)}"
+openclaw_resolve_frozen_core_harness_capabilities "$SOURCE_ROOT"
 
 IMAGE_NAME="$(docker_e2e_resolve_image "openclaw-mcp-code-mode-gateway-e2e" OPENCLAW_IMAGE)"
 PORT="$(docker_e2e_read_tcp_port_env OPENCLAW_MCP_CODE_MODE_GATEWAY_PORT 18789)"
@@ -46,6 +51,10 @@ docker_e2e_run_with_harness \
   -e "GW_TOKEN=$TOKEN" \
   -e "OPENCLAW_MCP_CODE_MODE_CLIENT_TIMEOUT_MS=$CLIENT_TIMEOUT_MS" \
   -e "OPENCLAW_MCP_CODE_MODE_CLIENT_BODY_MAX_BYTES=$CLIENT_BODY_MAX_BYTES" \
+  -e "OPENCLAW_FROZEN_TARGET_MCP_CODE_MODE_CATALOG_MODE=$OPENCLAW_FROZEN_TARGET_MCP_CODE_MODE_CATALOG_MODE" \
+  -e "OPENCLAW_FROZEN_TARGET_MCP_MEMORY_CONFIG_MODE=$OPENCLAW_FROZEN_TARGET_MCP_MEMORY_CONFIG_MODE" \
+  -e "OPENCLAW_SELECTED_SHA=$OPENCLAW_SELECTED_SHA" \
+  -e "OPENCLAW_TOOLING_SHA=$OPENCLAW_TOOLING_SHA" \
   -e "OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1" \
   "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DOCKER_ARGS[@]}" \
   "$IMAGE_NAME" \

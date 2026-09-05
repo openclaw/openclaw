@@ -631,10 +631,11 @@ assert_prepublish_fixture_idle() {
 }
 
 assert_prepublish_plugin_install() {
-  local allow_pending="${1:-0}" plugin_id="whatsapp" help consent
+  local allow_pending="${1:-0}" plugin_id="discord" clawhub_plugin_id="whatsapp"
+  local clawhub_request_dialect="${OPENCLAW_UPGRADE_SURVIVOR_CLAWHUB_REQUEST_DIALECT:-current}" help consent
   local consent_supported=0 pending_args=()
   if configured_plugin_installs_enabled; then
-    plugin_id="matrix"
+    clawhub_plugin_id="matrix"
   fi
   help="$(openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" openclaw plugins install --help)" || return "$?"
   consent="$(printf '%s' "$help" | node scripts/e2e/lib/package-compat.mjs fixture-consent)" || return "$?"
@@ -647,7 +648,17 @@ assert_prepublish_plugin_install() {
   node scripts/e2e/lib/upgrade-survivor/assertions.mjs \
     assert-npm-plugin-install "$plugin_id" "@openclaw/$plugin_id" "$candidate_version" \
     "$consent_supported" ${pending_args[@]+"${pending_args[@]}"} || return "$?"
-  assert_prepublish_fixture_idle
+  case "$clawhub_request_dialect" in
+    current) assert_prepublish_fixture_idle ;;
+    legacy)
+      node "${OPENCLAW_UPGRADE_SURVIVOR_CLAWHUB_FIXTURE_SERVER:-scripts/e2e/lib/clawhub-fixture-server.cjs}" \
+        assert-prepublish-requests "$OPENCLAW_CLAWHUB_URL" "@openclaw/$clawhub_plugin_id" "$candidate_version" legacy complete
+      ;;
+    *)
+      echo "invalid OPENCLAW_UPGRADE_SURVIVOR_CLAWHUB_REQUEST_DIALECT: $clawhub_request_dialect" >&2
+      return 2
+      ;;
+  esac
 }
 
 configure_plugin_registry() {
@@ -980,30 +991,17 @@ bootstrap_mobile_pairing() {
   return "$stop_status"
 }
 
-mobile_pairing_expects_node_surface_reapproval() {
-  case "$baseline_version" in
-    2026.7.1 | 2026.7.1-*)
-      return 0
-      ;;
-    *)
-      return 1
-      ;;
-  esac
-}
-
 verify_mobile_pairing() {
   local phase_name="$1"
   local evidence_file="$2"
-  local expect_known_node_surface_reapproval="false"
-  if mobile_pairing_expects_node_surface_reapproval; then
-    expect_known_node_surface_reapproval="true"
-  fi
   run_mobile_pairing_client verify \
     --package-root "$(package_root)" \
     --credentials "$MOBILE_PAIRING_CREDENTIALS" \
     --evidence "$evidence_file" \
+    --baseline-evidence "$MOBILE_PAIRING_BASELINE_EVIDENCE" \
     --phase "$phase_name" \
-    --expect-known-node-surface-reapproval "$expect_known_node_surface_reapproval"
+    --mobile-watch-reapproval-mode \
+    "${OPENCLAW_UPGRADE_SURVIVOR_MOBILE_WATCH_REAPPROVAL_MODE:-required}"
 }
 
 verify_mobile_pairing_once() {

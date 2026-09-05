@@ -87,7 +87,7 @@ function runPrepublishAssertion(
   baseUrl?: string,
   packageName?: string,
   version?: string,
-  securityMode?: "required" | "absent",
+  requestDialect?: "current" | "legacy",
   cwd = process.cwd(),
   attempts?: number | "complete",
   minimumAttempts?: number,
@@ -100,7 +100,7 @@ function runPrepublishAssertion(
       baseUrl ?? "",
       packageName ?? "",
       version ?? "",
-      ...(securityMode || attempts ? [securityMode ?? "required"] : []),
+      ...(requestDialect || attempts ? [requestDialect ?? "current"] : []),
       ...(attempts ? [String(attempts)] : []),
       ...(minimumAttempts ? [String(minimumAttempts)] : []),
     ],
@@ -188,6 +188,22 @@ describe("ClawHub fixture server", () => {
     expect(assertion.stderr).toContain(
       "assert-prepublish-requests requires <base-url> <package-name> <version>",
     );
+    const malformedDialect = spawnSync(
+      process.execPath,
+      [
+        SCRIPT_PATH,
+        "assert-prepublish-requests",
+        "http://127.0.0.1",
+        PACKAGE_NAME,
+        "1.0.0",
+        "mixed",
+      ],
+      { cwd: process.cwd(), encoding: "utf8", env: { ...process.env } },
+    );
+    expect(malformedDialect.status).toBe(1);
+    expect(malformedDialect.stderr).toContain(
+      "assert-prepublish-requests dialect must be current or legacy",
+    );
     const emptyAssertion = runNoRequestsAssertion();
     expect(emptyAssertion.status).toBe(1);
     expect(emptyAssertion.stderr).toContain("assert-no-requests requires <base-url>");
@@ -214,6 +230,38 @@ describe("ClawHub fixture server", () => {
     const sha256 = createHash("sha256").update(archive).digest("hex");
     const npmIntegrity = `sha512-${createHash("sha512").update(archive).digest("base64")}`;
     const npmShasum = createHash("sha1").update(archive).digest("hex");
+    const npmRoot = path.join(root, "npm");
+    const npmPackageDir = path.join(npmRoot, "package");
+    const npmTarball = "openclaw-discord-2026.8.1-beta.1.tgz";
+    const npmTarballPath = path.join(root, npmTarball);
+    mkdirSync(npmPackageDir, { recursive: true });
+    writeFileSync(
+      path.join(npmPackageDir, "package.json"),
+      `${JSON.stringify({ name: "@openclaw/discord", version, openclaw: { extensions: ["./index.js"] } })}\n`,
+    );
+    writeFileSync(
+      path.join(npmPackageDir, "openclaw.plugin.json"),
+      `${JSON.stringify({ id: "discord", configSchema: { type: "object" } })}\n`,
+    );
+    execFileSync("tar", ["-czf", npmTarballPath, "-C", npmRoot, "package"]);
+    const npmArchive = readFileSync(npmTarballPath);
+    const npmSha256 = createHash("sha256").update(npmArchive).digest("hex");
+    const npmArtifactIntegrity = `sha512-${createHash("sha512").update(npmArchive).digest("base64")}`;
+    const matrixRoot = path.join(root, "matrix");
+    const matrixPackageDir = path.join(matrixRoot, "package");
+    const matrixTarball = "openclaw-matrix-2026.8.1-beta.1.tgz";
+    const matrixTarballPath = path.join(root, matrixTarball);
+    mkdirSync(matrixPackageDir, { recursive: true });
+    writeFileSync(
+      path.join(matrixPackageDir, "package.json"),
+      `${JSON.stringify({ name: "@openclaw/matrix", version, openclaw: { extensions: ["./index.js"] } })}\n`,
+    );
+    writeFileSync(
+      path.join(matrixPackageDir, "openclaw.plugin.json"),
+      `${JSON.stringify({ id: "matrix", configSchema: { type: "object" } })}\n`,
+    );
+    execFileSync("tar", ["-czf", matrixTarballPath, "-C", matrixRoot, "package"]);
+    const matrixSha256 = createHash("sha256").update(readFileSync(matrixTarballPath)).digest("hex");
     const coreRoot = path.join(root, "core");
     mkdirSync(path.join(coreRoot, "package"), { recursive: true });
     writeFileSync(
@@ -232,6 +280,7 @@ describe("ClawHub fixture server", () => {
         packages: [
           { name: "@openclaw/ai", version, tarball: coreTarball, sha256: coreSha256 },
           { name: "@openclaw/whatsapp", version, tarball, sha256 },
+          { name: "@openclaw/matrix", version, tarball: matrixTarball, sha256: matrixSha256 },
         ],
       })}\n`,
     );
@@ -243,28 +292,25 @@ describe("ClawHub fixture server", () => {
     );
     expect(runNoRequestsAssertion(baseUrl, isolatedCwd).status).toBe(0);
     const stateDir = path.join(isolatedCwd, "state");
-    const installPath = path.join(
-      stateDir,
-      "npm/projects/whatsapp/node_modules/@openclaw/whatsapp",
-    );
-    cpSync(packageDir, installPath, { recursive: true });
+    const installPath = path.join(stateDir, "npm/projects/discord/node_modules/@openclaw/discord");
+    cpSync(npmPackageDir, installPath, { recursive: true });
     const registryDir = path.join(isolatedCwd, "registry");
     mkdirSync(registryDir);
-    cpSync(tarballPath, path.join(registryDir, tarball));
+    cpSync(npmTarballPath, path.join(registryDir, npmTarball));
     const registryManifest = JSON.stringify({
       schema: "openclaw.prepublish-plugin-registry/v1",
       schemaVersion: 1,
       sourceSha: "a".repeat(40),
       candidateVersion: version,
-      packages: [{ name: "@openclaw/whatsapp", version, tarball, sha256 }],
+      packages: [{ name: "@openclaw/discord", version, tarball: npmTarball, sha256: npmSha256 }],
     });
     writeFileSync(path.join(registryDir, "prepublish-plugin-registry.json"), registryManifest);
     const npmRecord: PluginInstallRecord = {
       source: "npm",
-      spec: `@openclaw/whatsapp@${version}`,
-      resolvedName: "@openclaw/whatsapp",
+      spec: `@openclaw/discord@${version}`,
+      resolvedName: "@openclaw/discord",
       resolvedVersion: version,
-      integrity: npmIntegrity,
+      integrity: npmArtifactIntegrity,
       installPath,
     };
     const bin = path.join(isolatedCwd, "bin");
@@ -296,13 +342,16 @@ ${runner.slice(boundary)}
     const runAutomaticChecks = (
       record: PluginInstallRecord | null = npmRecord,
       deniedPluginId?: string,
+      fixtureBaseUrl = baseUrl,
+      requestDialect: "current" | "legacy" = "current",
+      scenario = "base",
     ) => {
       mkdirSync(path.join(stateDir, "plugins"), { recursive: true });
       writeFileSync(
         path.join(stateDir, "plugins", "installs.json"),
-        JSON.stringify({ installRecords: record ? { whatsapp: record } : {} }),
+        JSON.stringify({ installRecords: record ? { discord: record } : {} }),
       );
-      const fixtureEnv = writePluginInspectFixture(bin, record ? { whatsapp: record } : {});
+      const fixtureEnv = writePluginInspectFixture(bin, record ? { discord: record } : {});
       const artifacts = path.join(isolatedCwd, "artifacts");
       mkdirSync(artifacts, { recursive: true });
       writeFileSync(
@@ -348,14 +397,15 @@ ${runner.slice(boundary)}
             FIXTURE_VERSION: version,
             FIXTURE_PENDING: deniedPluginId ? "1" : "0",
             OPENCLAW_STATE_DIR: stateDir,
-            OPENCLAW_CLAWHUB_URL: baseUrl,
+            OPENCLAW_CLAWHUB_URL: fixtureBaseUrl,
+            OPENCLAW_UPGRADE_SURVIVOR_CLAWHUB_REQUEST_DIALECT: requestDialect,
             OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR: registryDir,
             OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_MANIFEST_SHA256: createHash("sha256")
               .update(registryManifest)
               .digest("hex"),
             OPENCLAW_DOCKER_E2E_SELECTED_SHA: "a".repeat(40),
             OPENCLAW_UPGRADE_SURVIVOR_BASELINE: "openclaw@2026.7.1-2",
-            OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: "base",
+            OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: scenario,
             OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE: "manual",
             OPENCLAW_UPGRADE_SURVIVOR_RUNTIME_ROOT: path.join(isolatedCwd, "runtime"),
             OPENCLAW_UPGRADE_SURVIVOR_SUMMARY_JSON: path.join(
@@ -371,8 +421,54 @@ ${runner.slice(boundary)}
     expect(automatic.stdout).toContain("assert-prepublish-requests passed");
     expect(automatic.stdout).toContain("assert-prepublish-recovery-requests passed");
     expect(automatic.stdout).toContain(
-      'Plugin "whatsapp" has verified official capability-consent exemption.',
+      'Plugin "discord" has verified official capability-consent exemption.',
     );
+    const { baseUrl: legacyAutomaticBaseUrl } = await startFixtureServer(
+      "prepublish-artifacts",
+      [manifestPath],
+      isolatedCwd,
+    );
+    const whatsappPath = `/api/v1/packages/${encodeURIComponent("@openclaw/whatsapp")}`;
+    for (const requestPath of [
+      whatsappPath,
+      `${whatsappPath}/versions/${version}/artifact`,
+      `${whatsappPath}/versions/${version}/artifact/download`,
+    ]) {
+      const response = await fetch(`${legacyAutomaticBaseUrl}${requestPath}`);
+      expect(response.status).toBe(200);
+      await response.arrayBuffer();
+    }
+    const legacyAutomatic = runAutomaticChecks(
+      undefined,
+      undefined,
+      legacyAutomaticBaseUrl,
+      "legacy",
+    );
+    expect(legacyAutomatic.status, legacyAutomatic.stdout + legacyAutomatic.stderr).toBe(0);
+    expect(legacyAutomatic.stdout).toContain("assert-prepublish-requests passed");
+    const { baseUrl: legacyConfiguredBaseUrl } = await startFixtureServer(
+      "prepublish-artifacts",
+      [manifestPath],
+      isolatedCwd,
+    );
+    const matrixPath = `/api/v1/packages/${encodeURIComponent("@openclaw/matrix")}`;
+    for (const requestPath of [
+      matrixPath,
+      `${matrixPath}/versions/${version}/artifact`,
+      `${matrixPath}/versions/${version}/artifact/download`,
+    ]) {
+      const response = await fetch(`${legacyConfiguredBaseUrl}${requestPath}`);
+      expect(response.status).toBe(200);
+      await response.arrayBuffer();
+    }
+    const legacyConfigured = runAutomaticChecks(
+      undefined,
+      undefined,
+      legacyConfiguredBaseUrl,
+      "legacy",
+      "configured-plugin-installs",
+    );
+    expect(legacyConfigured.status, legacyConfigured.stdout + legacyConfigured.stderr).toBe(0);
     for (const [record, failure] of [
       [null, "plugin install record missing"],
       [{ ...npmRecord, source: "path" }, "must be installed from npm"],
@@ -384,29 +480,28 @@ ${runner.slice(boundary)}
         { ...npmRecord, sourcePath: tarballPath, artifactKind: "npm-pack" },
         "plugin accepted surface missing",
       ],
-      [{ ...npmRecord, resolvedName: "@vendor/whatsapp" }, "plugin accepted surface missing"],
+      [{ ...npmRecord, resolvedName: "@vendor/discord" }, "plugin accepted surface missing"],
     ] as const) {
       const rejected = runAutomaticChecks(record);
       expect(rejected.status).not.toBe(0);
       expect(rejected.stderr).toContain(failure);
     }
-    const pending = runAutomaticChecks(null, "whatsapp");
+    const pending = runAutomaticChecks(null, "discord");
     expect(pending.status, pending.stderr).toBe(0);
-    expect(pending.stdout).toContain('Plugin "whatsapp" is awaiting fixture capability consent.');
-    const unrelatedPending = runAutomaticChecks(null, "discord");
+    expect(pending.stdout).toContain('Plugin "discord" is awaiting fixture capability consent.');
+    const unrelatedPending = runAutomaticChecks(null, "whatsapp");
     expect(unrelatedPending.status).toBe(1);
-    expect(unrelatedPending.stderr).toContain("whatsapp plugin install record missing");
+    expect(unrelatedPending.stderr).toContain("discord plugin install record missing");
     expect(
       runPrepublishAssertion(
         baseUrl,
         "@openclaw/whatsapp",
         version,
-        "required",
+        "current",
         isolatedCwd,
         "complete",
       ).status,
     ).toBe(1);
-    const whatsappPath = `/api/v1/packages/${encodeURIComponent("@openclaw/whatsapp")}`;
     const detail = await fetchJson(baseUrl, whatsappPath);
     expect(detail.package).toMatchObject({
       latestVersion: version,
@@ -495,7 +590,7 @@ ${runner.slice(boundary)}
       baseUrl,
       "@openclaw/whatsapp",
       version,
-      "required",
+      "current",
       isolatedCwd,
       "complete",
       2,
@@ -522,7 +617,7 @@ ${runner.slice(boundary)}
       await response.arrayBuffer();
     }
     expect(
-      runPrepublishAssertion(baseUrl, "@openclaw/whatsapp", version, "required", isolatedCwd, 2)
+      runPrepublishAssertion(baseUrl, "@openclaw/whatsapp", version, "current", isolatedCwd, 2)
         .status,
     ).toBe(0);
     for (let attempt = 2; attempt < 4; attempt += 1) {
@@ -537,7 +632,7 @@ ${runner.slice(boundary)}
       baseUrl,
       "@openclaw/whatsapp",
       version,
-      "required",
+      "current",
       isolatedCwd,
       "complete",
       2,
@@ -550,7 +645,7 @@ ${runner.slice(boundary)}
       baseUrl,
       "@openclaw/whatsapp",
       version,
-      "required",
+      "current",
       isolatedCwd,
       "complete",
       2,
@@ -565,7 +660,7 @@ ${runner.slice(boundary)}
       baseUrl,
       "@openclaw/whatsapp",
       version,
-      "required",
+      "current",
       isolatedCwd,
       "complete",
       2,
@@ -589,7 +684,7 @@ ${runner.slice(boundary)}
       maximumBaseUrl,
       "@openclaw/whatsapp",
       version,
-      "required",
+      "current",
       isolatedCwd,
       "complete",
       2,
@@ -598,6 +693,38 @@ ${runner.slice(boundary)}
     expect(aboveMaximum.stderr).toContain(
       "expected 2-16 complete ClawHub artifact audit sequences",
     );
+
+    const { baseUrl: legacyBaseUrl } = await startFixtureServer(
+      "prepublish-artifacts",
+      [manifestPath],
+      isolatedCwd,
+    );
+    for (const requestPath of completeRequestPaths.filter(
+      (candidatePath) => !candidatePath.endsWith("/security"),
+    )) {
+      const response = await fetch(`${legacyBaseUrl}${requestPath}`);
+      expect(response.status).toBe(200);
+      await response.arrayBuffer();
+    }
+    const legacy = runPrepublishAssertion(
+      legacyBaseUrl,
+      "@openclaw/whatsapp",
+      version,
+      "legacy",
+      isolatedCwd,
+    );
+    expect(legacy.status, legacy.stderr).toBe(0);
+    expect(
+      runPrepublishAssertion(legacyBaseUrl, "@openclaw/whatsapp", version, "current", isolatedCwd)
+        .status,
+    ).toBe(1);
+    expect(
+      (await fetch(`${legacyBaseUrl}${whatsappPath}/versions/${version}/security`)).status,
+    ).toBe(200);
+    expect(
+      runPrepublishAssertion(legacyBaseUrl, "@openclaw/whatsapp", version, "legacy", isolatedCwd)
+        .status,
+    ).toBe(1);
     expect((await fetch(`${baseUrl}/api/v1/packages/%40openclaw%2Fai`)).status).toBe(404);
   });
 

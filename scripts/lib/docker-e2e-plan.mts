@@ -56,6 +56,7 @@ export const RELEASE_PATH_PROFILE = "release-path";
 type LiveMode = "all" | "only" | "skip";
 type DockerProfile = typeof DEFAULT_PROFILE | typeof RELEASE_PATH_PROFILE;
 type UpgradeSurvivorExpansion = { lanes: DockerE2eLane[]; omittedLaneNames: string[] };
+const UPDATE_FIRST_HOP_COMPAT_OUTPUTS = ["shared-DTaQo6Hi.js", "shared-Y6bNiw2w.js"];
 type DockerE2ePlanOptions = {
   allowFrozenTargetScenarioOmissions?: boolean;
   includeOpenWebUI: boolean;
@@ -282,6 +283,18 @@ function filterUpgradeSurvivorScenariosForTarget(
     (scenario) =>
       isTrustedHarnessOwnedUpgradeSurvivorScenario(scenario) || supportedScenarios.has(scenario),
   );
+}
+
+function supportsUpdateFirstHopCompatForTarget(targetRoot: string | undefined): boolean {
+  if (!targetRoot) {
+    return true;
+  }
+  const runtimePostbuild = resolve(targetRoot, "scripts/runtime-postbuild.mts");
+  if (!existsSync(runtimePostbuild)) {
+    return false;
+  }
+  const source = readFileSync(runtimePostbuild, "utf8");
+  return UPDATE_FIRST_HOP_COMPAT_OUTPUTS.every((name) => source.includes(`dest: "dist/${name}"`));
 }
 
 function expandedUpgradeSurvivorLaneName(
@@ -743,13 +756,20 @@ export function resolveDockerE2ePlan(options: DockerE2ePlanOptions) {
           return [];
         })
       : undefined;
-  const configuredLanes = selectedLanes
+  let configuredLanes = selectedLanes
     ? selectedLanes
     : releaseLanes
       ? applyLiveMode(releaseLanes, options.liveMode)
       : options.liveMode === "only"
         ? applyLiveMode([...retriedMainLanes, ...retriedTailLanes], options.liveMode)
         : applyLiveMode(retriedMainLanes, options.liveMode);
+  if (!supportsUpdateFirstHopCompatForTarget(options.upgradeSurvivorTargetRoot)) {
+    const filteredLanes = configuredLanes.filter((lane) => lane.name !== "update-first-hop-compat");
+    if (filteredLanes.length !== configuredLanes.length) {
+      omittedUnsupportedLaneNames.add("update-first-hop-compat");
+      configuredLanes = filteredLanes;
+    }
+  }
   const configuredTailLanes =
     selectedLanes || releaseLanes
       ? []

@@ -15,14 +15,16 @@ import {
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import type { PluginInstallRecord } from "../../src/config/types.plugins.js";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import {
   writePluginInspectFixture,
   type PluginInspectFixture,
 } from "./plugin-inspect.test-support.js";
 
 const ASSERTIONS_PATH = "scripts/e2e/lib/upgrade-survivor/assertions.mjs";
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function writeJson(path: string, value: unknown): void {
   writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`);
@@ -426,11 +428,21 @@ function createMigratedSessionFileStore(
 
 function writeMigratedSessionFiles(
   stateDir: string,
-  options: { includePrompt?: boolean } = {},
+  options: { includePrompt?: boolean; includeSessionFiles?: boolean } = {},
 ): void {
   const agentSessionsDir = join(stateDir, "agents", "main", "sessions");
   mkdirSync(agentSessionsDir, { recursive: true });
-  writeJson(join(agentSessionsDir, "sessions.json"), createMigratedSessionFileStore(options));
+  const store = createMigratedSessionFileStore(options);
+  if (options.includeSessionFiles) {
+    for (const [sessionKey, session] of Object.entries(store)) {
+      const sessionId = session.sessionId;
+      if (typeof sessionId !== "string") {
+        throw new TypeError(`missing fixture session id for ${sessionKey}`);
+      }
+      session.sessionFile = join(agentSessionsDir, `${sessionId}.jsonl`);
+    }
+  }
+  writeJson(join(agentSessionsDir, "sessions.json"), store);
   for (const sessionId of [
     "upgrade-main-session",
     "upgrade-direct-session",
@@ -614,6 +626,7 @@ function assertConfig(params: {
   scenario: string;
   stage?: "baseline" | "survival";
   updateChannel?: string;
+  discordDmConfigMode?: "canonical" | "legacy";
 }): void {
   const root = mkdtempSync(join(tmpdir(), "openclaw-upgrade-survivor-config-"));
   try {
@@ -632,6 +645,7 @@ function assertConfig(params: {
         OPENCLAW_UPGRADE_SURVIVOR_CONFIG_COVERAGE_JSON: coveragePath,
         OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: params.scenario,
         OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE: params.stage ?? "survival",
+        OPENCLAW_UPGRADE_SURVIVOR_DISCORD_DM_CONFIG_MODE: params.discordDmConfigMode ?? "canonical",
         OPENCLAW_UPGRADE_SURVIVOR_UPDATE_CHANNEL: params.updateChannel ?? "",
       },
       stdio: "pipe",
@@ -906,6 +920,72 @@ function assertUpdateRunSelfUpgrade(summary: ReturnType<typeof createUpdateRunSe
 }
 
 describe("upgrade survivor assertions", () => {
+  it("selects the exec-approval assertion owner without dropping the fixture", () => {
+    const root = mkdtempSync(join(tmpdir(), "openclaw-upgrade-survivor-exec-mode-"));
+    try {
+      const run = (mode: string | undefined, command: string) => {
+        const stateDir = join(root, mode ?? "default", "state");
+        const workspace = join(root, mode ?? "default", "workspace");
+        return {
+          result: spawnSync(process.execPath, [ASSERTIONS_PATH, command], {
+            encoding: "utf8",
+            env: {
+              ...process.env,
+              OPENCLAW_STATE_DIR: stateDir,
+              OPENCLAW_TEST_WORKSPACE_DIR: workspace,
+              OPENCLAW_UPGRADE_SURVIVOR_EXEC_APPROVALS_MODE: mode,
+            },
+          }),
+          stateDir,
+        };
+      };
+
+      const omittedSeed = run("omitted", "seed");
+      expect(omittedSeed.result.status, omittedSeed.result.stderr).toBe(0);
+      expect(() => readFileSync(join(omittedSeed.stateDir, "exec-approvals.json"), "utf8")).toThrow(
+        /ENOENT/,
+      );
+      expect(run("omitted", "assert-exec-approvals").result.status).toBe(0);
+
+      const requiredSeed = run(undefined, "seed");
+      expect(requiredSeed.result.status, requiredSeed.result.stderr).toBe(0);
+      expect(readFileSync(join(requiredSeed.stateDir, "exec-approvals.json"), "utf8")).toContain(
+        "survivor-used-command",
+      );
+
+      const legacySeed = run("legacy-json", "seed");
+      expect(legacySeed.result.status, legacySeed.result.stderr).toBe(0);
+      expect(readFileSync(join(legacySeed.stateDir, "exec-approvals.json"), "utf8")).toContain(
+        "survivor-used-command",
+      );
+      for (const stage of ["baseline", "survival"]) {
+        const legacyAssertion = spawnSync(
+          process.execPath,
+          [ASSERTIONS_PATH, "assert-exec-approvals"],
+          {
+            encoding: "utf8",
+            env: {
+              ...process.env,
+              OPENCLAW_STATE_DIR: legacySeed.stateDir,
+              OPENCLAW_TEST_WORKSPACE_DIR: join(root, "legacy-json", "workspace"),
+              OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE: stage,
+              OPENCLAW_UPGRADE_SURVIVOR_EXEC_APPROVALS_MODE: "legacy-json",
+            },
+          },
+        );
+        expect(legacyAssertion.status, legacyAssertion.stderr).toBe(0);
+      }
+
+      const malformed = run("legacy", "assert-exec-approvals").result;
+      expect(malformed.status).not.toBe(0);
+      expect(malformed.stderr).toContain(
+        "OPENCLAW_UPGRADE_SURVIVOR_EXEC_APPROVALS_MODE must be required, legacy-json, or omitted",
+      );
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
   it.each([
     {
       name: "legacy default-only doctor export",
@@ -1199,6 +1279,7 @@ process.stdout.write(sessionDir + "\\n");
     const files = phases.map((phase, index) => {
       const file = join(root, `${phase}.json`);
       const scopedNodeSurfaceReapproval = index > 0;
+      const nodeSurfaceReapprovalMode = index === 0 ? "not-applicable" : "required";
       writeJson(file, {
         phase,
         ok: true,
@@ -1209,10 +1290,17 @@ process.stdout.write(sessionDir + "\\n");
         pendingNodePairingCount: scopedNodeSurfaceReapproval ? 1 : 0,
         pairedDevicePresent: true,
         pairedNodePresent: true,
+        pairedNodeCaps: ["camera"],
+        pairedNodeCommands: ["camera.snap"],
+        pairedNodePermissions: { camera: false, screenRecording: true },
         nodeSurfaceReapprovalRequired: scopedNodeSurfaceReapproval,
-        nodeSurfaceReapprovalExpected: scopedNodeSurfaceReapproval,
+        nodeSurfaceReapprovalMode,
+        nodeSurfaceReapprovalReason:
+          nodeSurfaceReapprovalMode === "required"
+            ? "selected-gateway-admits-ios-iphone-watch-relay"
+            : "baseline-before-candidate",
         nodeSurfaceCommandAdditions: scopedNodeSurfaceReapproval
-          ? ["watch.notify", "watch.status"]
+          ? ["camera.clip", "watch.notify", "watch.status"]
           : [],
         missingPasswordReason: true,
         missingPasswordClose1008: true,
@@ -1253,7 +1341,10 @@ process.stdout.write(sessionDir + "\\n");
       writeJson(finalEvidenceFile, stale);
       expect(verify).toThrow(/newest stored token/);
       stale.credentials.node.usedTokenHash = hashes[2];
-      stale.nodeSurfaceCommandAdditions = ["watch.status", "system.run"];
+      stale.nodeSurfaceCommandAdditions = ["watch.notify", "watch.status"];
+      writeJson(finalEvidenceFile, stale);
+      expect(verify).toThrow(/command additions changed across reconnects/);
+      stale.nodeSurfaceCommandAdditions = ["camera.clip", "watch.notify"];
       writeJson(finalEvidenceFile, stale);
       expect(verify).toThrow(/known command-surface reapproval/);
       stale.nodeSurfaceCommandAdditions = [];
@@ -1262,9 +1353,156 @@ process.stdout.write(sessionDir + "\\n");
       stale.nodeSurfaceReapprovalRequired = false;
       writeJson(finalEvidenceFile, stale);
       expect(verify).toThrow(/known command-surface reapproval/);
+      stale.nodeSurfaceReapprovalMode = "omitted-gateway-unsupported";
+      stale.nodeSurfaceReapprovalReason = "selected-gateway-does-not-admit-ios-iphone-watch-relay";
+      writeJson(finalEvidenceFile, stale);
+      expect(verify).toThrow(/modes changed across reconnects/);
+      stale.nodeSurfaceReapprovalMode = "unknown";
+      stale.nodeSurfaceReapprovalReason = "unknown";
+      writeJson(finalEvidenceFile, stale);
+      expect(verify).toThrow(/mode missing or unknown/);
+      Reflect.deleteProperty(stale, "nodeSurfaceReapprovalMode");
+      writeJson(finalEvidenceFile, stale);
+      expect(verify).toThrow(/mode missing or unknown/);
     } finally {
       rmSync(root, { force: true, recursive: true });
     }
+  });
+
+  it("accepts one explicit unsupported-Gateway omission across candidate reconnects", () => {
+    const root = tempDirs.make("openclaw-mobile-pairing-omission-");
+    const phases = ["baseline", "candidate-first", "candidate-restart", "final"];
+    const hashes = ["a", "b", "c", "d", "e"].map((value) => value.repeat(64));
+    const files = phases.map((phase, index) => {
+      const file = join(root, `${phase}.json`);
+      const baseline = index === 0;
+      writeJson(file, {
+        phase,
+        ok: true,
+        health: true,
+        connectedDevicePresent: true,
+        pendingPairingCount: 0,
+        pendingDevicePairingCount: 0,
+        pendingNodePairingCount: 0,
+        pairedDevicePresent: true,
+        pairedNodePresent: true,
+        pairedNodeCaps: ["camera"],
+        pairedNodeCommands: ["camera.snap"],
+        pairedNodePermissions: { camera: false, screenRecording: true },
+        nodeSurfaceReapprovalRequired: false,
+        nodeSurfaceCommandAdditions: [],
+        nodeSurfaceReapprovalMode: baseline ? "not-applicable" : "omitted-gateway-unsupported",
+        nodeSurfaceReapprovalReason: baseline
+          ? "baseline-before-candidate"
+          : "selected-gateway-does-not-admit-ios-iphone-watch-relay",
+        missingPasswordReason: true,
+        missingPasswordClose1008: true,
+        credentials: {
+          node: {
+            usedTokenHash: hashes[index],
+            storedTokenHash: hashes[index + 1],
+            deviceTokenReturned: true,
+            tokenRotated: true,
+          },
+          operator: {
+            usedTokenHash: hashes[0],
+            storedTokenHash: hashes[0],
+            deviceTokenReturned: true,
+            tokenRotated: false,
+          },
+        },
+      });
+      return file;
+    });
+
+    expect(() =>
+      execFileSync(
+        process.execPath,
+        [ASSERTIONS_PATH, "assert-mobile-pairing-evidence", ...files],
+        {
+          stdio: "pipe",
+        },
+      ),
+    ).not.toThrow();
+  });
+
+  it("accepts a clean candidate when the baseline already owns the watch commands", () => {
+    const root = tempDirs.make("openclaw-mobile-pairing-preapproved-");
+    const phases = ["baseline", "candidate-first", "candidate-restart", "final"];
+    const hashes = ["a", "b", "c", "d", "e"].map((value) => value.repeat(64));
+    const files = phases.map((phase, index) => {
+      const file = join(root, `${phase}.json`);
+      writeJson(file, {
+        phase,
+        ok: true,
+        health: true,
+        connectedDevicePresent: true,
+        pendingPairingCount: 0,
+        pendingDevicePairingCount: 0,
+        pendingNodePairingCount: 0,
+        pairedDevicePresent: true,
+        pairedNodePresent: true,
+        pairedNodeCaps: ["camera"],
+        pairedNodeCommands: ["camera.snap", "watch.notify", "watch.status"],
+        pairedNodePermissions: { camera: false, screenRecording: true },
+        nodeSurfaceReapprovalRequired: false,
+        nodeSurfaceCommandAdditions: [],
+        nodeSurfaceReapprovalMode: "not-applicable",
+        nodeSurfaceReapprovalReason:
+          index === 0
+            ? "baseline-before-candidate"
+            : "baseline-already-admitted-ios-iphone-watch-relay",
+        missingPasswordReason: true,
+        missingPasswordClose1008: true,
+        credentials: {
+          node: {
+            usedTokenHash: hashes[index],
+            storedTokenHash: hashes[index + 1],
+            deviceTokenReturned: true,
+            tokenRotated: true,
+          },
+          operator: {
+            usedTokenHash: hashes[0],
+            storedTokenHash: hashes[0],
+            deviceTokenReturned: true,
+            tokenRotated: false,
+          },
+        },
+      });
+      return file;
+    });
+    const verify = () =>
+      execFileSync(
+        process.execPath,
+        [ASSERTIONS_PATH, "assert-mobile-pairing-evidence", ...files],
+        { stdio: "pipe" },
+      );
+    const candidateRestart = files[2];
+    if (!candidateRestart) {
+      throw new Error("candidate restart evidence fixture missing");
+    }
+
+    expect(verify).not.toThrow();
+    const stale = JSON.parse(readFileSync(candidateRestart, "utf8"));
+    stale.pairedNodeCommands = ["camera.snap", "system.run", "watch.notify", "watch.status"];
+    writeJson(candidateRestart, stale);
+    expect(verify).toThrow(/command surface changed without reapproval/);
+    stale.pairedNodeCommands = ["camera.snap", "watch.notify", "watch.status"];
+    stale.pairedNodeCaps = ["camera", "screen"];
+    writeJson(candidateRestart, stale);
+    expect(verify).toThrow(/capability surface changed without reapproval/);
+    stale.pairedNodeCaps = ["camera"];
+    stale.pairedNodePermissions = { camera: false };
+    writeJson(candidateRestart, stale);
+    expect(verify).toThrow(/permission surface changed without reapproval/);
+    stale.pairedNodePermissions = { camera: false, screenRecording: true };
+    stale.nodeSurfaceReapprovalReason = "baseline-before-candidate";
+    writeJson(candidateRestart, stale);
+    expect(verify).toThrow(/reapproval reason changed/);
+    stale.nodeSurfaceReapprovalMode = "omitted-gateway-unsupported";
+    stale.nodeSurfaceReapprovalReason = "selected-gateway-does-not-admit-ios-iphone-watch-relay";
+    writeJson(candidateRestart, stale);
+    expect(verify).toThrow(/modes changed across reconnects/);
   });
 
   it.each(["base", "sqlite-volume"])(
@@ -1505,6 +1743,40 @@ process.stdout.write(sessionDir + "\\n");
         scenario: "base",
       }),
     ).toThrow(/legacy Discord DM config survived/);
+  });
+
+  it("preserves a selected release's legacy Discord DM contract after update", () => {
+    const legacyConfig = {
+      channels: {
+        discord: {
+          enabled: true,
+          dm: { policy: "allowlist" as string, allowFrom: ["111111111111111111"] },
+          guilds: {
+            "222222222222222222": {
+              channels: { "333333333333333333": { requireMention: true } },
+            },
+          },
+          threadBindings: { idleHours: 72 },
+        },
+      },
+    };
+    expect(() =>
+      assertConfig({
+        acceptedIntents: ["discord-channel"],
+        config: legacyConfig,
+        discordDmConfigMode: "legacy",
+        scenario: "base",
+      }),
+    ).not.toThrow();
+    legacyConfig.channels.discord.dm.policy = "pairing";
+    expect(() =>
+      assertConfig({
+        acceptedIntents: ["discord-channel"],
+        config: legacyConfig,
+        discordDmConfigMode: "legacy",
+        scenario: "base",
+      }),
+    ).toThrow(/discord DM policy changed/);
   });
 
   it("requires canonical Discord DM config after update", () => {
@@ -1835,6 +2107,17 @@ process.stdout.write(sessionDir + "\\n");
         writeMigratedSessionFiles(stateDir);
       }),
     ).toThrow(/main legacy session row missing/);
+  });
+
+  it("uses the selected JSONL session store when a newer cache table is unrelated", () => {
+    expect(() =>
+      runSessionStateAssertion((stateDir) => {
+        mkdirSync(join(stateDir, "agents", "main", "agent"), { recursive: true });
+        writeLegacyCacheSessionState(stateDir, { empty: true });
+        writeMigratedSessionFiles(stateDir, { includeSessionFiles: true });
+        return { OPENCLAW_UPGRADE_SURVIVOR_SESSION_REPAIR_MODE: "jsonl" };
+      }),
+    ).not.toThrow();
   });
 
   it("prefers legacy cache_entries over a stale file session store", () => {

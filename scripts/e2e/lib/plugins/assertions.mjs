@@ -143,9 +143,14 @@ function readRequiredOpenClawConfig() {
   }
 }
 
+const pluginUninstallMode = process.env.OPENCLAW_FROZEN_TARGET_PLUGIN_UNINSTALL_MODE ?? "current";
+if (!new Set(["current", "legacy"]).has(pluginUninstallMode)) {
+  throw new Error(`invalid OPENCLAW_FROZEN_TARGET_PLUGIN_UNINSTALL_MODE: ${pluginUninstallMode}`);
+}
+
 function assertPluginUninstallConfigState(config, pluginId, label = pluginId) {
   const entry = config.plugins?.entries?.[pluginId];
-  if (process.env.OPENCLAW_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS === "1") {
+  if (pluginUninstallMode === "legacy") {
     if (entry) {
       throw new Error(`${label} config entry still present after uninstall`);
     }
@@ -759,7 +764,7 @@ function assertNpmPluginRemoved() {
       `npm managed dependency still exists after uninstall: ${dependencyPackagePath}`,
     );
   }
-  if (fs.existsSync(projectRoot)) {
+  if (pluginUninstallMode !== "legacy" && fs.existsSync(projectRoot)) {
     throw new Error(`npm managed project still exists after uninstall: ${projectRoot}`);
   }
 }
@@ -782,7 +787,7 @@ function assertNpmPluginRetained() {
 }
 
 function assertNpmPluginReinstalled() {
-  if (process.env.OPENCLAW_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS === "1") {
+  if (pluginUninstallMode === "legacy") {
     return;
   }
   assertPluginUninstallConfigState(readOpenClawConfig(), "demo-plugin-npm");

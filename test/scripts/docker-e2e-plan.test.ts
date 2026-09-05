@@ -1188,6 +1188,17 @@ describe("scripts/lib/docker-e2e-plan", () => {
     ]);
   });
 
+  it("reports the first-hop updater lane unsupported before its bridge artifacts existed", () => {
+    const targetRoot = tempDirs.make("openclaw-frozen-pre-bridge-updater-");
+    const plan = planFor({
+      selectedLaneNames: ["update-first-hop-compat"],
+      upgradeSurvivorTargetRoot: targetRoot,
+    });
+
+    expect(plan.lanes).toEqual([]);
+    expect(plan.omittedUnsupportedLanes).toEqual(["update-first-hop-compat"]);
+  });
+
   it("reads content-addressed scenario catalogs from pre-command frozen targets", () => {
     const targetRoot = tempDirs.make("openclaw-legacy-frozen-upgrade-harness-");
     const assertionsFile = join(targetRoot, "scripts/e2e/lib/upgrade-survivor/assertions.mjs");

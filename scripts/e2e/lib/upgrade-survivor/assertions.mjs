@@ -15,6 +15,18 @@ import {
 import { assertUpgradeVolumeMigrated, seedUpgradeVolume } from "./sqlite-volume.mjs";
 
 const command = process.argv[2];
+const execApprovalsMode = process.env.OPENCLAW_UPGRADE_SURVIVOR_EXEC_APPROVALS_MODE || "required";
+const sessionRepairMode = process.env.OPENCLAW_UPGRADE_SURVIVOR_SESSION_REPAIR_MODE || "sqlite";
+assertStrict.ok(
+  execApprovalsMode === "required" ||
+    execApprovalsMode === "legacy-json" ||
+    execApprovalsMode === "omitted",
+  "OPENCLAW_UPGRADE_SURVIVOR_EXEC_APPROVALS_MODE must be required, legacy-json, or omitted",
+);
+assertStrict.ok(
+  sessionRepairMode === "sqlite" || sessionRepairMode === "jsonl",
+  "OPENCLAW_UPGRADE_SURVIVOR_SESSION_REPAIR_MODE must be sqlite or jsonl",
+);
 const SCENARIOS = new Set([
   "base",
   "mobile-pairing-reconnect",
@@ -385,7 +397,9 @@ function seedState() {
   });
   // Volume imports start in per-agent JSON; other scenarios cover the older shared-store move.
   seedLegacySessionMetadata(stateDir, scenario === "sqlite-volume");
-  seedLegacyExecApprovalPolicy(stateDir);
+  if (execApprovalsMode !== "omitted") {
+    seedLegacyExecApprovalPolicy(stateDir);
+  }
   if (scenario === "meeting-transcripts-sqlite") {
     seedLegacyMeetingTranscripts(stateDir);
   }
@@ -555,11 +569,16 @@ function assertConfigSurvived() {
     const discord = config.channels?.discord;
     assert(discord?.enabled === true, "discord enabled flag changed");
     const stage = process.env.OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE || "survival";
-    const discordAllowFrom =
-      stage === "baseline" ? (discord.allowFrom ?? discord.dm?.allowFrom) : discord.allowFrom;
-    const discordDmPolicy =
-      stage === "baseline" ? (discord.dmPolicy ?? discord.dm?.policy) : discord.dmPolicy;
-    if (stage !== "baseline") {
+    const acceptsLegacyDiscordDm =
+      stage === "baseline" ||
+      process.env.OPENCLAW_UPGRADE_SURVIVOR_DISCORD_DM_CONFIG_MODE === "legacy";
+    const discordAllowFrom = acceptsLegacyDiscordDm
+      ? (discord.allowFrom ?? discord.dm?.allowFrom)
+      : discord.allowFrom;
+    const discordDmPolicy = acceptsLegacyDiscordDm
+      ? (discord.dmPolicy ?? discord.dm?.policy)
+      : discord.dmPolicy;
+    if (!acceptsLegacyDiscordDm) {
       assert(!Object.hasOwn(discord, "dm"), "legacy Discord DM config survived update");
     }
     assert(discordDmPolicy === "allowlist", "discord DM policy changed");
@@ -966,10 +985,18 @@ function assertSessionMetadataMigrated(stateDir) {
     [LEGACY_SESSION_GROUP_ID, group],
   ];
   for (const [sessionId, entry] of migratedSessions) {
-    assert(
-      !Object.hasOwn(entry ?? {}, "sessionFile"),
-      `legacy session row retained retired sessionFile metadata for ${sessionId}`,
-    );
+    const expectedPath = path.join(agentSessionsDir, `${sessionId}.jsonl`);
+    if (sessionRepairMode === "jsonl") {
+      assert(
+        entry?.sessionFile === expectedPath,
+        `legacy session row no longer points at its migrated transcript for ${sessionId}`,
+      );
+    } else {
+      assert(
+        !Object.hasOwn(entry ?? {}, "sessionFile"),
+        `legacy session row retained retired sessionFile metadata for ${sessionId}`,
+      );
+    }
   }
   if (source !== "file") {
     const dbPath = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
@@ -1009,7 +1036,7 @@ function assertSessionMetadataMigrated(stateDir) {
 
 function readMigratedSessionStore(stateDir, targetStorePath) {
   const dbPath = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
-  if (fs.existsSync(dbPath)) {
+  if (sessionRepairMode !== "jsonl" && fs.existsSync(dbPath)) {
     let db;
     try {
       db = new DatabaseSync(dbPath, { readOnly: true });
@@ -1654,6 +1681,28 @@ function assertUpdateRunSelfUpgrade([file]) {
 function assertMobilePairingEvidence(files) {
   const expectedPhases = ["baseline", "candidate-first", "candidate-restart", "final"];
   const expectedNodeSurfaceAdditions = ["watch.notify", "watch.status"];
+  const baselineReason = "baseline-before-candidate";
+  const alreadyAdmittedReason = "baseline-already-admitted-ios-iphone-watch-relay";
+  const expectedReasons = {
+    required: "selected-gateway-admits-ios-iphone-watch-relay",
+    "omitted-gateway-unsupported": "selected-gateway-does-not-admit-ios-iphone-watch-relay",
+  };
+  const isCanonicalStringSurface = (value) =>
+    Array.isArray(value) &&
+    value.every(
+      (entry, index) =>
+        typeof entry === "string" && entry.length > 0 && (index === 0 || value[index - 1] < entry),
+    );
+  const isCanonicalPermissionSurface = (value) =>
+    value !== null &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    Object.entries(value).every(
+      ([permission, enabled], index, entries) =>
+        permission.length > 0 &&
+        typeof enabled === "boolean" &&
+        (index === 0 || entries[index - 1][0] < permission),
+    );
   assert(
     files.length === expectedPhases.length,
     "mobile pairing evidence requires all four reconnect phases",
@@ -1670,6 +1719,18 @@ function assertMobilePairingEvidence(files) {
     assert(value?.pendingDevicePairingCount === 0, "mobile device pairing left a pending request");
     assert(value?.pairedDevicePresent === true, "paired mobile device missing");
     assert(value?.pairedNodePresent === true, "paired mobile node missing");
+    assert(
+      isCanonicalStringSurface(value?.pairedNodeCaps),
+      "mobile paired node capability evidence missing or non-canonical",
+    );
+    assert(
+      isCanonicalStringSurface(value?.pairedNodeCommands),
+      "mobile paired node command evidence missing or non-canonical",
+    );
+    assert(
+      isCanonicalPermissionSurface(value?.pairedNodePermissions),
+      "mobile paired node permission evidence missing or non-canonical",
+    );
     const cleanPairingState =
       value?.pendingPairingCount === 0 &&
       value?.pendingNodePairingCount === 0 &&
@@ -1681,16 +1742,32 @@ function assertMobilePairingEvidence(files) {
       value?.pendingPairingCount === 1 &&
       value?.pendingNodePairingCount === 1 &&
       value?.nodeSurfaceReapprovalRequired === true &&
-      JSON.stringify(value?.nodeSurfaceCommandAdditions) ===
-        JSON.stringify(expectedNodeSurfaceAdditions);
+      isCanonicalStringSurface(value?.nodeSurfaceCommandAdditions) &&
+      expectedNodeSurfaceAdditions.every((requiredCommand) =>
+        value.nodeSurfaceCommandAdditions.includes(requiredCommand),
+      );
+    const mode = value?.nodeSurfaceReapprovalMode;
     assert(
-      typeof value?.nodeSurfaceReapprovalExpected === "boolean",
-      "mobile node pairing reapproval expectation missing",
+      mode === "not-applicable" || Object.hasOwn(expectedReasons, mode),
+      "mobile node pairing reapproval mode missing or unknown",
+    );
+    const expectedReason =
+      index === 0
+        ? baselineReason
+        : mode === "not-applicable"
+          ? alreadyAdmittedReason
+          : expectedReasons[mode];
+    assert(
+      value?.nodeSurfaceReapprovalReason === expectedReason,
+      "mobile node pairing reapproval reason changed",
     );
     assert(
-      value.nodeSurfaceReapprovalExpected ? scopedNodeSurfaceReapproval : cleanPairingState,
+      mode === "required" ? scopedNodeSurfaceReapproval : cleanPairingState,
       "mobile node pairing pending state exceeded the known command-surface reapproval",
     );
+    if (index === 0) {
+      assert(mode === "not-applicable", "baseline mobile node pairing mode changed");
+    }
     assert(value?.missingPasswordReason === true, "mobile pairing password_missing proof missing");
     assert(
       value?.missingPasswordClose1008 === true,
@@ -1718,6 +1795,51 @@ function assertMobilePairingEvidence(files) {
     return value;
   });
 
+  const candidateMode = evidence[1]?.nodeSurfaceReapprovalMode;
+  const baselineCaps = JSON.stringify(evidence[0]?.pairedNodeCaps);
+  const baselineCommands = JSON.stringify(evidence[0]?.pairedNodeCommands);
+  const baselinePermissions = JSON.stringify(evidence[0]?.pairedNodePermissions);
+  assert(
+    evidence.slice(1).every((value) => value?.nodeSurfaceReapprovalMode === candidateMode),
+    "candidate mobile node pairing modes changed across reconnects",
+  );
+  assert(
+    evidence.slice(1).every((value) => JSON.stringify(value?.pairedNodeCaps) === baselineCaps),
+    "candidate mobile node pairing capability surface changed without reapproval",
+  );
+  assert(
+    evidence
+      .slice(1)
+      .every((value) => JSON.stringify(value?.pairedNodeCommands) === baselineCommands),
+    "candidate mobile node pairing command surface changed without reapproval",
+  );
+  assert(
+    evidence
+      .slice(1)
+      .every((value) => JSON.stringify(value?.pairedNodePermissions) === baselinePermissions),
+    "candidate mobile node pairing permission surface changed without reapproval",
+  );
+  if (candidateMode === "required") {
+    const candidateCommandAdditions = JSON.stringify(evidence[1]?.nodeSurfaceCommandAdditions);
+    assert(
+      evidence
+        .slice(2)
+        .every(
+          (value) =>
+            JSON.stringify(value?.nodeSurfaceCommandAdditions) === candidateCommandAdditions,
+        ),
+      "candidate mobile node pairing command additions changed across reconnects",
+    );
+  }
+  if (candidateMode === "not-applicable") {
+    assert(
+      expectedNodeSurfaceAdditions.every((nodeCommand) =>
+        evidence[0]?.pairedNodeCommands.includes(nodeCommand),
+      ),
+      "baseline mobile node pairing did not already admit the watch command surface",
+    );
+  }
+
   for (let index = 1; index < evidence.length; index += 1) {
     for (const role of ["node", "operator"]) {
       assert(
@@ -1734,10 +1856,14 @@ if (command === "list-scenarios") {
 } else if (command === "seed") {
   seedState();
 } else if (command === "assert-exec-approvals") {
-  if (!["watchos-direct-node", "mobile-pairing-reconnect"].includes(getScenario())) {
+  if (
+    execApprovalsMode !== "omitted" &&
+    !["watchos-direct-node", "mobile-pairing-reconnect"].includes(getScenario())
+  ) {
     assertExecApprovalPolicySurvived(
       requireEnv("OPENCLAW_STATE_DIR"),
       process.env.OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE || "survival",
+      execApprovalsMode,
     );
   }
 } else if (command === "seed-volume") {
