@@ -170,6 +170,16 @@ const execFileAsync = promisify(execFile);
 function createModelNormalizerGeneration() {
   const pluginRegistry = createEmptyPluginRegistry();
   pluginRegistry.providers.push({
+    pluginId: "foreign-owner",
+    provider: {
+      id: "foreign",
+      hookAliases: ["fixture"],
+      label: "Foreign alias",
+      auth: [],
+      normalizeModelId: () => "foreign-model",
+    },
+  });
+  pluginRegistry.providers.push({
     pluginId: "fixture-owner",
     source: "fixture-owner.ts",
     provider: {
@@ -183,7 +193,10 @@ function createModelNormalizerGeneration() {
     },
   });
   const metadataSnapshot = createPluginMetadataSnapshotFixture({
-    plugins: [{ id: "fixture-owner", providers: ["fixture"] }],
+    plugins: [
+      { id: "foreign-owner", providers: ["foreign"] },
+      { id: "fixture-owner", providers: ["fixture"] },
+    ],
   });
   return { metadataSnapshot, pluginRegistry };
 }

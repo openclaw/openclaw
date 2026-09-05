@@ -50,9 +50,16 @@ export function findProviderRuntimePluginInRegistry(params: {
   provider: string;
   ownerRefs: readonly string[];
 }): ProviderPlugin | undefined {
-  const entry = params.registry.providers.find(({ provider }) =>
-    matchesProviderRuntimePlugin(provider, params.provider, params.ownerRefs),
-  );
+  const literalId = normalizeLowercaseStringOrEmpty(params.provider);
+  // A registered provider owns its name; another provider's compatibility
+  // alias must not replace its executable hooks in a shared generation.
+  const entry =
+    params.registry.providers.find(
+      ({ provider }) => literalId && normalizeLowercaseStringOrEmpty(provider.id) === literalId,
+    ) ??
+    params.registry.providers.find(({ provider }) =>
+      matchesProviderRuntimePlugin(provider, params.provider, params.ownerRefs),
+    );
   return entry ? Object.assign({}, entry.provider, { pluginId: entry.pluginId }) : undefined;
 }
 

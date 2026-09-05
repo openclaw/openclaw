@@ -332,6 +332,9 @@ Normalization dispatch is hook-specific:
   Reference parsing reads the selected runtime registry without activating
   plugins. Executable normalization requires a prepared runtime owner; reads
   without one use static manifest policies only.
+  A directly registered provider owns its ID; compatibility aliases match only
+  when no literal provider exists, preserving alias-only routes and explicit
+  API-owner eligibility.
 - `normalizeTransport` tries the matched provider first. Only if that does not
   change `api` or `baseUrl` and the provider has no `models.providers.<id>` entry
   does it try other transport hooks, stopping at the first change.
