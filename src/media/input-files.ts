@@ -15,6 +15,7 @@ import { cancelUnreadResponseBody, readResponseWithLimit } from "../infra/http-b
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { logWarn } from "../logger.js";
+import type { DocumentExtractionMetadata } from "../plugins/document-extractor-types.js";
 import { convertHeicToJpeg } from "./media-services.js";
 import { extractPdfContent, type PdfExtractedImage } from "./pdf-extract.js";
 
@@ -26,6 +27,7 @@ type InputFileExtractResult = {
   filename: string;
   text?: string;
   images?: InputImageContent[];
+  metadata?: DocumentExtractionMetadata;
 };
 
 /** PDF extraction limits applied before model-visible input_file content is produced. */
@@ -450,14 +452,28 @@ export async function extractFileContentFromBuffer(params: {
         },
       }),
     });
-    const text = extracted.text ? truncateUtf16Safe(extracted.text, limits.maxChars) : "";
+    const text = truncateUtf16Safe(extracted.text, limits.maxChars);
+    const metadata: DocumentExtractionMetadata = {
+      ...extracted.metadata,
+      textTruncated:
+        extracted.metadata?.textTruncated === true || extracted.text.length > limits.maxChars,
+      imagesTruncated: extracted.metadata?.imagesTruncated === true,
+    };
     return {
       filename,
       text,
       images: extracted.images.length > 0 ? extracted.images : undefined,
+      metadata,
     };
   }
 
-  const text = truncateUtf16Safe(decodeTextContent(buffer, charset), limits.maxChars);
-  return { filename, text };
+  const decodedText = decodeTextContent(buffer, charset);
+  const text = truncateUtf16Safe(decodedText, limits.maxChars);
+  return {
+    filename,
+    text,
+    ...(decodedText.length > limits.maxChars
+      ? { metadata: { textTruncated: true, imagesTruncated: false } }
+      : {}),
+  };
 }
