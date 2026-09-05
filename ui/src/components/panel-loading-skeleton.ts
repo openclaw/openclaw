@@ -35,6 +35,13 @@ class PanelLoadingSkeleton extends OpenClawLitElement {
       padding: 8px;
     }
 
+    :host([data-panel-skeleton="chat"]:not([compact])) {
+      display: flex;
+      align-items: flex-start;
+      min-height: clamp(360px, calc(100vh - 300px), 620px);
+      padding-block: 20px;
+    }
+
     :host([overlay]) {
       position: absolute;
       inset: 0;
@@ -97,7 +104,6 @@ class PanelLoadingSkeleton extends OpenClawLitElement {
 
     .row,
     .toolbar,
-    .bubble,
     .card,
     .summary {
       display: flex;
@@ -190,18 +196,51 @@ class PanelLoadingSkeleton extends OpenClawLitElement {
       background: color-mix(in srgb, var(--bg) 76%, transparent);
     }
 
-    .bubble {
-      width: 82%;
-      min-height: 58px;
-      padding: 12px;
+    .chat-turn {
+      display: flex;
+      width: 100%;
       align-items: flex-start;
+    }
+
+    .chat-turn.assistant {
+      padding: 3px 0;
+    }
+
+    .chat-turn.user {
+      width: 68%;
+      min-height: 52px;
+      margin-left: auto;
+      padding: 12px;
       border-radius: 12px;
       background: color-mix(in srgb, var(--bg-muted) 76%, transparent);
     }
 
-    .bubble.user {
-      width: 58%;
-      margin-left: auto;
+    @media (max-width: 768px),
+      (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
+      .chat-turn.user {
+        width: 82%;
+      }
+    }
+
+    @media (max-width: 400px) {
+      .chat-turn.user {
+        width: 88%;
+      }
+    }
+
+    :host([data-panel-skeleton="chat"]:not([compact])) .conversation {
+      width: 100%;
+      gap: 50px;
+    }
+
+    :host([compact]) .chat-turn {
+      width: 88%;
+    }
+
+    :host([compact]) .chat-turn.user {
+      width: 64%;
+      min-height: 42px;
+      padding: 9px;
     }
 
     .discussion-frame {
@@ -247,6 +286,34 @@ class PanelLoadingSkeleton extends OpenClawLitElement {
     );
   }
 
+  private chatTurn(role: "assistant" | "user", widths: Array<"short" | "medium" | "long">) {
+    return html`
+      <div class="chat-turn ${role}" data-skeleton-role=${role}>
+        <div class="copy">${widths.map((width) => this.line(width))}</div>
+      </div>
+    `;
+  }
+
+  private renderChatConversation() {
+    if (this.compact) {
+      return html`
+        <div class="conversation">
+          ${this.chatTurn("assistant", ["long", "medium"])} ${this.chatTurn("user", ["medium"])}
+          ${this.chatTurn("assistant", ["long", "short"])}
+        </div>
+      `;
+    }
+    return html`
+      <div class="conversation">
+        ${this.chatTurn("user", ["medium"])}
+        ${this.chatTurn("assistant", ["long", "long", "medium", "short"])}
+        ${this.chatTurn("user", ["long", "short"])}
+        ${this.chatTurn("assistant", ["long", "medium", "long"])}
+        ${this.chatTurn("user", ["medium"])}
+      </div>
+    `;
+  }
+
   private renderContent() {
     switch (this.variant) {
       case "browser":
@@ -259,13 +326,7 @@ class PanelLoadingSkeleton extends OpenClawLitElement {
           <div class="skeleton viewport"></div>
         `;
       case "chat":
-        return html`
-          <div class="conversation">
-            <div class="bubble"><div class="copy">${this.line()}${this.line("medium")}</div></div>
-            <div class="bubble user"><div class="copy">${this.line("medium")}</div></div>
-            <div class="bubble"><div class="copy">${this.line()}${this.line("short")}</div></div>
-          </div>
-        `;
+        return this.renderChatConversation();
       case "desktop":
         return html`
           <div class="toolbar">${this.line("medium")}</div>

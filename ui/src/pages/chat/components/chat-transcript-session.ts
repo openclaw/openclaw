@@ -8,6 +8,7 @@ import type { TranscriptRow } from "./chat-transcript-layout.ts";
 export type TranscriptCallbacks = {
   onViewportResize?: () => void;
   onReaderScroll?: () => void;
+  onContentCommitted?: () => void;
 };
 
 export const CHAT_TRANSCRIPT_ESTIMATED_ROW_PX = 120;
@@ -29,6 +30,7 @@ export type ChatTranscriptSession = {
   readonly expandedAssistantMessages: Map<string, AssistantMessageExpansionState>;
   readonly liveAnnouncementText: string;
   readonly scrollElementRef: (element?: Element) => void;
+  readonly contentElementRef: (element?: Element) => void;
   render<T>(
     rows: readonly TranscriptRow<T>[],
     renderRow: (row: TranscriptRow<T>) => unknown,

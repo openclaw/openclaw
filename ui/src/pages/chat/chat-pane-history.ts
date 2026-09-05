@@ -621,7 +621,7 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
 
   protected readonly handleCommandPaletteSlashCommand = (command: string) => {
     const state = this.state;
-    if (!state) {
+    if (!state || !this.acceptsInput) {
       return;
     }
     state.handleChatDraftChange(command.endsWith(" ") ? command : `${command} `);

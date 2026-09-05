@@ -608,7 +608,7 @@ export function renderApplicationShell(host: ShellViewHost) {
           onOpenApprovals: () => host.openApprovals(),
         })}
         <openclaw-router-outlet
-          ?inert=${pageActionsBlocked || reloadRequired}
+          .interactionBlocked=${pageActionsBlocked || reloadRequired}
           aria-disabled=${pageActionsBlocked || reloadRequired ? "true" : nothing}
           .router=${runtime.router}
           .retryContext=${context}

@@ -476,7 +476,7 @@ export class ChatSessionRailElement extends OpenClawLightDomElement {
       <div class="chat-session-rail__thread" aria-live="polite" ${ref(syncScroll)}>
         ${
           this.companion.loading && this.companion.exchanges.length === 0
-            ? renderPanelLoadingSkeleton("chat", t("chat.thread.loading"))
+            ? renderPanelLoadingSkeleton("chat", t("chat.thread.loading"), true)
             : nothing
         }
         ${

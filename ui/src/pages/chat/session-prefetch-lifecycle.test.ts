@@ -80,12 +80,19 @@ describe("session prefetch pane and navigation ownership", () => {
     expect(request.mock.calls.map(sessionKeyFromCall)).toEqual(["agent:main:recent"]);
   });
 
-  it.each(["commit", "remove"])(
-    "waits for the sibling Home transcript and resumes on %s",
-    async (completion) => {
+  it.each([
+    ["visible sibling", true, false, "commit"],
+    ["visible sibling", true, false, "remove"],
+    ["covered selection", false, true, "commit"],
+    ["covered selection", false, true, "remove"],
+  ] as const)(
+    "waits for %s (presented=%s, preparing=%s) until %s",
+    async (_label, presented, preparing, completion) => {
       const home = Object.assign(document.createElement("openclaw-chat-pane"), {
         sessionKey: "agent:main:main",
         transcriptLoading: false,
+        presented,
+        preparing,
       });
       shell.append(home);
       const request = vi.fn(async (_method: string, params: unknown) =>

@@ -220,6 +220,7 @@ class OpenClawRouterOutlet<
   @property({ attribute: false }) retryContext?: TLoadContext;
   @property({ attribute: false }) onNotFound?: () => boolean | void;
   @property({ attribute: false }) notFoundRecoveryReady?: boolean;
+  @property({ attribute: false }) interactionBlocked = false;
   private readonly outlet = new LitRouterOutletController(this, () => ({
     router: this.router,
     onNotFound: this.onNotFound,
@@ -230,6 +231,8 @@ class OpenClawRouterOutlet<
   override render() {
     const router = this.router;
     if (!router) {
+      this.ariaBusy = "false";
+      this.inert = this.interactionBlocked;
       return nothing;
     }
     const snapshot = this.outlet.snapshot;
@@ -245,7 +248,7 @@ class OpenClawRouterOutlet<
       explicitOwnerKey !== undefined &&
       renderedMatch?.status === "pending" &&
       renderedMatch.data === undefined;
-    return this.mcpAppUnmountGate.render(
+    const rendered = this.mcpAppUnmountGate.render(
       explicitOwnerKey ?? routeKey,
       () =>
         renderRouterOutlet(router, snapshot, renderedMatch, {
@@ -254,6 +257,14 @@ class OpenClawRouterOutlet<
       () => [this],
       { retainRenderedValue: retainCurrent },
     );
+    // Reference resolution has no authoritative destination yet. Keep its
+    // subtree intact, but fence stale input until resolution and teardown finish.
+    const pending = retainCurrent || this.mcpAppUnmountGate.unmountPending;
+    this.ariaBusy = String(pending);
+    // One owner combines the shell's reconnect lock and transient route work;
+    // settling either must not release the other's input fence.
+    this.inert = this.interactionBlocked || pending;
+    return rendered;
   }
 }
 

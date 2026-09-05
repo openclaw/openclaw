@@ -142,6 +142,8 @@ describe("openclaw-router-outlet chat ownership", () => {
     await settleOutlet(outlet);
     expect(outlet.querySelector("mcp-app-view")).toBe(appView);
     expect(outlet.querySelector('[data-testid="route-value"]')?.textContent).toBe("chat");
+    expect(outlet.inert).toBe(true);
+    expect(outlet.getAttribute("aria-busy")).toBe("true");
     expect(teardown).not.toHaveBeenCalled();
 
     nextData.resolve(sessionData(nextSessionKey, "dashboard"));
@@ -149,6 +151,8 @@ describe("openclaw-router-outlet chat ownership", () => {
     await settleOutlet(outlet);
     expect(outlet.querySelector("mcp-app-view")).toBe(appView);
     expect(outlet.querySelector('[data-testid="route-value"]')?.textContent).toBe("dashboard");
+    expect(outlet.inert).toBe(false);
+    expect(outlet.getAttribute("aria-busy")).toBe("false");
     expect(teardown).not.toHaveBeenCalled();
     router.stop();
   });

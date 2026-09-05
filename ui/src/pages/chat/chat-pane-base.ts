@@ -60,6 +60,10 @@ import { ChatStateController } from "./chat-state-controller.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { requestChatPageUpdate } from "./chat-state-render.ts";
 import { resolveChatAgentId } from "./chat-state-route.ts";
+import {
+  CHAT_TRANSCRIPT_READY_EVENT,
+  type ChatTranscriptReadyDetail,
+} from "./chat-transcript-ready.ts";
 import { getChatComposerState } from "./components/chat-composer-state.ts";
 import type { ChatPaneHeaderAction } from "./components/chat-pane-header.ts";
 import type { ChatSessionSharingState } from "./components/chat-session-sharing.ts";
@@ -148,6 +152,7 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
   // Route ownership settles after retained-pane preview; dashboard activity follows
   // the pane the user can already see so its warmed runtime paints immediately.
   @property({ attribute: false }) visuallyPresented = true;
+  @property({ attribute: false }) preparing = false;
   private activeValue = false;
   private headerPresentationGeneration = 0;
   private presentedValue = true;
@@ -175,6 +180,10 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
     const phase = this.state ? getChatHistoryLoadState(this.state).phase : "idle";
     return phase === "committed" || phase === "failed";
   }
+  get transcriptCommitted(): boolean {
+    return this.transcript.contentCommitted;
+  }
+
   protected get headerOutcomeOwner(): string {
     return `${this.connectionGeneration}:${this.headerPresentationGeneration}`;
   }
@@ -183,6 +192,10 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
   }
   protected get selected(): boolean {
     return this.activeValue;
+  }
+  protected get acceptsInput(): boolean {
+    // Native and document listeners bypass the browser's inert hit-testing.
+    return this.active && this.presented && !this.closest("[inert]");
   }
   get active(): boolean {
     // The selected split pane stays selected while another region owns input.
@@ -249,6 +262,22 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
   protected readonly transcript = new ChatTranscriptController(this, {
     onViewportResize: () => this.chatState.handleTranscriptResize(),
     onReaderScroll: () => this.state && handleChatScrollTakeover(this.state),
+    onContentCommitted: () => {
+      const sessionKey = this.transcript.renderedSessionKey;
+      if (
+        sessionKey &&
+        this.state &&
+        areUiSessionKeysEquivalent(sessionKey, this.state.sessionKey)
+      ) {
+        this.dispatchEvent(
+          new CustomEvent<ChatTranscriptReadyDetail>(CHAT_TRANSCRIPT_READY_EVENT, {
+            bubbles: true,
+            composed: true,
+            detail: { paneId: this.paneId, sessionKey },
+          }),
+        );
+      }
+    },
   });
   protected readonly taskSidebarTranscript = new ChatTranscriptController(this);
   protected readonly progressCard = new SessionProgressCardController(this, {

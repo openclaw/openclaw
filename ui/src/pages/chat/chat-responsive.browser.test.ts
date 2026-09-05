@@ -2889,7 +2889,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
   );
 
   it(
-    "reveals, pins, and dismisses shared message context above virtual-row containment",
+    "reveals, pins, and dismisses shared message context without shifting the transcript",
     FULL_APP_TEST_OPTIONS,
     async () => {
       const page = await getSharedAppPage();
@@ -2934,7 +2934,6 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         await expect
           .poll(() =>
             context.evaluate((node) => {
-              const row = node.closest<HTMLElement>(".chat-virtual-row")!;
               const tooltipNode = node.closest("openclaw-tooltip")!;
               const popup = tooltipNode.shadowRoot
                 ?.querySelector("wa-tooltip")
@@ -2943,13 +2942,12 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
               const rect = node.getBoundingClientRect();
               const target = document.elementFromPoint(rect.left + 8, rect.top + rect.height / 2);
               return {
-                rowContainment: getComputedStyle(row).contentVisibility,
                 topLayer: popup?.matches(":popover-open") ?? false,
                 painted: target !== null && node.contains(target),
               };
             }),
           )
-          .toEqual({ rowContainment: "auto", topLayer: true, painted: true });
+          .toEqual({ topLayer: true, painted: true });
 
         await page.mouse.move(0, 0);
         await context.waitFor({ state: "hidden", timeout: 10_000 });

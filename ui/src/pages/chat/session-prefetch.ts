@@ -583,7 +583,8 @@ class SessionPrefetchController implements ReactiveController {
       openSessionKeys,
       intentSessionKey: this.intentSessionKey,
       presentedTranscriptsReady: !panes.some(
-        (pane) => pane.presented !== false && pane.transcriptLoading === true,
+        (pane) =>
+          (pane.presented !== false || pane.preparing === true) && pane.transcriptLoading === true,
       ),
       rows: context.sessions.state.result?.sessions ?? null,
       snapshotHost: {

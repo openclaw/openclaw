@@ -15,6 +15,7 @@ export function renderChatTranscriptLayout<T>({
   overlay,
   header,
   scrollElementRef,
+  contentElementRef,
   captureInteractionResize,
   measureRowRefFor,
 }: {
@@ -24,6 +25,7 @@ export function renderChatTranscriptLayout<T>({
   overlay: unknown;
   header: unknown;
   scrollElementRef: (element?: Element) => void;
+  contentElementRef: (element?: Element) => void;
   captureInteractionResize: (event: Event) => void;
   measureRowRefFor: (key: string) => (element?: Element) => void;
 }): TemplateResult {
@@ -32,6 +34,7 @@ export function renderChatTranscriptLayout<T>({
     <div
       class="chat-thread-inner chat-thread-inner--virtual"
       ${ref(scrollElementRef)}
+      ${virtualRows.length > 0 ? ref(contentElementRef) : nothing}
       @click=${{ handleEvent: captureInteractionResize, capture: true }}
     >
       ${header}
@@ -55,6 +58,10 @@ export function renderChatTranscriptLayout<T>({
                 return nothing;
               }
               const previous = virtualRows[renderedIndex - 1];
+              const inViewport =
+                virtualizer.range !== null &&
+                virtualRow.index >= virtualizer.range.startIndex &&
+                virtualRow.index <= virtualizer.range.endIndex;
               // A focused outlier needs omitted space, not intermediate rows.
               // Sibling spacers keep the flat keyed rows (and iframes) parented.
               const gap =
@@ -74,6 +81,8 @@ export function renderChatTranscriptLayout<T>({
                   style=${styleMap({
                     // Keep skipped overscan rows at the virtualizer's known size.
                     containIntrinsicBlockSize: `auto ${virtualRow.size}px`,
+                    // Viewport rows must paint on reveal; only overscan may skip content.
+                    contentVisibility: inViewport ? "visible" : undefined,
                   })}
                   data-index=${String(virtualRow.index)}
                   data-virtual-row-key=${row.key}

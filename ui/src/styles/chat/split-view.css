@@ -86,6 +86,16 @@ openclaw-chat-pane {
   z-index: 1;
 }
 
+openclaw-router-outlet[aria-busy="true"],
+.chat-pane-cache[aria-busy="true"] {
+  cursor: progress;
+}
+
+openclaw-router-outlet[aria-busy="true"] .chat-pane-cache__pane--visible,
+.chat-pane-cache[aria-busy="true"] > .chat-pane-cache__pane--visible {
+  opacity: 0.55;
+}
+
 .chat-pane-cache__pane:not(.chat-pane-cache__pane--active) .chat-inline-approval {
   display: none;
 }

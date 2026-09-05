@@ -130,6 +130,20 @@ describe("chat pane retained presentation lifecycle", () => {
       for (const { focus } of panes) {
         expect(focus).toHaveBeenCalledOnce();
       }
+      // Native/window events bypass the browser's inert hit-testing.
+      panes[0]!.mounted.setAttribute("inert", "");
+      for (const listener of listeners) {
+        listener("blocked draft");
+      }
+      const shortcut = new KeyboardEvent("keydown", {
+        key: "b",
+        ctrlKey: true,
+        shiftKey: true,
+        cancelable: true,
+      });
+      panes[0]!.mounted.handleDocumentKeydown(shortcut);
+      expect(shortcut.defaultPrevented).toBe(false);
+      expect(page.state.handleChatDraftChange).toHaveBeenCalledTimes(1);
       expect(page.pane.context.gateway.setSessionKey).not.toHaveBeenCalled();
       expect(page.pane.context.agentSelection.state.selectedId).toBe("main");
     } finally {
@@ -251,32 +265,36 @@ describe("chat pane retained presentation lifecycle", () => {
     );
   });
 
-  it("delivers a one-shot continuation to the mounted destination and sends it", async () => {
-    const { pane, state } = createTestChatPane({
-      client: {} as GatewayBrowserClient,
-      sessions: {} as SessionCapability,
-    });
-    pane.paneId = "p1";
-    pane.sessionKey = "agent:main:continued";
-    state.sessionKey = pane.sessionKey;
-    state.handleChatDraftChange = vi.fn((draft) => {
-      state.chatMessage = draft;
-    });
-    state.handleSendChat = vi.fn().mockResolvedValue(undefined);
-    preparePaneSessionHandoff(pane.context, pane.paneId, pane.sessionKey, {
-      attachments: [],
-      draft: "continue from the catalog",
-      send: true,
-    });
+  it.each([true, false])(
+    "delivers an admitted continuation with presented=%s",
+    async (presented) => {
+      const { pane, state } = createTestChatPane({
+        client: {} as GatewayBrowserClient,
+        sessions: {} as SessionCapability,
+      });
+      pane.paneId = "p1";
+      pane.sessionKey = "agent:main:continued";
+      state.sessionKey = pane.sessionKey;
+      state.handleChatDraftChange = vi.fn((draft) => {
+        state.chatMessage = draft;
+      });
+      state.handleSendChat = vi.fn().mockResolvedValue(undefined);
+      preparePaneSessionHandoff(pane.context, pane.paneId, pane.sessionKey, {
+        attachments: [],
+        draft: "continue from the catalog",
+        send: true,
+      });
 
-    pane.presented = false;
-    pane.presented = true;
-    Object.defineProperty(pane, "active", { configurable: true, value: true });
-    await Promise.resolve();
+      pane.presented = false;
+      pane.presented = true;
+      pane.presented = presented;
+      Object.defineProperty(pane, "active", { configurable: true, value: true });
+      await Promise.resolve();
 
-    expect(state.handleChatDraftChange).toHaveBeenCalledWith("continue from the catalog", []);
-    expect(state.handleSendChat).toHaveBeenCalledOnce();
-  });
+      expect(state.handleChatDraftChange).toHaveBeenCalledWith("continue from the catalog", []);
+      expect(state.handleSendChat).toHaveBeenCalledOnce();
+    },
+  );
 
   it("schedules renders when an actual retained pane is hidden and reactivated", () => {
     const { pane } = createTestChatPane({

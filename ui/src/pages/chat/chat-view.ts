@@ -279,19 +279,24 @@ export function renderChat(props: ChatProps) {
   // A failed load with cached content must stay visible without displacing the
   // transcript; only an empty pane may replace the thread with the error panel.
   const renderHistoryFailure = (inline: boolean) =>
-    html`<div
-      class="chat-history-error${inline ? " chat-history-error--inline" : ""}"
-      role=${inline ? "status" : "alert"}
-    >
-      <span>${historyLoadState?.phase === "failed" ? historyLoadState.message : ""}</span>
-      <button
-        class="btn btn--sm"
-        type="button"
-        @click=${() => historyState && retryChatHistoryLoad(historyState)}
+    props.transcript.renderSession(
+      props.paneId,
+      props.sessionKey,
+      (transcript) => html`<div
+        class="chat-history-error${inline ? " chat-history-error--inline" : ""}"
+        role=${inline ? "status" : "alert"}
+        ${inline ? nothing : ref(transcript.contentElementRef)}
       >
-        ${t("common.retry")}
-      </button>
-    </div>`;
+        <span>${historyLoadState?.phase === "failed" ? historyLoadState.message : ""}</span>
+        <button
+          class="btn btn--sm"
+          type="button"
+          @click=${() => historyState && retryChatHistoryLoad(historyState)}
+        >
+          ${t("common.retry")}
+        </button>
+      </div>`,
+    );
   const historyError = historyFailed && transcriptEmpty ? renderHistoryFailure(false) : nothing;
   const historyRefreshNotice =
     historyFailed && !transcriptEmpty ? renderHistoryFailure(true) : nothing;

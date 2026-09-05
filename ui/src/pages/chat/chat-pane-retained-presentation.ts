@@ -283,12 +283,9 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
     state.requestUpdate?.();
     if (handoff.send) {
       queueMicrotask(() => {
-        if (
-          this.state !== state ||
-          state.sessionKey !== sessionKey ||
-          !this.active ||
-          !this.presented
-        ) {
+        // This send was admitted before adoption. It follows the selected
+        // destination even while that pane prepares behind the visible cover.
+        if (this.state !== state || state.sessionKey !== sessionKey || !this.active) {
           return;
         }
         void state.handleSendChat().catch((error: unknown) => {

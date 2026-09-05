@@ -21,6 +21,7 @@ type RouterOutletElement = LitElement & {
   router?: TestRouter;
   retryContext?: TestContext;
   onNotFound?: () => void;
+  interactionBlocked: boolean;
 };
 
 type Deferred<T> = {
@@ -207,15 +208,17 @@ describe("openclaw-router-outlet", () => {
     expect(teardownView).toHaveBeenCalledOnce();
     expect(outlet.querySelector('[data-testid="route-page"]')).not.toBeNull();
     expect(outlet.querySelector('[data-testid="route-next"]')).toBeNull();
+    expect(outlet.inert).toBe(true);
 
     teardown.resolve(undefined);
     await expect.poll(() => outlet.querySelector('[data-testid="route-next"]')).not.toBeNull();
     expect(outlet.querySelector("mcp-app-view")).toBeNull();
+    expect(outlet.inert).toBe(false);
     outlet.remove();
     router.stop();
   });
 
-  it("renders route data through the public custom-element boundary", async () => {
+  it("renders route data without releasing the shell's interaction lock", async () => {
     const context = { label: "loaded" };
     const router = createRouter<RouteId, TestContext, TestModule, TestData>({
       routes: [
@@ -231,11 +234,16 @@ describe("openclaw-router-outlet", () => {
       ],
     });
     const outlet = createOutlet(router, context);
+    outlet.interactionBlocked = true;
 
     await router.navigate("page", context);
     await settleOutlet(outlet);
 
     expect(outlet.querySelector('[data-testid="route-page"]')?.textContent).toBe("loaded");
+    expect(outlet.inert).toBe(true);
+    outlet.interactionBlocked = false;
+    await settleOutlet(outlet);
+    expect(outlet.inert).toBe(false);
     outlet.remove();
     router.stop();
   });

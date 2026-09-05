@@ -26,6 +26,10 @@ export class ChatTranscriptController implements ReactiveController {
     return this.activeSessionKey;
   }
 
+  get contentCommitted(): boolean {
+    return this.sessionVirtualizer?.contentCommitted ?? false;
+  }
+
   renderSession(
     paneId: string,
     sessionKey: string,

@@ -589,6 +589,7 @@ describe("ChatSessionRailElement", () => {
     const skeleton = element.querySelector("openclaw-panel-loading-skeleton");
     await skeleton?.updateComplete;
     expect(skeleton?.getAttribute("data-panel-skeleton")).toBe("chat");
+    expect(skeleton?.hasAttribute("compact")).toBe(true);
     expect(element.querySelector("openclaw-panel-empty-state")).toBeNull();
   });
 

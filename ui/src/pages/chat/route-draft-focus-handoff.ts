@@ -18,9 +18,11 @@ export type ChatPaneElement = HTMLElement & {
   paneId?: string;
   prepareForEviction?: () => void;
   presented?: boolean;
+  preparing?: boolean;
   sessionKey?: string;
   transcriptLoading?: boolean;
   transcriptReady?: boolean;
+  transcriptCommitted?: boolean;
   updateComplete?: Promise<unknown>;
   visuallyPresented?: boolean;
 };

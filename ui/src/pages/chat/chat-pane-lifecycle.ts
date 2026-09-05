@@ -85,7 +85,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
   private readonly sessionPanelToggles = new ChatPaneSessionPanelToggleController({
     current: () => {
       const state = this.state;
-      return state && this.active && this.presented
+      return state && this.acceptsInput
         ? { renderRoot: this.renderRoot, state, updateComplete: this.updateComplete }
         : null;
     },
@@ -169,7 +169,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
     this.announceCommandPaletteTarget(this.handleCommandPaletteSlashCommand);
     this.nativeDraftCleanup = this.context.nativeChatDrafts.subscribe((draft) => {
       const state = this.state;
-      if (!state || !this.active || !this.presented) {
+      if (!state || !this.acceptsInput) {
         return;
       }
       state.handleChatDraftChange(draft, []);
@@ -184,7 +184,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
 
   /** Receives one complete browser annotation without mixing generated context into the user's draft. */
   protected receiveBrowserAnnotation(event: Event): void {
-    if (!admitBrowserAnnotation(this.state, this.active && this.presented, event)) {
+    if (!admitBrowserAnnotation(this.state, this.acceptsInput, event)) {
       return;
     }
     // A null mount binds only when its first annotation ownership begins.
@@ -198,8 +198,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
     // may consume a key before the visible pane receives it.
     if (
       !state ||
-      !this.active ||
-      !this.presented ||
+      !this.acceptsInput ||
       event.defaultPrevented ||
       document.querySelector(".shell-nav[aria-modal='true']")
     ) {
@@ -385,7 +384,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
     });
     const handleTerminalDockBottom = () => {
       const state = this.state;
-      if (!state || !this.active || !this.presented) {
+      if (!state || !this.acceptsInput) {
         return;
       }
       state.updateSidebarLayout(closeSlot(state.sidebarLayout, "terminal"));
