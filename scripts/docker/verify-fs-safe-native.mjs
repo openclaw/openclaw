@@ -64,6 +64,29 @@ function findOwningPackage(resolvedPath, expectedName) {
   }
 }
 
+function hasPhysicalPackageEntry(packageRoot, packageName) {
+  const packageSegments = packageName.split("/");
+  let current = packageRoot;
+  while (true) {
+    if (path.basename(current) !== "node_modules") {
+      const candidate = path.join(current, "node_modules", ...packageSegments);
+      try {
+        fs.lstatSync(candidate);
+        return true;
+      } catch (error) {
+        if (error?.code !== "ENOENT" && error?.code !== "ENOTDIR") {
+          throw error;
+        }
+      }
+    }
+    const parent = path.dirname(current);
+    if (parent === current) {
+      return false;
+    }
+    current = parent;
+  }
+}
+
 const { allowPreNativeContract, mode, packageRoot } = parseArgs(process.argv.slice(2));
 const requireFromPackage = createRequire(path.join(packageRoot, "package.json"));
 const configPath = requireFromPackage.resolve("@openclaw/fs-safe/config");
@@ -135,12 +158,22 @@ assert.equal(
 
 const requireFromFsSafe = createRequire(fsSafeManifestPath);
 const installedPlatformPackages = platformPackageNames.flatMap((name) => {
+  assert.equal(
+    optionalDependencies[name],
+    fsSafeManifest.version,
+    `expected ${name} dependency to match @openclaw/fs-safe exactly`,
+  );
   try {
     const manifestPath = requireFromFsSafe.resolve(`${name}/package.json`);
     const platformPackage = findOwningPackage(manifestPath, name);
+    assert.equal(
+      platformPackage.manifest.version,
+      fsSafeManifest.version,
+      `expected installed ${name} version to match @openclaw/fs-safe`,
+    );
     return [{ name, root: platformPackage.root }];
   } catch (error) {
-    if (error?.code === "MODULE_NOT_FOUND") {
+    if (error?.code === "MODULE_NOT_FOUND" && !hasPhysicalPackageEntry(fsSafeRoot, name)) {
       return [];
     }
     throw error;

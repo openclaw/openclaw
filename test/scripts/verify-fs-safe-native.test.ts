@@ -9,10 +9,13 @@ const verifierPath = path.resolve("scripts/docker/verify-fs-safe-native.mjs");
 
 type FixtureOptions = {
   binding?: "bundled" | "escaped" | "platform";
+  brokenPlatformManifestExport?: boolean;
   durability?: boolean;
   installPlatformPackage?: boolean;
   native?: boolean;
   platformPackage?: boolean;
+  platformDependencyVersion?: string;
+  platformVersion?: string;
   pnpmLayout?: boolean;
   version?: string | undefined;
 };
@@ -73,7 +76,12 @@ function createFixture(options: FixtureOptions = {}) {
         ...(options.durability ? { "./durability": "./dist/durability.js" } : {}),
       },
       ...(options.platformPackage
-        ? { optionalDependencies: { "@openclaw/fs-safe-linux-x64-gnu": "0.8.1" } }
+        ? {
+            optionalDependencies: {
+              "@openclaw/fs-safe-linux-x64-gnu":
+                options.platformDependencyVersion ?? options.version ?? "0.8.1",
+            },
+          }
         : {}),
     }),
   );
@@ -103,8 +111,11 @@ function createFixture(options: FixtureOptions = {}) {
       path.join(platformRoot, "package.json"),
       JSON.stringify({
         name: "@openclaw/fs-safe-linux-x64-gnu",
-        version: "0.8.1",
+        version: options.platformVersion ?? options.version ?? "0.8.1",
         main: "fs-safe-native.node",
+        ...(options.brokenPlatformManifestExport
+          ? { exports: { "./package.json": "./missing-package.json" } }
+          : {}),
       }),
     );
     if (options.pnpmLayout) {
@@ -260,6 +271,53 @@ describe("split-package fs-safe packages", () => {
     const result = runVerifier(fixture.packageRoot, { mode: "fallback" });
 
     expect(result.status, result.stderr).toBe(0);
+  });
+
+  it("rejects a non-exact platform dependency pin", () => {
+    const fixture = createFixture({
+      durability: true,
+      native: true,
+      platformDependencyVersion: "^0.8.0",
+      platformPackage: true,
+      version: "0.8.1",
+    });
+
+    const result = runVerifier(fixture.packageRoot, { mode: "fallback" });
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("dependency to match @openclaw/fs-safe exactly");
+  });
+
+  it("rejects an installed platform package with a mismatched version", () => {
+    const fixture = createFixture({
+      binding: "platform",
+      durability: true,
+      native: true,
+      platformPackage: true,
+      platformVersion: "0.8.0",
+      version: "0.8.1",
+    });
+
+    const result = runVerifier(fixture.packageRoot);
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("version to match @openclaw/fs-safe");
+  });
+
+  it("rejects fallback when installed platform manifest resolution is broken", () => {
+    const fixture = createFixture({
+      brokenPlatformManifestExport: true,
+      durability: true,
+      installPlatformPackage: true,
+      native: true,
+      platformPackage: true,
+      version: "0.8.1",
+    });
+
+    const result = runVerifier(fixture.packageRoot, { mode: "fallback" });
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("missing-package.json");
   });
 
   it("rejects a required binding outside the declared platform package", () => {
