@@ -732,6 +732,12 @@ describe("plugin authoring commands", () => {
       },
     });
     expect(
+      JSON.parse(fs.readFileSync(path.join(projectDir, "tsconfig.json"), "utf8")),
+    ).toMatchObject({
+      compilerOptions: { declaration: true },
+      include: ["src/index.ts"],
+    });
+    expect(
       JSON.parse(fs.readFileSync(path.join(projectDir, "openclaw.plugin.json"), "utf8")),
     ).toMatchObject({
       id: "stock-quotes",
@@ -800,6 +806,12 @@ describe("plugin authoring commands", () => {
     });
     expect(packageManifest.scripts).not.toHaveProperty("plugin:build");
     expect(packageManifest.scripts).not.toHaveProperty("plugin:validate");
+    expect(
+      JSON.parse(fs.readFileSync(path.join(projectDir, "tsconfig.json"), "utf8")),
+    ).toMatchObject({
+      compilerOptions: { declaration: false },
+      include: ["src/index.ts"],
+    });
 
     const manifest = JSON.parse(
       fs.readFileSync(path.join(projectDir, "openclaw.plugin.json"), "utf8"),
