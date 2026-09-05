@@ -4,6 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import { withTimeout } from "../../infra/fs-safe.js";
 import type { CommandOptions, SpawnResult } from "../../process/exec.js";
+import { WORKER_SKILL_RESOURCE_COMMAND } from "../../worker/skill-resource-protocol.js";
+import { buildSkillResourceCommand } from "../../worker/skill-resource-receiver.js";
 import { type PreparedWorkerSsh, runWorkerSshCandidates, workerSshCommandOptions } from "./ssh.js";
 import type {
   WorkerTunnelHandle,
@@ -158,6 +160,35 @@ export function createWorkerWorkspaceActions(
     );
     signal.throwIfAborted();
     command.assertCurrent?.();
+    let argv = command.argv;
+    if (command.skillResources) {
+      const { workspaceDir, generation, operation } = command.skillResources;
+      const parts = workspaceDir.split("/");
+      if (
+        !command.assertCurrent ||
+        command.transportRetry !== "never" ||
+        command.argv.length !== 1 ||
+        command.argv[0] !== WORKER_SKILL_RESOURCE_COMMAND ||
+        command.transfer ||
+        command.seed ||
+        command.capture ||
+        !path.posix.isAbsolute(workspaceDir) ||
+        path.posix.normalize(workspaceDir) !== workspaceDir ||
+        workspaceDir.includes("\0") ||
+        parts.at(-5) !== ".openclaw-worker" ||
+        parts.at(-4) !== "workspaces" ||
+        parts.at(-3) !== stableWorkerPathComponent(options.environmentId, 16) ||
+        !/^[a-f0-9]{32}$/.test(parts.at(-2) ?? "") ||
+        parts.at(-1) !== String(generation)
+      ) {
+        throw new Error("Skill resources do not match the SSH workspace owner");
+      }
+      argv = buildSkillResourceCommand({
+        parentDir: path.posix.dirname(workspaceDir),
+        generation,
+        operation,
+      });
+    }
     const remainingCommandTimeoutMs = () => Math.max(0, deadlineMs - Date.now());
     const commandOptions = (remainingTimeoutMs: number): CommandOptions => {
       const base = workerSshCommandOptions({
@@ -172,8 +203,9 @@ export function createWorkerWorkspaceActions(
     // Exit 255 does not prove whether the remote command was accepted, so stateful
     // commands must stay pinned to one transport attempt.
     if (command.transportRetry === "never") {
+      command.assertCurrent?.();
       const operation = runTask(
-        workerWorkspaceSshArgv(prepared, command.argv),
+        workerWorkspaceSshArgv(prepared, argv),
         commandOptions(remainingCommandTimeoutMs()),
       );
       command.onDispatchReady?.();
@@ -185,7 +217,7 @@ export function createWorkerWorkspaceActions(
       async (port, remainingTimeoutMs) => {
         command.assertCurrent?.();
         return await runTask(
-          workerWorkspaceSshArgv(prepared, command.argv, port),
+          workerWorkspaceSshArgv(prepared, argv, port),
           commandOptions(remainingTimeoutMs),
         );
       },
@@ -604,10 +636,6 @@ export function createWorkerWorkspaceActions(
           entries: current.entries.filter((entry) => transferPathSet.has(entry.path)),
         });
       }
-      // Catch additions, deletions, and writes that raced the inbound transfer.
-      // Stop performs this check once more after local acceptance, directly
-      // before destroying the remote owner.
-      await verifyStable(currentRef);
       const preparedStagedResult = request.stagedResult
         ? await runLocalReconciliation(
             async () =>
@@ -636,6 +664,8 @@ export function createWorkerWorkspaceActions(
         : undefined;
       let appliedWorkspaceResult: WorkerWorkspaceApplyResult | undefined;
       if (!stagedResult) {
+        // Staged results are fenced by the finalizer immediately before apply.
+        await verifyStable(currentRef);
         appliedWorkspaceResult = await runLocalReconciliation(
           async () =>
             await applyStagedWorkerWorkspace({
@@ -646,7 +676,7 @@ export function createWorkerWorkspaceActions(
               base,
               current,
               journal: request.journal,
-              publishAcceptedManifest,
+              acceptance: { kind: "reconcile", publish: publishAcceptedManifest },
             }),
         );
       }

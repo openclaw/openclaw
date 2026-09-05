@@ -85,6 +85,22 @@ it.each([
     });
     const server = await startNodeWorkspaceTransferTestServer(service);
     const runtime = new NodeWorkerWorkspaceRuntime({ root: path.join(root, "node") });
+    const runWorkspaceCommand: Parameters<
+      typeof createNodeWorkerWorkspaceActions
+    >[0]["runWorkspaceCommand"] = (command) =>
+      runtime.exec(
+        {
+          ...command,
+          skillResources: command.skillResources?.operation,
+          argv: [...command.argv],
+          gatewayNamespace: "gateway-input-test",
+          environmentId,
+          sessionId,
+          generation: ownerEpoch,
+        },
+        command.signal,
+        { url: server.gatewayUrl },
+      );
     const actions = createNodeWorkerWorkspaceActions({
       environmentId,
       ownerEpoch,
@@ -92,19 +108,8 @@ it.each([
       ownerSignal: owner.signal,
       isOwnerCurrent: () => !owner.signal.aborted,
       workspaceTransfer: service,
-      runWorkspaceCommand: (command) =>
-        runtime.exec(
-          {
-            ...command,
-            argv: [...command.argv],
-            gatewayNamespace: "gateway-input-test",
-            environmentId,
-            sessionId,
-            generation: ownerEpoch,
-          },
-          command.signal,
-          { url: server.gatewayUrl },
-        ),
+      runWorkspaceCommand,
+      runResumeWorkspaceCommand: runWorkspaceCommand,
     });
     try {
       const synced = await actions.syncWorkspace({ localPath, sessionId, generation: ownerEpoch });
@@ -386,6 +391,22 @@ it("restores node reconciliation after Gateway bootstrap changes without replaci
   let service = createService();
   let server = await startNodeWorkspaceTransferTestServer(service);
   const runtime = new NodeWorkerWorkspaceRuntime({ root: path.join(root, "node") });
+  const runWorkspaceCommand: Parameters<
+    typeof createNodeWorkerWorkspaceActions
+  >[0]["runWorkspaceCommand"] = (command) =>
+    runtime.exec(
+      {
+        ...command,
+        skillResources: command.skillResources?.operation,
+        argv: [...command.argv],
+        gatewayNamespace: "gateway-restart-test",
+        environmentId,
+        sessionId,
+        generation: ownerEpoch,
+      },
+      command.signal,
+      { url: server.gatewayUrl },
+    );
   const createActions = (
     restoredWorkspace?: Parameters<typeof createNodeWorkerWorkspaceActions>[0]["restoredWorkspace"],
   ) =>
@@ -397,19 +418,8 @@ it("restores node reconciliation after Gateway bootstrap changes without replaci
       isOwnerCurrent: () => !owner.signal.aborted,
       workspaceTransfer: service,
       restoredWorkspace,
-      runWorkspaceCommand: (command) =>
-        runtime.exec(
-          {
-            ...command,
-            argv: [...command.argv],
-            gatewayNamespace: "gateway-restart-test",
-            environmentId,
-            sessionId,
-            generation: ownerEpoch,
-          },
-          command.signal,
-          { url: server.gatewayUrl },
-        ),
+      runWorkspaceCommand,
+      runResumeWorkspaceCommand: runWorkspaceCommand,
     });
   try {
     const synced = await createActions().syncWorkspace({

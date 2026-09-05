@@ -26,6 +26,7 @@ import {
   createWorkerSessionPlacementStore,
   type WorkerSessionPlacementStore,
 } from "./placement-store.js";
+import { seedAttachedPlacementEnvironment } from "./placement-test-fixtures.js";
 import type { WorkerTurnTunnelHandle } from "./tunnel-contract.js";
 import { createWorkerSessionTurnPlacementProvider as createRawWorkerSessionTurnPlacementProvider } from "./worker-turn-launcher.js";
 import { createWorkerWorkspaceOperationCoordinator } from "./workspace-operation-coordinator.js";
@@ -55,7 +56,7 @@ export const measureLaunchTurn: WorkerTurnTunnelHandle["measureLaunchTurn"] = (p
   });
 
 let testState: OpenClawTestState;
-let database: OpenClawStateDatabase;
+export let database: OpenClawStateDatabase;
 let cleanupAdmissionSink: (() => void) | undefined;
 
 export let root: string;
@@ -170,6 +171,11 @@ export function seedActivePlacement(
       workspaceBaseManifestRef: MANIFEST_REF,
     },
   });
+  seedAttachedPlacementEnvironment(database, {
+    environmentId: ENVIRONMENT_ID,
+    sessionId: SESSION_ID,
+    ownerEpoch: OWNER_EPOCH,
+  });
   placements.transition({
     sessionId: SESSION_ID,
     from: "starting",
@@ -215,6 +221,7 @@ export function attachedEnvironment(): WorkerTurnEnvironmentRecord {
     providerId: "fake",
     profileId: "development",
     profileSnapshot: { settings: { region: "test" } },
+    preparation: null,
     provisionOperationId: "provision-worker-turn",
     nodeSetupId: null,
     nodeDeviceId: null,
@@ -232,6 +239,7 @@ export function attachedEnvironment(): WorkerTurnEnvironmentRecord {
     createdAtMs: 1,
     updatedAtMs: 1,
     stateChangedAtMs: 1,
+    lastActivatedAtMs: null,
     idleSinceAtMs: null,
     destroyRequestedAtMs: null,
     tunnelStatus: "connected",

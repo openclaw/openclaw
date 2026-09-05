@@ -2,11 +2,13 @@ import {
   selectWorkspaceSeedsToPrune,
   WORKSPACE_SEED_RETENTION,
 } from "../../worker/workspace-seed-retention.js";
+import { PREPARE_PROJECT_WORKSPACE_JS } from "./project-setup-script.js";
 
 type ProjectSeedScriptInput = {
   namespace: string;
   seedKey: string;
   baseCommit: string;
+  preparation?: { preparationKey: string; setupRecipe?: string };
   pack?: { directory: string; sha256: string; bytes: number };
 };
 
@@ -23,6 +25,7 @@ const { spawnSync } = require("node:child_process");
 const input = ${JSON.stringify(input)};
 const retention = ${JSON.stringify(WORKSPACE_SEED_RETENTION)};
 const selectSeedsToPrune = ${selectWorkspaceSeedsToPrune.toString()};
+const prepareWorkspace = ${input.preparation && !input.pack ? PREPARE_PROJECT_WORKSPACE_JS : "undefined"};
 process.umask(0o077);
 const env = { ...process.env, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: os.devNull, GIT_TERMINAL_PROMPT: "0", GIT_ASKPASS: "", SSH_ASKPASS: "" };
 const git = (root, args, stdin) => {
@@ -61,9 +64,10 @@ const ownedDirectory = (parent, target) => {
     if (fs.existsSync(seed)) {
       ownedDirectory(namespace, seed);
       ownedDirectory(seed, path.join(seed, ".git"));
-      if (git(seed, ["rev-parse", "--verify", "HEAD"]) !== input.baseCommit || git(seed, ["status", "--porcelain=v1", "--untracked-files=all"])) throw new Error("Prepared project seed is not pristine");
+      const preparedWorkspace = input.preparation && await prepareWorkspace({ ...input, ...input.preparation }, true);
+      if (!preparedWorkspace && (git(seed, ["rev-parse", "--verify", "HEAD"]) !== input.baseCommit || git(seed, ["status", "--porcelain=v1", "--untracked-files=all"]))) throw new Error("Prepared project seed is not pristine");
       prune();
-      process.stdout.write(JSON.stringify({ ready: true }));
+      process.stdout.write(JSON.stringify({ ready: true, preparedWorkspace }));
       return;
     }
     // Provisioning serializes this lease. Discard only this project's abandoned staging.

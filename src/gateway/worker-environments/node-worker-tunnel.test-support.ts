@@ -8,8 +8,8 @@ import { NODE_WORKER_ENVIRONMENT_STOP_COMMAND } from "../../infra/node-commands.
 import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../../infra/node-runner-inventory.js";
 import type { SpawnResult } from "../../process/exec.js";
 import type { NodeWorkerSupervisorTransport } from "../node-registry-private.js";
+import type { WorkerEnvironmentRecord } from "./environment-record.js";
 import type { NodeWorkspaceTransferService } from "./node-workspace-transfer-service.js";
-import type { WorkerEnvironmentRecord } from "./store.js";
 
 export const BUILD = {
   bundleHash: "a".repeat(64),
@@ -23,6 +23,7 @@ export function environment(): WorkerEnvironmentRecord {
     providerId: "device",
     profileId: "device:node-1",
     profileSnapshot: { settings: { device: "node-1" } },
+    preparation: null,
     provisionOperationId: "provision-1",
     nodeSetupId: null,
     nodeDeviceId: "node-1",
@@ -36,11 +37,38 @@ export function environment(): WorkerEnvironmentRecord {
     createdAtMs: 1,
     updatedAtMs: 2,
     stateChangedAtMs: 2,
+    lastActivatedAtMs: null,
     idleSinceAtMs: null,
     destroyRequestedAtMs: null,
     state: "attached",
     leaseId: "device-lease",
     sshEndpoint: null,
+  };
+}
+
+export function preparedEnvironment(): WorkerEnvironmentRecord {
+  const record = environment();
+  return {
+    ...record,
+    sharedHost: false,
+    profileSnapshot: {
+      ...record.profileSnapshot,
+      project: {
+        preparation: {
+          key: "b".repeat(64),
+          contractVersion: 1,
+          target: { machineClass: "test", platform: "linux", arch: "x64" },
+          artifacts: {
+            nodeBootstrapSha256: "c".repeat(64),
+            enabledPluginIds: [],
+            workerBundleHash: BUILD.bundleHash,
+            workerArchiveSha256: "e".repeat(64),
+            openclawVersion: BUILD.openclawVersion,
+            protocolFeatures: BUILD.protocolFeatures,
+          },
+        },
+      },
+    },
   };
 }
 
@@ -56,7 +84,12 @@ export function transport(): NodeWorkerSupervisorTransport {
         clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
         clientMode: GATEWAY_CLIENT_MODES.NODE,
         protocolFeature: NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
-        workerHost: { enabled: true, capacity: { total: 2, available: 2 }, environmentSession: 1 },
+        workerHost: {
+          enabled: true,
+          capacity: { total: 2, available: 2 },
+          environmentSession: 1,
+          workspaceManifest: 1,
+        },
         commands: ["system.run"],
       },
     ],
@@ -96,5 +129,19 @@ export function workspaceCommandPayload(workspaceDir: string, result: Partial<Sp
     killed: false,
     termination: "exit",
     ...result,
+  });
+}
+
+export function workspaceManifestCapturePayload(manifestRef: string): string {
+  return JSON.stringify({
+    version: 1,
+    manifestRef,
+    metrics: {
+      contentHashCount: 0,
+      contentHashDurationMs: 0,
+      memoHitCount: 0,
+      memoTruncatedCount: 0,
+      totalDurationMs: 0,
+    },
   });
 }

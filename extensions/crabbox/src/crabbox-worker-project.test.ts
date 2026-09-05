@@ -7,6 +7,7 @@ import {
   createWorkerArchiveFixture,
 } from "./crabbox-worker-node-enrollment.test-support.js";
 import { operationLeaseId } from "./crabbox-worker-profile.js";
+import { prepareCrabboxProjectFiles } from "./crabbox-worker-project.js";
 import { listCrabboxWarmImages } from "./crabbox-worker-warm-image-store.js";
 import {
   CHECKPOINT_ID,
@@ -22,7 +23,11 @@ type ProvisionOptions = NonNullable<Parameters<WorkerProvider["provision"]>[2]>;
 const PROJECT_KEY = "a".repeat(64);
 const BASE_COMMIT = "b".repeat(40);
 
-function projectOptions(events: string[], controller = new AbortController()) {
+function projectOptions(
+  events: string[],
+  controller = new AbortController(),
+  preparation?: { key: string; demandAtMs: number },
+) {
   let enrollmentStarted = false;
   const observe = ({ argv }: CommandCall) => {
     if (argv[1] === "run" && argv.includes("CRABBOX_WORKER_BOOTSTRAP_TOKEN")) {
@@ -37,6 +42,7 @@ function projectOptions(events: string[], controller = new AbortController()) {
     project: {
       key: PROJECT_KEY,
       baseCommit: BASE_COMMIT,
+      ...(preparation ? { preparation } : {}),
       signal: controller.signal,
       assertCurrent: () => controller.signal.throwIfAborted(),
       prepare: vi.fn<NonNullable<ProvisionOptions["project"]>["prepare"]>(async (transport) => {
@@ -72,10 +78,100 @@ function projectOptions(events: string[], controller = new AbortController()) {
 }
 
 describe("Crabbox project snapshot provisioning", () => {
-  it.each(["aws", "azure", "gcp"])(
-    "settles a retained %s checkpoint before enrollment without repeating capture",
-    async (backend) => {
+  it("shares each freshly selected command budget with its script factory", async () => {
+    const { options } = projectOptions([]);
+    const timeoutMs = vi
+      .fn()
+      .mockReturnValueOnce(15_000)
+      .mockReturnValueOnce(9_000)
+      .mockReturnValueOnce(4_000);
+    const runCommand = vi.fn<Parameters<typeof prepareCrabboxProjectFiles>[0]["runCommand"]>(
+      async () => commandResult(),
+    );
+    const createScript = vi.fn((budget: number) => `setup-budget-${budget}`);
+    options.project.prepare.mockImplementationOnce(async (transport) => {
+      if (!transport.runScriptWithBudget) {
+        throw new Error("Missing budgeted script transport");
+      }
+      await transport.runScript("seed-inspection", options.project.signal);
+      await transport.upload("base.pack", "/project/base.pack", options.project.signal);
+      await transport.runScriptWithBudget(createScript, options.project.signal);
+      return { seedKey: PROJECT_KEY, cacheHit: false };
+    });
+    await prepareCrabboxProjectFiles({
+      project: options.project,
+      binary: "crabbox",
+      provider: "aws",
+      id: "project-budget",
+      runArgs: ["run", "--script-stdin"],
+      runCommand,
+      timeoutMs,
+    });
+    expect(timeoutMs).toHaveBeenCalledTimes(3);
+    expect(createScript).toHaveBeenCalledExactlyOnceWith(4_000);
+    expect(runCommand.mock.calls.map(([, command]) => [command.input, command.timeoutMs])).toEqual([
+      ["seed-inspection", 15_000],
+      [undefined, 9_000],
+      ["setup-budget-4000", 4_000],
+    ]);
+  });
+
+  it("reuses prepared setup without inventing demand during refill and reports ready consumption", async () => {
+    const events: string[] = [];
+    const now = Date.now();
+    const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+    const preparation = { key: "c".repeat(64), demandAtMs: now };
+    const profile = { ...PROFILE, setup: "synthetic-profile-setup" };
+    let current = projectOptions(events, new AbortController(), preparation);
+    const { provider, calls } = createWarmProvider((call) => current.observe(call));
+    await provider.provision(profile, "prepared-source", current.options);
+    const cold = calls.find(({ argv }) => argv[1] === "warmup")!.argv;
+    expect(cold.slice(cold.indexOf("--target"))).toEqual(["--target", "linux", "--arch", "amd64"]);
+    clock.mockReturnValue(now + 60_000);
+    calls.length = 0;
+    current = projectOptions(events, new AbortController(), preparation);
+    const reserve = await provider.provision(profile, "prepared-reserve", current.options);
+    const fork = calls.find(({ argv }) => argv[2] === "fork")!.argv;
+    expect(fork.slice(fork.indexOf("--target"), -1)).toEqual([
+      "--target",
+      "linux",
+      "--arch",
+      "amd64",
+    ]);
+    expect(current.options.project.prepare).toHaveBeenCalledOnce();
+    expect(calls.some(({ options }) => options.input === profile.setup)).toBe(false);
+    expect(listCrabboxWarmImages()[0]?.lastDemandAtMs).toBe(now);
+    await provider.notePreparedDemand!(
+      { leaseId: reserve.leaseId, profile },
+      { preparationKey: preparation.key, demandAtMs: now + 60_000 },
+    );
+    expect(listCrabboxWarmImages()[0]?.lastDemandAtMs).toBe(now + 60_000);
+    expect(provider.resolvePreparedIdleTimeoutMs?.(profile)).toBe(3_600_000);
+    expect(provider.resolvePreparationTarget?.(profile, "fast")).toEqual({
+      machineClass: "fast",
+      platform: "linux",
+      arch: "x64",
+    });
+    expect(
+      provider.resolvePreparedIdleTimeoutMs?.({ ...profile, setupEnv: ["MUTABLE_INPUT"] }),
+    ).toBeUndefined();
+    expect(
+      provider.resolvePreparedIdleTimeoutMs?.({ ...profile, warmImage: false }),
+    ).toBeUndefined();
+  });
+
+  it.each([
+    { backend: "aws", lifecycleMs: 0 },
+    { backend: "azure", lifecycleMs: 0 },
+    { backend: "gcp", lifecycleMs: 0 },
+    { backend: "daytona", lifecycleMs: 3 * 60_000 },
+    { backend: "machine0", lifecycleMs: 30 * 60_000 },
+  ])(
+    "settles a retained $backend checkpoint through native waiting and source restoration before enrollment",
+    async ({ backend, lifecycleMs }) => {
       const events: string[] = [];
+      const startedAt = Date.now();
+      const clock = vi.spyOn(Date, "now").mockReturnValue(startedAt);
       const { options, observe } = projectOptions(events);
       const entered = createDeferred<void>();
       const available = createDeferred<void>();
@@ -90,6 +186,18 @@ describe("Crabbox project snapshot provisioning", () => {
           return commandResult({ code: 1, stderr: "http 503: checkpoint_pending" });
         }
         await available.promise;
+        // Native availability can take almost Crabbox's 45m wait, with provider-owned
+        // stop/restoration outside it. The old 3m/10m process cap killed that work.
+        const elapsedMs = 45 * 60_000 - 15_000 + lifecycleMs;
+        clock.mockReturnValue(startedAt + elapsedMs);
+        if (call.options.timeoutMs <= elapsedMs) {
+          return commandResult({ code: null, killed: true, termination: "timeout" });
+        }
+        const waitTimeoutIndex = call.argv.indexOf("--wait-timeout");
+        expect(call.argv.slice(waitTimeoutIndex, waitTimeoutIndex + 2)).toEqual([
+          "--wait-timeout",
+          "45m",
+        ]);
         return checkpointResult(CHECKPOINT_ID, operationLeaseId("retained-capture"), "available");
       });
       const provision = expect(

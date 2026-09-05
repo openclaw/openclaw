@@ -1,15 +1,23 @@
 import fsp from "node:fs/promises";
+import { NODE_WORKER_WORKSPACE_COMMAND_TIMEOUT_MS } from "../../worker/node-workspace-deadlines.js";
 import type { NodeWorkerWorkspaceExecResult } from "../../worker/node-workspace-protocol.js";
 import {
   createNodeWorkerWorkspaceFallback,
   recordNodeSyncPath,
 } from "./node-worker-workspace-fallback.js";
 import type { NodeWorkspaceTransferService } from "./node-workspace-transfer-service.js";
-import type { WorkerWorkspaceCommand, WorkerWorkspaceTunnelHandle } from "./tunnel-contract.js";
+import type {
+  WorkerWorkspaceCommand,
+  WorkerWorkspaceSyncResult,
+  WorkerWorkspaceTunnelHandle,
+} from "./tunnel-contract.js";
+import { boundedWorkerError } from "./worker-error.js";
 import { runInstrumentedWorkspaceReconcile } from "./workspace-finalize.js";
 import { workerProjectSeedKey } from "./workspace-git-base.js";
 import {
   measureLocalWorkspaceReconciliation,
+  parseRemoteWorkspaceManifestCapture,
+  recordRemoteWorkspaceHashMetrics,
   pruneWorkspaceHashMemo,
   withWorkspaceHashMemo,
   type WorkspaceHashMemo,
@@ -29,6 +37,7 @@ export type NodeWorkerWorkspaceBinding = {
   localPath: string;
   manifestRef: string;
   remoteWorkspaceDir: string;
+  sessionKey?: string;
 };
 
 type NodeWorkerWorkspaceActions = Pick<
@@ -38,7 +47,10 @@ type NodeWorkerWorkspaceActions = Pick<
   | "quiesceWorkspace"
   | "reconcileWorkspace"
   | "stageAttachments"
-> & { validateRestoredWorkspace: () => Promise<void> };
+> & {
+  validateRestoredWorkspace: () => Promise<void>;
+  getSessionKey: () => string | undefined;
+};
 
 export function createNodeWorkerWorkspaceActions(params: {
   environmentId: string;
@@ -49,22 +61,45 @@ export function createNodeWorkerWorkspaceActions(params: {
   restoredWorkspace?: NodeWorkerWorkspaceBinding;
   workspaceTransfer: NodeWorkspaceTransferService;
   runWorkspaceCommand: (
-    command: WorkerWorkspaceCommand & { resetWorkspace?: boolean },
+    command: WorkerWorkspaceCommand & { resetWorkspace?: boolean; sessionKey?: string },
+  ) => Promise<NodeWorkerWorkspaceExecResult>;
+  runResumeWorkspaceCommand: (
+    command: WorkerWorkspaceCommand & { sessionKey?: string },
   ) => Promise<NodeWorkerWorkspaceExecResult>;
 }): NodeWorkerWorkspaceActions {
   const { restoredWorkspace } = params;
   let workspaceReady = restoredWorkspace !== undefined;
-  const exec = async (command: WorkerWorkspaceCommand & { resetWorkspace?: boolean }) => {
+  let sessionKey = restoredWorkspace?.sessionKey;
+  let remoteWorkspaceDir = restoredWorkspace?.remoteWorkspaceDir;
+  const exec = async (
+    command: WorkerWorkspaceCommand & { resetWorkspace?: boolean },
+    run = params.runWorkspaceCommand,
+  ) => {
     if (!workspaceReady) {
       throw new Error("node worker workspace is unavailable before sync");
     }
-    return await params.runWorkspaceCommand(command);
+    if (
+      command.skillResources &&
+      (command.skillResources.workspaceDir !== remoteWorkspaceDir ||
+        command.skillResources.generation !== params.ownerEpoch)
+    ) {
+      throw new Error("Skill resources do not match the node workspace owner");
+    }
+    return await run({
+      ...command,
+      ...(sessionKey === undefined ? {} : { sessionKey }),
+    });
   };
   const workspace = createNodeWorkerWorkspaceFallback(exec);
+  const rememberWorkspace = (result: WorkerWorkspaceSyncResult) => {
+    remoteWorkspaceDir = result.remoteWorkspaceDir;
+    return result;
+  };
   const quiesceWorkspace = createWorkerWorkspaceQuiescence({
     ownerSignal: params.ownerSignal,
     sharedHost: true,
     runWorkspaceCommand: exec,
+    runResumeWorkspaceCommand: (command) => exec(command, params.runResumeWorkspaceCommand),
   });
   const validateRestoredWorkspace = async (): Promise<void> => {
     if (!restoredWorkspace) {
@@ -119,7 +154,7 @@ export function createNodeWorkerWorkspaceActions(params: {
           token: uploadToken,
           baseManifestRef: request.baseManifestRef,
         },
-        timeoutMs: 10 * 60_000,
+        timeoutMs: NODE_WORKER_WORKSPACE_COMMAND_TIMEOUT_MS,
         transportRetry: "never",
       });
     } finally {
@@ -136,16 +171,40 @@ export function createNodeWorkerWorkspaceActions(params: {
       const changed = uploaded.currentManifestRef !== request.baseManifestRef;
       let expectedRemoteRef = uploaded.currentManifestRef;
       const verifyStable = async () => {
-        const observed = await workspace.captureManifest(
-          request.remoteWorkspaceDir,
-          uploaded.base.baseCommit,
-          expectedRemoteRef,
-        );
+        metrics.remoteManifestCalls += 1;
+        const startedAt = performance.now();
+        const result = await exec({
+          argv: ["openclaw-internal-workspace-manifest"],
+          capture: {
+            baseManifestRef: request.baseManifestRef,
+            referenceManifestRef: expectedRemoteRef,
+          },
+          transportRetry: "idempotent",
+          timeoutMs: NODE_WORKER_WORKSPACE_COMMAND_TIMEOUT_MS,
+        }).finally(() => {
+          metrics.remoteManifestWallDurationMs += performance.now() - startedAt;
+        });
+        if (result.termination !== "exit" || result.code !== 0) {
+          const detail = boundedWorkerError(
+            result.stderr.trim() ||
+              `${result.termination} (exit code ${result.code}, signal ${result.signal})`,
+          );
+          throw new Error(`Node workspace manifest capture failed: ${detail}`);
+        }
+        let captured;
+        try {
+          captured = parseRemoteWorkspaceManifestCapture(result.stdout);
+        } catch (error) {
+          throw new Error("Node workspace manifest capture failed: invalid capture result", {
+            cause: error,
+          });
+        }
+        recordRemoteWorkspaceHashMetrics(metrics, captured.metrics);
+        const observed = captured.manifestRef;
         if (observed !== expectedRemoteRef) {
           throw new Error("Cloud workspace changed during final reconciliation");
         }
       };
-      await verifyStable();
       const publishAcceptedManifest = async (accepted: {
         manifestRef: string;
         manifest: typeof uploaded.current;
@@ -164,7 +223,7 @@ export function createNodeWorkerWorkspaceActions(params: {
           const published = await exec({
             argv: ["openclaw-internal-workspace-transfer"],
             transfer: { direction: "download", token, manifestRef: accepted.manifestRef },
-            timeoutMs: 10 * 60_000,
+            timeoutMs: NODE_WORKER_WORKSPACE_COMMAND_TIMEOUT_MS,
             transportRetry: "never",
           });
           if (
@@ -194,6 +253,8 @@ export function createNodeWorkerWorkspaceActions(params: {
         : undefined;
       let appliedWorkspaceResult: WorkerWorkspaceApplyResult | undefined;
       if (!preparedStagedResult) {
+        // Staged results are fenced by the finalizer immediately before apply.
+        await verifyStable();
         appliedWorkspaceResult = await runLocalReconciliation(
           async () =>
             await applyStagedWorkerWorkspace({
@@ -204,27 +265,11 @@ export function createNodeWorkerWorkspaceActions(params: {
               base: uploaded.base,
               current: uploaded.current,
               journal: request.journal,
-              publishAcceptedManifest,
+              acceptance: { kind: "reconcile", publish: publishAcceptedManifest },
             }),
         );
       }
       return {
-        get manifestRef() {
-          return expectedRemoteRef;
-        },
-        changed,
-        verifyStable,
-        verifyLocalStable: async () =>
-          await runLocalReconciliation(
-            async () =>
-              await (appliedWorkspaceResult?.verifyLocalStable() ??
-                assertWorkspaceResultStable({
-                  root: request.localPath,
-                  base: uploaded.base,
-                  current: uploaded.current,
-                })),
-          ),
-        getAppliedWorkspaceResult: () => appliedWorkspaceResult,
         ...(preparedStagedResult
           ? {
               ...preparedStagedResult,
@@ -236,6 +281,23 @@ export function createNodeWorkerWorkspaceActions(params: {
               },
             }
           : {}),
+        get manifestRef() {
+          return expectedRemoteRef;
+        },
+        changed,
+        verifyStable,
+        verifyLocalStable: async () =>
+          await runLocalReconciliation(
+            async () =>
+              await (preparedStagedResult?.verifyLocalStable() ??
+                appliedWorkspaceResult?.verifyLocalStable() ??
+                assertWorkspaceResultStable({
+                  root: request.localPath,
+                  base: uploaded.base,
+                  current: uploaded.current,
+                })),
+          ),
+        getAppliedWorkspaceResult: () => appliedWorkspaceResult,
       };
     } finally {
       await fsp.rm(uploaded.stagingRoot, { recursive: true, force: true });
@@ -243,6 +305,7 @@ export function createNodeWorkerWorkspaceActions(params: {
   };
   return {
     validateRestoredWorkspace,
+    getSessionKey: () => sessionKey,
     runWorkspaceCommand: exec,
     stageAttachments: async (request) => {
       const prepared = await params.workspaceTransfer.prepareAttachments({
@@ -278,6 +341,15 @@ export function createNodeWorkerWorkspaceActions(params: {
       }
     },
     syncWorkspace: async (request) => {
+      if (
+        request.sessionId !== params.sessionId ||
+        (sessionKey !== undefined && request.sessionKey !== sessionKey)
+      ) {
+        throw new Error("node workspace sync does not match its session owner");
+      }
+      // The placement key survives subsequent commands and tunnel recovery; callers cannot
+      // replace a prepared workspace's bound identity by sending a different command payload.
+      sessionKey = request.sessionKey;
       workspaceReady = true;
       try {
         const prepared = await params.workspaceTransfer.prepareSync({
@@ -296,7 +368,7 @@ export function createNodeWorkerWorkspaceActions(params: {
             const origin = await workspace.trySyncWorkspace(request, prepared.snapshot.manifestRef);
             recordNodeSyncPath(params.environmentId, params.sessionId, origin, originStartedAt);
             if (origin.kind === "synced") {
-              return await workspace.finalizeSync(request, origin.result);
+              return rememberWorkspace(await workspace.finalizeSync(request, origin.result));
             }
           }
           const transferred = await exec({
@@ -314,7 +386,7 @@ export function createNodeWorkerWorkspaceActions(params: {
                   }
                 : {}),
             },
-            timeoutMs: 10 * 60_000,
+            timeoutMs: NODE_WORKER_WORKSPACE_COMMAND_TIMEOUT_MS,
             transportRetry: "never",
           });
           if (
@@ -324,11 +396,13 @@ export function createNodeWorkerWorkspaceActions(params: {
           ) {
             throw new Error("Node workspace transfer failed");
           }
-          return await workspace.finalizeSync(request, {
-            mode: prepared.snapshot.manifest.baseCommit ? ("git" as const) : ("plain" as const),
-            remoteWorkspaceDir: transferred.workspaceDir,
-            manifestRef: prepared.snapshot.manifestRef,
-          });
+          return rememberWorkspace(
+            await workspace.finalizeSync(request, {
+              mode: prepared.snapshot.manifest.baseCommit ? ("git" as const) : ("plain" as const),
+              remoteWorkspaceDir: transferred.workspaceDir,
+              manifestRef: prepared.snapshot.manifestRef,
+            }),
+          );
         } finally {
           params.workspaceTransfer.revoke(params.environmentId, prepared.token);
         }

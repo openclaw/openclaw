@@ -12,6 +12,7 @@ import type { ManagedWorktreeRecord } from "../../agents/worktrees/types.js";
 import { normalizeCloudRepo } from "../../config/cloud-worker-project-profiles.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
+import { ADMIN_SCOPE } from "../method-scopes.js";
 import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-request-agent.js";
 import { SessionMutationAuthorizationChangedError } from "../session-sharing.js";
 import { resolveDevicePlacementEligibility } from "../worker-environments/device-placement-eligibility.js";
@@ -243,7 +244,13 @@ function respondWorkerDispatchError(error: unknown, respond: RespondFn): void {
 }
 
 export const sessionDispatchHandlers: GatewayRequestHandlers = {
-  "sessions.dispatch": async ({ params, respond, context, sessionMutationAuthorization }) => {
+  "sessions.dispatch": async ({
+    params,
+    respond,
+    context,
+    client,
+    sessionMutationAuthorization,
+  }) => {
     if (
       params.autoDevice === true &&
       (params.profileId !== undefined || params.deviceId !== undefined)
@@ -461,6 +468,7 @@ export const sessionDispatchHandlers: GatewayRequestHandlers = {
             agentId: target.target.agentId,
             executionMode,
             ...dispatchTarget,
+            setupAuthorized: client?.connect.scopes?.includes(ADMIN_SCOPE) === true,
             ...(devicePlacement ? { devicePlacement } : {}),
           },
           () =>
@@ -515,7 +523,7 @@ export const sessionDispatchHandlers: GatewayRequestHandlers = {
       respond,
     );
   },
-  "sessions.move": async ({ params, respond, context, sessionMutationAuthorization }) => {
+  "sessions.move": async ({ params, respond, context, client, sessionMutationAuthorization }) => {
     if (!assertValidParams(params, validateSessionsMoveParams, "sessions.move", respond)) {
       return;
     }
@@ -575,6 +583,7 @@ export const sessionDispatchHandlers: GatewayRequestHandlers = {
           agentId: target.target.agentId,
           source: params.expected,
           target: params.target,
+          setupAuthorized: client?.connect.scopes?.includes(ADMIN_SCOPE) === true,
           ...("abandonSource" in params ? { abandonSource: true } : {}),
         },
         () =>

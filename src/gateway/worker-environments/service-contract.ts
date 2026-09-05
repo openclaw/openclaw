@@ -100,6 +100,8 @@ export type WorkerPlacementDispatchRequest = {
   idempotencyKey?: string;
   deviceId?: string;
   machineClass?: string;
+  /** Trusted Gateway admission only; never accepted from dispatch RPC parameters. */
+  setupAuthorized?: boolean;
   inheritedProfile?: {
     providerId: string;
     profileSnapshot: WorkerProfile;
@@ -137,6 +139,7 @@ export type WorkerPlacementMoveRequest = WorkerPlacementReclaimRequest & {
   source: WorkerPlacementMoveSource;
   target: WorkerPlacementMoveTarget;
   abandonSource?: true;
+  setupAuthorized?: boolean;
 };
 
 /** Closure-bound request authority; in-process only and never part of durable placement intent. */

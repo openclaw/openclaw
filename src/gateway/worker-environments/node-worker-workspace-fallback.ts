@@ -182,7 +182,7 @@ function succeeded(result: SpawnResult): boolean {
 export function createNodeWorkerWorkspaceFallback(exec: WorkspaceExec) {
   let supportsSeeds = true;
   let seedStoreFailureLogged = false;
-  const capture = async (dir: string, base: string | null, reference?: string) =>
+  const capture = async (dir: string, base: string | null) =>
     await exec({
       argv: [
         "node",
@@ -190,7 +190,6 @@ export function createNodeWorkerWorkspaceFallback(exec: WorkspaceExec) {
         REMOTE_WORKSPACE_MANIFEST_JS,
         dir,
         ...(base ? [base, "eligible"] : ["", "all"]),
-        ...(reference ? [reference.slice("sha256:".length)] : []),
       ],
       timeoutMs: GIT_TIMEOUT_MS,
       transportRetry: "idempotent",
@@ -224,20 +223,6 @@ export function createNodeWorkerWorkspaceFallback(exec: WorkspaceExec) {
     };
   };
   return {
-    async captureManifest(dir: string, base: string | null, reference: string) {
-      const captured = await capture(dir, base, reference);
-      const manifestRef = captured.stdout.trim();
-      if (!succeeded(captured) || !MANIFEST_REF_PATTERN.test(manifestRef)) {
-        const detail = boundedWorkerError(
-          captured.stderr.trim() ||
-            (!succeeded(captured)
-              ? `${captured.termination} (exit code ${captured.code}, signal ${captured.signal})`
-              : "invalid manifest reference"),
-        );
-        throw new Error(`Node workspace manifest capture failed: ${detail}`);
-      }
-      return manifestRef;
-    },
     async trySyncWorkspace(
       request: WorkerWorkspaceSyncRequest,
       expectedManifestRef: string,

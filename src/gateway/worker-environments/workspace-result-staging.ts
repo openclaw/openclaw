@@ -519,7 +519,7 @@ async function applyStagedWorkerWorkspaceResultWithMemo(
       base: staged.base,
       current: staged.current,
       journal: params.journal,
-      publishAcceptedManifest: params.publishAcceptedManifest,
+      acceptance: { kind: "reconcile", publish: params.publishAcceptedManifest },
     });
     return { ...applied, changed: staged.changed };
   } finally {

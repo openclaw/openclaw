@@ -6,6 +6,8 @@ import { describe, expect, it, vi } from "vitest";
 import { requireGit } from "../../agents/worktrees/git.js";
 import type { WorkerProvider } from "../../plugins/types.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { readWorkerProjectPreparation } from "./preparation-identity.js";
+import { createWorkerEnvironmentService } from "./service.js";
 import * as support from "./service.test-support.js";
 import * as workspaceGitBase from "./workspace-git-base.js";
 
@@ -42,6 +44,80 @@ function createService(provision: WorkerProvider["provision"], providerCallTimeo
 
 describe("worker provider project preparation ownership", () => {
   support.setupWorkerEnvironmentServiceSuite();
+
+  it("prepares the inherited machine class while preserving explicit overrides and defaults", async () => {
+    const git = await repository("inherited-machine-class");
+    const settings = { region: "test", class: "standard" };
+    support.getDevelopmentProfile().settings = settings;
+    const provider = support.createProvider({
+      requiresNodeEnrollment: true,
+      supportsProjectPreparation: (profile, machineClass) =>
+        (machineClass ?? profile.class) !== "unprepared",
+      resolvePreparationTarget: (profile, machineClass) => {
+        if (typeof profile.class !== "string") {
+          throw new Error("Missing fixture machine class");
+        }
+        return { machineClass: machineClass ?? profile.class, platform: "linux", arch: "x64" };
+      },
+    });
+    const service = createWorkerEnvironmentService({
+      store: support.testState.store,
+      getConfig: () => support.testState.config,
+      resolveProvider: () => provider,
+      projectNamespace: "gateway",
+      prepareInstallation: support.testState.prepareInstallation,
+      bootstrapWorker: support.testState.bootstrapWorker,
+      prepareNodeArtifacts: async () => ({
+        artifacts: {
+          nodeBootstrapSha256: support.NODE_BOOTSTRAP.sha256,
+          enabledPluginIds: [...support.NODE_BOOTSTRAP.enabledPluginIds],
+          workerBundleHash: support.BUNDLE_HASH,
+          workerArchiveSha256: support.BUNDLE_ARTIFACT.tarballSha256,
+          openclawVersion: support.BUNDLE_ARTIFACT.openclawVersion,
+          protocolFeatures: [],
+        },
+        assertCurrent: () => {},
+      }),
+      executeInference: async () => ({ type: "error", reason: "cancelled", message: "unused" }),
+    });
+    support.testState.service = service;
+    const inherited = {
+      providerId: provider.id,
+      profileSnapshot: { install: "bundle", settings, machineClass: "large" },
+    };
+    const prepare = (options: Parameters<typeof service.prepareProjectIntent>[1] = {}) =>
+      service.prepareProjectIntent("development", { projectPath: git.root, ...options });
+    const configured = await prepare();
+    const large = await prepare({ inherited });
+    const explicitLarge = await prepare({ machineClass: "large" });
+    const override = await prepare({ inherited, machineClass: "standard" });
+
+    expect(
+      readWorkerProjectPreparation(configured.profileSnapshot.project)?.target.machineClass,
+    ).toBe("standard");
+    expect(large.profileSnapshot.machineClass).toBe("large");
+    expect(readWorkerProjectPreparation(large.profileSnapshot.project)?.target.machineClass).toBe(
+      "large",
+    );
+    expect(large.preparationKey).toBe(explicitLarge.preparationKey);
+    expect(large.preparationKey).not.toBe(configured.preparationKey);
+    expect(override.profileSnapshot.machineClass).toBe("standard");
+    expect(override.preparationKey).toBe(configured.preparationKey);
+
+    const ineligible = await prepare({
+      inherited: {
+        ...inherited,
+        profileSnapshot: { ...inherited.profileSnapshot, machineClass: "unprepared" },
+      },
+    });
+    expect(ineligible.profileSnapshot.project).toBeUndefined();
+    expect(ineligible.preparationKey).toBeUndefined();
+    const ordinary = await prepare({ inherited, projectPath: undefined });
+    expect(ordinary.profileSnapshot.machineClass).toBe("large");
+    expect(ordinary.profileSnapshot.project).toBeUndefined();
+    expect(ordinary.preparationKey).toBeUndefined();
+    expect(support.testState.store.list()).toEqual([]);
+  });
 
   it("cancels project snapshot preparation before creating an allocation intent", async () => {
     const git = await repository("cancelled-project-snapshot");

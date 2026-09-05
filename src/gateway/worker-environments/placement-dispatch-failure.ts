@@ -38,6 +38,7 @@ export type WorkerDispatchPlacementStore = Pick<
   | "claimTurn"
   | "closeWorkerTurnToolState"
   | "beginPlacementMove"
+  | "bindPreparedEnvironment"
   | "cancelPlacementMove"
   | "completePlacementMoveSourceToLocal"
   | "completeAbandonedPlacementMoveSourceToLocal"
@@ -78,14 +79,19 @@ export type WorkerDispatchPlacementStore = Pick<
 export type WorkerDispatchEnvironmentService = Pick<
   WorkerEnvironmentService,
   | "attachSession"
+  | "assertPreparedIntentCurrent"
+  | "bindPreparedWorkspace"
   | "create"
   | "createFromProfileSnapshot"
   | "destroy"
   | "get"
+  | "getPreparedCandidates"
+  | "prepareProjectIntent"
   | "reconcileEnvironment"
   | "reconcileOnce"
   | "startTunnel"
   | "stopTunnel"
+  | "schedulePreparedRefill"
   | "supportsProviderExecutionMode"
 >;
 

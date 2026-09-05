@@ -19,11 +19,9 @@ import {
   installGitHubPublicationTestHarness,
   root,
   seedLocalPublication,
+  seedPublicationWorkerPlacement,
 } from "./github-publication.test-support.js";
-import {
-  REQUEST,
-  seedActivePlacement,
-} from "./worker-environments/placement-dispatch-test-fixtures.js";
+import { REQUEST } from "./worker-environments/placement-dispatch-test-fixtures.js";
 import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 
 const mocks = githubPublicationTestMocks();
@@ -641,7 +639,7 @@ describe("Gateway GitHub publication boundaries", () => {
   ])("queues a cloud session publication with $label", async ({ claimRunId, expectedRunId }) => {
     const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
     const placements = createWorkerSessionPlacementStore({ database });
-    const active = seedActivePlacement(placements, {
+    const active = seedPublicationWorkerPlacement(database, placements, {
       environmentId: "environment-deferred-request",
       ownerEpoch: 2,
     });
@@ -688,7 +686,7 @@ describe("Gateway GitHub publication boundaries", () => {
   it("publishes deferred session requests alongside an accepted turn claim", async () => {
     const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
     const placements = createWorkerSessionPlacementStore({ database });
-    const active = seedActivePlacement(placements, {
+    const active = seedPublicationWorkerPlacement(database, placements, {
       environmentId: "environment-accepted-deferred",
       ownerEpoch: 2,
     });
@@ -725,7 +723,7 @@ describe("Gateway GitHub publication boundaries", () => {
   it("defers an orphaned turn request and publishes it when the workspace is quiescent", async () => {
     const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
     const placements = createWorkerSessionPlacementStore({ database });
-    const active = seedActivePlacement(placements, {
+    const active = seedPublicationWorkerPlacement(database, placements, {
       environmentId: "environment-1",
       ownerEpoch: 2,
     });
@@ -763,7 +761,7 @@ describe("Gateway GitHub publication boundaries", () => {
   it("defers snapshot preparation failures without blocking workspace acceptance", async () => {
     const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
     const placements = createWorkerSessionPlacementStore({ database });
-    const active = seedActivePlacement(placements, {
+    const active = seedPublicationWorkerPlacement(database, placements, {
       environmentId: "environment-snapshot-failure",
       ownerEpoch: 2,
     });

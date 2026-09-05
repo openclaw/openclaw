@@ -217,6 +217,8 @@ describeControlUiE2e("Control UI dashboard A2UI", () => {
         .toBe(true);
       const widgetFrame = outerFrame!.childFrames()[0]!;
       await widgetFrame.getByText("A2UI board widget").waitFor();
+      // Inner-frame text can render before the dashboard reveals its interactive outer frame.
+      await expect.poll(() => outer.getAttribute("inert")).toBeNull();
       await widgetFrame.getByText("Refresh data").click();
       await expect.poll(async () => (await gateway.getRequests("board.event")).length).toBe(1);
       expect((await gateway.getRequests("board.event"))[0]?.params).toMatchObject({

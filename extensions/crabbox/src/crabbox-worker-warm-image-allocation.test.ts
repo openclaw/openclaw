@@ -15,21 +15,23 @@ import {
   tempDirs,
 } from "./crabbox-worker-warm-image.test-support.js";
 
-function fixture(failCreate = false, onCommand?: (argv: string[]) => void) {
+function fixture(failCreate = false, onCommand?: (argv: string[]) => void | Promise<void>) {
   vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-crabbox-allocation-"));
   const calls: string[][] = [];
+  let captures = 0;
   const manager = () =>
     createCrabboxWarmImageManager({
       warn: vi.fn(),
       runArgs: ({ id }) => ["run", "--id", id, "--script-stdin"],
       runCommand: async (argv) => {
         calls.push(argv);
-        onCommand?.(argv);
+        await onCommand?.(argv);
         if (failCreate && argv[2] === "create") {
           return commandResult({ code: null, killed: true, termination: "timeout" });
         }
         if (argv[2] === "create") {
-          return checkpointResult(CHECKPOINT_ID, argv[argv.indexOf("--id") + 1]!, "available");
+          const checkpointId = ++captures === 1 ? CHECKPOINT_ID : `chk_generation_${captures}`;
+          return checkpointResult(checkpointId, argv[argv.indexOf("--id") + 1]!, "available");
         }
         if (argv[2] === "inspect") {
           return commandResult({
@@ -67,6 +69,130 @@ function fixture(failCreate = false, onCommand?: (argv: string[]) => void) {
 }
 
 describe("Crabbox durable allocation admission", () => {
+  it("retains a late capture image without resurrecting its released allocation", async () => {
+    const { manager, context } = fixture(false, async (argv) => {
+      if (argv[2] === "create") {
+        await owner.release(project);
+      }
+    });
+    const owner = manager();
+    const project = {
+      ...context("cbx_source", "project-a"),
+      preparation: { key: "a".repeat(64), demandAtMs: Date.now() },
+    };
+    await owner.allocate(project);
+    owner.markPrepared(project.id, "b".repeat(40));
+    await expect(owner.capture(project)).resolves.toBe(true);
+    resetPluginStateStoreForTests();
+    expect(manager().lookupLease(project.id)).toBeUndefined();
+    expect(openWarmImageStore().entries()[0]?.value).toMatchObject({
+      allocations: {},
+      image: { checkpointId: CHECKPOINT_ID, preparationKey: project.preparation.key },
+    });
+    expect(openWarmImageStore().entries()[0]?.value.operation).toBeUndefined();
+  });
+
+  it("freezes preparation and demand before allocation and refreshes only the consumed image generation", async () => {
+    const { manager, context, calls } = fixture();
+    const now = Date.now();
+    const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+    const preparation = { key: "1".repeat(64), demandAtMs: now };
+    const source = { ...context("cbx_source", "project-a"), preparation };
+    const owner = manager();
+    await owner.allocate(source);
+    owner.markPrepared(source.id, "a".repeat(40));
+    await owner.capture(source);
+    owner.markEnrolled(source.id);
+    expect(openWarmImageStore().entries()[0]?.value.image).toMatchObject({
+      preparationKey: preparation.key,
+      lastDemandAtMs: now,
+    });
+
+    clock.mockReturnValue(now + 60_000);
+    const reserve = { ...source, id: "cbx_reserve", slug: "cbx_reserve" };
+    await owner.allocate(reserve);
+    expect(owner.lookupLease(reserve.id)).toMatchObject({
+      preparationKey: preparation.key,
+      demandAtMs: now,
+      imageGeneration: { checkpointId: CHECKPOINT_ID, createdAtMs: now },
+    });
+    expect(openWarmImageStore().entries()[0]?.value.image?.lastDemandAtMs).toBe(now);
+    resetPluginStateStoreForTests();
+    const restarted = manager();
+    await restarted.allocate(reserve);
+    expect(openWarmImageStore().entries()[0]?.value.image?.lastDemandAtMs).toBe(now);
+    restarted.notePreparedDemand(reserve.id, {
+      preparationKey: preparation.key,
+      demandAtMs: now + 60_000,
+    });
+    restarted.notePreparedDemand(source.id, { preparationKey: preparation.key, demandAtMs: now });
+    expect(openWarmImageStore().entries()[0]?.value.image?.lastDemandAtMs).toBe(now + 60_000);
+
+    calls.length = 0;
+    await expect(
+      restarted.allocate({ ...reserve, preparation: { ...preparation, demandAtMs: now + 1 } }),
+    ).rejects.toThrow("changed its recorded profile or project identity");
+    expect(calls).toEqual([]);
+    const next = {
+      ...context("cbx_next", "project-a"),
+      preparation: { key: "2".repeat(64), demandAtMs: now + 60_000 },
+    };
+    await restarted.allocate(next);
+    expect(calls.some((argv) => argv[2] === "fork")).toBe(false);
+    restarted.markPrepared(next.id, "b".repeat(40));
+    await restarted.capture(next);
+    expect(openWarmImageStore().entries()[0]?.value.image?.checkpointId).toBe("chk_generation_2");
+    restarted.notePreparedDemand(reserve.id, {
+      preparationKey: preparation.key,
+      demandAtMs: now + 120_000,
+    });
+    expect(openWarmImageStore().entries()[0]?.value.image?.lastDemandAtMs).toBe(now + 60_000);
+    restarted.notePreparedDemand(next.id, {
+      preparationKey: next.preparation.key,
+      demandAtMs: now + 120_000,
+    });
+    expect(openWarmImageStore().entries()[0]?.value.image?.lastDemandAtMs).toBe(now + 120_000);
+  });
+
+  it("keeps unverified image obligations for recorded replays but never admits a new hit", async () => {
+    const { manager, context, calls } = fixture();
+    const owner = manager();
+    const source = context("cbx_source");
+    await owner.allocate(source);
+    owner.markEnrolled(source.id);
+    await owner.capture(source);
+    await owner.release(source);
+    const replay = context("cbx_replay");
+    await owner.allocate(replay);
+    const store = openWarmImageStore();
+    const entry = store.entries()[0]!;
+    store.register(entry.key, {
+      ...entry.value,
+      image: { ...entry.value.image!, lastDemandAtMs: null, preparationKey: null },
+      allocations: {
+        [replay.id]: {
+          ...entry.value.allocations[replay.id]!,
+          preparationKey: null,
+          demandAtMs: null,
+          imageGeneration: null,
+        },
+      },
+    });
+    resetPluginStateStoreForTests();
+    const reopened = manager();
+    calls.length = 0;
+    await reopened.allocate(context("cbx_new"));
+    expect(calls.map((argv) => argv[1])).toEqual(["warmup"]);
+    await reopened.allocate(replay);
+    expect(calls.at(-1)?.slice(1, 4)).toEqual(["checkpoint", "fork", CHECKPOINT_ID]);
+    expect(store.lookup(entry.key)?.image?.lastDemandAtMs).toBeNull();
+    await reopened.release(replay);
+    await reopened.maintain(context("maintenance"));
+    expect(calls.at(-1)?.slice(1)).toEqual(["checkpoint", "delete", CHECKPOINT_ID]);
+    expect(store.lookup(entry.key)?.image).toBeUndefined();
+    expect(reopened.lookupLease("cbx_new")?.choice).toEqual({ kind: "cold" });
+  });
+
   it("does not begin a native capture after project authority closes during scrub", async () => {
     let active = true;
     const { manager, context, calls } = fixture(false, (argv) => {
@@ -126,6 +252,9 @@ describe("Crabbox durable allocation admission", () => {
         choice: { kind: "cold" },
         machineClass: "standard",
         phase: "pending",
+        preparationKey: null,
+        demandAtMs: null,
+        imageGeneration: null,
       };
     }
     store.register(entry.key, { ...entry.value, allocations });

@@ -180,14 +180,15 @@ describe("Crabbox warm-image doctor", () => {
       const store = openCrabboxWarmImageStore(env);
       const now = Date.now();
       const record: WarmProfileRecord = {
-        version: 2,
+        version: 3,
         allocations: {},
         image: {
           checkpointId: "chk_last_good",
           kind: "native",
           state: "available",
           createdAtMs: now,
-          lastUsedAtMs: now,
+          preparationKey: null,
+          lastDemandAtMs: now,
         },
         ...(operation
           ? {

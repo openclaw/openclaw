@@ -410,6 +410,14 @@ export function createTestChatPane(params: {
   pane.state = state;
   pane.connectedClient = params.client;
   pane.connectionGeneration = 4;
+  onTestFinished(async () => {
+    if (pane.state) {
+      pane.disconnectedCallback();
+    }
+    // A retired pane cannot cancel module loading; join it before Vitest
+    // destroys the environment so lazy roster imports cannot outlive the test.
+    await vi.dynamicImportSettled();
+  });
   return {
     pane,
     requestUpdate,
