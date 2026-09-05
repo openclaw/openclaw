@@ -9,6 +9,7 @@ source "$ROOT_DIR/scripts/lib/docker-e2e-package.sh"
 
 IMAGE_NAME="$(docker_e2e_resolve_image "openclaw-update-channel-switch-e2e" OPENCLAW_UPDATE_CHANNEL_SWITCH_E2E_IMAGE)"
 SKIP_BUILD="${OPENCLAW_UPDATE_CHANNEL_SWITCH_E2E_SKIP_BUILD:-0}"
+OPENCLAW_ALLOW_PRE_NATIVE_FS_SAFE_CONTRACT="${OPENCLAW_ALLOW_PRE_NATIVE_FS_SAFE_CONTRACT:-0}"
 cleanup() {
   docker_e2e_cleanup_package_tgz "${PACKAGE_TGZ:-}"
 }
@@ -30,6 +31,7 @@ docker_e2e_build_or_reuse "$IMAGE_NAME" update-channel-switch "$ROOT_DIR/scripts
 echo "Running update channel switch E2E..."
 docker_e2e_run_with_harness \
   -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
+  -e "OPENCLAW_ALLOW_PRE_NATIVE_FS_SAFE_CONTRACT=$OPENCLAW_ALLOW_PRE_NATIVE_FS_SAFE_CONTRACT" \
   -e OPENCLAW_SKIP_CHANNELS=1 \
   -e OPENCLAW_SKIP_PROVIDERS=1 \
   -e "OPENCLAW_TEST_STATE_SCRIPT_B64=$OPENCLAW_TEST_STATE_SCRIPT_B64" \
@@ -97,7 +99,8 @@ for platform_package in "$fs_safe_scope"/fs-safe-*; do
 done
 node scripts/docker/verify-fs-safe-native.mjs \
   --package-root /tmp/npm-prefix/lib/node_modules/openclaw \
-  --mode fallback
+  --mode fallback \
+  --allow-pre-native-contract "$OPENCLAW_ALLOW_PRE_NATIVE_FS_SAFE_CONTRACT"
 OPENCLAW_PACKAGE_ACCEPTANCE_LEGACY_COMPAT="$(
   node scripts/e2e/lib/package-compat.mjs "$package_version"
 )"

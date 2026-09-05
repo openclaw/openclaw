@@ -2424,6 +2424,8 @@ if [[ "\${1:-}" == */verify-fs-safe-native.mjs ]]; then
   test -d "\${3:-}"
   test "\${4:-}" = "--mode"
   test "\${5:-}" = "require"
+  test "\${6:-}" = "--allow-pre-native-contract"
+  test "\${7:-}" = "$EXPECTED_FS_SAFE_AUTHORIZATION"
   exit 0
 fi
 if [[ "\${1:-}" == */openclaw.mjs ]]; then
@@ -2515,12 +2517,14 @@ node -e 'const fs=require("node:fs");const p=process.argv[1];const value=JSON.pa
         ...process.env,
         BUN_BIN: bunPath,
         EXPECT_AI_OVERRIDE: bundledAi ? "1" : "0",
+        EXPECTED_FS_SAFE_AUTHORIZATION: "1",
         FAKE_STATUS_EXIT: String(statusExit),
         FAKE_STATE_PATH: statePath,
         FAKE_AI_TARBALL_PATH: aiTarballPath,
         OPENCLAW_BUN_GLOBAL_SMOKE_HOST_BUILD: "0",
         OPENCLAW_BUN_GLOBAL_SMOKE_PACKAGE_TGZ: packageTgz,
         OPENCLAW_BUN_GLOBAL_SMOKE_TIMEOUT_MS: "10000",
+        OPENCLAW_ALLOW_PRE_NATIVE_FS_SAFE_CONTRACT: "1",
       },
     });
 
@@ -2709,6 +2713,9 @@ node -e 'const fs=require("node:fs");const p=process.argv[1];const value=JSON.pa
     expect(workflow).not.toContain("uses: ./.release-harness/.github/actions/setup-node-env");
     expect(workflow).toContain(
       "OPENCLAW_BUN_GLOBAL_SMOKE_PACKAGE_TGZ: ${{ runner.temp }}/install-smoke-candidate-payload/candidate.tgz",
+    );
+    expect(workflow).toContain(
+      "OPENCLAW_ALLOW_PRE_NATIVE_FS_SAFE_CONTRACT: ${{ inputs.allow_frozen_target_scenario_omissions && needs.preflight.outputs.target_sha != steps.workflow.outputs.sha && '1' || '0' }}",
     );
     expect(workflow).not.toContain("OPENCLAW_BUN_GLOBAL_SMOKE_DIST_IMAGE");
     expect(workflow).toContain("group: ${{ github.workflow }}-workflow-call-${{ github.run_id }}");
