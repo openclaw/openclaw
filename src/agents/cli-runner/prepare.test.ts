@@ -5252,6 +5252,16 @@ describe("prepareCliRunContext", () => {
   });
 
   it("ignores stored CLI session candidates when the backend disables sessions", async () => {
+    fixture.appendTranscript({
+      id: "msg-stateless-1",
+      parentId: null,
+      timestamp: new Date(1).toISOString(),
+      message: {
+        role: "user",
+        content: "earlier stateless context",
+        timestamp: 1,
+      },
+    });
     setCliBackendForPrepareTest({
       sessionMode: "none",
       reseedFromRawTranscriptWhenUncompacted: true,
@@ -5273,8 +5283,42 @@ describe("prepareCliRunContext", () => {
     });
 
     expect(context.reusableCliSession).toEqual({ mode: "none" });
+    expect(context.openClawHistoryPrompt).toContain("earlier stateless context");
+    expect(context.openClawHistoryPrompt).toContain("stateless ask");
     expect(transcriptCheck).not.toHaveBeenCalled();
     expect(orphanCheck).not.toHaveBeenCalled();
+  });
+
+  it("keeps none-mode raw reseed behind auth boundary invalidation", async () => {
+    fixture.appendTranscript({
+      id: "msg-auth-boundary-1",
+      parentId: null,
+      timestamp: new Date(1).toISOString(),
+      message: {
+        role: "user",
+        content: "credential-bound context",
+        timestamp: 1,
+      },
+    });
+    setCliBackendForPrepareTest({
+      sessionMode: "none",
+      reseedFromRawTranscriptWhenUncompacted: true,
+    });
+
+    const context = await fixture.prepare({
+      sessionKey: "agent:main:telegram:direct:peer",
+      prompt: "new credential turn",
+      provider: "claude-cli",
+      model: "opus",
+      cliSessionBinding: {
+        sessionId: "old-credential-session",
+        authProfileId: "anthropic:old-profile",
+      },
+      cliSessionId: "old-credential-session",
+    });
+
+    expect(context.reusableCliSession).toEqual({ mode: "none" });
+    expect(context.openClawHistoryPrompt).toBeUndefined();
   });
 
   it("checks claude-cli transcript content under the resolved cwd", async () => {

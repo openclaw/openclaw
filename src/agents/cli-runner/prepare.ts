@@ -1746,26 +1746,27 @@ export async function prepareCliRunContext(
     const controlOperationCliSessionId = isControlOperation
       ? params.cliSessionBinding?.sessionId.trim() || params.cliSessionId?.trim()
       : undefined;
+    const nativeCliSessionCandidate: CliReusableSession = controlOperationCliSessionId
+      ? { mode: "reuse", sessionId: controlOperationCliSessionId }
+      : params.cliSessionBinding
+        ? resolveCliSessionReuse({
+            binding: params.cliSessionBinding,
+            authProfileId: effectiveAuthProfileId,
+            authEpoch,
+            authEpochVersion: CLI_AUTH_EPOCH_VERSION,
+            extraSystemPromptHash,
+            messageToolPolicyHash,
+            promptToolNamesHash,
+            cwdHash,
+            mcpConfigHash: preparedBackendFinal.mcpConfigHash,
+            mcpResumeHash: preparedBackendFinal.mcpResumeHash,
+          })
+        : params.cliSessionId
+          ? { mode: "reuse", sessionId: params.cliSessionId }
+          : { mode: "none" };
     const reusableCliSessionCandidate: CliReusableSession = ignoreCliSessionCandidate
       ? { mode: "none" }
-      : controlOperationCliSessionId
-        ? { mode: "reuse", sessionId: controlOperationCliSessionId }
-        : params.cliSessionBinding
-          ? resolveCliSessionReuse({
-              binding: params.cliSessionBinding,
-              authProfileId: effectiveAuthProfileId,
-              authEpoch,
-              authEpochVersion: CLI_AUTH_EPOCH_VERSION,
-              extraSystemPromptHash,
-              messageToolPolicyHash,
-              promptToolNamesHash,
-              cwdHash,
-              mcpConfigHash: preparedBackendFinal.mcpConfigHash,
-              mcpResumeHash: preparedBackendFinal.mcpResumeHash,
-            })
-          : params.cliSessionId
-            ? { mode: "reuse", sessionId: params.cliSessionId }
-            : { mode: "none" };
+      : nativeCliSessionCandidate;
     const backendReusableCliSession: CliReusableSession =
       reusableCliSessionCandidate.mode === "reuse-with-drift" &&
       !canTransportSystemPrompt(preparedBackendFinal.backend)
@@ -1988,7 +1989,14 @@ export async function prepareCliRunContext(
     }
     const allowRawTranscriptReseed =
       backendResolved.config.reseedFromRawTranscriptWhenUncompacted === true;
-    const rawTranscriptReseedReason = reusableCliSessionId ? "session-expired" : invalidatedReason;
+    // None-mode has no native continuity, but an ignored binding can still carry
+    // an auth boundary that must block raw transcript reseeding.
+    const rawTranscriptReseedReason = reusableCliSessionId
+      ? "session-expired"
+      : (invalidatedReason ??
+        (preparedBackendFinal.backend.sessionMode === "none"
+          ? (resolveCliSessionInvalidatedReason(nativeCliSessionCandidate) ?? "no-native-session")
+          : undefined));
     // Node placement keeps this: the history prompt is built from the
     // gateway-side OpenClaw transcript, so a fresh remote CLI session still
     // receives prior conversation context via stdin.
