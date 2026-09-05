@@ -714,4 +714,72 @@ describe("context-engine turn outbox", () => {
       "pending durable turn advancement could not be completed before the next turn",
     );
   });
+
+  it("throws a descriptive error when existing outbox payload JSON is malformed", () => {
+    const stateDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), "openclaw-context-outbox-malformed-write-"),
+    );
+    tempDirs.push(stateDir);
+    const database = openOpenClawAgentDatabase({
+      agentId: "main",
+      env: { OPENCLAW_STATE_DIR: stateDir },
+    });
+    const payload = createPayload({
+      advancementKey: "session-a:malformed-write",
+      databasePath: database.path,
+      sequence: 1,
+      sessionId: "session-a",
+    });
+    enqueueContextEngineTurnCommit({ database, engineId: "test", payload });
+
+    // Corrupt the stored payload_json so the next write hits the JSON.parse path.
+    database.db
+      .prepare(
+        "UPDATE context_engine_turn_outbox SET payload_json = '{not-valid-json' WHERE advancement_key = ?",
+      )
+      .run(payload.boundary.admission.logicalTurnId);
+
+    expect(() => enqueueContextEngineTurnCommit({ database, engineId: "test", payload })).toThrow(
+      /Failed to parse existing outbox payload JSON/,
+    );
+  });
+
+  it("skips outbox rows with malformed payload JSON during recovery", () => {
+    const stateDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), "openclaw-context-outbox-malformed-recover-"),
+    );
+    tempDirs.push(stateDir);
+    const database = openOpenClawAgentDatabase({
+      agentId: "main",
+      env: { OPENCLAW_STATE_DIR: stateDir },
+    });
+    const payload = createPayload({
+      advancementKey: "session-a:malformed-recover",
+      databasePath: database.path,
+      sequence: 1,
+      sessionId: "session-a",
+    });
+    enqueueContextEngineTurnCommit({ database, engineId: "test", payload });
+
+    // Corrupt the stored payload_json so recovery hits the JSON.parse path.
+    database.db
+      .prepare(
+        "UPDATE context_engine_turn_outbox SET payload_json = '{not-valid-json' WHERE advancement_key = ?",
+      )
+      .run(payload.boundary.admission.logicalTurnId);
+
+    const warn = vi.fn();
+    recoverContextEngineTurnOutbox({
+      database,
+      engineId: "test",
+      sessionId: payload.boundary.admission.sessionId,
+      warn,
+    });
+
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "skipping outbox row with malformed payload JSON: session-a:malformed-recover",
+      ),
+    );
+  });
 });

@@ -127,7 +127,12 @@ function writeContextEngineTurnOutboxPayload(params: {
   );
   if (existing) {
     assertMatchingOutboxOwner(existing, params, advancementKey);
-    const existingPayload = JSON.parse(existing.payload_json) as ContextEngineTurnOutboxPayload;
+    let existingPayload: ContextEngineTurnOutboxPayload;
+    try {
+      existingPayload = JSON.parse(existing.payload_json) as ContextEngineTurnOutboxPayload;
+    } catch {
+      throw new Error(`Failed to parse existing outbox payload JSON for ${advancementKey}`);
+    }
     const transitionMatches =
       (params.payload.state === "accepted" &&
         existingPayload.state === "admitted" &&
@@ -279,7 +284,15 @@ export function recoverContextEngineTurnOutbox(params: {
       .orderBy(outboxEnqueueSequence(), "asc"),
   ).rows;
   for (const row of rows) {
-    const payload = JSON.parse(row.payload_json) as ContextEngineTurnOutboxPayload;
+    let payload: ContextEngineTurnOutboxPayload;
+    try {
+      payload = JSON.parse(row.payload_json) as ContextEngineTurnOutboxPayload;
+    } catch {
+      params.warn(
+        `[context-engine] skipping outbox row with malformed payload JSON: ${row.advancement_key}`,
+      );
+      continue;
+    }
     if (payload.state === "ready") {
       continue;
     }
