@@ -149,8 +149,8 @@ Plugins should declare `doctorContract.stateMigrations: true` in
 `openclaw.plugin.json` and export `stateMigrations` from their doctor-contract
 artifact. Plan-based migrations can use
 `definePluginDoctorMigrationFromPlans(...)` from
-`openclaw/plugin-sdk/runtime-doctor-migrations` to preserve existing move, copy, preview,
-and plugin-state import behavior.
+`openclaw/plugin-sdk/runtime-doctor-migrations` to preserve existing move, copy,
+preview, and plugin-state import behavior.
 
 For single-file imports, `defineLegacyJsonStateMigration(...)` skips missing
 sources (`ENOENT`) and values the plugin parser rejects with `null`. Other read
