@@ -1155,6 +1155,25 @@ extension SettingsProTab {
             })
     }
 
+    /// Reads through the language-aware `resolvedOverride` so a voice deleted in system
+    /// settings, or one that no longer matches the current Speech Language after the user
+    /// changes it, shows as System Default immediately instead of a stale identifier the
+    /// picker's own option list no longer contains.
+    var talkSystemVoiceSelectionBinding: Binding<String> {
+        Binding(
+            get: {
+                TalkSystemVoiceSelection.resolvedOverride(
+                    self.talkSystemVoiceSelectionRaw,
+                    languageID: self.talkSpeechLocale == TalkSpeechLocale.automaticID ? nil : self.talkSpeechLocale)
+                    ?? ""
+            },
+            set: { newValue in
+                let voice = TalkSystemVoiceSelection.resolvedOverride(newValue) ?? ""
+                self.talkSystemVoiceSelectionRaw = voice
+                self.appModel.setTalkSystemVoiceSelection(voice)
+            })
+    }
+
     var talkSpeakerphoneBinding: Binding<Bool> {
         Binding(
             get: { self.talkSpeakerphoneEnabled },
