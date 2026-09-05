@@ -164,6 +164,44 @@ describe("ingress retry policy", () => {
     });
   });
 
+  it("dead-letters a restart-recovery tombstone failure immediately", () => {
+    const message =
+      'Session "agent:main:main" ended during restart recovery. Use /new or /reset to start a replacement session.';
+    const wrapped = Object.assign(new Error("BotError in middleware"), {
+      error: new Error("telegram spooled update processing failed", {
+        cause: Object.assign(new Error(message), {
+          code: "SESSION_RESTART_RECOVERY_TOMBSTONE",
+        }),
+      }),
+    });
+    // Fresh event: no attempt floor and no dead-letter age gate met.
+    expect(
+      resolveIngressFailureDisposition({
+        err: wrapped,
+        event: { receivedAt: 1_000, attempts: 0 },
+        formatError: coerceErrorMessage,
+        config: { maxAttempts: 8, deadLetterMinAgeMs: 24 * 60 * 60 * 1000 },
+        now: 2_000,
+      }),
+    ).toEqual({
+      kind: "fail",
+      reason: "restart-recovery-tombstone",
+      message: wrapped.message,
+      attempt: 1,
+    });
+    // The stable code also survives without wrapper nesting.
+    expect(
+      resolveIngressFailureDisposition({
+        err: Object.assign(new Error(message), {
+          code: "SESSION_RESTART_RECOVERY_TOMBSTONE",
+        }),
+        event: { receivedAt: 1_000, attempts: 425 },
+        formatError: coerceErrorMessage,
+        now: 2_000,
+      }),
+    ).toMatchObject({ kind: "fail", reason: "restart-recovery-tombstone", attempt: 426 });
+  });
+
   it("bounds a wrapped session-start conflict at the configured attempt budget", () => {
     const maxAttempts = 3;
     const message = 'Session "agent:main:telegram:direct:1" changed while starting work. Retry.';

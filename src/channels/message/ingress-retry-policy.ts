@@ -7,7 +7,10 @@ import {
   collectNestedErrorCandidates,
   extractErrorCode,
 } from "@openclaw/normalization-core/error-coercion";
-import { SESSION_WORK_START_CHANGED_ERROR_CODE } from "../../config/sessions/work-start-error.js";
+import {
+  SESSION_RESTART_RECOVERY_TOMBSTONE_ERROR_CODE,
+  SESSION_WORK_START_CHANGED_ERROR_CODE,
+} from "../../config/sessions/work-start-error.js";
 import { computeBackoff } from "../../infra/backoff.js";
 
 export const DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS = 8;
@@ -50,6 +53,12 @@ type IngressFailureDisposition =
 function isSessionStartConflictFailure(error: unknown): boolean {
   return collectNestedErrorCandidates(error).some(
     (candidate) => extractErrorCode(candidate) === SESSION_WORK_START_CHANGED_ERROR_CODE,
+  );
+}
+
+function isRestartRecoveryTombstoneFailure(error: unknown): boolean {
+  return collectNestedErrorCandidates(error).some(
+    (candidate) => extractErrorCode(candidate) === SESSION_RESTART_RECOVERY_TOMBSTONE_ERROR_CODE,
   );
 }
 
@@ -118,6 +127,18 @@ export function resolveIngressFailureDisposition(params: {
       kind: "fail",
       reason: nonRetryable.reason,
       message: nonRetryable.message,
+      attempt,
+    };
+  }
+  // A restart-recovery tombstone rejects every non-reset dispatch until the
+  // session is replaced; retrying cannot succeed, and keeping the event at the
+  // head of an ordered lane blocks the reset command behind it. Dead-letter it
+  // immediately so the queued remedy can reach lifecycle admission.
+  if (isRestartRecoveryTombstoneFailure(params.err)) {
+    return {
+      kind: "fail",
+      reason: "restart-recovery-tombstone",
+      message,
       attempt,
     };
   }
