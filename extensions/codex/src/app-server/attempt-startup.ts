@@ -164,7 +164,13 @@ export async function startCodexAttemptThread(params: {
   persistentWebSearchAllowed?: boolean;
   webSearchAllowed: boolean;
   developerInstructions: string | undefined;
+  /** Developer instructions used only when a physical start or cold resume needs frozen replay. */
+  coldDeveloperInstructions?: string;
   agentWorkspaceDeveloperInstructions?: string;
+  agentWorkspaceDeveloperInstructionsAllowed?: boolean;
+  captureNativeProjectInstructions?: boolean;
+  projectInstructionsUnavailableToGateway?: boolean;
+  nativeProjectDocsDisabledOnResume?: boolean;
   finalConfigPatch?: Parameters<typeof startOrResumeThread>[0]["finalConfigPatch"];
   buildFinalConfigPatch?: Parameters<typeof startOrResumeThread>[0]["buildFinalConfigPatch"];
   nativeHookRelayGeneration?: string;
@@ -428,10 +434,6 @@ export async function startCodexAttemptThread(params: {
               await releaseStartupSandboxEnvironment();
               throw error;
             }
-            const startupEnvironmentSelection = resolveCodexSandboxEnvironmentSelection(
-              startupSandboxEnvironment,
-              params.nativeToolSurfaceEnabled,
-            );
             const startupExecutionCwd = resolveCodexAppServerExecutionCwd({
               effectiveCwd: params.effectiveCwd,
               localWorkspaceRoot: params.effectiveWorkspace,
@@ -439,6 +441,13 @@ export async function startCodexAttemptThread(params: {
               nativeToolSurfaceEnabled: params.nativeToolSurfaceEnabled,
               remoteWorkspaceRoot: params.appServer.remoteWorkspaceRoot,
             });
+            const startupEnvironmentSelection = resolveCodexSandboxEnvironmentSelection(
+              startupSandboxEnvironment,
+              params.nativeToolSurfaceEnabled,
+              params.captureNativeProjectInstructions || params.nativeProjectDocsDisabledOnResume
+                ? startupExecutionCwd
+                : undefined,
+            );
             const startupSandboxPolicy = startupSandboxEnvironment
               ? resolveCodexExternalSandboxPolicyForOpenClawSandbox(params.sandbox)
               : undefined;
@@ -485,7 +494,14 @@ export async function startCodexAttemptThread(params: {
                 webSearchAllowed: params.webSearchAllowed,
                 appServer: pluginAppServer,
                 developerInstructions: params.developerInstructions,
+                coldDeveloperInstructions: params.coldDeveloperInstructions,
                 agentWorkspaceDeveloperInstructions: params.agentWorkspaceDeveloperInstructions,
+                agentWorkspaceDeveloperInstructionsAllowed:
+                  params.agentWorkspaceDeveloperInstructionsAllowed,
+                captureNativeProjectInstructions: params.captureNativeProjectInstructions,
+                projectInstructionsUnavailableToGateway:
+                  params.projectInstructionsUnavailableToGateway,
+                nativeProjectDocsDisabledOnResume: params.nativeProjectDocsDisabledOnResume,
                 config: threadConfig,
                 shellEnvironment: params.shellEnvironment,
                 disableLoginShell: params.disableLoginShell,
@@ -703,7 +719,6 @@ export async function startCodexAttemptThread(params: {
     params.signal.removeEventListener("abort", abandonStartupAcquire);
   }
 }
-
 function shouldRetireCodexStartupClient(
   error: unknown,
   spawnedBy: EmbeddedRunAttemptParams["spawnedBy"],
