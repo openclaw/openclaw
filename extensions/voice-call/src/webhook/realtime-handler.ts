@@ -321,6 +321,7 @@ type RealtimeCallEndCause = "completed" | "disconnect" | "shutdown" | "inactivit
 // record termination. Replacement can retire old audio without a late close killing its successor.
 type RealtimeTelephonyBinding = {
   bridge: ActiveRealtimeVoiceBridge;
+  acknowledgeCarrierMark: (markName?: string) => void;
   close: (cause: RealtimeCallEndCause) => Promise<void>;
   endCall: () => void;
   noteMediaActivity: () => void;
@@ -519,7 +520,8 @@ export class RealtimeCallHandler {
             return;
           }
           if (frame.kind === "mark") {
-            telephonyBinding.bridge.acknowledgeMark();
+            telephonyBinding.acknowledgeCarrierMark(frame.name);
+            telephonyBinding.bridge.acknowledgeMark(frame.name);
             return;
           }
           if (frame.kind === "error") {
@@ -819,7 +821,11 @@ export class RealtimeCallHandler {
       }
       return true;
     };
+    const pendingMarkAcks = new Map<string, () => void>();
     const audioPacer = new RealtimeAudioPacer({
+      // Every pacer reset discards queued marks, so their stored provider
+      // acknowledgements can never fire and must be retired with them.
+      onPlaybackReset: () => pendingMarkAcks.clear(),
       send: sendString,
       serializer: {
         media: (payload) => adapter.serializeMedia(payload),
@@ -865,10 +871,13 @@ export class RealtimeCallHandler {
       triggerGreetingOnReady: Boolean(initialGreetingInstructions),
       audioSink: {
         isOpen: () => ws.readyState === WebSocket.OPEN,
-        sendAudio: (muLaw) => {
+        sendAudio: (muLaw, metadata) => {
           harness.recordOutputAudio(muLaw);
-          audioPacer.sendAudio(muLaw);
+          audioPacer.sendAudio(muLaw, metadata);
         },
+        // Telephony pacing knows what actually reached the line; the provider's
+        // inbound media clock can run far ahead of playout.
+        getPlaybackState: () => audioPacer.getPlaybackState(),
         clearAudio: (reason) => {
           harness.flushOutput(() => {
             const clearedBytes = audioPacer.clearAudio();
@@ -882,8 +891,11 @@ export class RealtimeCallHandler {
             harness.finishOutputAudio("clear");
           });
         },
-        sendMark: (markName) => {
+        sendMark: (markName, acknowledge) => {
           audioPacer.sendMark(markName);
+          if (markName && acknowledge) {
+            pendingMarkAcks.set(markName, acknowledge);
+          }
         },
       },
       onTranscript: (role, text, isFinal) => {
@@ -1216,6 +1228,19 @@ export class RealtimeCallHandler {
     };
     const telephonyBinding: RealtimeTelephonyBinding = {
       bridge: session,
+      acknowledgeCarrierMark: (markName) => {
+        // Retire the played prefix before provider acknowledgement so any
+        // truncation snapshot no longer carries carrier-confirmed items.
+        audioPacer.acknowledgeMark(markName);
+        if (!markName) {
+          return;
+        }
+        const acknowledge = pendingMarkAcks.get(markName);
+        if (acknowledge) {
+          pendingMarkAcks.delete(markName);
+          acknowledge();
+        }
+      },
       close: (cause) => closeBinding(telephonyBinding, cause),
       endCall: () => {
         // Close the provider session before the carrier socket so no pending
