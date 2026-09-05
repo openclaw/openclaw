@@ -19,6 +19,7 @@ import {
 } from "./markdown.js";
 import type { MentionTarget } from "./mention-target.types.js";
 import { buildMentionedCardContent } from "./mention.js";
+import { parseMergeForwardContent } from "./merge-forward.js";
 import { resolveFeishuCardTemplate } from "./native-card.js";
 import { parsePostContent } from "./post.js";
 import { resolveFeishuReceiptKind, toFeishuSendResult } from "./send-result.js";
@@ -305,6 +306,26 @@ export async function getMessageFeishu(params: {
 
     if (response.code !== 0) {
       return null;
+    }
+
+    // A merged-forward message get returns the container plus every forwarded
+    // child in data.items. The container alone renders as a placeholder, so
+    // expand the same ordered children the direct receive path produces. The
+    // container is located by its markers, not by response position.
+    const items = response.data?.items;
+    if (items && items.length > 1) {
+      const container = items.find(
+        (entry) =>
+          entry.msg_type === "merge_forward" &&
+          !("upper_message_id" in entry && entry.upper_message_id !== undefined),
+      );
+      if (container) {
+        const info = parseFeishuMessageItem(container, container.message_id ?? messageId);
+        return {
+          ...info,
+          content: parseMergeForwardContent({ content: JSON.stringify(items) }),
+        };
+      }
     }
 
     // Support both list shape (data.items[0]) and single-object shape (data as message)
