@@ -6765,9 +6765,18 @@ describe("update-cli", () => {
       const events: string[] = [];
       spawn.mockImplementationOnce((_node, _argv, options: { env: NodeJS.ProcessEnv }) => {
         const child = new EventEmitter();
+        const resultPath = requireValue(
+          options.env.OPENCLAW_UPDATE_POST_CORE_RESULT_PATH,
+          "post-core result path",
+        );
+        const childResultPath = `${resultPath}.child`;
         queueMicrotask(() => {
           void withEnvAsync(
-            { OPENCLAW_COMPATIBILITY_HOST_VERSION: undefined, ...options.env },
+            {
+              OPENCLAW_COMPATIBILITY_HOST_VERSION: undefined,
+              ...options.env,
+              OPENCLAW_UPDATE_POST_CORE_RESULT_PATH: childResultPath,
+            },
             async () => {
               const { resumePostCoreUpdate } =
                 await import("./update-cli/update-command-resume.js");
@@ -6778,10 +6787,14 @@ describe("update-cli", () => {
                 timeoutMs: 30_000,
               });
             },
-          ).then(
-            () => child.emit("exit", 0, null),
-            (error: unknown) => child.emit("error", error),
-          );
+          )
+            .then(async () => {
+              // This in-process child must restore its environment before the parent
+              // can observe completion; a real subprocess cannot mutate the parent.
+              await fs.rename(childResultPath, resultPath);
+              child.emit("exit", 0, null);
+            })
+            .catch((error: unknown) => child.emit("error", error));
         });
         return child;
       });
