@@ -1,4 +1,3 @@
-// Skill runtime refresh helpers reload active skill state and notify subscribers.
 import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs";
 import os from "node:os";
@@ -20,6 +19,7 @@ import {
   resolveAllowedSkillSymlinkTargetRealPaths,
   tryRealpath,
 } from "../loading/symlink-targets.js";
+import { createWorkshopWatcherKey, resolveWorkshopWatchRoots } from "../workshop/skills-root.js";
 import {
   bumpSkillsSnapshotVersion,
   clearSkillsSnapshotVersionForWorkspace,
@@ -108,6 +108,7 @@ const DEFAULT_SKILLS_WATCH_IGNORED: RegExp[] = [
 function resolveWatchTargets(
   workspaceDir: string,
   config: OpenClawConfig | undefined,
+  agentId: string | undefined,
   executionSkillsDir: string | undefined,
   watcherKey: string,
   pluginMetadataSnapshot: PluginMetadataSnapshot | undefined,
@@ -123,6 +124,7 @@ function resolveWatchTargets(
   if (executionSkillsDir) {
     baseRoots.push({ path: executionSkillsDir, source: "openclaw-workspace" });
   }
+  baseRoots.push(...resolveWorkshopWatchRoots(config, agentId));
   baseRoots.push({ path: path.join(CONFIG_DIR, "skills"), source: "openclaw-managed" });
   if (isDefaultStateDir()) {
     baseRoots.push({
@@ -431,8 +433,12 @@ function readFileStabilitySnapshot(filePath: string): FileStabilitySnapshot | un
   }
 }
 
-async function waitForStableSkillFile(filePath: string, stabilityMs: number): Promise<void> {
-  if (stabilityMs <= 0) {
+async function waitForStableSkillFile(
+  filePath: string,
+  stabilityMs: number,
+  watcher: FSWatcher,
+): Promise<void> {
+  if (watcher.closed || stabilityMs <= 0) {
     return;
   }
   let previous = readFileStabilitySnapshot(filePath);
@@ -445,7 +451,8 @@ async function waitForStableSkillFile(filePath: string, stabilityMs: number): Pr
     await new Promise<void>((resolve) => {
       setTimeout(resolve, delayMs);
     });
-    const next = readFileStabilitySnapshot(filePath);
+    // Closing a watcher retires raw polling, even while the file keeps changing.
+    const next = watcher.closed ? undefined : readFileStabilitySnapshot(filePath);
     if (!next) {
       return;
     }
@@ -546,7 +553,7 @@ function createSkillsPathWatcher(target: WatchTarget): SkillsPathWatchState {
     }, SKILLS_WATCH_DEBOUNCE_MS);
   };
   const scheduleRawSkillFile = (changedPath: string) => {
-    void waitForStableSkillFile(changedPath, SKILLS_WATCH_DEBOUNCE_MS)
+    void waitForStableSkillFile(changedPath, SKILLS_WATCH_DEBOUNCE_MS, watcher)
       .catch((err: unknown) => {
         log.warn(`skills watcher stability check failed (${changedPath}): ${String(err)}`);
       })
@@ -586,11 +593,15 @@ function createSkillsPathWatcher(target: WatchTarget): SkillsPathWatchState {
   return state;
 }
 
-function teardownSkillsPathWatcher(state: SkillsPathWatchState): void {
+async function teardownSkillsPathWatcher(state: SkillsPathWatchState): Promise<void> {
   if (state.timer) {
     clearTimeout(state.timer);
   }
-  void state.watcher.close().catch(() => {});
+  try {
+    await state.watcher.close();
+  } catch {
+    // Closing watchers is best effort, including during replacement and shutdown.
+  }
 }
 
 function subscribeWorkspaceToPath(workspaceDir: string, watchTarget: WatchTarget): void {
@@ -613,7 +624,7 @@ function subscribeWorkspaceToPath(workspaceDir: string, watchTarget: WatchTarget
       next.subscribers.add(subscriber);
     }
     next.subscribers.add(workspaceDir);
-    teardownSkillsPathWatcher(existing);
+    void teardownSkillsPathWatcher(existing);
     pathWatchers.set(watchTarget.path, next);
     return;
   }
@@ -629,7 +640,7 @@ function unsubscribeWorkspaceFromPath(workspaceDir: string, watchTarget: WatchTa
   }
   state.subscribers.delete(workspaceDir);
   if (state.subscribers.size === 0) {
-    teardownSkillsPathWatcher(state);
+    void teardownSkillsPathWatcher(state);
     pathWatchers.delete(watchTarget.path);
   }
 }
@@ -668,15 +679,14 @@ export function ensureSkillsWatcher(params: {
   workspaceDir: string;
   executionSkillsDir?: string;
   config?: OpenClawConfig;
+  agentId?: string;
   pluginMetadataSnapshot?: PluginMetadataSnapshot;
 }) {
   const workspaceDir = params.workspaceDir.trim();
   if (!workspaceDir) {
     return;
   }
-  const watcherKey = params.executionSkillsDir
-    ? JSON.stringify([workspaceDir, params.executionSkillsDir])
-    : workspaceDir;
+  const watcherKey = createWorkshopWatcherKey(workspaceDir, params);
   workspaceWatchOwnerDirs.set(watcherKey, workspaceDir);
   const now = Date.now();
   const watchEnabled = params.config?.skills?.load?.watch !== false;
@@ -692,6 +702,7 @@ export function ensureSkillsWatcher(params: {
   const watchTargets = resolveWatchTargets(
     workspaceDir,
     params.config,
+    params.agentId,
     params.executionSkillsDir,
     watcherKey,
     params.pluginMetadataSnapshot,
@@ -737,18 +748,7 @@ export async function closeSkillsWatchers(resetState = false): Promise<void> {
   workspaceWatchOwnerDirs.clear();
   workspaceWatchTargetCache.clear();
   workspaceWatchLastEnsuredAt.clear();
-  await Promise.all(
-    active.map(async (state) => {
-      if (state.timer) {
-        clearTimeout(state.timer);
-      }
-      try {
-        await state.watcher.close();
-      } catch {
-        // Best-effort test cleanup.
-      }
-    }),
-  );
+  await Promise.all(active.map(teardownSkillsPathWatcher));
 }
 
 if (process.env.VITEST || process.env.NODE_ENV === "test") {
