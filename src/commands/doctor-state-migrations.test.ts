@@ -2593,6 +2593,16 @@ describe("doctor legacy state migrations", () => {
     expect(firstResult.warnings).toStrictEqual([
       `Failed archiving plugin-state sidecar ${walPath}: Error: forced archive failure`,
     ]);
+    expect(
+      firstResult.stepReceipts.find((receipt) => receipt.id === "plugin-state-sidecar"),
+    ).toMatchObject({
+      outcome: "refused",
+      changes: ["Migrated 1 plugin-state sidecar entry → shared SQLite state"],
+      refusal: { code: "step-refused" },
+    });
+    expect(
+      firstResult.stepReceipts.find((receipt) => receipt.id === "plugin-install-index"),
+    ).toBeUndefined();
     expect(fs.existsSync(sourcePath)).toBe(false);
     expect(fs.existsSync(`${sourcePath}.migrated`)).toBe(true);
     expect(fs.existsSync(walPath)).toBe(true);
@@ -4261,6 +4271,13 @@ describe("doctor legacy state migrations", () => {
       "profile workspace",
     );
     expect(result.changes).toContain(`Profile workspace: ${paths.legacyDir} → ${paths.targetDir}`);
+    expect(result.stepReceipts.find((receipt) => receipt.id === "profile-workspace")).toMatchObject(
+      {
+        source: [{ kind: "path", path: paths.legacyDir }],
+        target: [{ kind: "path", path: paths.targetDir }],
+        outcome: "completed",
+      },
+    );
     expect(log.info).toHaveBeenCalledWith(expect.stringContaining(paths.targetDir));
   });
 
@@ -4276,6 +4293,12 @@ describe("doctor legacy state migrations", () => {
 
     const warning = `Profile workspace migration skipped: target already exists (${paths.targetDir}). Kept legacy workspace at ${paths.legacyDir}; merge manually.`;
     expect(result.warnings).toContain(warning);
+    expect(result.stepReceipts.find((receipt) => receipt.id === "profile-workspace")).toMatchObject(
+      {
+        outcome: "refused",
+        refusal: { code: "step-refused", message: warning },
+      },
+    );
     expect(log.warn).toHaveBeenCalledWith(expect.stringContaining(warning));
     expect(fs.readFileSync(path.join(paths.legacyDir, "legacy.txt"), "utf8")).toBe("legacy");
     expect(fs.readFileSync(path.join(paths.targetDir, "current.txt"), "utf8")).toBe("current");

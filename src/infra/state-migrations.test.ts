@@ -1862,6 +1862,17 @@ describe("state migrations", () => {
     const repaired = await runLegacyStateMigrations({ detected, config: cfg, env });
     expect(repaired.warnings).toStrictEqual([]);
     expect(repaired.changes).toContain("doctor-only plugin state migrated");
+    expect(repaired.stepReceipts.find((receipt) => receipt.id === "state-schema")).toMatchObject({
+      source: [{ kind: "sqlite", path: resolveOpenClawStateSqlitePath(env) }],
+      target: [{ kind: "sqlite", path: resolveOpenClawStateSqlitePath(env) }],
+    });
+    expect(
+      repaired.stepReceipts.find((receipt) => receipt.id === "plugin-doctor-state"),
+    ).toMatchObject({
+      source: [{ kind: "owner", id: "plugin:memory-core:memory-core-doctor-only-test" }],
+      target: [{ kind: "owner", id: "plugin:memory-core:doctor-state" }],
+      outcome: "completed",
+    });
     expect(detectLegacyState).toHaveBeenCalledTimes(2);
     expect(migrateLegacyState).toHaveBeenCalledOnce();
   });
@@ -2184,6 +2195,15 @@ describe("state migrations", () => {
       "Migrated 2 ACP session metadata rows → shared SQLite state",
       "Moved agent file settings.json → agents/worker-1/agent",
     ]);
+    expect(result.stepReceipts.find((receipt) => receipt.id === "sessions")).toMatchObject({
+      outcome: "warning",
+      warnings: [
+        `Preserved 1 ambiguous session key(s) while importing legacy sessions into ${targetStorePath}`,
+      ],
+    });
+    expect(result.stepReceipts.map((receipt) => receipt.id)).toEqual(
+      expect.arrayContaining(["acp-session-metadata", "agent-dir"]),
+    );
 
     const mergedStore = JSON.parse(
       await fs.readFile(
@@ -2423,9 +2443,12 @@ describe("state migrations", () => {
         await realSaveSessionStore(storePath, store, options);
       });
     try {
-      await expect(
-        runLegacyStateMigrations({ detected, config: cfg, now: () => 1234 }),
-      ).rejects.toThrow("simulated alias write failure");
+      const result = await runLegacyStateMigrations({ detected, config: cfg, now: () => 1234 });
+      expect(result.warnings).toContain("simulated alias write failure");
+      expect(result.stepReceipts.find((receipt) => receipt.id === "sessions")).toMatchObject({
+        outcome: "refused",
+        refusal: { code: "step-threw", message: "simulated alias write failure" },
+      });
     } finally {
       saveSpy.mockRestore();
     }
@@ -2535,17 +2558,24 @@ describe("state migrations", () => {
       >;
     });
 
-    it("preserves plugin ownership captured before an aliased store rewrite", () => {
+    it("preserves plugin ownership and receipts the alias refusal before dependent ACP work", () => {
       expect(targetStore["agent:main:desk"]?.sessionId).toBe("foreign-main");
       expect(targetStore["agent:worker-1:main"]?.sessionId).toBe("worker-main");
       expect(targetStore["agent:worker-1:desk"]).toBeUndefined();
       expect(targetStore["agent:worker-1:main"]).toHaveProperty("acp");
       expect(fsSync.statSync(configuredStorePath).ino).toBe(fsSync.statSync(targetStorePath).ino);
+      expect(result.stepReceipts.find((receipt) => receipt.id === "sessions")).toMatchObject({
+        outcome: "refused",
+        requiredness: "required",
+        refusal: { code: "step-refused" },
+      });
+      expect(
+        result.stepReceipts.find((receipt) => receipt.id === "acp-session-metadata"),
+      ).toBeUndefined();
       expect(result.warnings).toEqual(
         expect.arrayContaining([
           expect.stringContaining(`aliased store ${configuredStorePath}`),
           expect.stringContaining(`aliased store ${targetStorePath}`),
-          expect.stringContaining("Deferred ACP metadata migration"),
         ]),
       );
     });
@@ -2908,6 +2938,16 @@ describe("state migrations", () => {
     }
     expect(result.changes).toContain("Migrated 2 ACP session metadata rows → shared SQLite state");
     expect(result.warnings).toHaveLength(0);
+    const receipt = result.stepReceipts.find((entry) => entry.id === "acp-session-metadata");
+    expect(receipt).toMatchObject({ outcome: "completed" });
+    expect(receipt?.source).toEqual(expect.arrayContaining([{ kind: "path", path: storePath }]));
+    expect(receipt?.target).toEqual(
+      expect.arrayContaining([
+        { kind: "path", path: storePath },
+        { kind: "sqlite", path: resolveOpenClawStateSqlitePath(env) },
+      ]),
+    );
+    expect(receipt?.source).not.toContainEqual(expect.objectContaining({ kind: "sqlite" }));
   });
 
   it("preserves multi-owner rows through coalesced templated-store migration", async () => {
