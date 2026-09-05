@@ -1,8 +1,14 @@
 import path from "node:path";
-import { resolveSessionAgentIdStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
+import {
+  listAgentIds,
+  resolveAgentConfig,
+  resolveSessionAgentIdStrict,
+  resolveSubagentAllowedTargetIds,
+} from "openclaw/plugin-sdk/agent-scope-runtime";
 import { runTasksWithConcurrency } from "openclaw/plugin-sdk/concurrency-runtime";
 import type { MemoryReference, MemoryCitation } from "openclaw/plugin-sdk/memory-host-search";
 import { resolveIntegerOption } from "openclaw/plugin-sdk/number-runtime";
+import { normalizeAgentIdStrict } from "openclaw/plugin-sdk/routing";
 import { FsSafeError, root as fsRoot } from "openclaw/plugin-sdk/security-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -741,48 +747,51 @@ function isBridgeCompiledPage(page: QueryableWikiPage): boolean {
   );
 }
 
+// Page ownership metadata is whatever agent ids the memory provider recorded, so
+// it is normalized with the strict variant: a value that cannot be represented
+// as an agent id is dropped instead of folding onto the default agent id, which
+// the lenient `normalizeAgentId` would do and which would hand every malformed
+// page to whichever agent happens to be called that.
+function canonicalAgentIdOrNull(value: string): string | null {
+  const normalized = normalizeAgentIdStrict(value);
+  return normalized.ok ? normalized.value : null;
+}
+
 // Owners whose bridge pages a viewer may read. "owner" is the viewer alone;
-// "delegation" additionally trusts the agents the viewer is already allowed to
-// spawn, so read access cannot drift away from the delegation graph operators
-// already maintain. Delegation is deliberately not transitive: an A -> B -> C
-// chain cannot be spawned either, so granting reads across it would describe a
+// "delegation" additionally trusts the agents the viewer may already target with
+// sessions_spawn, so read access describes a delegation the operator has already
+// granted. Delegation is deliberately not transitive: an A -> B -> C chain
+// cannot be spawned either, so granting reads across it would describe a
 // delegation that cannot happen.
-// Owners whose bridge pages a viewer may read, or null when the delegation graph
-// cannot be evaluated at all.
 //
-// Returning null rather than "just the viewer" matters: a missing or unreadable
-// agent list is a configuration problem, and silently narrowing a delegation
-// viewer down to owner-only scope would hide pages the operator expected to be
-// visible while emitting nothing. Narrowing on missing input is the wrong
-// direction for this filter, so the caller treats null as "do not filter".
-//
-// An agent that is present in the graph with no delegates is a real answer, not
-// a missing one, and correctly yields owner-only scope.
+// The spawn policy is reused rather than re-derived from the roster here. It is
+// the only place that resolves per-agent overrides, inherited
+// `agents.defaults.subagents.allowAgents`, `"*"` expansion, and intersection
+// with the configured registry, and a second copy of those rules would drift as
+// the policy gains cases. Reusing it also means there is no separate
+// "graph unreadable" answer to invent: a config with no roster resolves exactly
+// as sessions_spawn resolves it, to the requester alone.
 function resolveBridgeOwnershipViewers(
   viewerId: string,
   appConfig: OpenClawConfig | undefined,
   mode: WikiBridgeOwnership,
-): Set<string> | null {
-  const viewers = new Set<string>([viewerId]);
-  if (mode !== "delegation") {
-    return viewers;
+): Set<string> {
+  if (mode !== "delegation" || !appConfig) {
+    // Without an app config there is no roster to read, and the spawn policy
+    // answers that input with the requester alone rather than with everyone.
+    return new Set<string>([viewerId]);
   }
-  const agents = appConfig?.agents?.list;
-  if (!Array.isArray(agents)) {
-    return null;
-  }
-  const entry = agents.find((agent) => normalizeLowercaseStringOrEmpty(agent?.id) === viewerId);
-  if (!entry) {
-    // The viewer is not in the graph, so its delegates are unknowable.
-    return null;
-  }
-  for (const delegate of entry.subagents?.allowAgents ?? []) {
-    const normalized = normalizeLowercaseStringOrEmpty(delegate);
-    if (normalized.length > 0) {
-      viewers.add(normalized);
-    }
-  }
-  return viewers;
+  const allowAgents =
+    resolveAgentConfig(appConfig, viewerId)?.subagents?.allowAgents ??
+    appConfig.agents?.defaults?.subagents?.allowAgents;
+  const allowed = resolveSubagentAllowedTargetIds({
+    requesterAgentId: viewerId,
+    allowAgents,
+    configuredAgentIds: listAgentIds(appConfig),
+  });
+  // A viewer always reads its own pages, even when an allowlist that excludes it
+  // narrows its spawn targets; sessions_spawn grants the same self-target.
+  return new Set<string>([viewerId, ...allowed.allowedIds]);
 }
 
 function createWikiPageVisibilityFilter(params: {
@@ -820,7 +829,13 @@ function createWikiPageVisibilityFilter(params: {
   const scopedAgentId = legacy
     ? normalizeLowercaseStringOrEmpty(params.resolvedAgentId?.trim()) || suppliedAgentId
     : suppliedAgentId;
-  if (scopedAgentId.length === 0) {
+  // Identity comparison follows the same split: legacy stays on plain lowercase
+  // strings, while configured modes measure viewer and page with the agent-id
+  // normalizer the spawn policy uses, so an `allowAgents` entry `"agent.b"`, the
+  // roster key `agent-b`, and a page that recorded `agent.b` denote one agent
+  // instead of three.
+  const viewerId = legacy ? scopedAgentId : canonicalAgentIdOrNull(scopedAgentId);
+  if (!viewerId) {
     // A sandboxed caller we cannot identify is precisely who this filter exists
     // to stop, so it stays closed for them. Configured filtering instead fails
     // open: an unidentified caller would otherwise receive an empty vault, which
@@ -833,14 +848,16 @@ function createWikiPageVisibilityFilter(params: {
   // to loosen the sandbox boundary too, so `ownership` governs non-sandboxed
   // callers only.
   const viewers = resolveBridgeOwnershipViewers(
-    scopedAgentId,
+    viewerId,
     params.appConfig,
     sandboxed ? "owner" : ownership,
   );
-  if (!viewers) {
-    // Delegation was requested but the graph could not be read. Do not filter.
-    return () => true;
-  }
+  const ownsPage = legacy
+    ? (bridgeAgentId: string) => viewers.has(normalizeLowercaseStringOrEmpty(bridgeAgentId))
+    : (bridgeAgentId: string) => {
+        const owner = canonicalAgentIdOrNull(bridgeAgentId);
+        return owner !== null && viewers.has(owner);
+      };
   return (page) =>
     !isBridgeCompiledPage(page) ||
     // A bridge page that records no owner is shared, not orphaned-and-hidden.
@@ -852,7 +869,7 @@ function createWikiPageVisibilityFilter(params: {
     // every page (see memory-state coercion), so for those deployments the
     // configured modes are a no-op rather than a partial filter.
     (!sandboxed && page.bridgeAgentIds.length === 0) ||
-    page.bridgeAgentIds.some((agentId) => viewers.has(normalizeLowercaseStringOrEmpty(agentId)));
+    page.bridgeAgentIds.some(ownsPage);
 }
 
 function shouldUseSharedMemory(config: ResolvedMemoryWikiConfig): boolean {
