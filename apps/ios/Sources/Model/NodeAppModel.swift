@@ -368,7 +368,13 @@ final class NodeAppModel {
 
     private(set) var isDesktopObserveAvailable: Bool = false
 
-    private(set) var hasOperatorAdminScope: Bool = false
+    // Privileged requests must notice authority loss even if UI observation coalesces a reconnect.
+    @ObservationIgnored private(set) var operatorAuthorityGeneration: UInt64 = 0
+    private(set) var hasOperatorAdminScope: Bool = false {
+        didSet {
+            if oldValue != self.hasOperatorAdminScope { self.operatorAuthorityGeneration &+= 1 }
+        }
+    }
 
     var gatewayServerName: String?
     var gatewayRemoteAddress: String?
@@ -564,7 +570,12 @@ final class NodeAppModel {
     private var completedPendingForegroundActionIDsByGateway: [String: Set<String>] = [:]
 
     var gatewayConnected = false
-    private var operatorConnected = false
+    private var operatorConnected = false {
+        didSet {
+            if oldValue != self.operatorConnected { self.operatorAuthorityGeneration &+= 1 }
+        }
+    }
+
     private var shareDeliveryChannel: String?
     private var shareDeliveryTo: String?
     private var apnsDeviceTokenHex: String?
@@ -936,7 +947,13 @@ final class NodeAppModel {
         }
     }
 
-    var activeGatewayConnectConfig: GatewayConnectConfig?
+    var activeGatewayConnectConfig: GatewayConnectConfig? {
+        didSet {
+            if oldValue?.controlUIInputs != self.activeGatewayConnectConfig?.controlUIInputs {
+                self.operatorAuthorityGeneration &+= 1
+            }
+        }
+    }
 
     private static let watchExecApprovalBridgeStateKey = "watch.execApproval.bridge.state.v1"
     private static let backgroundAliveLastSuccessAtMsKey = "gateway.backgroundAlive.lastSuccessAtMs"
@@ -1312,6 +1329,7 @@ final class NodeAppModel {
     }
 
     func setVoiceWakeEnabled(_ enabled: Bool) {
+        UserDefaults.standard.set(enabled, forKey: VoiceWakePreferences.enabledKey)
         self.voiceWake.setEnabled(enabled)
         if enabled {
             // If talk is enabled, voice wake should not grab the mic.
@@ -1561,7 +1579,11 @@ final class NodeAppModel {
         self.talkMode.applyAudioRoutePreferenceChanged()
     }
 
-    func requestLocationPermissions(mode: OpenClawLocationMode) async -> Bool {
+    func requestLocationPermissions(
+        mode: OpenClawLocationMode,
+        isCurrent: @MainActor () -> Bool = { true }) async -> Bool
+    {
+        guard !Task.isCancelled, isCurrent() else { return false }
         guard mode != .off else {
             self.reconcileSignificantLocationMonitoring(
                 mode: mode,
@@ -1569,6 +1591,7 @@ final class NodeAppModel {
             return true
         }
         let status = await locationService.ensureAuthorization(mode: mode)
+        guard !Task.isCancelled, isCurrent() else { return false }
         switch status {
         case .authorizedAlways:
             self.reconcileSignificantLocationMonitoring(mode: mode, authorizationStatus: status)
