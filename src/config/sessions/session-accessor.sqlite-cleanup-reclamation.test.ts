@@ -20,7 +20,26 @@ import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target
 
 const archiveMaterializationHook = vi.hoisted(() => ({
   afterMaterialize: undefined as (() => void) | undefined,
+  commitWaitsMs: new Array<number>(),
 }));
+
+vi.mock("./session-accessor.sqlite-reclamation-commit.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("./session-accessor.sqlite-reclamation-commit.js")>();
+  return {
+    ...actual,
+    authorizeSqliteReclamationCommit: (
+      ...args: Parameters<typeof actual.authorizeSqliteReclamationCommit>
+    ) => {
+      const started = performance.now();
+      try {
+        return actual.authorizeSqliteReclamationCommit(...args);
+      } finally {
+        archiveMaterializationHook.commitWaitsMs.push(performance.now() - started);
+      }
+    },
+  };
+});
 
 vi.mock("./session-accessor.sqlite-archive.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./session-accessor.sqlite-archive.js")>();
@@ -42,6 +61,7 @@ describe("SQLite lifecycle cleanup reclamation", () => {
   let storePath: string;
 
   beforeEach(() => {
+    archiveMaterializationHook.commitWaitsMs.length = 0;
     storePath = path.join(
       tempDirs.make("openclaw-session-cleanup-reclamation-"),
       "agents",
@@ -53,6 +73,7 @@ describe("SQLite lifecycle cleanup reclamation", () => {
 
   afterEach(() => {
     archiveMaterializationHook.afterMaterialize = undefined;
+    archiveMaterializationHook.commitWaitsMs.length = 0;
     closeOpenClawAgentDatabasesForTest();
   });
 
@@ -279,12 +300,15 @@ describe("SQLite lifecycle cleanup reclamation", () => {
     const maxGapMs = Math.max(...samples);
     if (process.env.OPENCLAW_TEST_RECLAMATION_LOG === "1") {
       process.stdout.write(
-        `${JSON.stringify({ owner: "lifecycle-cleanup", rows, maxGapMs, result })}\n`,
+        `${JSON.stringify({ owner: "lifecycle-cleanup", rows, maxGapMs, commitWaitsMs: archiveMaterializationHook.commitWaitsMs, result })}\n`,
       );
     }
     expect(result).toEqual({ removedEntries: 1, archivedTranscriptArtifacts: 1 });
     expect(samples.length).toBeGreaterThan(0);
-    expect(maxGapMs).toBeLessThan(500);
+    expect(
+      maxGapMs,
+      `Parent commit-authority waits (ms): ${JSON.stringify(archiveMaterializationHook.commitWaitsMs)}`,
+    ).toBeLessThan(500);
     expect(loadSessionEntry({ sessionKey, storePath })).toBeUndefined();
     expect(loadSessionEntry({ sessionKey: unrelatedKey, storePath })).toMatchObject({
       sessionId: unrelatedSessionId,
