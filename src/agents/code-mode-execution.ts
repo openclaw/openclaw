@@ -52,6 +52,7 @@ import {
 import { runCodeModeWorker } from "./code-mode-worker.js";
 import type { AgentToolUpdateCallback } from "./runtime/index.js";
 import type { ToolResultBudget } from "./tool-result-limits.js";
+import { resolveUnavailableMcpServers } from "./tool-search-lookup-miss.js";
 import { ToolSearchRuntime } from "./tool-search-runtime.js";
 import type { ToolSearchToolContext } from "./tool-search-types.js";
 import { ToolInputError } from "./tools/common.js";
@@ -94,7 +95,11 @@ export async function runCodeModeExec(params: {
   const approvalWait = observeAgentRunApprovalWait(params.ctx);
   const owner = createCodeModeRunOwner(params.ctx);
   const signal = owner.bindCall(params.signal);
-  const output = new CodeModeOutputState(config.maxOutputBytes, params.resultBudget);
+  const output = new CodeModeOutputState(
+    config.maxOutputBytes,
+    params.resultBudget,
+    resolveUnavailableMcpServers(params.ctx),
+  );
   try {
     const remainingMs = deadlineMs - performance.now();
     if (remainingMs <= 0) {
