@@ -22,7 +22,7 @@ const mocks = vi.hoisted(() => ({
   createServiceConfigIO: vi.fn(),
   readServiceState: vi.fn(),
   restartService: vi.fn<typeof import("./update-command-service.js").maybeRestartService>(
-    async () => true,
+    async () => "ok",
   ),
   revalidateService:
     vi.fn<
@@ -355,28 +355,31 @@ describe("successful update finalization ordering", () => {
     expect(mocks.restartService).toHaveBeenCalledOnce();
   });
 
-  it("keeps an unhealthy restart blocking before completion refresh", async () => {
-    Object.defineProperty(process.stdin, "isTTY", { configurable: true, value: true });
-    mocks.restartService.mockResolvedValueOnce(false);
+  it.each(["failed", "restart-health-failed"] as const)(
+    "keeps %s blocking before completion refresh",
+    async (outcome) => {
+      Object.defineProperty(process.stdin, "isTTY", { configurable: true, value: true });
+      mocks.restartService.mockResolvedValueOnce(outcome);
 
-    await expect(finishSuccessfulPackageSwitch()).rejects.toMatchObject({
-      name: "UpdateCommandFailure",
-      exitCode: 1,
-      result: { status: "error", reason: "restart-unhealthy" },
-    });
+      await expect(finishSuccessfulPackageSwitch()).rejects.toMatchObject({
+        name: "UpdateCommandFailure",
+        exitCode: 1,
+        result: { status: "error", reason: "restart-unhealthy" },
+      });
 
-    expect(mocks.printResult).toHaveBeenCalledOnce();
-    expect(mocks.printResult).toHaveBeenCalledWith(
-      expect.objectContaining({ status: "error", reason: "restart-unhealthy" }),
-      expect.any(Object),
-      expect.any(Object),
-    );
-    expect(mocks.markSentinelFailure).toHaveBeenCalledWith(
-      expect.objectContaining({ reason: "restart-unhealthy" }),
-    );
-    expect(defaultRuntime.exit).not.toHaveBeenCalled();
-    expect(mocks.checkCompletionStatus).not.toHaveBeenCalled();
-  });
+      expect(mocks.printResult).toHaveBeenCalledOnce();
+      expect(mocks.printResult).toHaveBeenCalledWith(
+        expect.objectContaining({ status: "error", reason: "restart-unhealthy" }),
+        expect.any(Object),
+        expect.any(Object),
+      );
+      expect(mocks.markSentinelFailure).toHaveBeenCalledWith(
+        expect.objectContaining({ reason: "restart-unhealthy" }),
+      );
+      expect(defaultRuntime.exit).not.toHaveBeenCalled();
+      expect(mocks.checkCompletionStatus).not.toHaveBeenCalled();
+    },
+  );
 
   it("reports elapsed time through restart and shell completion refresh", async () => {
     let now = 1_000;
@@ -384,7 +387,7 @@ describe("successful update finalization ordering", () => {
     Object.defineProperty(process.stdin, "isTTY", { configurable: true, value: true });
     mocks.restartService.mockImplementationOnce(async () => {
       now += 200;
-      return true;
+      return "ok";
     });
     mocks.checkCompletionStatus.mockImplementationOnce(async () => {
       now += 300;
@@ -859,7 +862,7 @@ describe("successful update finalization ordering", () => {
         env: serviceEnv,
         command: { programArguments, environment: serviceEnv },
       });
-      mocks.restartService.mockResolvedValueOnce(activated);
+      mocks.restartService.mockResolvedValueOnce(activated ? "ok" : "failed");
       const finishing = finishSuccessfulPackageSwitch({
         previousRoot: "/tmp/openclaw-update",
         packageRoot: "/tmp/openclaw-update",

@@ -594,7 +594,7 @@ export async function finishUpdate(params: {
     });
 
     await restoreWindowsAutoStart(resultWithPostUpdate);
-    const restartOk = await withOwnedManagedUpdateEnv(params.ownedManagedUpdateEnv, async () =>
+    const restartOutcome = await withOwnedManagedUpdateEnv(params.ownedManagedUpdateEnv, async () =>
       maybeRestartService({
         shouldRestart: params.shouldRestart && serviceMutationAllowed,
         result: resultWithPostUpdate,
@@ -614,7 +614,7 @@ export async function finishUpdate(params: {
         timeoutMs: params.updateStepTimeoutMs,
       }),
     );
-    if (!restartOk) {
+    if (restartOutcome !== "ok") {
       // The Gateway may already have consumed the notification. Mark only an
       // existing sentinel; recreating it would deliver the update twice.
       await markControlPlaneUpdateRestartSentinelFailureBestEffort({
