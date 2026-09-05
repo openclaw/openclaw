@@ -64,12 +64,13 @@ function getSnapshotProcessId(entry: WindowsProcessSnapshotEntry): number | null
   return typeof pid === "number" && Number.isFinite(pid) && pid > 0 ? pid : null;
 }
 
-export function findInstalledProcessPid(
+export function findInstalledProcessPids(
   entries: WindowsProcessSnapshotEntry[],
   port: number,
   installedArguments: string[],
   matchesProcess: (argv: string[]) => boolean,
-): number | null {
+): number[] {
+  const pids: number[] = [];
   for (const entry of entries) {
     const commandLine = normalizeLowercaseStringOrEmpty(entry.CommandLine ?? "");
     if (!commandLine) {
@@ -85,10 +86,19 @@ export function findInstalledProcessPid(
     }
     const pid = getSnapshotProcessId(entry);
     if (pid) {
-      return pid;
+      pids.push(pid);
     }
   }
-  return null;
+  return pids;
+}
+
+export function findInstalledProcessPid(
+  entries: WindowsProcessSnapshotEntry[],
+  port: number,
+  installedArguments: string[],
+  matchesProcess: (argv: string[]) => boolean,
+): number | null {
+  return findInstalledProcessPids(entries, port, installedArguments, matchesProcess)[0] ?? null;
 }
 
 async function resolveScheduledTaskProcess(
