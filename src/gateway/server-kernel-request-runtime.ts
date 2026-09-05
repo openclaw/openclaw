@@ -195,6 +195,8 @@ export async function prepareGatewayKernelRequestRuntime(params: {
         ? {
             workerPlacementDiskSpaceReader: workerPlacementRuntime.diskSpace,
             workerPlacementRunnerAvailabilityReader: workerPlacementRuntime.runnerAvailability,
+            workerRepositoryWorkspaceMutationService:
+              workerPlacementRuntime.repositoryWorkspaceMutationService,
           }
         : {}),
       ...(workerPlacementControlAvailable
