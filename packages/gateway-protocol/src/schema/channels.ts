@@ -366,6 +366,12 @@ const TalkCatalogProviderSchema = closedObject({
   models: Type.Optional(Type.Array(Type.String())),
   voices: Type.Optional(Type.Array(Type.String())),
   voicesByModel: Type.Optional(Type.Record(Type.String(), Type.Array(Type.String()))),
+  authMethods: Type.Optional(
+    Type.Array(closedObject({ id: NonEmptyString, label: NonEmptyString })),
+  ),
+  selectedAuthMethod: Type.Optional(NonEmptyString),
+  effectiveModel: Type.Optional(NonEmptyString),
+  effectiveTransport: Type.Optional(TalkTransportSchema),
   defaultModel: Type.Optional(Type.String()),
   modes: Type.Optional(Type.Array(TalkModeSchema)),
   transports: Type.Optional(Type.Array(TalkTransportSchema)),
@@ -448,7 +454,12 @@ export const TalkSessionOkResultSchema = closedObject({
 const BrowserRealtimeWebRtcSdpSessionSchema = closedObject({
   provider: NonEmptyString,
   transport: Type.Literal("webrtc"),
+  authMethod: Type.Optional(Type.Union([Type.Literal("oauth"), Type.Literal("api-key")])),
   voiceSessionId: NonEmptyString,
+  transcriptOwner: Type.Optional(Type.Union([Type.Literal("client"), Type.Literal("gateway")])),
+  controlSource: Type.Optional(
+    Type.Union([Type.Literal("delegation"), Type.Literal("transcript")]),
+  ),
   clientSecret: NonEmptyString,
   offerUrl: Type.Optional(Type.String()),
   offerHeaders: Type.Optional(Type.Record(Type.String(), Type.String())),

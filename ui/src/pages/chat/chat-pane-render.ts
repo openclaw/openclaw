@@ -65,6 +65,7 @@ import {
 } from "./components/chat-session-workspace.ts";
 import { createLinkFaviconFetcher } from "./link-favicon-loader.ts";
 import { activeQueuedMessageEdit } from "./queued-message-edit.ts";
+import { realtimeTalkStatusDetail } from "./realtime-talk-shared.ts";
 import { hasAbortableSessionRun, hasDirectSessionRun } from "./run-lifecycle.ts";
 import { scheduleChatScroll } from "./scroll.ts";
 import { maybeResetToolStream } from "./stream-reconciliation.ts";
@@ -97,7 +98,6 @@ export class ChatPane extends ChatPaneLayoutRender {
       digest: observerDigest,
     });
     const workspaceConflict = workspaceResultConflictFromPlacement(selectedSession?.placement);
-    const placement = selectedSession?.placement;
     const visibleWorkspaceConflict =
       workspaceConflict &&
       this.dismissedWorkspaceConflictRefs.get(selectedSession?.key ?? state.sessionKey) !==
@@ -305,7 +305,7 @@ export class ChatPane extends ChatPaneLayoutRender {
           hasOperatorWriteAccess(gatewaySnapshot.hello?.auth ?? null),
         personalReady:
           !hasAbortableSessionRun(state) &&
-          !isCloudWorkerPlacementState(placement?.state) &&
+          !isCloudWorkerPlacementState(selectedSession?.placement?.state) &&
           !workspaceConflict,
         isPresented: () => this.presented,
         isCurrent: () => {
@@ -424,7 +424,20 @@ export class ChatPane extends ChatPaneLayoutRender {
       queuedOutboxCount: state.chatQueue.filter((item) => !item.pendingRunId).length,
       realtimeTalkActive: state.realtimeTalkActive,
       realtimeTalkStatus: state.realtimeTalkStatus,
-      realtimeTalkDetail: state.realtimeTalkDetail,
+      realtimeTalkDetail:
+        state.realtimeTalkStatus === "connecting" ||
+        state.realtimeTalkStatus === "idle" ||
+        state.realtimeTalkStatus === "error"
+          ? state.realtimeTalkDetail
+          : realtimeTalkStatusDetail(
+              state.realtimeTalkDetail,
+              t(
+                state.realtimeTalkStatus === "thinking"
+                  ? "chat.voice.asking"
+                  : "chat.voice.listening",
+              ),
+              state.realtimeTalkSession?.activeIdentity,
+            ),
       realtimeTalkInputLevel: state.realtimeTalkInputLevel,
       realtimeTalkConversation: state.realtimeTalkConversation,
       realtimeTalkVideoStream: state.realtimeTalkVideoStream,

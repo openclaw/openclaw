@@ -70,6 +70,7 @@ import ai.openclaw.app.ui.design.TalkWaveformPhase
 import ai.openclaw.app.ui.design.agentAvatarSource
 import ai.openclaw.app.uppercaseFirstGraphemeOrNull
 import ai.openclaw.app.voice.AudioInputDeviceOption
+import ai.openclaw.app.voice.AudioInputPreferenceState
 import ai.openclaw.app.voice.VoiceWakePreferences
 import ai.openclaw.app.voice.audioInputDeviceOptionFromKey
 import android.Manifest
@@ -703,8 +704,6 @@ private fun VoiceSettingsScreen(
     mutableStateOf(voiceWakeWords)
   }
   var audioInputDevices by remember { mutableStateOf<List<AudioInputDeviceOption>>(emptyList()) }
-  val audioInputDevicePending =
-    voiceCaptureMode != VoiceCaptureMode.Off && preferredAudioInputDevice != activeAudioInputDevicePreference
 
   val microphonePermissionLauncher =
     rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
@@ -820,7 +819,8 @@ private fun VoiceSettingsScreen(
       AudioInputDevicePanel(
         devices = audioInputDevices,
         preferredDeviceKey = preferredAudioInputDevice,
-        preferencePending = audioInputDevicePending,
+        activePreference = activeAudioInputDevicePreference,
+        captureActive = voiceCaptureMode != VoiceCaptureMode.Off,
         onSelect = viewModel::setPreferredAudioInputDevice,
       )
       Text(text = nativeString("Audio Test"), style = ClawTheme.type.section, color = ClawTheme.colors.text)
@@ -840,12 +840,15 @@ private fun VoiceSettingsScreen(
 }
 
 @Composable
-private fun AudioInputDevicePanel(
+internal fun AudioInputDevicePanel(
   devices: List<AudioInputDeviceOption>,
   preferredDeviceKey: String?,
-  preferencePending: Boolean,
+  activePreference: AudioInputPreferenceState,
+  captureActive: Boolean,
   onSelect: (String?) -> Unit,
 ) {
+  val preferencePending = captureActive && activePreference != AudioInputPreferenceState.Applied(preferredDeviceKey)
+  val pendingLabel = if (activePreference == AudioInputPreferenceState.Requested(preferredDeviceKey)) nativeString("Requested") else nativeString("Next session")
   val preferredAvailable = devices.any { it.key == preferredDeviceKey }
   val unavailablePreferredDevice =
     preferredDeviceKey?.takeUnless { preferredAvailable }?.let(::audioInputDeviceOptionFromKey)
@@ -861,6 +864,7 @@ private fun AudioInputDevicePanel(
           },
         selected = preferredDeviceKey == null || !preferredAvailable,
         pending = preferencePending && preferredDeviceKey == null,
+        pendingLabel = pendingLabel,
         onClick = { onSelect(null) },
       )
       unavailablePreferredDevice?.let { device ->
@@ -870,6 +874,7 @@ private fun AudioInputDevicePanel(
           subtitle = nativeString("Unavailable"),
           selected = false,
           pending = preferencePending,
+          pendingLabel = pendingLabel,
           onClick = null,
         )
       }
@@ -881,6 +886,7 @@ private fun AudioInputDevicePanel(
           subtitle = typeLabel,
           selected = device.key == preferredDeviceKey,
           pending = preferencePending && device.key == preferredDeviceKey,
+          pendingLabel = pendingLabel,
           onClick = { onSelect(device.key) },
         )
       }
@@ -894,12 +900,13 @@ private fun AudioInputDeviceRow(
   subtitle: String,
   selected: Boolean,
   pending: Boolean,
+  pendingLabel: String,
   onClick: (() -> Unit)?,
 ) {
   ClawListItem(
     title = title,
     subtitle = subtitle,
-    metadata = nativeString("Next session").takeIf { pending },
+    metadata = pendingLabel.takeIf { pending },
     leading = { ClawIconBadge(Icons.Default.Mic) },
     trailing =
       if (selected) {

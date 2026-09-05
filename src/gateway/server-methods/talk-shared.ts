@@ -9,6 +9,7 @@ import {
 import { resolveRealtimeBootstrapContextInstructions } from "../../agents/realtime-bootstrap-context.js";
 import type { TalkRealtimeConfig } from "../../config/types.gateway.js";
 import type { OpenClawConfig } from "../../config/types.js";
+import { resolveProviderRawConfig } from "../../plugin-sdk/provider-selection-runtime.js";
 import type { RealtimeVoiceProviderPlugin } from "../../plugins/types.js";
 import {
   getRealtimeTranscriptionProvider,
@@ -243,8 +244,52 @@ export function buildTalkRealtimeConfig(
   const talkRealtimeProviderConfigs = talkRealtime?.providers as
     | Record<string, RealtimeVoiceProviderConfig>
     | undefined;
-  const explicitProvider =
-    normalizeOptionalString(requestedProvider) ?? normalizeOptionalString(talkRealtime?.provider);
+  const savedProvider = normalizeOptionalString(talkRealtime?.provider);
+  const requestedProviderId = normalizeOptionalString(requestedProvider);
+  const requestedModelId = normalizeOptionalString(requestedModel);
+  // Only a deliberate strict authMethod selection locks provider/model identity.
+  // Legacy Auto and per-call requests keep the prior override behavior.
+  const strictProviderKeys = Object.entries(talkRealtimeProviderConfigs ?? {})
+    .filter(([, entry]) => entry?.authMethod !== undefined)
+    .map(([key]) => key);
+  if (strictProviderKeys.length > 1) {
+    throw new Error("Talk strict authentication requires one selected provider");
+  }
+  const strictProvider = strictProviderKeys[0];
+  const strictAuthSelected = strictProvider !== undefined;
+  const lockedProvider = strictProvider;
+  if (strictProvider && savedProvider) {
+    const definition = listRealtimeVoiceProviders(config).find((entry) =>
+      providerMatchesId(entry, strictProvider),
+    );
+    const matches = definition
+      ? providerMatchesId(definition, savedProvider)
+      : normalizeOptionalLowercaseString(savedProvider) ===
+        normalizeOptionalLowercaseString(strictProvider);
+    if (!matches) {
+      throw new Error("Talk strict authentication conflicts with the selected provider");
+    }
+  }
+  if (strictAuthSelected && requestedProviderId) {
+    if (!lockedProvider) {
+      throw new Error("Talk strict authentication requires one selected provider");
+    }
+    const definition = listRealtimeVoiceProviders(config).find((entry) =>
+      providerMatchesId(entry, lockedProvider),
+    );
+    const matches = definition
+      ? providerMatchesId(definition, requestedProviderId)
+      : normalizeOptionalLowercaseString(requestedProviderId) ===
+        normalizeOptionalLowercaseString(lockedProvider);
+    if (!matches) {
+      throw new Error(
+        "Talk provider is selected on the Gateway; change Talk settings before starting a new call",
+      );
+    }
+  }
+  const explicitProvider = strictAuthSelected
+    ? lockedProvider
+    : (requestedProviderId ?? savedProvider);
   const singleConfiguredProvider = normalizeOptionalString(
     singleRecordKey(talkRealtimeProviderConfigs),
   );
@@ -266,7 +311,30 @@ export function buildTalkRealtimeConfig(
       normalizeOptionalString(requestedModel) ?? normalizeOptionalString(talkRealtime?.model),
   });
   const provider = selectedProvider ?? voiceModelDefault?.provider;
-  const model = normalizeOptionalString(talkRealtime?.model) ?? voiceModelDefault?.model;
+  const selected = listRealtimeVoiceProviders(config).find(
+    (entry) => provider && providerMatchesId(entry, provider),
+  );
+  const providerModel = provider
+    ? normalizeOptionalString(
+        resolveProviderRawConfig({
+          providerConfigs: talkRealtimeProviderConfigs ?? {},
+          providerId: selected?.id ?? provider,
+          providerAliases: selected?.aliases,
+          configuredProviderId: provider,
+        }).model,
+      )
+    : undefined;
+  const savedModel = normalizeOptionalString(talkRealtime?.model) ?? providerModel;
+  const strictModel =
+    savedModel ?? voiceModelDefault?.model ?? normalizeOptionalString(selected?.defaultModel);
+  if (strictAuthSelected && requestedModelId && requestedModelId !== strictModel) {
+    throw new Error(
+      "Talk model is selected on the Gateway; change Talk settings before starting a new call",
+    );
+  }
+  // Defaults stay saved/Gateway-owned; deliberate Auto per-call models flow through
+  // session launch params. Strict auth also locks the provider's implicit default.
+  const model = strictAuthSelected ? strictModel : (savedModel ?? voiceModelDefault?.model);
   return {
     provider,
     providers: providerConfigs,

@@ -34,6 +34,14 @@ export type RealtimeTalkTranscriptItem =
     }
   | { type: "settled"; itemId: string };
 
+export function realtimeTalkStatusDetail(
+  detail: string | null,
+  statusLabel: string,
+  activeIdentity: string | null | undefined,
+): string | null {
+  return [detail ?? statusLabel, activeIdentity].filter(Boolean).join(" — ") || null;
+}
+
 export type RealtimeTalkCallbacks = {
   onStatus?: (status: RealtimeTalkStatus, detail?: string) => void;
   onVideoCapability?: (capable: boolean) => void;
@@ -65,6 +73,8 @@ type RealtimeTalkAudioContract = {
 };
 
 export type RealtimeTalkWebRtcSdpSessionResult = {
+  authMethod?: "oauth" | "api-key";
+  transcriptOwner?: "client" | "gateway";
   provider: string;
   transport: "webrtc";
   voiceSessionId?: string;

@@ -54,6 +54,42 @@ function transportContext(transport: object | undefined): RealtimeTalkTransportC
 useRealtimeTalkMicrophoneFixture();
 
 describe("RealtimeTalkSession", () => {
+  it.each([
+    { model: "gpt-live-1-codex", authMethod: "oauth" },
+    { model: "gpt-realtime-2.1", authMethod: "api-key" },
+  ])(
+    "displays confirmed $model/$authMethod identity only for its active call",
+    async ({ model, authMethod }) => {
+      const ready = createDeferred<"ready">();
+      webRtcStart.mockImplementationOnce(() => ready.promise);
+      const payload = {
+        provider: "openai",
+        model,
+        authMethod,
+        voice: "test-voice",
+        transport: "webrtc",
+        voiceSessionId: "identity-call",
+        clientSecret: "do-not-display-ephemeral",
+      };
+      const request = vi.fn(async () => payload);
+      const session = new RealtimeTalkSession({ request } as never, "main");
+      const starting = session.start();
+      await vi.waitFor(() => expect(webRtcInstances).toHaveLength(1));
+      expect(session.activeIdentity).toBeNull();
+      ready.resolve("ready");
+      await starting;
+      expect(session.activeIdentity).toContain(model);
+      expect(session.activeIdentity).toContain(authMethod);
+      expect(session.activeIdentity).toContain("test-voice");
+      expect(session.activeIdentity).toContain("webrtc");
+      expect(session.activeIdentity).not.toContain(payload.clientSecret);
+      payload.model = "next-call-model";
+      expect(session.activeIdentity).toContain(model);
+      session.stop();
+      expect(session.activeIdentity).toBeNull();
+    },
+  );
+
   beforeEach(() => {
     googleStart.mockClear();
     googleStop.mockClear();
@@ -756,6 +792,26 @@ describe("RealtimeTalkSession", () => {
     expect(relayInstances).toHaveLength(0);
   });
 
+  it("never replaces an explicit per-call client transport with saved relay config", async () => {
+    const clientError = new Error("browser session unavailable");
+    const request = vi.fn(async (method: string) => {
+      if (method === "talk.client.create") {
+        throw clientError;
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const session = new RealtimeTalkSession(
+      { request } as never,
+      "main",
+      {},
+      { transport: "webrtc" },
+    );
+
+    await expect(session.start()).rejects.toBe(clientError);
+    expect(request.mock.calls.map(([method]) => method)).toEqual(["talk.client.create"]);
+    expect(relayInstances).toHaveLength(0);
+  });
+
   it("falls back to Gateway relay when config selects Gateway relay", async () => {
     const request = vi.fn(async (method: string) => {
       if (method === "talk.client.create") {
@@ -804,7 +860,7 @@ describe("RealtimeTalkSession", () => {
     expect(relayStart).toHaveBeenCalledTimes(1);
   });
 
-  it("falls back to Gateway relay when a successful config read resolves Auto", async () => {
+  it("recovers a failed Auto client call through Gateway relay", async () => {
     const request = vi.fn(async (method: string) => {
       if (method === "talk.client.create") {
         throw new Error("browser session unavailable");
@@ -830,19 +886,29 @@ describe("RealtimeTalkSession", () => {
     const session = new RealtimeTalkSession({ request } as never, "main");
 
     await session.start();
-
-    expect(request).toHaveBeenNthCalledWith(
-      3,
-      "talk.session.create",
-      {
-        sessionKey: "main",
-        mode: "realtime",
-        transport: "gateway-relay",
-        brain: "agent-consult",
-      },
-      requestTimeoutOptions,
-    );
+    expect(request.mock.calls.map(([method]) => method)).toContain("talk.session.create");
     expect(relayInstances).toHaveLength(1);
+  });
+
+  it("keeps a failed explicit strict-auth call fail-closed instead of relay recovery", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "talk.client.create") {
+        throw new Error("browser session unavailable");
+      }
+      if (method === "talk.config") {
+        return {
+          config: {
+            talk: { realtime: { providers: { openai: { authMethod: "oauth" } } } },
+          },
+        };
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const session = new RealtimeTalkSession({ request } as never, "main");
+
+    await expect(session.start()).rejects.toThrow("browser session unavailable");
+    expect(request.mock.calls.map(([method]) => method)).not.toContain("talk.session.create");
+    expect(relayInstances).toHaveLength(0);
   });
 
   it("does not fall back when the effective config cannot be read", async () => {

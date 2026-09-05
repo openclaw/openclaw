@@ -438,6 +438,15 @@ function buildTalkCatalog(config: OpenClawConfig) {
         if (provider.voices?.length) {
           entry.voices = [...provider.voices];
         }
+        entry.effectiveModel =
+          normalizeOptionalString(providerConfig.model) ?? provider.defaultModel;
+        entry.effectiveTransport = realtimeConfig.transport ?? capabilities?.transports?.[0];
+        if (capabilities?.authMethods) {
+          entry.authMethods = capabilities.authMethods;
+        }
+        if (capabilities?.selectedAuthMethod) {
+          entry.selectedAuthMethod = capabilities.selectedAuthMethod;
+        }
         if (capabilities?.voicesByModel) {
           entry.voicesByModel = capabilities.voicesByModel;
         }

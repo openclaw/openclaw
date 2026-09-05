@@ -1,7 +1,7 @@
 package ai.openclaw.app.voice
 
-import ai.openclaw.app.isAndroidRealtimeRelayModelSupported
 import ai.openclaw.app.normalizeMainKey
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -14,37 +14,29 @@ internal data class TalkModeGatewayConfigState(
   val speechLocale: String?,
   val interruptOnSpeech: Boolean?,
   val silenceTimeoutMs: Long,
-  val realtimeRelayModelSupported: Boolean,
+  val realtimeTransport: String?,
+  val realtimeMode: String?,
+  val strictAuthSelected: Boolean,
 )
 
 internal object TalkModeGatewayConfigParser {
   /** Reads gateway talk/session config into the runtime state TalkMode needs. */
   fun parse(config: JsonObject?): TalkModeGatewayConfigState {
     val talk = config?.get("talk").asObjectOrNull()
-    // talk.config carries the top-level model (plus voice-model default) in
-    // realtime.model, but a provider-level providers.<id>.model is NOT promoted
-    // into it — fall back to the selected provider's entry so a gpt-live model
-    // configured only at provider level still routes Android to native Talk.
     val realtime = talk?.get("realtime").asObjectOrNull()
-    val realtimeProvider = realtime?.get("provider").asStringOrNull()
-    val realtimeModel =
-      realtime?.get("model").asStringOrNull()
-        ?: realtimeProvider?.let { provider ->
-          realtime
-            ?.get("providers")
-            .asObjectOrNull()
-            ?.get(provider)
-            .asObjectOrNull()
-            ?.get("model")
-            .asStringOrNull()
-        }
     val sessionCfg = config?.get("session").asObjectOrNull()
     return TalkModeGatewayConfigState(
       mainSessionKey = normalizeMainKey(sessionCfg?.get("mainKey").asStringOrNull()),
       speechLocale = normalizeSpeechLocaleTag(talk?.get("speechLocale").asStringOrNull()),
       interruptOnSpeech = talk?.get("interruptOnSpeech").asBooleanOrNull(),
       silenceTimeoutMs = resolvedSilenceTimeoutMs(talk),
-      realtimeRelayModelSupported = isAndroidRealtimeRelayModelSupported(realtimeModel),
+      realtimeTransport = realtime?.get("transport").asStringOrNull(),
+      realtimeMode = realtime?.get("mode").asStringOrNull(),
+      // Legacy Auto keeps relay recovery; only a deliberate strict auth choice is fail-closed.
+      strictAuthSelected =
+        (realtime?.get("providers") as? JsonObject)
+          ?.values
+          ?.any { provider -> provider.asObjectOrNull()?.containsKey("authMethod") == true } == true,
     )
   }
 
@@ -58,6 +50,41 @@ internal object TalkModeGatewayConfigParser {
       return fallback
     }
     return timeout.toLong()
+  }
+}
+
+/** OpenAI uses WebRTC; other providers retain Android's advertised Gateway relay path. */
+internal fun resolveAndroidRealtimeTransport(
+  configured: String?,
+  catalog: JsonObject?,
+): String {
+  when (configured) {
+    "webrtc" -> {
+      return "webrtc"
+    }
+
+    "gateway-relay", "provider-websocket" -> {
+      return "gateway-relay"
+    }
+
+    null -> {}
+
+    else -> {
+      error("Configured Talk transport is not supported on Android")
+    }
+  }
+  val group = catalog?.get("realtime").asObjectOrNull() ?: error("Gateway did not return realtime Talk capabilities")
+  val active = group["activeProvider"].asStringOrNull() ?: error("No realtime Talk provider is selected")
+  val providers = (group["providers"] as? JsonArray)?.mapNotNull { it.asObjectOrNull() }.orEmpty()
+  val selected =
+    providers.firstOrNull { it["id"].asStringOrNull() == active }
+      ?: providers.firstOrNull { provider -> (provider["aliases"] as? JsonArray)?.any { it.asStringOrNull() == active } == true }
+      ?: error("Gateway selected an unavailable Talk provider")
+  val transports = (selected["transports"] as? JsonArray)?.mapNotNull { it.asStringOrNull() }.orEmpty()
+  return when {
+    "webrtc" in transports -> "webrtc"
+    "gateway-relay" in transports -> "gateway-relay"
+    else -> error("Selected Talk provider has no supported Android transport")
   }
 }
 

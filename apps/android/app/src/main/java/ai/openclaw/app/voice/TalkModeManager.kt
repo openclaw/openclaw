@@ -218,6 +218,7 @@ class TalkModeManager internal constructor(
   private val gatewayStableId: () -> String? = { null },
   private val preferredAudioInputDevice: () -> String? = { null },
   private val onAppliedAudioInputChanged: (String?) -> Unit = {},
+  private val onRequestedAudioInputChanged: (String?) -> Unit = {},
   private val onBeforeSpeak: suspend () -> Unit = {},
   private val onAfterSpeak: suspend () -> Unit = {},
   private val captureRelayStopNotification: () -> ((isCurrent: () -> Boolean) -> Unit) = { {} },
@@ -267,6 +268,7 @@ class TalkModeManager internal constructor(
   private val status = MutableStateFlow(TalkStatus(text = nativeText("Off"), state = TalkStatusState.Off))
   private val currentStatus: TalkStatus get() = status.value
   val statusText: StateFlow<String> = LocaleResolvingStateFlow(status) { it.text.resolveNativeText() }
+  val hasFailure: StateFlow<Boolean> = LocaleResolvingStateFlow(status) { it.state == TalkStatusState.TalkFailure }
   val awaitingAgent: StateFlow<Boolean> = LocaleResolvingStateFlow(status) { it.awaitingAgent }
 
   private fun setStatus(
@@ -313,7 +315,9 @@ class TalkModeManager internal constructor(
   private val interruptOnSpeech get() = configCache.get().value.interruptOnSpeech ?: false
   private var mainSessionKey: String = "main"
   private val speechLocale get() = configCache.get().value.speechLocale
-  private val realtimeRelayModelSupported get() = configCache.get().value.realtimeRelayModelSupported
+  private val realtimeTransport get() = configCache.get().value.realtimeTransport
+
+  @Volatile private var realtimeClient: TalkRealtimeClient? = null
 
   @Volatile private var pendingRunId: String? = null
   private var pendingFinal: CompletableDeferred<Boolean>? = null
@@ -418,7 +422,11 @@ class TalkModeManager internal constructor(
 
   /** Starts or stops continuous realtime TalkMode capture. */
   fun setEnabled(enabled: Boolean) {
-    if (_isEnabled.value == enabled) return
+    if (_isEnabled.value == enabled) {
+      if (!enabled && hasFailure.value) stop()
+      return
+    }
+    if (enabled) setStatus(nativeText("Connecting…"), awaitingAgent = true)
     _isEnabled.value = enabled
     if (enabled) {
       Log.d(tag, "enabled")
@@ -837,6 +845,7 @@ class TalkModeManager internal constructor(
       invalidateConfig()
       return
     }
+    if (realtimeClient?.handleGatewayEvent(event, payloadJson) == true) return
     if (event == "talk.event") {
       handleRealtimeTalkEvent(payloadJson)
       return
@@ -948,6 +957,7 @@ class TalkModeManager internal constructor(
       if (playbackEnabled == enabled) return
       playbackEnabled = enabled
     }
+    realtimeClient?.let { client -> scope.launch { client.setPlaybackEnabled(enabled) } }
     if (!enabled) {
       stopRealtimePlayback()
       cancelActivePlayback()
@@ -978,7 +988,7 @@ class TalkModeManager internal constructor(
   }
 
   private fun start() {
-    if (realtimeSessionId != null || realtimeCaptureJob?.isActive == true) return
+    if (realtimeClient != null || realtimeSessionId != null || realtimeCaptureJob?.isActive == true) return
     if (scope.coroutineContext[Job]?.isActive == false) return
     val notifyStopped = captureRelayStopNotification()
     val generation =
@@ -992,12 +1002,42 @@ class TalkModeManager internal constructor(
     gatewayWorkScope.launch {
       try {
         audioRetirement.await()
+        if (!isConnected()) {
+          disableRealtimeModeAndNotifyOwner(generation, nativeText("Gateway not connected"))
+          return@launch
+        }
         ensureConfigLoaded()
         if (generation != startGeneration.get() || !_isEnabled.value || stopRequested) return@launch
-        if (realtimeRelayModelSupported) {
-          startRealtimeRelay(generation)
-        } else {
+        if (configCache.get().value.realtimeMode == "stt-tts") {
           startNativeTalk(generation)
+        } else {
+          val configured = realtimeTransport
+          val catalog = if (configured == null) json.parseToJsonElement(requestGateway("talk.catalog", "{}")).asObjectOrNull() else null
+          val strictAuthSelected = configCache.get().value.strictAuthSelected
+          when (resolveAndroidRealtimeTransport(configured, catalog)) {
+            "webrtc" -> {
+              try {
+                startRealtimeClient(generation)
+              } catch (err: Throwable) {
+                // Only omitted/Auto transport with omitted auth keeps legacy relay recovery;
+                // any explicit transport or strict auth selection stays fail-closed.
+                if (strictAuthSelected || configured != null || err is CancellationException) throw err
+                Log.w(tag, "client realtime unavailable; recovering with gateway relay")
+                synchronized(realtimeCapturePauseLock) {
+                  if (generation != startGeneration.get() || !_isEnabled.value || stopRequested) {
+                    throw CancellationException("realtime talk stopped before relay recovery")
+                  }
+                  // Retire the published provisional client before relay ownership starts.
+                  stopRealtimeRelay(closeSession = false, preserveStatus = true)
+                }
+                startRealtimeRelay(generation)
+              }
+            }
+
+            "gateway-relay" -> {
+              startRealtimeRelay(generation)
+            }
+          }
         }
       } catch (err: Throwable) {
         if (err is CancellationException) return@launch
@@ -1214,6 +1254,63 @@ class TalkModeManager internal constructor(
     }
   }
 
+  private suspend fun startRealtimeClient(generation: Long) {
+    check(isConnected()) { "Gateway not connected" }
+    check(ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) { "Microphone permission required" }
+    val lease = session.captureRequestLease(gatewayStableId()) ?: error("Gateway not connected")
+    val key = mainSessionKey.ifBlank { "main" }
+    lateinit var client: TalkRealtimeClient
+    client =
+      TalkRealtimeClient(
+        context,
+        scope,
+        lease,
+        key,
+        onStatus = { state ->
+          synchronized(realtimeCapturePauseLock) {
+            if (realtimeClient === client && realtimeCapturePause == null) {
+              val snapshot = client.snapshot
+              _isListening.value = snapshot != null && state == "Listening"
+              setRealtimePlaying(snapshot != null && state == "Speaking")
+              setStatus(talkRealtimeStatusText(state, snapshot), awaitingAgent = snapshot == null || state == "Thinking")
+            }
+          }
+        },
+        onTranscript = { role, text, final ->
+          synchronized(realtimeCapturePauseLock) {
+            if (realtimeClient === client) upsertRealtimeConversation(if (role == "user") VoiceConversationRole.User else VoiceConversationRole.Assistant, text, final)
+          }
+        },
+        onFailure = { message ->
+          if (realtimeClient === client) disableRealtimeModeAndNotifyOwner(generation, nativeText("Talk failed: \$message", message))
+        },
+        preferredAudioInputDevice = preferredAudioInputDevice,
+        onInputRequested = { key ->
+          synchronized(realtimeCapturePauseLock) {
+            if (realtimeClient === client && realtimeCapturePause == null) onRequestedAudioInputChanged(key)
+          }
+        },
+      )
+    val admitted =
+      client.adopt {
+        synchronized(realtimeCapturePauseLock) {
+          if (generation != startGeneration.get() || !_isEnabled.value || stopRequested) {
+            false
+          } else {
+            realtimeClient = client
+            retireRecognizer()
+            setStatus(nativeText("Connecting…"), awaitingAgent = true)
+            true
+          }
+        }
+      }
+    if (!admitted) return
+    audioRetirement.await()
+    if (realtimeCapturePause != null) client.setCaptureEnabled(false)
+    client.setPlaybackEnabled(playbackEnabled && realtimeCapturePause == null)
+    client.start()
+  }
+
   private fun disableRealtimeModeAndNotifyOwner(
     generation: Long,
     status: NativeText,
@@ -1221,7 +1318,7 @@ class TalkModeManager internal constructor(
     val stopped =
       synchronized(realtimeCapturePauseLock) {
         if (generation != startGeneration.get()) return
-        setStatus(status)
+        setTalkFailure(status)
         stopRealtimeRelay(closeSession = false, preserveStatus = true)
         disableRealtimeModeLocked()
       }
@@ -1624,6 +1721,11 @@ class TalkModeManager internal constructor(
     preserveStatus: Boolean = false,
   ) = synchronized(realtimeCapturePauseLock) {
     val status = currentStatus
+    val retiredClient = realtimeClient
+    realtimeClient = null
+    if (retiredClient != null) {
+      audioRetirement.retire(cleanup = scope.async(start = CoroutineStart.UNDISPATCHED) { withContext(NonCancellable) { retiredClient.close() } })
+    }
     val sessionId = realtimeSessionId
     realtimeSessionId = null
     realtimeRequestLease = null
@@ -1662,6 +1764,15 @@ class TalkModeManager internal constructor(
     captureId: String,
     lease: GatewaySession.RequestLease?,
   ): suspend () -> Unit {
+    val client = realtimeClient
+    if (client != null) {
+      realtimeCapturePause = RealtimeCapturePause(null, captureId)
+      return {
+        client.setCaptureEnabled(false)
+        client.setPlaybackEnabled(false)
+        client.cancelOutput()
+      }
+    }
     val pause: RealtimeCapturePause
     val cancellationTurnId: String?
     val retirement: Deferred<Unit>
@@ -1719,9 +1830,18 @@ class TalkModeManager internal constructor(
           realtimeCapturePause = null
           return@synchronized RealtimeCaptureResume.Skipped
         }
-        // Native Talk has no relay ID. A completed PTT turn may have already
-        // restarted it; cancellation and empty turns still need that restart.
-        if (!realtimeRelayModelSupported && current.sessionId == null && !listeningMode) {
+        realtimeClient?.let { client ->
+          realtimeCapturePause = null
+          listeningMode = true
+          scope.launch {
+            if (realtimeClient === client && activePttCaptureId == null && !stopRequested) {
+              client.setPlaybackEnabled(playbackEnabled)
+              client.setCaptureEnabled(true)
+            }
+          }
+          return@synchronized RealtimeCaptureResume.Resumed
+        }
+        if (configCache.get().value.realtimeMode == "stt-tts" && current.sessionId == null && !listeningMode) {
           realtimeCapturePause = null
           return@synchronized RealtimeCaptureResume.Restart
         }
@@ -2799,6 +2919,7 @@ class TalkModeManager internal constructor(
   }
 
   fun stopTts() {
+    realtimeClient?.let { client -> scope.launch { client.cancelOutput() } }
     val lease = session.captureRequestLease(gatewayStableId())
     synchronized(realtimeCapturePauseLock) {
       val sessionId = realtimeSessionId
@@ -2991,7 +3112,7 @@ class TalkModeManager internal constructor(
   }
 
   private fun ensureInterruptListener() {
-    if (!interruptOnSpeech || !_isEnabled.value || !shouldAllowSpeechInterrupt()) return
+    if (realtimeClient != null || !interruptOnSpeech || !_isEnabled.value || !shouldAllowSpeechInterrupt()) return
     // Starting a recognizer during finalization or a paused PTT turn can kill
     // TTS playback and compete with the realtime recorder for microphone ownership.
     mainHandler.post {

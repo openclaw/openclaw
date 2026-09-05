@@ -26105,7 +26105,10 @@ public enum SystemAgentSetupVerifyResult: Codable, Sendable {
 public struct TalkClientCreateResultWebrtc: Codable, Sendable {
     public let provider: String
     public let transport: String
+    public let authmethod: AnyCodable?
     public let voicesessionid: String
+    public let transcriptowner: AnyCodable?
+    public let controlsource: AnyCodable?
     public let clientsecret: String
     public let offerurl: String?
     public let offerheaders: [String: AnyCodable]?
@@ -26116,7 +26119,10 @@ public struct TalkClientCreateResultWebrtc: Codable, Sendable {
 
     public init(
         provider: String,
+        authmethod: AnyCodable? = nil,
         voicesessionid: String,
+        transcriptowner: AnyCodable? = nil,
+        controlsource: AnyCodable? = nil,
         clientsecret: String,
         offerurl: String? = nil,
         offerheaders: [String: AnyCodable]? = nil,
@@ -26128,7 +26134,10 @@ public struct TalkClientCreateResultWebrtc: Codable, Sendable {
     {
         self.provider = provider
         self.transport = "webrtc"
+        self.authmethod = authmethod
         self.voicesessionid = voicesessionid
+        self.transcriptowner = transcriptowner
+        self.controlsource = controlsource
         self.clientsecret = clientsecret
         self.offerurl = offerurl
         self.offerheaders = offerheaders
@@ -26141,7 +26150,10 @@ public struct TalkClientCreateResultWebrtc: Codable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case provider
         case transport
+        case authmethod = "authMethod"
         case voicesessionid = "voiceSessionId"
+        case transcriptowner = "transcriptOwner"
+        case controlsource = "controlSource"
         case clientsecret = "clientSecret"
         case offerurl = "offerUrl"
         case offerheaders = "offerHeaders"
@@ -26155,7 +26167,7 @@ public struct TalkClientCreateResultWebrtc: Codable, Sendable {
         let rawContainer = try decoder.container(keyedBy: GatewayAnyCodingKey.self)
         let unexpectedKeys = rawContainer.allKeys
             .map(\.stringValue)
-            .filter { !Set(["provider", "transport", "voiceSessionId", "clientSecret", "offerUrl", "offerHeaders", "model", "voice", "expiresAt", "clientControl"]).contains($0) }
+            .filter { !Set(["provider", "transport", "authMethod", "voiceSessionId", "transcriptOwner", "controlSource", "clientSecret", "offerUrl", "offerHeaders", "model", "voice", "expiresAt", "clientControl"]).contains($0) }
         if !unexpectedKeys.isEmpty {
             throw DecodingError.dataCorrupted(
                 .init(
@@ -26175,7 +26187,10 @@ public struct TalkClientCreateResultWebrtc: Codable, Sendable {
             )
         }
         self.transport = "webrtc"
+        self.authmethod = try container.decodeIfPresent(AnyCodable.self, forKey: .authmethod)
         self.voicesessionid = try container.decode(String.self, forKey: .voicesessionid)
+        self.transcriptowner = try container.decodeIfPresent(AnyCodable.self, forKey: .transcriptowner)
+        self.controlsource = try container.decodeIfPresent(AnyCodable.self, forKey: .controlsource)
         self.clientsecret = try container.decode(String.self, forKey: .clientsecret)
         self.offerurl = try container.decodeIfPresent(String.self, forKey: .offerurl)
         self.offerheaders = try container.decodeIfPresent([String: AnyCodable].self, forKey: .offerheaders)
@@ -26189,7 +26204,10 @@ public struct TalkClientCreateResultWebrtc: Codable, Sendable {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(provider, forKey: .provider)
         try container.encode("webrtc", forKey: .transport)
+        try container.encodeIfPresent(authmethod, forKey: .authmethod)
         try container.encode(voicesessionid, forKey: .voicesessionid)
+        try container.encodeIfPresent(transcriptowner, forKey: .transcriptowner)
+        try container.encodeIfPresent(controlsource, forKey: .controlsource)
         try container.encode(clientsecret, forKey: .clientsecret)
         try container.encodeIfPresent(offerurl, forKey: .offerurl)
         try container.encodeIfPresent(offerheaders, forKey: .offerheaders)

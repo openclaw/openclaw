@@ -74,6 +74,7 @@ type RealtimeTalkConfigResult = {
     talk?: {
       realtime?: {
         transport?: unknown;
+        providers?: Record<string, { authMethod?: unknown }>;
       };
     };
   };
@@ -117,6 +118,12 @@ export class RealtimeTalkSession {
   private transcriptItems: ClientVoiceTranscriptQueue | undefined;
   private acceptingTranscripts = false;
   private serverOwnedVoiceSession = false;
+  private gatewayOwnsTranscripts = false;
+  private activeIdentityValue: string | null = null;
+
+  get activeIdentity(): string | null {
+    return this.activeIdentityValue;
+  }
   private transcriptQueue = VOICE_TRANSCRIPT_QUEUE_POLICY.createQueue();
   private clientVoiceSessionOwner: ClientVoiceSessionOwner | undefined;
 
@@ -192,6 +199,8 @@ export class RealtimeTalkSession {
       if (transport !== "gateway-relay") {
         // SDP setup can already deliver provider items. The logical allocation
         // owns their queue before its still-provisional transport becomes ready.
+        this.gatewayOwnsTranscripts =
+          session.transport === "webrtc" && session.transcriptOwner === "gateway";
         this.voiceSessionId = voiceSessionId;
         this.transportGeneration = nextTransportGeneration;
         this.acceptingTranscripts = true;
@@ -269,6 +278,14 @@ export class RealtimeTalkSession {
         return;
       }
       this.transport = nextTransport;
+      const unknown = t("common.unknown");
+      this.activeIdentityValue = t("talkPage.activeIdentity", {
+        provider: session.provider,
+        model: session.model ?? unknown,
+        auth: session.transport === "webrtc" ? (session.authMethod ?? unknown) : unknown,
+        voice: session.voice ?? unknown,
+        transport,
+      });
       if (transport === "gateway-relay") {
         this.voiceSessionId = voiceSessionId;
         this.transportGeneration = nextTransportGeneration;
@@ -353,15 +370,28 @@ export class RealtimeTalkSession {
         if (!result.config || typeof result.config !== "object") {
           throw error;
         }
-        const configuredTransport = result.config?.talk?.realtime?.transport;
+        const configuredRealtime = result.config?.talk?.realtime;
+        const configuredTransport = configuredRealtime?.transport;
         if (configuredTransport !== undefined) {
           transport = normalizeLaunchTransport(configuredTransport);
           if (!transport) {
             throw error;
           }
         }
+        // A deliberate strict auth selection is fail-closed; legacy Auto keeps the
+        // prior relay recovery so a failed client call can still use Gateway relay.
+        const strictAuthSelected = Object.values(configuredRealtime?.providers ?? {}).some(
+          (provider) => provider.authMethod !== undefined,
+        );
+        if (strictAuthSelected && transport !== "gateway-relay") {
+          throw error;
+        }
+        if (!transport) {
+          transport = "gateway-relay";
+        }
       }
-      if (transport && transport !== "gateway-relay") {
+      // A failed client-owned call is terminal unless the Gateway explicitly selected a relay.
+      if (transport !== "gateway-relay") {
         throw error;
       }
       const gatewayOptions = { ...launchOptions };
@@ -402,6 +432,7 @@ export class RealtimeTalkSession {
   private retireTransport(): void {
     this.lifecycleGeneration += 1;
     this.closed = true;
+    this.activeIdentityValue = null;
     this.videoOperation += 1;
     this.videoEnabled = false;
     activeRealtimeTalkSessions.delete(this);
@@ -524,6 +555,10 @@ export class RealtimeTalkSession {
         if (!isCurrent()) {
           return;
         }
+        if (this.gatewayOwnsTranscripts) {
+          this.callbacks.onTranscript?.(entry);
+          return;
+        }
         // Persist before notifying: a consumer callback that stops or throws must
         // not be able to drop an already-finalized utterance from the write tail.
         let published;
@@ -606,6 +641,7 @@ export class RealtimeTalkSession {
     this.voiceSessionId = undefined;
     this.acceptingTranscripts = false;
     this.serverOwnedVoiceSession = false;
+    this.gatewayOwnsTranscripts = false;
     this.transcriptQueue = VOICE_TRANSCRIPT_QUEUE_POLICY.createQueue();
     this.clientVoiceSessionOwner = undefined;
     if (missingItems.length > 0) {
