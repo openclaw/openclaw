@@ -29,8 +29,8 @@ import { resolveSessionPinnedHarnessId } from "../../sessions/agent-harness-sess
 import { resolveUserPath } from "../../utils.js";
 import { resolveAgentDir, resolveSessionAgentIds } from "../agent-scope.js";
 import {
-  classifyRecoverableNativeHarnessBindingFailure,
   isRecoverableNativeHarnessBindingFailure,
+  resolveLockedNativeHarnessCompactionResult,
 } from "../harness/compaction-recovery.js";
 import { maybeCompactAgentHarnessSession } from "../harness/compaction.js";
 import { ensureSelectedAgentHarnessPlugin } from "../harness/runtime-plugin.js";
@@ -649,47 +649,39 @@ async function compactResolvedContextEngine(
           );
         })
       : undefined;
-  // `nativeHarnessBindingRecoveryReason` is an owner-minted authorization marker:
-  // the turn layer treats its mere presence as license to safe-continue a required
-  // preflight (`isNativeHarnessBindingRecoverySkip`). Only the explicit stamp below
-  // may set it, and the harness result is the one value returned here that is
-  // spread verbatim, so strip any marker it carries before a return path can hand
-  // the turn layer a forged skip (#119977). The context-engine returns below cannot
-  // carry it: `deferOwningContextEngineBudgetCompaction` and
+  // `nativeHarnessBindingRecovery` is an owner-minted authorization marker: the
+  // turn layer treats its mere presence as license to safe-continue a required
+  // preflight (`isNativeHarnessBindingRecoverySkip`). Only the queued owner may
+  // set it, so every return path that spreads the harness result strips any
+  // marker it carries first: the locked resolver below and the native-harness
+  // projection here (#119977). The context-engine returns below cannot carry it:
+  // `deferOwningContextEngineBudgetCompaction` and
   // `executeQueuedContextEngineCompaction` both reconstruct their result field by
   // field rather than spreading the plugin result. No production harness sets it —
   // this keeps that impossible by construction.
-  let harnessResult = rawHarnessResult;
-  if (harnessResult?.nativeHarnessBindingRecoveryReason !== undefined) {
-    const { nativeHarnessBindingRecoveryReason: _forged, ...sanitized } = harnessResult;
-    harnessResult = sanitized;
-  }
   // A model-locked native harness is terminal: it has no context-engine
   // credentials, so a recoverable binding failure must never fall through to the
-  // generic engine (that route fails and drops the turn, #119977). Stamp the typed
-  // recovery disposition only when the private required-preflight capability
-  // dispatched and returned a recoverable binding failure, so the turn layer can
-  // safe-continue (#119971); every other locked outcome stays an honest ok:false.
+  // generic engine (that route fails and drops the turn, #119977). The locked
+  // resolver stamps the recovery marker only when the private required-preflight
+  // capability dispatched, so the turn layer can safe-continue (#119971); every
+  // other locked outcome stays an honest ok:false.
   // The transcript-byte preflight authority owns its own host-driven route, so a
   // locked harness under that authority still defers to the context engine below.
   if (lockedNativeHarness && !transcriptBytePreflightAuthority) {
-    if (!harnessResult) {
-      return lockedCompactionRuntimeFailure(selectedHarnessRuntime);
-    }
-    const bindingRecoveryReason =
-      preparedParams.preflightRequired === true && requiredPreflightNativeCapabilityUsed
-        ? classifyRecoverableNativeHarnessBindingFailure(harnessResult)
-        : undefined;
-    return bindingRecoveryReason
-      ? { ...harnessResult, nativeHarnessBindingRecoveryReason: bindingRecoveryReason }
-      : harnessResult;
+    return resolveLockedNativeHarnessCompactionResult(
+      rawHarnessResult,
+      lockedCompactionRuntimeFailure(selectedHarnessRuntime),
+      preparedParams.preflightRequired === true,
+      requiredPreflightNativeCapabilityUsed,
+    );
   }
-  if (harnessResult) {
-    if (!isRecoverableNativeHarnessBindingFailure(harnessResult)) {
-      return { ...harnessResult, compactionKind: "native-harness" };
+  if (rawHarnessResult) {
+    if (!isRecoverableNativeHarnessBindingFailure(rawHarnessResult)) {
+      const { nativeHarnessBindingRecovery: _forged, ...sanitized } = rawHarnessResult;
+      return { ...sanitized, compactionKind: "native-harness" };
     }
     log.warn(
-      `native harness compaction could not use its session binding; falling back to context engine: ${harnessResult.reason ?? "unknown"}`,
+      `native harness compaction could not use its session binding; falling back to context engine: ${rawHarnessResult.reason ?? "unknown"}`,
     );
   }
   if (params.abortSignal?.aborted) {

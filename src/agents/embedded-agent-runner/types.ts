@@ -284,29 +284,20 @@ export type EmbeddedAgentRunResult = {
   successfulCronAdds?: number;
 };
 
-/**
- * Typed recovery disposition for a model-locked native harness whose bound
- * thread was missing/stale. The queued compaction owner stamps it only after the
- * private required-preflight capability dispatched, so the turn layer can
- * safe-continue instead of matching failure reason text.
- */
-export type NativeHarnessBindingRecoveryReason =
-  | "missing_thread_binding"
-  | "stale_thread_binding"
-  | "thread_not_found";
-
 export type EmbeddedAgentCompactResult = {
   ok: boolean;
   compacted: boolean;
   compactionKind?: "context-engine" | "native-harness" | "server-endpoint";
   reason?: string;
   /**
-   * Set only for a model-locked native harness recoverable-binding failure
-   * reached through the private required-preflight capability. Its presence
-   * authorizes the turn layer to safe-continue the preflight instead of dropping
-   * the turn; a locked session has no context-engine fallback (#119971/#119977).
+   * @internal Host-only authenticated marker. Plugin-supplied values are stripped
+   * by the queued-compaction owner before every return path; only that owner
+   * stamps it, after the private required-preflight capability dispatched for a
+   * model-locked native harness recoverable-binding failure. Its presence
+   * authorizes a benign required-preflight skip (safe-continue) in the turn layer;
+   * a locked session has no context-engine fallback (#119971/#119977).
    */
-  nativeHarnessBindingRecoveryReason?: NativeHarnessBindingRecoveryReason;
+  nativeHarnessBindingRecovery?: true;
   /** Structured failure metadata used by model fallback classification. */
   failure?: {
     reason?: string;

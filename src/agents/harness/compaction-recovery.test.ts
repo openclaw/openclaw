@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { EmbeddedAgentCompactResult } from "../embedded-agent-runner/types.js";
 import {
-  classifyRecoverableNativeHarnessBindingFailure,
   isNativeHarnessBindingRecoverySkip,
   isRecoverableNativeHarnessBindingFailure,
 } from "./compaction-recovery.js";
@@ -10,25 +9,17 @@ function failure(overrides: Partial<EmbeddedAgentCompactResult>): EmbeddedAgentC
   return { ok: false, compacted: false, ...overrides };
 }
 
-describe("classifyRecoverableNativeHarnessBindingFailure", () => {
+describe("isRecoverableNativeHarnessBindingFailure", () => {
   it.each([
-    [{ failure: { reason: "missing_thread_binding" } }, "missing_thread_binding"],
-    [{ failure: { reason: "stale_thread_binding" } }, "stale_thread_binding"],
-    [{ reason: "thread not found: <id>" }, "thread_not_found"],
-    [{ reason: "no thread binding for session" }, "missing_thread_binding"],
-    [{ reason: "STALE_THREAD_BINDING" }, "stale_thread_binding"],
-  ] as const)("maps %o to %s", (overrides, expected) => {
-    const result = failure(overrides);
-    expect(classifyRecoverableNativeHarnessBindingFailure(result)).toBe(expected);
+    failure({ failure: { reason: "missing_thread_binding" } }),
+    failure({ failure: { reason: "stale_thread_binding" } }),
+    failure({ reason: "thread not found: <id>" }),
+    failure({ reason: "no thread binding for session" }),
+    failure({ reason: "STALE_THREAD_BINDING" }),
+    // Structured failure reason is recognized even when the display reason is not.
+    failure({ reason: "auth profile mismatch", failure: { reason: "stale_thread_binding" } }),
+  ])("recognizes recoverable binding failure %#", (result) => {
     expect(isRecoverableNativeHarnessBindingFailure(result)).toBe(true);
-  });
-
-  it("prefers the structured failure reason over the display reason", () => {
-    const result = failure({
-      reason: "thread not found",
-      failure: { reason: "stale_thread_binding" },
-    });
-    expect(classifyRecoverableNativeHarnessBindingFailure(result)).toBe("stale_thread_binding");
   });
 
   it.each([
@@ -37,18 +28,15 @@ describe("classifyRecoverableNativeHarnessBindingFailure", () => {
     failure({}),
     { ok: true, compacted: false, reason: "thread not found" } as EmbeddedAgentCompactResult,
     undefined,
-  ])("does not classify non-recoverable result %#", (result) => {
-    expect(classifyRecoverableNativeHarnessBindingFailure(result)).toBeUndefined();
+  ])("does not recognize non-recoverable result %#", (result) => {
     expect(isRecoverableNativeHarnessBindingFailure(result)).toBe(false);
   });
 });
 
 describe("isNativeHarnessBindingRecoverySkip", () => {
-  it("is true only when the typed disposition is present", () => {
+  it("is true only when the authenticated marker is present", () => {
     expect(
-      isNativeHarnessBindingRecoverySkip(
-        failure({ nativeHarnessBindingRecoveryReason: "stale_thread_binding" }),
-      ),
+      isNativeHarnessBindingRecoverySkip(failure({ nativeHarnessBindingRecovery: true })),
     ).toBe(true);
     expect(
       isNativeHarnessBindingRecoverySkip(failure({ failure: { reason: "stale_thread_binding" } })),

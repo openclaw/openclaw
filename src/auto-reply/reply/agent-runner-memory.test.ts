@@ -2144,7 +2144,7 @@ describe("runMemoryFlushIfNeeded", () => {
         compacted: false,
         reason,
         failure: { reason: recoveryReason },
-        nativeHarnessBindingRecoveryReason: recoveryReason,
+        nativeHarnessBindingRecovery: true,
       });
       const sessionEntry: SessionEntry = {
         sessionId: "session",

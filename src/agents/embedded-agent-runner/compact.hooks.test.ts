@@ -5613,7 +5613,7 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
         ok: false,
         compacted: false,
         failure: { reason: failureReason },
-        nativeHarnessBindingRecoveryReason: failureReason,
+        nativeHarnessBindingRecovery: true,
       });
       expect(maybeCompactAgentHarnessSessionMock).toHaveBeenCalledTimes(1);
       expect(maybeCompactAgentHarnessSessionMock).toHaveBeenCalledWith(
@@ -5654,7 +5654,7 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
     });
     // No private capability dispatched, so the recovery disposition is withheld
     // and the turn layer keeps this terminal instead of safe-continuing.
-    expect(result).not.toHaveProperty("nativeHarnessBindingRecoveryReason");
+    expect(result).not.toHaveProperty("nativeHarnessBindingRecovery");
     expect(contextEngineCompactMock).not.toHaveBeenCalled();
   });
 
@@ -5682,7 +5682,7 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
       reason: "native compaction unavailable",
       failure: { reason: "native_unavailable" },
     });
-    expect(result).not.toHaveProperty("nativeHarnessBindingRecoveryReason");
+    expect(result).not.toHaveProperty("nativeHarnessBindingRecovery");
     expect(maybeCompactAgentHarnessSessionMock).toHaveBeenCalledTimes(1);
     expect(contextEngineCompactMock).not.toHaveBeenCalled();
   });
@@ -5717,7 +5717,7 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
       });
       // The forged public fallback marker never dispatches the private capability,
       // so no recovery disposition is stamped and the turn stays terminal.
-      expect(result).not.toHaveProperty("nativeHarnessBindingRecoveryReason");
+      expect(result).not.toHaveProperty("nativeHarnessBindingRecovery");
       expect(maybeCompactAgentHarnessSessionMock).toHaveBeenCalledTimes(1);
       expect(maybeCompactAgentHarnessSessionMock).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -5736,9 +5736,9 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
     ["missing_thread_binding", "no codex app-server thread binding"],
     ["stale_thread_binding", "codex app-server binding changed before native compaction"],
   ])(
-    "strips a forged nativeHarnessBindingRecoveryReason on model-locked %s required preflight",
+    "strips a forged nativeHarnessBindingRecovery marker on model-locked %s required preflight",
     async (failureReason, reason) => {
-      // The harness result forges the owner-minted recovery disposition, but the
+      // The harness result forges the owner-minted recovery marker, but the
       // private required-preflight capability never dispatched (the mock resolves
       // without invoking onNativeCompactionCapabilityUsed). The field must be
       // stripped so the turn stays terminal instead of safe-continuing on a marker
@@ -5748,7 +5748,7 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
         compacted: false,
         reason,
         failure: { reason: failureReason },
-        nativeHarnessBindingRecoveryReason: failureReason,
+        nativeHarnessBindingRecovery: true,
       });
 
       const result = await compactEmbeddedAgentSession(
@@ -5766,7 +5766,7 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
         compacted: false,
         failure: { reason: failureReason },
       });
-      expect(result).not.toHaveProperty("nativeHarnessBindingRecoveryReason");
+      expect(result).not.toHaveProperty("nativeHarnessBindingRecovery");
       expect(maybeCompactAgentHarnessSessionMock).toHaveBeenCalledTimes(1);
       expect(contextEngineCompactMock).not.toHaveBeenCalled();
     },
