@@ -821,7 +821,9 @@ describe("runEmbeddedAgent auth profile rotation", () => {
             terminal: {
               kind: "failed",
               source: "prompt",
-              error: new Error("supported values are: low, medium"),
+              error: new Error(
+                "reasoning effort is unsupported; supported values are: low, medium",
+              ),
             },
           }),
         )
