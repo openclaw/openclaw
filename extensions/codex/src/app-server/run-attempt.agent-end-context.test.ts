@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 import { dynamicToolBuildState } from "./dynamic-tool-build-state.js";
 import {
   createParams,
+  createCodexRuntimePlanFixture,
   createRuntimeDynamicTool,
   createStartedThreadHarness,
   runCodexAppServerAttempt,
@@ -37,6 +38,7 @@ describe("runCodexAppServerAttempt agent-end context", () => {
         .spyOn(agentHarnessRuntime, "runAgentEndSideEffects")
         .mockImplementation(() => {});
       const params = createParams(sessionFile, workspaceDir);
+      params.runtimePlan = createCodexRuntimePlanFixture();
       const abortController = new AbortController();
       params.abortSignal = abortController.signal;
       params.sessionTarget = source;
