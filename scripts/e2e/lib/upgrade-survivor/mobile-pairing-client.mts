@@ -176,10 +176,10 @@ export const MOBILE_PAIRING_NODE_PERMISSIONS = Object.freeze({
 
 export const MOBILE_PAIRING_OPERATOR_CAPS = Object.freeze(["inline-widgets"]);
 export const MOBILE_PAIRING_APPROVAL_SCOPES = Object.freeze(["operator.pairing", "operator.admin"]);
+const MOBILE_PAIRING_AUDIT_SCOPES = ["operator.pairing", "operator.read"];
 
 const GATEWAY_PROTOCOL_VERSION = 4;
 const GATEWAY_MIN_NODE_PROTOCOL_VERSION = 3;
-const PAIRING_AUDIT_SCOPES = ["operator.pairing"];
 const EXPECTED_UPGRADE_COMMAND_ADDITIONS = ["watch.notify", "watch.status"];
 const MOBILE_WATCH_REAPPROVAL_REASONS: Record<MobileWatchReapprovalMode, string> = {
   "not-applicable": "baseline-before-candidate",
@@ -679,11 +679,11 @@ async function auditPairingState(params: {
     client: MOBILE_PAIRING_AUDIT_CLIENT,
     mode: "backend",
     role: "operator",
-    scopes: PAIRING_AUDIT_SCOPES,
+    scopes: [...MOBILE_PAIRING_AUDIT_SCOPES],
     auth: { password: params.password },
   });
   try {
-    readHelloAuth(audit.hello, "operator", PAIRING_AUDIT_SCOPES);
+    readHelloAuth(audit.hello, "operator", MOBILE_PAIRING_AUDIT_SCOPES);
     return validatePairingAudit({
       devicePairing: await request(audit.socket, "device.pair.list"),
       nodePairing: await request(audit.socket, "node.pair.list"),
@@ -753,6 +753,31 @@ export function validatePairingAudit(params: {
     pairedNode.permissions,
     "paired node permissions",
   );
+  if (
+    !Array.isArray(listedNode.caps) ||
+    !Array.isArray(listedNode.commands) ||
+    !isRecord(listedNode.permissions)
+  ) {
+    throw new Error("node.list effective mobile node surface missing");
+  }
+  const effectiveNodeCaps = normalizeCommandSurface(listedNode.caps, "effective node caps");
+  const effectiveNodeCommands = normalizeCommandSurface(
+    listedNode.commands,
+    "effective node commands",
+  );
+  const effectiveNodePermissions = normalizePermissionSurface(
+    listedNode.permissions,
+    "effective node permissions",
+  );
+  if (JSON.stringify(effectiveNodeCaps) !== JSON.stringify(pairedNodeCaps)) {
+    throw new Error("mobile node effective capability surface changed without reapproval");
+  }
+  if (JSON.stringify(effectiveNodeCommands) !== JSON.stringify(pairedNodeCommands)) {
+    throw new Error("mobile node effective command surface changed without reapproval");
+  }
+  if (JSON.stringify(effectiveNodePermissions) !== JSON.stringify(pairedNodePermissions)) {
+    throw new Error("mobile node effective permission surface changed without reapproval");
+  }
   const pairedCommands = new Set(pairedNodeCommands);
   if (params.mobileWatchReapprovalMode !== "not-applicable") {
     if (!params.baselinePairingSurface) {

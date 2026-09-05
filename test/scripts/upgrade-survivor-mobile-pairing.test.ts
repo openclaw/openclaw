@@ -142,13 +142,13 @@ describe("upgrade survivor mobile pairing client", () => {
       client: MOBILE_PAIRING_AUDIT_CLIENT,
       mode: "backend",
       role: "operator",
-      scopes: ["operator.pairing"],
+      scopes: ["operator.pairing", "operator.read"],
       auth: { password: "audit-password" },
     });
     expect(request.params).toMatchObject({
       client: { id: "gateway-client", mode: "backend" },
       role: "operator",
-      scopes: ["operator.pairing"],
+      scopes: ["operator.pairing", "operator.read"],
       auth: { password: "audit-password" },
     });
     expect(request.params).not.toHaveProperty("device");
@@ -360,11 +360,21 @@ describe("upgrade survivor mobile pairing client", () => {
       caps: ["watch", "camera"],
       permissions: { camera: false, microphone: false, screenRecording: true },
     };
-    const nodeListFor = (pending?: typeof pendingNode) => ({
+    const nodeListFor = (
+      pending?: typeof pendingNode,
+      effective: {
+        caps: string[];
+        commands: string[];
+        permissions: Record<string, boolean>;
+      } = pairedNode,
+    ) => ({
       nodes: [
         {
           nodeId: "device-1",
           connected: true,
+          caps: effective.caps,
+          commands: effective.commands,
+          permissions: effective.permissions,
           ...(pending
             ? {
                 pendingDeclaredCaps: pending.caps,
@@ -439,6 +449,31 @@ describe("upgrade survivor mobile pairing client", () => {
         mobileWatchReapprovalMode: "not-applicable",
       }),
     ).toThrow(/node.list retained a pending mobile node surface/);
+    for (const [effectiveSurface, expectedError] of [
+      [
+        { ...pairedNode, caps: [...pairedNode.caps, "screen"] },
+        /effective capability surface changed/,
+      ],
+      [
+        { ...pairedNode, commands: [...pairedNode.commands, "system.run"] },
+        /effective command surface changed/,
+      ],
+      [
+        { ...pairedNode, permissions: { ...pairedNode.permissions, camera: true } },
+        /effective permission surface changed/,
+      ],
+    ] as const) {
+      expect(() =>
+        validatePairingAudit({
+          devicePairing: { pending: [], paired: [{ deviceId: "device-1" }] },
+          nodePairing: { pending: [pendingNode], paired: [pairedNode] },
+          nodeList: nodeListFor(pendingNode, effectiveSurface),
+          deviceId: "device-1",
+          mobileWatchReapprovalMode: "required",
+          baselinePairingSurface,
+        }),
+      ).toThrow(expectedError);
+    }
     expect(
       validatePairingAudit({
         devicePairing: { pending: [], paired: [{ deviceId: "device-1" }] },
@@ -473,7 +508,10 @@ describe("upgrade survivor mobile pairing client", () => {
             },
           ],
         },
-        nodeList: nodeListFor(),
+        nodeList: nodeListFor(undefined, {
+          ...pairedNode,
+          commands: ["camera.snap", "watch.status", "watch.notify"],
+        }),
         deviceId: "device-1",
         mobileWatchReapprovalMode: "required",
         baselinePairingSurface: {
