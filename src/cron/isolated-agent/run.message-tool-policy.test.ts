@@ -5,6 +5,7 @@ import { createAgentLifecycleTerminalBackstop } from "../../auto-reply/reply/age
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { createSourceDeliveryPlan } from "../../infra/outbound/source-delivery-plan.js";
 import type { SkillSnapshot } from "../../skills/types.js";
+import { mockCall } from "../../test-utils/mock-call-assertions.js";
 import { applyJobPatch } from "../service/jobs.js";
 import type { CronDeliveryMode } from "../types.js";
 import type { MutableCronSession } from "./run-session-state.js";
@@ -137,25 +138,8 @@ function expectRecordFields(
   return record;
 }
 
-function getMockCallArg(
-  mock: { mock: { calls: readonly unknown[][] } },
-  callIndex: number,
-  argIndex: number,
-  label: string,
-): unknown {
-  const call = (mock.mock.calls as unknown[][])[callIndex];
-  if (!call) {
-    throw new Error(`expected ${label} call ${callIndex}`);
-  }
-  return call[argIndex];
-}
-
 function expectEmbeddedRunFields(expected: Record<string, unknown>): Record<string, unknown> {
-  return expectRecordFields(
-    getMockCallArg(runEmbeddedAgentMock, 0, 0, "embedded run"),
-    expected,
-    "embedded run params",
-  );
+  return expectRecordFields(mockCall(runEmbeddedAgentMock)[0], expected, "embedded run params");
 }
 
 function resolveRunPrompt(
@@ -183,14 +167,14 @@ function expectEmbeddedRunPrompt(messageToolAvailable = false): string {
 
 function expectCliRunPrompt(messageToolAvailable = false): string {
   return resolveRunPrompt(
-    expectRecordFields(getMockCallArg(runCliAgentMock, 0, 0, "CLI run"), {}, "CLI run params"),
+    expectRecordFields(mockCall(runCliAgentMock)[0], {}, "CLI run params"),
     messageToolAvailable,
   );
 }
 
 function expectDispatchFields(expected: Record<string, unknown>): Record<string, unknown> {
   return expectRecordFields(
-    getMockCallArg(dispatchCronDeliveryMock, 0, 0, "cron delivery dispatch"),
+    mockCall(dispatchCronDeliveryMock)[0],
     expected,
     "cron delivery dispatch params",
   );
@@ -787,7 +771,7 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
 
     expect(runCliAgentMock).toHaveBeenCalledTimes(1);
     expectRecordFields(
-      getMockCallArg(runCliAgentMock, 0, 0, "CLI run"),
+      mockCall(runCliAgentMock)[0],
       {
         allowEmptyAssistantReplyAsSilent: true,
         messageChannel: "messagechat",
@@ -799,8 +783,7 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
     expect(prompt).toContain("Message delivery destination metadata");
     expect(prompt).toContain('"channel":"messagechat","target":"123"');
     expect(
-      expectRecordFields(getMockCallArg(runCliAgentMock, 0, 0, "CLI run"), {}, "CLI run params")
-        .transcriptPrompt,
+      expectRecordFields(mockCall(runCliAgentMock)[0], {}, "CLI run params").transcriptPrompt,
     ).toBeUndefined();
   });
 
@@ -899,7 +882,7 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
     });
 
     const cliRun = expectRecordFields(
-      getMockCallArg(runCliAgentMock, 0, 0, "CLI run"),
+      mockCall(runCliAgentMock)[0],
       { toolsAllow: ["read"] },
       "CLI run params",
     );
@@ -918,11 +901,7 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
       ),
     });
 
-    const cliRun = expectRecordFields(
-      getMockCallArg(runCliAgentMock, 0, 0, "CLI run"),
-      {},
-      "CLI run params",
-    );
+    const cliRun = expectRecordFields(mockCall(runCliAgentMock)[0], {}, "CLI run params");
     expect(cliRun.toolsAllow).toBeUndefined();
     expect(resolveRunPrompt(cliRun, true)).toContain("Message delivery destination metadata");
   });
@@ -943,11 +922,7 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
       ),
     });
 
-    const cliRun = expectRecordFields(
-      getMockCallArg(runCliAgentMock, 0, 0, "CLI run"),
-      {},
-      "CLI run params",
-    );
+    const cliRun = expectRecordFields(mockCall(runCliAgentMock)[0], {}, "CLI run params");
     expect(cliRun.toolsAllow).toEqual(["read", "cron"]);
   });
 
@@ -976,11 +951,7 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
       job,
     });
 
-    const cliRun = expectRecordFields(
-      getMockCallArg(runCliAgentMock, 0, 0, "CLI run"),
-      {},
-      "CLI run params",
-    );
+    const cliRun = expectRecordFields(mockCall(runCliAgentMock)[0], {}, "CLI run params");
     expect(cliRun.toolsAllow).toEqual(["read", "cron"]);
   });
 
