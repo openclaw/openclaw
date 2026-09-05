@@ -1648,7 +1648,7 @@ describe("runMemoryFlushIfNeeded", () => {
     ).toBeUndefined();
   });
 
-  it("skips memory flush for CLI providers", async () => {
+  it("skips memory flush for CLI providers with no transcript anchor", async () => {
     const registry = createEmptyPluginRegistry();
     registry.cliBackends.push({
       pluginId: "test-codex-cli",
@@ -1679,6 +1679,9 @@ describe("runMemoryFlushIfNeeded", () => {
       replyOperation: createReplyOperation(),
     });
 
+    // The exclusion now lifts only where a transcript-byte anchor can replace
+    // the compaction watermark. This session has no transcript size, so it
+    // keeps the original skip rather than flushing once and locking the dedup.
     expect(result).toEqual({ sessionEntry, outcome: "skipped" });
     expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
   });
@@ -1717,7 +1720,7 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
   });
 
-  it("skips memory flush for compatible CLI session runtime pins", async () => {
+  it("skips memory flush for compatible CLI session runtime pins with no transcript anchor", async () => {
     registerClaudeCliBackend();
     const sessionEntry: SessionEntry = {
       sessionId: "session",
@@ -3827,7 +3830,78 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(incrementCompactionCountMock).not.toHaveBeenCalled();
   });
 
-  it("keeps ownsNativeCompaction absolute over the SQLite transcript byte guard", async () => {
+  it.each([
+    { label: "below the token threshold", totalTokens: 10, shouldFlush: false },
+    { label: "above the token threshold", totalTokens: 90_000, shouldFlush: true },
+  ])(
+    "honors forceFlushTranscriptBytes: 0 for a CLI session $label",
+    async ({ totalTokens, shouldFlush }) => {
+      registerClaudeCliBackend(true);
+      // 0 disables the byte trigger. The transcript size is still read so the
+      // re-arm anchor resolves, so `size >= 0` must not stand in for it.
+      registerMemoryFlushPlanResolverForTest(() => ({
+        softThresholdTokens: 4_000,
+        forceFlushTranscriptBytes: 0,
+        reserveTokensFloor: 20_000,
+        prompt: "Pre-compaction memory flush.\nNO_REPLY",
+        systemPrompt: "Write memory to memory/YYYY-MM-DD.md.",
+        relativePath: "memory/2023-11-14.md",
+      }));
+      const storePath = path.join(rootDir, `zero-byte-flush-${totalTokens}.json`);
+      const sessionKey = "agent:main:main";
+      const scope = { agentId: "main", sessionId: "session", sessionKey, storePath };
+      await upsertSessionEntryCore(scope, { sessionId: "session", updatedAt: 10 });
+      await replaceTranscriptEvents(scope, [
+        { message: { role: "user", content: "x".repeat(256) }, type: "message" },
+      ]);
+
+      const sessionEntry: SessionEntry = {
+        sessionId: "session",
+        updatedAt: Date.now(),
+        totalTokens,
+        totalTokensFresh: true,
+        totalTokensVersion: 1,
+        compactionCount: 0,
+      };
+      const cfg = {
+        agents: {
+          defaults: {
+            models: { "anthropic/claude-opus-4-6": { agentRuntime: { id: "claude-cli" } } },
+            compaction: { memoryFlush: {} },
+          },
+        },
+      } as const;
+
+      const result = await runMemoryFlushIfNeeded({
+        cfg,
+        followupRun: createTestFollowupRun({
+          provider: "anthropic",
+          model: "claude-opus-4-6",
+          sessionId: "session",
+          sessionKey,
+        }),
+        sessionCtx: createTestTemplateContext({ Provider: "whatsapp" }),
+        defaultModel: "anthropic/claude-opus-4-6",
+        modelContextTokens: 100_000,
+        resolvedVerboseLevel: "off",
+        sessionEntry,
+        sessionStore: { [sessionKey]: sessionEntry },
+        sessionKey,
+        storePath,
+        isHeartbeat: false,
+        replyOperation: createReplyOperation(),
+      });
+
+      if (shouldFlush) {
+        expect(result.outcome).not.toBe("skipped");
+      } else {
+        expect(result.outcome).toBe("skipped");
+        expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
+      }
+    },
+  );
+
+  it("keeps ownsNativeCompaction absolute for compaction while the flush runs on the byte guard", async () => {
     registerClaudeCliBackend(true);
     registerMemoryFlushPlanResolverForTest(() => ({
       softThresholdTokens: 4_000,
@@ -3901,10 +3975,13 @@ describe("runMemoryFlushIfNeeded", () => {
       ...createCompactionLifecycle(createReplyOperation()),
     });
 
-    expect(flushResult).toEqual({ sessionEntry, outcome: "skipped" });
+    // The transcript size gives this session a re-arm anchor, so the flush now
+    // runs where it previously could not. Compaction ownership is unchanged:
+    // the backend still owns it and OpenClaw still defers.
+    expect(flushResult.outcome).not.toBe("skipped");
+    expect(runEmbeddedAgentMock).toHaveBeenCalled();
     expect(preflightEntry).toBe(sessionEntry);
     expect(preflightEntry?.compactionCount).toBe(0);
-    expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
     expect(compactEmbeddedAgentSessionMock).not.toHaveBeenCalled();
   });
 
