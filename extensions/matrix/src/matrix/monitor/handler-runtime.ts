@@ -12,7 +12,7 @@ export type MatrixDraftStreamHandle = {
   mustDeliverFinalNormally: () => boolean;
   matchesPreparedText: (text: string) => boolean;
   finalizeLive: () => Promise<boolean>;
-  reset: () => void;
+  reset: (options?: { keepReplyTarget?: boolean }) => void;
 };
 
 export async function redactMatrixDraftEvent(
