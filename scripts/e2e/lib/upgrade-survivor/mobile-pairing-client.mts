@@ -729,13 +729,17 @@ export function validatePairingAudit(params: {
   if (!isRecord(pairedNode)) {
     throw new Error("paired mobile node missing");
   }
-  const pairedNodeCaps = normalizeCommandSurface(pairedNode.caps ?? [], "paired node caps");
-  const pairedNodeCommands = normalizeCommandSurface(
-    pairedNode.commands ?? [],
-    "paired node commands",
-  );
+  if (
+    !Array.isArray(pairedNode.caps) ||
+    !Array.isArray(pairedNode.commands) ||
+    !isRecord(pairedNode.permissions)
+  ) {
+    throw new Error("paired mobile node surface missing");
+  }
+  const pairedNodeCaps = normalizeCommandSurface(pairedNode.caps, "paired node caps");
+  const pairedNodeCommands = normalizeCommandSurface(pairedNode.commands, "paired node commands");
   const pairedNodePermissions = normalizePermissionSurface(
-    pairedNode.permissions ?? {},
+    pairedNode.permissions,
     "paired node permissions",
   );
   const pairedCommands = new Set(pairedNodeCommands);
@@ -806,10 +810,14 @@ export function validatePairingAudit(params: {
   if (!isRecord(pendingNode) || pendingNode.nodeId !== params.deviceId) {
     throw new Error("mobile node pairing pending identity changed");
   }
-  const pendingCommands = normalizeCommandSurface(
-    pendingNode.commands ?? [],
-    "pending node commands",
-  );
+  if (
+    !Array.isArray(pendingNode.caps) ||
+    !Array.isArray(pendingNode.commands) ||
+    !isRecord(pendingNode.permissions)
+  ) {
+    throw new Error("pending mobile node surface missing");
+  }
+  const pendingCommands = normalizeCommandSurface(pendingNode.commands, "pending node commands");
   const expectedPendingCommands = [
     ...new Set([...pairedNodeCommands, ...EXPECTED_UPGRADE_COMMAND_ADDITIONS]),
   ].toSorted();
@@ -822,12 +830,12 @@ export function validatePairingAudit(params: {
   if (JSON.stringify(commandAdditions) !== JSON.stringify(EXPECTED_UPGRADE_COMMAND_ADDITIONS)) {
     throw new Error("mobile node pairing pending command expansion changed");
   }
-  const pendingCaps = normalizeCommandSurface(pendingNode.caps ?? [], "pending node caps");
+  const pendingCaps = normalizeCommandSurface(pendingNode.caps, "pending node caps");
   if (JSON.stringify(pendingCaps) !== JSON.stringify(pairedNodeCaps)) {
     throw new Error("mobile node pairing pending capability surface changed");
   }
   const pendingPermissions = normalizePermissionSurface(
-    pendingNode.permissions ?? {},
+    pendingNode.permissions,
     "pending node permissions",
   );
   if (JSON.stringify(pendingPermissions) !== JSON.stringify(pairedNodePermissions)) {
