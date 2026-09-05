@@ -98,8 +98,10 @@ export async function updateCommand(inputOpts: UpdateCommandOptions): Promise<vo
     runId: run.runId,
   };
   recoveryState.triageTarget.root = prepared.discoveredRoot;
-  const presentation = createUpdateProgress(!opts.json && !prepared.postCoreUpdateResume, run);
+  let disposePresentation: (() => void) | undefined;
   try {
+    const presentation = createUpdateProgress(!opts.json && !prepared.postCoreUpdateResume, run);
+    disposePresentation = presentation.dispose;
     await withUpdateFailureTriage(
       { ...opts, invocationCwd },
       recoveryState.triageTarget,
@@ -152,8 +154,13 @@ export async function updateCommand(inputOpts: UpdateCommandOptions): Promise<vo
         });
       },
     );
+  } catch (error) {
+    if (!prepared.postCoreUpdateResume) {
+      failUpdateCommandRun(error, run);
+    }
+    throw error;
   } finally {
-    presentation.dispose();
+    disposePresentation?.();
   }
 }
 
