@@ -114,9 +114,9 @@ describe("pending spawn invocation authority", () => {
         data: { phase: "end", endedAt: Date.now() },
       });
       await vi.dynamicImportSettled();
-      await vi.waitFor(() => expect(findTaskByRunId("b")?.status).toBe("succeeded"));
-      clearAgentRunContext("b");
       await settleSubagentRegistryPersistenceWork();
+      expect(findTaskByRunId("b")?.status).toBe("succeeded");
+      clearAgentRunContext("b");
       expect(completedB).toMatchObject({
         generation: completedGeneration,
         spawnMode: "session",
