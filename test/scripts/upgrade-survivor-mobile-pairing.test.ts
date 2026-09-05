@@ -363,9 +363,9 @@ describe("upgrade survivor mobile pairing client", () => {
     const nodeListFor = (
       pending?: typeof pendingNode,
       effective: {
-        caps: string[];
-        commands: string[];
-        permissions: Record<string, boolean>;
+        caps: readonly string[];
+        commands: readonly string[];
+        permissions: Readonly<Record<string, boolean>>;
       } = pairedNode,
     ) => ({
       nodes: [
