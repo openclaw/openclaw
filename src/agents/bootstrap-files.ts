@@ -303,22 +303,30 @@ type BootstrapFileResolutionParams = {
   readOnlyState?: boolean;
 };
 
+/**
+ * Hook effects a resolution applies. Hook-runtime-free processes (doctor) pass
+ * the files a bundled handler would have added as `projected`; registered
+ * handlers still run first and path dedupe in sanitizeBootstrapFiles keeps the
+ * projection idempotent when both are present.
+ */
+type BootstrapHookApplication = "none" | "registered" | { projected: WorkspaceBootstrapFile[] };
+
 /** Prepare the same bounded workspace facts without invoking run-owned bootstrap hooks. */
 export async function resolveBootstrapFilesForPreparation(
   params: BootstrapFileResolutionParams,
 ): Promise<WorkspaceBootstrapFile[]> {
-  return resolveBootstrapFiles({ ...params, readOnlyState: true }, false);
+  return resolveBootstrapFiles({ ...params, readOnlyState: true }, "none");
 }
 
 export async function resolveBootstrapFilesForRun(
   params: BootstrapFileResolutionParams,
 ): Promise<WorkspaceBootstrapFile[]> {
-  return resolveBootstrapFiles(params, true);
+  return resolveBootstrapFiles(params, "registered");
 }
 
 async function resolveBootstrapFiles(
   params: BootstrapFileResolutionParams,
-  applyHooks: boolean,
+  hooks: BootstrapHookApplication,
 ): Promise<WorkspaceBootstrapFile[]> {
   const sessionKey = params.sessionKey ?? params.sessionId;
   const session = {
@@ -369,16 +377,18 @@ async function resolveBootstrapFiles(
     runKind: params.runKind,
   });
 
-  const updated = applyHooks
-    ? await applyBootstrapHookOverrides({
-        files: bootstrapFiles,
-        workspaceDir: params.workspaceDir,
-        config: params.config,
-        sessionKey: params.sessionKey,
-        sessionId: params.sessionId,
-        agentId: params.agentId,
-      })
-    : bootstrapFiles;
+  const hooked =
+    hooks === "none"
+      ? bootstrapFiles
+      : await applyBootstrapHookOverrides({
+          files: bootstrapFiles,
+          workspaceDir: params.workspaceDir,
+          config: params.config,
+          sessionKey: params.sessionKey,
+          sessionId: params.sessionId,
+          agentId: params.agentId,
+        });
+  const updated = typeof hooks === "object" ? [...hooked, ...hooks.projected] : hooked;
   const filteredUpdated = filterCompletedWorkspaceBootstrapFile(
     filterBootstrapFilesAfterHooks({
       files: updated,
@@ -408,6 +418,19 @@ export async function resolveBootstrapContextForRun(params: {
   contextFiles: EmbeddedContextFile[];
 }> {
   const bootstrapFiles = await resolveBootstrapFilesForRun(params);
+  const contextFiles = buildBootstrapContextForFiles(bootstrapFiles, params);
+  return { bootstrapFiles, contextFiles };
+}
+
+/** Resolves the run-equivalent bootstrap context plus hook additions a caller projected itself. */
+export async function resolveBootstrapContextWithProjectedHookFiles(
+  params: Pick<
+    BootstrapFileResolutionParams,
+    "workspaceDir" | "config" | "agentId" | "readOnlyState"
+  >,
+  projected: WorkspaceBootstrapFile[],
+): ReturnType<typeof resolveBootstrapContextForRun> {
+  const bootstrapFiles = await resolveBootstrapFiles(params, { projected });
   const contextFiles = buildBootstrapContextForFiles(bootstrapFiles, params);
   return { bootstrapFiles, contextFiles };
 }
