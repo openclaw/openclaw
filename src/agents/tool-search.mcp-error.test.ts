@@ -18,7 +18,6 @@ import { buildBundleMcpPolicyLayers } from "./embedded-agent-runner/effective-to
 import { createAgentHarnessPromptToolPolicy } from "./harness/prompt-tool-policy.js";
 import { runAgentLoop, type AgentEvent, type AgentMessage } from "./runtime/index.js";
 import { isToolResultError } from "./tool-result-error.js";
-import { MAX_UNAVAILABLE_MCP_ERROR_CHARS } from "./tool-search-lookup-miss.js";
 import { MAX_TOOL_SEARCH_BATCH_RESPONSE_CHARS } from "./tool-search-types.js";
 import {
   applyToolSearchCatalog,
@@ -650,9 +649,7 @@ describe("Tool Search with an unavailable MCP server", () => {
     }
     expect(details.unavailableMcpServers).toHaveLength(8);
     for (const server of details.unavailableMcpServers) {
-      expect(JSON.stringify(server.error).length - 2).toBeLessThanOrEqual(
-        MAX_UNAVAILABLE_MCP_ERROR_CHARS,
-      );
+      expect(JSON.stringify(server.error).length - 2).toBeLessThanOrEqual(120);
     }
     expect(JSON.stringify(details, null, 2).length).toBeLessThanOrEqual(
       MAX_TOOL_SEARCH_BATCH_RESPONSE_CHARS,
