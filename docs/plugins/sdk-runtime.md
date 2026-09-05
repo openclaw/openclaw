@@ -1255,6 +1255,14 @@ Each start receives a new capability lease and health reporter. Stop must releas
 resources before resolving; failed replacement cleanup or startup triggers
 Gateway recovery. A full plugin replacement subsumes these service restarts.
 
+Trusted official diagnostics exporter services can also receive
+`ctx.internalDiagnostics.getRuntimeIdentity?.()`. It returns the hosting
+process's canonical `processInstanceId` and optional loaded `buildId`, with no
+filesystem lookup or RPC. Capture it during service startup; a retained getter
+throws after the service lease is revoked. Hosts that do not provide this
+optional capability leave runtime identity unavailable. This diagnostic fact
+does not grant authority or identify a service-reload epoch.
+
 Long-lived services registered with `api.registerService(...)` receive a process-local
 `ctx.gatewayEvents` facade when the process runs a Gateway broadcaster; in runtimes without one the
 field is absent, so feature-detect it and keep a fallback (for example a coarse poll). Use
