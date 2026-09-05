@@ -1,4 +1,7 @@
-import { resolveProviderAuthProfileId } from "../../../plugins/provider-runtime.js";
+import {
+  providerOwnsDynamicModelPreparation,
+  resolveProviderAuthProfileId,
+} from "../../../plugins/provider-runtime.js";
 import type { AuthProfileStore } from "../../auth-profiles.js";
 import { resolveExternalCliAuthOverlayScopeFromSelection } from "../../auth-profiles/external-cli-auth-selection.js";
 import type { AgentHarness } from "../../harness/types.js";
@@ -192,6 +195,11 @@ export async function prepareEmbeddedRunAuthPlan(params: {
     agentDir: params.agentDir,
     workspaceDir: params.workspaceDir,
   });
+  const providerOwnsDynamicModelRefresh = providerOwnsDynamicModelPreparation({
+    provider: params.provider,
+    config: runParams.config,
+    workspaceDir: params.workspaceDir,
+  });
   const { materialize: materializeAuthPlan, materializeUncached: materializeAuthPlanUncached } =
     createPreparedRuntimeModelMaterializer({
       provider: params.provider,
@@ -201,6 +209,10 @@ export async function prepareEmbeddedRunAuthPlan(params: {
       nativeModelOwned: params.nativeModelOwned,
       requestedProfileId: runParams.authProfileId,
       providerUsesProfileScopedModelMetadata,
+      providerOwnsDynamicModelRefresh,
+      // Generation-owned: turns one resolveModelAsync per turn (~420ms) into
+      // one per prepared-model-runtime generation.
+      generationRouteModelMemo: params.preparedModelRuntime?.routeModelResolutionMemo,
       resolveModel: ({ config, authProfileId, authProfileMode }) =>
         resolveModelAsync(params.provider, params.modelId, params.agentDir, config, {
           authStorage: params.authStorage,

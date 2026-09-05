@@ -54,6 +54,7 @@ import type {
   PreparedModelRuntimeSnapshot,
   PreparedModelRuntimeStores,
 } from "./prepared-model-runtime.types.js";
+import { createPreparedRuntimeRouteModelMemo } from "./runtime-plan/credential-scoped-model.js";
 import { AuthStorage } from "./sessions/auth-storage.js";
 
 const MAX_CONCURRENT_MODEL_RUNTIME_AGENT_SOURCE_BUILDS = 2;
@@ -328,6 +329,7 @@ function createSnapshot(
     configuredRuntimeModels,
     inlineProviderModels,
     createStores,
+    routeModelResolutionMemo: createPreparedRuntimeRouteModelMemo(),
   });
   setPreparedModelRuntimeAuthStore(snapshot, agentFacts.authStore);
   setPreparedModelRuntimeAuthLoader(snapshot, catalogAccess.loadAuth);
