@@ -523,7 +523,12 @@ describe("prepareDelegatedSystemAgentApproval", () => {
         operation: { kind: "gateway-restart" as const },
         hash: "e".repeat(64),
       };
-      const session = approvalSession(proposal, vi.fn().mockResolvedValue(null));
+      const resolveOperatorApproval = vi.fn().mockResolvedValue({
+        text: "Applied",
+        action: "none" as const,
+        applied: true,
+      });
+      const session = approvalSession(proposal, resolveOperatorApproval);
       const sessions = new Map([["delegate-worker", session]]);
       const manager = createTestApprovalManager<SystemAgentApprovalRequestPayload>(testContext, {
         approvalKind: "system-agent",
@@ -597,36 +602,27 @@ describe("prepareDelegatedSystemAgentApproval", () => {
       );
 
       expect(secondApprovalId).toBe(firstApprovalId);
-<<<<<<< HEAD
       expect(await manager.listPendingRecords()).toHaveLength(1);
-      expect(session.engine.resolveOperatorApproval).not.toHaveBeenCalled();
-      const completion = session.pendingApproval?.completion;
-      await manager.expire(firstApprovalId!);
-=======
-      expect(manager.listPendingRecords()).toHaveLength(1);
-      expect(manager.getSnapshot(firstApprovalId)?.agentRuntimeDelegatedAuthority).toMatchObject({
+      expect((await manager.getSnapshot(firstApprovalId))?.agentRuntimeDelegatedAuthority).toMatchObject({
         claimId: firstAuthority.claimId,
       });
-      expect(session.engine.resolveOperatorApproval).not.toHaveBeenCalled();
+      expect(resolveOperatorApproval).not.toHaveBeenCalled();
       const completion = session.pendingApproval?.completion;
       expect(completion).toBeDefined();
       (abortLease === "first" ? firstController : secondController).abort();
-      expect(manager.resolve(firstApprovalId, "allow-once", "operator-ui")).toBe(applies);
->>>>>>> 30bf08d07cc (test(gateway): cover delegated approval lease reuse)
+      expect(await manager.resolve(firstApprovalId, "allow-once", "operator-ui")).toBe(applies);
       await completion;
       if (applies) {
-        expect(session.engine.resolveOperatorApproval).toHaveBeenCalledWith(
+        expect(resolveOperatorApproval).toHaveBeenCalledWith(
           "allow-once",
           proposal.hash,
           expect.any(Function),
           undefined,
         );
       } else {
-        expect(
-          session.engine.resolveOperatorApproval.mock.calls.some(
-            ([decision]) => decision === "allow-once",
-          ),
-        ).toBe(false);
+        expect(resolveOperatorApproval.mock.calls.some(([decision]) => decision === "allow-once")).toBe(
+          false,
+        );
       }
     },
   );
