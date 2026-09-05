@@ -1025,6 +1025,7 @@ describe("update-cli", () => {
         await opts.prepareGitExposure(
           requireValue(result.root, "candidate checkout"),
           requireValue(result.after?.sha ?? undefined, "candidate commit"),
+          undefined,
         );
       }
       if (result.root) {
@@ -8245,7 +8246,7 @@ describe("update-cli", () => {
           builtSha: sha,
           entrySource: "export {};\n",
         });
-        await options?.prepareGitExposure?.(publishedRoot, sha);
+        await options?.prepareGitExposure?.(publishedRoot, sha, undefined);
         await options?.validateCandidate?.(publishedRoot);
         await options?.beforeGitMutation?.({});
         return makeOkUpdateResult({
@@ -8415,7 +8416,7 @@ describe("update-cli", () => {
         return manifest.version;
       });
       vi.mocked(runGatewayUpdate).mockImplementationOnce(async (options) => {
-        await options?.prepareGitExposure?.(gitRoot, sha);
+        await options?.prepareGitExposure?.(gitRoot, sha, undefined);
         expect(serviceStop).not.toHaveBeenCalled();
         expect(await fs.realpath(pkgRoot)).toBe(pkgRoot);
         await options?.validateCandidate?.(gitRoot);
@@ -11107,7 +11108,7 @@ describe("update-cli", () => {
         confirm.mockResolvedValueOnce(true).mockResolvedValueOnce(false);
         vi.mocked(runGatewayUpdate).mockImplementation(async (options) => {
           await writeOpenClawPackageFixture(tempDir, "2026.8.1", { git: true, builtSha: sha });
-          await options?.prepareGitExposure?.(tempDir, sha);
+          await options?.prepareGitExposure?.(tempDir, sha, undefined);
           await options?.validateCandidate?.(tempDir);
           await options?.beforeGitMutation?.({});
           return makeOkUpdateResult({
