@@ -3,17 +3,19 @@ import { createControlUiSessionRow as sessionRow } from "../test-helpers/control
 import {
   controlUiSessionUrl,
   createSessionManagementE2eSuite,
+  captureUiProof,
   installMockGateway,
   sessionsListResponse,
 } from "./session-management.test-support.ts";
 
 const suite = createSessionManagementE2eSuite();
+const LONG_OWNER_NAME = "Alexandria Montgomery";
 
 function largeOwnerList(count: number) {
   return Array.from({ length: count }, (_, index) => ({
     type: "human" as const,
     id: index === count - 1 ? `profile-${"owner-without-label-".repeat(10)}` : `profile-${index}`,
-    ...(index === count - 1 ? {} : { label: `Owner ${index + 1}` }),
+    label: index === count - 1 ? LONG_OWNER_NAME : `Owner ${index + 1}`,
   }));
 }
 
@@ -52,7 +54,9 @@ suite.define(() => {
         exact: true,
       });
       const allOwnersLabel = menu.locator('[value="owner:"] .session-menu__text');
-      const ownersLabel = ownerSubmenu.locator(":scope > .session-menu__text");
+      const ownersLabel = ownerSubmenu.locator(
+        ":scope > .session-menu__label > .session-menu__text",
+      );
       const labelAlignment = await allOwnersLabel.evaluate(
         (allOwners, owners) =>
           Math.abs(allOwners.getBoundingClientRect().left - owners.getBoundingClientRect().left),
@@ -78,13 +82,7 @@ suite.define(() => {
           if (!details || !chevron || !content) {
             throw new Error("expected owner trailing content and submenu chevron");
           }
-          const contentBounds = content.getBoundingClientRect();
-          if (details !== content) {
-            const range = document.createRange();
-            range.selectNodeContents(content);
-            return chevron.getBoundingClientRect().left - range.getBoundingClientRect().right;
-          }
-          return chevron.getBoundingClientRect().left - contentBounds.right;
+          return chevron.getBoundingClientRect().left - content.getBoundingClientRect().right;
         }, selector);
       expect(await trailingGap(ownerSubmenu, ".sidebar-session-owner-count")).toBeLessThanOrEqual(
         8,
@@ -160,15 +158,10 @@ suite.define(() => {
         exact: true,
       });
       await expect
-        .poll(() =>
-          selectedOwnerSubmenu.locator(".sidebar-session-owner-selection__name").textContent(),
-        )
-        .toBe("Ada");
-      await expect
         .poll(() => page.locator('[value="owner:"]').getAttribute("aria-checked"))
         .toBe("false");
       expect(
-        await trailingGap(selectedOwnerSubmenu, ".sidebar-session-owner-selection__name"),
+        await trailingGap(selectedOwnerSubmenu, ".sidebar-session-owner-selection .viewer-avatar"),
       ).toBeLessThanOrEqual(8);
     } finally {
       await context.close();
@@ -176,124 +169,165 @@ suite.define(() => {
   });
 
   it.each([
-    { name: "desktop", ownerCount: 60, viewport: { height: 800, width: 1200 } },
+    { name: "desktop", ownerCount: 60, viewport: { height: 800, width: 1440 } },
     { name: "compact", ownerCount: 30, viewport: { height: 650, width: 390 } },
-  ])("contains a large owner roster in the $name menu", async ({ name, ownerCount, viewport }) => {
-    const context = await suite.browser.newContext({ viewport });
-    const page = await context.newPage();
-    await installMockGateway(page, {
-      sessionKey: "agent:main:large-roster",
-      methodResponses: {
-        "sessions.list": {
-          ...sessionsListResponse([
-            sessionRow("agent:main:large-roster", "Large owner roster", Date.now()),
-          ]),
-          owners: largeOwnerList(ownerCount),
+  ])(
+    "keeps the selected owner row clear in the $name menu",
+    async ({ name, ownerCount, viewport }) => {
+      const context = await suite.browser.newContext({ viewport });
+      const page = await context.newPage();
+      await installMockGateway(page, {
+        sessionKey: "agent:main:large-roster",
+        methodResponses: {
+          "sessions.list": {
+            ...sessionsListResponse([
+              sessionRow("agent:main:large-roster", "Large owner roster", Date.now()),
+            ]),
+            owners: largeOwnerList(ownerCount),
+          },
         },
-      },
-    });
+      });
 
-    try {
-      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:large-roster"));
-      if (name === "compact") {
-        await page.getByRole("button", { name: "Expand sidebar" }).click();
-      }
-      await page.getByRole("button", { name: "Filter & sort" }).click();
-      const menu = page.locator(".sidebar-session-sort-menu");
-      const specificOwner = menu.getByRole("menuitem", { name: /Specific owner/ });
-      await specificOwner.waitFor();
-      await expect
-        .poll(() => specificOwner.getAttribute("aria-label"))
-        .toMatch(/^Specific owner: \d+ available$/u);
-
-      if (name === "compact") {
-        expect(await specificOwner.getAttribute("aria-haspopup")).toBeNull();
-        await specificOwner.evaluate((element) => {
-          const menuPart = element
-            .closest("wa-dropdown")
-            ?.shadowRoot?.querySelector<HTMLElement>('[part="menu"]');
-          if (menuPart) {
-            menuPart.scrollTop = menuPart.scrollHeight;
-          }
-        });
-        await specificOwner.click();
-        const back = menu.getByRole("menuitem", { name: "Back", exact: true });
-        await back.waitFor();
-        expect(await menu.locator('[slot="submenu"]').count()).toBe(0);
+      try {
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:large-roster"));
+        if (name === "compact") {
+          await page.getByRole("button", { name: "Expand sidebar" }).click();
+        }
+        await page.getByRole("button", { name: "Filter & sort" }).click();
+        const menu = page.locator(".sidebar-session-sort-menu");
+        const specificOwner = menu.getByRole("menuitem", { name: /Specific owner/ });
+        await specificOwner.waitFor();
         await expect
-          .poll(() =>
-            menu.evaluate(
-              (dropdown) =>
-                dropdown.shadowRoot?.querySelector<HTMLElement>('[part="menu"]')?.scrollTop,
-            ),
-          )
-          .toBe(0);
-        await expect.poll(() => menu.locator('[value="owner:profile-0"]').isVisible()).toBe(true);
-        await back.click();
-        await menu.getByRole("menuitem", { name: /Specific owner/ }).click();
-        await menu.locator('[value^="owner:"]').last().click();
+          .poll(() => specificOwner.getAttribute("aria-label"))
+          .toMatch(/^Specific owner: \d+ available$/u);
+
+        if (name === "compact") {
+          expect(await specificOwner.getAttribute("aria-haspopup")).toBeNull();
+          await specificOwner.evaluate((element) => {
+            const menuPart = element
+              .closest("wa-dropdown")
+              ?.shadowRoot?.querySelector<HTMLElement>('[part="menu"]');
+            if (menuPart) {
+              menuPart.scrollTop = menuPart.scrollHeight;
+            }
+          });
+          await specificOwner.click();
+          const back = menu.getByRole("menuitem", { name: "Back", exact: true });
+          await back.waitFor();
+          expect(await menu.locator('[slot="submenu"]').count()).toBe(0);
+          await expect
+            .poll(() =>
+              menu.evaluate(
+                (dropdown) =>
+                  dropdown.shadowRoot?.querySelector<HTMLElement>('[part="menu"]')?.scrollTop,
+              ),
+            )
+            .toBe(0);
+          await expect.poll(() => menu.locator('[value="owner:profile-0"]').isVisible()).toBe(true);
+          await back.click();
+          await menu.getByRole("menuitem", { name: /Specific owner/ }).click();
+          await menu.locator('[value^="owner:"]').last().click();
+        } else {
+          await specificOwner.hover();
+          const submenuMetrics = await specificOwner.evaluate((element) => {
+            const submenu = element.shadowRoot?.querySelector<HTMLElement>('[part="submenu"]');
+            const lastLabel = element.querySelector<HTMLElement>(
+              'wa-dropdown-item[slot="submenu"]:last-of-type .session-menu__text',
+            );
+            if (!submenu || !lastLabel) {
+              throw new Error("expected a complete owner submenu");
+            }
+            const style = getComputedStyle(submenu);
+            return {
+              clientHeight: submenu.clientHeight,
+              scrollHeight: submenu.scrollHeight,
+              width: submenu.getBoundingClientRect().width,
+              overflowY: style.overflowY,
+              labelOverflows: lastLabel.scrollWidth > lastLabel.clientWidth,
+            };
+          });
+          expect(submenuMetrics.clientHeight).toBeLessThanOrEqual(viewport.height - 16);
+          expect(submenuMetrics.scrollHeight).toBeGreaterThan(submenuMetrics.clientHeight);
+          expect(submenuMetrics.width).toBeLessThanOrEqual(220);
+          expect(submenuMetrics.overflowY).toBe("auto");
+          expect(submenuMetrics.labelOverflows).toBe(true);
+          await specificOwner.locator('[slot="submenu"][value^="owner:"]').last().click();
+        }
+
         await expect.poll(() => menu.count()).toBe(0);
         await page.getByRole("button", { name: "Filter & sort" }).click();
-        const selected = page.getByRole("menuitem", { name: /Specific owner:/ });
-        const selectedGeometry = await selected.evaluate((element) => {
+        const selected = page.getByRole("menuitem", {
+          name: `Specific owner: ${LONG_OWNER_NAME}`,
+          exact: true,
+        });
+        await selected.waitFor();
+        if (name === "compact") {
+          await selected.evaluate((element) => {
+            const menuPart = element
+              .closest("wa-dropdown")
+              ?.shadowRoot?.querySelector<HTMLElement>('[part="menu"]');
+            if (menuPart) {
+              menuPart.scrollTop = menuPart.scrollHeight;
+            }
+          });
+        }
+        for (const theme of ["dark", "light"] as const) {
+          await page.locator("html").evaluate((element, mode) => {
+            element.setAttribute("data-theme-mode", mode);
+          }, theme);
+          await captureUiProof(suite, page, `owner-filter-${name}-${theme}.png`);
+        }
+        const allOwnersLabel = page
+          .getByRole("menuitemradio", { name: "All owners", exact: true })
+          .locator(".session-menu__text");
+        const allOwnersLabelElement = await allOwnersLabel.elementHandle();
+        if (!allOwnersLabelElement) {
+          throw new Error("expected the all-owners label");
+        }
+        const selectedGeometry = await selected.evaluate((element, siblingLabel) => {
           const dropdown = element.closest("wa-dropdown");
           const menuPart = dropdown?.shadowRoot?.querySelector<HTMLElement>('[part="menu"]');
-          const label = element
-            .querySelector<HTMLElement>(".session-menu__text")
-            ?.getBoundingClientRect();
-          const chevron = element
-            .querySelector<HTMLElement>(".session-menu__chevron")
-            ?.getBoundingClientRect();
-          const selectedName = element.querySelector<HTMLElement>(
-            ".sidebar-session-owner-selection__name",
+          const label = element.querySelector<HTMLElement>(
+            ":scope > .session-menu__text, :scope > .session-menu__label > .session-menu__text",
           );
-          const menuBounds = menuPart?.getBoundingClientRect();
+          const value = element.querySelector<HTMLElement>(".sidebar-session-owner-selection");
+          const chevron =
+            element.querySelector<HTMLElement>(".session-menu__chevron") ??
+            element.shadowRoot?.querySelector<HTMLElement>('[part="submenu-icon"]');
+          if (!menuPart || !label || !value || !chevron) {
+            throw new Error("expected the complete selected-owner row");
+          }
+          const menuBounds = menuPart.getBoundingClientRect();
+          const labelBounds = label.getBoundingClientRect();
+          const valueBounds = value.getBoundingClientRect();
+          const chevronBounds = chevron.getBoundingClientRect();
           return {
-            menuWidth: menuBounds?.width ?? 0,
-            labelLeft: label?.left ?? 0,
-            chevronRight: chevron?.right ?? 0,
-            menuRight: menuBounds?.right ?? 0,
-            nameOverflows: Boolean(
-              selectedName && selectedName.scrollWidth > selectedName.clientWidth,
+            chevronRight: chevronBounds.right,
+            labelFullyVisible: label.scrollWidth <= label.clientWidth,
+            labelOriginDelta: Math.abs(
+              labelBounds.left - siblingLabel.getBoundingClientRect().left,
             ),
+            labelRight: labelBounds.right,
+            leadingIconCount: element.querySelectorAll(":scope > [slot='icon']").length,
+            menuRight: menuBounds.right,
+            menuWidth: menuBounds.width,
+            valueChevronGap: chevronBounds.left - valueBounds.right,
+            valueLeft: valueBounds.left,
           };
-        });
+        }, allOwnersLabelElement);
         expect(selectedGeometry.menuWidth).toBeLessThanOrEqual(220);
-        expect(selectedGeometry.labelLeft).toBeGreaterThan(0);
+        expect(selectedGeometry.labelFullyVisible).toBe(true);
+        expect(selectedGeometry.labelOriginDelta).toBeLessThanOrEqual(0.5);
+        expect(selectedGeometry.leadingIconCount).toBe(0);
+        expect(selectedGeometry.labelRight).toBeLessThanOrEqual(selectedGeometry.valueLeft);
+        expect(selectedGeometry.valueChevronGap).toBeGreaterThanOrEqual(0);
+        expect(selectedGeometry.valueChevronGap).toBeLessThanOrEqual(8);
         expect(selectedGeometry.chevronRight).toBeLessThanOrEqual(selectedGeometry.menuRight);
-        expect(selectedGeometry.nameOverflows).toBe(true);
-        return;
+      } finally {
+        await context.close();
       }
-
-      await specificOwner.hover();
-      const submenuMetrics = await specificOwner.evaluate((element) => {
-        const submenu = element.shadowRoot?.querySelector<HTMLElement>('[part="submenu"]');
-        const lastLabel = element.querySelector<HTMLElement>(
-          'wa-dropdown-item[slot="submenu"]:last-of-type .session-menu__text',
-        );
-        if (!submenu || !lastLabel) {
-          throw new Error("expected a complete owner submenu");
-        }
-        const style = getComputedStyle(submenu);
-        return {
-          clientHeight: submenu.clientHeight,
-          scrollHeight: submenu.scrollHeight,
-          width: submenu.getBoundingClientRect().width,
-          maxHeight: style.maxHeight,
-          maxWidth: style.maxWidth,
-          overflowY: style.overflowY,
-          labelOverflows: lastLabel.scrollWidth > lastLabel.clientWidth,
-        };
-      });
-      expect(submenuMetrics.clientHeight).toBeLessThanOrEqual(viewport.height - 16);
-      expect(submenuMetrics.scrollHeight).toBeGreaterThan(submenuMetrics.clientHeight);
-      expect(submenuMetrics.width).toBeLessThanOrEqual(220);
-      expect(submenuMetrics.overflowY).toBe("auto");
-      expect(submenuMetrics.labelOverflows).toBe(true);
-    } finally {
-      await context.close();
-    }
-  });
+    },
+  );
 
   it("mirrors compact owner navigation arrows in RTL", async () => {
     const context = await suite.browser.newContext({ viewport: { height: 650, width: 390 } });

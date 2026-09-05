@@ -27,7 +27,7 @@ export function compactSessionMenuViewForValue(value: string): CompactSessionMen
 export function renderCompactSessionMenuNavigationItem(params: {
   value: string;
   label: string;
-  icon: TemplateResult;
+  icon?: TemplateResult;
   details?: TemplateResult;
   accessibleLabel?: string;
   disabled?: boolean;
@@ -35,24 +35,24 @@ export function renderCompactSessionMenuNavigationItem(params: {
 }) {
   return html`
     <wa-dropdown-item
-      class=${`session-menu__item${params.details ? " session-menu__item--compact-details" : ""}`}
+      class="session-menu__item"
       value=${params.value}
       aria-label=${params.accessibleLabel ?? nothing}
       ?disabled=${params.disabled ?? false}
       title=${params.title ?? nothing}
     >
-      <span slot="icon" class="session-menu__icon" aria-hidden="true">${params.icon}</span>
-      <span class="session-menu__text">${params.label}</span>
       ${
-        params.details
-          ? html`<span class="session-menu__compact-details" aria-hidden="true"
-              >${params.details}</span
+        params.icon
+          ? html`<span slot="icon" class="session-menu__icon" aria-hidden="true"
+              >${params.icon}</span
             >`
           : nothing
       }
-      <span slot="details" class="session-menu__icon session-menu__chevron" aria-hidden="true"
-        >${icons.chevronRight}</span
-      >
+      <span class="session-menu__text">${params.label}</span>
+      <span slot="details" class="session-menu__compact-details" aria-hidden="true">
+        ${params.details ?? nothing}
+        <span class="session-menu__icon session-menu__chevron">${icons.chevronRight}</span>
+      </span>
     </wa-dropdown-item>
   `;
 }

@@ -111,8 +111,7 @@ function renderSidebarOwnerFilter(params: {
     ? t("sessionsView.specificOwnerSelected", { name: selectedName })
     : t("sessionsView.specificOwnerAvailable", { count: String(owners.length) });
   const details = selectedOwner
-    ? html`${renderSessionOwnerAvatar(selectedOwner)}
-        <span class="sidebar-session-owner-selection__name">${selectedName}</span>`
+    ? renderSessionOwnerAvatar(selectedOwner)
     : html`<span class="sidebar-session-owner-count">${owners.length}</span>`;
   return html`
     <div class="session-menu__separator" role="separator"></div>
@@ -133,7 +132,6 @@ function renderSidebarOwnerFilter(params: {
           ? renderCompactSessionMenuNavigationItem({
               value: "compact:open-specific-owner",
               label: t("sessionsView.specificOwner"),
-              icon: icons.users,
               details: html`<span class="session-menu__shortcut sidebar-session-owner-selection"
                 >${details}</span
               >`,
@@ -143,7 +141,9 @@ function renderSidebarOwnerFilter(params: {
               class="sidebar-session-sort-menu__item sidebar-session-owner-submenu"
               aria-label=${accessibleLabel}
             >
-              <span class="session-menu__text">${t("sessionsView.specificOwner")}</span>
+              <span class="row session-menu__label">
+                <span class="session-menu__text">${t("sessionsView.specificOwner")}</span>
+              </span>
               <span
                 slot="details"
                 class="session-menu__shortcut sidebar-session-owner-selection"

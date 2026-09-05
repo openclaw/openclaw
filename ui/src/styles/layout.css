@@ -2671,10 +2671,10 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
   gap: 8px;
 }
 
-/* Web Awesome's shadow row adds `margin-inline-end: 0.75em !important` to the
-   slotted icon, which the light DOM cannot outrank. Dropping the gap leaves
-   that margin as the icon column instead of stacking into a ~17px gutter. */
-wa-dropdown-item.session-menu__item {
+/* Web Awesome's shadow row adds `margin-inline-end: 0.75em !important` to a
+   slotted icon, which the light DOM cannot outrank. Drop the host gap only when
+   that icon margin supplies the column; iconless rows keep the standard inset. */
+wa-dropdown-item.session-menu__item:has(> [slot="icon"]) {
   gap: 0;
 }
 
