@@ -70,6 +70,41 @@ test("sessions.delete retires an automation's idle run-alias placement through i
   expect(loadSessionEntry(AUTOMATION_BASE_KEY).entry).toBeUndefined();
 });
 
+test("sessions.delete still accepts an automation's exact run-alias key", async () => {
+  const sessionId = "sess-automation-exact-alias-delete";
+  const alias = automationRunAlias(sessionId);
+  await createSessionStoreDir();
+  // A retained run row aliases the base transcript; both share the sessionId.
+  await writeSessionStore({
+    entries: {
+      [AUTOMATION_BASE_KEY]: sessionStoreEntry(sessionId),
+      [alias]: sessionStoreEntry(sessionId),
+    },
+  });
+  const { placementStore } = await loadGatewayWorkerEnvironmentStartupState();
+  placementStore.releaseTurn(
+    placementStore.claimTurn({
+      sessionId,
+      agentId: "main",
+      sessionKey: alias,
+      owner: { kind: "local" },
+      claimId: `${sessionId}-claim`,
+      runId: `${sessionId}-run`,
+    }),
+  );
+
+  const deleted = await directSessionReq(
+    "sessions.delete",
+    { key: alias },
+    { context: { workerSessionPlacementService: placementStore } },
+  );
+
+  requireOk("sessions.delete", deleted);
+  expect(deleted.payload).toMatchObject({ deleted: true });
+  expect(placementStore.get(sessionId)).toBeUndefined();
+  expect(loadSessionEntry(alias).entry).toBeUndefined();
+});
+
 test("sessions.patch archives an automation base session over its idle run-alias placement", async () => {
   const sessionId = "sess-automation-idle-archive";
   const placementStore = await seedIdleAutomationRunPlacement(

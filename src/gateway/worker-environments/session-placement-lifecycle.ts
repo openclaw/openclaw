@@ -232,11 +232,13 @@ export function prepareSessionWorkerPlacementStop(params: {
   const { agentId, context, sessionId, sessionKey } = params;
   const expected = readSessionWorkerPlacement(params);
   // Isolated automation turns run under the hidden `<base>:run:<sessionId>` alias, so the
-  // placement may carry that alias while the stable base row owns the sessionId. Non-alias
-  // keys parse to themselves, so every other session keeps exact-key equality.
+  // placement may carry that alias while the stable base row owns the sessionId. A request
+  // may address the alias itself (exact-run lifecycle) or its base row; both own this
+  // placement. Non-alias keys parse to themselves, so every other session keeps exact equality.
   const matches = (candidate: Placement) =>
     candidate.sessionId === sessionId &&
-    parseCronRunScopeSuffix(candidate.sessionKey).baseSessionKey === sessionKey &&
+    (candidate.sessionKey === sessionKey ||
+      parseCronRunScopeSuffix(candidate.sessionKey).baseSessionKey === sessionKey) &&
     candidate.agentId === agentId;
   if (expected && !matches(expected)) {
     throw new Error(`Session ${sessionKey} cloud worker placement identity changed.`);
