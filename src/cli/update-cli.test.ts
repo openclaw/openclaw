@@ -7250,6 +7250,8 @@ describe("update-cli", () => {
   it.each([
     { command: "update", fault: "stop" },
     { command: "doctor", fault: "stop" },
+    { command: "update", fault: "stop-enable-committed" },
+    { command: "doctor", fault: "stop-enable-committed" },
     { command: "update", fault: "suspension" },
     { command: "doctor", fault: "suspension" },
     { command: "update", fault: "suspension-spawn" },
@@ -7257,6 +7259,7 @@ describe("update-cli", () => {
   ] as const)(
     "starts $command triage when native $fault preparation cannot restore task autostart",
     async ({ command, fault }) => {
+      const stopFailure = fault === "stop" || fault === "stop-enable-committed";
       vi.spyOn(process, "platform", "get").mockReturnValue("win32");
       setTty(true);
       setStdoutTty(true);
@@ -7310,17 +7313,20 @@ describe("update-cli", () => {
         nativeCommands.push([...argv]);
         if (argv[1] === "/Query") {
           return commandResult({
-            stdout: "<Task><Settings><Enabled>true</Enabled></Settings></Task>",
+            stdout: `<Task><Settings><Enabled>${taskEnabled}</Enabled></Settings></Task>`,
           });
         }
         if (argv.at(-1) === "/DISABLE") {
           taskEnabled = false;
-          return fault !== "stop"
+          return !stopFailure
             ? commandResult({ code: 1, stderr: "disable timed out after commit" })
             : commandResult();
         }
         if (fault === "suspension-spawn") {
           throw new Error("spawn schtasks EACCES: enable denied");
+        }
+        if (fault === "stop-enable-committed") {
+          taskEnabled = true;
         }
         return commandResult({ code: 1, stderr: "enable denied" });
       });
@@ -7356,8 +7362,14 @@ describe("update-cli", () => {
       expect(
         nativeCommands.map((argv) => argv.at(-1)),
         `${String(reportedError)}\n${getErrorOutput()}`,
-      ).toEqual(["/XML", "/DISABLE", "/ENABLE"]);
-      expect(serviceStop).toHaveBeenCalledTimes(fault === "stop" ? 1 : 0);
+      ).toEqual([
+        "/XML",
+        "/DISABLE",
+        "/ENABLE",
+        ...(stopFailure ? ["/XML"] : []),
+        ...(fault === "stop-enable-committed" ? ["/DISABLE"] : []),
+      ]);
+      expect(serviceStop).toHaveBeenCalledTimes(stopFailure ? 1 : 0);
       expect(packageInstallCommandCall() !== undefined).toBe(command === "update");
       expect(JSON.parse(await fs.readFile(path.join(root, "package.json"), "utf8"))).toMatchObject({
         version: "1.0.0",
@@ -7434,7 +7446,18 @@ describe("update-cli", () => {
       expect(resumeScheduledTaskAutoStartAfterUpdate).not.toHaveBeenCalled();
       expect(defaultRuntime.exit).not.toHaveBeenCalled();
       expect(listUpdateRuns({ limit: 1 })).toMatchObject([
-        { phase: "finished", status: "failed", reason: "package update" },
+        {
+          phase: "finished",
+          status: "failed",
+          reason: "post-install verification",
+          steps: expect.arrayContaining([
+            expect.objectContaining({
+              step: "post-install verification",
+              status: "failed",
+              detail: expect.stringContaining("interrupted lifecycle"),
+            }),
+          ]),
+        },
       ]);
     } finally {
       platformSpy.mockRestore();
@@ -8343,7 +8366,7 @@ describe("update-cli", () => {
       expect(
         (await fs.readdir(nodeModules)).filter(
           (entry) =>
-            entry.startsWith(".openclaw-update-stage-") ||
+            entry.startsWith(".openclaw.update-stage-") ||
             entry.startsWith(".openclaw.package-backup-"),
         ).length,
       ).toBe(0);
@@ -8536,7 +8559,7 @@ describe("update-cli", () => {
       "-g",
       "--allow-scripts=openclaw",
       "--prefix",
-      expect.stringContaining(".openclaw-update-stage-"),
+      expect.stringContaining(".openclaw.update-stage-"),
       "openclaw@9999.0.0",
     ];
     const installFlags = ["--no-fund", "--no-audit", "--loglevel=error", "--min-release-age=0"];
