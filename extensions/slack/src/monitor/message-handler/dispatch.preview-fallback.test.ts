@@ -349,6 +349,7 @@ function createPreparedSlackMessage(params?: {
   channelConfig?: Record<string, unknown> | null;
   replyToMode?: "off" | "first" | "all" | "batched";
   isDirectMessage?: boolean;
+  allowImplicitThreadReplies?: boolean;
   route?: Partial<{
     agentId: string;
     accountId: string;
@@ -409,6 +410,7 @@ function createPreparedSlackMessage(params?: {
     },
     relayIdentity: params?.relayIdentity,
     turnAdoptionLifecycle: params?.turnAdoptionLifecycle,
+    allowImplicitThreadReplies: params?.allowImplicitThreadReplies,
     eventScope: params?.eventScope,
     message,
     route: {
@@ -1290,7 +1292,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     mockedReplyThreadTs = message.ts;
     mockedSlackIsThreadReply = false;
     const prepared: Parameters<typeof dispatchPreparedSlackMessage>[0] = createPreparedSlackMessage(
-      { message, replyToMode: "first" },
+      { message, replyToMode: "first", allowImplicitThreadReplies: true },
     );
     mockedReplyOptionEvents = [
       {
@@ -1300,12 +1302,18 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
             getSlackSessionRuns(prepared.ctx, {
               channelId: message.channel,
               threadTs: message.ts,
-            }).map(({ route }) => route.sessionKey),
-          ).toEqual([prepared.route.sessionKey]);
+            }).map(({ route, allowImplicitReplies }) => ({
+              sessionKey: route.sessionKey,
+              allowImplicitReplies,
+            })),
+          ).toEqual([{ sessionKey: prepared.route.sessionKey, allowImplicitReplies: true }]);
         },
       },
     ];
     await dispatchPreparedSlackMessage(prepared);
+    expect(
+      getSlackSessionRuns(prepared.ctx, { channelId: message.channel, threadTs: message.ts }),
+    ).toEqual([]);
   });
 
   it.each([false, true])(
@@ -1313,6 +1321,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     async (executed) => {
       const prepared: Parameters<typeof dispatchPreparedSlackMessage>[0] =
         createPreparedSlackMessage({
+          allowImplicitThreadReplies: true,
           turnAdoptionLifecycle: {
             admission: "exclusive",
             onAdopted: async () => {},
@@ -1326,16 +1335,22 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
           kind: "checkpoint",
           run: async () => {
             expect(
-              getSlackSessionRuns(prepared.ctx, address).map(({ route }) => route.sessionKey),
-            ).toEqual([prepared.route.sessionKey]);
+              getSlackSessionRuns(prepared.ctx, address).map(({ route, allowImplicitReplies }) => ({
+                sessionKey: route.sessionKey,
+                allowImplicitReplies,
+              })),
+            ).toEqual([{ sessionKey: prepared.route.sessionKey, allowImplicitReplies: true }]);
             capturedReplyOptions?.turnAdoptionLifecycle?.onDeferred?.();
           },
         },
       ];
       await dispatchPreparedSlackMessage(prepared);
       expect(
-        getSlackSessionRuns(prepared.ctx, address).map(({ route }) => route.sessionKey),
-      ).toEqual([prepared.route.sessionKey]);
+        getSlackSessionRuns(prepared.ctx, address).map(({ route, allowImplicitReplies }) => ({
+          sessionKey: route.sessionKey,
+          allowImplicitReplies,
+        })),
+      ).toEqual([{ sessionKey: prepared.route.sessionKey, allowImplicitReplies: true }]);
       const endQueuedRun = executed
         ? capturedReplyOptions?.queuedDeliveryCorrelations?.[0]?.begin()
         : undefined;
@@ -2795,15 +2810,18 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     mockedReplyOptionEvents = [{ kind: "item", progressText: "working" }];
     mockedDispatchError = new Error("agent dispatch failed");
 
-    await expect(
-      dispatchPreparedSlackMessage(
-        createPreparedSlackMessage({
-          accountConfig: {
-            streaming: { mode: "progress", progress: { toolProgress: true, label: "Working" } },
-          },
-        }),
-      ),
-    ).rejects.toThrow("agent dispatch failed");
+    const prepared: Parameters<typeof dispatchPreparedSlackMessage>[0] = createPreparedSlackMessage(
+      {
+        allowImplicitThreadReplies: true,
+        accountConfig: {
+          streaming: { mode: "progress", progress: { toolProgress: true, label: "Working" } },
+        },
+      },
+    );
+    await expect(dispatchPreparedSlackMessage(prepared)).rejects.toThrow("agent dispatch failed");
+    expect(getSlackSessionRuns(prepared.ctx, { channelId: "C123", threadTs: THREAD_TS })).toEqual(
+      [],
+    );
 
     const finalEdit = requireRecord(
       requireMockCall(finalizeSlackPreviewEditMock, 0, "dispatch error card edit")[0],
