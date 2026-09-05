@@ -40,6 +40,16 @@ export type ModelProviderLogoutTarget = {
   profileIds: string[];
 };
 
+export type ModelProviderPendingLogout = {
+  cardId: string;
+  label: string;
+  targets: ModelProviderLogoutTarget[];
+};
+
+export type ModelProviderProfileOrderLock = NonNullable<
+  ModelAuthStatusProvider["profileOrderLocked"]
+>;
+
 export type ModelProviderCard = {
   /** Canonical provider id used for icon + label lookup. */
   id: string;
@@ -54,6 +64,14 @@ export type ModelProviderCard = {
   displayName: string;
   auth?: ModelProviderAuthSummary;
   profiles: ModelAuthStatusProfile[];
+  /** Gateway auth owner used for priority changes to each visible profile. */
+  profileProviderIds: Record<string, string>;
+  /** Explicit priority, or inventory order while selection is automatic, by auth owner. */
+  profileOrders: Record<string, string[]>;
+  /** Auth owners whose stored priority can be reset. */
+  profileOrderStoredProviders: string[];
+  /** Configuration owner that pins priority for each auth owner. */
+  profileOrderLocks: Record<string, ModelProviderProfileOrderLock>;
   apiKey?: ModelAuthStatusProvider["apiKey"];
   hasConfigApiKey: boolean;
   modelCount: number;
@@ -122,6 +140,10 @@ function ensureDraft(drafts: CardDraft[], id: string, displayName: string): Card
       id,
       displayName,
       profiles: [],
+      profileProviderIds: {},
+      profileOrders: {},
+      profileOrderStoredProviders: [],
+      profileOrderLocks: {},
       credentialProviderIds: [],
       logoutTargets: [],
       hasConfigApiKey: false,
@@ -171,6 +193,7 @@ function addLogoutTarget(
 export function buildModelProviderCards(input: ModelProviderCardsInput): ModelProviderCard[] {
   const drafts: CardDraft[] = [];
   const apiKeyCapabilities = new Map<string, boolean>();
+  const profileOrdersByAuthProvider = new Map<string, string[]>();
   for (const capability of input.authStatus?.providerCapabilities ?? []) {
     const id = canonicalProviderId(capability.provider);
     if (!id) {
@@ -252,6 +275,28 @@ export function buildModelProviderCards(input: ModelProviderCardsInput): ModelPr
     }
     draft.card.displayName = provider.displayName || draft.card.displayName;
     draft.card.profiles.push(...provider.profiles);
+    if (provider.profiles.length > 0) {
+      const authProvider = provider.authProvider || provider.provider;
+      for (const profile of provider.profiles) {
+        draft.card.profileProviderIds[profile.profileId] = authProvider;
+      }
+      const order = provider.profileOrder ?? provider.profiles.map((profile) => profile.profileId);
+      profileOrdersByAuthProvider.set(authProvider, [
+        ...new Set([...(profileOrdersByAuthProvider.get(authProvider) ?? []), ...order]),
+      ]);
+      draft.card.profileOrders[authProvider] = [
+        ...new Set([...(draft.card.profileOrders[authProvider] ?? []), ...order]),
+      ];
+      if (
+        provider.profileOrderStored === true &&
+        !draft.card.profileOrderStoredProviders.includes(authProvider)
+      ) {
+        draft.card.profileOrderStoredProviders.push(authProvider);
+      }
+      if (provider.profileOrderLocked !== undefined) {
+        draft.card.profileOrderLocks[authProvider] ??= provider.profileOrderLocked;
+      }
+    }
     if (provider.apiKey || provider.profiles.length > 0) {
       addProviderId(draft.card.credentialProviderIds, provider.provider);
     }
@@ -275,6 +320,15 @@ export function buildModelProviderCards(input: ModelProviderCardsInput): ModelPr
         ...(usage.plan ? { plan: usage.plan } : {}),
         ...(usage.billing?.length ? { billing: usage.billing } : {}),
       };
+    }
+  }
+
+  for (const draft of drafts) {
+    for (const authProvider of Object.keys(draft.card.profileOrders)) {
+      const completeOrder = profileOrdersByAuthProvider.get(authProvider);
+      if (completeOrder) {
+        draft.card.profileOrders[authProvider] = completeOrder;
+      }
     }
   }
 

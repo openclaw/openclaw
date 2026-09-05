@@ -41,7 +41,7 @@ export function stripRuntimeExternalProfileMetadata(store: AuthProfileStore): Au
 export function markRuntimePersistedProfiles(
   store: AuthProfileStore,
   persistedStore: AuthProfileStore = store,
-): AuthProfileStore {
+): RuntimeAuthProfileStore {
   const profileIds = Object.entries(persistedStore.profiles)
     .flatMap(([profileId, credential]) =>
       isDeepStrictEqual(store.profiles[profileId], credential) ? [profileId] : [],
@@ -50,6 +50,7 @@ export function markRuntimePersistedProfiles(
   return {
     ...store,
     runtimePersistedProfileIds: profileIds.length > 0 ? profileIds : undefined,
+    runtimeLocalOrderProviderIds: Object.keys(persistedStore.order ?? {}).toSorted(),
   };
 }
 
@@ -283,6 +284,7 @@ export function runtimeAuthOwnerState(
       | "runtimeExternalProfileIdsAuthoritative"
       | "runtimeExternalCliProfileIds"
       | "runtimeLocalProfileIds"
+      | "runtimeLocalOrderProviderIds"
       | "runtimeInheritsMainState"
     >
   | undefined {
@@ -297,6 +299,7 @@ export function runtimeAuthOwnerState(
     runtimeExternalProfileIdsAuthoritative: store.runtimeExternalProfileIdsAuthoritative,
     runtimeExternalCliProfileIds: store.runtimeExternalCliProfileIds,
     runtimeLocalProfileIds: store.runtimeLocalProfileIds,
+    runtimeLocalOrderProviderIds: store.runtimeLocalOrderProviderIds,
     runtimeInheritsMainState: store.runtimeInheritsMainState,
   };
 }

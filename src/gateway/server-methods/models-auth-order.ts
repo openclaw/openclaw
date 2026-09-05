@@ -108,7 +108,6 @@ export const modelsAuthOrderHandlers: GatewayRequestHandlers = {
         agentDir: preparedSnapshot.agentDir,
         provider: authProvider,
         order: profileIds,
-        sharedStoreWrite: true,
       });
       if (!updated) {
         respond(
@@ -120,16 +119,18 @@ export const modelsAuthOrderHandlers: GatewayRequestHandlers = {
       }
       clearModelAuthStatusUsageCache();
       clearCurrentProviderAuthState();
+      // Status reads the prepared owner, so publish the committed order before acknowledging it.
+      // Otherwise an immediate refresh can replace the saved order with the previous generation.
+      await refreshPreparedModelRuntimeSnapshots(cfg, {
+        catalogMode: "static",
+        allowGatewaySubagentBinding: true,
+        agentIds: new Set([scope.agentId]),
+        pluginMetadataSnapshot: preparedSnapshot.metadataSnapshot,
+      });
       const result: ModelAuthOrderSetResult = { provider, profileIds };
       respond(true, result, undefined);
       void Promise.all([
         refreshActiveProviderAuthRuntimeSnapshot(),
-        refreshPreparedModelRuntimeSnapshots(cfg, {
-          catalogMode: "static",
-          allowGatewaySubagentBinding: true,
-          agentIds: new Set([scope.agentId]),
-          pluginMetadataSnapshot: preparedSnapshot.metadataSnapshot,
-        }),
         warmCurrentProviderAuthStateOffMainThread(cfg),
       ]).catch((err: unknown) => {
         log.warn(`provider auth state refresh after reorder failed: ${formatForLog(err)}`);

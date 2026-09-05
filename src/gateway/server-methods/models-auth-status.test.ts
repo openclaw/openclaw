@@ -9,6 +9,7 @@ import type { AuthHealthSummary } from "../../agents/auth-health.js";
 import {
   replaceRuntimeAuthProfileStoreSnapshots,
   type AuthProfileStore,
+  type RuntimeAuthProfileStore,
 } from "../../agents/auth-profiles.js";
 import { NON_ENV_SECRETREF_MARKER } from "../../agents/model-auth-markers.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -252,7 +253,7 @@ const requireRecord = createRequireRecord("record", "expected-non-array-record")
 let preparedAuthStore: AuthProfileStore = { version: 1, profiles: {} };
 let preparedMetadataSnapshot: unknown;
 
-function setPreparedAuthStore(store: AuthProfileStore): void {
+function setPreparedAuthStore(store: RuntimeAuthProfileStore): void {
   preparedAuthStore = store;
   replaceRuntimeAuthProfileStoreSnapshots([{ agentDir: "/tmp/agent", store }]);
 }
@@ -645,36 +646,40 @@ describe("models.authStatus", () => {
     expect(result.providers[0]?.profiles[0]?.logoutSupported).toBe(true);
   });
 
-  it("projects profile labels, last use, and explicit priority", async () => {
-    setPreparedAuthStore({
-      version: 1,
-      profiles: {
-        "openai:default": {
-          type: "oauth",
-          provider: "openai",
-          access: "access",
-          refresh: "refresh",
-          expires: 1_000_000,
-          email: "owner@example.com",
-          displayName: "Work account",
+  it.each([false, true])(
+    "projects explicit priority with local reset ownership %s",
+    async (localOrderStored) => {
+      setPreparedAuthStore({
+        version: 1,
+        profiles: {
+          "openai:default": {
+            type: "oauth",
+            provider: "openai",
+            access: "access",
+            refresh: "refresh",
+            expires: 1_000_000,
+            email: "owner@example.com",
+            displayName: "Work account",
+          },
         },
-      },
-      order: { openai: ["openai:default"] },
-      usageStats: { "openai:default": { lastUsed: 42 } },
-    });
-    mocks.buildAuthHealthSummary.mockReturnValue(createOpenAiCodexOauthHealthSummary());
+        order: { openai: ["openai:default"] },
+        runtimeLocalOrderProviderIds: localOrderStored ? ["openai"] : [],
+        usageStats: { "openai:default": { lastUsed: 42 } },
+      });
+      mocks.buildAuthHealthSummary.mockReturnValue(createOpenAiCodexOauthHealthSummary());
 
-    const provider = await firstAuthStatusProvider();
+      const provider = await firstAuthStatusProvider();
 
-    expect(provider?.profileOrder).toEqual(["openai:default"]);
-    expect(provider?.profileOrderStored).toBe(true);
-    expect(provider?.profiles[0]).toMatchObject({
-      displayName: "Work account",
-      email: "owner@example.com",
-      lastUsedAt: 42,
-      source: "saved",
-    });
-  });
+      expect(provider?.profileOrder).toEqual(["openai:default"]);
+      expect(provider?.profileOrderStored === true).toBe(localOrderStored);
+      expect(provider?.profiles[0]).toMatchObject({
+        displayName: "Work account",
+        email: "owner@example.com",
+        lastUsedAt: 42,
+        source: "saved",
+      });
+    },
+  );
 
   it("omits profile identity for read-only clients", async () => {
     setPreparedAuthStore({
@@ -727,6 +732,83 @@ describe("models.authStatus", () => {
     expect(provider?.profileOrderLocked).toBe("auth-config");
     expect(provider?.profiles[0]?.source).toBe("external");
   });
+
+  it.each(["minimax:cn", "minimax:global"])(
+    "reports provider-owned priority for aliases when %s is pinned",
+    async (boundProfileId) => {
+      const config = {
+        auth: {
+          order: {
+            minimax: ["minimax:global", "minimax:cn"],
+            anthropic: ["anthropic:saved"],
+          },
+        },
+        models: {
+          providers: {
+            minimax: {
+              baseUrl: "https://api.minimax.io/v1",
+              apiKey: boundProfileId,
+              models: [],
+            },
+          },
+        },
+      } satisfies OpenClawConfig;
+      mocks.getRuntimeConfig.mockReturnValue(config);
+      setPreparedAuthStore({
+        version: 1,
+        profiles: {
+          "minimax:global": { type: "token", provider: "minimax", token: "global-token" },
+          "minimax:cn": { type: "token", provider: "minimax-cn", token: "cn-token" },
+          "anthropic:saved": { type: "token", provider: "anthropic", token: "other-token" },
+        },
+      });
+      setPreparedMetadataSnapshot(
+        createPluginMetadataSnapshotFixture({
+          plugins: [
+            {
+              id: "minimax",
+              origin: "bundled",
+              providers: ["minimax"],
+              providerAuthAliases: { "minimax-cn": "minimax" },
+            },
+          ],
+        }),
+      );
+      const actualAuthHealth = await vi.importActual<typeof import("../../agents/auth-health.js")>(
+        "../../agents/auth-health.js",
+      );
+      mocks.buildAuthHealthSummary.mockImplementation(actualAuthHealth.buildAuthHealthSummary);
+
+      const result = await readAuthStatus();
+
+      expect(result.providers).toMatchObject([
+        { provider: "anthropic", authProvider: "anthropic", profileOrderLocked: "auth-config" },
+        { provider: "minimax", authProvider: "minimax", profileOrderLocked: "provider-config" },
+        { provider: "minimax-cn", authProvider: "minimax", profileOrderLocked: "provider-config" },
+      ]);
+      const profiles = result.providers.flatMap((provider) => provider.profiles);
+      const boundProfile = profiles.find((profile) => profile.profileId === boundProfileId);
+      expect(boundProfile).toMatchObject({ source: "config" });
+      expect(boundProfile).not.toHaveProperty("logoutSupported");
+      for (const profile of profiles.filter(
+        (candidate) => candidate.profileId !== boundProfileId,
+      )) {
+        expect(profile).toMatchObject({ source: "saved", logoutSupported: true });
+      }
+
+      mocks.getRuntimeConfig.mockReturnValue({ ...config, auth: {} });
+      for (const provider of ["minimax", "minimax-cn"]) {
+        const opts = createOrderOptions({
+          provider,
+          profileIds: ["minimax:cn", "minimax:global"],
+        });
+        await orderHandler(opts);
+        expect(firstRespondCall(opts)?.[0]).toBe(false);
+        expect(firstRespondCall(opts)?.[2]?.message).toContain("provider configuration");
+      }
+      expect(mocks.setAuthProfileOrder).not.toHaveBeenCalled();
+    },
+  );
 
   it("projects provider capabilities from the published lifecycle metadata", async () => {
     const snapshot = createPluginMetadataSnapshotFixture({
@@ -2231,27 +2313,7 @@ describe("models.authOrderSet", () => {
     });
   });
 
-  it("persists a complete provider profile order", async () => {
-    const opts = createOrderOptions({
-      provider: "openai",
-      profileIds: ["openai:two", "openai:one"],
-    });
-
-    await orderHandler(opts);
-
-    expect(mocks.setAuthProfileOrder).toHaveBeenCalledWith({
-      agentDir: "/tmp/agent",
-      provider: "openai",
-      order: ["openai:two", "openai:one"],
-      sharedStoreWrite: true,
-    });
-    expect(firstRespondCall(opts)?.slice(0, 2)).toEqual([
-      true,
-      { provider: "openai", profileIds: ["openai:two", "openai:one"] },
-    ]);
-  });
-
-  it("acknowledges the durable order before background refresh finishes", async () => {
+  it("publishes the durable order before acknowledging it", async () => {
     let finishPublication: (() => void) | undefined;
     mocks.refreshPreparedModelRuntimeSnapshots.mockImplementationOnce(
       () =>
@@ -2265,9 +2327,14 @@ describe("models.authOrderSet", () => {
     });
 
     const pending = orderHandler(opts);
-    await pending;
+    await vi.waitFor(() => expect(mocks.refreshPreparedModelRuntimeSnapshots).toHaveBeenCalled());
 
-    expect(firstRespondCall(opts)?.[0]).toBe(true);
+    expect(mocks.setAuthProfileOrder).toHaveBeenCalledWith({
+      agentDir: "/tmp/agent",
+      provider: "openai",
+      order: ["openai:two", "openai:one"],
+    });
+    expect(opts.respond).not.toHaveBeenCalled();
     expect(mocks.refreshPreparedModelRuntimeSnapshots).toHaveBeenCalledWith(
       {},
       expect.objectContaining({
@@ -2278,6 +2345,11 @@ describe("models.authOrderSet", () => {
     );
 
     finishPublication?.();
+    await pending;
+    expect(firstRespondCall(opts)?.slice(0, 2)).toEqual([
+      true,
+      { provider: "openai", profileIds: ["openai:two", "openai:one"] },
+    ]);
   });
 
   it.each([
@@ -2313,7 +2385,6 @@ describe("models.authOrderSet", () => {
       agentDir: "/tmp/agent",
       provider: "openai",
       order: null,
-      sharedStoreWrite: true,
     });
   });
 

@@ -2,9 +2,10 @@ import { vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ModelsProbeResult } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
-import type { DefaultModelSelection, ModelProviderLogoutTarget } from "./data.ts";
+import type { DefaultModelSelection, ModelProviderPendingLogout } from "./data.ts";
 import { EMPTY_MODEL_PROVIDERS_DATA, type ModelProvidersData } from "./load.ts";
 import type { ModelBehaviorConfig } from "./model-behavior.ts";
+import type { ModelProviderProfileActionsController } from "./profile-actions-controller.ts";
 import type { ModelProvidersRouteData } from "./route.ts";
 import "./model-providers-page.ts";
 
@@ -20,9 +21,10 @@ export type ModelProvidersPageTestElement = HTMLElement & {
   defaultsDraft: (DefaultModelSelection & Partial<ModelBehaviorConfig>) | null;
   keyDraft: string;
   keyEditorProvider: string | null;
-  logout: (cardId: string, targets: ModelProviderLogoutTarget[]) => Promise<void>;
+  profileActions: Pick<ModelProviderProfileActionsController, "logout" | "setOrder">;
   messages: Record<string, { kind: "success" | "error"; text: string; warning?: string }>;
-  pendingLogoutProvider: string | null;
+  pendingLogout: ModelProviderPendingLogout | null;
+  profileOrders: Record<string, string[]>;
   probe: (cardId: string, providers: string[]) => Promise<void>;
   probeResults: Record<string, ModelsProbeResult>;
   refresh: (opts: { force: boolean }) => Promise<void>;
@@ -114,6 +116,7 @@ export function createHarness(initialScopeId: string) {
       };
     },
   };
+  let runtimeConfigListener: (() => void) | undefined;
   const subscribe = () => () => undefined;
   const runtimeConfig = {
     canPatch: true,
@@ -140,7 +143,12 @@ export function createHarness(initialScopeId: string) {
     save: vi.fn(async () => true),
     apply: vi.fn(async () => true),
     discardDraft: vi.fn(async () => undefined),
-    subscribe,
+    subscribe(listener: () => void) {
+      runtimeConfigListener = listener;
+      return () => {
+        runtimeConfigListener = undefined;
+      };
+    },
   };
   const context = {
     gateway: gatewaySource.gateway,
@@ -175,6 +183,7 @@ export function createHarness(initialScopeId: string) {
     context,
     deferNextAuthStatus,
     notifySelection: () => selectionListener?.(),
+    notifyRuntimeConfig: () => runtimeConfigListener?.(),
     request,
     runtimeConfig,
     snapshot,

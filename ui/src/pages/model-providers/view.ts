@@ -2,6 +2,7 @@
 import { html, nothing } from "lit";
 import type { FastMode, ModelsProbeResult } from "../../api/types.ts";
 import { icons } from "../../components/icons.ts";
+import "../../components/modal-dialog.ts";
 import { renderProviderBrandIcon } from "../../components/provider-icon.ts";
 import { renderProviderUsageDetails } from "../../components/provider-usage.ts";
 import {
@@ -25,10 +26,12 @@ import type {
   DefaultModelSelection,
   ModelPickerEntry,
   ModelProviderCard,
+  ModelProviderPendingLogout,
   ModelProviderLogoutTarget,
   ProviderOption,
 } from "./data.ts";
 import { renderDefaultModels } from "./default-models-view.ts";
+import { renderProviderProfiles } from "./profiles-view.ts";
 import { hasVerifiedProvider, renderProviderStatus } from "./view-status.ts";
 
 registerSettingsEnglish();
@@ -59,6 +62,7 @@ type ModelProvidersViewProps = {
   configBusy: boolean;
   quickAddSupported: boolean;
   unconfiguredProviders: ProviderOption[];
+  canViewProfiles: boolean;
   canMutate: boolean;
   mutationBlockedReason: string | null;
   /** Usage never converged before the retry budget ran out; cards lack usage. */
@@ -69,7 +73,8 @@ type ModelProvidersViewProps = {
   probeResults: Record<string, ModelsProbeResult>;
   keyEditorProvider: string | null;
   keyDraft: string;
-  pendingLogoutProvider: string | null;
+  pendingLogout: ModelProviderPendingLogout | null;
+  profileOrders: Record<string, string[]>;
   addProviderOpen: boolean;
   addProviderId: string;
   addProviderKey: string;
@@ -80,9 +85,10 @@ type ModelProvidersViewProps = {
   onSaveKey: (provider: string, configKey: string) => void;
   onRemoveKey: (provider: string, configKey: string) => void;
   onProbe: (cardId: string, providers: string[]) => void;
-  onRequestLogout: (provider: string) => void;
+  onRequestLogout: (pending: ModelProviderPendingLogout) => void;
   onCancelLogout: () => void;
   onLogout: (cardId: string, targets: ModelProviderLogoutTarget[]) => void;
+  onProfileOrderChange: (cardId: string, provider: string, profileIds: string[] | null) => void;
   onAddProviderToggle: () => void;
   onAddProviderIdChange: (provider: string) => void;
   onAddProviderKeyChange: (value: string) => void;
@@ -277,7 +283,6 @@ function renderProviderActions(card: ModelProviderCard, props: ModelProvidersVie
     ? card.credentialProviderIds
     : [card.id];
   const isConfigured = card.hasConfigApiKey || Boolean(card.apiKey) || card.profiles.length > 0;
-  const canLogout = card.logoutTargets.length > 0;
   const probeBusy = Boolean(props.busy[`probe:${card.id}`]);
   const keyBusy = Boolean(props.busy[`key:${card.id}`]);
   const logoutBusy = Boolean(props.busy[`logout:${card.id}`]);
@@ -288,6 +293,7 @@ function renderProviderActions(card: ModelProviderCard, props: ModelProvidersVie
   const keyBlocked = authModeBlocked
     ? t("modelProviders.apiKey.authModeBlocked", { mode: card.configAuthMode ?? "" })
     : blocked;
+  const pendingLogout = props.pendingLogout?.cardId === card.id ? props.pendingLogout : null;
   return html`
     <div class="model-providers__card-actions">
       ${
@@ -336,43 +342,58 @@ function renderProviderActions(card: ModelProviderCard, props: ModelProvidersVie
             `
           : nothing
       }
-      ${
-        canLogout
-          ? html`
-              <button
-                class="btn btn--sm"
-                ?disabled=${logoutBusy || mutationDisabled}
-                title=${blocked}
-                @click=${() => props.onRequestLogout(card.id)}
-              >
-                ${t("modelProviders.logout.action")}
-              </button>
-            `
-          : nothing
-      }
     </div>
     ${
-      props.pendingLogoutProvider === card.id
+      pendingLogout
         ? html`
-            <div class="model-providers__confirm" role="alert">
-              <span>${t("modelProviders.logout.confirm", { provider: card.displayName })}</span>
-              <div class="model-providers__form-actions">
-                <button
-                  class="btn danger btn--sm"
-                  ?disabled=${logoutBusy || mutationDisabled}
-                  @click=${() => props.onLogout(card.id, card.logoutTargets)}
-                >
-                  ${
-                    logoutBusy
-                      ? t("modelProviders.logout.loggingOut")
-                      : t("modelProviders.logout.action")
-                  }
-                </button>
-                <button class="btn btn--sm" ?disabled=${logoutBusy} @click=${props.onCancelLogout}>
-                  ${t("common.cancel")}
-                </button>
+            <openclaw-modal-dialog
+              label=${t("modelProviders.logout.actionFor", { account: pendingLogout.label })}
+              description=${t("modelProviders.logout.confirm", { provider: pendingLogout.label })}
+              @modal-cancel=${(event: Event) => {
+                if (logoutBusy) {
+                  event.preventDefault();
+                } else {
+                  props.onCancelLogout();
+                }
+              }}
+            >
+              <div class="exec-approval-card model-providers__logout-confirm">
+                <div class="exec-approval-header">
+                  <div>
+                    <div class="exec-approval-title">
+                      ${t("modelProviders.logout.actionFor", { account: pendingLogout.label })}
+                    </div>
+                    <div class="exec-approval-sub">
+                      ${t("modelProviders.logout.confirm", { provider: pendingLogout.label })}
+                    </div>
+                  </div>
+                </div>
+                ${renderMutationMessage(props.messages[card.id])}
+                <div class="exec-approval-actions">
+                  <button
+                    type="button"
+                    class="btn danger"
+                    ?disabled=${logoutBusy || mutationDisabled}
+                    @click=${() => props.onLogout(card.id, pendingLogout.targets)}
+                  >
+                    ${
+                      logoutBusy
+                        ? t("modelProviders.logout.loggingOut")
+                        : t("modelProviders.logout.action")
+                    }
+                  </button>
+                  <button
+                    type="button"
+                    class="btn"
+                    autofocus
+                    ?disabled=${logoutBusy}
+                    @click=${props.onCancelLogout}
+                  >
+                    ${t("common.cancel")}
+                  </button>
+                </div>
               </div>
-            </div>
+            </openclaw-modal-dialog>
           `
         : nothing
     }
@@ -402,7 +423,19 @@ function renderProviderRow(card: ModelProviderCard, props: ModelProvidersViewPro
           ${renderProviderStatus(card)}
         </div>
       </div>
-      ${renderCredentialSummary(card, props.credentialAgentLabel)}
+      ${
+        card.profiles.length > 0 && props.canViewProfiles
+          ? renderProviderProfiles(card, {
+              busy: props.busy,
+              canMutate: props.canMutate && !props.configBusy,
+              mutationBlockedReason: props.mutationBlockedReason,
+              profileOrders: props.profileOrders,
+              onOpenModelSetup: props.onOpenModelSetup,
+              onProfileOrderChange: props.onProfileOrderChange,
+              onRequestLogout: props.onRequestLogout,
+            })
+          : renderCredentialSummary(card, props.credentialAgentLabel)
+      }
       <div
         class="model-providers__global-metrics"
         aria-busy=${props.supplementalLoading ? "true" : "false"}
@@ -418,7 +451,8 @@ function renderProviderRow(card: ModelProviderCard, props: ModelProvidersViewPro
         ${renderLocalCost(card, props.costDays)}
       </div>
       ${renderProviderActions(card, props)} ${renderKeyEditor(card, props)}
-      ${renderProbeResult(props.probeResults[card.id])} ${renderMutationMessage(message)}
+      ${renderProbeResult(props.probeResults[card.id])}
+      ${props.pendingLogout?.cardId === card.id ? nothing : renderMutationMessage(message)}
     </div>
   `;
 }
