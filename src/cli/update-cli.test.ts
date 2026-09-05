@@ -3365,7 +3365,10 @@ describe("update-cli", () => {
           ],
         }),
       );
-      const inspectOriginalState = expectDefined(stateSchemaVersions.getMockImplementation());
+      const inspectOriginalState = expectDefined(
+        stateSchemaVersions.getMockImplementation(),
+        "state schema inspection mock is initialized",
+      );
       stateSchemaVersions.mockImplementation(async (options) => {
         if (options.root !== undefined) {
           throw new Error("The older target has no state schema worker");
