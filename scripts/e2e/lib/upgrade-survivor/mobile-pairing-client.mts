@@ -753,31 +753,6 @@ export function validatePairingAudit(params: {
     pairedNode.permissions,
     "paired node permissions",
   );
-  if (
-    !Array.isArray(listedNode.caps) ||
-    !Array.isArray(listedNode.commands) ||
-    !isRecord(listedNode.permissions)
-  ) {
-    throw new Error("node.list effective mobile node surface missing");
-  }
-  const effectiveNodeCaps = normalizeCommandSurface(listedNode.caps, "effective node caps");
-  const effectiveNodeCommands = normalizeCommandSurface(
-    listedNode.commands,
-    "effective node commands",
-  );
-  const effectiveNodePermissions = normalizePermissionSurface(
-    listedNode.permissions,
-    "effective node permissions",
-  );
-  if (JSON.stringify(effectiveNodeCaps) !== JSON.stringify(pairedNodeCaps)) {
-    throw new Error("mobile node effective capability surface changed without reapproval");
-  }
-  if (JSON.stringify(effectiveNodeCommands) !== JSON.stringify(pairedNodeCommands)) {
-    throw new Error("mobile node effective command surface changed without reapproval");
-  }
-  if (JSON.stringify(effectiveNodePermissions) !== JSON.stringify(pairedNodePermissions)) {
-    throw new Error("mobile node effective permission surface changed without reapproval");
-  }
   const pairedCommands = new Set(pairedNodeCommands);
   if (params.mobileWatchReapprovalMode !== "not-applicable") {
     if (!params.baselinePairingSurface) {

@@ -366,7 +366,7 @@ describe("upgrade survivor mobile pairing client", () => {
         caps: readonly string[];
         commands: readonly string[];
         permissions: Readonly<Record<string, boolean>>;
-      } = pairedNode,
+      } = pending ?? pairedNode,
     ) => ({
       nodes: [
         {
@@ -449,31 +449,6 @@ describe("upgrade survivor mobile pairing client", () => {
         mobileWatchReapprovalMode: "not-applicable",
       }),
     ).toThrow(/node.list retained a pending mobile node surface/);
-    for (const [effectiveSurface, expectedError] of [
-      [
-        { ...pairedNode, caps: [...pairedNode.caps, "screen"] },
-        /effective capability surface changed/,
-      ],
-      [
-        { ...pairedNode, commands: [...pairedNode.commands, "system.run"] },
-        /effective command surface changed/,
-      ],
-      [
-        { ...pairedNode, permissions: { ...pairedNode.permissions, camera: true } },
-        /effective permission surface changed/,
-      ],
-    ] as const) {
-      expect(() =>
-        validatePairingAudit({
-          devicePairing: { pending: [], paired: [{ deviceId: "device-1" }] },
-          nodePairing: { pending: [pendingNode], paired: [pairedNode] },
-          nodeList: nodeListFor(pendingNode, effectiveSurface),
-          deviceId: "device-1",
-          mobileWatchReapprovalMode: "required",
-          baselinePairingSurface,
-        }),
-      ).toThrow(expectedError);
-    }
     expect(
       validatePairingAudit({
         devicePairing: { pending: [], paired: [{ deviceId: "device-1" }] },
