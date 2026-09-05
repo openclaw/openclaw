@@ -10,6 +10,7 @@ const verifierPath = path.resolve("scripts/docker/verify-fs-safe-native.mjs");
 type FixtureOptions = {
   binding?: "bundled" | "escaped" | "platform";
   brokenPlatformManifestExport?: boolean;
+  danglingPlatformPackage?: boolean;
   durability?: boolean;
   installPlatformPackage?: boolean;
   native?: boolean;
@@ -124,6 +125,11 @@ function createFixture(options: FixtureOptions = {}) {
         path.join(fsSafeDependencyRoot, "@openclaw", "fs-safe-linux-x64-gnu"),
       );
     }
+  } else if (options.danglingPlatformPackage && options.pnpmLayout) {
+    linkDirectory(
+      path.join(virtualStore, "@openclaw+fs-safe-linux-x64-gnu@0.8.1", "missing"),
+      path.join(fsSafeDependencyRoot, "@openclaw", "fs-safe-linux-x64-gnu"),
+    );
   }
   return { packageRoot };
 }
@@ -265,6 +271,21 @@ describe("split-package fs-safe packages", () => {
       durability: true,
       native: true,
       platformPackage: true,
+      version: "0.8.1",
+    });
+
+    const result = runVerifier(fixture.packageRoot, { mode: "fallback" });
+
+    expect(result.status, result.stderr).toBe(0);
+  });
+
+  it("accepts fallback with a dangling omitted platform package link", () => {
+    const fixture = createFixture({
+      danglingPlatformPackage: true,
+      durability: true,
+      native: true,
+      platformPackage: true,
+      pnpmLayout: true,
       version: "0.8.1",
     });
 

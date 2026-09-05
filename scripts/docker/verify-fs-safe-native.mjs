@@ -64,14 +64,14 @@ function findOwningPackage(resolvedPath, expectedName) {
   }
 }
 
-function hasPhysicalPackageEntry(packageRoot, packageName) {
+function hasResolvablePackageEntry(packageRoot, packageName) {
   const packageSegments = packageName.split("/");
   let current = packageRoot;
   while (true) {
     if (path.basename(current) !== "node_modules") {
       const candidate = path.join(current, "node_modules", ...packageSegments);
       try {
-        fs.lstatSync(candidate);
+        fs.realpathSync(candidate);
         return true;
       } catch (error) {
         if (error?.code !== "ENOENT" && error?.code !== "ENOTDIR") {
@@ -173,7 +173,7 @@ const installedPlatformPackages = platformPackageNames.flatMap((name) => {
     );
     return [{ name, root: platformPackage.root }];
   } catch (error) {
-    if (error?.code === "MODULE_NOT_FOUND" && !hasPhysicalPackageEntry(fsSafeRoot, name)) {
+    if (error?.code === "MODULE_NOT_FOUND" && !hasResolvablePackageEntry(fsSafeRoot, name)) {
       return [];
     }
     throw error;
