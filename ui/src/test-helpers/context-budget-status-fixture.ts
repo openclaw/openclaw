@@ -18,6 +18,18 @@ export const SESSION_CONTEXT_TOKEN_BUDGET = 200_000;
 export const COMPACTION_RESERVE_TOKENS = 20_000;
 
 /**
+ * Budget a snapshot still records after the session's cap was lowered to
+ * `SESSION_CONTEXT_TOKEN_BUDGET` while the session sat idle.
+ *
+ * `buildGatewaySessionRow()` (`src/gateway/session-utils-row.ts`) projects the
+ * new cap into the row but forwards the stored snapshot unchanged until the
+ * session runs again, so this value outlives the setting it was measured
+ * against: its 980,000-token prompt budget reads 16% for a session that is at
+ * 89% of the boundary the next run will enforce.
+ */
+export const STALE_CONTEXT_TOKEN_BUDGET = 1_000_000;
+
+/**
  * Prompt size that is comfortable against both the catalog window (61%) and
  * the enforced budget (80%) while already pressuring the prompt budget (89%).
  */
