@@ -47,6 +47,7 @@ describe("upgrade survivor config recipe command resolution", () => {
         const candidate = join(candidateRoot, "candidate.tgz");
         const legacyDoctorPath = "src/commands/doctor-session-transcripts.ts";
         const legacyClawHubPath = "src/plugins/clawhub.ts";
+        const legacyGatewayPolicyPath = "src/gateway/node-command-policy.ts";
         const stateScript = "scripts/lib/openclaw-test-state.mts";
         mkdirSync(join(candidateRoot, dirname(legacyDoctorPath)), { recursive: true });
         writeFileSync(
@@ -55,8 +56,12 @@ describe("upgrade survivor config recipe command resolution", () => {
         );
         mkdirSync(join(candidateRoot, dirname(legacyClawHubPath)), { recursive: true });
         writeFileSync(join(candidateRoot, legacyClawHubPath), 'from "../infra/clawhub.js";\n');
+        mkdirSync(join(candidateRoot, dirname(legacyGatewayPolicyPath)), { recursive: true });
+        writeFileSync(join(candidateRoot, legacyGatewayPolicyPath), "\n");
         execFileSync("git", ["init", "--quiet"], { cwd: candidateRoot });
-        execFileSync("git", ["add", legacyDoctorPath, legacyClawHubPath], { cwd: candidateRoot });
+        execFileSync("git", ["add", legacyDoctorPath, legacyClawHubPath, legacyGatewayPolicyPath], {
+          cwd: candidateRoot,
+        });
         execFileSync(
           "git",
           [
@@ -138,6 +143,9 @@ esac
         );
         expect(args).toContain("OPENCLAW_UPGRADE_SURVIVOR_CLAWHUB_REQUEST_DIALECT=legacy");
         expect(args).toContain("OPENCLAW_UPGRADE_SURVIVOR_SESSION_REPAIR_MODE=jsonl");
+        expect(args).toContain(
+          "OPENCLAW_UPGRADE_SURVIVOR_MOBILE_WATCH_REAPPROVAL_MODE=omitted-gateway-unsupported",
+        );
         expect(args.slice(-5)).toEqual([
           "timeout",
           "--kill-after=30s",

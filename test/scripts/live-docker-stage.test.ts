@@ -432,11 +432,30 @@ export function parseRegistryNpmSpec(spec: string) {
           path.join(root, "src", "agents", "code-mode-namespaces.ts"),
           'const reserved = ["ALL_TOOLS", "catalog"];\n',
         );
+        mkdirSync(path.join(root, "src", "gateway"), { recursive: true });
+        writeFileSync(
+          path.join(root, "src", "gateway", "node-command-policy.ts"),
+          `const IOS_WATCH_RELAY_COMMANDS = ["watch.status", "watch.notify"];
+const watchRelayCommands =
+  platformId === "ios" && normalizeDeviceMetadataForPolicy(node?.deviceFamily) === "iphone"
+    ? IOS_WATCH_RELAY_COMMANDS
+    : [];
+const allow = new Set(
+  [...base, ...watchRelayCommands],
+);
+`,
+        );
         mkdirSync(path.join(root, "scripts", "e2e", "lib", "plugins"), { recursive: true });
         writeFileSync(
           path.join(root, "scripts", "e2e", "lib", "plugins", "assertions.mjs"),
           "function assertPluginUninstallConfigState() {}\n",
         );
+      } else {
+        mkdirSync(path.join(root, "src", "gateway"), { recursive: true });
+      }
+      if (kind === "legacy") {
+        mkdirSync(path.join(root, "src", "gateway"), { recursive: true });
+        writeFileSync(path.join(root, "src", "gateway", "node-command-policy.ts"), "\n");
       }
       execFileSync("git", ["init", "-q", root]);
       execFileSync("git", ["-C", root, "config", "user.email", "test@example.invalid"]);
@@ -464,7 +483,7 @@ export function parseRegistryNpmSpec(spec: string) {
             'openclaw_resolve_frozen_upgrade_survivor_capabilities "$2"',
             'openclaw_resolve_frozen_core_harness_capabilities "$2"',
             'openclaw_resolve_frozen_plugin_harness_capabilities "$2"',
-            'printf "%s|%s|%s|%s|%s|%s|%s|%s|%s|%s\\n" "$OPENCLAW_UPGRADE_SURVIVOR_EXEC_APPROVALS_MODE" "$OPENCLAW_UPGRADE_SURVIVOR_CLAWHUB_REQUEST_DIALECT" "$OPENCLAW_UPGRADE_SURVIVOR_SESSION_REPAIR_MODE" "$OPENCLAW_FROZEN_TARGET_ONBOARD_CASES" "$OPENCLAW_FROZEN_TARGET_ONBOARD_SESSION_MEMORY_HOOK_MODE" "$OPENCLAW_FROZEN_TARGET_AGENT_BUNDLE_MCP_MODE" "$OPENCLAW_FROZEN_TARGET_MCP_CODE_MODE_CATALOG_MODE" "$OPENCLAW_FROZEN_TARGET_MCP_MEMORY_CONFIG_MODE" "$OPENCLAW_FROZEN_TARGET_SESSION_REPAIR_MODE" "$OPENCLAW_FROZEN_TARGET_PLUGIN_UNINSTALL_MODE"',
+            'printf "%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s\\n" "$OPENCLAW_UPGRADE_SURVIVOR_EXEC_APPROVALS_MODE" "$OPENCLAW_UPGRADE_SURVIVOR_CLAWHUB_REQUEST_DIALECT" "$OPENCLAW_UPGRADE_SURVIVOR_SESSION_REPAIR_MODE" "$OPENCLAW_UPGRADE_SURVIVOR_MOBILE_WATCH_REAPPROVAL_MODE" "$OPENCLAW_FROZEN_TARGET_ONBOARD_CASES" "$OPENCLAW_FROZEN_TARGET_ONBOARD_SESSION_MEMORY_HOOK_MODE" "$OPENCLAW_FROZEN_TARGET_AGENT_BUNDLE_MCP_MODE" "$OPENCLAW_FROZEN_TARGET_MCP_CODE_MODE_CATALOG_MODE" "$OPENCLAW_FROZEN_TARGET_MCP_MEMORY_CONFIG_MODE" "$OPENCLAW_FROZEN_TARGET_SESSION_REPAIR_MODE" "$OPENCLAW_FROZEN_TARGET_PLUGIN_UNINSTALL_MODE"',
           ].join("; "),
           "test",
           frozenTargetCompatPath,
@@ -483,21 +502,21 @@ export function parseRegistryNpmSpec(spec: string) {
 
     const legacy = createSource("legacy");
     expect(run(legacy, "1").stdout.trim()).toBe(
-      "omitted|legacy|jsonl|local-basic,remote-non-interactive,reset,channels,skills|interactive|legacy|legacy|agent|jsonl|legacy",
+      "omitted|legacy|jsonl|omitted-gateway-unsupported|local-basic,remote-non-interactive,reset,channels,skills|interactive|legacy|legacy|agent|jsonl|legacy",
     );
     expect(run(legacy, "0").stdout.trim()).toBe(
-      "required|current|sqlite||required|current|current|current|sqlite|current",
+      "required|current|sqlite|required||required|current|current|current|sqlite|current",
     );
 
     const modern = createSource("modern");
     expect(run(modern, "1").stdout.trim()).toBe(
-      "required|current|sqlite||required|current|current|current|sqlite|current",
+      "required|current|sqlite|required||required|current|current|current|sqlite|current",
     );
 
     const unknown = createSource("unknown");
-    expect(run(unknown, "1").stdout.trim()).toBe(
-      "required|current|sqlite||required|current|current|current|sqlite|current",
-    );
+    const unknownResult = run(unknown, "1");
+    expect(unknownResult.status).toBe(2);
+    expect(unknownResult.stderr).toContain("failed to read selected Gateway node command policy");
 
     const mismatched = run(legacy, "1", "e".repeat(40));
     expect(mismatched.status).toBe(2);

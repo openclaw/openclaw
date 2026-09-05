@@ -1701,6 +1701,16 @@ function assertMobilePairingEvidence(files) {
     assert(value?.pendingDevicePairingCount === 0, "mobile device pairing left a pending request");
     assert(value?.pairedDevicePresent === true, "paired mobile device missing");
     assert(value?.pairedNodePresent === true, "paired mobile node missing");
+    assert(
+      Array.isArray(value?.pairedNodeCommands) &&
+        value.pairedNodeCommands.every(
+          (nodeCommand, commandIndex) =>
+            typeof nodeCommand === "string" &&
+            nodeCommand.length > 0 &&
+            (commandIndex === 0 || value.pairedNodeCommands[commandIndex - 1] < nodeCommand),
+        ),
+      "mobile paired node command evidence missing or non-canonical",
+    );
     const cleanPairingState =
       value?.pendingPairingCount === 0 &&
       value?.pendingNodePairingCount === 0 &&
@@ -1764,10 +1774,25 @@ function assertMobilePairingEvidence(files) {
   });
 
   const candidateMode = evidence[1]?.nodeSurfaceReapprovalMode;
+  const baselineCommands = JSON.stringify(evidence[0]?.pairedNodeCommands);
   assert(
     evidence.slice(1).every((value) => value?.nodeSurfaceReapprovalMode === candidateMode),
     "candidate mobile node pairing modes changed across reconnects",
   );
+  assert(
+    evidence
+      .slice(1)
+      .every((value) => JSON.stringify(value?.pairedNodeCommands) === baselineCommands),
+    "candidate mobile node pairing command surface changed without reapproval",
+  );
+  if (candidateMode === "not-applicable") {
+    assert(
+      expectedNodeSurfaceAdditions.every((nodeCommand) =>
+        evidence[0]?.pairedNodeCommands.includes(nodeCommand),
+      ),
+      "baseline mobile node pairing did not already admit the watch command surface",
+    );
+  }
 
   for (let index = 1; index < evidence.length; index += 1) {
     for (const role of ["node", "operator"]) {

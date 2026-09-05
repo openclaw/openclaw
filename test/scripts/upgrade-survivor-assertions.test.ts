@@ -1267,6 +1267,7 @@ process.stdout.write(sessionDir + "\\n");
         pendingNodePairingCount: scopedNodeSurfaceReapproval ? 1 : 0,
         pairedDevicePresent: true,
         pairedNodePresent: true,
+        pairedNodeCommands: ["camera.snap"],
         nodeSurfaceReapprovalRequired: scopedNodeSurfaceReapproval,
         nodeSurfaceReapprovalMode,
         nodeSurfaceReapprovalReason:
@@ -1341,7 +1342,7 @@ process.stdout.write(sessionDir + "\\n");
   });
 
   it("accepts one explicit unsupported-Gateway omission across candidate reconnects", () => {
-    const root = mkdtempSync(join(tmpdir(), "openclaw-mobile-pairing-omission-"));
+    const root = tempDirs.make("openclaw-mobile-pairing-omission-");
     const phases = ["baseline", "candidate-first", "candidate-restart", "final"];
     const hashes = ["a", "b", "c", "d", "e"].map((value) => value.repeat(64));
     const files = phases.map((phase, index) => {
@@ -1357,6 +1358,7 @@ process.stdout.write(sessionDir + "\\n");
         pendingNodePairingCount: 0,
         pairedDevicePresent: true,
         pairedNodePresent: true,
+        pairedNodeCommands: ["camera.snap"],
         nodeSurfaceReapprovalRequired: false,
         nodeSurfaceCommandAdditions: [],
         nodeSurfaceReapprovalMode: baseline ? "not-applicable" : "omitted-gateway-unsupported",
@@ -1383,17 +1385,15 @@ process.stdout.write(sessionDir + "\\n");
       return file;
     });
 
-    try {
-      expect(() =>
-        execFileSync(
-          process.execPath,
-          [ASSERTIONS_PATH, "assert-mobile-pairing-evidence", ...files],
-          { stdio: "pipe" },
-        ),
-      ).not.toThrow();
-    } finally {
-      rmSync(root, { force: true, recursive: true });
-    }
+    expect(() =>
+      execFileSync(
+        process.execPath,
+        [ASSERTIONS_PATH, "assert-mobile-pairing-evidence", ...files],
+        {
+          stdio: "pipe",
+        },
+      ),
+    ).not.toThrow();
   });
 
   it("accepts a clean candidate when the baseline already owns the watch commands", () => {
@@ -1412,6 +1412,7 @@ process.stdout.write(sessionDir + "\\n");
         pendingNodePairingCount: 0,
         pairedDevicePresent: true,
         pairedNodePresent: true,
+        pairedNodeCommands: ["camera.snap", "watch.notify", "watch.status"],
         nodeSurfaceReapprovalRequired: false,
         nodeSurfaceCommandAdditions: [],
         nodeSurfaceReapprovalMode: "not-applicable",
@@ -1451,6 +1452,10 @@ process.stdout.write(sessionDir + "\\n");
 
     expect(verify).not.toThrow();
     const stale = JSON.parse(readFileSync(candidateRestart, "utf8"));
+    stale.pairedNodeCommands = ["camera.snap", "system.run", "watch.notify", "watch.status"];
+    writeJson(candidateRestart, stale);
+    expect(verify).toThrow(/command surface changed without reapproval/);
+    stale.pairedNodeCommands = ["camera.snap", "watch.notify", "watch.status"];
     stale.nodeSurfaceReapprovalReason = "baseline-before-candidate";
     writeJson(candidateRestart, stale);
     expect(verify).toThrow(/reapproval reason changed/);

@@ -64,6 +64,7 @@ export type MobilePairingAudit = {
   pendingNodePairingCount: 0 | 1;
   pairedDevicePresent: true;
   pairedNodePresent: true;
+  pairedNodeCommands: string[];
   nodeSurfaceReapprovalRequired: boolean;
   nodeSurfaceCommandAdditions: string[];
   nodeSurfaceReapprovalMode: MobileWatchReapprovalMode;
@@ -196,6 +197,14 @@ function requireStringArray(value: unknown, label: string): string[] {
     throw new Error(`${label} invalid`);
   }
   return [...value];
+}
+
+function normalizeCommandSurface(value: unknown, label: string): string[] {
+  const commands = requireStringArray(value, label);
+  if (commands.some((command) => command.length === 0)) {
+    throw new Error(`${label} invalid`);
+  }
+  return [...new Set(commands)].toSorted();
 }
 
 function sha256(value: string | Buffer): string {
@@ -640,6 +649,7 @@ async function auditPairingState(params: {
   credentials: MobilePairingCredentials;
   password: string;
   mobileWatchReapprovalMode: MobileWatchReapprovalMode;
+  baselinePairedNodeCommands?: string[];
 }): Promise<MobilePairingAudit> {
   // Match the node approval CLI's local backend shared-auth path. Keep this
   // audit device-less so it cannot rotate mobile tokens.
@@ -659,6 +669,7 @@ async function auditPairingState(params: {
       nodePairing: await request(audit.socket, "node.pair.list"),
       deviceId: params.credentials.identity.deviceId,
       mobileWatchReapprovalMode: params.mobileWatchReapprovalMode,
+      baselinePairedNodeCommands: params.baselinePairedNodeCommands,
     });
   } finally {
     await closeSocket(audit.socket, params.WebSocket);
@@ -670,6 +681,7 @@ export function validatePairingAudit(params: {
   nodePairing: unknown;
   deviceId: string;
   mobileWatchReapprovalMode: MobileWatchReapprovalMode;
+  baselinePairedNodeCommands?: string[];
 }): MobilePairingAudit {
   if (!isRecord(params.devicePairing) || !Array.isArray(params.devicePairing.pending)) {
     throw new Error("mobile device pairing audit invalid");
@@ -697,9 +709,20 @@ export function validatePairingAudit(params: {
   if (!isRecord(pairedNode)) {
     throw new Error("paired mobile node missing");
   }
-  const pairedCommands = new Set(
-    requireStringArray(pairedNode.commands ?? [], "paired node commands"),
+  const pairedNodeCommands = normalizeCommandSurface(
+    pairedNode.commands ?? [],
+    "paired node commands",
   );
+  const pairedCommands = new Set(pairedNodeCommands);
+  if (params.mobileWatchReapprovalMode !== "not-applicable") {
+    const baselinePairedNodeCommands = normalizeCommandSurface(
+      params.baselinePairedNodeCommands,
+      "baseline paired node commands",
+    );
+    if (JSON.stringify(pairedNodeCommands) !== JSON.stringify(baselinePairedNodeCommands)) {
+      throw new Error("mobile node pairing command surface changed without reapproval");
+    }
+  }
   if (params.nodePairing.pending.length === 0) {
     if (params.mobileWatchReapprovalMode === "required") {
       if (!EXPECTED_UPGRADE_COMMAND_ADDITIONS.every((command) => pairedCommands.has(command))) {
@@ -710,6 +733,7 @@ export function validatePairingAudit(params: {
         pendingNodePairingCount: 0,
         pairedDevicePresent: true,
         pairedNodePresent: true,
+        pairedNodeCommands,
         nodeSurfaceReapprovalRequired: false,
         nodeSurfaceCommandAdditions: [],
         nodeSurfaceReapprovalMode: "not-applicable",
@@ -721,6 +745,7 @@ export function validatePairingAudit(params: {
       pendingNodePairingCount: 0,
       pairedDevicePresent: true,
       pairedNodePresent: true,
+      pairedNodeCommands,
       nodeSurfaceReapprovalRequired: false,
       nodeSurfaceCommandAdditions: [],
       nodeSurfaceReapprovalMode: params.mobileWatchReapprovalMode,
@@ -764,6 +789,7 @@ export function validatePairingAudit(params: {
     pendingNodePairingCount: 1,
     pairedDevicePresent: true,
     pairedNodePresent: true,
+    pairedNodeCommands,
     nodeSurfaceReapprovalRequired: true,
     nodeSurfaceCommandAdditions: commandAdditions,
     nodeSurfaceReapprovalMode: params.mobileWatchReapprovalMode,
@@ -952,6 +978,7 @@ async function verifyReconnect(params: {
   phase: string;
   evidenceFile: string;
   mobileWatchReapprovalMode: MobileWatchReapprovalMode;
+  baselinePairedNodeCommands?: string[];
 }): Promise<void> {
   const WebSocket = loadWebSocket(params.packageRoot);
   await assertMissingPassword({ WebSocket, credentials: params.credentials });
@@ -1010,6 +1037,7 @@ async function verifyReconnect(params: {
       credentials: params.credentials,
       password: params.password,
       mobileWatchReapprovalMode: params.mobileWatchReapprovalMode,
+      baselinePairedNodeCommands: params.baselinePairedNodeCommands,
     });
     writeRedactedEvidence(
       params.evidenceFile,
@@ -1060,6 +1088,14 @@ function mobileWatchReapprovalModeOption(
     return value;
   }
   throw new Error(`${name} invalid`);
+}
+
+function readBaselinePairedNodeCommands(file: string): string[] {
+  const evidence = readJson(file);
+  if (!isRecord(evidence) || evidence.phase !== "baseline") {
+    throw new Error("baseline mobile pairing evidence invalid");
+  }
+  return normalizeCommandSurface(evidence.pairedNodeCommands, "baseline paired node commands");
 }
 
 async function main(): Promise<void> {
@@ -1116,6 +1152,9 @@ async function main(): Promise<void> {
       mobileWatchReapprovalMode: mobileWatchReapprovalModeOption(
         options,
         "--mobile-watch-reapproval-mode",
+      ),
+      baselinePairedNodeCommands: readBaselinePairedNodeCommands(
+        option(options, "--baseline-evidence"),
       ),
     });
   } else {

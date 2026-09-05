@@ -370,6 +370,7 @@ describe("upgrade survivor mobile pairing client", () => {
       pendingNodePairingCount: 0,
       pairedDevicePresent: true,
       pairedNodePresent: true,
+      pairedNodeCommands: ["camera.snap"],
       nodeSurfaceReapprovalRequired: false,
       nodeSurfaceCommandAdditions: [],
       nodeSurfaceReapprovalMode: "not-applicable",
@@ -381,6 +382,7 @@ describe("upgrade survivor mobile pairing client", () => {
         nodePairing: { pending: [], paired: [pairedNode] },
         deviceId: "device-1",
         mobileWatchReapprovalMode: "omitted-gateway-unsupported",
+        baselinePairedNodeCommands: ["camera.snap"],
       }),
     ).toMatchObject({
       nodeSurfaceReapprovalRequired: false,
@@ -393,12 +395,14 @@ describe("upgrade survivor mobile pairing client", () => {
         nodePairing: { pending: [pendingNode], paired: [pairedNode] },
         deviceId: "device-1",
         mobileWatchReapprovalMode: "required",
+        baselinePairedNodeCommands: ["camera.snap"],
       }),
     ).toEqual({
       pendingDevicePairingCount: 0,
       pendingNodePairingCount: 1,
       pairedDevicePresent: true,
       pairedNodePresent: true,
+      pairedNodeCommands: ["camera.snap"],
       nodeSurfaceReapprovalRequired: true,
       nodeSurfaceCommandAdditions: ["watch.notify", "watch.status"],
       nodeSurfaceReapprovalMode: "required",
@@ -418,12 +422,14 @@ describe("upgrade survivor mobile pairing client", () => {
         },
         deviceId: "device-1",
         mobileWatchReapprovalMode: "required",
+        baselinePairedNodeCommands: ["camera.snap", "watch.notify", "watch.status"],
       }),
     ).toEqual({
       pendingDevicePairingCount: 0,
       pendingNodePairingCount: 0,
       pairedDevicePresent: true,
       pairedNodePresent: true,
+      pairedNodeCommands: ["camera.snap", "watch.notify", "watch.status"],
       nodeSurfaceReapprovalRequired: false,
       nodeSurfaceCommandAdditions: [],
       nodeSurfaceReapprovalMode: "not-applicable",
@@ -435,6 +441,7 @@ describe("upgrade survivor mobile pairing client", () => {
         nodePairing: { pending: [pendingNode], paired: [pairedNode] },
         deviceId: "device-1",
         mobileWatchReapprovalMode: "omitted-gateway-unsupported",
+        baselinePairedNodeCommands: ["camera.snap"],
       }),
     ).toThrow(/unexpected pending request/);
     for (const invalidPending of [
@@ -449,6 +456,7 @@ describe("upgrade survivor mobile pairing client", () => {
           nodePairing: { pending: [invalidPending], paired: [pairedNode] },
           deviceId: "device-1",
           mobileWatchReapprovalMode: "required",
+          baselinePairedNodeCommands: ["camera.snap"],
         }),
       ).toThrow();
     }
@@ -463,6 +471,7 @@ describe("upgrade survivor mobile pairing client", () => {
           nodePairing: { pending: [narrowedPending], paired: [pairedNode] },
           deviceId: "device-1",
           mobileWatchReapprovalMode: "required",
+          baselinePairedNodeCommands: ["camera.snap"],
         }),
       ).not.toThrow();
     }
@@ -472,6 +481,7 @@ describe("upgrade survivor mobile pairing client", () => {
         nodePairing: { pending: [pendingNode, pendingNode], paired: [pairedNode] },
         deviceId: "device-1",
         mobileWatchReapprovalMode: "required",
+        baselinePairedNodeCommands: ["camera.snap"],
       }),
     ).toThrow(/unexpected pending request/);
     expect(() =>
@@ -480,6 +490,7 @@ describe("upgrade survivor mobile pairing client", () => {
         nodePairing: { pending: [], paired: [pairedNode] },
         deviceId: "device-1",
         mobileWatchReapprovalMode: "required",
+        baselinePairedNodeCommands: ["camera.snap"],
       }),
     ).toThrow(/omitted the expected command-surface reapproval/);
     expect(() =>
@@ -491,8 +502,21 @@ describe("upgrade survivor mobile pairing client", () => {
         },
         deviceId: "device-1",
         mobileWatchReapprovalMode: "required",
+        baselinePairedNodeCommands: ["camera.snap"],
       }),
-    ).toThrow(/omitted the expected command-surface reapproval/);
+    ).toThrow(/command surface changed without reapproval/);
+    expect(() =>
+      validatePairingAudit({
+        devicePairing: { pending: [], paired: [{ deviceId: "device-1" }] },
+        nodePairing: {
+          pending: [],
+          paired: [{ ...pairedNode, commands: ["camera.snap", "system.run"] }],
+        },
+        deviceId: "device-1",
+        mobileWatchReapprovalMode: "omitted-gateway-unsupported",
+        baselinePairedNodeCommands: ["camera.snap"],
+      }),
+    ).toThrow(/command surface changed without reapproval/);
   });
 
   it("completes legacy baseline node pairing only for the bootstrapped identity", async () => {
@@ -602,6 +626,7 @@ describe("upgrade survivor mobile pairing client", () => {
           pendingNodePairingCount: 0,
           pairedDevicePresent: true,
           pairedNodePresent: true,
+          pairedNodeCommands: ["camera.snap"],
           nodeSurfaceReapprovalRequired: false,
           nodeSurfaceCommandAdditions: [],
           nodeSurfaceReapprovalMode: "omitted-gateway-unsupported",
@@ -623,6 +648,7 @@ describe("upgrade survivor mobile pairing client", () => {
       pendingNodePairingCount: 0,
       pairedDevicePresent: true,
       pairedNodePresent: true,
+      pairedNodeCommands: ["camera.snap"],
       nodeSurfaceReapprovalRequired: false,
       nodeSurfaceCommandAdditions: [],
       nodeSurfaceReapprovalMode: "omitted-gateway-unsupported",
@@ -734,6 +760,7 @@ describe("upgrade survivor mobile pairing client", () => {
       '"${OPENCLAW_UPGRADE_SURVIVOR_MOBILE_WATCH_REAPPROVAL_MODE:-required}"',
     );
     expect(reconnect).toContain("--mobile-watch-reapproval-mode");
+    expect(reconnect).toContain("--baseline-evidence");
     expect(source).not.toContain("mobile_pairing_expects_node_surface_reapproval");
     expect(source).not.toContain("--expect-known-node-surface-reapproval");
     expect(reconnect).not.toContain("candidate_install_mode");

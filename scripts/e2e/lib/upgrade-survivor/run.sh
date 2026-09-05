@@ -998,6 +998,7 @@ verify_mobile_pairing() {
     --package-root "$(package_root)" \
     --credentials "$MOBILE_PAIRING_CREDENTIALS" \
     --evidence "$evidence_file" \
+    --baseline-evidence "$MOBILE_PAIRING_BASELINE_EVIDENCE" \
     --phase "$phase_name" \
     --mobile-watch-reapproval-mode \
     "${OPENCLAW_UPGRADE_SURVIVOR_MOBILE_WATCH_REAPPROVAL_MODE:-required}"
