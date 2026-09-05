@@ -423,6 +423,7 @@ export async function handleOpenResponsesHttpRequest(
         extraSystemPrompt,
         modelOverride,
         streamParams,
+        agentId,
         sessionKey,
         runId: responseId,
         messageChannel,
