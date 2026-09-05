@@ -6119,16 +6119,38 @@ source "$ROOT_DIR/scripts/lib/docker-e2e-logs.sh"
     const dockerfile = readFileSync("scripts/e2e/Dockerfile", "utf8");
     const packageRunner = readFileSync(DOCKER_PACKAGE_INSTALL_E2E_PATH, "utf8");
     const updateRunner = readFileSync(UPDATE_CHANNEL_SWITCH_DOCKER_E2E_PATH, "utf8");
+    const bunRunner = readFileSync("scripts/e2e/bun-global-install-smoke.sh", "utf8");
 
     expect(dockerfile).toContain("AS musl");
+    expect(dockerfile).toContain("ARG OPENCLAW_ALLOW_PRE_NATIVE_FS_SAFE_CONTRACT=0");
     expect(dockerfile).toContain(
-      "node /tmp/verify-fs-safe-native.mjs --package-root /app --mode require",
+      '--allow-pre-native-contract "$OPENCLAW_ALLOW_PRE_NATIVE_FS_SAFE_CONTRACT"',
     );
     expect(packageRunner).toContain('MUSL_IMAGE_NAME="openclaw-docker-e2e-musl:local"');
+    expect(packageRunner).toContain(
+      'OPENCLAW_ALLOW_PRE_NATIVE_FS_SAFE_CONTRACT="${OPENCLAW_ALLOW_PRE_NATIVE_FS_SAFE_CONTRACT:-0}"',
+    );
+    expect(
+      packageRunner.match(
+        /--allow-pre-native-contract "\$OPENCLAW_ALLOW_PRE_NATIVE_FS_SAFE_CONTRACT"/gu,
+      ),
+    ).toHaveLength(3);
     expect(packageRunner.match(/verify-fs-safe-native\.mjs[^\n]+--mode require/gu)).toHaveLength(3);
     expect(packageRunner).toContain("bash scripts/e2e/bun-global-install-smoke.sh");
+    expect(packageRunner).toContain("--result-path /tmp/openclaw-fs-safe-result.json");
+    expect(packageRunner).toContain(
+      'JSON.parse(require("node:fs").readFileSync("/tmp/openclaw-fs-safe-result.json", "utf8")).outcome',
+    );
+    expect(packageRunner).toContain('--detail "musl:fsSafeNativeOutcome=$MUSL_FS_SAFE_OUTCOME"');
+    expect(packageRunner).not.toContain('--detail "musl:fsSafeNative=passed"');
+    expect(bunRunner).toContain(
+      '--allow-pre-native-contract "$OPENCLAW_ALLOW_PRE_NATIVE_FS_SAFE_CONTRACT"',
+    );
     expect(updateRunner).toContain('mv "$platform_package" "$platform_package.omitted"');
     expect(updateRunner).toContain("--mode fallback");
+    expect(updateRunner).toContain(
+      '--allow-pre-native-contract "$OPENCLAW_ALLOW_PRE_NATIVE_FS_SAFE_CONTRACT"',
+    );
   });
 
   it("keeps private bundled plugins discoverable without persisting a curated registry", () => {

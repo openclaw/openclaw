@@ -569,6 +569,8 @@ describe("install smoke no-push root image transport", () => {
     expect(step(bunConsumer, "Run Bun global install candidate-payload smoke")).toMatchObject({
       "working-directory": ".release-harness",
       env: {
+        OPENCLAW_ALLOW_PRE_NATIVE_FS_SAFE_CONTRACT:
+          "${{ inputs.allow_frozen_target_scenario_omissions && needs.preflight.outputs.target_sha != steps.workflow.outputs.sha && '1' || '0' }}",
         OPENCLAW_BUN_GLOBAL_SMOKE_HOST_BUILD: "0",
         OPENCLAW_BUN_GLOBAL_SMOKE_PACKAGE_TGZ:
           "${{ runner.temp }}/install-smoke-candidate-payload/candidate.tgz",

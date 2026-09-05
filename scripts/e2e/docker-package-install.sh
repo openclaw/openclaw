@@ -13,6 +13,7 @@ PNPM_PROOF_CONTAINER="openclaw-package-pnpm-proof-$$"
 BUN_PROOF_CONTAINER="openclaw-package-bun-proof-$$"
 MUSL_PROOF_CONTAINER="openclaw-package-musl-proof-$$"
 DOCKER_RUN_TIMEOUT="${OPENCLAW_DOCKER_PACKAGE_INSTALL_RUN_TIMEOUT:-120s}"
+OPENCLAW_ALLOW_PRE_NATIVE_FS_SAFE_CONTRACT="${OPENCLAW_ALLOW_PRE_NATIVE_FS_SAFE_CONTRACT:-0}"
 PACKAGE_HARNESS_DIR="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-package-harness.XXXXXX")"
 docker_e2e_package_mount_args "$PACKAGE_TGZ"
 
@@ -44,6 +45,7 @@ echo "Installing the real OpenClaw package artifact with npm as root..."
 DOCKER_COMMAND_TIMEOUT="$DOCKER_RUN_TIMEOUT" docker_e2e_docker_run_cmd run -d \
   --name "$NPM_PROOF_CONTAINER" \
   --user root \
+  -e "OPENCLAW_ALLOW_PRE_NATIVE_FS_SAFE_CONTRACT=$OPENCLAW_ALLOW_PRE_NATIVE_FS_SAFE_CONTRACT" \
   "${DOCKER_E2E_PACKAGE_ARGS[@]}" \
   -v "$PACKAGE_HARNESS_DIR:/repo:ro" \
   -v "$ROOT_DIR/scripts/docker/verify-fs-safe-native.mjs:/tmp/verify-fs-safe-native.mjs:ro" \
@@ -51,7 +53,8 @@ DOCKER_COMMAND_TIMEOUT="$DOCKER_RUN_TIMEOUT" docker_e2e_docker_run_cmd run -d \
   bash -lc '
     set -euo pipefail
     npm install -g /tmp/openclaw-current.tgz --no-fund --no-audit
-    node /tmp/verify-fs-safe-native.mjs --package-root /usr/local/lib/node_modules/openclaw --mode require
+    node /tmp/verify-fs-safe-native.mjs --package-root /usr/local/lib/node_modules/openclaw --mode require \
+      --allow-pre-native-contract "$OPENCLAW_ALLOW_PRE_NATIVE_FS_SAFE_CONTRACT"
     test "$(command -v openclaw)" = "/usr/local/bin/openclaw"
     # Root installed the global package; a non-root user must still be able to
     # run it. A same-user install can never catch an installed tree that ends
@@ -67,6 +70,7 @@ DOCKER_COMMAND_TIMEOUT="$DOCKER_RUN_TIMEOUT" docker_e2e_docker_run_cmd run -d \
 echo "Installing the real OpenClaw package artifact with pnpm..."
 DOCKER_COMMAND_TIMEOUT="$DOCKER_RUN_TIMEOUT" docker_e2e_docker_run_cmd run -d \
   --name "$PNPM_PROOF_CONTAINER" \
+  -e "OPENCLAW_ALLOW_PRE_NATIVE_FS_SAFE_CONTRACT=$OPENCLAW_ALLOW_PRE_NATIVE_FS_SAFE_CONTRACT" \
   "${DOCKER_E2E_PACKAGE_ARGS[@]}" \
   -v "$PACKAGE_HARNESS_DIR:/repo:ro" \
   -v "$ROOT_DIR/scripts/docker/verify-fs-safe-native.mjs:/tmp/verify-fs-safe-native.mjs:ro" \
@@ -85,7 +89,8 @@ DOCKER_COMMAND_TIMEOUT="$DOCKER_RUN_TIMEOUT" docker_e2e_docker_run_cmd run -d \
     # Tarball builds require their dependency path, relative to the install group.
     artifact_build="$(node -p "const path = require(\"node:path\"); \"openclaw@file:\" + path.relative(path.resolve(process.argv[1], \"../..\"), \"/tmp/openclaw-current.tgz\")" "$package_root")"
     pnpm approve-builds --global "$artifact_build"
-    node /tmp/verify-fs-safe-native.mjs --package-root "$package_root" --mode require
+    node /tmp/verify-fs-safe-native.mjs --package-root "$package_root" --mode require \
+      --allow-pre-native-contract "$OPENCLAW_ALLOW_PRE_NATIVE_FS_SAFE_CONTRACT"
     printf "%s\n" "$package_root" > /tmp/openclaw-package-root
     openclaw --version > /tmp/openclaw-version
     openclaw --help > /tmp/openclaw-help
@@ -125,6 +130,7 @@ SOURCE_LINK
 echo "Installing the real OpenClaw package artifact with Bun..."
 DOCKER_COMMAND_TIMEOUT="$DOCKER_RUN_TIMEOUT" docker_e2e_docker_run_cmd run -d \
   --name "$BUN_PROOF_CONTAINER" \
+  -e "OPENCLAW_ALLOW_PRE_NATIVE_FS_SAFE_CONTRACT=$OPENCLAW_ALLOW_PRE_NATIVE_FS_SAFE_CONTRACT" \
   "${DOCKER_E2E_PACKAGE_ARGS[@]}" \
   -v "$PACKAGE_HARNESS_DIR:/repo:ro" \
   "$IMAGE_NAME" \
@@ -144,12 +150,15 @@ DOCKER_COMMAND_TIMEOUT="$DOCKER_RUN_TIMEOUT" docker_e2e_docker_run_cmd run -d \
 echo "Installing the real OpenClaw package artifact with npm on musl..."
 DOCKER_COMMAND_TIMEOUT="$DOCKER_RUN_TIMEOUT" docker_e2e_docker_run_cmd run -d \
   --name "$MUSL_PROOF_CONTAINER" \
+  -e "OPENCLAW_ALLOW_PRE_NATIVE_FS_SAFE_CONTRACT=$OPENCLAW_ALLOW_PRE_NATIVE_FS_SAFE_CONTRACT" \
   -v "$PACKAGE_TGZ:/tmp/openclaw-current.tgz:ro" \
   "$MUSL_IMAGE_NAME" \
   sh -lc '
     set -eu
     npm install -g /tmp/openclaw-current.tgz --no-fund --no-audit
-    node /tmp/verify-fs-safe-native.mjs --package-root /usr/local/lib/node_modules/openclaw --mode require
+    node /tmp/verify-fs-safe-native.mjs --package-root /usr/local/lib/node_modules/openclaw --mode require \
+      --allow-pre-native-contract "$OPENCLAW_ALLOW_PRE_NATIVE_FS_SAFE_CONTRACT" \
+      --result-path /tmp/openclaw-fs-safe-result.json
     touch /tmp/openclaw-proof-ready
     exec sleep infinity
   ' >/dev/null
@@ -187,6 +196,14 @@ BUN_INSTALLED_VERSION="$(
   docker exec "$BUN_PROOF_CONTAINER" \
     node -p 'JSON.parse(require("node:fs").readFileSync("/tmp/openclaw-bun-proof.json", "utf8")).openclawVersion'
 )"
+MUSL_FS_SAFE_OUTCOME="$(
+  docker exec "$MUSL_PROOF_CONTAINER" \
+    node -p 'JSON.parse(require("node:fs").readFileSync("/tmp/openclaw-fs-safe-result.json", "utf8")).outcome'
+)"
+case "$MUSL_FS_SAFE_OUTCOME" in
+  native-verified | authorized-pre-native-omission) ;;
+  *) echo "unexpected musl fs-safe verifier outcome: $MUSL_FS_SAFE_OUTCOME" >&2; exit 1 ;;
+esac
 PACKAGE_VERSION="$(docker exec "$NPM_PROOF_CONTAINER" node -p "require('$NPM_PACKAGE_ROOT/package.json').version")"
 test "$PNPM_PACKAGE_VERSION" = "$PACKAGE_VERSION"
 for installed_version in "$NPM_INSTALLED_VERSION" "$PNPM_INSTALLED_VERSION" "$BUN_INSTALLED_VERSION"; do
@@ -211,7 +228,7 @@ node --import tsx "$ROOT_DIR/scripts/e2e/lib/docker-artifact-proof/write-identit
   --detail "npm:openclawPath=/usr/local/bin/openclaw" \
   --detail "npm:helpCommand=passed" \
   --detail "npm:nonRootExecution=passed" \
-  --detail "musl:fsSafeNative=passed" \
+  --detail "musl:fsSafeNativeOutcome=$MUSL_FS_SAFE_OUTCOME" \
   --detail "pnpm:installedPackageRoot=$PNPM_PACKAGE_ROOT" \
   --detail "pnpm:installedPackageVersion=$PNPM_PACKAGE_VERSION" \
   --detail "pnpm:openclawVersion=$PNPM_INSTALLED_VERSION" \

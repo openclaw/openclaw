@@ -110,6 +110,8 @@ INSTALL_DEPS
 
 FROM bare AS functional
 
+ARG OPENCLAW_ALLOW_PRE_NATIVE_FS_SAFE_CONTRACT=0
+
 # The app under test enters through the named BuildKit context, not by copying
 # checkout sources into the image.
 COPY --from=openclaw_package --chown=appuser:appuser openclaw-current.tgz /tmp/openclaw-current.tgz
@@ -129,6 +131,7 @@ RUN tar -xzf /tmp/openclaw-current.tgz -C /app --strip-components=1 \
  && mkdir -p "$HOME/.local/bin" \
  && ln -sf /app/openclaw.mjs "$HOME/.local/bin/openclaw" \
  && node /tmp/verify-fs-safe-native.mjs --package-root /app --mode require \
+      --allow-pre-native-contract "$OPENCLAW_ALLOW_PRE_NATIVE_FS_SAFE_CONTRACT" \
  && rm -f /tmp/openclaw-current.tgz
 
 CMD ["bash"]

@@ -22,6 +22,7 @@ read_positive_int_env() {
 
 BUN_BIN="${BUN_BIN:-bun}"
 HOST_BUILD="${OPENCLAW_BUN_GLOBAL_SMOKE_HOST_BUILD:-1}"
+OPENCLAW_ALLOW_PRE_NATIVE_FS_SAFE_CONTRACT="${OPENCLAW_ALLOW_PRE_NATIVE_FS_SAFE_CONTRACT:-0}"
 DIST_IMAGE="${OPENCLAW_BUN_GLOBAL_SMOKE_DIST_IMAGE:-}"
 PACKAGE_TGZ="${OPENCLAW_BUN_GLOBAL_SMOKE_PACKAGE_TGZ:-}"
 COMMAND_TIMEOUT_MS="$(read_positive_int_env OPENCLAW_BUN_GLOBAL_SMOKE_TIMEOUT_MS 180000)"
@@ -316,7 +317,8 @@ NODE
   )"
   package_root="$(dirname "$openclaw_entry")"
   export OPENCLAW_E2E_REDACTOR_MODULE="$package_root/dist/plugin-sdk/logging-core.js"
-  "$bun_path" scripts/docker/verify-fs-safe-native.mjs --package-root "$package_root" --mode require
+  "$bun_path" scripts/docker/verify-fs-safe-native.mjs --package-root "$package_root" --mode require \
+    --allow-pre-native-contract "$OPENCLAW_ALLOW_PRE_NATIVE_FS_SAFE_CONTRACT"
 
   echo "==> Verify OpenClaw lifecycle scripts were trusted and executed"
   run_with_timeout "$COMMAND_TIMEOUT_MS" "$bun_path" pm -g untrusted >"$UNTRUSTED_LOG" 2>&1

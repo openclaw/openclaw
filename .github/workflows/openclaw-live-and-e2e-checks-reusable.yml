@@ -575,6 +575,7 @@ jobs:
     runs-on: ${{ !inputs.use_github_hosted_runners && github.repository == 'openclaw/openclaw' && vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
     timeout-minutes: 30
     outputs:
+      allow_pre_native_fs_safe_contract: ${{ steps.validate.outputs.allow_pre_native_fs_safe_contract }}
       package_artifact_present: ${{ steps.validate.outputs.package_artifact_present }}
       selected_sha: ${{ steps.validate.outputs.selected_sha }}
       trusted_reason: ${{ steps.validate.outputs.trusted_reason }}
@@ -625,6 +626,7 @@ jobs:
       - name: Validate selected ref
         id: validate
         env:
+          ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS: ${{ inputs.allow_frozen_target_scenario_omissions && '1' || '0' }}
           INPUT_REF: ${{ inputs.ref }}
           PACKAGE_ARTIFACT_DIGEST: ${{ inputs.package_artifact_digest }}
           PACKAGE_ARTIFACT_ID: ${{ inputs.package_artifact_id }}
@@ -652,6 +654,7 @@ jobs:
           SHARED_IMAGE_ARTIFACT_RUN_ID: ${{ inputs.shared_image_artifact_run_id }}
           SHARED_IMAGE_ARCHIVE_SHA256: ${{ inputs.shared_image_archive_sha256 }}
           SHARED_IMAGE_POLICY: ${{ inputs.shared_image_policy }}
+          WORKFLOW_SHA: ${{ steps.workflow.outputs.workflow_sha }}
         shell: bash
         run: |
           set -euo pipefail
@@ -806,6 +809,11 @@ jobs:
               ;;
           esac
 
+          allow_pre_native_fs_safe_contract=0
+          if [[ "$ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS" == "1" && "$selected_sha" != "$WORKFLOW_SHA" ]]; then
+            allow_pre_native_fs_safe_contract=1
+          fi
+          echo "allow_pre_native_fs_safe_contract=$allow_pre_native_fs_safe_contract" >> "$GITHUB_OUTPUT"
           echo "selected_sha=$selected_sha" >> "$GITHUB_OUTPUT"
           echo "trusted_reason=$trusted_reason" >> "$GITHUB_OUTPUT"
           {
@@ -1300,6 +1308,7 @@ jobs:
       OPENCLAW_DOCKER_E2E_IMAGE: ${{ needs.prepare_docker_e2e_image.outputs.image }}
       OPENCLAW_DOCKER_E2E_BARE_IMAGE: ${{ needs.prepare_docker_e2e_image.outputs.bare_image }}
       OPENCLAW_DOCKER_E2E_FUNCTIONAL_IMAGE: ${{ needs.prepare_docker_e2e_image.outputs.functional_image }}
+      OPENCLAW_ALLOW_PRE_NATIVE_FS_SAFE_CONTRACT: ${{ needs.validate_selected_ref.outputs.allow_pre_native_fs_safe_contract }}
       OPENCLAW_DOCKER_E2E_PACKAGE_ARTIFACT_NAME: ${{ needs.prepare_docker_e2e_image.outputs.package_artifact_name || 'docker-e2e-package' }}
       OPENCLAW_DOCKER_E2E_REPO_ROOT: ${{ github.workspace }}
       OPENCLAW_DOCKER_E2E_SELECTED_SHA: ${{ needs.validate_selected_ref.outputs.selected_sha }}
@@ -1685,6 +1694,7 @@ jobs:
       OPENCLAW_DOCKER_E2E_IMAGE: ${{ needs.prepare_docker_e2e_image.outputs.image }}
       OPENCLAW_DOCKER_E2E_BARE_IMAGE: ${{ needs.prepare_docker_e2e_image.outputs.bare_image }}
       OPENCLAW_DOCKER_E2E_FUNCTIONAL_IMAGE: ${{ needs.prepare_docker_e2e_image.outputs.functional_image }}
+      OPENCLAW_ALLOW_PRE_NATIVE_FS_SAFE_CONTRACT: ${{ needs.validate_selected_ref.outputs.allow_pre_native_fs_safe_contract }}
       OPENCLAW_DOCKER_E2E_PACKAGE_ARTIFACT_NAME: ${{ needs.prepare_docker_e2e_image.outputs.package_artifact_name || 'docker-e2e-package' }}
       OPENCLAW_DOCKER_E2E_REPO_ROOT: ${{ github.workspace }}
       OPENCLAW_DOCKER_E2E_SELECTED_SHA: ${{ needs.validate_selected_ref.outputs.selected_sha }}
@@ -2900,6 +2910,7 @@ jobs:
         if: inputs.shared_image_policy == 'no-push-artifact' && steps.plan.outputs.needs_functional_image == '1' && inputs.shared_image_artifact_id == ''
         shell: bash
         env:
+          OPENCLAW_ALLOW_PRE_NATIVE_FS_SAFE_CONTRACT: ${{ needs.validate_selected_ref.outputs.allow_pre_native_fs_safe_contract }}
           IMAGE_REF: ${{ steps.image.outputs.functional_image }}
           BARE_IMAGE_REF: ${{ steps.image.outputs.bare_image }}
           OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR: ${{ steps.prepublish_plugin_registry.outputs.manifest_sha256 != '' && format('{0}/.artifacts/prepublish-plugin-registry', github.workspace) || '' }}
@@ -2919,6 +2930,7 @@ jobs:
             --file .release-harness/scripts/e2e/Dockerfile \
             --target functional \
             --build-context "openclaw_package=$package_context" \
+            --build-arg "OPENCLAW_ALLOW_PRE_NATIVE_FS_SAFE_CONTRACT=$OPENCLAW_ALLOW_PRE_NATIVE_FS_SAFE_CONTRACT" \
             --platform linux/amd64 \
             --tag "$IMAGE_REF" \
             "${cache[@]}" \

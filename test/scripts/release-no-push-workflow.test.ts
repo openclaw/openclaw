@@ -1305,6 +1305,9 @@ describe("release validation no-push transport", () => {
     expect(callPolicy).toMatchObject({ default: "no-push-artifact", type: "string" });
 
     const validation = job(workflow, "validate_selected_ref");
+    expect(validation.outputs?.allow_pre_native_fs_safe_contract).toBe(
+      "${{ steps.validate.outputs.allow_pre_native_fs_safe_contract }}",
+    );
     expect(validation.outputs?.workflow_repository).toBe(
       "${{ steps.workflow.outputs.workflow_repository }}",
     );
@@ -1399,10 +1402,22 @@ describe("release validation no-push transport", () => {
     expect(validateSelectedRef.env?.PACKAGE_ARTIFACT_ID).toBe("${{ inputs.package_artifact_id }}");
     expect(validateSelectedRef.env?.PACKAGE_FILE_NAME).toBe("${{ inputs.package_file_name }}");
     expect(validateSelectedRef.env?.PACKAGE_SOURCE_SHA).toBe("${{ inputs.package_source_sha }}");
+    expect(validateSelectedRef.env).toMatchObject({
+      ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS:
+        "${{ inputs.allow_frozen_target_scenario_omissions && '1' || '0' }}",
+      WORKFLOW_SHA: "${{ steps.workflow.outputs.workflow_sha }}",
+    });
     expect(validateSelectedRef.run).toContain(
       "Package artifact selection requires the complete immutable artifact and package identity tuple.",
     );
     expect(validateSelectedRef.run).toContain('"$PACKAGE_SOURCE_SHA" == "$selected_sha"');
+    expect(validateSelectedRef.run).toContain("allow_pre_native_fs_safe_contract=0");
+    expect(validateSelectedRef.run).toContain(
+      '"$ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS" == "1" && "$selected_sha" != "$WORKFLOW_SHA"',
+    );
+    expect(validateSelectedRef.run).toContain(
+      'echo "allow_pre_native_fs_safe_contract=$allow_pre_native_fs_safe_contract" >> "$GITHUB_OUTPUT"',
+    );
     for (const name of [
       "prepare_docker_e2e_image",
       "prepare_live_test_image",
@@ -1495,8 +1510,17 @@ describe("release validation no-push transport", () => {
       'docker_e2e_prepare_package_context "$GITHUB_WORKSPACE/.artifacts/docker-e2e-package/openclaw-current.tgz"',
     );
     expect(functionalBuild.run).toContain('--build-context "openclaw_package=$package_context"');
+    expect(functionalBuild.run).toContain(
+      '--build-arg "OPENCLAW_ALLOW_PRE_NATIVE_FS_SAFE_CONTRACT=$OPENCLAW_ALLOW_PRE_NATIVE_FS_SAFE_CONTRACT"',
+    );
     expect(functionalBuild.run).toContain("--file .release-harness/scripts/e2e/Dockerfile");
     expect(functionalBuild.run).toContain('--tag "$IMAGE_REF"');
+    expect(functionalBuild.env?.OPENCLAW_ALLOW_PRE_NATIVE_FS_SAFE_CONTRACT).toBe(
+      "${{ needs.validate_selected_ref.outputs.allow_pre_native_fs_safe_contract }}",
+    );
+    expect(functionalBuild.env).not.toHaveProperty(
+      "OPENCLAW_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS",
+    );
     const packDockerArtifact = step(dockerProducer, "Pack Docker E2E image artifact");
     expect(packDockerArtifact.env?.PACKAGE_SHA256).toBe("${{ steps.package.outputs.sha256 }}");
     expect(packDockerArtifact.run).toContain("shared-image-artifact.sh");
@@ -1539,6 +1563,11 @@ describe("release validation no-push transport", () => {
       job(workflow, "validate_docker_lanes"),
       "Run targeted Docker E2E lanes",
     );
+    for (const jobName of ["validate_docker_e2e", "validate_docker_lanes"]) {
+      expect(job(workflow, jobName).env?.OPENCLAW_ALLOW_PRE_NATIVE_FS_SAFE_CONTRACT, jobName).toBe(
+        "${{ needs.validate_selected_ref.outputs.allow_pre_native_fs_safe_contract }}",
+      );
+    }
     expect(targetedRun.env).toMatchObject({
       ARTIFACT_SUFFIX: "${{ steps.plan.outputs.artifact_suffix }}",
       INCLUDE_RELEASE_PATH_SUITES: "${{ inputs.include_release_path_suites }}",
@@ -1557,7 +1586,10 @@ describe("release validation no-push transport", () => {
     expect(readFileSync(LIVE_E2E, "utf8")).not.toContain("fromJSON(toJSON(job)).workflow_");
     expect(readFileSync(LIVE_E2E, "utf8")).not.toContain("${{ github.workflow_sha }}");
     const artifactPackAndLoadSteps = Object.values(workflow.jobs ?? {}).flatMap((workflowJob) =>
-      (workflowJob.steps ?? []).filter((candidate) => candidate.env?.WORKFLOW_SHA !== undefined),
+      (workflowJob.steps ?? []).filter(
+        (candidate) =>
+          candidate.env?.WORKFLOW_SHA === "${{ needs.validate_selected_ref.outputs.workflow_sha }}",
+      ),
     );
     expect(artifactPackAndLoadSteps).toHaveLength(8);
     for (const artifactStep of artifactPackAndLoadSteps) {
