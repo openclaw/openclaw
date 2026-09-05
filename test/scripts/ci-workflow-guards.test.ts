@@ -16372,6 +16372,13 @@ it("pins generated publisher and maturity owners before credentials and selected
     expect(publishers, file).toHaveLength(1);
     expect(publishers[0]?.index, file).toBe(publishers[0]!.length - 1);
   }
+  const refitWorkflow = parse(readFileSync(".github/workflows/ci-test-timings-refit.yml", "utf8"));
+  const refitPublisher = (refitWorkflow.jobs.refit.steps as WorkflowStep[]).find(
+    (step) => step.uses === "./.github/actions/publish-generated-pr",
+  );
+  expect(refitPublisher?.with?.["pr-body"]).toContain(
+    "successful main-push CI runs and release Gateway samples",
+  );
 });
 
 it("reports stale Linux release requests before selected code runs", () => {
