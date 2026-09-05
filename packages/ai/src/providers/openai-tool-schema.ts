@@ -6,6 +6,7 @@
 import {
   MAX_TOOL_SCHEMA_NESTING_DEPTH,
   normalizeToolParameterSchema,
+  SCHEMA_LITERAL_KEYS,
   shouldOmitEmptyArrayItems,
   ToolSchemaDepthLimitError,
   type ToolSchemaModelCompat,
@@ -131,6 +132,11 @@ function normalizeStrictOpenAIJsonSchemaRecursive(schema: unknown, depth: number
   let changed = false;
   const normalized = Object.fromEntries<unknown>(
     Object.entries(record).map(([key, value]) => {
+      // Literal payloads (const/default/enum/examples) are values, not schemas: preserve them
+      // without recursion so their depth can neither trip the cap nor abort request construction.
+      if (SCHEMA_LITERAL_KEYS.has(key)) {
+        return [key, value];
+      }
       const next = normalizeStrictOpenAIJsonSchemaRecursive(value, depth + 1);
       changed ||= next !== value;
       return [key, next];
@@ -244,6 +250,9 @@ function isStrictOpenAIJsonSchemaCompatibleRecursive(schema: unknown, depth: num
   }
 
   return Object.entries(record).every(([key, entry]) => {
+    if (SCHEMA_LITERAL_KEYS.has(key)) {
+      return true;
+    }
     if (key === "properties" && entry && typeof entry === "object" && !Array.isArray(entry)) {
       return Object.values(entry as Record<string, unknown>).every((value) =>
         isStrictOpenAIJsonSchemaCompatibleRecursive(value, depth + 1),

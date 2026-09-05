@@ -366,4 +366,45 @@ describe("tool schema depth guard", () => {
     };
     expect(normalized.properties.field.default).toEqual(literal);
   });
+
+  it("preserves deeply nested literal payloads in strict mode without rejecting", () => {
+    let literal: unknown = "leaf";
+    for (let i = 0; i < 300; i += 1) {
+      literal = { nested: literal };
+    }
+    const schema = { type: "object", properties: { field: { type: "object", default: literal } } };
+    const normalized = normalizeStrictOpenAIJsonSchema(schema) as {
+      properties: { field: { default: unknown } };
+    };
+    expect(normalized.properties.field.default).toEqual(literal);
+    expect(() => isStrictOpenAIJsonSchemaCompatible(schema)).not.toThrow();
+  });
+
+  it("bounds retained $defs subtrees reached only by downstream walkers", () => {
+    // An unresolved $ref keeps $defs on the normalized result; those raw subtrees are traversed
+    // by the post-inlining walkers, so the budget must hold there too.
+    let deep: unknown = { type: "string" };
+    for (let i = 0; i < 2000; i += 1) {
+      deep = { type: "object", properties: { child: deep } };
+    }
+    const schema = {
+      type: "object",
+      properties: { broken: { $ref: "#/definitions/missing" } },
+      $defs: { deep },
+    };
+    expect(() => normalizeToolParameterSchema(schema)).toThrow(ToolSchemaDepthLimitError);
+  });
+
+  it("describes the nesting limit and corrective action when rejecting", () => {
+    let caught: unknown;
+    try {
+      normalizeToolParameterSchema(deepPropertiesChain(3000));
+    } catch (error) {
+      caught = error;
+    }
+    const error = caught as Error;
+    expect(error.name).toBe("ToolSchemaDepthLimitError");
+    expect(error.message).toContain("256");
+    expect(error.message).toContain("nesting");
+  });
 });

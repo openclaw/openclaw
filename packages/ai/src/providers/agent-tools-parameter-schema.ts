@@ -25,7 +25,15 @@ import { stripUnsupportedSchemaKeywords } from "./schema-keyword-strip.js";
 export const MAX_TOOL_SCHEMA_NESTING_DEPTH = 256;
 
 /** Thrown when a tool schema nests deeper than {@link MAX_TOOL_SCHEMA_NESTING_DEPTH}. */
-export class ToolSchemaDepthLimitError extends Error {}
+export class ToolSchemaDepthLimitError extends Error {
+  constructor() {
+    super(
+      `Tool schema nesting exceeds the maximum supported depth of ${MAX_TOOL_SCHEMA_NESTING_DEPTH}; ` +
+        "reduce the schema's nesting or split deep definitions into shallower pieces.",
+    );
+    this.name = "ToolSchemaDepthLimitError";
+  }
+}
 
 /**
  * Narrow structural view of the host's model compat config. packages/ai must stay
@@ -259,7 +267,10 @@ function isTrulyEmptySchema(schemaRecord: Record<string, unknown>): boolean {
   return Object.keys(schemaRecord).length === 0;
 }
 
-function normalizeArraySchemasMissingItems(schema: unknown): unknown {
+function normalizeArraySchemasMissingItems(schema: unknown, depth = 0): unknown {
+  if (depth > MAX_TOOL_SCHEMA_NESTING_DEPTH) {
+    throw new ToolSchemaDepthLimitError();
+  }
   if (!isSchemaRecord(schema)) {
     return schema;
   }
@@ -277,7 +288,7 @@ function normalizeArraySchemasMissingItems(schema: unknown): unknown {
     }
     const value = nextSchema[key];
     if (Array.isArray(value)) {
-      const normalized = value.map(normalizeArraySchemasMissingItems);
+      const normalized = value.map((entry) => normalizeArraySchemasMissingItems(entry, depth + 1));
       if (normalized.some((entry, index) => entry !== value[index])) {
         nextSchema[key] = normalized;
         changed = true;
@@ -285,7 +296,7 @@ function normalizeArraySchemasMissingItems(schema: unknown): unknown {
       return;
     }
 
-    const normalized = normalizeArraySchemasMissingItems(value);
+    const normalized = normalizeArraySchemasMissingItems(value, depth + 1);
     if (normalized !== value) {
       nextSchema[key] = normalized;
       changed = true;
@@ -323,7 +334,7 @@ function normalizeArraySchemasMissingItems(schema: unknown): unknown {
     let entriesChanged = false;
     const normalizedEntries: Array<[string, unknown]> = Object.entries(value).map(
       ([entryKey, entryValue]) => {
-        const normalizedEntryValue = normalizeArraySchemasMissingItems(entryValue);
+        const normalizedEntryValue = normalizeArraySchemasMissingItems(entryValue, depth + 1);
         if (normalizedEntryValue !== entryValue) {
           entriesChanged = true;
         }
@@ -365,11 +376,14 @@ const ARRAY_ITEMS_SCHEMA_MAP_KEYS = new Set([
   "properties",
 ]);
 
-function stripEmptyArrayItemsFromArraySchemas(schema: unknown): unknown {
+function stripEmptyArrayItemsFromArraySchemas(schema: unknown, depth = 0): unknown {
+  if (depth > MAX_TOOL_SCHEMA_NESTING_DEPTH) {
+    throw new ToolSchemaDepthLimitError();
+  }
   if (Array.isArray(schema)) {
     let changed = false;
     const entries = schema.map((entry) => {
-      const next = stripEmptyArrayItemsFromArraySchemas(entry);
+      const next = stripEmptyArrayItemsFromArraySchemas(entry, depth + 1);
       changed ||= next !== entry;
       return next;
     });
@@ -392,13 +406,13 @@ function stripEmptyArrayItemsFromArraySchemas(schema: unknown): unknown {
     }
 
     if (ARRAY_ITEMS_SCHEMA_OBJECT_KEYS.has(key)) {
-      const next = stripEmptyArrayItemsFromArraySchemas(value);
+      const next = stripEmptyArrayItemsFromArraySchemas(value, depth + 1);
       changed ||= next !== value;
       return [[key, next] as const];
     }
 
     if (ARRAY_ITEMS_SCHEMA_ARRAY_KEYS.has(key) && Array.isArray(value)) {
-      const next = stripEmptyArrayItemsFromArraySchemas(value);
+      const next = stripEmptyArrayItemsFromArraySchemas(value, depth + 1);
       changed ||= next !== value;
       return [[key, next] as const];
     }
@@ -407,7 +421,7 @@ function stripEmptyArrayItemsFromArraySchemas(schema: unknown): unknown {
       let mapChanged = false;
       const next = Object.fromEntries(
         Object.entries(value).map(([entryKey, entryValue]) => {
-          const entryNext = stripEmptyArrayItemsFromArraySchemas(entryValue);
+          const entryNext = stripEmptyArrayItemsFromArraySchemas(entryValue, depth + 1);
           mapChanged ||= entryNext !== entryValue;
           return [entryKey, entryNext] as const;
         }),
@@ -531,7 +545,13 @@ const SCHEMA_OBJECT_KEYS = new Set([
 
 const SCHEMA_ARRAY_KEYS = new Set(["allOf", "anyOf", "items", "oneOf", "prefixItems"]);
 
-const SCHEMA_LITERAL_KEYS = new Set(["const", "default", "enum", "examples"]);
+/** Keywords whose values are opaque literal payloads, not nested schemas — never recurse or count depth here. */
+export const SCHEMA_LITERAL_KEYS: ReadonlySet<string> = new Set([
+  "const",
+  "default",
+  "enum",
+  "examples",
+]);
 
 function tryResolveLocalRef(
   ref: string,
@@ -752,11 +772,14 @@ function wrapNullableComposedSchema(schema: Record<string, unknown>): Record<str
   return wrapped;
 }
 
-function normalizeOpenApiSchemaKeywords(schema: unknown): unknown {
+function normalizeOpenApiSchemaKeywords(schema: unknown, depth = 0): unknown {
+  if (depth > MAX_TOOL_SCHEMA_NESTING_DEPTH) {
+    throw new ToolSchemaDepthLimitError();
+  }
   if (Array.isArray(schema)) {
     let changed = false;
     const normalized = schema.map((entry) => {
-      const next = normalizeOpenApiSchemaKeywords(entry);
+      const next = normalizeOpenApiSchemaKeywords(entry, depth + 1);
       changed ||= next !== entry;
       return next;
     });
@@ -782,7 +805,7 @@ function normalizeOpenApiSchemaKeywords(schema: unknown): unknown {
       let mapChanged = false;
       const next = Object.fromEntries(
         Object.entries(value).map(([entryKey, entryValue]) => {
-          const nextEntry = normalizeOpenApiSchemaKeywords(entryValue);
+          const nextEntry = normalizeOpenApiSchemaKeywords(entryValue, depth + 1);
           mapChanged ||= nextEntry !== entryValue;
           return [entryKey, nextEntry];
         }),
@@ -796,13 +819,13 @@ function normalizeOpenApiSchemaKeywords(schema: unknown): unknown {
       continue;
     }
     if (SCHEMA_OBJECT_KEYS.has(key) && isSchemaRecord(value)) {
-      const next = normalizeOpenApiSchemaKeywords(value);
+      const next = normalizeOpenApiSchemaKeywords(value, depth + 1);
       normalized[key] = next;
       changed ||= next !== value;
       continue;
     }
     if (SCHEMA_ARRAY_KEYS.has(key) && Array.isArray(value)) {
-      const next = value.map(normalizeOpenApiSchemaKeywords);
+      const next = value.map((entry) => normalizeOpenApiSchemaKeywords(entry, depth + 1));
       normalized[key] = next;
       changed ||= next.some((entry, index) => entry !== value[index]);
       continue;
