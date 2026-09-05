@@ -25,6 +25,11 @@ vi.mock("./load-config.js", () => ({
   loadModelsConfig: (...args: unknown[]) => mocks.loadModelsConfig(...args),
 }));
 
+// Real provider activation is covered by model-selection.runtime.test.ts.
+vi.mock("./model-selection.runtime.js", () => ({
+  withModelCommandProviderRuntime: (_params: unknown, run: () => unknown) => run(),
+}));
+
 function makeRuntime(): RuntimeEnv & { logs: string[] } {
   const logs: string[] = [];
   return {

@@ -8,6 +8,7 @@ import {
   legacyModelKey,
   modelKey,
   resolveModelRefFromString,
+  type ModelRef,
 } from "../../agents/model-selection.js";
 import { formatCliCommand } from "../../cli/command-format.js";
 import {
@@ -64,6 +65,10 @@ export async function updateConfig(
     cfg: OpenClawConfig,
     context: UpdateConfigContext,
   ) => OpenClawConfig | Promise<OpenClawConfig>,
+  selectModelRefs?: (
+    cfg: OpenClawConfig,
+    context: UpdateConfigContext,
+  ) => readonly (ModelRef | undefined)[],
 ): Promise<OpenClawConfig> {
   const snapshot = await readConfigFileSnapshot();
   if (!snapshot.valid) {
@@ -74,7 +79,18 @@ export async function updateConfig(
   const runtimeConfig = structuredClone(snapshot.runtimeConfig ?? snapshot.config);
   // Mutate source config so SecretRefs and unresolved placeholders do not get
   // overwritten by runtime-resolved secret values.
-  const next = await mutator(sourceConfig, { runtimeConfig });
+  const mutate = () => mutator(sourceConfig, { runtimeConfig });
+  const next = selectModelRefs
+    ? await (
+        await import("./model-selection.runtime.js")
+      ).withModelCommandProviderRuntime(
+        {
+          runtimeConfig,
+          selectModelRefs: () => selectModelRefs(sourceConfig, { runtimeConfig }),
+        },
+        mutate,
+      )
+    : await mutate();
   await replaceConfigFile({
     nextConfig: next,
     baseHash: snapshot.hash,
@@ -92,6 +108,7 @@ export function resolveModelTarget(params: { raw: string; cfg: OpenClawConfig })
     defaultProvider: DEFAULT_PROVIDER,
   });
   const resolved = resolveModelRefFromString({
+    cfg: params.cfg,
     raw: params.raw,
     defaultProvider: DEFAULT_PROVIDER,
     aliasIndex,
@@ -111,6 +128,7 @@ function resolveAuthoredModelAliasTarget(params: {
     defaultProvider: DEFAULT_PROVIDER,
   });
   const resolved = resolveModelRefFromString({
+    cfg: params.cfg,
     raw: params.raw,
     defaultProvider: DEFAULT_PROVIDER,
     aliasIndex,
@@ -118,11 +136,11 @@ function resolveAuthoredModelAliasTarget(params: {
   return resolved?.alias ? resolved.ref : undefined;
 }
 
-/** Resolves model reference strings to index-aligned canonical provider/model keys. */
-export function resolveModelKeysFromEntries(params: {
+/** Resolves model reference strings to index-aligned canonical refs. */
+export function resolveModelRefsFromEntries(params: {
   cfg: OpenClawConfig;
   entries: readonly string[];
-}): Array<string | undefined> {
+}): Array<ModelRef | undefined> {
   const aliasIndex = buildModelAliasIndex({
     cfg: params.cfg,
     defaultProvider: DEFAULT_PROVIDER,
@@ -130,13 +148,22 @@ export function resolveModelKeysFromEntries(params: {
   const canonicalizer = createModelCatalogProviderAliasCanonicalizer({ cfg: params.cfg });
   return params.entries.map((entry) => {
     const resolved = resolveModelRefFromString({
+      cfg: params.cfg,
       raw: entry,
       defaultProvider: DEFAULT_PROVIDER,
       aliasIndex,
     });
-    const ref = resolved ? canonicalizer.ref(resolved.ref) : undefined;
-    return ref ? modelKey(ref.provider, ref.model) : undefined;
+    return resolved ? canonicalizer.ref(resolved.ref) : undefined;
   });
+}
+
+/** Projects canonical model refs into index-aligned keys for config comparisons. */
+export function resolveModelKeysFromEntries(
+  params: Parameters<typeof resolveModelRefsFromEntries>[0],
+): Array<string | undefined> {
+  return resolveModelRefsFromEntries(params).map((ref) =>
+    ref ? modelKey(ref.provider, ref.model) : undefined,
+  );
 }
 
 function resolveKnownAgentId(cfg: OpenClawConfig, rawAgentId: string): string {
@@ -294,29 +321,38 @@ export async function updateDefaultModelPrimaryConfig(params: {
   field: "model" | "imageModel";
 }): Promise<{ updated: OpenClawConfig; warning?: string }> {
   let warning: string | undefined;
-  const updated = await updateConfig((cfg, context) => {
-    const resolvedTarget = resolveDefaultModelPrimaryTarget({
-      cfg,
-      resolveCfg: context.runtimeConfig,
-      modelRaw: params.modelRaw,
-    });
-    const inspection = inspectModelReference({ cfg: context.runtimeConfig, ref: resolvedTarget });
-    if (inspection.status === "unknown-provider") {
-      throw new Error(
-        `Unknown model provider "${inspection.provider}". Install a plugin that declares it or configure it under models.providers before selecting "${inspection.ref}". Config was not changed.`,
-      );
-    }
-    if (inspection.status === "unknown-model") {
-      warning = `Warning: Model "${inspection.ref}" is not in the local model catalog for provider "${inspection.provider}". The provider is installed or configured, so the selection was saved; verify the model ID if it is not a newly released or self-hosted model.`;
-    }
-    return applyDefaultModelPrimaryUpdate({
-      cfg,
-      resolveCfg: context.runtimeConfig,
-      modelRaw: params.modelRaw,
-      field: params.field,
-      resolvedTarget,
-    });
-  });
+  const updated = await updateConfig(
+    (cfg, context) => {
+      const resolvedTarget = resolveDefaultModelPrimaryTarget({
+        cfg,
+        resolveCfg: context.runtimeConfig,
+        modelRaw: params.modelRaw,
+      });
+      const inspection = inspectModelReference({ cfg: context.runtimeConfig, ref: resolvedTarget });
+      if (inspection.status === "unknown-provider") {
+        throw new Error(
+          `Unknown model provider "${inspection.provider}". Install a plugin that declares it or configure it under models.providers before selecting "${inspection.ref}". Config was not changed.`,
+        );
+      }
+      if (inspection.status === "unknown-model") {
+        warning = `Warning: Model "${inspection.ref}" is not in the local model catalog for provider "${inspection.provider}". The provider is installed or configured, so the selection was saved; verify the model ID if it is not a newly released or self-hosted model.`;
+      }
+      return applyDefaultModelPrimaryUpdate({
+        cfg,
+        resolveCfg: context.runtimeConfig,
+        modelRaw: params.modelRaw,
+        field: params.field,
+        resolvedTarget,
+      });
+    },
+    (cfg, context) => [
+      resolveDefaultModelPrimaryTarget({
+        cfg,
+        resolveCfg: context.runtimeConfig,
+        modelRaw: params.modelRaw,
+      }),
+    ],
+  );
   return { updated, ...(warning ? { warning } : {}) };
 }
 
