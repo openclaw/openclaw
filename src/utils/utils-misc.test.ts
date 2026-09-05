@@ -117,4 +117,28 @@ describe("zod parse helpers", () => {
     expect(safeParseJsonWithSchema(schema, `{"name":1}`)).toBeNull();
     expect(safeParseJsonWithSchema(schema, `{`)).toBeNull();
   });
+
+  it("returns null for null, undefined, primitive, and array inputs", () => {
+    expect(safeParseWithSchema(schema, null)).toBeNull();
+    expect(safeParseWithSchema(schema, undefined)).toBeNull();
+    expect(safeParseWithSchema(schema, "string")).toBeNull();
+    expect(safeParseWithSchema(schema, [])).toBeNull();
+  });
+
+  it("works with string and number schemas", () => {
+    expect(safeParseWithSchema(z.string(), "hello")).toBe("hello");
+    expect(safeParseWithSchema(z.string(), 123)).toBeNull();
+    expect(safeParseWithSchema(z.number(), 42)).toBe(42);
+  });
+
+  it("parses array JSON and returns null for malformed arrays", () => {
+    const ArraySchema = z.array(z.string());
+    expect(safeParseJsonWithSchema(ArraySchema, '["a","b","c"]')).toEqual(["a", "b", "c"]);
+    expect(safeParseJsonWithSchema(ArraySchema, '["a", 1, "c"]')).toBeNull();
+  });
+
+  it("returns null for empty string and JSON null", () => {
+    expect(safeParseJsonWithSchema(schema, "")).toBeNull();
+    expect(safeParseJsonWithSchema(schema, "null")).toBeNull();
+  });
 });
