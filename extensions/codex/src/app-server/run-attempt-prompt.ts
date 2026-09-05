@@ -7,6 +7,7 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   buildCodexSystemPromptReport,
+  compactCodexSkillsPrompt,
   prependCodexOpenClawPromptContext,
   readContextEngineThreadBootstrapProjection,
   resolveCodexDeliveryHintPreservedInputRange,
@@ -494,7 +495,9 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
     workspaceDir: effectiveWorkspace,
     developerInstructions: buildRenderedCodexDeveloperInstructions(),
     workspaceBootstrapContext,
-    skillsPrompt: skillsCollaborationInstructions ? (params.skillsSnapshot?.prompt ?? "") : "",
+    skillsPrompt: skillsCollaborationInstructions
+      ? compactCodexSkillsPrompt(params.skillsSnapshot?.prompt)
+      : "",
     tools: toolBridge.availableSpecs,
   });
   return {
