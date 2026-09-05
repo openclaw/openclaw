@@ -1685,6 +1685,22 @@ function assertMobilePairingEvidence(files) {
     required: "selected-gateway-admits-ios-iphone-watch-relay",
     "omitted-gateway-unsupported": "selected-gateway-does-not-admit-ios-iphone-watch-relay",
   };
+  const isCanonicalStringSurface = (value) =>
+    Array.isArray(value) &&
+    value.every(
+      (entry, index) =>
+        typeof entry === "string" && entry.length > 0 && (index === 0 || value[index - 1] < entry),
+    );
+  const isCanonicalPermissionSurface = (value) =>
+    value !== null &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    Object.entries(value).every(
+      ([permission, enabled], index, entries) =>
+        permission.length > 0 &&
+        typeof enabled === "boolean" &&
+        (index === 0 || entries[index - 1][0] < permission),
+    );
   assert(
     files.length === expectedPhases.length,
     "mobile pairing evidence requires all four reconnect phases",
@@ -1702,14 +1718,16 @@ function assertMobilePairingEvidence(files) {
     assert(value?.pairedDevicePresent === true, "paired mobile device missing");
     assert(value?.pairedNodePresent === true, "paired mobile node missing");
     assert(
-      Array.isArray(value?.pairedNodeCommands) &&
-        value.pairedNodeCommands.every(
-          (nodeCommand, commandIndex) =>
-            typeof nodeCommand === "string" &&
-            nodeCommand.length > 0 &&
-            (commandIndex === 0 || value.pairedNodeCommands[commandIndex - 1] < nodeCommand),
-        ),
+      isCanonicalStringSurface(value?.pairedNodeCaps),
+      "mobile paired node capability evidence missing or non-canonical",
+    );
+    assert(
+      isCanonicalStringSurface(value?.pairedNodeCommands),
       "mobile paired node command evidence missing or non-canonical",
+    );
+    assert(
+      isCanonicalPermissionSurface(value?.pairedNodePermissions),
+      "mobile paired node permission evidence missing or non-canonical",
     );
     const cleanPairingState =
       value?.pendingPairingCount === 0 &&
@@ -1774,16 +1792,28 @@ function assertMobilePairingEvidence(files) {
   });
 
   const candidateMode = evidence[1]?.nodeSurfaceReapprovalMode;
+  const baselineCaps = JSON.stringify(evidence[0]?.pairedNodeCaps);
   const baselineCommands = JSON.stringify(evidence[0]?.pairedNodeCommands);
+  const baselinePermissions = JSON.stringify(evidence[0]?.pairedNodePermissions);
   assert(
     evidence.slice(1).every((value) => value?.nodeSurfaceReapprovalMode === candidateMode),
     "candidate mobile node pairing modes changed across reconnects",
+  );
+  assert(
+    evidence.slice(1).every((value) => JSON.stringify(value?.pairedNodeCaps) === baselineCaps),
+    "candidate mobile node pairing capability surface changed without reapproval",
   );
   assert(
     evidence
       .slice(1)
       .every((value) => JSON.stringify(value?.pairedNodeCommands) === baselineCommands),
     "candidate mobile node pairing command surface changed without reapproval",
+  );
+  assert(
+    evidence
+      .slice(1)
+      .every((value) => JSON.stringify(value?.pairedNodePermissions) === baselinePermissions),
+    "candidate mobile node pairing permission surface changed without reapproval",
   );
   if (candidateMode === "not-applicable") {
     assert(

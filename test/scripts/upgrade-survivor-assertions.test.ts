@@ -1267,7 +1267,9 @@ process.stdout.write(sessionDir + "\\n");
         pendingNodePairingCount: scopedNodeSurfaceReapproval ? 1 : 0,
         pairedDevicePresent: true,
         pairedNodePresent: true,
+        pairedNodeCaps: ["camera"],
         pairedNodeCommands: ["camera.snap"],
+        pairedNodePermissions: { camera: false, screenRecording: true },
         nodeSurfaceReapprovalRequired: scopedNodeSurfaceReapproval,
         nodeSurfaceReapprovalMode,
         nodeSurfaceReapprovalReason:
@@ -1358,7 +1360,9 @@ process.stdout.write(sessionDir + "\\n");
         pendingNodePairingCount: 0,
         pairedDevicePresent: true,
         pairedNodePresent: true,
+        pairedNodeCaps: ["camera"],
         pairedNodeCommands: ["camera.snap"],
+        pairedNodePermissions: { camera: false, screenRecording: true },
         nodeSurfaceReapprovalRequired: false,
         nodeSurfaceCommandAdditions: [],
         nodeSurfaceReapprovalMode: baseline ? "not-applicable" : "omitted-gateway-unsupported",
@@ -1412,7 +1416,9 @@ process.stdout.write(sessionDir + "\\n");
         pendingNodePairingCount: 0,
         pairedDevicePresent: true,
         pairedNodePresent: true,
+        pairedNodeCaps: ["camera"],
         pairedNodeCommands: ["camera.snap", "watch.notify", "watch.status"],
+        pairedNodePermissions: { camera: false, screenRecording: true },
         nodeSurfaceReapprovalRequired: false,
         nodeSurfaceCommandAdditions: [],
         nodeSurfaceReapprovalMode: "not-applicable",
@@ -1456,6 +1462,14 @@ process.stdout.write(sessionDir + "\\n");
     writeJson(candidateRestart, stale);
     expect(verify).toThrow(/command surface changed without reapproval/);
     stale.pairedNodeCommands = ["camera.snap", "watch.notify", "watch.status"];
+    stale.pairedNodeCaps = ["camera", "screen"];
+    writeJson(candidateRestart, stale);
+    expect(verify).toThrow(/capability surface changed without reapproval/);
+    stale.pairedNodeCaps = ["camera"];
+    stale.pairedNodePermissions = { camera: false };
+    writeJson(candidateRestart, stale);
+    expect(verify).toThrow(/permission surface changed without reapproval/);
+    stale.pairedNodePermissions = { camera: false, screenRecording: true };
     stale.nodeSurfaceReapprovalReason = "baseline-before-candidate";
     writeJson(candidateRestart, stale);
     expect(verify).toThrow(/reapproval reason changed/);
