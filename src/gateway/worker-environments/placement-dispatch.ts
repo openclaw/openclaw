@@ -119,7 +119,6 @@ type WorkerPlacementDispatchOptions = WorkerPlacementReclaimBarriers & {
   resolveGitAuthor?: (agentId: string) => { name?: string; email?: string } | undefined;
   resolveDevicePlacementRequirement?: WorkerDevicePlacementRequirementResolver;
   isCurrentNodePlacement?: WorkerNodePlacementAuthority;
-  isInterruptedDelegatedChild?: (placement: WorkerDispatchPlacement) => boolean;
 };
 
 export function createWorkerPlacementDispatchService(options: WorkerPlacementDispatchOptions) {
@@ -130,7 +129,6 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
     ...options,
     failure,
     reportTransition: reportPlacementTransition,
-    isInterruptedDelegatedChild: options.isInterruptedDelegatedChild,
   });
 
   const recovery = createPlacementRecoveryActions({
@@ -144,7 +142,6 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
       : {}),
     resolveWorkspaceResultConflict: options.resolveWorkspaceResultConflict,
     recoverPlacementMoves: (environmentId) => moveService.recoverAll(environmentId),
-    isInterruptedDelegatedChild: options.isInterruptedDelegatedChild,
     workspaceOperations: options.workspaceOperations,
     ...(options.prepareAcceptedWorkspacePublication
       ? { prepareAcceptedWorkspacePublication: options.prepareAcceptedWorkspacePublication }

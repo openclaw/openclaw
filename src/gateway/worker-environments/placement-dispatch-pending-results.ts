@@ -62,7 +62,6 @@ export type PlacementRecoveryDeps = {
     agentId: string;
   }) => Promise<WorkerWorkspaceResultConflict | undefined>;
   recoverPlacementMoves?: (environmentId?: string) => Promise<Set<string>>;
-  isInterruptedDelegatedChild?: ((placement: WorkerDispatchPlacement) => boolean) | undefined;
   prepareAcceptedWorkspacePublication?: (claim: WorkerSessionTurnClaim) => Promise<void>;
   publishAcceptedWorkspace?: (claim: WorkerSessionTurnClaim) => Promise<void>;
 };
@@ -132,15 +131,9 @@ export async function recoverPendingWorkspaceResults(
     if (environmentId !== undefined && placement?.environmentId !== environmentId) {
       continue;
     }
-    const interruptedDelegatedChild =
-      placement !== undefined && deps.isInterruptedDelegatedChild?.(placement) === true;
     const sameGatewayInstance =
       pending.gatewayInstanceId === placements.workspaceResultInstanceId();
-    if (
-      sameGatewayInstance &&
-      pending.recoveryRequestedAtMs === null &&
-      !interruptedDelegatedChild
-    ) {
+    if (sameGatewayInstance && pending.recoveryRequestedAtMs === null) {
       continue;
     }
     try {
@@ -221,21 +214,6 @@ export async function recoverPendingWorkspaceResults(
           root: localPath,
           stagedResultRef: preparedWorkerWorkspaceResultRef(canonicalStagedResultRef),
         }));
-      if (interruptedDelegatedChild && !stagedResultRef) {
-        if (hasPreparedResult) {
-          // The snapshot exists but was never durably published as the turn result.
-          // Keep its SQLite fence for retry or explicit operator abandonment.
-          continue;
-        }
-        const failed = placements.failWorkspaceResultAndReleaseTurn(
-          pending,
-          new Error("Delegated child placement lost its initiating worker turn during restart"),
-        );
-        if (failed.state === "failed") {
-          await failure.retryFailedTeardown(failed);
-        }
-        continue;
-      }
       const priorWorkspaceResultConflict =
         active.workspaceResultConflict ?? (await deps.resolveWorkspaceResultConflict(active));
       const environment = environments.get(active.environmentId);
