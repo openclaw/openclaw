@@ -1318,7 +1318,8 @@ describe("Slack live QA runtime helpers", () => {
     const input = run && "input" in run ? run.input : "";
     const summaryText = input.match(/SLACK_QA_CHART_SUMMARY_[A-Z0-9]+/u)?.[0];
     const afterReply = run && "afterReply" in run ? run.afterReply : undefined;
-    if (!summaryText || !afterReply) {
+    const verifyObserved = run && "verifyObserved" in run ? run.verifyObserved : undefined;
+    if (!summaryText || !afterReply || !verifyObserved) {
       throw new Error("missing Slack chart scenario verifier");
     }
     const accessibleText = renderExpectedSlackChartAccessibleText(summaryText);
@@ -1355,6 +1356,10 @@ describe("Slack live QA runtime helpers", () => {
         },
       ],
     }));
+    verifyObserved({
+      finalMessage: {} as never,
+      messages: [{ channelId: "C123456789", text: summaryText, ts: "2.000000" }],
+    });
 
     await expect(
       afterReply(
@@ -1367,11 +1372,12 @@ describe("Slack live QA runtime helpers", () => {
         } as never,
       ),
     ).resolves.toBe("verified native data_visualization block and deterministic accessible text");
+    expect(history).toHaveBeenCalledOnce();
     expect(history).toHaveBeenCalledWith({
       channel: "C123456789",
       inclusive: true,
-      limit: 50,
-      oldest: "1.000000",
+      latest: "2.000000",
+      limit: 1,
     });
   });
 
@@ -1382,7 +1388,8 @@ describe("Slack live QA runtime helpers", () => {
     const input = run && "input" in run ? run.input : "";
     const summaryText = input.match(/SLACK_QA_CHART_SUMMARY_[A-Z0-9]+/u)?.[0];
     const afterReply = run && "afterReply" in run ? run.afterReply : undefined;
-    if (!summaryText || !afterReply) {
+    const verifyObserved = run && "verifyObserved" in run ? run.verifyObserved : undefined;
+    if (!summaryText || !afterReply || !verifyObserved) {
       throw new Error("missing Slack chart scenario verifier");
     }
     const accessibleText = renderExpectedSlackChartAccessibleText(summaryText);
@@ -1395,6 +1402,10 @@ describe("Slack live QA runtime helpers", () => {
         },
       ],
     }));
+    verifyObserved({
+      finalMessage: {} as never,
+      messages: [{ channelId: "C123456789", text: summaryText, ts: "2.000000" }],
+    });
     const result = expect(
       afterReply(
         {} as never,
@@ -1451,7 +1462,8 @@ describe("Slack live QA runtime helpers", () => {
     const input = run && "input" in run ? run.input : "";
     const summaryText = input.match(/SLACK_QA_TABLE_SUMMARY_[A-Z0-9]+/u)?.[0];
     const afterReply = run && "afterReply" in run ? run.afterReply : undefined;
-    if (!summaryText || !afterReply) {
+    const verifyObserved = run && "verifyObserved" in run ? run.verifyObserved : undefined;
+    if (!summaryText || !afterReply || !verifyObserved) {
       throw new Error("missing Slack table scenario verifier");
     }
     const accessibleText = renderExpectedSlackTableAccessibleText(summaryText);
@@ -1488,6 +1500,10 @@ describe("Slack live QA runtime helpers", () => {
         },
       ],
     }));
+    verifyObserved({
+      finalMessage: {} as never,
+      messages: [{ channelId: "C123456789", text: summaryText, ts: "2.000000" }],
+    });
 
     await expect(
       afterReply(
@@ -1500,6 +1516,13 @@ describe("Slack live QA runtime helpers", () => {
         } as never,
       ),
     ).resolves.toBe("verified native data_table block and deterministic accessible text");
+    expect(history).toHaveBeenCalledOnce();
+    expect(history).toHaveBeenCalledWith({
+      channel: "C123456789",
+      inclusive: true,
+      latest: "2.000000",
+      limit: 1,
+    });
   });
 
   it("rejects fallback-only Slack table delivery", async () => {
@@ -1509,7 +1532,8 @@ describe("Slack live QA runtime helpers", () => {
     const input = run && "input" in run ? run.input : "";
     const summaryText = input.match(/SLACK_QA_TABLE_SUMMARY_[A-Z0-9]+/u)?.[0];
     const afterReply = run && "afterReply" in run ? run.afterReply : undefined;
-    if (!summaryText || !afterReply) {
+    const verifyObserved = run && "verifyObserved" in run ? run.verifyObserved : undefined;
+    if (!summaryText || !afterReply || !verifyObserved) {
       throw new Error("missing Slack table scenario verifier");
     }
     const history = vi.fn(async () => ({
@@ -1521,6 +1545,10 @@ describe("Slack live QA runtime helpers", () => {
         },
       ],
     }));
+    verifyObserved({
+      finalMessage: {} as never,
+      messages: [{ channelId: "C123456789", text: summaryText, ts: "2.000000" }],
+    });
     const result = expect(
       afterReply(
         {} as never,
