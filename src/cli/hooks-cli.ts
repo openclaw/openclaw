@@ -366,6 +366,11 @@ export function registerHooksCli(program: Command): void {
       "Acknowledge security.installPolicy warnings without prompting; blocks and failures remain terminal",
       false,
     )
+    .addHelpText(
+      "after",
+      () =>
+        `\n${theme.warn("Deprecation notice:")}\n  This command is deprecated. Use ${theme.command("openclaw plugins install")} instead.\n`,
+    )
     .action(async (raw: string, opts: HooksInstallOptions) => {
       defaultRuntime.log(
         theme.warn("`openclaw hooks install` is deprecated; use `openclaw plugins install`."),
@@ -388,6 +393,11 @@ export function registerHooksCli(program: Command): void {
       "--acknowledge-install-policy-warning",
       "Acknowledge security.installPolicy warnings without prompting; blocks and failures remain terminal",
       false,
+    )
+    .addHelpText(
+      "after",
+      () =>
+        `\n${theme.warn("Deprecation notice:")}\n  This command is deprecated. Use ${theme.command("openclaw plugins update")} instead.\n`,
     )
     .action(async (id: string | undefined, opts: HooksUpdateOptions) => {
       defaultRuntime.log(
