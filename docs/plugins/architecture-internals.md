@@ -325,9 +325,13 @@ releases its lease without classifying the healthy process as a startup failure.
 
 Normalization dispatch is hook-specific:
 
-- `normalizeModelId` uses the matched provider hook's non-empty result. If none
-  is returned, OpenClaw applies manifest-declared model-ID normalization; it does
-  not try other providers' normalization hooks.
+- Model references apply manifest-declared model-ID normalization once before
+  `normalizeModelId` dispatch. The matched provider hook can refine that prepared
+  model ID; an empty result keeps it unchanged. OpenClaw does not try other
+  providers' normalization hooks or reapply manifest rules afterward.
+  Reference parsing reads the selected runtime registry without activating
+  plugins. Executable normalization requires a prepared runtime owner; reads
+  without one use static manifest policies only.
 - `normalizeTransport` tries the matched provider first. Only if that does not
   change `api` or `baseUrl` and the provider has no `models.providers.<id>` entry
   does it try other transport hooks, stopping at the first change.

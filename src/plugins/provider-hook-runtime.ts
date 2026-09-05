@@ -21,7 +21,11 @@ import {
   resolveModelCatalogScope,
   resolveProviderConfigApiOwnerHint,
 } from "./provider-config-owner.js";
-import { matchesProviderPluginRef } from "./provider-registry-shared.js";
+import {
+  findProviderRuntimePluginInRegistry,
+  matchesProviderPluginRef,
+  matchesProviderRuntimePlugin,
+} from "./provider-registry-shared.js";
 import { isPluginProvidersLoadInFlight, resolvePluginProvidersCore } from "./providers.runtime.js";
 import type { PluginRegistry } from "./registry-types.js";
 import {
@@ -115,11 +119,6 @@ function resolveProviderRuntimePluginCacheKey(
   });
 }
 
-function matchesProviderLiteralId(provider: ProviderPlugin, providerId: string): boolean {
-  const normalized = normalizeLowercaseStringOrEmpty(providerId);
-  return Boolean(normalized) && normalizeLowercaseStringOrEmpty(provider.id) === normalized;
-}
-
 function resolveProviderRuntimeLookupModelId(
   params: ProviderRuntimePluginLookupParams & { context?: { modelId?: unknown } },
 ): string | undefined {
@@ -189,23 +188,6 @@ function findProviderRuntimePluginInLoadedRegistries(params: {
     return activePlugin;
   }
   return undefined;
-}
-
-function findProviderRuntimePluginInRegistry(params: {
-  registry: PluginRegistry;
-  provider: string;
-  ownerRefs: readonly string[];
-}): ProviderPlugin | undefined {
-  const entry = params.registry.providers.find(({ provider: plugin }) => {
-    if (params.ownerRefs.length > 0) {
-      return (
-        matchesProviderLiteralId(plugin, params.provider) ||
-        params.ownerRefs.some((ownerRef) => matchesProviderPluginRef(plugin, ownerRef))
-      );
-    }
-    return matchesProviderPluginRef(plugin, params.provider);
-  });
-  return entry ? Object.assign({}, entry.provider, { pluginId: entry.pluginId }) : undefined;
 }
 
 function hasConfiguredModelProvider(params: {
@@ -328,15 +310,7 @@ export function resolveProviderRuntimePlugin(
         modelRefs: lookupScope.modelRefs,
         applyAutoEnable: params.applyAutoEnable,
         pluginMetadataSnapshot: params.pluginMetadataSnapshot,
-      }).find((plugin) => {
-        if (ownerRefs.length > 0) {
-          return (
-            matchesProviderLiteralId(plugin, params.provider) ||
-            ownerRefs.some((ownerRef) => matchesProviderPluginRef(plugin, ownerRef))
-          );
-        }
-        return matchesProviderPluginRef(plugin, params.provider);
-      }) ?? null
+      }).find((plugin) => matchesProviderRuntimePlugin(plugin, params.provider, ownerRefs)) ?? null
     );
   };
   const plugin = cacheConfig

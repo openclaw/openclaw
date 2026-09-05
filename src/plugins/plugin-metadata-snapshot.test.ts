@@ -1,6 +1,7 @@
 // Verifies lifecycle snapshot loading, ownership facts, and immutable boundaries.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { makeTempDir } from "../../test/helpers/temp-dir.js";
+import { normalizeStaticProviderModelId } from "../agents/model-ref-shared.js";
 import { resolveDefaultModelForAgent } from "../agents/model-selection-config.js";
 import { buildConfiguredModelCatalog } from "../agents/model-selection-shared.js";
 import {
@@ -26,7 +27,6 @@ import {
 } from "./current-plugin-metadata.test-support.js";
 import type { PluginDiscoveryResult } from "./discovery.js";
 import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
-import { normalizeProviderModelIdWithManifest } from "./manifest-model-id-normalization.js";
 import { loadPluginManifestRegistryCore } from "./manifest-registry.js";
 import {
   createPluginCache,
@@ -798,18 +798,8 @@ describe("plugin metadata snapshot", () => {
       snapshot,
       () => {
         for (let repeat = 0; repeat < 4; repeat += 1) {
-          expect(
-            normalizeProviderModelIdWithManifest({
-              provider: " DEMO ",
-              context: { provider: "demo", modelId: "latest" },
-            }),
-          ).toBe("middle-model");
-          expect(
-            normalizeProviderModelIdWithManifest({
-              provider: "missing",
-              context: { provider: "missing", modelId: "latest" },
-            }),
-          ).toBeUndefined();
+          expect(normalizeStaticProviderModelId(" DEMO ", "latest")).toBe("middle-model");
+          expect(normalizeStaticProviderModelId("missing", "latest")).toBe("latest");
           expect(resolveDefaultModelForAgent({ cfg })).toEqual({
             provider: "demo",
             model: "final-model",
@@ -818,13 +808,12 @@ describe("plugin metadata snapshot", () => {
             { provider: "demo", id: "middle-model" },
           ]);
         }
-        const context = { provider: "demo", modelId: "latest" };
-        expect(
-          normalizeProviderModelIdWithManifest({ provider: "demo", context, plugins: [] }),
-        ).toBeUndefined();
+        expect(normalizeStaticProviderModelId("demo", "latest", { manifestPlugins: [] })).toBe(
+          "latest",
+        );
         const providers = { demo: { aliases: { latest: "explicit-model" } } };
         const plugins = [{ modelIdNormalization: { providers } }];
-        expect(normalizeProviderModelIdWithManifest({ provider: "demo", context, plugins })).toBe(
+        expect(normalizeStaticProviderModelId("demo", "latest", { manifestPlugins: plugins })).toBe(
           "explicit-model",
         );
         plugins.splice(0, 1, {
@@ -832,7 +821,7 @@ describe("plugin metadata snapshot", () => {
             providers: { demo: { aliases: { latest: "changed-explicit-model" } } },
           },
         });
-        expect(normalizeProviderModelIdWithManifest({ provider: "demo", context, plugins })).toBe(
+        expect(normalizeStaticProviderModelId("demo", "latest", { manifestPlugins: plugins })).toBe(
           "changed-explicit-model",
         );
       },
