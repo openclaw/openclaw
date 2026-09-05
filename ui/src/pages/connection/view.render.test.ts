@@ -4,6 +4,7 @@ import { render } from "lit";
 import { describe, expect, it } from "vitest";
 import type { SystemInfoResult } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayHelloOk } from "../../api/gateway.ts";
+import { createGatewayProfile } from "../../app/gateway-registry.ts";
 import { renderConnection } from "./view.ts";
 
 type ConnectionProps = Parameters<typeof renderConnection>[0];
@@ -78,6 +79,54 @@ describe("connection view rendering", () => {
       "Default Session Key",
     ]);
     expect(container.textContent).not.toContain("Last error");
+  });
+
+  it("renders a capacity error as an alert", async () => {
+    const container = document.createElement("div");
+    const profile = createGatewayProfile({ name: "Personal", url: "ws://127.0.0.1:18789" });
+    if (!profile) {
+      throw new Error("test fixture must produce a gateway profile");
+    }
+    render(
+      renderConnection(
+        createConnectionProps({
+          gatewayRegistry: {
+            gateways: [profile],
+            activeGatewayId: profile.id,
+          },
+          gatewayRegistryError:
+            "Gateway registry is full. Remove a saved gateway before adding another.",
+        }),
+      ),
+      container,
+    );
+    await Promise.resolve();
+
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain("registry is full");
+  });
+
+  it("gives saved gateway actions distinct accessible names", async () => {
+    const container = document.createElement("div");
+    const personal = createGatewayProfile({ name: "Personal", url: "ws://personal.example" });
+    const team = createGatewayProfile({ name: "Team", url: "ws://team.example" });
+    if (!personal || !team) {
+      throw new Error("test fixtures must produce gateway profiles");
+    }
+    render(
+      renderConnection(
+        createConnectionProps({
+          gatewayRegistry: { gateways: [personal, team], activeGatewayId: personal.id },
+        }),
+      ),
+      container,
+    );
+    await Promise.resolve();
+
+    expect(
+      [...container.querySelectorAll<HTMLButtonElement>(".gateway-registry__actions button")].map(
+        (button) => button.getAttribute("aria-label"),
+      ),
+    ).toEqual(["Personal is active", "Remove Personal", "Switch to Team", "Remove Team"]);
   });
 
   it("keeps every gateway access input labeled when credentials are revealed", () => {

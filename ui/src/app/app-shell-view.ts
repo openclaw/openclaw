@@ -30,6 +30,11 @@ import type { ApplicationRuntime } from "./bootstrap.ts";
 import type { ApplicationContext, ApplicationNavigationOptions } from "./context.ts";
 import { resolveControlUiAuthToken } from "./control-ui-auth.ts";
 import {
+  GatewayRegistryPersistenceError,
+  loadGatewayRegistryForGateway,
+  selectGatewayProfile,
+} from "./gateway-registry.ts";
+import {
   DEBUG_OVERLAY_ELEMENT,
   isOptionalElementDefined,
   KEYBOARD_SHORTCUTS_ELEMENT,
@@ -55,6 +60,7 @@ import {
 import {
   NAV_WIDTH_MAX,
   NAV_WIDTH_MIN,
+  loadGatewaySessionSelection,
   normalizeCatalogOpenTarget,
   normalizeChatSendShortcut,
 } from "./settings.ts";
@@ -318,12 +324,35 @@ export function renderApplicationShell(host: ShellViewHost) {
       lobsterPetVisits: uiSettings.lobsterPetVisits !== false,
       lobsterPetSounds: uiSettings.lobsterPetSounds === true,
       gatewayVersion: config.serverVersion ?? gatewaySnapshot.hello?.server?.version ?? null,
+      gatewayRegistry: loadGatewayRegistryForGateway(context.gateway.connection.gatewayUrl),
       devGitBranch: config.devGitBranch,
       watchUpdateProgress,
       onOpenApprovals: () => host.openApprovals(),
       onOpenPalette: () => host.openPalette(),
       onRetryConnect: () => context.gateway.connect(),
       onToggleSidebar: () => host.toggleNavigationSurface(),
+      onSelectGateway: (id: string) => {
+        let registry;
+        try {
+          registry = selectGatewayProfile(id, {
+            url: context.gateway.connection.gatewayUrl,
+          });
+        } catch (error) {
+          if (error instanceof GatewayRegistryPersistenceError) {
+            return;
+          }
+          throw error;
+        }
+        const profile = registry.gateways.find((gateway) => gateway.id === id);
+        if (!profile || profile.url === context.gateway.connection.gatewayUrl) {
+          return;
+        }
+        context.gateway.connect({
+          gatewayUrl: profile.url,
+          sessionKey: loadGatewaySessionSelection(profile.url).sessionKey,
+        });
+      },
+      onManageGateways: () => host.navigate("connection"),
       onOpenNewSession: openNewSession,
       onUpdateSidebarEntries: (entries: string[]) =>
         context.navigation.update({ sidebarEntries: entries }),

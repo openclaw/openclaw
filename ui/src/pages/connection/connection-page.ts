@@ -13,6 +13,15 @@ import {
   type ApplicationGatewaySnapshot,
 } from "../../app/context.ts";
 import {
+  createGatewayProfile,
+  loadGatewayRegistryForGateway,
+  removeGatewayProfile,
+  selectGatewayProfile,
+  upsertGatewayProfile,
+  GatewayRegistryPersistenceError,
+  type GatewayRegistry,
+} from "../../app/gateway-registry.ts";
+import {
   loadGatewaySessionSelection,
   loadSettings,
   resolveGatewayCredentialsForUrlEdit,
@@ -20,6 +29,7 @@ import {
 } from "../../app/settings.ts";
 import { renderLearnMoreLink } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
+import { t } from "../../i18n/index.ts";
 import { isMissingOperatorReadScopeError } from "../../lib/gateway-errors.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { PollController } from "../../lit/poll-controller.ts";
@@ -40,6 +50,12 @@ export class ConnectionPage extends OpenClawLightDomElement {
   @state() private password = "";
   @state() private gatewayTokenVisible = false;
   @state() private gatewayPasswordVisible = false;
+  @state() private gatewayRegistry: GatewayRegistry = loadGatewayRegistryForGateway(
+    this.settings.gatewayUrl,
+  );
+  @state() private gatewayRegistryError = "";
+  @state() private newGatewayName = "";
+  @state() private newGatewayUrl = "";
   @state() private systemInfo: SystemInfoResult | null = null;
   @state() private systemInfoUnavailable = false;
 
@@ -221,9 +237,98 @@ export class ConnectionPage extends OpenClawLightDomElement {
       sessionKey,
       lastActiveSessionKey: sessionKey,
     };
+    this.gatewayRegistry = loadGatewayRegistryForGateway(gatewayUrl);
     this.password = password;
     this.sessionKeyDirty = false;
     this.resetSensitiveUi();
+  }
+
+  private addGateway() {
+    const profile = createGatewayProfile({ name: this.newGatewayName, url: this.newGatewayUrl });
+    if (!profile) {
+      this.gatewayRegistryError = t("connection.registry.invalidUrl");
+      return;
+    }
+    const hadProfile = this.gatewayRegistry.gateways.some((gateway) => gateway.id === profile.id);
+    try {
+      this.gatewayRegistry = upsertGatewayProfile(profile, { select: true });
+    } catch (error) {
+      if (error instanceof GatewayRegistryPersistenceError) {
+        this.gatewayRegistryError = t("connection.registry.persistence");
+        return;
+      }
+      throw error;
+    }
+    if (
+      !hadProfile &&
+      !this.gatewayRegistry.gateways.some((gateway) => gateway.id === profile.id)
+    ) {
+      this.gatewayRegistryError = t("connection.registry.capacity");
+      return;
+    }
+    this.gatewayRegistryError = "";
+    this.newGatewayName = "";
+    this.newGatewayUrl = "";
+    this.sessionKeyDirty = false;
+    this.context.gateway.connect({
+      gatewayUrl: profile.url,
+      sessionKey: loadGatewaySessionSelection(profile.url).sessionKey,
+    });
+  }
+
+  private selectGateway(id: string) {
+    const profile = this.gatewayRegistry.gateways.find((gateway) => gateway.id === id);
+    if (!profile) {
+      return;
+    }
+    try {
+      this.gatewayRegistry = selectGatewayProfile(id);
+    } catch (error) {
+      if (error instanceof GatewayRegistryPersistenceError) {
+        this.gatewayRegistryError = t("connection.registry.persistence");
+        return;
+      }
+      throw error;
+    }
+    this.gatewayRegistryError = "";
+    this.sessionKeyDirty = false;
+    this.context.gateway.connect({
+      gatewayUrl: profile.url,
+      sessionKey: loadGatewaySessionSelection(profile.url).sessionKey,
+    });
+  }
+
+  private removeGateway(id: string) {
+    const profile = this.gatewayRegistry.gateways.find((gateway) => gateway.id === id);
+    if (!profile || this.gatewayRegistry.gateways.length <= 1) {
+      return;
+    }
+    if (!window.confirm(t("connection.registry.removeConfirm", { name: profile.name }))) {
+      return;
+    }
+    const wasActive = this.gatewayRegistry.activeGatewayId === id;
+    try {
+      this.gatewayRegistry = removeGatewayProfile(id);
+    } catch (error) {
+      if (error instanceof GatewayRegistryPersistenceError) {
+        this.gatewayRegistryError = t("connection.registry.persistence");
+        return;
+      }
+      throw error;
+    }
+    if (wasActive && this.gatewayRegistry.activeGatewayId) {
+      const nextProfile = this.gatewayRegistry.gateways.find(
+        (gateway) => gateway.id === this.gatewayRegistry.activeGatewayId,
+      );
+      if (nextProfile) {
+        this.gatewayRegistryError = "";
+        this.sessionKeyDirty = false;
+        this.context.gateway.connect({
+          gatewayUrl: nextProfile.url,
+          sessionKey: loadGatewaySessionSelection(nextProfile.url).sessionKey,
+        });
+      }
+    }
   }
 
   private connect() {
@@ -262,6 +367,10 @@ export class ConnectionPage extends OpenClawLightDomElement {
     const body = renderConnection({
       connected: gateway.phase === "connected",
       hello: gateway.hello,
+      gatewayRegistry: this.gatewayRegistry,
+      newGatewayName: this.newGatewayName,
+      newGatewayUrl: this.newGatewayUrl,
+      gatewayRegistryError: this.gatewayRegistryError,
       settings: this.settings,
       password: this.password,
       lastError: gateway.lastError,
@@ -271,6 +380,11 @@ export class ConnectionPage extends OpenClawLightDomElement {
       showGatewayToken: this.gatewayTokenVisible,
       showGatewayPassword: this.gatewayPasswordVisible,
       onConnectionChange: (patch) => this.updateConnection(patch),
+      onNewGatewayNameChange: (name) => (this.newGatewayName = name),
+      onNewGatewayUrlChange: (url) => (this.newGatewayUrl = url),
+      onAddGateway: () => this.addGateway(),
+      onSelectGateway: (id) => this.selectGateway(id),
+      onRemoveGateway: (id) => this.removeGateway(id),
       onPasswordChange: (next) => (this.password = next),
       onSessionKeyChange: (sessionKey) => {
         this.sessionKeyDirty = true;
