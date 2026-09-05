@@ -72,6 +72,16 @@ function writeFixtureEntry(params: {
   );
 }
 
+function readSchemaVersions(database: OpenClawAgentDatabase): {
+  schemaVersion: unknown;
+  userVersion: unknown;
+} {
+  return {
+    schemaVersion: database.db.prepare("PRAGMA schema_version").get()?.schema_version,
+    userVersion: database.db.prepare("PRAGMA user_version").get()?.user_version,
+  };
+}
+
 describe("read-only SQLite session retention projection", () => {
   it("consumes canonical eligibility and ownership order without mutating the store", async () => {
     const state = await createOpenClawTestState({
@@ -121,6 +131,7 @@ describe("read-only SQLite session retention projection", () => {
       }
       const database = openOpenClawAgentDatabase({ agentId: "main", path: target.path });
       const fingerprintBefore = readSessionStoreFingerprint(database);
+      const schemaVersionsBefore = readSchemaVersions(database);
       const plan = applySessionEntryMaintenance(database, {
         activeSessionKey: "agent:main:main",
         archiveDirectory: state.sessionsDir(),
@@ -163,11 +174,19 @@ describe("read-only SQLite session retention projection", () => {
         projection.groups.map((group) => group.groupId),
       );
       const fingerprintAfter = withOpenClawAgentDatabaseReadOnly(
-        (readonlyDatabase) =>
-          readSessionStoreFingerprint(readonlyDatabase as OpenClawAgentDatabase),
+        (readonlyDatabase) => ({
+          fingerprint: readSessionStoreFingerprint(readonlyDatabase as OpenClawAgentDatabase),
+          schemaVersions: readSchemaVersions(readonlyDatabase as OpenClawAgentDatabase),
+        }),
         { agentId: "main", path: target.path },
       );
-      expect(fingerprintAfter).toEqual({ found: true, value: fingerprintBefore });
+      expect(fingerprintAfter).toEqual({
+        found: true,
+        value: {
+          fingerprint: fingerprintBefore,
+          schemaVersions: schemaVersionsBefore,
+        },
+      });
     } finally {
       await state.cleanup();
     }

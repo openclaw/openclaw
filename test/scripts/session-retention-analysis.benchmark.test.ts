@@ -1,5 +1,9 @@
-import { expect, it } from "vitest";
-import { runRetentionBenchmark } from "../../scripts/session-retention-analysis/benchmark.js";
+import { expect, it, vi } from "vitest";
+import {
+  parseRetentionBenchmarkCli,
+  runRetentionBenchmark,
+  runRetentionBenchmarkCommand,
+} from "../../scripts/session-retention-analysis/benchmark.js";
 import {
   BALANCED_GRAPH_WEIGHTS,
   PRIMARY_GRAPH_WEIGHTS,
@@ -26,6 +30,35 @@ function retentionEnvironment() {
     agentDir: process.env.OPENCLAW_AGENT_DIR,
   };
 }
+
+it.each([
+  [[], "default"],
+  [["--mode", "smoke"], "smoke"],
+  [["--mode", "default"], "default"],
+] as const)("parses supported benchmark arguments %#", (argv, mode) => {
+  expect(parseRetentionBenchmarkCli([...argv])).toEqual({ help: false, mode });
+});
+
+it.each([
+  [["--mode", "large"], '--mode must be one of smoke, default; got "large"'],
+  [["--mode"], "--mode requires a value"],
+  [["--mode", "smoke", "--mode", "default"], "--mode was provided more than once"],
+  [["--mode", "smoke", "--mode", "smoke"], "--mode was provided more than once"],
+  [["--unknown"], "Unknown argument: --unknown"],
+  [["smoke"], "Unknown argument: smoke"],
+  [["--mode=smoke"], "Unknown argument: --mode=smoke"],
+] as const)("rejects unsupported benchmark arguments %#", (argv, message) => {
+  expect(() => parseRetentionBenchmarkCli([...argv])).toThrow(message);
+});
+
+it("does not start benchmark work after argument parsing fails", async () => {
+  const runner = vi.fn<typeof runRetentionBenchmark>();
+
+  await expect(runRetentionBenchmarkCommand(["--mode", "smoke", "--typo"], runner)).rejects.toThrow(
+    "Unknown argument: --typo",
+  );
+  expect(runner).not.toHaveBeenCalled();
+});
 
 it("runs every temporary-store workload without mutations, splits, or protection violations", async () => {
   const environmentBefore = retentionEnvironment();

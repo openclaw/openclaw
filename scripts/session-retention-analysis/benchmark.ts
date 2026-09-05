@@ -14,6 +14,7 @@ import {
   openOpenClawAgentDatabase,
   type OpenClawAgentDatabase,
 } from "../../src/state/openclaw-agent-db.js";
+import { CliUsageError, parseSqliteBenchmarkCli } from "../lib/sqlite-benchmark-cli.js";
 import {
   BALANCED_GRAPH_WEIGHTS,
   PRIMARY_GRAPH_WEIGHTS,
@@ -110,6 +111,7 @@ const DAY_MS = 24 * 60 * 60 * 1_000;
 const PRUNE_AFTER_MS = 365 * DAY_MS;
 const PRESERVE_RECENT_MS = 7 * DAY_MS;
 const RETENTION_CONTROL_SESSION_KEY = "agent:main:retention-active-control";
+const RETENTION_BENCHMARK_VALUE_FLAGS = new Set(["--mode"]);
 
 function repositoryCommit(): string {
   return execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim();
@@ -433,16 +435,49 @@ export async function runRetentionBenchmark(params: {
   return report;
 }
 
-function parseMode(argv: readonly string[]): BenchmarkMode {
-  const modeIndex = argv.indexOf("--mode");
-  const mode = modeIndex >= 0 ? argv[modeIndex + 1] : "default";
-  if (mode !== "smoke" && mode !== "default") {
-    throw new Error(`Unknown benchmark mode: ${mode ?? "<missing>"}`);
+export function parseRetentionBenchmarkCli(
+  argv: string[],
+): { help: true } | { help: false; mode: BenchmarkMode } {
+  const parsed = parseSqliteBenchmarkCli(argv, RETENTION_BENCHMARK_VALUE_FLAGS);
+  if (parsed.help) {
+    return parsed;
   }
-  return mode;
+  const mode = parsed.values.get("--mode") ?? "default";
+  if (mode !== "smoke" && mode !== "default") {
+    throw new CliUsageError(`--mode must be one of smoke, default; got ${JSON.stringify(mode)}`);
+  }
+  return { help: false, mode };
+}
+
+function printUsage(): void {
+  console.log(`OpenClaw session-retention benchmark
+
+Usage:
+  pnpm sessions:retention:benchmark [--mode <smoke|default>]
+`);
+}
+
+export async function runRetentionBenchmarkCommand(
+  argv: string[],
+  runBenchmark: typeof runRetentionBenchmark = runRetentionBenchmark,
+): Promise<void> {
+  const parsed = parseRetentionBenchmarkCli(argv);
+  if (parsed.help) {
+    printUsage();
+    return;
+  }
+  await runBenchmark({ mode: parsed.mode });
 }
 
 const entryPoint = process.argv[1] ? pathToFileURL(path.resolve(process.argv[1])).href : "";
 if (import.meta.url === entryPoint) {
-  await runRetentionBenchmark({ mode: parseMode(process.argv.slice(2)) });
+  try {
+    await runRetentionBenchmarkCommand(process.argv.slice(2));
+  } catch (error) {
+    if (error instanceof CliUsageError) {
+      console.error(`error: ${error.message}`);
+      process.exit(2);
+    }
+    throw error;
+  }
 }
