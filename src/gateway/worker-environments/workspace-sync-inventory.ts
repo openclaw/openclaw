@@ -10,6 +10,7 @@ import {
   stagedInputPathDirectory,
   STAGED_INPUT_GIT_PATHSPEC,
 } from "../../media/staged-inputs.js";
+import { resolveCommandEnv } from "../../process/exec.js";
 import { killProcessTree } from "../../process/kill-tree.js";
 import { workerSshCommandOptions } from "./ssh.js";
 import { isPortableRootContainedSymlink } from "./workspace-actual-manifest.js";
@@ -268,7 +269,10 @@ export async function runWorkspaceInventoryCommandToFile(params: {
     params.signal.throwIfAborted();
     const boundedOutput = params.maxOutputBytes !== undefined;
     const child = spawn(command, args, {
-      env: workerSshCommandOptions({ timeoutMs: params.timeoutMs }).baseEnv,
+      env: resolveCommandEnv({
+        argv: params.argv,
+        baseEnv: workerSshCommandOptions({ timeoutMs: params.timeoutMs }).baseEnv,
+      }),
       stdio: [input?.fd ?? "ignore", boundedOutput ? "pipe" : output.fd, "pipe"],
       ...(process.platform !== "win32" ? { detached: true } : {}),
       windowsHide: true,

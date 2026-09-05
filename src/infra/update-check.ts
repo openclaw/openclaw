@@ -8,6 +8,7 @@ import {
   resolvePnpmNodeModulesRoot,
 } from "./detect-package-manager.js";
 import { executeGitCommand, GIT_TIMEOUT_MS } from "./git-exec.js";
+import { resolveGitPath } from "./git-path.js";
 import { compareOpenClawReleaseVersions } from "./npm-registry-spec.js";
 import { compareValidSemver, normalizeLegacyDotBetaVersion } from "./semver.js";
 import {
@@ -249,7 +250,10 @@ export async function resolveUpdateInstallKind(
     timeoutMs: 4000,
   });
   options.signal?.throwIfAborted();
-  const gitRoot = result?.code === 0 ? result.stdout.trim() : "";
+  const gitRoot =
+    result?.code === 0
+      ? await resolveGitPath(result.stdout.trim(), { signal: options.signal, timeoutMs: 4000 })
+      : "";
   return gitRoot && updateInstallRootsMatch(gitRoot, root) ? "git" : "package";
 }
 

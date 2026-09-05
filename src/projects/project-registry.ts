@@ -6,6 +6,7 @@ import { listAgentIds, resolveAgentWorkspaceDir } from "../agents/agent-scope.js
 import { insideGitCheckout, runGit } from "../agents/worktrees/git.js";
 import { slugifyWorktreeTitle } from "../agents/worktrees/name.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveGitPath } from "../infra/git-path.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -221,7 +222,7 @@ export async function resolveProjectCheckout(projectPath: string): Promise<{
   if (rootResult.code !== 0) {
     throw new ProjectCheckoutError(`project path is not a git checkout: ${projectPath}`);
   }
-  const repoRoot = await fs.realpath(rootResult.stdout.trim()).catch(() => {
+  const repoRoot = await fs.realpath(await resolveGitPath(rootResult.stdout.trim())).catch(() => {
     throw new ProjectCheckoutError(`project checkout root is unavailable: ${projectPath}`);
   });
   const headResult = await runGit(repoRoot, ["rev-parse", "--verify", "HEAD^{commit}"]);

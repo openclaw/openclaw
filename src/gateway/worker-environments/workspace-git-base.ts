@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { commandError, requireGit, runGit } from "../../agents/worktrees/git.js";
+import { resolveGitPath } from "../../infra/git-path.js";
 import { hasNodeErrorCode } from "../../infra/path-guards.js";
 import { workerSshCommandOptions } from "./ssh.js";
 import {
@@ -41,7 +42,10 @@ export async function prepareWorkerProjectSnapshot(params: {
     env: workerSshCommandOptions({ timeoutMs: GIT_TIMEOUT_MS }).baseEnv,
   };
   const gitRoot = await fsp.realpath(
-    await requireGit(root, ["rev-parse", "--show-toplevel"], options),
+    await resolveGitPath(
+      await requireGit(root, ["rev-parse", "--show-toplevel"], options),
+      options,
+    ),
   );
   if (gitRoot !== root) {
     throw new Error("Worker git workspace sync requires the managed worktree root");
@@ -58,7 +62,10 @@ export async function prepareWorkerProjectSnapshot(params: {
     throw new Error("Worker workspace Git base is not a commit id");
   }
   const commonDir = await fsp.realpath(
-    await requireGit(root, ["rev-parse", "--path-format=absolute", "--git-common-dir"], options),
+    await resolveGitPath(
+      await requireGit(root, ["rev-parse", "--path-format=absolute", "--git-common-dir"], options),
+      options,
+    ),
   );
   params.signal?.throwIfAborted();
   // Linked session worktrees share the repository cache; their pinned commits and

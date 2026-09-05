@@ -11,6 +11,7 @@ import type {
 import { gitEnvironment, runGit } from "../agents/worktrees/git.js";
 import type { SessionDiffBaseline } from "../config/sessions/types.js";
 import { GIT_TIMEOUT_MS } from "../infra/git-exec.js";
+import { resolveGitPath } from "../infra/git-path.js";
 import { runCommandBuffered } from "../process/exec.js";
 import {
   loadSessionDiffBranchMetadata,
@@ -78,7 +79,7 @@ async function loadCheckoutRevision(
     }
     const lines = result.stdout.replace(/\n$/, "").split("\n");
     const head = result.code === 0 ? lines.pop() : undefined;
-    const root = lines.join("\n");
+    const root = await resolveGitPath(lines.join("\n"));
     if (!root) {
       return undefined;
     }

@@ -9,6 +9,7 @@ import {
   requireGitCommandBuffer,
   requireGitCommandRaw,
 } from "../../infra/git-exec.js";
+import { resolveGitPath } from "../../infra/git-path.js";
 
 export type GitResult = Awaited<ReturnType<typeof executeGitCommand>>;
 
@@ -106,8 +107,14 @@ function parseWorktreeList(output: string): WorktreeListEntry[] {
 }
 
 export async function listGitWorktrees(repoRoot: string): Promise<WorktreeListEntry[]> {
-  return parseWorktreeList(
+  const entries = parseWorktreeList(
     await requireGitRaw(repoRoot, ["worktree", "list", "--porcelain", "-z"]),
+  );
+  return await Promise.all(
+    entries.map(async (entry) => {
+      entry.path = await resolveGitPath(entry.path);
+      return entry;
+    }),
   );
 }
 

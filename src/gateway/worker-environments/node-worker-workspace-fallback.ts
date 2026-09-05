@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { resolveGitPath } from "../../infra/git-path.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { runCommandWithTimeout, type SpawnResult } from "../../process/exec.js";
 import type {
@@ -146,7 +147,11 @@ async function inspectEligibleOrigin(localPath: string): Promise<OriginInspectio
     const canonicalPath = await fs.realpath(localPath);
     let root: string;
     try {
-      root = await fs.realpath(await localGit(canonicalPath, ["rev-parse", "--show-toplevel"]));
+      root = await fs.realpath(
+        await resolveGitPath(await localGit(canonicalPath, ["rev-parse", "--show-toplevel"]), {
+          timeoutMs: GIT_TIMEOUT_MS,
+        }),
+      );
     } catch {
       return { kind: "fallback", reason: "not-git-workspace" };
     }

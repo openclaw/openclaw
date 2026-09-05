@@ -9,6 +9,7 @@ import {
   requireGitCommand as requireGit,
   requireGitCommandBuffer as requireGitBuffer,
 } from "../infra/git-exec.js";
+import { resolveGitPath } from "../infra/git-path.js";
 import { formatCommandOutput, formatCommandResult } from "../process/command-error.js";
 import { BACKUP_RUN_ERROR_MAX_LENGTH } from "../state/backup-run-records.contract.js";
 import {
@@ -113,7 +114,7 @@ function gitBackupRepositoryPrivacyRemediation(repositoryPath: string, cause: un
 async function assertGitRepository(repositoryPath: string, env?: NodeJS.ProcessEnv): Promise<void> {
   const topLevel = await requireGit(repositoryPath, ["rev-parse", "--show-toplevel"], { env });
   const [canonicalTopLevel, canonicalRepository] = await Promise.all([
-    fs.realpath(topLevel),
+    resolveGitPath(topLevel, { env }).then((nativePath) => fs.realpath(nativePath)),
     fs.realpath(repositoryPath),
   ]);
   if (canonicalTopLevel !== canonicalRepository) {

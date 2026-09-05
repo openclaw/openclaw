@@ -103,6 +103,28 @@ describe("runCommandWithTimeout", () => {
     expect(resolved.PATH).toBe("/override/bin");
   });
 
+  it("keeps native argv literal for MSYS/Cygwin without losing other runtime options", () => {
+    const baseEnv = {
+      msys: 'glob error_start="C:/debug tools/debugger.exe"',
+      CYGWIN: "winsymlinks:native",
+    };
+    const windows = resolveCommandEnv({
+      argv: ["git", "rev-parse", "HEAD^{commit}"],
+      platform: "win32",
+      baseEnv,
+    });
+    expect(windows.MSYS).toBe(`${baseEnv.msys} noglob`);
+    expect(windows.msys).toBeUndefined();
+    expect(windows.CYGWIN).toBe("winsymlinks:native noglob");
+    expect(resolveCommandEnv({ argv: ["git"], platform: "win32", baseEnv: windows })).toEqual(
+      windows,
+    );
+    const posix = resolveCommandEnv({ argv: ["git"], platform: "linux", baseEnv });
+    expect(posix.msys).toBe(baseEnv.msys);
+    expect(posix.CYGWIN).toBe(baseEnv.CYGWIN);
+    expect(baseEnv.msys).not.toContain("noglob");
+  });
+
   it("does not restore parent variables excluded from the child environment", async () => {
     const key = "OPENCLAW_EXECA_PARENT_ONLY_TEST";
     const previous = process.env[key];

@@ -2,7 +2,7 @@ import path from "node:path";
 import process from "node:process";
 import { execa, type Options as ExecaOptions, type ResultPromise } from "execa";
 import { markOpenClawExecEnv } from "../infra/openclaw-exec-env.js";
-import { mergeProcessEnv } from "../infra/process-env.js";
+import { mergeProcessEnv, resolveEnvironmentValue } from "../infra/process-env.js";
 import { resolveSafeChildProcessInvocation } from "./windows-command.js";
 
 export const COMMAND_PROCESS_TREE_KILL_GRACE_MS = 300;
@@ -81,7 +81,18 @@ export function resolveCommandEnv(params: {
     return false;
   })();
 
-  const resolvedEnv = mergeProcessEnv([baseEnv, params.env], platform);
+  let resolvedEnv = mergeProcessEnv([baseEnv, params.env], platform);
+  if (platform === "win32") {
+    // A native parent otherwise lets MSYS/Cygwin expand literal argv, including
+    // Git's HEAD^{commit}. Explicit shells still own expansion of their scripts.
+    const literalArgvEnv = Object.fromEntries(
+      ["MSYS", "CYGWIN"].map((name) => {
+        const value = resolveEnvironmentValue(resolvedEnv, name, platform) ?? "";
+        return [name, /(?:^|\s)noglob$/i.test(value) ? value : `${value} noglob`.trim()];
+      }),
+    );
+    resolvedEnv = mergeProcessEnv([resolvedEnv, literalArgvEnv], platform);
+  }
   if (shouldSuppressNpmFund) {
     if (resolvedEnv.NPM_CONFIG_FUND == null) {
       resolvedEnv.NPM_CONFIG_FUND = "false";

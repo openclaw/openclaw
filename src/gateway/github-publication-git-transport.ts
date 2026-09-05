@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { resolveGitPath } from "../infra/git-path.js";
 import { runCommandBuffered } from "../process/exec.js";
 import { githubPublicationUnsafeConfigArgs } from "./github-publication-base.js";
 
@@ -102,7 +103,10 @@ export async function assertSafeGitPublicationWorkspace(
     throw new Error("GitHub publication workspace has unsupported Git replacement metadata.");
   }
   const grafts = await readOptionalAttributeFile(
-    path.resolve(cwd, graftPath.stdout.toString("utf8").trim()),
+    path.resolve(
+      cwd,
+      await resolveGitPath(graftPath.stdout.toString("utf8").trim(), { cwd, timeoutMs: 60_000 }),
+    ),
   );
   if (grafts && grafts.length > 0) {
     throw new Error("GitHub publication workspace has unsupported Git replacement metadata.");
@@ -187,13 +191,18 @@ async function assertGitHubPublicationTreeHasNoFilters(
     throw new Error("GitHub publication workspace attributes could not be verified.");
   }
   const paths = [
-    path.resolve(cwd, infoPath.stdout.toString("utf8").trim()),
+    path.resolve(
+      cwd,
+      await resolveGitPath(infoPath.stdout.toString("utf8").trim(), { cwd, timeoutMs: 60_000 }),
+    ),
     ...attributeFiles.flatMap((result) =>
       result.stdout.length > 0 ? [result.stdout.toString("utf8").trim()] : [],
     ),
   ];
   for (const file of paths) {
-    const contents = await readOptionalAttributeFile(file);
+    const contents = await readOptionalAttributeFile(
+      await resolveGitPath(file, { cwd, timeoutMs: 60_000 }),
+    );
     if (contents) {
       assertNoGitFilterAttributes(contents);
     }

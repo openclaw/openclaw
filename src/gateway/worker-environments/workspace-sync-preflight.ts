@@ -1,6 +1,8 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { resolveGitPath } from "../../infra/git-path.js";
+import { workerSshCommandOptions } from "./ssh.js";
 import {
   createWorkspaceGitTransferList,
   runWorkspaceInventoryCommandToFile,
@@ -49,7 +51,15 @@ export async function preflightWorkerWorkspace(params: {
       readBoundedGitValue(gitRootPath),
       readBoundedGitValue(baseCommitPath),
     ]);
-    if ((await fs.realpath(reportedRoot)) !== canonicalRoot) {
+    if (
+      (await fs.realpath(
+        await resolveGitPath(reportedRoot, {
+          baseEnv: workerSshCommandOptions({ timeoutMs }).baseEnv,
+          signal,
+          timeoutMs,
+        }),
+      )) !== canonicalRoot
+    ) {
       throw workspaceInventoryError(
         "Cloud worker dispatch requires the canonical managed Git worktree root",
       );

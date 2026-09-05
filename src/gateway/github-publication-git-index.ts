@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import type { FileHandle } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { resolveGitPath } from "../infra/git-path.js";
 import { GitHubPublicationWorkspaceChangedError } from "./github-publication-failure.js";
 
 type GitCommandOptions = { cwd?: string; env?: NodeJS.ProcessEnv; input?: string };
@@ -108,7 +109,10 @@ export async function recoverGitHubPublicationBranchAndIndex(params: {
   const rawIndexPath = await params.run(["git", "rev-parse", "--git-path", "index"], {
     cwd: params.cwd,
   });
-  const indexPath = path.resolve(params.cwd, rawIndexPath);
+  const indexPath = path.resolve(
+    params.cwd,
+    await resolveGitPath(rawIndexPath, { cwd: params.cwd, timeoutMs: 60_000 }),
+  );
   const lockPath = `${indexPath}.lock`;
   const recoveryPath = publicationRecoveryPath(indexPath, params.requestId);
   if (!(await pathExists(recoveryPath))) {
@@ -201,7 +205,10 @@ export async function updateGitHubPublicationBranchAndIndex(params: {
     const rawIndexPath = await params.run(["git", "rev-parse", "--git-path", "index"], {
       cwd: params.cwd,
     });
-    const indexPath = path.resolve(params.cwd, rawIndexPath);
+    const indexPath = path.resolve(
+      params.cwd,
+      await resolveGitPath(rawIndexPath, { cwd: params.cwd, timeoutMs: 60_000 }),
+    );
     lockPath = `${indexPath}.lock`;
     recoveryPath = publicationRecoveryPath(indexPath, params.requestId);
     const gitEnv = {

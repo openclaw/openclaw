@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { resolveGitPath } from "../../infra/git-path.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
@@ -49,7 +50,12 @@ export async function withWorkspaceResultRefMutation<T>(
   operation: () => Promise<T>,
 ): Promise<T> {
   const common = await requireWorkspaceResultGit(root, ["rev-parse", "--git-common-dir"]);
-  const commonDir = await fs.realpath(path.resolve(root, common));
+  const commonDir = await fs.realpath(
+    path.resolve(
+      root,
+      await resolveGitPath(common, { timeoutMs: WORKSPACE_RESULT_GIT_TIMEOUT_MS }),
+    ),
+  );
   // Linked worktrees share packed-refs. Even deleting a loose ref locks that
   // shared file, so distinct environment/worktree keys cannot protect it.
   return await refOperations.enqueue(commonDir, operation);

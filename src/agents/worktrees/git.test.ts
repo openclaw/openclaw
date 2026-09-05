@@ -1,15 +1,56 @@
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, expectTypeOf, it } from "vitest";
+import { afterEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { SpawnResult } from "../../process/exec.js";
+import * as processExec from "../../process/exec.js";
+import * as windowsCommand from "../../process/windows-command.js";
 import {
   commandError,
   findGitCheckoutRoot,
   hasSelfContainedGitMetadata,
   insideGitCheckout,
+  listGitWorktrees,
   runGit,
 } from "./git.js";
+
+it("preserves worktree identity and foreign locks from MSYS porcelain paths", async () => {
+  vi.stubGlobal("process", { ...process, platform: "win32" });
+  const success = {
+    code: 0,
+    stderr: "",
+    signal: null,
+    killed: false,
+    termination: "exit" as const,
+  };
+  try {
+    vi.spyOn(fsSync, "existsSync").mockImplementation((file) =>
+      String(file).endsWith("msys-2.0.dll"),
+    );
+    vi.spyOn(processExec, "runCommandWithTimeout").mockResolvedValue({
+      ...success,
+      stdout: "worktree /c/repo\0\0worktree /d/linked checkout\0locked other owner\0\0",
+    });
+    vi.spyOn(windowsCommand, "resolveSafeChildProcessInvocation").mockReturnValue({
+      command: "C:\\msys64\\usr\\bin\\git.exe",
+      args: [],
+      usesWindowsExitCodeShim: false,
+      windowsHide: true,
+    });
+    vi.spyOn(processExec, "runUtf8CommandWithTimeout").mockImplementation(async (argv) => ({
+      ...success,
+      stdout: argv.at(-1) === "/c/repo" ? "C:\\repo\n" : "D:\\linked checkout\n",
+    }));
+    await expect(listGitWorktrees("C:\\repo")).resolves.toEqual([
+      { path: "C:\\repo" },
+      { path: "D:\\linked checkout", lockedReason: "other owner" },
+    ]);
+  } finally {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  }
+});
 
 describe("Git checkout discovery", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);

@@ -15,6 +15,7 @@ import { ScheduledTaskAutoStartRecoveryError } from "../daemon/schtasks-update-r
 import { readGatewayServiceState, resolveGatewayService } from "../daemon/service.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { resolveGitPath } from "../infra/git-path.js";
 import type { UpdateRecovery } from "../infra/update-recovery.js";
 import { UPDATE_RUNNER_TIMEOUT_MS } from "../infra/update-runner-command.js";
 import { runGatewayUpdate } from "../infra/update-runner.js";
@@ -47,7 +48,7 @@ async function detectOpenClawGitCheckout(root: string): Promise<"git" | "not-git
     }
     return "unknown";
   }
-  const gitRoot = res.stdout.trim();
+  const gitRoot = await resolveGitPath(res.stdout.trim(), { timeoutMs: 5000 });
   return (await resolveComparablePath(gitRoot)) === (await resolveComparablePath(root))
     ? "git"
     : "not-git";

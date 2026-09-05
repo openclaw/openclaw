@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { resolveGitPath } from "../../infra/git-path.js";
 import { redactSensitiveText } from "../../logging/redact.js";
 import type { CommandOptions, SpawnResult } from "../../process/exec.js";
 import { WORKER_BUNDLE_RSYNC_RECEIVER_PATH } from "../../shared/worker-bundle-hash.js";
@@ -288,7 +289,7 @@ export async function probeWorkspaceGitMode(params: {
   if (workerWorkspaceCommandSucceeded(gitBaseResult)) {
     return {
       mode: "git",
-      gitRoot: gitRootResult.stdout.trim(),
+      gitRoot: await resolveGitPath(gitRootResult.stdout.trim(), params.commandOptions),
       baseCommit: gitBaseResult.stdout.trim(),
     };
   }

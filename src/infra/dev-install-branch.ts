@@ -4,6 +4,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { runCommandWithTimeout } from "../process/exec.js";
+import { resolveGitPath } from "./git-path.js";
 import { resolveOpenClawPackageRoot } from "./openclaw-root.js";
 
 const GIT_TIMEOUT_MS = 3000;
@@ -30,7 +31,7 @@ async function detectDevInstallGitBranch(params: {
   // itself a git toplevel counts as a source checkout. A package install
   // nested inside an unrelated repo must not surface that repo's branch.
   const rootReal = await fs.realpath(root).catch(() => root);
-  const top = topRes.stdout.trim();
+  const top = await resolveGitPath(topRes.stdout.trim(), { timeoutMs: GIT_TIMEOUT_MS });
   if (!top || path.resolve(top) !== path.resolve(rootReal)) {
     return null;
   }

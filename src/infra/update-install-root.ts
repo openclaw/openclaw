@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { resolveGitPath } from "./git-path.js";
 import type { CommandRunner } from "./update-runner-types.js";
 
 /** Resolve the canonical identity of an update checkout/install root. */
@@ -25,7 +26,8 @@ export async function resolveGitRoot(
     const result = await runCommand(["git", "-C", dir, "rev-parse", "--show-toplevel"], {
       timeoutMs,
     }).catch(() => null);
-    const root = result?.code === 0 ? result.stdout.trim() : "";
+    const root =
+      result?.code === 0 ? await resolveGitPath(result.stdout.trim(), { timeoutMs }) : "";
     // A launcher may live inside an unrelated checkout (for example nvm).
     // Keep probing until the Git root owns the discovered OpenClaw package.
     if (root && (!packageRoot || updateInstallRootsMatch(root, packageRoot))) {
