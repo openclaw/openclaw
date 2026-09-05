@@ -1040,4 +1040,39 @@ describe("CORE_HEALTH_CHECKS", () => {
       expect.objectContaining({ target: "groq/llama-3.3-70b-versatile" }),
     );
   });
+
+  it("recognizes bundled Google static models as known and still flags genuine unknowns", async () => {
+    const check = getCheck(createCoreHealthChecks(), "core/doctor/model-references");
+
+    const findings = await check.detect({
+      mode: "doctor",
+      runtime,
+      cfg: {
+        agents: {
+          defaults: {
+            model: {
+              primary: "google/gemini-2.5-flash",
+              fallbacks: ["google/gemini-3.8-flash"],
+            },
+          },
+        },
+      },
+    });
+
+    // The bundled google plugin ships gemini-2.5-flash in its static catalog,
+    // so Doctor must not warn about it as an unknown local model.
+    expect(findings).not.toContainEqual(
+      expect.objectContaining({ target: "google/gemini-2.5-flash" }),
+    );
+    // A model absent from both the manifest mirror and the runtime static list
+    // stays a genuine unknown so typos keep being surfaced.
+    expect(findings).toContainEqual(
+      expect.objectContaining({
+        severity: "info",
+        target: "google/gemini-3.8-flash",
+        fixHint:
+          "Verify the model id with the provider, or rerun with --severity-min info after refreshing the local catalog.",
+      }),
+    );
+  });
 });

@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { buildJsonPluginConfigSchema } from "openclaw/plugin-sdk/core";
 import type { JsonSchemaObject } from "openclaw/plugin-sdk/json-schema-runtime";
 import { describe, expect, it } from "vitest";
+import { buildGoogleStaticCatalogProvider } from "./provider-catalog.js";
 
 type GoogleManifest = {
   setup?: {
@@ -35,6 +36,15 @@ type GoogleManifest = {
       model?: string;
       reason?: string;
     }>;
+    providers?: Record<
+      string,
+      {
+        models?: Array<{
+          id?: string;
+          name?: string;
+        }>;
+      }
+    >;
   };
   configSchema?: JsonSchemaObject;
   configContracts?: {
@@ -110,6 +120,22 @@ describe("google manifest model catalog", () => {
         ],
       }),
     ]);
+  });
+
+  it("mirrors the runtime static Google model list into modelCatalog.providers for every Google chat provider", () => {
+    const manifest = loadManifest();
+    const runtimeStaticModelIds = new Set(
+      buildGoogleStaticCatalogProvider().models.map((model) => model.id),
+    );
+    expect(runtimeStaticModelIds.size).toBeGreaterThan(0);
+
+    for (const provider of GOOGLE_CHAT_PROVIDERS) {
+      const declaredModels = manifest.modelCatalog?.providers?.[provider]?.models ?? [];
+      expect(new Set(declaredModels.map((model) => model.id))).toEqual(runtimeStaticModelIds);
+      for (const model of declaredModels) {
+        expect(model.name).toBeTruthy();
+      }
+    }
   });
 
   it("offers Google AI Studio API keys without consumer CLI OAuth", () => {
