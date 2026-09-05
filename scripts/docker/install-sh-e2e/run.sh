@@ -280,13 +280,11 @@ run_agent_turn() {
   local session_id="$2"
   local prompt="$3"
   local out_json="$4"
-  # Installer E2E validates install + onboard + embedded agent tooling. It does
-  # not need a paired Gateway control-plane hop, which is flaky/non-deterministic
-  # in the isolated container and already covered by gateway-specific lanes.
+  # The profile Gateway is already running and owns this state directory. Route
+  # agent turns through it so the smoke matches the supported ownership model.
   set +e
   timeout --kill-after=15s "${AGENT_TURN_TIMEOUT_SECONDS}s" \
     openclaw --profile "$profile" agent \
-    --local \
     --session-id "$session_id" \
     --message "$prompt" \
     --thinking off \
