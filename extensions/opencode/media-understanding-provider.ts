@@ -1,10 +1,6 @@
 // Opencode provider module implements model/runtime integration.
 import type { ProviderStreamOptions } from "openclaw/plugin-sdk/llm";
-import {
-  describeImageWithModelPayloadTransform,
-  describeImagesWithModelPayloadTransform,
-  type MediaUnderstandingProvider,
-} from "openclaw/plugin-sdk/media-understanding";
+import type { MediaUnderstandingProvider } from "openclaw/plugin-sdk/media-understanding";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 function stripOpencodeDisabledResponsesReasoningPayload(payload: unknown): void {
@@ -33,8 +29,7 @@ export const opencodeMediaUnderstandingProvider: MediaUnderstandingProvider = {
   defaultModels: {
     image: "gpt-5-nano",
   },
-  describeImage: (request) =>
-    describeImageWithModelPayloadTransform(request, stripDisabledResponsesReasoning),
-  describeImages: (request) =>
-    describeImagesWithModelPayloadTransform(request, stripDisabledResponsesReasoning),
+  // The media registry hydrates every shared image hook (description and
+  // structured extraction) with this transform.
+  imagePayloadTransform: stripDisabledResponsesReasoning,
 };

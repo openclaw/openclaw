@@ -133,7 +133,8 @@ describe("opencode provider plugin", () => {
 
     expect(mediaProvider?.capabilities).toEqual(["image"]);
     expect(mediaProvider?.defaultModels).toEqual({ image: "gpt-5-nano" });
-    expect(typeof mediaProvider?.describeImage).toBe("function");
+    // Image hooks are hydrated by the media registry around this transform.
+    expect(typeof mediaProvider?.imagePayloadTransform).toBe("function");
   });
 
   it("owns Gemini-only passthrough replay policy", async () => {

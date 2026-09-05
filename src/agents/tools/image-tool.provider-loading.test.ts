@@ -13,6 +13,10 @@ vi.mock("../../media-understanding/image-runtime.js", () => ({
   describeImagesWithModel: genericDescribe,
   describeImageWithModelPayloadTransform: genericDescribe,
   describeImagesWithModelPayloadTransform: genericDescribe,
+  // provider-registry hydrates structured extraction from this facade at module
+  // load, so the factory must carry both extraction entries too.
+  extractStructuredWithImageModel: genericDescribe,
+  extractStructuredWithImageModelPayloadTransform: genericDescribe,
 }));
 
 const resolveProvider =

@@ -5,6 +5,7 @@ import type { MediaUnderstandingCapability } from "../../packages/media-understa
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import type { ModelProviderConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { ProviderStreamOptions } from "../llm/types.js";
 
 /** Agent-owned runtime handle carried opaquely through media provider requests. */
 type MediaPreparedModelRuntime = Readonly<{
@@ -292,4 +293,10 @@ export type MediaUnderstandingProvider = {
   describeImage?: (req: ImageDescriptionRequest) => Promise<ImageDescriptionResult>;
   describeImages?: (req: ImagesDescriptionRequest) => Promise<ImagesDescriptionResult>;
   extractStructured?: (req: StructuredExtractionRequest) => Promise<StructuredExtractionResult>;
+  /**
+   * Outbound request payload transform for every shared-runtime image hook the
+   * registry hydrates for this provider (describeImage, describeImages,
+   * extractStructured): a transport quirk is declared once, not wrapped per hook.
+   */
+  imagePayloadTransform?: ProviderStreamOptions["onPayload"];
 };

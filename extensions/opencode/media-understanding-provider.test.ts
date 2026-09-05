@@ -1,32 +1,9 @@
 // Opencode tests cover media understanding provider plugin behavior.
-import { beforeEach, describe, expect, it, vi } from "vitest";
-
-const mocks = vi.hoisted(() => ({
-  describeImageWithModelPayloadTransform:
-    vi.fn<
-      (request: unknown, onPayload: (payload: unknown) => unknown) => Promise<{ text: string }>
-    >(),
-}));
-
-vi.mock("openclaw/plugin-sdk/media-understanding", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("openclaw/plugin-sdk/media-understanding")>()),
-  describeImageWithModelPayloadTransform: mocks.describeImageWithModelPayloadTransform,
-}));
-
+import { describe, expect, it } from "vitest";
 import { opencodeMediaUnderstandingProvider } from "./media-understanding-provider.js";
 
-beforeEach(() => {
-  mocks.describeImageWithModelPayloadTransform.mockReset();
-});
-
 async function applyImagePayloadTransform(payload: Record<string, unknown>): Promise<void> {
-  mocks.describeImageWithModelPayloadTransform.mockImplementationOnce(
-    async (_request, onPayload) => {
-      await onPayload(payload);
-      return { text: "ok" };
-    },
-  );
-  await opencodeMediaUnderstandingProvider.describeImage?.({} as never);
+  await opencodeMediaUnderstandingProvider.imagePayloadTransform?.(payload, {} as never);
 }
 
 describe("opencode media understanding provider", () => {
@@ -63,7 +40,8 @@ describe("opencode media understanding provider", () => {
     expect(opencodeMediaUnderstandingProvider.id).toBe("opencode");
     expect(opencodeMediaUnderstandingProvider.capabilities).toEqual(["image"]);
     expect(opencodeMediaUnderstandingProvider.defaultModels).toEqual({ image: "gpt-5-nano" });
-    expect(typeof opencodeMediaUnderstandingProvider.describeImage).toBe("function");
-    expect(typeof opencodeMediaUnderstandingProvider.describeImages).toBe("function");
+    // Hooks come from registry hydration so the transform covers all of them.
+    expect(opencodeMediaUnderstandingProvider.describeImage).toBeUndefined();
+    expect(typeof opencodeMediaUnderstandingProvider.imagePayloadTransform).toBe("function");
   });
 });
