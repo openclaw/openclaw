@@ -80,6 +80,7 @@ import {
   discardSlackPreflightMedia,
   findCaptionlessSlackAudioFile,
   formatSlackAudioTranscriptForAgent,
+  resolveSlackEchoReplyMessageId,
   resolveSlackPreflightAudioTranscript,
   sendSlackPreflightAudioTranscriptEcho,
 } from "./preflight-audio.js";
@@ -1815,6 +1816,13 @@ export async function prepareSlackMessage(params: {
       accountId: account.accountId,
       originatingTo: preflightChannelTarget,
       messageThreadId: threadContext.messageThreadId,
+      messageId: resolveSlackEchoReplyMessageId({
+        messageTs: message.ts,
+        threadReplyToId: threadContext.replyToId,
+      }),
+      chatType,
+      // Carry the prepare-resolved mode so per-channel room policy wins over account defaults.
+      replyToMode,
     });
   }
 
