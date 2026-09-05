@@ -173,17 +173,36 @@ export async function prepareDelegatedSystemAgentApproval(params: {
   await reconcileSystemAgentApproval(params.session, manager, runtimeApprovalAuthority);
   assertLiveApprovalAuthority();
 
+<<<<<<< HEAD
   return async function resolveProposal(
     proposal: Parameters<DelegatedProposalResolver>[0],
     corrective = false,
   ): ReturnType<DelegatedProposalResolver> {
+=======
+  return async (proposal) => {
+    let ownedApproval: GatewaySystemAgentSession["pendingApproval"];
+    // Retirement belongs to the proposal's owner. A same-source observer that lost its
+    // lease between preparation and resolution would otherwise cancel the live original.
+    const holdsLiveForeignApproval = (): boolean => {
+      const pending = params.session.pendingApproval;
+      return (
+        pending !== undefined &&
+        pending !== ownedApproval &&
+        pending.proposalHash === proposal.hash &&
+        manager?.forceDenyIfRuntimeAuthorityClosed(pending.id) === null
+      );
+    };
+>>>>>>> e52eba953d1 (fix(gateway): scope delegated approval retirement to its owner)
     const withProposalFailureCleanup = async <T>(resolve: () => Promise<T>): Promise<T> => {
       try {
         return await resolve();
       } catch (error) {
         // Entry, registration, and apply failures all retire this exact proposal.
         // Otherwise a later run can inherit it without the failed run's authority.
-        if (params.sessions.get(params.sessionId) === params.session) {
+        if (
+          params.sessions.get(params.sessionId) === params.session &&
+          !holdsLiveForeignApproval()
+        ) {
           await retireSystemAgentProposal(params.session, manager, proposal.hash);
         }
         throw error;
@@ -302,6 +321,7 @@ export async function prepareDelegatedSystemAgentApproval(params: {
         applied: false,
       };
       params.session.pendingApproval = pendingApproval;
+      ownedApproval = pendingApproval;
       record.agentRuntimeDelegatedAuthority = runtimeApprovalAuthority;
       // The request loses authority when replaced, even while its source run lives.
       record.approvalAuthority = () =>
