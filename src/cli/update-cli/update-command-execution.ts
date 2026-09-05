@@ -56,7 +56,6 @@ import {
 import {
   maybeRestartServiceAfterFailedMutableUpdate,
   maybeStopManagedServiceBeforeMutableUpdate,
-  resolvePreparedGatewayUpdatePolicy,
   resolveUpdatedGatewayRestartPort,
   shouldBlockMutableUpdateFromGatewayServiceEnv,
   UpdateCommandAbort,
@@ -470,7 +469,6 @@ export async function executeMutableUpdate(params: {
       result = await packageExecutor.activate({
         prepared: preparedPackageUpdate,
         activation: {
-          ...resolvePreparedGatewayUpdatePolicy(preManagedServiceStop, params.shouldRestart),
           managedServiceEnv: preManagedServiceStop?.serviceEnv,
         },
       });
