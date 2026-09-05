@@ -65,6 +65,7 @@ export function createFileFetchTool(): AnyAgentTool {
         mimeType,
         FILE_TRANSFER_SUBDIR,
         FILE_FETCH_HARD_MAX_BYTES,
+        canonicalPath,
       );
       const localPath = saved.path;
       const shortHash = sha256.slice(0, 12);

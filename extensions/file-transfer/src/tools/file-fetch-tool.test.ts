@@ -71,6 +71,13 @@ async function executeFetchedNodeFile(params: {
       node: "node-1",
       path: filePath,
     });
+    expect(saveMediaBuffer).toHaveBeenCalledWith(
+      expect.any(Buffer),
+      payload.mimeType,
+      FILE_TRANSFER_SUBDIR,
+      expect.any(Number),
+      filePath,
+    );
     return { result, payload, savedPath };
   } finally {
     await fs.rm(rootDir, { recursive: true, force: true });
@@ -255,6 +262,7 @@ describe("file_fetch tool", () => {
       "text/markdown",
       FILE_TRANSFER_SUBDIR,
       expect.any(Number),
+      "/tmp/bom.md",
     );
     const details = result.details as { sha256: string; size: number };
     expect(details.sha256).toBe(originalSha256);
