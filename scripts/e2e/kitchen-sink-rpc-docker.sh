@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "$ROOT_DIR/scripts/lib/docker-e2e-image.sh"
+source "$ROOT_DIR/scripts/lib/frozen-target-compat.sh"
 
 IMAGE_NAME="$(docker_e2e_resolve_image "openclaw-kitchen-sink-rpc-e2e" OPENCLAW_KITCHEN_SINK_RPC_E2E_IMAGE)"
 MAX_MEMORY_MIB="$(docker_e2e_read_nonnegative_decimal_env OPENCLAW_KITCHEN_SINK_MAX_MEMORY_MIB 2048)"
@@ -26,6 +27,17 @@ DOCKER_ENV_ARGS=(
   -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0
   -e OPENCLAW_ENTRY=/app/openclaw.mjs
 )
+capability_status=0
+openclaw_resolve_frozen_plugin_prerelease_capabilities \
+  "${OPENCLAW_DOCKER_E2E_REPO_ROOT:-$ROOT_DIR}" || capability_status=$?
+[ "$capability_status" -eq 0 ] || exit "$capability_status"
+if [[ "$OPENCLAW_FROZEN_PLUGIN_PRERELEASE_PROFILE" == "legacy" ]]; then
+  DOCKER_ENV_ARGS+=(
+    -e OPENCLAW_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS
+    -e OPENCLAW_SELECTED_SHA
+    -e OPENCLAW_TOOLING_SHA
+  )
+fi
 
 for env_name in \
   OPENCLAW_KITCHEN_SINK_NPM_SPEC \

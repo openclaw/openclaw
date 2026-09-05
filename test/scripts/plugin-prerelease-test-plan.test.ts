@@ -816,6 +816,9 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
     expect(normalCiDispatchCase).not.toContain("full_release_validation=true");
     expect(pluginPrereleaseScript).toContain('-f phase="$PHASE"');
     expect(pluginPrereleaseScript).toContain(
+      "args+=(-f allow_frozen_target_scenario_omissions=true)",
+    );
+    expect(pluginPrereleaseScript).toContain(
       'args+=(-f candidate_artifact_json="$CANDIDATE_ARTIFACT_JSON")',
     );
     expect(pluginPrereleaseScript).toContain(
@@ -845,6 +848,14 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
       description: "Branch, tag, or full commit SHA to validate",
       required: false,
       type: "string",
+    });
+    expect(
+      pluginWorkflow.on.workflow_dispatch.inputs.allow_frozen_target_scenario_omissions,
+    ).toEqual({
+      default: false,
+      description: "Trusted opt-in to accept documented harness differences in a frozen target",
+      required: false,
+      type: "boolean",
     });
     expect(pluginWorkflow.on.workflow_dispatch.inputs.full_release_validation).toEqual({
       default: false,

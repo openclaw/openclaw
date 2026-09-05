@@ -5,6 +5,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "$ROOT_DIR/scripts/lib/docker-e2e-image.sh"
+source "$ROOT_DIR/scripts/lib/frozen-target-compat.sh"
 IMAGE_NAME="$(docker_e2e_resolve_image "openclaw-mcp-channels-e2e" OPENCLAW_IMAGE)"
 PORT="18789"
 TOKEN="mcp-e2e-$(date +%s)-$$"
@@ -19,6 +20,18 @@ trap cleanup EXIT
 
 docker_e2e_build_or_reuse "$IMAGE_NAME" mcp-channels
 OPENCLAW_TEST_STATE_SCRIPT_B64="$(docker_e2e_test_state_shell_b64 mcp-channels empty)"
+DOCKER_ENV_ARGS=()
+capability_status=0
+openclaw_resolve_frozen_plugin_prerelease_capabilities \
+  "${OPENCLAW_DOCKER_E2E_REPO_ROOT:-$ROOT_DIR}" || capability_status=$?
+[ "$capability_status" -eq 0 ] || exit "$capability_status"
+if [[ "$OPENCLAW_FROZEN_PLUGIN_PRERELEASE_PROFILE" == "legacy" ]]; then
+  DOCKER_ENV_ARGS+=(
+    -e OPENCLAW_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS
+    -e OPENCLAW_SELECTED_SHA
+    -e OPENCLAW_TOOLING_SHA
+  )
+fi
 
 echo "Running in-container gateway + MCP smoke..."
 # Harness files are mounted read-only; the app under test comes from /app/dist.
@@ -36,6 +49,7 @@ docker_e2e_run_with_harness \
   -e "GW_URL=ws://127.0.0.1:$PORT" \
   -e "GW_TOKEN=$TOKEN" \
   -e "OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1" \
+  "${DOCKER_ENV_ARGS[@]}" \
   "$IMAGE_NAME" \
   bash -lc "set -euo pipefail
     source scripts/lib/openclaw-e2e-instance.sh

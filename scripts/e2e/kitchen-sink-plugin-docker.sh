@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "$ROOT_DIR/scripts/lib/docker-e2e-image.sh"
+source "$ROOT_DIR/scripts/lib/frozen-target-compat.sh"
 IMAGE_NAME="$(docker_e2e_resolve_image "openclaw-kitchen-sink-plugin-e2e" OPENCLAW_KITCHEN_SINK_PLUGIN_E2E_IMAGE)"
 OPENCLAW_DOCKER_E2E_LOG_PRINT_BYTES="$(
   docker_e2e_read_positive_int_env OPENCLAW_DOCKER_E2E_LOG_PRINT_BYTES 65536
@@ -57,6 +58,17 @@ DOCKER_ENV_ARGS=(
   -e "KITCHEN_SINK_SCENARIOS=$KITCHEN_SINK_SCENARIOS"
   -e "KITCHEN_SINK_CLI_TIMEOUT=$KITCHEN_SINK_CLI_TIMEOUT"
 )
+capability_status=0
+openclaw_resolve_frozen_plugin_prerelease_capabilities \
+  "${OPENCLAW_DOCKER_E2E_REPO_ROOT:-$ROOT_DIR}" || capability_status=$?
+[ "$capability_status" -eq 0 ] || exit "$capability_status"
+if [[ "$OPENCLAW_FROZEN_PLUGIN_PRERELEASE_PROFILE" == "legacy" ]]; then
+  DOCKER_ENV_ARGS+=(
+    -e OPENCLAW_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS
+    -e OPENCLAW_SELECTED_SHA
+    -e OPENCLAW_TOOLING_SHA
+  )
+fi
 if [[ "${OPENCLAW_KITCHEN_SINK_LIVE_CLAWHUB:-0}" = "1" ]]; then
   for env_name in \
     OPENCLAW_KITCHEN_SINK_LIVE_CLAWHUB \

@@ -31,6 +31,7 @@ import {
   assertResourceCeiling,
   assertTtsProviderCoverage,
   cleanupKitchenSinkEnv,
+  configureKitchenSink,
   createGatewayReadyLogScanner,
   createRpcCliRunOptions,
   extractPluginCommandNames,
@@ -317,6 +318,24 @@ describe("kitchen-sink RPC isolated state", () => {
     await expect(cleanupKitchenSinkEnv(root)).resolves.toBe(true);
 
     expect(existsSync(root)).toBe(false);
+  });
+
+  it("uses the candidate config dialect only for an authorized frozen target", async () => {
+    const { root, env } = makeEnv();
+    try {
+      configureKitchenSink({ ...env, OPENCLAW_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS: "1" }, 18888);
+      const frozenConfig = JSON.parse(readFileSync(env.OPENCLAW_CONFIG_PATH, "utf8"));
+      expect(frozenConfig.plugins.allow).toBeUndefined();
+      expect(frozenConfig.messages.tts).toMatchObject({ provider: "kitchen-sink-speech" });
+      expect(frozenConfig.tts).toBeUndefined();
+
+      configureKitchenSink(env, 18889);
+      const currentConfig = JSON.parse(readFileSync(env.OPENCLAW_CONFIG_PATH, "utf8"));
+      expect(currentConfig.plugins.allow).toContain("openclaw-kitchen-sink-fixture");
+      expect(currentConfig.tts).toMatchObject({ provider: "kitchen-sink-speech" });
+    } finally {
+      await cleanupKitchenSinkEnv(root);
+    }
   });
 
   it("can fail the walk when generated temp cleanup cannot remove the root", async () => {

@@ -1,5 +1,5 @@
 // Live Docker Stage tests cover live docker stage script behavior.
-import { spawnSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { chmodSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -9,6 +9,7 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const stageScriptPath = path.join(repoRoot, "scripts/lib/live-docker-stage.sh");
+const frozenTargetCompatPath = path.join(repoRoot, "scripts/lib/frozen-target-compat.sh");
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("live Docker state staging", () => {
@@ -354,6 +355,80 @@ export function parseRegistryNpmSpec(spec: string) {
     });
     expect(malformed.status).toBe(2);
     expect(malformed.stderr).toContain("invalid OPENCLAW_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS");
+  });
+
+  it("selects plugin prerelease legacy fixtures only for the complete selected source profile", () => {
+    const createSource = (profile: "legacy" | "partial") => {
+      const root = tempDirs.make(`openclaw-frozen-plugin-profile-${profile}-`);
+      const writeSource = (relativePath: string, content: string) => {
+        const filePath = path.join(root, relativePath);
+        mkdirSync(path.dirname(filePath), { recursive: true });
+        writeFileSync(filePath, content);
+      };
+      writeSource("src/config/types.messages.ts", "tts?: TtsConfig;\n");
+      writeSource("src/config/types.plugins.ts", 'bundledDiscovery?: "compat" | "allowlist";\n');
+      writeSource(
+        "src/plugin-sdk/session-store-runtime.ts",
+        "// Callers must migrate away before SQLite migration.\n",
+      );
+      if (profile === "partial") {
+        writeSource("src/plugins/uninstall-package-plan.ts", "export {};\n");
+      }
+      execFileSync("git", ["init", "-q", root]);
+      execFileSync("git", ["-C", root, "config", "user.email", "test@example.invalid"]);
+      execFileSync("git", ["-C", root, "config", "user.name", "OpenClaw Test"]);
+      execFileSync("git", ["-C", root, "add", "-A"]);
+      execFileSync("git", ["-C", root, "commit", "-qm", profile]);
+      return {
+        root,
+        sha: execFileSync("git", ["-C", root, "rev-parse", "HEAD"], {
+          encoding: "utf8",
+        }).trim(),
+      };
+    };
+    const run = (
+      source: ReturnType<typeof createSource>,
+      {
+        authorized = true,
+        selectedSha = source.sha,
+      }: { authorized?: boolean; selectedSha?: string } = {},
+    ) =>
+      spawnSync(
+        "bash",
+        [
+          "-c",
+          [
+            'set -euo pipefail; source "$1"',
+            'openclaw_resolve_frozen_plugin_prerelease_capabilities "$2"',
+            'printf "%s\\n" "$OPENCLAW_FROZEN_PLUGIN_PRERELEASE_PROFILE"',
+          ].join("; "),
+          "test",
+          frozenTargetCompatPath,
+          source.root,
+        ],
+        {
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            ...(authorized ? { OPENCLAW_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS: "1" } : {}),
+            OPENCLAW_SELECTED_SHA: selectedSha,
+            OPENCLAW_TOOLING_SHA: "f".repeat(40),
+          },
+        },
+      );
+
+    const legacy = createSource("legacy");
+    expect(run(legacy).stdout.trim()).toBe("legacy");
+
+    const unauthorized = run(legacy, { authorized: false });
+    expect(unauthorized.stdout.trim()).toBe("current");
+
+    const partial = createSource("partial");
+    expect(run(partial).stdout.trim()).toBe("current");
+
+    const mismatched = run(legacy, { selectedSha: "e".repeat(40) });
+    expect(mismatched.status).toBe(2);
+    expect(mismatched.stderr).toContain("selected source checkout");
   });
 
   it.each([

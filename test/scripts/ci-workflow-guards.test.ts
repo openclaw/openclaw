@@ -6458,6 +6458,10 @@ server.listen(0, "127.0.0.1", () => {
     expect(releaseChecks.jobs.validate_docker_lanes.env.OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS).toBe(
       "${{ matrix.group.published_upgrade_survivor_scenarios || inputs.published_upgrade_survivor_scenarios }}",
     );
+    expect(releaseChecks.jobs.validate_docker_lanes.env).toMatchObject({
+      OPENCLAW_SELECTED_SHA: "${{ needs.validate_selected_ref.outputs.selected_sha }}",
+      OPENCLAW_TOOLING_SHA: "${{ needs.validate_selected_ref.outputs.workflow_sha }}",
+    });
   });
 
   it("persists Node 22 declarations through trusted bounded artifacts", () => {
