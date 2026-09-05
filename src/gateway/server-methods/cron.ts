@@ -31,6 +31,8 @@ import {
   resolveCronDeliveryPreviews,
 } from "../../cron/delivery-preview.js";
 import { assertCronDeliveryInputNonBlankFields } from "../../cron/delivery-target-validation.js";
+import { resolveCronListSnapshotRevision } from "../../cron/list-snapshot-revision.js";
+import { assertValidCronMetadata, resolveCronJobGroup } from "../../cron/metadata.js";
 import { normalizeCronJobCreate, normalizeCronJobPatch } from "../../cron/normalize.js";
 import { toPublicCronJob } from "../../cron/public-job.js";
 import type { CronRuntimeAuthority } from "../../cron/runtime-authority.js";
@@ -201,6 +203,7 @@ function cronJobReadView(job: CronJob) {
   return {
     ...publicJob,
     configRevision: resolveCronJobConfigRevision(job),
+    effectiveGroup: resolveCronJobGroup(job),
     nextRunAtMs: job.state.nextRunAtMs,
     lastRunAtMs: job.state.lastRunAtMs,
     lastRunStatus: job.state.lastRunStatus ?? job.state.lastStatus,
@@ -242,6 +245,9 @@ function compactCronListJob(job: CronJob) {
     name: job.name,
     ...(job.declarationKey ? { declarationKey: job.declarationKey } : {}),
     ...(job.displayName ? { displayName: job.displayName } : {}),
+    ...(job.group ? { group: job.group } : {}),
+    ...(job.tags ? { tags: job.tags } : {}),
+    effectiveGroup: resolveCronJobGroup(job),
     ...(job.owner ? { owner: job.owner } : {}),
     enabled: job.enabled,
     nextRunAtMs: job.state.nextRunAtMs ?? null,
@@ -611,6 +617,8 @@ export const cronHandlers: GatewayRequestHandlers = {
       scheduleKind: p.scheduleKind,
       lastRunStatus: p.lastRunStatus,
       trigger: p.trigger,
+      group: p.group,
+      tag: p.tag,
       sortBy: p.sortBy,
       sortDir: p.sortDir,
       // Owners retain visibility when execution is retargeted to another agent.
@@ -804,6 +812,9 @@ export const cronHandlers: GatewayRequestHandlers = {
         : undefined;
     let normalized: unknown;
     try {
+      assertValidCronMetadata(
+        params && typeof params === "object" ? (params as { group?: unknown; tags?: unknown }) : {},
+      );
       assertCronDeliveryInputNonBlankFields((params as { delivery?: unknown } | null)?.delivery);
       normalized =
         normalizeCronJobCreate(params, {
@@ -990,6 +1001,11 @@ export const cronHandlers: GatewayRequestHandlers = {
       if (typeof rawDisplayName === "string" && rawDisplayName.trim().length === 0) {
         throw new Error("displayName must not be blank");
       }
+      assertValidCronMetadata(
+        rawPatch && typeof rawPatch === "object"
+          ? (rawPatch as { group?: unknown; tags?: unknown })
+          : {},
+      );
       assertCronDeliveryInputNonBlankFields(
         rawPatch && typeof rawPatch === "object"
           ? (rawPatch as { delivery?: unknown }).delivery

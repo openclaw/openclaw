@@ -15,6 +15,7 @@ import {
   requestActiveCronJobCancellation,
 } from "../active-jobs.js";
 import { resolveCronJobConfigRevision } from "../config-revision.js";
+import { assertValidCronMetadata, isSystemOwnedCronJob } from "../metadata.js";
 import { cronSchedulingInputsEqual } from "../schedule-identity.js";
 import { removeCronJobBaseSession } from "../session-reaper.js";
 import { removeStaleCronJobFamilyRows } from "../store.js";
@@ -274,6 +275,8 @@ function declarativeFields(job: CronStoredJob, includeEnabled: boolean) {
     runtimeAuthorityRecoveryRequired: job.runtimeAuthorityRecoveryRequired,
     delivery: job.delivery,
     displayName: job.displayName,
+    group: job.group,
+    tags: job.tags,
     ...(includeEnabled ? { enabled: job.enabled } : {}),
   };
 }
@@ -299,6 +302,9 @@ export async function add(
   let pendingSessionCleanup: Promise<void> | undefined;
   return await locked(state, async () => {
     warnIfDisabled(state, "add");
+    // Validate at the shared service boundary before declaration matching so
+    // declarative re-upserts cannot bypass the metadata contract.
+    assertValidCronMetadata(input);
     const declarationKey = normalizeOptionalString(input.declarationKey);
     if (
       input.payload &&
@@ -344,7 +350,7 @@ export async function add(
     if (existing) {
       // A declarative upsert may not repurpose an existing system-owned monitor
       // with a different payload; only the gateway's own convergence touches it.
-      if (isSystemOwnedCronPayloadKind(existing.payload.kind) && opts?.systemOwned !== true) {
+      if (isSystemOwnedCronJob(existing) && opts?.systemOwned !== true) {
         throw new Error("system-owned monitor jobs cannot be edited by cron clients");
       }
       const now = state.deps.nowMs();
@@ -492,7 +498,7 @@ async function updateLoadedJob(params: {
   // Existing monitors are config-driven: any patch (disable, reschedule,
   // repurpose) would silently diverge from its owner until the next reconcile,
   // so updates are rejected outright. Removal stays allowed only to the owner.
-  if (isSystemOwnedCronPayloadKind(job.payload.kind)) {
+  if (isSystemOwnedCronJob(job)) {
     throw new Error("system-owned monitor jobs cannot be edited by cron clients");
   }
   const now = state.deps.nowMs();
@@ -597,7 +603,7 @@ export async function remove(
     // Config is the monitor's source of truth: ad-hoc deletion would disable
     // the feature until an unrelated reload, so only gateway reconciliation
     // (stale-monitor cleanup) may remove one.
-    if (isSystemOwnedCronPayloadKind(removedJob.payload.kind) && opts?.systemOwned !== true) {
+    if (isSystemOwnedCronJob(removedJob) && opts?.systemOwned !== true) {
       throw new Error("system-owned monitor jobs cannot be removed by cron clients");
     }
     opts?.commitGuard?.();
