@@ -398,7 +398,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     fallbackLimit: SLACK_TEXT_LIMIT,
   });
   const typingReaction = slackCfg.typingReaction?.trim() ?? "";
-  const mediaMaxBytes = (opts.mediaMaxMb ?? slackCfg.mediaMaxMb ?? 20) * 1024 * 1024;
+  const mediaMaxBytes = Math.floor((opts.mediaMaxMb ?? slackCfg.mediaMaxMb ?? 20) * 1024 * 1024);
   const slackDispatcher = resolveSlackProxyDispatcher();
   const clientOptions = resolveSlackWebClientOptions({}, slackDispatcher);
   const durableIngress = createSlackDurableIngress({

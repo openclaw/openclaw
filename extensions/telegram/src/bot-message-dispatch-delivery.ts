@@ -177,7 +177,9 @@ function createDeliveryBaseOptions(turn: Turn) {
     runtime: turn.runtime,
     bot: turn.bot,
     mediaLocalRoots: turn.mediaLocalRoots,
-    mediaMaxBytes: (turn.opts.mediaMaxMb ?? turn.telegramCfg.mediaMaxMb ?? 100) * 1024 * 1024,
+    mediaMaxBytes: Math.floor(
+      (turn.opts.mediaMaxMb ?? turn.telegramCfg.mediaMaxMb ?? 100) * 1024 * 1024,
+    ),
     replyToMode: turn.replyToMode,
     textLimit: turn.textLimit,
     thread: turn.context.threadSpec,

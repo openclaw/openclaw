@@ -333,9 +333,12 @@ uses the shared typing keepalive/cleanup lifecycle. Add
 Resolve account media limits with `resolveChannelMediaMaxBytes(...)` from
 `openclaw/plugin-sdk/account-helpers`. Pass the already-merged account's
 `mediaMaxMb` through `resolveChannelLimitMb`; the helper applies the agent
-default only when the account/channel limit is absent. Its optional byte result
-must reach the actual media loader, capped by any transport ceiling. Preserve
-the loader's existing default when no limit is configured.
+default when the account/channel limit is absent or invalid. Positive MiB limits
+are floored to whole bytes; a positive sub-byte limit becomes zero and permits no
+non-empty attachment. Pass zero through unchanged, rather than treating it as
+an absent limit. The optional byte result must reach the actual media loader,
+capped by any transport ceiling; preserve the loader's default only when the
+result is `undefined`.
 
 The focused account-helper import keeps setup and account resolution free of
 media analysis runtimes. The old `media-runtime` export remains available for
