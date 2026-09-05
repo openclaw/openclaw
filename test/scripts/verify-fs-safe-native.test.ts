@@ -149,6 +149,15 @@ describe("pre-native fs-safe packages", () => {
     },
   );
 
+  it("accepts authorized version 0.4.7 with durability but no native surface", () => {
+    const fixture = createFixture({ durability: true, version: "0.4.7" });
+
+    const result = runVerifier(fixture.packageRoot, { allowPreNative: true });
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain("authorized package predates native bindings");
+  });
+
   it.each(["0.3.0", "0.4.1"])("rejects version %s without authorization", (version) => {
     const fixture = createFixture({ version });
 
@@ -171,12 +180,12 @@ describe("pre-native fs-safe packages", () => {
   });
 
   it("rejects inconsistent pre-native metadata", () => {
-    const fixture = createFixture({ durability: true, version: "0.4.1" });
+    const fixture = createFixture({ platformPackage: true, version: "0.4.1" });
 
     const result = runVerifier(fixture.packageRoot, { allowPreNative: true });
 
     expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain("unexpectedly exports durability");
+    expect(result.stderr).toContain("unexpectedly declares platform packages");
   });
 });
 

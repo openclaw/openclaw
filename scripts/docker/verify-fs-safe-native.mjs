@@ -103,7 +103,6 @@ if (!hasNativeConfiguration) {
     "pre-native @openclaw/fs-safe requires explicit frozen-target authorization",
   );
   assert.equal(generation, "pre", "expected native configuration for @openclaw/fs-safe >= 0.5.0");
-  assert.equal(hasDurabilityExport, false, "pre-native fs-safe unexpectedly exports durability");
   assert.equal(
     platformPackageNames.length,
     0,
