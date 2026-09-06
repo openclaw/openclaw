@@ -4,6 +4,7 @@ import path from "node:path";
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import { afterEach, expect, test, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { SqliteBoardStore } from "../../boards/sqlite-board-store.js";
 import { onSessionIdentityMutation } from "../../sessions/session-lifecycle-events.js";
 import {
   closeOpenClawAgentDatabaseByPath,
@@ -11,6 +12,7 @@ import {
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { loadSessionEntry, loadTranscriptEvents } from "./session-accessor.js";
+import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
 import { ensureSessionEntrySync } from "./session-accessor.sqlite-initial-entry.js";
 import {
   createHistoryEvictionReclamationPlan,
@@ -89,15 +91,27 @@ test.each(
     { operation: "append", rejected: true },
     { operation: "replace", rejected: false },
     { operation: "replace", rejected: true },
+    { operation: "entry", rejected: false },
+    { operation: "entry", rejected: true },
+    { operation: "board", rejected: false },
+    { operation: "board", rejected: true },
   ].flatMap((scenario) =>
     (process.platform === "win32" ? [false] : [false, true]).map((alias) =>
       Object.assign({ alias }, scenario),
     ),
   ),
 )(
-  "two synchronous transcript writers progress at reclamation ($operation, rejected: $rejected, alias: $alias)",
+  "two synchronous writers progress at reclamation ($operation, rejected: $rejected, alias: $alias)",
   async ({ operation, rejected, alias }) => {
     const { databaseOptions, plan, scopes } = createFixture(alias);
+    const board = new SqliteBoardStore({
+      env: databaseOptions.env,
+      resolveSession: ({ sessionKey }) => ({
+        ...databaseOptions,
+        path: scopes[0]!.storePath ?? databaseOptions.path,
+        sessionKey,
+      }),
+    });
     const appends: unknown[] = [];
     const appendErrors: unknown[] = [];
     let commitChecks = 0;
@@ -110,6 +124,22 @@ test.each(
         // runtimes must service that request before its queued handler can return.
         for (const scope of scopes) {
           try {
+            if (operation === "entry") {
+              replaceSessionEntrySync(scope, { sessionId: scope.sessionId, updatedAt: 2 });
+              appends.push(loadSessionEntry(scope)?.updatedAt);
+              continue;
+            }
+            if (operation === "board") {
+              // First use enters the board's schema transaction before its canonical writer.
+              appends.push(
+                board.putWidget({
+                  sessionKey: scope.sessionKey,
+                  name: "writer-proof",
+                  content: { kind: "html", html: "<p>committed</p>" },
+                }).revision,
+              );
+              continue;
+            }
             const event = { type: "session", id: scope.sessionId };
             appends.push(
               operation === "replace"
@@ -147,14 +177,28 @@ test.each(
     expect(commitChecks).toBe(2);
     expect(appendErrors).toEqual([]);
     expect(appends).toEqual(
-      operation === "replace"
-        ? [true, true]
-        : [
-            { ok: true, value: true },
-            { ok: true, value: true },
-          ],
+      operation === "entry"
+        ? [2, 2]
+        : operation === "board"
+          ? [1, 1]
+          : operation === "replace"
+            ? [true, true]
+            : [
+                { ok: true, value: true },
+                { ok: true, value: true },
+              ],
     );
     for (const scope of scopes) {
+      if (operation === "entry") {
+        expect(loadSessionEntry(scope)).toMatchObject({ sessionId: scope.sessionId, updatedAt: 2 });
+        continue;
+      }
+      if (operation === "board") {
+        expect(board.getSnapshot({ sessionKey: scope.sessionKey }).widgets).toMatchObject([
+          { name: "writer-proof", revision: 1 },
+        ]);
+        continue;
+      }
       await expect(loadTranscriptEvents(scope)).resolves.toEqual([
         { type: "session", id: scope.sessionId },
       ]);

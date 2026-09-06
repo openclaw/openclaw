@@ -12,17 +12,10 @@ const identities = resolveGlobalSingleton(
 
 /** Prepare physical identity once at open; cached aliases must never be resolved again. */
 export function registerOpenClawAgentDatabaseIdentity(db: DatabaseSync): void {
-  // sqlite-allow-raw: PRAGMA exposes the connection's actual main filename on Node 22.
-  const main = db
-    .prepare("PRAGMA database_list")
-    .all()
-    .find((row) => row.name === "main");
-  if (typeof main?.file !== "string") {
-    throw new Error("OpenClaw agent database has no main connection filename");
-  }
-  const file = main.file ? statSync(main.file, { bigint: true }) : undefined;
+  const filename = db.location() ?? "";
+  const file = filename ? statSync(filename, { bigint: true }) : undefined;
   const identity = file ? `${file.dev}:${file.ino}` : Symbol("incognito-agent-database");
-  identities.set(db, { identity, filename: main.file });
+  identities.set(db, { identity, filename });
 }
 
 /** Reuse facts captured at open; aliases must never be resolved again at a handoff. */

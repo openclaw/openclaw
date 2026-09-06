@@ -3632,6 +3632,7 @@ describe("prepareCliRunContext", () => {
         messageChannel: "telegram",
         messageProvider: "discord",
         clientCaps: ["tool-events", "inline-widgets"],
+        pinnedWidgetAuthoring: true,
         currentChannelId: "telegram:-100123:topic:42",
         currentThreadTs: "42",
         currentMessageId: "reply-message-1",
@@ -3671,6 +3672,7 @@ describe("prepareCliRunContext", () => {
           modelId: "test-model",
           messageProvider: "telegram",
           clientCaps: ["tool-events", "inline-widgets"],
+          pinnedWidgetAuthoring: true,
           currentChannelId: "telegram:-100123:topic:42",
           currentThreadTs: "42",
           currentMessageId: "reply-message-1",
@@ -3746,6 +3748,7 @@ describe("prepareCliRunContext", () => {
       expect(resolveMcpLoopbackScopedTools).toHaveBeenCalledWith(
         expect.objectContaining({
           clientCaps: ["tool-events", "inline-widgets"],
+          pinnedWidgetAuthoring: true,
           taskSuggestionDeliveryMode: "gateway",
           requireExplicitMessageTarget: true,
           senderIsOwner: false,

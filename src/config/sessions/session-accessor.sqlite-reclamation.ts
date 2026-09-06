@@ -426,10 +426,10 @@ export async function runSqliteSessionReclamation(params: {
     let publishCommitted: (() => void) | undefined;
     const [workerResult] = await withSqliteReclamationAuthorization(
       commitGate,
-      claim.database,
+      claim.database.db,
       () => {
         assertCommitAllowed();
-        // A blocked transcript writer may authorize before the Worker's queued request.
+        // A blocked writer may authorize before the Worker's queued request.
         publishCommitted = prepareReclamationPublication(plan);
       },
       (authorize) =>
