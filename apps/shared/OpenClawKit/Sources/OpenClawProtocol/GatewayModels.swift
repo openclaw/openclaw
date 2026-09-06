@@ -13528,6 +13528,8 @@ public struct SystemAgentSetupDetectResult: Codable, Sendable {
     public let authoptions: [[String: AnyCodable]]?
     public let prepareoptions: [[String: AnyCodable]]?
     public let recommendedinstalls: [[String: AnyCodable]]?
+    public let nativesessioncatalogs: [[String: AnyCodable]]?
+    public let nativesessioncatalogpreferencerequired: Bool?
     public let workspace: String
     public let codexappserverdetected: Bool?
     public let configuredmodel: String?
@@ -13540,6 +13542,8 @@ public struct SystemAgentSetupDetectResult: Codable, Sendable {
         authoptions: [[String: AnyCodable]]? = nil,
         prepareoptions: [[String: AnyCodable]]? = nil,
         recommendedinstalls: [[String: AnyCodable]]? = nil,
+        nativesessioncatalogs: [[String: AnyCodable]]? = nil,
+        nativesessioncatalogpreferencerequired: Bool? = nil,
         workspace: String,
         codexappserverdetected: Bool? = nil,
         configuredmodel: String? = nil,
@@ -13551,6 +13555,8 @@ public struct SystemAgentSetupDetectResult: Codable, Sendable {
         self.authoptions = authoptions
         self.prepareoptions = prepareoptions
         self.recommendedinstalls = recommendedinstalls
+        self.nativesessioncatalogs = nativesessioncatalogs
+        self.nativesessioncatalogpreferencerequired = nativesessioncatalogpreferencerequired
         self.workspace = workspace
         self.codexappserverdetected = codexappserverdetected
         self.configuredmodel = configuredmodel
@@ -13564,6 +13570,8 @@ public struct SystemAgentSetupDetectResult: Codable, Sendable {
         case authoptions = "authOptions"
         case prepareoptions = "prepareOptions"
         case recommendedinstalls = "recommendedInstalls"
+        case nativesessioncatalogs = "nativeSessionCatalogs"
+        case nativesessioncatalogpreferencerequired = "nativeSessionCatalogPreferenceRequired"
         case workspace
         case codexappserverdetected = "codexAppServerDetected"
         case configuredmodel = "configuredModel"
@@ -13592,6 +13600,7 @@ public struct SystemAgentSetupActivateParams: Codable, Sendable {
     public let authchoice: String?
     public let apikey: String?
     public let workspace: String?
+    public let nativesessioncatalogsenabled: Bool?
 
     public init(
         agentid: String? = nil,
@@ -13599,7 +13608,8 @@ public struct SystemAgentSetupActivateParams: Codable, Sendable {
         modelref: String? = nil,
         authchoice: String? = nil,
         apikey: String? = nil,
-        workspace: String? = nil)
+        workspace: String? = nil,
+        nativesessioncatalogsenabled: Bool? = nil)
     {
         self.agentid = agentid
         self.kind = kind
@@ -13607,6 +13617,7 @@ public struct SystemAgentSetupActivateParams: Codable, Sendable {
         self.authchoice = authchoice
         self.apikey = apikey
         self.workspace = workspace
+        self.nativesessioncatalogsenabled = nativesessioncatalogsenabled
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -13616,6 +13627,7 @@ public struct SystemAgentSetupActivateParams: Codable, Sendable {
         case authchoice = "authChoice"
         case apikey = "apiKey"
         case workspace
+        case nativesessioncatalogsenabled = "nativeSessionCatalogsEnabled"
     }
 }
 
@@ -13668,6 +13680,7 @@ public struct SystemAgentSetupActivateStartParams: Codable, Sendable {
     public let authchoice: String?
     public let apikey: String?
     public let workspace: String?
+    public let nativesessioncatalogsenabled: Bool?
     public let sessionid: String
 
     public init(
@@ -13677,6 +13690,7 @@ public struct SystemAgentSetupActivateStartParams: Codable, Sendable {
         authchoice: String? = nil,
         apikey: String? = nil,
         workspace: String? = nil,
+        nativesessioncatalogsenabled: Bool? = nil,
         sessionid: String)
     {
         self.agentid = agentid
@@ -13685,6 +13699,7 @@ public struct SystemAgentSetupActivateStartParams: Codable, Sendable {
         self.authchoice = authchoice
         self.apikey = apikey
         self.workspace = workspace
+        self.nativesessioncatalogsenabled = nativesessioncatalogsenabled
         self.sessionid = sessionid
     }
 
@@ -13695,6 +13710,7 @@ public struct SystemAgentSetupActivateStartParams: Codable, Sendable {
         case authchoice = "authChoice"
         case apikey = "apiKey"
         case workspace
+        case nativesessioncatalogsenabled = "nativeSessionCatalogsEnabled"
         case sessionid = "sessionId"
     }
 }
@@ -13754,17 +13770,20 @@ public struct SystemAgentSetupAuthStartParams: Codable, Sendable {
     public let agentid: String?
     public let authchoice: String
     public let workspace: String?
+    public let nativesessioncatalogsenabled: Bool?
 
     public init(
         sessionid: String,
         agentid: String? = nil,
         authchoice: String,
-        workspace: String? = nil)
+        workspace: String? = nil,
+        nativesessioncatalogsenabled: Bool? = nil)
     {
         self.sessionid = sessionid
         self.agentid = agentid
         self.authchoice = authchoice
         self.workspace = workspace
+        self.nativesessioncatalogsenabled = nativesessioncatalogsenabled
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -13772,6 +13791,7 @@ public struct SystemAgentSetupAuthStartParams: Codable, Sendable {
         case agentid = "agentId"
         case authchoice = "authChoice"
         case workspace
+        case nativesessioncatalogsenabled = "nativeSessionCatalogsEnabled"
     }
 }
 

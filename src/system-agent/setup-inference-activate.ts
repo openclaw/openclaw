@@ -63,6 +63,12 @@ import { buildTestPlan } from "./setup-inference-plan.js";
 import { runSetupInferenceTest } from "./setup-inference-test.js";
 import { applySystemAgentModelSelection } from "./setup-model-selection.js";
 import {
+  applySetupNativeSessionCatalogPreference,
+  requiresSetupNativeSessionCatalogConsent,
+  listSetupNativeSessionCatalogs,
+  resolveSetupNativeSessionCatalogPreference,
+} from "./setup-native-session-catalogs.js";
+import {
   captureSystemAgentOwnerPluginArtifacts,
   type SystemAgentOwnerPluginArtifactSnapshot,
 } from "./verified-inference.js";
@@ -166,7 +172,7 @@ async function activateSetupInferenceUnredacted(
       ? withPluginRuntimeGenerationScope(codexProbePluginGeneration, run)
       : run();
   try {
-    const plan = await buildTestPlan({
+    const builtPlan = await buildTestPlan({
       kind: params.kind,
       ...(params.modelRef !== undefined ? { modelRef: params.modelRef } : {}),
       ...(params.authChoice !== undefined ? { authChoice: params.authChoice } : {}),
@@ -182,24 +188,54 @@ async function activateSetupInferenceUnredacted(
       ...(params.signal ? { signal: params.signal } : {}),
       ...(params.isCancelled ? { isCancelled: params.isCancelled } : {}),
       ...(params.kind === "provider-auth"
-        ? { isRemoteProviderAuth: params.surface === "gateway" }
+        ? { isRemoteProviderAuth: params.isRemoteProviderAuth ?? params.surface === "gateway" }
         : {}),
       ...(codexCliApiKey ? { codexCliApiKey } : {}),
       deps,
       routeAgentId,
     });
-    if ("error" in plan) {
+    if ("error" in builtPlan) {
       return {
         ok: false,
-        status: plan.status ?? "unavailable",
-        error: plan.error,
+        status: builtPlan.status ?? "unavailable",
+        error: builtPlan.error,
+      };
+    }
+    let plan = builtPlan;
+    const catalogConsentRequired = requiresSetupNativeSessionCatalogConsent({
+      configExists: snapshot.exists,
+      config: sourceCfg,
+      catalogs: listSetupNativeSessionCatalogs({ config: sourceCfg, workspaceDir: workspace }),
+    });
+    const catalogPreference = resolveSetupNativeSessionCatalogPreference({
+      consentRequired: catalogConsentRequired,
+      ...(params.nativeSessionCatalogsEnabled !== undefined
+        ? { requested: params.nativeSessionCatalogsEnabled }
+        : {}),
+    });
+    if (catalogPreference !== undefined) {
+      const preferenceConfig = applySetupNativeSessionCatalogPreference({
+        config: plan.config,
+        enabled: catalogPreference,
+        workspaceDir: workspace,
+      });
+      plan = {
+        ...plan,
+        config: preferenceConfig,
+        manualAuth: {
+          profiles: plan.manualAuth?.profiles ?? [],
+          runtimeConfigBase: cfg,
+          sourceConfigBase: sourceCfg,
+          configPatch: createMergePatch(cfg, preferenceConfig),
+          ...(plan.manualAuth?.pluginId ? { pluginId: plan.manualAuth.pluginId } : {}),
+        },
       };
     }
 
     const hasPreparedAuthProfiles = (plan.manualAuth?.profiles.length ?? 0) > 0;
     let testPlan = plan;
     if (plan.persistModelRef) {
-      const agentRuntimeId = resolveSetupAgentRuntimeId(params.kind);
+      const agentRuntimeId = plan.selectedAgentRuntimeId ?? resolveSetupAgentRuntimeId(params.kind);
       const stagedConfig = await applySystemAgentModelSelection({
         config: testPlan.config,
         model: plan.persistModelRef,
@@ -354,6 +390,28 @@ async function activateSetupInferenceUnredacted(
       if (preparationFailure) {
         return preparationFailure;
       }
+    }
+    if (catalogPreference !== undefined) {
+      // A managed runtime can add its manifest after the first setup snapshot.
+      // Re-resolve declarations before the probe so a newly installed catalog
+      // receives the same explicit fresh-install preference.
+      const preferenceConfig = applySetupNativeSessionCatalogPreference({
+        config: testPlan.config,
+        enabled: catalogPreference,
+        workspaceDir: workspace,
+      });
+      testPlan = { ...testPlan, config: preferenceConfig };
+      plan = {
+        ...plan,
+        config: preferenceConfig,
+        manualAuth: {
+          profiles: plan.manualAuth?.profiles ?? [],
+          runtimeConfigBase: cfg,
+          sourceConfigBase: sourceCfg,
+          configPatch: createMergePatch(cfg, preferenceConfig),
+          ...(plan.manualAuth?.pluginId ? { pluginId: plan.manualAuth.pluginId } : {}),
+        },
+      };
     }
     const metadataWorkspaceDir = getActivePluginRegistryWorkspaceDirFromState();
     const routeMetadataSnapshot =

@@ -131,6 +131,8 @@ extension OnboardingAISetupModel {
         let authOptions: [AuthOption]?
         let prepareOptions: [PrepareOption]?
         let recommendedInstalls: [RecommendedInstall]?
+        let nativeSessionCatalogs: [NativeSessionCatalog]?
+        let nativeSessionCatalogPreferenceRequired: Bool?
         let configuredModel: String?
         let setupComplete: Bool?
 
@@ -273,6 +275,16 @@ extension OnboardingAISetupModel {
         let brandId: String?
     }
 
+    struct NativeSessionCatalog: Identifiable, Equatable, Decodable {
+        let pluginId: String
+        let label: String
+        let detail: String?
+
+        var id: String {
+            self.pluginId
+        }
+    }
+
     struct PrepareOption: Identifiable, Equatable, Decodable {
         let id: String
         let label: String
@@ -357,6 +369,10 @@ extension OnboardingAISetupModel {
         return false
     }
 
+    var nativeSessionCatalogSummary: String {
+        self.nativeSessionCatalogs.map(\.label).formatted(.list(type: .and))
+    }
+
     var isBusy: Bool {
         self.phase == .detecting || self.phase == .testing || self.manualTesting || self.authBusy ||
             self.pendingActivationVerification
@@ -380,20 +396,6 @@ extension OnboardingAISetupModel {
         default: nil
         }
         self.advanceProviderAuth(stepID: step.id, value: value)
-    }
-
-    /// Candidates the automatic ladder may try: skip definitively logged-out
-    /// installs and anything already attempted.
-    func autoCandidateAfter(kind: String?) -> Candidate? {
-        let startIndex: Int = if let kind, let index = candidates.firstIndex(where: { $0.kind == kind }) {
-            index + 1
-        } else {
-            0
-        }
-        guard startIndex <= self.candidates.count else { return nil }
-        return self.candidates[startIndex...].first { candidate in
-            candidate.credentials != false && self.statuses[candidate.kind] == .untried
-        }
     }
 
     func startProviderPrepare(_ option: PrepareOption) {
