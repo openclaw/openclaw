@@ -1,5 +1,6 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { supportsWorkerExecutionContextLaunch } from "./admission.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { STALE_WORKER_BUILD_REASON, supportsWorkerExecutionContextLaunch } from "./admission.js";
 import { matchesWorkerPlacementTarget } from "./placement-reclaim-contract.js";
 import {
   FORCED_WORKER_ABANDONMENT_ERROR,
@@ -12,7 +13,7 @@ import type {
 } from "./placement-store.js";
 import type { WorkerPlacementAuthorization } from "./service-contract.js";
 import type { WorkerEnvironmentService } from "./service.js";
-import { boundedWorkerError } from "./worker-error.js";
+import { boundedWorkerError as boundedError } from "./worker-error.js";
 
 export type WorkerDispatchPlacement = WorkerSessionPlacementRecord;
 export type WorkerActiveDispatchPlacement = Extract<
@@ -100,7 +101,7 @@ export type WorkerActivationBarrier = (params: {
 }) => Promise<WorkerActiveDispatchPlacement>;
 
 const RECOVERY_ERROR_LIMIT = 1_024;
-const boundedError = boundedWorkerError;
+const log = createSubsystemLogger("gateway/worker-placement");
 
 export function workerDisappearanceError(
   environment: ReturnType<WorkerEnvironmentService["get"]>,
@@ -232,9 +233,9 @@ export function createPlacementFailureActions(deps: {
   const retryFailedTeardown = async (
     placement: WorkerFailedDispatchPlacement,
     authorize?: WorkerPlacementAuthorization,
-  ): Promise<void> => {
+  ): Promise<string | undefined> => {
     if (!placement.environmentId) {
-      return;
+      return undefined;
     }
     const environment = environments.get(placement.environmentId);
     if (
@@ -243,7 +244,7 @@ export function createPlacementFailureActions(deps: {
       environment.state === "failed" ||
       environment.state === "orphaned"
     ) {
-      return;
+      return undefined;
     }
     const teardownErrors = await cleanupEnvironment({
       environmentId: placement.environmentId,
@@ -260,6 +261,8 @@ export function createPlacementFailureActions(deps: {
         recoveryError: truncateUtf16Safe(recoveryError, RECOVERY_ERROR_LIMIT),
       });
     }
+    // The persisted failure may intentionally retain an earlier terminal cause.
+    return teardownErrors.length > 0 ? boundedError(teardownErrors.join("; ")) : undefined;
   };
 
   const startDrain = (
@@ -343,6 +346,28 @@ export function createPlacementFailureActions(deps: {
       return;
     }
     const reconciling = startReconcile(draining);
+    if (
+      environment?.state === "failed" &&
+      environment.error === STALE_WORKER_BUILD_REASON &&
+      environment.leaseId === null &&
+      !placements
+        .listPendingWorkspaceResults()
+        .some((result) => result.sessionId === placement.sessionId)
+    ) {
+      // Match successful live teardown below: retained conflicts do not block reclaim.
+      // Their durable reports and staged refs survive redispatch and remain independently
+      // consulted by reclaim/publication; only pending results block this idle retirement.
+      placements.transition({
+        sessionId: reconciling.sessionId,
+        from: "reconciling",
+        to: "reclaimed",
+        expectedGeneration: reconciling.generation,
+      });
+      log.info(
+        `Reclaimed idle cloud worker sessionId=${boundedError(placement.sessionId, 128)} environmentId=${boundedError(placement.environmentId, 128)}: ${STALE_WORKER_BUILD_REASON}`,
+      );
+      return;
+    }
     if (
       !environment ||
       environment.state === "destroyed" ||

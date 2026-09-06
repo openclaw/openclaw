@@ -1,3 +1,4 @@
+import type { PluginRuntime } from "openclaw/plugin-sdk/channel-core";
 import type { RealtimeVoiceAgentControlResult } from "openclaw/plugin-sdk/realtime-voice";
 import { vi, type Mock } from "vitest";
 const {
@@ -134,7 +135,10 @@ const {
         return undefined;
       },
     ),
-    createAudioResourceMock: vi.fn() as Mock,
+    createAudioResourceMock: vi.fn(() => ({
+      playbackDuration: 0,
+      read: vi.fn(() => null),
+    })) as Mock,
     createAudioPlayerMock: vi.fn(() => ({
       on: vi.fn() as Mock,
       off: vi.fn() as Mock,
@@ -153,7 +157,9 @@ const {
       (...args: unknown[]) => Promise<string | undefined>
     >(async () => undefined),
     resolveVoiceIngressWithParticipantsMock: vi.fn() as Mock,
-    transcribeAudioFileMock: vi.fn(async () => ({ text: "hello from voice" })),
+    transcribeAudioFileMock: vi.fn<PluginRuntime["mediaUnderstanding"]["transcribeAudioFile"]>(
+      async () => ({ text: "hello from voice" }),
+    ),
     prepareTtsRequestMock: vi.fn(async ({ cfg, text }: { cfg: unknown; text: string }) => ({
       cfg,
       directives: {
@@ -414,7 +420,12 @@ vi.mock("./audio.js", async () => {
   const { PassThrough } = await import("node:stream");
   return {
     ...actual,
-    createDiscordOpusEncodeStream: vi.fn(() => new PassThrough()),
+    createDiscordOpusEncodeStream: vi.fn(() =>
+      Object.assign(new PassThrough(), {
+        flushPartialFrame: () => false,
+        takePcmBytes: (packet: Buffer) => packet.length,
+      }),
+    ),
     createDiscordOpusPlaybackStream: vi.fn(() => new PassThrough()),
     decodeOpusStream: (...args: Parameters<typeof actual.decodeOpusStream>) =>
       decodeOpusStreamMock.getMockImplementation()
