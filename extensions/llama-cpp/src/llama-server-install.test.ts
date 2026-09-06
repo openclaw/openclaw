@@ -335,6 +335,85 @@ describe("ensureLlamaServerInstalled", () => {
     );
   });
 
+  it("retries a timed-out first exec with a wider budget (macOS 26 security scan)", async () => {
+    // Regression for #138672: macOS 26 blocks the first exec of a freshly
+    // downloaded unsigned binary for ~35-40s while syspolicyd evaluates it, so
+    // the 15s cap killed the version check before setup could finish. The
+    // evaluation is cached per binary hash, so the retry succeeds.
+    const command = await createInstalledServer();
+    const calls: Array<number | undefined> = [];
+    mocks.execFile.mockImplementation(
+      (
+        _command: string,
+        _args: string[],
+        options: { timeout?: number },
+        callback: (error: ExecFileException | null, stdout: string, stderr: string) => void,
+      ) => {
+        calls.push(options.timeout);
+        if (calls.length === 1) {
+          const error = new Error(`Command failed: ${command} --version`) as ExecFileException;
+          error.killed = true;
+          error.signal = "SIGTERM";
+          callback(error, "", "");
+          return;
+        }
+        callback(
+          null,
+          `version: 0.1.0-dev (build ${LLAMA_SERVER_BUILD}, commit ${LLAMA_SERVER_COMMIT.slice(0, 9)})`,
+          "",
+        );
+      },
+    );
+
+    await expect(ensureLlamaServerInstalled()).resolves.toMatchObject({ command });
+    expect(calls).toEqual([15_000, 120_000]);
+  });
+
+  it("does not retry exec failures that are not timeouts", async () => {
+    const command = await createInstalledServer();
+    let calls = 0;
+    mocks.execFile.mockImplementation(
+      (
+        _command: string,
+        _args: string[],
+        _options: unknown,
+        callback: (error: ExecFileException | null, stdout: string, stderr: string) => void,
+      ) => {
+        calls += 1;
+        const error = new Error(`spawn ${command} ENOENT`) as ExecFileException;
+        error.code = "ENOENT";
+        callback(error, "", "");
+      },
+    );
+
+    await expect(ensureLlamaServerInstalled()).rejects.toThrow();
+    expect(calls).toBe(1);
+  });
+
+  it("does not retry after the caller aborts", async () => {
+    const command = await createInstalledServer();
+    const calls: Array<number | undefined> = [];
+    const controller = new AbortController();
+    mocks.execFile.mockImplementation(
+      (
+        _command: string,
+        _args: string[],
+        options: { timeout?: number },
+        callback: (error: ExecFileException | null, stdout: string, stderr: string) => void,
+      ) => {
+        calls.push(options.timeout);
+        controller.abort();
+        const error = new Error("timeout") as ExecFileException;
+        error.killed = true;
+        error.signal = "SIGTERM";
+        callback(error, "", "");
+      },
+    );
+
+    await expect(ensureLlamaServerInstalled({ signal: controller.signal })).rejects.toThrow();
+    expect(calls).toEqual([15_000]);
+  });
+
   it.each(["ready", "corrupt-runtime", "missing-runtime", "no-device", "cancelled"] as const)(
     "publishes the complete CUDA installation only after verification: %s",
     async (outcome) => {
