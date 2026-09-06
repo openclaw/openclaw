@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { buildJsonPluginConfigSchema } from "openclaw/plugin-sdk/core";
 import type { JsonSchemaObject } from "openclaw/plugin-sdk/json-schema-runtime";
 import { describe, expect, it } from "vitest";
+import { buildGoogleStaticCatalogProvider } from "./provider-catalog.js";
 
 type GoogleManifest = {
   setup?: {
@@ -35,6 +36,15 @@ type GoogleManifest = {
       model?: string;
       reason?: string;
     }>;
+    providers?: Record<
+      string,
+      {
+        models?: Array<{
+          id?: string;
+          name?: string;
+        }>;
+      }
+    >;
   };
   configSchema?: JsonSchemaObject;
   configContracts?: {
@@ -110,6 +120,33 @@ describe("google manifest model catalog", () => {
         ],
       }),
     ]);
+  });
+
+  it("mirrors the runtime static Google model rows into modelCatalog.providers.google", () => {
+    const manifest = loadManifest();
+    const runtimeRows = buildGoogleStaticCatalogProvider().models.map((model) => {
+      const row = structuredClone(model);
+      // The static provider widens input with "video" at build time; the
+      // manifest mirror keeps the canonical text-model modality list.
+      row.input = row.input.filter((modality) => modality !== "video");
+      return row;
+    });
+    expect(runtimeRows.length).toBeGreaterThan(0);
+
+    // Full-row comparison (ids, names, capabilities, limits, costs, thinking
+    // mappings, compat tiers) so any runtime/manifest drift fails this guard.
+    expect(manifest.modelCatalog?.providers?.google?.models ?? []).toEqual(runtimeRows);
+  });
+
+  it("keeps legacy Google chat providers out of the manifest catalog mirror", () => {
+    const manifest = loadManifest();
+
+    // google-gemini-cli references must stay unknown-model so Doctor keeps
+    // emitting its migration hint, and neither CLI nor Vertex declares runtime
+    // discovery, so manifest rows for them would leak into runtime catalog
+    // planning. Only the canonical google provider is mirrored.
+    expect(manifest.modelCatalog?.providers?.["google-gemini-cli"]).toBeUndefined();
+    expect(manifest.modelCatalog?.providers?.["google-vertex"]).toBeUndefined();
   });
 
   it("offers Google AI Studio API keys without consumer CLI OAuth", () => {
