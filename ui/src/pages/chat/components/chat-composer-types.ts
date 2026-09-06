@@ -8,7 +8,6 @@ import type {
 } from "../../../api/types.ts";
 import type { QuestionPrompt } from "../../../app/question-prompt.ts";
 import type { ChatFollowUpMode, ChatSendShortcut } from "../../../app/settings.ts";
-import type { ComposerVoiceInputMode } from "../../../app/voice-input-settings.ts";
 import type {
   ChatGoalAction,
   ChatGoalDraft,
@@ -133,7 +132,6 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   realtimeTalkCameraError?: boolean;
   gatewayClient?: GatewayBrowserClient | null;
   composerHoldToRecord?: boolean;
-  composerVoiceInputMode?: ComposerVoiceInputMode;
   realtimeTalkInputDeviceId?: string;
   onComposerHoldToRecordChange?: (enabled: boolean) => void;
   onOpenTalkSettings?: () => void;

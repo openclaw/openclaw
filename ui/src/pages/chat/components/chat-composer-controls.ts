@@ -309,7 +309,6 @@ type ComposerVoiceButtonProps = {
   sending: boolean;
   isBusy: boolean;
   dictation?: ComposerDictationController;
-  voiceIdleLabel?: string;
   microphonePicker?: TemplateResult | typeof nothing;
   /**
    * What the control offers at rest. The chat composer's microphone also starts
@@ -331,7 +330,7 @@ export function renderComposerVoiceButton(props: ComposerVoiceButtonProps) {
     props.dictation !== undefined && props.onToggleVoice === undefined;
   const label = active
     ? t("chat.composer.dictationStopAndKeep")
-    : (props.idleLabel ?? props.voiceIdleLabel ?? t("chat.composer.startVoiceInput"));
+    : (props.idleLabel ?? t("chat.composer.startVoiceInput"));
   const tooltip =
     props.dictation && !startsDictationDirectly && !(active || finalizing)
       ? t("chat.composer.voiceGestureHint")
@@ -348,11 +347,7 @@ export function renderComposerVoiceButton(props: ComposerVoiceButtonProps) {
               : `chat-send-btn chat-send-btn--voice${props.dictation && !startsDictationDirectly ? " chat-send-btn--hold-enabled" : ""}${arming ? " chat-send-btn--dictation-arming" : ""}`
           }
           type="button"
-          @pointerdown=${
-            startsDictationDirectly
-              ? undefined
-              : (event: PointerEvent) => props.onDictationPointerDown?.(event)
-          }
+          @pointerdown=${(event: PointerEvent) => props.onDictationPointerDown?.(event)}
           @click=${(event: MouseEvent) => {
             if (active) {
               event.preventDefault();
@@ -529,10 +524,7 @@ export function renderChatPrimaryActions(props: ChatRunControlsProps) {
   // only its stop affordance instead of a fake listening meter plus a
   // duplicate announcement.
   const voiceErrored = props.voiceStatus === "error";
-  const voiceButton = renderComposerVoiceButton({
-    ...props,
-    voiceIdleLabel: props.onToggleVoice ? undefined : t("chat.composer.dictationCapability"),
-  });
+  const voiceButton = renderComposerVoiceButton(props);
   // Dictation and Talk are one affordance to the operator — a microphone — so
   // the control shows whenever either route exists, and it always sits ahead of
   // the primary action rather than standing in for it.
