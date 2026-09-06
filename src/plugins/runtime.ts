@@ -18,8 +18,13 @@ import { createEmptyPluginRegistry } from "./registry-empty.js";
 import { markPluginRegistryActive, markPluginRegistryRetired } from "./registry-lifecycle.js";
 import type { PluginRegistry } from "./registry-types.js";
 import { getActivePluginChannelRegistrySnapshotFromState } from "./runtime-channel-state.js";
-import { PLUGIN_REGISTRY_STATE, type RegistryState } from "./runtime-state.js";
-import { getPluginRuntimeGatewayRequestScope } from "./runtime/gateway-request-scope.js";
+import {
+  getPluginRegistryForContext,
+  PLUGIN_REGISTRY_STATE,
+  type RegistryState,
+} from "./runtime-state.js";
+
+export { getPluginRegistryForContext };
 
 const log = createSubsystemLogger("plugins/runtime");
 
@@ -262,15 +267,6 @@ export function getActivePluginRegistry(): PluginRegistry | null {
 
 export function getActivePluginRegistryWorkspaceDir(): string | undefined {
   return state.workspaceDir ?? undefined;
-}
-
-/** Reads registration/request/active registry precedence without initializing a cold runtime. */
-export function getPluginRegistryForContext(): PluginRegistry | null {
-  return (
-    state.registrationContext?.registry ??
-    getPluginRuntimeGatewayRequestScope()?.pluginRegistry ??
-    getActivePluginRegistry()
-  );
 }
 
 export function requireActivePluginRegistry(): PluginRegistry {

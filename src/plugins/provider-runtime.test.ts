@@ -70,7 +70,6 @@ let formatProviderAuthProfileApiKeyWithPlugin: typeof import("./provider-runtime
 let loginProviderOAuthWithPlugin: typeof import("./provider-runtime.js").loginProviderOAuthWithPlugin;
 let classifyProviderFailoverSignalWithPlugin: typeof import("./provider-runtime.js").classifyProviderFailoverSignalWithPlugin;
 let normalizeProviderConfigWithPlugin: typeof import("./provider-runtime.js").normalizeProviderConfigWithPlugin;
-let normalizeProviderModelIdWithPlugin: typeof import("./provider-runtime.js").normalizeProviderModelIdWithPlugin;
 let applyProviderResolvedTransportWithPlugin: typeof import("./provider-runtime.js").applyProviderResolvedTransportWithPlugin;
 let normalizeProviderTransportWithPlugin: typeof import("./provider-runtime.js").normalizeProviderTransportWithPlugin;
 let resolvePreparedExtraParams: typeof import("../agents/embedded-agent-runner/extra-params.js").resolvePreparedExtraParams;
@@ -328,7 +327,6 @@ describe("provider-runtime", () => {
       formatProviderAuthProfileApiKeyWithPlugin,
       loginProviderOAuthWithPlugin,
       normalizeProviderConfigWithPlugin,
-      normalizeProviderModelIdWithPlugin,
       normalizeProviderTransportWithPlugin,
       resolveProviderAuthProfileId,
       resolveProviderConfigApiKeyWithPlugin,
@@ -1688,29 +1686,6 @@ describe("provider-runtime", () => {
     ).toBeUndefined();
   });
 
-  it("can normalize model ids through provider aliases without changing ownership", () => {
-    resolvePluginProvidersMock.mockReturnValue([
-      {
-        id: "google",
-        label: "Google",
-        hookAliases: ["google-vertex"],
-        auth: [],
-        normalizeModelId: ({ modelId }) => modelId.replace("flash-lite-preview", "flash-lite"),
-      },
-    ]);
-
-    expect(
-      normalizeProviderModelIdWithPlugin({
-        provider: "google-vertex",
-        context: {
-          provider: "google-vertex",
-          modelId: "gemini-3.1-flash-lite-preview",
-        },
-      }),
-    ).toBe("gemini-3.1-flash-lite");
-    expect(resolvePluginProvidersMock).toHaveBeenCalledTimes(1);
-  });
-
   it("resolves config hooks through hook-only aliases without changing provider surfaces", () => {
     resolvePluginProvidersMock.mockReturnValue([
       {
@@ -2335,7 +2310,6 @@ describe("provider-runtime", () => {
             api,
             baseUrl: baseUrl ? `${baseUrl}/normalized` : undefined,
           }),
-          normalizeModelId: ({ modelId }) => modelId.replace("-legacy", ""),
           resolveDynamicModel: () => MODEL,
           prepareDynamicModel,
           sanitizeReplayHistory,
@@ -2408,16 +2382,6 @@ describe("provider-runtime", () => {
         }),
       }),
     ).toEqual(MODEL);
-
-    expect(
-      normalizeProviderModelIdWithPlugin({
-        provider: DEMO_PROVIDER_ID,
-        context: {
-          provider: DEMO_PROVIDER_ID,
-          modelId: "demo-model-legacy",
-        },
-      }),
-    ).toBe("demo-model");
 
     expect(
       normalizeProviderTransportWithPlugin({

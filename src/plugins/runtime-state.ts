@@ -1,6 +1,7 @@
 import { PLUGIN_REGISTRY_STATE } from "./runtime-state-key.js";
 // Stores plugin runtime registry state for the current process lifecycle.
 import { getActivePluginRegistryWorkspaceDirFromStateCore } from "./runtime-workspace-state.js";
+import { getPluginRuntimeGatewayRequestScope } from "./runtime/gateway-request-scope.js";
 
 export { PLUGIN_REGISTRY_STATE };
 
@@ -30,6 +31,17 @@ type GlobalRegistryState = typeof globalThis & {
 
 export function getPluginRegistryState(): RegistryState | undefined {
   return (globalThis as GlobalRegistryState)[PLUGIN_REGISTRY_STATE];
+}
+
+/** Reads registration/request/active registry precedence without initializing a cold runtime. */
+export function getPluginRegistryForContext(): PluginRegistry | null {
+  const state = getPluginRegistryState();
+  return (
+    state?.registrationContext?.registry ??
+    getPluginRuntimeGatewayRequestScope()?.pluginRegistry ??
+    state?.activeRegistry ??
+    null
+  );
 }
 
 /** Policy reads the process-active registry, independently of request or registration scopes. */

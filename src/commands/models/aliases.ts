@@ -56,32 +56,35 @@ export async function modelsAliasesAddCommand(
   const alias = normalizeAlias(aliasRaw);
   const normalizedAlias = alias.toLowerCase();
   let target = modelRaw;
-  await updateConfig((cfgLocal, context) => {
-    // Alias resolution must share the snapshot whose hash fences this write.
-    const resolved = resolveModelTarget({ raw: modelRaw, cfg: context.runtimeConfig });
-    const modelKey = `${resolved.provider}/${resolved.model}`;
-    target = modelKey;
-    const nextModels = { ...cfgLocal.agents?.defaults?.models };
-    // Model selection folds alias case, so case variants must not collide.
-    for (const [key, entry] of Object.entries(nextModels)) {
-      const existing = entry?.alias?.trim();
-      if (existing && existing.toLowerCase() === normalizedAlias && key !== modelKey) {
-        throw new Error(`Alias ${alias} already points to ${key}.`);
+  await updateConfig(
+    (cfgLocal, context) => {
+      // Alias resolution must share the snapshot whose hash fences this write.
+      const resolved = resolveModelTarget({ raw: modelRaw, cfg: context.runtimeConfig });
+      const modelKey = `${resolved.provider}/${resolved.model}`;
+      target = modelKey;
+      const nextModels = { ...cfgLocal.agents?.defaults?.models };
+      // Model selection folds alias case, so case variants must not collide.
+      for (const [key, entry] of Object.entries(nextModels)) {
+        const existing = entry?.alias?.trim();
+        if (existing && existing.toLowerCase() === normalizedAlias && key !== modelKey) {
+          throw new Error(`Alias ${alias} already points to ${key}.`);
+        }
       }
-    }
-    const existing = nextModels[modelKey] ?? {};
-    nextModels[modelKey] = { ...existing, alias };
-    return {
-      ...cfgLocal,
-      agents: {
-        ...cfgLocal.agents,
-        defaults: {
-          ...cfgLocal.agents?.defaults,
-          models: nextModels,
+      const existing = nextModels[modelKey] ?? {};
+      nextModels[modelKey] = { ...existing, alias };
+      return {
+        ...cfgLocal,
+        agents: {
+          ...cfgLocal.agents,
+          defaults: {
+            ...cfgLocal.agents?.defaults,
+            models: nextModels,
+          },
         },
-      },
-    };
-  });
+      };
+    },
+    (_cfg, context) => [resolveModelTarget({ raw: modelRaw, cfg: context.runtimeConfig })],
+  );
 
   logConfigUpdated(runtime);
   runtime.log(`Alias ${alias} -> ${target}`);

@@ -1,7 +1,12 @@
 // Shares provider registry normalization helpers across plugin paths.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
-import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+} from "@openclaw/normalization-core/string-coerce";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
+import type { PluginRegistry } from "./registry-types.js";
+import type { ProviderPlugin } from "./types.js";
 
 /** Normalizes provider ids used by capability-provider registries. */
 export function normalizeCapabilityProviderId(providerId: string | undefined): string | undefined {
@@ -21,6 +26,41 @@ export function matchesProviderPluginRef(
         (alias) => normalizeProviderId(alias) === normalized,
       )),
   );
+}
+
+/** Explicit API owners keep foreign aliases from taking over a configured provider route. */
+export function matchesProviderRuntimePlugin(
+  plugin: ProviderPlugin,
+  provider: string,
+  ownerRefs: readonly string[],
+): boolean {
+  if (ownerRefs.length === 0) {
+    return matchesProviderPluginRef(plugin, provider);
+  }
+  const literalId = normalizeLowercaseStringOrEmpty(provider);
+  return (
+    (Boolean(literalId) && normalizeLowercaseStringOrEmpty(plugin.id) === literalId) ||
+    ownerRefs.some((ownerRef) => matchesProviderPluginRef(plugin, ownerRef))
+  );
+}
+
+/** Resolves the hook receiver with its authoritative registry-owned plugin id. */
+export function findProviderRuntimePluginInRegistry(params: {
+  registry: PluginRegistry;
+  provider: string;
+  ownerRefs: readonly string[];
+}): ProviderPlugin | undefined {
+  const literalId = normalizeLowercaseStringOrEmpty(params.provider);
+  // A registered provider owns its name; another provider's compatibility
+  // alias must not replace its executable hooks in a shared generation.
+  const entry =
+    params.registry.providers.find(
+      ({ provider }) => literalId && normalizeLowercaseStringOrEmpty(provider.id) === literalId,
+    ) ??
+    params.registry.providers.find(({ provider }) =>
+      matchesProviderRuntimePlugin(provider, params.provider, params.ownerRefs),
+    );
+  return entry ? Object.assign({}, entry.provider, { pluginId: entry.pluginId }) : undefined;
 }
 
 /** Preserves ordered alias overrides, including aliases of replaced canonical entries. */

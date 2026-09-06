@@ -26,6 +26,7 @@ import {
   resolveOwningPluginIdsForModelRefs,
   resolveOwningPluginIdsForProviderRef,
 } from "./providers.js";
+import type { PluginRegistry } from "./registry-types.js";
 import { getActivePluginRegistryWorkspaceDir } from "./runtime.js";
 import { getPluginRuntimeGenerationRegistry } from "./runtime/generation-scope.js";
 import {
@@ -308,7 +309,7 @@ export function isPluginProvidersLoadInFlight(
   return isPluginRegistryLoadInFlight(loadState.loadOptions);
 }
 
-export function resolvePluginProvidersCore(params: {
+export function resolvePluginProviderRegistryCore(params: {
   config?: PluginLoadOptions["config"];
   workspaceDir?: string;
   /** Use an explicit env when plugin roots should resolve independently from process.env. */
@@ -326,30 +327,33 @@ export function resolvePluginProvidersCore(params: {
   includeUntrustedWorkspacePlugins?: boolean;
   pluginMetadataSnapshot?: PluginMetadataRegistryView;
   skipIfLoadInFlight?: boolean;
-}): ProviderPlugin[] {
-  const { env, workspaceDir, snapshot } = resolveProviderMetadataLookup(params);
+  /** Prepare only selected owners instead of borrowing a broader process registry. */
+  registryScope?: "exact";
+}): { registry: PluginRegistry; onlyPluginIds?: readonly string[] } | undefined {
+  const generationRegistry =
+    params.mode === "setup" ? undefined : getPluginRuntimeGenerationRegistry();
+  const { env, workspaceDir, snapshot } = resolveProviderMetadataLookup(
+    generationRegistry ? { ...params, pluginMetadataSnapshot: undefined } : params,
+  );
   const base = resolvePluginProviderLoadBase({ ...params, workspaceDir, env }, snapshot);
   if (params.mode === "setup") {
     const loadState = resolveSetupProviderPluginLoadState(params, base, snapshot);
     if (!loadState) {
-      return [];
+      return undefined;
     }
     if (params.skipIfLoadInFlight && isPluginRegistryLoadInFlight(loadState.loadOptions)) {
-      return [];
+      return undefined;
     }
     const registry = loadOpenClawPlugins(loadState.loadOptions);
-    return registry.providers.map((entry) =>
-      Object.assign({}, entry.provider, { pluginId: entry.pluginId }),
-    );
+    return { registry };
   }
   const loadState = resolveRuntimeProviderPluginLoadState(params, base, snapshot);
-  const generationRegistry = getPluginRuntimeGenerationRegistry();
   if (
     !generationRegistry &&
     params.skipIfLoadInFlight &&
     isPluginRegistryLoadInFlight(loadState.loadOptions)
   ) {
-    return [];
+    return undefined;
   }
   const onlyPluginIds = loadState.loadOptions.onlyPluginIds;
   // Prepared discovery must retain its exact runtime artifacts, including an empty selection.
@@ -357,17 +361,28 @@ export function resolvePluginProvidersCore(params: {
     onlyPluginIds?.length === 0
       ? undefined
       : (generationRegistry ??
-        getLoadedRuntimePluginRegistry({
-          env: base.env,
-          loadOptions: loadState.loadOptions,
-          workspaceDir: base.workspaceDir,
-          requiredPluginIds: onlyPluginIds,
-        }) ??
-        getRuntimePluginRegistryForLoadOptions(loadState.loadOptions));
+        (params.registryScope === "exact"
+          ? loadOpenClawPlugins(loadState.loadOptions)
+          : (getLoadedRuntimePluginRegistry({
+              env: base.env,
+              loadOptions: loadState.loadOptions,
+              workspaceDir: base.workspaceDir,
+              requiredPluginIds: onlyPluginIds,
+            }) ?? getRuntimePluginRegistryForLoadOptions(loadState.loadOptions))));
   if (!registry) {
+    return undefined;
+  }
+  return { registry, onlyPluginIds };
+}
+
+export function resolvePluginProvidersCore(
+  params: Parameters<typeof resolvePluginProviderRegistryCore>[0],
+): ProviderPlugin[] {
+  const resolved = resolvePluginProviderRegistryCore(params);
+  if (!resolved) {
     return [];
   }
-
+  const { registry, onlyPluginIds } = resolved;
   return registry.providers
     .filter((entry) => !onlyPluginIds || onlyPluginIds.includes(entry.pluginId))
     .map((entry) => Object.assign({}, entry.provider, { pluginId: entry.pluginId }));
