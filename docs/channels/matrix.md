@@ -8,6 +8,8 @@ title: "Matrix"
 
 Matrix is a downloadable channel plugin (`@openclaw/matrix`) built on the official `matrix-js-sdk`. It supports DMs, rooms, threads, media, reactions, polls, location, and E2EE.
 
+Matrix also works with [OpenClaw's opt-in Bun runtime](/install/bun). Keep the plugin's native crypto dependencies installed; encrypted media uses them on both runtimes.
+
 ## Install
 
 ```bash
