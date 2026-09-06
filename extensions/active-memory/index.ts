@@ -203,11 +203,22 @@ export default definePluginEntry({
     // both maxima so preflight latency cannot consume recall settlement time.
     const beforePromptBuildTimeoutMs =
       MAX_TIMEOUT_MS + MAX_SETUP_GRACE_TIMEOUT_MS + HOOK_TIMEOUT_RECOVERY_GRACE_MS * 2;
+    // Names the exit taken when recall is configured off for this session, so
+    // "no relevant memory found" and "recall never ran" stop being
+    // indistinguishable at info level. Reserved for states an operator can act
+    // on; the routine escalation decision stays at debug. Deliberately not
+    // gated on config.logging, which defaults to false and would reproduce the
+    // invisibility this reports.
+    const logRecallSkipped = (reason: string) => {
+      api.logger.info?.(`active-memory: recall skipped reason=${reason}`);
+    };
     api.on(
       "before_prompt_build",
       async (event, ctx) => {
         const toolAuthority = ctx.toolAuthority;
         if (!toolAuthority) {
+          // Defensive only: the host filters authority-required registrations
+          // out of the unauthorized pass, so this never runs in production.
           api.logger.debug?.(
             "active-memory: recall skipped because this prompt has no turn tool authority",
           );
@@ -288,6 +299,7 @@ export default definePluginEntry({
                 sessionKey: resolvedSessionKey,
                 statusLine: `${ACTIVE_MEMORY_STATUS_PREFIX} status=policy-disabled`,
               });
+              logRecallSkipped("policy-disabled");
               toolAuthority.assertActive();
               return undefined;
             }
@@ -298,6 +310,7 @@ export default definePluginEntry({
                 sessionKey: resolvedSessionKey,
               })
             ) {
+              logRecallSkipped("harness-session");
               return undefined;
             }
             const sessionDisabled = await isSessionActiveMemoryDisabled({
@@ -307,6 +320,7 @@ export default definePluginEntry({
             deadlineController.signal.throwIfAborted();
             toolAuthority.assertActive();
             if (sessionDisabled) {
+              logRecallSkipped("session-disabled");
               await persistPluginStatusLines({
                 api,
                 agentId: effectiveAgentId,
@@ -319,6 +333,7 @@ export default definePluginEntry({
               sessionKey: resolvedSessionKey ?? ctx.sessionKey,
             };
             if (!isEligibleInteractiveSession(sessionContext)) {
+              logRecallSkipped("session-ineligible");
               await persistPluginStatusLines({
                 api,
                 agentId: effectiveAgentId,
@@ -416,6 +431,7 @@ export default definePluginEntry({
               );
             }
             if (!activeMemoryAllowed && !productRecallAllowed) {
+              logRecallSkipped("destination-not-allowed");
               await persistPluginStatusLines({
                 api,
                 agentId: effectiveAgentId,
@@ -429,6 +445,9 @@ export default definePluginEntry({
               hasStrongLaneOneHit: laneOne.hasStrongHit,
             });
             if (escalationDecision !== "recall") {
+              // Stays at debug: escalate is the default mode and ordinary
+              // prompts resolve to no-recall-intent, so this is the healthy
+              // path rather than an actionable skip.
               api.logger.debug?.(`active-memory: recall skipped reason=${escalationDecision}`);
               const outcomeContext =
                 escalationDecision === "no-recall-intent"
