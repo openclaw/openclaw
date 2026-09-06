@@ -1,7 +1,6 @@
 // Telegram plugin module implements reasoning lane coordinator behavior.
 import { formatReasoningMessage } from "openclaw/plugin-sdk/agent-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   findCodeRegions,
   isInsideCode,
@@ -71,14 +70,14 @@ function extractThinkingFromTaggedStreamOutsideCode(text: string): string {
 }
 
 function isPartialReasoningTagPrefix(text: string): boolean {
-  const trimmed = normalizeLowercaseStringOrEmpty(text.trimStart());
+  const trimmed = text.trim().replace(/^<\s*(\/?)\s+/u, "<$1");
   if (!trimmed.startsWith("<")) {
     return false;
   }
   if (trimmed.includes(">")) {
     return false;
   }
-  return REASONING_TAG_PREFIXES.some((prefix) => prefix.startsWith(trimmed));
+  return REASONING_TAG_PREFIXES.some((prefix) => prefix.startsWith(trimmed.toLowerCase()));
 }
 
 type TelegramReasoningSplit = {
