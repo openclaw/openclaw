@@ -8,7 +8,7 @@ import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { PassThrough } from "node:stream";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { writeTriageUpdateFailure } from "../commands/triage-update.js";
 import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
@@ -233,9 +233,9 @@ async function runManagedServiceManagerBoundary(
       recoveryModulePath,
       `
       const { register } = await import(${JSON.stringify(pathToFileURL(createRequire(import.meta.url).resolve("tsx/esm/api")).href)});
-      register();
+      register({ tsconfig: ${JSON.stringify(fileURLToPath(new URL("../../tsconfig.json", import.meta.url)))} });
       const ledger = await import(${JSON.stringify(new URL("./update-run-ledger.ts", import.meta.url).href)});
-      export const { finishUpdateRun, recordUpdateRunPhase, recordUpdateRunVerification } = ledger;
+      export const { finishUpdateRun, recordUpdateRunPhase, recordUpdateRunStep, recordUpdateRunVerification } = ledger;
     `,
     );
   }
@@ -309,6 +309,16 @@ async function runManagedServiceManagerBoundary(
       consumeNotification,
       options,
     });
+    if (run) {
+      updaterScript = `
+        (async () => {
+          const ledger = await import(${JSON.stringify(pathToFileURL(recoveryModulePath).href)});
+          ledger.recordUpdateRunPhase(${JSON.stringify(run.runId)}, "staging");
+          ledger.recordUpdateRunPhase(${JSON.stringify(run.runId)}, "validating");
+          ${updaterScript}
+        })().catch((error) => { console.error(error); process.exitCode = 1; });
+      `;
+    }
     if (invocationCwd) {
       // Consuming a relative input then removing cwd forces recovery and triage
       // to launch from the durable helper directory, not the vanished caller cwd.
@@ -556,6 +566,23 @@ describe("managed service update handoff", () => {
   const itUnix = it.runIf(process.platform !== "win32");
 
   registerManagedHandoffOwnerTests(runManagedServiceManagerBoundary, itUnix, expect);
+
+  itUnix.each(["systemd", "launchd"] as const)(
+    "preserves updater staging and validation history after %s parking",
+    async (kind) => {
+      const { run } = await runManagedServiceManagerBoundary(kind, {
+        ledger: true,
+        updaterExitCode: 0,
+        updaterResult: { status: "ok", mode: "npm" },
+      });
+      const steps = run?.steps.map((step) => step.step);
+      expect(steps).toEqual(expect.arrayContaining(["staging", "validating"]));
+      expect(steps).not.toContain("activating");
+      expect(run?.steps).toContainEqual(
+        expect.objectContaining({ step: "service-stop", status: "completed" }),
+      );
+    },
+  );
 
   itUnix.each(
     (["systemd", "launchd"] as const).flatMap((kind) =>

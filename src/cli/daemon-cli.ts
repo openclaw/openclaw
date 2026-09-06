@@ -22,6 +22,6 @@ export {
 // The detached updater loads these closures before replacing its installation.
 export {
   finishUpdateRun,
-  recordUpdateRunPhase,
+  recordUpdateRunStep,
   recordUpdateRunVerification,
 } from "../infra/update-run-ledger.js";
