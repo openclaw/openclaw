@@ -547,9 +547,7 @@ export async function maybeRestartService(params: {
       if (err instanceof GatewayRestartHealthError && !updatedInstallRestartNeedsServiceRootProof) {
         return "restart-health-failed";
       }
-      if (requiresVerifiedRestart()) {
-        return "failed";
-      }
+      return "failed";
     }
     return "ok";
   }
