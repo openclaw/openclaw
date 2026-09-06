@@ -10,6 +10,10 @@ import {
 import { markTrustedOtelDiagnosticListener } from "../infra/diagnostic-otel-listener-provenance.js";
 import { registerDiagnosticTracePropagationBridge } from "../infra/diagnostic-trace-propagation.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import type {
+  ProviderUsageMetricsListener,
+  ProviderUsageMetricsSnapshot,
+} from "../infra/provider-usage-metrics.types.js";
 import {
   recordDiagnosticExporterHealth,
   type DiagnosticExporterHealthUpdate,
@@ -45,9 +49,15 @@ type TrustedExporterInternalDiagnostics = NonNullable<
   OpenClawPluginServiceContext["internalDiagnostics"]
 > & {
   reportExporterHealth: (update: DiagnosticExporterHealthUpdate) => void;
+  observeProviderUsage?: (listener: ProviderUsageMetricsListener) => Promise<() => void>;
 };
 
 type PluginServiceStopResult = { errors: readonly unknown[] };
+
+type ObserveProviderUsage = (params: {
+  isActive: () => boolean;
+  listener: (snapshot: ProviderUsageMetricsSnapshot) => void;
+}) => Promise<() => void>;
 
 export type PluginServicesHandle = {
   reload: (config: OpenClawConfig, serviceIds: ReadonlySet<string>) => Promise<void>;
@@ -96,6 +106,7 @@ export async function startPluginServices(
     broadcastPluginEvent?: GatewayPluginEventBroadcastFn;
     getCronService?: () => PluginServiceCronHost | null | undefined;
     oneShotStopTimeouts?: { eventDrainMs: number; serviceStopMs: number };
+    observeProviderUsage?: ObserveProviderUsage;
     previous?: PluginServicesHandle | null;
   } & (
     | { throwOnStartError: true; onHandle: (handle: PluginServicesHandle) => void }
@@ -440,6 +451,9 @@ export async function startPluginServices(
       entry?.pluginId === entry?.service.id &&
       (entry?.service.id === "diagnostics-otel" || entry?.service.id === "diagnostics-prometheus");
     const isOtelExporter = isDiagnosticsExporter && entry.service.id === "diagnostics-otel";
+    const isPrometheusExporter =
+      isDiagnosticsExporter && entry.service.id === "diagnostics-prometheus";
+    const observeProviderUsage = params.observeProviderUsage;
     const grantsInternalDiagnostics =
       isDiagnosticsExporter &&
       (entry?.origin === "bundled" || entry?.trustedOfficialInstall === true);
@@ -476,6 +490,22 @@ export async function startPluginServices(
                 recordDiagnosticExporterHealth(entry.service.id, update);
               }
             },
+            ...(isPrometheusExporter && observeProviderUsage
+              ? {
+                  observeProviderUsage: async (listener: ProviderUsageMetricsListener) => {
+                    lease.assertActive("provider usage observer");
+                    const release = await observeProviderUsage({
+                      isActive: lease.isActive,
+                      listener: (snapshot) => {
+                        if (lease.isActive()) {
+                          listener(snapshot);
+                        }
+                      },
+                    });
+                    return lease.retain(release);
+                  },
+                }
+              : {}),
           }
         : undefined;
 

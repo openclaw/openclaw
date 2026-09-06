@@ -50,6 +50,7 @@ import {
   type GatewayStartupOutcomeRecorder,
 } from "./server-startup-outcomes.js";
 import { measureStartup, type GatewayStartupTrace } from "./server-startup-trace.js";
+import { observeGatewayProviderUsageMetrics } from "./provider-usage-metrics-observer.js";
 import {
   beginMacOSSystemCaWarmupOnce,
   type warmMacOSSystemCaOffMainThread,
@@ -737,6 +738,7 @@ export async function startGatewaySidecars(params: {
           startupTrace: params.startupTrace,
           broadcastPluginEvent: params.broadcastPluginEvent,
           getCronService: params.getCronService,
+          observeProviderUsage: observeGatewayProviderUsageMetrics,
           onHandle: (handle) => {
             resolvePluginServicesOwner?.(handle);
             resolvePluginServicesOwner = undefined;
