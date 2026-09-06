@@ -791,8 +791,8 @@ function recordServiceStop() {
     const metaFile = JSON.parse(fs.readFileSync(params.metaPath, "utf-8"));
     metaFile.meta.serviceStoppedAtMs ??= serviceStoppedAtMs;
     fs.writeFileSync(params.metaPath, JSON.stringify(metaFile), { mode: 0o600 });
-    runLedger?.recordUpdateRunPhase(params.runId, "activating", {
-      step: { step: "service-stop", status: "in_progress", startedAtMs: metaFile.meta.serviceStoppedAtMs },
+    runLedger?.recordUpdateRunStep(params.runId, {
+      step: "service-stop", status: "in_progress", startedAtMs: metaFile.meta.serviceStoppedAtMs,
     });
   } catch (error) {
     appendLog("could not record service stop time: " + String(error));
@@ -1155,7 +1155,7 @@ async function collectUpdateFailureTriage() {
       // Resolve the one ledger writer before READY and before package replacement
       // can remove its chunks. Missing support refuses admission without stopping the service.
       runLedger = await import(pathToFileURL(params.recoveryModulePath).href);
-      for (const name of ["finishUpdateRun", "recordUpdateRunPhase", "recordUpdateRunVerification"]) {
+      for (const name of ["finishUpdateRun", "recordUpdateRunStep", "recordUpdateRunVerification"]) {
         if (typeof runLedger[name] !== "function") throw new Error("managed update ledger writer is unavailable");
       }
     }
@@ -1251,8 +1251,8 @@ async function collectUpdateFailureTriage() {
     }
     clearTimeout(parentExitDeadline);
     const stopped = pendingServiceStop ? await pendingServiceStop : null;
-    if (stopped) runLedger?.recordUpdateRunPhase(params.runId, "activating", {
-      step: { step: "service-stop", status: stopped.code === 0 || (params.serviceRecovery?.kind === "launchd" && isLaunchdNotLoaded(stopped)) ? "completed" : "failed", endedAtMs: Date.now() },
+    if (stopped) runLedger?.recordUpdateRunStep(params.runId, {
+      step: "service-stop", status: stopped.code === 0 || (params.serviceRecovery?.kind === "launchd" && isLaunchdNotLoaded(stopped)) ? "completed" : "failed", endedAtMs: Date.now(),
     });
     if (stopped && stopped.code !== 0 && params.serviceRecovery?.kind === "launchd" &&
       !isLaunchdNotLoaded(stopped)) {

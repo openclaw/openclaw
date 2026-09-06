@@ -7,7 +7,11 @@ import { resolveDefaultSessionStorePath } from "../../config/sessions/paths.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { RestartSentinelPayload } from "../../infra/restart-sentinel.js";
-import { getUpdateRun, listUpdateRuns } from "../../infra/update-run-ledger.js";
+import {
+  getUpdateRun,
+  listUpdateRuns,
+  recordUpdateRunPhase,
+} from "../../infra/update-run-ledger.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
@@ -206,7 +210,7 @@ describe("update.run acknowledgement", () => {
     );
   });
 
-  it("records activation and awaits its notice before parking the managed gateway", async () => {
+  it("awaits one parking notice without advancing the updater phases", async () => {
     mockGlobalInstallSurface();
     detectRespawnSupervisorMock.mockReturnValue("launchd");
     getUpdateAvailableMock.mockReturnValue({
@@ -234,13 +238,21 @@ describe("update.run acknowledgement", () => {
     try {
       await Promise.race([started.promise, park]);
       expect(sendGatewayLifecycleNoticeMock).toHaveBeenCalledTimes(2);
-      expect(getUpdateRun(response.runId)?.phase).toBe("activating");
+      expect(getUpdateRun(response.runId)?.phase).toBe("requested");
       expect(parked).toBe(false);
     } finally {
       delivered.resolve(true);
     }
     await park;
     await beforePark();
+    expect(getUpdateRun(response.runId)?.phase).toBe("requested");
+    recordUpdateRunPhase(response.runId, "staging");
+    const validating = recordUpdateRunPhase(response.runId, "validating");
+    expect(
+      validating.steps
+        .filter(({ step }) => ["requested", "staging", "validating"].includes(step))
+        .map(({ step }) => step),
+    ).toEqual(["requested", "staging", "validating"]);
     expect(sendGatewayLifecycleNoticeMock).toHaveBeenCalledTimes(2);
     expect(sendGatewayLifecycleNoticeMock).toHaveBeenLastCalledWith(
       expect.objectContaining({
