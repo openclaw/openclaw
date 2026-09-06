@@ -20,6 +20,26 @@ OpenClaw stores control-plane state in a global SQLite database and agent data i
 
 The task registry uses the global control-plane database. Runtime trajectory events live with their sessions in the per-agent database or a configured shared session SQLite store.
 
+### ACP replay accounting
+
+The shared `acp_replay_sessions` and `acp_replay_events` tables retain bridge
+replay history. Their `estimated_bytes` columns count the UTF-8 bytes of each
+persisted text field, plus 32 bytes per row. Session totals include their events.
+This is a retained-content estimate, not a limit on SQLite file, page, or WAL size.
+
+Older releases counted characters inconsistently, undercounting Unicode and
+allowing unchanged metadata writes to drift. The existing app-version upgrade
+repair and explicit shared-state schema repair rebuild all derived totals
+atomically, preserving event JSON text, identifiers, timestamps, and sequence.
+Repair does not prune history. The next ordinary session write applies the
+existing caps and eviction order, so corrected Unicode history may trim sooner
+and use transcript fallback when loaded.
+
+A current-app-version reopen skips this repair. Replacing code without changing
+the app version does not repair an already-open or current-version database;
+explicit schema repair remains the repair owner for that case. Accounting repair
+cannot recover history already evicted by an older writer. See [ACP CLI](/cli/acp).
+
 ### Meeting transcript tables
 
 Meeting captures use three `STRICT` tables in the shared
