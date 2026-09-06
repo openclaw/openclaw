@@ -25,14 +25,27 @@ export class CriticalObserverNoticeTracker {
   record(params: {
     sessionKey: string;
     agentId?: string;
+    runId?: string;
     health: string;
     revision: number;
   }): boolean {
     const sessionKey = normalizeSessionKeyForUiComparison(params.sessionKey);
-    const key =
+    const base =
       isUiGlobalSessionKey(sessionKey) && params.agentId
         ? `${sessionKey}:${normalizeAgentId(params.agentId)}`
         : sessionKey;
+    const runId = params.runId?.trim() ? params.runId.trim() : "";
+    // ponytail: O(n≤256) purge of stale generations; index by session if resets get hot.
+    const scopePrefix = `${JSON.stringify([base]).slice(0, -1)},`;
+    const key = runId ? `${scopePrefix}${JSON.stringify(runId)}]` : base;
+    if (runId) {
+      for (const existing of this.seen.keys()) {
+        if (existing !== key && existing.startsWith(scopePrefix)) {
+          this.seen.delete(existing);
+        }
+      }
+      this.seen.delete(base);
+    }
     const previous = this.seen.get(key);
     // Gateway revision floors keep revisions session-monotonic across run
     // rollover, so a gap reliably means this connection missed digest state.
@@ -82,6 +95,7 @@ export function showCriticalSessionObserverNotice(params: {
   const shouldAnnounce = params.tracker.record({
     sessionKey,
     agentId: digest.agentId,
+    runId: typeof digest.runId === "string" ? digest.runId : undefined,
     health: digest.health,
     revision,
   });
