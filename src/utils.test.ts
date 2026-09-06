@@ -118,6 +118,17 @@ describe("sleep", () => {
     expect(error).toMatchObject({ name: "AbortError", message: "aborted", cause: reason });
     expect(isAbortError(error)).toBe(true);
   });
+
+  it("clamps negative delay to zero", async () => {
+    vi.useFakeTimers();
+    try {
+      const promise = sleep(-100);
+      vi.advanceTimersByTime(0);
+      await expect(promise).resolves.toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe("normalizeE164", () => {
