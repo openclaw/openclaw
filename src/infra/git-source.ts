@@ -17,17 +17,20 @@ export async function acquireGitSource(params: {
   ref?: string;
   refMode: "detached" | "resolve-remote" | "shallow-branch";
   timeoutMs?: number;
+  signal?: AbortSignal;
   commandEnv?: () => { baseEnv?: NodeJS.ProcessEnv; env?: NodeJS.ProcessEnv };
   cloneSeparator?: boolean;
   recordCommit?: boolean;
   formatFailure?: (failure: GitSourceFailure) => string;
   cleanupOnFailure?: () => Promise<void>;
 }): Promise<{ ok: true; commit?: string } | { ok: false; error: string }> {
+  params.signal?.throwIfAborted();
   const run = (argv: string[], cwd?: string) =>
     runCommandWithTimeout(argv, {
       ...params.commandEnv?.(),
       ...(cwd ? { cwd } : {}),
       timeoutMs: params.timeoutMs ?? 120_000,
+      ...(params.signal ? { signal: params.signal } : {}),
     });
   const failure = async (details: GitSourceFailure) => {
     await params.cleanupOnFailure?.();
@@ -59,6 +62,7 @@ export async function acquireGitSource(params: {
   }
   argv.push(params.url, params.repoDir);
   const clone = await run(argv);
+  params.signal?.throwIfAborted();
   if (clone.code !== 0) {
     return await failure({ action: "clone", ...clone });
   }
@@ -87,6 +91,7 @@ export async function acquireGitSource(params: {
       checkoutRef = commitish;
     }
     const checkout = await run(["git", "switch", "--detach", "--", checkoutRef], params.repoDir);
+    params.signal?.throwIfAborted();
     if (checkout.code !== 0) {
       return await failure({ action: "checkout", ...checkout });
     }
@@ -96,6 +101,7 @@ export async function acquireGitSource(params: {
     return { ok: true };
   }
   const rev = await run(["git", "rev-parse", "HEAD"], params.repoDir);
+  params.signal?.throwIfAborted();
   if (rev.code !== 0) {
     return await failure({ action: "resolve commit for", ...rev });
   }

@@ -62,6 +62,7 @@ function pickPackageInstallCommonParams(
     onBeforePluginArtifactCommit: params.onBeforePluginArtifactCommit,
     beforePersistentApply: params.beforePersistentApply,
     onEffectiveMode: params.onEffectiveMode,
+    ...(params.signal ? { signal: params.signal } : {}),
   });
 }
 
@@ -95,7 +96,9 @@ async function installBundleFromSourceDir(
     sourceDir: string;
   } & InternalPackageInstallCommonParams,
 ): Promise<InstallPluginResult | null> {
+  params.signal?.throwIfAborted();
   const runtime = await loadPluginInstallRuntime();
+  params.signal?.throwIfAborted();
   const bundleFormat = runtime.detectBundleManifestFormat(params.sourceDir);
   if (!bundleFormat) {
     return null;
@@ -175,6 +178,7 @@ async function installBundleFromSourceDir(
         version: manifestRes.manifest.version,
       }),
   });
+  params.signal?.throwIfAborted();
   if (scanResult) {
     return scanResult;
   }
@@ -195,6 +199,7 @@ async function installBundleFromSourceDir(
       copyErrorPrefix: "failed to copy plugin bundle",
       hasDeps: false,
       depsLogMessage: "",
+      ...(params.signal ? { signal: params.signal } : {}),
       onBeforePluginArtifactCommit: params.onBeforePluginArtifactCommit,
       beforePersistentApply: params.beforePersistentApply,
     }),
@@ -222,7 +227,9 @@ async function installPluginFromSourceDir(
     sourceDir: string;
   } & InternalPackageInstallCommonParams,
 ): Promise<InstallPluginResult> {
+  params.signal?.throwIfAborted();
   const nativePackageManifest = await detectNativePackageInstallSource(params.sourceDir);
+  params.signal?.throwIfAborted();
   if (nativePackageManifest) {
     return withArtifactInspection(
       await installPluginFromPackageDir({
@@ -237,6 +244,7 @@ async function installPluginFromSourceDir(
     sourceDir: params.sourceDir,
     ...pickPackageInstallCommonParams(params),
   });
+  params.signal?.throwIfAborted();
   if (bundleResult) {
     return bundleResult;
   }
@@ -264,7 +272,9 @@ async function installPluginFromPackageDir(
     packageManifest?: PackageManifest;
   } & InternalPackageInstallCommonParams,
 ): Promise<InstallPluginResult> {
+  params.signal?.throwIfAborted();
   const runtime = await loadPluginInstallRuntime();
+  params.signal?.throwIfAborted();
   const { logger, timeoutMs, mode, dryRun } = runtime.resolveTimedInstallModeOptions(
     params,
     defaultLogger,
@@ -303,12 +313,14 @@ async function installPluginFromPackageDir(
     resolveEffectiveMode: async (pluginId) =>
       (await resolvePreparedTargetForPluginId(pluginId)).effectiveMode,
   });
+  params.signal?.throwIfAborted();
   if (!validated.ok) {
     return validated;
   }
   const { plugin } = validated;
 
   preparedTarget = await resolvePreparedTargetForPluginId(plugin.pluginId);
+  params.signal?.throwIfAborted();
   const effectiveMode = preparedTarget.effectiveMode;
   params.onEffectiveMode?.(effectiveMode);
   const shouldInstallRuntimeDeps =
@@ -333,6 +345,7 @@ async function installPluginFromPackageDir(
       sourceHardlinks: shouldInstallRuntimeDeps ? "package-manager" : "reject",
       depsLogMessage: "Installing plugin dependencies…",
       nameEncoder: encodePluginInstallDirName,
+      ...(params.signal ? { signal: params.signal } : {}),
       onBeforePluginArtifactCommit: params.onBeforePluginArtifactCommit,
       beforePersistentApply: params.beforePersistentApply,
       afterInstall: async (installedDir) => {
@@ -362,7 +375,9 @@ export async function installPluginFromArchive(
     archivePath: string;
   } & PackageInstallCommonParams,
 ): Promise<InstallPluginResult> {
+  params.signal?.throwIfAborted();
   const runtime = await loadPluginInstallRuntime();
+  params.signal?.throwIfAborted();
   const logger = params.logger ?? defaultLogger;
   const timeoutMs = params.timeoutMs ?? 120_000;
   const mode = params.mode ?? "install";
@@ -372,6 +387,7 @@ export async function installPluginFromArchive(
     source: localPluginInstallPolicySource("plugin-archive"),
   };
   const archivePathResult = await runtime.resolveArchiveSourcePath(params.archivePath);
+  params.signal?.throwIfAborted();
   if (!archivePathResult.ok) {
     return archivePathResult;
   }
@@ -384,6 +400,7 @@ export async function installPluginFromArchive(
     timeoutMs,
     logger,
     rootMarkers: PLUGIN_ARCHIVE_ROOT_MARKERS,
+    ...(params.signal ? { signal: params.signal } : {}),
     onExtracted: async (sourceDir) =>
       await installPluginFromSourceDir({
         sourceDir,

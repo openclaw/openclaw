@@ -295,19 +295,23 @@ async function replaceManagedGitRepo(params: {
   stagedRepoDir: string;
   persistentRepoDir: string;
   deferCommit?: boolean;
+  signal?: AbortSignal;
   onBeforePublish?: (stagedRepoDir: string) => Promise<void>;
   beforePersistentApply?: () => void;
   assertOwned?: () => void;
 }): Promise<{ ok: true; transaction?: PluginInstallTransaction } | { ok: false; error: string }> {
+  params.signal?.throwIfAborted();
   let artifactConsentFailure: { error: unknown } | undefined;
   const reviewFinalArtifact = async (stagedRepoDir: string) => {
+    params.signal?.throwIfAborted();
     try {
       await params.onBeforePublish?.(stagedRepoDir);
-      return { ok: true as const };
     } catch (error) {
       artifactConsentFailure = { error };
       throw error;
     }
+    params.signal?.throwIfAborted();
+    return { ok: true as const };
   };
   try {
     const installParams = {
@@ -323,6 +327,7 @@ async function replaceManagedGitRepo(params: {
       // Publication copies the clone again; review that final copy.
       afterInstall: reviewFinalArtifact,
       beforePersistentApply: params.beforePersistentApply,
+      ...(params.signal ? { signal: params.signal } : {}),
     };
     const result = await installPackageDir(
       params.deferCommit
@@ -335,6 +340,7 @@ async function replaceManagedGitRepo(params: {
     const transaction = result.ok ? resolvePackageDirInstallTransaction(result) : undefined;
     return result.ok ? { ok: true, ...(transaction ? { transaction } : {}) } : result;
   } catch (err) {
+    params.signal?.throwIfAborted();
     if (artifactConsentFailure) {
       throw artifactConsentFailure.error;
     }
@@ -404,6 +410,7 @@ export async function installPluginFromGitSpec(
       refMode: "resolve-remote",
       timeoutMs: params.timeoutMs,
       commandEnv: () => ({ env: createGitCommandEnv() }),
+      ...(params.signal ? { signal: params.signal } : {}),
     });
     if (!acquired.ok) {
       return acquired;
@@ -464,6 +471,7 @@ export async function installPluginFromGitSpec(
             packageLock: true,
             quiet: true,
           }),
+          ...(params.signal ? { signal: params.signal } : {}),
         },
       );
       if (install.code !== 0) {
@@ -484,7 +492,9 @@ export async function installPluginFromGitSpec(
       mode: effectiveMode,
       emitSuccessSecurityEvent: false,
       installPolicyRequest,
+      ...(params.signal ? { signal: params.signal } : {}),
     });
+    params.signal?.throwIfAborted();
     if (!result.ok) {
       return result;
     }
@@ -496,6 +506,7 @@ export async function installPluginFromGitSpec(
         persistentRepoDir,
         deferCommit: transactionRequest?.deferCommit,
         assertOwned: transactionRequest?.assertOwned,
+        ...(params.signal ? { signal: params.signal } : {}),
         onBeforePublish: async (stagedArtifactDir) => {
           await params.onBeforePluginArtifactCommit?.({
             pluginId: result.pluginId,

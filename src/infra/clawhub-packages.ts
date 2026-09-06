@@ -342,6 +342,7 @@ export async function fetchClawHubPackageDetail(params: {
   baseUrl?: string;
   token?: string;
   timeoutMs?: number;
+  signal?: AbortSignal;
   fetchImpl?: ClawHubFetch;
 }): Promise<ClawHubPackageDetail> {
   return await fetchClawHubJson<ClawHubPackageDetail>({
@@ -349,6 +350,7 @@ export async function fetchClawHubPackageDetail(params: {
     path: `/api/v1/packages/${encodeURIComponent(params.name)}`,
     token: params.token,
     timeoutMs: params.timeoutMs,
+    ...(params.signal ? { signal: params.signal } : {}),
     fetchImpl: params.fetchImpl,
   });
 }
@@ -359,6 +361,7 @@ export async function fetchClawHubPackageVersion(params: {
   baseUrl?: string;
   token?: string;
   timeoutMs?: number;
+  signal?: AbortSignal;
   fetchImpl?: ClawHubFetch;
 }): Promise<ClawHubPackageVersion> {
   return await fetchClawHubJson<ClawHubPackageVersion>({
@@ -368,6 +371,7 @@ export async function fetchClawHubPackageVersion(params: {
     )}`,
     token: params.token,
     timeoutMs: params.timeoutMs,
+    ...(params.signal ? { signal: params.signal } : {}),
     fetchImpl: params.fetchImpl,
   });
 }
@@ -378,6 +382,7 @@ export async function fetchClawHubPackageArtifact(params: {
   baseUrl?: string;
   token?: string;
   timeoutMs?: number;
+  signal?: AbortSignal;
   fetchImpl?: ClawHubFetch;
 }): Promise<ClawHubPackageArtifactResolverResponse> {
   return await fetchClawHubJson<ClawHubPackageArtifactResolverResponse>({
@@ -387,6 +392,7 @@ export async function fetchClawHubPackageArtifact(params: {
     )}/artifact`,
     token: params.token,
     timeoutMs: params.timeoutMs,
+    ...(params.signal ? { signal: params.signal } : {}),
     fetchImpl: params.fetchImpl,
   });
 }
@@ -397,6 +403,7 @@ export async function fetchClawHubPackageSecurity(params: {
   baseUrl?: string;
   token?: string;
   timeoutMs?: number;
+  signal?: AbortSignal;
   fetchImpl?: ClawHubFetch;
 }): Promise<ClawHubPackageSecurityResponse> {
   const response = await fetchClawHubJson<unknown>({
@@ -406,6 +413,7 @@ export async function fetchClawHubPackageSecurity(params: {
     )}/security`,
     token: params.token,
     timeoutMs: params.timeoutMs,
+    ...(params.signal ? { signal: params.signal } : {}),
     fetchImpl: params.fetchImpl,
   });
   return parseClawHubPackageSecurityResponse(response);

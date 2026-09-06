@@ -7,11 +7,10 @@ import { hasHttpUrlPrefix } from "@openclaw/net-policy/url-protocol";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { resolveArchiveKind } from "../infra/archive.js";
-import { formatErrorMessage } from "../infra/errors.js";
+import { formatErrorMessage, toErrorObject } from "../infra/errors.js";
 import { pathExists } from "../infra/fs-safe.js";
 import { acquireGitSource } from "../infra/git-source.js";
 import { resolveOsHomeRelativePath } from "../infra/home-dir.js";
-import { readChunkWithIdleTimeout } from "../infra/http-response-body-timeout.js";
 import { tryReadJson } from "../infra/json-files.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import { isPathInside } from "../infra/path-guards.js";
@@ -527,6 +526,7 @@ async function cloneMarketplaceRepo(params: {
   source: string;
   timeoutMs?: number;
   logger?: MarketplaceLogger;
+  signal?: AbortSignal;
 }): Promise<
   | { ok: true; rootDir: string; cleanup: () => Promise<void>; label: string; ref?: string }
   | { ok: false; error: string }
@@ -547,6 +547,7 @@ async function cloneMarketplaceRepo(params: {
     repoDir,
     refMode: isImmutableGitCommitRef(normalized.ref) ? "detached" : "shallow-branch",
     timeoutMs: params.timeoutMs,
+    ...(params.signal ? { signal: params.signal } : {}),
     cloneSeparator: false,
     recordCommit: false,
     cleanupOnFailure: cleanup,
@@ -572,7 +573,9 @@ async function loadMarketplace(params: {
   source: string;
   logger?: MarketplaceLogger;
   timeoutMs?: number;
+  signal?: AbortSignal;
 }): Promise<{ ok: true; marketplace: LoadedMarketplace } | { ok: false; error: string }> {
+  params.signal?.throwIfAborted();
   const loadMarketplaceFromManifestFile = async (paramsLocal: {
     manifestPath: string;
     sourceLabel: string;
@@ -699,6 +702,7 @@ async function loadMarketplace(params: {
     source,
     timeoutMs: params.timeoutMs,
     logger: params.logger,
+    ...(params.signal ? { signal: params.signal } : {}),
   });
   if (!cloned.ok) {
     return cloned;
@@ -775,6 +779,62 @@ function parseMarketplaceContentLength(raw: string): number {
   return size;
 }
 
+async function readMarketplaceChunkWithTimeout(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  chunkTimeoutMs: number,
+  signal?: AbortSignal,
+): Promise<Awaited<ReturnType<typeof reader.read>>> {
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  let terminated = false;
+
+  return await new Promise((resolve, reject) => {
+    const clear = () => {
+      if (timeoutId !== undefined) {
+        clearTimeout(timeoutId);
+        timeoutId = undefined;
+      }
+    };
+
+    const abort = () => {
+      terminated = true;
+      clear();
+      void reader.cancel().catch(() => undefined);
+      reject(toErrorObject(signal?.reason, "marketplace download aborted"));
+    };
+
+    if (signal?.aborted) {
+      abort();
+      return;
+    }
+    signal?.addEventListener("abort", abort, { once: true });
+
+    timeoutId = setTimeout(() => {
+      terminated = true;
+      clear();
+      signal?.removeEventListener("abort", abort);
+      void reader.cancel().catch(() => undefined);
+      reject(new Error(`download timed out after ${chunkTimeoutMs}ms`));
+    }, chunkTimeoutMs);
+
+    void reader.read().then(
+      (result) => {
+        clear();
+        signal?.removeEventListener("abort", abort);
+        if (!terminated) {
+          resolve(result);
+        }
+      },
+      (err: unknown) => {
+        clear();
+        signal?.removeEventListener("abort", abort);
+        if (!terminated) {
+          reject(toErrorObject(err, "Non-Error rejection"));
+        }
+      },
+    );
+  });
+}
+
 async function writeMarketplaceChunk(
   fileHandle: Awaited<ReturnType<typeof fs.open>>,
   chunk: Uint8Array,
@@ -794,6 +854,7 @@ async function streamMarketplaceResponseToFile(params: {
   targetPath: string;
   maxBytes: number;
   chunkTimeoutMs: number;
+  signal?: AbortSignal;
 }): Promise<void> {
   const reader = params.response.body.getReader();
   const fileHandle = await fs.open(params.targetPath, "wx");
@@ -801,10 +862,10 @@ async function streamMarketplaceResponseToFile(params: {
 
   try {
     while (true) {
-      const { done, value } = await readChunkWithIdleTimeout(
+      const { done, value } = await readMarketplaceChunkWithTimeout(
         reader,
         params.chunkTimeoutMs,
-        ({ chunkTimeoutMs }) => new Error(`download timed out after ${chunkTimeoutMs}ms`),
+        params.signal,
       );
       if (done) {
         return;
@@ -837,6 +898,7 @@ async function streamMarketplaceResponseToFile(params: {
 async function downloadUrlToTempFile(
   url: string,
   timeoutMs?: number,
+  signal?: AbortSignal,
 ): Promise<
   | {
       ok: true;
@@ -856,6 +918,7 @@ async function downloadUrlToTempFile(
     const { response, finalUrl, release } = await fetchWithSsrFGuard({
       url,
       timeoutMs: downloadTimeoutMs,
+      ...(signal ? { signal } : {}),
       auditContext: "marketplace-plugin-download",
     });
     try {
@@ -911,6 +974,7 @@ async function downloadUrlToTempFile(
         targetPath,
         maxBytes: MAX_MARKETPLACE_ARCHIVE_BYTES,
         chunkTimeoutMs: downloadTimeoutMs,
+        ...(signal ? { signal } : {}),
       });
       return {
         ok: true,
@@ -1055,6 +1119,7 @@ async function resolveMarketplaceEntryInstallPath(params: {
   marketplaceOrigin: MarketplaceManifestOrigin;
   logger?: MarketplaceLogger;
   timeoutMs?: number;
+  signal?: AbortSignal;
 }): Promise<
   | {
       ok: true;
@@ -1069,7 +1134,7 @@ async function resolveMarketplaceEntryInstallPath(params: {
   if (params.source.kind === "path") {
     if (hasHttpUrlPrefix(params.source.path)) {
       if (resolveArchiveKind(params.source.path)) {
-        return await downloadUrlToTempFile(params.source.path, params.timeoutMs);
+        return await downloadUrlToTempFile(params.source.path, params.timeoutMs, params.signal);
       }
       return {
         ok: false,
@@ -1104,6 +1169,7 @@ async function resolveMarketplaceEntryInstallPath(params: {
       source: sourceSpec,
       timeoutMs: params.timeoutMs,
       logger: params.logger,
+      ...(params.signal ? { signal: params.signal } : {}),
     });
     if (!cloned.ok) {
       return cloned;
@@ -1128,7 +1194,7 @@ async function resolveMarketplaceEntryInstallPath(params: {
   }
 
   if (resolveArchiveKind(params.source.url)) {
-    return await downloadUrlToTempFile(params.source.url, params.timeoutMs);
+    return await downloadUrlToTempFile(params.source.url, params.timeoutMs, params.signal);
   }
 
   if (!normalizeGitCloneSource(params.source.url)) {
@@ -1142,6 +1208,7 @@ async function resolveMarketplaceEntryInstallPath(params: {
     source: params.source.url,
     timeoutMs: params.timeoutMs,
     logger: params.logger,
+    ...(params.signal ? { signal: params.signal } : {}),
   });
   if (!cloned.ok) {
     return cloned;
@@ -1237,10 +1304,12 @@ export async function installPluginFromMarketplace(
     beforePersistentApply?: () => void;
   },
 ): Promise<MarketplaceInstallResult> {
+  params.signal?.throwIfAborted();
   const loaded = await loadMarketplace({
     source: params.marketplace,
     logger: params.logger,
     timeoutMs: params.timeoutMs,
+    ...(params.signal ? { signal: params.signal } : {}),
   });
   if (!loaded.ok) {
     return loaded;
@@ -1248,6 +1317,7 @@ export async function installPluginFromMarketplace(
 
   let installCleanup: (() => Promise<void>) | undefined;
   try {
+    params.signal?.throwIfAborted();
     const entry = loaded.marketplace.manifest.plugins.find(
       (plugin) => plugin.name === params.plugin,
     );
@@ -1267,6 +1337,7 @@ export async function installPluginFromMarketplace(
       marketplaceOrigin: loaded.marketplace.origin,
       logger: params.logger,
       timeoutMs: params.timeoutMs,
+      ...(params.signal ? { signal: params.signal } : {}),
     });
     if (!resolved.ok) {
       return resolved;
@@ -1286,6 +1357,7 @@ export async function installPluginFromMarketplace(
         expectedPluginId: params.expectedPluginId,
         onBeforePluginArtifactCommit: params.onBeforePluginArtifactCommit,
         beforePersistentApply: params.beforePersistentApply,
+        ...(params.signal ? { signal: params.signal } : {}),
         installPolicyRequest: {
           kind: marketplaceInstallPolicyRequestKind({
             marketplaceOrigin: loaded.marketplace.origin,
