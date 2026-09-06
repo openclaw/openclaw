@@ -2,6 +2,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { emitInboundMessageAuditTerminal } from "../../auto-reply/reply/dispatch-from-config.audit.js";
 import {
+  beginReplyMessageInjectionTarget,
   finalizeReplyMessageInjectionAttempt,
   type ReplyMessageInjectionTarget,
 } from "../../auto-reply/reply/reply-run-registry.js";
@@ -10,9 +11,14 @@ import {
   updateSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import { logMessageProcessed } from "../../logging/diagnostic.js";
+import type { SteerDocumentContext } from "../../media-understanding/apply.js";
 import { prepareSessionParticipantInput } from "../../sessions/session-participant-input.js";
+import type { ChatImageContent } from "../chat-attachments.js";
 import { broadcastChatError, broadcastChatFinal } from "./chat-broadcast.js";
-import { finalizeAcceptedChatSendMessageInjection } from "./chat-send-message-injection.js";
+import {
+  createChatSendMessageInjectionStarter,
+  finalizeAcceptedChatSendMessageInjection,
+} from "./chat-send-message-injection.js";
 import type { GatewayRequestContext } from "./types.js";
 
 vi.mock("../../auto-reply/reply/dispatch-from-config.audit.js", () => ({
@@ -146,5 +152,141 @@ describe("finalizeAcceptedChatSendMessageInjection", () => {
         terminal: { outcome: "skipped", options: { reason: "reply_operation_aborted" } },
       }),
     );
+  });
+});
+
+describe("createChatSendMessageInjectionStarter", () => {
+  function makeStarterParams(params?: {
+    body?: string;
+    rawMessage?: string;
+    documentContext?: SteerDocumentContext;
+    replyOptionImages?: ChatImageContent[];
+    isInternalTextSlashCommandTurn?: boolean;
+  }) {
+    return {
+      target: {} as ReplyMessageInjectionTarget,
+      request: {
+        p: {},
+        rawMessage: params?.rawMessage ?? "raw steer",
+        supportsTaskSuggestions: false,
+      },
+      session: { cfg: {}, entry: undefined },
+      turn: {
+        ctx: { Provider: "dashboard", Body: params?.body },
+        isInternalTextSlashCommandTurn: params?.isInternalTextSlashCommandTurn ?? false,
+        replyOptionImages: params?.replyOptionImages ?? [],
+        replyOptionMedia: [],
+      },
+      imageOrder: [],
+      ...(params?.documentContext ? { documentContext: params.documentContext } : {}),
+      userTurnTranscriptRecorder: vi.fn(),
+    } as unknown as Parameters<typeof createChatSendMessageInjectionStarter>[0];
+  }
+
+  it("appends document context to the injected steer text", () => {
+    vi.mocked(beginReplyMessageInjectionTarget).mockReturnValueOnce({} as never);
+    createChatSendMessageInjectionStarter(
+      makeStarterParams({
+        body: "see attached",
+        documentContext: {
+          text: '<file name="note.txt" mime="text/plain">doc body</file>',
+          images: [],
+        },
+      }),
+    )();
+
+    expect(beginReplyMessageInjectionTarget).toHaveBeenCalledWith(
+      expect.anything(),
+      'see attached\n\n<file name="note.txt" mime="text/plain">doc body</file>',
+      expect.objectContaining({ isInboundUserMessage: true }),
+    );
+  });
+
+  it("keeps the base text untouched when no document context was rendered", () => {
+    vi.mocked(beginReplyMessageInjectionTarget).mockReturnValueOnce({} as never);
+    createChatSendMessageInjectionStarter(makeStarterParams({ body: "plain steer" }))();
+
+    expect(beginReplyMessageInjectionTarget).toHaveBeenCalledWith(
+      expect.anything(),
+      "plain steer",
+      expect.anything(),
+    );
+  });
+
+  it("injects document context alone when the steer carries no text", () => {
+    vi.mocked(beginReplyMessageInjectionTarget).mockReturnValueOnce({} as never);
+    createChatSendMessageInjectionStarter(
+      makeStarterParams({
+        rawMessage: "",
+        documentContext: { text: '<file name="note.txt" mime="text/plain">x</file>', images: [] },
+      }),
+    )();
+
+    expect(beginReplyMessageInjectionTarget).toHaveBeenCalledWith(
+      expect.anything(),
+      '<file name="note.txt" mime="text/plain">x</file>',
+      expect.anything(),
+    );
+  });
+
+  it("merges extracted page images after the prepared inbound images", () => {
+    vi.mocked(beginReplyMessageInjectionTarget).mockReturnValueOnce({} as never);
+    createChatSendMessageInjectionStarter(
+      makeStarterParams({
+        body: "see attached",
+        replyOptionImages: [
+          { type: "image", data: "inbound-photo", mimeType: "image/png", sourceIndex: 0 },
+        ],
+        documentContext: {
+          text: "[PDF content rendered to images]",
+          images: [
+            { type: "image", data: "page-1", mimeType: "image/png", attachmentIndex: 1 },
+            { type: "image", data: "page-2", mimeType: "image/png", attachmentIndex: 1 },
+          ],
+        },
+      }),
+    )();
+
+    expect(beginReplyMessageInjectionTarget).toHaveBeenCalledWith(
+      expect.anything(),
+      "see attached\n\n[PDF content rendered to images]",
+      expect.objectContaining({
+        images: [
+          { type: "image", data: "inbound-photo", mimeType: "image/png", sourceIndex: 0 },
+          { type: "image", data: "page-1", mimeType: "image/png", sourceIndex: 1 },
+          { type: "image", data: "page-2", mimeType: "image/png", sourceIndex: 1 },
+        ],
+      }),
+    );
+  });
+
+  it("injects extracted page images when the steer carries no inbound images", () => {
+    vi.mocked(beginReplyMessageInjectionTarget).mockReturnValueOnce({} as never);
+    createChatSendMessageInjectionStarter(
+      makeStarterParams({
+        body: "scan attached",
+        documentContext: {
+          text: "[PDF content rendered to images]",
+          images: [{ type: "image", data: "page-1", mimeType: "image/png", attachmentIndex: 0 }],
+        },
+      }),
+    )();
+
+    expect(beginReplyMessageInjectionTarget).toHaveBeenCalledWith(
+      expect.anything(),
+      "scan attached\n\n[PDF content rendered to images]",
+      expect.objectContaining({
+        images: [{ type: "image", data: "page-1", mimeType: "image/png", sourceIndex: 0 }],
+      }),
+    );
+  });
+
+  it("returns undefined for internal slash-command turns even with a target", () => {
+    expect(
+      createChatSendMessageInjectionStarter(
+        makeStarterParams({ isInternalTextSlashCommandTurn: true }),
+      )(),
+    ).toBeUndefined();
+    expect(beginReplyMessageInjectionTarget).not.toHaveBeenCalled();
   });
 });

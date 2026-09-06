@@ -10,15 +10,18 @@ import {
   type SessionGoalOperationResult,
 } from "../../config/sessions/goals-operations.js";
 import type { PrepareAssistantTranscriptMessage } from "../../config/sessions/transcript-assistant-delivery.js";
+import { logVerbose } from "../../globals.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { clearAgentRunContext } from "../../infra/agent-run-registry.js";
 import { emitDiagnosticsTimelineEvent } from "../../infra/diagnostics-timeline.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import {
   recordSessionCreated,
   recordSessionGoalChanged,
 } from "../../sessions/session-state-events.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { extractTextFromChatContent } from "../../shared/chat-content.js";
+import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { SkillWorkshopProposalRevisionConstraint } from "../../skills/workshop/types.js";
 import { isOperatorUiClient } from "../../utils/message-channel.js";
 import { discardPreparedInboundMedia } from "../chat-attachments.js";
@@ -64,6 +67,13 @@ type ChatSendInternalOptions = {
   toolsAllow?: string[];
   skillWorkshopProposalRevision?: SkillWorkshopProposalRevisionConstraint;
 };
+
+// Document rendering is only needed for a steered attachment; loading it
+// eagerly would pull the media provider registry and its plugin graph into
+// every chat.send handler load. The .runtime facade is the lazy boundary.
+const mediaDocumentContextLoader = createLazyImportLoader(
+  () => import("../../media-understanding/apply.runtime.js"),
+);
 
 async function handleChatSendWithOptions(
   {
@@ -382,6 +392,28 @@ async function handleChatSendWithOptions(
         client?.internal?.syntheticClient ? undefined : client?.authenticatedUserProfile?.profileId,
       );
     }
+    // Steer targets never reach reply dispatch, so document attachments would
+    // otherwise reach the active run as bare media facts. Render their context
+    // up front. A failed lazy load or render must not abort a steerable
+    // message: normal reply dispatch tolerates media-understanding failures by
+    // proceeding with the raw content, so steer injection keeps the same
+    // contract and falls back to the original text.
+    const steerDocumentContext =
+      messageInjectionTarget && !isInternalTextSlashCommandTurn
+        ? await mediaDocumentContextLoader
+            .load()
+            .then((runtime) =>
+              runtime.renderInboundDocumentContext({ ctx, cfg: preparedSession.value.cfg }),
+            )
+            .catch((err: unknown) => {
+              // A poisoned lazy import must not be served to later steers.
+              mediaDocumentContextLoader.clear();
+              logVerbose(
+                `steer document render failed, injecting raw content: ${formatErrorMessage(err)}`,
+              );
+              return undefined;
+            })
+        : undefined;
     const beginCapturedMessageInjection = createChatSendMessageInjectionStarter({
       target: messageInjectionTarget,
       request: normalizedRequest.value,
@@ -389,6 +421,7 @@ async function handleChatSendWithOptions(
       admittedSessionSettings: admitted.value.admittedSessionSettings,
       turn: preparedUserTurn,
       imageOrder,
+      documentContext: steerDocumentContext,
       userTurnTranscriptRecorder: userTurnRecorder,
     });
     const preAckReplyContextPromise =
