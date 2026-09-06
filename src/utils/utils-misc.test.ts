@@ -12,6 +12,19 @@ describe("asBoolean", () => {
     expect(asBoolean("true")).toBeUndefined();
     expect(asBoolean(1)).toBeUndefined();
   });
+
+  it.each([
+    { value: "true", reason: "string" },
+    { value: "false", reason: "string" },
+    { value: 1, reason: "number" },
+    { value: 0, reason: "number" },
+    { value: null, reason: "null" },
+    { value: undefined, reason: "undefined" },
+    { value: {}, reason: "object" },
+    { value: [], reason: "array" },
+  ])("returns undefined for $reason input", ({ value }) => {
+    expect(asBoolean(value)).toBeUndefined();
+  });
 });
 
 describe("parseBooleanValue", () => {
@@ -50,6 +63,33 @@ describe("parseBooleanValue", () => {
     expect(parseBooleanValue("")).toBeUndefined();
     expect(parseBooleanValue("maybe")).toBeUndefined();
     expect(parseBooleanValue(1)).toBeUndefined();
+  });
+
+  it.each([
+    { input: "TRUE", expected: true, reason: "uppercase truthy" },
+    { input: "True", expected: true, reason: "mixed case truthy" },
+    { input: "FALSE", expected: false, reason: "uppercase falsy" },
+    { input: "False", expected: false, reason: "mixed case falsy" },
+  ])("returns $expected for '$input' ($reason)", ({ input, expected }) => {
+    expect(parseBooleanValue(input)).toBe(expected);
+  });
+
+  it.each([
+    { input: "maybe", reason: "ambiguous string" },
+    { input: "", reason: "empty string" },
+    { input: "   ", reason: "whitespace only" },
+    { input: 1, reason: "number" },
+    { input: null, reason: "null" },
+    { input: undefined, reason: "undefined" },
+    { input: {}, reason: "object" },
+  ])("returns undefined for $reason input", ({ input }) => {
+    expect(parseBooleanValue(input)).toBeUndefined();
+  });
+
+  it("uses custom truthy and falsy literals", () => {
+    expect(parseBooleanValue("y", { truthy: ["y"], falsy: ["n"] })).toBe(true);
+    expect(parseBooleanValue("n", { truthy: ["y"], falsy: ["n"] })).toBe(false);
+    expect(parseBooleanValue("true", { truthy: ["y"], falsy: ["n"] })).toBeUndefined();
   });
 });
 
