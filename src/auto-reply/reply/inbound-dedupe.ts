@@ -81,19 +81,31 @@ function buildInboundDedupeKey(ctx: MsgContext): string | null {
 
 export function claimInboundDedupe(
   ctx: MsgContext,
-  opts?: { cache?: DedupeCache; now?: number; inFlight?: Set<string> },
+  opts?: {
+    cache?: DedupeCache;
+    now?: number;
+    inFlight?: Set<string>;
+    reclaimPendingInput?: () => boolean;
+  },
 ): InboundDedupeClaimResult {
   const key = buildInboundDedupeKey(ctx);
   if (!key) {
     return { status: "invalid" };
   }
   const cache = opts?.cache ?? inboundDedupeCache;
-  if (cache.peek(key, opts?.now)) {
-    return { status: "duplicate", key };
-  }
+  const duplicate = cache.peek(key, opts?.now);
   const inFlight = opts?.inFlight ?? inboundDedupeInFlight;
   if (inFlight.has(key)) {
-    return { status: "inflight", key };
+    return { status: duplicate ? "duplicate" : "inflight", key };
+  }
+  // Spend recovery on the first claim, even if its old receipt expired. A later
+  // call from this same owner must not supersede its own completed admission.
+  const recovered = opts?.reclaimPendingInput?.() === true;
+  if (duplicate) {
+    if (!recovered) {
+      return { status: "duplicate", key };
+    }
+    cache.delete(key);
   }
   inFlight.add(key);
   return { status: "claimed", key };
