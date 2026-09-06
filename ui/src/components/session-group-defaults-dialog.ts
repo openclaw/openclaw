@@ -38,7 +38,7 @@ export function showSessionGroupDefaultsDialog(options: Options): Promise<void> 
   return new Promise<void>((resolve) => {
     let cwd = options.defaults.cwd;
     let worktree = false;
-    let repositoryStatus: WorktreeRepositoryStatus | "checking" = "checking";
+    let repositoryStatus: WorktreeRepositoryStatus | "checking" | "restricted" = "checking";
     let repositoryRequestToken = 0;
     let submitting = false;
     let failure: string | null = null;
@@ -56,7 +56,7 @@ export function showSessionGroupDefaultsDialog(options: Options): Promise<void> 
 
     const handleSubmit = async (event: Event) => {
       event.preventDefault();
-      if (submitting || repositoryStatus === "checking" || repositoryStatus === "unavailable") {
+      if (submitting || (repositoryStatus !== "git" && repositoryStatus !== "not_git")) {
         return;
       }
       submitting = true;
@@ -113,12 +113,15 @@ export function showSessionGroupDefaultsDialog(options: Options): Promise<void> 
         }
         repositoryStatus = status;
         worktree = status === "git" && restoreSavedWorktree && options.defaults.worktree;
-      } catch {
+      } catch (error) {
         if (requestToken !== repositoryRequestToken) {
           return;
         }
-        repositoryStatus = "unavailable";
         worktree = false;
+        // A path-authorization denial is not a repository status: collapsing it
+        // into "couldn't verify Git" would present a retry that can never
+        // succeed while the connection still lacks the required operator scope.
+        repositoryStatus = readMissingScopeError(error) ? "restricted" : "unavailable";
       }
       paint();
     };
@@ -183,7 +186,13 @@ export function showSessionGroupDefaultsDialog(options: Options): Promise<void> 
         ? folderDisplayName(trimmedCwd)
         : t("sessionsView.groupDefaultsCwdPlaceholder");
       const environmentState =
-        repositoryStatus === "checking" ? "checking" : repositoryStatus === "git" ? "git" : "local";
+        repositoryStatus === "checking"
+          ? "checking"
+          : repositoryStatus === "git"
+            ? "git"
+            : repositoryStatus === "restricted"
+              ? "restricted"
+              : "local";
       const environmentOptions = [
         {
           value: "local",
@@ -385,9 +394,11 @@ export function showSessionGroupDefaultsDialog(options: Options): Promise<void> 
                                     ? nothing
                                     : html`<small
                                         >${
-                                          repositoryStatus === "unavailable"
-                                            ? t("newSession.gitCheckUnavailable")
-                                            : t("newSession.checkoutCurrentNote")
+                                          repositoryStatus === "restricted"
+                                            ? t("sessionsView.groupDefaultsRequiresAdmin")
+                                            : repositoryStatus === "unavailable"
+                                              ? t("newSession.gitCheckUnavailable")
+                                              : t("newSession.checkoutCurrentNote")
                                         }</small
                                       >`
                                 }
@@ -410,13 +421,14 @@ export function showSessionGroupDefaultsDialog(options: Options): Promise<void> 
                   ?disabled=${
                     submitting ||
                     repositoryStatus === "checking" ||
-                    repositoryStatus === "unavailable"
+                    repositoryStatus === "unavailable" ||
+                    repositoryStatus === "restricted"
                   }
                 >
                   ${t("common.save")}
                 </button>
                 ${
-                  repositoryStatus === "unavailable"
+                  repositoryStatus === "unavailable" || repositoryStatus === "restricted"
                     ? html`
                         <button
                           type="button"
