@@ -7,7 +7,10 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { registerResolvedAgentDir } from "../agents/agent-dir-registry.js";
 import { getRuntimeAuthProfileStoreCredentialMutationToken } from "../agents/auth-profiles/mutation-lineage.js";
-import { noteCommittedSharedAuthStoreOwnership } from "../agents/auth-profiles/path-resolve.js";
+import {
+  noteCommittedSharedAuthStoreOwnership,
+  resolveSharedAuthStorePath,
+} from "../agents/auth-profiles/path-resolve.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   replaceRuntimeAuthProfileStoreSnapshots,
@@ -40,6 +43,7 @@ import {
   TALK_TEST_PROVIDER_API_KEY_PATH_SEGMENTS,
   TALK_TEST_PROVIDER_ID,
 } from "../test-utils/talk-test-provider.js";
+import { isSecretsApplyPlan } from "./plan.js";
 import type { SecretsApplyPlan } from "./plan.js";
 
 const { clearSecretsRuntimeSnapshotMock, prepareSecretsRuntimeSnapshotMock } = vi.hoisted(() => ({
@@ -191,9 +195,10 @@ function createPlan(params: {
   providerUpserts?: SecretsApplyPlan["providerUpserts"];
   providerDeletes?: SecretsApplyPlan["providerDeletes"];
 }): SecretsApplyPlan {
+  const hasSharedTarget = params.targets.some((t) => t.authProfileStore === "shared");
   return {
     version: 1,
-    protocolVersion: 1,
+    protocolVersion: hasSharedTarget ? 2 : 1,
     generatedAt: new Date().toISOString(),
     generatedBy: "manual",
     targets: params.targets,
@@ -748,6 +753,179 @@ describe("secrets apply", () => {
     expect(runtime?.profiles["openai:default"]).toBeUndefined();
   });
 
+  it.each([
+    {
+      store: "shared" as const,
+      label: "shared owner routes to the canonical shared state database",
+    },
+    { store: "agent" as const, label: "explicit agent owner routes to the per-agent database" },
+    {
+      store: undefined as "shared" | "agent" | undefined,
+      label: "omitted owner preserves legacy per-agent behavior",
+    },
+  ])("auth-profiles target with $store owner: $label", async ({ store }) => {
+    vi.stubEnv("OPENCLAW_STATE_DIR", fixture.stateDir);
+    noteCommittedSharedAuthStoreOwnership({ location: "state-db" }, fixture.env);
+    const sharedStore: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        "openai:shared": {
+          type: "api_key",
+          provider: "openai",
+          key: "sk-shared-plaintext", // pragma: allowlist secret
+        },
+      },
+    };
+    const stateDb = openOpenClawStateDatabase({ env: fixture.env }).db;
+    stateDb
+      .prepare(
+        "INSERT INTO config_machine_state (state_key, value_json, updated_at_ms) VALUES (?, ?, 1)",
+      )
+      .run("authProfiles.store", JSON.stringify(sharedStore));
+    closeOpenClawStateDatabaseForTest();
+
+    await writeJsonFile(fixture.authStorePath, {
+      version: 1,
+      profiles: {
+        "openai:agent": {
+          type: "api_key",
+          provider: "openai",
+          key: "sk-agent-plaintext", // pragma: allowlist secret
+        },
+      },
+    });
+
+    const targetProfile = store === "shared" ? "openai:shared" : "openai:agent";
+    const target: SecretsApplyPlan["targets"][number] = {
+      type: "auth-profiles.api_key.key",
+      path: `profiles.${targetProfile}.key`,
+      pathSegments: ["profiles", targetProfile, "key"],
+      // Shared targets omit agentId (fail-closed for v1 clients); agent and
+      // omitted targets carry it for legacy resolution.
+      ...(store !== "shared" ? { agentId: "main" } : {}),
+      ref: OPENAI_API_KEY_ENV_REF,
+      ...(store ? { authProfileStore: store } : {}),
+    };
+
+    const plan = createPlan({
+      targets: [target],
+      options: {
+        scrubEnv: false,
+        scrubAuthProfilesForProviderTargets: false,
+        scrubLegacyAuthJson: false,
+      },
+    });
+    // Verify the target shape passes the same validator the CLI entry point uses.
+    expect(isSecretsApplyPlan(plan)).toBe(true);
+
+    const result = await runSecretsApply({
+      plan,
+      env: fixture.env,
+      write: true,
+    });
+
+    expect(result.changed).toBe(true);
+
+    if (store === "shared") {
+      const sharedPath = resolveSharedAuthStorePath({
+        ...fixture.env,
+        OPENCLAW_STATE_DIR: fixture.stateDir,
+      });
+      expect(result.changedFiles).toContain(sharedPath);
+      expect(result.changedFiles).not.toContain(fixture.authStorePath);
+      const sharedRaw = readPersistedSharedAuthProfileStoreRaw(fixture.env) as AuthProfileStore;
+      const sharedProfile = sharedRaw.profiles["openai:shared"] as {
+        key?: string;
+        keyRef?: unknown;
+      };
+      expect(sharedProfile.key).toBeUndefined();
+      expect(sharedProfile.keyRef).toEqual(OPENAI_API_KEY_ENV_REF);
+      const agentRaw = readPersistedAuthProfileStoreRaw(fixture.agentDir) as AuthProfileStore;
+      expect(agentRaw.profiles["openai:agent"]).toMatchObject({ key: "sk-agent-plaintext" });
+    } else {
+      expect(result.changedFiles).toContain(fixture.authStorePath);
+      const agentRaw = readPersistedAuthProfileStoreRaw(fixture.agentDir) as AuthProfileStore;
+      const agentProfile = agentRaw.profiles["openai:agent"] as { key?: string; keyRef?: unknown };
+      expect(agentProfile.key).toBeUndefined();
+      expect(agentProfile.keyRef).toEqual(OPENAI_API_KEY_ENV_REF);
+    }
+  });
+
+  it("rejects an auth-profiles target with an invalid authProfileStore value", () => {
+    const plan = {
+      version: 1,
+      protocolVersion: 1,
+      generatedAt: new Date().toISOString(),
+      generatedBy: "manual",
+      targets: [
+        {
+          type: "auth-profiles.api_key.key",
+          path: "profiles.openai:default.key",
+          pathSegments: ["profiles", "openai:default", "key"],
+          agentId: "main",
+          authProfileStore: "bogus",
+          ref: OPENAI_API_KEY_ENV_REF,
+        },
+      ],
+      options: {
+        scrubEnv: false,
+        scrubAuthProfilesForProviderTargets: false,
+        scrubLegacyAuthJson: false,
+      },
+    };
+    expect(isSecretsApplyPlan(plan)).toBe(false);
+  });
+
+  it("preserves relocated legacy-main shared store when applying a shared SecretRef", async () => {
+    const relocatedDir = path.join(fixture.rootDir, "relocated-shared-legacy");
+    vi.stubEnv("OPENCLAW_STATE_DIR", fixture.stateDir);
+    vi.stubEnv("OPENCLAW_AGENT_DIR", relocatedDir);
+    noteCommittedSharedAuthStoreOwnership({ location: "legacy-main" }, fixture.env);
+    fixture.env.OPENCLAW_AGENT_DIR = relocatedDir;
+    const shared: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        "openai:legacy": {
+          type: "api_key",
+          provider: "openai",
+          key: "sk-legacy-plaintext", // pragma: allowlist secret
+        },
+      },
+    };
+    await writeJsonFile(resolveAuthProfileDatabasePath(relocatedDir), shared);
+
+    const target: SecretsApplyPlan["targets"][number] = {
+      type: "auth-profiles.api_key.key",
+      path: "profiles.openai:legacy.key",
+      pathSegments: ["profiles", "openai:legacy", "key"],
+      authProfileStore: "shared",
+      ref: OPENAI_API_KEY_ENV_REF,
+    };
+    const plan = createPlan({
+      targets: [target],
+      options: {
+        scrubEnv: false,
+        scrubAuthProfilesForProviderTargets: false,
+        scrubLegacyAuthJson: false,
+      },
+    });
+    expect(isSecretsApplyPlan(plan)).toBe(true);
+
+    const result = await runSecretsApply({
+      plan,
+      env: fixture.env,
+      write: true,
+    });
+
+    expect(result.changed).toBe(true);
+    const expectedPath = resolveAuthProfileDatabasePath(relocatedDir);
+    expect(result.changedFiles).toContain(expectedPath);
+    const sharedRaw = readPersistedAuthProfileStoreRaw(relocatedDir) as AuthProfileStore;
+    const profile = sharedRaw.profiles["openai:legacy"] as { key?: string; keyRef?: unknown };
+    expect(profile.key).toBeUndefined();
+    expect(profile.keyRef).toEqual(OPENAI_API_KEY_ENV_REF);
+  });
+
   it("rolls back committed auth rows when runtime publication fails", async () => {
     await writeJsonFile(fixture.authStorePath, {
       version: 1,
@@ -791,6 +969,56 @@ describe("secrets apply", () => {
     expect(publicationAttempted).toBe(true);
     expect(readPersistedAuthProfileStoreRaw(fixture.agentDir)).toEqual(credentialsBefore);
     expect(readPersistedAuthProfileStateRaw(fixture.agentDir)).toEqual(stateBefore);
+  });
+
+  it("rolls back relocated legacy-main shared store when runtime publication fails", async () => {
+    const relocatedDir = path.join(fixture.rootDir, "relocated-agent");
+    await fs.mkdir(relocatedDir, { recursive: true });
+    vi.stubEnv("OPENCLAW_STATE_DIR", fixture.stateDir);
+    vi.stubEnv("OPENCLAW_AGENT_DIR", relocatedDir);
+    noteCommittedSharedAuthStoreOwnership({ location: "legacy-main" }, fixture.env);
+    fixture.env.OPENCLAW_AGENT_DIR = relocatedDir;
+    const shared: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        "openai:legacy": {
+          type: "api_key",
+          provider: "openai",
+          key: "sk-legacy-plaintext",
+        },
+      },
+    };
+    await writeJsonFile(resolveAuthProfileDatabasePath(relocatedDir), shared);
+    const credentialsBefore = readPersistedAuthProfileStoreRaw(relocatedDir);
+    const stateBefore = readPersistedAuthProfileStateRaw(relocatedDir);
+    const target: SecretsApplyPlan["targets"][number] = {
+      type: "auth-profiles.api_key.key",
+      path: "profiles.openai:legacy.key",
+      pathSegments: ["profiles", "openai:legacy", "key"],
+      authProfileStore: "shared",
+      ref: OPENAI_API_KEY_ENV_REF,
+    };
+    const plan = createPlan({
+      targets: [target],
+      options: {
+        scrubEnv: false,
+        scrubAuthProfilesForProviderTargets: false,
+        scrubLegacyAuthJson: false,
+      },
+    });
+    let publicationAttempted = false;
+    storeTesting.setRuntimeSnapshotPublisherForTest(() => {
+      publicationAttempted = true;
+      throw new Error("injected postcommit publication failure");
+    });
+
+    await expect(runSecretsApply({ plan, env: fixture.env, write: true })).rejects.toThrow(
+      "auth profile runtime publication failed",
+    );
+
+    expect(publicationAttempted).toBe(true);
+    expect(readPersistedAuthProfileStoreRaw(relocatedDir)).toEqual(credentialsBefore);
+    expect(readPersistedAuthProfileStateRaw(relocatedDir)).toEqual(stateBefore);
   });
 
   it("uses the configured agent id for custom auth-profile target agent dirs", async () => {

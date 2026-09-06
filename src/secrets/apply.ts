@@ -392,7 +392,7 @@ function applyConfigTargetMutations(params: {
 
   for (const { target, resolved } of resolvedTargets) {
     if (resolved.entry.configFile === "auth-profile-store") {
-      const authStoreChanged = applyAuthProfileTargetMutation({
+      const authStoreResult = applyAuthProfileTargetMutation({
         target,
         resolved,
         nextConfig: params.nextConfig,
@@ -402,19 +402,11 @@ function applyConfigTargetMutations(params: {
         authStoreTargetByPath: params.authStoreTargetByPath,
         scrubbedValues,
       });
-      if (authStoreChanged) {
-        const agentId = (target.agentId ?? "").trim();
-        if (!agentId) {
-          throw new Error(`Missing required agentId for auth-profiles target ${target.path}.`);
+      if (authStoreResult.changed) {
+        if (!authStoreResult.path) {
+          throw new Error(`Missing auth store path for auth-profiles target ${target.path}.`);
         }
-        params.changedFiles.add(
-          resolveAuthStoreTargetForAgent({
-            nextConfig: params.nextConfig,
-            stateDir: params.stateDir,
-            env: params.env,
-            agentId,
-          }).path,
-        );
+        params.changedFiles.add(authStoreResult.path);
       }
       continue;
     }
@@ -558,23 +550,53 @@ function resolveAuthStoreForTarget(params: {
   authStoreByPath: Map<string, Record<string, unknown>>;
   authStoreTargetByPath: Map<string, AuthProfileStoreTarget>;
 }): { path: string; store: MutableAuthProfileStore } {
-  const agentId = (params.target.agentId ?? "").trim();
-  if (!agentId) {
-    throw new Error(`Missing required agentId for auth-profiles target ${params.target.path}.`);
-  }
-  const authStoreTarget = resolveAuthStoreTargetForAgent({
-    nextConfig: params.nextConfig,
-    stateDir: params.stateDir,
-    env: params.env,
-    agentId,
-  });
+  const authStoreTarget =
+    params.target.authProfileStore === "shared"
+      ? resolveAuthStoreTargetForShared({
+          stateDir: params.stateDir,
+          env: params.env,
+        })
+      : resolveAuthStoreTargetForAgent({
+          nextConfig: params.nextConfig,
+          stateDir: params.stateDir,
+          env: params.env,
+          agentId: requireAgentIdForTarget(params.target),
+        });
   const authStorePath = authStoreTarget.path;
   const existing = params.authStoreByPath.get(authStorePath);
-  const loaded = existing ?? loadPersistedAuthProfileStore(authStoreTarget.agentDir);
+  const loaded =
+    existing ??
+    (authStoreTarget.kind === "shared"
+      ? loadPersistedSharedAuthProfileStore(authStoreTarget.env)
+      : loadPersistedAuthProfileStore(authStoreTarget.agentDir));
   const store = ensureMutableAuthStore(isRecord(loaded) ? loaded : undefined);
   params.authStoreByPath.set(authStorePath, store);
   params.authStoreTargetByPath.set(authStorePath, authStoreTarget);
   return { path: authStorePath, store };
+}
+
+function requireAgentIdForTarget(target: SecretsPlanTarget): string {
+  const agentId = (target.agentId ?? "").trim();
+  if (!agentId) {
+    throw new Error(`Missing required agentId for auth-profiles target ${target.path}.`);
+  }
+  return agentId;
+}
+
+function resolveAuthStoreTargetForShared(params: {
+  stateDir: string;
+  env: NodeJS.ProcessEnv;
+}): Extract<AuthProfileStoreTarget, { kind: "shared" }> {
+  const scopedEnv = {
+    ...params.env,
+    OPENCLAW_STATE_DIR: params.stateDir,
+  };
+  return {
+    kind: "shared",
+    path: resolveSharedAuthStorePath(scopedEnv),
+    env: scopedEnv,
+    stateDir: params.stateDir,
+  };
 }
 
 function resolveAuthStoreTargetForAgent(params: {
@@ -660,11 +682,11 @@ function applyAuthProfileTargetMutation(params: {
   authStoreByPath: Map<string, Record<string, unknown>>;
   authStoreTargetByPath: Map<string, AuthProfileStoreTarget>;
   scrubbedValues: Set<string>;
-}): boolean {
+}): { changed: boolean; path: string | null } {
   if (params.resolved.entry.configFile !== "auth-profile-store") {
-    return false;
+    return { changed: false, path: null };
   }
-  const { store } = resolveAuthStoreForTarget({
+  const { path, store } = resolveAuthStoreForTarget({
     target: params.target,
     nextConfig: params.nextConfig,
     stateDir: params.stateDir,
@@ -691,7 +713,7 @@ function applyAuthProfileTargetMutation(params: {
     const wroteRef = setPathCreateStrict(store, refPathTokens, params.target.ref);
     const deletedPlaintext = deletePathStrict(store, targetPathSegments);
     changed = changed || wroteRef || deletedPlaintext;
-    return changed;
+    return { changed, path };
   }
   const previous = getPath(store, targetPathSegments);
   if (isNonEmptyString(previous)) {
@@ -699,7 +721,7 @@ function applyAuthProfileTargetMutation(params: {
   }
   const wroteRef = setPathCreateStrict(store, params.resolved.pathTokens, params.target.ref);
   changed = changed || wroteRef;
-  return changed;
+  return { changed, path };
 }
 
 function scrubEnvFiles(params: {
@@ -974,7 +996,9 @@ export async function runSecretsApply(params: {
           snapshot.persistence,
           snapshot.owned,
           snapshot.target.kind === "agent" ? snapshot.target.agentDir : undefined,
-          snapshot.target.kind === "shared" ? { stateDir: snapshot.target.stateDir } : {},
+          snapshot.target.kind === "shared"
+            ? { stateDir: snapshot.target.stateDir, env: snapshot.target.env }
+            : {},
         );
       } catch {
         // Best effort only; preserve original error.

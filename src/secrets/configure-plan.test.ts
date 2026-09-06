@@ -228,4 +228,81 @@ describe("secrets configure plan helpers", () => {
       scrubLegacyAuthJson: false,
     });
   });
+
+  it("emits protocolVersion 2 and omits agentId for shared auth-profile targets", () => {
+    const sharedTarget = {
+      type: "auth-profiles.api_key.key",
+      path: "profiles.openai:shared.key",
+      pathSegments: ["profiles", "openai:shared", "key"],
+      label: "profiles.openai:shared.key (auth profile, shared)",
+      configFile: "auth-profile-store" as const,
+      expectedResolvedValue: "string" as const,
+      agentId: "main",
+      authProfileStore: "shared" as "shared" | "agent",
+      ref: {
+        source: "env" as const,
+        provider: "default",
+        id: "OPENAI_API_KEY",
+      },
+    };
+    const agentTarget = {
+      type: "auth-profiles.api_key.key",
+      path: "profiles.openai:agent.key",
+      pathSegments: ["profiles", "openai:agent", "key"],
+      label: "profiles.openai:agent.key (auth profile, agent main)",
+      configFile: "auth-profile-store" as const,
+      expectedResolvedValue: "string" as const,
+      agentId: "main",
+      authProfileStore: "agent" as "shared" | "agent",
+      ref: {
+        source: "env" as const,
+        provider: "default",
+        id: "OPENAI_API_KEY",
+      },
+    };
+    const selected = new Map([
+      ["profiles.openai:shared.key", sharedTarget],
+      ["profiles.openai:agent.key", agentTarget],
+    ]);
+    const plan = buildSecretsConfigurePlan({
+      selectedTargets: selected,
+      providerChanges: { upserts: {}, deletes: [] },
+    });
+    const sharedPlanTarget = plan.targets.find((t) => t.path.includes("openai:shared"));
+    const agentPlanTarget = plan.targets.find((t) => t.path.includes("openai:agent"));
+    // A plan with shared targets must use protocolVersion 2 so older v1-only
+    // clients reject it at the version check instead of silently routing by
+    // agentId (which shared targets omit).
+    expect(plan.protocolVersion).toBe(2);
+    // Shared targets must NOT carry agentId.
+    expect(sharedPlanTarget?.agentId).toBeUndefined();
+    expect(sharedPlanTarget?.authProfileStore).toBe("shared");
+    // Agent targets still carry agentId for backward compatibility.
+    expect(agentPlanTarget?.agentId).toBe("main");
+    expect(agentPlanTarget?.authProfileStore).toBe("agent");
+  });
+
+  it("emits protocolVersion 1 when no shared auth-profile targets are selected", () => {
+    const agentTarget = {
+      type: "auth-profiles.api_key.key",
+      path: "profiles.openai:agent.key",
+      pathSegments: ["profiles", "openai:agent", "key"],
+      label: "profiles.openai:agent.key (auth profile, agent main)",
+      configFile: "auth-profile-store" as const,
+      expectedResolvedValue: "string" as const,
+      agentId: "main",
+      authProfileStore: "agent" as "shared" | "agent",
+      ref: {
+        source: "env" as const,
+        provider: "default",
+        id: "OPENAI_API_KEY",
+      },
+    };
+    const selected = new Map([["profiles.openai:agent.key", agentTarget]]);
+    const plan = buildSecretsConfigurePlan({
+      selectedTargets: selected,
+      providerChanges: { upserts: {}, deletes: [] },
+    });
+    expect(plan.protocolVersion).toBe(1);
+  });
 });

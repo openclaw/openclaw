@@ -200,7 +200,7 @@ Flags:
 
 - `--providers-only`: configure `secrets.providers` only, skip credential mapping
 - `--skip-provider-setup`: skip provider setup, map credentials to existing providers
-- `--agent <id>`: scope auth profile target discovery and writes to one agent store
+- `--agent <id>`: set the local auth-profile scope and override precedence for discovery and writes
 - `--allow-exec`: allow exec SecretRef checks during preflight/apply (may execute provider commands)
 
 `--providers-only` and `--skip-provider-setup` cannot be combined.
@@ -208,7 +208,7 @@ Flags:
 Notes:
 
 - Requires an interactive TTY.
-- Targets secret-bearing fields in `openclaw.json` plus the selected agent's auth profile store; canonical supported surface: [SecretRef Credential Surface](/reference/secretref-credential-surface).
+- Targets secret-bearing fields in `openclaw.json` plus auth profile stores. Discovery covers the canonical shared store (Gateway-wide profiles) and the selected agent's local store; duplicate profile IDs resolve to the agent-local candidate, matching runtime's local-overrides-shared precedence. Saved plans carry an `authProfileStore` field (`"shared"` or `"agent"`) so `secrets apply` routes each target to the correct database; plans with shared targets use `protocolVersion: 2`, which older v1-only clients reject to avoid silent wrong-store writes. Canonical supported surface: [SecretRef Credential Surface](/reference/secretref-credential-surface).
 - Supports creating new auth profile mappings directly in the picker flow.
 - Runs preflight resolution before apply.
 - Generated plans default to scrub options enabled (`scrubEnv`, `scrubAuthProfilesForProviderTargets`, `scrubLegacyAuthJson`). Apply is one-way for scrubbed plaintext values.
