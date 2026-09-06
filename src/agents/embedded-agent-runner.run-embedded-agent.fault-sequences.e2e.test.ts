@@ -2,7 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   classifyEmbeddedAgentRunResultForModelFallback,
@@ -17,9 +17,9 @@ import {
   makeEmbeddedRunnerAttempt,
 } from "./test-helpers/embedded-agent-runner-e2e-fixtures.js";
 import {
-  installEmbeddedRunnerBackoffE2eMocks,
   installEmbeddedRunnerBaseE2eMocks,
   installEmbeddedRunnerFastRunE2eMocks,
+  installEmbeddedRunnerRetrySleepE2eMocks,
 } from "./test-helpers/embedded-agent-runner-e2e-mocks.js";
 
 type ProviderFault =
@@ -52,6 +52,7 @@ const runEmbeddedAttemptMock = vi.fn<(params: unknown) => Promise<EmbeddedRunAtt
 const { sleepWithAbortMock } = vi.hoisted(() => ({
   sleepWithAbortMock: vi.fn(async (_ms: number, _abortSignal?: AbortSignal) => undefined),
 }));
+let mathRandomMock: ReturnType<typeof vi.spyOn> | undefined;
 
 vi.mock("./models-config.js", async () => {
   const actual = await vi.importActual<typeof import("./models-config.js")>("./models-config.js");
@@ -72,8 +73,7 @@ beforeAll(async () => {
   installEmbeddedRunnerFastRunE2eMocks({
     runEmbeddedAttempt: (params) => runEmbeddedAttemptMock(params),
   });
-  installEmbeddedRunnerBackoffE2eMocks({
-    computeBackoff: () => 0,
+  installEmbeddedRunnerRetrySleepE2eMocks({
     sleepWithAbort: (ms, abortSignal) => sleepWithAbortMock(ms, abortSignal),
   });
   vi.doMock("./embedded-agent-runner/model.js", () => ({
@@ -90,8 +90,14 @@ beforeAll(async () => {
 });
 
 beforeEach(() => {
+  mathRandomMock = vi.spyOn(Math, "random").mockReturnValue(0);
   runEmbeddedAttemptMock.mockReset();
   sleepWithAbortMock.mockClear();
+});
+
+afterEach(() => {
+  mathRandomMock?.mockRestore();
+  mathRandomMock = undefined;
 });
 
 function makeProviderConfig(fallbacks: string[]): OpenClawConfig {

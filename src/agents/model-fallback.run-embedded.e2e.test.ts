@@ -1,5 +1,5 @@
 // Exercises model fallback through the embedded runner integration surface.
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { wrapRunWithTestPreparedAdmission } from "./admitted-run-context.test-support.js";
 import type { ModelFallbackAvailability } from "./agent-scope.js";
@@ -22,9 +22,9 @@ import {
   makeEmbeddedRunnerAttempt,
 } from "./test-helpers/embedded-agent-runner-e2e-fixtures.js";
 import {
-  installEmbeddedRunnerBackoffE2eMocks,
   installEmbeddedRunnerBaseE2eMocks,
   installEmbeddedRunnerFastRunE2eMocks,
+  installEmbeddedRunnerRetrySleepE2eMocks,
 } from "./test-helpers/embedded-agent-runner-e2e-mocks.js";
 
 const runEmbeddedAttemptMock = vi.fn<(params: unknown) => Promise<EmbeddedRunAttemptResult>>();
@@ -33,15 +33,10 @@ const observedModelRoutingProvenance: Array<{
   fallbackReason?: string;
 }> = [];
 const suspendSessionMock = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
-const { computeBackoffMock, sleepWithAbortMock } = vi.hoisted(() => ({
-  computeBackoffMock: vi.fn(
-    (
-      _policy: { initialMs: number; maxMs: number; factor: number; jitter: number },
-      _attempt: number,
-    ) => 321,
-  ),
+const { sleepWithAbortMock } = vi.hoisted(() => ({
   sleepWithAbortMock: vi.fn(async (_ms: number, _abortSignal?: AbortSignal) => undefined),
 }));
+let mathRandomMock: ReturnType<typeof vi.spyOn> | undefined;
 
 vi.mock("./models-config.js", () => ({
   ensureOpenClawModelsJson: vi.fn(async () => ({ wrote: false })),
@@ -62,8 +57,7 @@ const installRunEmbeddedMocks = () => {
   installEmbeddedRunnerFastRunE2eMocks({
     runEmbeddedAttempt: (params) => runEmbeddedAttemptMock(params),
   });
-  installEmbeddedRunnerBackoffE2eMocks({
-    computeBackoff: (policy, attempt) => computeBackoffMock(policy, attempt),
+  installEmbeddedRunnerRetrySleepE2eMocks({
     sleepWithAbort: (ms, abortSignal) => sleepWithAbortMock(ms, abortSignal),
   });
   vi.doMock("./embedded-agent-runner/model.js", () => ({
@@ -100,12 +94,17 @@ beforeAll(async () => {
 });
 
 beforeEach(() => {
+  mathRandomMock = vi.spyOn(Math, "random").mockReturnValue(0);
   resetFallbackSkipCacheForTest();
   observedModelRoutingProvenance.length = 0;
   runEmbeddedAttemptMock.mockReset();
   suspendSessionMock.mockClear();
-  computeBackoffMock.mockClear();
   sleepWithAbortMock.mockClear();
+});
+
+afterEach(() => {
+  mathRandomMock?.mockRestore();
+  mathRandomMock = undefined;
 });
 
 const OVERLOADED_ERROR_PAYLOAD =
@@ -678,7 +677,6 @@ describe("runWithModelFallback + runEmbeddedAgent failover behavior", () => {
       expect(countProviderAttempts("azure-foundry")).toBeGreaterThan(0);
       expect(countProviderAttempts("openai")).toBe(0);
       expect(countProviderAttempts("groq")).toBe(1);
-      expect(computeBackoffMock).not.toHaveBeenCalled();
       expect(sleepWithAbortMock).not.toHaveBeenCalled();
     });
   });
@@ -706,8 +704,7 @@ describe("runWithModelFallback + runEmbeddedAgent failover behavior", () => {
       expect(typeof usageStats["groq:p1"]?.lastUsed).toBe("number");
 
       expectOpenAiThenGroqAttemptOrder({ primaryAttempts: 4 });
-      expect(computeBackoffMock).not.toHaveBeenCalled();
-      expect(sleepWithAbortMock).toHaveBeenCalledTimes(3);
+      expect(sleepWithAbortMock.mock.calls.map(([delay]) => delay)).toEqual([500, 1_000, 2_000]);
     });
   });
 
@@ -731,7 +728,6 @@ describe("runWithModelFallback + runEmbeddedAgent failover behavior", () => {
       await withModelFallbackWorkspace(async ({ agentDir, workspaceDir }) => {
         await writeFallbackAuthStore(agentDir);
         runEmbeddedAttemptMock.mockClear();
-        computeBackoffMock.mockClear();
         sleepWithAbortMock.mockClear();
         mockPrimaryErrorThenFallbackSuccess(message);
 
@@ -753,8 +749,7 @@ describe("runWithModelFallback + runEmbeddedAgent failover behavior", () => {
         expect(typeof usageStats["groq:p1"]?.lastUsed).toBe("number");
 
         expectOpenAiThenGroqAttemptOrder({ primaryAttempts: 4 });
-        expect(computeBackoffMock).not.toHaveBeenCalled();
-        expect(sleepWithAbortMock).toHaveBeenCalledTimes(3);
+        expect(sleepWithAbortMock.mock.calls.map(([delay]) => delay)).toEqual([500, 1_000, 2_000]);
       });
     }
   });
@@ -840,8 +835,9 @@ describe("runWithModelFallback + runEmbeddedAgent failover behavior", () => {
         ...Array.from({ length: 4 }, () => ({ provider: "openai", authProfileId: "openai:p1" })),
         ...Array.from({ length: 4 }, () => ({ provider: "groq", authProfileId: "groq:p1" })),
       ]);
-      expect(computeBackoffMock).not.toHaveBeenCalled();
-      expect(sleepWithAbortMock).toHaveBeenCalledTimes(6);
+      expect(sleepWithAbortMock.mock.calls.map(([delay]) => delay)).toEqual([
+        500, 1_000, 2_000, 500, 1_000, 2_000,
+      ]);
     });
   });
 
@@ -885,7 +881,6 @@ describe("runWithModelFallback + runEmbeddedAgent failover behavior", () => {
       expect(firstResult.provider).toBe("groq");
 
       runEmbeddedAttemptMock.mockClear();
-      computeBackoffMock.mockClear();
       sleepWithAbortMock.mockClear();
 
       mockPrimaryOverloadedThenFallbackSuccess();
@@ -903,8 +898,7 @@ describe("runWithModelFallback + runEmbeddedAgent failover behavior", () => {
       const usageStats = await readFallbackUsageStats(agentDir);
       expect(usageStats["openai:p1"]?.cooldownUntil).toBeUndefined();
       expect(usageStats["openai:p1"]?.failureCounts?.overloaded).toBeUndefined();
-      expect(computeBackoffMock).not.toHaveBeenCalled();
-      expect(sleepWithAbortMock).toHaveBeenCalledTimes(3);
+      expect(sleepWithAbortMock.mock.calls.map(([delay]) => delay)).toEqual([500, 1_000, 2_000]);
     });
   });
 
@@ -927,8 +921,7 @@ describe("runWithModelFallback + runEmbeddedAgent failover behavior", () => {
       expect(usageStats["openai:p1"]?.cooldownUntil).toBeUndefined();
       expect(usageStats["openai:p1"]?.failureCounts).toBeUndefined();
       expectOpenAiThenGroqAttemptOrder({ primaryAttempts: 4 });
-      expect(computeBackoffMock).not.toHaveBeenCalled();
-      expect(sleepWithAbortMock).toHaveBeenCalledTimes(3);
+      expect(sleepWithAbortMock.mock.calls.map(([delay]) => delay)).toEqual([500, 1_000, 2_000]);
     });
   });
 
@@ -963,7 +956,7 @@ describe("runWithModelFallback + runEmbeddedAgent failover behavior", () => {
         { provider: "openai", authProfileId: "openai:p2" },
         { provider: "groq", authProfileId: "groq:p1" },
       ]);
-      expect(sleepWithAbortMock).toHaveBeenCalledTimes(3);
+      expect(sleepWithAbortMock.mock.calls.map(([delay]) => delay)).toEqual([500, 1_000, 2_000]);
     });
   });
 

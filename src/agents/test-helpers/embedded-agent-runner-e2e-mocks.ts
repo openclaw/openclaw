@@ -22,11 +22,7 @@ type EmbeddedRunnerFastRunMockOptions = {
   }) => unknown;
 };
 
-type EmbeddedRunnerBackoffMockOptions = {
-  computeBackoff: (
-    policy: { initialMs: number; maxMs: number; factor: number; jitter: number },
-    attempt: number,
-  ) => number;
+type EmbeddedRunnerRetrySleepMockOptions = {
   sleepWithAbort: (ms: number, abortSignal?: AbortSignal) => unknown;
 };
 
@@ -407,16 +403,17 @@ function resolveMockHarnessId(params: {
     : "openclaw";
 }
 
-/** Installs deterministic backoff mocks for retry/timeout E2E tests. */
-export function installEmbeddedRunnerBackoffE2eMocks(
-  options: EmbeddedRunnerBackoffMockOptions,
+/** Captures retry sleeps while leaving delay selection with the production owner. */
+export function installEmbeddedRunnerRetrySleepE2eMocks(
+  options: EmbeddedRunnerRetrySleepMockOptions,
 ): void {
-  vi.doMock("../../infra/backoff.js", () => ({
-    computeBackoff: (
-      policy: { initialMs: number; maxMs: number; factor: number; jitter: number },
-      attempt: number,
-    ) => options.computeBackoff(policy, attempt),
-    sleepWithAbort: (ms: number, abortSignal?: AbortSignal) =>
-      options.sleepWithAbort(ms, abortSignal),
-  }));
+  vi.doMock("../../infra/backoff.js", async () => {
+    const actual =
+      await vi.importActual<typeof import("../../infra/backoff.js")>("../../infra/backoff.js");
+    return {
+      ...actual,
+      sleepWithAbort: (ms: number, abortSignal?: AbortSignal) =>
+        options.sleepWithAbort(ms, abortSignal),
+    };
+  });
 }

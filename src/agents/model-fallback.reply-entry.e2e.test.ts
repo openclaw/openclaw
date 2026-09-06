@@ -1,6 +1,6 @@
 // Proves the pinned fallback decision survives the complete reply-entry path.
 import path from "node:path";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MsgContext } from "../auto-reply/templating.js";
 import {
   clearRuntimeConfigSnapshot,
@@ -22,23 +22,18 @@ import {
   makeEmbeddedRunnerAttempt,
 } from "./test-helpers/embedded-agent-runner-e2e-fixtures.js";
 import {
-  installEmbeddedRunnerBackoffE2eMocks,
   installEmbeddedRunnerBaseE2eMocks,
   installEmbeddedRunnerFastRunE2eMocks,
+  installEmbeddedRunnerRetrySleepE2eMocks,
 } from "./test-helpers/embedded-agent-runner-e2e-mocks.js";
 
 const runEmbeddedAttemptMock = vi.fn<(params: unknown) => Promise<EmbeddedRunAttemptResult>>();
 const emptyPluginRegistry = createEmptyPluginRegistry();
 const suspendSessionMock = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
-const { computeBackoffMock, sleepWithAbortMock } = vi.hoisted(() => ({
-  computeBackoffMock: vi.fn(
-    (
-      _policy: { initialMs: number; maxMs: number; factor: number; jitter: number },
-      _attempt: number,
-    ) => 321,
-  ),
+const { sleepWithAbortMock } = vi.hoisted(() => ({
   sleepWithAbortMock: vi.fn(async (_ms: number, _abortSignal?: AbortSignal) => undefined),
 }));
+let mathRandomMock: ReturnType<typeof vi.spyOn> | undefined;
 
 vi.mock("./models-config.js", () => ({
   ensureOpenClawModelsJson: vi.fn(async () => ({ wrote: false })),
@@ -58,8 +53,7 @@ function installReplyEntryMocks() {
   installEmbeddedRunnerFastRunE2eMocks({
     runEmbeddedAttempt: (params) => runEmbeddedAttemptMock(params),
   });
-  installEmbeddedRunnerBackoffE2eMocks({
-    computeBackoff: (policy, attempt) => computeBackoffMock(policy, attempt),
+  installEmbeddedRunnerRetrySleepE2eMocks({
     sleepWithAbort: (ms, abortSignal) => sleepWithAbortMock(ms, abortSignal),
   });
   vi.doMock("./embedded-agent-runner/model.js", () => ({
@@ -84,12 +78,17 @@ beforeAll(async () => {
 });
 
 beforeEach(() => {
+  mathRandomMock = vi.spyOn(Math, "random").mockReturnValue(0);
   vi.stubEnv("OPENCLAW_ALLOW_SLOW_REPLY_TESTS", "1");
   resetFallbackSkipCacheForTest();
   runEmbeddedAttemptMock.mockReset();
   suspendSessionMock.mockClear();
-  computeBackoffMock.mockClear();
   sleepWithAbortMock.mockClear();
+});
+
+afterEach(() => {
+  mathRandomMock?.mockRestore();
+  mathRandomMock = undefined;
 });
 
 function countProviderAttempts(provider: string): number {

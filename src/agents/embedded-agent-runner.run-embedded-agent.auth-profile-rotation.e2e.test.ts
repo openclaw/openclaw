@@ -20,22 +20,17 @@ import {
   makeEmbeddedRunnerAttempt as makeAttempt,
 } from "./test-helpers/embedded-agent-runner-e2e-fixtures.js";
 import {
-  installEmbeddedRunnerBackoffE2eMocks,
   installEmbeddedRunnerBaseE2eMocks,
   installEmbeddedRunnerFastRunE2eMocks,
+  installEmbeddedRunnerRetrySleepE2eMocks,
 } from "./test-helpers/embedded-agent-runner-e2e-mocks.js";
 
 const runEmbeddedAttemptMock = vi.fn<(params: unknown) => Promise<EmbeddedRunAttemptResult>>();
 const resolveCopilotApiTokenMock = vi.fn();
-const { computeBackoffMock, sleepWithAbortMock } = vi.hoisted(() => ({
-  computeBackoffMock: vi.fn(
-    (
-      _policy: { initialMs: number; maxMs: number; factor: number; jitter: number },
-      _attempt: number,
-    ) => 321,
-  ),
+const { sleepWithAbortMock } = vi.hoisted(() => ({
   sleepWithAbortMock: vi.fn(async (_ms: number, _abortSignal?: AbortSignal) => undefined),
 }));
+let mathRandomMock: ReturnType<typeof vi.spyOn> | undefined;
 
 const installRunEmbeddedMocks = () => {
   installEmbeddedRunnerBaseE2eMocks();
@@ -83,8 +78,7 @@ const installRunEmbeddedMocks = () => {
       };
     },
   }));
-  installEmbeddedRunnerBackoffE2eMocks({
-    computeBackoff: (policy, attempt) => computeBackoffMock(policy, attempt),
+  installEmbeddedRunnerRetrySleepE2eMocks({
     sleepWithAbort: (ms, abortSignal) => sleepWithAbortMock(ms, abortSignal),
   });
   vi.doMock("./embedded-agent-runner/compact.js", () => ({
@@ -137,6 +131,7 @@ async function runEmbeddedAgentInline(
 
 beforeEach(() => {
   vi.useRealTimers();
+  mathRandomMock = vi.spyOn(Math, "random").mockReturnValue(0);
   runEmbeddedAttemptMock.mockReset();
   runEmbeddedAttemptMock.mockImplementation(async () => {
     throw new Error("unexpected extra runEmbeddedAttempt call");
@@ -149,11 +144,12 @@ beforeEach(() => {
     const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
     throw new Error(`Unexpected fetch in test: ${url}`);
   }) as unknown as typeof fetch;
-  computeBackoffMock.mockClear();
   sleepWithAbortMock.mockClear();
 });
 
 afterEach(() => {
+  mathRandomMock?.mockRestore();
+  mathRandomMock = undefined;
   globalThis.fetch = originalFetch;
   cleanupLogCapture?.();
   cleanupLogCapture = undefined;
@@ -486,7 +482,9 @@ async function runAutoPinnedRotationCase(params: {
         ? ["openai:p1", "openai:p1", "openai:p1", "openai:p1", "openai:p2"]
         : ["openai:p1", "openai:p2"],
     );
-    expect(sleepWithAbortMock).toHaveBeenCalledTimes(params.exhaustTransientRetries ? 3 : 0);
+    expect(sleepWithAbortMock.mock.calls.map(([delay]) => delay)).toEqual(
+      params.exhaustTransientRetries ? [500, 1_000, 2_000] : [],
+    );
     const usageStats = await readUsageStats(agentDir);
     expect(usageStats["openai:p2"]?.lastUsed).toBeGreaterThan(2);
     return { usageStats };
@@ -935,7 +933,6 @@ describe("runEmbeddedAgent auth profile rotation", () => {
       runId: "run:overloaded-rotation",
     });
     expect(usageStats["openai:p1"]?.cooldownUntil).toBeUndefined();
-    expect(computeBackoffMock).not.toHaveBeenCalled();
   });
 
   it("logs structured failover decision metadata for overloaded assistant rotation", async () => {
@@ -989,7 +986,6 @@ describe("runEmbeddedAgent auth profile rotation", () => {
       runId: "run:overloaded-prompt-rotation",
     });
     expect(usageStats["openai:p1"]?.cooldownUntil).toBeUndefined();
-    expect(computeBackoffMock).not.toHaveBeenCalled();
   });
 
   it("marks inline provider api key billing prompt failures without an auth profile", async () => {
@@ -1040,7 +1036,6 @@ describe("runEmbeddedAgent auth profile rotation", () => {
     const lastFailureAt = failedProfile?.lastFailureAt;
     expect(lastFailureAt).toBeTypeOf("number");
     expect(failedProfile?.cooldownUntil).toBe(lastFailureAt! + 30_000);
-    expect(computeBackoffMock).not.toHaveBeenCalled();
   });
 
   it("rotates on bare service unavailable without cooling down the profile", async () => {
