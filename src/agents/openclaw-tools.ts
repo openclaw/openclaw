@@ -143,10 +143,13 @@ export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentToo
     preparedModelRuntime: options?.preparedModelRuntime,
   });
   const trimmedRunSessionKey = options?.runSessionKey?.trim();
-  const mediaGenerationAgentSessionKey =
-    trimmedRunSessionKey && isCronRunSessionKey(trimmedRunSessionKey)
-      ? trimmedRunSessionKey
-      : options?.agentSessionKey;
+  // Match the durable controller key the spawn/subagents tools use, so media-generation
+  // tasks (image/video/music) persist their ownerKey under the same key the unified list
+  // tool queries by exact equality. Split-key callers (e.g. Telegram DM with a policy key
+  // distinct from the durable run key) would otherwise see their media tasks disappear from
+  // `subagents list` and fail to cancel with "Task outside session tree". Cron runs already
+  // carry their durable run-scoped key here, so the cron-specific branch is absorbed.
+  const mediaGenerationAgentSessionKey = trimmedRunSessionKey ?? options?.agentSessionKey;
   const mediaGenerationAsyncStartCallback = createMediaGenerationAsyncStartCallback({
     sessionKey: mediaGenerationAgentSessionKey,
     onYield: options?.onYield,
@@ -571,7 +574,7 @@ export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentToo
     ...(!embedded || options?.allowGatewaySubagentBinding === true
       ? [
           createSessionsSpawnTool({
-            agentSessionKey: options?.agentSessionKey,
+            agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
             requesterTurnRunId: options?.runId,
             requesterThinkingLevel: options?.requesterThinkingLevel,
             completionOwnerKey: options?.runSessionKey,
@@ -611,7 +614,14 @@ export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentToo
       onYield: options?.onYield,
     }),
     createSubagentsTool({
-      agentSessionKey: options?.agentSessionKey,
+      // Match the durable controller key the spawn tool registers runs under, so split-key
+      // callers (e.g. Telegram DM with a policy key distinct from the durable run key) still
+      // see their spawned runs in the active/recent list. Mirrors createSessionsSpawnTool above.
+      agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
+      // Retained task rows created before the durable-key alignment still carry the policy
+      // key in owner_key; let the listing/cancel tool match both so those rows stay reachable
+      // for split-key callers instead of disappearing with "Task outside session tree".
+      callerPolicySessionKey: options?.agentSessionKey,
       agentId: sessionAgentId,
       config: sessionConfig,
     }),
