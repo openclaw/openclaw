@@ -61,7 +61,9 @@ function createFacadeHarness(params?: {
 
 describe("createMatrixCryptoFacade", () => {
   it("round-trips encrypted media through the real native crypto bindings", async () => {
-    const downloadContent = vi.fn(async () => Buffer.alloc(0));
+    const downloadContent = vi.fn<MatrixCryptoFacadeDeps["downloadContent"]>(async () =>
+      Buffer.alloc(0),
+    );
     const { facade } = createFacadeHarness({ downloadContent });
     const plaintext = Buffer.from("Synthetic Matrix attachment");
     const encrypted = await facade.encryptMedia(plaintext);
