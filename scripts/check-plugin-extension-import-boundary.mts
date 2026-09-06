@@ -28,15 +28,6 @@ type PluginExtensionInventoryEntry = {
   resolvedPath: string | null;
   reason: string;
 };
-function compareEntries(left: PluginExtensionInventoryEntry, right: PluginExtensionInventoryEntry) {
-  return (
-    left.file.localeCompare(right.file) ||
-    left.line - right.line ||
-    left.kind.localeCompare(right.kind) ||
-    left.specifier.localeCompare(right.specifier) ||
-    left.reason.localeCompare(right.reason)
-  );
-}
 
 function classifyResolvedExtensionReason(kind: string, resolvedPath: string | null) {
   const verb =
@@ -75,7 +66,6 @@ const boundaryChecker = createExtensionImportBoundaryChecker({
       };
     });
   },
-  compareEntries,
 });
 
 /** Rejects retired core registries whose ownership now comes from plugin manifests. */
@@ -98,10 +88,10 @@ export function collectRetiredWebSearchCorePathEntries(
 
 /** Inventory of src/plugins extension imports and retired core web-search ownership paths. */
 async function collectPluginExtensionImportBoundaryInventory() {
-  return [
+  return boundaryChecker.sortInventory([
     ...(await boundaryChecker.collectInventory()),
     ...collectRetiredWebSearchCorePathEntries(),
-  ].toSorted(compareEntries);
+  ]);
 }
 
 const ruleText =

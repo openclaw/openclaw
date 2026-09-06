@@ -180,6 +180,12 @@ export function createExtensionImportBoundaryChecker<Entry = BoundaryViolation>(
   const repoRoot = path.resolve(params.repoRoot ?? DEFAULT_REPO_ROOT);
   const scanRoots = resolveSourceRoots(repoRoot, params.roots);
   const maxSourceBytes = normalizeMaxSourceBytes(params.maxSourceBytes);
+  const compareInventoryEntries =
+    params.compareEntries ??
+    ((left: Entry, right: Entry) =>
+      compareEntries(left as BoundaryViolation, right as BoundaryViolation));
+  const sortInventory = (inventory: readonly Entry[]): Entry[] =>
+    inventory.toSorted(compareInventoryEntries);
 
   const collectInventory = createCachedAsync(async () => {
     const files = (await collectTypeScriptFilesFromRoots(scanRoots, params.sourceOptions))
@@ -221,11 +227,7 @@ export function createExtensionImportBoundaryChecker<Entry = BoundaryViolation>(
       { concurrency: 32, stopOnError: true },
     );
     const inventory = entriesByFile.flat() as Entry[];
-    const compare =
-      params.compareEntries ??
-      ((left: Entry, right: Entry) =>
-        compareEntries(left as BoundaryViolation, right as BoundaryViolation));
-    return inventory.toSorted(compare);
+    return sortInventory(inventory);
   }) as () => Promise<Entry[]>;
 
   async function main(
@@ -248,5 +250,5 @@ export function createExtensionImportBoundaryChecker<Entry = BoundaryViolation>(
     return inventory.length === 0 ? 0 : 1;
   }
 
-  return { collectInventory, main };
+  return { collectInventory, main, sortInventory };
 }
