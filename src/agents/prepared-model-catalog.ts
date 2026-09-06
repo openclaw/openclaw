@@ -22,6 +22,10 @@ import {
   setPreparedModelRuntimeAuthLoader,
   setPreparedModelRuntimeAuthStore,
 } from "./prepared-model-runtime-auth.js";
+import {
+  PreparedModelCatalogGenerationMismatchError,
+  PreparedModelRuntimePublicationSupersededError,
+} from "./prepared-model-runtime.errors.js";
 import { isPreparedModelCatalogFull } from "./prepared-model-runtime.full-catalog.js";
 import {
   acquireAgentRunPreparedModelRuntime,
@@ -31,6 +35,7 @@ import {
   prepareModelRuntimeSnapshot,
   PreparedModelRuntimeOwnerNotPublishedError,
   preparedModelRuntimeConfigsMatch,
+  replacePreparedModelRuntimeSnapshotAfterCatalogGenerationMismatch,
   refreshStalePreparedModelRuntimeCatalog,
   type PreparedModelRuntimeInput,
   type PreparedModelRuntimeSnapshot,
@@ -75,16 +80,29 @@ async function materializeRequestedModelCatalog(
   if (!snapshot.loadFullModelCatalog) {
     return snapshot;
   }
-  // Inventory reads repair auth-stale content without making turn-path reads start discovery.
-  const staleCatalog =
-    refreshFullCatalog === "stale" || refreshFullCatalog === true
-      ? await refreshStalePreparedModelRuntimeCatalog(snapshot)
-      : undefined;
-  const modelCatalog =
-    staleCatalog ??
-    (readOnly === true
-      ? snapshot.readFullModelCatalog?.()
-      : await snapshot.loadFullModelCatalog({ refresh: refreshFullCatalog === true }));
+  let modelCatalog: ModelCatalogSnapshot | undefined;
+  try {
+    // Inventory reads repair auth-stale content without making turn-path reads start discovery.
+    const staleCatalog =
+      refreshFullCatalog === "stale" || refreshFullCatalog === true
+        ? await refreshStalePreparedModelRuntimeCatalog(snapshot)
+        : undefined;
+    modelCatalog =
+      staleCatalog ??
+      (readOnly === true
+        ? snapshot.readFullModelCatalog?.()
+        : await snapshot.loadFullModelCatalog({ refresh: refreshFullCatalog === true }));
+  } catch (error) {
+    if (
+      error instanceof PreparedModelCatalogGenerationMismatchError &&
+      (await replacePreparedModelRuntimeSnapshotAfterCatalogGenerationMismatch(snapshot))
+    ) {
+      throw new PreparedModelRuntimePublicationSupersededError(
+        `prepared model runtime catalog generation was replaced for ${snapshot.agentDir}`,
+      );
+    }
+    throw error;
+  }
   if (!modelCatalog) {
     return snapshot;
   }
