@@ -624,12 +624,10 @@ export function runOpenClawAgentWriteTransaction<T>(
       () => {
         assertAgentDeletionDatabaseCleanupAccess(database, options);
         const operationResult = operation(database);
-        if (!enteredNestedTransaction) {
+        if (!enteredNestedTransaction && !cache.incognito.has(database)) {
           // Permission failure must roll back with the write. Repairing after
           // COMMIT could make callers retry a transaction already durable in SQLite.
-          if (!cache.incognito.has(database)) {
-            ensureOpenClawAgentDatabasePermissions(database.path, options);
-          }
+          ensureOpenClawAgentDatabasePermissions(database.path, options);
         }
         return operationResult;
       },
@@ -654,8 +652,7 @@ export function borrowOpenClawAgentDatabase(options: OpenClawAgentDatabaseOption
 
 /** Return whether the exact cached agent database pathname is still open. */
 export function isOpenClawAgentDatabaseOpen(pathname: string): boolean {
-  const database = cache.databases.get(path.resolve(pathname));
-  return database?.db.isOpen === true;
+  return cache.databases.get(path.resolve(pathname))?.db.isOpen === true;
 }
 
 /** Return the matching live cache entry without materializing a database. */
