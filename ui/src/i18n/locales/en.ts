@@ -2760,10 +2760,13 @@ export const en: TranslationMap & {
       title: "Speaker voice",
       description: "Voice used for spoken replies. GPT-Live locks the voice once a call starts.",
       default: "Provider default",
+      unsupported: "unsupported",
+      unsupportedDefault:
+        "This saved voice is unavailable for the selected route. Provider default will be used.",
     },
     gptLive: {
       title: "GPT-Live",
-      hint: "GPT-Live works with a ChatGPT subscription: sign in once with “openclaw models auth login --provider openai”. No Platform API key needed for browser or Gateway-relay Talk. Delegated work can be steered while running and requires exact spoken confirmation for high-impact actions.",
+      hint: "Released browser/Gateway-owned WebRTC tries OAuth first and falls back to a Platform API key. Direct backend sockets and unlisted or private routes require Platform API-key access. Delegated work can be steered while running and requires exact spoken confirmation for high-impact actions.",
       ready: "Ready",
     },
   },
