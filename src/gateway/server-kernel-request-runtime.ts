@@ -219,6 +219,7 @@ export async function prepareGatewayKernelRequestRuntime(params: {
         sessionObserver.removeConnection(connId);
       },
       getSessionEventSubscriberConnIds: sessionEventSubscribers.getAll,
+      getSessionMessageSubscriberConnIds: sessionMessageSubscribers.get,
       registerToolEventRecipient: toolEventRecipients.add,
       dedupe,
       wizardSessions,
