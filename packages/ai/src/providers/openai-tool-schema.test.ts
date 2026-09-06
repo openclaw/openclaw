@@ -1,6 +1,10 @@
 // Verifies OpenAI strict tool schema normalization and cache behavior.
 import { deepStrictEqual } from "node:assert/strict";
 import { describe, expect, it } from "vitest";
+import {
+  normalizeToolParameterSchema,
+  ToolSchemaDepthLimitError,
+} from "./agent-tools-parameter-schema.js";
 import { projectOpenAITools } from "./openai-tool-projection.js";
 import { normalizeOpenAIStrictCompatSchema } from "./openai-tool-schema-compat.js";
 import {
@@ -306,4 +310,120 @@ describe("OpenAI strict tool schema normalization", () => {
     expect(normalizeOpenAIStrictToolParameters(tool?.parameters, true)).toBe(normalized);
     expect(serializationCount).toBe(1);
   });
+});
+
+describe("tool schema depth guard", () => {
+  function deepPropertiesChain(levels: number): unknown {
+    let schema: unknown = { type: "object", properties: { leaf: { type: "string" } } };
+    for (let i = 0; i < levels; i += 1) {
+      schema = { type: "object", properties: { nested: schema } };
+    }
+    return schema;
+  }
+
+  function deepArrayChain(levels: number): unknown {
+    let value: unknown = "leaf";
+    for (let i = 0; i < levels; i += 1) {
+      value = [value];
+    }
+    return value;
+  }
+
+  it.each([
+    ["deep properties chain", deepPropertiesChain(3000), normalizeStrictOpenAIJsonSchema],
+    ["deep array chain", deepArrayChain(3000), normalizeStrictOpenAIJsonSchema],
+  ])("rejects %s instead of overflowing the stack", (_name, schema, normalize) => {
+    expect(() => normalize(schema)).toThrow(ToolSchemaDepthLimitError);
+  });
+
+  it("normalizes a deeply nested but legitimate object schema without rejecting it", () => {
+    const schema = deepPropertiesChain(80);
+    expect(() => normalizeStrictOpenAIJsonSchema(schema)).not.toThrow();
+  });
+
+  it("bounds local $ref expansion depth, not only raw document depth", () => {
+    // A flat $defs map is shallow as a document, but each entry links to the next, so expansion
+    // recurses once per link — a pre-expansion document check cannot see this depth.
+    const defs: Record<string, unknown> = {};
+    for (let i = 0; i < 3000; i += 1) {
+      defs[`s${i}`] = { $ref: `#/$defs/s${i + 1}` };
+    }
+    defs.s3000 = { type: "string" };
+    const schema = { $defs: defs, $ref: "#/$defs/s0" };
+    expect(() => normalizeToolParameterSchema(schema)).toThrow(ToolSchemaDepthLimitError);
+  });
+
+  it("keeps deeply nested opaque literal values without rejecting the schema", () => {
+    // const/default/enum/examples are literal payloads, not schema edges: normalizers preserve
+    // them without recursion, so their depth must not trip the guard.
+    let literal: unknown = "leaf";
+    for (let i = 0; i < 3000; i += 1) {
+      literal = { nested: literal };
+    }
+    const schema = { type: "object", properties: { field: { type: "object", default: literal } } };
+    const normalized = normalizeToolParameterSchema(schema) as {
+      properties: { field: { default: unknown } };
+    };
+    expect(normalized.properties.field.default).toEqual(literal);
+  });
+
+  it("preserves deeply nested literal payloads in strict mode without rejecting", () => {
+    let literal: unknown = "leaf";
+    for (let i = 0; i < 300; i += 1) {
+      literal = { nested: literal };
+    }
+    const schema = { type: "object", properties: { field: { type: "object", default: literal } } };
+    const normalized = normalizeStrictOpenAIJsonSchema(schema) as {
+      properties: { field: { default: unknown } };
+    };
+    expect(normalized.properties.field.default).toEqual(literal);
+    expect(() => isStrictOpenAIJsonSchemaCompatible(schema)).not.toThrow();
+  });
+
+  it("bounds retained $defs subtrees reached only by downstream walkers", () => {
+    // An unresolved $ref keeps $defs on the normalized result; those raw subtrees are traversed
+    // by the post-inlining walkers, so the budget must hold there too.
+    let deep: unknown = { type: "string" };
+    for (let i = 0; i < 2000; i += 1) {
+      deep = { type: "object", properties: { child: deep } };
+    }
+    const schema = {
+      type: "object",
+      properties: { broken: { $ref: "#/definitions/missing" } },
+      $defs: { deep },
+    };
+    expect(() => normalizeToolParameterSchema(schema)).toThrow(ToolSchemaDepthLimitError);
+  });
+
+  it("describes the nesting limit and corrective action when rejecting", () => {
+    let caught: unknown;
+    try {
+      normalizeToolParameterSchema(deepPropertiesChain(3000));
+    } catch (error) {
+      caught = error;
+    }
+    const error = caught as Error;
+    expect(error.name).toBe("ToolSchemaDepthLimitError");
+    expect(error.message).toContain("256");
+    expect(error.message).toContain("nesting");
+  });
+
+  it.each(["default", "const", "enum", "examples"])(
+    "repairs a keyword-named property (%s) during strict normalization",
+    (name) => {
+      // Inside a properties map these are user-chosen property names, not schema keywords:
+      // the nested empty-object schema must still receive its required: [] repair, or the
+      // strict compatibility check downgrades the whole tool inventory to strict: false.
+      const schema = {
+        type: "object",
+        properties: { [name]: { type: "object", properties: {}, additionalProperties: false } },
+        required: [name],
+      };
+      const normalized = normalizeStrictOpenAIJsonSchema(schema) as {
+        properties: Record<string, { required?: unknown[] }>;
+      };
+      expect(normalized.properties[name]?.required).toEqual([]);
+      expect(isStrictOpenAIJsonSchemaCompatible(schema)).toBe(true);
+    },
+  );
 });

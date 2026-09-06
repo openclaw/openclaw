@@ -4,8 +4,12 @@
  * Caches normalized object inputs by provider compatibility so repeated inventory builds preserve identity.
  */
 import {
+  MAX_TOOL_SCHEMA_NESTING_DEPTH,
   normalizeToolParameterSchema,
+  SCHEMA_LITERAL_KEYS,
+  SCHEMA_MAP_KEYS,
   shouldOmitEmptyArrayItems,
+  ToolSchemaDepthLimitError,
   type ToolSchemaModelCompat,
 } from "./agent-tools-parameter-schema.js";
 import type { OpenAIToolProjection } from "./openai-tool-projection.js";
@@ -107,10 +111,15 @@ export function normalizeStrictOpenAIJsonSchema(
 }
 
 function normalizeStrictOpenAIJsonSchemaRecursive(schema: unknown, depth: number): unknown {
+  // Every container descent (array element or object entry) deepens the recursion by one level;
+  // a hostile MCP schema nested past the cap would otherwise overflow the stack as a RangeError.
+  if (depth > MAX_TOOL_SCHEMA_NESTING_DEPTH) {
+    throw new ToolSchemaDepthLimitError();
+  }
   if (Array.isArray(schema)) {
     let changed = false;
     const normalized = schema.map((entry) => {
-      const next = normalizeStrictOpenAIJsonSchemaRecursive(entry, depth);
+      const next = normalizeStrictOpenAIJsonSchemaRecursive(entry, depth + 1);
       changed ||= next !== entry;
       return next;
     });
@@ -124,10 +133,27 @@ function normalizeStrictOpenAIJsonSchemaRecursive(schema: unknown, depth: number
   let changed = false;
   const normalized = Object.fromEntries<unknown>(
     Object.entries(record).map(([key, value]) => {
-      const next = normalizeStrictOpenAIJsonSchemaRecursive(
-        value,
-        key === "properties" ? depth : depth + 1,
-      );
+      // Schema-map entries are user-named subschemas — a property can be called "default" — so
+      // traverse each entry value before the literal-keyword exemption below can apply.
+      if (SCHEMA_MAP_KEYS.has(key) && value && typeof value === "object" && !Array.isArray(value)) {
+        let mapChanged = false;
+        const nextMap = Object.fromEntries(
+          // SAFETY: value is narrowed to a non-null, non-array object above.
+          Object.entries(value as Record<string, unknown>).map(([entryKey, entryValue]) => {
+            const nextEntry = normalizeStrictOpenAIJsonSchemaRecursive(entryValue, depth + 1);
+            mapChanged ||= nextEntry !== entryValue;
+            return [entryKey, nextEntry];
+          }),
+        );
+        changed ||= mapChanged;
+        return [key, mapChanged ? nextMap : value];
+      }
+      // Literal payloads (const/default/enum/examples) are values, not schemas: preserve them
+      // without recursion so their depth can neither trip the cap nor abort request construction.
+      if (SCHEMA_LITERAL_KEYS.has(key)) {
+        return [key, value];
+      }
+      const next = normalizeStrictOpenAIJsonSchemaRecursive(value, depth + 1);
       changed ||= next !== value;
       return [key, next];
     }),
@@ -168,7 +194,7 @@ export function normalizeOpenAIStrictToolParameters<T>(
 
 /** Returns whether a schema already satisfies OpenAI strict tool-schema constraints. */
 export function isStrictOpenAIJsonSchemaCompatible(schema: unknown): boolean {
-  return isStrictOpenAIJsonSchemaCompatibleRecursive(normalizeStrictOpenAIJsonSchema(schema));
+  return isStrictOpenAIJsonSchemaCompatibleRecursive(normalizeStrictOpenAIJsonSchema(schema), 0);
 }
 
 type OpenAIStrictToolSchemaDiagnostic = {
@@ -199,9 +225,12 @@ export function findOpenAIStrictToolProjectionDiagnostics(
   ];
 }
 
-function isStrictOpenAIJsonSchemaCompatibleRecursive(schema: unknown): boolean {
+function isStrictOpenAIJsonSchemaCompatibleRecursive(schema: unknown, depth: number): boolean {
+  if (depth > MAX_TOOL_SCHEMA_NESTING_DEPTH) {
+    throw new ToolSchemaDepthLimitError();
+  }
   if (Array.isArray(schema)) {
-    return schema.every((entry) => isStrictOpenAIJsonSchemaCompatibleRecursive(entry));
+    return schema.every((entry) => isStrictOpenAIJsonSchemaCompatibleRecursive(entry, depth + 1));
   }
   if (!schema || typeof schema !== "object") {
     return true;
@@ -237,12 +266,17 @@ function isStrictOpenAIJsonSchemaCompatibleRecursive(schema: unknown): boolean {
   }
 
   return Object.entries(record).every(([key, entry]) => {
-    if (key === "properties" && entry && typeof entry === "object" && !Array.isArray(entry)) {
+    if (SCHEMA_LITERAL_KEYS.has(key)) {
+      return true;
+    }
+    // Schema-map entry names are user-chosen, never keywords; check each subschema value.
+    if (SCHEMA_MAP_KEYS.has(key) && entry && typeof entry === "object" && !Array.isArray(entry)) {
+      // SAFETY: entry is narrowed to a non-null, non-array object above.
       return Object.values(entry as Record<string, unknown>).every((value) =>
-        isStrictOpenAIJsonSchemaCompatibleRecursive(value),
+        isStrictOpenAIJsonSchemaCompatibleRecursive(value, depth + 1),
       );
     }
-    return isStrictOpenAIJsonSchemaCompatibleRecursive(entry);
+    return isStrictOpenAIJsonSchemaCompatibleRecursive(entry, depth + 1);
   });
 }
 

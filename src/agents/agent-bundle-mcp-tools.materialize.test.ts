@@ -1,6 +1,7 @@
 /** Tests materializing MCP catalog tools into agent tool definitions and results. */
 
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import { ToolSchemaDepthLimitError } from "@openclaw/ai/internal/openai";
 import { expectDefined } from "@openclaw/normalization-core";
 import { validateToolArguments } from "openclaw/plugin-sdk/llm";
 import { afterEach, describe, expect, it } from "vitest";
@@ -156,6 +157,44 @@ describe("createBundleMcpToolRuntime", () => {
         toolMeta: (tool) => getPluginToolMeta(tool),
       }).map((tool) => tool.name),
     ).toEqual(["demo__model_tool"]);
+  });
+
+  it("releases the runtime lease when tool build fails after catalog load", async () => {
+    // A hostile schema trips the depth guard during buildBundleMcpToolsFromCatalog — after the
+    // lease is acquired and the catalog is loaded. The lease must still be released, or the
+    // runtime can never idle-retire.
+    let releaseCount = 0;
+    let hostileSchema: unknown = { type: "string" };
+    for (let i = 0; i < 3000; i += 1) {
+      hostileSchema = { type: "object", properties: { child: hostileSchema } };
+    }
+    const runtime: SessionMcpRuntime = {
+      ...makeToolRuntime({
+        tools: [
+          {
+            serverName: "bundleProbe",
+            safeServerName: "bundleProbe",
+            toolName: "bundle_probe",
+            inputSchema: hostileSchema as Record<string, unknown>,
+            fallbackDescription: "Bundle probe",
+          },
+        ],
+      }),
+      acquireLease: () => {
+        let released = false;
+        return () => {
+          if (!released) {
+            released = true;
+            releaseCount += 1;
+          }
+        };
+      },
+    };
+
+    await expect(materializeBundleMcpToolsForRun({ runtime })).rejects.toThrow(
+      ToolSchemaDepthLimitError,
+    );
+    expect(releaseCount).toBe(1);
   });
 
   it("attaches app previews without converting typed image results to text", async () => {
