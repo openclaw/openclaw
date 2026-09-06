@@ -286,7 +286,10 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
   const createHandle = (
     entry: NodeTunnelEntry,
     restoredWorkspace: NodeWorkerWorkspaceBinding | undefined,
-  ): { handle: WorkerTurnTunnelHandle; validateRestoredWorkspace: () => Promise<void> } => {
+  ): {
+    handle: WorkerTurnTunnelHandle;
+    validateRestoredWorkspace: (authorize?: () => void) => Promise<void>;
+  } => {
     const buildLaunchInput = (
       plan: NodeWorkerLaunchInput["descriptor"],
       claim: WorkerSessionTurnClaim,
@@ -565,7 +568,7 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
           return;
         }
         const created = createHandle(entry, restoredWorkspace);
-        await created.validateRestoredWorkspace();
+        await created.validateRestoredWorkspace(request.authorize);
         request.authorize?.();
         if (!isLiveEntry(entry)) {
           return;

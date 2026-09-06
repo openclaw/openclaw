@@ -7,6 +7,11 @@ import { isPathInside } from "../../infra/fs-safe.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import type { NodeWorkspaceTransferHttpRoute } from "./node-workspace-transfer-http-contract.js";
 import {
+  createNodeWorkspaceSyncAuthorization,
+  isNodeWorkspaceTransferOwnerCurrent,
+  type NodeWorkspaceTransferOwner,
+} from "./node-workspace-transfer-owner.js";
+import {
   prepareNodeWorkspaceTransferSnapshot,
   type NodeWorkspaceTransferSnapshot,
 } from "./node-workspace-transfer-snapshot.js";
@@ -42,23 +47,6 @@ export {
 
 const TRANSFER_TIMEOUT_MS = 10 * 60_000;
 const MANIFEST_REF_PATTERN = /^sha256:[a-f0-9]{64}$/u;
-
-type TransferCredential = {
-  ownerEpoch: number;
-  sessionId: string | null;
-};
-
-type TransferEnvironment = {
-  ownerEpoch: number;
-  attachedSessionIds: string[];
-  destroyRequestedAtMs: number | null;
-  state: string;
-};
-
-type TransferOwner = {
-  credential: TransferCredential | undefined;
-  environment: TransferEnvironment;
-};
 
 type NodeWorkspaceTransferUpload = {
   base: WorkerWorkspaceManifest;
@@ -120,23 +108,14 @@ type TransferAuthorization = {
   route: NodeWorkspaceTransferHttpRoute;
 };
 
-function contextOwnerValid(context: TransferContext, owner: TransferOwner | undefined): boolean {
-  const environment = owner?.environment;
-  const credential = owner?.credential;
-  // Deleting the credential fences teardown before its asynchronous tunnel stop.
-  // Its RPC admission expiry does not end the node workspace; each transfer has its own TTL.
-  return Boolean(
+function contextOwnerValid(
+  context: TransferContext,
+  owner: NodeWorkspaceTransferOwner | undefined,
+): boolean {
+  return (
     !context.abortController.signal.aborted &&
     context.isAuthorized() &&
-    environment &&
-    credential &&
-    environment.state === "attached" &&
-    environment.destroyRequestedAtMs === null &&
-    environment.ownerEpoch === context.ownerEpoch &&
-    environment.attachedSessionIds.length === 1 &&
-    environment.attachedSessionIds[0] === context.sessionId &&
-    credential.ownerEpoch === context.ownerEpoch &&
-    credential.sessionId === context.sessionId,
+    isNodeWorkspaceTransferOwnerCurrent(context, owner)
   );
 }
 
@@ -161,7 +140,7 @@ function entryPath(root: string, relative: string): string {
 }
 
 export function createNodeWorkspaceTransferService(options: {
-  getOwner: (environmentId: string) => TransferOwner | undefined;
+  getOwner: (environmentId: string) => NodeWorkspaceTransferOwner | undefined;
   now?: () => number;
   temporaryRoot?: string;
 }) {
@@ -328,16 +307,26 @@ export function createNodeWorkspaceTransferService(options: {
       localPath: string;
       isAuthorized: () => boolean;
       signal?: AbortSignal;
+      authorize?: () => void;
     }) {
+      const { authorize, ...owner } = params;
+      const { assertCurrent, isOperationAuthorized } = createNodeWorkspaceSyncAuthorization(
+        owner,
+        authorize,
+        options.getOwner,
+      );
       return await contextOperations.enqueue(params.environmentId, async () => {
+        assertCurrent();
         const previous = contexts.get(params.environmentId);
         if (previous) {
           await closeContext(previous);
+          assertCurrent();
         }
         await ensureTemporaryRoot();
+        assertCurrent();
         const abortController = new AbortController();
         const context: TransferContext = {
-          ...params,
+          ...owner,
           localPath: await fsp.realpath(params.localPath),
           temporaryRoot: await fsp.mkdtemp(path.join(temporaryBaseRoot, "context-")),
           currentManifestRef: "",
@@ -356,6 +345,7 @@ export function createNodeWorkspaceTransferService(options: {
           }
         }
         try {
+          assertCurrent();
           const snapshot = await prepareNodeWorkspaceTransferSnapshot({
             localPath: context.localPath,
             temporaryRoot: context.temporaryRoot,
@@ -364,11 +354,17 @@ export function createNodeWorkspaceTransferService(options: {
               AbortSignal.timeout(TRANSFER_TIMEOUT_MS),
             ]),
           });
+          assertCurrent();
           context.snapshots.set(snapshot.manifestRef, snapshot);
           context.baseCommit = snapshot.manifest.baseCommit;
           context.currentManifestRef = snapshot.manifestRef;
           contexts.set(context.environmentId, context);
-          return { snapshot, token: mintDownload(context, snapshot.manifestRef) };
+          // Only this download retains initiating-turn authority; reconciliation and
+          // future turns continue under the independent placement owner.
+          return {
+            snapshot,
+            token: mintDownload(context, snapshot.manifestRef, isOperationAuthorized),
+          };
         } catch (error) {
           await closeContext(context);
           throw error;
