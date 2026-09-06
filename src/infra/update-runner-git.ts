@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import {
   resolveControlUiAssetHealth,
   resolveControlUiDistIndexPathForRoot,
@@ -34,6 +35,7 @@ import {
   prepareGitMutation,
   readBranchName,
   resolveChannelTag,
+  resolveReleaseTagRemote,
 } from "./update-runner-git-target.js";
 import type {
   CommandRunner,
@@ -375,13 +377,50 @@ export async function updateGitCheckout(params: {
       }
     }
   } else {
-    const fetchFailure = await runRequiredStep(
+    // Branches fetched unforced so a rewritten upstream branch ref is rejected
+    // (not force-updated), matching the dev channel's `--no-tags` shape. A global
+    // `--force` here would overwrite a protected (no `+` prefix) configured refspec.
+    const branchFetchFailure = await runRequiredStep(
       "git fetch",
-      ["git", "-C", gitRoot, "fetch", "--all", "--prune", "--tags"],
+      ["git", "-C", gitRoot, "fetch", "--all", "--prune", "--no-tags"],
       "fetch-failed",
     );
-    if (fetchFailure) {
-      return fetchFailure;
+    if (branchFetchFailure) {
+      return branchFetchFailure;
+    }
+    // Release tags come from one authoritative remote: auxiliary remotes share
+    // the local refs/tags namespace, so force-fetching tags from every configured
+    // remote would let any of them replace the auto-selected release revision.
+    // The retained `branch.<main>.remote` tracking config is that authority: it
+    // survives detached release checkouts and is the same upstream the dev
+    // channel resolves branches from, while a fork-style `origin` may never
+    // carry tags at all. Without tracking config, `origin` is the clone's
+    // canonical source and fork-style checkouts without one fall back to the
+    // first declared remote. resolveExplicitTarget keeps its per-remote walk
+    // because an operator-named ref is its own authorization.
+    // The `+` refspec prefix scopes force to the tag-only refspec, unlike a
+    // global `--all --force` that hits every configured refspec.
+    const remoteStep = await runStep(step("git remote", ["git", "-C", gitRoot, "remote"], gitRoot));
+    const remotes = normalizeStringEntries((remoteStep.stdoutTail ?? "").split("\n"));
+    const trackedRemoteStep = await runStep(
+      step(
+        "git config update upstream",
+        ["git", "-C", gitRoot, "config", "--get", `branch.${DEV_BRANCH}.remote`],
+        gitRoot,
+      ),
+    );
+    const trackedUpdateRemote =
+      trackedRemoteStep.exitCode === 0 ? (trackedRemoteStep.stdoutTail ?? "").trim() : "";
+    const tagRemote = resolveReleaseTagRemote(remotes, trackedUpdateRemote);
+    if (tagRemote) {
+      const tagFetchFailure = await runRequiredStep(
+        `git fetch tags ${tagRemote}`,
+        ["git", "-C", gitRoot, "fetch", tagRemote, "+refs/tags/*:refs/tags/*"],
+        "fetch-failed",
+      );
+      if (tagFetchFailure) {
+        return tagFetchFailure;
+      }
     }
     const tag = await resolveChannelTag(runCommand, gitRoot, timeoutMs, channel);
     if (!tag) {

@@ -1,0 +1,333 @@
+// Real-git boundary tests for the release-channel tag fetch in update-runner-git.
+// The release fetch resolves its checkout tag after `git fetch`, so tags cannot be
+// skipped (the dev channel uses `--no-tags`). An upstream-recreated (force-moved)
+// tag makes a plain `--tags` fetch reject and exit non-zero, which aborted every
+// `openclaw update` at fetch-failed. The release fetch is split into an unforced
+// `--no-tags` branch fetch and a forced tag-only refspec so a recreated tag
+// overwrites the local copy without forcing any configured branch mapping. These
+// tests prove the git invariants at the real boundary, not behind a mock.
+import { spawnSync } from "node:child_process";
+import { writeFileSync } from "node:fs";
+import path from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { resolveReleaseTagRemote } from "./update-runner-git-target.js";
+
+// Force the C locale so git's porcelain ref-status and error wording are stable
+// across operator locales (CI runs C; dev machines may localize "would clobber").
+const gitEnv = { ...process.env, LC_ALL: "C", LANG: "C", LANGUAGE: "C" };
+
+function git(cwd: string, args: string[]) {
+  const result = spawnSync("git", ["-C", cwd, ...args], {
+    encoding: "utf8",
+    env: gitEnv,
+  });
+  return { status: result.status ?? 1, stdout: result.stdout, stderr: result.stderr };
+}
+
+function gitStatus(cwd: string, args: string[]) {
+  return spawnSync("git", ["-C", cwd, ...args], { encoding: "utf8", env: gitEnv }).status ?? 1;
+}
+
+describe("release-channel tag fetch tolerates upstream-recreated tags", () => {
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+  // Bare origin whose tag `v1` is force-moved to a second commit, plus an operator
+  // checkout still holding the stale first-tag object — the state an installed
+  // `openclaw` checkout is in when upstream recreates a release tag.
+  function setupRecreatedTagOrigin() {
+    const root = tempDirs.make("openclaw-update-tags-");
+    const origin = path.join(root, "origin.git");
+    expect(spawnSync("git", ["init", "--bare", "-q", origin], { encoding: "utf8" }).status).toBe(0);
+
+    const work = path.join(root, "work");
+    expect(spawnSync("git", ["clone", "-q", origin, work], { encoding: "utf8" }).status).toBe(0);
+    expect(gitStatus(work, ["config", "user.email", "t@t.t"])).toBe(0);
+    expect(gitStatus(work, ["config", "user.name", "t"])).toBe(0);
+    writeFileSync(path.join(work, "a.txt"), "A");
+    expect(gitStatus(work, ["add", "-A"])).toBe(0);
+    expect(gitStatus(work, ["commit", "-q", "-m", "A"])).toBe(0);
+    expect(gitStatus(work, ["tag", "v1"])).toBe(0);
+    expect(
+      spawnSync("git", ["-C", work, "push", "-q", "origin", "HEAD:main", "v1"], {
+        encoding: "utf8",
+      }).status,
+    ).toBe(0);
+
+    // Operator checkout fetched the original tag object (prior `openclaw update`).
+    const operator = path.join(root, "operator");
+    expect(spawnSync("git", ["clone", "-q", origin, operator], { encoding: "utf8" }).status).toBe(
+      0,
+    );
+    expect(gitStatus(operator, ["config", "user.email", "t@t.t"])).toBe(0);
+    expect(gitStatus(operator, ["config", "user.name", "t"])).toBe(0);
+    expect(git(operator, ["fetch", "-q", "--all", "--prune", "--tags"]).status).toBe(0);
+    const firstTag = git(operator, ["rev-parse", "v1^{}"]).stdout.trim();
+
+    // Upstream recreates: new commit, force-move v1 to it.
+    writeFileSync(path.join(work, "b.txt"), "B");
+    expect(gitStatus(work, ["add", "-A"])).toBe(0);
+    expect(gitStatus(work, ["commit", "-q", "-m", "B"])).toBe(0);
+    expect(gitStatus(work, ["tag", "-f", "v1"])).toBe(0);
+    expect(
+      spawnSync("git", ["-C", work, "push", "-q", "--force", "origin", "HEAD:main", "v1"], {
+        encoding: "utf8",
+      }).status,
+    ).toBe(0);
+    const recreatedTag = git(work, ["rev-parse", "v1^{}"]).stdout.trim();
+
+    return { operator, firstTag, recreatedTag };
+  }
+
+  it("plain --tags fetch rejects a recreated tag and exits non-zero", () => {
+    const { operator, firstTag, recreatedTag } = setupRecreatedTagOrigin();
+    expect(firstTag).not.toBe(recreatedTag);
+
+    const fetch = git(operator, ["fetch", "--all", "--prune", "--tags"]);
+    expect(fetch.status).not.toBe(0);
+    expect(fetch.stderr).toContain("would clobber existing tag");
+    // Stale local tag object is unchanged after the rejected fetch.
+    expect(git(operator, ["rev-parse", "v1^{}"]).stdout.trim()).toBe(firstTag);
+  });
+
+  it("two-step fetch overwrites the recreated tag and exits zero", () => {
+    const { operator, recreatedTag } = setupRecreatedTagOrigin();
+
+    // Release fetch is split: an unforced `--no-tags` branch fetch, then a per-remote
+    // tag fetch whose `+` refspec prefix force-moves the recreated tag.
+    const branchFetch = git(operator, ["fetch", "--all", "--prune", "--no-tags"]);
+    expect(branchFetch.status, `${branchFetch.stdout}\n${branchFetch.stderr}`).toBe(0);
+    const tagFetch = git(operator, ["fetch", "origin", "+refs/tags/*:refs/tags/*"]);
+    expect(tagFetch.status, `${tagFetch.stdout}\n${tagFetch.stderr}`).toBe(0);
+    expect(git(operator, ["rev-parse", "v1^{}"]).stdout.trim()).toBe(recreatedTag);
+  });
+
+  // Operator checkout with a protected (no `+` prefix) branch refspec, facing an
+  // upstream that rewrites main non-fast-forward (rewind) and recreates the tag.
+  function setupRewrittenBranchAndRecreatedTag() {
+    const root = tempDirs.make("openclaw-update-ff-");
+    const origin = path.join(root, "origin.git");
+    expect(spawnSync("git", ["init", "--bare", "-q", origin], { encoding: "utf8" }).status).toBe(0);
+
+    const work = path.join(root, "work");
+    expect(spawnSync("git", ["clone", "-q", origin, work], { encoding: "utf8" }).status).toBe(0);
+    expect(gitStatus(work, ["config", "user.email", "t@t.t"])).toBe(0);
+    expect(gitStatus(work, ["config", "user.name", "t"])).toBe(0);
+    // c1: main HEAD, tagged v1.
+    writeFileSync(path.join(work, "a.txt"), "A");
+    expect(gitStatus(work, ["add", "-A"])).toBe(0);
+    expect(gitStatus(work, ["commit", "-q", "-m", "A"])).toBe(0);
+    expect(gitStatus(work, ["branch", "-M", "main"])).toBe(0);
+    expect(gitStatus(work, ["tag", "v1"])).toBe(0);
+    expect(
+      spawnSync("git", ["-C", work, "push", "-q", "origin", "main", "v1"], {
+        encoding: "utf8",
+      }).status,
+    ).toBe(0);
+    // c2: a second commit; main moves forward to c2, v1 stays on c1.
+    writeFileSync(path.join(work, "b.txt"), "B");
+    expect(gitStatus(work, ["add", "-A"])).toBe(0);
+    expect(gitStatus(work, ["commit", "-q", "-m", "B"])).toBe(0);
+    expect(
+      spawnSync("git", ["-C", work, "push", "-q", "origin", "main"], {
+        encoding: "utf8",
+      }).status,
+    ).toBe(0);
+    const forwardMain = git(work, ["rev-parse", "main"]).stdout.trim();
+
+    // Operator checkout with a PROTECTED branch refspec (no `+` prefix): a
+    // non-fast-forward upstream rewrite must be rejected, not force-applied.
+    const operator = path.join(root, "operator");
+    expect(spawnSync("git", ["clone", "-q", origin, operator], { encoding: "utf8" }).status).toBe(
+      0,
+    );
+    expect(gitStatus(operator, ["config", "user.email", "t@t.t"])).toBe(0);
+    expect(gitStatus(operator, ["config", "user.name", "t"])).toBe(0);
+    expect(
+      gitStatus(operator, [
+        "config",
+        "remote.origin.fetch",
+        "refs/heads/main:refs/remotes/origin/main",
+      ]),
+    ).toBe(0);
+    expect(git(operator, ["fetch", "-q", "--all", "--prune"]).status).toBe(0);
+
+    // Upstream REWRITES main non-fast-forward (rewind to c1) and recreates v1 on c2.
+    expect(gitStatus(work, ["reset", "--hard", "HEAD~1"])).toBe(0);
+    expect(gitStatus(work, ["tag", "-f", "v1", forwardMain])).toBe(0);
+    expect(
+      spawnSync("git", ["-C", work, "push", "-q", "--force", "origin", "main", "v1"], {
+        encoding: "utf8",
+      }).status,
+    ).toBe(0);
+
+    return {
+      operator,
+      forwardMain,
+      rewoundMain: git(work, ["rev-parse", "main"]).stdout.trim(),
+    };
+  }
+
+  it("tag-only force does not force-update a protected non-fast-forward branch refspec", () => {
+    const { operator, forwardMain, rewoundMain } = setupRewrittenBranchAndRecreatedTag();
+    // operator origin/main == forwardMain (c2); upstream rewound main to c1 (non-ff).
+    expect(git(operator, ["rev-parse", "origin/main"]).stdout.trim()).toBe(forwardMain);
+    expect(forwardMain).not.toBe(rewoundMain);
+
+    // The two-step release fetch: branches unforced, then per-remote tag fetch
+    // whose `+` refspec prefix forces tags without touching the branch mapping.
+    const branchFetch = git(operator, ["fetch", "--all", "--prune", "--no-tags"]);
+    expect(branchFetch.status).not.toBe(0); // rejected non-fast-forward
+    // Protected branch refspec stays at the forward commit, not force-rewound.
+    expect(git(operator, ["rev-parse", "origin/main"]).stdout.trim()).toBe(forwardMain);
+
+    const tagFetch = git(operator, ["fetch", "origin", "+refs/tags/*:refs/tags/*"]);
+    expect(tagFetch.status, `${tagFetch.stdout}\n${tagFetch.stderr}`).toBe(0);
+    // Tag force-moved to the recreated target (c2); branch still untouched.
+    expect(git(operator, ["rev-parse", "v1^{}"]).stdout.trim()).toBe(forwardMain);
+    expect(git(operator, ["rev-parse", "origin/main"]).stdout.trim()).toBe(forwardMain);
+  });
+
+  // Two remotes: origin carries the release tag; an auxiliary remote holds a
+  // same-named tag on unrelated content. Both share the local refs/tags
+  // namespace, so only the authoritative remote may feed the auto-selected tag.
+  function setupAuxiliaryRemoteTagCollision() {
+    const root = tempDirs.make("openclaw-update-tag-authority-");
+    const origin = path.join(root, "origin.git");
+    const aux = path.join(root, "aux.git");
+    expect(spawnSync("git", ["init", "--bare", "-q", origin], { encoding: "utf8" }).status).toBe(0);
+    expect(spawnSync("git", ["init", "--bare", "-q", aux], { encoding: "utf8" }).status).toBe(0);
+
+    const work = path.join(root, "work");
+    expect(spawnSync("git", ["clone", "-q", origin, work], { encoding: "utf8" }).status).toBe(0);
+    expect(gitStatus(work, ["config", "user.email", "t@t.t"])).toBe(0);
+    expect(gitStatus(work, ["config", "user.name", "t"])).toBe(0);
+    writeFileSync(path.join(work, "a.txt"), "A");
+    expect(gitStatus(work, ["add", "-A"])).toBe(0);
+    expect(gitStatus(work, ["commit", "-q", "-m", "A"])).toBe(0);
+    expect(gitStatus(work, ["tag", "v1"])).toBe(0);
+    expect(
+      spawnSync("git", ["-C", work, "push", "-q", "origin", "HEAD:main", "v1"], {
+        encoding: "utf8",
+      }).status,
+    ).toBe(0);
+    const originTag = git(work, ["rev-parse", "v1^{}"]).stdout.trim();
+
+    const auxWork = path.join(root, "aux-work");
+    expect(spawnSync("git", ["clone", "-q", aux, auxWork], { encoding: "utf8" }).status).toBe(0);
+    expect(gitStatus(auxWork, ["config", "user.email", "t@t.t"])).toBe(0);
+    expect(gitStatus(auxWork, ["config", "user.name", "t"])).toBe(0);
+    writeFileSync(path.join(auxWork, "aux.txt"), "aux");
+    expect(gitStatus(auxWork, ["add", "-A"])).toBe(0);
+    expect(gitStatus(auxWork, ["commit", "-q", "-m", "aux"])).toBe(0);
+    expect(gitStatus(auxWork, ["tag", "v1"])).toBe(0);
+    expect(
+      spawnSync("git", ["-C", auxWork, "push", "-q", "origin", "HEAD:main", "v1"], {
+        encoding: "utf8",
+      }).status,
+    ).toBe(0);
+    const auxTag = git(auxWork, ["rev-parse", "v1^{}"]).stdout.trim();
+    expect(originTag).not.toBe(auxTag);
+
+    const operator = path.join(root, "operator");
+    expect(spawnSync("git", ["clone", "-q", origin, operator], { encoding: "utf8" }).status).toBe(
+      0,
+    );
+    expect(gitStatus(operator, ["remote", "add", "zfork", aux])).toBe(0);
+    // Branches only: a `--tags` fetch from both remotes would already hit the
+    // clobber conflict this fixture is built to exercise one fetch at a time.
+    expect(git(operator, ["fetch", "-q", "--all", "--prune", "--no-tags"]).status).toBe(0);
+    expect(git(operator, ["fetch", "-q", "origin", "+refs/tags/*:refs/tags/*"]).status).toBe(0);
+    return { operator, originTag, auxTag };
+  }
+
+  it("release tag selection stays bound to the authoritative remote", () => {
+    const { operator, originTag, auxTag } = setupAuxiliaryRemoteTagCollision();
+
+    // Release fetch: branches unforced, tags force-fetched from the
+    // authoritative remote only (`origin` when present).
+    const branchFetch = git(operator, ["fetch", "--all", "--prune", "--no-tags"]);
+    expect(branchFetch.status, `${branchFetch.stdout}\n${branchFetch.stderr}`).toBe(0);
+    const tagFetch = git(operator, ["fetch", "origin", "+refs/tags/*:refs/tags/*"]);
+    expect(tagFetch.status, `${tagFetch.stdout}\n${tagFetch.stderr}`).toBe(0);
+    expect(git(operator, ["rev-parse", "v1^{}"]).stdout.trim()).toBe(originTag);
+
+    // Pre-fix contrast: force-fetching the auxiliary remote's tags would have
+    // replaced the authoritative release tag in the shared local namespace.
+    const auxTagFetch = git(operator, ["fetch", "zfork", "+refs/tags/*:refs/tags/*"]);
+    expect(auxTagFetch.status, `${auxTagFetch.stdout}\n${auxTagFetch.stderr}`).toBe(0);
+    expect(git(operator, ["rev-parse", "v1^{}"]).stdout.trim()).toBe(auxTag);
+  });
+
+  // Fork-style topology: `origin` is a fork mirror that carries the branch but
+  // never the release tags, while the authoritative release upstream survives
+  // the detached checkout as the retained `branch.main.remote` tracking config.
+  function setupTagLessForkWithRetainedUpstream() {
+    const root = tempDirs.make("openclaw-update-fork-upstream-");
+    const upstream = path.join(root, "upstream.git");
+    expect(spawnSync("git", ["init", "--bare", "-q", upstream], { encoding: "utf8" }).status).toBe(
+      0,
+    );
+
+    const seed = path.join(root, "seed");
+    expect(spawnSync("git", ["clone", "-q", upstream, seed], { encoding: "utf8" }).status).toBe(0);
+    expect(gitStatus(seed, ["config", "user.email", "t@t.t"])).toBe(0);
+    expect(gitStatus(seed, ["config", "user.name", "t"])).toBe(0);
+    writeFileSync(path.join(seed, "a.txt"), "A");
+    expect(gitStatus(seed, ["add", "-A"])).toBe(0);
+    expect(gitStatus(seed, ["commit", "-q", "-m", "A"])).toBe(0);
+    expect(gitStatus(seed, ["tag", "v1"])).toBe(0);
+    expect(
+      spawnSync("git", ["-C", seed, "push", "-q", "origin", "HEAD:main", "v1"], {
+        encoding: "utf8",
+      }).status,
+    ).toBe(0);
+    const upstreamTag = git(seed, ["rev-parse", "v1^{}"]).stdout.trim();
+
+    const fork = path.join(root, "fork.git");
+    // The fork mirrors the branch but is cloned `--no-tags`: it never carries
+    // the release tag namespace the updater must select from.
+    expect(
+      spawnSync("git", ["clone", "-q", "--no-tags", upstream, fork], { encoding: "utf8" }).status,
+    ).toBe(0);
+
+    const operator = path.join(root, "operator");
+    expect(spawnSync("git", ["clone", "-q", fork, operator], { encoding: "utf8" }).status).toBe(0);
+    expect(gitStatus(operator, ["remote", "add", "upstream", upstream])).toBe(0);
+    expect(git(operator, ["fetch", "-q", "--all", "--prune", "--no-tags"]).status).toBe(0);
+    expect(gitStatus(operator, ["config", "branch.main.remote", "upstream"])).toBe(0);
+    return { operator, upstreamTag };
+  }
+
+  it("fetches release tags from the retained update upstream when origin is a tag-less fork", () => {
+    const { operator, upstreamTag } = setupTagLessForkWithRetainedUpstream();
+
+    // Production remote selection: the retained `branch.<main>.remote` tracking
+    // config wins over the origin fallback; an origin-first choice would fetch
+    // only the fork's (empty) tag set and the release lookup would fail.
+    const remotes = git(operator, ["remote"])
+      .stdout.split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean);
+    const tracked = git(operator, ["config", "--get", "branch.main.remote"]).stdout.trim();
+    const tagRemote = resolveReleaseTagRemote(remotes, tracked);
+    expect(tagRemote).toBe("upstream");
+    if (!tagRemote) {
+      throw new Error("unreachable: tagRemote asserted to be the retained upstream");
+    }
+
+    const branchFetch = git(operator, ["fetch", "--all", "--prune", "--no-tags"]);
+    expect(branchFetch.status, `${branchFetch.stdout}\n${branchFetch.stderr}`).toBe(0);
+
+    // Pre-fix contrast: an origin-first choice force-fetches only the fork's
+    // empty tag set, so the release lookup would find no v1 at all.
+    const forkTagFetch = git(operator, ["fetch", "origin", "+refs/tags/*:refs/tags/*"]);
+    expect(forkTagFetch.status, `${forkTagFetch.stdout}\n${forkTagFetch.stderr}`).toBe(0);
+    expect(git(operator, ["rev-parse", "--verify", "-q", "v1"]).status).not.toBe(0);
+
+    // The tracked update upstream feeds the release tag instead.
+    const tagFetch = git(operator, ["fetch", tagRemote, "+refs/tags/*:refs/tags/*"]);
+    expect(tagFetch.status, `${tagFetch.stdout}\n${tagFetch.stderr}`).toBe(0);
+    expect(git(operator, ["rev-parse", "v1^{}"]).stdout.trim()).toBe(upstreamTag);
+  });
+});
