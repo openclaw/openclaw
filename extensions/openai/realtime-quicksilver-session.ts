@@ -240,7 +240,7 @@ export function createOpenAIQuicksilverBrowserSessionBroker(params: {
         }
       }
       prunePendingOffers();
-      const voice = isGptLive ? resolveOpenAIQuicksilverVoice(request.voice) : request.voice;
+      const voice = isGptLive ? resolveOpenAIQuicksilverVoice(model, request.voice) : request.voice;
       const token = randomBytes(32).toString("base64url");
       const expiresAt = Date.now() + OPENAI_QUICKSILVER_PENDING_TTL_MS;
       reserveOpenAIQuicksilverSession(token, {
