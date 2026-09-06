@@ -182,7 +182,12 @@ function succeeded(result: SpawnResult): boolean {
 export function createNodeWorkerWorkspaceFallback(exec: WorkspaceExec) {
   let supportsSeeds = true;
   let seedStoreFailureLogged = false;
-  const capture = async (dir: string, base: string | null, reference?: string) =>
+  const capture = async (
+    dir: string,
+    base: string | null,
+    reference?: string,
+    assertCurrent?: () => void,
+  ) =>
     await exec({
       argv: [
         "node",
@@ -194,22 +199,30 @@ export function createNodeWorkerWorkspaceFallback(exec: WorkspaceExec) {
       ],
       timeoutMs: GIT_TIMEOUT_MS,
       transportRetry: "idempotent",
+      assertCurrent,
     });
   const checkoutAndCapture = async (
     identity: GitIdentity,
     workspaceDir: string,
     expectedManifestRef: string,
     seeded: boolean,
+    assertCurrent?: () => void,
   ): Promise<OriginSyncOutcome> => {
     const checkedOut = await exec({
       argv: ["git", ...GIT_NONINTERACTIVE_ARGS, "checkout", "--detach", "--force", identity.commit],
       timeoutMs: GIT_TIMEOUT_MS,
       transportRetry: "never",
+      assertCurrent,
     });
     if (!succeeded(checkedOut) || checkedOut.workspaceDir !== workspaceDir) {
       return { kind: "fallback", reason: "checkout-failed" };
     }
-    const captured = await capture(checkedOut.workspaceDir, identity.commit);
+    const captured = await capture(
+      checkedOut.workspaceDir,
+      identity.commit,
+      undefined,
+      assertCurrent,
+    );
     const manifestRef = captured.stdout.trim();
     if (!succeeded(captured) || !MANIFEST_REF_PATTERN.test(manifestRef)) {
       return { kind: "fallback", reason: "manifest-capture-failed" };
@@ -257,12 +270,14 @@ export function createNodeWorkerWorkspaceFallback(exec: WorkspaceExec) {
             seed: { action: "apply", key: seedKey },
             timeoutMs: GIT_TIMEOUT_MS,
             transportRetry: "never",
+            assertCurrent: request.authorize,
           });
           if (succeeded(applied) && applied.stdout.trim() === "applied") {
             const remote = await exec({
               argv: ["git", ...GIT_NONINTERACTIVE_ARGS, "remote", "get-url", "origin"],
               timeoutMs: GIT_TIMEOUT_MS,
               transportRetry: "never",
+              assertCurrent: request.authorize,
             });
             if (!succeeded(remote) || remote.stdout.trim() !== identity.origin) {
               throw new Error("Node workspace seed origin mismatch");
@@ -278,6 +293,7 @@ export function createNodeWorkerWorkspaceFallback(exec: WorkspaceExec) {
               ],
               timeoutMs: GIT_TIMEOUT_MS,
               transportRetry: "never",
+              assertCurrent: request.authorize,
             });
             if (!succeeded(fetched)) {
               throw workspaceSyncError(fetched);
@@ -287,6 +303,7 @@ export function createNodeWorkerWorkspaceFallback(exec: WorkspaceExec) {
               applied.workspaceDir,
               expectedManifestRef,
               true,
+              request.authorize,
             );
           }
         } catch (error) {
@@ -318,6 +335,7 @@ export function createNodeWorkerWorkspaceFallback(exec: WorkspaceExec) {
           resetWorkspace: true,
           timeoutMs: GIT_TIMEOUT_MS,
           transportRetry: "never",
+          assertCurrent: request.authorize,
         });
         if (!succeeded(cloned)) {
           return { kind: "fallback", reason: "clone-failed" };
@@ -327,6 +345,7 @@ export function createNodeWorkerWorkspaceFallback(exec: WorkspaceExec) {
           cloned.workspaceDir,
           expectedManifestRef,
           false,
+          request.authorize,
         );
       }
       if (outcome.kind === "synced" && supportsSeeds) {
@@ -336,6 +355,7 @@ export function createNodeWorkerWorkspaceFallback(exec: WorkspaceExec) {
             seed: { action: "store", key: seedKey, maxAgeMs: 6 * 60 * 60 * 1000 },
             timeoutMs: 180_000,
             transportRetry: "never",
+            assertCurrent: request.authorize,
           });
           if (!succeeded(stored)) {
             throw workspaceSyncError(stored);
@@ -372,6 +392,7 @@ export function createNodeWorkerWorkspaceFallback(exec: WorkspaceExec) {
         const configured = await exec({
           argv: [...git, `user.${key}`, value],
           transportRetry: "never",
+          assertCurrent: request.authorize,
         });
         if (!succeeded(configured)) {
           throw workspaceSyncError(configured);

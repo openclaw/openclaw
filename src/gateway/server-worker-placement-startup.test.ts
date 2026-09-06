@@ -17,7 +17,7 @@ import {
 } from "../sessions/session-lifecycle-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { createGatewayWorkerPlacementRuntime } from "./server-worker-placement-startup.js";
-import type { WorkerPlacementDispatchService } from "./worker-environments/placement-dispatch.js";
+import type { WorkerPlacementDispatchService } from "./worker-environments/placement-dispatch-service.types.js";
 
 describe("worker placement startup health lifetime", () => {
   it("samples disk on schedule while reconciliation is stuck and drains both on stop", async () => {

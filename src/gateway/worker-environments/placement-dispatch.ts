@@ -36,21 +36,18 @@ import {
   completeMovedWorkspaceTeardown,
   completeReclaimedWorkspaceTeardown,
 } from "./placement-teardown.js";
-import type {
-  WorkerPlacementDispatchRequest,
-  WorkerPlacementAuthorization,
-  WorkerPlacementMoveDestination,
-  WorkerPlacementMoveRequest,
-  WorkerPlacementReclaimRequest,
+import {
+  deriveEnvironmentIntent,
+  type WorkerPlacementAuthorization,
+  type WorkerPlacementDispatchRequest,
+  type WorkerPlacementMoveDestination,
+  type WorkerPlacementMoveRequest,
+  type WorkerPlacementReclaimRequest,
 } from "./service-contract.js";
-import { deriveEnvironmentIntent } from "./service-contract.js";
 import type { WorkerEnvironmentService } from "./service.js";
 import { isFailedWorkerPlacementEnvironmentGone } from "./session-placement-lifecycle.js";
 import { WorkerTunnelOwnerDisconnectedError } from "./tunnel-contract.js";
-import type {
-  WorkerWorkspaceRecoveryFailureReport,
-  WorkerWorkspaceResultConflict,
-} from "./workspace-conflicts.js";
+import type * as WorkspaceConflicts from "./workspace-conflicts.js";
 import {
   verifyReconciledWorkspaceFinal,
   WorkerWorkspaceFinalFenceError,
@@ -106,13 +103,13 @@ type WorkerPlacementDispatchOptions = WorkerPlacementReclaimBarriers & {
     ),
   ) => Promise<void>;
   reportWorkspaceResultRecoveryFailure?: (
-    recovery: WorkerWorkspaceRecoveryFailureReport,
+    recovery: WorkspaceConflicts.WorkerWorkspaceRecoveryFailureReport,
   ) => Promise<void>;
   resolveWorkspaceResultConflict: (params: {
     sessionId: string;
     sessionKey: string;
     agentId: string;
-  }) => Promise<WorkerWorkspaceResultConflict | undefined>;
+  }) => Promise<WorkspaceConflicts.WorkerWorkspaceResultConflict | undefined>;
   prepareAcceptedWorkspacePublication?: (
     claim: import("./placement-store.js").WorkerSessionTurnClaim,
   ) => Promise<void>;
@@ -220,6 +217,7 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
         to: "provisioning",
         expectedGeneration: placement.generation,
         patch: { environmentId: expectedEnvironmentId },
+        delegatedSpawnOperation: request.delegatedSpawnOperation,
       });
       reportPlacementTransition(onTransition, placement);
       const environment = request.inheritedProfile
@@ -234,6 +232,7 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
             request.executionMode,
             localPath,
             signal,
+            assertCurrent,
           )
         : await environments.create(
             request.profileId,
@@ -242,6 +241,7 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
             request.executionMode,
             localPath,
             signal,
+            assertCurrent,
           );
       return await startup.continueProvisionedDispatch({
         request,
@@ -301,8 +301,7 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
       beforeDrain,
       begin: () => {
         const current = placements.get(request.sessionId);
-        // A queued stop can observe the previous stop's completion only after
-        // entering the lifecycle fence; joining an outside promise can deadlock it.
+        // Join queued stops inside the lifecycle fence; an outside promise can deadlock it.
         if (
           current?.state === "reclaimed" &&
           current.sessionKey === request.sessionKey &&
@@ -426,6 +425,7 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
           const tunnel = await environments.startTunnel({
             environmentId: current.environmentId,
             ownerEpoch: current.activeOwnerEpoch,
+            ...(reauthorize ? { authorize: reauthorize } : {}),
           });
           const reclaimed = await options.workspaceOperations.run(
             current.environmentId,
@@ -705,7 +705,6 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
   };
 
   const abandonment = createWorkerPlacementMoveAbandonment(options);
-
   const moveService = createWorkerPlacementMoveService({
     placements,
     environments,
@@ -717,7 +716,6 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
     abandonSource: abandonment.abandonSource,
     resolveDestination: options.resolveMoveDestination,
   });
-
   return {
     dispatch,
     forceDestroyEnvironment: abandonment.forceDestroyEnvironment,
@@ -728,7 +726,3 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
     resumeProvisioning: startup.resumeProvisioning,
   };
 }
-
-export type WorkerPlacementDispatchService = ReturnType<
-  typeof createWorkerPlacementDispatchService
->;
