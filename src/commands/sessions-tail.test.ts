@@ -334,6 +334,37 @@ describe("sessionsTailCommand", () => {
     expect(output).not.toContain("No sessions found");
   });
 
+  it("selects a trajectory target without decoding unrelated saved prompts", async () => {
+    const runtime = makeRuntime();
+    await writeSessionEntry();
+    for (let index = 0; index < 100; index += 1) {
+      await writeSessionEntry(`agent:main:unrelated:${index}`, {
+        sessionId: `unrelated-${index}`,
+        skillsSnapshot: {
+          prompt: `UNRELATED_TAIL_PAYLOAD_${"x".repeat(4096)}`,
+          skills: [],
+        },
+      });
+    }
+
+    const parse = vi.spyOn(JSON, "parse");
+    try {
+      await sessionsTailCommand(
+        { agent: "main", store: storePath, sessionKey, tail: "0" },
+        runtime,
+      );
+
+      expect(
+        parse.mock.calls.filter(
+          ([value]) => typeof value === "string" && value.includes("UNRELATED_TAIL_PAYLOAD_"),
+        ),
+      ).toHaveLength(0);
+      expect(runtime.error).not.toHaveBeenCalled();
+    } finally {
+      parse.mockRestore();
+    }
+  });
+
   it("isolates trajectory rows by session id", async () => {
     const runtime = makeRuntime();
     await writeSessionEntry();
