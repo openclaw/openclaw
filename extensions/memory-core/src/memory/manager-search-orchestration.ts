@@ -29,6 +29,9 @@ import { applyProjectRanking } from "./project-ranking.js";
 import { applyTemporalDecayToHybridResults } from "./temporal-decay.js";
 
 const SNIPPET_MAX_CHARS = 700;
+// Requests at or below this floor rank the same candidate set. Project-aware
+// retrieval also stays capped here because MMR is quadratic over the merged set.
+const SEARCH_CANDIDATE_UNIVERSE = 200;
 const VECTOR_TABLE = MEMORY_INDEX_VECTOR_TABLE;
 const FTS_TABLE = MEMORY_INDEX_FTS_TABLE;
 const log = createSubsystemLogger("memory");
@@ -59,18 +62,24 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
     const maxResults = opts?.maxResults ?? this.settings.query.maxResults;
     const minScore = opts?.minScore ?? this.settings.query.minScore;
     const hasActiveProject = (opts?.activeProjectKeys?.length ?? 0) > 0;
+    // Small requests share one candidate set so fusion cannot promote a weaker top hit.
+    // Ordinary larger requests stay caller-sized, while project-aware requests retain
+    // their historical cap to bound MMR work.
     const candidateMaxResults = hasActiveProject
-      ? Math.min(200, Math.max(maxResults, maxResults * 4))
-      : maxResults;
+      ? SEARCH_CANDIDATE_UNIVERSE
+      : Math.max(SEARCH_CANDIDATE_UNIVERSE, maxResults);
     const candidateMinScore = hasActiveProject ? minScore / 1.15 : minScore;
     const results = await this.searchCandidates(normalizedQuery, {
       ...opts,
       maxResults: candidateMaxResults,
       minScore: candidateMinScore,
     });
+    // Only the project path relaxed minScore for retrieval, so only it re-applies the
+    // caller's threshold. Other callers keep the lexical-supplement rows that hybrid
+    // selection intentionally admits below it.
     return hasActiveProject
       ? results.filter((entry) => entry.score >= minScore).slice(0, maxResults)
-      : results;
+      : results.slice(0, maxResults);
   }
 
   private async searchCandidates(
