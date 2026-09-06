@@ -248,6 +248,9 @@ export function createDiagnosticsEventHandler(params: {
           return;
         case "model.failover":
           recordModelFailover(evt, metadata);
+          break;
+        case "directive.rejected":
+          break;
       }
     } catch (err) {
       logger.error(`diagnostics-otel: event handler failed (${evt.type}): ${formatError(err)}`);
