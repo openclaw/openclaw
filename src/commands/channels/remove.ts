@@ -1,6 +1,10 @@
 // Implements guided and non-interactive disable/delete for channel accounts.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
+  type ChannelIngressQueueAccountPurge,
+  purgeChannelIngressQueueAccount,
+} from "../../channels/message/ingress-queue.js";
+import {
   applyPreparedChannelAccountRemoval,
   type ChannelAccountMutationPlugin,
   prepareChannelAccountRemoval,
@@ -15,6 +19,7 @@ import {
 import type { OpenClawConfig } from "../../config/config.js";
 import { callGateway } from "../../gateway/call.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { loadPluginManifestRegistryForPluginRegistry } from "../../plugins/plugin-registry.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../../utils/message-channel.js";
@@ -44,6 +49,77 @@ function listAccountIds(
   return plugin.config.listAccountIds(cfg);
 }
 
+type IngressDiscardOutcome =
+  | { kind: "discarded"; purge: ChannelIngressQueueAccountPurge }
+  | { kind: "kept"; reason: string }
+  | { kind: "failed"; message: string };
+
+/**
+ * Names the plugin whose ingress queue holds this channel's rows, or reports that the
+ * queue is shared with the plugin's other channels.
+ *
+ * The runtime keys every plugin ingress queue on the plugin id, not the channel id
+ * (`openChannelIngressQueue` forces `channelId: pluginId`), and one manifest may declare
+ * several channels whose rows then share a queue while recording no channel of their own.
+ * Manifests are the source because the runtime channel registry that also knows this is
+ * populated at Gateway startup and this command runs in its own process - the same source
+ * `channels logs` uses to map channels to plugins.
+ */
+function resolveIngressQueueOwner(
+  channelId: string,
+): { pluginId: string } | { sharedWithPluginId: string } {
+  const id = channelId.toLowerCase();
+  const plugins = loadPluginManifestRegistryForPluginRegistry({
+    includeDisabled: true,
+    env: process.env,
+  }).plugins;
+  // A channel is registered under a declared channel id OR under the plugin's own id -
+  // `channelPluginIdBelongsToManifest` accepts either - so a channel named after the
+  // plugin is absent from `channels` and would fall through the first lookup into the
+  // no-manifest branch, purging a queue that may be shared. Match both, and let the
+  // same declared-channel count decide.
+  const owner =
+    plugins.find((plugin) => plugin.channels.some((channel) => channel.toLowerCase() === id)) ??
+    plugins.find((plugin) => plugin.id.toLowerCase() === id);
+  if (!owner) {
+    // No manifest claims this channel, so the only id available is the one the operator
+    // typed, which is what a bundled channel's queue is keyed by anyway.
+    return { pluginId: channelId };
+  }
+  return owner.channels.length > 1 ? { sharedWithPluginId: owner.id } : { pluginId: owner.id };
+}
+
+/**
+ * Discards a removed account's ingress rows without letting that failure rewrite the
+ * outcome of the removal: the config write has already landed, so the account is gone
+ * whatever happens here, and a state store that refuses a write for reasons unrelated
+ * to this account would otherwise surface a completed deletion as a failed command.
+ * Report the shortfall alongside the deletion instead of throwing.
+ */
+function discardRemovedAccountIngressRows(params: {
+  channelId: string;
+  accountId: string;
+}): IngressDiscardOutcome {
+  try {
+    const owner = resolveIngressQueueOwner(params.channelId);
+    if ("sharedWithPluginId" in owner) {
+      return {
+        kind: "kept",
+        reason: `plugin "${owner.sharedWithPluginId}" serves more than one channel and its stored events do not record which`,
+      };
+    }
+    return {
+      kind: "discarded",
+      purge: purgeChannelIngressQueueAccount({
+        channelId: owner.pluginId,
+        accountId: params.accountId,
+      }),
+    };
+  } catch (error) {
+    return { kind: "failed", message: formatErrorMessage(error) };
+  }
+}
+
 async function stopGatewayRuntimeBeforeRemove(params: {
   cfg: OpenClawConfig;
   channel: ChatChannel;
@@ -71,6 +147,27 @@ async function stopGatewayRuntimeBeforeRemove(params: {
       `Could not stop running ${channelLabel(params.channel)} account "${params.accountId}" before removing it: ${formatErrorMessage(error)}`,
     );
   }
+}
+
+/**
+ * Always says what happened to the stored events, including when nothing was discarded.
+ * That case is not always "the account had nothing stored": a plugin that keys its rows
+ * under a name this command cannot reproduce also discards none. The line does not claim
+ * to tell those apart - it reports what the deletion did - but saying it at all is what
+ * keeps either from looking like a deletion that never touched the queue.
+ */
+function formatDiscardedIngressEvents(purge: ChannelIngressQueueAccountPurge): string {
+  if (purge.discarded === 0) {
+    return "Discarded no stored ingress events.";
+  }
+  const events = `${purge.discarded} stored ingress event${purge.discarded === 1 ? "" : "s"}`;
+  const work = [
+    ...(purge.undelivered > 0 ? [`${purge.undelivered} never answered`] : []),
+    ...(purge.recoverable > 0 ? [`${purge.recoverable} awaiting resubmission`] : []),
+  ];
+  return work.length > 0
+    ? `Discarded ${events}, including ${work.join(" and ")}.`
+    : `Discarded ${events}.`;
 }
 
 /** Disable or delete a channel account, stopping gateway runtime state before mutation. */
@@ -222,17 +319,30 @@ export async function channelsRemoveCommand(
     ...(baseHash !== undefined ? { baseHash } : {}),
     runtime,
   });
+  // Ingress retention prunes on admission, so a deleted account - which never admits
+  // again - would own its rows forever. Discard them once the removal is durable:
+  // running before the config write would drop inbound work for an account that is
+  // still configured if that write fails. A disabled account keeps its rows because
+  // re-enabling it drains them.
+  const discard = deleteConfig
+    ? discardRemovedAccountIngressRows({
+        channelId: resolvedChannelId,
+        accountId: preparedRemoval.accountKey,
+      })
+    : undefined;
+  const summary = [
+    deleteConfig
+      ? `Deleted ${channelLabel(resolvedChannelId)} account "${preparedRemoval.accountKey}".`
+      : `Disabled ${channelLabel(resolvedChannelId)} account "${preparedRemoval.accountKey}".`,
+    ...(discard?.kind === "discarded" ? [formatDiscardedIngressEvents(discard.purge)] : []),
+    ...(discard?.kind === "kept" ? [`Kept its stored ingress events: ${discard.reason}.`] : []),
+    ...(discard?.kind === "failed"
+      ? [`Its stored ingress events could not be discarded: ${discard.message}`]
+      : []),
+  ].join(" ");
   if (useWizard && prompter) {
-    await prompter.outro(
-      deleteConfig
-        ? `Deleted ${channelLabel(resolvedChannelId)} account "${preparedRemoval.accountKey}".`
-        : `Disabled ${channelLabel(resolvedChannelId)} account "${preparedRemoval.accountKey}".`,
-    );
+    await prompter.outro(summary);
   } else {
-    runtime.log(
-      deleteConfig
-        ? `Deleted ${channelLabel(resolvedChannelId)} account "${preparedRemoval.accountKey}".`
-        : `Disabled ${channelLabel(resolvedChannelId)} account "${preparedRemoval.accountKey}".`,
-    );
+    runtime.log(summary);
   }
 }
