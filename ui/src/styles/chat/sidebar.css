@@ -1262,6 +1262,14 @@ openclaw-session-discussion {
   overflow: hidden;
 }
 
+.sidebar-file-preview {
+  padding: 20px 18px 24px;
+  overflow: auto;
+}
+
+.sidebar-file-preview__content {
+  overflow-wrap: anywhere;
+}
 .file-view__mount,
 .sidebar-file-view .cm-editor {
   height: 100%;

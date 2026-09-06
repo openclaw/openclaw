@@ -507,7 +507,7 @@ function renderSanitizedMarkdown(renderInput: string, renderOptions: MarkdownRen
   const activeSanitizeOptions = renderOptions.progressBars
     ? progressSanitizeOptions
     : sanitizeOptions;
-  const documentMode = renderOptions.mode === "document";
+  const documentMode = renderOptions.mode !== "message";
   const truncated = documentMode
     ? { text: renderInput, truncated: false, total: renderInput.length }
     : truncateText(renderInput, MARKDOWN_CHAR_LIMIT);

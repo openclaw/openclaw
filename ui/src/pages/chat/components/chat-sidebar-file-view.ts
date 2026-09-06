@@ -1,15 +1,20 @@
 import { html, nothing } from "lit";
 import { keyed } from "lit/directives/keyed.js";
+import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { localEditorFilePath } from "../../../app/native-editor-locality.runtime.ts";
 import { icons } from "../../../components/icons.ts";
+import { toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
 import { renderPanelLoadingSkeleton } from "../../../components/panel-loading-skeleton.ts";
 import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
 import type { EditorId } from "../../../lib/editor-links.ts";
+import { detectTextDirection } from "../../../lib/text-direction.ts";
 import type { SidebarContent } from "./chat-sidebar-content-types.ts";
 import { renderChatSidebarEditorMenu } from "./chat-sidebar-editor-menu.ts";
 
 type FileSidebarContent = Extract<SidebarContent, { kind: "file" }>;
+
+export type FileViewMode = "source" | "preview";
 
 type RetainedFileDraft = {
   content: string;
@@ -54,6 +59,50 @@ export function computeFileMatches(content: string, query: string): number[] {
     );
 }
 
+function isMarkdownFile(content: FileSidebarContent): boolean {
+  return (
+    content.language?.toLocaleLowerCase() === "markdown" ||
+    /\.(?:md|markdown|mdown|mkd|mkdn)$/i.test(content.path)
+  );
+}
+
+function isAbsoluteFilePath(path: string): boolean {
+  return (
+    path.startsWith("/") ||
+    path.startsWith("\\") ||
+    path.startsWith("~/") ||
+    path.startsWith("~\\") ||
+    /^[a-z]:[\\/]/i.test(path)
+  );
+}
+
+export function resolveMarkdownPreviewFilePath(sourcePath: string, targetPath: string): string {
+  if (isAbsoluteFilePath(targetPath)) {
+    return targetPath;
+  }
+
+  const source = sourcePath.replaceAll("\\", "/");
+  const target = targetPath.replaceAll("\\", "/");
+  const segments = source.split("/");
+  segments.pop();
+  for (const segment of target.split("/")) {
+    if (!segment || segment === ".") {
+      continue;
+    }
+    if (segment === "..") {
+      const last = segments.at(-1);
+      if (last && last !== "..") {
+        segments.pop();
+      } else if (last !== "") {
+        segments.push(segment);
+      }
+      continue;
+    }
+    segments.push(segment);
+  }
+  return segments.join("/");
+}
+
 export type FileCopyAction = "path" | "contents";
 type FileCopyFeedback = Partial<Record<FileCopyAction, "copied" | "failed">>;
 export const emptyCopyFeedback: FileCopyFeedback = {};
@@ -68,10 +117,12 @@ export type FileViewControls = {
   loadingEditor: boolean;
   mountKey: number;
   matches: number[];
+  previewContent: string;
   query: string;
   saveNotice: { kind: "conflict" } | { kind: "error"; message: string } | null;
   saving: boolean;
   searchOpen: boolean;
+  viewMode: FileViewMode;
   onCopy: (action: FileCopyAction) => void;
   onDiscard: () => void;
   onEdit: () => void;
@@ -86,6 +137,7 @@ export type FileViewControls = {
   onSearchKeydown: (event: KeyboardEvent) => void;
   onEditorMenuOpenChange: (open: boolean) => void;
   onToggleSearch: () => void;
+  onViewModeChange: (mode: FileViewMode) => void;
 };
 
 function renderFileCopyButton(action: FileCopyAction, controls?: FileViewControls) {
@@ -120,6 +172,17 @@ export function renderSidebarFile(
 ) {
   const absolutePath = localEditorFilePath(content, controls?.execNode);
   const matchNumber = controls?.matches.length ? controls.currentMatchIndex + 1 : 0;
+  const markdownFile = isMarkdownFile(content);
+  const previewing = markdownFile && controls?.viewMode === "preview";
+  const markdownHtml =
+    previewing && controls.previewContent.trim()
+      ? toSanitizedMarkdownHtml(controls.previewContent, {
+          codeBlockInteraction: "interactive",
+          fileLinks: true,
+          mode: "document-no-remote-images",
+          sessionLinks: true,
+        })
+      : "";
   return html`
     <section class="sidebar-file-view">
       <div class="sidebar-file-view__path-bar">
@@ -169,17 +232,23 @@ export function renderSidebarFile(
                                 `
                               : nothing
                           }
-                          <openclaw-tooltip .content=${t("chat.detailPanel.searchInFile")}>
-                            <button
-                              class="btn btn--sm sidebar-file-view__action"
-                              type="button"
-                              aria-label=${t("chat.detailPanel.searchInFile")}
-                              aria-pressed=${String(controls.searchOpen)}
-                              @click=${controls.onToggleSearch}
-                            >
-                              ${icons.search}
-                            </button>
-                          </openclaw-tooltip>
+                          ${
+                            previewing
+                              ? nothing
+                              : html`
+                                  <openclaw-tooltip .content=${t("chat.detailPanel.searchInFile")}>
+                                    <button
+                                      class="btn btn--sm sidebar-file-view__action"
+                                      type="button"
+                                      aria-label=${t("chat.detailPanel.searchInFile")}
+                                      aria-pressed=${String(controls.searchOpen)}
+                                      @click=${controls.onToggleSearch}
+                                    >
+                                      ${icons.search}
+                                    </button>
+                                  </openclaw-tooltip>
+                                `
+                          }
                           ${
                             controls.onReveal
                               ? html`
@@ -216,7 +285,30 @@ export function renderSidebarFile(
           : nothing
       }
       ${
-        controls?.searchOpen
+        markdownFile && controls
+          ? html`
+              <div class="settings-segmented" role="group" aria-label=${content.name}>
+                ${(["source", "preview"] as const).map((mode) => {
+                  const active = controls.viewMode === mode;
+                  return html`
+                    <button
+                      class="settings-segmented__btn ${
+                        active ? "settings-segmented__btn--active" : ""
+                      }"
+                      type="button"
+                      aria-pressed=${String(active)}
+                      @click=${() => controls.onViewModeChange(mode)}
+                    >
+                      ${t(mode === "source" ? "agentTools.source" : "chat.workspaceFiles.preview")}
+                    </button>
+                  `;
+                })}
+              </div>
+            `
+          : nothing
+      }
+      ${
+        controls?.searchOpen && !previewing
           ? html`
               <div class="file-view__search">
                 <input
@@ -292,7 +384,7 @@ export function renderSidebarFile(
             `
           : nothing
       }
-      <div class="file-view">
+      <div class="file-view" ?hidden=${previewing}>
         ${keyed(controls?.mountKey ?? content, html`<div class="file-view__mount"></div>`)}
         ${
           controls?.loadingEditor
@@ -300,6 +392,30 @@ export function renderSidebarFile(
             : nothing
         }
       </div>
+      ${
+        markdownFile && controls
+          ? html`
+              <div class="file-view sidebar-file-preview" ?hidden=${!previewing}>
+                ${
+                  markdownHtml
+                    ? html`
+                        <article
+                          class="sidebar-markdown sidebar-file-preview__content"
+                          dir=${detectTextDirection(controls.previewContent)}
+                        >
+                          ${unsafeHTML(markdownHtml)}
+                        </article>
+                      `
+                    : html`
+                        <div class="sidebar-markdown-empty">
+                          ${t("chat.detailPanel.noPreviewableMarkdown")}
+                        </div>
+                      `
+                }
+              </div>
+            `
+          : nothing
+      }
       ${
         controls?.editing
           ? nothing
