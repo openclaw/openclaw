@@ -28,6 +28,12 @@ type ClaudePreparedExecutionWithSecret = {
 const CLAUDE_CLI_DISALLOWED_TOOLS =
   "ScheduleWakeup,CronCreate,Bash(run_in_background:true),Monitor";
 const CLAUDE_CACHE_FLAG = "--exclude-dynamic-system-prompt-sections";
+// Spelled out rather than imported so a change to the shipped payload has to be
+// restated here: this is the default that keeps Claude Code's own memory out of
+// the agent context, and it should not be able to move silently.
+const CLAUDE_MEMORY_ISOLATION_SETTINGS =
+  '{"autoMemoryEnabled":false,"claudeMdExcludes":["**/CLAUDE.md","**/CLAUDE.local.md","**/.claude/rules/**"]}';
+const CLAUDE_MEMORY_ISOLATION_ARGS = ["--settings", CLAUDE_MEMORY_ISOLATION_SETTINGS];
 
 describe("Claude CLI adapter equivalence", () => {
   const commonArgs = [
@@ -135,6 +141,7 @@ function normalizeClaudeArgs(
   ).args;
 }
 
+D
 describe("Claude backend permission args", () => {
   it("removes legacy skip-permissions without adding bypassPermissions", () => {
     expect(normalizeClaudeArgs(["-p", "--dangerously-skip-permissions", "--verbose"])).toEqual([
@@ -462,6 +469,7 @@ describe("normalizeClaudeBackendConfig", () => {
       "--verbose",
       "--setting-sources",
       "user",
+      ...CLAUDE_MEMORY_ISOLATION_ARGS,
       "--permission-mode",
       "bypassPermissions",
     ]);
@@ -474,6 +482,7 @@ describe("normalizeClaudeBackendConfig", () => {
       "{sessionId}",
       "--setting-sources",
       "user",
+      ...CLAUDE_MEMORY_ISOLATION_ARGS,
       "--permission-mode",
       "bypassPermissions",
     ]);
