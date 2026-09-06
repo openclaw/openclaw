@@ -257,7 +257,8 @@ function createWizardSessionPrompter(session: WizardSession): WizardPrompter {
 
 export class WizardSession {
   private readonly abortController = new AbortController();
-  private readonly expiryTimer: ReturnType<typeof setTimeout> | undefined;
+  private expiryTimer: ReturnType<typeof setTimeout> | undefined;
+  private readonly idleTimeoutMs: number | undefined;
   private readonly runnerPromise: Promise<void>;
   private currentStep: WizardStep | null = null;
   private progressSteps: WizardStep[] = [];
@@ -290,11 +291,30 @@ export class WizardSession {
     options?: { timeoutMs?: number },
   ) {
     const prompter = createWizardSessionPrompter(this);
-    if (options?.timeoutMs !== undefined) {
-      this.expiryTimer = setTimeout(() => this.cancel(), options.timeoutMs);
-      this.expiryTimer.unref?.();
-    }
+    this.idleTimeoutMs = options?.timeoutMs;
+    this.armIdleExpiry();
     this.runnerPromise = this.run(prompter);
+  }
+
+  // Idle TTL, not wall-clock from start: client next/answer keep a live
+  // hosted wizard alive. A one-shot constructor timer would cancel an
+  // active Control UI session after 25 minutes.
+  private armIdleExpiry() {
+    if (this.idleTimeoutMs === undefined || this.status !== "running") {
+      return;
+    }
+    if (this.expiryTimer) {
+      clearTimeout(this.expiryTimer);
+    }
+    this.expiryTimer = setTimeout(() => this.cancel(), this.idleTimeoutMs);
+    this.expiryTimer.unref?.();
+  }
+
+  private clearIdleExpiry() {
+    if (this.expiryTimer) {
+      clearTimeout(this.expiryTimer);
+      this.expiryTimer = undefined;
+    }
   }
 
   async next(): Promise<WizardNextResult> {
@@ -303,6 +323,7 @@ export class WizardSession {
     if (this.status !== "running") {
       return this.terminalResult();
     }
+    this.armIdleExpiry();
     const progressStep = this.progressSteps.shift();
     if (progressStep) {
       this.rememberDeliveredProgressStep(progressStep.id);
@@ -376,10 +397,12 @@ export class WizardSession {
       // clients still acknowledge every rendered step, so accept that stale
       // acknowledgement while newer clients poll without an answer.
       if (this.deliveredProgressStepIds.delete(stepId)) {
+        this.armIdleExpiry();
         return undefined;
       }
       throw new Error("wizard: no pending step");
     }
+    this.armIdleExpiry();
     const normalizedValue = pending.text ? normalizeTextAnswer(value) : value;
     if (pending.text && normalizedValue === undefined) {
       return "wizard: text answer must be a scalar value";
@@ -398,6 +421,7 @@ export class WizardSession {
     if (this.status !== "running" || this.cancellationLocked) {
       return false;
     }
+    this.clearIdleExpiry();
     this.status = "cancelled";
     this.error = "cancelled";
     this.abortController.abort(new WizardCancelledError());
@@ -487,9 +511,7 @@ export class WizardSession {
       }
     } finally {
       this.settled = true;
-      if (this.expiryTimer) {
-        clearTimeout(this.expiryTimer);
-      }
+      this.clearIdleExpiry();
       // Browser completion can win while manual input is pending. Terminal
       // sessions must retire that prompt and reject retained answer handles.
       this.rejectPendingAnswers();
