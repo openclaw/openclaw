@@ -570,4 +570,73 @@ describe("repairLoadedGatewayServiceForStart", () => {
     expect(installMock).not.toHaveBeenCalled();
     expect(buildGatewayInstallPlanMock).not.toHaveBeenCalled();
   });
+
+  it.each(["start", "restart"] as const)(
+    "fails %s repair when the post-install isLoaded probe throws",
+    async (action) => {
+      const installMock = vi.fn(async () => {});
+      const service = {
+        install: installMock,
+        isLoaded: vi.fn(async () => {
+          throw new Error("systemd show failed");
+        }),
+      };
+      const state: GatewayServiceState = {
+        installed: true,
+        loadState: { status: "loaded" },
+        running: false,
+        env: {},
+        command: {
+          programArguments: ["/usr/bin/openclaw", "gateway", "run"],
+          environment: { HOME: "/home/openclaw" },
+        },
+      };
+      const params = {
+        service,
+        state,
+        issues: [{ code: "port-mismatch" as const, message: "old port" }],
+        json: true,
+        stdout: process.stdout,
+      };
+
+      const repair =
+        action === "restart"
+          ? repairLoadedGatewayServiceForStart({ ...params, action })
+          : repairLoadedGatewayServiceForStart(params);
+
+      await expect(repair).rejects.toThrow(
+        "Gateway service repair verification failed: Error: systemd show failed",
+      );
+      expect(installMock).toHaveBeenCalled();
+    },
+  );
+
+  it("fails repair when the post-install isLoaded probe reports not loaded", async () => {
+    const installMock = vi.fn(async () => {});
+    const service = {
+      install: installMock,
+      isLoaded: vi.fn(async () => false),
+    };
+    const state: GatewayServiceState = {
+      installed: true,
+      loadState: { status: "loaded" },
+      running: false,
+      env: {},
+      command: {
+        programArguments: ["/usr/bin/openclaw", "gateway", "run"],
+        environment: { HOME: "/home/openclaw" },
+      },
+    };
+
+    await expect(
+      repairLoadedGatewayServiceForStart({
+        service,
+        state,
+        issues: [{ code: "port-mismatch", message: "old port" }],
+        json: true,
+        stdout: process.stdout,
+      }),
+    ).rejects.toThrow("Gateway service repair verification failed: service is not loaded.");
+    expect(installMock).toHaveBeenCalled();
+  });
 });

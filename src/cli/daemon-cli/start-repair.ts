@@ -250,8 +250,11 @@ export async function repairLoadedGatewayServiceForStart(
   let loaded;
   try {
     loaded = await params.service.isLoaded({ env: installEnv });
-  } catch {
-    loaded = true;
+  } catch (err) {
+    throw new Error(`Gateway service repair verification failed: ${String(err)}`, { cause: err });
+  }
+  if (!loaded) {
+    throw new Error("Gateway service repair verification failed: service is not loaded.");
   }
 
   return {
