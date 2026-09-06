@@ -127,6 +127,7 @@ const defaultFoundryModelId = "gpt-5.4";
 const defaultFoundryProfileId = "microsoft-foundry:entra";
 const defaultFoundryAgentDir = "/tmp/test-agent";
 const defaultAzureCliLoginError = "Please run 'az login' to setup account.";
+const foundryTokenCacheMaxEntries = 128;
 let runtimeAuthTestSequence = 0;
 let runtimeAuthTestTenantId = "tenant-0";
 
@@ -635,6 +636,34 @@ describe("microsoft-foundry plugin", () => {
       tokenResponse.resolve();
       await settled;
     }
+  });
+
+  it("bounds settled Entra tokens by least-recently-used account tuple", async () => {
+    const provider = registerProvider();
+    const prepareRuntimeAuth = requirePrepareRuntimeAuth(provider);
+    execFileMock.mockImplementation(async () => ({
+      stdout: JSON.stringify({
+        accessToken: `token-${execFileMock.mock.calls.length}`,
+        expiresOn: new Date(Date.now() + 10 * 60_000).toISOString(),
+      }),
+      stderr: "",
+    }));
+    const prepareForTenant = async (tenantId: string) => {
+      ensureAuthProfileStoreMock.mockReturnValueOnce(buildEntraProfileStore({ tenantId }));
+      return await prepareRuntimeAuth(buildFoundryRuntimeAuthContext());
+    };
+
+    for (let index = 0; index < foundryTokenCacheMaxEntries; index += 1) {
+      await prepareForTenant(`lru-${runtimeAuthTestTenantId}-${index}`);
+    }
+    expect(execFileMock).toHaveBeenCalledTimes(foundryTokenCacheMaxEntries);
+
+    await prepareForTenant(`lru-${runtimeAuthTestTenantId}-0`);
+    expect(execFileMock).toHaveBeenCalledTimes(foundryTokenCacheMaxEntries);
+
+    await prepareForTenant(`lru-${runtimeAuthTestTenantId}-${foundryTokenCacheMaxEntries}`);
+    await prepareForTenant(`lru-${runtimeAuthTestTenantId}-1`);
+    expect(execFileMock).toHaveBeenCalledTimes(foundryTokenCacheMaxEntries + 2);
   });
 
   it("clears failed refresh state so later concurrent retries succeed", async () => {
