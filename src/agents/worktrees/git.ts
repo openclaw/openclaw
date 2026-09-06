@@ -5,10 +5,12 @@ import path from "node:path";
 import {
   createGitCommandError,
   executeGitCommand,
+  normalizeGitPathForFilesystem,
   requireGitCommand,
   requireGitCommandBuffer,
   requireGitCommandRaw,
 } from "../../infra/git-exec.js";
+import { mergeProcessEnv, resolveEnvironmentValue } from "../../infra/process-env.js";
 
 export type GitResult = Awaited<ReturnType<typeof executeGitCommand>>;
 
@@ -17,6 +19,13 @@ type WorktreeListEntry = {
   lockedReason?: string;
 };
 
+function withNoGlob(value: string | undefined): string {
+  if (value?.trim().split(/\s+/).at(-1) === "noglob") {
+    return value;
+  }
+  return value ? `${value} noglob` : "noglob";
+}
+
 /**
  * Gateway-run Git must never execute repository hooks or filesystem monitors;
  * the admin-gated setup script is the sole intentional repository-code path.
@@ -24,9 +33,28 @@ type WorktreeListEntry = {
  * `requireGit*` wrappers (e.g. a buffered, non-throwing invocation with a
  * custom timeout) still pin the same invariant instead of reimplementing it.
  */
-export function gitEnvironment(env?: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+export function gitEnvironment(
+  env?: NodeJS.ProcessEnv,
+  platform: NodeJS.Platform = process.platform,
+  inheritedEnv: NodeJS.ProcessEnv = process.env,
+): NodeJS.ProcessEnv {
+  const baseEnv = env ?? inheritedEnv;
+  // Callers may supply only Git-specific overrides. Resolve against the inherited
+  // child environment first so adding noglob cannot discard existing runtime policy.
+  const effectiveWindowsEnv =
+    platform === "win32" ? mergeProcessEnv([inheritedEnv, env], platform) : undefined;
+  const windowsNoGlob =
+    platform === "win32"
+      ? {
+          // MSYS2/Cygwin expand braces before Git sees argv. Keep revision
+          // expressions such as HEAD^{commit} literal within this Git owner.
+          MSYS: withNoGlob(resolveEnvironmentValue(effectiveWindowsEnv, "MSYS", platform)),
+          CYGWIN: withNoGlob(resolveEnvironmentValue(effectiveWindowsEnv, "CYGWIN", platform)),
+        }
+      : {};
   return {
-    ...(env ?? process.env),
+    ...baseEnv,
+    ...windowsNoGlob,
     GIT_CONFIG_COUNT: "2",
     GIT_CONFIG_KEY_0: "core.hooksPath",
     GIT_CONFIG_VALUE_0: os.devNull,
@@ -92,7 +120,9 @@ function parseWorktreeList(output: string): WorktreeListEntry[] {
       if (current) {
         entries.push(current);
       }
-      current = { path: field.slice("worktree ".length) };
+      current = {
+        path: normalizeGitPathForFilesystem(field.slice("worktree ".length)),
+      };
     } else if (current && field === "locked") {
       current.lockedReason = "";
     } else if (current && field.startsWith("locked ")) {
