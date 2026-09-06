@@ -13,6 +13,8 @@ export interface Skill {
   readContent?: string;
   filePath: string;
   baseDir: string;
+  /** Host filesystem path retained when `filePath` is remapped to a sandbox container path. */
+  hostFilePath?: string;
   sourceInfo: SourceInfo;
   disableModelInvocation: boolean;
   // Preserve legacy source reads while keeping the canonical upstream shape.
