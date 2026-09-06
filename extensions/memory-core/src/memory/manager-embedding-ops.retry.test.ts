@@ -132,6 +132,12 @@ describe("memory embedding batch retry boundary", () => {
         `Embeddings API input limit exceeded: max 10, got ${count}. Request id: fixture-000597000`,
     ],
     ["an explicit maximum input length", () => "embeddings max input length is 10"],
+    // Zhipu names the bound on the input array itself, with no adjacent
+    // `embeddings` token, under its generic 1214 invalid-parameter code.
+    [
+      "an explicit input array item cap",
+      () => '{"error":{"code":"1214","message":"input array max 10"}}',
+    ],
   ])(
     "splits provider errors with %s without retrying oversized requests",
     async (_label, error) => {
