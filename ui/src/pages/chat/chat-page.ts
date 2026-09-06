@@ -21,6 +21,7 @@ import { currentRouteLocation, stillOwnsCanonicalLocation } from "./chat-canonic
 import { renderChatPagePaneCell } from "./chat-page-pane-render.ts";
 import { ChatPageRetainedSessions } from "./chat-page-retained-sessions.ts";
 import { closeStagedPane, resumeStagedPanes } from "./chat-pane-attachment-handoff.ts";
+import { CHAT_COMPOSER_TEXTAREA_SELECTOR } from "./chat-pane-shared.ts";
 import { bindChatPageSession } from "./chat-state-route.ts";
 import { ChatViewerPresenceController } from "./chat-viewer-presence.ts";
 import "../../styles/chat.ts";
@@ -544,6 +545,12 @@ export class ChatPage extends OpenClawLightDomElement implements SessionSplitHos
   private readonly handleSplitDown = (paneId: string) => this.handleSplit(paneId, "down");
 
   private closeSplitPane(layout: ChatSplitLayout, paneId: string): void {
+    // When keyboard focus lives inside the removed pane, the committed layout
+    // transition must move it into the surviving pane; otherwise focus falls to
+    // an undefined document location once the active pane disappears (see #127323).
+    const focusInsideClosingPane =
+      document.activeElement instanceof HTMLElement &&
+      this.findChatPaneElement(paneId)?.contains(document.activeElement) === true;
     const survivingPane = closeStagedPane(this.context, this, layout, paneId);
     this.retainedSessions.discardPane(paneId);
     const next = closePane(layout, paneId);
@@ -559,6 +566,34 @@ export class ChatPage extends OpenClawLightDomElement implements SessionSplitHos
     if (activePane) {
       this.updateRoute(activePane.sessionKey, true);
     }
+    if (focusInsideClosingPane) {
+      void this.focusSurvivingPaneComposer(activePane?.sessionKey);
+    }
+  }
+
+  private findChatPaneElement(paneId: string): ChatPaneElement | undefined {
+    return [...this.querySelectorAll<ChatPaneElement>("openclaw-chat-pane")].find(
+      (candidate) => candidate.paneId === paneId,
+    );
+  }
+
+  private async focusSurvivingPaneComposer(sessionKey?: string): Promise<void> {
+    await this.updateComplete;
+    if (!this.isConnected) {
+      return;
+    }
+    const panes = [...this.querySelectorAll<ChatPaneElement>("openclaw-chat-pane")];
+    const target =
+      (sessionKey
+        ? panes.find(
+            (candidate) =>
+              candidate.sessionKey !== undefined &&
+              areUiSessionKeysEquivalent(candidate.sessionKey, sessionKey),
+          )
+        : undefined) ?? panes[0];
+    target
+      ?.querySelector<HTMLTextAreaElement>(CHAT_COMPOSER_TEXTAREA_SELECTOR)
+      ?.focus({ preventScroll: true });
   }
 
   private readonly handleClosePane = (paneId: string) => {

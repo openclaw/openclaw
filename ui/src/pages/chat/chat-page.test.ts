@@ -355,6 +355,69 @@ describe("chat page split layout host", () => {
     expect(survivingPane.classList.contains("chat-split-view__pane")).toBe(false);
   });
 
+  it("moves focus to the surviving pane composer when closing the focused pane", async () => {
+    const page = new ChatPage();
+    setNavigationContext(page);
+    page.data = { sessionKey: "main" };
+    document.body.append(page);
+    setLayout(page, createSplitLayout("main"));
+    await page.updateComplete;
+
+    const panes = [...page.querySelectorAll<RenderedPane>("openclaw-chat-pane")];
+    expect(panes).toHaveLength(2);
+    for (const pane of panes) {
+      const wrap = document.createElement("div");
+      wrap.className = "agent-chat__composer-combobox";
+      wrap.append(document.createElement("textarea"));
+      pane.append(wrap);
+    }
+    const survivingPane = itemAt(panes, 0, "surviving pane");
+    const closingPane = itemAt(panes, 1, "closing pane");
+    const survivingTextarea = survivingPane.querySelector("textarea") as HTMLTextAreaElement;
+    const closingTextarea = closingPane.querySelector("textarea") as HTMLTextAreaElement;
+    const focusSpy = vi.spyOn(survivingTextarea, "focus");
+
+    closingTextarea.focus();
+    closingPane.onClosePane?.(closingPane.paneId);
+    await page.updateComplete;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(focusSpy).toHaveBeenCalledWith({ preventScroll: true });
+    page.remove();
+  });
+
+  it("leaves focus alone when closing a pane that does not own focus", async () => {
+    const page = new ChatPage();
+    setNavigationContext(page);
+    page.data = { sessionKey: "main" };
+    document.body.append(page);
+    setLayout(page, createSplitLayout("main"));
+    await page.updateComplete;
+
+    const panes = [...page.querySelectorAll<RenderedPane>("openclaw-chat-pane")];
+    expect(panes).toHaveLength(2);
+    for (const pane of panes) {
+      const wrap = document.createElement("div");
+      wrap.className = "agent-chat__composer-combobox";
+      wrap.append(document.createElement("textarea"));
+      pane.append(wrap);
+    }
+    const survivingPane = itemAt(panes, 0, "surviving pane");
+    const closingPane = itemAt(panes, 1, "closing pane");
+    const focusSpy = vi.spyOn(
+      survivingPane.querySelector("textarea") as HTMLTextAreaElement,
+      "focus",
+    );
+
+    document.body.focus();
+    closingPane.onClosePane?.(closingPane.paneId);
+    await page.updateComplete;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(focusSpy).not.toHaveBeenCalled();
+    page.remove();
+  });
+
   it("applies mounted UI split, focus, and close commands", () => {
     const page = new ChatPage();
     page.data = { sessionKey: "main" };
