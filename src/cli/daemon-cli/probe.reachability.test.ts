@@ -135,6 +135,7 @@ describe("Gateway reachability over real sockets", () => {
     const url = `ws://127.0.0.1:${address.port}`;
     const rpc = await probeGatewayStatus({
       url,
+      urlOverride: url,
       token: "synthetic-token",
       config: {},
       timeoutMs: 2_000,
