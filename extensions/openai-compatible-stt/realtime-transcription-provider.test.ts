@@ -1,9 +1,11 @@
 // Tests for the universal OpenAI-compatible realtime transcription provider.
-// These tests stub out the WebSocket transport so the protocol translation
+// These tests stub the SDK session factory so the protocol translation
 // layer (binary audio out, JSON events in, partial/final transcript handling)
 // can be exercised without a real STT service.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildOpenAiCompatibleRealtimeTranscriptionProvider } from "./realtime-transcription-provider.js";
+
+type Listener = (...args: unknown[]) => void;
 
 class MockWebSocket {
   static readonly OPEN = 1;
@@ -15,7 +17,7 @@ class MockWebSocket {
     MockWebSocket.onCreated = undefined;
   }
 
-  readonly listeners = new Map<string, Array<(...args: unknown[]) => void>>();
+  readonly listeners = new Map<string, Listener[]>();
   readonly headers?: Record<string, string>;
   readonly url?: string;
   readyState = 0;
@@ -30,7 +32,7 @@ class MockWebSocket {
     MockWebSocket.onCreated?.(this);
   }
 
-  on(event: string, listener: (...args: unknown[]) => void): this {
+  on(event: string, listener: Listener): this {
     const listeners = this.listeners.get(event) ?? [];
     listeners.push(listener);
     this.listeners.set(event, listeners);
@@ -63,14 +65,6 @@ vi.mock("ws", () => ({
   default: MockWebSocket,
 }));
 
-function lastSocket() {
-  const socket = MockWebSocket.instances.at(-1);
-  if (!socket) {
-    throw new Error("expected at least one mock websocket");
-  }
-  return socket;
-}
-
 type SessionHarness = {
   sendAudio: (audio: Buffer) => void;
   close: () => void;
@@ -79,20 +73,51 @@ type SessionHarness = {
   __test_close: () => void;
 };
 
+// The real provider receives the configured session-factory from
+// PluginCapabilityCatalogContext. Tests inject a mock that records the
+// negotiated URL + headers (so the dictionary/output tests can verify what
+// would have been opened) and routes WebSocket payloads back through a
+// recording harness so partial/final/error/close events still flow through
+// the provider's own state machine.
+const factoryCalls: Array<{
+  url: string;
+  headers: Record<string, string>;
+  sentBinary: Buffer[];
+}> = [];
+
+let lastSession: SessionHarness | undefined;
+
 function createRecordingSessionFactory() {
   return (options: unknown): SessionHarness => {
     const opts = options as {
+      url?: unknown;
+      headers?: unknown;
       parseMessage?: (payload: Buffer) => unknown;
       onMessage?: (event: unknown, transport: unknown) => void;
       onClose?: () => void;
       sendAudio?: (audio: Buffer, transport: unknown) => void;
     };
+    // Capture what the provider would have negotiated, including the resolved
+    // URL after any function-call deferred resolution.
+    const resolvedUrl =
+      typeof opts.url === "function"
+        ? (opts.url as () => string)()
+        : typeof opts.url === "string"
+          ? opts.url
+          : "";
+    const sentBinary: Buffer[] = [];
+    const callRecord: (typeof factoryCalls)[number] = {
+      url: resolvedUrl,
+      headers:
+        typeof opts.headers === "function"
+          ? ((opts.headers as () => Record<string, string>)() ?? {})
+          : ((opts.headers as Record<string, string> | undefined) ?? {}),
+      sentBinary,
+    };
+    factoryCalls.push(callRecord);
     const transport = {
       sendBinary: vi.fn((payload: Buffer) => {
-        const ws = MockWebSocket.instances.at(-1);
-        if (ws) {
-          ws.sentBinary.push(payload);
-        }
+        sentBinary.push(payload);
       }),
       sendJson: vi.fn(),
       closeNow: vi.fn(),
@@ -102,7 +127,7 @@ function createRecordingSessionFactory() {
       failConnect: () => undefined,
       callbacks: undefined,
     };
-    return {
+    const session: SessionHarness = {
       sendAudio: (audio: Buffer) => {
         opts.sendAudio?.(audio, transport);
       },
@@ -118,7 +143,15 @@ function createRecordingSessionFactory() {
         opts.onClose?.();
       },
     };
+    lastSession = session;
+    return session;
   };
+}
+
+function resetFactory(): void {
+  factoryCalls.length = 0;
+  MockWebSocket.reset();
+  lastSession = undefined;
 }
 
 describe("openai-compatible-stt provider", () => {
@@ -126,7 +159,7 @@ describe("openai-compatible-stt provider", () => {
   const originalApiKey = process.env.OPENAI_COMPATIBLE_STT_API_KEY;
 
   beforeEach(() => {
-    MockWebSocket.reset();
+    resetFactory();
   });
 
   afterEach(() => {
@@ -185,15 +218,14 @@ describe("openai-compatible-stt provider", () => {
       onSpeechStart: vi.fn(),
       onError: vi.fn(),
     });
-    const socket = lastSocket();
-    expect(socket.url).toBe(
+    expect(factoryCalls).toHaveLength(1);
+    const call = factoryCalls[0];
+    expect(call.url).toBe(
       "ws://127.0.0.1:8765/ws/transcribe?encoding=pcm_s16le&model=whisper-1&sample_rate=16000&interim_results=true",
     );
     const audio = Buffer.from([1, 2, 3, 4]);
     session.sendAudio(audio);
-    expect(socket.sentBinary).toHaveLength(1);
-    expect(socket.sentBinary[0]).toEqual(audio);
-    expect(socket.sentText).toHaveLength(0);
+    expect(call.sentBinary).toEqual([audio]);
   });
 
   it("forwards an Authorization bearer header when an apiKey is configured", () => {
@@ -203,15 +235,16 @@ describe("openai-compatible-stt provider", () => {
     provider.createSession({
       providerConfig: {
         endpoint: "https://stt.example.test/ws/transcribe",
-        apiKey: "test-key",
+        apiKey: "***",
       },
       onPartial: vi.fn(),
       onTranscript: vi.fn(),
       onError: vi.fn(),
     });
-    const socket = lastSocket();
-    expect(socket.url?.startsWith("wss://stt.example.test/")).toBe(true);
-    expect(socket.headers).toEqual({ Authorization: "Bearer test-key" });
+    expect(factoryCalls).toHaveLength(1);
+    const call = factoryCalls[0];
+    expect(call.url.startsWith("wss://stt.example.test/")).toBe(true);
+    expect(call.headers).toEqual({ Authorization: "Bearer ***" });
   });
 
   it("emits partial transcripts and finalizes them", () => {
