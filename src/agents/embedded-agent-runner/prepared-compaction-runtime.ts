@@ -33,6 +33,11 @@ import { createSkillInstructionDeliveryCache } from "../agent-tools.read.js";
 import { listActiveProcessSessionReferences } from "../bash-process-references.js";
 import { resolveProcessToolScopeKey } from "../bash-process-scope.js";
 import {
+  buildBootstrapBudgetState,
+  buildBootstrapInjectionStats,
+  buildBootstrapPromptWarningNotice,
+} from "../bootstrap-budget.js";
+import {
   makeBootstrapWarn,
   resolveBootstrapContextForRun,
   resolveContextInjectionMode,
@@ -45,6 +50,7 @@ import {
 import { resolveConversationCapabilityProfile } from "../conversation-capability-profile.js";
 import { formatDateStamp, resolveUserTimezone } from "../date-time.js";
 import { resolveOpenClawReferencePaths } from "../docs-path.js";
+import type { EmbeddedContextFile } from "../embedded-agent-helpers.js";
 import { prepareAgentMemoryPrompt } from "../memory-prompt-prepare.js";
 import {
   applyAuthHeaderOverride,
@@ -72,6 +78,7 @@ import {
 } from "../tool-schema-projection.js";
 import { logRuntimeToolSchemaQuarantine } from "../tool-schema-quarantine.js";
 import { prepareWatchedSessionsPrompt } from "../watched-sessions-prompt.js";
+import type { WorkspaceBootstrapFile } from "../workspace.js";
 import { resolveCompactionContextTokenBudget } from "./compaction-runtime-context.js";
 import type { DirectCompactionPreparation } from "./direct-compaction-preparation.js";
 import { applyFinalEffectiveToolPolicy } from "./effective-tool-policy.js";
@@ -218,22 +225,42 @@ export async function buildPreparedCompactionRuntime(prepared: DirectCompactionP
 
     const sessionLabel = params.sessionKey ?? params.sessionId;
     const resolvedMessageProvider = params.messageChannel ?? params.messageProvider;
-    const contextInjectionMode = resolveContextInjectionMode(params.config, sessionAgentId);
-    const { contextFiles } =
+    const contextInjectionMode = resolveContextInjectionMode(params.config, effectiveSkillAgentId);
+    const bootstrapWarn = makeBootstrapWarn({
+      sessionLabel,
+      warn: (message) => log.warn(message),
+    });
+    const {
+      contextFiles,
+      bootstrapFiles,
+    }: { contextFiles: EmbeddedContextFile[]; bootstrapFiles: WorkspaceBootstrapFile[] } =
       contextInjectionMode === "never"
-        ? { contextFiles: [] }
+        ? { contextFiles: [], bootstrapFiles: [] }
         : await resolveBootstrapContextForRun({
             workspaceDir: effectiveWorkspace,
             config: params.config,
             sessionKey: params.sessionKey,
             sessionId: params.sessionId,
             chatType: params.chatType,
-            agentId: sessionAgentId,
-            warn: makeBootstrapWarn({
-              sessionLabel,
-              warn: (message) => log.warn(message),
-            }),
+            agentId: effectiveSkillAgentId,
+            warn: bootstrapWarn,
           });
+    // Compaction must mirror the live-turn contract: when aggregate budget exhausts,
+    // later valid files may be omitted entirely. The shared budget state derives the
+    // canonical truncation notice from raw bootstrap files, and we resolve it once
+    // per prepared attempt so thinking-level retries reuse the same notice.
+    const bootstrapInjectionStats = buildBootstrapInjectionStats({
+      bootstrapFiles,
+      injectedFiles: contextFiles,
+    });
+    const bootstrapBudget = buildBootstrapBudgetState({
+      config: params.config,
+      agentId: effectiveSkillAgentId,
+      files: bootstrapInjectionStats,
+    });
+    const bootstrapTruncationNotice = buildBootstrapPromptWarningNotice(
+      bootstrapBudget.bootstrapPromptWarning.lines,
+    );
     // Apply contextTokens cap to model so session runtime's auto-compaction
     // threshold uses the effective limit, not the native context window.
     const runtimeModelWithContext = runtimeModel as ProviderRuntimeModel;
@@ -642,6 +669,7 @@ export async function buildPreparedCompactionRuntime(prepared: DirectCompactionP
         userTimezone,
         userDate,
         contextFiles,
+        bootstrapTruncationNotice,
         activeProjectKeys,
         preparedMemoryPrompt,
         preparedWatchedSessions,
