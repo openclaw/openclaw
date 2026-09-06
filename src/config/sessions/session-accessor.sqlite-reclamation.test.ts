@@ -1,16 +1,20 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import fs from "node:fs";
+import path from "node:path";
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import { afterEach, expect, test, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { onSessionIdentityMutation } from "../../sessions/session-lifecycle-events.js";
 import {
   closeOpenClawAgentDatabaseByPath,
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
-import { loadTranscriptEvents } from "./session-accessor.js";
+import { loadSessionEntry, loadTranscriptEvents } from "./session-accessor.js";
 import { ensureSessionEntrySync } from "./session-accessor.sqlite-initial-entry.js";
 import {
   createHistoryEvictionReclamationPlan,
+  createLifecycleArtifactReclamationPlan,
   runSqliteSessionReclamation,
 } from "./session-accessor.sqlite-reclamation.js";
 import { runExclusiveSqliteSessionWrite } from "./session-accessor.sqlite-scope.js";
@@ -44,7 +48,7 @@ afterEach(() => {
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => closeOpenClawAgentDatabasesForTest());
 
-function createFixture() {
+function createFixture(alias = false) {
   const env = { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-reclamation-writers-") };
   const options = { agentId: "main", env };
   const scopes = ["parent", "child"].map((sessionId) => ({
@@ -58,30 +62,50 @@ function createFixture() {
   }
   const database = openOpenClawAgentDatabase(options);
   const databaseOptions = { ...options, path: database.path };
+  const aliasPath = alias
+    ? path.join(path.dirname(database.path), "writer-alias.sqlite")
+    : undefined;
+  if (aliasPath) {
+    fs.symlinkSync(database.path, aliasPath);
+    openOpenClawAgentDatabase({ ...options, path: aliasPath });
+  }
   const plan = createHistoryEvictionReclamationPlan({
     databaseOptions,
     materializedPlans: [],
     protectedSessionIds: new Set(scopes.map((scope) => scope.sessionId)),
     sessionId: "already-removed-history",
   });
-  return { database, databaseOptions, plan, scopes };
+  return {
+    database,
+    databaseOptions,
+    plan,
+    scopes: scopes.map((scope) => Object.assign(scope, { storePath: aliasPath })),
+  };
 }
 
-test.each([
-  { operation: "append", rejected: false },
-  { operation: "append", rejected: true },
-  { operation: "replace", rejected: false },
-  { operation: "replace", rejected: true },
-])(
-  "two synchronous transcript writers progress at reclamation ($operation, rejected: $rejected)",
-  async ({ operation, rejected }) => {
-    const { databaseOptions, plan, scopes } = createFixture();
+test.each(
+  [
+    { operation: "append", rejected: false },
+    { operation: "append", rejected: true },
+    { operation: "replace", rejected: false },
+    { operation: "replace", rejected: true },
+  ].flatMap((scenario) =>
+    (process.platform === "win32" ? [false] : [false, true]).map((alias) =>
+      Object.assign({ alias }, scenario),
+    ),
+  ),
+)(
+  "two synchronous transcript writers progress at reclamation ($operation, rejected: $rejected, alias: $alias)",
+  async ({ operation, rejected, alias }) => {
+    const { databaseOptions, plan, scopes } = createFixture(alias);
     const appends: unknown[] = [];
     const appendErrors: unknown[] = [];
     let commitChecks = 0;
+    let retired = false;
     const owner = new AsyncLocalStorage<string>();
     hooks.beforeAuthorization = () =>
       owner.run("transcript-writer", () => {
+        retired = rejected;
         // The worker owns BEGIN IMMEDIATE and is waiting for the parent. Both sync
         // runtimes must service that request before its queued handler can return.
         for (const scope of scopes) {
@@ -105,7 +129,7 @@ test.each([
           assertCommitAllowed: () => {
             commitChecks += 1;
             expect(owner.getStore()).toBe("reclamation-owner");
-            if (rejected) {
+            if (retired) {
               throw new Error("reclamation owner retired");
             }
           },
@@ -120,7 +144,7 @@ test.each([
         value: { archivedTranscripts: [], deleted: true },
       });
     }
-    expect(commitChecks).toBe(1);
+    expect(commitChecks).toBe(2);
     expect(appendErrors).toEqual([]);
     expect(appends).toEqual(
       operation === "replace"
@@ -138,6 +162,49 @@ test.each([
   },
   20_000,
 );
+
+test("captures removal identity when a synchronous writer authorizes reclamation", async () => {
+  const { databaseOptions, scopes } = createFixture();
+  const removed = scopes[0]!;
+  const writer = scopes[1]!;
+  const expectedEntry = loadSessionEntry(removed);
+  if (!expectedEntry) {
+    throw new Error("expected the removal fixture entry");
+  }
+  const plan = createLifecycleArtifactReclamationPlan({
+    databaseOptions,
+    entries: [{ sessionKey: removed.sessionKey, expectedEntry }],
+    materializedPlans: [],
+  });
+  const removedSessionIds: Array<string | undefined> = [];
+  const unsubscribe = onSessionIdentityMutation((mutation) => {
+    if (mutation.kind === "delete" && mutation.previous.sessionKeys.includes(removed.sessionKey)) {
+      removedSessionIds.push(mutation.previous.sessionId);
+    }
+  });
+  hooks.beforeAuthorization = () => {
+    expect(appendTranscriptEventSync(writer, { type: "session", id: writer.sessionId })).toEqual({
+      ok: true,
+      value: true,
+    });
+    expect(loadSessionEntry({ ...removed, readConsistency: "latest" })).toBeUndefined();
+    // The helper has joined COMMIT, but the queued Worker callback has not run yet.
+    expectedEntry.sessionId = "changed-after-grant";
+  };
+  try {
+    await expect(
+      runExclusiveSqliteSessionWrite(databaseOptions, () =>
+        runSqliteSessionReclamation({ forceInProcess: false, plan }),
+      ),
+    ).resolves.toMatchObject({ kind: "lifecycle-artifacts", value: { removedEntries: 1 } });
+    expect(removedSessionIds).toEqual([removed.sessionId]);
+    await expect(loadTranscriptEvents(writer)).resolves.toEqual([
+      { type: "session", id: writer.sessionId },
+    ]);
+  } finally {
+    unsubscribe();
+  }
+});
 
 test("one reclamation pass leaves a large freelist for bounded later maintenance", async () => {
   const { database, plan, scopes } = createFixture();

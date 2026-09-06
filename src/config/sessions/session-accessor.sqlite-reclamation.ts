@@ -1,8 +1,11 @@
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
+import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
+import { retainOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import {
+  deferOpenClawAgentPostCommitPublication,
   isIncognitoOpenClawAgentSqlitePath,
   openOpenClawAgentDatabase,
   resolveOpenClawAgentSqlitePath,
@@ -33,6 +36,7 @@ import {
   deleteLifecycleTargetRows,
   readLifecycleTargetSnapshot,
 } from "./session-accessor.sqlite-entry-store.js";
+import { prepareCommittedSessionEntryRemovals } from "./session-accessor.sqlite-identity.js";
 import {
   assertPlannedLifecycleArtifactEntriesUnchanged,
   deleteMaterializedSessionStatePlans,
@@ -365,6 +369,15 @@ function prepareReclamationWorkerTransferList(plan: SqliteSessionReclamationPlan
   return [...buffers];
 }
 
+function prepareReclamationPublication(
+  plan: SqliteSessionReclamationPlan,
+): (() => void) | undefined {
+  if (plan.kind === "lifecycle-artifacts") {
+    return prepareCommittedSessionEntryRemovals(plan.entries);
+  }
+  return undefined;
+}
+
 export async function runSqliteSessionReclamation(params: {
   assertCommitAllowed?: () => void;
   forceInProcess: boolean;
@@ -380,53 +393,88 @@ export async function runSqliteSessionReclamation(params: {
   ) {
     return reclaimSqliteSessionInTransaction(params.plan, {
       beforeMutation: params.assertCommitAllowed,
-      onCommit: params.onInProcessCommit,
+      onCommit: (database) => {
+        const publish = prepareReclamationPublication(params.plan);
+        if (publish) {
+          deferOpenClawAgentPostCommitPublication(database, publish);
+        }
+        params.onInProcessCommit?.(database);
+      },
     });
   }
-  const assertCommitAllowed = params.assertCommitAllowed;
-  const commitGate = assertCommitAllowed
-    ? new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT)
-    : undefined;
-  const recoveredCommitErrors: unknown[] = [];
-  const [workerResult] = await withSqliteReclamationAuthorization(
-    commitGate,
-    params.plan.databaseOptions.path,
-    assertCommitAllowed,
-    (authorize) =>
-      runSqliteTranscriptArchiveWorkerOperation<SqliteSessionReclamationWorkerResult>({
-        expectedMessageType: "reclaimed",
-        onCommitRequest: () => recoveredCommitErrors.push(...authorize()),
-        transferList: prepareReclamationWorkerTransferList(params.plan),
-        workerData: {
-          commitGate,
-          operation: "reclaim",
-          plan: params.plan,
-          type: "sqlite-transcript-archive-v2",
-        } satisfies SqliteSessionReclamationWorkerData,
-      }),
-  );
-  if (!workerResult) {
-    throw new Error("SQLite session reclamation Worker returned no result");
+  const retained = retainOpenClawAgentDatabaseReadOnly(params.plan.databaseOptions);
+  if (!retained.found) {
+    throw new Error("SQLite session reclamation lost its prepared database");
   }
-  if (recoveredCommitErrors.length > 0) {
-    reclamationLog.warn("SQLite session reclamation recovered commit settlement errors", {
-      errors: recoveredCommitErrors.map(String),
-      path: params.plan.databaseOptions.path,
-    });
+  const { claim } = retained;
+  try {
+    const assertCommitAllowed = () => {
+      claim.assertCurrent();
+      params.assertCommitAllowed?.();
+    };
+    assertCommitAllowed();
+    // The parent keeps its exact handle live; only the existing cloneable filename crosses threads.
+    const plan = {
+      ...params.plan,
+      databaseOptions: {
+        ...params.plan.databaseOptions,
+        path: readOpenClawAgentDatabaseIdentity(claim.database).filename,
+      },
+    };
+    const commitGate = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT);
+    const recoveredCommitErrors: unknown[] = [];
+    let publishCommitted: (() => void) | undefined;
+    const [workerResult] = await withSqliteReclamationAuthorization(
+      commitGate,
+      claim.database,
+      () => {
+        assertCommitAllowed();
+        // A blocked transcript writer may authorize before the Worker's queued request.
+        publishCommitted = prepareReclamationPublication(plan);
+      },
+      (authorize) =>
+        runSqliteTranscriptArchiveWorkerOperation<SqliteSessionReclamationWorkerResult>({
+          expectedMessageType: "reclaimed",
+          onCommitRequest: () => recoveredCommitErrors.push(...authorize()),
+          transferList: prepareReclamationWorkerTransferList(plan),
+          workerData: {
+            commitGate,
+            operation: "reclaim",
+            plan,
+            type: "sqlite-transcript-archive-v2",
+          } satisfies SqliteSessionReclamationWorkerData,
+        }),
+    );
+    if (!workerResult) {
+      throw new Error("SQLite session reclamation Worker returned no result");
+    }
+    if (recoveredCommitErrors.length > 0) {
+      reclamationLog.warn("SQLite session reclamation recovered commit settlement errors", {
+        errors: recoveredCommitErrors.map(String),
+        path: params.plan.databaseOptions.path,
+      });
+    }
+    if (workerResult.cleanupIncomplete) {
+      reclamationLog.error(
+        "SQLite session reclamation committed but Worker cleanup is incomplete",
+        {
+          errors: workerResult.cleanupWarnings ?? [],
+          path: params.plan.databaseOptions.path,
+          recovery: "restart OpenClaw before deleting the owning agent",
+        },
+      );
+    } else if (workerResult.cleanupWarnings?.length) {
+      reclamationLog.warn("SQLite session reclamation Worker recovered cleanup failures", {
+        errors: workerResult.cleanupWarnings,
+        path: params.plan.databaseOptions.path,
+      });
+    }
+    // Publish the removal identities captured at authorization only after confirmed settlement.
+    publishCommitted?.();
+    return workerResult.result;
+  } finally {
+    claim.release();
   }
-  if (workerResult.cleanupIncomplete) {
-    reclamationLog.error("SQLite session reclamation committed but Worker cleanup is incomplete", {
-      errors: workerResult.cleanupWarnings ?? [],
-      path: params.plan.databaseOptions.path,
-      recovery: "restart OpenClaw before deleting the owning agent",
-    });
-  } else if (workerResult.cleanupWarnings?.length) {
-    reclamationLog.warn("SQLite session reclamation Worker recovered cleanup failures", {
-      errors: workerResult.cleanupWarnings,
-      path: params.plan.databaseOptions.path,
-    });
-  }
-  return workerResult.result;
 }
 
 // The live assertion belongs to runSqliteSessionReclamation, never its cloneable plan.

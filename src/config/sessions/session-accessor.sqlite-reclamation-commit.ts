@@ -12,6 +12,10 @@ import {
 } from "../../infra/sqlite-transaction.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import {
+  readOpenClawAgentDatabaseIdentity,
+  type OpenClawAgentDatabaseIdentity,
+} from "../../state/openclaw-agent-db-identity.js";
+import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
@@ -26,19 +30,17 @@ const REQUESTED = 5;
 
 const pendingAuthorizations = resolveGlobalSingleton(
   Symbol.for("openclaw.sqliteReclamationAuthorizations"),
-  () => new Map<string, () => void>(),
+  () => new Map<OpenClawAgentDatabaseIdentity, () => void>(),
 );
 
 /** Preserve the reclamation owner's context when an unrelated synchronous writer helps. */
 export async function withSqliteReclamationAuthorization<T>(
-  buffer: SharedArrayBuffer | undefined,
-  databasePath: string,
-  assertCurrent: (() => void) | undefined,
+  buffer: SharedArrayBuffer,
+  database: { db: DatabaseSync },
+  assertCurrent: () => void,
   run: (authorize: () => unknown[]) => Promise<T>,
 ): Promise<T> {
-  if (!buffer || !assertCurrent) {
-    return await run(() => []);
-  }
+  const { identity, filename: databasePath } = readOpenClawAgentDatabaseIdentity(database);
   const shared = new Int32Array(buffer);
   const inOwnerContext = AsyncLocalStorage.snapshot();
   let consumed = false;
@@ -74,11 +76,11 @@ export async function withSqliteReclamationAuthorization<T>(
       }
     }
   };
-  pendingAuthorizations.set(databasePath, service);
+  pendingAuthorizations.set(identity, service);
   try {
     return await run(authorize);
   } finally {
-    pendingAuthorizations.delete(databasePath);
+    pendingAuthorizations.delete(identity);
   }
 }
 
@@ -89,7 +91,7 @@ export function runSqliteTranscriptWriteTransaction<T>(
   transactionOptions?: Parameters<typeof runOpenClawAgentWriteTransaction>[2],
 ): T {
   const database = openOpenClawAgentDatabase(options);
-  const service = pendingAuthorizations.get(database.path);
+  const service = pendingAuthorizations.get(readOpenClawAgentDatabaseIdentity(database).identity);
   if (!service || database.db.isTransaction) {
     return runOpenClawAgentWriteTransaction(operation, options, transactionOptions);
   }

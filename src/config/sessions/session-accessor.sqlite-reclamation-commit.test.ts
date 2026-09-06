@@ -7,6 +7,7 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import * as nodeSqlite from "../../infra/node-sqlite.js";
 import * as sqliteTransaction from "../../infra/sqlite-transaction.js";
+import { registerOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import { withSqliteReclamationAuthorization } from "./session-accessor.sqlite-reclamation-commit.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -35,6 +36,7 @@ function createCommitFixture(
   database.exec(
     "PRAGMA journal_mode=WAL; CREATE TABLE proof(value INTEGER); INSERT INTO proof VALUES (1)",
   );
+  registerOpenClawAgentDatabaseIdentity(database);
   const gate = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT);
   const progress = new Int32Array(new SharedArrayBuffer(2 * Int32Array.BYTES_PER_ELEMENT));
   const register = `import { register } from ${JSON.stringify(import.meta.resolve("tsx/esm/api"))}; register();`;
@@ -65,7 +67,7 @@ function createCommitFixture(
       assertCurrent: () => void,
       run: (authorize: () => unknown[]) => Promise<T>,
     ) {
-      return withSqliteReclamationAuthorization(gate, databasePath, assertCurrent, run);
+      return withSqliteReclamationAuthorization(gate, { db: database }, assertCurrent, run);
     },
     async close() {
       release();
