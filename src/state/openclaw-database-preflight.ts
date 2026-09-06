@@ -36,6 +36,7 @@ import {
 import type {
   DeferredStateSchemaPublication,
   IncompatibleOpenClawDatabase,
+  IndeterminateOpenClawDatabase,
   OpenClawAgentSchemaPreflightResult,
   OpenClawDatabaseSchemaPreflight,
   OpenClawStateSchemaPreflightResult,
@@ -110,6 +111,16 @@ function describeDeferredStateSchemaPublication(
 type AgentRegistryDatabase = Pick<OpenClawStateKyselyDatabase, "agent_databases">;
 
 type OpenClawDatabaseSchemaPreflightOperation = "doctor" | "gateway-restart" | "gateway-startup";
+
+type AgentDatabaseSchemaInspection = {
+  incompatible?: IncompatibleOpenClawDatabase;
+  indeterminate?: IndeterminateOpenClawDatabase;
+  pendingMigration?: Omit<IncompatibleOpenClawDatabase, "writerAppVersion">;
+};
+
+// Snapshot preparation can be disk-heavy; overlap one additional agent
+// without fanning out across every registered database.
+const AGENT_DATABASE_PREFLIGHT_CONCURRENCY = 2;
 
 function formatDoctorIncompatibleDatabase(database: IncompatibleOpenClawDatabase): string {
   const agent = database.agentId ? ` for agent ${database.agentId}` : "";
@@ -647,15 +658,16 @@ export async function preflightOpenClawDatabaseSchemas(options: {
   ];
   const inspectedAgentPaths = new Set<string>();
   const inspectedAgentTargets = new Set<string>();
-  for (const row of inspectionTargets) {
+  const inspectAgent = async (
+    row: (typeof inspectionTargets)[number],
+  ): Promise<AgentDatabaseSchemaInspection | undefined> => {
     const agentPath = row.path;
     const presence = inspectCandidatePresence(agentPath);
     if (presence.status === "absent") {
-      continue;
+      return undefined;
     }
     if (presence.status === "indeterminate") {
-      result.indeterminate.push({ kind: "agent", path: agentPath, reason: presence.reason });
-      continue;
+      return { indeterminate: { kind: "agent", path: agentPath, reason: presence.reason } };
     }
     let agentDatabase: DatabaseSync | undefined;
     let agentSnapshot: Awaited<ReturnType<typeof prepareSqliteReadOnlyLocation>> | undefined;
@@ -667,7 +679,7 @@ export async function preflightOpenClawDatabaseSchemas(options: {
         inspectedAgentTargets.has(inspectionKey) ||
         (row.agentId === undefined && inspectedAgentPaths.has(realAgentPath))
       ) {
-        continue;
+        return undefined;
       }
       inspectedAgentPaths.add(realAgentPath);
       inspectedAgentTargets.add(inspectionKey);
@@ -682,15 +694,16 @@ export async function preflightOpenClawDatabaseSchemas(options: {
       });
       agentDatabase.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
       const agentVersion = readSqliteUserVersion(agentDatabase);
-      if (agentVersion < options.supportedVersions.agent) {
-        (result.pendingMigrations ??= []).push({
-          kind: "agent",
-          path: agentPath,
-          ...(row.agentId !== undefined ? { agentId: row.agentId } : {}),
-          foundVersion: agentVersion,
-          supportedVersion: options.supportedVersions.agent,
-        });
-      }
+      const pendingMigration =
+        agentVersion < options.supportedVersions.agent
+          ? {
+              kind: "agent" as const,
+              path: agentPath,
+              ...(row.agentId !== undefined ? { agentId: row.agentId } : {}),
+              foundVersion: agentVersion,
+              supportedVersion: options.supportedVersions.agent,
+            }
+          : undefined;
       if (agentVersion <= options.supportedVersions.agent) {
         if (options.requireStartupMigrationReadiness) {
           assertSqliteIntegrity(agentDatabase, agentPath);
@@ -711,32 +724,84 @@ export async function preflightOpenClawDatabaseSchemas(options: {
             pathname: agentPath,
           });
         }
-        continue;
+        return pendingMigration ? { pendingMigration } : undefined;
       }
       const writerAppVersion = readWriterAppVersion(agentDatabase);
-      result.incompatible.push({
-        kind: "agent",
-        path: agentPath,
-        ...(row.agentId !== undefined ? { agentId: row.agentId } : {}),
-        foundVersion: agentVersion,
-        supportedVersion: options.supportedVersions.agent,
-        ...(writerAppVersion ? { writerAppVersion } : {}),
-      });
+      return {
+        incompatible: {
+          kind: "agent",
+          path: agentPath,
+          ...(row.agentId !== undefined ? { agentId: row.agentId } : {}),
+          foundVersion: agentVersion,
+          supportedVersion: options.supportedVersions.agent,
+          ...(writerAppVersion ? { writerAppVersion } : {}),
+        },
+      };
     } catch (error) {
       if (options.signal?.aborted || options.requireStartupMigrationReadiness) {
         throw error;
       }
-      result.indeterminate.push({
-        kind: "agent",
-        path: agentPath,
-        reason: formatErrorMessage(error),
-      });
+      return {
+        indeterminate: {
+          kind: "agent",
+          path: agentPath,
+          reason: formatErrorMessage(error),
+        },
+      };
     } finally {
       try {
         agentDatabase?.close();
       } finally {
         agentSnapshot?.cleanup();
       }
+    }
+  };
+
+  const inspections: Array<AgentDatabaseSchemaInspection | undefined> = [];
+  const failures = new Map<number, unknown>();
+  let nextInspectionIndex = 0;
+  const worker = async (): Promise<void> => {
+    while (!options.signal?.aborted && failures.size === 0) {
+      const index = nextInspectionIndex;
+      nextInspectionIndex += 1;
+      const row = inspectionTargets[index];
+      if (!row) {
+        return;
+      }
+      try {
+        inspections[index] = await inspectAgent(row);
+      } catch (error) {
+        failures.set(index, error);
+        return;
+      }
+    }
+  };
+
+  // Cancellation and fatal inspection errors stop admission, but workers that
+  // already own a snapshot must finish their close and cleanup before preflight settles.
+  await Promise.all(
+    Array.from(
+      { length: Math.min(AGENT_DATABASE_PREFLIGHT_CONCURRENCY, inspectionTargets.length) },
+      () => worker(),
+    ),
+  );
+  for (let index = 0; index < inspectionTargets.length; index += 1) {
+    const failure = failures.get(index);
+    if (failure !== undefined) {
+      throw failure;
+    }
+  }
+  options.signal?.throwIfAborted();
+
+  for (const inspection of inspections) {
+    if (inspection?.pendingMigration) {
+      (result.pendingMigrations ??= []).push(inspection.pendingMigration);
+    }
+    if (inspection?.incompatible) {
+      result.incompatible.push(inspection.incompatible);
+    }
+    if (inspection?.indeterminate) {
+      result.indeterminate.push(inspection.indeterminate);
     }
   }
   return result;
