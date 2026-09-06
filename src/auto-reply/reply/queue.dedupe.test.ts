@@ -2,6 +2,8 @@
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import type { MsgContext } from "../templating.js";
+import { claimInboundDedupe, commitInboundDedupe, resetInboundDedupe } from "./inbound-dedupe.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
 import {
   admitFollowupRunLifecycle,
@@ -48,6 +50,7 @@ function createFollowupCollector(expectedCalls = 1): {
 describe("followup queue deduplication", () => {
   beforeEach(() => {
     resetRecentQueuedMessageIdDedupe();
+    resetInboundDedupe();
   });
 
   it("deduplicates messages with same Discord message_id", async () => {
@@ -462,56 +465,70 @@ describe("followup queue deduplication", () => {
     clearSessionQueues([key]);
   });
 
-  it("allows re-enqueueing a message compacted into a summary elision before teardown", () => {
-    const key = `test-dedup-elision-retry-${Date.now()}`;
-    const summarizeSettings: QueueSettings = {
-      mode: "collect",
-      debounceMs: 0,
-      cap: 1,
-      dropPolicy: "summarize",
-    };
-    const onAbandoned = vi.fn();
-    const first = createRun({
-      prompt: "first",
-      messageId: "m1",
-      originatingChannel: "line",
-      originatingTo: "group:G1",
-    });
-    first.turnAdoptionLifecycle = { onAdopted: () => {}, onAbandoned };
-    expect(enqueueFollowupRun(key, first, summarizeSettings)).toBe(true);
+  it.each(["teardown", "abort"] as const)(
+    "readmits a message compacted into a summary elision after %s",
+    (action) => {
+      const key = `test-dedup-elision-retry-${Date.now()}`;
+      const summarizeSettings: QueueSettings = {
+        mode: "collect",
+        debounceMs: 0,
+        cap: 1,
+        dropPolicy: "summarize",
+      };
+      const onAbandoned = vi.fn();
+      const controller = new AbortController();
+      const first = createRun({
+        prompt: "first",
+        messageId: "m1",
+        originatingChannel: "line",
+        originatingTo: "group:G1",
+      });
+      first.abortSignal = controller.signal;
+      first.turnAdoptionLifecycle = { onAdopted: () => {}, onAbandoned };
+      expect(enqueueFollowupRun(key, first, summarizeSettings)).toBe(true);
 
-    // Overflow the cap twice: the first enqueue drops `first` into the summary
-    // sources, the second compacts it into a summary elision. Compaction clones
-    // the run (createOverflowSummaryRetrySource), so from here on completion
-    // sees the clone, not the originally recorded run object.
-    for (const [prompt, messageId] of [
-      ["second", "m2"],
-      ["third", "m3"],
-    ] as const) {
-      expect(
-        enqueueFollowupRun(
-          key,
-          createRun({ prompt, messageId, originatingChannel: "line", originatingTo: "group:G1" }),
-          summarizeSettings,
-        ),
-      ).toBe(true);
-    }
+      // Overflow the cap twice: the first enqueue drops `first` into the summary
+      // sources, the second compacts it into a summary elision. Compaction clones
+      // the run (createOverflowSummaryRetrySource), so from here on completion
+      // sees the clone, not the originally recorded run object.
+      for (const [prompt, messageId] of [
+        ["second", "m2"],
+        ["third", "m3"],
+      ] as const) {
+        expect(
+          enqueueFollowupRun(
+            key,
+            createRun({ prompt, messageId, originatingChannel: "line", originatingTo: "group:G1" }),
+            summarizeSettings,
+          ),
+        ).toBe(true);
+      }
 
-    // Teardown abandons the elided run via its clone; the ingress retry for the
-    // original message id must still be re-admittable.
-    clearSessionQueues([key]);
-    expect(onAbandoned).toHaveBeenCalledTimes(1);
+      // Teardown abandons the elided run via its clone; the ingress retry for the
+      // original message id must still be re-admittable.
+      if (action === "abort") {
+        controller.abort();
+        expect(getExistingFollowupQueue(key)?.items.map((run) => run.prompt)).toEqual(["third"]);
+        expect(getExistingFollowupQueue(key)?.summarySources.map((run) => run.prompt)).toEqual([
+          "second",
+        ]);
+        expect(getExistingFollowupQueue(key)?.droppedCount).toBe(1);
+      } else {
+        clearSessionQueues([key]);
+      }
+      expect(onAbandoned).toHaveBeenCalledTimes(1);
 
-    const retry = createRun({
-      prompt: "first",
-      messageId: "m1",
-      originatingChannel: "line",
-      originatingTo: "group:G1",
-    });
-    retry.turnAdoptionLifecycle = { onAdopted: () => {} };
-    expect(enqueueFollowupRun(key, retry, summarizeSettings)).toBe(true);
-    clearSessionQueues([key]);
-  });
+      const retry = createRun({
+        prompt: "first",
+        messageId: "m1",
+        originatingChannel: "line",
+        originatingTo: "group:G1",
+      });
+      retry.turnAdoptionLifecycle = { onAdopted: () => {} };
+      expect(enqueueFollowupRun(key, retry, summarizeSettings)).toBe(true);
+      clearSessionQueues([key]);
+    },
+  );
 
   it("does not let a stale abandoned lifecycle release a newer same-id owner", async () => {
     vi.useFakeTimers();
@@ -589,6 +606,86 @@ describe("followup queue deduplication", () => {
     });
     expect(enqueueFollowupRun(key, redelivery, collectSettings)).toBe(false);
   });
+
+  it.each(["abandoned", "aborted", "adopted", "adopting", "consumed"] as const)(
+    "preserves inbound retry eligibility after the %s disposition",
+    async (disposition) => {
+      const key = `test-dedup-inbound-release-${Date.now()}`;
+      const ctx: MsgContext = {
+        Provider: "whatsapp",
+        Surface: "whatsapp",
+        From: "whatsapp:+15550100",
+        To: "whatsapp:+15550200",
+        OriginatingChannel: "whatsapp",
+        OriginatingTo: "whatsapp:+15550200",
+        SessionKey: "agent:main:whatsapp:+15550200",
+        MessageSid: "stalled-1",
+      };
+      const onAbandoned = vi.fn();
+      const onSettled = vi.fn();
+      const pendingAdoption = createDeferred();
+      const sourceAbort = new AbortController();
+
+      const run = createRun({
+        prompt: "stalled message",
+        messageId: "stalled-1",
+        originatingChannel: "whatsapp",
+        originatingTo: "whatsapp:+15550200",
+      });
+      run.abortSignal = sourceAbort.signal;
+      run.turnAdoptionLifecycle = {
+        onAdopted: () => (disposition === "adopting" ? pendingAdoption.promise : undefined),
+        onAbandoned,
+        onSettled,
+      };
+      const claim = claimInboundDedupe(ctx, { owner: run.turnAdoptionLifecycle });
+      expect(claim.status).toBe("claimed");
+      if (claim.status !== "claimed") {
+        throw new Error("expected the first dispatch to claim inbound dedupe");
+      }
+      expect(enqueueFollowupRun(key, run, collectSettings)).toBe(true);
+      commitInboundDedupe(claim);
+      expect(claimInboundDedupe(ctx).status).toBe("duplicate");
+
+      if (disposition === "adopted") {
+        await admitFollowupRunLifecycle(run);
+        sourceAbort.abort();
+        expect(onSettled).not.toHaveBeenCalled();
+      }
+      const admission = disposition === "adopting" ? admitFollowupRunLifecycle(run) : undefined;
+      if (disposition === "aborted") {
+        sourceAbort.abort();
+      } else {
+        completeFollowupRunLifecycle(run, disposition === "consumed" ? "consumed" : undefined);
+      }
+      if (admission) {
+        expect(claimInboundDedupe(ctx).status).toBe("duplicate");
+        expect(onAbandoned).not.toHaveBeenCalled();
+        pendingAdoption.resolve();
+        await admission;
+      }
+      const retryable = disposition === "abandoned" || disposition === "aborted";
+      expect(onAbandoned).toHaveBeenCalledTimes(retryable ? 1 : 0);
+      expect(onSettled).toHaveBeenCalledOnce();
+      if (disposition === "aborted") {
+        expect(
+          enqueueFollowupRun(
+            key,
+            createRun({
+              prompt: "retry",
+              messageId: "stalled-1",
+              originatingChannel: "whatsapp",
+              originatingTo: "whatsapp:+15550200",
+            }),
+            collectSettings,
+          ),
+        ).toBe(true);
+      }
+      clearSessionQueues([key]);
+
+      expect(claimInboundDedupe(ctx).status).toBe(retryable ? "claimed" : "duplicate");
+    },
+  );
 
   it("can opt-in to prompt-based dedupe when message id is absent", () => {
     const key = `test-dedup-prompt-mode-${Date.now()}`;
