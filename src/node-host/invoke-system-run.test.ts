@@ -585,6 +585,52 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     });
   });
 
+  it("classifies a companion response deadline as a timeout", async () => {
+    const result = await runMac({
+      runViaResponse: {
+        ok: false,
+        error: {
+          code: "TIMEOUT",
+          reason: "timeout",
+          message: "TIMEOUT: macOS app exec host response timed out; execution outcome is unknown",
+        },
+      },
+    });
+
+    expectExecDeniedEvent(result.sendNodeEvent, "timeout");
+    expect(invokeResult(result.sendInvokeResult)).toMatchObject({
+      ok: false,
+      error: {
+        code: "TIMEOUT",
+        message: "TIMEOUT: macOS app exec host response timed out; execution outcome is unknown",
+      },
+    });
+    expect(result.runCommand).not.toHaveBeenCalled();
+  });
+
+  it("keeps a submitted companion command from falling back after response loss", async () => {
+    const result = await runMac({
+      runViaResponse: {
+        ok: false,
+        error: {
+          code: "UNKNOWN",
+          reason: "response-lost",
+          message: "UNKNOWN: macOS app exec host response was lost; execution outcome is unknown",
+        },
+      },
+    });
+
+    expectExecDeniedEvent(result.sendNodeEvent, "response-lost");
+    expect(invokeResult(result.sendInvokeResult)).toMatchObject({
+      ok: false,
+      error: {
+        code: "UNKNOWN",
+        message: "UNKNOWN: macOS app exec host response was lost; execution outcome is unknown",
+      },
+    });
+    expect(result.runCommand).not.toHaveBeenCalled();
+  });
+
   it("does not spawn an already-cancelled node command", async () => {
     const controller = new AbortController();
     controller.abort();

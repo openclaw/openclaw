@@ -111,12 +111,17 @@ describe.runIf(process.platform !== "win32")("enforced exec host transport bound
             expect(failures).toEqual([]);
             expect(order).toEqual(["child-completed", "response-dropped"]);
             expect(runCommand).not.toHaveBeenCalled();
-            expect(sendInvokeResult).toHaveBeenCalledExactlyOnceWith(
-              expect.objectContaining({ ok: false }),
-            );
+            expect(sendInvokeResult).toHaveBeenCalledExactlyOnceWith({
+              ok: false,
+              error: {
+                code: "UNKNOWN",
+                message:
+                  "UNKNOWN: macOS app exec host response was lost; execution outcome is unknown",
+              },
+            });
             expect(sendNodeEvent).toHaveBeenCalledExactlyOnceWith(
               "exec.denied",
-              expect.objectContaining({ host: "node" }),
+              expect.objectContaining({ host: "node", reason: "response-lost" }),
             );
             expect(await fs.readFile(marker, "utf8")).toBe("START\nCOMPLETE\n");
           } finally {
