@@ -214,6 +214,8 @@ describe("memory embedding policy", () => {
     for (const message of [
       "Embeddings API input limit exceeded: max 10, got 33. Request id: fixture-000597000",
       "embeddings max input length is 16",
+      // Zhipu embedding-3 caps `input` at 64 items under its generic 1214 code.
+      'openai-compatible embeddings failed: HTTP 400: {"error":{"code":"1214","message":"input array max 64"}}',
     ]) {
       expect(isSplittableMemoryEmbeddingBatchError(message)).toBe(true);
       expect(isRetryableMemoryEmbeddingError(message)).toBe(false);
@@ -224,6 +226,9 @@ describe("memory embedding policy", () => {
       "embeddings max input length is unknown",
       "Embeddings API input limit exceeded",
       'HTTP 400: {"code":"InvalidParameter","param":"input","message":"input must be a string"}',
+      // Code 1214 alone, an item index, or a bare limit phrase without a number stay terminal.
+      'HTTP 400: {"error":{"code":"1214","message":"input array element 3 must be a string"}}',
+      'HTTP 400: {"error":{"code":"1214","message":"input array exceeds the maximum length"}}',
     ]) {
       expect(isSplittableMemoryEmbeddingBatchError(message)).toBe(false);
     }
