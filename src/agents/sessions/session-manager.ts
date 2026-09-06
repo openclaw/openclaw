@@ -7,7 +7,7 @@
 import type { AgentMessage } from "../../../packages/agent-core/src/types.js";
 import {
   appendTranscriptMessageSync,
-  loadTranscriptEventsSync,
+  inspectRuntimeTranscriptEventsSync,
   type SessionTranscriptRuntimeTarget,
 } from "../../config/sessions/session-accessor.js";
 import { readSessionTranscriptBoundedActiveContextCore } from "../../config/sessions/session-accessor.sqlite-active-context.js";
@@ -72,8 +72,9 @@ export class SessionManager extends SessionManagerBranching {
     persistenceTarget?: SessionManagerPersistenceTarget,
     loadedEntries?: FileEntry[],
     boundedContext?: SessionManagerBoundedContext,
+    transcriptMutationAt?: number | null,
   ) {
-    super(cwd, persistenceTarget, loadedEntries, boundedContext);
+    super(cwd, persistenceTarget, loadedEntries, boundedContext, transcriptMutationAt);
   }
 
   /** Makes pending append-oriented persistence durable without rewriting committed entries. */
@@ -107,11 +108,18 @@ export class SessionManager extends SessionManagerBranching {
         ...(cwdOverride !== undefined ? { cwd: cwdOverride } : {}),
       });
     }
-    const entries = loadTranscriptEventsSync(target) as FileEntry[];
+    const inspected = inspectRuntimeTranscriptEventsSync(target);
+    const entries = inspected.events as FileEntry[];
     const header = entries.find(
       (entry) => typeof entry === "object" && entry !== null && entry.type === "session",
     );
-    return new SessionManager(cwdOverride ?? header?.cwd ?? process.cwd(), target, entries);
+    return new SessionManager(
+      cwdOverride ?? header?.cwd ?? process.cwd(),
+      target,
+      entries,
+      undefined,
+      inspected.snapshot.transcriptUpdatedAt,
+    );
   }
 
   /** Opens only the selected model-context tail while preserving the complete durable transcript. */

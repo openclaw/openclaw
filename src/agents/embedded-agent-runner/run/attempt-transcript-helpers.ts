@@ -48,6 +48,10 @@ export function removeTrailingMidTurnPrecheckAssistantError(params: {
           (entry.type === "message" && isTranscriptOnlyOpenClawAssistantMessage(entry.message)),
       },
     ) > 0;
+
+  // Keep the live attempt unchanged until the durable suffix fence commits.
+  // A concurrent append can reject persistence, and the caller must then retry from matching state.
+
   if (removedActiveError) {
     params.activeSession.agent.state.messages = messages.slice(0, -1);
   }

@@ -1,5 +1,5 @@
 import {
-  loadTranscriptEventsSync,
+  inspectRuntimeTranscriptEventsSync,
   type SessionTranscriptRuntimeTarget,
 } from "../../config/sessions/session-accessor.js";
 import {
@@ -30,7 +30,12 @@ export type SessionManagerPersistenceTarget = SessionTranscriptRuntimeTarget;
 export type SessionManagerBoundedContextLimits = { maxBytes: number; maxEvents: number };
 export type SessionManagerBoundedContext = Pick<
   SessionTranscriptBoundedActiveContext,
-  "activeLeafEntryId" | "opaqueParents" | "firstKeptRanges" | "boundaryCount"
+  | "activeLeafEntryId"
+  | "opaqueParents"
+  | "firstKeptRanges"
+  | "persistedSuffixStartSeq"
+  | "boundaryCount"
+  | "transcriptMutationAt"
 > & { limits: SessionManagerBoundedContextLimits };
 
 export class SessionManagerCore extends SessionEntryNavigation<SessionEntry> {
@@ -46,12 +51,15 @@ export class SessionManagerCore extends SessionEntryNavigation<SessionEntry> {
   protected boundedContextLimits: SessionManagerBoundedContextLimits | undefined;
   protected boundedContextIncomplete = false;
   protected persistedBoundaryCount: number | undefined;
+  protected persistedSuffixStartSeq: number | undefined;
+  protected transcriptMutationAt: number | null | undefined;
 
   constructor(
     cwd: string,
     persistenceTarget?: SessionManagerPersistenceTarget,
     loadedEntries?: FileEntry[],
     boundedContext?: SessionManagerBoundedContext,
+    transcriptMutationAt?: number | null,
   ) {
     super();
     this.cwd = cwd;
@@ -59,6 +67,9 @@ export class SessionManagerCore extends SessionEntryNavigation<SessionEntry> {
     this.boundedContextLimits = boundedContext?.limits;
     this.boundedContextIncomplete = boundedContext !== undefined;
     this.persistedBoundaryCount = boundedContext?.boundaryCount;
+    this.persistedSuffixStartSeq = boundedContext?.persistedSuffixStartSeq;
+    this.transcriptMutationAt =
+      boundedContext !== undefined ? boundedContext.transcriptMutationAt : transcriptMutationAt;
     if (persistenceTarget || loadedEntries) {
       this.setLoadedSessionTarget(persistenceTarget, loadedEntries ?? [], boundedContext);
     } else {
@@ -70,9 +81,15 @@ export class SessionManagerCore extends SessionEntryNavigation<SessionEntry> {
     const bounded = this.boundedContextLimits
       ? readSessionTranscriptBoundedActiveContextCore(target, this.boundedContextLimits)
       : undefined;
-    const entries = (bounded?.events ?? loadTranscriptEventsSync(target)) as FileEntry[];
+    const inspected = bounded ? undefined : inspectRuntimeTranscriptEventsSync(target);
+    const entries = (bounded?.events ?? inspected?.events ?? []) as FileEntry[];
     this.boundedContextIncomplete = bounded !== undefined;
     this.persistedBoundaryCount = bounded?.boundaryCount;
+    this.persistedSuffixStartSeq = bounded?.persistedSuffixStartSeq;
+    this.transcriptMutationAt =
+      bounded !== undefined
+        ? bounded.transcriptMutationAt
+        : inspected?.snapshot.transcriptUpdatedAt;
     const header = entries.find(
       (entry) => typeof entry === "object" && entry !== null && entry.type === "session",
     );

@@ -46,6 +46,8 @@ export type TranscriptEventAppendOptions = {
   appendIntent?: "active-branch";
   /** Synchronous authority check run inside the append transaction. */
   beforeCommitInTransaction?: () => void;
+  /** Captures the mutation fence produced by a successful synchronous append. */
+  captureMutationAtInTransaction?: (mutationAt: number | null) => void;
 };
 
 export type TranscriptAppendRefusal =

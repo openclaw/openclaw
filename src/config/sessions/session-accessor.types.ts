@@ -329,6 +329,8 @@ export type TranscriptMessageAppendResult<TMessage> = {
   message: TMessage;
   /** Existing or newly generated transcript message id. */
   messageId: string;
+  /** Mutation fence captured in the same transaction as a successful append. */
+  transcriptMutationAt?: number | null;
   /** Parent id actually used by the durable transcript append. */
   effectiveParentId?: string | null;
   /** Authoritative immutable identity issued by the append transaction. */

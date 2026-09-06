@@ -14,6 +14,7 @@ import type {
   TranscriptEvent,
 } from "./session-accessor.sqlite-contract.js";
 import { resolveTranscriptBoundaryWindow } from "./session-accessor.sqlite-reset-window.js";
+import { readTranscriptMutationStateInTransaction } from "./session-accessor.sqlite-transcript-state.js";
 import {
   DEFAULT_VISIBLE_MESSAGE_MAX_BYTES,
   DEFAULT_VISIBLE_MESSAGE_MAX_MESSAGES,
@@ -27,10 +28,12 @@ export type SessionTranscriptBoundedActiveContext = {
   activeLeafEntryId: string | null;
   opaqueParents: Map<string, string | null>;
   firstKeptRanges: Map<string, { startIndex: number; endIndex: number }>;
+  persistedSuffixStartSeq: number;
   boundaryCount: number;
   events: TranscriptEvent[];
   serializedBytes: number;
   totalEvents: number;
+  transcriptMutationAt: number | null;
   truncated: boolean;
 };
 
@@ -287,10 +290,15 @@ export function readSessionTranscriptBoundedActiveContextCore(
       activeLeafEntryId,
       opaqueParents,
       firstKeptRanges,
+      persistedSuffixStartSeq: contextSequences[0] ?? (header ? header.seq + 1 : 0),
       boundaryCount: boundary?.boundary_count ?? 0,
       events,
       serializedBytes,
       totalEvents: projection.state.activeEventCount,
+      transcriptMutationAt: readTranscriptMutationStateInTransaction(
+        projection.database,
+        projection.resolved.sessionId,
+      ).updatedAt,
       truncated: boundaryOmitted || metadata.length > selectedSequences.length,
     };
   });

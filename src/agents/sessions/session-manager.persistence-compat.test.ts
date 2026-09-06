@@ -11,10 +11,13 @@ import {
 import {
   appendTranscriptMessage,
   loadTranscriptEvents,
+  readSessionTranscriptWatermark,
+  replaceTranscriptEventsSync,
   resolveSessionTranscriptDatabasePath,
   updateSessionEntry,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import { waitForSessionTranscriptIndexReconcile } from "../../config/sessions/session-transcript-reconcile.js";
 import { withOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
@@ -185,6 +188,253 @@ describe("SessionManager persistence compatibility", () => {
     });
   });
 
+  it("preserves and rebases trailing metadata, labels, and leaf controls", async () => {
+    const dir = tempDirs.make("openclaw-session-manager-controls-");
+    const scope = {
+      agentId: "main",
+      sessionId: "sqlite-remove-controls-session",
+      sessionKey: "agent:main:dashboard:sqlite-remove-controls",
+      storePath: path.join(dir, "sessions.json"),
+    };
+    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+    const events = [
+      {
+        type: "session",
+        version: CURRENT_SESSION_VERSION,
+        id: scope.sessionId,
+        timestamp: new Date(0).toISOString(),
+        cwd: dir,
+      },
+      {
+        type: "message",
+        id: "user",
+        parentId: null,
+        timestamp: new Date(1).toISOString(),
+        message: { role: "user", content: "question" },
+      },
+      {
+        type: "message",
+        id: "temporary",
+        parentId: "user",
+        timestamp: new Date(2).toISOString(),
+        message: buildAssistantMessage("temporary"),
+      },
+      {
+        type: "label",
+        id: "temporary-label",
+        parentId: "temporary",
+        timestamp: new Date(3).toISOString(),
+        targetId: "temporary",
+        label: "retry",
+      },
+      {
+        type: "custom",
+        id: "plugin-state",
+        parentId: "temporary-label",
+        timestamp: new Date(4).toISOString(),
+        customType: "plugin-state",
+        data: { enabled: true },
+      },
+      {
+        type: "session_info",
+        id: "session-info",
+        parentId: "plugin-state",
+        timestamp: new Date(5).toISOString(),
+        name: "kept session",
+      },
+      {
+        type: "leaf",
+        id: "leaf-control",
+        parentId: "session-info",
+        targetId: "temporary",
+        appendParentId: "temporary",
+      },
+    ];
+    expect(replaceTranscriptEventsSync(scope, events)).toBe(true);
+    const generationBefore = readSessionTranscriptWatermark(scope).generation;
+    const manager = SessionManager.open(scope, dir);
+
+    expect(
+      manager.removeTrailingEntries((entry) => entry.id === "temporary", {
+        preserveTrailing: (entry) =>
+          entry.type === "custom" || entry.type === "label" || entry.type === "session_info",
+      }),
+    ).toBe(1);
+
+    expect(readSessionTranscriptWatermark(scope).generation).not.toBe(generationBefore);
+    expect(await loadTranscriptEvents(scope)).toMatchObject([
+      { type: "session" },
+      { id: "user", parentId: null, type: "message" },
+      { id: "plugin-state", parentId: "user", type: "custom" },
+      { id: "session-info", parentId: "plugin-state", type: "session_info" },
+      {
+        id: "leaf-control",
+        parentId: "session-info",
+        targetId: "user",
+        appendParentId: "user",
+        type: "leaf",
+      },
+    ]);
+  });
+
+  it("allows stale suffix cleanup to remain a no-op when its target is absent", async () => {
+    const dir = tempDirs.make("openclaw-session-manager-concurrent-noop-");
+    const scope = {
+      agentId: "main",
+      sessionId: "sqlite-remove-concurrent-noop-session",
+      sessionKey: "agent:main:dashboard:sqlite-remove-concurrent-noop",
+      storePath: path.join(dir, "sessions.json"),
+    };
+    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+    await appendTranscriptMessage(scope, {
+      cwd: dir,
+      eventId: "base",
+      message: { role: "user", content: "question" },
+    });
+    const manager = SessionManager.open(scope, dir);
+    await appendTranscriptMessage(scope, {
+      cwd: dir,
+      eventId: "concurrent",
+      message: { role: "user", content: "concurrent" },
+    });
+
+    expect(manager.removeTrailingEntries((entry) => entry.id === "absent")).toBe(0);
+    expect(manager.buildSessionContext().messages).toMatchObject([
+      { role: "user", content: "question" },
+    ]);
+    expect(
+      (await loadTranscriptEvents(scope)).map((event) =>
+        event && typeof event === "object" && "id" in event ? event.id : undefined,
+      ),
+    ).toEqual([scope.sessionId, "base", "concurrent"]);
+  });
+
+  it("rejects stale suffix removal without deleting concurrent history", async () => {
+    const dir = tempDirs.make("openclaw-session-manager-concurrent-");
+    const scope = {
+      agentId: "main",
+      sessionId: "sqlite-remove-concurrent-session",
+      sessionKey: "agent:main:dashboard:sqlite-remove-concurrent",
+      storePath: path.join(dir, "sessions.json"),
+    };
+    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+    await appendTranscriptMessage(scope, {
+      cwd: dir,
+      eventId: "base",
+      message: { role: "user", content: "question" },
+    });
+    await appendTranscriptMessage(scope, {
+      cwd: dir,
+      eventId: "temporary",
+      message: buildAssistantMessage("temporary"),
+    });
+    const manager = SessionManager.open(scope, dir);
+    await appendTranscriptMessage(scope, {
+      cwd: dir,
+      eventId: "concurrent",
+      message: { role: "user", content: "concurrent" },
+    });
+
+    expect(() => manager.removeTrailingEntries((entry) => entry.id === "temporary")).toThrow(
+      "SQLite transcript changed while preparing suffix removal",
+    );
+    expect(manager.buildSessionContext().messages).toMatchObject([
+      { role: "user", content: "question" },
+      { role: "assistant", content: [{ type: "text", text: "temporary" }] },
+    ]);
+    expect(
+      (await loadTranscriptEvents(scope)).map((event) =>
+        event && typeof event === "object" && "id" in event ? event.id : undefined,
+      ),
+    ).toEqual([scope.sessionId, "base", "temporary", "concurrent"]);
+  });
+
+  it("retains the append transaction fence when another write starts after commit", async () => {
+    const dir = tempDirs.make("openclaw-session-manager-append-fence-");
+    const scope = {
+      agentId: "main",
+      sessionId: "sqlite-append-fence-session",
+      sessionKey: "agent:main:dashboard:sqlite-append-fence",
+      storePath: path.join(dir, "sessions.json"),
+    };
+    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+    await appendTranscriptMessage(scope, {
+      cwd: dir,
+      eventId: "base",
+      message: { role: "user", content: "question" },
+    });
+    const manager = SessionManager.open(scope, dir);
+    const temporaryId = manager.appendMessage(buildAssistantMessage("temporary"));
+    const afterAppend = await loadTranscriptEvents(scope);
+    const base = afterAppend[1];
+    if (!base || typeof base !== "object") {
+      throw new Error("Expected persisted base transcript event");
+    }
+    expect(
+      replaceTranscriptEventsSync(scope, [
+        afterAppend[0],
+        { ...base, message: { role: "user", content: "rewritten question" } },
+        afterAppend[2],
+      ]),
+    ).toBe(true);
+
+    expect(() => manager.removeTrailingEntries((entry) => entry.id === temporaryId)).toThrow(
+      "SQLite transcript changed while preparing suffix removal",
+    );
+    expect(await loadTranscriptEvents(scope)).toMatchObject([
+      { type: "session" },
+      { id: "base", message: { role: "user", content: "rewritten question" } },
+      { id: temporaryId },
+    ]);
+  });
+
+  it("rejects suffix removal after a concurrent retained-prefix rewrite", async () => {
+    const dir = tempDirs.make("openclaw-session-manager-prefix-concurrent-");
+    const scope = {
+      agentId: "main",
+      sessionId: "sqlite-remove-prefix-concurrent-session",
+      sessionKey: "agent:main:dashboard:sqlite-remove-prefix-concurrent",
+      storePath: path.join(dir, "sessions.json"),
+    };
+    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+    await appendTranscriptMessage(scope, {
+      cwd: dir,
+      eventId: "base",
+      message: { role: "user", content: "question" },
+    });
+    await appendTranscriptMessage(scope, {
+      cwd: dir,
+      eventId: "temporary",
+      message: buildAssistantMessage("temporary"),
+    });
+    const manager = SessionManager.open(scope, dir);
+    const current = await loadTranscriptEvents(scope);
+    const base = current[1];
+    if (!base || typeof base !== "object") {
+      throw new Error("Expected persisted base transcript event");
+    }
+    expect(
+      replaceTranscriptEventsSync(scope, [
+        current[0],
+        { ...base, message: { role: "user", content: "rewritten question" } },
+        current[2],
+      ]),
+    ).toBe(true);
+
+    expect(() => manager.removeTrailingEntries((entry) => entry.id === "temporary")).toThrow(
+      "SQLite transcript changed while preparing suffix removal",
+    );
+    expect(manager.buildSessionContext().messages).toMatchObject([
+      { role: "user", content: "question" },
+      { role: "assistant", content: [{ type: "text", text: "temporary" }] },
+    ]);
+    expect(await loadTranscriptEvents(scope)).toMatchObject([
+      { type: "session" },
+      { id: "base", message: { role: "user", content: "rewritten question" } },
+      { id: "temporary" },
+    ]);
+  });
+
   it("keeps file fixture factories off the production SessionManager class", () => {
     expect(SessionManager).not.toHaveProperty("create");
     expect(SessionManager).not.toHaveProperty("openFile");
@@ -283,9 +533,24 @@ describe("SessionManager persistence compatibility", () => {
       await expect(rewrite()).resolves.toBe(1);
       expect(manager.getEntry(temporaryId)).toBeUndefined();
       expect(manager.getLabel(temporaryId)).toBeUndefined();
-      expect(SessionManager.open(scope, dir).getPersistedEntries()).toEqual(
-        manager.getPersistedEntries(),
-      );
+      if (failure === "bounded-sqlite") {
+        await waitForSessionTranscriptIndexReconcile({
+          agentId: scope.agentId,
+          path: resolveSessionTranscriptDatabasePath(scope),
+        });
+      }
+      const reopened =
+        failure === "bounded-sqlite"
+          ? SessionManager.open(scope, dir, { maxEvents: 3, maxBytes: 4096 })
+          : SessionManager.open(scope, dir);
+      if (failure === "bounded-sqlite") {
+        expect(reopened.getEntry(temporaryId)).toBeUndefined();
+        expect(reopened.getLabel(temporaryId)).toBeUndefined();
+        expect(manager.getEntry(temporaryId)).toBeUndefined();
+        expect(manager.getLabel(temporaryId)).toBeUndefined();
+      } else {
+        expect(reopened.getPersistedEntries()).toEqual(manager.getPersistedEntries());
+      }
     },
   );
 

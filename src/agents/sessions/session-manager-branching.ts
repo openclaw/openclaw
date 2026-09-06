@@ -148,12 +148,16 @@ export class SessionManagerBranching extends SessionManagerEntries {
     ]);
     branch.opaqueFileEntries = branchPath.opaqueEntries;
     branch.buildIndex();
-    const adoptBranch = (target?: SessionManagerPersistenceTarget) => {
+    const adoptBranch = (
+      target?: SessionManagerPersistenceTarget,
+      transcriptMutationAt?: number | null,
+    ) => {
       this.fileEntries = branch.fileEntries;
       this.opaqueFileEntries = branch.opaqueFileEntries;
       this.sessionId = newSessionId;
       this.buildIndex();
       this.persistenceTarget = target;
+      this.transcriptMutationAt = target ? transcriptMutationAt : undefined;
       this.persistenceHeaderPending = false;
     };
     if (persistenceTarget) {

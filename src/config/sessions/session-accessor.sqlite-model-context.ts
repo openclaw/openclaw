@@ -43,6 +43,7 @@ type ContextEntry = SessionTreeEntry & { seq: number };
 export type SessionTranscriptContextVersion = {
   generation: string | null;
   rawSeq: number | null;
+  updatedAt: number | null;
 };
 type ModelContextRequest = { entry: ContextEntry; omitCheckpoint: boolean };
 type TranscriptContextSnapshot = {
@@ -70,6 +71,11 @@ function readContextVersion(database: Pick<OpenClawAgentDatabase, "db">, session
           .select("generation")
           .where("session_id", "=", sessionId)
           .as("generation"),
+        eb
+          .selectFrom("session_windows")
+          .select("transcript_updated_at")
+          .where("session_id", "=", sessionId)
+          .as("updatedAt"),
       ])
       .where("session_id", "=", sessionId),
   )!;
@@ -133,7 +139,11 @@ export function validateSessionTranscriptContextVersion(
     { throwOnMissingTable: true },
   );
   const current = result.found ? result.value : undefined;
-  if (current?.generation !== version?.generation || current?.rawSeq !== version?.rawSeq) {
+  if (
+    current?.generation !== version?.generation ||
+    current?.rawSeq !== version?.rawSeq ||
+    current?.updatedAt !== version?.updatedAt
+  ) {
     throw new SessionTranscriptReadFenceError("Session transcript changed during context read");
   }
 }

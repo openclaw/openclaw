@@ -31,7 +31,10 @@ import {
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
 import { projectResetBoundaryNavigationSql } from "./session-model-context-projection.js";
-import { resolveSqliteSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
+import {
+  resolveSqliteSessionTranscriptReadFence,
+  SessionTranscriptReadFenceError,
+} from "./session-transcript-read-fence.js";
 
 export type SqliteTranscriptSnapshotRow = {
   eventJson: string;
@@ -97,7 +100,7 @@ export function loadTranscriptEventsSync(scope: SessionTranscriptReadScope): Tra
   );
 }
 
-/** Reads a complete transcript and its lifecycle snapshot from one SQLite read transaction. */
+/** Reads a complete maintenance transcript and its lifecycle snapshot from one transaction. */
 export function inspectTranscriptEventsSync(scope: SessionTranscriptReadScope): {
   events: TranscriptEvent[];
   snapshot: SessionStateDeleteSnapshot;
@@ -113,6 +116,31 @@ export function inspectTranscriptEventsSync(scope: SessionTranscriptReadScope): 
     {
       databaseLabel: database.path,
       operationLabel: "session transcript inspection",
+    },
+  );
+}
+
+/** Reads the runtime-visible transcript and mutation snapshot under the current admission fence. */
+export function inspectRuntimeTranscriptEventsSync(scope: SessionTranscriptReadScope): {
+  events: TranscriptEvent[];
+  snapshot: SessionStateDeleteSnapshot;
+} {
+  const resolved = resolveSqliteTranscriptReadScope(scope);
+  const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
+  return runSqliteDeferredTransactionSync(
+    database.db,
+    () => {
+      const fence = resolveSqliteSessionTranscriptReadFence({ database, ...resolved });
+      return {
+        events: loadTranscriptEventsFromDatabase(database, resolved.sessionId, {
+          beforeEventSeq: fence?.beforeRawSeq,
+        }),
+        snapshot: readSessionStateDeleteSnapshot(database.db, resolved.sessionId),
+      };
+    },
+    {
+      databaseLabel: database.path,
+      operationLabel: "session transcript runtime inspection",
     },
   );
 }
@@ -157,6 +185,95 @@ export function loadTranscriptTailEventsSync(
   )
     .rows.toReversed()
     .map((row) => JSON.parse(row.event_json) as TranscriptEvent);
+}
+
+/** Loads one raw suffix only after SQL-side row and byte bounds are proven. */
+export function loadTranscriptSuffixEventsBoundedSync(
+  scope: SessionTranscriptReadScope,
+  startSeq: number,
+  limits: { maxBytes: number; maxEvents: number },
+): TranscriptEvent[] {
+  const resolved = resolveSqliteTranscriptReadScope(scope);
+  const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
+  return runSqliteDeferredTransactionSync(
+    database.db,
+    () => {
+      const db = getSessionKysely(database.db);
+      const fence = resolveSqliteSessionTranscriptReadFence({ database, ...resolved });
+      if (fence) {
+        const hiddenSuffix = executeSqliteQueryTakeFirstSync(
+          database.db,
+          db
+            .selectFrom("transcript_events")
+            .select("seq")
+            .where("session_id", "=", resolved.sessionId)
+            .where("seq", ">=", fence.beforeRawSeq)
+            .limit(1),
+        );
+        if (hiddenSuffix) {
+          throw new SessionTranscriptReadFenceError(
+            `Current-turn transcript admission hides rows needed for suffix mutation: ${fence.admission.entryId}`,
+          );
+        }
+      }
+      const metadata = executeSqliteQuerySync(
+        database.db,
+        db
+          .selectFrom("transcript_events")
+          .select([
+            "seq",
+            /* kysely-allow-raw: reject oversized suffixes before acquiring their JSON payloads. */
+            sql<number>`OCTET_LENGTH(event_json) + 1`.as("serialized_bytes"),
+          ])
+          .where("session_id", "=", resolved.sessionId)
+          .where("seq", ">=", startSeq)
+          .orderBy("seq", "asc")
+          .limit(limits.maxEvents + 1),
+      ).rows;
+      if (metadata.length > limits.maxEvents) {
+        throw new Error(
+          `Transcript suffix exceeds synchronous planning row limit for ${resolved.sessionId}`,
+        );
+      }
+      let bytes = 0;
+      for (const row of metadata) {
+        bytes += row.serialized_bytes;
+        if (bytes > limits.maxBytes) {
+          throw new Error(
+            `Transcript suffix exceeds synchronous planning byte limit for ${resolved.sessionId}`,
+          );
+        }
+      }
+      if (metadata.length === 0) {
+        return [];
+      }
+      const rows = executeSqliteQuerySync(
+        database.db,
+        db
+          .selectFrom("transcript_events")
+          .select(["event_json", "seq"])
+          .where("session_id", "=", resolved.sessionId)
+          .where(
+            "seq",
+            "in",
+            metadata.map((row) => row.seq),
+          )
+          .orderBy("seq", "asc"),
+      ).rows;
+      if (
+        rows.length !== metadata.length ||
+        rows.some((row, index) => row.seq !== metadata[index]?.seq)
+      ) {
+        throw new Error(`SQLite transcript changed while reading suffix for ${resolved.sessionId}`);
+      }
+      // SAFETY: Raw transcript rows are parsed through the persisted transcript event union.
+      return rows.map((row) => JSON.parse(row.event_json) as TranscriptEvent);
+    },
+    {
+      databaseLabel: database.path,
+      operationLabel: "bounded transcript suffix read",
+    },
+  );
 }
 
 /** Loads additive transcript rows after one durable sequence checkpoint. */
