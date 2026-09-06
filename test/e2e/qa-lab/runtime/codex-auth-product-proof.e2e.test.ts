@@ -483,7 +483,17 @@ describe("Codex auth product proof", () => {
           status: "ok",
         });
 
-        await instance.state.writeAuthProfiles({ version: 1, profiles: {} });
+        await expect(
+          client.request("models.authLogout", {
+            provider: "openai",
+            agentId: "main",
+            profileIds: [MISSING_PROFILE_ID],
+          }),
+        ).resolves.toEqual({
+          provider: "openai",
+          removedProfiles: [MISSING_PROFILE_ID],
+          abortedRunIds: [],
+        });
         await fs.writeFile(requestLog, "", "utf8");
         events.length = 0;
         await client.request("sessions.messages.subscribe", { key: sessionKey });
