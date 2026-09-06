@@ -86,7 +86,10 @@ function createContainerMock(
       runningInspection({
         state: start ? "running" : "created",
         running: start,
-        labels: fleetLabels(profile.tenantId, profile.attemptId),
+        labels: {
+          ...fleetLabels(profile.tenantId, profile.attemptId),
+          "openclaw.fleet.env-keys": profile.userEnvironmentKeys.toSorted().join(","),
+        },
         environment: { ...profile.environment },
         containerId: `container-${profile.attemptId}`,
         imageId: `sha256:${profile.attemptId}`,
@@ -228,6 +231,7 @@ describe("fleet service", () => {
       OPENCLAW_GATEWAY_TOKEN: "gw-token",
       FEATURE: "a=b",
     });
+    expect(profile?.userEnvironmentKeys).toEqual(["FEATURE"]);
 
     const dataDir = path.join(root, "fleet", "cells", "acme");
     const config = JSON.parse(await fs.readFile(path.join(dataDir, "openclaw.json"), "utf8")) as {
@@ -609,10 +613,22 @@ describe("fleet service", () => {
     containers.run.mockClear();
     // The disk limit replays from the fleet label because Podman inspect has no
     // HostConfig.StorageOpt; the label is the cross-runtime carrier.
-    const diskLabels = { ...fleetLabels(), "openclaw.fleet.disk-limit": "10g" };
+    const diskLabels = {
+      ...fleetLabels(),
+      "openclaw.fleet.disk-limit": "10g",
+      "openclaw.fleet.env-keys": "FEATURE,XDG_CACHE_HOME",
+    };
+    const upgradedEnvironment = {
+      ...runningInspection().environment,
+      XDG_CACHE_HOME: "/home/node/.openclaw/cache",
+    };
     containers.inspect
-      .mockResolvedValue(runningInspection({ labels: diskLabels }))
-      .mockResolvedValueOnce(runningInspection({ labels: diskLabels }))
+      .mockResolvedValue(
+        runningInspection({ labels: diskLabels, environment: upgradedEnvironment }),
+      )
+      .mockResolvedValueOnce(
+        runningInspection({ labels: diskLabels, environment: upgradedEnvironment }),
+      )
       .mockResolvedValueOnce(runningInspection({ labels: fleetLabels("acme", NEXT_ATTEMPT_ID) }));
 
     const result = await service.upgrade("acme", "ghcr.io/openclaw/openclaw:v2");
@@ -640,7 +656,9 @@ describe("fleet service", () => {
         HOME: "/home/node",
         OPENCLAW_GATEWAY_TOKEN: "old-token",
         FEATURE: "enabled",
+        XDG_CACHE_HOME: "/home/node/.openclaw/cache",
       },
+      userEnvironmentKeys: ["FEATURE", "XDG_CACHE_HOME"],
     });
     expect(profile?.environment).not.toHaveProperty("NODE_VERSION");
     expect(getFleetCell(env, "acme")?.image).toBe("ghcr.io/openclaw/openclaw:v2");

@@ -25,6 +25,7 @@ import {
 
 const FLEET_BASE_PORT = 19_100;
 const FLEET_CONTAINER_STATE_DIR = "/home/node/.openclaw";
+const FLEET_CONTAINER_CACHE_DIR = `${FLEET_CONTAINER_STATE_DIR}/cache`;
 const FLEET_CONTAINER_AUTH_SECRET_DIR = "/home/node/.config/openclaw";
 const TEST_ENVIRONMENT_FILE = "/tmp/openclaw-fleet-env/cell.env";
 
@@ -46,6 +47,7 @@ function makeProfile(overrides: Partial<CellContainerProfile> = {}): CellContain
     cpus: "2",
     pidsLimit: 512,
     environment: buildCellEnvironment("gateway-token", { TENANT_REGION: "west=1" }),
+    userEnvironmentKeys: ["TENANT_REGION"],
     selinuxRelabel: false,
     ...overrides,
   };
@@ -183,8 +185,36 @@ describe("fleet cell environment", () => {
       OPENCLAW_CONFIG_PATH: `${FLEET_CONTAINER_STATE_DIR}/openclaw.json`,
       OPENCLAW_WORKSPACE_DIR: `${FLEET_CONTAINER_STATE_DIR}/workspace`,
       OPENCLAW_GATEWAY_TOKEN: "secret",
+      XDG_CACHE_HOME: FLEET_CONTAINER_CACHE_DIR,
       REGION: "west",
     });
+  });
+
+  it("preserves an explicit cache override in the replay provenance label", () => {
+    const environment = buildCellEnvironment("secret", { XDG_CACHE_HOME: "/srv/cache" });
+    const args = buildCellRunArgs(
+      makeProfile({ environment, userEnvironmentKeys: ["XDG_CACHE_HOME"] }),
+      {
+        environmentFile: TEST_ENVIRONMENT_FILE,
+      },
+    );
+
+    expect(environment.XDG_CACHE_HOME).toBe("/srv/cache");
+    expect(args).toContain(`${FLEET_ENV_KEYS_LABEL}=XDG_CACHE_HOME`);
+  });
+
+  it("preserves an explicit cache setting that matches the current default", () => {
+    const environment = buildCellEnvironment("secret", {
+      XDG_CACHE_HOME: FLEET_CONTAINER_CACHE_DIR,
+    });
+    const args = buildCellRunArgs(
+      makeProfile({ environment, userEnvironmentKeys: ["XDG_CACHE_HOME"] }),
+      {
+        environmentFile: TEST_ENVIRONMENT_FILE,
+      },
+    );
+
+    expect(args).toContain(`${FLEET_ENV_KEYS_LABEL}=XDG_CACHE_HOME`);
   });
 
   it("rejects values that cannot be represented in the protected environment file", () => {

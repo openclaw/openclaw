@@ -9,6 +9,9 @@ export const FLEET_GATEWAY_PORT = 18_789;
 const FLEET_CONTAINER_HOME = "/home/node";
 const FLEET_CONTAINER_STATE_DIR = "/home/node/.openclaw";
 const FLEET_CONTAINER_AUTH_SECRET_DIR = "/home/node/.config/openclaw";
+const FLEET_DEFAULT_ENVIRONMENT: Readonly<Record<string, string>> = {
+  XDG_CACHE_HOME: `${FLEET_CONTAINER_STATE_DIR}/cache`,
+};
 export const FLEET_TENANT_LABEL = "openclaw.fleet.tenant";
 export const FLEET_OWNER_LABEL = "openclaw.fleet.owner";
 export const FLEET_ATTEMPT_LABEL = "openclaw.fleet.attempt";
@@ -48,6 +51,7 @@ export interface CellContainerProfile {
   diskSize?: string;
   pidsLimit: number;
   environment: Readonly<Record<string, string>>;
+  userEnvironmentKeys: readonly string[];
   containerUser?:
     | { mode: "numeric"; uid: number; gid: number }
     | { mode: "podman-keep-id"; uid: number; gid: number };
@@ -160,6 +164,7 @@ export function buildCellEnvironment(
     OPENCLAW_CONFIG_PATH: `${FLEET_CONTAINER_STATE_DIR}/openclaw.json`,
     OPENCLAW_WORKSPACE_DIR: `${FLEET_CONTAINER_STATE_DIR}/workspace`,
     OPENCLAW_GATEWAY_TOKEN: token,
+    ...FLEET_DEFAULT_ENVIRONMENT,
     ...userEnv,
   };
 }
@@ -260,9 +265,9 @@ function buildCellContainerArgs(
         `${profile.containerUser.uid}:${profile.containerUser.gid}`,
       ]
     : [];
-  const userEnvironmentKeys = Object.keys(profile.environment)
-    .filter((key) => !RESERVED_ENV_KEYS.has(key))
-    .toSorted();
+  // Explicit origin cannot be inferred from final values: a user override may
+  // equal today's default and still need to survive a later default change.
+  const userEnvironmentKeys = profile.userEnvironmentKeys.toSorted();
   const mountSuffix = profile.selinuxRelabel ? ":Z" : "";
 
   return [
