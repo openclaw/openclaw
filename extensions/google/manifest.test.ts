@@ -122,20 +122,31 @@ describe("google manifest model catalog", () => {
     ]);
   });
 
-  it("mirrors the runtime static Google model list into modelCatalog.providers for every Google chat provider", () => {
+  it("mirrors the runtime static Google model rows into modelCatalog.providers.google", () => {
     const manifest = loadManifest();
-    const runtimeStaticModelIds = new Set(
-      buildGoogleStaticCatalogProvider().models.map((model) => model.id),
-    );
-    expect(runtimeStaticModelIds.size).toBeGreaterThan(0);
+    const runtimeRows = buildGoogleStaticCatalogProvider().models.map((model) => {
+      const row = structuredClone(model);
+      // The static provider widens input with "video" at build time; the
+      // manifest mirror keeps the canonical text-model modality list.
+      row.input = row.input.filter((modality) => modality !== "video");
+      return row;
+    });
+    expect(runtimeRows.length).toBeGreaterThan(0);
 
-    for (const provider of GOOGLE_CHAT_PROVIDERS) {
-      const declaredModels = manifest.modelCatalog?.providers?.[provider]?.models ?? [];
-      expect(new Set(declaredModels.map((model) => model.id))).toEqual(runtimeStaticModelIds);
-      for (const model of declaredModels) {
-        expect(model.name).toBeTruthy();
-      }
-    }
+    // Full-row comparison (ids, names, capabilities, limits, costs, thinking
+    // mappings, compat tiers) so any runtime/manifest drift fails this guard.
+    expect(manifest.modelCatalog?.providers?.google?.models ?? []).toEqual(runtimeRows);
+  });
+
+  it("keeps legacy Google chat providers out of the manifest catalog mirror", () => {
+    const manifest = loadManifest();
+
+    // google-gemini-cli references must stay unknown-model so Doctor keeps
+    // emitting its migration hint, and neither CLI nor Vertex declares runtime
+    // discovery, so manifest rows for them would leak into runtime catalog
+    // planning. Only the canonical google provider is mirrored.
+    expect(manifest.modelCatalog?.providers?.["google-gemini-cli"]).toBeUndefined();
+    expect(manifest.modelCatalog?.providers?.["google-vertex"]).toBeUndefined();
   });
 
   it("offers Google AI Studio API keys without consumer CLI OAuth", () => {
