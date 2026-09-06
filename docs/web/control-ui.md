@@ -525,7 +525,9 @@ The new panel chords include Option/Alt to avoid browser actions such as develop
 tools, Read Aloud, and find previous, and OpenClaw's existing debug-overlay shortcut.
 The existing Terminal, Files, and Side chat bindings are unchanged.
 
-### This Mac (macOS app)
+<a id="this-mac-macos-app" />
+
+### This device (macOS and iOS apps)
 
 Inside the [macOS app](/platforms/macos), Settings includes a **This Mac** group
 for settings on that Mac. **This Mac** (`/settings/device`) contains app behavior,
@@ -535,9 +537,21 @@ and actions, location preferences, and active computer presence.
 
 **Talk** adds a **This Mac** section for Voice Wake, push-to-talk, sounds,
 microphone, and languages. **Updates** adds the app version, automatic update
-preference, and **Check for Updates**. These device settings appear only inside
-the Mac app; ordinary browsers keep the Gateway settings. Talk trigger words
-are Gateway settings and remain available in every browser.
+preference, and **Check for Updates**.
+
+Inside the [iOS app](/platforms/ios), the group is **This iPhone** or **This iPad**.
+Its device page contains appearance, notification delivery, camera, keep-awake,
+and Health summary controls, plus rows that open native Apple Watch, Diagnostics,
+Licenses, and About screens. Permissions shows the device's notification, camera,
+microphone, speech, location, contacts, calendars, reminders, and photo access.
+Precise Location is read-only system status with an action to open iOS Settings.
+Talk adds Voice Wake, Talk, Talk control, background listening, and speakerphone
+settings for this device. iOS does not publish browser or app-update controls.
+
+These device settings appear only inside the OpenClaw app; ordinary browsers keep
+the Gateway settings. Sensitive capability changes require native confirmation,
+and permission requests use the operating system's authorization prompt. Talk
+trigger words are Gateway settings and remain available in every browser.
 
 ## What it can do (today)
 
