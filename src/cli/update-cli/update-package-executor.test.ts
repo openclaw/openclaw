@@ -61,12 +61,13 @@ vi.mock("./update-command-service.js", async () => {
   const actual = await vi.importActual<typeof import("./update-command-service-maintenance.js")>(
     "./update-command-service-maintenance.js",
   );
+  const shared = await vi.importActual<typeof import("./shared.js")>("./shared.js");
   return {
     maybeRestartServiceAfterFailedMutableUpdate: mocks.maybeRestartService,
     maybeStopManagedServiceBeforeMutableUpdate: mocks.maybeStopService,
     resolvePreparedGatewayUpdatePolicy: actual.resolvePreparedGatewayUpdatePolicy,
     shouldBlockMutableUpdateFromGatewayServiceEnv: mocks.shouldBlockServiceUpdate,
-    UpdateCommandAbort: actual.UpdateCommandAbort,
+    UpdateCommandAbort: shared.UpdateCommandAbort,
   };
 });
 

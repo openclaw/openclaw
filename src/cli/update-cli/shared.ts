@@ -72,6 +72,13 @@ export class UpdatePreMutationError extends Error {
   }
 }
 
+export class UpdateCommandAbort extends Error {
+  constructor() {
+    super("openclaw-update-abort");
+    this.name = "UpdateCommandAbort";
+  }
+}
+
 const INVALID_TIMEOUT_ERROR = "--timeout must be a positive integer (seconds)";
 const MAX_SAFE_TIMEOUT_SECONDS = Math.floor(Number.MAX_SAFE_INTEGER / 1000);
 

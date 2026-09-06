@@ -15,6 +15,17 @@ import { maybeStopManagedServiceBeforeMutableUpdate } from "./update-command-ser
 const mocks = vi.hoisted(() => ({
   service: vi.fn<() => GatewayService>(),
   taskState: 3 as number | string,
+  execFile: vi.fn<typeof import("../../daemon/exec-file.js").execFileUtf8>(async () => ({
+    stdout: "",
+    stderr: "",
+    code: 0,
+    termination: "exit" as const,
+  })),
+}));
+
+vi.mock("../../daemon/exec-file.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../daemon/exec-file.js")>()),
+  execFileUtf8: mocks.execFile,
 }));
 
 vi.mock("../../daemon/service.js", async (importOriginal) => ({
@@ -36,6 +47,24 @@ vi.mock("node:child_process", async (importOriginal) => ({
 
 beforeEach(() => mockSystemAccountHome());
 afterEach(() => vi.restoreAllMocks());
+
+function isolatedUpdateEnv(home: string) {
+  return {
+    HOME: home,
+    USERPROFILE: home,
+    APPDATA: path.join(home, "AppData"),
+    OPENCLAW_GATEWAY_PORT: undefined,
+    OPENCLAW_HOME: undefined,
+    OPENCLAW_STATE_DIR: undefined,
+    OPENCLAW_CONFIG_PATH: undefined,
+    OPENCLAW_PROFILE: undefined,
+    OPENCLAW_SUPERVISOR_MODE: undefined,
+    OPENCLAW_SERVICE_MARKER: undefined,
+    OPENCLAW_SERVICE_KIND: undefined,
+    OPENCLAW_CONTAINER_HINT: undefined,
+    OPENCLAW_CONTAINER: undefined,
+  };
+}
 
 type NativeOfflineCase = {
   platform: NodeJS.Platform;
@@ -110,63 +139,152 @@ it.each(nativeOfflineCases)(
   async (scenario) => {
     const home = await makeTempWorkspace("openclaw-update-offline-");
     try {
-      await withEnvAsync(
-        {
-          HOME: home,
-          USERPROFILE: home,
-          APPDATA: path.join(home, "AppData"),
-          OPENCLAW_GATEWAY_PORT: undefined,
-          OPENCLAW_HOME: undefined,
-          OPENCLAW_STATE_DIR: undefined,
-          OPENCLAW_CONFIG_PATH: undefined,
-          OPENCLAW_PROFILE: undefined,
-          OPENCLAW_SUPERVISOR_MODE: undefined,
-          OPENCLAW_SERVICE_MARKER: undefined,
-          OPENCLAW_SERVICE_KIND: undefined,
-        },
-        async () => {
-          mockProcessPlatform(scenario.platform);
-          mocks.taskState = scenario.state ?? 3;
-          const service = createMockGatewayService({
-            readCommand: async () => ({
-              programArguments: [
-                process.execPath,
-                path.join(process.cwd(), "openclaw.mjs"),
-                "gateway",
-              ],
-              environment: { HOME: home },
-            }),
-            readRuntime:
-              scenario.platform === "win32"
-                ? readScheduledTaskRuntime
-                : async () => ({ status: scenario.runtime }),
-            isLoaded: async () => scenario.loaded,
-            isEnabled: async () => {
-              if (scenario.enabled === undefined) {
-                throw new Error("enabled state unavailable");
-              }
-              return scenario.enabled;
-            },
-          });
-          mocks.service.mockReturnValue(service);
-          const inspected = await maybeStopManagedServiceBeforeMutableUpdate({
-            root: process.cwd(),
-            updateInstallKind: "package",
-            shouldRestart: true,
-            phase: "inspect",
-            jsonMode: true,
-          });
-          expect(inspected.serviceUpdateVerdict?.kind).toBe(
-            scenario.runtime === "unknown" ? "unavailable" : "owned",
+      await withEnvAsync(isolatedUpdateEnv(home), async () => {
+        mockProcessPlatform(scenario.platform);
+        mocks.taskState = scenario.state ?? 3;
+        const service = createMockGatewayService({
+          readCommand: async () => ({
+            programArguments: [
+              process.execPath,
+              path.join(process.cwd(), "openclaw.mjs"),
+              "gateway",
+            ],
+            environment: { HOME: home },
+          }),
+          readRuntime:
+            scenario.platform === "win32"
+              ? readScheduledTaskRuntime
+              : async () => ({ status: scenario.runtime }),
+          isLoaded: async () => scenario.loaded,
+          isEnabled: async () => {
+            if (scenario.enabled === undefined) {
+              throw new Error("enabled state unavailable");
+            }
+            return scenario.enabled;
+          },
+        });
+        mocks.service.mockReturnValue(service);
+        const inspected = await maybeStopManagedServiceBeforeMutableUpdate({
+          root: process.cwd(),
+          updateInstallKind: "package",
+          shouldRestart: true,
+          phase: "inspect",
+          jsonMode: true,
+        });
+        expect(inspected.serviceUpdateVerdict?.kind).toBe(
+          scenario.runtime === "unknown" ? "unavailable" : "owned",
+        );
+        expect(inspected.offline).toBe(scenario.offline);
+        expect(service.stop).not.toHaveBeenCalled();
+        expect(service.start).not.toHaveBeenCalled();
+        expect(service.restart).not.toHaveBeenCalled();
+        expect(service.stage).not.toHaveBeenCalled();
+        expect(service.install).not.toHaveBeenCalled();
+      });
+    } finally {
+      await fs.rm(home, { recursive: true, force: true });
+    }
+  },
+);
+
+const USER_SCOPE_BUS_STDERR =
+  "Failed to connect to user scope bus via local transport: No such file or directory";
+const MACHINE_SCOPE_BUS_STDERR =
+  "Failed to connect to system scope bus via machine transport: Permission denied\nCall failed: Transport endpoint is not connected";
+
+it("names the user bus when both busctl scopes fail below the service boundary", async () => {
+  // Debian without dbus-user-session: busctl --user cannot reach the bus and the
+  // machine-scope retry fails with a transport error no hint family classifies.
+  const home = await makeTempWorkspace("openclaw-update-user-bus-");
+  try {
+    await withEnvAsync(
+      // A set bus address keeps systemd absence unproven, as on the reported host.
+      { ...isolatedUpdateEnv(home), DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/user/1000/bus" },
+      async () => {
+        mockProcessPlatform("linux");
+        const daemon =
+          await vi.importActual<typeof import("../../daemon/service.js")>(
+            "../../daemon/service.js",
           );
-          expect(inspected.offline).toBe(scenario.offline);
-          expect(service.stop).not.toHaveBeenCalled();
-          expect(service.start).not.toHaveBeenCalled();
-          expect(service.restart).not.toHaveBeenCalled();
-          expect(service.stage).not.toHaveBeenCalled();
-          expect(service.install).not.toHaveBeenCalled();
-        },
-      );
+        mocks.service.mockImplementation(() => daemon.resolveGatewayService());
+        mocks.execFile.mockImplementation(async (_command, args) => ({
+          stdout: "",
+          stderr: args[0] === "--machine" ? MACHINE_SCOPE_BUS_STDERR : USER_SCOPE_BUS_STDERR,
+          code: 1,
+          termination: "exit" as const,
+        }));
+        const inspected = await maybeStopManagedServiceBeforeMutableUpdate({
+          root: process.cwd(),
+          updateInstallKind: "package",
+          shouldRestart: true,
+          phase: "inspect",
+          jsonMode: true,
+        });
+        expect(mocks.execFile).toHaveBeenCalledWith(
+          "busctl",
+          expect.arrayContaining(["--machine"]),
+          expect.anything(),
+        );
+        expect(inspected.serviceMutationAllowed).toBe(false);
+        expect(inspected.blockMessage).toContain("dbus-user-session");
+        expect(inspected.blockMessage).toContain("loginctl enable-linger");
+        expect(inspected.blockMessage).toContain("XDG_RUNTIME_DIR");
+        expect(inspected.blockMessage).not.toContain("machine transport");
+      },
+    );
+  } finally {
+    await fs.rm(home, { recursive: true, force: true });
+  }
+});
+
+const USER_BUS_INSPECTION_FAILURE =
+  "Effective systemd service command could not be inspected: Failed to connect to user scope bus via local transport: No such file or directory";
+
+it.each([
+  { shouldRestart: true, failure: USER_BUS_INSPECTION_FAILURE, classified: true },
+  { shouldRestart: false, failure: USER_BUS_INSPECTION_FAILURE, classified: true },
+  { shouldRestart: true, failure: "inspection-secret-canary", classified: false },
+])(
+  "keeps a failed Linux inspection fail-closed and names a classified systemd cause (restart=$shouldRestart, classified=$classified)",
+  async ({ shouldRestart, failure, classified }) => {
+    const home = await makeTempWorkspace("openclaw-update-inspection-");
+    try {
+      await withEnvAsync(isolatedUpdateEnv(home), async () => {
+        mockProcessPlatform("linux");
+        const service = createMockGatewayService({
+          readCommand: async () => {
+            throw new Error(failure);
+          },
+        });
+        mocks.service.mockReturnValue(service);
+        const inspected = await maybeStopManagedServiceBeforeMutableUpdate({
+          root: process.cwd(),
+          updateInstallKind: "package",
+          shouldRestart,
+          phase: "inspect",
+          jsonMode: true,
+        });
+        const message = shouldRestart
+          ? inspected.blockMessage
+          : inspected.serviceMutationSkipMessage;
+        expect(inspected.inspected).toBe(false);
+        expect(inspected.serviceMutationAllowed).toBe(false);
+        expect(message).toContain("inspection is unavailable");
+        expect(message).toContain("gateway status --deep");
+        // Raw inspection errors never reach update output; only the classified family does.
+        expect(message).not.toContain("No such file or directory");
+        expect(message).not.toContain("inspection-secret-canary");
+        if (classified) {
+          expect(message).toContain("dbus-user-session");
+          expect(message).toContain("loginctl enable-linger");
+          expect(inspected.serviceInspectionHints).toEqual(
+            expect.arrayContaining([expect.stringContaining("dbus-user-session")]),
+          );
+        } else {
+          expect(inspected.serviceInspectionHints).toBeUndefined();
+        }
+        expect(service.stop).not.toHaveBeenCalled();
+      });
     } finally {
       await fs.rm(home, { recursive: true, force: true });
     }
