@@ -29,7 +29,7 @@ runFakeCodexAppServer({
     "account/login/start": ({ params, sendResult }) => sendResult({ type: params?.type }),
     "model/list": ({ sendResult }) =>
       sendResult({
-        data: ["gpt-5.6-luna", "gpt-future"].map((model) => ({
+        data: ["gpt-5.6-luna"].map((model) => ({
           id: model,
           model,
           displayName: model,

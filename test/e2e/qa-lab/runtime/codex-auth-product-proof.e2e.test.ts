@@ -20,7 +20,6 @@ import { runCodexAuthDoctorMigrationProof } from "./codex-auth-product-proof.tes
 const oauthAccess = "test-oauth-access";
 const ACCOUNT_ID = "qa-codex-account";
 const MODEL = "openai/gpt-5.6-luna";
-const NATIVE_MODEL = "openai/gpt-future";
 const MISSING_PROFILE_ID = "openai:missing";
 const SELECTED_AUTH_PROFILE_UNAVAILABLE_USER_TEXT =
   "The selected auth profile is unavailable in this agent's OpenClaw credential store. " +
@@ -361,7 +360,7 @@ describe("Codex auth product proof", () => {
   );
 
   it(
-    "returns bounded recovery when the configured profile is absent without calling app-server",
+    "returns bounded recovery after the explicitly selected profile is removed",
     { timeout: 180_000 },
     async () => {
       const { CODEX_APP_SERVER_VERSION } = await loadBundledPluginFacade<{
@@ -401,7 +400,6 @@ describe("Codex auth product proof", () => {
               model: { primary: `${MODEL}@${MISSING_PROFILE_ID}`, fallbacks: [] },
               models: {
                 [MODEL]: { agentRuntime: { id: "codex" } },
-                [NATIVE_MODEL]: { agentRuntime: { id: "codex" } },
               },
               workspace: "~/workspace",
               skipBootstrap: true,
@@ -453,12 +451,37 @@ describe("Codex auth product proof", () => {
         ).toMatchObject({ runId: setup.runId, status: "ok" });
         await expect(client.request("models.list", { agentId: "main" })).resolves.toMatchObject({
           models: expect.arrayContaining([
-            expect.objectContaining({ id: "gpt-future", provider: "openai" }),
+            expect.objectContaining({ id: "gpt-5.6-luna", provider: "openai" }),
           ]),
         });
         await expect(
-          client.request("sessions.patch", { key: sessionKey, model: NATIVE_MODEL }),
-        ).resolves.toMatchObject({ ok: true });
+          client.request("sessions.patch", {
+            key: sessionKey,
+            model: `${MODEL}@${MISSING_PROFILE_ID}`,
+          }),
+        ).resolves.toMatchObject({
+          ok: true,
+          entry: {
+            authProfileOverride: MISSING_PROFILE_ID,
+            authProfileOverrideSource: "user",
+          },
+        });
+        const selected = await client.request<{ runId: string; status: string }>("chat.send", {
+          sessionKey,
+          message: `Reply with ${PRODUCT_OUTPUT}.`,
+          deliver: false,
+          idempotencyKey: "qa-codex-selected-profile",
+        });
+        expect(selected).toMatchObject({ runId: expect.any(String), status: "started" });
+        const selectedTerminal = await client.request(
+          "agent.wait",
+          { runId: selected.runId, timeoutMs: REQUEST_TIMEOUT_MS },
+          { timeoutMs: REQUEST_TIMEOUT_MS + 5_000 },
+        );
+        expect(selectedTerminal, JSON.stringify(selectedTerminal)).toMatchObject({
+          runId: selected.runId,
+          status: "ok",
+        });
 
         await instance.state.writeAuthProfiles({ version: 1, profiles: {} });
         await fs.writeFile(requestLog, "", "utf8");
@@ -554,24 +577,20 @@ describe("Codex auth product proof", () => {
       expect(JSON.stringify(failedHistory)).not.toContain(MISSING_PROFILE_ID);
       expect(JSON.stringify(failedHistory)).not.toContain("Codex app-server auth profile");
 
-      await waitForRequest(failureAppServerLog, "initialize");
       const failureMethods = failureAppServerLog
         .read()
         .flatMap((entry) => (typeof entry.method === "string" ? [entry.method] : []));
-      expect(failureMethods).toContain("initialize");
-      expect(failureMethods).not.toContain("account/login/start");
-      expect(failureMethods).not.toContain("thread/start");
-      expect(failureMethods).not.toContain("thread/resume");
-      expect(failureMethods).not.toContain("turn/start");
+      const operationalMethods = failureMethods.filter(
+        (method) => method !== "initialize" && method !== "initialized",
+      );
+      expect(operationalMethods).toEqual([]);
 
       console.log(
         `[qa-codex-missing-auth-profile] ${JSON.stringify({
           assistantOutput: SELECTED_AUTH_PROFILE_UNAVAILABLE_USER_TEXT,
           historySessionKey: sessionKey,
-          appServerInitialized: true,
-          appServerOperationalRpcCount: failureMethods.filter(
-            (method) => method !== "initialize" && method !== "initialized",
-          ).length,
+          appServerInitialized: failureMethods.includes("initialize"),
+          appServerOperationalRpcCount: operationalMethods.length,
         })}`,
       );
     },
