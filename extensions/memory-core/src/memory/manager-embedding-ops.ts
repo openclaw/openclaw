@@ -628,9 +628,13 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
                 structured ? "retrying structured batch" : "retrying",
               );
             },
-            onSplit: ({ itemCount, splitAt }) => {
+            onSplit: ({ itemCount, splitAt, strategy, chunkCount }) => {
+              const splitDescription =
+                strategy === "item-limit"
+                  ? `${chunkCount} batches of at most ${splitAt}`
+                  : `${splitAt} + ${itemCount - splitAt}`;
               log.warn(
-                `memory embeddings ${label} failed; splitting ${itemCount} inputs into ${splitAt} + ${itemCount - splitAt}`,
+                `memory embeddings ${label} failed; splitting ${itemCount} inputs into ${splitDescription}`,
               );
             },
           }),

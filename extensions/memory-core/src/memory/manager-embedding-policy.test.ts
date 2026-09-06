@@ -463,6 +463,100 @@ describe("memory embedding policy", () => {
     }
   });
 
+  it("uses an explicit item limit while preserving paired inputs and persisting each slice once", async () => {
+    const items = Array.from({ length: 33 }, (_, index) => ({
+      input: index,
+      cacheCandidate: `candidate-${index}`,
+    }));
+    const splits: Array<{
+      strategy: string;
+      itemCount: number;
+      splitAt: number;
+      chunkCount: number;
+    }> = [];
+    const completed: Array<{ candidates: string[]; outputs: string[] }> = [];
+    const run = vi.fn(async (batch: typeof items) => {
+      if (batch.length > 10) {
+        throw new Error("embeddings max input length is 10");
+      }
+      return batch.map((item) => `output-${item.input}`);
+    });
+
+    await expect(
+      runMemoryEmbeddingBatchRetryWithSplit({
+        profile: "index",
+        items,
+        run,
+        onSuccess: (batch, outputs) => {
+          completed.push({
+            candidates: batch.map((item) => item.cacheCandidate),
+            outputs,
+          });
+        },
+        isSplittable: isSplittableMemoryEmbeddingBatchError,
+        waitForRetry: async () => {},
+        onSplit: ({ strategy, itemCount, splitAt, chunkCount }) => {
+          splits.push({ strategy, itemCount, splitAt, chunkCount });
+        },
+      }),
+    ).resolves.toEqual(items.map((item) => `output-${item.input}`));
+    const payloadCounts = run.mock.calls.map(([batch]) => batch.length);
+    expect(payloadCounts).toEqual([33, 10, 10, 10, 3]);
+    expect(payloadCounts.reduce((total, count) => total + count, 0)).toBe(66);
+    expect(completed).toEqual([
+      {
+        candidates: Array.from({ length: 10 }, (_, index) => `candidate-${index}`),
+        outputs: Array.from({ length: 10 }, (_, index) => `output-${index}`),
+      },
+      {
+        candidates: Array.from({ length: 10 }, (_, index) => `candidate-${index + 10}`),
+        outputs: Array.from({ length: 10 }, (_, index) => `output-${index + 10}`),
+      },
+      {
+        candidates: Array.from({ length: 10 }, (_, index) => `candidate-${index + 20}`),
+        outputs: Array.from({ length: 10 }, (_, index) => `output-${index + 20}`),
+      },
+      {
+        candidates: ["candidate-30", "candidate-31", "candidate-32"],
+        outputs: ["output-30", "output-31", "output-32"],
+      },
+    ]);
+    expect(completed.flatMap((batch) => batch.candidates)).toEqual(
+      items.map((item) => item.cacheCandidate),
+    );
+    expect(splits).toEqual([{ strategy: "item-limit", itemCount: 33, splitAt: 10, chunkCount: 4 }]);
+  });
+
+  it("falls back to recursive splitting for unusable or stale limits", async () => {
+    for (const [errorMessage, expectedCalls] of [
+      ["embeddings max input length is 0", [4, 2, 2]],
+      [
+        "embeddings max input length is 4; batch size is invalid, it should not be larger than 3",
+        [4, 2, 2],
+      ],
+      ["embeddings max input length is 4", [4, 2, 2]],
+      ["embeddings max input length is 8", [4, 2, 2]],
+      ["embeddings max input length is 3", [4, 3, 2, 1, 1]],
+    ] as const) {
+      const run = vi.fn(async (items: number[]) => {
+        if (items.length > 2) {
+          throw new Error(errorMessage);
+        }
+        return items;
+      });
+      await expect(
+        runMemoryEmbeddingBatchRetryWithSplit({
+          profile: "index",
+          items: [0, 1, 2, 3],
+          run,
+          isSplittable: isSplittableMemoryEmbeddingBatchError,
+          waitForRetry: async () => {},
+        }),
+      ).resolves.toEqual([0, 1, 2, 3]);
+      expect(run.mock.calls.map(([items]) => items.length)).toEqual(expectedCalls);
+    }
+  });
+
   it("splits OpenAI 431 oversized embedding batches without retrying the same request", async () => {
     const completed: string[][] = [];
     const run = vi.fn(async (items: string[]) => {
@@ -556,8 +650,8 @@ describe("memory embedding policy", () => {
       waitForRetry: async (delayMs) => {
         waits.push(delayMs);
       },
-      onSplit: ({ itemCount, splitAt }) => {
-        splits.push(`${itemCount}:${splitAt}`);
+      onSplit: ({ itemCount, splitAt, strategy, chunkCount }) => {
+        splits.push(`${strategy}:${itemCount}:${splitAt}:${chunkCount}`);
       },
     });
 
@@ -569,7 +663,7 @@ describe("memory embedding policy", () => {
     for (const [index, wait] of waits.entries()) {
       expectDelayBetween(wait, index % 2 === 0 ? 400 : 800, index % 2 === 0 ? 600 : 1200);
     }
-    expect(splits).toEqual(["4:2", "2:1", "2:1"]);
+    expect(splits).toEqual(["binary:4:2:2", "binary:2:1:2", "binary:2:1:2"]);
   });
 
   it("does not split exhausted service retry errors", async () => {

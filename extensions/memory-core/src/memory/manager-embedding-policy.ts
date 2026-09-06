@@ -89,6 +89,21 @@ type MemoryEmbeddingRetryBudget = {
   retryAfterMs?: number;
 };
 
+const MEMORY_EMBEDDING_BATCH_ITEM_LIMIT_RE =
+  /\b(?:embeddings api input limit exceeded:\s*max\s+(\d+)\s*,\s*got\s+\d+|embeddings max input length is\s+(\d+)|batch size is invalid,?\s+it should not be larger than\s+(\d+))\b/gi;
+
+function parseMemoryEmbeddingBatchItemLimit(message: string): number | undefined {
+  const limits = new Set<number>();
+  for (const match of message.matchAll(MEMORY_EMBEDDING_BATCH_ITEM_LIMIT_RE)) {
+    const value = Number(match[1] ?? match[2] ?? match[3]);
+    if (!Number.isSafeInteger(value) || value <= 0) {
+      return undefined;
+    }
+    limits.add(value);
+  }
+  return limits.size === 1 ? limits.values().next().value : undefined;
+}
+
 export function isSplittableMemoryEmbeddingBatchError(message: string): boolean {
   return SPLITTABLE_MEMORY_EMBEDDING_BATCH_ERROR_RE.test(message);
 }
@@ -179,7 +194,13 @@ export async function runMemoryEmbeddingBatchRetryWithSplit<TInput, TOutput>(par
   onSuccess?: (items: TInput[], outputs: TOutput[]) => void | Promise<void>;
   isSplittable: (message: string) => boolean;
   waitForRetry: (delayMs: number) => Promise<void>;
-  onSplit?: (info: { itemCount: number; splitAt: number; message: string }) => void;
+  onSplit?: (info: {
+    itemCount: number;
+    splitAt: number;
+    message: string;
+    strategy: "binary" | "item-limit";
+    chunkCount: number;
+  }) => void;
 }): Promise<TOutput[]> {
   let outputs: TOutput[];
   try {
@@ -194,8 +215,35 @@ export async function runMemoryEmbeddingBatchRetryWithSplit<TInput, TOutput>(par
       throw err;
     }
 
+    const itemLimit = parseMemoryEmbeddingBatchItemLimit(message);
+    if (itemLimit !== undefined && itemLimit < params.items.length) {
+      params.onSplit?.({
+        itemCount: params.items.length,
+        splitAt: itemLimit,
+        message,
+        strategy: "item-limit",
+        chunkCount: Math.ceil(params.items.length / itemLimit),
+      });
+      const results: TOutput[] = [];
+      for (let start = 0; start < params.items.length; start += itemLimit) {
+        results.push(
+          ...(await runMemoryEmbeddingBatchRetryWithSplit({
+            ...params,
+            items: params.items.slice(start, start + itemLimit),
+          })),
+        );
+      }
+      return results;
+    }
+
     const splitAt = Math.ceil(params.items.length / 2);
-    params.onSplit?.({ itemCount: params.items.length, splitAt, message });
+    params.onSplit?.({
+      itemCount: params.items.length,
+      splitAt,
+      message,
+      strategy: "binary",
+      chunkCount: 2,
+    });
     const left = await runMemoryEmbeddingBatchRetryWithSplit({
       ...params,
       items: params.items.slice(0, splitAt),
