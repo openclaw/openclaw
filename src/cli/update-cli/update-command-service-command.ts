@@ -76,7 +76,12 @@ export async function runUpdatedInstallGatewayCommand(
     // Restart owns migration-aware readiness; only refresh has the fixed watchdog.
     timeoutMs: installing ? SERVICE_REFRESH_TIMEOUT_MS : params.timeoutMs,
   });
-  const exited = res.termination === "exit" && res.signal === null && !res.killed;
+  const exited =
+    res.termination === "exit" &&
+    res.signal === null &&
+    !res.killed &&
+    res.cleanup !== "forced" &&
+    res.cleanup !== "uncertain";
   const complete = !res.stdoutTruncatedBytes && !res.outputLimitExceeded && !res.outputErrorStream;
   const response = complete ? safeParseJsonRecord(res.stdout) : undefined;
   if (exited && res.code === 0) {
