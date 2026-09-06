@@ -1205,12 +1205,13 @@ if (process.argv[1]?.endsWith("vitest-worker-compiler.mts")) {
       });
     `,
       );
+      // Use portable native fs.watch for this source-selection fixture.
       const config = writeFixture(
         directory,
         "vitest.config.mts",
         `
       import {sharedVitestConfig as shared} from ${JSON.stringify(pathToFileURL(path.join(root, "test/vitest/vitest.shared.config.ts")).href)};
-      export default {root:${JSON.stringify(directory)},plugins:shared.plugins,test:{include:[${JSON.stringify(convertPathToPattern(test))}],pool:'forks',maxWorkers:1}};
+      export default {root:${JSON.stringify(directory)},plugins:shared.plugins,server:{watch:{useFsEvents:false,usePolling:false}},test:{include:[${JSON.stringify(convertPathToPattern(test))}],pool:'forks',maxWorkers:1}};
     `,
       );
       const handle = spawnWatchedVitestProcess({
