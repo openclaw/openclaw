@@ -83,7 +83,11 @@ function transformAssistant<TApi extends Api>(
       return sameModel ? block : { type: "text" as const, text: block.text };
     }
     // Pairing uses these IDs as shared keys, before model-specific normalization runs.
-    const trimmedId = block.id.trim();
+    // Runtime content blocks (e.g. attachment blocks) may carry no id even though
+    // the static union requires one; guard the trim so a missing id does not crash
+    // every subsequent turn in the session (see #137729).
+    // SAFETY: ToolCall.id is statically a required string, but runtime attachment blocks bypass the union and carry no id.
+    const trimmedId = (block as { id?: string }).id?.trim() ?? "";
     if (sameModel) {
       return trimmedId === block.id ? block : Object.assign({}, block, { id: trimmedId });
     }
@@ -116,7 +120,8 @@ export function transformMessages<TApi extends Api>(
         message.model === model.id;
       for (const block of message.content ?? []) {
         if (block.type === "toolCall") {
-          const id = block.id.trim();
+          // SAFETY: same guard as transformAssistant — runtime blocks may omit id (#137729).
+          const id = (block as { id?: string }).id?.trim() ?? "";
           if (block.async && !sameModel) {
             asyncOwners.set(id, message);
           } else {
@@ -125,7 +130,9 @@ export function transformMessages<TApi extends Api>(
         }
       }
     } else if (message.role === "toolResult") {
-      const id = message.toolCallId.trim();
+      // SAFETY: toolCallId is statically required, but runtime toolResult messages
+      // may omit it; guard the trim so a missing id does not crash (#137729).
+      const id = (message.toolCallId ?? "").trim();
       const owner = asyncOwners.get(id);
       if (owner) {
         const results = relocated.get(owner) ?? [];
@@ -199,7 +206,8 @@ export function transformMessages<TApi extends Api>(
         };
       }
       if (message.role === "toolResult") {
-        const trimmedId = message.toolCallId.trim();
+        // SAFETY: same guard as the first pass — runtime toolResult may omit toolCallId (#137729).
+        const trimmedId = (message.toolCallId ?? "").trim();
         const toolCallId = toolCallIdMap.get(trimmedId) ?? trimmedId;
         if (toolCallId !== message.toolCallId) {
           message = { ...message, toolCallId };
