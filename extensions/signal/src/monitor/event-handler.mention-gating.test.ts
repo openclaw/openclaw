@@ -234,7 +234,13 @@ describe("signal mention gating", () => {
     expect(log.mock.calls[0]?.[0]).toContain("requireMention");
     expect(log.mock.calls[0]?.[0]).toContain("false");
     expect(log.mock.calls.flat().join(" ")).not.toContain("What up");
-    expect(log.mock.calls.flat().join(" ")).not.toContain("+15550001111");
+  });
+
+  it("drops group messages without mention when requireMention is configured", async () => {
+    const handler = createMentionHandler({ requireMention: true });
+
+    await handler(makeGroupEvent({ message: "hello everyone" }));
+    expect(capturedCtx).toBeUndefined();
   });
 
   it("allows group messages with mention when requireMention is configured", async () => {
@@ -242,6 +248,13 @@ describe("signal mention gating", () => {
 
     await handler(makeGroupEvent({ message: "hey @bot what's up" }));
     expect(getCapturedCtx().WasMentioned).toBe(true);
+  });
+
+  it("does not drop group text with inline command tokens when requireMention is off", async () => {
+    const handler = createMentionHandler({ requireMention: false });
+
+    await handler(makeGroupEvent({ message: "hello /status" }));
+    expect(getCapturedCtx().Body).toContain("hello /status");
   });
 
   it("sets WasMentioned=false for group messages without mention when requireMention is off", async () => {

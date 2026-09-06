@@ -707,6 +707,26 @@ describe("msteams monitor handler authz", () => {
     expect(ctxPayload.CommandAuthorized).toBe(false);
   });
 
+  it("uses the narrow control-command predicate for direct-message plugin commands", async () => {
+    resetThreadMocks();
+    const isControlCommandMessage = vi.fn(() => false);
+    const shouldComputeCommandAuthorized = vi.fn(() => true);
+    const shouldHandleTextCommands = vi.fn(() => true);
+    const { deps } = createDeps(
+      {
+        channels: { msteams: { dmPolicy: "open", allowFrom: ["attacker-aad"] } },
+      } as OpenClawConfig,
+      { isControlCommandMessage, shouldComputeCommandAuthorized, shouldHandleTextCommands },
+    );
+    await createMSTeamsMessageHandler(deps)(createAttackerPersonalActivity("hello /status"));
+    // The narrow predicate gates the hard-drop: ordinary text like "hello /status"
+    // is NOT a control command, so it must not be hard-dropped even if the sender
+    // lacks command authorization. The broad probe must NOT be used for the
+    // hasControlCommand gate.
+    expect(isControlCommandMessage).toHaveBeenCalled();
+    expect(shouldComputeCommandAuthorized).not.toHaveBeenCalled();
+  });
+
   it("marks skipped channel message system events as non-owner without duplicating body text", async () => {
     resetThreadMocks();
     const { deps, enqueueSystemEvent } = createDeps({

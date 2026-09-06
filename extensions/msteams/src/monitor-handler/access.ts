@@ -258,6 +258,11 @@ export async function admitMSTeamsMessage(params: {
   });
   const isControlCommand =
     allowTextCommands && core.channel.commands.isControlCommandMessage(params.text, params.cfg);
+  // Keep the narrow predicate for hasControlCommand — the broad
+  // shouldComputeCommandAuthorized probe matches ordinary text such as
+  // "hello /status" and would hard-drop admitted DM senders who lack
+  // command authorization. Authorization is still computed for actual
+  // control commands via isControlCommand below.
   const access = await resolveMSTeamsSenderAccess({
     cfg: params.cfg,
     activity: params.activity,

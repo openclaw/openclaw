@@ -48,7 +48,10 @@ import {
   resolveChannelGroups,
   resolveChannelGroupsConfigPath,
 } from "openclaw/plugin-sdk/channel-policy";
-import { isControlCommandMessage } from "openclaw/plugin-sdk/command-detection";
+import {
+  isControlCommandMessage,
+  shouldComputeCommandAuthorized,
+} from "openclaw/plugin-sdk/command-detection";
 import { collectErrorGraphCandidates, formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   createInternalHookEvent,
@@ -1026,6 +1029,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     const groupId = dataMessage?.groupInfo?.groupId ?? reaction?.groupInfo?.groupId ?? undefined;
     const isGroup = Boolean(groupId);
     const hasControlCommandInMessage = isControlCommandMessage(messageText, cfg);
+    const shouldComputeCommandAuthorization = shouldComputeCommandAuthorized(messageText, cfg);
 
     const senderDisplay = formatSignalSenderDisplay(sender);
     const resolveChannelIngress = async (contextBinding?: ChannelIngressContextBinding) =>
@@ -1039,7 +1043,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         groupId,
         isGroup,
         cfg,
-        hasControlCommand: hasControlCommandInMessage,
+        hasControlCommand: isGroup ? hasControlCommandInMessage : shouldComputeCommandAuthorization,
         contextBinding,
       });
     const accessDecision = await resolveChannelIngress();
@@ -1239,6 +1243,8 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       if (
         (signalGroupPolicy.groupConfig?.ingest ?? signalGroupPolicy.defaultConfig?.ingest) === true
       ) {
+        const canonicalGroupTarget =
+          normalizeSignalMessagingTarget(`group:${groupId}`) ?? `group:${groupId}`;
         fireAndForgetHook(
           triggerInternalHook(
             createInternalHookEvent(
@@ -1247,12 +1253,12 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
               route.sessionKey,
               toInternalMessageReceivedContext({
                 from: `group:${groupId}`,
-                to: signalTo,
+                to: canonicalGroupTarget,
                 content: pendingBodyText,
                 timestamp: envelope.timestamp ?? undefined,
                 channelId: "signal",
                 accountId: deps.accountId,
-                conversationId: signalTo,
+                conversationId: canonicalGroupTarget,
                 messageId:
                   typeof envelope.timestamp === "number" ? String(envelope.timestamp) : undefined,
                 senderId: senderDisplay,
@@ -1260,9 +1266,9 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
                 provider: "signal",
                 surface: "signal",
                 originatingChannel: "signal",
-                originatingTo: signalTo,
+                originatingTo: canonicalGroupTarget,
                 isGroup: true,
-                groupId: signalTo,
+                groupId: canonicalGroupTarget,
               }),
             ),
           ),
