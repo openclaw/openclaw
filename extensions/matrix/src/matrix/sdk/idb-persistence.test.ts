@@ -3,6 +3,7 @@ import "fake-indexeddb/auto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { createClient } from "matrix-js-sdk/lib/matrix.js";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { resetFileLockStateForTest } from "openclaw/plugin-sdk/file-lock";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
@@ -80,6 +81,49 @@ describe("Matrix IndexedDB persistence", () => {
 
     const dbs = await indexedDB.databases();
     expect(dbs.map((entry) => entry.name)).not.toContain(otherCryptoDatabaseName);
+  });
+
+  it("preserves real Rust crypto device keys through SQLite snapshot restore", async () => {
+    const snapshotPath = path.join(tmpDir, "crypto-idb-snapshot.json");
+    const fetchFixture: typeof fetch = async () =>
+      Response.json({ errcode: "M_NOT_FOUND", error: "No backup configured" }, { status: 404 });
+    vi.stubGlobal("fetch", fetchFixture);
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const clients: ReturnType<typeof createClient>[] = [];
+    const createCryptoClient = async () => {
+      const client = createClient({
+        baseUrl: "https://matrix.example.org",
+        userId: "@bot:example.org",
+        deviceId: "SYNTHETIC",
+        accessToken: "synthetic",
+        fetchFn: fetchFixture,
+      });
+      clients.push(client);
+      await client.initRustCrypto({ cryptoDatabasePrefix: DATABASE_PREFIX });
+      return client;
+    };
+    try {
+      const original = await createCryptoClient();
+      const keys = await original.getCrypto()?.getOwnDeviceKeys();
+      expect(keys).toBeDefined();
+      original.stopClient();
+      await persistIdbToDisk({ snapshotPath, databasePrefix: DATABASE_PREFIX, strict: true });
+      resetPluginStateStoreForTests();
+      await clearTestIndexedDbState();
+      expect((await indexedDB.databases()).map((entry) => entry.name)).not.toContain(
+        cryptoDatabaseName,
+      );
+      await expect(restoreIdbFromDisk(snapshotPath)).resolves.toBe(true);
+      const restored = await createCryptoClient();
+      await expect(restored.getCrypto()?.getOwnDeviceKeys()).resolves.toEqual(keys);
+    } finally {
+      for (const client of clients) {
+        client.stopClient();
+      }
+      await vi.runOnlyPendingTimersAsync();
+      vi.useRealTimers();
+      vi.unstubAllGlobals();
+    }
   });
 
   it("blocks runtime restore and persistence until doctor migrates the legacy snapshot", async () => {

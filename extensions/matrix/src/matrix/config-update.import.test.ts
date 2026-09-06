@@ -4,8 +4,7 @@ import { describe, expect, it } from "vitest";
 describe("matrix config update import boundary", () => {
   it("updates secret inputs without loading secret setup or resolution", async () => {
     const stdout = await runDirectImportSmoke(`
-import { realpathSync } from "node:fs";
-import { registerHooks } from "node:module";
+import { readFileSync, realpathSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 const entryUrl = pathToFileURL(realpathSync("./extensions/matrix/src/matrix/config-update.ts")).href;
 const watchedUrls = new Map([
@@ -14,17 +13,37 @@ const watchedUrls = new Map([
   [pathToFileURL(realpathSync("./src/secrets/resolve.ts")).href, "resolver"],
 ]);
 const observed = { entry: false, setup: false, resolver: false };
-const hooks = registerHooks({
-  load(url, context, nextLoad) {
-    // Loader query parameters do not change which filesystem owner is loaded.
-    const canonicalUrl = new URL(url);
-    canonicalUrl.search = "";
-    canonicalUrl.hash = "";
-    const owner = watchedUrls.get(canonicalUrl.href);
-    if (owner) observed[owner] = true;
-    return nextLoad(url, context);
-  },
-});
+function observeLoad(url) {
+  // Loader query parameters do not change which filesystem owner is loaded.
+  const canonicalUrl = new URL(url);
+  canonicalUrl.search = "";
+  canonicalUrl.hash = "";
+  const owner = watchedUrls.get(canonicalUrl.href);
+  if (owner) observed[owner] = true;
+}
+let deregister;
+if (process.versions.bun) {
+  const { plugin } = await import("bun");
+  plugin({
+    name: "matrix-import-observation",
+    setup(build) {
+      build.onLoad({ filter: /\\.ts$/ }, ({ path }) => {
+        observeLoad(pathToFileURL(realpathSync(path)).href);
+        return { contents: readFileSync(path, "utf8"), loader: "ts" };
+      });
+    },
+  });
+  deregister = () => plugin.clearAll();
+} else {
+  const { registerHooks } = await import("node:module");
+  const hooks = registerHooks({
+    load(url, context, nextLoad) {
+      observeLoad(url);
+      return nextLoad(url, context);
+    },
+  });
+  deregister = () => hooks.deregister();
+}
 try {
   const { updateMatrixAccountConfig } = await import(entryUrl);
   const ref = { source: "env", provider: "default", id: "MATRIX_IMPORT_TEST_TOKEN" };
@@ -39,7 +58,7 @@ try {
     explicitAccount: hasExplicitMatrixAccountConfig({ channels: { matrix: { accessToken: ref } } }, "default"),
   }));
 } finally {
-  hooks.deregister();
+  deregister();
 }
 `);
     const result = JSON.parse(stdout);

@@ -67,31 +67,38 @@ function runMatrixDoctorFix(params: { rootDir: string; stateDir: string }) {
   );
   fs.writeFileSync(
     loaderPath,
-    `import { registerHooks } from "node:module";
-registerHooks({
-  resolve(specifier, context, nextResolve) {
-    if (specifier.endsWith("/doctor-ui.js")) {
-      return {
-        shortCircuit: true,
-        url: "data:text/javascript," + encodeURIComponent([
-          "export async function detectUiProtocolFreshnessIssues() { return []; }",
-          "export function uiProtocolFreshnessIssueToHealthFinding() { return {}; }",
-          "export function uiProtocolFreshnessIssueToRepairEffects() { return []; }",
-          "export async function maybeRepairUiProtocolFreshness() {}",
-        ].join("\\n")),
-      };
-    }
-    if (specifier.endsWith("/doctor-health-contributions.js")) {
-      return {
-        shortCircuit: true,
-        url: "data:text/javascript," + encodeURIComponent(
-          "export async function runDoctorHealthContributions() {}",
-        ),
-      };
-    }
-    return nextResolve(specifier, context);
-  },
-});
+    `import { basename } from "node:path";
+const sources = new Map([
+  ["doctor-ui", [
+    "export async function detectUiProtocolFreshnessIssues() { return []; }",
+    "export function uiProtocolFreshnessIssueToHealthFinding() { return {}; }",
+    "export function uiProtocolFreshnessIssueToRepairEffects() { return []; }",
+    "export async function maybeRepairUiProtocolFreshness() {}",
+  ].join("\\n")],
+  ["doctor-health-contributions", "export async function runDoctorHealthContributions() {}"],
+]);
+if (process.versions.bun) {
+  const { plugin } = await import("bun");
+  plugin({
+    name: "matrix-doctor-fixture",
+    setup(build) {
+      build.onLoad({ filter: /doctor-(?:ui|health-contributions)\\.[jt]s$/ }, ({ path }) => ({
+        contents: sources.get(basename(path).replace(/\\.[jt]s$/, "")),
+        loader: "js",
+      }));
+    },
+  });
+} else {
+  const { registerHooks } = await import("node:module");
+  registerHooks({
+    resolve(specifier, context, nextResolve) {
+      const source = sources.get(basename(specifier).replace(/\\.js$/, ""));
+      return source
+        ? { shortCircuit: true, url: "data:text/javascript," + encodeURIComponent(source) }
+        : nextResolve(specifier, context);
+    },
+  });
+}
 `,
   );
   const entryPath = fileURLToPath(new URL("../../src/entry.ts", import.meta.url));

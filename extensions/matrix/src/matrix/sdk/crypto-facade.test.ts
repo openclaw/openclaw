@@ -60,6 +60,21 @@ function createFacadeHarness(params?: {
 }
 
 describe("createMatrixCryptoFacade", () => {
+  it("round-trips encrypted media through the real native crypto bindings", async () => {
+    const downloadContent = vi.fn<MatrixCryptoFacadeDeps["downloadContent"]>(async () =>
+      Buffer.alloc(0),
+    );
+    const { facade } = createFacadeHarness({ downloadContent });
+    const plaintext = Buffer.from("Synthetic Matrix attachment");
+    const encrypted = await facade.encryptMedia(plaintext);
+    expect(encrypted.buffer).not.toEqual(plaintext);
+    downloadContent.mockResolvedValue(encrypted.buffer);
+
+    await expect(
+      facade.decryptMedia({ ...encrypted.file, url: "mxc://example.org/synthetic" }),
+    ).resolves.toEqual(plaintext);
+  });
+
   it("delegates encrypted-room classification to the canonical client owner", async () => {
     const isRoomEncrypted = vi.fn(async () => true);
     const { facade } = createFacadeHarness({
