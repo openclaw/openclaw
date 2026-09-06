@@ -282,7 +282,7 @@ export async function writeTuiPtyFixtureScript(dir: string) {
           }
           if (startRenderingFixture(this, opts.message, runId, opts.sessionKey)) return { runId };
           if (opts.message === "/btw picker focus proof") {
-            queueMicrotask(() => {
+            const emitSideResult = () => {
               record("pickerSideResult", { runId, sessionKey: opts.sessionKey });
               this.onEvent?.({
                 event: "chat.side_result",
@@ -298,7 +298,21 @@ export async function writeTuiPtyFixtureScript(dir: string) {
                 event: "chat",
                 payload: { runId, sessionKey: opts.sessionKey, state: "final" },
               });
-            });
+              record("pickerSideFinal", { runId, sessionKey: opts.sessionKey });
+            };
+            const delayMs = Number(process.env.OPENCLAW_TUI_PTY_BTW_DELAY_MS ?? "0");
+            const gapDelayMs = Number(process.env.OPENCLAW_TUI_PTY_BTW_GAP_DELAY_MS ?? "0");
+            if (gapDelayMs > 0) {
+              setTimeout(() => {
+                record("pickerSideGap", { runId, sessionKey: opts.sessionKey });
+                this.onGap?.({ expected: 4, received: 5 });
+              }, gapDelayMs);
+            }
+            if (delayMs > 0) {
+              setTimeout(emitSideResult, delayMs);
+            } else {
+              queueMicrotask(emitSideResult);
+            }
             return { runId };
           }
           if (opts.message === "cross-session abort source proof") {

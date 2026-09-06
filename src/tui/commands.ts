@@ -162,6 +162,7 @@ const TUI_COMMAND_ROWS = [
   ["stop", undefined, "/stop", undefined, { shared: true }],
   ["new", "Spawn a new isolated session", "/new or /reset"],
   ["reset", "Reset the current session"],
+  ["clear-view", "Clear visible chat without resetting the session", "/clear-view"],
   ["abort", "Abort active run", "/abort"],
   ["settings", "Open settings", "/settings"],
   [

@@ -90,6 +90,9 @@ type CommandHandlerContext = {
   noteLocalBtwRunId?: (runId: string) => void;
   forgetLocalRunId?: (runId: string) => void;
   forgetLocalBtwRunId?: (runId: string) => void;
+  hasPendingLocalBtwRuns?: () => boolean;
+  retirePendingLocalBtwResults?: () => void;
+  isDynamicCommand?: (name: string) => boolean;
   consumeCompletedRunForPendingSend?: (runId: string) => boolean;
   isRunObserved?: (runId: string) => boolean;
   flushPendingHistoryRefreshIfIdle?: () => void;
@@ -134,6 +137,9 @@ export function createCommandHandlers(context: CommandHandlerContext) {
     noteLocalBtwRunId,
     forgetLocalRunId,
     forgetLocalBtwRunId,
+    hasPendingLocalBtwRuns,
+    retirePendingLocalBtwResults,
+    isDynamicCommand,
     consumeCompletedRunForPendingSend,
     isRunObserved,
     flushPendingHistoryRefreshIfIdle,
@@ -239,6 +245,11 @@ export function createCommandHandlers(context: CommandHandlerContext) {
 
   const hasUnsafeSessionRollover = () =>
     hasTrackedAbortTarget() || state.activityStatus === "finishing context";
+
+  // Side questions do not claim the main activity slot, but their delayed
+  // results still render into the current view after a clear.
+  const hasClearViewBlocker = () =>
+    hasUnsafeSessionRollover() || hasPendingLocalBtwRuns?.() === true;
 
   const rejectUnsafeSessionRollover = (command: "new" | "reset") => {
     if (!hasUnsafeSessionRollover()) {
@@ -838,6 +849,15 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         finishSessionTransition();
       }
     },
+    "clear-view": () => {
+      if (hasClearViewBlocker()) {
+        chatLog.addSystem("abort or wait for the current run before /clear-view");
+        return;
+      }
+      retirePendingLocalBtwResults?.();
+      chatLog.clearAll();
+      chatLog.addSystem("view cleared; session history is unchanged");
+    },
     abort: async () => await abortActive(),
     stop: async () => {
       // Queued client runs can terminalize before the followup executes, so
@@ -861,7 +881,9 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       tui.requestRender();
       return;
     }
-    if (descriptor?.handler) {
+    if (isDynamicCommand?.(name)) {
+      await sendMessage(raw);
+    } else if (descriptor?.handler) {
       await commandHandlers[descriptor.name as TuiCommandHandlerName](args, raw);
     } else if (opts.local && isSharedTextCommand(raw)) {
       addUnsupportedLocalCommand(name);

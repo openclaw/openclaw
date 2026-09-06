@@ -58,9 +58,10 @@ type EventHandlerChatLog = {
 };
 
 type EventHandlerTui = { requestRender: (force?: boolean) => void };
+type EventHandlerBtwResult = { question: string; text: string; isError?: boolean; runId?: string };
 
 type EventHandlerBtwPresenter = {
-  showResult: (params: { question: string; text: string; isError?: boolean }) => void;
+  showResult: (params: EventHandlerBtwResult) => void;
   clear: () => void;
 };
 
@@ -725,7 +726,7 @@ export function createEventHandlers(context: EventHandlerContext) {
     if (!question || !text) {
       return;
     }
-    btw.showResult({ question, text, isError: evt.isError });
+    btw.showResult({ question, text, isError: evt.isError, runId: evt.runId });
     tui.requestRender();
   };
 

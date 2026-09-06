@@ -2230,6 +2230,81 @@ export default {
     LOCAL_TEST_TIMEOUT_MS,
   );
   registerGatewayTest(
+    "clears only the visible conversation while a real Gateway keeps its history",
+    async ({ onTestFinished }) => {
+      const shared = await requireSharedGatewayFixture();
+      const scenario = GATEWAY_SCENARIOS.history;
+      const sessionKey = `agent:${scenario.agentId}:tui-pty-clear-${++gatewaySessionSequence}`;
+      const userMarker = "T02_CLEAR_VIEW_USER";
+      const assistantMarker = scenario.replyText;
+      await shared.controlClient.createSession({ key: sessionKey, agentId: scenario.agentId });
+      await shared.controlClient.patchSession({
+        key: sessionKey,
+        agentId: scenario.agentId,
+        model: `tui-pty-mock/${scenario.modelId}`,
+      });
+      const proxy = await startGatewayRpcDelayProxy(shared.gateway.url, []);
+      const cleanupProxy = registerIdempotentCleanup(
+        onTestFinished,
+        async () => await proxy.stop(),
+      );
+      const fixture = await startIsolatedGatewayPty({
+        gateway: shared.gateway,
+        registerCleanup: onTestFinished,
+        sessionKey,
+        url: proxy.url,
+      });
+      try {
+        await fixture.run.waitForOutput("gateway connected", LOCAL_STARTUP_TIMEOUT_MS);
+        await fixture.run.write(`${userMarker}\r`, { delay: false });
+        await fixture.run.waitForOutput(assistantMarker, LOCAL_OUTPUT_TIMEOUT_MS);
+        const seeded = await waitForHistoryMessages(
+          shared.controlClient,
+          sessionKey,
+          ({ messages }) => findOrderedTurn(messages, userMarker, assistantMarker) >= 0,
+        );
+
+        const requestOffset = proxy.requests.length;
+        await fixture.run.write("/clear-view\r", { delay: false });
+        await waitForSynchronizedFrameRows(
+          fixture.run,
+          (frame) =>
+            frame.some((row) => row.includes("view cleared; session history is unchanged")) &&
+            !frame.some((row) => row.includes(userMarker) || row.includes(assistantMarker)),
+          LOCAL_OUTPUT_TIMEOUT_MS,
+        );
+        expect(
+          proxy.requests
+            .slice(requestOffset)
+            .some((request) =>
+              /^(chat\.(send|abort)|sessions\.(reset|patch))$/u.test(request.method),
+            ),
+        ).toBe(false);
+        await waitForHistoryMessages(
+          shared.controlClient,
+          sessionKey,
+          ({ messages, sessionInfo }) =>
+            sessionInfo?.sessionId === seeded.sessionInfo?.sessionId &&
+            sessionInfo?.activeLeafEntryId === seeded.sessionInfo?.activeLeafEntryId &&
+            findOrderedTurn(messages, userMarker, assistantMarker) >= 0,
+        );
+
+        await fixture.run.write("\x14", { delay: false });
+        await waitForSynchronizedFrameRows(
+          fixture.run,
+          (frame) =>
+            frame.some((row) => row.includes(userMarker)) &&
+            frame.some((row) => row.includes(assistantMarker)),
+          LOCAL_OUTPUT_TIMEOUT_MS,
+        );
+      } finally {
+        await fixture.cleanup();
+        await cleanupProxy();
+      }
+    },
+    LOCAL_TEST_TIMEOUT_MS,
+  );
+  registerGatewayTest(
     "executes Gateway status model new and reset RPCs through a real TUI PTY",
     async ({ onTestFinished }) => {
       const fixture = await startGatewayModeTui("command", onTestFinished);

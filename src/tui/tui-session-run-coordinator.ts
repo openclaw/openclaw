@@ -26,6 +26,8 @@ export function createTuiRunIdTracker() {
     },
     forget: (runId: string) => void runIds.delete(runId),
     has: (runId: string) => runIds.has(runId),
+    hasAny: () => runIds.size > 0,
+    values: () => runIds.values(),
     clear: () => runIds.clear(),
   };
 }

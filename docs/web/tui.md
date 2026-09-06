@@ -134,6 +134,7 @@ Session lifecycle:
 
 - `/new` (spawn a fresh, isolated session under a new key; does not affect other TUI clients on the old session)
 - `/reset` (reset the current session key in place)
+- `/clear-view` (clear only the visible chat; session history is unchanged)
 - `/abort` (abort the active run)
 - `/stop` (stop the active or queued run)
 - `/settings`

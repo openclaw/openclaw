@@ -1468,6 +1468,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
       question: "what changed?",
       text: "nothing important",
       isError: undefined,
+      runId: "run-btw",
     });
     expect(setActivityStatus).not.toHaveBeenCalled();
     expect(loadHistory).not.toHaveBeenCalled();
@@ -1500,6 +1501,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
       question: "what changed?",
       text: "nothing important",
       isError: undefined,
+      runId: "run-btw",
     });
     expect(tui.requestRender).toHaveBeenCalledTimes(1);
     expect(tui.requestRender).toHaveBeenCalledWith(true);
@@ -1543,6 +1545,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
       question: "what changed?",
       text: "answer for the replacement session",
       isError: undefined,
+      runId: "replacement-btw-run",
     });
   });
 
@@ -1582,6 +1585,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
       question: "what changed?",
       text: "nothing important",
       isError: undefined,
+      runId: "run-btw",
     });
   });
 
