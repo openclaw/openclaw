@@ -315,6 +315,9 @@ export async function installPackageDir<
   };
   const assertPersistentApply = () => {
     params.beforePersistentApply?.();
+    // A startup cancellation observed between the pre-move abort check and the
+    // rename must refuse publication; ownership guards alone do not see it.
+    params.signal?.throwIfAborted();
     assertRollbackOwned();
   };
   let stageDir: string | null = null;
