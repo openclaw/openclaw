@@ -79,12 +79,20 @@ export function createMatrixReplyDispatcher(config: {
   const hasRepliedRef = { value: false };
   let finalReplyDeliveryFailed = false;
   let nonFinalReplyDeliveryFailed = false;
-  const beginNextBlockDraft = () => {
+  const beginNextBlockDraft = async () => {
     // Each block owns a new draft generation; prior retained/consumed state must not
     // suppress settlement or cleanup for the next provider-visible event.
+    const settled = await draftController.settleDraftGeneration();
     draftController.beginDraftGeneration();
     draftController.advanceDraftBlockBoundary({ fallbackToLatestEnd: true });
-    draftStream?.reset();
+    // Only reset the underlying draft stream when settlement actually
+    // succeeded — a failed live-marker edit needs its event id and
+    // mustDeliverFinalNormally() failure state to survive so a later
+    // final/block delivery's own redact-or-replace handling can still find
+    // and clean up this preview instead of losing all reference to it.
+    if (settled) {
+      draftStream?.reset();
+    }
     draftController.resetReplyToIdForNextBlock();
     draftController.updateDraftFromLatestFullText();
   };
@@ -93,15 +101,35 @@ export function createMatrixReplyDispatcher(config: {
     ...prefixOptions,
     humanDelay,
     deliver: async (payload: ReplyPayload, info: { kind: string }) => {
+      // Captured before any await below: production enqueues a tool's own
+      // Matrix delivery without awaiting completion, so a fast-following
+      // assistant message can already be streaming new partial text into
+      // this same draft by the time completeDelivery below actually runs.
+      const draftGenerationAtDispatch = draftController.currentGeneration();
       const completeDelivery = async (
         result: MatrixReplyDeliveryResult,
       ): Promise<MatrixReplyDeliveryResult> => {
         if (info.kind === "block") {
-          beginNextBlockDraft();
+          await beginNextBlockDraft();
 
           // Re-assert typing so the user still sees the indicator while
           // the next block generates.
           await typingCallbacks.onReplyStart();
+        } else if (info.kind === "tool") {
+          // "tool" kind bypasses the draft-settlement branch below entirely
+          // (its finalize/redact logic assumes payload.text is the draft's
+          // own final content, which does not hold for a tool payload).
+          // Settle without the rest of beginNextBlockDraft()'s generation
+          // reset: that also clears the draft's reply target, but a tool
+          // dispatch must keep the *same* in-flight draft/reply target for
+          // whatever text follows the tool call, not start a fresh block.
+          // Without settling at all here, a tool dispatch mid-stream leaves
+          // whatever the draft was last showing (often just the first
+          // throttled fragment) orphaned with the MSC4357 live marker stuck
+          // on forever. Bound to draftGenerationAtDispatch: this tool call
+          // does not own a newer generation that started while its own
+          // delivery was in flight.
+          await draftController.settleDraftForToolDispatch(draftGenerationAtDispatch);
         }
         return result;
       };
@@ -475,14 +503,22 @@ export function createMatrixReplyDispatcher(config: {
         }),
       );
     },
-    onError: (err: unknown, info: { kind: "tool" | "block" | "final" }) => {
+    onError: async (err: unknown, info: { kind: "tool" | "block" | "final" }) => {
       if (info.kind === "final") {
         finalReplyDeliveryFailed = true;
       } else {
         nonFinalReplyDeliveryFailed = true;
       }
       if (info.kind === "block") {
-        beginNextBlockDraft();
+        await beginNextBlockDraft();
+      } else if (info.kind === "tool") {
+        // No captured pre-dispatch generation is available on this error
+        // path (a distinct, later top-level callback, not the same deliver()
+        // closure) -- read the current one directly. A delivery failure
+        // path is not the enqueue-without-awaiting race the dispatch path
+        // guards against, so this is not a meaningful narrowing here, just
+        // parameter parity with the success path's generation-bound check.
+        await draftController.settleDraftForToolDispatch(draftController.currentGeneration());
       }
       runtime.error?.(`matrix ${info.kind} reply failed: ${String(err)}`);
     },
