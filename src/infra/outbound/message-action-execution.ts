@@ -497,6 +497,7 @@ export async function executeMessagePoll(ctx: ResolvedActionContext): Promise<Me
         gatewayOwnedDelivery: input.gatewayOwnedDelivery,
         onPlatformSendDispatch: input.onPlatformSendDispatch,
         assertDirectAdapterHandoff: input.assertDirectAdapterHandoff,
+        ...(input.onDeliveryResult ? { onDeliveryResult: input.onDeliveryResult } : {}),
       },
       silent: silent ?? undefined,
     },

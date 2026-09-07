@@ -265,6 +265,7 @@ describe("discordOutbound", () => {
 
   it("routes poll sends to thread target when threadId is provided", async () => {
     const onPlatformSendDispatch = vi.fn(async () => undefined);
+    const onDeliveryResult = vi.fn();
     const markInboundEventDelivered = vi.fn();
     const end = discordInboundEventDelivery.begin(
       "agent:main:discord:channel:parent-1",
@@ -275,7 +276,7 @@ describe("discordOutbound", () => {
       },
       { inboundEventKind: "room_event" },
     );
-    hoisted.sendPollDiscordMock.mockResolvedValueOnce({
+    const pollResult = {
       messageId: "poll-1",
       channelId: "thread-1",
       receipt: createDiscordSendReceipt({
@@ -284,6 +285,18 @@ describe("discordOutbound", () => {
         kind: "poll",
         threadId: "thread-1",
       }),
+    };
+    hoisted.sendPollDiscordMock.mockImplementationOnce(async (_to, _poll, options) => {
+      if (
+        !options ||
+        typeof options !== "object" ||
+        !("onDeliveryResult" in options) ||
+        typeof options.onDeliveryResult !== "function"
+      ) {
+        throw new Error("expected poll delivery callback");
+      }
+      await options.onDeliveryResult(pollResult);
+      return pollResult;
     });
     let result;
     try {
@@ -298,6 +311,7 @@ describe("discordOutbound", () => {
         sessionKey: "agent:main:discord:channel:parent-1",
         inboundEventKind: "room_event",
         onPlatformSendDispatch,
+        onDeliveryResult,
       });
     } finally {
       end();
@@ -315,6 +329,7 @@ describe("discordOutbound", () => {
       threadId: "thread-1",
       silent: true,
       onPlatformSendDispatch,
+      onDeliveryResult: expect.any(Function),
     });
     expect(result).toEqual({
       channel: "discord",
@@ -326,6 +341,14 @@ describe("discordOutbound", () => {
       }),
     });
     expect(markInboundEventDelivered).toHaveBeenCalledOnce();
+    expect(onDeliveryResult).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messageId: "poll-1",
+        target: { kind: "channel", id: "thread-1" },
+        receipt: expect.objectContaining({ primaryPlatformMessageId: "poll-1" }),
+      }),
+    );
+    expect(onDeliveryResult.mock.calls[0]?.[0]).not.toHaveProperty("channel");
   });
 
   it("enforces account poll policy before provider dispatch", async () => {

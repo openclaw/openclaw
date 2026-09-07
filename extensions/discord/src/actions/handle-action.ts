@@ -27,6 +27,8 @@ import {
   DISCORD_PRESENTATION_CAPABILITIES,
   isDiscordComponentSpecWithinMessageLimit,
 } from "../outbound-components.js";
+import { toDiscordOutboundDeliveryResult } from "../send.receipt.js";
+import type { DiscordSendResult } from "../send.types.js";
 import {
   buildDiscordInteractiveComponents,
   buildDiscordPresentationComponents,
@@ -79,6 +81,7 @@ type DiscordMessageActionContext = Pick<
   | "reply"
   | "progressSnapshot"
   | "assertDirectAdapterHandoff"
+  | "onDeliveryResult"
 >;
 
 export async function handleDiscordMessageAction(
@@ -122,6 +125,12 @@ async function dispatchDiscordMessageAction(
     mediaReadFile: ctx.mediaReadFile,
     ...(ctx.reply ? { reply: ctx.reply } : {}),
     ...(ctx.progressSnapshot ? { progressSnapshot: ctx.progressSnapshot } : {}),
+    ...(ctx.onDeliveryResult
+      ? {
+          onDeliveryResult: async (result: DiscordSendResult) =>
+            ctx.onDeliveryResult?.(toDiscordOutboundDeliveryResult(result)),
+        }
+      : {}),
     ...readPolicyOptions,
   } as const;
   const notifyVisibleOutbound = (

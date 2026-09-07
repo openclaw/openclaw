@@ -31,7 +31,11 @@ import type {
   PlatformSendRoute,
 } from "./deliver-contracts.js";
 import { assertOutboundHandoffCurrent } from "./deliver-handoff.js";
-import { PlatformMessageNotDispatchedError, type OutboundDeliveryResult } from "./deliver-types.js";
+import {
+  normalizeChannelMessageSendResult,
+  PlatformMessageNotDispatchedError,
+  type OutboundDeliveryResult,
+} from "./deliver-types.js";
 import {
   attachOutboundDeliveryCommitHook,
   type OutboundDeliveryCommitHook,
@@ -509,23 +513,6 @@ function createPluginHandler(
       }
       return dispatchToAdapter(mediaCtx, () => sendText!(mediaCtx));
     },
-  };
-}
-
-function normalizeChannelMessageSendResult(
-  channel: string,
-  result: ChannelMessageSendResult,
-): OutboundDeliveryResult {
-  const source = result as ChannelMessageSendResult & Partial<OutboundDeliveryResult>;
-  return {
-    ...source,
-    channel,
-    messageId:
-      source.messageId ??
-      source.receipt.primaryPlatformMessageId ??
-      source.receipt.platformMessageIds[0] ??
-      "",
-    receipt: source.receipt,
   };
 }
 

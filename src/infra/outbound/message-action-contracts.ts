@@ -21,7 +21,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { MessageActionAuthorization } from "../../gateway/message-action-turn-capability.js";
 import type { OutboundMediaAccess } from "../../media/load-options.js";
 import type { GatewayClientMode, GatewayClientName } from "../../utils/message-channel.js";
-import type { OutboundDeliveryResult } from "./deliver-types.js";
+import { normalizeChannelMessageSendResult, type OutboundDeliveryResult } from "./deliver-types.js";
 import type { OutboundSendDeps } from "./deliver.js";
 import type {
   ConversationDeliveryTarget,
@@ -294,6 +294,7 @@ export function createChannelActionContext(params: {
   action: ChannelMessageActionContext["action"];
   mediaAccess?: OutboundMediaAccess;
   reply?: OutboundReplyFacts;
+  onDeliveryResult?: ChannelMessageActionContext["onDeliveryResult"];
 }): ChannelMessageActionContext {
   const mediaAccess = params.mediaAccess ?? params.ctx.mediaAccess;
   return {
@@ -322,5 +323,16 @@ export function createChannelActionContext(params: {
     onPlatformSendDispatch: params.ctx.input.onPlatformSendDispatch,
     assertDirectAdapterHandoff: params.ctx.input.assertDirectAdapterHandoff,
     ...(params.action === "send" ? { skipQueue: params.ctx.input.skipQueue } : {}),
+    ...(params.onDeliveryResult || params.ctx.input.onDeliveryResult
+      ? {
+          onDeliveryResult:
+            params.onDeliveryResult ??
+            (async (result) => {
+              await params.ctx.input.onDeliveryResult?.(
+                normalizeChannelMessageSendResult(params.ctx.channel, result),
+              );
+            }),
+        }
+      : {}),
   };
 }
