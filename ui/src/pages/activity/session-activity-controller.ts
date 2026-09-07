@@ -430,11 +430,13 @@ export class SessionActivityController implements ReactiveController {
       this.summaryPending = undefined;
       this.summaryAttempts.clear();
       this.summaryRetries.clear();
+      this.eventRefresh.reset();
       this.result = undefined;
       this.incomplete = false;
     }
     this.refreshPending = false;
     this.host.requestUpdate();
+    this.eventRefresh.requestStarted();
     void client
       .request<SessionsListResult>("sessions.list", request, { signal: pending.signal })
       .then((result) => {

@@ -30,6 +30,7 @@ export const uiE2eRealGatewayTestFiles = [
   "ui/src/e2e/model-catalog-partial-refresh.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-flow.catalog-bootstrap.e2e.test.ts",
   "ui/src/e2e/worker-initial-setup.real-gateway.e2e.test.ts",
+  "ui/src/e2e/session-roster-request-rate.real-gateway.e2e.test.ts",
   "ui/src/e2e/agent-file-lifecycle.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-composer-websearch-kill-switch.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-agent-avatar.real-gateway.e2e.test.ts",
@@ -59,6 +60,7 @@ export const uiE2eRealGatewayTestFiles = [
 // These files own their server instead of leasing the global production bundle.
 // Keep any shared source-module optimizer cache under one worker.
 export const uiE2ePrivateServerTestFiles = [
+  "ui/src/e2e/session-roster-request-rate.real-gateway.e2e.test.ts",
   "ui/src/e2e/agent-file-lifecycle.real-gateway.e2e.test.ts",
   "ui/src/e2e/approval-bootstrap.e2e.test.ts",
   "ui/src/e2e/build-info-unicode.e2e.test.ts",

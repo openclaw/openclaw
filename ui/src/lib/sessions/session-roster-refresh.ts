@@ -249,6 +249,7 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
     }
     try {
       const issuedRevision = ++requestRevision;
+      eventRefreshCoordinator.requestStarted();
       let result = await requestSessionList(scope.client, requestOptions);
       if (!isCurrent()) {
         return null;
