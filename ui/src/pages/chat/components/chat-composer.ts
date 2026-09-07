@@ -1,4 +1,4 @@
-// Chat-owned composer orchestration.
+﻿// Chat-owned composer orchestration.
 import { nothing } from "lit";
 import {
   normalizeChatSendShortcut,

@@ -1,4 +1,4 @@
-import { html, nothing, type TemplateResult } from "lit";
+﻿import { html, nothing, type TemplateResult } from "lit";
 import { ref } from "lit/directives/ref.js";
 import type { ChatFollowUpMode } from "../../../app/settings.ts";
 import { icons } from "../../../components/icons.ts";
@@ -513,7 +513,7 @@ export function renderChatPrimaryActions(props: ChatRunControlsProps) {
   const alternateShortcutAvailable =
     props.alternateFollowUpMode && props.canSend && hasComposedContent;
   const activeRunActionTooltip = alternateShortcutAvailable
-    ? `${activeRunActionLabel} ⏎ · ${alternateActionLabel} ${t("chat.sendShortcutModifierEnter")}`
+    ? `${activeRunActionLabel} ÔÅÄ ┬À ${alternateActionLabel} ${t("chat.sendShortcutModifierEnter")}`
     : activeRunActionLabel;
   // Preserve the click identity without mistaking it for a follow-up mode.
   const send = (event: Event) => props.onSend(event);
@@ -525,7 +525,7 @@ export function renderChatPrimaryActions(props: ChatRunControlsProps) {
   // duplicate announcement.
   const voiceErrored = props.voiceStatus === "error";
   const voiceButton = renderComposerVoiceButton(props);
-  // Dictation and Talk are one affordance to the operator — a microphone — so
+  // Dictation and Talk are one affordance to the operator ÔÇö a microphone ÔÇö so
   // the control shows whenever either route exists, and it always sits ahead of
   // the primary action rather than standing in for it.
   const voiceControl = props.dictation || props.onToggleVoice ? voiceButton : nothing;
