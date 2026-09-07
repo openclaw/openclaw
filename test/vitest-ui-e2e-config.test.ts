@@ -132,6 +132,7 @@ const realGatewayFiles = [
   "profile-page.real-gateway",
   "quota-reset-status.real-gateway",
   "session-progress-hovercard.real-gateway",
+  "session-roster-request-rate.real-gateway",
   "usage-sessions-owner-attribution",
   "worker-initial-setup.real-gateway",
 ]
@@ -547,6 +548,13 @@ describe("Control UI E2E resource ownership", () => {
         },
         {
           file: mcpFile,
+          project: "ui-e2e-serial-standalone",
+          phase: 1,
+          workers: 1,
+          fileParallelism: false,
+        },
+        {
+          file: "ui/src/e2e/session-roster-request-rate.real-gateway.e2e.test.ts",
           project: "ui-e2e-serial-standalone",
           phase: 1,
           workers: 1,
