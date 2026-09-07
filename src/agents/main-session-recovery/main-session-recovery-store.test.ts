@@ -7,14 +7,17 @@ import {
   applySessionEntryLifecycleMutation,
   listSessionEntriesCore,
 } from "../../config/sessions/session-accessor.js";
+import { resolveSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target.js";
 import {
   getAgentEventLifecycleGeneration,
   rotateAgentEventLifecycleGeneration,
 } from "../../infra/agent-events.js";
+import { loadSqliteTrajectoryRuntimeEvents } from "../../trajectory/runtime-store.sqlite.js";
 import * as recoveryOwnerRelease from "./main-session-recovery-owner-release.js";
 import {
   claimMainSessionRecoveryOwner,
   commitMainSessionRecovery,
+  createRestoreAdmittedRecoveryInterrupted,
   inspectMainSessionRecoveryRequired,
   refreshMainSessionRecoveryOwner,
   releaseMainSessionRecoveryOwner,
@@ -56,6 +59,10 @@ describe("main session recovery store", () => {
 
   function read(): SessionEntry {
     return sessionAccessor.loadSessionEntry({ sessionKey, storePath })!;
+  }
+
+  function trajectoryTarget(): ReturnType<typeof resolveSqliteTargetFromSessionStorePath> {
+    return resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main" });
   }
 
   function readStore(): Record<string, SessionEntry> {
@@ -601,6 +608,26 @@ describe("main session recovery store", () => {
     expect(dispatch).not.toHaveBeenCalled();
   });
 
+  it("carries the durable partition owner into the owner-release retry target", async () => {
+    await write(interruptedEntry());
+    const claim = await claimMainSessionRecoveryOwner({
+      lifecycleGeneration,
+      sessionId: "session-1",
+      target: { sessionKey, storePath, agentId: "main" },
+    });
+    if (claim.kind !== "claimed") {
+      throw new Error("expected foreground owner claim");
+    }
+    expect(claim.lease.agentId).toBe("main");
+
+    await expect(releaseMainSessionRecoveryOwner(claim.lease)).resolves.toEqual({
+      sessionId: "session-1",
+      sessionKey,
+      storePath,
+      agentId: "main",
+    });
+  });
+
   it("does not let an old lease release a same-token claim from a new cycle", async () => {
     await write(interruptedEntry());
     const oldClaim = await claimRecovery();
@@ -754,5 +781,169 @@ describe("main session recovery store", () => {
     rotateAgentEventLifecycleGeneration();
 
     await expect(refreshMainSessionRecoveryOwner(claim.lease)).resolves.toBeUndefined();
+  });
+
+  it("records one interrupted trajectory ending when an admitted recovery is restored", async () => {
+    await write(
+      interruptedEntry({
+        abortedLastRun: false,
+        lifecycleRunId: "recovery-1",
+        restartRecoveryRuns: [{ runId: "recovery-1", lifecycleGeneration }],
+      }),
+    );
+
+    const restoreAdmittedRecovery = createRestoreAdmittedRecoveryInterrupted({
+      agentId: "main",
+      lifecycleGeneration,
+      logWarn: () => {},
+      runId: "recovery-1",
+      sessionId: () => "session-1",
+      sessionKey,
+      storePath,
+      trajectoryTarget: trajectoryTarget(),
+    });
+
+    await expect(restoreAdmittedRecovery()).resolves.toEqual({
+      sessionId: "session-1",
+      sessionKey,
+      storePath,
+      agentId: "main",
+    });
+    const restoredEntry = read();
+    expect(restoredEntry).toMatchObject({
+      sessionId: "session-1",
+      status: "running",
+      abortedLastRun: true,
+    });
+    expect(restoredEntry.lifecycleRunId).toBeUndefined();
+
+    // The pre-dispatch restore boundary records the canonical terminal event,
+    // and a repeated closure invocation must not fabricate a duplicate.
+    await expect(restoreAdmittedRecovery()).resolves.toBeUndefined();
+    const trajectoryEvents = await loadSqliteTrajectoryRuntimeEvents({
+      sessionId: "session-1",
+      storePath,
+    });
+    expect(trajectoryEvents).toEqual([
+      expect.objectContaining({
+        type: "session.ended",
+        runId: "recovery-1",
+        data: expect.objectContaining({ status: "interrupted", aborted: true }),
+      }),
+    ]);
+  });
+
+  it("records one interrupted trajectory ending across two independent restore closures", async () => {
+    await write(
+      interruptedEntry({
+        abortedLastRun: false,
+        lifecycleRunId: "recovery-1",
+        restartRecoveryRuns: [{ runId: "recovery-1", lifecycleGeneration }],
+      }),
+    );
+
+    // Gateway execution and the outer restart-dispatch failure path each build
+    // their own restore closure for one admitted run; the durable transition
+    // must record the interruption exactly once.
+    const buildRestore = () =>
+      createRestoreAdmittedRecoveryInterrupted({
+        agentId: "main",
+        lifecycleGeneration,
+        logWarn: () => {},
+        runId: "recovery-1",
+        sessionId: () => "session-1",
+        sessionKey,
+        storePath,
+        trajectoryTarget: trajectoryTarget(),
+      });
+
+    await expect(buildRestore()()).resolves.toEqual({
+      sessionId: "session-1",
+      sessionKey,
+      storePath,
+      agentId: "main",
+    });
+    await expect(buildRestore()()).resolves.toBeUndefined();
+    const trajectoryEvents = await loadSqliteTrajectoryRuntimeEvents({
+      sessionId: "session-1",
+      storePath,
+    });
+    expect(trajectoryEvents).toEqual([
+      expect.objectContaining({
+        type: "session.ended",
+        runId: "recovery-1",
+        data: expect.objectContaining({ status: "interrupted", aborted: true }),
+      }),
+    ]);
+  });
+
+  it("records the trajectory ending even if shutdown begins immediately after the rollback commits", async () => {
+    await write(
+      interruptedEntry({
+        abortedLastRun: false,
+        lifecycleRunId: "recovery-1",
+        restartRecoveryRuns: [{ runId: "recovery-1", lifecycleGeneration }],
+      }),
+    );
+
+    let continuation = true;
+    const restoreAdmittedRecovery = createRestoreAdmittedRecoveryInterrupted({
+      agentId: "main",
+      lifecycleGeneration,
+      logWarn: () => {},
+      runId: "recovery-1",
+      sessionId: () => "session-1",
+      sessionKey,
+      shouldContinue: () => continuation,
+      storePath,
+      trajectoryTarget: trajectoryTarget(),
+    });
+
+    const resultPromise = restoreAdmittedRecovery();
+    continuation = false;
+    await expect(resultPromise).resolves.toEqual({
+      sessionId: "session-1",
+      sessionKey,
+      storePath,
+      agentId: "main",
+    });
+
+    const trajectoryEvents = await loadSqliteTrajectoryRuntimeEvents({
+      sessionId: "session-1",
+      storePath,
+    });
+    expect(trajectoryEvents).toEqual([
+      expect.objectContaining({
+        type: "session.ended",
+        runId: "recovery-1",
+        data: expect.objectContaining({ status: "interrupted", aborted: true }),
+      }),
+    ]);
+  });
+
+  it("records no trajectory ending when the admitted recovery restore is rejected", async () => {
+    await write(
+      interruptedEntry({
+        abortedLastRun: false,
+        lifecycleRunId: "recovery-1",
+        restartRecoveryRuns: [{ runId: "recovery-1", lifecycleGeneration }],
+      }),
+    );
+    const restoreAdmittedRecovery = createRestoreAdmittedRecoveryInterrupted({
+      agentId: "main",
+      lifecycleGeneration,
+      logWarn: () => {},
+      runId: "recovery-1",
+      sessionId: () => "rotated-session",
+      sessionKey,
+      storePath,
+      trajectoryTarget: trajectoryTarget(),
+    });
+
+    await expect(restoreAdmittedRecovery()).resolves.toBeUndefined();
+    expect(read()).toMatchObject({ abortedLastRun: false });
+    expect(await loadSqliteTrajectoryRuntimeEvents({ sessionId: "session-1", storePath })).toEqual(
+      [],
+    );
   });
 });

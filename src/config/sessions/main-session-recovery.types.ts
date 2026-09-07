@@ -20,6 +20,16 @@ export type MainRestartRecoveryState = {
     attempt: number;
     lifecycleGeneration: string;
   };
+  /**
+   * Run identity whose admitted-recovery interruption is already durable.
+   * Gateway execution and the outer restart-dispatch failure path each build
+   * their own restore closure for one run; this fence makes the second
+   * closure a durable no-op so the terminal trajectory event records once.
+   */
+  interruptedRestore?: {
+    runId: string;
+    lifecycleGeneration: string;
+  };
   foregroundClaims?: {
     lifecycleGeneration: string;
     tokens: string[];

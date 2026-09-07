@@ -29,6 +29,8 @@ export type ExpectedRestartRecoveryTarget = {
 
 export type ExhaustedRestartRecoveryTarget = ExpectedRestartRecoveryTarget & {
   storePath: string;
+  /** Durable SQLite owner partition that owns the exhausted row. */
+  agentId?: string;
 };
 
 export function resolveRestartRecoveryTerminalClientRunId(

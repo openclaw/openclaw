@@ -1,7 +1,9 @@
 import { randomUUID } from "node:crypto";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
 import { applySessionEntryReplacements } from "../../config/sessions/session-accessor.js";
+import { resolveSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
+import { appendInterruptedSessionTrajectoryEndSync } from "../../trajectory/interrupted-end.js";
 import {
   retryMainSessionRecoveryMutation,
   scheduleMainSessionRecoveryMutation,
@@ -17,6 +19,7 @@ import {
 } from "./main-session-recovery-state.js";
 
 export type MainSessionRecoveryStoreTarget = {
+  /** Durable SQLite partition owner; carried into deferred retry targets so exact reads stay on the owning partition. */
   agentId?: string;
   sessionKey: string;
   storePath: string;
@@ -62,6 +65,7 @@ export async function commitMainSessionRecovery(params: {
   scanAliases?: boolean;
   shouldContinue?: () => boolean;
   target: MainSessionRecoveryStoreTarget;
+  afterWriteInTransaction?: (result: MainSessionRecoveryStoreResult) => void;
 }): Promise<MainSessionRecoveryStoreResult> {
   const reservationCleanup =
     params.command.kind === "cancel_reservation" || params.command.kind === "abandon_reservation"
@@ -84,6 +88,9 @@ export async function commitMainSessionRecovery(params: {
     requireWriteSuccess: params.requireWriteSuccess,
     ...(scansAliases ? {} : { sessionKeys: [params.target.sessionKey] }),
     storePath: params.target.storePath,
+    ...(params.afterWriteInTransaction
+      ? { afterWriteInTransaction: params.afterWriteInTransaction }
+      : {}),
     update: (entries) => {
       // Recheck inside the synchronous commit: shutdown can begin while this
       // recovery owner is waiting to acquire the session-store transaction.
@@ -178,6 +185,88 @@ export async function commitMainSessionRecovery(params: {
   });
 }
 
+/**
+ * Builds the idempotent restore closure for a Gateway-admitted recovery that
+ * aborts before dispatch (or after an ambiguous dispatch settlement fails).
+ * The committed interruption stamps the row's recovery state with the
+ * restored run identity, so only the first applied transition mints the
+ * terminal trajectory event; a separate restore closure for the same run
+ * (Gateway execution vs. outer restart-dispatch) re-enters as a durable
+ * no-op and must not fabricate a duplicate.
+ *
+ * Callers resolve `trajectoryTarget` before durable recovery admission: a
+ * filesystem/registry failure while resolving must reject the run before the
+ * row is admitted, not after, otherwise the admitted row has no restore path.
+ */
+export function createRestoreAdmittedRecoveryInterrupted(params: {
+  agentId: string;
+  lifecycleGeneration: string;
+  logWarn: (message: string) => void;
+  runId: string;
+  sessionId: () => string;
+  sessionKey: string;
+  shouldContinue?: () => boolean;
+  storePath: string;
+  trajectoryTarget: ReturnType<typeof resolveSqliteTargetFromSessionStorePath>;
+}): () => Promise<MainSessionRecoveryPendingTarget | undefined> {
+  let restored = false;
+  return async () => {
+    if (restored || params.shouldContinue?.() === false) {
+      return undefined;
+    }
+    const recovery = await commitMainSessionRecovery({
+      command: {
+        kind: "mark_admitted_recovery_interrupted",
+        lifecycleGeneration: params.lifecycleGeneration,
+        now: Date.now(),
+        runId: params.runId,
+        sessionId: params.sessionId(),
+      },
+      requireWriteSuccess: true,
+      ...(params.shouldContinue ? { shouldContinue: params.shouldContinue } : {}),
+      target: {
+        agentId: params.agentId,
+        sessionKey: params.sessionKey,
+        storePath: params.storePath,
+      },
+      afterWriteInTransaction: (result) => {
+        if (
+          result.transition.kind !== "applied" ||
+          result.entry?.sessionId !== params.sessionId() ||
+          !result.sessionKey
+        ) {
+          return;
+        }
+        appendInterruptedSessionTrajectoryEndSync({
+          agentDatabaseAgentId: params.trajectoryTarget.agentId ?? params.agentId,
+          agentDatabasePath: params.trajectoryTarget.path,
+          runId: params.runId,
+          sessionKey: result.sessionKey,
+          sessionId: result.entry.sessionId,
+          storePath: params.storePath,
+        });
+      },
+    });
+    restored = true;
+    if (
+      recovery.transition.kind !== "applied" ||
+      recovery.entry?.sessionId !== params.sessionId() ||
+      !recovery.sessionKey
+    ) {
+      return undefined;
+    }
+    return {
+      sessionId: recovery.entry.sessionId,
+      sessionKey: recovery.sessionKey,
+      storePath: params.storePath,
+      // Deferred retries reopen this exact store without the admission
+      // context; the owner must travel with the target or the retry reads
+      // the store's default partition and leaves the ops-owned row pending.
+      agentId: params.agentId,
+    };
+  };
+}
+
 export async function refreshMainSessionRecoveryOwner(
   lease: MainSessionRecoveryOwnerLease,
   runId?: string,
@@ -239,6 +328,8 @@ export async function claimMainSessionRecoveryOwner(params: {
     }
     return {
       kind: "claimed",
+      // The lease is the only owner provenance the release retry sees; the
+      // target owner must travel into it or retries reopen the default partition.
       lease: { ...params.target, ...claim.transition.claim },
       entry: claim.entry,
       sessionKey: claim.sessionKey,
@@ -340,6 +431,8 @@ async function releaseMainSessionRecoveryOwnerWithRetries(
     return undefined;
   }
   return {
+    // The release retry may run after the claiming context is gone; only the
+    // lease-carried owner keeps the follow-up recovery on the durable partition.
     agentId: lease.agentId,
     sessionId: entry.sessionId,
     sessionKey,

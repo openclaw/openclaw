@@ -566,6 +566,20 @@ export function transitionMainSessionRecovery(
       ) {
         return { kind: "rejected", reason: "stale_reservation" };
       }
+      if (
+        state.interruptedRestore?.runId === command.runId &&
+        state.interruptedRestore.lifecycleGeneration === command.lifecycleGeneration
+      ) {
+        // A second restore closure for the same admitted attempt (Gateway
+        // execution and the outer restart-dispatch failure path each build
+        // one) must stay a durable no-op: the interruption's terminal event
+        // already recorded, and re-applying here would double-count it.
+        return { kind: "no_change" };
+      }
+      state.interruptedRestore = {
+        runId: command.runId,
+        lifecycleGeneration: command.lifecycleGeneration,
+      };
       entry.status = "running";
       entry.lifecycleRunId = undefined;
       entry.lastRunId = undefined;
