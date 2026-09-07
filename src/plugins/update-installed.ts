@@ -206,6 +206,7 @@ export async function updateNpmInstalledPlugins(params: {
       coreVersion: params.coreVersion,
       versionBoundToCore: params.versionBoundPluginIds?.has(pluginId),
       timeoutMs: params.timeoutMs,
+      ...(params.signal ? { signal: params.signal } : {}),
     });
     if (normalizedPluginConfig) {
       const enableState = resolveEffectiveEnableState({
