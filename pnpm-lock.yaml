@@ -1726,6 +1726,12 @@ importers:
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
 
+  extensions/openai-compatible-stt:
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+
   extensions/opencode:
     devDependencies:
       '@openclaw/plugin-sdk':
