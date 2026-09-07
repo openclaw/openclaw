@@ -14,6 +14,7 @@ import type {
   TalkConfigResponse,
   TalkProviderConfig,
   TalkRealtimeConfig,
+  TalkTranscriptionConfig,
 } from "./types.gateway.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
 import { coerceSecretRef } from "./types.secrets.js";
@@ -159,6 +160,26 @@ function normalizeTalkRealtimeConfig(value: unknown): TalkRealtimeConfig | undef
   return Object.keys(normalized).length > 0 ? normalized : undefined;
 }
 
+function normalizeTalkTranscriptionConfig(value: unknown): TalkTranscriptionConfig | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const normalized: TalkTranscriptionConfig = {};
+  const provider = normalizeOptionalString(value.provider);
+  if (provider) {
+    normalized.provider = provider;
+  }
+  const providers = normalizeTalkProviders(value.providers);
+  if (providers) {
+    normalized.providers = providers;
+  }
+  const model = normalizeOptionalString(value.model);
+  if (model) {
+    normalized.model = model;
+  }
+  return Object.keys(normalized).length > 0 ? normalized : undefined;
+}
+
 function activeProviderFromTalk(talk: TalkConfig): string | undefined {
   const providerIds = Object.keys(talk.providers ?? {});
   const provider = normalizeOptionalString(
@@ -227,12 +248,16 @@ export function normalizeTalkSection(value: TalkConfig | undefined): TalkConfig 
 
   const providers = normalizeTalkProviders(source.providers);
   const realtime = normalizeTalkRealtimeConfig(source.realtime);
+  const transcription = normalizeTalkTranscriptionConfig(source.transcription);
   const provider = normalizeOptionalString(source.provider);
   if (providers) {
     normalized.providers = providers;
   }
   if (realtime) {
     normalized.realtime = realtime;
+  }
+  if (transcription) {
+    normalized.transcription = transcription;
   }
   if (provider) {
     normalized.provider = provider;
@@ -310,6 +335,9 @@ export function buildTalkConfigResponse(
   }
   if (normalized?.realtime && Object.keys(normalized.realtime).length > 0) {
     payload.realtime = normalized.realtime;
+  }
+  if (normalized?.transcription && Object.keys(normalized.transcription).length > 0) {
+    payload.transcription = normalized.transcription;
   }
 
   const resolved = resolveActiveTalkProviderConfig(normalized);
