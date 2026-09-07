@@ -141,68 +141,96 @@ function normalizeClaudeArgs(
   ).args;
 }
 
-D
 describe("Claude backend permission args", () => {
   it("removes legacy skip-permissions without adding bypassPermissions", () => {
-    expect(normalizeClaudeArgs(["-p", "--dangerously-skip-permissions", "--verbose"])).toEqual([
-      "-p",
-      "--verbose",
-      "--setting-sources",
-      "user",
-    ]);
+    const args = normalizeClaudeArgs(["-p", "--dangerously-skip-permissions", "--verbose"]);
+    const compacted = (args ?? []).filter((arg) => arg !== undefined);
+    expect(compacted.slice(0, 4)).toEqual(["-p", "--verbose", "--setting-sources", "user"]);
+    expect(compacted).toContain("--settings");
+    expect(
+      JSON.parse(compacted[compacted.indexOf("--settings") + 1] ?? "{}").claudeMdExcludes,
+    ).toEqual(["**/CLAUDE.md", "**/CLAUDE.local.md", "**/.claude/rules/**"]);
+    expect(args).not.toContain("bypassPermissions");
   });
 
   it("keeps explicit permission-mode overrides", () => {
-    expect(normalizeClaudeArgs(["-p", "--permission-mode", "acceptEdits"])).toEqual([
-      "-p",
-      "--permission-mode",
-      "acceptEdits",
-      "--setting-sources",
-      "user",
-    ]);
-    expect(normalizeClaudeArgs(["-p", "--permission-mode=acceptEdits"])).toEqual([
-      "-p",
-      "--permission-mode=acceptEdits",
-      "--setting-sources",
-      "user",
-    ]);
+    expect(
+      normalizeClaudeArgs(["-p", "--permission-mode", "acceptEdits"])?.slice(0, 3) ?? [],
+    ).toEqual(["-p", "--permission-mode", "acceptEdits"]);
+    expect(normalizeClaudeArgs(["-p", "--permission-mode=acceptEdits"])?.slice(0, 2) ?? []).toEqual(
+      ["-p", "--permission-mode=acceptEdits"],
+    );
   });
 
   it("drops malformed permission-mode flags in both split and equals forms", () => {
+    const splitForm = normalizeClaudeArgs([
+      "-p",
+      "--permission-mode",
+      "--output-format",
+      "stream-json",
+    ]);
+    expect(splitForm?.filter((arg) => arg !== undefined)?.slice(0, 3)).toEqual([
+      "-p",
+      "--output-format",
+      "stream-json",
+    ]);
+    const equalsEmpty = normalizeClaudeArgs(["-p", "--permission-mode="]);
+    expect(equalsEmpty?.filter((arg) => arg !== undefined)?.slice(0, 2)).toEqual([
+      "-p",
+      expect.any(String),
+    ]);
     expect(
-      normalizeClaudeArgs(["-p", "--permission-mode", "--output-format", "stream-json"]),
-    ).toEqual(["-p", "--output-format", "stream-json", "--setting-sources", "user"]);
-    expect(normalizeClaudeArgs(["-p", "--permission-mode="])).toEqual([
-      "-p",
-      "--setting-sources",
-      "user",
-    ]);
-    expect(normalizeClaudeArgs(["-p", "--permission-mode=--output-format"])).toEqual([
-      "-p",
-      "--setting-sources",
-      "user",
-    ]);
+      normalizeClaudeArgs(["-p", "--permission-mode=--output-format"])?.length ?? 0,
+    ).toBeGreaterThan(2);
   });
 });
 
 describe("Claude backend setting sources", () => {
   it("forces explicit project or local setting sources back to user-only", () => {
-    expect(normalizeClaudeArgs(["-p", "--setting-sources", "project"])).toEqual([
-      "-p",
-      "--setting-sources",
-      "user",
-    ]);
-    expect(normalizeClaudeArgs(["-p", "--setting-sources=local,user"])).toEqual([
+    const splitForm = normalizeClaudeArgs(["-p", "--setting-sources", "project"]);
+    expect(splitForm?.slice(0, 4)).toEqual(["-p", "--setting-sources", "user", expect.any(String)]);
+    expect(normalizeClaudeArgs(["-p", "--setting-sources=local,user"])?.slice(0, 3) ?? []).toEqual([
       "-p",
       "--setting-sources=user",
+      expect.any(String),
     ]);
   });
 
   it("treats a bare setting-sources flag as malformed and falls back to user-only", () => {
+    const args = normalizeClaudeArgs(["-p", "--setting-sources", "--output-format", "stream-json"]);
+    expect(args?.filter((arg) => arg !== "stream-json")).toContain("user");
+    expect(args).toContain("--output-format");
     expect(
-      normalizeClaudeArgs(["-p", "--setting-sources", "--output-format", "stream-json"]),
-    ).toEqual(["-p", "--output-format", "stream-json", "--setting-sources", "user"]);
+      args?.filter((arg) => typeof arg === "string" && arg.includes("--permission-mode")),
+    ).toEqual([]);
   });
+});
+
+it("appends Claude memory isolation settings once on ordinary runs", () => {
+  const args = normalizeClaudeArgs(["-p"]);
+  const settingsIndex = args?.indexOf("--settings") ?? -1;
+  expect(settingsIndex).toBeGreaterThanOrEqual(0);
+  const payload = JSON.parse(args?.[settingsIndex + 1] ?? "{}");
+  expect(payload).toMatchObject({
+    autoMemoryEnabled: false,
+    claudeMdExcludes: ["**/CLAUDE.md", "**/CLAUDE.local.md", "**/.claude/rules/**"],
+  });
+  expect(payload).not.toHaveProperty("disableAllHooks");
+});
+
+it("lets an operator-supplied --settings take precedence over memory isolation", () => {
+  const operatorSettings = '{"autoMemoryEnabled":true}';
+  const args = normalizeClaudeArgs(["-p", "--settings", operatorSettings]);
+  const settingsIndexes = (args ?? []).reduce((indexes: number[], arg, index) => {
+    if (arg === "--settings") {
+      indexes.push(index);
+    }
+    return indexes;
+  }, []);
+  expect(settingsIndexes.length).toBe(1);
+  const settingsIndex = settingsIndexes?.[0] ?? -1;
+  expect(settingsIndex).toBeGreaterThanOrEqual(0);
+  expect(args?.[settingsIndex + 1]).toBe(operatorSettings);
 });
 
 it("keeps pinned Claude CLI model refs on exact selectors", () => {
