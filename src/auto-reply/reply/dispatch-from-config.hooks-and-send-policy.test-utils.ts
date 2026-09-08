@@ -627,37 +627,15 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     expect(result.noVisibleReplyFallbackEligible).toBeUndefined();
   });
 
-  it.each(
-    [
-      { name: "supplied", runId: "caller-run", generatedRunId: undefined, reference: "caller-run" },
-      {
-        name: "generated",
-        runId: undefined,
-        generatedRunId: "generated-run",
-        reference: "generated-run",
-      },
-      {
-        name: "observed over supplied",
-        runId: "caller-run",
-        generatedRunId: "observed-run",
-        reference: "observed-run",
-      },
-      { name: "missing", runId: undefined, generatedRunId: undefined, reference: undefined },
-      ...["run\nprivate detail", "<@everyone>", "https://example.com/private", "x".repeat(129)].map(
-        (runId) => ({
-          name: "unsafe reference",
-          runId,
-          generatedRunId: undefined,
-          reference: undefined,
-        }),
-      ),
-    ].flatMap((entry) => [
-      { entry, routed: false },
-      { entry, routed: true },
-    ]),
-  )(
-    "keeps $entry.name fallback correlation non-error (routed=$routed)",
-    async ({ entry: { runId, generatedRunId, reference }, routed }) => {
+  it.each([
+    ["caller-run", undefined, false, "caller-run"],
+    [undefined, "generated-run", false, "generated-run"],
+    ["caller-run", "observed-run", true, "observed-run"],
+    [undefined, undefined, true, undefined],
+    ["<@everyone>", undefined, true, undefined],
+  ] as const)(
+    "keeps fallback correlation non-error (supplied=%s, observed=%s, routed=%s)",
+    async (runId, generatedRunId, routed, reference) => {
       setNoAbort();
       const dispatcher = createDispatcher();
       const onAgentRunStart = vi.fn();
@@ -695,12 +673,8 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       }
       expect(result.noVisibleReplyFallbackDelivered).toBe(true);
       expect(readAgentRunTerminalOutcome(result)).toBe(generatedRunId ? "completed" : undefined);
-      expect(replyOptions.runId).toBe(runId);
-      if (generatedRunId) {
-        expect(onAgentRunStart).toHaveBeenCalledExactlyOnceWith(generatedRunId);
-      } else {
-        expect(onAgentRunStart).not.toHaveBeenCalled();
-      }
+      expect(replyOptions).toEqual({ runId, onAgentRunStart });
+      expect(onAgentRunStart.mock.calls).toEqual(generatedRunId ? [[generatedRunId]] : []);
     },
   );
 

@@ -3304,6 +3304,11 @@ describe("dispatchReplyFromConfig", () => {
     }
   });
 
+  it.each(["run\nprivate detail", "<@everyone>", "https://example.com/private", "x".repeat(129)])(
+    "omits unsafe fallback references: %j",
+    (runId) => expect(buildNoVisibleReplyFallbackText(runId)).toBe(NO_VISIBLE_REPLY_FALLBACK_TEXT),
+  );
+
   it("skips fallback when directives stay visible", () =>
     expect(needsTtsFallback(false, "[[tts:text]]x", "x")).toBe(false));
 });
