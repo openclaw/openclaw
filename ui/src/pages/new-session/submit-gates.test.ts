@@ -32,7 +32,7 @@ describe("DraftSubmissionFlow submit gates", () => {
     "blocks new sessions only for actionable $reason model availability",
     async ({ reason, message }) => {
       const { context, flow, place } = createDraftFixture({
-        request: async () => ({
+        modelCatalog: async () => ({
           models: [
             {
               id: "gpt-5.6-luna",
@@ -69,7 +69,7 @@ describe("DraftSubmissionFlow submit gates", () => {
       const { context, flow, place } = createDraftFixture({
         methods: ["sessions.create", "sessions.dispatch"],
         scopes: ["operator.admin", "operator.read", "operator.write"],
-        request: async () => ({
+        modelCatalog: async () => ({
           models: [
             {
               id: "gpt-5.6-luna",

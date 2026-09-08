@@ -177,9 +177,17 @@ describe("ConfigPage session observer models", () => {
         return Promise.resolve({});
       }
       signals.push(options.signal);
-      return signals.length === 2
-        ? stale.promise
-        : Promise.resolve({ models: signals.length === 1 ? original : fresh });
+      if (signals.length !== 2) {
+        return Promise.resolve({ models: signals.length === 1 ? original : fresh });
+      }
+      return new Promise<ModelCatalogResult>((resolve, reject) => {
+        options.signal.addEventListener(
+          "abort",
+          () => reject(new DOMException("Page retired", "AbortError")),
+          { once: true },
+        );
+        void stale.promise.then(resolve, reject);
+      });
     });
     const client = { request } as unknown as GatewayBrowserClient;
     const { page, state, provider } = await mount(client);

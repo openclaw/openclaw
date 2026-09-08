@@ -4132,7 +4132,9 @@ describe("refreshChatMetadata", () => {
           reasoning: true,
         },
       ]);
-      expect(refreshSessions).not.toHaveBeenCalled();
+      expect(refreshSessions).toHaveBeenCalledWith(
+        expect.objectContaining({ agentId: "work", force: true }),
+      );
       expect(state.chatModelCatalogError).toBeNull();
     },
   );
@@ -4198,7 +4200,7 @@ describe("refreshChatMetadata", () => {
       commands: never[];
       models: Array<{ id: string; name: string; provider: string }>;
     }>();
-    const request = vi.fn(async () => await metadata);
+    const request = vi.fn(async (_method: string) => await metadata);
     const existingCatalog = [
       { id: "work-model", name: "Work Model", provider: "openai", available: true },
     ];

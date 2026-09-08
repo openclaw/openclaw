@@ -52,9 +52,9 @@ function fixture() {
   const authStore = expectDefined(getPreparedModelRuntimeAuthStore(owner), "prepared auth store");
   const snapshot: PreparedGatewayModelCatalogSnapshot = {
     ...owner.modelCatalog,
-    agentId: owner.agentId,
+    agentId: expectDefined(owner.agentId, "fixture agent"),
     agentDir: owner.agentDir,
-    workspaceDir: owner.workspaceDir,
+    workspaceDir: expectDefined(owner.workspaceDir, "fixture workspace"),
     config,
     observationConfig: config,
     metadataSnapshot: owner.metadataSnapshot,
@@ -136,6 +136,13 @@ describe("direct session model catalogs", () => {
   it("uses a saved session pin after the viewer changes their default and keeps agent reads separate", async () => {
     await withOpenClawTestState(isolated, async (state) => {
       const f = fixture();
+      f.config.agents = {
+        ...f.config.agents,
+        list: [
+          { id: "main", default: true },
+          { id: "other", default: false },
+        ],
+      };
       await state.writeConfig(f.config);
       const sessionKey = "agent:main:saved";
       await upsertSessionEntryCore(

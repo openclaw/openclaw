@@ -89,6 +89,7 @@ describe("loadModelProvidersData", () => {
     });
     expect(request.mock.calls.filter(([method]) => method === "models.list")).toEqual([
       ["models.list", { view: "configured", agentId: "writer", refresh: true }],
+      ["models.list", { view: "configured", agentId: "writer", preparedOnly: true }],
     ]);
     expect(result.providerOutcomes).toEqual([]);
     expect(request.mock.calls.some(([method]) => method === "usage.status")).toBe(false);

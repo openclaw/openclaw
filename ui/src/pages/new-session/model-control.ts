@@ -43,6 +43,7 @@ type NewSessionMetadataStatus = ChatModelCatalogState["status"];
 type NewSessionMetadataState = {
   catalog: ModelCatalogEntry[];
   accountSelection?: ChatAccountSelection;
+  refreshFailed?: boolean;
   hasSnapshot: boolean;
   status: NewSessionMetadataStatus;
 };
@@ -170,7 +171,8 @@ export class NewSessionModelControl {
       catalog: result.models,
       accountSelection: result.accountSelection,
       hasSnapshot: true,
-      status: result.refreshFailed ? "error" : "ready",
+      status: "ready",
+      refreshFailed: result.refreshFailed,
     };
     if (!this.draftAccount && this.pendingSelectionGeneration === this.selectionGeneration) {
       this.restorePreference(this.pendingPreference, this.pendingAgent, this.pendingContext);
@@ -649,6 +651,7 @@ export class NewSessionModelControl {
         // The model catalog and agents.list hydrate independently. Do not expose a
         // ready catalog until the selected agent can supply its concrete defaults.
         hasSnapshot: agentDefaultsAvailable && this.metadataState.hasSnapshot,
+        refreshFailed: this.metadataState.refreshFailed,
         status:
           !agentDefaultsAvailable && this.metadataState.status !== "error"
             ? "loading"

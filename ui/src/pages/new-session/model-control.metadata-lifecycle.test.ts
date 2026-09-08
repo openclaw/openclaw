@@ -83,44 +83,55 @@ function retainedAccountDraft() {
 }
 
 describe("new-session model metadata lifecycle", () => {
-  it("selects a retained account for an unavailable draft without changing saved preferences", async () => {
-    const {
-      account,
-      agent,
-      control,
-      request,
-      preview,
-      connected,
-      draw,
-      select,
-      chooseAccount,
-      savePreference,
-    } = retainedAccountDraft();
-    const { completion } = await chooseAccount();
-    expect(request).toHaveBeenLastCalledWith(
-      "models.list",
-      { view: "configured", agentId: "main", authProfileId: account.authProfileId },
-      { signal: expect.any(AbortSignal) },
-    );
-    expect(control.modelSelectionBlockedReason(agent)).toBe("Loading models…");
-    preview.resolve(connected);
-    await completion;
-    expect(control.modelSelectionBlockedReason(agent)).toBeUndefined();
-    expect(draw().querySelector("[data-chat-account-trigger]")?.textContent).toContain(
-      account.label,
-    );
-    expect(control.modelForSubmission()).toBe(`anthropic/model@${account.authProfileId}`);
-    expect(control.selected).toBe("");
-    select("automatic");
-    await vi.waitFor(() => expect(control.modelUnavailableReason(agent)).toBe("missing-auth"));
-    expect(control.modelForSubmission()).toBe("");
-    expect(draw().querySelector("[data-chat-account-trigger]")?.textContent).toContain("Automatic");
-    expect(savePreference).not.toHaveBeenCalled();
-    expect(
-      request.mock.calls.some(([method]) => /users\.(selectModelAccount|prefs\.set)/.test(method)),
-    ).toBe(false);
-    control.reset();
-  });
+  it.each([false, true])(
+    "selects a usable retained account with refresh warning %s without changing saved preferences",
+    async (refreshFailed) => {
+      const {
+        account,
+        agent,
+        control,
+        request,
+        preview,
+        connected,
+        draw,
+        select,
+        chooseAccount,
+        savePreference,
+      } = retainedAccountDraft();
+      const { completion } = await chooseAccount();
+      expect(request).toHaveBeenLastCalledWith(
+        "models.list",
+        { view: "configured", agentId: "main", authProfileId: account.authProfileId },
+        { signal: expect.any(AbortSignal) },
+      );
+      expect(control.modelSelectionBlockedReason(agent)).toBe("Loading models…");
+      preview.resolve({ ...connected, refreshFailed });
+      await completion;
+      expect(control.modelSelectionBlockedReason(agent)).toBeUndefined();
+      expect(control.accountSelectionReady()).toBe(true);
+      expect(draw().textContent?.includes("Some models could not be refreshed.")).toBe(
+        refreshFailed,
+      );
+      expect(draw().querySelector("[data-chat-account-trigger]")?.textContent).toContain(
+        account.label,
+      );
+      expect(control.modelForSubmission()).toBe(`anthropic/model@${account.authProfileId}`);
+      expect(control.selected).toBe("");
+      select("automatic");
+      await vi.waitFor(() => expect(control.modelUnavailableReason(agent)).toBe("missing-auth"));
+      expect(control.modelForSubmission()).toBe("");
+      expect(draw().querySelector("[data-chat-account-trigger]")?.textContent).toContain(
+        "Automatic",
+      );
+      expect(savePreference).not.toHaveBeenCalled();
+      expect(
+        request.mock.calls.some(([method]) =>
+          /users\.(selectModelAccount|prefs\.set)/.test(method),
+        ),
+      ).toBe(false);
+      control.reset();
+    },
+  );
 
   it.each(["request failure", "missing model", "unconfirmed account", "unknown availability"])(
     "keeps an explicit account blocked after a preview with $0",
@@ -277,12 +288,11 @@ describe("new-session model metadata lifecycle", () => {
         ),
       ).not.toBeNull(),
     );
-    request.mockResolvedValueOnce({ models: published });
+    request.mockResolvedValue({ models: published });
     const picker = renderControl(control, context).querySelector<HTMLDetailsElement>(
       ".chat-controls__model-picker",
     )!;
-    picker.open = true;
-    picker.dispatchEvent(new Event("toggle"));
+    picker.querySelector("summary")!.click();
     await vi.waitFor(() =>
       expect(
         renderControl(control, context).querySelector(

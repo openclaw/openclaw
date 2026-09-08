@@ -29,6 +29,7 @@ describe("chat pane companion connection lifecycle", () => {
       switch (method) {
         case "chat.startup":
           return { messages: [], sessionId: "session-current", hasMore: false, totalMessages: 0 };
+        case "models.list":
         case "chat.metadata":
           return { commands: [], models, swarmEnabled: false };
         default:

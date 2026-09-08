@@ -32,7 +32,7 @@ export function resolveChatMetadataReadParams(
     );
     if (!requested.ok) {
       respond(false, undefined, requested.error);
-      return;
+      return undefined;
     }
     // Persisted session state owns account pins; a caller cannot replace them with a draft id.
     const session = loadGatewaySessionEntryReadOnly(params.sessionKey, {
@@ -57,7 +57,7 @@ export function resolveChatMetadataReadParams(
     normalize: (id) => (typeof id === "string" && id.trim() ? normalizeAgentId(id) : undefined),
   });
   if (!resolved) {
-    return;
+    return undefined;
   }
   const draftAccountSelection = params.authProfileId
     ? preparePersonalModelAccountSelection(

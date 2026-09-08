@@ -960,11 +960,15 @@ describe("chat pane composer controls", () => {
 
       expect(state.chatModelPickerOpenSessionKey).toBe("main");
       expect(request).toHaveBeenCalledOnce();
-      expect(request).toHaveBeenCalledWith("models.list", {
-        view: "configured",
-        agentId: "main",
-        refresh: true,
-      });
+      expect(request).toHaveBeenCalledWith(
+        "models.list",
+        {
+          view: "configured",
+          agentId: "main",
+          sessionKey: "main",
+        },
+        { signal: expect.any(AbortSignal) },
+      );
       expect(state.chatModelsLoading).toBe(cachedModels.length === 0);
       render(renderChatPaneComposerControls(controlParams).composerControls, container);
       if (cachedModels.length > 0) {

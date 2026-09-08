@@ -134,11 +134,11 @@ catalogSuite.define(() => {
     url.hash = new URL(browserUrl).hash;
     const frames: unknown[] = [];
     const commands: unknown[] = [];
-    const metadataRequests = new Set<string>();
+    const catalogRequests = new Set<string>();
     const mutations: string[] = [];
-    let rejectMetadata = false;
-    let holdMetadata = false;
-    const heldMetadata: Array<() => void> = [];
+    let rejectCatalog = false;
+    let holdCatalog = false;
+    const heldCatalogs: Array<() => void> = [];
     const publish = async (id: string) => {
       const args = [
         "config",
@@ -167,8 +167,8 @@ catalogSuite.define(() => {
               const frame = requireRecord(JSON.parse(message.toString()));
               if (frame.type === "req" && frame.method !== "connect") {
                 frames.push({ direction: "sent", frame });
-                if (frame.method === "chat.metadata" && typeof frame.id === "string") {
-                  metadataRequests.add(frame.id);
+                if (frame.method === "models.list" && typeof frame.id === "string") {
+                  catalogRequests.add(frame.id);
                 }
                 if (
                   ["config.set", "config.patch", "config.apply", "agents.update"].includes(
@@ -182,21 +182,21 @@ catalogSuite.define(() => {
             });
             server.onMessage((message) => {
               const frame = requireRecord(JSON.parse(message.toString()));
-              const metadataReply = typeof frame.id === "string" && metadataRequests.has(frame.id);
+              const catalogReply = typeof frame.id === "string" && catalogRequests.has(frame.id);
               if (
-                metadataReply ||
+                catalogReply ||
                 frame.event === "config.changed" ||
                 frame.event === "chat.metadata.changed"
               ) {
                 frames.push({
                   direction: "received",
                   frame,
-                  transportFailure: metadataReply && rejectMetadata,
+                  transportFailure: catalogReply && rejectCatalog,
                 });
               }
-              if (metadataReply && holdMetadata) {
-                heldMetadata.push(() => socket.send(message));
-              } else if (metadataReply && rejectMetadata) {
+              if (catalogReply && holdCatalog) {
+                heldCatalogs.push(() => socket.send(message));
+              } else if (catalogReply && rejectCatalog) {
                 socket.send(
                   JSON.stringify({
                     type: "res",
@@ -261,17 +261,17 @@ catalogSuite.define(() => {
             0,
           );
 
-          holdMetadata = true;
+          holdCatalog = true;
           inventoryModel = "inventory-held";
           commands.push(await owner.cli(refreshInventoryArgs));
-          await expect.poll(() => heldMetadata.length).toBeGreaterThan(0);
-          holdMetadata = false;
+          await expect.poll(() => heldCatalogs.length).toBeGreaterThan(0);
+          holdCatalog = false;
           inventoryModel = "inventory-latest";
           commands.push(await owner.cli(refreshInventoryArgs));
           await expect
             .poll(() => picker.locator('wa-option[value="ollama/inventory-latest"]').count())
             .toBe(1);
-          for (const release of heldMetadata) {
+          for (const release of heldCatalogs) {
             release();
           }
           await page.screenshot({
@@ -282,7 +282,7 @@ catalogSuite.define(() => {
           );
           expect(await picker.locator('wa-option[value="ollama/inventory-held"]').count()).toBe(0);
 
-          rejectMetadata = true;
+          rejectCatalog = true;
           await publish("held");
           const error = editor
             .getByRole("alert")
@@ -291,7 +291,7 @@ catalogSuite.define(() => {
           expect(await picker.locator('wa-option[value="fixture/published"]').count()).toBe(1);
           await page.screenshot({ path: path.join(catalogSuite.artifactDir, "read-failure.png") });
 
-          rejectMetadata = false;
+          rejectCatalog = false;
           await publish("recovered");
           await expect
             .poll(() => picker.locator('wa-option[value="fixture/recovered"]').count())

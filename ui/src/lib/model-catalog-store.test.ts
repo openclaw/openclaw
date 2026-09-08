@@ -89,7 +89,7 @@ describe("direct model catalog reads", () => {
         throw new Error("Expected caller cancellation signal");
       }
       return new Promise<ModelCatalogResult>((resolve, reject) => {
-        signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+        signal.addEventListener("abort", () => reject(reason), { once: true });
         if (signal === second.signal) {
           finishSecond = resolve;
         }

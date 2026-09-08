@@ -658,6 +658,7 @@ describe("refreshChat", () => {
       const retained = makeChatHost({
         requestHandlers: {
           "chat.metadata": () => metadata.promise,
+          "models.list": () => metadata.promise,
           "chat.startup": () => startup.promise,
         },
       });

@@ -50,7 +50,7 @@ type ChatMetadataBinding = {
   client: GatewayBrowserClient;
   scope: { agentId?: string; sessionKey: string };
   version: number;
-  catalogRequest?: { version: number; controller: AbortController; promise: Promise<void> };
+  catalogRequest?: { version: number; controller: AbortController; promise: Promise<boolean> };
   isCurrent: () => boolean;
   unsubscribe: () => void;
 };
@@ -129,20 +129,6 @@ export function applyChatAgentOwnerTransition(
   host.requestUpdate?.();
 }
 
-function applyChatMetadataResult(
-  host: ChatPageHost,
-  client: GatewayBrowserClient,
-  agentId: string | null | undefined,
-  result: ChatMetadataResult,
-): void {
-  // Missing commands keep the built-ins: commands.list uses the same server builder and fails too.
-  applyRemoteSlashCommandsResult({
-    client,
-    agentId,
-    result,
-  });
-}
-
 function bindChatMetadata(host: ChatPageHost): ChatMetadataBinding | undefined {
   const previous = metadataBindings.get(host);
   if (previous?.isCurrent()) {
@@ -179,7 +165,7 @@ function bindChatMetadata(host: ChatPageHost): ChatMetadataBinding | undefined {
       if (update.type === "loading") {
         binding.version += 1;
       } else if (update.type === "result") {
-        applyChatMetadataResult(host, client, scope.agentId, update.result);
+        applyRemoteSlashCommandsResult({ client, agentId: scope.agentId, result: update.result });
       }
       host.requestUpdate?.();
     }),
@@ -187,7 +173,7 @@ function bindChatMetadata(host: ChatPageHost): ChatMetadataBinding | undefined {
   metadataBindings.set(host, binding);
   const cached = peekChatMetadata(client, scope);
   if (cached) {
-    applyChatMetadataResult(host, client, scope.agentId, cached);
+    applyRemoteSlashCommandsResult({ client, agentId: scope.agentId, result: cached });
   }
   return binding;
 }
@@ -239,7 +225,7 @@ export async function refreshChatModelAuthStatus(host: ChatPageHost, opts?: { re
 async function loadChatModelCatalog(
   host: ChatPageHost,
   binding: ChatMetadataBinding,
-): Promise<void> {
+): Promise<boolean> {
   if (binding.catalogRequest?.version === binding.version) {
     return binding.catalogRequest.promise;
   }
@@ -254,16 +240,18 @@ async function loadChatModelCatalog(
     .then(
       (result) => {
         if (!ownsRequest()) {
-          return;
+          return false;
         }
         host.chatModelCatalog = result.models;
         host.chatAccountSelection = result.accountSelection ?? null;
         host.chatModelCatalogError = modelCatalogRefreshError(result);
+        return true;
       },
       (error: unknown) => {
         if (ownsRequest()) {
           host.chatModelCatalogError = formatUiError(error);
         }
+        return false;
       },
     )
     .finally(() => {
@@ -279,8 +267,9 @@ async function loadChatModelCatalog(
 
 export async function refreshChatModelCatalogOnDemand(host: ChatPageHost): Promise<void> {
   const binding = bindChatMetadata(host);
-  if (binding) {
-    await loadChatModelCatalog(host, binding);
+  if (binding && (await loadChatModelCatalog(host, binding)) && binding.isCurrent()) {
+    // Session-owned thinking/context facts must converge with the published model catalog.
+    await refreshCurrentChatSessionList(host).catch(() => undefined);
   }
 }
 
