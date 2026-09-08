@@ -607,12 +607,8 @@ function enforcePostRegisterLimits(params: {
     params.retention.namespaceCount -= deleted;
     params.retention.pluginCount -= deleted;
   }
-  const remainingPluginCount =
-    params.retention?.pluginCount ??
-    countLivePluginStateEntries(params.store.db, {
-      pluginId: params.pluginId,
-      now: params.now,
-    });
+  // The deletion uses the same live-row predicate and transaction as pluginCount.
+  const remainingPluginCount = params.retention?.pluginCount ?? pluginCount - deleted;
   if (remainingPluginCount > maxPluginEntries) {
     throw createPluginStateError({
       code: "PLUGIN_STATE_LIMIT_EXCEEDED",

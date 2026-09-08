@@ -212,8 +212,8 @@ export class DraftPlaceState {
     return this.cloudProfileIdValue;
   }
 
-  get machineClass(): string {
-    return this.cloudMachines.resolve(this.cloudProfileIdValue);
+  get cloudSelection() {
+    return this.cloudMachines.selection(this.cloudProfileIdValue);
   }
 
   get agentsHydrated(): boolean {
@@ -466,7 +466,7 @@ export class DraftPlaceState {
     this.deviceIdValue = params.deviceId ?? "";
     this.autoDeviceValue = params.autoDevice === true;
     this.cloudProfileIdValue = params.profileId;
-    this.cloudMachines.applyPending(params.profileId, params.machineClass);
+    this.cloudMachines.applyPending(params.profileId, params.machineClass, params.os);
     this.repositoryState.forceWorktree(true);
     this.folderValue = params.cwd ?? "";
     if (params.repository) {

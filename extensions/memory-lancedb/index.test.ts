@@ -1254,18 +1254,7 @@ describe("memory plugin e2e", () => {
     vi.useFakeTimers();
     const ensureGlobalUndiciEnvProxyDispatcher = vi.fn();
     const post = vi.fn(() => new Promise(() => {}));
-    const loadLanceDbModule = vi.fn(async () => ({
-      connect: vi.fn(async () => ({
-        tableNames: vi.fn(async () => ["memories"]),
-        openTable: vi.fn(async () => ({
-          schema: createAgentScopedSchemaMock(),
-          vectorSearch: vi.fn(),
-          countRows: vi.fn(async () => 0),
-          add: vi.fn(async () => undefined),
-          delete: vi.fn(async () => undefined),
-        })),
-      })),
-    }));
+    const loadLanceDbModule = vi.fn(async () => undefined);
 
     try {
       await withMockedOpenAiMemoryPlugin({
@@ -1505,18 +1494,14 @@ describe("memory plugin e2e", () => {
         )?.[1];
         expect(beforePromptBuild).toBeTypeOf("function");
 
-        const latestUserText = `what editor should i use? ${"with a very long channel metadata tail ".repeat(10)}`;
-        const expectedRecallQuery = normalizeRecallQuery(latestUserText, 120);
+        const currentUserText = `what editor should i use? ${"for a large TypeScript project ".repeat(10)}`;
+        const expectedRecallQuery = normalizeRecallQuery(currentUserText, 120);
         const result = await beforePromptBuild?.(
           {
-            prompt: `discord metadata ${"ignored ".repeat(100)}`,
+            prompt: `[media attached: /tmp/editor.png (image/png)]\n${currentUserText}`,
             messages: [
-              { role: "user", content: "old preference question" },
-              { role: "assistant", content: "old answer" },
-              {
-                role: "user",
-                content: `[media attached: /tmp/what editor should i use.png (image/png)]\n${latestUserText}`,
-              },
+              { role: "user", content: "what seat should i book for a long flight?" },
+              { role: "assistant", content: "An aisle seat." },
             ],
           },
           withAllowedMemoryRecallAuthority({ agentId: "main" }),

@@ -2,6 +2,7 @@ import path from "node:path";
 import { Type } from "typebox";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import { disposeOpenClawAgentDatabaseByPath } from "../../state/openclaw-agent-db.js";
 import { toToolDefinitions } from "../agent-tool-definition-adapter.js";
 import type { AgentTool } from "../runtime/index.js";
@@ -125,11 +126,7 @@ describe("session tool outcomes", () => {
         return createAssistantResultStream(createAssistant(testModel, calls, "toolUse"));
       };
       try {
-        await session.agent.prompt({
-          role: "user",
-          content: "Run the synthetic tools.",
-          timestamp: 1,
-        });
+        await session.agent.prompt(makeUserMessage("Run the synthetic tools.", 1));
         expect(completed).toHaveLength(expected.length);
         expect(completed).toEqual(expect.arrayContaining(expected));
         expect(replay).toMatchObject(expected);

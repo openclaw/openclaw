@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { openFileBackedSessionManagerForTest } from "../../../test/helpers/session-manager-file-fixture.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import {
   formatSqliteSessionFileMarker,
   parseSqliteSessionFileMarker,
@@ -337,11 +338,7 @@ describe("SessionManager persistence compatibility", () => {
       }),
     );
     const manager = openFileBackedSessionManagerForTest(sessionFile, dir);
-    manager.appendMessage({
-      role: "user",
-      content: "appended",
-      timestamp: 1,
-    });
+    manager.appendMessage(makeUserMessage("appended", 1));
     expect(
       openFileBackedSessionManagerForTest(sessionFile, dir).buildSessionContext().messages,
     ).toEqual([expect.objectContaining({ content: "appended", role: "user" })]);

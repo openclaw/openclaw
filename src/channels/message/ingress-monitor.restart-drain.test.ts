@@ -8,9 +8,12 @@ import {
 } from "../../infra/runtime-worker-url.js";
 import {
   beginGatewayRestartSignalAdmission,
+  getGatewaySuspendAdmissionPhase,
   markGatewayRestartDraining,
   resetGatewayWorkAdmission,
+  tryBeginGatewaySuspendAdmission,
 } from "../../process/gateway-work-admission.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import {
   createChannelIngressMonitor,
@@ -173,6 +176,110 @@ it("rearms queued ingress after a restart signal rolls back without an idle obse
     } finally {
       signal?.rollback();
       await monitor.stop();
+    }
+  });
+});
+
+it("holds queued ingress until host suspension reopens admission", async () => {
+  await withQueue(async (queue) => {
+    const deliver = vi.fn(async (_raw: RawEvent, lifecycle: ChannelIngressMonitorLifecycle) => {
+      await lifecycle.onAdopted();
+    });
+    const monitor = createMonitor(queue, deliver);
+    const suspension = tryBeginGatewaySuspendAdmission(() => {});
+    expect(suspension).not.toBeNull();
+    try {
+      await queue.enqueue(
+        "event-suspend-release",
+        {
+          version: 1,
+          rawEvent: JSON.stringify({ id: "event-suspend-release", lane: "a", text: "deliver me" }),
+        },
+        { laneKey: "lane:a" },
+      );
+      monitor.start();
+
+      await new Promise((resolve) => {
+        setTimeout(resolve, 50);
+      });
+      expect(deliver).not.toHaveBeenCalled();
+
+      expect(suspension?.rollback()).toBe(true);
+      await vi.waitFor(() => expect(deliver).toHaveBeenCalledOnce());
+      await monitor.waitForIdle();
+    } finally {
+      suspension?.rollback();
+      await monitor.stop();
+    }
+  });
+});
+
+it("releases a claim without an attempt when suspension closes during the claim", async () => {
+  await withQueue(async (queue) => {
+    const raw: RawEvent = {
+      id: "event-suspend-claim",
+      lane: "a",
+      text: "deliver after suspension",
+    };
+    const payload: StoredEvent = { version: 1, rawEvent: JSON.stringify(raw) };
+    const claimReady = createDeferredCore();
+    const returnClaim = createDeferredCore();
+    const claimNext = queue.claimNext.bind(queue);
+    const claimNextSpy = vi.spyOn(queue, "claimNext").mockImplementationOnce(async (...args) => {
+      const claim = await claimNext(...args);
+      // Keep the monitor awaiting the result after the real SQLite claim commits.
+      claimReady.resolve();
+      await returnClaim.promise;
+      return claim;
+    });
+    const deliver = vi.fn(async (_raw: RawEvent, lifecycle: ChannelIngressMonitorLifecycle) => {
+      await lifecycle.onAdopted();
+    });
+    const activity: boolean[] = [];
+    const monitor = createMonitor(queue, deliver, (active) => activity.push(active));
+    let suspension: ReturnType<typeof tryBeginGatewaySuspendAdmission> = null;
+    try {
+      await queue.enqueue(raw.id, payload, { laneKey: "lane:a" });
+      monitor.start();
+      await claimReady.promise;
+      expect(await queue.listClaims()).toEqual([
+        expect.objectContaining({ id: raw.id, payload, attempts: 0 }),
+      ]);
+
+      suspension = tryBeginGatewaySuspendAdmission(() => {});
+      expect(suspension?.drain()).toBe(true);
+      expect(getGatewaySuspendAdmissionPhase()).toBe("draining");
+      returnClaim.resolve();
+      await monitor.waitForIdle();
+
+      expect(deliver).not.toHaveBeenCalled();
+      expect(await queue.listClaims()).toEqual([]);
+      const pending = await queue.listPending();
+      expect(pending).toEqual([
+        expect.objectContaining({ id: raw.id, payload, laneKey: "lane:a", attempts: 0 }),
+      ]);
+      expect(pending[0]).not.toHaveProperty("lastAttemptAt");
+      expect(pending[0]).not.toHaveProperty("lastError");
+      expect(claimNextSpy).toHaveBeenCalledOnce();
+      expect(activity.at(-1)).toBe(false);
+
+      expect(suspension?.release()).toBe(true);
+      await monitor.waitForIdle();
+
+      expect(deliver).toHaveBeenCalledOnce();
+      expect(deliver.mock.calls[0]?.[0]).toEqual(raw);
+      expect(await queue.listPending()).toEqual([]);
+      expect(await queue.listClaims()).toEqual([]);
+      expect(await queue.enqueue(raw.id, payload, { laneKey: "lane:a" })).toMatchObject({
+        kind: "completed",
+        duplicate: true,
+      });
+    } finally {
+      returnClaim.resolve();
+      await monitor.stop();
+      suspension?.rollback();
+      suspension?.release();
+      claimNextSpy.mockRestore();
     }
   });
 });

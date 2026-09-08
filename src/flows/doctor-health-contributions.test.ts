@@ -398,6 +398,10 @@ vi.mock("../commands/doctor-platform-notes.js", () => ({
   noteMacStaleOpenClawUpdateLaunchdJobs: mocks.noteMacStaleOpenClawUpdateLaunchdJobs,
 }));
 
+vi.mock("../commands/doctor-foreign-launchd-jobs.js", () => ({
+  noteMacForeignLaunchdJobs: vi.fn().mockResolvedValue(undefined),
+}));
+
 vi.mock("../gateway/credentials-secret-inputs.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../gateway/credentials-secret-inputs.js")>();
   return {
@@ -911,7 +915,7 @@ describe("doctor health contributions", () => {
         id: "doctor:test-failure",
         label: "Test failure",
         run: async () => {
-          throw new Error("media migration required");
+          throw new Error("media migration\nrequired");
         },
       }),
       createDoctorHealthContribution({
@@ -926,6 +930,7 @@ describe("doctor health contributions", () => {
       configResult: { cfg: {} },
       shouldRepair: true,
       env: {},
+      updateWarnings: ["earlier warning"],
     });
 
     await runDoctorHealthContributionList(ctx, contributions);
@@ -935,6 +940,11 @@ describe("doctor health contributions", () => {
       "doctor:test-failure run failed: media migration required",
       "Doctor warnings",
     );
+    expect(ctx.updateWarnings).toEqual([
+      "earlier warning",
+      "doctor:test-failure run failed: media migration required",
+    ]);
+    expect(mocks.note).toHaveBeenCalledBefore(laterRun);
   });
 
   it("rejects a failed initial config write before later work runs", async () => {
@@ -946,6 +956,7 @@ describe("doctor health contributions", () => {
       configResult: { cfg, shouldWriteConfig: true },
       shouldRepair: true,
       env: {},
+      updateWarnings: ["earlier warning"],
     });
     mocks.replaceConfigFile.mockRejectedValueOnce(new Error("Config validation failed"));
 
@@ -963,6 +974,7 @@ describe("doctor health contributions", () => {
     expect(laterRun).not.toHaveBeenCalled();
     expect(ctx.configResultWriteCommitted).not.toBe(true);
     expect(ctx.cfgForPersistence).toEqual(cfg);
+    expect(ctx.updateWarnings).toEqual(["earlier warning"]);
   });
 
   it("keeps legacy plugin manifest lint opt-in for structured findings", async () => {
@@ -2654,10 +2666,12 @@ describe("doctor health contributions", () => {
     expect(mocks.replaceConfigFile).toHaveBeenCalledWith(
       expect.objectContaining({ nextConfig: repairedCfg }),
     );
-    expect(mocks.removeAuthProfilesAcrossOwnerStores).toHaveBeenCalledWith({
-      agentDir: "/tmp/openclaw/agents/main",
-      profileIds: ["anthropic:claude-cli"],
-    });
+    expect(mocks.removeAuthProfilesAcrossOwnerStores).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentDir: "/tmp/openclaw/agents/main",
+        profileIds: ["anthropic:claude-cli"],
+      }),
+    );
     expect(mocks.replaceConfigFile.mock.invocationCallOrder[0]).toBeLessThan(
       mocks.removeAuthProfilesAcrossOwnerStores.mock.invocationCallOrder[0]!,
     );
@@ -3261,7 +3275,7 @@ describe("doctor health contributions", () => {
       checksSkipped: 0,
       findings: [expect.objectContaining({ checkId: "core/doctor/disk-space" })],
     });
-    expect(mocks.collectDiskSpaceHealthFindings).toHaveBeenCalledWith(ctx.cfg);
+    expect(mocks.collectDiskSpaceHealthFindings).toHaveBeenCalledWith();
   });
 
   it("keeps WhatsApp responsiveness opt-in for default lint selection", async () => {
@@ -3934,6 +3948,101 @@ describe("doctor health contributions", () => {
       checks: [{ id: "plugin/example/unrelated", kind: "plugin", sourceContract: "split" }],
     });
   });
+
+  it("skips opt-in extension checks during routine repair", async () => {
+    mocks.listHealthChecks.mockReturnValue([
+      { id: "plugin/example/regular", kind: "plugin" },
+      { id: "plugin/example/opt-in", kind: "plugin", defaultEnabled: false },
+    ]);
+    const contribution = requireDoctorContribution("doctor:structured-health-repairs");
+    const ctx = createDoctorContext({
+      cfg: {},
+      configResult: { cfg: {} },
+      cfgForPersistence: {},
+      shouldRepair: true,
+      env: { OPENCLAW_UPDATE_POST_CORE: "1" },
+    });
+
+    await contribution.run(ctx);
+
+    expect(mocks.runDoctorHealthRepairs).toHaveBeenCalledWith(
+      expect.objectContaining({ env: { OPENCLAW_UPDATE_POST_CORE: "1" } }),
+      { checks: [{ id: "plugin/example/regular", kind: "plugin", sourceContract: "split" }] },
+    );
+  });
+
+  it.each([
+    ["doctor:structured-health-repairs", "plugin/example/probe"],
+    ["doctor:browser", "core/doctor/browser-clawd-profile-residue"],
+    ["doctor:default-account-routing", "core/doctor/default-account-routing"],
+  ])("retains %s update warnings without resolved or non-warning findings", async (id, checkId) => {
+    const contribution = requireDoctorContribution(id);
+    const ctx = createDoctorContext({
+      cfg: {},
+      configResult: { cfg: {} },
+      cfgForPersistence: {},
+      shouldRepair: true,
+      env: { OPENCLAW_UPDATE_POST_CORE: "1" },
+      updateWarnings: ["earlier warning"],
+    });
+    const remainingFindings: HealthFinding[] = [
+      { checkId, severity: "warning", message: "optional maintenance incomplete" },
+      { checkId, severity: "error", message: "required artifact missing" },
+      { checkId, severity: "info", message: "optional setup is available" },
+    ];
+    mocks.runDoctorHealthRepairs.mockResolvedValue({
+      config: {},
+      changes: [],
+      warnings: ["optional repair unavailable"],
+      remainingFindings,
+      findings: [
+        ...remainingFindings,
+        { checkId, severity: "warning", message: "already repaired" },
+      ],
+    });
+
+    await contribution.run(ctx);
+
+    expect(ctx.updateWarnings).toEqual([
+      "earlier warning",
+      `${checkId}: optional maintenance incomplete`,
+      "optional repair unavailable",
+    ]);
+    expect(ctx.runtime.log).toHaveBeenCalledWith(
+      `[warning] ${checkId} - optional maintenance incomplete`,
+    );
+    expect(ctx.runtime.error).toHaveBeenCalledWith(
+      `[error] ${checkId} - required artifact missing`,
+    );
+    expect(ctx.runtime.exit).not.toHaveBeenCalled();
+  });
+
+  it.each(["warning", "info", "error"] as const)(
+    "records %s finding-only output without changing health or exit policy",
+    async (severity) => {
+      const contribution = requireDoctorContribution("doctor:model-references");
+      const check = CORE_HEALTH_CHECKS.find(
+        (entry) => entry.id === "core/doctor/model-references",
+      )!;
+      vi.spyOn(check, "detect").mockResolvedValue([
+        { checkId: check.id, severity, message: "configured model needs attention" },
+      ]);
+      const ctx = createDoctorContext({ healthOk: true, updateWarnings: ["earlier warning"] });
+
+      await contribution.run(ctx);
+
+      expect(ctx.updateWarnings).toEqual([
+        "earlier warning",
+        ...(severity === "warning" ? [`${check.id}: configured model needs attention`] : []),
+      ]);
+      expect(ctx.healthOk).toBe(severity === "info");
+      expect(mocks.note).toHaveBeenCalledWith(
+        "- configured model needs attention",
+        severity === "info" ? "Doctor information" : "Doctor warnings",
+      );
+      expect(ctx.runtime.exit).not.toHaveBeenCalled();
+    },
+  );
 
   it("rejects extension repairs that claim reserved core doctor ids", async () => {
     mocks.listHealthChecks.mockReturnValue([

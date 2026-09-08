@@ -14,7 +14,7 @@ const providerRuntimeMocks = vi.hoisted(() => ({
 
 const normalizeDiscoveredAgentModelMock = vi.hoisted(() => vi.fn((value: unknown) => value));
 
-vi.mock("./agent-model-discovery.js", () => ({
+vi.mock("./model-discovery-normalize.js", () => ({
   normalizeDiscoveredAgentModel: normalizeDiscoveredAgentModelMock,
 }));
 

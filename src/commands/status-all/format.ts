@@ -333,7 +333,7 @@ export function buildStatusOverviewSurfaceRows(params: {
         ? params.gatewayAuthWarningValue
         : params.gatewayProbeAuthWarning,
     middleRows: params.middleRows,
-    gatewaySelfValue: params.gatewaySelfFallbackValue ?? gatewaySelfValue,
+    gatewaySelfValue: gatewaySelfValue ?? params.gatewaySelfFallbackValue,
     gatewayServiceValue,
     nodeServiceValue,
     agentsValue: params.agentsValue,

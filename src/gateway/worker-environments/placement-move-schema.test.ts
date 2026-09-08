@@ -25,13 +25,12 @@ describe("worker placement move schema", () => {
     const metadataBefore = database.db
       .prepare("SELECT schema_version, updated_at FROM schema_meta WHERE meta_key = 'primary'")
       .get();
-    const previousSchema = OPENCLAW_STATE_SCHEMA_SQL.replace(
-      "  target_machine_class TEXT,\n",
-      "",
-    ).replace(
-      "  -- Explicit source abandonment is a durable operator decision. Keep the bit\n  -- bare and nullable so same-version older readers can safely omit it.\n  abandon_source INTEGER,\n",
-      "",
-    );
+    const previousSchema = OPENCLAW_STATE_SCHEMA_SQL.replace("  target_machine_class TEXT,\n", "")
+      .replace("  target_os TEXT,\n", "")
+      .replace(
+        "  -- Explicit source abandonment is a durable operator decision. Keep the bit\n  -- bare and nullable so same-version older readers can safely omit it.\n  abandon_source INTEGER,\n",
+        "",
+      );
     const moveSchemaStart = previousSchema.indexOf(
       "CREATE TABLE IF NOT EXISTS worker_session_placement_moves (",
     );
@@ -63,10 +62,18 @@ describe("worker placement move schema", () => {
     const begun = store.beginPlacementMove({
       sessionId: "session-move",
       source: { generation: 4, environmentId: "environment-source", ownerEpoch: 7 },
-      target: { kind: "profile", profileId: "profile-destination", machineClass: "beast" },
+      target: {
+        kind: "profile",
+        profileId: "profile-destination",
+        machineClass: "beast",
+        os: "os-a",
+      },
     });
     expect(database.db.prepare("PRAGMA table_info(worker_session_placement_moves)").all()).toEqual(
-      expect.arrayContaining([expect.objectContaining({ name: "target_machine_class" })]),
+      expect.arrayContaining([
+        expect.objectContaining({ name: "target_machine_class" }),
+        expect.objectContaining({ name: "target_os", type: "TEXT", notnull: 0, dflt_value: null }),
+      ]),
     );
     expect(database.db.prepare("PRAGMA table_info(worker_session_placement_moves)").all()).toEqual(
       expect.arrayContaining([

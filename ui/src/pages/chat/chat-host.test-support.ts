@@ -22,7 +22,7 @@ export function makeRequestMock(handlers: RequestHandlers = {}): GatewayRequestM
   return createGatewayRequestMock((method: string, params?: unknown) => {
     if (!Object.hasOwn(handlers, method)) {
       // Keep unrelated Gateway traffic inert so each test declares only the responses it observes.
-      return Promise.resolve({});
+      return Promise.resolve(method === "models.list" ? { models: [] } : {});
     }
     try {
       const handler = handlers[method];

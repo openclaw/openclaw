@@ -2344,7 +2344,8 @@ export function createNodeTestShardBundles(
     }
 
     const { name: runnerClass } = resolveCiNodeTestRunnerClass(group.runner);
-    const bundleName = `${bundleNameForConfigs(group.configs)}-${runnerClass}`;
+    const buildModeSuffix = group.pretestBuildMode ? `-${group.pretestBuildMode}` : "";
+    const bundleName = `${bundleNameForConfigs(group.configs)}-${runnerClass}${buildModeSuffix}`;
     for (const [index, bin] of bins.entries()) {
       const shardName = `bundle-${bundleName}-${index + 1}`;
       bundled.push({
@@ -2427,6 +2428,7 @@ function splitOversizedCompactGroup(
   runnerBackend: string | undefined,
   runtimePartition?: ReturnType<typeof partitionRuntimeTestFiles>,
   splitHostedToolingTails = false,
+  balancedHostedToolingTailParents?: ReadonlySet<string>,
 ): Array<{ group: NodeTestShardGroup; seconds: number }> {
   // Hybrid groups must fit both the first-attempt runner and hosted retries;
   // a faster retry estimate must not leave a slow first attempt unsplit.
@@ -2518,9 +2520,19 @@ function splitOversizedCompactGroup(
         tail.length > 1 &&
         batchWeight(tail) <= COMPACT_EXCLUSIVE_JOB_SECONDS
       ) {
-        // Half-budget tails can share with another family instead of stranding
-        // capacity. Keep full chunks and indivisible files at their original cost.
-        stripes.splice(-1, 1, ...packFiles(tail, COMPACT_EXCLUSIVE_JOB_SECONDS / 2));
+        if (
+          balancedHostedToolingTailParents?.has(group.shard_name) &&
+          runtimePartition === undefined &&
+          group.pretestBuildMode === undefined &&
+          !group.requiresDist
+        ) {
+          // Preserve complete runtime families, including their siblings' timing keys.
+          stripes.splice(-1, 1, ...createStripedBatches(tail, 2, weightForValue, batchWeight));
+        } else {
+          // Half-budget tails can share with another family instead of stranding
+          // capacity. Keep full chunks and indivisible files at their original cost.
+          stripes.splice(-1, 1, ...packFiles(tail, COMPACT_EXCLUSIVE_JOB_SECONDS / 2));
+        }
       }
     } else {
       // The fixed build stays with its runtime child; only remaining test
@@ -2620,6 +2632,7 @@ function createCompactNodeTestShardBundles(
   options: NodeTestPlanOptions,
   compactMode: CompactNodeTestPlanMode,
   splitHostedToolingTails = false,
+  balancedHostedToolingTailParents?: ReadonlySet<string>,
 ): CompactNodeTestShard[] {
   const isBlacksmithProfile = (options.runnerBackend ?? "blacksmith") === "blacksmith";
   const shards = createNodeTestShards(options).filter(
@@ -2659,6 +2672,7 @@ function createCompactNodeTestShardBundles(
             options.runnerBackend,
             runtimePartition,
             splitHostedToolingTails,
+            balancedHostedToolingTailParents,
           )
         : [{ group, seconds: estimateCompactGroupSeconds(group, options.runnerBackend) }];
     for (const planned of plannedGroups) {
@@ -2900,6 +2914,24 @@ function createCompactNodeTestShardBundles(
       // Repartition once at the file owner so timing identities and build costs
       // describe the smaller tails before the same admission checks pack them.
       return createCompactNodeTestShardBundles(options, compactMode, true);
+    }
+    if (packsHostedTooling && balancedHostedToolingTailParents === undefined) {
+      // Only failed half-budget overflow bins select the final construction.
+      // Use construction order, before the returned jobs are sorted by check name.
+      const overflowTailParents = new Set(
+        packedBins
+          .slice(COMPACT_NODE_TEST_JOB_CAP)
+          .filter(
+            (bin) =>
+              bin.length === 1 &&
+              isHostedToolingGroup(bin[0]) &&
+              (bin[0].includePatterns?.length ?? 0) > 1,
+          )
+          .map(([group]) => group.shard_name.replace(/-hosted-\d+$/u, "")),
+      );
+      if (overflowTailParents.size > 0) {
+        return createCompactNodeTestShardBundles(options, compactMode, true, overflowTailParents);
+      }
     }
     throw new Error(
       `compact ${options.runnerBackend ?? "blacksmith"} node test plan exceeds ${COMPACT_NODE_TEST_JOB_CAP} jobs (${compactJobs.length} planned)`,

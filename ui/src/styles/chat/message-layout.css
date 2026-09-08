@@ -213,8 +213,7 @@
   flex-wrap: nowrap;
   align-items: flex-start;
   width: 100%;
-  gap: 12px;
-  margin-bottom: 8px;
+  gap: var(--chat-block-gap);
 }
 
 .chat-message-image-button {
@@ -416,8 +415,7 @@
   flex-direction: column;
   width: 100%;
   max-width: 100%;
-  gap: 12px;
-  margin: 12px 0 8px;
+  gap: var(--chat-block-gap);
 }
 
 .chat-group.assistant .chat-bubble:has(.chat-assistant-attachments),

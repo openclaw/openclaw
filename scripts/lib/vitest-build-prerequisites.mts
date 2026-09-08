@@ -37,6 +37,13 @@ const runtimeConsumers = [
     mode: "private-qa",
     dir: "extensions",
   },
+  // Sticker selection loads real provider registrations; only image description is mocked.
+  {
+    file: "extensions/telegram/src/sticker-cache.selection.test.ts",
+    configs: ["test/vitest/vitest.extension-telegram.config.ts"],
+    mode: "runtime",
+    dir: "extensions",
+  },
   ...[
     "src/cli/acp-cli-exit.process.test.ts",
     "src/cli/update-dry-run-state.process.test.ts",
@@ -153,12 +160,25 @@ export function mergeVitestPretestBuildModes(
 export function resolveVitestPretestBuildMode(
   selections: readonly VitestRuntimeTestSelection[],
 ): VitestPretestBuildMode | undefined {
+  const preparedSelections = selections.map((selection) => {
+    const includedFiles = new Set<string>();
+    // Keep each pattern hot in Node's bounded glob cache across the small consumer list.
+    // Consumer-first traversal recompiles large include inventories for every file.
+    for (const pattern of selection.includePatterns ?? []) {
+      for (const { file } of runtimeConsumers) {
+        if (!includedFiles.has(file) && path.matchesGlob(file, pattern)) {
+          includedFiles.add(file);
+        }
+      }
+    }
+    return { ...selection, includedFiles };
+  });
   return mergeVitestPretestBuildModes(
     runtimeConsumers
       .filter(({ file, configs: consumerConfigs }) =>
-        selections.some(({ configs, includePatterns, matchesFile }) => {
+        preparedSelections.some(({ configs, includePatterns, matchesFile, includedFiles }) => {
           const included = includePatterns
-            ? includePatterns.some((pattern) => path.matchesGlob(file, pattern))
+            ? includedFiles.has(file)
             : consumerConfigs.some((config) => includesRuntimeConfig(configs, config));
           // Only project the canonical consumers; config loading and test discovery
           // stay with Vitest. Include-file overrides still intersect emitted filters.

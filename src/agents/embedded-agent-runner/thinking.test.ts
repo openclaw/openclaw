@@ -4,6 +4,7 @@ import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it, vi } from "vitest";
 import { castAgentMessage, castAgentMessages } from "../test-helpers/agent-message-fixtures.js";
+import { textAssistant } from "../test-helpers/sparse-transcript.test-support.js";
 import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
 import { stripStaleThinkingSignaturesForCompactionReplay } from "../thinking-signatures.js";
 import {
@@ -148,10 +149,7 @@ describe("dropThinkingBlocks", () => {
         content: [{ type: "redacted_thinking", data: "opaque" }],
       }),
       castAgentMessage({ role: "user", content: "second" }),
-      castAgentMessage({
-        role: "assistant",
-        content: [{ type: "text", text: "latest text" }],
-      }),
+      castAgentMessage(textAssistant("latest text")),
     ];
 
     const result = dropThinkingBlocks(messages);

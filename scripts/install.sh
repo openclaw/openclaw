@@ -1,5 +1,31 @@
 #!/bin/bash
+
+# Bash 5.3+ can deadlock writing heredoc pipes on macOS before the reader starts.
+if [[ ${OSTYPE:-} == darwin* && $BASH != /bin/bash ]] && ((BASH_VERSINFO[0] > 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 3))); then
+  if (return 0 2>/dev/null); then
+    printf '%s\n' 'Run this installer with /bin/bash on macOS instead of sourcing it.' >&2
+    return 1
+  fi
+  case "${BASH_SOURCE[0]:-}" in
+    ""|bash|-bash|/dev/stdin)
+      # Bash reads piped scripts unbuffered; stdin now starts after this guard.
+      OPENCLAW_INSTALLER_REEXEC_FILE="$(mktemp "${TMPDIR:-/tmp}/openclaw-installer.XXXXXX")" || exit 1
+      export OPENCLAW_INSTALLER_REEXEC_FILE
+      trap 'rm -f -- "$OPENCLAW_INSTALLER_REEXEC_FILE"' EXIT
+      { printf '#!/bin/bash\n'; cat; } > "$OPENCLAW_INSTALLER_REEXEC_FILE" || exit 1
+      exec /bin/bash "$OPENCLAW_INSTALLER_REEXEC_FILE" "$@"
+      ;;
+    *) exec /bin/bash "$0" "$@" ;;
+  esac
+fi
+
 set -euo pipefail
+
+# The re-executed shell has the script open, so unlink its private copy now.
+if [[ -n "${OPENCLAW_INSTALLER_REEXEC_FILE:-}" && "${BASH_SOURCE[0]:-}" == "$OPENCLAW_INSTALLER_REEXEC_FILE" ]]; then
+  rm -f -- "$OPENCLAW_INSTALLER_REEXEC_FILE"
+fi
+unset OPENCLAW_INSTALLER_REEXEC_FILE
 
 # OpenClaw Installer for macOS and Linux
 # Usage: curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install.sh | bash
@@ -23,14 +49,11 @@ NODE_BREW_FORMULA="node"
 # Linux package repositories can publish builds ahead of the Node release line.
 # Provision the supported LTS line there so a fresh install never receives a prerelease runtime.
 NODE_LINUX_DEFAULT_MAJOR=24
-NODE_MIN_MAJOR=22
-NODE_22_MIN_MINOR=22
-NODE_22_MIN_PATCH=3
-NODE_24_MIN_MINOR=15
+NODE_24_MIN_MINOR=16
 NODE_24_MIN_PATCH=0
-NODE_25_MIN_MINOR=9
-NODE_25_MIN_PATCH=0
-NODE_SUPPORTED_VERSION_LABEL="22.22.3+, 24.15.0+, or 25.9.0+"
+NODE_26_MIN_MINOR=1
+NODE_26_MIN_PATCH=0
+NODE_SUPPORTED_VERSION_LABEL="24.16.0+ or 26.1.0+"
 
 ORIGINAL_PATH="${PATH:-}"
 
@@ -1748,20 +1771,16 @@ node_version_components_are_supported() {
     local patch="$3"
 
     case "$major" in
-        "$NODE_MIN_MAJOR")
-            ((minor > NODE_22_MIN_MINOR)) ||
-                ((minor == NODE_22_MIN_MINOR && patch >= NODE_22_MIN_PATCH))
-            ;;
         24)
             ((minor > NODE_24_MIN_MINOR)) ||
                 ((minor == NODE_24_MIN_MINOR && patch >= NODE_24_MIN_PATCH))
             ;;
-        25)
-            ((minor > NODE_25_MIN_MINOR)) ||
-                ((minor == NODE_25_MIN_MINOR && patch >= NODE_25_MIN_PATCH))
+        26)
+            ((minor > NODE_26_MIN_MINOR)) ||
+                ((minor == NODE_26_MIN_MINOR && patch >= NODE_26_MIN_PATCH))
             ;;
         *)
-            ((major > 25))
+            ((major > 26))
             ;;
     esac
 }
@@ -3338,7 +3357,7 @@ install_openclaw_from_git() {
     if should_prefer_offline_pnpm_install "$repo_dir"; then
         pnpm_prefer_offline_args=(--prefer-offline)
     fi
-    CI="${CI:-true}" run_quiet_step "Installing dependencies" run_pnpm -C "$repo_dir" install "${pnpm_prefer_offline_args[@]}" "$install_lockfile_flag"
+    CI="${CI:-true}" run_quiet_step "Installing dependencies" run_pnpm -C "$repo_dir" install ${pnpm_prefer_offline_args[@]+"${pnpm_prefer_offline_args[@]}"} "$install_lockfile_flag"
 
     if ! run_quiet_step "Building UI" run_pnpm -C "$repo_dir" ui:build; then
         ui_warn "UI build failed; continuing (CLI may still work)"
