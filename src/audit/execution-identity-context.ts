@@ -1,10 +1,7 @@
 /** Immutable execution identity context storage and run-admission projection. */
 import type { DatabaseSync } from "node:sqlite";
 import type { Selectable } from "kysely";
-import type {
-  AuditRunInspectResult,
-  ExecutionIdentityContextV1,
-} from "../../packages/gateway-protocol/src/index.js";
+import type { ExecutionIdentityContextV1 } from "../../packages/gateway-protocol/src/index.js";
 import { validateExecutionIdentityContextV1 } from "../../packages/gateway-protocol/src/index.js";
 import { hasOperatorApprovalReceiptsForRun } from "../gateway/operator-approval-store.js";
 import {
@@ -21,9 +18,13 @@ import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
+import { createOpenClawStateSchemaEnsurer } from "../state/openclaw-state-feature-schema.js";
 import { clearAuditIdentityKeyCacheForDatabase } from "./audit-identity.js";
 import { hasExecutionDecisionFactsForRun } from "./execution-decision-facts.js";
-import { presentExecutionDecisionReceipts } from "./execution-decision-receipts.js";
+import {
+  presentExecutionDecisionReceipts,
+  type InternalAuditRunInspectResult,
+} from "./execution-decision-receipts.js";
 import {
   parseExecutionIdentityAdmissionEnvelope,
   parseExecutionIdentityAdmissionWork,
@@ -47,25 +48,11 @@ const EXECUTION_IDENTITY_CONTEXT_MAX_ROWS = 100_000;
 const EXECUTION_IDENTITY_CONTEXT_PRUNE_BATCH_ROWS = 1_024;
 const EXECUTION_IDENTITY_HMAC_REF_RE = /^hmac-sha256:v1:[a-f0-9]{32}:[a-f0-9]{64}$/u;
 
-const ensuredDatabases = new WeakSet<DatabaseSync>();
-
-// Keep this feature-local DDL byte-for-byte aligned with the canonical schema.
-const EXECUTION_IDENTITY_CONTEXT_SCHEMA_SQL = `
-CREATE TABLE IF NOT EXISTS execution_identity_contexts (
-  context_id TEXT NOT NULL PRIMARY KEY CHECK (length(context_id) BETWEEN 1 AND 256),
-  execution_id TEXT NOT NULL UNIQUE CHECK (length(execution_id) BETWEEN 1 AND 256),
-  run_id TEXT NOT NULL CHECK (length(run_id) BETWEEN 1 AND 256),
-  created_at INTEGER NOT NULL CHECK (created_at >= 0),
-  coverage_state TEXT NOT NULL CHECK (
-    coverage_state IN ('attribution-only', 'unattributed', 'unknown', 'unsupported')
-  ),
-  context_bytes INTEGER NOT NULL CHECK (context_bytes BETWEEN 1 AND 16384),
-  context_json TEXT NOT NULL CHECK (length(context_json) > 0),
-  UNIQUE (created_at, context_id)
-) STRICT;
-CREATE INDEX IF NOT EXISTS execution_identity_contexts_run_created_idx
-  ON execution_identity_contexts (run_id, created_at, execution_id);
-`;
+const ensureExecutionIdentityContextSchema = createOpenClawStateSchemaEnsurer({
+  table: "execution_identity_contexts",
+  endMarker: "  ON execution_identity_contexts (run_id, created_at, execution_id);\n",
+  operationLabel: "audit.execution-identity.schema.ensure",
+});
 
 type ExecutionIdentityStoreOptions = OpenClawStateDatabaseOptions & {
   now?: number;
@@ -87,22 +74,6 @@ type ExecutionIdentityContextReadResult =
 
 function executionIdentityDb(db: DatabaseSync) {
   return getNodeSqliteKysely<ExecutionIdentityDatabase>(db);
-}
-
-function ensureExecutionIdentityContextSchema(options: OpenClawStateDatabaseOptions = {}): void {
-  const database = openOpenClawStateDatabase(options);
-  if (ensuredDatabases.has(database.db)) {
-    return;
-  }
-  runOpenClawStateWriteTransaction(
-    ({ db }) => {
-      // sqlite-allow-raw -- feature-local additive schema DDL; context rows use Kysely.
-      db.exec(EXECUTION_IDENTITY_CONTEXT_SCHEMA_SQL);
-    },
-    options,
-    { operationLabel: "audit.execution-identity.schema.ensure" },
-  );
-  ensuredDatabases.add(database.db);
 }
 
 function parseExecutionIdentityRow(row: ExecutionIdentityRow): ExecutionIdentityContextV1 {
@@ -391,8 +362,8 @@ function unavailableResult(params: {
   reasonCode: string;
   missingEvidence: string[];
   remediation: Array<{ code: string; text: string }>;
-}): AuditRunInspectResult {
-  const run: AuditRunInspectResult["run"] =
+}): InternalAuditRunInspectResult {
+  const run: InternalAuditRunInspectResult["run"] =
     "executionId" in params.selector
       ? {
           executionId: params.selector.executionId,
@@ -413,6 +384,7 @@ function unavailableResult(params: {
       remediation: params.remediation,
     },
     decisions: [],
+    decisionDisplays: [],
     coverage: { state: params.state, missingEvidence: params.missingEvidence },
   };
 }
@@ -421,7 +393,7 @@ function unavailableIdentityContext(
   selector: { runId: string } | { executionId: string },
   remediation: { code: string; text: string },
   resolvedRunId?: string,
-): AuditRunInspectResult {
+): InternalAuditRunInspectResult {
   return unavailableResult({
     selector,
     resolvedRunId,
@@ -436,7 +408,7 @@ function unavailableIdentityContext(
 function inspectExactExecution(
   params: { executionId: string; decisionCursor?: string; decisionLimit?: number },
   options: ExecutionIdentityReadOptions,
-): AuditRunInspectResult {
+): InternalAuditRunInspectResult {
   const executionId = ensureBoundedExecutionIdentityRef(params.executionId, "execution id");
   const selector = { executionId };
   const contextResult = readExecutionIdentityContextByExecutionId(executionId, options);
@@ -529,125 +501,125 @@ function inspectRunSelector(
     decisionLimit?: number;
   },
   options: ExecutionIdentityReadOptions,
-): AuditRunInspectResult {
+): InternalAuditRunInspectResult {
   const runId = ensureBoundedExecutionIdentityRef(params.runId, "run id");
   const now = options.now ?? Date.now();
-  const inspected = withExistingOpenClawStateDatabaseReadOnly<AuditRunInspectResult | undefined>(
-    ({ db }) => {
-      const firstMatches = tableExists(db, "execution_identity_contexts")
-        ? readRowsByRunId(db, runId, now, 0, 2)
-        : [];
-      if (firstMatches.length === 1) {
-        let context: ExecutionIdentityContextV1;
-        try {
-          context = parseExecutionIdentityRow(firstMatches[0]!);
-        } catch {
-          return unavailableResult({
-            selector: { runId },
-            runStatus: "known",
-            state: "unknown",
-            reasonCode: "identity_context_corrupt",
-            missingEvidence: ["identity.context.valid"],
-            remediation: [
-              {
-                code: "inspect_state_integrity",
-                text: "Run openclaw doctor and inspect the shared state database before trusting this run.",
-              },
-            ],
-          });
-        }
-        return presentExecutionDecisionReceipts({
-          context,
-          decisionCursor: params.decisionCursor,
-          decisionLimit: params.decisionLimit,
-          options,
-        });
-      }
-      if (firstMatches.length > 1) {
-        const offset = params.executionOffset ?? 0;
-        const limit = params.executionLimit ?? 50;
-        const page = readRowsByRunId(db, runId, now, offset, limit + 1);
-        const candidates = page.slice(0, limit).map((row) => ({
-          executionId: row.execution_id,
-          contextId: row.context_id,
-          createdAt: normalizeSqliteNumber(row.created_at) ?? 0,
-        }));
-        return {
-          schemaVersion: 1,
-          run: { runId, status: "known" },
-          identity: {
-            state: "ambiguous",
-            reasonCode: "execution_selection_required",
-            candidates,
-            missingEvidence: ["execution.selection"],
-            remediation: [
-              {
-                code: "select_execution_id",
-                text: "Select one candidate with openclaw audit --execution <id> --explain.",
-              },
-            ],
-          },
-          decisions: [],
-          coverage: { state: "unknown", missingEvidence: ["execution.selection"] },
-          ...(page.length > limit ? { nextExecutionCursor: String(offset + limit) } : {}),
-        };
-      }
-      if (
-        hasOperatorApprovalReceiptsForRun({ runId, nowMs: now, databaseOptions: options }) ||
-        hasExecutionDecisionFactsForRun({ runId, now, database: options })
-      ) {
+  const inspected = withExistingOpenClawStateDatabaseReadOnly<
+    InternalAuditRunInspectResult | undefined
+  >(({ db }) => {
+    const firstMatches = tableExists(db, "execution_identity_contexts")
+      ? readRowsByRunId(db, runId, now, 0, 2)
+      : [];
+    if (firstMatches.length === 1) {
+      let context: ExecutionIdentityContextV1;
+      try {
+        context = parseExecutionIdentityRow(firstMatches[0]!);
+      } catch {
         return unavailableResult({
           selector: { runId },
           runStatus: "known",
           state: "unknown",
-          reasonCode: "decision_context_link_missing",
-          missingEvidence: ["identity.context", "decision.context_link"],
-          remediation: [
-            {
-              code: "record_new_identity_context",
-              text: "Confirm execution identity collection is enabled, then run and request the action again to record a linked context.",
-            },
-          ],
-        });
-      }
-      if (tableExists(db, "execution_identity_contexts") && hasAnyRunContext(db, runId)) {
-        return unavailableIdentityContext(
-          { runId },
-          {
-            code: "run_again_after_expiry",
-            text: "This run's retained identity contexts are outside the 30-day window; run the operation again to record a new execution.",
-          },
-        );
-      }
-      try {
-        if (hasRetainedAuditRun(db, runId, now)) {
-          return unavailableIdentityContext(
-            { runId },
-            {
-              code: "record_new_identity_context",
-              text: "Confirm audit collection is enabled and the Gateway is current, then run the operation again to record a new execution context.",
-            },
-          );
-        }
-      } catch {
-        return unavailableResult({
-          selector: { runId },
-          runStatus: "unknown",
-          state: "unknown",
-          reasonCode: "run_evidence_unreadable",
-          missingEvidence: ["run.record", "identity.context"],
+          reasonCode: "identity_context_corrupt",
+          missingEvidence: ["identity.context.valid"],
           remediation: [
             {
               code: "inspect_state_integrity",
-              text: "Run openclaw doctor and retry the run inspection.",
+              text: "Run openclaw doctor and inspect the shared state database before trusting this run.",
             },
           ],
         });
       }
-      return undefined;
-    },
-    options,
-  );
+      return presentExecutionDecisionReceipts({
+        context,
+        decisionCursor: params.decisionCursor,
+        decisionLimit: params.decisionLimit,
+        options,
+      });
+    }
+    if (firstMatches.length > 1) {
+      const offset = params.executionOffset ?? 0;
+      const limit = params.executionLimit ?? 50;
+      const page = readRowsByRunId(db, runId, now, offset, limit + 1);
+      const candidates = page.slice(0, limit).map((row) => ({
+        executionId: row.execution_id,
+        contextId: row.context_id,
+        createdAt: normalizeSqliteNumber(row.created_at) ?? 0,
+      }));
+      return {
+        schemaVersion: 1,
+        run: { runId, status: "known" },
+        identity: {
+          state: "ambiguous",
+          reasonCode: "execution_selection_required",
+          candidates,
+          missingEvidence: ["execution.selection"],
+          remediation: [
+            {
+              code: "select_execution_id",
+              text: "Select one candidate with openclaw audit --execution <id> --explain.",
+            },
+          ],
+        },
+        decisions: [],
+        decisionDisplays: [],
+        coverage: { state: "unknown", missingEvidence: ["execution.selection"] },
+        ...(page.length > limit ? { nextExecutionCursor: String(offset + limit) } : {}),
+      };
+    }
+    if (
+      hasOperatorApprovalReceiptsForRun({ runId, nowMs: now, databaseOptions: options }) ||
+      hasExecutionDecisionFactsForRun({ runId, now, database: options })
+    ) {
+      return unavailableResult({
+        selector: { runId },
+        runStatus: "known",
+        state: "unknown",
+        reasonCode: "decision_context_link_missing",
+        missingEvidence: ["identity.context", "decision.context_link"],
+        remediation: [
+          {
+            code: "record_new_identity_context",
+            text: "Confirm execution identity collection is enabled, then run and request the action again to record a linked context.",
+          },
+        ],
+      });
+    }
+    if (tableExists(db, "execution_identity_contexts") && hasAnyRunContext(db, runId)) {
+      return unavailableIdentityContext(
+        { runId },
+        {
+          code: "run_again_after_expiry",
+          text: "This run's retained identity contexts are outside the 30-day window; run the operation again to record a new execution.",
+        },
+      );
+    }
+    try {
+      if (hasRetainedAuditRun(db, runId, now)) {
+        return unavailableIdentityContext(
+          { runId },
+          {
+            code: "record_new_identity_context",
+            text: "Confirm audit collection is enabled and the Gateway is current, then run the operation again to record a new execution context.",
+          },
+        );
+      }
+    } catch {
+      return unavailableResult({
+        selector: { runId },
+        runStatus: "unknown",
+        state: "unknown",
+        reasonCode: "run_evidence_unreadable",
+        missingEvidence: ["run.record", "identity.context"],
+        remediation: [
+          {
+            code: "inspect_state_integrity",
+            text: "Run openclaw doctor and retry the run inspection.",
+          },
+        ],
+      });
+    }
+    return undefined;
+  }, options);
   if (inspected) {
     return inspected;
   }
@@ -678,7 +650,7 @@ export function inspectExecutionIdentityRun(
       }
     | { executionId: string; decisionCursor?: string; decisionLimit?: number },
   options: ExecutionIdentityReadOptions = {},
-): AuditRunInspectResult {
+): InternalAuditRunInspectResult {
   return "executionId" in params
     ? inspectExactExecution(params, options)
     : inspectRunSelector(params, options);

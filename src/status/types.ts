@@ -56,6 +56,11 @@ export type StatusSummary = {
   runtimeVersion?: string | null;
   hostDesktop?: import("../gateway/desktop/host-source.js").HostDesktopStatus;
   eventLoop?: import("../gateway/server/event-loop-health.js").GatewayEventLoopHealth;
+  processMemory?: {
+    rssBytes: number;
+    heapUsedBytes: number;
+    heapTotalBytes: number;
+  };
   linkChannel?: {
     id: ChannelId;
     label: string;
@@ -68,6 +73,8 @@ export type StatusSummary = {
   };
   channelSummary: string[];
   queuedSystemEvents: string[];
+  startupMigrationWarning?: string;
+  secretEgressProxy?: import("../secrets/egress-proxy/certificates.js").SecretEgressCertificateStatus;
   degradedSecretOwners?: Array<{
     ownerKind: "account" | "capability" | "gateway" | "provider" | "route";
     ownerId: string;

@@ -23,6 +23,7 @@ import {
 } from "../../lib/format.ts";
 import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
 import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
+import { cronRunEntryMatchesLink } from "./route-model.ts";
 
 // Leaf contract: the slice of the cron view props this module needs. Keeping
 // it local (instead of importing CronProps from view.ts) avoids a module
@@ -31,6 +32,7 @@ type CronRunsSectionProps = {
   basePath: string;
   agentId: string;
   runs: CronRunLogEntry[];
+  highlightedRunId?: string | null;
   runsHasMore: boolean;
   runsLoadingMore: boolean;
   runsStatuses: CronRunsStatusValue[];
@@ -175,9 +177,9 @@ function renderFilterDropdown(params: {
         <button
           slot="trigger"
           type="button"
-          class="btn btn--sm cron-filter-dropdown__trigger ${params.selected.length > 0
-            ? "active"
-            : ""}"
+          class="btn btn--sm cron-filter-dropdown__trigger ${
+            params.selected.length > 0 ? "active" : ""
+          }"
           title=${params.title}
           aria-label=${`${params.title} ${accessibleSummary}`}
         >
@@ -223,8 +225,8 @@ export function renderRunsSection(props: CronRunsSectionProps) {
     .map((option) => option.label);
   const statusSummary = summarizeSelection(selectedStatusLabels, t("cron.runs.allStatuses"));
   const deliverySummary = summarizeSelection(selectedDeliveryLabels, t("cron.runs.allDelivery"));
-  // The sort select's .value binding commits before its options exist;
-  // selected attributes preserve non-first values.
+  const sortLabel =
+    props.runsSortDir === "asc" ? t("cron.runs.oldestFirst") : t("cron.runs.newestFirst");
   return html`
     <div class="cron-runs">
       ${props.conditionActivity ? renderConditionActivity(props.conditionActivity) : nothing}
@@ -273,59 +275,90 @@ export function renderRunsSection(props: CronRunsSectionProps) {
             void props.onRunsFiltersChange({ cronRunsDeliveryStatuses: [] });
           },
         })}
-        <select
-          class="cron-run-sort"
-          aria-label=${t("cron.jobs.sort")}
-          title=${t("cron.jobs.sort")}
-          .value=${props.runsSortDir}
-          @change=${(e: Event) =>
-            props.onRunsFiltersChange({
-              cronRunsSortDir: (e.target as HTMLSelectElement).value as CronSortDir,
-            })}
-        >
-          <option value="desc" ?selected=${props.runsSortDir === "desc"}>
-            ${t("cron.runs.newestFirst")}
-          </option>
-          <option value="asc" ?selected=${props.runsSortDir === "asc"}>
-            ${t("cron.runs.oldestFirst")}
-          </option>
-        </select>
+        <div class="cron-filter-dropdown">
+          <wa-dropdown
+            class="cron-filter-dropdown__details"
+            placement="bottom-start"
+            @wa-select=${(event: CustomEvent<{ item: { value?: string } }>) => {
+              const value = event.detail.item.value;
+              if (value === "asc" || value === "desc") {
+                void props.onRunsFiltersChange({ cronRunsSortDir: value });
+              }
+            }}
+          >
+            <button
+              slot="trigger"
+              type="button"
+              class="btn btn--sm cron-filter-dropdown__trigger cron-run-sort"
+              aria-label=${`${t("cron.jobs.sort")} ${sortLabel}`}
+            >
+              <span>${sortLabel}</span>
+              ${icon("chevronDown")}
+            </button>
+            <wa-dropdown-item value="desc" aria-current=${String(props.runsSortDir === "desc")}>
+              ${t("cron.runs.newestFirst")}
+              <span slot="details" aria-hidden="true">
+                ${props.runsSortDir === "desc" ? icon("check") : nothing}
+              </span>
+            </wa-dropdown-item>
+            <wa-dropdown-item value="asc" aria-current=${String(props.runsSortDir === "asc")}>
+              ${t("cron.runs.oldestFirst")}
+              <span slot="details" aria-hidden="true">
+                ${props.runsSortDir === "asc" ? icon("check") : nothing}
+              </span>
+            </wa-dropdown-item>
+          </wa-dropdown>
+        </div>
       </div>
-      ${runs.length === 0
-        ? hasRunFilters
-          ? html`<div class="muted cron-runs__empty">${t("cron.runs.noMatching")}</div>`
+      ${
+        runs.length === 0
+          ? hasRunFilters
+            ? html`<div class="muted cron-runs__empty">${t("cron.runs.noMatching")}</div>`
+            : html`
+                <div class="cron-empty-state">
+                  <div class="cron-empty-state__title">
+                    ${
+                      props.conditionActivity
+                        ? t("cron.runs.emptyConditionTitle")
+                        : t("cron.runs.emptyTitle")
+                    }
+                  </div>
+                  <div class="cron-empty-state__copy">
+                    ${
+                      props.conditionActivity
+                        ? conditionEmptyHint(props.conditionActivity)
+                        : t("cron.runs.emptyHint")
+                    }
+                  </div>
+                </div>
+              `
           : html`
-              <div class="cron-empty-state">
-                <div class="cron-empty-state__title">
-                  ${props.conditionActivity
-                    ? t("cron.runs.emptyConditionTitle")
-                    : t("cron.runs.emptyTitle")}
-                </div>
-                <div class="cron-empty-state__copy">
-                  ${props.conditionActivity
-                    ? conditionEmptyHint(props.conditionActivity)
-                    : t("cron.runs.emptyHint")}
-                </div>
+              <div class="cron-runs__list">
+                ${runs.map((entry) =>
+                  renderRun(
+                    entry,
+                    props.agentId,
+                    props.basePath,
+                    props.highlightedRunId,
+                    props.onNavigateToChat,
+                  ),
+                )}
               </div>
             `
-        : html`
-            <div class="cron-runs__list">
-              ${runs.map((entry) =>
-                renderRun(entry, props.agentId, props.basePath, props.onNavigateToChat),
-              )}
-            </div>
-          `}
-      ${props.runsHasMore
-        ? html`
-            <button
-              class="btn btn--sm cron-load-more"
-              ?disabled=${props.runsLoadingMore}
-              @click=${props.onLoadMoreRuns}
-            >
-              ${props.runsLoadingMore ? t("cron.list.loading") : t("cron.runs.loadMore")}
-            </button>
-          `
-        : nothing}
+      }
+      ${
+        props.runsHasMore
+          ? html`
+              <button
+                class="btn btn--sm cron-load-more"
+                ?disabled=${props.runsLoadingMore}
+                @click=${props.onLoadMoreRuns}
+              >
+                ${props.runsLoadingMore ? t("cron.list.loading") : t("cron.runs.loadMore")}
+              </button>
+            `
+          : nothing
+      }
     </div>
   `;
 }
@@ -365,6 +398,7 @@ function renderRun(
   entry: CronRunLogEntry,
   fallbackAgentId: string,
   basePath: string,
+  highlightedRunId?: string | null,
   onNavigateToChat?: (sessionKey: string) => void,
 ) {
   const chatUrl =
@@ -388,9 +422,19 @@ function renderRun(
   const bodySource =
     entry.summary || formatUiExternalText(entry.error) || t("cron.runEntry.noSummary");
   const showErrorInMeta = Boolean(entry.error) && Boolean(entry.summary);
-  const facts = [delivery, entry.model, entry.provider, usageSummary].filter(Boolean);
+  const suppressionReason = formatUiExternalText(entry.deliverySuppressionReason);
+  const facts = [
+    delivery,
+    suppressionReason
+      ? t("cron.runEntry.deliverySuppression", { reason: suppressionReason })
+      : null,
+    entry.model,
+    entry.provider,
+    usageSummary,
+  ].filter(Boolean);
+  const highlighted = Boolean(highlightedRunId && cronRunEntryMatchesLink(highlightedRunId, entry));
   return html`
-    <div class="cron-run-entry">
+    <div class="cron-run-entry ${highlighted ? "cron-run-entry--highlighted" : ""}">
       <div class="cron-run-entry__header">
         <div class="cron-run-entry__main">
           <div class="cron-run-entry__title">
@@ -401,42 +445,56 @@ function renderRun(
         </div>
         <div class="cron-run-entry__meta">
           <div>${formatMs(entry.ts)}</div>
-          ${typeof entry.runAtMs === "number"
-            ? html`<div class="muted">${t("cron.runEntry.runAt")} ${formatMs(entry.runAtMs)}</div>`
-            : nothing}
+          ${
+            typeof entry.runAtMs === "number"
+              ? html`<div class="muted">
+                  ${t("cron.runEntry.runAt")} ${formatMs(entry.runAtMs)}
+                </div>`
+              : nothing
+          }
           <div class="muted">
-            ${typeof entry.durationMs === "number" && Number.isFinite(entry.durationMs)
-              ? (formatDurationCompact(entry.durationMs) ??
-                formatDurationHuman(entry.durationMs, t("common.na")))
-              : t("common.na")}
+            ${
+              typeof entry.durationMs === "number" && Number.isFinite(entry.durationMs)
+                ? (formatDurationCompact(entry.durationMs) ??
+                  formatDurationHuman(entry.durationMs, t("common.na")))
+                : t("common.na")
+            }
           </div>
-          ${typeof entry.nextRunAtMs === "number"
-            ? html`<div class="muted">${formatRunNextLabel(entry.nextRunAtMs)}</div>`
-            : nothing}
-          ${chatUrl
-            ? html`<div>
-                <a
-                  class="session-link"
-                  href=${chatUrl}
-                  @click=${(e: MouseEvent) => {
-                    if (!shouldHandleNavigationClick(e)) {
-                      return;
-                    }
-                    if (onNavigateToChat && entry.sessionKey) {
-                      e.preventDefault();
-                      onNavigateToChat(entry.sessionKey);
-                    }
-                  }}
-                  >${t("cron.runEntry.openRunChat")}</a
-                >
-              </div>`
-            : nothing}
-          ${showErrorInMeta
-            ? html`<div class="muted">${formatUiExternalText(entry.error)}</div>`
-            : nothing}
-          ${entry.deliveryError
-            ? html`<div class="muted">${formatUiExternalText(entry.deliveryError)}</div>`
-            : nothing}
+          ${
+            typeof entry.nextRunAtMs === "number"
+              ? html`<div class="muted">${formatRunNextLabel(entry.nextRunAtMs)}</div>`
+              : nothing
+          }
+          ${
+            chatUrl
+              ? html`<div>
+                  <a
+                    class="session-link"
+                    href=${chatUrl}
+                    @click=${(e: MouseEvent) => {
+                      if (!shouldHandleNavigationClick(e)) {
+                        return;
+                      }
+                      if (onNavigateToChat && entry.sessionKey) {
+                        e.preventDefault();
+                        onNavigateToChat(entry.sessionKey);
+                      }
+                    }}
+                    >${t("cron.runEntry.openRunChat")}</a
+                  >
+                </div>`
+              : nothing
+          }
+          ${
+            showErrorInMeta
+              ? html`<div class="muted">${formatUiExternalText(entry.error)}</div>`
+              : nothing
+          }
+          ${
+            entry.deliveryError
+              ? html`<div class="muted">${formatUiExternalText(entry.deliveryError)}</div>`
+              : nothing
+          }
         </div>
       </div>
       <div class="cron-run-entry__body chat-text">

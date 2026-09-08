@@ -46,13 +46,14 @@ const workerOwnedFields = {
 };
 
 describe("session dispatch protocol schemas", () => {
-  it("accepts an explicit target or configured-default lookup", () => {
+  it("accepts an explicit target, automatic device selection, or configured-default lookup", () => {
     expect(
       validateSessionsDispatchParams({
         key: "agent:main:dispatch",
         agentId: "main",
         profileId: "development",
         machineClass: "beast",
+        os: "windows/wsl2",
       }),
     ).toBe(true);
     expect(
@@ -61,7 +62,28 @@ describe("session dispatch protocol schemas", () => {
         deviceId: "device-1",
       }),
     ).toBe(true);
+    expect(validateSessionsDispatchParams({ key: "agent:main:dispatch", autoDevice: true })).toBe(
+      true,
+    );
     expect(validateSessionsDispatchParams({ key: "agent:main:dispatch" })).toBe(true);
+    expect(
+      validateSessionsDispatchParams({
+        key: "agent:main:dispatch",
+        profileId: "development",
+        os: "x".repeat(64),
+      }),
+    ).toBe(true);
+    for (const invalidOsTarget of [
+      { os: "windows/wsl2" },
+      { deviceId: "device-1", os: "windows/wsl2" },
+      { autoDevice: true, os: "windows/wsl2" },
+      { profileId: "development", os: "" },
+      { profileId: "development", os: "x".repeat(65) },
+    ]) {
+      expect(
+        validateSessionsDispatchParams({ key: "agent:main:dispatch", ...invalidOsTarget }),
+      ).toBe(false);
+    }
     expect(
       validateSessionsDispatchParams({ key: "agent:main:dispatch", machineClass: "beast" }),
     ).toBe(false);
@@ -79,6 +101,19 @@ describe("session dispatch protocol schemas", () => {
         machineClass: "beast",
       }),
     ).toBe(false);
+    for (const invalidAutomaticTarget of [
+      { autoDevice: false },
+      { autoDevice: true, profileId: "development" },
+      { autoDevice: true, deviceId: "device-1" },
+      { autoDevice: true, machineClass: "beast" },
+    ]) {
+      expect(
+        validateSessionsDispatchParams({
+          key: "agent:main:dispatch",
+          ...invalidAutomaticTarget,
+        }),
+      ).toBe(false);
+    }
     expect(
       validateSessionsDispatchParams({
         key: "agent:main:dispatch",
@@ -311,11 +346,21 @@ describe("session dispatch protocol schemas", () => {
           runner: { kind: "device", status },
         }),
       ).toBe(true);
+      expect(
+        Value.Check(SessionPlacementSchema, {
+          state: "active",
+          ...basePlacement,
+          ...workerOwnedFields,
+          runner: { kind: "device", status, deviceId: "device-1" },
+        }),
+      ).toBe(true);
     }
     for (const runner of [
       { kind: "cloud", status: "offline" },
       { kind: "device", status: "unknown" },
       { kind: "device", status: "offline", extra: true },
+      { kind: "device", status: "available", deviceId: "" },
+      { kind: "device", status: "available", deviceId: "x".repeat(257) },
     ]) {
       expect(
         Value.Check(SessionPlacementSchema, {
@@ -373,6 +418,18 @@ describe("session dispatch protocol schemas", () => {
     expect(Value.Check(SessionPlacementSchema, failed)).toBe(true);
     expect(
       Value.Check(SessionPlacementSchema, {
+        ...failed,
+        recoveryAction: "restart",
+      }),
+    ).toBe(true);
+    expect(
+      Value.Check(SessionPlacementSchema, {
+        ...failed,
+        recoveryAction: "stop-first",
+      }),
+    ).toBe(true);
+    expect(
+      Value.Check(SessionPlacementSchema, {
         state: "failed",
         ...basePlacement,
       }),
@@ -402,7 +459,8 @@ describe("session dispatch protocol schemas", () => {
 
   it.each([
     { kind: "gateway" },
-    { kind: "profile", profileId: "development", machineClass: "beast" },
+    { kind: "profile", profileId: "development", machineClass: "beast", os: "windows/wsl2" },
+    { kind: "profile", profileId: "development", os: "macos" },
     { kind: "device", deviceId: "device-1" },
   ] as const)("accepts the closed $kind move target", (target) => {
     expect(
@@ -446,7 +504,12 @@ describe("session dispatch protocol schemas", () => {
       validateSessionsMoveParams({
         key: "agent:main:dispatch",
         expected: { generation: 4, environmentId: accepted, ownerEpoch: 7 },
-        target: { kind: "profile", profileId: accepted, machineClass: "x".repeat(128) },
+        target: {
+          kind: "profile",
+          profileId: accepted,
+          machineClass: "x".repeat(128),
+          os: "x".repeat(64),
+        },
       }),
     ).toBe(true);
     for (const machineClass of ["", "x".repeat(129)]) {
@@ -455,6 +518,15 @@ describe("session dispatch protocol schemas", () => {
           key: "agent:main:dispatch",
           expected: { generation: 4, environmentId: "environment-1", ownerEpoch: 7 },
           target: { kind: "profile", profileId: "development", machineClass },
+        }),
+      ).toBe(false);
+    }
+    for (const os of ["", "x".repeat(65)]) {
+      expect(
+        validateSessionsMoveParams({
+          key: "agent:main:dispatch",
+          expected: { generation: 4, environmentId: "environment-1", ownerEpoch: 7 },
+          target: { kind: "profile", profileId: "development", os },
         }),
       ).toBe(false);
     }
@@ -479,10 +551,12 @@ describe("session dispatch protocol schemas", () => {
   it.each([
     { kind: "gateway", profileId: "development" },
     { kind: "gateway", machineClass: "beast" },
+    { kind: "gateway", os: "windows/wsl2" },
     { kind: "profile" },
     { kind: "profile", profileId: "development", deviceId: "device-1" },
     { kind: "device" },
     { kind: "device", deviceId: "device-1", machineClass: "beast" },
+    { kind: "device", deviceId: "device-1", os: "windows/wsl2" },
     { kind: "other" },
   ])("rejects an invalid or mixed move target %#", (target) => {
     expect(

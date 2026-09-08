@@ -1,11 +1,13 @@
 import { createHash } from "node:crypto";
 import type {
   SessionCatalogHost,
+  SessionCatalogShareRoute,
   SessionsCatalogArchiveParams,
   SessionsCatalogContinueParams,
   SessionsCatalogReadParams,
   SessionsCatalogReadResult,
 } from "../../packages/gateway-protocol/src/schema/sessions-catalog.js";
+import type { TerminalUploadPathStyle } from "../../packages/gateway-protocol/src/schema/terminal.js";
 import { listAgentIds, resolveSessionAgentIds } from "../agents/agent-scope.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -27,6 +29,10 @@ export type SessionCatalogListProviderParams = {
   listNodes?: () => ReturnType<PluginRuntime["nodes"]["list"]>;
   /** Publishes completed hosts without waiting for slower machines in the same list. */
   onHost?: (host: SessionCatalogHost) => void;
+  /** Register bounded host publication work before `list` settles; includes the onHost callback. */
+  waitUntil?: (completion: Promise<void>) => void;
+  /** Catalog owner retirement, independent of the requesting connection's lifetime. */
+  signal?: AbortSignal;
 };
 export type SessionCatalogReadProviderParams = Omit<SessionsCatalogReadParams, "catalogId"> & {
   /** Gateway always supplies this; optional only for pre-existing external provider types. */
@@ -63,6 +69,8 @@ export type SessionCatalogStartTerminalProviderParams = {
   initialMessage?: string;
   /** Present only when the caller selected a catalog host backed by this node. */
   nodeId?: string;
+  /** Selected local catalog source; node ownership is carried by nodeId. */
+  hostId?: string;
 };
 
 export type SessionCatalogTerminalPlan =
@@ -83,6 +91,8 @@ export type SessionCatalogTerminalPlan =
       paramsJSON: string;
       cwd?: string;
       title?: string;
+      /** Opt in only for native CLI text input, never for a shell receiver. */
+      uploadPathStyle?: TerminalUploadPathStyle;
     };
 
 export type SessionCatalogCreateTarget = {
@@ -164,6 +174,11 @@ export type SessionCatalogContinueProviderResult = {
   };
 };
 
+type SessionCatalogGatewayCopy = {
+  displayName?: string;
+  preferredModel?: string;
+};
+
 type SessionCatalogCreateParams = {
   /** Agent whose model/runtime policy must authorize the catalog target. */
   agentId?: string;
@@ -172,6 +187,10 @@ type SessionCatalogCreateParams = {
 export type SessionCatalogProvider = {
   id: string;
   label: string;
+  /** Provider rows are Gateway-hosted artifacts visible to authenticated operators. */
+  audience?: "gateway-operators";
+  /** Closed plugin-owned route contract; invalid or colliding declarations are not projected. */
+  shareRoute?: SessionCatalogShareRoute;
   /** Declares that every HOME-sensitive action honors the host isolation policy. */
   supportsProcessHomeIsolation?: true;
   /** Config-derived target; the Gateway memoizes it for one runtime-config object identity. */
@@ -179,10 +198,15 @@ export type SessionCatalogProvider = {
     params: SessionCatalogCreateParams,
   ) => SessionCatalogCreateTarget | undefined;
   list: (params: SessionCatalogListProviderParams) => Promise<SessionCatalogHost[]>;
+  /** Items are newest-first by source order; nextCursor continues to older items. */
   read: (params: SessionCatalogReadProviderParams) => Promise<SessionsCatalogReadResult>;
   continueSession?: (
     params: SessionCatalogContinueProviderParams,
   ) => Promise<SessionCatalogContinueProviderResult>;
+  /** Copy catalog history into a new ordinary Gateway-owned session. */
+  copyToGatewaySession?: (
+    params: SessionCatalogContinueProviderParams,
+  ) => Promise<SessionCatalogGatewayCopy>;
   checkUpstreamActivity?: (
     probes: SessionUpstreamProbe[],
     policy?: { allowProcessHomeFallback?: boolean },

@@ -4,6 +4,7 @@
  */
 import type { Command } from "commander";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { BrowserActRequest } from "../../browser/client-actions.types.js";
 import {
   BROWSER_TAB_REFERENCE_HELP,
   parseBrowserNonNegativeIntegerOption,
@@ -17,6 +18,17 @@ import {
   requireRef,
   resolveBrowserActionContext,
 } from "./shared.js";
+
+function parseBrowserMouseButtonOption(value: string): "left" | "right" | "middle" {
+  if (value === "left" || value === "right" || value === "middle") {
+    return value;
+  }
+  throw Object.assign(new Error("--button must be left, right, or middle."), {
+    name: "InvalidArgumentError",
+    code: "commander.invalidArgument",
+    exitCode: 1,
+  });
+}
 
 /** Registers element-centric Browser action commands. */
 export function registerBrowserElementCommands(
@@ -44,9 +56,8 @@ export function registerBrowserElementCommands(
 
   const runElementAction = async (params: {
     cmd: Command;
-    body: Record<string, unknown>;
+    body: BrowserActRequest;
     successMessage: string | ((result: unknown) => string);
-    timeoutMs?: number;
   }): Promise<void> => {
     const { parent, profile } = resolveBrowserActionContext(params.cmd, parentOpts);
     try {
@@ -54,7 +65,6 @@ export function registerBrowserElementCommands(
         parent,
         profile,
         body: params.body,
-        timeoutMs: params.timeoutMs,
       });
       const successMessage =
         typeof params.successMessage === "function"
@@ -73,7 +83,7 @@ export function registerBrowserElementCommands(
     .argument("<ref>", "Ref id from snapshot")
     .option("--target-id <id>", BROWSER_TAB_REFERENCE_HELP)
     .option("--double", "Double click", false)
-    .option("--button <left|right|middle>", "Mouse button to use")
+    .option("--button <left|right|middle>", "Mouse button to use", parseBrowserMouseButtonOption)
     .option("--modifiers <list>", "Comma-separated modifiers (Shift,Alt,Meta)")
     .action(async (ref: string | undefined, opts, cmd) => {
       const refValue = requireRef(ref);
@@ -111,7 +121,7 @@ export function registerBrowserElementCommands(
     .argument("<y>", "Viewport y coordinate")
     .option("--target-id <id>", BROWSER_TAB_REFERENCE_HELP)
     .option("--double", "Double click", false)
-    .option("--button <left|right|middle>", "Mouse button to use")
+    .option("--button <left|right|middle>", "Mouse button to use", parseBrowserMouseButtonOption)
     .option("--delay-ms <ms>", "Delay between mouse down/up", (v: string) =>
       parseBrowserNonNegativeIntegerOption(v, "--delay-ms"),
     )
@@ -215,7 +225,6 @@ export function registerBrowserElementCommands(
           targetId: normalizeOptionalString(opts.targetId),
           timeoutMs,
         },
-        timeoutMs,
         successMessage: `scrolled into view: ${refValue}`,
       });
     });

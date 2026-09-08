@@ -7,6 +7,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it, vi } from "vitest";
+import { createApiKeyCredential } from "./credential-fixtures.test-support.js";
 import {
   overlayRuntimeExternalOAuthProfiles,
   shouldReplaceStoredOAuthCredential,
@@ -19,11 +20,7 @@ describe("overlayRuntimeExternalOAuthProfiles", () => {
     const store: AuthProfileStore = {
       version: 1,
       profiles: {
-        "openai:default": {
-          type: "api_key",
-          provider: "openai",
-          key: "sk-test",
-        },
+        "openai:default": createApiKeyCredential("openai", "sk-test"),
       },
       order: {
         openai: ["openai:default"],

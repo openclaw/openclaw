@@ -7,18 +7,34 @@ const NODE_DUPLEX_MAX_MESSAGE_BYTES = 100 * 1024 * 1024;
 const MAX_PENDING_MESSAGES = 8;
 const MAX_PENDING_BYTES = 1024 * 1024;
 
+type NodeDuplexFrame = Readonly<
+  | { v: 1; kind: "ready" }
+  | { v: 1; kind: "data"; message: number; index: number; last: boolean; data: string }
+>;
+
 /** Owns ordered, bounded binary messages carried by existing node-invoke string frames. */
 export function createNodeDuplexEndpoint(options: {
-  sendFrame: (frame: string) => Promise<void> | void;
+  sendFrame: (frame: NodeDuplexFrame) => Promise<void> | void;
   onReady?: () => void;
   onError?: (error: Error) => void;
   requireReady?: boolean;
   maxMessageBytes?: number;
+  maxOutstandingDeliveryBytes?: number;
 }) {
   const maxMessageBytes = options.maxMessageBytes ?? NODE_DUPLEX_MAX_MESSAGE_BYTES;
   const invalidMessageLimit = !Number.isSafeInteger(maxMessageBytes) || maxMessageBytes < 1;
   if (invalidMessageLimit || maxMessageBytes > NODE_DUPLEX_MAX_MESSAGE_BYTES) {
     throw new Error("node duplex maximum message bytes must be between 1 and 100 MiB");
+  }
+  const maxOutstandingDeliveryBytes = options.maxOutstandingDeliveryBytes ?? maxMessageBytes;
+  if (
+    !Number.isSafeInteger(maxOutstandingDeliveryBytes) ||
+    maxOutstandingDeliveryBytes < maxMessageBytes ||
+    maxOutstandingDeliveryBytes > NODE_DUPLEX_MAX_MESSAGE_BYTES
+  ) {
+    throw new Error(
+      "node duplex maximum outstanding delivery bytes must be between the message limit and 100 MiB",
+    );
   }
   let closed = false;
   const ready = { sent: false, received: false };
@@ -67,7 +83,7 @@ export function createNodeDuplexEndpoint(options: {
   };
 
   const observeListener = (callback: NonNullable<typeof listener>, message: Uint8Array) => {
-    const bytesExceeded = activeDeliveryBytes + message.byteLength > maxMessageBytes;
+    const bytesExceeded = activeDeliveryBytes + message.byteLength > maxOutstandingDeliveryBytes;
     if (activeDeliveries.size >= MAX_PENDING_MESSAGES || bytesExceeded) {
       throw new Error("node duplex pending listener delivery exceeded its bounded capacity");
     }
@@ -149,16 +165,16 @@ export function createNodeDuplexEndpoint(options: {
           assertOpen();
           const start = index * NODE_DUPLEX_FRAGMENT_BYTES;
           const fragment = message.subarray(start, start + NODE_DUPLEX_FRAGMENT_BYTES);
-          await options.sendFrame(
-            JSON.stringify({
-              v: 1,
-              kind: "data",
-              message: messageId,
-              index,
-              last: index === fragments - 1,
-              data: Buffer.from(fragment).toString("base64"),
-            }),
-          );
+          await options.sendFrame({
+            v: 1,
+            kind: "data",
+            message: messageId,
+            index,
+            last: index === fragments - 1,
+            data: Buffer.from(fragment.buffer, fragment.byteOffset, fragment.byteLength).toString(
+              "base64",
+            ),
+          });
           assertOpen();
         }
       });
@@ -171,7 +187,7 @@ export function createNodeDuplexEndpoint(options: {
           throw new Error("node duplex framed readiness is duplicate or out of order");
         }
         ready.sent = true;
-        await options.sendFrame(JSON.stringify({ v: 1, kind: "ready" }));
+        await options.sendFrame({ v: 1, kind: "ready" });
         assertOpen();
       });
     },

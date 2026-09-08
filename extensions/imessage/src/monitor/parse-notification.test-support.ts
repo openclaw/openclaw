@@ -15,7 +15,7 @@ describe("parseIMessageNotification", () => {
         destination_caller_id: null,
         is_from_me: false,
         text: wrappedText,
-        reply_to_id: null,
+        reply_to_guid: null,
         reply_to_text: wrappedReply,
         reply_to_sender: null,
         created_at: null,
@@ -67,6 +67,49 @@ describe("parseIMessageNotification", () => {
     expect(parsed?.reaction_emoji).toBe("👍");
     expect(parsed?.reacted_to_guid).toBe("target-guid");
   });
+
+  it("preserves the provider's thread-originator and direct-reply GUIDs", () => {
+    const parsed = parseIMessageNotification({
+      message: {
+        guid: "message-guid",
+        thread_originator_guid: "thread-parent",
+        reply_to_guid: "reply-parent",
+        reply_to_text: "parent question",
+        reply_to_sender: "+10000000000",
+      },
+    });
+
+    expect(parsed).toMatchObject({
+      thread_originator_guid: "thread-parent",
+      reply_to_guid: "reply-parent",
+      reply_to_text: "parent question",
+      reply_to_sender: "+10000000000",
+    });
+  });
+
+  it("preserves the provider-resolved sender contact name", () => {
+    const parsed = parseIMessageNotification({
+      message: {
+        sender: "+15551234567",
+        sender_name: "Alice",
+      },
+    });
+
+    expect(parsed?.sender_name).toBe("Alice");
+  });
+
+  it.each([42, true, {}, ["Alice"]])("rejects malformed sender contact names", (senderName) => {
+    expect(parseIMessageNotification({ message: { sender_name: senderName } })).toBeNull();
+  });
+
+  it.each([42, true, {}, ["thread-parent"]])(
+    "rejects malformed provider thread-originator GUIDs",
+    (threadOriginatorGuid) => {
+      expect(
+        parseIMessageNotification({ message: { thread_originator_guid: threadOriginatorGuid } }),
+      ).toBeNull();
+    },
+  );
 
   it("accepts iMessage attachment transfer_name and uti metadata", () => {
     const parsed = parseIMessageNotification({

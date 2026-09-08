@@ -1,8 +1,10 @@
+import { setTimeout as sleep } from "node:timers/promises";
 import type { SlackQaScenarioEnvironment } from "./scenario-environment.js";
 import { runSlackApprovalScenario } from "./slack-live.approvals.js";
 import { runSlackCodexApprovalScenario } from "./slack-live.codex-approval-runner.js";
 import type {
   SlackQaMessageScenarioRun,
+  SlackObservedMessage,
   SlackQaScenarioImplementation,
 } from "./slack-live.contracts.js";
 import {
@@ -15,6 +17,31 @@ import {
   collectSlackBlockText,
   sendSlackChannelMessage,
 } from "./slack-live.observations.js";
+
+async function waitForSlackPreReplyCapture(params: {
+  capture: NonNullable<SlackQaMessageScenarioRun["captureBeforeReply"]>;
+  channelId: string;
+  readMessages: () => Promise<SlackObservedMessage[]>;
+  scenarioId: string;
+  timeoutMs: number;
+}) {
+  const deadline = Date.now() + params.timeoutMs;
+  while (true) {
+    const messages = (await params.readMessages()).filter(
+      (message) => message.channelId === params.channelId,
+    );
+    if (params.capture(messages)) {
+      return;
+    }
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= 0) {
+      throw new Error(
+        `timed out after ${params.timeoutMs}ms waiting for ${params.scenarioId} write capture`,
+      );
+    }
+    await sleep(Math.min(25, remainingMs));
+  }
+}
 
 export {
   slackQaAllowlistBlockScenario,
@@ -31,6 +58,7 @@ export {
   slackQaProgressCommentaryOmittedScenario,
   slackQaProgressCommentaryTrueScenario,
   slackQaProgressCommentaryVerboseDedupeScenario,
+  slackQaProgressCommentaryVerboseFullScenario,
   slackQaReactionGlyphNativeScenario,
   slackQaTableInvalidBlocksFallbackScenario,
   slackQaTablePresentationNativeScenario,
@@ -85,6 +113,17 @@ async function runSlackMessageScenario(params: {
         details: ["no reply", beforeRunDetails, afterNoReplyDetails].filter(Boolean).join("; "),
       };
     }
+    if (params.run.captureBeforeReply) {
+      // Native presentation identity belongs to the successful write capture. Resolve it
+      // before shared channel history can evict the earlier message while awaiting the final reply.
+      await waitForSlackPreReplyCapture({
+        capture: params.run.captureBeforeReply,
+        channelId,
+        readMessages: () => params.environment.readMessageWrites(messageWriteCursor),
+        scenarioId: params.scenarioId,
+        timeoutMs: params.timeoutMs,
+      });
+    }
     const reply = await waitForSlackScenarioReply({
       channelId,
       client: params.environment.context.sutReadClient,
@@ -126,10 +165,21 @@ async function runSlackMessageScenario(params: {
     });
     const responseObservedAt = new Date(reply.observedAt);
     const rttMs = responseObservedAt.getTime() - requestStartedAt.getTime();
+    const requestStartedAtIso = requestStartedAt.toISOString();
+    const responseObservedAtIso = responseObservedAt.toISOString();
     return {
       details: [`reply matched in ${rttMs}ms`, beforeRunDetails, observedDetails, afterReplyDetails]
         .filter(Boolean)
         .join("; "),
+      requestStartedAt: requestStartedAtIso,
+      responseObservedAt: responseObservedAtIso,
+      rttMs,
+      rttMeasurement: {
+        finalMatchedReplyRttMs: rttMs,
+        requestStartedAt: requestStartedAtIso,
+        responseObservedAt: responseObservedAtIso,
+        source: "request-to-observed-message" as const,
+      },
     };
   } finally {
     await params.run.cleanup?.(scenarioContext);
@@ -183,6 +233,15 @@ export async function runSlackScenario(
     return {
       details: `${run.approvalKind} approval resolved ${run.decision} in ${approval.rttMs}ms`,
       artifacts: { approval: approval.artifact },
+      requestStartedAt: approval.requestStartedAt.toISOString(),
+      responseObservedAt: approval.responseObservedAt.toISOString(),
+      rttMs: approval.rttMs,
+      rttMeasurement: {
+        finalMatchedReplyRttMs: approval.rttMs,
+        requestStartedAt: approval.requestStartedAt.toISOString(),
+        responseObservedAt: approval.responseObservedAt.toISOString(),
+        source: "approval-request-to-resolution" as const,
+      },
     };
   }
   if (run.kind === "codex-approval") {
@@ -199,6 +258,15 @@ export async function runSlackScenario(
     return {
       details: `Codex ${run.appServerMethod} approval resolved ${run.decision} in ${approval.rttMs}ms`,
       artifacts: { approval: approval.artifact },
+      requestStartedAt: approval.requestStartedAt.toISOString(),
+      responseObservedAt: approval.responseObservedAt.toISOString(),
+      rttMs: approval.rttMs,
+      rttMeasurement: {
+        finalMatchedReplyRttMs: approval.rttMs,
+        requestStartedAt: approval.requestStartedAt.toISOString(),
+        responseObservedAt: approval.responseObservedAt.toISOString(),
+        source: "approval-request-to-resolution" as const,
+      },
     };
   }
   return await runSlackMessageScenario({

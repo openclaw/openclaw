@@ -129,6 +129,8 @@ type AnthropicInlineContentNormalizer = (
 
 /** Narrow host ports consumed by the built-in provider adapters. */
 export interface AiTransportHost {
+  /** Retains accepted lifecycle work after its caller observes cancellation. */
+  observePendingProviderWork?: (pending: Promise<unknown>) => void;
   /**
    * Builds a policy-guarded fetch for one model request.
    * Returning undefined keeps the provider SDK's default fetch.
@@ -140,8 +142,8 @@ export interface AiTransportHost {
   ): typeof fetch | undefined;
   /** Resolves host-owned process-local secret sentinel substrings immediately before egress. */
   resolveSecretSentinel(value: string): string;
-  /** Redacts secrets inside structured tool-result payloads. */
-  redactSecrets<T>(value: T): T;
+  /** Redacts model-visible tool results without treating ordinary source assignments as secrets. */
+  redactModelVisibleSecrets<T>(value: T): T;
   /** Redacts secret-bearing text in tool payload strings. */
   redactToolPayloadText(text: string): string;
   /** Normalizes Anthropic inline image blocks before provider payload construction. */
@@ -228,7 +230,7 @@ type ActiveAiTransportHost = Omit<AiTransportHost, "normalizeAnthropicInlineCont
 const inertAiTransportHost: ActiveAiTransportHost = {
   buildModelFetch: () => undefined,
   resolveSecretSentinel: (value) => value,
-  redactSecrets: (value) => value,
+  redactModelVisibleSecrets: (value) => value,
   redactToolPayloadText: (text) => text,
   normalizeAnthropicInlineContentBlocks: async (content) => [...content],
   resolveOpenAIStrictToolSetting: (_model, options) =>

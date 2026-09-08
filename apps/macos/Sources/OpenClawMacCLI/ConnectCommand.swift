@@ -133,7 +133,7 @@ actor SnapshotStore {
     }
 }
 
-func runConnect(_ args: [String]) async {
+func runConnect(_ args: [String], configURL: URL) async {
     let opts = ConnectOptions.parse(args)
     if opts.help {
         print("""
@@ -146,6 +146,7 @@ func runConnect(_ args: [String]) async {
                                [--role <role>] [--scopes <a,b,c>]
 
         Options:
+          --profile <name>  App profile; overrides OPENCLAW_PROFILE (default: default)
           --url <url>        Gateway WebSocket URL (overrides config)
           --token <token>    Gateway token (if required)
           --password <pw>    Gateway password (if required)
@@ -163,7 +164,7 @@ func runConnect(_ args: [String]) async {
         return
     }
 
-    let config = loadGatewayConfig()
+    let config = loadGatewayConfig(from: configURL)
     do {
         let endpoint = try resolveGatewayEndpoint(opts: opts, config: config)
         let displayName = opts.displayName ?? Host.current().localizedName ?? "OpenClaw macOS Debug CLI"

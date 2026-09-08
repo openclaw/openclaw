@@ -15,6 +15,7 @@ import {
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { resolveAgentWorkspaceDir } from "openclaw/plugin-sdk/agent-runtime";
+import { resolveBootstrapFilesForPreparation } from "openclaw/plugin-sdk/codex-mcp-projection";
 import {
   buildMemorySystemPromptAddition,
   prepareMemorySystemPromptAddition,
@@ -26,6 +27,7 @@ import type {
 } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { readNonBlankString as readNonEmptyString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { EmbeddedRunAttemptResult } from "./attempt-terminal.js";
+import { isMessageOnlyCodexSourceReply } from "./dynamic-tool-profile.js";
 import type { CodexDynamicToolFunctionSpec, CodexDynamicToolSpec, JsonValue } from "./protocol.js";
 import { flattenCodexDynamicToolFunctions, isJsonObject } from "./protocol.js";
 import type { CodexAppServerThreadBinding } from "./session-binding.js";
@@ -87,9 +89,15 @@ export async function readMirroredSessionHistoryMessages(params: {
   sessionKey?: string;
   sessionTarget?: Partial<SessionTranscriptTargetParams>;
   admission?: TranscriptTurnAdmission;
+  signal?: AbortSignal;
 }): Promise<AgentMessage[] | undefined> {
-  const { admission, ...target } = params;
-  const messages = await readCodexMirroredSessionHistoryMessages(target, admission);
+  const { admission, signal, ...target } = params;
+  const messages = await readCodexMirroredSessionHistoryMessages(
+    target,
+    admission,
+    "model-context",
+    signal,
+  );
   if (!messages) {
     embeddedAgentLog.warn("failed to read mirrored session history for codex harness hooks", {
       sessionFile: params.sessionFile,
@@ -168,6 +176,30 @@ export function resolveContextEngineBootstrapProjectionDecision(params: {
  * Loads workspace bootstrap files and partitions them into Codex-native prompt,
  * developer-instruction, heartbeat, and memory-tool contexts.
  */
+/** A child baseline reads the bounded workspace snapshot without invoking admission hooks. */
+export async function prepareCodexWorkspaceDeveloperInstructions(params: {
+  config: EmbeddedRunAttemptParams["config"];
+  agentId: string;
+  sessionKey: string;
+  sessionId: string;
+  workspaceDir: string;
+  cwd: string;
+}): Promise<string | undefined> {
+  if (isSameCodexWorkspacePath(params.workspaceDir, params.cwd)) {
+    return undefined;
+  }
+  const files = await resolveBootstrapFilesForPreparation(params);
+  const contextFiles = buildBootstrapContextForFiles(files, {
+    config: params.config,
+    agentId: params.agentId,
+  });
+  return renderCodexWorkspaceDeveloperInstructions({
+    files: selectCodexWorkspaceAgentProjectInstructionFiles(contextFiles, params.workspaceDir),
+    header: "## OpenClaw Agent Workspace Instructions",
+    preamble: "OpenClaw loaded this bounded snapshot from the configured agent workspace.",
+  });
+}
+
 export async function buildCodexWorkspaceBootstrapContext(params: {
   params: EmbeddedRunAttemptParams;
   resolvedWorkspace: string;
@@ -176,6 +208,7 @@ export async function buildCodexWorkspaceBootstrapContext(params: {
   sessionKey: string;
   sessionAgentId: string;
   memoryToolNames: readonly string[];
+  ringZeroActive: boolean;
   sandboxed?: boolean;
 }): Promise<CodexWorkspaceBootstrapContext> {
   try {
@@ -244,8 +277,15 @@ export async function buildCodexWorkspaceBootstrapContext(params: {
       memoryWorkspaceDir: params.effectiveWorkspace,
     });
     const injectOpenClawContext = shouldInjectCodexOpenClawPromptContext(params.params);
+    const restrictedProjectDocNeedsOpenClawCarrier =
+      params.params.pluginHarnessToolPolicyRestricted === true &&
+      !params.params.disableTools &&
+      !isMessageOnlyCodexSourceReply(params.params) &&
+      params.params.bootstrapContextMode !== "lightweight";
     const threadDeveloperInstructionFiles =
-      injectOpenClawContext && inheritsAgentWorkspace
+      injectOpenClawContext &&
+      !params.ringZeroActive &&
+      (inheritsAgentWorkspace || restrictedProjectDocNeedsOpenClawCarrier)
         ? selectCodexWorkspaceAgentProjectInstructionFiles(contextFiles, params.resolvedWorkspace)
         : [];
     const turnScopedDeveloperInstructionFiles = injectOpenClawContext
@@ -299,6 +339,7 @@ export function buildCodexSystemPromptReport(params: {
   workspaceDir: string;
   developerInstructions: string;
   workspaceBootstrapContext: CodexWorkspaceBootstrapContext;
+  omitWorkspaceReferences?: boolean;
   skillsPrompt: string;
   tools: CodexDynamicToolSpec[];
 }): CodexSystemPromptReport {
@@ -330,6 +371,7 @@ export function buildCodexSystemPromptReport(params: {
     injectedWorkspaceFiles: buildCodexBootstrapInjectionStats({
       bootstrapFiles: params.workspaceBootstrapContext.bootstrapFiles,
       injectedFiles: params.workspaceBootstrapContext.promptContextFiles ?? [],
+      omitReferenceFiles: params.omitWorkspaceReferences,
       developerInstructionFiles: [
         ...(params.workspaceBootstrapContext.threadDeveloperInstructionFiles ?? []),
         ...(params.workspaceBootstrapContext.turnScopedDeveloperInstructionFiles ?? []),
@@ -431,6 +473,7 @@ function stableJsonHash(value: JsonValue): string {
 function buildCodexBootstrapInjectionStats(params: {
   bootstrapFiles: CodexBootstrapFile[];
   injectedFiles: EmbeddedContextFile[];
+  omitReferenceFiles?: boolean;
   developerInstructionFiles?: EmbeddedContextFile[];
   memoryToolRoutedBootstrapFiles?: CodexBootstrapFile[];
   memoryToolRouted?: boolean;
@@ -474,8 +517,12 @@ function buildCodexBootstrapInjectionStats(params: {
         truncated: null,
       };
     }
-    const injectedChars = memoryToolRoutedFile ? 0 : (injected?.length ?? 0);
-    const truncated = memoryToolRoutedFile ? false : !file.missing && injectedChars < rawChars;
+    const omitted =
+      memoryToolRoutedFile ||
+      (params.omitReferenceFiles &&
+        readCodexIndexedContextFileContent(injectedIndex, pathValue, fileName) !== undefined);
+    const injectedChars = omitted ? 0 : (injected?.length ?? 0);
+    const truncated = omitted ? false : !file.missing && injectedChars < rawChars;
     return {
       name: displayName,
       path: pathValue,

@@ -6,6 +6,8 @@ import {
 } from "openclaw/plugin-sdk/gateway-runtime";
 import { formatQaGatewayLogsForError } from "./gateway-log-redaction.js";
 
+type QaGatewayClientOptions = ConstructorParameters<typeof GatewayClient>[0];
+
 type QaGatewayRpcRequestOptions = {
   deadlineMs?: number;
   expectFinal?: boolean;
@@ -75,7 +77,8 @@ export async function startQaGatewayRpcClient(params: {
   wsUrl: string;
   token: string;
   logs: () => string;
-  scopes?: Array<"operator.read" | "operator.write" | "operator.admin">;
+  deviceIdentity?: QaGatewayClientOptions["deviceIdentity"];
+  scopes?: QaGatewayClientOptions["scopes"];
 }): Promise<QaGatewayRpcClient> {
   const wrapError = (error: unknown) => formatQaGatewayRpcError(error, params.logs);
   let stopped = false;
@@ -91,7 +94,9 @@ export async function startQaGatewayRpcClient(params: {
     token: params.token,
     requestTimeoutMs: QA_GATEWAY_RPC_TIMEOUT_MS,
     clientName: "gateway-client",
-    deviceIdentity: null,
+    deviceIdentity: params.deviceIdentity ?? null,
+    // Ephemeral observers must not persist hello tokens into shared client state.
+    ...(params.deviceIdentity ? { sharedStateMode: "read-only" as const } : {}),
     mode: "backend",
     scopes: params.scopes ?? ["operator.admin"],
     onHelloOk: () => {

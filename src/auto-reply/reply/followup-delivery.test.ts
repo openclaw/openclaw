@@ -162,7 +162,7 @@ describe("resolveFollowupDeliveryPayloads", () => {
         payloads: [{ mediaUrl: "/tmp/img.png" }],
         sentMediaUrls: ["/tmp/img.png"],
       }),
-    ).toEqual([{ mediaUrl: undefined, mediaUrls: undefined }]);
+    ).toEqual([]);
   });
 
   it("does not dedupe text sent via messaging tool to another target", () => {
@@ -483,7 +483,7 @@ describe("resolveFollowupDeliveryDecision", () => {
     });
   });
 
-  it("delivers a yield acknowledgment in configured group message-tool-only mode", () => {
+  it("delivers a yield acknowledgment despite private partial output in group message-tool-only mode", () => {
     const turn = createTurn();
     turn.queued.originatingChatType = "group";
     turn.queued.run.sourceReplyDeliveryMode = "message_tool_only";
@@ -500,7 +500,7 @@ describe("resolveFollowupDeliveryDecision", () => {
       resolveFollowupDeliveryDecision({
         turn,
         execution,
-        accounting: createAccounting(),
+        accounting: createAccounting([{ text: "Private partial output." }]),
       }),
     ).toMatchObject({
       kind: "deliver",
@@ -533,11 +533,11 @@ describe("resolveFollowupDeliveryDecision", () => {
     ).toEqual({ kind: "suppress", reason: "send-policy" });
   });
 
-  it("suppresses a settled result whose accepted abort still requires accounting", () => {
-    const execution = createSettledExecution("late reply");
-    if (execution.outcome.kind === "settled") {
-      execution.outcome.abortReason = "user";
-    }
+  it("does not deliver completed compaction facts from an aborted turn", () => {
+    const execution: AgentTurnExecutionResult = {
+      runId: "run-1",
+      outcome: { kind: "aborted", reason: "user", compaction: { count: 1, durable: [] } },
+    };
 
     expect(
       resolveFollowupDeliveryDecision({
@@ -687,6 +687,28 @@ describe("resolveFollowupDeliveryDecision", () => {
     }
   });
 
+  it("recovers a substantive final after an explicitly allowed media payload is deduplicated", () => {
+    const substantiveFinal =
+      "This is a substantive private answer that missed the message tool. It must trigger recovery after its only marked media was already delivered.";
+    const turn = createTurn();
+    turn.queued.run.sourceReplyDeliveryMode = "message_tool_only";
+    const mediaUrl = "file:///tmp/already-sent.png";
+    const execution = createSettledExecution(substantiveFinal);
+    if (execution.outcome.kind === "settled") {
+      execution.outcome.result.messagingToolSentMediaUrls = [mediaUrl];
+    }
+
+    expect(
+      resolveFollowupDeliveryDecision({
+        turn,
+        execution,
+        accounting: createAccounting([
+          setReplyPayloadMetadata({ mediaUrl }, { deliverDespiteSourceReplySuppression: true }),
+        ]),
+      }),
+    ).toMatchObject({ kind: "retry-source-delivery" });
+  });
+
   it("routes settled delivery with the actual runtime provider", () => {
     const decision = resolveFollowupDeliveryDecision({
       turn: createTurn(),
@@ -819,12 +841,14 @@ describe("resolveFollowupDeliveryDecision", () => {
   );
 
   it.each([
-    { label: "accidental", intentionalTerminalCompletion: undefined },
-    { label: "intentional terminal tool", intentionalTerminalCompletion: "tool-batch" as const },
-  ])(
-    "accounts for an $label empty message-tool-only completion",
-    ({ intentionalTerminalCompletion }) => {
+    ["accidental", undefined, undefined],
+    ["intentional terminal tool", "tool-batch", undefined],
+    ["private terminal diagnostic", undefined, "Private terminal diagnostic."],
+  ] as const)(
+    "accounts for %s message-tool-only completion",
+    (_label, intentionalTerminalCompletion, privateText) => {
       const turn = createTurn();
+      turn.queued.originatingChatType = privateText ? "group" : turn.queued.originatingChatType;
       turn.queued.run.sourceReplyDeliveryMode = "message_tool_only";
       const execution = createSettledExecution();
       if (execution.outcome.kind === "settled" && intentionalTerminalCompletion) {
@@ -834,9 +858,9 @@ describe("resolveFollowupDeliveryDecision", () => {
       const decision = resolveFollowupDeliveryDecision({
         turn,
         execution,
-        accounting: createAccounting(),
+        accounting: createAccounting(privateText ? [{ text: privateText }] : []),
       });
-      if (intentionalTerminalCompletion) {
+      if (intentionalTerminalCompletion || privateText) {
         expect(decision).toEqual({ kind: "suppress", reason: "message-tool-only" });
         return;
       }
@@ -844,10 +868,7 @@ describe("resolveFollowupDeliveryDecision", () => {
       expect(decision).toMatchObject({
         kind: "deliver",
         payloads: [
-          {
-            text: expect.stringContaining("did not produce a visible reply"),
-            isError: true,
-          },
+          { text: expect.stringContaining("did not produce a visible reply"), isError: true },
         ],
       });
       if (decision.kind === "deliver") {
@@ -931,6 +952,45 @@ describe("deliverFollowupDecision", () => {
 
       expect(onBlockReply).toHaveBeenCalledOnce();
       expect(deliveryState.routeReply).not.toHaveBeenCalled();
+    } finally {
+      deliveryState.followupRoute = undefined;
+    }
+  });
+
+  it("keeps a queued WebChat reply bound to its original source dispatcher", async () => {
+    const laterDispatcher = vi.fn(async (_payload: ReplyPayload) => {});
+    const sourceDispatcher = vi.fn(async () => {});
+    const turn = createTurn();
+    turn.queued.originatingChannel = "webchat";
+    turn.queued.originatingTo = undefined;
+    turn.queued.queuedFollowupReplyDisposition = { kind: "deliver", deliver: sourceDispatcher };
+    deliveryState.followupRoute = { route: "dispatcher" };
+    try {
+      await deliverFollowupDecision({
+        decision: { kind: "deliver", payloads: [{ text: "one" }, { text: "two" }] },
+        turn,
+        defaults: createDefaults(laterDispatcher),
+        runId: "source-run",
+        runFollowup: vi.fn(async () => {}),
+      });
+      expect(sourceDispatcher).toHaveBeenCalledWith({
+        kind: "queued-followup",
+        runId: "source-run",
+        originatingChannel: "webchat",
+        payloads: [{ text: "one" }, { text: "two" }],
+      });
+      turn.queued.queuedFollowupReplyDisposition = {
+        kind: "drop",
+        reason: "source-unavailable",
+      };
+      await deliverFollowupDecision({
+        decision: { kind: "deliver", payloads: [{ text: "must stay dropped" }] },
+        turn,
+        defaults: createDefaults(laterDispatcher),
+        runId: "dropped-run",
+        runFollowup: vi.fn(async () => {}),
+      });
+      expect(laterDispatcher).not.toHaveBeenCalled();
     } finally {
       deliveryState.followupRoute = undefined;
     }
