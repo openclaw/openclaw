@@ -1943,6 +1943,78 @@ describe("cli session history", () => {
     ).toBe(true);
   });
 
+  it("projects distinct imported identities onto repeated local text turns", () => {
+    const timestamp = Date.parse("2026-09-01T10:00:00Z");
+    const localMessages = [
+      { role: "assistant", content: "Repeated answer", timestamp },
+      { role: "assistant", content: "Repeated answer", timestamp: timestamp + 1 },
+    ];
+    const importedMessages = [
+      {
+        role: "assistant",
+        content: "Repeated answer",
+        timestamp,
+        __openclaw: {
+          importedFrom: "claude-cli",
+          cliSessionId: "session-1",
+          externalId: "external-1",
+        },
+      },
+      {
+        role: "assistant",
+        content: "Repeated answer",
+        timestamp: timestamp + 1,
+        __openclaw: {
+          importedFrom: "claude-cli",
+          cliSessionId: "session-1",
+          externalId: "external-2",
+        },
+      },
+    ];
+
+    const merged = mergeImportedChatHistoryMessages({ localMessages, importedMessages });
+
+    expect(merged).toHaveLength(2);
+    expect(
+      merged.map((message) => readRecord(readRecord(message)["__openclaw"]).externalId),
+    ).toEqual(["external-1", "external-2"]);
+  });
+
+  it("prefers timestamped text matches before timestamp-less fallbacks", () => {
+    const timestamp = Date.parse("2026-09-01T10:00:00Z");
+    const merged = mergeImportedChatHistoryMessages({
+      localMessages: [
+        { role: "assistant", content: "Repeated answer" },
+        { role: "assistant", content: "Repeated answer", timestamp },
+      ],
+      importedMessages: [
+        {
+          role: "assistant",
+          content: "Repeated answer",
+          timestamp,
+          __openclaw: {
+            importedFrom: "claude-cli",
+            cliSessionId: "session-1",
+            externalId: "timestamped",
+          },
+        },
+        {
+          role: "assistant",
+          content: "Repeated answer",
+          __openclaw: {
+            importedFrom: "claude-cli",
+            cliSessionId: "session-1",
+            externalId: "timestamp-less",
+          },
+        },
+      ],
+    });
+
+    expect(merged).toHaveLength(2);
+    expect(readRecord(readRecord(merged[0])["__openclaw"]).externalId).toBe("timestamp-less");
+    expect(readRecord(readRecord(merged[1])["__openclaw"]).externalId).toBe("timestamped");
+  });
+
   it("falls back to legacy cliSessionIds when bindings are absent", async () => {
     await withClaudeProjectsDir(async ({ homeDir, sessionId }) => {
       const messages = resolveChatHistoryWithCliSessionImports({

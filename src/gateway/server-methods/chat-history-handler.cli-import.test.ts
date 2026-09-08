@@ -166,6 +166,76 @@ describe("CLI-imported history anchors", () => {
     });
   });
 
+  it("advances offset pages when imports only add metadata", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const scope = {
+        agentId: "main",
+        sessionKey: "agent:main:cli-history-metadata-pages",
+        sessionId: randomUUID(),
+      };
+      const cliSessionId = randomUUID();
+      const timestamp = Date.parse("2026-09-01T10:00:00Z");
+      await upsertSessionEntryCore(scope, {
+        sessionId: scope.sessionId,
+        updatedAt: timestamp,
+        providerOverride: "claude-cli",
+        modelOverride: "claude-sonnet-4-6",
+        cliSessionBindings: { "claude-cli": { sessionId: cliSessionId } },
+      });
+      const localIds: string[] = [];
+      const importedRows: string[] = [];
+      for (let index = 0; index < 6; index += 1) {
+        const content = `Deduplicated answer ${index}`;
+        const messageTimestamp = timestamp + index;
+        const local = await appendTranscriptMessage(scope, {
+          message: { role: "assistant", content, timestamp: messageTimestamp },
+        });
+        localIds.push(local.messageId);
+        importedRows.push(
+          JSON.stringify({
+            type: "assistant",
+            uuid: randomUUID(),
+            parentUuid: null,
+            sessionId: cliSessionId,
+            timestamp: new Date(messageTimestamp).toISOString(),
+            message: { role: "assistant", content },
+          }),
+        );
+      }
+      const projectDir = path.join(state.home, ".claude", "projects", "synthetic-history");
+      await fs.mkdir(projectDir, { recursive: true });
+      await fs.writeFile(
+        path.join(projectDir, `${cliSessionId}.jsonl`),
+        `${importedRows.join("\n")}\n`,
+      );
+      const context = createDirectChatContext();
+      const handler = expectDefined(chatHistoryHandlers["chat.history"], "history handler");
+      const read = async (params: HistoryRequest) => {
+        let result: HistoryPage | undefined;
+        await handler({
+          params: { sessionKey: scope.sessionKey, ...params },
+          context,
+          req: { type: "req", id: randomUUID(), method: "chat.history" },
+          client: null,
+          isWebchatConnect: () => false,
+          respond: (ok, payload, error) => {
+            expect(error).toBeUndefined();
+            expect(ok).toBe(true);
+            result = payload as HistoryPage;
+          },
+        });
+        return expectDefined(result, "history response");
+      };
+
+      const newest = await read({ limit: 2, offset: 0 });
+      expect(newest.messages.map(readChatHistoryMessageId)).toEqual(localIds.slice(-2));
+      expect(newest.nextOffset).toBe(2);
+      const older = await read({ limit: 2, offset: newest.nextOffset });
+      expect(older.messages.map(readChatHistoryMessageId)).toEqual(localIds.slice(2, 4));
+      expect(older.nextOffset).toBe(4);
+    });
+  });
+
   it.each(["chat.history", "chat.startup"] as const)(
     "%s distinguishes missing anchors from terminal imported snapshots",
     async (method) => {

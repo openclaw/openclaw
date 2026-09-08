@@ -14,6 +14,7 @@ import {
 } from "../cli-session-history.js";
 import { resolveCurrentUserProfileDisplay } from "../current-user-profile-display.js";
 import {
+  capOffsetChatHistoryProjectedMessages,
   dropChatHistoryOverreadContextMessage,
   readChatHistoryMessageId,
   readChatHistoryRecoveryContext,
@@ -44,6 +45,37 @@ type ChatHistoryPage = {
     exhausted?: true;
   };
 };
+
+function projectCliIdentityOntoPagedMessages(params: {
+  pagedMessages: unknown[];
+  completeMessages: unknown[];
+}): unknown[] {
+  const importedMetaById = new Map<string, Record<string, unknown>>();
+  for (const message of params.completeMessages) {
+    const id = readChatHistoryMessageId(message);
+    const meta = asOptionalRecord(asOptionalRecord(message)?.["__openclaw"]);
+    if (id && meta) {
+      importedMetaById.set(id, meta);
+    }
+  }
+  return params.pagedMessages.map((message) => {
+    const record = asOptionalRecord(message);
+    const importedMeta = importedMetaById.get(readChatHistoryMessageId(message) ?? "");
+    if (!record || !importedMeta) {
+      return message;
+    }
+    const localMeta = asOptionalRecord(record["__openclaw"]);
+    return {
+      ...record,
+      __openclaw: {
+        ...localMeta,
+        importedFrom: importedMeta.importedFrom,
+        externalId: importedMeta.externalId,
+        cliSessionId: importedMeta.cliSessionId,
+      },
+    };
+  });
+}
 
 export function resolveChatHistoryNextOffset(params: {
   messages: unknown[];
@@ -381,6 +413,7 @@ export async function readChatHistoryPage(params: {
     effectiveMaxChars,
     max,
     maxBytes: maxHistoryBytes,
+    offset,
   });
   const { readPage } = incrementalTail;
   const activeLeafEntryId = resolveChatHistoryActiveLeafEntryId(readPage);
@@ -435,6 +468,19 @@ export async function readChatHistoryPage(params: {
       maxChars: effectiveMaxChars,
       resolveCurrentUserProfileDisplay,
     });
+    if (!completeCliHistory.expanded && !messageId) {
+      // A tail-only merge can look expanded because older imported rows are absent
+      // from that local window. Preserve normal local pagination after the full merge
+      // proves that the import only contributes identity metadata.
+      const localPage = await readChatHistoryPage({ ...params, ignoreCliSessionImports: true });
+      return {
+        ...localPage,
+        messages: projectCliIdentityOntoPagedMessages({
+          pagedMessages: localPage.messages,
+          completeMessages: displayMessages,
+        }),
+      };
+    }
     // Import snapshots are terminal, but a missing display anchor is not a tail request.
     if (
       messageId &&

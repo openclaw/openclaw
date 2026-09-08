@@ -29,8 +29,8 @@ type ComparableHistoryMessage = {
 };
 
 type TimestampSummary = {
-  missingTimestamp?: ComparableHistoryMessage;
-  buckets: Map<number, { min: ComparableHistoryMessage; max: ComparableHistoryMessage }>;
+  missingTimestamps: ComparableHistoryMessage[];
+  buckets: Map<number, ComparableHistoryMessage[]>;
 };
 
 type RoleTextIndex = Map<string, Map<string, TimestampSummary>>;
@@ -165,53 +165,73 @@ function resolveImportedExternalIdentityKey(message: unknown): string | undefine
 
 function addTimestampToSummary(summary: TimestampSummary, entry: ComparableHistoryMessage): void {
   if (entry.timestamp === undefined) {
-    summary.missingTimestamp ??= entry;
+    summary.missingTimestamps.push(entry);
     return;
   }
   const bucketKey = Math.floor(entry.timestamp / DEDUPE_TIMESTAMP_WINDOW_MS);
-  const bucket = summary.buckets.get(bucketKey);
-  if (bucket) {
-    if ((bucket.min.timestamp ?? Number.POSITIVE_INFINITY) > entry.timestamp) {
-      bucket.min = entry;
-    }
-    if ((bucket.max.timestamp ?? Number.NEGATIVE_INFINITY) < entry.timestamp) {
-      bucket.max = entry;
-    }
-  } else {
-    summary.buckets.set(bucketKey, { min: entry, max: entry });
-  }
+  const bucket = summary.buckets.get(bucketKey) ?? [];
+  bucket.push(entry);
+  summary.buckets.set(bucketKey, bucket);
 }
 
 function findTimestampMatch(
   summary: TimestampSummary | undefined,
   timestamp: number | undefined,
+  consumed: Set<ComparableHistoryMessage>,
 ): ComparableHistoryMessage | undefined {
   if (!summary) {
     return undefined;
   }
-  if (summary.missingTimestamp) {
-    return summary.missingTimestamp;
-  }
   if (timestamp === undefined) {
-    return summary.buckets.values().next().value?.min;
+    const missingTimestamp = summary.missingTimestamps.find((entry) => !consumed.has(entry));
+    if (missingTimestamp) {
+      return missingTimestamp;
+    }
+    for (const bucket of summary.buckets.values()) {
+      const candidate = bucket.find((entry) => !consumed.has(entry));
+      if (candidate) {
+        return candidate;
+      }
+    }
+    return undefined;
   }
   const bucketKey = Math.floor(timestamp / DEDUPE_TIMESTAMP_WINDOW_MS);
-  const current = summary.buckets.get(bucketKey);
+  const pickCandidate = (
+    bucket: ComparableHistoryMessage[] | undefined,
+    direction: "earliest" | "latest",
+  ) => {
+    let selected: ComparableHistoryMessage | undefined;
+    for (const candidate of bucket ?? []) {
+      if (consumed.has(candidate)) {
+        continue;
+      }
+      if (
+        !selected ||
+        (direction === "earliest"
+          ? (candidate.timestamp ?? Infinity) < (selected.timestamp ?? Infinity)
+          : (candidate.timestamp ?? -Infinity) > (selected.timestamp ?? -Infinity))
+      ) {
+        selected = candidate;
+      }
+    }
+    return selected;
+  };
+  const current = pickCandidate(summary.buckets.get(bucketKey), "earliest");
   if (current) {
-    return current.min;
+    return current;
   }
-  const previous = summary.buckets.get(bucketKey - 1);
+  const previous = pickCandidate(summary.buckets.get(bucketKey - 1), "latest");
   if (
-    previous?.max.timestamp !== undefined &&
-    previous.max.timestamp >= timestamp - DEDUPE_TIMESTAMP_WINDOW_MS
+    previous?.timestamp !== undefined &&
+    previous.timestamp >= timestamp - DEDUPE_TIMESTAMP_WINDOW_MS
   ) {
-    return previous.max;
+    return previous;
   }
-  const next = summary.buckets.get(bucketKey + 1);
-  return next?.min.timestamp !== undefined &&
-    next.min.timestamp <= timestamp + DEDUPE_TIMESTAMP_WINDOW_MS
-    ? next.min
-    : undefined;
+  const next = pickCandidate(summary.buckets.get(bucketKey + 1), "earliest");
+  if (next?.timestamp !== undefined && next.timestamp <= timestamp + DEDUPE_TIMESTAMP_WINDOW_MS) {
+    return next;
+  }
+  return summary.missingTimestamps.find((entry) => !consumed.has(entry));
 }
 
 function addRoleTextCandidate(index: RoleTextIndex, entry: ComparableHistoryMessage): void {
@@ -225,7 +245,7 @@ function addRoleTextCandidate(index: RoleTextIndex, entry: ComparableHistoryMess
   }
   let summary = byText.get(entry.text);
   if (!summary) {
-    summary = { buckets: new Map() };
+    summary = { missingTimestamps: [], buckets: new Map() };
     byText.set(entry.text, summary);
   }
   addTimestampToSummary(summary, entry);
@@ -234,11 +254,12 @@ function addRoleTextCandidate(index: RoleTextIndex, entry: ComparableHistoryMess
 function findRoleTextCandidate(
   index: RoleTextIndex,
   entry: ComparableHistoryMessage,
+  consumed: Set<ComparableHistoryMessage>,
 ): ComparableHistoryMessage | undefined {
   if (!entry.role || !entry.text) {
     return undefined;
   }
-  return findTimestampMatch(index.get(entry.role)?.get(entry.text), entry.timestamp);
+  return findTimestampMatch(index.get(entry.role)?.get(entry.text), entry.timestamp, consumed);
 }
 
 function hasLocalImageMediaFacts(entry: ComparableHistoryMessage): boolean {
@@ -293,6 +314,7 @@ export function mergeImportedChatHistoryMessages(params: {
   const allMessageRoleTextIndex: RoleTextIndex = new Map();
   const identitylessRoleTextIndex: RoleTextIndex = new Map();
   const localImageMediaCandidates = new Map<string, ComparableHistoryMessage[]>();
+  const consumedLocalCandidates = new Set<ComparableHistoryMessage>();
   const indexEntry = (entry: ComparableHistoryMessage) => {
     if (entry.externalIdentityKey) {
       exactExternalIdentityIndex.set(entry.externalIdentityKey, entry);
@@ -337,11 +359,12 @@ export function mergeImportedChatHistoryMessages(params: {
         }
         changed = true;
       }
+      consumedLocalCandidates.add(imageDuplicate);
       continue;
     }
     const duplicate = imported.externalIdentityKey
-      ? findRoleTextCandidate(identitylessRoleTextIndex, imported)
-      : findRoleTextCandidate(allMessageRoleTextIndex, imported);
+      ? findRoleTextCandidate(identitylessRoleTextIndex, imported, consumedLocalCandidates)
+      : findRoleTextCandidate(allMessageRoleTextIndex, imported, consumedLocalCandidates);
     if (!imported.hasCliImageMentions && duplicate) {
       const projected = projectImportedIdentity(duplicate.message, imported.message);
       if (projected !== duplicate.message) {
@@ -352,6 +375,7 @@ export function mergeImportedChatHistoryMessages(params: {
         }
         changed = true;
       }
+      consumedLocalCandidates.add(duplicate);
       continue;
     }
     merged.push(imported);
