@@ -533,8 +533,8 @@ function renderClawHubDetailDialog(props: SkillsProps) {
       style="--openclaw-modal-width: min(1040px, calc(100vw - 32px));"
       @modal-cancel=${props.onClawHubDetailClose}
     >
-      <div class="md-preview-dialog__panel skill-reader-dialog">
-        <div class="md-preview-dialog__header">
+      <div class="exec-approval-card skill-reader-dialog">
+        <div class="exec-approval-header">
           <div class="clawhub-skill-detail__identity">
             ${
               detailImageUrl
@@ -547,20 +547,20 @@ function renderClawHubDetailDialog(props: SkillsProps) {
                   />`
                 : nothing
             }
-            <div class="md-preview-dialog__title">
+            <div class="exec-approval-title">
               ${detail?.skill?.displayName ?? props.clawhubDetailRef}
             </div>
           </div>
           <button
             type="button"
-            class="btn btn--sm md-preview-icon-btn"
+            class="btn btn--icon btn--ghost"
             aria-label=${t("skillsPage.close")}
             @click=${props.onClawHubDetailClose}
           >
-            <span aria-hidden="true">${icons.x}</span>
+            ${icons.x}
           </button>
         </div>
-        <div class="md-preview-dialog__body" style="display: grid; gap: var(--space-4);">
+        <div class="skill-reader-dialog__body" style="display: grid; gap: var(--space-4);">
           ${
             props.clawhubDetailLoading
               ? html`<div class="muted">${t("common.loading")}</div>`
@@ -694,26 +694,23 @@ function renderSkillDetail(skill: SkillStatusEntry, props: SkillsProps) {
       style="--openclaw-modal-width: min(1040px, calc(100vw - 32px));"
       @modal-cancel=${props.onDetailClose}
     >
-      <div class="md-preview-dialog__panel skill-reader-dialog">
-        <div class="md-preview-dialog__header">
-          <div
-            class="md-preview-dialog__title"
-            style="display: flex; align-items: center; gap: 8px;"
-          >
+      <div class="exec-approval-card skill-reader-dialog">
+        <div class="exec-approval-header">
+          <div class="exec-approval-title" style="display: flex; align-items: center; gap: 8px;">
             <span class="statusDot ${skillStatusClass(skill)}"></span>
             ${skill.emoji ? html`<span style="font-size: 18px;">${skill.emoji}</span>` : nothing}
             <span>${skill.name}</span>
           </div>
           <button
             type="button"
-            class="btn btn--sm md-preview-icon-btn"
+            class="btn btn--icon btn--ghost"
             aria-label=${t("skillsPage.close")}
             @click=${props.onDetailClose}
           >
-            <span aria-hidden="true">${icons.x}</span>
+            ${icons.x}
           </button>
         </div>
-        <div class="md-preview-dialog__body" style="display: grid; gap: var(--space-4);">
+        <div class="skill-reader-dialog__body" style="display: grid; gap: var(--space-4);">
           <div>
             <div style="font-size: 14px; line-height: 1.5; color: var(--text);">
               ${skill.description}

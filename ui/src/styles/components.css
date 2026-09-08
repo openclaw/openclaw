@@ -4537,36 +4537,44 @@ td.data-table-key-col {
   }
 }
 
-.md-preview-dialog__panel.skill-reader-dialog {
+/* Use the same card and ghost close control as Connect machine and confirmations. */
+.exec-approval-card.skill-reader-dialog {
   --skill-reader-inset: var(--space-5);
 
+  height: fit-content;
   min-height: 0;
-  max-height: calc(100dvh - 2 * var(--space-6));
+  max-height: var(--openclaw-modal-max-height, calc(100dvh - 2 * var(--space-6)));
+  padding: 0;
+  overflow: hidden;
 }
 
-.skill-reader-dialog .md-preview-dialog__header {
-  flex-direction: row;
-  align-items: center;
+.skill-reader-dialog .exec-approval-header {
   flex-shrink: 0;
   gap: var(--space-3);
   padding: var(--skill-reader-inset);
+  border-bottom: 1px solid var(--border);
 }
 
-.skill-reader-dialog .md-preview-dialog__header > :first-child {
+.skill-reader-dialog .exec-approval-header > :first-child {
   min-width: 0;
+  overflow-wrap: anywhere;
 }
 
-.skill-reader-dialog .md-preview-icon-btn,
+.skill-reader-dialog .btn--icon,
 .skill-reader-dialog .statusDot {
   flex-shrink: 0;
 }
 
-.skill-reader-dialog .md-preview-dialog__body {
+.skill-reader-dialog__body {
+  flex: 0 1 auto;
+  min-height: 0;
   align-content: start;
+  overflow: auto;
+  overscroll-behavior: contain;
   padding: var(--skill-reader-inset);
 }
 
-.skill-reader-dialog .md-preview-dialog__body > p {
+.skill-reader-dialog__body > p {
   margin: 0;
 }
 
@@ -4588,10 +4596,14 @@ td.data-table-key-col {
 }
 
 @media (max-width: 768px) {
-  .md-preview-dialog__panel.skill-reader-dialog {
+  .exec-approval-card.skill-reader-dialog {
     --skill-reader-inset: var(--space-4);
+  }
+}
 
-    max-height: 90dvh;
+@media (max-width: 640px) {
+  .exec-approval-card.skill-reader-dialog {
+    max-height: var(--openclaw-modal-max-height, 90dvh);
   }
 }
 

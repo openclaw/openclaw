@@ -40,20 +40,20 @@ export function renderLibraryPinRead(props: {
     style="--openclaw-modal-width: 960px;"
     @modal-cancel=${props.onClose}
   >
-    <div class="md-preview-dialog__panel skill-reader-dialog">
-      <div class="md-preview-dialog__header">
-        <strong class="md-preview-dialog__title">${read.entry.slug}</strong
+    <div class="exec-approval-card skill-reader-dialog">
+      <div class="exec-approval-header">
+        <strong class="exec-approval-title">${read.entry.slug}</strong
         ><button
           type="button"
-          class="btn btn--sm md-preview-icon-btn"
+          class="btn btn--icon btn--ghost"
           aria-label=${t("common.close")}
           @click=${props.onClose}
         >
-          <span aria-hidden="true">${icons.x}</span>
+          ${icons.x}
         </button>
       </div>
       <div
-        class="md-preview-dialog__body"
+        class="skill-reader-dialog__body"
         style="display: grid; gap: var(--space-4); min-width: 0;"
       >
         <p>

@@ -2,6 +2,7 @@ import { nothing, render } from "lit";
 import { afterEach, describe, expect, it } from "vitest";
 import "../../styles.css";
 import { getRenderedModalDialog } from "../../test-helpers/modal-dialog.ts";
+import { renderConnectMachineDialog } from "../new-session/connect-machine-dialog.ts";
 import { createProps, createSkill } from "./view.test-support.ts";
 import { renderSkills } from "./view.ts";
 
@@ -23,6 +24,37 @@ describe.runIf(browserMode)("skill reader shell", () => {
     await page.viewport(width, 844);
     container = document.createElement("openclaw-skills-page");
     document.body.append(container);
+    render(
+      renderConnectMachineDialog({
+        open: true,
+        loading: false,
+        error: null,
+        setup: null,
+        onRefresh: () => undefined,
+        onClose: () => undefined,
+        onManageDevices: () => undefined,
+      }),
+      container,
+    );
+    const canonical = await getRenderedModalDialog(container);
+    await Promise.all(canonical.dialog.getAnimations().map((animation) => animation.finished));
+    const readChrome = (panel: HTMLElement) => {
+      const style = getComputedStyle(panel);
+      const close = panel.querySelector<HTMLButtonElement>("button")!;
+      const button = getComputedStyle(close);
+      const icon = getComputedStyle(close.querySelector("svg")!);
+      return {
+        surface: style.backgroundColor,
+        image: style.backgroundImage,
+        border: style.border,
+        radius: style.borderRadius,
+        button: [button.background, button.border, button.boxShadow, button.width, button.height],
+        icon: [icon.width, icon.height, icon.strokeWidth],
+      };
+    };
+    const canonicalChrome = readChrome(
+      container.querySelector<HTMLElement>(".exec-approval-card")!,
+    );
     const showContent = (content: string) => {
       render(
         renderSkills(
@@ -46,9 +78,14 @@ describe.runIf(browserMode)("skill reader shell", () => {
     showContent(shortContent);
     const { modal, dialog } = await getRenderedModalDialog(container);
     await Promise.all(dialog.getAnimations().map((animation) => animation.finished));
-    const title = container.querySelector<HTMLElement>(".md-preview-dialog__title")!;
-    const close = container.querySelector<HTMLButtonElement>(".md-preview-dialog__header button")!;
-    const panel = container.querySelector<HTMLElement>(".md-preview-dialog__panel")!;
+    const title = container.querySelector<HTMLElement>(
+      ".skill-reader-dialog > :first-child > :first-child",
+    )!;
+    const close = container.querySelector<HTMLButtonElement>(
+      ".skill-reader-dialog > :first-child button",
+    )!;
+    const panel = container.querySelector<HTMLElement>(".skill-reader-dialog")!;
+    expect(readChrome(panel)).toEqual(canonicalChrome);
     const titleRect = title.getBoundingClientRect();
     const closeRect = close.getBoundingClientRect();
     expect(closeRect.top).toBeLessThan(titleRect.bottom);
@@ -58,7 +95,7 @@ describe.runIf(browserMode)("skill reader shell", () => {
     expect(modal.label).toBe(variant === "error" ? "example-skill" : "Repo Skill");
 
     showContent(shortContent.repeat(200));
-    const body = panel.querySelector<HTMLElement>(".md-preview-dialog__body")!;
+    const body = panel.querySelector<HTMLElement>(".skill-reader-dialog__body")!;
     await expect.poll(() => body.scrollHeight > body.clientHeight).toBe(true);
     expect(panel.getBoundingClientRect().top).toBeGreaterThanOrEqual(0);
     expect(panel.getBoundingClientRect().bottom).toBeLessThanOrEqual(window.innerHeight);

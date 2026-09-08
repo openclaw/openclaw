@@ -229,7 +229,7 @@ function renderLibraryEditor(library: SkillLibraryController) {
     }}
   >
     <form
-      class="md-preview-dialog__panel skill-reader-dialog"
+      class="exec-approval-card skill-reader-dialog"
       @submit=${(event: SubmitEvent) => {
         event.preventDefault();
         void library.save();
@@ -241,21 +241,20 @@ function renderLibraryEditor(library: SkillLibraryController) {
         }
       }}
     >
-      <div class="md-preview-dialog__header">
-        <strong class="md-preview-dialog__title"
-          >${draft.entry?.slug ?? t("skillLibrary.create")}</strong
+      <div class="exec-approval-header">
+        <strong class="exec-approval-title">${draft.entry?.slug ?? t("skillLibrary.create")}</strong
         ><button
           type="button"
-          class="btn btn--sm md-preview-icon-btn"
+          class="btn btn--icon btn--ghost"
           aria-label=${t("common.close")}
           ?disabled=${library.busy}
           @click=${() => library.close()}
         >
-          <span aria-hidden="true">${icons.x}</span>
+          ${icons.x}
         </button>
       </div>
       <div
-        class="md-preview-dialog__body"
+        class="skill-reader-dialog__body"
         style="display: grid; gap: var(--space-4); min-width: 0;"
       >
         <p class="muted">
@@ -545,7 +544,7 @@ function renderLibraryImport(library: SkillLibraryController) {
     }}
   >
     <form
-      class="md-preview-dialog__panel skill-reader-dialog"
+      class="exec-approval-card skill-reader-dialog"
       @submit=${(event: SubmitEvent) => {
         event.preventDefault();
         if (library.importSource) {
@@ -559,20 +558,20 @@ function renderLibraryImport(library: SkillLibraryController) {
         }
       }}
     >
-      <div class="md-preview-dialog__header">
-        <strong class="md-preview-dialog__title">${t("skillLibrary.import")}</strong
+      <div class="exec-approval-header">
+        <strong class="exec-approval-title">${t("skillLibrary.import")}</strong
         ><button
           type="button"
-          class="btn btn--sm md-preview-icon-btn"
+          class="btn btn--icon btn--ghost"
           aria-label=${t("common.close")}
           ?disabled=${library.busy}
           @click=${close}
         >
-          <span aria-hidden="true">${icons.x}</span>
+          ${icons.x}
         </button>
       </div>
       <div
-        class="md-preview-dialog__body"
+        class="skill-reader-dialog__body"
         style="display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-4);"
       >
         <p class="muted">
