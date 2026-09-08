@@ -33,7 +33,6 @@ type TimestampSummary = {
   missingTimestampCursor: number;
   timestampedByOrder: ComparableHistoryMessage[];
   timestampedOrderCursor: number;
-  timestampRoot?: TimestampCandidateNode;
 };
 
 type RoleTextIndex = Map<string, Map<string, TimestampSummary>>;
@@ -41,13 +40,6 @@ type RoleTextIndex = Map<string, Map<string, TimestampSummary>>;
 type ConsumableCandidates = {
   entries: ComparableHistoryMessage[];
   cursor: number;
-};
-
-type TimestampCandidateNode = {
-  entry: ComparableHistoryMessage;
-  height: number;
-  left?: TimestampCandidateNode;
-  right?: TimestampCandidateNode;
 };
 
 // Claude records CLI-injected @cache-path suffixes as user text. Keep the
@@ -184,160 +176,6 @@ function addTimestampToSummary(summary: TimestampSummary, entry: ComparableHisto
     return;
   }
   summary.timestampedByOrder.push(entry);
-  summary.timestampRoot = insertTimestampCandidate(summary.timestampRoot, entry);
-}
-
-function compareTimestampCandidates(
-  left: ComparableHistoryMessage,
-  right: ComparableHistoryMessage,
-): number {
-  const timestampDifference = (left.timestamp ?? 0) - (right.timestamp ?? 0);
-  return timestampDifference || left.order - right.order;
-}
-
-function timestampCandidateHeight(node: TimestampCandidateNode | undefined): number {
-  return node?.height ?? 0;
-}
-
-function updateTimestampCandidateHeight(node: TimestampCandidateNode): void {
-  node.height =
-    Math.max(timestampCandidateHeight(node.left), timestampCandidateHeight(node.right)) + 1;
-}
-
-function rotateTimestampCandidateLeft(root: TimestampCandidateNode): TimestampCandidateNode {
-  const next = root.right;
-  if (!next) {
-    return root;
-  }
-  root.right = next.left;
-  next.left = root;
-  updateTimestampCandidateHeight(root);
-  updateTimestampCandidateHeight(next);
-  return next;
-}
-
-function rotateTimestampCandidateRight(root: TimestampCandidateNode): TimestampCandidateNode {
-  const next = root.left;
-  if (!next) {
-    return root;
-  }
-  root.left = next.right;
-  next.right = root;
-  updateTimestampCandidateHeight(root);
-  updateTimestampCandidateHeight(next);
-  return next;
-}
-
-function balanceTimestampCandidate(root: TimestampCandidateNode): TimestampCandidateNode {
-  updateTimestampCandidateHeight(root);
-  const balance = timestampCandidateHeight(root.left) - timestampCandidateHeight(root.right);
-  if (balance > 1) {
-    if (
-      root.left &&
-      timestampCandidateHeight(root.left.left) < timestampCandidateHeight(root.left.right)
-    ) {
-      root.left = rotateTimestampCandidateLeft(root.left);
-    }
-    return rotateTimestampCandidateRight(root);
-  }
-  if (balance < -1) {
-    if (
-      root.right &&
-      timestampCandidateHeight(root.right.right) < timestampCandidateHeight(root.right.left)
-    ) {
-      root.right = rotateTimestampCandidateRight(root.right);
-    }
-    return rotateTimestampCandidateLeft(root);
-  }
-  return root;
-}
-
-function insertTimestampCandidate(
-  root: TimestampCandidateNode | undefined,
-  entry: ComparableHistoryMessage,
-): TimestampCandidateNode {
-  if (!root) {
-    return { entry, height: 1 };
-  }
-  if (compareTimestampCandidates(entry, root.entry) < 0) {
-    root.left = insertTimestampCandidate(root.left, entry);
-  } else {
-    root.right = insertTimestampCandidate(root.right, entry);
-  }
-  return balanceTimestampCandidate(root);
-}
-
-function removeTimestampCandidate(
-  root: TimestampCandidateNode | undefined,
-  entry: ComparableHistoryMessage,
-): TimestampCandidateNode | undefined {
-  if (!root) {
-    return undefined;
-  }
-  const comparison = compareTimestampCandidates(entry, root.entry);
-  if (comparison < 0) {
-    root.left = removeTimestampCandidate(root.left, entry);
-  } else if (comparison > 0) {
-    root.right = removeTimestampCandidate(root.right, entry);
-  } else if (!root.left || !root.right) {
-    return root.left ?? root.right;
-  } else {
-    let successor = root.right;
-    while (successor.left) {
-      successor = successor.left;
-    }
-    root.entry = successor.entry;
-    root.right = removeTimestampCandidate(root.right, successor.entry);
-  }
-  return balanceTimestampCandidate(root);
-}
-
-function findTimestampCandidateAtOrAfter(
-  root: TimestampCandidateNode | undefined,
-  timestamp: number,
-): ComparableHistoryMessage | undefined {
-  let current = root;
-  let candidate: ComparableHistoryMessage | undefined;
-  while (current) {
-    if ((current.entry.timestamp ?? 0) >= timestamp) {
-      candidate = current.entry;
-      current = current.left;
-    } else {
-      current = current.right;
-    }
-  }
-  return candidate;
-}
-
-function findTimestampCandidateBefore(
-  root: TimestampCandidateNode | undefined,
-  timestamp: number,
-): ComparableHistoryMessage | undefined {
-  let current = root;
-  let candidate: ComparableHistoryMessage | undefined;
-  while (current) {
-    if ((current.entry.timestamp ?? 0) < timestamp) {
-      candidate = current.entry;
-      current = current.right;
-    } else {
-      current = current.left;
-    }
-  }
-  return candidate
-    ? findTimestampCandidateAtOrAfter(root, candidate.timestamp ?? timestamp)
-    : undefined;
-}
-
-function dropConsumedTimestampCandidate(
-  summary: TimestampSummary,
-  candidate: ComparableHistoryMessage | undefined,
-  consumed: Set<ComparableHistoryMessage>,
-): boolean {
-  if (!candidate || !consumed.has(candidate)) {
-    return false;
-  }
-  summary.timestampRoot = removeTimestampCandidate(summary.timestampRoot, candidate);
-  return true;
 }
 
 function findTimestampMatch(
@@ -365,28 +203,27 @@ function findTimestampMatch(
     }
     return undefined;
   }
-  let after = findTimestampCandidateAtOrAfter(summary.timestampRoot, timestamp);
-  while (dropConsumedTimestampCandidate(summary, after, consumed)) {
-    after = findTimestampCandidateAtOrAfter(summary.timestampRoot, timestamp);
-  }
-  let before = findTimestampCandidateBefore(summary.timestampRoot, timestamp);
-  while (dropConsumedTimestampCandidate(summary, before, consumed)) {
-    before = findTimestampCandidateBefore(summary.timestampRoot, timestamp);
-  }
-  const timestamped = [before, after]
-    .filter((candidate): candidate is ComparableHistoryMessage => candidate !== undefined)
-    .filter(
-      (candidate) =>
-        Math.abs((candidate.timestamp ?? timestamp) - timestamp) <= DEDUPE_TIMESTAMP_WINDOW_MS,
-    )
-    .toSorted((left, right) => {
-      const distanceDifference =
-        Math.abs((left.timestamp ?? timestamp) - timestamp) -
-        Math.abs((right.timestamp ?? timestamp) - timestamp);
-      return distanceDifference || left.order - right.order;
-    })[0];
-  if (timestamped) {
-    return timestamped;
+  // Repeated text must retain transcript order. Consuming the nearest row
+  // greedily can cross two adjacent imports and swap their external identities.
+  while (summary.timestampedOrderCursor < summary.timestampedByOrder.length) {
+    const candidate = summary.timestampedByOrder[summary.timestampedOrderCursor];
+    if (!candidate || consumed.has(candidate)) {
+      summary.timestampedOrderCursor += 1;
+      continue;
+    }
+    const candidateTimestamp = candidate.timestamp;
+    if (candidateTimestamp === undefined) {
+      summary.timestampedOrderCursor += 1;
+      continue;
+    }
+    if (candidateTimestamp < timestamp - DEDUPE_TIMESTAMP_WINDOW_MS) {
+      summary.timestampedOrderCursor += 1;
+      continue;
+    }
+    if (candidateTimestamp <= timestamp + DEDUPE_TIMESTAMP_WINDOW_MS) {
+      return candidate;
+    }
+    break;
   }
   while (summary.missingTimestampCursor < summary.missingTimestamps.length) {
     const candidate = summary.missingTimestamps[summary.missingTimestampCursor];

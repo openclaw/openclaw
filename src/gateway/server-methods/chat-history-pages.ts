@@ -1,4 +1,5 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { readTranscriptDisplayPosition } from "../../chat/transcript-display-position.js";
 import { resolveSessionTranscriptActiveLeafEntryId } from "../../config/sessions/session-accessor.js";
 import {
   dropPreSessionStartAnnouncePairs,
@@ -46,21 +47,36 @@ type ChatHistoryPage = {
   };
 };
 
+function readCliIdentityProjectionKey(message: unknown): string | undefined {
+  const id = readChatHistoryMessageId(message);
+  if (id) {
+    return `id:${id}`;
+  }
+  const record = asOptionalRecord(message);
+  const meta = asOptionalRecord(record?.["__openclaw"]);
+  const position = readTranscriptDisplayPosition(meta?.transcriptPosition);
+  if (!record || !position) {
+    return undefined;
+  }
+  return JSON.stringify([position, record.role, record.text, record.content]);
+}
+
 function projectCliIdentityOntoPagedMessages(params: {
   pagedMessages: unknown[];
   completeMessages: unknown[];
 }): unknown[] {
-  const importedMetaById = new Map<string, Record<string, unknown>>();
+  const importedMetaByKey = new Map<string, Record<string, unknown>>();
   for (const message of params.completeMessages) {
-    const id = readChatHistoryMessageId(message);
+    const key = readCliIdentityProjectionKey(message);
     const meta = asOptionalRecord(asOptionalRecord(message)?.["__openclaw"]);
-    if (id && meta) {
-      importedMetaById.set(id, meta);
+    if (key && meta) {
+      importedMetaByKey.set(key, meta);
     }
   }
   return params.pagedMessages.map((message) => {
     const record = asOptionalRecord(message);
-    const importedMeta = importedMetaById.get(readChatHistoryMessageId(message) ?? "");
+    const key = readCliIdentityProjectionKey(message);
+    const importedMeta = key ? importedMetaByKey.get(key) : undefined;
     if (!record || !importedMeta) {
       return message;
     }

@@ -1980,6 +1980,42 @@ describe("cli session history", () => {
     ).toEqual(["external-1", "external-2"]);
   });
 
+  it("preserves repeated-text identity order across overlapping timestamp windows", () => {
+    const window = 5 * 60 * 1000;
+    const localMessages = [
+      { role: "assistant", content: "Repeated answer", timestamp: 0 },
+      { role: "assistant", content: "Repeated answer", timestamp: window },
+    ];
+    const importedMessages = [
+      {
+        role: "assistant",
+        content: "Repeated answer",
+        timestamp: window - 1,
+        __openclaw: {
+          importedFrom: "claude-cli",
+          cliSessionId: "session-1",
+          externalId: "external-1",
+        },
+      },
+      {
+        role: "assistant",
+        content: "Repeated answer",
+        timestamp: window,
+        __openclaw: {
+          importedFrom: "claude-cli",
+          cliSessionId: "session-1",
+          externalId: "external-2",
+        },
+      },
+    ];
+
+    const merged = mergeImportedChatHistoryMessages({ localMessages, importedMessages });
+
+    expect(
+      merged.map((message) => readRecord(readRecord(message)["__openclaw"]).externalId),
+    ).toEqual(["external-1", "external-2"]);
+  });
+
   it("uses local order to break equal predecessor timestamp ties", () => {
     const localMessages = [
       { role: "assistant", content: "Repeated answer", timestamp: 0 },
