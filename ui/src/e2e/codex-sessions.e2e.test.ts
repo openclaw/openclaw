@@ -146,7 +146,7 @@ suite.define(() => {
             {
               id: "codex",
               label: "Codex",
-              capabilities: { continueSession: true, archive: true, startTerminal: true },
+              capabilities: { continueSession: true, archive: true, createSession: true },
               hosts: [
                 {
                   hostId: "gateway:local",

@@ -91,6 +91,26 @@ export async function assertSessionSectionCountAlignment(
   if (expected === undefined || rightEdges.some((edge) => Math.abs(edge - expected) > 0.1)) {
     throw new Error(`Expected aligned section count edges, received ${rightEdges.join(", ")}`);
   }
+  for (const [index, sectionId] of sectionIds.entries()) {
+    const section = sections[index];
+    if (!section || !sectionId.startsWith("catalog:")) {
+      continue;
+    }
+    const header = section.locator(":scope > .sidebar-recent-sessions__head");
+    await header.hover();
+    const count = header.locator(".sidebar-session-group-count");
+    const countBox = await count.boundingBox();
+    const countOpacity = await count.evaluate((element) => getComputedStyle(element).opacity);
+    if (!countBox || Number.parseFloat(countOpacity) <= 0) {
+      throw new Error("Expected visible catalog count on hover");
+    }
+    for (const action of await header.locator(".sidebar-session-group-actions").all()) {
+      const actionBox = await action.boundingBox();
+      if (!actionBox || actionBox.x + actionBox.width > countBox.x) {
+        throw new Error("Expected catalog hover actions to stay left of the count");
+      }
+    }
+  }
 }
 
 export async function navigateToControlUiSession(page: Page, sessionKey: string): Promise<void> {
