@@ -17,11 +17,13 @@ import {
   selectNpmChannelVersion,
   type UpdateChannel,
 } from "./update-channels.js";
+import { resolveStaleUpdateFetch, type StaleUpdateFetch } from "./update-check-fetch.js";
 import {
   fetchNpmPackageTargetStatus,
   type NpmMetadataCommandRunner,
 } from "./update-check-package-target.js";
 import { updateInstallRootsMatch } from "./update-install-root.js";
+import type { UpdateRunRecord } from "./update-run-record.js";
 
 type PackageManager = "pnpm" | "bun" | "npm" | "unknown";
 type GitUpdateOptions = { timeoutMs?: number; signal?: AbortSignal };
@@ -39,6 +41,8 @@ type GitUpdateStatus = {
   ahead: number | null;
   behind: number | null;
   fetchOk: boolean | null;
+  countsCached?: true;
+  stale?: StaleUpdateFetch;
   error?: string;
 };
 
@@ -305,6 +309,7 @@ async function checkGitUpdateStatus(params: {
   fetch?: boolean;
   useDetachedDevUpstream?: boolean;
   upstreamFallback?: { currentSha: string; upstreamRef: string };
+  lastUpdateRun?: UpdateRunRecord;
 }): Promise<GitUpdateStatus> {
   const timeoutMs = params.timeoutMs ?? (params.fetch ? GIT_TIMEOUT_MS : 6000);
   const root = path.resolve(params.root);
@@ -413,6 +418,17 @@ async function checkGitUpdateStatus(params: {
       : null;
 
   const parsed = counts?.match(/^(\d+)\s+(\d+)$/u);
+  const stale =
+    fetchOk === null
+      ? await resolveStaleUpdateFetch({
+          root,
+          run: params.lastUpdateRun,
+          branch,
+          upstreamRevision,
+          upstreamCommit,
+          readGit,
+        })
+      : undefined;
 
   return {
     root,
@@ -427,6 +443,7 @@ async function checkGitUpdateStatus(params: {
     ahead: parsed ? Number(parsed[1]) : null,
     behind: parsed ? Number(parsed[2]) : null,
     fetchOk,
+    ...(stale ? { stale, countsCached: true as const } : {}),
   };
 }
 
@@ -631,6 +648,7 @@ export async function checkUpdateStatus(params: {
   fetchGit?: boolean;
   useDetachedDevUpstream?: boolean;
   gitUpstreamFallback?: { currentSha: string; upstreamRef: string };
+  lastUpdateRun?: UpdateRunRecord;
   includeRegistry?: boolean;
   registryChannel?: UpdateChannel;
   resolveRegistryChannel?: (status: UpdateInstallIdentity) => UpdateChannel;
@@ -707,6 +725,7 @@ export async function checkUpdateStatus(params: {
           fetch: Boolean(params.fetchGit),
           useDetachedDevUpstream: params.useDetachedDevUpstream,
           upstreamFallback: params.gitUpstreamFallback,
+          lastUpdateRun: params.lastUpdateRun,
         })
       : Promise.resolve(undefined),
     checkDepsStatus({ root, manager: packageManager }),

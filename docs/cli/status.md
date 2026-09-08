@@ -42,6 +42,17 @@ security audit, plugin compatibility, and memory-vector probes are left to
 `openclaw status --all`, `openclaw status --deep`, `openclaw security audit`,
 and `openclaw memory status --deep`.
 
+For Git installs, plain status compares cached remote-tracking refs without a
+network fetch. If the latest update run in the current state directory failed
+at fetch and no later ref refresh is recorded locally, the Update row shows
+`update check stale: last fetch failed 5m ago (network error)` instead of
+`up to date`, with ahead/behind counts labeled `cached`. JSON exposes this under
+`update.git.stale` (`reason`, `failedAtMs`, `detail`, and `runId`) and sets
+`update.git.countsCached` to `true`. Without a recorded fetch failure, the usual
+cached comparison is unchanged. Use `openclaw status --deep` or
+`openclaw update status` for a fresh check; the latter also shows the last update
+run. See [Release channels](/install/development-channels#checking-current-status).
+
 ## Skills diagnosis
 
 `status --all` reports eligible skills and skills with missing prerequisites for
