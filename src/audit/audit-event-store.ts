@@ -51,9 +51,7 @@ const AUDIT_EVENT_PRUNE_BATCH_ROWS = 1_024;
 // The single audit writer owns one DB handle. Invalidate on out-of-band
 // maintenance or rollback so the hot path avoids a 100k-row scan per message.
 const auditEventRowCounts = new WeakMap<DatabaseSync, number>();
-function getAuditKysely(db: DatabaseSync) {
-  return getNodeSqliteKysely<AuditDatabase>(db);
-}
+function getAuditKysely(db: DatabaseSync) { return getNodeSqliteKysely<AuditDatabase>(db); }
 const RUN_ACTIONS = ["agent.run.started", "agent.run.finished"] as const;
 const TOOL_ACTIONS = ["tool.action.started", "tool.action.finished"] as const;
 const CONVERSATION_KINDS = ["direct", "group", "channel", "unknown"] as const;
@@ -103,18 +101,8 @@ function optionalInteger(
   }
   return requiredInteger(row, value, field, minimum);
 }
-function requiredText(row: AuditEventRow, value: unknown, field: string): string {
-  if (typeof value !== "string" || value.length === 0) {
-    corruptAuditRow(row, `invalid ${field}`);
-  }
-  return value;
-}
-function optionalText(row: AuditEventRow, value: unknown, field: string): string | undefined {
-  if (value === null || value === undefined) {
-    return undefined;
-  }
-  return requiredText(row, value, field);
-}
+function requiredText(row: AuditEventRow, value: unknown, field: string): string { if (typeof value !== "string" || value.length === 0) { corruptAuditRow(row, `invalid ${field}`); } return value; }
+function optionalText(row: AuditEventRow, value: unknown, field: string): string | undefined { if (value === null || value === undefined) { return undefined; } return requiredText(row, value, field); }
 function requiredEnum<const Value extends string>(
   row: AuditEventRow,
   value: unknown,
@@ -152,15 +140,8 @@ function optionalHmacRef(row: AuditEventRow, value: unknown, field: string): str
   }
   return requiredHmacRef(row, value, field);
 }
-function requireNull(row: AuditEventRow, field: keyof AuditEventRow): void {
-  if (row[field] !== null) {
-    corruptAuditRow(row, `unexpected ${field}`);
-  }
-}
-function requireNullColumns(row: AuditEventRow, fields: readonly (keyof AuditEventRow)[]): void {
-  for (const field of fields) {
-    requireNull(row, field);
-  }
+function requireNull(row: AuditEventRow, field: keyof AuditEventRow): void { if (row[field] !== null) { corruptAuditRow(row, `unexpected ${field}`); } }
+function requireNullColumns(row: AuditEventRow, fields: readonly (keyof AuditEventRow)[]): void { for (const field of fields) { requireNull(row, field); } }
 }
 function parseAuditRecordBase(row: AuditEventRow) {
   const schemaVersion = requiredInteger(row, row.schema_version, "schemaVersion", 1);
