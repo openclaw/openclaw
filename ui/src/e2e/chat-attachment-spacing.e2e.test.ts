@@ -76,40 +76,68 @@ suite.define(() => {
     );
   }
 
-  it("keeps multiple files in a column with the text rhythm on mobile", async () => {
+  it("keeps user files above the painted text bubble without changing assistant cards", async () => {
     const count = 5;
-    await suite.withPage({ viewport: { width: 390, height: 900 } }, async ({ page }) => {
-      await installMockGateway(page, {
-        historyMessages: [
-          {
-            role: "user",
-            content: [
-              ...Array.from({ length: count }, (_, index) => attachment(index)),
-              { type: "text", text: "Reference one.\n\nReference two." },
-            ],
-          },
-        ],
-      });
-      await page.goto(`${suite.server.baseUrl}chat/main`);
-      const cards = page.locator(".chat-assistant-attachment-card");
-      const paragraphs = page.locator(".chat-text > p");
-      await paragraphs.last().waitFor();
-      await expect.poll(() => cards.count()).toBe(count);
-      const reference = await gap(paragraphs.nth(0), paragraphs.nth(1));
-      for (let index = 1; index < count; index += 1) {
+    for (const width of [1440, 390]) {
+      await suite.withPage({ viewport: { width, height: 900 } }, async ({ page }) => {
+        await installMockGateway(page, {
+          historyMessages: [
+            {
+              role: "user",
+              content: [
+                ...Array.from({ length: count }, (_, index) => attachment(index)),
+                { type: "text", text: "Reference one.\n\nReference two." },
+              ],
+            },
+            {
+              role: "assistant",
+              content: [attachment(6), { type: "text", text: "Assistant reference." }],
+            },
+            { role: "user", content: [attachment(7)] },
+          ],
+        });
+        await page.goto(`${suite.server.baseUrl}chat/main`);
+        const user = page.locator(".chat-group.user").first();
+        const cards = user.locator(".chat-assistant-attachment-card");
+        const paragraphs = user.locator(".chat-text > p");
+        await paragraphs.last().waitFor();
+        await expect.poll(() => cards.count()).toBe(count);
+        const shell = user.locator(".chat-bubble");
+        const text = user.locator(".chat-text");
+        const background = (element: Locator) =>
+          element.evaluate((node) => getComputedStyle(node).backgroundColor);
+        expect(await background(shell)).toBe("rgba(0, 0, 0, 0)");
+        expect(await background(text)).not.toBe("rgba(0, 0, 0, 0)");
+        const column = await user.locator(".chat-group-messages").boundingBox();
+        const card = await cards.first().boundingBox();
+        expect(column).not.toBeNull();
+        expect(card).not.toBeNull();
+        expect(Math.abs(card!.width - column!.width)).toBeLessThanOrEqual(1);
+        expect(Math.abs(card!.x + card!.width - column!.x - column!.width)).toBeLessThanOrEqual(1);
+        const assistant = page.locator(".chat-group.assistant");
+        expect(await background(assistant.locator(".chat-text"))).toBe("rgba(0, 0, 0, 0)");
         expect(
-          Math.abs((await gap(cards.nth(index - 1), cards.nth(index))) - reference),
-        ).toBeLessThanOrEqual(1);
-      }
-      expect(
-        Math.abs((await gap(cards.last(), paragraphs.first())) - reference),
-      ).toBeLessThanOrEqual(1);
-      expect(
-        await page
-          .locator(".chat-thread")
-          .evaluate((element) => element.scrollWidth <= element.clientWidth),
-      ).toBe(true);
-    });
+          await assistant
+            .locator(".chat-bubble > .chat-assistant-attachments .chat-assistant-attachment-card")
+            .count(),
+        ).toBe(1);
+        const fileOnly = page.locator(".chat-group.user").last();
+        expect(await background(fileOnly.locator(".chat-bubble"))).toBe("rgba(0, 0, 0, 0)");
+        expect(await fileOnly.locator(".chat-text").count()).toBe(0);
+        const reference = await gap(paragraphs.nth(0), paragraphs.nth(1));
+        for (let index = 1; index < count; index += 1) {
+          expect(
+            Math.abs((await gap(cards.nth(index - 1), cards.nth(index))) - reference),
+          ).toBeLessThanOrEqual(1);
+        }
+        expect(Math.abs((await gap(cards.last(), text)) - reference)).toBeLessThanOrEqual(1);
+        expect(
+          await page
+            .locator(".chat-thread")
+            .evaluate((element) => element.scrollWidth <= element.clientWidth),
+        ).toBe(true);
+      });
+    }
   });
 
   it("preserves nested user fences while sharing the top-level attachment rhythm", async () => {
@@ -138,7 +166,7 @@ suite.define(() => {
       );
       const card = page.locator(".chat-assistant-attachment-card");
       for (const [above, below] of [
-        [card, text.locator(":scope > pre")],
+        [card, text],
         [text.locator("blockquote > p").first(), nestedCode],
         [nestedCode, text.locator("blockquote > p").last()],
       ] as const) {

@@ -541,6 +541,10 @@
   gap: var(--chat-block-gap);
 }
 
+.chat-group.user:not(.chat-group--peer) .chat-bubble--with-files {
+  width: 100%;
+}
+
 .chat-group.assistant .chat-bubble:has(.chat-assistant-attachments),
 .chat-group.assistant .chat-text:has(.chat-assistant-attachments) {
   width: 100%;

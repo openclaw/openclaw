@@ -287,6 +287,9 @@ export function renderGroupedMessage(
         )
       : [];
   const cardAttachments = visibleAttachments.filter((item) => !videoPreviews.includes(item));
+  const hasUserFiles =
+    normalizedRole === "user" &&
+    cardAttachments.some((item) => item.attachment.kind === "document");
   const imageRenderOptions = {
     sessionKey: opts.sessionKey,
     agentId: opts.agentId,
@@ -331,7 +334,8 @@ export function renderGroupedMessage(
 
   const bubbleClasses = [
     "chat-bubble",
-    hasImages || videoPreviews.length > 0 ? "chat-bubble--with-images" : "",
+    hasImages || videoPreviews.length > 0 || hasUserFiles ? "chat-bubble--with-images" : "",
+    hasUserFiles ? "chat-bubble--with-files" : "",
     isToolShell ? "chat-bubble--tool-shell" : "",
     opts.isStreaming ? "streaming" : "",
     opts.entryAnimated ? "chat-bubble--user-turn-enter" : "",
