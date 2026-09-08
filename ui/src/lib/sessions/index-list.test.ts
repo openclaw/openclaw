@@ -1,13 +1,16 @@
 import { describe, expect, it, vi } from "vitest";
 import { SIDEBAR_SESSION_ROSTER_LIMIT } from "../../../../src/shared/session-list-limits.ts";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SessionsListResult } from "../../api/types.ts";
+import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import {
+  createGatewayHarness,
   createSessionCapabilityHarness,
   createTestSessionCapability,
   sessionsResult,
 } from "./session-capability.test-support.ts";
+import type { SessionGateway } from "./session-capability.ts";
 
 const SESSION_EVENT_REFRESH_DEBOUNCE_MS = 200;
 
@@ -37,7 +40,7 @@ function listResult(keys: string[] = [], totalCount = keys.length, offset = 0): 
 }
 
 function sessionHarness(request: unknown) {
-  const snapshot = {
+  const snapshot: SessionGateway["snapshot"] = {
     client: { request } as unknown as GatewayBrowserClient,
     phase: "connected" as "connected" | "reconnecting",
     sessionKey: "agent:main:main",
@@ -55,6 +58,10 @@ function sessionHarness(request: unknown) {
   });
   return {
     sessions,
+    publish: (patch: Partial<SessionGateway["snapshot"]>) => {
+      Object.assign(snapshot, patch);
+      listener?.(snapshot);
+    },
     reconnect: () => {
       for (const phase of ["reconnecting", "connected"] as const) {
         snapshot.phase = phase;
@@ -65,6 +72,96 @@ function sessionHarness(request: unknown) {
 }
 
 describe("session list requests", () => {
+  it("clears serialized start timing tombstones while the next roster read is pending", async () => {
+    vi.useFakeTimers();
+    const child = {
+      key: "agent:main:timing-child",
+      sessionId: "timing-child-session",
+      spawnedBy: "agent:main:timing-parent",
+      kind: "direct" as const,
+      label: "Keep this child title",
+      status: "done" as const,
+      hasActiveRun: false,
+      activeRunIds: [],
+      updatedAt: 121_000,
+      startedAt: 1_000,
+      endedAt: 121_000,
+      runtimeMs: 120_000,
+    };
+    const sibling = {
+      ...child,
+      key: "agent:main:timing-sibling",
+      sessionId: "timing-sibling-session",
+    };
+    const initial = sessionsResult([child, sibling], 121_000);
+    const nextList = createDeferred<SessionsListResult>();
+    let listCalls = 0;
+    const request = vi.fn(async (method: string): Promise<SessionsListResult> => {
+      if (method !== "sessions.list") {
+        throw new Error(`Unexpected request: ${method}`);
+      }
+      listCalls += 1;
+      return listCalls === 1 ? initial : nextList.promise;
+    });
+    const { gateway, emitEvent } = createGatewayHarness(createTestGatewayClient(request));
+    const sessions = createTestSessionCapability(gateway);
+
+    try {
+      await sessions.refresh({ agentId: "main", force: true });
+      const wire = JSON.stringify({
+        sessionKey: child.key,
+        agentId: "main",
+        phase: "start",
+        runId: "run-b",
+        ts: 200_000,
+        session: {
+          key: child.key,
+          sessionId: child.sessionId,
+          kind: "direct",
+          archived: false,
+          updatedAt: 200_000,
+          startedAt: 200_000,
+          endedAt: null,
+          runtimeMs: null,
+          status: "running",
+          hasActiveRun: true,
+          activeRunIds: ["run-b"],
+        },
+      });
+      const payload: unknown = JSON.parse(wire);
+      emitEvent({ type: "event", event: "sessions.changed", payload });
+      await vi.advanceTimersByTimeAsync(SESSION_EVENT_REFRESH_DEBOUNCE_MS);
+
+      expect(request).toHaveBeenCalledTimes(2);
+      const current = sessions.state.result?.sessions.find((row) => row.key === child.key);
+      expect(current).toMatchObject({
+        key: child.key,
+        sessionId: child.sessionId,
+        spawnedBy: child.spawnedBy,
+        label: child.label,
+        updatedAt: 200_000,
+        startedAt: 200_000,
+        status: "running",
+        hasActiveRun: true,
+        activeRunIds: ["run-b"],
+      });
+      expect(current?.endedAt).toBeUndefined();
+      expect(current?.runtimeMs).toBeUndefined();
+      expect(sessions.state.result?.sessions.map((row) => row.key)).toEqual([
+        child.key,
+        sibling.key,
+      ]);
+      expect(sessions.state.result?.sessions.find((row) => row.key === sibling.key)).toEqual(
+        sibling,
+      );
+    } finally {
+      sessions.dispose();
+      nextList.resolve(initial);
+      await vi.advanceTimersByTimeAsync(0);
+      vi.useRealTimers();
+    }
+  });
+
   it("keeps an observed active query independent and retires its disposed handle", async () => {
     const pending = createDeferred<SessionsListResult>();
     let holdRefresh = false;
@@ -636,4 +733,73 @@ describe("session list requests", () => {
     unsubscribe();
     sessions.dispose();
   });
+
+  it.each([
+    [true, "before"],
+    [false, "before"],
+    [true, "during"],
+    [false, "during"],
+    [true, "after"],
+    [false, "after"],
+  ])(
+    "recovers a failed managed list once when same-client admission reopens (lifecycle error: %s, failure: %s drain)",
+    async (lifecycle, failureTiming) => {
+      vi.useFakeTimers();
+      let fail = false;
+      let label = "original";
+      const pending = createDeferred<SessionsListResult>();
+      const error = new GatewayRequestError({
+        code: "UNAVAILABLE",
+        message: "Dashboard refresh unavailable",
+        retryable: true,
+        ...(lifecycle ? { details: { reason: "gateway-suspending", phase: "draining" } } : {}),
+      });
+      const request = vi.fn(async (_method: string, params?: ListParams) => {
+        if (params?.hasBoard && fail) {
+          return pending.promise;
+        }
+        return listResult([`agent:main:${label}`]);
+      });
+      const { sessions, publish } = sessionHarness(request);
+      const query = { hasBoard: true };
+      const unsubscribe = sessions.subscribeList(query, () => undefined);
+      try {
+        await sessions.refreshList(query);
+        fail = true;
+        const refresh = sessions.refreshList({ ...query, force: true });
+        if (failureTiming === "during") {
+          publish({ suspensionPhase: "draining" });
+        }
+        if (failureTiming !== "after") {
+          pending.reject(error);
+          await refresh;
+          expect(sessions.listSnapshot(query).error).toBe(
+            lifecycle ? null : "Dashboard refresh unavailable",
+          );
+        }
+        expect(sessions.listSnapshot(query).result?.sessions[0]?.key).toBe("agent:main:original");
+
+        if (failureTiming !== "during") {
+          publish({ suspensionPhase: "draining" });
+        }
+        fail = false;
+        label = "recovered";
+        publish({ suspensionPhase: "accepting" });
+        publish({ suspensionPhase: "accepting" });
+        await vi.advanceTimersByTimeAsync(SESSION_EVENT_REFRESH_DEBOUNCE_MS);
+        if (failureTiming === "after") {
+          expect(request.mock.calls.filter(([, params]) => params?.hasBoard)).toHaveLength(2);
+          pending.reject(error);
+          await refresh;
+        }
+        expect(sessions.listSnapshot(query).result?.sessions[0]?.key).toBe("agent:main:recovered");
+        expect(sessions.listSnapshot(query).error).toBeNull();
+        expect(request.mock.calls.filter(([, params]) => params?.hasBoard)).toHaveLength(3);
+      } finally {
+        unsubscribe();
+        sessions.dispose();
+        vi.useRealTimers();
+      }
+    },
+  );
 });

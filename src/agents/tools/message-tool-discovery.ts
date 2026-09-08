@@ -1,7 +1,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sortUniqueStrings, uniqueValues } from "@openclaw/normalization-core/string-normalization";
-import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
 import type { ChatType } from "../../channels/chat-type.js";
+import { resolveChannelDefaultAccountId } from "../../channels/plugins/helpers.js";
 import {
   getChannelPlugin,
   getLoadedChannelPlugin,
@@ -17,15 +17,15 @@ import {
 } from "../../channels/plugins/message-action-discovery.js";
 import type { ChannelMessageCapability } from "../../channels/plugins/message-capabilities.js";
 import type { ChannelMessageActionName } from "../../channels/plugins/types.public.js";
+import { readExactSessionDeliveryContext } from "../../config/sessions/delivery-info.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { stripTargetProviderPrefix } from "../../infra/outbound/channel-target-prefix.js";
+import { actionHasTarget } from "../../infra/outbound/message-action-spec.js";
 import { resolveAllowedMessageActions } from "../../infra/outbound/outbound-policy.js";
 import { normalizeAccountId, parseSessionDeliveryRoute } from "../../routing/session-key.js";
 import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
 import { listAllChannelSupportedActions, listChannelSupportedActions } from "../channel-tools.js";
-import {
-  appendMessageToolReadHint,
-  appendMessageToolVisibleReplyHint,
-} from "./message-tool-description.js";
+import { appendMessageToolReadHint } from "./message-tool-description.js";
 import { buildMessageToolSchemaFromActions } from "./message-tool-schema-scoping.js";
 import { MESSAGE_TOOL_SCHEMA_BUILDERS } from "./message-tool-schema.js";
 export type MessageToolDiscoveryParams = {
@@ -52,6 +52,7 @@ type MessageActionDiscoveryInput = Omit<ChannelMessageActionDiscoveryInput, "cfg
 
 type MessageToolCurrentContextOptions = {
   agentSessionKey?: string;
+  sessionId?: string;
   currentChannelId?: string;
   currentChannelProvider?: string;
   currentChatType?: ChatType;
@@ -82,8 +83,63 @@ function resolveSessionDeliveryChatType(peerKind: string): ChatType | undefined 
   return undefined;
 }
 
+type MessageToolDeliveryRequest = {
+  config: OpenClawConfig;
+  action: ChannelMessageActionName;
+  params: Record<string, unknown>;
+  accountId?: string;
+};
+
+function recoverSessionCanonicalPeerId(params: {
+  channel: string;
+  peerId: string;
+  sessionKey?: string;
+  sessionId?: string;
+  request?: MessageToolDeliveryRequest;
+}): string {
+  const { request } = params;
+  if (
+    !request ||
+    normalizeOptionalString(request.params.target) ||
+    (Array.isArray(request.params.targets) && request.params.targets.length > 0) ||
+    actionHasTarget(request.action, request.params, { channel: params.channel })
+  ) {
+    return params.peerId;
+  }
+  const plugin = getChannelPlugin(params.channel);
+  if (plugin?.messaging?.targetIdComparison !== "case-sensitive") {
+    return params.peerId;
+  }
+  const delivery = readExactSessionDeliveryContext({
+    cfg: request.config,
+    sessionKey: params.sessionKey,
+    sessionId: params.sessionId,
+  });
+  const accountId =
+    request.accountId ??
+    resolveChannelDefaultAccountId({
+      plugin,
+      cfg: request.config,
+    });
+  if (
+    normalizeMessageChannel(delivery?.channel) !== params.channel ||
+    normalizeAccountId(delivery?.accountId) !== normalizeAccountId(accountId)
+  ) {
+    return params.peerId;
+  }
+  const storedTo = normalizeOptionalString(delivery?.to);
+  const canonical = storedTo
+    ? stripTargetProviderPrefix(storedTo, params.channel, delivery?.channel ?? "")
+    : undefined;
+  return canonical && canonical.toLowerCase() === params.peerId.toLowerCase()
+    ? canonical
+    : params.peerId;
+}
+
 function inferDeliveryFromSessionKey(
   sessionKey: string | undefined,
+  request?: MessageToolDeliveryRequest,
+  sessionId?: string,
 ): InferredSessionDelivery | null {
   const route = parseSessionDeliveryRoute(sessionKey);
   if (!route) {
@@ -94,16 +150,26 @@ function inferDeliveryFromSessionKey(
     return null;
   }
   const accountId = route.accountId ? resolveAgentAccountId(route.accountId) : undefined;
+  const peerId = recoverSessionCanonicalPeerId({
+    request,
+    channel,
+    peerId: route.peerId,
+    sessionKey,
+    sessionId,
+  });
   return {
     accountId,
     channel,
     chatType: resolveSessionDeliveryChatType(route.peerKind),
     threadId: route.threadId,
-    to: formatSessionDeliveryTarget(channel, route.peerKind, route.peerId),
+    to: formatSessionDeliveryTarget(channel, route.peerKind, peerId),
   };
 }
 
-export function resolveEffectiveCurrentChannelContext(options?: MessageToolCurrentContextOptions): {
+export function resolveEffectiveCurrentChannelContext(
+  options?: MessageToolCurrentContextOptions,
+  request?: MessageToolDeliveryRequest,
+): {
   accountId?: string;
   currentChannelId?: string;
   currentChatType?: ChatType;
@@ -115,7 +181,7 @@ export function resolveEffectiveCurrentChannelContext(options?: MessageToolCurre
   const currentChannelId = options?.currentChannelId;
   const sessionDelivery =
     normalizeMessageChannel(currentChannelProvider) === INTERNAL_MESSAGE_CHANNEL
-      ? inferDeliveryFromSessionKey(options?.agentSessionKey)
+      ? inferDeliveryFromSessionKey(options?.agentSessionKey, request, options?.sessionId)
       : null;
 
   if (!sessionDelivery?.to) {
@@ -191,11 +257,11 @@ export function resolveMessageToolActionSchemaActions(
     agentId: params.agentId,
   });
   if (!allowedActions) {
-    return discoveredActions;
+    return sortUniqueStrings(discoveredActions);
   }
   const allow = new Set(allowedActions);
   const filtered = discoveredActions.filter((action) => allow.has(action));
-  return filtered.length > 0 ? filtered : allowedActions;
+  return sortUniqueStrings(filtered.length > 0 ? filtered : allowedActions);
 }
 
 function listAllMessageToolActions(params: MessageToolDiscoveryParams): ChannelMessageActionName[] {
@@ -282,26 +348,14 @@ export function resolveAgentAccountId(value?: string): string | undefined {
   return normalizeAccountId(trimmed);
 }
 
-export function buildMessageToolDescription(
-  actions: string[] | undefined,
-  sourceReplyDeliveryMode?: SourceReplyDeliveryMode,
-  requireExplicitTarget?: boolean,
-): string {
+export function buildMessageToolDescription(actions: string[] | undefined): string {
   const baseDescription = "Send/manage channel messages.";
   if (actions && actions.length > 0) {
     const sortedActions = sortUniqueStrings(actions) as Array<ChannelMessageActionName | "send">;
     return appendMessageToolReadHint(
-      appendMessageToolVisibleReplyHint(
-        `${baseDescription} Supports actions: ${sortedActions.join(", ")}.`,
-        sourceReplyDeliveryMode,
-        requireExplicitTarget,
-      ),
+      `${baseDescription} Supports actions: ${sortedActions.join(", ")}.`,
       sortedActions,
     );
   }
-  return appendMessageToolVisibleReplyHint(
-    `${baseDescription} Action families (availability depends on the channel): sending/editing/unsend, reactions, polls, pins, threads, file upload/download, moderation (timeout/kick/ban), roles, channel + category management, profile/presence.`,
-    sourceReplyDeliveryMode,
-    requireExplicitTarget,
-  );
+  return `${baseDescription} Action families (availability depends on the channel): sending/editing/unsend, reactions, polls, pins, threads, file upload/download, moderation (timeout/kick/ban), roles, channel + category management, profile/presence.`;
 }

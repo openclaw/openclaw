@@ -4,6 +4,7 @@ import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coerci
 import { serializeConversation } from "openclaw/plugin-sdk/agent-core";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { estimateTokens } from "../../packages/agent-core/src/harness/compaction/compaction.js";
+import { makeTextToolResult } from "../../test/helpers/text-tool-result.js";
 import * as compactionPlanningWorkerRuntime from "./compaction-planning-worker-runtime.js";
 import {
   CompactionPlanningWorkerError,
@@ -418,14 +419,7 @@ describe("compaction planning worker", () => {
         timestamp: 1,
       }),
       displacedUser,
-      {
-        role: "toolResult",
-        toolCallId: "call_large",
-        toolName: "read",
-        content: [{ type: "text", text: "small result" }],
-        isError: false,
-        timestamp: 3,
-      },
+      makeTextToolResult("call_large", "read", "small result", false, 3),
       ...Array.from({ length: 61 }, (_, index) => makeMessage(index + 4, "keep")),
     ];
 

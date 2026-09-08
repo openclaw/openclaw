@@ -117,7 +117,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.workflow_sha }}
-          path: .mobile-release-authority
+          path: apps/android/build/mobile-release-ci/authority
           persist-credentials: false
           fetch-depth: 0
           sparse-checkout: |
@@ -164,7 +164,7 @@ jobs:
           test "$(bundle _2.6.9_ exec ruby -e 'require "fastlane"; print Fastlane::VERSION')" = "2.238.0"
 
       - name: Revalidate release authority immediately before signing access
-        uses: ./.mobile-release-authority/.github/actions/mobile-release-authority
+        uses: ./apps/android/build/mobile-release-ci/authority/.github/actions/mobile-release-authority
         with:
           operation: revalidate
           platform: android
@@ -186,7 +186,7 @@ jobs:
           permission-contents: read
 
       - name: Revalidate release authority immediately before Android signing checkout
-        uses: ./.mobile-release-authority/.github/actions/mobile-release-authority
+        uses: ./apps/android/build/mobile-release-ci/authority/.github/actions/mobile-release-authority
         with:
           operation: revalidate
           platform: android
@@ -207,7 +207,7 @@ jobs:
           persist-credentials: false
 
       - name: Revalidate release authority immediately before Android signing materialization
-        uses: ./.mobile-release-authority/.github/actions/mobile-release-authority
+        uses: ./apps/android/build/mobile-release-ci/authority/.github/actions/mobile-release-authority
         with:
           operation: revalidate
           platform: android
@@ -227,7 +227,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.workflow_sha }}
-          path: .mobile-release-sink
+          path: apps/android/build/mobile-release-ci/sink
           persist-credentials: false
           fetch-depth: 0
           sparse-checkout: |
@@ -240,7 +240,7 @@ jobs:
             apps/ios/CHANGELOG.md
 
       - name: Revalidate release authority immediately before upload
-        uses: ./.mobile-release-sink/.github/actions/mobile-release-authority
+        uses: ./apps/android/build/mobile-release-ci/sink/.github/actions/mobile-release-authority
         with:
           operation: revalidate
           platform: android

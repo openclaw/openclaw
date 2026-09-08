@@ -54,8 +54,7 @@ vi.mock("./prepared-model-runtime.js", () => {
     preparedModelRuntimeConfigsMatch: (left: object, right: object) =>
       JSON.stringify(left) === JSON.stringify(right),
     prepareModelRuntimeSnapshot: (...args: unknown[]) => mocks.prepareSnapshot(...args),
-    refreshStalePreparedModelRuntimeCatalog: (...args: unknown[]) =>
-      mocks.refreshStaleCatalog(...args),
+    refreshPreparedModelRuntimeCatalog: (...args: unknown[]) => mocks.refreshStaleCatalog(...args),
   };
 });
 
@@ -226,8 +225,6 @@ describe("prepared model catalog access", () => {
   });
 
   it.each([
-    { readOnly: true, refreshFullCatalog: "stale" },
-    { readOnly: false, refreshFullCatalog: "stale" },
     { readOnly: true, refreshFullCatalog: true },
     { readOnly: false, refreshFullCatalog: true },
   ] as const)(
@@ -253,7 +250,9 @@ describe("prepared model catalog access", () => {
       await expect(
         loadPreparedModelCatalogOwnerSnapshot({ readOnly, refreshFullCatalog }),
       ).resolves.toMatchObject({ modelCatalog: staleCatalog });
-      expect(mocks.refreshStaleCatalog).toHaveBeenCalledWith(snapshot);
+      expect(mocks.refreshStaleCatalog).toHaveBeenCalledWith(snapshot, {
+        refresh: !readOnly,
+      });
       expect(snapshot.readFullModelCatalog).not.toHaveBeenCalled();
       expect(snapshot.loadFullModelCatalog).not.toHaveBeenCalled();
     },
@@ -519,6 +518,7 @@ describe("prepared model catalog access", () => {
 
     expect(mocks.activateSnapshot).toHaveBeenCalledWith(
       expect.not.objectContaining({ readOnly: true }),
+      { catalogMode: "static" },
     );
     expect(mocks.loadSnapshot).not.toHaveBeenCalled();
     expect(mocks.releaseSnapshot).not.toHaveBeenCalled();

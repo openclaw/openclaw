@@ -35,7 +35,7 @@ import {
 } from "./command-registration-policy.js";
 import { resolveCliStartupPolicy as resolveCliStartupPolicyForArgv } from "./command-startup-policy.js";
 import { maybeRunCliInContainer, parseCliContainerArgs } from "./container-target.js";
-import { isUnconfiguredConfigSource } from "./fresh-install-config.js";
+import { shouldStartLocalOnboarding } from "./fresh-install-config.js";
 import {
   consumeGatewayFastPathRootOptionToken,
   consumeGatewayRunOptionToken,
@@ -67,7 +67,7 @@ import {
   shouldUseSetupOnboardConfigureHelpFastPath,
 } from "./run-main-policy.js";
 import { withCliCommandCleanup, type CliHarnessCleanup } from "./runtime-cleanup-scope.js";
-import { closeCliResources } from "./runtime-cleanup.js";
+import { closeCliResources, runCliDisposer } from "./runtime-cleanup.js";
 import { registerSignalExitBarrier, waitForSignalExitBarriers } from "./signal-exit-barrier.js";
 import {
   configureGatewayStartupTraceConsoleFormatting,
@@ -264,35 +264,6 @@ async function tryRunGatewayRunFastPath(
     process.exitCode = error.exitCode;
   }
   return true;
-}
-
-function isUnconfiguredConfigSnapshot(
-  snapshot: Pick<ConfigFileSnapshot, "exists" | "valid" | "sourceConfig">,
-): boolean {
-  if (!snapshot.exists) {
-    return true;
-  }
-  if (!snapshot.valid) {
-    return false;
-  }
-  return isUnconfiguredConfigSource(snapshot.sourceConfig);
-}
-
-async function shouldStartLocalOnboarding(
-  snapshot: Pick<ConfigFileSnapshot, "exists" | "valid" | "sourceConfig" | "path">,
-): Promise<boolean> {
-  if (isUnconfiguredConfigSnapshot(snapshot)) {
-    return true;
-  }
-  if (!snapshot.valid || snapshot.sourceConfig.gateway?.mode === "remote") {
-    return false;
-  }
-  // Inference persists before setup finishes; only its owning receipt can
-  // distinguish interrupted local onboarding from an authored model-only config.
-  const { readLocalOnboardingStateForConfig } = await import("../state/local-onboarding-state.js");
-  return (
-    readLocalOnboardingStateForConfig(snapshot.path, snapshot.sourceConfig)?.status === "pending"
-  );
 }
 
 export async function shouldStartOnboardingForFreshInstall(argv: string[]): Promise<boolean> {
@@ -1020,6 +991,19 @@ export async function runCli(
             }
           }
           throw error;
+        } finally {
+          const resources = harnessCleanup?.pluginResources;
+          if (resources) {
+            await runCliDisposer("plugin-registration-resources", async () => {
+              try {
+                await resources.release();
+              } catch (error) {
+                console.error(`Plugin CLI resource disposal failed: ${String(error)}`);
+                throw error;
+              }
+            });
+            pauseNonTtyStdinForCliExit();
+          }
         }
       };
       // Nested registrars and late actions share this lightweight owner, even when no
@@ -1126,7 +1110,7 @@ async function runCliWithPreparedOutputMode(
 
   // Enforce the minimum supported runtime before gateway selection can read or recover config.
   const { assertSupportedRuntime } = await import("../infra/runtime-guard.js");
-  assertSupportedRuntime();
+  await assertSupportedRuntime();
 
   if (
     !isHelpOrVersionInvocation &&
@@ -1142,6 +1126,22 @@ async function runCliWithPreparedOutputMode(
         const { loadCliDotEnv } = await import("./dotenv.js");
         loadCliDotEnv({ loadGlobalEnv, quiet: true });
       }
+    });
+  }
+  if (
+    !isHelpOrVersionInvocation &&
+    normalizedInvocation.primary === "doctor" &&
+    process.env.OPENCLAW_UPDATE_IN_PROGRESS === "1"
+  ) {
+    // Debug capture can migrate shared state before Commander reaches Doctor.
+    // Resolve the update guard after selectors settle, before any bootstrap writer.
+    const [{ guardUpdateDoctorSchemaUpgrade }, { defaultRuntime }] = await Promise.all([
+      import("../commands/doctor-update-schema-guard.js"),
+      import("../runtime.js"),
+    ]);
+    await guardUpdateDoctorSchemaUpgrade({
+      runtime: defaultRuntime,
+      json: options.builtInMachineOutput,
     });
   }
   await configureStartupTraces();
@@ -1171,6 +1171,7 @@ async function runCliWithPreparedOutputMode(
   // Local Gateway/control-plane commands keep direct loopback access while
   // runtime, provider, plugin, update, and manifest/metadata-owned plugin commands route egress.
   let proxyHandle: ProxyHandle | null = null;
+  let proxyStopPromise: Promise<void> | undefined;
   let onSigterm: (() => void) | null = null;
   let onSigint: (() => void) | null = null;
   let onExit: (() => void) | null = null;
@@ -1237,16 +1238,26 @@ async function runCliWithPreparedOutputMode(
       onExit = null;
     }
   };
-  const stopStartedProxy = async () => {
+  const stopStartedProxy = () => {
+    if (proxyStopPromise) {
+      return proxyStopPromise;
+    }
     unregisterProxySignalExitBarrier?.();
     unregisterProxySignalExitBarrier = null;
     uninstallProxySignalHandlers();
     const handle = proxyHandle;
     proxyHandle = null;
-    if (handle) {
-      const { stopProxy } = await loadProxyLifecycleModule();
-      await stopProxy(handle);
-    }
+    const stop = async () => {
+      if (handle) {
+        const { stopProxy } = await loadProxyLifecycleModule();
+        await stopProxy(handle);
+      }
+    };
+    const resources = options.harnessCleanup?.pluginResources;
+    proxyStopPromise = Promise.resolve().then(() =>
+      resources ? resources.runCleanup(stop) : stop(),
+    );
+    return proxyStopPromise;
   };
   const killStartedProxy = () => {
     const handle = proxyHandle;
@@ -1274,6 +1285,7 @@ async function runCliWithPreparedOutputMode(
     await stopStartedProxy();
     const { startProxy } = await loadProxyLifecycleModule();
     proxyHandle = await startProxy(config);
+    proxyStopPromise = undefined;
     installProxySignalHandlers();
   };
   let uninstallGatewayRunRuntimeHooks: (() => void) | null = null;
@@ -1554,6 +1566,7 @@ async function runCliWithPreparedOutputMode(
         ]),
       );
       const program = await startupTrace.measure("build-program", () => buildProgram());
+      await options.harnessCleanup?.pluginResources?.waitForRegistrations();
 
       // Global error handlers to prevent silent crashes from unhandled rejections/exceptions.
       // These log the error and exit gracefully instead of crashing without trace.
@@ -1597,7 +1610,7 @@ async function runCliWithPreparedOutputMode(
           const ctx = getProgramContext(program);
           if (ctx) {
             const { registerCoreCliByName } = await import("./program/command-registry.js");
-            await registerCoreCliByName(program, ctx, primary, parseArgv);
+            await registerCoreCliByName(program, ctx, primary);
           }
           const { registerSubCliByName } = await import("./program/register.subclis.js");
           await registerSubCliByName(program, primary, parseArgv);
@@ -1661,11 +1674,16 @@ async function runCliWithPreparedOutputMode(
 
       let completedHelpOrVersion = false;
       try {
+        const resources = options.harnessCleanup?.pluginResources;
+        await resources?.waitForRegistrations();
         pluginCliSession?.close();
         // The invocation's cache scope survives closed preparation through action completion.
-        await startupTrace.measure("parse", () => program.parseAsync(parseArgv), {
-          timeline: false,
-        });
+        const parse = () =>
+          startupTrace.measure("parse", () => program.parseAsync(parseArgv), {
+            timeline: false,
+          });
+        await (resources ? resources.run(parse) : parse());
+        await resources?.waitForRegistrations();
         completedHelpOrVersion = isHelpOrVersionInvocation;
       } catch (error) {
         if (!isCommanderParseExit(error)) {
@@ -1689,9 +1707,12 @@ async function runCliWithPreparedOutputMode(
   } finally {
     pluginCliSession?.close();
     uninstallGatewayRunRuntimeHooks?.();
-    await stopStartedProxy();
+    const resources = options.harnessCleanup?.pluginResources;
+    await runCliDisposer("managed-proxy", stopStartedProxy, resources?.runCleanup);
     await closeCliResources(options.harnessCleanup);
-    pauseNonTtyStdinForCliExit();
+    if (!resources) {
+      pauseNonTtyStdinForCliExit();
+    }
   }
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

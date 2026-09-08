@@ -8,6 +8,7 @@ import {
   createGatewayRequestMock,
   createTestGatewayClient,
   type GatewayRequestMock,
+  type GatewayRequestHandler,
 } from "../../test-helpers/gateway-client.ts";
 import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
 import type { ChatHost } from "./chat-send-contract.ts";
@@ -21,7 +22,7 @@ export function makeRequestMock(handlers: RequestHandlers = {}): GatewayRequestM
   return createGatewayRequestMock((method: string, params?: unknown) => {
     if (!Object.hasOwn(handlers, method)) {
       // Keep unrelated Gateway traffic inert so each test declares only the responses it observes.
-      return Promise.resolve({});
+      return Promise.resolve(method === "models.list" ? { models: [] } : {});
     }
     try {
       const handler = handlers[method];
@@ -54,7 +55,7 @@ export function createBrowserAnnotationAttachment(
 }
 
 export function findChatSendPayload(host: {
-  request: { mock: { calls: ReadonlyArray<readonly [string, unknown?]> } };
+  request: { mock: { calls: ReadonlyArray<Readonly<Parameters<GatewayRequestHandler>>> } };
 }): Record<string, unknown> {
   const call = host.request.mock.calls.find(([method]) => method === "chat.send");
   if (!call?.[1] || typeof call[1] !== "object") {

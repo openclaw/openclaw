@@ -46,7 +46,8 @@ it("refreshes a retained pane from a persisted profile-only selection through th
       { ...entry, sessionId: "other-session" },
     );
     const request = makeRequestMock({
-      "chat.metadata": async (params: unknown) => {
+      "chat.metadata": async () => ({ commands: [] }),
+      "models.list": async (params: unknown) => {
         const selected = loadGatewaySessionEntryReadOnly(
           (params as { sessionKey: string }).sessionKey,
           { agentId: "main" },

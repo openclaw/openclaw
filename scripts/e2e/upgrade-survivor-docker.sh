@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# Bash 5.3+ can deadlock writing heredoc pipes on macOS before the reader starts.
+if [[ ${OSTYPE:-} == darwin* && $BASH != /bin/bash ]] && ((BASH_VERSINFO[0] > 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 3))); then
+  exec /bin/bash "$0" "$@"
+fi
 # Installs the packed OpenClaw tarball over dirty old-user state. When
 # OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC is set, installs that published
 # baseline first and upgrades it to the selected candidate.
@@ -46,7 +50,68 @@ source "$HARNESS_ROOT_DIR/scripts/lib/docker-e2e-image.sh"
 source "$HARNESS_ROOT_DIR/scripts/lib/docker-e2e-package.sh"
 source "$HARNESS_ROOT_DIR/scripts/lib/upgrade-survivor-diagnostics.sh"
 source "$HARNESS_ROOT_DIR/scripts/lib/openclaw-e2e-instance.sh"
+source "$HARNESS_ROOT_DIR/scripts/lib/frozen-target-compat.sh"
 source "$HARNESS_ROOT_DIR/scripts/e2e/lib/prepublish-plugin-registry.sh"
+
+UPGRADE_SCENARIO_ARGS=()
+UPGRADE_RUNNER="$HARNESS_ROOT_DIR/scripts/e2e/lib/upgrade-survivor/run.sh"
+UPGRADE_SCENARIO_DIR=""
+UPGRADE_TARGET_TRAIN=""
+context_status=0
+openclaw_prepare_frozen_target_context "$ROOT_DIR" || context_status=$?
+case "$context_status" in
+  0)
+    UPGRADE_TARGET_TRAIN="$(node --input-type=module - "$ROOT_DIR" "$OPENCLAW_SELECTED_SHA" "$HARNESS_ROOT_DIR/scripts/lib/release-version.mjs" <<'NODE'
+import { execFileSync } from "node:child_process";
+import { pathToFileURL } from "node:url";
+const [root, sha, classifier] = process.argv.slice(2);
+const { parseReleaseVersion, classifyReleaseTrain } = await import(pathToFileURL(classifier).href);
+const { version } = JSON.parse(execFileSync("git", ["-C", root, "show", `${sha}:package.json`], { encoding: "utf8" }));
+const parsed = typeof version === "string" ? parseReleaseVersion(version) : null;
+if (!parsed) throw new Error("Selected upgrade target has an invalid release version.");
+const train = classifyReleaseTrain(parsed);
+if (train === "unsupported-extended-stable-correction") {
+  throw new Error("Selected extended-stable target has an unsupported correction version.");
+}
+process.stdout.write(train);
+NODE
+)"
+    ;;
+  1) ;;
+  *) exit "$context_status" ;;
+esac
+if [ "$UPGRADE_TARGET_TRAIN" = extended-stable ]; then
+  # Extended-stable retains shipped state expectations. Regular releases keep
+  # the trusted runner and its serving-turn/post-inference assertions together.
+  UPGRADE_SCENARIO_DIR="$(openclaw_resolve_frozen_target_file \
+    "$ROOT_DIR" scripts/e2e/lib/upgrade-survivor)"
+  if [ -z "$UPGRADE_SCENARIO_DIR" ]; then
+    echo "Selected extended-stable target does not provide an upgrade scenario." >&2
+    exit 2
+  fi
+  UPGRADE_RUNNER="$UPGRADE_SCENARIO_DIR/run.sh"
+  UPGRADE_NPM_PUBLISH_PLAN="$(openclaw_resolve_frozen_target_file \
+    "$ROOT_DIR" scripts/lib/npm-publish-plan.mjs)"
+  UPGRADE_WINDOWS_HELPERS="$(openclaw_resolve_frozen_target_file \
+    "$ROOT_DIR" scripts/windows-cmd-helpers.mjs)"
+  DOCKER_E2E_WINDOWS_HELPERS_PATH="$UPGRADE_WINDOWS_HELPERS"
+  UPGRADE_BOUNDED_RESPONSE="$(openclaw_resolve_frozen_target_file \
+    "$ROOT_DIR" scripts/lib/bounded-response.mjs)"
+  UPGRADE_PLUGIN_INDEX="$(openclaw_resolve_frozen_target_file \
+    "$ROOT_DIR" scripts/e2e/lib/plugin-index-sqlite.mjs)"
+  UPGRADE_ENV_LIMITS="$(openclaw_resolve_frozen_target_file \
+    "$ROOT_DIR" scripts/e2e/lib/env-limits.mjs)"
+  UPGRADE_TEXT_FILE_UTILS="$(openclaw_resolve_frozen_target_file \
+    "$ROOT_DIR" scripts/e2e/lib/text-file-utils.mjs)"
+  UPGRADE_SCENARIO_ARGS+=(
+    -v "$UPGRADE_SCENARIO_DIR:/app/scripts/e2e/lib/upgrade-survivor:ro"
+    -v "$UPGRADE_NPM_PUBLISH_PLAN:/app/scripts/lib/npm-publish-plan.mjs:ro"
+    -v "$UPGRADE_BOUNDED_RESPONSE:/app/scripts/lib/bounded-response.mjs:ro"
+    -v "$UPGRADE_PLUGIN_INDEX:/app/scripts/e2e/lib/plugin-index-sqlite.mjs:ro"
+    -v "$UPGRADE_ENV_LIMITS:/app/scripts/e2e/lib/env-limits.mjs:ro"
+    -v "$UPGRADE_TEXT_FILE_UTILS:/app/scripts/e2e/lib/text-file-utils.mjs:ro"
+  )
+fi
 
 IMAGE_NAME="$(docker_e2e_resolve_image "openclaw-upgrade-survivor-e2e" OPENCLAW_UPGRADE_SURVIVOR_E2E_IMAGE)"
 SKIP_BUILD="${OPENCLAW_UPGRADE_SURVIVOR_E2E_SKIP_BUILD:-0}"
@@ -54,6 +119,9 @@ DOCKER_RUN_TIMEOUT="${OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT:-1200s}"
 BASELINE_SPEC="${OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC:-}"
 SCENARIO="${OPENCLAW_UPGRADE_SURVIVOR_SCENARIO:-base}"
 UPDATE_RESTART_MODE="${OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE:-manual}"
+if [ "$SCENARIO" = "abandoned-update" ] && [ -z "${OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE:-}" ]; then
+  UPDATE_RESTART_MODE="auto-auth"
+fi
 COMMAND_TIMEOUT="${OPENCLAW_UPGRADE_SURVIVOR_COMMAND_TIMEOUT:-900s}"
 START_BUDGET_SECONDS="$(openclaw_e2e_read_positive_int_env OPENCLAW_UPGRADE_SURVIVOR_START_BUDGET_SECONDS 90)"
 STATUS_BUDGET_SECONDS="$(openclaw_e2e_read_positive_int_env OPENCLAW_UPGRADE_SURVIVOR_STATUS_BUDGET_SECONDS 30)"
@@ -95,7 +163,7 @@ case "$LIVE_OPENAI" in
     ;;
 esac
 
-if { [ "$SCENARIO" = "sqlite-volume" ] || [ "$SCENARIO" = "recovery-cleanup" ]; } && [ "${OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE:-0}" != "1" ]; then
+if { [ "$SCENARIO" = "sqlite-volume" ] || [ "$SCENARIO" = "recovery-cleanup" ] || [ "$SCENARIO" = "legacy-operator-state" ]; } && [ "${OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE:-0}" != "1" ]; then
   echo "$SCENARIO requires OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1" >&2
   exit 1
 fi
@@ -109,6 +177,14 @@ if [ "$SCENARIO" = "recovery-cleanup" ] && { [ "$UPDATE_RESTART_MODE" != "manual
 fi
 if [ "$SCENARIO" = "mobile-pairing-reconnect" ] && { [ "$UPDATE_RESTART_MODE" != "manual" ] || [ "$ROOT_MANAGED_VPS" != "0" ] || [ "$LIVE_OPENAI" != "0" ]; }; then
   echo "mobile-pairing-reconnect requires the isolated manual-restart fixture without live provider credentials" >&2
+  exit 1
+fi
+
+if [ "$SCENARIO" = "abandoned-update" ] && {
+  [ "${OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE:-0}" != "1" ] ||
+  [ "$UPDATE_RESTART_MODE" != "auto-auth" ] || [ "$ROOT_MANAGED_VPS" != "0" ] || [ "$LIVE_OPENAI" != "0" ];
+}; then
+  echo "abandoned-update requires the published baseline, auto-auth service fixture, and no live provider" >&2
   exit 1
 fi
 
@@ -255,6 +331,7 @@ if [ "${OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE:-0}" = "1" ]; then
     -e OPENCLAW_UPGRADE_SURVIVOR_CANDIDATE_SPEC="$CANDIDATE_SPEC" \
     -e OPENCLAW_DOCKER_E2E_SELECTED_SHA="${OPENCLAW_DOCKER_E2E_SELECTED_SHA:-}" \
     -e OPENCLAW_UPGRADE_SURVIVOR_SCENARIO="$SCENARIO" \
+    -e OPENCLAW_UPGRADE_SURVIVOR_RUNTIME_ROOT="${OPENCLAW_UPGRADE_SURVIVOR_RUNTIME_ROOT:-/tmp/openclaw-upgrade-survivor-runtime}" \
     -e OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE="$UPDATE_RESTART_MODE" \
     -e OPENCLAW_UPGRADE_SURVIVOR_COMMAND_TIMEOUT="$COMMAND_TIMEOUT" \
     -e OPENCLAW_UPGRADE_SURVIVOR_VOLUME_SESSIONS="${OPENCLAW_UPGRADE_SURVIVOR_VOLUME_SESSIONS:-}" \
@@ -268,12 +345,15 @@ if [ "${OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE:-0}" = "1" ]; then
     -e OPENCLAW_UPGRADE_SURVIVOR_STATUS_BUDGET_SECONDS="$STATUS_BUDGET_SECONDS" \
     -e OPENCLAW_UPGRADE_SURVIVOR_CLAWHUB_FIXTURE_SERVER=/tmp/openclaw-clawhub-fixture-server.cjs \
     -e OPENCLAW_UPGRADE_SURVIVOR_CONFIG_PARKING_HELPER=/tmp/openclaw-config-parking.mjs \
+    -e OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_SERVER_SCRIPT=/tmp/openclaw-release-harness/scripts/e2e/lib/plugins/npm-registry-server.mjs \
     "${PROBE_ENV_ARGS[@]}" \
     ${LIVE_OPENAI_ENV_ARGS[@]+"${LIVE_OPENAI_ENV_ARGS[@]}"} \
     -v "$ARTIFACT_DIR:/tmp/openclaw-upgrade-survivor-artifacts" \
     -v "$HARNESS_ROOT_DIR/scripts/e2e/lib/clawhub-fixture-server.cjs:/tmp/openclaw-clawhub-fixture-server.cjs:ro" \
     -v "$HARNESS_ROOT_DIR/scripts/e2e/lib/upgrade-survivor/config-parking.mjs:/tmp/openclaw-config-parking.mjs:ro" \
-    -v "$HARNESS_ROOT_DIR/scripts/e2e/lib/upgrade-survivor/run.sh:/tmp/openclaw-upgrade-survivor-run.sh:ro" \
+    -v "$HARNESS_ROOT_DIR/scripts:/tmp/openclaw-release-harness/scripts:ro" \
+    -v "$UPGRADE_RUNNER:/tmp/openclaw-upgrade-survivor-run.sh:ro" \
+    ${UPGRADE_SCENARIO_ARGS[@]+"${UPGRADE_SCENARIO_ARGS[@]}"} \
     ${DOCKER_E2E_PACKAGE_ARGS[@]+"${DOCKER_E2E_PACKAGE_ARGS[@]}"} \
     ${DOCKER_RUN_USER_ARGS[@]+"${DOCKER_RUN_USER_ARGS[@]}"} \
     "$IMAGE_NAME" \
@@ -319,10 +399,13 @@ docker_e2e_run_with_harness \
   -e OPENCLAW_UPGRADE_SURVIVOR_STATUS_BUDGET_SECONDS="$STATUS_BUDGET_SECONDS" \
   -e OPENCLAW_UPGRADE_SURVIVOR_CLAWHUB_FIXTURE_SERVER=/tmp/openclaw-clawhub-fixture-server.cjs \
   -e OPENCLAW_UPGRADE_SURVIVOR_CONFIG_PARKING_HELPER=/tmp/openclaw-config-parking.mjs \
+  -e OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_SERVER_SCRIPT=/tmp/openclaw-release-harness/scripts/e2e/lib/plugins/npm-registry-server.mjs \
   "${PROBE_ENV_ARGS[@]}" \
   -v "$ARTIFACT_DIR:/tmp/openclaw-upgrade-survivor-artifacts" \
   -v "$HARNESS_ROOT_DIR/scripts/e2e/lib/clawhub-fixture-server.cjs:/tmp/openclaw-clawhub-fixture-server.cjs:ro" \
   -v "$HARNESS_ROOT_DIR/scripts/e2e/lib/upgrade-survivor/config-parking.mjs:/tmp/openclaw-config-parking.mjs:ro" \
+  -v "$HARNESS_ROOT_DIR/scripts:/tmp/openclaw-release-harness/scripts:ro" \
+  ${UPGRADE_SCENARIO_ARGS[@]+"${UPGRADE_SCENARIO_ARGS[@]}"} \
   ${DOCKER_E2E_PACKAGE_ARGS[@]+"${DOCKER_E2E_PACKAGE_ARGS[@]}"} \
   ${DOCKER_RUN_USER_ARGS[@]+"${DOCKER_RUN_USER_ARGS[@]}"} \
   "$IMAGE_NAME" \

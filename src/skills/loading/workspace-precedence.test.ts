@@ -9,8 +9,9 @@ import { createFixtureSuite } from "../../test-utils/fixture-suite.js";
 import { bumpSkillsSnapshotVersion } from "../runtime/refresh-state.js";
 import { writeSkill } from "../test-support/e2e-test-helpers.js";
 import type { OpenClawSkillMetadata, SkillEntry } from "../types.js";
+import { resolveWorkshopSkillsDir } from "../workshop/skills-root.js";
 import { createSyntheticSourceInfo } from "./skill-contract.js";
-import { loadMergedWorkspaceSkills } from "./workspace-skill-loader.js";
+import { loadWorkspaceSkills } from "./workspace-skill-loader.js";
 import { buildSkillSnapshot } from "./workspace-skill-prompt.js";
 
 const buildWorkspaceSkillsPrompt = (
@@ -124,6 +125,41 @@ describe("buildWorkspaceSkillsPrompt", () => {
     expect(prompt).not.toContain("Bundled version");
   });
 
+  it("loads Workshop skills below managed and above bundled", async () => {
+    const workspaceDir = await fixtureSuite.createCaseDir("workshop-precedence");
+    const managedDir = path.join(workspaceDir, ".managed");
+    const config = {
+      agents: { entries: { main: { agentDir: path.join(workspaceDir, ".agent") } } },
+    };
+    const workshopDir = resolveWorkshopSkillsDir(config, "main");
+    const bundledDir = path.join(workspaceDir, ".bundled");
+    for (const [root, name, description] of [
+      [managedDir, "managed-wins", "Managed version"],
+      [workshopDir, "managed-wins", "Workshop version below managed"],
+      [workshopDir, "workshop-wins", "Workshop version"],
+      [bundledDir, "workshop-wins", "Bundled version below Workshop"],
+    ] as const) {
+      await writeSkill({ dir: path.join(root, name), name, description });
+    }
+
+    const entries = loadWorkspaceSkills(workspaceDir, {
+      config,
+      agentId: "main",
+      managedSkillsDir: managedDir,
+      bundledSkillsDir: bundledDir,
+      pluginSkillsDir: path.join(workspaceDir, ".plugin-skills"),
+    });
+
+    expect(entries.find((entry) => entry.skill.name === "managed-wins")?.skill).toMatchObject({
+      source: "openclaw-managed",
+      description: "Managed version",
+    });
+    expect(entries.find((entry) => entry.skill.name === "workshop-wins")?.skill).toMatchObject({
+      source: "openclaw-workshop",
+      description: "Workshop version",
+    });
+  });
+
   it("keeps extraDirs below bundled precedence and reports the collision", async () => {
     const workspaceDir = await fixtureSuite.createCaseDir("extra-bundled-collision");
     const extraDir = path.join(workspaceDir, ".extra");
@@ -177,12 +213,12 @@ describe("buildWorkspaceSkillsPrompt", () => {
 
     const loadOptions = {
       agentWorkspaceDir,
-      executionSkillsDir: path.join(executionWorkspaceDir, "skills"),
+      executionWorkspaceDir,
       managedSkillsDir: path.join(agentWorkspaceDir, ".managed"),
       bundledSkillsDir: "",
       pluginSkillsDir: path.join(agentWorkspaceDir, ".plugin-skills"),
     };
-    const entries = loadMergedWorkspaceSkills(loadOptions);
+    const entries = loadWorkspaceSkills(agentWorkspaceDir, loadOptions);
     const warning = JSON.parse(String(warn.mock.calls[0]?.[0])) as Record<string, unknown>;
 
     expect(entries.find((entry) => entry.skill.name === "demo-skill")?.skill.description).toBe(
@@ -195,11 +231,11 @@ describe("buildWorkspaceSkillsPrompt", () => {
       loserPath: executionSkillFile,
     });
 
-    loadMergedWorkspaceSkills(loadOptions);
+    loadWorkspaceSkills(agentWorkspaceDir, loadOptions);
     expect(warn).toHaveBeenCalledOnce();
 
     bumpSkillsSnapshotVersion({ workspaceDir: agentWorkspaceDir, reason: "watch" });
-    loadMergedWorkspaceSkills(loadOptions);
+    loadWorkspaceSkills(agentWorkspaceDir, loadOptions);
     expect(warn).toHaveBeenCalledTimes(2);
   });
 
@@ -212,17 +248,15 @@ describe("buildWorkspaceSkillsPrompt", () => {
       name: "demo-skill",
       description: "Workspace version",
     });
-    const executionSkillsDir = path.join(executionWorkspaceDir, "skills");
     await fs.symlink(
       workspaceSkillsDir,
-      executionSkillsDir,
+      path.join(executionWorkspaceDir, "skills"),
       process.platform === "win32" ? "junction" : "dir",
     );
     const warn = captureWarningLogger();
 
-    const entries = loadMergedWorkspaceSkills({
-      agentWorkspaceDir,
-      executionSkillsDir,
+    const entries = loadWorkspaceSkills(agentWorkspaceDir, {
+      executionWorkspaceDir,
       managedSkillsDir: path.join(agentWorkspaceDir, ".managed"),
       bundledSkillsDir: "",
       pluginSkillsDir: path.join(agentWorkspaceDir, ".plugin-skills"),

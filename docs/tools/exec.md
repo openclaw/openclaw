@@ -29,13 +29,13 @@ Auto-background the command after this delay (ms).
 </ParamField>
 
 <ParamField path="background" type="boolean" default="false">
-Background the command immediately instead of waiting for `yieldMs`.
+Background the command immediately instead of waiting for `yieldMs`. The process timeout still applies after the tool returns.
 </ParamField>
 
 <ParamField path="timeoutSeconds" type="number" default="tools.exec.timeoutSeconds">
-Override the configured exec timeout for this call, in **seconds**. Note the sibling `yieldMs` is in
-milliseconds, and the `process` tool's identically named `timeout` is also in milliseconds - pass
-`timeoutSeconds` so the unit is explicit at the call site. Applies to foreground, background, `yieldMs`, gateway, sandbox, and node `system.run` execution. `timeoutSeconds: 0` disables the exec process timeout for that call.
+Limit the command's total lifetime, in **seconds**, overriding the configured exec timeout for this call. Expiry terminates the process even after `background` or `yieldMs` returns a session ID. `yieldMs` controls how long the tool waits before backgrounding; the `process` tool's `timeout` controls how long a poll waits, also in milliseconds.
+
+Applies to gateway, sandbox, and node `system.run` execution. `timeoutSeconds: 0` disables the exec process timeout for that call. For a persistent service on the gateway or in a sandbox, use `background: true` with `timeoutSeconds: 0`, then stop it with `process` action `kill` when finished. Disabling this timeout does not make the process survive its host or worker shutting down.
 </ParamField>
 
 <ParamField path="pty" type="boolean" default="false">
@@ -71,6 +71,7 @@ Notes:
 - On Windows hosts, exec prefers PowerShell 7 (`pwsh`) discovery (Program Files, ProgramW6432, then PATH), then falls back to Windows PowerShell 5.1.
 - On non-Windows gateway hosts, bash and zsh exec commands use a startup snapshot. OpenClaw captures sourceable aliases/functions and a small safe environment set from shell startup files into `$OPENCLAW_STATE_DIR/cache/shell-snapshots/`, then sources that snapshot before each exec command. Secret-looking variables are excluded; sandbox and node exec do not use this snapshot. Set `OPENCLAW_EXEC_SHELL_SNAPSHOT=0` in the Gateway process environment to disable this snapshot path.
 - Host execution (`gateway`/`node`) rejects `env.PATH` and loader overrides (`LD_*`/`DYLD_*`) to prevent binary hijacking or injected code.
+- Exact `"cat"` or empty `GIT_PAGER` and `PAGER` overrides are normalized to empty values, including on node shell-wrapper execution. This disables Git paging without passing an executable pager name through `PATH`. Other programs may interpret an empty `PAGER` differently; use their noninteractive flags when needed. Other pager commands, paths, whitespace variants, and `MANPAGER` overrides remain blocked.
 - OpenClaw sets `OPENCLAW_SHELL=exec` in the spawned command environment (including PTY and sandbox execution) so shell/profile rules can detect exec-tool context.
 - With the default-off [secret egress proxy](/gateway/secrets#secret-egress-proxy), Gateway-hosted exec receives shared-store `secret` entries only as process-local sentinels. The authenticated loopback proxy substitutes plaintext at outbound HTTPS request time; the exact run token expires when the agent run closes.
 - Shared-store `env` entries are intentionally plaintext and reach Gateway-hosted exec from the next agent run. They do not reach sandbox, remote `node`, ACP, or Codex-native shell execution. Under the Codex harness, use `gateway_exec` for this OpenClaw-managed environment path.
@@ -121,23 +122,35 @@ Example:
 
 `tools.exec.mode` is the canonical persisted policy knob. Runtime security and approval behavior are derived from it.
 
-| Mode        | security    | ask       | Behavior                                                                                                                       |
-| ----------- | ----------- | --------- | ------------------------------------------------------------------------------------------------------------------------------ |
-| `deny`      | `deny`      | `off`     | Exec is denied.                                                                                                                |
-| `allowlist` | `allowlist` | `off`     | Only allowlisted/safe-bin commands run; nothing else is asked.                                                                 |
-| `ask`       | `allowlist` | `on-miss` | Allowlist matches run directly; everything else asks a human.                                                                  |
-| `auto`      | `allowlist` | `on-miss` | Allowlist/safe-bin matches run directly; everything else routes through OpenClaw's native auto reviewer before asking a human. |
-| `full`      | `full`      | `off`     | No approval gate.                                                                                                              |
+| Mode        | security    | ask       | Behavior                                                                                                                        |
+| ----------- | ----------- | --------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| `deny`      | `deny`      | `off`     | Exec is denied.                                                                                                                 |
+| `allowlist` | `allowlist` | `off`     | Only allowlisted/safe-bin commands run; nothing else is asked.                                                                  |
+| `ask`       | `allowlist` | `on-miss` | Allowlist matches run directly; everything else asks a human.                                                                   |
+| `auto`      | `allowlist` | `on-miss` | Allowlist/safe-bin matches run directly; eligible misses receive an `allow`, `deny`, or `ask` verdict from the native reviewer. |
+| `full`      | `full`      | `off`     | No approval gate.                                                                                                               |
 
 Use `/exec ask=always` with a message to require human approval for that run. It does not persist to later messages. Use [session permission modes](/gateway/permission-modes) for session-wide policy.
 
-Auto-review approval is single-use. On the gateway, OpenClaw supplies the resolved executable path to the reviewer and pins execution to that same path. An enforceable command chain or pipeline can be reviewed as one request when every executable resolves and OpenClaw can rebuild the complete command with those exact paths. Commands that cannot be reduced to one enforceable execution plan—such as heredocs, shell expansions, or unsupported wrapper quoting—fall back to human approval even if the model would otherwise allow them.
+Auto-review approval is single-use. The reviewer returns `allow`, `deny`, or `ask`: `allow` runs a low- or medium-risk command once; `deny` returns a reason to the agent, which must choose a materially safer alternative or ask the user rather than work around the denial; `ask` requests human approval. Commands containing reviewer-directed text are denied back to the agent so it can rewrite the command; they do not directly escalate to human approval. Reviewer failures, timeouts, and invalid responses also ask a human. On the gateway, three consecutive reviewer denials for a session escalate the third command to human approval; a reviewer allowance or resolved human approval resets the count.
+
+For embedded agent runs, the reviewer receives a bounded, redacted excerpt of the current conversation: user requests, assistant text, tool calls, and tool results, labeled by origin. It uses this context to judge whether a command serves the user's request. The excerpt is untrusted evidence, not instructions. Conversation context is unavailable for direct node `system.run` calls and widgets.
+
+On the gateway, commands must still pass the existing mutable-file binding checks before review. Those checks continue to reject heredocs, unresolved executables, and missing script operands. The whole ordinary external dispatch chain—each original wrapper executable and the final command-segment executable—is bound at review time and re-checked before launch: protected executables use resolved real-path identity only, while writable executables also use a content hash. A changed executable resolution, including a new executable earlier on `PATH`, denies the approved run. Identity-only binding does not make an otherwise eligible human approval single-use.
+
+Reviewer-approved unpinned execution requires the complete dispatch chain to be identity-bound: the authorization plan must be complete, use direct transports, and have a recorded executable operand for every wrapper and final executable. Eligible globs and chains run as written after executable-identity, mutable-file, and working-directory revalidation. Commands rebuilt with pinned executable paths retain their existing review behavior. Node-host auto-review accepts a prepared pinned direct command, including the node's own canonical POSIX shell transport around one direct absolute executable with static arguments. Bare executable names, unquoted globs, and user-supplied wrappers still require human approval when the gateway cannot inspect the node's in-memory binding. Node executable-identity revalidation covers local policy evaluation through dispatch; it does not preserve every inner shell executable's identity across a remote human approval wait. See [Interpreter/runtime commands](/tools/exec-approvals-advanced#interpreter%2Fruntime-commands) for that boundary.
+
+Shell `-c` wrappers, `env` with assignments, `xcrun`, BusyBox/Toybox applets, shell `builtin`/`command`/`exec` dispatch, and any other incomplete dispatch chain skip the reviewer with `Exec auto-review skipped: dispatch chain cannot be bound`. In auto mode, these forms take the one-shot human approval path when existing binding checks succeed; existing binding rejections still apply. Plain commands and transparent `env` without assignments remain eligible when their complete chains are bound. There are no persisted data model changes: binding stays in memory for the approval lifetime.
+
+POSIX login or interactive shell wrappers in the requested command never receive auto-review. When binding succeeds, as with `bash -lc 'printf ok'`, they require human approval because their implicit startup files are outside operand binding. Existing binding rejections still take precedence; interactive forms rejected as code-loading options remain denied. This applies to wrappers in the requested command; the gateway's ordinary shell startup snapshot is unchanged.
+
+Explicit `ask=always`, security-audit suppression changes, and commands above the review candidate limit go directly to human approval.
 
 Codex app-server command approvals that are not already decided by explicit runtime or native policy use the human approval route. OpenClaw does not run its configured exec reviewer for these requests because Codex does not expose an enforceable resolved executable that can bind the review decision to the command Codex runs.
 
 ### Inline eval (`strictInlineEval`)
 
-When `tools.exec.strictInlineEval` is `true`, inline interpreter-eval forms require reviewer or explicit approval: `python -c`, `node -e`, `ruby -e`, `perl -e`, `php -r`, `lua -e`, `osascript -e`, and similar forms across other supported interpreters and command carriers (`awk`, `find -exec`, `make`, `sed`, `xargs`, and more). In `mode=auto`, the normal exec approval path may let the native auto reviewer allow a clearly low-risk one-off command; direct node-host `system.run` calls still require an explicit approval because they cannot hand the command to a human approval route. If the reviewer asks, the request goes to a human. `allow-always` can still persist benign interpreter/script invocations, but inline-eval forms do not become durable allow rules.
+When `tools.exec.strictInlineEval` is `true`, inline interpreter-eval forms require reviewer or explicit approval: `python -c`, `node -e`, `ruby -e`, `perl -e`, `php -r`, `lua -e`, `osascript -e`, and similar forms across other supported interpreters and command carriers (`awk`, `find -exec`, `make`, `sed`, `xargs`, and more). In `mode=auto`, the normal exec approval path may let the native auto reviewer allow a low- or medium-risk one-off command; direct node-host `system.run` calls still require an explicit approval because they cannot hand the command to a human approval route. A reviewer denial returns to the agent with a reason; `ask` goes to a human. `allow-always` can still persist benign interpreter/script invocations, but inline-eval forms do not become durable allow rules.
 
 ### PATH handling
 
@@ -155,7 +168,7 @@ openclaw config get agents.entries
 openclaw config set 'agents.entries.main.tools.exec.node' "node-id-or-name"
 ```
 
-Control UI: the **Devices** page includes a small "Exec node binding" panel for the same settings.
+Control UI: the **Devices** page includes a small "Exec node binding" panel for the same settings. If a saved target cannot be resolved or no longer advertises execution support, its binding stays selected and is marked **Unavailable**. Supported names, addresses, and ID prefixes resolve without rewriting the saved reference.
 
 ### Python environments (`uv`)
 
@@ -242,6 +255,19 @@ Send keys (tmux-style):
 {"tool":"process","action":"send-keys","sessionId":"<id>","keys":["Enter"]}
 {"tool":"process","action":"send-keys","sessionId":"<id>","keys":["C-c"]}
 {"tool":"process","action":"send-keys","sessionId":"<id>","keys":["Up","Up","Enter"]}
+```
+
+For text, use `literal`; for exact input bytes, use `hex`. A mixed request sends literal UTF-8 text, hex bytes, then named keys, in that order:
+
+```json
+{
+  "tool": "process",
+  "action": "send-keys",
+  "sessionId": "<id>",
+  "literal": "hello ",
+  "hex": ["c3", "a9"],
+  "keys": ["Enter"]
+}
 ```
 
 Submit (send CR only):

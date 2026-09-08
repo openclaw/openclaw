@@ -119,6 +119,21 @@ First-run Q&A - install, onboard, auth routes, subscriptions, initial failures -
 
   </Accordion>
 
+  <Accordion title="Is OpenClaw owned by OpenAI?">
+    No. OpenClaw is stewarded by the [OpenClaw Foundation](https://openclaw.org), an independent 501(c)(3). OpenAI is one of several donors, and its creator works there. Donors do not own, control, or direct the project. Codex is one [agent harness](/concepts/agent-runtimes) plugin among several, and no lab's model is privileged in the code.
+
+  </Accordion>
+
+  <Accordion title="What does OpenClaw send to the Foundation?">
+    By default, a daily update check carrying the OpenClaw version, OS, Node version, and CPU architecture: the same information any package registry sees. Optional anonymous feature statistics are off by default and carry no identifier. No prompts, messages, model names, keys, paths, or machine identifiers are ever sent to the Foundation. Set `update.checkOnStart: false` to send nothing at all. Traffic to the model providers and chat platforms you configure is separate and goes to them, as always; see "Is all data used with OpenClaw saved locally?" below. Details: [Usage telemetry and update checks](/gateway/telemetry).
+
+  </Accordion>
+
+  <Accordion title="How is OpenClaw funded, and how does that compare?">
+    The Foundation is funded by donations and has no product to sell: no paid tier, no hosted service, no token. It is not venture-backed. Some other self-hosted agents are built by venture-funded companies that sell a subscription their agent offers during setup. That is a difference in incentives, not a judgment of their engineering; see the [governance comparison](/start/why-openclaw#governance).
+
+  </Accordion>
+
   <Accordion title="What are the advantages vs Claude Code for web development?">
     OpenClaw is an **assistant and coordination layer**, not an IDE replacement. Use Claude Code or Codex for the fastest direct coding loop inside a repo. Use OpenClaw for durable memory, cross-device access, and tool orchestration.
 
@@ -154,7 +169,7 @@ First-run Q&A - install, onboard, auth routes, subscriptions, initial failures -
     - **Global default + current session**: Owner/admin `/model <model> -g` (or `--global`) updates `agents.defaults.model`.
 
     Bare `/model <model>` keeps owner/admin configured-default persistence unless
-    you set the optional [model selection scope](/gateway/config-agents#agentsdefaultsmodelselectionscope).
+    you set the optional [model selection scope](/gateway/config-agents/models#agentsdefaultsmodelselectionscope).
 
     Example - same model, different per-agent settings:
 
@@ -178,7 +193,7 @@ First-run Q&A - install, onboard, auth routes, subscriptions, initial failures -
     }
     ```
 
-    Put shared per-model defaults in `agents.defaults.models["provider/model"].params`, then agent-specific overrides in flat `agents.entries.*.params`. Do not duplicate the same model under nested `agents.entries.*.models["provider/model"].params`; that path is for per-agent model catalog and runtime overrides.
+    Put shared per-model defaults in `agents.defaults.models["provider/model"].params`. Use `agents.entries.*.models["provider/model"].params` when one agent needs different settings for that model. Flat `agents.entries.*.params` applies across that agent's models and wins over both per-model layers.
 
     See [Cron jobs](/automation/cron-jobs), [Multi-Agent Routing](/concepts/multi-agent), [Configuration](/gateway/config-agents), [Slash commands](/tools/slash-commands).
 
@@ -406,7 +421,7 @@ First-run Q&A - install, onboard, auth routes, subscriptions, initial failures -
   <Accordion title="Can I keep DMs personal but make groups public/sandboxed with one agent?">
     Yes, if private traffic is **DMs** and public traffic is **groups**. Set `agents.defaults.sandbox.mode: "non-main"` so group/channel sessions (non-main keys) run in the configured sandbox backend while the main DM session stays on-host. Select `backend: "docker"` for Docker or `backend: "podman"` for Podman. Restrict tools available in sandboxed sessions via `tools.sandbox.tools`.
 
-    Setup walkthrough: [Groups: personal DMs + public groups](/channels/groups#pattern-personal-dms-public-groups-single-agent). Key reference: [Gateway configuration](/gateway/config-agents#agentsdefaultssandbox).
+    Setup walkthrough: [Groups: personal DMs + public groups](/channels/groups#pattern-personal-dms-public-groups-single-agent). Key reference: [Gateway configuration](/gateway/config-agents/sandbox#agentsdefaultssandbox).
 
   </Accordion>
 
@@ -554,7 +569,7 @@ First-run Q&A - install, onboard, auth routes, subscriptions, initial failures -
     {
       agents: {
         defaults: {
-          workspace: "~/Projects/my-repo",
+          workspace: "~/path/to/my-repo",
         },
       },
     }
@@ -803,7 +818,7 @@ First-run Q&A - install, onboard, auth routes, subscriptions, initial failures -
   </Accordion>
 
   <Accordion title="Is there a benefit to using a node on my personal laptop instead of SSH from a VPS?">
-    Yes: nodes are the first-class way to reach your laptop from a remote Gateway and unlock more than shell access. The Gateway runs on macOS/Linux (Windows via WSL2) and is lightweight (a small VPS or Raspberry Pi-class box is fine; 4 GB RAM is plenty), so a common setup is an always-on host plus your laptop as a node.
+    Yes: nodes are the first-class way to reach your laptop from a remote Gateway and unlock more than shell access. The Gateway runs on macOS, Linux, and Windows (native or WSL2) and is lightweight (a small VPS or Raspberry Pi-class box is fine; 4 GB RAM is plenty), so a common setup is an always-on host plus your laptop as a node.
 
     - **No inbound SSH required** - nodes connect out to the Gateway WebSocket via device pairing.
     - **Safer execution controls** - `system.run` is gated by node allowlists/approvals on that laptop.
@@ -882,7 +897,7 @@ First-run Q&A - install, onboard, auth routes, subscriptions, initial failures -
   </Accordion>
 
   <Accordion title="Should I install on a second laptop or just add a node?">
-    For **local tools only** (screen/camera/exec) on the second laptop, add it as a **node** - one Gateway, no duplicated config. Local node tools are currently macOS-only. Install a second Gateway only for **hard isolation** or two fully separate bots.
+    For **local tools only** (screen/camera/exec) on the second laptop, add it as a **node** - one Gateway, no duplicated config. The local tools a node exposes depend on its platform. See [Nodes](/nodes) for the per-platform defaults. Install a second Gateway only for **hard isolation** or two fully separate bots.
 
     Docs: [Nodes](/nodes), [Nodes CLI](/cli/nodes), [Multiple gateways](/gateway/multiple-gateways).
 
@@ -1455,7 +1470,7 @@ Model Q&A - defaults, selection, aliases, switching, failover, auth profiles - l
 
     A safer baseline: Gateway bound to `loopback`, or exposed only through authenticated private access (tailnet, SSH tunnel, token/password auth, or a correctly configured trusted proxy); DMs in `pairing` or `allowlist` mode; group access limited to rooms you chose (group allowlists), with mention gating or sender allowlists where membership is broad or public; high-risk tools (`exec`, `browser`, `gateway`, `cron`) denied or tightly scoped for agents that read untrusted content; sandboxing enabled where tool execution needs a smaller blast radius.
 
-    Public binds without auth, open DMs/groups with tools, and exposed browser control are the findings to fix first. Details: [openclaw security audit](/gateway/security#openclaw-security-audit).
+    Public binds without auth, open DMs/groups with tools, and exposed browser control are the findings to fix first. Details: [openclaw security audit](/gateway/security/running-the-audit#openclaw-security-audit).
 
   </Accordion>
 

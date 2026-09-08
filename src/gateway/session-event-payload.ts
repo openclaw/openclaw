@@ -23,6 +23,8 @@ export function buildGatewaySessionEventFields(params: {
 }): Record<string, unknown> {
   const { sessionRow } = params;
   const omitUnscopedGlobalGoal = sessionRow.key === "global" && !params.agentId;
+  const omitUnscopedSwarm =
+    (sessionRow.key === "global" || sessionRow.key === "unknown") && !params.agentId;
   return {
     updatedAt: sessionRow.updatedAt ?? undefined,
     sessionId: sessionRow.sessionId,
@@ -53,6 +55,16 @@ export function buildGatewaySessionEventFields(params: {
     spawnedBy: sessionRow.spawnedBy,
     controlOwnerSessionKey: sessionRow.controlOwnerSessionKey ?? null,
     swarmGroupId: sessionRow.swarmGroupId,
+    ...(!Object.hasOwn(sessionRow, "swarm") || omitUnscopedSwarm
+      ? {}
+      : {
+          swarm: sessionRow.swarm
+            ? {
+                ...sessionRow.swarm,
+                groups: sessionRow.swarm.groups.map(({ children: _children, ...counts }) => counts),
+              }
+            : null,
+        }),
     spawnedWorkspaceDir: sessionRow.spawnedWorkspaceDir,
     spawnedCwd: sessionRow.spawnedCwd,
     permissionMode: sessionRow.permissionMode ?? null,
@@ -104,6 +116,7 @@ export function buildGatewaySessionEventFields(params: {
     totalTokensFresh: sessionRow.totalTokensFresh,
     ...(omitUnscopedGlobalGoal ? {} : { goal: sessionRow.goal ?? null }),
     contextTokens: sessionRow.contextTokens,
+    contextBudgetStatus: sessionRow.contextBudgetStatus ?? null,
     estimatedCostUsd: sessionRow.estimatedCostUsd,
     responseUsage: sessionRow.responseUsage,
     effectiveResponseUsage: sessionRow.effectiveResponseUsage,
@@ -123,8 +136,8 @@ export function buildGatewaySessionEventFields(params: {
     ...(params.hasActiveRun === undefined ? {} : { hasActiveRun: params.hasActiveRun }),
     ...(params.activeRunIds === undefined ? {} : { activeRunIds: params.activeRunIds }),
     startedAt: sessionRow.startedAt,
-    endedAt: sessionRow.endedAt,
-    runtimeMs: sessionRow.runtimeMs,
+    endedAt: sessionRow.endedAt ?? null,
+    runtimeMs: sessionRow.runtimeMs ?? null,
     compactionCheckpointCount: sessionRow.compactionCheckpointCount,
     latestCompactionCheckpoint: sessionRow.latestCompactionCheckpoint,
     pluginExtensions: sessionRow.pluginExtensions,
@@ -212,6 +225,9 @@ export function buildGatewaySessionSnapshot(params: {
     : undefined;
   if (session && sessionRow.key === "global" && !params.agentId) {
     delete session.goal;
+  }
+  if (session && (sessionRow.key === "global" || sessionRow.key === "unknown") && !params.agentId) {
+    delete session.swarm;
   }
   return {
     ...(session ? { session } : {}),

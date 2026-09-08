@@ -17,10 +17,13 @@ import {
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { buildCurrentRunRestartRecoveryClaim } from "../../agents/agent-command-restart-recovery.js";
+import { buildEmbeddedRunPayloads } from "../../agents/embedded-agent-runner/run/payloads.js";
+import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
 import {
   GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
   HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT,
 } from "../../agents/failover/user-copy.js";
+import { makeAssistantMessageFixture } from "../../agents/test-helpers/assistant-message-fixtures.js";
 import {
   runFallbackModelAttempt,
   runInitialModelFallbackAttempt,
@@ -4329,6 +4332,106 @@ describe("runReplyAgent typing (heartbeat)", () => {
     expect(getReplyPayloadMetadata(payload ?? {})?.deliverDespiteSourceReplySuppression).toBe(true);
   });
 
+  it("delivers a queued provider error after a private settled-tool completion", async () => {
+    const helperStarted = createDeferred();
+    const finishHelper = createDeferred();
+    const privatePartial = "Private unfinished work before the provider request failed.";
+    const providerFailure = "400 Synthetic provider failure for delivery proof.";
+    const failedAssistant = makeAssistantMessageFixture({
+      content: [],
+      errorMessage: providerFailure,
+      errorType: "invalid_request_error",
+      errorBody: JSON.stringify({
+        type: "invalid_request_error",
+        message: "Synthetic provider failure for delivery proof.",
+      }),
+    });
+    state.runEmbeddedAgentMock.mockImplementationOnce(async () => {
+      helperStarted.resolve();
+      await finishHelper.promise;
+      return {
+        payloads: [{ text: "The tool run finished, but no final summary was produced." }],
+        meta: { durationMs: 0, stopReason: "stop", intentionalTerminalCompletion: "tool-batch" },
+      } satisfies EmbeddedAgentRunResult;
+    });
+    state.runEmbeddedAgentMock.mockImplementationOnce(async () => {
+      return {
+        payloads: buildEmbeddedRunPayloads({
+          assistantTexts: [privatePartial],
+          lastAssistant: failedAssistant,
+          currentAssistant: failedAssistant,
+          sourceReplyDeliveryMode: "message_tool_only",
+          sessionKey: "main",
+          isCronTrigger: false,
+          verboseLevel: "off",
+          reasoningLevel: "off",
+          toolResultFormat: "plain",
+        }),
+        meta: {
+          durationMs: 0,
+          error: {
+            kind: "incomplete_turn",
+            message: providerFailure,
+            fallbackSafe: false,
+            terminalPresentation: false,
+          },
+          finalAssistantVisibleText: privatePartial,
+          toolSummary: { calls: 1, tools: ["exec"] },
+        },
+      } satisfies EmbeddedAgentRunResult;
+    });
+    const onBlockReply = vi.fn(async (_payload: ReplyPayload) => {});
+    const shared = {
+      opts: { sourceReplyDeliveryMode: "message_tool_only", onBlockReply },
+      sessionCtx: { Provider: "telegram", ChatType: "group" },
+      runOverrides: {
+        messageProvider: "telegram",
+        chatType: "group",
+        sourceReplyDeliveryMode: "message_tool_only",
+        config: { messages: { groupChat: { visibleReplies: "message_tool" } } },
+      },
+    } satisfies NonNullable<Parameters<typeof createMinimalRun>[0]>;
+    const helper = createMinimalRun(shared).run();
+    await helperStarted.promise;
+    const queued = createMinimalRun({
+      ...shared,
+      sessionCtx: { ...shared.sessionCtx, MessageSid: "queued-message" },
+      isActive: true,
+      bindActiveAuthority: false,
+      isRunActive: () => true,
+      shouldFollowup: true,
+      resolvedQueueMode: "followup",
+    });
+    queued.followupRun.originatingChatType = "group";
+    try {
+      await queued.run();
+      expect(enqueueFollowupRun).toHaveBeenCalledOnce();
+      expect(scheduleFollowupDrain).not.toHaveBeenCalled();
+      finishHelper.resolve();
+      const helperReply = await helper;
+      const helperPayload = Array.isArray(helperReply) ? helperReply[0] : helperReply;
+      expect(helperPayload?.text).toBe("The tool run finished, but no final summary was produced.");
+      expect(
+        getReplyPayloadMetadata(helperPayload ?? {})?.deliverDespiteSourceReplySuppression,
+      ).not.toBe(true);
+      expect(onBlockReply).not.toHaveBeenCalled();
+
+      await requireScheduledFollowupRunner()(queued.followupRun);
+
+      expect(onBlockReply).toHaveBeenCalledOnce();
+      expect(onBlockReply).toHaveBeenCalledWith(
+        expect.objectContaining({
+          text: "LLM request failed: provider rejected the request schema or tool payload.",
+          isError: true,
+        }),
+      );
+      expect(state.runEmbeddedAgentMock).toHaveBeenCalledTimes(2);
+    } finally {
+      finishHelper.resolve();
+      await helper;
+    }
+  });
+
   it.each([
     { lane: "reasoning", payload: { text: "internal", isReasoning: true } },
     { lane: "commentary", payload: { text: "internal", isCommentary: true } },
@@ -4425,6 +4528,70 @@ describe("runReplyAgent typing (heartbeat)", () => {
       replyToId: "msg",
     });
     expect(onPendingContinuation).toHaveBeenCalledOnce();
+  });
+
+  it("prefers a yield acknowledgment over an earlier generated tool warning", async () => {
+    const toolWarning = setReplyPayloadMetadata(
+      { text: "⚠️ Bash failed", isError: true },
+      { toolErrorWarning: { toolName: "bash" } },
+    );
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [toolWarning],
+      meta: {
+        yielded: true,
+        yieldAcknowledgment: "Research started; results will follow.",
+      },
+      acceptedSessionSpawns: [{ runId: "child", childSessionKey: "agent:main:child" }],
+    });
+    const { run } = createMinimalRun();
+
+    await expect(run()).resolves.toMatchObject({
+      text: "Research started; results will follow.",
+      replyToId: "msg",
+    });
+  });
+
+  it("keeps a generated tool warning when the yield acknowledgment is not deliverable", async () => {
+    const toolWarning = setReplyPayloadMetadata(
+      { text: "⚠️ Bash failed", isError: true },
+      { toolErrorWarning: { toolName: "bash" } },
+    );
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [toolWarning],
+      meta: {
+        yielded: true,
+        yieldAcknowledgment: "Research started; results will follow.",
+      },
+    });
+    const { run } = createMinimalRun({ currentInboundEventKind: "room_event" });
+
+    await expect(run()).resolves.toMatchObject({
+      text: "⚠️ Bash failed",
+      isError: true,
+      replyToId: "msg",
+    });
+  });
+
+  it("keeps a generated tool warning when the yield acknowledgment normalizes to empty", async () => {
+    const toolWarning = setReplyPayloadMetadata(
+      { text: "⚠️ Bash failed", isError: true },
+      { toolErrorWarning: { toolName: "bash" } },
+    );
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [toolWarning],
+      meta: {
+        yielded: true,
+        yieldAcknowledgment: "[[reply_to_current]]",
+      },
+      acceptedSessionSpawns: [{ runId: "child", childSessionKey: "agent:main:child" }],
+    });
+    const { run } = createMinimalRun();
+
+    await expect(run()).resolves.toMatchObject({
+      text: "⚠️ Bash failed",
+      isError: true,
+      replyToId: "msg",
+    });
   });
 
   it("delivers an explicit yield acknowledgment in message-tool-only mode", async () => {
@@ -5836,6 +6003,6 @@ describe("runReplyAgent typing (heartbeat)", () => {
   });
 });
 
-import { getReplyPayloadMetadata } from "../reply-payload.js";
+import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

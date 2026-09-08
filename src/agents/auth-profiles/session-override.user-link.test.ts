@@ -15,6 +15,7 @@ import {
   type OpenClawTestState,
   withOpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
+import { createApiKeyCredential } from "./credential-fixtures.test-support.js";
 import { resolveSessionAuthSelection } from "./session-override.js";
 
 const DEFAULT_PROFILE_ID = "openai:shared";
@@ -176,11 +177,7 @@ describe("person-linked session auth", () => {
       await state.writeAuthProfiles({
         version: 1,
         profiles: {
-          [DEFAULT_PROFILE_ID]: {
-            type: "api_key",
-            provider: "openai",
-            key: "synthetic-shared-key",
-          },
+          [DEFAULT_PROFILE_ID]: createApiKeyCredential("openai", "synthetic-shared-key"),
         },
       });
       const alice = ensureProfileForEmail("alice@example.test");
@@ -214,11 +211,7 @@ describe("person-linked session auth", () => {
       await state.writeAuthProfiles({
         version: 1,
         profiles: {
-          [DEFAULT_PROFILE_ID]: {
-            type: "api_key",
-            provider: "openai",
-            key: "synthetic-shared-key",
-          },
+          [DEFAULT_PROFILE_ID]: createApiKeyCredential("openai", "synthetic-shared-key"),
         },
       });
       const alice = ensureProfileForEmail("alice@example.test");

@@ -39,6 +39,12 @@ Exec approvals are enforced locally on the execution host:
 - **Gateway host** -> `openclaw` process on the gateway machine.
 - **Node host** -> node runner (macOS companion app or headless node host).
 
+The `claude-cli` backend also checks native Bash commands against the agent's
+exec allowlist when `ask: "on-miss"`. This authorizes command arguments while
+Claude Code owns execution; it does not provide OpenClaw sandboxing. See
+[Native Bash and the exec allowlist](/gateway/cli-backends#native-bash-and-the-exec-allowlist)
+for matching, prompting, and binding restrictions.
+
 ### Trust model
 
 - Gateway-authenticated callers are trusted operators for that Gateway.
@@ -46,6 +52,7 @@ Exec approvals are enforced locally on the execution host:
 - Approvals reduce accidental execution risk, but are **not** a per-user auth boundary or filesystem read-only policy.
 - Once approved, a command can mutate files according to the selected host or sandbox filesystem permissions.
 - Approved node-host runs bind canonical execution context: cwd, exact argv, env binding when present, and pinned executable path when applicable.
+- Gateway approval-backed commands bind every resolved command-segment executable before review and re-check it before launch. Node hosts capture these identities during local policy evaluation and re-check before dispatch; this does not cover inner shell executables across a remote human approval wait. Protected executables use resolved real-path identity only; writable executables also use a content hash. A changed resolution during the bound window, including a new executable earlier on `PATH`, denies the run. Identity-only binding preserves otherwise eligible `allow-always` decisions. See [Interpreter/runtime commands](/tools/exec-approvals-advanced#interpreter%2Fruntime-commands).
 - For shell scripts and direct interpreter/runtime file invocations, OpenClaw also tries to bind one concrete local file operand. If that file changes after approval but before execution, the run is denied instead of executing drifted content.
 - File binding is best-effort, not a complete model of every interpreter/runtime loader path. If exactly one concrete local file cannot be identified, OpenClaw refuses to mint an approval-backed run rather than pretend full coverage.
 
@@ -150,14 +157,14 @@ Example schema:
       "allowlist": [
         {
           "id": "B0C8C0B3-2C2D-4F8A-9A3C-5A4B3C2D1E0F",
-          "pattern": "~/Projects/**/bin/rg",
+          "pattern": "~/path/to/**/bin/rg",
           "argPattern": "sha256:argv:...",
           "source": "allow-always",
           "lastUsedAt": 1737150000000,
           "lastResolvedPath": "/Users/user/Projects/.../bin/rg"
         },
         {
-          "pattern": "~/Projects/**/bin/git"
+          "pattern": "~/path/to/**/bin/git"
         }
       ],
       "mcpTools": [
@@ -179,16 +186,28 @@ Example schema:
 
 `tools.exec.mode` is the preferred normalized policy surface for host exec:
 
-| Value       | Behavior                                                                                                                                                                  |
-| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `deny`      | Block host exec.                                                                                                                                                          |
-| `allowlist` | Run only allowlisted commands without asking.                                                                                                                             |
-| `ask`       | Use allowlist policy and ask on misses.                                                                                                                                   |
-| `auto`      | Use allowlist policy, run deterministic matches directly, and send approval misses through OpenClaw's native auto reviewer before falling back to a human approval route. |
-| `full`      | Run host exec without approval prompts.                                                                                                                                   |
+| Value       | Behavior                                                                                                                                                    |
+| ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `deny`      | Block host exec.                                                                                                                                            |
+| `allowlist` | Run only allowlisted commands without asking.                                                                                                               |
+| `ask`       | Use allowlist policy and ask on misses.                                                                                                                     |
+| `auto`      | Run deterministic allowlist matches directly; review eligible misses with `allow` (once), `deny` (reason returned to the agent), or `ask` (human approval). |
+| `full`      | Run host exec without approval prompts.                                                                                                                     |
 
-Doctor migrates the retired persisted `tools.exec.security` / `tools.exec.ask`
-pair to `tools.exec.mode`.
+Doctor migrates supported legacy `tools.exec.security` / `tools.exec.ask` pairs
+to `tools.exec.mode`. If a deploy script, template, or config generator still
+sends the old fields, `config patch` and Gateway `config.patch` reject the mixed
+policy without changing the file. Update that source in the same exec object
+named by the error, including `agents.entries.<agentId>.tools.exec` for an agent
+override. Replace `security` / `ask` with the suggested `mode` value when an exact
+equivalent exists. For example, `security: "full", ask: "off"` becomes `mode: "full"`.
+
+An incomplete pair needs an explicit choice of the intended policy before
+conversion. Pairs with `ask: "always"`, or `security: "full", ask: "on-miss"`,
+have no exact mode equivalent: retain both legacy fields and remove `mode` from
+that same object to keep their policy. Preserve other exec settings when replacing
+an object. Run `openclaw doctor --fix` for a saved file that still needs migration;
+running it again does not update a stale deployment source.
 
 ### `exec.security`
 
@@ -241,8 +260,15 @@ Examples that strict mode catches: `python -c`, `node -e`/`--eval`/`-p`,
 `sed`, `make`, `find -exec`, and `xargs` inline forms).
 
 In strict mode these commands need reviewer or explicit approval. With
-`tools.exec.mode: "auto"`, the reviewer may grant one low-risk execution when
-the command has an enforceable plan; otherwise OpenClaw asks a human.
+`tools.exec.mode: "auto"`, eligible commands receive an `allow`, `deny`, or `ask`
+verdict. The reviewer may grant one low- or medium-risk execution, return a denial
+reason to the agent, or ask a human. Gateway commands must pass mutable-file
+binding checks, but do not need a rendered command with pinned paths to receive
+review. POSIX login or interactive shell wrappers skip the reviewer and require
+human approval when binding succeeds because their implicit startup files are outside
+operand binding. Existing binding rejections, including interactive code-loading forms,
+remain denied.
+See [Exec modes](/tools/exec#modes) for binding limits and escalation.
 `Codex app-server` command approvals that reach the reviewer fallback ask a
 human because their approval requests do not expose an enforceable resolved
 executable.
@@ -284,9 +310,9 @@ explicitly when a no-UI approval prompt should fall back to allow.
 
 </Warning>
 
-For OpenClaw-managed Claude sessions, the Claude Agent SDK always uses its
+For OpenClaw-managed Claude sessions, OpenClaw launches Claude Code in its
 `default` permission mode. OpenClaw's effective exec policy remains
-authoritative through its native tool approval callback, including YOLO and
+authoritative through native tool hooks and permission requests, including YOLO and
 restrictive policies, even if raw Claude backend args request
 `bypassPermissions`.
 
@@ -392,7 +418,7 @@ to satisfy allowlist rules.
 Examples:
 
 - `rg`
-- `~/Projects/**/bin/peekaboo`
+- `~/path/to/**/bin/peekaboo`
 - `~/.local/bin/*`
 - `/opt/homebrew/bin/rg`
 
@@ -663,6 +689,14 @@ facts; channels never infer them from commands or message text. Without a
 declared scope, approval cards render exactly as before.
 
 ## System events and denials
+
+When an approval can be delivered, ordinary agent runs wait for the decision
+and receive the exec result in the same turn. The final reply uses the original
+delivery path, including an inbound A2A task. An operator denial returns a denied
+tool result without running the command.
+
+Diagnostic and export commands that explicitly use asynchronous execution retain
+their separate follow-up delivery. For those workflows:
 
 Exec lifecycle posts an `Exec finished` system message to the agent's
 session after the node reports completion. OpenClaw can also emit an

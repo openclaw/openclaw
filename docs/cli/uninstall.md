@@ -3,13 +3,13 @@ summary: "CLI reference for `openclaw uninstall` (remove gateway service + local
 read_when:
   - You want to remove the gateway service and/or local state
   - You want a dry-run first
-title: "Uninstall"
+title: "Uninstall CLI"
 ---
 
 # `openclaw uninstall`
 
-Uninstall the Gateway service and/or local data. The CLI itself is not
-removed; uninstall it via npm/pnpm separately.
+Uninstall the Gateway service and/or local data. There is no separate CLI-removal scope.
+Remove any remaining CLI through the [installation-specific steps](/install/uninstall#remove-the-cli).
 
 ## Options
 

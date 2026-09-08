@@ -77,6 +77,9 @@ openclaw pairing approve feishu <CODE>
 - Set `true` or `false` explicitly to override; per-group override: `channels.feishu.groups.<chat_id>.requireMention`.
 - Broadcast-only `@all` and `@_all` are not treated as bot mentions. A message that mentions both `@all` and the bot directly still counts as a bot mention.
 
+Mentions of other people stay readable in the text sent to the agent,
+including when consecutive messages are combined.
+
 ## Group configuration examples
 
 ### Allow all groups, no @mention required
@@ -393,6 +396,10 @@ The plugin ships agent tools for Feishu documents, chats, knowledge base, cloud 
 | `tools.bitable` | `feishu_bitable_*` Bitable/Base operations    | `true`              |
 
 Per-account gates live under `accounts.<id>.tools`.
+
+After a configuration update is applied, new agent turns use the updated tool
+gates and account selection without restarting the Gateway. Tools already created
+for an in-progress turn keep their original configuration.
 
 Bitable operations use the application token from a `/base/` URL or returned
 `app_token`, not the node token in a `/wiki/` URL. If application creation succeeds

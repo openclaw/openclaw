@@ -198,17 +198,6 @@ openclaw-chat-sidebar-region,
   width: 100%;
 }
 
-.sidebar-column {
-  display: flex;
-  flex: 0 0 auto;
-  min-width: 260px;
-  min-height: 0;
-  overflow: hidden;
-  background: transparent;
-  flex-direction: column;
-  animation: chat-sidebar-fade-in 160ms ease-out;
-}
-
 /* Canonical rail header contract. The header owns geometry; actions are bare
    glyphs with an invisible hit area so generic button chrome cannot leak in. */
 .rail-header {
@@ -954,15 +943,6 @@ openclaw-chat-sidebar-region,
   opacity: 0.55;
 }
 
-@keyframes chat-sidebar-fade-in {
-  from {
-    opacity: 0;
-  }
-  to {
-    opacity: 1;
-  }
-}
-
 /* Sidebar Panel */
 .sidebar-panel {
   display: flex;
@@ -1427,6 +1407,21 @@ openclaw-session-discussion {
   display: grid;
   width: 100%;
   min-height: 0;
+}
+
+.sidebar-attachment-preview__text {
+  min-width: 0;
+  margin: 16px 0 0;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 13px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  tab-size: 4;
 }
 
 .sidebar-attachment-preview__image {

@@ -1,4 +1,4 @@
-// Ollama probe planning tests cover keyless runtime auth and provider-scoped catalog reads.
+// Ollama probe planning tests cover keyless runtime auth and published catalog reads.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -99,7 +99,6 @@ describe("Ollama probe targets", () => {
     expect(loadPreparedModelCatalog).toHaveBeenCalledWith(
       expect.objectContaining({
         readOnly: true,
-        providerDiscoveryProviderIds: ["ollama"],
       }),
     );
     expect(plan.targets).toEqual([

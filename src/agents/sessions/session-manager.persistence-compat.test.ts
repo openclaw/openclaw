@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { openFileBackedSessionManagerForTest } from "../../../test/helpers/session-manager-file-fixture.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import {
   formatSqliteSessionFileMarker,
   parseSqliteSessionFileMarker,
@@ -17,6 +18,7 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { withOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
 import { CURRENT_SESSION_VERSION, SessionManager } from "./session-manager.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -28,14 +30,7 @@ function buildAssistantMessage(text: string) {
     api: "messages" as const,
     provider: "anthropic" as const,
     model: "sonnet-4.6" as const,
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
+    usage: createZeroUsageFixture(),
     stopReason: "stop" as const,
     timestamp: Date.now(),
   };
@@ -343,11 +338,7 @@ describe("SessionManager persistence compatibility", () => {
       }),
     );
     const manager = openFileBackedSessionManagerForTest(sessionFile, dir);
-    manager.appendMessage({
-      role: "user",
-      content: "appended",
-      timestamp: 1,
-    });
+    manager.appendMessage(makeUserMessage("appended", 1));
     expect(
       openFileBackedSessionManagerForTest(sessionFile, dir).buildSessionContext().messages,
     ).toEqual([expect.objectContaining({ content: "appended", role: "user" })]);

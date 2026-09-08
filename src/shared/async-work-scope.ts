@@ -42,12 +42,20 @@ export class AsyncWorkScope {
     return operation.promise;
   }
 
-  beginClose(): void {
+  beginClose(reason?: unknown): void {
     if (this.phase !== "open") {
       return;
     }
     this.phase = "closing";
-    this.controller.abort();
+    this.controller.abort(reason);
+  }
+
+  /** Starts the next phase in the same continuation that observes settled pending work. */
+  async runWhenIdle<T>(run: () => T | Promise<T>): Promise<T> {
+    do {
+      await Promise.allSettled(this.pending);
+    } while (this.pending.size > 0);
+    return this.track(run);
   }
 
   async drain(): Promise<void> {

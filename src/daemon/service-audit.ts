@@ -75,6 +75,7 @@ export const SERVICE_AUDIT_CODES = {
   systemdRestartSec: "systemd-restart-sec",
   systemdWantsNetworkOnline: "systemd-wants-network-online",
   systemdKillModeProcessOrNone: "systemd-kill-mode-process-or-none",
+  systemdKillModeControlGroup: "systemd-kill-mode-control-group",
   systemdUnitBackupUnsafe: "systemd-unit-backup-unsafe",
 } as const;
 
@@ -141,16 +142,11 @@ function parseSystemdUnit(content: string): {
     if (!value) {
       continue;
     }
-    if (key === "After") {
+    if (key === "After" || key === "Wants") {
+      const dependencies = key === "After" ? after : wants;
       for (const entry of value.split(/\s+/)) {
         if (entry) {
-          after.add(entry);
-        }
-      }
-    } else if (key === "Wants") {
-      for (const entry of value.split(/\s+/)) {
-        if (entry) {
-          wants.add(entry);
+          dependencies.add(entry);
         }
       }
     } else if (key === "RestartSec") {
@@ -201,6 +197,8 @@ async function auditSystemdUnit(
 
   // The manager owns merged drop-ins and dependency links. Fall back wholesale
   // to the base unit only when its bounded effective-state query fails.
+  // `systemctl show` still exits 0 for masked and not-found units, with empty
+  // After/Wants and RestartUSec=100ms defaults. Those are not loaded settings.
   const manager = await execSystemctlUser(
     env,
     [
@@ -208,11 +206,15 @@ async function auditSystemdUnit(
       `${resolveSystemdServiceName(env)}.service`,
       "--no-page",
       "--property",
-      "After,Wants,RestartUSec,KillMode",
+      "After,Wants,RestartUSec,KillMode,LoadState",
     ],
     timeoutMs && timeoutMs > 0 ? timeoutMs : SYSTEMD_AUDIT_TIMEOUT_MS,
   );
   const entries = manager.code === 0 ? parseKeyValueOutput(manager.stdout, "=") : undefined;
+  const loadState = normalizeLowercaseStringOrEmpty(entries?.loadstate);
+  if (loadState && loadState !== "loaded") {
+    return;
+  }
   const parsed = entries
     ? {
         after: new Set(entries.after?.split(/\s+/).filter(Boolean)),
@@ -245,12 +247,15 @@ async function auditSystemdUnit(
       level: "recommended",
     });
   }
-  const killMode = normalizeLowercaseStringOrEmpty(parsed.killMode);
-  if (killMode === "process" || killMode === "none") {
+  const killMode = normalizeLowercaseStringOrEmpty(parsed.killMode) || "control-group";
+  if (killMode !== "mixed") {
     issues.push({
-      code: SERVICE_AUDIT_CODES.systemdKillModeProcessOrNone,
+      code:
+        killMode === "process" || killMode === "none"
+          ? SERVICE_AUDIT_CODES.systemdKillModeProcessOrNone
+          : SERVICE_AUDIT_CODES.systemdKillModeControlGroup,
       message:
-        "KillMode is process/none; service child processes can survive gateway stops and restarts.",
+        "KillMode=mixed is required to drain active turns before final service child cleanup; inspect unit and drop-in overrides.",
       detail: `${unitPath}: ${killMode}`,
       level: "recommended",
     });
@@ -639,7 +644,12 @@ async function auditGatewayRuntime(
           runtime.status === "probe-failed"
             ? "Gateway service Bun runtime probe failed."
             : "Gateway service uses an unsupported Bun runtime; Bun 1.4+ with WAL-reset-safe node:sqlite is required.",
-        detail: runtime.status === "probe-failed" ? runtime.error.message : execPath,
+        detail:
+          runtime.status === "probe-failed"
+            ? runtime.error.message
+            : runtime.sqliteSelectionError
+              ? `${execPath}: ${runtime.sqliteSelectionError}`
+              : execPath,
         level: "recommended",
       });
     }

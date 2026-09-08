@@ -36,7 +36,7 @@ vi.mock("./audit.js", () => ({ appendSystemAgentAuditEntry: mocks.audit }));
 vi.mock("../cli/plugins-install-config.js", () => ({
   loadConfigForInstall: async () => ({ config: {}, baseHash: "config", writeOptions: {} }),
 }));
-vi.mock("../plugins/management-service.js", () => ({ installManagedPluginSource: mocks.install }));
+vi.mock("../plugins/management-install.js", () => ({ installManagedPluginSource: mocks.install }));
 vi.mock("../plugins/plugin-lifecycle-lease.js", () => ({
   withPluginLifecycleLease: async (
     _params: unknown,
@@ -137,7 +137,9 @@ describe("exact system-agent plugin artifacts", () => {
     ).toMatchObject({ applied: true });
     await expect(fs.access(review.retainedPath)).rejects.toThrow();
     expect(beforePersistentApply).toHaveBeenCalledTimes(3);
-    expect(lines.join("\n")).toContain("Restart the Gateway");
+    expect(lines.join("\n")).toContain(
+      "Artifact installed. After the Gateway restarts, inspect the plugin's Control UI activation status.",
+    );
     expect(mocks.audit).toHaveBeenCalledWith(
       expect.objectContaining({
         details: expect.objectContaining({

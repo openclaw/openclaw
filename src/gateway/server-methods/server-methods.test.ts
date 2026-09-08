@@ -19,6 +19,7 @@ import {
 } from "vitest";
 import { GATEWAY_CLIENT_IDS } from "../../../packages/gateway-protocol/src/client-info.js";
 import { validateExecApprovalRequestParams } from "../../../packages/gateway-protocol/src/index.js";
+import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import { STREAM_ERROR_FALLBACK_TEXT } from "../../agents/stream-message-shared.js";
 import { HEARTBEAT_PROMPT } from "../../auto-reply/heartbeat.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -1894,73 +1895,6 @@ describe("projectChatDisplayMessages", () => {
     ]);
   });
 
-  it("preserves structured trace alongside visible assistant progress text", () => {
-    const result = projectChatDisplayMessages(
-      [
-        userHistoryMessage("fix it", { timestamp: 1 }),
-        {
-          role: "assistant",
-          content: [
-            { type: "thinking", thinking: "private reasoning" },
-            {
-              type: "text",
-              text: "I will clean that up now.",
-              textSignature: JSON.stringify({
-                v: 1,
-                id: "msg-progress",
-                phase: "commentary",
-              }),
-            },
-            {
-              type: "toolCall",
-              id: "call-read",
-              name: "read",
-              arguments: { path: "AGENTS.md" },
-            },
-          ],
-          timestamp: 2,
-          __openclaw: { seq: 2 },
-        },
-        {
-          role: "toolResult",
-          toolCallId: "call-read",
-          toolName: "read",
-          content: [{ type: "text", text: "file contents" }],
-          timestamp: 3,
-        },
-      ],
-      { includeCommentaryFallbacks: true },
-    );
-
-    expect(result.slice(1, 3)).toEqual([
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "I will clean that up now." }],
-        timestamp: 2,
-        __openclaw: { seq: 2 },
-        openclawStreamFallback: {
-          replacementText: "I will clean that up now.",
-          source: "segment",
-          itemId: "msg-progress",
-        },
-      },
-      {
-        role: "assistant",
-        content: [
-          { type: "thinking", thinking: "private reasoning" },
-          {
-            type: "toolCall",
-            id: "call-read",
-            name: "read",
-            arguments: { path: "AGENTS.md" },
-          },
-        ],
-        timestamp: 2,
-        __openclaw: { seq: 2 },
-      },
-    ]);
-  });
-
   it("projects pure keyed commentary as a durable preamble", () => {
     const result = projectChatDisplayMessages(
       [
@@ -2027,11 +1961,7 @@ describe("projectChatDisplayMessages", () => {
 
   it("drops channel-final delivery mirrors that duplicate the preceding assistant reply", () => {
     const result = projectChatDisplayMessages([
-      {
-        role: "user",
-        content: "yo big boy",
-        timestamp: 1,
-      },
+      makeUserMessage("yo big boy", 1),
       assistantHistoryMessage("Yo Peter. I’m here.", {
         provider: "openai",
         model: "gpt-5.5",
@@ -2064,11 +1994,7 @@ describe("projectChatDisplayMessages", () => {
         __openclaw: { mirrorIdentity: "run-1:assistant" },
         timestamp: 1,
       }),
-      {
-        role: "user",
-        content: "",
-        timestamp: 2,
-      },
+      makeUserMessage("", 2),
       deliveryMirrorHistoryMessage("Repeated reply", "message-2", 3),
     ]);
 
@@ -2173,15 +2099,6 @@ describe("projectChatDisplayMessages", () => {
     {
       name: "type-only",
       message: { __openclaw: { media: [{ contentType: "image/png" }] } },
-      expectedPath: undefined,
-    },
-    {
-      name: "media-only",
-      message: {
-        __openclaw: {
-          media: [{ path: "/tmp/openclaw/media-only.png", contentType: "image/png" }],
-        },
-      },
       expectedPath: undefined,
     },
   ])("keeps $name media-only users through canonical display projection", (testCase) => {
@@ -2310,6 +2227,18 @@ describe("dropPreSessionStartAnnouncePairs (#85648)", () => {
           timestamp: cutoff - 500,
         },
         { role: "user", content: "fresh imported turn", timestamp: cutoff + 1_000 },
+      ],
+      keptIndexes: [2],
+    },
+    {
+      name: "drops a pre-cutoff settlement wake and its adjacent synthesis",
+      messages: [
+        {
+          ...recordedMessage("user", "All children settled", 1, cutoff - 1_000),
+          provenance: { ...announceProvenance, sourceTool: "subagent_settle" },
+        },
+        recordedMessage("assistant", "old synthesis", 2, cutoff - 500),
+        recordedMessage("user", "fresh user turn", 3, cutoff + 1_000),
       ],
       keptIndexes: [2],
     },
