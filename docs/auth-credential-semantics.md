@@ -70,6 +70,21 @@ shared credential belongs to the same account. If that identity cannot be
 verified, the peer remains terminally fenced instead of inheriting another
 account.
 
+## Plugin SDK OAuth validation
+
+`resolveApiKeyForProfile`, exported from `openclaw/plugin-sdk/agent-runtime`,
+accepts an optional `validateOAuthCredential` callback. The resolver calls it
+before returning an OAuth credential and before persisting or adopting a
+refreshed credential. The callback also applies when a legacy
+`provider:default` profile falls back to a replacement OAuth profile.
+
+Throwing from the callback rejects that credential. A rejected fallback is not
+returned or refreshed, and the original selected-profile refresh failure remains
+the operator-facing error. Rejecting an active refresh or settlement generation
+fails closed and can leave that generation and its peers terminally fenced, so
+the operator must authenticate again. Callers that omit the callback retain the
+existing resolution and fallback behavior.
+
 `openclaw agent exec` preserves the original shared-store root when switching to temporary run state. Its bounded credential scope reads portable `api_key` and `token` profiles from that shared store without persisting copies; the configured agent's local profiles still win. Shared OAuth profiles are excluded from this temporary scope, even with `copyToAgents: true`, so the run does not acquire another refresh owner. `--auth-env-only` disables stored credential access entirely.
 
 Auth writes that explicitly select a state directory, including isolated QA staging, use that directory's shared store for ownership and OAuth deduplication. Their runtime publication and rollback retain the same owner; another process-local state root is not an inherited base. An unrelated outer database may be older, newer, or unreadable without blocking an isolated write, but an unreadable or newer database in the selected target still fails closed. Writes without an explicit state directory retain the normal ambient state and agent-directory configuration.
