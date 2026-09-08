@@ -91,8 +91,10 @@ configured or completed catalog. They do not start provider discovery, including
 after a restart. If the owner is not yet published, the request reports that the
 catalog is not ready. Retry after startup or an in-progress refresh finishes.
 Use an explicit Refresh action or `openclaw models list --refresh` to acquire
-provider inventory. Startup and turn-path capability preparation keep their
-separate runtime responsibilities.
+provider inventory. Model selection, subagent capability checks, and hook-model
+validation also use the published inventory. Missing capability facts do not
+start another provider discovery. Native runtime observations keep their separate
+owner and authentication requirements.
 For models configured to use a CLI runtime, channel picker availability follows that
 runtime's prepared authentication; a provider API key does not substitute for its
 native login.
