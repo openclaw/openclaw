@@ -57,7 +57,7 @@ const normalizeEnvMock = vi.hoisted(() => vi.fn());
 const pinConfigDirMock = vi.hoisted(() => vi.fn());
 const pinRuntimePathsMock = vi.hoisted(() => vi.fn());
 const ensurePathMock = vi.hoisted(() => vi.fn());
-const assertRuntimeMock = vi.hoisted(() => vi.fn());
+const assertRuntimeMock = vi.hoisted(() => vi.fn(async () => {}));
 const closeActiveMemorySearchManagersMock = vi.hoisted(() => vi.fn(async () => {}));
 const hasMemoryRuntimeMock = vi.hoisted(() => vi.fn(() => false));
 const listRegisteredAgentHarnessesMock = vi.hoisted(() => vi.fn((): unknown[] => []));
@@ -2649,6 +2649,17 @@ describe("runCli exit behavior", () => {
     const configReadOrder = readConfigFileSnapshotMock.mock.invocationCallOrder[0] ?? 0;
     expect(runtimeGuardOrder).toBeGreaterThan(0);
     expect(configReadOrder).toBeGreaterThan(runtimeGuardOrder);
+  });
+
+  it("stops before config selection when asynchronous runtime validation rejects", async () => {
+    const error = new Error("unsupported runtime");
+    const validation = Promise.reject(error);
+    // The regression must also join this rejection when old code ignores the returned promise.
+    void validation.catch(() => {});
+    assertRuntimeMock.mockReturnValueOnce(validation);
+
+    await expect(runCli(["node", "openclaw", "gateway", "run"])).rejects.toBe(error);
+    expect(readConfigFileSnapshotMock).not.toHaveBeenCalled();
   });
 
   it("re-pins runtime paths after selecting gateway config", async () => {

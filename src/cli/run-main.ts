@@ -1110,7 +1110,7 @@ async function runCliWithPreparedOutputMode(
 
   // Enforce the minimum supported runtime before gateway selection can read or recover config.
   const { assertSupportedRuntime } = await import("../infra/runtime-guard.js");
-  assertSupportedRuntime();
+  await assertSupportedRuntime();
 
   if (
     !isHelpOrVersionInvocation &&

@@ -407,7 +407,15 @@ test.each([false, true])(
           lastRunId: runId,
           lastRunError: expect.stringContaining(failureMessage),
         },
-        messages: [expect.objectContaining({ role: "user" })],
+        messages: [
+          expect.objectContaining({ role: "user" }),
+          expect.objectContaining({
+            role: "custom",
+            customType: "run-failed-before-reply",
+            display: true,
+            content: expect.stringContaining(failureMessage),
+          }),
+        ],
       });
     }
 

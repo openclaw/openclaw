@@ -1,7 +1,11 @@
+export const EXEC_AUTO_REVIEW_GUIDANCE =
+  "An automatic reviewer may deny a command and explain why; if denied, choose a materially safer alternative or ask the user, never work around the denial.";
+
 /** Builds the model-facing exec tool description for the current platform and capabilities. */
 export function describeExecTool(params?: {
   hasCronTool?: boolean;
   hasProcessTool?: boolean;
+  autoReview?: boolean;
 }): string {
   const continuation =
     params?.hasProcessTool === false
@@ -18,14 +22,11 @@ export function describeExecTool(params?: {
   ]
     .filter(Boolean)
     .join(" ");
-  if (process.platform !== "win32") {
-    return `${base} Quote arguments containing shell metacharacters, including URL query strings with \`?\` or \`&\`.`;
-  }
-  const lines: string[] = [base];
-  lines.push(
-    "IMPORTANT (Windows): Run executables directly; do NOT wrap commands in `cmd /c`, `powershell -Command`, `& ` prefix, or WSL. Use backslash paths (C:\\path), not forward slashes. Use short executable names (e.g. `node`, `python3`) instead of full paths.",
-  );
-  return lines.join("\n");
+  const description =
+    process.platform !== "win32"
+      ? `${base} Quote arguments containing shell metacharacters, including URL query strings with \`?\` or \`&\`.`
+      : `${base}\nIMPORTANT (Windows): Run executables directly; do NOT wrap commands in \`cmd /c\`, \`powershell -Command\`, \`& \` prefix, or WSL. Use backslash paths (C:\\path), not forward slashes. Use short executable names (e.g. \`node\`, \`python3\`) instead of full paths.`;
+  return params?.autoReview ? `${description} ${EXEC_AUTO_REVIEW_GUIDANCE}` : description;
 }
 
 /** Builds the model-facing process-control tool description. */

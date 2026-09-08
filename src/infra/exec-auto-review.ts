@@ -6,12 +6,24 @@ import { formatErrorMessage } from "./errors.js";
 /** Risk level returned by exec auto-reviewers for approval routing decisions. */
 type ExecAutoReviewRisk = "unknown" | "low" | "medium" | "high";
 
-/** Auto-review outcome: either approve once or send the command to normal approval. */
+/**
+ * Auto-review outcome: `allow-once` with low/medium risk permits one execution;
+ * `ask` requests human approval. Plugin consumers must handle `deny` explicitly:
+ * do not run, return the rationale and rejection guidance to the agent, and never
+ * escalate that denial to human approval. The configured exec reviewer maps
+ * provider failures, timeouts, and invalid responses to `ask`; detected
+ * reviewer-directed prompt injection maps to `deny` with high risk.
+ */
 export type ExecAutoReviewDecision =
   | {
       decision: "allow-once";
       rationale: string;
-      risk: "low";
+      risk: "low" | "medium";
+    }
+  | {
+      decision: "deny";
+      rationale: string;
+      risk: ExecAutoReviewRisk;
     }
   | {
       decision: "ask";
@@ -63,6 +75,15 @@ export type BoardWidgetAutoReviewInput = {
 export type ExecAutoReviewer = (
   input: ExecAutoReviewInput,
 ) => Promise<ExecAutoReviewDecision> | ExecAutoReviewDecision;
+
+export const EXEC_AUTO_REVIEW_DENIAL_GUIDANCE =
+  "Do not attempt the same outcome through a workaround, indirect execution, or policy circumvention. Proceed only with a materially safer alternative, or ask the user to approve this exact command after explaining the risk.";
+
+export const EXEC_AUTO_REVIEW_SHELL_STARTUP_WARNING =
+  "Exec auto-review skipped: login or interactive shell startup requires human approval";
+
+export const EXEC_AUTO_REVIEW_DISPATCH_IDENTITY_WARNING =
+  "Exec auto-review skipped: dispatch chain cannot be bound";
 
 /** Keeps reviewer and provider explanations safe for human-facing approval text. */
 export function normalizeExecAutoReviewRationale(value: unknown, fallback: string): string {

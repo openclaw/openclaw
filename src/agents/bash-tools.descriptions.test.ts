@@ -1,4 +1,5 @@
 /** Model-facing description contracts at the public Bash/process tool factory boundary. */
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as execApprovals from "../infra/exec-approvals.js";
 import { withMockedPlatform } from "../test-utils/vitest-spies.js";
@@ -13,6 +14,28 @@ const processTool = createProcessTool();
 afterEach(() => vi.restoreAllMocks());
 
 describe("tool descriptions", () => {
+  it.each(["auto", "ask", "full", undefined] as const)(
+    "includes denial guidance only for auto review through finalization: %s",
+    (mode) => {
+      const guidance =
+        "An automatic reviewer may deny a command and explain why; if denied, choose a materially safer alternative or ask the user, never work around the denial.";
+      for (const createTool of [createExecTool, createLazyExecTool]) {
+        const tool = createTool({ ...execDefaults, mode });
+        const [finalized] = finalizeAgentTools({
+          tools: [tool],
+          hookContext: {},
+          wrapBeforeToolCallHook: false,
+        });
+        for (const description of [
+          tool.description,
+          expectDefined(finalized, "finalized exec tool").description,
+        ]) {
+          expect(description.includes(guidance)).toBe(mode === "auto");
+        }
+      }
+    },
+  );
+
   it.each(["win32", "linux", "darwin"] as const)(
     "keeps exec descriptors stable across approval changes on %s",
     (platform) =>

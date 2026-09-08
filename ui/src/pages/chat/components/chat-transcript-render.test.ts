@@ -641,42 +641,64 @@ describe("chat transcript rendering", () => {
     },
   );
 
-  it("resolves persisted replies to their source and highlights it on click", async () => {
-    const transcript = createTestTranscript();
-    const container = document.body.appendChild(document.createElement("div"));
-    const props = threadProps("pane-reply-preview", "agent:main:main", [
-      {
-        role: "assistant",
-        content: "The original answer",
-        __openclaw: { id: "source-message" },
-        timestamp: 1_000,
-      },
-      {
-        role: "user",
-        content: "Follow up",
-        __openclaw: { id: "reply-message", replyToId: "source-message" },
-        timestamp: 2_000,
-      },
-    ]);
-    render(renderChatThread(props, transcript), container);
-    transcript.hostConnected();
-    transcript.hostUpdated();
-    await flushDeferredRowPrune();
+  it.each([false, true])(
+    "resolves persisted replies and owns their flash lifetime (reduced motion: %s)",
+    async (reducedMotion) => {
+      vi.stubGlobal("matchMedia", () => ({ matches: reducedMotion }));
+      const transcript = createTestTranscript();
+      const container = document.body.appendChild(document.createElement("div"));
+      const props = threadProps("pane-reply-preview", "agent:main:main", [
+        {
+          role: "assistant",
+          content: "The original answer",
+          __openclaw: { id: "source-message" },
+          timestamp: 1_000,
+        },
+        {
+          role: "user",
+          content: "Follow up",
+          __openclaw: { id: "reply-message", replyToId: "source-message" },
+          timestamp: 2_000,
+        },
+      ]);
+      render(renderChatThread(props, transcript), container);
+      transcript.hostConnected();
+      transcript.hostUpdated();
+      await flushDeferredRowPrune();
 
-    const preview = container.querySelector<HTMLButtonElement>(".chat-reply-preview--message");
-    expect(preview?.textContent).toContain("Replying to Molty");
-    expect(preview?.textContent).toContain("The original answer");
-    expect(preview?.textContent).not.toContain("source-message");
+      const preview = container.querySelector<HTMLButtonElement>(".chat-reply-preview--message");
+      expect(preview?.textContent).toContain("Replying to Molty");
+      expect(preview?.textContent).toContain("The original answer");
+      expect(preview?.textContent).not.toContain("source-message");
 
-    preview?.click();
-    await Promise.resolve();
-
-    const sourceBubble = [...container.querySelectorAll<HTMLElement>(".chat-bubble")].find(
-      (bubble) => bubble.dataset.entryId === "source-message",
-    );
-    expect(sourceBubble?.classList.contains("chat-bubble--reply-target")).toBe(true);
-    transcript.hostDisconnected();
-  });
+      const sourceBubble = [...container.querySelectorAll<HTMLElement>(".chat-bubble")].find(
+        (bubble) => bubble.dataset.entryId === "source-message",
+      )!;
+      const duration = reducedMotion ? 1_000 : 1_200;
+      vi.useFakeTimers();
+      try {
+        preview?.click();
+        await Promise.resolve();
+        expect(sourceBubble.classList.contains("chat-bubble--reply-target")).toBe(true);
+        sourceBubble.firstElementChild!.dispatchEvent(new Event("animationend", { bubbles: true }));
+        expect(sourceBubble.classList.contains("chat-bubble--reply-target")).toBe(true);
+        vi.advanceTimersByTime(duration / 2);
+        preview?.click();
+        await Promise.resolve();
+        vi.advanceTimersByTime(duration - 1);
+        expect(sourceBubble.classList.contains("chat-bubble--reply-target")).toBe(true);
+        vi.advanceTimersByTime(1);
+        expect(sourceBubble.classList.contains("chat-bubble--reply-target")).toBe(false);
+        preview?.click();
+        await Promise.resolve();
+        transcript.hostDisconnected();
+        expect(sourceBubble.classList.contains("chat-bubble--reply-target")).toBe(false);
+      } finally {
+        transcript.hostDisconnected();
+        vi.useRealTimers();
+      }
+    },
+  );
 
   it("hydrates an unloaded reply preview without inserting its source row", async () => {
     const transcript = createTestTranscript();

@@ -233,6 +233,7 @@ function writeGhShim(binDir: string): void {
   fs.writeFileSync(
     shim,
     `#!/usr/bin/env node
+const { spawnSync } = require("node:child_process");
 const fs = require("node:fs");
 const path = require("node:path");
 const args = process.argv.slice(2);
@@ -343,6 +344,73 @@ if (endpoint.includes("/collaborators/")) {
       ? process.env.MOBILE_RECEIPT_ARTIFACT_NAME
       : process.env.MOBILE_INTENT_ARTIFACT_NAME,
     workflow_run: { id: Number(runId) }
+  }) + "\\n");
+} else if (endpoint.includes("/compare/")) {
+  const match = endpoint.match(/\\/compare\\/([0-9a-f]{40})\\.\\.\\.([0-9a-f]{40})$/);
+  const jq = args[args.indexOf("--jq") + 1];
+  const expectedJq =
+    "{status, ahead_by, behind_by, base_commit: {sha: .base_commit.sha}, merge_base_commit: {sha: .merge_base_commit.sha}}";
+  if (!match) {
+    console.error("malformed compare endpoint", endpoint);
+    process.exit(72);
+  }
+  if (jq !== expectedJq) {
+    console.error("unexpected compare projection");
+    process.exit(72);
+  }
+  const mode = next("GH_COMPARE_MODES", "auto");
+  if (mode === "failure") process.exit(73);
+  if (mode === "malformed") {
+    process.stdout.write(JSON.stringify({ status: "ahead" }) + "\\n");
+    process.exit(0);
+  }
+  const base = match[1];
+  const head = match[2];
+  const repository = path.resolve(process.env.MOBILE_ACTION_PATH, "../../..");
+  const isAncestor = (from, to) =>
+    spawnSync("/usr/bin/git", ["-C", repository, "merge-base", "--is-ancestor", from, to]).status === 0;
+  const count = (range) => {
+    const result = spawnSync("/usr/bin/git", ["-C", repository, "rev-list", "--count", range], {
+      encoding: "utf8"
+    });
+    if (result.status !== 0) process.exit(result.status || 74);
+    return Number(result.stdout.trim());
+  };
+  let status;
+  let aheadBy;
+  let behindBy;
+  let mergeBase;
+  if (base === head) {
+    status = "identical";
+    aheadBy = 0;
+    behindBy = 0;
+    mergeBase = base;
+  } else if (isAncestor(base, head)) {
+    status = "ahead";
+    aheadBy = count(base + ".." + head);
+    behindBy = 0;
+    mergeBase = base;
+  } else if (isAncestor(head, base)) {
+    status = "behind";
+    aheadBy = 0;
+    behindBy = count(head + ".." + base);
+    mergeBase = head;
+  } else {
+    status = "diverged";
+    aheadBy = count(base + ".." + head);
+    behindBy = count(head + ".." + base);
+    const result = spawnSync("/usr/bin/git", ["-C", repository, "merge-base", base, head], {
+      encoding: "utf8"
+    });
+    if (result.status !== 0) process.exit(result.status || 75);
+    mergeBase = result.stdout.trim();
+  }
+  process.stdout.write(JSON.stringify({
+    ahead_by: aheadBy,
+    base_commit: { sha: base },
+    behind_by: behindBy,
+    merge_base_commit: { sha: mergeBase },
+    status
   }) + "\\n");
 } else if (endpoint.includes("/git/ref/heads/main")) {
   process.stdout.write(next("GH_MAIN_REFS", process.env.MOBILE_WORKFLOW_SHA) + "\\n");
@@ -552,6 +620,13 @@ function advanceTrustedTooling(
     : emptyCommit(fixture.source, "advance trusted release tooling");
   useTrustedWorkflow(fixture, workflowSha);
   return workflowSha;
+}
+
+function advanceObservedMain(fixture: Fixture, fromSha: string, branch: string): string {
+  git(fixture.source, "checkout", "-b", branch, fromSha);
+  const mainSha = emptyCommit(fixture.source, `advance ${branch}`);
+  git(fixture.trusted, "fetch", "origin", mainSha);
+  return mainSha;
 }
 
 function runAuthority(fixture: Fixture, phase: string, overrides: NodeJS.ProcessEnv = {}) {
@@ -779,6 +854,112 @@ describe("mobile release authority", () => {
 
     expect(outputs.target_sha).toBe(fixture.targetSha);
     expect(receipt.workflowSha).toBe(workflowSha);
+  });
+
+  it("authorizes while main advances forward before and during candidate validation", () => {
+    const fixture = createFixture();
+    const mainBefore = advanceObservedMain(fixture, fixture.baseSha, "main-before-validation");
+    const mainAfter = advanceObservedMain(fixture, mainBefore, "main-during-validation");
+
+    const result = runAuthority(fixture, "authorize", {
+      GH_MAIN_REFS: `${mainBefore},${mainBefore},${mainAfter},${mainAfter}`,
+    });
+    const comparisons = readGhTrace(fixture.ghLog)
+      .map(({ args }) => args[1] ?? "")
+      .filter((endpoint) => endpoint.includes("/compare/"));
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(comparisons).toEqual([
+      `repos/${REPOSITORY}/compare/${fixture.baseSha}...${mainBefore}`,
+      `repos/${REPOSITORY}/compare/${mainBefore}...${mainAfter}`,
+    ]);
+  });
+
+  it("admits recovery from current tooling while retaining original receipt tooling", () => {
+    const fixture = createFixture();
+    const outputs = authorize(fixture);
+    signIntentFile(fixture, outputs);
+    const recovery = prepareRecoveryOverrides(fixture, outputs);
+    const recoveryWorkflowSha = recovery.MOBILE_WORKFLOW_SHA as string;
+    const mainBefore = advanceObservedMain(
+      fixture,
+      recoveryWorkflowSha,
+      "recovery-main-before-validation",
+    );
+    const mainAfter = advanceObservedMain(fixture, mainBefore, "recovery-main-during-validation");
+    resetState(fixture);
+
+    const result = runAuthority(fixture, "validate-record", {
+      ...recovery,
+      GH_MAIN_REFS: `${mainBefore},${mainBefore},${mainAfter},${mainAfter}`,
+    });
+    const trace = readGhTrace(fixture.ghLog);
+    const comparisons = trace
+      .map(({ args }) => args[1] ?? "")
+      .filter((endpoint) => endpoint.includes("/compare/"));
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(comparisons).toEqual([
+      `repos/${REPOSITORY}/compare/${recoveryWorkflowSha}...${mainBefore}`,
+      `repos/${REPOSITORY}/compare/${mainBefore}...${mainAfter}`,
+    ]);
+    expect(fs.readFileSync(fixture.ghLog, "utf8")).toContain(
+      `"--source-digest","${fixture.baseSha}"`,
+    );
+  });
+
+  it("rejects divergent and rewound main transitions", () => {
+    const divergent = createFixture();
+    const left = advanceObservedMain(divergent, divergent.baseSha, "main-left");
+    const right = advanceObservedMain(divergent, divergent.baseSha, "main-right");
+    const divergence = runAuthority(divergent, "authorize", {
+      GH_MAIN_REFS: `${left},${left},${right},${right}`,
+    });
+    expect(divergence.status).toBe(1);
+    expect(divergence.stderr).toContain("did not advance monotonically");
+
+    const rewound = createFixture();
+    const workflowSha = advanceTrustedTooling(rewound);
+    const rewind = runAuthority(rewound, "authorize", {
+      GH_MAIN_REFS: `${rewound.baseSha},${rewound.baseSha}`,
+    });
+    expect(rewind.status).toBe(1);
+    expect(rewind.stderr).toContain("not an ancestor of the observed main");
+    expect(workflowSha).not.toBe(rewound.baseSha);
+  });
+
+  it.each(["failure", "malformed"])(
+    "rejects a %s exact-pair ancestry lookup before candidate output",
+    (mode) => {
+      const fixture = createFixture();
+      const result = runAuthority(fixture, "authorize", {
+        GH_COMPARE_MODES: mode,
+      });
+
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("Trusted main ancestry lookup failed");
+      expect(fs.readFileSync(fixture.outputPath, "utf8")).toBe("");
+    },
+  );
+
+  it("rejects main movement inside either ancestry lookup window", () => {
+    const before = createFixture();
+    const beforeMain = advanceObservedMain(before, before.baseSha, "lookup-before");
+    const beforeMoved = advanceObservedMain(before, beforeMain, "lookup-before-moved");
+    const unstableBefore = runAuthority(before, "authorize", {
+      GH_MAIN_REFS: `${beforeMain},${beforeMoved}`,
+    });
+    expect(unstableBefore.status).toBe(1);
+    expect(unstableBefore.stderr).toContain("changed during trusted ancestry lookup");
+
+    const after = createFixture();
+    const afterMain = advanceObservedMain(after, after.baseSha, "lookup-after");
+    const afterMoved = advanceObservedMain(after, afterMain, "lookup-after-moved");
+    const unstableAfter = runAuthority(after, "authorize", {
+      GH_MAIN_REFS: `${after.baseSha},${after.baseSha},${afterMain},${afterMoved}`,
+    });
+    expect(unstableAfter.status).toBe(1);
+    expect(unstableAfter.stderr).toContain("changed during trusted ancestry lookup");
   });
 
   it("regenerates from Code SHA metadata with the newer Tooling SHA", () => {
@@ -1508,7 +1689,7 @@ describe("mobile release authority", () => {
       GH_MAIN_REFS: `${recoveryWorkflowSha},${OTHER_SHA}`,
     });
     expect(staleMain.status).toBe(1);
-    expect(staleMain.stderr).toContain("Main changed during initial mobile release authorization");
+    expect(staleMain.stderr).toContain("Main changed during trusted ancestry lookup");
 
     resetState(fixture);
     const successful = runAuthority(fixture, "validate-record", {

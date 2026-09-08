@@ -1759,7 +1759,7 @@ describe("sendMessageTelegram", () => {
     });
 
     expect(botApi.sendMessage).toHaveBeenCalledTimes(1);
-    expect(sendMessageTexts(botApi.sendMessage).join("")).toContain("| H1 | H2 |");
+    expect(sendMessageTexts(botApi.sendMessage).join("")).toContain("| H1  | H2  |");
     expect(botRawApi.sendRichMessage).not.toHaveBeenCalled();
   });
 

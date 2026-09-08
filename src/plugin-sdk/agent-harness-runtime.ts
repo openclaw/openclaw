@@ -179,6 +179,13 @@ export type {
 export type { HeartbeatToolResponse } from "../auto-reply/heartbeat-tool-response.js";
 export type { AgentApprovalEventData, AgentEventPayload } from "../infra/agent-events.js";
 export type { ExecApprovalDecision } from "../infra/exec-approvals.js";
+/**
+ * Plugin exec-review contract: low/medium-risk `allow-once` permits one run;
+ * `ask` routes to human approval. Consumers must handle `deny` explicitly:
+ * do not run or escalate, and return the rationale and rejection guidance to the
+ * agent. The configured exec reviewer maps provider failures, timeouts, and
+ * invalid responses to `ask`, and detected reviewer-directed injection to `deny`.
+ */
 export type {
   ExecAutoReviewDecision,
   ExecAutoReviewInput,

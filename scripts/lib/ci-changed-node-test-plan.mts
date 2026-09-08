@@ -1,13 +1,18 @@
-import { existsSync } from "node:fs";
+import { existsSync, lstatSync } from "node:fs";
 import path from "node:path";
 import { pluginContractPatterns } from "../../test/vitest/vitest.contracts-paths.mjs";
-import { isPluginControlUiPath, isUiBrowserTestFile } from "../../test/vitest/vitest.ui-paths.mjs";
+import {
+  isPluginControlUiPath,
+  isUiBrowserTestFile,
+  isUiTestTarget,
+} from "../../test/vitest/vitest.ui-paths.mjs";
 import { detectChangedLanes } from "../changed-lanes.mts";
 import {
   buildVitestRunPlans,
   CHANNEL_CONTRACT_CONFIG_PATTERNS,
   CONTRACTS_PLUGIN_VITEST_CONFIG,
   findUnmatchedExplicitTestTargets,
+  hasImportGraphConsumers,
   hasImportGraphImpactOnTargets,
   isTestFileTarget,
   isTestSupportFileTarget,
@@ -52,6 +57,30 @@ type ChangedNodeTestShard = {
 };
 type ChangedExtensionConfigShard = ChangedNodeTestShard & { predictedSeconds: number };
 type CwdOptions = { cwd?: string };
+
+/** Ordinary UI unit entries retain their unit owner; fixtures and their consumers retain E2E. */
+export function hasUiE2eAffectingChange(changedPaths: string[], options: CwdOptions = {}) {
+  const cwd = options.cwd ?? process.cwd();
+  if (
+    !Array.isArray(changedPaths) ||
+    changedPaths.length === 0 ||
+    changedPaths.some(
+      (file) =>
+        !file.startsWith("ui/src/") ||
+        !isUiTestTarget(file) ||
+        /\.(?:browser|node)\.test\.ts$/u.test(file) ||
+        /(?:^|\/)(?:e2e|test-helpers|test-fixtures|fixtures|__fixtures__)(?:\/|$)/u.test(file) ||
+        path.posix.normalize(file) !== file ||
+        !existsSync(path.join(cwd, file)) ||
+        !lstatSync(path.join(cwd, file)).isFile(),
+    )
+  ) {
+    return true;
+  }
+  // Test entry names are not enough: a fixture or application may import one.
+  // Reuse the canonical import graph rather than orphaning that consumer's proof.
+  return hasImportGraphConsumers(changedPaths, cwd, { tooling: true });
+}
 
 const DEFAULT_NODE_TEST_RUNNER = "blacksmith-8vcpu-ubuntu-2404";
 const MAX_CHANGED_NODE_TEST_TARGETS = 96;
