@@ -12,6 +12,7 @@ import {
   UPDATE_EFFECTIVE_CHANNEL_ENV,
 } from "../../infra/update-channels.js";
 import { resolveUpdateInstallKind } from "../../infra/update-check.js";
+import { normalizeUpdatePostInstallDoctorWarnings } from "../../infra/update-doctor-result.js";
 import { POST_CORE_UPDATE_SOURCE_CONFIG_PATH_ENV } from "../../infra/update-post-core-context.js";
 import {
   acknowledgeAbandonedUpdateRun,
@@ -188,6 +189,12 @@ async function updateFinalizeCommandInternal(
   const { root, preFinalizeConfig, requestedChannel, storedChannel, effectiveChannel, channel } =
     prepared;
   let { configSnapshot } = prepared;
+  let doctorWarnings: string[] = [];
+  const onDoctorWarnings = (warnings: string[]) => {
+    doctorWarnings = normalizeUpdatePostInstallDoctorWarnings([
+      ...new Set([...doctorWarnings, ...warnings]),
+    ]);
+  };
 
   const initialPluginUpdate = await withPrePluginUpdateDoctorEnv(async () => {
     await lifecycle.run("configSnapshot", createUpdateConfigSnapshot);
@@ -199,6 +206,7 @@ async function updateFinalizeCommandInternal(
         json: opts.json === true,
         workspaceSuggestions: true,
         timeoutMs: lifecycle.budget("doctor"),
+        onWarnings: onDoctorWarnings,
       }),
     );
     return await lifecycle.run(
@@ -244,6 +252,7 @@ async function updateFinalizeCommandInternal(
         yes: opts.yes === true,
         json: opts.json === true,
         timeoutMs: lifecycle.budget("targetConfigConvergence"),
+        onWarnings: onDoctorWarnings,
       });
       await persistValidatedDowngradeConfig(result.configSnapshot);
       return result;
@@ -269,7 +278,7 @@ async function updateFinalizeCommandInternal(
     status:
       pluginUpdate.status === "error"
         ? "error"
-        : pluginUpdate.status === "warning"
+        : pluginUpdate.status === "warning" || doctorWarnings.length > 0
           ? "warning"
           : "ok",
     mode: "finalize",
@@ -285,7 +294,8 @@ async function updateFinalizeCommandInternal(
     phaseTimings: lifecycle.phaseTimings,
     postUpdate: {
       doctor: {
-        status: "ok",
+        status: doctorWarnings.length > 0 ? "warning" : "ok",
+        ...(doctorWarnings.length > 0 ? { warnings: doctorWarnings } : {}),
       },
       plugins: pluginUpdate,
     },

@@ -1,3 +1,4 @@
+import { normalizeUpdatePostInstallDoctorWarnings } from "../infra/update-doctor-result.js";
 import type {
   DoctorHealthCheckContext,
   DoctorHealthFlowContext,
@@ -6,7 +7,7 @@ import { resolveDoctorWorkspaceDir } from "./doctor-health-contribution-utils.js
 import { renderStructuredHealthFindings } from "./doctor-health-contribution.js";
 import { defineSplitHealthCheckInput } from "./health-check-adapter.js";
 import type { DetectableHealthCheckInput } from "./health-check-runner-types.js";
-import type { HealthFinding } from "./health-checks.js";
+import { isHealthCheckEnabledByDefault, type HealthFinding } from "./health-checks.js";
 
 const loadHealthCheckRegistryModule = async () => await import("./health-check-registry.js");
 
@@ -35,21 +36,30 @@ export async function runStructuredHealthRepairs(
   const { note } = await import("../../packages/terminal-core/src/note.js");
 
   const workspaceDir = resolveDoctorWorkspaceDir(ctx.cfg, ctx.env);
-  registerBundledHealthChecks({ cfg: ctx.cfg, cwd: workspaceDir });
-  const checks = listExtensionHealthChecksForDoctor(await resolveCoreChecks()).map(
-    defineSplitHealthCheckInput,
-  );
+  registerBundledHealthChecks({ cfg: ctx.cfg, cwd: workspaceDir, env: ctx.env });
+  const checks = listExtensionHealthChecksForDoctor(await resolveCoreChecks())
+    .filter(isHealthCheckEnabledByDefault)
+    .map(defineSplitHealthCheckInput);
   const result = await runDoctorHealthRepairs(
     withDoctorHealthCheckFacts(ctx, {
       mode: "fix" as const,
       runtime: ctx.runtime,
       cfg: ctx.cfg,
+      env: ctx.env,
       cwd: workspaceDir,
       configPath: ctx.configPath,
     }),
     { checks },
   );
   ctx.cfg = result.config;
+  renderStructuredHealthFindings(ctx, result.remainingFindings);
+  ctx.updateWarnings = normalizeUpdatePostInstallDoctorWarnings([
+    ...(ctx.updateWarnings ?? []),
+    ...result.remainingFindings
+      .filter((finding) => finding.severity === "warning")
+      .map((finding) => `${finding.checkId}: ${finding.message}`),
+    ...result.warnings,
+  ]);
   if (result.changes.length > 0) {
     note(result.changes.join("\n"), "Doctor changes");
   }

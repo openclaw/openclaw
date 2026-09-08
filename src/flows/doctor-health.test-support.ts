@@ -210,4 +210,35 @@ export function registerDoctorConfigReceiptTests(
       });
     },
   );
+  it.each([false, true])(
+    "preserves health warnings in the update result (advisory=%s)",
+    async (advisory) => {
+      mocks.runContributions.mockImplementation(async (ctx) => {
+        ctx.updateWarnings = ["plugin/example: version probe timed out"];
+        if (advisory) {
+          ctx.postInstallDoctorResult = postInstallAdvisory;
+        }
+      });
+      const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+      vi.stubEnv(
+        "OPENCLAW_UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH",
+        "/tmp/openclaw-update-doctor-result.json",
+      );
+
+      await runDoctorHealthFlow(runtime, {});
+
+      expect(mocks.writeUpdatePostInstallDoctorResult).toHaveBeenCalledWith({
+        resultPath: "/tmp/openclaw-update-doctor-result.json",
+        result: {
+          ...(advisory ? postInstallAdvisory : { status: "ok" }),
+          configHash: "unchanged",
+          warnings: ["plugin/example: version probe timed out"],
+        },
+      });
+      expect(runtime.exit).not.toHaveBeenCalledWith(1);
+      if (advisory) {
+        expect(runtime.exit).toHaveBeenCalledWith(86);
+      }
+    },
+  );
 }

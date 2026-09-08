@@ -1,4 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  consumeUpdatePostInstallDoctorResult,
+  createDeferredConfiguredPluginRepairDoctorResult,
+  UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE,
+  UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV,
+  writeUpdatePostInstallDoctorResult,
+} from "../../infra/update-doctor-result.js";
 import type { PostCorePluginUpdateResult } from "./update-command-plugins.js";
 
 const mocks = vi.hoisted(() => ({
@@ -16,7 +23,8 @@ vi.mock("../../daemon/gateway-entrypoint.js", () => ({
   resolveGatewayInstallEntrypoint: mocks.resolveEntrypoint,
 }));
 
-vi.mock("../../process/exec.js", () => ({
+vi.mock("../../process/exec.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../process/exec.js")>()),
   runExec: mocks.runExec,
 }));
 
@@ -29,7 +37,10 @@ vi.mock("./shared.js", async (importOriginal) => ({
   resolveNodeRunner: vi.fn(() => "/usr/bin/node"),
 }));
 
-import { completePostCorePluginUpdate } from "./update-command-fresh-doctor.js";
+import {
+  completePostCorePluginUpdate,
+  runUpdateFinalizationDoctorInFreshProcess,
+} from "./update-command-fresh-doctor.js";
 
 const pluginUpdate: PostCorePluginUpdateResult = {
   status: "ok",
@@ -115,6 +126,55 @@ describe("post-plugin update readiness", () => {
       ["/opt/openclaw/dist/index.js", "doctor", "--lint", "--json", "--severity-min", "error"],
     ]);
   });
+
+  it("consumes nonfatal Doctor warnings before reporting successful convergence", async () => {
+    const warnings = ["Optional probe timed out; recheck after restart."];
+    const onWarnings = vi.fn();
+    let resultPath = "";
+    const runNormally = mocks.runExec.getMockImplementation()!;
+    mocks.runExec.mockImplementation(async (command, args: string[], options) => {
+      if (args.includes("--repair")) {
+        resultPath = options.env[UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV];
+        await writeUpdatePostInstallDoctorResult({
+          resultPath,
+          result: { status: "ok", warnings },
+        });
+      }
+      return await runNormally(command, args, options);
+    });
+
+    const result = await completePostCorePluginUpdate({ ...updateOptions, onWarnings });
+
+    expect(result.pluginUpdate.status).toBe("ok");
+    expect(onWarnings).toHaveBeenCalledExactlyOnceWith(warnings);
+    expect(await consumeUpdatePostInstallDoctorResult(resultPath)).toBeNull();
+  });
+
+  it.each([false, true])(
+    "preserves deferred repair advisory semantics (timed out: %s)",
+    async (timedOut) => {
+      mocks.runExec.mockImplementation(async (_command, _args, options) => {
+        await writeUpdatePostInstallDoctorResult({
+          resultPath: options.env[UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV],
+          result: createDeferredConfiguredPluginRepairDoctorResult(["plugin repair deferred"]),
+        });
+        throw Object.assign(new Error("Doctor advisory"), {
+          failed: true,
+          exitCode: UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE,
+          timedOut,
+        });
+      });
+      const run = runUpdateFinalizationDoctorInFreshProcess({
+        ...updateOptions,
+        phase: "pre-plugin",
+      });
+      if (timedOut) {
+        await expect(run).rejects.toThrow("Doctor advisory");
+      } else {
+        await expect(run).resolves.toBeUndefined();
+      }
+    },
+  );
 
   it("requires the lifecycle owner before starting fresh Doctor maintenance", async () => {
     const beforeDoctor = vi.fn(async () => undefined);

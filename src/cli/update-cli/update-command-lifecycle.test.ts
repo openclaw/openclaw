@@ -5,6 +5,7 @@ const mocks = vi.hoisted(() => ({
   events: [] as string[],
   leaseActive: false,
   readConfig: vi.fn(),
+  doctorWarnings: [] as string[],
 }));
 
 const validConfigSnapshot = {
@@ -134,9 +135,12 @@ vi.mock("./update-command-fresh-doctor.js", () => ({
       configSnapshot: validConfigSnapshot,
     };
   }),
-  runUpdateFinalizationDoctorInFreshProcess: vi.fn(async () => {
-    record("fresh-doctor");
-  }),
+  runUpdateFinalizationDoctorInFreshProcess: vi.fn(
+    async (params: { onWarnings?: (warnings: string[]) => void }) => {
+      record("fresh-doctor");
+      params.onWarnings?.(mocks.doctorWarnings);
+    },
+  ),
   withPrePluginUpdateDoctorEnv: async (run: () => Promise<unknown>) => await run(),
 }));
 
@@ -181,6 +185,7 @@ describe("update plugin lifecycle lease boundaries", () => {
     vi.unstubAllEnvs();
     mocks.events = [];
     mocks.leaseActive = false;
+    mocks.doctorWarnings = [];
     mocks.readConfig.mockImplementation(async () => {
       record("read-config");
       return validConfigSnapshot;
@@ -249,5 +254,21 @@ describe("update plugin lifecycle lease boundaries", () => {
       mocks.events.lastIndexOf("lease-exit:false"),
     );
     expect(mocks.events).not.toContain("persisted-index:true");
+  });
+
+  it("keeps nonfatal Doctor warnings in terminal JSON without failing finalization", async () => {
+    mocks.doctorWarnings = ["Optional version probe timed out; recheck after restart."];
+    await updateFinalizeCommand({ json: true, yes: true, deferCompletionCache: true });
+
+    expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: "warning",
+        restart: false,
+        postUpdate: expect.objectContaining({
+          doctor: { status: "warning", warnings: mocks.doctorWarnings },
+        }),
+      }),
+    );
+    expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
   });
 });

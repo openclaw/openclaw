@@ -7,6 +7,7 @@ import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import { DoctorUnreadableStateDatabaseError } from "../infra/state-repair-message.js";
 import {
   captureUpdateDoctorConfigWrites,
+  normalizeUpdatePostInstallDoctorWarnings,
   UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE,
   UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV,
   writeUpdatePostInstallDoctorResult,
@@ -221,7 +222,14 @@ async function runDoctorHealthFlowWithResult(
       repairGatewayMaintenanceStartupFailures();
     }
     await maintenance?.finish(ctx.cfg);
-    doctorResult = ctx.postInstallDoctorResult ?? { status: "ok" };
+    const warnings = normalizeUpdatePostInstallDoctorWarnings([
+      ...(ctx.postInstallDoctorResult?.warnings ?? []),
+      ...(ctx.updateWarnings ?? []),
+    ]);
+    doctorResult = {
+      ...(ctx.postInstallDoctorResult ?? { status: "ok" }),
+      ...(warnings.length ? { warnings } : {}),
+    };
     if (updateResult && doctorResult.status === "advisory") {
       exitCode = UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE;
       return;
