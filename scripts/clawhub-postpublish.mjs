@@ -240,7 +240,11 @@ export async function verifyClawHubPostpublish({
   if (!/^[a-f0-9]{40}$/u.test(verifierSha)) {
     throw new Error("Invalid trusted verifier SHA.");
   }
-  const ancestry = await githubJson(`compare/${parent.head_sha}...${verifierSha}`, context);
+  // GitHub includes file patches only on page 1; status describes the full comparison.
+  const ancestry = await githubJson(
+    `compare/${parent.head_sha}...${verifierSha}?per_page=1&page=2`,
+    context,
+  );
   if (ancestry.status !== "ahead" && ancestry.status !== "identical") {
     throw new Error("Parent tooling is not an ancestor of trusted verification tooling.");
   }
