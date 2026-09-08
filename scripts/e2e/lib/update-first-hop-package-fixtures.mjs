@@ -7,6 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+// Frozen candidates predating the recorded inventory retain their original fixture contract.
 export const LEGACY_UPDATE_COMPAT_CHUNKS = [
   "shared-DTaQo6Hi.js",
   "shared-Y6bNiw2w.js",
@@ -42,8 +43,29 @@ export function removeLegacyUpdateCompatChunks(packageRoot) {
     throw new Error("package fixture inventory is not a string array");
   }
 
+  const compatibilityPath = path.join(paths.root, "dist", "update-compat-inventory.json");
+  const recordedChunks = fs.existsSync(compatibilityPath)
+    ? readJson(compatibilityPath).releases.flatMap((release) =>
+        release.chunks.map((chunk) => chunk.path),
+      )
+    : [];
+  if (
+    recordedChunks.some(
+      (name) =>
+        typeof name !== "string" ||
+        path.isAbsolute(name) ||
+        name.includes("\\") ||
+        name.split("/").includes(".."),
+    )
+  ) {
+    throw new Error("package fixture compatibility inventory has an invalid path");
+  }
+  const chunks = new Set([
+    ...LEGACY_UPDATE_COMPAT_CHUNKS,
+    ...recordedChunks.filter((name) => /-[A-Za-z0-9_-]{8}\.m?js$/.test(name)),
+  ]);
   const removed = [];
-  for (const name of LEGACY_UPDATE_COMPAT_CHUNKS) {
+  for (const name of chunks) {
     const relativePath = `dist/${name}`;
     const filePath = path.join(paths.root, relativePath);
     if (!fs.existsSync(filePath) || !inventory.includes(relativePath)) {

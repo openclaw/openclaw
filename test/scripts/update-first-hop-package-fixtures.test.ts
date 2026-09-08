@@ -48,6 +48,37 @@ function makePackageFixture() {
 }
 
 describe("first-hop package fixtures", () => {
+  it("removes the candidate's recorded bridges while retaining its stable entrypoints", () => {
+    const root = makePackageFixture();
+    const bridge = "new-runtime-12345678.mjs";
+    const stable = "new-runtime.js";
+    const metadata = "dist/update-compat-inventory.json";
+    writeJson(path.join(root, metadata), {
+      releases: [{ chunks: [{ path: bridge }, { path: stable }] }],
+    });
+    for (const name of [bridge, stable]) {
+      fs.writeFileSync(path.join(root, "dist", name), "export {};\n");
+    }
+    const inventoryPath = path.join(root, "dist/postinstall-inventory.json");
+    writeJson(inventoryPath, [
+      ...JSON.parse(fs.readFileSync(inventoryPath, "utf8")),
+      metadata,
+      `dist/${bridge}`,
+      `dist/${stable}`,
+    ]);
+
+    removeLegacyUpdateCompatChunks(root);
+
+    expect(fs.existsSync(path.join(root, "dist", bridge))).toBe(false);
+    expect(fs.readFileSync(path.join(root, "dist", stable), "utf8")).toBe("export {};\n");
+    expect(JSON.parse(fs.readFileSync(inventoryPath, "utf8"))).toEqual([
+      "dist/build-info.json",
+      "dist/index.js",
+      metadata,
+      `dist/${stable}`,
+    ]);
+  });
+
   it("removes only the declared legacy compatibility inputs", () => {
     const root = makePackageFixture();
     removeLegacyUpdateCompatChunks(root);

@@ -296,6 +296,63 @@ For correction artifact preparation, validate the immutable SHA with `--target-r
 
 ## Release preflight
 
+### Previous updater compatibility
+
+Before freezing the release, refresh `scripts/lib/update-compat-inventory.json`
+from the previous stable npm artifact. Verify the tarball against npm's
+`dist.integrity`, then extract it and run:
+
+```bash
+pnpm update:compat:gen \
+  --package-dir <extracted-package-directory> \
+  --integrity <verified-npm-dist.integrity>
+```
+
+Run `pnpm update:compat:check` with the same arguments to verify the recorded inventory. Replace the previous
+stable entry rather than accumulating releases; the recorder accepts at most
+one additional beta via `--beta-package-dir` and `--beta-integrity`.
+It scans emitted lazy imports in the updater, service, and CLI cleanup source
+regions and records required export origins. The wizard entry is excluded
+because it starts before replacement. `runtime-postbuild` generates hashed
+compatibility files by re-exporting the candidate's corresponding symbols;
+missing or ambiguous mappings fail the build. Stable entrypoints are checked
+without replacement. The package carries the inventory in
+`dist/update-compat-inventory.json`, so negative and future fixtures remove that
+candidate's bridges. Existing older compatibility aliases remain separately
+owned by their original upgrade contracts.
+
+Run `update-first-hop-compat` and the published upgrade survivor lane from the
+recorded stable package. Native Windows proof must invoke the old updater with
+a registered Scheduled Task and verify its restart without a subsequent manual
+`gateway start`. Import compatibility alone does not prove that old and new
+modules share process-local state.
+
+### Design proposal: immutable runtime generations
+
+A durable replacement would install each version in an immutable generation
+directory and switch an installation pointer. Launchers must resolve that
+pointer before starting Node so lazy imports keep the process's original tree.
+Retain generations until their processes have exited. This is a proposal, not
+the current update layout.
+
+The design must preserve npm's ownership and bookkeeping: `npm ls -g`, later
+global installs and uninstall, lifecycle scripts, and generated launchers must
+still work. Unix uses `<prefix>/lib/node_modules` and `<prefix>/bin`; Windows
+uses `<prefix>/node_modules` and prefix-root launchers. A mutable junction alone
+does not pin old imports, and Windows pointer replacement must respect open
+handles and junction semantics. npm must not replace or orphan the retained
+generation anchor during its next install.
+
+pnpm owns a global project, manifests, lockfiles, virtual-store links, and
+version-dependent package groups; its cleanup must not collect live generations.
+Bun also owns a shared global project and separate binary directory, and its
+Windows binary launchers currently cannot be relocated by this updater.
+Generation activation must preserve sibling packages and the existing
+concurrent-project checks for both managers. These constraints need separate
+design approval and package-manager integration proof before implementation.
+
+### Required checks
+
 - Run `pnpm check:test-types` before release preflight so test TypeScript stays covered outside the faster local `pnpm check` gate.
 - Run `pnpm check:architecture` before release preflight so the broader import cycle and architecture boundary checks are green outside the faster local gate.
 - Run `pnpm build && pnpm ui:build` before `pnpm release:check` so the expected `dist/*` release artifacts and Control UI bundle exist for the pack validation step.

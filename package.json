@@ -2133,6 +2133,8 @@
     "android:i18n:check": "node --import ./scripts/tsx.mjs scripts/android-app-i18n.ts check",
     "apple:i18n:check": "node --import ./scripts/tsx.mjs scripts/apple-app-i18n.ts check",
     "ui:install": "node scripts/ui.js install",
+    "update:compat:gen": "node scripts/update-compat-inventory.mts",
+    "update:compat:check": "node scripts/update-compat-inventory.mts --check",
     "verify": "node --import ./scripts/tsx.mjs scripts/verify.mts"
   },
   "dependencies": {
