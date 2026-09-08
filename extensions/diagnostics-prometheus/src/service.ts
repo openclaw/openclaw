@@ -1207,7 +1207,7 @@ export function createDiagnosticsPrometheusExporter() {
         { includePrivateData: false },
       );
       internalDiagnostics = ctx.internalDiagnostics as unknown as TrustedExporterDiagnosticsBridge;
-      if (internalDiagnostics.observeProviderUsage) {
+      if (isDiagnosticsEnabled(ctx.config) && internalDiagnostics.observeProviderUsage) {
         unsubscribeProviderUsage = await internalDiagnostics.observeProviderUsage((snapshot) => {
           try {
             recordProviderUsageSnapshot(store, snapshot);
