@@ -54,6 +54,7 @@ const resetGatewaySuspendCoordinatorForLifecycleRestart = vi.fn();
 const consumeGatewaySuspendHandoff =
   vi.fn<typeof import("../../infra/gateway-suspend-coordinator.js").consumeGatewaySuspendHandoff>();
 const disarmGatewaySuspendHandoff = vi.fn();
+const recoverGatewayRestartDrainAfterFailedSignalAdmission = vi.fn();
 const rollbackGatewayRestartSignalAdmission = vi.fn();
 const requestGatewayRestartWithSignalAdmission = vi.fn(() => ({ status: "emitted" as const }));
 const writeGatewayRestartHandoffSync = vi.fn(
@@ -197,6 +198,8 @@ vi.mock("../../infra/restart.js", async (importOriginal) => {
     peekGatewaySigusr1RestartReason: () => peekGatewaySigusr1RestartReason(),
     resetGatewayRestartStateForInProcessRestart: () =>
       resetGatewayRestartStateForInProcessRestart(),
+    recoverGatewayRestartDrainAfterFailedSignalAdmission: () =>
+      recoverGatewayRestartDrainAfterFailedSignalAdmission(),
     rollbackGatewayRestartSignalAdmission: () => rollbackGatewayRestartSignalAdmission(),
     requestGatewayRestartWithSignalAdmission,
     scheduleGatewaySigusr1Restart: (opts?: { delayMs?: number; reason?: string }) =>
@@ -3617,7 +3620,7 @@ describe("runGatewayLoop", () => {
         "SIGUSR1 handler failed: lifecycle module corrupted",
       );
       expect(markGatewaySigusr1RestartHandled).toHaveBeenCalled();
-      expect(rollbackGatewayRestartSignalAdmission).toHaveBeenCalledOnce();
+      expect(recoverGatewayRestartDrainAfterFailedSignalAdmission).toHaveBeenCalledOnce();
       expect(close).not.toHaveBeenCalled();
       expect(start).toHaveBeenCalledTimes(1);
 
@@ -3653,7 +3656,7 @@ describe("runGatewayLoop", () => {
       // Restart token must be cleared so future SIGUSR1 restarts are not
       // permanently coalesced as "already in-flight".
       expect(markGatewaySigusr1RestartHandled).toHaveBeenCalled();
-      expect(rollbackGatewayRestartSignalAdmission).toHaveBeenCalledOnce();
+      expect(recoverGatewayRestartDrainAfterFailedSignalAdmission).toHaveBeenCalledOnce();
       expect(close).not.toHaveBeenCalled();
       expect(start).toHaveBeenCalledTimes(1);
 
@@ -3675,8 +3678,8 @@ describe("runGatewayLoop", () => {
 
       sigusr1();
       await waitForLoopCondition(
-        () => rollbackGatewayRestartSignalAdmission.mock.calls.length === 1,
-        "failed SIGUSR1 handler did not roll back restart admission",
+        () => recoverGatewayRestartDrainAfterFailedSignalAdmission.mock.calls.length === 1,
+        "failed SIGUSR1 handler did not recover restart admission",
       );
 
       sigusr1();
