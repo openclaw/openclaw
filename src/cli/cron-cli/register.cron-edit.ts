@@ -12,6 +12,7 @@ import { defaultRuntime } from "../../runtime.js";
 import type { GatewayRpcOpts } from "../gateway-rpc.js";
 import { addGatewayClientOptions, callGatewayFromCli } from "../gateway-rpc.js";
 import { parseDurationMs } from "../parse-duration.js";
+import { CronCliError } from "./cron-cli-error.js";
 import { isUnknownCronGetMethodError, listCronJobsFromGateway } from "./list-jobs.js";
 import { createCronOutputCommand } from "./output-mode.js";
 import { resolveCronEditPayloadDeliveryPatch } from "./register.cron-edit-options.js";
@@ -48,7 +49,7 @@ async function readCronJobForEdit(opts: GatewayRpcOpts, id: string): Promise<Cro
     );
     const existing = inventory.jobs.find((job) => job.id === id);
     if (!existing) {
-      throw new Error(`unknown automation id: ${id}`, { cause: error });
+      throw new CronCliError(`unknown automation id: ${id}`, { cause: error });
     }
     return existing;
   }
@@ -106,11 +107,11 @@ export function registerCronEditCommand(cron: Command) {
       .action(async (id, opts) => {
         try {
           if (opts.clearTools && opts.tools !== undefined) {
-            throw new Error("Use --tools or --clear-tools, not both");
+            throw new CronCliError("Use --tools or --clear-tools, not both");
           }
           const commandCwd = normalizeOptionalString(opts.commandCwd);
           if (typeof opts.commandCwd === "string" && !commandCwd) {
-            throw new Error("--command-cwd must not be blank");
+            throw new CronCliError("--command-cwd must not be blank");
           }
           let existingJobPromise: Promise<CronJobForEdit> | undefined;
           let expectedConfigRevision: string | undefined;
@@ -126,10 +127,10 @@ export function registerCronEditCommand(cron: Command) {
               ? normalizeCronSessionTargetOption(opts.session)
               : undefined;
           if (typeof opts.session === "string" && !sessionTarget) {
-            throw new Error("--session must be main, isolated, current, or session:<id>");
+            throw new CronCliError("--session must be main, isolated, current, or session:<id>");
           }
           if (sessionTarget === "main" && (opts.message || opts.command || opts.commandArgv)) {
-            throw new Error(
+            throw new CronCliError(
               "Main jobs cannot use --message or --command; use --system-event or --session isolated.",
             );
           }
@@ -137,7 +138,7 @@ export function registerCronEditCommand(cron: Command) {
             (sessionTarget === "current" || sessionTarget?.startsWith("session:")) &&
             typeof opts.script === "string"
           ) {
-            throw new Error("Script jobs require --session main or --session isolated.");
+            throw new CronCliError("Script jobs require --session main or --session isolated.");
           }
           if (
             (sessionTarget === "isolated" ||
@@ -145,7 +146,7 @@ export function registerCronEditCommand(cron: Command) {
               sessionTarget?.startsWith("session:")) &&
             opts.systemEvent
           ) {
-            throw new Error(
+            throw new CronCliError(
               "Isolated jobs cannot use --system-event; use --message, --command, or --session main.",
             );
           }
@@ -159,7 +160,7 @@ export function registerCronEditCommand(cron: Command) {
             typeof opts.systemEvent === "string" &&
             hasExplicitChatDelivery
           ) {
-            throw new Error(
+            throw new CronCliError(
               "--channel, --to, --account, and --thread-id require a non-main agentTurn or command job with delivery.",
             );
           }
@@ -168,7 +169,7 @@ export function registerCronEditCommand(cron: Command) {
               ? (normalizeHttpWebhookUrl(opts.webhook) ?? undefined)
               : undefined;
           if (typeof opts.webhook === "string" && !webhookUrl) {
-            throw new Error("--webhook must be a valid http(s) URL");
+            throw new CronCliError("--webhook must be a valid http(s) URL");
           }
           const hasWebhookDelivery = Boolean(webhookUrl);
           const deliveryModeFlagCount = [
@@ -177,14 +178,14 @@ export function registerCronEditCommand(cron: Command) {
             hasWebhookDelivery,
           ].filter(Boolean).length;
           if (deliveryModeFlagCount > 1) {
-            throw new Error("Choose at most one of --announce, --no-deliver, or --webhook.");
+            throw new CronCliError("Choose at most one of --announce, --no-deliver, or --webhook.");
           }
           const triggerScriptPath = normalizeOptionalString(opts.triggerScript);
           if (typeof opts.triggerScript === "string" && !triggerScriptPath) {
-            throw new Error("--trigger-script must not be blank");
+            throw new CronCliError("--trigger-script must not be blank");
           }
           if (opts.clearTrigger && (triggerScriptPath || opts.triggerOnce)) {
-            throw new Error("Use --clear-trigger or trigger options, not both");
+            throw new CronCliError("Use --clear-trigger or trigger options, not both");
           }
           // Local input errors must not depend on Gateway availability, even when
           // another edit field needs the existing job.
@@ -197,10 +198,10 @@ export function registerCronEditCommand(cron: Command) {
           }
           const displayName = normalizeOptionalString(opts.displayName);
           if (typeof opts.displayName === "string" && !displayName) {
-            throw new Error("--display-name must not be blank");
+            throw new CronCliError("--display-name must not be blank");
           }
           if (displayName && opts.clearDisplayName) {
-            throw new Error("Use --display-name or --clear-display-name, not both");
+            throw new CronCliError("Use --display-name or --clear-display-name, not both");
           }
           if (displayName) {
             patch.displayName = displayName;
@@ -212,7 +213,7 @@ export function registerCronEditCommand(cron: Command) {
             patch.description = opts.description;
           }
           if (opts.enable && opts.disable) {
-            throw new Error("Choose --enable or --disable, not both");
+            throw new CronCliError("Choose --enable or --disable, not both");
           }
           if (opts.enable) {
             patch.enabled = true;
@@ -221,7 +222,7 @@ export function registerCronEditCommand(cron: Command) {
             patch.enabled = false;
           }
           if (opts.deleteAfterRun && opts.keepAfterRun) {
-            throw new Error("Choose --delete-after-run or --keep-after-run, not both");
+            throw new CronCliError("Choose --delete-after-run or --keep-after-run, not both");
           }
           if (opts.deleteAfterRun) {
             patch.deleteAfterRun = true;
@@ -235,16 +236,16 @@ export function registerCronEditCommand(cron: Command) {
           if (typeof opts.wake === "string") {
             const wakeMode = opts.wake.trim();
             if (wakeMode !== "now" && wakeMode !== "next-heartbeat") {
-              throw new Error("--wake must be now or next-heartbeat");
+              throw new CronCliError("--wake must be now or next-heartbeat");
             }
             patch.wakeMode = wakeMode;
           }
           const agentId = normalizeOptionalString(opts.agent);
           if (typeof opts.agent === "string" && !agentId) {
-            throw new Error("--agent must not be blank");
+            throw new CronCliError("--agent must not be blank");
           }
           if (agentId && opts.clearAgent) {
-            throw new Error("Use --agent or --clear-agent, not both");
+            throw new CronCliError("Use --agent or --clear-agent, not both");
           }
           if (agentId) {
             patch.agentId = sanitizeAgentId(agentId);
@@ -254,10 +255,10 @@ export function registerCronEditCommand(cron: Command) {
           }
           const sessionKey = normalizeOptionalString(opts.sessionKey);
           if (typeof opts.sessionKey === "string" && !sessionKey) {
-            throw new Error("--session-key must not be blank");
+            throw new CronCliError("--session-key must not be blank");
           }
           if (sessionKey && opts.clearSessionKey) {
-            throw new Error("Use --session-key or --clear-session-key, not both");
+            throw new CronCliError("Use --session-key or --clear-session-key, not both");
           }
           if (sessionKey) {
             patch.sessionKey = sessionKey;
@@ -271,13 +272,13 @@ export function registerCronEditCommand(cron: Command) {
           const hasPacingMin = typeof opts.pacingMin === "string";
           const hasPacingMax = typeof opts.pacingMax === "string";
           if (hasPacingMin && !pacingMin) {
-            throw new Error("--pacing-min must not be blank");
+            throw new CronCliError("--pacing-min must not be blank");
           }
           if (hasPacingMax && !pacingMax) {
-            throw new Error("--pacing-max must not be blank");
+            throw new CronCliError("--pacing-max must not be blank");
           }
           if (opts.clearPacing && (hasPacingMin || hasPacingMax)) {
-            throw new Error("Use --clear-pacing or pacing bounds, not both");
+            throw new CronCliError("Use --clear-pacing or pacing bounds, not both");
           }
           if (opts.clearPacing) {
             patch.pacing = null;
@@ -301,7 +302,9 @@ export function registerCronEditCommand(cron: Command) {
           } else if (opts.triggerOnce) {
             const existing = await readExistingCronJob();
             if (!existing.trigger) {
-              throw new Error("--trigger-once requires an existing trigger or --trigger-script");
+              throw new CronCliError(
+                "--trigger-once requires an existing trigger or --trigger-script",
+              );
             }
             patch.trigger = { ...existing.trigger, once: true };
           }
@@ -368,7 +371,7 @@ export function registerCronEditCommand(cron: Command) {
           const hasFailureAlertMode = typeof opts.failureAlertMode === "string";
           const hasFailureAlertAccountId = typeof opts.failureAlertAccountId === "string";
           if (hasFailureAlertIncludeSkipped && hasFailureAlertExcludeSkipped) {
-            throw new Error(
+            throw new CronCliError(
               "Use either --failure-alert-include-skipped or --failure-alert-exclude-skipped.",
             );
           }
@@ -384,7 +387,9 @@ export function registerCronEditCommand(cron: Command) {
           const failureAlertFlag =
             typeof opts.failureAlert === "boolean" ? opts.failureAlert : undefined;
           if (failureAlertFlag === false && hasFailureAlertFields) {
-            throw new Error("Use --no-failure-alert alone (without failure-alert-* options).");
+            throw new CronCliError(
+              "Use --no-failure-alert alone (without failure-alert-* options).",
+            );
           }
           if (failureAlertFlag === false) {
             patch.failureAlert = false;
@@ -393,7 +398,9 @@ export function registerCronEditCommand(cron: Command) {
             if (hasFailureAlertAfter) {
               const after = parseStrictPositiveInteger(opts.failureAlertAfter);
               if (after === undefined) {
-                throw new Error("Invalid --failure-alert-after (must be a positive integer).");
+                throw new CronCliError(
+                  "Invalid --failure-alert-after (must be a positive integer).",
+                );
               }
               failureAlert.after = after;
             }
@@ -409,7 +416,7 @@ export function registerCronEditCommand(cron: Command) {
               try {
                 cooldownMs = parseDurationMs(String(opts.failureAlertCooldown));
               } catch {
-                throw new Error("Invalid --failure-alert-cooldown.");
+                throw new CronCliError("Invalid --failure-alert-cooldown.");
               }
               failureAlert.cooldownMs = cooldownMs;
             }
@@ -419,7 +426,9 @@ export function registerCronEditCommand(cron: Command) {
             if (hasFailureAlertMode) {
               const mode = normalizeOptionalLowercaseString(opts.failureAlertMode);
               if (mode !== "announce" && mode !== "webhook") {
-                throw new Error("Invalid --failure-alert-mode (must be 'announce' or 'webhook').");
+                throw new CronCliError(
+                  "Invalid --failure-alert-mode (must be 'announce' or 'webhook').",
+                );
               }
               failureAlert.mode = mode;
             }
