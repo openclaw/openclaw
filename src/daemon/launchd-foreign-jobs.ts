@@ -71,41 +71,46 @@ function lifecycleAction(args: string[]): GatewayAction | undefined {
     : undefined;
 }
 
+// Verify blank/comment lines, set -e/-u/-x/+e/+u/+x or -o pipefail, literal
+// openclaw_*/OPENCLAW_* assignments, then the first lifecycle call (optional
+// exec or resolved helper, no unresolved words). CR, heredocs, continuations,
+// control/substitution syntax and other preludes are report-only.
 function scriptActions(script: string): GatewayAction[] {
-  // A diagnostic is not a shell interpreter. Never mistake heredoc/documentation
-  // contents or multiline quoted strings for executable command positions.
-  if (script.includes("<<") || script.includes("\\\n") || /''|""/.test(script)) {
+  if (
+    script.includes("\r") ||
+    script.includes("<<") ||
+    script.includes("\\\n") ||
+    /''|""/.test(script)
+  ) {
     return [];
   }
-  const lines = script.split(/\r?\n/);
-  const parsed = lines.map((line) => splitShellArgs(line));
-  if (parsed.some((words) => words === null)) {
-    return [];
-  }
-  const actions = new Set<GatewayAction>();
   const variables = new Map<string, string>();
-  for (const [i, line] of lines.entries()) {
-    const words = parsed[i] ?? [];
+  for (const line of script.split("\n")) {
+    const words = splitShellArgs(line);
+    if (!words) {
+      return [];
+    }
     if (!words.length) {
       continue;
     }
     if (hasTopLevelShellControlOperator(line) || /`|\$\(/.test(line)) {
-      break;
+      return [];
+    }
+    const safeSet =
+      words[0] === "set" &&
+      words.length > 1 &&
+      (words.slice(1).every((word) => ["-e", "-u", "-x", "+e", "+u", "+x"].includes(word)) ||
+        (words.length === 3 && words[1] === "-o" && words[2] === "pipefail"));
+    if (safeSet) {
+      continue;
     }
     const assignmentWords = words[0] === "export" ? words.slice(1) : words;
     const assignment =
-      assignmentWords.length === 1 && assignmentWords[0]?.match(/^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/);
-    if (assignment) {
-      const [, name, value] = assignment;
-      if (!name || value === undefined || /[`$]/.test(value)) {
-        break;
-      }
-      // Shell-special parameters do not obey ordinary assignment semantics.
-      // Resolve only literal OpenClaw helper variables.
-      variables.delete(name);
-      if (/^(?:openclaw_|OPENCLAW_)/.test(name) && /^[A-Za-z0-9_./-]+$/.test(value)) {
-        variables.set(name, value);
-      }
+      assignmentWords.length === 1
+        ? assignmentWords[0]?.match(/^((?:openclaw_|OPENCLAW_)[A-Za-z0-9_]*)=([A-Za-z0-9_./-]+)$/)
+        : null;
+    if (assignment?.[1] && assignment[2]) {
+      variables.set(assignment[1], assignment[2]);
       continue;
     }
     const commandIndex = words[0] === "exec" ? 1 : 0;
@@ -120,32 +125,21 @@ function scriptActions(script: string): GatewayAction[] {
       words[commandIndex] = expandsCommand && name ? (variables.get(name) ?? "") : "";
     }
     if (words.some((word) => /[$`]/.test(word))) {
-      break;
+      return [];
     }
-    const action = lifecycleAction(words[0] === "exec" ? words.slice(1) : words);
-    if (action) {
-      actions.add(action);
-      continue;
-    }
-    // Stop at unknown execution/control flow rather than treating unreachable
-    // function/conditional bodies or a reassigned command variable as evidence.
-    const safeSet =
-      words[0] === "set" &&
-      words.length > 1 &&
-      (words.slice(1).every((word) => /^[+-][eux]+$/.test(word)) ||
-        (words.length === 3 && words[1] === "-o" && words[2] === "pipefail"));
+    const command = words[0] === "exec" ? words.slice(1) : words;
+    const executable = command[0] ?? "";
+    const cliName = path.basename(executable);
     if (
-      !safeSet &&
-      !(
-        words[0] === "exec" &&
-        !line.includes("$") &&
-        words.slice(1).every((word) => /^\d*>/.test(word))
-      )
+      !["openclaw", "openclaw.mjs"].includes(cliName) ||
+      (executable !== cliName && !path.isAbsolute(executable))
     ) {
-      break;
+      return [];
     }
+    const action = lifecycleAction(command);
+    return action ? [action] : [];
   }
-  return [...actions].toSorted();
+  return [];
 }
 
 async function readShellScript(args: string[]): Promise<string | undefined> {

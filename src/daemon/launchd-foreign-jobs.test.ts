@@ -112,6 +112,29 @@ describe("foreign launchd command classification", () => {
   it.each([
     ['#!/bin/sh\nopenclaw_bin="/opt/bin/openclaw"\n"$openclaw_bin" gateway restart\n', ["restart"]],
     [
+      '#!/bin/sh\r\nopenclaw_bin=/usr/local/bin/openclaw\r\n"$openclaw_bin" gateway restart\r\n',
+      [],
+    ],
+    ["#!/bin/sh\nopenclaw gateway restart\n# carriage return\r", []],
+    [
+      '#!/bin/bash\nset -e\nUID=1000\nopenclaw_bin=/usr/local/bin/openclaw\n"$openclaw_bin" gateway restart\n',
+      [],
+    ],
+    [
+      '#!/bin/sh\nPATH=/usr/local/bin\nopenclaw_bin=/usr/local/bin/openclaw\n"$openclaw_bin" gateway restart\n',
+      [],
+    ],
+    ["#!/bin/sh\nexport PATH=/usr/local/bin\nopenclaw gateway restart\n", []],
+    [
+      '#!/bin/sh\nexport OPENCLAW_BIN=/usr/local/bin/openclaw\n"$OPENCLAW_BIN" gateway restart\n',
+      ["restart"],
+    ],
+    ["#!/bin/sh\nset -e -u -x +e +u +x\nopenclaw gateway restart\n", ["restart"]],
+    ["#!/bin/sh\nset -eu\nopenclaw gateway restart\n", []],
+    ["#!/bin/sh\nexec >/dev/null\nopenclaw gateway restart\n", []],
+    ["#!/bin/sh\nUID=/usr/local/bin/openclaw gateway restart\n", []],
+    ["#!/bin/sh\nenv PATH=/usr/local/bin openclaw gateway restart\n", []],
+    [
       '#!/bin/sh\nset -u\nopenclaw_bin=/usr/local/bin/openclaw\n"$openclaw_bin" gateway restart --profile "$PROFILE"\nopenclaw gateway restart\n',
       [],
     ],
@@ -123,10 +146,7 @@ describe("foreign launchd command classification", () => {
       '#!/bin/sh\nset -u\nopenclaw_bin=/usr/local/bin/openclaw\n"$openclaw_bin" gateway restart --profile work\n',
       ["restart"],
     ],
-    [
-      "#!/bin/sh\n/opt/bin/openclaw gateway stop\n/opt/bin/openclaw gateway start\n",
-      ["start", "stop"],
-    ],
+    ["#!/bin/sh\n/opt/bin/openclaw gateway stop\n/opt/bin/openclaw gateway start\n", ["stop"]],
     ['#!/bin/sh\n# openclaw gateway restart\necho "openclaw gateway start"\n', []],
     ["#!/bin/sh\ncat <<EOF\nopenclaw gateway restart\nEOF\n", []],
     ['#!/bin/sh\necho "example:\nopenclaw gateway restart\n"\n', []],
