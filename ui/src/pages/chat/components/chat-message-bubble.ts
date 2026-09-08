@@ -1,6 +1,6 @@
 import { readSessionMessageIdentity } from "@openclaw/gateway-client/browser";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { html, nothing } from "lit";
+import { html, nothing, type TemplateResult } from "lit";
 import { ref } from "lit/directives/ref.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { CHAT_PENDING_INPUT_MESSAGE_PREFIX } from "../../../../../packages/gateway-protocol/src/schema/chat-history-constants.js";
@@ -249,6 +249,7 @@ export function renderGroupedMessage(
     fetchLinkFavicon?: LinkFaviconFetcher;
     githubRepo?: MarkdownRenderOptions["githubRepo"];
     onOpenWorkspaceFile?: (target: { path: string; line?: number | null }) => void;
+    avatar?: TemplateResult | typeof nothing;
     entryId?: string;
     /** Freshly submitted user turn: play the one-shot composer entry animation. */
     entryAnimated?: boolean;
@@ -453,6 +454,18 @@ export function renderGroupedMessage(
     !reasoningMarkdown;
 
   const toolRenderOptions = { ...opts, messageKey, onOpenSidebar };
+  const renderText = () =>
+    jsonResult
+      ? renderMessageJson(jsonResult, isStandaloneToolMessage && Boolean(opts.autoExpandToolCalls))
+      : bodyMarkdown
+        ? renderMessageMarkdown(
+            bodyMarkdown,
+            messageKey,
+            { ...opts, role: isStandaloneToolMessage ? "tool" : normalizedRole },
+            markdownRenderOptions,
+            duplicateSuffix,
+          )
+        : nothing;
   // Collapsed tool results must not load attachments or render hidden markdown.
   // Retained panes use opacity, so hidden transcripts must unmount video previews.
   const renderBody = () => html`
@@ -490,20 +503,9 @@ export function renderGroupedMessage(
     }
     ${isStandaloneToolMessage ? nothing : assistantViewContent}
     ${
-      jsonResult
-        ? renderMessageJson(
-            jsonResult,
-            isStandaloneToolMessage && Boolean(opts.autoExpandToolCalls),
-          )
-        : bodyMarkdown
-          ? renderMessageMarkdown(
-              bodyMarkdown,
-              messageKey,
-              { ...opts, role: isStandaloneToolMessage ? "tool" : normalizedRole },
-              markdownRenderOptions,
-              duplicateSuffix,
-            )
-          : nothing
+      opts.avatar
+        ? html`<div class="chat-message-avatar-anchor">${renderText()}${opts.avatar}</div>`
+        : renderText()
     }
     ${
       hasToolCards
