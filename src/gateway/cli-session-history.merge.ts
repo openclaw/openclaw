@@ -33,6 +33,7 @@ type TimestampSummary = {
   missingTimestampCursor: number;
   timestampedByOrder: ComparableHistoryMessage[];
   timestampedOrderCursor: number;
+  timestampRoot?: TimestampCandidateNode;
 };
 
 type RoleTextIndex = Map<string, Map<string, TimestampSummary>>;
@@ -40,6 +41,15 @@ type RoleTextIndex = Map<string, Map<string, TimestampSummary>>;
 type ConsumableCandidates = {
   entries: ComparableHistoryMessage[];
   cursor: number;
+};
+
+type TimestampCandidateNode = {
+  entry: ComparableHistoryMessage;
+  height: number;
+  minOrder: number;
+  maxOrder: number;
+  left?: TimestampCandidateNode;
+  right?: TimestampCandidateNode;
 };
 
 // Claude records CLI-injected @cache-path suffixes as user text. Keep the
@@ -176,6 +186,160 @@ function addTimestampToSummary(summary: TimestampSummary, entry: ComparableHisto
     return;
   }
   summary.timestampedByOrder.push(entry);
+  summary.timestampRoot = insertTimestampCandidate(summary.timestampRoot, entry);
+}
+
+function compareTimestampCandidates(
+  left: ComparableHistoryMessage,
+  right: ComparableHistoryMessage,
+): number {
+  const timestampDifference = (left.timestamp ?? 0) - (right.timestamp ?? 0);
+  return timestampDifference || left.order - right.order;
+}
+
+function timestampCandidateHeight(node: TimestampCandidateNode | undefined): number {
+  return node?.height ?? 0;
+}
+
+function updateTimestampCandidate(node: TimestampCandidateNode): void {
+  node.height =
+    Math.max(timestampCandidateHeight(node.left), timestampCandidateHeight(node.right)) + 1;
+  node.minOrder = Math.min(
+    node.entry.order,
+    node.left?.minOrder ?? Number.POSITIVE_INFINITY,
+    node.right?.minOrder ?? Number.POSITIVE_INFINITY,
+  );
+  node.maxOrder = Math.max(
+    node.entry.order,
+    node.left?.maxOrder ?? Number.NEGATIVE_INFINITY,
+    node.right?.maxOrder ?? Number.NEGATIVE_INFINITY,
+  );
+}
+
+function rotateTimestampCandidateLeft(root: TimestampCandidateNode): TimestampCandidateNode {
+  const next = root.right;
+  if (!next) {
+    return root;
+  }
+  root.right = next.left;
+  next.left = root;
+  updateTimestampCandidate(root);
+  updateTimestampCandidate(next);
+  return next;
+}
+
+function rotateTimestampCandidateRight(root: TimestampCandidateNode): TimestampCandidateNode {
+  const next = root.left;
+  if (!next) {
+    return root;
+  }
+  root.left = next.right;
+  next.right = root;
+  updateTimestampCandidate(root);
+  updateTimestampCandidate(next);
+  return next;
+}
+
+function balanceTimestampCandidate(root: TimestampCandidateNode): TimestampCandidateNode {
+  updateTimestampCandidate(root);
+  const balance = timestampCandidateHeight(root.left) - timestampCandidateHeight(root.right);
+  if (balance > 1) {
+    if (
+      root.left &&
+      timestampCandidateHeight(root.left.left) < timestampCandidateHeight(root.left.right)
+    ) {
+      root.left = rotateTimestampCandidateLeft(root.left);
+    }
+    return rotateTimestampCandidateRight(root);
+  }
+  if (balance < -1) {
+    if (
+      root.right &&
+      timestampCandidateHeight(root.right.right) < timestampCandidateHeight(root.right.left)
+    ) {
+      root.right = rotateTimestampCandidateRight(root.right);
+    }
+    return rotateTimestampCandidateLeft(root);
+  }
+  return root;
+}
+
+function insertTimestampCandidate(
+  root: TimestampCandidateNode | undefined,
+  entry: ComparableHistoryMessage,
+): TimestampCandidateNode {
+  if (!root) {
+    return { entry, height: 1, minOrder: entry.order, maxOrder: entry.order };
+  }
+  if (compareTimestampCandidates(entry, root.entry) < 0) {
+    root.left = insertTimestampCandidate(root.left, entry);
+  } else {
+    root.right = insertTimestampCandidate(root.right, entry);
+  }
+  return balanceTimestampCandidate(root);
+}
+
+function removeTimestampCandidate(
+  root: TimestampCandidateNode | undefined,
+  entry: ComparableHistoryMessage,
+): TimestampCandidateNode | undefined {
+  if (!root) {
+    return undefined;
+  }
+  const comparison = compareTimestampCandidates(entry, root.entry);
+  if (comparison < 0) {
+    root.left = removeTimestampCandidate(root.left, entry);
+  } else if (comparison > 0) {
+    root.right = removeTimestampCandidate(root.right, entry);
+  } else if (!root.left || !root.right) {
+    return root.left ?? root.right;
+  } else {
+    let successor = root.right;
+    while (successor.left) {
+      successor = successor.left;
+    }
+    root.entry = successor.entry;
+    root.right = removeTimestampCandidate(root.right, successor.entry);
+  }
+  return balanceTimestampCandidate(root);
+}
+
+function findFirstTimestampCandidateInRange(
+  root: TimestampCandidateNode | undefined,
+  minimumTimestamp: number,
+  maximumTimestamp: number,
+  minimumOrder: number,
+  maximumOrder = Number.POSITIVE_INFINITY,
+): ComparableHistoryMessage | undefined {
+  if (!root || root.maxOrder < minimumOrder || root.minOrder >= maximumOrder) {
+    return undefined;
+  }
+  const rootTimestamp = root.entry.timestamp ?? 0;
+  let best =
+    rootTimestamp >= minimumTimestamp &&
+    rootTimestamp <= maximumTimestamp &&
+    root.entry.order >= minimumOrder
+      ? root.entry
+      : undefined;
+  const left = rootTimestamp >= minimumTimestamp ? root.left : undefined;
+  const right = rootTimestamp <= maximumTimestamp ? root.right : undefined;
+  const [first, second] =
+    (left?.minOrder ?? Number.POSITIVE_INFINITY) <= (right?.minOrder ?? Number.POSITIVE_INFINITY)
+      ? [left, right]
+      : [right, left];
+  for (const child of [first, second]) {
+    const candidate = findFirstTimestampCandidateInRange(
+      child,
+      minimumTimestamp,
+      maximumTimestamp,
+      minimumOrder,
+      best?.order ?? maximumOrder,
+    );
+    if (candidate && (!best || candidate.order < best.order)) {
+      best = candidate;
+    }
+  }
+  return best;
 }
 
 function findTimestampMatch(
@@ -199,6 +363,10 @@ function findTimestampMatch(
     (summary.timestampedByOrder[summary.timestampedOrderCursor]?.order ??
       Number.POSITIVE_INFINITY) < minimumOrder
   ) {
+    const skipped = summary.timestampedByOrder[summary.timestampedOrderCursor];
+    if (skipped) {
+      summary.timestampRoot = removeTimestampCandidate(summary.timestampRoot, skipped);
+    }
     summary.timestampedOrderCursor += 1;
   }
   if (timestamp === undefined) {
@@ -230,27 +398,42 @@ function findTimestampMatch(
     }
     return candidate;
   }
-  // The order floor only moves forward. Once a later transcript row matches,
-  // earlier nonmatching rows cannot be assigned to a later import without
-  // reversing external identity order, so each candidate is examined once.
-  while (summary.timestampedOrderCursor < summary.timestampedByOrder.length) {
-    const candidate = summary.timestampedByOrder[summary.timestampedOrderCursor];
-    summary.timestampedOrderCursor += 1;
-    if (
-      candidate &&
-      !consumed.has(candidate) &&
-      candidate.timestamp !== undefined &&
-      Math.abs(candidate.timestamp - timestamp) <= DEDUPE_TIMESTAMP_WINDOW_MS
+  let timestamped = findFirstTimestampCandidateInRange(
+    summary.timestampRoot,
+    timestamp - DEDUPE_TIMESTAMP_WINDOW_MS,
+    timestamp + DEDUPE_TIMESTAMP_WINDOW_MS,
+    minimumOrder,
+  );
+  while (timestamped && consumed.has(timestamped)) {
+    summary.timestampRoot = removeTimestampCandidate(summary.timestampRoot, timestamped);
+    timestamped = findFirstTimestampCandidateInRange(
+      summary.timestampRoot,
+      timestamp - DEDUPE_TIMESTAMP_WINDOW_MS,
+      timestamp + DEDUPE_TIMESTAMP_WINDOW_MS,
+      minimumOrder,
+    );
+  }
+  if (timestamped) {
+    while (
+      summary.timestampedOrderCursor < summary.timestampedByOrder.length &&
+      (summary.timestampedByOrder[summary.timestampedOrderCursor]?.order ??
+        Number.POSITIVE_INFINITY) <= timestamped.order
     ) {
-      return candidate;
+      const skipped = summary.timestampedByOrder[summary.timestampedOrderCursor];
+      if (skipped) {
+        summary.timestampRoot = removeTimestampCandidate(summary.timestampRoot, skipped);
+      }
+      summary.timestampedOrderCursor += 1;
     }
+    return timestamped;
   }
   while (summary.missingTimestampCursor < summary.missingTimestamps.length) {
     const candidate = summary.missingTimestamps[summary.missingTimestampCursor];
-    summary.missingTimestampCursor += 1;
     if (candidate && !consumed.has(candidate)) {
+      summary.missingTimestampCursor += 1;
       return candidate;
     }
+    summary.missingTimestampCursor += 1;
   }
   return undefined;
 }

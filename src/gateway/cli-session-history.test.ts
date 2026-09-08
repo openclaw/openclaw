@@ -2335,6 +2335,28 @@ describe("cli session history", () => {
     );
   });
 
+  it("retains later timestamped matches after a timestamp-less fallback", () => {
+    const window = 5 * 60 * 1000;
+    const merged = mergeImportedChatHistoryMessages({
+      localMessages: [
+        { role: "assistant", content: "Repeated answer" },
+        { role: "assistant", content: "Repeated answer", timestamp: window * 2 },
+      ],
+      importedMessages: [
+        { role: "assistant", content: "Repeated answer", timestamp: 0 },
+        {
+          role: "assistant",
+          content: "Repeated answer",
+          timestamp: window * 2,
+          __openclaw: { importedFrom: "claude-cli", externalId: "later-id" },
+        },
+      ],
+    });
+
+    expect(merged).toHaveLength(2);
+    expect(readRecord(readRecord(merged[1])["__openclaw"]).externalId).toBe("later-id");
+  });
+
   it("prefers timestamped text matches before timestamp-less fallbacks", () => {
     const timestamp = Date.parse("2026-09-01T10:00:00Z");
     const merged = mergeImportedChatHistoryMessages({
