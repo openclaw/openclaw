@@ -4169,7 +4169,7 @@ surfaces:
       source_ref: null
       process_version: 3
   - id: control-ui
-    name: Gateway Web App
+    name: Control UI
     family: core
     level: beta
     level_code: M3

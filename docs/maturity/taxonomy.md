@@ -64,8 +64,8 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
       <span className="maturity-surface-meta"><span className="maturity-level-pill maturity-level-beta"><span className="maturity-level-code">M3</span><span>Beta</span></span><span>5 areas - 79% complete</span></span>
     </a>
 
-    <a className="maturity-surface-link" href="#gateway-web-app">
-      <span className="maturity-surface-title">Gateway Web App</span>
+    <a className="maturity-surface-link" href="#control-ui">
+      <span className="maturity-surface-title">Control UI</span>
       <span className="maturity-surface-meta"><span className="maturity-level-pill maturity-level-beta"><span className="maturity-level-code">M3</span><span>Beta</span></span><span>6 areas - 79% complete</span></span>
     </a>
 
@@ -1095,7 +1095,8 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
   </Accordion>
 
-  <Accordion title="Gateway Web App - M3 Beta - 6 areas">
+  <Accordion title="Control UI - M3 Beta - 6 areas">
+    <a id="control-ui" />
     <a id="gateway-web-app" />
 
     Web UI is documented with pairing, chat, PWA, Talk, push, and remote Gateway flows. Promote after cross-browser and mobile-PWA scorecards.
