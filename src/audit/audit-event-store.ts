@@ -142,7 +142,6 @@ function optionalHmacRef(row: AuditEventRow, value: unknown, field: string): str
 }
 function requireNull(row: AuditEventRow, field: keyof AuditEventRow): void { if (row[field] !== null) { corruptAuditRow(row, `unexpected ${field}`); } }
 function requireNullColumns(row: AuditEventRow, fields: readonly (keyof AuditEventRow)[]): void { for (const field of fields) { requireNull(row, field); } }
-}
 function parseAuditRecordBase(row: AuditEventRow) {
   const schemaVersion = requiredInteger(row, row.schema_version, "schemaVersion", 1);
   if (schemaVersion !== AUDIT_EVENT_SCHEMA_VERSION) {
