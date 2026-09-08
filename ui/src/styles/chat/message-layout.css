@@ -79,7 +79,7 @@
   transform: translateY(-50%);
 }
 
-/* Keep every message at 12px spacing. Long rails scroll within 45vh instead
+/* Keep every message at 6px spacing. Long rails scroll within 45vh instead
    of sampling messages or letting their marks overlap. */
 .chat-position-rail__marks {
   --chat-position-fade-top: 0px;
@@ -87,7 +87,7 @@
 
   position: relative;
   display: grid;
-  grid-auto-rows: 12px;
+  grid-auto-rows: 6px;
   max-height: min(45vh, calc(100cqh - 32px));
   overflow: hidden auto;
   overscroll-behavior: contain;
@@ -128,7 +128,7 @@
   display: flex;
   align-items: center;
   width: 44px;
-  height: 12px;
+  height: 6px;
   padding: 0;
   border: 0;
   border-radius: 0;
