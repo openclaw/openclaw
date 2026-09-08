@@ -206,6 +206,152 @@ describe.each(["chat", "new-session"] as const)("%s human mentions", (kind) => {
     });
   });
 
+  it("reuses complete searches while refining and restoring cached queries", async () => {
+    const view = composerFixture(kind);
+    const roster: UsersMentionableResult = {
+      users: [
+        { profileId: "harper", displayName: "Harper", online: true },
+        { profileId: "henry", displayName: "Henry", online: false },
+        { profileId: "robin", displayName: "Robin", online: false },
+      ],
+      truncated: false,
+    };
+    view.request.mockResolvedValue(roster);
+    view.edit("@");
+    await vi.advanceTimersByTimeAsync(150);
+    for (const [query, count] of [
+      ["@h", 2],
+      ["@ha", 1],
+      ["@h", 2],
+      ["@", 3],
+    ] as const) {
+      view.edit(query);
+      expect(view.container.querySelectorAll('[role="option"]')).toHaveLength(count);
+      await vi.advanceTimersByTimeAsync(150);
+    }
+    expect(view.request).toHaveBeenCalledTimes(1);
+    view.edit("@ha");
+    view.key("Enter");
+    expect(view.value()).toEqual({
+      draft: "@Harper ",
+      mentions: [{ profileId: "harper", start: 0, end: 7 }],
+    });
+  });
+
+  it.each([
+    {
+      label: "truncated",
+      query: "@ha",
+      result: {
+        users: [{ profileId: "harper", displayName: "Harper", online: true }],
+        truncated: true,
+      },
+    },
+    {
+      label: "unrelated",
+      query: "@r",
+      result: {
+        users: [{ profileId: "harper", displayName: "Harper", online: true }],
+        truncated: false,
+      },
+    },
+    {
+      label: "server-only match",
+      query: "@ha",
+      result: {
+        users: [{ profileId: "harper", displayName: "Robin", online: true }],
+        truncated: false,
+      },
+    },
+    {
+      label: "disambiguated name",
+      query: "@ha",
+      result: {
+        users: [{ profileId: "harper01", displayName: "Henry (harper01)", online: true }],
+        truncated: false,
+      },
+    },
+  ])("refetches $label queries and preserves exact cached results", async ({ query, result }) => {
+    const view = composerFixture(kind);
+    view.request.mockResolvedValueOnce(result).mockResolvedValue({ users: [], truncated: false });
+    view.edit("@h");
+    await vi.advanceTimersByTimeAsync(150);
+    expect(view.container.querySelectorAll('[role="option"]')).toHaveLength(1);
+    view.edit(query);
+    await vi.advanceTimersByTimeAsync(150);
+    expect(view.request).toHaveBeenCalledTimes(2);
+    expect(view.container.querySelectorAll('[role="option"]')).toHaveLength(0);
+    view.edit("@h");
+    expect(view.container.querySelectorAll('[role="option"]')).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(150);
+    expect(view.request).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps server-locale matching authoritative for case-sensitive query identities", async () => {
+    const view = composerFixture(kind);
+    const dotless = {
+      users: [{ profileId: "isik", displayName: "Işık", online: true }],
+      truncated: false,
+    };
+    const dotted = {
+      users: [{ profileId: "ipek", displayName: "İpek", online: true }],
+      truncated: false,
+    };
+    view.request.mockResolvedValueOnce(dotless).mockResolvedValueOnce(dotted);
+    view.edit("@I");
+    await vi.advanceTimersByTimeAsync(150);
+    view.edit("@i");
+    await vi.advanceTimersByTimeAsync(150);
+    expect(view.request).toHaveBeenCalledTimes(2);
+    expect(view.container.textContent).toContain("İpek");
+    expect(view.container.textContent).not.toContain("Işık");
+    view.edit("@I");
+    expect(view.container.textContent).toContain("Işık");
+    expect(view.request).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    ["Ipek", "i"],
+    ["J\u0301onas", "j\u0301"],
+  ])("refetches locale-sensitive names such as %s", async (displayName, query) => {
+    const view = composerFixture(kind);
+    view.request
+      .mockResolvedValueOnce({
+        users: [{ profileId: "person", displayName, online: true }],
+        truncated: false,
+      })
+      .mockResolvedValueOnce({ users: [], truncated: false });
+    view.edit("@");
+    await vi.advanceTimersByTimeAsync(150);
+    view.edit(`@${query}`);
+    await vi.advanceTimersByTimeAsync(150);
+    expect(view.request).toHaveBeenCalledTimes(2);
+    expect(view.container.querySelectorAll('[role="option"]')).toHaveLength(0);
+  });
+
+  it("fences late searches when restoring a cached query and clears snapshots on owner change", async () => {
+    const view = composerFixture(kind);
+    view.edit("@A");
+    await vi.advanceTimersByTimeAsync(150);
+    let resolve!: (result: UsersMentionableResult) => void;
+    view.request.mockReturnValueOnce(
+      new Promise((done) => {
+        resolve = done;
+      }),
+    );
+    view.edit("@B");
+    await vi.advanceTimersByTimeAsync(150);
+    view.edit("@A");
+    resolve({ users: [], truncated: false });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(view.container.querySelectorAll('[role="option"]')).toHaveLength(2);
+    expect(view.request).toHaveBeenCalledTimes(2);
+    view.replaceOwner();
+    view.edit("@A");
+    await vi.advanceTimersByTimeAsync(150);
+    expect(view.request).toHaveBeenCalledTimes(3);
+  });
+
   it("selects an offline same-name profile before Enter can send", async () => {
     const view = composerFixture(kind);
     view.edit("@Al", { data: "@Al" });
