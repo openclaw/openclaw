@@ -37,6 +37,8 @@ export function parseSkillSelectionAuditRow(row: SkillRow): SkillSelectionAuditE
     schemaVersion: AUDIT_EVENT_SCHEMA_VERSION,
     eventId: row.event_id,
     kind: "skill_selection",
+    actorType: "agent",
+    actorId: row.agent_id!,
     agentId: row.agent_id!,
     sessionKey: row.session_key ?? undefined,
     sessionId: row.session_id ?? undefined,
@@ -45,5 +47,5 @@ export function parseSkillSelectionAuditRow(row: SkillRow): SkillSelectionAuditE
     action: "skill.selection.observed",
     status: "observed",
     occurredAt: Number(row.occurred_at),
-  };
+  } as SkillSelectionAuditEventRecord;
 }
