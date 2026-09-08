@@ -11,6 +11,7 @@ import type { TelegramOutboundPromptContextMessage } from "./outbound-message-co
 import { isTelegramEmptyContentError, isTelegramHtmlParseError } from "./rich-plain-fallback.js";
 import type { TelegramApi } from "./send-context.js";
 import { isTelegramPhotoLimitError } from "./send-error-predicates.js";
+import { probeAudioDurationMs } from "./send.runtime.js";
 import { resolveTelegramVoiceSend } from "./voice.js";
 
 type TelegramLoadedMedia = Awaited<ReturnType<typeof loadWebMedia>>;
@@ -143,6 +144,7 @@ export function resolveTelegramOutboundMediaSenders<
   asVoice?: boolean;
   sendImageAsPhoto?: boolean;
 }): { sender: TelegramOutboundMediaSender<T>; documentSender: TelegramOutboundMediaSender<T> } {
+  let audioDurationMsPromise: Promise<number | undefined> | undefined;
   const createSender = (label: TelegramOutboundMediaKind): TelegramOutboundMediaSender<T> => {
     const operation = `send${label
       .split("_")
@@ -156,15 +158,19 @@ export function resolveTelegramOutboundMediaSenders<
     return {
       label,
       operation,
-      send: (effectiveParams) =>
-        method.call(
-          params.api,
-          params.chatId,
-          params.plan.file,
-          label === "document" && params.forceDocument
-            ? { ...effectiveParams, disable_content_type_detection: true }
-            : effectiveParams,
-        ),
+      send: async (effectiveParams) => {
+        const durationMs =
+          label === "voice" || label === "audio"
+            ? await (audioDurationMsPromise ??= probeAudioDurationMs(params.media.buffer))
+            : undefined;
+        return await method.call(params.api, params.chatId, params.plan.file, {
+          ...effectiveParams,
+          ...(durationMs ? { duration: Math.max(1, Math.round(durationMs / 1000)) } : {}),
+          ...(label === "document" && params.forceDocument
+            ? { disable_content_type_detection: true }
+            : {}),
+        });
+      },
     };
   };
   const documentSender = createSender("document");

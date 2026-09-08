@@ -5,6 +5,8 @@ import {
   asSafeIntegerInRange,
 } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
+import { withTempWorkspace } from "../infra/private-temp-workspace.js";
+import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { runFfprobe } from "./ffmpeg-exec.js";
 
 export type MediaProbeKind = Extract<MediaKind, "audio" | "video">;
@@ -144,7 +146,10 @@ function parseFfprobeMediaMetadata(
   };
 }
 
-function buildFfprobeMetadataArgs(protocol: "fd" | "pipe"): string[] {
+type FfprobeInput = { protocol: "fd" | "pipe" } | { protocol: "file"; filePath: string };
+
+function buildFfprobeMetadataArgs(input: FfprobeInput): string[] {
+  const protocol = input.protocol;
   const isFileDescriptor = protocol === "fd";
   return [
     "-v",
@@ -156,7 +161,7 @@ function buildFfprobeMetadataArgs(protocol: "fd" | "pipe"): string[] {
     "-of",
     "json",
     ...(isFileDescriptor ? ["-fd", "0"] : []),
-    isFileDescriptor ? "fd:" : "pipe:0",
+    protocol === "file" ? input.filePath : isFileDescriptor ? "fd:" : "pipe:0",
   ];
 }
 
@@ -177,7 +182,7 @@ async function probeMediaSource(
 ): Promise<PlaybackMediaProbeResult | null> {
   const runProbe = async (protocol: "fd" | "pipe") =>
     await runFfprobe(
-      buildFfprobeMetadataArgs(protocol),
+      buildFfprobeMetadataArgs({ protocol }),
       source.kind === "buffer"
         ? { input: source.buffer, ...options }
         : { stdinFileDescriptor: source.fd, ...options },
@@ -239,6 +244,31 @@ async function probeMediaFile(
   }
 }
 
+async function probeSeekableMediaBuffer(
+  buffer: Buffer,
+  kind: MediaProbeKind,
+): Promise<MediaProbeResult> {
+  try {
+    return await withTempWorkspace(
+      {
+        rootDir: resolvePreferredOpenClawTmpDir(),
+        prefix: "media-probe-",
+      },
+      async (workspace) => {
+        const filePath = await workspace.write("media", buffer);
+        return toMediaProbeResult(
+          parseFfprobeMediaMetadata(
+            await runFfprobe(buildFfprobeMetadataArgs({ protocol: "file", filePath })),
+            kind,
+          ),
+        );
+      },
+    );
+  } catch {
+    return {};
+  }
+}
+
 /** Probes a bounded batch under one elapsed-time budget, unaffected by wall-clock steps. */
 export async function probeMediaFilesWithinBudget(
   inputs: readonly MediaFileProbeInput[],
@@ -285,4 +315,9 @@ export async function probeVideoDimensions(buffer: Buffer): Promise<VideoDimensi
     await probeMediaSource({ kind: "buffer", buffer }, "video"),
   );
   return width && height ? { width, height } : undefined;
+}
+
+/** Positive audio duration in milliseconds. */
+export async function probeAudioDurationMs(buffer: Buffer): Promise<number | undefined> {
+  return (await probeSeekableMediaBuffer(buffer, "audio")).durationMs;
 }

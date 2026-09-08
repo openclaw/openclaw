@@ -86,7 +86,8 @@ const { imageMetadata } = vi.hoisted(() => ({
   },
 }));
 
-const { probeVideoDimensions } = vi.hoisted(() => ({
+const { probeAudioDurationMs, probeVideoDimensions } = vi.hoisted(() => ({
+  probeAudioDurationMs: vi.fn(),
   probeVideoDimensions: vi.fn(),
 }));
 
@@ -140,6 +141,7 @@ type TelegramSendTestMocks = {
   loadWebMedia: MockFn;
   maybePersistResolvedTelegramTarget: MockFn;
   imageMetadata: { width: number | undefined; height: number | undefined };
+  probeAudioDurationMs: MockFn;
   probeVideoDimensions: MockFn;
 };
 
@@ -217,6 +219,7 @@ vi.mock("./send.runtime.js", () => ({
   loadConfig,
   loadWebMedia,
   normalizePollInput,
+  probeAudioDurationMs,
   probeVideoDimensions,
   requireRuntimeConfig: vi.fn((cfg: unknown) => cfg ?? loadConfig()),
   resolveMarkdownTableMode,
@@ -238,6 +241,7 @@ export function getTelegramSendTestMocks(): TelegramSendTestMocks {
     loadWebMedia,
     maybePersistResolvedTelegramTarget,
     imageMetadata,
+    probeAudioDurationMs,
     probeVideoDimensions,
   };
 }
@@ -247,6 +251,8 @@ export function installTelegramSendTestHooks() {
     loadConfig.mockReturnValue({});
     resolveStorePath.mockReturnValue("/tmp/openclaw-telegram-send-tests.json");
     loadWebMedia.mockReset();
+    probeAudioDurationMs.mockReset();
+    probeAudioDurationMs.mockResolvedValue(undefined);
     probeVideoDimensions.mockReset();
     probeVideoDimensions.mockResolvedValue(undefined);
     imageMetadata.width = 1200;

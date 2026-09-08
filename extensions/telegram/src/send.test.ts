@@ -134,6 +134,7 @@ const {
   loadConfig,
   loadWebMedia,
   maybePersistResolvedTelegramTarget,
+  probeAudioDurationMs,
   probeVideoDimensions,
 } = getTelegramSendTestMocks();
 const telegramSendModule = await importTelegramSendModule();
@@ -4456,6 +4457,32 @@ describe("sendMessageTelegram", () => {
       );
       expect(notCalled, testCase.name).not.toHaveBeenCalled();
     }
+  });
+
+  it.each([
+    { name: "voice", contentType: "audio/ogg", fileName: "note.ogg", asVoice: true },
+    { name: "audio", contentType: "audio/mpeg", fileName: "track.mp3", asVoice: false },
+  ])("passes a rounded probed duration to durable $name sends", async (testCase) => {
+    const sendAudio = vi.fn().mockResolvedValue({ message_id: 11, chat: { id: "123" } });
+    const sendVoice = vi.fn().mockResolvedValue({ message_id: 11, chat: { id: "123" } });
+    probeAudioDurationMs.mockResolvedValueOnce(12_600);
+    mockLoadedMedia({
+      buffer: Buffer.from("audio"),
+      contentType: testCase.contentType,
+      fileName: testCase.fileName,
+    });
+
+    await sendMessageTelegram("123", "caption", {
+      cfg: TELEGRAM_TEST_CFG,
+      token: "tok",
+      api: makeTelegramApiTestMock({ sendAudio, sendVoice }),
+      mediaUrl: `https://example.com/${testCase.fileName}`,
+      asVoice: testCase.asVoice,
+    });
+
+    expect(probeAudioDurationMs).toHaveBeenCalledWith(Buffer.from("audio"));
+    const send = testCase.asVoice ? sendVoice : sendAudio;
+    expect(firstMockCall(send, `send ${testCase.name} call`)[2]).toMatchObject({ duration: 13 });
   });
 
   it("keeps message_thread_id for forum/private/group sends", async () => {

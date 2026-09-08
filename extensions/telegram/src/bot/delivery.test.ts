@@ -7,7 +7,8 @@ import { createTelegramPromptContextProjectionSequence } from "../prompt-context
 const { loadWebMedia } = vi.hoisted(() => ({
   loadWebMedia: vi.fn(),
 }));
-const { probeVideoDimensions } = vi.hoisted(() => ({
+const { probeAudioDurationMs, probeVideoDimensions } = vi.hoisted(() => ({
+  probeAudioDurationMs: vi.fn(),
   probeVideoDimensions: vi.fn(),
 }));
 const triggerInternalHook = vi.hoisted(() => vi.fn(async () => {}));
@@ -39,6 +40,7 @@ vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/media-runtime")>();
   return {
     ...actual,
+    probeAudioDurationMs,
     probeVideoDimensions,
   };
 });
@@ -320,6 +322,8 @@ function createVoiceFailureHarness(params: {
 describe("deliverReplies", () => {
   beforeEach(() => {
     loadWebMedia.mockClear();
+    probeAudioDurationMs.mockReset();
+    probeAudioDurationMs.mockResolvedValue(undefined);
     probeVideoDimensions.mockReset();
     probeVideoDimensions.mockResolvedValue(undefined);
     triggerInternalHook.mockReset();
@@ -1931,6 +1935,32 @@ describe("deliverReplies", () => {
       width: 720,
       height: 1280,
     });
+  });
+
+  it.each([
+    { name: "voice", contentType: "audio/ogg", fileName: "note.ogg", audioAsVoice: true },
+    { name: "audio", contentType: "audio/mpeg", fileName: "track.mp3", audioAsVoice: false },
+  ])("passes a rounded probed duration to streaming $name sends", async (testCase) => {
+    const runtime = createRuntime();
+    const sendAudio = vi.fn().mockResolvedValue({ message_id: 23, chat: { id: "123" } });
+    const sendVoice = vi.fn().mockResolvedValue({ message_id: 23, chat: { id: "123" } });
+    probeAudioDurationMs.mockResolvedValueOnce(12_600);
+    mockMediaLoad(testCase.fileName, testCase.contentType, "audio");
+
+    await deliverWith({
+      replies: [
+        {
+          mediaUrl: `https://example.com/${testCase.fileName}`,
+          audioAsVoice: testCase.audioAsVoice,
+        },
+      ],
+      runtime,
+      bot: createBot({ sendAudio, sendVoice }),
+    });
+
+    expect(probeAudioDurationMs).toHaveBeenCalledWith(Buffer.from("audio"));
+    const send = testCase.audioAsVoice ? sendVoice : sendAudio;
+    expect(mockCallArg(send, 0, 2)).toMatchObject({ duration: 13 });
   });
 
   it("does not probe GIF reply animations", async () => {
