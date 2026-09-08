@@ -574,7 +574,10 @@ function renderClawHubDetailDialog(props: SkillsProps) {
                       <div>${detail.skill.summary ?? ""}</div>
                       ${
                         detail.owner?.displayName || detail.latestVersion
-                          ? html`<div class="clawhub-skill-detail__meta muted">
+                          ? html`<div
+                              class="clawhub-skill-detail__meta muted"
+                              style="letter-spacing: normal;"
+                            >
                               ${
                                 detail.owner?.displayName
                                   ? html`${t("skillsPage.by")}
