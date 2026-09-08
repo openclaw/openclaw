@@ -49,6 +49,11 @@ describe("live test provider drift", () => {
         "Service temporarily unavailable. The model is at capacity and currently cannot serve this request.",
       ),
     ).toBe(true);
+    expect(
+      isLiveProviderUnavailableDrift(
+        "400 Error from provider (Console Go): Upstream request failed: Model is unavailable.",
+      ),
+    ).toBe(true);
   });
 
   it("returns explicit skip labels only for enabled drift classes", () => {
