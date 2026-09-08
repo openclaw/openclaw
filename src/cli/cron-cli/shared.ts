@@ -297,7 +297,7 @@ export async function warnIfCronSchedulerDisabled(opts: GatewayRpcOpts) {
     defaultRuntime.error(
       [
         "warning: the automations scheduler is disabled in the Gateway; jobs are saved but will not run automatically.",
-        "Re-enable with `cron.enabled: true` (or remove `cron.enabled: false`) and restart the Gateway.",
+        "To enable automatic runs, set `cron.enabled: true` (or remove `cron.enabled: false`), remove `OPENCLAW_SKIP_CRON=1` from the Gateway's launch environment, and restart the Gateway.",
         store ? `store: ${store}` : "",
       ]
         .filter(Boolean)
