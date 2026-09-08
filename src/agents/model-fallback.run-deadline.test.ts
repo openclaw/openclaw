@@ -48,10 +48,14 @@ describe("model fallback run deadline", () => {
     // enters the fallback chain holding only the grace window.
     expect((entry?.expiresAtMs ?? 0) - now).toBeLessThanOrEqual(TIMEOUT_MS);
 
+    const expiresAtAdmissionMs = entry?.expiresAtMs ?? 0;
+
+    let deadlineDuringPrimaryMs = 0;
     let remainingAtFallbackMs = 0;
     const run = vi
       .fn()
       .mockImplementationOnce(() => {
+        deadlineDuringPrimaryMs = entries.get(RUN_ID)?.expiresAtMs ?? 0;
         throw new FailoverError("primary timed out", { reason: "timeout" });
       })
       .mockImplementationOnce(() => {
@@ -70,8 +74,12 @@ describe("model fallback run deadline", () => {
 
     expect(result.result).toBe("ok");
     expect(run).toHaveBeenCalledTimes(2);
-    // Without renewal the fallback candidate starts with only the abort grace
-    // and is killed by the run deadline instead of being given a real attempt.
+    // The primary keeps the whole-run budget the owner configured: renewal is
+    // recovery-only, so a single-candidate run can never outlive its deadline.
+    expect(deadlineDuringPrimaryMs).toBe(expiresAtAdmissionMs);
+    // Only the fallback candidate is renewed. Without that renewal it starts
+    // with the spent remainder and is killed by the run deadline instead of
+    // being given a real attempt.
     expect(remainingAtFallbackMs).toBeGreaterThan(TIMEOUT_MS);
   });
 

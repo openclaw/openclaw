@@ -271,11 +271,13 @@ export async function runFallbackAttempt<T>(params: {
   // after an awaited failure callback aborts the caller.
   if (params.attempt > 1) {
     params.abortSignal?.throwIfAborted();
+    // Recovery only. The run owner sizes the whole-run deadline for a single
+    // attempt, so a candidate that follows a timed-out primary would otherwise
+    // inherit only the abort grace window and be killed by the run deadline
+    // instead of running. The primary is never renewed, so a run that never
+    // reaches a fallback candidate keeps exactly its configured budget.
+    renewAgentRunDeadline(params.attribution?.runId);
   }
-  // The run owner sizes the whole-run deadline for a single attempt, so a
-  // candidate that follows a timed-out primary would otherwise inherit only the
-  // abort grace window and be killed by the run deadline instead of running.
-  renewAgentRunDeadline(params.attribution?.runId);
   const runResult = await runFallbackCandidate(params);
   const classification = runResult.ok
     ? await params.classifyResult?.({
