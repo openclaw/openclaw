@@ -58,6 +58,7 @@ const loadTalkAgentExecution = createLazyRuntimeModule(async () => {
 function createTalkClientAgentRuntime(params: {
   config: OpenClawConfig;
   rawSourceRef?: string;
+  assertCurrent?: () => void;
   bindOperationalRunInstance?: (instance: OperationalRunInstanceRef) => void;
 }) {
   const agentRuntime = createPluginRuntime().agent;
@@ -70,6 +71,7 @@ function createTalkClientAgentRuntime(params: {
       throw new Error("Talk consult requires its prepared transcript target");
     }
     const operationalRunInstance = execution.createOperationalRunInstanceRef(runParams.runId);
+    params.assertCurrent?.();
     params.bindOperationalRunInstance?.(operationalRunInstance);
     const preparedRunAdmission = execution.prepareAgentRunAdmission({
       cfg: params.config,
@@ -209,14 +211,18 @@ export function createTalkClientAgentConsultRunner(params: {
     voiceSessionId?: string;
   };
   let promptOwner: PromptOwner | undefined;
-  const createOwnedAgentRuntime = (owner: PromptOwner) =>
+  const createOwnedAgentRuntime = (owner: PromptOwner, assertCurrent?: () => void) =>
     createTalkClientAgentRuntime({
       config: params.config,
       ...(params.ownerConnId ? { rawSourceRef: params.ownerConnId } : {}),
+      assertCurrent,
       bindOperationalRunInstance: (instance) => {
+        const identity = owner.identity;
         if (
           promptOwner !== owner ||
-          owner.identity?.runId !== instance.runId ||
+          !identity ||
+          identity.runId !== instance.runId ||
+          owner.isCurrent?.(identity.sessionId) !== true ||
           owner.completionClaim?.bindOperationalRunInstance(instance) !== true
         ) {
           throw new Error("The active Talk consult admission is no longer current");
@@ -255,7 +261,15 @@ export function createTalkClientAgentConsultRunner(params: {
           confirmationId: parsedArgs.confirmationId,
         })
       : undefined;
-    const runtime = owner ? createOwnedAgentRuntime(owner) : getAgentRuntime();
+    const runtime = owner
+      ? createOwnedAgentRuntime(owner, assertCurrent)
+      : assertCurrent
+        ? createTalkClientAgentRuntime({
+            config: params.config,
+            ...(params.ownerConnId ? { rawSourceRef: params.ownerConnId } : {}),
+            assertCurrent,
+          })
+        : getAgentRuntime();
     const talkConfig = normalizeTalkSection(params.config.talk);
     // A voice turn outlives offer setup and must drain under its own root,
     // while new turns still respect suspension and restart admission.

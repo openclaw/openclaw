@@ -85,6 +85,7 @@ const coreParams = {
 function createRunner(
   registerRun = vi.fn(),
   authority: TalkAgentConsultAuthority = { senderIsOwner: false, toolsAllow: ["read"] },
+  options: { ownerConnId?: string; isRunCurrent?: (runId: string) => boolean } = {},
 ) {
   return createTalkClientAgentConsultRunner({
     config,
@@ -99,6 +100,7 @@ function createRunner(
     getVoiceSessionId: () => "voice-session",
     initialItems: [],
     registerRun,
+    ...options,
   });
 }
 
@@ -797,7 +799,7 @@ describe("Talk client agent consult admission", () => {
       expect(mocks.controlRealtimeVoiceAgentRun).not.toHaveBeenCalled();
       ready.resolve();
       await steering;
-      expect(assertCurrent).toHaveBeenCalledOnce();
+      expect(assertCurrent).toHaveBeenCalledTimes(2);
       expect(mocks.consultRealtimeVoiceAgent).toHaveBeenCalledOnce();
       expect(mocks.controlRealtimeVoiceAgentRun).toHaveBeenCalledOnce();
       finish.resolve();
@@ -828,6 +830,43 @@ describe("Talk client agent consult admission", () => {
     await expect(run).rejects.toThrow("not active");
     expect(assertCurrent).toHaveBeenCalledOnce();
     expect(mocks.consultRealtimeVoiceAgent).not.toHaveBeenCalled();
+  });
+
+  it("rechecks reusable ownership at embedded-run admission", async () => {
+    let current = true;
+    const assertCurrent = vi.fn(() => {
+      if (!current) {
+        throw new Error("Realtime voice session is not active");
+      }
+    });
+    mocks.createOperationalRunInstanceRef.mockImplementationOnce((runId: string) => {
+      current = false;
+      return { instanceId: `instance:${runId}`, runId };
+    });
+
+    await expect(
+      createRunner().runArgs({ question: "first task" }, undefined, assertCurrent),
+    ).rejects.toThrow("not active");
+    expect(assertCurrent).toHaveBeenCalledTimes(2);
+    expect(mocks.prepareAgentRunAdmission).not.toHaveBeenCalled();
+  });
+
+  it("rechecks owned run identity at embedded-run admission", async () => {
+    let current = true;
+    mocks.createOperationalRunInstanceRef.mockImplementationOnce((runId: string) => {
+      current = false;
+      return { instanceId: `instance:${runId}`, runId };
+    });
+    const runner = createRunner(vi.fn(), undefined, {
+      ownerConnId: "connection-owner",
+      isRunCurrent: () => current,
+    });
+    runner.runPrompt.adoptCompletionClaims();
+
+    await expect(runner.runPrompt({ prompt: "first task" })).rejects.toThrow(
+      "admission is no longer current",
+    );
+    expect(mocks.prepareAgentRunAdmission).not.toHaveBeenCalled();
   });
 
   it("closes the Talk admission when core execution fails", async () => {
