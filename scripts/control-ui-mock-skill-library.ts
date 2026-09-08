@@ -234,7 +234,6 @@ function installSkillLibraryMock(
         params.slug = upload.slug;
         params.content = `---\nname: ${upload.slug}\ndescription: Imported archive fixture\n---\n\nReview the source material before drafting.\n`;
         params.files = [];
-        method = "skills.library.save";
       }
     }
 
@@ -284,7 +283,10 @@ function installSkillLibraryMock(
       revisions: [],
     };
     read.entry = { ...read.entry, slug, revision, updatedAt: Date.now() };
-    if (method === "skills.library.save") {
+    if (
+      method === "skills.library.save" ||
+      (method === "skills.library.upload" && params.action === "commit")
+    ) {
       read.content = params.content ?? "";
       read.files = params.files ?? [];
     }

@@ -143,7 +143,7 @@ export function buildPluginCatalogMock() {
 }
 
 /** Parameterized plugins.inspect fixtures for the consent dialog and detail overlay. */
-export function buildPluginInspectMock() {
+function buildPluginInspectMock() {
   const emptyDeclared: PluginDeclaredSurface = {
     channels: [],
     providers: [],
@@ -273,7 +273,7 @@ function installPluginLifecycleMock(
   const details = new Map(inspections.cases.map((entry) => [entry.match.pluginId, entry.response]));
   let discordConsented = false;
   gateway.setRequestHandler("plugins.search", ({ params, respond }) => {
-    const query = String((params as { query?: string }).query ?? "").toLowerCase();
+    const query = ((params as { query?: string }).query ?? "").toLowerCase();
     respond({
       results: catalog.plugins
         .filter((plugin) => plugin.install && plugin.name.toLowerCase().includes(query))

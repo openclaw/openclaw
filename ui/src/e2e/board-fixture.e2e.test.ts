@@ -465,11 +465,14 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
           try {
             return await new Promise<SkillWorkshopDiffResponse["diff"]["stat"]>(
               (resolve, reject) => {
-                worker.onmessage = ({ data }: MessageEvent<SkillWorkshopDiffResponse>) =>
-                  resolve(data.diff.stat);
-                worker.onerror = () =>
-                  reject(new Error("The local Workshop worker could not run."));
-                worker.postMessage({ id: 1, previous: "Before\n", current: "After\n" });
+                worker.addEventListener(
+                  "message",
+                  ({ data }: MessageEvent<SkillWorkshopDiffResponse>) => resolve(data.diff.stat),
+                );
+                worker.addEventListener("error", () =>
+                  reject(new Error("The local Workshop worker could not run.")),
+                );
+                worker.postMessage({ id: 1, previous: "Before\n", current: "After\n" }, []);
               },
             );
           } finally {
