@@ -2849,9 +2849,9 @@ describe("openclaw state database", () => {
       expect(collectSqliteSchemaShape(migrated.db).gateway_origin_device_tokens).toEqual(
         createInitialStateSchemaShape().gateway_origin_device_tokens,
       );
-      const cronColumns = migrated.db.prepare("PRAGMA table_info(cron_jobs)").all() as Array<{
-        name: string;
-      }>;
+      type NamedColumn = { name: string };
+      const stateDb = migrated.db;
+      const cronColumns = stateDb.prepare("PRAGMA table_info(cron_jobs)").all() as NamedColumn[];
       expect(cronColumns.map((column) => column.name)).toEqual([
         "store_key",
         "job_id",
@@ -2861,8 +2861,9 @@ describe("openclaw state database", () => {
         "description",
         "enabled",
         "agent_id",
-        "payload_kind",
-        "job_json",
+        ..."payload_kind job_json grant_definition_revision grant_definition_generation grant_definition_updated_at".split(
+          " ",
+        ),
         "state_json",
         "runtime_updated_at_ms",
         "schedule_identity",

@@ -91,7 +91,7 @@ export function commitCronRuntimeRows<T>(params: {
         const row = rowsByJobId.get(jobId);
         const job = jobs.get(jobId);
         if (row && job && !deleteJobIds.includes(jobId)) {
-          upsertCronJobRow(db, storeKey, job, row.sort_order);
+          upsertCronJobRow(db, storeKey, job, row.sort_order, { knownExistingRow: row });
         }
       }
       if (runHooks) {

@@ -5,7 +5,13 @@ import { getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../../state/openclaw-state-db.generated.js";
 
 type CronJobsTable = OpenClawStateKyselyDatabase["cron_jobs"];
-type CronStoreDatabase = Pick<OpenClawStateKyselyDatabase, "cron_job_scratch" | "cron_jobs">;
+type CronStoreDatabase = Pick<
+  OpenClawStateKyselyDatabase,
+  | "cron_job_scratch"
+  | "cron_jobs"
+  | "operator_approval_standing_grants"
+  | "operator_approval_standing_grant_generations"
+>;
 
 // Keep native integer conversion in the table's column order.
 export const CRON_JOB_READ_COLUMNS = [
@@ -15,6 +21,9 @@ export const CRON_JOB_READ_COLUMNS = [
   "agent_id",
   "payload_kind",
   "job_json",
+  "grant_definition_revision",
+  "grant_definition_generation",
+  "grant_definition_updated_at",
   "state_json",
   "runtime_updated_at_ms",
   "schedule_identity",

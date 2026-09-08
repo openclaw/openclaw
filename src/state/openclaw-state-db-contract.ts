@@ -43,6 +43,7 @@ export const FIRST_USE_STATE_TABLES = [
   "node_worker_turns",
   "operator_approval_execution_identities",
   "operator_approval_standing_grants",
+  "operator_approval_standing_grant_generations",
   "web_push_approval_deliveries",
   "execution_decision_facts",
   "execution_owner_lifecycle_bindings",
