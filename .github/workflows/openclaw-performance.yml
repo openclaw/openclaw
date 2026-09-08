@@ -119,7 +119,9 @@ jobs:
         with:
           ref: ${{ inputs.target_ref || github.sha }}
           path: .artifacts/performance-target
-          sparse-checkout: src/config/zod-schema.agent-defaults.ts
+          sparse-checkout: |
+            package.json
+            src/config/zod-schema.agent-defaults.ts
           sparse-checkout-cone-mode: false
           fetch-depth: 1
           persist-credentials: false
@@ -148,6 +150,18 @@ jobs:
 
           kova_ref="${KOVA_REF_INPUT:-}"
           kova_config_contract="${KOVA_CONFIG_CONTRACT_INPUT:-}"
+          if [[ -z "$kova_ref" ]]; then
+            target_version="$(node -e '
+              const fs = require("node:fs");
+              const version = JSON.parse(fs.readFileSync(process.argv[1], "utf8")).version;
+              if (typeof version !== "string") process.exit(1);
+              process.stdout.write(version);
+            ' "$TARGET_CHECKOUT_DIR/package.json")"
+            if [[ "$target_version" == "2026.7.33" ]]; then
+              # Kova #116 carries the historical 250% status CLI calibration for this release only.
+              kova_ref="70ea2c5a3bdd206937b4a0bd7460a19a69d8c52a"
+            fi
+          fi
           if [[ "$kova_ref" == *$'\n'* || "$kova_ref" == *$'\r'* ]]; then
             echo "::error::kova_ref must be a single line."
             exit 1
