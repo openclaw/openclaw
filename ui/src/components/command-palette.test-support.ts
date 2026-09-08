@@ -1,5 +1,4 @@
 import { vi } from "vitest";
-import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { SessionsListResult } from "../api/types.ts";
 import type { RouteId } from "../app-route-paths.ts";
 import { createAgentSelectionCapability } from "../app/agent-selection.ts";
@@ -9,7 +8,10 @@ import type {
   ApplicationGatewaySnapshot,
 } from "../app/context.ts";
 import { createApplicationContextProvider } from "../test-helpers/application-context.ts";
-import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
+import {
+  createTestGatewayClient,
+  type GatewayRequestHandler,
+} from "../test-helpers/gateway-client.ts";
 import type { CommandPalette } from "./command-palette.ts";
 
 type GatewayHarness = {
@@ -20,7 +22,7 @@ type GatewayHarness = {
 
 export function createGateway(
   connected: boolean,
-  options: { methods?: string[]; request?: GatewayBrowserClient["request"] } = {},
+  options: { methods?: string[]; request?: GatewayRequestHandler } = {},
 ): GatewayHarness {
   const client = createTestGatewayClient(options.request ?? (() => ({ models: [] })));
   let snapshot: ApplicationGatewaySnapshot = {

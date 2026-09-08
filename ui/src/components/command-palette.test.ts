@@ -8,7 +8,6 @@ import type { SessionsListResult } from "../api/types.ts";
 import type { RouteId } from "../app-route-paths.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { subscribeNativeOverlayOcclusion } from "../lib/native-overlay-occlusion.ts";
-import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
 import { installDialogPolyfill } from "../test-helpers/modal-dialog.ts";
 import {
   createContext,
@@ -195,7 +194,7 @@ describe("CommandPalette lifecycle", () => {
       );
       const { gateway } = createGateway(true, {
         methods: ["sessions.search"],
-        request: createTestGatewayClient(request).request,
+        request,
       });
       const { palette } = await mountPalette(createContext(gateway, list));
 
@@ -249,7 +248,7 @@ describe("CommandPalette lifecycle", () => {
       );
       const { gateway } = createGateway(true, {
         methods: ["sessions.search"],
-        request: createTestGatewayClient(request).request,
+        request,
       });
       const context = createContext(gateway, list);
       context.agentSelection.set(agentId);
@@ -286,7 +285,7 @@ describe("CommandPalette lifecycle", () => {
     });
     const { gateway } = createGateway(true, {
       methods: ["sessions.search"],
-      request: createTestGatewayClient(request).request,
+      request,
     });
     const { palette } = await mountPalette(createContext(gateway, list));
 
@@ -342,7 +341,7 @@ describe("CommandPalette lifecycle", () => {
     );
     const { gateway } = createGateway(true, {
       methods: ["sessions.search"],
-      request: createTestGatewayClient(request).request,
+      request,
     });
     const { palette } = await mountPalette(createContext(gateway, list));
 
@@ -381,7 +380,7 @@ describe("CommandPalette lifecycle", () => {
     });
     const { gateway } = createGateway(true, {
       methods: ["cron.list"],
-      request: createTestGatewayClient(request).request,
+      request,
     });
     const empty = { ...createSessionResult("agent:main:none", "None"), sessions: [] };
     const { palette } = await mountPalette(
@@ -884,7 +883,7 @@ describe("CommandPalette lifecycle", () => {
     );
     const { gateway } = createGateway(true, {
       methods: ["sessions.search"],
-      request: createTestGatewayClient(request).request,
+      request,
     });
     const { palette } = await mountPalette(createContext(gateway, list));
 

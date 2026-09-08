@@ -105,13 +105,9 @@ describe("ModelProvidersPage catalog discovery", () => {
       expect(page.textContent).toContain(warning);
       expect(page.data?.config).toEqual(savedModelConfig);
       expect(runtimeConfig.patch).not.toHaveBeenCalled();
-      expect(
-        request.mock.calls
-          .filter(([method]) => method === "models.list")
-          .map(([, params]) => params),
-      ).toEqual([
-        { agentId: "main", view: "configured" },
-        { agentId: "main", view: "configured", refresh: true },
+      expect(request.mock.calls.filter(([method]) => method === "models.list")).toEqual([
+        ["models.list", { agentId: "main", view: "configured" }, expect.anything()],
+        ["models.list", { agentId: "main", view: "configured", refresh: true }, expect.anything()],
       ]);
     },
   );
