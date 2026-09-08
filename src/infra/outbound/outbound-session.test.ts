@@ -100,6 +100,26 @@ describe("resolveOutboundSessionRoute", () => {
     expect(route?.displayName).toBe("Alice");
   });
 
+  it("keeps directory identifier fallbacks out of durable session names", async () => {
+    const roomId = "8f560ffb-37e2-4078-a6c4-83e4d72e94b3";
+    const route = await resolveOutboundSessionRoute({
+      cfg: perChannelPeerSessionCfg,
+      channel: "telegram",
+      plugin: telegramRoutePlugin,
+      agentId: "main",
+      target: `group:${roomId}`,
+      resolvedTarget: {
+        to: `group:${roomId}`,
+        kind: "group",
+        display: roomId,
+        source: "directory",
+        resolutionSource: "directory",
+      },
+    });
+
+    expect(route?.displayName).toBeUndefined();
+  });
+
   it("carries an iMessage plugin contact alias into the session route", async () => {
     const route = await resolveOutboundSessionRoute({
       cfg: perChannelPeerSessionCfg,

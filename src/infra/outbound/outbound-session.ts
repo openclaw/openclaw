@@ -222,13 +222,23 @@ function resolveFallbackSession(
 
 function resolveOutboundSessionDisplayName(params: ResolveOutboundSessionRouteParams) {
   const resolvedTarget = params.resolvedTarget;
-  if (
-    resolvedTarget?.resolutionSource !== "directory" &&
-    !(params.channel === "imessage" && resolvedTarget?.resolutionSource === "plugin")
-  ) {
+  const displayName = normalizeOptionalString(resolvedTarget?.display);
+  if (!displayName) {
     return undefined;
   }
-  return normalizeOptionalString(resolvedTarget.display);
+  if (params.channel === "imessage" && resolvedTarget?.resolutionSource === "plugin") {
+    return displayName;
+  }
+  if (resolvedTarget?.resolutionSource !== "directory") {
+    return undefined;
+  }
+  const target = stripProviderPrefix(resolvedTarget.to, params.channel).trim();
+  const identifier = stripKindPrefix(target);
+  const normalizedDisplay = normalizeLowercaseStringOrEmpty(displayName);
+  const identifierDisplays = uniqueStrings([resolvedTarget.to, target, identifier])
+    .map(normalizeLowercaseStringOrEmpty)
+    .filter(Boolean);
+  return identifierDisplays.includes(normalizedDisplay) ? undefined : displayName;
 }
 
 /** Resolves the session route used to mirror outbound delivery into conversation state. */
