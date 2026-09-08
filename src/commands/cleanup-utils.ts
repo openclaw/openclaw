@@ -77,7 +77,7 @@ export async function moveToTrashResult(
     const targetPath = path.resolve(pathname);
     const sourcePath = await resolveMoveToTrashSourcePath(targetPath);
     const allowedRoots = trashAllowedRoots(
-      sourcePath,
+      [sourcePath],
       isSymbolicLink ? await resolveSymlinkTargetPath(sourcePath) : undefined,
     );
     // Preparation can outlive its owner; revalidate immediately before Trash dispatch.
@@ -100,14 +100,18 @@ export async function moveToTrash(
 }
 
 /**
- * Allowed Trash roots for an OpenClaw-owned path: its own parent, plus the resolved
- * parent when the path is a symlink (fs-safe checks the link target). The fs-safe
- * default (home + tmp) would refuse state dirs on volumes such as `/data`.
+ * Allowed Trash roots for OpenClaw-owned paths: each declared path's own parent, plus the
+ * resolved parent when the moved path is a symlink (fs-safe checks the link target, and
+ * moving a link never touches the directory behind it). fs-safe's default roots (home + tmp)
+ * alone refuse every path of a state dir on a volume such as `/data`.
  */
-export function trashAllowedRoots(targetPath: string, resolvedTargetPath?: string): string[] {
-  const roots = [path.dirname(targetPath)];
-  if (resolvedTargetPath !== undefined) {
-    roots.push(path.dirname(resolvedTargetPath));
+export function trashAllowedRoots(
+  declaredPaths: readonly string[],
+  resolvedLinkPath?: string,
+): string[] {
+  const roots = declaredPaths.map((declaredPath) => path.dirname(declaredPath));
+  if (resolvedLinkPath !== undefined) {
+    roots.push(path.dirname(resolvedLinkPath));
   }
   return [...new Set(roots)];
 }

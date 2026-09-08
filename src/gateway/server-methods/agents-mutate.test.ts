@@ -311,10 +311,12 @@ vi.mock("../../plugin-sdk/browser-maintenance.js", () => ({
   movePathToTrash: mocks.movePathToTrash,
 }));
 
-function expectTrashedWithinParent(pathname: string): void {
+function expectTrashedWithinParent(pathname: string, declaredPath = pathname): void {
   expect(mocks.movePathToTrash).toHaveBeenCalledWith(
     pathname,
-    expect.objectContaining({ allowedRoots: expect.arrayContaining([path.dirname(pathname)]) }),
+    expect.objectContaining({
+      allowedRoots: expect.arrayContaining([path.dirname(declaredPath)]),
+    }),
   );
 }
 
@@ -2007,7 +2009,7 @@ describe("agents.delete", () => {
     });
     expect(mocks.movePathToTrash).not.toHaveBeenCalledWith(agentLink);
     expect(mocks.movePathToTrash).not.toHaveBeenCalledWith("/deep");
-    expectTrashedWithinParent(agentTarget);
+    expectTrashedWithinParent(agentTarget, agentLink);
     expect(mocks.unregisterResolvedAgentDir).not.toHaveBeenCalled();
     expect(mocks.beginAgentDeletionFinish).not.toHaveBeenCalled();
   });
@@ -2137,8 +2139,8 @@ describe("agents.delete", () => {
     expect(trashedPaths.indexOf(`${workspaceTarget}/agent`)).toBeLessThan(targetIndex);
     expect(trashedPaths.indexOf(`${workspaceTarget}/transcripts`)).toBeLessThan(targetIndex);
     expect(targetIndex).toBeLessThan(trashedPaths.indexOf(canonicalWorkspaceLink));
-    expectTrashedWithinParent(workspaceTarget);
-    expectTrashedWithinParent(canonicalWorkspaceLink);
+    expectTrashedWithinParent(workspaceTarget, workspaceLink);
+    expectTrashedWithinParent(canonicalWorkspaceLink, workspaceLink);
     expect(mocks.movePathToTrash).not.toHaveBeenCalledWith(workspaceLink);
     expect(mocks.beginAgentDeletionFinish).toHaveBeenCalledOnce();
   });
@@ -2235,7 +2237,7 @@ describe("agents.delete", () => {
     expect(mocks.fsRealpath).not.toHaveBeenCalled();
     expect(mocks.movePathToTrash).not.toHaveBeenCalledWith(retargetedWorkspace);
     expect(mocks.movePathToTrash).not.toHaveBeenCalledWith(`${retargetedWorkspace}/transcripts`);
-    expectTrashedWithinParent(originalTarget);
+    expectTrashedWithinParent(originalTarget, workspaceLink);
     expectTrashedWithinParent(workspaceLink);
     expect(mocks.beginAgentDeletionFinish).toHaveBeenCalledOnce();
   });
