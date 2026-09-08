@@ -35,6 +35,8 @@ export type OpenClawAgentDatabase = {
 /** Options for resolving and opening one agent database. */
 export type OpenClawAgentDatabaseOptions = OpenClawStateDatabaseOptions & {
   agentId: string;
+  /** Skip the whole-file integrity check for routine opens on healthy, current-schema databases. */
+  skipIntegrityCheck?: boolean;
 };
 
 /** Shared-state registry row describing an agent database seen by this process. */

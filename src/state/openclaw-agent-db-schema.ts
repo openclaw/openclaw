@@ -485,6 +485,7 @@ export function* agentDatabaseIntegrityBeforeMutationSteps(
   agentId: string,
   pathname: string,
   diagnostics?: SqliteIntegrityDiagnostics,
+  options?: { skipIntegrityCheck?: boolean },
 ): SqliteIntegrityOperation<boolean> {
   database.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
   const userVersion = readSqliteUserVersion(database);
@@ -516,6 +517,7 @@ export function* agentDatabaseIntegrityBeforeMutationSteps(
       validateAfterRepair: () =>
         assertOpenClawAgentCurrentRuntimeSchema(database, { agentId, pathname }),
       diagnostics,
+      skipIntegrityCheck: options?.skipIntegrityCheck,
     });
     assertOpenClawAgentCurrentRuntimeSchema(database, { agentId, pathname });
   } else if (

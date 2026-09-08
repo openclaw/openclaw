@@ -56,17 +56,21 @@ export function* verifyAndRepairCanonicalSqliteIndexSteps(
   schemaSql: string,
   options: Omit<RepairCanonicalSqliteIndexesOptions, "verifyPhysicalIntegrity"> & {
     diagnostics?: SqliteIntegrityDiagnostics;
+    /** Skip the whole-file integrity check for routine opens on healthy, current-schema databases. */
+    skipIntegrityCheck?: boolean;
   } = {},
 ): SqliteIntegrityOperation<string[]> {
-  const { diagnostics, ...repairOptions } = options;
+  const { diagnostics, skipIntegrityCheck, ...repairOptions } = options;
   let integrityFailure: Error | undefined;
-  try {
-    yield* sqliteIntegrityCheckSteps(db, databaseLabel, diagnostics);
-  } catch (error) {
-    if (!(error instanceof Error) || !isTerminalSqliteIntegrityError(error)) {
-      throw error;
+  if (!skipIntegrityCheck) {
+    try {
+      yield* sqliteIntegrityCheckSteps(db, databaseLabel, diagnostics);
+    } catch (error) {
+      if (!(error instanceof Error) || !isTerminalSqliteIntegrityError(error)) {
+        throw error;
+      }
+      integrityFailure = error;
     }
-    integrityFailure = error;
   }
 
   const indexesStartedAt = performance.now();

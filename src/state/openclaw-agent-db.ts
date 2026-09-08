@@ -181,7 +181,7 @@ export function clearOpenClawAgentDatabaseOpenFailure(
 
 /** Open or return a cached per-agent database after schema and owner validation. */
 export function openOpenClawAgentDatabase(
-  options: OpenClawAgentDatabaseOptions,
+  options: OpenClawAgentDatabaseOptions & { skipIntegrityCheck?: boolean },
 ): OpenClawAgentDatabase {
   return runSqliteIntegrityOperationSync(openOpenClawAgentDatabaseSteps(options));
 }
@@ -191,7 +191,7 @@ export const { withOpenClawAgentDatabaseAsync, withOpenClawAgentDatabaseAdmissio
   createOpenClawAgentDatabaseAdmissionOwner(openOpenClawAgentDatabaseSteps);
 
 function* openOpenClawAgentDatabaseSteps(
-  options: OpenClawAgentDatabaseOptions,
+  options: OpenClawAgentDatabaseOptions & { skipIntegrityCheck?: boolean },
   pending?: PendingAgentDatabaseOpen,
 ): SqliteIntegrityOperation<OpenClawAgentDatabase> {
   const agentId = normalizeAgentId(options.agentId);
@@ -335,6 +335,7 @@ function* openOpenClawAgentDatabaseSteps(
           agentId,
           pathname,
           diagnostics,
+          { skipIntegrityCheck: options.skipIntegrityCheck },
         );
         if (isValidatedReopen && (!existingSchema || requiresCurrentVersionConvergence)) {
           // New files and same-version divergence cannot inherit an earlier validation.
