@@ -248,6 +248,18 @@ describe("reconcileSkillCollectionReviewJobs", () => {
         payload: { kind: "skillCollectionReview" },
       };
       await saveCronJobsStore(storePath, { version: 1, jobs: [monitorJob("main")] });
+      const ordinaryCron = new CronService(deps);
+      try {
+        const before = await ordinaryCron.list({ includeDisabled: true });
+        expect(before).toHaveLength(1);
+        await expect(ordinaryCron.update("job-main", { enabled: false })).rejects.toThrow(
+          /system-owned/,
+        );
+        await expect(ordinaryCron.remove("job-main")).rejects.toThrow(/system-owned/);
+        await expect(ordinaryCron.list({ includeDisabled: true })).resolves.toEqual(before);
+      } finally {
+        ordinaryCron.stop();
+      }
       const db = openOpenClawStateDatabase().db;
       const version = db.prepare("PRAGMA user_version").get();
       db.prepare("UPDATE cron_jobs SET payload_kind = ?, job_json = ? WHERE job_id = ?").run(
