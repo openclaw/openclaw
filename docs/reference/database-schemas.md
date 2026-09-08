@@ -825,6 +825,8 @@ Asynchronous agent-database admission and maintenance run their initial full-fil
 
 The integrity child and both asynchronous and synchronous read-only snapshot workers share a lifetime budget: 30 seconds for startup and shutdown plus one second per 32 MiB of source database file size, rounded up, capped at 30 minutes. A full copy or full scan reads the whole file at least once; the budget allows for a conservative cold-cache read rate of 32 MiB/s. A 9.4 GiB database gets 331 seconds. Budgets above 30 seconds are logged once per call at debug level with the operation, path, size, and applied budget, keeping ordinary CLI output quiet. If the snapshot worker cannot stat the source, it uses the 30-second base budget and lets the child report the underlying error.
 
+The synchronous byte-neutral snapshot strategy is for small or quiescent databases. Inspections of a live agent database, including memory-core readiness, use the asynchronous online-backup worker.
+
 Integrity-child timeout and incomplete-exit errors include `lastObservedPhase`:
 
 | Value             | Last observation                                                                          |
