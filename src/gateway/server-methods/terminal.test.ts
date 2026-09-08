@@ -994,7 +994,7 @@ describe("terminal gateway policy", () => {
     { caps: [GATEWAY_CLIENT_CAPS.TERMINAL_UPLOAD_PATH_STYLE] },
   ])(
     "only returns insertion metadata to clients advertising its capability: $caps",
-    async ({ caps }) => {
+    async ({ caps }: { caps: string[] }) => {
       const { opts, sessions, respond } = makeOpts(
         { sessionId: "s1", name: "report.pdf", contentBase64: "dGVzdA==" },
         { enabled: true },
