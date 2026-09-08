@@ -569,6 +569,7 @@ export function renderAgentFiles(params: {
                             ></textarea>
                           </label>
                           <openclaw-modal-dialog
+                            class="agent-file-preview"
                             manual
                             label=${activeEntry.name}
                             style="--openclaw-modal-width: min(1040px, calc(100vw - 32px));"
