@@ -337,7 +337,7 @@ export function renderSessionCatalogGroups(params: SessionCatalogGroupsParams) {
                     disabledReason: params.newSessionDisabledReason,
                     onOpen: params.onOpenNewSession,
                   })
-                : nothing
+                : html`<span class="sidebar-session-catalog-new-spacer" aria-hidden="true"></span>`
             }
           `,
         })}
@@ -575,6 +575,8 @@ function renderCatalogSessionRow(
         routeId,
         navigation,
         canOpenTerminal: session.canOpenTerminal === true,
+        canDelete: session.canArchive && catalog.capabilities.archive,
+        name: session.name ?? session.threadId,
         meta,
       },
       x,

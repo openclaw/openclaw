@@ -10,7 +10,7 @@ import { assertValidParams } from "./validation.js";
 
 export { buildModelsListResult };
 
-// Automatic clients opt into preparedOnly; omitted mode preserves shipped wildcard discovery.
+// Ordinary reads consume published facts; only an explicit refresh starts discovery.
 export const modelsHandlers: GatewayRequestHandlers = {
   "models.list": async ({ params, respond, context, client }) => {
     if (!assertValidParams(params, validateModelsListParams, "models.list", respond)) {
@@ -29,7 +29,7 @@ export const modelsHandlers: GatewayRequestHandlers = {
     respond(
       true,
       await buildModelsListResult({
-        context,
+        source: { kind: "gateway", context },
         agentId: resolved.agentId,
         params,
         requesterProfileId: resolveAuthenticatedProfileId(client),

@@ -620,6 +620,55 @@ console.log(JSON.stringify({
   );
 
   it.each([
+    ["LF", "\n", "", ""],
+    ["CR", "\r", "", ""],
+    ["CRLF", "\r\n", "", ""],
+    ["colored CRLF", "\r\n", "\x1b[31m", "\x1b[39m"],
+    ["linked LF", "\n", "\x1b]8;;https://example.com/\x07", "\x1b]8;;\x07"],
+  ])(
+    "preserves blank %s lines at their positions across cells",
+    (_label, separator, open, close) => {
+      const out = renderTable({
+        border: "ascii",
+        width: 30,
+        columns: [
+          { key: "A", header: "A", flex: true },
+          { key: "B", header: "B", flex: true },
+        ],
+        rows: [
+          {
+            A: `${open}${["", "alpha", "", "omega", "", ""].join(separator)}${close}`,
+            B: "0\n1\n2\n3\n4",
+          },
+        ],
+      });
+
+      const dataLines = out.trimEnd().split("\n").slice(3, -1);
+      expect(
+        dataLines.map((line) =>
+          stripAnsi(line)
+            .split("|")
+            .slice(1, -1)
+            .map((cell) => cell.trim()),
+        ),
+      ).toEqual([
+        ["", "0"],
+        ["alpha", "1"],
+        ["", "2"],
+        ["omega", "3"],
+        ["", "4"],
+      ]);
+      if (open) {
+        for (const line of dataLines) {
+          const cell = line.split("|")[1] ?? "";
+          expect(cell).toContain(open);
+          expect(cell).toContain(close);
+        }
+      }
+    },
+  );
+
+  it.each([
     ["LF", "line1\n東京 line2", "", "", 0],
     ["CR", "line1\r東京 line2", "", "", 0],
     ["CRLF", "line1\r\n東京 line2", "", "", 0],

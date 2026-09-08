@@ -83,13 +83,16 @@ Other selection rules:
 
 - Changing `agents.defaults.model.primary` does not rewrite existing session pins. If status reports `This session is pinned to X; config primary Y will apply to new/unpinned sessions.`, run `/model default` to clear the pin.
 - CLI default-model and allowlist pickers respect `models.mode: "replace"` by listing only `models.providers.*.models` instead of the full built-in catalog.
-- The Control UI starts from the Gateway's prepared configured model view, so opening chat does not start provider discovery. Opening or refreshing a model picker may discover models required by a trailing `provider/*` policy entry. Default and configured picker views hide catalog rows marked `deprecated` or `disabled` unless that exact model is configured as a primary, fallback, utility/tool model, alias/settings key, or exact policy entry. Hidden rows remain selectable by exact `provider/model` ref. The full built-in catalog, including hidden rows, is reserved for explicit browse views (`models.list` with `view: "all"`, or `openclaw models list --all`).
+- The Control UI starts from the Gateway's prepared configured model view, so opening chat does not start provider discovery. Opening a model picker reads published rows, including rows matched by a trailing `provider/*` policy entry. Use its explicit Refresh action to discover provider models. Default and configured picker views hide catalog rows marked `deprecated` or `disabled` unless that exact model is configured as a primary, fallback, utility/tool model, alias/settings key, or exact policy entry. Hidden rows remain selectable by exact `provider/model` ref. The full built-in catalog, including hidden rows, is reserved for explicit browse views (`models.list` with `view: "all"`, or `openclaw models list --all`).
 - Provider inventory UIs use `models.list` with `view: "provider-config"` to show source-authored `models.providers.*.models` rows without applying picker allowlists.
 
-After a Gateway restart, the first ordinary `models.list` or `/models` browse
-initializes provider inventory. A bounded request may show configured models while
-discovery finishes; later reads reuse the completed inventory. Startup, turn-path
-reads, and `models.list` with `preparedOnly: true` do not start discovery.
+Ordinary `models.list` and `/models` browsing use the Gateway's published
+configured or completed catalog. They do not start provider discovery, including
+after a restart. If the owner is not yet published, the request reports that the
+catalog is not ready. Retry after startup or an in-progress refresh finishes.
+Use an explicit Refresh action or `openclaw models list --refresh` to acquire
+provider inventory. Startup and turn-path capability preparation keep their
+separate runtime responsibilities.
 For models configured to use a CLI runtime, channel picker availability follows that
 runtime's prepared authentication; a provider API key does not substitute for its
 native login.
@@ -105,6 +108,10 @@ compatible inventory, the Gateway publishes the provider's prepared starter rows
 with the failed outcome, even when strict discovery returns no rows.
 They cannot widen a retained successful list, including an empty list. Changes to
 provider, plugin, auth, environment, or workspace identity invalidate incompatible inventory.
+
+Automations and command-palette model search show a warning when a provider refresh
+fails, while keeping the models returned by the Gateway. Open Models to retry the
+refresh. A successful empty result clears the discovered choices and warning.
 
 A successful provider result takes precedence over retained rows, even when
 another credential reports failure. Catalog results describe one provider's model
@@ -329,6 +336,11 @@ visible after the next Gateway restart. Remote data can update or add models
 only for providers declared by installed plugin manifests. It cannot supply API
 base URLs or request headers, and a catalog older than the installed release's
 build stamp is ignored.
+
+The Gateway reports when a checked catalog needs a restart to become active,
+including a bundle downloaded by another process. Repeated checks of the same
+source and generation do not repeat the notice. Checking for an update does not
+activate the downloaded rows or prices.
 
 The hosted file is published from the public
 [`openclaw/catalog`](https://github.com/openclaw/catalog) GitHub repository.

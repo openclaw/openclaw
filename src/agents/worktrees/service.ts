@@ -34,6 +34,7 @@ import {
   requireGit,
   requireGitBuffer,
   runGit,
+  WORKTREE_CHECKOUT_TIMEOUT_MS,
   type GitResult,
 } from "./git.js";
 import { worktreeOwnerMatches } from "./owner.js";
@@ -85,8 +86,6 @@ const NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/;
 const WORKTREE_CREATE_LEASE_SCOPE = "core:managed-worktrees:create";
 const WORKTREE_CREATE_LEASE_MS = 60_000;
 const WORKTREE_CREATE_LEASE_WAIT_MS = 5 * 60_000;
-// Materializing a checkout gets extra time without extending other Git commands or setup.
-const WORKTREE_CHECKOUT_TIMEOUT_MS = 300_000;
 
 /** Removal aborted because snapshot loss was not permitted. */
 export class WorktreeSnapshotError extends Error {
@@ -1319,7 +1318,28 @@ export class ManagedWorktreeService {
     );
     const gitBytes = await estimateWorktreeGitBytes(record.repoRoot, record.snapshotRef);
     this.requireAllocationSpace(record.path, repository, 2 * (gitBytes + provisionedBytes));
-    const parent = await requireGit(record.repoRoot, ["rev-parse", `${record.snapshotRef}^`]);
+    let parent: string;
+    try {
+      parent = await requireGit(record.repoRoot, ["rev-parse", `${record.snapshotRef}^`]);
+    } catch (error) {
+      const shallow = await runGit(record.repoRoot, ["rev-parse", "--is-shallow-repository"]);
+      if (shallow.code !== 0 || shallow.stdout.trim() !== "true") {
+        throw error;
+      }
+      const snapshot = await runGit(record.repoRoot, [
+        "rev-parse",
+        "--verify",
+        `${record.snapshotRef}^{commit}`,
+      ]);
+      if (snapshot.code !== 0) {
+        throw error;
+      }
+      // Origin cannot deepen a local-only snapshot that a later fetch made shallow.
+      throw new Error(
+        `Cannot restore snapshot ${snapshot.stdout.trim()} in ${record.repoRoot}: shallow clone boundary; run \`git fetch --unshallow\` in ${record.repoRoot}. If the snapshot remains shallow, recover its parent from the original repository before retrying.`,
+        { cause: error },
+      );
+    }
     params.commitGuard?.();
     await fs.mkdir(path.dirname(record.path), { recursive: true });
     params.commitGuard?.();

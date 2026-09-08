@@ -40,11 +40,10 @@ import { planOpenClawModelsJson, type PreparedModelsConfigContext } from "./mode
 import { repairPluginModelCatalogTransportMetadata } from "./plugin-model-catalog-repair.js";
 import {
   decodePluginModelCatalogRelativePathPluginId,
-  isGeneratedPluginModelCatalog,
+  filterGeneratedPluginModelCatalogProviders,
   loadPersistedPluginModelCatalogs,
   loadPersistedPluginModelCatalogsReadOnly,
   replacePersistedPluginModelCatalogs,
-  resolvePluginModelCatalogOwnerPluginId,
   type PersistedPluginModelCatalog,
 } from "./plugin-model-catalog.js";
 
@@ -186,7 +185,8 @@ async function mergeGeneratedPluginCatalogProvidersIntoExistingParsed(params: {
   agentDir: string;
   existingParsed: unknown;
   pluginCatalogs?: readonly PersistedPluginModelCatalog[];
-  pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "owners">;
+  config: OpenClawConfig;
+  pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "owners" | "manifestRegistry">;
 }): Promise<unknown> {
   const root = isRecord(params.existingParsed) ? params.existingParsed : {};
   const providers = isRecord(root.providers) ? { ...root.providers } : {};
@@ -199,21 +199,17 @@ async function mergeGeneratedPluginCatalogProvidersIntoExistingParsed(params: {
     } catch {
       continue;
     }
-    if (
-      !isGeneratedPluginModelCatalog(catalog) ||
-      !isRecord(catalog) ||
-      !isRecord(catalog.providers)
-    ) {
+    if (!isRecord(catalog) || !isRecord(catalog.providers)) {
       continue;
     }
-    for (const [providerId, provider] of Object.entries(catalog.providers)) {
-      const currentOwnerPluginId = resolvePluginModelCatalogOwnerPluginId({
-        providerId,
-        pluginMetadataSnapshot: params.pluginMetadataSnapshot,
-      });
-      if (currentOwnerPluginId !== catalogPluginId) {
-        continue;
-      }
+    const eligibleProviders = filterGeneratedPluginModelCatalogProviders({
+      catalogPluginId,
+      parsedCatalog: catalog,
+      config: params.config,
+      pluginMetadataSnapshot: params.pluginMetadataSnapshot,
+      providers: catalog.providers,
+    });
+    for (const [providerId, provider] of Object.entries(eligibleProviders)) {
       providers[providerId] = provider;
       changed = true;
     }
@@ -372,6 +368,7 @@ async function prepareOpenClawModelsJsonSource(
     const existingModelsFile = await readExistingModelsFile(targetPath);
     const existingParsedForMerge = await mergeGeneratedPluginCatalogProvidersIntoExistingParsed({
       agentDir,
+      config: context.cfg,
       existingParsed: existingModelsFile.parsed,
       ...(pluginMetadataSnapshot ? { pluginMetadataSnapshot } : {}),
     });
@@ -451,6 +448,7 @@ export async function planOpenClawModelsJsonSource(
   const existingPluginCatalogs = loadPersistedPluginModelCatalogsReadOnly(agentDir);
   const existingParsedForMerge = await mergeGeneratedPluginCatalogProvidersIntoExistingParsed({
     agentDir,
+    config: context.cfg,
     existingParsed: existingModelsFile.parsed,
     pluginCatalogs: existingPluginCatalogs,
     ...(pluginMetadataSnapshot ? { pluginMetadataSnapshot } : {}),

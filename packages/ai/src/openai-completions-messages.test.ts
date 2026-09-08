@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { makeTextToolResult } from "../../../test/helpers/text-tool-result.js";
 import { convertMessages } from "./openai-completions-messages.js";
 import type { ProviderContext, ProviderModel } from "./provider-types.js";
 import { resolveOpenAICompletionsCompat } from "./transports/openai-completions-compat.js";
@@ -80,7 +81,7 @@ describe("convertMessages assistant text replay", () => {
   });
 
   it.each([false, true])(
-    "preserves sanitized block positions with thinking-as-text %s",
+    "preserves interleaved text, thinking, and tool replay with thinking-as-text %s",
     (requiresThinkingAsText) => {
       const assistant: AssistantMessage = {
         role: "assistant",
@@ -88,20 +89,34 @@ describe("convertMessages assistant text replay", () => {
         provider: model.provider,
         model: model.id,
         content: [
-          { type: "thinking", thinking: "reason\ud800" },
+          { type: "thinking", thinking: " \t", thinkingSignature: "reasoning_text" },
+          {
+            type: "thinking",
+            thinking: "reason\ud800",
+            thinkingSignature: "reasoning_content",
+          },
           { type: "text", text: " \t" },
           { type: "text", text: "first\ud800" },
           { type: "text", text: "\udc00" },
-          { type: "thinking", thinking: "next😀" },
+          {
+            type: "toolCall",
+            id: "call_lookup",
+            name: "lookup",
+            arguments: { query: "cats" },
+            thoughtSignature: '{"type":"reasoning.encrypted","data":"synthetic"}',
+          },
+          { type: "thinking", thinking: "next😀", thinkingSignature: "reasoning_text" },
           { type: "text", text: "last😀" },
         ],
         usage: emptyUsage,
-        stopReason: "stop",
+        stopReason: "toolUse",
         timestamp: 2,
       };
       const converted = convertMessages(
         model,
-        { messages: [assistant] },
+        {
+          messages: [assistant, makeTextToolResult("call_lookup", "lookup", "found", false, 3)],
+        },
         { ...resolveOpenAICompletionsCompat(model), requiresThinkingAsText },
       );
 
@@ -116,7 +131,17 @@ describe("convertMessages assistant text replay", () => {
                 { type: "text", text: "last😀" },
               ]
             : "first\n\nlast😀",
+          ...(!requiresThinkingAsText && { reasoning_content: "reason\ud800\nnext😀" }),
+          tool_calls: [
+            {
+              id: "call_lookup",
+              type: "function",
+              function: { name: "lookup", arguments: '{"query":"cats"}' },
+            },
+          ],
+          reasoning_details: [{ type: "reasoning.encrypted", data: "synthetic" }],
         },
+        { role: "tool", content: "found", tool_call_id: "call_lookup" },
       ]);
     },
   );
@@ -357,22 +382,8 @@ describe("convertMessages parallel tool-result image ownership", () => {
     const context: Context = {
       messages: [
         makeToolCallAssistant(["call_a", "call_b"], ["lookup", "search"]),
-        {
-          role: "toolResult",
-          toolCallId: "call_a",
-          toolName: "lookup",
-          content: [{ type: "text", text: "found it" }],
-          isError: false,
-          timestamp: 2,
-        },
-        {
-          role: "toolResult",
-          toolCallId: "call_b",
-          toolName: "search",
-          content: [{ type: "text", text: "no results" }],
-          isError: false,
-          timestamp: 3,
-        },
+        makeTextToolResult("call_a", "lookup", "found it", false, 2),
+        makeTextToolResult("call_b", "search", "no results", false, 3),
       ],
     };
 

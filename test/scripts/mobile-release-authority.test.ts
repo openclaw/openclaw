@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
+import { verifyAndroidReleaseSource } from "../../apps/android/scripts/build-release-artifacts.ts";
 import {
   mobileReleasePlanDigest,
   writeMobileReleaseIntent,
@@ -1490,6 +1491,7 @@ describe("mobile release authority", () => {
   it("keeps upload and recovery credentials inside one protected platform boundary", () => {
     const workflows = [
       {
+        authorityRoot: "apps/ios/build/mobile-release-ci",
         environment: "ios-beta-release",
         file: ".github/workflows/ios-beta-release.yml",
         name: "iOS Beta Release",
@@ -1502,6 +1504,7 @@ describe("mobile release authority", () => {
         setupBeforeSigning: [],
       },
       {
+        authorityRoot: "apps/android/build/mobile-release-ci",
         environment: "android-beta-release",
         file: ".github/workflows/android-beta-release.yml",
         name: "Android Beta Release",
@@ -1522,6 +1525,7 @@ describe("mobile release authority", () => {
     ] as const;
 
     for (const {
+      authorityRoot,
       environment,
       file,
       name,
@@ -1587,6 +1591,16 @@ describe("mobile release authority", () => {
       expect(release.if).toBe(
         "inputs.operation == 'upload-and-record' && needs.authorize.outputs.approved == 'true'",
       );
+      const authorityCheckout = release.steps.find(
+        (step) => step.name === "Checkout trusted mobile release authority",
+      );
+      const sinkCheckout = release.steps.find(
+        (step) => step.name === "Refresh trusted authority before store access",
+      );
+      expect(authorityCheckout?.with?.path).toBe(`${authorityRoot}/authority`);
+      expect(sinkCheckout?.with?.path).toBe(`${authorityRoot}/sink`);
+      expect(source).not.toContain(".mobile-release-authority");
+      expect(source).not.toContain(".mobile-release-sink");
       const signingRevalidateIndex = release.steps.findIndex(
         (step) => step.name === "Revalidate release authority immediately before signing access",
       );
@@ -1631,7 +1645,7 @@ describe("mobile release authority", () => {
       }
       for (const stepIndex of signingAuthorityIndexes) {
         expect(release.steps[stepIndex]?.uses, `${file}:${stepIndex}:uses`).toBe(
-          "./.mobile-release-authority/.github/actions/mobile-release-authority",
+          `./${authorityRoot}/authority/.github/actions/mobile-release-authority`,
         );
         expect(release.steps[stepIndex]?.with, `${file}:${stepIndex}:with`).toEqual({
           "authority-run-id": "${{ needs.authorize.outputs.run_id }}",
@@ -1665,6 +1679,9 @@ describe("mobile release authority", () => {
       );
       expect(revalidateIndex).toBeGreaterThan(-1);
       expect(uploadIndex).toBe(revalidateIndex + 1);
+      expect(release.steps[revalidateIndex]?.uses).toBe(
+        `./${authorityRoot}/sink/.github/actions/mobile-release-authority`,
+      );
       expect(intentIndex).toBeGreaterThan(uploadIndex);
       expect(recorderIndex).toBeGreaterThan(intentIndex);
       expect(recordIndex).toBeGreaterThan(recorderIndex);
@@ -1773,6 +1790,103 @@ describe("mobile release authority", () => {
       expect(source).not.toContain("workflow_run");
       expect(source).not.toContain("secrets.MOBILE_RELEASE_REF_TOKEN");
       expect(source).toContain("release/YYYY.M.PATCH-mobile");
+    }
+  });
+
+  it("keeps trusted pre-upload helper checkouts outside release source dirt", () => {
+    const workflows = [
+      {
+        file: ".github/workflows/ios-beta-release.yml",
+        platform: "ios",
+      },
+      {
+        file: ".github/workflows/android-beta-release.yml",
+        platform: "android",
+      },
+    ] as const;
+
+    for (const { file, platform } of workflows) {
+      const source = fs.readFileSync(file, "utf8");
+      const workflow = parse(source) as {
+        jobs: {
+          release: {
+            steps: Array<{
+              name: string;
+              with?: { path?: string };
+            }>;
+          };
+        };
+      };
+      const authorityPath = workflow.jobs.release.steps.find(
+        (step) => step.name === "Checkout trusted mobile release authority",
+      )?.with?.path;
+      const sinkPath = workflow.jobs.release.steps.find(
+        (step) => step.name === "Refresh trusted authority before store access",
+      )?.with?.path;
+      if (!authorityPath || !sinkPath) {
+        throw new Error(`${file}: missing pre-upload helper checkout path`);
+      }
+
+      const repository = tempRoots.make(`openclaw-mobile-release-source-${platform}-`);
+      git(repository, "init");
+      git(repository, "config", "user.email", "release-test@openclaw.invalid");
+      git(repository, "config", "user.name", "OpenClaw Release Test");
+      copyFile(repository, ".gitignore");
+      copyFile(repository, "apps/android/.gitignore");
+      writeFile(repository, "tracked.txt", "clean\n");
+      const expectedCommit = commit(repository, "test: create release source");
+
+      for (const helperPath of [authorityPath, sinkPath]) {
+        writeFile(
+          repository,
+          path.join(helperPath, ".github/actions/mobile-release-authority/action.yml"),
+          "name: trusted helper\n",
+        );
+      }
+
+      const verifyAppleSource = () =>
+        spawnSync(
+          "/bin/bash",
+          [
+            "scripts/apple-release-source-check.sh",
+            "--root",
+            repository,
+            "--expected-commit",
+            expectedCommit,
+          ],
+          { cwd: process.cwd(), encoding: "utf8" },
+        );
+      const expectCleanSource = () => {
+        expect(() =>
+          verifyAndroidReleaseSource(expectedCommit, { rootDir: repository }),
+        ).not.toThrow();
+        const apple = verifyAppleSource();
+        expect(apple.status, apple.stderr).toBe(0);
+      };
+      const expectDirtySource = () => {
+        expect(() => verifyAndroidReleaseSource(expectedCommit, { rootDir: repository })).toThrow(
+          "Android release builds require a clean Git checkout",
+        );
+        const apple = verifyAppleSource();
+        expect(apple.status).toBe(1);
+        expect(apple.stderr).toContain("Apple release builds require a clean Git checkout.");
+      };
+
+      expectCleanSource();
+      writeFile(repository, "unrelated.txt", "dirty\n");
+      expectDirtySource();
+      fs.unlinkSync(path.join(repository, "unrelated.txt"));
+
+      writeFile(repository, "tracked.txt", "dirty\n");
+      expectDirtySource();
+      writeFile(repository, "tracked.txt", "clean\n");
+
+      writeFile(
+        repository,
+        ".mobile-release-authority/.github/actions/mobile-release-authority/action.yml",
+        "name: obsolete root helper\n",
+      );
+      expectDirtySource();
     }
   });
 

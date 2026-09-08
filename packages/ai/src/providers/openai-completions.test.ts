@@ -81,6 +81,8 @@ vi.mock("openai", () => {
   return { default: MockOpenAI };
 });
 
+import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
+import { makeUserMessage } from "../../../../test/helpers/user-message.js";
 import { createZeroUsage } from "../usage.test-support.js";
 import {
   streamOpenAICompletions,
@@ -1140,11 +1142,7 @@ describe("OpenAI-compatible completions params", () => {
       },
       {
         messages: [
-          {
-            role: "user",
-            content: "search first",
-            timestamp: 1,
-          },
+          makeUserMessage("search first", 1),
           {
             role: "assistant",
             api: "openai-completions",
@@ -1162,19 +1160,8 @@ describe("OpenAI-compatible completions params", () => {
             ],
             timestamp: 2,
           },
-          {
-            role: "toolResult",
-            toolCallId: "call_search",
-            toolName: "search",
-            content: [{ type: "text", text: "ok" }],
-            isError: false,
-            timestamp: 3,
-          },
-          {
-            role: "user",
-            content: "continue",
-            timestamp: 4,
-          },
+          makeTextToolResult("call_search", "search", "ok", false, 3),
+          makeUserMessage("continue", 4),
         ],
       },
       {

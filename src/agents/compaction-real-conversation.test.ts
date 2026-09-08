@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { isRealConversationMessage } from "./compaction-real-conversation.js";
 import type { AgentMessage } from "./runtime/index.js";
+import { textToolResult } from "./test-helpers/sparse-transcript.test-support.js";
 
 type SummaryRole = "branchSummary" | "compactionSummary";
 
@@ -13,12 +14,7 @@ describe("compaction real conversation classification", () => {
     "treats non-empty %s messages as conversation anchors",
     (role) => {
       const summary = summaryMessage(role, "The user asked for a repository audit.");
-      const toolResult = {
-        role: "toolResult",
-        toolCallId: "call-1",
-        toolName: "exec",
-        content: [{ type: "text", text: "audit output" }],
-      } as AgentMessage;
+      const toolResult = textToolResult("call-1", "exec", "audit output") as AgentMessage;
       const messages = [summary, toolResult];
 
       expect(isRealConversationMessage(summary, messages, 0)).toBe(true);
@@ -49,12 +45,7 @@ describe("compaction real conversation classification", () => {
         excludeFromContext,
         timestamp: 1,
       } satisfies AgentMessage;
-      const toolResult = {
-        role: "toolResult",
-        toolCallId: "call-1",
-        toolName: "exec",
-        content: [{ type: "text", text: "audit output" }],
-      } as AgentMessage;
+      const toolResult = textToolResult("call-1", "exec", "audit output") as AgentMessage;
       const messages = [custom, toolResult];
 
       expect(isRealConversationMessage(custom, messages, 0)).toBe(expected);
@@ -67,12 +58,7 @@ describe("compaction real conversation classification", () => {
       role: "assistant",
       content: [{ type: "toolCall", id: "call-1", name: "exec", arguments: {} }],
     } as AgentMessage;
-    const orphanToolResult = {
-      role: "toolResult",
-      toolCallId: "call-1",
-      toolName: "exec",
-      content: [{ type: "text", text: "audit output" }],
-    } as AgentMessage;
+    const orphanToolResult = textToolResult("call-1", "exec", "audit output") as AgentMessage;
 
     expect(isRealConversationMessage(toolCall, [toolCall], 0)).toBe(false);
     expect(isRealConversationMessage(orphanToolResult, [orphanToolResult], 0)).toBe(false);
@@ -108,12 +94,7 @@ describe("compaction real conversation classification", () => {
       expected: true,
     },
   ])("classifies tool output after a $name", ({ preceding, expected }) => {
-    const toolResult = {
-      role: "toolResult",
-      toolCallId: "call-1",
-      toolName: "exec",
-      content: [{ type: "text", text: "checked" }],
-    } as AgentMessage;
+    const toolResult = textToolResult("call-1", "exec", "checked") as AgentMessage;
     const messages = [...preceding, toolResult] as AgentMessage[];
 
     expect(isRealConversationMessage(toolResult, messages, preceding.length)).toBe(expected);
@@ -126,12 +107,7 @@ describe("compaction real conversation classification", () => {
       content: "prepare the daily report",
       display: true,
     } as AgentMessage;
-    const toolResult = {
-      role: "toolResult",
-      toolCallId: "call-1",
-      toolName: "read",
-      content: [{ type: "text", text: "report source data" }],
-    } as AgentMessage;
+    const toolResult = textToolResult("call-1", "read", "report source data") as AgentMessage;
     const messages = [
       custom,
       {

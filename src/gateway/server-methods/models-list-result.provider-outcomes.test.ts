@@ -74,7 +74,7 @@ describe("models.list provider catalog outcomes", () => {
 
       await expect(
         buildModelsListResult({
-          context,
+          source: { kind: "gateway", context },
           agentId: "main",
           params: { view: "configured" },
           preloadedCatalog: { agentId: "main", config, snapshot },
@@ -121,7 +121,9 @@ describe("models.list provider catalog outcomes", () => {
       readPrepared: async () => snapshot as PreparedGatewayModelCatalogSnapshot,
     });
 
-    await expect(buildModelsListResult({ context, params: { view: "all" } })).resolves.toEqual({
+    await expect(
+      buildModelsListResult({ source: { kind: "gateway", context }, params: { view: "all" } }),
+    ).resolves.toEqual({
       models: [],
       providerOutcomes: [
         { provider: "openai", profileId: "openai:chatgpt", status: "auth-rejected" },
@@ -203,7 +205,7 @@ describe("models.list provider catalog outcomes", () => {
 
     await expect(
       buildModelsListResult({
-        context,
+        source: { kind: "gateway", context },
         agentId: "main",
         params: { view: "configured" },
         preloadedCatalog: { agentId: "main", config, snapshot },
@@ -342,7 +344,7 @@ describe("models.list provider catalog outcomes", () => {
     } as unknown as GatewayRequestContext;
 
     const prepared = await prepareModelsListResult({
-      context,
+      source: { kind: "gateway", context },
       params: { view: "configured" },
       preloadedCatalog: { agentId: "main", config, snapshot },
       preloadedOnly: true,

@@ -7,6 +7,7 @@ import { dirname, join } from "node:path";
 import { type Static, Type } from "typebox";
 import { Compile } from "typebox/compile";
 import type { TLocalizedValidationError } from "typebox/error";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type {
   AnthropicMessagesCompat,
   Api,
@@ -259,6 +260,7 @@ function emptyCustomModelsResult(error?: string): CustomModelsResult {
 }
 
 type ModelRegistryOptions = {
+  config?: OpenClawConfig;
   includePluginCatalogs?: boolean;
   modelsJsonContents?: string | null;
   pluginCatalogs?: readonly PersistedPluginModelCatalog[];
@@ -317,6 +319,7 @@ function mergeCompat(
  */
 export class ModelRegistry {
   private models: Model[] = [];
+  private config: OpenClawConfig | undefined;
   private providerRequestConfigs: Map<string, ProviderRequestConfig> = new Map();
   private modelRequestHeaders: Map<string, Record<string, string>> = new Map();
   private registeredProviders: Map<string, ProviderConfigInput> = new Map();
@@ -336,6 +339,7 @@ export class ModelRegistry {
     options: ModelRegistryOptions = {},
   ) {
     this.authStorage = authStorage;
+    this.config = options.config ?? options.sourceSnapshot?.config;
     this.includePluginCatalogs = options.includePluginCatalogs !== false;
     initializeModelRegistryRuntime(this);
     if (options.sourceSnapshot) {
@@ -551,6 +555,7 @@ export class ModelRegistry {
         options.requireGeneratedCatalog === true
           ? filterGeneratedPluginModelCatalogProviders({
               catalogPluginId: options.catalogPluginId,
+              config: this.config,
               parsedCatalog: parsed,
               pluginMetadataSnapshot: this.pluginMetadataSnapshot,
               providers: config.providers,

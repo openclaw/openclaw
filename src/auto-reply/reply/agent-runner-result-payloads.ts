@@ -8,7 +8,11 @@ import {
   hasDeliberateSilentTerminalReply,
   hasIntentionalTerminalCompletion,
 } from "../../agents/embedded-agent-runner/result-fallback-classifier.js";
-import { deriveContextPromptTokens, hasBillableUsage } from "../../agents/usage.js";
+import {
+  deriveContextPromptTokens,
+  hasBillableUsage,
+  toDiagnosticUsage,
+} from "../../agents/usage.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { emitTrustedDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
@@ -209,6 +213,7 @@ export async function prepareReplyAgentPayloads(state: {
     // always gets a diagnostic, even when the retry produced no final text.
     const recovery = resolveStrandedReplyRecovery({
       base: followupRun,
+      payloads: [],
       finalText: "",
       sourceReplyDeliveryMode: sourceReplyPolicy.sourceReplyDeliveryMode,
       sendPolicyDenied: sourceReplyPolicy.sendPolicyDenied,
@@ -430,6 +435,9 @@ export async function prepareReplyAgentPayloads(state: {
   const hasTerminalReplyPayload = replyPayloadsWithoutToolWarnings.some(
     (payload) =>
       isReplyPayloadTerminalContent(payload) &&
+      ((!shouldDeliverTerminalFailure && !yieldAcknowledgmentPayload) ||
+        followupRun.run.sourceReplyDeliveryMode !== "message_tool_only" ||
+        getReplyPayloadMetadata(payload)?.deliverDespiteSourceReplySuppression === true) &&
       normalizeReplyPayload(payload, { applyChannelTransforms: false }) !== null,
   );
   if (yieldAcknowledgmentPayload && hasTerminalReplyPayload) {
@@ -454,7 +462,9 @@ export async function prepareReplyAgentPayloads(state: {
       return { kind: "return" as const, value: silentFallbackFailurePayload };
     }
   } else if (emptyInteractiveReplyPayload && !hasTerminalReplyPayload) {
-    const emptyPayloadResult = await buildFinalPayloads([emptyInteractiveReplyPayload]);
+    const emptyPayloadResult = await buildFinalPayloads([
+      buildStrandedRetryMissingDeliveryDiagnostic() ?? emptyInteractiveReplyPayload,
+    ]);
     replyPayloads = [...replyPayloads, ...emptyPayloadResult.replyPayloads];
     didLogHeartbeatStrip = emptyPayloadResult.didLogHeartbeatStrip;
     if (emptyPayloadResult.replyPayloads.length > 0) {
@@ -563,12 +573,6 @@ export async function prepareReplyAgentPayloads(state: {
 
   const diagnosticUsage = runResult.meta?.agentMeta?.diagnosticUsage ?? usage;
   if (isDiagnosticsEnabled(cfg) && hasBillableUsage(diagnosticUsage)) {
-    const input = diagnosticUsage.input ?? 0;
-    const output = diagnosticUsage.output ?? 0;
-    const cacheRead = diagnosticUsage.cacheRead ?? 0;
-    const cacheWrite = diagnosticUsage.cacheWrite ?? 0;
-    const usagePromptTokens = input + cacheRead + cacheWrite;
-    const totalTokens = diagnosticUsage.total ?? usagePromptTokens + output;
     const contextUsedTokens = deriveContextPromptTokens({
       lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
       promptTokens,
@@ -596,14 +600,7 @@ export async function prepareReplyAgentPayloads(state: {
       agentId: followupRun.run.agentId,
       provider: providerUsed,
       model: modelUsed,
-      usage: {
-        input,
-        output,
-        cacheRead,
-        cacheWrite,
-        promptTokens: usagePromptTokens,
-        total: totalTokens,
-      },
+      usage: toDiagnosticUsage(diagnosticUsage),
       lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
       context: {
         limit: contextTokensUsed,

@@ -366,7 +366,10 @@ async function saveSnapshotTargeted(params: SaveSnapshotTargetedParams): Promise
   } else if (params.source === "local") {
     // Announced at the write, not at target resolution: no-op allowlist edits and
     // rejected `set` input never reach here and must not claim a write happened.
-    defaultRuntime.log(theme.muted("Writing local approvals."));
+    // JSON mode owns stdout: the written snapshot below is the record of the write.
+    if (!params.opts.json) {
+      defaultRuntime.log(theme.muted("Writing local approvals."));
+    }
     next = await saveSnapshotLocal(params.file, params.baseHash);
   } else {
     next = await saveSnapshot(params.opts, params.nodeId, params.file, params.baseHash);

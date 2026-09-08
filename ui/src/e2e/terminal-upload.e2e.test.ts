@@ -19,6 +19,80 @@ const requestedErrorScreenshotPath = process.env.OPENCLAW_TERMINAL_UPLOAD_ERROR_
 const requestedVideoDir = process.env.OPENCLAW_TERMINAL_UPLOAD_VIDEO_DIR?.trim();
 
 suite.define(() => {
+  it.skipIf(!expectUploadSurface)(
+    "pastes native catalog upload paths without treating the CLI title as a shell",
+    async () => {
+      await suite.withPage(
+        { serviceWorkers: "block", viewport: { width: 1280, height: 800 } },
+        async ({ page }) => {
+          await page.addInitScript(() => {
+            (
+              window as Window & {
+                ["__OPENCLAW_NATIVE_CONTROL_AUTH__"]?: { gatewayUrl: string; token: string };
+              }
+            )["__OPENCLAW_NATIVE_CONTROL_AUTH__"] = {
+              gatewayUrl: "ws://gateway.example.test",
+              token: "test",
+            };
+          });
+          const nativeTitle = "claude --resume 12345678…";
+          const stagedPath = "/tmp/openclaw-terminal-upload/reviewer's notes.pdf";
+          const gateway = await installMockGateway(page, {
+            featureMethods: ["terminal.open", "terminal.upload"],
+            methodResponses: {
+              "terminal.list": { sessions: [] },
+              "terminal.open": {
+                agentId: "main",
+                confined: false,
+                cwd: "/workspace",
+                sessionId: "terminal-native-upload-e2e",
+                shell: nativeTitle,
+                title: nativeTitle,
+              },
+            },
+            terminalEnabled: true,
+          });
+
+          await page.goto(`${suite.server.baseUrl}focus/terminal`);
+          await gateway.waitForRequest("terminal.open");
+          await page.locator("button.tp-upload").waitFor({ state: "visible" });
+          await expect
+            .poll(() => page.locator(".tabstrip-tab.is-live").textContent())
+            .toContain(nativeTitle);
+
+          await gateway.deferNext("terminal.upload");
+          await page.locator("input.tp-file-input").setInputFiles({
+            name: "reviewer's notes.pdf",
+            mimeType: "application/pdf",
+            buffer: Buffer.from("%PDF"),
+          });
+          const upload = await gateway.waitForRequest("terminal.upload");
+          expect(upload.params).toEqual({
+            sessionId: "terminal-native-upload-e2e",
+            name: "reviewer's notes.pdf",
+            contentBase64: "JVBERg==",
+          });
+          await gateway.resolveDeferred("terminal.upload", {
+            path: stagedPath,
+            size: 4,
+            uploadPathStyle: "native",
+          });
+
+          await expect
+            .poll(async () => (await gateway.getRequests("terminal.input")).length)
+            .toBe(1);
+          const input = (await gateway.getRequests("terminal.input"))[0]?.params as {
+            data?: string;
+          };
+          expect(input.data).toBe('"/tmp/openclaw-terminal-upload/reviewer\'s notes.pdf"');
+          expect(input.data).not.toMatch(/[\r\n]/);
+          await expect.poll(async () => await page.locator(".tp-upload-card").count()).toBe(0);
+          expect(await gateway.getRequests("terminal.upload")).toHaveLength(1);
+        },
+      );
+    },
+  );
+
   it("uploads picked and dropped files, then pastes staged paths without Enter", async () => {
     // Independent requested parents stay independent; captures under one parent share this attempt.
     const directories = new Map<string, string>();
@@ -131,12 +205,24 @@ suite.define(() => {
           .toBe(2);
         await page.getByText("Uploading 2 of 2").waitFor();
         await expect.poll(async () => await progress.getAttribute("aria-valuenow")).toBe("1");
+        const relativeLockDirectory = ".openclaw\\tmp\\openclaw\\terminal-upload-lock";
+        const privatePath = "C:\\Users\\operator\\private\\request.log";
+        const recoveryMessage =
+          "terminal upload staging is busy; retry after other uploads finish. " +
+          `If it stays blocked after a crash, locate ${relativeLockDirectory} under the home directory ` +
+          "of the account running this terminal's Gateway or node host. Stop all Gateway and " +
+          "node-host processes using that staging root, remove only this lock directory, then restart them.";
         await gateway.rejectDeferred("terminal.upload", {
           code: "UNAVAILABLE",
-          message: "paired node went offline",
+          message: `${recoveryMessage} Diagnostic: ${privatePath}; token=synthetic-terminal-secret-value`,
         });
         await page.getByText("Upload failed").waitFor();
-        await page.getByText("paired node went offline").waitFor();
+        const uploadError = page.locator(".tp-upload-card__error");
+        await expect.poll(async () => await uploadError.textContent()).toContain(recoveryMessage);
+        const displayedError = await uploadError.textContent();
+        expect(displayedError).toContain("[redacted path]");
+        expect(displayedError).not.toContain(privatePath);
+        expect(displayedError).not.toContain("synthetic-terminal-secret-value");
         expect(await page.getByRole("button", { name: "Retry" }).isVisible()).toBe(true);
         expect((await gateway.getRequests("terminal.input")).length).toBe(0);
         if (errorScreenshotPath) {

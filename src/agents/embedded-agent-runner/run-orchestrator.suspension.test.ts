@@ -3,6 +3,7 @@ import path from "node:path";
 import { createAssistantMessageEventStream, type Context } from "openclaw/plugin-sdk/llm";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import {
   loadSessionEntryReadOnly as loadSessionEntry,
@@ -439,11 +440,7 @@ describe("embedded run detached session metadata", () => {
       const { params, scope, stateDir, database } = await createRun("research", "detached");
       params.config.agents!.defaults!.compaction = { mode: "default", keepRecentTokens: 1 };
       const manager = params.sessionManager;
-      manager.appendMessage({
-        role: "user",
-        content: "Remember the memory-only project.",
-        timestamp: 1,
-      });
+      manager.appendMessage(makeUserMessage("Remember the memory-only project.", 1));
       manager.appendMessage(
         buildEmbeddedRunnerAssistant({
           content: [{ type: "text", text: "The project is called Blue Heron." }],
@@ -458,11 +455,9 @@ describe("embedded run detached session metadata", () => {
           providerOverride: "openai",
           modelOverride: "mock-1",
         });
-        SessionManager.open({ ...scope, sessionId: params.sessionId }).appendMessage({
-          role: "user",
-          content: "BORROWED DURABLE HISTORY MUST NOT BE READ",
-          timestamp: 1,
-        });
+        SessionManager.open({ ...scope, sessionId: params.sessionId }).appendMessage(
+          makeUserMessage("BORROWED DURABLE HISTORY MUST NOT BE READ", 1),
+        );
       }
       const before = loadSessionEntry(scope);
       closeOpenClawAgentDatabasesForTest();
