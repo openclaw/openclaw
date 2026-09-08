@@ -5,8 +5,6 @@ import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, test, vi } from "vitest";
 import { waitForFile } from "../../test/helpers/process-wait.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { runWithCanonicalSkillWorkspace } from "../agents/skill-workshop-workspace-context.js";
-import { createConfiguredSkillWorkshopTool } from "../agents/tools/skill-workshop-tool-factory.js";
 import { requireGit } from "../agents/worktrees/git.js";
 import { createManagedWorktreeOwnerPolicy } from "../agents/worktrees/owner-protection.js";
 import { managedWorktrees } from "../agents/worktrees/service.js";
@@ -27,7 +25,6 @@ import { ProjectCloneError } from "../projects/project-clone-runtime.js";
 import { registerProjectRegistry } from "../projects/project-registry.js";
 import { SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS } from "../sessions/session-lifecycle-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { inspectSkillProposal } from "../skills/workshop/service.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { ChatAbortControllerEntry } from "./chat-abort.js";
@@ -69,11 +66,11 @@ afterEach(() => {
 
 test.each([
   { worktree: false, sandboxed: false },
-  { worktree: true, sandboxed: false, image: true },
+  { worktree: true, sandboxed: false, image: true, baseRef: "main" },
   { worktree: false, sandboxed: true },
 ])(
-  "sessions.create admits remote project work (worktree=$worktree, sandboxed=$sandboxed) before materialization and dispatches only after authoritative binding",
-  async ({ worktree, sandboxed, image }) => {
+  "sessions.create admits remote project work (worktree=$worktree, base=$baseRef, sandboxed=$sandboxed) before materialization and dispatches only after authoritative binding",
+  async ({ worktree, sandboxed, image, baseRef }) => {
     const root = tempDirs.make("openclaw-session-remote-project-startup-");
     const workspace = await initializeRepository(root, "workspace");
     const projectRoot = await initializeRepository(sandboxed ? workspace : root, "project");
@@ -123,7 +120,9 @@ test.each([
           message: "Inspect the remote project",
           ...(attachments ? { attachments } : {}),
           projectGitUrl: "git@github.com:OpenClaw/OpenClaw.git",
-          ...(worktree ? { worktree: true, worktreeName: "remote-startup" } : {}),
+          ...(worktree
+            ? { worktree: true, worktreeName: "remote-startup", worktreeBaseRef: baseRef }
+            : {}),
         },
         { ...controlUiClient, context },
       );
@@ -142,6 +141,7 @@ test.each([
       expect(loadSessionEntry({ agentId: "main", sessionKey: key, storePath })).toMatchObject({
         sessionId,
         pendingProjectGitUrl: "https://github.com/openclaw/openclaw.git",
+        ...(worktree ? { pendingWorktree: { baseRef } } : {}),
       });
       await vi.waitFor(() => expect(projectCloneMocks.materialize).toHaveBeenCalledOnce());
       expect(projectCloneMocks.materialize).toHaveBeenCalledWith(
@@ -222,6 +222,7 @@ test.each([
             }),
       });
       if (worktree) {
+        expect(managedWorktrees.findLiveByOwner("session", key)?.baseRef).toBe("main");
         expect(prepared?.spawnedCwd).not.toBe(projectRoot);
         expect(await fs.readFile(path.join(prepared!.spawnedCwd!, "README.md"), "utf8")).toBe(
           "project\n",
@@ -518,6 +519,7 @@ test.each([false, true])(
           agentId: "main",
           message: "Start during setup",
           worktree: true,
+          worktreeBaseRef: "main",
           label: "Concurrent setup",
         },
         options,
@@ -530,7 +532,7 @@ test.each([false, true])(
       expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
       expect(
         loadSessionEntry({ agentId: "main", sessionKey: key, storePath })?.pendingWorktree,
-      ).toBeDefined();
+      ).toMatchObject({ baseRef: "main", baseCommit: expect.any(String) });
       const sent = await directSessionReq(
         "chat.send",
         {
@@ -932,28 +934,6 @@ test("sessions.create with an empty message preserves its owned checkout above t
         throw new Error("expected migrated project worktree session");
       }
       expect(canonicalWorkspaceDir).toBe(projectRoot);
-      const proposal = await runWithCanonicalSkillWorkspace(canonicalWorkspaceDir, async () => {
-        const tool = createConfiguredSkillWorkshopTool({
-          workspaceDir: spawnedCwd,
-          config: getRuntimeConfig(),
-          agentId: "main",
-          sessionKey,
-        });
-        return await tool.execute("legacy-project-proposal", {
-          action: "create",
-          name: "legacy-project-learning",
-          description: "Preserve learning from a resumed project worktree.",
-          proposal_content: "# Legacy Project Learning\n\nPersist this in the project workspace.\n",
-        });
-      });
-      const proposalDetails = proposal.details as { id: string };
-      const inspected = await inspectSkillProposal(proposalDetails.id, {
-        agentId: "main",
-        workspaceDir: projectRoot,
-      });
-      expect(inspected?.record.target.skillFile).toBe(
-        path.join(projectRoot, "skills", "legacy-project-learning", "SKILL.md"),
-      );
     } finally {
       createSpy.mockRestore();
       await settleWorkspaceRuns(context, storePath, key, true);

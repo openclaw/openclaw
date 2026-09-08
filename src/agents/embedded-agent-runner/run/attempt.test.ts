@@ -1,13 +1,16 @@
 // Broad helper coverage for runEmbeddedAttempt prompt, stream, and tool seams.
 import { describe, expect, it, vi } from "vitest";
 import { streamSimple } from "../../../llm/stream.js";
+import {
+  textToolResult,
+  textAssistant,
+} from "../../test-helpers/sparse-transcript.test-support.js";
 
 vi.mock("../context-engine-capabilities.js", () => ({
   resolveContextEngineCapabilities: async () => ({ llm: undefined }),
 }));
 import type { LlmRuntime } from "@openclaw/ai";
 import { defaultLlmRuntime } from "@openclaw/ai/internal/runtime";
-import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "@openclaw/ai/internal/shared";
 import type { OpenClawConfig } from "../../../config/config.js";
 import { addSession } from "../../bash-process-registry.js";
 import { createProcessSessionFixture } from "../../bash-process-registry.test-helpers.js";
@@ -531,31 +534,6 @@ describe("resolveEmbeddedAgentStream", () => {
     expect(providerStreamFn).toHaveBeenCalledTimes(1);
   });
 
-  it("strips the internal cache boundary before provider-owned stream calls", async () => {
-    const providerStreamFn = vi.fn(async (_model, context) => context);
-    const { streamFn } = resolveEmbeddedAgentStream({
-      currentStreamFn: undefined,
-      providerStreamFn,
-      sessionId: "session-1",
-      model: {
-        api: "openai-completions",
-        provider: "demo-provider",
-        id: "demo-model",
-      } as never,
-    });
-
-    const context = await streamFn(
-      { provider: "demo-provider", id: "demo-model" } as never,
-      {
-        systemPrompt: `Stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic suffix`,
-      } as never,
-      {},
-    );
-    expect(requireRecord(context, "stream context").systemPrompt).toBe(
-      "Stable prefix\nDynamic suffix",
-    );
-    expect(providerStreamFn).toHaveBeenCalledTimes(1);
-  });
   it("routes supported default streamSimple fallbacks through boundary-aware transports", () => {
     const { streamFn } = resolveEmbeddedAgentStream({
       currentStreamFn: undefined,
@@ -1127,10 +1105,7 @@ describe("wrapStreamFnTrimToolCallNames", () => {
               message: { role: "assistant", content: [{ type: "toolCall", name: " read " }] },
             },
           ],
-          resultMessage: {
-            role: "assistant",
-            content: [{ type: "text", text: "resolved to allowed tool" }],
-          },
+          resultMessage: textAssistant("resolved to allowed tool"),
         }),
       )
       .mockImplementationOnce(() =>
@@ -1707,10 +1682,7 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
         role: "user",
         content: [{ type: "text", text: "earlier question" }],
       },
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "stale assistant answer" }],
-      },
+      textAssistant("stale assistant answer"),
     ];
     const baseFn = vi.fn((_model, _context) =>
       createFakeStream({ events: [], resultMessage: { role: "assistant", content: [] } }),
@@ -1745,10 +1717,7 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
         role: "user",
         content: [{ type: "text", text: "earlier question" }],
       },
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "stale model answer" }],
-      },
+      textAssistant("stale model answer"),
     ];
     const baseFn = vi.fn((_model, _context) =>
       createFakeStream({ events: [], resultMessage: { role: "assistant", content: [] } }),
@@ -1952,12 +1921,7 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
       role: "assistant",
       content: [{ type: "toolCall", id: "call_1", name: "read", arguments: {} }],
     };
-    const firstResult = {
-      role: "toolResult",
-      toolCallId: "call_1",
-      toolName: "read",
-      content: [{ type: "text", text: "mutable result" }],
-    };
+    const firstResult = textToolResult("call_1", "read", "mutable result");
     const userMessage = {
       role: "user",
       content: [{ type: "text", text: "retry" }],
@@ -2130,12 +2094,7 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
           },
         ],
       },
-      {
-        role: "toolResult",
-        toolCallId: "call_1",
-        toolName: "sessions_spawn",
-        content: [{ type: "text", text: "done" }],
-      },
+      textToolResult("call_1", "sessions_spawn", "done"),
       {
         role: "user",
         content: [{ type: "text", text: "retry" }],
@@ -2405,13 +2364,7 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
         role: "assistant",
         content: [{ type: "toolCall", id: "call_1", name: "   ", arguments: {} }],
       },
-      {
-        role: "toolResult",
-        toolCallId: "call_1",
-        toolName: "",
-        content: [{ type: "text", text: "stale result" }],
-        isError: true,
-      },
+      textToolResult("call_1", "", "stale result", { isError: true }),
     ];
     const baseFn = vi.fn((_model, _context) =>
       createFakeStream({ events: [], resultMessage: { role: "assistant", content: [] } }),
@@ -2459,13 +2412,7 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
         content: [{ type: "toolCall", name: "read", arguments: {} }],
         stopReason: "error",
       },
-      {
-        role: "toolResult",
-        toolCallId: "call_missing",
-        toolName: "read",
-        content: [{ type: "text", text: "stale result" }],
-        isError: false,
-      },
+      textToolResult("call_missing", "read", "stale result", { isError: false }),
       {
         role: "user",
         content: [{ type: "text", text: "retry" }],
@@ -2499,13 +2446,7 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
         role: "assistant",
         content: [{ type: "toolCall", id: "call_1", name: "write", arguments: {} }],
       },
-      {
-        role: "toolResult",
-        toolCallId: "call_1",
-        toolName: "write",
-        content: [{ type: "text", text: "stale result" }],
-        isError: false,
-      },
+      textToolResult("call_1", "write", "stale result", { isError: false }),
       {
         role: "user",
         content: [{ type: "text", text: "retry" }],
@@ -2538,13 +2479,7 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
         role: "assistant",
         content: [{ type: "toolUse", id: "call_1", name: "unknown_tool", input: { path: "." } }],
       },
-      {
-        role: "toolResult",
-        toolCallId: "call_1",
-        toolName: "unknown_tool",
-        content: [{ type: "text", text: "stale result" }],
-        isError: false,
-      },
+      textToolResult("call_1", "unknown_tool", "stale result", { isError: false }),
     ];
     const baseFn = vi.fn((_model, _context) =>
       createFakeStream({ events: [], resultMessage: { role: "assistant", content: [] } }),
@@ -2596,13 +2531,7 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
           { type: "toolCall", name: "read", arguments: {} },
         ],
       },
-      {
-        role: "toolResult",
-        toolCallId: "call_1",
-        toolName: "read",
-        content: [{ type: "text", text: "kept result" }],
-        isError: false,
-      },
+      textToolResult("call_1", "read", "kept result", { isError: false }),
       {
         role: "user",
         content: [{ type: "text", text: "retry" }],
@@ -3306,58 +3235,63 @@ describe("prependSystemPromptAddition", () => {
 });
 
 describe("buildAfterTurnRuntimeContext", () => {
-  it("preserves sessionId-scoped active process sessions for after-turn context", () => {
-    resetProcessRegistryForTests();
-    try {
-      const active = createProcessSessionFixture({
-        id: "sess-session-id",
-        command: "sleep 600",
-        backgrounded: true,
-        pid: 1234,
-      });
-      active.scopeKey = "session-123";
-      addSession(active);
-      const other = createProcessSessionFixture({
-        id: "sess-other",
-        command: "sleep 600",
-        backgrounded: true,
-      });
-      other.scopeKey = "agent:main";
-      addSession(other);
-
-      const legacy = buildAfterTurnRuntimeContext({
-        attempt: {
-          sessionId: "session-123",
-          config: {} as OpenClawConfig,
-          skillsSnapshot: undefined,
-          provider: "openai",
-          modelId: "gpt-5.4",
-          thinkLevel: "off",
-          reasoningLevel: "on",
-          extraSystemPrompt: "extra",
-          ownerNumbers: ["+15555550123"],
-        },
-        workspaceDir: "/tmp/workspace",
-        agentDir: "/tmp/agent",
-        activeAgentId: "main",
-      });
-
-      const activeProcessSessions = legacy.activeProcessSessions as
-        | Array<{ sessionId?: string; command?: string; pid?: number }>
-        | undefined;
-      expect(activeProcessSessions).toHaveLength(1);
-      const activeSession = requireRecord(activeProcessSessions?.[0], "active process session");
-      expect(activeSession.sessionId).toBe("sess-session-id");
-      expect(activeSession.command).toBe("sleep 600");
-      expect(activeSession.pid).toBe(1234);
-      expect(activeProcessSessions?.some((session) => session.sessionId === "sess-other")).toBe(
-        false,
-      );
-      expect(legacy.transcriptStorage).toEqual({ kind: "sqlite" });
-    } finally {
+  it.each([undefined, "agent:main:execution"])(
+    "preserves execution-scoped processes with sessionKey=%s and borrowed policy",
+    (sessionKey) => {
       resetProcessRegistryForTests();
-    }
-  });
+      try {
+        const active = createProcessSessionFixture({
+          id: "sess-session-id",
+          command: "sleep 600",
+          backgrounded: true,
+          pid: 1234,
+        });
+        active.scopeKey = sessionKey ?? "session-123";
+        addSession(active);
+        const other = createProcessSessionFixture({
+          id: "sess-other",
+          command: "sleep 600",
+          backgrounded: true,
+        });
+        other.scopeKey = "agent:main";
+        addSession(other);
+
+        const legacy = buildAfterTurnRuntimeContext({
+          attempt: {
+            sessionId: "session-123",
+            sessionKey,
+            sandboxSessionKey: "agent:main",
+            config: {} as OpenClawConfig,
+            skillsSnapshot: undefined,
+            provider: "openai",
+            modelId: "gpt-5.4",
+            thinkLevel: "off",
+            reasoningLevel: "on",
+            extraSystemPrompt: "extra",
+            ownerNumbers: ["+15555550123"],
+          },
+          workspaceDir: "/tmp/workspace",
+          agentDir: "/tmp/agent",
+          activeAgentId: "main",
+        });
+
+        const activeProcessSessions = legacy.activeProcessSessions as
+          | Array<{ sessionId?: string; command?: string; pid?: number }>
+          | undefined;
+        expect(activeProcessSessions).toHaveLength(1);
+        const activeSession = requireRecord(activeProcessSessions?.[0], "active process session");
+        expect(activeSession.sessionId).toBe("sess-session-id");
+        expect(activeSession.command).toBe("sleep 600");
+        expect(activeSession.pid).toBe(1234);
+        expect(activeProcessSessions?.some((session) => session.sessionId === "sess-other")).toBe(
+          false,
+        );
+        expect(legacy.transcriptStorage).toEqual({ kind: "sqlite" });
+      } finally {
+        resetProcessRegistryForTests();
+      }
+    },
+  );
 
   it("uses primary model when compaction.model is not set", () => {
     const runtimeAuthPlan = {

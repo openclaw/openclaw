@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { HelloOk } from "../../packages/gateway-protocol/src/schema/frames.js";
+import { createDeferred } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { DeviceIdentity } from "../infra/device-identity.js";
@@ -1591,6 +1592,43 @@ describe("buildGatewayConnectionDetails", () => {
     }
   });
 
+  it.each([true, false])(
+    "keeps service target diagnostics authoritative with remote URL present=%s",
+    (remoteUrl) => {
+      const config = {
+        gateway: {
+          mode: "remote",
+          bind: "loopback",
+          remote: {
+            ...(remoteUrl ? { url: "wss://remote-gateway.example/ws" } : {}),
+            token: "remote-token",
+          },
+        },
+      } satisfies OpenClawConfig;
+      resolveGatewayPort.mockReturnValue(19191);
+      const prevUrl = process.env.OPENCLAW_GATEWAY_URL;
+      try {
+        process.env.OPENCLAW_GATEWAY_URL = "wss://env-gateway.example/ws";
+
+        const details = buildGatewayConnectionDetails({
+          config,
+          serviceTargetUrl: "wss://service-gateway.example:19191",
+        });
+
+        expect(details.url).toBe("wss://service-gateway.example:19191");
+        expect(details.urlSource).toBe("service target");
+        expect(details.remoteFallbackNote).toBeUndefined();
+        expect(details.message).not.toContain("remote-gateway.example");
+      } finally {
+        if (prevUrl === undefined) {
+          delete process.env.OPENCLAW_GATEWAY_URL;
+        } else {
+          process.env.OPENCLAW_GATEWAY_URL = prevUrl;
+        }
+      }
+    },
+  );
+
   it("redacts credential-bearing target URLs from connection messages", () => {
     setLocalLoopbackGatewayConfig(18800);
 
@@ -2414,6 +2452,28 @@ describe("callGateway error details", () => {
     await promise;
 
     expect(errMessage).toContain("gateway closed (1006");
+  });
+
+  it("returns a catalog refresh after the passive-read deadline", async () => {
+    setLocalLoopbackGatewayConfig();
+    vi.useFakeTimers();
+    const response = { models: [{ provider: "fixture", id: "refreshed", name: "Refreshed" }] };
+    const pending = createDeferred<typeof response>();
+    helloMethods = ["models.list"];
+    gatewayClientRequest = async (method, params, requestOpts) => {
+      lastRequestOptions = { method, params, opts: requestOpts };
+      return await pending.promise;
+    };
+    const result = callGateway({
+      method: "models.list",
+      params: { refresh: true },
+      timeoutMs: 210_000,
+    });
+    const outcome = expect(result).resolves.toEqual(response);
+    await vi.advanceTimersByTimeAsync(12_000);
+    expect(lastRequestOptions?.method).toBe("models.list");
+    pending.resolve(response);
+    await outcome;
   });
 
   it("forwards caller timeout to client requests", async () => {

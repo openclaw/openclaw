@@ -29,6 +29,7 @@ import {
 import type { SecretStoreExecEnvironment } from "../secrets/store/secret-store.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
+import { captureAgentToolSourceExecutionGuard } from "./agent-tool-source-execution-guard.js";
 import { markBackgrounded } from "./bash-process-registry.js";
 import { describeExecTool } from "./bash-tools.descriptions.js";
 import { processGatewayAllowlist } from "./bash-tools.exec-host-gateway.js";
@@ -107,6 +108,7 @@ export function createExecTool(
   defaults?: ExecToolDefaults,
 ): AgentToolWithMeta<typeof execSchema, ExecToolDetails> {
   const secretEgressEnabled = isSecretEgressProxyActive();
+  const cleanupMs = defaults?.cleanupMs;
   const preparedRunEnvironment = resolveExecPreparedRunEnvironment(defaults);
   // Agent runs own one tool instance, so the store is read on first exec and reused for that run.
   // A new run constructs a new instance and observes later store mutations.
@@ -195,13 +197,14 @@ export function createExecTool(
     label: "exec",
     displaySummary: EXEC_TOOL_DISPLAY_SUMMARY,
     get description() {
-      return describeExecTool({ agentId, hasCronTool: defaults?.hasCronTool === true });
+      return describeExecTool({ hasCronTool: defaults?.hasCronTool === true });
     },
     parameters: execSchema,
     prepareBeforeToolCallParams: requestPreparation.prepareBeforeToolCallParams,
     finalizeBeforeToolCallParams: requestPreparation.finalizeBeforeToolCallParams,
     execute: async (toolCallId, args, signal, onUpdate) => {
       signal?.throwIfAborted();
+      const assertSourceActive = captureAgentToolSourceExecutionGuard(signal);
       assertSupportedExecParams(args);
       // Capture settings and cancellation per execution; unused reviewers must not load model runtime.
       let autoReviewer: ExecAutoReviewer | undefined = defaults?.autoReviewer;
@@ -427,6 +430,7 @@ export function createExecTool(
           if (!defaults?.operationalRunInstance) {
             throw new Error("Secret egress proxy requires an admitted agent run instance");
           }
+          assertSourceActive();
           secretEgressEnv = registerSecretEgressProxyRun(
             defaults.operationalRunInstance,
             storeEnv.secretEgressBindings ?? [],
@@ -462,6 +466,7 @@ export function createExecTool(
             bashElevated: elevatedDefaults,
             approvalReviewerDeviceId: defaults?.approvalReviewerDeviceId,
             nonInteractiveApproval: defaults?.nonInteractiveApproval,
+            approvalFollowupMode: defaults?.approvalFollowupMode,
             turnSourceChannel: defaults?.messageProvider,
             turnSourceTo: defaults?.currentChannelId,
             turnSourceAccountId: defaults?.accountId,
@@ -543,6 +548,7 @@ export function createExecTool(
             approvalRunningNoticeMs,
             maxOutput,
             pendingMaxOutput,
+            cleanupMs,
             processContinuationAvailable: allowBackground,
             trustedSafeBinDirs,
           });
@@ -588,13 +594,12 @@ export function createExecTool(
           warnings,
           maxOutput,
           pendingMaxOutput,
+          cleanupMs,
           notifyOnExit,
           notifyOnExitEmptySuccess,
           scopeKey: defaults?.scopeKey,
           sessionKey: notifySessionKey,
           agentId,
-          mainKey: defaults?.mainKey,
-          sessionScope: defaults?.sessionScope,
           eventRouting: defaults?.eventRouting,
           notifyDeliveryContext,
           timeoutSec: effectiveTimeout,

@@ -74,8 +74,9 @@ type EventHandlerContext = {
   tui: EventHandlerTui;
   state: TuiStateAccess;
   setActivityStatus: (text: string) => void;
+  updateFooter: () => void;
   refreshSessionInfo?: () => Promise<void>;
-  loadHistory?: () => Promise<TuiHistoryLoadResult>;
+  loadHistory: () => Promise<TuiHistoryLoadResult>;
   noteLocalRunId?: (runId: string) => void;
   isLocalRunId?: (runId: string) => boolean;
   forgetLocalRunId?: (runId: string) => void;
@@ -109,7 +110,6 @@ export function createEventHandlers(context: EventHandlerContext) {
   const runCoordinator = new TuiSessionRunCoordinator({
     state,
     loadHistory,
-    refreshSessionInfo,
     restoreTerminalError: (message) => chatLog.addSystem(message),
     requestRender: (force) => tui.requestRender(force),
     finalizeHistoryOwnedRun: ({ runId, result, previouslyDisplayed }) => {
@@ -594,6 +594,7 @@ export function createEventHandlers(context: EventHandlerContext) {
       if (isActiveRun) {
         armStreamingWatchdog(evt.runId);
       }
+      context.updateFooter();
       tui.requestRender();
       return;
     }

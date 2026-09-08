@@ -5,13 +5,12 @@
  */
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ProviderExternalAuthProfile } from "../../plugins/types.js";
+import type { ProviderExternalAuthProfile } from "../../plugins/provider-external-auth.types.js";
 import { resolveAgentCredentialMapFromStore } from "../agent-auth-credentials.js";
 import { addEnvBackedAgentCredentials } from "../agent-auth-discovery-core.js";
-import {
-  overlayExternalAuthProfiles,
-  syncPersistedExternalCliAuthProfiles,
-} from "./external-auth.js";
+import { createApiKeyCredential } from "./credential-fixtures.test-support.js";
+import { overlayExternalAuthProfiles } from "./external-auth-runtime.js";
+import { syncPersistedExternalCliAuthProfiles } from "./external-auth.js";
 import { testing } from "./external-auth.test-support.js";
 import { readExternalCliBootstrapCredential } from "./external-cli-sync.js";
 import { getRuntimeExternalCliProfileIds } from "./runtime-external-profile-references.js";
@@ -20,7 +19,8 @@ import {
   registerRuntimeAuthProfileStoreMutationListener,
   replaceRuntimeAuthProfileStoreSnapshots,
 } from "./runtime-snapshots.js";
-import { ensureAuthProfileStore, getRuntimeAuthProfileStoreSnapshot } from "./store.js";
+import { ensureAuthProfileStore } from "./store-runtime.js";
+import { getRuntimeAuthProfileStoreSnapshot } from "./store.js";
 import type { AuthProfileStore, OAuthCredential, RuntimeAuthProfileStore } from "./types.js";
 
 const resolveExternalAuthProfilesWithPluginsMock = vi.fn<
@@ -590,11 +590,7 @@ describe("auth external oauth helpers", () => {
 
     const overlaid = overlayExternalAuthProfiles(
       createStore({
-        "openai:default": {
-          type: "api_key",
-          provider: "openai",
-          key: "sk-local",
-        },
+        "openai:default": createApiKeyCredential("openai", "sk-local"),
       }),
     );
 

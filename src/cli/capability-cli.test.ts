@@ -104,7 +104,9 @@ const mocks = vi.hoisted(() => ({
   resolveMemorySearchConfig: vi.fn<
     typeof import("../agents/memory-search.js").resolveMemorySearchConfig
   >(() => null),
-  loadModelCatalog: vi.fn(async () => []),
+  loadModelCatalog: vi.fn<
+    typeof import("../agents/prepared-model-catalog.js").loadPreparedModelCatalog
+  >(async () => []),
   prepareSimpleCompletionModelForAgent: vi.fn(async () => ({
     selection: {
       provider: "openai",
@@ -363,9 +365,9 @@ vi.mock("../agents/model-auth.js", () => ({
     mocks.resolveApiKeyForProviderCore as typeof import("../agents/model-auth.js").resolveApiKeyForProviderCore,
 }));
 
-vi.mock("../agents/auth-profiles/store.js", () => ({
+vi.mock("../agents/auth-profiles/store-runtime.js", () => ({
   updateAuthProfileStoreWithLock:
-    mocks.updateAuthProfileStoreWithLock as typeof import("../agents/auth-profiles/store.js").updateAuthProfileStoreWithLock,
+    mocks.updateAuthProfileStoreWithLock as typeof import("../agents/auth-profiles/store-runtime.js").updateAuthProfileStoreWithLock,
 }));
 
 vi.mock("../agents/memory-search.js", () => ({
@@ -914,6 +916,84 @@ describe("capability cli", () => {
 
     await runCapability("model", "list");
     expect(mocks.runtime.log).toHaveBeenCalledWith("No results found.");
+  });
+
+  it.each([
+    ["list", []],
+    ["inspect", ["--model", "catalog-fixture/work-model"]],
+  ] as const)("shows the requested agent's model in infer model %s", async (command, args) => {
+    mocks.loadConfig.mockReturnValue({
+      agents: {
+        ownership: "explicit",
+        defaults: { systemAgent: { agentId: "main" } },
+        entries: { main: {}, work: {} },
+      },
+    });
+    const workModel = { provider: "catalog-fixture", id: "work-model", name: "Work model" };
+    mocks.loadModelCatalog.mockImplementation(async (params) =>
+      params?.agentId === "work"
+        ? [workModel]
+        : [{ provider: "catalog-fixture", id: "main-model", name: "Main model" }],
+    );
+
+    await runCap("infer", "model", "--agent", "work", command, ...args, "--json");
+
+    expect(mocks.runtime.writeJson).toHaveBeenCalledWith(
+      command === "list" ? [workModel] : workModel,
+    );
+  });
+
+  it.each(["list", "inspect"])(
+    "rejects an unknown agent before infer model %s returns another agent's model",
+    async (command) => {
+      mocks.loadConfig.mockReturnValue({
+        agents: { ownership: "explicit", entries: { main: {}, work: {} } },
+      });
+
+      await expect(
+        runCap(
+          "infer",
+          "model",
+          "--agent",
+          "retired",
+          command,
+          ...(command === "inspect" ? ["--model", "openai/gpt-5.4"] : []),
+          "--json",
+        ),
+      ).rejects.toThrow("exit 1");
+
+      expectRuntimeErrorContains('Unknown agent id "retired"');
+      expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
+    },
+  );
+
+  it("canonicalizes an infer model run override using the requested agent's catalog", async () => {
+    mocks.loadConfig.mockReturnValue({
+      agents: { ownership: "explicit", entries: { main: {}, work: {} } },
+    });
+    mocks.loadModelCatalog.mockImplementation(async (params) =>
+      params?.agentId === "work"
+        ? [{ provider: "catalog-fixture", id: "Work-Model", name: "Work model" }]
+        : [],
+    );
+
+    await runCap(
+      "infer",
+      "model",
+      "--agent",
+      "work",
+      "run",
+      "--model",
+      "catalog-fixture/WORK-MODEL",
+      "--prompt",
+      "hello",
+      "--json",
+    );
+
+    expect(firstPreparedModelParams()).toMatchObject({
+      agentId: "work",
+      modelRef: "catalog-fixture/Work-Model",
+    });
   });
 
   it("reports model providers configured through their environment key", async () => {
@@ -3186,53 +3266,62 @@ describe("capability cli", () => {
     expect(mocks.generateImage).not.toHaveBeenCalled();
   });
 
-  it("rejects partial image generate timeout before provider dispatch", async () => {
-    await expect(
-      runCapability("image", "generate", "--prompt", "portrait", "--timeout-ms", "1000ms"),
-    ).rejects.toThrow("exit 1");
-    expectRuntimeErrorContains("Invalid --timeout. Use a positive millisecond value");
-    expect(mocks.generateImage).not.toHaveBeenCalled();
-  });
+  describe.each(["infer", "capability"])("%s numeric options", (command) => {
+    describe.each(["", "   "])("blank value %j", (raw) => {
+      it.each([
+        [
+          "web search limit",
+          ["web", "search", "--query", "ping", "--limit"],
+          "--limit must be a positive integer",
+        ],
+        [
+          "image generate count",
+          ["image", "generate", "--prompt", "portrait", "--count"],
+          "--count must be a positive integer",
+        ],
+        [
+          "image edit count",
+          ["image", "edit", "--file", "photo.png", "--prompt", "crop it", "--count"],
+          "--count must be a positive integer",
+        ],
+        [
+          "video generate duration",
+          ["video", "generate", "--prompt", "clip", "--duration"],
+          "--duration must be a finite number",
+        ],
+      ] as const)("rejects %s before provider dispatch", async (_name, argv, message) => {
+        const webSearchRuntime = await import("../web-search/runtime.js");
+        vi.mocked(webSearchRuntime.runWebSearch).mockClear();
 
-  it.each([
-    [
-      "image generate",
-      ["capability", "image", "generate", "--prompt", "portrait", "--timeout-ms", "1000ms"],
-    ],
-    [
-      "image edit",
-      [
-        "capability",
-        "image",
-        "edit",
-        "--file",
-        "photo.png",
-        "--prompt",
-        "crop it",
-        "--timeout-ms",
-        "1000ms",
-      ],
-    ],
-    [
-      "image describe",
-      ["capability", "image", "describe", "--file", "photo.png", "--timeout-ms", "1000ms"],
-    ],
-    [
-      "image describe-many",
-      ["capability", "image", "describe-many", "--file", "photo.png", "--timeout-ms", "1000ms"],
-    ],
-    [
-      "video generate",
-      ["capability", "video", "generate", "--prompt", "clip", "--timeout-ms", "1000ms"],
-    ],
-  ])("rejects malformed %s timeout before provider dispatch", async (_name, argv) => {
-    await expect(runCap(...argv)).rejects.toThrow("exit 1");
+        await expect(runCap(command, ...argv, raw)).rejects.toThrow("exit 1");
 
-    expectRuntimeErrorContains("Invalid --timeout. Use a positive millisecond value");
-    expect(mocks.generateImage).not.toHaveBeenCalled();
-    expect(mocks.generateVideo).not.toHaveBeenCalled();
-    expect(mocks.describeImageFile).not.toHaveBeenCalled();
-    expect(mocks.describeImageFileWithModel).not.toHaveBeenCalled();
+        expectRuntimeErrorContains(message);
+        expect(mocks.resolveCommandConfigWithSecrets).not.toHaveBeenCalled();
+        expect(webSearchRuntime.runWebSearch).not.toHaveBeenCalled();
+        expect(mocks.generateImage).not.toHaveBeenCalled();
+        expect(mocks.generateVideo).not.toHaveBeenCalled();
+      });
+    });
+
+    describe.each(["", "   ", "1000ms"])("invalid timeout %j", (raw) => {
+      it.each([
+        ["image generate", ["image", "generate", "--prompt", "portrait"]],
+        ["image edit", ["image", "edit", "--file", "photo.png", "--prompt", "crop it"]],
+        ["image describe", ["image", "describe", "--file", "photo.png"]],
+        ["image describe-many", ["image", "describe-many", "--file", "photo.png"]],
+        ["video generate", ["video", "generate", "--prompt", "clip"]],
+      ] as const)("rejects %s before provider dispatch", async (_name, argv) => {
+        await expect(runCap(command, ...argv, "--timeout-ms", raw)).rejects.toThrow("exit 1");
+
+        expectRuntimeErrorContains("Invalid --timeout. Use a positive millisecond value");
+        expect(mocks.resolveCommandConfigWithSecrets).not.toHaveBeenCalled();
+        expect(mocks.generateImage).not.toHaveBeenCalled();
+        expect(mocks.generateVideo).not.toHaveBeenCalled();
+        expect(mocks.describeImageFile).not.toHaveBeenCalled();
+        expect(mocks.prepareImageDescriptionInput).not.toHaveBeenCalled();
+        expect(mocks.describePreparedImageWithModel).not.toHaveBeenCalled();
+      });
+    });
   });
 
   it("routes audio transcribe through transcription, not realtime", async () => {

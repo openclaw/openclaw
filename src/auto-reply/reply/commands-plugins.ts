@@ -8,16 +8,15 @@ import {
   resolveInstallConfigMutationPreflights,
   selectInstallMutationWriteOptions,
   type ConfigSnapshotForInstallPersist,
-} from "../../plugins/install-persistence.js";
-import type { InstalledPluginIndex } from "../../plugins/installed-plugin-index.js";
-import { resolveInstalledPluginPackageOwnership } from "../../plugins/installed-plugin-package-ownership.js";
+} from "../../plugins/install-config-mutation.js";
+import { createInstalledPluginOwnershipResolver } from "../../plugins/installed-plugin-package-ownership.js";
 import { withPluginLifecycleLease } from "../../plugins/plugin-lifecycle-lease.js";
 import { loadPluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
 import { refreshPluginRegistryAfterConfigMutation } from "../../plugins/registry-refresh.js";
 import type { PluginRecord } from "../../plugins/registry.js";
 import {
   buildAllPluginInspectReports,
-  buildPluginDiagnosticsReport,
+  withPluginDiagnosticsReportForInspection,
   buildPluginInspectReport,
   buildPluginRegistrySnapshotReport,
   formatPluginCompatibilityNotice,
@@ -44,9 +43,9 @@ function renderJsonBlock(label: string, value: unknown): string {
 
 function buildPluginInspectJson(
   inspect: ReturnType<typeof buildAllPluginInspectReports>[number],
-  index: InstalledPluginIndex,
+  ownershipResolver: ReturnType<typeof createInstalledPluginOwnershipResolver>,
 ) {
-  const ownership = resolveInstalledPluginPackageOwnership(index, inspect.plugin.id);
+  const ownership = ownershipResolver.resolvePackage(inspect.plugin.id);
   return {
     inspect,
     compatibilityWarnings: inspect.compatibility.map((warning) => ({
@@ -225,32 +224,41 @@ export const handlePluginsCommand: CommandHandler = defineAuthorizedTextCommand(
 
       if (pluginsCommand.action === "inspect") {
         const metadataSnapshot = loadPluginMetadataSnapshot(reportParams);
-        const report = buildPluginDiagnosticsReport({ ...reportParams, metadataSnapshot });
-        if (!pluginsCommand.name) {
-          return commandReply(formatPluginsList(report));
-        }
-        if (normalizeOptionalLowercaseString(pluginsCommand.name) === "all") {
-          const reports = buildAllPluginInspectReports({ config, report }).map((inspect) =>
-            buildPluginInspectJson(inspect, metadataSnapshot.index),
-          );
-          return commandReply(renderJsonBlock("🔌 Plugins", reports));
-        }
-        const inspect = buildPluginInspectReport({
-          id: pluginsCommand.name,
-          config,
-          report,
-        });
-        if (!inspect) {
-          return commandReply(`🔌 No plugin named "${pluginsCommand.name}" found.`);
-        }
-        const payload = buildPluginInspectJson(inspect, metadataSnapshot.index);
-        return commandReply(
-          renderJsonBlock(`🔌 Plugin "${inspect.plugin.id}"`, {
-            ...inspect,
-            compatibilityWarnings: payload.compatibilityWarnings,
-            install: payload.install,
-          }),
+        const text = await withPluginDiagnosticsReportForInspection(
+          { ...reportParams, metadataSnapshot },
+          (report) => {
+            if (!pluginsCommand.name) {
+              return formatPluginsList(report);
+            }
+            if (normalizeOptionalLowercaseString(pluginsCommand.name) === "all") {
+              const ownershipResolver = createInstalledPluginOwnershipResolver(
+                metadataSnapshot.index,
+              );
+              const reports = buildAllPluginInspectReports({ config, report }).map((inspect) =>
+                buildPluginInspectJson(inspect, ownershipResolver),
+              );
+              return renderJsonBlock("🔌 Plugins", reports);
+            }
+            const inspect = buildPluginInspectReport({
+              id: pluginsCommand.name,
+              config,
+              report,
+            });
+            if (!inspect) {
+              return `🔌 No plugin named "${pluginsCommand.name}" found.`;
+            }
+            const payload = buildPluginInspectJson(
+              inspect,
+              createInstalledPluginOwnershipResolver(metadataSnapshot.index),
+            );
+            return renderJsonBlock(`🔌 Plugin "${inspect.plugin.id}"`, {
+              ...inspect,
+              compatibilityWarnings: payload.compatibilityWarnings,
+              install: payload.install,
+            });
+          },
         );
+        return commandReply(text);
       }
 
       const report = buildPluginRegistrySnapshotReport(reportParams);
@@ -264,7 +272,7 @@ export const handlePluginsCommand: CommandHandler = defineAuthorizedTextCommand(
 
       let registryWarning: string | undefined;
       try {
-        const committedConfig = await setPluginEnabledFromCommand({
+        await setPluginEnabledFromCommand({
           pluginId: plugin.id,
           enabled: pluginsCommand.action === "enable",
           action: pluginsCommand.action,
@@ -276,7 +284,6 @@ export const handlePluginsCommand: CommandHandler = defineAuthorizedTextCommand(
           }),
         });
         await refreshPluginRegistryAfterConfigMutation({
-          config: committedConfig,
           reason: "policy-changed",
           logger: {
             warn: (message) => {

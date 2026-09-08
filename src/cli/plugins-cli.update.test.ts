@@ -8,7 +8,7 @@ import { resolveRegistryUpdateChannel } from "../infra/update-channels.js";
 import type { PluginCapabilityConsentReview } from "../plugins/capability-summary.js";
 import {
   attachPluginInstallOwnerMigrations,
-  resolvePluginInstallTransactionSink,
+  resolvePluginInstallTransactionRequest,
   type PluginInstallTransaction,
 } from "../plugins/install-transaction.js";
 import { recordInstalledPluginIndexInstallOwner } from "../plugins/installed-plugin-index-install-owner.js";
@@ -209,7 +209,9 @@ function primePluginUpdate(
   installOwnerMigrations?: Readonly<Record<string, string>>,
 ): void {
   updateNpmInstalledPluginsMock.mockImplementation(async (params: unknown) => {
-    resolvePluginInstallTransactionSink(params as object)?.push(...(transactions ?? []));
+    resolvePluginInstallTransactionRequest(params as object)?.transactionSink?.push(
+      ...(transactions ?? []),
+    );
     const result = {
       config,
       changed,
@@ -477,7 +479,7 @@ describe("plugins cli update", () => {
     primePluginUpdate(cfg);
     const transaction = { commit: vi.fn(async () => {}), rollback: vi.fn(async () => {}) };
     updateNpmInstalledHookPacksMock.mockImplementation(async (params) => {
-      resolvePluginInstallTransactionSink(params)?.push(transaction);
+      resolvePluginInstallTransactionRequest(params)?.transactionSink?.push(transaction);
       return {
         config: nextConfig,
         changed: true,
@@ -499,7 +501,6 @@ describe("plugins cli update", () => {
     expect(hookUpdateParams.specOverrides).toEqual(
       specOverride ? { "demo-hooks": specOverride } : undefined,
     );
-    expect(hookUpdateParams.dangerouslyForceUnsafeInstall).toBe(true);
     expect(updateNpmInstalledPluginsMock).not.toHaveBeenCalled();
     expect(configWriteMock).toHaveBeenCalledWith(nextConfig);
     expect(replaceConfigFileMock).toHaveBeenCalledWith(
@@ -522,7 +523,7 @@ describe("plugins cli update", () => {
     });
     const events: string[] = [];
     updateNpmInstalledHookPacksMock.mockImplementation(async (params) => {
-      resolvePluginInstallTransactionSink(params)?.push({
+      resolvePluginInstallTransactionRequest(params)?.transactionSink?.push({
         commit: async () => {
           events.push("commit");
           if (failure === "backup cleanup") {
@@ -815,7 +816,7 @@ describe("plugins cli update", () => {
     expect(configWriteMock).not.toHaveBeenCalled();
     expect(replaceConfigFileMock).not.toHaveBeenCalled();
     expect(refreshPluginRegistryMock).toHaveBeenCalledWith({
-      config: sourceCfg,
+      config: cfg,
       installRecords: nextRecords,
       reason: "source-changed",
     });
@@ -1409,7 +1410,7 @@ describe("plugins cli update", () => {
     expect(pluginsCliRuntimeLogs.at(-1)).toBe("No tracked plugins or hook packs to update.");
   });
 
-  it("passes dangerous force unsafe install to plugin updates", async () => {
+  it("warns once for the deprecated unsafe flag on updates", async () => {
     const config = createTrackedPluginConfig({
       pluginId: "openclaw-codex-app-server",
       spec: "openclaw-codex-app-server@beta",
@@ -1428,7 +1429,6 @@ describe("plugins cli update", () => {
     const updateParams = expectSingleCallParams(updateNpmInstalledPluginsMock);
     expect(updateParams.config).toEqual(config);
     expect(updateParams.pluginIds).toEqual(["openclaw-codex-app-server"]);
-    expect(updateParams.dangerouslyForceUnsafeInstall).toBe(true);
     expect(
       pluginsCliRuntimeLogs.filter((message) =>
         message.includes(

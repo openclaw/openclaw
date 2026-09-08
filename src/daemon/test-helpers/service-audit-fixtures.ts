@@ -1,21 +1,22 @@
 /** Shared mocks and issue helpers for the daemon service-audit tests. */
 import { vi } from "vitest";
 import type { MockFn } from "../../test-utils/vitest-mock-fn.js";
+import type { resolveBunRuntimeInfo } from "../runtime-paths.js";
 import type { SERVICE_AUDIT_CODES, ServiceConfigAudit } from "../service-audit.js";
+import type { execSystemctlUser } from "../systemd-exec.js";
 
-export const execSystemctlUserMock: MockFn<
-  (
-    env: NodeJS.ProcessEnv,
-    args: string[],
-    timeoutMs?: number,
-  ) => Promise<{ stdout: string; stderr: string; code: number }>
-> = vi.fn();
-export const resolveBunRuntimeInfoMock: MockFn = vi.fn();
+export const execSystemctlUserMock: MockFn<typeof execSystemctlUser> = vi.fn();
+export const resolveBunRuntimeInfoMock: MockFn<typeof resolveBunRuntimeInfo> = vi.fn();
 
 /** Restores the default systemd-unavailable and WAL-safe Bun probe responses. */
 export function resetServiceAuditMocks() {
   execSystemctlUserMock.mockReset();
-  execSystemctlUserMock.mockResolvedValue({ stdout: "", stderr: "systemd unavailable", code: 1 });
+  execSystemctlUserMock.mockResolvedValue({
+    stdout: "",
+    stderr: "systemd unavailable",
+    code: 1,
+    termination: "exit",
+  });
   resolveBunRuntimeInfoMock.mockReset();
   resolveBunRuntimeInfoMock.mockResolvedValue({
     version: "1.4.0",

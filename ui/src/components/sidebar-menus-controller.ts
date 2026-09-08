@@ -1,4 +1,5 @@
 import { nothing, type ReactiveController, type ReactiveControllerHost } from "lit";
+import type { ControlUiNavigationItem } from "../../../src/plugin-sdk/control-ui.js";
 import type { AgentIdentityResult } from "../api/types.ts";
 import {
   cancelRoutePreload,
@@ -10,16 +11,18 @@ import { isSessionRouteId, pathForRoute, type RouteId } from "../app-route-paths
 import type { ApplicationContext, ApplicationNavigationOptions } from "../app/context.ts";
 import type { ThemeMode } from "../app/theme.ts";
 import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
+import { IdentityAvatarController } from "../lib/identity-avatar-loader.ts";
 import { createIdleImport } from "../lib/idle-import.ts";
 import {
-  scopedSessionPullRequestKey,
   SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
   sessionPullRequestsForGateway,
 } from "../lib/session-pull-requests.ts";
+import { parseCatalogSessionKey } from "../lib/sessions/catalog-key.ts";
 import type { CatalogProjectGrouping } from "../lib/sessions/catalog-project-grouping.ts";
 import type { SidebarSessionsGrouping } from "../lib/sessions/grouping.ts";
 import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
-import { parseAgentSessionKey } from "../lib/sessions/session-key.ts";
+import { parseAgentSessionKey, scopedSessionArtifactKey } from "../lib/sessions/session-key.ts";
+import type { ControlUiRegistration } from "../plugins/control-ui-capability.ts";
 import { SidebarCatalogMenuController } from "./app-sidebar-catalog-menu.ts";
 import { isSidebarRouteActive, renderSidebarNavRoute } from "./app-sidebar-nav-menus.ts";
 import type {
@@ -28,7 +31,6 @@ import type {
   SidebarSessionMenuState,
   SidebarSessionSortMode,
 } from "./app-sidebar-session-types.ts";
-import type { SidebarWorkboardBoard, SidebarWorkboardRenderers } from "./app-sidebar-workboard.ts";
 import type { SessionDataController } from "./session-data-controller.ts";
 import { fetchSessionMenuWork } from "./session-menu-work.ts";
 import type { SessionMenuWork } from "./session-menu.ts";
@@ -69,21 +71,11 @@ interface SidebarMenusControllerState {
 
 export type SidebarFilterMenuView = "root" | "specific-owner";
 
-type SidebarMenusRenderer = {
-  renderSidebarAgentMenuForController(controller: SidebarMenusController): unknown;
-  renderSidebarCatalogViewMenuForController(controller: SidebarMenusController): unknown;
-  renderSidebarCustomizeMenuForController(controller: SidebarMenusController): unknown;
-  renderSidebarIdentityMenuForController(controller: SidebarMenusController): unknown;
-  renderSidebarMoreMenuForController(controller: SidebarMenusController): unknown;
-  renderSidebarSessionGroupMenuForController(controller: SidebarMenusController): unknown;
-  renderSidebarSessionMenuForController(controller: SidebarMenusController): unknown;
-  renderSidebarSessionSortMenuForController(controller: SidebarMenusController): unknown;
-};
+type SidebarMenusRenderer = typeof import("./sidebar-menus-render.ts");
 
 interface SidebarMenusControllerHost
   extends ReactiveControllerHost, SessionOrganizerControllerHost {
   readonly activeRouteId?: NavigationRouteId;
-  readonly activeWorkboardBoardId: string;
   readonly basePath: string;
   readonly canPairDevice: boolean;
   readonly connected: boolean;
@@ -110,6 +102,7 @@ interface SidebarMenusControllerHost
       | "sessionResultsByAgent"
       | "sessionsLoading"
       | "sessionsResult"
+      | "invalidateSessionCatalogs"
     >;
   readonly sessionDataContext: ApplicationContext<RouteId> | undefined;
   readonly sessionOrganizer: SessionOrganizerController;
@@ -135,8 +128,7 @@ interface SidebarMenusControllerHost
   setSessionOwnerFilter(ownerId: string | null, involvingMe?: boolean): void;
   readonly terminalAvailable: boolean;
   readonly themeMode: ThemeMode;
-  readonly workboardBoards: readonly SidebarWorkboardBoard[];
-  readonly workboardRenderers?: SidebarWorkboardRenderers;
+  pluginNavigation(): ControlUiRegistration<ControlUiNavigationItem>[];
   activeChipAgent(): {
     activeId: string;
     agent: SidebarMenuAgent | undefined;
@@ -199,23 +191,52 @@ export class SidebarMenusController implements ReactiveController, SidebarMenusC
     },
   );
   readonly catalogMenu: SidebarCatalogMenuController;
+  readonly agentMenuAvatars: IdentityAvatarController;
+  pluginActionLifetime = new AbortController();
 
   constructor(readonly host: SidebarMenusControllerHost) {
     host.addController(this);
+    this.agentMenuAvatars = new IdentityAvatarController(host);
     this.catalogMenu = new SidebarCatalogMenuController({
       // Closing every transient menu keeps one popover at a time.
       beforeOpen: () => void this.dismissTransientMenus(),
       requestUpdate: () => host.requestUpdate(),
       terminalAvailable: () => host.terminalAvailable,
+      beginMutation: () => host.sessionData.beginSessionMutation(),
+      isMutationCurrent: (scope) => host.sessionData.isSessionMutationScopeCurrent(scope),
+      archive: (scope, params) => scope.client.request("sessions.catalog.archive", params),
+      afterDelete: async (scope, key) => {
+        host.sessionData.invalidateSessionCatalogs();
+        if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
+          return;
+        }
+        const active = parseCatalogSessionKey(host.getRouteSessionKey());
+        if (
+          host.activeRouteId === "chat" &&
+          active?.catalogId === key.catalogId &&
+          active.hostId === key.hostId &&
+          active.threadId === key.threadId
+        ) {
+          host.onNavigate?.("chat", {
+            pathname: pathForRoute("chat", host.basePath),
+            search: "",
+            hash: "",
+          });
+        }
+      },
       navigate: ({ routeId, navigation }) => host.onNavigate?.(routeId, navigation),
     });
   }
 
   hostConnected(): void {
+    if (this.pluginActionLifetime.signal.aborted) {
+      this.pluginActionLifetime = new AbortController();
+    }
     this.menuRendererImport.schedule();
   }
 
   hostDisconnected(): void {
+    this.pluginActionLifetime.abort();
     this.menuRendererImport.dispose();
     this.clearAgentMenuHoverTimers();
     for (const timer of this.routePreloadTimers.values()) {
@@ -400,7 +421,7 @@ export class SidebarMenusController implements ReactiveController, SidebarMenusC
     }
     const { selectedAgentId } = this.host.getSessionNavigationState();
     const store = sessionPullRequestsForGateway(context.gateway);
-    const pullRequestKey = scopedSessionPullRequestKey(
+    const pullRequestKey = scopedSessionArtifactKey(
       session.key,
       parseAgentSessionKey(session.key)?.agentId ?? selectedAgentId,
     );
@@ -693,7 +714,9 @@ export class SidebarMenusController implements ReactiveController, SidebarMenusC
   }
 
   renderAgentMenu() {
-    return this.menuRenderer?.renderSidebarAgentMenuForController(this) ?? nothing;
+    return this.agentMenuAvatars.withActiveRoutes(
+      () => this.menuRenderer?.renderSidebarAgentMenuForController(this) ?? nothing,
+    );
   }
 
   renderIdentityMenu() {
@@ -729,9 +752,7 @@ export class SidebarMenusController implements ReactiveController, SidebarMenusC
     return renderSidebarNavRoute({
       routeId,
       href: sessionTarget?.href ?? pathForRoute(routeId, this.host.basePath),
-      active:
-        isSidebarRouteActive(this.host.activeRouteId, routeId) &&
-        !(routeId === "workboard" && this.activeWorkboardBoardIsPinned()),
+      active: isSidebarRouteActive(this.host.activeRouteId, routeId),
       onNavigate: () => {
         this.host.onNavigate?.(routeId, sessionTarget?.options);
       },
@@ -742,17 +763,5 @@ export class SidebarMenusController implements ReactiveController, SidebarMenusC
 
   renderMoreMenu() {
     return this.menuRenderer?.renderSidebarMoreMenuForController(this) ?? nothing;
-  }
-
-  private activeWorkboardBoardIsPinned(): boolean {
-    return Boolean(
-      this.host.activeWorkboardBoardId &&
-      this.host
-        .reconciledSidebarZone()
-        .entries.some(
-          (entry) =>
-            entry.type === "workboard" && entry.boardId === this.host.activeWorkboardBoardId,
-        ),
-    );
   }
 }

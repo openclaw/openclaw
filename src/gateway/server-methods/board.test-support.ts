@@ -4,7 +4,7 @@ import { createTestBoardStore } from "../../boards/board-store.test-support.js";
 import { createBoardHandlers } from "./board.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
 
-type BoardHandlerDependencies = NonNullable<Parameters<typeof createBoardHandlers>[3]>;
+type BoardHandlerDependencies = NonNullable<Parameters<typeof createBoardHandlers>[2]>;
 type BoardMcpAppDependencies = {
   resolveActiveView: NonNullable<BoardHandlerDependencies["resolveActiveView"]>;
   resolveAllowedToolNames: NonNullable<BoardHandlerDependencies["resolveAllowedToolNames"]>;
@@ -68,7 +68,7 @@ export function createMcpAppDependencies(): BoardMcpAppDependencies {
 }
 
 export function createBoardHarness(
-  readCanvasHtml?: Parameters<typeof createBoardHandlers>[2],
+  readCanvasHtml?: Parameters<typeof createBoardHandlers>[1],
   dependencies: BoardHandlerDependencies = {},
   store: BoardStore = createTestBoardStore(),
   contextOverrides: Partial<GatewayRequestContext> = {},
@@ -83,7 +83,7 @@ export function createBoardHarness(
     mintFromTranscript: dependencies.mintFromTranscript ?? defaults.mintFromTranscript,
   };
   const broadcast = vi.fn();
-  const handlers = createBoardHandlers(store, undefined, readCanvasHtml, mcpApp);
+  const handlers = createBoardHandlers(store, readCanvasHtml, mcpApp);
   const context = {
     broadcast,
     getMcpAppSandboxPort: () => 18790,

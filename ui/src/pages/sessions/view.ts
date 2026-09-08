@@ -6,7 +6,6 @@ import {
 // Control UI view renders sessions screen content.
 import { html, nothing } from "lit";
 import type { SessionsSearchHit } from "../../../../packages/gateway-protocol/src/index.js";
-import "../../styles/sessions.css";
 import type {
   AgentIdentityResult,
   GatewaySessionRow,
@@ -16,19 +15,20 @@ import type {
   SessionCompactionCheckpoint,
   SessionsListResult,
 } from "../../api/types.ts";
+import "../../styles/sessions.css";
 import { renderCapacityMeter } from "../../components/capacity-meter.ts";
 import { icons } from "../../components/icons.ts";
-import "../../components/tooltip.ts";
-import "../../components/web-awesome.ts";
-import "../../components/web-awesome-popover.ts";
 import {
   renderSettingsPage,
   renderSettingsSegmented,
   renderSettingsSection,
   renderSettingsStatus,
 } from "../../components/settings-ui.ts";
+import "../../components/tooltip.ts";
+import "../../components/web-awesome.ts";
+import "../../components/web-awesome-popover.ts";
 import { t } from "../../i18n/index.ts";
-import { resolveAgentRuntimeLabel } from "../../lib/agents/display.ts";
+import { formatAgentRuntimeLabel } from "../../lib/agents/display.ts";
 import {
   formatInheritedThinkingLabel,
   formatThinkingOverrideLabel,
@@ -42,11 +42,13 @@ import {
 } from "../../lib/format.ts";
 import { handleContextMenuEvent } from "../../lib/keyboard-shortcuts.ts";
 import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
+import { presenceViewerLabel } from "../../lib/presence-users.ts";
 import { formatSessionTokens } from "../../lib/presenter.ts";
 import { isCronSessionKey } from "../../lib/session-display.ts";
 import { formatGoalDetail, formatGoalSummary } from "../../lib/session-goal.ts";
 import { sessionModelMatchesDefaults } from "../../lib/session-model-defaults.ts";
 import { isSessionRunActive } from "../../lib/session-run-state.ts";
+import { resolveSessionContextLimit } from "../../lib/sessions/context-budget.ts";
 import { SESSION_DRAG_MIME } from "../../lib/sessions/drag.ts";
 import {
   groupSessionRows,
@@ -64,7 +66,7 @@ import { formatSessionArchiveReason } from "../../lib/sessions/session-archive-r
 import { parseSessionKeyParts } from "../../lib/sessions/session-key.ts";
 import { SESSIONS_PAGE_DEFAULT_LIMIT } from "../../lib/sessions/session-requests.ts";
 
-export type TranscriptSearchState =
+type TranscriptSearchState =
   | { status: "idle" }
   | { status: "loading" }
   | { status: "error"; message: string }
@@ -129,6 +131,7 @@ export type SessionsProps = {
   onGroupByChange: (mode: SessionsGroupBy) => void;
   onAssignCategory: (key: string, category: string | null) => void;
   onRequestNewCategory: (sessionKey?: string) => void;
+  onLoadMore: () => void;
   onPageChange: (page: number) => void;
   onPageSizeChange: (size: number) => void;
   onRefresh: () => void;
@@ -314,8 +317,8 @@ function renderTokensCell(row: GatewaySessionRow) {
   // composer's context-usage convention.
   const fresh = row.totalTokensFresh !== false;
   const totalLabel = `${fresh ? "" : "~"}${formatCompactTokenCount(total)}`;
-  const context =
-    typeof row.contextTokens === "number" && row.contextTokens > 0 ? row.contextTokens : null;
+  const limit = resolveSessionContextLimit(row);
+  const context = limit.tokens > 0 ? limit.tokens : null;
   if (!context) {
     return html`<span class="session-tokens__value">${totalLabel}</span>`;
   }
@@ -327,11 +330,20 @@ function renderTokensCell(row: GatewaySessionRow) {
       : percent >= CONTEXT_METER_WARN_PERCENT
         ? "warn"
         : "ok";
-  const title = t(fresh ? "sessionsView.contextUsage" : "sessionsView.contextUsageApprox", {
-    percent: String(percent),
-    used: total.toLocaleString(),
-    context: context.toLocaleString(),
-  });
+  const title = t(
+    limit.fromLastPrompt
+      ? fresh
+        ? "sessionsView.promptBudgetUsage"
+        : "sessionsView.promptBudgetUsageApprox"
+      : fresh
+        ? "sessionsView.contextUsage"
+        : "sessionsView.contextUsageApprox",
+    {
+      percent: String(percent),
+      used: total.toLocaleString(),
+      context: context.toLocaleString(),
+    },
+  );
   return html`
     <openclaw-tooltip .content=${title}>
       <div class="session-tokens">
@@ -579,42 +591,6 @@ function renderSkeletonRows(columnCount: number) {
   );
 }
 
-function filterRows(
-  rows: GatewaySessionRow[],
-  query: string,
-  agentIdentityById: Record<string, AgentIdentityResult>,
-): GatewaySessionRow[] {
-  const q = normalizeLowercaseStringOrEmpty(query);
-  if (!q) {
-    return rows;
-  }
-  return rows.filter((row) => {
-    const fields = [
-      row.key,
-      row.label,
-      row.category,
-      row.kind,
-      row.displayName,
-      resolveAgentRuntimeLabel(row.agentRuntime),
-      row.status,
-      row.goal
-        ? `${row.goal.objective} ${row.goal.status} ${formatGoalSummary(row.goal)} ${
-            row.goal.lastStatusNote ?? ""
-          }`
-        : "",
-      isSessionRunActive(row) ? "live running" : row.hasActiveRun === false ? "idle" : "",
-    ];
-    if (fields.some((value) => normalizeLowercaseStringOrEmpty(value).includes(q))) {
-      return true;
-    }
-    const keyParts = parseSessionKeyParts(row.key);
-    const identityName = keyParts
-      ? normalizeLowercaseStringOrEmpty(getAgentIdentity(agentIdentityById, keyParts.agentId)?.name)
-      : "";
-    return identityName.includes(q);
-  });
-}
-
 function sortRows(
   rows: GatewaySessionRow[],
   column: "key" | "kind" | "updated" | "tokens",
@@ -749,7 +725,7 @@ function sessionDetailItems(params: {
   add(t("sessionsView.provider"), row.modelProvider);
   // The roster dropped its Runtime column; the drawer is where agent runtime
   // and run duration live now.
-  add(t("sessionsView.runtime"), resolveAgentRuntimeLabel(row.agentRuntime));
+  add(t("sessionsView.runtime"), formatAgentRuntimeLabel(row.agentRuntime));
   add(t("sessionsView.runDuration"), formatRuntimeMs(row.runtimeMs));
   add(t("sessionsView.surface"), row.surface);
   add(t("sessionsView.subject"), row.subject);
@@ -817,7 +793,10 @@ function sessionGroupLabel(group: SessionRowGroup, props: SessionsProps): string
     }
   }
   if (props.groupBy === "person") {
-    return group.rows[0]?.owner?.actor.label?.trim() || id;
+    const actor = group.rows[0]?.owner?.actor;
+    return actor?.identity?.type === "profile"
+      ? presenceViewerLabel({ id: actor.identity.id, name: actor.label?.trim() || id })
+      : actor?.label?.trim() || id;
   }
   return id;
 }
@@ -995,8 +974,7 @@ function renderOverrideSelect(params: {
 
 export function renderSessions(props: SessionsProps) {
   const rawRows = props.result?.sessions ?? [];
-  const filtered = filterRows(rawRows, props.searchQuery, props.agentIdentityById);
-  const sorted = sortRows(filtered, props.sortColumn, props.sortDir);
+  const sorted = sortRows(rawRows, props.sortColumn, props.sortDir);
   const totalRows = sorted.length;
   const totalPages = Math.max(1, Math.ceil(totalRows / props.pageSize));
   const page = Math.min(props.page, totalPages - 1);
@@ -1010,8 +988,7 @@ export function renderSessions(props: SessionsProps) {
       : null;
   const displayRows = groups ? groups.flatMap((group) => group.rows) : sorted;
   const paginated = paginateRows(displayRows, page, props.pageSize);
-  const emptyBecauseFiltered =
-    rawRows.length === 0 ? hasActiveFilters(props) : filtered.length === 0;
+  const emptyBecauseFiltered = rawRows.length === 0 && hasActiveFilters(props);
   const liveCount = rawRows.filter((row) => isSessionRunActive(row)).length;
   const archivedCount = rawRows.filter((row) => row.archived === true).length;
   const emptyMessage =
@@ -1355,39 +1332,44 @@ function renderSessionsTable(props: SessionsProps, ctx: SessionsTableContext) {
           ${
             props.loading && !props.result
               ? renderSkeletonRows(sessionsTableColumnCount(props))
-              : paginated.length === 0
-                ? html`
-                    <tr>
-                      <td colspan=${sessionsTableColumnCount(props)} class="data-table-empty-cell">
-                        <div class="data-table-empty-state" role="status" aria-live="polite">
-                          <div class="data-table-empty-state__message">
-                            ${emptyBecauseFiltered ? icons.search : icons.messageSquare}
-                            <span>${emptyStateMessage}</span>
+              : paginated.length === 0 && (props.loading || props.error || !props.result)
+                ? nothing
+                : paginated.length === 0
+                  ? html`
+                      <tr>
+                        <td
+                          colspan=${sessionsTableColumnCount(props)}
+                          class="data-table-empty-cell"
+                        >
+                          <div class="data-table-empty-state" role="status" aria-live="polite">
+                            <div class="data-table-empty-state__message">
+                              ${emptyBecauseFiltered ? icons.search : icons.messageSquare}
+                              <span>${emptyStateMessage}</span>
+                            </div>
+                            ${
+                              emptyBecauseFiltered
+                                ? html`
+                                    <button class="btn btn--sm" @click=${props.onClearFilters}>
+                                      ${t("sessionsView.showAll")}
+                                    </button>
+                                  `
+                                : nothing
+                            }
                           </div>
-                          ${
-                            emptyBecauseFiltered
-                              ? html`
-                                  <button class="btn btn--sm" @click=${props.onClearFilters}>
-                                    ${t("sessionsView.showAll")}
-                                  </button>
-                                `
-                              : nothing
-                          }
-                        </div>
-                      </td>
-                    </tr>
-                  `
-                : groups
-                  ? groups.flatMap((group) => {
-                      const visibleRows = group.rows.filter((row) => paginatedKeys?.has(row.key));
-                      if (visibleRows.length === 0 && group.rows.length > 0) {
-                        return [];
-                      }
-                      const section = visibleRows.flatMap((row) => renderRows(row, props));
-                      section.unshift(renderGroupHeaderRow(group, props));
-                      return section;
-                    })
-                  : paginated.flatMap((row) => renderRows(row, props))
+                        </td>
+                      </tr>
+                    `
+                  : groups
+                    ? groups.flatMap((group) => {
+                        const visibleRows = group.rows.filter((row) => paginatedKeys?.has(row.key));
+                        if (visibleRows.length === 0 && group.rows.length > 0) {
+                          return [];
+                        }
+                        const section = visibleRows.flatMap((row) => renderRows(row, props));
+                        section.unshift(renderGroupHeaderRow(group, props));
+                        return section;
+                      })
+                    : paginated.flatMap((row) => renderRows(row, props))
           }
         </tbody>
       </table>
@@ -1421,6 +1403,13 @@ function renderSessionsTable(props: SessionsProps, ctx: SessionsTableContext) {
                       </option>`,
                   )}
                 </select>
+                ${
+                  props.result?.hasMore && props.result.nextOffset != null
+                    ? html` <button ?disabled=${props.loading} @click=${props.onLoadMore}>
+                        ${t("chat.selectors.loadMoreRosterSessions")}
+                      </button>`
+                    : nothing
+                }
                 <button ?disabled=${page <= 0} @click=${() => props.onPageChange(page - 1)}>
                   ${t("common.previous")}
                 </button>

@@ -3,8 +3,8 @@ import type {
   SessionTypingEvent,
   TaskSuggestionEvent,
 } from "../../../../packages/gateway-protocol/src/index.js";
-import { invalidateAssistantIdentityCache } from "../../app/assistant-identity.ts";
 import { chatInputOwnerForContext } from "../../app/chat-input-owner.ts";
+import { isDesktopPanelAvailable } from "../../app/panel-availability.ts";
 import {
   disposeQuestionPromptState,
   handleQuestionPromptEvent,
@@ -15,14 +15,10 @@ import { BROWSER_ANNOTATION_EVENT } from "../../components/browser/browser-annot
 import {
   BROWSER_PANEL_TOGGLE_EVENT,
   DESKTOP_PANEL_TOGGLE_EVENT,
-  isTerminalPanelShortcut,
   TERMINAL_PANEL_DOCK_BOTTOM_EVENT,
   TERMINAL_PANEL_TOGGLE_EVENT,
 } from "../../components/panel-toggle-contract.ts";
-import {
-  KEYBOARD_SHORTCUT_COMBOS,
-  matchesShortcutCombo,
-} from "../../lib/keyboard-shortcut-catalog.ts";
+import { matchesShortcutCombo } from "../../lib/keyboard-shortcut-contract.ts";
 import { sessionPullRequestsForGateway } from "../../lib/session-pull-requests.ts";
 import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import { resolveSessionKey } from "../../lib/sessions/index.ts";
@@ -31,6 +27,11 @@ import {
   parseAgentSessionKey,
 } from "../../lib/sessions/session-key.ts";
 import * as chatAvatars from "./chat-avatar.ts";
+import {
+  chatHistoryRequests,
+  retireInitialChatSnapshot,
+  type InitialChatSnapshotHydration,
+} from "./chat-history-state.ts";
 import { syncSelectedSessionMessageSubscription } from "./chat-history-subscription.ts";
 import {
   type ChatAttachmentGatewayOwner,
@@ -44,6 +45,7 @@ import {
   focusBrowserAnnotationComposerAfterUpdate,
   receiveBrowserAnnotation as admitBrowserAnnotation,
 } from "./chat-pane-browser-annotation.ts";
+import { SIDEBAR_PANEL_SHORTCUTS } from "./chat-pane-panel-shortcuts.ts";
 import { releaseAttachmentWorkspaceOwner } from "./chat-pane-rails.ts";
 import { ChatPaneSessionCreation } from "./chat-pane-session-creation.ts";
 import { ChatPaneSessionPanelToggleController } from "./chat-pane-session-panel-toggle.ts";
@@ -52,6 +54,7 @@ import {
   CHAT_OPEN_DETAILS_SELECTOR,
   focusChatComposerFromPrintableKeydown,
 } from "./chat-pane-shared.ts";
+import { resolveSidebarLayoutForBoard } from "./chat-pane-sidebar-layout.ts";
 import {
   subscribeChatPaneSnapshotInvalidation,
   subscribeChatPaneStartup,
@@ -67,7 +70,6 @@ import {
 import { resetChatViewState } from "./chat-view-state.ts";
 import { publishChatWorkContext } from "./chat-work-context.ts";
 import { dismissConfirmedActionPopovers } from "./components/chat-message.ts";
-import { clearChatModelSearchOnEscape } from "./components/chat-model-picker.ts";
 import { dismissThreadPortals } from "./components/chat-thread-interactions.ts";
 import { WIDGET_PROMPT_EVENT, type WidgetPromptEventDetail } from "./components/chat-tool-cards.ts";
 import { CHAT_COMPOSER_DRAFT_STORAGE_ERROR } from "./composer-persistence.ts";
@@ -80,8 +82,7 @@ import {
   readChatSessionSnapshot,
   resolveChatSnapshotKey,
 } from "./session-message-cache.ts";
-import { closeSlot, isSidebarSlotVisible, openSlot, type SidebarSlotId } from "./sidebar-layout.ts";
-import { subscribeToolTitleChanges } from "./tool-titles.ts";
+import { closeSlot, isSidebarSlotVisible, openSlot } from "./sidebar-layout.ts";
 
 export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
   private readonly sessionPanelToggles = new ChatPaneSessionPanelToggleController({
@@ -117,22 +118,48 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
       return;
     }
     const cacheKey = resolveChatSnapshotKey(state, { sessionKey });
-    void store.read(cacheKey).then((snapshot) => {
-      if (
-        !snapshot ||
-        this.state !== state ||
-        !areUiSessionKeysEquivalent(state.sessionKey, sessionKey) ||
-        readChatSessionSnapshot(state.chatMessagesBySession, state, { sessionKey })
-      ) {
-        return;
-      }
-      // The memory miss fences network replacement; the pane projection merges
-      // live and pending rows that arrived while IndexedDB was pending.
-      applyChatCacheSnapshot(state, snapshot);
-      const mergedSnapshot = { ...snapshot, messages: state.chatMessages };
-      cacheChatSessionSnapshot(state.chatMessagesBySession, state, { sessionKey }, mergedSnapshot);
-      state.requestUpdate?.();
+    const requests = chatHistoryRequests(state);
+    let startedBeforeReady = this.context.gateway.snapshot.phase !== "connected";
+    let readyAt: number | undefined;
+    const reading = store.read(cacheKey, (prewarmReadyAt) => {
+      startedBeforeReady = true;
+      readyAt = prewarmReadyAt;
     });
+    const hydration: InitialChatSnapshotHydration = {
+      sessionKey,
+      startedBeforeReady,
+      readyAt,
+      promise: reading
+        .then((snapshot) => {
+          if (
+            !snapshot ||
+            requests.initialSnapshotHydration !== hydration ||
+            this.state !== state ||
+            !areUiSessionKeysEquivalent(state.sessionKey, sessionKey) ||
+            readChatSessionSnapshot(state.chatMessagesBySession, state, { sessionKey })
+          ) {
+            return;
+          }
+          // The memory miss fences network replacement; the pane projection merges
+          // live and pending rows that arrived while IndexedDB was pending.
+          applyChatCacheSnapshot(state, snapshot);
+          const mergedSnapshot = { ...snapshot, messages: state.chatMessages };
+          cacheChatSessionSnapshot(
+            state.chatMessagesBySession,
+            state,
+            { sessionKey },
+            mergedSnapshot,
+          );
+          state.requestUpdate?.();
+        })
+        .catch(() => undefined)
+        .finally(() => {
+          if (requests.initialSnapshotHydration === hydration && !hydration.wait) {
+            delete requests.initialSnapshotHydration;
+          }
+        }),
+    };
+    requests.initialSnapshotHydration = hydration;
   }
 
   public discardStagedAttachments(): void {
@@ -207,7 +234,21 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
     ) {
       return;
     }
-    const togglePanelSlot = (slot: SidebarSlotId) => {
+    const shortcut = Object.values(SIDEBAR_PANEL_SHORTCUTS).find(
+      (entry) => entry && matchesShortcutCombo(entry.combo, event),
+    );
+    const discussionState = this.sessionDiscussionStates.get(state.sessionKey.trim());
+    if (
+      shortcut?.available({
+        state,
+        desktopAvailable: isDesktopPanelAvailable(this.context.gateway.snapshot),
+        discussion: state.connected && state.client ? true : null,
+        discussionAvailable: discussionState === "available" || discussionState === "open",
+        dashboardAvailable: () => !this.compact && this.isBoardPanelAvailable(),
+      })
+    ) {
+      event.preventDefault();
+      const { slot } = shortcut;
       const visible = isSidebarSlotVisible(state.sidebarLayout, slot);
       if (visible) {
         releaseAttachmentWorkspaceOwner(state, slot);
@@ -215,21 +256,11 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
       this.commitSidebarLayout(
         visible ? closeSlot(state.sidebarLayout, slot) : openSlot(state.sidebarLayout, slot),
       );
-    };
-    if (state.terminalAvailable && isTerminalPanelShortcut(event)) {
-      event.preventDefault();
-      togglePanelSlot("terminal");
-      return;
-    }
-    if (matchesShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.workspaceFiles, event)) {
-      event.preventDefault();
-      togglePanelSlot("workspace");
       return;
     }
 
     focusChatComposerFromPrintableKeydown(this, event);
 
-    clearChatModelSearchOnEscape(event);
     if (event.defaultPrevented || event.key !== "Escape") {
       return;
     }
@@ -286,7 +317,6 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
     document.addEventListener("pointerdown", this.handleDocumentPointerdown, true);
     const chatState = this.chatState;
     chatState.addCleanup(() => publishChatWorkContext(this.context, this));
-    chatState.addCleanup(subscribeToolTitleChanges(() => this.state?.requestUpdate?.()));
     chatState.addCleanup(() => {
       document.removeEventListener("keydown", this.handleDocumentKeydown, true);
       document.removeEventListener("pointerdown", this.handleDocumentPointerdown, true);
@@ -304,9 +334,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
       pageState.assistantAgentId = paneAgentId;
       pageState.agentsSelectedId = paneAgentId;
     }
-    if (this.compact) {
-      pageState.sidebarLayout = { ...pageState.sidebarLayout, open: false };
-    }
+    pageState.sidebarLayout = this.restorePaneSidebarLayout(pageState.sidebarLayout);
     pageState.getWorkContext = () => this.workContext;
     // Task tabs can precede main chat in DOM order; viewport reads and commands
     // must resolve through the same transcript owner.
@@ -450,8 +478,9 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
         }
         if (state) {
           if (event.event === "config.changed") {
+            state.mediaPolicyEpoch = (state.mediaPolicyEpoch ?? 0) + 1;
+            state.requestUpdate?.();
             chatAvatars.invalidateChatAvatarCache(state);
-            invalidateAssistantIdentityCache(state.client);
             state.assistantIdentityRequestVersion += 1;
             void chatAvatars.refreshChatAvatar(state).finally(() => state.requestUpdate?.());
           }
@@ -566,7 +595,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
       const textarea = this.querySelector<HTMLTextAreaElement>(CHAT_COMPOSER_TEXTAREA_SELECTOR);
       const input = textarea?.closest<HTMLElement>(".agent-chat__input");
       textarea?.focus({ preventScroll: true });
-      if (input) {
+      if (input && this.draft) {
         this.showComposerPrefillAttention(input);
       }
     }
@@ -581,12 +610,26 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
     const board = this.resolveBoardView();
     this.syncRetainedBoardSession(board);
     this.sessionPanelToggles.flush();
+    this.setConversationVisible(
+      Boolean(
+        this.state &&
+        isSidebarSlotVisible(
+          resolveSidebarLayoutForBoard({
+            board,
+            layout: this.state.sidebarLayout,
+            paneWidth: this.paneWidth,
+          }),
+          "conversation",
+        ),
+      ),
+    );
   }
 
   override disconnectedCallback() {
     this.composerPresentation?.dispose();
     this.composerPresentation = undefined;
     if (this.state) {
+      retireInitialChatSnapshot(this.state);
       chatAvatars.invalidateChatAvatarCache(this.state);
       retireChatMetadataRequests(this.state);
       if (this.suppressStagedAttachmentHandoffOnDisconnect) {
@@ -604,7 +647,6 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
     }
     this.stagedAttachmentGatewayOwner = null;
     this.clearComposerPrefillAttention();
-    this.retainedBoardSessionKey = "";
     this.boardProviderLifecycleConnected = false;
     this.releaseBoardProviderLease();
     this.settleResetConfirmation(false);
@@ -618,7 +660,6 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
     this.setTaskSuggestions([]);
     this.taskSuggestionBusyIds.clear();
     this.taskSuggestionOperations.clear();
-    this.resetTaskSuggestionCloudProfiles();
     this.resetSessionSuggestions();
     this.clearTypingActors();
     this.resetSessionPullRequests();

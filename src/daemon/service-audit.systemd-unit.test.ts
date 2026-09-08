@@ -45,6 +45,20 @@ describe("auditGatewayServiceConfig systemd unit content", () => {
 
   it.each([
     {
+      name: "detects a control-group drop-in over a mixed base unit",
+      unit: ["KillMode=mixed"],
+      manager: ["KillMode=control-group", "LoadState=loaded"],
+      code: SERVICE_AUDIT_CODES.systemdKillModeControlGroup,
+      expected: true,
+    },
+    {
+      name: "accepts effective mixed mode over an older base unit",
+      unit: ["KillMode=control-group"],
+      manager: ["KillMode=mixed", "LoadState=loaded"],
+      code: SERVICE_AUDIT_CODES.systemdKillModeControlGroup,
+      expected: false,
+    },
+    {
       name: "uses manager KillMode instead of the base unit",
       unit: [
         "After=network-online.target",
@@ -121,6 +135,7 @@ describe("auditGatewayServiceConfig systemd unit content", () => {
         stdout: manager.join("\n"),
         stderr: "",
         code: 0,
+        termination: "exit",
       });
 
       const audit = await auditGatewayServiceConfig({
@@ -188,6 +203,7 @@ describe("auditGatewayServiceConfig systemd unit content", () => {
           stdout: manager.join("\n"),
           stderr: "",
           code: 0,
+          termination: "exit",
         });
 
         const audit = await auditGatewayServiceConfig({
@@ -218,7 +234,7 @@ describe("auditGatewayServiceConfig systemd unit content", () => {
     },
   );
 
-  it.each(["process", "none"])(
+  it.each(["process", "none", "control-group", ""])(
     `warns when KillMode is %s in explicit unit file`,
     async (killMode) => {
       const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-service-audit-killmode-"));
@@ -239,7 +255,11 @@ describe("auditGatewayServiceConfig systemd unit content", () => {
               environment: { PATH: "/usr/bin:/bin" },
             },
           });
-          expect(hasIssue(audit, SERVICE_AUDIT_CODES.systemdKillModeProcessOrNone)).toBe(true);
+          const code =
+            killMode === "process" || killMode === "none"
+              ? SERVICE_AUDIT_CODES.systemdKillModeProcessOrNone
+              : SERVICE_AUDIT_CODES.systemdKillModeControlGroup;
+          expect(hasIssue(audit, code)).toBe(true);
           expect(execSystemctlUserMock).toHaveBeenCalledWith(
             { HOME: home },
             expect.any(Array),
@@ -261,7 +281,7 @@ describe("auditGatewayServiceConfig systemd unit content", () => {
           `After=basic.target ${continuation}network-online.target`,
           `Wants=basic.target ${continuation}network-online.target`,
           `RestartSec=${continuation}5s`,
-          `KillMode=${continuation}control-group`,
+          `KillMode=${continuation}mixed`,
         ]);
         const audit = await auditGatewayServiceConfig({
           env: { HOME: home },

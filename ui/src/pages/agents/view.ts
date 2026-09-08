@@ -16,6 +16,7 @@ import type {
 } from "../../api/types.ts";
 import { handleCopyButton } from "../../components/copy-button.ts";
 import { renderHubTabs } from "../../components/hub-tabs.ts";
+import type { PanelRefreshStatus } from "../../components/panel-refresh-status.ts";
 import {
   renderSettingsEmpty,
   renderSettingsNavRow,
@@ -32,7 +33,7 @@ import "../../styles/agents.css";
 import "../../styles/sidebar-markdown.css";
 import "./memory/memory-panel.ts";
 import type { AgentsPanel } from "../../lib/agents/index.ts";
-import type { AgentIdentityDraft } from "./panels-overview.ts";
+import type { AgentIdentityDraft, IdentityAvatarLoader } from "./panels-overview.ts";
 import { renderAgentOverview } from "./panels-overview.ts";
 import { renderAgentFiles, renderAgentChannels, renderAgentCron } from "./panels-status-files.ts";
 import { renderAgentTools, renderAgentSkills } from "./panels-tools-skills.ts";
@@ -104,7 +105,6 @@ type AgentsProps = {
     canRunCron: boolean;
   };
   basePath: string;
-  authToken: string | null;
   loading: boolean;
   error: string | null;
   agentsList: AgentsListResult | null;
@@ -118,6 +118,7 @@ type AgentsProps = {
   agentIdentityError: string | null;
   agentIdentityById: Record<string, AgentIdentityResult>;
   identityDraft: AgentIdentityDraft;
+  identityAvatarLoader: IdentityAvatarLoader;
   identitySaving: boolean;
   identityError: string | null;
   agentSkills: AgentSkillsState;
@@ -128,7 +129,7 @@ type AgentsProps = {
   runtimeSessionKey: string;
   runtimeSessionMatchesSelectedAgent: boolean;
   modelCatalog: ModelCatalogEntry[];
-  modelCatalogError: string | null;
+  modelCatalogStatus: PanelRefreshStatus;
   pinnedAgentIds: readonly string[];
   onTogglePinnedAgent: (agentId: string) => void;
   onRefresh: () => void;
@@ -149,7 +150,7 @@ type AgentsProps = {
   onIdentitySave: () => void;
   onModelChange: (agentId: string, modelId: string | null) => void;
   onModelFallbacksChange: (agentId: string, fallbacks: string[]) => void;
-  onModelCatalogRetry: () => void;
+  onModelCatalogOpen: () => void;
   onChannelsRefresh: () => void;
   onOpenMemoryImport?: () => void;
   onOpenMemorySettings?: () => void;
@@ -247,7 +248,6 @@ export function renderAgents(props: AgentsProps) {
                       .value=${selectedId ?? ""}
                       .accessibleLabel=${t("usage.filters.agent")}
                       .identityById=${props.agentIdentityById}
-                      .authToken=${props.authToken}
                       .disabled=${props.loading}
                       .onSelect=${props.onSelectAgent}
                       .onCreateAgent=${props.access.canCreateAgent ? props.onCreateAgent : null}
@@ -375,6 +375,7 @@ export function renderAgents(props: AgentsProps) {
                             agentIdentityError: props.agentIdentityError,
                             agentIdentityLoading: props.agentIdentityLoading,
                             identityDraft: props.identityDraft,
+                            identityAvatarLoader: props.identityAvatarLoader,
                             identitySaving: props.identitySaving,
                             identityError: props.identityError,
                             canUpdateConfig: props.access.canUpdateConfig,
@@ -383,7 +384,7 @@ export function renderAgents(props: AgentsProps) {
                             configSaving: props.config.saving,
                             configDirty: props.config.dirty,
                             modelCatalog: props.modelCatalog,
-                            modelCatalogError: props.modelCatalogError,
+                            modelCatalogStatus: props.modelCatalogStatus,
                             onConfigReload: props.onConfigReload,
                             onConfigSave: props.onConfigSave,
                             onIdentityFieldChange: props.onIdentityFieldChange,
@@ -391,7 +392,7 @@ export function renderAgents(props: AgentsProps) {
                             onIdentitySave: props.onIdentitySave,
                             onModelChange: props.onModelChange,
                             onModelFallbacksChange: props.onModelFallbacksChange,
-                            onModelCatalogRetry: props.onModelCatalogRetry,
+                            onModelCatalogOpen: props.onModelCatalogOpen,
                             onSelectPanel: props.onSelectPanel,
                           }),
                         )

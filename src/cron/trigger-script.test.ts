@@ -10,7 +10,7 @@ import { runCodeModeScriptHeadless, type CodeModeHeadlessResult } from "../agent
 import { clearToolSearchCatalog } from "../agents/tool-search.js";
 import { jsonResult, type AnyAgentTool } from "../agents/tools/common.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { createCronScriptRuntime } from "./trigger-script.js";
+import { createCronScriptRuntimeFixture as createCronScriptRuntime } from "./trigger-script.test-helpers.js";
 
 type EvaluatorDeps = Parameters<typeof createCronScriptRuntime>[0];
 type HeadlessParams = Parameters<NonNullable<EvaluatorDeps["runHeadless"]>>[0];
@@ -45,14 +45,8 @@ function createPreparedRuntime(config: OpenClawConfig) {
     { config, agentId: "main", sessionKey: "cron:test:trigger" },
   );
   return {
-    tools: [tool],
-    ctx: {
-      config,
-      runtimeConfig: config,
-      agentId: "main",
-      sessionKey: "cron:test:trigger",
-    },
-    hookContext: { config, agentId: "main", sessionKey: "cron:test:trigger" },
+    createTools: () => [tool],
+    context: { config, agentId: "main", sessionKey: "cron:test:trigger" },
   };
 }
 
@@ -84,7 +78,7 @@ describe("cron trigger script evaluator", () => {
     let aborts = 0;
     const prepared = createPreparedRuntime(config);
     const gate: AnyAgentTool = {
-      ...prepared.tools[0],
+      ...prepared.createTools()[0],
       name: "gate",
       label: "Gate",
       description: "Wait for the local fixture",
@@ -104,7 +98,7 @@ describe("cron trigger script evaluator", () => {
     };
     const runtime = createCronScriptRuntime({
       config,
-      prepareRuntime: async () => ({ ...prepared, tools: [gate] }),
+      prepareRuntime: async () => ({ ...prepared, createTools: () => [gate] }),
       runHeadless: (params) => {
         context = params.ctx;
         return runCodeModeScriptHeadless(params);
@@ -725,7 +719,10 @@ describe("cron script runtime elapsed-time budgets", () => {
         const preparedRuntime = createPreparedRuntime(config);
         const runtime = createCronScriptRuntime({
           config,
-          prepareRuntime: async () => ({ ...preparedRuntime, tools: [shiftClock, observeClock] }),
+          prepareRuntime: async () => ({
+            ...preparedRuntime,
+            createTools: () => [shiftClock, observeClock],
+          }),
         });
         const sharedScript =
           "await Promise.all([shift_clock({}), observe_clock({})]); await observe_clock({});";

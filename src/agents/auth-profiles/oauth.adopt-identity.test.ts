@@ -9,6 +9,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetFileLockStateForTest } from "../../infra/file-lock.js";
 import { captureEnv } from "../../test-utils/env.js";
+import { oauthCred } from "./credential-fixtures.test-support.js";
 import { getOAuthProviderRuntimeMocks } from "./oauth-common-mocks.test-support.js";
 import "./oauth-external-auth-passthrough.test-support.js";
 import "./oauth-file-lock-passthrough.test-support.js";
@@ -16,7 +17,6 @@ import {
   OAUTH_AGENT_ENV_KEYS,
   createOAuthMainAgentDir,
   createOAuthTestTempRoot,
-  oauthCred,
   readAuthProfileStoreForTest,
   removeOAuthTestTempRoot,
   resolveApiKeyForProfileInTest,
@@ -26,7 +26,7 @@ import {
 import { resolveApiKeyForProfile } from "./oauth.js";
 import { resetOAuthRefreshQueuesForTest } from "./oauth.test-support.js";
 import { clearRuntimeAuthProfileStoreSnapshots } from "./runtime-snapshots.js";
-import { ensureAuthProfileStore, saveAuthProfileStore } from "./store.js";
+import { ensureAuthProfileStore, saveAuthProfileStore } from "./store-runtime.js";
 import type { AuthProfileStore } from "./types.js";
 
 const {

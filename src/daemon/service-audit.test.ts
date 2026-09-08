@@ -84,6 +84,13 @@ describe("auditGatewayServiceConfig", () => {
     resetServiceAuditMocks();
   });
 
+  const auditBunGateway = (bunPath = "/opt/homebrew/bin/bun") =>
+    auditGatewayServiceConfig({
+      env: { HOME: "/tmp" },
+      platform: "darwin",
+      command: { programArguments: [bunPath, "gateway"], environment: { PATH: "/usr/bin:/bin" } },
+    });
+
   it("flags Bun runtimes without WAL-safe SQLite", async () => {
     resolveBunRuntimeInfoMock.mockResolvedValue({
       version: "1.4.0",
@@ -91,47 +98,42 @@ describe("auditGatewayServiceConfig", () => {
       nodeSharedSqlite: false,
       status: "unsupported",
     });
-    const audit = await auditGatewayServiceConfig({
-      env: { HOME: "/tmp" },
-      platform: "darwin",
-      command: {
-        programArguments: ["/opt/homebrew/bin/bun", "gateway"],
-        environment: { PATH: "/usr/bin:/bin" },
-      },
+    const audit = await auditBunGateway();
+    expect(audit.issues).toContainEqual(
+      expect.objectContaining({
+        code: SERVICE_AUDIT_CODES.gatewayRuntimeBun,
+        message: expect.stringContaining("Bun 1.4+ with WAL-reset-safe node:sqlite is required"),
+      }),
+    );
+  });
+
+  it("surfaces an invalid SQLite library override as the Bun runtime issue detail", async () => {
+    const selectionError = "Cannot use SQLite library /opt/broken/libsqlite3.dylib: missing file.";
+    resolveBunRuntimeInfoMock.mockResolvedValue({
+      version: "1.4.2",
+      sqliteVersion: null,
+      nodeSharedSqlite: false,
+      status: "unsupported",
+      sqliteSelectionError: selectionError,
     });
-    expect(hasIssue(audit, SERVICE_AUDIT_CODES.gatewayRuntimeBun)).toBe(true);
-    expect(
-      audit.issues.find((issue) => issue.code === SERVICE_AUDIT_CODES.gatewayRuntimeBun)?.message,
-    ).toContain("Bun 1.4+ with WAL-reset-safe node:sqlite is required");
+    const audit = await auditBunGateway();
+    expect(audit.issues).toContainEqual(
+      expect.objectContaining({
+        code: SERVICE_AUDIT_CODES.gatewayRuntimeBun,
+        detail: `/opt/homebrew/bin/bun: ${selectionError}`,
+      }),
+    );
   });
 
   it("accepts Bun 1.4 with WAL-safe node:sqlite", async () => {
-    const audit = await auditGatewayServiceConfig({
-      env: { HOME: "/tmp" },
-      platform: "darwin",
-      command: {
-        programArguments: ["/opt/homebrew/bin/bun", "gateway"],
-        environment: { PATH: "/usr/bin:/bin" },
-      },
-    });
-
+    const audit = await auditBunGateway();
     expect(hasIssue(audit, SERVICE_AUDIT_CODES.gatewayRuntimeBun)).toBe(false);
   });
 
   it("reports a failed Bun probe without recommending runtime migration", async () => {
-    resolveBunRuntimeInfoMock.mockResolvedValue({
-      status: "probe-failed",
-      error: new Error("Bun runtime probe failed at /opt/bun (cwd /root): EACCES"),
-    });
-    const audit = await auditGatewayServiceConfig({
-      env: { HOME: "/tmp" },
-      platform: "darwin",
-      command: {
-        programArguments: ["/opt/bun", "gateway"],
-        environment: { PATH: "/usr/bin:/bin" },
-      },
-    });
-
+    const error = new Error("Bun runtime probe failed at /opt/bun (cwd /root): EACCES");
+    resolveBunRuntimeInfoMock.mockResolvedValue({ status: "probe-failed", error });
+    const audit = await auditBunGateway("/opt/bun");
     expect(audit.issues).toContainEqual(
       expect.objectContaining({
         code: SERVICE_AUDIT_CODES.gatewayRuntimeProbeFailed,
@@ -142,28 +144,28 @@ describe("auditGatewayServiceConfig", () => {
     expect(hasIssue(audit, SERVICE_AUDIT_CODES.gatewayRuntimeBun)).toBe(false);
   });
 
-  it("flags version-managed node paths", async () => {
+  it.each([
+    [".nvm/versions/node/v22.0.0/bin", true, true],
+    [".NVM/versions/node/v22.0.0/bin", true, false],
+    [".local/share/mise/installs/node/22/bin", true, false],
+    ["Library/Application Support/fnm/aliases/default/bin", true, false],
+    [".nvs/node/22/bin", false, false],
+    [".local/share/pnpm", false, true],
+    [".nvm/../system/bin", false, false],
+    [".local/share/mise/.nvm/bin", true, true],
+  ] as const)("audits runtime and PATH for %s", async (directory, runtime, nonMinimal) => {
+    const bin = `/Users/test/${directory}`;
     const audit = await auditGatewayServiceConfig({
       env: { HOME: "/tmp" },
       platform: "darwin",
       command: {
-        programArguments: ["/Users/test/.nvm/versions/node/v22.0.0/bin/node", "gateway"],
-        environment: {
-          PATH: "/usr/bin:/bin:/Users/test/.nvm/versions/node/v22.0.0/bin",
-        },
+        programArguments: [`${bin}/node`, "gateway"],
+        environment: { PATH: `/usr/bin:/bin:${bin}` },
       },
     });
-    expect(
-      audit.issues.some(
-        (issue) => issue.code === SERVICE_AUDIT_CODES.gatewayRuntimeNodeVersionManager,
-      ),
-    ).toBe(true);
-    expect(
-      audit.issues.some((issue) => issue.code === SERVICE_AUDIT_CODES.gatewayPathNonMinimal),
-    ).toBe(true);
-    expect(
-      audit.issues.some((issue) => issue.code === SERVICE_AUDIT_CODES.gatewayPathMissingDirs),
-    ).toBe(true);
+    expect(hasIssue(audit, SERVICE_AUDIT_CODES.gatewayRuntimeNodeVersionManager)).toBe(runtime);
+    expect(hasIssue(audit, SERVICE_AUDIT_CODES.gatewayPathNonMinimal)).toBe(nonMinimal);
+    expect(hasIssue(audit, SERVICE_AUDIT_CODES.gatewayPathMissingDirs)).toBe(true);
   });
 
   it("accepts Linux minimal PATH with user directories", async () => {

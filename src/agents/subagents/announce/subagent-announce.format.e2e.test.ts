@@ -33,6 +33,7 @@ import {
 } from "../../announce-idempotency.js";
 import * as embeddedRuns from "../../embedded-agent-runner/runs.js";
 import { FailoverError } from "../../failover-error.js";
+import { textAssistant } from "../../test-helpers/sparse-transcript.test-support.js";
 import { testing as subagentAnnounceDeliveryTesting } from "./subagent-announce-delivery.test-support.js";
 import { runSubagentAnnounceDispatch } from "./subagent-announce-dispatch.js";
 import { testing as subagentAnnounceOutputTesting } from "./subagent-announce-output.test-support.js";
@@ -562,10 +563,10 @@ describe("subagent announce formatting", () => {
     expect(msg).toContain("Stats:");
     expect(msg).toContain("A completed subagent task is ready for parent review.");
     expect(msg).toContain(
-      "Review/verify the result above before deciding whether the original task is done.",
+      "This completion ends one child run, not necessarily the original user request.",
     );
     expect(msg).toContain(
-      "If additional action is required, continue the task or record a follow-up; otherwise send a truthful user-facing update.",
+      "Reviews, failed checks, and other in-scope fixable blockers require continued work",
     );
     expect(msg).toContain("Keep this internal context private");
     expect(call?.params?.internalEvents?.[0]?.type).toBe("task_completion");
@@ -651,12 +652,7 @@ describe("subagent announce formatting", () => {
       }
       if (typed.method === "chat.history") {
         return {
-          messages: [
-            {
-              role: "assistant",
-              content: [{ type: "text", text: "Worker executed successfully" }],
-            },
-          ],
+          messages: [textAssistant("Worker executed successfully")],
         };
       }
       if (typed.method === "sessions.delete") {
@@ -715,10 +711,7 @@ describe("subagent announce formatting", () => {
     async (testCase) => {
       chatHistoryMock.mockResolvedValueOnce({
         messages: [
-          {
-            role: "assistant",
-            content: [{ type: "text", text: "" }],
-          },
+          textAssistant(""),
           {
             role: testCase.role,
             content: [{ type: "text", text: testCase.toolOutput }],
@@ -750,10 +743,7 @@ describe("subagent announce formatting", () => {
           role: "tool",
           content: [{ type: "text", text: "tool output line" }],
         },
-        {
-          role: "assistant",
-          content: [{ type: "text", text: "assistant final line" }],
-        },
+        textAssistant("assistant final line"),
       ],
     });
     readLatestAssistantReplyMock.mockResolvedValue("");
@@ -804,7 +794,10 @@ describe("subagent announce formatting", () => {
     expect(msg).toContain("session_id: child-session-usage");
     expect(msg).toContain("A completed subagent task is ready for parent review.");
     expect(msg).toContain(
-      "If additional action is required, continue the task or record a follow-up; otherwise send a truthful user-facing update.",
+      "This completion ends one child run, not necessarily the original user request.",
+    );
+    expect(msg).toContain(
+      "Reviews, failed checks, and other in-scope fixable blockers require continued work",
     );
     expect(msg).toContain(
       `Reply ONLY: ${SILENT_REPLY_TOKEN} if this exact result was already delivered to the user in this same turn.`,
@@ -2235,10 +2228,7 @@ describe("subagent announce formatting", () => {
           role: "toolResult",
           content: [{ type: "text", text: "old tool output" }],
         },
-        {
-          role: "assistant",
-          content: [{ type: "text", text: "assistant completion text" }],
-        },
+        textAssistant("assistant completion text"),
       ],
     });
     readLatestAssistantReplyMock.mockResolvedValue("");
@@ -2265,10 +2255,7 @@ describe("subagent announce formatting", () => {
   it("does not fall back to latest tool output for completion-mode when assistant output is empty", async () => {
     chatHistoryMock.mockResolvedValueOnce({
       messages: [
-        {
-          role: "assistant",
-          content: [{ type: "text", text: "" }],
-        },
+        textAssistant(""),
         {
           role: "toolResult",
           content: [{ type: "text", text: "tool output only" }],

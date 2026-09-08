@@ -1,6 +1,3 @@
-/**
- * Active Memory plugin entry. Runtime behavior lives in focused sibling modules.
- */
 import { resolveAgentDir, resolveAgentWorkspaceDir } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { getMemoryCapabilityRegistration } from "openclaw/plugin-sdk/memory-host-core";
@@ -14,12 +11,13 @@ import {
   hasDeprecatedModelFallbackPolicy,
   isMissingRegisteredMemoryToolsError,
   normalizePluginConfig,
+  readActiveMemoryConfig,
   resetActiveMemoryConfigForTests,
   setMinimumTimeoutMsForTests,
   setSetupGraceTimeoutMsForTests,
 } from "./config.js";
 import { resolveRecallEscalationDecision } from "./escalation.js";
-import { buildMetadata, buildPromptPrefix, buildRecallOutcomePrefix } from "./prompt.js";
+import { buildPromptPrefix, buildRecallOutcomePrefix } from "./prompt.js";
 import { buildQuery, buildSearchQuery, extractRecentTurns, getModelRef } from "./query.js";
 import {
   buildCacheKey,
@@ -30,7 +28,6 @@ import {
   isCircuitBreakerOpen,
   resetActiveRecallStateForTests,
   setCachedResult,
-  shouldCacheResult,
   toSingleLineErrorMessage,
 } from "./recall-state.js";
 import { maybeResolveActiveRecall } from "./recall.js";
@@ -53,7 +50,6 @@ import {
   updateActiveMemoryGlobalEnabledInConfig,
 } from "./session-policy.js";
 import {
-  buildPluginStatusLine,
   persistPluginStatusLines,
   resolveCanonicalSessionKeyFromSessionId,
   resolveStatusUpdateAgentId,
@@ -63,7 +59,6 @@ import {
   resetActiveMemoryTranscriptForTests,
   setTimeoutPartialDataGraceMsForTests,
 } from "./transcript-result.js";
-import { readActiveMemorySearchDebug } from "./transcript-watch.js";
 import {
   createActiveMemoryHookDeadline,
   hasUsableMemoryResultInSessionRecord,
@@ -81,33 +76,16 @@ import {
   type ConversationRecallContext,
 } from "./types.js";
 
-/** Plugin entry registering Active Memory hooks, tools, config schema, and doctor cleanup. */
 export default definePluginEntry({
   id: "active-memory",
   name: "Active Memory",
   description: "Proactively surfaces relevant memory before eligible conversational replies.",
   register(api: OpenClawPluginApi) {
-    const readCurrentConfig = (): OpenClawConfig | undefined => {
-      try {
-        return (
-          (api.runtime.config?.current?.() as OpenClawConfig | undefined) ??
-          (api.config as OpenClawConfig | undefined)
-        );
-      } catch {
-        return api.config as OpenClawConfig | undefined;
-      }
-    };
+    const readCurrentConfig = () => readActiveMemoryConfig(api);
     let config = normalizePluginConfig(api.pluginConfig, readCurrentConfig());
     const warnDeprecatedModelFallbackPolicy = (pluginConfig: unknown) => {
       if (hasDeprecatedModelFallbackPolicy(pluginConfig)) {
-        // Wording matters here: the previous text ("set config.modelFallback
-        // explicitly if you want a fallback model") read naturally as runtime
-        // failover (model A errors → switch to model B), but `getModelRef`
-        // only consults `modelFallback` as the *last candidate* in the
-        // resolution chain after `config.model`, the current run's model,
-        // and the agent's configured default have all resolved to nothing.
-        // Surface the chain-resolution semantics directly so operators
-        // don't waste debug cycles assuming runtime failover (#74587).
+        // modelFallback is a last model-selection candidate, never runtime failover.
         api.logger.warn?.(
           "active-memory: config.modelFallbackPolicy is deprecated and no longer changes runtime behavior. " +
             "config.modelFallback is a chain-resolution last-resort (consulted only when config.model, " +
@@ -126,11 +104,9 @@ export default definePluginEntry({
         api.pluginConfig as Record<string, unknown>,
       );
       const liveConfig = readCurrentConfig();
-      const fallbackConfig = {};
-      const effectivePluginConfig =
-        liveConfig && !isActiveMemoryPluginEnabled(liveConfig)
-          ? { enabled: false }
-          : (livePluginConfig ?? fallbackConfig);
+      const effectivePluginConfig = !isActiveMemoryPluginEnabled(liveConfig)
+        ? { enabled: false }
+        : (livePluginConfig ?? {});
       config = normalizePluginConfig(effectivePluginConfig, liveConfig);
       if (livePluginConfig) {
         warnDeprecatedModelFallbackPolicy(livePluginConfig);
@@ -148,6 +124,11 @@ export default definePluginEntry({
         if (action === "help") {
           return { text: formatActiveMemoryCommandHelp() };
         }
+        const enabled = ["on", "enable", "enabled"].includes(action)
+          ? true
+          : ["off", "disable", "disabled"].includes(action)
+            ? false
+            : undefined;
         refreshLiveConfigFromRuntime();
         if (isGlobal) {
           const currentConfig = api.runtime.config.current() as OpenClawConfig;
@@ -166,27 +147,16 @@ export default definePluginEntry({
               text: ACTIVE_MEMORY_GLOBAL_MUTATION_ADMIN_REQUIRED_TEXT,
             };
           }
-          if (action === "on" || action === "enable" || action === "enabled") {
+          if (enabled !== undefined) {
             await api.runtime.config.mutateConfigFile({
               afterWrite: { mode: "auto" },
               mutate: (draft) => {
-                const nextConfig = updateActiveMemoryGlobalEnabledInConfig(draft, true);
+                const nextConfig = updateActiveMemoryGlobalEnabledInConfig(draft, enabled);
                 Object.assign(draft, nextConfig);
               },
             });
             refreshLiveConfigFromRuntime();
-            return { text: "Active Memory: on globally." };
-          }
-          if (action === "off" || action === "disable" || action === "disabled") {
-            await api.runtime.config.mutateConfigFile({
-              afterWrite: { mode: "auto" },
-              mutate: (draft) => {
-                const nextConfig = updateActiveMemoryGlobalEnabledInConfig(draft, false);
-                Object.assign(draft, nextConfig);
-              },
-            });
-            refreshLiveConfigFromRuntime();
-            return { text: "Active Memory: off globally." };
+            return { text: `Active Memory: ${enabled ? "on" : "off"} globally.` };
           }
         }
         const sessionKey = resolveCommandSessionKey({
@@ -201,7 +171,7 @@ export default definePluginEntry({
           };
         }
         const commandAgentId = resolveStatusUpdateAgentId({ sessionKey });
-        const liveConfig = readCurrentConfig() ?? api.config;
+        const liveConfig = readCurrentConfig();
         const commandRecallEnabled =
           isEnabledForAgent(config, commandAgentId) ||
           (config.enabled && shouldRememberAcrossConversations(liveConfig, commandAgentId));
@@ -214,18 +184,12 @@ export default definePluginEntry({
             text: `Active Memory: ${disabled ? "off" : "on"} for this session.`,
           };
         }
-        if (action === "on" || action === "enable" || action === "enabled") {
-          await setSessionActiveMemoryDisabled({ api, sessionKey, disabled: false });
-          return { text: "Active Memory: on for this session." };
-        }
-        if (action === "off" || action === "disable" || action === "disabled") {
-          await setSessionActiveMemoryDisabled({ api, sessionKey, disabled: true });
-          await persistPluginStatusLines({
-            api,
-            agentId: resolveStatusUpdateAgentId({ sessionKey }),
-            sessionKey,
-          });
-          return { text: "Active Memory: off for this session." };
+        if (enabled !== undefined) {
+          await setSessionActiveMemoryDisabled({ api, sessionKey, disabled: !enabled });
+          if (!enabled) {
+            await persistPluginStatusLines({ api, agentId: commandAgentId, sessionKey });
+          }
+          return { text: `Active Memory: ${enabled ? "on" : "off"} for this session.` };
         }
         return {
           text: `Unknown Active Memory action: ${action}\n\n${formatActiveMemoryCommandHelp()}`,
@@ -237,11 +201,22 @@ export default definePluginEntry({
     // both maxima so preflight latency cannot consume recall settlement time.
     const beforePromptBuildTimeoutMs =
       MAX_TIMEOUT_MS + MAX_SETUP_GRACE_TIMEOUT_MS + HOOK_TIMEOUT_RECOVERY_GRACE_MS * 2;
+    // Names the exit taken when recall is configured off for this session, so
+    // "no relevant memory found" and "recall never ran" stop being
+    // indistinguishable at info level. Reserved for states an operator can act
+    // on; the routine escalation decision stays at debug. Deliberately not
+    // gated on config.logging, which defaults to false and would reproduce the
+    // invisibility this reports.
+    const logRecallSkipped = (reason: string) => {
+      api.logger.info?.(`active-memory: recall skipped reason=${reason}`);
+    };
     api.on(
       "before_prompt_build",
       async (event, ctx) => {
         const toolAuthority = ctx.toolAuthority;
         if (!toolAuthority) {
+          // Defensive only: the host filters authority-required registrations
+          // out of the unauthorized pass, so this never runs in production.
           api.logger.debug?.(
             "active-memory: recall skipped because this prompt has no turn tool authority",
           );
@@ -249,7 +224,7 @@ export default definePluginEntry({
         }
         toolAuthority.assertActive();
         refreshLiveConfigFromRuntime();
-        const liveConfig = readCurrentConfig() ?? api.config;
+        const liveConfig = readCurrentConfig();
         // The hook deadline, watchdog, and embedded-run budget all flow from
         // this config, so the CLI-runtime default raise must happen before
         // any of them are armed. Budgeting shares the runner's own dispatch
@@ -322,6 +297,7 @@ export default definePluginEntry({
                 sessionKey: resolvedSessionKey,
                 statusLine: `${ACTIVE_MEMORY_STATUS_PREFIX} status=policy-disabled`,
               });
+              logRecallSkipped("policy-disabled");
               toolAuthority.assertActive();
               return undefined;
             }
@@ -332,6 +308,7 @@ export default definePluginEntry({
                 sessionKey: resolvedSessionKey,
               })
             ) {
+              logRecallSkipped("harness-session");
               return undefined;
             }
             const sessionDisabled = await isSessionActiveMemoryDisabled({
@@ -341,6 +318,7 @@ export default definePluginEntry({
             deadlineController.signal.throwIfAborted();
             toolAuthority.assertActive();
             if (sessionDisabled) {
+              logRecallSkipped("session-disabled");
               await persistPluginStatusLines({
                 api,
                 agentId: effectiveAgentId,
@@ -353,6 +331,7 @@ export default definePluginEntry({
               sessionKey: resolvedSessionKey ?? ctx.sessionKey,
             };
             if (!isEligibleInteractiveSession(sessionContext)) {
+              logRecallSkipped("session-ineligible");
               await persistPluginStatusLines({
                 api,
                 agentId: effectiveAgentId,
@@ -377,16 +356,6 @@ export default definePluginEntry({
                 : undefined;
             const allowedRecallTools = authorityAllowedRecallTools;
             const deterministicRecallToolName = memoryCapability?.deterministicRecallToolName;
-            if (allowedRecallTools.length === 0) {
-              await persistPluginStatusLines({
-                api,
-                agentId: effectiveAgentId,
-                sessionKey: resolvedSessionKey,
-                statusLine: `${ACTIVE_MEMORY_STATUS_PREFIX} status=policy-disabled`,
-              });
-              toolAuthority.assertActive();
-              return undefined;
-            }
             const chatIdAllowed = isAllowedChatId(invocationConfig, {
               sessionKey: destinationContext.sessionKey,
               messageProvider: destinationContext.messageProvider,
@@ -460,6 +429,7 @@ export default definePluginEntry({
               );
             }
             if (!activeMemoryAllowed && !productRecallAllowed) {
+              logRecallSkipped("destination-not-allowed");
               await persistPluginStatusLines({
                 api,
                 agentId: effectiveAgentId,
@@ -473,6 +443,9 @@ export default definePluginEntry({
               hasStrongLaneOneHit: laneOne.hasStrongHit,
             });
             if (escalationDecision !== "recall") {
+              // Stays at debug: escalate is the default mode and ordinary
+              // prompts resolve to no-recall-intent, so this is the healthy
+              // path rather than an actionable skip.
               api.logger.debug?.(`active-memory: recall skipped reason=${escalationDecision}`);
               const outcomeContext =
                 escalationDecision === "no-recall-intent"
@@ -560,20 +533,14 @@ export default definePluginEntry({
 });
 
 const testing = {
-  buildSearchQuery,
   buildCacheKey,
   buildCircuitBreakerKey,
-  buildMetadata,
-  buildPluginStatusLine,
-  buildPromptPrefix,
   getCachedResult,
   hasUsableMemoryResultInSessionRecord,
   isCircuitBreakerOpen,
   isMissingRegisteredMemoryToolsError,
   normalizePluginConfig,
-  readActiveMemorySearchDebug,
   readPartialAssistantText,
-  shouldCacheResult,
   resetActiveRecallCacheForTests() {
     resetActiveRecallStateForTests();
     resetActiveMemoryConfigForTests();

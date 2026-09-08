@@ -8,13 +8,12 @@ import { isCommandLaneTaskTimeoutError } from "../process/command-queue.js";
 import { findAgentRunTerminalOutcome } from "./agent-run-terminal-error.js";
 import { isDefaultAgentRuntimeId, normalizeOptionalAgentRuntimeId } from "./agent-runtime-id.js";
 import { externalCliDiscoveryForProviders } from "./auth-profiles/external-cli-discovery.js";
-import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { isOpenClawAbortableWrapper } from "./embedded-agent-runner/run/abortable.js";
 import {
   FailoverError,
   buildFailoverRemediationHint,
   describeFailoverError,
-  findCliTerminalStopError,
+  hasModelFallbackStop,
   isFailoverError,
   resolveModelFallbackError,
   type FallbackAttemptRecord,
@@ -26,7 +25,9 @@ import { resolveAgentHarnessPolicy } from "./harness/policy.js";
 import { getRegisteredAgentHarness } from "./harness/registry.js";
 import { LiveSessionModelSwitchError } from "./live-model-switch-error.js";
 import {
+  logModelFallbackChainStopped,
   logModelFallbackDecision,
+  type ModelFallbackChainStopReason,
   type ModelFallbackStepFields,
 } from "./model-fallback-observation.js";
 import type {
@@ -193,6 +194,41 @@ function isAgentRunTerminalTimeout(err: unknown): boolean {
   return findAgentRunTerminalOutcome(err)?.status === "timeout";
 }
 
+/** Preserve stop precedence while naming the first matching condition. */
+function resolveChainStopReason(params: {
+  err: unknown;
+  harnessPreflight: boolean;
+  captureHarnessPreflight?: boolean;
+  callerSignalAborted: boolean;
+}): ModelFallbackChainStopReason | undefined {
+  const { err } = params;
+  if (isAgentRunTerminalTimeout(err)) {
+    return "agent_run_terminal_timeout";
+  }
+  if (isCommandLaneTaskTimeoutError(err)) {
+    return "command_lane_task_timeout";
+  }
+  if (params.harnessPreflight && !params.captureHarnessPreflight) {
+    return "agent_harness_preflight";
+  }
+  if (isSandboxProvisioningError(err)) {
+    return "sandbox_provisioning";
+  }
+  if (params.callerSignalAborted) {
+    return "caller_signal_aborted";
+  }
+  if (isAgentRunDirectAbortReason(err)) {
+    return "agent_run_direct_abort";
+  }
+  if (isAgentRunRestartAbortReason(err)) {
+    return "agent_run_restart_abort";
+  }
+  if (isTerminalAbortFromError(err)) {
+    return "terminal_abort_wrapper";
+  }
+  return undefined;
+}
+
 async function runFallbackCandidate<T>(params: {
   run: ModelFallbackRunFn<T>;
   provider: string;
@@ -215,16 +251,21 @@ async function runFallbackCandidate<T>(params: {
     return { ok: true, result };
   } catch (err) {
     const harnessPreflight = isAgentHarnessPreflightError(err);
-    if (
-      isAgentRunTerminalTimeout(err) ||
-      isCommandLaneTaskTimeoutError(err) ||
-      (harnessPreflight && !params.captureHarnessPreflight) ||
-      isSandboxProvisioningError(err) ||
-      params.abortSignal?.aborted ||
-      isAgentRunDirectAbortReason(err) ||
-      isAgentRunRestartAbortReason(err) ||
-      isTerminalAbortFromError(err)
-    ) {
+    const chainStopReason = resolveChainStopReason({
+      err,
+      harnessPreflight,
+      captureHarnessPreflight: params.captureHarnessPreflight,
+      callerSignalAborted: params.abortSignal?.aborted === true,
+    });
+    if (chainStopReason) {
+      logModelFallbackChainStopped({
+        reason: chainStopReason,
+        provider: params.provider,
+        model: params.model,
+        sessionId: params.attribution?.sessionId,
+        lane: params.attribution?.lane,
+        error: err,
+      });
       throw err;
     }
     // A harness-local failure can select another candidate only while the turn is live.
@@ -289,7 +330,7 @@ export async function runFallbackAttempt<T>(params: {
   }
   // Thrown, captured-preflight and callback-returned stops share this exit.
   // Do not replay tool effects or replace the original wrapper with its cause.
-  if (findCliTerminalStopError(attemptError)) {
+  if (hasModelFallbackStop(attemptError)) {
     throw attemptError;
   }
   if (!runResult.ok) {
@@ -631,30 +672,27 @@ export function throwFallbackFailureSummary(params: {
 
 export function resolveFallbackSoonestCooldownExpiry(params: {
   authRuntime: ModelFallbackAuthRuntime | null;
-  authStore: AuthProfileStore | null;
+  userLockedAuthProfileId?: string;
   agentDir?: string;
   cfg: OpenClawConfig | undefined;
-  candidates: ModelCandidate[];
+  profileIdsByCandidate: ReadonlyMap<ModelCandidate, string[]>;
 }): number | null {
-  if (!params.authRuntime || !params.authStore) {
+  if (!params.authRuntime || params.profileIdsByCandidate.size === 0) {
     return null;
   }
   // Refresh from persisted state because embedded attempts can update auth
   // cooldowns through a separate store instance while the fallback loop runs.
+  // Keep admission's profile scope: shared ordering must not hide a selected personal account.
   const refreshedStore = params.authRuntime.loadAuthProfileStoreForRuntime(params.agentDir, {
     readOnly: true,
+    profileId: params.userLockedAuthProfileId,
     externalCli: externalCliDiscoveryForProviders({
       cfg: params.cfg,
-      providers: params.candidates.map((candidate) => candidate.provider),
+      providers: [...params.profileIdsByCandidate.keys()].map((candidate) => candidate.provider),
     }),
   });
   let soonest: number | null = null;
-  for (const candidate of params.candidates) {
-    const ids = params.authRuntime.resolveAuthProfileOrder({
-      cfg: params.cfg,
-      store: refreshedStore,
-      provider: candidate.provider,
-    });
+  for (const [candidate, ids] of params.profileIdsByCandidate) {
     const candidateSoonest = params.authRuntime.getSoonestCooldownExpiry(refreshedStore, ids, {
       forModel: candidate.model,
     });
