@@ -6152,6 +6152,7 @@ describe("package artifact reuse", () => {
         step.run?.includes("export OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR="),
       );
       expect(runStep).toBeDefined();
+      expect(runStep?.run).toContain("openclaw_resolve_frozen_update_channel_dry_run_mode");
       expect(`${runStep?.run}\n${JSON.stringify(runStep?.env)}`).toContain(
         "steps.plan.outputs.needs_package",
       );

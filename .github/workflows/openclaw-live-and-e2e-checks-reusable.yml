@@ -1606,6 +1606,8 @@ jobs:
             OPENCLAW_SKIP_DOCKER_BUILD=0 OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" bash .release-harness/scripts/test-live-build-docker.sh
           fi
 
+          source .release-harness/scripts/lib/frozen-target-compat.sh
+          openclaw_resolve_frozen_update_channel_dry_run_mode "$GITHUB_WORKSPACE"
           node .release-harness/scripts/test-docker-all.mjs
 
       - name: Summarize Docker E2E chunk
@@ -1994,6 +1996,8 @@ jobs:
           fi
           export OPENCLAW_DOCKER_ALL_BUILD=0
 
+          source .release-harness/scripts/lib/frozen-target-compat.sh
+          openclaw_resolve_frozen_update_channel_dry_run_mode "$GITHUB_WORKSPACE"
           node .release-harness/scripts/test-docker-all.mjs
 
       - name: Summarize targeted Docker E2E lanes

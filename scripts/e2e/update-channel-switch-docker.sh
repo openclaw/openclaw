@@ -37,6 +37,7 @@ docker_e2e_run_with_harness \
   -e OPENCLAW_SKIP_CHANNELS=1 \
   -e OPENCLAW_SKIP_PROVIDERS=1 \
   -e OPENCLAW_FS_SAFE_NATIVE_CONTRACT \
+  -e OPENCLAW_UPDATE_CHANNEL_DRY_RUN_PACKAGE_COMPAT \
   -e "OPENCLAW_TEST_STATE_SCRIPT_B64=$OPENCLAW_TEST_STATE_SCRIPT_B64" \
   "${DOCKER_E2E_PACKAGE_ARGS[@]}" \
   "$IMAGE_NAME" \
@@ -107,9 +108,7 @@ OPENCLAW_PACKAGE_ACCEPTANCE_LEGACY_COMPAT="$(
   node scripts/e2e/lib/package-compat.mjs "$package_version"
 )"
 export OPENCLAW_PACKAGE_ACCEPTANCE_LEGACY_COMPAT
-OPENCLAW_UPDATE_CHANNEL_DRY_RUN_PACKAGE_COMPAT="$(
-  node scripts/e2e/lib/package-compat.mjs update-channel-dry-run "$package_version"
-)"
+OPENCLAW_UPDATE_CHANNEL_DRY_RUN_PACKAGE_COMPAT="${OPENCLAW_UPDATE_CHANNEL_DRY_RUN_PACKAGE_COMPAT:-0}"
 export OPENCLAW_UPDATE_CHANNEL_DRY_RUN_PACKAGE_COMPAT
 command -v openclaw >/dev/null
 openclaw_e2e_enable_openclaw_cli_timeout

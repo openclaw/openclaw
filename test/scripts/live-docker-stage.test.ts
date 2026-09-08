@@ -438,6 +438,61 @@ export function parseRegistryNpmSpec(spec: string) {
     expect(result.status, result.stderr).toBe(0);
   });
 
+  it("derives stored-dev preview compatibility from the selected source", () => {
+    const root = tempDirs.make("openclaw-frozen-update-channel-");
+    const sourcePath = path.join(root, "src/cli/update-cli/update-command.ts");
+    mkdirSync(path.dirname(sourcePath), { recursive: true });
+    writeFileSync(
+      sourcePath,
+      'const switchToGit = requestedChannel === "dev" && installKind !== "git";\n',
+    );
+    execFileSync("git", ["init", "-q"], { cwd: root });
+    execFileSync("git", ["config", "user.email", "test@example.invalid"], { cwd: root });
+    execFileSync("git", ["config", "user.name", "Test"], { cwd: root });
+    execFileSync("git", ["add", "."], { cwd: root });
+    execFileSync("git", ["commit", "-qm", "legacy"], { cwd: root });
+    const legacySha = execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd: root,
+      encoding: "utf8",
+    }).trim();
+    writeFileSync(
+      sourcePath,
+      'const switchToGit = installKind !== "git" &&\n  (requestedChannel === "dev" || (selectedChannel === "dev" && explicitTag === null));\n',
+    );
+    execFileSync("git", ["add", "."], { cwd: root });
+    execFileSync("git", ["commit", "-qm", "current"], { cwd: root });
+    const currentSha = execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd: root,
+      encoding: "utf8",
+    }).trim();
+    const run = (selectedSha: string, authorized = true) => {
+      execFileSync("git", ["checkout", "-q", selectedSha], { cwd: root });
+      return spawnSync(
+        "bash",
+        [
+          "-c",
+          'set -euo pipefail; source "$1"; openclaw_resolve_frozen_update_channel_dry_run_mode "$2"; printf "%s\\n" "$OPENCLAW_UPDATE_CHANNEL_DRY_RUN_PACKAGE_COMPAT"',
+          "test",
+          stageScriptPath,
+          root,
+        ],
+        {
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            OPENCLAW_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS: authorized ? "1" : "0",
+            OPENCLAW_SELECTED_SHA: selectedSha,
+            OPENCLAW_TOOLING_SHA: "f".repeat(40),
+          },
+        },
+      );
+    };
+
+    expect(run(legacySha).stdout).toBe("1\n");
+    expect(run(currentSha).stdout).toBe("0\n");
+    expect(run(legacySha, false).stdout).toBe("0\n");
+  });
+
   it("derives frozen harness capabilities only from an authorized selected source", () => {
     const root = tempDirs.make("openclaw-frozen-target-core-dialects-");
     mkdirSync(path.join(root, "src/agents"), { recursive: true });
@@ -445,14 +500,14 @@ export function parseRegistryNpmSpec(spec: string) {
     mkdirSync(path.join(root, "src/commands"), { recursive: true });
     mkdirSync(path.join(root, "scripts"), { recursive: true });
     mkdirSync(path.join(root, "src/config"), { recursive: true });
-    mkdirSync(path.join(root, "test/e2e/qa-lab/runtime"), { recursive: true });
+    mkdirSync(path.join(root, "scripts/e2e"), { recursive: true });
     writeFileSync(
       path.join(root, "src/agents/code-mode-namespaces.ts"),
       'export const globals = ["ALL_TOOLS"];\n',
     );
     writeFileSync(path.join(root, "src/agents/agent-bundle-mcp-runtime.ts"), "export {};\n");
     writeFileSync(
-      path.join(root, "test/e2e/qa-lab/runtime/agent-bundle-mcp-tools-docker-client.ts"),
+      path.join(root, "scripts/e2e/agent-bundle-mcp-tools-docker-client.ts"),
       "export {};\n",
     );
     writeFileSync(

@@ -59,6 +59,14 @@ it("keeps explicit dev selection for frozen stored-dev package reporters", () =>
   );
 });
 
+it("preserves a source-derived dry-run mode supplied by the workflow", () => {
+  const script = readFileSync("scripts/e2e/update-channel-switch-docker.sh", "utf8");
+  expect(script).toContain(
+    'OPENCLAW_UPDATE_CHANNEL_DRY_RUN_PACKAGE_COMPAT="${OPENCLAW_UPDATE_CHANNEL_DRY_RUN_PACKAGE_COMPAT:-0}"',
+  );
+  expect(script).toContain("-e OPENCLAW_UPDATE_CHANNEL_DRY_RUN_PACKAGE_COMPAT \\");
+});
+
 it("preserves the package-derived Git fixture identity through build and lifecycle completion", async () => {
   const root = tempDirs.make("update-channel-git-fixture-");
   const packageCommit = "a".repeat(40);

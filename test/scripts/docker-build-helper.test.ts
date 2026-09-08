@@ -6541,8 +6541,8 @@ process.exit(73);
 
     expectTextToIncludeAll(runner, [
       "scripts/e2e/lib/temp-state-dir.ts \\",
-      "test/e2e/qa-lab/runtime/agent-bundle-mcp-tools-docker-client.ts |",
-      'CLIENT_PATH="$LEGACY_CLIENT_ROOT/test/e2e/qa-lab/runtime/agent-bundle-mcp-tools-docker-client.ts"',
+      "scripts/e2e/agent-bundle-mcp-tools-docker-client.ts |",
+      'CLIENT_PATH="$LEGACY_CLIENT_ROOT/scripts/e2e/agent-bundle-mcp-tools-docker-client.ts"',
       'ln -s /app/dist "$LEGACY_CLIENT_SOURCE_ROOT/dist"',
       'ln -s /app/node_modules "$LEGACY_CLIENT_SOURCE_ROOT/node_modules"',
       '-v "$LEGACY_CLIENT_SOURCE_ROOT:$LEGACY_CLIENT_ROOT:ro"',
