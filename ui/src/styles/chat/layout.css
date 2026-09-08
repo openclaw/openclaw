@@ -1316,18 +1316,35 @@ openclaw-chat-video-player {
 }
 
 .chat-bubble--reply-target {
-  animation: chat-reply-target-highlight 1.4s ease-out;
+  isolation: isolate;
 }
 
-@keyframes chat-reply-target-highlight {
+.chat-bubble--reply-target::after {
+  position: absolute;
+  z-index: -1;
+  inset: 0;
+  border-radius: inherit;
+  background: var(--bg-hover);
+  opacity: 0;
+  pointer-events: none;
+  content: "";
+  animation: chat-reply-target-flash var(--duration) ease-out;
+}
+
+@keyframes chat-reply-target-flash {
   0%,
-  35% {
-    outline: 2px solid color-mix(in srgb, var(--accent) 80%, transparent);
-    outline-offset: 3px;
+  20% {
+    opacity: 0.6;
   }
   100% {
-    outline: 2px solid transparent;
-    outline-offset: 6px;
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-bubble--reply-target::after {
+    animation: none;
+    opacity: 0.6;
   }
 }
 

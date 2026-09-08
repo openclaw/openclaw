@@ -81,7 +81,7 @@ suite.define(() => {
           const contentBounds = (await transcript.locator(".chat-thread-inner").boundingBox())!;
           expect(trackBounds.x).toBeGreaterThanOrEqual(transcriptBounds.x);
           expect(trackBounds.x + trackBounds.width).toBeLessThan(contentBounds.x);
-          expect(trackBounds.height).toBeCloseTo(900 * 0.6, 2);
+          expect(trackBounds.height).toBeCloseTo(900 * 0.45, 2);
           expect(
             Math.abs(
               trackBounds.y +
@@ -94,7 +94,7 @@ suite.define(() => {
           );
           expect(Math.min(...markBounds.map((bounds) => bounds.width))).toBeGreaterThanOrEqual(44);
           for (let index = 1; index < markBounds.length; index++) {
-            expect(markBounds[index]!.y - markBounds[index - 1]!.y).toBeCloseTo(14, 2);
+            expect(markBounds[index]!.y - markBounds[index - 1]!.y).toBeCloseTo(12, 2);
             expect(markBounds[index]!.y).toBeCloseTo(markBounds[index - 1]!.bottom, 2);
           }
           expect(await markers.first().getAttribute("aria-label")).toContain("1 of 240");
@@ -276,6 +276,15 @@ suite.define(() => {
 
           const composer = page.locator(".agent-chat__composer-combobox textarea");
           await composer.focus();
+          const strokeColors = () =>
+            markers.evaluateAll((items) =>
+              items.map(
+                (item) =>
+                  getComputedStyle(item.querySelector(".chat-position-rail__tick")!)
+                    .backgroundColor,
+              ),
+            );
+          const restingColors = await strokeColors();
           await markers.nth(4).hover();
           await expect.poll(() => preview.textContent()).toContain("Transcript checkpoint 4");
           await expect
@@ -291,8 +300,9 @@ suite.define(() => {
               ),
             )
             .toEqual([8, 12, 20, 28, 40, 28, 20, 12, 8]);
-          expect(await strokeColor(4)).toBe(colors.text);
-          expect(await strokeColor(5)).toBe(colors.muted);
+          await expect
+            .poll(strokeColors)
+            .toEqual(restingColors.map((color, index) => (index === 4 ? colors.text : color)));
           await captureUiProof(suite, page, "chat-position-rail", "scroll-follow-hover.png");
 
           const previewBounds = await preview.boundingBox();
@@ -347,18 +357,37 @@ suite.define(() => {
           expect(focusedBounds.y + focusedBounds.height).toBeLessThan(
             scrollBounds.y + scrollBounds.height - 60,
           );
-          await markers.nth(120).click();
-          const revealed = transcript.locator('.chat-bubble[data-entry-id="position-rail-120"]');
-          await expect
-            .poll(() =>
-              revealed.evaluate((element) => {
-                const viewport = element.closest(".chat-thread")!.getBoundingClientRect();
-                const bubble = element.getBoundingClientRect();
-                return bubble.top >= viewport.top && bubble.bottom <= viewport.bottom;
-              }),
-            )
-            .toBe(true);
-          await captureUiProof(suite, page, "chat-position-rail", "keyboard-jump.png");
+          const flashPaint = (index: number) =>
+            transcript
+              .locator(`.chat-bubble[data-entry-id="position-rail-${index}"]`)
+              .evaluate((element) => {
+                const overlay = getComputedStyle(element, "::after");
+                return {
+                  visible: overlay.content !== "none" && Number.parseFloat(overlay.opacity) > 0,
+                  animated: overlay.animationName !== "none",
+                  outline: getComputedStyle(element).outlineStyle,
+                };
+              });
+          for (const index of [120, 121]) {
+            await markers.nth(index).click();
+            const revealed = transcript.locator(
+              `.chat-bubble[data-entry-id="position-rail-${index}"]`,
+            );
+            await expect
+              .poll(() =>
+                revealed.evaluate((element) => {
+                  const viewport = element.closest(".chat-thread")!.getBoundingClientRect();
+                  const bubble = element.getBoundingClientRect();
+                  return bubble.top >= viewport.top && bubble.bottom <= viewport.bottom;
+                }),
+              )
+              .toBe(true);
+            await expect
+              .poll(() => flashPaint(index))
+              .toEqual({ visible: true, animated: true, outline: "none" });
+            await captureUiProof(suite, page, "chat-position-rail", `jump-flash-${index}.png`);
+            await expect.poll(async () => (await flashPaint(index)).visible).toBe(false);
+          }
           await markers.nth(120).press("Escape");
           await expect.poll(() => preview.count()).toBe(0);
           await markers.nth(120).press("Home");
@@ -398,6 +427,12 @@ suite.define(() => {
                 Number.parseFloat(getComputedStyle(element).transitionDuration),
               ),
           ).toBeLessThanOrEqual(0.00001); // Global reduced-motion policy uses 0.01ms.
+
+          await markers.last().click();
+          await expect
+            .poll(() => flashPaint(239))
+            .toEqual({ visible: true, animated: false, outline: "none" });
+          await expect.poll(async () => (await flashPaint(239)).visible).toBe(false);
 
           // Saved widths can consume the gutter even in a wide desktop pane.
           for (const width of ["100%", "none", "95%", "48rem"]) {
