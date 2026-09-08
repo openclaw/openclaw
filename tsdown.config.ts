@@ -218,6 +218,10 @@ function shouldNeverBundleDependency(id: string): boolean {
   });
 }
 
+function shouldNeverBundleDeclarationDependency(id: string): boolean {
+  return shouldNeverBundleDependency(id) || id === "zod" || id.startsWith("zod/");
+}
+
 function shouldAlwaysBundleDependency(id: string): boolean {
   return (
     id === "@openclaw/fs-safe" ||
@@ -793,7 +797,7 @@ const configs = [
       alwaysBundle: shouldAlwaysBundleDependency,
       neverBundle: shouldNeverBundleDependency,
       // Keep dts generation from inlining externalized package types.
-      dts: { neverBundle: shouldNeverBundleDependency },
+      dts: { neverBundle: shouldNeverBundleDeclarationDependency },
     },
   }),
 ] satisfies UserConfig[];

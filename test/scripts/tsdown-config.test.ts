@@ -36,4 +36,15 @@ describe("tsdown config", () => {
       expect(entry.outExtensions?.(context)).toEqual({ js: ".js", dts: ".d.ts" });
     }
   });
+
+  it("externalizes Zod declarations while retaining bundled runtime output", () => {
+    const unifiedConfig = configs.at(-1) as {
+      deps?: { dts?: { neverBundle?: (id: string) => boolean } };
+    };
+    const neverBundleDeclaration = unifiedConfig.deps?.dts?.neverBundle;
+
+    expect(neverBundleDeclaration?.("zod")).toBe(true);
+    expect(neverBundleDeclaration?.("zod/v4/core")).toBe(true);
+    expect(neverBundleDeclaration?.("unrelated-package")).toBe(false);
+  });
 });
