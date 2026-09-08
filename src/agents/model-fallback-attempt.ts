@@ -119,9 +119,13 @@ export type ModelFallbackResultClassification =
       preserveResultPriority?: number;
     }
   | { error: unknown }
-  | { stopReason: ModelFallbackChainStopReason }
   | null
   | undefined;
+
+/** Internal fallback execution also accepts producer-owned terminal causes. */
+type ModelFallbackAttemptClassification =
+  | ModelFallbackResultClassification
+  | { stopReason: ModelFallbackChainStopReason };
 
 export type ModelFallbackResultClassifier<T> = (attempt: {
   result: T;
@@ -129,7 +133,7 @@ export type ModelFallbackResultClassifier<T> = (attempt: {
   model: string;
   attempt: number;
   total: number;
-}) => ModelFallbackResultClassification | Promise<ModelFallbackResultClassification>;
+}) => ModelFallbackAttemptClassification | Promise<ModelFallbackAttemptClassification>;
 
 export type ModelFallbackRunResult<T> = {
   outcome: "completed" | "exhausted";
@@ -388,7 +392,7 @@ export async function runFallbackAttempt<T>(params: {
 }
 
 function resolveResultClassificationError(
-  classification: ModelFallbackResultClassification,
+  classification: ModelFallbackAttemptClassification,
   params: { provider: string; model: string; attribution?: FailoverAttribution },
 ) {
   if (!classification || "stopReason" in classification) {

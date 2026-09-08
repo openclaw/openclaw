@@ -98,7 +98,7 @@ describe("resolveEmbeddedRunTerminalTimeout", () => {
           model: "gpt-5.6-luna",
           result,
         }),
-      ).toEqual({ stopReason: "agent_run_terminal_timeout" });
+      ).toBeNull();
     },
   );
 

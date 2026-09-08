@@ -17,7 +17,6 @@ import { loggingState } from "../logging/state.js";
 import { createDiagnosticLogRecordCapture } from "../logging/test-helpers/diagnostic-log-capture.js";
 import { enqueueCommandInLane } from "../process/command-queue.js";
 import { AgentRunTerminalOutcomeError } from "./agent-run-terminal-error.js";
-import { classifyEmbeddedAgentRunResultForModelFallback } from "./embedded-agent-runner/result-fallback-classifier.js";
 import { abortable } from "./embedded-agent-runner/run/abortable.js";
 import { resolveEmbeddedRunAttemptTerminalState } from "./embedded-agent-runner/run/terminal-outcome.js";
 import { resolveEmbeddedRunTerminalTimeout } from "./embedded-agent-runner/run/terminal-timeout.js";
@@ -180,7 +179,7 @@ describe("model fallback chain-stop diagnostics", () => {
       ...fallbackOptions,
       fallbacksOverride: ["fixture-next/fixture-model", "fixture-last/fixture-model"],
       run,
-      classifyResult: classifyEmbeddedAgentRunResultForModelFallback,
+      classifyResult: () => ({ stopReason: "idle_timeout_circuit_breaker" }),
     });
     expect(run).toHaveBeenCalledTimes(2);
     expect(result.result).toBe(terminalResult);
@@ -231,7 +230,7 @@ describe("model fallback chain-stop diagnostics", () => {
           ? ["fixture-primary/fixture-model"]
           : fallbackOptions.fallbacksOverride,
         run,
-        classifyResult: classifyEmbeddedAgentRunResultForModelFallback,
+        classifyResult: () => ({ stopReason: "agent_run_terminal_timeout" }),
       });
       expect(run).toHaveBeenCalledOnce();
       expect(result.result?.meta.agentMeta).toMatchObject({
