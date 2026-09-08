@@ -4540,6 +4540,7 @@ td.data-table-key-col {
 .md-preview-dialog__panel.skill-reader-dialog {
   --skill-reader-inset: var(--space-5);
 
+  min-height: 0;
   max-height: calc(100dvh - 2 * var(--space-6));
 }
 
@@ -4590,14 +4591,8 @@ td.data-table-key-col {
   .md-preview-dialog__panel.skill-reader-dialog {
     --skill-reader-inset: var(--space-4);
 
-    min-height: 90dvh;
     max-height: 90dvh;
   }
-}
-
-/* Keep brief errors content-sized even inside the mobile Skills page. */
-.skill-reader-dialog.md-preview-dialog__panel--message-only {
-  min-height: 0;
 }
 
 @media (prefers-reduced-motion: reduce) {

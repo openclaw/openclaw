@@ -533,13 +533,7 @@ function renderClawHubDetailDialog(props: SkillsProps) {
       style="--openclaw-modal-width: min(1040px, calc(100vw - 32px));"
       @modal-cancel=${props.onClawHubDetailClose}
     >
-      <div
-        class="md-preview-dialog__panel skill-reader-dialog ${
-          props.clawhubDetailError && !props.clawhubDetailLoading
-            ? "md-preview-dialog__panel--message-only"
-            : ""
-        }"
-      >
+      <div class="md-preview-dialog__panel skill-reader-dialog">
         <div class="md-preview-dialog__header">
           <div class="clawhub-skill-detail__identity">
             ${
