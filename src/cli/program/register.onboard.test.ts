@@ -64,7 +64,7 @@ vi.mock("../../runtime.js", async (importOriginal) => ({
 
 describe("registerOnboardCommand", () => {
   async function runCli(args: string[]) {
-    const program = new Command().enablePositionalOptions();
+    const program = new Command().enablePositionalOptions().exitOverride();
     registerOnboardCommand(program);
     await program.parseAsync(args, { from: "user" });
   }
@@ -120,6 +120,112 @@ describe("registerOnboardCommand", () => {
     );
     expect(setupWizardCommandMock).not.toHaveBeenCalled();
   });
+
+  it.each([
+    {
+      args: ["--agent", "writer", "--json"],
+      target: "onboardRecommendationsCommand",
+      expected: { agent: "writer", json: true },
+    },
+    {
+      args: ["--json", "--agent", "writer"],
+      target: "onboardRecommendationsCommand",
+      expected: { agent: "writer", json: true },
+    },
+    {
+      args: ["--agent", "writer", "acknowledge"],
+      target: "acknowledgeOnboardRecommendationsCommand",
+      expected: { agent: "writer", retry: undefined },
+    },
+    {
+      args: ["acknowledge", "--agent", "writer"],
+      target: "acknowledgeOnboardRecommendationsCommand",
+      expected: { agent: "writer", retry: undefined },
+    },
+    {
+      args: ["--agent", "writer", "acknowledge", "--retry", "chat-plugin"],
+      target: "acknowledgeOnboardRecommendationsCommand",
+      expected: { agent: "writer", retry: ["chat-plugin"] },
+    },
+    {
+      args: ["acknowledge", "--agent", "writer", "--retry", "chat-plugin"],
+      target: "acknowledgeOnboardRecommendationsCommand",
+      expected: { agent: "writer", retry: ["chat-plugin"] },
+    },
+    {
+      args: ["acknowledge", "--retry", "chat-plugin", "--agent", "writer"],
+      target: "acknowledgeOnboardRecommendationsCommand",
+      expected: { agent: "writer", retry: ["chat-plugin"] },
+    },
+    {
+      args: ["--agent", "writer", "refresh"],
+      target: "refreshOnboardRecommendationsCommand",
+      expected: { agent: "writer" },
+    },
+    {
+      args: ["refresh", "--agent", "writer"],
+      target: "refreshOnboardRecommendationsCommand",
+      expected: { agent: "writer" },
+    },
+  ] as const)("accepts agent option placement $args", async ({ args, target, expected }) => {
+    await runCli(["onboard", "recommendations", ...args]);
+    expect(mocks[target]).toHaveBeenCalledExactlyOnceWith(expected, runtime);
+  });
+
+  it.each(["acknowledge", "refresh"] as const)(
+    "prefers explicit agent leaf selection for %s",
+    async (leaf) => {
+      await runCli(["onboard", "recommendations", "--agent", "writer", leaf, "--agent", "analyst"]);
+      const target =
+        leaf === "acknowledge"
+          ? mocks.acknowledgeOnboardRecommendationsCommand
+          : mocks.refreshOnboardRecommendationsCommand;
+      expect(target).toHaveBeenCalledWith(expect.objectContaining({ agent: "analyst" }), runtime);
+    },
+  );
+
+  it.each(["", "   ", "ghost"])(
+    "preserves invalid agent leaf value '%s' over its parent",
+    async (agent) => {
+      await runCli([
+        "onboard",
+        "recommendations",
+        "--agent",
+        "writer",
+        "refresh",
+        "--agent",
+        agent,
+      ]);
+      expect(mocks.refreshOnboardRecommendationsCommand).toHaveBeenCalledExactlyOnceWith(
+        { agent },
+        runtime,
+      );
+    },
+  );
+
+  it.each(["acknowledge", "refresh"] as const)(
+    "inherits the parent agent option instead of a %s leaf default",
+    async (leafName) => {
+      const program = new Command().enablePositionalOptions().exitOverride();
+      registerOnboardCommand(program);
+      const recommendations = program.commands
+        .find((command) => command.name() === "onboard")
+        ?.commands.find((command) => command.name() === "recommendations");
+      const leaf = recommendations?.commands.find((command) => command.name() === leafName);
+      if (!leaf) {
+        throw new Error(`Expected registered recommendations ${leafName} command`);
+      }
+      leaf.setOptionValueWithSource("agent", "analyst", "default");
+      await program.parseAsync(["onboard", "recommendations", "--agent", "writer", leafName], {
+        from: "user",
+      });
+      const target =
+        leafName === "acknowledge"
+          ? mocks.acknowledgeOnboardRecommendationsCommand
+          : mocks.refreshOnboardRecommendationsCommand;
+      expect(target).toHaveBeenCalledWith(expect.objectContaining({ agent: "writer" }), runtime);
+    },
+  );
 
   it("routes failed recommendation ids through acknowledgement", async () => {
     await runCli([

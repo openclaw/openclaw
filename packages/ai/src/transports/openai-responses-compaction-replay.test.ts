@@ -6,6 +6,7 @@ import type {
   ProviderReplayState,
 } from "@openclaw/llm-core";
 import { describe, expect, it } from "vitest";
+import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
 import { convertResponsesMessages as convertProviderResponsesMessages } from "../providers/openai-responses-shared.js";
 import { createZeroUsage } from "../usage.test-support.js";
 import {
@@ -755,23 +756,9 @@ describe("OpenAI Responses compaction replay", () => {
           { role: "user", content: "prefix user", timestamp: 1 },
           createAssistant([{ type: "text", text: "prefix assistant" }]),
           prefixCall,
-          {
-            role: "toolResult",
-            toolCallId: "call_prefix|fc_prefix",
-            toolName: "lookup",
-            content: [{ type: "text", text: "prefix tool result" }],
-            isError: false,
-            timestamp: 2,
-          },
+          makeTextToolResult("call_prefix|fc_prefix", "lookup", "prefix tool result", false, 2),
           owner,
-          {
-            role: "toolResult",
-            toolCallId: "call_after|fc_after",
-            toolName: "lookup",
-            content: [{ type: "text", text: "after tool result" }],
-            isError: false,
-            timestamp: 3,
-          },
+          makeTextToolResult("call_after|fc_after", "lookup", "after tool result", false, 3),
           { role: "user", content: "later user", timestamp: 4 },
           laterAssistant,
           { role: "user", content: "active current user prompt", timestamp: 5 },
@@ -822,14 +809,7 @@ describe("OpenAI Responses compaction replay", () => {
       const input = convert({
         messages: [
           owner,
-          {
-            role: "toolResult",
-            toolCallId: "call_before|fc_before",
-            toolName: "lookup",
-            content: [{ type: "text", text: "before output" }],
-            isError: false,
-            timestamp: 1,
-          },
+          makeTextToolResult("call_before|fc_before", "lookup", "before output", false, 1),
         ],
       });
 

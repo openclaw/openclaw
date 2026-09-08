@@ -40,8 +40,7 @@ import {
   buildGatewayReloadPlan,
   isNoopGatewayReloadPlan,
   listConfigReloadRefinementPrefixes,
-  listPluginInstallTimestampMetadataPaths,
-  listPluginInstallWholeRecordPaths,
+  resolvePluginInstallReloadMetadata,
   type GatewayReloadPlan,
 } from "./config-reload-plan.js";
 import { resolveGatewayReloadSettings } from "./config-reload-settings.js";
@@ -515,11 +514,7 @@ export function startGatewayConfigReloader(opts: {
       nextCompareConfig,
       listConfigReloadRefinementPrefixes(),
     );
-    const configPluginInstallTimestampNoopPaths = listPluginInstallTimestampMetadataPaths(
-      currentCompareConfig,
-      nextCompareConfig,
-    );
-    const configPluginInstallWholeRecordPaths = listPluginInstallWholeRecordPaths(
+    const configInstallMetadata = resolvePluginInstallReloadMetadata(
       currentCompareConfig,
       nextCompareConfig,
     );
@@ -535,23 +530,11 @@ export function startGatewayConfigReloader(opts: {
       previousPluginInstallConfig,
       nextPluginInstallConfig,
     );
-    const pluginInstallRecordTimestampNoopPaths = listPluginInstallTimestampMetadataPaths(
-      previousPluginInstallConfig,
-      nextPluginInstallConfig,
-    );
-    const pluginInstallRecordWholeRecordPaths = listPluginInstallWholeRecordPaths(
+    const installMetadata = resolvePluginInstallReloadMetadata(
       previousPluginInstallConfig,
       nextPluginInstallConfig,
     );
     const changedPaths = [...configChangedPaths, ...pluginInstallRecordChangedPaths];
-    const pluginInstallTimestampNoopPaths = [
-      ...configPluginInstallTimestampNoopPaths,
-      ...pluginInstallRecordTimestampNoopPaths,
-    ];
-    const pluginInstallWholeRecordPaths = [
-      ...configPluginInstallWholeRecordPaths,
-      ...pluginInstallRecordWholeRecordPaths,
-    ];
     // Publication can be superseded after its runtime commit but before its
     // lifecycle owner is applied. Finish that owner before the next candidate
     // prepares state that acceptance or restart policy may discard.
@@ -698,8 +681,11 @@ export function startGatewayConfigReloader(opts: {
       return;
     }
     const plan = buildGatewayReloadPlan(changedPaths, {
-      noopPaths: pluginInstallTimestampNoopPaths,
-      forceChangedPaths: pluginInstallWholeRecordPaths,
+      noopPaths: [...configInstallMetadata.noopPaths, ...installMetadata.noopPaths],
+      forceChangedPaths: [
+        ...configInstallMetadata.forceChangedPaths,
+        ...installMetadata.forceChangedPaths,
+      ],
       candidateConfig: nextConfig,
       candidateCompareConfig: nextCompareConfig,
       previousCompareConfig: currentCompareConfig,

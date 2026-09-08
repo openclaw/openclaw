@@ -85,5 +85,3 @@ export function createModelCatalogView(params: {
     },
   };
 }
-
-export type ModelCatalogView = ReturnType<typeof createModelCatalogView>;

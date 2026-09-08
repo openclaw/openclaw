@@ -265,6 +265,12 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
     // not an operation failure and should not latch the unread retry guard.
     if (
       !access.allowed ||
+      this.sessionParticipationTracker.resolve({
+        catalog: parseCatalogSessionKey(state.sessionKey) !== null,
+        listLoading: state.sessionsLoading,
+        sessionKey: `${resolveChatAgentId(state) ?? ""}\0${state.sessionKey}`,
+        session: row,
+      }) ||
       !this.unreadPatchGuard.shouldPatch(state.sessionKey, true, row.markedUnreadAt)
     ) {
       return;

@@ -1254,18 +1254,7 @@ describe("memory plugin e2e", () => {
     vi.useFakeTimers();
     const ensureGlobalUndiciEnvProxyDispatcher = vi.fn();
     const post = vi.fn(() => new Promise(() => {}));
-    const loadLanceDbModule = vi.fn(async () => ({
-      connect: vi.fn(async () => ({
-        tableNames: vi.fn(async () => ["memories"]),
-        openTable: vi.fn(async () => ({
-          schema: createAgentScopedSchemaMock(),
-          vectorSearch: vi.fn(),
-          countRows: vi.fn(async () => 0),
-          add: vi.fn(async () => undefined),
-          delete: vi.fn(async () => undefined),
-        })),
-      })),
-    }));
+    const loadLanceDbModule = vi.fn(async () => undefined);
 
     try {
       await withMockedOpenAiMemoryPlugin({

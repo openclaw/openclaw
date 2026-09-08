@@ -25,7 +25,9 @@ import { resolveAgentHarnessPolicy } from "./harness/policy.js";
 import { getRegisteredAgentHarness } from "./harness/registry.js";
 import { LiveSessionModelSwitchError } from "./live-model-switch-error.js";
 import {
+  logModelFallbackChainStopped,
   logModelFallbackDecision,
+  type ModelFallbackChainStopReason,
   type ModelFallbackStepFields,
 } from "./model-fallback-observation.js";
 import type {
@@ -192,6 +194,41 @@ function isAgentRunTerminalTimeout(err: unknown): boolean {
   return findAgentRunTerminalOutcome(err)?.status === "timeout";
 }
 
+/** Preserve stop precedence while naming the first matching condition. */
+function resolveChainStopReason(params: {
+  err: unknown;
+  harnessPreflight: boolean;
+  captureHarnessPreflight?: boolean;
+  callerSignalAborted: boolean;
+}): ModelFallbackChainStopReason | undefined {
+  const { err } = params;
+  if (isAgentRunTerminalTimeout(err)) {
+    return "agent_run_terminal_timeout";
+  }
+  if (isCommandLaneTaskTimeoutError(err)) {
+    return "command_lane_task_timeout";
+  }
+  if (params.harnessPreflight && !params.captureHarnessPreflight) {
+    return "agent_harness_preflight";
+  }
+  if (isSandboxProvisioningError(err)) {
+    return "sandbox_provisioning";
+  }
+  if (params.callerSignalAborted) {
+    return "caller_signal_aborted";
+  }
+  if (isAgentRunDirectAbortReason(err)) {
+    return "agent_run_direct_abort";
+  }
+  if (isAgentRunRestartAbortReason(err)) {
+    return "agent_run_restart_abort";
+  }
+  if (isTerminalAbortFromError(err)) {
+    return "terminal_abort_wrapper";
+  }
+  return undefined;
+}
+
 async function runFallbackCandidate<T>(params: {
   run: ModelFallbackRunFn<T>;
   provider: string;
@@ -214,16 +251,21 @@ async function runFallbackCandidate<T>(params: {
     return { ok: true, result };
   } catch (err) {
     const harnessPreflight = isAgentHarnessPreflightError(err);
-    if (
-      isAgentRunTerminalTimeout(err) ||
-      isCommandLaneTaskTimeoutError(err) ||
-      (harnessPreflight && !params.captureHarnessPreflight) ||
-      isSandboxProvisioningError(err) ||
-      params.abortSignal?.aborted ||
-      isAgentRunDirectAbortReason(err) ||
-      isAgentRunRestartAbortReason(err) ||
-      isTerminalAbortFromError(err)
-    ) {
+    const chainStopReason = resolveChainStopReason({
+      err,
+      harnessPreflight,
+      captureHarnessPreflight: params.captureHarnessPreflight,
+      callerSignalAborted: params.abortSignal?.aborted === true,
+    });
+    if (chainStopReason) {
+      logModelFallbackChainStopped({
+        reason: chainStopReason,
+        provider: params.provider,
+        model: params.model,
+        sessionId: params.attribution?.sessionId,
+        lane: params.attribution?.lane,
+        error: err,
+      });
       throw err;
     }
     // A harness-local failure can select another candidate only while the turn is live.

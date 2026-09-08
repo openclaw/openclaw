@@ -79,6 +79,7 @@ still resolves. Each entry points at the page that now holds the content.
 - <a id="11b-bootstrap-file-size" />[11b. Bootstrap file size](/gateway/doctor/gateway-and-services#11b-bootstrap-file-size)
 - <a id="11c-shell-completion" />[11c. Shell completion](/gateway/doctor/gateway-and-services#11c-shell-completion)
 - <a id="11d-stale-channel-plugin-cleanup" />[11d. Stale channel plugin cleanup](/gateway/doctor/gateway-and-services#11d-stale-channel-plugin-cleanup)
+- <a id="11e-project-clone-shape" />[11e. Project clone shape](/gateway/doctor/gateway-and-services#11e-project-clone-shape)
 - <a id="12-gateway-auth-checks-local-token" />[12. Gateway auth checks (local token)](/gateway/doctor/gateway-and-services#12-gateway-auth-checks-local-token)
 - <a id="12b-read-only-secretref-aware-repairs" />[12b. Read-only SecretRef-aware repairs](/gateway/doctor/gateway-and-services#12b-read-only-secretref-aware-repairs)
 - <a id="13-gateway-health-check-restart" />[13. Gateway health check + restart](/gateway/doctor/gateway-and-services#13-gateway-health-check-restart)

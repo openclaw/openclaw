@@ -8,7 +8,9 @@ import {
   extractLeadingHttpStatus,
   formatProviderRefusalText,
   formatRawAssistantErrorForUi,
+  formatTransportErrorCopy,
   isGenericProviderInternalError,
+  isKnownTransportErrorCode,
   parseApiErrorInfo,
 } from "../../shared/assistant-error-format.js";
 import { renderAssistantRequestFailureCopy } from "../failover/assistant-request-failure-copy.js";
@@ -23,7 +25,6 @@ import {
   AUTH_INVALID_TOKEN_USER_TEXT,
   formatBillingErrorMessage,
   formatDiskSpaceErrorCopy,
-  formatTransportErrorCopy,
   isInvalidStreamingEventOrderError,
   isLikelyHttpErrorText,
   isRawApiErrorPayload,
@@ -233,7 +234,9 @@ export function formatAssistantErrorText(
     return formatRawAssistantErrorForUi(raw);
   }
 
-  const transportCopy = formatTransportErrorCopy(raw);
+  const transportCopy = formatTransportErrorCopy(
+    msg.errorCode && isKnownTransportErrorCode(msg.errorCode) ? `${raw} ${msg.errorCode}` : raw,
+  );
   if (transportCopy) {
     return transportCopy;
   }

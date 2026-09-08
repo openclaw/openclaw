@@ -2075,6 +2075,60 @@ describe("redactSecrets", () => {
     expect(serialized).not.toContain("opaque-refresh-token-value");
   });
 
+  it.each([
+    "ECONNREFUSED",
+    "ECONNRESET",
+    "ECONNABORTED",
+    "ENETRESET",
+    "EPIPE",
+    "ENOTFOUND",
+    "EAI_AGAIN",
+    "ENETUNREACH",
+    "EHOSTUNREACH",
+    "EHOSTDOWN",
+  ])("preserves the known transport code %s only in object cause chains", (code) => {
+    expect(redactSecrets({ cause: { code, cause: { code } } })).toEqual({
+      cause: { code, cause: { code } },
+    });
+    expect(redactSecrets({ Cause: { CODE: code } })).toEqual({ Cause: { CODE: code } });
+  });
+
+  it.each([
+    { input: { cause: { code: "p4Q6x7J9" } }, expected: { cause: { code: "***" } } },
+    {
+      input: { cause: { code: "token-EAI_AGAIN-secret" } },
+      expected: { cause: { code: "token-…cret" } },
+    },
+    { input: { cause: { code: " EAI_AGAIN" } }, expected: { cause: { code: "***" } } },
+    { input: { cause: { code: "EAI_AGAIN\n" } }, expected: { cause: { code: "***" } } },
+    { input: { cause: { code: 123456 } }, expected: { cause: { code: "***" } } },
+    { input: { cause: { code: true } }, expected: { cause: { code: "***" } } },
+    { input: { cause: { code: 123456n } }, expected: { cause: { code: "***" } } },
+    {
+      input: { oauth: { cause: { code: "EAI_AGAIN" } } },
+      expected: { oauth: { cause: { code: "***" } } },
+    },
+    {
+      input: { providerAuth: { cause: { code: "p4Q6x7J9" } } },
+      expected: { providerAuth: { cause: { code: "***" } } },
+    },
+    { input: { cause: [{ code: "EAI_AGAIN" }] }, expected: { cause: [{ code: "***" }] } },
+    { input: { cause: { code: ["EAI_AGAIN"] } }, expected: { cause: { code: ["***"] } } },
+    { input: [{ cause: { code: "EAI_AGAIN" } }], expected: [{ cause: { code: "***" } }] },
+  ])(
+    "masks authorization codes outside the exact transport boundary: $input",
+    ({ input, expected }) => {
+      expect(redactSecrets(input)).toEqual(expected);
+    },
+  );
+
+  it("keeps secret masking ahead of known transport code preservation", () => {
+    registerSecretValueForRedaction("EAI_AGAIN");
+    const output = redactSecrets({ cause: { code: "EAI_AGAIN", token: "opaque-neighbor-secret" } });
+    expect(output.cause.code).not.toBe("EAI_AGAIN");
+    expect(output.cause.token).not.toBe("opaque-neighbor-secret");
+  });
+
   it("keeps structured error codes while redacting OAuth authorization codes", () => {
     const output = redactSecrets({
       manifest: {

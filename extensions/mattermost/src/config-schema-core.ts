@@ -127,7 +127,7 @@ const MattermostReplyToModeByChatTypeSchema = z
   })
   .strict();
 
-const MattermostAccountSchemaBase = z
+export const MattermostAccountSchemaBase = z
   .object({
     name: z.string().optional(),
     capabilities: z.array(z.string()).optional(),

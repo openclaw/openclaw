@@ -112,7 +112,7 @@ Methods an operator client calls on behalf of a person: helper reads, exec appro
   for `provider/*` entries. Otherwise the response is the full gateway
   catalog.
 - `"configured"`: picker-sized behavior. If `agents.defaults.modelPolicy.allow` is
-  configured, it still wins, including provider-scoped discovery for
+  configured, it still wins, including published rows matched by
   `provider/*` entries. Without an allowlist, the response uses explicit
   `models.providers.<provider>.models` entries, falling back to the full
   catalog only when no configured model rows exist.
@@ -123,17 +123,29 @@ Methods an operator client calls on behalf of a person: helper reads, exec appro
 - `"all"`: full gateway catalog, bypassing `agents.defaults.modelPolicy.allow`. Use for
   diagnostics/discovery UIs, not normal model pickers.
 
-Two optional controls separate automatic reads from operator-requested discovery:
+Ordinary requests read the published catalog without starting provider discovery.
+Views select rows; they do not decide whether discovery runs. If the owner is not
+published yet, the request reports that the model catalog is not ready. A result
+whose owner becomes stale during projection is rejected for retry.
 
-- `preparedOnly: true` reuses the current prepared catalog or a completed catalog for that
-  runtime generation without starting provider discovery. Control UI startup and polling use
-  this mode.
-- `refresh: true` replaces a completed full catalog when the selected view requires discovery.
-  Concurrent refreshes share one build; a failed refresh leaves the previous completed catalog
-  available and returns the failure to the caller.
+- `preparedOnly: true` remains supported for automatic clients. Ordinary reads
+  are passive with or without this flag.
+- `refresh: true` requests provider acquisition before reading the new published
+  generation. Concurrent refreshes share the owner build. A failed acquisition
+  retains compatible rows and reports its `providerOutcomes`; successful empty
+  acquisition remains empty.
+- `provider: "<id>"` filters the published result through the captured provider
+  aliases. Unknown provider IDs are rejected.
+- `includeDetails: true` includes available input modalities, effective
+  `contextTokens`, and a `local` endpoint classification. It does not expose
+  endpoint URLs, headers, credentials, costs or runtime request parameters.
 
-`preparedOnly: true` and `refresh: true` are mutually exclusive because one forbids discovery
-while the other requests it.
+`preparedOnly: true` and `refresh: true` remain mutually exclusive.
+The Gateway advertises these published-read and details controls as
+`published-model-catalog`. Clients that require this contract must check the
+capability before sending the new fields; an older Gateway requires an update
+or restart, not a silent local fallback. The model CLI uses this contract for
+`models list` and `models list --refresh`.
 
 ## Exec approvals
 

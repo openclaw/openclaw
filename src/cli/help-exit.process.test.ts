@@ -334,7 +334,7 @@ describe("models list JSON failure process output", () => {
       {
         provider: "autoqa-no-such-provider",
         message:
-          'Unknown provider filter "autoqa-no-such-provider" for this installation. Run openclaw plugins list --json to see installed providers, or configure it under models.providers.',
+          "Unknown model catalog provider. Use a provider id from the installed plugins or configured providers.",
       },
     ].flatMap(({ provider, message }) => [
       {

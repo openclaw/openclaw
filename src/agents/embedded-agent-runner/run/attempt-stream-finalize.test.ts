@@ -28,6 +28,7 @@ vi.mock("./attempt-stream-settle.js", () => ({
   settleEmbeddedAttemptStream: mocks.settleStream,
 }));
 
+import { makeUserMessage } from "../../../../test/helpers/user-message.js";
 import { createSubscribedSessionHarness } from "../../embedded-agent-subscribe.e2e-harness.js";
 import { SessionManager } from "../../sessions/index.js";
 import { runEmbeddedAttemptSettledPhase } from "./attempt-settle.js";
@@ -315,11 +316,7 @@ describe("runEmbeddedAttemptSettledPhase stream finalization", () => {
 
   it("rewinds the exact rejected branch before the hidden retry can choose NO_REPLY", async () => {
     const sessionManager = SessionManager.inMemory();
-    const promptId = sessionManager.appendMessage({
-      role: "user",
-      content: "Original request",
-      timestamp: 1,
-    });
+    const promptId = sessionManager.appendMessage(makeUserMessage("Original request", 1));
     const rejectedId = sessionManager.appendMessage({
       role: "assistant",
       content: [{ type: "text", text: "Rejected first answer" }],
@@ -574,11 +571,7 @@ describe("runEmbeddedAttemptSettledPhase stream finalization", () => {
 
   it("restores the rewound in-memory branch when settlement fails", async () => {
     const sessionManager = SessionManager.inMemory();
-    const promptId = sessionManager.appendMessage({
-      role: "user",
-      content: "Original request",
-      timestamp: 1,
-    });
+    const promptId = sessionManager.appendMessage(makeUserMessage("Original request", 1));
     const rejectedId = sessionManager.appendMessage({
       role: "assistant",
       content: [{ type: "text", text: "Rejected first answer" }],

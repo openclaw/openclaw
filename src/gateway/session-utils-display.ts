@@ -32,18 +32,15 @@ export function resolveGatewaySessionDisplayName(key: string, entry?: SessionEnt
   const groupChannel = entry?.groupChannel;
   const space = entry?.space;
   const id = parsed?.id;
-  const originLabel = sessionDeliveryOrigin(entry)?.label;
+  const origin = sessionDeliveryOrigin(entry);
+  const originLabel = origin?.label;
   const isDashboardSession = parsedAgent?.rest.startsWith("dashboard:") === true;
   const isGroupSession = isGroupOrChannelDisplaySession(entry, parsed);
-  // A user-assigned label is an explicit rename; it must win over stored
-  // channel-derived display names or renames silently vanish on refresh.
-  // Group sessions prefer the human chat title (subject/#channel) over the
-  // stored compact token displayName (e.g. "slack:g-general").
-  const displayName =
-    entry?.label ??
-    (isGroupSession ? buildGroupDisplayTitle({ subject, groupChannel, space }) : undefined) ??
-    entry?.displayName ??
-    (isGroupSession && channel
+  const groupTitle = isGroupSession
+    ? buildGroupDisplayTitle({ subject, groupChannel, space })
+    : undefined;
+  const compactGroupFallback =
+    isGroupSession && channel
       ? buildGroupDisplayName({
           provider: channel,
           subject,
@@ -52,10 +49,43 @@ export function resolveGatewaySessionDisplayName(key: string, entry?: SessionEnt
           id,
           key,
         })
-      : undefined) ??
+      : undefined;
+  const storedDisplayName =
+    channel === "imessage" &&
+    isGroupSession &&
+    !groupTitle &&
+    entry?.displayName === compactGroupFallback
+      ? undefined
+      : entry?.displayName;
+  const normalizedOriginFrom = normalizeOptionalString(origin?.from);
+  const routeIdentityTail = normalizedOriginFrom?.split(":").at(-1);
+  const routeIdentityTailIsOpaque =
+    routeIdentityTail != null &&
+    (routeIdentityTail.includes("@") || /^[+]?[\d\s().-]+$/.test(routeIdentityTail));
+  const originIsRouteIdentity =
+    originLabel != null &&
+    (originLabel === normalizedOriginFrom ||
+      (routeIdentityTailIsOpaque && originLabel === routeIdentityTail));
+  const originIsGenericGroupFallback =
+    channel === "imessage" &&
+    isGroupSession &&
+    !groupTitle &&
+    id != null &&
+    originLabel?.toLowerCase() === `group id:${id.toLowerCase()}`;
+  const readableOriginLabel =
+    originIsRouteIdentity || originIsGenericGroupFallback ? undefined : originLabel;
+  // A user-assigned label is an explicit rename; it must win over stored
+  // channel-derived display names or renames silently vanish on refresh.
+  // Group sessions prefer the human chat title (subject/#channel) over the
+  // stored compact token displayName (e.g. "slack:g-general").
+  const displayName =
+    entry?.label ??
+    groupTitle ??
+    storedDisplayName ??
+    (channel === "imessage" ? undefined : compactGroupFallback) ??
     // Dashboard origin labels identify the authenticated sender. Using them as
     // titles leaks account names into the sidebar while the generated title is pending.
-    (isDashboardSession ? undefined : originLabel);
+    (isDashboardSession ? undefined : readableOriginLabel);
   return displayName;
 }
 
