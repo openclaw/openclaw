@@ -1,104 +1,119 @@
-import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
-  checkCodexThreadAppAvailability,
+  attestCodexPluginThreadApps,
   discardUnattestedCodexPluginThread,
 } from "./plugin-thread-attestation.js";
 import type { v2 } from "./protocol.js";
 
-describe("Codex thread app availability", () => {
-  afterEach(() => vi.restoreAllMocks());
+describe("Codex plugin thread app attestation", () => {
+  it("reads the committed snapshot with the started thread's effective policy", async () => {
+    const request = vi.fn(async () => installedApps(["linear-app"]));
 
-  it("checks configured and account apps once using the thread policy", async () => {
-    const request = vi.fn(async () => installedApps(["plugin-app", "account-app"]));
-    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => {});
-    await checkCodexThreadAppAvailability({
+    await attestCodexPluginThreadApps({
       client: { request } as never,
-      threadId: "thread-mixed",
-      appIds: ["plugin-app", "account-app", "plugin-app"],
+      threadId: "thread-linear",
+      appIds: ["linear-app", "linear-app"],
     });
+
     expect(request).toHaveBeenCalledExactlyOnceWith(
       "app/installed",
-      { threadId: "thread-mixed", forceRefresh: false },
+      { threadId: "thread-linear", forceRefresh: false },
       { signal: undefined },
     );
-    expect(warn).not.toHaveBeenCalled();
   });
 
-  it("records unavailable apps without blocking the remaining tools", async () => {
-    const request = vi.fn(async () => ({
-      apps: [
-        ...installedApps(["working"]).apps,
-        ...installedApps(["disabled"], { enabled: false, callable: false }).apps,
-        ...installedApps(["readonly"], { callable: false }).apps,
-      ],
-    }));
-    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => {});
-    await checkCodexThreadAppAvailability({
+  it("attests configured plugin and account apps against one thread snapshot", async () => {
+    const request = vi.fn(async () => installedApps(["plugin-app", "account-app"]));
+
+    await attestCodexPluginThreadApps({
       client: { request } as never,
-      threadId: "thread-mixed",
-      appIds: ["working", "readonly", "missing", "disabled", "missing"],
+      threadId: "thread-mixed-apps",
+      appIds: ["plugin-app", "account-app", "plugin-app"],
     });
-    expect(warn).toHaveBeenCalledExactlyOnceWith(
-      "codex apps unavailable; continuing with remaining tools",
-      {
-        threadId: "thread-mixed",
-        failures: ["disabled:disabled", "missing:missing", "readonly:not-callable"],
-      },
+
+    expect(request).toHaveBeenCalledExactlyOnceWith(
+      "app/installed",
+      { threadId: "thread-mixed-apps", forceRefresh: false },
+      { signal: undefined },
     );
+  });
+
+  it("rejects a mixed snapshot when the thread denies its account-wide app", async () => {
+    const request = vi.fn(async () => installedApps(["plugin-app"]));
+
+    await expect(
+      attestCodexPluginThreadApps({
+        client: { request } as never,
+        threadId: "thread-mixed-apps",
+        appIds: ["plugin-app", "account-app"],
+      }),
+    ).rejects.toMatchObject({
+      name: "CodexPluginThreadAppAttestationError",
+      message: expect.stringContaining("account-app:missing"),
+    });
+
     expect(request).toHaveBeenCalledOnce();
   });
 
-  it("does not read the app snapshot when no apps are configured", async () => {
+  it("does not read the app snapshot when no apps need attestation", async () => {
     const request = vi.fn();
-    await checkCodexThreadAppAvailability({
+
+    await attestCodexPluginThreadApps({
       client: { request } as never,
-      threadId: "thread-empty",
+      threadId: "thread-linear",
       appIds: [],
     });
+
     expect(request).not.toHaveBeenCalled();
   });
 
-  it("preserves snapshot request failures and their cause", async () => {
-    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => {});
-    const cause = new Error("app inventory offline");
-    const request = vi.fn(async () => {
-      throw cause;
-    });
+  it.each([
+    {
+      state: "missing",
+      response: installedApps([]),
+      failure: "linear-app:missing",
+    },
+    {
+      state: "disabled",
+      response: installedApps(["linear-app"], { enabled: false, callable: false }),
+      failure: "linear-app:disabled",
+    },
+    {
+      state: "not callable",
+      response: installedApps(["linear-app"], { callable: false }),
+      failure: "linear-app:not-callable",
+    },
+  ])("fails closed when an admitted app is $state", async ({ response, failure }) => {
     await expect(
-      checkCodexThreadAppAvailability({
-        client: { request } as never,
-        threadId: "thread-unavailable",
-        appIds: ["plugin-app"],
+      attestCodexPluginThreadApps({
+        client: { request: vi.fn(async () => response) } as never,
+        threadId: "thread-linear",
+        appIds: ["linear-app"],
       }),
-    ).rejects.toMatchObject({ name: "CodexPluginThreadAppAttestationError", cause });
-    expect(warn).not.toHaveBeenCalled();
+    ).rejects.toMatchObject({
+      name: "CodexPluginThreadAppAttestationError",
+      message: expect.stringContaining(failure),
+    });
   });
 
-  it.each(["resolve", "reject"])(
-    "preserves cancellation when discovery will %s",
-    async (outcome) => {
-      const abort = new AbortController();
-      const cause = new Error("turn cancelled");
-      const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => {});
-      const request = vi.fn(async () => {
-        abort.abort(cause);
-        if (outcome === "reject") {
-          throw cause;
-        }
-        return installedApps([]);
-      });
-      await expect(
-        checkCodexThreadAppAvailability({
-          client: { request } as never,
-          threadId: "thread-cancelled",
-          appIds: ["plugin-app"],
-          signal: abort.signal,
-        }),
-      ).rejects.toBe(cause);
-      expect(warn).not.toHaveBeenCalled();
-    },
-  );
+  it("preserves the original cause when thread-scoped discovery fails", async () => {
+    const cause = new Error("committed app snapshot unavailable");
+
+    await expect(
+      attestCodexPluginThreadApps({
+        client: {
+          request: vi.fn(async () => {
+            throw cause;
+          }),
+        } as never,
+        threadId: "thread-linear",
+        appIds: ["linear-app"],
+      }),
+    ).rejects.toMatchObject({
+      name: "CodexPluginThreadAppAttestationError",
+      cause,
+    });
+  });
 });
 
 describe("unattested Codex plugin thread cleanup", () => {

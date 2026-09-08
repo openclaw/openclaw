@@ -3127,54 +3127,61 @@ describe("Codex thread-effective app attestation", () => {
     },
   );
 
-  it.each(
-    ["chat", "heartbeat", "incognito"].flatMap((source) =>
-      ["missing", "disabled", "not-callable"].map((state) => ({ source, state })),
-    ),
-  )("keeps the $source binding when its optional app is $state", async ({ source, state }) => {
+  it.each([
+    {
+      state: "missing",
+      apps: [],
+      failure: "linear-app:missing",
+    },
+    {
+      state: "disabled by managed or workspace policy",
+      apps: [{ id: "linear-app", runtimeName: "Linear", enabled: false, callable: false }],
+      failure: "linear-app:disabled",
+    },
+    {
+      state: "not callable under thread policy",
+      apps: [{ id: "linear-app", runtimeName: "Linear", enabled: true, callable: false }],
+      failure: "linear-app:not-callable",
+    },
+  ])("deletes the unbound persistent thread when its app is $state", async ({ apps, failure }) => {
     const workspaceDir = path.join(tempDir, "workspace");
     const params = createThreadLifecycleParams(path.join(tempDir, "session.jsonl"), workspaceDir);
-    params.sessionKey =
-      source === "heartbeat"
-        ? "agent:main:main"
-        : source === "incognito"
-          ? "agent:main:internal-session-effects:incognito-app-unavailable"
-          : "agent:main:dashboard:app-unavailable";
-    const provider = createProvisionalPluginThreadConfigProvider("linear-app");
-    const expectedConfig = (await provider.build()).configPatch;
     const abandonClient = vi.fn(async () => undefined);
-    const request = vi.fn(async (method: string, requestParams?: unknown) => {
-      if (method === "thread/start") {
-        expect(requestParams).toMatchObject({ config: expectedConfig });
-        return threadStartResult("thread-app-unavailable");
-      }
-      if (method === "app/installed") {
-        return {
-          apps:
-            state === "missing"
-              ? []
-              : [
-                  {
-                    id: "linear-app",
-                    runtimeName: "Linear",
-                    enabled: state !== "disabled",
-                    callable: false,
-                  },
-                ],
-        };
-      }
-      throw new Error(`unexpected method: ${method}`);
-    });
-    const result = await startOrResumeThread({
-      client: { request } as never,
-      abandonClient,
-      params,
-      cwd: workspaceDir,
-      dynamicTools: [],
-      appServer: createThreadLifecycleAppServerOptions(),
-      pluginThreadConfig: provider,
-    });
-    expect(result.threadId).toBe("thread-app-unavailable");
+    const request = vi.fn(
+      async (method: string, _requestParams?: unknown, _requestOptions?: unknown) => {
+        if (method === "thread/start") {
+          return threadStartResult("thread-linear-blocked");
+        }
+        if (method === "app/installed") {
+          return { apps };
+        }
+        if (method === "thread/delete") {
+          return {};
+        }
+        throw new Error(`unexpected method: ${method}`);
+      },
+    );
+
+    await expect(
+      startOrResumeThread({
+        client: { request } as never,
+        abandonClient,
+        params,
+        cwd: workspaceDir,
+        dynamicTools: [],
+        appServer: createThreadLifecycleAppServerOptions(),
+        pluginThreadConfig: createProvisionalPluginThreadConfigProvider("linear-app"),
+      }),
+    ).rejects.toThrow(failure);
+
+    expect(request.mock.calls.map(([method]) => method)).toEqual([
+      "thread/start",
+      "app/installed",
+      "thread/delete",
+    ]);
+    expect(request.mock.calls[2]?.[1]).toEqual({ threadId: "thread-linear-blocked" });
+    expect(request.mock.calls[2]?.[2]).toEqual({ timeoutMs: 5_000 });
+    expect(abandonClient).not.toHaveBeenCalled();
     await expect(
       testCodexAppServerBindingStore.read(
         sessionBindingIdentity({
@@ -3184,9 +3191,7 @@ describe("Codex thread-effective app attestation", () => {
           config: params.config,
         }),
       ),
-    ).resolves.toMatchObject({ threadId: result.threadId });
-    expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/start", "app/installed"]);
-    expect(abandonClient).not.toHaveBeenCalled();
+    ).resolves.toBeUndefined();
   });
 
   it.each([
@@ -3196,6 +3201,7 @@ describe("Codex thread-effective app attestation", () => {
       state: "disabled by thread policy",
       enabled: false,
       callable: false,
+      failure: "global-ready-app:disabled",
     },
     {
       source: "globally ready account-wide app",
@@ -3203,6 +3209,7 @@ describe("Codex thread-effective app attestation", () => {
       state: "disabled by thread policy",
       enabled: false,
       callable: false,
+      failure: "global-ready-app:disabled",
     },
     {
       source: "globally ready configured plugin",
@@ -3210,6 +3217,7 @@ describe("Codex thread-effective app attestation", () => {
       state: "not callable under thread policy",
       enabled: true,
       callable: false,
+      failure: "global-ready-app:not-callable",
     },
     {
       source: "globally ready account-wide app",
@@ -3217,10 +3225,11 @@ describe("Codex thread-effective app attestation", () => {
       state: "not callable under thread policy",
       enabled: true,
       callable: false,
+      failure: "global-ready-app:not-callable",
     },
   ])(
-    "keeps a $source when it is $state in the actual thread",
-    async ({ createProvider, enabled, callable }) => {
+    "rejects a $source when it is $state in the actual thread",
+    async ({ createProvider, enabled, callable, failure }) => {
       const workspaceDir = path.join(tempDir, "workspace");
       const params = createThreadLifecycleParams(path.join(tempDir, "session.jsonl"), workspaceDir);
       const abandonClient = vi.fn(async () => undefined);
@@ -3250,11 +3259,12 @@ describe("Codex thread-effective app attestation", () => {
           appServer: createThreadLifecycleAppServerOptions(),
           pluginThreadConfig: createProvider("global-ready-app"),
         }),
-      ).resolves.toMatchObject({ threadId: "thread-global-ready" });
+      ).rejects.toThrow(failure);
 
       expect(request.mock.calls.map(([method]) => method)).toEqual([
         "thread/start",
         "app/installed",
+        "thread/delete",
       ]);
       expect(abandonClient).not.toHaveBeenCalled();
       await expect(
@@ -3266,7 +3276,7 @@ describe("Codex thread-effective app attestation", () => {
             config: params.config,
           }),
         ),
-      ).resolves.toMatchObject({ threadId: "thread-global-ready" });
+      ).resolves.toBeUndefined();
     },
   );
 
@@ -3279,7 +3289,7 @@ describe("Codex thread-effective app attestation", () => {
         return threadStartResult("thread-linear-unsafe");
       }
       if (method === "app/installed") {
-        throw new Error("app inventory offline");
+        return { apps: [] };
       }
       if (method === "thread/delete") {
         throw new Error("delete unavailable");
@@ -3351,7 +3361,7 @@ describe("Codex thread-effective app attestation", () => {
     expect(abandonClient).not.toHaveBeenCalled();
   });
 
-  it("unsubscribes an ephemeral thread when its app snapshot request fails", async () => {
+  it("unsubscribes an ephemeral thread when its app cannot be attested", async () => {
     const workspaceDir = path.join(tempDir, "workspace");
     const params = createThreadLifecycleParams(path.join(tempDir, "session.jsonl"), workspaceDir);
     params.sessionKey = "agent:main:internal-session-effects:incognito-plugin-attestation";
@@ -3362,7 +3372,7 @@ describe("Codex thread-effective app attestation", () => {
         return threadStartResult("thread-linear-ephemeral");
       }
       if (method === "app/installed") {
-        throw new Error("app inventory offline");
+        return { apps: [] };
       }
       if (method === "thread/unsubscribe") {
         return {};
@@ -3380,7 +3390,7 @@ describe("Codex thread-effective app attestation", () => {
         appServer: createThreadLifecycleAppServerOptions(),
         pluginThreadConfig: createProvisionalPluginThreadConfigProvider("linear-app"),
       }),
-    ).rejects.toThrow("Codex could not confirm admitted apps");
+    ).rejects.toThrow("linear-app:missing");
 
     expect(request.mock.calls.map(([method]) => method)).toEqual([
       "thread/start",
@@ -3400,7 +3410,7 @@ describe("Codex thread-effective app attestation", () => {
         return threadStartResult("thread-linear-ephemeral-unsafe");
       }
       if (method === "app/installed") {
-        throw new Error("app inventory offline");
+        return { apps: [] };
       }
       if (method === "thread/unsubscribe") {
         throw new Error("unsubscribe unavailable");
@@ -4243,40 +4253,46 @@ describe("Codex app-server supervised branch lifecycle", () => {
       createProvider: createProvisionalPluginThreadConfigProvider,
       state: "missing from the effective thread",
       apps: [],
+      failure: "linear-app:missing",
     },
     {
       source: "account-wide policy",
       createProvider: createAttestedAccountAppThreadConfigProvider,
       state: "missing from the effective thread",
       apps: [],
+      failure: "linear-app:missing",
     },
     {
       source: "configured plugin",
       createProvider: createProvisionalPluginThreadConfigProvider,
       state: "disabled by managed or workspace policy",
       apps: [{ id: "linear-app", runtimeName: "Linear", enabled: false, callable: false }],
+      failure: "linear-app:disabled",
     },
     {
       source: "account-wide policy",
       createProvider: createAttestedAccountAppThreadConfigProvider,
       state: "disabled by managed or workspace policy",
       apps: [{ id: "linear-app", runtimeName: "Linear", enabled: false, callable: false }],
+      failure: "linear-app:disabled",
     },
     {
       source: "configured plugin",
       createProvider: createProvisionalPluginThreadConfigProvider,
       state: "not callable under thread policy",
       apps: [{ id: "linear-app", runtimeName: "Linear", enabled: true, callable: false }],
+      failure: "linear-app:not-callable",
     },
     {
       source: "account-wide policy",
       createProvider: createAttestedAccountAppThreadConfigProvider,
       state: "not callable under thread policy",
       apps: [{ id: "linear-app", runtimeName: "Linear", enabled: true, callable: false }],
+      failure: "linear-app:not-callable",
     },
   ])(
-    "keeps the supervised branch when a $source app is $state",
-    async ({ createProvider, apps }) => {
+    "cleans both supervised branches when a $source app is $state",
+    async ({ createProvider, apps, failure }) => {
       const sourceThreadId = "thread-source";
       const probeThreadId = "thread-probe";
       const finalThreadId = "thread-final";
@@ -4321,7 +4337,7 @@ describe("Codex app-server supervised branch lifecycle", () => {
           appServer: createThreadLifecycleAppServerOptions(),
           pluginThreadConfig: createProvider("linear-app"),
         }),
-      ).resolves.toMatchObject({ threadId: finalThreadId, lifecycle: { action: "forked" } });
+      ).rejects.toThrow(failure);
 
       expect(request.mock.calls.map(([method]) => method)).toEqual([
         "thread/read",
@@ -4329,15 +4345,18 @@ describe("Codex app-server supervised branch lifecycle", () => {
         "thread/unsubscribe",
         "thread/start",
         "app/installed",
+        "thread/delete",
       ]);
       expect(request.mock.calls[2]?.[1]).toEqual({ threadId: probeThreadId });
+      expect(request.mock.calls[5]?.[1]).toEqual({ threadId: finalThreadId });
       expect(abandonClient).not.toHaveBeenCalled();
       await expect(testCodexAppServerBindingStore.read(identity)).resolves.toMatchObject({
-        threadId: finalThreadId,
+        pendingSupervisionBranch: { sourceThreadId },
       });
       expect(
-        (await testCodexAppServerBindingStore.read(identity))?.pendingSupervisionBranch,
-      ).toBeUndefined();
+        (await testCodexAppServerBindingStore.read(identity))?.pendingSupervisionBranch
+          ?.cleanupThreadIds ?? [],
+      ).toEqual([]);
     },
   );
 
@@ -4364,7 +4383,7 @@ describe("Codex app-server supervised branch lifecycle", () => {
         return nativeThreadResult(finalThreadId, "native-effective", "native-provider");
       }
       if (method === "app/installed") {
-        throw new Error("app inventory offline");
+        return { apps: [] };
       }
       if (method === "thread/delete") {
         throw new Error("delete unavailable");
