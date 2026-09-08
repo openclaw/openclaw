@@ -180,6 +180,16 @@ function expectNoLoggerMessageContaining(spy: unknown, text: string): void {
   expect(loggerMessages(spy).join("\n")).not.toContain(text);
 }
 
+/** Sampler result for a genuinely blocked event loop, the only state that defers recovery. */
+function stalledEventLoopSample() {
+  return {
+    reasons: ["event_loop_delay" as const],
+    intervalMs: 30_000,
+    eventLoopDelayP99Ms: 1_200,
+    eventLoopDelayMaxMs: 1_500,
+  };
+}
+
 function expectRecoveryCall(
   recoverStuckSession: unknown,
   fields: Record<string, unknown>,
@@ -506,7 +516,11 @@ describe("stuck session diagnostics threshold", () => {
     const warnSpy = vi.spyOn(diagnosticLogger, "warn").mockImplementation(() => undefined);
 
     vi.setSystemTime(0);
-    startEnabledDiagnosticHeartbeat({ recoverStuckSession });
+    startEnabledDiagnosticHeartbeat({
+      recoverStuckSession,
+      readEventLoopHealth: () => ({ reasons: ["event_loop_delay"] }),
+      sampleLiveness: () => stalledEventLoopSample(),
+    });
     logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "processing" });
 
     vi.setSystemTime(120_001);
@@ -530,12 +544,101 @@ describe("stuck session diagnostics threshold", () => {
     );
   });
 
+  it("keeps recovery running when ticks are late but the event loop stayed responsive", () => {
+    // Reported on WSL2: host timer wakeup latency put every tick ~1.5s past its 30s
+    // deadline while measured event-loop delay stayed at 10-13ms, so recovery deferred
+    // for the lifetime of the process.
+    const recoverStuckSession = vi.fn();
+    const warnSpy = vi.spyOn(diagnosticLogger, "warn").mockImplementation(() => undefined);
+
+    vi.setSystemTime(0);
+    startEnabledDiagnosticHeartbeat({
+      recoverStuckSession,
+      readEventLoopHealth: () => ({ reasons: [] }),
+      sampleLiveness: () => null,
+    });
+    logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "processing" });
+
+    const advanceLateTick = () => {
+      vi.setSystemTime(Date.now() + 1_500);
+      vi.advanceTimersByTime(30_000);
+    };
+
+    advanceLateTick();
+    advanceLateTick();
+    advanceLateTick();
+
+    expectRecoveryCall(
+      recoverStuckSession,
+      { sessionId: "s1", sessionKey: "main", queueDepth: 0 },
+      ["ageMs", "stateGeneration"],
+    );
+    expectLoggerMessageContaining(warnSpy, "event loop stayed responsive");
+  });
+
+  it("defers a late tick when no event-loop health evidence is available", () => {
+    // Without a working delay monitor nothing rules out a stall holding queued progress,
+    // so the tick keeps the original conservative behavior rather than authorizing abort.
+    const recoverStuckSession = vi.fn();
+
+    vi.setSystemTime(0);
+    startEnabledDiagnosticHeartbeat({
+      recoverStuckSession,
+      readEventLoopHealth: () => undefined,
+      sampleLiveness: () => null,
+    });
+    logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "processing" });
+
+    vi.setSystemTime(120_001);
+    vi.advanceTimersByTime(30_000);
+
+    expect(recoverStuckSession).not.toHaveBeenCalled();
+  });
+
+  it("still defers recovery when a late tick follows a real event-loop stall", () => {
+    // Chronic lateness must not buy a standing exemption: a genuine stall can queue
+    // progress that has not run yet, and aborting on that snapshot cancels healthy work.
+    const recoverStuckSession = vi.fn();
+    const warnSpy = vi.spyOn(diagnosticLogger, "warn").mockImplementation(() => undefined);
+    let eventLoopStalled = false;
+
+    vi.setSystemTime(0);
+    startEnabledDiagnosticHeartbeat({
+      recoverStuckSession,
+      readEventLoopHealth: () => ({ reasons: eventLoopStalled ? ["event_loop_delay"] : [] }),
+      // Deliberately still null while stalled: this is the Gateway contract, where
+      // persistentDegradationSnapshot() withholds under 60s of continuous degradation.
+      // Recovery must not read that filter as a responsive loop.
+      sampleLiveness: () => null,
+    });
+    logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "processing" });
+
+    const advanceLateTick = () => {
+      vi.setSystemTime(Date.now() + 1_500);
+      vi.advanceTimersByTime(30_000);
+    };
+
+    advanceLateTick();
+    advanceLateTick();
+    recoverStuckSession.mockClear();
+
+    eventLoopStalled = true;
+    advanceLateTick();
+
+    expect(recoverStuckSession).not.toHaveBeenCalled();
+    expectLoggerMessageContaining(warnSpy, "deferring recovery decisions");
+  });
+
   it("defers a material heartbeat stall even when elapsed time is below the abort threshold", () => {
     const recoverStuckSession = vi.fn();
     const warnSpy = vi.spyOn(diagnosticLogger, "warn").mockImplementation(() => undefined);
 
     vi.setSystemTime(0);
-    startEnabledDiagnosticHeartbeat({ recoverStuckSession });
+    startEnabledDiagnosticHeartbeat({
+      recoverStuckSession,
+      readEventLoopHealth: () => ({ reasons: ["event_loop_delay"] }),
+      sampleLiveness: () => stalledEventLoopSample(),
+    });
     logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "processing" });
     markDiagnosticEmbeddedRunStarted({ sessionId: "s1", sessionKey: "main" });
 
