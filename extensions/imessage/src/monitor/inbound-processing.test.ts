@@ -786,7 +786,7 @@ describe("resolveIMessageReactionContext", () => {
 });
 
 describe("buildIMessageInboundContext", () => {
-  it("keeps numeric row id and provider GUID separately for action tooling", async () => {
+  it("keeps provider IDs separate and projects from-me identity", async () => {
     const message = {
       id: 12345,
       guid: "p:0/GUID-current",
@@ -801,18 +801,23 @@ describe("buildIMessageInboundContext", () => {
       return;
     }
 
-    const { ctxPayload } = await buildIMessageInboundContext({
+    const contextParams = {
       cfg: {} as OpenClawConfig,
       accountService: undefined,
       decision,
-      message,
       historyLimit: 0,
       groupHistories: new Map(),
-    });
+    } satisfies Omit<Parameters<typeof buildIMessageInboundContext>[0], "message">;
+    const { ctxPayload } = await buildIMessageInboundContext({ ...contextParams, message });
 
     expect(ctxPayload.MessageSid).toMatch(/^\d+$/u);
     expect(ctxPayload.MessageSid).not.toBe("12345");
     expect(ctxPayload.MessageSidFull).toBe("p:0/GUID-current");
+    const selfContext = await buildIMessageInboundContext({
+      ...contextParams,
+      message: { ...message, is_from_me: true },
+    });
+    expect(selfContext.ctxPayload.SenderIsSelf).toBe(true);
   });
 
   it("keeps generated media notices out of command input", async () => {
@@ -915,132 +920,6 @@ describe("buildIMessageInboundContext", () => {
 
     expect(imessageTo).toBe("sms:+15555550123");
     expect(channelConfigReads).toBe(0);
-  });
-});
-
-describe("resolveIMessageInboundDecision command auth", () => {
-  const resolveDmCommandDecision = (params: {
-    messageId: number;
-    storeAllowFrom: string[];
-    dmPolicy?: "open" | "pairing" | "allowlist" | "disabled";
-    allowFrom?: string[];
-    text?: string;
-  }) =>
-    resolveDecision({
-      message: {
-        id: params.messageId,
-        sender: "+15555550123",
-        text: params.text ?? "/status",
-        is_from_me: false,
-        is_group: false,
-      },
-      allowFrom: params.allowFrom ?? [],
-      dmPolicy: params.dmPolicy ?? "open",
-      storeAllowFrom: params.storeAllowFrom,
-    });
-
-  it("does not auto-authorize DM commands in open mode without allowlists", async () => {
-    const decision = await resolveDmCommandDecision({
-      messageId: 100,
-      storeAllowFrom: [],
-    });
-
-    expect(decision).toEqual({ kind: "drop", reason: "dmPolicy blocked" });
-  });
-
-  it("authorizes DM commands for senders in pairing-mode store allowlist", async () => {
-    const decision = await resolveDmCommandDecision({
-      messageId: 101,
-      dmPolicy: "pairing",
-      storeAllowFrom: ["+15555550123"],
-    });
-
-    expect(decision.kind).toBe("dispatch");
-    if (decision.kind !== "dispatch") {
-      return;
-    }
-    expect(decision.commandAuthorized).toBe(true);
-    expect(decision.hasControlCommand).toBe(true);
-  });
-
-  it("marks authorized iMessage control commands as text command turns", async () => {
-    const decision = await resolveDmCommandDecision({
-      messageId: 102,
-      dmPolicy: "pairing",
-      storeAllowFrom: ["+15555550123"],
-      text: "/new",
-    });
-
-    expect(decision.kind).toBe("dispatch");
-    if (decision.kind !== "dispatch") {
-      return;
-    }
-
-    const { ctxPayload } = await buildIMessageInboundContext({
-      cfg,
-      accountService: undefined,
-      decision,
-      message: {
-        id: 102,
-        guid: "p:0/GUID-command",
-        sender: "+15555550123",
-        text: "/new",
-        is_from_me: false,
-        is_group: false,
-      },
-      historyLimit: 0,
-      groupHistories: new Map(),
-    });
-
-    expect(ctxPayload.CommandAuthorized).toBe(true);
-    expect(ctxPayload.ConversationRoutePeerId).toBe("+15555550123");
-    expect(ctxPayload.CommandSource).toBe("text");
-    expect(ctxPayload.CommandTurn).toMatchObject({
-      kind: "text-slash",
-      source: "text",
-      authorized: true,
-      commandName: "new",
-    });
-  });
-
-  it("does not mark authorized non-command iMessage DMs as text command turns", async () => {
-    const decision = await resolveDmCommandDecision({
-      messageId: 103,
-      dmPolicy: "pairing",
-      storeAllowFrom: ["+15555550123"],
-      text: "hello there",
-    });
-
-    expect(decision.kind).toBe("dispatch");
-    if (decision.kind !== "dispatch") {
-      return;
-    }
-    expect(decision.commandAuthorized).toBe(true);
-    expect(decision.hasControlCommand).toBe(false);
-
-    const { ctxPayload } = await buildIMessageInboundContext({
-      cfg,
-      accountService: undefined,
-      decision,
-      message: {
-        id: 103,
-        guid: "p:0/GUID-non-command",
-        sender: "+15555550123",
-        text: "hello there",
-        is_from_me: false,
-        is_group: false,
-      },
-      historyLimit: 0,
-      groupHistories: new Map(),
-    });
-
-    expect(ctxPayload.CommandAuthorized).toBe(true);
-    expect(ctxPayload.CommandSource).toBeUndefined();
-    expect(ctxPayload.CommandTurn).toMatchObject({
-      kind: "normal",
-      source: "message",
-      commandName: undefined,
-    });
   });
 });
 

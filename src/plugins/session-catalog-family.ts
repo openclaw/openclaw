@@ -5,6 +5,7 @@ import type {
   SessionCatalogTranscriptItem,
   SessionsCatalogReadResult,
 } from "../../packages/gateway-protocol/src/schema/sessions-catalog.js";
+import type { TerminalUploadPathStyle } from "../../packages/gateway-protocol/src/schema/terminal.js";
 import {
   decodeNodePtyResumeParams,
   resolveNodeHostExecutable,
@@ -52,6 +53,7 @@ type SessionCatalogFamilyMessages = {
 
 type SessionCatalogTerminalOptions = {
   executable: string;
+  uploadPathStyle?: TerminalUploadPathStyle;
   args: (threadId: string) => string[];
   title: (threadId: string) => string;
   requireLocalSession: (threadId: string) => Promise<SessionCatalogSession>;
@@ -143,6 +145,7 @@ function isNodeSession(value: unknown, sessionIdPattern: RegExp): value is Sessi
     typeof value.canContinue === "boolean" &&
     typeof value.canArchive === "boolean" &&
     isOptionalString(value.name) &&
+    isOptionalString(value.color) &&
     isOptionalString(value.cwd) &&
     isOptionalString(value.source) &&
     isOptionalString(value.modelProvider) &&
@@ -354,6 +357,10 @@ async function listHosts(
       query.onHost?.(host);
     }
   }
+  // Use the captured host selection after local discovery and progress callbacks.
+  if (requested && !Array.from(requested).some((hostId) => hostId.startsWith("node:"))) {
+    return hosts;
+  }
   let nodes: CatalogNode[];
   try {
     nodes = (await (query.listNodes?.() ?? options.runtime.nodes.list())).nodes;
@@ -477,6 +484,9 @@ async function openTerminal(
     kind: "node" as const,
     nodeId,
     command: options.node.terminalCommand,
+    ...(options.terminal.uploadPathStyle
+      ? { uploadPathStyle: options.terminal.uploadPathStyle }
+      : {}),
     paramsJSON: JSON.stringify({ threadId: request.threadId }),
     ...(session.cwd ? { cwd: session.cwd } : {}),
     title,
@@ -512,8 +522,10 @@ export function createSessionCatalogFamily(
       }
       const agentId = options.continuation.resolveAgentId(request.agentId);
       const sourceKey = sessionCatalogAdoptedSourceKey(request.hostId, request.threadId);
+      // Scope in-flight results to the agent without changing host/thread adoption lookup keys.
+      const operationKey = `${agentId}\0${sourceKey}`;
       return await continueAdoption({
-        sourceKey,
+        sourceKey: operationKey,
         findExisting: async () => (await options.continuation.listAdopted(agentId)).get(sourceKey),
         create: async () => {
           const session = await options.continuation.loadSession(request.threadId);

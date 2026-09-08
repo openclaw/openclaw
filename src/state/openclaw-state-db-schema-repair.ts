@@ -3,19 +3,18 @@ import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { quoteSqliteIdentifier } from "../infra/sqlite-schema-sql.js";
-import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
 import {
   canRepairLegacyAuditEventsSchema,
   hasCanonicalAuditEventsSchema,
 } from "./openclaw-state-db-audit-migration.js";
 import {
-  OPENCLAW_STATE_SCHEMA_VERSION,
   OPENCLAW_STATE_STRICT_SCHEMA_VERSION,
   type OpenClawStateDatabaseOptions,
   type OpenClawStateDatabaseSchemaMigration,
 } from "./openclaw-state-db-contract.js";
 import { resolveDatabasePath } from "./openclaw-state-db-maintenance.js";
 import * as operatorApprovalMigration from "./openclaw-state-db-operator-approval-migration.js";
+import { withExistingOpenClawStateDatabaseArtifactPreservingReadOnly } from "./openclaw-state-db-readonly.js";
 import {
   tableExists,
   tableHasColumn,
@@ -23,9 +22,11 @@ import {
 } from "./openclaw-state-db-schema-helpers.js";
 import { OpenClawStateDatabaseSchemaMigrationRequiredError } from "./openclaw-state-db-schema-migration-required.js";
 import { FOLDED_SINGLETON_STATE_TABLES_V12 } from "./openclaw-state-db-schema-v12-foldin.js";
+import { readStateSchemaContentVersion } from "./openclaw-state-db-schema-version.js";
 import * as sessionWatchMigration from "./openclaw-state-db-session-watch-migration.js";
 import {
   hasRecognizedRetiredCommitmentsSchema,
+  RETIRED_COMMITMENTS_SCHEMA_VERSION,
   RETIRED_DEAD_STATE_TABLES_V10,
   RETIRED_SKILL_CURATOR_TABLES_V11,
 } from "./openclaw-state-db-table-retirements.js";
@@ -333,10 +334,19 @@ export function assertCanonicalStateSchemaShape(db: DatabaseSync, pathname: stri
 }
 export function detectOpenClawStateDatabaseSchemaMigrations(
   options: OpenClawStateDatabaseOptions = {},
+  behavior: { artifactPreservingReadOnly?: boolean } = {},
 ): OpenClawStateDatabaseSchemaMigration[] {
   const pathname = resolveDatabasePath(options);
   if (!existsSync(pathname)) {
     return [];
+  }
+  if (behavior.artifactPreservingReadOnly) {
+    return (
+      withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(
+        ({ db }) => detectOpenClawStateDatabaseSchemaMigrationsFromDatabase(db, pathname),
+        { ...options, path: pathname },
+      ) ?? []
+    );
   }
   const db = openNodeSqliteDatabase(pathname, { readOnly: true });
   try {
@@ -357,9 +367,9 @@ export function detectOpenClawStateDatabaseSchemaMigrationsFromDatabase(
   pathname: string,
 ): OpenClawStateDatabaseSchemaMigration[] {
   const migrations: OpenClawStateDatabaseSchemaMigration[] = [];
-  const userVersion = readSqliteUserVersion(db);
+  const userVersion = readStateSchemaContentVersion(db);
   if (
-    userVersion < OPENCLAW_STATE_SCHEMA_VERSION &&
+    userVersion < RETIRED_COMMITMENTS_SCHEMA_VERSION &&
     tableExists(db, "commitments") &&
     hasRecognizedRetiredCommitmentsSchema(db)
   ) {
@@ -388,6 +398,34 @@ export function detectOpenClawStateDatabaseSchemaMigrationsFromDatabase(
     FOLDED_SINGLETON_STATE_TABLES_V12.some((tableName) => tableExists(db, tableName))
   ) {
     migrations.push({ kind: "singleton-state-foldin-v12", path: pathname });
+  }
+  if (
+    userVersion < 13 &&
+    (tableHasColumn(db, "cron_jobs", "schedule_kind") ||
+      tableHasColumn(db, "subagent_runs", "task") ||
+      tableExists(db, "workspace_attestations") ||
+      tableExists(db, "installed_plugin_index") ||
+      tableExists(db, "auth_profile_stores"))
+  ) {
+    migrations.push({ kind: "state-consolidation-v13", path: pathname });
+  }
+  if (userVersion < 14 && tableExists(db, "cron_jobs")) {
+    migrations.push({ kind: "creator-namespace-v14", path: pathname });
+  }
+  if (
+    userVersion < 15 &&
+    (tableHasColumn(db, "current_conversation_bindings", "target_agent_id") ||
+      tableHasColumn(db, "current_conversation_bindings", "target_session_id"))
+  ) {
+    migrations.push({ kind: "conversation-binding-targets-v15", path: pathname });
+  }
+  if (
+    userVersion < 16 &&
+    (tableHasColumn(db, "skill_workshop_proposals", "workspace_dir") ||
+      tableHasColumn(db, "skill_workshop_proposals", "claim_released_time") ||
+      tableHasColumn(db, "skill_workshop_collection_reviews", "workspace_dir"))
+  ) {
+    migrations.push({ kind: "skill-workshop-directory-ownership-v16", path: pathname });
   }
   if (!hasCanonicalAgentDatabasesPrimaryKey(db)) {
     migrations.push({ kind: "agent-databases-composite-primary-key", path: pathname });

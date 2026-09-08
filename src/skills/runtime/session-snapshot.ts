@@ -1,14 +1,10 @@
-// Session snapshot helpers capture and restore runtime skill state for sessions.
 import { stableStringify } from "@openclaw/normalization-core";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { matchesSkillFilter } from "../discovery/filter.js";
-import {
-  loadMergedWorkspaceSkills,
-  normalizeWorkspaceSkillRoots,
-} from "../loading/workspace-skill-loader.js";
 import { buildSkillSnapshot } from "../loading/workspace-skill-prompt.js";
+import { normalizeWorkspaceSkillRoots } from "../loading/workspace-skill-roots.js";
 import { WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION } from "../types.js";
 import type { SkillEligibilityContext, SkillSnapshot } from "../types.js";
 import { getSkillsSnapshotVersion, shouldRefreshSnapshotForVersion } from "./refresh-state.js";
@@ -22,8 +18,9 @@ const SKILL_SNAPSHOT_CACHE_MAX = 10;
 
 /** Inputs that make a resolved skill snapshot reusable within a process. */
 type ReusableSkillSnapshotParams = {
+  librarySelections?: SkillSnapshot["librarySelections"];
   workspaceDir: string;
-  executionSkillsDir?: string;
+  executionWorkspaceDir?: string;
   config: OpenClawConfig;
   agentId?: string;
   skillFilter?: string[];
@@ -53,20 +50,21 @@ export function resolveReusableWorkspaceSkillSnapshot(
 ): ReusableSkillSnapshotResult {
   const normalizedRoots = normalizeWorkspaceSkillRoots({
     agentWorkspaceDir: params.workspaceDir,
-    ...(params.executionSkillsDir ? { executionSkillsDir: params.executionSkillsDir } : {}),
+    executionWorkspaceDir: params.executionWorkspaceDir,
   });
-  const skillRoots = normalizedRoots.executionSkillsDir
+  const skillRoots = normalizedRoots.executionWorkspaceDir
     ? {
         agentWorkspaceDir: normalizedRoots.agentWorkspaceDir,
-        executionSkillsDir: normalizedRoots.executionSkillsDir,
+        executionWorkspaceDir: normalizedRoots.executionWorkspaceDir,
       }
     : undefined;
   const watcherWorkspaceDir = skillRoots?.agentWorkspaceDir ?? params.workspaceDir;
   if (params.watch !== false) {
     ensureSkillsWatcher({
       workspaceDir: watcherWorkspaceDir,
-      ...(skillRoots ? { executionSkillsDir: skillRoots.executionSkillsDir } : {}),
+      ...(skillRoots ? { executionWorkspaceDir: skillRoots.executionWorkspaceDir } : {}),
       config: params.config,
+      agentId: params.agentId,
       ...(params.pluginMetadataSnapshot
         ? { pluginMetadataSnapshot: params.pluginMetadataSnapshot }
         : {}),
@@ -87,7 +85,12 @@ export function resolveReusableWorkspaceSkillSnapshot(
     stableStringify(params.skillOverrides);
   const skillRootsChanged =
     stableStringify(params.existingSnapshot?.skillRoots) !== stableStringify(skillRoots);
+  const librarySelections = params.librarySelections ?? params.existingSnapshot?.librarySelections;
+  const libraryChanged =
+    stableStringify(librarySelections) !==
+    stableStringify(params.existingSnapshot?.librarySelections);
   const shouldRefresh =
+    libraryChanged ||
     promptFormatChanged ||
     skillVersionChanged ||
     nodeSkillsEligibilityChanged ||
@@ -95,20 +98,11 @@ export function resolveReusableWorkspaceSkillSnapshot(
     !matchesSkillFilter(params.existingSnapshot?.skillFilter, params.skillFilter) ||
     skillOverridesChanged;
   const buildSnapshot = () => {
-    const entries = skillRoots
-      ? loadMergedWorkspaceSkills({
-          ...skillRoots,
-          config: params.config,
-          agentId: params.agentId,
-          skillFilter: params.skillFilter,
-          skillOverrides: params.skillOverrides,
-          eligibility: params.eligibility,
-          pluginMetadataSnapshot: params.pluginMetadataSnapshot,
-        })
-      : undefined;
-    const snapshot = buildSkillSnapshot(params.workspaceDir, {
+    const snapshot = buildSkillSnapshot(normalizedRoots.agentWorkspaceDir, {
+      executionWorkspaceDir: normalizedRoots.executionWorkspaceDir,
+      librarySelections,
       config: params.config,
-      ...(entries ? { entries, preserveEntryOrder: true } : {}),
+      preserveEntryOrder: Boolean(skillRoots),
       agentId: params.agentId,
       skillFilter: params.skillFilter,
       skillOverrides: params.skillOverrides,
@@ -116,12 +110,17 @@ export function resolveReusableWorkspaceSkillSnapshot(
       pluginMetadataSnapshot: params.pluginMetadataSnapshot,
       snapshotVersion,
     });
-    return skillRoots ? { ...snapshot, skillRoots } : snapshot;
+    return {
+      ...snapshot,
+      ...(skillRoots ? { skillRoots } : {}),
+      ...(librarySelections ? { librarySelections } : {}),
+    };
   };
 
   const buildSnapshotCacheKey = () =>
     JSON.stringify([
       params.workspaceDir,
+      librarySelections,
       skillRoots,
       snapshotVersion,
       params.skillFilter,

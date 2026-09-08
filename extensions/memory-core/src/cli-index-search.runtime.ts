@@ -3,6 +3,7 @@ import { resolveMemorySearchStaleness } from "openclaw/plugin-sdk/memory-core-ho
 import {
   resolveMemoryDreamingConfig,
   resolveMemoryDreamingWorkspaces,
+  resolveMemoryDeepDreamingConfig,
 } from "openclaw/plugin-sdk/memory-core-host-status";
 import {
   buildCliMemorySearchSessionKey,
@@ -31,7 +32,6 @@ import type {
   MemoryPromoteExplainOptions,
   MemorySearchCommandOptions,
 } from "./cli.types.js";
-import { resolveShortTermPromotionDreamingConfig } from "./dreaming.js";
 import { forgetMemoryEntries } from "./memory-forget.js";
 import { formatMemoryVectorDegradedWriteReason } from "./memory/manager-vector-warning.js";
 import type { MemoryCoreRuntimeHost } from "./memory/runtime-host.js";
@@ -209,7 +209,9 @@ export async function runMemorySearch(
     commandName: "memory search",
     agent: opts.agent,
     diagnosticsToStderr: Boolean(opts.json),
+    onUnavailable: opts.json ? defaultRuntime.writeJson : undefined,
     purpose: "cli",
+    inspectSources: true,
     ...hostOptions,
     run: async ({ manager, cfg, agentId }) => {
       const memoryPluginConfig = resolveMemoryPluginConfig(cfg);
@@ -217,7 +219,7 @@ export async function runMemorySearch(
         pluginConfig: memoryPluginConfig,
         cfg,
       }).enabled;
-      const dreaming = resolveShortTermPromotionDreamingConfig({
+      const dreaming = resolveMemoryDeepDreamingConfig({
         pluginConfig: memoryPluginConfig,
         cfg,
       });
@@ -317,6 +319,11 @@ export async function runMemoryForget(opts: MemoryForgetCommandOptions) {
     for (const session of report.sessionResolutions) {
       lines.push(`${muted("Session resolution:")} ${session.sessionId} (${session.source})`);
     }
+    for (const match of report.participantMatches) {
+      lines.push(
+        `${muted("Raw participant selector:")} ${match.actorId}: ${match.identities.map((identity) => JSON.stringify(identity)).join(", ") || "no live match"}. Matches select whole sessions across identity namespaces.`,
+      );
+    }
     if (report.mixedLineageEntryKeys.length > 0) {
       lines.push(
         `${muted("Mixed-lineage entry keys:")} ${report.mixedLineageEntryKeys.join(", ")}`,
@@ -370,12 +377,13 @@ export async function runMemoryPromote(
     commandName: "memory promote",
     agent: opts.agent,
     diagnosticsToStderr: Boolean(opts.json),
+    onUnavailable: opts.json ? defaultRuntime.writeJson : undefined,
     purpose: "status",
     ...hostOptions,
     run: async ({ manager, cfg, agentId }) => {
       const status = manager.status();
       const workspaceDir = status.workspaceDir?.trim();
-      const dreaming = resolveShortTermPromotionDreamingConfig({
+      const dreaming = resolveMemoryDeepDreamingConfig({
         pluginConfig: resolveMemoryPluginConfig(cfg),
         cfg,
       });
@@ -548,12 +556,13 @@ export async function runMemoryPromoteExplain(
     commandName: "memory promote-explain",
     agent: opts.agent,
     diagnosticsToStderr: Boolean(opts.json),
+    onUnavailable: opts.json ? defaultRuntime.writeJson : undefined,
     purpose: "status",
     ...hostOptions,
     run: async ({ manager, cfg, agentId }) => {
       const status = manager.status();
       const workspaceDir = status.workspaceDir?.trim();
-      const dreaming = resolveShortTermPromotionDreamingConfig({
+      const dreaming = resolveMemoryDeepDreamingConfig({
         pluginConfig: resolveMemoryPluginConfig(cfg),
         cfg,
       });

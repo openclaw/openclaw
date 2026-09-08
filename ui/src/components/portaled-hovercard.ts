@@ -1,3 +1,5 @@
+import { promoteToPopoverTopLayer } from "./menu-surface.ts";
+
 const CARD_GAP = 10;
 const VIEWPORT_PADDING = 12;
 
@@ -9,6 +11,7 @@ export class PortaledHovercardController {
   pointerOverCard = false;
   focusInside = false;
   cardFocusInside = false;
+  explicitHold = false;
 
   private closeTimer: number | null = null;
   private exitCleanup: (() => void) | null = null;
@@ -18,6 +21,29 @@ export class PortaledHovercardController {
   private stopPositioning: (() => void) | null = null;
   private trigger: HTMLElement | null = null;
   private unmountContents: (() => void) | null = null;
+  private readonly handleCardPointerEnter = (event: PointerEvent) => {
+    if (event.currentTarget === this.card) {
+      this.pointerOverCard = true;
+      this.clearClose();
+    }
+  };
+  private readonly handleCardFocusIn = (event: FocusEvent) => {
+    if (event.currentTarget === this.card) {
+      this.cardFocusInside = true;
+      this.clearClose();
+    }
+  };
+  private readonly handleCardFocusOut = (event: FocusEvent) => {
+    const card = this.card;
+    if (!card || event.currentTarget !== this.card) {
+      return;
+    }
+    if (event.relatedTarget instanceof Node && card.contains(event.relatedTarget)) {
+      return;
+    }
+    this.cardFocusInside = false;
+    this.scheduleClose();
+  };
 
   constructor(
     private readonly close: () => void,
@@ -25,7 +51,25 @@ export class PortaledHovercardController {
   ) {}
 
   get held(): boolean {
-    return this.pointerInside || this.pointerOverCard || this.focusInside || this.cardFocusInside;
+    return (
+      this.explicitHold ||
+      this.pointerInside ||
+      this.pointerOverCard ||
+      this.focusInside ||
+      this.cardFocusInside
+    );
+  }
+
+  schedulePointerExit(bridgeMs = 220): void {
+    this.pointerInside = false;
+    // Portaled cards can be viewport-clamped diagonally from their trigger, so
+    // exit coordinates cannot reliably tell whether the pointer is crossing the gap.
+    this.scheduleClose(bridgeMs);
+  }
+
+  focusables(): HTMLElement[] {
+    // Decorative avatar twins opt out; cards share the same keyboard traversal contract.
+    return [...(this.card?.querySelectorAll<HTMLElement>('a[href]:not([tabindex="-1"])') ?? [])];
   }
 
   scheduleOpen(delay: number, open: () => void): void {
@@ -75,6 +119,7 @@ export class PortaledHovercardController {
     this.clearCard();
     this.anchor = anchor;
     this.card = card;
+    this.attachCardHoldListeners(card);
     this.placement = placement;
     this.unmountContents = unmountContents ?? null;
     this.stopPositioning = mountPortaledHovercard({
@@ -84,6 +129,12 @@ export class PortaledHovercardController {
       placement,
       observeVisualViewport,
     });
+  }
+
+  private attachCardHoldListeners(card: HTMLDivElement): void {
+    card.addEventListener("pointerenter", this.handleCardPointerEnter);
+    card.addEventListener("focusin", this.handleCardFocusIn);
+    card.addEventListener("focusout", this.handleCardFocusOut);
   }
 
   clearCard(exitDurationMs = 0): void {
@@ -144,6 +195,7 @@ export class PortaledHovercardController {
     this.pointerOverCard = false;
     this.focusInside = false;
     this.cardFocusInside = false;
+    this.explicitHold = false;
     clearPortaledHovercardTrigger(this.trigger);
     this.clearCard(exitDurationMs);
     this.anchor = null;
@@ -178,7 +230,11 @@ function mountPortaledHovercard(params: {
   placement: PortaledHovercardPlacement;
   observeVisualViewport?: boolean;
 }): () => void {
-  document.body.append(params.card);
+  // A modal drawer makes body siblings inert. Keep its card inside the same
+  // dialog, then use the existing menu top layer to escape clipping and stacking.
+  const owner = params.anchor.closest("openclaw-modal-dialog") ?? document.body;
+  owner.append(params.card);
+  promoteToPopoverTopLayer(params.card);
   params.trigger.setAttribute("aria-controls", params.card.id);
   params.trigger.setAttribute("aria-expanded", "true");
   const position = () => positionPortaledHovercard(params.anchor, params.card, params.placement);

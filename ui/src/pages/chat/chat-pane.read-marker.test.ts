@@ -3,15 +3,14 @@
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
-import type { SessionCapability } from "../../lib/sessions/index.ts";
-import { createTestChatPane } from "./chat-pane.test-support.ts";
+import { createSessionCapabilityFixture, createTestChatPane } from "./chat-pane.test-support.ts";
 
 describe("chat pane read markers", () => {
   it("marks an unread failure read even when its regular unread flag is false", () => {
     const patch = vi.fn().mockResolvedValue(null);
     const { pane } = createTestChatPane({
       client: {} as GatewayBrowserClient,
-      sessions: { patch } as unknown as SessionCapability,
+      sessions: createSessionCapabilityFixture({ patch }),
     });
 
     pane.markSessionRead({
@@ -35,7 +34,7 @@ describe("chat pane read markers", () => {
     const patch = vi.fn().mockResolvedValue(null);
     const { pane } = createTestChatPane({
       client: {} as GatewayBrowserClient,
-      sessions: { patch } as unknown as SessionCapability,
+      sessions: createSessionCapabilityFixture({ patch }),
     });
 
     pane.markSessionRead({
@@ -59,17 +58,31 @@ describe("chat pane read markers", () => {
       name: "read-only scope",
       methods: ["sessions.patch"],
       scopes: ["operator.read"],
+      session: {},
     },
     {
       name: "unadvertised sessions.patch",
       methods: ["sessions.create"],
       scopes: ["operator.write"],
+      session: {},
     },
-  ])("does not mutate unread state with $name", ({ methods, scopes }) => {
+    ...(["read-only", "suggest", "draft"] as const).map((visibility) => ({
+      name: `${visibility} viewer participation`,
+      methods: ["sessions.patch"],
+      scopes: ["operator.write"],
+      session: { visibility, sharingRole: "viewer" as const },
+    })),
+    {
+      name: "draft member participation",
+      methods: ["sessions.patch"],
+      scopes: ["operator.write"],
+      session: { visibility: "draft" as const, sharingRole: "member" as const },
+    },
+  ])("does not mutate unread state with $name", ({ methods, scopes, session }) => {
     const patch = vi.fn().mockResolvedValue(null);
     const { pane, state } = createTestChatPane({
       client: {} as GatewayBrowserClient,
-      sessions: { patch } as unknown as SessionCapability,
+      sessions: createSessionCapabilityFixture({ patch }),
     });
     pane.context.gateway.snapshot.hello = {
       auth: { role: "operator", scopes },
@@ -80,6 +93,7 @@ describe("chat pane read markers", () => {
       kind: "direct" as const,
       updatedAt: 20,
       unread: true,
+      ...session,
     };
 
     pane.markSessionRead(row);
@@ -90,6 +104,40 @@ describe("chat pane read markers", () => {
     expect(state.lastError).toBeNull();
   });
 
+  it.each([
+    { visibility: "shared", sharingRole: "viewer", scopes: ["operator.write"] },
+    { visibility: "read-only", sharingRole: "member", scopes: ["operator.write"] },
+    { visibility: "draft", sharingRole: "owner", scopes: ["operator.write"] },
+    { visibility: "draft", sharingRole: "admin", scopes: ["operator.admin"] },
+  ] as const)("acknowledges unread state for $visibility $sharingRole", (session) => {
+    const patch = vi.fn().mockResolvedValue({});
+    const { pane } = createTestChatPane({
+      client: {} as GatewayBrowserClient,
+      sessions: createSessionCapabilityFixture({ patch }),
+    });
+    pane.context.gateway.snapshot.hello = {
+      auth: { role: "operator", scopes: [...session.scopes] },
+      features: { methods: ["sessions.patch"] },
+    } as ApplicationGatewaySnapshot["hello"];
+    const row = {
+      key: "agent:main:current",
+      kind: "direct" as const,
+      updatedAt: 20,
+      unread: true,
+      visibility: session.visibility,
+      sharingRole: session.sharingRole,
+    };
+
+    pane.markSessionRead(row);
+    pane.markSessionRead(row);
+
+    expect(patch).toHaveBeenCalledExactlyOnceWith(
+      "agent:main:current",
+      { unread: false },
+      { agentId: "main", expectedMarkedUnreadAt: null },
+    );
+  });
+
   it("retries the read patch after a null (unsent) resolution", async () => {
     // sessions.patch resolves null without a request when the connection
     // scope is lost; the guard must unlatch like a failure or the badge
@@ -97,7 +145,7 @@ describe("chat pane read markers", () => {
     const patch = vi.fn().mockResolvedValue(null);
     const { pane } = createTestChatPane({
       client: {} as GatewayBrowserClient,
-      sessions: { patch } as unknown as SessionCapability,
+      sessions: createSessionCapabilityFixture({ patch }),
     });
     const row = {
       key: "agent:main:current",
@@ -118,7 +166,7 @@ describe("chat pane read markers", () => {
     const patch = vi.fn().mockResolvedValue(null);
     const { pane } = createTestChatPane({
       client: {} as GatewayBrowserClient,
-      sessions: { patch } as unknown as SessionCapability,
+      sessions: createSessionCapabilityFixture({ patch }),
     });
     const sessionsState = (presented: boolean) => {
       pane.presented = presented;
@@ -158,7 +206,7 @@ describe("chat pane read markers", () => {
     const patch = vi.fn().mockResolvedValue(null);
     const { pane } = createTestChatPane({
       client: {} as GatewayBrowserClient,
-      sessions: { patch } as unknown as SessionCapability,
+      sessions: createSessionCapabilityFixture({ patch }),
     });
 
     pane.markSessionRead({
@@ -182,7 +230,7 @@ describe("chat pane read markers", () => {
     const patch = vi.fn().mockResolvedValue({});
     const { pane } = createTestChatPane({
       client: {} as GatewayBrowserClient,
-      sessions: { patch } as unknown as SessionCapability,
+      sessions: createSessionCapabilityFixture({ patch }),
     });
     const row = {
       key: "agent:main:current",

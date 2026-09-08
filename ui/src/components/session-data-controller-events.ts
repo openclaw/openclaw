@@ -1,13 +1,34 @@
+import { SIDEBAR_SESSION_ROSTER_LIMIT } from "../../../src/shared/session-list-limits.ts";
 import type { RouteId } from "../app-route-paths.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { readPresenceEntries, type PresencePayload } from "../app/user-profile.ts";
 import type { AgentCapability } from "../lib/agents/index.ts";
-import type { SessionCapability, SessionListSnapshot } from "../lib/sessions/index.ts";
+import { CATALOG_SESSION_CONTINUED_EVENT } from "../lib/sessions/catalog-key.ts";
+import type {
+  SessionCapability,
+  SessionListOptions,
+  SessionListSnapshot,
+} from "../lib/sessions/index.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
-import {
-  SIDEBAR_AGENT_SESSION_LIST_LIMIT,
-  type SidebarSessionStatusFilter,
+import type {
+  SidebarSessionOwnerFilter,
+  SidebarSessionStatusFilter,
 } from "./app-sidebar-session-types.ts";
+
+// Chat panes announce catalog adoptions before the next poll so rows bind immediately.
+export function subscribeSessionCatalogBrowserEvents(
+  onContinued: EventListener,
+  onPageActivation: EventListener,
+): () => void {
+  document.addEventListener(CATALOG_SESSION_CONTINUED_EVENT, onContinued);
+  document.addEventListener("visibilitychange", onPageActivation);
+  globalThis.addEventListener("focus", onPageActivation);
+  return () => {
+    document.removeEventListener(CATALOG_SESSION_CONTINUED_EVENT, onContinued);
+    document.removeEventListener("visibilitychange", onPageActivation);
+    globalThis.removeEventListener("focus", onPageActivation);
+  };
+}
 
 type SidebarSessionListOwner = {
   readonly context: ApplicationContext<RouteId> | undefined;
@@ -17,6 +38,7 @@ type SidebarSessionListOwner = {
   sessionsLoading: boolean;
   sessionMutationError: string | null;
   expandedAgentId(): string;
+  sessionListQuery(agentId: string): SessionListOptions;
   requestSessionDataUpdate(): void;
 };
 
@@ -76,11 +98,24 @@ export function subscribeSidebarAgentSessionCaches(
   });
 }
 
-function filteredSidebarSessionQuery(agentId: string, archivedFilter: SidebarSessionStatusFilter) {
+type SidebarSessionQueryOwner = {
+  sidebarSessionOwnerFilter(): SidebarSessionOwnerFilter;
+  sidebarSessionStatusFilter(): SidebarSessionStatusFilter;
+};
+
+export function hasSidebarListFilter(owner: SidebarSessionQueryOwner): boolean {
+  const { ownerId, involvingMe } = owner.sidebarSessionOwnerFilter();
+  return owner.sidebarSessionStatusFilter() !== "active" || Boolean(ownerId || involvingMe);
+}
+
+export function sidebarSessionListQuery(owner: SidebarSessionQueryOwner, agentId: string) {
+  const { ownerId, involvingMe } = owner.sidebarSessionOwnerFilter();
   return {
+    ownerId: involvingMe ? undefined : ownerId || undefined,
+    involvingMe: involvingMe || undefined,
     agentId,
-    archivedFilter,
-    limit: SIDEBAR_AGENT_SESSION_LIST_LIMIT,
+    archivedFilter: owner.sidebarSessionStatusFilter(),
+    limit: SIDEBAR_SESSION_ROSTER_LIMIT,
     includeDerivedTitles: true,
     includeLastMessage: true,
   } as const;
@@ -100,11 +135,9 @@ export function publishSidebarSessionList(
 export function subscribeFilteredSidebarSessions(
   owner: SidebarSessionListOwner,
   sessions: SessionCapability,
-  agentId: string,
-  archivedFilter: Exclude<SidebarSessionStatusFilter, "active">,
+  scope: SessionListOptions,
   isCurrent: () => boolean,
 ): () => void {
-  const scope = filteredSidebarSessionQuery(agentId, archivedFilter);
   const apply = (snapshot: SessionListSnapshot) => {
     if (!isCurrent()) {
       return;
@@ -129,7 +162,6 @@ export function subscribeFilteredSidebarSessions(
 export function refreshSidebarSessionList(
   owner: SidebarSessionListOwner,
   agentId: string | null,
-  archivedFilter: SidebarSessionStatusFilter,
   append = false,
 ): Promise<void> {
   const result = owner.sessionsResult;
@@ -147,7 +179,7 @@ export function refreshSidebarSessionList(
     return Promise.resolve();
   }
   return owner.context.sessions.refreshList({
-    ...filteredSidebarSessionQuery(agentId, archivedFilter),
+    ...owner.sessionListQuery(agentId),
     ...(append && typeof offset === "number" ? { offset, append: true } : {}),
     force: true,
   });

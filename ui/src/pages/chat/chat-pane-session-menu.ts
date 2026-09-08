@@ -17,15 +17,17 @@ import { openEditor } from "../../lib/editor-links.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
+import { resolveSessionRenamePatch, resolveSessionRenameValue } from "../../lib/session-rename.ts";
 import { collectKnownSessionGroups } from "../../lib/sessions/grouping.ts";
 import {
   areUiSessionKeysEquivalent,
   parseAgentSessionKey,
 } from "../../lib/sessions/session-key.ts";
+import { runSessionNavigationAction } from "../../lib/sessions/session-menu-navigation.ts";
 import { showToast } from "../../lib/toast.ts";
 import { ChatPaneContext } from "./chat-pane-context.ts";
 import { headerPlatformByClient } from "./chat-pane-shared.ts";
-import { patchChatSessionLabel } from "./chat-state-route.ts";
+import { resolveChatAgentId } from "./chat-state-route.ts";
 import type { HeaderMenuAction } from "./components/chat-header-session-menu.ts";
 import type { ChatPaneHeaderAction } from "./components/chat-pane-header.ts";
 import { buildContinueInTerminalCommand } from "./continue-in-terminal-command.ts";
@@ -68,9 +70,24 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
       this.beginHeaderRename(row);
       return;
     }
-    if (action.kind === "copy-session-id") {
-      const copied = row.sessionId ? await copyToClipboard(row.sessionId) : false;
-      showToast({ message: t(copied ? "common.copied" : "common.copyFailed") });
+    if (
+      action.kind === "copy-session-id" ||
+      action.kind === "copy-session-link" ||
+      action.kind === "copy-session-preview-link" ||
+      action.kind === "copy-markdown" ||
+      action.kind === "open-new-tab" ||
+      action.kind === "open-new-window" ||
+      action.kind === "split-right" ||
+      action.kind === "split-below"
+    ) {
+      const owner = this.headerOutcomeOwner;
+      await runSessionNavigationAction(action.kind, {
+        context: this.context,
+        session: row,
+        agentId: this.state ? resolveChatAgentId(this.state) : row.agentId,
+        sourceSessionKey: row.key,
+        isCurrent: () => this.ownsHeaderOutcome(owner),
+      });
       return;
     }
     if (action.kind === "continue-in-terminal") {
@@ -99,15 +116,15 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
       gatewayHasActiveRun: candidate.hasActiveRun,
     });
     const session = toActionSession(row);
-    // Header actions capture a rendered row, but any awaited menu work can
-    // outlive that row. Resolve at the patch boundary so a deleted no-ID row
-    // cannot be recreated by a stale sessions.patch request.
+    // Refresh metadata only on the selected instance; replacements must keep
+    // the captured ID so the Gateway rejects the stale action. No-ID rows
+    // still need current-list presence before a metadata patch can create them.
     const resolveCurrentSession = (notify = false) => {
-      const currentRow = scope.sessions.state.result?.sessions.find((candidate) =>
-        areUiSessionKeysEquivalent(candidate.key, row.key),
+      const currentRow = scope.sessions.state.result?.sessions.find(
+        (candidate) =>
+          areUiSessionKeysEquivalent(candidate.key, row.key) &&
+          (!session.sessionId || candidate.sessionId === session.sessionId),
       );
-      // A durable ID makes the captured row safe: the Gateway rejects a
-      // deleted or replaced identity. No-ID rows need current-list proof.
       const resolvedRow = currentRow ?? (session.sessionId ? row : null);
       if (!resolvedRow && notify) {
         showToast({ message: t("common.refresh") });
@@ -137,7 +154,6 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
           );
           scope.context.navigation.update({ sidebarEntries });
         },
-        replaceCurrentSession: (key) => this.onPaneSessionChange?.(this.paneId, key),
         selectSession: (key) => this.onPaneSessionChange?.(this.paneId, key),
         sidebarSessionStatusFilter: () => "active",
         knownSessionGroups: () =>
@@ -171,10 +187,18 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
           }
           break;
         }
-        case "set-icon": {
+        case "set-icon":
+        case "set-color":
+        case "reset-appearance": {
           const currentSession = resolveCurrentSession(true);
           if (currentSession) {
-            await operations.patchSession(host, currentSession, { icon: action.icon }, scope);
+            const patch =
+              action.kind === "set-icon"
+                ? { icon: action.icon }
+                : action.kind === "set-color"
+                  ? { color: action.color }
+                  : { icon: null, color: null };
+            await operations.patchSession(host, currentSession, patch, scope);
           }
           break;
         }
@@ -347,16 +371,9 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
       this.publishHeaderError(access.reason);
       return;
     }
-    const customLabel = normalizeOptionalString(row.label) ?? null;
-    const generatedTitle = parseAgentSessionKey(row.key)?.rest.startsWith("dashboard:")
-      ? (normalizeOptionalString(row.displayName) ??
-        (row.worktree ? undefined : normalizeOptionalString(row.derivedTitle)))
-      : undefined;
-    this.headerRenameSessionKey = row.key;
-    this.headerRenameInitialLabel = customLabel;
-    // Dashboard titles are generated session text; channel/account decoration
-    // remains display-only and must never become the stored label.
-    this.headerRenameInitialValue = customLabel ?? generatedTitle ?? "";
+    // The edit belongs to this instance, even if a replacement reuses its key.
+    this.headerRenameSession = { key: row.key, sessionId: row.sessionId, label: row.label };
+    this.headerRenameInitialValue = resolveSessionRenameValue(row);
     this.headerRenameValue = this.headerRenameInitialValue;
     this.headerEditing = true;
     void this.updateComplete.then(() => {
@@ -368,37 +385,40 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
 
   protected cancelHeaderRename(): void {
     this.headerEditing = false;
-    this.headerRenameSessionKey = "";
+    this.headerRenameSession = null;
   }
 
   protected commitHeaderRename(): void {
     if (!this.headerEditing) {
       return;
     }
-    const key = this.headerRenameSessionKey;
-    const trimmed = this.headerRenameValue.trim();
-    const label = trimmed || null;
-    const unchangedGeneratedTitle =
-      this.headerRenameInitialLabel === null && trimmed === this.headerRenameInitialValue.trim();
-    const unchangedLabel = label === this.headerRenameInitialLabel;
+    const session = this.headerRenameSession;
+    const patch = resolveSessionRenamePatch(
+      this.headerRenameValue,
+      this.headerRenameInitialValue,
+      session?.label,
+    );
     this.headerEditing = false;
-    this.headerRenameSessionKey = "";
+    this.headerRenameSession = null;
     const state = this.state;
-    if (!key || !state || unchangedGeneratedTitle || unchangedLabel) {
+    if (!session || !state || !patch) {
       return;
     }
     const access = readSessionMethodAccess(this.context.gateway.snapshot, {
       method: "sessions.patch",
-      params: { key, label },
+      params: { key: session.key, ...patch },
     });
     if (!access.allowed) {
       this.publishHeaderError(access.reason);
       return;
     }
     const owner = this.headerOutcomeOwner;
-    void patchChatSessionLabel(state, this.context.sessions, key, label).catch((error: unknown) =>
-      this.publishHeaderError(error, owner),
-    );
+    void this.context.sessions
+      .patch(session.key, patch, {
+        agentId: resolveChatAgentId(state),
+        expectedSessionId: session.sessionId,
+      })
+      .catch((error: unknown) => this.publishHeaderError(error, owner));
   }
 
   protected async loadHeaderMenuData(

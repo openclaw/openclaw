@@ -3,6 +3,7 @@
 import { nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { i18n } from "../../i18n/index.ts";
+import { choosePickerValue, updatePickers } from "../../test-helpers/select-picker.ts";
 import type { ModelProviderCard } from "./data.ts";
 import { renderModelProviders } from "./view.ts";
 
@@ -14,6 +15,11 @@ function card(overrides: Partial<ModelProviderCard> = {}): ModelProviderCard {
     id: "openai",
     displayName: "OpenAI",
     profiles: [],
+    profileProviderIds: {},
+    profileOrders: {},
+    profileOrderStoredProviders: [],
+    profileOrderExplicitProviders: [],
+    profileOrderLocks: {},
     credentialProviderIds: ["openai"],
     logoutTargets: [],
     hasConfigApiKey: false,
@@ -31,13 +37,13 @@ function props(overrides: Partial<ModelProvidersViewProps> = {}): ModelProviders
     refreshing: false,
     error: null,
     providerUsageFailed: false,
+    supplementalLoading: false,
     updatedAt: 1,
     costDays: 30,
     credentialAgentLabel: "Writer",
     cards: [card()],
     configuredModels: [{ id: "openai/gpt-5", provider: "openai", name: "GPT-5", available: true }],
     defaultModels: { primary: "openai/gpt-5", fallbacks: [], utilityModel: null },
-    defaultModelsDirty: false,
     thinkingLevel: "off",
     thinkingOverridden: true,
     fastMode: false,
@@ -45,6 +51,7 @@ function props(overrides: Partial<ModelProvidersViewProps> = {}): ModelProviders
     configBusy: false,
     quickAddSupported: true,
     unconfiguredProviders: [{ id: "anthropic", displayName: "Anthropic" }],
+    canViewProfiles: true,
     canMutate: true,
     mutationBlockedReason: null,
     providerUsageStalled: false,
@@ -54,7 +61,7 @@ function props(overrides: Partial<ModelProvidersViewProps> = {}): ModelProviders
     probeResults: {},
     keyEditorProvider: null,
     keyDraft: "",
-    pendingLogoutProvider: null,
+    profileOrders: {},
     addProviderOpen: false,
     addProviderId: "",
     addProviderKey: "",
@@ -66,18 +73,14 @@ function props(overrides: Partial<ModelProvidersViewProps> = {}): ModelProviders
     onRemoveKey: () => undefined,
     onProbe: () => undefined,
     onRequestLogout: () => undefined,
-    onCancelLogout: () => undefined,
-    onLogout: () => undefined,
+    onProfileOrderChange: () => undefined,
     onAddProviderToggle: () => undefined,
     onAddProviderIdChange: () => undefined,
     onAddProviderKeyChange: () => undefined,
     onAddProvider: () => undefined,
     onPrimaryChange: () => undefined,
-    onFallbackAdd: () => undefined,
-    onFallbackRemove: () => undefined,
+    onFallbackChange: () => undefined,
     onUtilityChange: () => undefined,
-    onDefaultModelsSave: () => undefined,
-    onDefaultModelsReset: () => undefined,
     onThinkingChange: () => undefined,
     onThinkingReset: () => undefined,
     onFastModeChange: () => undefined,
@@ -86,6 +89,44 @@ function props(overrides: Partial<ModelProvidersViewProps> = {}): ModelProviders
     ...overrides,
   };
 }
+
+it("retains a saved unavailable model without offering it for another default setting", async () => {
+  const onUtilityChange = vi.fn();
+  const container = document.createElement("div");
+  render(
+    renderModelProviders(
+      props({
+        configuredModels: [
+          { provider: "fixture", id: "ready", name: "Ready", available: true },
+          { provider: "fixture", id: "blocked", name: "Blocked", available: false },
+        ],
+        defaultModels: {
+          primary: "fixture/ready",
+          fallbacks: ["fixture/blocked"],
+          utilityModel: "fixture/blocked",
+        },
+        onUtilityChange,
+      }),
+    ),
+    container,
+  );
+
+  await updatePickers(container);
+  const blocked = [...container.querySelectorAll('[role="option"][data-value="fixture/blocked"]')];
+  expect(blocked).toHaveLength(3);
+  expect(blocked.every((option) => option.getAttribute("aria-disabled") === "true")).toBe(true);
+  expect(
+    [...container.querySelectorAll('[role="option"][data-value="fixture/ready"]')].every(
+      (option) => option.getAttribute("aria-disabled") === "false",
+    ),
+  ).toBe(true);
+  const utility = container.querySelector<HTMLButtonElement>("#model-providers-utility-model")!;
+  expect(utility.textContent).toContain("Blocked");
+  await choosePickerValue(utility, "fixture/blocked");
+  expect(onUtilityChange).not.toHaveBeenCalled();
+  await choosePickerValue(utility, "__openclaw_automatic_utility__");
+  expect(onUtilityChange).toHaveBeenCalledExactlyOnceWith(null);
+});
 
 function mount(viewProps: ModelProvidersViewProps): HTMLDivElement {
   const container = document.createElement("div");
@@ -106,7 +147,11 @@ function button(container: Element, label: string): HTMLButtonElement | undefine
 
 function settingsRow(container: Element, label: string): HTMLElement {
   const match = [...container.querySelectorAll<HTMLElement>(".settings-row")].find(
-    (candidate) => text(candidate.querySelector(".settings-row__title")) === label,
+    (candidate) =>
+      text(
+        candidate.querySelector(".model-providers__label-with-help > span:first-child") ??
+          candidate.querySelector(".settings-row__title"),
+      ) === label,
   );
   if (!match) {
     throw new Error(`Missing settings row: ${label}`);
@@ -146,6 +191,31 @@ describe("renderModelProviders", () => {
     expect(container.querySelector('[data-model-readiness="model-required"]')).not.toBeNull();
   });
 
+  it("renders each configured provider as a separate standard card", () => {
+    const container = mount(
+      props({
+        cards: [
+          card(),
+          card({ id: "anthropic", displayName: "Claude", credentialProviderIds: ["anthropic"] }),
+        ],
+      }),
+    );
+
+    expect(
+      container.querySelectorAll(".model-providers__provider-list > .settings-group"),
+    ).toHaveLength(2);
+  });
+
+  it("renders a minute-precision update time beside an icon refresh action", () => {
+    const container = mount(props({ updatedAt: new Date(2026, 7, 31, 18, 51, 22).getTime() }));
+    const updated = text(container.querySelector(".model-providers__updated"));
+    const refresh = container.querySelector<HTMLButtonElement>('button[aria-label="Refresh"]');
+
+    expect(updated).toContain("Updated");
+    expect(updated).not.toMatch(/:\d{2}:\d{2}/u);
+    expect(refresh?.querySelector("svg")).not.toBeNull();
+  });
+
   afterEach(() => {
     for (const container of document.body.querySelectorAll("div")) {
       render(nothing, container);
@@ -153,7 +223,7 @@ describe("renderModelProviders", () => {
     document.body.replaceChildren();
   });
 
-  it("renders model behavior next to default models and emits canonical values", () => {
+  it("renders one Defaults section with the five default rows and canonical values", () => {
     const onThinkingChange = vi.fn();
     const onFastModeChange = vi.fn();
     const container = mount(
@@ -167,10 +237,22 @@ describe("renderModelProviders", () => {
 
     const behavior = container.querySelector("#settings-model-behavior");
     expect(behavior).not.toBeNull();
+    expect(text(container.querySelector(".settings-section__heading"))).toBe("Defaults");
+    expect(text(container.querySelector(".settings-section__desc"))).toBe(
+      "Applies across all providers and models where applicable.",
+    );
+    expect(
+      [...container.querySelectorAll(".model-providers__defaults .settings-row")].map((entry) =>
+        text(
+          entry.querySelector(".model-providers__label-with-help > span:first-child") ??
+            entry.querySelector(".settings-row__title"),
+        ),
+      ),
+    ).toEqual(["Model", "Utility Model", "Fallback Model", "Thinking", "Fast Mode"]);
     const thinking = settingsRow(behavior!, "Thinking").querySelector<SegmentedGroup>(
       "wa-radio-group",
     );
-    const fastMode = settingsRow(behavior!, "Fast mode").querySelector<SegmentedGroup>(
+    const fastMode = settingsRow(behavior!, "Fast Mode").querySelector<SegmentedGroup>(
       "wa-radio-group",
     );
     expect(thinking?.value).toBe("low");
@@ -178,9 +260,18 @@ describe("renderModelProviders", () => {
     expect([...fastMode!.querySelectorAll("wa-radio")].map((entry) => text(entry))).toEqual([
       "Default",
       "Auto",
-      "Fast",
-      "Standard",
+      "On",
+      "Off",
     ]);
+    expect(container.querySelector('button[aria-label="About thinking defaults"]')).not.toBeNull();
+    expect(container.querySelector('button[aria-label="About fast mode defaults"]')).not.toBeNull();
+    expect(
+      container.querySelector('button[aria-label="About thinking defaults"] svg'),
+    ).not.toBeNull();
+    expect(
+      container.querySelector('button[aria-label="About fast mode defaults"] svg'),
+    ).not.toBeNull();
+    expect(container.querySelector(".model-providers__form-actions")).toBeNull();
 
     selectSegment(thinking!, "high");
     selectSegment(fastMode!, "off");
@@ -201,22 +292,39 @@ describe("renderModelProviders", () => {
     );
     const behavior = container.querySelector("#settings-model-behavior")!;
     const thinkingRow = settingsRow(behavior, "Thinking");
-    const fastRow = settingsRow(behavior, "Fast mode");
+    const fastRow = settingsRow(behavior, "Fast Mode");
 
     expect(thinkingRow.querySelector<SegmentedGroup>("wa-radio-group")?.value).toBe("adaptive");
     expect(text(thinkingRow)).toContain("Adaptive");
-    expect(text(thinkingRow)).toContain("Default: Model policy");
-    expect(text(fastRow)).toContain("Default: Model policy");
-
-    thinkingRow.querySelector<HTMLButtonElement>('button[aria-label="Reset to default"]')?.click();
-    fastRow.querySelector<HTMLButtonElement>('button[aria-label="Reset to default"]')?.click();
-    expect(onThinkingReset).toHaveBeenCalledOnce();
-    expect(onFastModeReset).toHaveBeenCalledOnce();
+    expect(text(thinkingRow)).not.toContain("Default: Model policy");
+    expect(text(fastRow)).not.toContain("Default: Model policy");
+    const thinkingDefaultHelp = thinkingRow.querySelector(
+      'wa-radio[value=""] .model-providers__segment-info',
+    );
+    const fastModeDefaultHelp = fastRow.querySelector(
+      'wa-radio[value=""] .model-providers__segment-info',
+    );
+    expect(
+      (
+        thinkingDefaultHelp?.closest("openclaw-tooltip") as
+          | (HTMLElement & { content?: string })
+          | null
+      )?.content,
+    ).toContain("model's thinking policy");
+    expect(
+      (
+        fastModeDefaultHelp?.closest("openclaw-tooltip") as
+          | (HTMLElement & { content?: string })
+          | null
+      )?.content,
+    ).toContain("Unlike Auto");
+    expect(thinkingRow.querySelector('wa-radio[value=""]')?.hasAttribute("title")).toBe(false);
+    expect(fastRow.querySelector('wa-radio[value=""]')?.hasAttribute("title")).toBe(false);
 
     selectSegment(thinkingRow.querySelector<SegmentedGroup>("wa-radio-group")!, "");
     selectSegment(fastRow.querySelector<SegmentedGroup>("wa-radio-group")!, "");
-    expect(onThinkingReset).toHaveBeenCalledTimes(2);
-    expect(onFastModeReset).toHaveBeenCalledTimes(2);
+    expect(onThinkingReset).toHaveBeenCalledOnce();
+    expect(onFastModeReset).toHaveBeenCalledOnce();
 
     render(
       renderModelProviders(
@@ -231,7 +339,7 @@ describe("renderModelProviders", () => {
     );
     const inheritedBehavior = container.querySelector("#settings-model-behavior")!;
     const inheritedThinking = settingsRow(inheritedBehavior, "Thinking");
-    const inheritedFast = settingsRow(inheritedBehavior, "Fast mode");
+    const inheritedFast = settingsRow(inheritedBehavior, "Fast Mode");
     expect(inheritedThinking.querySelector<SegmentedGroup>("wa-radio-group")?.value).toBe("");
     expect(inheritedFast.querySelector<SegmentedGroup>("wa-radio-group")?.value).toBe("");
     expect(
@@ -245,8 +353,8 @@ describe("renderModelProviders", () => {
       (inheritedFast.querySelector('wa-radio[value=""]') as HTMLElement & { checked: boolean })
         .checked,
     ).toBe(true);
-    expect(text(inheritedThinking)).toContain("Using default: Model policy");
-    expect(text(inheritedFast)).toContain("Using default: Model policy");
+    expect(text(inheritedThinking)).not.toContain("Using default: Model policy");
+    expect(text(inheritedFast)).not.toContain("Using default: Model policy");
     expect(
       inheritedBehavior.querySelectorAll('button[aria-label="Reset to default"]'),
     ).toHaveLength(0);
@@ -267,12 +375,10 @@ describe("renderModelProviders", () => {
     );
     const behavior = container.querySelector("#settings-model-behavior")!;
     const thinking = settingsRow(behavior, "Thinking");
-    const fast = settingsRow(behavior, "Fast mode");
+    const fast = settingsRow(behavior, "Fast Mode");
 
-    expect(text(thinking)).toContain("Default: Model policy");
-    expect(text(fast)).toContain("Default: Model policy");
-    thinking.querySelector<HTMLButtonElement>('button[aria-label="Reset to default"]')?.click();
-    fast.querySelector<HTMLButtonElement>('button[aria-label="Reset to default"]')?.click();
+    thinking.querySelector<HTMLElement>('wa-radio[value=""]')?.click();
+    fast.querySelector<HTMLElement>('wa-radio[value=""]')?.click();
     expect(onThinkingReset).toHaveBeenCalledOnce();
     expect(onFastModeReset).toHaveBeenCalledOnce();
   });
@@ -287,7 +393,7 @@ describe("renderModelProviders", () => {
     const thinking = settingsRow(behavior, "Thinking").querySelector<SegmentedGroup>(
       "wa-radio-group",
     )!;
-    const fastMode = settingsRow(behavior, "Fast mode").querySelector<SegmentedGroup>(
+    const fastMode = settingsRow(behavior, "Fast Mode").querySelector<SegmentedGroup>(
       "wa-radio-group",
     )!;
 
@@ -316,11 +422,10 @@ describe("renderModelProviders", () => {
     expect([...groups].every((group) => group.disabled)).toBe(true);
   });
 
-  it("locks provider and default-model mutations while shared config work is pending", () => {
+  it("locks provider and default-model mutations while shared config work is pending", async () => {
     const container = mount(
       props({
         configBusy: true,
-        defaultModelsDirty: true,
         defaultModels: {
           primary: "openai/gpt-5",
           fallbacks: ["anthropic/claude"],
@@ -334,7 +439,10 @@ describe("renderModelProviders", () => {
           card({
             hasConfigApiKey: true,
             apiKey: { source: "config" },
-            logoutTargets: [{ provider: "openai", profileIds: ["openai:oauth"] }],
+            profiles: [
+              { profileId: "openai:one", type: "oauth", status: "ok", logoutSupported: true },
+            ],
+            logoutTargets: [{ provider: "openai", profileIds: ["openai:one"] }],
           }),
         ],
         keyEditorProvider: "openai",
@@ -346,9 +454,12 @@ describe("renderModelProviders", () => {
     );
 
     const defaults = container.querySelector(".model-providers__defaults");
-    const defaultSelects = [...(defaults?.querySelectorAll("wa-select") ?? [])];
+    await updatePickers(container);
+    const defaultSelects = [...(defaults?.querySelectorAll("openclaw-select-picker") ?? [])];
     expect(defaultSelects).toHaveLength(3);
-    expect(defaultSelects.every((select) => select.hasAttribute("disabled"))).toBe(true);
+    expect(
+      defaultSelects.every((select) => select.querySelector<HTMLButtonElement>("button")?.disabled),
+    ).toBe(true);
     expect(
       [
         ...(defaults?.querySelectorAll<HTMLButtonElement>(
@@ -356,7 +467,7 @@ describe("renderModelProviders", () => {
         ) ?? []),
       ].every((control) => control.disabled),
     ).toBe(true);
-    expect(button(container, "Save")?.disabled).toBe(true);
+    expect(button(defaults!, "Save")).toBeUndefined();
 
     const provider = container.querySelector('[data-provider-id="openai"]');
     expect(
@@ -364,7 +475,9 @@ describe("renderModelProviders", () => {
     ).toBe(true);
     expect(button(provider!, "Replace key")?.disabled).toBe(true);
     expect(button(provider!, "Remove key")?.disabled).toBe(true);
-    expect(button(provider!, "Log out")?.disabled).toBe(true);
+    expect(
+      provider?.querySelector<HTMLButtonElement>(".model-providers__profile-logout")?.disabled,
+    ).toBe(true);
 
     const addForm = container.querySelector(".model-providers__add-form");
     expect(
@@ -376,7 +489,7 @@ describe("renderModelProviders", () => {
     ).toEqual([true, true, true]);
   });
 
-  it("locks an already-open provider form after mutation access is revoked", () => {
+  it("locks an already-open provider form after mutation access is revoked", async () => {
     const onAddProvider = vi.fn();
     const onAddProviderToggle = vi.fn();
     const container = mount(
@@ -386,6 +499,12 @@ describe("renderModelProviders", () => {
         addProviderKey: "new-provider-key",
         canMutate: false,
         mutationBlockedReason: "Operator admin access required",
+        messages: {
+          defaults: {
+            kind: "error",
+            text: "Configuration changes require operator.admin access.",
+          },
+        },
         onAddProvider,
         onAddProviderToggle,
       }),
@@ -398,6 +517,14 @@ describe("renderModelProviders", () => {
     ];
 
     expect(controls.map((control) => control.disabled)).toEqual([true, true, true]);
+    const defaults = container.querySelector(".model-providers__defaults");
+    await updatePickers(container);
+    expect(
+      [
+        ...(defaults?.querySelectorAll("openclaw-select-picker button, wa-radio-group") ?? []),
+      ].every((control) => control.hasAttribute("disabled")),
+    ).toBe(true);
+    expect(text(defaults)).not.toContain("operator.admin access");
     addForm?.querySelector<HTMLButtonElement>("button")?.click();
     expect(onAddProvider).not.toHaveBeenCalled();
 
@@ -498,8 +625,9 @@ describe("renderModelProviders", () => {
       settingsRow(behavior!, "Thinking").querySelector<SegmentedGroup>("wa-radio-group")?.value,
     ).toBe("high");
     expect(
-      settingsRow(behavior!, "Fast mode").querySelector<SegmentedGroup>("wa-radio-group")?.value,
+      settingsRow(behavior!, "Fast Mode").querySelector<SegmentedGroup>("wa-radio-group")?.value,
     ).toBe("on");
+    expect(text(container)).not.toContain("Configure a provider before selecting default models.");
     expect(container.querySelector('[aria-busy="true"]')).not.toBeNull();
     expect(container.querySelector('[data-provider-id="openai"]')).toBeNull();
   });
@@ -554,7 +682,7 @@ describe("renderModelProviders", () => {
     const readiness = container.querySelector('[data-model-readiness="model-required"]');
     expect(text(readiness)).toContain("Connect a verified AI model");
     expect(text(readiness)).toContain("Model required");
-    expect(container.querySelector(".model-providers__defaults")).toBeNull();
+    expect(container.querySelector(".model-providers__defaults")).not.toBeNull();
     expect(text(container.querySelector('[data-provider-id="openai"]'))).toContain(
       "Credentials configured",
     );
@@ -615,7 +743,7 @@ describe("renderModelProviders", () => {
     const readiness = container.querySelector('[data-model-readiness="model-required"]');
     expect(text(readiness)).toContain("Model required");
     expect(button(readiness!, "Connect a verified AI model")).toBeDefined();
-    expect(container.querySelector(".model-providers__defaults")).toBeNull();
+    expect(container.querySelector(".model-providers__defaults")).not.toBeNull();
   });
 
   it("recovers from a saved default that is no longer selectable", () => {
@@ -638,7 +766,7 @@ describe("renderModelProviders", () => {
     );
 
     expect(container.querySelector('[data-model-readiness="model-required"]')).not.toBeNull();
-    expect(container.querySelector(".model-providers__defaults")).toBeNull();
+    expect(container.querySelector(".model-providers__defaults")).not.toBeNull();
   });
 
   it("shows defaults normally when a selectable model exists", () => {
@@ -793,7 +921,7 @@ describe("renderModelProviders", () => {
     expect(text(provider)).not.toContain("Connection failed");
   });
 
-  it("qualifies slash-bearing model IDs with their catalog provider", () => {
+  it("qualifies slash-bearing model IDs with their catalog provider", async () => {
     const container = mount(
       props({
         configuredModels: [
@@ -811,13 +939,14 @@ describe("renderModelProviders", () => {
         },
       }),
     );
+    await updatePickers(container);
     const option = container.querySelector(
-      'wa-option[value="openrouter/anthropic/claude-sonnet-4"]',
+      '[role="option"][data-value="openrouter/anthropic/claude-sonnet-4"]',
     );
-    expect(option?.hasAttribute("selected")).toBe(true);
+    expect(option?.getAttribute("aria-selected") === "true").toBe(true);
   });
 
-  it("renders alias defaults and distinct automatic or disabled utility states", () => {
+  it("renders alias defaults and distinct automatic or disabled utility states", async () => {
     const aliasEntry = {
       id: "claude-opus",
       provider: "anthropic",
@@ -831,14 +960,19 @@ describe("renderModelProviders", () => {
         defaultModels: { primary: "opus", fallbacks: [], utilityModel: null },
       }),
     );
-    expect(automatic.querySelector('wa-option[value="opus"]')?.hasAttribute("selected")).toBe(true);
+    await updatePickers(automatic);
+    expect(
+      automatic
+        .querySelector('[role="option"][data-value="opus"]')
+        ?.getAttribute("aria-selected") === "true",
+    ).toBe(true);
     expect(
       text(
         automatic
-          .querySelectorAll(".model-providers__defaults wa-select")[1]
-          ?.querySelector("wa-option[selected]") ?? null,
+          .querySelectorAll(".model-providers__defaults openclaw-select-picker")[1]
+          ?.querySelector('[role="option"][aria-selected="true"]') ?? null,
       ),
-    ).toContain("Automatic");
+    ).toBe("Auto");
 
     const disabled = mount(
       props({
@@ -846,11 +980,12 @@ describe("renderModelProviders", () => {
         defaultModels: { primary: "opus", fallbacks: [], utilityModel: "" },
       }),
     );
+    await updatePickers(disabled);
     expect(
       text(
         disabled
-          .querySelectorAll(".model-providers__defaults wa-select")[1]
-          ?.querySelector("wa-option[selected]") ?? null,
+          .querySelectorAll(".model-providers__defaults openclaw-select-picker")[1]
+          ?.querySelector('[role="option"][aria-selected="true"]') ?? null,
       ),
     ).toBe("Disabled");
   });
@@ -875,37 +1010,6 @@ describe("renderModelProviders", () => {
     );
     button(container, "Test connection")?.click();
     expect(onProbe).toHaveBeenCalledWith("openai", ["anthropic", "claude-cli"]);
-  });
-
-  it("shows logout confirmation only for OAuth or token profiles", () => {
-    const onLogout = vi.fn();
-    const container = mount(
-      props({
-        cards: [
-          card({
-            credentialProviderIds: ["openai", "openai-codex"],
-            logoutTargets: [{ provider: "openai-codex", profileIds: ["openai:oauth"] }],
-            profiles: [
-              {
-                profileId: "openai:oauth",
-                type: "oauth",
-                status: "ok",
-                logoutSupported: true,
-              },
-            ],
-          }),
-        ],
-        pendingLogoutProvider: "openai",
-        onLogout,
-      }),
-    );
-    expect(text(container.querySelector(".model-providers__confirm"))).toContain(
-      "Log out of OpenAI?",
-    );
-    container.querySelector<HTMLButtonElement>(".model-providers__confirm .btn.danger")?.click();
-    expect(onLogout).toHaveBeenCalledWith("openai", [
-      { provider: "openai-codex", profileIds: ["openai:oauth"] },
-    ]);
   });
 
   it("uses the original config key for credential mutations", () => {

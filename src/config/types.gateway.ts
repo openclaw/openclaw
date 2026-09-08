@@ -136,18 +136,18 @@ export type GatewayControlUiConfig = {
   enabled?: boolean;
   /** Optional base path prefix for the Control UI (e.g. "/openclaw"). */
   basePath?: string;
+  experimental?: {
+    /** Allow native UI from user-installed plugins (default false; bundled UI stays available). */
+    customPlugins?: boolean;
+  };
   /** Optional filesystem root for Control UI assets (defaults to dist/control-ui). */
   root?: string;
   /** Optional visual label and named color distinguishing this Gateway environment. */
   environment?: ControlUiEnvironment;
+  /** Show the Discord community invitation in this Gateway's Control UI (default true). */
+  communityInvite?: boolean;
   /** Optional service credential used only for Control UI GitHub previews and discovery. */
   github?: { token?: SecretInput };
-  /**
-   * Opt-in AI purpose titles for tool calls in Control UI chat (default false).
-   * When enabled, chat.toolTitles generates short titles through standard
-   * utility-model routing and caches them per agent.
-   */
-  toolTitles?: boolean;
   /** Produce utility-model session status digests for subscribed Control UI clients (default true). */
   sessionObserver?: boolean;
   /**
@@ -207,29 +207,32 @@ export type GatewayTrustedProxyConfig = {
    */
   allowLoopback?: boolean;
   /**
-   * Automatically approve new browser device identities after trusted-proxy
-   * authentication. Disabled by default; existing-device upgrades stay manual.
+   * Automatically approve new browser/native UI operator devices and same-key scope upgrades after
+   * trusted-proxy authentication. Disabled by default; configured scopes cap grants.
    */
   deviceAutoApprove?: {
-    /** Enable automatic approval for new browser devices. @default false */
+    /** Enable automatic browser enrollment and same-key scope upgrades. @default false */
     enabled?: boolean;
     /**
      * Maximum operator scopes granted by automatic approval. Listing
      * operator.admin explicitly lets every proxy-authenticated user request
      * automatic full-admin device grants. Requests without scopes receive the
      * configured maximum. @default operator.read, operator.write,
-     * operator.approvals
+     * operator.approvals, operator.questions
      */
     scopes?: string[];
   };
 };
 
 export type GatewayAuthConfig = {
-  /** Authentication mode for Gateway connections. Defaults to token when unset. */
+  /**
+   * Authentication mode for Gateway connections. Token/password mode selects the
+   * configured secret; clients may send it in either auth.token or auth.password.
+   */
   mode?: GatewayAuthMode;
-  /** Shared token for token mode (plaintext or SecretRef). */
+  /** Shared secret selected by token mode (plaintext or SecretRef). */
   token?: SecretInput;
-  /** Shared password for password mode (consider env instead). */
+  /** Shared secret selected by password mode (plaintext or SecretRef; consider env instead). */
   password?: SecretInput;
   /** Allow Tailscale identity headers when serve mode is enabled. */
   allowTailscale?: boolean;
@@ -321,7 +324,7 @@ export type GatewayTerminalConfig = {
 
 /** Labs-gated external CLI session targets in the Control UI. */
 export type GatewayCliAgentsConfig = {
-  /** Show catalog-backed CLI agents in the new-session model picker. Default: false. */
+  /** Show catalog-backed CLI agents in the new-session model picker. Default: true. */
   enabled?: boolean;
 };
 

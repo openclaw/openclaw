@@ -1,4 +1,5 @@
 import type { SessionsDiffResult } from "../../../../../packages/gateway-protocol/src/index.js";
+import { formatFencedCodeBlock } from "../../../../../src/shared/markdown-code.js";
 import { GatewayRequestError } from "../../../api/gateway.ts";
 import type { ArtifactDownloadResult, SessionWorkspaceGetResult } from "../../../api/types.ts";
 import { hasOperatorAdminAccess } from "../../../app/operator-access.ts";
@@ -140,7 +141,7 @@ function artifactSidebarContent(params: {
     const language = mimeType === "application/json" ? "json" : "";
     return {
       kind: "markdown",
-      content: `# ${title}\n\n\`\`\`${language}\n${decoded}\n\`\`\``,
+      content: `# ${title}\n\n${formatFencedCodeBlock(decoded, language)}`,
       rawText: decoded,
     };
   }
@@ -158,24 +159,6 @@ export function refreshSessionWorkspace(state: SessionWorkspaceHost, refreshFile
   }
 }
 
-function beginWorkspaceOpenRequest(workspace: SessionWorkspaceState, itemId: string): object {
-  workspace.activeId = itemId;
-  return (workspace.openRequest = {});
-}
-
-function isCurrentWorkspaceOpenRequest(
-  state: SessionWorkspaceHost,
-  workspace: SessionWorkspaceState,
-  request: object,
-  itemId: string,
-): boolean {
-  return (
-    workspace.openRequest === request &&
-    isCurrentSessionWorkspace(state, workspace) &&
-    workspace.activeId === itemId
-  );
-}
-
 function openWorkspaceItem<T>(
   state: SessionWorkspaceHost,
   workspace: SessionWorkspaceState,
@@ -184,30 +167,38 @@ function openWorkspaceItem<T>(
   render: (result: T) => SidebarContent | null,
   missingMessage: string,
 ) {
-  const request = beginWorkspaceOpenRequest(workspace, itemId);
+  if (!state.client || !state.connected) {
+    return;
+  }
+  const request = { kind: "loading" } as const;
+  workspace.activeId = itemId;
+  // The Review selection owns completion; Files rows can change independently.
+  openSessionCheckoutSidebar(state, request);
+  const isCurrent = () =>
+    state.sidebarContent === request && isCurrentSessionWorkspace(state, workspace);
   void (async () => {
-    if (!state.client || !state.connected) {
-      return;
-    }
-    state.handleOpenSidebar(null);
     workspace.error = null;
     try {
       const result = await load();
       const content = result == null ? null : render(result);
       if (!content) {
-        if (isCurrentWorkspaceOpenRequest(state, workspace, request, itemId)) {
+        if (isCurrent()) {
           workspace.error = missingMessage;
         }
         return;
       }
-      if (isCurrentWorkspaceOpenRequest(state, workspace, request, itemId)) {
-        openSessionCheckoutSidebar(state, content);
+      if (isCurrent()) {
+        trackSessionCheckoutSidebar(content);
+        state.sidebarContent = content;
       }
     } catch (error) {
-      if (isCurrentWorkspaceOpenRequest(state, workspace, request, itemId)) {
+      if (isCurrent()) {
         workspace.error = formatUiError(error);
       }
     } finally {
+      if (state.sidebarContent === request) {
+        state.sidebarContent = null;
+      }
       requestWorkspaceUpdate(state);
     }
   })();

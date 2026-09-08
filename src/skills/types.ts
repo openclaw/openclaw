@@ -125,9 +125,10 @@ export type SkillEligibilityContext = {
   };
 };
 
-export const WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION = 4;
+export const WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION = 5;
 
 export type SkillSnapshot = {
+  librarySelections?: import("../../packages/gateway-protocol/src/schema/skill-library.js").SkillLibrarySelection[];
   prompt: string;
   /** Complete eligible sync identities, including skills hidden from the model prompt. */
   skills: Array<{
@@ -147,7 +148,7 @@ export type SkillSnapshot = {
   /** Present only when a session merges skills from distinct agent and execution roots. */
   skillRoots?: {
     agentWorkspaceDir: string;
-    executionSkillsDir: string;
+    executionWorkspaceDir: string;
   };
   version?: number;
   promptFormatVersion?: number;

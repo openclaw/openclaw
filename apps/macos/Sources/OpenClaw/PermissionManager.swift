@@ -1,11 +1,10 @@
 import AppKit
 import ApplicationServices
 import AVFoundation
-import CoreGraphics
 import CoreLocation
 import Foundation
-import Observation
 import OpenClawIPC
+import PeekabooAutomationKit
 import Speech
 import UserNotifications
 
@@ -24,6 +23,8 @@ enum CapabilityAuthorizationStatus: Equatable, Sendable {
 }
 
 enum PermissionManager {
+    @MainActor static let screenRecordingPermissions = PermissionsService()
+
     /// UNUserNotificationCenter.current() aborts with NSInternalInconsistencyException
     /// ("bundleProxyForCurrentProcess is nil") in unbundled processes such as
     /// `swift build` dev binaries. Every notification-center call must check this
@@ -103,10 +104,7 @@ enum PermissionManager {
             return granted && self.isNotificationAuthorized(status: updated.authorizationStatus)
         }
         if settings.authorizationStatus == .denied, interactive {
-            SystemSettingsURLSupport.openFirst([
-                "x-apple.systempreferences:com.apple.Notifications-Settings.extension",
-                "x-apple.systempreferences:com.apple.preference.notifications",
-            ])
+            SystemSettingsURLSupport.openFirst(SystemSettingsURLSupport.settingsCandidates(for: .notifications))
         }
         return false
     }
@@ -129,12 +127,12 @@ enum PermissionManager {
         return await MainActor.run { AXIsProcessTrusted() }
     }
 
+    @MainActor
     private static func ensureScreenRecording(interactive: Bool) async -> Bool {
-        let granted = ScreenRecordingProbe.isAuthorized()
-        if interactive, !granted {
-            await ScreenRecordingProbe.requestAuthorization()
+        if interactive, !self.screenRecordingPermissions.checkScreenRecordingPermission() {
+            self.screenRecordingPermissions.requestScreenRecordingPermission()
         }
-        return ScreenRecordingProbe.isAuthorized()
+        return await self.screenRecordingPermissions.checkScreenRecordingPermissionLive(forceProbe: interactive)
     }
 
     private static func ensureMicrophone(interactive: Bool) async -> Bool {
@@ -251,11 +249,10 @@ enum PermissionManager {
                 results[cap] = await MainActor.run { AXIsProcessTrusted() } ? .granted : .notGranted
 
             case .screenRecording:
-                if #available(macOS 10.15, *) {
-                    results[cap] = CGPreflightScreenCaptureAccess() ? .granted : .notGranted
-                } else {
-                    results[cap] = .granted
-                }
+                // CoreGraphics can retain a denial after a grant. Peekaboo retains confirmed grants
+                // and only unlocks live probes after an explicit permission request.
+                results[cap] = await self.screenRecordingPermissions.checkScreenRecordingPermissionLive()
+                    ? .granted : .notGranted
 
             case .microphone:
                 results[cap] = AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
@@ -417,87 +414,21 @@ final class LocationPermissionRequester: NSObject, CLLocationManagerDelegate {
 }
 
 @MainActor
-@Observable
 final class PermissionMonitor {
     static let shared = PermissionMonitor()
 
-    private(set) var status: [Capability: CapabilityAuthorizationStatus] = [:]
-
-    private var monitorTimer: Timer?
+    private var status: [Capability: CapabilityAuthorizationStatus] = [:]
     private var isChecking = false
-    private var registrations = 0
-    private var lastCheck: Date?
-    private let minimumCheckInterval: TimeInterval = 0.5
-
-    func register() {
-        self.registrations += 1
-        if self.registrations == 1 {
-            self.startMonitoring()
-        }
-    }
-
-    func unregister() {
-        guard self.registrations > 0 else { return }
-        self.registrations -= 1
-        if self.registrations == 0 {
-            self.stopMonitoring()
-        }
-    }
 
     func refreshNow() async {
-        await self.checkStatus(force: true)
-    }
-
-    private func startMonitoring() {
-        Task { await self.checkStatus(force: true) }
-
-        if ProcessInfo.processInfo.isRunningTests { return }
-        self.monitorTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
-            guard let self else { return }
-            Task { @MainActor in
-                await self.checkStatus(force: false)
-            }
-        }
-    }
-
-    private func stopMonitoring() {
-        self.monitorTimer?.invalidate()
-        self.monitorTimer = nil
-        self.lastCheck = nil
-    }
-
-    private func checkStatus(force: Bool) async {
         if self.isChecking { return }
-        let now = Date()
-        if !force, let lastCheck, now.timeIntervalSince(lastCheck) < self.minimumCheckInterval {
-            return
-        }
-
         self.isChecking = true
+        defer { self.isChecking = false }
 
         let latest = await PermissionManager.authorizationStatus()
         if latest != self.status {
             self.status = latest
             NotificationCenter.default.post(name: .openclawPermissionsChanged, object: nil)
-        }
-        self.lastCheck = Date()
-
-        self.isChecking = false
-    }
-}
-
-enum ScreenRecordingProbe {
-    static func isAuthorized() -> Bool {
-        if #available(macOS 10.15, *) {
-            return CGPreflightScreenCaptureAccess()
-        }
-        return true
-    }
-
-    @MainActor
-    static func requestAuthorization() async {
-        if #available(macOS 10.15, *) {
-            _ = CGRequestScreenCaptureAccess()
         }
     }
 }

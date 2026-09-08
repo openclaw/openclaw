@@ -40,10 +40,14 @@ export type SpawnSubagentParams = {
 };
 
 export type SpawnSubagentContext = SpawnedToolContext & {
+  onSpawnEffectsStart?: () => void;
   agentSessionKey?: string;
   requesterTurnRunId?: string;
   /** Separate key used only for completion routing, not sandbox policy. */
   completionOwnerKey?: string;
+  /** Active requester sandbox classification, preserved separately from the durable lineage key.
+   * Hidden native spawn derives sandbox admission from this when set, mirroring visible/ACP paths. */
+  sandboxed?: boolean;
   agentChannel?: string;
   agentAccountId?: string;
   agentTo?: string;
@@ -53,15 +57,17 @@ export type SpawnSubagentContext = SpawnedToolContext & {
   currentMessageId?: string | number;
   requesterAgentIdOverride?: string;
   requesterRunId?: string;
+  /** Private invocation fence, consumed only before registration transfers ownership. */
+  assertActive?: () => void;
 };
 
 export type SpawnSubagentResult = {
-  status: "accepted" | "forbidden" | "error";
   childSessionKey?: string;
   sessionKey?: string;
   runId?: string;
   mode?: SpawnSubagentMode;
   taskName?: string;
+  expectsCompletionMessage?: boolean;
   note?: string;
   /** Fully resolved model ref applied to the spawned child session. */
   resolvedModel?: string;
@@ -75,4 +81,7 @@ export type SpawnSubagentResult = {
     files: Array<{ name: string; bytes: number; sha256: string }>;
     relDir: string;
   };
-};
+} & (
+  | { status: "accepted"; context: SpawnSubagentContextMode }
+  | { status: "forbidden" | "error"; context?: never }
+);

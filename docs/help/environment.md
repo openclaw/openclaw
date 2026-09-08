@@ -28,15 +28,16 @@ The variables below are the supported environment contract for operators. Undocu
 
 ### Paths and instances
 
-| Variable                 | Purpose                                                           |
-| ------------------------ | ----------------------------------------------------------------- |
-| `OPENCLAW_HOME`          | Override the home directory used for OpenClaw path defaults.      |
-| `OPENCLAW_STATE_DIR`     | Override the mutable state directory.                             |
-| `OPENCLAW_CONFIG_PATH`   | Override the active config file path.                             |
-| `OPENCLAW_WORKSPACE_DIR` | Override the default agent workspace.                             |
-| `OPENCLAW_PROFILE`       | Select a named profile and its isolated defaults.                 |
-| `OPENCLAW_GIT_DIR`       | Override the source checkout used by development-channel updates. |
-| `OPENCLAW_INCLUDE_ROOTS` | Allow `$include` to resolve from additional roots.                |
+| Variable                  | Purpose                                                                                              |
+| ------------------------- | ---------------------------------------------------------------------------------------------------- |
+| `OPENCLAW_HOME`           | Override the home directory used for OpenClaw path defaults.                                         |
+| `OPENCLAW_STATE_DIR`      | Override the mutable state directory.                                                                |
+| `OPENCLAW_CONFIG_PATH`    | Override the active config file path.                                                                |
+| `OPENCLAW_WORKSPACE_DIR`  | Override the default agent workspace.                                                                |
+| `OPENCLAW_PROFILE`        | Select a named profile and its isolated defaults.                                                    |
+| `OPENCLAW_GIT_DIR`        | Override the source checkout used by development-channel updates.                                    |
+| `OPENCLAW_INCLUDE_ROOTS`  | Allow `$include` to resolve from additional roots.                                                   |
+| `OPENCLAW_SQLITE_LIBRARY` | Override the SQLite library for [Bun on macOS](/install/bun-compatibility#sqlite-library-selection). |
 
 ### Gateway and authentication
 
@@ -171,8 +172,12 @@ before login startup files run. Bash reads `/etc/profile` and the first availabl
 profile (`~/.bash_profile`, `~/.bash_login`, or `~/.profile`); many login profiles also source
 `~/.bashrc`. Keep those files quiet and bounded because their output, long-running work, or
 failures can affect OpenClaw startup. Other shells use noninteractive login startup (`-l -c`).
+The probe runs in its own session, detached from your terminal, so startup files get no job
+control and cannot take over the terminal that runs OpenClaw.
 This interactive Bash mode is limited to explicit shell env imports; automatic executable PATH
 discovery during ordinary Gateway commands remains noninteractive.
+
+Successful probes are cached. If a probe fails, the next shell environment or PATH lookup tries again.
 
 ## Exec shell snapshots
 
@@ -182,6 +187,13 @@ Values `false`, `no`, and `off` also disable it. Per-call `exec.env` values cann
 snapshots or redirect the snapshot cache.
 
 ## Runtime-injected env vars
+
+Gateway port-listener diagnostics and lock-owner identity probes run native utilities with
+a limited environment containing executable paths, OS bootstrap and account directories,
+temporary directories, and known locale and timezone settings. These children do not inherit provider credentials,
+application tokens, proxies, runtime injection variables, or arbitrary application settings.
+This boundary leaves the parent environment and normal agent, Gateway, and updater payload
+environments unchanged.
 
 OpenClaw also injects context markers into spawned child processes:
 
@@ -217,7 +229,13 @@ You can reference env vars directly in config string values using `${VAR_NAME}` 
 
 A missing or empty variable remains visible as `${VAR_NAME}` and emits a warning. Consumers that require the value treat it as unavailable. Use `$${VAR_NAME}` when the literal `${VAR_NAME}` text is intended.
 
-See [Configuration: Env var substitution](/gateway/configuration-reference#env-var-substitution) for full details.
+See [Configuration: Env var substitution](/gateway/config-secrets-env#env-var-substitution) for full details.
+
+This applies to string values in `openclaw.json` and in any file it pulls in through `$include`, because substitution runs over the config tree after includes resolve. OpenClaw's dotenv loader does not expand environment variable values. For example, `OPENCLAW_WORKSPACE_DIR=${XDG_CONFIG_HOME}/workspace` in a runtime `.env` file remains literal when OpenClaw loads it.
+
+Since OpenClaw does not expand these values, give path variables fully-resolved absolute paths. `OPENCLAW_WORKSPACE_DIR` does not expand a leading `~` either, because it goes straight to `path.resolve`. `OPENCLAW_STATE_DIR` and `OPENCLAW_CONFIG_PATH` do expand `~`. A workspace-local `.env` file drops the entire `OPENCLAW_*` namespace, since it is untrusted input, so set these variables in the trusted global `.env` at `$OPENCLAW_STATE_DIR/.env`, or `~/.openclaw/.env` by default.
+
+Docker Compose follows its own [interpolation rules](https://docs.docker.com/compose/how-tos/environment-variables/variable-interpolation/). In the bundled `docker-compose.yml`, `OPENCLAW_WORKSPACE_DIR` from the project `.env` selects the host directory for the workspace bind mount. The container-side `OPENCLAW_WORKSPACE_DIR` stays pinned to `/home/node/.openclaw/workspace`.
 
 ## Secret refs vs `${ENV}` strings
 

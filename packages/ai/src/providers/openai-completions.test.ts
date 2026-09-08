@@ -81,6 +81,9 @@ vi.mock("openai", () => {
   return { default: MockOpenAI };
 });
 
+import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
+import { makeUserMessage } from "../../../../test/helpers/user-message.js";
+import { createZeroUsage } from "../usage.test-support.js";
 import {
   streamOpenAICompletions,
   streamSimpleOpenAICompletions,
@@ -695,14 +698,7 @@ describe("OpenAI-compatible completions params", () => {
             api: model.api,
             provider: model.provider,
             model: model.id,
-            usage: {
-              input: 0,
-              output: 0,
-              cacheRead: 0,
-              cacheWrite: 0,
-              totalTokens: 0,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-            },
+            usage: createZeroUsage(),
             stopReason: "toolUse",
             content: [{ type: "toolCall", id: "call_plan", name: "update_plan", arguments: {} }],
             timestamp: 1,
@@ -749,14 +745,7 @@ describe("OpenAI-compatible completions params", () => {
             api: model.api,
             provider: model.provider,
             model: model.id,
-            usage: {
-              input: 0,
-              output: 0,
-              cacheRead: 0,
-              cacheWrite: 0,
-              totalTokens: 0,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-            },
+            usage: createZeroUsage(),
             stopReason: "toolUse",
             content: [{ type: "toolCall", id: "call_husk", name: "screenshot", arguments: {} }],
             timestamp: 1,
@@ -805,14 +794,7 @@ describe("OpenAI-compatible completions params", () => {
             api: model.api,
             provider: model.provider,
             model: model.id,
-            usage: {
-              input: 0,
-              output: 0,
-              cacheRead: 0,
-              cacheWrite: 0,
-              totalTokens: 0,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-            },
+            usage: createZeroUsage(),
             stopReason: "toolUse",
             content: [{ type: "toolCall", id: "call_shot", name: "screenshot", arguments: {} }],
             timestamp: 1,
@@ -847,7 +829,7 @@ describe("OpenAI-compatible completions params", () => {
     expect(capturedMessages?.find((message) => Array.isArray(message.content))).toMatchObject({
       role: "user",
       content: [
-        { type: "text", text: "Attached image(s) from tool result:" },
+        { type: "text", text: "Image(s) from tool result #1 (screenshot):" },
         { type: "image_url", image_url: { url: "data:image/png;base64,aW1n" } },
       ],
     });
@@ -1160,24 +1142,13 @@ describe("OpenAI-compatible completions params", () => {
       },
       {
         messages: [
-          {
-            role: "user",
-            content: "search first",
-            timestamp: 1,
-          },
+          makeUserMessage("search first", 1),
           {
             role: "assistant",
             api: "openai-completions",
             provider: "xiaomi",
             model: "mimo-v2.5-pro",
-            usage: {
-              input: 0,
-              output: 0,
-              cacheRead: 0,
-              cacheWrite: 0,
-              totalTokens: 0,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-            },
+            usage: createZeroUsage(),
             stopReason: "toolUse",
             content: [
               {
@@ -1189,19 +1160,8 @@ describe("OpenAI-compatible completions params", () => {
             ],
             timestamp: 2,
           },
-          {
-            role: "toolResult",
-            toolCallId: "call_search",
-            toolName: "search",
-            content: [{ type: "text", text: "ok" }],
-            isError: false,
-            timestamp: 3,
-          },
-          {
-            role: "user",
-            content: "continue",
-            timestamp: 4,
-          },
+          makeTextToolResult("call_search", "search", "ok", false, 3),
+          makeUserMessage("continue", 4),
         ],
       },
       {
@@ -1699,6 +1659,120 @@ describe("openai-completions stop-reason tool-call guard", () => {
     });
   });
 
+  it("replaces the stored function name on a same-id fragmented continuation", async () => {
+    // A stable tool-call id that repeats across deltas signals a continuation of
+    // the same call, so the latest nonempty function-name snapshot must replace
+    // the stored name — mirroring the pinned OpenAI SDK and the managed
+    // transport. Without this the first fragment (e.g. "get_") freezes and the
+    // call is published under a stale, partial name.
+    mockChunksRef.chunks = [
+      makeToolCallChunk("call_name", "get_", '{"city":'),
+      makeToolCallChunk("call_name", "weather", '"Paris"}'),
+      makeFinishChunk("tool_calls"),
+    ];
+
+    const stream = streamOpenAICompletions(model, context, { apiKey: "sk-test" });
+    const result = await stream.result();
+
+    expect(result.content).toContainEqual({
+      type: "toolCall",
+      id: "call_name",
+      name: "weather",
+      arguments: { city: "Paris" },
+    });
+  });
+
+  it("replaces the stored name when an index-resolved continuation omits the id", async () => {
+    // A continuation delta that re-uses the established index but omits the id
+    // is still the same tool call — the block was already resolved by index
+    // above, so an absent id is a continuation, not a conflicting identity. The
+    // latest nonempty function-name snapshot must replace the stored name,
+    // matching the pinned OpenAI SDK accumulator. Only an explicitly conflicting
+    // id (next test) keeps the first name.
+    mockChunksRef.chunks = [
+      makeToolCallChunk("call_A", "first", '{"city":'),
+      {
+        id: "chatcmpl-test",
+        choices: [
+          {
+            index: 0,
+            delta: {
+              tool_calls: [
+                { index: 0, function: { name: "second", arguments: '"Paris"}' }, type: "function" },
+              ],
+            },
+            finish_reason: "tool_calls",
+          },
+        ],
+      },
+    ];
+
+    const stream = streamOpenAICompletions(model, context, { apiKey: "sk-test" });
+    const result = await stream.result();
+
+    expect(result.content).toContainEqual({
+      type: "toolCall",
+      id: "call_A",
+      name: "second",
+      arguments: { city: "Paris" },
+    });
+  });
+
+  it("keeps the first name when a continuation carries a conflicting id", async () => {
+    // A continuation whose id explicitly conflicts with the established block
+    // id is not the same call, so in direct mode the first tool identity wins
+    // and the stored name is preserved.
+    mockChunksRef.chunks = [
+      makeToolCallChunk("call_A", "first", '{"city":'),
+      makeToolCallChunk("call_B", "second", '"Paris"}'),
+      makeFinishChunk("tool_calls"),
+    ];
+
+    const stream = streamOpenAICompletions(model, context, { apiKey: "sk-test" });
+    const result = await stream.result();
+
+    expect(result.content).toContainEqual({
+      type: "toolCall",
+      id: "call_A",
+      name: "first",
+      arguments: { city: "Paris" },
+    });
+  });
+
+  it("does not erase the stored name when a continuation carries an empty name", async () => {
+    // An empty function-name snapshot must not replace the stored name — the
+    // guard checks truthiness, so "" is skipped. This mirrors the pinned SDK
+    // (which only replaces on nonempty fn.name) and satisfies the issue's
+    // "empty-name continuation" assertion requirement.
+    mockChunksRef.chunks = [
+      makeToolCallChunk("call_name", "get_weather", '{"city":'),
+      {
+        id: "chatcmpl-test",
+        choices: [
+          {
+            index: 0,
+            delta: {
+              tool_calls: [
+                { index: 0, function: { name: "", arguments: '"Paris"}' }, type: "function" },
+              ],
+            },
+            finish_reason: "tool_calls",
+          },
+        ],
+      },
+    ];
+
+    const stream = streamOpenAICompletions(model, context, { apiKey: "sk-test" });
+    const result = await stream.result();
+
+    expect(result.content).toContainEqual({
+      type: "toolCall",
+      id: "call_name",
+      name: "get_weather",
+      arguments: { city: "Paris" },
+    });
+  });
+
   it("publishes post-tool text immediately and closes blocks in their original order", async () => {
     mockChunksRef.chunks = [
       makeToolCallChunk("call_1", "lookup", '{"value":1}'),
@@ -1722,7 +1796,9 @@ describe("openai-completions stop-reason tool-call guard", () => {
       {
         type: "text",
         text: "following text",
-        textSignature: '{"v":1,"id":"commentary-0","phase":"commentary"}',
+        textSignature: expect.stringMatching(
+          /^\{"v":1,"id":"commentary-0-[0-9a-f]{24}","phase":"commentary"\}$/u,
+        ),
       },
     ]);
   });
@@ -1795,7 +1871,9 @@ describe("openai-completions stop-reason tool-call guard", () => {
     expect(result.content[0]).toEqual({
       type: "text",
       text: "Use <",
-      textSignature: '{"v":1,"id":"commentary-0","phase":"commentary"}',
+      textSignature: expect.stringMatching(
+        /^\{"v":1,"id":"commentary-0-[0-9a-f]{24}","phase":"commentary"\}$/u,
+      ),
     });
     expect(result.content[1]).toMatchObject({ type: "toolCall", id: "call_1", name: "bash" });
   });

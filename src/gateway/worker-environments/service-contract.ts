@@ -3,8 +3,10 @@ import type { DevicePlacementRequirement } from "../../agents/harness/types.js";
 import type {
   WorkerDesktopApp,
   WorkerMachineOption,
+  WorkerOperatingSystem,
   WorkerProfile,
 } from "../../plugins/capability-provider.types.js";
+import type { DesktopObserveRequester } from "../desktop/observe-requester.js";
 import type {
   WorkerPlacementMoveSource,
   WorkerPlacementMoveTarget,
@@ -35,6 +37,7 @@ export function deriveEnvironmentIntent(idempotencyKey: string): {
 export type WorkerEnvironmentServiceRecord = {
   environmentId: string;
   providerId: string;
+  profileId: string;
   leaseId: string | null;
   nodeDeviceId?: string | null;
   sharedHost: boolean | null;
@@ -66,19 +69,25 @@ export type WorkerDesktopLaunchResult = {
 export type WorkerEnvironmentServiceContract = {
   list(): WorkerEnvironmentServiceRecord[];
   get(environmentId: string): WorkerEnvironmentServiceRecord | undefined;
-  supportsExecutionMode?(profileId: string, mode: WorkerPlacementExecutionMode): boolean;
+  inventoryVersion(): number;
+  supportsExecutionMode(profileId: string, mode: WorkerPlacementExecutionMode): boolean;
   listMachineOptions(profileId: string): Promise<readonly WorkerMachineOption[] | undefined>;
+  listOperatingSystems(profileId: string): Promise<readonly WorkerOperatingSystem[] | undefined>;
   create(
     profileId: string,
     idempotencyKey: string,
     machineClass?: string,
     executionMode?: WorkerPlacementExecutionMode,
+    projectPath?: string,
+    signal?: AbortSignal,
+    os?: string,
   ): Promise<WorkerEnvironmentServiceRecord>;
   destroy(environmentId: string): Promise<WorkerEnvironmentServiceRecord>;
   destroyUnattached(environmentId: string): Promise<WorkerEnvironmentServiceRecord>;
   observeDesktop(request: {
     environmentId: string;
     control: boolean;
+    requester?: DesktopObserveRequester;
   }): Promise<WorkerDesktopObserveResult>;
   launchDesktopApp(request: {
     environmentId: string;
@@ -94,15 +103,29 @@ export type WorkerPlacementDispatchRequest = {
   agentId: string;
   profileId: string;
   executionMode: WorkerPlacementExecutionMode;
+  /** Current dispatch caller's setup authority; never inherited by a new caller. */
+  runSetupScript?: boolean;
   devicePlacement?: DevicePlacementRequirement;
   idempotencyKey?: string;
   deviceId?: string;
   machineClass?: string;
+  os?: string;
   inheritedProfile?: {
     providerId: string;
     profileSnapshot: WorkerProfile;
   };
 };
+
+export type WorkerPlacementDispatchAdmission = <T>(
+  request: Pick<WorkerPlacementDispatchRequest, "sessionId" | "sessionKey" | "agentId">,
+  run: (signal?: AbortSignal) => Promise<T>,
+  authorize?: () => void,
+) => Promise<T>;
+
+/** Canonical admission rejected the session owner, not a caller or process cancellation. */
+export class WorkerPlacementAdmissionTargetError extends Error {
+  readonly code = "invalid_state";
+}
 
 export type WorkerPlacementMoveDestination = Pick<
   WorkerPlacementDispatchRequest,
@@ -111,6 +134,7 @@ export type WorkerPlacementMoveDestination = Pick<
   | "devicePlacement"
   | "deviceId"
   | "machineClass"
+  | "os"
   | "inheritedProfile"
 >;
 

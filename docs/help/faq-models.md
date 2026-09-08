@@ -55,8 +55,8 @@ troubleshooting, see the main [FAQ](/help/faq).
     - `openclaw configure --section model` (interactive)
     - edit `agents.defaults.model` in `~/.openclaw/openclaw.json` directly
 
-    Bare `/model <model>` keeps owner/admin configured-default persistence unless
-    you set the optional [model selection scope](/gateway/config-agents#agentsdefaultsmodelselectionscope).
+    Bare `/model <model>` changes only the current session, including for owners/admins,
+    unless you explicitly choose a broader [model selection scope](/gateway/config-agents/models#agentsdefaultsmodelselectionscope).
 
     For RPC edits, inspect with `config.schema.lookup` first (normalized
     path, shallow schema docs, child summaries), then prefer `config.patch`
@@ -92,11 +92,11 @@ troubleshooting, see the main [FAQ](/help/faq).
 
   <Accordion title="How do I switch models on the fly (without restarting)?">
     Send `/model <name> -s` as a standalone message to switch only this session.
-    Without a scope flag, the optional [model selection scope](/gateway/config-agents#agentsdefaultsmodelselectionscope)
-    applies; leaving it unset preserves owner/admin configured-default persistence. See
+    Without a scope flag, the optional [model selection scope](/gateway/config-agents/models#agentsdefaultsmodelselectionscope)
+    applies; leaving it unset keeps the change in the current session, including for owners/admins. See
     [Slash commands](/tools/slash-commands) for the
-    full command list, including the numbered picker (`/model`, `/model
-    list`, `/model 3`), `/model default -s` to clear only a session model override, and
+    full command list, including model browsing (`/model`, `/models`, `/model
+    list`), `/model default -s` to clear only a session model override, and
     `/model status` for endpoint/API-mode detail.
 
     Force a specific auth profile per session with `@profile`:
@@ -285,7 +285,7 @@ troubleshooting, see the main [FAQ](/help/faq).
 
     Then `/model sonnet -s` selects that model ID for the current session only.
     Owners/admins can use `-a` to also update the agent default or `-g` for the
-    shared global default. Bare selections follow the [model selection scope](/gateway/config-agents#agentsdefaultsmodelselectionscope).
+    shared global default. Bare selections follow the [model selection scope](/gateway/config-agents/models#agentsdefaultsmodelselectionscope).
 
   </Accordion>
 
@@ -323,16 +323,16 @@ troubleshooting, see the main [FAQ](/help/faq).
 
     **No API key found for provider after adding a new agent**
 
-    A new agent has an empty auth store — auth is per-agent, stored at:
+    A new agent can read shared auth profiles without copying them. Its
+    own profiles live in `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite`
+    and override the shared read-through base. See
+    [Auth credential semantics](/auth-credential-semantics#agent-copy-portability).
 
-    ```text
-    ~/.openclaw/agents/<agentId>/agent/auth-profiles.json
-    ```
-
-    Fix: run `openclaw agents add <id>` and configure auth in the wizard, or
-    copy only portable static `api_key`/`token` profiles from the main
-    agent's store. For OAuth, sign in from the new agent when it needs its
-    own account. See [Multi-Agent Routing](/concepts/multi-agent) for the
+    Fix: run `openclaw models auth login --provider <providerId> --agent <agentId>`
+    on the Gateway host when the agent needs its own credentials. You can also
+    configure auth when creating an agent with `openclaw agents add <id>`.
+    For OAuth, sign in separately when the agent needs its own account.
+    See [Multi-Agent Routing](/concepts/multi-agent) for the
     full `agentDir` reuse and credential-sharing rules — never reuse
     `agentDir` across agents.
 
@@ -391,16 +391,17 @@ troubleshooting, see the main [FAQ](/help/faq).
 
     **Fix checklist:**
 
-    - Confirm where profiles live — current:
-      `~/.openclaw/agents/<agentId>/agent/auth-profiles.json`; legacy:
-      `~/.openclaw/agent/*` (migrated by `openclaw doctor`).
+    - Confirm where profiles live: shared and agent-local SQLite auth stores.
+      Run `openclaw doctor --fix` if an older install still has
+      `auth-profiles.json`; it is a migration source, not the runtime store.
     - Confirm the Gateway loads your env var. `ANTHROPIC_API_KEY` set only in
       your shell won't reach a Gateway run via systemd/launchd — put it in
       `~/.openclaw/.env` or enable `env.shellEnv`.
-    - Confirm you're editing the right agent — multi-agent setups have
-      multiple `auth-profiles.json` files.
-    - Run `openclaw models status` to see configured models and provider
-      auth state.
+    - Confirm you're configuring the right agent — use `--agent <agentId>`
+      with `openclaw models auth login` to select its local store.
+    - Run `openclaw models status --agent <agentId>` for that agent's model
+      routes and auth state. A stored profile alone does not prove readiness;
+      see [Read status correctly](/cli/models#read-status-correctly).
 
     **For "No credentials found for profile anthropic" (no email suffix):**
 
@@ -445,12 +446,12 @@ Related: [/concepts/oauth](/concepts/oauth) (OAuth flows, token storage, multi-a
 
 <AccordionGroup>
   <Accordion title="What is an auth profile?">
-    A named credential record (OAuth or API key) tied to a provider, stored
-    at:
-
-    ```text
-    ~/.openclaw/agents/<agentId>/agent/auth-profiles.json
-    ```
+    A named credential record (API key, token, or OAuth) tied to a provider,
+    stored in SQLite. Agent-local profiles in
+    `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite` override the
+    shared read-through base in `~/.openclaw/state/openclaw.sqlite`.
+    Older installs keep the shared store in the main agent's database until
+    `openclaw doctor --fix` relocates it.
 
     Inspect saved profiles without dumping secrets: `openclaw models auth
     list` (optionally `--provider <id>` or `--json`). See
@@ -477,7 +478,8 @@ Related: [/concepts/oauth](/concepts/oauth) (OAuth flows, token storage, multi-a
     sibling model on the same provider; billing/disabled windows block the
     whole profile.
 
-    Set a per-agent order override (stored in that agent's `auth-state.json`):
+    Set a per-agent order override (stored in that agent's
+    `openclaw-agent.sqlite` database):
 
     ```bash
     # Defaults to the configured default agent (omit --agent)

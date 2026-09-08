@@ -1,6 +1,7 @@
 import type { CostUsageSummary } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import type { PanelRefreshStatus } from "../../components/panel-refresh-status.ts";
+import type { UsageRetryState } from "../../lib/incomplete-usage-retry.ts";
 // Control UI view renders usageTypes screen content.
 import type {
   CostUsageDailyEntry,
@@ -10,21 +11,24 @@ import type {
   SessionsUsageTotals,
   SessionUsageTimePoint,
 } from "./data-types.ts";
-import type { ProviderUsageSnapshot, UsageSnapshotResult } from "./request-usage-snapshot.ts";
+import type { ProviderUsageSnapshot } from "./request-usage-snapshot.ts";
 
 export type UsageSessionEntry = SessionsUsageEntry;
 export type UsageTotals = SessionsUsageTotals;
 export type CostDailyEntry = CostUsageDailyEntry;
 export type UsageAggregates = SessionsUsageResult["aggregates"];
 
-export type UsageTaskValue = {
-  epoch: object;
-  snapshot: UsageSnapshotResult;
+export type UsageContextDetail = {
+  weight: UsageSessionEntry["contextWeight"];
+  loading: boolean;
+  status: PanelRefreshStatus;
 };
 
-export type UsageDetailTaskValue<T> = {
-  sessionKey: string;
-  data: T;
+export type UsageJsonExport = {
+  totals: UsageTotals | null;
+  sessions: UsageSessionEntry[];
+  daily: CostDailyEntry[];
+  aggregates: UsageAggregates;
 };
 
 export type UsageRouteData = {
@@ -70,6 +74,7 @@ export type TimeSeriesPoint = SessionUsageTimePoint;
 
 type UsageDataState = {
   loading: boolean;
+  exporting: boolean;
   error: string | null;
   sessions: UsageSessionEntry[];
   agents: string[];
@@ -77,7 +82,7 @@ type UsageDataState = {
   totals: UsageTotals | null;
   aggregates: UsageAggregates | null;
   costDaily: CostDailyEntry[];
-  cacheStatus: SessionsUsageResult["cacheStatus"];
+  cacheRefresh: UsageRetryState;
   providerUsage: ProviderUsageSummary["providers"];
   /** The gateway never converged the refresh; the empty list is not an answer. */
   providerUsageStalled: boolean;
@@ -110,6 +115,7 @@ type UsageDisplayState = {
 };
 
 type UsageDetailState = {
+  context: UsageContextDetail;
   timeSeriesMode: "cumulative" | "per-turn";
   timeSeriesBreakdownMode: "total" | "by-type";
   timeSeries: { points: TimeSeriesPoint[] } | null;
@@ -149,6 +155,7 @@ type UsageCallbacks = {
     onClearQuery: () => void;
   };
   display: {
+    onExportJson: (data: UsageJsonExport) => void;
     onChartModeChange: (mode: "tokens" | "cost") => void;
     onDailyChartModeChange: (mode: "total" | "by-type") => void;
     onSessionSortChange: (sort: "tokens" | "cost" | "recent" | "messages" | "errors") => void;
@@ -168,8 +175,6 @@ type UsageCallbacks = {
     onTimeSeriesModeChange: (mode: "cumulative" | "per-turn") => void;
     onTimeSeriesBreakdownChange: (mode: "total" | "by-type") => void;
     onTimeSeriesCursorRangeChange: (start: number | null, end: number | null) => void;
-    onRetryTimeSeries: () => void;
-    onRetrySessionLogs: () => void;
   };
 };
 

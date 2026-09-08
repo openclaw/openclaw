@@ -200,7 +200,17 @@ export function assertTimeScheduleSatisfiable(
 export function assertMainSessionAgentId(
   job: Pick<CronJob, "sessionTarget" | "agentId" | "payload">,
   defaultAgentId: string | undefined,
+  patch?: CronJobPatch,
 ) {
+  // A changed default must not strand stored jobs. Revalidate newly authored bindings and kinds.
+  if (
+    patch &&
+    !("agentId" in patch) &&
+    !("sessionTarget" in patch) &&
+    patch.payload?.kind === undefined
+  ) {
+    return;
+  }
   if (job.sessionTarget !== "main") {
     return;
   }
@@ -307,7 +317,7 @@ export function cronPatchTouchesDeliveryResolution(patch: CronJobPatch): boolean
   );
 }
 
-export function hasConcreteFailureDestination(
+function hasConcreteFailureDestination(
   destination: CronDelivery["failureDestination"] | undefined,
 ): boolean {
   return Boolean(

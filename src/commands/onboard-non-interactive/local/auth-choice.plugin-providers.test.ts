@@ -1,19 +1,18 @@
 // Non-interactive plugin provider auth tests cover provider choice setup and runtime plugin install requirements.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
+import * as pluginEnable from "../../../plugins/enable.js";
 import { applyNonInteractivePluginProviderChoice } from "./auth-choice.plugin-providers.js";
 
 type ModelSelectionRuntimePluginsResult =
   | { ok: true; cfg: OpenClawConfig; codexInstalled: boolean }
   | { ok: false; message: string };
 const ensureModelSelectionRuntimePlugins = vi.hoisted(() =>
-  vi.fn(
-    async ({ cfg }: { cfg: OpenClawConfig }): Promise<ModelSelectionRuntimePluginsResult> => ({
-      ok: true,
-      cfg,
-      codexInstalled: false,
-    }),
-  ),
+  vi.fn(async ({ cfg }: { cfg: OpenClawConfig }): Promise<ModelSelectionRuntimePluginsResult> => ({
+    ok: true,
+    cfg,
+    codexInstalled: false,
+  })),
 );
 vi.mock("../../runtime-plugin-install.js", () => ({
   CODEX_RUNTIME_PLUGIN_ID: "codex",
@@ -160,6 +159,38 @@ async function applyProviderModelChoice(params: {
 }
 
 describe("applyNonInteractivePluginProviderChoice", () => {
+  it("requires capability consent before loading a disabled provider in noninteractive setup", async () => {
+    const config: OpenClawConfig = { plugins: { entries: { example: { enabled: false } } } };
+    resolveManifestProviderAuthChoice.mockReturnValue({ pluginId: "example" } as never);
+    const enable = vi
+      .spyOn(pluginEnable, "enablePluginWithCapabilityConsent")
+      .mockResolvedValueOnce({
+        config,
+        enabled: false,
+        pluginId: "example",
+        reason: "Plugin requires capability consent.",
+      });
+    const runtime = createRuntime();
+    try {
+      const result = await applyNonInteractivePluginProviderChoice({
+        nextConfig: config,
+        authChoice: "example-api-key",
+        opts: {},
+        runtime,
+        baseConfig: config,
+        target,
+        resolveApiKey: vi.fn(),
+        toApiKeyCredential: vi.fn(),
+      });
+      expect(result).toBeNull();
+      expectRuntimeErrorIncludes(runtime, "capability consent");
+      expect(resolvePluginProvidersCore).not.toHaveBeenCalled();
+      expect(resolveProviderPluginChoice).not.toHaveBeenCalled();
+    } finally {
+      enable.mockRestore();
+    }
+  });
+
   it.each(["nvidia", "google"])(
     "keeps %s provider model selection on the configured explicit-fleet agent",
     async (providerId) => {
@@ -209,12 +240,12 @@ describe("applyNonInteractivePluginProviderChoice", () => {
   it.each([
     { providerId: "lmstudio", modelRef: "lmstudio/qwen/qwen3-1.7b" },
     { providerId: "ollama", modelRef: "ollama/qwen3:8b" },
-  ])("auto-enables lean tools for verified $providerId onboarding", async (params) => {
+  ])("does not persist lean defaults for verified $providerId onboarding", async (params) => {
     const result = await applyProviderModelChoice(params);
 
     expect(result?.agents?.defaults?.model).toEqual({ primary: params.modelRef });
-    expect(result?.agents?.defaults?.experimental?.localModelLean).toBe(true);
-    expect(result?.wizard?.localModelLeanAutoModel).toBe(params.modelRef);
+    expect(result?.agents?.defaults?.experimental?.localModelLean).toBeUndefined();
+    expect(result?.wizard).toBeUndefined();
   });
 
   it.each([
@@ -234,28 +265,7 @@ describe("applyNonInteractivePluginProviderChoice", () => {
 
     expect(result?.agents?.defaults?.model).toEqual({ primary: params.modelRef });
     expect(result?.agents?.defaults?.experimental?.localModelLean).toBe(false);
-    expect(result?.wizard?.localModelLeanAutoModel).toBeUndefined();
-  });
-
-  it("lifts onboarding-owned lean tools after verified hosted provider selection", async () => {
-    const previousModel = "ollama/qwen3:8b";
-    const result = await applyProviderModelChoice({
-      providerId: "openai",
-      modelRef: "openai/gpt-5.6-luna",
-      nextConfig: {
-        wizard: { localModelLeanAutoModel: previousModel },
-        agents: {
-          defaults: {
-            model: { primary: previousModel },
-            experimental: { localModelLean: true },
-          },
-        },
-      },
-    });
-
-    expect(result?.agents?.defaults?.model).toEqual({ primary: "openai/gpt-5.6-luna" });
-    expect(result?.agents?.defaults?.experimental?.localModelLean).toBeUndefined();
-    expect(result?.wizard?.localModelLeanAutoModel).toBeUndefined();
+    expect(result?.wizard).toBeUndefined();
   });
 
   it("preserves explicitly enabled lean tools for verified hosted providers", async () => {
@@ -272,7 +282,7 @@ describe("applyNonInteractivePluginProviderChoice", () => {
     });
 
     expect(result?.agents?.defaults?.experimental?.localModelLean).toBe(true);
-    expect(result?.wizard?.localModelLeanAutoModel).toBeUndefined();
+    expect(result?.wizard).toBeUndefined();
   });
 
   it("loads plugin providers for provider-plugin auth choices", async () => {
@@ -857,31 +867,7 @@ describe("applyNonInteractivePluginProviderChoice", () => {
 
       expect(result?.agents?.defaults?.model).toEqual({ primary: modelRef });
       expect(result?.agents?.defaults?.experimental?.localModelLean).toBeUndefined();
-      expect(result?.wizard?.localModelLeanAutoModel).toBeUndefined();
-    },
-  );
-
-  it.each(["ollama/kimi-k2.5:cloud", "ollama/gpt-oss:120b-cloud"])(
-    "lifts onboarding-owned lean when Ollama switches to hosted model %s",
-    async (modelRef) => {
-      const previousModel = "ollama/qwen3:8b";
-      const result = await applyProviderModelChoice({
-        providerId: "ollama",
-        modelRef,
-        nextConfig: {
-          wizard: { localModelLeanAutoModel: previousModel },
-          agents: {
-            defaults: {
-              model: { primary: previousModel },
-              experimental: { localModelLean: true },
-            },
-          },
-        },
-      });
-
-      expect(result?.agents?.defaults?.model).toEqual({ primary: modelRef });
-      expect(result?.agents?.defaults?.experimental?.localModelLean).toBeUndefined();
-      expect(result?.wizard?.localModelLeanAutoModel).toBeUndefined();
+      expect(result?.wizard).toBeUndefined();
     },
   );
 
@@ -901,7 +887,7 @@ describe("applyNonInteractivePluginProviderChoice", () => {
       });
 
       expect(result?.agents?.defaults?.experimental?.localModelLean).toBe(localModelLean);
-      expect(result?.wizard?.localModelLeanAutoModel).toBeUndefined();
+      expect(result?.wizard).toBeUndefined();
     },
   );
 });

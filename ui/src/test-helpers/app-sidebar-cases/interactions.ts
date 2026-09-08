@@ -60,20 +60,20 @@ describe("AppSidebar context menu boundary", () => {
 });
 
 describe("AppSidebar multi-select", () => {
-  it("names session actions and routes menu hints through the shared tooltip", async () => {
+  it("uses generic pin labels and routes menu hints through the shared tooltip", async () => {
     const { sidebar } = await mountMultiSelect();
 
     for (const key of ["agent:main:a", "agent:main:b"]) {
       const row = sidebar.querySelector<HTMLElement>(`[data-session-key="${key}"]`);
       const label = row?.querySelector(".sidebar-recent-session__name")?.textContent?.trim();
+      const pin = row?.querySelector<HTMLElement>("[data-sidebar-session-pin]");
       const menu = row?.querySelector<HTMLElement>("[data-session-menu]");
       const tooltip = menu?.closest("openclaw-tooltip") as
         | (HTMLElement & { content: string; describe: boolean })
         | null;
       expect(label).toBeTruthy();
-      expect(row?.querySelector("[data-sidebar-session-pin]")?.getAttribute("aria-label")).toBe(
-        `Pin session: ${label}`,
-      );
+      expect(pin?.getAttribute("aria-label")).toBe("Pin session");
+      expect(pin?.getAttribute("title")).toBe("Pin session");
       expect(menu?.getAttribute("aria-label")).toBe(`Open session menu: ${label}`);
       expect(menu?.hasAttribute("title")).toBe(false);
       expect(tooltip?.content).toBe("Open session menu");
@@ -220,8 +220,8 @@ describe("AppSidebar multi-select", () => {
     await waitForFast(() => expect(harness.patchMany).toHaveBeenCalledOnce());
     expect(harness.patchMany).toHaveBeenCalledWith(
       [
-        { key: "agent:main:a", agentId: "main" },
-        { key: "agent:main:b", agentId: "main" },
+        { key: "agent:main:a", agentId: "main", expectedSessionId: "session:agent:main:a" },
+        { key: "agent:main:b", agentId: "main", expectedSessionId: "session:agent:main:b" },
       ],
       { unread: true },
     );
@@ -642,7 +642,11 @@ describe("AppSidebar catalog session rows", () => {
       };
       await menu.updateComplete;
       const items = menu.querySelectorAll<HTMLElement & { disabled: boolean }>("wa-dropdown-item");
-      expect(items).toHaveLength(2);
+      expect([...items].map((item) => item.getAttribute("value"))).toEqual([
+        "viewer",
+        "terminal",
+        "delete",
+      ]);
       expect(items[1]?.disabled).toBe(true);
       const menuButton = row.querySelector<HTMLElement>("[data-catalog-session-menu]");
       expect(menuButton).not.toBeNull();
@@ -670,13 +674,13 @@ describe("AppSidebar catalog session rows", () => {
         ["agent:main:main"],
       );
       (sidebar as unknown as { activeRouteId: string }).activeRouteId = "chat";
-      sidebar.sessionKey = "catalog:codex:gateway%3Alocal:thread-1";
+      sidebar.sessionKey = "agent:main:catalog:codex:gateway%3Alocal:thread-1";
       await sidebar.updateComplete;
 
       const active = sidebar.querySelectorAll(".sidebar-recent-session--active");
       expect(active).toHaveLength(1);
       expect(active[0]?.getAttribute("data-session-key")).toBe(
-        "catalog:codex:gateway%3Alocal:thread-1",
+        "agent:main:catalog:codex:gateway%3Alocal:thread-1",
       );
       expect(active[0]?.getAttribute("role")).toBe("listitem");
       expect(active[0]?.closest('[role="list"]')?.getAttribute("aria-label")).toBe("Local Codex");
@@ -691,13 +695,13 @@ describe("AppSidebar catalog session rows", () => {
       ]
         .filter((row) => !row.closest('[data-session-section^="catalog:"]'))
         .map((row) => row.getAttribute("data-session-key"));
-      expect(chatRows).not.toContain("catalog:codex:gateway%3Alocal:thread-1");
+      expect(chatRows).not.toContain(sidebar.sessionKey);
     } finally {
       vi.useRealTimers();
     }
   });
 
-  it("associates catalog running state with the session link description", async () => {
+  it("announces catalog running state through the leading ring", async () => {
     vi.useFakeTimers();
     try {
       const { sidebar } = await mountWithCatalog(
@@ -706,12 +710,14 @@ describe("AppSidebar catalog session rows", () => {
       );
       const row = sidebar.querySelector('[data-session-key*="thread-running"]');
       const link = row?.querySelector("a");
-      const state = row?.querySelector(".session-row-state");
+      const ring = row?.querySelector(".sidebar-session-indicator .session-glyph__ring");
 
-      expect(link?.getAttribute("aria-describedby")).toBe(state?.id);
+      expect(link?.hasAttribute("aria-describedby")).toBe(false);
       expect(link?.hasAttribute("title")).toBe(false);
-      expect(state?.querySelector('.session-run-spinner[aria-label="Active run"]')).not.toBeNull();
-      expect(state?.querySelector(".session-run-spinner")?.hasAttribute("title")).toBe(false);
+      expect(ring?.getAttribute("aria-label")).toBe("Active run");
+      expect(
+        row?.querySelector(".sidebar-recent-session__details-endcap .session-run-spinner"),
+      ).toBeNull();
     } finally {
       vi.useRealTimers();
     }

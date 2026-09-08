@@ -2,11 +2,18 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { ArchiveLimitError } from "openclaw/plugin-sdk/archive";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { runCommandBuffered } from "openclaw/plugin-sdk/process-runtime";
 import { root as fsRoot } from "openclaw/plugin-sdk/security-runtime";
+import { inspectDirFetchArchive } from "../shared/dir-fetch-archive.js";
+import {
+  DIR_FETCH_DEFAULT_MAX_BYTES,
+  DIR_FETCH_HARD_MAX_BYTES,
+  DIR_FETCH_MAX_ENTRIES,
+} from "../shared/dir-fetch-limits.js";
 import {
   matchesFileIdentity,
-  readPathBinding,
   type FileIdentity,
   type PathBinding,
 } from "../shared/path-binding.js";
@@ -14,18 +21,13 @@ import { createTarArchive } from "./dir-fetch-archive.js";
 import {
   classifyFsSafeReadError,
   readAbsolutePath,
-  rejectCanonicalPathChange,
-  resolveCanonicalReadPath,
+  resolveBoundReadDirectory,
   statRequiredDirectory,
 } from "./path-errors.js";
-
-const DIR_FETCH_HARD_MAX_BYTES = 16 * 1024 * 1024;
-const DIR_FETCH_DEFAULT_MAX_BYTES = 8 * 1024 * 1024;
 
 type DirFetchParams = {
   path?: unknown;
   maxBytes?: unknown;
-  includeDotfiles?: unknown;
   followSymlinks?: unknown;
   preflightOnly?: unknown;
   expectedCanonicalPath?: unknown;
@@ -98,34 +100,6 @@ async function preflightDu(dirPath: string, maxBytes: number): Promise<boolean> 
   return match ? Number.parseInt(match[0], 10) <= heuristicKb : true;
 }
 
-async function listTarEntries(tarBuffer: Buffer): Promise<string[] | null> {
-  const result = await runCommandBuffered(["tar", "-tzf", "-"], {
-    discardOutput: { stderr: true },
-    input: tarBuffer,
-    maxOutputBytes: { stdout: 32 * 1024 * 1024, stderr: 64 * 1024 },
-    timeoutMs: 10_000,
-  }).catch(() => null);
-  if (!result || result.termination !== "exit" || result.code !== 0) {
-    return null;
-  }
-  const entries: string[] = [];
-  const output = result.stdout.toString("utf8");
-  let start = 0;
-  while (start <= output.length) {
-    const end = output.indexOf("\n", start);
-    const rawLine = output.slice(start, end === -1 ? output.length : end);
-    const line = rawLine.replace(/\\/gu, "/").replace(/^\.\//u, "").replace(/\/$/u, "");
-    if (line.length > 0) {
-      entries.push(line);
-    }
-    if (end === -1) {
-      break;
-    }
-    start = end + 1;
-  }
-  return entries.toSorted((left, right) => left.localeCompare(right));
-}
-
 async function listTreeEntries(
   root: string,
   maxEntries: number,
@@ -166,57 +140,27 @@ export async function handleDirFetch(params: DirFetchParams): Promise<DirFetchRe
   }
 
   const maxBytes = clampMaxBytes(params.maxBytes);
-  const includeDotfiles = params.includeDotfiles === true;
   const followSymlinks = params.followSymlinks === true;
   const preflightOnly = params.preflightOnly === true;
 
-  const canonical = await resolveCanonicalReadPath({
+  const directory = await resolveBoundReadDirectory({
     requestedPath,
     followSymlinks,
     classifyError: classifyFsError,
     notFoundMessage: "directory not found",
+    expectedCanonicalPath: params.expectedCanonicalPath,
+    expectedBinding: params.expectedBinding,
   });
-  if (typeof canonical !== "string") {
-    return canonical;
-  }
-
-  const canonicalPathChange = rejectCanonicalPathChange(params.expectedCanonicalPath, canonical);
-  if (canonicalPathChange) {
-    return canonicalPathChange;
-  }
-
-  const directory = await statRequiredDirectory(canonical, classifyFsError);
   if (!directory.ok) {
     return directory;
   }
-  const expectedBinding = readPathBinding(params.expectedBinding);
-  if (params.expectedBinding !== undefined && expectedBinding?.kind !== "existing") {
-    return {
-      ok: false,
-      code: "CANONICAL_PATH_CHANGED",
-      message: "filesystem identity differs from the authorized target",
-      canonicalPath: canonical,
-    };
-  }
-  if (
-    expectedBinding?.kind === "existing" &&
-    (expectedBinding.device !== directory.identity.device ||
-      expectedBinding.inode !== directory.identity.inode)
-  ) {
-    return {
-      ok: false,
-      code: "CANONICAL_PATH_CHANGED",
-      message: "filesystem identity differs from the authorized target",
-      canonicalPath: canonical,
-    };
-  }
-  const boundIdentity: FileIdentity =
-    expectedBinding?.kind === "existing" ? expectedBinding : directory.identity;
+  const { canonicalPath: canonical, identity } = directory;
 
+  let preflightEntries: string[] | undefined;
   if (preflightOnly) {
     let entries: string[] | "TOO_MANY";
     try {
-      entries = await listTreeEntries(canonical, 5000, boundIdentity);
+      entries = await listTreeEntries(canonical, DIR_FETCH_MAX_ENTRIES, identity);
     } catch (err) {
       const errorCode = err && typeof err === "object" && "code" in err ? err.code : undefined;
       const code =
@@ -237,65 +181,8 @@ export async function handleDirFetch(params: DirFetchParams): Promise<DirFetchRe
       };
     }
 
-    const tarBuffer = await createTarArchive(
-      canonical,
-      canonical,
-      boundIdentity.device,
-      boundIdentity.inode,
-      maxBytes,
-    );
-    if (tarBuffer === "TOO_LARGE") {
-      return {
-        ok: false,
-        code: "TREE_TOO_LARGE",
-        message: `tarball exceeded ${maxBytes} byte limit during preflight`,
-        canonicalPath: canonical,
-      };
-    }
-    if (tarBuffer === "TIMEOUT") {
-      return {
-        ok: false,
-        code: "READ_ERROR",
-        message: "tar command exceeded 60s wall-clock timeout (slow filesystem or symlink loop?)",
-        canonicalPath: canonical,
-      };
-    }
-    if (tarBuffer === "CANONICAL_PATH_CHANGED") {
-      return {
-        ok: false,
-        code: "CANONICAL_PATH_CHANGED",
-        message: "canonical path differs from the authorized target",
-        canonicalPath: canonical,
-      };
-    }
-    if (tarBuffer === "ERROR") {
-      const currentDirectory = await statRequiredDirectory(canonical, classifyFsError);
-      if (!currentDirectory.ok) {
-        return currentDirectory;
-      }
-      return {
-        ok: false,
-        code: "READ_ERROR",
-        message: "tar command failed",
-        canonicalPath: canonical,
-      };
-    }
-    return {
-      ok: true,
-      path: canonical,
-      tarBase64: "",
-      tarBytes: 0,
-      sha256: "",
-      fileCount: entries.length,
-      entries,
-      preflightOnly: true,
-      binding: { kind: "existing", ...directory.identity },
-    };
-  }
-
-  // Preflight size check using du
-  const withinBudget = await preflightDu(canonical, maxBytes);
-  if (!withinBudget) {
+    preflightEntries = entries;
+  } else if (!(await preflightDu(canonical, maxBytes))) {
     return {
       ok: false,
       code: "TREE_TOO_LARGE",
@@ -304,24 +191,12 @@ export async function handleDirFetch(params: DirFetchParams): Promise<DirFetchRe
     };
   }
 
-  // Build tar args. Shell out to /usr/bin/tar for portability.
-  // -cz: create + gzip
-  // -C <dir>: change to directory so paths in archive are relative
-  // .: include everything from that directory
-  // v1: includeDotfiles is accepted in the API but not enforced. BSD tar's
-  // --exclude pattern matching is unreliable for dotfiles (every plausible
-  // pattern except "*/.*" collapses the archive on macOS). Reliable filtering
-  // requires a `find ! -name '.*' | tar -T -` pipeline; deferred to v2.
-  // For now we always archive everything in the directory.
-  void includeDotfiles;
-  // Capture tar output with a hard byte cap and a wall-clock timeout.
-  // SIGTERM if the byte cap is exceeded; SIGKILL if the timeout fires
-  // (covers tar hanging on a slow filesystem or symlink loop).
+  // Preflight must build the capped archive so approval cannot accept an oversized tree.
   const tarBuffer = await createTarArchive(
     canonical,
     canonical,
-    boundIdentity.device,
-    boundIdentity.inode,
+    identity.device,
+    identity.inode,
     maxBytes,
   );
 
@@ -329,7 +204,7 @@ export async function handleDirFetch(params: DirFetchParams): Promise<DirFetchRe
     return {
       ok: false,
       code: "TREE_TOO_LARGE",
-      message: `tarball exceeded ${maxBytes} byte limit mid-stream`,
+      message: `tarball exceeded ${maxBytes} byte limit ${preflightOnly ? "during preflight" : "mid-stream"}`,
       canonicalPath: canonical,
     };
   }
@@ -350,6 +225,14 @@ export async function handleDirFetch(params: DirFetchParams): Promise<DirFetchRe
     };
   }
   if (tarBuffer === "ERROR") {
+    // Preflight preserves filesystem error classification after a tar race;
+    // actual fetch reports the archive failure without another path lookup.
+    if (preflightOnly) {
+      const currentDirectory = await statRequiredDirectory(canonical, classifyFsError);
+      if (!currentDirectory.ok) {
+        return currentDirectory;
+      }
+    }
     return {
       ok: false,
       code: "READ_ERROR",
@@ -358,15 +241,31 @@ export async function handleDirFetch(params: DirFetchParams): Promise<DirFetchRe
     };
   }
 
+  if (preflightEntries) {
+    return {
+      ok: true,
+      path: canonical,
+      tarBase64: "",
+      tarBytes: 0,
+      sha256: "",
+      fileCount: preflightEntries.length,
+      entries: preflightEntries,
+      preflightOnly: true,
+      binding: { kind: "existing", ...identity },
+    };
+  }
+
   const sha256 = crypto.createHash("sha256").update(tarBuffer).digest("hex");
   const tarBase64 = tarBuffer.toString("base64");
   const tarBytes = tarBuffer.byteLength;
-  const entries = await listTarEntries(tarBuffer);
-  if (entries === null) {
+  let entries: string[];
+  try {
+    entries = await inspectDirFetchArchive(tarBuffer, 10_000);
+  } catch (error) {
     return {
       ok: false,
-      code: "READ_ERROR",
-      message: "tar entry listing failed",
+      code: error instanceof ArchiveLimitError ? "TREE_TOO_LARGE" : "READ_ERROR",
+      message: `archive inspection failed: ${formatErrorMessage(error)}`,
       canonicalPath: canonical,
     };
   }
@@ -379,6 +278,6 @@ export async function handleDirFetch(params: DirFetchParams): Promise<DirFetchRe
     sha256,
     fileCount: entries.length,
     entries,
-    binding: { kind: "existing", ...directory.identity },
+    binding: { kind: "existing", ...identity },
   };
 }

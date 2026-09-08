@@ -191,7 +191,11 @@ function createHarness(params?: {
   const runAuthFlow: RunAuthFlow | undefined =
     params?.runAuthFlow ??
     (params?.opts?.local
-      ? (vi.fn().mockResolvedValue({ exitCode: 0, signal: null }) as unknown as RunAuthFlow)
+      ? (vi.fn().mockResolvedValue({
+          exitCode: 0,
+          signal: null,
+          commandArgv: '["codex","login"]',
+        }) as unknown as RunAuthFlow)
       : undefined);
   const state = {
     agentDefaultId: params?.agentDefaultId ?? "main",
@@ -426,6 +430,36 @@ describe("tui command handlers", () => {
     expect(harness.openOverlay).toHaveBeenCalledTimes(2);
     expect(harness.closeOverlay).toHaveBeenCalledExactlyOnceWith(harness.overlayHandle);
   });
+
+  it.each([
+    { command: "/models", value: "fixture/model" },
+    { command: "/sessions", value: "agent:main:other" },
+    { command: "/agents", value: "other" },
+  ])(
+    "consumes $command selection before its asynchronous action finishes",
+    async ({ command, value }) => {
+      const pending = createDeferred();
+      const action = vi.fn(() => pending.promise);
+      const harness = createHarness({
+        listModels: vi.fn().mockResolvedValue([{ provider: "fixture", id: "model" }]),
+        listSessions: vi.fn().mockResolvedValue({ sessions: [{ key: "agent:main:other" }] }),
+        agents: [{ id: "main" }, { id: "other" }],
+        patchSession: action,
+        setSession: action,
+      });
+      await harness.handleCommand(command);
+      const selector = firstMockArg(harness.openOverlay, "openOverlay") as SelectableOverlay;
+
+      selector.onSelect?.({ value });
+      expect(harness.closeOverlay).toHaveBeenCalledExactlyOnceWith(harness.overlayHandle);
+      selector.onSelect?.({ value });
+      expect(action).toHaveBeenCalledOnce();
+
+      pending.resolve();
+      await flushAsyncSelect();
+      expect(harness.closeOverlay).toHaveBeenCalledOnce();
+    },
+  );
 
   it.each([
     {
@@ -1110,6 +1144,7 @@ describe("tui command handlers", () => {
     const { handleCommand, getGatewayStatus, addSystem, addUser, sendChat } = createHarness({
       getGatewayStatus: vi.fn().mockResolvedValue({
         runtimeVersion: "1.2.3",
+        channelSummary: ["Telegram: not configured"],
         sessions: { count: 2, defaults: { model: "gpt-5.4", contextTokens: 200000 } },
       }),
     });
@@ -1121,6 +1156,7 @@ describe("tui command handlers", () => {
     expect(sendChat).not.toHaveBeenCalled();
     expect(addSystem).toHaveBeenCalledWith("Gateway status");
     expect(addSystem).toHaveBeenCalledWith("Version: 1.2.3");
+    expect(addSystem).toHaveBeenCalledWith("  Telegram: not configured");
   });
 
   it("returns to OpenClaw with an optional request", async () => {
@@ -2079,6 +2115,7 @@ describe("tui command handlers", () => {
         });
         const editor = {
           getText: vi.fn(() => ""),
+          getExpandedText: vi.fn(() => ""),
           setText: vi.fn(),
           addToHistory: vi.fn(),
         };
@@ -3130,7 +3167,11 @@ describe("tui command handlers", () => {
 
   it("runs /auth through the local auth flow and refreshes session info", async () => {
     const refreshSessionInfo = vi.fn().mockResolvedValue(undefined);
-    const runAuthFlow = vi.fn().mockResolvedValue({ exitCode: 0, signal: null });
+    const runAuthFlow = vi.fn().mockResolvedValue({
+      exitCode: 0,
+      signal: null,
+      commandArgv: '["codex","login"]',
+    });
     const { handleCommand, addSystem, setActivityStatus } = createHarness({
       opts: { local: true },
       refreshSessionInfo,
@@ -3148,6 +3189,25 @@ describe("tui command handlers", () => {
     expect(setActivityStatus).toHaveBeenLastCalledWith("idle");
   });
 
+  it("shows the failed auth command and a safe terminal retry", async () => {
+    const runAuthFlow = vi.fn().mockResolvedValue({
+      exitCode: 1,
+      signal: null,
+      commandArgv: '["codex","login"]',
+    });
+    const { handleCommand, addSystem, setActivityStatus } = createHarness({
+      opts: { local: true },
+      runAuthFlow,
+    });
+
+    await handleCommand("/auth openai");
+
+    expect(addSystem).toHaveBeenCalledWith(
+      'auth flow failed (exit 1) — command argv: ["codex","login"]; retry provider login in a regular terminal to see its output',
+    );
+    expect(setActivityStatus).toHaveBeenLastCalledWith("error");
+  });
+
   it("rejects /auth in non-local mode", async () => {
     const { handleCommand, addSystem } = createHarness();
 
@@ -3157,7 +3217,11 @@ describe("tui command handlers", () => {
   });
 
   it("blocks /auth while an optimistic run is still pending", async () => {
-    const runAuthFlow = vi.fn().mockResolvedValue({ exitCode: 0, signal: null });
+    const runAuthFlow = vi.fn().mockResolvedValue({
+      exitCode: 0,
+      signal: null,
+      commandArgv: '["codex","login"]',
+    });
     const { handleCommand, addSystem } = createHarness({
       opts: { local: true },
       pendingSubmit: {

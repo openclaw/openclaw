@@ -2,6 +2,7 @@
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  buildHuggingfaceProvider,
   discoverHuggingfaceModels,
   HUGGINGFACE_MODEL_CATALOG,
   isHuggingfacePolicyLocked,
@@ -12,21 +13,25 @@ function stubAbortSignalTimeout() {
   return vi.spyOn(AbortSignal, "timeout").mockReturnValue(controller.signal);
 }
 
-function responseFromReader(reader: ReadableStreamDefaultReader<Uint8Array>): Response {
-  return {
-    ok: true,
-    status: 200,
-    headers: new Headers({ "Content-Type": "application/json" }),
-    body: { getReader: () => reader },
-  } as Response;
-}
-
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
 
 describe("huggingface models", () => {
+  it.each([503, 200])(
+    "preserves the public advisory builder for HTTP %s with no rows",
+    async (status) => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => Response.json({ data: [] }, { status })),
+      );
+      await expect(buildHuggingfaceProvider("synthetic-key")).resolves.toMatchObject({
+        models: HUGGINGFACE_MODEL_CATALOG,
+      });
+    },
+  );
+
   it("does not advertise the retired Llama 3.3 Turbo route", () => {
     expect(HUGGINGFACE_MODEL_CATALOG.map((model) => model.id)).not.toContain(
       "meta-llama/Llama-3.3-70B-Instruct-Turbo",
@@ -222,8 +227,9 @@ describe("huggingface models", () => {
       ),
     );
 
-    await discoverHuggingfaceModels("hf_test_token");
-
+    await expect(
+      discoverHuggingfaceModels("hf_test_token", undefined, { discoveryMode: "strict" }),
+    ).rejects.toMatchObject({ status: 500 });
     expect(timeoutSpy).toHaveBeenCalledWith(30_000);
   });
 
@@ -237,7 +243,11 @@ describe("huggingface models", () => {
       ),
     );
 
-    await discoverHuggingfaceModels("hf_test_token", 25_000);
+    await expect(
+      discoverHuggingfaceModels("hf_test_token", 25_000, { discoveryMode: "strict" }),
+    ).rejects.toMatchObject({
+      status: 500,
+    });
 
     expect(timeoutSpy).toHaveBeenCalledWith(25_000);
   });
@@ -252,12 +262,16 @@ describe("huggingface models", () => {
       ),
     );
 
-    await discoverHuggingfaceModels("hf_test_token", Number.MAX_SAFE_INTEGER);
+    await expect(
+      discoverHuggingfaceModels("hf_test_token", Number.MAX_SAFE_INTEGER, {
+        discoveryMode: "strict",
+      }),
+    ).rejects.toMatchObject({ status: 500 });
 
     expect(timeoutSpy).toHaveBeenCalledWith(MAX_TIMER_TIMEOUT_MS);
   });
 
-  it("cancels the response body before falling back after an HTTP error", async () => {
+  it("cancels the response body before propagating an HTTP error", async () => {
     stubAbortSignalTimeout();
     const response = new Response("unavailable", { status: 503 });
     const cancel = vi.spyOn(response.body!, "cancel");
@@ -266,61 +280,52 @@ describe("huggingface models", () => {
       vi.fn(async () => response),
     );
 
-    const models = await discoverHuggingfaceModels("hf_test_token");
-
-    expect(models.map((model) => model.id)).toEqual(
-      HUGGINGFACE_MODEL_CATALOG.map((model) => model.id),
-    );
+    await expect(
+      discoverHuggingfaceModels("hf_test_token", undefined, { discoveryMode: "strict" }),
+    ).rejects.toMatchObject({ status: 503 });
     expect(cancel).toHaveBeenCalledTimes(1);
   });
 
-  it("falls back to the static catalog when the discovery response exceeds the byte cap", async () => {
+  it("propagates discovery response overflow after releasing the reader", async () => {
     const chunk = new Uint8Array(1024 * 1024);
-    const read = vi.fn(async () => ({ done: false as const, value: chunk }));
+    const pull = vi.fn((controller: ReadableStreamDefaultController<Uint8Array>) => {
+      controller.enqueue(chunk);
+    });
     const cancel = vi.fn(async () => undefined);
-    const releaseLock = vi.fn();
-    const reader = {
-      read,
-      cancel,
-      releaseLock,
-    } as unknown as ReadableStreamDefaultReader<Uint8Array>;
+    // Disable prefetch so each pull records a chunk requested by the bounded reader.
+    const response = new Response(new ReadableStream({ pull, cancel }, { highWaterMark: 0 }), {
+      headers: { "Content-Type": "application/json" },
+    });
     vi.stubGlobal(
       "fetch",
-      vi.fn(async () => responseFromReader(reader)),
+      vi.fn(async () => response),
     );
 
-    const models = await discoverHuggingfaceModels("hf_test_token");
-
-    expect(models.map((m) => m.id)).toEqual(HUGGINGFACE_MODEL_CATALOG.map((m) => m.id));
+    await expect(
+      discoverHuggingfaceModels("hf_test_token", undefined, { discoveryMode: "strict" }),
+    ).rejects.toThrow("Live model catalog response exceeded");
     expect(cancel).toHaveBeenCalledTimes(1);
-    expect(releaseLock).toHaveBeenCalledTimes(1);
-    expect(read).toHaveBeenCalledTimes(5);
+    expect(response.body?.locked).toBe(false);
+    expect(response.bodyUsed).toBe(true);
+    expect(pull).toHaveBeenCalledTimes(5);
   });
 
   it("parses a valid bounded discovery response", async () => {
     const modelId = "test-org/test-model";
     const body = new TextEncoder().encode(JSON.stringify({ data: [{ id: modelId }] }));
-    const read = vi
-      .fn()
-      .mockResolvedValueOnce({ done: false, value: body })
-      .mockResolvedValueOnce({ done: true, value: undefined });
-    const cancel = vi.fn(async () => undefined);
-    const releaseLock = vi.fn();
-    const reader = {
-      read,
-      cancel,
-      releaseLock,
-    } as unknown as ReadableStreamDefaultReader<Uint8Array>;
+    const response = new Response(body, { headers: { "Content-Type": "application/json" } });
+    const cancel = vi.spyOn(response.body!, "cancel");
     vi.stubGlobal(
       "fetch",
-      vi.fn(async () => responseFromReader(reader)),
+      vi.fn(async () => response),
     );
 
     const models = await discoverHuggingfaceModels("hf_test_token");
 
     expect(models.some((model) => model.id === modelId)).toBe(true);
     expect(cancel).not.toHaveBeenCalled();
-    expect(releaseLock).toHaveBeenCalledTimes(1);
+    expect(response.body?.locked).toBe(false);
+    expect(response.bodyUsed).toBe(true);
   });
 
   describe("isHuggingfacePolicyLocked", () => {

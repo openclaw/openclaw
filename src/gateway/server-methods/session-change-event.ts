@@ -1,5 +1,6 @@
 // Shared sessions.changed broadcaster for gateway RPC and chat-command mutations.
 import { parseAgentSessionKey } from "../../routing/session-key.js";
+import { bumpGatewayAccessRevision } from "../gateway-access-revision.js";
 import { hasSessionChangeReceivers } from "../session-change-receivers.js";
 import { buildGatewaySessionSnapshot } from "../session-event-payload.js";
 import {
@@ -14,6 +15,7 @@ import type { GatewayRequestContext } from "./types.js";
 
 type SessionChangedPayload = {
   sessionKey?: string;
+  sessionId?: string;
   agentId?: string;
   reason: string;
   compacted?: boolean;
@@ -25,6 +27,7 @@ type SessionChangeContext = Pick<
   | "chatAbortControllers"
   | "getRuntimeConfig"
   | "getSessionEventSubscriberConnIds"
+  | "mentionInbox"
 >;
 
 type PendingSessionChange = {
@@ -76,7 +79,9 @@ function broadcastSessionsChanged(
     ...(eventAgentId ? { agentId: eventAgentId } : {}),
     ts: Date.now(),
   };
+  // A deletion describes the removed generation, never the row now occupying its key.
   if (
+    payload.reason === "delete" ||
     !payload.sessionKey ||
     !routingAgentId ||
     (!eventAgentId && !compatibilityOwnerAgentId && !parseAgentSessionKey(payload.sessionKey))
@@ -106,7 +111,6 @@ function broadcastSessionsChanged(
               sessionRow,
               agentId: eventAgentId,
               activeRunState,
-              status: activeRunState?.active ? (activeRunState.status ?? "running") : undefined,
             }),
           }
         : {}),
@@ -143,12 +147,22 @@ export function flushPendingSessionsChangedEvents(context?: object): void {
   }
 }
 
-export function emitSessionsChanged(context: SessionChangeContext, payload: SessionChangedPayload) {
+export function emitSessionsChanged(
+  context: SessionChangeContext,
+  payload: SessionChangedPayload,
+  options: { accessChanged?: boolean } = {},
+) {
   // This counter is the sessions.list projection fence: every mutation advances it
   // synchronously, before event coalescing, so work started on an older value is never
   // joined or cached by a request that begins after the mutation.
   sessionsMutationVersions.set(context, readSessionsMutationVersion(context) + 1);
+  // Only a committed producer may certify unchanged access; unknown changes stay conservative.
+  if (options.accessChanged !== false) {
+    bumpGatewayAccessRevision();
+  }
   invalidateSessionSharingSnapshot(payload.sessionKey);
+  // Inbox subscriptions are independent of session-list subscriptions, including a closed sidebar.
+  context.mentionInbox?.invalidate();
   const connIds = context.getSessionEventSubscriberConnIds();
   if (!hasSessionChangeReceivers(connIds)) {
     return;

@@ -1,6 +1,7 @@
 // Ollama provider module implements model/runtime integration.
 import { createHash } from "node:crypto";
 import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
+import { LiveModelCatalogHttpError } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import {
   isCloudModelRef,
@@ -9,6 +10,7 @@ import {
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-onboard";
 import { fetchWithSsrFGuard, type LookupFn } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
+  isOllamaCloudOrigin,
   OLLAMA_CLOUD_DEFAULT_MODELS,
   OLLAMA_DEFAULT_BASE_URL,
   OLLAMA_DEFAULT_CONTEXT_WINDOW,
@@ -102,7 +104,8 @@ export const mergeOllamaModelShowInfo = (
   const incomplete =
     info.capabilities === undefined &&
     model.capabilities !== undefined &&
-    Boolean(model.remote_host || model.remote_model || isOllamaCloudModel(model.name));
+    isOllamaRemoteModel(model) &&
+    !isOllamaEmbeddingOnlyModel(model);
   return {
     ...model,
     ...info,
@@ -128,6 +131,7 @@ type OllamaModelRequestOptions = {
   apiKey?: string;
   timeoutMs?: number;
   signal?: AbortSignal;
+  discoveryMode?: "strict";
 };
 
 type OllamaModelShowRequestOptions = OllamaModelRequestOptions & {
@@ -351,10 +355,10 @@ export async function enrichOllamaCompletionModels(
     for (const model of batch) {
       const canComplete = model.capabilities?.includes("completion");
       if (
-        !canComplete &&
-        (opts?.requireCompletionCapability ||
-          model.capabilities?.includes("embedding") ||
-          (model.capabilities && !model.capabilitiesFromList))
+        isOllamaEmbeddingOnlyModel(model) ||
+        (!canComplete &&
+          (opts?.requireCompletionCapability ||
+            (model.capabilities && !model.capabilitiesFromList)))
       ) {
         continue;
       }
@@ -369,6 +373,21 @@ export async function enrichOllamaCompletionModels(
 
 export function isOllamaCloudModel(modelName: string | undefined): boolean {
   return isCloudModelRef(modelName);
+}
+
+export function isOllamaEmbeddingOnlyModel(model: OllamaTagModel): boolean {
+  // Advertised tools do not turn an embedding-only row into a chat model.
+  return (
+    model.capabilities?.includes("embedding") === true && !model.capabilities.includes("completion")
+  );
+}
+
+export function isOllamaRemoteModel(model: OllamaTagModel): boolean {
+  // Remote stubs can identify only the upstream model, without a host or cloud suffix.
+  return (
+    Boolean(model.remote_host?.trim() || model.remote_model?.trim()) ||
+    isOllamaCloudModel(model.name)
+  );
 }
 
 /**
@@ -428,8 +447,16 @@ export function buildDefaultOllamaCloudModelDefinition(
   };
 }
 
-export function capLocalOllamaModelContext(model: ModelDefinitionConfig): ModelDefinitionConfig {
-  if (isOllamaCloudModel(model.id) || typeof model.contextWindow !== "number") {
+export function capLocalOllamaModelContext(
+  model: ModelDefinitionConfig,
+  baseUrl: string,
+): ModelDefinitionConfig {
+  // Direct hosted routes use bare model IDs; their context is not a local KV allocation.
+  if (
+    isOllamaCloudOrigin(baseUrl) ||
+    isOllamaCloudModel(model.id) ||
+    typeof model.contextWindow !== "number"
+  ) {
     return model;
   }
   return {
@@ -443,7 +470,7 @@ export function capLocalOllamaModelContext(model: ModelDefinitionConfig): ModelD
 export function capLocalOllamaProviderContext(provider: ModelProviderConfig): ModelProviderConfig {
   return {
     ...provider,
-    models: provider.models?.map(capLocalOllamaModelContext),
+    models: provider.models?.map((model) => capLocalOllamaModelContext(model, provider.baseUrl)),
   };
 }
 
@@ -482,19 +509,28 @@ async function fetchOllamaModelRows(params: {
         // Capture can retain a cloned tee branch, so cancellation must not delay
         // the guard's bounded dispatcher release.
         void response.body?.cancel().catch(() => undefined);
+        if (params.opts?.discoveryMode === "strict") {
+          throw new LiveModelCatalogHttpError("ollama", response.status);
+        }
         return { reachable: true, models: [] };
       }
       const data = await readProviderJsonResponse<{ models?: OllamaModelRow[] }>(
         response,
         auditContext,
       );
+      if (params.opts?.discoveryMode === "strict" && !Array.isArray(data.models)) {
+        throw new Error("Ollama model discovery response must contain models[]");
+      }
       const models = Array.isArray(data.models) ? data.models : [];
       return { reachable: true, models };
     } finally {
       await release();
     }
-  } catch {
+  } catch (error) {
     throwIfOllamaRequestAborted(params.opts?.signal);
+    if (params.opts?.discoveryMode === "strict") {
+      throw error;
+    }
     return { reachable: false, models: [] };
   }
 }
@@ -535,11 +571,11 @@ export async function fetchLoadedOllamaModelNames(
 
 export async function buildOllamaProvider(
   configuredBaseUrl?: string,
-  opts?: { apiKey?: string; quiet?: boolean },
+  opts?: { apiKey?: string; quiet?: boolean; discoveryMode?: "strict" },
 ): Promise<ModelProviderConfig> {
   const apiBase = resolveOllamaApiBase(configuredBaseUrl);
   const auth = opts?.apiKey ? { apiKey: opts.apiKey } : undefined;
-  const { reachable, models } = await fetchOllamaModels(apiBase, auth);
+  const { reachable, models } = await fetchOllamaModels(apiBase, opts);
   if (!reachable && !opts?.quiet) {
     console.warn(`Ollama could not be reached at ${apiBase}.`);
   }

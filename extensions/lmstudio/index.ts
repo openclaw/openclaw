@@ -1,4 +1,3 @@
-import { adaptMemoryEmbeddingProviderAdapter } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 // Lmstudio plugin entrypoint registers its OpenClaw integration.
 import {
   definePluginEntry,
@@ -53,9 +52,7 @@ export default definePluginEntry({
   name: "LM Studio Provider",
   description: "Bundled LM Studio provider plugin",
   register(api: OpenClawPluginApi) {
-    api.registerEmbeddingProvider(
-      adaptMemoryEmbeddingProviderAdapter(lmstudioMemoryEmbeddingProviderAdapter),
-    );
+    api.registerEmbeddingProvider(lmstudioMemoryEmbeddingProviderAdapter);
     api.registerProvider({
       id: PROVIDER_ID,
       label: "LM Studio",
@@ -117,7 +114,7 @@ export default definePluginEntry({
         order: "late",
         run: async (ctx) => {
           const providerSetup = await loadProviderSetup();
-          return await providerSetup.discoverLmstudioProvider(ctx);
+          return await providerSetup.discoverLmstudioProvider(ctx, { discoveryMode: "strict" });
         },
       },
       resolveSyntheticAuth: ({ providerConfig }) => {

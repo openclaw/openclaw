@@ -2,7 +2,6 @@
 import type * as Lark from "@larksuiteoapi/node-sdk";
 import { readPositiveIntegerParam } from "openclaw/plugin-sdk/param-readers";
 import type { OpenClawPluginApi } from "../runtime-api.js";
-import { listEnabledFeishuAccounts } from "./accounts.js";
 import { createFeishuToolClient, resolveAnyEnabledFeishuToolsConfig } from "./tool-account.js";
 import {
   feishuExternalToolResult as jsonResult,
@@ -205,24 +204,14 @@ async function renameNode(client: Lark.Client, spaceId: string, nodeToken: strin
 // ============ Tool Registration ============
 
 export function registerFeishuWikiTools(api: OpenClawPluginApi) {
-  if (!api.config) {
-    return;
-  }
-
-  const accounts = listEnabledFeishuAccounts(api.config);
-  if (accounts.length === 0) {
-    return;
-  }
-
-  const toolsCfg = resolveAnyEnabledFeishuToolsConfig(accounts);
-  if (!toolsCfg.wiki) {
-    return;
-  }
-
   type FeishuWikiExecuteParams = FeishuWikiParams & { accountId?: string };
 
   api.registerTool(
     (ctx) => {
+      const cfg = ctx.runtimeConfig ?? ctx.config ?? api.config;
+      if (!cfg || !resolveAnyEnabledFeishuToolsConfig(cfg).wiki) {
+        return null;
+      }
       const defaultAccountId = ctx.agentAccountId;
       return {
         name: "feishu_wiki",
@@ -236,7 +225,7 @@ export function registerFeishuWikiTools(api: OpenClawPluginApi) {
           try {
             const createClient = () =>
               createFeishuToolClient({
-                api,
+                cfg,
                 executeParams: p,
                 defaultAccountId,
                 requiredTool: { family: "wiki", label: "Wiki" },

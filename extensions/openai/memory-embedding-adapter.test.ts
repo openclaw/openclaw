@@ -12,7 +12,6 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("./embedding-provider.js", () => ({
-  DEFAULT_OPENAI_EMBEDDING_MODEL: "text-embedding-3-small",
   createOpenAiEmbeddingProvider: mocks.createOpenAiEmbeddingProvider,
 }));
 
@@ -26,8 +25,8 @@ import { openAiMemoryEmbeddingProviderAdapter } from "./memory-embedding-adapter
 const provider: MemoryEmbeddingProvider = {
   id: "openai",
   model: "text-embedding-3-small",
-  embedQuery: async () => [1, 0],
-  embedBatch: async (texts) => texts.map(() => [1, 0]),
+  embed: async () => [1, 0],
+  embedBatch: async (inputs) => inputs.map(() => [1, 0]),
 };
 
 describe("OpenAI memory embedding adapter", () => {

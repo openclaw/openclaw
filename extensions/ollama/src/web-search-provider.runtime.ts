@@ -5,9 +5,11 @@ import {
   normalizeOptionalSecretInput,
 } from "openclaw/plugin-sdk/provider-auth";
 import { resolveEnvApiKey } from "openclaw/plugin-sdk/provider-auth-runtime";
-import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import {
-  enablePluginInConfig,
+  readProviderJsonResponse,
+  redactProviderResponseErrorText,
+} from "openclaw/plugin-sdk/provider-http";
+import {
   readPositiveIntegerParam,
   readResponseText,
   readStringParam,
@@ -29,7 +31,6 @@ import {
   fetchOllamaModels,
   resolveOllamaApiBase,
 } from "./provider-models.js";
-import { redactOllamaResponseErrorText } from "./request-header-redaction.js";
 import {
   OLLAMA_WEB_SEARCH_TOOL_DESCRIPTION,
   OLLAMA_WEB_SEARCH_TOOL_PARAMETERS,
@@ -234,7 +235,7 @@ async function runOllamaWebSearch(params: {
       }
       if (!response.ok) {
         const detail = await readResponseText(response, { maxBytes: 64_000 });
-        const detailText = redactOllamaResponseErrorText(detail.text, headers, {
+        const detailText = redactProviderResponseErrorText(detail.text, headers, {
           sourceTruncated: detail.truncated,
         });
         const message = `Ollama web search failed (${response.status}): ${detailText}`.trim();
@@ -333,22 +334,11 @@ async function warnOllamaWebSearchPrereqs(params: {
   return params.config;
 }
 
-export function createOllamaWebSearchProvider(): WebSearchProviderPlugin {
+export function createOllamaWebSearchProvider(): Pick<
+  WebSearchProviderPlugin,
+  "runSetup" | "createTool"
+> {
   return {
-    id: "ollama",
-    label: "Ollama Web Search",
-    hint: "Local Ollama host · requires ollama signin",
-    onboardingScopes: ["text-inference"],
-    requiresCredential: false,
-    envVars: [],
-    placeholder: "(run ollama signin)",
-    signupUrl: "https://ollama.com/",
-    docsUrl: "https://docs.openclaw.ai/tools/web",
-    autoDetectOrder: 110,
-    credentialPath: "",
-    getCredentialValue: () => undefined,
-    setCredentialValue: () => {},
-    applySelectionConfig: (config) => enablePluginInConfig(config, "ollama").config,
     runSetup: async (ctx) => await warnOllamaWebSearchPrereqs(ctx),
     createTool: (ctx) => ({
       description: OLLAMA_WEB_SEARCH_TOOL_DESCRIPTION,

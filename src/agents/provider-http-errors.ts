@@ -14,6 +14,7 @@ import {
 } from "../infra/http-body.js";
 import { redactSensitiveText, redactToolPayloadText } from "../logging/redact.js";
 import type { ModelProviderRequestTransportOverrides } from "./provider-request-config.js";
+import { redactProviderResponseErrorText } from "./provider-request-header-redaction.js";
 export { asFiniteNumber } from "../../packages/normalization-core/src/number-coercion.js";
 export { asBoolean } from "../utils/boolean.js";
 export { normalizeOptionalString as trimToUndefined } from "../../packages/normalization-core/src/string-coerce.js";
@@ -88,6 +89,8 @@ export function createProviderErrorTextRedactor(params: {
 type ProviderResponseReadOptions = ReadResponseTextPrefixOptions & {
   maxBytes?: number;
   onOverflow?: (params: { size: number; maxBytes: number; res: Response }) => Error;
+  /** Credentials that must not appear in malformed-response diagnostics. */
+  requestHeaders?: HeadersInit;
 };
 
 function readProviderResponseBytes(
@@ -95,8 +98,7 @@ function readProviderResponseBytes(
   label: string,
   kind: string,
   opts?: ProviderResponseReadOptions,
-  onOverflow?: ProviderResponseReadOptions["onOverflow"],
-): Promise<Uint8Array> {
+): Promise<Buffer> {
   return readResponseWithLimit(response, opts?.maxBytes ?? PROVIDER_RESPONSE_MAX_BYTES, {
     ...opts,
     chunkTimeoutMs: opts?.chunkTimeoutMs ?? 30_000,
@@ -105,7 +107,7 @@ function readProviderResponseBytes(
       (({ chunkTimeoutMs }) =>
         new Error(`${label}: response body stalled for ${chunkTimeoutMs}ms`)),
     onOverflow:
-      onOverflow ??
+      opts?.onOverflow ??
       (({ maxBytes: limit }) => new Error(`${label}: ${kind} response exceeds ${limit} bytes`)),
   });
 }
@@ -115,6 +117,8 @@ type ProviderHttpErrorOptions = {
   statusPrefix?: string;
   bodyTimeoutMs?: ReadResponseTextPrefixOptions["timeoutMs"];
   onBodyTimeout?: NonNullable<ReadResponseTextPrefixOptions["onTimeout"]>;
+  /** Scrub reflected request credentials before retaining response diagnostics. */
+  requestHeaders?: HeadersInit;
 };
 
 class ProviderErrorBodyTimeout extends Error {
@@ -170,13 +174,18 @@ export async function readProviderTextResponse(
   return new TextDecoder().decode(bytes);
 }
 
-/** Formats common provider JSON error payload shapes into one readable detail string. */
-export function formatProviderErrorPayload(payload: unknown): string | undefined {
+type ProviderErrorPayloadMetadata = {
+  detail?: string;
+  code?: string;
+  type?: string;
+};
+
+function resolveProviderErrorPayloadMetadata(payload: unknown): ProviderErrorPayloadMetadata {
   const root = asOptionalRecord(payload);
   const detailObject = asOptionalRecord(root?.detail);
   const subject = asOptionalRecord(root?.error) ?? detailObject ?? root;
   if (!subject) {
-    return undefined;
+    return { detail: undefined };
   }
   const errorDescription =
     trimToUndefined(subject.error_description) ?? trimToUndefined(root?.error_description);
@@ -193,50 +202,21 @@ export function formatProviderErrorPayload(payload: unknown): string | undefined
   const metadata = [type ? `type=${type}` : undefined, code ? `code=${code}` : undefined]
     .filter((value): value is string => Boolean(value))
     .join(", ");
-  if (message && metadata) {
-    return `${truncateErrorDetail(message)} [${metadata}]`;
-  }
-  if (message) {
-    return truncateErrorDetail(message);
-  }
-  if (metadata) {
-    return `[${metadata}]`;
-  }
-  return undefined;
+  const detail = message
+    ? `${truncateErrorDetail(message)}${metadata ? ` [${metadata}]` : ""}`
+    : metadata
+      ? `[${metadata}]`
+      : undefined;
+  return { detail, code, type };
 }
 
-type ProviderErrorPayloadMetadata = {
-  detail?: string;
-  code?: string;
-  type?: string;
-};
-
-function extractProviderErrorPayloadMetadata(payload: unknown): ProviderErrorPayloadMetadata {
-  const root = asOptionalRecord(payload);
-  const detailObject = asOptionalRecord(root?.detail);
-  const subject = asOptionalRecord(root?.error) ?? detailObject ?? root;
-  if (!subject) {
-    return {};
-  }
-
-  const detail = formatProviderErrorPayload(payload);
-  const type = trimToUndefined(subject.type);
-  const errorDescription =
-    trimToUndefined(subject.error_description) ?? trimToUndefined(root?.error_description);
-  const oauthCode = errorDescription ? trimToUndefined(root?.error) : undefined;
-  const code = trimToUndefined(subject.code) ?? trimToUndefined(subject.status) ?? oauthCode;
-  return {
-    ...(detail ? { detail: redactSensitiveText(detail) } : {}),
-    ...(code ? { code } : {}),
-    ...(type ? { type } : {}),
-  };
+/** Formats common provider JSON error payload shapes into one readable detail string. */
+export function formatProviderErrorPayload(payload: unknown): string | undefined {
+  return resolveProviderErrorPayloadMetadata(payload).detail;
 }
 
 /** Metadata extracted from a non-2xx provider response body and headers. */
-type ProviderHttpErrorInfo = {
-  detail?: string;
-  code?: string;
-  type?: string;
+type ProviderHttpErrorInfo = ProviderErrorPayloadMetadata & {
   body?: string;
   requestId?: string;
 };
@@ -247,49 +227,66 @@ async function extractProviderErrorInfo(
   options?: ProviderHttpErrorOptions,
 ): Promise<ProviderHttpErrorInfo> {
   const bodyTimeoutMs = options?.bodyTimeoutMs;
-  const rawBody = trimToUndefined(
-    await readResponseTextLimited(response, 16 * 1024, {
-      timeoutMs:
-        typeof bodyTimeoutMs === "function"
-          ? () => {
-              try {
-                return bodyTimeoutMs();
-              } catch (error) {
-                throw new ProviderErrorBodyTimeout(error);
-              }
+  const prefix = await readResponseTextPrefix(response, 16 * 1024, {
+    chunkTimeoutMs: 10_000,
+    onIdleTimeout: ({ chunkTimeoutMs }) =>
+      new Error(`error body read stalled for ${chunkTimeoutMs}ms`),
+    timeoutMs:
+      typeof bodyTimeoutMs === "function"
+        ? () => {
+            try {
+              return bodyTimeoutMs();
+            } catch (error) {
+              throw new ProviderErrorBodyTimeout(error);
             }
-          : bodyTimeoutMs,
-      onTimeout: (params) =>
-        new ProviderErrorBodyTimeout(
-          options?.onBodyTimeout?.(params) ??
-            new Error(`Provider error body timed out after ${params.timeoutMs}ms`),
-        ),
-    }).catch((error: unknown) => {
-      if (error instanceof ProviderErrorBodyTimeout) {
-        throw error.timeoutError;
-      }
-      return "";
-    }),
-  );
-  const requestId = extractProviderRequestId(response);
+          }
+        : bodyTimeoutMs,
+    onTimeout: (params) =>
+      new ProviderErrorBodyTimeout(
+        options?.onBodyTimeout?.(params) ??
+          new Error(`Provider error body timed out after ${params.timeoutMs}ms`),
+      ),
+  }).catch((error: unknown) => {
+    if (error instanceof ProviderErrorBodyTimeout) {
+      throw error.timeoutError;
+    }
+    // Fetch keeps its request deadline active while the response body is consumed.
+    if (error instanceof Error && error.name === "TimeoutError") {
+      throw error;
+    }
+    return undefined;
+  });
+  const rawRequestId = extractProviderRequestId(response);
+  const requestId =
+    rawRequestId && options?.requestHeaders
+      ? redactProviderResponseErrorText(rawRequestId, options.requestHeaders)
+      : rawRequestId;
+  const rawBody = trimToUndefined(prefix?.text);
   if (!rawBody) {
-    return requestId ? { requestId } : {};
+    return { requestId };
   }
-  const body = redactProviderErrorBody(rawBody);
+  // Redact before metadata extraction or preview truncation can split a credential.
+  const safeBody = options?.requestHeaders
+    ? redactProviderResponseErrorText(rawBody, options.requestHeaders, {
+        sourceTruncated: prefix?.truncated,
+      })
+    : rawBody;
+  const body = redactProviderErrorBody(safeBody);
   try {
-    const metadata = extractProviderErrorPayloadMetadata(JSON.parse(rawBody));
+    const metadata = resolveProviderErrorPayloadMetadata(JSON.parse(safeBody));
     return {
-      ...(metadata.detail ? { detail: metadata.detail } : { detail: body }),
-      ...(metadata.code ? { code: metadata.code } : {}),
-      ...(metadata.type ? { type: metadata.type } : {}),
+      // Public formatting stays raw; HTTP details are redacted before choosing the fallback.
+      detail: (metadata.detail && redactSensitiveText(metadata.detail)) || body,
+      code: metadata.code,
+      type: metadata.type,
       body,
-      ...(requestId ? { requestId } : {}),
+      requestId,
     };
   } catch {
     return {
       detail: body,
       body,
-      ...(requestId ? { requestId } : {}),
+      requestId,
     };
   }
 }
@@ -419,7 +416,11 @@ export async function readProviderJsonResponse<T>(
   try {
     return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)) as T;
   } catch (cause) {
-    throw new Error(`${label}: malformed JSON response`, { cause });
+    // oxlint-disable-next-line preserve-caught-error -- Parser causes can quote partial credentials; header-bearing failures must omit them.
+    throw new Error(
+      `${label}: malformed JSON response`,
+      opts?.requestHeaders ? undefined : { cause },
+    );
   }
 }
 
@@ -482,7 +483,7 @@ export async function readProviderBinaryResponse(
   label: string,
   kind = "binary",
   opts?: ProviderResponseReadOptions,
-): Promise<Uint8Array> {
+): Promise<Buffer> {
   try {
     assertProviderBinaryResponseContent(response, label, kind);
   } catch (error) {
@@ -491,7 +492,7 @@ export async function readProviderBinaryResponse(
     void response.body?.cancel().catch(() => undefined);
     throw error;
   }
-  const bytes = await readProviderResponseBytes(response, label, kind, opts, opts?.onOverflow);
+  const bytes = await readProviderResponseBytes(response, label, kind, opts);
   if (bytes.byteLength === 0) {
     throw new Error(`${label}: malformed ${kind} response`);
   }
