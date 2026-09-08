@@ -19954,13 +19954,22 @@ public struct TerminalUploadParams: Codable, Sendable {
 public struct TerminalUploadResult: Codable, Sendable {
     public let path: String
     public let size: Int
+    public let uploadpathstyle: String?
 
     public init(
         path: String,
-        size: Int)
+        size: Int,
+        uploadpathstyle: String? = nil)
     {
         self.path = path
         self.size = size
+        self.uploadpathstyle = uploadpathstyle
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case path
+        case size
+        case uploadpathstyle = "uploadPathStyle"
     }
 }
 

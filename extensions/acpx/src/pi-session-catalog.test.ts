@@ -874,6 +874,7 @@ describe("Pi session catalog", () => {
       kind: "node",
       nodeId: "node-1",
       command: PI_TERMINAL_RESUME_COMMAND,
+      uploadPathStyle: "native",
       paramsJSON: JSON.stringify({ threadId: "pi-remote" }),
       cwd: "/remote/workspace",
       title: "pi --session pi-remote…",

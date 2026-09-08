@@ -19,6 +19,7 @@ import {
   TERMINAL_UPLOAD_RETENTION_MS,
   terminalUploadDecodedSize,
 } from "../../packages/gateway-protocol/src/schema/terminal-constants.js";
+import type { TerminalUploadResult as ProtocolTerminalUploadResult } from "../../packages/gateway-protocol/src/schema/terminal.js";
 import { logWarn } from "../logger.js";
 import { BoundedSerialQueue } from "../shared/bounded-serial-queue.js";
 import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
@@ -70,10 +71,7 @@ export type TerminalUploadFile = {
   contentBase64: string;
 };
 
-export type TerminalUploadResult = {
-  path: string;
-  size: number;
-};
+export type TerminalUploadResult = ProtocolTerminalUploadResult;
 
 function truncateUtf8(value: string, maxBytes: number): string {
   let result = "";
