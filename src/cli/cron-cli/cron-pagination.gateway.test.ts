@@ -223,6 +223,65 @@ describe("cron CLI with the real Gateway pagination contract", () => {
     ).toHaveLength(2);
   });
 
+  it("returns a single bounded page when --limit is provided", async () => {
+    installRealCronGateway(Array.from({ length: 201 }, (_, index) => createJob(index)));
+
+    await runCron(["list", "--json", "--limit", "50"]);
+
+    const result = mocks.runtime.writeJson.mock.calls.at(-1)?.[0] as {
+      jobs: CronJob[];
+      total: number;
+      hasMore: boolean;
+      nextOffset: number | null;
+    };
+    expect(result.jobs).toHaveLength(50);
+    expect(result.jobs[0].id).toBe("job-000");
+    expect(result.total).toBe(201);
+    expect(result.hasMore).toBe(true);
+    expect(result.nextOffset).toBe(50);
+    // Single-page mode issues exactly one cron.list RPC regardless of the total.
+    expect(
+      mocks.callGatewayFromCli.mock.calls.filter(([method]) => method === "cron.list"),
+    ).toHaveLength(1);
+  });
+
+  it("offsets the single returned page when --offset is provided", async () => {
+    installRealCronGateway(Array.from({ length: 201 }, (_, index) => createJob(index)));
+
+    await runCron(["list", "--json", "--offset", "150", "--limit", "50"]);
+
+    const result = mocks.runtime.writeJson.mock.calls.at(-1)?.[0] as {
+      jobs: CronJob[];
+      offset: number;
+      total: number;
+    };
+    expect(result.jobs).toHaveLength(50);
+    expect(result.jobs[0].id).toBe("job-150");
+    expect(result.offset).toBe(150);
+    expect(result.total).toBe(201);
+    expect(
+      mocks.callGatewayFromCli.mock.calls.filter(([method]) => method === "cron.list"),
+    ).toHaveLength(1);
+  });
+
+  it("rejects a non-numeric --limit", async () => {
+    installRealCronGateway([]);
+
+    await expect(runCron(["list", "--limit", "not-a-number"])).rejects.toThrow("exit 1");
+  });
+
+  it("rejects a --limit above 200", async () => {
+    installRealCronGateway([]);
+
+    await expect(runCron(["list", "--limit", "201"])).rejects.toThrow("exit 1");
+  });
+
+  it("rejects a non-numeric --offset", async () => {
+    installRealCronGateway([]);
+
+    await expect(runCron(["list", "--offset", "not-a-number"])).rejects.toThrow("exit 1");
+  });
+
   it("never combines Gateway pages from different cron snapshots", async () => {
     const original = Array.from({ length: 201 }, (_, index) => createJob(index));
     installRealCronGateway(original, {

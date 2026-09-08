@@ -1,5 +1,8 @@
 // Cron status/list/add command registration and create-payload normalization.
-import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
+import {
+  parseStrictNonNegativeInteger,
+  parseStrictPositiveInteger,
+} from "@openclaw/normalization-core/number-coercion";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -53,10 +56,17 @@ export function registerCronListCommand(cron: Command) {
       .description("List automations")
       .option("--all", "Include disabled jobs", false)
       .option("--agent <id>", "Filter by agent id")
+      .option("--offset <n>", "Skip the first N automations")
+      .option("--limit <n>", "Maximum automations to return (1-200)")
       .option("--json", "Output JSON", false)
       .action(async (opts) => {
         try {
-          const listParams: { includeDisabled: boolean; agentId?: string } = {
+          const listParams: {
+            includeDisabled: boolean;
+            agentId?: string;
+            offset?: number;
+            limit?: number;
+          } = {
             includeDisabled: Boolean(opts.all),
           };
           const agentId = normalizeOptionalString(opts.agent);
@@ -65,6 +75,22 @@ export function registerCronListCommand(cron: Command) {
           }
           if (agentId) {
             listParams.agentId = sanitizeAgentId(agentId);
+          }
+          if (opts.offset !== undefined) {
+            const offset = parseStrictNonNegativeInteger(opts.offset);
+            if (offset === undefined) {
+              throw new Error("Invalid --offset (must be a non-negative integer).");
+            }
+            if (offset > 0) {
+              listParams.offset = offset;
+            }
+          }
+          if (opts.limit !== undefined) {
+            const limit = parseStrictPositiveInteger(opts.limit);
+            if (limit === undefined || limit > 200) {
+              throw new Error("Invalid --limit (must be a positive integer, max 200).");
+            }
+            listParams.limit = limit;
           }
           const res = await listCronJobsFromGateway(opts, listParams);
           if (opts.json) {

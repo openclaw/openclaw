@@ -32,15 +32,22 @@ export function isUnknownCronGetMethodError(error: unknown): error is Error {
   );
 }
 
-/** Read every bounded Gateway page from one complete cron inventory revision. */
+/** Read every bounded Gateway page from one complete cron inventory revision, or a single page when offset/limit are provided. */
 export async function listCronJobsFromGateway(
   opts: GatewayRpcOpts,
-  filters: Pick<CronListPageOptions, "includeDisabled" | "agentId" | "query">,
+  filters: Pick<CronListPageOptions, "includeDisabled" | "agentId" | "query"> & {
+    offset?: number;
+    limit?: number;
+  },
   options: { allowLegacyUnversionedPagination?: boolean } = {},
 ): Promise<GatewayCronJobInventory> {
   let allowLegacyUnversionedPagination = options.allowLegacyUnversionedPagination === true;
+  const userOffset = filters.offset;
+  const userLimit = filters.limit;
+  const singlePage = userOffset !== undefined || userLimit !== undefined;
+
   for (let restart = 0; restart <= CRON_LIST_MAX_SNAPSHOT_RESTARTS; restart += 1) {
-    let offset = 0;
+    let offset = userOffset ?? 0;
     let snapshotRevision: string | undefined;
     let total: number | undefined;
     let pageMetadataMode: "canonical" | "legacy" | undefined;
@@ -52,9 +59,23 @@ export async function listCronJobsFromGateway(
     for (let pageNumber = 0; pageNumber < CRON_LIST_MAX_PAGES; pageNumber += 1) {
       const page = (await callGatewayFromCli("cron.list", opts, {
         ...filters,
-        limit: CRON_LIST_PAGE_SIZE,
+        limit: userLimit ?? CRON_LIST_PAGE_SIZE,
         offset,
       })) as GatewayCronListPage | null;
+
+      // In single-page mode, return just this page with its metadata
+      if (singlePage && pageNumber === 0 && page) {
+        return {
+          jobs: page.jobs ?? [],
+          deliveryPreviews: page.deliveryPreviews,
+          snapshotRevision: page.snapshotRevision,
+          total: page.total ?? page.jobs?.length ?? 0,
+          offset: page.offset ?? offset,
+          limit: page.limit ?? userLimit ?? CRON_LIST_PAGE_SIZE,
+          hasMore: page.hasMore ?? false,
+          nextOffset: page.nextOffset ?? null,
+        };
+      }
 
       const hasCanonicalMetadata =
         page !== null &&
