@@ -3306,6 +3306,9 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       prompt: SETTLED_TOOL_CONTINUATION_INSTRUCTION,
       suppressNextUserMessagePersistence: true,
     });
+    expect(runAttemptCall(1).prompt).toContain(
+      "Tools are unavailable in this step: it is a text-only pass",
+    );
     expect(result.meta.finalAssistantVisibleText).toBe("Write completed.");
     expectWarnMessageWith("settled post-tool turn lacked a final answer");
   });
