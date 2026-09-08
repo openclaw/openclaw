@@ -215,18 +215,14 @@ suite.define(() => {
       );
       expect(await machineClass.getAttribute("list")).toBeNull();
       const saveButton = page.getByRole("button", { name: "Save" });
-      // The patch schedules an applied-revision poll. Let it settle before
-      // deferring config.get so the background read cannot consume the gate.
-      await expect
-        .poll(() => page.getByRole("button", { name: "Apply changes", exact: true }).count())
-        .toBe(0);
       const configGetCount = (await gateway.getRequests("config.get")).length;
-      await gateway.deferNext("config.get");
-      await gateway.emitGatewayEvent("config.changed", {
-        path: "/tmp/openclaw.json",
-        hash: "cloud-workers-2",
-        ts: Date.now(),
-      });
+      // Keep the gate and event in one browser task: an applied-revision poll
+      // can run while the Saved indicator still hides the Apply changes button.
+      await gateway.emitGatewayEvent(
+        "config.changed",
+        { path: "/tmp/openclaw.json", hash: "cloud-workers-2", ts: Date.now() },
+        { deferNext: { method: "config.get" } },
+      );
       await gateway.waitForRequest("config.get", { after: configGetCount });
       await expect.poll(() => saveButton.isDisabled()).toBe(true);
       await gateway.resolveDeferred(

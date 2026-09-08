@@ -82,6 +82,25 @@ async function settleTabs(container: HTMLElement) {
 describe
   .skipIf(navigator.userAgent.toLowerCase().includes("jsdom"))
   .each(["inline", "standalone"] as const)("%s tool message disclosures", (mode) => {
+  it("publishes tab-panel links with the initial message-scoped IDs", async () => {
+    const { rows, container, draw } = fixture(mode);
+    draw();
+    try {
+      expect(container.querySelectorAll("wa-tab")).toHaveLength(4);
+      for (const row of rows) {
+        for (const name of ["diff", "raw"]) {
+          const prefix = `${row.key}:shared-call-${name}`;
+          const tab = container.querySelector(`[id="${prefix}-tab"]`)!;
+          const panel = container.querySelector(`[id="${prefix}-panel"]`)!;
+          expect(tab.getAttribute("aria-controls")).toBe(panel.id);
+          expect(panel.getAttribute("aria-labelledby")).toBe(tab.id);
+        }
+      }
+    } finally {
+      await settleTabs(container);
+    }
+  });
+
   it("preserves message-scoped IDs and independent Raw tabs for reused call IDs", async () => {
     const { rows, container, draw, toggledKeys } = fixture(mode);
     draw();

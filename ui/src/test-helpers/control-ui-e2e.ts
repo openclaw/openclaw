@@ -744,12 +744,21 @@ export function setSharedControlUiE2eServerBaseUrl(baseUrl: string | null): void
 
 type MockSessionsListResponse = { sessions: unknown[]; [field: string]: unknown };
 
+type MockGatewayEventOptions = {
+  deferNext?: { method: string; match?: Record<string, unknown> };
+};
+
 export type MockGatewayControls = {
   closeLatest: (code?: number, reason?: string) => Promise<void>;
   deliverLatest: (frame: unknown) => Promise<void>;
   deferNext: (method: string, match?: Record<string, unknown>) => Promise<void>;
   emitChatFinal: (params: { runId: string; sessionKey?: string; text: string }) => Promise<void>;
-  emitGatewayEvent: (event: string, payload?: unknown) => Promise<void>;
+  /** Arm a response gate and dispatch its triggering event in the same browser task. */
+  emitGatewayEvent: (
+    event: string,
+    payload?: unknown,
+    options?: MockGatewayEventOptions,
+  ) => Promise<void>;
   getRequests: (method?: string, match?: Record<string, unknown>) => Promise<MockGatewayRequest[]>;
   getSocketCount: () => Promise<number>;
   getSocketUrls: () => Promise<string[]>;
@@ -1262,7 +1271,7 @@ export type ControlUiMockGateway = {
   closeLatest: (code?: number, reason?: string) => void;
   deliverLatest: (frame: unknown) => void;
   deferNext: (method: string, match?: Record<string, unknown>) => void;
-  emit: (event: string, payload?: unknown) => void;
+  emit: (event: string, payload?: unknown, options?: MockGatewayEventOptions) => void;
   findRequests: (method?: string, match?: Record<string, unknown>) => MockGatewayRequest[];
   rejectDeferred: (
     method: string,
@@ -2936,7 +2945,11 @@ function installControlUiMockGateway(
     deferNext(method, match) {
       deferredMethods.push({ method, match });
     },
-    emit(event, payload) {
+    emit(event, payload, options) {
+      // A queued background read must not consume this gate between arming and event delivery.
+      if (options?.deferNext) {
+        exposed.deferNext(options.deferNext.method, options.deferNext.match);
+      }
       emitGatewayEvent(MockWebSocket.latest, event, payload);
     },
     findRequests(method, match) {
@@ -3186,16 +3199,20 @@ function createMockGatewayControls(
   diagnosticEvents: ControlUiE2eDiagnosticEvent[],
   methodResponses: Record<string, unknown>,
 ): MockGatewayControls {
-  const emitGatewayEvent = async (event: string, payload?: unknown) => {
+  const emitGatewayEvent: MockGatewayControls["emitGatewayEvent"] = async (
+    event,
+    payload,
+    options,
+  ) => {
     await page.evaluate(
-      ({ eventName, eventPayload }) => {
+      ({ eventName, eventPayload, eventOptions }) => {
         const gateway = (window as MockGatewayWindow).openclawControlUiE2eGateway;
         if (!gateway) {
           throw new Error("Mock Gateway is not installed");
         }
-        gateway.emit(eventName, eventPayload);
+        gateway.emit(eventName, eventPayload, eventOptions);
       },
-      { eventName: event, eventPayload: payload },
+      { eventName: event, eventPayload: payload, eventOptions: options },
     );
   };
 

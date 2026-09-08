@@ -1,4 +1,5 @@
 /* @vitest-environment jsdom */
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect } from "vitest";
 import {
   createControlUiMockGatewayInitScript,
@@ -125,4 +126,40 @@ it("separates canonical roster capture and deferrals from child session queries"
     "roster-held",
     "roster-next",
   ]);
+});
+
+it("defers an event-triggered request before a queued same-method background read", async ({
+  gatewayPage,
+}) => {
+  const { window, execute } = gatewayPage;
+  execute(createControlUiMockGatewayInitScript());
+  const gateway = (window as typeof window & { openclawControlUiE2eGateway?: ControlUiMockGateway })
+    .openclawControlUiE2eGateway;
+  if (!gateway) {
+    throw new Error("Mock Gateway was not installed");
+  }
+  const socket = new window.WebSocket("ws://mock-gateway/config-refresh");
+  const responses: string[] = [];
+  const send = (id: string) =>
+    socket.send(JSON.stringify({ type: "req", id, method: "config.get", params: {} }));
+  socket.addEventListener("message", (event) => {
+    const frame: unknown = JSON.parse(String(event.data));
+    if (!isRecord(frame)) {
+      return;
+    }
+    if (frame.type === "event" && frame.event === "config.changed") {
+      send("event-refresh");
+    } else if (frame.type === "res" && typeof frame.id === "string") {
+      responses.push(frame.id);
+    }
+  });
+  await flush();
+
+  window.setTimeout(() => send("background-poll"), 0);
+  gateway.emit("config.changed", {}, { deferNext: { method: "config.get" } });
+  await expect.poll(() => responses).toContain("background-poll");
+
+  expect(responses).toEqual(["background-poll"]);
+  gateway.resolveDeferred("config.get");
+  expect(responses).toEqual(["background-poll", "event-refresh"]);
 });
