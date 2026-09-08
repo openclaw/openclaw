@@ -157,6 +157,13 @@ suite.define(() => {
       await expect.poll(() => start.getAttribute("aria-disabled")).toBe("true");
       await expect.poll(() => accountTrigger.textContent()).toContain("Automatic");
       await accountTrigger.click();
+      await gateway.deferNext("models.list", { authProfileId: account.authProfileId });
+      await picker.getByRole("menuitemradio", { name: account.label, exact: true }).click();
+      await expect.poll(() => startHint.getAttribute("content")).toBe("Loading models…");
+      await gateway.rejectDeferred("models.list", { code: "UNAVAILABLE", message: "Try again" });
+      await expect.poll(() => startHint.getAttribute("content")).toBe("Models unavailable");
+      expect(await start.getAttribute("aria-disabled")).toBe("true");
+      await accountTrigger.click();
       await picker.getByRole("menuitemradio", { name: account.label, exact: true }).click();
       await expect.poll(() => start.getAttribute("aria-disabled")).toBe("false");
       await page.keyboard.press("Escape");

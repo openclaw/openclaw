@@ -130,13 +130,14 @@ export class NewSessionModelControl {
 
   private bindMetadataSubscription(client: NewSessionMetadataClient, scope: ModelCatalogReadScope) {
     if (
+      this.metadataScope &&
       this.metadataClient === client &&
       this.metadataGateway === this.pendingContext?.gateway &&
-      this.metadataScope?.agentId === scope.agentId &&
-      this.metadataScope?.authProfileId === scope.authProfileId &&
+      this.metadataScope.agentId === scope.agentId &&
+      this.metadataScope.authProfileId === scope.authProfileId &&
       this.metadataUnsubscribe
     ) {
-      return;
+      return this.metadataScope;
     }
     this.clearMetadataSubscription();
     this.metadataClient = client;
@@ -155,6 +156,7 @@ export class NewSessionModelControl {
           void this.startMetadataRequest(client, scope);
         })
       : undefined;
+    return scope;
   }
 
   loadCatalogTargets(context: ApplicationContext | undefined, agentId: string, enabled: boolean) {
@@ -232,14 +234,14 @@ export class NewSessionModelControl {
     this.selectionGeneration += 1;
     this.restoringPreference = false;
     this.draftAccount = { authProfileId: account.authProfileId, provider: account.provider, model };
-    const scope = { agentId: this.agentId, authProfileId: account.authProfileId };
+    const requestedScope = { agentId: this.agentId, authProfileId: account.authProfileId };
     this.metadataState = {
       catalog: [],
       accountSelection: this.metadataState.accountSelection,
       hasSnapshot: false,
       status: "loading",
     };
-    this.bindMetadataSubscription(client, scope);
+    const scope = this.bindMetadataSubscription(client, requestedScope);
     return this.startMetadataRequest(client, scope).then(
       (result) => Boolean(result) && this.ownsMetadata(client, scope),
     );
@@ -271,7 +273,6 @@ export class NewSessionModelControl {
     if (resetSelection) {
       this.agentId = "";
       this.metadataClient = undefined;
-      this.clearMetadataSubscription();
       this.selected = "";
       this.contextWindow = "";
       this.thinkingLevel = "";
@@ -351,8 +352,8 @@ export class NewSessionModelControl {
       ...(this.draftAccount ? { authProfileId: this.draftAccount.authProfileId } : {}),
     };
     const previousScope = this.metadataScope;
-    this.bindMetadataSubscription(client, scope);
-    const rebound = this.metadataScope !== previousScope;
+    const boundScope = this.bindMetadataSubscription(client, scope);
+    const rebound = boundScope !== previousScope;
     this.pendingPreference = options.preference;
     this.pendingAgent = options.agent;
     this.pendingSelectionGeneration = selectionGeneration;
@@ -376,7 +377,7 @@ export class NewSessionModelControl {
       this.restoringPreference = false;
       return;
     }
-    void this.startMetadataRequest(client, this.metadataScope ?? scope);
+    void this.startMetadataRequest(client, boundScope);
   }
 
   isRestoringPreference(): boolean {

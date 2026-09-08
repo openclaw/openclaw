@@ -693,8 +693,11 @@ suite.define(() => {
         provider: "example",
         available: true,
       };
-      const gateway = await installMockGateway(page, { models: [existing] });
-      await page.goto(`${suite.server.baseUrl}chat`);
+      const gateway = await installMockGateway(page, {
+        models: [existing],
+        sessionKey: "agent:main:main",
+      });
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       const composer = page.locator(".agent-chat__input");
       await expect
         .poll(() => composer.locator('[data-chat-model-option="example/existing"]').count())
@@ -712,7 +715,7 @@ suite.define(() => {
         expect(request.params).toMatchObject({
           view: "configured",
           agentId: "main",
-          sessionKey: "main",
+          sessionKey: "agent:main:main",
         });
         expect(request.params).not.toHaveProperty("refresh");
       }

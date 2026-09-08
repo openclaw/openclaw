@@ -133,6 +133,40 @@ describe("new-session model metadata lifecycle", () => {
     },
   );
 
+  it("retries the same draft account after failed previews and accepts its successful result", async () => {
+    const { account, agent, control, request, preview, connected, draw, select, chooseAccount } =
+      retainedAccountDraft();
+    const { completion } = await chooseAccount();
+    preview.reject(new Error("Preview unavailable"));
+    await completion;
+    expect(control.modelSelectionBlockedReason(agent)).toBe("Models unavailable");
+    expect(control.accountSelectionReady()).toBe(false);
+
+    draw().querySelector(".chat-model-account__picker")!.dispatchEvent(new Event("wa-show"));
+    await vi.waitFor(() => expect(draw().textContent).toContain(account.label));
+    const failedRetry = deferred<ModelCatalogResult>();
+    request.mockReturnValueOnce(failedRetry.promise);
+    select(`account:${account.authProfileId}`);
+    expect(control.modelSelectionBlockedReason(agent)).toBe("Loading models…");
+    failedRetry.reject(new Error("Preview still unavailable"));
+    await vi.waitFor(() =>
+      expect(control.modelSelectionBlockedReason(agent)).toBe("Models unavailable"),
+    );
+    expect(control.accountSelectionReady()).toBe(false);
+
+    draw().querySelector(".chat-model-account__picker")!.dispatchEvent(new Event("wa-show"));
+    await vi.waitFor(() => expect(draw().textContent).toContain(account.label));
+    request.mockResolvedValueOnce(connected);
+    select(`account:${account.authProfileId}`);
+    await vi.waitFor(() => expect(control.accountSelectionReady()).toBe(true));
+    expect(control.modelSelectionBlockedReason(agent)).toBeUndefined();
+    expect(draw().querySelector("[data-chat-account-trigger]")?.textContent).toContain(
+      account.label,
+    );
+    expect(control.modelForSubmission()).toBe(`anthropic/model@${account.authProfileId}`);
+    control.reset();
+  });
+
   it.each(["request failure", "missing model", "unconfirmed account", "unknown availability"])(
     "keeps an explicit account blocked after a preview with $0",
     async (outcome) => {

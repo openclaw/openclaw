@@ -52,6 +52,7 @@ function fixture() {
   const authStore = expectDefined(getPreparedModelRuntimeAuthStore(owner), "prepared auth store");
   const snapshot: PreparedGatewayModelCatalogSnapshot = {
     ...owner.modelCatalog,
+    catalogComplete: false,
     agentId: expectDefined(owner.agentId, "fixture agent"),
     agentDir: owner.agentDir,
     workspaceDir: expectDefined(owner.workspaceDir, "fixture workspace"),
