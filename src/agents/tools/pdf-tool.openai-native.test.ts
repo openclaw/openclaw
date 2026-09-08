@@ -53,6 +53,7 @@ describe("createPdfTool OpenAI native routing", () => {
     await withTempPdfAgentDir(async (agentDir) => {
       await stubPdfToolInfra(agentDir, {
         provider: "openai",
+        input: ["text", "image"],
         api: "openai-responses",
         baseUrl: "https://api.openai.com/v1",
       });
@@ -89,6 +90,7 @@ describe("createPdfTool OpenAI native routing", () => {
     await withTempPdfAgentDir(async (agentDir) => {
       await stubPdfToolInfra(agentDir, {
         provider: "openai",
+        input: ["text", "image"],
         api: "openai-responses",
         baseUrl: "https://api.openai.com/v1",
       });
@@ -127,6 +129,7 @@ describe("createPdfTool OpenAI native routing", () => {
     await withTempPdfAgentDir(async (agentDir) => {
       const { loadSpy } = await stubPdfToolInfra(agentDir, {
         provider: "openai",
+        input: ["text", "image"],
         api: "openai-responses",
         baseUrl: "https://api.openai.com/v1",
       });
@@ -170,6 +173,7 @@ describe("createPdfTool OpenAI native routing", () => {
     await withTempPdfAgentDir(async (agentDir) => {
       await stubPdfToolInfra(agentDir, {
         provider: "openai",
+        input: ["text", "image"],
         api: "openai-responses",
         baseUrl: "https://proxy.example.com/v1",
       });
@@ -206,6 +210,7 @@ describe("createPdfTool OpenAI native routing", () => {
     await withTempPdfAgentDir(async (agentDir) => {
       await stubPdfToolInfra(agentDir, {
         provider: "openai",
+        input: ["text", "image"],
         api: "openai-chatgpt-responses",
       });
       const nativeSpy = vi.spyOn(pdfNativeProviders, "openaiAnalyzePdf");

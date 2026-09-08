@@ -250,11 +250,12 @@ async function runPdfPrompt(params: {
           authStorage: resolved.authStorage,
         });
 
-        // Preserve OpenAI extraction for filtering/decryption and inputs outside
-        // its file limits. Decide from original bytes before base64 allocation.
+        // Preserve OpenAI extraction for text-only models, filtering/decryption,
+        // and file limits. Check original bytes before base64 allocation.
         const openaiNeedsExtraction =
           provider === "openai" &&
-          (Boolean(params.password) ||
+          (!model.input?.includes("image") ||
+            Boolean(params.password) ||
             Boolean(params.pageNumbers?.length) ||
             params.pdfBuffers.some(({ buffer }) => buffer.length >= OPENAI_PDF_MAX_BYTES) ||
             params.pdfBuffers.reduce((total, { buffer }) => total + buffer.length, 0) >

@@ -15,10 +15,12 @@ The tool registers only when OpenClaw can resolve a PDF-capable model for the ag
 
 1. `agents.defaults.pdfModel` (explicit primary/fallbacks)
 2. `agents.defaults.imageModel` (explicit primary/fallbacks)
-3. The agent's resolved session/default model, if its provider supports native PDF input (Anthropic, Google) or already has a configured vision model
+3. The agent's resolved session/default model, if its provider supports native PDF input (Anthropic, Google, OpenAI) or already has a configured vision model
 4. Auto-detected image/vision-capable providers with usable auth, preferring native-PDF providers first
 
 Every fallback candidate is auth-checked before use, so a configured `provider/model` only counts if OpenClaw can authenticate that provider for the agent. If no usable model resolves, the `pdf` tool is not exposed.
+
+On fresh installs and after upgrades, automatic selection can prefer OpenAI's PDF model when OpenAI is the default provider with usable auth, even when Anthropic is also available. Explicit `pdfModel` and `imageModel` settings keep their precedence. Saved configuration is not rewritten.
 
 ## Input reference
 
@@ -72,13 +74,16 @@ Used for providers `anthropic` and `google`, and for `openai` with the `openai-r
 
 Limits:
 
+- OpenAI native input requires `image` in the resolved model's input capabilities. Configured text-only models retain extraction, including explicit `input: ["text"]` overrides.
 - Anthropic and Google reject `pages` and `password` with `pages is not supported with native PDF providers` or `password is not supported with native PDF providers`. Use an extraction-capable route for these options.
 - OpenAI uses extraction when `pages` or `password` is set, preserving page filtering and encrypted-PDF support.
 - OpenAI native input requires each PDF to be smaller than `50,000,000` bytes and all PDFs together to be at most `50,000,000` bytes. Larger requests use extraction. These conservative decimal-byte bounds follow the [OpenAI file input limits](https://developers.openai.com/api/docs/guides/file-inputs#usage-considerations); the per-PDF loader cap still applies first.
 
+An existing OpenAI configuration that meets these requirements sends the complete original PDFs after upgrading, rather than only locally extracted content. `pdfMaxPages` limits extraction only; it does not limit native uploads.
+
 ### Extraction fallback mode
 
-Used for every other provider, custom OpenAI endpoints, ChatGPT/Codex transports, and OpenAI requests that need filtering, decryption, or exceed the native file limits.
+Used for every other provider, custom OpenAI endpoints, and ChatGPT/Codex transports. OpenAI also uses extraction for text-only models, page filtering, decryption, and requests exceeding the native file limits.
 
 1. Extract text from the selected pages (up to `agents.defaults.pdfMaxPages`, default `20`) via the bundled `document-extract` plugin, which uses the `clawpdf` package (PDFium WebAssembly) for text and image extraction.
 2. If the extracted text is shorter than `200` characters, render the same pages to PNG images. The render budget is `4,000,000` pixels total, shared across all pages needing images (allocated proportionally per remaining page, not per page), so text pages that already have enough text skip rendering entirely.
