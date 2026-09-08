@@ -246,6 +246,13 @@ async function inspectJob(
     .filter((line) => line.startsWith("\t\t"))
     .map((line) => line.slice(2));
   const environment = output.match(/^\tenvironment = \{\n([\s\S]*?)^\t\}/m)?.[1] ?? "";
+  // launchd also injects the `inherited environment` and `default environment`
+  // blocks into the process; a shell reads BASH_ENV/SHELLOPTS from any of them.
+  const environmentBlocks = [
+    ...output.matchAll(/^\t(?:inherited |default )?environment = \{\n([\s\S]*?)^\t\}/gm),
+  ]
+    .map((match) => match[1] ?? "")
+    .join("\n");
   const plist = plistPath ? await readOwnedText(plistPath) : undefined;
   const hasServiceMarker =
     /^\t\tOPENCLAW_SERVICE_MARKER => openclaw$/m.test(environment) &&
@@ -260,7 +267,7 @@ async function inspectJob(
   }
   let actions: GatewayAction[] = [];
   let diagnostic: string | undefined;
-  const shellEnvironmentDiagnostic = hasShellExecutionEnvironment(environment)
+  const shellEnvironmentDiagnostic = hasShellExecutionEnvironment(environmentBlocks)
     ? "Shell environment alters execution; left unchanged."
     : undefined;
   const command = args.length ? [program, ...args.slice(1)] : [program];

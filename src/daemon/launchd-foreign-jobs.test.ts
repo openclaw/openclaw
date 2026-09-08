@@ -275,6 +275,18 @@ describe("foreign launchd command classification", () => {
           : mode === "direct"
             ? [file]
             : ["/bin/bash", file];
+      for (const block of ["inherited environment", "default environment"]) {
+        addJob(
+          label,
+          args,
+          `\t${block} = {\n\t\tBASH_ENV => /tmp/profile\n\t}\n\tenvironment = {\n\t\tPATH => /usr/bin:/bin\n\t}\n`,
+        );
+        expect((await findForeignLaunchdJobs({}))[0], block).toMatchObject({
+          gatewayActions: [],
+          safeToRemove: false,
+          diagnostic: "Shell environment alters execution; left unchanged.",
+        });
+      }
       for (const name of [
         "SHELLOPTS",
         "BASHOPTS",
