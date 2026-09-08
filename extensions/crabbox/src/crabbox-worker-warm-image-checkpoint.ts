@@ -4,7 +4,7 @@ import type { WarmImageRecord } from "./crabbox-worker-warm-image-store.js";
 
 const CHECKPOINT_ID_PATTERN = /^chk_[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/u;
 
-export function parseCheckpointJson(stdout: string, action: string): Record<string, unknown> {
+function parseCheckpointJson(stdout: string, action: string): Record<string, unknown> {
   let parsed: unknown;
   try {
     parsed = JSON.parse(stdout);
