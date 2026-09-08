@@ -37,7 +37,7 @@ export function attachOpenClawTranscriptMeta(
   };
 }
 
-function readTranscriptMessageIdempotencyKey(message: unknown): string | undefined {
+export function readTranscriptMessageIdempotencyKey(message: unknown): string | undefined {
   if (!message || typeof message !== "object" || Array.isArray(message)) {
     return undefined;
   }
@@ -135,14 +135,32 @@ export function projectTranscriptEntryMessage(
       seq,
     });
   }
+  const parsedTimestamp =
+    typeof record.timestamp === "string" ? Date.parse(record.timestamp) : Number.NaN;
+  if (record.type === "custom_message") {
+    return attachOpenClawTranscriptMeta(
+      {
+        role: "custom",
+        customType: record.customType,
+        content: record.content,
+        display: record.display,
+        details: record.details,
+        timestamp: parsedTimestamp,
+      },
+      {
+        ...(typeof record.id === "string" ? { id: record.id } : {}),
+        recordTimestampMs: parsedTimestamp,
+        transcriptPosition,
+        seq,
+      },
+    );
+  }
   if (record.type !== "compaction" && record.type !== "reset") {
     return null;
   }
   const kind = record.type;
   const compactionIdentity =
     kind === "compaction" ? asOptionalRecord(record["__openclaw"]) : undefined;
-  const parsedTimestamp =
-    typeof record.timestamp === "string" ? Date.parse(record.timestamp) : Number.NaN;
   return {
     role: "system",
     content: [{ type: "text", text: kind === "compaction" ? "Compaction" : "Reset" }],

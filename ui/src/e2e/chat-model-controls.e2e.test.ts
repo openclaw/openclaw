@@ -63,7 +63,7 @@ suite.define(() => {
           deferredMethods: ["sessions.patch"],
           methodResponses: {
             "sessions.list": sessionList,
-            "chat.metadata": {
+            "models.list": {
               commands: [],
               models,
               accountSelection: {
@@ -161,7 +161,7 @@ suite.define(() => {
         await expect.poll(() => trigger.textContent()).toContain(personal.label);
         await gateway.resolveDeferred("sessions.patch", { ok: true });
         await gateway.setMethodResponse("sessions.list", sessionList);
-        await gateway.setMethodResponse("chat.metadata", {
+        await gateway.setMethodResponse("models.list", {
           commands: [],
           models,
           accountSelection: {
@@ -457,13 +457,26 @@ suite.define(() => {
       });
     },
   );
-  it.each(["openai", "example"])(
-    "keeps %s non-reasoning capabilities reachable without a model-menu bridge",
-    async (provider) => {
+  it.each([
+    { provider: "openai", reasoning: false, capability: "non-reasoning" },
+    { provider: "example", reasoning: false, capability: "non-reasoning" },
+    { provider: "metadata-fixture", reasoning: true, capability: "no-effort" },
+  ])(
+    "keeps $provider $capability capabilities reachable without a model-menu bridge",
+    async ({ provider, reasoning }) => {
       await suite.withPage({ viewport: { width: 320, height: 852 } }, async ({ page }) => {
         const gateway = await installMockGateway(page, {
           agentModel: `${provider}/basic`,
-          models: [{ id: "basic", provider, name: "Basic", reasoning: false, thinkingLevels: [] }],
+          models: [
+            {
+              id: "basic",
+              provider,
+              name: "Basic",
+              reasoning,
+              thinkingLevels: [],
+              thinkingDefault: "off",
+            },
+          ],
           methodResponses: {
             "sessions.list": {
               count: 1,
@@ -473,6 +486,7 @@ suite.define(() => {
                 model: "basic",
                 modelProvider: provider,
                 thinkingLevels: [],
+                thinkingDefault: "off",
                 contextTokens: 200_000,
               },
               sessions: [
@@ -482,6 +496,7 @@ suite.define(() => {
                   model: "basic",
                   modelProvider: provider,
                   thinkingLevels: [],
+                  thinkingDefault: "off",
                   contextTokens: 200_000,
                   totalTokens: 46_000,
                   totalTokensFresh: true,
@@ -496,8 +511,13 @@ suite.define(() => {
         const model = composer.locator('[data-chat-model-select="true"]');
         await expect.poll(() => model.getAttribute("aria-busy")).toBe("false");
         const effort = composer.locator('[data-chat-thinking-select="true"]');
-        if (provider === "example") {
+        if (provider !== "openai") {
           await expect.poll(() => effort.count()).toBe(0);
+          expect(
+            (await gateway.getRequests("sessions.patch")).some(
+              ({ params }) => params && Object.hasOwn(params, "thinkingLevel"),
+            ),
+          ).toBe(false);
           return;
         }
         await expect.poll(() => effort.getAttribute("aria-label")).toBe("Fast mode: Standard");

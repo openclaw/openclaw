@@ -187,7 +187,10 @@ export function createChatMetadataHarness(
     },
   );
   const readProjection = vi.fn(
-    (projection: { modelCatalog: ModelCatalogEntry[]; models?: unknown[] }) => projection,
+    (projection: {
+      modelCatalog: ModelCatalogEntry[];
+      models?: import("../../../packages/gateway-protocol/src/index.js").ModelChoice[];
+    }) => projection,
   );
   const context = {
     getRuntimeConfig: () => config,

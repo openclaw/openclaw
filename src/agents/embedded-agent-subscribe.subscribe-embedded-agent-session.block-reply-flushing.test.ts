@@ -5,6 +5,7 @@ import {
   emitAssistantTextDelta,
 } from "./embedded-agent-subscribe.e2e-harness.js";
 import { subscribeEmbeddedAgentSession } from "./embedded-agent-subscribe.js";
+import { textAssistant } from "./test-helpers/sparse-transcript.test-support.js";
 
 function firstBlockReplyText(onBlockReply: ReturnType<typeof vi.fn>): string | undefined {
   // Flush tests only care about the first emitted user-visible chunk.
@@ -161,10 +162,7 @@ describe("subscribeEmbeddedAgentSession", () => {
 
     emit({
       type: "message_end",
-      message: {
-        role: "assistant",
-        content: [{ type: "text", text: "Final reply before lifecycle end." }],
-      },
+      message: textAssistant("Final reply before lifecycle end."),
     });
     await Promise.resolve();
 
@@ -201,10 +199,7 @@ describe("subscribeEmbeddedAgentSession", () => {
 
     emit({
       type: "message_end",
-      message: {
-        role: "assistant",
-        content: [{ type: "text", text: "Final reply before lifecycle end." }],
-      },
+      message: textAssistant("Final reply before lifecycle end."),
     });
     await vi.waitFor(() => {
       expect(delivered).toEqual(["Final reply before lifecycle end."]);

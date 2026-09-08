@@ -397,6 +397,10 @@ The plugin ships agent tools for Feishu documents, chats, knowledge base, cloud 
 
 Per-account gates live under `accounts.<id>.tools`.
 
+After a configuration update is applied, new agent turns use the updated tool
+gates and account selection without restarting the Gateway. Tools already created
+for an in-progress turn keep their original configuration.
+
 Bitable operations use the application token from a `/base/` URL or returned
 `app_token`, not the node token in a `/wiki/` URL. If application creation succeeds
 but table metadata is not retrieved, keep the returned `app_token` and URL. Inspect

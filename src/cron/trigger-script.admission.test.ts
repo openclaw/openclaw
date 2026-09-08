@@ -32,7 +32,7 @@ function toolRuntime(ctx: HeadlessParams["ctx"]) {
 
 function prepareRuntime(config: OpenClawConfig, tool: AnyAgentTool) {
   return vi.fn(async () => ({
-    tools: [tool],
+    createTools: () => [tool],
     context: { config, agentId: "main", sessionKey: "agent:main:cron:probe" },
   }));
 }

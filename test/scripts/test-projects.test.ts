@@ -55,6 +55,13 @@ describe("test runtime prerequisites", () => {
     ["QA directory", ["extensions/qa-lab"], "private-qa"],
     ["tooling config", ["test/vitest/vitest.tooling.config.ts"], "private-qa"],
     ["QA config", ["test/vitest/vitest.extension-qa.config.ts"], "private-qa"],
+    [
+      "sticker provider runtime",
+      ["extensions/telegram/src/sticker-cache.selection.test.ts"],
+      "runtime",
+    ],
+    ["Telegram config", ["test/vitest/vitest.extension-telegram.config.ts"], "runtime"],
+    ["ordinary Telegram test", ["extensions/telegram/src/sequential-key.test.ts"], undefined],
     ["all plugins", ["extensions"], "private-qa"],
     ["full local suite", [], "private-qa"],
     ["root config", ["vitest.config.ts"], "private-qa"],
@@ -173,6 +180,7 @@ describe("test runtime prerequisites", () => {
     ["gateway", ["gateway-*.test.ts"], "runtime"],
     ["gateway", ["server*.test.ts"], "runtime"],
     ["tooling", ["**/gateway-codex-delivery-cache.test.ts"], "runtime"],
+    ["extension-telegram", ["**/sticker-cache.selection.test.ts"], undefined],
   ] as const)("keeps %s selection scoped after excluding %s", (project, exclude, expected) => {
     const selections = resolveVitestRuntimeCliSelections(
       `test/vitest/vitest.${project}.config.ts`,
@@ -531,7 +539,11 @@ describe("scripts/test-projects changed-target routing", () => {
     (scriptPath) => {
       expectChangedTargets(
         [scriptPath],
-        ["test/scripts/direct-run-entrypoints.test.ts", "test/scripts/lint-status.test.ts"],
+        [
+          "test/scripts/direct-run-entrypoints.test.ts",
+          "test/scripts/lint-status.test.ts",
+          "test/scripts/local-check-runtime.test.ts",
+        ],
       );
     },
   );
@@ -1162,6 +1174,7 @@ describe("scripts/test-projects changed-target routing", () => {
         "test/scripts/npm-prepared-bundle.test.ts",
         "test/scripts/openclaw-npm-resume-run.test.ts",
         "test/scripts/release-candidate-checklist.test.ts",
+        "test/scripts/verify-stable-main-closeout.test.ts",
         "test/scripts/ci-workflow-guards.test.ts",
       ],
     );
@@ -1190,6 +1203,7 @@ describe("scripts/test-projects changed-target routing", () => {
         "test/scripts/authorized-beta-focused-evidence.test.ts",
         "test/scripts/clawhub-parent-authorization.test.ts",
         "test/scripts/clawhub-postpublish.test.ts",
+        "test/scripts/plugin-npm-extended-stable-workflow.test.ts",
         "test/scripts/release-candidate-checklist.test.ts",
         "test/scripts/release-no-push-workflow.test.ts",
         "test/scripts/release-plan-producer.test.ts",
@@ -1412,7 +1426,12 @@ describe("scripts/test-projects changed-target routing", () => {
       [".github/workflows/mantis-slack-desktop-smoke.yml", packageAcceptanceTargets],
       [
         ".github/workflows/mantis-web-ui-chat-proof.yml",
-        ["test/scripts/mantis-web-ui-chat-proof-workflow.test.ts", ...packageAcceptanceTargets],
+        [
+          "test/scripts/mantis-web-ui-chat-proof-workflow.test.ts",
+          ...packageAcceptanceTargets,
+          "test/scripts/mantis-request-proof.test.ts",
+          "test/scripts/mantis-telegram-proof.test.ts",
+        ],
       ],
     ]);
 
@@ -1441,6 +1460,7 @@ describe("scripts/test-projects changed-target routing", () => {
         "test/scripts/package-source-preflight.test.ts",
         "test/scripts/release-ci-summary.test.ts",
         "test/scripts/release-no-push-workflow.test.ts",
+        "test/scripts/upgrade-survivor-baselines.test.ts",
       ],
     );
   });
@@ -2270,7 +2290,7 @@ describe("scripts/test-projects changed-target routing", () => {
   it("routes mac restart helpers through restart-mac owner tests", () => {
     expectChangedTargets(
       ["scripts/lib/restart-mac-gateway.sh"],
-      ["test/scripts/restart-mac.test.ts"],
+      ["test/scripts/build-and-run-mac.test.ts", "test/scripts/restart-mac.test.ts"],
     );
   });
 

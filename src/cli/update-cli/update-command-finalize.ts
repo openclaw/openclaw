@@ -12,7 +12,13 @@ import {
   UPDATE_EFFECTIVE_CHANNEL_ENV,
 } from "../../infra/update-channels.js";
 import { resolveUpdateInstallKind } from "../../infra/update-check.js";
+import { normalizeUpdatePostInstallDoctorWarnings } from "../../infra/update-doctor-result.js";
 import { POST_CORE_UPDATE_SOURCE_CONFIG_PATH_ENV } from "../../infra/update-post-core-context.js";
+import {
+  acknowledgeAbandonedUpdateRun,
+  getUpdateRun,
+  reconcileAbandonedUpdateRuns,
+} from "../../infra/update-run-ledger.js";
 import { loadInstalledPluginIndexInstallRecords } from "../../plugins/installed-plugin-index-records.js";
 import { withPluginLifecycleLease } from "../../plugins/plugin-lifecycle-lease.js";
 import { withCommandProcessScope } from "../../process/exec-spawn.js";
@@ -31,9 +37,9 @@ import { suppressDeprecations } from "./suppress-deprecations.js";
 import { createUpdateConfigSnapshot } from "./update-command-config-snapshot.js";
 import {
   persistRequestedUpdateChannel,
+  preparePostCorePluginConfig,
   persistValidatedDowngradeConfig,
   readPostCorePreUpdateSourceConfig,
-  restoreDroppedPreUpdateChannels,
 } from "./update-command-config.js";
 import {
   completePostCorePluginUpdate,
@@ -49,7 +55,10 @@ import { resolveServiceRefreshEnv, withUpdateInProgressEnv } from "./update-comm
 import { withUpdateFailureTriage } from "./update-command-triage.js";
 import { UpdateFinalizationLifecycle } from "./update-finalization-lifecycle.js";
 
-export async function updateFinalizeCommand(opts: UpdateFinalizeOptions): Promise<void> {
+export async function updateFinalizeCommand(
+  opts: UpdateFinalizeOptions,
+  recoveryRunIds: readonly string[] = [],
+): Promise<void> {
   const invocationCwd = tryResolveInvocationCwd();
   suppressDeprecations();
   const timeoutMs = parseTimeoutMsOrExit(opts.timeout);
@@ -89,7 +98,7 @@ export async function updateFinalizeCommand(opts: UpdateFinalizeOptions): Promis
             const prepared = await lifecycle.run("targetConfigValidation", () =>
               prepareUpdateFinalization(opts, root, requestedChannel),
             );
-            await updateFinalizeCommandInternal(opts, prepared, lifecycle);
+            await updateFinalizeCommandInternal(opts, prepared, lifecycle, recoveryRunIds);
           } catch (error) {
             if (error instanceof UpdateCommandFailure) {
               lifecycle.complete(error.exitCode);
@@ -175,10 +184,17 @@ async function updateFinalizeCommandInternal(
   opts: UpdateFinalizeOptions,
   prepared: Awaited<ReturnType<typeof prepareUpdateFinalization>>,
   lifecycle: UpdateFinalizationLifecycle,
+  recoveryRunIds: readonly string[],
 ): Promise<void> {
   const { root, preFinalizeConfig, requestedChannel, storedChannel, effectiveChannel, channel } =
     prepared;
   let { configSnapshot } = prepared;
+  let doctorWarnings: string[] = [];
+  const onDoctorWarnings = (warnings: string[]) => {
+    doctorWarnings = normalizeUpdatePostInstallDoctorWarnings([
+      ...new Set([...doctorWarnings, ...warnings]),
+    ]);
+  };
 
   const initialPluginUpdate = await withPrePluginUpdateDoctorEnv(async () => {
     await lifecycle.run("configSnapshot", createUpdateConfigSnapshot);
@@ -190,21 +206,18 @@ async function updateFinalizeCommandInternal(
         json: opts.json === true,
         workspaceSuggestions: true,
         timeoutMs: lifecycle.budget("doctor"),
+        onWarnings: onDoctorWarnings,
       }),
     );
     return await lifecycle.run(
       "plugins",
       () =>
         withPluginLifecycleLease({}, async () => {
-          configSnapshot = await readConfigFileSnapshot({ skipPluginValidation: true });
-          if (requestedChannel) {
-            configSnapshot = await persistRequestedUpdateChannel({
-              configSnapshot,
-              requestedChannel,
-            });
-          }
-          const restoredConfig = restoreDroppedPreUpdateChannels(configSnapshot, preFinalizeConfig);
-          configSnapshot = restoredConfig.snapshot;
+          const preparedConfig = await preparePostCorePluginConfig({
+            requestedChannel,
+            preUpdateConfig: preFinalizeConfig,
+          });
+          configSnapshot = preparedConfig.configSnapshot;
           const postDoctorStoredChannel = configSnapshot.valid
             ? normalizeUpdateChannel(configSnapshot.config.update?.channel)
             : null;
@@ -218,9 +231,7 @@ async function updateFinalizeCommandInternal(
           return await updatePluginsAfterCoreUpdate({
             root,
             channel: postDoctorChannel,
-            configSnapshot,
-            configChanged: restoredConfig.changed,
-            restoredAuthoredChannels: restoredConfig.authoredChannels,
+            ...preparedConfig,
             json: opts.json,
             acceptCapabilities: opts.acceptCapabilities,
             timeoutMs: lifecycle.budget("plugins"),
@@ -241,6 +252,7 @@ async function updateFinalizeCommandInternal(
         yes: opts.yes === true,
         json: opts.json === true,
         timeoutMs: lifecycle.budget("targetConfigConvergence"),
+        onWarnings: onDoctorWarnings,
       });
       await persistValidatedDowngradeConfig(result.configSnapshot);
       return result;
@@ -261,11 +273,12 @@ async function updateFinalizeCommandInternal(
     (result) => result,
   );
 
+  const reconciledRuns: string[] = [];
   const result = {
     status:
       pluginUpdate.status === "error"
         ? "error"
-        : pluginUpdate.status === "warning"
+        : pluginUpdate.status === "warning" || doctorWarnings.length > 0
           ? "warning"
           : "ok",
     mode: "finalize",
@@ -277,14 +290,33 @@ async function updateFinalizeCommandInternal(
         : null) ??
       channel,
     restart: false,
+    ...(recoveryRunIds.length ? { reconciledRuns } : {}),
     phaseTimings: lifecycle.phaseTimings,
     postUpdate: {
       doctor: {
-        status: "ok",
+        status: doctorWarnings.length > 0 ? "warning" : "ok",
+        ...(doctorWarnings.length > 0 ? { warnings: doctorWarnings } : {}),
       },
       plugins: pluginUpdate,
     },
   };
+  if (result.status !== "error" && recoveryRunIds.length) {
+    // Publish successful recovery only after convergence and the ledger's
+    // transactional inactivity/driver check both finish.
+    reconciledRuns.push(
+      ...reconcileAbandonedUpdateRuns({ explicit: true, runIds: recoveryRunIds }).map(
+        (run) => run.runId,
+      ),
+    );
+    if (recoveryRunIds.some((runId) => getUpdateRun(runId)?.status === "running")) {
+      throw new Error(
+        "An update resumed while repair was running; wait for that update before retrying repair.",
+      );
+    }
+    for (const runId of recoveryRunIds) {
+      acknowledgeAbandonedUpdateRun(runId);
+    }
+  }
   if (opts.json) {
     defaultRuntime.writeJson(result);
   } else if (result.status === "ok") {

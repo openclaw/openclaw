@@ -59,6 +59,17 @@ Explicit copy flows, such as `openclaw agents add`, use this portability policy:
 
 Non-portable profiles remain available through the shared read-through base unless the target agent signs in separately and creates its own local profile.
 
+During OAuth refresh, the current credential generation is replaced by an inert
+durable marker. Pending markers remain ineligible by default and are ordered only
+by runtime paths that immediately pass them to the settlement-aware resolver.
+Failed markers are terminal and require the operator to authenticate again.
+
+Agent-local peers never receive copied rotated refresh material. A peer removes
+its marker and inherits the shared credential only after verifying that the
+shared credential belongs to the same account. If that identity cannot be
+verified, the peer remains terminally fenced instead of inheriting another
+account.
+
 `openclaw agent exec` preserves the original shared-store root when switching to temporary run state. Its bounded credential scope reads portable `api_key` and `token` profiles from that shared store without persisting copies; the configured agent's local profiles still win. Shared OAuth profiles are excluded from this temporary scope, even with `copyToAgents: true`, so the run does not acquire another refresh owner. `--auth-env-only` disables stored credential access entirely.
 
 Auth writes that explicitly select a state directory, including isolated QA staging, use that directory's shared store for ownership and OAuth deduplication. Their runtime publication and rollback retain the same owner; another process-local state root is not an inherited base. An unrelated outer database may be older, newer, or unreadable without blocking an isolated write, but an unreadable or newer database in the selected target still fails closed. Writes without an explicit state directory retain the normal ambient state and agent-directory configuration.
@@ -74,6 +85,8 @@ Personal pins keep the existing same-provider failover policy: ordered shared ac
 `auth.profiles` entries with `mode: "aws-sdk"` are routing metadata, not stored credentials. They are valid when the target provider uses `models.providers.<id>.auth: "aws-sdk"`, the route the plugin-owned Amazon Bedrock setup writes. These profile ids may appear in `auth.order` and session overrides even when no matching entry exists in the credential store.
 
 Do not write `type: "aws-sdk"` into the credential store; stored credentials are only `api_key`, `token`, or `oauth`. If a legacy `auth-profiles.json` has such a marker, `openclaw doctor --fix` moves it to `auth.profiles` and removes the marker from the store.
+
+When a selected stored profile is removed, credential-scoped model discovery reports `selected_auth_profile_unavailable` before consulting dynamic model metadata. Restore the credential or select another configured profile; registering the model does not repair missing authentication. Config-only AWS SDK profiles remain valid without a stored credential. Chat admission and agent commands retain an explicit same-provider selection when its credential disappears so authentication can report recovery. Stale automatic selections and selections for incompatible providers are still cleared.
 
 ## Explicit auth order filtering
 

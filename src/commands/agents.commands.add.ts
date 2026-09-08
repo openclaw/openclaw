@@ -30,13 +30,13 @@ import { formatCliCommand } from "../cli/command-format.js";
 import { ExpectedCliError } from "../cli/failure-output.js";
 import { isTerminalInteractive } from "../cli/terminal-interactivity.js";
 import { logConfigUpdated } from "../config/logging.js";
-import { createChannelSetupTransaction } from "../flows/channel-setup.js";
+import { createChannelSetupHooks } from "../flows/channel-setup.js";
 import {
   commitConfigWithPendingPluginInstalls,
   transformConfigWithPendingPluginInstalls,
 } from "../plugins/install-record-commit.js";
 import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
-import { persistProviderAuthProfileBatch } from "../plugins/provider-auth-persistence.js";
+import { stageProviderAuthProfileBatch } from "../plugins/provider-auth-persistence.js";
 import type { ProviderAuthProfile } from "../plugins/types.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
@@ -47,7 +47,7 @@ import { applyAgentBindings, buildChannelBindings, describeBinding } from "./age
 import { applyAgentConfig, listAgentEntries } from "./agents.config.js";
 import { promptAuthChoiceGrouped } from "./auth-choice-prompt.js";
 import { prepareAuthChoice, warnIfModelConfigLooksOff } from "./auth-choice.js";
-import { requireValidConfigFileSnapshot } from "./config-validation.js";
+import { requireValidConfigForWrite } from "./config-validation.js";
 import {
   ensureOnboardingAgentWorkspace,
   resolveOnboardingAgentTarget,
@@ -111,12 +111,11 @@ export async function agentsAddCommand(
     );
   }
 
-  const configSnapshot = await requireValidConfigFileSnapshot(runtime);
-  if (!configSnapshot) {
+  const writeSnapshot = await requireValidConfigForWrite(runtime);
+  if (!writeSnapshot) {
     return;
   }
-  const cfg = configSnapshot.sourceConfig ?? configSnapshot.config;
-  const baseHash = configSnapshot.hash;
+  const cfg = writeSnapshot.snapshot.sourceConfig;
 
   const workspaceFlag = opts.workspace?.trim();
   const nameInput = opts.name?.trim();
@@ -424,7 +423,7 @@ export async function agentsAddCommand(
       validateCatalog: false,
     });
 
-    const channelSetup = createChannelSetupTransaction({ runtime: wizardRuntime });
+    const channelSetup = createChannelSetupHooks({ runtime: wizardRuntime });
     let selection: ChannelChoice[] = [];
     const channelAccountIds: Partial<Record<ChannelChoice, string>> = {};
     nextConfig = await setupChannels(nextConfig, wizardRuntime, prompter, {
@@ -502,20 +501,21 @@ export async function agentsAddCommand(
         skipOptionalBootstrapFiles: nextConfig.agents?.defaults?.skipOptionalBootstrapFiles,
       });
       const authPersistence = stagedAuthBatch
-        ? await persistProviderAuthProfileBatch(stagedAuthBatch)
+        ? await stageProviderAuthProfileBatch(stagedAuthBatch)
         : undefined;
       try {
-        nextConfig = await channelSetup.commit(nextConfig, async (configToCommit) => {
-          const committed = await commitConfigWithPendingPluginInstalls({
-            nextConfig: configToCommit,
-            ...(baseHash !== undefined ? { baseHash } : {}),
-          });
-          return committed.config;
+        const committed = await commitConfigWithPendingPluginInstalls({
+          sourceConfig: nextConfig,
+          writeOptions: writeSnapshot.writeOptions,
+          baseHash: writeSnapshot.snapshot.hash,
         });
+        await channelSetup.runPostWriteHooks(committed.path);
+        nextConfig = committed.nextConfig;
       } catch (error) {
-        authPersistence?.rollback();
+        await authPersistence?.rollback();
         throw error;
       }
+      await authPersistence?.commit();
       payload = {
         agentId: target.agentId,
         name: agentName,
@@ -529,13 +529,12 @@ export async function agentsAddCommand(
       const created = await withPluginLifecycleLease({}, async () => {
         return await createAgent({
           entry: { ...stagedEntry, id: agentId },
-          expectedConfigHash: baseHash ?? null,
-          stagedConfig: nextConfig,
+          stagedConfig: { config: nextConfig, writeSnapshot },
           transformConfig: transformConfigWithPendingPluginInstalls,
           ...(stagedAuthBatch
             ? {
                 prepareConfigCommit: async () =>
-                  (await persistProviderAuthProfileBatch(stagedAuthBatch)).rollback,
+                  await stageProviderAuthProfileBatch(stagedAuthBatch),
               }
             : {}),
         });
@@ -551,7 +550,7 @@ export async function agentsAddCommand(
         workspace: created.workspace,
         agentDir: created.agentDir,
       };
-      await channelSetup.runPostWriteHooks(nextConfig);
+      await channelSetup.runPostWriteHooks(created.configPath);
     }
     await reportPortableAuthCopy?.();
     if (!opts.json) {

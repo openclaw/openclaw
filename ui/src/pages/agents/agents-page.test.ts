@@ -12,11 +12,11 @@ import type {
 } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { refreshVisibleToolsEffectiveForCurrentSession } from "../../lib/agents/index.ts";
-import { invalidateChatMetadataStore } from "../../lib/chat/chat-metadata-store.ts";
 import { loadCronJobsPage } from "../../lib/cron/index.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import {
   deferred,
+  emitCatalogChanged,
   gateway,
   setPageGateway,
   snapshot,
@@ -288,10 +288,14 @@ describe("AgentsPage gateway lifecycle", () => {
 
     await waitForFast(() => expect(page.chatModelCatalog).toEqual(models));
     expect(request).toHaveBeenCalledOnce();
-    expect(request).toHaveBeenCalledWith("chat.metadata", { agentId: "main" });
+    expect(request).toHaveBeenCalledWith(
+      "models.list",
+      { view: "configured", agentId: "main" },
+      { signal: expect.any(AbortSignal) },
+    );
   });
 
-  it("caches separate configured model catalogs for the default and worker agents", async () => {
+  it("reads separate configured model catalogs when switching default and worker agents", async () => {
     const defaultModels = [
       { id: "default-model", name: "Default account model", provider: "openai" },
     ];
@@ -315,10 +319,20 @@ describe("AgentsPage gateway lifecycle", () => {
 
     page.agentsSelectedId = "main";
     page.loadActivePanelData();
-    expect(page.chatModelCatalog).toEqual(defaultModels);
-    expect(request).toHaveBeenCalledTimes(2);
-    expect(request).toHaveBeenNthCalledWith(1, "chat.metadata", { agentId: "main" });
-    expect(request).toHaveBeenNthCalledWith(2, "chat.metadata", { agentId: "worker" });
+    await waitForFast(() => expect(page.chatModelCatalog).toEqual(defaultModels));
+    expect(request).toHaveBeenCalledTimes(3);
+    expect(request).toHaveBeenNthCalledWith(
+      1,
+      "models.list",
+      { view: "configured", agentId: "main" },
+      { signal: expect.any(AbortSignal) },
+    );
+    expect(request).toHaveBeenNthCalledWith(
+      2,
+      "models.list",
+      { view: "configured", agentId: "worker" },
+      { signal: expect.any(AbortSignal) },
+    );
   });
 
   it("rejects a stale default-agent catalog after switching to a worker agent", async () => {
@@ -350,7 +364,12 @@ describe("AgentsPage gateway lifecycle", () => {
 
     expect(page.chatModelCatalog).toEqual(workerModels);
     expect(request).toHaveBeenCalledTimes(2);
-    expect(request).toHaveBeenNthCalledWith(2, "chat.metadata", { agentId: "worker" });
+    expect(request).toHaveBeenNthCalledWith(
+      2,
+      "models.list",
+      { view: "configured", agentId: "worker" },
+      { signal: expect.any(AbortSignal) },
+    );
   });
 
   it("re-reads a cached model catalog when the picker asks for a refresh", async () => {
@@ -368,8 +387,7 @@ describe("AgentsPage gateway lifecycle", () => {
     page.loadActivePanelData();
     await waitForFast(() => expect(page.chatModelCatalog).toEqual(oldModels));
 
-    // Without refresh the per-agent cache answers; provider-key changes would
-    // stay invisible for the connection lifetime.
+    // Repeated render work retains this page snapshot; a picker read requests current facts.
     page.ensureModelCatalog();
     expect(request).toHaveBeenCalledTimes(1);
 
@@ -398,7 +416,7 @@ describe("AgentsPage gateway lifecycle", () => {
 
       page.loadActivePanelData();
       if (replacement === "publication") {
-        invalidateChatMetadataStore(client);
+        emitCatalogChanged(page.context.gateway);
       } else {
         if (replacement === "reconnect") {
           setPageGateway(page, client, false);
@@ -409,7 +427,7 @@ describe("AgentsPage gateway lifecycle", () => {
           true,
           replacement === "gateway source",
         );
-        invalidateChatMetadataStore(client);
+        emitCatalogChanged(page.context.gateway);
         page.agentsSelectedId = "main";
         page.loadActivePanelData();
       }
@@ -442,13 +460,18 @@ describe("AgentsPage gateway lifecycle", () => {
 
     setPageGateway(page, client, false);
     expect(page.chatModelCatalog).toEqual([]);
-    invalidateChatMetadataStore(client);
+    emitCatalogChanged(page.context.gateway);
     setPageGateway(page, client);
     page.loadActivePanelData();
 
     await waitForFast(() => expect(page.chatModelCatalog).toEqual(nextModels));
     expect(request).toHaveBeenCalledTimes(2);
-    expect(request).toHaveBeenNthCalledWith(2, "chat.metadata", { agentId: "main" });
+    expect(request).toHaveBeenNthCalledWith(
+      2,
+      "models.list",
+      { view: "configured", agentId: "main" },
+      { signal: expect.any(AbortSignal) },
+    );
   });
 
   it("surfaces a rejected agent-scoped metadata RPC and retries without marking an empty catalog loaded", async () => {
@@ -473,7 +496,12 @@ describe("AgentsPage gateway lifecycle", () => {
 
     expect(page.chatModelCatalogStatus.error).toBeNull();
     expect(request).toHaveBeenCalledTimes(2);
-    expect(request).toHaveBeenNthCalledWith(2, "chat.metadata", { agentId: "main" });
+    expect(request).toHaveBeenNthCalledWith(
+      2,
+      "models.list",
+      { view: "configured", agentId: "main" },
+      { signal: expect.any(AbortSignal) },
+    );
   });
 
   it("requests the selected agent's implicit default cron job before the first 50 unrelated jobs", async () => {

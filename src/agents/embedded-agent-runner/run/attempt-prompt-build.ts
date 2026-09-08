@@ -60,6 +60,7 @@ import {
 } from "./attempt-llm-boundary.js";
 import type { resolveOrphanRepairPlan } from "./attempt-orphan-repair.js";
 import {
+  mergeOrphanedTrailingUserPrompt,
   resolvePromptBuildHookResult,
   shouldWarnOnOrphanedUserRepair,
 } from "./attempt-prompt-helpers.js";
@@ -260,13 +261,12 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
 
   const leafEntry = input.orphanRepair?.messageEntry;
   if (leafEntry && input.orphanRepair) {
-    const messageMergeStrategy = input.orphanRepair.strategy;
-    const orphanPromptMerge = messageMergeStrategy.mergeOrphanedTrailingUserPrompt({
+    const orphanPromptMerge = mergeOrphanedTrailingUserPrompt({
       prompt: effectivePrompt,
       trigger: attempt.trigger,
       leafMessage: leafEntry.message,
     });
-    const transcriptPromptMerge = messageMergeStrategy.mergeOrphanedTrailingUserPrompt({
+    const transcriptPromptMerge = mergeOrphanedTrailingUserPrompt({
       prompt: effectiveTranscriptPrompt,
       trigger: attempt.trigger,
       leafMessage: leafEntry.message,
@@ -401,7 +401,6 @@ export function prepareEmbeddedAttemptPromptContext(input: {
   isRawModelRun: boolean;
   messages: AgentMessage[];
   preparedUserTurnMessage?: AgentMessage;
-  heartbeatOutcomeContext?: string;
   prompt: PromptAssemblyContext;
   replaceSessionMessages: (messages: AgentMessage[]) => void;
   sessionAgentId: string;
@@ -502,9 +501,6 @@ export function prepareEmbeddedAttemptPromptContext(input: {
         ? [{ kind: "conversation-data" as const, text: attempt.currentInboundContext.text }]
         : [])),
     ...eventFragments,
-    ...(input.heartbeatOutcomeContext
-      ? [{ kind: "heartbeat-outcome" as const, text: input.heartbeatOutcomeContext }]
-      : []),
   ];
   const currentUserTimestampOverride =
     !input.isRawModelRun && typeof preparedUserTurnTimestamp === "number"

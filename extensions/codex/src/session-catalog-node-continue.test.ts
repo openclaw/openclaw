@@ -621,6 +621,7 @@ describe("Codex supervision actions", () => {
       kind: "node",
       nodeId: "devbox",
       command: CODEX_TERMINAL_START_COMMAND,
+      uploadPathStyle: "native",
       paramsJSON: JSON.stringify({ cwd: "/workspace/node-new" }),
       cwd: "/workspace/node-new",
       title: "codex",
@@ -792,6 +793,7 @@ describe("Codex supervision actions", () => {
       kind: "node",
       nodeId: "devbox",
       command: CODEX_TERMINAL_RESUME_COMMAND,
+      uploadPathStyle: "native",
       cwd: "/workspace/node",
     });
     expect(invoke.mock.calls.at(-1)?.[0].params).not.toHaveProperty("searchTerm");

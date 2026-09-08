@@ -53,8 +53,8 @@ export type LoadPreparedModelCatalogParams = {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   providerDiscoveryProviderIds?: readonly string[];
-  /** Initializes cold or auth-stale inventory; true also refreshes a full catalog on writable reads. */
-  refreshFullCatalog?: boolean | "stale";
+  /** Explicitly requests full inventory acquisition; writable reads also replace completed data. */
+  refreshFullCatalog?: boolean;
   /** Scoped read-only loads may run live discovery for the scoped providers only. */
   scopedLiveProviderDiscovery?: boolean;
   allowGatewaySubagentBinding?: boolean;
@@ -75,11 +75,11 @@ async function materializeRequestedModelCatalog(
   if (!snapshot.loadFullModelCatalog) {
     return snapshot;
   }
-  // Inventory demand initializes discovery; prepared-only and turn-path reads stay passive.
+  // Only an explicit refresh request initializes or refreshes inventory.
   const inventoryCatalog =
-    refreshFullCatalog === "stale" || refreshFullCatalog === true
+    refreshFullCatalog === true
       ? await refreshPreparedModelRuntimeCatalog(snapshot, {
-          refresh: refreshFullCatalog === true && readOnly !== true,
+          refresh: readOnly !== true,
         })
       : undefined;
   const modelCatalog =
@@ -87,6 +87,17 @@ async function materializeRequestedModelCatalog(
     (readOnly === true
       ? snapshot.readFullModelCatalog?.()
       : await snapshot.loadFullModelCatalog({ refresh: refreshFullCatalog === true }));
+  if (!modelCatalog) {
+    return snapshot;
+  }
+  return materializePreparedModelCatalogOwner(snapshot, modelCatalog);
+}
+
+/** Carries a completed catalog and its paired auth without acquiring or refreshing facts. */
+export function materializePreparedModelCatalogOwner(
+  snapshot: PreparedModelRuntimeSnapshot,
+  modelCatalog: ModelCatalogSnapshot | undefined = snapshot.readFullModelCatalog?.(),
+): PreparedModelRuntimeSnapshot {
   if (!modelCatalog) {
     return snapshot;
   }
@@ -271,7 +282,9 @@ async function resolvePreparedModelCatalogOwnerSnapshotWithPolicy(
   }
   // Direct commands own a persistent standalone generation. During gateway lifetime, writable
   // publication belongs exclusively to startup/reload or agent-run admission.
-  const activated = await activateStandalonePreparedModelRuntime(activationExact);
+  const activated = await activateStandalonePreparedModelRuntime(activationExact, {
+    catalogMode: "static",
+  });
   if (activated && acceptsPreparedSnapshotConfig(activated, activationExact, configPolicy)) {
     return { snapshot: activated };
   }

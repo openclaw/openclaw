@@ -28,7 +28,7 @@ openclaw security audit --json
 - **Tool blast radius** - elevated tools + open rooms: could prompt injection become shell/file/network actions?
 - **Exec filesystem drift** - mutating filesystem tools denied while `exec`/`process` stay available without sandbox constraints.
 - **Exec approval drift** - `security="full"`, `autoAllowSkills`, interpreter allowlists without `strictInlineEval`. `security="full"` alone is a broad posture warning, not proof of a bug - it is the chosen default for trusted-operator setups; tighten it only when your threat model needs approval or allowlist guardrails.
-- **Network exposure** - Gateway bind/auth, Tailscale Serve/Funnel, weak/short auth tokens.
+- **Network exposure** - Gateway bind/auth, Tailscale Serve/Funnel, weak/short auth tokens and passwords.
 - **Browser control exposure** - remote nodes, relay ports, remote CDP endpoints.
 - **Local disk hygiene** - permissions, symlinks, config includes, synced-folder paths.
 - **Plugins** - loading without an explicit allowlist.

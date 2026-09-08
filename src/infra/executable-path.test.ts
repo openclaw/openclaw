@@ -94,6 +94,42 @@ describe("executable path helpers", () => {
     });
   });
 
+  it("rechecks executable availability without replacing ordinary cached probes", async () => {
+    await withTestDir({ prefix: "openclaw-exec-path-" }, async (binDir) => {
+      const executable = path.join(binDir, "runner");
+      await fs.writeFile(executable, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+      const env = { PATH: binDir };
+      expect(resolveExecutablePath("runner", { env })).toBe(executable);
+
+      await fs.unlink(executable);
+
+      expect(resolveExecutablePath("runner", { env, useCache: false })).toBeUndefined();
+      expect(resolveExecutablePath("runner", { env })).toBe(executable);
+    });
+  });
+
+  it.runIf(process.platform !== "win32").each(["bin", ".", ""])(
+    "resolves PATH component %j against the requested cwd",
+    async (pathEntry) => {
+      await withTestDir({ prefix: "openclaw-exec-path-" }, async (base) => {
+        const firstCwd = path.join(base, "first");
+        const secondCwd = path.join(base, "second");
+        const binDir = path.join(firstCwd, pathEntry);
+        await fs.mkdir(binDir, { recursive: true });
+        await fs.mkdir(secondCwd);
+        const executable = path.join(binDir, "runner");
+        await fs.writeFile(executable, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+        const env = { PATH: pathEntry };
+
+        expect(resolveExecutablePath("runner", { env, cwd: firstCwd })).toBe(executable);
+        expect(resolveExecutablePath("runner", { env, cwd: secondCwd })).toBeUndefined();
+        expect(resolveExecutablePath("runner", { env, cwd: firstCwd, useCache: false })).toBe(
+          executable,
+        );
+      });
+    },
+  );
+
   it.each([".EXE;.CMD;", ";.EXE;.CMD", ".EXE;;.CMD", ".EXE; ;.CMD", "", ";;"])(
     "keeps extensionless lookup explicit with PATHEXT %j",
     async (pathext) => {

@@ -1,13 +1,18 @@
-import { existsSync } from "node:fs";
+import { existsSync, lstatSync } from "node:fs";
 import path from "node:path";
 import { pluginContractPatterns } from "../../test/vitest/vitest.contracts-paths.mjs";
-import { isPluginControlUiPath, isUiBrowserTestFile } from "../../test/vitest/vitest.ui-paths.mjs";
+import {
+  isPluginControlUiPath,
+  isUiBrowserTestFile,
+  isUiTestTarget,
+} from "../../test/vitest/vitest.ui-paths.mjs";
 import { detectChangedLanes } from "../changed-lanes.mts";
 import {
   buildVitestRunPlans,
   CHANNEL_CONTRACT_CONFIG_PATTERNS,
   CONTRACTS_PLUGIN_VITEST_CONFIG,
   findUnmatchedExplicitTestTargets,
+  hasImportGraphConsumers,
   hasImportGraphImpactOnTargets,
   isTestFileTarget,
   isTestSupportFileTarget,
@@ -53,6 +58,30 @@ type ChangedNodeTestShard = {
 type ChangedExtensionConfigShard = ChangedNodeTestShard & { predictedSeconds: number };
 type CwdOptions = { cwd?: string };
 
+/** Ordinary UI unit entries retain their unit owner; fixtures and their consumers retain E2E. */
+export function hasUiE2eAffectingChange(changedPaths: string[], options: CwdOptions = {}) {
+  const cwd = options.cwd ?? process.cwd();
+  if (
+    !Array.isArray(changedPaths) ||
+    changedPaths.length === 0 ||
+    changedPaths.some(
+      (file) =>
+        !file.startsWith("ui/src/") ||
+        !isUiTestTarget(file) ||
+        /\.(?:browser|node)\.test\.ts$/u.test(file) ||
+        /(?:^|\/)(?:e2e|test-helpers|test-fixtures|fixtures|__fixtures__)(?:\/|$)/u.test(file) ||
+        path.posix.normalize(file) !== file ||
+        !existsSync(path.join(cwd, file)) ||
+        !lstatSync(path.join(cwd, file)).isFile(),
+    )
+  ) {
+    return true;
+  }
+  // Test entry names are not enough: a fixture or application may import one.
+  // Reuse the canonical import graph rather than orphaning that consumer's proof.
+  return hasImportGraphConsumers(changedPaths, cwd, { tooling: true });
+}
+
 const DEFAULT_NODE_TEST_RUNNER = "blacksmith-8vcpu-ubuntu-2404";
 const MAX_CHANGED_NODE_TEST_TARGETS = 96;
 // Each target runs in its own child process (isolation contract), so bound the
@@ -74,10 +103,11 @@ const DOCKER_SEED_LANE_ORDER = [
   ...MCP_DOCKER_SEED_LANES,
   "update-channel-switch",
   "fleet-cache",
+  "published-upgrade-survivor",
 ] as const;
 type DockerSeedLane = (typeof DOCKER_SEED_LANE_ORDER)[number];
 const DOCKER_SEED_LANES_BY_PATH: Readonly<Record<string, readonly DockerSeedLane[]>> = {
-  ".github/workflows/ci.yml": MCP_DOCKER_SEED_LANES,
+  ".github/workflows/ci.yml": [...MCP_DOCKER_SEED_LANES, "published-upgrade-survivor"],
   "scripts/e2e/cron-mcp-cleanup-seed.ts": ["cron-mcp-cleanup"],
   "scripts/e2e/docker-openai-seed.ts": MCP_DOCKER_SEED_LANES,
   "scripts/e2e/fleet-cache-docker.sh": ["fleet-cache"],
@@ -87,8 +117,15 @@ const DOCKER_SEED_LANES_BY_PATH: Readonly<Record<string, readonly DockerSeedLane
   "scripts/e2e/mcp-channels-seed.ts": ["mcp-channels"],
   "scripts/e2e/mcp-code-mode-gateway-seed.ts": ["mcp-code-mode-gateway"],
   "scripts/e2e/update-channel-switch-docker.sh": ["update-channel-switch"],
-  "scripts/lib/ci-changed-node-test-plan.mts": MCP_DOCKER_SEED_LANES,
+  "scripts/lib/ci-changed-node-test-plan.mts": [
+    ...MCP_DOCKER_SEED_LANES,
+    "published-upgrade-survivor",
+  ],
 };
+// Keep the whole state owner: both schema-version constants and future migrations
+// must exercise an installed release's updater before they reach main.
+const PUBLISHED_UPGRADE_OWNER_RE =
+  /^src\/(?:cli\/update-cli\/|infra\/(?:update-|package-update-)|plugins\/update(?:-|\.ts$)|commands\/doctor|state\/)|^scripts\/e2e\/(?:upgrade-survivor|lib\/upgrade-survivor\/)|^scripts\/(?:resolve-upgrade-survivor-baselines\.mts|lib\/(?:docker-e2e-(?:plan|scenarios)|upgrade-survivor-[^/]+)\.(?:mjs|mts))$|^package\.json$/u;
 const publicPluginSdkEntrySources = Object.values(
   buildPluginSdkEntrySources(publicPluginSdkEntrypoints),
 );
@@ -111,6 +148,12 @@ export function resolveChangedDockerSeedLanes(changedPaths: string[]) {
     const normalizedPath = changedPath.replaceAll("\\", "/");
     if (normalizedPath.startsWith("scripts/e2e/lib/fleet-cache/")) {
       selected.add("fleet-cache");
+    }
+    if (
+      PUBLISHED_UPGRADE_OWNER_RE.test(normalizedPath) &&
+      (!normalizedPath.startsWith("src/") || !isTestOnlyPath(normalizedPath))
+    ) {
+      selected.add("published-upgrade-survivor");
     }
     for (const lane of DOCKER_SEED_LANES_BY_PATH[normalizedPath] ?? []) {
       selected.add(lane);

@@ -33,7 +33,7 @@ import "../../styles/agents.css";
 import "../../styles/sidebar-markdown.css";
 import "./memory/memory-panel.ts";
 import type { AgentsPanel } from "../../lib/agents/index.ts";
-import type { AgentIdentityDraft } from "./panels-overview.ts";
+import type { AgentIdentityDraft, IdentityAvatarLoader } from "./panels-overview.ts";
 import { renderAgentOverview } from "./panels-overview.ts";
 import { renderAgentFiles, renderAgentChannels, renderAgentCron } from "./panels-status-files.ts";
 import { renderAgentTools, renderAgentSkills } from "./panels-tools-skills.ts";
@@ -118,6 +118,7 @@ type AgentsProps = {
   agentIdentityError: string | null;
   agentIdentityById: Record<string, AgentIdentityResult>;
   identityDraft: AgentIdentityDraft;
+  identityAvatarLoader: IdentityAvatarLoader;
   identitySaving: boolean;
   identityError: string | null;
   agentSkills: AgentSkillsState;
@@ -374,6 +375,7 @@ export function renderAgents(props: AgentsProps) {
                             agentIdentityError: props.agentIdentityError,
                             agentIdentityLoading: props.agentIdentityLoading,
                             identityDraft: props.identityDraft,
+                            identityAvatarLoader: props.identityAvatarLoader,
                             identitySaving: props.identitySaving,
                             identityError: props.identityError,
                             canUpdateConfig: props.access.canUpdateConfig,

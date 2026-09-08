@@ -18,7 +18,7 @@ sidebarTitle: "Incident response"
 
 ### Rotate (assume compromise if secrets leaked)
 
-1. Rotate Gateway auth (`gateway.auth.token` / `OPENCLAW_GATEWAY_PASSWORD`) and restart.
+1. Rotate Gateway auth (`gateway.auth.token` / `gateway.auth.password`). Rotation hot-applies only when the effective auth mode stays the same; set `gateway.auth.mode` explicitly for SecretRefs. Restart for an auth-mode change or updated process environment credentials such as `OPENCLAW_GATEWAY_PASSWORD`.
 2. Rotate remote client secrets (`gateway.remote.token` / `.password`) on any machine that can call the Gateway.
 3. Rotate provider/API credentials (WhatsApp creds, Slack/Discord tokens, model/API keys in SQLite auth stores, and encrypted secrets payload values when used).
 

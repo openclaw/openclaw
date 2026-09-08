@@ -122,6 +122,11 @@ on:
         required: false
         default: false
         type: boolean
+      allow_frozen_target_scenario_omissions:
+        description: Allow source-qualified omission of current-only default scenarios
+        required: false
+        default: false
+        type: boolean
       dispatch_id:
         description: Optional parent workflow dispatch identifier
         required: false
@@ -131,6 +136,11 @@ on:
     inputs:
       advisory:
         description: Treat package Telegram failures as advisory for the caller
+        required: false
+        default: false
+        type: boolean
+      allow_frozen_target_scenario_omissions:
+        description: Allow source-qualified omission of current-only default scenarios
         required: false
         default: false
         type: boolean
@@ -321,6 +331,25 @@ jobs:
           pnpm build qaRuntime
           test -f dist/plugin-sdk/qa-runtime.js
           test -f dist/extensions/qa-lab/runtime-api.js
+
+      - name: Checkout frozen package source capabilities
+        if: inputs.allow_frozen_target_scenario_omissions && inputs.package_source_sha != '' && inputs.scenario == ''
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          ref: ${{ inputs.package_source_sha }}
+          path: .artifacts/frozen-telegram-target
+          fetch-depth: 1
+          persist-credentials: false
+          sparse-checkout: |
+            extensions/telegram/src/bot-message-dispatch.ts
+            extensions/telegram/src/draft-stream.ts
+            src/agents/embedded-agent-subscribe.ts
+
+      - name: Resolve frozen package Telegram scenarios
+        if: inputs.allow_frozen_target_scenario_omissions && inputs.package_source_sha != '' && inputs.scenario == ''
+        env:
+          OPENCLAW_SELECTED_SHA: ${{ inputs.package_source_sha }}
+        run: node --import tsx scripts/e2e/lib/npm-telegram-live/resolve-target-scenarios.mts .artifacts/frozen-telegram-target
 
       - name: Validate inputs and secrets
         env:

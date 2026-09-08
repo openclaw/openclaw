@@ -351,6 +351,7 @@ Supported blocks:
 
 - `text`, `section`, `separator`, `actions`, `media-gallery`, `file`
 - Action rows allow up to 5 buttons or a single select menu
+- Buttons support emoji, including link buttons
 - Select types: `string`, `user`, `role`, `mentionable`, `channel`
 
 By default, components are single use. Set `components.reusable=true` to allow buttons, selects, and forms to be used multiple times until they expire.
@@ -366,6 +367,7 @@ File attachments:
 - `file` blocks must point to an attachment reference (`attachment://<filename>`)
 - Provide the attachment via `media`/`path`/`filePath` (single file); use `media-gallery` for multiple files
 - Use `filename` to override the upload name when it should match the attachment reference
+- Attachment captions preserve text-block order and repeated paragraphs
 
 Modal forms:
 
@@ -1334,7 +1336,7 @@ Notes:
 - If receive logs repeatedly show `DecryptionFailed(UnencryptedWhenPassthroughDisabled)` after updating, collect a dependency report and logs. The bundled `@discordjs/voice` line includes the upstream padding fix from discord.js PR #11449, which closed discord.js issue #11419.
 - `The operation was aborted` receive events are expected when OpenClaw finalizes a captured speaker segment; they are verbose diagnostics, not warnings.
 - Verbose Discord voice logs include a bounded one-line STT transcript preview for each accepted speaker segment, so debugging shows both the user side and the agent reply side without dumping unbounded transcript text.
-- In `agent-proxy` mode, forced consult fallback skips likely incomplete transcript fragments such as text ending in `...` or a trailing connector like "and", plus obvious non-actionable closings like "be right back" or "bye". Logs show `forced agent consult skipped reason=...` when this prevents a stale queued answer.
+- In `agent-proxy` mode, forced consult fallback skips likely incomplete transcript fragments such as text ending in `...` or a trailing connector like "and", plus complete non-actionable closings like "I'll be right back" or "bye". Requests that mention a closing, such as "write a goodbye email", still reach the agent. Closing detection uses a bounded English-language heuristic; unrecognized wording continues to the agent. Logs show `forced agent consult skipped reason=...` when this prevents a stale queued answer.
 
 ### Capture voice transcripts
 

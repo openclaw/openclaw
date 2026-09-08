@@ -18,6 +18,8 @@ Talk mode covers these runtime shapes:
 
 Native Talk is a continuous loop: listen for speech, send the transcript to the model through the active session, wait for the response, then speak it via the configured Talk provider (`talk.speak`).
 
+For replies dominated by fenced code, `talk.speak` uses a short spoken message directing the listener to the screen. Inline code and ordinary prose remain part of the spoken reply.
+
 Apple Watch also retains **Talk to Claw**, the separate [one-turn companion flow](/platforms/ios#talk-to-claw-with-the-iphone): native dictation, text relayed through the iPhone, and system-voice readback. **Talk on Watch** is the realtime path included in normal Watch setup; see [standalone voice setup](/platforms/ios#standalone-voice).
 
 ## Choose a Talk voice from chat

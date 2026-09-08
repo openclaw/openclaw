@@ -589,7 +589,8 @@ describe("Docker channel promotion", () => {
       "cancel-in-progress": false,
       queue: "max",
     });
-    expect(publish.environment).toBe("docker-release");
+    expect(publish.environment).toBeUndefined();
+    expect(requireJob(releaseWorkflow, "approve").environment).toBe("docker-release");
     expect(publish.permissions).toEqual({
       actions: "read",
       attestations: "read",

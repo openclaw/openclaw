@@ -62,7 +62,7 @@ Treat these controls as defense in depth that reduces direct capability for a re
 }
 ```
 
-Keeps the Gateway private, requires DM pairing, and gates group replies behind a mention. Groups are fully supported - sender identity is threaded through to the agent, and per-group settings let one room run different defaults than another - so the goal here is scoping the agent's attention, not avoiding groups. For safer tool execution too, add a sandbox + deny dangerous tools for any non-owner agent (see [Per-agent access profiles](/gateway/security/tool-permissions#per-agent-access-profiles-multi-agent)).
+Keeps the Gateway private, requires DM pairing, and gates group replies behind a mention. Groups are fully supported - sender identity is threaded through to the agent, and per-group settings let one room run different defaults than another - so the goal here is scoping the agent's attention, not avoiding groups. For safer tool execution too, add a sandbox + deny dangerous tools for any non-owner agent (see "Per-agent access profiles" above).
 
 ### Separate numbers (WhatsApp, Signal, Telegram)
 

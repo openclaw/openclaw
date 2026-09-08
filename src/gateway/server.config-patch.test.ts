@@ -24,6 +24,25 @@ import { GatewayClient, GatewayClientRequestError } from "./client.js";
 import { invalidateConfigGetResponseCache } from "./config-get-response.js";
 import { startGatewayServerCore } from "./server-start.js";
 
+const reloadBarrier = vi.hoisted(() => ({ wait: undefined as Promise<void> | undefined }));
+
+vi.mock("./config-reload.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./config-reload.js")>();
+  return {
+    ...actual,
+    startGatewayConfigReloader: (
+      options: Parameters<typeof actual.startGatewayConfigReloader>[0],
+    ) =>
+      actual.startGatewayConfigReloader({
+        ...options,
+        onHotReload: async (...args) => {
+          await reloadBarrier.wait;
+          return await options.onHotReload(...args);
+        },
+      }),
+  };
+});
+
 const CONFIG_SECRETREF_RPC_TIMEOUT_MS = 20_000;
 const GATEWAY_TOKEN = "config-rpc-synthetic-token";
 
@@ -94,7 +113,8 @@ async function startConfigRpcGateway() {
   const port = await getFreePort();
   server = await startGatewayServerCore(port, {
     auth: { mode: "token", token: GATEWAY_TOKEN },
-    controlUiEnabled: true,
+    // These config RPCs do not exercise browser asset serving or preparation.
+    controlUiEnabled: false,
     hotReloadRecovery,
   });
   const connected = createDeferredCore();
@@ -413,6 +433,39 @@ describe("gateway config methods", () => {
     expect(res.error?.message ?? "").toContain("active SecretRef resolution failed");
     const afterHash = await getConfigHash();
     expect(afterHash).toBe(current.hash);
+  });
+
+  it("uses fresh revisions after agent create, update, and delete before reload applies", async () => {
+    vi.mocked(Date.now).mockRestore();
+    const operations = [
+      {
+        method: "agents.create",
+        params: { name: "revision-worker", workspace: state.path("revision-workspace") },
+      },
+      { method: "agents.update", params: { agentId: "revision-worker", name: "Ready" } },
+      { method: "agents.delete", params: { agentId: "revision-worker", deleteFiles: false } },
+    ];
+    for (const operation of operations) {
+      const before = await getConfigHash();
+      const gate = createDeferredCore();
+      reloadBarrier.wait = gate.promise;
+      try {
+        const changed = await rpcReq(requireClient(), operation.method, operation.params);
+        expect(changed.ok, changed.error?.message).toBe(true);
+
+        const current = await getCurrentConfigObject();
+        gate.resolve();
+        const patched = await rpcReq(requireClient(), "config.patch", {
+          baseHash: current.hash,
+          raw: JSON.stringify({ agents: { entries: { main: { name: operation.method } } } }),
+        });
+        expect(patched.ok, patched.error?.message).toBe(true);
+        expect(current.hash).not.toBe(before);
+      } finally {
+        gate.resolve();
+        reloadBarrier.wait = undefined;
+      }
+    }
   });
 
   it("round-trips config.set and returns the live config path", async () => {
@@ -1031,28 +1084,61 @@ describe("gateway config methods", () => {
     expect(error?.details?.issues?.[0]?.path).toBe("gateway.bind");
   });
 
-  it("returns noop for config.patch when config is unchanged", async () => {
-    const current = await rpcReq<{
-      config?: Record<string, unknown>;
-      hash?: string;
-    }>(requireClient(), "config.get", {});
-    expect(current.ok).toBe(true);
+  it.each(["config.set", "config.apply", "config.patch"] as const)(
+    "preserves literal nulls in full replacements and patch deletion through %s",
+    async (method) => {
+      const original = await getCurrentConfigObject();
+      const seed = structuredClone(original.config);
+      const agents = requireConfigObject(seed.agents, "agents");
+      const defaults = requireConfigObject(agents.defaults ?? {}, "agent defaults");
+      agents.defaults = { ...defaults, params: { temperature: 0.2, topP: 0.8 } };
 
-    // Patch with the same config — no actual changes
+      try {
+        await writeJsonFile(original.path, seed);
+        invalidateConfigGetResponseCache();
+        const current = await getCurrentConfigObject();
+        const next = structuredClone(current.config);
+        const nextAgents = requireConfigObject(next.agents, "agents");
+        const nextDefaults = requireConfigObject(nextAgents.defaults, "agent defaults");
+        nextDefaults.params = { temperature: null, nested: { value: null } };
+        const patch = { agents: { defaults: { params: { temperature: null, topP: null } } } };
+
+        const res = await rpcReq(requireClient(), method, {
+          raw: JSON.stringify(method === "config.patch" ? patch : next),
+          baseHash: current.hash,
+        });
+
+        expect(res.ok, res.error?.message).toBe(true);
+        const persisted = JSON.parse(await fs.readFile(original.path, "utf-8"));
+        expect(persisted.agents.defaults).toStrictEqual({
+          ...defaults,
+          params: method === "config.patch" ? {} : { temperature: null, nested: { value: null } },
+        });
+      } finally {
+        await restoreConfigFileForTest(original);
+        invalidateConfigGetResponseCache();
+      }
+    },
+  );
+
+  it("returns noop for config.patch when authored config is unchanged", async () => {
+    const current = await getCurrentConfigObject();
+
+    // Replaying runtime defaults would explicitly author them into the source config.
     const res = await rpcReq<{
       ok?: boolean;
       noop?: boolean;
       config?: Record<string, unknown>;
     }>(requireClient(), "config.patch", {
-      raw: JSON.stringify(current.payload?.config ?? {}),
-      baseHash: current.payload?.hash,
+      raw: JSON.stringify(current.config),
+      baseHash: current.hash,
     });
 
     expect(res.ok, res.error?.message).toBe(true);
     expect(res.payload?.noop).toBe(true);
     // Config hash should not change (no file write)
     const after = await rpcReq<{ hash?: string }>(requireClient(), "config.get", {});
-    expect(after.payload?.hash).toBe(current.payload?.hash);
+    expect(after.payload?.hash).toBe(current.hash);
   });
 
   it("acknowledges sandbox config only after the runtime snapshot applies it", async () => {

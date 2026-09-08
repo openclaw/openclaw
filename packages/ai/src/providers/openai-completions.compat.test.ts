@@ -48,6 +48,7 @@ vi.mock("openai", () => {
   return { default: MockOpenAI };
 });
 
+import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
 import {
   resolveOpenAICompletionsCompat,
   type ResolvedOpenAICompletionsCompat,
@@ -989,14 +990,7 @@ describe("OpenAI-compatible completions compatibility", () => {
         messages: [
           userMessage,
           assistant,
-          {
-            role: "toolResult",
-            toolCallId: "call_1",
-            toolName: "lookup",
-            content: [{ type: "text", text: "done" }],
-            isError: false,
-            timestamp: 3,
-          },
+          makeTextToolResult("call_1", "lookup", "done", false, 3),
         ],
       },
       {

@@ -15,6 +15,14 @@ const context = () => ({
   signal: new AbortController().signal,
   assertCurrent() {},
 });
+const mixedContext = () => ({
+  ...context(),
+  profiles: [
+    { ...PROFILE, binary: "/opt/b/crabbox" },
+    { ...PROFILE, binary: "/opt/a/crabbox" },
+    { ...PROFILE, binary: "/opt/a/crabbox" },
+  ],
+});
 const expiredImage = (id: string): WarmProfileRecord => ({
   version: 2,
   allocations: {},
@@ -94,19 +102,19 @@ describe("Crabbox idle image maintenance", () => {
     async (boundary) => {
       const started = createDeferred<AbortSignal>();
       const finish = createDeferred<void>();
-      const { provider, stateDir } = createWarmProvider(async ({ argv, options }) => {
+      const { provider, calls, stateDir } = createWarmProvider(async ({ argv, options }) => {
         if (argv[2] !== "delete") {
           return undefined;
         }
         started.resolve(options.signal!);
         await finish.promise;
-        return commandResult();
+        return commandResult({ stdout: "checkpoint absent id=chk_expired\n" });
       });
       const store = openWarmImageStore();
       store.register("expired", expiredImage("chk_expired"));
       let current = true;
       const maintenance = provider.maintain!({
-        ...context(),
+        ...mixedContext(),
         assertCurrent() {
           if (!current) {
             throw new Error("maintenance authority closed");
@@ -140,6 +148,9 @@ describe("Crabbox idle image maintenance", () => {
         type: "retire",
         checkpointId: "chk_expired",
       });
+      expect(calls.filter(({ argv }) => argv[2] === "delete").map(({ argv }) => argv)).toEqual([
+        ["/opt/a/crabbox", "checkpoint", "delete", "chk_expired"],
+      ]);
       const replacement = createWarmProvider(undefined, stateDir);
       await replacement.provider.maintain!(context());
       expect(store.lookup("expired")).toBeUndefined();
@@ -150,17 +161,126 @@ describe("Crabbox idle image maintenance", () => {
     },
   );
 
-  it("leaves ambiguous executable contexts visible without guessing a checkpoint catalog", async () => {
-    const { provider, calls, warn } = createWarmProvider();
-    const store = openWarmImageStore();
-    const image = expiredImage("chk_expired");
-    store.register("expired", image);
-    await provider.maintain!({
-      ...context(),
-      profiles: [PROFILE, { ...PROFILE, binary: "/custom/crabbox" }],
+  it("deletes retained images across configured catalogs in sorted executable order", async () => {
+    const { provider, calls, warn } = createWarmProvider(({ argv }) => {
+      const known =
+        (argv[0] === "/opt/a/crabbox" && argv[3] === "chk_a") ||
+        (argv[0] === "/opt/b/crabbox" && argv[3] === "chk_b");
+      return commandResult({
+        stdout: `catalog response\n  checkpoint ${known ? "deleted" : "absent"} id=${argv[3]}  \n`,
+      });
     });
-    expect(calls).toEqual([]);
-    expect(store.lookup("expired")).toEqual(image);
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining("one configured CLI executable"));
+    const store = openWarmImageStore();
+    for (const id of ["chk_a", "chk_b", "chk_nowhere"]) {
+      store.register(id, expiredImage(id));
+    }
+
+    await provider.maintain!(mixedContext());
+
+    for (const id of ["chk_a", "chk_b", "chk_nowhere"]) {
+      expect(store.lookup(id)).toBeUndefined();
+      expect(calls.filter(({ argv }) => argv[3] === id).map(({ argv }) => argv)).toEqual(
+        (id === "chk_a" ? ["/opt/a/crabbox"] : ["/opt/a/crabbox", "/opt/b/crabbox"]).map(
+          (binary) => [binary, "checkpoint", "delete", id],
+        ),
+      );
+    }
+    expect(calls).toHaveLength(5);
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it.each(["exit", "command"])(
+    "retains a deletion after a first-executable %s error without consulting another catalog",
+    async (failure) => {
+      const { provider, calls, warn } = createWarmProvider(() => {
+        if (failure === "command") {
+          throw new Error("fixture command unavailable");
+        }
+        return commandResult({ code: 7, stderr: "fixture deletion unavailable" });
+      });
+      const store = openWarmImageStore();
+      store.register("expired", expiredImage("chk_expired"));
+
+      await provider.maintain!(mixedContext());
+      await provider.maintain!(mixedContext());
+
+      expect(store.lookup("expired")?.operation).toEqual({
+        type: "retire",
+        checkpointId: "chk_expired",
+      });
+      expect(calls.map(({ argv }) => argv)).toEqual([
+        ["/opt/a/crabbox", "checkpoint", "delete", "chk_expired"],
+        ["/opt/a/crabbox", "checkpoint", "delete", "chk_expired"],
+      ]);
+      expect(warn).toHaveBeenCalledOnce();
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("deletion obligation retained"));
+    },
+  );
+
+  it.each([20_000, 60_000])(
+    "shares the maintenance deadline after an absent command consumes %i ms",
+    async (elapsed) => {
+      let now = Date.now();
+      vi.spyOn(Date, "now").mockImplementation(() => now);
+      const { provider, calls, warn } = createWarmProvider(() => {
+        now += elapsed;
+        return commandResult({ stdout: "checkpoint absent id=chk_expired\n" });
+      });
+      const store = openWarmImageStore();
+      store.register("expired", expiredImage("chk_expired"));
+
+      await provider.maintain!(mixedContext());
+
+      expect(calls.map(({ argv, options }) => [argv[0], options.timeoutMs])).toEqual(
+        elapsed < 60_000
+          ? [
+              ["/opt/a/crabbox", 60_000],
+              ["/opt/b/crabbox", 40_000],
+            ]
+          : [["/opt/a/crabbox", 60_000]],
+      );
+      if (elapsed < 60_000) {
+        expect(store.lookup("expired")).toBeUndefined();
+      } else {
+        expect(store.lookup("expired")?.operation).toEqual({
+          type: "retire",
+          checkpointId: "chk_expired",
+        });
+      }
+      expect(warn).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["", "checkpoint absent id=chk_expired_other\n"])(
+    "accepts successful deletion without an exact absent line: %j",
+    async (stdout) => {
+      const { provider, calls, warn } = createWarmProvider(() => commandResult({ stdout }));
+      const store = openWarmImageStore();
+      store.register("expired", expiredImage("chk_expired"));
+
+      await provider.maintain!(mixedContext());
+
+      expect(calls.map(({ argv }) => argv)).toEqual([
+        ["/opt/a/crabbox", "checkpoint", "delete", "chk_expired"],
+      ]);
+      expect(store.lookup("expired")).toBeUndefined();
+      expect(warn).not.toHaveBeenCalled();
+    },
+  );
+
+  it("clears an absent checkpoint after one successful single-executable command", async () => {
+    const { provider, calls, warn } = createWarmProvider(() =>
+      commandResult({ stdout: "checkpoint absent id=chk_expired\n" }),
+    );
+    const store = openWarmImageStore();
+    store.register("expired", expiredImage("chk_expired"));
+
+    await provider.maintain!(context());
+
+    expect(calls.map(({ argv }) => argv.slice(1))).toEqual([
+      ["checkpoint", "delete", "chk_expired"],
+    ]);
+    expect(store.lookup("expired")).toBeUndefined();
+    expect(warn).not.toHaveBeenCalled();
   });
 });

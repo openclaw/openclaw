@@ -36,6 +36,7 @@ import {
   resolvePluginMetadataSnapshot,
 } from "../plugins/plugin-metadata-snapshot.js";
 import type { ProviderAuthChoiceMetadata } from "../plugins/provider-auth-choices.js";
+import * as providerAuthPersistence from "../plugins/provider-auth-persistence.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { capturePluginRegistryLifecycleEpoch } from "../plugins/registry-lifecycle.js";
 import {
@@ -104,6 +105,7 @@ vi.mock("../agents/runtime-plugins.js", () => ({
 
 vi.mock("../plugins/registry-refresh.js", () => ({
   refreshPluginRegistryAfterConfigMutation: mocks.refreshPluginRegistryAfterConfigMutation,
+  refreshPluginRegistryForPreparedConfig: mocks.refreshPluginRegistryAfterConfigMutation,
 }));
 
 vi.mock("../config/config.js", async (importOriginal) => {
@@ -593,6 +595,7 @@ function activateCodexSetup(params: Omit<TestSetupInferenceActivationParams, "ki
       ensureCodexRuntimePlugin: mockCodexRuntimeInstall(),
       runEmbeddedAgent: vi.fn(successfulRunner("openai", "gpt-5.6-sol")) as never,
       refreshPluginRegistryAfterConfigMutation: vi.fn(async () => {}) as never,
+      refreshPluginRegistryForPreparedConfig: vi.fn(async () => {}) as never,
       ...params.deps,
     },
   });
@@ -1561,6 +1564,7 @@ async function runCodexSetupWithFinalConfig(params: {
       readConfigFileSnapshot: readConfigFileSnapshot as never,
       transformConfigWithPendingPluginInstalls: transformConfig as never,
       refreshPluginRegistryAfterConfigMutation: refreshPluginRegistry as never,
+      refreshPluginRegistryForPreparedConfig: refreshPluginRegistry as never,
     },
   });
   return { result, persistedConfig, refreshPluginRegistry, transformConfig };
@@ -1714,6 +1718,18 @@ describe("activateSetupInference", () => {
         ...params.deps,
       },
     });
+  }
+
+  function mockProtectedStorageReleaseFailure(releaseError: Error) {
+    return vi
+      .spyOn(providerAuthPersistence, "stageProviderAuthProfilesForPersistence")
+      .mockImplementationOnce(async ({ profiles }) => ({
+        profiles: [...profiles],
+        rollback: vi.fn(async () => {}),
+        commit: vi.fn(async () => {
+          throw releaseError;
+        }),
+      }));
   }
 
   it("surfaces an invalid existing config without probing or persisting", async () => {
@@ -2763,6 +2779,7 @@ describe("activateSetupInference", () => {
         ensureCodexRuntimePlugin: ensureCodexRuntimePlugin as never,
         transformConfigWithPendingPluginInstalls: configHarness.transform as never,
         refreshPluginRegistryAfterConfigMutation: refreshPluginRegistry as never,
+        refreshPluginRegistryForPreparedConfig: refreshPluginRegistry as never,
         runCliAgent: runCliAgent as never,
       },
     });
@@ -4083,6 +4100,126 @@ describe("activateSetupInference", () => {
     }
   });
 
+  it("preserves indeterminate activation guidance when protected storage release fails", async () => {
+    const { stateDir, agentDir, initialConfig } = await createMainAgentFixture();
+    resolveAgentDir(initialConfig, "main");
+    const releaseError = new Error("simulated protected release failure");
+    let currentConfig: OpenClawConfig = initialConfig;
+    const readConfigFileSnapshot = vi.fn(async () => ({
+      exists: true,
+      valid: true,
+      config: currentConfig,
+      sourceConfig: currentConfig,
+      runtimeConfig: currentConfig,
+    }));
+    const transformConfig = vi.fn(async (params: { transform: Function }) => {
+      const transformed = await params.transform(initialConfig, {
+        snapshot: {
+          config: initialConfig,
+          sourceConfig: initialConfig,
+          runtimeConfig: initialConfig,
+        },
+        previousHash: null,
+        attempt: 0,
+      });
+      currentConfig = {
+        ...transformed.nextConfig,
+        agents: {
+          ...transformed.nextConfig.agents,
+          defaults: {
+            ...transformed.nextConfig.agents?.defaults,
+            params: { temperature: 0.25 },
+          },
+        },
+      };
+      throw new Error("simulated post-write failure after concurrent edit");
+    });
+    mockProtectedStorageReleaseFailure(releaseError);
+
+    try {
+      const failure = await activateGroqSetup({
+        apiKey: "candidate-key",
+        deps: {
+          readConfigFileSnapshot: readConfigFileSnapshot as never,
+          transformConfigWithPendingPluginInstalls: transformConfig as never,
+        },
+      }).catch((error: unknown) => error);
+
+      expect(failure).toBeInstanceOf(Error);
+      expect(failure).toMatchObject({
+        message: expect.stringMatching(
+          /credential was retained.*run openclaw doctor --fix before retrying.*protected storage could not be released/i,
+        ),
+      });
+      const profileId = Object.keys(readInMemoryAuthProfileStore(agentDir).profiles).find((id) =>
+        id.startsWith("groq:setup-"),
+      );
+      expect(profileId).toBeDefined();
+      expect(currentConfig.auth?.profiles?.[profileId!]).toMatchObject({ provider: "groq" });
+      expect(readInMemoryAuthProfileStore(agentDir).profiles[profileId!]).toMatchObject({
+        key: "candidate-key",
+      });
+    } finally {
+      await removeOAuthTestTempRoot(stateDir);
+    }
+  });
+
+  it("preserves a committed activation error when protected storage release fails", async () => {
+    const { stateDir, agentDir, initialConfig } = await createMainAgentFixture();
+    resolveAgentDir(initialConfig, "main");
+    const primaryError = new Error("simulated committed post-write failure");
+    const releaseError = new Error("simulated protected release failure");
+    let currentConfig: OpenClawConfig = initialConfig;
+    const readConfigFileSnapshot = vi.fn(async () => ({
+      exists: true,
+      valid: true,
+      config: currentConfig,
+      sourceConfig: currentConfig,
+      runtimeConfig: currentConfig,
+    }));
+    const transformConfig = vi.fn(async (params: { transform: Function }) => {
+      const transformed = await params.transform(initialConfig, {
+        snapshot: {
+          config: initialConfig,
+          sourceConfig: initialConfig,
+          runtimeConfig: initialConfig,
+        },
+        previousHash: null,
+        attempt: 0,
+      });
+      currentConfig = transformed.nextConfig;
+      throw primaryError;
+    });
+    mockProtectedStorageReleaseFailure(releaseError);
+
+    try {
+      const failure = await activateGroqSetup({
+        apiKey: "candidate-key",
+        deps: {
+          readConfigFileSnapshot: readConfigFileSnapshot as never,
+          transformConfigWithPendingPluginInstalls: transformConfig as never,
+        },
+      }).catch((error: unknown) => error);
+
+      expect(failure).toBeInstanceOf(Error);
+      expect(failure).toMatchObject({
+        message: expect.stringContaining(
+          "activation committed despite a post-write error, but protected storage could not be released",
+        ),
+      });
+      const profileId = Object.keys(currentConfig.auth?.profiles ?? {}).find((id) =>
+        id.startsWith("groq:setup-"),
+      );
+      expect(profileId).toBeDefined();
+      expect(currentConfig.agents?.defaults?.model).toContain(`@${profileId}`);
+      expect(readInMemoryAuthProfileStore(agentDir).profiles[profileId!]).toMatchObject({
+        key: "candidate-key",
+      });
+    } finally {
+      await removeOAuthTestTempRoot(stateDir);
+    }
+  });
+
   it("confirms rollback from the locked update when independent readback fails", async () => {
     const { stateDir, agentDir, initialConfig } = await createMainAgentFixture();
     resolveAgentDir(initialConfig, "main");
@@ -4797,6 +4934,7 @@ describe("activateSetupInference", () => {
         markRetainedManagedNpmInstall: markRetainedInstall,
         transformConfigWithPendingPluginInstalls: transformConfig as never,
         refreshPluginRegistryAfterConfigMutation: refreshPluginRegistry as never,
+        refreshPluginRegistryForPreparedConfig: refreshPluginRegistry as never,
       },
     });
     expect(result).toMatchObject({ ok: true, gatewayRestartRequired: true });
@@ -4877,7 +5015,6 @@ describe("activateSetupInference", () => {
       expect.not.objectContaining({ afterWrite: expect.anything() }),
     );
     expect(refreshPluginRegistry).toHaveBeenCalledWith({
-      config: persistedConfig,
       reason: "source-changed",
       workspaceDir: "/tmp/openclaw-workspace",
       logger: expect.objectContaining({ warn: expect.any(Function) }),
@@ -5014,6 +5151,7 @@ describe("activateSetupInference", () => {
         readConfigFileSnapshot: configHarness.readSnapshot as never,
         ensureCodexRuntimePlugin: ensureCodex as never,
         refreshPluginRegistryAfterConfigMutation: refreshPluginRegistryAfterConfigMutation as never,
+        refreshPluginRegistryForPreparedConfig: refreshPluginRegistryAfterConfigMutation as never,
         runEmbeddedAgent: runEmbeddedAgent as never,
         transformConfigWithPendingPluginInstalls: configHarness.transform as never,
       },
@@ -5387,6 +5525,7 @@ describe("activateSetupInference", () => {
         runEmbeddedAgent: runEmbeddedAgent as never,
         transformConfigWithPendingPluginInstalls: transformConfig as never,
         refreshPluginRegistryAfterConfigMutation: refreshPluginRegistry as never,
+        refreshPluginRegistryForPreparedConfig: refreshPluginRegistry as never,
       },
     });
 
@@ -5422,6 +5561,7 @@ describe("activateSetupInference", () => {
         clearPluginMetadataLifecycleCaches: clearMetadata,
         invalidatePluginRuntimeDiscoveryAfterConfigMutation: clearDiscovery as never,
         refreshPluginRegistryAfterConfigMutation: refreshPluginRegistry as never,
+        refreshPluginRegistryForPreparedConfig: refreshPluginRegistry as never,
       },
     });
 
@@ -5437,7 +5577,6 @@ describe("activateSetupInference", () => {
     expect(clearMetadata).toHaveBeenCalledTimes(2);
     expect(clearDiscovery).toHaveBeenCalledTimes(2);
     expect(refreshPluginRegistry).toHaveBeenCalledWith({
-      config: {},
       reason: "source-changed",
       workspaceDir: "/tmp/openclaw-workspace",
       logger: expect.objectContaining({ warn: expect.any(Function) }),
@@ -5479,6 +5618,7 @@ describe("activateSetupInference", () => {
           clearPluginMetadataLifecycleCaches: vi.fn(),
           invalidatePluginRuntimeDiscoveryAfterConfigMutation: vi.fn(async () => {}) as never,
           refreshPluginRegistryAfterConfigMutation: refreshPluginRegistry as never,
+          refreshPluginRegistryForPreparedConfig: refreshPluginRegistry as never,
           createTempDir: async () => {
             tempDir = await suiteTempRootTracker.make("case");
             return tempDir;
@@ -5593,6 +5733,7 @@ describe("activateSetupInference", () => {
         runEmbeddedAgent: runEmbeddedAgent as never,
         transformConfigWithPendingPluginInstalls: transformConfig as never,
         refreshPluginRegistryAfterConfigMutation: refreshPluginRegistry as never,
+        refreshPluginRegistryForPreparedConfig: refreshPluginRegistry as never,
       },
     });
 
@@ -5632,6 +5773,7 @@ describe("activateSetupInference", () => {
           transformConfigWithPendingPluginInstalls: configHarness.transform as never,
           readPersistedInstalledPluginIndexInstallRecords: vi.fn(async () => ({})),
           refreshPluginRegistryAfterConfigMutation: refreshPluginRegistry as never,
+          refreshPluginRegistryForPreparedConfig: refreshPluginRegistry as never,
         },
       });
 
@@ -5766,6 +5908,7 @@ describe("activateSetupInference", () => {
       transformConfigWithPendingPluginInstalls: transformConfig as never,
       readConfigFileSnapshot: readConfigFileSnapshot as never,
       refreshPluginRegistryAfterConfigMutation: vi.fn(async () => {}) as never,
+      refreshPluginRegistryForPreparedConfig: vi.fn(async () => {}) as never,
       readPersistedInstalledPluginIndexInstallRecords: vi.fn(async () => ({})),
       markRetainedManagedNpmInstall: markRetained,
       clearLoadInstalledPluginIndexInstallRecordsCache: clearInstallRecords,
@@ -5889,6 +6032,7 @@ describe("resolvePersistentApplyInference", () => {
     const execution = {
       runner: "embedded" as const,
       runConfig: { agents: { defaults: { model: "openai/gpt-5.5" } } },
+      sourceConfig: { agents: { defaults: { model: "openai/gpt-5.5" } } },
       modelLabel: "openai/gpt-5.5",
       provider: "openai",
       model: "gpt-5.5",
