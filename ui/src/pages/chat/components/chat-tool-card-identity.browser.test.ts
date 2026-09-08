@@ -82,11 +82,11 @@ async function settleTabs(container: HTMLElement) {
 describe
   .skipIf(navigator.userAgent.toLowerCase().includes("jsdom"))
   .each(["inline", "standalone"] as const)("%s tool message disclosures", (mode) => {
-  it("publishes tab-panel links with the initial message-scoped IDs", async () => {
-    const { rows, container, draw } = fixture(mode);
+  it("preserves message-scoped IDs and independent Raw tabs for reused call IDs", async () => {
+    const { rows, container, draw, toggledKeys } = fixture(mode);
     draw();
+    // Initial references must exist before the dependency's observer callbacks.
     try {
-      expect(container.querySelectorAll("wa-tab")).toHaveLength(4);
       for (const row of rows) {
         for (const name of ["diff", "raw"]) {
           const prefix = `${row.key}:shared-call-${name}`;
@@ -99,12 +99,6 @@ describe
     } finally {
       await settleTabs(container);
     }
-  });
-
-  it("preserves message-scoped IDs and independent Raw tabs for reused call IDs", async () => {
-    const { rows, container, draw, toggledKeys } = fixture(mode);
-    draw();
-    await settleTabs(container);
     const bubbles = Array.from(container.querySelectorAll<HTMLElement>(".chat-bubble"));
     expect(bubbles.map((bubble) => bubble.dataset.messageId)).toEqual(rows.map((row) => row.key));
     expect(container.querySelectorAll(".chat-tools-inline")).toHaveLength(

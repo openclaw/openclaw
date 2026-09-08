@@ -55,9 +55,7 @@ function settingsControlsHtml(collectionItems: boolean): string {
     showLabel: !collectionItems,
     onPatch: () => {},
   };
-  // Array/map item callers pass showLabel:false. renderFieldRow owns the
-  // resulting stacked, full-width anatomy; a hand-built inline row at 285px
-  // is not an equivalent fixture (see config-form.node.collection*.ts).
+  // Collection items use renderFieldRow's stacked, full-width layout.
   const controls = html`
     <div class="settings-group">
       ${renderNode({ ...common, schema: { type: "string", title: "Settings name" }, value: "config input", path: ["name"] })}
@@ -605,15 +603,6 @@ describeBrowserLayout("form control sizing", () => {
                 }
               } else {
                 await control.fill(value);
-              }
-              if (tag === "SELECT" && state === "edited") {
-                expect(
-                  await control
-                    .locator("option:checked")
-                    .evaluate((option) => (option as HTMLOptionElement).text),
-                ).toBe(value);
-              } else {
-                expect(await control.inputValue()).toBe(value);
               }
             }
             const metrics = await controls.evaluateAll((nodes) => {

@@ -967,6 +967,11 @@
   outline-offset: 2px;
 }
 
+.code-block-expand:focus-visible {
+  /* Keep the bottom edge inside the clipped code wrapper. */
+  outline-offset: -2px;
+}
+
 .chat-group.user .chat-text :where(pre) {
   padding: 0;
   border: 0;

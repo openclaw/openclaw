@@ -1116,7 +1116,7 @@ openclaw-chat-video-player {
 
 .chat-audio-player:focus-visible {
   outline: 2px solid var(--ring);
-  outline-offset: 2px;
+  outline-offset: -2px;
 }
 
 .chat-audio-player__toggle {

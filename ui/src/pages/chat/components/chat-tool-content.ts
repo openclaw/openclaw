@@ -329,7 +329,7 @@ function renderToolCardModes(
   file: DiffFilePaths,
 ) {
   // Call IDs repeat across messages; scope DOM identity without copying source cards.
-  // Set ARIA references with the IDs; Web Awesome links them in later observer callbacks.
+  // Web Awesome links ARIA references in later observer callbacks; initial render needs them too.
   const id = `${messageKey}:${card.id}`;
   const active = isError ? "raw" : "diff";
   const modeLabel = t("chat.toolCards.viewMode");
