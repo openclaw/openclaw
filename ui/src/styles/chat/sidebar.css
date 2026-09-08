@@ -1445,6 +1445,44 @@ openclaw-session-discussion {
   color: var(--muted);
 }
 
+.sidebar-attachment-preview__header {
+  position: relative;
+}
+
+.sidebar-attachment-preview__header .chat-assistant-attachment-card__header {
+  padding-right: 54px;
+}
+
+.sidebar-attachment-preview__header .chat-assistant-attachment-card__actions {
+  min-height: 30px;
+}
+
+.sidebar-attachment-preview__download {
+  position: absolute;
+  top: 50%;
+  right: 14px;
+  transform: translateY(-50%);
+}
+
+.sidebar-attachment-preview__state {
+  display: grid;
+  min-height: 180px;
+  place-items: center;
+  background: var(--bg);
+  color: var(--muted);
+}
+
+.sidebar-attachment-preview__loading {
+  opacity: 0;
+  animation: sidebar-attachment-loading 0s 150ms forwards;
+}
+
+@keyframes sidebar-attachment-loading {
+  to {
+    opacity: 1;
+  }
+}
+
 .sidebar-markdown-shell {
   display: grid;
   gap: 14px;

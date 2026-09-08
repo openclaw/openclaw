@@ -1,5 +1,6 @@
 import { html, nothing } from "lit";
 import { keyed } from "lit/directives/keyed.js";
+import { styleMap } from "lit/directives/style-map.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { formatFencedCodeBlock } from "../../../../../src/shared/markdown-code.js";
 import { isStaleChunkImportError } from "../../../app/stale-chunk-reload.ts";
@@ -29,7 +30,7 @@ import {
 import { isSvgImageMediaPath } from "../../../lib/media-file-extension.ts";
 import { shouldHandleNavigationClick } from "../../../lib/navigation-click.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
-import { renderCompactAttachmentCard } from "./chat-attachment-card.ts";
+import { renderAttachmentCardHeader, renderCompactAttachmentCard } from "./chat-attachment-card.ts";
 import {
   isCrossOriginHttpSource,
   safeAttachmentHref,
@@ -51,8 +52,12 @@ function renderSidebarAttachment(
   onRequestUpdate: () => void,
   runtime: AttachmentSidebarRuntime,
 ) {
-  const liveSource = content.resolveSource?.(onRequestUpdate, runtime);
-  const source = content.resolveSource ? liveSource : content;
+  const resolution = content.resolveSource?.(onRequestUpdate, runtime);
+  const source = content.resolveSource
+    ? resolution?.status === "ready"
+      ? resolution
+      : null
+    : content;
   const sourceHref = source?.src ?? "";
   const src =
     content.attachmentKind === "audio" ||
@@ -61,14 +66,59 @@ function renderSidebarAttachment(
     content.mimeType?.toLowerCase().startsWith("video/")
       ? safeMediaAttachmentHref(sourceHref)
       : safeAttachmentHref(sourceHref);
-  const authToken = content.resolveSource
-    ? (liveSource?.authToken ?? null)
-    : (content.authToken ?? null);
+  const authToken = source?.authToken ?? null;
   const mimeType = content.mimeType?.split(";", 1)[0]?.trim().toLowerCase() ?? "";
   if (!src) {
-    return html`<div class="sidebar-attachment-preview__unavailable">
-      ${t("chat.attachments.previewUnavailable")}
-    </div>`;
+    const pending = resolution?.status === "pending";
+    const kind = content.attachmentKind ?? (mimeType.startsWith("video/") ? "video" : "document");
+    return html`
+      <div
+        class="chat-assistant-attachment-card chat-assistant-attachment-card--${kind}"
+        aria-busy=${pending ? "true" : nothing}
+      >
+        <div class="sidebar-attachment-preview__header">
+          ${renderAttachmentCardHeader({
+            kind,
+            label: content.title,
+            mimeType: content.mimeType ?? undefined,
+            sizeBytes: content.sizeBytes,
+            visualMode: "preview-with-favicon",
+          })}
+          ${
+            pending
+              ? html`<button
+                  class="chat-assistant-attachment-card__action sidebar-attachment-preview__download"
+                  type="button"
+                  disabled
+                  aria-label=${t("chat.mediaPlayer.download", { filename: content.title })}
+                  title=${t("common.loading")}
+                >
+                  ${icons.download}
+                </button>`
+              : nothing
+          }
+        </div>
+        <div
+          class="sidebar-attachment-preview__state"
+          style=${styleMap({
+            "aspect-ratio":
+              kind === "video" ? `${content.width ?? 16} / ${content.height ?? 9}` : undefined,
+            "min-height": kind === "video" ? "0" : undefined,
+          })}
+        >
+          ${
+            pending
+              ? html`<span class="sidebar-attachment-preview__loading" role="status"
+                  >${t("common.loading")}</span
+                >`
+              : html`<div class="sidebar-attachment-preview__unavailable">
+                  ${t("chat.attachments.previewUnavailable")}
+                  ${resolution?.status === "error" ? html`<span>${resolution.reason}</span>` : nothing}
+                </div>`
+          }
+        </div>
+      </div>
+    `;
   }
   if (content.attachmentKind === "video" || mimeType.startsWith("video/")) {
     return html`<openclaw-chat-video-player
