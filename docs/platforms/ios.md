@@ -12,7 +12,7 @@ read_when:
 title: "iOS app"
 ---
 
-Availability: iPhone app builds are distributed through Apple channels when enabled for a release. Local development builds can also run from source.
+Availability: The official iPhone app is available on the [App Store](https://apps.apple.com/app/openclaw-ai-that-does-things/id6780396132). Local development builds can also run from source.
 
 ## What it does
 
