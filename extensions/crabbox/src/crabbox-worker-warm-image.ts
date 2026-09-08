@@ -300,7 +300,11 @@ export function createCrabboxWarmImageManager(dependencies: {
     const key = resolveCrabboxWarmImageProfileKey(profile, context.projectKey);
     const replay = lookupLease(context.id);
     if (replay) {
-      if (replay.key !== key || replay.machineClass !== profile.class) {
+      if (
+        replay.key !== key ||
+        replay.machineClass !== profile.class ||
+        (replay.os ?? "linux") !== profile.target
+      ) {
         throw new Error(
           "Crabbox provision retry changed its recorded profile or project identity.",
         );
@@ -363,6 +367,7 @@ export function createCrabboxWarmImageManager(dependencies: {
           [context.id]: {
             choice,
             machineClass: profile.class,
+            os: profile.target,
             phase: "pending",
             runtimeIdentity: structuredClone(context.nodeRuntimeIdentity),
           },
@@ -479,11 +484,12 @@ export function createCrabboxWarmImageManager(dependencies: {
             return;
           }
           if (
+            (owner.os ?? "linux") !== context.profile.target ||
             key !==
-            resolveCrabboxWarmImageProfileKey(
-              { ...context.profile, class: owner.machineClass },
-              owner.projectKey,
-            )
+              resolveCrabboxWarmImageProfileKey(
+                { ...context.profile, class: owner.machineClass },
+                owner.projectKey,
+              )
           ) {
             throw new Error("Crabbox capture profile does not match its recorded allocation.");
           }
@@ -569,7 +575,9 @@ export function createCrabboxWarmImageManager(dependencies: {
           creating = openStore().update(key, (current) =>
             current?.operation?.type === "capture" &&
             current.operation.id === captureId &&
-            current.allocations[context.id]?.phase === owner.phase
+            current.allocations[context.id]?.phase === owner.phase &&
+            current.allocations[context.id]?.machineClass === owner.machineClass &&
+            current.allocations[context.id]?.os === owner.os
               ? { ...current, operation: { ...current.operation, phase: "creating" } }
               : undefined,
           );
@@ -682,6 +690,18 @@ export function createCrabboxWarmImageManager(dependencies: {
 
     async allocate(context: AllocationContext): Promise<WarmAllocationRecord["choice"]> {
       assertCurrent(context);
+      if (!context.profile.warmImage) {
+        const replay = lookupLease(context.id);
+        if (
+          replay &&
+          ((replay.os ?? "linux") !== context.profile.target ||
+            replay.machineClass !== context.profile.class)
+        ) {
+          throw new Error(
+            "Crabbox provision retry changed its recorded operating system or machine class.",
+          );
+        }
+      }
       if (context.profile.warmImage) {
         assertCrabboxWarmImageMigrationReady();
         const owner = await selectAllocation(context, context.profile);

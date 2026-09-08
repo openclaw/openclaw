@@ -149,11 +149,19 @@ export const WorkerMachineOptionSchema = closedObject({
   cpu: Type.Optional(Type.Integer({ minimum: 1, maximum: 65_536 })),
   memoryGb: Type.Optional(Type.Integer({ minimum: 1, maximum: 65_536 })),
   default: Type.Optional(Type.Boolean()),
+  os: Type.Optional(Type.String({ minLength: 1, maxLength: 64 })),
 });
 
 export const WorkerMachineOptionsSchema = Type.Array(WorkerMachineOptionSchema, {
   minItems: 1,
-  maxItems: 32,
+  maxItems: 64,
+});
+
+/** Provider-authored operating system choice for one configured worker profile. */
+export const WorkerOperatingSystemSchema = closedObject({
+  id: Type.String({ minLength: 1, maxLength: 64 }),
+  label: Type.String({ minLength: 1, maxLength: 64 }),
+  default: Type.Optional(Type.Boolean()),
 });
 
 /** Placement execution modes shared by runtime requirements and worker providers. */
@@ -175,6 +183,9 @@ const WorkerEnvironmentProfileSummarySchema = closedObject({
     ]),
   ),
   machines: Type.Optional(WorkerMachineOptionsSchema),
+  operatingSystems: Type.Optional(
+    Type.Array(WorkerOperatingSystemSchema, { minItems: 1, maxItems: 8 }),
+  ),
 });
 
 /** List response containing all gateway-visible environment summaries. */
@@ -242,6 +253,7 @@ export type RequiredNodeCommandState = Static<typeof RequiredNodeCommandStateSch
 export type RequiredNodeCommand = Static<typeof RequiredNodeCommandSchema>;
 export type WorkerEnvironmentMetadata = Static<typeof WorkerEnvironmentMetadataSchema>;
 export type WorkerMachineOption = Static<typeof WorkerMachineOptionSchema>;
+export type WorkerOperatingSystem = Static<typeof WorkerOperatingSystemSchema>;
 export type WorkerExecutionMode = Static<typeof WorkerExecutionModeSchema>;
 export type EnvironmentSummary = Static<typeof EnvironmentSummarySchema>;
 export type EnvironmentsCreateParams = Static<typeof EnvironmentsCreateParamsSchema>;

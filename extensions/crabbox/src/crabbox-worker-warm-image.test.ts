@@ -519,7 +519,7 @@ describe("Crabbox profile warm images", () => {
     { machineClass: "standard", warmImage: undefined },
     { machineClass: undefined, warmImage: undefined },
   ])(
-    "recovers the enrolled class after restart (configured=$machineClass, warmImage=$warmImage)",
+    "recovers enrolled class after restart (configured=$machineClass, warmImage=$warmImage)",
     async ({ machineClass, warmImage }) => {
       const initial = createWarmProvider();
       const profile = {
@@ -532,7 +532,10 @@ describe("Crabbox profile warm images", () => {
 
       const restarted = createWarmProvider(undefined, initial.stateDir);
       await restarted.provider.inspect({ leaseId: lease.leaseId, profile });
-      await restarted.provider.destroy({ leaseId: lease.leaseId, profile });
+      await restarted.provider.destroy({
+        leaseId: lease.leaseId,
+        profile,
+      });
 
       expect(restarted.calls.filter(({ argv }) => argv[2] === "create")).toHaveLength(1);
 

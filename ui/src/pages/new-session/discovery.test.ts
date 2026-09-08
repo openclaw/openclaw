@@ -31,6 +31,38 @@ describe("draftCloudProfileSupportsExecutionMode", () => {
 });
 
 describe("readDraftCloudProfiles", () => {
+  it("keeps same-class choices distinct per OS and bounds catalogs", () => {
+    const [profile] = readDraftCloudProfiles([
+      {
+        id: "aws",
+        providerId: "crabbox",
+        operatingSystems: [
+          { id: "linux", label: "Linux", default: true },
+          { id: "windows/wsl2", label: "Windows (WSL2)" },
+          { id: "linux", label: "Duplicate" },
+        ],
+        machines: [
+          { id: "tiny", label: "Tiny Linux", os: "linux" },
+          { id: "tiny", label: "Duplicate", os: "linux" },
+          { id: "tiny", label: "Tiny Windows", os: "windows/wsl2" },
+          ...Array.from({ length: 64 }, (_, index) => ({
+            id: `class-${index}`,
+            label: `Class ${index}`,
+          })),
+        ],
+      },
+    ]);
+    expect(profile?.operatingSystems).toEqual([
+      { id: "linux", label: "Linux", default: true },
+      { id: "windows/wsl2", label: "Windows (WSL2)" },
+    ]);
+    expect(profile?.machines?.slice(0, 2)).toEqual([
+      { id: "tiny", label: "Tiny Linux", os: "linux" },
+      { id: "tiny", label: "Tiny Windows", os: "windows/wsl2" },
+    ]);
+    expect(profile?.machines).toHaveLength(63);
+  });
+
   it("keeps closed profile summaries in stable order", () => {
     expect(
       readDraftCloudProfiles([

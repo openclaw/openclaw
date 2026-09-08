@@ -1,5 +1,5 @@
 import { describe, expectTypeOf, it } from "vitest";
-import type { OpenClawPluginApi, WorkerMachineOption } from "./plugin-entry.js";
+import type { OpenClawPluginApi, WorkerMachineOption, WorkerProvider } from "./plugin-entry.js";
 import type { PluginHookAgentTrigger } from "./types.js";
 
 function registerScopedReplyHook(api: OpenClawPluginApi): void {
@@ -41,6 +41,14 @@ describe("plugin entry hook option contracts", () => {
       readonly label: string;
       readonly cpu?: number;
       readonly memoryGb?: number;
+      readonly default?: boolean;
+      readonly os?: string;
+    }>();
+    expectTypeOf<
+      Awaited<ReturnType<NonNullable<WorkerProvider["listOperatingSystems"]>>>[number]
+    >().toEqualTypeOf<{
+      readonly id: string;
+      readonly label: string;
       readonly default?: boolean;
     }>();
   });
