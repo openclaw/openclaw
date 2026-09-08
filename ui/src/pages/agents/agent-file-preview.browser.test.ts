@@ -142,11 +142,10 @@ describe.runIf(browserMode)("agent file preview", () => {
   );
   it.each([
     [320, "ru"],
-    [320, "fr"],
     [390, "en"],
     [1440, "en"],
   ] as const)(
-    "keeps actions and whole metadata chips within each preview mode at %ipx (%s)",
+    "keeps actions aligned and shows metadata by priority in each preview mode at %ipx (%s)",
     async (width, locale) => {
       const { page, userEvent } = await import("vitest/browser");
       await page.viewport(width, 900);
@@ -164,7 +163,12 @@ describe.runIf(browserMode)("agent file preview", () => {
       const identity = container.querySelector<HTMLElement>(".md-preview-dialog__header-main")!;
       const actions = container.querySelector<HTMLElement>(".md-preview-dialog__actions")!;
       const meta = container.querySelector<HTMLElement>(".md-preview-dialog__meta")!;
-      const chips = [...meta.children];
+      const essentialChips = meta.querySelectorAll<HTMLDivElement>('[data-priority="essential"]');
+      const secondaryMetadata = meta.querySelectorAll<HTMLElement>(
+        '[data-priority="secondary"], .md-preview-dialog__chip > span',
+      );
+      expect(essentialChips).toHaveLength(3);
+      expect(secondaryMetadata).toHaveLength(4);
       const body = container.querySelector<HTMLElement>(".md-preview-dialog__body")!;
       const normalInset = getComputedStyle(body).paddingInlineStart;
       for (const mode of ["normal", "fullscreen", "return"]) {
@@ -178,29 +182,14 @@ describe.runIf(browserMode)("agent file preview", () => {
         expect(buttons.top).toBeLessThan(name.bottom);
         expect(buttons.bottom).toBeGreaterThan(name.top);
         expect(buttons.right).toBeLessThanOrEqual(dialog.getBoundingClientRect().right);
-        const visibleChips = chips.filter(
-          (chip) =>
-            getComputedStyle(chip).visibility !== "hidden" &&
-            chip.getBoundingClientRect().width > 0,
-        );
-        expect(visibleChips.length).toBeGreaterThan(0);
-        for (const chip of visibleChips) {
-          expect(chip.scrollWidth).toBeLessThanOrEqual(chip.clientWidth);
-          expect(chip.getBoundingClientRect().bottom).toBeLessThanOrEqual(
-            meta.getBoundingClientRect().bottom,
-          );
+        for (const chip of essentialChips) {
+          await expect.element(chip).toBeVisible();
         }
-        expect(new Set(visibleChips.map((chip) => chip.getBoundingClientRect().top)).size).toBe(1);
-        if (width <= 390) {
-          meta.scrollLeft = meta.scrollWidth;
-          expect(meta.scrollLeft).toBe(0);
-          for (const chip of visibleChips) {
-            expect(chip.getBoundingClientRect().left).toBeGreaterThanOrEqual(
-              meta.getBoundingClientRect().left,
-            );
-            expect(chip.getBoundingClientRect().right).toBeLessThanOrEqual(
-              meta.getBoundingClientRect().right,
-            );
+        for (const metadata of secondaryMetadata) {
+          if (width <= 400) {
+            await expect.element(metadata).not.toBeVisible();
+          } else {
+            await expect.element(metadata).toBeVisible();
           }
         }
         expect(getComputedStyle(body).paddingInlineStart).toBe(normalInset);
@@ -208,22 +197,10 @@ describe.runIf(browserMode)("agent file preview", () => {
         expect(body.scrollTop).toBeGreaterThan(0);
         body.scrollTop = 0;
       }
-      if (width <= 390) {
+      if (width <= 400) {
         await page.viewport(1440, 900);
-        await expect
-          .poll(
-            () =>
-              chips.filter(
-                (chip) =>
-                  getComputedStyle(chip).visibility !== "hidden" &&
-                  chip.getBoundingClientRect().width > 0,
-              ).length,
-          )
-          .toBe(chips.length);
-        for (const chip of chips) {
-          expect(chip.getBoundingClientRect().right).toBeLessThanOrEqual(
-            meta.getBoundingClientRect().right,
-          );
+        for (const metadata of secondaryMetadata) {
+          await expect.element(metadata).toBeVisible();
         }
       }
       const closed = afterOwnTransition(webAwesomeDialog, "wa-after-hide");

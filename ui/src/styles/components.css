@@ -4569,24 +4569,12 @@ td.data-table-key-col {
   }
 
   .agent-file-preview .md-preview-dialog__meta {
-    position: relative;
     overflow: clip;
   }
 
-  .agent-file-preview .md-preview-dialog__chip {
-    width: max-content;
-  }
-
-  .agent-file-preview .md-preview-dialog__chip:nth-child(3),
+  .agent-file-preview .md-preview-dialog__chip[data-priority="secondary"],
   .agent-file-preview .md-preview-dialog__chip > span {
     display: none;
-  }
-
-  .agent-file-preview .md-preview-dialog__chip.is-overflowing {
-    position: absolute;
-    inset-inline-start: 0;
-    top: 0;
-    visibility: hidden;
   }
 }
 

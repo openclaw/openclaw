@@ -1,6 +1,5 @@
 // Control UI view renders agents panels status files screen content.
 import { html, nothing } from "lit";
-import { ref } from "lit/directives/ref.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import type {
   AgentFileEntry,
@@ -35,11 +34,7 @@ import {
   formatCronState,
   formatNextRun,
 } from "../../lib/presenter.ts";
-import {
-  previewMetadataRef,
-  resetAgentFilePreview,
-  setPreviewExpandButtonState,
-} from "./agent-file-preview-state.ts";
+import { resetAgentFilePreview, setPreviewExpandButtonState } from "./agent-file-preview-state.ts";
 import { renderAgentContextSection } from "./panels-overview.ts";
 
 function countWords(text: string) {
@@ -671,11 +666,14 @@ export function renderAgentFiles(params: {
                                   </openclaw-tooltip>
                                 </div>
                               </div>
-                              <div class="md-preview-dialog__meta" ${ref(previewMetadataRef())}>
-                                <div class="md-preview-dialog__chip ${previewStatusClass}">
+                              <div class="md-preview-dialog__meta">
+                                <div
+                                  class="md-preview-dialog__chip ${previewStatusClass}"
+                                  data-priority="essential"
+                                >
                                   <strong>${previewStatusLabel}</strong>
                                 </div>
-                                <div class="md-preview-dialog__chip">
+                                <div class="md-preview-dialog__chip" data-priority="essential">
                                   <strong>${estimateReadingTimeLabel(draftWordCount)}</strong>
                                   <span
                                     >${t("agents.files.words", {
@@ -683,11 +681,11 @@ export function renderAgentFiles(params: {
                                     })}</span
                                   >
                                 </div>
-                                <div class="md-preview-dialog__chip">
+                                <div class="md-preview-dialog__chip" data-priority="secondary">
                                   <strong>${draftLineCount}</strong>
                                   <span>${t("agents.files.lines")}</span>
                                 </div>
-                                <div class="md-preview-dialog__chip">
+                                <div class="md-preview-dialog__chip" data-priority="essential">
                                   <strong>${draftByteSize}</strong>
                                   <span>${previewUpdatedLabel}</span>
                                 </div>
