@@ -7,6 +7,7 @@ import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coerc
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { setLoggerOverride } from "../../logging/logger.js";
+import { createApiKeyCredential } from "./credential-fixtures.test-support.js";
 import type { AuthProfileStore, ProfileUsageStats } from "./types.js";
 import { resolveProfileUnusableUntil } from "./usage-state.js";
 import {
@@ -1271,11 +1272,10 @@ describe("markAuthProfileBlockedUntil", () => {
 describe("markAuthProfileFailure — detail-less provider failures", () => {
   it("does not persist unverifiable failures for API-key profiles", async () => {
     const store = makeStore(undefined);
-    store.profiles["azure-foundry:default"] = {
-      type: "api_key",
-      provider: "azure-foundry",
-      key: "azure-foundry-test-key",
-    };
+    store.profiles["azure-foundry:default"] = createApiKeyCredential(
+      "azure-foundry",
+      "azure-foundry-test-key",
+    );
 
     for (const profileId of ["azure-foundry:default", "openai:api-key"]) {
       await markAuthProfileFailure({
@@ -1665,11 +1665,7 @@ describe("markAuthProfileFailure — WHAM-aware Codex cooldowns", () => {
     storeMocks.updateAuthProfileStoreWithLock.mockImplementationOnce(
       async (lockParams: { updater: (store: AuthProfileStore) => boolean }) => {
         const freshStore = structuredClone(store);
-        freshStore.profiles["openai:default"] = {
-          type: "api_key",
-          provider: "openai",
-          key: "rotated-api-key",
-        };
+        freshStore.profiles["openai:default"] = createApiKeyCredential("openai", "rotated-api-key");
         lockParams.updater(freshStore);
         return freshStore;
       },
@@ -1873,11 +1869,7 @@ describe("markAuthProfileFailure — per-model cooldown metadata", () => {
 
   function makeStoreWithCopilot(usageStats: AuthProfileStore["usageStats"]): AuthProfileStore {
     const store = makeStore(usageStats);
-    store.profiles["github-copilot:github"] = {
-      type: "api_key",
-      provider: "github-copilot",
-      key: "ghu_test",
-    };
+    store.profiles["github-copilot:github"] = createApiKeyCredential("github-copilot", "ghu_test");
     return store;
   }
 

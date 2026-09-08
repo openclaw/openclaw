@@ -102,7 +102,14 @@ regular UTF-8 file before verification. Empty files are valid. It preserves
 operator-provided text and trailers, appending any missing co-authors from the
 current GitHub preview and reviewed source commits. This option requires squash
 and a non-queue PR; all review, CI, exact-head, and admission checks still apply.
-Without the option, the existing GitHub preview behavior is unchanged.
+Without the option, the wrapper composes the message from the GitHub preview:
+it keeps credit backed by a non-merge PR commit author or a reviewed source
+trailer, appends human `Co-authored-by` trailers from the PR's commits that the
+preview omitted, and drops machine credit (Claude, Codex, Cursor, Copilot, Amp,
+Trae, and GitHub App `[bot]` accounts) wherever GitHub replayed it, including
+inside per-commit bullets. A reviewed body that still contains machine credit
+is rejected, and a merge-queue PR whose preview needs such edits stops before
+admission.
 
 `merge-recover` accepts the same option after its required outcome ID and
 `--confirmed-operator-recovery`. Repeating `merge-run` with a retained outcome

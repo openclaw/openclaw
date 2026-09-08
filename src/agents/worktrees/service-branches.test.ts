@@ -78,4 +78,23 @@ describe("ManagedWorktreeService branch discovery", () => {
       expect(result.branches).toContainEqual({ name: "main", kind: "local" });
     },
   );
+
+  it("rejects a truncated branch inventory instead of returning a partial picker", async () => {
+    const { stdout } = await execFileAsync("git", ["-C", repo, "rev-parse", "HEAD"]);
+    const commit = stdout.trim();
+    const refs = Array.from(
+      { length: 3_000 },
+      (_, index) => `refs/heads/overflow-${String(index).padStart(80, "0")}`,
+    );
+    await fs.writeFile(
+      path.join(repo, ".git", "packed-refs"),
+      "# pack-refs with: peeled fully-peeled sorted\n" +
+        refs.map((ref) => `${commit} ${ref}`).join("\n") +
+        "\n",
+    );
+
+    await expect(service.listRepositoryBranches(repo)).rejects.toThrow(
+      "too many branches to list safely",
+    );
+  });
 });

@@ -44,7 +44,10 @@ function createFixture(defaults: AgentDefaults, minimaxProvider?: string) {
     agentRuntime: { id: "openclaw" },
   });
   const cfg: OpenClawConfig = {
-    plugins: { allow: ["openai", ...(minimaxProvider ? ["minimax"] : [])] },
+    // Runtime model discovery loads the full plugin entry through the plugin loader.
+    // Without build output, transpiling the core graph can take ~150s, exceeding the 120s budget.
+    // Selection only needs the configured provider rows, so keep MiniMax inactive.
+    plugins: { allow: ["openai"] },
     agents: { ownership: "explicit", defaults, entries: { main: {} } },
     models: {
       mode: "replace",

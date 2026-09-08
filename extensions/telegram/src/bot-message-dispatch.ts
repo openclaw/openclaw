@@ -426,6 +426,7 @@ export const dispatchTelegramMessage = async (
   const terminalFailure = turn.dispatchError || turn.agentRunFailed;
   const shouldSendFailureFallback =
     !isRoomEvent &&
+    !turn.sendPolicyDenied &&
     (!suppressFailureFallback || turn.agentRunFailed) &&
     !turn.finalAnswerDelivered &&
     (terminalFailure ||
@@ -446,6 +447,7 @@ export const dispatchTelegramMessage = async (
 
   if (
     !sentFallback &&
+    !turn.sendPolicyDenied &&
     !turn.dispatchError &&
     !deliverySummary.delivered &&
     !turn.suppressSilentReplyFallback &&

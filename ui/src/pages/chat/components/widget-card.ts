@@ -38,6 +38,7 @@ type WidgetCardOptions = {
   embedSandboxMode?: EmbedSandboxMode;
   allowExternalEmbedUrls?: boolean;
   sessionKey?: string;
+  messageTimestamp?: number;
   boardProvider?: BoardProvider;
   browserTabRevision?: string;
   browserTabLatest?: boolean;
@@ -428,6 +429,7 @@ function renderWidgetContent(
             <openclaw-canvas-widget-view
               .docId=${preview.viewId!.trim()}
               .sessionKey=${options?.sessionKey ?? ""}
+              .messageTimestamp=${options?.messageTimestamp}
               .title=${preview.title?.trim() || t("chat.toolCards.canvas")}
               .preferredHeight=${preview.preferredHeight}
               .allowScripts=${sandbox.includes("allow-scripts")}

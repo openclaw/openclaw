@@ -1,5 +1,6 @@
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
 import { PreparedModelRuntimePublicationSupersededError } from "./prepared-model-runtime.errors.js";
 import type { PreparedModelRuntimeOwner } from "./prepared-model-runtime.types.js";
 
@@ -15,8 +16,23 @@ const publicationListeners = new Set<(event: PreparedModelRuntimePublicationEven
 export function createCatalogAttemptReporter(
   owner: Pick<PreparedModelRuntimeOwner, "catalogAttemptError">,
   isCurrent: () => boolean,
-): { published: () => void; failed: (error: unknown) => never } {
+): {
+  published: () => void;
+  failed: (error: unknown) => never;
+  withRefreshStatus: (catalog: ModelCatalogSnapshot) => ModelCatalogSnapshot;
+} {
   return {
+    withRefreshStatus: (catalog) => {
+      // Keep the status live on retained inventory without copying an error into its successor.
+      Object.defineProperty(catalog, "refreshFailed", {
+        enumerable: true,
+        get: () =>
+          owner.catalogAttemptError !== undefined ||
+          catalog.providerOutcomes?.some((outcome) => outcome.status !== "ready") ||
+          undefined,
+      });
+      return catalog;
+    },
     published: () => {
       delete owner.catalogAttemptError;
       notifyPreparedModelRuntimePublication({ phase: "catalog-published" });

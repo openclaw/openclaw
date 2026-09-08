@@ -1,18 +1,16 @@
 import type {
   ChatAccountSelection,
-  ChatMetadataParams,
   UserModelAccount,
 } from "../../../../packages/gateway-protocol/src/index.ts";
-import type { FastMode, GatewayAgentRow, ModelCatalogEntry } from "../../api/types.ts";
+import type {
+  FastMode,
+  GatewayAgentRow,
+  ModelCatalogEntry,
+  ModelCatalogResult,
+} from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import { t } from "../../i18n/index.ts";
-import {
-  peekChatMetadata,
-  revalidateChatMetadata,
-  subscribeChatMetadata,
-  type ChatMetadataResult,
-} from "../../lib/chat/chat-metadata-store.ts";
 import { buildQualifiedChatModelValue } from "../../lib/chat/model-ref.ts";
 import {
   isChatFastModeProviderSupported,
@@ -21,7 +19,11 @@ import {
   resolveChatModelUnavailableReason,
 } from "../../lib/chat/model-select-state.ts";
 import { normalizeThinkingOptionValue } from "../../lib/chat/thinking.ts";
-import { loadModelCatalog } from "../../lib/model-catalog-store.ts";
+import {
+  loadModelCatalog,
+  subscribeModelCatalogChanges,
+  type ModelCatalogReadScope,
+} from "../../lib/model-catalog-store.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import { renderChatModelAccountControl } from "../chat/components/chat-model-account-control.ts";
 import {
@@ -41,6 +43,7 @@ type NewSessionMetadataStatus = ChatModelCatalogState["status"];
 type NewSessionMetadataState = {
   catalog: ModelCatalogEntry[];
   accountSelection?: ChatAccountSelection;
+  refreshFailed?: boolean;
   hasSnapshot: boolean;
   status: NewSessionMetadataStatus;
 };
@@ -63,10 +66,11 @@ export class NewSessionModelControl {
     hasSnapshot: false,
     status: "idle",
   };
-  private metadataLoading = false;
+  private metadataRequest: AbortController | undefined;
   private metadataClient: NewSessionMetadataClient | undefined;
-  private metadataScope: ChatMetadataParams | undefined;
+  private metadataScope: ModelCatalogReadScope | undefined;
   private metadataIdentityId: string | undefined;
+  private metadataGateway: ApplicationContext["gateway"] | undefined;
   private metadataHello: ApplicationContext["gateway"]["snapshot"]["hello"] | undefined;
   private metadataUnsubscribe: (() => void) | undefined;
   private draftAccount:
@@ -103,15 +107,19 @@ export class NewSessionModelControl {
   }
 
   private clearMetadataSubscription() {
+    this.metadataRequest?.abort();
+    this.metadataRequest = undefined;
     this.metadataUnsubscribe?.();
     this.metadataUnsubscribe = undefined;
     this.metadataScope = undefined;
+    this.metadataGateway = undefined;
   }
 
-  private ownsMetadata(client: NewSessionMetadataClient, scope: ChatMetadataParams): boolean {
+  private ownsMetadata(client: NewSessionMetadataClient, scope: ModelCatalogReadScope): boolean {
     const snapshot = this.pendingContext?.gateway.snapshot;
     return (
       this.metadataClient === client &&
+      this.metadataGateway === this.pendingContext?.gateway &&
       this.metadataScope === scope &&
       snapshot?.phase === "connected" &&
       snapshot.client === client &&
@@ -120,56 +128,35 @@ export class NewSessionModelControl {
     );
   }
 
-  private bindMetadataSubscription(client: NewSessionMetadataClient, scope: ChatMetadataParams) {
+  private bindMetadataSubscription(client: NewSessionMetadataClient, scope: ModelCatalogReadScope) {
     if (
+      this.metadataScope &&
       this.metadataClient === client &&
-      this.metadataScope?.agentId === scope.agentId &&
-      this.metadataScope?.authProfileId === scope.authProfileId &&
+      this.metadataGateway === this.pendingContext?.gateway &&
+      this.metadataScope.agentId === scope.agentId &&
+      this.metadataScope.authProfileId === scope.authProfileId &&
       this.metadataUnsubscribe
     ) {
-      return;
+      return this.metadataScope;
     }
     this.clearMetadataSubscription();
     this.metadataClient = client;
     this.metadataScope = scope;
-    this.metadataUnsubscribe = subscribeChatMetadata(client, scope, (update) => {
-      if (this.metadataClient !== client || this.metadataScope !== scope) {
-        return;
-      }
-      if (!this.ownsMetadata(client, scope)) {
-        this.metadataLoading = false;
-        this.restoringPreference = false;
-        this.draftAccount = undefined;
-        this.clearMetadataSubscription();
-        this.updateMetadataState({ catalog: [], hasSnapshot: false, status: "offline" });
-        return;
-      }
-      if (update.type === "invalidated") {
-        void this.startMetadataRequest(client, scope);
-        return;
-      }
-      this.metadataLoading = update.type === "loading";
-      if (update.type === "result") {
-        this.publishMetadataCatalog(update.result);
-      } else if (update.type === "loading") {
-        const status = this.metadataState.hasSnapshot ? "ready" : "loading";
-        if (this.metadataState.status !== status) {
-          this.updateMetadataState({ ...this.metadataState, status });
-        }
-      } else {
-        if (
-          !this.draftAccount &&
-          this.pendingSelectionGeneration === this.selectionGeneration &&
-          (this.pendingPreference?.model || this.pendingPreference?.thinkingLevel)
-        ) {
-          // A transport failure cannot authorize a model or replace the requested preference.
-          this.selected = this.pendingPreference.model ?? "";
-          this.thinkingLevel = this.pendingPreference.thinkingLevel ?? "";
-        }
-        this.restoringPreference = false;
-        this.updateMetadataState({ ...this.metadataState, status: "error" });
-      }
-    });
+    const gateway = this.pendingContext?.gateway;
+    this.metadataGateway = gateway;
+    this.metadataUnsubscribe = gateway
+      ? subscribeModelCatalogChanges(gateway, () => {
+          if (!this.ownsMetadata(client, scope)) {
+            this.restoringPreference = false;
+            this.draftAccount = undefined;
+            this.clearMetadataSubscription();
+            this.updateMetadataState({ catalog: [], hasSnapshot: false, status: "offline" });
+            return;
+          }
+          void this.startMetadataRequest(client, scope);
+        })
+      : undefined;
+    return scope;
   }
 
   loadCatalogTargets(context: ApplicationContext | undefined, agentId: string, enabled: boolean) {
@@ -181,12 +168,13 @@ export class NewSessionModelControl {
     this.notify();
   }
 
-  private publishMetadataCatalog(result: ChatMetadataResult) {
+  private publishMetadataCatalog(result: ModelCatalogResult) {
     this.metadataState = {
-      catalog: Array.isArray(result.models) ? result.models : [],
+      catalog: result.models,
       accountSelection: result.accountSelection,
       hasSnapshot: true,
       status: "ready",
+      refreshFailed: result.refreshFailed,
     };
     if (!this.draftAccount && this.pendingSelectionGeneration === this.selectionGeneration) {
       this.restorePreference(this.pendingPreference, this.pendingAgent, this.pendingContext);
@@ -195,21 +183,47 @@ export class NewSessionModelControl {
     this.notify();
   }
 
-  private startMetadataRequest(client: NewSessionMetadataClient, scope: ChatMetadataParams) {
-    this.metadataLoading = true;
-    const cached = peekChatMetadata(client, scope);
-    if (Array.isArray(cached?.models)) {
-      this.publishMetadataCatalog(cached);
-    } else {
-      this.updateMetadataState({
-        ...this.metadataState,
-        status: this.metadataState.hasSnapshot ? "ready" : "loading",
-      });
-    }
-
-    return revalidateChatMetadata(client, scope, {
-      startupRetryWindowMs: 60_000,
-    }).catch(() => undefined);
+  private startMetadataRequest(client: NewSessionMetadataClient, scope: ModelCatalogReadScope) {
+    this.metadataRequest?.abort();
+    const controller = new AbortController();
+    this.metadataRequest = controller;
+    const ownsRequest = () =>
+      this.metadataRequest === controller && this.ownsMetadata(client, scope);
+    this.updateMetadataState({
+      ...this.metadataState,
+      status: this.metadataState.hasSnapshot
+        ? this.metadataState.status === "error"
+          ? "error"
+          : "ready"
+        : "loading",
+    });
+    return loadModelCatalog(client, { ...scope, signal: controller.signal }).then(
+      (result) => {
+        if (!ownsRequest()) {
+          return undefined;
+        }
+        this.metadataRequest = undefined;
+        this.publishMetadataCatalog(result);
+        return result;
+      },
+      () => {
+        if (!ownsRequest()) {
+          return undefined;
+        }
+        this.metadataRequest = undefined;
+        if (
+          !this.draftAccount &&
+          this.pendingSelectionGeneration === this.selectionGeneration &&
+          (this.pendingPreference?.model || this.pendingPreference?.thinkingLevel)
+        ) {
+          this.selected = this.pendingPreference.model ?? "";
+          this.thinkingLevel = this.pendingPreference.thinkingLevel ?? "";
+        }
+        this.restoringPreference = false;
+        this.updateMetadataState({ ...this.metadataState, status: "error" });
+        return undefined;
+      },
+    );
   }
 
   private selectDraftAccount(account: UserModelAccount, model: string): Promise<boolean> {
@@ -220,14 +234,14 @@ export class NewSessionModelControl {
     this.selectionGeneration += 1;
     this.restoringPreference = false;
     this.draftAccount = { authProfileId: account.authProfileId, provider: account.provider, model };
-    const scope = { agentId: this.agentId, authProfileId: account.authProfileId };
+    const requestedScope = { agentId: this.agentId, authProfileId: account.authProfileId };
     this.metadataState = {
       catalog: [],
       accountSelection: this.metadataState.accountSelection,
       hasSnapshot: false,
       status: "loading",
     };
-    this.bindMetadataSubscription(client, scope);
+    const scope = this.bindMetadataSubscription(client, requestedScope);
     return this.startMetadataRequest(client, scope).then(
       (result) => Boolean(result) && this.ownsMetadata(client, scope),
     );
@@ -238,44 +252,27 @@ export class NewSessionModelControl {
       return;
     }
     this.draftAccount = undefined;
-    this.metadataLoading = false;
     this.clearMetadataSubscription();
     this.metadataState = { catalog: [], hasSnapshot: false, status: "idle" };
   }
 
-  private retryPickerCatalogs(refreshReadyMetadata = false) {
-    const metadataClient = this.metadataClient;
+  private retryPickerCatalogs() {
+    const client = this.metadataClient;
     const scope = this.metadataScope;
-    if (this.metadataState.status === "error" && metadataClient && scope) {
-      void this.startMetadataRequest(metadataClient, scope);
-    } else if (
-      refreshReadyMetadata &&
-      this.metadataState.status === "ready" &&
-      metadataClient &&
-      this.agentId
-    ) {
-      const agentId = this.agentId;
-      void loadModelCatalog(metadataClient, {
-        agentId,
-        refreshIfDue: true,
-      }).catch(() => {
-        if (this.metadataClient === metadataClient && this.metadataScope === scope) {
-          this.updateMetadataState({ ...this.metadataState, status: "error" });
-        }
-      });
+    if (!this.metadataRequest && client && scope) {
+      void this.startMetadataRequest(client, scope);
     }
-    this.catalogTargets.retry(metadataClient, this.agentId);
+    this.catalogTargets.retry(client, this.agentId);
   }
 
   invalidate(resetSelection = false) {
-    this.metadataLoading = false;
     this.clearDraftAccount();
+    this.clearMetadataSubscription();
     this.catalogTargets.clear();
     this.restoringPreference = false;
     if (resetSelection) {
       this.agentId = "";
       this.metadataClient = undefined;
-      this.clearMetadataSubscription();
       this.selected = "";
       this.contextWindow = "";
       this.thinkingLevel = "";
@@ -289,7 +286,7 @@ export class NewSessionModelControl {
     }
     this.updateMetadataState({
       ...this.metadataState,
-      status: this.metadataState.hasSnapshot ? "error" : "idle",
+      status: this.metadataState.hasSnapshot ? this.metadataState.status : "idle",
     });
   }
 
@@ -310,12 +307,12 @@ export class NewSessionModelControl {
     if (
       this.agentId !== normalizedAgentId ||
       (this.metadataClient && this.metadataClient !== client) ||
+      (this.metadataGateway && this.metadataGateway !== context?.gateway) ||
       this.metadataIdentityId !== snapshot?.selfUser?.id ||
       (this.metadataHello && this.metadataHello !== snapshot?.hello)
     ) {
       // Model preferences belong to the agent; an explicit account belongs to this connection.
       // Neither its availability nor an in-flight preview can cross an identity change.
-      this.metadataLoading = false;
       this.draftAccount = undefined;
       this.clearMetadataSubscription();
       if (this.agentId !== normalizedAgentId) {
@@ -336,7 +333,6 @@ export class NewSessionModelControl {
     this.metadataHello = snapshot?.hello;
     const selectionGeneration = this.selectionGeneration;
     if (!context || snapshot?.phase !== "connected" || !client || !normalizedAgentId || !enabled) {
-      this.metadataLoading = false;
       this.clearDraftAccount();
       this.clearMetadataSubscription();
       this.metadataClient = undefined;
@@ -355,27 +351,33 @@ export class NewSessionModelControl {
       agentId: normalizedAgentId,
       ...(this.draftAccount ? { authProfileId: this.draftAccount.authProfileId } : {}),
     };
-    this.bindMetadataSubscription(client, scope);
+    const previousScope = this.metadataScope;
+    const boundScope = this.bindMetadataSubscription(client, scope);
+    const rebound = boundScope !== previousScope;
     this.pendingPreference = options.preference;
     this.pendingAgent = options.agent;
     this.pendingSelectionGeneration = selectionGeneration;
     this.restoringPreference = Boolean(
       !this.draftAccount && (options.preference?.model || options.preference?.thinkingLevel),
     );
-    const cached = peekChatMetadata(client, scope);
-    if (this.metadataLoading) {
-      if (cached) {
-        this.publishMetadataCatalog(cached);
-      } else {
-        this.notify();
+    if (this.metadataRequest) {
+      this.notify();
+      return;
+    }
+    // Render passes do not retry a failed read; publication events and picker opens do.
+    if (!rebound && this.metadataState.status !== "idle") {
+      if (
+        this.metadataState.status === "ready" &&
+        this.metadataState.hasSnapshot &&
+        !this.draftAccount &&
+        this.pendingSelectionGeneration === this.selectionGeneration
+      ) {
+        this.restorePreference(this.pendingPreference, this.pendingAgent, this.pendingContext);
       }
+      this.restoringPreference = false;
       return;
     }
-    if (cached && this.metadataState.status !== "error") {
-      this.publishMetadataCatalog(cached);
-      return;
-    }
-    void this.startMetadataRequest(client, this.metadataScope ?? scope);
+    void this.startMetadataRequest(client, boundScope);
   }
 
   isRestoringPreference(): boolean {
@@ -399,7 +401,7 @@ export class NewSessionModelControl {
       if (this.metadataState.status === "error") {
         return t("chat.modelControls.modelsUnavailable");
       }
-      if (this.metadataLoading || !this.metadataState.hasSnapshot) {
+      if (this.metadataRequest || !this.metadataState.hasSnapshot) {
         return t("chat.modelControls.loadingModels");
       }
       if (!this.accountSelectionReady()) {
@@ -429,7 +431,7 @@ export class NewSessionModelControl {
       !this.metadataClient ||
       !this.metadataScope ||
       !this.ownsMetadata(this.metadataClient, this.metadataScope) ||
-      this.metadataLoading ||
+      this.metadataRequest ||
       this.metadataState.status !== "ready" ||
       selection?.kind !== "personal" ||
       selection.authProfileId !== this.draftAccount.authProfileId
@@ -647,9 +649,10 @@ export class NewSessionModelControl {
       loading: false,
       modelCatalog: this.catalog,
       modelCatalogState: {
-        // chat.metadata and agents.list hydrate independently. Do not expose a
+        // The model catalog and agents.list hydrate independently. Do not expose a
         // ready catalog until the selected agent can supply its concrete defaults.
         hasSnapshot: agentDefaultsAvailable && this.metadataState.hasSnapshot,
+        refreshFailed: this.metadataState.refreshFailed,
         status:
           !agentDefaultsAvailable && this.metadataState.status !== "error"
             ? "loading"
@@ -713,7 +716,7 @@ export class NewSessionModelControl {
       },
       onModelPickerTargetRetry: (groupId) => {
         if (groupId === "cliAgents") {
-          this.retryPickerCatalogs();
+          this.catalogTargets.retry(this.metadataClient, this.agentId);
         }
       },
       onThinkingSelect: (value) => {
@@ -735,7 +738,7 @@ export class NewSessionModelControl {
         this.notify();
       },
       onModelSetup: () => options.context?.navigate("model-setup"),
-      onModelPickerOpen: () => this.retryPickerCatalogs(true),
+      onModelPickerOpen: () => this.retryPickerCatalogs(),
       onRequestUpdate: this.notify,
     });
   }

@@ -7175,7 +7175,7 @@ describe("chat model controls", () => {
 
   it.each([
     { status: "offline", catalogState: "offline", triggerLabel: "GPT-5.6 Sol" },
-    { status: "error", catalogState: null, triggerLabel: "GPT-5.6 Sol" },
+    { status: "error", catalogState: "error", triggerLabel: "GPT-5.6 Sol" },
   ] as const)(
     "renders $status over a stale all-cold catalog",
     ({ status, catalogState, triggerLabel }) => {

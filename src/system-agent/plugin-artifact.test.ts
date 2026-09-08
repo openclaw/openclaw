@@ -137,7 +137,9 @@ describe("exact system-agent plugin artifacts", () => {
     ).toMatchObject({ applied: true });
     await expect(fs.access(review.retainedPath)).rejects.toThrow();
     expect(beforePersistentApply).toHaveBeenCalledTimes(3);
-    expect(lines.join("\n")).toContain("Restart the Gateway");
+    expect(lines.join("\n")).toContain(
+      "Artifact installed. After the Gateway restarts, inspect the plugin's Control UI activation status.",
+    );
     expect(mocks.audit).toHaveBeenCalledWith(
       expect.objectContaining({
         details: expect.objectContaining({
