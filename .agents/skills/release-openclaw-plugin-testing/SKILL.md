@@ -121,8 +121,10 @@ Use `source=npm -f package_spec=openclaw@beta` for published beta proof. Keep
 `workflow_ref` as trusted current harness code unless the release process says
 otherwise.
 
-For extended-stable, branch-owned Full Release Validation is publication
-evidence; Package Acceptance is a post-publish selector smoke:
+For extended-stable shared publication, require complete exact-target Full
+Release Validation from the trusted main-pinned `release-ci/*` harness. Direct
+canonical-branch or `main` producers do not satisfy the protected publisher.
+Package Acceptance is a post-publish selector smoke:
 
 ```bash
 gh workflow run package-acceptance.yml \

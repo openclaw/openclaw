@@ -215,6 +215,8 @@ export function validateExtendedStableRunIdentity({
   fullReleaseRunId = "",
   fullReleaseRunAttempt = "",
   workflowPath = "",
+  expectedOrchestratorBranch = "",
+  expectedOrchestratorSha = "",
 }) {
   const fullReleasePreflight =
     kind === "preflight" && run.workflowName === "Full Release Validation";
@@ -253,12 +255,21 @@ export function validateExtendedStableRunIdentity({
       );
     }
   }
-  // FRV runs trusted tooling against a separately pinned release source; its
-  // qualified manifest, not the workflow head, binds that source SHA.
+  const directTargetIdentity = run.headBranch === expectedBranch && run.headSha === expectedSha;
+  const orchestratedPluginIdentity =
+    kind === "plugin" &&
+    typeof expectedOrchestratorBranch === "string" &&
+    expectedOrchestratorBranch.length > 0 &&
+    typeof expectedOrchestratorSha === "string" &&
+    expectedOrchestratorSha.length > 0 &&
+    run.headBranch === expectedOrchestratorBranch &&
+    run.headSha === expectedOrchestratorSha;
+  // FRV's qualified manifest binds the separately pinned release source.
   if (
     !fullReleasePreflight &&
     npmDistTag === "extended-stable" &&
-    (run.headBranch !== expectedBranch || run.headSha !== expectedSha)
+    !directTargetIdentity &&
+    !orchestratedPluginIdentity
   ) {
     throw new Error(
       `Referenced extended-stable ${kind} run must have headBranch=${expectedBranch} and headSha=${expectedSha}; got ${run.headBranch ?? "<missing>"} and ${run.headSha ?? "<missing>"}.`,
@@ -553,6 +564,8 @@ async function main() {
       fullReleaseRunId: process.env.FULL_RELEASE_VALIDATION_RUN_ID,
       fullReleaseRunAttempt: process.env.FULL_RELEASE_VALIDATION_RUN_ATTEMPT,
       workflowPath: process.env.RUN_WORKFLOW_PATH,
+      expectedOrchestratorBranch: process.env.EXPECTED_ORCHESTRATOR_BRANCH,
+      expectedOrchestratorSha: process.env.EXPECTED_ORCHESTRATOR_SHA,
     });
     console.log(`Verified referenced ${process.env.RUN_KIND} run.`);
     return;

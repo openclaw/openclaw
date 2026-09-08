@@ -56,6 +56,7 @@ type WorkflowStep = {
 type WorkflowJob = {
   "continue-on-error"?: boolean | string;
   "runs-on"?: string;
+  environment?: string;
   env?: Record<string, string>;
   if?: string;
   needs?: string | string[];
@@ -1891,6 +1892,18 @@ describe("release validation no-push transport", () => {
     const releasePublishPath = ".github/workflows/openclaw-release-publish.yml";
     const releasePublish = readWorkflow(releasePublishPath);
     const dockerCall = job(releasePublish, "publish_docker");
+    const resolveTarget = job(releasePublish, "resolve_release_target");
+    const validateInputs = step(resolveTarget, "Validate inputs");
+    const validateEvidence = step(resolveTarget, "Validate full release validation manifest");
+    const validateReleaseBranch = step(
+      resolveTarget,
+      "Validate release tag is reachable from a trusted release branch",
+    );
+    const publishJob = job(releasePublish, "publish");
+    const resolveClawHubPlan = step(publishJob, "Resolve ClawHub release plan");
+    const dispatchPublish = step(publishJob, "Dispatch publish workflows");
+    const dispatchRun = dispatchPublish.run ?? "";
+    const coreStart = step(publishJob, "Start core npm publication");
 
     expect(dockerRelease.on?.push).toBeUndefined();
     expect(dockerRelease.on?.workflow_dispatch).toBeUndefined();
@@ -1916,12 +1929,33 @@ describe("release validation no-push transport", () => {
     // approval; its own guard test covers those safety properties.
     expect(callers).toEqual(["docker-image-refresh.yml", "openclaw-release-publish.yml"]);
 
+    expect(validateInputs.id).toBe("inputs");
+    expect(validateInputs.run).toContain(
+      'expected_validation_branch="extended-stable/${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.33"',
+    );
+    expect(validateInputs.run).not.toContain(
+      "Extended-stable core npm publication stays on the canonical extended-stable release flow",
+    );
+    expect(validateInputs.run).toContain(
+      'if [[ "${RELEASE_NPM_DIST_TAG}" == "extended-stable" ]]; then',
+    );
+    expect(publishJob.if).toBe("${{ !inputs.publish_docker_only }}");
+    expect(validateEvidence.env?.EXPECTED_WORKFLOW_BRANCH).toBe("${{ github.ref_name }}");
+    expect(validateReleaseBranch.run).toContain(
+      'expected_ref="refs/remotes/origin/${EXPECTED_VALIDATION_BRANCH}"',
+    );
+    expect(validateReleaseBranch.run).toContain(
+      "must be reachable from ${EXPECTED_VALIDATION_BRANCH}",
+    );
+
     expect(dockerCall.needs).toEqual([
       "resolve_release_target",
       "publish",
       "verify_core_npm_registry",
     ]);
+    expect(dockerCall.if).toContain("inputs.publish_openclaw_npm");
     expect(dockerCall.if).toContain("needs.publish.result == 'success'");
+    expect(dockerCall.if).toContain("inputs.publish_docker_only");
     expect(dockerCall.if).toContain("needs.verify_core_npm_registry.result == 'success'");
     expect(dockerCall.with).toEqual({
       tag: "${{ inputs.tag }}",
@@ -1958,10 +1992,44 @@ describe("release validation no-push transport", () => {
         "Validate full release validation manifest",
       ).run,
     ).toContain("Full release validation target SHA mismatch");
-    expect(job(releasePublish, "finalize_github_release").needs).toEqual([
-      "publish",
-      "publish_docker",
-    ]);
+    const finalizeRelease = job(releasePublish, "finalize_github_release");
+    const finalizeSteps = finalizeRelease.steps ?? [];
+    const publishRelease = step(finalizeRelease, "Publish the verified draft release");
+
+    expect(finalizeRelease.needs).toEqual(["publish", "publish_docker"]);
+    expect(finalizeRelease.if).toContain("inputs.publish_openclaw_npm");
+    expect(finalizeRelease.if).toContain("needs.publish.result == 'success'");
+    expect(finalizeRelease.if).toContain("needs.publish_docker.result == 'success'");
+    expect(resolveClawHubPlan.run).toContain("plan_args+=(--skip-clawhub)");
+    expect(dispatchRun).toContain("-f npm_dist_tag=extended-stable");
+    expect(coreStart.run).toContain('-f plugin_npm_run_id="${plugin_npm_run_id}"');
+    for (const nativeJob of ["qualify_android_native", "publish_android", "publish_windows"]) {
+      expect(job(releasePublish, nativeJob).if).toContain(
+        "inputs.npm_dist_tag != 'extended-stable'",
+      );
+    }
+    expect(finalizeRelease.environment).toBe("npm-release");
+    expect(finalizeRelease.permissions).toEqual({ contents: "write" });
+    expect(finalizeSteps).toHaveLength(1);
+    expect(publishRelease.if).toBeUndefined();
+    expect(publishRelease.run).toContain('gh release edit "${RELEASE_TAG}"');
+    expect(publishRelease.run).toContain("--draft=false");
+    expect(publishRelease.run).toContain('latest_arg="--latest=false"');
+    expect(publishRelease.run).toContain('latest_arg="--latest"');
+    expect(publishRelease.run).toContain("release(tagName:$tag){isDraft isLatest isPrerelease}");
+    expect(publishRelease.run).toContain("'.data.repository.release'");
+    expect(publishRelease.run).toContain("'.isLatest'");
+    expect(publishRelease.run).toContain('!= "${expected_latest}"');
+
+    const releasePublishText = readFileSync(releasePublishPath, "utf8");
+    expect(releasePublishText).toContain("publish_docker_only");
+    expect(releasePublishText).toContain("verify_core_npm_registry");
+    expect(releasePublishText).not.toContain("prepare_extended_stable_release");
+    expect(releasePublishText).not.toContain("finalize_extended_stable_github_release");
+    expect(releasePublishText).not.toContain("extended-stable-release-notes-${{ inputs.tag }}");
+    expect(releasePublishText).not.toContain("verify_extended_stable_docker_completion");
+    expect(releasePublishText).not.toContain("Docker completion status");
+    expect(JSON.stringify(dockerRelease)).not.toContain("statuses");
 
     const identity = step(
       job(dockerRelease, "validate_release_identity"),
@@ -1975,6 +2043,59 @@ describe("release validation no-push transport", () => {
     expect(reusablePermissionViolations(releasePublishPath, "publish_docker")).toEqual([]);
     expect(reusablePermissionViolations(DOCKER_RELEASE, "prepare")).toEqual([]);
   });
+
+  it.each([
+    ["v2026.9.1", "latest", false, true],
+    ["v2026.9.1-beta.1", "beta", true, false],
+    ["v2026.8.35", "extended-stable", false, false],
+  ] as const)(
+    "publishes %s with the track's latest classification and verifies readback",
+    (tag, distTag, prerelease, latest) => {
+      const workflow = readWorkflow(".github/workflows/openclaw-release-publish.yml");
+      const script = step(
+        job(workflow, "finalize_github_release"),
+        "Publish the verified draft release",
+      ).run;
+      const root = tempDirs.make("release-finalize-track-");
+      const calls = join(root, "calls");
+      for (const mismatch of [false, true]) {
+        writeFileSync(calls, "");
+        const result = spawnSync(
+          "bash",
+          [
+            "-c",
+            `
+        gh() {
+          if [[ "$1 $2" == "release edit" ]]; then printf '%s\\n' "$*" >> "$CALLS";
+          elif [[ "$1 $2" == "api graphql" ]]; then printf '%s\\n' "$READBACK";
+          else return 99; fi
+        }
+        ${script}
+      `,
+          ],
+          {
+            encoding: "utf8",
+            env: {
+              PATH: process.env.PATH,
+              CALLS: calls,
+              GITHUB_REPOSITORY: "openclaw/openclaw",
+              RELEASE_TAG: tag,
+              RELEASE_NPM_DIST_TAG: distTag,
+              READBACK: JSON.stringify({
+                isDraft: false,
+                isPrerelease: prerelease,
+                isLatest: mismatch ? !latest : latest,
+              }),
+            },
+          },
+        );
+        expect(readFileSync(calls, "utf8")).toContain(
+          latest ? "--draft=false --latest\n" : "--draft=false --latest=false\n",
+        );
+        expect(result.status, result.stderr).toBe(mismatch ? 1 : 0);
+      }
+    },
+  );
 
   it("finalizes npm-only alpha releases while retaining required Docker gates for other trains", () => {
     const workflow = readWorkflow(".github/workflows/openclaw-release-publish.yml");

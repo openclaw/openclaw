@@ -199,23 +199,38 @@ wrong-SHA tag, parent mismatch, or disallowed parent state fails closed. Other
 privileged writers require their dependent enforcement changes before the
 protected-tag publication route is globally complete.
 
-## Extended-stable exception
+## Extended-stable validation
 
-Extended-stable publish requires a run whose workflow and target are both the
-canonical branch:
+The shared extended-stable publisher runs from a protected tooling tag and
+requires complete exact-target validation from the canonical
+`release-ci/<sha12>-<epoch>` producer at the recorded validation Tooling SHA. Use the
+trusted helper:
 
 ```bash
-RELEASE_SHA="$(git rev-parse HEAD)"
-gh workflow run full-release-validation.yml \
-  --ref extended-stable/YYYY.M.33 \
-  -f ref=extended-stable/YYYY.M.33 \
-  -f expected_sha="$RELEASE_SHA" \
+RELEASE_SHA="<frozen-canonical-branch-tip-sha>"
+TOOLING_SHA="<recorded-full-main-ancestor-sha>"
+pnpm ci:full-release \
+  --sha "$RELEASE_SHA" \
+  --target-ref extended-stable/YYYY.M.33 \
+  --workflow-sha "$TOOLING_SHA" \
   -f release_profile=stable
 ```
 
-Do not use `pnpm ci:full-release` or `release-ci/*`. Publish binds the run's
-branch, head/target SHA, manifest `workflowRef`, ID, and attempt to the canonical
-branch and release commit.
+The extended-stable closeout derives `extended-stable/YYYY.M.33` from the final
+`.33+` tag, requires the tag commit to be reachable from that exact branch, and
+passes that branch to the validation-evidence verifier. It does not substitute
+the protected publication ref for the candidate branch.
+
+Every child must use the pinned trusted workflow SHA. The Full Release
+Validation manifest binds the canonical branch, exact release commit, run ID,
+and attempt under a supported schema (`openclaw.release-validation-evidence/v3`
+or `v4`). Reject narrow runs, stale attempts, untrusted workflow SHAs, and
+mismatched targets. Direct canonical-branch or direct `main` producers do not
+satisfy the protected publisher's evidence contract; any direct recovery route
+retains its own verifier requirements. If a reviewed publisher tooling repair
+changes the Tooling SHA, an older canonical producer is accepted only when its
+workflow SHA remains reachable from current `main`; its target and evidence
+identities must still match.
 
 Backport product failures; make the smallest behavior-preserving repair for
 frozen-target tooling; retry provider, approval, or runner failures without a
@@ -718,7 +733,7 @@ its exact prepared publication artifacts for both roles. For a later
 changelog-only Release SHA using evidence reuse, also record the reuse policy,
 complete changed-path set, green Code SHA parent run, and Release SHA parent
 run. For extended-stable, record the canonical branch, exact release SHA,
-fresh parent run id and attempt, workflow ref, every child run, and any
+accepted producer identity, parent run id and attempt, workflow ref, every child run, and any
 frozen-target compatibility repair or intentional omission.
 
 Useful artifacts:

@@ -137,13 +137,19 @@ gh workflow run full-release-validation.yml --ref main \
   -f expected_sha="$VALIDATION_SHA"
 ```
 
-Gateway extended-stable runs npm preflight, Full Release Validation, and plugin
-npm release from `extended-stable/YYYY.M.33`; core publish consumes those three
-run IDs plus the validation attempt. `release-ci/*` evidence is invalid because
-publish binds every run to the canonical branch and release SHA. The tag
-publishes Gateway images and only the `extended-stable*` aliases; the path skips
-the regular orchestrator and its ClawHub, native-app, GitHub Release, website,
-and private dist-tag surfaces. See [Monthly Gateway extended-stable
+Gateway extended-stable shared publication requires complete exact-target Full
+Release Validation from the trusted main-pinned `release-ci/*` harness targeting
+the frozen `extended-stable/YYYY.M.33` tip. Direct canonical-branch and `main`
+producers do not satisfy the protected publisher. Current
+manifests also supply qualified npm preflight artifacts. The shared
+`OpenClaw Release Publish` parent dispatches from a protected lightweight
+`release-publish/<sha12>-<epoch>` tag at the frozen trusted-main Tooling SHA and
+uses `npm_dist_tag=extended-stable` to publish official npm plugins and core, attach evidence, publish Docker, and
+finalize a non-Latest GitHub Release. Only `extended-stable*` container aliases
+advance; ClawHub, native-app, website, regular npm `latest`, and private
+dist-tag surfaces are excluded. Core-resume recovery verifies existing registry
+bytes before resuming evidence and finalization; Docker-only recovery leaves
+GitHub finalization untouched. See [Monthly Gateway extended-stable
 publication](/reference/RELEASING#monthly-gateway-extended-stable-publication)
 for commands and recovery.
 

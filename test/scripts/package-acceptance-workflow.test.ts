@@ -1572,11 +1572,13 @@ function runReleasePublishInputValidation(overrides: Record<string, string>) {
   writeFileSync(join(binDir, "gh"), '#!/bin/sh\nprintf "%s\\n" "$WORKFLOW_SHA"\n', {
     mode: 0o755,
   });
+  const githubOutput = resolve(tempDirs.make("release-publish-inputs-"), "github-output");
   return spawnSync("bash", ["-c", script], {
     encoding: "utf8",
     env: {
       FULL_RELEASE_VALIDATION_RUN_ATTEMPT: "1",
       FULL_RELEASE_VALIDATION_RUN_ID: "222",
+      GITHUB_OUTPUT: githubOutput,
       OPENCLAW_NPM_RESUME_RUN_ID: "",
       GITHUB_REPOSITORY: "openclaw/openclaw",
       PATH: `${binDir}:${process.env.PATH}`,
@@ -2510,7 +2512,7 @@ describe("package acceptance workflow", () => {
     expect(verifyStep.run).not.toContain("npm view openclaw@extended-stable version");
   });
 
-  it("accepts only exact protected SHA-pinned release publish tags", () => {
+  it("accepts only main-reachable protected SHA-pinned release publish tags", () => {
     const workflowSha = "a".repeat(40);
     const binDir = tempDirs.make("release-publish-gh-");
     const ghPath = `${binDir}/gh`;
@@ -2769,6 +2771,7 @@ dispatch_workflow_at_ref "$WORKFLOW_REF" "$PARENT_WORKFLOW_SHA" plugin-clawhub-r
         RELEASE_PLUGINS: plugin.packageName,
         BASE_REF: "",
         NPM_DIST_TAG: "default",
+        RELEASE_NPM_DIST_TAG: "latest",
         PREFLIGHT_ONLY: "false",
       },
     });
@@ -2894,7 +2897,9 @@ const fs=require("node:fs");fs.writeFileSync("install-proof.json",JSON.stringify
       );
       expect(planner["working-directory"]).toBeUndefined();
     }
-    expect(identity.if).toBe("github.event_name == 'workflow_dispatch' && inputs.preflight_only");
+    expect(identity.if).toBe(
+      "github.event_name == 'workflow_dispatch' && (inputs.preflight_only || inputs.release_candidate_branch != '')",
+    );
     expect(identity.env).toMatchObject({
       GH_TOKEN: "${{ github.token }}",
       WORKFLOW_FULL_REF: "${{ github.ref }}",
@@ -3736,6 +3741,7 @@ wait_for_run openclaw-npm-release.yml 404 "$EXPECTED_SHA" "$STARTED_JOB" "$APPRO
         env: {
           PATH: `${root}:${process.env.PATH}`,
           RELEASE_TAG: "v2026.9.1",
+          RELEASE_NPM_DIST_TAG: "latest",
           PUBLISH_OPENCLAW_NPM: "true",
           PUBLISH_DOCKER_ONLY: "false",
           GITHUB_OUTPUT: join(root, "output"),
@@ -3773,6 +3779,11 @@ wait_for_run openclaw-npm-release.yml 404 "$EXPECTED_SHA" "$STARTED_JOB" "$APPRO
       env: {
         PATH: `${root}:${process.env.PATH}`,
         RELEASE_TAG: tag,
+        RELEASE_NPM_DIST_TAG: tag.includes("-alpha.")
+          ? "alpha"
+          : tag.includes("-beta.")
+            ? "beta"
+            : "latest",
         PUBLISH_OPENCLAW_NPM: "true",
         PUBLISH_DOCKER_ONLY: "false",
         GITHUB_OUTPUT: join(root, "output"),
@@ -4469,6 +4480,9 @@ NODE
     expect(workflow).toContain("main_ref: ${{ steps.inputs.outputs.main_ref }}");
     expect(workflow).toContain("TRIGGER_SHA: ${{ github.sha }}");
     expect(workflow).toContain('main_ref="$TRIGGER_SHA"');
+    expect(workflow).toContain('classifyReleaseTrain(parsed) === "stable"');
+    expect(workflow).toContain('classifyReleaseTrain(parsed) !== "stable"');
+    expect(workflow).toContain("below the extended-stable .33 boundary");
     expect(workflow).toContain("ref: ${{ needs.resolve.outputs.main_ref }}");
     expect(
       workflowStep(
@@ -10942,6 +10956,7 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
       "sparse-checkout": "scripts",
     });
     expect(validateManifest.env).toMatchObject({
+      EXPECTED_WORKFLOW_BRANCH: "${{ github.ref_name }}",
       RUN_JSON_FILE: "${{ runner.temp }}/full-release-validation-run.json",
       TRUSTED_WORKFLOW_FULL_REF: "${{ github.ref }}",
       TRUSTED_WORKFLOW_REF: "${{ github.ref_name }}",
@@ -11218,9 +11233,17 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
       dispatchFailure: false,
       exit: 1,
     },
+    {
+      scenario: "extended-stable",
+      selected: true,
+      hasDigests: true,
+      dispatchFailure: false,
+      exit: 0,
+    },
   ])(
     "dispatches optional Windows promotion without waiting: $scenario",
-    ({ selected, hasDigests, dispatchFailure, exit }) => {
+    ({ scenario, selected, hasDigests, dispatchFailure, exit }) => {
+      const shouldDispatch = selected && hasDigests && scenario !== "extended-stable";
       const source = readFileSync("scripts/lib/release-publish-children.sh", "utf8");
       const root = tempDirs.make("windows-detached-publish-");
       const dispatchPath = join(root, "dispatch");
@@ -11258,6 +11281,7 @@ promote_windows_release_assets
             GITHUB_STEP_SUMMARY: summaryPath,
             GITHUB_REPOSITORY: "openclaw/openclaw",
             RELEASE_TAG: "v2026.9.1",
+            RELEASE_NPM_DIST_TAG: scenario === "extended-stable" ? "extended-stable" : "latest",
             CHILD_WORKFLOW_REF: workflowRef,
             PARENT_WORKFLOW_SHA: workflowSha,
             WINDOWS_NODE_TAG: selected ? "v0.6.3" : "",
@@ -11267,8 +11291,8 @@ promote_windows_release_assets
       );
       expect(result.status, result.stderr).toBe(exit);
       expect(result.stderr).not.toContain("unexpected-windows-wait");
-      expect(existsSync(dispatchPath)).toBe(selected && hasDigests);
-      if (selected && hasDigests) {
+      expect(existsSync(dispatchPath)).toBe(shouldDispatch);
+      if (shouldDispatch) {
         expect(readFileSync(dispatchPath, "utf8").trim().split("\n")).toEqual([
           workflowRef,
           workflowSha,
@@ -11282,7 +11306,7 @@ promote_windows_release_assets
         ]);
       }
       expect(readFileSync(summaryPath, "utf8").includes("actions/runs/456")).toBe(
-        selected && hasDigests && !dispatchFailure,
+        shouldDispatch && !dispatchFailure,
       );
     },
   );
@@ -12382,7 +12406,7 @@ wait_for_run plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
     }
   });
 
-  it("pins every documented raw Full Release Validation caller to one exact SHA", () => {
+  it("pins documented Full Release Validation callers to exact target and tooling SHAs", () => {
     const nightly = readFileSync(".agents/skills/release-openclaw-nightly/SKILL.md", "utf8");
     const releaseCi = readFileSync(".agents/skills/release-openclaw-ci/SKILL.md", "utf8");
     // The CI page is an index over docs/ci/*. Read the whole set so this
@@ -12400,9 +12424,12 @@ wait_for_run plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
     expect(nightly).toContain('-f expected_sha="$SHA"');
     for (const text of [releaseCi, fullReleaseDocs, releasingDocs]) {
       expectTextToIncludeAll(text, [
-        'RELEASE_SHA="$(git rev-parse HEAD)"',
-        "-f ref=extended-stable/YYYY.M.33",
-        '-f expected_sha="$RELEASE_SHA"',
+        'RELEASE_SHA="<frozen-canonical-branch-tip-sha>"',
+        'TOOLING_SHA="<recorded-full-main-ancestor-sha>"',
+        "pnpm ci:full-release",
+        '--sha "$RELEASE_SHA"',
+        "--target-ref extended-stable/YYYY.M.33",
+        '--workflow-sha "$TOOLING_SHA"',
       ]);
     }
     expectTextToIncludeAll(ciDocs, [

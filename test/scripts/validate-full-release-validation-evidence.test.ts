@@ -373,6 +373,27 @@ describe("full release validation evidence", () => {
     }
   });
 
+  it("rejects direct monthly-branch evidence under a protected publisher", () => {
+    const branch = "extended-stable/2026.6.33";
+    expect(() =>
+      validateFullReleaseValidationEvidence({
+        run: releaseRun({ head_branch: branch }),
+        manifest: releaseManifest({
+          workflowRef: branch,
+          workflowFullRef: `refs/heads/${branch}`,
+          targetRef: "v2026.6.35",
+        }),
+        expectedRepository: "openclaw/openclaw",
+        expectedRunId: "123",
+        expectedTargetSha: targetSha,
+        expectedWorkflowBranch: branch,
+        expectedTrustedWorkflowFullRef: `refs/tags/release-publish/${workflowSha.slice(0, 12)}-123`,
+        expectedTrustedWorkflowSha: workflowSha,
+        isTrustedMainAncestor: () => false,
+      }),
+    ).toThrow("must use a canonical release-ci producer branch");
+  });
+
   it("rejects direct main evidence outside current main", () => {
     expect(() =>
       validate(

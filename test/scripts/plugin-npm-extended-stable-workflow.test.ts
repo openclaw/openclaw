@@ -301,6 +301,12 @@ describe("plugin npm extended-stable workflow", () => {
     expect(inputs?.ref?.description).toBe(
       "Exact commit SHA; preflight accepts main/release ancestry, while publish mode also supports canonical extended-stable or matching Tideclaw alpha branches",
     );
+    expect(inputs?.release_candidate_branch).toEqual({
+      description:
+        "Canonical extended-stable branch when protected release tooling publishes its immutable target",
+      required: false,
+      type: "string",
+    });
   });
 
   it("uses one override for check, plan, pack, and publish", () => {
@@ -448,7 +454,7 @@ process.exit(${JSON.stringify(command)} === "node" ? Number(process.env.IDENTITY
     },
   );
 
-  it("trusts only the canonical monthly branch at the exact checked-out SHA", () => {
+  it("admits monthly branch tips or canonical candidates from protected tooling", () => {
     const trusted = step(
       workflow().jobs?.preview_plugins_npm,
       "Validate ref is on a trusted publish branch",
@@ -461,6 +467,16 @@ process.exit(${JSON.stringify(command)} === "node" ? Number(process.env.IDENTITY
     expect(trusted.run).toContain(
       'exact_ref_match(\n        "HEAD",\n        f"refs/remotes/origin/{extended_branch}"',
     );
+    expect(trusted.env?.RELEASE_CANDIDATE_BRANCH).toBe(
+      "${{ github.event_name == 'workflow_dispatch' && inputs.release_candidate_branch || '' }}",
+    );
+    expect(trusted.run).toContain("candidate_branch != extended_branch");
+    expect(trusted.run).toContain('r"refs/tags/release-publish/[a-f0-9]{12}-[1-9][0-9]*"');
+    expect(trusted.run).toContain('is_ancestor(f"refs/remotes/origin/{extended_branch}")');
+    expect(trusted.run).toContain('is_ancestor("origin/main", os.environ["WORKFLOW_SHA"])');
+    expect(
+      step(workflow().jobs?.preview_plugins_npm, "Verify trusted preflight tooling identity").if,
+    ).toContain("inputs.release_candidate_branch != ''");
   });
 
   it("binds preflight to an exact source SHA without release-publish approval", () => {
@@ -519,6 +535,7 @@ process.exit(${JSON.stringify(command)} === "node" ? Number(process.env.IDENTITY
     expect(trusted.run).toContain(
       "Plugin npm preflight must not include a release publish parent run tuple.",
     );
+    expect(trusted.run).toContain("preflight must not include release_candidate_branch");
     const preflightBranchRejection = trusted.run?.indexOf(
       "Plugin npm preflight target must be reachable from main or release/*.",
     );

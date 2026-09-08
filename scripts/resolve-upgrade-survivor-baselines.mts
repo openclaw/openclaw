@@ -4,7 +4,11 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { normalizeUpgradeSurvivorBaselineSpec } from "./lib/docker-e2e-plan.mts";
 import { resolveNpmJsonEntries } from "./lib/npm-json-output.mts";
-import { compareReleaseVersions, parseReleaseVersion } from "./lib/release-version.mjs";
+import {
+  classifyReleaseTrain,
+  compareReleaseVersions,
+  parseReleaseVersion,
+} from "./lib/release-version.mjs";
 import { OLDEST_SUPPORTED_UPGRADE_SURVIVOR_BASELINE } from "./lib/upgrade-survivor-policy.mjs";
 
 type ReleaseRecord = Partial<Record<"isPrerelease" | "publishedAt" | "tagName", unknown>>;
@@ -70,16 +74,16 @@ function readPublishedVersions(file: string | undefined) {
 
 function stableVersionFromTag(tagName: unknown) {
   const version = typeof tagName === "string" ? tagName.replace(/^v/u, "") : "";
-  return parseStableVersion(version) ? version : undefined;
+  return parseVersionForTrain(version) ? version : undefined;
 }
 
-function parseStableVersion(version: unknown) {
+function parseVersionForTrain(version: unknown, train: "stable" | "extended-stable" = "stable") {
   const parsed = parseReleaseVersion(typeof version === "string" ? version : "");
-  return parsed?.channel === "stable" ? parsed : undefined;
+  return parsed && classifyReleaseTrain(parsed) === train ? parsed : undefined;
 }
 
 function compareStableVersions(left: string, right: string) {
-  if (!parseStableVersion(left) || !parseStableVersion(right)) {
+  if (!parseVersionForTrain(left) || !parseVersionForTrain(right)) {
     throw new Error(`cannot compare release versions: ${left} ${right}`);
   }
   const comparison = compareReleaseVersions(left, right);
@@ -194,11 +198,13 @@ function resolveSupportedLines(args: Map<string, string>) {
     throw new Error("npm dist-tags must be a JSON object");
   }
   const latest = "latest" in tags ? tags.latest : undefined;
-  if (typeof latest !== "string" || !parseStableVersion(latest) || !versions.has(latest)) {
+  if (typeof latest !== "string" || !parseVersionForTrain(latest) || !versions.has(latest)) {
     throw new Error("npm latest must name a published stable version");
   }
   const previous = [...versions]
-    .filter((version) => parseStableVersion(version) && compareStableVersions(version, latest) < 0)
+    .filter(
+      (version) => parseVersionForTrain(version) && compareStableVersions(version, latest) < 0,
+    )
     .toSorted((left, right) => compareStableVersions(right, left))[0];
   if (!previous) {
     throw new Error(`no previous stable npm version before ${latest}`);
@@ -211,9 +217,13 @@ function resolveSupportedLines(args: Map<string, string>) {
   const extended = "extended-stable" in tags ? tags["extended-stable"] : undefined;
   if (
     extended !== undefined &&
-    (typeof extended !== "string" || !parseStableVersion(extended) || !versions.has(extended))
+    (typeof extended !== "string" ||
+      !parseVersionForTrain(extended, "extended-stable") ||
+      !versions.has(extended))
   ) {
-    throw new Error("npm extended-stable must name a published stable version when present");
+    throw new Error(
+      "npm extended-stable must name a published extended-stable version when present",
+    );
   }
   return dedupeSpecs([
     latest,
@@ -247,7 +257,7 @@ export function resolveBaselines(args: Map<string, string>) {
       resolved.push(...resolveLastStable(args, count));
     } else if (token.startsWith("all-since-")) {
       const minimumVersion = token.slice("all-since-".length);
-      if (!parseStableVersion(minimumVersion)) {
+      if (!parseVersionForTrain(minimumVersion)) {
         throw new Error(`invalid all-since baseline token: ${token}`);
       }
       resolved.push(...resolveAllSince(args, minimumVersion));

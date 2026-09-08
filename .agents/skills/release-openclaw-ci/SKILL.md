@@ -380,23 +380,26 @@ publish workflow reads the effective profile from the full-validation manifest.
 
 ### Extended-stable validation
 
-For `.33+`, dispatch from and target the canonical branch. This direct route is
-intentional: downstream extended-stable evidence requires the canonical branch
-identity, while Telegram still authenticates the exact branch SHA:
+For `.33+` shared publication, use the trusted main-pinned helper against the
+immutable canonical branch tip. The protected publication tooling tag requires
+a canonical `release-ci/<sha12>-<epoch>` producer at the recorded validation Tooling SHA:
 
 ```bash
-RELEASE_SHA="$(git rev-parse HEAD)"
-gh workflow run full-release-validation.yml \
-  --ref extended-stable/YYYY.M.33 \
-  -f ref=extended-stable/YYYY.M.33 \
-  -f expected_sha="$RELEASE_SHA" \
+RELEASE_SHA="<frozen-canonical-branch-tip-sha>"
+TOOLING_SHA="<recorded-full-main-ancestor-sha>"
+pnpm ci:full-release \
+  --sha "$RELEASE_SHA" \
+  --target-ref extended-stable/YYYY.M.33 \
+  --workflow-sha "$TOOLING_SHA" \
   -f release_profile=stable
 ```
 
-Accept only a complete `rerun_group=all` run whose branch, head/target SHAs,
-manifest `workflowRef`, and package versions identify the same commit. Save its
-successful `run_attempt` and require the final tag to resolve there. Reject
-`release-ci/*`, current-main, narrow, and earlier-attempt evidence.
+Accept only a complete `rerun_group=all` run with a supported exact-target
+manifest. Bind its workflow SHA separately from the canonical target SHA;
+require the manifest target, package versions, saved `run_attempt`, and final
+tag to identify the same candidate. Direct canonical-branch and direct `main`
+producers do not satisfy protected-tag publication. Reject narrow runs,
+untrusted tooling, mismatched targets, and earlier-attempt evidence.
 
 Product failures need an approved backport. Frozen-target tooling failures need
 the smallest behavior-preserving repair. Provider, approval, runner, or log

@@ -73,6 +73,10 @@ on:
         required: false
         default: ""
         type: string
+      release_candidate_branch:
+        description: Canonical extended-stable branch when protected release tooling publishes its immutable target
+        required: false
+        type: string
       preflight_only:
         description: Prepare and verify immutable plugin npm artifacts without publishing
         required: true
@@ -148,7 +152,7 @@ jobs:
           PYTHON
 
       - name: Verify trusted preflight tooling identity
-        if: github.event_name == 'workflow_dispatch' && inputs.preflight_only
+        if: github.event_name == 'workflow_dispatch' && (inputs.preflight_only || inputs.release_candidate_branch != '')
         env:
           GH_TOKEN: ${{ github.token }}
           WORKFLOW_FULL_REF: ${{ github.ref }}
@@ -171,6 +175,7 @@ jobs:
           RELEASE_PLUGINS: ${{ github.event_name == 'workflow_dispatch' && inputs.plugins || '' }}
           RELEASE_PUBLISH_RUN_ATTEMPT: ${{ github.event_name == 'workflow_dispatch' && inputs.release_publish_run_attempt || '' }}
           RELEASE_PUBLISH_RUN_ID: ${{ github.event_name == 'workflow_dispatch' && inputs.release_publish_run_id || '' }}
+          RELEASE_CANDIDATE_BRANCH: ${{ github.event_name == 'workflow_dispatch' && inputs.release_candidate_branch || '' }}
           SOURCE_REF: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.sha }}
           WORKFLOW_REF: ${{ github.ref }}
           WORKFLOW_SHA: ${{ github.workflow_sha }}
@@ -198,9 +203,9 @@ jobs:
                   return False
               return left == right
 
-          def is_ancestor(ref):
+          def is_ancestor(ref, source="HEAD"):
               try:
-                  run_git(workspace, "merge-base", "--is-ancestor", "HEAD", ref)
+                  run_git(workspace, "merge-base", "--is-ancestor", source, ref)
                   return True
               except GitFailure as error:
                   if error.code == 1:
@@ -213,6 +218,7 @@ jobs:
           source_ref = os.environ["SOURCE_REF"]
           run_id = os.environ["RELEASE_PUBLISH_RUN_ID"]
           run_attempt = os.environ["RELEASE_PUBLISH_RUN_ATTEMPT"]
+          candidate_branch = os.environ["RELEASE_CANDIDATE_BRANCH"]
           if preflight:
               if not re.fullmatch(r"[0-9a-fA-F]{40}", source_ref) or not exact_ref_match(
                   "HEAD",
@@ -221,6 +227,8 @@ jobs:
                   fail("Plugin npm preflight requires ref to be the exact 40-character source SHA.")
               if run_id.strip() or run_attempt.strip():
                   fail("Plugin npm preflight must not include a release publish parent run tuple.")
+              if candidate_branch.strip():
+                  fail("Plugin npm preflight must not include release_candidate_branch.")
           if run_id.strip() and not re.fullmatch(r"[1-9][0-9]*", run_attempt):
               fail("release_publish_run_id requires the exact positive release_publish_run_attempt.")
 
@@ -262,6 +270,31 @@ jobs:
                   timeout=120,
                   reclaim_locks=True,
               )
+              if candidate_branch.strip():
+                  if candidate_branch != extended_branch or not re.fullmatch(
+                      r"refs/tags/release-publish/[a-f0-9]{12}-[1-9][0-9]*",
+                      os.environ["WORKFLOW_REF"],
+                  ):
+                      fail(
+                          f"release_candidate_branch must be {extended_branch} and requires "
+                          "protected release-publish workflow tooling."
+                      )
+                  # The preceding identity check binds the protected tag to WORKFLOW_SHA.
+                  # Source and tooling ancestry are separate release admission boundaries.
+                  run_git(
+                      workspace,
+                      "fetch",
+                      "--no-tags",
+                      "origin",
+                      "+refs/heads/main:refs/remotes/origin/main",
+                      timeout=120,
+                      reclaim_locks=True,
+                  )
+                  if not is_ancestor("origin/main", os.environ["WORKFLOW_SHA"]):
+                      fail("Extended-stable plugin workflow revision is not reachable from current main.")
+                  if is_ancestor(f"refs/remotes/origin/{extended_branch}"):
+                      raise SystemExit(0)
+                  fail(f"Extended-stable plugin target must be reachable from {extended_branch}.")
               if os.environ["WORKFLOW_REF"] == f"refs/heads/{extended_branch}" and exact_ref_match(
                   "HEAD",
                   f"refs/remotes/origin/{extended_branch}",
@@ -271,6 +304,9 @@ jobs:
                   f"Extended-stable plugin npm publishes must run from {extended_branch} at "
                   "its exact branch tip."
               )
+
+          if candidate_branch.strip():
+              fail("release_candidate_branch is only valid for extended-stable publication.")
 
           run_git(
               workspace,

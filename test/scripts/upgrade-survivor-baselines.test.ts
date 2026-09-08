@@ -278,9 +278,14 @@ console.log(JSON.stringify(process.argv[4] === "dist-tags"
     },
     {
       tags: { latest: "2026.9.2", "extended-stable": "2026.6.99" },
-      versions: ["2026.6.34", "2026.9.2"],
-      error: "npm extended-stable must name a published stable version",
+      versions: ["2026.6.34", "2026.9.1", "2026.9.2"],
+      error: "npm extended-stable must name a published extended-stable version",
     },
+    ...["2026.9.1", "2026.6.35-1", "2026.6.35-beta.1"].map((extended) => ({
+      tags: { latest: "2026.9.2", "extended-stable": extended },
+      versions: ["2026.6.34", "2026.9.1", "2026.9.2", extended],
+      error: "npm extended-stable must name a published extended-stable version",
+    })),
     {
       tags: { latest: "2026.9.2" },
       versions: ["2026.9.1", "2026.9.2"],
@@ -426,6 +431,32 @@ console.log(JSON.stringify(process.argv[4] === "dist-tags"
           ]);
         },
       );
+    });
+  });
+
+  it("excludes extended-stable GitHub releases from regular stable baselines", () => {
+    const releases = [
+      {
+        isPrerelease: false,
+        publishedAt: "2026-08-02T00:00:00Z",
+        tagName: "v2026.6.34",
+      },
+      {
+        isPrerelease: false,
+        publishedAt: "2026-08-01T00:00:00Z",
+        tagName: "v2026.7.12",
+      },
+    ];
+
+    withReleaseFixture(releases, (file) => {
+      expect(
+        resolveBaselines(
+          new Map([
+            ["requested", "last-stable-1"],
+            ["releases-json", file],
+          ]),
+        ),
+      ).toEqual(["openclaw@2026.7.12"]);
     });
   });
 

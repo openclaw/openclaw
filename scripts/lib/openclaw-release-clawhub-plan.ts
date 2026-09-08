@@ -33,6 +33,7 @@ type OpenClawReleaseClawHubPlanArgs = {
   releasePublishRunId: string;
   pluginPublishScope: PluginReleaseSelectionMode;
   plugins: string[];
+  skipClawHub?: boolean;
 };
 
 type OpenClawReleaseClawHubPlan = {
@@ -264,6 +265,7 @@ export function parseOpenClawReleaseClawHubPlanArgs(
   let pluginPublishScope: PluginReleaseSelectionMode | undefined;
   let plugins: string[] = [];
   let pluginsFlagProvided = false;
+  let skipClawHub = false;
 
   for (let index = 0; index < values.length; index += 1) {
     const arg = values[index];
@@ -308,6 +310,9 @@ export function parseOpenClawReleaseClawHubPlanArgs(
         plugins = parsePluginReleaseSelection(next());
         pluginsFlagProvided = true;
         break;
+      case "--skip-clawhub":
+        skipClawHub = true;
+        break;
       default:
         throw new Error(`Unknown argument: ${arg}`);
     }
@@ -338,6 +343,7 @@ export function parseOpenClawReleaseClawHubPlanArgs(
     releasePublishRunId: requireArg(releasePublishRunId, "--release-publish-run-id"),
     pluginPublishScope: resolvedPluginPublishScope,
     plugins,
+    skipClawHub,
   };
 }
 
@@ -360,13 +366,15 @@ export async function buildOpenClawReleaseClawHubPlan(
     "releasePublishRunAttempt",
   );
   const releasePublishRunId = requireArg(args.releasePublishRunId, "releasePublishRunId");
-  const plan = await collectPluginClawHubReleasePlan({
-    rootDir: options.rootDir ?? resolve("."),
-    selection: args.plugins,
-    selectionMode: args.pluginPublishScope,
-    fetchImpl: options.fetchImpl,
-    registryBaseUrl: options.registryBaseUrl,
-  });
+  const plan = args.skipClawHub
+    ? { candidates: [], bootstrapCandidates: [], missingTrustedPublisher: [], warnings: [] }
+    : await collectPluginClawHubReleasePlan({
+        rootDir: options.rootDir ?? resolve("."),
+        selection: args.plugins,
+        selectionMode: args.pluginPublishScope,
+        fetchImpl: options.fetchImpl,
+        registryBaseUrl: options.registryBaseUrl,
+      });
 
   const normalPackages = packageNames(plan.candidates);
   const bootstrapPackages = [

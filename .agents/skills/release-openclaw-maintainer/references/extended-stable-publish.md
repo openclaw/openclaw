@@ -8,8 +8,8 @@ or publication work. Treat backport discovery and preparation as an ability of
 this release skill, not as a separate release workflow.
 
 The backport flow covers mainline inventory, private-security reconciliation,
-approval, the staging PR, and proof handoff. After it lands, use the sequence
-below. Never route `.33+` through regular beta/stable release steps.
+approval, the staging PR, and proof handoff. After it lands, use the shared
+release pipeline with the extended-stable track inputs below.
 
 Extended-stable requires a visible **SDK/config backport warning** whenever a
 candidate changes the public plugin SDK or a config/default/schema/migration
@@ -37,30 +37,35 @@ on pinned current `main` as the exact command and validation contract.
    Release Validation derives `npm_dist_tag=extended-stable` from the version.
 3. Run complete Full Release Validation against the canonical branch with
    `release_profile=stable`; save its run ID and successful `run_attempt`.
-   Prefer the trusted main-pinned harness, which attests the immutable target
-   SHA in its manifest. Current manifests include qualified npm and prepared
+   Use the trusted main-pinned helper's canonical `release-ci/*` producer,
+   which attests the immutable target SHA in its manifest. Direct branch/main
+   producers do not satisfy protected-tag shared publication. Current manifests include qualified npm and prepared
    Docker artifacts; use that same run ID for npm preflight evidence. Historical
    manifests without them still need a separate npm preflight. Any candidate
    branch change invalidates both gates.
 4. Require the tip still equals the frozen SHA, then create signed `vYYYY.M.P`.
    Never move or delete a final tag; later source changes need a new patch.
 5. Require the saved validation run to be complete and successful, bind its
-   manifest target SHA and attempt to the tag, and accept a direct run from the
-   canonical branch, a direct current-`main` run whose workflow SHA is still
-   reachable from main, or a trusted main-pinned `release-ci/*` harness. Reject
-   narrow reruns.
-6. Dispatch `plugin-npm-release.yml` from the same branch with
-   `publish_scope=all-publishable`, the full release SHA as `ref`, and
-   `npm_dist_tag=extended-stable`. Require complete exact-version and selector
-   readback, then save the successful plugin run ID.
-7. Publish core with the tag, `npm_dist_tag=extended-stable`, all three run IDs,
-   and `full_release_validation_run_attempt=<saved-attempt>`. Normally dispatch
-   from the canonical branch. For a workflow-only recovery after the candidate
-   is immutable, dispatch trusted current `main` with
-   `release_candidate_branch=extended-stable/YYYY.M.33`; it still publishes the
-   tag checkout and accepts canonical-branch, current-main, or trusted-pinned
-   validation evidence; the prepared tarball and every evidence identity must
-   still match the candidate SHA.
+   manifest target SHA and attempt to the tag, and require the canonical
+   `release-ci/<sha12>-<epoch>` producer with trusted tooling identity. Reject
+   direct canonical-branch/main producers and narrow reruns.
+6. With publication/tag-push authority, create and push a protected lightweight
+   `release-publish/<tooling-sha12>-<epoch>` tag at the frozen trusted-main
+   Tooling SHA, using the commands in `docs/reference/RELEASING.md`. Dispatch
+   `OpenClaw Release Publish` with `--ref` set to that tooling tag, the product
+   release tag as `tag`, `npm_dist_tag=extended-stable`,
+   `publish_openclaw_npm=true`, the saved
+   preflight and Full Release Validation run IDs, and the saved validation run
+   attempt. The parent derives `release_candidate_branch`, creates the draft,
+   publishes every official npm plugin and core under `extended-stable`,
+   attaches release evidence, skips ClawHub/native publication, publishes
+   Docker, and finalizes the release with `latest=false`.
+7. If core npm already published, resume the parent from the same protected
+   tooling tag with `openclaw_npm_resume_run_id` bound to the successful original core publish.
+   It verifies the registry tarball against preflight before resuming evidence,
+   Docker, and finalization. Docker-only recovery may dispatch from `main` with
+   `publish_openclaw_npm=false` and `publish_docker_only=true`; that path does
+   not attach evidence or finalize the release.
 8. From a clean current-`main` checkout, run
    `node --import tsx scripts/openclaw-npm-postpublish-verify.ts YYYY.M.P`.
    Verify signatures, provenance, inventories, exact versions, and selectors.
@@ -73,5 +78,6 @@ on pinned current `main` as the exact command and validation contract.
    digest and refuse automatic rollback. For alias repair, dispatch the
    approval-gated `docker-channel-promote.yml` from current `main` with the exact
    tag; never rebuild or move the release tag.
-10. Do not create a GitHub Release or publish macOS, Windows, mobile, website,
-    ClawHub, or private dist-tag artifacts from this path.
+10. Verify the non-Latest GitHub Release and its dependency, validation, and
+    postpublish evidence. Do not publish macOS, Windows, mobile, website,
+    ClawHub, regular npm `latest`, or private dist-tag artifacts from this path.
