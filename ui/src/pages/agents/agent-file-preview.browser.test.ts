@@ -140,12 +140,17 @@ describe.runIf(browserMode)("agent file preview", () => {
       }
     },
   );
-  it.each([320, 390, 1440])(
-    "keeps identity, actions and metadata accessible across preview modes at %ipx",
-    async (width) => {
+  it.each([
+    [320, "ru"],
+    [320, "fr"],
+    [390, "en"],
+    [1440, "en"],
+  ] as const)(
+    "keeps actions and whole metadata chips within each preview mode at %ipx (%s)",
+    async (width, locale) => {
       const { page, userEvent } = await import("vitest/browser");
       await page.viewport(width, 900);
-      await i18n.setLocale(width === 320 ? "ru" : "en");
+      await i18n.setLocale(locale);
       container.classList.add("shell--settings");
       renderPreview(
         "# Workspace operating instructions\n\n" + "Readable document content.\n\n".repeat(80),
@@ -173,24 +178,53 @@ describe.runIf(browserMode)("agent file preview", () => {
         expect(buttons.top).toBeLessThan(name.bottom);
         expect(buttons.bottom).toBeGreaterThan(name.top);
         expect(buttons.right).toBeLessThanOrEqual(dialog.getBoundingClientRect().right);
-        for (const chip of chips) {
+        const visibleChips = chips.filter(
+          (chip) =>
+            getComputedStyle(chip).visibility !== "hidden" &&
+            chip.getBoundingClientRect().width > 0,
+        );
+        expect(visibleChips.length).toBeGreaterThan(0);
+        for (const chip of visibleChips) {
           expect(chip.scrollWidth).toBeLessThanOrEqual(chip.clientWidth);
           expect(chip.getBoundingClientRect().bottom).toBeLessThanOrEqual(
             meta.getBoundingClientRect().bottom,
           );
         }
-        expect(new Set(chips.map((chip) => chip.getBoundingClientRect().top)).size).toBe(1);
+        expect(new Set(visibleChips.map((chip) => chip.getBoundingClientRect().top)).size).toBe(1);
         if (width <= 390) {
           meta.scrollLeft = meta.scrollWidth;
-          expect(meta.scrollLeft).toBeGreaterThan(0);
-          expect(chips.at(-1)!.getBoundingClientRect().right).toBeLessThanOrEqual(
-            meta.getBoundingClientRect().right,
-          );
+          expect(meta.scrollLeft).toBe(0);
+          for (const chip of visibleChips) {
+            expect(chip.getBoundingClientRect().left).toBeGreaterThanOrEqual(
+              meta.getBoundingClientRect().left,
+            );
+            expect(chip.getBoundingClientRect().right).toBeLessThanOrEqual(
+              meta.getBoundingClientRect().right,
+            );
+          }
         }
         expect(getComputedStyle(body).paddingInlineStart).toBe(normalInset);
         body.scrollTop = body.scrollHeight;
         expect(body.scrollTop).toBeGreaterThan(0);
         body.scrollTop = 0;
+      }
+      if (width <= 390) {
+        await page.viewport(1440, 900);
+        await expect
+          .poll(
+            () =>
+              chips.filter(
+                (chip) =>
+                  getComputedStyle(chip).visibility !== "hidden" &&
+                  chip.getBoundingClientRect().width > 0,
+              ).length,
+          )
+          .toBe(chips.length);
+        for (const chip of chips) {
+          expect(chip.getBoundingClientRect().right).toBeLessThanOrEqual(
+            meta.getBoundingClientRect().right,
+          );
+        }
       }
       const closed = afterOwnTransition(webAwesomeDialog, "wa-after-hide");
       await userEvent.keyboard("{Escape}");

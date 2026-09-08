@@ -1,5 +1,6 @@
 // Control UI view renders agents panels status files screen content.
 import { html, nothing } from "lit";
+import { ref } from "lit/directives/ref.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import type {
   AgentFileEntry,
@@ -34,7 +35,11 @@ import {
   formatCronState,
   formatNextRun,
 } from "../../lib/presenter.ts";
-import { resetAgentFilePreview, setPreviewExpandButtonState } from "./agent-file-preview-state.ts";
+import {
+  previewMetadataRef,
+  resetAgentFilePreview,
+  setPreviewExpandButtonState,
+} from "./agent-file-preview-state.ts";
 import { renderAgentContextSection } from "./panels-overview.ts";
 
 function countWords(text: string) {
@@ -666,7 +671,7 @@ export function renderAgentFiles(params: {
                                   </openclaw-tooltip>
                                 </div>
                               </div>
-                              <div class="md-preview-dialog__meta">
+                              <div class="md-preview-dialog__meta" ${ref(previewMetadataRef())}>
                                 <div class="md-preview-dialog__chip ${previewStatusClass}">
                                   <strong>${previewStatusLabel}</strong>
                                 </div>

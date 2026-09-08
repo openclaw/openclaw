@@ -4548,6 +4548,48 @@ td.data-table-key-col {
   }
 }
 
+@media (max-width: 400px) {
+  .agent-file-preview .btn.md-preview-icon-btn {
+    width: var(--space-7);
+    height: var(--space-7);
+    min-width: var(--space-7);
+    min-height: var(--space-7);
+    border-color: transparent;
+    border-radius: var(--radius-md);
+    background: transparent;
+    color: var(--muted);
+    box-shadow: none;
+  }
+
+  .agent-file-preview .btn.md-preview-icon-btn:hover:not(:disabled) {
+    border-color: transparent;
+    background: var(--bg-hover);
+    color: var(--text);
+    box-shadow: none;
+  }
+
+  .agent-file-preview .md-preview-dialog__meta {
+    position: relative;
+    overflow: clip;
+  }
+
+  .agent-file-preview .md-preview-dialog__chip {
+    width: max-content;
+  }
+
+  .agent-file-preview .md-preview-dialog__chip:nth-child(3),
+  .agent-file-preview .md-preview-dialog__chip > span {
+    display: none;
+  }
+
+  .agent-file-preview .md-preview-dialog__chip.is-overflowing {
+    position: absolute;
+    inset-inline-start: 0;
+    top: 0;
+    visibility: hidden;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .md-preview-dialog__panel {
     animation: none;
