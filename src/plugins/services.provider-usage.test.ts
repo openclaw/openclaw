@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ProviderUsageMetricsListener } from "../infra/provider-usage-metrics.types.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { createEmptyPluginRegistry } from "./registry.js";
 import { startPluginServices } from "./services.js";
 import type { OpenClawPluginService, OpenClawPluginServiceContext } from "./types.js";
@@ -85,7 +86,7 @@ describe("provider usage diagnostics capability", () => {
 
   it("carries lease revocation through asynchronous observer acquisition", async () => {
     const acquired = vi.fn();
-    const gate = Promise.withResolvers<void>();
+    const gate = createDeferredCore();
     const observeProviderUsage = vi.fn(async ({ isActive }: { isActive: () => boolean }) => {
       await gate.promise;
       if (!isActive()) {

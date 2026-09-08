@@ -893,7 +893,7 @@ describe("diagnostics-prometheus service", () => {
     const exporter = createDiagnosticsPrometheusExporter();
     const unsubscribe = vi.fn();
 
-    exporter.service.start({
+    void exporter.service.start({
       config: {} as never,
       stateDir: "/tmp/openclaw-prometheus-test",
       logger: {

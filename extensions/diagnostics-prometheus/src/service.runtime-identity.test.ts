@@ -39,7 +39,7 @@ describe("diagnostics-prometheus runtime identity", () => {
       metrics.stop();
       expect(metrics.render()).toBe("");
       identity.processInstanceId = "a6aa1fc7-1f10-4b56-8ae8-4ff8c4dc02ea";
-      metrics.start();
+      void metrics.start();
       expect(metrics.render()).toContain(info);
       expect(metrics.render()).not.toContain("openclaw_prometheus_series_dropped_total");
       expect(readIdentity).toHaveBeenCalledTimes(2);
