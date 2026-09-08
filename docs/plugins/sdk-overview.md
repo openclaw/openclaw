@@ -912,7 +912,7 @@ dispatches can overlap, so consumers must not depend on event completion order.
 Keep OpenClaw as the source of truth for due checks and execution.
 
 For a single-flight adapter with durable replacement, retry/backoff, and clean
-shutdown, see [Safe external cron projection](/plugins/hooks#safe-external-cron-projection).
+shutdown, see [Safe external cron projection](/plugins/hooks/lifecycle#safe-external-cron-projection).
 
 ### API object fields
 

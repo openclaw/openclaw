@@ -2794,5 +2794,25 @@
   {
     "source": "QA reporting",
     "target": "QA 报告"
+  },
+  {
+    "source": "Hook reference",
+    "target": "Hook 参考"
+  },
+  {
+    "source": "Tool call policy hooks",
+    "target": "工具调用策略 Hook"
+  },
+  {
+    "source": "Prompt and session hooks",
+    "target": "提示词与会话 Hook"
+  },
+  {
+    "source": "Message and delivery hooks",
+    "target": "消息与投递 Hook"
+  },
+  {
+    "source": "Gateway and install lifecycle hooks",
+    "target": "Gateway 与安装生命周期 Hook"
   }
 ]
