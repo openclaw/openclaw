@@ -11,6 +11,7 @@ import {
 import {
   buildAgentContext,
   buildModelOptions,
+  createPrimaryModelExclusion,
   formatBytes,
   listSelectableAgents,
   normalizeAgentLabel,
@@ -56,6 +57,219 @@ describe("buildModelOptions", () => {
       provider: "openai",
       tags: ["default", "configured"],
     });
+  });
+
+  it("keeps case-distinct catalog identities, configured aliases, and current values", () => {
+    const lower = "custom/model-a";
+    const upper = "custom/Model-A";
+    const caseCatalog = [
+      { id: "model-a", name: "Lowercase model", provider: "custom" },
+      { id: "Model-A", name: "Uppercase model", provider: "custom" },
+    ];
+    const config = {
+      agents: {
+        defaults: { models: { [lower]: { alias: "lower" }, [upper]: { alias: "upper" } } },
+      },
+    };
+
+    expect(
+      buildModelOptions(config, null, caseCatalog).map(({ value, label }) => ({ value, label })),
+    ).toEqual([
+      { value: lower, label: "Lowercase model · lower" },
+      { value: upper, label: "Uppercase model · upper" },
+    ]);
+    expect(
+      buildModelOptions(null, upper, caseCatalog.slice(0, 1)).map(({ value }) => value),
+    ).toEqual([upper, lower]);
+  });
+});
+
+describe("createPrimaryModelExclusion", () => {
+  const lower = "custom/model-a";
+  const upper = "custom/Model-A";
+  const other = "other/model-a";
+  type AliasCase = {
+    name: string;
+    primary: string;
+    models: Record<string, { alias?: string } | null>;
+    agentModels?: Record<string, { alias?: string } | null> | Array<{ alias?: string }>;
+    providers?: Record<string, { api?: string; models?: unknown }>;
+    excluded: string[];
+    allowed: string[];
+  };
+  const cases: AliasCase[] = [
+    {
+      name: "resolves a bare primary alias without folding its target model id",
+      primary: "FAST",
+      models: { [upper]: { alias: "fast" } },
+      excluded: [upper, "fast"],
+      allowed: [lower],
+    },
+    {
+      name: "prefers an explicit agent alias over a later default alias",
+      primary: "fast",
+      models: { [lower]: { alias: "fast" }, [other]: { alias: "fast" } },
+      agentModels: { [lower]: { alias: "fast" } },
+      excluded: [lower],
+      allowed: [other],
+    },
+    {
+      name: "preserves default alias priority when agent metadata omits alias",
+      primary: "fast",
+      models: { [lower]: { alias: "fast" }, [other]: { alias: "fast" } },
+      agentModels: { [lower]: {} },
+      excluded: [other],
+      allowed: [lower],
+    },
+    {
+      name: "respects an explicitly disabled inherited alias",
+      primary: "fast",
+      models: { [lower]: { alias: "fast" } },
+      agentModels: { [lower]: { alias: "" } },
+      excluded: ["fast"],
+      allowed: [lower],
+    },
+    {
+      name: "tolerates null editable metadata without replacing inherited aliases",
+      primary: "fast",
+      models: { [lower]: null, [upper]: { alias: "fast" } },
+      agentModels: { [upper]: null },
+      excluded: [upper],
+      allowed: [lower],
+    },
+    {
+      name: "keeps an explicit configured-provider ref ahead of a slash alias",
+      primary: lower,
+      models: { [other]: { alias: lower }, [lower]: { alias: "original" } },
+      providers: { custom: { api: "openai-completions" } },
+      excluded: ["original"],
+      allowed: [lower, other],
+    },
+    {
+      name: "resolves a slash alias when no explicit provider owns the input",
+      primary: lower,
+      models: { [other]: { alias: lower } },
+      excluded: [other, lower, upper],
+      allowed: ["custom/unrelated"],
+    },
+    {
+      name: "does not replace a provider ref with an alias on a bare config key",
+      primary: lower,
+      models: { legacy: { alias: lower }, [lower]: { alias: "original" } },
+      excluded: ["original"],
+      allowed: [lower],
+    },
+    {
+      name: "resolves profile-qualified aliases",
+      primary: "fast@work",
+      models: { [lower]: { alias: "fast" } },
+      excluded: [lower, `${lower}@work`],
+      allowed: [`${lower}@other`, `${lower}@Work`],
+    },
+    {
+      name: "keeps primary literal-alias precedence separate from fallback profile parsing",
+      primary: "fast@work",
+      models: { [lower]: { alias: "fast" }, [upper]: { alias: "fast@work" } },
+      excluded: [upper],
+      allowed: [lower, "fast@work"],
+    },
+    {
+      name: "preserves case-sensitive credential-profile qualifiers",
+      primary: `${lower}@Work`,
+      models: {},
+      excluded: [lower, `${lower}@Work`],
+      allowed: [`${lower}@work`],
+    },
+    {
+      name: "preserves case-distinct explicit references",
+      primary: "CUSTOM/Model-A",
+      models: {},
+      excluded: [upper],
+      allowed: [lower],
+    },
+    {
+      name: "does not guess a provider for an ambiguous bare model id",
+      primary: "model-a",
+      models: { [lower]: {}, [other]: {} },
+      excluded: ["model-a"],
+      allowed: [lower, other],
+    },
+    {
+      name: "does not infer a provider for bare fallback identities from configured model keys",
+      primary: "Model-A",
+      models: { [lower]: {}, [upper]: {} },
+      excluded: ["Model-A"],
+      allowed: [lower, upper],
+    },
+    {
+      name: "does not infer a provider for bare fallback identities from provider model rows",
+      primary: "Model-A",
+      models: {},
+      providers: { custom: { api: "openai-completions", models: [{ id: "Model-A" }] } },
+      excluded: ["Model-A"],
+      allowed: [upper],
+    },
+    {
+      name: "ignores unsaved provider model shapes while resolving configured aliases",
+      primary: "fast",
+      models: { [upper]: { alias: "fast" } },
+      providers: { custom: { api: "openai-completions", models: {} } },
+      excluded: [upper],
+      allowed: [lower],
+    },
+    {
+      name: "ignores invalid agent model arrays without shadowing inherited aliases",
+      primary: "fast",
+      models: { [upper]: { alias: "fast" } },
+      agentModels: [{ alias: "fast" }],
+      excluded: [upper],
+      allowed: [lower],
+    },
+    {
+      name: "preserves a bare id without a configured provider match",
+      primary: "Model-A",
+      models: {},
+      excluded: ["Model-A"],
+      allowed: [upper],
+    },
+    {
+      name: "resolves provider-scoped fallback aliases without borrowing another provider's alias",
+      primary: lower,
+      models: { [lower]: { alias: "fast" }, [other]: { alias: "fast" } },
+      excluded: [lower, "custom/fast"],
+      allowed: ["fast"],
+    },
+    {
+      name: "does not borrow fallback provider-scoped aliases for a configured primary",
+      primary: "anthropic/claude-sonnet-4-6",
+      models: {
+        "anthropic/claude-sonnet-4-6": { alias: "original" },
+        "anthropic/claude-haiku-4-5": { alias: "claude-sonnet-4-6" },
+      },
+      excluded: ["original"],
+      allowed: ["anthropic/claude-haiku-4-5", "anthropic/claude-sonnet-4-6"],
+    },
+    {
+      name: "prefers a global fallback alias before provider-scoped alias lookup",
+      primary: lower,
+      models: { [lower]: { alias: "fast" }, [other]: { alias: "custom/fast" } },
+      excluded: [lower, "fast"],
+      allowed: ["custom/fast"],
+    },
+  ];
+
+  it.each(cases)("$name", ({ primary, models, agentModels, providers, excluded, allowed }) => {
+    const config = {
+      agents: {
+        defaults: { models },
+        entries: { worker: { models: agentModels } },
+      },
+      models: { providers },
+    };
+
+    const isExcluded = createPrimaryModelExclusion(config, primary, "worker");
+    expect(excluded.filter(isExcluded)).toEqual(excluded);
+    expect(allowed.filter(isExcluded)).toEqual([]);
   });
 });
 

@@ -1,5 +1,6 @@
 // Control UI view renders agents panels overview screen content.
 import { html, nothing } from "lit";
+import { normalizeAgentModelRefForConfig } from "../../../../src/config/model-input.js";
 import type {
   AgentIdentityResult,
   AgentsFilesListResult,
@@ -19,6 +20,7 @@ import {
   type AgentContext,
   buildAgentContext,
   buildModelOptions,
+  createPrimaryModelExclusion,
   normalizeModelValue,
   resolveAgentConfig,
   resolveAgentTextAvatar,
@@ -132,6 +134,7 @@ export function renderAgentOverview(params: {
   // Same catalog the primary picker offers; the field hides the effective
   // primary and current chain itself. Order is preserved: a pick appends.
   const fallbackOptions = buildModelOptions(configForm, null, params.modelCatalog, agent.id);
+  const isPrimaryModel = createPrimaryModelExclusion(configForm, effectivePrimary, agent.id);
 
   return html`
     ${renderSettingsSection(
@@ -309,7 +312,8 @@ export function renderAgentOverview(params: {
               class="agent-fallbacks"
               .options=${fallbackOptions}
               .value=${fallbackChips}
-              .exclude=${effectivePrimary ? [effectivePrimary] : []}
+              .isExcluded=${isPrimaryModel}
+              .getValueKey=${normalizeAgentModelRefForConfig}
               .placeholder=${t("agents.overview.addFallback")}
               .accessibleLabel=${t("agents.overview.fallbacks")}
               .allowCustom=${true}

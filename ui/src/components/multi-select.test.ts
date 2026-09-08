@@ -1,5 +1,7 @@
 /* @vitest-environment jsdom */
 import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
+import { normalizeAgentModelRefForConfig } from "../../../src/config/model-input.js";
+import { createPrimaryModelExclusion } from "../lib/agents/display.ts";
 import { MultiSelect, type MultiSelectOption } from "./multi-select.ts";
 
 const MULTI_SELECT_TEST_TAG = `test-openclaw-multi-select-${crypto.randomUUID()}`;
@@ -7,7 +9,8 @@ const MULTI_SELECT_TEST_TAG = `test-openclaw-multi-select-${crypto.randomUUID()}
 type MultiSelectElement = HTMLElement & {
   options: readonly MultiSelectOption[];
   value: readonly string[];
-  exclude: readonly string[];
+  isExcluded: (value: string) => boolean;
+  getValueKey: (value: string) => string;
   placeholder: string;
   allowCustom: boolean;
   disabled: boolean;
@@ -55,7 +58,7 @@ async function createMultiSelect(
   const element = document.createElement(MULTI_SELECT_TEST_TAG) as MultiSelectElement;
   element.options = options;
   element.value = [sonnet];
-  element.exclude = [primary];
+  element.isExcluded = (value) => value === primary;
   element.placeholder = "Add fallback…";
   element.allowCustom = true;
   element.onChange = vi.fn();
@@ -235,10 +238,119 @@ it.each(["Tab", ",", "blur"])("commits typed references on %s", async (action) =
 it("appends pasted references in order without duplicating or adding excluded models", async () => {
   const element = await createMultiSelect();
 
-  await typeText(element, `${gemini}, openrouter/pending, ${primary}, ${gemini.toUpperCase()}`);
+  await typeText(element, `${gemini}, openrouter/pending, ${primary}, ${gemini}`);
   await pressKey(element, "Enter");
 
   expect(element.onChange).toHaveBeenCalledExactlyOnceWith([sonnet, gemini, "openrouter/pending"]);
+});
+
+it.each(["click", "Enter", ","])(
+  "preserves a case-distinct custom model when committed with %s",
+  async (action) => {
+    const lower = "custom/model-a";
+    const custom = "custom/Model-A";
+    const element = await createMultiSelect({
+      options: [{ value: lower, label: "Lowercase model" }],
+      value: [],
+      isExcluded: () => false,
+      getValueKey: normalizeAgentModelRefForConfig,
+    });
+    input(element).focus();
+    await typeText(element, custom);
+
+    expect(rowValues(element)).toEqual([lower, custom]);
+    const customRow = element.querySelector<HTMLElement>(".multi-select__option[data-custom]");
+    expect(customRow?.getAttribute("data-value")).toBe(custom);
+    if (action === "click") {
+      customRow?.click();
+    } else {
+      if (action === "Enter") {
+        await pressKey(element, "ArrowDown");
+      }
+      await pressKey(element, action);
+    }
+    await element.updateComplete;
+
+    expect(element.onChange).toHaveBeenCalledExactlyOnceWith([custom]);
+  },
+);
+
+it("uses caller-owned identity for chips, exclusion, and pasted values", async () => {
+  const lower = "custom/model-a";
+  const upper = "custom/Model-A";
+  const element = await createMultiSelect({
+    options: [
+      { value: lower, label: "Lowercase model" },
+      { value: upper, label: "Uppercase model" },
+    ],
+    value: ["CUSTOM/model-a"],
+    isExcluded: () => false,
+    getValueKey: normalizeAgentModelRefForConfig,
+  });
+
+  expect(element.querySelector(".multi-select__chip-label")?.textContent).toBe("Lowercase model");
+  await clickField(element);
+  expect(rowValues(element)).toEqual([upper]);
+  element.isExcluded = (value) => normalizeAgentModelRefForConfig(value) === upper;
+  await element.updateComplete;
+  expect(rowValues(element)).toEqual([]);
+  element.isExcluded = () => false;
+  await typeText(element, `${lower}, ${upper}, CUSTOM/Model-A`);
+  await pressKey(element, ",");
+
+  expect(element.onChange).toHaveBeenCalledExactlyOnceWith(["CUSTOM/model-a", upper]);
+});
+
+it.each([",", "Enter"])("preserves explicitly confirmed alias bindings on %s", async (action) => {
+  const target = "custom/Model-A";
+  const element = await createMultiSelect({
+    options: [{ value: target, label: "Uppercase model" }],
+    value: [],
+    isExcluded: createPrimaryModelExclusion(
+      { agents: { defaults: { models: { [target]: { alias: "backup" } } } } },
+      primary,
+    ),
+    getValueKey: normalizeAgentModelRefForConfig,
+  });
+
+  await typeText(element, action === "," ? "backup" : `backup, ${target}`);
+  await pressKey(element, action);
+
+  expect(element.onChange).toHaveBeenCalledExactlyOnceWith(
+    action === "," ? ["backup"] : ["backup", target],
+  );
+});
+
+it.each([
+  {
+    name: "a bare fallback",
+    existing: "gpt-5.4-mini",
+    alternate: "local/gpt-5.4-mini",
+    models: { "local/gpt-5.4-mini": {} },
+  },
+  {
+    name: "a profile-qualified fallback alias",
+    existing: "fast@work",
+    alternate: "custom/upper",
+    models: { "custom/lower": { alias: "fast" }, "custom/upper": { alias: "fast@work" } },
+  },
+])("keeps $name separate from a real alternate model", async ({ existing, alternate, models }) => {
+  const primaryModelRef = "openai/gpt-5.4";
+  const element = await createMultiSelect({
+    options: [{ value: alternate, label: "Alternate model" }],
+    value: [existing],
+    isExcluded: createPrimaryModelExclusion(
+      { agents: { defaults: { model: { primary: primaryModelRef }, models } } },
+      primaryModelRef,
+    ),
+    getValueKey: normalizeAgentModelRefForConfig,
+  });
+
+  await clickField(element);
+  expect(rowValues(element)).toEqual([alternate]);
+  await pressKey(element, "Enter");
+
+  expect(element.onChange).toHaveBeenCalledExactlyOnceWith([existing, alternate]);
 });
 
 it("selects the visible highlight when a catalog refresh shortens the open list", async () => {
