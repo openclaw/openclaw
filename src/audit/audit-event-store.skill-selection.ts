@@ -1,5 +1,7 @@
-import type { SkillSelectionAuditEventRecord } from "./audit-event-types.js";
-import { AUDIT_EVENT_SCHEMA_VERSION } from "./audit-event-types.js";
+import {
+  AUDIT_EVENT_SCHEMA_VERSION,
+  type SkillSelectionAuditEventRecord,
+} from "./audit-event-types.js";
 
 type SkillRow = {
   event_id: string;
@@ -35,11 +37,11 @@ export function parseSkillSelectionAuditRow(row: SkillRow): SkillSelectionAuditE
     schemaVersion: AUDIT_EVENT_SCHEMA_VERSION,
     eventId: row.event_id,
     kind: "skill_selection",
-    agentId: row.agent_id,
-    sessionKey: row.session_key,
-    sessionId: row.session_id,
-    runId: row.run_id,
-    toolName: row.tool_name,
+    agentId: row.agent_id ?? undefined,
+    sessionKey: row.session_key ?? undefined,
+    sessionId: row.session_id ?? undefined,
+    runId: row.run_id ?? undefined,
+    toolName: row.tool_name!,
     action: "skill.selection.observed",
     status: "observed",
     occurredAt: Number(row.occurred_at),
