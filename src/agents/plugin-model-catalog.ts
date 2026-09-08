@@ -8,9 +8,11 @@ import { randomUUID } from "node:crypto";
 import { linkSync, readFileSync, readdirSync, renameSync, unlinkSync, type Dirent } from "node:fs";
 import path from "node:path";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
+import { isProviderCatalogSourceAllowed } from "../plugins/provider-config-owner.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
 import { runOpenClawAgentWriteTransaction } from "../state/openclaw-agent-db.js";
@@ -655,6 +657,7 @@ export function replacePersistedPluginModelCatalogs(params: {
 }
 
 export type PluginModelCatalogMetadataSnapshot = Pick<PluginMetadataSnapshot, "owners"> & {
+  manifestRegistry?: Pick<PluginMetadataSnapshot["manifestRegistry"], "plugins">;
   index?: {
     plugins: ReadonlyArray<{
       enabled: boolean;
@@ -745,6 +748,7 @@ export function resolvePluginModelCatalogOwnerPluginId(params: {
 /** Keeps generated catalog providers only when the catalog plugin still owns them. */
 export function filterGeneratedPluginModelCatalogProviders<T>(params: {
   catalogPluginId?: string;
+  config?: OpenClawConfig;
   parsedCatalog?: unknown;
   pluginMetadataSnapshot?: PluginModelCatalogMetadataSnapshot;
   providers: Record<string, T>;
@@ -762,7 +766,14 @@ export function filterGeneratedPluginModelCatalogProviders<T>(params: {
         resolvePluginModelCatalogOwnerPluginId({
           providerId,
           pluginMetadataSnapshot: params.pluginMetadataSnapshot,
-        }) === params.catalogPluginId
+        }) === params.catalogPluginId &&
+        isProviderCatalogSourceAllowed({
+          provider: providerId,
+          config: params.config,
+          plugin: params.pluginMetadataSnapshot?.manifestRegistry?.plugins.find(
+            (plugin) => plugin.id === params.catalogPluginId,
+          ),
+        })
       );
     }),
   );

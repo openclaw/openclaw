@@ -164,6 +164,7 @@ so it does not require `--all`.
 Notes:
 
 - The `Auth` column uses prepared credential and runtime evidence. A separate API key does not prove a native CLI login. Unknown readiness stays unknown, and catalog metadata does not prove that a model request will succeed. See [Read status correctly](/cli/models#read-status-correctly).
+- A provider-level `models.providers.<id>.baseUrl` outside the plugin’s declared native endpoints excludes its implicit catalog rows, including cached discovery. Add the models supported by your proxy to `models.providers.<id>.models`; explicitly authored rows, names, defaults, and aliases remain intact. A model-level URL override alone does not exclude the provider catalog.
 - Static catalog rows can remain visible without authentication. Listing them does not grant permission to select a restricted model or change `modelPolicy.allow`.
 - `Ctx` shows `contextTokens/contextWindow` when a runtime cap differs from the native context window. JSON retains `contextTokens` when provided.
 - `Input` and `Ctx` use the selected physical route plus explicit configured logical overrides. Unresolved route metadata stays unknown instead of borrowing another route's capabilities.

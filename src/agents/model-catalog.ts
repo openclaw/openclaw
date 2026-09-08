@@ -13,6 +13,7 @@ import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-meta
 import { isManifestPluginAvailableForControlPlane } from "../plugins/manifest-contract-eligibility.js";
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
+import { isProviderCatalogSourceAllowed } from "../plugins/provider-config-owner.js";
 import { augmentModelCatalogWithProviderPlugins } from "../plugins/provider-runtime.runtime.js";
 import { createLazyPromise } from "../shared/lazy-promise.js";
 import { modelCatalogRowToEntry } from "./model-catalog-entry.js";
@@ -590,6 +591,16 @@ export async function buildPreparedModelCatalogSnapshot(
         const normalizedSupplemental: ModelCatalogEntry[] = [];
         for (const entry of supplemental) {
           const provider = normalizeProvider(entry.provider);
+          const owners = manifestMetadataSnapshot.owners;
+          const pluginIds =
+            owners.modelCatalogProviders.get(provider) ?? owners.providers.get(provider);
+          const plugin =
+            pluginIds?.length === 1
+              ? manifestMetadataSnapshot.byPluginId.get(pluginIds[0])
+              : undefined;
+          if (!isProviderCatalogSourceAllowed({ provider, config: cfg, plugin })) {
+            continue;
+          }
           const id = normalizeModelId(provider, entry.id);
           // Account-discovered providers own the visible model set. Synthetic
           // metadata can enrich an available or explicitly configured model,
