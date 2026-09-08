@@ -188,14 +188,17 @@ Shell `-c` wrappers, `env` with assignments, `xcrun`, BusyBox/Toybox applets, sh
 automatic review with `Exec auto-review skipped: dispatch chain cannot be bound`. When existing
 binding checks succeed, these forms take the one-shot human approval path. Plain commands and
 transparent `env` without assignments remain eligible when all executable identities are bound.
-A gateway reviewing a remote node command requires a prepared pinned command because it cannot
+A gateway reviewing a remote node command accepts a prepared pinned direct command, including
+the node's own canonical POSIX shell transport around one direct absolute executable with static
+arguments. That transport is the node's dispatcher; user-supplied shell or dispatch wrappers,
+bare executable names, and unquoted globs still require a human because the gateway cannot
 inspect the node's in-memory executable binding. Existing binding rejections remain in force.
 Every external wrapper's own executable file must still resolve. Shell carriers are exempt from
 file binding only in shell command position; external dispatch binds those names as executable
 files too. There are no persisted data model changes: binding stays in memory for the approval
 lifetime.
 
-In `mode=auto`, POSIX login or interactive shell wrappers skip the reviewer. Bindable commands,
+In `mode=auto`, user-supplied POSIX login or interactive shell wrappers skip the reviewer. Bindable commands,
 such as `bash -lc 'printf ok'`, require human approval because their implicit startup files are
 outside operand binding. Existing binding rejections take precedence: the gateway already
 rejects interactive code-loading options such as `-i`, `--interactive`, and combined `-ic`, so

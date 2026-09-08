@@ -4,7 +4,6 @@
  * requirements, and formats node invoke results for the exec tool.
  */
 import crypto from "node:crypto";
-import path from "node:path";
 import {
   describeInterpreterInlineEval,
   type InterpreterInlineEvalHit,
@@ -28,12 +27,10 @@ import {
   resolveAllowAlwaysPatternCoverage,
   type AllowAlwaysPattern,
 } from "../infra/exec-approvals.js";
-import { resolveUnpinnedAutoApprovalEligibility } from "../infra/exec-auto-approval-eligibility.js";
 import {
   hasPosixShellStartupBeforeInlineCommand,
   isBlockedShellWrapperCommand,
 } from "../infra/exec-wrapper-resolution.js";
-import { resolveExecWrapperTrustPlan } from "../infra/exec-wrapper-trust-plan.js";
 import { buildNodeShellCommand } from "../infra/node-shell.js";
 import {
   parsePreparedSystemRunPayload,
@@ -45,6 +42,7 @@ import {
 } from "../infra/system-run-command.js";
 import { resolveEligibleNodeFromList } from "../shared/node-resolve.js";
 import { addSafeTimeoutDelayGraceMs } from "../utils/timer-delay.js";
+import { resolveNodeAutoApprovalEligibility } from "./bash-tools.exec-host-node-approval-eligibility.js";
 import {
   formatNodeInvokeFailureToolResult,
   invokeNodeSystemRun,
@@ -89,7 +87,7 @@ type NodeApprovalAnalysis = {
   inlineEvalHit: InterpreterInlineEvalHit | null;
   requiresSecurityAuditSuppressionApproval: boolean;
   autoReviewBlockedByShellStartup: boolean;
-  autoReviewEligibility: ReturnType<typeof resolveUnpinnedAutoApprovalEligibility>;
+  autoReviewEligibility: ReturnType<typeof resolveNodeAutoApprovalEligibility>;
   autoReviewArgv?: string[];
   allowAlwaysPersistence: AllowAlwaysPersistenceDecision;
 };
@@ -696,26 +694,13 @@ export async function analyzeNodeApprovalRequirement(params: {
       `${obsoleteGeneratedApprovalCount} older generated exec ${obsoleteGeneratedApprovalCount === 1 ? "approval is" : "approvals are"} inactive on this node because they are not tied to a working directory. Run "openclaw doctor --fix" on the node, then rerun the workflow and choose "Always allow here".`,
     );
   }
-  const platform =
-    params.target.platform === "win32"
-      ? "win32"
-      : params.target.platform === "darwin"
-        ? "darwin"
-        : "linux";
-  const preparedTrustPlan = resolveExecWrapperTrustPlan(params.prepared.argv, undefined, platform);
-  const pinnedDirectCommand =
-    preparedShellPayload === null &&
-    preparedTrustPlan.dispatchChain?.length === 1 &&
-    (platform === "win32" ? path.win32 : path.posix).isAbsolute(params.prepared.argv[0] ?? "");
-  // Preparation pins direct argv on the node. Remote unpinned dispatch has no
-  // in-memory executable binding available here, so it requires a human.
-  const autoReviewEligibility = pinnedDirectCommand
-    ? { eligible: true as const }
-    : resolveUnpinnedAutoApprovalEligibility({
-        authorizationPlan: autoReviewBindingEval.authorizationPlan,
-        binding: undefined,
-        platform,
-      });
+  const autoReviewEligibility = resolveNodeAutoApprovalEligibility({
+    argv: params.prepared.argv,
+    shellPayload: preparedShellPayload,
+    platform: params.target.platform,
+    authorizationPlan: autoReviewBindingEval.authorizationPlan,
+    segmentSatisfiedBy: autoReviewBindingEval.segmentSatisfiedBy,
+  });
   const autoReviewBlockedByShellStartup = autoReviewBindingEval.segments.some((segment) =>
     hasPosixShellStartupBeforeInlineCommand(segment.argv),
   );

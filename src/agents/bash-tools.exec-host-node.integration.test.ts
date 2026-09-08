@@ -82,6 +82,9 @@ beforeEach(async ({ onTestFinished }) => {
     if (method === "exec.approval.request") {
       return { id: params.id, expiresAtMs: Date.now() + 60000 };
     }
+    if (method === "exec.approval.resolve") {
+      return { ok: true };
+    }
     if (method === "exec.approval.waitDecision") {
       decisionEntered.resolve();
       return await decision;
@@ -207,6 +210,71 @@ it.each(["GH_TOKEN", "GITHUB_TOKEN"])(
     }
   },
 );
+
+it("auto-reviews an absolute direct command through real node preparation and execution", async () => {
+  resolveDecision({ decision: "deny" });
+  saveExecApprovals({ version: 1, defaults: { security: "allowlist", ask: "on-miss" } });
+  const autoReviewer = vi.fn(async () => ({
+    decision: "allow-once" as const,
+    risk: "low" as const,
+    rationale: "prints fixture output",
+  }));
+  const result = await executeNodeHostCommand({
+    ...request,
+    security: "allowlist",
+    ask: "on-miss",
+    autoReview: true,
+    autoReviewer,
+  });
+
+  expect(autoReviewer).toHaveBeenCalledOnce();
+  expect(autoReviewer).toHaveBeenCalledWith(
+    expect.objectContaining({
+      argv: ["/usr/bin/printf", "node-policy-proof"],
+      host: "node",
+    }),
+  );
+  expect(rpc.mock.calls.some(([method]) => method === "exec.approval.waitDecision")).toBe(false);
+  expect(result.details).toMatchObject({ status: "completed", aggregated: "node-policy-proof" });
+  expect(invokeCount).toBe(1);
+});
+
+it.each([
+  "printf node-policy-proof",
+  "/usr/bin/printf *.txt",
+  "/usr/bin/env /usr/bin/printf node-policy-proof",
+  "FOO=bar /usr/bin/printf node-policy-proof",
+  "/bin/sh -c '/usr/bin/printf node-policy-proof'",
+])("keeps remote unpinned or wrapped %s on the human path", async (command) => {
+  saveExecApprovals({ version: 1, defaults: { security: "allowlist", ask: "on-miss" } });
+  const autoReviewer = vi.fn(async () => ({
+    decision: "allow-once" as const,
+    risk: "low" as const,
+    rationale: "would allow if called",
+  }));
+  const warnings: string[] = [];
+  const execution = executeNodeHostCommand({
+    ...request,
+    command,
+    security: "allowlist",
+    ask: "on-miss",
+    autoReview: true,
+    autoReviewer,
+    warnings,
+  });
+  const drained = execution.catch(() => undefined);
+  try {
+    await Promise.race([decisionEntered.promise, execution]);
+    expect(autoReviewer).not.toHaveBeenCalled();
+    expect(invokeCount).toBe(0);
+    expect(warnings).toContain("Exec auto-review skipped: dispatch chain cannot be bound");
+    resolveDecision({ decision: "deny" });
+    await expect(execution).rejects.toThrow("exec denied: user-denied");
+  } finally {
+    resolveDecision({ decision: "deny" });
+    await drained;
+  }
+});
 
 it("denies caller allowlist/off misses before dispatch to a permissive node", async () => {
   await expect(executeNodeHostCommand({ ...request, security: "allowlist" })).rejects.toThrow(
