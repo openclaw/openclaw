@@ -27,6 +27,7 @@ import { formatCompactTokenCount, formatCost, formatTimeMs } from "../../lib/for
 import { MODEL_SETTINGS_TARGET_IDS } from "../config/route-data.ts";
 import "../../styles/model-providers.css";
 import "../../styles/usage.css";
+import type { ModelProviderRowMessage } from "./config-mutation.ts";
 import type {
   DefaultModelSelection,
   ModelPickerEntry,
@@ -39,12 +40,6 @@ import { renderProviderProfiles } from "./profiles-view.ts";
 import { hasVerifiedProvider, renderProviderStatus } from "./view-status.ts";
 
 registerSettingsEnglish();
-
-export type ModelProviderRowMessage = {
-  kind: "success" | "error";
-  text: string;
-  warning?: string;
-};
 
 type ModelProvidersViewProps = {
   connected: boolean;

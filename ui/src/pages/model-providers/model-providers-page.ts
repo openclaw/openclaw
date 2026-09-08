@@ -22,6 +22,7 @@ import {
   runModelProviderConfigMutation,
   type ModelProviderConfigMutation,
   type ModelProviderConfigMutationResult,
+  type ModelProviderRowMessage,
 } from "./config-mutation.ts";
 import {
   buildModelProviderCards,
@@ -49,11 +50,7 @@ import { showProfileActionError, showProfileLogoutSuccess } from "./profiles-vie
 import { updateRecordEntry } from "./record-state.ts";
 import type { ModelProvidersRouteData } from "./route.ts";
 import { ModelProviderSupplementalLoader } from "./supplemental-load.ts";
-import {
-  renderModelProviders,
-  renderModelProvidersPageShell,
-  type ModelProviderRowMessage,
-} from "./view.ts";
+import { renderModelProviders, renderModelProvidersPageShell } from "./view.ts";
 
 type DefaultsDraft = DefaultModelSelection & ModelBehaviorConfig;
 
