@@ -9,7 +9,7 @@ describe("loadModelProvidersData", () => {
   it.each([false, true])(
     "reads the refreshed catalog after auth publication, including auth failure %s",
     async (authFails) => {
-      const auth = createDeferred<void>();
+      const auth = createDeferred();
       let authPending = true;
       const client = createTestGatewayClient(async (method) => {
         if (method === "models.authStatus") {
@@ -49,7 +49,7 @@ describe("loadModelProvidersData", () => {
   );
 
   it("does not acquire models when the page retires during auth publication", async () => {
-    const auth = createDeferred<void>();
+    const auth = createDeferred();
     const modelRequests: unknown[] = [];
     const client = createTestGatewayClient(async (method, params) => {
       if (method === "models.authStatus") {
