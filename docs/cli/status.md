@@ -101,6 +101,8 @@ Use `openclaw skills check --agent <id>` to inspect the missing requirements.
 
 - Overview includes Gateway + node host service install/runtime status when
   available, plus compact Gateway process uptime and host system uptime.
+- `status --all` shows returned host, IP, version, and platform in **Gateway self**.
+  It uses `unknown` only when those fields are unavailable.
 - On Linux, a readable installed node service remains listed when the service
   manager is unavailable; its runtime status stays unknown.
 - Overview includes update channel + git SHA (for source checkouts).
