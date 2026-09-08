@@ -2568,8 +2568,8 @@ if [[ "\${1:-}" == */verify-fs-safe-native.mjs ]]; then
   exit 0
 fi
 if [[ "\${1:-}" == */openclaw.mjs ]]; then
-  echo "openclaw: the Bun runtime is unsupported because OpenClaw requires node:sqlite." >&2
-  exit 1
+  shift
+  exec node "$BUN_INSTALL/install/global/node_modules/openclaw/openclaw.mjs" "$@"
 fi
 test "\${1:-}" = "install"
 case " $* " in
@@ -2663,13 +2663,13 @@ node -e 'const fs=require("node:fs");const p=process.argv[1];const value=JSON.pa
     expect(result.stdout).toContain("bun-global-install-smoke: image providers OK (3 providers)");
     if (statusExit === 0) {
       expect(result.stdout).toContain(
-        "bun-global-install-smoke: Bun 1.4.0 package install and Node CLI/runtime OK",
+        "bun-global-install-smoke: Bun 1.4.0 package, CLI, local agent, and Gateway runtime OK",
       );
     } else {
       expect(result.stderr).toContain("bun global install smoke failed with exit code 23");
       expect(result.stderr).toContain("synthetic Bun status failure");
       expect(result.stderr).not.toContain("failure log omitted");
-      expect(result.stdout).not.toContain("Node CLI/runtime OK");
+      expect(result.stdout).not.toContain("Gateway runtime OK");
     }
   });
 
