@@ -72,6 +72,9 @@ export type ExecAutoReviewer = (
 export const EXEC_AUTO_REVIEW_DENIAL_GUIDANCE =
   "Do not attempt the same outcome through a workaround, indirect execution, or policy circumvention. Proceed only with a materially safer alternative, or ask the user to approve this exact command after explaining the risk.";
 
+export const EXEC_AUTO_REVIEW_SHELL_STARTUP_WARNING =
+  "Exec auto-review skipped: login or interactive shell startup requires human approval";
+
 /** Keeps reviewer and provider explanations safe for human-facing approval text. */
 export function normalizeExecAutoReviewRationale(value: unknown, fallback: string): string {
   const text = normalizeOptionalString(typeof value === "string" ? value : undefined);

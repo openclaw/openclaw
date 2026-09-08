@@ -2402,92 +2402,100 @@ describe("executeNodeHostCommand", () => {
     expectSystemRunInvoke({ invokeDeadlineMs: 35_000, invokeWaitMs: 40_000, runTimeoutMs: 30_000 });
   });
 
-  it.each(["bash", "sh", "/bin/sh"])(
-    "keeps non-transport %s login shells outside model auto-review",
-    async (shell) => {
-      const payload = "./scripts/check_mail.sh --limit 5";
-      const loginCommand = `${shell} -lc "${payload}"`;
-      const loginPlan = {
-        argv: ["/bin/sh", "-lc", loginCommand],
-        cwd: "/tmp/work",
-        commandText: `/bin/sh -lc "${loginCommand.replaceAll('"', '\\"')}"`,
-        commandPreview: loginCommand,
-        agentId: "prepared-agent",
-        sessionKey: "prepared-session",
-      };
-      parsePreparedSystemRunPayloadMock.mockReturnValue({
-        plan: loginPlan,
-        execPolicy: { security: "full", ask: "off" },
-      });
-      resolveExecApprovalsFromFileMock.mockReturnValue({
-        allowlist: [],
-        file: { version: 1, agents: {} },
-        agent: {
-          security: "full",
-          ask: "off",
-          askFallback: "deny",
-          autoAllowSkills: false,
-        },
-      });
-      evaluateShellAllowlistMock.mockImplementation((params?: { command?: string }) => {
-        const command = params?.command ?? "";
-        return {
-          allowlistMatches: [],
-          analysisOk: true,
-          allowlistSatisfied: false,
-          segments: [
-            command === loginPlan.commandText
+  it.each([
+    ["bash", "-lc"],
+    ["sh", "-lc"],
+    ["/bin/sh", "-lc"],
+    ["zsh", "-ic"],
+    ["bash", "-lic"],
+  ])("keeps non-transport %s %s startup shells outside model auto-review", async (shell, flag) => {
+    const payload = "./scripts/check_mail.sh --limit 5";
+    const loginCommand = `${shell} ${flag} "${payload}"`;
+    const loginPlan = {
+      argv: ["/bin/sh", "-lc", loginCommand],
+      cwd: "/tmp/work",
+      commandText: `/bin/sh -lc "${loginCommand.replaceAll('"', '\\"')}"`,
+      commandPreview: loginCommand,
+      agentId: "prepared-agent",
+      sessionKey: "prepared-session",
+    };
+    parsePreparedSystemRunPayloadMock.mockReturnValue({
+      plan: loginPlan,
+      execPolicy: { security: "full", ask: "off" },
+    });
+    resolveExecApprovalsFromFileMock.mockReturnValue({
+      allowlist: [],
+      file: { version: 1, agents: {} },
+      agent: {
+        security: "full",
+        ask: "off",
+        askFallback: "deny",
+        autoAllowSkills: false,
+      },
+    });
+    evaluateShellAllowlistMock.mockImplementation((params?: { command?: string }) => {
+      const command = params?.command ?? "";
+      return {
+        allowlistMatches: [],
+        analysisOk: true,
+        allowlistSatisfied: false,
+        segments: [
+          command === loginPlan.commandText
+            ? {
+                resolution: null,
+                argv: ["/bin/sh", "-lc", loginCommand],
+                raw: loginPlan.commandText,
+              }
+            : command === loginCommand
               ? {
                   resolution: null,
-                  argv: ["/bin/sh", "-lc", loginCommand],
-                  raw: loginPlan.commandText,
+                  argv: [shell, flag, payload],
+                  raw: loginCommand,
                 }
-              : command === loginCommand
-                ? {
-                    resolution: null,
-                    argv: [shell, "-lc", payload],
-                    raw: loginCommand,
-                  }
-                : {
-                    resolution: null,
-                    argv: ["./scripts/check_mail.sh", "--limit", "5"],
-                    raw: payload,
-                  },
-          ],
-          segmentAllowlistEntries: [],
-        };
-      });
-      requiresExecApprovalMock.mockImplementation(
-        (params?: { allowlistSatisfied?: boolean; durableApprovalSatisfied?: boolean }) =>
-          params?.allowlistSatisfied !== true && params?.durableApprovalSatisfied !== true,
-      );
-      const autoReviewer = vi.fn<ExecAutoReviewer>(async () => ({
-        decision: "allow-once",
-        risk: "low",
-        rationale: "unsafe startup wrapper must not reach the reviewer",
-      }));
-      resolveExecHostApprovalContextMock.mockReturnValue({
-        approvals: { allowlist: [], file: { version: 1, agents: {} } },
-        hostSecurity: "allowlist",
-        hostAsk: "on-miss",
-        askFallback: "deny",
-      });
+              : {
+                  resolution: null,
+                  argv: ["./scripts/check_mail.sh", "--limit", "5"],
+                  raw: payload,
+                },
+        ],
+        segmentAllowlistEntries: [],
+      };
+    });
+    requiresExecApprovalMock.mockImplementation(
+      (params?: { allowlistSatisfied?: boolean; durableApprovalSatisfied?: boolean }) =>
+        params?.allowlistSatisfied !== true && params?.durableApprovalSatisfied !== true,
+    );
+    const autoReviewer = vi.fn<ExecAutoReviewer>(async () => ({
+      decision: "allow-once",
+      risk: "low",
+      rationale: "unsafe startup wrapper must not reach the reviewer",
+    }));
+    resolveExecHostApprovalContextMock.mockReturnValue({
+      approvals: { allowlist: [], file: { version: 1, agents: {} } },
+      hostSecurity: "allowlist",
+      hostAsk: "on-miss",
+      askFallback: "deny",
+    });
 
-      const result = await executeNodeHostCommand(
-        createNodeHostRequest({
-          command: loginCommand,
-          security: "allowlist",
-          ask: "on-miss",
-          autoReview: true,
-          autoReviewer,
-        }),
-      );
+    const warnings: string[] = [];
+    const result = await executeNodeHostCommand(
+      createNodeHostRequest({
+        command: loginCommand,
+        security: "allowlist",
+        ask: "on-miss",
+        autoReview: true,
+        autoReviewer,
+        warnings,
+      }),
+    );
 
-      expect(result.details?.status).toBe("completed");
-      expect(autoReviewer).not.toHaveBeenCalled();
-      expect(createAndRegisterDefaultExecApprovalRequestMock).toHaveBeenCalled();
-    },
-  );
+    expect(result.details?.status).toBe("completed");
+    expect(autoReviewer).not.toHaveBeenCalled();
+    expect(createAndRegisterDefaultExecApprovalRequestMock).toHaveBeenCalled();
+    expect(warnings).toContain(
+      "Exec auto-review skipped: login or interactive shell startup requires human approval",
+    );
+  });
 
   it("requires human approval when prepared shell payload has multiple commands", async () => {
     const chainPlan = {

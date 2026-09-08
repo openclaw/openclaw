@@ -16,6 +16,7 @@ import {
 } from "../infra/exec-approvals.js";
 import {
   defaultExecAutoReviewer,
+  EXEC_AUTO_REVIEW_SHELL_STARTUP_WARNING,
   resolveExecAutoReviewDecision,
 } from "../infra/exec-auto-review.js";
 import {
@@ -146,6 +147,7 @@ export async function executeNodeHostCommand(
     nodeAsk,
     inlineEvalHit,
     requiresSecurityAuditSuppressionApproval,
+    autoReviewBlockedByShellStartup,
     autoReviewArgv,
     allowAlwaysPersistence,
   } = approvalAnalysis;
@@ -228,12 +230,7 @@ export async function executeNodeHostCommand(
       approvalReviewerDeviceIds: params.approvalReviewerDeviceId
         ? [params.approvalReviewerDeviceId]
         : undefined,
-      ...(options.requireDeliveryRoute !== undefined
-        ? { requireDeliveryRoute: options.requireDeliveryRoute }
-        : {}),
-      ...(options.suppressDelivery !== undefined
-        ? { suppressDelivery: options.suppressDelivery }
-        : {}),
+      ...options,
       ...buildExecApprovalTurnSourceContext(params),
     });
 
@@ -315,6 +312,9 @@ export async function executeNodeHostCommand(
   let inlineDispatchAuthority: NodeGatewayDispatchAuthority = "current-policy";
   let inlineFallbackPolicy: NodeGatewayPolicyCheckpoint | undefined;
   if (requiresAsk) {
+    if (params.autoReview === true && hostAsk !== "always" && autoReviewBlockedByShellStartup) {
+      params.warnings.push(EXEC_AUTO_REVIEW_SHELL_STARTUP_WARNING);
+    }
     const autoReviewHasBoundCommand = analysisOk && autoReviewArgv !== undefined;
     // Remote policy may be stricter; local auto-review cannot bypass that floor.
     const autoReviewBlockedByNodePolicy =
@@ -325,6 +325,7 @@ export async function executeNodeHostCommand(
         (nodeSecurity !== undefined && minSecurity(hostSecurity, nodeSecurity) !== hostSecurity));
     let autoReviewRequiresHumanApproval =
       autoReviewBlockedByNodePolicy ||
+      (params.autoReview === true && autoReviewBlockedByShellStartup) ||
       (params.autoReview === true && hostAsk !== "always" && !autoReviewHasBoundCommand) ||
       requiresSecurityAuditSuppressionApproval;
     if (
@@ -332,6 +333,7 @@ export async function executeNodeHostCommand(
       hostAsk !== "always" &&
       autoReviewHasBoundCommand &&
       !autoReviewBlockedByNodePolicy &&
+      !autoReviewBlockedByShellStartup &&
       !requiresSecurityAuditSuppressionApproval
     ) {
       const reviewer = params.autoReviewer ?? defaultExecAutoReviewer;

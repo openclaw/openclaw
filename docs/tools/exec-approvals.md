@@ -52,6 +52,7 @@ for matching, prompting, and binding restrictions.
 - Approvals reduce accidental execution risk, but are **not** a per-user auth boundary or filesystem read-only policy.
 - Once approved, a command can mutate files according to the selected host or sandbox filesystem permissions.
 - Approved node-host runs bind canonical execution context: cwd, exact argv, env binding when present, and pinned executable path when applicable.
+- Gateway approval-backed commands bind every resolved command-segment executable before review and re-check it before launch. Node hosts capture these identities during local policy evaluation and re-check before dispatch; this does not cover inner shell executables across a remote human approval wait. Protected executables use resolved real-path identity only; writable executables also use a content hash. A changed resolution during the bound window, including a new executable earlier on `PATH`, denies the run. Identity-only binding preserves otherwise eligible `allow-always` decisions. See [Interpreter/runtime commands](/tools/exec-approvals-advanced#interpreter%2Fruntime-commands).
 - For shell scripts and direct interpreter/runtime file invocations, OpenClaw also tries to bind one concrete local file operand. If that file changes after approval but before execution, the run is denied instead of executing drifted content.
 - File binding is best-effort, not a complete model of every interpreter/runtime loader path. If exactly one concrete local file cannot be identified, OpenClaw refuses to mint an approval-backed run rather than pretend full coverage.
 
@@ -263,7 +264,11 @@ In strict mode these commands need reviewer or explicit approval. With
 verdict. The reviewer may grant one low- or medium-risk execution, return a denial
 reason to the agent, or ask a human. Gateway commands must pass mutable-file
 binding checks, but do not need a rendered command with pinned paths to receive
-review. See [Exec modes](/tools/exec#modes) for binding limits and escalation.
+review. POSIX login or interactive shell wrappers skip the reviewer and require
+human approval when binding succeeds because their implicit startup files are outside
+operand binding. Existing binding rejections, including interactive code-loading forms,
+remain denied.
+See [Exec modes](/tools/exec#modes) for binding limits and escalation.
 `Codex app-server` command approvals that reach the reviewer fallback ask a
 human because their approval requests do not expose an enforceable resolved
 executable.

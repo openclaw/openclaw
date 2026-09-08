@@ -29,6 +29,7 @@ import {
   saveExecApprovals,
 } from "../infra/exec-approvals.js";
 import type { ExecAutoReviewer } from "../infra/exec-auto-review.js";
+import * as commandResolution from "../infra/exec-command-resolution.js";
 import type { ExecHostResponse } from "../infra/exec-host.js";
 import { sanitizeHostExecEnv } from "../infra/host-env-security.js";
 import { formatExecCommand } from "../infra/system-run-command.js";
@@ -1688,6 +1689,75 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
         "SYSTEM_RUN_DENIED: approval cwd changed before execution",
         true,
       );
+    },
+  );
+
+  it.runIf(process.platform !== "win32").each([
+    { approval: "auto", driftAt: "reviewer" },
+    { approval: "human", driftAt: "commit" },
+    { approval: "auto", driftAt: "unchanged" },
+  ] as const)(
+    "checks executable identity for $approval approval when resolution is $driftAt",
+    async ({ approval, driftAt }) => {
+      const tmp = createFixtureDir("openclaw-approval-executable-identity-");
+      const prepared = buildCwdApprovalPlan(["/bin/sh", "-c", "ls *.ts"], tmp);
+      requireApprovalPlan(prepared, "expected a bound shell command plan");
+      const resolveCommand = commandResolution.resolveCommandResolutionFromArgv;
+      let changed = false;
+      const resolutionSpy = vi
+        .spyOn(commandResolution, "resolveCommandResolutionFromArgv")
+        .mockImplementation((...args) => {
+          const resolution = resolveCommand(...args);
+          if (!changed || args[0][0] !== "ls" || !resolution) {
+            return resolution;
+          }
+          return {
+            ...resolution,
+            execution: {
+              ...resolution.execution,
+              resolvedPath: "/synthetic/changed/ls",
+              resolvedRealPath: "/synthetic/changed/ls",
+            },
+          };
+        });
+      const autoReviewer = vi.fn<ExecAutoReviewer>(() => {
+        changed = driftAt === "reviewer";
+        return { decision: "allow-once", rationale: "lists fixture files", risk: "low" };
+      });
+      const commitAuthorization: HandleSystemRunInvokeOptions["commitExecAuthorization"] = async (
+        params,
+      ) => {
+        await commitExecAuthorizationLocked(params);
+        changed = driftAt === "commit";
+      };
+      setRuntimeConfigSnapshot({ tools: { exec: { mode: "auto" } } });
+      try {
+        const invoke = await runLocalSystemInvoke({
+          command: prepared.plan.argv,
+          cwd: prepared.plan.cwd ?? tmp,
+          systemRunPlan: prepared.plan,
+          ...(approval === "human" ? { approvalDecision: "allow-once" } : {}),
+          resolveExecSecurity: resolveProductionExecSecurity,
+          resolveExecAsk: resolveProductionExecAsk,
+          autoReviewer,
+          commitExecAuthorization: commitAuthorization,
+        });
+
+        expect(autoReviewer).toHaveBeenCalledTimes(approval === "auto" ? 1 : 0);
+        if (driftAt === "unchanged") {
+          expect(invoke.runCommand).toHaveBeenCalledTimes(1);
+          expectInvokeOk(invoke.sendInvokeResult);
+        } else {
+          expect(invoke.runCommand).not.toHaveBeenCalled();
+          expectInvokeErrorMessage(
+            invoke.sendInvokeResult,
+            "SYSTEM_RUN_DENIED: approval script operand changed before execution",
+            true,
+          );
+        }
+      } finally {
+        resolutionSpy.mockRestore();
+      }
     },
   );
 

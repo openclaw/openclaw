@@ -40,11 +40,13 @@ import {
 import { buildAuthorizedShellCommandFromPlan } from "../infra/exec-authorization-render.js";
 import {
   defaultExecAutoReviewer,
+  EXEC_AUTO_REVIEW_SHELL_STARTUP_WARNING,
   resolveExecAutoReviewDecision,
   type ExecAutoReviewDecision,
   type ExecAutoReviewer,
 } from "../infra/exec-auto-review.js";
 import type { SafeBinProfile } from "../infra/exec-safe-bin-policy.js";
+import { hasPosixShellStartupBeforeInlineCommand } from "../infra/exec-wrapper-resolution.js";
 import {
   prepareSystemRunMutableFileBinding,
   revalidateSystemRunMutableFileBinding,
@@ -845,7 +847,8 @@ export async function processGatewayAllowlist(
     }
     mutableFileBinding = prepared.binding;
   }
-  const mutableFileApprovalRequiresOneShot = (mutableFileBinding?.operands.length ?? 0) > 0;
+  const mutableFileApprovalRequiresOneShot =
+    mutableFileBinding?.operands.some((operand) => operand.kind === "mutable") ?? false;
   // Cron standing grants: a prior allow-always for this exact job + operation
   // minted a scoped SQLite grant instead of a JSON allowlist digest. Consult it
   // before prompting; any validation failure falls through to the normal prompt
@@ -987,13 +990,21 @@ export async function processGatewayAllowlist(
       : undefined;
     const autoReviewEnforcedCommand =
       gatewayEnforcedCommand?.ok === true ? gatewayEnforcedCommand.command : undefined;
+    const autoReviewBlockedByShellStartup = allowlistEval.segments.some((segment) =>
+      hasPosixShellStartupBeforeInlineCommand(segment.argv),
+    );
+    if (params.autoReview === true && autoReviewBlockedByShellStartup) {
+      params.warnings.push(EXEC_AUTO_REVIEW_SHELL_STARTUP_WARNING);
+    }
     const canAutoReviewApprovalMiss =
       params.autoReview === true &&
       hostAsk !== "always" &&
       Math.max(authorizationCandidates.length, allowlistEval.segments.length) <=
         MAX_GATEWAY_AUTO_REVIEW_CANDIDATES &&
+      !autoReviewBlockedByShellStartup &&
       !requiresSecurityAuditSuppressionApproval;
     let autoReviewRequiresHumanApproval =
+      (params.autoReview === true && autoReviewBlockedByShellStartup) ||
       (params.autoReview === true && hostAsk !== "always" && !canAutoReviewApprovalMiss) ||
       requiresAllowlistPlanApproval ||
       requiresHeredocApproval ||

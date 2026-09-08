@@ -48,7 +48,9 @@ import {
   buildCwdBoundHashedArgPattern,
   resolvePolicyTargetCandidatePath,
 } from "../infra/exec-command-resolution.js";
+import * as commandResolution from "../infra/exec-command-resolution.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import * as mutableFilePolicy from "../infra/system-run-mutable-file-policy.js";
 import {
   getActiveGatewayRootWorkCount,
   markGatewayRestartDraining,
@@ -1159,6 +1161,95 @@ describe("processGatewayAllowlist", () => {
     },
   );
 
+  it.runIf(process.platform !== "win32").each(["auto", "human"])(
+    "rejects protected executable identity drift for an unpinned %s approval",
+    async (approval) => {
+      const command = "ls *.ts | head";
+      await configurePlanBackedCommand({ command });
+      const policy = vi
+        .spyOn(mutableFilePolicy, "pathLooksMutableForShellPayloadSync")
+        .mockReturnValue(false);
+      const resolve = commandResolution.resolveCommandResolutionFromArgv;
+      let changed = false;
+      const resolutionSpy = vi
+        .spyOn(commandResolution, "resolveCommandResolutionFromArgv")
+        .mockImplementation((...args) => {
+          const resolution = resolve(...args);
+          return changed && args[0][0] === "ls" && resolution
+            ? {
+                ...resolution,
+                execution: { ...resolution.execution, resolvedRealPath: "/synthetic/changed/ls" },
+              }
+            : resolution;
+        });
+      try {
+        if (approval === "human") {
+          buildExecApprovalFollowupTargetMock.mockImplementation((value) => value);
+          resolveExecApprovalWaitOutcomeMock.mockImplementationOnce(async () => {
+            changed = true;
+            return {
+              kind: "resolved",
+              decision: "allow-once",
+              state: {
+                baseDecision: { timedOut: false },
+                approvedByAsk: true,
+                deniedReason: null,
+                timeoutContext: undefined,
+              },
+            };
+          });
+        }
+        const result = await runGatewayAllowlist({
+          command,
+          autoReview: approval === "auto",
+          approvalFollowupMode: "agent",
+        });
+        if (approval === "auto") {
+          expect(defaultExecAutoReviewerMock).toHaveBeenCalledOnce();
+          expect(result.allowWithoutEnforcedCommand).toBe(true);
+          changed = true;
+          const denied = await result.revalidateBeforeExecution?.();
+          expect(denied?.content[0]).toMatchObject({
+            text: expect.stringContaining("approval script operand changed before execution"),
+          });
+        } else {
+          expect(result.pendingResult).toBeDefined();
+          await vi.waitFor(() => expect(sendExecApprovalFollowupResultMock).toHaveBeenCalledOnce());
+          expect(requireSentFollowupText(0)).toContain(
+            "approval script operand changed before execution",
+          );
+          expect(defaultExecAutoReviewerMock).not.toHaveBeenCalled();
+        }
+        expect(runExecProcessMock).not.toHaveBeenCalled();
+      } finally {
+        resolutionSpy.mockRestore();
+        policy.mockRestore();
+      }
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "preserves allow-always for protected executable identities",
+    async () => {
+      const command = "/bin/ls";
+      await configurePlanBackedCommand({ command });
+      const policy = vi
+        .spyOn(mutableFilePolicy, "pathLooksMutableForShellPayloadSync")
+        .mockReturnValue(false);
+      try {
+        buildExecApprovalFollowupTargetMock.mockImplementation((value) => value);
+        await runGatewayAllowlist({ command, approvalFollowupMode: "agent" });
+        expect(buildExecApprovalPendingToolResultMock).toHaveBeenCalledWith(
+          expect.objectContaining({
+            allowedDecisions: ["allow-once", "allow-always", "deny"],
+          }),
+        );
+      } finally {
+        policy.mockRestore();
+      }
+    },
+  );
+
   it("returns reviewer denial to the agent without a human approval", async () => {
     const command = "echo denied";
     await configurePlanBackedCommand({ command });
@@ -1424,24 +1515,21 @@ Command: ${command}`;
     }
   });
 
-  it.runIf(process.platform !== "win32").each(["bash", "sh", "/bin/sh"])(
-    "reviews %s login-shell commands after mutable binding succeeds",
+  it.runIf(process.platform !== "win32").each(["bash -lc", "sh -lc", "/bin/sh -lc"])(
+    "keeps %s startup commands on human approval",
     async (shell) => {
-      const payload = "echo auto-review-startup-proof";
-      const command = `${shell} -lc "${payload}"`;
+      const command = `${shell} 'printf ok'`;
       await configurePlanBackedCommand({ command });
-
-      const result = await runGatewayAllowlist({
-        command,
-        ask: "on-miss",
-        autoReview: true,
-      });
-
-      expect(defaultExecAutoReviewerMock).toHaveBeenCalledWith(
-        expect.objectContaining({ command }),
+      const warnings: string[] = [];
+      await runGatewayAllowlist({ command, ask: "on-miss", autoReview: true, warnings });
+      expect(defaultExecAutoReviewerMock).not.toHaveBeenCalled();
+      expect(createAndRegisterDefaultExecApprovalRequestMock).toHaveBeenCalledOnce();
+      expect(createAndRegisterDefaultExecApprovalRequestMock).toHaveBeenCalledWith(
+        expect.objectContaining({ requiresAutoReviewHumanApproval: true }),
       );
-      expect(createAndRegisterDefaultExecApprovalRequestMock).not.toHaveBeenCalled();
-      expect(result.deniedResult).toBeUndefined();
+      expect(warnings).toContain(
+        "Exec auto-review skipped: login or interactive shell startup requires human approval",
+      );
     },
   );
 

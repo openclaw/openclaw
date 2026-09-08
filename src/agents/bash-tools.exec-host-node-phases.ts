@@ -27,7 +27,10 @@ import {
   resolveAllowAlwaysPatternCoverage,
   type AllowAlwaysPattern,
 } from "../infra/exec-approvals.js";
-import { isBlockedShellWrapperCommand } from "../infra/exec-wrapper-resolution.js";
+import {
+  hasPosixShellStartupBeforeInlineCommand,
+  isBlockedShellWrapperCommand,
+} from "../infra/exec-wrapper-resolution.js";
 import { buildNodeShellCommand } from "../infra/node-shell.js";
 import {
   parsePreparedSystemRunPayload,
@@ -82,6 +85,7 @@ type NodeApprovalAnalysis = {
   nodeAsk?: ExecAsk;
   inlineEvalHit: InterpreterInlineEvalHit | null;
   requiresSecurityAuditSuppressionApproval: boolean;
+  autoReviewBlockedByShellStartup: boolean;
   autoReviewArgv?: string[];
   allowAlwaysPersistence: AllowAlwaysPersistenceDecision;
 };
@@ -697,6 +701,9 @@ export async function analyzeNodeApprovalRequirement(params: {
     nodeAsk: params.prepared.execPolicy?.ask,
     inlineEvalHit,
     requiresSecurityAuditSuppressionApproval,
+    autoReviewBlockedByShellStartup: autoReviewBindingEval.segments.some((segment) =>
+      hasPosixShellStartupBeforeInlineCommand(segment.argv),
+    ),
     allowAlwaysPersistence: resolveAllowAlwaysPersistenceDecision({
       segments: baseAllowlistEval.segments,
       commandText: approvalCommand,

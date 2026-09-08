@@ -33,6 +33,7 @@ import {
 import type { ExecAuthorizationPlan } from "../infra/exec-authorization-plan.js";
 import {
   EXEC_AUTO_REVIEW_DENIAL_GUIDANCE,
+  EXEC_AUTO_REVIEW_SHELL_STARTUP_WARNING,
   resolveExecAutoReviewDecision,
   type ExecAutoReviewer,
 } from "../infra/exec-auto-review.js";
@@ -40,6 +41,7 @@ import type { ExecHostRequest, ExecHostResponse, ExecHostRunResult } from "../in
 import { resolveExecSafeBinRuntimePolicy } from "../infra/exec-safe-bin-runtime-policy.js";
 import {
   extractEnvAssignmentKeysFromDispatchWrappers,
+  hasPosixShellStartupBeforeInlineCommand,
   isBlockedShellWrapperCommand,
   isShellWrapperInvocation,
   resolveShellWrapperTransportArgv,
@@ -51,8 +53,11 @@ import {
 import {
   APPROVAL_SCRIPT_OPERAND_DRIFT_DENIED_MESSAGE,
   normalizeSystemRunApprovalPlan,
+  prepareSystemRunExecutableIdentityBinding,
   revalidateApprovedMutableFileOperand,
+  revalidateSystemRunMutableFileBinding,
   resolveMutableFileOperandSnapshotSync,
+  type SystemRunMutableFileBinding,
 } from "../infra/system-run-approval-binding.js";
 import { formatExecCommand, resolveSystemRunCommandRequest } from "../infra/system-run-command.js";
 import {
@@ -156,6 +161,7 @@ type SystemRunPolicyPhase = SystemRunParsePhase & {
   plannedAllowlistArgv: string[] | undefined;
   isWindows: boolean;
   approvedCwdSnapshot: ApprovedCwdSnapshot | undefined;
+  executableBinding: SystemRunMutableFileBinding | undefined;
 };
 
 const safeBinTrustedDirWarningCache = createDedupeCache({
@@ -677,7 +683,32 @@ async function evaluateSystemRunPolicyPhase(
     return null;
   }
 
+  let executableBinding: SystemRunMutableFileBinding | undefined;
+  if (
+    security !== "deny" &&
+    (policy.approvedByAsk ||
+      fallbackRequest ||
+      security === "allowlist" ||
+      effectivePolicy.autoReview)
+  ) {
+    const prepared = prepareSystemRunExecutableIdentityBinding({ segments, env: parsed.env });
+    if (!prepared.ok) {
+      await sendSystemRunDenied(opts, parsed.execution, {
+        reason: "approval-required",
+        message: prepared.message,
+      });
+      return null;
+    }
+    executableBinding = prepared.binding;
+  }
+
   if (!policy.allowed) {
+    const autoReviewBlockedByShellStartup = segments.some((segment) =>
+      hasPosixShellStartupBeforeInlineCommand(segment.argv),
+    );
+    if (effectivePolicy.autoReview && ask !== "always" && autoReviewBlockedByShellStartup) {
+      autoReviewDeferredMessage = `${policy.errorMessage} (${EXEC_AUTO_REVIEW_SHELL_STARTUP_WARNING})`;
+    }
     const [autoReviewSegment] = segments;
     const directAutoReviewArgvMatchesRequest =
       parsed.shellPayload !== null || argvArraysMatch(autoReviewSegment?.argv, parsed.argv);
@@ -701,6 +732,7 @@ async function evaluateSystemRunPolicyPhase(
       autoReviewArgv !== undefined &&
       parsed.approvalPlan !== null &&
       inlineEvalHit === null &&
+      !autoReviewBlockedByShellStartup &&
       !requiresSecurityAuditSuppressionApproval &&
       policy.eventReason !== "security=deny";
     if (canAutoReviewApprovalMiss) {
@@ -878,6 +910,7 @@ async function evaluateSystemRunPolicyPhase(
     plannedAllowlistArgv: plannedAllowlistArgv ?? undefined,
     isWindows,
     approvedCwdSnapshot,
+    executableBinding,
   };
 }
 
@@ -907,6 +940,20 @@ async function revalidateSystemRunApprovedPathBindings(
       message: APPROVAL_SCRIPT_OPERAND_DRIFT_DENIED_MESSAGE,
     });
     return false;
+  }
+  if (phase.executableBinding) {
+    const revalidated = await revalidateSystemRunMutableFileBinding({
+      binding: phase.executableBinding,
+      cwd: phase.cwd,
+    });
+    if (!revalidated.ok) {
+      logWarn(`security: system.run approval executable drift blocked (runId=${phase.runId})`);
+      await sendSystemRunDenied(opts, phase.execution, {
+        reason: "approval-required",
+        message: revalidated.message,
+      });
+      return false;
+    }
   }
   return true;
 }
@@ -1087,7 +1134,7 @@ async function executeSystemRunPhase(
   }
 
   // Policy commit can yield to another invocation or process. Recheck the
-  // approval-bound cwd and mutable operand immediately before local spawn.
+  // approval-bound cwd, executable identities, and mutable operands before local spawn.
   if (!(await revalidateSystemRunApprovedPathBindings(opts, phase))) {
     return;
   }

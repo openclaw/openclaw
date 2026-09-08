@@ -153,6 +153,12 @@ Custom profile example:
 Approval-backed interpreter/runtime runs are intentionally conservative:
 
 - Exact argv/cwd/env context is always bound.
+- On the gateway, every resolved command-segment executable is bound before human or automatic
+  review and re-checked before launch. Node hosts capture the same identities during local policy
+  evaluation and re-check them before dispatch.
+  Protected executables use resolved real-path identity only; writable executables also use a
+  content hash. A changed resolution, including a new executable earlier on `PATH`, denies the run.
+  Identity-only binding does not restrict otherwise eligible `allow-always` decisions.
 - Direct shell script and direct runtime file forms are best-effort bound to one concrete local
   file snapshot.
 - Common package-manager wrapper forms that still resolve to one direct local file (for example
@@ -163,6 +169,19 @@ Approval-backed interpreter/runtime runs are intentionally conservative:
   have.
 - For those workflows, prefer sandboxing, a separate host boundary, or an explicit trusted
   allowlist/full workflow where the operator accepts the broader runtime semantics.
+
+Node executable-identity bindings are local to one invocation. The remote human approval plan
+keeps its existing direct executable pinning and single script-operand snapshot; it does not
+carry every executable identity inside a shell wrapper across the approval wait. For those inner
+commands, identity revalidation starts when the approved invocation reaches the node's local
+policy evaluation, so it does not detect substitutions made earlier in the remote approval wait.
+
+In `mode=auto`, POSIX login or interactive shell wrappers skip the reviewer. Bindable commands,
+such as `bash -lc 'printf ok'`, require human approval because their implicit startup files are
+outside operand binding. Existing binding rejections take precedence: the gateway already
+rejects interactive code-loading options such as `-i`, `--interactive`, and combined `-ic`, so
+those commands remain denied rather than creating a human approval request. This does not
+change the gateway's ordinary shell startup snapshot.
 
 When approvals are required, the exec tool returns immediately with an approval id. Use that id to
 correlate later approved-run system events (`Exec finished`, and `Exec running` when configured).

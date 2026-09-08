@@ -45,6 +45,8 @@ openclaw exec-policy show
 
 `ask` and `auto` share the same allowlist/ask settings; `auto` additionally enables the native auto-reviewer. An `allow` verdict permits one low- or medium-risk execution. A `deny` verdict returns a reason to the agent so it can choose a materially safer alternative or ask the user. An `ask` verdict requests human approval, as do review failures. On the gateway, three consecutive reviewer denials escalate to a human. Existing binding checks and explicit human-approval requirements still apply; see [Exec modes](/tools/exec#modes).
 
+Gateway approval-backed commands bind every resolved command-segment executable before review and re-check it before launch: protected executables use resolved real-path identity only, while writable executables also use a content hash. Node identity checks cover local policy evaluation through dispatch, with a [remote shell-wrapper approval limitation](/tools/exec-approvals-advanced#interpreter%2Fruntime-commands). In `auto` mode, POSIX login or interactive shell wrappers skip the reviewer and require human approval when binding succeeds; existing binding rejections remain denied. Their implicit startup files are outside operand binding.
+
 For the full host exec policy, local approvals file, allowlist schema, safe bins, and forwarding behavior, see [Exec approvals](/tools/exec-approvals).
 
 ## Codex Guardian mapping
