@@ -432,6 +432,40 @@ describe("opencode-go provider plugin", () => {
     ]);
   });
 
+  it("adds the OpenCode session header to direct completions", async () => {
+    const provider = await registerSingleProviderPlugin(plugin);
+    const capturedOptions: unknown[] = [];
+    const baseStreamFn = (_model: unknown, _context: unknown, options: unknown) => {
+      capturedOptions.push(options);
+      return {} as never;
+    };
+
+    const streamFn = provider.wrapSimpleCompletionStreamFn?.({
+      streamFn: baseStreamFn as never,
+      providerId: "opencode-go",
+      modelId: "glm-5",
+    } as never);
+
+    expect(streamFn).toBeTypeOf("function");
+    await streamFn?.(
+      {
+        provider: "opencode-go",
+        id: "glm-5",
+        api: "openai-completions",
+        baseUrl: "https://opencode.ai/zen/go/v1",
+      } as never,
+      {} as never,
+      { sessionId: "live-probe-session" },
+    );
+
+    expect(capturedOptions).toEqual([
+      {
+        sessionId: "live-probe-session",
+        headers: { "x-opencode-session": "live-probe-session" },
+      },
+    ]);
+  });
+
   it("canonicalizes stale OpenCode Go base URLs", async () => {
     const provider = await registerSingleProviderPlugin(plugin);
 

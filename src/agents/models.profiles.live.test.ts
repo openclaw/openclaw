@@ -1450,6 +1450,19 @@ async function completeSimpleWithTimeout<TApi extends Api>(
   }
 }
 
+function resolveLiveModelSessionId(model: Pick<Model, "id" | "provider">): string | undefined {
+  return model.provider === "opencode-go" ? `openclaw-live-model-${model.id}` : undefined;
+}
+
+describe("resolveLiveModelSessionId", () => {
+  it("gives direct OpenCode Go probes a stable conversation identity", () => {
+    expect(resolveLiveModelSessionId({ provider: "opencode-go", id: "glm-5" })).toBe(
+      "openclaw-live-model-glm-5",
+    );
+    expect(resolveLiveModelSessionId({ provider: "openai", id: "gpt-5" })).toBeUndefined();
+  });
+});
+
 function requireToolChoicePayload(payload: unknown): unknown {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
     return undefined;
@@ -1485,6 +1498,9 @@ async function completeOkWithRetry(params: {
   progressLabel: string;
 }) {
   const runOnce = async (maxTokens: number) => {
+    // OpenCode Go requires a stable conversation identity. Normal agent turns
+    // provide one; this direct transport probe must model that contract too.
+    const sessionId = resolveLiveModelSessionId(params.model);
     const res = await completeSimpleWithTimeout(
       params.model,
       {
@@ -1501,6 +1517,7 @@ async function completeOkWithRetry(params: {
         apiKey: params.apiKey,
         reasoning: resolveTestReasoning(params.model),
         maxTokens,
+        ...(sessionId ? { sessionId } : {}),
       },
       params.timeoutMs,
       `${params.progressLabel}: prompt call (maxTokens=${maxTokens})`,
