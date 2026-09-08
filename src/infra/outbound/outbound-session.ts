@@ -220,6 +220,17 @@ function resolveFallbackSession(
   };
 }
 
+function resolveOutboundSessionDisplayName(params: ResolveOutboundSessionRouteParams) {
+  const resolvedTarget = params.resolvedTarget;
+  if (
+    resolvedTarget?.resolutionSource !== "directory" &&
+    !(params.channel === "imessage" && resolvedTarget?.resolutionSource === "plugin")
+  ) {
+    return undefined;
+  }
+  return normalizeOptionalString(resolvedTarget.display);
+}
+
 /** Resolves the session route used to mirror outbound delivery into conversation state. */
 export async function resolveOutboundSessionRoute(
   params: ResolveOutboundSessionRouteParams,
@@ -232,7 +243,7 @@ export async function resolveOutboundSessionRoute(
   const plugin = params.plugin ?? resolveOutboundChannelPlugin(params.channel);
   const resolver = plugin?.messaging?.resolveOutboundSessionRoute;
   const route = resolver ? await resolver(nextParams) : resolveFallbackSession(nextParams);
-  const displayName = normalizeOptionalString(params.resolvedTarget?.display);
+  const displayName = resolveOutboundSessionDisplayName(params);
   const namedRoute = route && displayName ? { ...route, displayName } : route;
   if (!namedRoute || namedRoute.recipientSessionExact !== true) {
     return namedRoute;

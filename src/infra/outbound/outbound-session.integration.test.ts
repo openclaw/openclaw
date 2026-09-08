@@ -242,4 +242,37 @@ describe("outbound session persistence", () => {
       target: to,
     });
   });
+
+  it("preserves an existing group title for a normalized identifier target", async () => {
+    const cfg = {
+      session: { store: storePath, groupScope: "per-group" },
+    } as OpenClawConfig;
+    const route = {
+      sessionKey: "agent:main:telegram:group:-1001234567890:topic:42",
+      baseSessionKey: "agent:main:telegram:group:-1001234567890:topic:42",
+      peer: { kind: "group" as const, id: "-1001234567890:topic:42" },
+      chatType: "group" as const,
+      from: "telegram:group:-1001234567890:topic:42",
+      to: "telegram:-1001234567890:topic:42",
+    };
+    await upsertSessionEntryCore(
+      { agentId: "main", sessionKey: route.sessionKey, storePath },
+      {
+        sessionId: "existing-telegram-group",
+        updatedAt: 100,
+        chatType: "group",
+        subject: "Family",
+      },
+    );
+
+    await bindOutboundSessionEntry({ cfg, channel: "telegram", route });
+
+    const persisted = loadExactSessionEntry({
+      agentId: "main",
+      sessionKey: route.sessionKey,
+      storePath,
+    });
+    expect(persisted?.entry.subject).toBe("Family");
+    expect(persisted?.entry.displayName).not.toContain("-1001234567890");
+  });
 });
