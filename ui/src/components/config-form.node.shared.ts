@@ -219,7 +219,6 @@ export function renderFieldRow(params: {
   tags: string[];
   showLabel: boolean;
   control: TemplateResult | typeof nothing;
-  stacked?: boolean;
   error?: unknown;
 }): TemplateResult {
   // Array/map item rows resolve their meta from the parent path (numeric and
@@ -233,11 +232,8 @@ export function renderFieldRow(params: {
     Boolean(defaultDescription) ||
     params.tags.length > 0 ||
     Boolean(params.error);
-  // Control-only rows (array/map item values) stack so the control gets full width.
-  const stacked = params.stacked || !hasText;
-  const className = stacked ? "settings-row settings-row--stacked" : "settings-row";
   return html`
-    <div class=${className}>
+    <div class="settings-row settings-row--stacked cfg-field">
       ${
         hasText
           ? html`

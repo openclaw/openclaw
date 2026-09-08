@@ -49,7 +49,6 @@ export function renderJsonTextarea(params: ConfigNodeRenderParams): TemplateResu
       : renderSchemaDefaultDescription(schema, value),
     tags,
     showLabel,
-    stacked: true,
     control,
   });
 }

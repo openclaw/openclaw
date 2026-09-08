@@ -338,7 +338,7 @@ export function renderArray(
 
   return html`
     <div class="cfg-block cfg-array">
-      <div class="settings-row">
+      <div class="settings-row cfg-collection-header">
         <div class="settings-row__text">
           ${showLabel ? html`<span class="settings-row__title">${label}</span>` : nothing}
           ${
@@ -419,7 +419,7 @@ export function renderArray(
                 ${arrayValue.map((item, index) => {
                   const itemSchema = itemSchemaAt(index);
                   return html`
-                    <div class="settings-row">
+                    <div class="settings-row cfg-collection-header">
                       <div class="settings-row__text">
                         <span class="settings-row__title">#${index + 1}</span>
                       </div>
@@ -428,7 +428,6 @@ export function renderArray(
                           <button
                             type="button"
                             class="btn btn--icon"
-                            style="width:28px;height:28px;padding:0;"
                             aria-label=${t("configForm.removeItem")}
                             ?disabled=${
                               disabled ||

@@ -76,7 +76,7 @@ export function renderMapField(
 
   return html`
     <div class="cfg-block cfg-map">
-      <div class="settings-row">
+      <div class="settings-row cfg-collection-header">
         <div class="settings-row__text">
           <span class="settings-row__title">${t("configForm.customEntries")}</span>
         </div>
@@ -139,7 +139,7 @@ export function renderMapField(
                     isSensitivePathRevealed,
                   });
                   return html`
-                    <div class="settings-row">
+                    <div class="settings-row cfg-collection-header">
                       <div class="settings-row__text">
                         <input
                           type="text"
@@ -189,7 +189,6 @@ export function renderMapField(
                           <button
                             type="button"
                             class="btn btn--icon"
-                            style="width:28px;height:28px;padding:0;"
                             aria-label=${t("configForm.removeEntry")}
                             ?disabled=${disabled}
                             @click=${() => {
@@ -209,7 +208,6 @@ export function renderMapField(
                             label: key,
                             tags: [],
                             showLabel: false,
-                            stacked: true,
                             control: renderJsonTextareaControl({
                               schema,
                               path: valuePath,

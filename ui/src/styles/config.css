@@ -828,15 +828,6 @@
   width: 100%;
 }
 
-.cfg-array .settings-row--stacked .settings-row__control {
-  width: 100%;
-}
-
-.cfg-array .settings-row--stacked .settings-row__control > input[type="number"] {
-  flex: 1 1 auto;
-  width: auto;
-}
-
 .cfg-collection-draft__controls {
   display: grid;
   gap: 8px;

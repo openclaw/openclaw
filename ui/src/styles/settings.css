@@ -481,6 +481,66 @@
   border-top: 1px solid color-mix(in srgb, var(--border) 45%, transparent);
 }
 
+/* Schema fields share a control column; collection headers keep their actions inline. */
+.settings-row.cfg-field {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-2) var(--space-4);
+}
+
+:is(.cfg-field, .cfg-collection-draft) > .settings-row__control {
+  width: 100%;
+  max-width: none;
+  flex-wrap: nowrap;
+  justify-content: flex-start;
+}
+
+.cfg-field > .settings-row__control:only-child {
+  grid-column: 1 / -1;
+}
+
+.cfg-field
+  > .settings-row__control
+  > :is(
+    .settings-input,
+    .settings-select,
+    .settings-secret,
+    .settings-phone-presentation,
+    .settings-segmented
+  ) {
+  flex: 1 1 0;
+  width: 100%;
+  min-width: 0;
+}
+
+@media (width >= 768px) {
+  .settings-row.cfg-field {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+.settings-row.cfg-collection-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--space-2);
+}
+
+.cfg-collection-header > .settings-row__control {
+  width: auto;
+  max-width: none;
+  flex-wrap: nowrap;
+  white-space: nowrap;
+}
+
+.cfg-block > .settings-subrows {
+  padding-inline: var(--space-4);
+}
+
+.cfg-block > .settings-subrows > .settings-row,
+.settings-subrows .cfg-block > .settings-row {
+  padding-inline: 0;
+}
+
 /* ── Controls ── */
 
 /* One control height inside settings clusters. Buttons, inputs, selects, and
