@@ -11,8 +11,8 @@ export function isUpdateCompatibilityChunk(source: string): boolean {
   return source.startsWith(GENERATED_HEADER);
 }
 
-export type UpdateCompatibilityOrigin = { module: string; symbol: string };
-export type UpdateCompatibilityChunk = {
+type UpdateCompatibilityOrigin = { module: string; symbol: string };
+type UpdateCompatibilityChunk = {
   path: string;
   imports: Array<{ importer: string; owner: string; exports: string[] }>;
   exports: Array<{ exported: string; origin: UpdateCompatibilityOrigin }>;
