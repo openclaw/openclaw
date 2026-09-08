@@ -218,6 +218,7 @@ export function renderGroupedMessage(
     isStreaming: boolean;
     sessionKey?: string;
     presented?: boolean;
+    transcriptVisible?: boolean;
     boardProvider?: BoardProvider;
     agentId?: string;
     duplicateCount?: number;
@@ -449,6 +450,7 @@ export function renderGroupedMessage(
 
   const toolRenderOptions = { ...opts, messageKey, onOpenSidebar };
   // Collapsed tool results must not load attachments or render hidden markdown.
+  // Retained panes use opacity, so hidden transcripts must unmount video previews.
   const renderBody = () => html`
     ${renderPairingQrExpiryNotices(expiredPairingQrCount)}
     ${renderMessageImages(
@@ -457,7 +459,7 @@ export function renderGroupedMessage(
       videoPreviews.map(
         (item) => html`
           <div class="chat-image-frame chat-video-preview">
-            ${renderMessageAttachment(item, imageRenderOptions, onOpenSidebar, opts.onAssistantAttachmentLoaded, "preview")}
+            ${opts.transcriptVisible === false ? nothing : renderMessageAttachment(item, imageRenderOptions, onOpenSidebar, opts.onAssistantAttachmentLoaded, "preview")}
           </div>
         `,
       ),

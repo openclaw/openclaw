@@ -400,11 +400,16 @@
   background: var(--bg-muted);
 }
 
+.chat-video-preview__content,
 .chat-video-preview .chat-message-image-button,
 .chat-video-preview .chat-message-image {
   display: block;
   width: 100%;
   height: 100%;
+}
+
+.chat-video-preview__content {
+  min-width: 0;
 }
 
 .chat-video-preview__play {

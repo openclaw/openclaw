@@ -1,6 +1,5 @@
 import { html, nothing } from "lit";
 import { normalizeBasePath } from "../../../app-route-paths.ts";
-import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
 import { formatBytes } from "../../../lib/agents/display.ts";
 import type { MessageContentItem } from "../../../lib/chat/chat-types.ts";
@@ -40,6 +39,7 @@ import {
   type ChatMediaResource,
   type ImageRenderOptions,
 } from "./chat-message-media.ts";
+import { renderMessageVideoPreview } from "./chat-message-video-preview.ts";
 import type { AttachmentSidebarState } from "./chat-sidebar-content-types.ts";
 import type { SidebarContent } from "./chat-sidebar.ts";
 
@@ -592,18 +592,7 @@ export function renderMessageAttachment(
       .onMediaLoaded=${onAssistantAttachmentLoaded}
     ></openclaw-chat-video-player>`;
   }
-  if (presentation === "preview" && attachment.kind === "video" && openAttachmentSidebar) {
-    return html`<button
-      type="button"
-      class="chat-message-image-button"
-      aria-label=${`${t("chat.attachments.open")}: ${attachment.label}`}
-      @click=${openAttachmentSidebar}
-    >
-      <span class="chat-message-image chat-video-preview__placeholder"></span>
-      <span class="chat-video-preview__play" aria-hidden="true">${icons.play}</span>
-    </button>`;
-  }
-  return renderCompactAttachmentCard({
+  const card = renderCompactAttachmentCard({
     kind: attachment.kind,
     label: attachment.label,
     mimeType: attachment.mimeType,
@@ -612,4 +601,32 @@ export function renderMessageAttachment(
     onExpand: openAttachmentSidebar,
     voiceNote: attachment.isVoiceNote === true,
   });
+  if (
+    presentation === "preview" &&
+    attachment.kind === "video" &&
+    media.playback === "native" &&
+    safeAttachmentUrl &&
+    openAttachmentSidebar
+  ) {
+    return renderMessageVideoPreview({
+      key: JSON.stringify([
+        options.resourceBasePath ?? "",
+        options.authToken?.trim() ?? "",
+        options.sessionKey,
+        options.agentId,
+        options.policyKey,
+        options.connectionEpoch ?? 0,
+        attachment.url,
+        attachment.artifactId,
+        safeAttachmentUrl,
+        400,
+        225,
+      ]),
+      src: safeAttachmentUrl,
+      label: attachment.label,
+      onOpen: openAttachmentSidebar,
+      fallback: card,
+    });
+  }
+  return card;
 }

@@ -1,10 +1,11 @@
 /* @vitest-environment jsdom */
 
 import { expectDefined } from "@openclaw/normalization-core";
-import { render } from "lit";
+import { nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BoardProvider } from "../../../lib/board/provider.ts";
 import * as messageNormalizer from "../../../lib/chat/message-normalizer.ts";
+import * as videoPoster from "../../../lib/media/video-poster.ts";
 import { resolveAssistantAttachmentAuthToken } from "../chat-pane-state.ts";
 import { createTestChatPane } from "../chat-pane.test-support.ts";
 import * as chatThreadBuild from "../chat-thread-build.ts";
@@ -34,6 +35,67 @@ import {
 describe("chat transcript invalidation", () => {
   beforeEach(installTranscriptDomMocks);
   afterEach(resetTranscriptTestDom);
+
+  it("retains video previews in visible inactive panes and releases hidden transcript rows", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(60_000);
+    vi.spyOn(videoPoster, "requestVideoPoster").mockResolvedValue(
+      new Blob(["poster"], { type: "image/jpeg" }),
+    );
+    const NativeUrl = URL;
+    const revokeObjectURL = vi.fn();
+    vi.stubGlobal(
+      "URL",
+      class extends NativeUrl {
+        static override createObjectURL = () => "blob:visible-transcript-poster";
+        static override revokeObjectURL = revokeObjectURL;
+      },
+    );
+    const props = {
+      ...threadProps("video-pane-visibility", "agent:main:video", [
+        {
+          role: "user",
+          timestamp: 1_000,
+          content: [
+            {
+              type: "attachment",
+              attachment: {
+                kind: "video",
+                label: "Recording.mp4",
+                mimeType: "video/mp4",
+                url: "https://cdn.example/recording.mp4",
+              },
+            },
+          ],
+        },
+      ]),
+      presented: false,
+      transcriptVisible: true,
+      onOpenSidebar: vi.fn(),
+    };
+    const transcript = createTestTranscript();
+    const container = document.body.appendChild(document.createElement("div"));
+    const rerender = () => {
+      render(renderChatThread(props, transcript), container);
+      transcript.hostUpdated();
+    };
+    try {
+      rerender();
+      transcript.hostConnected();
+      await flushDeferredRowPrune();
+      expect(container.querySelector(".chat-video-preview img")).toBeInstanceOf(HTMLImageElement);
+      props.transcriptVisible = false;
+      rerender();
+      expect(container.querySelector(".chat-video-preview img")).toBeNull();
+      expect(revokeObjectURL).toHaveBeenCalledWith("blob:visible-transcript-poster");
+      props.transcriptVisible = true;
+      rerender();
+      await flushDeferredRowPrune();
+      expect(container.querySelector(".chat-video-preview img")).toBeInstanceOf(HTMLImageElement);
+    } finally {
+      render(nothing, container);
+      transcript.hostDisconnected();
+    }
+  });
 
   it("updates settled GitHub reference chips when the session repository arrives or changes", () => {
     vi.spyOn(Date, "now").mockReturnValue(60_000);
