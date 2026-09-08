@@ -81,6 +81,40 @@ describe("convertMarkdownTables", () => {
     expect(html).toContain(mode === "bullets" ? "<code>x`y</code>" : "x`y");
   });
 
+  it.each([
+    {
+      name: "row label stray delimiter binds through the generated bold markers",
+      input: "| Name | Value |\n| --- | --- |\n| `tick | more` |",
+      // A bare label backtick must not own the generated `**`; otherwise the
+      // code span swallows the bullet line (`**<code>tick** • V: more</code>`).
+      notHtml: ["<code>tick**"],
+      html: ["• Value: more`"],
+    },
+    {
+      name: "value cell stray delimiters bind across the bullet line",
+      input: "| A | B |\n| --- | --- |\n| a * | b * |",
+      // Bare stars must stay literal instead of pairing across the bullet line
+      // boundary (`*<em>a ***\n• V: b</em>` once emphasis misbinds).
+      notHtml: ["<em>"],
+      html: ["• B: b *"],
+    },
+  ])(
+    "keeps unescaped stray cell delimiters literal in bullet output: $name",
+    ({ input, notHtml, html }) => {
+      const rendered = convertMarkdownTables(input, "bullets");
+      const parsed = new MarkdownIt().render(rendered);
+
+      for (const forbidden of notHtml) {
+        expect(parsed).not.toContain(forbidden);
+      }
+      for (const literal of html) {
+        expect(parsed).toContain(literal);
+      }
+      // Row labels stay bold and no delimiter leaks outside its own cell text.
+      expect(parsed).toContain("<strong>");
+    },
+  );
+
   it("chooses a code fence that contains literal backtick runs", () => {
     const rendered = convertMarkdownTables(
       "| A | B |\n| --- | --- |\n| 1 | ````a```b```` |",
