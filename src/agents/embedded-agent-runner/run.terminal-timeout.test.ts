@@ -1,8 +1,15 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { logModelFallbackChainStopped } from "../model-fallback-observation.js";
 import { classifyEmbeddedAgentRunResultForModelFallback } from "./result-fallback-classifier.js";
 import { resolveEmbeddedRunAttemptTerminalState } from "./run/terminal-outcome.js";
 import { resolveEmbeddedRunTerminalTimeout } from "./run/terminal-timeout.js";
 import type { EmbeddedRunAttemptResult } from "./run/types.js";
+
+vi.mock("../model-fallback-observation.js", () => ({
+  logModelFallbackChainStopped: vi.fn(),
+}));
+
+beforeEach(() => vi.clearAllMocks());
 
 function makeTimedOutAttempt(
   overrides: Partial<EmbeddedRunAttemptResult> = {},
@@ -33,6 +40,7 @@ function makeTimeoutInput(
   overrides: Partial<Omit<TimeoutInput, "terminalPrepared">> = {},
 ): TimeoutInput {
   return {
+    fallbackConfigured: true,
     terminalPrepared: {
       timedOutDuringPrompt: true,
       hasSuccessfulFinalAssistantAfterPromptTimeout: false,
@@ -84,6 +92,12 @@ describe("resolveEmbeddedRunTerminalTimeout", () => {
         fallbackSafe: false,
       });
       expect(result?.meta.replayInvalid).toBe(false);
+      expect(logModelFallbackChainStopped).toHaveBeenCalledExactlyOnceWith({
+        reason: "agent_run_terminal_timeout",
+        provider: "openai",
+        model: "gpt-5.6-luna",
+        sessionId: "session-1",
+      });
       expect(
         classifyEmbeddedAgentRunResultForModelFallback({
           provider: "openai",
@@ -93,6 +107,14 @@ describe("resolveEmbeddedRunTerminalTimeout", () => {
       ).toBeNull();
     },
   );
+
+  it("does not report a fallback stop when no fallback is configured", () => {
+    const result = resolveEmbeddedRunTerminalTimeout(
+      makeTimeoutInput(makeTimedOutAttempt(), {}, { fallbackConfigured: false }),
+    );
+    expect(result?.meta.error?.fallbackSafe).toBe(false);
+    expect(logModelFallbackChainStopped).not.toHaveBeenCalled();
+  });
 
   it("preserves an accepted child spawn while surfacing the parent timeout", () => {
     const acceptedSessionSpawns = [
@@ -118,6 +140,7 @@ describe("resolveEmbeddedRunTerminalTimeout", () => {
         }),
       ),
     ).toBeUndefined();
+    expect(logModelFallbackChainStopped).not.toHaveBeenCalled();
   });
 
   it("prefers harness timeout metadata while retaining terminal attribution", () => {

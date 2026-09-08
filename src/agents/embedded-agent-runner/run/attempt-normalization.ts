@@ -1,5 +1,6 @@
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import { formatAssistantErrorText } from "../../embedded-agent-helpers.js";
+import { logModelFallbackChainStopped } from "../../model-fallback-observation.js";
 import { normalizeUsage, type UsageLike } from "../../usage.js";
 import { hasOutboundDeliveryEvidence } from "../delivery-evidence.js";
 import { log } from "../logger.js";
@@ -214,33 +215,40 @@ export async function normalizeEmbeddedRunAttempt(input: {
         `provider=${provider}/${modelId} consecutive=${breakerStep.consecutive} ` +
         `cap=${MAX_CONSECUTIVE_IDLE_TIMEOUTS_BEFORE_OUTPUT}`,
     );
-    return {
-      action: "complete",
-      result: handleRetryLimitExhaustion({
-        message,
-        decision: resolveRunFailoverDecision({
-          stage: "retry_limit",
-          fallbackConfigured: runInput.fallbackConfigured,
-          failoverReason: input.lastRetryFailoverReason,
-        }),
+    const result = handleRetryLimitExhaustion({
+      message,
+      decision: resolveRunFailoverDecision({
+        stage: "retry_limit",
+        fallbackConfigured: runInput.fallbackConfigured,
+        failoverReason: input.lastRetryFailoverReason,
+      }),
+      provider,
+      model: modelId,
+      profileId: runtime.lastProfileId,
+      durationMs: Date.now() - runInput.startedAtMs,
+      agentMeta: buildErrorAgentMeta({
+        sessionId: sessionPromptState.sessionId,
+        sessionFile: sessionPromptState.sessionFile,
+        provider,
+        model: preparedRuntime.model.id,
+        credentialSource: attempt.modelAttempt?.credentialSource,
+        ...runtime.outerContextTokenMeta,
+        usageAccumulator: input.usageAccumulator,
+        lastRunPromptUsage,
+      }),
+      replayInvalid: input.replayState.replayInvalid ? true : undefined,
+      livenessState: "blocked",
+    });
+    // Escalating provider failures throw above; only returned stops bypass the outer fallback loop.
+    if (runInput.fallbackConfigured) {
+      logModelFallbackChainStopped({
+        reason: "idle_timeout_circuit_breaker",
         provider,
         model: modelId,
-        profileId: runtime.lastProfileId,
-        durationMs: Date.now() - runInput.startedAtMs,
-        agentMeta: buildErrorAgentMeta({
-          sessionId: sessionPromptState.sessionId,
-          sessionFile: sessionPromptState.sessionFile,
-          provider,
-          model: preparedRuntime.model.id,
-          credentialSource: attempt.modelAttempt?.credentialSource,
-          ...runtime.outerContextTokenMeta,
-          usageAccumulator: input.usageAccumulator,
-          lastRunPromptUsage,
-        }),
-        replayInvalid: input.replayState.replayInvalid ? true : undefined,
-        livenessState: "blocked",
-      }),
-    };
+        sessionId: sessionPromptState.sessionId,
+      });
+    }
+    return { action: "complete", result };
   }
   if (attempt.contextBudgetStatus) {
     input.contextRecoveryState.lastContextBudgetStatus = attempt.contextBudgetStatus;
