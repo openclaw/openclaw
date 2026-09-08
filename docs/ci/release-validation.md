@@ -46,6 +46,15 @@ Full Release Validation run ID and pin `full_release_validation_run_attempt`.
 The publisher resolves the independent `Full Release Artifacts` producer from
 that validation manifest's sealed `publicationArtifacts.npmPreflight` descriptor.
 The producer ID alone does not carry Full Release Validation authorization.
+
+`Docker Release` requests the `docker-release` environment approval in a
+separate job after source identity and image preparation succeed (or prepared
+artifacts are supplied). Approval waits stay outside `docker-release-publish`;
+only the approved publisher enters that global registry/alias lock. It then
+revalidates the immutable source, prepared artifacts, attestations and alias
+state before writing. Docker Hub credentials remain required caller-provided
+secrets. Failed preparation, denied approval and cancellation cannot publish.
+
 Historical recovery may still supply a separate successful `OpenClaw NPM Release`
 preflight run ID alongside the matching successful Full Release Validation run
 and attempt. Create the tooling tag with the [release publish commands](/reference/RELEASING#regular-release-publish-automation);
@@ -231,6 +240,8 @@ fixtures; regular targets keep the trusted scenario together, including its
 serving-turn/post-inference assertions.
 The historical baseline does not select the assertion owner. Invalid target
 versions and unsupported extended-stable correction versions fail before Docker.
+
+Docker seed CI resolves an exact published stable predecessor of the selected source package version before running `published-upgrade-survivor`. It uses the release baseline resolver and selected release context, so publishing `latest` never turns the first upgrade into an already-current operation. Missing predecessors fail before Docker starts; the separate already-current control remains unchanged.
 
 The `published-upgrade-survivor` Docker lane validates one published package baseline per scenario. In Package Acceptance, the resolved `package-under-test` tarball is always the candidate and `published_upgrade_survivor_baseline` selects the fallback published baseline, defaulting to `openclaw@latest`; failed-lane rerun commands preserve that baseline. Current source release checks set `published_upgrade_survivor_baselines=supported-lines` for `legacy-operator-state`: npm's current `latest`, the preceding stable version, `extended-stable` when that tag exists, and the documented oldest supported baseline `2026.6.34`. The resolver reads `npm view openclaw versions` and `npm view openclaw dist-tags` at run time, pins exact versions before fanout, and deduplicates overlapping lines. Normal current-source release checks retain `base` and add `legacy-operator-state`; release soak selects `reported-issues`, including legacy operator state and the existing issue-shaped fixtures.
 

@@ -418,7 +418,6 @@ async function runPluginUpdateCommandUnlocked(
 
   const installPolicyWarningAcknowledgement = resolveInstallPolicyWarningAcknowledgementCliOptions({
     acknowledgeInstallPolicyWarning: params.opts.acknowledgeInstallPolicyWarning,
-    dangerouslyForceUnsafeInstall: params.opts.dangerouslyForceUnsafeInstall,
     allowPrompt: !params.opts.dryRun,
   });
   const deferredInstallTransactions: PluginInstallTransaction[] = [];

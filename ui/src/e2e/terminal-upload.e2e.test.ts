@@ -19,6 +19,80 @@ const requestedErrorScreenshotPath = process.env.OPENCLAW_TERMINAL_UPLOAD_ERROR_
 const requestedVideoDir = process.env.OPENCLAW_TERMINAL_UPLOAD_VIDEO_DIR?.trim();
 
 suite.define(() => {
+  it.skipIf(!expectUploadSurface)(
+    "pastes native catalog upload paths without treating the CLI title as a shell",
+    async () => {
+      await suite.withPage(
+        { serviceWorkers: "block", viewport: { width: 1280, height: 800 } },
+        async ({ page }) => {
+          await page.addInitScript(() => {
+            (
+              window as Window & {
+                ["__OPENCLAW_NATIVE_CONTROL_AUTH__"]?: { gatewayUrl: string; token: string };
+              }
+            )["__OPENCLAW_NATIVE_CONTROL_AUTH__"] = {
+              gatewayUrl: "ws://gateway.example.test",
+              token: "test",
+            };
+          });
+          const nativeTitle = "claude --resume 12345678…";
+          const stagedPath = "/tmp/openclaw-terminal-upload/reviewer's notes.pdf";
+          const gateway = await installMockGateway(page, {
+            featureMethods: ["terminal.open", "terminal.upload"],
+            methodResponses: {
+              "terminal.list": { sessions: [] },
+              "terminal.open": {
+                agentId: "main",
+                confined: false,
+                cwd: "/workspace",
+                sessionId: "terminal-native-upload-e2e",
+                shell: nativeTitle,
+                title: nativeTitle,
+              },
+            },
+            terminalEnabled: true,
+          });
+
+          await page.goto(`${suite.server.baseUrl}focus/terminal`);
+          await gateway.waitForRequest("terminal.open");
+          await page.locator("button.tp-upload").waitFor({ state: "visible" });
+          await expect
+            .poll(() => page.locator(".tabstrip-tab.is-live").textContent())
+            .toContain(nativeTitle);
+
+          await gateway.deferNext("terminal.upload");
+          await page.locator("input.tp-file-input").setInputFiles({
+            name: "reviewer's notes.pdf",
+            mimeType: "application/pdf",
+            buffer: Buffer.from("%PDF"),
+          });
+          const upload = await gateway.waitForRequest("terminal.upload");
+          expect(upload.params).toEqual({
+            sessionId: "terminal-native-upload-e2e",
+            name: "reviewer's notes.pdf",
+            contentBase64: "JVBERg==",
+          });
+          await gateway.resolveDeferred("terminal.upload", {
+            path: stagedPath,
+            size: 4,
+            uploadPathStyle: "native",
+          });
+
+          await expect
+            .poll(async () => (await gateway.getRequests("terminal.input")).length)
+            .toBe(1);
+          const input = (await gateway.getRequests("terminal.input"))[0]?.params as {
+            data?: string;
+          };
+          expect(input.data).toBe('"/tmp/openclaw-terminal-upload/reviewer\'s notes.pdf"');
+          expect(input.data).not.toMatch(/[\r\n]/);
+          await expect.poll(async () => await page.locator(".tp-upload-card").count()).toBe(0);
+          expect(await gateway.getRequests("terminal.upload")).toHaveLength(1);
+        },
+      );
+    },
+  );
+
   it("uploads picked and dropped files, then pastes staged paths without Enter", async () => {
     // Independent requested parents stay independent; captures under one parent share this attempt.
     const directories = new Map<string, string>();

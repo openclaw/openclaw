@@ -115,6 +115,7 @@ title: "Thinking levels"
 - When enabled, reasoning is sent as a **separate message** prefixed with `Thinking`.
 - `stream`: streams reasoning while the reply is generating when the active channel supports reasoning previews, then sends the final answer without reasoning. Channel previews remove recognized internal runtime context before delivery; the original reasoning remains unchanged for model replay.
 - Control UI history shows saved reasoning only for `on`, with **View → Reasoning** enabled. `off` and `stream` keep it hidden, including after reload.
+- Visible Control UI reasoning preserves Markdown paragraphs and fenced code blocks, including blank lines inside code.
 - Alias: `/reason`.
 - Send `/reasoning` (or `/reasoning:`) with no argument to see the current reasoning level.
 - Resolution order: inline directive, then session override, then per-agent default (`agents.entries.*.reasoningDefault`), then global default (`agents.defaults.reasoningDefault`), then fallback (`off`).

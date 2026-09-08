@@ -322,6 +322,10 @@ revisions with the same toolchain. See [Control UI size budgets](/ci/pipeline#co
 
 ### Source tests and subprocess builds
 
+Tests that discover real bundled provider runtimes declare that prerequisite in
+`scripts/lib/vitest-build-prerequisites.mts`, including Telegram sticker-model
+selection. Local runners and CI prepare those artifacts before admitting workers.
+
 Non-watch runs through `pnpm test` or `scripts/run-vitest.mjs` keep Vitest tests
 and runtime parents on TypeScript. Importing a declared subprocess entrypoint
 compiles the fixed test entry set and its workspace dependencies into one fresh

@@ -579,6 +579,11 @@ wildcard; subscribe to the two exact compaction keys.
 | `message:preprocessed`   | Media/link preprocessing completed or was skipped, with a session key; asynchronous observation.                          |
 | `message:sent`           | A delivery owner reports a send outcome with a session key; asynchronous observation. Inspect `context.success`.          |
 
+The initial wait for `gateway:shutdown` and `gateway:pre-restart` hooks is bounded
+so independent teardown can proceed. A timeout does not cancel the handler.
+Before closing shared state, the Gateway joins the actual hook completion;
+a handler that never settles can therefore prevent in-process shutdown from finishing.
+
 Not every incoming transport update or attempted low-level send produces an
 internal message event. Suppressed/duplicate inbound dispatches and paths with
 no session key can omit them. These are observation points, not a complete

@@ -133,14 +133,20 @@ describe("auditGatewayServiceConfig", () => {
   beforeEach(() => {
     execSystemctlUser.mockReset();
     execSystemctlUser.mockResolvedValue({ stdout: "", stderr: "systemd unavailable", code: 1 });
-    resolveBunRuntimeInfo.mockReset();
-    resolveBunRuntimeInfo.mockResolvedValue({
+    resolveBunRuntimeInfo.mockReset().mockResolvedValue({
       version: "1.4.0",
       sqliteVersion: "3.51.3",
       nodeSharedSqlite: false,
       status: "supported",
     });
   });
+
+  const auditBunGateway = (bunPath = "/opt/homebrew/bin/bun") =>
+    auditGatewayServiceConfig({
+      env: { HOME: "/tmp" },
+      platform: "darwin",
+      command: { programArguments: [bunPath, "gateway"], environment: { PATH: "/usr/bin:/bin" } },
+    });
 
   it("flags Bun runtimes without WAL-safe SQLite", async () => {
     resolveBunRuntimeInfo.mockResolvedValue({
@@ -149,47 +155,42 @@ describe("auditGatewayServiceConfig", () => {
       nodeSharedSqlite: false,
       status: "unsupported",
     });
-    const audit = await auditGatewayServiceConfig({
-      env: { HOME: "/tmp" },
-      platform: "darwin",
-      command: {
-        programArguments: ["/opt/homebrew/bin/bun", "gateway"],
-        environment: { PATH: "/usr/bin:/bin" },
-      },
+    const audit = await auditBunGateway();
+    expect(audit.issues).toContainEqual(
+      expect.objectContaining({
+        code: SERVICE_AUDIT_CODES.gatewayRuntimeBun,
+        message: expect.stringContaining("Bun 1.4+ with WAL-reset-safe node:sqlite is required"),
+      }),
+    );
+  });
+
+  it("surfaces an invalid SQLite library override as the Bun runtime issue detail", async () => {
+    const selectionError = "Cannot use SQLite library /opt/broken/libsqlite3.dylib: missing file.";
+    resolveBunRuntimeInfo.mockResolvedValue({
+      version: "1.4.2",
+      sqliteVersion: null,
+      nodeSharedSqlite: false,
+      status: "unsupported",
+      sqliteSelectionError: selectionError,
     });
-    expect(hasIssue(audit, SERVICE_AUDIT_CODES.gatewayRuntimeBun)).toBe(true);
-    expect(
-      audit.issues.find((issue) => issue.code === SERVICE_AUDIT_CODES.gatewayRuntimeBun)?.message,
-    ).toContain("Bun 1.4+ with WAL-reset-safe node:sqlite is required");
+    const audit = await auditBunGateway();
+    expect(audit.issues).toContainEqual(
+      expect.objectContaining({
+        code: SERVICE_AUDIT_CODES.gatewayRuntimeBun,
+        detail: `/opt/homebrew/bin/bun: ${selectionError}`,
+      }),
+    );
   });
 
   it("accepts Bun 1.4 with WAL-safe node:sqlite", async () => {
-    const audit = await auditGatewayServiceConfig({
-      env: { HOME: "/tmp" },
-      platform: "darwin",
-      command: {
-        programArguments: ["/opt/homebrew/bin/bun", "gateway"],
-        environment: { PATH: "/usr/bin:/bin" },
-      },
-    });
-
+    const audit = await auditBunGateway();
     expect(hasIssue(audit, SERVICE_AUDIT_CODES.gatewayRuntimeBun)).toBe(false);
   });
 
   it("reports a failed Bun probe without recommending runtime migration", async () => {
-    resolveBunRuntimeInfo.mockResolvedValue({
-      status: "probe-failed",
-      error: new Error("Bun runtime probe failed at /opt/bun (cwd /root): EACCES"),
-    });
-    const audit = await auditGatewayServiceConfig({
-      env: { HOME: "/tmp" },
-      platform: "darwin",
-      command: {
-        programArguments: ["/opt/bun", "gateway"],
-        environment: { PATH: "/usr/bin:/bin" },
-      },
-    });
-
+    const error = new Error("Bun runtime probe failed at /opt/bun (cwd /root): EACCES");
+    resolveBunRuntimeInfo.mockResolvedValue({ status: "probe-failed", error });
+    const audit = await auditBunGateway("/opt/bun");
     expect(audit.issues).toContainEqual(
       expect.objectContaining({
         code: SERVICE_AUDIT_CODES.gatewayRuntimeProbeFailed,

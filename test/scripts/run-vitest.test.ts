@@ -917,6 +917,7 @@ registerHooks({resolve(specifier, context, nextResolve) {
 
     for (const configArg of [
       "--config=test/vitest/vitest.e2e.config.ts",
+      "--config=test/vitest/vitest.package-contract.config.ts",
       "--config=test/vitest/vitest.tui-pty.config.ts",
       "--config=test/vitest/vitest.gateway.config.ts",
       "--config=./test/vitest/vitest.ui-e2e.config.ts",

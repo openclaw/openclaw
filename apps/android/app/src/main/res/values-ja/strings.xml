@@ -1226,7 +1226,6 @@
     <string name="native_b8ed5279e897be5d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"送信中…"</string>
     <string name="native_b906e4f5d8dd6128" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"エージェントはまだ読み込まれていません。"</string>
     <string name="native_b93a70717669740b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"ClawHubを検索"</string>
-    <string name="native_b95a17e08fdcdf57" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"チャットがGatewayの稼働状態を確認しています。"</string>
     <string name="native_b96a4e034aae9cd8" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"ペアリングが必要です"</string>
     <string name="native_b9cf97697898d132" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"実行中の処理"</string>
     <string name="native_b9d5d026db17b9e4" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"失敗 — %1$s"</string>
@@ -1289,6 +1288,7 @@
     <string name="native_c3812fc4acb861d5" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"削除"</string>
     <string name="native_c382566dbe2ea49f" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s%%がオンライン"</string>
     <string name="native_c385951198c45d9c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"チャンネルはありません"</string>
+    <string name="native_c3ac9576d94db14f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"「チャットを更新」でGatewayの稼働状態を確認してください。"</string>
     <string name="native_c420c647b0dce05a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"スキルワークショップの却下および隔離操作"</string>
     <string name="native_c49240206db14522" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"ノード &amp; デバイス"</string>
     <string name="native_c49eef4499c7913b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"ローカルコマンドセンター"</string>
@@ -1389,6 +1389,7 @@
     <string name="native_d21467d22e4a3f94" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"デスクトップを開く"</string>
     <string name="native_d221e1221dce05f9" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"フジツボ付着中"</string>
     <string name="native_d23d9ee57a18a989" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"選択した写真またはすべての写真へのアクセスが許可されています。"</string>
+    <string name="native_d23fc4acc3d6f95d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"チャットの準備ができていません"</string>
     <string name="native_d25ec2aa4dcc5d8f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"アクセシビリティ実行機能"</string>
     <string name="native_d2b0d89c925920b4" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s 件の不足項目"</string>
     <string name="native_d2e42a0613646388" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"ノードの承認が必要です"</string>

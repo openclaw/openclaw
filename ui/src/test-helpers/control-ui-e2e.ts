@@ -65,6 +65,71 @@ export function controlUiSessionUrl(
   return url.toString();
 }
 
+export async function assertSessionSectionCountAlignment(
+  page: Page,
+  sectionIds: readonly string[],
+) {
+  const sections = sectionIds.map((sectionId) =>
+    page.locator(`[data-session-section="${sectionId}"]`),
+  );
+  for (const section of sections) {
+    const toggle = section.locator(".sidebar-session-group-toggle");
+    if ((await toggle.getAttribute("aria-expanded")) !== "false") {
+      await toggle.click();
+    }
+  }
+  const rightEdges = await Promise.all(
+    sections.map(async (section) => {
+      const bounds = await section.locator(".sidebar-session-group-count").boundingBox();
+      if (!bounds) {
+        throw new Error("Expected visible collapsed section count");
+      }
+      return bounds.x + bounds.width;
+    }),
+  );
+  const expected = rightEdges[0];
+  if (expected === undefined || rightEdges.some((edge) => Math.abs(edge - expected) > 0.1)) {
+    throw new Error(`Expected aligned section count edges, received ${rightEdges.join(", ")}`);
+  }
+  for (const [index, sectionId] of sectionIds.entries()) {
+    const section = sections[index];
+    if (!section || !sectionId.startsWith("catalog:")) {
+      continue;
+    }
+    const header = section.locator(":scope > .sidebar-recent-sessions__head");
+    await header.hover();
+    const count = header.locator(".sidebar-session-group-count");
+    const countBox = await count.boundingBox();
+    const countOpacity = await count.evaluate((element) => getComputedStyle(element).opacity);
+    if (!countBox || Number.parseFloat(countOpacity) <= 0) {
+      throw new Error("Expected visible catalog count on hover");
+    }
+    for (const action of await header.locator(".sidebar-session-group-actions").all()) {
+      const actionBox = await action.boundingBox();
+      if (!actionBox || actionBox.x + actionBox.width > countBox.x) {
+        throw new Error("Expected catalog hover actions to stay left of the count");
+      }
+    }
+    await section.locator(".sidebar-session-group-toggle").click();
+    for (const nestedCount of await section
+      .locator(".sidebar-session-catalog-host__count, .sidebar-session-catalog-project__count")
+      .all()) {
+      const nestedBounds = await nestedCount.boundingBox();
+      const textAlign = await nestedCount.evaluate(
+        (element) => getComputedStyle(element).textAlign,
+      );
+      if (
+        !nestedBounds ||
+        textAlign !== "right" ||
+        Math.abs(nestedBounds.x + nestedBounds.width - expected) > 0.1
+      ) {
+        throw new Error("Expected expanded catalog counts to share the section count edge");
+      }
+    }
+    await section.locator(".sidebar-session-group-toggle").click();
+  }
+}
+
 export async function navigateToControlUiSession(page: Page, sessionKey: string): Promise<void> {
   const expectedPathname = await page.evaluate((sessionPath) => {
     const app = document.querySelector("openclaw-app") as HTMLElement & {

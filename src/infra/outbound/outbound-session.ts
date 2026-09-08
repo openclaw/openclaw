@@ -1,6 +1,9 @@
 // Outbound session routing maps send targets back into route/session metadata
 // so outbound-only messages can be mirrored into conversation state.
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import type { ChatType } from "../../channels/chat-type.js";
@@ -34,6 +37,8 @@ export type OutboundSessionRoute = {
   /** Routable delivery address mirrored into MsgContext.To. */
   to: string;
   threadId?: string | number;
+  /** Trusted human-readable target name resolved before delivery. */
+  displayName?: string;
 };
 
 /** Inputs required to resolve an outbound target into a session route. */
@@ -215,6 +220,27 @@ function resolveFallbackSession(
   };
 }
 
+function resolveOutboundSessionDisplayName(params: ResolveOutboundSessionRouteParams) {
+  const resolvedTarget = params.resolvedTarget;
+  const displayName = normalizeOptionalString(resolvedTarget?.display);
+  if (!displayName) {
+    return undefined;
+  }
+  if (params.channel === "imessage" && resolvedTarget?.resolutionSource === "plugin") {
+    return displayName;
+  }
+  if (resolvedTarget?.resolutionSource !== "directory") {
+    return undefined;
+  }
+  const target = stripProviderPrefix(resolvedTarget.to, params.channel).trim();
+  const identifier = stripKindPrefix(target);
+  const normalizedDisplay = normalizeLowercaseStringOrEmpty(displayName);
+  const identifierDisplays = uniqueStrings([resolvedTarget.to, target, identifier])
+    .map(normalizeLowercaseStringOrEmpty)
+    .filter(Boolean);
+  return identifierDisplays.includes(normalizedDisplay) ? undefined : displayName;
+}
+
 /** Resolves the session route used to mirror outbound delivery into conversation state. */
 export async function resolveOutboundSessionRoute(
   params: ResolveOutboundSessionRouteParams,
@@ -227,17 +253,19 @@ export async function resolveOutboundSessionRoute(
   const plugin = params.plugin ?? resolveOutboundChannelPlugin(params.channel);
   const resolver = plugin?.messaging?.resolveOutboundSessionRoute;
   const route = resolver ? await resolver(nextParams) : resolveFallbackSession(nextParams);
-  if (!route || route.recipientSessionExact !== true) {
-    return route;
+  const displayName = resolveOutboundSessionDisplayName(params);
+  const namedRoute = route && displayName ? { ...route, displayName } : route;
+  if (!namedRoute || namedRoute.recipientSessionExact !== true) {
+    return namedRoute;
   }
   const bindingRoute = resolveAgentRoute({
     cfg: params.cfg,
     channel: params.channel,
     defaultAgentId: params.agentId,
     accountId: params.accountId,
-    peer: route.peer,
+    peer: namedRoute.peer,
   });
-  const isDirect = route.peer.kind === "direct";
+  const isDirect = namedRoute.peer.kind === "direct";
   const globalScope = isDirect
     ? (params.cfg.session?.dmScope ?? "main")
     : (params.cfg.session?.groupScope ?? "per-group");
@@ -245,11 +273,11 @@ export async function resolveOutboundSessionRoute(
   if (normalizeAgentId(bindingRoute.agentId) !== normalizeAgentId(params.agentId)) {
     // Another agent owns the canonical inbound session. Keep the transport
     // route, but never authorize this agent-local candidate as exact.
-    return { ...route, recipientSessionExact: false };
+    return { ...namedRoute, recipientSessionExact: false };
   }
   return bindingScope !== globalScope
-    ? rebaseOutboundSessionRoute(route, bindingRoute.sessionKey)
-    : route;
+    ? rebaseOutboundSessionRoute(namedRoute, bindingRoute.sessionKey)
+    : namedRoute;
 }
 
 type OutboundSessionEntryParams = {
@@ -297,6 +325,8 @@ async function persistOutboundSessionEntry(
     OriginatingTo: params.route.to,
     NativeDirectUserId: params.route.peer.kind === "direct" ? params.route.peer.id : undefined,
     NativeChannelId: params.route.peer.kind === "direct" ? undefined : params.route.peer.id,
+    ConversationLabel: params.route.displayName,
+    GroupSubject: params.route.peer.kind === "direct" ? undefined : params.route.displayName,
     SessionCreation: resolveOutboundSessionCreation(params),
   };
   // Shared-main context may still point at another channel. Commit route and

@@ -54,7 +54,7 @@ suite.define(() => {
       workspaceGit: true,
       methodResponses: {
         "users.listModelAccounts": { profileId: "person-a", accounts: [account], links: [] },
-        "chat.metadata": {
+        "models.list": {
           cases: [
             {
               match: { authProfileId: account.authProfileId },
@@ -174,7 +174,7 @@ suite.define(() => {
       await pollLocatorText(
         page.locator("#new-session-where-trigger .new-session-page__trigger-label"),
       ).toBe("aws · fast");
-      await gateway.waitForRequest("chat.metadata");
+      await gateway.waitForRequest("models.list");
       try {
         await expect
           .poll(() =>

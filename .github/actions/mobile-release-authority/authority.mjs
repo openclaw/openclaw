@@ -417,11 +417,13 @@ async function releaseTooling(baseSha) {
     const stage = fs.mkdtempSync(
       path.join(process.env.RUNNER_TEMP ?? path.dirname(trustedRoot), "mobile-release-tooling-"),
     );
-    const archive = gitBuffer(trustedRoot, "archive", "--format=tar", baseSha, "--", "scripts");
-    runBuffer("tar", ["-xf", "-", "-C", stage], {
-      input: archive,
-      stdio: ["pipe", "pipe", "inherit"],
-    });
+    const archive = path.join(stage, "scripts.tar");
+    try {
+      git(trustedRoot, "archive", "--format=tar", `--output=${archive}`, baseSha, "--", "scripts");
+      runBuffer("tar", ["-xf", archive, "-C", stage]);
+    } finally {
+      fs.rmSync(archive, { force: true });
+    }
     releaseToolingPromises.set(
       baseSha,
       Promise.all([

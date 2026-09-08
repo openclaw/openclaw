@@ -106,6 +106,43 @@ describe("worker launch descriptor", () => {
     });
   });
 
+  it.each(["workspaceDir", "workerContainmentRoot"] as const)(
+    "accepts absolute %s paths through the project preparation limit",
+    (field) => {
+      for (const root of ["/", "C:\\", "\\\\server\\share\\"]) {
+        for (const length of [257, 4_096]) {
+          const descriptor = launchDescriptor();
+          descriptor.assignment[field] = root + "a".repeat(length - root.length);
+
+          expect(parseWorkerLaunchDescriptor(descriptor)).toEqual(descriptor);
+        }
+      }
+    },
+  );
+
+  it.each(["workspaceDir", "workerContainmentRoot"] as const)(
+    "rejects invalid %s paths",
+    (field) => {
+      for (const value of [
+        "/" + "a".repeat(4_096),
+        "/workspace\0other",
+        " /workspace",
+        "/workspace ",
+        "",
+        "workspace",
+        null,
+      ]) {
+        const descriptor = launchDescriptor();
+        expect(() =>
+          parseWorkerLaunchDescriptor({
+            ...descriptor,
+            assignment: { ...descriptor.assignment, [field]: value },
+          }),
+        ).toThrow("invalid worker launch descriptor");
+      }
+    },
+  );
+
   it("round-trips turn-bound GitHub identity without adding it to worker admission", () => {
     const descriptor = launchDescriptor();
     const identity = {

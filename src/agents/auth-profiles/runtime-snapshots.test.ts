@@ -7,6 +7,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import * as authProfileClone from "./clone.js";
+import { createApiKeyCredential } from "./credential-fixtures.test-support.js";
 import {
   getPreparedRuntimeAuthMaterializations,
   recordRuntimeAuthMaterialization,
@@ -384,11 +385,7 @@ describe("runtime auth profile snapshots", () => {
           ...createStore("inherited"),
           profiles: {
             ...createStore("inherited").profiles,
-            "anthropic:default": {
-              type: "api_key",
-              provider: "anthropic",
-              key: "inherited-key",
-            },
+            "anthropic:default": createApiKeyCredential("anthropic", "inherited-key"),
           },
         },
         inheritedAuthDir,

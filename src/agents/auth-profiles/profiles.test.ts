@@ -16,6 +16,7 @@ import {
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { AUTH_STORE_VERSION } from "./constants.js";
+import { createApiKeyCredential, oauthCred } from "./credential-fixtures.test-support.js";
 import { testing as externalAuthTesting } from "./external-auth.test-support.js";
 import {
   getRuntimeAuthProfileStoreCredentialMutationToken,
@@ -160,16 +161,8 @@ describe("promoteAuthProfileInOrder", () => {
         const mainStore = (selected: string): AuthProfileStore => ({
           version: AUTH_STORE_VERSION,
           profiles: {
-            "openai:first": {
-              type: "api_key",
-              provider: "openai",
-              key: "sk-first",
-            },
-            "openai:second": {
-              type: "api_key",
-              provider: "openai",
-              key: "sk-second",
-            },
+            "openai:first": createApiKeyCredential("openai", "sk-first"),
+            "openai:second": createApiKeyCredential("openai", "sk-second"),
           },
           order: { openai: [selected] },
         });
@@ -244,13 +237,12 @@ describe("promoteAuthProfileInOrder", () => {
 
         await upsertAuthProfileWithLock({
           profileId: "openai:default",
-          credential: {
-            type: "oauth",
+          credential: oauthCred({
             provider: "openai",
             access: "new",
             refresh: "refresh-new",
             expires: Date.now() + 60_000,
-          },
+          }),
         });
 
         expect(
@@ -289,13 +281,12 @@ describe("promoteAuthProfileInOrder", () => {
           {
             version: AUTH_STORE_VERSION,
             profiles: {
-              "openai:local": {
-                type: "oauth",
+              "openai:local": oauthCred({
                 provider: "openai",
                 access: "local-old",
                 refresh: "local-refresh-old",
                 expires: Date.now() + 60_000,
-              },
+              }),
             },
           },
           customAgentDir,
@@ -317,13 +308,12 @@ describe("promoteAuthProfileInOrder", () => {
           await upsertAuthProfileWithLock({
             agentDir: customAgentDir,
             profileId: "openai:local",
-            credential: {
-              type: "oauth",
+            credential: oauthCred({
               provider: "openai",
               access: "local-new",
               refresh: "local-refresh-new",
               expires: Date.now() + 120_000,
-            },
+            }),
           });
         } finally {
           externalAuthTesting.resetResolveExternalAuthProfilesForTest();
@@ -352,11 +342,7 @@ describe("promoteAuthProfileInOrder", () => {
         const siblingStore: RuntimeAuthProfileStore = {
           version: AUTH_STORE_VERSION,
           profiles: {
-            "anthropic:sibling": {
-              type: "api_key",
-              provider: "anthropic",
-              key: "sk-sibling",
-            },
+            "anthropic:sibling": createApiKeyCredential("anthropic", "sk-sibling"),
           },
           runtimeLocalProfileIds: ["anthropic:sibling"],
         };
@@ -411,11 +397,7 @@ describe("promoteAuthProfileInOrder", () => {
           {
             version: AUTH_STORE_VERSION,
             profiles: {
-              "anthropic:broken": {
-                type: "api_key",
-                provider: "anthropic",
-                key: "sk-broken-local",
-              },
+              "anthropic:broken": createApiKeyCredential("anthropic", "sk-broken-local"),
             },
           },
           brokenAgentDir,
@@ -424,11 +406,7 @@ describe("promoteAuthProfileInOrder", () => {
           {
             version: AUTH_STORE_VERSION,
             profiles: {
-              "google:healthy": {
-                type: "api_key",
-                provider: "google",
-                key: "sk-healthy-local",
-              },
+              "google:healthy": createApiKeyCredential("google", "sk-healthy-local"),
             },
           },
           healthyAgentDir,
@@ -706,13 +684,12 @@ describe("promoteAuthProfileInOrder", () => {
             key: "sk-materialized",
             keyRef,
           },
-          "anthropic:external": {
-            type: "oauth",
+          "anthropic:external": oauthCred({
             provider: "anthropic",
             access: "external-access",
             refresh: "external-refresh",
             expires: Date.now() + 60_000,
-          },
+          }),
         },
         runtimeExternalProfileIds: ["anthropic:external"],
       };
@@ -725,11 +702,7 @@ describe("promoteAuthProfileInOrder", () => {
         store: {
           version: AUTH_STORE_VERSION,
           profiles: {
-            "openai:temporary": {
-              type: "api_key",
-              provider: "openai",
-              key: "sk-temporary",
-            },
+            "openai:temporary": createApiKeyCredential("openai", "sk-temporary"),
           },
         },
       });
@@ -750,13 +723,12 @@ describe("promoteAuthProfileInOrder", () => {
       const runtimeStore: RuntimeAuthProfileStore = {
         version: AUTH_STORE_VERSION,
         profiles: {
-          [profileId]: {
-            type: "oauth",
+          [profileId]: oauthCred({
             provider: "openai",
             access: "external-access",
             refresh: "external-refresh",
             expires: Date.now() + 60_000,
-          },
+          }),
         },
         runtimeExternalProfileIds: [profileId],
         runtimeExternalCliProfileIds: [profileId],
@@ -780,18 +752,13 @@ describe("promoteAuthProfileInOrder", () => {
           const baselineStore: AuthProfileStore = {
             version: AUTH_STORE_VERSION,
             profiles: {
-              "openai:baseline": {
-                type: "api_key",
-                provider: "openai",
-                key: "sk-baseline",
-              },
-              "anthropic:external": {
-                type: "oauth",
+              "openai:baseline": createApiKeyCredential("openai", "sk-baseline"),
+              "anthropic:external": oauthCred({
                 provider: "anthropic",
                 access: "external-before-capture",
                 refresh: "external-refresh",
                 expires: Date.now() + 60_000,
-              },
+              }),
             },
             runtimeExternalProfileIds: ["anthropic:external"],
           };
@@ -807,13 +774,12 @@ describe("promoteAuthProfileInOrder", () => {
                   ...baselineStore,
                   profiles: {
                     ...baselineStore.profiles,
-                    "anthropic:external": {
-                      type: "oauth",
+                    "anthropic:external": oauthCred({
                       provider: "anthropic",
                       access: "external-after-capture",
                       refresh: "external-refresh-new",
                       expires: Date.now() + 120_000,
-                    },
+                    }),
                   },
                 },
               },
@@ -828,11 +794,7 @@ describe("promoteAuthProfileInOrder", () => {
             store: {
               version: AUTH_STORE_VERSION,
               profiles: {
-                "openai:temporary": {
-                  type: "api_key",
-                  provider: "openai",
-                  key: "sk-temporary",
-                },
+                "openai:temporary": createApiKeyCredential("openai", "sk-temporary"),
               },
             },
           });
@@ -887,13 +849,12 @@ describe("promoteAuthProfileInOrder", () => {
           throw new Error("expected captured derived API-key profile");
         }
         capturedProfile.key = "sk-captured-resolved";
-        capturedRuntime.profiles["anthropic:captured-external"] = {
-          type: "oauth",
+        capturedRuntime.profiles["anthropic:captured-external"] = oauthCred({
           provider: "anthropic",
           access: "captured-external-access",
           refresh: "captured-external-refresh",
           expires: Date.now() + 60_000,
-        };
+        });
         capturedRuntime.runtimeExternalProfileIds = ["anthropic:captured-external"];
         replaceRuntimeAuthProfileStoreSnapshots([
           { agentDir: capturedAgentDir, store: capturedRuntime },
@@ -905,21 +866,16 @@ describe("promoteAuthProfileInOrder", () => {
           store: {
             version: AUTH_STORE_VERSION,
             profiles: {
-              "openai:temporary": {
-                type: "api_key",
-                provider: "openai",
-                key: "sk-temporary",
-              },
+              "openai:temporary": createApiKeyCredential("openai", "sk-temporary"),
             },
           },
         });
-        capturedRuntime.profiles["anthropic:captured-external"] = {
-          type: "oauth",
+        capturedRuntime.profiles["anthropic:captured-external"] = oauthCred({
           provider: "anthropic",
           access: "captured-publication-edge-access",
           refresh: "captured-publication-edge-refresh",
           expires: Date.now() + 120_000,
-        };
+        });
         replaceRuntimeAuthProfileStoreSnapshots([
           { agentDir: capturedAgentDir, store: capturedRuntime },
         ]);
@@ -935,13 +891,12 @@ describe("promoteAuthProfileInOrder", () => {
           refresh: "captured-publication-edge-refresh",
         });
         const newerRuntime = loadAuthProfileStoreForRuntime(newerAgentDir);
-        newerRuntime.profiles["anthropic:newer-external"] = {
-          type: "oauth",
+        newerRuntime.profiles["anthropic:newer-external"] = oauthCred({
           provider: "anthropic",
           access: "newer-external-access",
           refresh: "newer-external-refresh",
           expires: Date.now() + 60_000,
-        };
+        });
         newerRuntime.runtimeExternalProfileIds = ["anthropic:newer-external"];
         replaceRuntimeAuthProfileStoreSnapshots([
           { agentDir: capturedAgentDir, store: ownedCapturedRuntime },
@@ -981,11 +936,7 @@ describe("promoteAuthProfileInOrder", () => {
         saveAuthProfileStore({
           version: AUTH_STORE_VERSION,
           profiles: {
-            "openai:baseline": {
-              type: "api_key",
-              provider: "openai",
-              key: "sk-baseline",
-            },
+            "openai:baseline": createApiKeyCredential("openai", "sk-baseline"),
           },
         });
         const capturedRuntime = loadAuthProfileStoreForRuntime(derivedAgentDir);
@@ -998,11 +949,7 @@ describe("promoteAuthProfileInOrder", () => {
           store: {
             version: AUTH_STORE_VERSION,
             profiles: {
-              "openai:temporary": {
-                type: "api_key",
-                provider: "openai",
-                key: "sk-temporary",
-              },
+              "openai:temporary": createApiKeyCredential("openai", "sk-temporary"),
             },
           },
         });
@@ -1123,11 +1070,7 @@ describe("promoteAuthProfileInOrder", () => {
         });
         await upsertAuthProfileWithLock({
           profileId: "anthropic:key",
-          credential: {
-            type: "api_key",
-            provider: "anthropic",
-            key: "  sk-\r\nant\u2502  ",
-          },
+          credential: createApiKeyCredential("anthropic", "  sk-\r\nant\u2502  "),
           agentDir,
         });
 
@@ -1327,20 +1270,18 @@ describe("promoteAuthProfileInOrder", () => {
         {
           version: AUTH_STORE_VERSION,
           profiles: {
-            [newProfileId]: {
-              type: "oauth",
+            [newProfileId]: oauthCred({
               provider: "openai",
               access: "new-access",
               refresh: "new-refresh",
               expires: Date.now() + 60 * 60 * 1000,
-            },
-            [staleProfileId]: {
-              type: "oauth",
+            }),
+            [staleProfileId]: oauthCred({
               provider: "openai",
               access: "stale-access",
               refresh: "stale-refresh",
               expires: Date.now() + 30 * 60 * 1000,
-            },
+            }),
           },
           order: {
             openai: [staleProfileId],
@@ -1378,34 +1319,30 @@ describe("promoteAuthProfileInOrder", () => {
         {
           version: AUTH_STORE_VERSION,
           profiles: {
-            [primaryProfileId]: {
-              type: "oauth",
+            [primaryProfileId]: oauthCred({
               provider: "openai",
               access: "primary-access",
               refresh: "primary-refresh",
               expires: Date.now() + 30 * 60 * 1000,
-            },
-            [backupProfileId]: {
-              type: "oauth",
+            }),
+            [backupProfileId]: oauthCred({
               provider: "openai",
               access: "backup-access",
               refresh: "backup-refresh",
               expires: Date.now() + 30 * 60 * 1000,
-            },
-            [newProfileId]: {
-              type: "oauth",
+            }),
+            [newProfileId]: oauthCred({
               provider: "openai",
               access: "new-access",
               refresh: "new-refresh",
               expires: Date.now() + 60 * 60 * 1000,
-            },
-            [unrelatedProfileId]: {
-              type: "oauth",
+            }),
+            [unrelatedProfileId]: oauthCred({
               provider: "openai",
               access: "unrelated-access",
               refresh: "unrelated-refresh",
               expires: Date.now() + 30 * 60 * 1000,
-            },
+            }),
           },
         },
         agentDir,
@@ -1441,20 +1378,18 @@ describe("promoteAuthProfileInOrder", () => {
         {
           version: AUTH_STORE_VERSION,
           profiles: {
-            [existingProfileId]: {
-              type: "oauth",
+            [existingProfileId]: oauthCred({
               provider: "openai",
               access: "old-access",
               refresh: "old-refresh",
               expires: Date.now() + 30 * 60 * 1000,
-            },
-            [newProfileId]: {
-              type: "oauth",
+            }),
+            [newProfileId]: oauthCred({
               provider: "openai",
               access: "new-access",
               refresh: "new-refresh",
               expires: Date.now() + 60 * 60 * 1000,
-            },
+            }),
           },
         },
         agentDir,
@@ -1490,13 +1425,12 @@ describe("promoteAuthProfileInOrder", () => {
         {
           version: AUTH_STORE_VERSION,
           profiles: {
-            [newProfileId]: {
-              type: "oauth",
+            [newProfileId]: oauthCred({
               provider: "openai",
               access: "new-access",
               refresh: "new-refresh",
               expires: Date.now() + 60 * 60 * 1000,
-            },
+            }),
           },
         },
         agentDir,
@@ -1522,13 +1456,12 @@ describe("promoteAuthProfileInOrder", () => {
         {
           version: AUTH_STORE_VERSION,
           profiles: {
-            [staleProfileId]: {
-              type: "oauth",
+            [staleProfileId]: oauthCred({
               provider: "openai",
               access: "stale-access-token",
               refresh: "stale-refresh-token",
               expires: Date.now() - 60_000,
-            },
+            }),
           },
           lastGood: { openai: staleProfileId },
         },
@@ -1664,18 +1597,13 @@ describe("promoteAuthProfileInOrder", () => {
       const initialStore: RuntimeAuthProfileStore = {
         version: AUTH_STORE_VERSION,
         profiles: {
-          "openrouter:oauth": {
-            type: "oauth",
+          "openrouter:oauth": oauthCred({
             provider: "openrouter",
             access: "oauth-access",
             refresh: "oauth-refresh",
             expires: Date.now() + 60_000,
-          },
-          "openrouter:api-key": {
-            type: "api_key",
-            provider: "openrouter",
-            key: "api-key",
-          },
+          }),
+          "openrouter:api-key": createApiKeyCredential("openrouter", "api-key"),
         },
         order: { openrouter: ["openrouter:oauth", "openrouter:api-key"] },
         lastGood: { openrouter: "openrouter:oauth" },
@@ -1736,11 +1664,7 @@ describe("promoteAuthProfileInOrder", () => {
       const initialStore: AuthProfileStore = {
         version: AUTH_STORE_VERSION,
         profiles: {
-          "openrouter:api-key": {
-            type: "api_key",
-            provider: "openrouter",
-            key: "api-key",
-          },
+          "openrouter:api-key": createApiKeyCredential("openrouter", "api-key"),
         },
       };
       saveAuthProfileStore(initialStore, agentDir);
@@ -1810,13 +1734,12 @@ describe("promoteAuthProfileInOrder", () => {
         {
           version: AUTH_STORE_VERSION,
           profiles: {
-            [goodProfileId]: {
-              type: "oauth",
+            [goodProfileId]: oauthCred({
               provider: "openai",
               access: "good-access-token",
               refresh: "good-refresh-token",
               expires: Date.now() + 60_000,
-            },
+            }),
           },
           lastGood: { openai: goodProfileId },
         },
@@ -1848,20 +1771,18 @@ describe("setAuthProfileOrder", () => {
         saveAuthProfileStore({
           version: AUTH_STORE_VERSION,
           profiles: {
-            "openai:first": {
-              type: "oauth",
+            "openai:first": oauthCred({
               provider: "openai",
               access: "first",
               refresh: "first-refresh",
               expires: Date.now() + 60_000,
-            },
-            "openai:second": {
-              type: "oauth",
+            }),
+            "openai:second": oauthCred({
               provider: "openai",
               access: "second",
               refresh: "second-refresh",
               expires: Date.now() + 60_000,
-            },
+            }),
           },
           order: { openai: ["openai:first", "openai:second"] },
         });
@@ -1982,20 +1903,18 @@ describe("setAuthProfileOrder", () => {
         const mainStore = (): AuthProfileStore => ({
           version: AUTH_STORE_VERSION,
           profiles: {
-            "openai:profile-a": {
-              type: "oauth",
+            "openai:profile-a": oauthCred({
               provider: "openai",
               access: "access-a",
               refresh: "refresh-a",
               expires: Date.now() + 60_000,
-            },
-            "openai:profile-b": {
-              type: "oauth",
+            }),
+            "openai:profile-b": oauthCred({
               provider: "openai",
               access: "access-b",
               refresh: "refresh-b",
               expires: Date.now() + 60_000,
-            },
+            }),
           },
           order: { openai: ["openai:profile-a"] },
         });
@@ -2038,11 +1957,7 @@ describe("setAuthProfileOrder", () => {
         saveAuthProfileStore({
           version: AUTH_STORE_VERSION,
           profiles: {
-            "openai:local": {
-              type: "api_key",
-              provider: "openai",
-              key: "sk-local",
-            },
+            "openai:local": createApiKeyCredential("openai", "sk-local"),
           },
           order: { openai: ["openai:local"] },
         });

@@ -1245,7 +1245,6 @@ extensions/telegram/src/sent-message-cache.ts	2
 extensions/telegram/src/state-migrations.ts	2
 extensions/telegram/src/status-issues.ts	1
 extensions/telegram/src/sticker-cache-store.legacy-state.ts	1
-extensions/telegram/src/sticker-cache.ts	2
 extensions/telegram/src/target-writeback.test-shared.ts	12
 extensions/telegram/src/telegram-ingress-drain-factory.ts	1
 extensions/telegram/src/telegram-ingress-drain.ts	5
@@ -1259,7 +1258,7 @@ extensions/telegram/src/thread-bindings.ts	2
 extensions/telegram/src/topic-name-cache.ts	3
 extensions/telegram/src/update-offset-store.ts	1
 extensions/telegram/src/webhook.ts	1
-extensions/tencent/stream.ts	5
+extensions/tencent/stream.ts	4
 extensions/tlon/src/channel.runtime.ts	3
 extensions/tlon/src/channel.ts	2
 extensions/tlon/src/monitor/approval-runtime.ts	2
@@ -1280,7 +1279,7 @@ extensions/twitch/src/config.ts	10
 extensions/twitch/src/monitor.ts	3
 extensions/twitch/src/outbound.ts	2
 extensions/twitch/src/resolver.ts	1
-extensions/twitch/src/setup-surface.ts	6
+extensions/twitch/src/setup-surface.ts	1
 extensions/twitch/src/status.ts	2
 extensions/twitch/src/token.ts	3
 extensions/twitch/src/twitch-ingress.ts	4
@@ -1396,8 +1395,7 @@ extensions/zai/model-definitions.ts	1
 extensions/zalo/setup-api.ts	3
 extensions/zalo/src/accounts.ts	3
 extensions/zalo/src/proxy.ts	1
-extensions/zalo/src/setup-allow-from.ts	3
-extensions/zalo/src/setup-surface.ts	10
+extensions/zalo/src/setup-allow-from.ts	1
 extensions/zalo/src/token.ts	1
 extensions/zalo/src/webhook-spool.ts	1
 extensions/zalouser/src/accounts.ts	1
@@ -1592,7 +1590,6 @@ src/agents/agent-bundle-mcp-runtime.ts	7
 src/agents/agent-command-restart-recovery.ts	3
 src/agents/agent-command.ts	1
 src/agents/agent-hooks/compaction-safeguard.ts	14
-src/agents/agent-model-discovery.ts	5
 src/agents/agent-project-settings-snapshot.ts	5
 src/agents/agent-run-terminal-delivery.ts	1
 src/agents/agent-run-terminal-error.ts	1
@@ -1870,7 +1867,7 @@ src/agents/modes/interactive/theme/theme.ts	11
 src/agents/node-plugin-tools.ts	1
 src/agents/openai-model-routes.ts	2
 src/agents/openclaw-tools.requester-yield.ts	2
-src/agents/plugin-model-catalog.ts	4
+src/agents/plugin-model-catalog.ts	3
 src/agents/plugin-text-transforms.ts	5
 src/agents/prepared-model-catalog.ts	1
 src/agents/prepared-model-catalog.worker.ts	1
@@ -2472,11 +2469,7 @@ src/commands/gateway-status/helpers.ts	11
 src/commands/message-format.ts	17
 src/commands/message.ts	2
 src/commands/models/fallbacks-shared.ts	2
-src/commands/models/list.model-projection.ts	1
-src/commands/models/list.persisted-catalog.ts	2
 src/commands/models/list.probe.ts	2
-src/commands/models/list.registry.ts	3
-src/commands/models/list.rows.ts	1
 src/commands/models/shared.ts	3
 src/commands/onboard-agent.ts	1
 src/commands/onboard-config.ts	3
@@ -2689,7 +2682,7 @@ src/flows/doctor-health-contributions-final.ts	1
 src/flows/doctor-health-contributions.ts	1
 src/flows/doctor-removed-workspaces-state-check.ts	2
 src/flows/health-check-adapter.ts	1
-src/flows/search-setup.ts	6
+src/flows/search-setup.ts	1
 src/gateway/agent-runtime-identity-token.ts	1
 src/gateway/agent-turn/agent-dedupe.ts	3
 src/gateway/agent-turn/agent-job.ts	1
@@ -3654,7 +3647,6 @@ src/tui/tui-session-actions.ts	5
 src/tui/tui-session-events.ts	1
 src/tui/tui-session-projection.ts	2
 src/tui/tui-session-run-coordinator.ts	1
-src/tui/tui-stream-assembler.ts	2
 src/tui/tui-task-suggestions.ts	6
 src/tui/tui.ts	5
 src/utils.ts	1
@@ -3778,7 +3770,7 @@ ui/src/components/mcp-server-form.ts	1
 ui/src/components/model-picker.ts	2
 ui/src/components/onboarding-memory-import.ts	1
 ui/src/components/panel-tab-strip.ts	4
-ui/src/components/select-picker.ts	3
+ui/src/components/select-picker.ts	2
 ui/src/components/sensitive-input.ts	2
 ui/src/components/session-data-controller.ts	1
 ui/src/components/session-data-scroll-controller.ts	1
@@ -3810,7 +3802,7 @@ ui/src/lib/chat/tool-display.ts	1
 ui/src/lib/config-form-utils.ts	7
 ui/src/lib/config/config-draft-model.ts	5
 ui/src/lib/cron/index.ts	11
-ui/src/lib/gateway-diagnostics.ts	3
+ui/src/lib/gateway-diagnostics.ts	2
 ui/src/lib/gateway-errors.ts	1
 ui/src/lib/keyboard-shortcuts.ts	1
 ui/src/lib/nodes/index.ts	3

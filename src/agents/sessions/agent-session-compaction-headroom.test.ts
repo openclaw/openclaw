@@ -1,5 +1,6 @@
 import type { Context, Model, SimpleStreamOptions } from "openclaw/plugin-sdk/llm";
 import { expect, it, vi } from "vitest";
+import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
 import { buildRuntimeContextCustomMessage } from "../embedded-agent-runner/run/runtime-context-prompt.js";
 import { agentSessionAutomaticCompaction } from "./agent-session-compaction.js";
@@ -203,11 +204,7 @@ it.each([
     retry: { enabled: false },
   });
   const sessionManager = SessionManager.inMemory();
-  const keptId = sessionManager.appendMessage({
-    role: "user",
-    content: "Continue the project.",
-    timestamp: 1,
-  });
+  const keptId = sessionManager.appendMessage(makeUserMessage("Continue the project.", 1));
   const originalSummary = "The project uses blue buttons. ".repeat(40);
   sessionManager.appendCompaction(originalSummary, keptId, 2_000);
   sessionManager.appendMessage(createAssistant(model, [{ type: "text", text: "Ready." }]));

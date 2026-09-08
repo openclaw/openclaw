@@ -70,6 +70,7 @@ import {
   streamMocks,
 } from "./sessions/agent-session-loop-correctness.test-support.js";
 import { SessionManager } from "./sessions/session-manager.js";
+import { textAssistant } from "./test-helpers/sparse-transcript.test-support.js";
 import { compactToolOutputHint } from "./tool-schema-hints.js";
 import { testing as agentStepTesting } from "./tools/agent-step.test-support.js";
 import { withGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
@@ -520,13 +521,7 @@ describe("sessions tools", () => {
       }
       if (request.method === "chat.history") {
         return {
-          messages: [
-            { role: "toolResult", content: [] },
-            {
-              role: "assistant",
-              content: [{ type: "text", text: "hi" }],
-            },
-          ],
+          messages: [{ role: "toolResult", content: [] }, textAssistant("hi")],
         };
       }
       return {};
@@ -897,14 +892,7 @@ describe("sessions tools", () => {
       const request = opts as { method?: string };
       if (request.method === "chat.history") {
         return {
-          messages: [
-            {
-              role: "assistant",
-              content: [
-                { type: "text", text: "Use sk-1234567890abcdef1234 to authenticate with the API." },
-              ],
-            },
-          ],
+          messages: [textAssistant("Use sk-1234567890abcdef1234 to authenticate with the API.")],
         };
       }
       return {};

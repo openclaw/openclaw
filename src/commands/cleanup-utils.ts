@@ -2,7 +2,6 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { AgentsDeleteResult } from "../../packages/gateway-protocol/src/schema/agents-models-skills.js";
 import { listAgentIds, resolveAgentWorkspaceDir } from "../agents/agent-scope-config.js";
 import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace-default.js";
@@ -66,8 +65,9 @@ export async function moveToTrashResult(
   if (!pathname) {
     return { failed: { path: pathname, reason: "path is empty" } };
   }
+  let isSymbolicLink: boolean;
   try {
-    await fs.lstat(pathname);
+    isSymbolicLink = (await fs.lstat(pathname)).isSymbolicLink();
   } catch (error) {
     return isMissingPathError(error)
       ? { removed: { path: pathname, method: "missing" } }
@@ -76,7 +76,10 @@ export async function moveToTrashResult(
   try {
     const targetPath = path.resolve(pathname);
     const sourcePath = await resolveMoveToTrashSourcePath(targetPath);
-    const allowedRoots = await resolveMoveToTrashAllowedRoots(sourcePath);
+    const allowedRoots = trashAllowedRoots(
+      [sourcePath],
+      isSymbolicLink ? await resolveSymlinkTargetPath(sourcePath) : undefined,
+    );
     // Preparation can outlive its owner; revalidate immediately before Trash dispatch.
     assertCurrent?.();
     await movePathToTrash(sourcePath, { allowedRoots });
@@ -96,23 +99,34 @@ export async function moveToTrash(
   return "removed" in (await moveToTrashResult(pathname, runtime, assertCurrent));
 }
 
+/**
+ * Allowed Trash roots for OpenClaw-owned paths: each declared path's own parent, plus the
+ * resolved parent when the moved path is a symlink (fs-safe checks the link target, and
+ * moving a link never touches the directory behind it). fs-safe's default roots (home + tmp)
+ * alone refuse every path of a state dir on a volume such as `/data`.
+ */
+export function trashAllowedRoots(
+  declaredPaths: readonly string[],
+  resolvedLinkPath?: string,
+): string[] {
+  const roots = declaredPaths.map((declaredPath) => path.dirname(declaredPath));
+  if (resolvedLinkPath !== undefined) {
+    roots.push(path.dirname(resolvedLinkPath));
+  }
+  return [...new Set(roots)];
+}
+
 async function resolveMoveToTrashSourcePath(targetPath: string): Promise<string> {
   return path.join(await fs.realpath(path.dirname(targetPath)), path.basename(targetPath));
 }
 
-async function resolveMoveToTrashAllowedRoots(targetPath: string): Promise<string[]> {
-  const allowedRoots = [path.dirname(targetPath)];
-  const stat = await fs.lstat(targetPath);
-  if (stat.isSymbolicLink()) {
-    try {
-      // fs-safe resolves valid symlinks before allow-root checks; include the
-      // resolved parent so deleting a configured symlink moves the link itself.
-      allowedRoots.push(path.dirname(await fs.realpath(targetPath)));
-    } catch {
-      // Broken symlinks are handled lexically by fs-safe.
-    }
+// fs-safe resolves valid symlinks before allow-root checks; a broken link is handled lexically.
+async function resolveSymlinkTargetPath(linkPath: string): Promise<string | undefined> {
+  try {
+    return await fs.realpath(linkPath);
+  } catch {
+    return undefined;
   }
-  return uniqueStrings(allowedRoots);
 }
 
 function collectWorkspaceDirs(cfg: OpenClawConfig | undefined): string[] {

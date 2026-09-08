@@ -1,7 +1,7 @@
 #!/usr/bin/env -S node --import tsx
 // Openclaw Npm Postpublish Verify script supports OpenClaw repository automation.
 
-import { createHash, createPublicKey, verify as verifySignature } from "node:crypto";
+import { createHash } from "node:crypto";
 import {
   existsSync,
   lstatSync,
@@ -26,6 +26,7 @@ import {
 import { readBoundedResponseText } from "./lib/bounded-response.mjs";
 import { listBundledPluginPackArtifacts } from "./lib/bundled-plugin-build-entries.mjs";
 import { formatErrorMessage } from "./lib/error-format.mts";
+import { verifyNpmRegistrySignatures } from "./lib/npm-registry-signatures.mjs";
 import { runNpmVerifyCommand } from "./lib/npm-verify-exec.ts";
 import {
   comparePackageDistInventory,
@@ -261,50 +262,6 @@ type FetchRegistryJsonOptions = {
   timeoutMs?: number;
 };
 
-export function verifyNpmRegistrySignatures(params: {
-  integrity: string;
-  keys: NpmRegistryKey[];
-  packageName: string;
-  signatures: NpmRegistrySignature[];
-  version: string;
-}): void {
-  if (!params.integrity.startsWith("sha512-")) {
-    throw new Error(`npm registry integrity is missing a sha512 digest for ${params.packageName}.`);
-  }
-  if (params.signatures.length === 0) {
-    throw new Error(
-      `npm registry returned no signatures for ${params.packageName}@${params.version}.`,
-    );
-  }
-
-  const payload = `${params.packageName}@${params.version}:${params.integrity}`;
-  for (const signature of params.signatures) {
-    const key = params.keys.find((candidate) => candidate.keyid === signature.keyid);
-    if (!key) {
-      continue;
-    }
-    const publicKey = createPublicKey({
-      key: Buffer.from(key.key, "base64"),
-      format: "der",
-      type: "spki",
-    });
-    if (
-      verifySignature(
-        "sha256",
-        Buffer.from(payload, "utf8"),
-        publicKey,
-        Buffer.from(signature.sig, "base64"),
-      )
-    ) {
-      return;
-    }
-  }
-
-  throw new Error(
-    `npm registry signatures did not verify for ${params.packageName}@${params.version}.`,
-  );
-}
-
 function resolveNpmProvenanceVerificationPolicy(
   statement: NpmProvenanceStatement,
   version: string,
@@ -464,6 +421,7 @@ export async function verifyNpmProvenanceAttestation(params: {
 }
 
 export function collectInstalledPackageErrors(params: {
+  additionalCompanionManifestRoots?: string[];
   expectedVersion: string;
   installedVersion: string;
   packageRoot: string;
@@ -487,7 +445,12 @@ export function collectInstalledPackageErrors(params: {
   errors.push(...collectInstalledAlwaysAllowedRuntimeFacadeErrors(params.packageRoot));
   errors.push(...collectInstalledContextEngineRuntimeErrors(params.packageRoot));
   errors.push(...collectInstalledPluginSdkDeclarationErrors(params.packageRoot));
-  errors.push(...collectInstalledRootDependencyManifestErrors(params.packageRoot));
+  errors.push(
+    ...collectInstalledRootDependencyManifestErrors(
+      params.packageRoot,
+      params.additionalCompanionManifestRoots,
+    ),
+  );
 
   return [...new Set(errors)];
 }
@@ -690,7 +653,10 @@ function extractJavaScriptImportSpecifiers(source: string): ParsedImportSpecifie
   }
 }
 
-export function collectInstalledRootDependencyManifestErrors(packageRoot: string): string[] {
+export function collectInstalledRootDependencyManifestErrors(
+  packageRoot: string,
+  additionalCompanionManifestRoots: string[] = [],
+): string[] {
   const packageJsonPath = join(packageRoot, "package.json");
   if (!existsSync(packageJsonPath)) {
     return ["installed package is missing package.json."];
@@ -718,6 +684,10 @@ export function collectInstalledRootDependencyManifestErrors(packageRoot: string
   const missingImporters = new Map<string, Set<string>>();
   const bundledExtensionRuntimeDependencyOwners =
     collectBundledExtensionRuntimeDependencyOwners(packageRoot);
+  const companionManifestRoots = [
+    join(packageRoot, "..", "@openclaw"),
+    ...additionalCompanionManifestRoots,
+  ];
   const companionManifestCache = new Map<string, InstalledPackageJson | null>();
   let runtimeDependencyOwnership: RuntimeDependencyOwnership | null;
   try {
@@ -797,7 +767,7 @@ export function collectInstalledRootDependencyManifestErrors(packageRoot: string
               isInstalledCompanionExtensionOwnedRuntimeImport({
                 dependencyName,
                 extensionId,
-                packageRoot,
+                manifestRoots: companionManifestRoots,
                 manifestCache: companionManifestCache,
               }),
           ))
@@ -821,13 +791,24 @@ export function collectInstalledRootDependencyManifestErrors(packageRoot: string
 function isInstalledCompanionExtensionOwnedRuntimeImport(params: {
   dependencyName: string;
   extensionId: string;
-  packageRoot: string;
+  manifestRoots: string[];
   manifestCache: Map<string, InstalledPackageJson | null>;
 }): boolean {
   const extensionId = params.extensionId;
-  let manifest = params.manifestCache.get(extensionId);
-  if (manifest === undefined) {
-    const manifestPath = join(params.packageRoot, "..", "@openclaw", extensionId, "package.json");
+  for (const manifestRoot of params.manifestRoots) {
+    const cacheKey = `${manifestRoot}\0${extensionId}`;
+    let manifest = params.manifestCache.get(cacheKey);
+    if (manifest !== undefined) {
+      if (
+        manifest &&
+        (Object.hasOwn(manifest.dependencies ?? {}, params.dependencyName) ||
+          Object.hasOwn(manifest.optionalDependencies ?? {}, params.dependencyName))
+      ) {
+        return true;
+      }
+      continue;
+    }
+    const manifestPath = join(manifestRoot, extensionId, "package.json");
     manifest = null;
     if (existsSync(manifestPath)) {
       const stat = lstatSync(manifestPath);
@@ -842,13 +823,16 @@ function isInstalledCompanionExtensionOwnedRuntimeImport(params: {
         }
       }
     }
-    params.manifestCache.set(extensionId, manifest);
+    params.manifestCache.set(cacheKey, manifest);
+    if (
+      manifest &&
+      (Object.hasOwn(manifest.dependencies ?? {}, params.dependencyName) ||
+        Object.hasOwn(manifest.optionalDependencies ?? {}, params.dependencyName))
+    ) {
+      return true;
+    }
   }
-  return Boolean(
-    manifest &&
-    (Object.hasOwn(manifest.dependencies ?? {}, params.dependencyName) ||
-      Object.hasOwn(manifest.optionalDependencies ?? {}, params.dependencyName)),
-  );
+  return false;
 }
 
 function collectBundledExtensionRuntimeDependencyOwners(

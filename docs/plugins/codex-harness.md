@@ -14,6 +14,11 @@ native compaction, and app-server execution. OpenClaw still owns chat
 channels, session files, model selection, OpenClaw dynamic tools, approvals,
 media delivery, and the visible transcript mirror.
 
+Pasted text saved as a `.txt` attachment is extracted by OpenClaw and included in
+the current turn as untrusted external content, subject to the existing file
+extraction limits. This also applies to adopted and forked Codex sessions with
+locked model selection. Images continue through Codex's native image input.
+
 Remote Codex app-servers can run on a different machine from the Gateway. Set
 `remoteWorkspaceRoot` to validate remote workspace attachment paths. OpenClaw
 transfers authoritative attachment bytes over the existing app-server connection

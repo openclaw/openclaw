@@ -10,6 +10,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
 import { isAmbientCredentialAllowedByProviderAuthPin } from "./ambient-auth.js";
+import { createApiKeyCredential, oauthCred } from "./credential-fixtures.test-support.js";
 import { saveAuthProfileStore } from "./store-runtime.js";
 import type { AuthProfileStore } from "./types.js";
 
@@ -67,11 +68,7 @@ describe("resolveAuthProfileOrder", () => {
     const store: AuthProfileStore = {
       version: 1,
       profiles: {
-        "fixture-provider:default": {
-          type: "api_key",
-          provider: "fixture-provider",
-          key: "sk-test",
-        },
+        "fixture-provider:default": createApiKeyCredential("fixture-provider", "sk-test"),
       },
     };
 
@@ -98,18 +95,13 @@ describe("resolveAuthProfileOrder", () => {
     const store: AuthProfileStore = {
       version: 1,
       profiles: {
-        "fixture-provider:oauth": {
-          type: "oauth",
+        "fixture-provider:oauth": oauthCred({
           provider: "fixture-provider",
           access: "oauth-access",
           refresh: "oauth-refresh",
           expires: Date.now() + 60_000,
-        },
-        "fixture-provider:api-key": {
-          type: "api_key",
-          provider: "fixture-provider",
-          key: "api-key",
-        },
+        }),
+        "fixture-provider:api-key": createApiKeyCredential("fixture-provider", "api-key"),
       },
     };
 
@@ -177,16 +169,8 @@ describe("resolveAuthProfileOrder", () => {
     const store: AuthProfileStore = {
       version: 1,
       profiles: {
-        "fixture-provider:primary": {
-          type: "api_key",
-          provider: "fixture-provider",
-          key: "sk-primary",
-        },
-        "fixture-provider:secondary": {
-          type: "api_key",
-          provider: "fixture-provider",
-          key: "sk-secondary",
-        },
+        "fixture-provider:primary": createApiKeyCredential("fixture-provider", "sk-primary"),
+        "fixture-provider:secondary": createApiKeyCredential("fixture-provider", "sk-secondary"),
       },
       order: {
         "fixture-provider": ["fixture-provider:secondary", "fixture-provider:primary"],
@@ -205,16 +189,8 @@ describe("resolveAuthProfileOrder", () => {
     const store: AuthProfileStore = {
       version: 1,
       profiles: {
-        "fixture-provider:primary": {
-          type: "api_key",
-          provider: "fixture-provider",
-          key: "sk-primary",
-        },
-        "fixture-provider:secondary": {
-          type: "api_key",
-          provider: "fixture-provider",
-          key: "sk-secondary",
-        },
+        "fixture-provider:primary": createApiKeyCredential("fixture-provider", "sk-primary"),
+        "fixture-provider:secondary": createApiKeyCredential("fixture-provider", "sk-secondary"),
       },
       order: {
         "fixture-provider-plan": [],
@@ -234,16 +210,8 @@ describe("resolveAuthProfileOrder", () => {
     const store: AuthProfileStore = {
       version: 1,
       profiles: {
-        "fixture-provider:primary": {
-          type: "api_key",
-          provider: "fixture-provider",
-          key: "sk-primary",
-        },
-        "fixture-provider:secondary": {
-          type: "api_key",
-          provider: "fixture-provider",
-          key: "sk-secondary",
-        },
+        "fixture-provider:primary": createApiKeyCredential("fixture-provider", "sk-primary"),
+        "fixture-provider:secondary": createApiKeyCredential("fixture-provider", "sk-secondary"),
       },
     };
 
@@ -267,11 +235,7 @@ describe("resolveAuthProfileOrder", () => {
     const store: AuthProfileStore = {
       version: 1,
       profiles: {
-        "fixture-provider:primary": {
-          type: "api_key",
-          provider: "fixture-provider",
-          key: "sk-primary",
-        },
+        "fixture-provider:primary": createApiKeyCredential("fixture-provider", "sk-primary"),
       },
     };
 
@@ -294,11 +258,7 @@ describe("resolveAuthProfileOrder", () => {
     const store: AuthProfileStore = {
       version: 1,
       profiles: {
-        "fixture-provider:primary": {
-          type: "api_key",
-          provider: "fixture-provider",
-          key: "sk-primary",
-        },
+        "fixture-provider:primary": createApiKeyCredential("fixture-provider", "sk-primary"),
       },
       order: {
         "fixture-provider": [],
@@ -324,18 +284,13 @@ describe("resolveAuthProfileOrder", () => {
     const store: AuthProfileStore = {
       version: 1,
       profiles: {
-        "fixture-provider:key": {
-          type: "api_key",
-          provider: "fixture-provider",
-          key: "sk-primary",
-        },
-        "fixture-provider:oauth": {
-          type: "oauth",
+        "fixture-provider:key": createApiKeyCredential("fixture-provider", "sk-primary"),
+        "fixture-provider:oauth": oauthCred({
           provider: "fixture-provider",
           access: "access-token",
           refresh: "refresh-token",
           expires: Date.now() + 60_000,
-        },
+        }),
       },
       order: {
         "fixture-provider": ["fixture-provider:deleted"],
@@ -356,20 +311,18 @@ describe("resolveAuthProfileOrder", () => {
   ])("prefers live OAuth before expired OAuth when %s", (_caseName, profileIds) => {
     const now = Date.now();
     const profiles: AuthProfileStore["profiles"] = {
-      "openai:expired": {
-        type: "oauth",
+      "openai:expired": oauthCred({
         provider: "openai",
         access: "expired-access",
         refresh: "expired-refresh",
         expires: now - 60_000,
-      },
-      "openai:valid": {
-        type: "oauth",
+      }),
+      "openai:valid": oauthCred({
         provider: "openai",
         access: "valid-access",
         refresh: "valid-refresh",
         expires: now + 60_000,
-      },
+      }),
     };
     const orderedProfiles: AuthProfileStore["profiles"] = {};
     for (const profileId of profileIds) {
@@ -399,20 +352,18 @@ describe("resolveAuthProfileOrder", () => {
     const store: AuthProfileStore = {
       version: 1,
       profiles: {
-        "openai:expired": {
-          type: "oauth",
+        "openai:expired": oauthCred({
           provider: "openai",
           access: "expired-access",
           refresh: "expired-refresh",
           expires: now - 60_000,
-        },
-        "openai:valid": {
-          type: "oauth",
+        }),
+        "openai:valid": oauthCred({
           provider: "openai",
           access: "valid-access",
           refresh: "valid-refresh",
           expires: now + 60_000,
-        },
+        }),
       },
       order: { openai: ["openai:expired", "openai:valid"] },
     };
@@ -427,11 +378,7 @@ describe("resolveAuthProfileOrder", () => {
     const store: AuthProfileStore = {
       version: 1,
       profiles: {
-        "fixture-provider:primary": {
-          type: "api_key",
-          provider: "fixture-provider",
-          key: "sk-primary",
-        },
+        "fixture-provider:primary": createApiKeyCredential("fixture-provider", "sk-primary"),
       },
     };
 
@@ -475,11 +422,7 @@ describe("resolveAuthProfileOrder", () => {
       store: {
         version: 1,
         profiles: {
-          "fixture-provider:primary": {
-            type: "api_key",
-            provider: "fixture-provider",
-            key: "sk-primary",
-          },
+          "fixture-provider:primary": createApiKeyCredential("fixture-provider", "sk-primary"),
         },
       },
       provider: "fixture-provider",
@@ -492,16 +435,8 @@ describe("resolveAuthProfileOrder", () => {
     const store: AuthProfileStore = {
       version: 1,
       profiles: {
-        "fixture-provider:primary": {
-          type: "api_key",
-          provider: "fixture-provider",
-          key: "sk-primary",
-        },
-        "fixture-provider:backup": {
-          type: "api_key",
-          provider: "fixture-provider",
-          key: "sk-backup",
-        },
+        "fixture-provider:primary": createApiKeyCredential("fixture-provider", "sk-primary"),
+        "fixture-provider:backup": createApiKeyCredential("fixture-provider", "sk-backup"),
       },
       usageStats: {
         "fixture-provider:primary": {
@@ -541,16 +476,8 @@ describe("resolveAuthProfileOrder", () => {
     const store: AuthProfileStore = {
       version: 1,
       profiles: {
-        "fixture-provider:primary": {
-          type: "api_key",
-          provider: "fixture-provider",
-          key: "placeholder",
-        },
-        "fixture-provider:backup": {
-          type: "api_key",
-          provider: "fixture-provider",
-          key: "placeholder",
-        },
+        "fixture-provider:primary": createApiKeyCredential("fixture-provider", "placeholder"),
+        "fixture-provider:backup": createApiKeyCredential("fixture-provider", "placeholder"),
       },
       usageStats: {
         "fixture-provider:primary": {
@@ -623,23 +550,14 @@ describe("resolveAuthProfileOrder", () => {
     const store: AuthProfileStore = {
       version: 1,
       profiles: {
-        "openai:personal": {
-          type: "oauth",
+        "openai:personal": oauthCred({
           provider: "openai",
           access: "access",
           refresh: "refresh",
           expires: Date.now() + 60_000,
-        },
-        "openai:backup": {
-          type: "api_key",
-          provider: "openai",
-          key: "sk-backup",
-        },
-        "openai:platform": {
-          type: "api_key",
-          provider: "openai",
-          key: "sk-platform",
-        },
+        }),
+        "openai:backup": createApiKeyCredential("openai", "sk-backup"),
+        "openai:platform": createApiKeyCredential("openai", "sk-platform"),
       },
     };
 
@@ -662,25 +580,19 @@ describe("resolveAuthProfileOrder", () => {
     const store: AuthProfileStore = {
       version: 1,
       profiles: {
-        "openai:personal": {
-          type: "oauth",
+        "openai:personal": oauthCred({
           provider: "openai",
           access: "access",
           refresh: "refresh",
           expires: Date.now() + 60_000,
-        },
-        "openai:backup": {
-          type: "api_key",
-          provider: "openai",
-          key: "sk-platform",
-        },
-        "openai:oauth": {
-          type: "oauth",
+        }),
+        "openai:backup": createApiKeyCredential("openai", "sk-platform"),
+        "openai:oauth": oauthCred({
           provider: "openai",
           access: "wrong-provider-access",
           refresh: "wrong-provider-refresh",
           expires: Date.now() + 60_000,
-        },
+        }),
       },
     };
 
@@ -696,13 +608,12 @@ describe("resolveAuthProfileOrder", () => {
     const store: AuthProfileStore = {
       version: 1,
       profiles: {
-        "openai:personal": {
-          type: "oauth",
+        "openai:personal": oauthCred({
           provider: "openai",
           access: "",
           refresh: "",
           expires: Date.now() + 60_000,
-        },
+        }),
       },
     };
 
@@ -718,18 +629,13 @@ describe("resolveAuthProfileOrder", () => {
     const store: AuthProfileStore = {
       version: 1,
       profiles: {
-        "openai:default": {
-          type: "api_key",
-          provider: "openai",
-          key: "sk-platform",
-        },
-        "openai:personal": {
-          type: "oauth",
+        "openai:default": createApiKeyCredential("openai", "sk-platform"),
+        "openai:personal": oauthCred({
           provider: "openai",
           access: "access",
           refresh: "refresh",
           expires: Date.now() + 60_000,
-        },
+        }),
       },
     };
 
@@ -752,18 +658,13 @@ describe("resolveAuthProfileOrder", () => {
     const store: AuthProfileStore = {
       version: 1,
       profiles: {
-        "openai:personal": {
-          type: "oauth",
+        "openai:personal": oauthCred({
           provider: "openai",
           access: "access",
           refresh: "refresh",
           expires: Date.now() + 60_000,
-        },
-        "openai:backup": {
-          type: "api_key",
-          provider: "openai",
-          key: "sk-platform",
-        },
+        }),
+        "openai:backup": createApiKeyCredential("openai", "sk-platform"),
       },
     };
 
@@ -786,13 +687,12 @@ describe("resolveAuthProfileOrder", () => {
     const store: AuthProfileStore = {
       version: 1,
       profiles: {
-        "openai:personal": {
-          type: "oauth",
+        "openai:personal": oauthCred({
           provider: "openai",
           access: "access",
           refresh: "refresh",
           expires: Date.now() + 60_000,
-        },
+        }),
       },
     };
 
@@ -815,18 +715,13 @@ describe("resolveAuthProfileOrder", () => {
     const store: AuthProfileStore = {
       version: 1,
       profiles: {
-        "openai:platform": {
-          type: "api_key",
-          provider: "openai",
-          key: "sk-platform",
-        },
-        "openai:work": {
-          type: "oauth",
+        "openai:platform": createApiKeyCredential("openai", "sk-platform"),
+        "openai:work": oauthCred({
           provider: "openai",
           access: "work-access",
           refresh: "work-refresh",
           expires: Date.now() + 60_000,
-        },
+        }),
       },
       order: {
         openai: ["openai:platform"],
@@ -854,13 +749,12 @@ describe("resolveAuthProfileOrder", () => {
       const store: AuthProfileStore = {
         version: 1,
         profiles: {
-          "fixture-provider:default": {
-            type: "oauth",
+          "fixture-provider:default": oauthCred({
             provider: "fixture-provider",
             access: "token",
             refresh: "refresh",
             expires: Date.now() + 60_000,
-          },
+          }),
         },
         usageStats: {
           "fixture-provider:default": {

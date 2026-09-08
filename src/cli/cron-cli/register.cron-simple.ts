@@ -15,6 +15,7 @@ import { addGatewayClientOptions, callGatewayFromCli } from "../gateway-rpc.js";
 import { exitCliAfterOutput } from "../one-shot-exit.js";
 import { parseDurationMs } from "../parse-duration.js";
 import { parseTimeoutMs } from "../parse-timeout.js";
+import { CronCliError } from "./cron-cli-error.js";
 import { findCronJobByIdOrName } from "./list-jobs.js";
 import { createCronOutputCommand } from "./output-mode.js";
 import {
@@ -23,6 +24,7 @@ import {
   handleCronCliError,
   printCronJson,
   printCronShow,
+  requireCronJobId,
   warnIfCronSchedulerDisabled,
 } from "./shared.js";
 
@@ -36,22 +38,27 @@ type CronRunCommandResult = {
   runId?: string;
 };
 
-function parseCronRunWaitDuration(raw: unknown, label: string): number {
+function parseCronRunWaitDuration(raw: unknown): number {
   const input =
     typeof raw === "string" || typeof raw === "number" || typeof raw === "bigint"
       ? String(raw)
       : "";
-  const durationMs = parseDurationMs(input, { defaultUnit: "ms" });
-  if (!Number.isFinite(durationMs) || durationMs < 0) {
-    throw new Error(`invalid ${label}`);
+  let durationMs: number;
+  try {
+    durationMs = parseDurationMs(input, { defaultUnit: "ms" });
+  } catch (error) {
+    if (error instanceof Error) {
+      throw new CronCliError(error);
+    }
+    throw error;
   }
   return resolveTimerTimeoutMs(durationMs, 0, 0);
 }
 
 function parseCronRunPollInterval(raw: unknown): number {
-  const durationMs = parseCronRunWaitDuration(raw, "--poll-interval");
+  const durationMs = parseCronRunWaitDuration(raw);
   if (durationMs <= 0) {
-    throw new Error("invalid --poll-interval");
+    throw new CronCliError("invalid --poll-interval");
   }
   return resolvePositiveTimerTimeoutMs(durationMs, 2_000);
 }
@@ -69,7 +76,7 @@ async function waitForCronRunCompletion(params: {
   for (;;) {
     const elapsedBeforePollMs = Math.floor(performance.now() - startedAt);
     if (hasPolled && elapsedBeforePollMs >= params.timeoutMs) {
-      throw new Error(`timed out waiting for cron run ${params.runId}`);
+      throw new CronCliError(`timed out waiting for cron run ${params.runId}`);
     }
     const remainingMs = Math.max(1, params.timeoutMs - elapsedBeforePollMs);
     const configuredTimeoutMs = parseTimeoutMs(params.opts.timeout);
@@ -90,7 +97,7 @@ async function waitForCronRunCompletion(params: {
     }
     const elapsedMs = Math.floor(performance.now() - startedAt);
     if (elapsedMs >= params.timeoutMs) {
-      throw new Error(`timed out waiting for cron run ${params.runId}`);
+      throw new CronCliError(`timed out waiting for cron run ${params.runId}`);
     }
     await sleep(Math.min(params.pollIntervalMs, params.timeoutMs - elapsedMs));
   }
@@ -109,7 +116,7 @@ function registerCronToggleCommand(params: {
       .action(async (id, opts) => {
         try {
           const res = await callGatewayFromCli("cron.update", opts, {
-            id,
+            id: requireCronJobId(id),
             patch: { enabled: params.enabled },
           });
           printCronJson(res);
@@ -133,7 +140,7 @@ export function registerCronSimpleCommands(cron: Command) {
       .argument("<id>", "Job id")
       .action(async (id, opts) => {
         try {
-          const res = await callGatewayFromCli("cron.remove", opts, { id });
+          const res = await callGatewayFromCli("cron.remove", opts, { id: requireCronJobId(id) });
           printCronJson(res);
         } catch (err) {
           handleCronCliError(err);
@@ -160,7 +167,7 @@ export function registerCronSimpleCommands(cron: Command) {
       .argument("<id>", "Job id")
       .action(async (id, opts) => {
         try {
-          const res = await callGatewayFromCli("cron.get", opts, { id: String(id) });
+          const res = await callGatewayFromCli("cron.get", opts, { id: requireCronJobId(id) });
           printCronJson(res);
         } catch (err) {
           handleCronCliError(err);
@@ -174,13 +181,14 @@ export function registerCronSimpleCommands(cron: Command) {
       .description("Show an automation")
       .argument("<id>", "Job id or exact name")
       .option("--json", "Output JSON", false)
-      .action(async (id, opts) => {
+      .action(async (idArg, opts) => {
         try {
-          const { job, deliveryPreview } = await findCronJobByIdOrName(opts, String(id), {
+          const id = requireCronJobId(idArg);
+          const { job, deliveryPreview } = await findCronJobByIdOrName(opts, id, {
             includeDeliveryPreview: !opts.json,
           });
           if (!job) {
-            throw new Error(formatCronLookupMiss(String(id)));
+            throw new CronCliError(formatCronLookupMiss(id));
           }
           if (opts.json) {
             printCronJson(enrichCronJsonWithStatus(job));
@@ -205,18 +213,17 @@ export function registerCronSimpleCommands(cron: Command) {
           const argId = normalizeOptionalString(idArg);
           const flagId = normalizeOptionalString(opts.id);
           if (argId && flagId && argId !== flagId) {
-            throw new Error(`Conflicting job ids: positional "${argId}" and --id "${flagId}".`);
+            throw new CronCliError(
+              `Conflicting job ids: positional "${argId}" and --id "${flagId}".`,
+            );
           }
-          const id = argId ?? flagId;
-          if (!id) {
-            throw new Error("Missing job id. Pass it positionally or with --id.");
-          }
+          const id = requireCronJobId(argId ?? flagId, "Pass it positionally or with --id.");
           const limit = parseStrictPositiveInteger(opts.limit ?? "50");
           if (limit === undefined) {
-            throw new Error("Invalid --limit (must be a positive integer).");
+            throw new CronCliError("Invalid --limit (must be a positive integer).");
           }
           if (typeof opts.runId === "string" && !opts.runId.trim()) {
-            throw new Error("--run-id must not be blank");
+            throw new CronCliError("--run-id must not be blank");
           }
           const res = await callGatewayFromCli("cron.runs", opts, {
             id,
@@ -246,12 +253,13 @@ export function registerCronSimpleCommands(cron: Command) {
         "Polling interval for --wait",
         CRON_RUN_WAIT_POLL_INTERVAL_DEFAULT,
       )
-      .action(async (id, opts, command) => {
+      .action(async (idArg, opts, command) => {
         try {
+          const id = requireCronJobId(idArg);
           let waitTimeoutMs = 0;
           let pollIntervalMs = 0;
           if (opts.wait) {
-            waitTimeoutMs = parseCronRunWaitDuration(opts.waitTimeout, "--wait-timeout");
+            waitTimeoutMs = parseCronRunWaitDuration(opts.waitTimeout);
             pollIntervalMs = parseCronRunPollInterval(opts.pollInterval);
           }
           if (command.getOptionValueSource("timeout") === "default") {
@@ -268,7 +276,7 @@ export function registerCronSimpleCommands(cron: Command) {
             }
             const run = await waitForCronRunCompletion({
               opts,
-              jobId: String(id),
+              jobId: id,
               runId: result.runId,
               timeoutMs: waitTimeoutMs,
               pollIntervalMs,

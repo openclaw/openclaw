@@ -74,6 +74,35 @@ describe("chat-model-ref helpers", () => {
     },
   );
 
+  it.each([
+    {
+      names: ["Lowercase model", "Uppercase model"],
+      labels: ["Lowercase model", "Uppercase model"],
+    },
+    {
+      names: ["Shared name", "Shared name"],
+      labels: ["Shared name · model-a · custom", "Shared name · Model-A · custom"],
+    },
+  ] as const)(
+    "keeps case-distinct catalog display identities with names $names",
+    ({ names, labels }) => {
+      const entries = [
+        { id: "model-a", name: names[0], provider: "custom" },
+        { id: "Model-A", name: names[1], provider: "custom" },
+      ];
+      const lookup = buildCatalogDisplayLookup(entries);
+
+      expect(entries.map((entry) => buildChatModelOptionFromLookup(entry, lookup))).toEqual([
+        { value: "custom/model-a", label: labels[0] },
+        { value: "custom/Model-A", label: labels[1] },
+      ]);
+      expect(formatCatalogChatModelDisplayFromLookup("CUSTOM/Model-A", lookup)).toBe(labels[1]);
+      expect(formatCatalogChatModelDisplayFromLookup("custom/MODEL-A", lookup)).toBe(
+        "MODEL-A · custom",
+      );
+    },
+  );
+
   it("normalizes raw overrides when the catalog match is unique", () => {
     expect(normalizeChatModelOverrideValue("gpt-5-mini", catalog)).toBe("openai/gpt-5-mini");
   });

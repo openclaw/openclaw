@@ -40,6 +40,17 @@ function selectFrozenUpgradeOracle(
     'throw new Error("selected oracle has no serving-turn command");\n',
   );
   writeFileSync(join(selectedScenario, "run.sh"), "# selected scenario runner\n");
+  for (const path of [
+    "scripts/lib/npm-publish-plan.mjs",
+    "scripts/windows-cmd-helpers.mjs",
+    "scripts/lib/bounded-response.mjs",
+    "scripts/e2e/lib/plugin-index-sqlite.mjs",
+    "scripts/e2e/lib/env-limits.mjs",
+    "scripts/e2e/lib/text-file-utils.mjs",
+  ]) {
+    mkdirSync(join(selectedRoot, path, ".."), { recursive: true });
+    writeFileSync(join(selectedRoot, path), "// selected release helper\n");
+  }
   const git = (...args: string[]) =>
     execFileSync("git", ["-C", selectedRoot, ...args], { encoding: "utf8" }).trim();
   git("init", "--quiet");
@@ -1003,7 +1014,30 @@ describe("upgrade survivor assertions", () => {
         );
         expect(proof.mounts).toEqual(
           selected
-            ? ["-v", `${proof.selectedScenario}:/app/scripts/e2e/lib/upgrade-survivor:ro`]
+            ? [
+                "-v",
+                `${proof.selectedScenario}:/app/scripts/e2e/lib/upgrade-survivor:ro`,
+                "-v",
+                expect.stringMatching(
+                  /npm-publish-plan\.mjs:\/app\/scripts\/lib\/npm-publish-plan\.mjs:ro$/u,
+                ),
+                "-v",
+                expect.stringMatching(
+                  /bounded-response\.mjs:\/app\/scripts\/lib\/bounded-response\.mjs:ro$/u,
+                ),
+                "-v",
+                expect.stringMatching(
+                  /plugin-index-sqlite\.mjs:\/app\/scripts\/e2e\/lib\/plugin-index-sqlite\.mjs:ro$/u,
+                ),
+                "-v",
+                expect.stringMatching(
+                  /env-limits\.mjs:\/app\/scripts\/e2e\/lib\/env-limits\.mjs:ro$/u,
+                ),
+                "-v",
+                expect.stringMatching(
+                  /text-file-utils\.mjs:\/app\/scripts\/e2e\/lib\/text-file-utils\.mjs:ro$/u,
+                ),
+              ]
             : [],
         );
       } finally {

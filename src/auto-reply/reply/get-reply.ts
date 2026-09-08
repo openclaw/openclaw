@@ -149,7 +149,7 @@ async function applyMediaUnderstandingIfNeeded(params: {
   agentDir?: string;
   workspaceDir?: string;
   activeModel: { provider: string; model: string };
-  processingMode?: "audio-only";
+  processingMode?: "audio-only" | "files-only" | "audio-and-files";
   selfServeLocalPaths?: boolean;
 }): Promise<ApplyMediaUnderstandingResult | undefined> {
   if (!hasInboundMediaForUnderstanding(params.ctx)) {
@@ -587,28 +587,32 @@ export async function getReplyFromConfig(
       utilityModelSelectionLocked &&
       hasInboundAudio(finalized) &&
       hasExplicitAudioUnderstandingConfig(cfg);
-    // Native harnesses own image, video, and file interpretation. They cannot
-    // transcribe audio, so an explicitly configured STT pipeline still runs alone.
-    if (!utilityModelSelectionLocked || shouldApplyLockedAudio) {
-      const mediaResult = await traceGetReplyPhase("reply.apply_media_understanding", () =>
-        applyMediaUnderstandingIfNeeded({
-          ctx: finalized,
-          cfg,
-          agentId,
-          agentDir,
-          workspaceDir,
-          activeModel: { provider, model },
-          // Cache and classify now; the final provider and owner policy are
-          // resolved later, immediately before the embedded turn starts.
-          selfServeLocalPaths: false,
-          ...(shouldApplyLockedAudio ? { processingMode: "audio-only" as const } : {}),
-        }),
-      );
-      if (mediaResult?.extractedFileImages.length) {
-        extractedFileImages = mediaResult.extractedFileImages;
-      }
-      enableLocalPathSelfServe = mediaResult?.enableLocalPathSelfServe;
+    // Native harnesses receive images directly, but generic file attachments
+    // still need host extraction. Only explicitly configured STT runs when locked.
+    const mediaResult = await traceGetReplyPhase("reply.apply_media_understanding", () =>
+      applyMediaUnderstandingIfNeeded({
+        ctx: finalized,
+        cfg,
+        agentId,
+        agentDir,
+        workspaceDir,
+        activeModel: { provider, model },
+        // Cache and classify now; the final provider and owner policy are
+        // resolved later, immediately before the embedded turn starts.
+        selfServeLocalPaths: false,
+        ...(utilityModelSelectionLocked
+          ? {
+              processingMode: shouldApplyLockedAudio
+                ? ("audio-and-files" as const)
+                : ("files-only" as const),
+            }
+          : {}),
+      }),
+    );
+    if (mediaResult?.extractedFileImages.length) {
+      extractedFileImages = mediaResult.extractedFileImages;
     }
+    enableLocalPathSelfServe = mediaResult?.enableLocalPathSelfServe;
   }
   if (linkUnderstandingRequested && !utilityModelSelectionLocked) {
     await traceGetReplyPhase("reply.apply_link_understanding", () =>

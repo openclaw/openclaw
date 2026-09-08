@@ -3,7 +3,9 @@ import { SIDEBAR_SESSION_ROSTER_LIMIT } from "../../../../src/shared/session-lis
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SessionsListResult } from "../../api/types.ts";
+import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import {
+  createGatewayHarness,
   createSessionCapabilityHarness,
   createTestSessionCapability,
   sessionsResult,
@@ -70,6 +72,96 @@ function sessionHarness(request: unknown) {
 }
 
 describe("session list requests", () => {
+  it("clears serialized start timing tombstones while the next roster read is pending", async () => {
+    vi.useFakeTimers();
+    const child = {
+      key: "agent:main:timing-child",
+      sessionId: "timing-child-session",
+      spawnedBy: "agent:main:timing-parent",
+      kind: "direct" as const,
+      label: "Keep this child title",
+      status: "done" as const,
+      hasActiveRun: false,
+      activeRunIds: [],
+      updatedAt: 121_000,
+      startedAt: 1_000,
+      endedAt: 121_000,
+      runtimeMs: 120_000,
+    };
+    const sibling = {
+      ...child,
+      key: "agent:main:timing-sibling",
+      sessionId: "timing-sibling-session",
+    };
+    const initial = sessionsResult([child, sibling], 121_000);
+    const nextList = createDeferred<SessionsListResult>();
+    let listCalls = 0;
+    const request = vi.fn(async (method: string): Promise<SessionsListResult> => {
+      if (method !== "sessions.list") {
+        throw new Error(`Unexpected request: ${method}`);
+      }
+      listCalls += 1;
+      return listCalls === 1 ? initial : nextList.promise;
+    });
+    const { gateway, emitEvent } = createGatewayHarness(createTestGatewayClient(request));
+    const sessions = createTestSessionCapability(gateway);
+
+    try {
+      await sessions.refresh({ agentId: "main", force: true });
+      const wire = JSON.stringify({
+        sessionKey: child.key,
+        agentId: "main",
+        phase: "start",
+        runId: "run-b",
+        ts: 200_000,
+        session: {
+          key: child.key,
+          sessionId: child.sessionId,
+          kind: "direct",
+          archived: false,
+          updatedAt: 200_000,
+          startedAt: 200_000,
+          endedAt: null,
+          runtimeMs: null,
+          status: "running",
+          hasActiveRun: true,
+          activeRunIds: ["run-b"],
+        },
+      });
+      const payload: unknown = JSON.parse(wire);
+      emitEvent({ type: "event", event: "sessions.changed", payload });
+      await vi.advanceTimersByTimeAsync(SESSION_EVENT_REFRESH_DEBOUNCE_MS);
+
+      expect(request).toHaveBeenCalledTimes(2);
+      const current = sessions.state.result?.sessions.find((row) => row.key === child.key);
+      expect(current).toMatchObject({
+        key: child.key,
+        sessionId: child.sessionId,
+        spawnedBy: child.spawnedBy,
+        label: child.label,
+        updatedAt: 200_000,
+        startedAt: 200_000,
+        status: "running",
+        hasActiveRun: true,
+        activeRunIds: ["run-b"],
+      });
+      expect(current?.endedAt).toBeUndefined();
+      expect(current?.runtimeMs).toBeUndefined();
+      expect(sessions.state.result?.sessions.map((row) => row.key)).toEqual([
+        child.key,
+        sibling.key,
+      ]);
+      expect(sessions.state.result?.sessions.find((row) => row.key === sibling.key)).toEqual(
+        sibling,
+      );
+    } finally {
+      sessions.dispose();
+      nextList.resolve(initial);
+      await vi.advanceTimersByTimeAsync(0);
+      vi.useRealTimers();
+    }
+  });
+
   it("keeps an observed active query independent and retires its disposed handle", async () => {
     const pending = createDeferred<SessionsListResult>();
     let holdRefresh = false;

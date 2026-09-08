@@ -377,13 +377,21 @@ vi.mock("../../agents/agent-scope.js", () => ({
 }));
 
 vi.mock("../../agents/prepared-model-catalog.js", () => {
-  const loadModelCatalog = vi.fn(async () => [
+  const entries = [
     { provider: "anthropic", id: "claude-opus-4-6", name: "Claude Opus" },
     { provider: "localai", id: "ultra-chat", name: "Ultra Chat" },
-  ]);
+  ];
+  const loadModelCatalog = vi.fn(async () => entries);
   return {
     loadPreparedModelCatalog: loadModelCatalog,
     loadProviderScopedThinkingCatalog: loadModelCatalog,
+    getPublishedPreparedModelCatalogOwnerSnapshot: (params: { config: OpenClawConfig }) => ({
+      config: params.config,
+      modelCatalog: { entries, routeVariants: entries },
+      authModes: {},
+      isCurrent: () => true,
+    }),
+    materializePreparedModelCatalogOwner: (owner: object) => owner,
     withPreparedModelCatalogOwner: async (
       _params: unknown,
       read: (owner: {
@@ -392,9 +400,9 @@ vi.mock("../../agents/prepared-model-catalog.js", () => {
         isCurrent: () => boolean;
       }) => unknown,
     ) => {
-      const entries = await loadModelCatalog();
+      const catalog = await loadModelCatalog();
       return read({
-        modelCatalog: { entries, routeVariants: entries },
+        modelCatalog: { entries: catalog, routeVariants: catalog },
         authModes: {},
         isCurrent: () => true,
       });
