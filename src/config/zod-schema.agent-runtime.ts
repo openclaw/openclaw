@@ -29,6 +29,7 @@ import { MemorySearchSchema } from "./zod-schema.memory-search.js";
 import {
   SandboxBrowserSchema,
   SandboxDockerSchema,
+  SandboxEnvironmentSchema,
   SandboxPruneSchema,
 } from "./zod-schema.sandbox.js";
 import { sensitive } from "./zod-schema.sensitive.js";
@@ -597,6 +598,7 @@ export const AgentSandboxSchema = z
     sessionToolsVisibility: z.union([z.literal("spawned"), z.literal("all")]).optional(),
     scope: z.union([z.literal("session"), z.literal("agent"), z.literal("shared")]).optional(),
     workspaceRoot: z.string().optional(),
+    environment: SandboxEnvironmentSchema,
     docker: SandboxDockerSchema,
     ssh: SandboxSshSchema,
     browser: SandboxBrowserSchema,

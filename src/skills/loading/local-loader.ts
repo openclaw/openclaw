@@ -92,32 +92,47 @@ export function loadSingleSkillDirectory(params: {
     return null;
   }
 
+  return parseSkillContent({
+    filePath: path.resolve(skillFilePath),
+    content: raw,
+    source: params.source,
+    onDiagnostic: params.onDiagnostic,
+  });
+}
+
+/** Parse local or executor-owned text through the same Agent Skills contract. */
+export function parseSkillContent(params: {
+  filePath: string;
+  content: string;
+  source: string;
+  onDiagnostic?: (diagnostic: LocalSkillLoadDiagnostic) => void;
+}): LoadedLocalSkill | null {
   let frontmatter: Record<string, string>;
   try {
-    frontmatter = parseSkillFrontmatter(raw);
+    frontmatter = parseSkillFrontmatter(params.content);
   } catch (error) {
     const message = error instanceof Error ? error.message : "failed to parse skill frontmatter";
-    params.onDiagnostic?.({ kind: "invalid", path: skillFilePath, message });
+    params.onDiagnostic?.({ kind: "invalid", path: params.filePath, message });
     return null;
   }
 
-  const fallbackName = path.basename(params.skillDir).trim();
+  const fallbackName = path.basename(path.dirname(params.filePath)).trim();
   const name = frontmatter.name?.trim() || fallbackName;
   const description = frontmatter.description?.trim();
   if (!name || !description) {
     params.onDiagnostic?.({
       kind: "invalid",
-      path: skillFilePath,
+      path: params.filePath,
       message: !name ? "name is required" : "description is required",
     });
     return null;
   }
-  const filePath = path.resolve(skillFilePath);
-  const baseDir = path.resolve(params.skillDir);
+  const filePath = params.filePath;
+  const baseDir = path.dirname(filePath);
 
   return {
     skill: materializeSkill({
-      content: raw,
+      content: params.content,
       frontmatter,
       name,
       description,
@@ -127,7 +142,7 @@ export function loadSingleSkillDirectory(params: {
       sourceOptions: { source: params.source, scope: "project", origin: "top-level" },
     }),
     frontmatter,
-    content: raw,
+    content: params.content,
   };
 }
 
