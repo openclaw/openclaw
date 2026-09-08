@@ -4,6 +4,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { describe, expect, it } from "vitest";
 import { validateAnthropicTurns, validateGeminiTurns } from "./embedded-agent-helpers.js";
+import { textToolResult } from "./test-helpers/sparse-transcript.test-support.js";
 
 function asMessages(messages: unknown[]): AgentMessage[] {
   return messages as AgentMessage[];
@@ -693,13 +694,7 @@ describe("validateAnthropicTurns strips dangling tool_use blocks", () => {
         role: "assistant",
         content: makeSignedThinkingGatewayToolCall("tool-1"),
       },
-      {
-        role: "toolResult",
-        toolCallId: "tool-1",
-        toolName: "gateway",
-        content: [{ type: "text", text: "ok" }],
-        isError: false,
-      },
+      textToolResult("tool-1", "gateway", "ok", { isError: false }),
       { role: "user", content: [{ type: "text", text: "Continue" }] },
     ]);
 
@@ -782,13 +777,7 @@ describe("validateAnthropicTurns strips dangling tool_use blocks", () => {
         role: "assistant",
         content: makeSignedThinkingGatewayToolCall("tool-1"),
       },
-      {
-        role: "toolResult",
-        toolCallId: "tool-1",
-        toolName: "exec",
-        content: [{ type: "text", text: "wrong tool" }],
-        isError: false,
-      },
+      textToolResult("tool-1", "exec", "wrong tool", { isError: false }),
       { role: "user", content: [{ type: "text", text: "Continue" }] },
     ]);
 

@@ -25,6 +25,7 @@ import { runAgentHarnessBeforeMessageWriteHook } from "./harness/hook-helpers.js
 import { guardSessionManager } from "./session-tool-result-guard-wrapper.js";
 import { sanitizeToolUseResultPairing } from "./session-transcript-repair.js";
 import { makeAgentAssistantMessage } from "./test-helpers/agent-message-fixtures.js";
+import { textToolResult } from "./test-helpers/sparse-transcript.test-support.js";
 
 function assistantToolCall(id: string): AgentMessage {
   return {
@@ -84,13 +85,7 @@ describe("guardSessionManager integration", () => {
       model: "delivery-mirror",
       content: [{ type: "text", text: "display copy" }],
     } as AgentMessage);
-    appendMessage({
-      role: "toolResult",
-      toolCallId: "call_1",
-      toolName: "n",
-      content: [{ type: "text", text: "real output" }],
-      isError: false,
-    } as AgentMessage);
+    appendMessage(textToolResult("call_1", "n", "real output", { isError: false }) as AgentMessage);
 
     const messages = getMessages(sm);
 
@@ -515,13 +510,9 @@ describe("guardSessionManager integration", () => {
       ],
       stopReason: "toolUse",
     } as AgentMessage);
-    appendMessage({
-      role: "toolResult",
-      toolCallId: "call_1",
-      toolName: "read",
-      content: [{ type: "text", text: "peter@dc.io\n" }],
-      isError: false,
-    } as AgentMessage);
+    appendMessage(
+      textToolResult("call_1", "read", "peter@dc.io\n", { isError: false }) as AgentMessage,
+    );
 
     const messages = getMessages(sm);
 

@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { parseSessionEntries, SessionManager } from "../sessions/index.js";
+import { textToolResult } from "../test-helpers/sparse-transcript.test-support.js";
 
 const roots: string[] = [];
 
@@ -260,13 +261,7 @@ describe("readTranscriptState", () => {
         id: "tool-result",
         parentId: "assistant-tool",
         timestamp: "2026-05-16T00:00:03.000Z",
-        message: {
-          role: "toolResult",
-          toolCallId: "call-input",
-          toolName: "read",
-          content: [{ type: "text", text: "contents" }],
-          isError: false,
-        },
+        message: textToolResult("call-input", "read", "contents", { isError: false }),
       }),
     ]);
 

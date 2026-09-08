@@ -2,6 +2,7 @@
 
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { describe, expect, it, vi } from "vitest";
+import { textToolResult } from "../../test-helpers/sparse-transcript.test-support.js";
 import {
   sanitizeOpenAIResponsesReplayForStream,
   sanitizeReplayToolCallIdsForStream,
@@ -644,13 +645,7 @@ describe("sanitizeOpenAIResponsesReplayForStream", () => {
           { type: "toolCall", id: "call_123|fc_123", name: "noop", arguments: {} },
         ],
       } as never,
-      {
-        role: "toolResult",
-        toolCallId: "call_123|fc_123",
-        toolName: "noop",
-        content: [{ type: "text", text: "ok" }],
-        isError: false,
-      } as never,
+      textToolResult("call_123|fc_123", "noop", "ok", { isError: false }) as never,
     ];
 
     expect(sanitizeOpenAIResponsesReplayForStream(messages)).toBe(messages);
@@ -674,13 +669,12 @@ describe("sanitizeOpenAIResponsesReplayForStream", () => {
           },
         ],
       } as never,
-      {
-        role: "toolResult",
-        toolCallId: "call_mock_image_generate_1",
-        toolName: "image_generate",
-        content: [{ type: "text", text: "Background task started for image generation." }],
-        isError: false,
-      } as never,
+      textToolResult(
+        "call_mock_image_generate_1",
+        "image_generate",
+        "Background task started for image generation.",
+        { isError: false },
+      ) as never,
       {
         role: "custom",
         content: "Image generation started; wait for completion.",

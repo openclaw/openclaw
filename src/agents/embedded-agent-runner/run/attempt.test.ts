@@ -1,6 +1,7 @@
 // Broad helper coverage for runEmbeddedAttempt prompt, stream, and tool seams.
 import { describe, expect, it, vi } from "vitest";
 import { streamSimple } from "../../../llm/stream.js";
+import { textToolResult } from "../../test-helpers/sparse-transcript.test-support.js";
 
 vi.mock("../context-engine-capabilities.js", () => ({
   resolveContextEngineCapabilities: async () => ({ llm: undefined }),
@@ -1926,12 +1927,7 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
       role: "assistant",
       content: [{ type: "toolCall", id: "call_1", name: "read", arguments: {} }],
     };
-    const firstResult = {
-      role: "toolResult",
-      toolCallId: "call_1",
-      toolName: "read",
-      content: [{ type: "text", text: "mutable result" }],
-    };
+    const firstResult = textToolResult("call_1", "read", "mutable result");
     const userMessage = {
       role: "user",
       content: [{ type: "text", text: "retry" }],
@@ -2104,12 +2100,7 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
           },
         ],
       },
-      {
-        role: "toolResult",
-        toolCallId: "call_1",
-        toolName: "sessions_spawn",
-        content: [{ type: "text", text: "done" }],
-      },
+      textToolResult("call_1", "sessions_spawn", "done"),
       {
         role: "user",
         content: [{ type: "text", text: "retry" }],
@@ -2379,13 +2370,7 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
         role: "assistant",
         content: [{ type: "toolCall", id: "call_1", name: "   ", arguments: {} }],
       },
-      {
-        role: "toolResult",
-        toolCallId: "call_1",
-        toolName: "",
-        content: [{ type: "text", text: "stale result" }],
-        isError: true,
-      },
+      textToolResult("call_1", "", "stale result", { isError: true }),
     ];
     const baseFn = vi.fn((_model, _context) =>
       createFakeStream({ events: [], resultMessage: { role: "assistant", content: [] } }),
@@ -2433,13 +2418,7 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
         content: [{ type: "toolCall", name: "read", arguments: {} }],
         stopReason: "error",
       },
-      {
-        role: "toolResult",
-        toolCallId: "call_missing",
-        toolName: "read",
-        content: [{ type: "text", text: "stale result" }],
-        isError: false,
-      },
+      textToolResult("call_missing", "read", "stale result", { isError: false }),
       {
         role: "user",
         content: [{ type: "text", text: "retry" }],
@@ -2473,13 +2452,7 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
         role: "assistant",
         content: [{ type: "toolCall", id: "call_1", name: "write", arguments: {} }],
       },
-      {
-        role: "toolResult",
-        toolCallId: "call_1",
-        toolName: "write",
-        content: [{ type: "text", text: "stale result" }],
-        isError: false,
-      },
+      textToolResult("call_1", "write", "stale result", { isError: false }),
       {
         role: "user",
         content: [{ type: "text", text: "retry" }],
@@ -2512,13 +2485,7 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
         role: "assistant",
         content: [{ type: "toolUse", id: "call_1", name: "unknown_tool", input: { path: "." } }],
       },
-      {
-        role: "toolResult",
-        toolCallId: "call_1",
-        toolName: "unknown_tool",
-        content: [{ type: "text", text: "stale result" }],
-        isError: false,
-      },
+      textToolResult("call_1", "unknown_tool", "stale result", { isError: false }),
     ];
     const baseFn = vi.fn((_model, _context) =>
       createFakeStream({ events: [], resultMessage: { role: "assistant", content: [] } }),
@@ -2570,13 +2537,7 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
           { type: "toolCall", name: "read", arguments: {} },
         ],
       },
-      {
-        role: "toolResult",
-        toolCallId: "call_1",
-        toolName: "read",
-        content: [{ type: "text", text: "kept result" }],
-        isError: false,
-      },
+      textToolResult("call_1", "read", "kept result", { isError: false }),
       {
         role: "user",
         content: [{ type: "text", text: "retry" }],
