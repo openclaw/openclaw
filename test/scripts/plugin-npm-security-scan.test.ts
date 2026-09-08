@@ -415,6 +415,67 @@ describe("scripts/lib/plugin-npm-security-scan.mts", () => {
     },
   );
 
+  it.each([null, 0, 1, 2])(
+    "freezes release doctor-test counts while reviewing the current fixture: %s",
+    async (count) => {
+      const packageName = "@openclaw/codex";
+      const fixturePath = "src/doctor.test.ts";
+      const fixtureKey = `${packageName}:dangerous-exec:${fixturePath}`;
+      const spawnProbe =
+        'import { spawn } from "node:child_process";\nspawn(process.execPath, []);\n';
+      for (const context of ["", "release/2026.9.1", "release/2026.9.2", "release/2026.9.3"]) {
+        const requiresLegacyDoctor =
+          context === "release/2026.9.1" || context === "release/2026.9.2";
+        const artifact = writePluginArtifact({
+          extensionId: "codex",
+          packageName,
+          files: {
+            "src/app-server/transport-stdio.ts": spawnProbe,
+            "src/app-server/sandbox-exec-server/sandbox-child.ts": spawnProbe,
+            "src/app-server/transport-process-snapshot.ts": spawnProbe,
+            ...(requiresLegacyDoctor ? { "src/doctor.ts": spawnProbe } : {}),
+            ...(count === null
+              ? {}
+              : {
+                  [fixturePath]:
+                    'import { spawn } from "node:child_process";\n' +
+                    "spawn(process.execPath, []);\n".repeat(count),
+                }),
+          },
+        });
+        const scanned = await scanPublishablePluginPackages([artifact.artifact], context);
+        expect(scanned.scanErrors).toEqual([]);
+        const result = scanned.packageResults[0]!;
+        const current = context === "";
+        expect(
+          result.expectedReviewedCriticalFindings.filter((finding) => finding === fixtureKey),
+          context,
+        ).toEqual(current && count !== null ? [fixtureKey] : []);
+        expect(
+          result.reviewedCriticalFindings.filter((finding) => finding === fixtureKey),
+          context,
+        ).toEqual(current ? Array.from({ length: count ?? 0 }, () => fixtureKey) : []);
+        expect(
+          result.unexpectedCriticalFindings.filter((finding) => finding.path === fixturePath),
+          context,
+        ).toHaveLength(current ? 0 : (count ?? 0));
+
+        const report = buildPluginNpmSecurityScanReport({
+          candidateSha: CANDIDATE_SHA,
+          packageResults: scanned.packageResults,
+          targetContextRef: context,
+          toolingSha: TOOLING_SHA,
+        });
+        expect(
+          report.errors.filter((error) => error.startsWith(`${packageName}:`)),
+          context,
+        ).toHaveLength(
+          current ? (count === null || count === 1 ? 0 : 1) : count === null || count === 0 ? 0 : 1,
+        );
+      }
+    },
+  );
+
   it.each([1, 2])(
     "reviews exactly one current hardware probe, preserving frozen policy: %s",
     async (count) => {
