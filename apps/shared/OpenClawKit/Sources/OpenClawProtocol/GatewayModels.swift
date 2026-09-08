@@ -22378,26 +22378,32 @@ public struct PluginsInspectResult: Codable, Sendable {
     public let plugin: [String: AnyCodable]
     public let source: PluginInspectSource?
     public let declared: PluginDeclaredSurface
+    public let components: [String: AnyCodable]
     public let reviewtoken: String
     public let grants: PluginOperatorGrants
     public let trust: PluginInstallTrust?
+    public let catalog: PluginsCatalogGetResult?
 
     public init(
         ok: Bool,
         plugin: [String: AnyCodable],
         source: PluginInspectSource? = nil,
         declared: PluginDeclaredSurface,
+        components: [String: AnyCodable],
         reviewtoken: String,
         grants: PluginOperatorGrants,
-        trust: PluginInstallTrust? = nil)
+        trust: PluginInstallTrust? = nil,
+        catalog: PluginsCatalogGetResult? = nil)
     {
         self.ok = ok
         self.plugin = plugin
         self.source = source
         self.declared = declared
+        self.components = components
         self.reviewtoken = reviewtoken
         self.grants = grants
         self.trust = trust
+        self.catalog = catalog
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -22405,9 +22411,11 @@ public struct PluginsInspectResult: Codable, Sendable {
         case plugin
         case source
         case declared
+        case components
         case reviewtoken = "reviewToken"
         case grants
         case trust
+        case catalog
     }
 }
 

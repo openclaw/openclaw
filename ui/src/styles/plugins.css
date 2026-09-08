@@ -1991,6 +1991,37 @@ h3.plugins-subheader {
   gap: var(--space-8);
 }
 
+.plugin-catalog-detail--no-sidebar .plugin-catalog-detail__hero {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.plugin-installed-detail__configuration-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.plugin-installed-detail__setup-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--warn);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--warn) 15%, transparent);
+}
+
+.plugin-installed-detail__panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
+.plugin-installed-detail__panel-head p {
+  margin: 0;
+  color: var(--muted);
+}
+
 .plugin-catalog-detail__hero main {
   min-width: 0;
 }

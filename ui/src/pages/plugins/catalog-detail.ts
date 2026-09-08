@@ -1,6 +1,5 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
-import { renderHubTabs } from "../../components/hub-tabs.ts";
 import { icons } from "../../components/icons.ts";
 import { toSanitizedMarkdownHtml } from "../../components/markdown.ts";
 import { renderReasonedDisabledControl } from "../../components/reasoned-disabled-control.ts";
@@ -12,6 +11,7 @@ import type { PluginDiscoveryDetailResult } from "../../lib/plugins/index.ts";
 import "../../styles/sidebar-markdown.css";
 import { clawHubPackageUrl } from "./catalog-links.ts";
 import { formatCompactCount } from "./catalog-results.ts";
+import { renderPluginDetailShell } from "./detail-shell.ts";
 import { renderPluginAuthor, renderPluginOfficialBadge } from "./plugin-card.ts";
 
 export type PluginCatalogDetailTab =
@@ -58,7 +58,7 @@ function securityTone(status: string): "pass" | "warning" | "danger" | "unknown"
   return "unknown";
 }
 
-function renderReadme(result: PluginDiscoveryDetailResult): TemplateResult {
+export function renderPluginDetailReadme(result: PluginDiscoveryDetailResult): TemplateResult {
   const readmeHtml = result.detail.readme
     ? toSanitizedMarkdownHtml(result.detail.readme)
         .replaceAll("<h1", "<h2")
@@ -71,7 +71,7 @@ function renderReadme(result: PluginDiscoveryDetailResult): TemplateResult {
     : html`<p class="plugin-catalog-detail__empty">${t("pluginsPage.detailNoReadme")}</p>`;
 }
 
-function renderSkills(result: PluginDiscoveryDetailResult): TemplateResult {
+export function renderPluginDetailSkills(result: PluginDiscoveryDetailResult): TemplateResult {
   return result.detail.skills.length
     ? html`<div class="plugin-catalog-detail__rows">
         ${result.detail.skills.map(
@@ -111,7 +111,9 @@ function renderConfiguration(result: PluginDiscoveryDetailResult): TemplateResul
     : html`<p class="plugin-catalog-detail__empty">${t("pluginsPage.detailNoConfiguration")}</p>`;
 }
 
-function compatibilityRows(result: PluginDiscoveryDetailResult): Array<[string, string]> {
+export function pluginDetailCompatibilityRows(
+  result: PluginDiscoveryDetailResult,
+): Array<[string, string]> {
   const compatibility = result.detail.compatibility;
   if (!compatibility) {
     return [];
@@ -124,8 +126,10 @@ function compatibilityRows(result: PluginDiscoveryDetailResult): Array<[string, 
   ].filter((row): row is [string, string] => Boolean(row[1]));
 }
 
-function renderCompatibility(result: PluginDiscoveryDetailResult): TemplateResult {
-  const rows = compatibilityRows(result);
+export function renderPluginDetailCompatibility(
+  result: PluginDiscoveryDetailResult,
+): TemplateResult {
+  const rows = pluginDetailCompatibilityRows(result);
   return rows.length
     ? html`<dl class="plugin-catalog-detail__definition-list">
         ${rows.map(
@@ -139,7 +143,7 @@ function renderCompatibility(result: PluginDiscoveryDetailResult): TemplateResul
     : html`<p class="plugin-catalog-detail__empty">${t("pluginsPage.detailNoCompatibility")}</p>`;
 }
 
-function renderVersions(result: PluginDiscoveryDetailResult): TemplateResult {
+export function renderPluginDetailVersions(result: PluginDiscoveryDetailResult): TemplateResult {
   return result.detail.versions.length
     ? html`<div class="plugin-catalog-detail__rows">
         ${result.detail.versions.map(
@@ -188,21 +192,21 @@ function renderTabPanel(
   tab: PluginCatalogDetailTab,
 ): TemplateResult {
   if (tab === "skills") {
-    return renderSkills(result);
+    return renderPluginDetailSkills(result);
   }
   if (tab === "configuration") {
     return renderConfiguration(result);
   }
   if (tab === "compatibility") {
-    return renderCompatibility(result);
+    return renderPluginDetailCompatibility(result);
   }
   if (tab === "versions") {
-    return renderVersions(result);
+    return renderPluginDetailVersions(result);
   }
   if (tab === "advanced") {
     return renderAdvanced(result);
   }
-  return renderReadme(result);
+  return renderPluginDetailReadme(result);
 }
 
 function renderDetail(result: PluginDiscoveryDetailResult, props: PluginCatalogDetailProps) {
@@ -215,159 +219,120 @@ function renderDetail(result: PluginDiscoveryDetailResult, props: PluginCatalogD
     : undefined;
   const publisherName = detail.author?.displayName ?? authorHandle ?? plugin.catalog.name;
   const tabs: PluginCatalogDetailTab[] = ["readme"];
-  if (detail.skills.length) {
-    tabs.push("skills");
-  }
   if (detail.configuration.length) {
     tabs.push("configuration");
   }
-  if (compatibilityRows(result).length) {
+  if (detail.skills.length) {
+    tabs.push("skills");
+  }
+  if (pluginDetailCompatibilityRows(result).length) {
     tabs.push("compatibility");
   }
   tabs.push("versions", "advanced");
 
-  return html`<section class="plugin-catalog-detail" aria-labelledby="plugin-catalog-detail-title">
-    <nav class="plugins-settings-breadcrumb" aria-label=${t("pluginsPage.breadcrumb")}>
-      <a
-        class="plugins-settings-breadcrumb__parent"
-        href=${props.backHref}
-        @click=${(event: MouseEvent) => {
-          event.preventDefault();
-          props.onBack();
-        }}
-        >${t("tabs.plugins")}</a
-      >
-      <span class="plugins-settings-breadcrumb__chevron" aria-hidden="true"
-        >${icons.chevronRight}</span
-      >
-      <span class="plugins-settings-breadcrumb__current" aria-current="page"
-        >${plugin.catalog.name}</span
-      >
-    </nav>
-    <div class="plugin-catalog-detail__hero">
-      <main>
-        <div class="plugin-catalog-detail__title-row">
-          <h1 id="plugin-catalog-detail-title">${plugin.catalog.name}</h1>
-          ${
-            plugin.local.action === "install"
-              ? renderReasonedDisabledControl(
-                  props.installBlockedReason,
-                  html`<button
-                    type="button"
-                    class="btn primary oc-action oc-action-primary plugin-catalog-detail__install"
-                    ?disabled=${!props.installBlockedReason && !props.canInstall}
-                    aria-disabled=${!props.canInstall ? "true" : nothing}
-                    @click=${() => {
-                      if (props.canInstall) {
-                        props.onInstall();
-                      }
-                    }}
-                  >
-                    ${t("pluginsPage.install")}
-                  </button>`,
-                )
-              : nothing
-          }
+  return renderPluginDetailShell({
+    id: "plugin-catalog-detail",
+    name: plugin.catalog.name,
+    summary: plugin.catalog.summary,
+    backHref: props.backHref,
+    backLabel: t("tabs.plugins"),
+    onBack: props.onBack,
+    titleAction:
+      plugin.local.action === "install"
+        ? renderReasonedDisabledControl(
+            props.installBlockedReason,
+            html`<button
+              type="button"
+              class="btn primary oc-action oc-action-primary plugin-catalog-detail__install"
+              ?disabled=${!props.installBlockedReason && !props.canInstall}
+              aria-disabled=${!props.canInstall ? "true" : nothing}
+              @click=${() => {
+                if (props.canInstall) {
+                  props.onInstall();
+                }
+              }}
+            >
+              ${t("pluginsPage.install")}
+            </button>`,
+          )
+        : undefined,
+    identity: html`<div class="plugin-catalog-detail__publisher">
+      <span class="plugin-catalog-detail__publisher-icon" aria-hidden="true">
+        ${
+          publisherIcon || packageIcon
+            ? html`<img src=${publisherIcon ?? packageIcon} alt="" />`
+            : icons.box
+        }
+      </span>
+      <div>
+        <div class="plugin-catalog-detail__publisher-name">
+          <strong>${publisherName}</strong>
+          ${plugin.catalog.official ? renderPluginOfficialBadge() : nothing}
         </div>
+        ${renderPluginAuthor(authorHandle, { linked: true })}
+      </div>
+    </div>`,
+    sidebar: html`<dl>
         ${
-          plugin.catalog.summary
-            ? html`<p class="plugin-catalog-detail__summary">${plugin.catalog.summary}</p>`
-            : nothing
+          plugin.catalog.downloads === undefined
+            ? nothing
+            : html`<div>
+                <dt>${t("pluginsPage.catalogDownloadsColumn")}</dt>
+                <dd>${icons.download} ${formatCompactCount(plugin.catalog.downloads)}</dd>
+              </div>`
         }
-        <div class="plugin-catalog-detail__publisher">
-          <span class="plugin-catalog-detail__publisher-icon" aria-hidden="true">
-            ${
-              publisherIcon || packageIcon
-                ? html`<img src=${publisherIcon ?? packageIcon} alt="" />`
-                : icons.box
-            }
-          </span>
-          <div>
-            <div class="plugin-catalog-detail__publisher-name">
-              <strong>${publisherName}</strong>
-              ${plugin.catalog.official ? renderPluginOfficialBadge() : nothing}
-            </div>
-            ${renderPluginAuthor(authorHandle, { linked: true })}
-          </div>
-        </div>
-      </main>
-      <aside class="plugin-catalog-detail__sidebar">
-        <dl>
-          ${
-            plugin.catalog.downloads === undefined
-              ? nothing
-              : html`<div>
-                  <dt>${t("pluginsPage.catalogDownloadsColumn")}</dt>
-                  <dd>${icons.download} ${formatCompactCount(plugin.catalog.downloads)}</dd>
-                </div>`
-          }
-          ${
-            plugin.catalog.latestVersion
-              ? html`<div>
-                  <dt>${t("pluginsPage.version")}</dt>
-                  <dd>${plugin.catalog.latestVersion}</dd>
-                </div>`
-              : nothing
-          }
-          ${
-            detail.updatedAt
-              ? html`<div>
-                  <dt>${t("pluginsPage.detailUpdated")}</dt>
-                  <dd>${formatDateMs(detail.updatedAt, { dateStyle: "medium" })}</dd>
-                </div>`
-              : nothing
-          }
-        </dl>
         ${
-          detail.security
-            ? html`<a
-                class="plugin-catalog-detail__security plugin-catalog-detail__security--${securityTone(
-                  detail.security.status,
-                )}"
-                href=${packageUrl ? `${packageUrl}/security-audit` : nothing}
-                target="_blank"
-                rel="noopener noreferrer"
-              >
-                <h2>${t("pluginsPage.detailSecurity")} ${icons.info}</h2>
-                <div class="plugin-catalog-detail__security-score">
-                  <strong>${securityLabel(detail.security.status)}</strong>
-                  <span aria-hidden="true"></span><span aria-hidden="true"></span
-                  ><span aria-hidden="true"></span>
-                </div>
-              </a>`
+          plugin.catalog.latestVersion
+            ? html`<div>
+                <dt>${t("pluginsPage.version")}</dt>
+                <dd>${plugin.catalog.latestVersion}</dd>
+              </div>`
             : nothing
         }
         ${
-          packageUrl
-            ? html`<a
-                class="btn plugin-catalog-detail__clawhub"
-                href=${packageUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                >${t("pluginsPage.detailViewOnClawHub")}</a
-              >`
+          detail.updatedAt
+            ? html`<div>
+                <dt>${t("pluginsPage.detailUpdated")}</dt>
+                <dd>${formatDateMs(detail.updatedAt, { dateStyle: "medium" })}</dd>
+              </div>`
             : nothing
         }
-      </aside>
-    </div>
-    ${renderHubTabs({
-      id: "plugin-catalog-detail",
-      active: props.tab,
-      tabs: tabs.map((tab) => ({ value: tab, label: tabLabel(tab) })),
-      ariaLabel: t("pluginsPage.detailSections"),
-      panelId: "plugin-catalog-detail-panel",
-      className: "plugin-catalog-detail__tabs",
-      onSelect: props.onTabChange,
-    })}
-    <section
-      id="plugin-catalog-detail-panel"
-      class="plugin-catalog-detail__panel"
-      role="tabpanel"
-      aria-labelledby=${`plugin-catalog-detail-tab-${props.tab}`}
-    >
-      ${renderTabPanel(result, props.tab)}
-    </section>
-  </section>`;
+      </dl>
+      ${
+        detail.security
+          ? html`<a
+              class="plugin-catalog-detail__security plugin-catalog-detail__security--${securityTone(
+                detail.security.status,
+              )}"
+              href=${packageUrl ? `${packageUrl}/security-audit` : nothing}
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              <h2>${t("pluginsPage.detailSecurity")} ${icons.info}</h2>
+              <div class="plugin-catalog-detail__security-score">
+                <strong>${securityLabel(detail.security.status)}</strong>
+                <span aria-hidden="true"></span><span aria-hidden="true"></span
+                ><span aria-hidden="true"></span>
+              </div>
+            </a>`
+          : nothing
+      }
+      ${
+        packageUrl
+          ? html`<a
+              class="btn plugin-catalog-detail__clawhub"
+              href=${packageUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              >${t("pluginsPage.detailViewOnClawHub")}</a
+            >`
+          : nothing
+      }`,
+    tabs: tabs.map((tab) => ({ value: tab, label: tabLabel(tab) })),
+    activeTab: props.tab,
+    onTabChange: props.onTabChange,
+    panel: renderTabPanel(result, props.tab),
+  });
 }
 
 export function renderPluginCatalogDetail(props: PluginCatalogDetailProps): TemplateResult {

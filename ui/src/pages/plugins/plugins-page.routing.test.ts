@@ -130,10 +130,12 @@ describe("PluginsPage routing", () => {
     expect(breadcrumb?.textContent).toBe(testCase.label);
     expect(breadcrumb?.getAttribute("href")).toBe(testCase.href);
     expect(page.querySelector('[aria-current="page"]')?.textContent).toBe("Workboard");
-    const hero = page.querySelector(".plugins-settings-detail-hero");
-    expect(hero?.querySelector(".plugins-tile")).not.toBeNull();
+    const hero = page.querySelector(".plugin-catalog-detail__hero");
+    expect(page.querySelector(".plugin-catalog-detail--no-sidebar")).not.toBeNull();
+    expect(hero?.querySelector(".plugin-catalog-detail__sidebar")).toBeNull();
+    expect(hero?.querySelector(".plugin-catalog-detail__publisher-icon")).not.toBeNull();
     expect(hero?.querySelector("h1")?.textContent).toBe("Workboard");
-    expect(hero?.querySelector(".plugins-settings-detail-description")?.textContent).toBe(
+    expect(hero?.querySelector(".plugin-catalog-detail__summary")?.textContent).toBe(
       t("subtitles.workboard"),
     );
     expect(hero?.querySelector("wa-switch")).not.toBeNull();
@@ -208,7 +210,7 @@ describe("PluginsPage routing", () => {
     await refresh;
   });
 
-  it("explains required setup below the description and blocks enabling", async () => {
+  it("explains required setup in Configuration and blocks enabling", async () => {
     const plugin = createPlugin({
       id: "team-reports",
       name: "Team Reports",
@@ -242,15 +244,14 @@ describe("PluginsPage routing", () => {
     await vi.waitFor(() => {
       expect(page.querySelector("h1")?.textContent).toContain("Team Reports");
     });
-    const alert = page.querySelector(".plugins-settings-detail-setup");
+    expect(page.querySelector(".plugins-settings-detail-setup")).toBeNull();
+    const configurationTab = page.querySelector("#plugin-installed-detail-tab-configuration");
+    expect(configurationTab?.getAttribute("aria-selected")).toBe("true");
+    expect(configurationTab?.querySelector(".plugin-installed-detail__setup-dot")).not.toBeNull();
+    const alert = page.querySelector(".plugin-catalog-detail__panel .oc-banner-warning");
     expect(alert?.textContent?.trim()).toBe(
-      "Additional configuration required before this plugin can be enabled.",
+      "Complete the required configuration before enabling this plugin.",
     );
-    expect(
-      page.querySelector(".plugins-settings-detail-hero + .plugins-settings-detail-setup"),
-    ).toBe(alert);
-    expect(alert?.classList.contains("warn")).toBe(true);
-    expect(alert?.querySelector(".plugins-settings-detail-setup__icon svg")).not.toBeNull();
     expect(page.querySelector(".plugins-settings-detail-actions .settings-status")).toBeNull();
     expect(
       page.querySelector(".plugins-settings-detail-actions wa-switch")?.hasAttribute("disabled"),

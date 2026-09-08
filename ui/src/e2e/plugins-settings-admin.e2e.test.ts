@@ -86,6 +86,7 @@ const inspection = {
   plugin: {
     id: workboard.id,
     name: workboard.name,
+    version: workboard.version,
     origin: workboard.origin,
     installed: true,
     enabled: true,
@@ -102,6 +103,53 @@ const inspection = {
     cliBackends: [],
     skills: [],
     dangerousConfigFlags: [],
+  },
+  components: {
+    mapped: ["skills", "mcpServers"],
+    skills: ["Weekly planning"],
+    mcpServers: ["workboard"],
+    commands: [],
+    hooks: [],
+    lspServers: [],
+    unavailable: { capabilities: [], mcpServers: [], lspServers: [] },
+  },
+  catalog: {
+    plugin: {
+      id: "ch_workboard",
+      catalog: {
+        name: "Workboard",
+        summary: "Plan and track agent-owned work.",
+        author: "openclaw",
+        official: true,
+        categories: ["tools"],
+        latestVersion: "1.2.3",
+        downloads: 1200,
+      },
+      local: {
+        present: true,
+        installed: true,
+        enabled: true,
+        state: "enabled",
+        pluginId: "workboard",
+        action: "manage",
+      },
+    },
+    detail: {
+      origin: "clawhub",
+      packageName: "@openclaw/workboard",
+      author: { handle: "openclaw", displayName: "OpenClaw" },
+      topics: ["planning"],
+      updatedAt: 1_788_000_000_000,
+      readme: "# Workboard\n\nCoordinate agent work in one place.",
+      compatibility: { minGatewayVersion: ">=1.0.0" },
+      configuration: [],
+      mcpServers: ["workboard"],
+      skills: [{ name: "Weekly planning" }],
+      versions: [
+        { version: "1.2.3", createdAt: 1_788_000_000_000, changelog: "", tags: ["latest"] },
+      ],
+      security: { status: "clean" },
+    },
   },
   grants: {
     hooks: {
@@ -322,7 +370,69 @@ async function openWorkboard(page: Parameters<typeof waitForControlUiRoute>[0], 
 }
 
 suite.define(() => {
-  it("drills from searchable inventory into canonical configuration, access, and lifecycle sections", async () => {
+  it("moves needs-setup guidance into the Configuration tab", async () => {
+    await suite.withPage(
+      {
+        colorScheme: "dark",
+        locale: "en-US",
+        serviceWorkers: "block",
+        viewport: { height: 900, width: 1280 },
+      },
+      async ({ page }) => {
+        const needsSetup = { ...workboard, enabled: false, state: "needs-setup" as const };
+        const localInspection = {
+          ...inspection,
+          catalog: undefined,
+          components: {
+            mapped: ["commands"],
+            skills: [],
+            mcpServers: [],
+            commands: [],
+            hooks: [],
+            lspServers: [],
+            unavailable: {
+              capabilities: ["agents", "hooks", "rules"],
+              mcpServers: [],
+              lspServers: [],
+            },
+          },
+        };
+        await installMockGateway(page, {
+          featureMethods: pluginMethods,
+          methodResponses: {
+            ...pluginResponses(),
+            "plugins.list": { ...inventory, plugins: [needsSetup] },
+            "plugins.inspect": {
+              ...localInspection,
+              plugin: { ...localInspection.plugin, enabled: false },
+            },
+          },
+          operatorScopes: ["operator.read", "operator.admin"],
+        });
+
+        await page.goto(`${suite.server.baseUrl}settings/plugins/workboard`);
+        const configuration = page.getByRole("tab", { name: /Configuration/iu });
+        await configuration.waitFor();
+        expect(await page.locator(".plugin-catalog-detail--no-sidebar").count()).toBe(1);
+        expect(await page.locator(".plugin-catalog-detail__sidebar").count()).toBe(0);
+        expect(await page.getByRole("tab", { name: "Commands", exact: true }).count()).toBe(0);
+        expect(await page.getByRole("tab", { name: "Hooks", exact: true }).count()).toBe(0);
+        const dot = configuration.locator(".plugin-installed-detail__setup-dot");
+        expect(await dot.getAttribute("title")).toBe(
+          "This plugin requires additional configuration",
+        );
+        expect(await page.getByText("Setup required", { exact: true }).count()).toBe(0);
+        await configuration.click();
+        await page
+          .getByText("Complete the required configuration before enabling this plugin.", {
+            exact: true,
+          })
+          .waitFor();
+      },
+    );
+  });
+
+  it("drills from searchable inventory into the shared tabbed detail shell", async () => {
     await suite.withPage(
       {
         colorScheme: "dark",
@@ -340,103 +450,39 @@ suite.define(() => {
         await openWorkboard(page, suite.server.baseUrl);
         await page.getByRole("heading", { level: 1, name: "Workboard", exact: true }).waitFor();
         await page.getByRole("link", { name: "Settings", exact: true }).waitFor();
-        const detailGeometry = await page.evaluate(() => {
-          const breadcrumb = document.querySelector<HTMLElement>(".plugins-settings-breadcrumb");
-          const parent = breadcrumb?.querySelector<HTMLElement>(
-            ".plugins-settings-breadcrumb__parent",
-          );
-          const current = breadcrumb?.querySelector<HTMLElement>(
-            ".plugins-settings-breadcrumb__current",
-          );
-          const hero = document.querySelector<HTMLElement>(".plugins-settings-detail-hero");
-          const tile = hero?.querySelector<HTMLElement>(".plugins-tile");
-          const title = hero?.querySelector<HTMLElement>("h1");
-          const description = hero?.querySelector<HTMLElement>(
-            ".plugins-settings-detail-description",
-          );
-          const toggle = hero?.querySelector<HTMLElement>("wa-switch");
-          const surface = hero?.closest<HTMLElement>(".settings-page");
-          const firstSection = surface?.querySelector<HTMLElement>(".settings-section");
-          if (
-            !breadcrumb ||
-            !parent ||
-            !current ||
-            !hero ||
-            !tile ||
-            !title ||
-            !description ||
-            !toggle ||
-            !surface ||
-            !firstSection
-          ) {
-            return null;
-          }
-          const breadcrumbRect = breadcrumb.getBoundingClientRect();
-          const heroRect = hero.getBoundingClientRect();
-          const tileRect = tile.getBoundingClientRect();
-          const toggleRect = toggle.getBoundingClientRect();
-          const accentProbe = document.createElement("span");
-          accentProbe.style.color = "var(--accent)";
-          document.body.append(accentProbe);
-          const accentColor = getComputedStyle(accentProbe).color;
-          accentProbe.remove();
-          return {
-            breadcrumbAboveHero: breadcrumbRect.bottom <= heroRect.top,
-            breadcrumbToHero: heroRect.top - breadcrumbRect.bottom,
-            colorsMatch: getComputedStyle(parent).color === getComputedStyle(current).color,
-            currentColor: getComputedStyle(current).color,
-            accentColor,
-            breadcrumbFontSize: Number.parseFloat(getComputedStyle(current).fontSize),
-            titleFontSize: Number.parseFloat(getComputedStyle(title).fontSize),
-            description: description.textContent,
-            legacySubtitleCount: surface.querySelectorAll(".page-subtitle").length,
-            heroLeft: heroRect.left,
-            sectionLeft: firstSection.getBoundingClientRect().left,
-            tileTop: tileRect.top,
-            toggleTop: toggleRect.top,
-          };
-        });
-        expect(detailGeometry).not.toBeNull();
-        expect(detailGeometry?.breadcrumbAboveHero).toBe(true);
-        expect(detailGeometry?.breadcrumbToHero ?? 0).toBeGreaterThanOrEqual(16);
-        expect(detailGeometry?.colorsMatch).toBe(true);
-        expect(detailGeometry?.currentColor).not.toBe(detailGeometry?.accentColor);
-        expect(detailGeometry?.breadcrumbFontSize ?? Infinity).toBeLessThan(
-          detailGeometry?.titleFontSize ?? 0,
-        );
-        expect(detailGeometry?.description).toBe("Plan and track agent-owned work.");
-        expect(detailGeometry?.legacySubtitleCount).toBe(0);
+        await page.getByText("Plan and track agent-owned work.", { exact: true }).waitFor();
+        await page.getByRole("link", { name: "View on ClawHub", exact: true }).waitFor();
         expect(
-          Math.abs((detailGeometry?.heroLeft ?? 0) - (detailGeometry?.sectionLeft ?? 0)),
-        ).toBeLessThanOrEqual(1);
-        expect(
-          Math.abs((detailGeometry?.toggleTop ?? 0) - (detailGeometry?.tileTop ?? 0)),
-        ).toBeLessThanOrEqual(1);
-        expect(await page.getByRole("status").filter({ hasText: "Enabled" }).count()).toBe(0);
-        await page.getByRole("heading", { name: "Configuration", exact: true }).waitFor();
+          await page
+            .getByRole("tab")
+            .evaluateAll((tabs) => tabs.map((tab) => tab.textContent?.trim()).filter(Boolean)),
+        ).toEqual([
+          "README",
+          "Configuration",
+          "Skills",
+          "MCP servers",
+          "Compatibility",
+          "Versions",
+          "Access",
+          "Lifecycle",
+          "Advanced",
+        ]);
+        await page.getByRole("tab", { name: "Configuration", exact: true }).click();
         const refresh = page.getByRole("button", { name: "Reload", exact: true });
         await refresh.waitFor();
         expect((await refresh.textContent())?.trim()).toBe("");
         expect(await refresh.getAttribute("title")).toBeNull();
-        expect(
-          await refresh.evaluate((button) => {
-            const header = button.closest(".settings-section__header")?.getBoundingClientRect();
-            return header
-              ? Math.abs(header.right - button.getBoundingClientRect().right)
-              : Infinity;
-          }),
-        ).toBeLessThanOrEqual(1);
-        await page.getByRole("heading", { name: "Access & capabilities", exact: true }).waitFor();
-        await page.getByRole("heading", { name: "Lifecycle", exact: true }).waitFor();
         expect(await gateway.getRequests("plugins.inspect")).toHaveLength(1);
 
+        await page.getByRole("tab", { name: "Access", exact: true }).click();
         await page.getByText("Add context to prompts", { exact: true }).waitFor();
         await page.getByText("Read conversation context", { exact: true }).waitFor();
-        expect(await page.getByText("workboard_list", { exact: true }).isVisible()).toBe(false);
-        await page.locator("summary").filter({ hasText: "Advanced" }).click();
+        expect(await page.getByText("workboard_list", { exact: true }).count()).toBe(0);
+        await page.getByRole("tab", { name: "Advanced", exact: true }).click();
         await page.getByText("workboard_list", { exact: true }).waitFor();
+        await page.getByRole("tab", { name: "Lifecycle", exact: true }).click();
         await page.locator("code").filter({ hasText: "@openclaw/workboard" }).first().waitFor();
-        await page.getByText(/1\.2\.3/u).waitFor();
+        await page.getByText("v1.2.3", { exact: true }).waitFor();
         if (captureUiProof) {
           await page.screenshot({
             animations: "disabled",
@@ -449,6 +495,7 @@ suite.define(() => {
           pathname: "/settings/plugins/workboard",
           routeId: "plugin-settings",
         });
+        await page.locator("code").filter({ hasText: "@openclaw/workboard" }).first().waitFor();
         await page.getByRole("link", { name: "Settings", exact: true }).click();
         await waitForControlUiRoute(page, {
           pathname: "/settings/plugins",
@@ -500,13 +547,11 @@ suite.define(() => {
             hasText: "Dependency check failed. Reinstall the plugin and restart OpenClaw.",
           })
           .waitFor();
-        expect(
-          await page.getByRole("heading", { name: "Configuration", exact: true }).count(),
-        ).toBe(0);
+        expect(await page.getByRole("tab", { name: "Configuration", exact: true }).count()).toBe(0);
         expect(await page.getByRole("button", { name: "Reload", exact: true }).count()).toBe(0);
         expect(await page.getByText("This plugin has no configurable settings.").count()).toBe(0);
-        await page.getByRole("heading", { name: "Access & capabilities", exact: true }).waitFor();
-        await page.getByRole("heading", { name: "Lifecycle", exact: true }).waitFor();
+        await page.getByRole("tab", { name: "Access", exact: true }).waitFor();
+        await page.getByRole("tab", { name: "Lifecycle", exact: true }).waitFor();
       },
     );
   });
@@ -538,6 +583,7 @@ suite.define(() => {
             .count(),
         ).toBe(1);
 
+        await page.getByRole("tab", { name: "Configuration", exact: true }).click();
         const workspace = page.getByLabel("Workspace label", { exact: true });
         const catalogRequests = (await gateway.getRequests("plugins.list")).length;
         await workspace.fill("Release planning");
@@ -558,6 +604,7 @@ suite.define(() => {
         ).toBe(0);
 
         const uninstallCount = (await gateway.getRequests("plugins.uninstall")).length;
+        await page.getByRole("tab", { name: "Lifecycle", exact: true }).click();
         await page.getByRole("button", { name: /(?:Remove|Uninstall) Workboard/iu }).click();
         await page.getByRole("dialog").waitFor();
         await page
@@ -613,12 +660,14 @@ suite.define(() => {
         expect(
           await page.getByRole("button", { name: "Save configuration", exact: true }).count(),
         ).toBe(0);
-        const workspace = page.getByLabel("Workspace label", { exact: true });
         const toggle = page.locator("wa-switch").filter({ hasText: "Enable or disable Workboard" });
+        await page.getByRole("tab", { name: "Configuration", exact: true }).click();
+        const workspace = page.getByLabel("Workspace label", { exact: true });
+        expect(await workspace.isDisabled()).toBe(true);
+        await page.getByRole("tab", { name: "Lifecycle", exact: true }).click();
         const uninstall = page.getByRole("button", {
           name: /(?:Remove|Uninstall) Workboard/iu,
         });
-        expect(await workspace.isDisabled()).toBe(true);
         expect(await toggle.getAttribute("aria-disabled")).toBe("true");
         expect(await uninstall.getAttribute("aria-disabled")).toBe("true");
         await toggle.dispatchEvent("click");
@@ -681,9 +730,15 @@ suite.define(() => {
           .filter({ hasText: "Inspection unavailable" });
         await inspectionError.waitFor();
         await inspectionError.getByRole("button", { name: "Try again", exact: true }).click();
+        await expect
+          .poll(async () => (await gateway.getRequests("plugins.inspect")).length)
+          .toBe(2);
+        await page.getByRole("tab", { name: "README", exact: true }).waitFor();
+        await page.getByRole("tab", { name: "Access", exact: true }).click();
+        await expect.poll(() => new URL(page.url()).hash).toBe("#access");
         await page.getByText("Add context to prompts", { exact: true }).waitFor();
-        expect(await gateway.getRequests("plugins.inspect")).toHaveLength(2);
 
+        await page.getByRole("tab", { name: "Configuration", exact: true }).click();
         await page.getByRole("alert").filter({ hasText: "Configuration unavailable" }).waitFor();
         const configRequests = (await gateway.getRequests("config.get")).length;
         await gateway.setMethodResponse("config.get", configMocks["config.get"]);

@@ -33,6 +33,7 @@ import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import "../../styles/plugins.css";
 import type { PluginCatalogDetailTab } from "./catalog-detail.ts";
 import { CatalogIconController } from "./catalog-icon-controller.ts";
+import { installedPluginDetailTabFromHash, type InstalledPluginDetailTab } from "./detail-tabs.ts";
 import { InstallWizardController } from "./install-wizard-controller.ts";
 import type { PluginInstallWizardState } from "./install-wizard-model.ts";
 import { PluginDiscoveryController } from "./plugin-discovery-controller.ts";
@@ -77,6 +78,7 @@ class PluginsPage extends OpenClawLightDomElement {
     error: string | null;
   } | null = null;
   @state() private catalogDetailTab: PluginCatalogDetailTab = "readme";
+  @state() private installedDetailTab: InstalledPluginDetailTab = "readme";
   @state() private installWizard: PluginInstallWizardState | null = null;
   private configAutoSaveStatus = this.context?.runtimeConfig.state.configAutoSaveStatus ?? "idle";
   private pluginConfigEditPending = false;
@@ -375,6 +377,9 @@ class PluginsPage extends OpenClawLightDomElement {
           ? "advanced"
           : "installed";
     }
+    if (detailPluginId) {
+      this.installedDetailTab = installedPluginDetailTabFromHash(data.location.hash);
+    }
     if (!this.gateway.isRouteDataCurrent(data)) {
       this.ensureInitialData();
       return;
@@ -650,6 +655,7 @@ class PluginsPage extends OpenClawLightDomElement {
       catalogIconUrls: this.catalogIconUrls,
       catalogDetail: this.catalogDetail,
       catalogDetailTab: this.catalogDetailTab,
+      installedDetailTab: this.installedDetailTab,
       installWizard: this.installWizard,
       canMutate: this.canMutate(),
       mutationBlockedReason: blockedReason,
@@ -707,11 +713,22 @@ class PluginsPage extends OpenClawLightDomElement {
         },
         closeSettingsDetail: (parentRoute) => {
           this.detail = null;
+          this.installedDetailTab = "readme";
           this.context.navigate(parentRoute, {
             pathname: pathForRoute(parentRoute, this.context.basePath),
           });
         },
         retrySettingsDetail: (pluginId) => void this.showDetails(pluginId),
+        selectInstalledDetailTab: (tab) => {
+          this.installedDetailTab = tab;
+          this.context.replace("plugin-settings", {
+            pathname: this.detail
+              ? pathForPluginSettings(this.detail.pluginId, this.context.basePath)
+              : this.routeData?.location.pathname,
+            search: this.routeData?.location.search,
+            hash: `#${tab}`,
+          });
+        },
         selectSettingsTab: (tab) => {
           this.settingsTab = tab;
           this.context.replace("plugin-settings", {
