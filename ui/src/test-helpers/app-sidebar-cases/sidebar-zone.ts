@@ -249,17 +249,24 @@ describe("AppSidebar interleaved zone", () => {
     expect(sidebar.querySelector(".nav-item--home")?.hasAttribute("draggable")).toBe(false);
   });
 
-  it("renders plugin tabs as sidebar entries", async () => {
+  it.each([
+    { slug: undefined, href: "/plugin?plugin=logbook&id=logbook" },
+    { slug: "reports", href: "/reports" },
+  ])("renders plugin tabs as sidebar entries at $href", async ({ slug, href }) => {
     const gateway = createGatewayHarness({} as GatewayBrowserClient);
     const sessions = createSessionsHarness("main", ["agent:main:main"]);
     const { sidebar } = await mountSidebar(gateway.gateway, sessions.sessions);
+    const navigate = vi.fn();
+    sidebar.onNavigate = navigate;
 
     gateway.publish({
       hello: {
         type: "hello-ok",
         protocol: 1,
         auth: { role: "operator", scopes: ["operator.read"] },
-        controlUiTabs: [{ group: "control", id: "logbook", label: "Logbook", pluginId: "logbook" }],
+        controlUiTabs: [
+          { group: "control", id: "logbook", label: "Logbook", pluginId: "logbook", slug },
+        ],
       },
     });
     await sidebar.updateComplete;
@@ -268,7 +275,14 @@ describe("AppSidebar interleaved zone", () => {
       '[data-sidebar-entry="plugin:logbook/logbook"] > .nav-item',
     );
     expect(entry?.textContent).toContain("Logbook");
-    expect(entry?.getAttribute("href")).toBe("/plugin?plugin=logbook&id=logbook");
+    expect(entry?.getAttribute("href")).toBe(href);
+    entry?.click();
+    const location = new URL(href, window.location.origin);
+    expect(navigate).toHaveBeenCalledWith("plugin", {
+      pathname: location.pathname,
+      search: location.search,
+      hash: "",
+    });
 
     gateway.publish({
       hello: {

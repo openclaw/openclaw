@@ -13,6 +13,7 @@ import { isValidWorkboardBoardId } from "@openclaw/workboard-contract";
 import { DEFAULT_AGENT_PANEL, isAgentsPanel, type AgentsPanel } from "./lib/agents/panels.ts";
 import type { BoardFace } from "./lib/board/settings.ts";
 import { takeGraphemes } from "./lib/graphemes.ts";
+import { pluginTabSlugFromPath } from "./pages/plugin/tab-slugs.ts";
 export const INTERNAL_AGENT_PATH_PARAM = "__openclawAgentPath";
 export const INTERNAL_ACTIVITY_PATH_PARAM = "__openclawActivityPath";
 export const INTERNAL_SESSION_PATH_PARAM = "__openclawSessionPath";
@@ -109,6 +110,8 @@ for (const routeId of APP_ROUTE_IDS) {
     }
   }
 }
+
+export const NATIVE_ROUTE_SEGMENTS = new Set(APP_ROUTE_PATHS.map((path) => path.split("/")[1]));
 
 export function isRouteId(routeId: string): routeId is RouteId {
   return Object.hasOwn(APP_ROUTE_DEFINITIONS, routeId);
@@ -305,6 +308,9 @@ export function workboardBoardIdFromPath(pathname: string, basePath = ""): strin
 }
 
 function dynamicRouteIdFromPath(pathname: string, basePath = ""): RouteId | null {
+  if (pluginTabSlugFromPath(pathname, basePath)) {
+    return "plugin";
+  }
   if (agentRouteFromPath(pathname, basePath)) {
     return "agents";
   }

@@ -15,6 +15,7 @@ import {
   resolveUiConfiguredMainKey,
 } from "../lib/sessions/session-key.ts";
 import { newSessionSearch, type NewSessionTarget } from "../pages/new-session/location.ts";
+import { pluginSlugCandidate, pluginTabSlugFromPath } from "../pages/plugin/tab-slugs.ts";
 import { selectApplicationSession } from "./agent-selection.ts";
 import type { ShellRouteState } from "./app-host-route-state.ts";
 import type { ApplicationContext, ApplicationNavigationOptions } from "./context.ts";
@@ -84,6 +85,25 @@ export class ShellNavigationOwner {
       routeId,
       isSessionRouteId(routeId) ? this.chatNavigationOptions(routeId, options) : options,
     );
+  }
+
+  recoverNotFoundRoute(): boolean {
+    const context = this.host.context;
+    const location = this.host.routeState.location ?? window.location;
+    if (context && pluginSlugCandidate(location.pathname, context.basePath)) {
+      if (context.gateway.snapshot.phase !== "connected") {
+        return false;
+      }
+      if (pluginTabSlugFromPath(location.pathname, context.basePath)) {
+        context.replace("plugin", {
+          pathname: location.pathname,
+          search: location.search,
+          hash: location.hash,
+        });
+        return true;
+      }
+    }
+    return this.replaceChatWithCurrentSession();
   }
 
   replaceChatWithCurrentSession(): boolean {
