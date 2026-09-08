@@ -451,7 +451,9 @@ describe("Codex auth product proof", () => {
           ).toMatchObject({ runId: setup.runId, status: "ok" });
         };
         await runConfiguredTurn("qa-codex-profile-binding-setup");
-        await expect(client.request("models.list", { agentId: "main" })).resolves.toMatchObject({
+        await expect(
+          client.request("models.list", { agentId: "main", refresh: true }),
+        ).resolves.toMatchObject({
           models: expect.arrayContaining([
             expect.objectContaining({ id: "gpt-5.6-luna", provider: "openai" }),
           ]),
