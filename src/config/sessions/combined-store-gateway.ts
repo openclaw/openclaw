@@ -31,7 +31,6 @@ import {
 import type { SessionEntryListScope } from "./session-accessor.types.js";
 import { canonicalSessionKeyMigrationRequiredError } from "./session-canonical-key.js";
 import { resolvePersistedSessionStoreOwner } from "./session-store-owner.js";
-import { resolveDeliveryProvenCanonicalSessionKey } from "./store-entry.js";
 import {
   dedupeSessionStoreTargetsBySqliteTarget,
   listConfiguredSessionStoreAgentIds,
@@ -165,6 +164,7 @@ function loadGatewayStoreEntries(params: {
   });
 }
 
+// The listing accessor owns delivery-key validation; federation owns config aliases and targets.
 function mergeSessionEntryIntoCombined(params: {
   cfg: OpenClawConfig;
   combined: Record<string, SessionEntry>;
@@ -185,12 +185,6 @@ function mergeSessionEntryIntoCombined(params: {
   if (existing) {
     throw canonicalSessionKeyMigrationRequiredError(
       `duplicate rows resolve to canonical session key ${canonicalKey}`,
-    );
-  }
-  const deliveryCanonicalKey = resolveDeliveryProvenCanonicalSessionKey(canonicalKey, entry);
-  if (deliveryCanonicalKey !== canonicalKey) {
-    throw canonicalSessionKeyMigrationRequiredError(
-      `non-canonical persisted row resolves to session key ${deliveryCanonicalKey}`,
     );
   }
   const projected = { ...entry };
