@@ -22,6 +22,10 @@ import { Worker } from "node:worker_threads";
  * notification settlement, not process liveness, restart/upgrade, or deletion
  * retention.
  *
+ * The `silent_dm` settlement scenario is the review-flagged shape: a
+ * completion-enabled direct-message parent that answers a provisional expiry
+ * with NO_REPLY must settle the notification rather than re-announce forever.
+ *
  * Deliberately NOT proven here: the parent-facing announcement that kill
  * reconciliation releases after its 5-minute provisional-kill grace. That path
  * reads the child transcript through a real Gateway `chat.history` call whose
@@ -212,7 +216,10 @@ try {
         if (response === "error") {
           assert.equal(result.disposition, "retryable");
         } else {
-          assert.equal(result.reason, "message_tool_delivery_missing");
+          // Instructed silence settles. A retryable result here would make the
+          // wait manager re-announce every few seconds while the child works.
+          assert.equal(result.disposition, "intentional_non_delivery");
+          assert.equal(result.terminal, true);
         }
       } else {
         assert.equal(
@@ -350,10 +357,20 @@ try {
     process.stdout.write(`[pass] cancellation ${stopReason}: waiter records killed, not exited\n`);
   }
 
-  for (const mode of ["intentional_non_delivery", "permanent_failure", "retryable"] as const) {
+  // `silent_dm` is the shape the review flagged: a completion-enabled
+  // direct-message parent that correctly answers a provisional expiry with
+  // NO_REPLY. Its requester is a DM, so message-tool-only delivery applies and
+  // there is no automatic external route to receipt against.
+  for (const mode of [
+    "intentional_non_delivery",
+    "permanent_failure",
+    "retryable",
+    "silent_dm",
+  ] as const) {
+    const silentDm = mode === "silent_dm";
     const runId = `provisional-${mode}`;
     const childSessionKey = `agent:main:subagent:${runId}`;
-    const requesterSessionKey = `${slackRequester}-${mode}`;
+    const requesterSessionKey = silentDm ? `${dmRequester}-${mode}` : `${slackRequester}-${mode}`;
     await sessions.replaceSessionEntry(
       { sessionKey: requesterSessionKey, agentId: "main" },
       {
@@ -376,7 +393,13 @@ try {
     let provisionalCalls = 0;
     let completing = false;
     requesterResponses.set(requesterSessionKey, (params) => {
-      assert.equal(params.deliver, true, "registry proof must reach the automatic external route");
+      if (!silentDm) {
+        assert.equal(
+          params.deliver,
+          true,
+          "registry proof must reach the automatic external route",
+        );
+      }
       if (completing) {
         return successResponse();
       }
@@ -394,7 +417,8 @@ try {
       if (mode === "retryable" && provisionalCalls === 1) {
         throw new Error("requester synthesis unavailable");
       }
-      return suppressedResponse();
+      // The parent follows the provisional instruction and stays silent.
+      return silentDm ? { result: { payloads: [{ text: "NO_REPLY" }] } } : suppressedResponse();
     });
     const run = () =>
       read.listSubagentRunsForRequester(requesterSessionKey).find((row) => row.runId === runId);
@@ -418,7 +442,7 @@ try {
       childSessionKey,
       requesterSessionKey,
       requesterAgentId: "main",
-      requesterOrigin: slackOrigin,
+      requesterOrigin: silentDm ? dmOrigin : slackOrigin,
       requesterDisplayKey: "proof",
       task: "notification settlement must not settle its child",
       cleanup: "keep",
@@ -428,7 +452,9 @@ try {
     });
     assert.equal(taskStatus(), "running", "launch owns a real SQLite task");
     await until(`${mode}: first notification result`, () => phaseResults().length > 0);
-    assert.equal(phaseResults()[0]?.outcome, mode);
+    // A silent DM parent settles as intentional non-delivery; the other three
+    // modes are named for the outcome they produce.
+    assert.equal(phaseResults()[0]?.outcome, silentDm ? "intentional_non_delivery" : mode);
     assert.equal(phaseResults()[0]?.delivery?.delivered, false);
     assert.equal(phaseResults()[0]?.delivery?.requesterVisibleFinalDelivered, undefined);
     if (mode === "retryable") {
@@ -499,7 +525,7 @@ try {
     );
   }
   process.stdout.write(
-    "PASS: six direct-delivery controls, three cancellation waits and three registry settlement scenarios\n",
+    "PASS: six direct-delivery controls, three cancellation waits and four registry settlement scenarios\n",
   );
 } catch (error) {
   exitCode = 1;

@@ -2102,7 +2102,12 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
           expect(result.disposition).toBe("retryable");
           expect(result.error).toContain(requesterError);
         } else {
-          expect(result.reason).toBe("message_tool_delivery_missing");
+          // Instructed silence is a settled non-delivery, not a failure to
+          // retry: a retryable result here re-announces every few seconds for
+          // as long as the child keeps working.
+          expect(result.disposition).toBe("intentional_non_delivery");
+          expect(result.terminal).toBe(true);
+          expect(result.error).toBeUndefined();
         }
       }
     },

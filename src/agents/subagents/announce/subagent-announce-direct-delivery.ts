@@ -46,6 +46,7 @@ import {
   isDirectMessageDeliveryTarget,
   isFailedTerminalSubagentCompletion,
   isGatewayAgentRunPending,
+  isProvisionalSubagentCompletion,
 } from "./subagent-announce-completion-delivery.js";
 import {
   hasAnnounceSendEvidence,
@@ -201,6 +202,8 @@ export async function sendSubagentAnnounceDirectly(params: {
         : undefined;
     const hasFailedTrustedSubagentCompletion =
       isFailedTerminalSubagentCompletion(trustedCompletionEvent);
+    const hasProvisionalTrustedSubagentCompletion =
+      isProvisionalSubagentCompletion(trustedCompletionEvent);
     const hasRequiredSubagentNoOutputCompletion =
       params.expectsCompletionMessage &&
       isSubagentCompletion &&
@@ -612,6 +615,21 @@ export async function sendSubagentAnnounceDirectly(params: {
           path: "direct",
           reason: "visible_reply_missing",
           error: "completion agent did not produce a visible reply",
+        };
+      }
+      // A provisional expiry tells the parent to stay quiet, so an explicitly
+      // silent reply is the instruction being carried out, not a delivery
+      // failure. Settle it: reporting this as retryable makes the wait manager
+      // re-announce every few seconds, forever, while the child is still
+      // working. Synthesis errors never reach here (they throw), and a terminal
+      // completion still owes a visible reply, so both stay strict.
+      if (hasProvisionalTrustedSubagentCompletion && hasIntentionalSilentCompletionReply) {
+        return {
+          delivered: false,
+          path: "direct",
+          reason: "delivery_suppressed",
+          terminal: true,
+          disposition: "intentional_non_delivery",
         };
       }
       if (subagentDirectMessageCompletionRequiresMessageTool) {
