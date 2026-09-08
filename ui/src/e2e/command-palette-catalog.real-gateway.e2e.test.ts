@@ -264,6 +264,7 @@ suite.define(() => {
             .locator(".model-providers__catalog-progress")
             .getByRole("button", { name: "Retry", exact: true });
           await retry.waitFor({ state: "visible" });
+          expect(await settings.textContent()).not.toContain("Open Models to try again.");
           expect(acquisitions()).toBe(initialAcquisitions + 5);
           await primary
             .locator('[role="option"][data-value="ollama/published-fixture:latest"]')

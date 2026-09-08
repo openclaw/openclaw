@@ -217,6 +217,7 @@ describe("ModelProvidersPage catalog discovery", () => {
       expect(page.querySelector(".model-providers__catalog-progress")?.textContent).toContain(
         "More models could not be discovered.",
       );
+      expect(page.textContent).not.toContain("Open Models to try again.");
       expect(page.data?.models).toEqual(preparedCatalog.models);
       const retry = page.querySelector<HTMLButtonElement>(
         ".model-providers__catalog-progress button",

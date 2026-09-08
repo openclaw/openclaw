@@ -6,8 +6,9 @@
 // refresh the Gateway-owned catalog. Completed reopens read its current publication.
 // Pending opens share this page's request without disturbing the saved selection.
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import { loadModelCatalog, modelCatalogRefreshError } from "../../lib/model-catalog-store.ts";
+import { loadModelCatalog } from "../../lib/model-catalog-store.ts";
 import type { ModelProvidersData } from "./load.ts";
 
 type DiscoveryGateway = {
@@ -98,14 +99,14 @@ export function createCatalogDiscoveryController(
         signal: request.signal,
       });
       if (ownsResult()) {
-        error = modelCatalogRefreshError(result);
+        error = result.refreshFailed ? t("modelProviders.defaults.discoverFailed") : null;
         const data = options.getData();
         if (data) {
           options.setData({
             ...data,
             models: result.models,
             providerOutcomes: result.providerOutcomes ?? [],
-            catalogError: error,
+            catalogError: null,
           });
         }
       }
