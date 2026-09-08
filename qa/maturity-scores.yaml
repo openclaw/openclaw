@@ -2449,7 +2449,7 @@ surfaces:
           reason: none
           human_override: false
   - id: small-linux
-    name: Raspberry Pi and small Linux devices
+    name: ChromeOS, Raspberry Pi, and small Linux devices
     family: platform-app
     level:
       id: beta

@@ -6964,11 +6964,11 @@ surfaces:
       source_ref: null
       process_version: 3
   - id: small-linux
-    name: Raspberry Pi and small Linux devices
+    name: ChromeOS, Raspberry Pi, and small Linux devices
     family: platform-app
     level: beta
     level_code: M3
-    rationale: Platform docs exist and Gateway path is Linux-based. Needs hardware-specific release smoke proof to move higher.
+    rationale: Raspberry Pi and ChromeOS/Crostini guides cover supported Linux-based Gateway paths. Needs platform-specific release smoke proof to move higher.
     completeness_instructions: references/completeness/raspberry-pi-small-linux-devices.md
     categories:
       - name: Setup and Compatibility
@@ -7010,7 +7010,11 @@ surfaces:
           - name: Fallback/build guidance
             coverageIds: [small-linux.fallback-build-guidance]
             description: Defines Fallback/build guidance setup, credential, configuration, and operator verification behavior for Package Manager and ARM Binary Compatibility.
+          - name: ChromeOS Crostini lifecycle
+            coverageIds: [small-linux.chromeos-crostini-lifecycle]
+            description: Crostini enablement, native installation, Node compatibility, service environment, and post-reboot Gateway recovery on ChromeOS.
         docs:
+          - docs/platforms/chromeos.md
           - docs/install/raspberry-pi.md
           - docs/install/index.md
           - docs/help/faq-first-run.md
@@ -7034,6 +7038,9 @@ surfaces:
           - Installer architecture detection
           - Optional ARM binary checks
           - Fallback/build guidance
+          - Enable the Linux container
+          - Prefer the native install over Docker
+          - Crostini is not always on
         category_note: arm-linux-install-and-runtime-prerequisites.md
         human_lts_override: false
       - name: Remote Access and Auth

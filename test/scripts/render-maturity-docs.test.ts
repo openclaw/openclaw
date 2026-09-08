@@ -474,6 +474,15 @@ describe("maturity docs renderer CLI", () => {
         id,
       ).toHaveLength(1);
     }
+    for (const id of [
+      "chromeos-raspberry-pi-and-small-linux-devices",
+      "raspberry-pi-and-small-linux-devices",
+    ]) {
+      expect(
+        taxonomyDocument.ids.filter((candidate: string) => candidate === id),
+        id,
+      ).toHaveLength(1);
+    }
     for (const [markdown, id] of [
       [scorecard, "surface-explorer"],
       [taxonomy, "product-areas"],

@@ -210,6 +210,7 @@ function markdownSlug(value: string): string {
 const legacySurfaceAnchors: Readonly<Record<string, readonly string[]>> = {
   "control-ui": ["gateway-web-app"],
   "imessage-bluebubbles": ["imessage-and-bluebubbles"],
+  "small-linux": ["raspberry-pi-and-small-linux-devices"],
 };
 
 function normalizeRoutePath(route: string): string {
