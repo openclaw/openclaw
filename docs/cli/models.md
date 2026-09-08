@@ -176,7 +176,7 @@ Notes:
 
 Provider discovery through `models list --refresh` is separate from the hosted
 metadata download performed by `models refresh`, described below. See the
-[Gateway catalog request](/gateway/protocol/operator-methods#modelslist-views)
+[Gateway catalog request](/gateway/protocol/operator-methods#models-list-views)
 for the wire controls.
 
 ### Refresh the hosted catalog

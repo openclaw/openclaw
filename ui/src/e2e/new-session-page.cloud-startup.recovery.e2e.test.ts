@@ -7,6 +7,7 @@ import {
   SESSION_LIST_DEFAULTS,
   WORKSPACE,
   controlUiSessionPath,
+  createCloudAgentsListResponse,
   createNewSessionPageE2eSuite,
   expectPastedPngImage,
   installMockGateway,
@@ -237,20 +238,7 @@ suite.define(() => {
       deferredMethods: ["sessions.create", "sessions.delete"],
       workspaceGit: true,
       methodResponses: {
-        "agents.list": {
-          agents: [
-            {
-              id: "cloud",
-              identity: { name: "Cloud" },
-              name: "Cloud",
-              workspace: WORKSPACE,
-              workspaceGit: true,
-            },
-          ],
-          defaultId: "cloud",
-          mainKey: "main",
-          scope: "agent",
-        },
+        "agents.list": createCloudAgentsListResponse(),
         "environments.list": {
           environments: [],
           profiles: [{ id: "aws", providerId: "crabbox" }],
@@ -361,20 +349,7 @@ suite.define(() => {
         deferredMethods: ["sessions.create"],
         workspaceGit: true,
         methodResponses: {
-          "agents.list": {
-            agents: [
-              {
-                id: "cloud",
-                identity: { name: "Cloud" },
-                name: "Cloud",
-                workspace: WORKSPACE,
-                workspaceGit: true,
-              },
-            ],
-            defaultId: "cloud",
-            mainKey: "main",
-            scope: "agent",
-          },
+          "agents.list": createCloudAgentsListResponse(),
           "environments.list": {
             environments: [],
             profiles: [{ id: "aws", providerId: "crabbox" }],
@@ -532,20 +507,7 @@ suite.define(() => {
       deferredMethods: ["sessions.send"],
       workspaceGit: true,
       methodResponses: {
-        "agents.list": {
-          agents: [
-            {
-              id: "cloud",
-              identity: { name: "Cloud" },
-              name: "Cloud",
-              workspace: WORKSPACE,
-              workspaceGit: true,
-            },
-          ],
-          defaultId: "cloud",
-          mainKey: "main",
-          scope: "agent",
-        },
+        "agents.list": createCloudAgentsListResponse(),
         "environments.list": {
           environments: [],
           profiles: [{ id: "aws", providerId: "crabbox" }],

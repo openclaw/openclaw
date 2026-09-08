@@ -261,8 +261,7 @@ export class HumanMentionMenu {
                   }),
                   iconHidden: true,
                   name: person.displayName,
-                  description: html`${person.online ? t("chat.mentions.online") : t("chat.mentions.offline")}
-                  · ${person.profileId.slice(-8)}`,
+                  description: person.online ? t("chat.mentions.online") : nothing,
                 }),
               )
         }

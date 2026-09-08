@@ -145,7 +145,7 @@ suite.define(() => {
           catalogs: [
             {
               id: "codex",
-              label: "Codex",
+              label: "Codex Native Sessions with a Deliberately Long Provider Label",
               capabilities: { continueSession: true, archive: true, startTerminal: true },
               hosts: [
                 {
