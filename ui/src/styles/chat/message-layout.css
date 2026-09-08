@@ -62,7 +62,6 @@
   outline: none;
 }
 
-/* Message landmarks occupy only the existing left gutter, centered in the pane. */
 .chat-position-rail {
   position: sticky;
   z-index: 4;
@@ -76,41 +75,71 @@
   position: absolute;
   top: 0;
   left: 10px;
-  display: grid;
-  grid-auto-rows: 8px;
-  width: 28px;
+  width: 48px;
   transform: translateY(-50%);
 }
 
-/* The measured gutter leaves 10px between the 38px rail footprint and messages. */
+/* Keep every message at 20px spacing. Long rails scroll within 60vh instead
+   of sampling messages or letting their marks overlap. */
+.chat-position-rail__marks {
+  --chat-position-fade-top: 0px;
+  --chat-position-fade-bottom: 0px;
+
+  position: relative;
+  display: grid;
+  grid-auto-rows: 20px;
+  max-height: min(60vh, calc(100cqh - 32px));
+  overflow: hidden auto;
+  overscroll-behavior: contain;
+  scroll-padding-block: 60px;
+  scrollbar-width: none;
+}
+
+.chat-position-rail__marks::-webkit-scrollbar {
+  display: none;
+}
+
+.chat-position-rail__marks[data-overflow-top] {
+  --chat-position-fade-top: 60px;
+}
+
+.chat-position-rail__marks[data-overflow-bottom] {
+  --chat-position-fade-bottom: 60px;
+}
+
+.chat-position-rail__marks[data-overflow-top],
+.chat-position-rail__marks[data-overflow-bottom] {
+  mask-image: linear-gradient(
+    to bottom,
+    transparent,
+    var(--text) var(--chat-position-fade-top),
+    var(--text) calc(100% - var(--chat-position-fade-bottom)),
+    transparent
+  );
+}
+
 .chat-thread:not([data-position-rail-gutter]) > .chat-position-rail {
   display: none;
 }
 
 .chat-position-rail__marker {
-  --chat-position-mark-width: 8px;
-
   position: relative;
   z-index: 1;
   display: flex;
   align-items: center;
-  width: 28px;
-  height: 8px;
+  width: 48px;
+  height: 20px;
   padding: 0;
   border: 0;
   border-radius: 0;
-  color: var(--muted);
+  color: color-mix(in srgb, var(--muted) 40%, transparent);
   background: transparent;
   cursor: var(--cursor-action);
 }
 
-.chat-position-rail__marker--user {
-  --chat-position-mark-width: 12px;
-}
-
 .chat-position-rail__tick {
   display: block;
-  width: var(--chat-position-mark-width);
+  width: 8px;
   height: 2px;
   border-radius: 1px;
   background: currentColor;
@@ -122,18 +151,47 @@
 
 .chat-position-rail__marker:focus-visible {
   outline: 2px solid var(--focus-ring);
-  outline-offset: 1px;
+  outline-offset: -2px;
 }
 
-.chat-position-rail:hover .chat-position-rail__marker,
-.chat-position-rail__marker:focus-visible,
-.chat-position-rail__marker--current {
+.chat-position-rail__marker[data-visible],
+.chat-position-rail:hover .chat-position-rail__marker {
+  color: var(--muted);
+}
+
+.chat-position-rail .chat-position-rail__marker:hover {
   color: var(--text);
 }
 
-.chat-position-rail__marker:hover .chat-position-rail__tick,
-.chat-position-rail__marker:focus-visible .chat-position-rail__tick {
-  width: calc(2 * var(--chat-position-mark-width));
+/* The wave is pointer-only; resting and keyboard-focused marks stay uniform. */
+.chat-position-rail__marker:has(
+    + .chat-position-rail__marker + .chat-position-rail__marker + .chat-position-rail__marker:hover
+  )
+  .chat-position-rail__tick,
+.chat-position-rail__marker:hover
+  + .chat-position-rail__marker
+  + .chat-position-rail__marker
+  + .chat-position-rail__marker
+  .chat-position-rail__tick {
+  width: 12px;
+}
+
+.chat-position-rail__marker:has(+ .chat-position-rail__marker + .chat-position-rail__marker:hover)
+  .chat-position-rail__tick,
+.chat-position-rail__marker:hover
+  + .chat-position-rail__marker
+  + .chat-position-rail__marker
+  .chat-position-rail__tick {
+  width: 20px;
+}
+
+.chat-position-rail__marker:has(+ .chat-position-rail__marker:hover) .chat-position-rail__tick,
+.chat-position-rail__marker:hover + .chat-position-rail__marker .chat-position-rail__tick {
+  width: 28px;
+}
+
+.chat-position-rail__marker:hover .chat-position-rail__tick {
+  width: 40px;
 }
 
 .chat-position-rail__preview {
@@ -175,11 +233,6 @@
   overflow: hidden;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 3;
-}
-
-.chat-position-rail__preview-skeleton {
-  width: 100%;
-  height: 2.7em;
 }
 
 .chat-thread-inner > :first-child {
@@ -773,7 +826,7 @@
     background: ButtonText;
   }
 
-  .chat-position-rail__marker--current .chat-position-rail__tick {
+  .chat-position-rail__marker[data-visible] .chat-position-rail__tick {
     background: Highlight;
     outline: 1px solid Highlight;
   }
