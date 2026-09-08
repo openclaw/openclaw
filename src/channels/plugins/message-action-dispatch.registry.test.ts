@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { revokePluginRecordLifecycleEpoch } from "../../plugins/registry-lifecycle.js";
 import { createPluginRegistry } from "../../plugins/registry.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
@@ -306,7 +307,7 @@ describe("official channel delegated read provenance", () => {
     "reregister",
   ] as const)("rejects an in-flight official read after owner %s", async (change) => {
     const fixture = registerChannel({ trustedOfficialInstall: true, providerOwnedReadGates: true });
-    const pending = Promise.withResolvers<typeof receipt>();
+    const pending = createDeferred<typeof receipt>();
     fixture.handleAction.mockReturnValueOnce(pending.promise);
     const read = dispatchChannelMessageAction(context);
     expect(fixture.handleAction).toHaveBeenCalledOnce();
