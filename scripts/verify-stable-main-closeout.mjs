@@ -74,6 +74,9 @@ function main() {
     rollbackDrillDate: args["rollback-drill-date"],
     allowStaleRollbackDrill: args["allow-stale-rollback-drill"] === "true",
     allowFailedPublishRecovery: args["allow-failed-publish-recovery"] === "true",
+    publishRecovery: args["publish-recovery"]
+      ? readJson(resolve(args["publish-recovery"]))
+      : undefined,
     existingManifest: args["existing-manifest"]
       ? readJson(resolve(args["existing-manifest"]))
       : undefined,

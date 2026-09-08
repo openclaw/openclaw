@@ -314,6 +314,27 @@ export function verifyStableMainCloseout(params) {
     }
   }
 
+  if (
+    params.publishRecovery &&
+    (!params.allowFailedPublishRecovery ||
+      params.publishRecovery.mode !== "split-publication-v1" ||
+      params.publishRecovery.releaseTag !== params.tag ||
+      params.publishRecovery.sourceSha !== params.releaseTagSha ||
+      params.publishRecovery.originalParent?.runId !== params.releasePublishRunId ||
+      params.publishRecovery.fullReleaseValidation?.runId !== params.fullReleaseValidationRunId ||
+      params.publishRecovery.fullReleaseValidation?.runAttempt !== fullReleaseValidationRunAttempt)
+  ) {
+    errors.push("Verified publication recovery does not match the closeout identity.");
+  }
+  if (
+    params.existingManifest?.releasePublishRecovery?.mode === "split-publication-v1" &&
+    JSON.stringify(params.publishRecovery) !==
+      JSON.stringify(params.existingManifest.releasePublishRecovery)
+  ) {
+    errors.push(
+      "Recorded split publication recovery must be independently reverified without changes.",
+    );
+  }
   verifyRollbackDrill(params, errors);
 
   if (errors.length > 0) {
@@ -343,7 +364,7 @@ export function verifyStableMainCloseout(params) {
     ...(existingManifest
       ? copyOwnFields(existingManifest, "releasePublishRecovery")
       : params.allowFailedPublishRecovery
-        ? { releasePublishRecovery: { npmDockerVerified: true } }
+        ? { releasePublishRecovery: params.publishRecovery ?? { npmDockerVerified: true } }
         : {}),
     rollbackDrill: {
       id: params.rollbackDrillId,

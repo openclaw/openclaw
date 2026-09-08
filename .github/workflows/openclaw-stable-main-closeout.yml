@@ -404,8 +404,13 @@ jobs:
           }
           BASH
 
+      - name: Set up Docker verification for manual recovery
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.allow_failed_publish_recovery }}
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+
       - name: Verify release workflow evidence
         env:
+          RELEASE_TAG: ${{ needs.resolve.outputs.tag }}
           GH_TOKEN: ${{ github.token }}
           EVIDENCE_TAG: ${{ needs.resolve.outputs.evidence_tag }}
           FULL_RELEASE_VALIDATION_RUN_ID: ${{ needs.resolve.outputs.full_release_validation_run_id }}
@@ -437,50 +442,6 @@ jobs:
           gh_with_retry run view "$RELEASE_PUBLISH_RUN_ID" --repo "$GITHUB_REPOSITORY" \
             --json workflowName,event,status,conclusion,headSha,jobs \
             > "$RUNNER_TEMP/release-publish-run.json"
-          node --input-type=module - "$RUNNER_TEMP/release-publish-run.json" <<'NODE'
-          import { readFileSync } from "node:fs";
-          const run = JSON.parse(readFileSync(process.argv[2], "utf8"));
-          for (const [key, expected] of [
-            ["workflowName", "OpenClaw Release Publish"],
-            ["event", "workflow_dispatch"],
-            ["status", "completed"],
-          ]) {
-            if (run[key] !== expected) {
-              throw new Error(`OpenClaw Release Publish must have ${key}=${expected}, got ${run[key] ?? "<missing>"}.`);
-            }
-          }
-          const recoveryRequested = process.env.ALLOW_FAILED_PUBLISH_RECOVERY === "true";
-          if (recoveryRequested && run.conclusion !== "failure") {
-            throw new Error(
-              `Failed-publish recovery requires conclusion=failure, got ${run.conclusion ?? "<missing>"}.`,
-            );
-          }
-          const failedRecovery = recoveryRequested && run.conclusion === "failure";
-          if (run.conclusion !== "success" && !failedRecovery) {
-            throw new Error(
-              `OpenClaw Release Publish must have conclusion=success, got ${run.conclusion ?? "<missing>"}.`,
-            );
-          }
-          if (failedRecovery) {
-            // App failures cannot hold npm closeout; the Gateway distribution
-            // still needs successful npm and Docker publication in this parent.
-            const requiredJobs = [
-              ["Publish plugins, then OpenClaw"],
-              [
-                "Publish Docker images / Publish prepared Docker images",
-                // Published releases before prepared-image promotion used this terminal job.
-                "Publish Docker images / Verify attestations and promote channel",
-              ],
-            ];
-            for (const names of requiredJobs) {
-              const jobs = (run.jobs ?? []).filter((job) => names.includes(job.name));
-              if (jobs.length !== 1 || jobs[0].conclusion !== "success") {
-                throw new Error(`Failed-publish recovery requires one successful publication job: ${names.join(" or ")}.`);
-              }
-            }
-            console.log("Accepting failed Release Publish parent with verified npm and Docker publication; apps may be pending.");
-          }
-          NODE
 
           manifest_dir="$RUNNER_TEMP/full-release-validation-manifest"
           rm -rf "$manifest_dir"
@@ -517,6 +478,83 @@ jobs:
             exit 1
           }
 
+          recovery_evidence="$manifest_dir/openclaw-${evidence_version}-postpublish-evidence.json"
+          if [[ "$ALLOW_FAILED_PUBLISH_RECOVERY" == "true" ]]; then
+            gh_with_retry release download "$EVIDENCE_TAG" --repo "$GITHUB_REPOSITORY" \
+              --pattern "$(basename "$recovery_evidence")" \
+              --pattern "$(basename "$recovery_evidence").sha256" --dir "$manifest_dir"
+          fi
+          SOURCE_SHA="$tag_sha" node --input-type=module - "$RUNNER_TEMP/release-publish-run.json" "$manifest_dir/$manifest_asset" "$recovery_evidence" <<'NODE'
+          import { readFileSync, writeFileSync } from "node:fs";
+          import { createHash } from "node:crypto";
+          import { basename } from "node:path";
+          const run = JSON.parse(readFileSync(process.argv[2], "utf8"));
+          for (const [key, expected] of [
+            ["workflowName", "OpenClaw Release Publish"],
+            ["event", "workflow_dispatch"],
+            ["status", "completed"],
+          ]) {
+            if (run[key] !== expected) {
+              throw new Error(`OpenClaw Release Publish must have ${key}=${expected}, got ${run[key] ?? "<missing>"}.`);
+            }
+          }
+          const recoveryRequested = process.env.ALLOW_FAILED_PUBLISH_RECOVERY === "true";
+          if (recoveryRequested && run.conclusion !== "failure") {
+            throw new Error(
+              `Failed-publish recovery requires conclusion=failure, got ${run.conclusion ?? "<missing>"}.`,
+            );
+          }
+          const failedRecovery = recoveryRequested && run.conclusion === "failure";
+          if (run.conclusion !== "success" && !failedRecovery) {
+            throw new Error(
+              `OpenClaw Release Publish must have conclusion=success, got ${run.conclusion ?? "<missing>"}.`,
+            );
+          }
+          let recoveryEvidence = null;
+          if (failedRecovery) {
+            const bytes = readFileSync(process.argv[4]);
+            const checksum = readFileSync(`${process.argv[4]}.sha256`, "utf8");
+            const entry = /^([a-f0-9]{64}) {2}([^\r\n]+)\r?\n?$/.exec(checksum);
+            if (!entry || entry[2] !== basename(process.argv[4]) ||
+              entry[1] !== createHash("sha256").update(bytes).digest("hex")) {
+              throw new Error("Postpublish checksum must bind exactly the recovery evidence filename and bytes.");
+            }
+            recoveryEvidence = JSON.parse(bytes);
+          }
+          if (failedRecovery && (recoveryEvidence?.operatorRecovery?.npmPublishRunId !== undefined ||
+            recoveryEvidence?.operatorRecovery?.dockerPromotionRunId !== undefined)) {
+            const { verifyStablePublishRecovery } = await import('./.closeout-tooling/scripts/lib/stable-publish-recovery.mjs');
+            if (recoveryEvidence.releasePublishRunId !== process.env.RELEASE_PUBLISH_RUN_ID) {
+              throw new Error("Recovery parent differs from resolved postpublish evidence.");
+            }
+            const recovery = await verifyStablePublishRecovery({
+              evidence: recoveryEvidence,
+              manifest: JSON.parse(readFileSync(process.argv[3], "utf8")),
+              sourceSha: process.env.SOURCE_SHA,
+              tag: process.env.RELEASE_TAG,
+            });
+            writeFileSync(`${process.env.RUNNER_TEMP}/stable-publish-recovery.json`, JSON.stringify(recovery));
+          } else if (failedRecovery) {
+            // App failures cannot hold npm closeout; the Gateway distribution
+            // still needs successful npm and Docker publication in this parent.
+            const requiredJobs = [
+              ["Publish plugins, then OpenClaw"],
+              [
+                "Publish Docker images / Publish prepared Docker images",
+                // Published releases before prepared-image promotion used this terminal job.
+                "Publish Docker images / Verify attestations and promote channel",
+              ],
+            ];
+            for (const names of requiredJobs) {
+              const jobs = (run.jobs ?? []).filter((job) => names.includes(job.name));
+              if (jobs.length !== 1 || jobs[0].conclusion !== "success") {
+                throw new Error(`Failed-publish recovery requires one successful publication job: ${names.join(" or ")}.`);
+              }
+            }
+            console.log("Accepting failed Release Publish parent with verified npm and Docker publication; apps may be pending.");
+          }
+          NODE
+
       - name: Verify stable state and write closeout manifest
         env:
           GH_TOKEN: ${{ github.token }}
@@ -548,6 +586,10 @@ jobs:
             existing_manifest_args=(--existing-manifest "$CLOSEOUT_DIR/$closeout_asset"
               --published-appcast "$CLOSEOUT_DIR/published-appcast.xml")
           fi
+          recovery_args=()
+          if [[ -f "$RUNNER_TEMP/stable-publish-recovery.json" ]]; then
+            recovery_args=(--publish-recovery "$RUNNER_TEMP/stable-publish-recovery.json")
+          fi
           node .closeout-tooling/scripts/verify-stable-main-closeout.mjs \
             --tag "$RELEASE_TAG" \
             --main-dir "$GITHUB_WORKSPACE" \
@@ -561,6 +603,7 @@ jobs:
             --allow-stale-rollback-drill "$REPAIR_PARTIAL_CLOSEOUT" \
             --allow-failed-publish-recovery "$ALLOW_FAILED_PUBLISH_RECOVERY" \
             "${existing_manifest_args[@]}" \
+            "${recovery_args[@]}" \
             --output "$CLOSEOUT_DIR/stable-main-closeout.json"
           jq -r '"Apps: \(.apps // "not recorded in legacy snapshot")\nAppcast: \(.appcast // "verified")"' \
             "$CLOSEOUT_DIR/stable-main-closeout.json" >> "$GITHUB_STEP_SUMMARY"

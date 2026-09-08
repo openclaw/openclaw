@@ -1,8 +1,10 @@
 // Verify Stable Main Closeout tests cover stable closeout CLI behavior.
 import { execFileSync, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 
 const tempDirs: string[] = [];
@@ -127,5 +129,188 @@ describe("verify-stable-main-closeout", () => {
     expect(changed.stderr).toContain(
       `Recorded release asset changed or disappeared: ${evidence.name}`,
     );
+  });
+});
+
+describe("stable closeout workflow publication routing", () => {
+  it.each([
+    {
+      name: "ordinary successful parent",
+      manual: false,
+      conclusion: "success",
+      npm: "success",
+      docker: "success",
+      recovery: undefined,
+      code: 0,
+    },
+    {
+      name: "failed parent without manual recovery",
+      manual: false,
+      conclusion: "failure",
+      npm: "success",
+      docker: "success",
+      recovery: undefined,
+      code: 1,
+    },
+    {
+      name: "legacy same-parent recovery",
+      manual: true,
+      conclusion: "failure",
+      npm: "success",
+      docker: "success",
+      recovery: undefined,
+      code: 0,
+    },
+    {
+      name: "unrelated operator metadata",
+      manual: true,
+      conclusion: "failure",
+      npm: "success",
+      docker: "success",
+      recovery: { reason: "App assets are pending" },
+      code: 0,
+    },
+    {
+      name: "failed legacy npm publication",
+      manual: true,
+      conclusion: "failure",
+      npm: "failure",
+      docker: "success",
+      recovery: undefined,
+      code: 1,
+    },
+    {
+      name: "failed legacy Docker publication",
+      manual: true,
+      conclusion: "failure",
+      npm: "success",
+      docker: "failure",
+      recovery: undefined,
+      code: 1,
+    },
+    {
+      name: "incomplete split selectors",
+      manual: true,
+      conclusion: "failure",
+      npm: "success",
+      docker: "success",
+      recovery: { npmPublishRunId: "13" },
+      code: 1,
+    },
+    {
+      name: "rejects wrong-file checksum",
+      manual: true,
+      conclusion: "failure",
+      npm: "success",
+      docker: "success",
+      recovery: undefined,
+      code: 1,
+      checksum: "wrong-file",
+    },
+    {
+      name: "rejects duplicate checksum",
+      manual: true,
+      conclusion: "failure",
+      npm: "success",
+      docker: "success",
+      recovery: undefined,
+      code: 1,
+      checksum: "duplicate",
+    },
+    {
+      name: "rejects mismatch checksum",
+      manual: true,
+      conclusion: "failure",
+      npm: "success",
+      docker: "success",
+      recovery: undefined,
+      code: 1,
+      checksum: "mismatch",
+    },
+  ])("preserves $name", (scenario) => {
+    const workflow = readFileSync(".github/workflows/openclaw-stable-main-closeout.yml", "utf8");
+    const block = workflow.match(
+      /node --input-type=module - "\$RUNNER_TEMP\/release-publish-run.json"[^\n]+<<'NODE'\n([\s\S]*?)\n {10}NODE/u,
+    )?.[1];
+    if (!block) {
+      throw new Error("Publication verifier node block missing");
+    }
+    const script = block
+      .split("\n")
+      .map((line) => line.slice(10))
+      .join("\n")
+      .replace(
+        "'./.closeout-tooling/scripts/lib/stable-publish-recovery.mjs'",
+        JSON.stringify(pathToFileURL(path.resolve("scripts/lib/stable-publish-recovery.mjs")).href),
+      );
+    const dir = mkdtempSync(path.join(tmpdir(), "openclaw-closeout-routing-"));
+    tempDirs.push(dir);
+    const run = path.join(dir, "run.json");
+    const evidence = path.join(dir, "evidence.json");
+    const manifest = path.join(dir, "manifest.json");
+    writeFileSync(
+      run,
+      JSON.stringify({
+        workflowName: "OpenClaw Release Publish",
+        event: "workflow_dispatch",
+        status: "completed",
+        conclusion: scenario.conclusion,
+        jobs: [
+          { name: "Publish plugins, then OpenClaw", conclusion: scenario.npm },
+          {
+            name: "Publish Docker images / Publish prepared Docker images",
+            conclusion: scenario.docker,
+          },
+        ],
+      }),
+    );
+    writeFileSync(
+      evidence,
+      JSON.stringify({
+        releasePublishRunId: "12",
+        releaseTag: "v2026.6.8",
+        releaseVersion: "2026.6.8",
+        releaseSha: "a".repeat(40),
+        operatorRecovery: scenario.recovery,
+      }),
+    );
+    writeFileSync(manifest, JSON.stringify({ targetSha: "a".repeat(40) }));
+    let checksum = `${createHash("sha256").update(readFileSync(evidence)).digest("hex")}  evidence.json\n`;
+    if ("checksum" in scenario) {
+      if (scenario.checksum === "wrong-file") {
+        checksum = `${createHash("sha256").update(readFileSync(manifest)).digest("hex")}  manifest.json\n`;
+      }
+      if (scenario.checksum === "duplicate") {
+        checksum += checksum;
+      }
+      if (scenario.checksum === "mismatch") {
+        checksum = `${"b".repeat(64)}  evidence.json\n`;
+      }
+    }
+    writeFileSync(`${evidence}.sha256`, checksum);
+
+    const result = spawnSync(
+      process.execPath,
+      ["--input-type=module", "-", run, manifest, evidence],
+      {
+        input: script,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          ALLOW_FAILED_PUBLISH_RECOVERY: String(scenario.manual),
+          RELEASE_PUBLISH_RUN_ID: "12",
+          RELEASE_TAG: "v2026.6.8",
+          SOURCE_SHA: "a".repeat(40),
+          RUNNER_TEMP: dir,
+        },
+      },
+    );
+    expect(result.status, result.stderr).toBe(scenario.code);
+    if ("checksum" in scenario) {
+      expect(result.stderr).toContain("Postpublish checksum must bind exactly");
+    }
+    if (scenario.name === "incomplete split selectors") {
+      expect(result.stderr).toContain("invalid run or attempt ID");
+    }
   });
 });
