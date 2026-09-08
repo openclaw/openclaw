@@ -258,8 +258,16 @@ export function resolveContextTokenResolutionFromCache(
       modelContextWindow,
     );
     if (discoveredCap !== undefined) {
+      // Authored contextWindow-only rows are projected into the shared window
+      // cache, so a config-only model can read its own cap back as
+      // "discovered". The authored cap owns ties to keep it non-sticky, while
+      // explicit runtime metadata stays model-owned on ties so warm provider
+      // discovery keeps persisting resolved-v1.
+      const runtimeCap = minPositiveContextTokens(modelContextTokens, modelContextWindow);
       const configuredCapOwnsResolution =
-        configuredContextWindow !== undefined && configuredContextWindow < discoveredCap;
+        configuredContextWindow !== undefined &&
+        configuredContextWindow <= discoveredCap &&
+        (runtimeCap === undefined || configuredContextWindow < runtimeCap);
       return {
         contextTokens: configuredCapOwnsResolution ? configuredContextWindow : discoveredCap,
         source: configuredCapOwnsResolution ? "configured" : "model",
