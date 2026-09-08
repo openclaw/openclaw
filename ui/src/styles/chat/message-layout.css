@@ -417,12 +417,22 @@
   inset: 0;
   display: grid;
   place-items: center;
+  width: 44px;
+  height: 44px;
+  margin: auto;
+  border-radius: 50%;
+  color: var(--media-foreground);
+  background: color-mix(in srgb, var(--media-bg) 55%, transparent);
   pointer-events: none;
 }
 
 .chat-video-preview__play svg {
-  width: 32px;
-  height: 32px;
+  width: 24px;
+  height: 24px;
+}
+
+.chat-video-preview__play svg polygon {
+  fill: currentColor;
 }
 
 /* A failed poster retains its tile without squeezing the existing card actions. */
