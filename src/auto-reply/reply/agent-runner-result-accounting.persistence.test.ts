@@ -148,7 +148,10 @@ async function createFixture() {
   replyOperation.setPhase("running");
   retainReplyOperationUntilComplete(replyOperation);
   operations.push(replyOperation);
-  const context: FinalizeReplyAgentRunInput & { storePath: string } = {
+  const context: FinalizeReplyAgentRunInput & {
+    storePath: string;
+    activeSessionEntry: InternalSessionEntry;
+  } = {
     activeIsNewSession: false,
     activeSessionEntry: entry,
     activeSessionStore: sessionStore,
@@ -544,6 +547,90 @@ it("accounts a completed compaction before an empty heartbeat skips reply prepar
     totalTokensFresh: true,
   });
   expect(fixture.read()?.pendingFinalDelivery).toBeUndefined();
+});
+
+it.each([
+  { heartbeat: false, payloads: [{ text: "visible reply" }], silent: false, touchesActivity: true },
+  { heartbeat: false, payloads: [], silent: true, touchesActivity: false },
+  { heartbeat: true, payloads: [{ text: "visible reply" }], silent: false, touchesActivity: false },
+] as const)(
+  "updates session activity only for visible ordinary replies (heartbeat=$heartbeat, silent=$silent)",
+  async ({ heartbeat, payloads, silent, touchesActivity }) => {
+    const fixture = await createFixture();
+    const previousActivityAt = 10;
+    await fixture.replace({
+      ...fixture.context.activeSessionEntry!,
+      lastReadAt: previousActivityAt,
+      lastActivityAt: previousActivityAt,
+    });
+    fixture.context.isHeartbeat = heartbeat;
+    fixture.context.execution.result.payloads = [...payloads];
+    if (silent) {
+      fixture.context.followupRun.run.terminalReplyExpectation = "optional";
+      fixture.context.execution.result.meta.finalAssistantRawText = "NO_REPLY";
+    }
+
+    await fixture.account("ordinary", {});
+
+    const entry = fixture.read();
+    if (touchesActivity) {
+      expect(entry?.lastActivityAt).toBeGreaterThan(previousActivityAt);
+    } else {
+      expect(entry?.lastActivityAt).toBe(previousActivityAt);
+    }
+  },
+);
+
+it("does not mark a same-session replacement writer unread from a stale ordinary completion", async () => {
+  const fixture = await createFixture();
+  const previousActivityAt = 10;
+  const replacementWriter: InternalSessionEntry = {
+    ...fixture.context.activeSessionEntry!,
+    activeWriterRunId: "replacement-writer",
+    lastReadAt: previousActivityAt,
+    lastActivityAt: previousActivityAt,
+  };
+  await fixture.replace(replacementWriter);
+
+  await accountAgentTurn(fixture.context);
+
+  expect(fixture.read()).toMatchObject({
+    sessionId: fixture.sessionId,
+    lifecycleRevision: "generation-1",
+    activeWriterRunId: "replacement-writer",
+    lastReadAt: previousActivityAt,
+    lastActivityAt: previousActivityAt,
+  });
+});
+
+it("skips SQLite accounting after a same-session reply operation is replaced", async () => {
+  const fixture = await createFixture();
+  const previousActivityAt = 10;
+  const replacementWriter: InternalSessionEntry = {
+    ...fixture.context.activeSessionEntry!,
+    activeWriterRunId: "replacement-writer",
+    lastReadAt: previousActivityAt,
+    lastActivityAt: previousActivityAt,
+  };
+  await fixture.replace(replacementWriter);
+  const before = fixture.read();
+  fixture.context.replyOperation.complete();
+  const replacement = createReplyOperation({
+    sessionId: fixture.sessionId,
+    sessionKey: fixture.context.sessionKey!,
+    resetTriggered: false,
+  });
+  operations.push(replacement);
+  const write = vi.spyOn(sessionAccessor, "patchSessionEntryCore");
+
+  try {
+    await accountAgentTurn(fixture.context);
+    expect(write).not.toHaveBeenCalled();
+  } finally {
+    write.mockRestore();
+  }
+
+  expect(fixture.read()).toEqual(before);
 });
 
 it.each([

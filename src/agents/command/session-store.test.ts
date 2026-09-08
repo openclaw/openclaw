@@ -1631,6 +1631,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
         result: createRunResult({ sessionId, provider: "openai", model: "gpt-5.4" }),
         touchInteraction: false,
         touchActivity: false,
+        preserveUserFacingSessionModelState: true,
       });
 
       expect(sessionStore[sessionKey]?.lastActivityAt).toBe(lastActivityAt);

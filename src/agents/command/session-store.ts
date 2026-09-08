@@ -12,6 +12,7 @@ import { projectSessionSnapshotChanges } from "../../config/sessions/session-sna
 import { resolveMaintenanceConfigFromInput } from "../../config/sessions/store-maintenance.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { deriveSessionUnread } from "../../shared/session-unread.js";
 import { estimateAggregateUsageCost } from "../../utils/usage-format.js";
 import { clearAllCliSessions, setCliSessionBinding } from "../cli-session.js";
 import { resolveContextTokensForModel } from "../context.js";
@@ -184,10 +185,9 @@ export async function updateSessionStoreAfterAgentRun(params: {
   }
   const metadataPatch = preserveUserFacingRunState
     ? {
-        // Preserved-state runs must not alter perceived session state, so the
-        // unread-driving lastActivityAt stays untouched here.
+        // Preserve model/usage state, but honor the independent activity
+        // signal so completed user-facing handoffs can mark sessions unread.
         updatedAt: next.updatedAt,
-        ...(touchInteraction ? { lastInteractionAt: next.lastInteractionAt } : {}),
       }
     : next;
   const maintenanceConfig = resolveMaintenanceConfigFromInput(cfg.session?.maintenance);
@@ -208,14 +208,31 @@ export async function updateSessionStoreAfterAgentRun(params: {
         // their exact still-current row and cannot recreate a deleted owner.
         return null;
       }
-      return preserveUserFacingRunState
-        ? metadataPatch
-        : projectSessionSnapshotChanges({
-            initial: entry,
-            next,
-            current: currentEntry,
-            reassertAbortedLastRun: result.meta.aborted === true,
-          });
+      if (preserveUserFacingRunState) {
+        const currentOwnerMatches =
+          context.existingEntry &&
+          isSameSessionLifecycleOwner(context.existingEntry, expectedSession);
+        const preservesUnreadState =
+          !context.existingEntry ||
+          deriveSessionUnread(context.existingEntry) ===
+            deriveSessionUnread({
+              ...context.existingEntry,
+              lastInteractionAt: next.lastInteractionAt,
+            });
+        return {
+          ...metadataPatch,
+          ...(touchInteraction && (currentOwnerMatches || preservesUnreadState)
+            ? { lastInteractionAt: next.lastInteractionAt }
+            : {}),
+          ...(touchActivity && currentOwnerMatches ? { lastActivityAt: next.lastActivityAt } : {}),
+        };
+      }
+      return projectSessionSnapshotChanges({
+        initial: entry,
+        next,
+        current: currentEntry,
+        reassertAbortedLastRun: result.meta.aborted === true,
+      });
     },
     {
       ...(preserveUserFacingRunState || params.compactionAccounting
