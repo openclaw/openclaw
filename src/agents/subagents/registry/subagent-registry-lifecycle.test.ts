@@ -737,14 +737,9 @@ describe("subagent registry lifecycle hardening", () => {
   });
 
   it("hands announce dispatch the durable requester agent id on a multi-agent roster", async () => {
-    // Two agents and no default marker: resolveDefaultAgentId cannot pick one, so any
-    // consumer that re-derives the requester owner instead of reading the persisted
-    // one throws AGENT_SELECTION_REQUIRED. Spawn already captured the owner, so
-    // dispatch has to carry it.
-    const cfg = { agents: { list: [{ id: "alpha" }, { id: "beta" }] } };
+    const cfg = { agents: { ownership: "explicit" as const, entries: { alpha: {}, beta: {} } } };
     const entry = createRunEntry({
       expectsCompletionMessage: true,
-      // Unscoped on purpose: nothing downstream can parse the owner out of this key.
       requesterSessionKey: "main",
       requesterAgentId: "beta",
     });
