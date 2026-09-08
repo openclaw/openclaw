@@ -20,6 +20,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.DeviceConfigurationOverride
@@ -29,6 +30,8 @@ import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.assertIsNotSelected
+import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.hasScrollAction
 import androidx.compose.ui.test.hasSetTextAction
@@ -52,7 +55,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModelStore
 import androidx.test.core.app.ApplicationProvider
-import com.google.mlkit.common.internal.MlKitInitProvider
+import com.google.mlkit.common.sdkinternal.MlKitContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -60,7 +63,6 @@ import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
-import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import org.robolectric.util.ReflectionHelpers
@@ -82,17 +84,7 @@ class InitialOnboardingLayoutTest {
 
   @Test
   fun gatewayCredentialsAndSetupCodeAreMasked() {
-    val app = ApplicationProvider.getApplicationContext<NodeApp>()
-    val prefs = SecurePrefs(app, app.getSharedPreferences("onboarding-input-${UUID.randomUUID()}", Context.MODE_PRIVATE))
-    val runtime = NodeRuntime(app, prefs, NodeRuntimeMode.ScreenshotFixture)
-    val models = ViewModelStore()
-    try {
-      Robolectric.buildContentProvider(MlKitInitProvider::class.java).create()
-      val viewModel = MainViewModel(app, prefs, SavedStateHandle())
-      models.put("onboarding", viewModel)
-      ReflectionHelpers.getField<MutableStateFlow<NodeRuntime?>>(viewModel, "runtimeRef").value = runtime
-      setContent(fontScale = 1f, viewportHeight = 720.dp) { OnboardingFlow(viewModel) }
-
+    withOnboarding {
       composeRule.onNodeWithText("Continue").performClick()
       composeRule.onNodeWithText("Set up manually").performClick()
       assertInputPresentation("Host", "127.0.0.1", secret = false, scroll = true)
@@ -104,6 +96,98 @@ class InitialOnboardingLayoutTest {
       composeRule.onNodeWithText("Scan QR or setup code").performClick()
       composeRule.onNodeWithText("Enter setup code").performClick()
       assertInputPresentation("Paste setup code", "synthetic-setup-code", secret = true)
+    }
+  }
+
+  @Test
+  @Config(qualifiers = "w480dp-h800dp-420dpi")
+  fun horizontalTransportChoicesExposeSelectionAndKeepForcedTlsDisabled() = verifyTransportChoices(fontScale = 1f)
+
+  @Test
+  @Config(qualifiers = "w480dp-h800dp-420dpi")
+  fun stackedTransportChoicesExposeSelectionAndKeepForcedTlsDisabled() = verifyTransportChoices(fontScale = 2f)
+
+  private fun verifyTransportChoices(fontScale: Float) {
+    withOnboarding(fontScale = fontScale, viewportWidth = 480.dp) {
+      composeRule.onNodeWithText("Continue").performClick()
+      composeRule.onNodeWithText("Set up manually").performClick()
+
+      fun changeHost(
+        previous: String,
+        next: String,
+      ) {
+        composeRule.onNode(hasSetTextAction() and hasText(previous)).performScrollTo().performTextReplacement(next)
+      }
+      changeHost("Host", "127.0.0.1")
+      val cleartext = composeRule.onNodeWithText("Unencrypted")
+      val tls = composeRule.onNodeWithText("Secure (TLS)")
+
+      fun assertTransport(
+        tlsSelected: Boolean,
+        cleartextEnabled: Boolean = true,
+      ) {
+        tls.performScrollTo().assertIsDisplayed().assertIsEnabled()
+        cleartext.assertIsDisplayed()
+        if (tlsSelected) {
+          tls.assertIsSelected()
+          cleartext.assertIsNotSelected()
+        } else {
+          cleartext.assertIsSelected()
+          tls.assertIsNotSelected()
+        }
+        for (choice in listOf(cleartext, tls)) {
+          choice.assert(SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.Button))
+          val bounds = choice.fetchSemanticsNode().touchBoundsInRoot
+          val minimum = with(composeRule.density) { 48.dp.toPx() }
+          assertTrue("Transport choice keeps its minimum touch width", bounds.width >= minimum)
+          assertTrue("Transport choice keeps its minimum touch height", bounds.height >= minimum)
+        }
+        if (cleartextEnabled) cleartext.assertIsEnabled() else cleartext.assertIsNotEnabled()
+      }
+      assertTransport(tlsSelected = false)
+      val clearBounds = cleartext.getUnclippedBoundsInRoot()
+      val tlsBounds = tls.getUnclippedBoundsInRoot()
+      if (fontScale == 1f) {
+        assertEquals(clearBounds.top, tlsBounds.top)
+        assertTrue("Normal font exercises the horizontal choices", tlsBounds.left >= clearBounds.right)
+      } else {
+        assertEquals(clearBounds.left, tlsBounds.left)
+        assertTrue("Large font exercises the stacked choices", tlsBounds.top >= clearBounds.bottom)
+      }
+      tls.performClick()
+      assertTransport(tlsSelected = true)
+      changeHost("127.0.0.1", "gateway.example.com")
+      assertTransport(tlsSelected = true, cleartextEnabled = false)
+      cleartext.performClick()
+      assertTransport(tlsSelected = true, cleartextEnabled = false)
+      // Returning local exposes an accidental disabled callback that forced TLS would hide.
+      changeHost("gateway.example.com", "127.0.0.1")
+      assertTransport(tlsSelected = true)
+      cleartext.performClick()
+      assertTransport(tlsSelected = false)
+      changeHost("127.0.0.1", "gateway.example.com")
+      assertTransport(tlsSelected = true, cleartextEnabled = false)
+      changeHost("gateway.example.com", "127.0.0.1")
+      assertTransport(tlsSelected = false)
+    }
+  }
+
+  private fun withOnboarding(
+    fontScale: Float = 1f,
+    viewportWidth: Dp = 360.dp,
+    verify: () -> Unit,
+  ) {
+    val app = ApplicationProvider.getApplicationContext<NodeApp>()
+    val prefs = SecurePrefs(app, app.getSharedPreferences("onboarding-input-${UUID.randomUUID()}", Context.MODE_PRIVATE))
+    val runtime = NodeRuntime(app, prefs, NodeRuntimeMode.ScreenshotFixture)
+    val models = ViewModelStore()
+    try {
+      MlKitContext.initializeIfNeeded(app)
+      val viewModel = MainViewModel(app, prefs, SavedStateHandle())
+      models.put("onboarding", viewModel)
+      ReflectionHelpers.getField<MutableStateFlow<NodeRuntime?>>(viewModel, "runtimeRef").value = runtime
+      setContent(fontScale = fontScale, viewportHeight = 720.dp, viewportWidth = viewportWidth) { OnboardingFlow(viewModel) }
+      verify()
     } finally {
       try {
         models.clear()
@@ -303,6 +387,7 @@ class InitialOnboardingLayoutTest {
   private fun setContent(
     fontScale: Float,
     viewportHeight: Dp,
+    viewportWidth: Dp = 360.dp,
     content: @Composable () -> Unit,
   ) {
     composeRule.setContent {
@@ -311,7 +396,7 @@ class InitialOnboardingLayoutTest {
           Box(
             modifier =
               Modifier
-                .size(width = 360.dp, height = viewportHeight)
+                .size(width = viewportWidth, height = viewportHeight)
                 .clipToBounds()
                 .testTag(OnboardingViewportTag),
           ) {
