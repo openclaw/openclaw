@@ -108,9 +108,6 @@ export function isIpv6Address(address: ParsedIpAddress): address is ipaddr.IPv6 
   return address.kind() === "ipv6";
 }
 
-/** Number of leading bits shared by every IPv4-mapped IPv6 address (::ffff:0:0/96). */
-const IPV4_MAPPED_PREFIX_BITS = 96;
-
 function normalizeIpv4MappedAddress(address: ParsedIpAddress): ParsedIpAddress {
   if (!isIpv6Address(address)) {
     return address;
@@ -398,23 +395,13 @@ export function isIpInCidr(ip: string, cidr: string): boolean {
       comparableIp.toString() === comparableBase.toString()
     );
   }
-  if (isIpv6Address(baseAddress) && baseAddress.isIPv4MappedAddress()) {
-    // A mapped base (::ffff:a.b.c.d/N) describes an IPv4 range. Its prefix counts
-    // the 96 mapped bits, so rebase it onto the IPv4 form of the address; shorter
-    // prefixes cover the whole ::ffff:0:0/96 block and therefore every IPv4 peer.
-    if (!isIpv4Address(comparableIp)) {
-      return false;
-    }
-    if (prefixLength < IPV4_MAPPED_PREFIX_BITS) {
-      return true;
-    }
-    return comparableIp.match([
-      baseAddress.toIPv4Address(),
-      prefixLength - IPV4_MAPPED_PREFIX_BITS,
-    ]);
-  }
   if (isIpv4Address(comparableIp) && isIpv4Address(comparableBase)) {
-    return comparableIp.match([comparableBase, prefixLength]);
+    // A base normalized from IPv6 is mapped: its prefix includes 96 mapped bits.
+    // Shorter prefixes contain the whole mapped block, equivalent to IPv4 /0.
+    const ipv4PrefixLength = isIpv6Address(baseAddress)
+      ? Math.max(0, prefixLength - 96)
+      : prefixLength;
+    return comparableIp.match([comparableBase, ipv4PrefixLength]);
   }
   if (isIpv6Address(comparableIp) && isIpv6Address(comparableBase)) {
     return comparableIp.match([comparableBase, prefixLength]);
