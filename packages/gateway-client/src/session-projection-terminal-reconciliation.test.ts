@@ -77,8 +77,40 @@ describe("terminal snapshot reconciliation", () => {
     ]);
   });
 
+  it("promotes a trailing unmarked terminal after the durable same-run user turn", () => {
+    const runId = "browser-run";
+    const user = {
+      role: "user",
+      content: [{ text: "Please finish the repair.", type: "text" }],
+      __openclaw: { id: "user-prompt", idempotencyKey: `${runId}:user`, seq: 1 },
+    };
+    const synthetic = createAssistantMessage("The browser repair is complete.");
+    const persisted = createAssistantMessage("The browser repair is complete.", {
+      id: "assistant-final",
+      seq: 2,
+      runId,
+    });
+    let state = reduceSessionProjection(createSessionProjection(scope), {
+      type: "runTerminal",
+      runId,
+      status: "completed",
+      message: synthetic,
+    });
+    state = projectLiveSessionMessage(state, structuredClone(synthetic), { runId });
+
+    expect(reconcileSessionProjectionSnapshot(state, [user, persisted], scope).messages).toEqual([
+      user,
+      persisted,
+    ]);
+  });
+
   it("retains an unsequenced terminal when matching content precedes a later tool boundary", () => {
     const runId = "partial-history-run";
+    const user = {
+      role: "user",
+      content: [{ text: "Please inspect the repository.", type: "text" }],
+      __openclaw: { id: "user-prompt", idempotencyKey: `${runId}:user`, seq: 1 },
+    };
     const synthetic = createAssistantMessage("Still working.");
     const earlier = createAssistantMessage("Still working.", {
       id: "assistant-earlier",
@@ -102,8 +134,8 @@ describe("terminal snapshot reconciliation", () => {
     state = projectLiveSessionMessage(state, synthetic, { runId });
 
     expect(
-      reconcileSessionProjectionSnapshot(state, [earlier, laterToolBoundary], scope).messages,
-    ).toEqual([earlier, laterToolBoundary, synthetic]);
+      reconcileSessionProjectionSnapshot(state, [user, earlier, laterToolBoundary], scope).messages,
+    ).toEqual([user, earlier, laterToolBoundary, synthetic]);
   });
 
   it("retains an unsequenced terminal when partial history has one unmarked same-content row", () => {

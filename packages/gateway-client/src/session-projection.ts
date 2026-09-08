@@ -461,7 +461,7 @@ export function reconcileSessionProjectionSnapshot(
     const run = current.identity?.runId ? state.runs[current.identity.runId] : undefined;
     if (
       (matches.length === 1 && !isUnsequencedLiveTerminal(current, run)) ||
-      hasUniqueSnapshotTerminalMatch(current, matches, run)
+      hasUniqueSnapshotTerminalMatch(current, matches, run, entries)
     ) {
       continue;
     }

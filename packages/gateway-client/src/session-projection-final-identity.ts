@@ -104,6 +104,29 @@ function hasTerminalStopReason(message: unknown): boolean {
   );
 }
 
+function hasCompletedRunSnapshotContext(
+  entry: TerminalProjectionEntry,
+  snapshot: readonly TerminalProjectionEntry[],
+  runId: string | null,
+): boolean {
+  if (!runId || entry.identity?.runId !== runId) {
+    return false;
+  }
+  const entryIndex = snapshot.indexOf(entry);
+  if (entryIndex < 0) {
+    return false;
+  }
+  const hasEarlierUser = snapshot
+    .slice(0, entryIndex)
+    .some((candidate) => candidate.identity?.role === "user" && candidate.identity.runId === runId);
+  const hasLaterAssistant = snapshot
+    .slice(entryIndex + 1)
+    .some(
+      (candidate) => candidate.identity?.role === "assistant" && candidate.identity.runId === runId,
+    );
+  return hasEarlierUser && !hasLaterAssistant;
+}
+
 /** Read stable persisted identity first, falling back to canonical display content. */
 export function readSessionProjectionFinalMessageIdentity(message: unknown): string | null {
   if (!hasDisplayableSessionMessage(message)) {
@@ -145,6 +168,7 @@ export function hasUniqueSnapshotTerminalMatch(
   current: TerminalProjectionEntry,
   matches: readonly TerminalProjectionEntry[],
   run: TerminalProjectionRun | undefined,
+  snapshot: readonly TerminalProjectionEntry[],
 ): boolean {
   if (
     !current.live ||
@@ -165,7 +189,8 @@ export function hasUniqueSnapshotTerminalMatch(
     return (
       (metadata?.runTerminal === true ||
         (entry.identity?.runId === current.identity?.runId &&
-          hasTerminalStopReason(entry.message))) &&
+          hasTerminalStopReason(entry.message)) ||
+        hasCompletedRunSnapshotContext(entry, snapshot, current.identity?.runId ?? null)) &&
       readFinalContentIdentity(entry.message) === terminalContent
     );
   });
