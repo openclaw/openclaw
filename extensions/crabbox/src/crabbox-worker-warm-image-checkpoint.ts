@@ -39,6 +39,22 @@ export function parseCreatedCheckpoint(
   return { checkpointId, kind, state: "available" };
 }
 
+export function parseForkedCheckpoint(
+  stdout: string,
+  expected: { checkpointId: string; leaseId: string; provider: string; slug: string },
+): void {
+  const fork = parseCheckpointJson(stdout, "fork");
+  if (
+    fork.checkpointId !== expected.checkpointId ||
+    fork.leaseId !== expected.leaseId ||
+    fork.provider !== expected.provider ||
+    fork.slug !== expected.slug ||
+    !nonEmptyString(fork.workdir)
+  ) {
+    throw new Error("Crabbox checkpoint fork returned an invalid lease identity");
+  }
+}
+
 export function parseCheckpointAvailability(stdout: string): "available" | "pending" | "missing" {
   const record = parseCheckpointJson(stdout, "inspect");
   if (!nonEmptyString(record.localState) || !nonEmptyString(record.nextAction)) {

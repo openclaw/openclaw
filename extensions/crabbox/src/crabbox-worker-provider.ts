@@ -62,12 +62,10 @@ import {
   resolveCrabboxLifecycleTimeoutMs,
   resolveCrabboxProvisionBaseTimeoutMs,
   resolveCrabboxProvisionCallTimeoutMs,
+  resolveCrabboxWarmImageCaptureTimeoutMs,
 } from "./crabbox-worker-timeouts.js";
 import { loadCrabboxWorkerWallpaperBase64 } from "./crabbox-worker-wallpaper.js";
-import {
-  createCrabboxWarmImageManager,
-  resolveCrabboxWarmImageCaptureTimeoutMs,
-} from "./crabbox-worker-warm-image.js";
+import { createCrabboxWarmImageManager } from "./crabbox-worker-warm-image.js";
 
 export { resolveOpenClawRoot } from "./crabbox-worker-profile.js";
 

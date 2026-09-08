@@ -30,6 +30,25 @@ export const CRABBOX_HEARTBEAT_TIMEOUT_MS = 150_000;
 // `providers --json` is a static compiled report; bound picker latency for a hung binary.
 // Failed reads leave machine overrides unavailable until a later discovery request succeeds.
 export const CRABBOX_MACHINE_CATALOG_TIMEOUT_MS = 5_000;
+export const WARM_IMAGE_COMMAND_TIMEOUT_MS = 60_000;
+// Scrub and create include the SSH, workspace-owner, and coordinator round trips.
+// AWS measurements require more than the ordinary command timeout.
+export const WARM_IMAGE_CAPTURE_TIMEOUT_MS = 180_000;
+// Machine0 image save stops the source and waits for image availability even with --wait=false.
+const WARM_IMAGE_MACHINE0_CAPTURE_TIMEOUT_MS = 600_000;
+
+export const checkpointCaptureTimeoutMs = (provider: string) =>
+  provider === "machine0" ? WARM_IMAGE_MACHINE0_CAPTURE_TIMEOUT_MS : WARM_IMAGE_CAPTURE_TIMEOUT_MS;
+
+export function resolveCrabboxWarmImageCaptureTimeoutMs(provider: string): number {
+  // Include verification, reclamation, and retirement so core awaits the capture owner.
+  return (
+    5 * WARM_IMAGE_COMMAND_TIMEOUT_MS +
+    WARM_IMAGE_CAPTURE_TIMEOUT_MS +
+    checkpointCaptureTimeoutMs(provider)
+  );
+}
+
 // Fixed-lease inspection can follow warmup's final read; allow four one-minute retries.
 const CRABBOX_MACHINE0_LIFECYCLE_TIMEOUT_MS = 5 * 60_000;
 // Setup gets its own budget on top of provision so a slow warmup cannot starve it.

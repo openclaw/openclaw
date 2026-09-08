@@ -123,11 +123,10 @@ export function createCrabboxMachineOptionsResolver(
     },
     async listOperatingSystems(profile) {
       const { parsed, catalog } = await resolveCatalog(profile);
-      return (catalog?.operatingSystems ?? []).map((id) => ({
-        id,
-        label: CRABBOX_OS_LABELS[id],
-        ...(id === parsed.target ? { default: true } : {}),
-      }));
+      return (catalog?.operatingSystems ?? []).map((id) => {
+        const label = CRABBOX_OS_LABELS[id];
+        return id === parsed.target ? { id, label, default: true } : { id, label };
+      });
     },
   };
 }
