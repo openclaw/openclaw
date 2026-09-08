@@ -2532,6 +2532,8 @@ button.chat-pr__diff {
    not a blue information callout inside it. Match the Question surface so the
    frame does not change shape when composition is unavailable. */
 .agent-chat__disabled-banner.agent-chat__disabled-banner--replacement.callout {
+  position: relative;
+  z-index: 1;
   border: 1px solid var(--chat-composer-hairline, var(--border));
   border-radius: calc(20px * var(--openclaw-corner-radius-scale));
   corner-shape: superellipse(1.5);
