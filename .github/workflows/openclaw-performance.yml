@@ -88,9 +88,9 @@ env:
   OCM_VERSION: v0.2.33
   OCM_LINUX_X64_SHA256: 06b0e46791e750eb044e4a898b6643ad5e7b20224fe0c64f160e35a42f08d00a
   KOVA_REPOSITORY: openclaw/Kova
-  KOVA_CANONICAL_CONFIG_REF: d1cb301f0577c089b905d20efe5ccbc66b94d226
-  KOVA_LEGACY_LIST_CONFIG_REF: d1cb301f0577c089b905d20efe5ccbc66b94d226
-  KOVA_TRUSTED_LIVE_REF: d1cb301f0577c089b905d20efe5ccbc66b94d226
+  KOVA_CANONICAL_CONFIG_REF: 11b56553e4c4e93ddf99a53617a139b2c9e9efef
+  KOVA_LEGACY_LIST_CONFIG_REF: 11b56553e4c4e93ddf99a53617a139b2c9e9efef
+  KOVA_TRUSTED_LIVE_REF: 11b56553e4c4e93ddf99a53617a139b2c9e9efef
   PERFORMANCE_MODEL_ID: gpt-5.6-luna
   # Release matrices cold-build the candidate runtime before measurement.
   KOVA_SCENARIO_TIMEOUT_MS: ${{ inputs.profile == 'release' && '900000' || '300000' }}
@@ -159,8 +159,9 @@ jobs:
             ' "$TARGET_CHECKOUT_DIR/package.json")"
             if [[ "$target_version" == "2026.7.33" ]]; then
               # Kova #116 carries the historical 250% status CLI calibration for this release only;
-              # Kova #118 keeps process-census time out of CPU scan uncertainty.
-              kova_ref="d1cb301f0577c089b905d20efe5ccbc66b94d226"
+              # Kova #118 keeps process-census time out of CPU scan uncertainty;
+              # Kova #119 discovers a starting gateway before its zero baseline is lost.
+              kova_ref="11b56553e4c4e93ddf99a53617a139b2c9e9efef"
             fi
           fi
           if [[ "$kova_ref" == *$'\n'* || "$kova_ref" == *$'\r'* ]]; then
