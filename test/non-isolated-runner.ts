@@ -496,7 +496,6 @@ export default class OpenClawNonIsolatedRunner extends TestRunner {
   // the next file's vi.mock factories silently never applied. The worker loop
   // calls startTests per file, so this hook runs after every file regardless
   // of its collect/run outcome.
-  // oxlint-disable-next-line typescript/no-misused-promises -- Vitest awaits this hook but its concrete TestRunner declaration returns void.
   override async onAfterRunFiles(files: RunnerTestFile[]) {
     super.onAfterRunFiles(files);
     if (this.config.isolate) {
