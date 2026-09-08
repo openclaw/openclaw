@@ -349,6 +349,8 @@ function runCompiledEsmSidecarFastPathProbe(): SpawnSyncReturns<string> {
     },
   });
   fs.writeFileSync(path.join(tempRoot, "openclaw.mjs"), "#!/usr/bin/env node\n", "utf8");
+  fs.mkdirSync(path.join(tempRoot, "src"));
+  fs.mkdirSync(path.join(tempRoot, "extensions"));
   fs.mkdirSync(path.join(tempRoot, "dist", "plugin-sdk"), { recursive: true });
   fs.writeFileSync(
     path.join(tempRoot, "dist", "plugin-sdk", "channel-outbound.js"),
@@ -383,7 +385,11 @@ function runCompiledEsmSidecarFastPathProbe(): SpawnSyncReturns<string> {
   return spawnSync(process.execPath, ["--import", "tsx", probePath], {
     cwd: process.cwd(),
     encoding: "utf8",
-    env: { ...process.env, OPENCLAW_DIAGNOSTICS: "plugin.load-profile" },
+    env: {
+      ...process.env,
+      OPENCLAW_DIAGNOSTICS: "plugin.load-profile",
+      OPENCLAW_DEV_SOURCE_ROOT: tempRoot,
+    },
   });
 }
 
@@ -661,7 +667,7 @@ describe("loadBundledEntryExportSync", () => {
   it("keeps compiled ESM sidecars with SDK imports on the nodeRequire fast-path", async () => {
     const result = compiledEsmSidecarFastPathResult;
 
-    expect(result.status).toBe(0);
+    expect(result.status, result.stderr).toBe(0);
     expect(result.stdout.trim()).toBe("adapter");
     expect(result.stderr).toMatch(/sourceLoaderCreateMs=0(?:\.0+)?(?:\s|$)/u);
     expect(result.stderr).toMatch(/sourceLoaderCallMs=0(?:\.0+)?(?:\s|$)/u);

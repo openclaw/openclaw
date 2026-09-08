@@ -9,7 +9,9 @@ import {
   createSubscribedSessionHarness,
 } from "./embedded-agent-subscribe.e2e-harness.js";
 import { subscribeEmbeddedAgentSession } from "./embedded-agent-subscribe.js";
+import type { AgentSessionEvent } from "./sessions/index.js";
 import { makeAgentAssistantMessage } from "./test-helpers/agent-message-fixtures.js";
+import { textAssistant } from "./test-helpers/sparse-transcript.test-support.js";
 import { makeZeroUsageSnapshot } from "./usage.js";
 
 type SessionEventHandler = (evt: unknown) => void;
@@ -151,27 +153,33 @@ describe("synchronous context accounting", () => {
       emit(completedCompactionEnd(false, 90_000, 12_000));
       const after = accountingAssistant(0);
       emit({ type: "message_start", message: after });
+      const partial = {
+        ...after,
+        usage: {
+          ...makeZeroUsageSnapshot(),
+          input: 18_000,
+          cacheRead: 2_000,
+          totalTokens: 20_000,
+        },
+      };
       emit({
         type: "message_update",
-        message: after,
+        message: partial,
         assistantMessageEvent: {
-          type: "done",
-          message: {
-            ...after,
-            usage: {
-              ...makeZeroUsageSnapshot(),
-              input: 18_000,
-              cacheRead: 2_000,
-              totalTokens: 20_000,
-            },
-          },
+          type: "text_end",
+          contentIndex: 0,
+          content: "model reply",
+          partial,
         },
-      });
+      } satisfies AgentSessionEvent);
       emit({ type: "message_end", message: after });
       for (const model of ["delivery-mirror", "gateway-injected"]) {
         const synthetic = { ...accountingAssistant(99_000), provider: "openclaw", model };
         emit({ type: "message_start", message: synthetic });
         emit({ type: "message_end", message: synthetic });
+        const withoutUsage = { role: "assistant", provider: "openclaw", model };
+        emit({ type: "message_end", message: withoutUsage });
+        expect(withoutUsage).not.toHaveProperty("usage");
       }
       expect(observed).toEqual(expected);
       expect(after.usage.input).toBe(18_000);
@@ -210,10 +218,7 @@ describe("fenced output and compaction retries", () => {
       runId: "run-1",
     });
 
-    const assistantMessage = {
-      role: "assistant",
-      content: [{ type: "text", text: "oops" }],
-    } as AssistantMessage;
+    const assistantMessage = textAssistant("oops") as AssistantMessage;
 
     for (const listener of listeners) {
       listener({ type: "message_end", message: assistantMessage });
@@ -517,10 +522,7 @@ describe("subscribeEmbeddedAgentSession", () => {
     const { emit, subscription } = createSubscribedSessionHarness({
       runId: "run-compaction-assistant",
     });
-    const assistant = {
-      role: "assistant",
-      content: [{ type: "text", text: "Reply before compaction" }],
-    } as AssistantMessage;
+    const assistant = textAssistant("Reply before compaction") as AssistantMessage;
 
     emit({ type: "message_end", message: assistant });
     expect(subscription.getCurrentAttemptAssistant()).toEqual(assistant);

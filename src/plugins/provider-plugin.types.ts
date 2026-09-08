@@ -7,6 +7,7 @@ import type { AnyAgentTool } from "../agents/tools/common.js";
 import type { ModelProviderConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProviderUsageSnapshot } from "../infra/provider-usage.types.js";
+import type { ProviderFastModePolicyContext } from "../plugin-sdk/provider-model-types.js";
 import type {
   OAuthCredentials as SessionOAuthCredentials,
   OAuthLoginCallbacks,
@@ -88,6 +89,7 @@ import type {
   ProviderCacheTtlEligibilityContext,
   ProviderBuildMissingAuthMessageContext,
   ProviderBuildUnknownModelHintContext,
+  ProviderReconcileLocalServiceContext,
 } from "./provider-transport.types.js";
 
 export type ProviderPlugin = {
@@ -307,6 +309,12 @@ export type ProviderPlugin = {
    */
   createStreamFn?: (ctx: ProviderCreateStreamFnContext) => StreamFn | null | undefined;
   /**
+   * Opt custom streams into the internal stable/dynamic system-prompt boundary.
+   * The transport must consume the boundary before sending its provider payload.
+   * Otherwise the host strips it before invoking the custom stream.
+   */
+  supportsSystemPromptCacheBoundary?: boolean;
+  /**
    * Provider-owned stream wrapper applied after generic OpenClaw wrappers.
    *
    * Typical uses: provider attribution headers, request-body rewrites, or
@@ -321,6 +329,8 @@ export type ProviderPlugin = {
    * the embedded agent runtime.
    */
   wrapSimpleCompletionStreamFn?: (ctx: ProviderWrapStreamFnContext) => StreamFn | null | undefined;
+  /** Cheap, idempotent provider repair after local-service health and before each request. */
+  reconcileLocalService?: (ctx: ProviderReconcileLocalServiceContext) => Promise<void>;
   /**
    * Provider-owned native transport turn identity.
    *
@@ -470,6 +480,8 @@ export type ProviderPlugin = {
   resolveThinkingProfile?: (
     ctx: ProviderDefaultThinkingPolicyContext,
   ) => ProviderThinkingProfile | null | undefined;
+  /** Whether Fast can affect this selected request; undefined retains existing unknown behavior. */
+  resolveFastModeSupport?: (ctx: ProviderFastModePolicyContext) => boolean | undefined;
   /**
    * Provider-owned system-prompt contribution.
    *
@@ -603,15 +615,6 @@ export type ProviderPlugin = {
    * Runtime callers must not treat non-secret markers as runnable credentials;
    * they should retry against the active runtime snapshot when available.
    *
-   * This hook is the canonical seam for provider-specific fallback auth
-   * derived from plugin/private config. It may return:
-   * - a runnable literal credential for runtime callers
-   * - a non-secret marker for managed-secret source config, which is still useful
-   *   for discovery/bootstrap callers
-   *
-   * Runtime callers must not treat non-secret markers as runnable credentials;
-   * they should retry against the active runtime snapshot when available.
-   *
    * Use this when the provider can operate without a real secret for certain
    * configured local/self-hosted cases and wants auth resolution to treat that
    * config as available.
@@ -619,6 +622,13 @@ export type ProviderPlugin = {
   resolveSyntheticAuth?: (
     ctx: ProviderResolveSyntheticAuthContext,
   ) => ProviderSyntheticAuthResult | null | undefined;
+  /**
+   * Prepare external availability before synchronous synthetic-auth reads.
+   * Keep process/network I/O here; OpenClaw publishes the completed result for this generation.
+   */
+  prepareSyntheticAuth?: (
+    ctx: ProviderResolveSyntheticAuthContext & { env?: NodeJS.ProcessEnv; signal?: AbortSignal },
+  ) => Promise<ProviderSyntheticAuthResult | null | undefined>;
   /**
    * Provider-owned external auth profile discovery.
    *
@@ -644,4 +654,13 @@ export type ProviderPlugin = {
     ctx: ProviderDeferSyntheticProfileAuthContext,
   ) => boolean | undefined;
   onModelSelected?: (ctx: ProviderModelSelectedContext) => Promise<void>;
+};
+
+/** Provider runtime registered with its owning plugin and source. */
+export type PluginProviderRegistration = {
+  pluginId: string;
+  pluginName?: string;
+  provider: ProviderPlugin;
+  source: string;
+  rootDir?: string;
 };

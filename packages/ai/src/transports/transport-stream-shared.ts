@@ -11,6 +11,7 @@ import type {
   Usage,
 } from "@openclaw/llm-core";
 import { asNonArrayRecord, asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { getAiTransportHost } from "../host.js";
 import {
   appendAssistantMessageDiagnostic,
   createAssistantMessageDiagnostic,
@@ -74,6 +75,11 @@ export function coerceTransportToolCallArguments(argumentsValue: unknown): Recor
   return {};
 }
 
+/** Stable terminal fact: presentation must not infer unfinished calls from provider prose. */
+export class IncompleteToolCallError extends Error {
+  readonly code = "incomplete_tool_call";
+}
+
 /** Admit only complete object-shaped terminal tool arguments; partial parsing is preview-only. */
 export function parseTerminalToolCallArguments(
   value: unknown,
@@ -104,9 +110,18 @@ export function mergeTransportHeaders(
   ...headerSources: Array<Record<string, string> | undefined>
 ): Record<string, string> | undefined {
   const merged: Record<string, string> = {};
+  const namesByLowercase = new Map<string, string>();
   for (const headers of headerSources) {
-    if (headers) {
-      Object.assign(merged, headers);
+    for (const [name, value] of Object.entries(headers ?? {})) {
+      // HTTP header names are case-insensitive. Remove the earlier spelling so
+      // fetch cannot combine a protected replacement with its stale value.
+      const lowercaseName = name.toLowerCase();
+      const previousName = namesByLowercase.get(lowercaseName);
+      if (previousName && previousName !== name) {
+        delete merged[previousName];
+      }
+      merged[name] = value;
+      namesByLowercase.set(lowercaseName, name);
     }
   }
   return Object.keys(merged).length > 0 ? merged : undefined;
@@ -239,6 +254,7 @@ async function awaitProviderLifecycleCallback(
     return;
   }
   const callbackPromise = Promise.resolve().then(callback);
+  getAiTransportHost().observePendingProviderWork?.(callbackPromise);
   if (!signal) {
     await callbackPromise;
     return;
@@ -266,7 +282,9 @@ function startProviderStreamCancellation(cancelStream: ProviderStreamCancel, err
   const reason = error instanceof Error ? error : new Error(String(error));
   try {
     // The lifecycle failure remains authoritative. Cleanup must not delay or replace it.
-    void Promise.resolve(cancelStream(reason)).catch(() => undefined);
+    const pending = Promise.resolve(cancelStream(reason));
+    void pending.catch(() => undefined);
+    getAiTransportHost().observePendingProviderWork?.(pending);
   } catch {
     // A synchronous cleanup failure cannot replace the lifecycle failure either.
   }

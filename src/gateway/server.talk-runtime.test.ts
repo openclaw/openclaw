@@ -187,6 +187,24 @@ describe("gateway talk runtime", () => {
     );
   });
 
+  it.each(["```printf```", "> ```\n> x"])("preserves talk.speak prose after %s", async (prefix) => {
+    await setAcmeTalkConfig();
+    const text = `${prefix}\n\nThis explanation is ordinary prose and should be spoken in full.`;
+    await withAcmeSpeechProvider(
+      async () => ({
+        audioBuffer: Buffer.from([7, 8, 9]),
+        outputFormat: "mp3",
+        fileExtension: ".mp3",
+        voiceCompatible: false,
+      }),
+      async () => {
+        const res = await invokeTalkSpeakDirect({ text });
+        expect(res?.ok, JSON.stringify(res?.error)).toBe(true);
+        expect(expectSingleSynthesizeSpeechCall().text).toBe(text);
+      },
+    );
+  });
+
   it("uses the spoken fallback for code-heavy talk.speak replies", async () => {
     await setAcmeTalkConfig();
 

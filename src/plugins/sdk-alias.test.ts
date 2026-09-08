@@ -10,6 +10,7 @@ import {
 } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import { withEnv, withEnvAsync } from "../test-utils/env.js";
+import { createPluginCache, withPluginCache } from "./plugin-cache.js";
 import {
   buildPluginLoaderAliasMap,
   createPluginLoaderModuleCacheKey,
@@ -1272,6 +1273,12 @@ describe("plugin sdk alias helpers", () => {
       ["@openclaw/gateway-protocol", "gateway-protocol", "index"],
       ["@openclaw/gateway-protocol/schema", "gateway-protocol", "schema"],
       ["@openclaw/gateway-protocol/frame-guards", "gateway-protocol", "frame-guards"],
+      [
+        "@openclaw/gateway-protocol/gateway-error-details",
+        "gateway-protocol",
+        "gateway-error-details",
+      ],
+      ["@openclaw/gateway-protocol/restart-unavailable", "gateway-protocol", "restart-unavailable"],
       ["@openclaw/markdown-core", "markdown-core", "index"],
       ["@openclaw/markdown-core/tables", "markdown-core", "tables"],
       ["@openclaw/media-generation-core", "media-generation-core", "index"],
@@ -1327,6 +1334,12 @@ describe("plugin sdk alias helpers", () => {
         "connect-error-details",
       ],
       ["@openclaw/gateway-protocol/frame-guards", "gateway-protocol", "frame-guards"],
+      [
+        "@openclaw/gateway-protocol/gateway-error-details",
+        "gateway-protocol",
+        "gateway-error-details",
+      ],
+      ["@openclaw/gateway-protocol/restart-unavailable", "gateway-protocol", "restart-unavailable"],
       ["@openclaw/markdown-core/render", "markdown-core", "render"],
       ["@openclaw/media-generation-core/catalog", "media-generation-core", "catalog"],
       ["@openclaw/media-core/attachment-classify", "media-core", "attachment-classify"],
@@ -1540,6 +1553,58 @@ describe("plugin sdk alias helpers", () => {
     });
   });
 
+  it.each(
+    (["src", "dist"] as const).flatMap((preference) =>
+      ["sibling-argv", "missing-argv", "no-argv", "development", "no-host", "invalid-host"].map(
+        (mode) => ({ preference, mode }),
+      ),
+    ),
+  )("selects the running SDK host across checkouts ($preference/$mode)", ({ preference, mode }) => {
+    const fixtureOptions = {
+      srcFile: "plugin-state-store-runtime.ts",
+      distFile: "plugin-state-store-runtime.js",
+      srcBody: 'throw new Error("SDK metadata selection must not execute source");\n',
+      distBody: 'throw new Error("SDK metadata selection must not execute dist");\n',
+      packageExports: {
+        "./plugin-sdk/plugin-state-store-runtime": {
+          default: "./dist/plugin-sdk/plugin-state-store-runtime.js",
+        },
+      },
+    };
+    const host = createPluginSdkAliasFixture(fixtureOptions);
+    const sibling = createPluginSdkAliasFixture(fixtureOptions);
+    const pluginEntry = writePluginEntry(sibling.root, ".artifacts/plugin/index.ts");
+    const loader = writePluginEntry(host.root, "src/plugins/loader.ts");
+    const noHost = mode === "no-host" || mode === "invalid-host";
+    const expected = noHost || mode === "development" ? sibling : host;
+    const prepared = preparePluginLoaderAliases({
+      modulePath: pluginEntry,
+      cwd: sibling.root,
+      moduleUrl:
+        mode === "no-host"
+          ? undefined
+          : mode === "invalid-host"
+            ? "not-a-file-url"
+            : pathToFileURL(loader).href,
+      argv1:
+        mode === "no-argv"
+          ? undefined
+          : mode === "missing-argv"
+            ? path.join(makeTempDir(), "missing-launcher")
+            : path.join(noHost ? host.root : sibling.root, "openclaw.mjs"),
+      devSourceRoot: mode === "development" ? sibling.root : null,
+      pluginSdkResolution: preference,
+    });
+    for (const prefix of ["openclaw/plugin-sdk", "@openclaw/plugin-sdk"]) {
+      const specifier = `${prefix}/plugin-state-store-runtime`;
+      const target = prepared.resolveAlias(specifier);
+      expect(fs.realpathSync(target ?? "")).toBe(
+        fs.realpathSync(preference === "src" ? expected.srcFile : expected.distFile),
+      );
+      expect(prepared.getAliasMap()[specifier]).toBe(target);
+    }
+  });
+
   it("resolves plugin-sdk aliases for user-installed plugins via moduleUrl hint", () => {
     const {
       externalPluginEntry,
@@ -1553,16 +1618,11 @@ describe("plugin sdk alias helpers", () => {
     // This covers installations where argv1 does not resolve to the openclaw root
     // (e.g. single-binary distributions or custom process launchers).
     // Use openclaw.mjs which is created by createPluginSdkAliasFixture (bin+marker mode).
-    // Use fixture.root as cwd so process.cwd() fallback also resolves to fixture, not the
-    // real openclaw repo root in the test runner environment.
     const loaderModuleUrl = pathToFileURL(path.join(fixture.root, "openclaw.mjs")).href;
 
     // Use externalPluginRoot as cwd so process.cwd() fallback cannot accidentally
     // resolve to the fixture root — only the moduleUrl hint can bridge the gap.
-    // Pass "" for argv1: undefined would trigger the STARTUP_ARGV1 default (the vitest
-    // runner binary, inside the openclaw repo), which resolves before moduleUrl is checked.
-    // An empty string is falsy so resolveTrustedOpenClawRootFromArgvHint returns null,
-    // meaning only the moduleUrl hint can bridge the gap.
+    // Disable the startup argv hint so this row exercises the explicit host alone.
     const aliases = withCwd(externalPluginRoot, () =>
       withEnv({ NODE_ENV: undefined }, () =>
         buildPluginLoaderAliasMap(
@@ -1688,6 +1748,30 @@ describe("plugin sdk alias helpers", () => {
     });
 
     expect(second).toBe(first);
+  });
+
+  it("retains missing SDK targets until a new generation, including deferred complete maps", () => {
+    const { fixture, distPluginEntryPath } = createPluginSdkAliasTargetFixture();
+    const owner = createPluginCache();
+    const other = createPluginCache();
+    const params = {
+      modulePath: writePluginEntry(fixture.root, bundledDistPluginFile("demo", "index.js")),
+      pluginSdkResolution: "dist" as const,
+    };
+    fs.unlinkSync(distPluginEntryPath);
+    fs.unlinkSync(path.join(fixture.root, "src", "plugin-sdk", "plugin-entry.ts"));
+    const prepared = withPluginCache(owner, () => preparePluginLoaderAliases(params));
+    expect(prepared.resolveAlias("openclaw/plugin-sdk/plugin-entry")).toBeUndefined();
+    fs.writeFileSync(distPluginEntryPath, "export const marker = 'new-generation';\n", "utf8");
+
+    withPluginCache(other, () => {
+      expect(prepared.resolveAlias("openclaw/plugin-sdk/plugin-entry")).toBeUndefined();
+      expect(prepared.getAliasMap()["openclaw/plugin-sdk/plugin-entry"]).toBeUndefined();
+      const fresh = preparePluginLoaderAliases(params);
+      expect(fs.realpathSync(fresh.resolveAlias("openclaw/plugin-sdk/plugin-entry") ?? "")).toBe(
+        fs.realpathSync(distPluginEntryPath),
+      );
+    });
   });
 
   it("scopes prepared alias authority by effective resolution", () => {

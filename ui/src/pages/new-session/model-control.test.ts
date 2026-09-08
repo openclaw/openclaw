@@ -1,10 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayAgentRow, ModelCatalogEntry } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import {
-  invalidateChatMetadataStore,
-  beginChatMetadataPublication,
-} from "../../lib/chat/chat-metadata-store.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { contextWith, deferred, renderControl } from "./model-control.test-support.ts";
 import { NewSessionModelControl } from "./model-control.ts";
@@ -14,7 +10,7 @@ afterEach(() => {
 });
 
 describe("new-session model runtime", () => {
-  it("discloses session-only selection and keeps a draft model local", async () => {
+  it("keeps a draft model local without exposing its internal selection target", async () => {
     const { context, request } = contextWith([
       { id: "gpt-5.6-luna", name: "GPT-5.6 Luna", provider: "openai" },
       { id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6", provider: "anthropic" },
@@ -30,9 +26,7 @@ describe("new-session model runtime", () => {
       ).not.toBeNull(),
     );
     const container = renderControl(control, context);
-    expect(container.querySelector("[data-chat-model-selection-target]")?.textContent).toContain(
-      "Selection target: This session only",
-    );
+    expect(container.querySelector("[data-chat-model-selection-target]")).toBeNull();
     container
       .querySelector<HTMLButtonElement>('[data-chat-model-option="anthropic/claude-sonnet-4-6"]')
       ?.click();
@@ -57,7 +51,7 @@ describe("new-session model runtime", () => {
     ).toBeNull();
   });
 
-  it("lists create-capable CLI agents and selects the canonical catalog target", async () => {
+  it("lists terminal-capable CLI agents and selects the canonical catalog target", async () => {
     const { context, request } = contextWith(
       [{ id: "gpt-5.6-luna", name: "GPT-5.6 Luna", provider: "openai" }],
       "openclaw",
@@ -70,7 +64,7 @@ describe("new-session model runtime", () => {
               {
                 id: "anthropic",
                 label: "Claude Code",
-                capabilities: { createSession: { model: "anthropic/claude-sonnet-4-6" } },
+                capabilities: { startTerminal: true },
                 hosts: [],
               },
               {
@@ -134,7 +128,11 @@ describe("new-session model runtime", () => {
     picker!.open = true;
     picker!.dispatchEvent(new Event("toggle"));
 
-    expect(request).toHaveBeenCalledOnce();
+    expect(
+      request.mock.calls.every(
+        ([method, params]) => method === "models.list" && params.refresh === undefined,
+      ),
+    ).toBe(true);
     expect(request.mock.calls.some(([method]) => method === "sessions.catalog.list")).toBe(false);
     expect(container.querySelector("[data-chat-model-target-group]")).toBeNull();
   });
@@ -330,7 +328,11 @@ describe("new-session model runtime", () => {
     control.load(context, "main", true);
     await vi.waitFor(() => {
       expect(request).toHaveBeenCalledOnce();
-      expect(notify).toHaveBeenCalledTimes(2);
+      expect(
+        renderControl(control, context).querySelector(
+          '[data-chat-model-option="openai/gpt-5.6-luna"]',
+        ),
+      ).not.toBeNull();
     });
 
     let container = renderControl(control, context, "main", null);
@@ -570,8 +572,8 @@ describe("new-session model runtime", () => {
     expect(container.textContent).not.toContain("GPT-5.6 Luna");
   });
 
-  it("updates a verified-empty catalog when shared chat metadata publishes models", async () => {
-    const { context, request } = contextWith([]);
+  it("updates a verified-empty catalog after a catalog publication", async () => {
+    const { context, request, emitCatalogChanged } = contextWith([]);
     const control = new NewSessionModelControl(() => undefined);
 
     control.load(context, "main", true);
@@ -582,10 +584,10 @@ describe("new-session model runtime", () => {
     );
     expect(renderControl(control, context).textContent).toContain("No models available");
 
-    beginChatMetadataPublication(context.gateway.snapshot.client!, { agentId: "main" }).publish({
-      commands: [],
+    request.mockResolvedValueOnce({
       models: [{ id: "gpt-5.6-luna", name: "GPT-5.6 Luna", provider: "openai" }],
     });
+    emitCatalogChanged();
 
     await vi.waitFor(() =>
       expect(
@@ -595,7 +597,7 @@ describe("new-session model runtime", () => {
       ).not.toBeNull(),
     );
     expect(renderControl(control, context).textContent).not.toContain("No models available");
-    expect(request).toHaveBeenCalledOnce();
+    expect(request).toHaveBeenCalledTimes(2);
   });
 
   it("treats a disconnected stale all-cold catalog as offline and non-authoritative", async () => {
@@ -608,7 +610,7 @@ describe("new-session model runtime", () => {
         unavailableReason: "missing-auth",
       },
     ];
-    const { context, request } = contextWith(coldModels);
+    const { context, request, emitCatalogChanged } = contextWith(coldModels);
     const control = new NewSessionModelControl(() => undefined);
     const agent = { id: "main", model: { primary: "openai/gpt-5.6-luna" } };
     control.load(context, "main", true, { agent });
@@ -623,7 +625,7 @@ describe("new-session model runtime", () => {
     } as unknown as ApplicationContext;
     (context.gateway as { snapshot: ApplicationContext["gateway"]["snapshot"] }).snapshot =
       offlineContext.gateway.snapshot;
-    invalidateChatMetadataStore(context.gateway.snapshot.client!);
+    emitCatalogChanged();
 
     const container = renderControl(control, offlineContext, "main", agent);
     expect(container.querySelector('[data-chat-model-catalog-state="offline"]')).not.toBeNull();
@@ -646,7 +648,7 @@ describe("new-session model runtime", () => {
     const availableModels: ModelCatalogEntry[] = [
       { id: "gpt-5.6-luna", name: "GPT-5.6 Luna", provider: "openai", available: true },
     ];
-    const { context, request } = contextWith(coldModels);
+    const { context, request, emitCatalogChanged } = contextWith(coldModels);
     const control = new NewSessionModelControl(() => undefined);
     const agent = { id: "main", model: { primary: "openai/gpt-5.6-luna" } };
     control.load(context, "main", true, { agent });
@@ -660,7 +662,7 @@ describe("new-session model runtime", () => {
         renderControl(control, context, "main", agent).querySelector(
           "[data-chat-model-catalog-state]",
         ),
-      ).toBeNull(),
+      ).not.toBeNull(),
     );
     let container = renderControl(control, context, "main", agent);
     expect(container.querySelector('[data-chat-model-select="true"]')?.textContent).toContain(
@@ -670,6 +672,7 @@ describe("new-session model runtime", () => {
     expect(control.modelUnavailableReason(agent)).toBe("missing-auth");
 
     request.mockResolvedValueOnce({ models: availableModels });
+    emitCatalogChanged();
     control.load(context, "main", true, { agent });
     await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(3));
     await vi.waitFor(() =>
@@ -720,7 +723,9 @@ describe("new-session model runtime", () => {
 
     await vi.waitFor(() => {
       expect(request).toHaveBeenCalledTimes(2);
-      expect(notify).toHaveBeenCalledTimes(4);
+      expect(
+        renderControl(control, context).querySelector('[data-chat-model-catalog-state="error"]'),
+      ).not.toBeNull();
     });
     expect(control.selected).toBe("anthropic/claude-sonnet-4-6");
     expect(control.thinkingLevel).toBe("high");
@@ -769,8 +774,8 @@ describe("new-session model runtime", () => {
     refresh.reject(new Error("refresh failed"));
     await vi.waitFor(() =>
       expect(
-        renderControl(control, context).querySelector("[data-chat-model-catalog-state]"),
-      ).toBeNull(),
+        renderControl(control, context).querySelector('[data-chat-model-catalog-state="error"]'),
+      ).not.toBeNull(),
     );
     container = renderControl(control, context);
     expect(container.querySelectorAll("[data-chat-model-option]")).toHaveLength(2);
@@ -815,7 +820,6 @@ describe("new-session model runtime", () => {
     );
 
     request.mockReturnValueOnce(reconnect.promise);
-    invalidateChatMetadataStore(context.gateway.snapshot.client!);
     control.invalidate(false);
     control.load(context, "main", true);
 

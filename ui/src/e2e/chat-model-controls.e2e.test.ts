@@ -1,3 +1,4 @@
+import { writeFile } from "node:fs/promises";
 import { expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
@@ -6,6 +7,270 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
 const suite = createControlUiE2eSuite({ name: "Control UI model and effort controls" });
 
 suite.define(() => {
+  it.each(["chat", "new"])("keeps a large model catalog usable in %s", async (route) => {
+    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+      const models = Array.from({ length: 1_000 }, (_, index) => ({
+        id: `model-${index}`,
+        name: `Model ${String(index).padStart(4, "0")}`,
+        provider: "example",
+        contextWindow: 128_000,
+      }));
+      const gateway = await installMockGateway(page, {
+        agentModel: "example/model-0",
+        models,
+        sessionInfo: { model: "model-0", modelProvider: "example" },
+      });
+      await page.goto(`${suite.server.baseUrl}${route}`);
+      const composer = page.locator(".agent-chat__input").first();
+      const picker = composer.locator(".chat-controls__model-picker");
+      const trigger = picker.locator("[data-chat-model-select]");
+      await expect
+        .poll(() => picker.locator("[data-chat-model-option]").count())
+        .toBe(models.length);
+      await expect.poll(() => trigger.getAttribute("aria-disabled")).toBe("false");
+      const textarea = composer.locator("textarea").first();
+      const cdp = await page.context().newCDPSession(page);
+      await cdp.send("Performance.enable");
+      const before: { metrics: Array<{ name: string; value: number }> } =
+        await cdp.send("Performance.getMetrics");
+      const started = performance.now();
+      await textarea.pressSequentially("catalog proof");
+      expect(await textarea.inputValue()).toBe("catalog proof");
+      const after: typeof before = await cdp.send("Performance.getMetrics");
+      const elapsedMs = performance.now() - started;
+      const metric = (name: string) => {
+        const earlier = before.metrics.find((entry) => entry.name === name)?.value ?? 0;
+        const later = after.metrics.find((entry) => entry.name === name)?.value ?? 0;
+        return (later - earlier) * 1_000;
+      };
+      const timings = {
+        route,
+        models: models.length,
+        elapsedMs,
+        scriptMs: metric("ScriptDuration"),
+        taskMs: metric("TaskDuration"),
+      };
+      console.log(JSON.stringify({ proof: "model-catalog-typing", ...timings }));
+      await trigger.click();
+      await picker.locator("[data-chat-model-search]").fill("Model 0999");
+      const result = picker.locator('[data-chat-model-option="example/model-999"]');
+      await expect.poll(() => result.isVisible()).toBe(true);
+      expect(await picker.locator("[data-chat-model-option]:visible").count()).toBe(1);
+      const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+      if (artifactRoot) {
+        const dir = createControlUiE2eArtifactDir(`large-model-catalog-${route}`, artifactRoot);
+        await writeFile(`${dir}/timings.json`, `${JSON.stringify(timings, null, 2)}\n`);
+        await page.screenshot({ path: `${dir}/filtered-catalog.png`, animations: "disabled" });
+      }
+      const selectionBefore: typeof before = await cdp.send("Performance.getMetrics");
+      const selectionStarted = performance.now();
+      await result.click();
+      await expect.poll(() => trigger.textContent()).toContain("Model 0999");
+      const selectionAfter: typeof before = await cdp.send("Performance.getMetrics");
+      const selectionTimings = {
+        route,
+        models: models.length,
+        elapsedMs: performance.now() - selectionStarted,
+        taskMs:
+          (selectionAfter.metrics.find((entry) => entry.name === "TaskDuration")?.value ?? 0) *
+            1_000 -
+          (selectionBefore.metrics.find((entry) => entry.name === "TaskDuration")?.value ?? 0) *
+            1_000,
+      };
+      console.log(JSON.stringify({ proof: "model-catalog-selection", ...selectionTimings }));
+      await cdp.detach();
+      if (route === "chat") {
+        expect((await gateway.waitForRequest("sessions.patch")).params).toMatchObject({
+          model: "example/model-999",
+        });
+      }
+    });
+  });
+
+  it("shows and changes this chat's account without changing the default for new chats", async () => {
+    const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+    const artifactDir = artifactRoot
+      ? createControlUiE2eArtifactDir("chat-model-accounts", artifactRoot)
+      : undefined;
+    await suite.withPage(
+      {
+        viewport: { width: 393, height: 852 },
+        ...(artifactDir
+          ? { recordVideo: { dir: artifactDir, size: { width: 1280, height: 900 } } }
+          : {}),
+      },
+      async ({ page }) => {
+        const personal = {
+          authProfileId: "openai:personal",
+          provider: "openai",
+          label: "Test Person · Personal workspace",
+          authType: "oauth",
+          selected: false,
+        };
+        const work = {
+          ...personal,
+          authProfileId: "openai:work",
+          label: "Test Person · Work workspace",
+          selected: true,
+        };
+        const models = [
+          {
+            id: "gpt-5.5",
+            provider: "openai",
+            name: "GPT-5.5",
+            reasoning: false,
+            thinkingLevels: [],
+          },
+        ];
+        const sessionKey = "agent:main:main";
+        const sessionList = {
+          count: 1,
+          path: "",
+          ts: 1,
+          defaults: { model: "gpt-5.5", modelProvider: "openai", contextTokens: 200_000 },
+          sessions: [
+            {
+              key: sessionKey,
+              kind: "direct",
+              model: "gpt-5.5",
+              modelProvider: "openai",
+              updatedAt: 1,
+            },
+          ],
+        };
+        const gateway = await installMockGateway(page, {
+          agentModel: "openai/gpt-5.5",
+          models,
+          deferredMethods: ["sessions.patch"],
+          methodResponses: {
+            "sessions.list": sessionList,
+            "models.list": {
+              commands: [],
+              models,
+              accountSelection: {
+                kind: "personal",
+                label: personal.label,
+                authProfileId: personal.authProfileId,
+                source: "user",
+              },
+            },
+            "users.listModelAccounts": {
+              profileId: "test-person",
+              accounts: [personal],
+              nextCursor: "accounts-page-2",
+              links: [{ provider: "openai", authProfileId: work.authProfileId, updatedAt: 1 }],
+            },
+          },
+        });
+        await page.goto(`${suite.server.baseUrl}chat`);
+        const composer = page.locator(".agent-chat__input").first();
+        const model = composer.locator('[data-chat-model-select="true"]');
+        await expect.poll(() => model.getAttribute("aria-busy")).toBe("false");
+        await model.click();
+        const account = composer.locator(".chat-model-account");
+        const picker = account.locator("wa-dropdown");
+        const trigger = picker.locator("[data-chat-account-trigger]");
+        await expect.poll(() => trigger.textContent()).toContain(personal.label);
+        for (const width of [320, 768, 1280]) {
+          await page.setViewportSize({ width, height: 900 });
+          await expect
+            .poll(async () => {
+              const box = await account.boundingBox();
+              return Boolean(box && box.width > 0 && box.x >= 0 && box.x + box.width <= width + 1);
+            })
+            .toBe(true);
+          if (artifactDir) {
+            await page.screenshot({
+              animations: "disabled",
+              path: `${artifactDir}/chat-account-${width}.png`,
+            });
+          }
+        }
+        await trigger.click();
+        const more = picker.getByRole("menuitem", {
+          name: "Load more saved accounts",
+          exact: true,
+        });
+        await expect.poll(() => more.isVisible()).toBe(true);
+        await page.keyboard.press("Escape");
+        await expect.poll(() => more.isVisible()).toBe(false);
+        await expect.poll(() => account.isVisible()).toBe(true);
+        await expect
+          .poll(() => trigger.evaluate((element) => element === document.activeElement))
+          .toBe(true);
+        await trigger.press("Enter");
+        await expect.poll(() => more.isVisible()).toBe(true);
+        await expect
+          .poll(() =>
+            picker
+              .locator('[data-chat-account-option="current"]')
+              .evaluate((element) => element === document.activeElement),
+          )
+          .toBe(true);
+        const inventoryRequests = await gateway.getRequests("users.listModelAccounts");
+        await gateway.deferNext("users.listModelAccounts", { cursor: "accounts-page-2" });
+        await more.click();
+        const nextPage = await gateway.waitForRequest("users.listModelAccounts", {
+          after: inventoryRequests.length,
+        });
+        expect(nextPage.params).toEqual({ cursor: "accounts-page-2" });
+        await expect.poll(() => trigger.getAttribute("aria-expanded")).toBe("true");
+        await gateway.resolveDeferred("users.listModelAccounts", {
+          profileId: "test-person",
+          accounts: [work],
+          links: [{ provider: "openai", authProfileId: work.authProfileId, updatedAt: 1 }],
+        });
+        const workOption = picker.getByRole("menuitemradio", { name: work.label, exact: true });
+        await expect.poll(() => workOption.isVisible()).toBe(true);
+        if (artifactDir) {
+          await page.screenshot({
+            animations: "disabled",
+            path: `${artifactDir}/chat-account-page-2.png`,
+          });
+        }
+        await page.keyboard.press("Home");
+        await page.keyboard.press("ArrowDown");
+        await expect
+          .poll(() => workOption.evaluate((element) => element === document.activeElement))
+          .toBe(true);
+        await page.keyboard.press("Enter");
+        const patch = await gateway.waitForRequest("sessions.patch");
+        expect(patch.params).toEqual({
+          key: sessionKey,
+          model: `openai/gpt-5.5@${work.authProfileId}`,
+        });
+        await expect.poll(() => trigger.textContent()).toContain(personal.label);
+        await gateway.resolveDeferred("sessions.patch", { ok: true });
+        await gateway.setMethodResponse("sessions.list", sessionList);
+        await gateway.setMethodResponse("models.list", {
+          commands: [],
+          models,
+          accountSelection: {
+            kind: "personal",
+            label: work.label,
+            authProfileId: work.authProfileId,
+            source: "user",
+          },
+        });
+        await gateway.emitGatewayEvent("chat.metadata.changed", {});
+        await gateway.emitGatewayEvent("sessions.changed", {
+          key: sessionKey,
+          agentId: "main",
+          reason: "patch",
+        });
+        await expect.poll(() => trigger.textContent()).toContain(work.label);
+        expect(await gateway.getRequests("users.selectModelAccount")).toHaveLength(0);
+        expect(await gateway.getRequests("users.unlinkAuthProfile")).toHaveLength(0);
+        if (artifactDir) {
+          await page.screenshot({
+            animations: "disabled",
+            path: `${artifactDir}/chat-account-selected.png`,
+          });
+        }
+      },
+    );
+  });
+
   it.each(
     ["chat", "new"].flatMap((route) =>
       [false, true].map((tooltipOpen) => ({ route, tooltipOpen })),
@@ -273,13 +538,26 @@ suite.define(() => {
       });
     },
   );
-  it.each(["openai", "example"])(
-    "keeps %s non-reasoning capabilities reachable without a model-menu bridge",
-    async (provider) => {
+  it.each([
+    { provider: "openai", reasoning: false, capability: "non-reasoning" },
+    { provider: "example", reasoning: false, capability: "non-reasoning" },
+    { provider: "metadata-fixture", reasoning: true, capability: "no-effort" },
+  ])(
+    "keeps $provider $capability capabilities reachable without a model-menu bridge",
+    async ({ provider, reasoning }) => {
       await suite.withPage({ viewport: { width: 320, height: 852 } }, async ({ page }) => {
         const gateway = await installMockGateway(page, {
           agentModel: `${provider}/basic`,
-          models: [{ id: "basic", provider, name: "Basic", reasoning: false, thinkingLevels: [] }],
+          models: [
+            {
+              id: "basic",
+              provider,
+              name: "Basic",
+              reasoning,
+              thinkingLevels: [],
+              thinkingDefault: "off",
+            },
+          ],
           methodResponses: {
             "sessions.list": {
               count: 1,
@@ -289,6 +567,7 @@ suite.define(() => {
                 model: "basic",
                 modelProvider: provider,
                 thinkingLevels: [],
+                thinkingDefault: "off",
                 contextTokens: 200_000,
               },
               sessions: [
@@ -298,6 +577,7 @@ suite.define(() => {
                   model: "basic",
                   modelProvider: provider,
                   thinkingLevels: [],
+                  thinkingDefault: "off",
                   contextTokens: 200_000,
                   totalTokens: 46_000,
                   totalTokensFresh: true,
@@ -312,8 +592,13 @@ suite.define(() => {
         const model = composer.locator('[data-chat-model-select="true"]');
         await expect.poll(() => model.getAttribute("aria-busy")).toBe("false");
         const effort = composer.locator('[data-chat-thinking-select="true"]');
-        if (provider === "example") {
+        if (provider !== "openai") {
           await expect.poll(() => effort.count()).toBe(0);
+          expect(
+            (await gateway.getRequests("sessions.patch")).some(
+              ({ params }) => params && Object.hasOwn(params, "thinkingLevel"),
+            ),
+          ).toBe(false);
           return;
         }
         await expect.poll(() => effort.getAttribute("aria-label")).toBe("Fast mode: Standard");
@@ -348,6 +633,63 @@ suite.define(() => {
           await page.screenshot({
             path: `${artifactDir}/chat-speed-only-320.png`,
             animations: "disabled",
+          });
+        }
+      });
+    },
+  );
+
+  it.each(["chat", "new"])(
+    "clears %s model search before Escape dismisses the picker",
+    async (route) => {
+      await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+        const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+        const artifactDir = artifactRoot
+          ? createControlUiE2eArtifactDir(`model-search-escape-${route}`, artifactRoot)
+          : undefined;
+        const gateway = await installMockGateway(page, {
+          agentModel: "openai/gpt-5.5",
+          models: [
+            { id: "gpt-5.5", name: "GPT-5.5", provider: "openai" },
+            { id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6", provider: "anthropic" },
+          ],
+        });
+        await page.goto(`${suite.server.baseUrl}${route}`);
+        const composer = page.locator(".agent-chat__input").first();
+        const picker = composer.locator(".chat-controls__model-picker");
+        const trigger = picker.locator('[data-chat-model-select="true"]');
+        await expect.poll(() => picker.locator("[data-chat-model-option]").count()).toBe(2);
+        await expect.poll(() => trigger.getAttribute("aria-disabled")).toBe("false");
+        await trigger.click();
+        const search = picker.locator("[data-chat-model-search]");
+        await search.fill("anthropic");
+        await expect.poll(() => picker.locator("[data-chat-model-option]:visible").count()).toBe(1);
+        if (artifactDir) {
+          await page.screenshot({
+            animations: "disabled",
+            path: `${artifactDir}/01-filtered.png`,
+          });
+        }
+        await search.press("Escape");
+        if (artifactDir) {
+          await page.screenshot({
+            animations: "disabled",
+            path: `${artifactDir}/02-first-escape.png`,
+          });
+        }
+        await expect.poll(() => picker.getAttribute("open")).toBe("");
+        expect(await search.inputValue()).toBe("");
+        expect(await search.evaluate((input) => input === document.activeElement)).toBe(true);
+        await expect.poll(() => picker.locator("[data-chat-model-option]:visible").count()).toBe(2);
+        expect(await gateway.getRequests("sessions.patch")).toEqual([]);
+
+        await search.press("Escape");
+        await expect.poll(() => picker.getAttribute("open")).toBe(null);
+        expect(await trigger.evaluate((summary) => summary === document.activeElement)).toBe(true);
+        if (artifactDir) {
+          await page.screenshot({
+            animations: "disabled",
+            path: `${artifactDir}/03-second-escape.png`,
           });
         }
       });

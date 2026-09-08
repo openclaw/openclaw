@@ -206,7 +206,6 @@ function numericConstraintMessage(value: number, schema: ConfigNodeRenderParams[
 }
 
 type NumericInputState =
-  | { kind: "badInput" }
   | { kind: "empty" }
   | { kind: "invalid" }
   | { kind: "value"; parsed: number; message: string };
@@ -220,7 +219,7 @@ function resolveNumericInputState(
 ): NumericInputState {
   const raw = target.value;
   if (raw.trim() === "") {
-    return target.validity.badInput ? { kind: "badInput" } : { kind: "empty" };
+    return target.validity.badInput ? { kind: "invalid" } : { kind: "empty" };
   }
   const parsed = coerceConfigFormNumberString(raw, schemaType(schema) === "integer");
   if (typeof parsed !== "number") {
@@ -233,10 +232,7 @@ function numericStateMessage(state: NumericInputState, isRequired: boolean): str
   if (state.kind === "value") {
     return state.message;
   }
-  if (state.kind === "invalid") {
-    return t("configForm.invalidNumber");
-  }
-  return state.kind === "badInput" || isRequired ? t("configForm.invalidNumber") : "";
+  return state.kind === "invalid" || isRequired ? t("configForm.invalidNumber") : "";
 }
 
 function applyNumericInputState(
@@ -478,9 +474,11 @@ export function renderTextInput(
     ? html`
         <span class="settings-phone-presentation">
           ${wrappedInput}
-          ${phonePresentation
-            ? html`<span class="settings-phone-presentation__value">${phonePresentation}</span>`
-            : nothing}
+          ${
+            phonePresentation
+              ? html`<span class="settings-phone-presentation__value">${phonePresentation}</span>`
+              : nothing
+          }
         </span>
       `
     : wrappedInput;
@@ -530,7 +528,7 @@ export function renderNumberInput(params: ConfigNodeRenderParams): TemplateResul
       return;
     }
     const current = Number(effectiveValue);
-    const base = Number.isFinite(current) ? current : normalizeNumericValue(0, schema);
+    const base = Number.isFinite(current) ? current : 0;
     const candidate = normalizeNumericValue(base + direction * numericStep, schema);
     if (isSupportedConfigValueValid(schema, candidate)) {
       onPatch(path, candidate);
@@ -564,9 +562,11 @@ export function renderNumberInput(params: ConfigNodeRenderParams): TemplateResul
       aria-label=${label}
       aria-describedby=${helpId ?? nothing}
       aria-invalid="false"
-      placeholder=${schema.default !== undefined
-        ? t("configForm.defaultValue", { value: formatConfigValueText(schema.default) })
-        : nothing}
+      placeholder=${
+        schema.default !== undefined
+          ? t("configForm.defaultValue", { value: formatConfigValueText(schema.default) })
+          : nothing
+      }
       min=${constraints.min ?? nothing}
       max=${constraints.max ?? nothing}
       step=${constraints.step}
@@ -687,17 +687,21 @@ export function renderSelect(
         ?selected=${selectedValue === unset}
         ?disabled=${params.isRequired && schema.default === undefined}
       >
-        ${schema.default !== undefined
-          ? t("configForm.defaultValue", { value: formatConfigValueText(schema.default) })
-          : (hintForPath(path, hints)?.placeholder ?? t("configForm.select"))}
+        ${
+          schema.default !== undefined
+            ? t("configForm.defaultValue", { value: formatConfigValueText(schema.default) })
+            : (hintForPath(path, hints)?.placeholder ?? t("configForm.select"))
+        }
       </option>
-      ${canSelectNull
-        ? html`
-            <option value=${nullValue} ?selected=${selectedValue === nullValue}>
-              ${t("configForm.nullValue")}
-            </option>
-          `
-        : nothing}
+      ${
+        canSelectNull
+          ? html`
+              <option value=${nullValue} ?selected=${selectedValue === nullValue}>
+                ${t("configForm.nullValue")}
+              </option>
+            `
+          : nothing
+      }
       ${options.map(
         (option, index) => html`
           <option value=${String(index)} ?selected=${selectedValue === String(index)}>

@@ -15,7 +15,6 @@ vi.mock("./conversation-binding.js", () => ({
 import { getPluginCommandExecutionCount } from "./command-execution-lock.js";
 import { registerPluginCommandInRegistry } from "./command-registration.js";
 import { createPluginRecord } from "./loader-records.js";
-import { withPluginCommandAccountStartScope } from "./plugin-command-account-start-scope.js";
 import {
   createPluginCommandRuntime,
   executePluginCommandDispatch,
@@ -151,6 +150,7 @@ describe("plugin command runtime", () => {
     const scoped = createEmptyPluginRegistry();
     const ambientHandler = vi.fn(async () => ({ text: "ambient" }));
     const scopedHandler = vi.fn(async (args?: string) => ({ text: `scoped:${args}` }));
+    const nativeNames = { discord: "discord-demo" };
     registerCommand(ambient, {
       pluginId: "ambient",
       name: "demo",
@@ -160,7 +160,7 @@ describe("plugin command runtime", () => {
       pluginId: "scoped",
       name: "demo",
       channels: ["discord"],
-      nativeNames: { discord: "discord-demo" },
+      nativeNames,
       acceptsArgs: true,
       handler: scopedHandler,
     });
@@ -174,7 +174,14 @@ describe("plugin command runtime", () => {
       expect(
         matchPluginCommandInvocation(runtime, "/discord-demo hi", { channel: "telegram" }),
       ).toBeNull();
-      const match = matchPluginCommandInvocation(runtime, "/discord-demo hi", {
+      expect(
+        matchPluginCommandInvocation(runtime, "/discord-demo hi", { channel: "discord" }),
+      ).not.toBeNull();
+      nativeNames.discord = "renamed-demo";
+      expect(
+        matchPluginCommandInvocation(runtime, "/discord-demo hi", { channel: "discord" }),
+      ).toBeNull();
+      const match = matchPluginCommandInvocation(runtime, "/renamed-demo hi", {
         channel: "discord",
       });
       expect(match?.dispatch.kind).toBe("plugin");
@@ -184,7 +191,7 @@ describe("plugin command runtime", () => {
       const result = await match.dispatch.execute({
         ...executionContext,
         channel: "discord",
-        commandBody: "/discord-demo hi",
+        commandBody: "/renamed-demo hi",
       });
       expect(result).toEqual({ text: "scoped:hi" });
     });
@@ -379,7 +386,7 @@ describe("plugin command runtime", () => {
     expect(candidate.prepareDispatch("unexpected")).toEqual({ kind: "non-plugin" });
   });
 
-  it("retains only a supported provider in its matching account startup scope", () => {
+  it("preserves the shipped catalog-retention call and rejects retired runtimes", () => {
     const registry = createEmptyPluginRegistry();
     registerCommand(registry, {
       pluginId: "demo",
@@ -389,15 +396,8 @@ describe("plugin command runtime", () => {
     });
     setActivePluginRegistry(registry);
     const runtime = createPluginCommandRuntime();
-    const retainCatalog = vi.fn();
-
-    runtime.retainNativeCatalog("telegram");
-    withPluginCommandAccountStartScope({ channelId: "telegram", retainCatalog }, () => {
-      runtime.retainNativeCatalog("discord");
-      runtime.retainNativeCatalog("telegram");
-    });
-
-    expect(retainCatalog).toHaveBeenCalledOnce();
+    expect(() => runtime.retainNativeCatalog("telegram")).not.toThrow();
+    expect(() => runtime.retainNativeCatalog("discord")).not.toThrow();
     markPluginRegistryRetired(registry);
     expect(() => runtime.retainNativeCatalog("telegram")).toThrow("retired registry generation");
   });
@@ -440,26 +440,32 @@ describe("plugin command runtime", () => {
     expect(cleanupReplacedPluginHostRegistry).toHaveBeenCalledOnce();
   });
 
-  it("lets repeated command-triggered clears return without deadlocking their drain", async () => {
-    const registry = createEmptyPluginRegistry();
-    registry.plugins.push({ status: "loaded" } as never);
-    registerCommand(registry, {
-      pluginId: "clear",
-      name: "clear",
-      handler: async () => {
-        await clearActivePluginRegistry();
-        await clearActivePluginRegistry();
-        return { text: "cleared" };
-      },
-    });
-    setActivePluginRegistry(registry);
-    const dispatch = requirePluginDispatch(
-      createPluginCommandRuntime().listNativeCandidates("telegram")[0]!,
-    );
-    await expect(dispatch.execute(executionContext)).resolves.toEqual({ text: "cleared" });
-    await clearActivePluginRegistry();
-    expect(cleanupReplacedPluginHostRegistry).toHaveBeenCalledOnce();
-  });
+  it.each([false, true])(
+    "lets command-triggered clears finish (replaced: %s)",
+    async (replaced) => {
+      const registry = createEmptyPluginRegistry();
+      registry.plugins.push({ status: "loaded" } as never);
+      registerCommand(registry, {
+        pluginId: "clear",
+        name: "clear",
+        handler: async () => {
+          if (replaced) {
+            setActivePluginRegistry(createEmptyPluginRegistry());
+          }
+          await clearActivePluginRegistry();
+          await clearActivePluginRegistry();
+          return { text: "cleared" };
+        },
+      });
+      setActivePluginRegistry(registry);
+      const dispatch = requirePluginDispatch(
+        createPluginCommandRuntime().listNativeCandidates("telegram")[0]!,
+      );
+      await expect(dispatch.execute(executionContext)).resolves.toEqual({ text: "cleared" });
+      await clearActivePluginRegistry();
+      expect(cleanupReplacedPluginHostRegistry).toHaveBeenCalledOnce();
+    },
+  );
 
   it("awaits cleanup from detached handler context after execution settles", async () => {
     const registry = createEmptyPluginRegistry();

@@ -58,14 +58,26 @@ describe("agent-runtime model catalog compatibility", () => {
       routeVariants: [],
     });
 
-    await expect(loadModelCatalog({ cacheOnly: true, useCache: true })).resolves.toEqual([
-      { provider: "test", id: "cached", name: "Cached" },
-    ]);
+    await expect(
+      loadModelCatalog({ cacheOnly: true, useCache: true, refreshFullCatalog: true }),
+    ).resolves.toEqual([{ provider: "test", id: "cached", name: "Cached" }]);
     expect(mocks.loadCatalog).not.toHaveBeenCalled();
   });
 
+  it("preserves explicit refresh intent through the legacy loader", async () => {
+    const entries = [{ provider: "test", id: "refreshed", name: "Refreshed" }];
+    mocks.loadCatalog.mockResolvedValue(entries);
+
+    await expect(loadModelCatalog({ refreshFullCatalog: true })).resolves.toBe(entries);
+    expect(mocks.loadCatalog).toHaveBeenCalledExactlyOnceWith({ refreshFullCatalog: true });
+    expect(mocks.getSnapshot).not.toHaveBeenCalled();
+  });
+
   it("accepts legacy options without overriding lifecycle metadata", async () => {
-    type LegacyMetadataSnapshot = Omit<PluginMetadataSnapshot, "owners"> & {
+    type LegacyMetadataSnapshot = Omit<
+      PluginMetadataSnapshot,
+      "owners" | "declaredProviderOwners"
+    > & {
       owners: Omit<PluginMetadataSnapshot["owners"], "modelIdNormalizationPolicies">;
     };
     type AcceptedMetadataSnapshot = NonNullable<

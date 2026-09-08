@@ -1,5 +1,6 @@
 // Reconciles configured plugin installs after the core package update has completed.
 import path from "node:path";
+import { PLUGIN_CAPABILITY_CONSENT_REQUIRED } from "../../../../packages/gateway-protocol/src/capability-consent-error-details.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../../config/types.plugins.js";
 import {
@@ -18,6 +19,7 @@ import {
   relinkOpenClawPeerDependenciesInManagedNpmRoot,
 } from "../../../plugins/plugin-peer-link.js";
 import { pruneStaleLocalBundledPluginInstallRecords } from "../../../plugins/stale-local-bundled-plugin-install-records.js";
+import type { PluginUpdateOutcome } from "../../../plugins/update.js";
 import { resolveUserPath } from "../../../utils.js";
 import { VERSION } from "../../../version.js";
 // Link mandatory repairs before a package swap can remove this updater's old chunks.
@@ -36,6 +38,7 @@ type PostCoreConvergenceResult = {
   changes: string[];
   notices?: PostCoreConvergenceWarning[];
   warnings: PostCoreConvergenceWarning[];
+  outcomes?: PluginUpdateOutcome[];
   errored: boolean;
   smokeFailures: PluginPayloadSmokeFailure[];
   /**
@@ -272,7 +275,12 @@ export async function runPostCorePluginConvergence(params: {
     ],
     notices,
     warnings,
-    errored: repair.capabilityConsentRequired === true || smoke.failures.length > 0,
+    outcomes: repair.outcomes,
+    errored:
+      repair.outcomes?.some(
+        (outcome) =>
+          outcome.status === "error" && outcome.code === PLUGIN_CAPABILITY_CONSENT_REQUIRED,
+      ) === true || smoke.failures.length > 0,
     smokeFailures: smoke.failures,
     installRecords: records,
   };

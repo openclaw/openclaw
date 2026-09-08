@@ -1,18 +1,18 @@
 // Config snapshots and pre/post-update config restoration.
-import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
-import { createPreUpdateConfigSnapshot } from "../../config/backup-rotation.js";
 import {
+  createConfigIO,
   mutateConfigFileWithRetry,
   parseConfigJson5,
   readConfigFileSnapshot,
 } from "../../config/config.js";
 import { resolveConfigEnvVars } from "../../config/env-substitution.js";
 import { resolveConfigIncludes } from "../../config/includes.js";
+import type { ConfigWriteOptions } from "../../config/io.js";
 import { asResolvedSourceConfig, asRuntimeConfig } from "../../config/materialize.js";
-import { CONFIG_PATH, resolveIncludeRoots } from "../../config/paths.js";
+import { resolveIncludeRoots } from "../../config/paths.js";
 import { parsePluginInstallRecordMap } from "../../config/plugin-install-record-map.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../config/types.plugins.js";
@@ -24,13 +24,6 @@ import { defaultRuntime } from "../../runtime.js";
 import { VERSION } from "../../version.js";
 
 const PRE_UPDATE_CONFIG_SNAPSHOT_MAX_AGE_MS = 6 * 60 * 60 * 1000;
-
-export async function createUpdateConfigSnapshot(): Promise<void> {
-  await createPreUpdateConfigSnapshot({
-    configPath: CONFIG_PATH,
-    fs: { writeFile: fs.writeFile, readFile: fs.readFile, existsSync },
-  });
-}
 
 export function normalizePluginInstallRecordMap(
   value: unknown,
@@ -102,7 +95,7 @@ function restorePreUpdateChannelModelOverrides(params: {
     : { channels: params.channels, changed: false };
 }
 
-export function restoreDroppedPreUpdateChannels(
+function restoreDroppedPreUpdateChannels(
   snapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>>,
   preUpdateConfig: PreUpdateConfigRestoreInput | undefined,
 ): {
@@ -281,6 +274,33 @@ export async function persistRequestedUpdateChannel(params: {
   return createUpdatedConfigSnapshot(mutation.snapshot, mutation.nextConfig);
 }
 
+/** Capture write provenance in the process that will converge plugins, after any channel write. */
+export async function preparePostCorePluginConfig(params: {
+  requestedChannel: UpdateChannel | null;
+  preUpdateConfig?: PreUpdateConfigRestoreInput;
+  suppressFutureVersionWarning?: boolean;
+}) {
+  const io = createConfigIO({
+    pluginValidation: "skip",
+    suppressFutureVersionWarning: params.suppressFutureVersionWarning,
+  });
+  let prepared = await io.readConfigFileSnapshotForWrite();
+  const channelSnapshot = await persistRequestedUpdateChannel({
+    configSnapshot: prepared.snapshot,
+    requestedChannel: params.requestedChannel,
+  });
+  if (channelSnapshot !== prepared.snapshot) {
+    prepared = await io.readConfigFileSnapshotForWrite();
+  }
+  const restored = restoreDroppedPreUpdateChannels(prepared.snapshot, params.preUpdateConfig);
+  return {
+    configSnapshot: restored.snapshot,
+    configWriteOptions: prepared.writeOptions,
+    configChanged: restored.changed,
+    restoredAuthoredChannels: restored.authoredChannels,
+  };
+}
+
 function createUpdatedConfigSnapshot(
   snapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>>,
   next: OpenClawConfig,
@@ -301,6 +321,7 @@ function createUpdatedConfigSnapshot(
 
 export async function maybeRepairLegacyConfigForUpdateChannel(params: {
   configSnapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>>;
+  configWriteOptions: ConfigWriteOptions;
   jsonMode: boolean;
 }): Promise<Awaited<ReturnType<typeof readConfigFileSnapshot>>> {
   if (params.configSnapshot.valid || params.configSnapshot.legacyIssues.length === 0) {

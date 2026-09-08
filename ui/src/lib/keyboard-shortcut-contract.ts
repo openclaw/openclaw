@@ -1,28 +1,9 @@
 import { resolveAsciiShortcutKey } from "./keyboard-shortcuts.ts";
 
 type KeyboardShortcutModifier = "mod" | "ctrl" | "shift" | "alt";
-type KeyboardShortcutKey =
-  | "k"
-  | "b"
-  | "d"
-  | "f"
-  | "h"
-  | "/"
-  | "+"
-  | "-"
-  | "0"
-  | "Backquote"
-  | "Comma"
-  | "Enter"
-  | "Escape"
-  | "ArrowUp"
-  | "ArrowDown"
-  // Display-only mouse chord for the overview dialog; never keyboard-matched.
-  | "Click";
-
-export type KeyboardShortcutCombo = {
+type ShortcutDefinition<Key extends string> = {
   readonly modifiers: readonly KeyboardShortcutModifier[];
-  readonly key: KeyboardShortcutKey;
+  readonly key: Key;
   readonly platformSpecific?: boolean;
 };
 
@@ -40,6 +21,13 @@ export const KEYBOARD_SHORTCUT_COMBOS = {
   terminalPanel: { modifiers: ["ctrl"], key: "Backquote" },
   homePanel: { modifiers: ["mod", "shift"], key: "h" },
   workspaceFiles: { modifiers: ["mod", "shift"], key: "b" },
+  sideChat: { modifiers: ["mod", "shift"], key: "s" },
+  browserPanel: { modifiers: ["mod", "alt", "shift"], key: "u" },
+  tasksPanel: { modifiers: ["mod", "alt", "shift"], key: "k" },
+  desktopPanel: { modifiers: ["mod", "alt", "shift"], key: "d" },
+  discussionPanel: { modifiers: ["mod", "alt", "shift"], key: "j" },
+  dashboardPanel: { modifiers: ["mod", "alt", "shift"], key: "g" },
+  reviewPanel: { modifiers: ["mod", "alt", "shift"], key: "e" },
   approveAlways: { modifiers: ["mod", "shift"], key: "Enter" },
   denyApproval: { modifiers: ["mod"], key: "d" },
   historyPrevious: { modifiers: [], key: "ArrowUp" },
@@ -47,9 +35,14 @@ export const KEYBOARD_SHORTCUT_COMBOS = {
   zoomIn: { modifiers: [], key: "+" },
   zoomOut: { modifiers: [], key: "-" },
   zoomReset: { modifiers: [], key: "0" },
+  // Display-only mouse chords; never keyboard-matched.
   toggleSessionSelect: { modifiers: ["mod"], key: "Click" },
   extendSessionSelect: { modifiers: ["shift"], key: "Click" },
-} as const satisfies Record<string, KeyboardShortcutCombo>;
+} as const satisfies Record<string, ShortcutDefinition<string>>;
+
+type KeyboardShortcutKey =
+  (typeof KEYBOARD_SHORTCUT_COMBOS)[keyof typeof KEYBOARD_SHORTCUT_COMBOS]["key"];
+export type KeyboardShortcutCombo = ShortcutDefinition<KeyboardShortcutKey>;
 
 export function isApplePlatform(platform = globalThis.navigator?.platform ?? ""): boolean {
   return /Mac|iPhone|iPad|iPod/u.test(platform);
@@ -87,7 +80,7 @@ export function formatKeyboardShortcutCombo(
 // Most mod-chords accept either modifier. Platform-specific chords reserve
 // native editing keys (Mac Ctrl+B/F/K) for the focused text field.
 export function matchesShortcutCombo(combo: KeyboardShortcutCombo, event: KeyboardEvent): boolean {
-  if (event.isComposing || event.keyCode === 229) {
+  if (event.isComposing || event.key === "Dead" || event.keyCode === 229) {
     return false;
   }
   const wantsMod = combo.modifiers.includes("mod");
@@ -127,5 +120,10 @@ export function matchesShortcutCombo(combo: KeyboardShortcutCombo, event: Keyboa
   ) {
     return event.key === combo.key;
   }
-  return resolveAsciiShortcutKey(event) === combo.key;
+  // Only Command+Option uses physical letters; Ctrl+Alt may be AltGr text.
+  const key = resolveAsciiShortcutKey(event);
+  if (key !== null || !event.metaKey || !event.altKey) {
+    return key === combo.key;
+  }
+  return event.code === `Key${combo.key.toUpperCase()}`;
 }

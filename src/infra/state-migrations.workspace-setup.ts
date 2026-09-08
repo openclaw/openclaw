@@ -1,5 +1,5 @@
 // Doctor-only import for retired workspace setup and attestation files.
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -18,6 +18,7 @@ import { resolveWorkspaceStateIdentity } from "../agents/workspace-state-identit
 import { resolveLegacyStateDirs } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "./errors.js";
+import { resolveUserPath } from "./home-dir.js";
 import { pathMayExistSync } from "./path-existence.js";
 import { withLegacyMigrationStateLock } from "./state-migrations.lock.js";
 import {
@@ -41,6 +42,7 @@ import type {
   LegacyWorkspaceStateDetection,
   LegacyWorkspaceStateSource,
 } from "./state-migrations.workspace-setup.types.js";
+import { formatDoctorStateRepairFailure } from "./state-repair-message.js";
 
 const SETUP_MAX_BYTES = 64 * 1024;
 const CLAIM_SUFFIX = WORKSPACE_DOCTOR_CLAIM_SUFFIX;
@@ -108,10 +110,37 @@ async function readBoundedRegularFile(params: {
       sha256: createHash("sha256").update(buffer).digest("hex"),
       size: after.size,
       raw,
+      buffer,
     };
   } finally {
     await opened[Symbol.asyncDispose]();
   }
+}
+
+async function archiveWorkspaceSetupSource(
+  sourceRoot: Root,
+  source: LegacyWorkspaceStateSource,
+  snapshot: SourceSnapshot,
+  existingArchivePath?: string,
+): Promise<string> {
+  const archivePath =
+    existingArchivePath ?? `${source.sourcePath}.migrated.${snapshot.sha256}.${randomUUID()}`;
+  const relativePath = path.relative(source.rootDir, archivePath);
+  // The receipt publishes only a verified backup. A crash during creation leaves
+  // an unreferenced artifact, so the next attempt can safely use a fresh name.
+  if (!existingArchivePath) {
+    await sourceRoot.create(relativePath, snapshot.buffer, { mode: 0o600 });
+  }
+  const archived = await readBoundedRegularFile({
+    sourceRoot,
+    relativePath,
+    sourcePath: archivePath,
+    maxBytes: SETUP_MAX_BYTES,
+  });
+  if (archived.sha256 !== snapshot.sha256) {
+    throw new Error(`workspace setup backup differs from the claimed source: ${archivePath}`);
+  }
+  return archivePath;
 }
 
 function createLegacySourceClaim(
@@ -297,12 +326,21 @@ export function detectLegacyWorkspaceState(params: {
     }
   };
 
-  for (const workspaceDir of listWorkspaceStateDirs({
-    cfg: params.cfg,
-    env,
-    homedir,
-    stateDir: params.stateDir,
-  })) {
+  const workspaceDirs = new Set(
+    listWorkspaceStateDirs({
+      cfg: params.cfg,
+      env,
+      homedir,
+      stateDir: params.stateDir,
+    }),
+  );
+  // Explicit fleets may use only subdirectories of this still-configured root.
+  // Doctor must discover its retired state without making it a runtime workspace.
+  const sharedWorkspace = params.cfg.agents?.defaults?.workspace?.trim();
+  if (sharedWorkspace) {
+    workspaceDirs.add(resolveUserPath(sharedWorkspace, env, homedir));
+  }
+  for (const workspaceDir of workspaceDirs) {
     addLegacyWorkspaceSources({ workspaceDir, env, homedir, add });
   }
 
@@ -322,7 +360,10 @@ function formatLegacyWorkspaceReadWarning(
   source: LegacyWorkspaceStateSource,
   error: unknown,
 ): string {
-  return `Failed reading legacy workspace state at ${source.sourcePath}: ${formatErrorMessage(error)}`;
+  return formatDoctorStateRepairFailure(
+    `Failed reading legacy workspace state at ${source.sourcePath}: ${formatErrorMessage(error)}`,
+    "Stop the Gateway. Restore this source or its .doctor-importing claim from a verified backup, or rename the unreadable source or claim with a .rejected-<timestamp> suffix to retain its bytes if its setup/attestation history can be discarded. Then rerun openclaw doctor --fix against the same state/config.",
+  );
 }
 
 function assertConfiguredWorkspaceIdentity(source: LegacyWorkspaceStateSource): void {
@@ -342,6 +383,7 @@ function assertConfiguredWorkspaceIdentity(source: LegacyWorkspaceStateSource): 
 }
 
 async function cleanupReceiptSource(params: {
+  sourceRoot: Root;
   sourceClaim: LegacyMigrationSourceClaim<SourceSnapshot>;
   source: LegacyWorkspaceStateSource;
   receipt: MigrationReceipt;
@@ -393,6 +435,30 @@ async function cleanupReceiptSource(params: {
         warnings: ["Workspace state is in SQLite, but the retired source now conflicts."],
       };
     }
+    const notices: string[] = [];
+    if (parsed.kind === "setup") {
+      const archivePath = await archiveWorkspaceSetupSource(
+        params.sourceRoot,
+        params.source,
+        snapshot,
+        params.receipt.archivePath,
+      );
+      if (!params.receipt.archivePath) {
+        // Receipts written before setup backups still need an archive before cleanup.
+        const imported = importAndRecordReceipt({
+          source: params.source,
+          snapshot,
+          parsed,
+          env: params.env,
+          previousReceipt: params.receipt,
+          archivePath,
+        });
+        notices.push(
+          `Archived legacy workspace setup state at ${archivePath}.`,
+          ...imported.differences,
+        );
+      }
+    }
     const unchanged = await sourceClaim.read(true);
     if (!snapshotsMatch(snapshot, unchanged)) {
       if (claimedByThisRun) {
@@ -406,7 +472,10 @@ async function cleanupReceiptSource(params: {
     return {
       changes: [],
       warnings: [],
-      notices: ["Discarded retired workspace state already covered by its SQLite receipt."],
+      notices: [
+        ...notices,
+        "Discarded retired workspace state already covered by its SQLite receipt.",
+      ],
     };
   } catch (error) {
     return {
@@ -425,9 +494,10 @@ async function migrateOneSource(params: {
   removeSource?: (sourcePath: string) => Promise<void> | void;
 }): Promise<MigrationMessages> {
   let sourceClaim: LegacyMigrationSourceClaim<SourceSnapshot>;
+  let sourceRoot: Root;
   try {
     assertConfiguredWorkspaceIdentity(params.source);
-    const sourceRoot = await root(params.source.rootDir, {
+    sourceRoot = await root(params.source.rootDir, {
       hardlinks: "reject",
       symlinks: "reject",
     });
@@ -454,6 +524,7 @@ async function migrateOneSource(params: {
   // already renamed before a crash. Collisions keep the stricter receipt check.
   if (receipt && !(receipt.removedSource && hasSource !== hasClaim)) {
     return cleanupReceiptSource({
+      sourceRoot,
       sourceClaim,
       source: params.source,
       receipt,
@@ -474,9 +545,10 @@ async function migrateOneSource(params: {
     return { changes: [], warnings: [] };
   }
 
-  let operation = `reading legacy workspace state at ${params.source.sourcePath}`;
+  let operation: string | undefined;
   let claimAttempted = false;
   let imported: ReturnType<typeof importAndRecordReceipt> | undefined;
+  let archivePath: string | undefined;
   try {
     let snapshot = await sourceClaim.read(!hasSource);
     // Empty reserved hashed markers have no importable state. The runtime gate is
@@ -507,13 +579,17 @@ async function migrateOneSource(params: {
     }
 
     if (parsed) {
+      if (parsed.kind === "setup") {
+        archivePath = await archiveWorkspaceSetupSource(sourceRoot, params.source, snapshot);
+      }
       assertConfiguredWorkspaceIdentity(params.source);
       imported = importAndRecordReceipt({
         source: params.source,
         snapshot,
         parsed,
         env: params.env,
-        replaceRemovedReceipt: receipt?.removedSource === true,
+        previousReceipt: receipt ?? undefined,
+        archivePath,
       });
     }
 
@@ -542,7 +618,9 @@ async function migrateOneSource(params: {
     return {
       changes: [],
       warnings: [
-        `Failed ${operation}: ${formatErrorMessage(error)}${restoreError ? `; restore failure: ${restoreError}` : ""}`,
+        operation
+          ? `Failed ${operation}: ${formatErrorMessage(error)}${restoreError ? `; restore failure: ${restoreError}` : ""}`
+          : formatLegacyWorkspaceReadWarning(params.source, error),
       ],
     };
   }
@@ -559,7 +637,11 @@ async function migrateOneSource(params: {
       imported.imported ? `Migrated ${label} to SQLite.` : `Verified canonical SQLite ${label}.`,
     ],
     warnings: [],
-    notices: ["Removed retired workspace state after verified SQLite import."],
+    notices: [
+      ...(archivePath ? [`Archived legacy workspace setup state at ${archivePath}.`] : []),
+      ...imported.differences,
+      "Removed retired workspace state after verified SQLite import.",
+    ],
   };
 }
 

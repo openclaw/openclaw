@@ -5,6 +5,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { terminateManagedChild } from "../lib/managed-child-process.mts";
 import { sleep as delay } from "../lib/sleep.mjs";
+import { resolveVitestHomeSelection } from "../lib/vitest-home-selection.mts";
 import { spawnOwnedVitestProcess } from "../lib/vitest-process.mts";
 
 type Options = {
@@ -129,23 +130,14 @@ function currentTerminalDimension(value: number | undefined, fallback: number): 
 
 function createChildStopper(
   child: KillableChild,
-  options: {
-    signalChild?: SignalChild;
-    sigtermGraceMs?: number;
-    sigkillGraceMs?: number;
-  } = {},
+  signalChild: SignalChild = (targetChild, signal) =>
+    terminateManagedChild(targetChild, signal, {
+      onChildSignalError(error) {
+        throw error;
+      },
+      taskkillTimeoutMs: null,
+    }),
 ): ChildStopper {
-  const signalChild =
-    options.signalChild ??
-    ((targetChild, signal) =>
-      terminateManagedChild(targetChild, signal, {
-        onChildSignalError(error) {
-          throw error;
-        },
-        taskkillTimeoutMs: null,
-      }));
-  const sigtermGraceMs = options.sigtermGraceMs ?? CHILD_SIGTERM_GRACE_MS;
-  const sigkillGraceMs = options.sigkillGraceMs ?? CHILD_SIGKILL_GRACE_MS;
   let stopping = false;
   let termTimer: ReturnType<typeof setTimeout> | undefined;
   let killTimer: ReturnType<typeof setTimeout> | undefined;
@@ -171,9 +163,9 @@ function createChildStopper(
       signalChild(child, "SIGTERM");
       killTimer = setTimeout(() => {
         signalChild(child, "SIGKILL");
-      }, sigkillGraceMs);
+      }, CHILD_SIGKILL_GRACE_MS);
       unrefTimer(killTimer);
-    }, sigtermGraceMs);
+    }, CHILD_SIGTERM_GRACE_MS);
     unrefTimer(termTimer);
   };
 
@@ -245,6 +237,10 @@ async function main(): Promise<void> {
   await createMirrorFile(options.mirrorPath);
 
   const { child, completion } = spawnOwnedVitestProcess({
+    homeMode: resolveVitestHomeSelection(
+      ["--config", "test/vitest/vitest.tui-pty.config.ts", ...options.vitestArgs],
+      { env: process.env },
+    ),
     command: process.execPath,
     args: [
       "--no-maglev",

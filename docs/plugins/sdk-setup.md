@@ -44,7 +44,7 @@ Your `package.json` needs an `openclaw` field that tells the plugin system what 
       "version": "1.0.0",
       "type": "module",
       "dependencies": {
-        "typebox": "1.3.17"
+        "typebox": "1.3.18"
       },
       "peerDependencies": {
         "openclaw": ">=2026.3.24-beta.2"
@@ -165,6 +165,8 @@ Supported field kinds are `string`, `boolean`, `integer`, `string-list`, and `ch
 For a boolean `useEnv` field, set `envVars` to the static environment variable names required by the plugin runtime. Non-interactive channel setup then rejects `--use-env` before writing config when any declared variable is empty. Set `envVarMode: "any"` when one variable from the list is sufficient, such as an inline credential or file-path alternative. Omitting `envVars` preserves the plugin's existing validation behavior.
 
 The released `setup`/`ChannelSetupInput` adapter stays available for existing external plugins. New plugins should expose `setupContract`; OpenClaw always prefers it when both are present.
+
+Use `afterAccountConfigWritten` (or a wizard's `afterConfigWritten`) for connection checks and other work that requires saved configuration. OpenClaw runs these callbacks after the write succeeds and passes a runtime `cfg` reread from the exact committed file, with environment references and plugin defaults resolved. The saved file can retain `${VAR}` references. Missing or invalid saved configuration prevents callback execution; callback failures are reported as post-setup warnings without undoing the saved configuration.
 
 | Field                                  | Type       | What it means                                                                 |
 | -------------------------------------- | ---------- | ----------------------------------------------------------------------------- |
@@ -444,7 +446,7 @@ Every channel plugin can extend or narrow that promotion through its setup adapt
 
 The presence of `singleAccountKeysToMove` marks the promotion contract complete. Declare the field even when it is an empty array to opt out of legacy key promotion; an empty array does not suppress common fields. Adapters that omit the field retain a reader-backed pre-declaration promotion tier for already-published plugins. The 2026-07-22 registry sweep removed 23 keys with no published dependents and retained six common keys plus the setup-only `rooms` key. Each retained key is deleted as soon as its published readers migrate to declarations; no version boundary is required.
 
-Declare `openclaw.setupFeatures.configPromotion: true` in the plugin package manifest when doctor must load these declarations from the lightweight bundled setup artifact. The setup-only plugin surface and the full channel plugin must expose the same declarations.
+Declare `openclaw.setupFeatures.configPromotion: true` in the plugin package manifest when doctor must load these declarations from the lightweight setup entry. Doctor discovers that entry through the plugin manifest for both bundled and installed plugins, including disabled plugins. The setup-only plugin surface and the full channel plugin must expose the same declarations.
 
 For a plugin-owned root layout, also declare `openclaw.setupFeatures.configPromotion: "preserve-root"` in `package.json`. Doctor reads this static declaration for installed and bundled plugins, including disabled plugins, without executing their runtime. Omitting the declaration or using `false` does not opt out of promotion. The runtime declaration belongs on the adapter passed to `defineChannelSetupContract`, and covers shared CLI, declarative wizard, and policy-writer promotion. It does not change helpers that explicitly migrate a base name; use a selected-account writer when the root remains an implicit identity. Buzz is an example of this layout.
 

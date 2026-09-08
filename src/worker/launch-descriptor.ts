@@ -62,6 +62,14 @@ export type WorkerComputerLaunchDescriptor = {
   computerUse: ComputerUseCapabilityDescriptor;
 };
 
+export type WorkerGitHubLaunchBinding = {
+  token: string;
+  login: string;
+  branch: string;
+  remoteUrl?: string;
+  gitAuthor?: { name?: string; email?: string };
+};
+
 type WorkerLaunchPermissionContext =
   | { permissionMode: SessionPermissionMode; workerContainmentRoot: string }
   | { permissionMode?: never; workerContainmentRoot?: never };
@@ -94,6 +102,7 @@ type WorkerLaunchAssignment = WorkerLaunchPermissionContext & {
   toolAuthority: WorkerToolAuthority;
   browser?: WorkerBrowserLaunchDescriptor;
   computer?: WorkerComputerLaunchDescriptor;
+  github?: WorkerGitHubLaunchBinding;
 };
 
 type WorkerLaunchAdmission = Omit<WorkerConnectParams["admission"], "runId"> & {
@@ -125,6 +134,17 @@ function isSafeSequence(value: unknown, minimum: number): value is number {
 
 function isAbsoluteHostPath(value: string): boolean {
   return path.posix.isAbsolute(value) || path.win32.isAbsolute(value);
+}
+
+function isWorkspacePath(value: unknown): value is string {
+  // Project preparation admits paths longer than the worker identifier limit.
+  return (
+    typeof value === "string" &&
+    value.trim() === value &&
+    value.length <= 4_096 &&
+    !value.includes("\0") &&
+    isAbsoluteHostPath(value)
+  );
 }
 
 function isInferenceOptions(value: unknown): value is WorkerInferenceOptions {
@@ -182,6 +202,61 @@ function parseBrowserLaunchDescriptor(value: unknown): WorkerBrowserLaunchDescri
   };
 }
 
+export function parseWorkerGitHubLaunchBinding(
+  value: unknown,
+): WorkerGitHubLaunchBinding | undefined {
+  if (
+    !isRecord(value) ||
+    !hasExactOwnKeys(value, ["token", "login", "branch"], ["remoteUrl", "gitAuthor"]) ||
+    typeof value.token !== "string" ||
+    value.token.length < 1 ||
+    value.token.length > 2048 ||
+    /[\s\p{Cc}]/u.test(value.token) ||
+    typeof value.login !== "string" ||
+    value.login.trim() !== value.login ||
+    !/^[A-Za-z0-9-]{1,39}$/u.test(value.login) ||
+    typeof value.branch !== "string" ||
+    value.branch.length < 1 ||
+    value.branch.length > 256 ||
+    /[\s~^:?*[\\]/u.test(value.branch) ||
+    value.branch.includes("\u0000") ||
+    value.branch.startsWith("-") ||
+    value.branch.includes("..") ||
+    value.branch.includes("@{") ||
+    (Object.hasOwn(value, "remoteUrl") &&
+      (typeof value.remoteUrl !== "string" ||
+        value.remoteUrl.trim() !== value.remoteUrl ||
+        !/^https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\.git$/u.test(value.remoteUrl)))
+  ) {
+    return undefined;
+  }
+  let gitAuthor: WorkerGitHubLaunchBinding["gitAuthor"];
+  if (Object.hasOwn(value, "gitAuthor")) {
+    if (!isRecord(value.gitAuthor) || !hasExactOwnKeys(value.gitAuthor, [], ["name", "email"])) {
+      return undefined;
+    }
+    for (const entry of Object.values(value.gitAuthor)) {
+      if (
+        typeof entry !== "string" ||
+        !entry.trim() ||
+        entry.length > 256 ||
+        entry.includes("\u0000") ||
+        /[\r\n]/u.test(entry)
+      ) {
+        return undefined;
+      }
+    }
+    gitAuthor = value.gitAuthor;
+  }
+  return {
+    token: value.token,
+    login: value.login,
+    branch: value.branch,
+    ...(typeof value.remoteUrl === "string" ? { remoteUrl: value.remoteUrl } : {}),
+    ...(gitAuthor ? { gitAuthor } : {}),
+  };
+}
+
 function parseAssignment(value: unknown): WorkerLaunchAssignment | undefined {
   if (
     !isRecord(value) ||
@@ -207,6 +282,7 @@ function parseAssignment(value: unknown): WorkerLaunchAssignment | undefined {
         "systemPrompt",
         "browser",
         "computer",
+        "github",
         "permissionMode",
         "workerContainmentRoot",
         "skillResources",
@@ -234,9 +310,7 @@ function parseAssignment(value: unknown): WorkerLaunchAssignment | undefined {
     hasPermissionMode !== hasContainmentRoot ||
     (hasPermissionMode &&
       (!Value.Check(SessionPermissionModeSchema, value.permissionMode) ||
-        typeof value.workerContainmentRoot !== "string" ||
-        !isIdentifier(value.workerContainmentRoot) ||
-        !isAbsoluteHostPath(value.workerContainmentRoot)))
+        !isWorkspacePath(value.workerContainmentRoot)))
   ) {
     return undefined;
   }
@@ -259,8 +333,7 @@ function parseAssignment(value: unknown): WorkerLaunchAssignment | undefined {
       })
     ) ||
     typeof value.suppressPromptTranscript !== "boolean" ||
-    !isIdentifier(value.workspaceDir) ||
-    !isAbsoluteHostPath(value.workspaceDir) ||
+    !isWorkspacePath(value.workspaceDir) ||
     (value.systemPrompt !== undefined && typeof value.systemPrompt !== "string") ||
     !Array.isArray(value.initialMessages) ||
     value.initialMessages.length > WORKER_INFERENCE_MAX_CONTEXT_MESSAGES ||
@@ -275,6 +348,12 @@ function parseAssignment(value: unknown): WorkerLaunchAssignment | undefined {
   const browser =
     value.browser === undefined ? undefined : parseBrowserLaunchDescriptor(value.browser);
   if (value.browser !== undefined && !browser) {
+    return undefined;
+  }
+  const github = Object.hasOwn(value, "github")
+    ? parseWorkerGitHubLaunchBinding(value.github)
+    : undefined;
+  if (Object.hasOwn(value, "github") && !github) {
     return undefined;
   }
   if (
@@ -318,6 +397,7 @@ function parseAssignment(value: unknown): WorkerLaunchAssignment | undefined {
     }),
     toolAuthority,
     ...(browser ? { browser } : {}),
+    ...(github ? { github } : {}),
   } as WorkerLaunchAssignment;
 }
 

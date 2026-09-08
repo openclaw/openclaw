@@ -1,5 +1,10 @@
-import { describe, expect, it, vi } from "vitest";
+import { assert, describe, expect, it, vi } from "vitest";
+import {
+  GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
+  HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT,
+} from "../../agents/failover/user-copy.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import { getReplyPayloadMetadata } from "../reply-payload.js";
 import type { TemplateContext } from "../templating.js";
 import type { GetReplyOptions } from "../types.js";
 import {
@@ -21,9 +26,45 @@ import type {
   EmbeddedAgentParams,
 } from "./agent-runner-execution.test-support.js";
 
-const state = setupAgentRunnerExecutionTestState();
+const state = await setupAgentRunnerExecutionTestState();
 
 describe("executeAgentTurn: result and tool delivery", () => {
+  it.each([
+    { stopReason: "error", isHeartbeat: false, failureText: GENERIC_EXTERNAL_RUN_FAILURE_TEXT },
+    { stopReason: "error", isHeartbeat: true, failureText: HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT },
+    { stopReason: "aborted", isHeartbeat: false, failureText: undefined },
+    { stopReason: "superseded", isHeartbeat: false, failureText: undefined },
+  ])(
+    "preserves canonical $stopReason after private partial output (heartbeat=$isHeartbeat)",
+    async (testCase) => {
+      const followupRun = createFollowupRun();
+      followupRun.run.sourceReplyDeliveryMode = "message_tool_only";
+      state.runEmbeddedAgentMock.mockResolvedValueOnce({
+        payloads: [{ text: "Private partial output before the run ended." }],
+        meta: { stopReason: testCase.stopReason },
+      });
+
+      const executeAgentTurn = await getExecuteAgentTurnForTest();
+      const result = await executeAgentTurn({
+        ...createMinimalRunAgentTurnParams({ followupRun }),
+        isHeartbeat: testCase.isHeartbeat,
+      });
+
+      expect(result.kind).toBe("success");
+      if (result.kind === "success") {
+        expect(result.terminalFailurePayload?.text).toBe(testCase.failureText);
+        if (testCase.failureText !== undefined) {
+          assert(result.terminalFailurePayload);
+          expect(result.terminalFailurePayload.isError).toBe(true);
+          expect(
+            getReplyPayloadMetadata(result.terminalFailurePayload)
+              ?.deliverDespiteSourceReplySuppression,
+          ).toBe(true);
+        }
+      }
+    },
+  );
+
   it("forwards media-only tool results without typing text", async () => {
     const onToolResult = vi.fn();
     state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
@@ -209,8 +250,15 @@ describe("executeAgentTurn: result and tool delivery", () => {
   });
 
   it("does not classify silent NO_REPLY terminal results for fallback", async () => {
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "NO_REPLY" }],
+      meta: {},
+    });
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {
-      const result = { payloads: [{ text: "NO_REPLY" }], meta: {} };
+      const result = requireRecord(
+        await params.run("openai", "gpt-5.4", initialFallbackAttemptOptions(params)),
+        "executed fallback result",
+      );
       expect(
         await params.classifyResult?.({
           result,
@@ -297,8 +345,12 @@ describe("executeAgentTurn: result and tool delivery", () => {
       hasSentPayload: vi.fn(() => false),
       getSentMediaUrls: vi.fn(() => []),
     };
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({ payloads: [], meta: {} });
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {
-      const result = { payloads: [], meta: {} };
+      const result = requireRecord(
+        await params.run("openai", "gpt-5.4", initialFallbackAttemptOptions(params)),
+        "executed fallback result",
+      );
       expect(
         await params.classifyResult?.({
           result,
@@ -328,8 +380,12 @@ describe("executeAgentTurn: result and tool delivery", () => {
   });
 
   it("classifies final GPT-5 terminal-empty results instead of silently succeeding", async () => {
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({ payloads: [], meta: {} });
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {
-      const result = { payloads: [], meta: {} };
+      const result = requireRecord(
+        await params.run("openai", "gpt-5.4", initialFallbackAttemptOptions(params)),
+        "executed fallback result",
+      );
       const classification = await params.classifyResult?.({
         result,
         provider: "openai",

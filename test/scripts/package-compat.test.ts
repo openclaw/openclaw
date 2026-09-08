@@ -2,7 +2,10 @@ import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { fixtureCapabilityConsentArgs } from "../../scripts/e2e/lib/package-compat.mjs";
+import {
+  fixtureCapabilityConsentArgs,
+  updateChannelDryRunReportsPackageCompat,
+} from "../../scripts/e2e/lib/package-compat.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -11,7 +14,13 @@ const BASH_BIN = process.platform === "win32" ? "bash" : "/bin/bash";
 
 function writeCandidate(
   root: string,
-  options: { commands?: string[]; helpStatus?: number; hang?: boolean; exitCode?: number } = {},
+  options: {
+    commands?: string[];
+    helpStatus?: number;
+    hang?: boolean;
+    exitCode?: number;
+    preserveUninstallIntent?: boolean;
+  } = {},
   name = "candidate.cjs",
 ) {
   const entry = path.join(root, name);
@@ -29,6 +38,17 @@ if (args.includes('--help')) {
   if (options.hang) setInterval(() => {}, 1000);
   else process.exit(options.helpStatus ?? 0);
 } else {
+  if (options.preserveUninstallIntent) {
+    const marker = process.env.ARGV_LOG + '.disabled';
+    if (args[0] === 'plugins' && args[2] === 'demo-plugin-npm') {
+      if (args[1] === 'uninstall') fs.writeFileSync(marker, 'disabled');
+      if (args[1] === 'enable') fs.rmSync(marker, { force: true });
+    }
+    if (args[0] === 'demo-npm' && fs.existsSync(marker)) {
+      console.error('OpenClaw does not know the command "demo-npm".');
+      process.exit(43);
+    }
+  }
   const accepted = args.includes('--accept-capabilities');
   if (accepted && !supported) {
     console.error('unknown option --accept-capabilities');
@@ -140,7 +160,10 @@ describe("package fixture consent compatibility", () => {
     "runs the plugin sweep with selective consent (supported=%s)",
     (supported) => {
       const root = tempDirs.make("openclaw-consent-sweep-");
-      const entry = writeCandidate(root, { commands: supported ? undefined : [] });
+      const entry = writeCandidate(root, {
+        commands: supported ? undefined : [],
+        preserveUninstallIntent: true,
+      });
       const result = runShell(root, entry, sweepFixtureLoader);
       expect(result.status, result.stderr).toBe(0);
       const mutations = result.calls.filter(
@@ -158,7 +181,10 @@ describe("package fixture consent compatibility", () => {
         expect(args.includes(consent), args.join(" ")).toBe(supported && positive);
       }
       expect(mutations.filter((args) => args[1] === "update")).toHaveLength(5);
-      expect(mutations.find((args) => args[1] === "enable")).toContain("claude-bundle-e2e");
+      expect(mutations.filter((args) => args[1] === "enable").map((args) => args[2])).toEqual([
+        "demo-plugin-npm",
+        "claude-bundle-e2e",
+      ]);
     },
   );
 
@@ -333,5 +359,13 @@ ${fixtureCommand} plugins install fixture`,
     });
     expect(result.status).toBe(0);
     expect(result.stdout.trim()).toBe(output);
+  });
+
+  it.each([
+    ["2026.7.33", true],
+    ["2026.7.33-1", true],
+    ["2026.8.1", false],
+  ])("scopes package-reported dev dry runs for %s", (version, expected) => {
+    expect(updateChannelDryRunReportsPackageCompat(version)).toBe(expected);
   });
 });

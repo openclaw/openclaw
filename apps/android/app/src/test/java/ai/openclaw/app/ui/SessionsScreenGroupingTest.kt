@@ -36,6 +36,10 @@ class SessionsScreenGroupingTest {
       "Main thread",
       sessionPresentationTitle(ChatSessionEntry(key = "agent:main:main", updatedAtMs = null)) { "Main thread" },
     )
+    assertEquals(
+      "New chat",
+      sessionPresentationTitle(ChatSessionEntry(key = "agent:main:main", updatedAtMs = null)) { "New chat" },
+    )
   }
 
   @Test
@@ -225,6 +229,24 @@ class SessionsScreenGroupingTest {
       "Needs attention · Thread failed · Current thread · Running · Unread",
       rows.single().descendantState.presentationLabel(),
     )
+  }
+
+  @Test
+  fun collapsedParentUsesLiveActivityInsteadOfHistoricalRunStatus() {
+    for ((status, flag, active) in listOf(
+      Triple("running", false, false),
+      Triple("done", true, false),
+      Triple("running", null, true),
+      Triple("queued", null, true),
+      Triple("queued", false, false),
+    )) {
+      val parent =
+        buildSessionTreeSections(
+          entries = listOf(session("parent"), session("child", spawnedBy = "parent", status = status, hasActiveRun = flag)),
+          collapsedSessionKeys = setOf("parent"),
+        ).single().entries.single()
+      assertEquals("status=$status flag=$flag", active, parent.descendantState.hasRunning)
+    }
   }
 
   @Test

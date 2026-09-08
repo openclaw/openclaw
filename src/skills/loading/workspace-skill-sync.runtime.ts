@@ -9,9 +9,11 @@ import { sha256Hex } from "../../infra/crypto-digest.js";
 import { tryReadJson, writeJson } from "../../infra/json-files.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { normalizeAgentId } from "../../routing/session-key.js";
 import { resolveUserPath } from "../../utils.js";
 import { loadSkillLibrarySelection, readSelectedSkillLibraryFiles } from "../library/selection.js";
 import { getSkillsSnapshotVersion } from "../runtime/refresh-state.js";
+import { fingerprintSkillSnapshotConfig } from "../runtime/snapshot-config-fingerprint.js";
 import type {
   SkillEligibilityContext,
   SkillEntry,
@@ -22,7 +24,7 @@ import { resolveSkillKey } from "./frontmatter.js";
 import { serializeByKey } from "./serialize.js";
 import { shouldSyncSkillPath } from "./skill-paths.js";
 import { resolveSkillTelemetrySource } from "./source.js";
-import { loadMergedWorkspaceSkills, loadWorkspaceSkills } from "./workspace-skill-loader.js";
+import { loadWorkspaceSkills } from "./workspace-skill-loader.js";
 
 const fsp = fs.promises;
 const skillsLogger = createSubsystemLogger("skills");
@@ -45,7 +47,7 @@ const SYNCED_SKILLS_MANIFEST_NAME = ".openclaw-sync.json";
 
 type SyncedSkillsManifest = {
   entryKeys: string[];
-  skillRootsFingerprint?: string;
+  skillRootsFingerprint: string;
   skillsVersion: number;
 };
 
@@ -67,22 +69,15 @@ function parseSyncedSkillsManifest(value: unknown): SyncedSkillsManifest | null 
     !isRecord(value) ||
     typeof value.skillsVersion !== "number" ||
     !Number.isFinite(value.skillsVersion) ||
+    typeof value.skillRootsFingerprint !== "string" ||
     !Array.isArray(value.entryKeys) ||
     !value.entryKeys.every((entry) => typeof entry === "string")
   ) {
     return null;
   }
-  if (
-    value.skillRootsFingerprint !== undefined &&
-    typeof value.skillRootsFingerprint !== "string"
-  ) {
-    return null;
-  }
   return {
     entryKeys: value.entryKeys,
-    ...(value.skillRootsFingerprint === undefined
-      ? {}
-      : { skillRootsFingerprint: value.skillRootsFingerprint }),
+    skillRootsFingerprint: value.skillRootsFingerprint,
     skillsVersion: value.skillsVersion,
   };
 }
@@ -155,18 +150,21 @@ export async function syncWorkspaceSkills(params: {
     const manifestPath = path.join(targetSkillsDir, SYNCED_SKILLS_MANIFEST_NAME);
     const skillsSnapshot = params.skillsSnapshot;
     const skillRoots = skillsSnapshot?.skillRoots;
-    // Same-named skills from different execution roots share entry identities.
-    // Bind roots to the cache so shared sandboxes recopy when sessions change repos.
-    const skillRootsFingerprint =
-      skillRoots || skillsSnapshot?.librarySelections?.length
-        ? sha256Hex(
-            JSON.stringify([
-              skillRoots?.agentWorkspaceDir,
-              skillRoots?.executionSkillsDir,
-              skillsSnapshot?.librarySelections,
-            ]),
-          )
-        : undefined;
+    // Names and versions do not identify a source tree. Both reuse paths must
+    // bind its full discovery context, or shared sandboxes retain another owner's bytes.
+    const skillRootsFingerprint = sha256Hex(
+      JSON.stringify([
+        sourceDir,
+        params.agentId ? normalizeAgentId(params.agentId) : undefined,
+        params.config ? fingerprintSkillSnapshotConfig(params.config) : undefined,
+        params.managedSkillsDir,
+        params.bundledSkillsDir,
+        params.pluginSkillsDir,
+        skillRoots?.agentWorkspaceDir,
+        skillRoots?.executionWorkspaceDir,
+        skillsSnapshot?.librarySelections,
+      ]),
+    );
     const skillsVersion = getSkillsSnapshotVersion(skillRoots?.agentWorkspaceDir ?? sourceDir);
 
     await ensureSyncedSkillsDirectory(targetSkillsDir);
@@ -177,7 +175,7 @@ export async function syncWorkspaceSkills(params: {
             entryKeys: skillsSnapshot.skills
               .map((skill) => resolveSyncedSkillIdentity(skill.skillKey ?? skill.name, skill.name))
               .toSorted(),
-            ...(skillRootsFingerprint ? { skillRootsFingerprint } : {}),
+            skillRootsFingerprint,
             skillsVersion,
           })
         : undefined;
@@ -202,9 +200,10 @@ export async function syncWorkspaceSkills(params: {
       ...(skillsSnapshot?.skillFilter ? { skillFilter: skillsSnapshot.skillFilter } : {}),
       ...(skillsSnapshot?.skillOverrides ? { skillOverrides: skillsSnapshot.skillOverrides } : {}),
     };
-    const entries = skillRoots
-      ? loadMergedWorkspaceSkills({ ...skillRoots, ...loadOptions })
-      : loadWorkspaceSkills(sourceDir, loadOptions);
+    const entries = loadWorkspaceSkills(skillRoots?.agentWorkspaceDir ?? sourceDir, {
+      ...loadOptions,
+      executionWorkspaceDir: skillRoots?.executionWorkspaceDir,
+    });
     if (skillsSnapshot?.librarySelections?.length) {
       const selectedNames = new Set(skillsSnapshot.skills.map((skill) => skill.name));
       entries.push(
@@ -324,7 +323,7 @@ export async function syncWorkspaceSkills(params: {
     if (!copyFailed) {
       const nextManifest: SyncedSkillsManifest = {
         entryKeys: plans.map((plan) => plan.identity).toSorted(),
-        ...(skillRootsFingerprint ? { skillRootsFingerprint } : {}),
+        skillRootsFingerprint,
         skillsVersion,
       };
       await writeJson(manifestPath, nextManifest, { trailingNewline: true });
