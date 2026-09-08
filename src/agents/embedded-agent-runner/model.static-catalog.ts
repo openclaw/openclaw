@@ -4,7 +4,6 @@
 import { normalizeResolvedPricing } from "@openclaw/llm-core";
 import type { NormalizedModelCatalogRow } from "@openclaw/model-catalog-core/model-catalog-types";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
-import type { ModelProviderConfig } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { planEffectiveModelCatalogRows } from "../../model-catalog/index.js";
 import { normalizePluginsConfig } from "../../plugins/config-state.js";
@@ -32,7 +31,7 @@ import {
 import type { PluginRegistry } from "../../plugins/registry-types.js";
 import { dedupeByKey } from "../../shared/dedupe-by-key.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
-import { buildInlineProviderModels, type InlineModelEntry } from "./model.inline-provider.js";
+import { buildInlineProviderModels, completeInlineProviderModel } from "./model.inline-provider.js";
 import type { BundledStaticCatalogState } from "./model.static-catalog.types.js";
 import {
   createStaticModelIdMatcher,
@@ -89,25 +88,6 @@ function modelFromStaticCatalogRow(row: NormalizedModelCatalogRow): ProviderRunt
     headers: row.headers,
     compat: row.compat,
     mediaInput: row.mediaInput,
-  };
-}
-
-function completeProviderStaticCatalogModel(
-  model: InlineModelEntry,
-  providerConfig: ModelProviderConfig,
-): ProviderRuntimeModel {
-  return {
-    ...model,
-    name: model.name || model.id,
-    api: model.api ?? providerConfig.api ?? "openai-responses",
-    baseUrl: model.baseUrl ?? "",
-    reasoning: model.reasoning ?? false,
-    input: normalizeStaticCatalogInput(model.input),
-    cost: model.cost ?? normalizeResolvedPricing({}),
-    contextWindow: model.contextWindow ?? DEFAULT_CONTEXT_TOKENS,
-    contextTokens: model.contextTokens,
-    maxTokens: model.maxTokens ?? DEFAULT_CONTEXT_TOKENS,
-    ...(providerConfig.authHeader !== undefined ? { authHeader: providerConfig.authHeader } : {}),
   };
 }
 
@@ -460,7 +440,7 @@ async function loadBundledProviderStaticCatalogModels(params: {
         ...buildInlineProviderModels(
           { [provider]: providerConfig },
           { providerMetadataOwners: params.providerMetadataOwners },
-        ).map((model) => completeProviderStaticCatalogModel(model, providerConfig)),
+        ).map((model) => completeInlineProviderModel(model, providerConfig)),
       );
       modelsByProvider.set(provider, models);
     }
