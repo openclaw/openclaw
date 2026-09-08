@@ -70,7 +70,7 @@ const limitFullModelCatalogBuild = pLimit(MAX_CONCURRENT_FULL_MODEL_CATALOG_BUIL
 export type PreparedModelRuntimeBuildCandidate = Readonly<{
   input: PreparedModelRuntimeInput;
   catalogOwner: PreparedModelRuntimeSnapshot["catalogOwner"];
-  inventoryOwner?: Pick<PreparedModelRuntimeOwner, "catalogInventory" | "catalogAttemptError">;
+  inventoryOwner?: Pick<PreparedModelRuntimeOwner, "catalogInventory" | "catalogAttempt">;
   pluginGeneration?: PreparedModelRuntimePluginGeneration;
   prepareInboundPluginRegistry?: boolean;
   isGenerationCurrent?: () => boolean;
@@ -138,7 +138,7 @@ function createFullModelCatalogAccess(params: {
   pluginGeneration: PreparedModelRuntimePluginGeneration;
   agentBuildCompletions: Map<string, Promise<void>>;
   isCurrent: () => boolean;
-  inventoryOwner: Pick<PreparedModelRuntimeOwner, "catalogInventory" | "catalogAttemptError">;
+  inventoryOwner: Pick<PreparedModelRuntimeOwner, "catalogInventory" | "catalogAttempt">;
 }): PreparedModelRuntimeCatalogAccess {
   // Retain discovery, not the retired worker or its runtime capability projection.
   const project = (
@@ -189,9 +189,13 @@ function createFullModelCatalogAccess(params: {
     params.agentFacts.env,
   );
   const previousInventory = params.inventoryOwner.catalogInventory;
-  const attempt = createCatalogAttemptReporter(params.inventoryOwner, params.isCurrent);
   const pluginFingerprint = resolveInstalledManifestRegistryIndexFingerprint(
     params.pluginGeneration.pluginMetadataSnapshot.index,
+  );
+  const attempt = createCatalogAttemptReporter(
+    params.inventoryOwner,
+    { key: inventoryKey, pluginFingerprint, credentials: params.agentFacts.credentials },
+    params.isCurrent,
   );
   let inventory =
     previousInventory?.key === inventoryKey &&

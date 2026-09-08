@@ -2838,5 +2838,69 @@
   {
     "source": "Removal timeline",
     "target": "移除时间线"
+  },
+  {
+    "source": "Imports and module layout",
+    "target": "导入与模块布局"
+  },
+  {
+    "source": "Capability registration",
+    "target": "能力注册"
+  },
+  {
+    "source": "Tools and commands",
+    "target": "工具与命令"
+  },
+  {
+    "source": "Infrastructure registration",
+    "target": "基础设施注册"
+  },
+  {
+    "source": "Host hooks",
+    "target": "宿主钩子"
+  },
+  {
+    "source": "CLI and discovery",
+    "target": "CLI 与发现"
+  },
+  {
+    "source": "Memory and context slots",
+    "target": "记忆与上下文插槽"
+  },
+  {
+    "source": "Events and hook semantics",
+    "target": "事件与钩子语义"
+  },
+  {
+    "source": "Plugin SDK imports and module layout",
+    "target": "插件 SDK 导入与模块布局"
+  },
+  {
+    "source": "Plugin SDK capability registration",
+    "target": "插件 SDK 能力注册"
+  },
+  {
+    "source": "Plugin SDK tools and commands",
+    "target": "插件 SDK 工具与命令"
+  },
+  {
+    "source": "Plugin SDK infrastructure registration",
+    "target": "插件 SDK 基础设施注册"
+  },
+  {
+    "source": "Plugin SDK host hooks for workflow plugins",
+    "target": "面向工作流插件的插件 SDK 宿主钩子"
+  },
+  {
+    "source": "Plugin SDK CLI and discovery registration",
+    "target": "插件 SDK CLI 与发现注册"
+  },
+  {
+    "source": "Plugin SDK memory and context slots",
+    "target": "插件 SDK 记忆与上下文插槽"
+  },
+  {
+    "source": "Plugin SDK events and hook semantics",
+    "target": "插件 SDK 事件与钩子语义"
   }
 ]

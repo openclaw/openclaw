@@ -618,6 +618,10 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
         return cached;
       }
       await this.ensureProviderInitialized();
+      // Diagnostics must describe the provider search actually uses. A published index that
+      // belongs to the configured fallback is adopted on the search path, so adopt it here
+      // too instead of probing a provider this workspace's index cannot be read with.
+      await this.adoptPublishedFallbackProviderIfMatched();
       // FTS-only mode: embeddings not available but search still works
       if (!this.provider) {
         return this.cacheProbeResult({

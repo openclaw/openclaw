@@ -12,7 +12,7 @@ import type { AgentHarnessPluginSelection } from "./harness/runtime-plugin-load-
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "./model-catalog.types.js";
 import type { PublishedModelCatalogOwnerCandidate } from "./prepared-model-catalog.types.js";
 import type { PreparedConfiguredRuntimeModel } from "./prepared-model-runtime.configured.js";
-import type { AuthStorage } from "./sessions/auth-storage.js";
+import type { AuthStorage, AuthStorageData } from "./sessions/auth-storage.js";
 import type { ModelRegistry } from "./sessions/model-registry.js";
 
 export type PreparedModelRuntimeCatalogMode = "live" | "static";
@@ -174,6 +174,15 @@ export type PreparedModelCatalogInventory = {
   discoveryOrigins: readonly { provider: string; profileId?: string }[];
 };
 
+export type PreparedModelCatalogAttempt = {
+  source: {
+    key: string;
+    pluginFingerprint: string;
+    credentials: Readonly<AuthStorageData>;
+  };
+  error?: Error;
+};
+
 export type PreparedModelRuntimeOwner = {
   input: PreparedModelRuntimeInput;
   catalogOwner: PublishedModelCatalogOwnerCandidate["catalogOwner"];
@@ -185,8 +194,8 @@ export type PreparedModelRuntimeOwner = {
   catalogStale: boolean;
   /** Completed discovery facts; runtime capability projection belongs to each generation. */
   catalogInventory?: PreparedModelCatalogInventory;
-  /** Last failed catalog attempt; it does not withdraw the published turn runtime. */
-  catalogAttemptError?: Error;
+  /** Source-bound attempt status, including failure before any inventory was published. */
+  catalogAttempt?: PreparedModelCatalogAttempt;
   refreshError?: Error;
   snapshot?: PreparedModelRuntimeSnapshot;
   pluginGeneration?: PreparedModelRuntimePluginGeneration;

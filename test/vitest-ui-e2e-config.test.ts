@@ -117,6 +117,7 @@ const realGatewayFiles = [
   "control-ui-auth-transports",
   "cron-duration-save.real-gateway",
   "device-alias-rename.real-gateway",
+  "device-platform-family.real-gateway",
   "logs-lifecycle",
   "mcp-app-conformance",
   "model-picker-search.real-gateway",
@@ -537,6 +538,13 @@ describe("Control UI E2E resource ownership", () => {
         {
           file: "ui/src/e2e/device-alias-rename.real-gateway.e2e.test.ts",
           project: "ui-e2e-serial",
+          phase: 1,
+          workers: 1,
+          fileParallelism: false,
+        },
+        {
+          file: "ui/src/e2e/device-platform-family.real-gateway.e2e.test.ts",
+          project: "ui-e2e-serial-standalone",
           phase: 1,
           workers: 1,
           fileParallelism: false,

@@ -10,6 +10,8 @@ sidebarTitle: "Settings"
 
 Everything under Settings, plus the settings-owned pages the sidebar links to.
 
+Use **Search settings** to find pages and configuration fields. Add `tag:storage`, for example, to filter configuration fields by tag. Tags can appear before, within, or after a text phrase: `Log File tag:storage` and `Log tag:storage File` both find **Log File Path**. Multiple tags require a field to match every tag.
+
 Model menus with more than eight choices include search. Filter by model name or provider/model reference, then choose a result to apply it. Typing or dismissing the menu leaves the current selection unchanged. Short menus stay compact, and custom model entry remains available where the setting supports it.
 
 ## Environment identity

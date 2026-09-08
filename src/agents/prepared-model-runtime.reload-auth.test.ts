@@ -33,6 +33,53 @@ describe("prepared model runtime reload auth adoption", () => {
     await resetPreparedModelRuntimeHarness(state);
   });
 
+  it("keeps catalog failure status when a neutral reload retains the same source", async () => {
+    mocks.configuredAgentIds = ["default"];
+    const config = {
+      models: {
+        providers: {
+          custom: {
+            baseUrl: "https://first.invalid/v1",
+            api: "openai-completions" as const,
+            models: [],
+          },
+        },
+      },
+    };
+    await refreshPreparedModelRuntimeSnapshots(config, {
+      gatewayLifecycle: true,
+      catalogMode: "static",
+    });
+    const input = {
+      agentId: "default",
+      agentDir: state.agentDir("default"),
+      inheritedAuthDir: state.agentDir("default"),
+      config,
+    };
+    const original = await prepareModelRuntimeSnapshot(input);
+    if (!original.loadFullModelCatalog) {
+      throw new Error("catalog source diagnostic requires a full catalog loader");
+    }
+    await original.loadFullModelCatalog();
+    const failure = new Error("same source failed to refresh");
+    mocks.runPreparedModelCatalogWorker.mockRejectedValueOnce(failure);
+    await expect(original.loadFullModelCatalog({ refresh: true })).rejects.toBe(failure);
+    const replacementConfig = { ...config, logging: { level: "debug" as const } };
+    await refreshPreparedModelRuntimeSnapshots(replacementConfig, {
+      gatewayLifecycle: true,
+      catalogMode: "static",
+    });
+    const replacement = await prepareModelRuntimeSnapshot({ ...input, config: replacementConfig });
+    expect(replacement.isCurrent()).toBe(true);
+    expect(replacement.modelCatalog.refreshFailed).toBe(true);
+    if (!replacement.loadFullModelCatalog) {
+      throw new Error("expected the replacement catalog loader");
+    }
+    await replacement.loadFullModelCatalog({ refresh: true });
+    expect(replacement.modelCatalog.refreshFailed).toBeUndefined();
+    expect(original.modelCatalog.refreshFailed).toBeUndefined();
+  });
+
   it("records failed catalog attempts without withdrawing published runtime", async () => {
     mocks.configuredAgentIds = ["default"];
     await refreshPreparedModelRuntimeSnapshots({}, { gatewayLifecycle: true });
@@ -75,7 +122,7 @@ describe("prepared model runtime reload auth adoption", () => {
       expect
         .soft(await loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" }))
         .toBe(dispatch);
-      expect.soft(owner.catalogAttemptError).toBe(failure);
+      expect.soft(owner.catalogAttempt?.error).toBe(failure);
       expect.soft(snapshot.modelCatalog.refreshFailed).toBe(true);
       expect.soft(original.refreshFailed).toBe(true);
       expect.soft(events).toContainEqual({ phase: "catalog-failed", error: failure });
@@ -117,7 +164,7 @@ describe("prepared model runtime reload auth adoption", () => {
       if (!owner.catalogInventory) {
         throw new Error("catalog attempt test lost its internal inventory after recovery");
       }
-      expect.soft(owner.catalogAttemptError).toBeUndefined();
+      expect.soft(owner.catalogAttempt?.error).toBeUndefined();
       expect.soft(snapshot.modelCatalog.refreshFailed).toBeUndefined();
       expect.soft(snapshot.readFullModelCatalog()?.refreshFailed).toBeUndefined();
     } finally {
@@ -148,13 +195,13 @@ describe("prepared model runtime reload auth adoption", () => {
     const failure = new Error("first catalog attempt failed");
     mocks.runPreparedModelCatalogWorker.mockRejectedValueOnce(failure);
     await expect(snapshot.loadFullModelCatalog()).rejects.toBe(failure);
-    expect(owner.catalogAttemptError).toBe(failure);
+    expect(owner.catalogAttempt?.error).toBe(failure);
     expect(snapshot.modelCatalog.refreshFailed).toBe(true);
     expect(owner.catalogInventory).toBeUndefined();
     expect(snapshot.readFullModelCatalog()).toBeUndefined();
     expect(snapshot.isCurrent()).toBe(true);
     await snapshot.loadFullModelCatalog();
-    expect(owner.catalogAttemptError).toBeUndefined();
+    expect(owner.catalogAttempt?.error).toBeUndefined();
     expect(snapshot.modelCatalog.refreshFailed).toBeUndefined();
     expect(snapshot.readFullModelCatalog()).toBeDefined();
   });
@@ -203,7 +250,7 @@ describe("prepared model runtime reload auth adoption", () => {
       result.reject(failure);
       await rejected;
       await replacement;
-      expect(owner.catalogAttemptError).toBeUndefined();
+      expect(owner.catalogAttempt?.error).toBeUndefined();
       expect(events).not.toContain("catalog-failed");
     } finally {
       result.reject(failure);

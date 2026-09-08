@@ -60,15 +60,28 @@ internal turns suppress project-doc loading and that fallback carrier.
 
 OpenClaw developer instructions cover OpenClaw runtime concerns: source-channel
 delivery, OpenClaw dynamic tools, ACP delegation, adapter context, and the
-active agent workspace profile files. Skill catalogs and tool-routed
-`MEMORY.md` pointers are projected as turn-scoped collaboration developer
-instructions. Active `BOOTSTRAP.md` and, when memory tools are unavailable,
+active agent workspace profile files. With the OpenClaw-managed bundled stdio
+app-server using standard OpenAI endpoints, skill catalogs, persona files, and tool-routed `MEMORY.md` guidance
+are appended to the parent model request instructions by a private inference
+relay. Native base and catalog instructions remain unchanged; this new context
+is not written to native conversation history or automatically inherited by
+native subagents. Active `BOOTSTRAP.md` and, when memory tools are unavailable,
 bounded `MEMORY.md` content travel as plain turn input references. They are
 introduced on a new native thread, after a cold resume or native compaction,
 and when their rendered content changes. Consecutive warm turns omit unchanged
 references once the complete block has been submitted. References dropped or
 truncated by prompt fitting are introduced again on a later turn. Process-local
 tracking resets when the Gateway restarts.
+
+Custom commands, Desktop attachments, external Unix/WebSocket app-server
+connections, non-OpenAI native providers, custom upstream endpoints, unsupported
+native accounts, locked upstreams, and native `features.respect_system_proxy` profiles retain their existing
+collaboration carrier. Managed relay requests use the Gateway's HTTP(S) proxy
+and TLS configuration instead of changing native networking settings. OpenClaw reports that
+the parent-local workaround is unavailable there rather than replacing another
+application's live configuration. Existing history, including any older embedded
+persona or explicitly shared task text, is preserved; this is not a retroactive
+history scrub. See [Workspace bootstrap files](/plugins/codex-harness-reference#workspace-bootstrap-files).
 
 Delivery mode and the current message target requirement arrive as compact
 application context before each user turn. They explicitly supersede earlier

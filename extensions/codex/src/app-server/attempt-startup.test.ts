@@ -318,12 +318,14 @@ describe("startCodexAttemptThread", () => {
       "account/login/start",
       "config/read",
       "configRequirements/read",
+      "account/read",
     ]);
     expect(readHarnessRequestMethods(second)).toEqual([
       "initialize",
       "account/login/start",
       "config/read",
       "configRequirements/read",
+      "account/read",
       "thread/start",
     ]);
     expect(startSpy).toHaveBeenCalledTimes(2);
@@ -423,7 +425,7 @@ describe("startCodexAttemptThread", () => {
     );
     expect(
       readHarnessMessages(harness.writes.slice(writesBeforeRestart)).map(({ method }) => method),
-    ).toEqual(["config/read", "configRequirements/read"]);
+    ).toEqual(["config/read", "configRequirements/read", "account/read"]);
 
     result.turnRoute.release();
     result.releaseSharedClientLease();
