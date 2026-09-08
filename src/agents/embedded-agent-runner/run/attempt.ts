@@ -11,6 +11,7 @@ import {
   projectAgentRunAttemptTerminal,
 } from "../../agent-run-terminal-outcome.js";
 import { resolveAgentDir } from "../../agent-scope.js";
+import { buildExecAutoReviewTranscript } from "../../exec-auto-review-transcript.js";
 import { recordAgentCleanupFailure, runOwnedAgentCleanup } from "../../run-cleanup-timeout.js";
 import {
   clearToolSearchCatalog,
@@ -88,6 +89,10 @@ export async function runEmbeddedAttempt(
   let toolSearchCatalogRef: ToolSearchCatalogRef | undefined;
   let toolSearchCatalogApplied = false;
   let runCleanups: Array<(reason: string) => Promise<void>> = [];
+  const resources: EmbeddedAttemptSessionResources = {
+    trajectoryRecorder: null,
+    buildAbortSettlePromise: () => null,
+  };
   const cleanupStep = (step: string, cleanup: () => Promise<void>) =>
     runOwnedAgentCleanup({ ...params, step, cleanup, log });
   const cleanupEmbeddedPrepResourcesAfterEarlyExit = async () => {
@@ -191,6 +196,23 @@ export async function runEmbeddedAttempt(
         skillUsagePaths,
         skillsSnapshot: skillsSnapshotForRun,
         codeModeSkills,
+        reviewTranscript: () => {
+          if (!resources.session || runAbortController.signal.aborted) {
+            return undefined;
+          }
+          return buildExecAutoReviewTranscript({
+            config: params.config,
+            messages: resources.session.messages,
+            userTurnOrigins: new Map(
+              resources
+                .getUserTranscriptContexts?.()
+                ?.map(({ runtimeMessage, transcriptMessage }) => [
+                  runtimeMessage,
+                  transcriptMessage,
+                ]),
+            ),
+          });
+        },
         toolSearchCatalogExecutor: (toolParams) => {
           if (!toolSearchCatalogExecutor) {
             throw new Error("Tool Search catalog executor is unavailable for this run.");
@@ -284,10 +306,6 @@ export async function runEmbeddedAttempt(
         externalAbortController,
       }),
     );
-    const resources: EmbeddedAttemptSessionResources = {
-      trajectoryRecorder: null,
-      buildAbortSettlePromise: () => null,
-    };
     try {
       const preparedSessionRuntime = await prepare("attempt.session-runtime", () =>
         prepareEmbeddedAttemptSessionRuntime({
@@ -400,6 +418,10 @@ export async function runEmbeddedAttempt(
           : {}),
       };
     } finally {
+      // Retained review callbacks must lose the live transcript before cleanup awaits.
+      const sessionResources = { ...resources };
+      resources.session = undefined;
+      resources.getUserTranscriptContexts = undefined;
       // Transfer resources to the session cleanup owner before awaiting it. A
       // bounded timeout must not let outer early-exit cleanup dispose them twice.
       const sessionMcpRuntime = bundleMcpRuntime;
@@ -410,7 +432,7 @@ export async function runEmbeddedAttempt(
       await cleanupStep("embedded-session", () =>
         cleanupEmbeddedAttemptSessionPhase({
           attempt: params,
-          ...resources,
+          ...sessionResources,
           transcriptLifecycle: sessionLock.transcriptLifecycle,
           bundleMcpRuntime: sessionMcpRuntime,
           bundleLspRuntime: sessionLspRuntime,

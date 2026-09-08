@@ -326,7 +326,7 @@ describe("followup queue deduplication", () => {
     expect(second).toBe(true);
   });
 
-  it("deduplicates exact prompt when routing matches and no message id", () => {
+  it("admits identical prompts when routing matches and no message id is present", () => {
     const key = `test-dedup-whatsapp-${Date.now()}`;
 
     const first = enqueueFollowupRun(
@@ -668,33 +668,5 @@ describe("followup queue deduplication", () => {
       originatingTo: "group:G1",
     });
     expect(enqueueFollowupRun(key, redelivery, collectSettings)).toBe(false);
-  });
-
-  it("can opt-in to prompt-based dedupe when message id is absent", () => {
-    const key = `test-dedup-prompt-mode-${Date.now()}`;
-
-    const first = enqueueFollowupRun(
-      key,
-      createRun({
-        prompt: "Hello world",
-        originatingChannel: "whatsapp",
-        originatingTo: "+1234567890",
-      }),
-      collectSettings,
-      "prompt",
-    );
-    expect(first).toBe(true);
-
-    const second = enqueueFollowupRun(
-      key,
-      createRun({
-        prompt: "Hello world",
-        originatingChannel: "whatsapp",
-        originatingTo: "+1234567890",
-      }),
-      collectSettings,
-      "prompt",
-    );
-    expect(second).toBe(false);
   });
 });

@@ -11,7 +11,7 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { onAgentEvent } from "../infra/agent-events.js";
 import { saveExecApprovals, type ExecApprovalsFile } from "../infra/exec-approvals.js";
-import type { ExecAutoReviewer } from "../infra/exec-auto-review.js";
+import type { ExecAutoReviewer, ExecAutoReviewTranscript } from "../infra/exec-auto-review.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
@@ -222,6 +222,27 @@ describe("exec security floor", () => {
     expect(callGatewayTool).not.toHaveBeenCalled();
   });
 
+  it("does not collect conversation context for allowlisted auto-mode commands", async () => {
+    const binDir = installAllowlistedGogFixture(tempRoot ?? os.tmpdir());
+    const autoReviewer = createAskingAutoReviewer();
+    const reviewTranscript = vi.fn<() => ExecAutoReviewTranscript | undefined>();
+    const tool = createExecTool({
+      host: "gateway",
+      mode: "auto",
+      safeBins: [],
+      pathPrepend: [binDir],
+      autoReviewer,
+      reviewTranscript,
+    });
+
+    const result = await tool.execute("call-allowlisted-context", { command: "gog version" });
+
+    expect(result.details.status).toBe("completed");
+    expect((result.content[0] as { text?: string }).text).toContain("gog-ok version");
+    expect(autoReviewer).not.toHaveBeenCalled();
+    expect(reviewTranscript).not.toHaveBeenCalled();
+  });
+
   it("honors per-call ask hardening for trusted callers without messageProvider", async () => {
     const root = tempRoot ?? os.tmpdir();
     const binDir = installAllowlistedGogFixture(root);
@@ -374,19 +395,28 @@ describe("exec security floor", () => {
     expect(autoReviewer).not.toHaveBeenCalled();
   });
 
-  it("retains the Guardian approval on the completed gateway result without a run ID", async () => {
+  it("reviews current conversation context and retains Guardian approval without a run ID", async () => {
+    const reviewTranscript = vi.fn(() => currentTranscript);
     const autoReviewer = vi.fn<ExecAutoReviewer>(async () => ({
       decision: "allow-once",
       risk: "low",
       rationale: "read-only version check",
+      userAuthorization: "high",
     }));
     const tool = createExecTool({
       host: "gateway",
       mode: "auto",
       safeBins: [],
       autoReviewer,
+      reviewTranscript,
       sessionKey: "agent:main:main",
     });
+    expect(reviewTranscript).not.toHaveBeenCalled();
+    const currentTranscript: ExecAutoReviewTranscript = {
+      entries: [{ kind: "user", origin: "operator", text: "Check the Node version." }],
+      omittedEntries: 0,
+      truncated: false,
+    };
 
     const liveReviews: unknown[] = [];
     const unsubscribe = onAgentEvent((event) => {
@@ -404,7 +434,16 @@ describe("exec security floor", () => {
     }
 
     expect(liveReviews).toEqual([]);
+    expect(reviewTranscript).toHaveBeenCalledTimes(1);
+    expect(autoReviewer).toHaveBeenCalledWith(
+      expect.objectContaining({ host: "gateway", transcript: currentTranscript }),
+    );
     expect(reviewerRuntime.prepare).not.toHaveBeenCalled();
+    expect(result.content).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ text: expect.stringContaining("risk=low, authorization=high") }),
+      ]),
+    );
     expect(result.details).toMatchObject({
       status: "completed",
       approvalReviewOutcome: "approved",
@@ -650,7 +689,13 @@ describe("exec security floor", () => {
     },
   );
 
-  it("keeps default reviewer settings and cancellation scoped to each execution", async () => {
+  it("keeps default reviewer settings, conversation and cancellation scoped to each execution", async () => {
+    let userRequest = "Check the Node version before building.";
+    const reviewTranscript = vi.fn((): ExecAutoReviewTranscript => ({
+      entries: [{ kind: "user", origin: "operator", text: userRequest }],
+      omittedEntries: 0,
+      truncated: false,
+    }));
     const reviewer = { model: "synthetic/reviewer-first" };
     const config: OpenClawConfig = {
       tools: { exec: { reviewer: { model: "synthetic/reviewer-global" } } },
@@ -680,8 +725,10 @@ describe("exec security floor", () => {
       mode: "auto",
       safeBins: [],
       config,
+      reviewTranscript,
       messageProvider: "webchat",
     });
+    expect(reviewTranscript).not.toHaveBeenCalled();
     const first = new AbortController();
     const second = new AbortController();
     const firstRun = tool.execute(
@@ -694,7 +741,11 @@ describe("exec security floor", () => {
       first.abort(new Error("first execution cancelled"));
       await expect(firstRun).rejects.toThrow("first execution cancelled");
       expect(reviewerRuntime.complete.mock.calls[0]?.[0].options?.signal?.aborted).toBe(true);
+      expect(reviewerRuntime.complete.mock.calls[0]?.[0].context.messages[0]?.content).toContain(
+        userRequest,
+      );
 
+      userRequest = "Check the Node version after building.";
       reviewer.model = "synthetic/reviewer-second";
       const result = await tool.execute(
         "default-review-second",
@@ -709,6 +760,10 @@ describe("exec security floor", () => {
         expect.objectContaining({ cfg: config, agentId: "main" }),
       );
       expect(reviewerRuntime.complete.mock.calls[1]?.[0].options?.signal?.aborted).toBe(false);
+      expect(reviewerRuntime.complete.mock.calls[1]?.[0].context.messages[0]?.content).toContain(
+        userRequest,
+      );
+      expect(reviewTranscript).toHaveBeenCalledTimes(2);
       expect(result.details).toMatchObject({
         status: "failed",
         approvalReviewOutcome: "denied",

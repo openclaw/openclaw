@@ -71,10 +71,11 @@ import {
   logModelFallbackDecision,
   type ModelFallbackDecisionParams,
 } from "./model-fallback-observation.js";
-import type {
-  FallbackAttempt,
-  ModelFallbackCandidate,
-  ModelFallbackRouteResolution,
+import {
+  MODEL_FALLBACK_SKIPPED_CODE,
+  type FallbackAttempt,
+  type ModelFallbackCandidate,
+  type ModelFallbackRouteResolution,
 } from "./model-fallback.types.js";
 import type { ModelManifestNormalizationContext } from "./model-ref-shared.js";
 import {
@@ -280,9 +281,8 @@ async function runWithModelFallbackInternal<T>(
       ...candidate,
     });
     const isPrimary = candidate.routeOrigin === "requested";
-    const requestedModel = requestedCandidate
-      ? sameModelCandidate(candidate, requestedCandidate)
-      : false;
+    const requestedModel =
+      requestedCandidate !== undefined && sameModelCandidate(candidate, requestedCandidate);
     const attemptContext = { attempt: i + 1, total: candidates.length };
     const candObs = {
       ...runObs,
@@ -296,16 +296,13 @@ async function runWithModelFallbackInternal<T>(
       decision: ModelFallbackDecisionParams["decision"],
       extra: Partial<ModelFallbackDecisionParams> = {},
     ) => observeDecision({ decision, ...candObs, ...extra });
-    const pushAttempt = (
-      error: string,
-      reason: FailoverReason,
-      auth?: Pick<FallbackAttempt, "authMode">,
-    ) =>
+    const pushSkippedAttempt = (error: string, reason: FailoverReason, authMode?: string) =>
       attempts.push({
         ...candidateRef,
         error,
         reason,
-        ...auth,
+        code: MODEL_FALLBACK_SKIPPED_CODE,
+        authMode,
       });
 
     let candidateAuthProfileIds: string[] | undefined;
@@ -370,7 +367,7 @@ async function runWithModelFallbackInternal<T>(
           ? `run \`${reauthCommand}\` to re-authenticate`
           : "re-authenticate that provider";
         const error = `Skipping ${candidate.provider}/${candidate.model}: recent ${skipReason} failure in this session (${reauthHint})`;
-        pushAttempt(error, skipReason as FailoverReason);
+        pushSkippedAttempt(error, skipReason as FailoverReason);
         await observeCandidateDecision("skip_candidate", {
           reason: skipReason as FailoverReason,
           error,
@@ -418,7 +415,7 @@ async function runWithModelFallbackInternal<T>(
 
         if (decision.type === "suspend_session") {
           const error = `Provider ${candidate.provider} is in cooldown`;
-          pushAttempt(error, decision.reason, { authMode });
+          pushSkippedAttempt(error, decision.reason, authMode);
 
           // Only record terminal session suspension when no remaining candidate
           // can serve the turn. Provider cooldown state prevents repeat probes.
@@ -454,7 +451,7 @@ async function runWithModelFallbackInternal<T>(
         }
 
         if (decision.type === "skip") {
-          pushAttempt(decision.error, decision.reason, { authMode });
+          pushSkippedAttempt(decision.error, decision.reason, authMode);
           await observeCandidateDecision("skip_candidate", {
             reason: decision.reason,
             error: decision.error,
@@ -473,7 +470,7 @@ async function runWithModelFallbackInternal<T>(
           const isTransientCooldownReason = shouldUseTransientCooldownProbeSlot(decision.reason);
           if (isTransientCooldownReason && cooldownProbeUsedProviders.has(candidate.provider)) {
             const error = `Provider ${candidate.provider} is in cooldown (probe already attempted this run)`;
-            pushAttempt(error, decision.reason, { authMode });
+            pushSkippedAttempt(error, decision.reason, authMode);
             await observeCandidateDecision("skip_candidate", {
               reason: decision.reason,
               error,

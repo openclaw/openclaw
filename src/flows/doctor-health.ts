@@ -108,7 +108,7 @@ async function runDoctorHealthFlowWithResult(
 
   if (options.repair === true || options.yes === true || options.generateGatewayToken === true) {
     const { assertConfigWriteAllowedInCurrentMode } =
-      await import("../config/nix-mode-write-guard.js");
+      await import("../config/config-write-guard.js");
     assertConfigWriteAllowedInCurrentMode();
   }
   let maintenance: Awaited<
