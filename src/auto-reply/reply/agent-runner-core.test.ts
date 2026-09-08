@@ -84,8 +84,12 @@ function silentFallbackTransition() {
   };
 }
 
-function fallbackAttempt(reason: RuntimeFallbackAttempt["reason"]): RuntimeFallbackAttempt {
-  return { provider: "openai", model: "gpt-5.6-luna", error: "failed", reason };
+function fallbackAttempt(
+  reason: RuntimeFallbackAttempt["reason"],
+  provider = "openai",
+  model = "gpt-5.6-luna",
+): RuntimeFallbackAttempt {
+  return { provider, model, error: "failed", reason };
 }
 
 describe("buildSilentFallbackFailurePayload", () => {
@@ -107,31 +111,53 @@ describe("buildSilentFallbackFailurePayload", () => {
     expect(payload?.text).toContain("I couldn't reach the configured model backend");
   });
 
-  it.each([
-    "format",
-    "auth",
-    "billing",
-    "rate_limit",
-    "context_overflow",
-    "session_expired",
-  ] as const)("reports a responded backend instead of unreachability for %s", (reason) => {
+  it.each(["format", "billing", "rate_limit", "context_overflow", "session_expired"] as const)(
+    "uses neutral wording for %s failures, claiming neither reachability nor a response",
+    (reason) => {
+      const payload = buildSilentFallbackFailurePayload({
+        ...silentFallbackParams,
+        fallbackTransition: silentFallbackTransition(),
+        fallbackAttempts: [fallbackAttempt(reason)],
+      });
+      expect(payload?.text).toContain("did not produce a usable reply");
+      expect(payload?.text).not.toContain("couldn't reach");
+      expect(payload?.text).not.toContain("responded");
+    },
+  );
+
+  it("uses neutral wording for auth-skipped candidates that never sent a request", () => {
+    // The fallback runner records an auth-class failure for skipped candidates
+    // and continues without executing them, so no backend answered and no
+    // response claim is supportable.
     const payload = buildSilentFallbackFailurePayload({
       ...silentFallbackParams,
       fallbackTransition: silentFallbackTransition(),
-      fallbackAttempts: [fallbackAttempt(reason)],
+      fallbackAttempts: [fallbackAttempt("auth")],
     });
-    expect(payload?.text).toContain("responded without a usable reply");
+    expect(payload?.text).toContain("did not produce a usable reply");
     expect(payload?.text).not.toContain("couldn't reach");
+    expect(payload?.text).not.toContain("responded");
   });
 
-  it("reports a responded backend when any attempt reached it, even beside transport failures", () => {
-    const payload = buildSilentFallbackFailurePayload({
-      ...silentFallbackParams,
-      fallbackTransition: silentFallbackTransition(),
-      fallbackAttempts: [fallbackAttempt("server_error"), fallbackAttempt("format")],
-    });
-    expect(payload?.text).toContain("responded without a usable reply");
-  });
+  it.each([
+    { primary: "timeout", secondary: "format" },
+    { primary: "server_error", secondary: "format" },
+  ] as const)(
+    "uses neutral wording when a $primary transport failure mixes with a $secondary response-side failure",
+    ({ primary, secondary }) => {
+      const payload = buildSilentFallbackFailurePayload({
+        ...silentFallbackParams,
+        fallbackTransition: silentFallbackTransition(),
+        fallbackAttempts: [
+          fallbackAttempt(primary, "openai", "gpt-5.6-luna"),
+          fallbackAttempt(secondary, "anthropic", "claude-sonnet-5"),
+        ],
+      });
+      expect(payload?.text).toContain("did not produce a usable reply");
+      expect(payload?.text).not.toContain("couldn't reach");
+      expect(payload?.text).not.toContain("responded");
+    },
+  );
 
   it("still suppresses the payload for heartbeat runs", () => {
     expect(

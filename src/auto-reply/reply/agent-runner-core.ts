@@ -78,10 +78,10 @@ export function markBeforeAgentRunBlockedPayloads(payloads: ReplyPayload[]): Rep
 }
 
 // "Couldn't reach" is only true when an attempt failed before the backend could
-// answer: 5xx classes plus request timeout. A 4xx-mapped reason (format, auth,
-// billing, ...) or an unmapped one (empty response, unknown) reached the
-// backend, and reporting unreachability sends operators auditing connectivity
-// for a provider that answered.
+// answer: 5xx classes plus request timeout. Any other record — a 4xx-mapped
+// reason (format, auth, billing, ...), an unmapped one (empty response,
+// unknown), or a candidate skipped without sending a request — establishes
+// neither reachability nor a response, so the wording must claim neither.
 const UNREACHABLE_FAILOVER_STATUSES = new Set([408, 500, 502, 503]);
 
 function everyFallbackAttemptUnreachable(attempts: readonly RuntimeFallbackAttempt[]): boolean {
@@ -121,7 +121,7 @@ export function buildSilentFallbackFailurePayload(params: {
     text: backendUnreachable
       ? `⚠️ I couldn't reach the configured model backend ${params.fallbackTransition.selectedModelRef}. ` +
         `Fallback used ${params.fallbackTransition.activeModelRef}, but it produced no visible reply.`
-      : `⚠️ The configured model backend ${params.fallbackTransition.selectedModelRef} responded without a usable reply. ` +
+      : `⚠️ The configured model backend ${params.fallbackTransition.selectedModelRef} did not produce a usable reply. ` +
         `Fallback used ${params.fallbackTransition.activeModelRef}, but it produced no visible reply.`,
     isError: true,
   });
