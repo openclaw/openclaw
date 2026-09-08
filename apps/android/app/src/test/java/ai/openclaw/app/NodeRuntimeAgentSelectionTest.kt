@@ -43,6 +43,121 @@ import java.util.concurrent.atomic.AtomicReference
 @Config(sdk = [34])
 class NodeRuntimeAgentSelectionTest {
   @Test
+  fun failedRefreshPublishesCompatibleRowsAndWarning() =
+    runBlocking {
+      val runtime = createConnectedRuntime()
+      val catalogJobs = Channel<Job>(Channel.UNLIMITED)
+      val response = AtomicReference("""{"models":[{"id":"previous","provider":"fixture","available":true}]}""")
+      try {
+        runtime.gatewayDataRequestOverrideForTests = { _, method, _ ->
+          when (method) {
+            "models.list" -> {
+              catalogJobs.send(currentCoroutineContext().job)
+              response.get()
+            }
+
+            "models.authStatus" -> """{"providers":[{"provider":"current-credential","status":"ok","profiles":[]}]}"""
+            else -> error("Unexpected catalog request: $method")
+          }
+        }
+        runtime.refreshProviderModels()
+        withTimeout(2_000) { catalogJobs.receive().join() }
+        assertEquals(listOf("previous"), runtime.providerModelCatalog.value.map { it.id })
+
+        response.set("""{"models":[{"id":"compatible","provider":"fixture","available":true}],"refreshFailed":true}""")
+        runtime.refreshProviderModels(refresh = true)
+        withTimeout(2_000) { catalogJobs.receive().join() }
+
+        assertEquals(listOf("compatible"), runtime.providerModelCatalog.value.map { it.id })
+        assertEquals(listOf("current-credential"), runtime.modelAuthProviders.value.map { it.id })
+        assertFalse("A failed refresh must remain visible alongside its returned rows", runtime.providerModelCatalogErrorText.value.isNullOrBlank())
+        assertFalse(runtime.providerModelCatalogRefreshing.value)
+      } finally {
+        closeNodeRuntimeTestFixture(runtime)
+        catalogJobs.close()
+      }
+    }
+
+  @Test
+  fun failedRefreshCannotRestoreRowsWithRejectedAuth() =
+    runBlocking {
+      val runtime = createConnectedRuntime()
+      val catalogJobs = Channel<Job>(Channel.UNLIMITED)
+      val response = AtomicReference("""{"models":[{"id":"retired-private-model","provider":"fixture","available":true}]}""")
+      val authResponse = AtomicReference("""{"providers":[{"provider":"fixture","status":"ok","profiles":[]}]}""")
+      try {
+        runtime.gatewayDataRequestOverrideForTests = { _, method, _ ->
+          when (method) {
+            "models.list" -> {
+              catalogJobs.send(currentCoroutineContext().job)
+              response.get()
+            }
+
+            "models.authStatus" -> authResponse.get()
+            else -> error("Unexpected catalog request: $method")
+          }
+        }
+        runtime.refreshModelCatalog()
+        runtime.refreshProviderModels()
+        withTimeout(2_000) { repeat(2) { catalogJobs.receive().join() } }
+        assertEquals(listOf("retired-private-model"), runtime.modelCatalog.value.map { it.id })
+        assertEquals(listOf("retired-private-model"), runtime.providerModelCatalog.value.map { it.id })
+
+        response.set("""{"models":[],"refreshFailed":true,"providerOutcomes":[{"provider":"fixture","status":"auth-rejected"}]}""")
+        authResponse.set("""{"providers":[{"provider":"fixture","status":"missing","profiles":[]}]}""")
+        runtime.refreshModelCatalog()
+        runtime.refreshProviderModels(refresh = true)
+        withTimeout(2_000) { repeat(2) { catalogJobs.receive().join() } }
+
+        assertTrue(runtime.modelCatalog.value.isEmpty())
+        assertTrue(runtime.providerModelCatalog.value.isEmpty())
+        assertEquals("missing", runtime.modelAuthProviders.value.single().status)
+        assertFalse("An unavailable empty result must show the refresh failure", runtime.providerModelCatalogErrorText.value.isNullOrBlank())
+      } finally {
+        closeNodeRuntimeTestFixture(runtime)
+        catalogJobs.close()
+      }
+    }
+
+  @Test
+  fun successfulEmptyPublicationClearsPreviousRowsAndWarning() =
+    runBlocking {
+      val runtime = createConnectedRuntime()
+      val catalogJobs = Channel<Job>(Channel.UNLIMITED)
+      val response = AtomicReference("""{"models":[{"id":"old-compatible","provider":"fixture"}],"refreshFailed":true}""")
+      try {
+        runtime.gatewayDataRequestOverrideForTests = { _, method, _ ->
+          when (method) {
+            "models.list" -> {
+              catalogJobs.send(currentCoroutineContext().job)
+              response.get()
+            }
+
+            "models.authStatus" -> """{"providers":[]}"""
+            else -> error("Unexpected catalog request: $method")
+          }
+        }
+        runtime.refreshModelCatalog()
+        runtime.refreshProviderModels()
+        withTimeout(2_000) { repeat(2) { catalogJobs.receive().join() } }
+        assertEquals(listOf("old-compatible"), runtime.modelCatalog.value.map { it.id })
+        assertEquals(listOf("old-compatible"), runtime.providerModelCatalog.value.map { it.id })
+
+        response.set("""{"models":[],"refreshFailed":false}""")
+        runtime.refreshModelCatalog()
+        runtime.refreshProviderModels()
+        withTimeout(2_000) { repeat(2) { catalogJobs.receive().join() } }
+
+        assertTrue(runtime.modelCatalog.value.isEmpty())
+        assertTrue(runtime.providerModelCatalog.value.isEmpty())
+        assertEquals(null, runtime.providerModelCatalogErrorText.value)
+      } finally {
+        closeNodeRuntimeTestFixture(runtime)
+        catalogJobs.close()
+      }
+    }
+
+  @Test
   fun publicationsRereadSelectedAgentModelsWithoutDiscovery() =
     runBlocking {
       for (event in listOf("config.changed", "chat.metadata.changed")) {
