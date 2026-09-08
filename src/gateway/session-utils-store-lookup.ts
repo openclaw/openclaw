@@ -185,20 +185,18 @@ function prepareGatewaySessionStoreLookup(
       resolve: () => ({ storePath: fallback.storePath, store: {}, match: undefined }),
     };
   }
-  const reads = candidates.map(
-    (target, index): GatewaySessionStoreRead => ({
-      storePath: target.storePath,
-      agentId: target.agentId,
-      clone: params.clone,
-      options: {
-        readOnly: configured ? params.readOnly : true,
-        ...(params.exactRead ? { exactKeys: scanTargets } : {}),
-        ...(params.projection ? { projection: params.projection } : {}),
-        ...(params.storeCache ? { cache: params.storeCache } : {}),
-      },
-      store: index === 0 && target.storePath === fallback.storePath ? params.store : undefined,
-    }),
-  );
+  const reads = candidates.map((target, index): GatewaySessionStoreRead => ({
+    storePath: target.storePath,
+    agentId: target.agentId,
+    clone: params.clone,
+    options: {
+      readOnly: configured ? params.readOnly : true,
+      ...(params.exactRead ? { exactKeys: scanTargets } : {}),
+      ...(params.projection ? { projection: params.projection } : {}),
+      ...(params.storeCache ? { cache: params.storeCache } : {}),
+    },
+    store: index === 0 && target.storePath === fallback.storePath ? params.store : undefined,
+  }));
   return {
     reads,
     resolve: () => {
@@ -278,19 +276,17 @@ function prepareExplicitDeletedLegacyMainStoreTarget(
   );
   const reads = existing
     .filter((target) => target.agentId === legacyAgentId)
-    .map(
-      (target): GatewaySessionStoreRead => ({
-        storePath: target.storePath,
-        clone: params.clone,
-        agentId: target.agentId,
-        options: {
-          readOnly: true,
-          ...(params.exactRead ? { exactKeys: lookupSeeds } : {}),
-          ...(params.projection ? { projection: params.projection } : {}),
-          ...(params.storeCache ? { cache: params.storeCache } : {}),
-        },
-      }),
-    );
+    .map((target): GatewaySessionStoreRead => ({
+      storePath: target.storePath,
+      clone: params.clone,
+      agentId: target.agentId,
+      options: {
+        readOnly: true,
+        ...(params.exactRead ? { exactKeys: lookupSeeds } : {}),
+        ...(params.projection ? { projection: params.projection } : {}),
+        ...(params.storeCache ? { cache: params.storeCache } : {}),
+      },
+    }));
   return {
     reads,
     resolve: () => {

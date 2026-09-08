@@ -1217,7 +1217,7 @@ describe("session list subagent metadata", () => {
         cleanupCompletedAt: now - 500,
       });
       const list = (spawnedBy?: string) =>
-        listSessionsFromStoreAsync({
+        listSessionFixture({
           cfg,
           storePath: "/tmp/sessions.json",
           store,
