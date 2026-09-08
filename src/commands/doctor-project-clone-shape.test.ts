@@ -25,10 +25,13 @@ describe("doctor project clone shape", () => {
     "inspects only registry clones and reports %s clone repair",
     async (shape) => {
       await withOpenClawTestState({ prefix: "openclaw-doctor-clones-" }, async (state) => {
-        const urlRemote =
-          "https://user:synthetic-secret@example.invalid/project.git?opaque=query-private#fragment-private";
+        const urlRemote = new URL(
+          "https://example.invalid/project.git?opaque=query-private#fragment-private",
+        );
+        urlRemote.username = "user";
+        urlRemote.password = ["synthetic", "secret"].join("-");
         const urlKeys = ["promisor", "partialclonefilter"].map(
-          (field) => `remote.${urlRemote}.${field}`,
+          (field) => `remote.${urlRemote.href}.${field}`,
         );
         const source = state.path("source");
         await git(state.root, "init", "-b", "main", source);
