@@ -798,7 +798,11 @@ export type ChannelMessageActionAdapter = {
   describeMessageTool: (
     params: ChannelMessageActionDiscoveryContext,
   ) => ChannelMessageToolDiscovery | null | undefined;
-  /** Delegate conversation-read authorization to this adapter for bundled registrations only. */
+  /**
+   * Delegate conversation-read authorization to this adapter for bundled or
+   * loader-verified official registrations. Other installs remain exact-current.
+   * The adapter must enforce provider account, sender, and destination policy.
+   */
   providerOwnedReadGates?: true | readonly ChannelMessageActionName[];
   supportsAction?: (params: { action: ChannelMessageActionName }) => boolean;
   resolveExecutionMode?: (params: { action: ChannelMessageActionName }) => "local" | "gateway";

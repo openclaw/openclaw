@@ -32,6 +32,7 @@ type PreparedMessageActionReadContext = {
   origin: ServerOwnedConversationReadOrigin;
   actionPolicy: ChannelMessageActionReadPolicy;
   enforcement: MessageActionReadEnforcement;
+  assertReadAuthorityCurrent?: () => void;
 };
 
 type ChannelMessageActionReadPolicy =
@@ -139,10 +140,11 @@ function resolveMessageActionReadEnforcement(params: {
   action: ChannelMessageActionName;
   actions: ChannelPlugin["actions"];
   pluginOrigin: string | undefined;
+  pluginTrustedOfficialInstall?: boolean;
 }): MessageActionReadEnforcement {
   const providerOwnedReadGates = params.actions?.providerOwnedReadGates;
   if (
-    params.pluginOrigin === "bundled" &&
+    (params.pluginOrigin === "bundled" || params.pluginTrustedOfficialInstall === true) &&
     (providerOwnedReadGates === true || providerOwnedReadGates?.includes(params.action) === true)
   ) {
     return { kind: "provider-owned" };
@@ -545,16 +547,34 @@ function prepareMessageActionReadContext(
     action,
     conversationReadOrigin: origin,
   };
+  const enforcement = resolveMessageActionReadEnforcement({
+    action,
+    actions: registration.plugin.actions,
+    pluginOrigin: registration.origin,
+    pluginTrustedOfficialInstall: registration.trustedOfficialInstall,
+  });
+  let assertReadAuthorityCurrent: (() => void) | undefined;
+  if (
+    origin !== "direct-operator" &&
+    actionPolicy.kind === "conversation-read" &&
+    enforcement.kind === "provider-owned" &&
+    registration.origin !== "bundled"
+  ) {
+    const isCurrent = registration.captureReadAuthority?.();
+    assertReadAuthorityCurrent = () => {
+      if (!isCurrent?.()) {
+        throw new Error(`Plugin ${ctx.channel} read authority is no longer active.`);
+      }
+    };
+    assertReadAuthorityCurrent();
+  }
   return {
     actionContext,
     plugin: registration.plugin,
     origin,
     actionPolicy,
-    enforcement: resolveMessageActionReadEnforcement({
-      action,
-      actions: registration.plugin.actions,
-      pluginOrigin: registration.origin,
-    }),
+    enforcement,
+    assertReadAuthorityCurrent,
   };
 }
 
@@ -706,5 +726,11 @@ export async function dispatchChannelMessageAction(
   ) {
     return null;
   }
-  return await actions.handleAction(authorizedActionContext);
+  prepared.assertReadAuthorityCurrent?.();
+  try {
+    return await actions.handleAction(authorizedActionContext);
+  } finally {
+    // A replaced/disabled owner cannot publish late read data, including provider errors.
+    prepared.assertReadAuthorityCurrent?.();
+  }
 }

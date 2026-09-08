@@ -9,6 +9,8 @@ export type ActivePluginChannelRegistration = {
   plugin: ActiveChannelPluginRuntimeShape;
   pluginId?: string | null;
   origin?: import("./plugin-origin.types.js").PluginOrigin | null;
+  trustedOfficialInstall?: boolean;
+  captureReadAuthority?: () => (() => boolean) | undefined;
   resolveChannelRuntime?: () => import("./runtime/types-channel.js").PluginRuntimeChannel;
 };
 
