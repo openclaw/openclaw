@@ -11,6 +11,7 @@ changelog first.
 
 ## Releases
 
+- [v2026.9.3](/releases/2026.9.3) - Safer update rehearsal, persistent Workshop skills, live browser views and native Mac tabs, and a searchable meeting library.
 - [v2026.9.2](/releases/2026.9.2) - Reliability and recovery improvements, OpenAI GPT-6 Astra and Meta Muse Spark 1.3 support, and flexible task workspaces.
 - [v2026.9.1](/releases/2026.9.1) - Mermaid diagrams across chat surfaces, a fuller Android experience, safer update recovery, and lower overhead for long conversations and large installations.
 - [v2026.8.2](/releases/2026.8.2) - Home beside your work, a Linux desktop companion, background sessions, browser control without a running Gateway, four new Control UI looks, and focused reply, voice, update, and recovery fixes.
