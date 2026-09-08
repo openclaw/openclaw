@@ -158,10 +158,9 @@ jobs:
               process.stdout.write(version);
             ' "$TARGET_CHECKOUT_DIR/package.json")"
             if [[ "$target_version" == "2026.7.33" ]]; then
-              # Kova #116 carries the historical 250% status CLI calibration for this release only;
-              # Kova #118 keeps process-census time out of CPU scan uncertainty;
-              # Kova #119 discovers a starting gateway before its zero baseline is lost.
-              kova_ref="cf6e26f0ca1241c9e7a626e96e66f392ff58012d"
+              # This compatibility ref keeps Kova #116's historical 250% status CLI calibration
+              # while backporting #118-#120's complete CPU-accounting fixes for this release only.
+              kova_ref="18c9eb8c3950a35794d196f4e40ad471e9308e27"
             fi
           fi
           if [[ "$kova_ref" == *$'\n'* || "$kova_ref" == *$'\r'* ]]; then
