@@ -87,7 +87,7 @@ suite.define(() => {
       await expectInboxOnNextFrame(page, populated);
 
       await page.locator(".sidebar-recent-session__link").first().click();
-      await page.waitForLoadState("networkidle");
+      await page.getByRole("textbox", { name: "Chat composer", exact: true }).waitFor();
       await expectInboxOnNextFrame(page, populated);
 
       const connections = await gateway.getRequests("connect");
