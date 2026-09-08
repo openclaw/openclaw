@@ -25,6 +25,7 @@ import { resolveAgentHarnessPolicy } from "./harness/policy.js";
 import { getRegisteredAgentHarness } from "./harness/registry.js";
 import { LiveSessionModelSwitchError } from "./live-model-switch-error.js";
 import {
+  logLocalChainStop,
   logModelFallbackChainStopped,
   logModelFallbackDecision,
   type ModelFallbackChainStopReason,
@@ -284,6 +285,10 @@ async function runFallbackCandidate<T>(params: {
       lane: params.attribution?.lane,
     });
     if (fallbackError.kind === "coordination") {
+      // A local coordination failure is not a provider failure, so the chain
+      // stops here by design. Name it: the remaining candidates are skipped and
+      // nothing else on this path says so.
+      logLocalChainStop(err, params, params.attribution);
       throw err;
     }
     return { ok: false, error: fallbackError.error };
