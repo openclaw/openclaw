@@ -1064,11 +1064,11 @@ describe("ModelProvidersPage agent scope", () => {
       { id: "gpt-5", name: "GPT-5", provider: "openai", available: true },
     ]);
 
-    await page.discoverPickerCatalog();
+    page.catalogDiscovery.openPicker();
+    await vi.waitFor(() => expect(page.data?.models).toEqual(discovered));
 
-    expect(page.data?.models).toEqual(discovered);
-    expect(page.catalogDiscovering).toBe(false);
-    expect(page.catalogDiscoveryError).toBeNull();
+    expect(page.catalogDiscovery.discovering).toBe(false);
+    expect(page.catalogDiscovery.error).toBeNull();
     expect(request).toHaveBeenCalledWith("models.list", {
       view: "configured",
       agentId: "main",
@@ -1092,13 +1092,13 @@ describe("ModelProvidersPage agent scope", () => {
     const page = appendPage(context);
     await waitForFast(() => expect(page.data?.config).toEqual({}));
 
-    await page.discoverPickerCatalog();
-
-    expect(page.catalogDiscoveryError).toContain("discovery failed");
-    expect(page.catalogDiscovering).toBe(false);
+    page.catalogDiscovery.openPicker();
+    await vi.waitFor(() => expect(page.catalogDiscovery.error).toContain("discovery failed"));
+    expect(page.catalogDiscovery.discovering).toBe(false);
 
     failDiscovery = false;
-    await page.discoverPickerCatalog();
-    expect(page.catalogDiscoveryError).toBeNull();
+    page.catalogDiscovery.retry();
+    await vi.waitFor(() => expect(page.catalogDiscovery.discovering).toBe(false));
+    expect(page.catalogDiscovery.error).toBeNull();
   });
 });

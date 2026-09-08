@@ -1,19 +1,25 @@
 // Control UI view renders the Models settings page content.
-import { html, nothing } from "lit";
-import type { FastMode, ModelsProbeResult } from "../../api/types.ts";
+import { html, nothing, type TemplateResult } from "lit";
+import type { FastMode, GatewayAgentRow, ModelsProbeResult } from "../../api/types.ts";
+import { titleForRoute } from "../../app-navigation.ts";
+import type { AgentSelectionCapability } from "../../app/agent-selection.ts";
+import { renderAgentScopeControl } from "../../components/agent-scope-control.ts";
 import { icons } from "../../components/icons.ts";
 import { renderProviderBrandIcon } from "../../components/provider-icon.ts";
 import { renderProviderUsageDetails } from "../../components/provider-usage.ts";
 import {
+  renderLearnMoreLink,
   renderSettingsEmpty,
   renderSettingsGroup,
   renderSettingsLoadingSkeleton,
   renderSettingsPage,
+  renderSettingsPageHeader,
   renderSettingsRow,
   renderSettingsSection,
   renderSettingsStatus,
   renderSettingsValue,
 } from "../../components/settings-ui.ts";
+import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
@@ -645,4 +651,33 @@ export function renderModelProviders(props: ModelProvidersViewProps) {
         : nothing
     }
   `);
+}
+
+/** Page shell for the Models settings page: header, agent scope control, body. */
+export function renderModelProvidersPageShell(props: {
+  agentSelection: AgentSelectionCapability;
+  agents: readonly GatewayAgentRow[];
+  onOpenModelSetup: () => void;
+  selectedAgentId: string;
+  body: TemplateResult;
+}): TemplateResult {
+  return html`
+    ${renderSettingsPageHeader({
+      title: titleForRoute("model-providers"),
+      subtitle: html`${t("modelProviders.subtitle")}
+      ${renderLearnMoreLink("https://docs.openclaw.ai/concepts/model-providers")}`,
+      actions: html`
+        ${renderAgentScopeControl({
+          agents: props.agents,
+          selection: props.agentSelection,
+          allowAll: false,
+          selectedId: props.selectedAgentId,
+        })}
+        <button class="btn" @click=${props.onOpenModelSetup}>
+          ${icons.settings}<span>${t("modelProviders.configureModels")}</span>
+        </button>
+      `,
+    })}
+    ${renderSettingsWorkspace(props.body)}
+  `;
 }

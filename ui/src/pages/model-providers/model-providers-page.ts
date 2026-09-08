@@ -1,29 +1,24 @@
 import { consume } from "@lit/context";
 import { initialState, Task } from "@lit/task";
 import { asNullableRecord as asConfigRecord } from "@openclaw/normalization-core/record-coerce";
-import { html, type PropertyValues } from "lit";
+import type { PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ModelsProbeResult } from "../../api/types.ts";
-import { titleForRoute } from "../../app-navigation.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
-import { renderAgentScopeControl } from "../../components/agent-scope-control.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { icons } from "../../components/icons.ts";
-import { renderLearnMoreLink, renderSettingsPageHeader } from "../../components/settings-ui.ts";
-import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
 import { normalizeAgentLabel } from "../../lib/agents/display.ts";
-import { formatUiError } from "../../lib/format-error.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
-import { loadModelCatalog } from "../../lib/model-catalog-store.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
-import { showToast, type ToastOptions } from "../../lib/toast.ts";
+import { showToast } from "../../lib/toast.ts";
 import { GatewayPageController } from "../../lit/gateway-page-controller.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { UsageRefreshPolicy } from "../usage/refresh-policy.ts";
+import { createCatalogDiscoveryController } from "./catalog-discovery.ts";
 import {
   modelProviderErrorMessage,
   runModelProviderConfigMutation,
@@ -55,15 +50,13 @@ import { ModelProviderProfileActionsController } from "./profile-actions-control
 import { updateRecordEntry } from "./record-state.ts";
 import type { ModelProvidersRouteData } from "./route.ts";
 import { ModelProviderSupplementalLoader } from "./supplemental-load.ts";
-import { renderModelProviders, type ModelProviderRowMessage } from "./view.ts";
-
-const MODEL_PROVIDERS_DOCS_URL = "https://docs.openclaw.ai/concepts/model-providers";
+import {
+  renderModelProviders,
+  renderModelProvidersPageShell,
+  type ModelProviderRowMessage,
+} from "./view.ts";
 
 type DefaultsDraft = DefaultModelSelection & ModelBehaviorConfig;
-
-function showProfileToast(options: ToastOptions) {
-  showToast({ placement: "bottom", ...options });
-}
 
 export class ModelProvidersPage extends OpenClawLightDomElement {
   @consume({ context: applicationContext, subscribe: true })
@@ -86,8 +79,6 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
   @state() private addProviderKey = "";
   @state() private defaultsDraft: DefaultsDraft | null = null;
   @state() private selectedAgentId = "";
-  @state() private catalogDiscovering = false;
-  @state() private catalogDiscoveryError: string | null = null;
   /** Client the current data was loaded from; a new client means stale data. */
   private dataClient: GatewayBrowserClient | null = null;
   // Null Task runs supersede stale work without counting as a real load.
@@ -138,6 +129,14 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     setDataClient: (client) => (this.dataClient = client),
     refreshPolicy: this.refreshPolicy,
   });
+  private readonly catalogDiscovery = createCatalogDiscoveryController({
+    getGateway: () => this.gateway,
+    getAgentId: () => this.selectedAgentId,
+    getAgentEpoch: () => this.agentEpoch,
+    getData: () => this.data,
+    setData: (data) => (this.data = data),
+    requestUpdate: () => this.requestUpdate(),
+  });
   private readonly gateway = new GatewayPageController(this, {
     getGateway: () => this.context?.gateway,
     onIdentityChange: () => this.resetConnectionState(),
@@ -170,7 +169,8 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     getOrders: () => this.profileOrders,
     setData: (data) => (this.data = data),
     setError: (_cardId, error) =>
-      showProfileToast({
+      showToast({
+        placement: "bottom",
         message: modelProviderErrorMessage(error),
         icon: icons.alertTriangle,
         durationMs: 12_000,
@@ -185,7 +185,11 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     setBusy: (key, value) => this.setBusy(key, value),
     clearProbe: (cardId) => this.clearProbe(cardId),
     setLogoutSuccess: () =>
-      showProfileToast({ message: t("modelProviders.logout.done"), icon: icons.check }),
+      showToast({
+        placement: "bottom",
+        message: t("modelProviders.logout.done"),
+        icon: icons.check,
+      }),
   });
   private readonly subscriptions = new SubscriptionsController(this)
     .watch(
@@ -301,8 +305,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     this.addProviderOpen = false;
     this.addProviderId = "";
     this.addProviderKey = "";
-    this.catalogDiscovering = false;
-    this.catalogDiscoveryError = null;
+    this.catalogDiscovery.reset();
   }
 
   private resolveSelectedAgentId(): string {
@@ -350,56 +353,6 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     this.loadClient = client;
     return this.refreshTask.run([client, this.selectedAgentId, opts.force]);
   }
-
-  // Demand-driven discovery: the initial prepared catalog is fast but only lists
-  // configured models. Opening a picker signals interest, so fetch the full catalog
-  // through the shared store (cooldown + concurrency dedupe) and merge it in without
-  // disturbing the saved selection. Cooldown hits reuse the cached prepared list.
-  private async discoverPickerCatalog(): Promise<void> {
-    if (!this.selectedAgentId || this.catalogDiscovering) {
-      return;
-    }
-    const client = this.gateway.client;
-    if (!this.gateway.connected || !client) {
-      return;
-    }
-    const agentId = this.selectedAgentId;
-    const agentEpoch = this.agentEpoch;
-    const clientEpoch = this.gateway.epoch;
-    const ownsResult = () =>
-      this.gateway.isCurrent({ client, epoch: clientEpoch }) &&
-      this.selectedAgentId === agentId &&
-      this.agentEpoch === agentEpoch;
-    this.catalogDiscovering = true;
-    this.catalogDiscoveryError = null;
-    try {
-      const result = await loadModelCatalog(client, { agentId, refreshIfDue: true });
-      if (ownsResult() && result.models) {
-        this.data = this.data
-          ? { ...this.data, models: result.models, providerOutcomes: result.providerOutcomes ?? [] }
-          : this.data;
-      }
-    } catch (error) {
-      if (ownsResult()) {
-        this.catalogDiscoveryError = formatUiError(error, "request failed");
-      }
-    } finally {
-      if (ownsResult()) {
-        this.catalogDiscovering = false;
-      }
-    }
-  }
-
-  private retryPickerCatalog(): void {
-    // Reopening the picker triggers discovery again; the shared store's cooldown
-    // dedupes runs while a prior failure is immediately retryable.
-    this.catalogDiscoveryError = null;
-    void this.discoverPickerCatalog();
-  }
-
-  private onModelPickerOpen = (): void => {
-    void this.discoverPickerCatalog();
-  };
 
   private mutationBlockedReason(): string | null {
     const snapshot = this.context.gateway.snapshot;
@@ -716,8 +669,8 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
       thinkingOverridden: defaults.thinkingOverridden,
       fastMode: defaults.fastMode,
       fastModeOverridden: defaults.fastModeOverridden,
-      catalogDiscovering: this.catalogDiscovering,
-      catalogDiscoveryError: this.catalogDiscoveryError,
+      catalogDiscovering: this.catalogDiscovery.discovering,
+      catalogDiscoveryError: this.catalogDiscovery.error,
       configBusy: this.configBusy(),
       quickAddSupported: data.authStatus?.providerCapabilities !== undefined,
       unconfiguredProviders: buildUnconfiguredProviderOptions(
@@ -781,29 +734,17 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
       onThinkingReset: () => stageDefaults({ thinkingLevel: undefined, thinkingOverridden: false }),
       onFastModeChange: (mode) => stageDefaults({ fastMode: mode, fastModeOverridden: true }),
       onFastModeReset: () => stageDefaults({ fastMode: undefined, fastModeOverridden: false }),
-      onModelPickerOpen: this.onModelPickerOpen,
-      onCatalogRetry: () => this.retryPickerCatalog(),
+      onModelPickerOpen: () => this.catalogDiscovery.openPicker(),
+      onCatalogRetry: () => this.catalogDiscovery.retry(),
       onOpenModelSetup: () => this.context.navigate("model-setup"),
     });
-    return html`
-      ${renderSettingsPageHeader({
-        title: titleForRoute("model-providers"),
-        subtitle: html`${t("modelProviders.subtitle")}
-        ${renderLearnMoreLink(MODEL_PROVIDERS_DOCS_URL)}`,
-        actions: html`
-          ${renderAgentScopeControl({
-            agents,
-            selection: this.context.agentSelection,
-            allowAll: false,
-            selectedId: this.selectedAgentId,
-          })}
-          <button class="btn" @click=${() => this.context.navigate("model-setup")}>
-            ${icons.settings}<span>${t("modelProviders.configureModels")}</span>
-          </button>
-        `,
-      })}
-      ${renderSettingsWorkspace(body)}
-    `;
+    return renderModelProvidersPageShell({
+      agentSelection: this.context.agentSelection,
+      agents,
+      onOpenModelSetup: () => this.context.navigate("model-setup"),
+      selectedAgentId: this.selectedAgentId,
+      body,
+    });
   }
 }
 
