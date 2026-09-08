@@ -91,6 +91,7 @@ function runPrepublishAssertion(
   cwd = process.cwd(),
   attempts?: number | "complete",
   minimumAttempts?: number,
+  env = process.env,
 ) {
   return spawnSync(
     process.execPath,
@@ -104,7 +105,7 @@ function runPrepublishAssertion(
       ...(attempts ? [String(attempts)] : []),
       ...(minimumAttempts ? [String(minimumAttempts)] : []),
     ],
-    { cwd, encoding: "utf8", env: { ...process.env } },
+    { cwd, encoding: "utf8", env: { ...env } },
   );
 }
 
@@ -500,6 +501,28 @@ ${runner.slice(boundary)}
     expect(
       runPrepublishAssertion(baseUrl, "@openclaw/whatsapp", version, undefined, isolatedCwd).status,
     ).toBe(0);
+    const { baseUrl: legacyBaseUrl } = await startFixtureServer(
+      "prepublish-artifacts",
+      [manifestPath],
+      isolatedCwd,
+    );
+    await fetchJson(legacyBaseUrl, whatsappPath);
+    await fetchJson(legacyBaseUrl, `${whatsappPath}/versions/${version}/artifact`);
+    await fetch(`${legacyBaseUrl}${whatsappPath}/versions/${version}/artifact/download`);
+    const legacyAssertion = runPrepublishAssertion(
+      legacyBaseUrl,
+      "@openclaw/whatsapp",
+      version,
+      undefined,
+      isolatedCwd,
+      undefined,
+      undefined,
+      {
+        ...process.env,
+        OPENCLAW_FROZEN_UPGRADE_SURVIVOR_CLAWHUB_PACKAGE: "@openclaw/whatsapp",
+      },
+    );
+    expect(legacyAssertion.status, legacyAssertion.stderr).toBe(0);
     const completeWithMinimum = runPrepublishAssertion(
       baseUrl,
       "@openclaw/whatsapp",

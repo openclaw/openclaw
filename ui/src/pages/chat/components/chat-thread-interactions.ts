@@ -153,6 +153,7 @@ export type ChatThreadProps = ChatSendStatusActions & {
   onRewindMessage?: (entryId: string) => Promise<boolean> | boolean;
   onForkMessage?: (entryId: string) => Promise<void> | void;
   onFocusComposer?: () => void;
+  onAddToChat?: (question: string) => void;
   onCompanionPrefill?: (question: string) => void;
   onOpenSession?: (sessionKey: string) => void;
   modelSetupRequired?: boolean;
@@ -169,6 +170,7 @@ type TranscriptInteractionProps = Pick<
   | "onRewindMessage"
   | "onForkMessage"
   | "onFocusComposer"
+  | "onAddToChat"
   | "onCompanionPrefill"
 >;
 
@@ -418,6 +420,15 @@ export function handleTranscriptPointerUp(event: PointerEvent, props: Transcript
     return;
   }
   handleChatSelectionPointerUp(event, {
+    onAddToChat: props.onAddToChat
+      ? (selection) => {
+          const question = buildCompanionQuestionPrefill(selection);
+          if (question) {
+            props.onAddToChat?.(question);
+            props.onFocusComposer?.();
+          }
+        }
+      : undefined,
     onAskSideChat: (selection) => {
       const question = buildCompanionQuestionPrefill(selection);
       if (question) {

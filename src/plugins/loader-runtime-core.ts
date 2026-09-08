@@ -28,7 +28,7 @@ import type { PluginLoadOptions } from "./loader-types.js";
 import { createPluginIdScopeSet, normalizePluginIdScope } from "./plugin-scope.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import type { PluginRegistryInspectionResources } from "./registry-inspection-resources.js";
-import { pluginLoaderCacheState } from "./registry-lifecycle.js";
+import { isPluginRegistryActivated, pluginLoaderCacheState } from "./registry-lifecycle.js";
 import { getPluginRegistryRuntime } from "./registry-runtime-binding.js";
 import { createPluginRegistry, type PluginRegistry } from "./registry.js";
 import { getActivePluginRegistry } from "./runtime.js";
@@ -325,12 +325,16 @@ export function loadOpenClawPluginsCore(
     }
     return registry;
   } catch (error) {
-    // Registration failures discard only an inactive builder. Activation is failure-atomic, and
-    // any later cache failure must not strip the registry already serving runtime consumers.
-    if (context.shouldActivate && registryBuilder?.registry !== getActivePluginRegistry()) {
-      for (const plugin of registryBuilder?.registry.plugins.toReversed() ?? []) {
+    // Published generations keep their callbacks until retirement drains admitted users.
+    // Only construction failures still own registration rollback here.
+    if (
+      context.shouldActivate &&
+      registryBuilder &&
+      !isPluginRegistryActivated(registryBuilder.registry)
+    ) {
+      for (const plugin of registryBuilder.registry.plugins.toReversed()) {
         if (plugin.status === "loaded") {
-          registryBuilder?.rollbackPluginGlobalSideEffects(plugin.id);
+          registryBuilder.rollbackPluginGlobalSideEffects(plugin.id);
         }
       }
     }

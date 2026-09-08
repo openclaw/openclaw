@@ -156,9 +156,9 @@ openclaw_resolve_frozen_core_harness_capabilities() {
   [ "$authorization_status" -eq 1 ] && return 0
   [ "$authorization_status" -eq 0 ] || return "$authorization_status"
 
-  # The pre-consent onboarding flow does not accept the wizard record or the
-  # newer guided case. Run its own established non-interactive coverage.
-  if ! openclaw_frozen_target_source_contains "$source_root" src/config/zod-schema.ts 'securityAcknowledgedAt:' &&
+  # Older onboarding schemas do not accept the guided fixture's full wizard
+  # consent record. Run their own established non-interactive coverage.
+  if ! openclaw_frozen_target_source_contains "$source_root" src/config/zod-schema.ts 'accessMode:' &&
     openclaw_frozen_target_source_contains "$source_root" src/config/zod-schema.ts 'lastRunAt:'; then
     export OPENCLAW_FROZEN_TARGET_ONBOARD_CASES="local-basic,remote-non-interactive,reset,channels,skills"
   fi
@@ -214,7 +214,7 @@ openclaw_resolve_frozen_core_harness_capabilities() {
   # new dist entry the release cannot contain.
   if ! git -C "$source_root" cat-file -e "$OPENCLAW_SELECTED_SHA:src/agents/agent-bundle-mcp-manager-api.ts" 2>/dev/null &&
     git -C "$source_root" cat-file -e "$OPENCLAW_SELECTED_SHA:src/agents/agent-bundle-mcp-runtime.ts" 2>/dev/null &&
-    git -C "$source_root" cat-file -e "$OPENCLAW_SELECTED_SHA:scripts/e2e/agent-bundle-mcp-tools-docker-client.ts" 2>/dev/null; then
+    git -C "$source_root" cat-file -e "$OPENCLAW_SELECTED_SHA:test/e2e/qa-lab/runtime/agent-bundle-mcp-tools-docker-client.ts" 2>/dev/null; then
     export OPENCLAW_FROZEN_TARGET_AGENT_BUNDLE_MCP_MODE="legacy"
   fi
 }

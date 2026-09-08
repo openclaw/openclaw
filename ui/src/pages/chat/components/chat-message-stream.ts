@@ -7,7 +7,11 @@ import type { ChatItem } from "../../../lib/chat/chat-types.ts";
 import { formatDurationCompact } from "../../../lib/format.ts";
 import { renderChatAvatar } from "../chat-avatar.ts";
 import { renderGroupedMessage } from "./chat-message-bubble.ts";
-import { resolveMessageActionDetails, type MessageReplyTarget } from "./chat-message-markdown.ts";
+import {
+  prepareChatMessageRender,
+  resolveMessageActionDetails,
+  type MessageReplyTarget,
+} from "./chat-message-markdown.ts";
 import { renderChatTimestamp } from "./chat-message-timestamp.ts";
 import { renderChatQuestionSummary } from "./chat-question-card.ts";
 import type { SidebarContent } from "./chat-sidebar.ts";
@@ -73,21 +77,20 @@ export function renderStreamGroupParts(
       const prompt = opts.questionPrompts?.get(part.questionId);
       return prompt ? renderChatQuestionSummary(prompt) : nothing;
     }
-    const message = {
+    const source = prepareChatMessageRender({
       role: "assistant",
       content: [{ type: "text", text: part.text }],
       timestamp: part.startedAt,
-    };
+    });
     return renderGroupedMessage(
-      message,
+      source,
       part.key,
       {
         ...opts,
         isStreaming: part.isStreaming,
         showReasoning: false,
         // Settled segments can be replied to without transcript IDs or footer actions.
-        messageActions: resolveMessageActionDetails({
-          message,
+        messageActions: resolveMessageActionDetails(source, {
           messageId: part.key,
           onReply: opts.onReply,
           senderLabel: opts.assistant?.name ?? "Assistant",

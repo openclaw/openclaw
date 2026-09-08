@@ -18,7 +18,9 @@ async function assertPrepublishRequests(
   baseUrl,
   requestedPackage,
   version,
-  securityMode = "required",
+  securityMode = process.env.OPENCLAW_FROZEN_UPGRADE_SURVIVOR_CLAWHUB_PACKAGE === requestedPackage
+    ? "absent"
+    : "required",
   attempts = "1",
   minimumAttempts = "1",
 ) {

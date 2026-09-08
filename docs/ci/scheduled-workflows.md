@@ -225,6 +225,25 @@ selects a shorter 30-second diagnostic budget but preserves exit codes: 0 means
 no matching findings, 1 means findings or an error, and 2 means incomplete coverage.
 Ordinary CI, scheduled audits, and local hooks propagate every non-zero exit.
 
+### Docs Sync Publish Repo
+
+`Docs Sync Publish Repo` assembles English, ClawHub, and preserved translated
+pages in `openclaw/docs`. After each final rebase and before pushing, it installs
+the publisher's existing npm lock with `npm ci` and checks the resulting docs
+tree. Push retries reuse that install unless the publisher manifest or lock
+changes. The checker runs natively on Node 24; no separate checker dependency
+graph or TypeScript loader is installed.
+
+The disposable Actions validation cache records successful page checks by
+repository-relative path and complete raw content hash. Checker and helper
+changes, Node/runtime changes, or requested/installed npm lock changes invalidate
+reuse. Missing or corrupt cache data triggers full checking; deleted pages are
+pruned from the next successful cache. `docs.json` is checked every time, including
+on warm runs. Only successful main-branch workflows save the artifact, outside
+the publish repository. The checker preserves its Markdown/MDX format detection,
+poison-text checks, and component-indentation checks; it does not replace the
+site renderer or cross-page link validation.
+
 ### Docs Agent
 
 The `Docs Agent` workflow is an event-driven Codex maintenance lane for keeping existing docs aligned with recently landed changes. It has no pure schedule: a successful non-bot push CI run on `main` can trigger it, and manual dispatch can run it directly. Workflow-run invocations skip when `main` has moved on or when another eligible Docs Agent workflow-run invocation was created in the last hour. Canceled and skipped workflow conclusions are excluded from both hourly cadence and review-base selection; active runs with no conclusion still count. When admitted, the agent reviews the commit range from the previous eligible invocation's source SHA to current `main`.

@@ -195,7 +195,15 @@ suite.define(() => {
           await trigger.waitFor({ state: "visible" });
           await expect.poll(() => pickerValue(primary)).toBe("fixture/anchor");
           await expect
-            .poll(() => requests.some(({ params }) => params.preparedOnly === true))
+            .poll(() =>
+              requests.some(
+                ({ params }) =>
+                  params.view === "configured" &&
+                  params.agentId === "main" &&
+                  params.preparedOnly === undefined &&
+                  params.refresh === undefined,
+              ),
+            )
             .toBe(true);
           expect(acquisitions()).toBe(initialAcquisitions);
           stages.push({ stage: "initial", acquisitions: acquisitions() });
@@ -525,7 +533,6 @@ suite.define(() => {
           expect(catalogParams.at(-1)).toEqual({
             view: "configured",
             agentId: "reviewer",
-            preparedOnly: true,
           });
           expect(await recovered.count()).toBe(0);
           await page.screenshot({

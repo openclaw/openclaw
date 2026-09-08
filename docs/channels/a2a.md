@@ -161,6 +161,10 @@ Each authenticated peer and A2A `contextId` pair gets its own agent session. A2A
 isolated direct-message scope rather than inheriting `session.dmScope`, so remote peer content never
 joins the operator's main session and one peer cannot read another peer's conversation history.
 
+For agent bindings, use the configured peer name as the canonical direct-peer ID, such as
+`hermes`. A context-specific `hermes:<contextId>` binding takes precedence over that stable peer
+binding, and the stable peer binding takes precedence over broader A2A account or channel routes.
+
 ## Security
 
 Agent Card discovery is intentionally public: anyone who can reach the gateway can read the instance description and exposed agent IDs. Use `exposeAgents` to limit disclosure, and expose the gateway through HTTPS when it is reachable over an untrusted network.

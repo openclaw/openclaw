@@ -1219,7 +1219,7 @@ surfaces:
           reason: none
           human_override: false
   - id: control-ui
-    name: Gateway Web App
+    name: Control UI
     family: core
     level:
       id: beta

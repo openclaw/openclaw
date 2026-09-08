@@ -8,7 +8,7 @@ import type ts from "typescript";
 const require = createRequire(import.meta.url);
 let tsCache: typeof ts | undefined;
 
-function getTypeScript() {
+export function getTypeScript() {
   tsCache ??= require("typescript") as typeof ts;
   return tsCache;
 }
