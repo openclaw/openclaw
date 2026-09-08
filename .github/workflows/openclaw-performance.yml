@@ -730,7 +730,9 @@ jobs:
           fi
 
       - name: Upload Kova artifacts
+        id: upload_kova_artifacts
         if: ${{ always() && steps.lane.outputs.run == 'true' }}
+        continue-on-error: true
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: openclaw-performance-${{ matrix.lane }}-${{ github.run_id }}-${{ github.run_attempt }}
@@ -740,6 +742,19 @@ jobs:
             .artifacts/kova/summaries/${{ matrix.lane }}.md
           if-no-files-found: error
           retention-days: ${{ matrix.deep_profile == 'true' && 14 || 30 }}
+
+      - name: Retry Kova artifact upload
+        if: ${{ always() && steps.lane.outputs.run == 'true' && steps.upload_kova_artifacts.outcome == 'failure' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: openclaw-performance-${{ matrix.lane }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            .artifacts/kova/reports/${{ matrix.lane }}
+            .artifacts/kova/bundles/${{ matrix.lane }}
+            .artifacts/kova/summaries/${{ matrix.lane }}.md
+          if-no-files-found: error
+          retention-days: ${{ matrix.deep_profile == 'true' && 14 || 30 }}
+          overwrite: true
 
   source_performance:
     name: OpenClaw source performance probes
@@ -1070,13 +1085,25 @@ jobs:
           cat "$SOURCE_PERF_DIR/index.md" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload source performance artifacts
+        id: upload_source_performance_artifacts
         if: always()
+        continue-on-error: true
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: openclaw-performance-source-${{ github.run_id }}-${{ github.run_attempt }}
           path: .artifacts/openclaw-performance/source
           if-no-files-found: error
           retention-days: 30
+
+      - name: Retry source performance artifact upload
+        if: ${{ always() && steps.upload_source_performance_artifacts.outcome == 'failure' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: openclaw-performance-source-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .artifacts/openclaw-performance/source
+          if-no-files-found: error
+          retention-days: 30
+          overwrite: true
 
   publish:
     name: Publish ${{ matrix.title }} report

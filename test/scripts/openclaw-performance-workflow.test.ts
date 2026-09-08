@@ -1365,6 +1365,12 @@ printf '%s\\n' \
   it("requires Kova evidence before uploading selected lane artifacts", () => {
     const validateEvidence = findStep("Validate Kova evidence");
     const upload = findStep("Upload Kova artifacts");
+    const retryUpload = findStep("Retry Kova artifact upload");
+    const sourceUpload = findStep("Upload source performance artifacts", "source_performance");
+    const retrySourceUpload = findStep(
+      "Retry source performance artifact upload",
+      "source_performance",
+    );
 
     expect(validateEvidence.if).toContain("always()");
     expect(validateEvidence.if).toContain("steps.lane.outputs.run == 'true'");
@@ -1373,5 +1379,15 @@ printf '%s\\n' \
     expect(validateEvidence.run).toContain('"$SUMMARY_DIR/${LANE_ID}.md"');
     expect(validateEvidence.run).toContain("exit 1");
     expect(upload.with?.["if-no-files-found"]).toBe("error");
+    expect(upload.id).toBe("upload_kova_artifacts");
+    expect(upload["continue-on-error"]).toBe(true);
+    expect(retryUpload.if).toContain("steps.upload_kova_artifacts.outcome == 'failure'");
+    expect(retryUpload.with?.overwrite).toBe(true);
+    expect(sourceUpload.id).toBe("upload_source_performance_artifacts");
+    expect(sourceUpload["continue-on-error"]).toBe(true);
+    expect(retrySourceUpload.if).toContain(
+      "steps.upload_source_performance_artifacts.outcome == 'failure'",
+    );
+    expect(retrySourceUpload.with?.overwrite).toBe(true);
   });
 });
