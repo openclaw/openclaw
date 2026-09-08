@@ -10,7 +10,7 @@ import { summarizeGatewayServiceLayout } from "../../daemon/service-layout.js";
 import type { GatewayServiceCommandConfig } from "../../daemon/service-types.js";
 import { resolveGatewayService } from "../../daemon/service.js";
 import { assertGatewayServiceMutationAllowed } from "../../infra/gateway-supervision.js";
-import { nodeVersionSatisfiesEngine } from "../../infra/runtime-guard.js";
+import { listNodeEngineClauses, nodeVersionSatisfiesEngine } from "../../infra/runtime-guard.js";
 import { parseTcpPortFromArgs } from "../../infra/tcp-port.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { resolveNodeRunner } from "./shared.js";
@@ -144,13 +144,19 @@ export async function resolvePackageRuntimePreflight(params: {
   const runtimeLabel = runtime.nodeRunner
     ? `Node ${runtime.version ?? "unknown"} at ${runtime.nodeRunner}`
     : `Node ${runtime.version ?? "unknown"}`;
+  // The floors must come from the target package's own engine range: the
+  // installed release predates the target, so any literal here is stale as
+  // soon as the target raises its floor.
+  const targetFloors = listNodeEngineClauses(target.nodeEngine)
+    ?.map(({ minimum, below }) => (below ? `Node ${minimum}+ below ${below}` : `Node ${minimum}+`))
+    .join(" or ");
   return resultError(
     [
       `${runtimeLabel} is too old for openclaw@${targetVersion}.`,
       `The requested package requires ${target.nodeEngine}.`,
       runtime.nodeRunner
         ? "Upgrade the Node runtime that owns the managed Gateway service, then rerun `openclaw update`."
-        : "Upgrade to Node 24.16.0+ or Node 26.1.0+, then rerun `openclaw update`.",
+        : `Upgrade to ${targetFloors ?? "a Node version in that range"}, then rerun \`openclaw update\`.`,
       "Bare `npm i -g openclaw` can silently install an older compatible release.",
       "After upgrading Node, use `npm i -g openclaw@latest`.",
     ].join("\n"),

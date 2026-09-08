@@ -172,6 +172,28 @@ function parseMinimumNodeEngine(engine: string | null): Semver | null {
   return parseSemver(match[1] ?? null);
 }
 
+/**
+ * Lists each `||` clause of a supported engine range as its minimum version
+ * and optional exclusive upper bound, in range order, or null when any
+ * clause uses unsupported syntax.
+ */
+export function listNodeEngineClauses(
+  engine: string | null,
+): Array<{ minimum: string; below?: string }> | null {
+  if (!engine) {
+    return null;
+  }
+  const clauses: Array<{ minimum: string; below?: string }> = [];
+  for (const clause of engine.split("||")) {
+    const match = clause.match(ENGINE_CLAUSE_RE);
+    if (!match?.[1]) {
+      return null;
+    }
+    clauses.push(match[2] ? { minimum: match[1], below: match[2] } : { minimum: match[1] });
+  }
+  return clauses;
+}
+
 /** Returns whether a Node version satisfies a supported engine range, or null if unsupported. */
 export function nodeVersionSatisfiesEngine(
   version: string | null,
