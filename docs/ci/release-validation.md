@@ -46,6 +46,15 @@ Full Release Validation run ID and pin `full_release_validation_run_attempt`.
 The publisher resolves the independent `Full Release Artifacts` producer from
 that validation manifest's sealed `publicationArtifacts.npmPreflight` descriptor.
 The producer ID alone does not carry Full Release Validation authorization.
+
+`Docker Release` requests the `docker-release` environment approval in a
+separate job after source identity and image preparation succeed (or prepared
+artifacts are supplied). Approval waits stay outside `docker-release-publish`;
+only the approved publisher enters that global registry/alias lock. It then
+revalidates the immutable source, prepared artifacts, attestations and alias
+state before writing. Docker Hub credentials remain required caller-provided
+secrets. Failed preparation, denied approval and cancellation cannot publish.
+
 Historical recovery may still supply a separate successful `OpenClaw NPM Release`
 preflight run ID alongside the matching successful Full Release Validation run
 and attempt. Create the tooling tag with the [release publish commands](/reference/RELEASING#regular-release-publish-automation);
