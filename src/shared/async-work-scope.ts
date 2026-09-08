@@ -50,6 +50,14 @@ export class AsyncWorkScope {
     this.controller.abort(reason);
   }
 
+  /** Starts the next phase in the same continuation that observes settled pending work. */
+  async runWhenIdle<T>(run: () => T | Promise<T>): Promise<T> {
+    do {
+      await Promise.allSettled(this.pending);
+    } while (this.pending.size > 0);
+    return this.track(run);
+  }
+
   async drain(): Promise<void> {
     this.beginClose();
     // An admitted parent can register a cleanup tail while it settles.

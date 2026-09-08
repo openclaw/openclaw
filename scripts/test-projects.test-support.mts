@@ -31,6 +31,7 @@ import {
 import { codexExtensionTestRoots } from "../test/vitest/vitest.extension-codex-paths.mjs";
 import { matrixExtensionTestRoots } from "../test/vitest/vitest.extension-matrix-paths.mjs";
 import { telegramExtensionTestRoots } from "../test/vitest/vitest.extension-telegram-paths.mjs";
+import { packageContractTestFiles } from "../test/vitest/vitest.package-contract-paths.mjs";
 import { resolveVitestFsModuleCacheRoot } from "../test/vitest/vitest.performance-config.ts";
 import {
   isPluginSdkLightTarget,
@@ -85,7 +86,11 @@ import {
 import { readTestSelectorSourceFacts } from "./lib/test-selector-source-facts.mts";
 // CI imports planning before dependency installation; execution owners stay outside this closure.
 import { resolveVitestCliEntry } from "./lib/vitest-build-prerequisites.mts";
-import { resolveBooleanModeFlag, vitestOptionConsumesNextArg } from "./lib/vitest-cli-mode.mts";
+import {
+  collectVitestFileFilters,
+  resolveBooleanModeFlag,
+  vitestOptionConsumesNextArg,
+} from "./lib/vitest-cli-mode.mts";
 import {
   isCiLikeEnv,
   resolveLocalFullSuiteProfile,
@@ -427,12 +432,10 @@ const RUNTIME_CONFIG_VITEST_CONFIG = "test/vitest/vitest.runtime-config.config.t
 const SECRETS_VITEST_CONFIG = "test/vitest/vitest.secrets.config.ts";
 const SHARED_CORE_VITEST_CONFIG = "test/vitest/vitest.shared-core.config.ts";
 const TASKS_VITEST_CONFIG = "test/vitest/vitest.tasks.config.ts";
-const PACKAGE_DOCKER_VITEST_CONFIG = "test/vitest/vitest.package-docker.config.ts";
+const PACKAGE_CONTRACT_VITEST_CONFIG = "test/vitest/vitest.package-contract.config.ts";
 const TOOLING_DOCKER_VITEST_CONFIG = "test/vitest/vitest.tooling-docker.config.ts";
 const TOOLING_ISOLATED_VITEST_CONFIG = "test/vitest/vitest.tooling-isolated.config.ts";
 const TOOLING_VITEST_CONFIG = "test/vitest/vitest.tooling.config.ts";
-const PACKAGE_DOCKER_TEST_TARGET =
-  "test/e2e/qa-lab/runtime/package-openclaw-for-docker.e2e.test.ts";
 const TOOLING_DOCKER_TEST_TARGET = "test/scripts/docker-build-helper.test.ts";
 const BROAD_TOOLING_SCRIPT_TEST_PATTERNS = new Set([
   "test/scripts/**/*.test.ts",
@@ -480,7 +483,7 @@ const VITEST_CONFIG_BY_KIND: Record<string, string> = {
   daemon: DAEMON_VITEST_CONFIG,
   media: MEDIA_VITEST_CONFIG,
   logging: LOGGING_VITEST_CONFIG,
-  packageDocker: PACKAGE_DOCKER_VITEST_CONFIG,
+  packageContract: PACKAGE_CONTRACT_VITEST_CONFIG,
   pluginSdkLight: PLUGIN_SDK_LIGHT_VITEST_CONFIG,
   pluginSdk: PLUGIN_SDK_VITEST_CONFIG,
   process: PROCESS_VITEST_CONFIG,
@@ -3482,8 +3485,8 @@ function classifyTarget(arg: string, cwd: string) {
   if (isControlUiE2eTarget(relative)) {
     return "uiE2e";
   }
-  if (relative === PACKAGE_DOCKER_TEST_TARGET) {
-    return "packageDocker";
+  if (packageContractTestFiles.includes(relative)) {
+    return "packageContract";
   }
   if (isUiIsolatedTestFile(relative)) {
     return "uiIsolated";
@@ -3839,31 +3842,47 @@ export function buildVitestRunPlans(
   }
 
   const nonTargetArgs = changedTargetArgs !== null ? activeForwardedArgs : remainingArgs;
-  const explicitConfigTargets = activeTargetArgs.map((targetArg) =>
-    toRepoRelativeTarget(targetArg, cwd),
+  const classifiedTargets = activeTargetArgs.map((targetArg) => ({
+    targetArg,
+    relative: toRepoRelativeTarget(targetArg, cwd),
+    kind: classifyTarget(targetArg, cwd),
+  }));
+  const explicitConfigTargets = classifiedTargets.map(({ relative }) => relative);
+  const hasPackageFileTarget = classifiedTargets.some(
+    ({ kind, relative }) =>
+      kind === "packageContract" && relative !== PACKAGE_CONTRACT_VITEST_CONFIG,
   );
+  // The wrapper removes its separator; remaining positional filters can widen
+  // a package file run beyond the package inventory. Option operands cannot.
+  const hasE2eTarget =
+    classifiedTargets.some(({ kind }) => kind === "e2e") ||
+    (!explicitConfigTargets.includes(PACKAGE_CONTRACT_VITEST_CONFIG) &&
+      hasPackageFileTarget &&
+      collectVitestFileFilters(["run", ...nonTargetArgs]).length > 0);
   if (explicitConfigTargets.every(isVitestConfigFileTarget)) {
     if (watchMode && explicitConfigTargets.length > 1) {
       throw new Error(
         "watch mode with mixed test suites is not supported; target one suite at a time or use a dedicated suite command",
       );
     }
-    return explicitConfigTargets.flatMap((config) =>
-      createBoundedExtensionPlans(
-        {
-          config,
-          forwardedArgs: nonTargetArgs,
-          includePatterns: null,
-          watchMode,
-        },
-        options.env,
-      ),
-    );
+    return explicitConfigTargets
+      .filter((config) => !hasE2eTarget || config !== PACKAGE_CONTRACT_VITEST_CONFIG)
+      .flatMap((config) =>
+        createBoundedExtensionPlans(
+          {
+            config,
+            forwardedArgs: nonTargetArgs,
+            includePatterns: null,
+            watchMode,
+          },
+          options.env,
+        ),
+      );
   }
 
   const groupedTargets = new Map<string, string[]>();
-  for (const targetArg of activeTargetArgs) {
-    if (!watchMode && toRepoRelativeTarget(targetArg, cwd) === AGENTS_EMBEDDED_AGENT_TEST_ROOT) {
+  for (const { targetArg, relative, kind: targetKind } of classifiedTargets) {
+    if (!watchMode && relative === AGENTS_EMBEDDED_AGENT_TEST_ROOT) {
       // The recursive parent spans four harness owners; keep every isolated project intact.
       for (const { kind, include: targets } of embeddedAgentVitestProjectOwners) {
         const current = groupedTargets.get(kind) ?? [];
@@ -3877,9 +3896,15 @@ export function buildVitestRunPlans(
       continue;
     }
 
-    const kind = classifyTarget(targetArg, cwd);
+    // Package builds clean shared outputs. Mixed E2E selections keep their
+    // original serial owner instead of introducing a concurrent artifact writer.
+    const kind = hasE2eTarget && targetKind === "packageContract" ? "e2e" : targetKind;
     const current = groupedTargets.get(kind) ?? [];
-    current.push(targetArg);
+    current.push(
+      ...(hasE2eTarget && relative === PACKAGE_CONTRACT_VITEST_CONFIG
+        ? packageContractTestFiles
+        : [targetArg]),
+    );
     groupedTargets.set(kind, current);
   }
   const toolingTargets = groupedTargets.get("tooling") ?? [];
@@ -3995,14 +4020,15 @@ export function buildVitestRunPlans(
     const config = VITEST_CONFIG_BY_KIND[kind] ?? DEFAULT_VITEST_CONFIG;
     const useCliTargetArgs =
       kind === "e2e" ||
-      kind === "packageDocker" ||
+      kind === "packageContract" ||
       grouped.every((targetArg) => isCanonicalAgentOwnerDirectoryTarget(targetArg, cwd)) ||
       (kind === "default" &&
         grouped.every((targetArg) => isFileLikeTarget(toRepoRelativeTarget(targetArg, cwd))));
     const useWholeConfigTarget = grouped.some((targetArg) =>
       shouldUseWholeConfigTarget(kind, targetArg, cwd),
     );
-    const scopedTargetArgs = useCliTargetArgs ? uniqueOrdered(grouped) : [];
+    const scopedTargetArgs =
+      useCliTargetArgs && !useWholeConfigTarget ? uniqueOrdered(grouped) : [];
     const forwardedPlanArgs = [...nonTargetArgs, ...scopedTargetArgs];
     const unitCliIncludes =
       kind === "default" &&

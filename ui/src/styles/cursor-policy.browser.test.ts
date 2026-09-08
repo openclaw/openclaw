@@ -107,7 +107,8 @@ function fixtureDocument(): string {
       <aside class="sidebar">
         <a class="nav-item" href="/chat"><span class="nav-item__text">Home</span></a>
         <a class="sidebar-recent-session__link" href="/chat/test"><span class="sidebar-recent-session__name">Session</span></a>
-        <a class="sidebar-online__person" href="/activity">Person</a>
+        <a class="sidebar-online__person" href="/activity"><span class="sidebar-online__person-name">Person</span></a>
+        <button class="sidebar-online__person" type="button"><span class="sidebar-online__person-name">Viewer</span></button>
         <a class="sidebar-brand__new-thread" href="/new">New session</a>
         <a class="sidebar-new-session" href="/new">New group session</a>
         <a class="sidebar-session-catalog-new" href="/new">New catalog session</a>
@@ -215,6 +216,33 @@ afterAll(async () => {
 });
 
 describeCursorPolicy("Control UI cursor policy", () => {
+  it("keeps Online names undecorated for links and buttons", async () => {
+    const page = await tabBrowser.newPage();
+    try {
+      await page.goto(`file://${fixtureFile}`);
+      const people = await page.locator(".sidebar-online__person").all();
+      expect(people).toHaveLength(2);
+      for (const person of people) {
+        // Ancestor decorations propagate visually without inheriting the computed value.
+        expect(
+          await person.evaluate((element) => getComputedStyle(element).textDecorationLine),
+        ).toBe("none");
+        expect(
+          await person
+            .locator(".sidebar-online__person-name")
+            .evaluate((element) => getComputedStyle(element).textDecorationLine),
+        ).toBe("none");
+      }
+      expect(
+        await page
+          .locator("#real-link")
+          .evaluate((element) => getComputedStyle(element).textDecorationLine),
+      ).toBe("underline");
+    } finally {
+      await page.close().catch(() => {});
+    }
+  });
+
   it("uses semantic cursors in a browser tab", async () => {
     const page = await tabBrowser.newPage();
     try {

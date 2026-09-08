@@ -345,11 +345,13 @@ if [ "${OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE:-0}" = "1" ]; then
     -e OPENCLAW_UPGRADE_SURVIVOR_STATUS_BUDGET_SECONDS="$STATUS_BUDGET_SECONDS" \
     -e OPENCLAW_UPGRADE_SURVIVOR_CLAWHUB_FIXTURE_SERVER=/tmp/openclaw-clawhub-fixture-server.cjs \
     -e OPENCLAW_UPGRADE_SURVIVOR_CONFIG_PARKING_HELPER=/tmp/openclaw-config-parking.mjs \
+    -e OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_SERVER_SCRIPT=/tmp/openclaw-release-harness/scripts/e2e/lib/plugins/npm-registry-server.mjs \
     "${PROBE_ENV_ARGS[@]}" \
     ${LIVE_OPENAI_ENV_ARGS[@]+"${LIVE_OPENAI_ENV_ARGS[@]}"} \
     -v "$ARTIFACT_DIR:/tmp/openclaw-upgrade-survivor-artifacts" \
     -v "$HARNESS_ROOT_DIR/scripts/e2e/lib/clawhub-fixture-server.cjs:/tmp/openclaw-clawhub-fixture-server.cjs:ro" \
     -v "$HARNESS_ROOT_DIR/scripts/e2e/lib/upgrade-survivor/config-parking.mjs:/tmp/openclaw-config-parking.mjs:ro" \
+    -v "$HARNESS_ROOT_DIR/scripts:/tmp/openclaw-release-harness/scripts:ro" \
     -v "$UPGRADE_RUNNER:/tmp/openclaw-upgrade-survivor-run.sh:ro" \
     ${UPGRADE_SCENARIO_ARGS[@]+"${UPGRADE_SCENARIO_ARGS[@]}"} \
     ${DOCKER_E2E_PACKAGE_ARGS[@]+"${DOCKER_E2E_PACKAGE_ARGS[@]}"} \
@@ -397,10 +399,12 @@ docker_e2e_run_with_harness \
   -e OPENCLAW_UPGRADE_SURVIVOR_STATUS_BUDGET_SECONDS="$STATUS_BUDGET_SECONDS" \
   -e OPENCLAW_UPGRADE_SURVIVOR_CLAWHUB_FIXTURE_SERVER=/tmp/openclaw-clawhub-fixture-server.cjs \
   -e OPENCLAW_UPGRADE_SURVIVOR_CONFIG_PARKING_HELPER=/tmp/openclaw-config-parking.mjs \
+  -e OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_SERVER_SCRIPT=/tmp/openclaw-release-harness/scripts/e2e/lib/plugins/npm-registry-server.mjs \
   "${PROBE_ENV_ARGS[@]}" \
   -v "$ARTIFACT_DIR:/tmp/openclaw-upgrade-survivor-artifacts" \
   -v "$HARNESS_ROOT_DIR/scripts/e2e/lib/clawhub-fixture-server.cjs:/tmp/openclaw-clawhub-fixture-server.cjs:ro" \
   -v "$HARNESS_ROOT_DIR/scripts/e2e/lib/upgrade-survivor/config-parking.mjs:/tmp/openclaw-config-parking.mjs:ro" \
+  -v "$HARNESS_ROOT_DIR/scripts:/tmp/openclaw-release-harness/scripts:ro" \
   ${UPGRADE_SCENARIO_ARGS[@]+"${UPGRADE_SCENARIO_ARGS[@]}"} \
   ${DOCKER_E2E_PACKAGE_ARGS[@]+"${DOCKER_E2E_PACKAGE_ARGS[@]}"} \
   ${DOCKER_RUN_USER_ARGS[@]+"${DOCKER_RUN_USER_ARGS[@]}"} \

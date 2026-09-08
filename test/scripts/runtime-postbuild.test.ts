@@ -1,4 +1,6 @@
 // Runtime Postbuild tests cover runtime postbuild script behavior.
+import childProcess from "node:child_process";
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -10,6 +12,14 @@ import {
   discoverStaticExtensionAssets,
 } from "../../scripts/lib/static-extension-assets.mts";
 import {
+  parseUpdateCompatibilityInventory,
+  readUpdateCompatibilityInventory,
+  recordUpdateCompatibilityRelease,
+  writeUpdateCompatibilityChunks,
+  type UpdateCompatibilityInventory,
+  type UpdateCompatibilityRelease,
+} from "../../scripts/lib/update-compat-chunks.mts";
+import {
   rewriteRootRuntimeImportsToStableAliases,
   runRuntimePostBuild,
   writeLegacyCliExitCompatChunks,
@@ -19,6 +29,10 @@ import {
 import { expectNoNodeFsScans } from "../../src/test-utils/fs-scan-assertions.js";
 import { readBuildIdFromBuildInfoForModuleUrl } from "../../src/version.js";
 import { createScriptTestHarness } from "./test-helpers.js";
+import {
+  previousReleaseInventory,
+  writeUpdateCompatibilityBuildFixture,
+} from "./update-compat-chunks.test-support.js";
 
 const { createTempDir } = createScriptTestHarness();
 const MODULE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
@@ -72,6 +86,7 @@ async function writeExportHtmlBuildFixture(rootDir: string): Promise<void> {
 describe("runtime postbuild static assets", () => {
   it("copies bundled hook metadata without replacing compiled handlers", async () => {
     const rootDir = createTempDir("openclaw-runtime-postbuild-hooks-");
+    writeUpdateCompatibilityBuildFixture(rootDir);
     const sourceHookDir = path.join(rootDir, "src", "hooks", "bundled", "session-memory");
     const distHookDir = path.join(rootDir, "dist", "bundled", "session-memory");
     await fs.mkdir(sourceHookDir, { recursive: true });
@@ -280,6 +295,7 @@ describe("runtime postbuild static assets", () => {
     );
     await fs.writeFile(path.join(rootDir, source), "export const viewer = true;\n", "utf8");
 
+    writeUpdateCompatibilityBuildFixture(rootDir);
     runRuntimePostBuild({
       cwd: rootDir,
       repoRoot: rootDir,
@@ -303,6 +319,7 @@ describe("runtime postbuild static assets", () => {
     );
     const moduleSentinelPath = path.join(MODULE_ROOT, sentinelDest);
     await writeExportHtmlBuildFixture(rootDir);
+    writeUpdateCompatibilityBuildFixture(rootDir);
     await expectPathMissing(moduleSentinelPath);
 
     try {
@@ -349,6 +366,7 @@ describe("runtime postbuild static assets", () => {
     const cwd = createTempDir("openclaw-runtime-postbuild-rejected-cwd-");
     const repoRoot = createTempDir("openclaw-runtime-postbuild-rejected-repo-");
     await writeExportHtmlBuildFixture(rootDir);
+    writeUpdateCompatibilityBuildFixture(rootDir);
 
     runRuntimePostBuild({
       cwd,
@@ -421,6 +439,7 @@ describe("runtime postbuild static assets", () => {
     );
     await fs.writeFile(path.join(distPluginDir, output), "console.log('viewer');\n", "utf8");
 
+    writeUpdateCompatibilityBuildFixture(rootDir);
     runRuntimePostBuild({
       cwd: rootDir,
       repoRoot: rootDir,
@@ -433,6 +452,7 @@ describe("runtime postbuild static assets", () => {
 
   it("can skip static asset copies for minimal runtime builds", async () => {
     const rootDir = createTempDir("openclaw-runtime-postbuild-");
+    writeUpdateCompatibilityBuildFixture(rootDir);
     const warn = vi.fn();
     const output = "assets/viewer-runtime.js";
 
@@ -1159,7 +1179,28 @@ describe("runtime postbuild static assets", () => {
     }
   });
 
-  it.each(["shared-Y6bNiw2w.js", "shared-DTaQo6Hi.js", "shared-DFJEouXv.js"])(
+  it("keeps every recorded previous-release lazy import loadable after replacement", async () => {
+    const rootDir = createTempDir("openclaw-runtime-postbuild-update-compat-");
+    writeUpdateCompatibilityBuildFixture(rootDir);
+    runRuntimePostBuild({
+      rootDir,
+      env: { OPENCLAW_RUNTIME_POSTBUILD_STATIC_ASSETS: "0" },
+      timings: false,
+    });
+
+    for (const release of previousReleaseInventory.releases) {
+      for (const chunk of release.chunks) {
+        const loaded = await import(pathToFileURL(path.join(rootDir, "dist", chunk.path)).href);
+        for (const { exported, origin } of chunk.exports) {
+          expect(loaded[exported](), `${release.version}: ${chunk.path}:${exported}`).toBe(
+            origin.symbol,
+          );
+        }
+      }
+    }
+  });
+
+  it.each(["shared-Y6bNiw2w.js", "shared-DTaQo6Hi.js"])(
     "preserves the old updater node-runner ABI through %s",
     async (chunk) => {
       const rootDir = createTempDir("openclaw-runtime-postbuild-");
@@ -1170,4 +1211,572 @@ describe("runtime postbuild static assets", () => {
       expect(bridge.resolveNodeRunner()).toBe(process.execPath);
     },
   );
+});
+
+describe("previous release update compatibility", () => {
+  const integrity = `sha512-${Buffer.alloc(64).toString("base64")}`;
+
+  function write(root: string, relative: string, contents: string): void {
+    const file = path.join(root, relative);
+    fsSync.mkdirSync(path.dirname(file), { recursive: true });
+    fsSync.writeFileSync(file, contents);
+  }
+
+  function recordFixture(): UpdateCompatibilityInventory & {
+    releases: [UpdateCompatibilityRelease];
+  } {
+    const root = createTempDir("update-compat-release-");
+    write(root, "package.json", JSON.stringify({ name: "openclaw", version: "2026.9.1" }));
+    write(
+      root,
+      "dist/build-info.json",
+      JSON.stringify({ version: "2026.9.1", buildId: "fixture", commit: "0".repeat(40) }),
+    );
+    write(
+      root,
+      "dist/command.js",
+      [
+        "//#region src/cli/update-cli/update-command-service-command.ts",
+        'export async function restart() { return (await import("./service-abcdefgh.js")).runner(); }',
+        'export async function recover() { const { mode: selected } = await import("./service-abcdefgh.js"); return selected(); }',
+      ].join("\n"),
+    );
+    write(
+      root,
+      "dist/service-abcdefgh.js",
+      'export { r as runner, m as mode } from "./implementation-12345678.js";',
+    );
+    write(
+      root,
+      "dist/implementation-12345678.js",
+      [
+        "//#region src/cli/update-cli/runner.ts",
+        'function resolveRunner() { return "old"; }',
+        "//#region src/cli/update-cli/recovery.ts",
+        'function resolveMode() { return "old"; }',
+        "export { resolveRunner as r, resolveMode as m };",
+      ].join("\n"),
+    );
+    return {
+      schemaVersion: 1,
+      releases: [recordUpdateCompatibilityRelease({ packageDir: root, integrity })],
+    };
+  }
+
+  function candidate(root: string): void {
+    write(root, "src/cli/update-cli/recovery.ts", 'import { resolveMode } from "./mode.js";');
+    write(root, "src/cli/update-cli/mode.ts", 'export function resolveMode() { return "npm"; }');
+    write(
+      root,
+      "dist/current.mjs",
+      [
+        "//#region src/cli/update-cli/runner.ts",
+        'function resolveRunner() { return "node"; }',
+        "//#region src/cli/update-cli/mode.ts",
+        'function resolveMode() { return "npm"; }',
+        "export { resolveRunner as x, resolveMode as y };",
+      ].join("\n"),
+    );
+  }
+
+  function recordImportedFixture(expression: string, modules: Record<string, string>) {
+    const root = createTempDir("update-compat-import-graph-");
+    write(
+      root,
+      "package.json",
+      JSON.stringify({ name: "openclaw", version: "2026.9.1", type: "module" }),
+    );
+    write(
+      root,
+      "dist/build-info.json",
+      JSON.stringify({ version: "2026.9.1", buildId: "fixture", commit: "0".repeat(40) }),
+    );
+    write(
+      root,
+      "dist/command.js",
+      [
+        "//#region src/cli/update-cli/update-command-service-command.ts",
+        `export async function restart() { return ${expression}; }`,
+      ].join("\n"),
+    );
+    for (const [file, source] of Object.entries(modules)) {
+      write(root, `dist/${file}`, source);
+    }
+    const inventory: UpdateCompatibilityInventory = {
+      schemaVersion: 1,
+      releases: [recordUpdateCompatibilityRelease({ packageDir: root, integrity })],
+    };
+    return { root, inventory };
+  }
+
+  it.each([
+    {
+      access: "then",
+      expression: 'import("./surface-abcdefgh.js").then((module) => module.x)',
+      names: ["x", "y"],
+    },
+    {
+      access: "catch",
+      expression: 'import("./surface-abcdefgh.js").catch(() => undefined)',
+      names: ["x", "y"],
+    },
+    {
+      access: "finally",
+      expression: 'import("./surface-abcdefgh.js").finally(() => undefined)',
+      names: ["x", "y"],
+    },
+    {
+      access: "awaited property",
+      expression: '(await import("./surface-abcdefgh.js")).x',
+      names: ["x"],
+    },
+    {
+      access: "awaited bracket",
+      expression: '(await import("./surface-abcdefgh.js"))["x"]',
+      names: ["x"],
+    },
+  ])(
+    "records namespace exports instead of Promise methods for $access access",
+    ({ expression, names }) => {
+      const { inventory } = recordImportedFixture(expression, {
+        "surface-abcdefgh.js":
+          "//#region src/infra/values.ts\nconst x = 1; const y = 2; export { x, y };\n",
+      });
+      expect(inventory.releases[0]?.chunks).toMatchObject([
+        {
+          path: "surface-abcdefgh.js",
+          imports: [{ exports: names }],
+          exports: names.map((exported) => ({
+            exported,
+            origin: { module: "src/infra/values.ts", symbol: exported },
+          })),
+        },
+      ]);
+    },
+  );
+
+  it.each(["distinct owners", "the same source annotation"])(
+    "rejects conflicting emitted star bindings with %s and names both sources",
+    (annotation) => {
+      const leftOwner = annotation === "the same source annotation" ? "shared" : "left";
+      const rightOwner = annotation === "the same source annotation" ? "shared" : "right";
+      expect(() =>
+        recordImportedFixture('(await import("./surface-abcdefgh.js")).x', {
+          "surface-abcdefgh.js": 'export * from "./left.mjs"; export * from "./right.mjs";\n',
+          "left.mjs": `//#region src/infra/${leftOwner}.ts\nexport const x = "left";\n`,
+          "right.mjs": `//#region src/infra/${rightOwner}.ts\nexport const x = "right";\n`,
+        }),
+      ).toThrow(/(?=[\s\S]*left\.mjs)(?=[\s\S]*right\.mjs)/);
+    },
+  );
+
+  it("resolves a star diamond to the single declaration shared by both paths", async () => {
+    const { root, inventory } = recordImportedFixture('(await import("./surface-abcdefgh.js")).x', {
+      "surface-abcdefgh.js": 'export * from "./left.mjs"; export * from "./right.mjs";\n',
+      "left.mjs": 'export { x } from "./origin.mjs";\n',
+      "right.mjs": 'export * from "./origin.mjs";\n',
+      "origin.mjs": '//#region src/infra/origin.ts\nexport const x = { value: "shared" };\n',
+    });
+    const namespace = await import(pathToFileURL(path.join(root, "dist/surface-abcdefgh.js")).href);
+    const declaration = await import(pathToFileURL(path.join(root, "dist/origin.mjs")).href);
+    expect(namespace.x).toBe(declaration.x);
+    expect(inventory.releases[0]?.chunks[0]?.exports).toEqual([
+      { exported: "x", origin: { module: "src/infra/origin.ts", symbol: "x" } },
+    ]);
+  });
+
+  it("lets an explicit export resolve an otherwise ambiguous star name", async () => {
+    const { root, inventory } = recordImportedFixture('(await import("./surface-abcdefgh.js")).x', {
+      "surface-abcdefgh.js":
+        'export * from "./left.mjs"; export * from "./right.mjs"; export { x } from "./left.mjs";\n',
+      "left.mjs": '//#region src/infra/left.ts\nexport const x = "left";\n',
+      "right.mjs": '//#region src/infra/right.ts\nexport const x = "right";\n',
+    });
+    const namespace = await import(pathToFileURL(path.join(root, "dist/surface-abcdefgh.js")).href);
+    expect(namespace.x).toBe("left");
+    expect(inventory.releases[0]?.chunks[0]?.exports).toEqual([
+      { exported: "x", origin: { module: "src/infra/left.ts", symbol: "x" } },
+    ]);
+  });
+
+  it.each(["surface.js", "surface-abcdefgh.js"])(
+    "rejects an existing %s whose star ambiguity omits the required export",
+    (target) => {
+      const { inventory } = recordImportedFixture(`(await import("./${target}")).x`, {
+        [target]: '//#region src/infra/original.ts\nexport const x = "original";\n',
+      });
+      const root = createTempDir("update-compat-existing-stars-");
+      write(root, "package.json", '{"type":"module"}\n');
+      write(root, `dist/${target}`, 'export * from "./left.mjs"; export * from "./right.mjs";\n');
+      write(root, "dist/left.mjs", '//#region src/infra/original.ts\nexport const x = "left";\n');
+      write(root, "dist/right.mjs", '//#region src/infra/other.ts\nexport const x = "right";\n');
+      const namespaceHasX = childProcess.execFileSync(
+        process.execPath,
+        [
+          "--input-type=module",
+          "-e",
+          'const namespace = await import(process.argv[1]); console.log(Object.hasOwn(namespace, "x"));',
+          pathToFileURL(path.join(root, "dist", target)).href,
+        ],
+        { encoding: "utf8" },
+      );
+      expect(namespaceHasX.trim()).toBe("false");
+      expect(() =>
+        writeUpdateCompatibilityChunks({
+          distDir: path.join(root, "dist"),
+          sourceDir: root,
+          inventory,
+        }),
+      ).toThrow(`${target} lacks x`);
+    },
+  );
+
+  it.each([
+    {
+      route: "source star forwarding",
+      owner: 'export * from "./moved.js";\n',
+      module: "src/infra/moved.ts",
+      symbol: "oldName",
+    },
+    {
+      route: "a local export alias",
+      owner: 'function newName() { return "current"; } export { newName as oldName };\n',
+      module: "src/infra/old.ts",
+      symbol: "newName",
+    },
+  ])("bridges a moved declaration through $route", async ({ owner, module, symbol }) => {
+    const { inventory } = recordImportedFixture('(await import("./surface-abcdefgh.js")).x', {
+      "surface-abcdefgh.js":
+        '//#region src/infra/old.ts\nfunction oldName() { return "old"; } export { oldName as x };\n',
+    });
+    const root = createTempDir("update-compat-source-forwarding-");
+    write(root, "package.json", '{"type":"module"}\n');
+    write(root, "src/infra/old.ts", owner);
+    if (module !== "src/infra/old.ts") {
+      write(root, module, 'export function oldName() { return "current"; }\n');
+    }
+    write(
+      root,
+      "dist/current.mjs",
+      `//#region ${module}\nfunction ${symbol}() { return "current"; } export { ${symbol} as n };\n`,
+    );
+    writeUpdateCompatibilityChunks({
+      distDir: path.join(root, "dist"),
+      sourceDir: root,
+      inventory,
+    });
+    const bridge = await import(pathToFileURL(path.join(root, "dist/surface-abcdefgh.js")).href);
+    expect(bridge.x()).toBe("current");
+  });
+
+  it("refuses ambiguous source stars and names both possible declaration owners", () => {
+    const { inventory } = recordImportedFixture('(await import("./surface-abcdefgh.js")).x', {
+      "surface-abcdefgh.js":
+        '//#region src/infra/old.ts\nfunction oldName() { return "old"; } export { oldName as x };\n',
+    });
+    const root = createTempDir("update-compat-source-conflict-");
+    write(root, "src/infra/old.ts", 'export * from "./left.js"; export * from "./right.js";\n');
+    for (const side of ["left", "right"]) {
+      write(root, `src/infra/${side}.ts`, `export function oldName() { return "${side}"; }\n`);
+      write(
+        root,
+        `dist/${side}.mjs`,
+        `//#region src/infra/${side}.ts\nfunction oldName() { return "${side}"; } export { oldName as n };\n`,
+      );
+    }
+    expect(() =>
+      writeUpdateCompatibilityChunks({
+        distDir: path.join(root, "dist"),
+        sourceDir: root,
+        inventory,
+      }),
+    ).toThrow(/(?=[\s\S]*left\.ts)(?=[\s\S]*right\.ts)/);
+    expect(fsSync.existsSync(path.join(root, "dist/surface-abcdefgh.js"))).toBe(false);
+  });
+
+  function writeWindowInventory(root: string): string {
+    const release = recordFixture().releases[0];
+    const output = path.join(root, "inventory.json");
+    write(
+      root,
+      "inventory.json",
+      JSON.stringify({
+        schemaVersion: 1,
+        releases: [
+          release,
+          { ...release, version: "2026.9.2", chunks: [] },
+          { ...release, version: "2026.9.3", chunks: [] },
+        ],
+      }),
+    );
+    return output;
+  }
+
+  function runInventoryCli(
+    args: string[],
+    replies: Array<{ args: string[]; value: unknown }> = [],
+  ) {
+    const root = createTempDir("update-compat-npm-");
+    const bin = path.join(root, "bin");
+    const callsFile = path.join(root, "calls.json");
+    const stub = path.join(bin, "npm.cjs");
+    write(
+      root,
+      "bin/npm.cjs",
+      [
+        `#!${process.execPath}`,
+        'const fs = require("node:fs");',
+        `const callsFile = ${JSON.stringify(callsFile)};`,
+        `const replies = ${JSON.stringify(replies)};`,
+        'const calls = fs.existsSync(callsFile) ? JSON.parse(fs.readFileSync(callsFile, "utf8")) : [];',
+        "const args = process.argv.slice(2);",
+        "const reply = replies[calls.length];",
+        "calls.push(args);",
+        "fs.writeFileSync(callsFile, JSON.stringify(calls));",
+        'if (!reply || JSON.stringify(reply.args) !== JSON.stringify(args)) throw new Error("unexpected npm call: " + JSON.stringify(args));',
+        "console.log(JSON.stringify(reply.value));",
+      ].join("\n"),
+    );
+    if (process.platform === "win32") {
+      write(root, "bin/npm.cmd", `@"${process.execPath}" "${stub}" %*\r\n`);
+    } else {
+      fsSync.copyFileSync(stub, path.join(bin, "npm"));
+      fsSync.chmodSync(path.join(bin, "npm"), 0o755);
+    }
+    const result = childProcess.spawnSync(
+      process.execPath,
+      [path.join(MODULE_ROOT, "scripts/update-compat-inventory.mts"), ...args],
+      {
+        encoding: "utf8",
+        env: { ...process.env, PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}` },
+        timeout: 30_000,
+      },
+    );
+    const calls: unknown = fsSync.existsSync(callsFile)
+      ? JSON.parse(fsSync.readFileSync(callsFile, "utf8"))
+      : [];
+    return { result, calls };
+  }
+
+  it("records an ordered supported window, including releases without post-swap imports, offline", () => {
+    const root = createTempDir("update-compat-window-");
+    const output = path.join(root, "inventory.json");
+    const args = ["--output", output];
+    for (const version of ["2026.9.3", "2026.9.1", "2026.9.2"]) {
+      const packageDir = path.join(root, version);
+      write(packageDir, "package.json", JSON.stringify({ name: "openclaw", version }));
+      write(
+        packageDir,
+        "dist/build-info.json",
+        JSON.stringify({ version, buildId: version, commit: "0".repeat(40) }),
+      );
+      write(packageDir, "dist/entry.js", "export {};\n");
+      args.push("--release", `${packageDir}=${integrity}`);
+    }
+    const generated = runInventoryCli(args);
+    expect(generated.result.status, generated.result.stderr).toBe(0);
+    expect(generated.calls).toEqual([]);
+    expect(
+      readUpdateCompatibilityInventory(output).releases.map(({ version, chunks }) => ({
+        version,
+        chunks,
+      })),
+    ).toEqual([
+      { version: "2026.9.1", chunks: [] },
+      { version: "2026.9.2", chunks: [] },
+      { version: "2026.9.3", chunks: [] },
+    ]);
+    const checked = runInventoryCli([...args, "--check"]);
+    expect(checked.result.status, checked.result.stderr).toBe(0);
+    expect(checked.calls).toEqual([]);
+  });
+
+  it.each(["npm 11", "npm 12"])(
+    "checks %s latest and beta coverage without refetching recorded integrity",
+    (npmVersion) => {
+      const output = writeWindowInventory(createTempDir("update-compat-tag-coverage-"));
+      const tags = { latest: "2026.9.3", beta: "2026.9.2" };
+      const npmArgs = ["view", "openclaw", "dist-tags", "--json"];
+      const { result, calls } = runInventoryCli(
+        ["--check", "--output", output],
+        [{ args: npmArgs, value: npmVersion === "npm 12" ? [tags] : tags }],
+      );
+      expect(result.status, result.stderr).toBe(0);
+      expect(calls).toEqual([npmArgs]);
+    },
+  );
+
+  it.each([
+    { latest: "2026.9.3", beta: "2026.9.4-beta.1", missing: "2026.9.4-beta.1" },
+    { latest: "2026.9.4", beta: "2026.9.4", missing: "2026.9.4" },
+  ])(
+    "prints a complete refresh command when $missing leaves the window",
+    ({ latest, beta, missing }) => {
+      const output = writeWindowInventory(createTempDir("update-compat-tag-refresh-"));
+      const newIntegrity = `sha512-${Buffer.alloc(64, 1).toString("base64")}`;
+      const tags = { latest, beta };
+      const expectedCalls = [
+        ["view", "openclaw", "dist-tags", "--json"],
+        ["view", `openclaw@${missing}`, "dist.integrity", "--json"],
+      ];
+      const { result, calls } = runInventoryCli(
+        ["--check", "--output", output],
+        [
+          { args: expectedCalls[0]!, value: latest === beta ? [tags] : tags },
+          { args: expectedCalls[1]!, value: latest === beta ? [newIntegrity] : newIntegrity },
+        ],
+      );
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("pnpm update:compat:gen --output");
+      expect(result.stderr).toContain(output);
+      expect(result.stderr).toContain(
+        [
+          ...["2026.9.1", "2026.9.2", "2026.9.3"].map(
+            (version) => `--release .artifacts/update-compat/${version}/package=${integrity}`,
+          ),
+          `--release .artifacts/update-compat/${missing}/package=${newIntegrity}`,
+        ].join(" "),
+      );
+      expect(calls).toEqual(expectedCalls);
+    },
+  );
+
+  it.each([
+    { tags: { beta: "2026.9.3" }, invalid: "latest" },
+    { tags: { latest: "2026.9.3", beta: "not-a-release" }, invalid: "beta" },
+  ])("refuses an absent or invalid $invalid dist-tag", ({ tags, invalid }) => {
+    const output = writeWindowInventory(createTempDir("update-compat-invalid-tags-"));
+    const npmArgs = ["view", "openclaw", "dist-tags", "--json"];
+    const { result, calls } = runInventoryCli(
+      ["--check", "--output", output],
+      [{ args: npmArgs, value: tags }],
+    );
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(`dist-tag ${invalid} is missing or invalid`);
+    expect(calls).toEqual([npmArgs]);
+  });
+
+  it("refuses conflicting release origins before writing any bridge", () => {
+    const inventory = recordFixture();
+    const newer = structuredClone(inventory.releases[0]);
+    newer.version = "2026.9.2";
+    const firstExport = newer.chunks[0]?.exports[0];
+    if (!firstExport) {
+      throw new Error("Fixture has no recorded export");
+    }
+    firstExport.origin.module = "src/cli/update-cli/different.ts";
+    inventory.releases.push(newer);
+    const conflict =
+      /Release inventories disagree about service-abcdefgh.js:mode: 2026.9.1 uses .*; 2026.9.2 uses/;
+    expect(() => parseUpdateCompatibilityInventory(inventory)).toThrow(conflict);
+    const root = createTempDir("update-compat-conflict-");
+    candidate(root);
+    expect(() =>
+      writeUpdateCompatibilityChunks({
+        distDir: path.join(root, "dist"),
+        sourceDir: root,
+        inventory,
+      }),
+    ).toThrow(conflict);
+    expect(fsSync.existsSync(path.join(root, "dist/service-abcdefgh.js"))).toBe(false);
+  });
+
+  it("keeps compatibility facades out of current runtime alias selection on rebuild", async () => {
+    const inventory = recordFixture();
+    inventory.releases[0].chunks = inventory.releases[0].chunks.map((chunk) => ({
+      ...chunk,
+      path: "worker.runtime-12345678.js",
+    }));
+    const root = createTempDir("update-compat-rebuild-");
+    candidate(root);
+    fsSync.renameSync(
+      path.join(root, "dist/current.mjs"),
+      path.join(root, "dist/worker.runtime-abcdefgh.mjs"),
+    );
+    writeStableRootRuntimeAliases({ rootDir: root });
+    writeUpdateCompatibilityChunks({
+      distDir: path.join(root, "dist"),
+      sourceDir: root,
+      inventory,
+    });
+    writeStableRootRuntimeAliases({ rootDir: root });
+    const current = await import(pathToFileURL(path.join(root, "dist/worker.runtime.js")).href);
+    expect(current.x()).toBe("node");
+    expect(current.y()).toBe("npm");
+  });
+
+  it("records emitted aliases and forwards old consumers to the current implementations", async () => {
+    const inventory = recordFixture();
+    expect(inventory.releases[0].chunks).toMatchObject([
+      {
+        path: "service-abcdefgh.js",
+        exports: [
+          {
+            exported: "mode",
+            origin: { module: "src/cli/update-cli/recovery.ts", symbol: "resolveMode" },
+          },
+          {
+            exported: "runner",
+            origin: { module: "src/cli/update-cli/runner.ts", symbol: "resolveRunner" },
+          },
+        ],
+      },
+    ]);
+    const root = createTempDir("update-compat-candidate-");
+    candidate(root);
+    const options = { distDir: path.join(root, "dist"), sourceDir: root, inventory };
+    writeUpdateCompatibilityChunks(options);
+    const bridge = path.join(root, "dist/service-abcdefgh.js");
+    const first = fsSync.readFileSync(bridge, "utf8");
+    writeUpdateCompatibilityChunks(options);
+    expect(fsSync.readFileSync(bridge, "utf8")).toBe(first);
+    const loaded = await import(pathToFileURL(bridge).href);
+    expect(loaded.runner()).toBe("node");
+    expect(loaded.mode()).toBe("npm");
+  });
+
+  it.each(["missing", "ambiguous"])(
+    "refuses %s required implementations before writing bridges",
+    (failure) => {
+      const inventory = recordFixture();
+      const root = createTempDir("update-compat-refusal-");
+      candidate(root);
+      if (failure === "missing") {
+        write(root, "dist/current.mjs", "export {};\n");
+      } else {
+        fsSync.copyFileSync(
+          path.join(root, "dist/current.mjs"),
+          path.join(root, "dist/duplicate.mjs"),
+        );
+      }
+      expect(() =>
+        writeUpdateCompatibilityChunks({
+          distDir: path.join(root, "dist"),
+          sourceDir: root,
+          inventory,
+        }),
+      ).toThrow(/Cannot bridge service-abcdefgh\.js export mode/);
+      expect(fsSync.existsSync(path.join(root, "dist/service-abcdefgh.js"))).toBe(false);
+    },
+  );
+
+  it("does not replace a public entrypoint to conceal a missing export", () => {
+    const inventory = recordFixture();
+    inventory.releases[0].chunks = inventory.releases[0].chunks.map((chunk) => ({
+      ...chunk,
+      path: "service.js",
+    }));
+    const root = createTempDir("update-compat-public-");
+    candidate(root);
+    const original = "export const other = true;\n";
+    write(root, "dist/service.js", original);
+    expect(() =>
+      writeUpdateCompatibilityChunks({
+        distDir: path.join(root, "dist"),
+        sourceDir: root,
+        inventory,
+      }),
+    ).toThrow(/service\.js lacks mode/);
+    expect(fsSync.readFileSync(path.join(root, "dist/service.js"), "utf8")).toBe(original);
+  });
 });

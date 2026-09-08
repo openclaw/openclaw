@@ -1,6 +1,7 @@
 package ai.openclaw.app.chat
 
 import ai.openclaw.app.GatewayModelSummary
+import ai.openclaw.app.gateway.ChatSendAck
 import ai.openclaw.app.gateway.GatewayLoadedImage
 import ai.openclaw.app.gateway.GatewayLoadedMedia
 import ai.openclaw.app.gateway.GatewayMediaKind
@@ -3421,148 +3422,33 @@ class ChatController internal constructor(
     if (journaled.gatedEpoch != null && journaled.gatedEpoch != currentCacheScope()?.connectionGeneration) {
       // A reconnect landed between admission and this claim; command-shaped input never
       // auto-replays across connection epochs, so the claimed row parks for explicit retry.
-      persistJournaledSendState(journaled, ChatOutboxStatus.Failed, OUTBOX_CONNECTION_CHANGED_ERROR)
+      persistJournaledSendState(journaled.copy(status = ChatOutboxStatus.Sending), ChatOutboxStatus.Failed, OUTBOX_CONNECTION_CHANGED_ERROR)
       return true
     }
 
     val runId = journaled.id
-
-    val optimisticMessage = optimisticUserMessage(runId = runId, text = text, attachments = attachments)
-    pendingRunProjectionsByRunId[runId] =
+    val projection =
       PendingRunProjection(
         owner = capturedOwner,
         runId = runId,
-        optimisticMessage = optimisticMessage,
+        optimisticMessage = optimisticUserMessage(runId = runId, text = text, attachments = attachments),
       )
-
-    // Durable admission can suspend while the user changes chats. Route the captured row, but
-    // project it only into the exact owner generation that initiated the send.
+    pendingRunProjectionsByRunId[runId] = projection
+    // Admission may outlive its UI selection; only that selection projects before the ACK.
     if (ownsCapturedUi()) projectPendingRun(runId)
 
-    fun settleProjectedRun(
-      settledRunId: String,
-      terminalSuccess: Boolean = false,
-    ) {
-      synchronized(gatewayScopeApplyLock) {
-        if (terminalSuccess) retireRunTelemetry(settledRunId)
-        // A terminal may already have retired the projection while this dispatch was suspended.
-        clearPendingRun(settledRunId, owner = capturedOwner)
-        removeOptimisticMessage(settledRunId)
-        unresolvedRepliesByRunId.remove(settledRunId)
-        runLifecycleOwner?.takeIf { it.identity.runId == settledRunId }?.let {
-          runLifecycleOwner =
-            when {
-              terminalSuccess -> it.copy(awaitingCanonicalTerminal = false)
-
-              // A witnessed lifecycle end can still be waiting for canonical diagnostics.
-              hasTerminalRunTelemetry(settledRunId) -> it
-
-              else -> null
-            }
-        }
-      }
-    }
-
-    // Dispatch ownership lives in the controller scope: cancelling the calling UI scope
-    // (leaving the chat screen mid-send) after the durable claim must not strand a Sending
-    // row this process can no longer repair; the dispatch completes and settles the row.
-    val dispatch =
-      scope.async {
-        try {
-          val params =
-            buildChatSendParams(
-              // Dispatch exactly what was journaled: the row's captured session key is the
-              // idempotent identity a replay after process death would use.
-              sessionKey = journaled.sessionKey,
-              ownerAgentId = capturedOwner.agentId,
-              text = text,
-              thinking = thinking,
-              idempotencyKey = runId,
-              attachments = attachments,
-            )
-          val res = requestGatewayBound(sendGatewayId, "chat.send", params)
-          val ack = parseChatSendAck(json, res)
-          // Row transitions are durable state for the dispatching gateway and apply even when the
-          // UI scope moved on mid-request; only UI updates below are scope-guarded. A terminal
-          // failure ack proves transmission, not that this idempotency key never ran (a timeout ack
-          // can outlive a still-admitted run), so the row parks for review instead of deleting.
-          if (ack.isTerminalFailure) {
-            markJournaledSendUnconfirmed(journaled)
-          } else {
-            markJournaledSendAccepted(journaled)
-            val ackRunId = ack.runId
-            if (ackRunId != null && ackRunId != journaled.id) {
-              acknowledgedRunIdByRowId[journaled.id] = ackRunId
-            }
-          }
-          val actualRunId = ack.runId ?: runId
-          if (!ack.isTerminal) projectPendingRun(runId)
-          if (actualRunId != runId) {
-            transferRunOwnership(runId, actualRunId, optimisticMessage)
-          }
-          if (ack.isTerminal) {
-            settleProjectedRun(actualRunId, terminalSuccess = ack.isTerminalSuccess)
-            if (ack.isTerminalSuccess) {
-              if (isCapturedOwnerCurrent()) {
-                refreshCurrentHistoryBestEffort(runIdsToReconcile = setOf(actualRunId))
-              }
-              true
-            } else {
-              if (isCapturedOwnerCurrent()) {
-                updateLocalizedErrorText(nativeText("OpenClaw request failed."))
-              }
-              // The parked row owns the input; restoring the draft would duplicate it.
-              true
-            }
-          } else {
-            true
-          }
-        } catch (err: CancellationException) {
-          throw err
-        } catch (err: GatewayRequestNotEnqueued) {
-          // The frame provably never entered the socket queue. The journaled row stays queued and
-          // reconnect flush owns delivery, exactly like the flush path treats not-dispatched sends;
-          // deleting here could lose fire-and-forget input if the process died after the delete.
-          persistJournaledSendState(journaled, ChatOutboxStatus.Queued, err.message)
-          settleProjectedRun(runId)
-          // The transport is effectively down; drop health so the next health event re-flushes.
-          if (sendCacheScope == currentCacheScope()) _healthOk.value = false
-          publishOutbox()
-          true
-        } catch (err: GatewayRequestDefinitiveFailure) {
-          // An ok:false response proves transmission, not that this idempotency key was never run;
-          // park the journaled copy for review instead of deleting a possibly delivered send.
-          markJournaledSendUnconfirmed(journaled)
-          settleProjectedRun(runId)
-          if (isCapturedOwnerCurrent()) updateErrorText(err.message)
-          // The parked row owns the input; restoring the draft would duplicate it.
-          true
-        } catch (_: GatewayRequestOutcomeUnknown) {
-          // A transport failure cannot distinguish rejection from an accepted send whose ACK was
-          // lost. Keep the journaled row until history confirms or reconciliation parks it.
-          markJournaledSendAccepted(journaled)
-          synchronized(gatewayScopeApplyLock) {
-            if (!isCapturedOwnerCurrent()) {
-              settleProjectedRun(runId)
-              return@async true
-            }
-            projectPendingRun(runId, outcomeUnknown = true)
-          }
-          if (_healthOk.value) {
-            refreshCurrentHistoryBestEffort(runIdsToReconcile = setOf(runId))
-          }
-          true
-        } catch (err: Throwable) {
-          // Unexpected failure after dispatch is ambiguous; fail closed and keep the row visible.
-          markJournaledSendUnconfirmed(journaled)
-          settleProjectedRun(runId)
-          if (isCapturedOwnerCurrent()) updateErrorText(err.message)
-          // With a journaled row parked for review, the composer must not restore a duplicate
-          // draft: the row owns the input now.
-          true
-        }
-      }
-    return dispatch.await()
+    // The controller owns a claimed dispatch even if its UI caller stops awaiting it.
+    scope
+      .async {
+        dispatchClaimedSend(
+          item = journaled.copy(status = ChatOutboxStatus.Sending),
+          gatewayId = sendGatewayId,
+          ownerAgentId = capturedOwner.agentId,
+          attachments = attachments,
+          direct = DirectSendContext(projection, sendCacheScope),
+        )
+      }.await()
+    return true
   }
 
   private fun ChatComposerOwner.matches(
@@ -3953,44 +3839,21 @@ class ChatController internal constructor(
     right: String,
   ): Boolean = normalizeRequestedSessionKey(left) == normalizeRequestedSessionKey(right)
 
-  private suspend fun markJournaledSendAccepted(row: ChatOutboxItem) {
-    persistJournaledSendState(row, ChatOutboxStatus.Accepted, null)
-  }
-
-  private suspend fun markJournaledSendUnconfirmed(row: ChatOutboxItem) {
-    persistJournaledSendState(row, ChatOutboxStatus.Failed, OUTBOX_DELIVERY_UNCONFIRMED_ERROR)
-  }
-
-  // Mirrors the flush path's fail-closed persistence handling: a claimed row whose follow-up
-  // state cannot be made durable must not silently stay 'sending' (it would block its session
-  // with no user action available); the re-armed recovery sweep parks it once storage recovers.
   private suspend fun persistJournaledSendState(
     row: ChatOutboxItem,
     status: ChatOutboxStatus,
     lastError: String?,
-  ) {
-    if (status != ChatOutboxStatus.Accepted) acknowledgedRunIdByRowId.remove(row.id)
-    val persisted =
-      try {
-        commandOutbox.updateStatusIfAttempt(
-          row.id,
-          row.attemptVersion,
-          status,
-          row.retryCount,
-          lastError,
-          expectedStatus = ChatOutboxStatus.Sending,
-        )
-      } catch (err: CancellationException) {
-        throw err
-      } catch (_: Throwable) {
-        null
-      }
+    direct: Boolean = true,
+  ): Int? {
+    if (direct && status != ChatOutboxStatus.Accepted) acknowledgedRunIdByRowId.remove(row.id)
+    val persisted = updateOutboxStatusOrNull(row, status, lastError)
     if (persisted == null) {
       rearmOutboxRecovery()
-      _healthOk.value = false
+      if (direct) _healthOk.value = false
     }
     publishOutbox()
-    kickFlushForRoutedBacklog()
+    if (direct) kickFlushForRoutedBacklog()
+    return persisted
   }
 
   // Sends routed to the queue while a direct dispatch held their session wait for that dispatch
@@ -6077,27 +5940,6 @@ class ChatController internal constructor(
   // Stop: transport or persistence state cannot safely advance to younger work.
   private enum class OutboxSendOutcome { Sent, Continue, Stop }
 
-  private enum class GatewayResponseState { Received, Unknown }
-
-  private sealed interface OutboxSendResult {
-    data class Accepted(
-      val runId: String,
-    ) : OutboxSendResult
-
-    /** The request never entered the socket queue, so reconnect may retry it automatically. */
-    data class NotDispatched(
-      val error: String,
-    ) : OutboxSendResult
-
-    /** Dispatch may have succeeded, so only explicit user intent may retry the command. */
-    data class DeliveryUnconfirmed(
-      val gatewayResponse: GatewayResponseState,
-    ) : OutboxSendResult
-
-    /** The canonical alias now resolves to a different agent than the one captured at admission. */
-    data object OwnerChanged : OutboxSendResult
-  }
-
   private suspend fun updateOutboxStatusOrNull(
     item: ChatOutboxItem,
     status: ChatOutboxStatus,
@@ -6187,86 +6029,7 @@ class ChatController internal constructor(
           OutboxSendOutcome.Continue
         }
       }
-    return when (val result = attemptOutboxSend(item, flushScope.gatewayId, ownerAgentId, attachments)) {
-      is OutboxSendResult.Accepted -> {
-        // Ack received: keep the row as accepted until canonical history proves the user turn
-        // persisted; the started ACK alone is not durable proof (issue #86946 tracks the gap).
-        if (result.runId != item.id) acknowledgedRunIdByRowId[item.id] = result.runId
-        val persisted = updateOutboxStatusOrNull(item, ChatOutboxStatus.Accepted, null)
-        if (persisted == null) rearmOutboxRecovery()
-        publishOutbox()
-        if (persisted == null) {
-          // The accepted row is still Sending; the re-armed recovery sweep parks it once
-          // storage recovers, and canonical history proof can still retire it later.
-          _healthOk.value = false
-          OutboxSendOutcome.Stop
-        } else {
-          // Stale or removed attempts cannot adopt run ownership; history still owns proof.
-          if (persisted > 0) {
-            adoptFlushedSend(
-              item = item,
-              attachments = attachments,
-              ackRunId = result.runId,
-              gatewayId = flushScope.gatewayId,
-              ownerAgentId = ownerAgentId,
-            )
-          }
-          OutboxSendOutcome.Sent
-        }
-      }
-
-      is OutboxSendResult.NotDispatched -> {
-        // This frame never entered the socket queue, so reconnect may retry it safely.
-        val requeued = updateOutboxStatusOrNull(item, ChatOutboxStatus.Queued, result.error)
-        if (requeued == null) rearmOutboxRecovery()
-        publishOutbox()
-        _healthOk.value = false
-        OutboxSendOutcome.Stop
-      }
-
-      OutboxSendResult.OwnerChanged -> {
-        val parked = updateOutboxStatusOrNull(item, ChatOutboxStatus.Failed, OUTBOX_OWNER_CHANGED_ERROR)
-        if (parked == null) rearmOutboxRecovery()
-        publishOutbox()
-        if (parked == null) {
-          _healthOk.value = false
-          OutboxSendOutcome.Stop
-        } else {
-          OutboxSendOutcome.Continue
-        }
-      }
-
-      is OutboxSendResult.DeliveryUnconfirmed -> {
-        // Every transmitted failure is ambiguous: gateway error responses can be cached after
-        // agent dispatch, and gateway dedupe is process-local and time-bounded.
-        val persisted =
-          updateOutboxStatusOrNull(
-            item,
-            ChatOutboxStatus.Failed,
-            OUTBOX_DELIVERY_UNCONFIRMED_ERROR,
-          )
-        if (persisted == null) rearmOutboxRecovery()
-        publishOutbox()
-        when {
-          persisted == null -> {
-            // The ambiguous row is still Sending. Stop before younger work; the re-armed
-            // recovery sweep will park it after storage becomes available again.
-            _healthOk.value = false
-            OutboxSendOutcome.Stop
-          }
-
-          result.gatewayResponse == GatewayResponseState.Unknown -> {
-            _healthOk.value = false
-            OutboxSendOutcome.Stop
-          }
-
-          else -> {
-            // The response lets the drain continue; the store fences stale or retired attempts.
-            OutboxSendOutcome.Continue
-          }
-        }
-      }
-    }
+    return dispatchClaimedSend(item, flushScope.gatewayId, ownerAgentId, attachments)
   }
 
   private suspend fun loadOutboxAttachmentsForSend(
@@ -6318,87 +6081,218 @@ class ChatController internal constructor(
     if (ackRunId != runId) transferRunOwnership(runId, ackRunId, optimistic)
   }
 
-  private suspend fun attemptOutboxSend(
+  private data class DirectSendContext(
+    val projection: PendingRunProjection,
+    val gatewayScope: ChatCacheScope?,
+  )
+
+  private fun settleDirectSendRun(
+    direct: DirectSendContext,
+    runId: String,
+    terminalSuccess: Boolean = false,
+  ) {
+    synchronized(gatewayScopeApplyLock) {
+      if (terminalSuccess) retireRunTelemetry(runId)
+      clearPendingRun(runId, owner = direct.projection.owner)
+      removeOptimisticMessage(runId)
+      unresolvedRepliesByRunId.remove(runId)
+      runLifecycleOwner?.takeIf { it.identity.runId == runId }?.let {
+        runLifecycleOwner =
+          when {
+            terminalSuccess -> it.copy(awaitingCanonicalTerminal = false)
+            hasTerminalRunTelemetry(runId) -> it
+            else -> null
+          }
+      }
+    }
+  }
+
+  private sealed interface OutboxSendResult {
+    data class Acknowledged(
+      val ack: ChatSendAck,
+    ) : OutboxSendResult
+
+    data class NotDispatched(
+      val error: String,
+    ) : OutboxSendResult
+
+    data object OwnerChanged : OutboxSendResult
+  }
+
+  /** One network and durable-settlement owner after either lane claims a command. */
+  private suspend fun dispatchClaimedSend(
     item: ChatOutboxItem,
-    gatewayId: String,
+    gatewayId: String?,
     ownerAgentId: String,
     attachments: List<OutgoingAttachment>,
-  ): OutboxSendResult {
-    return try {
-      val queuedSessionKey = normalizeRequestedSessionKey(item.sessionKey)
-      val canonicalAgentId = resolveAgentIdFromMainSessionKey(queuedSessionKey)
-      if (canonicalAgentId != null && canonicalAgentId != ownerAgentId) {
-        return OutboxSendResult.OwnerChanged
-      }
-      if (queuedSessionKey != item.sessionKey) {
-        // A row captured under the pre-hello "main" alias resolves exactly once, against the
-        // canonical main session active at first dispatch. Pinning it before the request means
-        // a later default-agent change can never redirect this input on a retry, so a pin
-        // that cannot be made durable must stop the dispatch while the row is still safe.
-        val pinned =
+    direct: DirectSendContext? = null,
+  ): OutboxSendOutcome {
+    fun ownsDirectUi(): Boolean = direct?.projection?.owner?.matches(currentCacheScope(), _sessionKey.value) == true
+
+    suspend fun persist(
+      status: ChatOutboxStatus,
+      error: String?,
+    ): Int? = persistJournaledSendState(item, status, error, direct = direct != null)
+
+    suspend fun attempt(): OutboxSendResult {
+      val sessionKey = if (direct == null) normalizeRequestedSessionKey(item.sessionKey) else item.sessionKey
+      if (direct == null) {
+        val canonicalAgentId = resolveAgentIdFromMainSessionKey(sessionKey)
+        if (canonicalAgentId != null && canonicalAgentId != ownerAgentId) return OutboxSendResult.OwnerChanged
+        if (sessionKey != item.sessionKey) {
+          // A pre-hello alias resolves once; a failed durable pin must prevent dispatch.
           try {
-            commandOutbox.pinSessionKey(item.id, queuedSessionKey)
-            true
+            commandOutbox.pinSessionKey(item.id, sessionKey)
           } catch (err: CancellationException) {
             throw err
           } catch (_: Throwable) {
-            false
+            return OutboxSendResult.NotDispatched("could not pin the delivery session")
           }
-        if (!pinned) return OutboxSendResult.NotDispatched("could not pin the delivery session")
-      }
-      // Android only knows the active session's selected model. Unknown queued sessions fail
-      // open, preserving the thinking level captured when they were enqueued.
-      val thinking =
-        if (
-          queuedSessionKey == _sessionKey.value && !thinkingSupportedForCurrentSelection()
-        ) {
-          "off"
-        } else {
-          item.thinkingLevel
         }
-      // The row id is the idempotency key, so gateway-side dedupe makes redelivery of an
-      // acked-but-crashed item harmless within the gateway's dedupe window.
-      val params =
-        buildChatSendParams(
-          sessionKey = queuedSessionKey,
-          ownerAgentId = ownerAgentId,
-          text = item.text,
-          thinking = thinking,
-          idempotencyKey = item.id,
-          attachments = attachments,
-        )
-      val ack = parseChatSendAck(json, requestGatewayBound(gatewayId, "chat.send", params))
-      when (ack.normalizedStatus) {
-        "ok", "started", "in_flight" -> {
-          if (ack.runId.isNullOrBlank()) {
-            OutboxSendResult.DeliveryUnconfirmed(GatewayResponseState.Received)
-          } else {
-            OutboxSendResult.Accepted(ack.runId)
-          }
+      }
+      // Reconnect rechecks the visible model; other queued owners keep their captured level.
+      val thinking =
+        if (direct == null && sessionKey == _sessionKey.value && !thinkingSupportedForCurrentSelection()) "off" else item.thinkingLevel
+      val params = buildChatSendParams(sessionKey, ownerAgentId, item.text, thinking, item.id, attachments)
+      return OutboxSendResult.Acknowledged(parseChatSendAck(json, requestGatewayBound(gatewayId, "chat.send", params)))
+    }
+
+    suspend fun settle(result: OutboxSendResult): OutboxSendOutcome {
+      when (result) {
+        OutboxSendResult.OwnerChanged -> {
+          if (persist(ChatOutboxStatus.Failed, OUTBOX_OWNER_CHANGED_ERROR) != null) return OutboxSendOutcome.Continue
+          _healthOk.value = false
+          return OutboxSendOutcome.Stop
         }
 
-        "timeout", "error" -> {
-          OutboxSendResult.DeliveryUnconfirmed(GatewayResponseState.Received)
+        is OutboxSendResult.NotDispatched -> {
+          persist(ChatOutboxStatus.Queued, result.error)
+          _healthOk.value = false
+          return OutboxSendOutcome.Stop
+        }
+
+        is OutboxSendResult.Acknowledged -> {}
+      }
+      val ack = result.ack
+      // Interactive sends retain their existing permissive ACK policy. Reconnect requires a
+      // recognized admission status and run ID before it adopts a previously hidden run.
+      val accepted =
+        !ack.isTerminalFailure &&
+          (direct != null || (ack.normalizedStatus in setOf("ok", "started", "in_flight") && !ack.runId.isNullOrBlank()))
+      val ackRunId = ack.runId
+      if (direct == null && accepted && ackRunId != item.id) acknowledgedRunIdByRowId[item.id] = checkNotNull(ackRunId)
+      val persisted =
+        persist(
+          if (accepted) ChatOutboxStatus.Accepted else ChatOutboxStatus.Failed,
+          if (accepted) null else OUTBOX_DELIVERY_UNCONFIRMED_ERROR,
+        )
+      if (direct != null) {
+        if (accepted && ackRunId != null && ackRunId != item.id) acknowledgedRunIdByRowId[item.id] = ackRunId
+        val actualRunId = ackRunId ?: item.id
+        if (!ack.isTerminal) projectPendingRun(item.id)
+        if (actualRunId != item.id) transferRunOwnership(item.id, actualRunId, direct.projection.optimisticMessage)
+        if (ack.isTerminal) {
+          settleDirectSendRun(direct, actualRunId, terminalSuccess = ack.isTerminalSuccess)
+          if (ownsDirectUi()) {
+            if (ack.isTerminalSuccess) {
+              refreshCurrentHistoryBestEffort(runIdsToReconcile = setOf(actualRunId))
+            } else {
+              updateLocalizedErrorText(nativeText("OpenClaw request failed."))
+            }
+          }
+        }
+        return OutboxSendOutcome.Sent
+      }
+      if (persisted == null) {
+        _healthOk.value = false
+        return OutboxSendOutcome.Stop
+      }
+      if (!accepted) return OutboxSendOutcome.Continue
+      if (persisted > 0) adoptFlushedSend(item, attachments, checkNotNull(ackRunId), checkNotNull(gatewayId), ownerAgentId)
+      return OutboxSendOutcome.Sent
+    }
+
+    suspend fun fail(err: Throwable): OutboxSendOutcome =
+      when (err) {
+        is CancellationException -> {
+          // Process teardown leaves the claim for startup recovery. The direct caller's
+          // UI lifetime does not cancel the controller-owned dispatch.
+          throw err
+        }
+
+        is GatewayRequestNotEnqueued -> {
+          persist(ChatOutboxStatus.Queued, if (direct != null) err.message else err.message ?: "send failed")
+          direct?.let { settleDirectSendRun(it, item.id) }
+          if (direct == null || direct.gatewayScope == currentCacheScope()) _healthOk.value = false
+          if (direct != null) publishOutbox()
+          OutboxSendOutcome.Stop
+        }
+
+        is GatewayRequestDefinitiveFailure -> {
+          // A rejection can be a cached result from an admitted run; it never permits replay.
+          val persisted = persist(ChatOutboxStatus.Failed, OUTBOX_DELIVERY_UNCONFIRMED_ERROR)
+          if (direct != null) {
+            settleDirectSendRun(direct, item.id)
+            if (ownsDirectUi()) updateErrorText(err.message)
+          } else if (persisted == null) {
+            _healthOk.value = false
+          }
+          if (direct == null && persisted == null) OutboxSendOutcome.Stop else OutboxSendOutcome.Continue
+        }
+
+        is GatewayRequestOutcomeUnknown -> {
+          // Interactive ambiguity retains its live owner for history recovery; reconnect
+          // has no pre-ACK projection and parks the input for explicit retry instead.
+          persist(
+            if (direct == null) ChatOutboxStatus.Failed else ChatOutboxStatus.Accepted,
+            if (direct == null) OUTBOX_DELIVERY_UNCONFIRMED_ERROR else null,
+          )
+          if (direct == null) {
+            _healthOk.value = false
+          } else {
+            val projected =
+              synchronized(gatewayScopeApplyLock) {
+                if (!ownsDirectUi()) {
+                  settleDirectSendRun(direct, item.id)
+                  false
+                } else {
+                  projectPendingRun(item.id, outcomeUnknown = true)
+                  true
+                }
+              }
+            if (projected && _healthOk.value) refreshCurrentHistoryBestEffort(runIdsToReconcile = setOf(item.id))
+          }
+          OutboxSendOutcome.Stop
         }
 
         else -> {
-          OutboxSendResult.DeliveryUnconfirmed(GatewayResponseState.Received)
+          persist(ChatOutboxStatus.Failed, OUTBOX_DELIVERY_UNCONFIRMED_ERROR)
+          if (direct == null) {
+            _healthOk.value = false
+          } else {
+            settleDirectSendRun(direct, item.id)
+            if (ownsDirectUi()) updateErrorText(err.message)
+          }
+          OutboxSendOutcome.Stop
         }
       }
-    } catch (err: CancellationException) {
-      // Teardown must not be recorded as a send failure; the row stays 'sending' and the
-      // next startup recovery parks it as delivery-unconfirmed.
-      throw err
-    } catch (err: GatewayRequestNotEnqueued) {
-      OutboxSendResult.NotDispatched(err.message ?: "send failed")
-    } catch (_: GatewayRequestDefinitiveFailure) {
-      // An ok:false response proves transmission, not that this idempotency key was never run.
-      OutboxSendResult.DeliveryUnconfirmed(GatewayResponseState.Received)
-    } catch (_: GatewayRequestOutcomeUnknown) {
-      OutboxSendResult.DeliveryUnconfirmed(GatewayResponseState.Unknown)
-    } catch (_: Throwable) {
-      OutboxSendResult.DeliveryUnconfirmed(GatewayResponseState.Unknown)
+
+    if (direct != null) {
+      return try {
+        settle(attempt())
+      } catch (err: Throwable) {
+        fail(err)
+      }
     }
+    val result =
+      try {
+        attempt()
+      } catch (err: Throwable) {
+        return fail(err)
+      }
+    // Reconnect settlement was never transport failure evidence. Keep its exceptions outside
+    // request classification; direct dispatch intentionally owns the broader boundary above.
+    return settle(result)
   }
 
   private suspend fun recoverInterruptedOutboxSends(): Boolean =

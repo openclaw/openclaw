@@ -398,6 +398,10 @@ vi.mock("../commands/doctor-platform-notes.js", () => ({
   noteMacStaleOpenClawUpdateLaunchdJobs: mocks.noteMacStaleOpenClawUpdateLaunchdJobs,
 }));
 
+vi.mock("../commands/doctor-foreign-launchd-jobs.js", () => ({
+  noteMacForeignLaunchdJobs: vi.fn().mockResolvedValue(undefined),
+}));
+
 vi.mock("../gateway/credentials-secret-inputs.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../gateway/credentials-secret-inputs.js")>();
   return {
@@ -2662,10 +2666,12 @@ describe("doctor health contributions", () => {
     expect(mocks.replaceConfigFile).toHaveBeenCalledWith(
       expect.objectContaining({ nextConfig: repairedCfg }),
     );
-    expect(mocks.removeAuthProfilesAcrossOwnerStores).toHaveBeenCalledWith({
-      agentDir: "/tmp/openclaw/agents/main",
-      profileIds: ["anthropic:claude-cli"],
-    });
+    expect(mocks.removeAuthProfilesAcrossOwnerStores).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentDir: "/tmp/openclaw/agents/main",
+        profileIds: ["anthropic:claude-cli"],
+      }),
+    );
     expect(mocks.replaceConfigFile.mock.invocationCallOrder[0]).toBeLessThan(
       mocks.removeAuthProfilesAcrossOwnerStores.mock.invocationCallOrder[0]!,
     );

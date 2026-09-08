@@ -107,6 +107,16 @@ it.each([
   [["scripts\\e2e\\lib\\mcp-code-mode-probe-server.ts"], ["mcp-code-mode-gateway"]],
   [["scripts\\e2e\\lib\\mcp-code-mode\\scenario.sh"], ["mcp-code-mode-gateway"]],
   [["scripts/e2e/install-e2e.ts", "docs/ci.md"], []],
+  [["src/commands/doctor-config-preflight.admission.process.test.ts"], []],
+  [["src/commands/doctor-config-runtime.test-support.ts"], []],
+  [["src\\commands\\doctor-config-runtime.test-support.ts"], []],
+  [["src/state/openclaw-state-db-contract.test.ts"], []],
+  [
+    ["src/commands/doctor-config-runtime.test-support.ts", "src/commands/doctor.ts"],
+    ["published-upgrade-survivor"],
+  ],
+  [["src\\state\\openclaw-state-db-contract.ts"], ["published-upgrade-survivor"]],
+  [["scripts/e2e/lib/upgrade-survivor/test-support.ts"], ["published-upgrade-survivor"]],
   ...[
     "src/cli/update-cli/run-update.ts",
     "src/infra/update-runner.ts",

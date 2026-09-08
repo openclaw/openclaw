@@ -52,7 +52,7 @@ function formatPluginRegistryDifferences(
     )
     .map(
       (difference) =>
-        `${sanitizeTerminalText(difference.pluginId)} (persisted source: ${JSON.stringify(difference.persistedSource)}; derived source: ${JSON.stringify(difference.derivedSource)})`,
+        `${sanitizeTerminalText(difference.pluginId)} (${difference.changed.join("+")} changed; persisted source: ${JSON.stringify(difference.persistedSource)}; derived source: ${JSON.stringify(difference.derivedSource)})`,
     )
     .join(", ");
 }

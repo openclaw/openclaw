@@ -1867,7 +1867,7 @@ src/agents/modes/interactive/theme/theme.ts	11
 src/agents/node-plugin-tools.ts	1
 src/agents/openai-model-routes.ts	2
 src/agents/openclaw-tools.requester-yield.ts	2
-src/agents/plugin-model-catalog.ts	4
+src/agents/plugin-model-catalog.ts	3
 src/agents/plugin-text-transforms.ts	5
 src/agents/prepared-model-catalog.ts	1
 src/agents/prepared-model-catalog.worker.ts	1
@@ -3802,7 +3802,7 @@ ui/src/lib/chat/tool-display.ts	1
 ui/src/lib/config-form-utils.ts	7
 ui/src/lib/config/config-draft-model.ts	5
 ui/src/lib/cron/index.ts	11
-ui/src/lib/gateway-diagnostics.ts	3
+ui/src/lib/gateway-diagnostics.ts	2
 ui/src/lib/gateway-errors.ts	1
 ui/src/lib/keyboard-shortcuts.ts	1
 ui/src/lib/nodes/index.ts	3
