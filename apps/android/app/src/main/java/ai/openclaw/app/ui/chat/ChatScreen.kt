@@ -1226,7 +1226,7 @@ private fun ChatHeader(
       sessionCreating -> nativeString("Loading")
       pendingRunCount > 0 -> nativeString("Working")
       healthOk -> nativeString("Ready")
-      else -> nativeString("Offline")
+      else -> nativeString("Not ready")
     }
   val statusColor =
     when {
