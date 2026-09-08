@@ -924,26 +924,35 @@ describe("ensureSkillsWatcher", () => {
     ]);
   });
 
-  it("fans out a shared-directory change to every subscribed workspace", async () => {
-    vi.useFakeTimers();
-    const secondWorkspace = await createFixtureDirectory("second-workspace");
-    const sharedRoot = await createFixtureDirectory("shared");
-    const config = { skills: { load: { extraDirs: [sharedRoot] } } };
-    const seen: SkillsChangeEvent[] = [];
-    refreshModule.registerSkillsChangeListener((change) => {
-      seen.push(change);
-    });
-    refreshModule.ensureSkillsWatcher({ workspaceDir: fixtureWorkspaceDir, config });
-    refreshModule.ensureSkillsWatcher({ workspaceDir: secondWorkspace, config });
-    const changedPath = path.join(sharedRoot, "demo", "SKILL.md");
-    watchForSkillRoot(sharedRoot).watcher.emit("all", "change", changedPath);
-    await vi.advanceTimersByTimeAsync(250);
+  it.each(["change", "ready"] as const)(
+    "fans out shared-directory %s to every subscribed workspace",
+    async (event) => {
+      vi.useFakeTimers();
+      const secondWorkspace = await createFixtureDirectory("second-workspace");
+      const sharedRoot = await createFixtureDirectory("shared");
+      const config = { skills: { load: { extraDirs: [sharedRoot] } } };
+      const seen: SkillsChangeEvent[] = [];
+      refreshModule.registerSkillsChangeListener((change) => {
+        seen.push(change);
+      });
+      refreshModule.ensureSkillsWatcher({ workspaceDir: fixtureWorkspaceDir, config });
+      refreshModule.ensureSkillsWatcher({ workspaceDir: secondWorkspace, config });
+      const changedPath =
+        event === "change" ? path.join(sharedRoot, "demo", "SKILL.md") : undefined;
+      const watcher = watchForSkillRoot(sharedRoot).watcher;
+      if (event === "ready") {
+        watcher.emit("ready");
+      } else {
+        watcher.emit("all", event, changedPath);
+      }
+      await vi.advanceTimersByTimeAsync(250);
 
-    expect(seen).toEqual([
-      { workspaceDir: fixtureWorkspaceDir, reason: "watch", changedPath },
-      { workspaceDir: secondWorkspace, reason: "watch", changedPath },
-    ]);
-  });
+      expect(seen).toEqual([
+        { workspaceDir: fixtureWorkspaceDir, reason: "watch", changedPath },
+        { workspaceDir: secondWorkspace, reason: "watch", changedPath },
+      ]);
+    },
+  );
 
   it("stops fanning a shared-directory change to a workspace after it unsubscribes", async () => {
     vi.useFakeTimers();

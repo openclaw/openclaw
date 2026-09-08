@@ -541,6 +541,9 @@ function createSkillsPathWatcher(target: WatchTarget): SkillsPathWatchState {
       .then(() => schedule(changedPath));
   };
 
+  // ignoreInitial suppresses writes discovered before native watches are ready.
+  // Reconcile snapshots read during that gap once the initial scan completes.
+  watcher.on("ready", () => schedule());
   watcher.on("all", (_event, changedPath) => {
     if (isPathInside(target.path, changedPath) || isPathInside(changedPath, target.path)) {
       schedule(changedPath);
