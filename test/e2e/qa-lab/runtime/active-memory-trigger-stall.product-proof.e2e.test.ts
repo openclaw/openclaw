@@ -221,7 +221,8 @@ function activeMemoryLines(logText: string): string[] {
       }
       try {
         const entry = JSON.parse(line) as { 1?: unknown; _meta?: { date?: string } };
-        return `${entry._meta?.date ?? ""} ${String(entry[1] ?? "")}`.trim();
+        const message = typeof entry[1] === "string" ? entry[1] : JSON.stringify(entry[1] ?? "");
+        return `${entry._meta?.date ?? ""} ${message}`.trim();
       } catch {
         return line;
       }
