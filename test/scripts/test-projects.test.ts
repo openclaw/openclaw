@@ -55,6 +55,13 @@ describe("test runtime prerequisites", () => {
     ["QA directory", ["extensions/qa-lab"], "private-qa"],
     ["tooling config", ["test/vitest/vitest.tooling.config.ts"], "private-qa"],
     ["QA config", ["test/vitest/vitest.extension-qa.config.ts"], "private-qa"],
+    [
+      "sticker provider runtime",
+      ["extensions/telegram/src/sticker-cache.selection.test.ts"],
+      "runtime",
+    ],
+    ["Telegram config", ["test/vitest/vitest.extension-telegram.config.ts"], "runtime"],
+    ["ordinary Telegram test", ["extensions/telegram/src/sequential-key.test.ts"], undefined],
     ["all plugins", ["extensions"], "private-qa"],
     ["full local suite", [], "private-qa"],
     ["root config", ["vitest.config.ts"], "private-qa"],
@@ -173,6 +180,7 @@ describe("test runtime prerequisites", () => {
     ["gateway", ["gateway-*.test.ts"], "runtime"],
     ["gateway", ["server*.test.ts"], "runtime"],
     ["tooling", ["**/gateway-codex-delivery-cache.test.ts"], "runtime"],
+    ["extension-telegram", ["**/sticker-cache.selection.test.ts"], undefined],
   ] as const)("keeps %s selection scoped after excluding %s", (project, exclude, expected) => {
     const selections = resolveVitestRuntimeCliSelections(
       `test/vitest/vitest.${project}.config.ts`,
