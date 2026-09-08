@@ -156,7 +156,7 @@ describe("formatUpdateOneLiner", () => {
     });
 
     expect(formatUpdateOneLiner(update)).toBe(
-      `Update: git main · ↔ origin/main · update check stale: last fetch failed 5m ago (network error) · cached: ahead ${ahead}, behind ${behind} · npm latest ${VERSION}`,
+      `Update: git main · ↔ origin/main · update check stale: last update fetch failed 5m ago (network error) · cached: ahead ${ahead}, behind ${behind} · npm latest ${VERSION}`,
     );
   });
 

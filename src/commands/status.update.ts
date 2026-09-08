@@ -44,17 +44,11 @@ export async function getUpdateCheckResult(params: {
     argv1: process.argv[1],
     cwd: process.cwd(),
   });
-  const lastUpdateRun = params.fetchGit
-    ? undefined
-    : await import("../infra/update-run-ledger.js")
-        .then(({ listUpdateRuns }) => listUpdateRuns({ limit: 1 })[0])
-        .catch(() => undefined);
-  return await checkUpdateStatus({
+  const update = await checkUpdateStatus({
     root,
     timeoutMs: params.timeoutMs,
     fetchGit: params.fetchGit,
     includeRegistry: params.includeRegistry,
-    lastUpdateRun,
     resolveRegistryChannel: ({ installKind, git }) =>
       resolveStatusRegistryUpdateChannel({
         configChannel,
@@ -62,6 +56,15 @@ export async function getUpdateCheckResult(params: {
         git,
       }),
   });
+  if (update.installKind === "git" && update.git && !params.fetchGit) {
+    const stale = await import("../infra/update-run-ledger.js")
+      .then(({ getLatestUpdateFetchFailure }) => getLatestUpdateFetchFailure())
+      .catch(() => undefined);
+    if (stale) {
+      update.git = { ...update.git, stale, countsCached: true };
+    }
+  }
+  return update;
 }
 
 type UpdateAvailability = {
@@ -177,7 +180,7 @@ export function formatUpdateOneLiner(update: UpdateCheckResult): string {
     if (update.git.stale) {
       const { failedAtMs, detail } = update.git.stale;
       parts.push(
-        `update check stale: last fetch failed ${formatTimeAgo(Math.max(0, Date.now() - failedAtMs))} (${detail})`,
+        `update check stale: last update fetch failed ${formatTimeAgo(Math.max(0, Date.now() - failedAtMs))} (${detail})`,
       );
       if (update.git.behind != null && update.git.ahead != null) {
         parts.push(`cached: ahead ${update.git.ahead}, behind ${update.git.behind}`);
