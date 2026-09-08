@@ -7,7 +7,6 @@ import type { PluginCommandContext, PluginCommandResult } from "openclaw/plugin-
 import { CODEX_PLUGINS_MARKETPLACE_NAME } from "./app-server/config.js";
 import { isOpenAiCuratedMarketplaceName } from "./app-server/plugin-inventory.js";
 import type { v2 } from "./app-server/protocol.js";
-import { refreshCodexHostedApps } from "./command-apps-refresh.js";
 import { canMutateCodexHost } from "./command-authorization.js";
 import { formatCodexDisplayText } from "./command-formatters.js";
 import { buildCodexPluginAppLinks } from "./command-plugin-app-links.js";
@@ -111,28 +110,28 @@ export async function handleCodexPluginsSubcommand(
     }
   }
 
-  if (normalized === "status" || normalized === "recheck") {
+  if (normalized === "status") {
     const requestedPlugin = args[0];
     const page = args[1] === undefined ? 1 : Number(args[1]);
     if (
       !requestedPlugin ||
       !parseCodexPluginMarketplaceId(requestedPlugin) ||
-      args.length > (normalized === "recheck" ? 1 : 2) ||
+      args.length > 2 ||
       !Number.isSafeInteger(page) ||
       page < 1
     ) {
       return {
-        text: `Usage: /codex plugins ${normalized} <name>@<marketplace>${normalized === "status" ? " [page]" : ""}. Use /codex plugins list to find a configured plugin.`,
+        text: "Usage: /codex plugins status <name>@<marketplace> [page]. Use /codex plugins list to find a configured plugin.",
       };
     }
     if (!canMutateCodexHost(ctx)) {
       return {
-        text: `Only an owner or operator.admin gateway client can run /codex plugins ${normalized}.`,
+        text: "Only an owner or operator.admin gateway client can run /codex plugins status.",
       };
     }
     if (!runtime?.withContext) {
       return {
-        text: `Codex plugin ${normalized} is unavailable. Check the configured Codex app-server, then run this command again.`,
+        text: "Codex plugin status is unavailable. Check the configured Codex app-server, then run this command again.",
       };
     }
     return await runtime.withContext(async (context) => {
@@ -146,9 +145,6 @@ export async function handleCodexPluginsSubcommand(
         return {
           text: "This plugin is not explicitly configured. Use /codex plugins list, or /codex plugins available to find an install command.",
         };
-      }
-      if (normalized === "recheck") {
-        return await refreshCodexHostedApps(context, configured.configKey);
       }
       return formatCodexPluginReadiness(
         await readCodexPluginReadiness({
@@ -326,11 +322,10 @@ function buildPluginsHelp(): string {
     "- /codex plugins available                  list discoverable Codex marketplaces",
     "- /codex plugins status <name>@<marketplace> [page]  inspect app readiness without refreshing",
     "- /codex apps refresh                      refresh all hosted apps for the current Codex account/runtime",
-    "- /codex plugins recheck <configured-plugin>  refresh all hosted apps, then show this plugin's status",
     "- /codex plugins install <name>@<marketplace>  install and authorize one plugin",
     "- /codex plugins enable <name>              enable a configured plugin",
     "- /codex plugins disable <name>             disable a configured plugin",
-    "Only an owner or operator.admin can discover, inspect, recheck, install, enable, or disable plugins.",
+    "Only an owner or operator.admin can discover, inspect, install, enable, or disable plugins.",
   ].join("\n");
 }
 
@@ -530,12 +525,19 @@ async function installCodexPlugin(
         {
           type: "buttons",
           buttons: [
+            ...(appLinks.length > 0
+              ? [
+                  {
+                    label: "Refresh hosted apps",
+                    action: { type: "command" as const, command: "/codex apps refresh" },
+                  },
+                ]
+              : []),
             {
-              label:
-                appLinks.length > 0 ? "Refresh hosted apps, then check status" : "Check status",
+              label: "Check status",
               action: {
                 type: "command",
-                command: `/codex plugins ${appLinks.length > 0 ? "recheck" : "status"} ${requestedId}`,
+                command: `/codex plugins status ${requestedId}`,
               },
             },
           ],

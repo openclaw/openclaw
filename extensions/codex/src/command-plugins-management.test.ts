@@ -830,7 +830,8 @@ describe("Codex /codex plugins subcommand", () => {
       buttons: [{ label: "Open GitHub in ChatGPT", action: { type: "url", url: installUrl } }],
     });
     expect(buttonCommands(result)).toEqual([
-      "/codex plugins recheck security-review@company-tools",
+      "/codex apps refresh",
+      "/codex plugins status security-review@company-tools",
     ]);
     expect(io.current()["security-review@company-tools"]?.enabled).toBe(true);
   });

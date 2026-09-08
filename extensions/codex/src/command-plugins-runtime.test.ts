@@ -436,7 +436,7 @@ describe("Codex plugin command context", () => {
   );
 
   it.each(["policy", "account", "session", "conversation session"] as const)(
-    "does not publish a recheck response after %s changes and releases the client",
+    "does not publish a refresh response after %s changes and releases the client",
     async (change) => {
       const test = await fixture();
       const appCache = new CodexAppInventoryCache();

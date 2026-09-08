@@ -15,16 +15,13 @@ import { formatCodexDisplayText } from "./command-formatters.js";
 import {
   describeCodexHostedAppsSupport,
   formatBoundAccount,
-  formatCodexPluginReadiness,
   readCodexHostedAppsSupport,
-  readCodexPluginReadiness,
 } from "./command-plugins-readiness.js";
 import type { CodexPluginCommandContext } from "./command-plugins-runtime.js";
 
-/** Refreshes this account/runtime; a plugin only selects the follow-up status. */
+/** Refreshes hosted app inventory for the current account/runtime. */
 export async function refreshCodexHostedApps(
   context: CodexPluginCommandContext,
-  configKey?: string,
 ): Promise<PluginCommandResult> {
   let account: CodexAppServerRequestResult<"account/read">;
   try {
@@ -61,32 +58,21 @@ export async function refreshCodexHostedApps(
       text: `${reason} Run /codex apps refresh to retry for the current Codex account/runtime. Previous inventory was not confirmed; no conversation policy was changed.`,
     };
   }
-  const status = configKey
-    ? formatCodexPluginReadiness(
-        await readCodexPluginReadiness({ context, current: context.current, configKey }),
-      )
-    : undefined;
   const presentation: MessagePresentation = {
     title: "Hosted app refresh",
     blocks: [
       {
         type: "text",
         text: [
-          ...(status
-            ? []
-            : [
-                `Agent: ${formatCodexDisplayText(context.agentId.slice(0, 120))} · Profile: ${formatCodexDisplayText((context.profileId ?? "native Codex account (profile unknown)").slice(0, 120))}`,
-                formatBoundAccount({ status: "known", value: account }),
-              ]),
+          `Agent: ${formatCodexDisplayText(context.agentId.slice(0, 120))} · Profile: ${formatCodexDisplayText((context.profileId ?? "native Codex account (profile unknown)").slice(0, 120))}`,
+          formatBoundAccount({ status: "known", value: account }),
           "Hosted app refresh request completed for the current Codex account/runtime, across all hosted apps. Codex does not report whether it replaced its snapshot; this does not verify a live connection. No plugin enablement or conversation policy was changed. Use /new or /reset after connecting.",
         ].join("\n"),
       },
-      ...(status?.presentation?.blocks ?? [
-        {
-          type: "text" as const,
-          text: "Use /codex plugins status to inspect a configured plugin.",
-        },
-      ]),
+      {
+        type: "text",
+        text: "Use /codex plugins status to inspect a configured plugin.",
+      },
     ],
   };
   return {

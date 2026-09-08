@@ -404,16 +404,24 @@ export function formatCodexPluginReadiness(
       }
       blocks.push({
         type: "text",
-        text: "Snapshot freshness is unknown; status reads do not refresh hosted tools or verify a live call. After connecting, /codex apps refresh refreshes hosted inventory for the current Codex account/runtime, across all apps. The plugin button performs that same refresh, then shows this plugin's status. Existing conversations keep their admitted app policy; use /new or /reset after connecting.",
+        text: "Flags reflect Codex's runtime snapshot; status does not refresh hosted tools. After connecting, /codex apps refresh refreshes hosted inventory for the current Codex account/runtime, across all apps. Use Check status separately to inspect this plugin without refreshing. Existing conversations keep their admitted app policy; use /new or /reset after connecting.",
       });
       blocks.push({
         type: "buttons",
         buttons: [
+          ...(canRefreshHostedApps
+            ? [
+                {
+                  label: "Refresh hosted apps",
+                  action: { type: "command" as const, command: "/codex apps refresh" },
+                },
+              ]
+            : []),
           {
-            label: canRefreshHostedApps ? "Refresh hosted apps, then check status" : "Check status",
+            label: "Check status",
             action: {
               type: "command",
-              command: `/codex plugins ${canRefreshHostedApps ? "recheck" : "status"} ${readiness.commandId}`,
+              command: `/codex plugins status ${readiness.commandId}`,
             },
           },
         ],

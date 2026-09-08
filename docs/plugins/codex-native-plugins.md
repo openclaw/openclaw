@@ -180,10 +180,10 @@ account/runtime:
 ```
 
 This refresh covers all hosted apps in that runtime; it is not a per-plugin
-backend refresh. A plugin's **Refresh hosted apps, then check status** button
-performs the same account/runtime refresh and then displays that plugin's
-status. Neither path changes authorization or the current conversation's app
-policy. Use `/new` or `/reset` after connecting, then inspect status in the new
+backend refresh. A plugin's **Refresh hosted apps** button runs this command.
+The separate **Check status** button inspects only that plugin without refreshing
+hosted tools. Neither action changes authorization or the current conversation's
+app policy. Use `/new` or `/reset` after connecting, then inspect status in the new
 conversation.
 
 After a `codexPlugins` change, new Codex conversations pick up the updated
@@ -231,7 +231,6 @@ same chat where you operate the Codex harness:
 /codex plugins install security-review@company-tools
 /codex plugins status security-review@company-tools
 /codex apps refresh
-/codex plugins recheck security-review@company-tools
 /codex plugins disable google-calendar
 /codex plugins enable google-calendar
 /codex plugins disable security-review@company-tools
@@ -282,11 +281,10 @@ configured plugin. It invalidates that runtime's OpenClaw app cache, calls
 Codex `app/installed` with `forceRefresh: true` and no `threadId`, and reads
 metadata for the returned apps. It does not reload native MCP servers.
 
-`/codex plugins recheck <configured-plugin>` is a convenience for that same
-account/runtime-wide refresh followed by the selected plugin's status. The
-plugin name only selects the follow-up display; it does not limit the refresh
-or updates to the runtime's app cache. Disabled or blocked plugins remain
-disabled or blocked, but do not prevent an otherwise permitted hosted refresh.
+After refreshing, use `/codex plugins status <configured-plugin>` to inspect
+one plugin. Status never forces a hosted refresh. Disabled or blocked plugins
+remain disabled or blocked, but do not prevent an otherwise permitted hosted
+refresh.
 
 A completed request does not prove that Codex replaced its snapshot or that a
 live tool call will succeed. Refresh never installs, enables, authenticates,

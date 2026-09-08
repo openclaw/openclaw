@@ -42,7 +42,7 @@ describe("explicit Codex plugin app refresh", () => {
     );
   });
 
-  it("leaves prior readiness stale and reports a failed recheck instead of returning success", async () => {
+  it("leaves prior readiness stale and reports a failed refresh instead of returning success", async () => {
     const appCache = new CodexAppInventoryCache();
     const key = "selected-runtime";
     const request = vi.fn(async (method, params) =>
@@ -67,7 +67,7 @@ describe("explicit Codex plugin app refresh", () => {
     expect(cached.diagnostic?.message).toBe(failure.message);
   });
 
-  it("does not publish a pre-recheck refresh after the completed recheck removed access", async () => {
+  it("does not publish a pre-refresh refresh after the completed recheck removed access", async () => {
     const appCache = new CodexAppInventoryCache();
     const key = "selected-runtime";
     let finishOldRefresh: () => void = () => {};
