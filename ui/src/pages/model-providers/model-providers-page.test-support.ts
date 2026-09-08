@@ -6,6 +6,7 @@ import type {
   ModelsProbeResult,
 } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
+import type { CatalogDiscoveryController } from "./catalog-discovery.ts";
 import type { DefaultModelSelection } from "./data.ts";
 import { EMPTY_MODEL_PROVIDERS_DATA, type ModelProvidersData } from "./load.ts";
 import type { ModelBehaviorConfig } from "./model-behavior.ts";
@@ -22,9 +23,7 @@ export type ModelProvidersPageTestElement = HTMLElement & {
   addProviderId: string;
   addProviderKey: string;
   addProviderOpen: boolean;
-  catalogDiscovering: boolean;
-  catalogDiscoveryError: string | null;
-  discoverPickerCatalog: () => Promise<void>;
+  catalogDiscovery: CatalogDiscoveryController;
   defaultsDraft: (DefaultModelSelection & Partial<ModelBehaviorConfig>) | null;
   keyDraft: string;
   keyEditorProvider: string | null;

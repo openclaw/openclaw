@@ -100,7 +100,7 @@ function mount(viewProps: ModelProvidersViewProps): HTMLDivElement {
   return container;
 }
 
-function text(element: Element | null): string {
+function text(element: Element | null | undefined): string {
   return element?.textContent?.replace(/\s+/gu, " ").trim() ?? "";
 }
 
@@ -1026,11 +1026,18 @@ describe("renderModelProviders", () => {
     expect(button(container, "Set API key")).toBeUndefined();
   });
 
-  it("invokes onModelPickerOpen when any default-model picker opens", () => {
+  it("invokes onModelPickerOpen when any default-model picker opens", async () => {
     const onModelPickerOpen = vi.fn();
     const container = mount(props({ onModelPickerOpen }));
-    const selects = container.querySelectorAll<HTMLElement>(".model-providers__defaults wa-select");
-    expect(selects.length).toBe(3);
+    // Match by the stable picker class: wa-select is a custom element, and tag-name
+    // descendant queries are unreliable for it once other suites register the tag.
+    const selects = await vi.waitFor(() => {
+      const found = container.querySelectorAll<HTMLElement>(
+        ".model-providers__defaults .picker-select",
+      );
+      expect(found.length).toBe(3);
+      return found;
+    });
 
     for (const select of selects) {
       select.dispatchEvent(new Event("wa-show", { bubbles: true }));
@@ -1039,13 +1046,17 @@ describe("renderModelProviders", () => {
     expect(onModelPickerOpen).toHaveBeenCalledTimes(3);
   });
 
-  it("announces catalog discovery in progress without blocking the pickers", () => {
+  it("announces catalog discovery in progress without blocking the pickers", async () => {
     const container = mount(props({ catalogDiscovering: true }));
     const progress = container.querySelector(".model-providers__catalog-progress");
 
     expect(progress?.getAttribute("role")).toBe("status");
     expect(text(progress)).toContain("Discovering more models");
-    expect(container.querySelectorAll(".model-providers__defaults wa-select")).toHaveLength(3);
+    await vi.waitFor(() =>
+      expect(container.querySelectorAll(".model-providers__defaults .picker-select")).toHaveLength(
+        3,
+      ),
+    );
   });
 
   it("presents a retry action when catalog discovery fails", () => {

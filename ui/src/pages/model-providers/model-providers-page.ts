@@ -131,8 +131,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
   });
   private readonly catalogDiscovery = createCatalogDiscoveryController({
     getGateway: () => this.gateway,
-    getAgentId: () => this.selectedAgentId,
-    getAgentEpoch: () => this.agentEpoch,
+    getScope: () => ({ agentId: this.selectedAgentId, agentEpoch: this.agentEpoch }),
     getData: () => this.data,
     setData: (data) => (this.data = data),
     requestUpdate: () => this.requestUpdate(),
@@ -232,10 +231,9 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
       this.routeData !== undefined
     ) {
       this.routeDataObserved = true;
-      const selectedAgentId = this.resolveSelectedAgentId();
-      this.setSelectedAgent(selectedAgentId);
+      this.setSelectedAgent(this.resolveSelectedAgentId());
       if (
-        (this.routeData.agentId ?? "") === selectedAgentId &&
+        (this.routeData.agentId ?? "") === this.selectedAgentId &&
         this.gateway.isRouteDataCurrent(this.routeData)
       ) {
         this.supplemental.adoptCoreData(this.routeData.client, this.routeData.data);
@@ -324,8 +322,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
   }
 
   private syncSelectedAgent() {
-    const agentId = this.resolveSelectedAgentId();
-    if (!this.setSelectedAgent(agentId)) {
+    if (!this.setSelectedAgent(this.resolveSelectedAgentId())) {
       return;
     }
     this.invalidateRequests();

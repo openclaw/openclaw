@@ -32,8 +32,7 @@ export type CatalogDiscoveryController = {
 
 type CreateOptions = {
   getGateway: () => DiscoveryGateway;
-  getAgentId: () => string;
-  getAgentEpoch: () => number;
+  getScope: () => { agentId: string; agentEpoch: number };
   getData: () => ModelProvidersData | null;
   setData: (data: ModelProvidersData) => void;
   requestUpdate: () => void;
@@ -67,7 +66,7 @@ export function createCatalogDiscoveryController(
   };
 
   async function discover(): Promise<void> {
-    const agentId = options.getAgentId();
+    const agentId = options.getScope().agentId;
     if (!agentId || discovering) {
       return;
     }
@@ -76,12 +75,12 @@ export function createCatalogDiscoveryController(
     if (!gateway.connected || !client) {
       return;
     }
-    const agentEpoch = options.getAgentEpoch();
+    const { agentEpoch } = options.getScope();
     const clientEpoch = gateway.epoch;
     const ownsResult = () =>
       gateway.isCurrent({ client, epoch: clientEpoch }) &&
-      options.getAgentId() === agentId &&
-      options.getAgentEpoch() === agentEpoch;
+      options.getScope().agentId === agentId &&
+      options.getScope().agentEpoch === agentEpoch;
     discovering = true;
     error = null;
     options.requestUpdate();
