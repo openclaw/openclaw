@@ -77,6 +77,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     prompt?: string;
     disableTools?: boolean;
     clientTools?: unknown[];
+    suppressNextUserMessagePersistence?: boolean;
   } {
     // Continuation prompt assertions read the exact prompt passed to the runner
     // attempt rather than derived result metadata.
@@ -84,7 +85,12 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     if (!call) {
       throw new Error(`Expected run embedded attempt call ${index}`);
     }
-    return call[0] as { prompt?: string; disableTools?: boolean; clientTools?: unknown[] };
+    return call[0] as {
+      prompt?: string;
+      disableTools?: boolean;
+      clientTools?: unknown[];
+      suppressNextUserMessagePersistence?: boolean;
+    };
   }
 
   it("emits the before_agent_run hook block message as the agent payload", async () => {
@@ -3250,15 +3256,20 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     } as unknown as EmbeddedRunAttemptResult["lastAssistant"];
     mockedClassifyFailoverReason.mockReturnValue(null);
     mockedRunEmbeddedAttempt
-      .mockResolvedValueOnce(
-        makeAttemptResult({
+      .mockImplementationOnce(async (attemptParams) => {
+        (
+          attemptParams as {
+            onUserMessagePersisted?: (message: { role: "user"; content: string }) => void;
+          }
+        ).onUserMessagePersisted?.({ role: "user", content: "Write the note." });
+        return makeAttemptResult({
           assistantTexts: [],
           toolMetas: [{ toolName: "write", meta: "path=note.txt", replaySafe: false }],
           itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
           lastAssistant: emptyStopAssistant,
           currentAttemptAssistant: emptyStopAssistant,
-        }),
-      )
+        });
+      })
       .mockResolvedValueOnce(
         makeAttemptResult({
           assistantTexts: ["Write completed."],
@@ -3278,6 +3289,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       provider: "openai",
       model: "gpt-5.5",
       runId: "run-settled-write-empty-stop",
+      currentMessageId: "telegram-message-1",
       agentHarnessRuntimeOverride: "openclaw",
       clientTools: [
         {
@@ -3291,7 +3303,8 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(runAttemptCall(1)).toMatchObject({
       disableTools: true,
       clientTools: undefined,
-      prompt: expect.stringContaining(SETTLED_TOOL_CONTINUATION_INSTRUCTION),
+      prompt: SETTLED_TOOL_CONTINUATION_INSTRUCTION,
+      suppressNextUserMessagePersistence: true,
     });
     expect(result.meta.finalAssistantVisibleText).toBe("Write completed.");
     expectWarnMessageWith("settled post-tool turn lacked a final answer");

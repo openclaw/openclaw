@@ -2095,9 +2095,8 @@ async function runEmbeddedAgentInternal(
             currentInboundContext: params.currentInboundContext,
             images: params.images,
             imageOrder: params.imageOrder,
-            clientTools:
-              settledToolContinuationInstruction === null ? params.clientTools : undefined,
-            disableTools: params.disableTools || settledToolContinuationInstruction !== null,
+            clientTools: settledToolContinuationAttempts === 0 ? params.clientTools : undefined,
+            disableTools: params.disableTools || settledToolContinuationAttempts > 0,
             provider,
             modelId,
             requestedModelId,
@@ -3809,7 +3808,17 @@ async function runEmbeddedAgentInternal(
                 });
           if (nextSettledToolContinuationInstruction && settledToolContinuationAttempts < 1) {
             settledToolContinuationAttempts += 1;
-            settledToolContinuationInstruction = nextSettledToolContinuationInstruction;
+            if (
+              params.currentMessageId !== undefined &&
+              params.currentMessageId === lastPersistedCurrentMessageId
+            ) {
+              // The settled tool batch already follows this inbound leaf. Keep the
+              // continuation as the new model prompt instead of replaying that leaf.
+              nextAttemptPromptOverride = nextSettledToolContinuationInstruction;
+              suppressNextUserMessagePersistence = true;
+            } else {
+              settledToolContinuationInstruction = nextSettledToolContinuationInstruction;
+            }
             log.warn(
               `settled post-tool turn lacked a final answer: runId=${params.runId} sessionId=${params.sessionId} ` +
                 `provider=${activeErrorContext.provider}/${activeErrorContext.model} — continuing from settled tool results`,
