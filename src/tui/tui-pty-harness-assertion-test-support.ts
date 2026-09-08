@@ -167,7 +167,7 @@ function assertAllowedOsc(body: string) {
   if (
     target === undefined ||
     (target !== "" &&
-      (!/^https?:\/\/\S+$/u.test(target) ||
+      (!/^(?:https?:\/\/|mailto:)\S+$/u.test(target) ||
         ansi.sanitizeForLog(target) !== target ||
         !URL.canParse(target)))
   ) {

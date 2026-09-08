@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
+import { toUSVString } from "node:util";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { z } from "zod";
 import { inlineAuthProfileCredentialSchema } from "../agents/auth-profiles/credential-schema.js";
 import { coerceProfileUsageStats } from "../agents/auth-profiles/profile-usage-stats.js";
@@ -251,11 +253,12 @@ function accountSummary(
   return {
     authProfileId,
     provider: credential.provider,
-    label: (
-      credential.displayName?.trim() ||
-      credential.email?.trim() ||
-      credential.provider
-    ).slice(0, 256),
+    label: truncateUtf16Safe(
+      toUSVString(
+        credential.displayName?.trim() || credential.email?.trim() || credential.provider,
+      ),
+      256,
+    ),
     authType: credential.type,
     selected: links.links[credential.provider]?.authProfileId === authProfileId,
   };

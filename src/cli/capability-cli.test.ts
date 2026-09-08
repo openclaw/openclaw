@@ -6,6 +6,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
 import type { inspectLocalAudioSelection } from "../media-understanding/local-audio.js";
 import { registerCapabilityCli } from "./capability-cli.js";
 import { CAPABILITY_METADATA } from "./capability-cli/metadata.js";
@@ -929,7 +930,14 @@ describe("capability cli", () => {
         entries: { main: {}, work: {} },
       },
     });
-    const workModel = { provider: "catalog-fixture", id: "work-model", name: "Work model" };
+    const workModel: ModelCatalogEntry = {
+      provider: "catalog-fixture",
+      id: "work-model",
+      name: "Work model",
+      contextWindow: 24576,
+      reasoning: false,
+      input: ["text", "image"],
+    };
     mocks.loadModelCatalog.mockImplementation(async (params) =>
       params?.agentId === "work"
         ? [workModel]
@@ -1172,32 +1180,40 @@ describe("capability cli", () => {
     });
   });
 
-  it("inspects runtime-declared manifest models without live discovery", async () => {
-    mocks.loadModelCatalog.mockResolvedValueOnce([] as never);
-    mocks.planEffectiveModelCatalogRows.mockReturnValueOnce({
-      rows: [
-        {
-          provider: "openai",
-          id: "gpt-5.6-sol",
-          name: "GPT-5.6 Sol",
-          ref: "openai/gpt-5.6-sol",
-          mergeKey: "openai/gpt-5.6-sol",
-          source: "manifest",
-          input: ["text"],
-          reasoning: true,
-          status: "available",
-        },
-      ],
-      entries: [],
-      conflicts: [],
-    });
+  it.each(["list", "inspect", "providers"])(
+    "keeps excluded manifest models out of infer model %s",
+    async (command) => {
+      mocks.loadModelCatalog.mockResolvedValue([]);
+      mocks.planEffectiveModelCatalogRows.mockReturnValue({
+        rows: [
+          {
+            provider: "cerebras",
+            id: "gpt-oss-120b",
+            name: "GPT OSS 120B",
+            ref: "cerebras/gpt-oss-120b",
+            mergeKey: "cerebras::gpt-oss-120b",
+            source: "manifest",
+            input: ["text"],
+            reasoning: true,
+            status: "available",
+          },
+        ],
+        entries: [],
+        conflicts: [],
+      });
 
-    await runCap("capability", "model", "inspect", "--model", "openai/gpt-5.6-sol", "--json");
-
-    expect(firstJsonOutput()).toEqual(
-      expect.objectContaining({ provider: "openai", id: "gpt-5.6-sol" }),
-    );
-  });
+      if (command === "inspect") {
+        await expect(
+          runCap("infer", "model", command, "--model", "cerebras/gpt-oss-120b", "--json"),
+        ).rejects.toThrow("exit 1");
+        expectRuntimeErrorContains("Model not found: cerebras/gpt-oss-120b");
+        expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
+      } else {
+        await runCap("infer", "model", command, "--json");
+        expect(mocks.runtime.writeJson).toHaveBeenCalledWith([]);
+      }
+    },
+  );
 
   it("defaults model run to local transport", async () => {
     await runCapability("model", "run", "--prompt", "hello", "--json");

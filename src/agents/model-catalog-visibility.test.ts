@@ -13,6 +13,53 @@ import { createModelVisibilityPolicy } from "./model-visibility-policy.js";
 import { openAIModelCatalogRoutePolicy } from "./openai-model-routes.js";
 
 describe("resolveLogicalVisibleModelCatalog", () => {
+  it.each(["all", "configured", "default"] as const)(
+    "keeps case-distinct configured identities in the %s view",
+    async (view) => {
+      const catalog: ModelCatalogEntry[] = [
+        { provider: "fixture", id: "MixedCase", name: "Large", contextWindow: 64_000 },
+        { provider: "fixture", id: "mixedcase", name: "Small", contextWindow: 16_000 },
+      ];
+      const result = await resolveLogicalVisibleModelCatalog({
+        cfg: { agents: { defaults: { modelPolicy: { allow: ["fixture/*"] } } } },
+        catalog,
+        defaultProvider: "fixture",
+        view,
+        routePolicy: openAIModelCatalogRoutePolicy,
+        evaluateEntry: async () =>
+          resolveLogicalModelCatalogEntryState({
+            evaluation: { availability: true, routeResolution: null },
+            routePolicy: openAIModelCatalogRoutePolicy,
+          }),
+      });
+
+      expect(result).toEqual(expect.arrayContaining(catalog));
+      expect(result).toHaveLength(2);
+    },
+  );
+
+  it("keeps a literal catalog suffix distinct from its base model", async () => {
+    const catalog: ModelCatalogEntry[] = [
+      { provider: "fixture", id: "reader", name: "Base" },
+      { provider: "fixture", id: "reader@variant", name: "Literal variant" },
+    ];
+    const result = await resolveLogicalVisibleModelCatalog({
+      cfg: {},
+      catalog,
+      defaultProvider: "fixture",
+      view: "all",
+      routePolicy: openAIModelCatalogRoutePolicy,
+      evaluateEntry: async () =>
+        resolveLogicalModelCatalogEntryState({
+          evaluation: { availability: true, routeResolution: null },
+          routePolicy: openAIModelCatalogRoutePolicy,
+        }),
+    });
+
+    expect(result).toEqual(expect.arrayContaining(catalog));
+    expect(result).toHaveLength(2);
+  });
+
   const selectedRoute = {
     api: "openai-chatgpt-responses" as const,
     baseUrl: "https://chatgpt.com/backend-api/codex",

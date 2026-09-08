@@ -459,12 +459,17 @@ describe("refreshChat", () => {
     expect(requestUpdate).not.toHaveBeenCalled();
   });
 
-  it("uses prepared models delivered with startup metadata", async () => {
+  it("uses direct catalog models instead of a competing startup projection", async () => {
     const startup = createDeferred<unknown>();
     const host = makeChatHost({
       hello: gatewayHelloForMethods(["chat.metadata", "chat.startup"], []),
       requestHandlers: {
         "chat.startup": () => startup.promise,
+        "models.list": async () => ({
+          models: [
+            { available: true, id: "direct-model", name: "Direct Model", provider: "example" },
+          ],
+        }),
       },
     });
 
@@ -474,7 +479,10 @@ describe("refreshChat", () => {
       startup: true,
     });
 
-    expect(host.request.mock.calls.map(([method]) => method)).toEqual(["chat.startup"]);
+    expect(host.request.mock.calls.map(([method]) => method)).toEqual([
+      "models.list",
+      "chat.startup",
+    ]);
     expect(await raceWithMacrotask(refresh)).toBe("pending");
 
     startup.resolve({
@@ -494,16 +502,15 @@ describe("refreshChat", () => {
     await expect(refresh).resolves.toBeUndefined();
     await waitForFast(() =>
       expect(host.chatModelCatalog).toEqual([
-        {
-          available: true,
-          id: "startup-model",
-          name: "Startup Model",
-          provider: "openai",
-        },
+        { available: true, id: "direct-model", name: "Direct Model", provider: "example" },
       ]),
     );
     expect(host.request).not.toHaveBeenCalledWith("chat.metadata", expect.anything());
-    expect(host.request).not.toHaveBeenCalledWith("models.list", expect.anything());
+    expect(host.request).toHaveBeenCalledWith(
+      "models.list",
+      { view: "configured", agentId: "main", sessionKey: host.sessionKey },
+      { signal: expect.any(AbortSignal) },
+    );
     expect(host.request).not.toHaveBeenCalledWith("commands.list", expect.anything());
   });
 
@@ -518,6 +525,7 @@ describe("refreshChat", () => {
       requestHandlers: {
         "chat.startup": async () => ({ messages: [message] }),
         "chat.metadata": () => metadata.promise,
+        "models.list": () => metadata.promise,
       },
     });
 
@@ -546,13 +554,15 @@ describe("refreshChat", () => {
     await waitForFast(() => expect(host.chatModelCatalog).toEqual([model]));
   });
 
-  it("keeps cached models interactive while startup metadata revalidates silently", async () => {
+  it("keeps current models interactive while the direct catalog revalidates", async () => {
     const startup = createDeferred<unknown>();
+    const catalog = createDeferred<unknown>();
     const host = makeChatHost({
       chatModelSwitchPromises: {},
       hello: gatewayHelloForMethods(["chat.metadata", "chat.startup"], []),
       requestHandlers: {
         "chat.startup": () => startup.promise,
+        "models.list": () => catalog.promise,
       },
     });
     const cachedModel = {
@@ -569,6 +579,7 @@ describe("refreshChat", () => {
       models: [cachedModel],
     });
 
+    host.chatModelCatalog = [cachedModel];
     const refresh = refreshPageChat(asChatPageHost(host), {
       awaitHistory: true,
       deferBranches: true,
@@ -601,6 +612,7 @@ describe("refreshChat", () => {
         models: [{ ...cachedModel, id: "fresh-model", name: "Fresh Model" }],
       },
     });
+    catalog.resolve({ models: [{ ...cachedModel, id: "fresh-model", name: "Fresh Model" }] });
     await expect(refresh).resolves.toBeUndefined();
     await waitForFast(() =>
       expect(host.chatModelCatalog).toEqual([
@@ -615,7 +627,8 @@ describe("refreshChat", () => {
     const host = makeChatHost({
       requestHandlers: {
         "chat.startup": () => startup.promise,
-        "chat.metadata": async () => ({ commands: [], models: [ready] }),
+        "chat.metadata": async () => ({ commands: [] }),
+        "models.list": async () => ({ models: [ready] }),
       },
     });
     const refresh = refreshPageChat(asChatPageHost(host), {
@@ -637,7 +650,7 @@ describe("refreshChat", () => {
   });
 
   it.each(["closes", "disconnects", "changes session"])(
-    "publishes shared startup metadata after its initiating pane %s",
+    "keeps direct catalog reads alive after another pane %s",
     async (retirement) => {
       const startup = createDeferred<unknown>();
       const metadata = createDeferred<unknown>();
@@ -645,6 +658,7 @@ describe("refreshChat", () => {
       const retained = makeChatHost({
         requestHandlers: {
           "chat.metadata": () => metadata.promise,
+          "models.list": () => metadata.promise,
           "chat.startup": () => startup.promise,
         },
       });
@@ -684,7 +698,8 @@ describe("refreshChat", () => {
       const host = makeChatHost({
         requestHandlers: {
           "chat.startup": async () => ({ messages: [] }),
-          "chat.metadata": async () => ({ commands: [], models: [ready] }),
+          "chat.metadata": async () => ({ commands: [] }),
+          "models.list": async () => ({ models: [ready] }),
         },
       });
       const client = expectDefined(host.client, "chat client");

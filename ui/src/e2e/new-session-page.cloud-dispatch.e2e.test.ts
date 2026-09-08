@@ -15,6 +15,7 @@ import {
   captureUiProofEnabled,
   controlUiSessionPath,
   controlUiSessionUrl,
+  createCloudAgentsListResponse,
   createNewSessionPageE2eSuite,
   createdSessionListResult,
   expectPendingSessionPlacementStartupBeforeRuntime,
@@ -137,20 +138,7 @@ suite.define(() => {
       workspaceGit: true,
       sessionKey: "agent:cloud:neutral-e2e",
       methodResponses: {
-        "agents.list": {
-          agents: [
-            {
-              id: "cloud",
-              identity: { name: "Cloud" },
-              name: "Cloud",
-              workspace: WORKSPACE,
-              workspaceGit: true,
-            },
-          ],
-          defaultId: "cloud",
-          mainKey: "main",
-          scope: "agent",
-        },
+        "agents.list": createCloudAgentsListResponse(),
         "projects.list": {
           projects: [
             {

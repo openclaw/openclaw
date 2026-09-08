@@ -57,7 +57,7 @@ export type GatewayClientOptions = BaseGatewayClientOptions & {
 function createOpenClawGatewayClientHostDeps(
   overrides?: GatewayClientHostDeps,
   deviceAuthScope?: string,
-  suppressOriginDeviceAuth = false,
+  suppressStoredDeviceAuth = false,
   sharedStateMode?: "read-only",
   preparedDeviceAuth?: DeviceAuthEntry,
 ): GatewayClientHostDeps {
@@ -73,7 +73,7 @@ function createOpenClawGatewayClientHostDeps(
   > = deviceAuthScope
     ? {
         loadDeviceAuthToken: (params) =>
-          suppressOriginDeviceAuth
+          suppressStoredDeviceAuth
             ? null
             : readOnly
               ? loadOriginDeviceTokenReadOnly({ ...params, gatewayScope: deviceAuthScope })
@@ -97,7 +97,7 @@ function createOpenClawGatewayClientHostDeps(
       }
     : readOnly
       ? {
-          loadDeviceAuthToken: loadDeviceAuthTokenReadOnly,
+          loadDeviceAuthToken: suppressStoredDeviceAuth ? () => null : loadDeviceAuthTokenReadOnly,
           storeDeviceAuthToken: () => {},
           clearDeviceAuthToken: () => {},
         }
@@ -139,9 +139,18 @@ export class GatewayClient {
   constructor(opts: GatewayClientOptions) {
     const { deviceAuthScope, preparedDeviceAuth, sharedStateMode, ...baseOptions } = opts;
     const runtimeIdentity = resolveGatewayClientPlatformIdentity(process.platform);
-    const suppressOriginDeviceAuth = Boolean(
-      deviceAuthScope && (baseOptions.token?.trim() || baseOptions.password?.trim()),
-    );
+    // Password-only read-only clients cannot use stored tokens for auth, retry, or persistence.
+    const suppressStoredDeviceAuth =
+      Boolean(deviceAuthScope && (baseOptions.token?.trim() || baseOptions.password?.trim())) ||
+      (!deviceAuthScope &&
+        sharedStateMode === "read-only" &&
+        Boolean(baseOptions.password?.trim()) &&
+        !baseOptions.token?.trim() &&
+        !baseOptions.bootstrapToken?.trim() &&
+        !baseOptions.deviceToken?.trim() &&
+        !baseOptions.approvalRuntimeToken?.trim() &&
+        !baseOptions.agentRuntimeIdentityToken?.trim() &&
+        !baseOptions.preferBootstrapToken);
     for (const value of Object.values(baseOptions.edgeAuthHeaders ?? {})) {
       registerSecretValueForRedaction(value);
     }
@@ -155,7 +164,7 @@ export class GatewayClient {
       hostDeps: createOpenClawGatewayClientHostDeps(
         baseOptions.hostDeps,
         deviceAuthScope,
-        suppressOriginDeviceAuth,
+        suppressStoredDeviceAuth,
         sharedStateMode,
         preparedDeviceAuth,
       ),

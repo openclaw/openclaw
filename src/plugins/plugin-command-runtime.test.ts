@@ -150,6 +150,7 @@ describe("plugin command runtime", () => {
     const scoped = createEmptyPluginRegistry();
     const ambientHandler = vi.fn(async () => ({ text: "ambient" }));
     const scopedHandler = vi.fn(async (args?: string) => ({ text: `scoped:${args}` }));
+    const nativeNames = { discord: "discord-demo" };
     registerCommand(ambient, {
       pluginId: "ambient",
       name: "demo",
@@ -159,7 +160,7 @@ describe("plugin command runtime", () => {
       pluginId: "scoped",
       name: "demo",
       channels: ["discord"],
-      nativeNames: { discord: "discord-demo" },
+      nativeNames,
       acceptsArgs: true,
       handler: scopedHandler,
     });
@@ -173,7 +174,14 @@ describe("plugin command runtime", () => {
       expect(
         matchPluginCommandInvocation(runtime, "/discord-demo hi", { channel: "telegram" }),
       ).toBeNull();
-      const match = matchPluginCommandInvocation(runtime, "/discord-demo hi", {
+      expect(
+        matchPluginCommandInvocation(runtime, "/discord-demo hi", { channel: "discord" }),
+      ).not.toBeNull();
+      nativeNames.discord = "renamed-demo";
+      expect(
+        matchPluginCommandInvocation(runtime, "/discord-demo hi", { channel: "discord" }),
+      ).toBeNull();
+      const match = matchPluginCommandInvocation(runtime, "/renamed-demo hi", {
         channel: "discord",
       });
       expect(match?.dispatch.kind).toBe("plugin");
@@ -183,7 +191,7 @@ describe("plugin command runtime", () => {
       const result = await match.dispatch.execute({
         ...executionContext,
         channel: "discord",
-        commandBody: "/discord-demo hi",
+        commandBody: "/renamed-demo hi",
       });
       expect(result).toEqual({ text: "scoped:hi" });
     });

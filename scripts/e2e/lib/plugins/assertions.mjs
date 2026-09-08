@@ -8,7 +8,7 @@ import {
 } from "../../../lib/bounded-response.mjs";
 import { createTimeoutError } from "../../../lib/timeout-error.mjs";
 import { readPositiveIntEnv } from "../env-limits.mjs";
-import { resolveHomePath } from "../openclaw-state-paths.mjs";
+import { assertRealPathInside, resolveHomePath } from "../openclaw-state-paths.mjs";
 import {
   readPluginInstallIndex,
   readPluginInstallRecords,
@@ -539,17 +539,6 @@ function assertGitPluginRemoved() {
     throw new Error(
       `empty git managed install parent still exists after uninstall: ${installParent}`,
     );
-  }
-}
-
-function assertRealPathInside(parentPath, childPath, label) {
-  const parentRealPath = fs.realpathSync(parentPath);
-  const childRealPath = fs.realpathSync(childPath);
-  if (
-    childRealPath !== parentRealPath &&
-    !childRealPath.startsWith(`${parentRealPath}${path.sep}`)
-  ) {
-    throw new Error(`${label} resolved outside ${parentPath}: ${childRealPath}`);
   }
 }
 

@@ -88,9 +88,9 @@ env:
   OCM_VERSION: v0.2.33
   OCM_LINUX_X64_SHA256: 06b0e46791e750eb044e4a898b6643ad5e7b20224fe0c64f160e35a42f08d00a
   KOVA_REPOSITORY: openclaw/Kova
-  KOVA_CANONICAL_CONFIG_REF: 11b56553e4c4e93ddf99a53617a139b2c9e9efef
-  KOVA_LEGACY_LIST_CONFIG_REF: 11b56553e4c4e93ddf99a53617a139b2c9e9efef
-  KOVA_TRUSTED_LIVE_REF: 11b56553e4c4e93ddf99a53617a139b2c9e9efef
+  KOVA_CANONICAL_CONFIG_REF: cf6e26f0ca1241c9e7a626e96e66f392ff58012d
+  KOVA_LEGACY_LIST_CONFIG_REF: cf6e26f0ca1241c9e7a626e96e66f392ff58012d
+  KOVA_TRUSTED_LIVE_REF: cf6e26f0ca1241c9e7a626e96e66f392ff58012d
   PERFORMANCE_MODEL_ID: gpt-5.6-luna
   # Release matrices cold-build the candidate runtime before measurement.
   KOVA_SCENARIO_TIMEOUT_MS: ${{ inputs.profile == 'release' && '900000' || '300000' }}
@@ -158,10 +158,9 @@ jobs:
               process.stdout.write(version);
             ' "$TARGET_CHECKOUT_DIR/package.json")"
             if [[ "$target_version" == "2026.7.33" ]]; then
-              # Kova #116 carries the historical 250% status CLI calibration for this release only;
-              # Kova #118 keeps process-census time out of CPU scan uncertainty;
-              # Kova #119 discovers a starting gateway before its zero baseline is lost.
-              kova_ref="11b56553e4c4e93ddf99a53617a139b2c9e9efef"
+              # This compatibility ref keeps Kova #116's historical 250% status CLI calibration
+              # while backporting #118-#120's complete CPU-accounting fixes for this release only.
+              kova_ref="18c9eb8c3950a35794d196f4e40ad471e9308e27"
             fi
           fi
           if [[ "$kova_ref" == *$'\n'* || "$kova_ref" == *$'\r'* ]]; then
@@ -730,7 +729,9 @@ jobs:
           fi
 
       - name: Upload Kova artifacts
+        id: upload_kova_artifacts
         if: ${{ always() && steps.lane.outputs.run == 'true' }}
+        continue-on-error: true
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: openclaw-performance-${{ matrix.lane }}-${{ github.run_id }}-${{ github.run_attempt }}
@@ -740,6 +741,19 @@ jobs:
             .artifacts/kova/summaries/${{ matrix.lane }}.md
           if-no-files-found: error
           retention-days: ${{ matrix.deep_profile == 'true' && 14 || 30 }}
+
+      - name: Retry Kova artifact upload
+        if: ${{ always() && steps.lane.outputs.run == 'true' && steps.upload_kova_artifacts.outcome == 'failure' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: openclaw-performance-${{ matrix.lane }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            .artifacts/kova/reports/${{ matrix.lane }}
+            .artifacts/kova/bundles/${{ matrix.lane }}
+            .artifacts/kova/summaries/${{ matrix.lane }}.md
+          if-no-files-found: error
+          retention-days: ${{ matrix.deep_profile == 'true' && 14 || 30 }}
+          overwrite: true
 
   source_performance:
     name: OpenClaw source performance probes
@@ -1070,13 +1084,25 @@ jobs:
           cat "$SOURCE_PERF_DIR/index.md" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload source performance artifacts
+        id: upload_source_performance_artifacts
         if: always()
+        continue-on-error: true
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: openclaw-performance-source-${{ github.run_id }}-${{ github.run_attempt }}
           path: .artifacts/openclaw-performance/source
           if-no-files-found: error
           retention-days: 30
+
+      - name: Retry source performance artifact upload
+        if: ${{ always() && steps.upload_source_performance_artifacts.outcome == 'failure' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: openclaw-performance-source-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .artifacts/openclaw-performance/source
+          if-no-files-found: error
+          retention-days: 30
+          overwrite: true
 
   publish:
     name: Publish ${{ matrix.title }} report

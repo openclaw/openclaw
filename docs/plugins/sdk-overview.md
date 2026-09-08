@@ -506,6 +506,17 @@ still does not invoke a discovery-only engine factory. `dispose()` must not dele
 durable state or disable another registration. Existing raw loader and Gateway
 lifetimes do not gain automatic disposal: keep their `cleanup(ctx)` behavior.
 
+Executable CLI command registration also uses an owned, uncached registry. Its
+resources remain available through asynchronous registration, command actions,
+and their tracked cleanup, then `dispose()` runs. Closing command preparation
+before parsing does not release those resources. Return asynchronous work from
+registrars and actions; a plugin's disposer must also stop and join any background
+work it owns before closing resources that work uses. The CLI's bounded cleanup
+grace can report pending work without treating that work as completed.
+Standalone programmatic CLI calls and caller-owned Commander programs retain
+their existing lifecycle. `cli-metadata` remains inert and accepts CLI descriptors
+only; keep its `machineOutput` resolver pure and synchronous.
+
 `registerBoardWidgetContentKind(...)` is for plugins that own a declarative
 widget source format. The registration supplies a globally unique lowercase
 `kind`, a short label, one capability-scoped plugin surface plus its renderer

@@ -8,6 +8,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { resolveAuthProfileSecretOwnerId } from "../../secrets/runtime-auth-profile-owner.js";
 import { setActiveDegradedSecretOwners } from "../../secrets/runtime-degraded-state.js";
 import { withEnvAsync } from "../../test-utils/env.js";
+import { createApiKeyCredential } from "./credential-fixtures.test-support.js";
 import type { AuthProfileStore, RuntimeAuthProfileStore } from "./types.js";
 
 vi.hoisted(() => {
@@ -29,6 +30,7 @@ vi.mock("../../plugins/provider-runtime.runtime.js", () => ({
   formatProviderAuthProfileApiKeyWithPlugin: async (params: { context?: { access?: string } }) =>
     params.context?.access,
   resolveProviderOAuthCredentialWithPlugin,
+  resolveProviderOAuthRefreshCapabilityWithPlugin: async () => ({ status: "unhandled" }),
 }));
 
 let resolveApiKeyForProfile: typeof import("./oauth.js").resolveApiKeyForProfile;
@@ -592,11 +594,7 @@ describe("resolveApiKeyForProfile secret refs", () => {
         store: {
           version: 1,
           profiles: {
-            [profileId]: {
-              type: "api_key",
-              provider: "openai",
-              key: "${OPENAI_API_KEY}",
-            },
+            [profileId]: createApiKeyCredential("openai", "${OPENAI_API_KEY}"),
           },
         },
         profileId,

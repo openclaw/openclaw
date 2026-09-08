@@ -3,7 +3,6 @@
    ============================================= */
 
 .chat-thinking {
-  margin-bottom: 10px;
   padding: 10px 12px;
   border-radius: var(--radius-md);
   border: 1px dashed rgba(255, 255, 255, 0.18);
@@ -121,14 +120,6 @@
   margin: 0;
 }
 
-/* Keep every adjacent top-level Markdown block on the same rhythm, including
-   special blocks that otherwise read as part of the preceding block. */
-.chat-text
-  > :where(p, ul, ol, pre, blockquote, table, details, .markdown-table)
-  + :where(p, ul, ol, pre, blockquote, table, details, .markdown-table) {
-  margin-top: 1em;
-}
-
 .chat-text
   :where(blockquote, details, li)
   > :where(p, ul, ol, pre, blockquote, table, details, .markdown-table)
@@ -136,8 +127,6 @@
   margin-top: 0.5em;
 }
 
-/* Tables retain top margin even when first; the adjacent-block rule above gives
-   tables the same rhythm when they follow another Markdown block. */
 .chat-text :where(table) {
   margin-top: 0.75em;
   border: 1px solid color-mix(in srgb, var(--accent) 20%, var(--border));
@@ -979,7 +968,6 @@
 }
 
 .chat-group.user .chat-text :where(pre) {
-  margin-block: 1em;
   padding: 0;
   border: 0;
   border-radius: 0;
@@ -988,6 +976,10 @@
   font: inherit;
   overflow: visible;
   white-space: pre-wrap;
+}
+
+.chat-group.user .chat-text :where(:not(.chat-text) > pre) {
+  margin-block: 1em;
 }
 
 /* A user fence carries no code chrome, so it reads as the message it was typed
@@ -1178,4 +1170,54 @@
   .chat-json-content {
     max-height: 200px;
   }
+}
+
+/* Only top-level blocks share message rhythm; list/quote interiors keep their
+   own spacing. Reset edge margins so a first or last block adds no extra gap. */
+.chat-text > *,
+.chat-text > .markdown-external-image {
+  margin-block: 0;
+}
+
+/* renderBody is shared by normal bubbles and expanded tool output. */
+:is(.chat-bubble, .chat-tool-msg-body) {
+  > :is(
+    .chat-message-images,
+    .chat-assistant-attachments,
+    .chat-assistant-attachment-card,
+    .chat-pairing-qr-notices,
+    .chat-thinking,
+    .chat-tool-card__widget-host,
+    .chat-text,
+    .chat-json-collapse,
+    .chat-message-disclosure,
+    .chat-tools-inline
+  ) {
+    margin-block: 0;
+
+    + :is(
+      .chat-message-images,
+      .chat-assistant-attachments,
+      .chat-assistant-attachment-card,
+      .chat-pairing-qr-notices,
+      .chat-thinking,
+      .chat-tool-card__widget-host,
+      .chat-text,
+      .chat-json-collapse,
+      .chat-message-disclosure,
+      .chat-tools-inline
+    ) {
+      margin-block-start: var(--chat-block-gap);
+    }
+  }
+}
+
+.chat-text > * + *,
+.chat-text > * + .markdown-external-image {
+  margin-block-start: var(--chat-block-gap);
+}
+
+/* Contain the preview's reserved toolbar space within its message block. */
+.chat-bubble > .chat-tool-card__widget-host {
+  display: flow-root;
 }

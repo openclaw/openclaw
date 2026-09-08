@@ -1,4 +1,5 @@
 // Daemon runtime path tests cover executable and config path resolution.
+import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const fsMocks = vi.hoisted(() => ({
@@ -20,6 +21,8 @@ vi.mock("node:fs/promises", async () => {
   };
 });
 
+import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.js";
+import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { resolveStableNodePath } from "../infra/stable-node-path.js";
 import { resolveNodeProgramArguments } from "./program-args.js";
 import {
@@ -63,12 +66,16 @@ function bunRuntime(
   bunVersion: string | null,
   hasNodeSqlite = true,
   sqliteVersion: string | null = hasNodeSqlite ? "3.51.3" : null,
+  sqliteSelectionError: string | null = null,
 ) {
   return {
-    stdout: `${JSON.stringify({ bunVersion, hasNodeSqlite, sqliteVersion })}\n`,
+    stdout: `${JSON.stringify({ bunVersion, hasNodeSqlite, sqliteVersion, sqliteSelectionError })}\n`,
     stderr: "",
   };
 }
+
+const INVALID_SQLITE_OVERRIDE =
+  "Cannot use SQLite library /opt/broken/libsqlite3.dylib: missing file. Fix or unset OPENCLAW_SQLITE_LIBRARY; install a supported library with brew install sqlite.";
 
 describe.each(["node", "bun"] as const)("%s probe failures", (runtime) => {
   it.each([
@@ -314,7 +321,7 @@ describe("resolvePreferredNodePath", () => {
     expect(execFile).toHaveBeenCalledWith(
       darwinNode,
       ["-e", expect.stringContaining("SELECT sqlite_version() AS version")],
-      { encoding: "utf8", timeoutMs: 5_000 },
+      { encoding: "utf8", timeoutMs: 5_000, env: expect.any(Object) },
     );
   });
 
@@ -362,7 +369,7 @@ describe("resolvePreferredNodePath", () => {
     expect(execFile).toHaveBeenCalledWith(
       darwinNode,
       ["-e", expect.stringContaining("SELECT sqlite_version() AS version")],
-      { encoding: "utf8", timeoutMs: 5_000 },
+      { encoding: "utf8", timeoutMs: 5_000, env: expect.any(Object) },
     );
   });
 
@@ -459,7 +466,7 @@ describe("resolvePreferredBunPath", () => {
     expect(execFile).toHaveBeenCalledWith(
       bunPath,
       ["-e", expect.stringContaining("SELECT sqlite_version() AS version")],
-      { encoding: "utf8", timeoutMs: 5_000 },
+      { encoding: "utf8", timeoutMs: 5_000, env: expect.any(Object) },
     );
   });
 
@@ -520,6 +527,89 @@ describe("resolvePreferredBunPath", () => {
     const info = await resolveBunRuntimeInfo("/opt/bun", vi.fn().mockResolvedValue(probe));
 
     expect(info.status).toBe("unsupported");
+  });
+
+  it("probes Bun through the Gateway's SQLite library selection with a minimal env", async () => {
+    const bunPath = "/opt/homebrew/bin/bun";
+    // Apple's SQLite would report 3.54.0 here; the selected Homebrew library is what the Gateway opens.
+    const execFile = vi.fn().mockResolvedValue(bunRuntime("1.4.2", true, "3.53.4"));
+    const env = {
+      PATH: "/opt/homebrew/bin",
+      HOMEBREW_PREFIX: "/opt/homebrew",
+      OPENCLAW_SQLITE_LIBRARY: "/opt/homebrew/opt/sqlite/lib/libsqlite3.dylib",
+      OPENCLAW_GATEWAY_TOKEN: "secret",
+    };
+
+    await expect(resolveBunRuntimeInfo(bunPath, execFile, env)).resolves.toEqual({
+      status: "supported",
+      version: "1.4.2",
+      sqliteVersion: "3.53.4",
+      nodeSharedSqlite: false,
+    });
+    const selectionModule = fileURLToPath(
+      resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.bunSqliteLibrary),
+    );
+    expect(execFile).toHaveBeenCalledWith(
+      bunPath,
+      [
+        "-e",
+        expect.stringContaining(
+          `require(${JSON.stringify(selectionModule)}).ensureSqliteLibrarySelected`,
+        ),
+      ],
+      {
+        encoding: "utf8",
+        timeoutMs: 5_000,
+        env: {
+          PATH: env.PATH,
+          HOMEBREW_PREFIX: env.HOMEBREW_PREFIX,
+          OPENCLAW_SQLITE_LIBRARY: env.OPENCLAW_SQLITE_LIBRARY,
+        },
+      },
+    );
+  });
+
+  it("never loads the SQLite library selection module into a Node probe", async () => {
+    mockNodePathPresent("/usr/bin/node");
+    const execFile = vi.fn().mockResolvedValue(nodeRuntime("26.8.1"));
+
+    await resolveSystemNodeInfo({ env: {}, platform: "linux", execFile });
+
+    expect(execFile).toHaveBeenCalledWith(
+      "/usr/bin/node",
+      ["-e", expect.not.stringContaining("ensureSqliteLibrarySelected")],
+      expect.anything(),
+    );
+  });
+
+  it("rejects a Bun executable when its SQLite library override is invalid", async () => {
+    const probe = bunRuntime("1.4.2", true, null, INVALID_SQLITE_OVERRIDE);
+
+    await expect(
+      resolveBunRuntimeInfo("/opt/bun", vi.fn().mockResolvedValue(probe)),
+    ).resolves.toEqual({
+      status: "unsupported",
+      version: "1.4.2",
+      sqliteVersion: null,
+      nodeSharedSqlite: false,
+      sqliteSelectionError: INVALID_SQLITE_OVERRIDE,
+    });
+  });
+
+  it("reports an invalid SQLite library override instead of advising a Bun upgrade", async () => {
+    const execFile = vi
+      .fn()
+      .mockResolvedValue(bunRuntime("1.4.2", true, null, INVALID_SQLITE_OVERRIDE));
+
+    await expect(
+      resolvePreferredBunPath({
+        env: { PATH: "/opt/homebrew/bin:/usr/local/bin" },
+        runtime: "bun",
+        platform: "darwin",
+        execPath: "/fixture/other",
+        execFile,
+      }),
+    ).rejects.toThrow(INVALID_SQLITE_OVERRIDE);
   });
 });
 
@@ -705,7 +795,7 @@ describe("resolveSystemNodeInfo", () => {
     expect(execFile).toHaveBeenCalledWith(
       homebrewOptNode,
       ["-e", expect.stringContaining("SELECT sqlite_version() AS version")],
-      { encoding: "utf8", timeoutMs: 5_000 },
+      { encoding: "utf8", timeoutMs: 5_000, env: expect.any(Object) },
     );
   });
 

@@ -63,29 +63,51 @@ describe("trusted transcript display metadata", () => {
     expect(activity).not.toHaveProperty("__openclaw");
   });
 
-  it.each([undefined, position])(
-    "uses only reader-supplied placement (%j)",
-    (transcriptPosition) => {
-      const history = projectTranscriptEntryMessage(
-        { type: "message", id: "entry", message },
-        2,
-        transcriptPosition,
-      );
-      const live = projectSessionMessagePayload({
-        message,
-        messageId: "entry",
-        messageSeq: 2,
-        transcriptPosition,
-        sessionKey: "agent:main:main",
-      }).payload?.message;
-      for (const projected of [history, live]) {
-        const metadata = asOptionalRecord(asOptionalRecord(projected)?.["__openclaw"]);
-        expect(metadata?.transcriptPosition).toEqual(transcriptPosition);
-        expect(metadata).toMatchObject({ id: "entry", seq: 2 });
+  it.each([
+    { transcriptPosition: undefined, custom: false },
+    { transcriptPosition: position, custom: false },
+    { transcriptPosition: undefined, custom: true },
+    { transcriptPosition: position, custom: true },
+  ])("uses only reader-supplied placement (%j)", ({ transcriptPosition, custom }) => {
+    const customMessage = {
+      role: "custom",
+      customType: "run-failed-before-reply",
+      content: "This turn ended before a reply.",
+      display: true,
+      details: { error: "PRIVATE_DIAGNOSTIC" },
+    };
+    const timestamp = "2026-09-08T00:00:00.000Z";
+    const history = projectTranscriptEntryMessage(
+      custom
+        ? { ...customMessage, type: "custom_message", id: "entry", timestamp }
+        : { type: "message", id: "entry", message },
+      2,
+      transcriptPosition,
+    );
+    const live = projectSessionMessagePayload({
+      message: custom ? { ...customMessage, timestamp: Date.parse(timestamp) } : message,
+      messageId: "entry",
+      messageSeq: 2,
+      transcriptPosition,
+      sessionKey: "agent:main:main",
+    }).payload?.message;
+    for (const projected of [projectChatDisplayMessage(history), live]) {
+      const metadata = asOptionalRecord(asOptionalRecord(projected)?.["__openclaw"]);
+      expect(metadata?.transcriptPosition).toEqual(transcriptPosition);
+      expect(metadata).toMatchObject({ id: "entry", seq: 2 });
+      if (custom) {
+        expect(projected).toMatchObject({
+          role: "custom",
+          customType: "run-failed-before-reply",
+          content: customMessage.content,
+          display: true,
+          timestamp: Date.parse(timestamp),
+        });
+        expect(projected).not.toHaveProperty("details");
       }
-      expect(message["__openclaw"].transcriptPosition.source).toBe("untrusted");
-    },
-  );
+    }
+    expect(message["__openclaw"].transcriptPosition.source).toBe("untrusted");
+  });
 
   it.each(["compaction", "reset"])(
     "keeps %s markers in the same physical coordinate space",

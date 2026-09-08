@@ -190,8 +190,10 @@ read once and trailing newlines are removed. Keep credential files private.
 The new commands reject `--token` and `--password` to keep secrets out of
 process arguments. Status and saved-Gateway output never contain credentials.
 
-Use `--profile <name>` or `OPENCLAW_PROFILE` to select the app profile. For
-example:
+Every command, including offline `configure-remote` and legacy `connect`/`wizard`,
+uses `--profile <name>` first, then `OPENCLAW_PROFILE`, then the default profile.
+Use `--profile default` to override a named environment profile. Profile names
+follow the app's validation rules. For example:
 
 ```bash
 openclaw-mac --profile research status --json
@@ -230,7 +232,15 @@ openclaw-mac configure-remote \
 
 The legacy `connect`, `wizard`, and `configure-remote` commands resolve config
 in this order: `OPENCLAW_CONFIG_PATH`, then
-`$OPENCLAW_STATE_DIR/openclaw.json`, then `~/.openclaw/openclaw.json`.
+`$OPENCLAW_STATE_DIR/openclaw.json`, then the selected profile's config:
+`~/.openclaw-<name>/openclaw.json` for a named profile or
+`~/.openclaw/openclaw.json` for the default profile. Explicit config/state paths
+override the profile's config location but do not change its app defaults suite.
+With a named profile, `configure-remote` writes only
+`ai.openclaw.mac.profile.<name>`, shared by release and debug app bundles.
+The default profile keeps the `ai.openclaw.mac` and `ai.openclaw.mac.debug` suites.
+For example, `openclaw-mac configure-remote --profile research --direct-url wss://gateway.example.com`
+preconfigures only the research profile unless an explicit config/state path is set.
 `configure-remote` supports SSH and `--direct-url` transports, marks onboarding
 complete, and leaves the app to use the selected transport on its next start.
 Its ports default to `18789`. Additional options include `--identity`,

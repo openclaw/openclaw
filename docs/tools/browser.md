@@ -169,9 +169,10 @@ After an established stream disconnects, the panel refreshes its screenshot
 and retries the stream automatically after a short delay. Annotation and
 inspection keep their captured image until you return to interaction mode.
 
-Preview cards are interactive only when OpenClaw can identify the browser's
-route. Sandbox browser results remain available to the agent but do not open a
-host-browser preview.
+Preview cards appear only for HTTP(S) page URLs when OpenClaw can identify the
+browser's route. Blank or internal pages remain ordinary tool results. Tab
+actions without a page URL still update the Browser panel's selection. Sandbox
+browser results remain available to the agent but do not open a host-browser preview.
 
 If a listed tab cannot be accessed, the panel explains whether navigation rules
 blocked it or its address could not be verified. Select another tab, enter an
