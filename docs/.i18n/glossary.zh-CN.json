@@ -2586,5 +2586,41 @@
   {
     "source": "Workspace tips and Dreams UI actions",
     "target": "工作区提示与 Dreams UI 操作"
+  },
+  {
+    "source": "Bun",
+    "target": "Bun"
+  },
+  {
+    "source": "Bun compatibility",
+    "target": "Bun 兼容性"
+  },
+  {
+    "source": "Environment variables",
+    "target": "环境变量"
+  },
+  {
+    "source": "Linux",
+    "target": "Linux"
+  },
+  {
+    "source": "Memory configuration",
+    "target": "记忆配置"
+  },
+  {
+    "source": "Node.js",
+    "target": "Node.js"
+  },
+  {
+    "source": "Node.js compatibility",
+    "target": "Node.js 兼容性"
+  },
+  {
+    "source": "Runtimes",
+    "target": "运行时"
+  },
+  {
+    "source": "macOS",
+    "target": "macOS"
   }
 ]
