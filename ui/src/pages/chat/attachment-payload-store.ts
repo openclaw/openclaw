@@ -52,8 +52,7 @@ export function getChatAttachmentVideoPosterUrl(
   if (payload?.videoPoster) {
     return payload.videoPoster.promise;
   }
-  // Restored data URLs belong to recovery; a thumbnail must not decode another
-  // full copy. Selected files already have a retained File owned by this payload.
+  // Use retained Files; never reconstruct a data URL just for a poster.
   if (!(payload?.blob instanceof File) || payload.blob.size > 512 * 1024 * 1024) {
     return null;
   }
@@ -72,11 +71,7 @@ export function getChatAttachmentVideoPosterUrl(
       signal: controller.signal,
     })
       .then((blob) => {
-        if (
-          !blob ||
-          controller.signal.aborted ||
-          payloads.get(attachment.id)?.videoPoster !== poster
-        ) {
+        if (!blob || payloads.get(attachment.id)?.videoPoster !== poster) {
           return null;
         }
         poster.url = createObjectUrl(blob);

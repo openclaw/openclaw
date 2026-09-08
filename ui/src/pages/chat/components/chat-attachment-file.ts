@@ -12,47 +12,42 @@ function renderAttachmentVideoPreview(attachment: ChatAttachment) {
   return html`
     <span class="chat-attachment-file__preview" aria-hidden="true">
       ${guard([poster], () =>
-        poster
-          ? until(
-              poster.then((src) =>
-                src
-                  ? html`
-                      <img src=${src} alt="" />
-                      <span class="chat-attachment-video__play">${icons.play}</span>
-                    `
-                  : icons.play,
-              ),
-              icons.play,
-            )
-          : icons.play,
+        until(
+          poster?.then((src) =>
+            src
+              ? html`
+                  <img src=${src} alt="" />
+                  <span class="chat-attachment-video__play">${icons.play}</span>
+                `
+              : icons.play,
+          ) ?? icons.play,
+          icons.play,
+        ),
       )}
     </span>
   `;
 }
 
 export function renderCompactAttachmentFile(attachment: ChatAttachment) {
-  const resolved = resolveAttachmentFileIcon(
+  const { family, extensionLabel } = resolveAttachmentFileIcon(
     attachment.fileName ?? "attachment",
     attachment.mimeType,
   );
-  const glyph = resolved.family === "audio" ? icons.music : icons.fileText;
+  const name = attachment.fileName ?? t("chat.attachments.attachedFile");
+  const glyph = family === "audio" ? icons.music : icons.fileText;
   return html`
-    <openclaw-tooltip .content=${attachment.fileName ?? t("chat.attachments.attachedFile")}>
+    <openclaw-tooltip .content=${name}>
       <div
-        class=${`chat-attachment-file${resolved.family === "video" ? " chat-attachment-file--video" : ""}`}
+        class=${`chat-attachment-file${family === "video" ? " chat-attachment-file--video" : ""}`}
       >
         ${
-          resolved.family === "video"
+          family === "video"
             ? renderAttachmentVideoPreview(attachment)
-            : html`<span class="chat-attachment-file__icon" data-family=${resolved.family}
-                >${glyph}</span
-              >`
+            : html`<span class="chat-attachment-file__icon" data-family=${family}>${glyph}</span>`
         }
         <span class="chat-attachment-file__body">
-          <span class="chat-attachment-file__name"
-            >${attachment.fileName ?? t("chat.attachments.attachedFile")}</span
-          >
-          <span class="chat-attachment-file__type">${resolved.extensionLabel}</span>
+          <span class="chat-attachment-file__name">${name}</span>
+          <span class="chat-attachment-file__type">${extensionLabel}</span>
         </span>
       </div>
     </openclaw-tooltip>

@@ -31,153 +31,103 @@ function schedule(): void {
   }
 }
 
-function decodePoster(
-  src: string,
-  width: number,
-  height: number,
-  signal: AbortSignal,
-): Promise<Blob | null> {
-  return new Promise((resolve) => {
-    const video = document.createElement("video");
-    let canvas: HTMLCanvasElement | undefined;
-    let frameCallback: number | undefined;
-    let metadataReady = false;
-    let initialFrameReady = false;
-    let frameReady = false;
-    let seeked = false;
+function createPoster(src: string, width: number, height: number): PosterEntry {
+  const controller = new AbortController();
+  const { signal } = controller;
+  const promise = new Promise<Blob | null>((resolve) => {
+    let cleanup = () => {
+      queue.delete(start);
+    };
     let settled = false;
     const finish = (blob: Blob | null) => {
       if (settled) {
         return;
       }
       settled = true;
-      clearTimeout(timeout);
-      signal.removeEventListener("abort", abort);
-      if (frameCallback !== undefined) {
-        video.cancelVideoFrameCallback(frameCallback);
-      }
-      video.removeEventListener("loadedmetadata", loadedMetadata);
-      video.removeEventListener("seeked", seekComplete);
-      video.removeEventListener("error", abort);
-      video.removeAttribute("src");
-      video.load();
-      if (canvas) {
-        canvas.width = canvas.height = 0;
-      }
+      controller.abort();
+      cleanup();
       resolve(blob);
     };
     const abort = () => finish(null);
-    const timeout = setTimeout(abort, 2000);
     signal.addEventListener("abort", abort, { once: true });
-    video.preload = "metadata";
-    video.muted = true;
-    video.playsInline = true;
-    video.crossOrigin = "anonymous";
-    const loadedMetadata = () => {
-      if (
-        !Number.isFinite(video.duration) ||
-        video.duration <= 0 ||
-        video.videoWidth * video.videoHeight > 16_777_216
-      ) {
-        finish(null);
-        return;
-      }
-      metadataReady = true;
-      seek();
-    };
-    const seek = () => {
-      if (settled || !metadataReady || !initialFrameReady) {
-        return;
-      }
-      // Consume the initial frame before seeking so it cannot satisfy the
-      // sought-frame fence. Seek completion alone can still yield black pixels.
-      frameCallback = video.requestVideoFrameCallback(() => {
-        frameReady = true;
-        if (seeked) {
-          capture();
-        }
-      });
-      video.currentTime = Math.min(0.1, video.duration / 10);
-    };
-    const seekComplete = () => {
-      seeked = true;
-      if (frameReady) {
-        capture();
-      }
-    };
-    const capture = () => {
-      if (settled) {
-        return;
-      }
-      try {
-        canvas = document.createElement("canvas");
-        canvas.width = width;
-        canvas.height = height;
-        const context = canvas.getContext("2d");
-        if (!context) {
-          finish(null);
-          return;
-        }
-        const scale = Math.max(width / video.videoWidth, height / video.videoHeight);
-        const sourceWidth = width / scale;
-        const sourceHeight = height / scale;
-        context.drawImage(
-          video,
-          (video.videoWidth - sourceWidth) / 2,
-          (video.videoHeight - sourceHeight) / 2,
-          sourceWidth,
-          sourceHeight,
-          0,
-          0,
-          width,
-          height,
-        );
-        canvas.toBlob(finish, "image/jpeg", 0.8);
-      } catch {
-        finish(null);
-      }
-    };
-    if (typeof video.requestVideoFrameCallback !== "function") {
-      finish(null);
-      return;
-    }
-    frameCallback = video.requestVideoFrameCallback(() => {
-      initialFrameReady = true;
-      seek();
-    });
-    video.addEventListener("loadedmetadata", loadedMetadata, { once: true });
-    video.addEventListener("seeked", seekComplete, { once: true });
-    video.addEventListener("error", abort, { once: true });
-    video.src = src;
-    video.load();
-  });
-}
-
-function enqueuePoster(
-  src: string,
-  width: number,
-  height: number,
-  signal: AbortSignal,
-): Promise<Blob | null> {
-  return new Promise((resolve) => {
-    const cancel = () => {
-      queue.delete(start);
-      resolve(null);
-    };
     const start = () => {
-      signal.removeEventListener("abort", cancel);
       active += 1;
-      void decodePoster(src, width, height, signal)
-        .then(resolve)
-        .finally(() => {
-          active -= 1;
-          schedule();
-        });
+      const video = document.createElement("video");
+      const canvas = document.createElement("canvas");
+      let frameCallback: number | undefined;
+      const timeout = setTimeout(abort, 2000);
+      cleanup = () => {
+        clearTimeout(timeout);
+        if (frameCallback !== undefined) {
+          video.cancelVideoFrameCallback(frameCallback);
+        }
+        video.removeAttribute("src");
+        video.load();
+        canvas.width = canvas.height = 0;
+        active -= 1;
+        schedule();
+      };
+      const options = { once: true, signal };
+      // Consume the initial compositor frame before waiting for the sought frame.
+      const waitForFrame = (event: "loadedmetadata" | "seeked", next: () => void) => {
+        let pending = 2;
+        const ready = () => {
+          if (!settled && --pending === 0) {
+            next();
+          }
+        };
+        video.addEventListener(event, ready, options);
+        frameCallback = video.requestVideoFrameCallback(ready);
+      };
+      const capture = () => {
+        try {
+          canvas.width = width;
+          canvas.height = height;
+          const context = canvas.getContext("2d");
+          if (!context) {
+            return abort();
+          }
+          const scale = Math.max(width / video.videoWidth, height / video.videoHeight);
+          const w = video.videoWidth * scale;
+          const h = video.videoHeight * scale;
+          context.drawImage(video, (width - w) / 2, (height - h) / 2, w, h);
+          canvas.toBlob(finish, "image/jpeg", 0.8);
+        } catch {
+          abort();
+        }
+      };
+      video.preload = "metadata";
+      video.muted = true;
+      video.playsInline = true;
+      video.crossOrigin = "anonymous";
+      video.addEventListener("error", abort, options);
+      video.addEventListener(
+        "loadedmetadata",
+        () => {
+          if (
+            !Number.isFinite(video.duration) ||
+            video.duration <= 0 ||
+            video.videoWidth * video.videoHeight > 16_777_216
+          ) {
+            abort();
+          }
+        },
+        options,
+      );
+      if (typeof video.requestVideoFrameCallback !== "function") {
+        return abort();
+      }
+      waitForFrame("loadedmetadata", () => {
+        waitForFrame("seeked", capture);
+        video.currentTime = Math.min(0.1, video.duration / 10);
+      });
+      video.src = src;
+      video.load();
     };
-    signal.addEventListener("abort", cancel, { once: true });
     queue.add(start);
     schedule();
   });
+  return { controller, owners: new Set(), promise };
 }
 
 /**
@@ -195,26 +145,12 @@ export function requestVideoPoster(params: {
   const { key, src, width, height, signal } = params;
   if (
     signal.aborted ||
-    !Number.isInteger(width) ||
-    !Number.isInteger(height) ||
-    width <= 0 ||
-    height <= 0 ||
-    width > 512 ||
-    height > 512
+    ![width, height].every((size) => Number.isInteger(size) && size > 0 && size <= 512)
   ) {
     return Promise.resolve(null);
   }
-  let entry = posters.get(key);
-  if (!entry) {
-    const controller = new AbortController();
-    entry = {
-      controller,
-      owners: new Set(),
-      promise: enqueuePoster(src, width, height, controller.signal),
-    };
-    posters.set(key, entry);
-  }
-  const owned = entry;
+  const owned = posters.get(key) ?? createPoster(src, width, height);
+  posters.set(key, owned);
   if (!owned.owners.has(signal)) {
     owned.owners.add(signal);
     signal.addEventListener(
@@ -222,9 +158,7 @@ export function requestVideoPoster(params: {
       () => {
         owned.owners.delete(signal);
         if (owned.owners.size === 0) {
-          if (posters.get(key) === owned) {
-            posters.delete(key);
-          }
+          posters.delete(key);
           owned.controller.abort();
         }
       },
