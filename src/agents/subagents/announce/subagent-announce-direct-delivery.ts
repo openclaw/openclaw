@@ -33,6 +33,7 @@ import {
 import type { EmbeddedAgentQueueMessageOptions } from "../../embedded-agent-runner/run-state.js";
 import {
   AGENT_INTERNAL_EVENT_TYPE_TASK_COMPLETION,
+  hasFailedSubagentNoOutputCompletion,
   hasVisibleCompletionResult,
 } from "../../internal-event-contract.js";
 import type { AgentInternalEvent } from "../../internal-events.js";
@@ -44,7 +45,6 @@ import {
 } from "./subagent-announce-active-wake.js";
 import {
   deliverCompletionDirect,
-  hasFailedSubagentNoOutputCompletion,
   hasMessagingToolDeliveryToSource,
   isDirectMessageDeliveryTarget,
   isGatewayAgentRunPending,

@@ -1,67 +1,34 @@
-// Pins the no-visible-result gate to the typed fact on the completion event
-// rather than to the placeholder wording rendered for the parent.
+// Completion predicates read recorded facts, not rendered placeholder wording.
 import { describe, expect, it } from "vitest";
-import { createTaskCompletionEvent } from "../../subagent-test-fixtures.test-helpers.js";
-import { hasFailedSubagentNoOutputCompletion } from "./subagent-announce-completion-delivery.js";
+import { hasFailedSubagentNoOutputCompletion } from "../../internal-event-contract.js";
+
+const failedChild = { type: "task_completion", source: "subagent", status: "error" } as const;
 
 describe("hasFailedSubagentNoOutputCompletion", () => {
-  it("reports a failed completion that recorded no visible result", () => {
-    expect(
-      hasFailedSubagentNoOutputCompletion([
-        createTaskCompletionEvent({
-          status: "error",
-          statusLabel: "failed: all models failed",
-          result: "(no output)",
-          noVisibleResult: true,
-        }),
-      ]),
-    ).toBe(true);
-  });
-
-  it("still reports it after the placeholder copy is reworded", () => {
-    expect(
-      hasFailedSubagentNoOutputCompletion([
-        createTaskCompletionEvent({
-          status: "error",
-          statusLabel: "failed: all models failed",
-          result: "(nothing to report)",
-          noVisibleResult: true,
-        }),
-      ]),
-    ).toBe(true);
-  });
-
-  it("does not report a failed completion whose result only reads like the placeholder", () => {
-    expect(
-      hasFailedSubagentNoOutputCompletion([
-        createTaskCompletionEvent({
-          status: "error",
-          statusLabel: "failed: all models failed",
-          result: "(no output)",
-        }),
-      ]),
-    ).toBe(false);
-  });
-
-  it("ignores a successful completion that recorded no visible result", () => {
-    expect(
-      hasFailedSubagentNoOutputCompletion([
-        createTaskCompletionEvent({ status: "ok", result: "(no output)", noVisibleResult: true }),
-      ]),
-    ).toBe(false);
-  });
-
-  it("ignores non-subagent sources that recorded no visible result", () => {
-    expect(
-      hasFailedSubagentNoOutputCompletion([
-        createTaskCompletionEvent({
-          source: "image_generation",
-          status: "error",
-          result: "(no output)",
-          noVisibleResult: true,
-        }),
-      ]),
-    ).toBe(false);
+  it.each([
+    [
+      "recorded no visible result",
+      { ...failedChild, result: "(no output)", noVisibleResult: true },
+      true,
+    ],
+    [
+      "reworded placeholder",
+      { ...failedChild, result: "(nothing to report)", noVisibleResult: true },
+      true,
+    ],
+    ["real result resembling placeholder", { ...failedChild, result: "(no output)" }, false],
+    [
+      "successful child",
+      { ...failedChild, status: "ok", result: "(no output)", noVisibleResult: true },
+      false,
+    ],
+    [
+      "non-subagent source",
+      { ...failedChild, source: "image_generation", result: "(no output)", noVisibleResult: true },
+      false,
+    ],
+  ] as const)("classifies %s from the recorded result fact", (_label, event, expected) => {
+    expect(hasFailedSubagentNoOutputCompletion([event])).toBe(expected);
   });
 
   it("reports nothing for an absent or empty event list", () => {

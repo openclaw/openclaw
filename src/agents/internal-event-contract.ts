@@ -34,6 +34,28 @@ export function hasVisibleCompletionResult(event: { noVisibleResult?: boolean })
   return event.noVisibleResult !== true;
 }
 
+/** Identify failed child events without loading the delivery runtime. */
+export function hasFailedSubagentNoOutputCompletion(
+  events:
+    | readonly {
+        type: string;
+        source: AgentInternalEventSource;
+        status: AgentInternalEventStatus;
+        noVisibleResult?: boolean;
+      }[]
+    | undefined,
+) {
+  return (
+    events?.some(
+      (event) =>
+        event.type === AGENT_INTERNAL_EVENT_TYPE_TASK_COMPLETION &&
+        event.source === "subagent" &&
+        event.status !== "ok" &&
+        !hasVisibleCompletionResult(event),
+    ) === true
+  );
+}
+
 /** Identifies completion events that can resume an exact cron run. */
 export function hasGeneratedMediaCompletionEvent(
   events?: readonly { type: string; source: AgentInternalEventSource }[],

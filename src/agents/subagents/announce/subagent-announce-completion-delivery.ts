@@ -82,20 +82,6 @@ function resolveTextCompletionDirectFallback(
   return undefined;
 }
 
-export function hasFailedSubagentNoOutputCompletion(
-  events: readonly AgentInternalEvent[] | undefined,
-) {
-  return (
-    events?.some(
-      (event) =>
-        event.type === "task_completion" &&
-        event.source === "subagent" &&
-        event.status !== "ok" &&
-        !hasVisibleCompletionResult(event),
-    ) === true
-  );
-}
-
 export async function deliverCompletionDirect(params: {
   cfg: OpenClawConfig;
   requesterSessionKey: string;
