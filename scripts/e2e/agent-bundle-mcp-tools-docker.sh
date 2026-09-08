@@ -29,15 +29,18 @@ OPENCLAW_TEST_STATE_SCRIPT_B64="$(docker_e2e_test_state_shell_b64 agent-bundle-m
 CLIENT_PATH="test/e2e/qa-lab/runtime/agent-bundle-mcp-tools-docker-client.ts"
 CLIENT_MOUNT_ARGS=()
 if [ "$OPENCLAW_FROZEN_TARGET_AGENT_BUNDLE_MCP_MODE" = "legacy" ]; then
-  # The selected release's client imports sibling E2E helpers and ../../dist.
+  # The selected release's client imports a trusted E2E helper and ../../../../dist.
   # Materialize its committed source tree outside the trusted read-only harness.
   LEGACY_CLIENT_SOURCE_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-frozen-agent-bundle-mcp-tools.XXXXXX")"
   # Preserve its root package.json so tsx retains the selected release's ESM scope,
   # then link the package-owned dependencies.
-  git -C "$SOURCE_ROOT" archive "$OPENCLAW_SELECTED_SHA" -- package.json scripts/e2e |
+  git -C "$SOURCE_ROOT" archive "$OPENCLAW_SELECTED_SHA" -- \
+    package.json \
+    scripts/e2e/lib/temp-state-dir.ts \
+    test/e2e/qa-lab/runtime/agent-bundle-mcp-tools-docker-client.ts |
     tar -x -C "$LEGACY_CLIENT_SOURCE_ROOT"
   LEGACY_CLIENT_ROOT="/tmp/openclaw-frozen-agent-bundle-mcp-tools"
-  CLIENT_PATH="$LEGACY_CLIENT_ROOT/scripts/e2e/agent-bundle-mcp-tools-docker-client.ts"
+  CLIENT_PATH="$LEGACY_CLIENT_ROOT/test/e2e/qa-lab/runtime/agent-bundle-mcp-tools-docker-client.ts"
   ln -s /app/dist "$LEGACY_CLIENT_SOURCE_ROOT/dist"
   ln -s /app/node_modules "$LEGACY_CLIENT_SOURCE_ROOT/node_modules"
   # The functional image runs as UID 1001 and must traverse this host-owned staging root.

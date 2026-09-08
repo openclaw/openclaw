@@ -1,4 +1,5 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -11,6 +12,7 @@ import {
   hasPromptSnapshotAffectingChange,
   hasQaSmokeAffectingChange,
   hasSqliteSessionLifecycleAffectingChange,
+  hasUiE2eAffectingChange,
   resolveChangedDockerSeedLanes,
 } from "../../scripts/lib/ci-changed-node-test-plan.mts";
 import {
@@ -27,6 +29,90 @@ import { isGatewayServerTestFile } from "../vitest/vitest.gateway-server-paths.m
 
 const CODEX_TEST_PROCESS_FILE_LIMIT = 12;
 const githubActivityHelper = ".agents/skills/openclaw-pr-maintainer/scripts/github-activity.sh";
+
+it("keeps ordinary activity unit changes with their UI unit owner", () => {
+  expect(hasUiE2eAffectingChange(["ui/src/pages/activity/activity-page.test.ts"])).toBe(false);
+});
+
+it.each(
+  [
+    [],
+    ["ui/src/pages/activity/deleted.test.ts"],
+    ["ui/src/pages/activity/activity-page.test.ts", "ui/src/pages/activity/activity-page.ts"],
+    ["ui/src/pages/activity/activity-page.test.ts", "package.json"],
+    ["ui/src/test-helpers/control-ui-e2e.test.ts"],
+    ["ui/src/app/gateway-store.test-support.ts"],
+    ["ui/src/e2e/board-a2ui.e2e.test.ts"],
+    ["ui/src/styles/cursor-policy.browser.test.ts"],
+    ["ui/src/components/web-awesome-migration.node.test.ts"],
+    ["test/vitest/vitest.ui-e2e-prebuilt.global-setup.ts"],
+    ["ui/vitest.config.ts"],
+    ["extensions/example/browser/page.test.ts"],
+    ["ui/src/pages/activity/../activity/activity-page.test.ts"],
+  ].map((paths) => ({ paths })),
+)("retains UI E2E for protected or unresolved inputs $paths", ({ paths }) => {
+  expect(hasUiE2eAffectingChange(paths)).toBe(true);
+});
+
+it.each([
+  [null, false],
+  ["ui/src/e2e/page.e2e.test.ts", true],
+  ["ui/src/pages/page.ts", true],
+  ["scripts/fixture.mts", true],
+  ["ui/vite.config.ts", true],
+  ["ui/public/sw.js", true],
+  ["ui/.cache/vitest/generated.mjs", false],
+  ["ui/.artifacts/generated.mjs", false],
+  ["ui/dist/generated.js", false],
+  ["ui/node_modules/dependency/index.js", false],
+] as const)("resolves UI E2E ownership for importer %s: %s", (consumer, expected) => {
+  const cwd = mkdtempSync(path.join(tmpdir(), "openclaw-ui-unit-consumer-"));
+  const target = "ui/src/pages/unit.test.ts";
+  try {
+    mkdirSync(path.dirname(path.join(cwd, target)), { recursive: true });
+    writeFileSync(path.join(cwd, target), "export const fixture = 1;\n");
+    if (consumer) {
+      mkdirSync(path.dirname(path.join(cwd, consumer)), { recursive: true });
+      const relative = path.relative(path.dirname(consumer), target).split(path.sep).join("/");
+      writeFileSync(
+        path.join(cwd, consumer),
+        `import "${relative.startsWith(".") ? relative : `./${relative}`}";\n`,
+      );
+    }
+    writeFileSync(path.join(cwd, ".gitignore"), ".cache/\n.artifacts/\ndist/\nnode_modules/\n");
+    execFileSync("git", ["init", "-q"], { cwd });
+    execFileSync("git", ["add", "."], { cwd });
+    expect(
+      hasImportGraphImpactOnTargets([target], (file) => file !== target, cwd, { tooling: true }),
+    ).toBe(expected);
+    expect(hasUiE2eAffectingChange([target], { cwd })).toBe(expected);
+  } finally {
+    rmSync(cwd, { force: true, recursive: true });
+  }
+});
+
+it.each(["archive", "untracked", "symlink"])("retains UI E2E for %s unit inputs", (mode) => {
+  const cwd = mkdtempSync(path.join(tmpdir(), "openclaw-ui-unit-inventory-"));
+  const target = "ui/src/unit.test.ts";
+  try {
+    mkdirSync(path.join(cwd, "ui/src"), { recursive: true });
+    if (mode === "symlink") {
+      writeFileSync(path.join(cwd, "ui/src/source.ts"), "export {};\n");
+      symlinkSync("source.ts", path.join(cwd, target));
+    } else {
+      writeFileSync(path.join(cwd, target), "export {};\n");
+    }
+    if (mode !== "archive") {
+      execFileSync("git", ["init", "-q"], { cwd });
+    }
+    if (mode === "symlink") {
+      execFileSync("git", ["add", "."], { cwd });
+    }
+    expect(hasUiE2eAffectingChange([target], { cwd })).toBe(true);
+  } finally {
+    rmSync(cwd, { force: true, recursive: true });
+  }
+});
 
 function expectBoundedCodexFallback(
   shards: ReturnType<typeof createChangedExtensionFallbackShards>,

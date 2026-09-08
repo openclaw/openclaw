@@ -2622,5 +2622,221 @@
   {
     "source": "macOS",
     "target": "macOS"
+  },
+  {
+    "source": "Run tests locally",
+    "target": "本地运行测试"
+  },
+  {
+    "source": "Control UI, TUI, and E2E lanes",
+    "target": "控制 UI、TUI 与 E2E 通道"
+  },
+  {
+    "source": "Docker test suites",
+    "target": "Docker 测试套件"
+  },
+  {
+    "source": "Test performance and benchmarks",
+    "target": "测试性能与基准"
+  },
+  {
+    "source": "Test runner internals",
+    "target": "测试运行器内部机制"
+  },
+  {
+    "source": "Remote test proof",
+    "target": "远程测试验证"
+  },
+  {
+    "source": "OpenAI setup",
+    "target": "OpenAI 设置"
+  },
+  {
+    "source": "OpenAI models",
+    "target": "OpenAI 模型"
+  },
+  {
+    "source": "OpenAI runtimes and Codex auth",
+    "target": "OpenAI 运行时与 Codex 认证"
+  },
+  {
+    "source": "OpenAI coverage and cost",
+    "target": "OpenAI 覆盖范围与费用"
+  },
+  {
+    "source": "OpenAI image and video generation",
+    "target": "OpenAI 图像与视频生成"
+  },
+  {
+    "source": "OpenAI voice and speech",
+    "target": "OpenAI 语音与语音合成"
+  },
+  {
+    "source": "Azure OpenAI endpoints",
+    "target": "Azure OpenAI 端点"
+  },
+  {
+    "source": "OpenAI advanced configuration",
+    "target": "OpenAI 高级配置"
+  },
+  {
+    "source": "Code Mode quickstart",
+    "target": "代码模式快速上手"
+  },
+  {
+    "source": "Code Mode configuration",
+    "target": "代码模式配置"
+  },
+  {
+    "source": "Code Mode tool surface",
+    "target": "代码模式工具暴露面"
+  },
+  {
+    "source": "Code Mode guest API",
+    "target": "代码模式来宾 API"
+  },
+  {
+    "source": "Code Mode output",
+    "target": "代码模式输出"
+  },
+  {
+    "source": "Code Mode internals",
+    "target": "代码模式内部机制"
+  },
+  {
+    "source": "Code Mode troubleshooting",
+    "target": "代码模式故障排查"
+  },
+  {
+    "source": "Code Mode maintainer notes",
+    "target": "代码模式维护者说明"
+  },
+  {
+    "source": "Security trust model",
+    "target": "安全信任模型"
+  },
+  {
+    "source": "Running the security audit",
+    "target": "运行安全审计"
+  },
+  {
+    "source": "Security audit checks",
+    "target": "安全审计检查项"
+  },
+  {
+    "source": "Hardened baselines",
+    "target": "加固基线"
+  },
+  {
+    "source": "Access control and allowlists",
+    "target": "访问控制与允许列表"
+  },
+  {
+    "source": "Prompt injection",
+    "target": "提示注入"
+  },
+  {
+    "source": "Tool and agent permissions",
+    "target": "工具与 Agent 权限"
+  },
+  {
+    "source": "Browser control risks",
+    "target": "浏览器控制风险"
+  },
+  {
+    "source": "Network exposure",
+    "target": "网络暴露面"
+  },
+  {
+    "source": "Secrets, storage, and logs",
+    "target": "密钥、存储与日志"
+  },
+  {
+    "source": "Dependency locking",
+    "target": "依赖锁定"
+  },
+  {
+    "source": "Rate limiting",
+    "target": "限流"
+  },
+  {
+    "source": "Operator incident response",
+    "target": "运维方事件响应"
+  },
+  {
+    "source": "Command surface",
+    "target": "命令总览"
+  },
+  {
+    "source": "Operator flow",
+    "target": "操作员流程"
+  },
+  {
+    "source": "Canonical scenario coverage",
+    "target": "标准场景覆盖"
+  },
+  {
+    "source": "Channel QA reference",
+    "target": "通道 QA 参考"
+  },
+  {
+    "source": "Slack QA",
+    "target": "Slack QA"
+  },
+  {
+    "source": "WhatsApp QA and credentials",
+    "target": "WhatsApp QA 与凭据"
+  },
+  {
+    "source": "Extending the QA stack",
+    "target": "扩展 QA 技术栈"
+  },
+  {
+    "source": "QA reporting",
+    "target": "QA 报告"
+  },
+  {
+    "source": "Hook reference",
+    "target": "Hook 参考"
+  },
+  {
+    "source": "Tool call policy hooks",
+    "target": "工具调用策略 Hook"
+  },
+  {
+    "source": "Prompt and session hooks",
+    "target": "提示词与会话 Hook"
+  },
+  {
+    "source": "Message and delivery hooks",
+    "target": "消息与投递 Hook"
+  },
+  {
+    "source": "Gateway and install lifecycle hooks",
+    "target": "Gateway 与安装生命周期 Hook"
+  },
+  {
+    "source": "How to migrate a plugin",
+    "target": "如何迁移插件"
+  },
+  {
+    "source": "Import path reference",
+    "target": "导入路径参考"
+  },
+  {
+    "source": "Removed surfaces and replacements",
+    "target": "已移除的接口与替代方案"
+  },
+  {
+    "source": "Talk and realtime voice migration",
+    "target": "Talk 与实时语音迁移"
+  },
+  {
+    "source": "Compatibility policy and records",
+    "target": "兼容性策略与记录"
+  },
+  {
+    "source": "Removal timeline",
+    "target": "移除时间线"
   }
 ]

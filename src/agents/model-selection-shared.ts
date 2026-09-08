@@ -1622,6 +1622,7 @@ function resolveAllowedModelSelection(
 
 export type ModelVisibilityPolicy = {
   allowAny: boolean;
+  configuredCatalog: readonly ModelCatalogEntry[];
   allowedCatalog: ModelCatalogEntry[];
   allowedKeys: Set<string>;
   policyAliasIndex: ModelAliasIndex;
@@ -1733,6 +1734,7 @@ export function createModelVisibilityPolicyWithFallbacks(
     allowed.allowAny || isModelKeyAllowedBySet(allowed.allowedKeys, key);
   const policy: ModelVisibilityPolicy = {
     allowAny: allowed.allowAny,
+    configuredCatalog,
     allowedCatalog: allowed.allowedCatalog,
     allowedKeys: allowed.allowedKeys,
     policyAliasIndex,

@@ -2212,6 +2212,11 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       Array.from({ length: 10 }, (_, index) => `test/scripts/zz-growth-probe-${index}.test.ts`),
       ["test/scripts/openclaw-performance-crabbox.test.ts"],
       ["test/scripts/install-smoke-ref-admission.test.ts"],
+      [
+        "test/scripts/npm-package-locks-report.test.ts",
+        "test/scripts/openclaw-performance-crabbox.test.ts",
+        "test/scripts/install-smoke-ref-admission.test.ts",
+      ],
     ];
     const growthFiles = new Set([inventoryGrowthFile, ...extraInventories.flat()]);
     const isHostedToolingGroup = (group: { shard_name: string }) =>

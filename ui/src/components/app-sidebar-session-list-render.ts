@@ -286,19 +286,23 @@ function renderSessionSection(params: {
                       </button>`
                 }
                 ${
+                  group || section.id === "ungrouped"
+                    ? renderNewSessionLink({
+                        basePath: host.basePath,
+                        agentId: host.expandedAgentId(),
+                        target: { group: group ?? "" },
+                        className: "sidebar-session-group-actions sidebar-new-session",
+                        label: t("sessionsView.newSessionInGroup", { group: label }),
+                        disabledReason: newSessionAccess.allowed
+                          ? undefined
+                          : newSessionAccess.reason,
+                        onOpen: (agentId, target) => host.requestOpenNewSession(agentId, target),
+                      })
+                    : nothing
+                }
+                ${
                   group
                     ? html`
-                        ${renderNewSessionLink({
-                          basePath: host.basePath,
-                          agentId: host.expandedAgentId(),
-                          target: { group },
-                          className: "sidebar-session-group-actions sidebar-new-session",
-                          label: t("sessionsView.newSessionInGroup", { group }),
-                          disabledReason: newSessionAccess.allowed
-                            ? undefined
-                            : newSessionAccess.reason,
-                          onOpen: (agentId, target) => host.requestOpenNewSession(agentId, target),
-                        })}
                         <button
                           type="button"
                           class="sidebar-session-group-actions"

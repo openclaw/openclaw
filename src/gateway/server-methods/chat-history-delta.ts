@@ -13,6 +13,7 @@ import {
 import { resolveCurrentUserProfileDisplay } from "../current-user-profile-display.js";
 import {
   projectSessionMessagePayload,
+  projectTranscriptEntryMessage,
   type SessionMessageProjectionState,
 } from "../session-transcript-message.js";
 
@@ -27,20 +28,6 @@ type ChatHistoryDeltaRead =
       kind: "delta";
       messages: Record<string, unknown>[];
     };
-
-function readMessageEvent(event: unknown): { message: unknown; messageId?: string } | undefined {
-  const record = asOptionalRecord(event);
-  if (!record) {
-    return undefined;
-  }
-  if (record.message === undefined) {
-    return undefined;
-  }
-  return {
-    message: record.message,
-    ...(typeof record.id === "string" && record.id ? { messageId: record.id } : {}),
-  };
-}
 
 function containsTranscriptDiscontinuity(
   result: Extract<SessionTranscriptDisplayDeltaResult, { kind: "page" }>,
@@ -84,11 +71,19 @@ export function readChatHistoryDelta(params: {
   // Include array brackets and separators without serializing the whole page.
   let messagesBytes = 2;
   for (const row of result.events) {
-    const event = readMessageEvent(row.event);
-    if (!event || row.messageSeq === undefined) {
+    if (row.messageSeq === undefined) {
       continue;
     }
-    const historyProjection = projectChatDisplayMessagesWithState([event.message], {
+    const entryMessage = projectTranscriptEntryMessage(
+      row.event,
+      row.messageSeq,
+      row.displayPosition,
+    );
+    if (!entryMessage) {
+      continue;
+    }
+    const messageId = asOptionalRecord(row.event)?.id;
+    const historyProjection = projectChatDisplayMessagesWithState([entryMessage], {
       ...projectionState,
       includeCommentaryFallbacks: true,
     });
@@ -103,8 +98,8 @@ export function readChatHistoryDelta(params: {
     }
     const projected = projectSessionMessagePayload({
       agentId: params.agentId,
-      message: event.message,
-      ...(event.messageId ? { messageId: event.messageId } : {}),
+      message: entryMessage,
+      ...(typeof messageId === "string" && messageId ? { messageId } : {}),
       messageSeq: row.messageSeq,
       transcriptPosition: row.displayPosition,
       projectionState,

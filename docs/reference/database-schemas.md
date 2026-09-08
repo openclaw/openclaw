@@ -570,6 +570,14 @@ session writes can continue during those checks. It reacquires the writer and
 revalidates current authority before index repair, schema work, or deletion.
 The connection and lease remain owned throughout admission; refusal unwinds that
 owner, and final writer admission remains held until the worker exits.
+
+Disk-budget cleanup rechecks protection after archive materialization. A candidate
+already excluded by that fresh protection set is canceled before worker admission
+and is not counted as reclaimed. After releasing its lifecycle holds, cleanup
+remeasures physical usage before considering another candidate, so space freed by
+a peer does not cause unnecessary eviction. Every admitted worker still performs
+the full integrity, foreign-key, and current-owner checks described here.
+
 Archive publication and cascading deletion remain atomic. Before COMMIT, the
 worker publishes its authorization request in shared memory and waits for the
 parent's current owner check. Synchronous writers service that request at the shared
@@ -824,6 +832,8 @@ Agent database maintenance fences other writers with a 60-second lease in the sh
 Asynchronous agent-database admission and maintenance run their initial full-file integrity check in a read-only child process when that check is outside a write transaction. The connection and owning scope remain held until the child closes, including on cancellation or timeout. Schema changes, index repairs, and compaction retain their synchronous phases.
 
 The integrity child and both asynchronous and synchronous read-only snapshot workers share a lifetime budget: 30 seconds for startup and shutdown plus one second per 32 MiB of source database file size, rounded up, capped at 30 minutes. A full copy or full scan reads the whole file at least once; the budget allows for a conservative cold-cache read rate of 32 MiB/s. A 9.4 GiB database gets 331 seconds. Budgets above 30 seconds are logged once per call at debug level with the operation, path, size, and applied budget, keeping ordinary CLI output quiet. If the snapshot worker cannot stat the source, it uses the 30-second base budget and lets the child report the underlying error.
+
+The synchronous byte-neutral snapshot strategy is for small or quiescent databases. Inspections of a live agent database, including memory-core readiness, use the asynchronous online-backup worker.
 
 Integrity-child timeout and incomplete-exit errors include `lastObservedPhase`:
 

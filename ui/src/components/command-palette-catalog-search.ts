@@ -10,7 +10,7 @@ import {
 import type { RouteId } from "../app-route-paths.ts";
 import type { NativeDeviceSettingsCapability } from "../app/native-device-settings.ts";
 import { t } from "../i18n/index.ts";
-import { loadModelCatalog } from "../lib/model-catalog-store.ts";
+import { loadModelCatalog, modelCatalogRefreshError } from "../lib/model-catalog-store.ts";
 import type { PluginListResult } from "../lib/plugins/index.ts";
 import { SETTINGS_SEARCH_TARGETS } from "../pages/config/settings-targets.ts";
 import type { IconName } from "./icons.ts";
@@ -300,7 +300,6 @@ export async function loadCommandPaletteCatalogItems(params: {
   modelRequestFailed: boolean;
   modelSearchError: string | null;
 }> {
-  let modelRequestFailed = false;
   const requestIfAvailable = async <T>(
     method: string,
     requestParams: unknown,
@@ -320,16 +319,7 @@ export async function loadCommandPaletteCatalogItems(params: {
     }),
     requestIfAvailable<SkillStatusReport>("skills.status", { agentId: params.agentId }),
     requestIfAvailable<PluginListResult>("plugins.list", {}),
-    params.methodAvailable("models.list")
-      ? loadModelCatalog(params.client, {
-          view: "configured",
-          agentId: params.agentId,
-          preparedOnly: true,
-        }).catch(() => {
-          modelRequestFailed = true;
-          return null;
-        })
-      : null,
+    loadModelCatalog(params.client, { agentId: params.agentId }).catch(() => null),
   ]);
 
   const items: CommandPaletteCatalogItem[] = [
@@ -387,10 +377,9 @@ export async function loadCommandPaletteCatalogItems(params: {
         .join(" "),
     })),
   ];
-  const modelSearchError = modelRequestFailed
-    ? t("palette.modelSearchFailed")
-    : models?.providerOutcomes?.some((outcome) => outcome.status !== "ready")
-      ? t("chat.modelControls.modelsRefreshFailed")
-      : null;
-  return { items, modelRequestFailed, modelSearchError };
+  return {
+    items,
+    modelRequestFailed: models === null,
+    modelSearchError: models ? modelCatalogRefreshError(models) : t("palette.modelSearchFailed"),
+  };
 }

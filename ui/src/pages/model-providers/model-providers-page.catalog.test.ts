@@ -71,9 +71,17 @@ function createCatalogHarness() {
   const harness = createHarness("main");
   const originalRequest = harness.request.getMockImplementation()!;
   const discover = vi.fn<() => Promise<ModelCatalogResult>>();
-  const catalogRequest = async (method: string, params?: { refresh?: boolean }) => {
+  const readPublished = vi.fn(() => preparedCatalog);
+  const catalogRequest = async (
+    method: string,
+    params?: { refresh?: boolean; preparedOnly?: boolean },
+  ) => {
     if (method === "models.list") {
-      return params?.refresh ? discover() : preparedCatalog;
+      return params?.preparedOnly
+        ? preparedCatalog
+        : params?.refresh
+          ? discover()
+          : readPublished();
     }
     if (method === "config.get") {
       return { config: savedModelConfig, hash: "saved-model-config" };
@@ -81,10 +89,40 @@ function createCatalogHarness() {
     return originalRequest(method);
   };
   harness.request.mockImplementation(catalogRequest);
-  return { ...harness, discover, catalogRequest };
+  return { ...harness, discover, readPublished, catalogRequest };
 }
 
 describe("ModelProvidersPage catalog discovery", () => {
+  it.each([false, true])(
+    "shows a catalog refresh failure without changing saved choices (retained rows: %s)",
+    async (hasRows) => {
+      const { context, discover, request, runtimeConfig } = createCatalogHarness();
+      const models = hasRows ? preparedCatalog.models : [];
+      discover.mockResolvedValue({ models, refreshFailed: true });
+      const page = appendPage(context);
+      await waitForFast(() => expect(page.data?.config).toEqual(savedModelConfig));
+      await page.updateComplete;
+
+      await openModelPicker(page);
+      const warning = "More models could not be discovered.";
+      await waitForFast(() =>
+        expect(page.querySelector(".model-providers__catalog-progress")?.textContent).toContain(
+          warning,
+        ),
+      );
+      await drainPageUpdates(page);
+      expect(page.data?.models).toEqual(models);
+      expect(page.textContent).toContain(warning);
+      expect(page.data?.catalogError).toBeNull();
+      expect(page.data?.config).toEqual(savedModelConfig);
+      expect(runtimeConfig.patch).not.toHaveBeenCalled();
+      expect(request.mock.calls.filter(([method]) => method === "models.list")).toEqual([
+        ["models.list", { agentId: "main", view: "configured" }, expect.anything()],
+        ["models.list", { agentId: "main", view: "configured", refresh: true }, expect.anything()],
+      ]);
+    },
+  );
+
   it.each([
     { picker: "primary", index: 0 },
     { picker: "utility", index: 1 },
@@ -92,7 +130,7 @@ describe("ModelProvidersPage catalog discovery", () => {
   ])(
     "discovers the full catalog when the $picker picker opens and merges it without clearing saved state",
     async ({ index: firstPicker }) => {
-      const { context, request, discover, runtimeConfig } = createCatalogHarness();
+      const { context, request, discover, readPublished, runtimeConfig } = createCatalogHarness();
       const pending = deferred<ModelCatalogResult>();
       discover.mockReturnValue(pending.promise);
       const discovered: ModelCatalogResult = {
@@ -150,8 +188,19 @@ describe("ModelProvidersPage catalog discovery", () => {
       expect(page.data?.config).toEqual(savedModelConfig);
       expect(runtimeConfig.patch).not.toHaveBeenCalled();
       expect(page.querySelector(".model-providers__catalog-progress")).toBeNull();
+      const published = {
+        models: [
+          ...discovered.models,
+          { id: "published-later", name: "Published later", provider: "openai", available: true },
+        ],
+      };
+      readPublished.mockReturnValue(published);
       await openModelPicker(page, 1);
       await drainPageUpdates(page);
+      expect(page.data?.models).toEqual(published.models);
+      expect(
+        page.querySelector('[role="option"][data-value="openai/published-later"]'),
+      ).not.toBeNull();
       const utility = modelPickers(page)[1]!;
       const search = utility.querySelector<HTMLInputElement>('input[type="search"]');
       expect(search).not.toBeNull();
@@ -168,49 +217,62 @@ describe("ModelProvidersPage catalog discovery", () => {
       );
       expect(page.data?.config).toEqual(savedModelConfig);
       expect(runtimeConfig.patch).not.toHaveBeenCalled();
-      expect(discover).toHaveBeenCalledTimes(2);
+      expect(discover).toHaveBeenCalledOnce();
+      expect(readPublished).toHaveBeenCalledTimes(2);
       expect(request.mock.calls.filter(([method]) => method === "models.list")).toHaveLength(3);
     },
   );
 
-  it("surfaces a retryable error when picker catalog discovery fails", async () => {
-    const { context, discover } = createCatalogHarness();
-    const pending = deferred<ModelCatalogResult>();
-    discover
-      .mockRejectedValueOnce(new Error("discovery failed"))
-      .mockReturnValueOnce(pending.promise);
-    const page = appendPage(context);
-    await waitForFast(() => expect(page.data?.config).toEqual(savedModelConfig));
-    await page.updateComplete;
+  it.each(["rejected request", "nonfatal refresh failure"])(
+    "retains choices and reacquires on Retry after a %s",
+    async (failure) => {
+      const { context, discover } = createCatalogHarness();
+      const pending = deferred<ModelCatalogResult>();
+      if (failure === "rejected request") {
+        discover.mockRejectedValueOnce(new Error("discovery failed"));
+      } else {
+        discover.mockResolvedValueOnce({ ...preparedCatalog, refreshFailed: true });
+      }
+      discover.mockReturnValueOnce(pending.promise);
+      const page = appendPage(context);
+      await waitForFast(() => expect(page.data?.config).toEqual(savedModelConfig));
+      await page.updateComplete;
 
-    await openModelPicker(page);
-    await waitForFast(() =>
-      expect(page.querySelector('.model-providers__catalog-progress[role="alert"]')).not.toBeNull(),
-    );
-    expect(page.querySelector(".model-providers__catalog-progress")?.textContent).toContain(
-      "More models could not be discovered.",
-    );
-    expect(page.data?.models).toEqual(preparedCatalog.models);
-    const retry = page.querySelector<HTMLButtonElement>(
-      ".model-providers__catalog-progress button",
-    );
-    expect(retry?.textContent?.trim()).toBe("Retry");
-    retry!.click();
-    await page.updateComplete;
-    expect(discover).toHaveBeenCalledTimes(2);
-    expect(page.querySelector('.model-providers__catalog-progress[role="status"]')).not.toBeNull();
+      await openModelPicker(page);
+      await waitForFast(() =>
+        expect(
+          page.querySelector('.model-providers__catalog-progress[role="alert"]'),
+        ).not.toBeNull(),
+      );
+      expect(page.querySelector(".model-providers__catalog-progress")?.textContent).toContain(
+        "More models could not be discovered.",
+      );
+      expect(page.textContent).not.toContain("Open Models to try again.");
+      expect(page.data?.models).toEqual(preparedCatalog.models);
+      const retry = page.querySelector<HTMLButtonElement>(
+        ".model-providers__catalog-progress button",
+      );
+      expect(retry?.textContent?.trim()).toBe("Retry");
+      retry!.click();
+      await page.updateComplete;
+      expect(discover).toHaveBeenCalledTimes(2);
+      expect(
+        page.querySelector('.model-providers__catalog-progress[role="status"]'),
+      ).not.toBeNull();
 
-    pending.resolve({
-      models: [
-        ...preparedCatalog.models,
-        { id: "recovered", name: "Recovered model", provider: "openai", available: true },
-      ],
-    });
-    await waitForFast(() => expect(page.data?.models?.at(-1)?.id).toBe("recovered"));
-    await drainPageUpdates(page);
-    expect(page.querySelector(".model-providers__catalog-progress")).toBeNull();
-    expect(page.querySelector('[role="option"][data-value="openai/recovered"]')).not.toBeNull();
-  });
+      pending.resolve({
+        models: [
+          ...preparedCatalog.models,
+          { id: "recovered", name: "Recovered model", provider: "openai", available: true },
+        ],
+      });
+      await waitForFast(() => expect(page.data?.models?.at(-1)?.id).toBe("recovered"));
+      await drainPageUpdates(page);
+      expect(page.querySelector(".model-providers__catalog-progress")).toBeNull();
+      expect(page.querySelector('[role="option"][data-value="openai/recovered"]')).not.toBeNull();
+      expect(page.data?.catalogError).toBeNull();
+    },
+  );
 
   it.each([false, true])(
     "clears a prior catalog error after successful discovery (unrelated auth error: %s)",
@@ -256,13 +318,13 @@ describe("ModelProvidersPage catalog discovery", () => {
   it.each(["core refresh", "route data"] as const)(
     "keeps newer %s after an older picker response settles",
     async (replacement) => {
-      const { context, request, discover, snapshot } = createCatalogHarness();
+      const { context, request, discover, readPublished, snapshot } = createCatalogHarness();
       const pending = deferred<ModelCatalogResult>();
       const newer: ModelCatalogResult = {
         models: [{ id: "newer", name: "Newer model", provider: "openai", available: true }],
         providerOutcomes: [{ provider: "openai", status: "ready" }],
       };
-      discover.mockReturnValueOnce(pending.promise).mockResolvedValueOnce(newer);
+      discover.mockReturnValueOnce(pending.promise).mockResolvedValue(newer);
       const page = appendPage(context);
       await waitForFast(() => expect(page.data?.config).toEqual(savedModelConfig));
       await page.updateComplete;
@@ -303,6 +365,12 @@ describe("ModelProvidersPage catalog discovery", () => {
       expect(request.mock.calls.filter(([method]) => method === "models.list")).toHaveLength(
         replacement === "core refresh" ? 3 : 2,
       );
+      readPublished.mockReturnValue(newer);
+      await openModelPicker(page, 1);
+      await drainPageUpdates(page);
+      expect(discover).toHaveBeenCalledTimes(replacement === "core refresh" ? 3 : 2);
+      expect(readPublished).toHaveBeenCalledOnce();
+      expect(page.data?.models).toEqual(newer.models);
     },
   );
 

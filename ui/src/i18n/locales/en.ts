@@ -4633,7 +4633,6 @@ export const en: TranslationMap & {
     },
     mentions: {
       menu: "Mention a person",
-      loading: "Loading people…",
       empty: "No eligible people found.",
       truncated: "Keep typing to find more people.",
       online: "Online",
@@ -5325,6 +5324,7 @@ export const en: TranslationMap & {
       actions: "Message actions",
       selectionActions: "Selection actions",
       askInSideChat: "Ask in side chat",
+      addToChat: "Add to chat",
       rewind: "Rewind",
       rewindConfirm: "Rewind to before this message?",
       dontAskAgain: "Don't ask again",

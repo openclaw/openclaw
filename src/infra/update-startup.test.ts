@@ -257,7 +257,6 @@ describe("update-startup", () => {
     triageResult = {
       status: "completed",
       hint: `Triage prompt: ${path.join(tempDir, "triage-prompt.md")}`,
-      contextPath: path.join(tempDir, "update-failure.json"),
     };
     runUpdateFailureTriageMock.mockReset().mockResolvedValue(triageResult);
 

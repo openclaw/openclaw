@@ -80,7 +80,7 @@ title: "Thinking levels"
 - For direct API-key `anthropic/*` requests, Opus 5 and Opus 4.8 use native `speed=fast`. Other supported models use Priority Tier: on sets `service_tier=auto`, off sets `service_tier=standard_only`. Sonnet 5 supports neither mapping; OAuth requests receive neither field.
 - For `minimax/*` on the Anthropic-compatible path, `/fast on` (or `params.fastMode: true`) rewrites `MiniMax-M2.7` to `MiniMax-M2.7-highspeed`.
 - Explicit Anthropic `serviceTier` / `service_tier` model params override the fast-mode default when both are set. OpenClaw still skips Anthropic service-tier injection for non-Anthropic proxy base URLs.
-- `/status` reports the resolved OpenClaw policy (`on`, `off`, or `auto`) and the selected runtime. It does not report the upstream service tier actually honored or returned for a completed request. See [OpenAI Fast mode](/providers/openai#advanced-configuration) for provider details.
+- `/status` reports the resolved OpenClaw policy (`on`, `off`, or `auto`) and the selected runtime. It does not report the upstream service tier actually honored or returned for a completed request. See [OpenAI Fast mode](/providers/openai/advanced#advanced-configuration) for provider details.
 - The Control UI disables Fast choices confirmed to have no effect on the selected request. Existing saved preferences remain visible and clearable. When applicability is unknown, controls retain their existing behavior; availability does not promise vendor entitlement or faster responses.
 
 ## Verbose directives (/verbose or /v)

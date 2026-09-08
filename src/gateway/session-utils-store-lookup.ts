@@ -1,6 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { listAgentIds } from "../agents/agent-scope.js";
+import { listSubagentRunsForController } from "../agents/subagents/registry/subagent-registry-read.js";
 import {
   isConfiguredSessionStoreAgentId,
   resolveAgentMainSessionKey,
@@ -413,6 +414,7 @@ export function resolveGatewaySessionStoreTargetWithStore(
     deletedMain ?? prepareGatewaySessionStoreTarget(normalized).resolve(),
     params.includeStoreChildEntries,
     params.projection,
+    params.cfg,
   );
 }
 
@@ -420,6 +422,7 @@ export function resolveGatewaySessionStoreTargetWithStore(
 export function resolveGatewaySessionStoreTargetsReadOnly(params: {
   cfg: OpenClawConfig;
   targets: readonly { key: string; agentId?: string }[];
+  projection?: SessionEntryListScope["projection"];
 }): GatewaySessionStoreTargetWithStore[] {
   const targetDiscoveryCache: GatewaySessionStoreDiscoveryCache = new Map();
   const requests = params.targets.map((target) => {
@@ -430,7 +433,7 @@ export function resolveGatewaySessionStoreTargetsReadOnly(params: {
       clone: false,
       readOnly: true,
       exactRead: true,
-      projection: "list",
+      projection: params.projection ?? "list",
       targetDiscoveryCache,
     };
     return { lookup, legacy: prepareExplicitDeletedLegacyMainStoreTarget(lookup) };
@@ -453,12 +456,14 @@ function includeDirectChildEntries(
   target: GatewaySessionStoreTargetWithStore,
   include: boolean | undefined,
   projection: SessionEntryListScope["projection"],
+  cfg: OpenClawConfig,
 ): GatewaySessionStoreTargetWithStore {
   if (!include) {
     return target;
   }
   try {
     const parentKeys = new Set([target.canonicalKey, ...target.storeKeys]);
+    const childKeys = new Set<string>();
     for (const parentKey of parentKeys) {
       for (const { sessionKey, entry } of listSessionChildEntriesReadOnly({
         agentId: target.agentId,
@@ -468,6 +473,21 @@ function includeDirectChildEntries(
         storePath: target.storePath,
       })) {
         target.store[sessionKey] = entry;
+      }
+      for (const { childSessionKey } of listSubagentRunsForController(parentKey)) {
+        childKeys.add(childSessionKey);
+      }
+    }
+    // Retained runs are discovery hints, not existence: deduplicate and batch exact reads.
+    const targets = [...childKeys].filter((key) => !target.store[key]).map((key) => ({ key }));
+    for (const child of resolveGatewaySessionStoreTargetsReadOnly({
+      cfg,
+      targets,
+      projection: projection ?? "full",
+    })) {
+      const entry = child.store[child.canonicalKey];
+      if (entry) {
+        target.store[child.canonicalKey] = entry;
       }
     }
   } catch {

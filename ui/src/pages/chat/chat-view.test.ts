@@ -4948,10 +4948,9 @@ describe("chat slash menu accessibility", () => {
 
     inputDraftAtEnd(container, "Please /exec");
     keydownComposer(container, "Tab");
-    keydownComposer(container, "ArrowDown");
     keydownComposer(container, "Enter");
 
-    expect(onSlashCommand).toHaveBeenCalledExactlyOnceWith("/exec host=gateway");
+    expect(onSlashCommand).toHaveBeenCalledExactlyOnceWith("/exec host=auto");
     expect(draft).toBe("Please ");
     expect(container.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe(draft);
     expect(onSend).not.toHaveBeenCalled();
@@ -6961,8 +6960,60 @@ describe("chat welcome", () => {
 });
 
 describe("chat model controls", () => {
+  it.each([100, 400])("prepares %i catalog rows without per-option catalog rescans", (size) => {
+    let idReads = 0;
+    const models: ModelCatalogEntry[] = Array.from({ length: size }, (_, index) => ({
+      get id() {
+        idReads += 1;
+        return `model-${index}`;
+      },
+      name: `Model ${index}`,
+      provider: "example",
+      contextWindow: 128_000,
+    }));
+    const { state } = createChatHeaderState({
+      model: "model-0",
+      modelProvider: "example",
+      models,
+    });
+    idReads = 0;
+    const container = renderModelControls(state);
+    const rows = container.querySelectorAll<HTMLButtonElement>("[data-chat-model-option]");
+    expect(rows).toHaveLength(size);
+    expect(rows[0]?.dataset.chatModelOption).toBe("example/model-0");
+    expect(rows[size - 1]?.textContent).toContain(`Model ${size - 1}`);
+    expect(rows[size - 1]?.textContent).toContain("128k");
+    console.log(JSON.stringify({ proof: "model-catalog-render", size, idReads }));
+    expect(idReads).toBeLessThan(size * 60);
+  });
+
   afterEach(async () => {
     await i18n.setLocale("en");
+  });
+
+  it("retains first-match metadata and canonical labels for duplicate catalog rows", () => {
+    const { state } = createChatHeaderState({
+      model: "shared",
+      modelProvider: "example",
+      models: [
+        { id: "shared", name: "First label", provider: "example", contextWindow: 111_000 },
+        { id: "shared", name: "Last label", provider: "example", contextWindow: 222_000 },
+        { id: "gpt-5.5", name: "Legacy label", provider: "codex", contextWindow: 333_000 },
+        { id: "gpt-5.5", name: "Canonical label", provider: "openai", contextWindow: 444_000 },
+        { id: "gpt-5.5", name: "Later canonical", provider: "openai", contextWindow: 555_000 },
+      ],
+    });
+    const container = renderModelControls(state);
+    expect(container.querySelectorAll("[data-chat-model-option]")).toHaveLength(3);
+    const shared = container.querySelector('[data-chat-model-option="example/shared"]');
+    expect(shared?.textContent).toContain("Last label");
+    expect(shared?.textContent).toContain("111k");
+    for (const provider of ["codex", "openai"]) {
+      const row = container.querySelector(`[data-chat-model-option="${provider}/gpt-5.5"]`);
+      expect(row?.textContent).toContain("Canonical label");
+      expect(row?.textContent).toContain("444k");
+      expect(row?.textContent).not.toContain("555k");
+    }
   });
 
   it("disables the chat header model picker while a run is active", () => {

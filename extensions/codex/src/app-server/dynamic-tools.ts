@@ -67,10 +67,7 @@ import {
   sliceUtf16Safe,
 } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { CodexDynamicToolsLoading } from "./config.js";
-import {
-  CODEX_AUTOMATIONS_DYNAMIC_TOOL_NAME,
-  canonicalizeCodexAutomationsToolsAllow,
-} from "./dynamic-tool-automations-allowlist.js";
+import { createCodexAutomationsToolsAllowResolver } from "./dynamic-tool-automations-allowlist.js";
 import { finalizeCodexToolAvailability } from "./dynamic-tool-availability.js";
 import {
   createCodexDynamicToolSpecs,
@@ -600,6 +597,14 @@ export function createCodexDynamicToolBridge(params: {
   };
   const executionSnapshotStates = new Map<string, ExecutionSnapshotState>();
   const directToolNames = params.directToolNames;
+  const specs =
+    inheritedSpecs ??
+    createCodexDynamicToolSpecs({
+      entries: registeredSpecTools,
+      loading: params.loading ?? "searchable",
+      directToolNames,
+    });
+  const resolveAutomationsToolsAllow = createCodexAutomationsToolsAllowResolver(specs);
   let readRemoteWorkspaceFile: CodexRemoteWorkspaceFileReader | undefined;
   return {
     availableTools: availableTools.map((entry) => entry.tool),
@@ -616,13 +621,7 @@ export function createCodexDynamicToolBridge(params: {
           loading: params.loading ?? "searchable",
           directToolNames,
         }),
-    specs:
-      inheritedSpecs ??
-      createCodexDynamicToolSpecs({
-        entries: registeredSpecTools,
-        loading: params.loading ?? "searchable",
-        directToolNames,
-      }),
+    specs,
     resultContentSourceForTool: (toolName) => toolMap.get(toolName)?.tool.resultContentSource,
     sideEffectOwnerKeyForTool: (toolName) => {
       const tool = toolMap.get(toolName)?.tool;
@@ -668,12 +667,8 @@ export function createCodexDynamicToolBridge(params: {
         });
       }
       const { tool, name: toolName } = toolEntry;
-      // Code Mode shows OpenClaw tools as `openclaw__<name>`; the scheduler caps
-      // an automation by canonical names, so translate the job allowlist here.
       const rawArguments =
-        toolName === CODEX_AUTOMATIONS_DYNAMIC_TOOL_NAME
-          ? canonicalizeCodexAutomationsToolsAllow(call.arguments, registeredToolNames)
-          : call.arguments;
+        toolName === "automations" ? resolveAutomationsToolsAllow(call.arguments) : call.arguments;
       const args = asNonArrayRecord(rawArguments);
       const startedAt = Date.now();
       const signal = composeAbortSignals(params.signal, options?.signal);

@@ -1095,7 +1095,7 @@ describe("resolvePluginTools optional tools", () => {
     expectLoaderSelectedOnlyPluginIds(["optional-demo"]);
   });
 
-  it("uses owner-prepared load facts through cold and warm resolution without rediscovery", async () => {
+  it("uses owner-prepared load facts and last-manifest metadata without rediscovery", async () => {
     const context = createContext();
     const config = context.config;
     const registry = createToolRegistry([createOptionalDemoEntry()]);
@@ -1103,6 +1103,9 @@ describe("resolvePluginTools optional tools", () => {
     const metadataSnapshot = installToolManifestSnapshots({
       config,
       plugins: [
+        createToolManifest("optional-demo", ["optional_tool"], {
+          toolMetadata: { optional_tool: { optional: true, sideEffecting: false } },
+        }),
         createToolManifest("optional-demo", ["optional_tool"], {
           toolMetadata: { optional_tool: { optional: true, sideEffecting: true } },
         }),

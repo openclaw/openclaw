@@ -8,7 +8,7 @@ import {
 } from "../../../lib/bounded-response.mjs";
 import { createTimeoutError } from "../../../lib/timeout-error.mjs";
 import { readPositiveIntEnv } from "../env-limits.mjs";
-import { resolveHomePath } from "../openclaw-state-paths.mjs";
+import { assertRealPathInside, resolveHomePath } from "../openclaw-state-paths.mjs";
 import {
   readPluginInstallIndex,
   readPluginInstallRecords,
@@ -154,7 +154,10 @@ function assertPluginUninstallConfigState(config, pluginId, label = pluginId) {
 
 function assertPluginRemoved(params) {
   const list = readJson(params.listFile);
-  if ((list.plugins || []).some((entry) => entry.id === params.pluginId)) {
+  if (
+    !params.allowLegacyRetainedListing &&
+    (list.plugins || []).some((entry) => entry.id === params.pluginId)
+  ) {
     throw new Error(`${params.pluginId} still listed after uninstall`);
   }
 
@@ -542,17 +545,6 @@ function assertGitPluginRemoved() {
   }
 }
 
-function assertRealPathInside(parentPath, childPath, label) {
-  const parentRealPath = fs.realpathSync(parentPath);
-  const childRealPath = fs.realpathSync(childPath);
-  if (
-    childRealPath !== parentRealPath &&
-    !childRealPath.startsWith(`${parentRealPath}${path.sep}`)
-  ) {
-    throw new Error(`${label} resolved outside ${parentPath}: ${childRealPath}`);
-  }
-}
-
 function assertClawHubExternalInstallContract(installPath) {
   const openclawPeerPath = path.join(installPath, "node_modules", "openclaw");
   if (!fs.existsSync(openclawPeerPath)) {
@@ -768,6 +760,10 @@ function assertNpmPluginRetained() {
   assertPluginRemoved({
     pluginId: "demo-plugin-npm",
     listFile: scratchFile("plugins-npm-retained.json"),
+    // Historical --keep-files removed config ownership but retained a
+    // discoverable plugin directory. Its list entry is expected until the
+    // subsequent reinstall; current releases persist an exact disabled marker.
+    allowLegacyRetainedListing: pluginUninstallMode === "legacy",
   });
   if (!fs.existsSync(installPath)) {
     throw new Error(`npm managed package was deleted by --keep-files: ${installPath}`);

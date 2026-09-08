@@ -62,6 +62,8 @@ type UpgradeSurvivorExpansion = { lanes: DockerE2eLane[]; omittedLaneNames: stri
 const UPDATE_FIRST_HOP_COMPAT_CATALOGS = new Set([
   "3a07518cac2a3f92c0ecb73e177ced4ae3350872be59c8c9a1871c2f0e3c0773",
   "edf5302a5bb101f2a2efaf9735cd0ae90081bd1b693e0c77a1f8e56ada865096",
+  // Node-runner aliases for newer releases moved to the recorded package inventory.
+  "0a12e16a5b6a2d723472cff04a05b356751da92a54c7b9a19cbb539c94190bb6",
 ]);
 const IOS_WATCH_RELAY_COMMANDS = ['"watch.status"', '"watch.notify"'];
 type DockerE2ePlanOptions = {

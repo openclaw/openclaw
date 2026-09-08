@@ -2,7 +2,10 @@ import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { fixtureCapabilityConsentArgs } from "../../scripts/e2e/lib/package-compat.mjs";
+import {
+  fixtureCapabilityConsentArgs,
+  updateChannelDryRunReportsPackageCompat,
+} from "../../scripts/e2e/lib/package-compat.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -356,5 +359,13 @@ ${fixtureCommand} plugins install fixture`,
     });
     expect(result.status).toBe(0);
     expect(result.stdout.trim()).toBe(output);
+  });
+
+  it.each([
+    ["2026.7.33", true],
+    ["2026.7.33-1", true],
+    ["2026.8.1", false],
+  ])("scopes package-reported dev dry runs for %s", (version, expected) => {
+    expect(updateChannelDryRunReportsPackageCompat(version)).toBe(expected);
   });
 });

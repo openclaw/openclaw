@@ -428,6 +428,29 @@ function expectSingleBlockReplyText(params: {
 }
 
 describe("subscribeEmbeddedAgentSession", () => {
+  it.each(["text_end", "message_end"] as const)(
+    "retains silent terminal evidence with %s block replies",
+    async (blockReplyBreak) => {
+      const onBlockReply = vi.fn();
+      const { emit, subscription } = createSubscribedSessionHarness({
+        runId: "run-silent-final",
+        onBlockReply,
+        blockReplyBreak,
+        blockReplyChunking: { minChars: 64, maxChars: 128, breakPreference: "paragraph" },
+      });
+
+      emit({ type: "message_start", message: { role: "assistant" } });
+      emitAssistantTextDelta({ emit, delta: "NO_REPLY" });
+      emitAssistantTextEnd({ emit, content: "NO_REPLY" });
+      emit({ type: "message_end", message: textAssistant("NO_REPLY") });
+      await subscription.waitForPendingEvents();
+
+      expect(subscription.assistantTexts).toEqual(["NO_REPLY"]);
+      expect(onBlockReply).not.toHaveBeenCalled();
+      subscription.unsubscribe();
+    },
+  );
+
   it("emits block replies on text_end and does not duplicate on message_end", async () => {
     const onBlockReply = vi.fn();
     const { emit, subscription } = createTextEndBlockReplyHarness({ onBlockReply });

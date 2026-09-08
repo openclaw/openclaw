@@ -73,6 +73,23 @@ openclaw_frozen_target_source_contains() {
   git -C "$source_root" show "$OPENCLAW_SELECTED_SHA:$relative_path" 2>/dev/null | grep -F -- "$needle" >/dev/null
 }
 
+openclaw_resolve_frozen_upgrade_survivor_capabilities() {
+  local source_root="${1:?missing selected source root}" authorization_status=0
+
+  export OPENCLAW_FROZEN_UPGRADE_SURVIVOR_CLAWHUB_MODE="current"
+  openclaw_prepare_frozen_target_context "$source_root" || authorization_status=$?
+  [ "$authorization_status" -eq 1 ] && return 0
+  [ "$authorization_status" -eq 0 ] || return "$authorization_status"
+
+  # The older shipped installer fetched its official companion through ClawHub
+  # and therefore owns a three-request audit instead of the current idle ledger.
+  if ! openclaw_frozen_target_source_has_path "$source_root" src/infra/clawhub-install-trust.ts &&
+    openclaw_frozen_target_source_contains \
+      "$source_root" src/plugins/clawhub.ts 'from "../infra/clawhub.js"'; then
+    export OPENCLAW_FROZEN_UPGRADE_SURVIVOR_CLAWHUB_MODE="legacy"
+  fi
+}
+
 openclaw_resolve_frozen_live_cli_backend_package_mode() {
   local source_root="${1:?missing selected source root}" authorization_status=0
 
@@ -139,9 +156,9 @@ openclaw_resolve_frozen_core_harness_capabilities() {
   [ "$authorization_status" -eq 1 ] && return 0
   [ "$authorization_status" -eq 0 ] || return "$authorization_status"
 
-  # The pre-consent onboarding flow does not accept the wizard record or the
-  # newer guided case. Run its own established non-interactive coverage.
-  if ! openclaw_frozen_target_source_contains "$source_root" src/config/zod-schema.ts 'securityAcknowledgedAt:' &&
+  # Older onboarding schemas do not accept the guided fixture's full wizard
+  # consent record. Run their own established non-interactive coverage.
+  if ! openclaw_frozen_target_source_contains "$source_root" src/config/zod-schema.ts 'accessMode:' &&
     openclaw_frozen_target_source_contains "$source_root" src/config/zod-schema.ts 'lastRunAt:'; then
     export OPENCLAW_FROZEN_TARGET_ONBOARD_CASES="local-basic,remote-non-interactive,reset,channels,skills"
   fi
@@ -197,7 +214,7 @@ openclaw_resolve_frozen_core_harness_capabilities() {
   # new dist entry the release cannot contain.
   if ! git -C "$source_root" cat-file -e "$OPENCLAW_SELECTED_SHA:src/agents/agent-bundle-mcp-manager-api.ts" 2>/dev/null &&
     git -C "$source_root" cat-file -e "$OPENCLAW_SELECTED_SHA:src/agents/agent-bundle-mcp-runtime.ts" 2>/dev/null &&
-    git -C "$source_root" cat-file -e "$OPENCLAW_SELECTED_SHA:scripts/e2e/agent-bundle-mcp-tools-docker-client.ts" 2>/dev/null; then
+    git -C "$source_root" cat-file -e "$OPENCLAW_SELECTED_SHA:test/e2e/qa-lab/runtime/agent-bundle-mcp-tools-docker-client.ts" 2>/dev/null; then
     export OPENCLAW_FROZEN_TARGET_AGENT_BUNDLE_MCP_MODE="legacy"
   fi
 }

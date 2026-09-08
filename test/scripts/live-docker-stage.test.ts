@@ -444,9 +444,20 @@ export function parseRegistryNpmSpec(spec: string) {
     mkdirSync(path.join(root, "src/agents/embedded-agent-runner/run"), { recursive: true });
     mkdirSync(path.join(root, "src/commands"), { recursive: true });
     mkdirSync(path.join(root, "scripts"), { recursive: true });
+    mkdirSync(path.join(root, "src/config"), { recursive: true });
+    mkdirSync(path.join(root, "test/e2e/qa-lab/runtime"), { recursive: true });
     writeFileSync(
       path.join(root, "src/agents/code-mode-namespaces.ts"),
       'export const globals = ["ALL_TOOLS"];\n',
+    );
+    writeFileSync(path.join(root, "src/agents/agent-bundle-mcp-runtime.ts"), "export {};\n");
+    writeFileSync(
+      path.join(root, "test/e2e/qa-lab/runtime/agent-bundle-mcp-tools-docker-client.ts"),
+      "export {};\n",
+    );
+    writeFileSync(
+      path.join(root, "src/config/zod-schema.ts"),
+      "const wizard = { lastRunAt: true };\n",
     );
     writeFileSync(
       path.join(root, "src/agents/embedded-agent-runner/run/runtime-context-prompt.ts"),
@@ -471,7 +482,7 @@ export function parseRegistryNpmSpec(spec: string) {
     }).trim();
     const resolveCoreDialects = [
       "-c",
-      'set -euo pipefail; source "$1"; openclaw_resolve_frozen_core_harness_capabilities "$2"; openclaw_resolve_frozen_live_cli_backend_package_mode "$2"; printf "%s %s %s %s\\n" "$OPENCLAW_FROZEN_TARGET_SESSION_REPAIR_MODE" "$OPENCLAW_FROZEN_TARGET_MCP_CODE_MODE_CATALOG_MODE" "$OPENCLAW_FROZEN_TARGET_LIVE_CLI_BACKEND_PACKAGE_MODE" "$OPENCLAW_FROZEN_TARGET_RUNTIME_CONTEXT_INPUT_MODE"',
+      'set -euo pipefail; source "$1"; openclaw_resolve_frozen_core_harness_capabilities "$2"; openclaw_resolve_frozen_live_cli_backend_package_mode "$2"; printf "%s|%s|%s|%s|%s|%s\\n" "$OPENCLAW_FROZEN_TARGET_SESSION_REPAIR_MODE" "$OPENCLAW_FROZEN_TARGET_MCP_CODE_MODE_CATALOG_MODE" "$OPENCLAW_FROZEN_TARGET_LIVE_CLI_BACKEND_PACKAGE_MODE" "$OPENCLAW_FROZEN_TARGET_RUNTIME_CONTEXT_INPUT_MODE" "$OPENCLAW_FROZEN_TARGET_ONBOARD_CASES" "$OPENCLAW_FROZEN_TARGET_AGENT_BUNDLE_MCP_MODE"',
       "test",
       stageScriptPath,
       root,
@@ -486,7 +497,7 @@ export function parseRegistryNpmSpec(spec: string) {
     });
 
     expect(strictResult.status, strictResult.stderr).toBe(0);
-    expect(strictResult.stdout.trim()).toBe("sqlite current current producer-fragments");
+    expect(strictResult.stdout.trim()).toBe("sqlite|current|current|producer-fragments||current");
 
     const result = spawnSync("bash", resolveCoreDialects, {
       encoding: "utf8",
@@ -499,7 +510,9 @@ export function parseRegistryNpmSpec(spec: string) {
     });
 
     expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout.trim()).toBe("jsonl legacy legacy legacy-marked-prompt");
+    expect(result.stdout.trim()).toBe(
+      "jsonl|legacy|legacy|legacy-marked-prompt|local-basic,remote-non-interactive,reset,channels,skills|legacy",
+    );
   });
 
   it.each([

@@ -2,7 +2,7 @@ import { fileURLToPath } from "node:url";
 import { expect, it } from "vitest";
 import { runNodeScript } from "../../../../test/helpers/run-node-script.js";
 
-it.for(["line", "range", "cursor"])(
+it.for(["line", "range", "cursor", "eof"])(
   "owns both output channels for a partial-file %s page",
   { timeout: 30_000 },
   async (mode, { signal }) => {

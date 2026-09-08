@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
+import { isPrePartialFailureRecoveryTarget } from "../../scripts/e2e/lib/npm-telegram-live/resolve-target-scenarios.mts";
 import { testing } from "../../scripts/e2e/npm-telegram-live-runner.ts";
 import { privateLocalOnlyPluginSdkEntrypoints } from "../../scripts/lib/plugin-sdk-entries.mts";
 
@@ -390,6 +391,45 @@ describe("package Telegram live Docker E2E", () => {
     ]);
   });
 
+  it("omits source-qualified current-only scenarios only from the default catalog", () => {
+    const resolve = (scenarioIds: readonly string[]) =>
+      scenarioIds.length > 0
+        ? [...scenarioIds]
+        : ["channel-canary", "telegram-partial-failure-recovery"];
+    const env = {
+      OPENCLAW_NPM_TELEGRAM_OMIT_DEFAULT_SCENARIOS: "telegram-partial-failure-recovery",
+    };
+
+    expect(testing.resolvePackageTelegramScenarios(env, resolve).resolvedScenarioIds).toEqual([
+      "channel-canary",
+    ]);
+    expect(
+      testing.resolvePackageTelegramScenarios(
+        { ...env, OPENCLAW_NPM_TELEGRAM_SCENARIOS: "telegram-partial-failure-recovery" },
+        resolve,
+      ).resolvedScenarioIds,
+    ).toEqual(["telegram-partial-failure-recovery"]);
+  });
+
+  it("recognizes only the complete pre-recovery Telegram source contract", () => {
+    const root = mkTempRoot();
+    const writeOwner = (relativePath: string, source: string) => {
+      const file = path.join(root, relativePath);
+      mkdirSync(path.dirname(file), { recursive: true });
+      writeFileSync(file, source);
+    };
+    writeOwner("src/agents/embedded-agent-subscribe.ts", "void params.onPartialReply(data);");
+    writeOwner("extensions/telegram/src/draft-stream.ts", "flush: loop.flush,");
+    writeOwner(
+      "extensions/telegram/src/bot-message-dispatch.ts",
+      "enqueueDraftLaneEvent(async () => {});",
+    );
+
+    expect(isPrePartialFailureRecoveryTarget(root)).toBe(true);
+    writeOwner("extensions/telegram/src/draft-stream.ts", "waitForInFlight();");
+    expect(isPrePartialFailureRecoveryTarget(root)).toBe(false);
+  });
+
   it("rejects multiple explicit RTT scenario ids", () => {
     expect(() =>
       testing.resolvePackageTelegramScenarioSelection({
@@ -553,9 +593,9 @@ describe("package Telegram live Docker E2E", () => {
     ).toBeUndefined();
   });
 
-  it("preserves the frozen 2026.6.35 package projection", () => {
+  it.each(["2026.6.35", "2026.7.33"])("preserves the frozen %s package projection", (version) => {
     const mutateConfig = testing.resolvePackageConfigMutation({
-      OPENCLAW_NPM_TELEGRAM_PACKAGE_VERSION: "2026.6.35",
+      OPENCLAW_NPM_TELEGRAM_PACKAGE_VERSION: version,
     });
     const config = {
       agents: {

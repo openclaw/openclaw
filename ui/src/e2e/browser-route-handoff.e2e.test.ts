@@ -275,7 +275,12 @@ suite.define(() => {
             result: {
               content: [{ type: "text", text: "Browser control output" }],
               details: {
-                browserTab: { target: "host", profile: "managed", targetId: "default-tab" },
+                browserTab: {
+                  target: "host",
+                  profile: "managed",
+                  targetId: "default-tab",
+                  url: "https://default.example/",
+                },
               },
             },
           });

@@ -1994,6 +1994,88 @@ function runControlUiI18nSourceFixture(options: {
 }
 
 describe("ci workflow guards", () => {
+  it("keeps activity unit proof without unrelated dedicated UI E2E on a PR", () => {
+    const manifest = runCiManifestFixture({
+      bundledPlanner: true,
+      eventName: "pull_request",
+      changedPaths: ["ui/src/pages/activity/activity-page.test.ts"],
+      scopeEnv: { OPENCLAW_CI_RUN_UI_TESTS: "true" },
+      changedPlannerSource: `
+        export const hasUiE2eAffectingChange = () => false;
+        export const hasBuildArtifactAffectingChange = () => false;
+        export const createChangedNodeTestShards = (_paths, options) => [{
+          checkName: "dedicated-ui-" + options.dedicatedUiE2e,
+          configs: [], requiresDist: false, runner: "ubuntu-24.04", shardName: "unit",
+        }];
+        export const createChangedExtensionFallbackShards = () => [];
+      `,
+    });
+    expect(manifest.status, manifest.output).toBe(0);
+    const workflow = readCiWorkflow();
+    const context = {
+      eventName: "pull_request" as const,
+      repository: "openclaw/openclaw",
+      runAttempt: 1,
+      preflightOutputs: manifest.outputs,
+    };
+    for (const name of ["checks-ui", "control-ui-performance"]) {
+      expect(evaluateWorkflowExpression(`\${{ ${workflow.jobs[name].if} }}`, context)).toBe(true);
+    }
+    for (const name of ["checks-ui-e2e", "checks-ui-e2e-real-gateway"]) {
+      expect(evaluateWorkflowExpression(`\${{ ${workflow.jobs[name].if} }}`, context)).toBe(false);
+    }
+    expect(JSON.stringify(manifest.outputs)).toContain("dedicated-ui-false");
+    expect(
+      runCiGateFixture(
+        renderCiGateEnvironment(
+          { preflightOutputs: manifest.outputs },
+          {
+            "checks-ui-e2e": "skipped",
+            "checks-ui-e2e-real-gateway": "skipped",
+          },
+        ),
+      ).status,
+    ).toBe(0);
+    expect(
+      runCiGateFixture(
+        renderCiGateEnvironment(
+          { preflightOutputs: manifest.outputs },
+          {
+            "checks-ui": "skipped",
+          },
+        ),
+      ).status,
+    ).toBe(1);
+  });
+
+  it.each([
+    { eventName: "push" as const },
+    { eventName: "workflow_dispatch" as const, historicalCompatibility: false },
+    { eventName: "workflow_dispatch" as const, historicalCompatibility: true },
+    { eventName: "pull_request" as const, repository: "example/openclaw" },
+    { eventName: "pull_request" as const, changedPaths: null },
+    { eventName: "pull_request" as const, missingSelector: true },
+  ])("retains UI E2E outside current known unit-only PR selection %j", (options) => {
+    const manifest = runCiManifestFixture({
+      bundledPlanner: true,
+      changedPaths: ["ui/src/pages/activity/activity-page.test.ts"],
+      scopeEnv: { OPENCLAW_CI_RUN_UI_TESTS: "true" },
+      ...options,
+      changedPlannerSource: `
+        ${"missingSelector" in options && options.missingSelector ? "" : "export const hasUiE2eAffectingChange = () => false;"}
+        export const createChangedNodeTestShards = () => [];
+        export const createChangedExtensionFallbackShards = () => [];
+      `,
+    });
+    // Current PRs with an unusable manifest fail rather than narrowing proof.
+    if ("changedPaths" in options && options.changedPaths === null) {
+      expect(manifest.status).not.toBe(0);
+    } else {
+      expect(manifest.status, manifest.output).toBe(0);
+      expect(manifest.outputs.run_ui_tests).toBe("true");
+      expect(manifest.outputs.run_ui_e2e).toBe("true");
+    }
+  });
   it("isolates mutations between workflow fixtures", () => {
     const workflow = readCiWorkflow();
     const expected = structuredClone(workflow);
@@ -8973,8 +9055,7 @@ server.listen(0, "127.0.0.1", () => {
       "Setup Node",
       "Clone publish repo",
       "Sync docs into publish repo",
-      "Install docs MDX checker dependency",
-      "Check publish docs MDX",
+      "Cache successful docs validation",
       "Commit publish repo sync",
     ]);
     expect(steps[3]).toEqual({
@@ -8992,9 +9073,13 @@ server.listen(0, "127.0.0.1", () => {
         "persist-credentials": false,
       },
     });
-    expect(steps.slice(1).every((step) => step.if === "env.OPENCLAW_DOCS_SYNC_TOKEN != ''")).toBe(
-      true,
-    );
+    for (const step of steps.slice(1)) {
+      expect(step.if).toBe(
+        step.name === "Cache successful docs validation"
+          ? "env.OPENCLAW_DOCS_SYNC_TOKEN != '' && github.repository == 'openclaw/openclaw' && github.ref == 'refs/heads/main'"
+          : "env.OPENCLAW_DOCS_SYNC_TOKEN != ''",
+      );
+    }
     expect(source).not.toContain("setup-python");
     expect(workflow.concurrency).toEqual({
       group:
@@ -9003,8 +9088,8 @@ server.listen(0, "127.0.0.1", () => {
     });
     const clone = expectDefined(steps[5]?.run, "clone policy");
     const sync = expectDefined(steps[6]?.run, "sync body");
-    const publish = expectDefined(steps[9]?.run, "publication policy");
-    expect(steps[9]?.["working-directory"]).toBe("publish");
+    const publish = expectDefined(steps[8]?.run, "publication policy");
+    expect(steps[8]?.["working-directory"]).toBe("publish");
     for (const policy of [clone, publish]) {
       expect(
         policy.startsWith(
@@ -13371,7 +13456,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(uiE2e.permissions).toEqual({ contents: "read" });
     expect(uiE2e.needs).toEqual(["preflight"]);
     expect(uiE2e.if).toBe(
-      "needs.preflight.outputs.run_ui_tests == 'true' && needs.preflight.outputs.compatibility_target != 'true'",
+      "needs.preflight.outputs.run_ui_e2e == 'true' && needs.preflight.outputs.compatibility_target != 'true'",
     );
     expect(uiE2e["runs-on"]).not.toBe(ui["runs-on"]);
     expect(uiE2e["timeout-minutes"]).toBe(25);

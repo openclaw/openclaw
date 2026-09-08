@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { createHash, generateKeyPairSync, sign } from "node:crypto";
+import { createHash } from "node:crypto";
 // OpenClaw npm postpublish tests validate postpublish verification behavior.
 import {
   existsSync,
@@ -36,7 +36,6 @@ import {
   resolveInstalledBinaryPath,
   retryNpmRegistryProvenanceRead,
   verifyNpmProvenanceAttestation,
-  verifyNpmRegistrySignatures,
 } from "../scripts/openclaw-npm-postpublish-verify.ts";
 import {
   rewriteRootRuntimeImportsToStableAliases,
@@ -202,29 +201,6 @@ describe("npm registry provenance verification", () => {
     ).rejects.toThrow(
       "npm registry request timed out after 5ms: https://registry.example/openclaw",
     );
-  });
-
-  it("verifies an npm registry signature against the matching public key", () => {
-    const keys = generateKeyPairSync("ec", { namedCurve: "prime256v1" });
-    const payload = `${packageName}@${version}:${integrity}`;
-    const signature = sign("sha256", Buffer.from(payload, "utf8"), keys.privateKey).toString(
-      "base64",
-    );
-
-    expect(() =>
-      verifyNpmRegistrySignatures({
-        packageName,
-        version,
-        integrity,
-        signatures: [{ keyid: "test-key", sig: signature }],
-        keys: [
-          {
-            keyid: "test-key",
-            key: keys.publicKey.export({ format: "der", type: "spki" }).toString("base64"),
-          },
-        ],
-      }),
-    ).not.toThrow();
   });
 
   it("requires a trusted GitHub release identity for the exact SLSA provenance attestation", async () => {

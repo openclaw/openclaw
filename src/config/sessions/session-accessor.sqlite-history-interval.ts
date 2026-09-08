@@ -1,3 +1,5 @@
+import { sql, type Expression, type RawBuilder, type SqlBool } from "kysely";
+import { OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE } from "../../agents/internal-runtime-context.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -15,7 +17,19 @@ import {
   type ClosedResetInterval,
 } from "./session-accessor.sqlite-reset-window.js";
 
-const HISTORY_DISPLAY_EVENT_TYPES = ["compaction", "reset"] as const;
+/** Select display slots without loading custom content or details into history metadata. */
+export function isVisibleHistoryNonMessageEventSql(
+  type: Expression<string | null>,
+  event: Expression<string>,
+): RawBuilder<SqlBool> {
+  // Match isVisibleTranscriptRecord; CASE avoids parsing unrelated marker payloads.
+  return /* kysely-allow-raw: query-time display selection leaves canonical events and message indexes unchanged. */ sql<SqlBool>`CASE
+    WHEN ${type} IN ('compaction', 'reset') THEN 1
+    WHEN ${type} = 'custom_message' THEN
+      json_type(${event}, '$.display') = 'true'
+      AND json_extract(${event}, '$.customType') IS NOT ${OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE}
+    ELSE 0 END`;
+}
 
 export function parseStoredTranscriptEvent(eventJson: string): TranscriptEvent {
   // SAFETY: The active projection indexes serialized TranscriptEvent rows.
@@ -44,7 +58,10 @@ function selectHistoricalDisplayEvents(
     .where((eb) =>
       eb.or([
         eb("active.message_position", "is not", null),
-        eb("identity.event_type", "in", HISTORY_DISPLAY_EVENT_TYPES),
+        isVisibleHistoryNonMessageEventSql(
+          eb.ref("identity.event_type"),
+          eb.ref("event.event_json"),
+        ),
       ]),
     );
 }
@@ -77,7 +94,10 @@ function readDisplayableActiveEventById(projection: CurrentTranscriptProjection,
       .where((eb) =>
         eb.or([
           eb("active.message_position", "is not", null),
-          eb("identity.event_type", "in", HISTORY_DISPLAY_EVENT_TYPES),
+          isVisibleHistoryNonMessageEventSql(
+            eb.ref("identity.event_type"),
+            eb.ref("event.event_json"),
+          ),
         ]),
       ),
   );
