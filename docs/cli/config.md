@@ -25,8 +25,12 @@ openclaw gateway run
 ```
 
 For a service or container, set the variable in its service environment or
-container definition. This is an environment switch, not an `openclaw.json` field.
-Only the value `1` enables it.
+container definition. This is a host-environment switch, not an `openclaw.json`
+field. Do not set `OPENCLAW_CONFIG_READONLY` in config `env` or `env.vars`.
+Entries in `env.vars` are ignored, including differently cased spellings; flat
+`env` keys are not valid configuration. Config reload cannot enable, disable,
+or change the host-selected read-only mode. Only the host value `1` enables
+this switch. Existing `OPENCLAW_NIX_MODE` behavior is unchanged.
 
 Config writes are blocked, including setup, onboarding, doctor repairs, plugin
 install/update/uninstall/enable/disable, and mutating `openclaw update` flows.

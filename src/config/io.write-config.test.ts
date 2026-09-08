@@ -497,6 +497,26 @@ describe("config io write", () => {
     );
   });
 
+  itWithHome("does not enable READONLY from config env.vars before writing", async (home) => {
+    const config = {
+      env: { vars: { OPENCLAW_CONFIG_READONLY: "1" } },
+      gateway: { mode: "local" as const },
+    };
+    const { configPath } = await writeConfigFixture(home, config);
+    const io = createHomeConfigIO(home, {
+      configPath,
+      env: { OPENCLAW_TEST_FAST: "1" },
+    });
+    expect(io.loadConfig().gateway?.mode).toBe("local");
+    const result = await io.writeConfigFile({
+      ...config,
+      gateway: { mode: "local", port: 19001 },
+    });
+    expect(result.persistedConfig.gateway?.port).toBe(19001);
+    expect((await io.readConfigFileSnapshot()).config.gateway?.port).toBe(19001);
+    expect(io.env.OPENCLAW_CONFIG_READONLY).toBeUndefined();
+  });
+
   for (const [mode, message] of [
     [
       "OPENCLAW_NIX_MODE",
@@ -508,6 +528,7 @@ describe("config io write", () => {
       `refuses direct config writes in ${mode} without changing the file`,
       async (home) => {
         const { configPath, raw: initialRaw } = await writeConfigFixture(home, {
+          env: { vars: { [mode]: "0" } },
           gateway: { mode: "local" },
         });
         const io = createHomeConfigIO(home, {
@@ -518,6 +539,8 @@ describe("config io write", () => {
           } as NodeJS.ProcessEnv,
         });
 
+        expect(io.loadConfig().gateway?.mode).toBe("local");
+        expect(io.env[mode]).toBe("1");
         await expect(
           io.writeConfigFile({ gateway: { mode: "local", port: 19001 } }),
         ).rejects.toThrow(message);
