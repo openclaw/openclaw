@@ -1,7 +1,7 @@
 // Control UI view renders config form.render screen content.
 import { html, nothing, type TemplateResult } from "lit";
 import type { ConfigUiHints } from "../api/types.ts";
-import { t } from "../i18n/index.ts";
+import { i18n, t } from "../i18n/index.ts";
 import "./web-awesome-popover.ts";
 import { SECTION_META } from "./config-form.meta.ts";
 import { renderNode } from "./config-form.node.ts";
@@ -25,6 +25,8 @@ type ConfigFormProps = {
   searchQuery?: string;
   activeSection?: string | null;
   activeSubsection?: string | null;
+  /** The flat Advanced page sorts section headings; curated pages retain schema order. */
+  alphabeticalSections?: boolean;
   showAdvanced?: boolean;
   forceAdvancedSection?: string | null;
   /** Required: the collapsed advanced disclosure's only action. Optional would
@@ -150,7 +152,18 @@ export function renderConfigForm(props: ConfigFormProps) {
   const activeSection = props.activeSection;
   const activeSubsection = props.activeSubsection ?? null;
 
+  const sectionLabel = (key: string) =>
+    SECTION_META[key]?.label ?? key.charAt(0).toUpperCase() + key.slice(1);
+  const sectionCollator = props.alphabeticalSections
+    ? new Intl.Collator(i18n.getLocale(), { sensitivity: "accent" })
+    : null;
   const entries = Object.entries(properties).toSorted((a, b) => {
+    if (sectionCollator) {
+      return (
+        sectionCollator.compare(sectionLabel(a[0]), sectionLabel(b[0])) ||
+        (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0)
+      );
+    }
     const orderA = hintForPath([a[0]], props.uiHints)?.order ?? 50;
     const orderB = hintForPath([b[0]], props.uiHints)?.order ?? 50;
     if (orderA !== orderB) {
@@ -326,15 +339,10 @@ export function renderConfigForm(props: ConfigFormProps) {
           });
         })()
       : filteredEntries.map(([key, node]) => {
-          const meta = SECTION_META[key] ?? {
-            label: key.charAt(0).toUpperCase() + key.slice(1),
-            description: node.description ?? "",
-          };
-
           return renderSection({
             id: `config-section-${key}`,
-            label: meta.label,
-            description: meta.description,
+            label: sectionLabel(key),
+            description: SECTION_META[key]?.description ?? node.description ?? "",
             node,
             nodeValue: value[key],
             path: [key],
