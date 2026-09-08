@@ -25,6 +25,11 @@ describe("doctor project clone shape", () => {
     "inspects only registry clones and reports %s clone repair",
     async (shape) => {
       await withOpenClawTestState({ prefix: "openclaw-doctor-clones-" }, async (state) => {
+        const urlRemote =
+          "https://user:synthetic-secret@example.invalid/project.git?opaque=query-private#fragment-private";
+        const urlKeys = ["promisor", "partialclonefilter"].map(
+          (field) => `remote.${urlRemote}.${field}`,
+        );
         const source = state.path("source");
         await git(state.root, "init", "-b", "main", source);
         await git(source, "config", "user.name", "OpenClaw Test");
@@ -55,13 +60,8 @@ describe("doctor project clone shape", () => {
         await registerClonedProjectRegistry({ path: clone, name: "Stored project", originUrl });
         await registerProjectRegistry({ path: ignored, name: "User checkout" });
         if (shape === "both") {
-          await git(clone, "config", "remote.https://example.invalid/project.git.promisor", "true");
-          await git(
-            clone,
-            "config",
-            "remote.https://example.invalid/project.git.partialclonefilter",
-            "blob:none",
-          );
+          await git(clone, "config", urlKeys[0]!, "true");
+          await git(clone, "config", urlKeys[1]!, "blob:none");
           await git(clone, "config", "extensions.partialclone", "origin");
         }
         const configBefore = await fs.readFile(path.join(clone, ".git", "config"), "utf8");
@@ -97,14 +97,52 @@ describe("doctor project clone shape", () => {
           expect(finding.message).toContain("remote.origin.partialclonefilter");
         }
         if (shape === "both") {
-          expect(finding.message).toContain("remote.https://example.invalid/project.git.promisor");
+          for (const output of [finding.message, finding.path, finding.fixHint]) {
+            for (const credential of [
+              "user:",
+              "synthetic-secret",
+              "query-private",
+              "fragment-private",
+            ]) {
+              expect(output).not.toContain(credential);
+            }
+          }
           expect(finding.message).toContain(
-            "remote.https://example.invalid/project.git.partialclonefilter",
+            "remote.https://***@example.invalid/project.git.promisor",
+          );
+          expect(finding.message).toContain(
+            "remote.https://***@example.invalid/project.git.partialclonefilter",
           );
           expect(finding.message).toContain("extensions.partialclone");
+          expect(finding.fixHint).toContain(
+            "git config --get-regexp '^remote\\..*\\.(promisor|partialclonefilter)$'",
+          );
+          expect(finding.fixHint).toContain(
+            "git config --unset-all <the key shown by that command>",
+          );
+          expect(finding.fixHint).toContain(
+            "git config --unset-all remote.origin.partialclonefilter",
+          );
+          expect(finding.fixHint).toContain("git config --unset-all remote.origin.promisor");
+          expect(finding.fixHint).not.toMatch(/git config --unset-all .*https:/);
         }
         expect(await fs.readFile(path.join(clone, ".git", "config"), "utf8")).toBe(configBefore);
         expect(await git(clone, "rev-parse", "--is-shallow-repository")).toBe(String(shallow));
+        if (shape === "both") {
+          // The operator locates and removes URL-keyed entries locally; Doctor
+          // cannot print their raw keys as executable repair commands.
+          const localKeys = await git(
+            clone,
+            "config",
+            "--name-only",
+            "--get-regexp",
+            "^remote\\..*\\.(promisor|partialclonefilter)$",
+          );
+          for (const key of urlKeys) {
+            expect(localKeys.split("\n")).toContain(key);
+            await git(clone, "config", "--unset-all", key);
+          }
+        }
         // Exercise the printed operator commands against the local origin.
         await execFileAsync("sh", ["-ec", finding.fixHint!.split("\n").slice(1, -1).join("\n")]);
         expect(await detect()).toEqual([]);

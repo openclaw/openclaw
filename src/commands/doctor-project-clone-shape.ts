@@ -8,6 +8,21 @@ import { listProjectRegistry } from "../projects/project-registry.js";
 
 const CHECK_ID = "core/doctor/project-clone-shape";
 
+function describeCloneConfigKey(key: string) {
+  const fieldOffset = key.lastIndexOf(".");
+  const url = key.startsWith("remote.")
+    ? URL.parse(key.slice("remote.".length, fieldOffset))
+    : null;
+  if (!url) {
+    return { name: key, urlKey: false };
+  }
+  url.username = url.username || url.password ? "***" : "";
+  url.password = "";
+  url.search = "";
+  url.hash = "";
+  return { name: `remote.${url.href}${key.slice(fieldOffset)}`, urlKey: true };
+}
+
 async function readCloneGit(root: string, args: string[], optional = false): Promise<string> {
   const result = await executeGitCommand(root, args, {
     env: gitEnvironment({ ...process.env, GIT_NO_LAZY_FETCH: "1" }),
@@ -45,7 +60,13 @@ export async function collectProjectCloneShapeHealthFindings(
     try {
       const config = await readCloneGit(
         project.repoRoot,
-        ["config", "--null", "--get-regexp", "^remote\\..*\\.(promisor|partialclonefilter)$"],
+        [
+          "config",
+          "--null",
+          "--name-only",
+          "--get-regexp",
+          "^remote\\..*\\.(promisor|partialclonefilter)$",
+        ],
         true,
       );
       const shallow = (
@@ -56,35 +77,39 @@ export async function collectProjectCloneShapeHealthFindings(
         ["config", "--get", "extensions.partialclone"],
         true,
       );
-      const keys = [
-        ...new Set(
-          config
-            .split("\0")
-            .filter(Boolean)
-            .map((entry) => entry.split("\n", 1)[0]!),
-        ),
-      ].toSorted();
+      const keys = [...new Set(config.split("\0").filter(Boolean))]
+        .toSorted()
+        .map(describeCloneConfigKey);
       if (extension) {
-        keys.push("extensions.partialclone");
+        keys.push(describeCloneConfigKey("extensions.partialclone"));
       }
       if (shallow !== "true" && keys.length === 0) {
         continue;
       }
-      const unset = (key: string) => `git config --unset-all ${quoteCliArg(key)}`;
+      const unset = (key: ReturnType<typeof describeCloneConfigKey>) =>
+        key.urlKey
+          ? [
+              `# Before continuing, locate ${key.name} locally; the raw output may contain credentials:`,
+              "# git config --get-regexp '^remote\\..*\\.(promisor|partialclonefilter)$'",
+              "# Then run: git config --unset-all <the key shown by that command>",
+            ]
+          : [`git config --unset-all ${quoteCliArg(key.name)}`];
       findings.push({
         checkId: CHECK_ID,
         severity: "warning",
         path: project.repoRoot,
-        message: `Project clone ${project.displayName} (${project.id}): shallow=${shallow}; partial-clone keys: ${keys.join(", ") || "none"}. Full clones are recommended for managed worktrees.`,
+        message: `Project clone ${project.displayName} (${project.id}): shallow=${shallow}; partial-clone keys: ${keys.map((key) => key.name).join(", ") || "none"}. Full clones are recommended for managed worktrees.`,
         fixHint: [
           "Manual repair only (POSIX shell); stop on any failed step:",
           `cd ${quoteCliArg(project.repoRoot)}`,
-          ...keys.filter((key) => key.endsWith(".partialclonefilter")).map(unset),
+          ...keys.filter((key) => key.name.endsWith(".partialclonefilter")).flatMap(unset),
           `git fetch --refetch${shallow === "true" ? " --unshallow" : ""} origin`,
           "git rev-list --objects --missing=print --all | grep '^?' | cut -c2- | git fetch origin --no-tags --no-write-fetch-head --recurse-submodules=no --stdin",
           ...keys
-            .filter((key) => key.endsWith(".promisor") || key === "extensions.partialclone")
-            .map(unset),
+            .filter(
+              (key) => key.name.endsWith(".promisor") || key.name === "extensions.partialclone",
+            )
+            .flatMap(unset),
           "git repack -a -d",
           "Rerun openclaw doctor. If history or objects remain missing, recover them from the original repository.",
         ].join("\n"),
