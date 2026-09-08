@@ -2085,6 +2085,7 @@ describe("Crabbox worker provider", () => {
       }),
     ).toBe(149 * 60_000 + 15_000);
     expect(setupOrder).toEqual(["desktop", "enrollment"]);
+    expect(calls.filter(({ argv }) => argv[1] === "inspect")).toHaveLength(1);
   });
 
   it.each(["desktop setup", "enrollment preparation", "enrollment completion"] as const)(
@@ -2650,7 +2651,7 @@ describe("Crabbox worker provider", () => {
     expect(calls.filter((argv) => argv[1] === "warmup")).toHaveLength(2);
     expect(
       calls.filter((argv) => argv[1] === "inspect").map((argv) => argv[argv.indexOf("--id") + 1]),
-    ).toEqual([LEASE_ID, LEASE_ID]);
+    ).toEqual([LEASE_ID]);
     expect(calls.at(-1)).toEqual([SIBLING_BINARY, "stop", "--provider", "aws", "--id", LEASE_ID]);
   });
 
