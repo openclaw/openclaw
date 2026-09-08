@@ -345,8 +345,13 @@ export class AcpTranslatorSessionLifecycle {
       surface: "ACP bridge session",
       hint: "Pass --agent <id>, set agents.defaults.systemAgent.agentId, or provide an agent-owned session key or label.",
     });
+    // Local bridges validate the owner early against the configured roster;
+    // remote Gateway targets enforce ownership at the Gateway boundary instead.
+    const ownerId = this.opts.skipAgentOwnerRosterValidation
+      ? agentId
+      : resolveConfiguredAgentId(this.config, agentId);
     return toAgentStoreSessionKey({
-      agentId: resolveConfiguredAgentId(this.config, agentId),
+      agentId: ownerId,
       requestKey: sessionKey,
     });
   }

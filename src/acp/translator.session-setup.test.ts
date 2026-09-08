@@ -109,6 +109,22 @@ describe("acp session UX bridge behavior", () => {
     );
   });
 
+  it("scopes generated sessions to a remote-only owner without a local roster entry", async () => {
+    const sessionStore = createInMemorySessionStore();
+    const agent = createAcpGatewayAgent(createAcpConnection(), createAcpGateway(), {
+      agentId: "remote-only",
+      skipAgentOwnerRosterValidation: true,
+      config: explicitMultiAgentConfig,
+      sessionStore,
+    });
+
+    const result = await agent.newSession(createNewSessionRequest());
+
+    expect(sessionStore.getSession(result.sessionId)?.sessionKey).toMatch(
+      /^agent:remote-only:acp-bridge:/,
+    );
+  });
+
   it("preserves explicit session routing without an ambient owner", async () => {
     const sessionStore = createInMemorySessionStore();
     const agent = createAcpGatewayAgent(createAcpConnection(), createAcpGateway(), {
@@ -123,6 +139,20 @@ describe("acp session UX bridge behavior", () => {
     });
 
     expect(sessionStore.getSession(result.sessionId)?.sessionKey).toBe("agent:ops:override");
+  });
+
+  it("keeps explicit session routing precedence when --agent is not in the local roster", async () => {
+    const sessionStore = createInMemorySessionStore();
+    const agent = createAcpGatewayAgent(createAcpConnection(), createAcpGateway(), {
+      agentId: "missing",
+      config: explicitMultiAgentConfig,
+      defaultSessionKey: "agent:research:default",
+      sessionStore,
+    });
+
+    const result = await agent.newSession(createNewSessionRequest());
+
+    expect(sessionStore.getSession(result.sessionId)?.sessionKey).toBe("agent:research:default");
   });
 
   it("returns initial modes and thought-level config options for new sessions", async () => {

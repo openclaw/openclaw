@@ -35,6 +35,12 @@ export type AcpServerOptions = {
   gatewayToken?: string;
   gatewayPassword?: string;
   agentId?: string;
+  /**
+   * Skip validating the generated-session owner against the local agent roster.
+   * Set for remote Gateway targets, where ownership is enforced at the Gateway
+   * boundary instead of the client's configured roster.
+   */
+  skipAgentOwnerRosterValidation?: boolean;
   defaultSessionKey?: string;
   defaultSessionLabel?: string;
   requireExistingSession?: boolean;

@@ -474,6 +474,59 @@ describe("serveAcpGateway startup", () => {
     }
   });
 
+  it("defers unknown --agent roster validation to the generated-session path", async () => {
+    mockState.runtimeConfig = {
+      gateway: { mode: "local" },
+      agents: {
+        ownership: "explicit",
+        entries: { ops: {}, research: {} },
+      },
+    };
+    const { signalHandlers, onceSpy } = captureProcessSignalHandlers();
+
+    try {
+      const servePromise = serveAcpGateway({ agentId: "not-in-roster" });
+      await emitHelloAndWaitForAgentSideConnection();
+
+      expect(mockState.agentOptions[0]).toMatchObject({
+        agentId: "not-in-roster",
+      });
+      expect(mockState.agentOptions[0]).not.toHaveProperty("skipAgentOwnerRosterValidation");
+
+      await stopServeWithSigint(signalHandlers, servePromise);
+    } finally {
+      onceSpy.mockRestore();
+    }
+  });
+
+  it("skips local roster validation for remote Gateway targets", async () => {
+    mockState.runtimeConfig = {
+      gateway: { mode: "local" },
+      agents: {
+        ownership: "explicit",
+        entries: { ops: {}, research: {} },
+      },
+    };
+    const { signalHandlers, onceSpy } = captureProcessSignalHandlers();
+
+    try {
+      const servePromise = serveAcpGateway({
+        agentId: "not-in-roster",
+        gatewayUrl: "wss://gateway-host:18789",
+      });
+      await emitHelloAndWaitForAgentSideConnection();
+
+      expect(mockState.agentOptions[0]).toMatchObject({
+        agentId: "not-in-roster",
+        skipAgentOwnerRosterValidation: true,
+      });
+
+      await stopServeWithSigint(signalHandlers, servePromise);
+    } finally {
+      onceSpy.mockRestore();
+    }
+  });
+
   it("advertises approval handling and subscribes to run-scoped tool events", async () => {
     const { signalHandlers, onceSpy } = captureProcessSignalHandlers();
 

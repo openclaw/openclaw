@@ -17,8 +17,8 @@ import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
 } from "../../packages/gateway-protocol/src/client-info.js";
-import { resolveConfiguredAgentId } from "../agents/agent-scope-config.js";
 import { getRuntimeConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveGatewayClientBootstrap } from "../gateway/client-bootstrap.js";
 import { startGatewayClientWhenEventLoopReady } from "../gateway/client-start-readiness.js";
 import { GatewayClient } from "../gateway/client.js";
@@ -93,6 +93,15 @@ function createStartupInputMonitor(input: ReadableStream<Uint8Array>): {
   };
 }
 
+/**
+ * Whether the bridge targets a Gateway whose agent roster is not the local
+ * config's: an explicit `--url` target or `gateway.mode: "remote"`. Ownership
+ * for those targets is enforced at the Gateway boundary.
+ */
+function isRemoteGatewayTarget(cfg: OpenClawConfig, gatewayUrl?: string): boolean {
+  return Boolean(normalizeOptionalString(gatewayUrl)) || cfg.gateway?.mode === "remote";
+}
+
 /** Starts the ACP Gateway bridge and serves AgentSideConnection over stdio. */
 export async function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void> {
   routeLogsToStderr();
@@ -101,10 +110,16 @@ export async function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void
   if (opts.agentId !== undefined && !requestedAgentId) {
     throw new Error("--agent must not be blank");
   }
-  const agentId = requestedAgentId
-    ? resolveConfiguredAgentId(cfg, normalizeAgentId(requestedAgentId))
-    : undefined;
-  const resolvedOpts = agentId ? { ...opts, agentId } : opts;
+  // Defer roster validation to the generated-session path: explicit session
+  // routing never consults --agent, and remote Gateway targets enforce
+  // ownership at the Gateway boundary instead of the client's local roster.
+  const skipAgentOwnerRosterValidation = isRemoteGatewayTarget(cfg, opts.gatewayUrl);
+  const agentId = requestedAgentId ? normalizeAgentId(requestedAgentId) : undefined;
+  const resolvedOpts: AcpServerOptions = {
+    ...opts,
+    ...(agentId ? { agentId } : {}),
+    ...(skipAgentOwnerRosterValidation ? { skipAgentOwnerRosterValidation: true } : {}),
+  };
   const bootstrap = await resolveGatewayClientBootstrap({
     config: cfg,
     gatewayUrl: opts.gatewayUrl,

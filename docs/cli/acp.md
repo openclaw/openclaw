@@ -169,6 +169,8 @@ openclaw acp --agent design
 
 Without `--agent`, the bridge uses the configured system agent or the only configured agent when that choice is unambiguous. In an explicit multi-agent setup with no default owner, pass `--agent` or route to an existing agent-owned session key or label.
 
+For local Gateways, `--agent` is validated against the configured agent roster and an unknown id fails when a generated session needs an owner. For remote Gateways (`--url` or `gateway.mode: "remote"`), the local roster is not authoritative: the owner is embedded in the generated session key and ownership is enforced at the remote Gateway boundary.
+
 Explicit session routing takes precedence over the generated-session owner. Use `--session` or `--session-label` when you want an existing Gateway session instead:
 
 ```bash
@@ -296,7 +298,7 @@ Learn more about session keys at [/concepts/session](/concepts/session).
 - `--token-file <path>`: read Gateway auth token from file.
 - `--password <password>`: Gateway auth password.
 - `--password-file <path>`: read Gateway auth password from file.
-- `--agent <id>`: owner for newly generated bridge sessions.
+- `--agent <id>`: owner for newly generated bridge sessions. Validated against the local agent roster for local Gateways; ownership is enforced at the Gateway boundary for remote Gateways (`--url` or `gateway.mode: "remote"`).
 - `--session <key>`: default session key.
 - `--session-label <label>`: default session label to resolve.
 - `--require-existing`: fail if the session key/label does not exist.
