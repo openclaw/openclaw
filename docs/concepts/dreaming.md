@@ -147,14 +147,14 @@ The Control UI exposes the same diary backfill/reset flow on the agent's Memory 
 
 Deep ranking uses six weighted base signals plus phase reinforcement:
 
-| Signal              | Weight | Description                                       |
-| ------------------- | ------ | ------------------------------------------------- |
-| Relevance           | 0.30   | Average retrieval quality for the entry           |
-| Frequency           | 0.24   | How many short-term signals the entry accumulated |
-| Query diversity     | 0.15   | Distinct query/day contexts that surfaced it      |
-| Recency             | 0.15   | Time-decayed freshness score                      |
-| Consolidation       | 0.10   | Multi-day recurrence strength                     |
-| Conceptual richness | 0.06   | Concept-tag density from snippet/path             |
+| Signal              | Weight | Description                                          |
+| ------------------- | ------ | ---------------------------------------------------- |
+| Relevance           | 0.30   | Average retrieval quality for the entry              |
+| Frequency           | 0.24   | How many short-term signals the entry accumulated    |
+| Query diversity     | 0.15   | Distinct interactive recall queries that surfaced it |
+| Recency             | 0.15   | Time-decayed freshness score                         |
+| Consolidation       | 0.10   | Multi-day recurrence strength                        |
+| Conceptual richness | 0.06   | Concept-tag density from snippet/path                |
 
 Light and REM phase hits recorded in SQLite-backed plugin state add a small recency-decayed boost.
 
