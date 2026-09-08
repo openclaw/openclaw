@@ -236,6 +236,83 @@ describe("CLI-imported history anchors", () => {
     });
   });
 
+  it("preserves recovered-failure filtering on metadata-only offset pages", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const scope = {
+        agentId: "main",
+        sessionKey: "agent:main:cli-history-metadata-recovery",
+        sessionId: randomUUID(),
+      };
+      const cliSessionId = randomUUID();
+      const importedId = randomUUID();
+      const timestamp = Date.parse("2026-09-01T10:00:00Z");
+      await upsertSessionEntryCore(scope, {
+        sessionId: scope.sessionId,
+        updatedAt: timestamp,
+        providerOverride: "claude-cli",
+        modelOverride: "claude-sonnet-4-6",
+        cliSessionBindings: { "claude-cli": { sessionId: cliSessionId } },
+      });
+      const localUser = await appendTranscriptMessage(scope, {
+        message: { role: "user", content: "Question", timestamp },
+      });
+      await appendTranscriptMessage(scope, {
+        message: {
+          role: "assistant",
+          content: [],
+          timestamp: timestamp + 1,
+          stopReason: "error",
+          errorMessage: "The selected model is unavailable.",
+          __openclaw: { runId: "recovered-run" },
+        },
+      });
+      await appendTranscriptMessage(scope, {
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "Recovered answer" }],
+          timestamp: timestamp + 2,
+          stopReason: "stop",
+          __openclaw: { runId: "recovered-run" },
+        },
+      });
+      const projectDir = path.join(state.home, ".claude", "projects", "synthetic-history");
+      await fs.mkdir(projectDir, { recursive: true });
+      await fs.writeFile(
+        path.join(projectDir, `${cliSessionId}.jsonl`),
+        `${JSON.stringify({
+          type: "user",
+          uuid: importedId,
+          parentUuid: null,
+          sessionId: cliSessionId,
+          timestamp: new Date(timestamp).toISOString(),
+          message: { role: "user", content: "Question" },
+        })}\n`,
+      );
+      const handler = expectDefined(chatHistoryHandlers["chat.history"], "history handler");
+      let result: HistoryPage | undefined;
+      await handler({
+        params: { sessionKey: scope.sessionKey, limit: 1, offset: 1 },
+        context: createDirectChatContext(),
+        req: { type: "req", id: "metadata-recovery", method: "chat.history" },
+        client: null,
+        isWebchatConnect: () => false,
+        respond: (ok, payload, error) => {
+          expect(error).toBeUndefined();
+          expect(ok).toBe(true);
+          result = payload as HistoryPage;
+        },
+      });
+
+      const messages = expectDefined(result, "history response").messages;
+      expect(messages.map(readChatHistoryMessageId)).toEqual([localUser.messageId]);
+      expect(asOptionalRecord(asOptionalRecord(messages[0])?.["__openclaw"])).toMatchObject({
+        importedFrom: "claude-cli",
+        externalId: importedId,
+        cliSessionId,
+      });
+    });
+  });
+
   it.each(["chat.history", "chat.startup"] as const)(
     "%s distinguishes missing anchors from terminal imported snapshots",
     async (method) => {

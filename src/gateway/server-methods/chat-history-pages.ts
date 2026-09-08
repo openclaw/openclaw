@@ -501,13 +501,9 @@ export async function readChatHistoryPage(params: {
     };
   }
   const projectedTailMessages = cliHistory.imported
-    ? projectChatDisplayMessages(cliHistory.messages, {
-        includeCommentaryFallbacks: true,
-        maxChars: effectiveMaxChars,
-        resolveCurrentUserProfileDisplay,
-        turnBoundaryPending: isHeartbeatHistoryTurnBoundaryMessage(
-          incrementalTail.overreadContextMessage,
-        ),
+    ? projectCliIdentityOntoPagedMessages({
+        pagedMessages: incrementalTail.projected,
+        completeMessages: cliHistory.messages,
       })
     : incrementalTail.projected;
   const windowedTailMessages =

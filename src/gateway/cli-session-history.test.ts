@@ -1980,6 +1980,69 @@ describe("cli session history", () => {
     ).toEqual(["external-1", "external-2"]);
   });
 
+  it("uses local order to break equal predecessor timestamp ties", () => {
+    const localMessages = [
+      { role: "assistant", content: "Repeated answer", timestamp: 0 },
+      { role: "assistant", content: "Repeated answer", timestamp: 0 },
+    ];
+    const importedMessages = [
+      {
+        role: "assistant",
+        content: "Repeated answer",
+        timestamp: 1,
+        __openclaw: {
+          importedFrom: "claude-cli",
+          cliSessionId: "session-1",
+          externalId: "external-1",
+        },
+      },
+      {
+        role: "assistant",
+        content: "Repeated answer",
+        timestamp: 1,
+        __openclaw: {
+          importedFrom: "claude-cli",
+          cliSessionId: "session-1",
+          externalId: "external-2",
+        },
+      },
+    ];
+
+    const merged = mergeImportedChatHistoryMessages({ localMessages, importedMessages });
+
+    expect(
+      merged.map((message) => readRecord(readRecord(message)["__openclaw"]).externalId),
+    ).toEqual(["external-1", "external-2"]);
+  });
+
+  it("consumes large repeated-text histories without rescanning matched candidates", () => {
+    const timestamp = Date.parse("2026-09-01T10:00:00Z");
+    const count = 20_000;
+    const localMessages = Array.from({ length: count }, (_, index) => ({
+      role: "assistant",
+      content: "Repeated answer",
+      timestamp: timestamp + index,
+    }));
+    const importedMessages = localMessages.map((message, index) => ({
+      ...message,
+      __openclaw: {
+        importedFrom: "claude-cli",
+        cliSessionId: "session-1",
+        externalId: `external-${index}`,
+      },
+    }));
+
+    const startedAt = performance.now();
+    const merged = mergeImportedChatHistoryMessages({ localMessages, importedMessages });
+
+    expect(performance.now() - startedAt).toBeLessThan(2_000);
+    expect(merged).toHaveLength(count);
+    expect(readRecord(readRecord(merged[0])["__openclaw"]).externalId).toBe("external-0");
+    expect(readRecord(readRecord(merged.at(-1))["__openclaw"]).externalId).toBe(
+      `external-${count - 1}`,
+    );
+  });
+
   it("prefers timestamped text matches before timestamp-less fallbacks", () => {
     const timestamp = Date.parse("2026-09-01T10:00:00Z");
     const merged = mergeImportedChatHistoryMessages({
