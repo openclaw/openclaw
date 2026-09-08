@@ -365,10 +365,16 @@ suite.define(() => {
           .evaluate((element: HTMLInputElement) => element.checkValidity()),
       ).toBe(false);
       await page.getByLabel("Skill name", { exact: true }).fill("checklist");
-      await page.locator('input[name="library-import-files"]').setInputFiles([
+      const chooseFiles = page.getByRole("button", { name: "Choose files", exact: true });
+      const [fileChooser] = await Promise.all([
+        page.waitForEvent("filechooser"),
+        chooseFiles.press("Enter"),
+      ]);
+      await fileChooser.setFiles([
         { name: "SKILL.md", mimeType: "text/markdown", buffer: Buffer.from(own.content) },
         { name: "notes.txt", mimeType: "text/plain", buffer: Buffer.from("untouched\r\n") },
       ]);
+      await page.getByText("SKILL.md, notes.txt", { exact: true }).waitFor();
       await page
         .locator("openclaw-modal-dialog")
         .getByRole("button", { name: "Import skill", exact: true })

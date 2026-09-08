@@ -90,6 +90,9 @@ const enSkillLibrary = {
       "Import {source} into your private library. This does not publish your files or install host dependencies.",
     chooseFiles: "SKILL.md, supporting files, or ZIP",
     chooseFolder: "Skill folder",
+    chooseFilesButton: "Choose files",
+    chooseFolderButton: "Choose folder",
+    noFilesSelected: "No files selected.",
     confirm: {
       remove: "Remove {slug} from the library?",
       transfer: "Transfer {slug} to team ownership? Team administrators will manage it.",

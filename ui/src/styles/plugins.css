@@ -965,6 +965,22 @@ h3.plugins-subheader {
   justify-content: flex-end;
 }
 
+.skill-library-import {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-content: start;
+  gap: var(--space-4);
+}
+
+.skill-library-import > p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.skill-library-import .btn {
+  justify-self: start;
+}
+
 /* ---------- responsive ---------- */
 
 @media (max-width: 640px) {
