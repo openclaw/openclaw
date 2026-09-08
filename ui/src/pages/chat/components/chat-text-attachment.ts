@@ -2,7 +2,10 @@ import { html, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
 import { t } from "../../../i18n/index.ts";
 import { OpenClawLightDomContentsElement } from "../../../lit/openclaw-element.ts";
-import { renderCompactAttachmentCard } from "./chat-attachment-card.ts";
+import {
+  renderAttachmentPreviewSkeleton,
+  renderCompactAttachmentCard,
+} from "./chat-attachment-card.ts";
 import { readResponseBytesWithinLimit } from "./chat-response-bytes.ts";
 
 const TEXT_PREVIEW_MAX_BYTES = 256 * 1024;
@@ -30,6 +33,7 @@ class ChatTextAttachment extends OpenClawLightDomContentsElement {
   @property() sourceIdentity = "";
   @property() label = "";
   @property() mimeType = "";
+  @property({ type: Boolean }) sourcePending = false;
   @property({ type: Number }) sizeBytes: number | undefined;
 
   @state() private text: string | null = null;
@@ -49,11 +53,18 @@ class ChatTextAttachment extends OpenClawLightDomContentsElement {
   }
 
   override willUpdate(changed: PropertyValues<this>): void {
-    if (changed.has("src") || changed.has("sourceIdentity") || changed.has("sizeBytes")) {
+    if (
+      changed.has("src") ||
+      changed.has("sourceIdentity") ||
+      changed.has("sizeBytes") ||
+      changed.has("sourcePending")
+    ) {
       this.cancelLoad();
       this.text = null;
       this.failed = false;
-      void this.loadText();
+      if (!this.sourcePending) {
+        void this.loadText();
+      }
     }
   }
 
@@ -114,12 +125,13 @@ class ChatTextAttachment extends OpenClawLightDomContentsElement {
         mimeType: this.mimeType,
         sizeBytes: this.sizeBytes,
         downloadHref: this.src,
+        downloadPending: this.sourcePending,
       })}
       ${
         this.failed
           ? html`<p class="muted" role="status">${t("chat.attachments.textPreviewUnavailable")}</p>`
           : this.text === null
-            ? html`<p class="muted" role="status">${t("common.loading")}</p>`
+            ? renderAttachmentPreviewSkeleton()
             : html`<pre
                 class="sidebar-attachment-preview__text"
                 tabindex="0"

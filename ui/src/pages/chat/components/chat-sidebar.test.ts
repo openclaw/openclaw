@@ -1,12 +1,13 @@
 /* @vitest-environment jsdom */
 
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { openEditor } from "../../../lib/editor-links.ts";
 import {
   clearNativeGatewayTestState,
   setNativeGatewayTestState,
 } from "../../../test-helpers/native-gateways.ts";
-import { hasUniformLineEndings } from "./chat-sidebar.ts";
+import { hasUniformLineEndings, type SidebarContent } from "./chat-sidebar.ts";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -540,6 +541,48 @@ describe("markdown sidebar", () => {
       expect(download?.target).toBe("_blank");
       expect(download?.rel).toBe("noreferrer");
       expect(fetchMock).not.toHaveBeenCalled();
+      panel.remove();
+    },
+  );
+
+  it.each(["load", "error"] as const)(
+    "keeps the image placeholder through metadata until the image emits %s",
+    async (outcome) => {
+      let pending = true;
+      let src = "/diagram.png";
+      const content = {
+        kind: "attachment",
+        attachmentKind: "image",
+        title: "diagram.png",
+        mimeType: "image/png",
+        width: 600,
+        height: 400,
+        resolveSource: () => (pending ? { status: "pending" } : { status: "ready", src }),
+      } satisfies SidebarContent;
+      const panel = Object.assign(document.createElement("openclaw-chat-detail-panel"), {
+        content,
+      });
+      document.body.append(panel);
+      await vi.waitFor(() => expect(panel.querySelector('[role="status"]')).not.toBeNull());
+      const presentation = panel.querySelector('[role="status"]');
+      const header = panel.querySelector(".chat-assistant-attachment-card__header");
+      pending = false;
+      panel.content = { ...panel.content };
+      const image = await vi.waitFor(() =>
+        expectDefined(panel.querySelector(".sidebar-attachment-preview__image"), "Preview image"),
+      );
+      expect(panel.querySelector('[role="status"]')).toBe(presentation);
+      expect(panel.querySelector(".chat-assistant-attachment-card__header")).toBe(header);
+      image.dispatchEvent(new Event(outcome));
+      await vi.waitFor(() => expect(panel.querySelector('[role="status"]')).toBeNull());
+      expect(panel.textContent?.includes("Preview unavailable")).toBe(outcome === "error");
+      src = "/next.png";
+      panel.content = { ...panel.content };
+      await vi.waitFor(() => expect(panel.querySelector('[role="status"]')).not.toBeNull());
+      image.dispatchEvent(new Event("load"));
+      expect(panel.querySelector('[role="status"]')).not.toBeNull();
+      panel.querySelector(".sidebar-attachment-preview__image")?.dispatchEvent(new Event("load"));
+      await vi.waitFor(() => expect(panel.querySelector('[role="status"]')).toBeNull());
       panel.remove();
     },
   );

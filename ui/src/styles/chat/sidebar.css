@@ -1457,9 +1457,32 @@ openclaw-session-discussion {
   color: var(--muted);
 }
 
+.sidebar-attachment-preview__image-slot,
+.sidebar-attachment-preview__loading {
+  width: 100%;
+  height: 100%;
+}
+
+.sidebar-attachment-preview__image-slot {
+  position: relative;
+}
+
+.sidebar-attachment-preview__image-slot .sidebar-attachment-preview__image {
+  position: absolute;
+  inset: 0;
+  height: 100%;
+}
+
 .sidebar-attachment-preview__loading {
   opacity: 0;
   animation: fade-in 0s 150ms forwards;
+}
+
+.sidebar-attachment-preview__loading--text {
+  display: grid;
+  align-content: start;
+  gap: 12px;
+  padding: 16px;
 }
 
 .sidebar-markdown-shell {

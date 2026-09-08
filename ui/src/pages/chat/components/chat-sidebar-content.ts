@@ -30,7 +30,11 @@ import {
 import { isSvgImageMediaPath } from "../../../lib/media-file-extension.ts";
 import { shouldHandleNavigationClick } from "../../../lib/navigation-click.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
-import { renderAttachmentCardHeader, renderCompactAttachmentCard } from "./chat-attachment-card.ts";
+import {
+  renderAttachmentCardHeader,
+  renderAttachmentPreviewSkeleton,
+  renderCompactAttachmentCard,
+} from "./chat-attachment-card.ts";
 import {
   isCrossOriginHttpSource,
   safeAttachmentHref,
@@ -42,6 +46,7 @@ import "./chat-video-player.ts";
 import { openResolvedImage } from "./chat-message-image-open.ts";
 import type { AttachmentSidebarRuntime, SidebarContent } from "./chat-sidebar-content-types.ts";
 import { renderSidebarFile, type FileViewControls } from "./chat-sidebar-file-view.ts";
+import { renderSidebarImage } from "./chat-sidebar-image.ts";
 import { isTextAttachment } from "./chat-text-attachment.ts";
 import "./session-diff-panel.ts";
 
@@ -64,9 +69,45 @@ function renderSidebarAttachment(
       : safeAttachmentHref(sourceHref);
   const authToken = source?.authToken ?? null;
   const mimeType = content.mimeType?.split(";", 1)[0]?.trim().toLowerCase() ?? "";
-  if (!src) {
-    const pending = resolution?.status === "pending";
-    const kind = content.attachmentKind ?? (mimeType.startsWith("video/") ? "video" : "document");
+  const pending = resolution?.status === "pending";
+  const inferTypeFromExtension = !mimeType || mimeType === "application/octet-stream";
+  const blockedExternalSvg =
+    (mimeType === "image/svg+xml" ||
+      (inferTypeFromExtension &&
+        (isSvgImageMediaPath(content.sourceIdentity ?? "", undefined) ||
+          isSvgImageMediaPath(src ?? "", undefined) ||
+          isSvgImageMediaPath(content.title, undefined)))) &&
+    isCrossOriginHttpSource(src ?? "");
+  const imagePreview =
+    (src || pending) &&
+    !blockedExternalSvg &&
+    (content.attachmentKind === "image" || mimeType.startsWith("image/"));
+  if (
+    (src || pending) &&
+    isTextAttachment(mimeType, content.title) &&
+    !isCrossOriginHttpSource(src ?? "")
+  ) {
+    return html`<openclaw-chat-text-attachment
+      .src=${src ?? ""}
+      .sourcePending=${pending}
+      .sourceIdentity=${content.sourceIdentity ?? src ?? ""}
+      .label=${content.title}
+      .mimeType=${content.mimeType ?? ""}
+      .sizeBytes=${source?.sizeBytes ?? content.sizeBytes}
+    ></openclaw-chat-text-attachment>`;
+  }
+  if (!src || imagePreview) {
+    const kind = imagePreview
+      ? "image"
+      : (content.attachmentKind ??
+        (mimeType.startsWith("video/")
+          ? "video"
+          : mimeType.startsWith("image/")
+            ? "image"
+            : "document"));
+    const media = kind === "video" || kind === "image";
+    const width = source?.width ?? content.width;
+    const height = source?.height ?? content.height;
     return html`
       <div
         class="chat-assistant-attachment-card chat-assistant-attachment-card--${kind} sidebar-attachment-preview__state-card"
@@ -76,30 +117,31 @@ function renderSidebarAttachment(
           kind,
           label: content.title,
           mimeType: content.mimeType ?? undefined,
-          sizeBytes: content.sizeBytes,
+          sizeBytes: source?.sizeBytes ?? content.sizeBytes,
+          downloadHref: src ?? undefined,
           downloadPending: pending,
           visualMode: "preview-with-favicon",
         })}
         <div
           class="sidebar-attachment-preview__state"
           style=${styleMap({
-            "aspect-ratio":
-              kind === "video" ? `${content.width ?? 16} / ${content.height ?? 9}` : undefined,
-            "min-height": kind === "video" ? "0" : undefined,
+            "aspect-ratio": media
+              ? width && height
+                ? `${width} / ${height}`
+                : "16 / 9"
+              : undefined,
+            "min-height": media ? "0" : undefined,
           })}
         >
           ${
-            pending
-              ? html`<span
-                  class="sidebar-attachment-preview__loading"
-                  role="status"
-                  aria-label=${t("common.loading")}
-                  ><span class="session-run-spinner" aria-hidden="true"></span
-                ></span>`
-              : html`<div class="sidebar-attachment-preview__unavailable">
-                  ${t("chat.attachments.previewUnavailable")}
-                  ${resolution?.status === "error" ? html`<span>${resolution.reason}</span>` : nothing}
-                </div>`
+            imagePreview
+              ? renderSidebarImage(src ?? "", content.title)
+              : pending
+                ? renderAttachmentPreviewSkeleton(media)
+                : html`<div class="sidebar-attachment-preview__unavailable">
+                    ${t("chat.attachments.previewUnavailable")}
+                    ${resolution?.status === "error" ? html`<span>${resolution.reason}</span>` : nothing}
+                  </div>`
           }
         </div>
       </div>
@@ -130,29 +172,6 @@ function renderSidebarAttachment(
       .serverDurationMs=${source?.durationMs ?? content.durationMs}
       .voiceNote=${content.voiceNote === true}
     ></openclaw-chat-audio-player>`;
-  }
-  const inferTypeFromExtension = !mimeType || mimeType === "application/octet-stream";
-  const blockedExternalSvg =
-    (mimeType === "image/svg+xml" ||
-      (inferTypeFromExtension &&
-        (isSvgImageMediaPath(content.sourceIdentity ?? "", undefined) ||
-          isSvgImageMediaPath(src, undefined) ||
-          isSvgImageMediaPath(content.title, undefined)))) &&
-    isCrossOriginHttpSource(src);
-  if (
-    !blockedExternalSvg &&
-    (content.attachmentKind === "image" || mimeType.startsWith("image/"))
-  ) {
-    return html`<img class="sidebar-attachment-preview__image" src=${src} alt=${content.title} />`;
-  }
-  if (isTextAttachment(mimeType, content.title) && !isCrossOriginHttpSource(src)) {
-    return html`<openclaw-chat-text-attachment
-      .src=${src}
-      .sourceIdentity=${content.sourceIdentity ?? src}
-      .label=${content.title}
-      .mimeType=${content.mimeType ?? ""}
-      .sizeBytes=${source?.sizeBytes ?? content.sizeBytes}
-    ></openclaw-chat-text-attachment>`;
   }
   return renderCompactAttachmentCard({
     kind: content.attachmentKind ?? "document",

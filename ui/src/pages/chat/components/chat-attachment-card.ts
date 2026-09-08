@@ -37,6 +37,22 @@ export function renderCompactAttachmentCard(options: AttachmentCardHeaderOptions
   </div>`;
 }
 
+export function renderAttachmentPreviewSkeleton(media = false) {
+  return html`<div
+    class="sidebar-attachment-preview__loading ${media ? "skeleton" : "sidebar-attachment-preview__loading--text"}"
+    role="status"
+    aria-label=${t("common.loading")}
+  >
+    ${
+      media
+        ? null
+        : html`<div class="skeleton skeleton-line" aria-hidden="true"></div>
+            <div class="skeleton skeleton-line skeleton-line--long" aria-hidden="true"></div>
+            <div class="skeleton skeleton-line skeleton-line--medium" aria-hidden="true"></div>`
+    }
+  </div>`;
+}
+
 const attachmentCardInteractiveSelector =
   "a, button, input, select, textarea, audio, video, iframe, [contenteditable='true'], [tabindex], [role='button']";
 
