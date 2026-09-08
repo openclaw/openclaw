@@ -4,6 +4,7 @@ import { beforeAll, describe, expect, it, vi } from "vitest";
 import "../../styles.css";
 import type { ThemeMode, ThemeName } from "../../app/theme.ts";
 import { renderConfigForm } from "../../components/config-form.ts";
+import { i18n } from "../../i18n/index.ts";
 import { warmJson5 } from "../../lib/json5-runtime.ts";
 import { renderBrowserLinkPreferencesRow } from "./browser-link-preferences.ts";
 import { createConfigViewState, renderConfig, type ConfigProps } from "./view.ts";
@@ -115,6 +116,82 @@ describe("config view", () => {
     setCatalogOpenTarget: vi.fn(),
     gatewayUrl: "",
     assistantName: "OpenClaw",
+  });
+
+  it.each([
+    { locale: "en" as const, advanced: true, keys: ["cron", "cli", "env", "logging"] },
+    { locale: "de" as const, advanced: true, keys: ["cron", "cli", "logging", "env"] },
+    { locale: "en" as const, advanced: false, keys: ["env", "cli", "cron", "logging"] },
+  ])(
+    "orders top-level sections for $locale with Advanced=$advanced",
+    async ({ locale, advanced, keys }) => {
+      const previousLocale = i18n.getLocale();
+      try {
+        await i18n.setLocale(locale);
+        const { container } = renderConfigView({
+          schema: {
+            type: "object",
+            properties: Object.fromEntries(
+              ["logging", "env", "cli", "cron"].map((key) => [
+                key,
+                { type: "object", properties: { enabled: { type: "boolean" } } },
+              ]),
+            ),
+          },
+          uiHints: {
+            env: { order: -1 },
+            cli: { order: 26 },
+            cron: { order: 100 },
+            logging: { order: 900 },
+          },
+          forceShowAdvanced: advanced,
+          showAdvancedSettings: true,
+        });
+        expect(
+          [...container.querySelectorAll("section.settings-section")].map((section) => section.id),
+        ).toEqual(keys.map((key) => `config-section-${key}`));
+      } finally {
+        await i18n.setLocale(previousLocale);
+      }
+    },
+  );
+
+  it("breaks equal-label ties by key and preserves nested hint ordering", () => {
+    for (const keys of [
+      ["zebra", "alpha", "Alpha", "äther", "zEBRA"],
+      ["zEBRA", "äther", "Alpha", "alpha", "zebra"],
+    ]) {
+      const { container } = renderConfigView({
+        schema: {
+          type: "object",
+          properties: Object.fromEntries(
+            keys.map((key) => [
+              key,
+              {
+                type: "object",
+                properties: { first: { type: "string" }, last: { type: "string" } },
+              },
+            ]),
+          ),
+        },
+        uiHints: Object.fromEntries(
+          keys.flatMap((key) => [
+            [`${key}.first`, { order: 90 }],
+            [`${key}.last`, { order: 1 }],
+          ]),
+        ),
+        forceShowAdvanced: true,
+      });
+      const sections = [...container.querySelectorAll("section.settings-section")];
+      expect(sections.map((section) => section.id)).toEqual(
+        ["Alpha", "alpha", "äther", "zEBRA", "zebra"].map((key) => `config-section-${key}`),
+      );
+      for (const section of sections) {
+        expect(
+          [...section.querySelectorAll("input")].map((input) => input.getAttribute("aria-label")),
+        ).toEqual(["Last", "First"]);
+      }
+    }
   });
 
   it("lets config pages grow with their content instead of creating an inner viewport", async () => {

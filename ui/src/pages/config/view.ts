@@ -512,6 +512,7 @@ export function renderConfig(props: ConfigProps) {
                             onRemove: props.onFormRemove,
                             activeSection: props.activeSection,
                             activeSubsection: null,
+                            alphabeticalSections: props.forceShowAdvanced === true,
                             showAdvanced: effectiveShowAdvanced,
                             forceAdvancedSection: props.forceAdvancedSection,
                             onShowAdvanced: () => props.setShowAdvancedSettings(true),
