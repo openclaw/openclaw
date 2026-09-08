@@ -136,12 +136,22 @@ suite.define(() => {
           await composer.press("Tab");
           await expect.poll(() => composer.inputValue()).toBe("/think ");
           await composer.press("Enter");
-          await page.getByText("Current thinking level: Unknown.", { exact: true }).waitFor();
-          await page.getByText("Options: none.", { exact: true }).waitFor();
+          try {
+            await expect
+              .poll(
+                async () => {
+                  text = await page.getByRole("log").textContent();
+                  return text;
+                },
+                { timeout: 30_000 },
+              )
+              .toContain("Current thinking level: Unknown.");
+            expect(text).toContain("Options: none.");
+          } finally {
+            await page.screenshot({ path: path.join(suite.artifactDir, "thinking-status.png") });
+          }
           expect(await composer.inputValue()).toBe("");
           expect(await page.getByRole("slider").count()).toBe(0);
-          text = await page.getByRole("log").textContent();
-          await page.screenshot({ path: path.join(suite.artifactDir, "thinking-status.png") });
 
           await page.goto(new URL("/sessions", url).href);
           await waitForControlUiGatewayReady(page);

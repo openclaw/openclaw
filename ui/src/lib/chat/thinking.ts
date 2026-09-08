@@ -280,7 +280,7 @@ export function normalizeThinkingOptionValue(raw: string): string {
   return normalizeThinkLevel(raw) ?? normalizeLowercaseStringOrEmpty(raw);
 }
 
-export function formatInheritedThinkingLabel(effectiveLevel: string | null | undefined): string {
+function formatInheritedThinkingLabel(effectiveLevel: string | null | undefined): string {
   if (!effectiveLevel) {
     return t("common.unknown");
   }

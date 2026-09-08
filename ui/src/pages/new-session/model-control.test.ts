@@ -246,7 +246,15 @@ describe("new-session model runtime", () => {
   it("clears Fast Mode when switching to a provider without a wire mapping", async () => {
     const { context } = contextWith([
       { id: "gpt-5.6-luna", name: "GPT-5.6 Luna", provider: "openai", reasoning: true },
-      { id: "llama-4", name: "Llama 4", provider: "ollama" },
+      {
+        id: "llama-4",
+        name: "Llama 4",
+        provider: "ollama",
+        thinkingLevels: [
+          { id: "low", label: "Low" },
+          { id: "high", label: "High" },
+        ],
+      },
     ]);
     const control = new NewSessionModelControl(() => undefined);
     control.load(context, "main", true);
@@ -403,7 +411,11 @@ describe("new-session model runtime", () => {
     const agent = { id: "main", model: { primary: "thinking-fixture/published" } };
     const control = new NewSessionModelControl(() => undefined);
     control.load(context, "main", true, { agent });
-    await waitForFast(() => expect(control.catalog).toHaveLength(1));
+    await waitForFast(() =>
+      expect(renderControl(control, context, "main", agent).textContent).toContain(
+        "Published thinking",
+      ),
+    );
 
     const container = renderControl(control, context, "main", agent);
     const picker = container.querySelector('[data-chat-thinking-select="true"]');

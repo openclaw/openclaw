@@ -112,6 +112,7 @@ const realGatewayFiles = [
   "chat-agent-avatar.real-gateway",
   "chat-loading-performance.real-gateway",
   "chat-project-media.real-gateway",
+  "chat-thinking-metadata.real-gateway",
   "chat-widget-sandbox.real-gateway",
   "command-palette-catalog.real-gateway",
   "control-ui-auth-transports",
@@ -522,6 +523,13 @@ describe("Control UI E2E resource ownership", () => {
       expect(result.files.filter((entry) => entry.phase === 1)).toEqual([
         {
           file: "ui/src/e2e/chat-agent-avatar.real-gateway.e2e.test.ts",
+          project: "ui-e2e-serial-standalone",
+          phase: 1,
+          workers: 1,
+          fileParallelism: false,
+        },
+        {
+          file: "ui/src/e2e/chat-thinking-metadata.real-gateway.e2e.test.ts",
           project: "ui-e2e-serial-standalone",
           phase: 1,
           workers: 1,
