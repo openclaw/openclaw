@@ -372,7 +372,7 @@ export async function executeNodeHostCommand(
             command: prepared.rawCommand,
             cwd: prepared.cwd,
             decision,
-            toolCallId: params.toolCallId ?? randomUUID(),
+            toolCallId: params.toolCallId,
           });
         case "ask":
           break;
