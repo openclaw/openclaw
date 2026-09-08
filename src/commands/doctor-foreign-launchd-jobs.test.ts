@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ForeignLaunchdJob } from "../daemon/launchd-foreign-jobs.js";
+import { runGatewayServicesHealth } from "../flows/doctor-health-contribution-runners.gateway.js";
+import { createDoctorHealthFlowContext } from "../flows/doctor-health-contributions.test-support.js";
 import { noteMacForeignLaunchdJobs } from "./doctor-foreign-launchd-jobs.js";
 import type { DoctorOptions } from "./doctor.types.js";
 
@@ -79,8 +81,15 @@ describe("Doctor foreign launchd jobs", () => {
     },
   );
 
-  it("names each confirmed removal in noninteractive --fix output and preserves report-only jobs", async () => {
-    await noteMacForeignLaunchdJobs({ repair: true, nonInteractive: true }, runtime, {});
+  it("names confirmed removals through the maintenance-owned --fix runner and preserves report-only jobs", async () => {
+    await runGatewayServicesHealth(
+      createDoctorHealthFlowContext({
+        options: { repair: true, nonInteractive: true },
+        gatewayMaintenanceActive: true,
+        runtime,
+        env: {},
+      }),
+    );
 
     expect(mocks.repair).toHaveBeenCalledExactlyOnceWith(lifecycleJob, {});
     expect(runtime.log).toHaveBeenCalledWith(

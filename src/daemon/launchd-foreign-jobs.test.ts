@@ -112,6 +112,18 @@ describe("foreign launchd command classification", () => {
   it.each([
     ['#!/bin/sh\nopenclaw_bin="/opt/bin/openclaw"\n"$openclaw_bin" gateway restart\n', ["restart"]],
     [
+      '#!/bin/sh\nset -u\nopenclaw_bin=/usr/local/bin/openclaw\n"$openclaw_bin" gateway restart --profile "$PROFILE"\nopenclaw gateway restart\n',
+      [],
+    ],
+    [
+      '#!/bin/sh\nset -u\nopenclaw_bin=/usr/local/bin/openclaw\n"$openclaw_bin" gateway restart --profile "${PROFILE}"\n',
+      [],
+    ],
+    [
+      '#!/bin/sh\nset -u\nopenclaw_bin=/usr/local/bin/openclaw\n"$openclaw_bin" gateway restart --profile work\n',
+      ["restart"],
+    ],
+    [
       "#!/bin/sh\n/opt/bin/openclaw gateway stop\n/opt/bin/openclaw gateway start\n",
       ["start", "stop"],
     ],
@@ -170,6 +182,46 @@ describe("foreign launchd command classification", () => {
       ).toBe(false);
     }
     expect(exec.mock.calls.map(([args]) => args)).toEqual([["list"]]);
+  });
+
+  it.each([
+    { shebang: "#!/bin/bash", verified: true },
+    { shebang: "#!/bin/sh", verified: true },
+    { shebang: "#!/usr/bin/env bash", verified: true },
+    { shebang: "#!/usr/bin/env sh", verified: true },
+    { shebang: "#!/usr/bin/env zsh", verified: true },
+    { shebang: "#!/usr/bin/python3", verified: false },
+    { shebang: "", verified: false },
+    { shebang: "#!/bin/bash -n", verified: false },
+  ])(
+    "verifies directly executed scripts only with an executing shell shebang ($shebang)",
+    async ({ shebang, verified }) => {
+      const file = path.join(dir, "validate.sh");
+      await fs.writeFile(
+        file,
+        `${shebang}\nopenclaw_bin=/usr/local/bin/openclaw\n"$openclaw_bin" gateway restart\nfor attempt in 1 2; do\n  "$openclaw_bin" gateway status\n  sleep 1\ndone\n`,
+      );
+      addJob(label, [file]);
+      expect(await findForeignLaunchdJobs({})).toEqual([
+        expect.objectContaining({
+          program: file,
+          gatewayActions: verified ? ["restart"] : [],
+          safeToRemove: verified,
+        }),
+      ]);
+    },
+  );
+
+  it("does not inspect positional script arguments as executable files", async () => {
+    const file = path.join(dir, "observer");
+    const argument = path.join(dir, "restart.sh");
+    await fs.writeFile(file, "#!/usr/bin/python3\n");
+    await fs.writeFile(argument, "#!/bin/sh\nopenclaw gateway restart\n");
+    addJob(label, [file, argument]);
+    expect((await findForeignLaunchdJobs({}))[0]).toMatchObject({
+      gatewayActions: [],
+      safeToRemove: false,
+    });
   });
 
   it("protects another profile's generated service even if its command is corrupted", async () => {

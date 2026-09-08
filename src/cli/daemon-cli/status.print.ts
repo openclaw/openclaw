@@ -456,17 +456,25 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
     spacer();
   }
   if (service.foreignLaunchdJobs?.length) {
-    defaultRuntime.error(warnText("Foreign launchd jobs detected (macOS)."));
-    defaultRuntime.error(warnText(formatForeignLaunchdJobs(service.foreignLaunchdJobs)));
+    const shouldWarn = service.foreignLaunchdJobs.some(
+      (job) => job.keepAlive || job.gatewayActions.length > 0,
+    );
+    if (shouldWarn) {
+      defaultRuntime.error(warnText("Foreign launchd jobs detected (macOS)."));
+      defaultRuntime.error(warnText(formatForeignLaunchdJobs(service.foreignLaunchdJobs)));
+    } else {
+      defaultRuntime.log(infoText("Other OpenClaw launchd jobs (macOS)"));
+      defaultRuntime.log(infoText(formatForeignLaunchdJobs(service.foreignLaunchdJobs)));
+    }
     const restarts = service.forcedRestartSummary;
-    if (restarts && restarts.count > 0) {
+    if (shouldWarn && restarts && restarts.count > 0) {
       defaultRuntime.error(
         warnText(
           `${restarts.count} external forced Gateway restart(s) in the last ${Math.round(restarts.windowMs / 60_000)} minutes. Listed lifecycle jobs may be responsible; this is not proof of attribution.`,
         ),
       );
     }
-    if (service.foreignLaunchdJobs.some((job) => job.safeToRemove)) {
+    if (shouldWarn && service.foreignLaunchdJobs.some((job) => job.safeToRemove)) {
       defaultRuntime.error(
         warnText(
           `Remove confirmed stray Gateway lifecycle jobs with ${formatCliCommand("openclaw doctor --fix")}.`,

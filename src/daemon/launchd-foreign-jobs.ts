@@ -119,6 +119,9 @@ function scriptActions(script: string): GatewayAction[] {
       const name = variable[1] ?? variable[2];
       words[commandIndex] = expandsCommand && name ? (variables.get(name) ?? "") : "";
     }
+    if (words.some((word) => /[$`]/.test(word))) {
+      break;
+    }
     const action = lifecycleAction(words[0] === "exec" ? words.slice(1) : words);
     if (action) {
       actions.add(action);
@@ -163,6 +166,23 @@ async function readShellScript(args: string[]): Promise<string | undefined> {
     }
   }
   return undefined;
+}
+
+function hasShellShebang(script: string): boolean {
+  const firstLine = script.split(/\r?\n/, 1)[0] ?? "";
+  if (!firstLine.startsWith("#!")) {
+    return false;
+  }
+  const [interpreter = "", ...options] = firstLine.slice(2).trim().split(/\s+/);
+  if (interpreter === "/usr/bin/env") {
+    return options.length === 1 && SHELLS.has(options[0] ?? "");
+  }
+  // Preserve the same executing-option boundary as explicit shell launches.
+  return (
+    path.isAbsolute(interpreter) &&
+    SHELLS.has(path.basename(interpreter)) &&
+    (options.length === 0 || (options.length === 1 && /^-[elux]+$/.test(options[0] ?? "")))
+  );
 }
 
 async function readOwnedText(filePath: string): Promise<string | undefined> {
@@ -240,6 +260,9 @@ async function inspectJob(
     diagnostic = actions.length
       ? undefined
       : "Shell command could not be verified; left unchanged.";
+  } else if (!["openclaw", "openclaw.mjs", "node", "bun", "env"].includes(path.basename(program))) {
+    const script = await readOwnedText(program);
+    actions = script && hasShellShebang(script) ? scriptActions(script) : [];
   }
   return {
     label,

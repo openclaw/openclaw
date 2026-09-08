@@ -109,10 +109,13 @@ openclaw doctor
 On macOS, both commands report foreign loaded jobs in the `ai.openclaw.*`
 namespace, including jobs submitted without a plist. The report shows each
 label, program, KeepAlive flag, and detected `openclaw gateway restart`,
-`start`, or `stop` invocation. Status JSON includes these jobs under
-`service.foreignLaunchdJobs`. When recent external forced restarts appear in
-the lifecycle log, the report includes their count as a possible correlation.
-The count alone does not identify which job caused a restart.
+`start`, or `stop` invocation. Plain-text status shows the list as a warning when
+at least one job has KeepAlive or a verified lifecycle invocation. Otherwise,
+the list appears informationally under "Other OpenClaw launchd jobs (macOS)".
+Status JSON includes all these jobs under
+`service.foreignLaunchdJobs`. For warnings, recent external forced restarts in
+the lifecycle log provide a possible correlation; the count alone does not
+identify which job caused a restart.
 After three external forced restarts within ten minutes, the managed Gateway
 logs an actionable warning naming likely KeepAlive jobs when available. It
 does not suppress an operator's restart command.
@@ -126,7 +129,10 @@ openclaw health
 ```
 
 Doctor only removes foreign OpenClaw-namespace jobs with a confirmed Gateway
-lifecycle invocation. It preserves managed LaunchAgents, unrelated labels,
+lifecycle invocation. Detection can inspect directly executed, user-owned
+scripts with supported shell shebangs. Lifecycle commands that depend on
+unresolved shell expansions remain report-only.
+Doctor preserves managed LaunchAgents, unrelated labels,
 and jobs whose purpose cannot be established, and names every removal even
 in noninteractive runs. Service repair remains disabled for an isolated install
 identity, external supervision, or an update in progress.

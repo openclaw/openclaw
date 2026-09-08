@@ -7,6 +7,8 @@ import path from "node:path";
 import { expect, it, vi } from "vitest";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { noteMacForeignLaunchdJobs } from "../commands/doctor-foreign-launchd-jobs.js";
+import { runGatewayServicesHealth } from "../flows/doctor-health-contribution-runners.gateway.js";
+import { createDoctorHealthFlowContext } from "../flows/doctor-health-contributions.test-support.js";
 import { execLaunchctl } from "./launchd-exec.js";
 import { findForeignLaunchdJobs } from "./launchd-foreign-jobs.js";
 
@@ -27,6 +29,16 @@ vi.mock("../commands/doctor-service-repair-policy.js", () => ({
 vi.mock("./restart-storm.js", () => ({
   readGatewayForcedRestartSummary: () => ({ count: 0, windowMs: 600_000 }),
 }));
+vi.mock("../commands/doctor-gateway-services.js", () => {
+  const forbidden = () => {
+    throw new Error("Native scratch proof must not enter managed-service repair");
+  };
+  return {
+    maybeRepairGatewayServiceConfig: forbidden,
+    maybeResolveDuelingSystemdGatewayScopes: forbidden,
+    maybeScanExtraGatewayServices: forbidden,
+  };
+});
 
 const hasGuiLaunchd =
   process.platform === "darwin" &&
@@ -35,11 +47,13 @@ const hasGuiLaunchd =
     timeout: 5000,
   }).status === 0;
 
-it.skipIf(!hasGuiLaunchd)(
-  "detects, reports and fixes only the scratch lifecycle job using native launchd",
-  async () => {
+it.skipIf(!hasGuiLaunchd).each(["interpreter", "direct"] as const)(
+  "detects, reports and fixes only the scratch lifecycle job using native launchd (%s)",
+  async (mode) => {
     const prefix = `ai.openclaw.test.w15.${process.pid}.${randomUUID()}`;
-    const labels = [prefix, `${prefix}.managed`, `com.example.w15.${process.pid}.${randomUUID()}`];
+    const lifecycleLabel = `${prefix}.restart`;
+    const observerLabel = `${prefix}.observer`;
+    const labels = [lifecycleLabel, `${prefix}.managed`, observerLabel];
     const domain = `gui/${process.getuid?.()}`;
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-w15-native-"));
     const created: string[] = [];
@@ -77,7 +91,7 @@ it.skipIf(!hasGuiLaunchd)(
         throw new Error("Native test refused an operation outside its scratch labels");
       }
       if (args[0] !== "print") {
-        if (label !== prefix || args[0] !== "bootout") {
+        if (label !== lifecycleLabel || args[0] !== "bootout") {
           throw new Error("Native test refused a mutation of a protected scratch job");
         }
         mutations.push(label);
@@ -89,36 +103,63 @@ it.skipIf(!hasGuiLaunchd)(
       const cli = path.join(dir, "openclaw");
       const script = path.join(dir, "validator.sh");
       await fs.writeFile(cli, "#!/bin/sh\nexec /bin/sleep 120\n", { mode: 0o700 });
-      await fs.writeFile(script, `#!/bin/sh\nexec "${cli}" gateway restart\n`);
+      await fs.writeFile(
+        script,
+        `#!/bin/bash\nopenclaw_bin="${cli}"\n"$openclaw_bin" gateway restart\nfor attempt in 1 2; do\n  "$openclaw_bin" gateway status\n  /bin/sleep 1\ndone\n`,
+        { mode: 0o700 },
+      );
       for (const label of labels) {
         created.push(label);
-        const result = native(["submit", "-l", label, "--", "/bin/sh", script]);
+        const command =
+          label === observerLabel
+            ? ["/bin/sleep", "120"]
+            : mode === "direct"
+              ? [script]
+              : ["/bin/bash", script];
+        const result = native(["submit", "-l", label, "--", ...command]);
         expect(result, "scratch launchctl submit must not require privileges").toMatchObject({
           code: 0,
         });
       }
       const found = await findForeignLaunchdJobs(env);
-      expect(found).toEqual([
-        expect.objectContaining({
-          label: prefix,
-          program: "/bin/sh",
-          keepAlive: true,
-          gatewayActions: ["restart"],
-          safeToRemove: true,
-        }),
-      ]);
+      expect(found).toHaveLength(2);
+      expect(found).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            label: lifecycleLabel,
+            program: mode === "direct" ? script : "/bin/bash",
+            keepAlive: true,
+            gatewayActions: ["restart"],
+            safeToRemove: true,
+          }),
+          expect.objectContaining({
+            label: observerLabel,
+            gatewayActions: [],
+            safeToRemove: false,
+          }),
+        ]),
+      );
       await noteMacForeignLaunchdJobs({ nonInteractive: true }, runtime, env);
       expect(vi.mocked(note).mock.calls.flat().join("\n")).toContain(prefix);
       expect(mutations).toEqual([]);
-      await noteMacForeignLaunchdJobs({ repair: true, nonInteractive: true }, runtime, env);
-      expect(log.mock.calls.flat().join("\n")).toContain(`Removed stray launchd job ${prefix}`);
-      expect(mutations).toEqual([prefix]);
-      expect(native(["print", `${domain}/${prefix}`]).code).not.toBe(0);
+      await runGatewayServicesHealth(
+        createDoctorHealthFlowContext({
+          options: { repair: true, nonInteractive: true },
+          gatewayMaintenanceActive: true,
+          runtime,
+          env,
+        }),
+      );
+      expect(log.mock.calls.flat().join("\n")).toContain(
+        `Removed stray launchd job ${lifecycleLabel}`,
+      );
+      expect(mutations).toEqual([lifecycleLabel]);
+      expect(native(["print", `${domain}/${lifecycleLabel}`]).code).not.toBe(0);
       for (const label of labels.slice(1)) {
         expect(native(["print", `${domain}/${label}`]).code).toBe(0);
       }
       console.log(
-        "Native scratch proof: keepalive lifecycle job detected; Doctor report preserved it; --fix removed it; managed and unrelated scratch jobs remained loaded.",
+        `Native scratch proof (${mode}): keepalive lifecycle job detected; Doctor report preserved it; maintenance-owned --fix removed it; managed and observer scratch jobs remained loaded.`,
       );
     } catch (error) {
       errors.push(error);
