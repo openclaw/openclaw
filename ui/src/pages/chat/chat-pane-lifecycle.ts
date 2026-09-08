@@ -65,6 +65,7 @@ import {
   applyChatAgentOwnerTransition,
   applySelectedChatAgent,
   refreshPageChat,
+  reloadChatIdentityForConfigChange,
   retireChatMetadataRequests,
 } from "./chat-state-refresh.ts";
 import { resetChatViewState } from "./chat-view-state.ts";
@@ -478,11 +479,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
         }
         if (state) {
           if (event.event === "config.changed") {
-            state.mediaPolicyEpoch = (state.mediaPolicyEpoch ?? 0) + 1;
-            state.requestUpdate?.();
-            chatAvatars.invalidateChatAvatarCache(state);
-            state.assistantIdentityRequestVersion += 1;
-            void chatAvatars.refreshChatAvatar(state).finally(() => state.requestUpdate?.());
+            reloadChatIdentityForConfigChange(state);
           }
           handleQuestionPromptEvent(this.questionPromptState, event);
         }
