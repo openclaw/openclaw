@@ -4,7 +4,6 @@ import { setImmediate } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ModelCatalogResult } from "../../api/types.ts";
 import type { SelectPicker } from "../../components/select-picker.ts";
-import { invalidateModelCatalogCache } from "../../lib/model-catalog-store.ts";
 import { updatePickers } from "../../test-helpers/select-picker.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { EMPTY_MODEL_PROVIDERS_DATA } from "./load.ts";
@@ -169,8 +168,8 @@ describe("ModelProvidersPage catalog discovery", () => {
       );
       expect(page.data?.config).toEqual(savedModelConfig);
       expect(runtimeConfig.patch).not.toHaveBeenCalled();
-      expect(discover).toHaveBeenCalledOnce();
-      expect(request.mock.calls.filter(([method]) => method === "models.list")).toHaveLength(2);
+      expect(discover).toHaveBeenCalledTimes(2);
+      expect(request.mock.calls.filter(([method]) => method === "models.list")).toHaveLength(3);
     },
   );
 
@@ -270,8 +269,7 @@ describe("ModelProvidersPage catalog discovery", () => {
       await openModelPicker(page);
       expect(discover).toHaveBeenCalledOnce();
 
-      // A published config change retires the shared catalog before reloading the page.
-      invalidateModelCatalogCache(snapshot.client!);
+      // Replacing page data retires its request; direct reads have no cache to invalidate.
       if (replacement === "core refresh") {
         page.querySelector<HTMLButtonElement>('button[aria-label="Refresh"]')!.click();
       } else {
@@ -321,7 +319,6 @@ describe("ModelProvidersPage catalog discovery", () => {
       await openModelPicker(page);
       expect(discover).toHaveBeenCalledOnce();
 
-      invalidateModelCatalogCache(snapshot.client!);
       page.routeData = {
         gateway: context.gateway,
         gatewaySnapshot: snapshot,
@@ -362,7 +359,7 @@ describe("ModelProvidersPage catalog discovery", () => {
     },
   );
 
-  it("keeps a shared discovery alive when another page retires its subscription", async () => {
+  it("keeps discovery alive when another page retires its own request", async () => {
     const { context, discover, snapshot } = createCatalogHarness();
     const pending = deferred<ModelCatalogResult>();
     discover.mockReturnValue(pending.promise);
@@ -374,7 +371,7 @@ describe("ModelProvidersPage catalog discovery", () => {
     await second.updateComplete;
     await openModelPicker(first);
     await openModelPicker(second);
-    expect(discover).toHaveBeenCalledOnce();
+    expect(discover).toHaveBeenCalledTimes(2);
     first.routeData = {
       gateway: context.gateway,
       gatewaySnapshot: snapshot,
@@ -399,6 +396,6 @@ describe("ModelProvidersPage catalog discovery", () => {
     expect(second.querySelector('[role="option"][data-value="openai/shared"]')).not.toBeNull();
     expect(first.querySelector(".model-providers__catalog-progress")).toBeNull();
     expect(second.querySelector(".model-providers__catalog-progress")).toBeNull();
-    expect(discover).toHaveBeenCalledOnce();
+    expect(discover).toHaveBeenCalledTimes(2);
   });
 });
