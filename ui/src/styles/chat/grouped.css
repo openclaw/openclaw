@@ -1057,7 +1057,6 @@ img.chat-avatar.chat-avatar--logo {
   display: flex;
   flex-direction: column;
   align-items: flex-end;
-  gap: 8px;
   padding: 0;
   border: 0;
   background: transparent;

@@ -33,13 +33,20 @@ export type CliJsonFailure = {
   };
 };
 
-const gatewayRunFailures = new WeakMap<Error, { runId: string; origin: "gateway" }>();
+export type CliGatewayRunFailure = { runId: string; origin: "gateway" };
+
+const gatewayRunFailures = new WeakMap<Error, CliGatewayRunFailure>();
 
 /** Agent dispatch supplies observed Gateway IDs; error identity and human output stay intact. */
 export function recordCliGatewayRunFailure(error: unknown, runId: string | undefined): void {
   if (error instanceof Error && runId) {
     gatewayRunFailures.set(error, { runId, origin: "gateway" });
   }
+}
+
+/** Human diagnostics (agent transport-loss hint) read back the run identity recorded at dispatch. */
+export function readCliGatewayRunFailure(error: unknown): CliGatewayRunFailure | undefined {
+  return error instanceof Error ? gatewayRunFailures.get(error) : undefined;
 }
 
 export class ExpectedCliError extends Error {
@@ -119,7 +126,7 @@ export function formatCliJsonFailure(
     : formatCliOperatorError(error, options);
   return {
     ok: false,
-    ...(error instanceof Error ? gatewayRunFailures.get(error) : undefined),
+    ...readCliGatewayRunFailure(error),
     error: {
       type: "cli_error",
       message,

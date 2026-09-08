@@ -1657,6 +1657,10 @@ openclaw-settings-save-indicator:empty {
   flex: 0 0 var(--sidebar-session-group-action-size);
 }
 
+.sidebar-session-catalog-action-reserve {
+  display: none;
+}
+
 @media (hover: hover) and (pointer: fine) {
   /* Keep hover actions immediately left of the fixed count. */
   .sidebar-session-catalog-grouping,
@@ -1667,10 +1671,25 @@ openclaw-settings-save-indicator:empty {
     transform: translateY(-50%);
   }
 
-  .sidebar-session-catalog-grouping:has(+ .sidebar-session-catalog-new) {
+  .sidebar-recent-sessions__group--catalog-can-create
+    > .sidebar-recent-sessions__head
+    > .sidebar-session-catalog-grouping {
     right: calc(
       10px + var(--sidebar-session-group-count-slot) + var(--sidebar-session-group-action-size) +
         8px
+    );
+  }
+
+  .sidebar-session-catalog-action-reserve {
+    display: block;
+    flex: 0 0
+      calc(var(--sidebar-session-group-count-slot) + var(--sidebar-session-group-action-size));
+  }
+
+  .sidebar-recent-sessions__group--catalog-can-create .sidebar-session-catalog-action-reserve {
+    flex-basis: calc(
+      var(--sidebar-session-group-count-slot) + var(--sidebar-session-group-action-size) +
+        var(--sidebar-session-group-action-size) + 8px
     );
   }
 
