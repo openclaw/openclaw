@@ -167,13 +167,13 @@ export function createWorkerProviderIntent(options: WorkerProviderIntentOptions)
       }
       if (
         projectPath &&
-        provider.supportsProjectPreparation?.(requireWorkerProfile(profileSnapshot.settings), {
-          machineClass:
-            typeof profileSnapshot.machineClass === "string"
-              ? profileSnapshot.machineClass
-              : undefined,
-          os: typeof profileSnapshot.os === "string" ? profileSnapshot.os : undefined,
-        })
+        provider.supportsProjectPreparation?.(
+          requireWorkerProfile(profileSnapshot.settings),
+          typeof profileSnapshot.machineClass === "string"
+            ? profileSnapshot.machineClass
+            : undefined,
+          typeof profileSnapshot.os === "string" ? profileSnapshot.os : undefined,
+        )
       ) {
         if (!options.projectNamespace) {
           throw serviceError(

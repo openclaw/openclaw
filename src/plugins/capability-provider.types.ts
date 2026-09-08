@@ -249,7 +249,8 @@ export type WorkerProvider = {
   /** Prepare a pristine project before enrollment so it can be included in a reusable image. */
   supportsProjectPreparation?: (
     profile: WorkerProfile,
-    options?: { machineClass?: string; os?: string },
+    machineClass?: string,
+    os?: string,
   ) => boolean;
   /**
    * Resolve the exact cleanup handle for this operation, even if no machine was created.

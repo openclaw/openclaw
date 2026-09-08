@@ -274,7 +274,7 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
       const project = readWorkerProjectSnapshot(record.profileSnapshot.project);
       if (project) {
         if (
-          !provider.supportsProjectPreparation?.(profile, { machineClass, os }) ||
+          !provider.supportsProjectPreparation?.(profile, machineClass, os) ||
           !options.projectNamespace
         ) {
           throw new Error("Worker provider cannot resume its prepared project contract");

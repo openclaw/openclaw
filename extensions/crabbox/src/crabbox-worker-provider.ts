@@ -552,12 +552,12 @@ export function createCrabboxWorkerProvider(
     supportedExecutionModes: ["worker-turn", "remote-exec"],
     provisionBeforeInstallation: true,
     requiresNodeEnrollment: true,
-    supportsProjectPreparation(profile, options) {
+    supportsProjectPreparation(profile, machineClass, os) {
       const parsed = parseCrabboxProfile(profile);
       return resolveCrabboxWarmImageProfile(
         parsed,
-        options?.machineClass ?? parsed.class,
-        options?.os === undefined ? parsed.target : parseCrabboxOperatingSystem(options.os),
+        machineClass ?? parsed.class,
+        os === undefined ? parsed.target : parseCrabboxOperatingSystem(os),
       ).warmImage;
     },
     resolveAllocation,
