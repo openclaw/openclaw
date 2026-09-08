@@ -974,14 +974,20 @@ h3.plugins-subheader {
 
 .skill-library-import > p {
   margin: 0;
-  overflow-wrap: anywhere;
 }
 
-.skill-library-import .btn {
-  justify-self: start;
+.skill-library-import > .btn {
+  justify-self: end;
 }
 
 /* ---------- responsive ---------- */
+
+@media (max-width: 400px) {
+  .skill-library-import__pickers {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+}
 
 @media (max-width: 640px) {
   openclaw-skills-page .plugins-toolbar--fields {

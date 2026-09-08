@@ -370,15 +370,25 @@ suite.define(() => {
         page.waitForEvent("filechooser"),
         chooseFiles.press("Enter"),
       ]);
-      await fileChooser.setFiles([
+      const selectedFiles = [
         { name: "SKILL.md", mimeType: "text/markdown", buffer: Buffer.from(own.content) },
         { name: "notes.txt", mimeType: "text/plain", buffer: Buffer.from("untouched\r\n") },
-      ]);
-      await page.getByText("SKILL.md, notes.txt", { exact: true }).waitFor();
-      await page
+      ];
+      await fileChooser.setFiles(selectedFiles);
+      await page.getByText("2 files · SKILL.md, notes.txt", { exact: true }).waitFor();
+      const importSkill = page
         .locator("openclaw-modal-dialog")
-        .getByRole("button", { name: "Import skill", exact: true })
-        .click();
+        .getByRole("button", { name: "Import skill", exact: true });
+      await page.getByRole("button", { name: "Clear", exact: true }).click();
+      expect(await importSkill.isDisabled()).toBe(true);
+      expect(await page.getByText(/SKILL.md, notes.txt/u).count()).toBe(0);
+      expect(await gateway.getRequests("skills.library.save")).toHaveLength(0);
+      const [reselection] = await Promise.all([
+        page.waitForEvent("filechooser"),
+        chooseFiles.press("Enter"),
+      ]);
+      await reselection.setFiles(selectedFiles);
+      await importSkill.click();
       await page.getByRole("button", { name: "Save skill", exact: true }).click();
       expect((await gateway.waitForRequest("skills.library.save")).params).toMatchObject({
         expectedRevision: null,

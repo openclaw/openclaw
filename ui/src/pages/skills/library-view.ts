@@ -597,59 +597,97 @@ function renderLibraryImport(library: SkillLibraryController) {
         /></label>
         ${
           !library.importSource
-            ? html`
-                ${[false, true].map(
-                  (directory) => html`<div class="field">
-                    <span
-                      >${t(directory ? "skillLibrary.chooseFolder" : "skillLibrary.chooseFiles")}</span
-                    >
-                    <button
-                      type="button"
-                      class="btn"
-                      aria-describedby="library-import-selection"
-                      ?disabled=${library.busy}
-                      @click=${(event: Event) => {
-                        const input = libraryEventControl(
-                          event,
-                          HTMLButtonElement,
-                        ).nextElementSibling;
-                        if (input instanceof HTMLInputElement) {
-                          input.click();
-                        }
-                      }}
-                    >
-                      ${t(
-                        directory
-                          ? "skillLibrary.chooseFolderButton"
-                          : "skillLibrary.chooseFilesButton",
-                      )}
-                    </button>
-                    <input
-                      type="file"
-                      hidden
-                      ?webkitdirectory=${directory}
-                      multiple
-                      name=${directory ? "library-import-directory" : "library-import-files"}
-                      ?disabled=${library.busy}
-                      @change=${(event: Event) => {
-                        const input = libraryEventControl(event, HTMLInputElement);
-                        library.importSelection = Array.from(input.files ?? []);
-                        input.value = "";
-                        library.changed();
-                      }}
-                    />
-                  </div>`,
-                )}
-                <p id="library-import-selection" class="muted" aria-live="polite">
+            ? html`<div class="field" role="group" aria-labelledby="library-import-files-label">
+                <span id="library-import-files-label">${t("skillLibrary.files")}</span>
+                <small id="library-import-files-help" class="settings-row__desc">
+                  ${t(
+                    library.createTarget === "workspace"
+                      ? "skillLibrary.workspaceFilesHelp"
+                      : "skillLibrary.filesHelp",
+                  )}
+                </small>
+                <div class="plugins-toolbar skill-library-import__pickers">
+                  ${[false, true].map(
+                    (directory) => html`
+                      <button
+                        type="button"
+                        class="btn"
+                        aria-describedby="library-import-files-help library-import-selection"
+                        ?disabled=${library.busy}
+                        @click=${(event: Event) => {
+                          const input = libraryEventControl(
+                            event,
+                            HTMLButtonElement,
+                          ).nextElementSibling;
+                          if (input instanceof HTMLInputElement) {
+                            input.click();
+                          }
+                        }}
+                      >
+                        ${t(
+                          directory
+                            ? "skillLibrary.chooseFolderButton"
+                            : "skillLibrary.chooseFilesButton",
+                        )}
+                      </button>
+                      <input
+                        type="file"
+                        hidden
+                        ?webkitdirectory=${directory}
+                        multiple
+                        name=${directory ? "library-import-directory" : "library-import-files"}
+                        ?disabled=${library.busy}
+                        @change=${(event: Event) => {
+                          const input = libraryEventControl(event, HTMLInputElement);
+                          library.importSelection = Array.from(input.files ?? []);
+                          input.value = "";
+                          library.changed();
+                        }}
+                      />
+                    `,
+                  )}
+                </div>
+                <div class="plugins-toolbar">
+                  <small
+                    id="library-import-selection"
+                    class="settings-row__desc"
+                    aria-live="polite"
+                  >
+                    ${
+                      library.importSelection.length
+                        ? t(
+                            library.importSelection.length === 1
+                              ? "skillLibrary.selectedFile"
+                              : "skillLibrary.selectedFiles",
+                            {
+                              count: String(library.importSelection.length),
+                              names:
+                                library.importSelection
+                                  .slice(0, 2)
+                                  .map((file) => file.webkitRelativePath || file.name)
+                                  .join(", ") + (library.importSelection.length > 2 ? ", …" : ""),
+                            },
+                          )
+                        : t("skillLibrary.noFilesSelected")
+                    }
+                  </small>
                   ${
                     library.importSelection.length
-                      ? library.importSelection
-                          .map((file) => file.webkitRelativePath || file.name)
-                          .join(", ")
-                      : t("skillLibrary.noFilesSelected")
+                      ? html`<button
+                          type="button"
+                          class="btn btn--sm btn--ghost"
+                          ?disabled=${library.busy}
+                          @click=${() => {
+                            library.importSelection = [];
+                            library.changed();
+                          }}
+                        >
+                          ${t("skillLibrary.clearSelection")}
+                        </button>`
+                      : nothing
                   }
-                </p>
-              `
+                </div>
+              </div>`
             : nothing
         }
         ${
