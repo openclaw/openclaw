@@ -4,7 +4,7 @@ import type { Command } from "commander";
 import { addGatewayClientOptions, callGatewayFromCli } from "../gateway-rpc.js";
 import { CronCliError } from "./cron-cli-error.js";
 import { createCronOutputCommand } from "./output-mode.js";
-import { handleCronCliError, printCronJson } from "./shared.js";
+import { handleCronCliError, printCronJson, requireCronJobId } from "./shared.js";
 import { readCronScratchContent } from "./trigger-options.js";
 
 type ScratchRecord = { content: string; revision: number; updatedAtMs: number };
@@ -37,8 +37,9 @@ export function registerCronScratchCommand(cron: Command) {
       .option("--file <path>", "Replace scratch from a file, or - for stdin")
       .option("--unset", "Remove the scratch row", false)
       .option("--expected-revision <n>", "Require the current scratch revision")
-      .action(async (id, opts) => {
+      .action(async (idArg, opts) => {
         try {
+          const id = requireCronJobId(idArg);
           const mutations = [
             opts.set !== undefined,
             opts.file !== undefined,
@@ -48,7 +49,7 @@ export function registerCronScratchCommand(cron: Command) {
             throw new CronCliError("choose only one of --set, --file, or --unset");
           }
           const current = (await callGatewayFromCli("cron.scratch.get", opts, {
-            id: String(id),
+            id,
           })) as ScratchGetResult;
           if (mutations === 0) {
             if (opts.json) {
@@ -67,7 +68,7 @@ export function registerCronScratchCommand(cron: Command) {
               ? await readCronScratchContent(String(opts.file))
               : String(opts.set ?? "");
           const result = (await callGatewayFromCli("cron.scratch.set", opts, {
-            id: String(id),
+            id,
             content,
             expectedRevision,
           })) as ScratchSetResult;

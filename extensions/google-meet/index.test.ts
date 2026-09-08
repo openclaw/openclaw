@@ -1097,6 +1097,19 @@ describe("google-meet plugin", () => {
     expect(resolveGoogleMeetConfig({ defaultMode: "realtime" }).defaultMode).toBe("agent");
   });
 
+  it("keeps optional resolved fields optional for typed config consumers", () => {
+    const resolved = resolveGoogleMeetConfig({});
+    const config: GoogleMeetConfig = {
+      ...resolved,
+      defaults: {},
+      chromeNode: {},
+      twilio: {},
+      oauth: {},
+      auth: { provider: "google-oauth" },
+    };
+    expect(config.auth.provider).toBe("google-oauth");
+  });
+
   it("resolves separate realtime providers for agent transcription and bidi voice", () => {
     const realtime = resolveGoogleMeetConfig({
       realtime: {

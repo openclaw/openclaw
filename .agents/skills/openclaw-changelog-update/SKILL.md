@@ -76,6 +76,13 @@ every human `Thanks @...` attribution.
    `--refresh-github-snapshot` after suspect API data, `--github-snapshot
 <path>` for an explicit artifact, or `--no-github-snapshot` for a live-only
    audit. GitHub release bodies are always read live.
+   Explicit `CI #`, `CI run #`, `Actions run #`, and `workflow run #` references
+   in active source are classified separately only when issue/PR resolution
+   fails and a live same-repository Actions lookup confirms the exact run ID.
+   Any ordinary occurrence of that number in active source, notes, or the
+   contribution record remains a strict issue/PR requirement. Confirmed runs
+   appear as `workflowRuns` in verification output and the manifest, never as
+   PR associations or contributor credit.
    - the manifest is the required input to the rewrite, not an after-the-fact
      audit; it contains every referenced PR, eligible contributor credit,
      inline issue context, every direct commit, and an editorial-eligibility
@@ -100,10 +107,24 @@ every human `Thanks @...` attribution.
      target prose, or target record. The manifest and generated provenance retain
      each tag plus the exact excluded PR inventory and count for deterministic
      candidate validation
-   - source PR discovery combines merged GitHub commit associations with merged
-     PR references explicitly present in active commit subjects/bodies so
-     cherry-picks and squash commits remain accounted for. Resolve every
-     association page and exclude PRs merged after the target release commit
+   - source PR discovery bounds GitHub commit associations to the selected target
+     history, or the frozen main history for canonical carriers. A contextual
+     source reference becomes a contribution only when its merged commit is
+     reachable in the target history and its merge time is within the target.
+     Keep all references resolvable, but do not promote unrelated PRs merely
+     because they merge while release preparation continues. Explicit seeds
+     retain their historical membership and remain seed-only unless independently
+     proven in-range. Resolve every association page; existing canonical,
+     cherry-pick, and provenance contracts remain authoritative.
+   - explicit multi-commit reverts require a revert subject and one standalone
+     `Reverts <full SHA> and <full SHA>.` declaration (comma-separated lists
+     with final `and` also work). The exact ending ` to restore the previous behavior.`
+     is accepted. Duplicate, abbreviated, embedded, or repeated declarations do
+     not establish reversal. Each named commit must be a single-parent ancestor,
+     and reverse-applying all named patches must reproduce the complete revert
+     tree. Recognized declarations that fail this proof stop verification. Proof
+     uses private Git index/object storage without hooks or external diffs;
+     canonical single-revert and revert-of-revert accounting stays intact.
    - canonicalize backports to the original merged PR on `main`: explicit
      cherry-pick origins win, then a unique normalized-subject match requires
      the same author and an overlapping changed path. Suppress release/backport
@@ -162,11 +183,12 @@ every human `Thanks @...` attribution.
      infer a PR relationship from a generic cross-reference event, invent an
      unrelated PR link for a standalone report, or recreate the retired
      inventory
-   - the complete contribution record lists every merged source PR exactly once
-     as `**PR #NNN**`; source PRs include GitHub commit associations and merged
-     PR references explicitly present in active commit subjects/bodies. It
-     preserves author/co-author credit and any issue references in the original
-     title
+   - the complete contribution record lists every verified in-range PR and
+     explicitly retained seed-only PR exactly once as `**PR #NNN**`. Discovery
+     preserves canonical/cherry-pick provenance and requires frozen-history
+     membership for contextual references; inline context alone cannot create a
+     contribution row. It preserves author/co-author credit and any issue
+     references in the original title
    - the provenance arithmetic and unique total must match the rendered PR
      rows exactly; candidate validation rejects malformed or forged counts
    - direct commits remain in the manifest with GitHub-resolved author,

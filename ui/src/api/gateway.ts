@@ -360,6 +360,11 @@ export class GatewayBrowserClient {
     );
   }
 
+  /** Changes before a stopped or replaced connection can deliver stale auth work. */
+  get connectionGeneration(): number {
+    return this.recovery.generation;
+  }
+
   get recoveryScope() {
     return this.recovery.value;
   }

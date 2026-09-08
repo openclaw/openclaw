@@ -276,6 +276,16 @@ export const formatCronLookupMiss = (jobId: string) =>
     valueLabel: "automation id",
   });
 
+// A blank id usually comes from an empty shell variable; reject it here instead of
+// letting the Gateway answer with a raw params-schema error.
+export function requireCronJobId(id: unknown, accepted = "Pass it positionally."): string {
+  const jobId = normalizeOptionalString(id);
+  if (!jobId) {
+    throw new CronCliError(`Missing job id. ${accepted}`);
+  }
+  return jobId;
+}
+
 export async function warnIfCronSchedulerDisabled(opts: GatewayRpcOpts) {
   // Old/offline gateways should not make successful cron mutations fail after the fact.
   try {
@@ -297,7 +307,7 @@ export async function warnIfCronSchedulerDisabled(opts: GatewayRpcOpts) {
     defaultRuntime.error(
       [
         "warning: the automations scheduler is disabled in the Gateway; jobs are saved but will not run automatically.",
-        "Re-enable with `cron.enabled: true` (or remove `cron.enabled: false`) and restart the Gateway.",
+        "To enable automatic runs, set `cron.enabled: true` (or remove `cron.enabled: false`), remove `OPENCLAW_SKIP_CRON=1` from the Gateway's launch environment, and restart the Gateway.",
         store ? `store: ${store}` : "",
       ]
         .filter(Boolean)

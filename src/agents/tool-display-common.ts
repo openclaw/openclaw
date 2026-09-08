@@ -126,7 +126,7 @@ function coerceDisplayValue(
     if (!trimmed) {
       return undefined;
     }
-    const rawLine = normalizeOptionalString(trimmed.split(/\r?\n/)[0]) ?? "";
+    const rawLine = normalizeOptionalString(trimmed.split(/\r?\n/, 1)[0]) ?? "";
     if (!rawLine) {
       return undefined;
     }
@@ -153,22 +153,18 @@ function coerceDisplayValue(
   }
   if (Array.isArray(value)) {
     const values: string[] = [];
-    let displayValueCount = 0;
     for (const item of value) {
       const display = coerceDisplayValue(item, opts);
       if (!display) {
         continue;
       }
-      displayValueCount += 1;
-      if (values.length < 3) {
-        values.push(display);
+      // The fourth visible value determines the ellipsis; later items cannot affect the preview.
+      if (values.length === 3) {
+        return `${values.join(", ")}…`;
       }
+      values.push(display);
     }
-    if (displayValueCount === 0) {
-      return undefined;
-    }
-    const preview = values.join(", ");
-    return displayValueCount > 3 ? `${preview}…` : preview;
+    return values.length > 0 ? values.join(", ") : undefined;
   }
   return undefined;
 }
@@ -724,7 +720,7 @@ function resolveDetailFromKeys(
       parts.push(`${entry.label} ${entry.value}`);
     }
   }
-  return parts.join(" · ");
+  return parts.join(", ");
 }
 
 function resolveToolVerbAndDetail(params: {
@@ -788,29 +784,4 @@ function resolveToolVerbAndDetail(params: {
   return { verb, detail };
 }
 
-/** Normalize final detail text before attaching it to a tool display line. */
-export function formatToolDetailText(
-  detail: string | undefined,
-  opts: { prefixWithWith?: boolean } = {},
-): string | undefined {
-  if (!detail) {
-    return undefined;
-  }
-  const normalized = detail.includes(" · ")
-    ? (() => {
-        const parts: string[] = [];
-        for (const part of detail.split(" · ")) {
-          const trimmed = part.trim();
-          if (trimmed) {
-            parts.push(trimmed);
-          }
-        }
-        return parts.join(", ");
-      })()
-    : detail;
-  if (!normalized) {
-    return undefined;
-  }
-  return opts.prefixWithWith ? `with ${normalized}` : normalized;
-}
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

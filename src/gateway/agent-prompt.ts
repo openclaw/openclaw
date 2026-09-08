@@ -72,10 +72,13 @@ export function buildAgentMessageFromConversationEntries(entries: ConversationEn
     return "";
   }
 
-  const historyEntries = entries
-    .slice(0, currentIndex)
-    .map(toPromptEntry)
-    .filter((entry): entry is HistoryEntry => entry !== null);
+  const historyEntries: HistoryEntry[] = [];
+  entries.slice(0, currentIndex).forEach((entry) => {
+    const promptEntry = toPromptEntry(entry);
+    if (promptEntry) {
+      historyEntries.push(promptEntry);
+    }
+  });
   const currentPromptEntry = toPromptEntry(currentConversationEntry);
   if (!currentPromptEntry) {
     return "";
@@ -87,8 +90,9 @@ export function buildAgentMessageFromConversationEntries(entries: ConversationEn
 
   const formatEntry = (entry: HistoryEntry) => `${entry.sender}: ${entry.body}`;
   return buildHistoryContextFromEntries({
-    entries: [...historyEntries, currentPromptEntry],
+    entries: historyEntries,
     currentMessage: formatEntry(currentPromptEntry),
     formatEntry,
+    excludeLast: false,
   });
 }

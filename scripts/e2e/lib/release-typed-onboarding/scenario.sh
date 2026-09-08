@@ -114,7 +114,6 @@ drive_typed_onboarding() {
 }
 
 openclaw_e2e_install_package "$INSTALL_LOG"
-echo "Installed the OpenClaw package."
 openclaw_prepublish_plugin_registry_start_mounted "$scenario_tmp/registry" plugin_registry_pid '["@openclaw/codex"]'
 command -v openclaw >/dev/null
 package_root="$(openclaw_e2e_package_root)"

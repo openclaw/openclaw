@@ -22,6 +22,7 @@ import {
   type ChatScrollToEndOptions,
 } from "../scroll.ts";
 import { SIDEBAR_GEOMETRY_COMMIT_EVENT } from "../sidebar-layout.ts";
+import { ChatMessageReveal } from "./chat-message-reveal.ts";
 import {
   TranscriptAnnouncementState,
   type TranscriptAnnouncement,
@@ -77,7 +78,11 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
     onSettled?: (position: ChatSessionScrollPosition) => void;
   } | null = null;
   private pendingScrollFrame: number | null = null;
-  private scrollCommand: { behavior: ScrollBehavior; target: "end" | "index" } | null = null;
+  private scrollCommand:
+    | { behavior: ScrollBehavior; target: "end" | "index" }
+    | { behavior: ScrollBehavior; target: "message"; messageId: string }
+    | null = null;
+  private readonly messageReveal = new ChatMessageReveal();
   // Lit calls refs before newly rendered nodes are connected. Resolve the
   // scroll parent lazily or a stable ref can permanently capture null.
   get scrollElement(): HTMLDivElement | null {
@@ -162,6 +167,13 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
     if (!callback) {
       callback = (element?: Element) => {
         if (element instanceof HTMLElement) {
+          if (
+            this.scrollCommand?.target === "message" &&
+            this.messageRowKeysById.get(this.scrollCommand.messageId) === key
+          ) {
+            // The parent update can finish before a virtualized target mounts.
+            queueMicrotask(() => this.completeMessageReveal());
+          }
           if (element.isConnected) {
             this.virtualizerController.getVirtualizer().measureElement(element);
           } else {
@@ -392,6 +404,7 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
     this.expandedAssistantMessages.clear();
     this.expandedAssistantMessages = new Map();
     this.scrollCommand = null;
+    this.messageReveal.clear();
     if (this.pendingRowMeasureFrame !== null) {
       cancelAnimationFrame(this.pendingRowMeasureFrame);
       this.pendingRowMeasureFrame = null;
@@ -572,31 +585,21 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
       return false;
     }
     this.cancelScroll();
-    const command = (this.scrollCommand = { behavior: resolveScrollBehavior(), target: "index" });
+    this.scrollCommand = { behavior: resolveScrollBehavior(), target: "message", messageId };
     this.virtualizerController.getVirtualizer().scrollToIndex(rowIndex, { align: "center" });
     this.host.requestUpdate();
-    void this.host.updateComplete.then(() => {
-      if (this.scrollCommand !== command) {
-        return;
-      }
-      const bubble = [
-        ...(this.threadInnerElement?.querySelectorAll<HTMLElement>(".chat-bubble") ?? []),
-      ].find((candidate) => candidate.dataset.entryId === messageId);
-      if (!bubble) {
-        return;
-      }
-      this.threadInnerElement
-        ?.querySelector(".chat-bubble--reply-target")
-        ?.classList.remove("chat-bubble--reply-target");
-      bubble.scrollIntoView?.({ behavior: command.behavior, block: "center" });
-      bubble.classList.add("chat-bubble--reply-target");
-      bubble.addEventListener(
-        "animationend",
-        () => bubble.classList.remove("chat-bubble--reply-target"),
-        { once: true },
-      );
-    });
+    void this.host.updateComplete.then(() => this.completeMessageReveal());
     return true;
+  }
+
+  private completeMessageReveal(): void {
+    const command = this.scrollCommand;
+    if (
+      command?.target === "message" &&
+      this.messageReveal.reveal(this.threadInnerElement, command)
+    ) {
+      this.scrollCommand = { behavior: command.behavior, target: "index" };
+    }
   }
 
   setContentReady(ready: boolean): void {

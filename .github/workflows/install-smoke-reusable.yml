@@ -39,6 +39,7 @@ concurrency:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  NODE_VERSION: "24.19.0"
 
 jobs:
   preflight:
@@ -1160,6 +1161,7 @@ jobs:
       - name: Run installer update docker tests
         env:
           OPENCLAW_INSTALL_SMOKE_FROZEN_PAYLOAD_DIR: ${{ runner.temp }}/install-smoke-candidate-payload
+          OPENCLAW_INSTALL_SMOKE_NODE_VERSION: ${{ env.NODE_VERSION }}
           OPENCLAW_INSTALL_SMOKE_GROUP: update
           OPENCLAW_INSTALL_URL: file:///tmp/openclaw-install.sh
           OPENCLAW_INSTALL_CLI_URL: file:///tmp/openclaw-install-cli.sh
@@ -1360,6 +1362,7 @@ jobs:
       - name: Run installer non-root docker tests
         env:
           OPENCLAW_INSTALL_SMOKE_FROZEN_PAYLOAD_DIR: ${{ runner.temp }}/install-smoke-candidate-payload
+          OPENCLAW_INSTALL_SMOKE_NODE_VERSION: ${{ env.NODE_VERSION }}
           OPENCLAW_INSTALL_SMOKE_GROUP: nonroot
           OPENCLAW_INSTALL_URL: file:///tmp/openclaw-install.sh
           OPENCLAW_INSTALL_CLI_URL: file:///tmp/openclaw-install-cli.sh

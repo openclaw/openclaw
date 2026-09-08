@@ -38,6 +38,23 @@ export function installMockGateway(
 
 export const WORKSPACE = "/home/peter/openclaw";
 
+export function createCloudAgentsListResponse() {
+  return {
+    agents: [
+      {
+        id: "cloud",
+        identity: { name: "Cloud" },
+        name: "Cloud",
+        workspace: WORKSPACE,
+        workspaceGit: true,
+      },
+    ],
+    defaultId: "cloud",
+    mainKey: "main",
+    scope: "agent",
+  };
+}
+
 export const LOCAL_GIT_WORKSPACE_RESPONSES = {
   "agents.list": {
     agents: [

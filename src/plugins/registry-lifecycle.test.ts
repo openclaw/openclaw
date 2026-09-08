@@ -8,6 +8,7 @@ import {
   writePlugin,
 } from "./loader.test-fixtures.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
+import { getPluginRegistryInspectionResources } from "./registry-inspection-resources.js";
 import {
   activatePluginRecordLifecycleEpoch,
   capturePluginLifecycleAuthority,
@@ -310,9 +311,13 @@ module.exports = {
       }
       return connection;
     },
-    async cleanup(inspection?: Awaited<ReturnType<typeof acquirePluginRegistryForInspection>>) {
+    async cleanup(
+      inspection?: Awaited<ReturnType<typeof acquirePluginRegistryForInspection>>,
+      borrowed?: { release: () => Promise<void> },
+    ) {
       resume.resolve();
       finishDisposal.resolve();
+      await borrowed?.release().catch(() => undefined);
       await inspection?.release().catch(() => undefined);
       for (const connection of connections) {
         if (connection.database.isOpen) {
@@ -367,49 +372,185 @@ describe("owned plugin inspections", () => {
     }
   });
 
-  it("disposes a failed registration without closing a successful sibling", async () => {
-    const failed = createInspectionFixture({ registration: "throw", disposalFailure: true });
-    const successful = createInspectionFixture();
-    let inspection: Awaited<ReturnType<typeof acquirePluginRegistryForInspection>> | undefined;
-    try {
-      inspection = await acquirePluginRegistryForInspection({
-        config: {
-          plugins: {
-            allow: [failed.plugin.id, successful.plugin.id],
-            load: { paths: [failed.plugin.file, successful.plugin.file] },
-            slots: { memory: "none" },
+  it.each([false, true])(
+    "revokes a released inspection while retaining its native resources (disposal failure: %s)",
+    async (disposalFailure) => {
+      const fixture = createInspectionFixture({ pauseDisposal: true, disposalFailure });
+      const active = createEmptyPluginRegistry();
+      setActivePluginRegistry(active);
+      const activeEpoch = capturePluginRegistryLifecycleEpoch(active);
+      let inspection: Awaited<ReturnType<typeof acquirePluginRegistryForInspection>> | undefined;
+      let borrowed: { release: () => Promise<void> } | undefined;
+      try {
+        inspection = await acquirePluginRegistryForInspection({ config: fixture.config });
+        const resources = getPluginRegistryInspectionResources(inspection.registry)!;
+        borrowed = resources.retain();
+        const signal = capturePluginRegistryLifecycleSignal(inspection.registry, undefined, {
+          scopedRuntime: true,
+        })!;
+        const authority = capturePluginLifecycleAuthority(inspection.registry, undefined, {
+          scopedRuntime: true,
+        })!;
+        let reentrantRelease: Promise<void> | undefined;
+        signal.addEventListener("abort", () => {
+          expect(authority()).toBe(false);
+          expect(() => resources.retain()).toThrow("inspection resources have been released");
+          reentrantRelease = inspection?.release();
+        });
+
+        const release = inspection.release();
+        expect(signal.aborted).toBe(true);
+        expect(authority()).toBe(false);
+        expect(reentrantRelease).toBe(release);
+        await release;
+        expect(inspection.release()).toBe(release);
+        const connection = fixture.connection();
+        expect(connection.disposals).toBe(0);
+        expect(connection.database.prepare("SELECT 42 AS value").get()).toEqual({ value: 42 });
+        expect(getActivePluginRegistry()).toBe(active);
+        expect(capturePluginRegistryLifecycleEpoch(active)).toBe(activeEpoch);
+
+        const finalRelease = borrowed.release();
+        expect(borrowed.release()).toBe(finalRelease);
+        const settled = disposalFailure
+          ? expect(finalRelease).rejects.toMatchObject({
+              errors: [
+                expect.objectContaining({
+                  message: `Plugin inspection disposal failed: ${fixture.plugin.id}:native-resource`,
+                }),
+              ],
+            })
+          : expect(finalRelease).resolves.toBeUndefined();
+        await fixture.state.disposalStarted.promise;
+        expect(connection.database.isOpen).toBe(true);
+        fixture.state.finishDisposal.resolve();
+        await settled;
+        expect(connection.disposals).toBe(1);
+        expect(connection.database.isOpen).toBe(false);
+        expect(connection.cleanups).toBe(0);
+        expect(signal.aborted).toBe(true);
+        expect(authority()).toBe(false);
+      } finally {
+        await fixture.cleanup(inspection, borrowed);
+      }
+    },
+  );
+
+  it.each([false, true])(
+    "disposes a failed registration without closing a successful sibling (borrowed: %s)",
+    async (retainSibling) => {
+      const failed = createInspectionFixture({ registration: "throw", disposalFailure: true });
+      const successful = createInspectionFixture();
+      let inspection: Awaited<ReturnType<typeof acquirePluginRegistryForInspection>> | undefined;
+      let borrowed: { release: () => Promise<void> } | undefined;
+      try {
+        inspection = await acquirePluginRegistryForInspection({
+          config: {
+            plugins: {
+              allow: [failed.plugin.id, successful.plugin.id],
+              load: { paths: [failed.plugin.file, successful.plugin.file] },
+              slots: { memory: "none" },
+            },
           },
-        },
-      });
-      expect(
-        inspection.registry.plugins.find((entry) => entry.id === failed.plugin.id),
-      ).toMatchObject({
-        status: "error",
-        failurePhase: "register",
-      });
-      expect(inspection.registry.runtimeLifecycles.map((entry) => entry.pluginId)).toEqual([
-        successful.plugin.id,
-      ]);
-      await failed.state.disposed.promise;
-      expect(failed.connection().database.isOpen).toBe(false);
-      expect(successful.connection().database.prepare("SELECT 42 AS value").get()).toEqual({
-        value: 42,
-      });
-      await expect(inspection.release()).rejects.toMatchObject({
-        errors: [
-          expect.objectContaining({
-            message: `Plugin inspection disposal failed: ${failed.plugin.id}:native-resource`,
-          }),
-        ],
-      });
-      expect(failed.connection().disposals).toBe(1);
-      expect(successful.connection().disposals).toBe(1);
-      expect(successful.connection().database.isOpen).toBe(false);
-    } finally {
-      await failed.cleanup(inspection);
-      await successful.cleanup();
-    }
-  });
+        });
+        if (retainSibling) {
+          borrowed = getPluginRegistryInspectionResources(inspection.registry)!.retain();
+        }
+        expect(
+          inspection.registry.plugins.find((entry) => entry.id === failed.plugin.id),
+        ).toMatchObject({
+          status: "error",
+          failurePhase: "register",
+        });
+        expect(inspection.registry.runtimeLifecycles.map((entry) => entry.pluginId)).toEqual([
+          successful.plugin.id,
+        ]);
+        await failed.state.disposed.promise;
+        expect(failed.connection().database.isOpen).toBe(false);
+        expect(successful.connection().database.prepare("SELECT 42 AS value").get()).toEqual({
+          value: 42,
+        });
+        await expect(inspection.release()).rejects.toMatchObject({
+          errors: [
+            expect.objectContaining({
+              message: `Plugin inspection disposal failed: ${failed.plugin.id}:native-resource`,
+            }),
+          ],
+        });
+        if (borrowed) {
+          expect(successful.connection().disposals).toBe(0);
+          expect(successful.connection().database.prepare("SELECT 42 AS value").get()).toEqual({
+            value: 42,
+          });
+          await expect(borrowed.release()).resolves.toBeUndefined();
+        }
+        expect(failed.connection().disposals).toBe(1);
+        expect(successful.connection().disposals).toBe(1);
+        expect(successful.connection().database.isOpen).toBe(false);
+      } finally {
+        await failed.cleanup(inspection, borrowed);
+        await successful.cleanup();
+      }
+    },
+  );
+
+  it.each(["same-turn", "abort-listener"] as const)(
+    "assigns final disposal to the borrower released after the inspection (%s)",
+    async (timing) => {
+      const fixture = createInspectionFixture({ pauseDisposal: true, disposalFailure: true });
+      let inspection: Awaited<ReturnType<typeof acquirePluginRegistryForInspection>> | undefined;
+      let borrowed: { release: () => Promise<void> } | undefined;
+      try {
+        inspection = await acquirePluginRegistryForInspection({ config: fixture.config });
+        borrowed = getPluginRegistryInspectionResources(inspection.registry)!.retain();
+        const signal = capturePluginRegistryLifecycleSignal(inspection.registry, undefined, {
+          scopedRuntime: true,
+        })!;
+        let borrowedRelease: Promise<void> | undefined;
+        if (timing === "abort-listener") {
+          signal.addEventListener("abort", () => {
+            borrowedRelease = borrowed?.release();
+          });
+        }
+        const inspectionRelease = inspection.release();
+        if (timing === "same-turn") {
+          borrowedRelease = borrowed.release();
+        }
+        expect(signal.aborted).toBe(true);
+        expect(borrowedRelease).toBeDefined();
+        const inspectionOutcome = inspectionRelease.then(
+          () => ({ owner: "inspection", error: undefined }),
+          (error: unknown) => ({ owner: "inspection", error }),
+        );
+        const borrowerOutcome = borrowedRelease!.then(
+          () => ({ owner: "borrower", error: undefined }),
+          (error: unknown) => ({ owner: "borrower", error }),
+        );
+        await fixture.state.disposalStarted.promise;
+        expect(fixture.connection().database.isOpen).toBe(true);
+        expect(await Promise.race([inspectionOutcome, borrowerOutcome])).toEqual({
+          owner: "inspection",
+          error: undefined,
+        });
+        fixture.state.finishDisposal.resolve();
+        expect(await borrowerOutcome).toMatchObject({
+          owner: "borrower",
+          error: {
+            errors: [
+              expect.objectContaining({
+                message: `Plugin inspection disposal failed: ${fixture.plugin.id}:native-resource`,
+              }),
+            ],
+          },
+        });
+        expect(fixture.connection().disposals).toBe(1);
+        expect(fixture.connection().database.isOpen).toBe(false);
+        expect(fixture.connection().cleanups).toBe(0);
+      } finally {
+        await fixture.cleanup(inspection, borrowed);
+      }
+    },
+  );
 
   it("finishes construction rollback before rejecting an inspection", async () => {
     const fixture = createInspectionFixture({ registration: "throw" });
@@ -424,6 +565,59 @@ describe("owned plugin inspections", () => {
       await fixture.cleanup();
     }
   });
+
+  it.each([true, false])(
+    "reports mixed cleanup failures in registration order (failed registration first: %s)",
+    async (failedFirst) => {
+      const fixtures = [failedFirst, !failedFirst].map((failsRegistration) =>
+        createInspectionFixture({
+          registration: failsRegistration ? "throw" : undefined,
+          disposalFailure: true,
+          pauseDisposal: true,
+        }),
+      );
+      let inspection: Awaited<ReturnType<typeof acquirePluginRegistryForInspection>> | undefined;
+      try {
+        inspection = await acquirePluginRegistryForInspection({
+          config: {
+            plugins: {
+              allow: fixtures.map((fixture) => fixture.plugin.id),
+              load: { paths: fixtures.map((fixture) => fixture.plugin.file) },
+              slots: { memory: "none" },
+            },
+          },
+        });
+        expect(inspection.registry.plugins.map((plugin) => plugin.id)).toEqual(
+          fixtures.map((fixture) => fixture.plugin.id),
+        );
+        const release = inspection.release();
+        const rejected = expect(release).rejects.toMatchObject({
+          errors: fixtures.map((fixture) =>
+            expect.objectContaining({
+              message: `Plugin inspection disposal failed: ${fixture.plugin.id}:native-resource`,
+            }),
+          ),
+        });
+        // Neither paused disposer may prevent its sibling from starting.
+        await Promise.all(fixtures.map((fixture) => fixture.state.disposalStarted.promise));
+        for (const fixture of fixtures) {
+          expect(fixture.connection().database.isOpen).toBe(true);
+          fixture.state.finishDisposal.resolve();
+        }
+        await rejected;
+        for (const fixture of fixtures) {
+          expect(fixture.connection().disposals).toBe(1);
+          expect(fixture.connection().database.isOpen).toBe(false);
+          expect(fixture.connection().cleanups).toBe(0);
+        }
+      } finally {
+        for (const fixture of fixtures) {
+          fixture.state.finishDisposal.resolve();
+        }
+        await Promise.all(fixtures.map((fixture) => fixture.cleanup(inspection)));
+      }
+    },
+  );
 
   it.each(["async-resolve", "async-reject"] as const)(
     "waits for actual invalid registration work before disposal (%s)",
@@ -467,6 +661,50 @@ describe("owned plugin inspections", () => {
       }
     },
   );
+
+  it("joins invalid registration work before releasing an inspection with a retained sibling", async () => {
+    const sibling = createInspectionFixture();
+    const fixture = createInspectionFixture({ registration: "async-reject" });
+    fixture.state.sibling.read = () =>
+      sibling.connection().database.prepare("SELECT 42 AS value").get()?.value;
+    let inspection: Awaited<ReturnType<typeof acquirePluginRegistryForInspection>> | undefined;
+    let borrowed: { release: () => Promise<void> } | undefined;
+    try {
+      inspection = await acquirePluginRegistryForInspection({
+        config: {
+          plugins: {
+            allow: [sibling.plugin.id, fixture.plugin.id],
+            load: { paths: [sibling.plugin.file, fixture.plugin.file] },
+            slots: { memory: "none" },
+          },
+        },
+      });
+      borrowed = getPluginRegistryInspectionResources(inspection.registry)!.retain();
+      let released = false;
+      const release = inspection.release().then(() => {
+        released = true;
+      });
+      await Promise.resolve();
+      expect(released).toBe(false);
+      expect(fixture.connection().disposals).toBe(0);
+      fixture.state.resume.resolve();
+      await release;
+      expect(fixture.state.lateRead).toBe(42);
+      expect(fixture.state.sibling.result).toBe(42);
+      expect(fixture.connection().database.isOpen).toBe(false);
+      expect(fixture.connection().disposals).toBe(1);
+      expect(sibling.connection().disposals).toBe(0);
+      expect(sibling.connection().database.prepare("SELECT 42 AS value").get()).toEqual({
+        value: 42,
+      });
+      await borrowed.release();
+      expect(sibling.connection().database.isOpen).toBe(false);
+      expect(sibling.connection().disposals).toBe(1);
+    } finally {
+      await fixture.cleanup(inspection, borrowed);
+      await sibling.cleanup();
+    }
+  });
 
   it("releases Doctor discovery resources without invoking the context engine factory", async () => {
     const fixture = createInspectionFixture({ contextEngine: true, pauseDisposal: true });

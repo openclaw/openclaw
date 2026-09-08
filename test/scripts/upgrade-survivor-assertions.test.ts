@@ -29,6 +29,7 @@ function selectFrozenUpgradeOracle(
   version: string,
   baseline = "openclaw@2026.6.35",
   workingVersion?: string,
+  legacyClawHub = false,
 ) {
   const selectedRoot = join(root, "selected");
   const selectedScenario = join(selectedRoot, "scripts/e2e/lib/upgrade-survivor");
@@ -40,6 +41,13 @@ function selectFrozenUpgradeOracle(
     'throw new Error("selected oracle has no serving-turn command");\n',
   );
   writeFileSync(join(selectedScenario, "run.sh"), "# selected scenario runner\n");
+  if (legacyClawHub) {
+    mkdirSync(join(selectedRoot, "src/plugins"), { recursive: true });
+    writeFileSync(
+      join(selectedRoot, "src/plugins/clawhub.ts"),
+      'import { install } from "../infra/clawhub.js";\n',
+    );
+  }
   for (const path of [
     "scripts/lib/npm-publish-plan.mjs",
     "scripts/windows-cmd-helpers.mjs",
@@ -66,6 +74,7 @@ function selectFrozenUpgradeOracle(
     "selected release contract",
   );
   const selectedSha = git("rev-parse", "HEAD");
+  const modePath = join(root, "clawhub-mode");
   if (workingVersion) {
     writeFileSync(join(selectedRoot, "package.json"), JSON.stringify({ version: workingVersion }));
   }
@@ -86,6 +95,7 @@ ${policy}
 printf '%s\\n' "\${UPGRADE_SCENARIO_DIR:-$HARNESS_ROOT_DIR/scripts/e2e/lib/upgrade-survivor}/assertions.mjs"
 printf '%s\\n' "$UPGRADE_RUNNER"
 printf '%s\\n' \${UPGRADE_SCENARIO_ARGS[@]+"\${UPGRADE_SCENARIO_ARGS[@]}"}
+printf '%s' "$OPENCLAW_FROZEN_UPGRADE_SURVIVOR_CLAWHUB_MODE" > "$MODE_PATH"
 `,
     ],
     {
@@ -98,11 +108,24 @@ printf '%s\\n' \${UPGRADE_SCENARIO_ARGS[@]+"\${UPGRADE_SCENARIO_ARGS[@]}"}
         OPENCLAW_TOOLING_SHA: "f".repeat(40),
         OPENCLAW_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS: "1",
         OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC: baseline,
+        MODE_PATH: modePath,
+        TMPDIR: root,
       },
     },
   );
   const [oracle, runner, ...mounts] = result.stdout.trim().split("\n").filter(Boolean);
-  return { result, oracle, runner, mounts, selectedOracle, selectedScenario };
+  const clawhubMode = existsSync(modePath) ? readFileSync(modePath, "utf8") : undefined;
+  const stagedScenario = mounts[0] === "-v" ? mounts[1]?.split(":", 1)[0] : undefined;
+  return {
+    result,
+    oracle,
+    runner,
+    mounts,
+    selectedOracle,
+    selectedScenario,
+    stagedScenario,
+    clawhubMode,
+  };
 }
 
 function writeJson(path: string, value: unknown): void {
@@ -1012,11 +1035,25 @@ describe("upgrade survivor assertions", () => {
             "run.sh",
           ),
         );
+        if (selected) {
+          expect(readFileSync(join(proof.stagedScenario!, "assertions.mjs"), "utf8")).toBe(
+            readFileSync(proof.selectedOracle, "utf8"),
+          );
+          expect(readFileSync(join(proof.stagedScenario!, "diagnostics.mjs"), "utf8")).toBe(
+            readFileSync("scripts/e2e/lib/upgrade-survivor/diagnostics.mjs", "utf8"),
+          );
+        }
         expect(proof.mounts).toEqual(
           selected
             ? [
                 "-v",
-                `${proof.selectedScenario}:/app/scripts/e2e/lib/upgrade-survivor:ro`,
+                expect.stringMatching(
+                  /openclaw-upgrade-scenario\.[^/]+:\/app\/scripts\/e2e\/lib\/upgrade-survivor:ro$/u,
+                ),
+                "-v",
+                expect.stringMatching(
+                  /npm-registry-server\.mjs:\/app\/scripts\/e2e\/lib\/plugins\/npm-registry-server\.mjs:ro$/u,
+                ),
                 "-v",
                 expect.stringMatching(
                   /npm-publish-plan\.mjs:\/app\/scripts\/lib\/npm-publish-plan\.mjs:ro$/u,
@@ -1052,6 +1089,23 @@ describe("upgrade survivor assertions", () => {
       const proof = selectFrozenUpgradeOracle(root, version);
       expect(proof.result.status).not.toBe(0);
       expect(proof.oracle).toBeUndefined();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("derives the shipped ClawHub request contract from the authorized selected source", () => {
+    const root = mkdtempSync(join(tmpdir(), "openclaw-upgrade-clawhub-mode-"));
+    try {
+      const proof = selectFrozenUpgradeOracle(
+        root,
+        "2026.6.35",
+        "openclaw@2026.6.34",
+        undefined,
+        true,
+      );
+      expect(proof.result.status, proof.result.stderr).toBe(0);
+      expect(proof.clawhubMode).toBe("legacy");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

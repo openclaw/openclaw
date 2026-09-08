@@ -70,6 +70,8 @@ const IrcAccountSchemaBase = z
   })
   .strict();
 
+export type IrcAccountConfigInput = z.input<typeof IrcAccountSchemaBase>;
+
 const IrcConfigSchema = buildMultiAccountChannelSchema(IrcAccountSchemaBase, {
   optionalAccount: true,
   refine: (value, ctx) => {

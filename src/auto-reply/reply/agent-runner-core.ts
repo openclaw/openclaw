@@ -1,7 +1,9 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { hasSessionAutoModelFallbackProvenance } from "../../agents/agent-scope.js";
 import { hasVisibleCommittedMessagingToolDeliveryEvidence } from "../../agents/embedded-agent-runner/delivery-evidence.js";
+import { MODEL_FALLBACK_SKIPPED_CODE } from "../../agents/model-fallback.types.js";
 import type { ModelRef } from "../../agents/model-ref-shared.js";
+import { areRuntimeModelRefsEquivalent } from "../../agents/model-runtime-aliases.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
   resolveSessionPluginStatusLines,
@@ -28,6 +30,7 @@ import type { TemplateContext } from "../templating.js";
 import type { VerboseLevel } from "../thinking.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
+import type { RuntimeFallbackAttempt } from "./agent-runner-execution.types.js";
 import {
   buildKnownAgentRunFailureReplyPayload,
   buildTerminalAgentRunFailureReplyPayload,
@@ -78,6 +81,8 @@ export function markBeforeAgentRunBlockedPayloads(payloads: ReplyPayload[]): Rep
 export function buildSilentFallbackFailurePayload(params: {
   fallbackTransition: ReturnType<typeof resolveFallbackTransition>;
   fallbackFailureKnown: boolean;
+  fallbackAttempts: readonly RuntimeFallbackAttempt[];
+  cfg: OpenClawConfig;
   isHeartbeat: boolean;
   hasSuccessfulTerminalDelivery: boolean;
   allowEmptyAssistantReplyAsSilent?: boolean;
@@ -95,10 +100,35 @@ export function buildSilentFallbackFailurePayload(params: {
   ) {
     return undefined;
   }
+  const selected = params.fallbackTransition.selectedModelRef;
+  const active = params.fallbackTransition.activeModelRef;
+  const attempts = params.fallbackAttempts;
+  const selectedAttempts = attempts.filter((attempt) =>
+    areRuntimeModelRefsEquivalent(`${attempt.provider}/${attempt.model}`, selected, {
+      config: params.cfg,
+    }),
+  );
+  let primary = `⚠️ The configured model backend ${selected} produced no usable reply. `;
+  // Local skips retain old failure reasons, not evidence of a new backend attempt.
+  if (
+    selectedAttempts.length > 0 &&
+    selectedAttempts.every((attempt) => attempt.code !== MODEL_FALLBACK_SKIPPED_CODE) &&
+    attempts.every((attempt) => attempt.provider.trim() && attempt.model.trim())
+  ) {
+    if (
+      selectedAttempts.every(({ reason }) =>
+        ["timeout", "server_error", "overloaded", "tls_certificate"].includes(reason),
+      )
+    ) {
+      primary = `⚠️ I couldn't reach the configured model backend ${selected}. `;
+    } else if (
+      selectedAttempts.every(({ reason }) => reason === "format" || reason === "empty_response")
+    ) {
+      primary = `⚠️ The configured model backend ${selected} responded but produced no usable reply. `;
+    }
+  }
   return markReplyPayloadForSourceSuppressionDelivery({
-    text:
-      `⚠️ I couldn't reach the configured model backend ${params.fallbackTransition.selectedModelRef}. ` +
-      `Fallback used ${params.fallbackTransition.activeModelRef}, but it produced no visible reply.`,
+    text: `${primary}Fallback used ${active}, but it produced no visible reply.`,
     isError: true,
   });
 }

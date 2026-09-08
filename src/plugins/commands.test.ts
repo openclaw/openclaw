@@ -1248,14 +1248,13 @@ describe("registerPluginCommand", () => {
     second.clearPluginCommands();
   });
 
-  it.each(["/talkvoice now", "/discordvoice now"] as const)(
-    "matches provider-specific native alias %s back to the canonical command",
-    (commandBody) => {
+  it.each(["default", "discord"] as const)(
+    "matches live %s aliases back to the canonical command",
+    (provider) => {
+      const nativeNames = { default: "talkvoice", discord: "discordvoice" };
+      const commandBody = `/${nativeNames[provider]} now`;
       const result = registerVoiceCommandForTest({
-        nativeNames: {
-          default: "talkvoice",
-          discord: "discordvoice",
-        },
+        nativeNames,
         description: "Demo command",
         acceptsArgs: true,
       });
@@ -1265,6 +1264,13 @@ describe("registerPluginCommand", () => {
         name: "voice",
         pluginId: "demo-plugin",
         args: "now",
+      });
+      nativeNames[provider] = "renamedvoice";
+      expect(matchPluginCommand(commandBody)).toBeNull();
+      expectCommandMatch("/renamedvoice later", {
+        name: "voice",
+        pluginId: "demo-plugin",
+        args: "later",
       });
     },
   );

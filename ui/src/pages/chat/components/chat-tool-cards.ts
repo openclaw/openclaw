@@ -52,11 +52,8 @@ export function renderBrowserTabPreviews(
   // turn all describe the same tab, and stacked near-identical cards are noise.
   const lastCardForTab = new Map<string, (typeof cards)[number]>();
   for (const card of cards) {
-    if (
-      card.preview?.kind === "browser-tab" &&
-      resolveToolCardOutcome(card, false) === "succeeded"
-    ) {
-      lastCardForTab.set(browserTabKey(card.preview), card);
+    if (card.browserTab && resolveToolCardOutcome(card, false) === "succeeded") {
+      lastCardForTab.set(browserTabKey(card.browserTab), card);
     }
   }
   return [...lastCardForTab.values()].map((card) => {

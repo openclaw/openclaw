@@ -1391,7 +1391,9 @@ describe("GatewayBrowserClient", () => {
     expect(recoveryMigrationRuntimeMock.loaded).not.toHaveBeenCalled();
     expect(onRecoveryScopeChange).not.toHaveBeenCalled();
 
+    const firstGeneration = client.connectionGeneration;
     firstWs.emitClose(1006, "socket lost");
+    expect(client.connectionGeneration).toBeGreaterThan(firstGeneration);
     await vi.advanceTimersByTimeAsync(800);
     const secondWs = getLatestWebSocket();
     secondWs.emitOpen();
@@ -1449,7 +1451,9 @@ describe("GatewayBrowserClient", () => {
     expect(
       readSessionPlacementRecovery(DEFAULT_GATEWAY_URL, "server-current", recovery.sessionKey),
     ).toEqual({ ...recovery, recoveryScope: "server-current" });
+    const connectedGeneration = client.connectionGeneration;
     client.stop();
+    expect(client.connectionGeneration).toBeGreaterThan(connectedGeneration);
     expect(client.recoveryScopeReady).toBe(false);
   });
 

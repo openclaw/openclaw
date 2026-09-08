@@ -222,6 +222,7 @@ export function renderSessionCatalogGroups(params: SessionCatalogGroupsParams) {
     const sectionClass = [
       "sidebar-recent-sessions__group",
       "sidebar-recent-sessions__group--zone-coding",
+      canCreateSession ? "sidebar-recent-sessions__group--catalog-can-create" : "",
       collapsed ? "sidebar-recent-sessions__group--collapsed" : "",
       params.draggingSectionId === sectionId ? "sidebar-recent-sessions__group--dragging" : "",
       params.sectionDropTarget?.sectionId === sectionId
@@ -295,6 +296,7 @@ export function renderSessionCatalogGroups(params: SessionCatalogGroupsParams) {
                 >${catalog.label}</span
               >
               ${renderCatalogHeaderStatus(hasActiveRun, hasUnread)}
+              <span class="sidebar-session-catalog-action-reserve" aria-hidden="true"></span>
               ${
                 hasError || (collapsed && rows.length > 0)
                   ? html`<span
