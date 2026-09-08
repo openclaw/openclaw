@@ -164,6 +164,13 @@ Responses show up to five app links and explicitly report additional apps to
 review in Codex CLI. These links are for hosted ChatGPT apps; native MCP server
 setup remains separate.
 
+An app can also request sign-in when you first use one of its tools. In the
+Control UI, choose **Open link** to open the requested page in a separate tab.
+The question stays pending while you sign in. After completing the browser step,
+select **I've completed this step** and submit to let Codex refresh and retry.
+Opening the link alone does not resume the tool or confirm a connection. Clients
+without a link action still show the URL to open manually before answering.
+
 After a `codexPlugins` change, new Codex conversations pick up the updated
 app set automatically. Run `/new` or `/reset` to refresh the current
 conversation. A gateway restart is not required for plugin enable/disable

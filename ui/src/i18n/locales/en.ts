@@ -5272,6 +5272,8 @@ export const en: TranslationMap & {
       other: "Type your own answer here",
       answer: "Answer",
       answerPlaceholder: "{label}",
+      openLink: "Open link",
+      externalStepHint: "Complete the step in the new tab, then return here to submit your answer.",
       submit: "Submit",
       next: "Next",
       back: "Back",

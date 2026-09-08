@@ -21257,6 +21257,7 @@ public struct Question: Codable, Sendable {
     public let questionid: String
     public let header: String
     public let question: String
+    public let url: String?
     public let options: [QuestionOption]
     public let multiselect: Bool?
     public let isother: Bool?
@@ -21268,6 +21269,7 @@ public struct Question: Codable, Sendable {
         questionid: String,
         header: String,
         question: String,
+        url: String? = nil,
         options: [QuestionOption],
         multiselect: Bool? = nil,
         isother: Bool? = nil,
@@ -21278,6 +21280,7 @@ public struct Question: Codable, Sendable {
         self.questionid = questionid
         self.header = header
         self.question = question
+        self.url = url
         self.options = options
         self.multiselect = multiselect
         self.isother = isother
@@ -21290,6 +21293,7 @@ public struct Question: Codable, Sendable {
         case questionid = "questionId"
         case header
         case question
+        case url
         case options
         case multiselect = "multiSelect"
         case isother = "isOther"
@@ -21303,6 +21307,7 @@ public struct QuestionRequestQuestion: Codable, Sendable {
     public let questionid: String
     public let header: String
     public let question: String
+    public let url: String?
     public let options: [QuestionOption]
     public let multiselect: Bool?
     public let isother: Bool?
@@ -21313,6 +21318,7 @@ public struct QuestionRequestQuestion: Codable, Sendable {
         questionid: String,
         header: String,
         question: String,
+        url: String? = nil,
         options: [QuestionOption],
         multiselect: Bool? = nil,
         isother: Bool? = nil,
@@ -21322,6 +21328,7 @@ public struct QuestionRequestQuestion: Codable, Sendable {
         self.questionid = questionid
         self.header = header
         self.question = question
+        self.url = url
         self.options = options
         self.multiselect = multiselect
         self.isother = isother
@@ -21333,6 +21340,7 @@ public struct QuestionRequestQuestion: Codable, Sendable {
         case questionid = "questionId"
         case header
         case question
+        case url
         case options
         case multiselect = "multiSelect"
         case isother = "isOther"

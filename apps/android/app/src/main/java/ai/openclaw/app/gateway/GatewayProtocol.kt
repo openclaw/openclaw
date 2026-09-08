@@ -87,6 +87,7 @@ data class Question(
   val questionId: String,
   val header: String,
   val question: String,
+  val url: String? = null,
   val options: List<QuestionOption>,
   val multiSelect: Boolean? = null,
   val isOther: Boolean? = null,
