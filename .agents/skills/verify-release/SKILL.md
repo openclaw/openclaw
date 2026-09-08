@@ -49,10 +49,14 @@ Use these checks only for the regular orchestrated release track.
    - Get exact tag metadata from GitHub, not the local checkout when dirty:
      download `https://api.github.com/repos/openclaw/openclaw/tarball/v<VERSION>`
      into `/tmp/openclaw-v<VERSION>-src`.
-   - Count `extensions/*/package.json` with
-     `openclaw.release.publishToNpm === true` and
-     `openclaw.release.publishToClawHub === true`.
-   - Compare expected counts to workflow job counts:
+   - Derive the expected npm and ClawHub package sets with the canonical
+     publication planners/collector from the recorded release Tooling SHA,
+     using the exact tag's package metadata and the selected publication scope.
+     Do not count raw publish flags: `openclaw.build.bundledDist === true`
+     explicitly defers external publication even when publish flags are set.
+     Record deferred package names and reasons separately.
+   - Compare expected package identities, versions, and counts with the immutable
+     publication plans and workflow jobs:
      `gh api repos/openclaw/openclaw/actions/runs/<RUN>/jobs --paginate`.
    - Each expected npm plugin must have version `<VERSION>` and
      `dist-tags.latest === <VERSION>`.
