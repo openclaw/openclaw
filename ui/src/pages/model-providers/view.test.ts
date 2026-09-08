@@ -3,6 +3,7 @@
 import { nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { i18n } from "../../i18n/index.ts";
+import { choosePickerValue, updatePickers } from "../../test-helpers/select-picker.ts";
 import type { ModelProviderCard } from "./data.ts";
 import { renderModelProviders } from "./view.ts";
 
@@ -92,6 +93,44 @@ function props(overrides: Partial<ModelProvidersViewProps> = {}): ModelProviders
     ...overrides,
   };
 }
+
+it("retains a saved unavailable model without offering it for another default setting", async () => {
+  const onUtilityChange = vi.fn();
+  const container = document.createElement("div");
+  render(
+    renderModelProviders(
+      props({
+        configuredModels: [
+          { provider: "fixture", id: "ready", name: "Ready", available: true },
+          { provider: "fixture", id: "blocked", name: "Blocked", available: false },
+        ],
+        defaultModels: {
+          primary: "fixture/ready",
+          fallbacks: ["fixture/blocked"],
+          utilityModel: "fixture/blocked",
+        },
+        onUtilityChange,
+      }),
+    ),
+    container,
+  );
+
+  await updatePickers(container);
+  const blocked = [...container.querySelectorAll('[role="option"][data-value="fixture/blocked"]')];
+  expect(blocked).toHaveLength(3);
+  expect(blocked.every((option) => option.getAttribute("aria-disabled") === "true")).toBe(true);
+  expect(
+    [...container.querySelectorAll('[role="option"][data-value="fixture/ready"]')].every(
+      (option) => option.getAttribute("aria-disabled") === "false",
+    ),
+  ).toBe(true);
+  const utility = container.querySelector<HTMLButtonElement>("#model-providers-utility-model")!;
+  expect(utility.textContent).toContain("Blocked");
+  await choosePickerValue(utility, "fixture/blocked");
+  expect(onUtilityChange).not.toHaveBeenCalled();
+  await choosePickerValue(utility, "__openclaw_automatic_utility__");
+  expect(onUtilityChange).toHaveBeenCalledExactlyOnceWith(null);
+});
 
 function mount(viewProps: ModelProvidersViewProps): HTMLDivElement {
   const container = document.createElement("div");
@@ -387,7 +426,7 @@ describe("renderModelProviders", () => {
     expect([...groups].every((group) => group.disabled)).toBe(true);
   });
 
-  it("locks provider and default-model mutations while shared config work is pending", () => {
+  it("locks provider and default-model mutations while shared config work is pending", async () => {
     const container = mount(
       props({
         configBusy: true,
@@ -419,9 +458,12 @@ describe("renderModelProviders", () => {
     );
 
     const defaults = container.querySelector(".model-providers__defaults");
-    const defaultSelects = [...(defaults?.querySelectorAll("wa-select") ?? [])];
+    await updatePickers(container);
+    const defaultSelects = [...(defaults?.querySelectorAll("openclaw-select-picker") ?? [])];
     expect(defaultSelects).toHaveLength(3);
-    expect(defaultSelects.every((select) => select.hasAttribute("disabled"))).toBe(true);
+    expect(
+      defaultSelects.every((select) => select.querySelector<HTMLButtonElement>("button")?.disabled),
+    ).toBe(true);
     expect(
       [
         ...(defaults?.querySelectorAll<HTMLButtonElement>(
@@ -451,7 +493,7 @@ describe("renderModelProviders", () => {
     ).toEqual([true, true, true]);
   });
 
-  it("locks an already-open provider form after mutation access is revoked", () => {
+  it("locks an already-open provider form after mutation access is revoked", async () => {
     const onAddProvider = vi.fn();
     const onAddProviderToggle = vi.fn();
     const container = mount(
@@ -480,10 +522,11 @@ describe("renderModelProviders", () => {
 
     expect(controls.map((control) => control.disabled)).toEqual([true, true, true]);
     const defaults = container.querySelector(".model-providers__defaults");
+    await updatePickers(container);
     expect(
-      [...(defaults?.querySelectorAll("wa-select, wa-radio-group") ?? [])].every((control) =>
-        control.hasAttribute("disabled"),
-      ),
+      [
+        ...(defaults?.querySelectorAll("openclaw-select-picker button, wa-radio-group") ?? []),
+      ].every((control) => control.hasAttribute("disabled")),
     ).toBe(true);
     expect(text(defaults)).not.toContain("operator.admin access");
     addForm?.querySelector<HTMLButtonElement>("button")?.click();
@@ -882,7 +925,7 @@ describe("renderModelProviders", () => {
     expect(text(provider)).not.toContain("Connection failed");
   });
 
-  it("qualifies slash-bearing model IDs with their catalog provider", () => {
+  it("qualifies slash-bearing model IDs with their catalog provider", async () => {
     const container = mount(
       props({
         configuredModels: [
@@ -900,13 +943,14 @@ describe("renderModelProviders", () => {
         },
       }),
     );
+    await updatePickers(container);
     const option = container.querySelector(
-      'wa-option[value="openrouter/anthropic/claude-sonnet-4"]',
+      '[role="option"][data-value="openrouter/anthropic/claude-sonnet-4"]',
     );
-    expect(option?.hasAttribute("selected")).toBe(true);
+    expect(option?.getAttribute("aria-selected") === "true").toBe(true);
   });
 
-  it("renders alias defaults and distinct automatic or disabled utility states", () => {
+  it("renders alias defaults and distinct automatic or disabled utility states", async () => {
     const aliasEntry = {
       id: "claude-opus",
       provider: "anthropic",
@@ -920,12 +964,17 @@ describe("renderModelProviders", () => {
         defaultModels: { primary: "opus", fallbacks: [], utilityModel: null },
       }),
     );
-    expect(automatic.querySelector('wa-option[value="opus"]')?.hasAttribute("selected")).toBe(true);
+    await updatePickers(automatic);
+    expect(
+      automatic
+        .querySelector('[role="option"][data-value="opus"]')
+        ?.getAttribute("aria-selected") === "true",
+    ).toBe(true);
     expect(
       text(
         automatic
-          .querySelectorAll(".model-providers__defaults wa-select")[1]
-          ?.querySelector("wa-option[selected]") ?? null,
+          .querySelectorAll(".model-providers__defaults openclaw-select-picker")[1]
+          ?.querySelector('[role="option"][aria-selected="true"]') ?? null,
       ),
     ).toBe("Auto");
 
@@ -935,11 +984,12 @@ describe("renderModelProviders", () => {
         defaultModels: { primary: "opus", fallbacks: [], utilityModel: "" },
       }),
     );
+    await updatePickers(disabled);
     expect(
       text(
         disabled
-          .querySelectorAll(".model-providers__defaults wa-select")[1]
-          ?.querySelector("wa-option[selected]") ?? null,
+          .querySelectorAll(".model-providers__defaults openclaw-select-picker")[1]
+          ?.querySelector('[role="option"][aria-selected="true"]') ?? null,
       ),
     ).toBe("Disabled");
   });
@@ -1024,45 +1074,5 @@ describe("renderModelProviders", () => {
       }),
     );
     expect(button(container, "Set API key")).toBeUndefined();
-  });
-
-  it("invokes onModelPickerOpen when any default-model picker opens", () => {
-    const onModelPickerOpen = vi.fn();
-    const container = mount(props({ onModelPickerOpen }));
-    const selects = container.querySelectorAll<HTMLElement>(".model-providers__defaults wa-select");
-    expect(selects.length).toBe(3);
-
-    for (const select of selects) {
-      select.dispatchEvent(new Event("wa-show", { bubbles: true }));
-    }
-
-    expect(onModelPickerOpen).toHaveBeenCalledTimes(3);
-  });
-
-  it("announces catalog discovery in progress without blocking the pickers", () => {
-    const container = mount(props({ catalogDiscovering: true }));
-    const progress = container.querySelector(".model-providers__catalog-progress");
-
-    expect(progress?.getAttribute("role")).toBe("status");
-    expect(text(progress)).toContain("Discovering more models");
-    expect(container.querySelectorAll(".model-providers__defaults wa-select")).toHaveLength(3);
-  });
-
-  it("presents a retry action when catalog discovery fails", () => {
-    const onCatalogRetry = vi.fn();
-    const container = mount(
-      props({
-        catalogDiscoveryError: "catalog unavailable",
-        onCatalogRetry,
-      }),
-    );
-    const progress = container.querySelector(".model-providers__catalog-progress");
-
-    expect(progress?.getAttribute("role")).toBe("alert");
-    expect(text(progress)).toContain("More models could not be discovered.");
-    const retry = progress?.querySelector<HTMLButtonElement>("button");
-    expect(text(retry)).toBe("Retry");
-    retry?.click();
-    expect(onCatalogRetry).toHaveBeenCalledOnce();
   });
 });

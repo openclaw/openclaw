@@ -1,28 +1,23 @@
-// Build And Run Mac tests cover build and run mac script behavior.
 import { execFileSync, spawnSync } from "node:child_process";
 import {
   chmodSync,
   copyFileSync,
   existsSync,
   mkdirSync,
-  mkdtempSync,
   readFileSync,
-  rmSync,
   statSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
 import path, { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const scriptPath = "scripts/build-and-run-mac.sh";
-const tempRoots: string[] = [];
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function runStopExistingLocalApp(params: { fakeLsof?: string; fakePgrep: string }) {
-  const root = mkdtempSync(join(tmpdir(), "openclaw-build-run-mac-test-"));
-  tempRoots.push(root);
+  const root = tempDirs.make("openclaw-build-run-mac-test-");
   const binDir = join(root, "bin");
   const killCallsPath = join(root, "kill-calls.txt");
   const pgrepCallsPath = join(root, "pgrep-calls.txt");
@@ -89,7 +84,7 @@ function runStopExistingLocalApp(params: { fakeLsof?: string; fakePgrep: string 
   );
   chmodSync(harnessPath, 0o755);
 
-  const result = spawnSync("bash", [harnessPath], {
+  const result = spawnSync("/bin/bash", [harnessPath], {
     encoding: "utf8",
     env: {
       ...process.env,
@@ -105,18 +100,11 @@ function runStopExistingLocalApp(params: { fakeLsof?: string; fakePgrep: string 
   return { killCalls, pgrepCalls, result };
 }
 
-afterEach(() => {
-  for (const root of tempRoots.splice(0)) {
-    rmSync(root, { force: true, recursive: true });
-  }
-});
-
 describe("scripts/build-and-run-mac.sh", () => {
   it.each(["pnpm", "corepack"])(
     "prepares the Apple resource bundle before SwiftPM with %s",
     (runner) => {
-      const root = mkdtempSync(join(tmpdir(), "openclaw-mac-mermaid-test-"));
-      tempRoots.push(root);
+      const root = tempDirs.make("openclaw-mac-mermaid-test-");
       const binDir = join(root, "bin");
       mkdirSync(binDir);
       mkdirSync(join(root, "apps/macos"), { recursive: true });
@@ -172,7 +160,7 @@ describe("scripts/build-and-run-mac.sh", () => {
         chmodSync(target, 0o755);
       }
 
-      const result = spawnSync("bash", [join(root, scriptPath)], {
+      const result = spawnSync("/bin/bash", [join(root, scriptPath)], {
         encoding: "utf8",
         env: {
           ...process.env,
@@ -189,7 +177,7 @@ describe("scripts/build-and-run-mac.sh", () => {
   );
 
   it("prints help before build or launch side effects", () => {
-    const result = spawnSync("bash", [scriptPath, "--help"], {
+    const result = spawnSync("/bin/bash", [scriptPath, "--help"], {
       cwd: process.cwd(),
       encoding: "utf8",
     });
@@ -201,7 +189,7 @@ describe("scripts/build-and-run-mac.sh", () => {
   });
 
   it("rejects unknown options before build or launch side effects", () => {
-    const result = spawnSync("bash", [scriptPath, "--wat"], {
+    const result = spawnSync("/bin/bash", [scriptPath, "--wat"], {
       cwd: process.cwd(),
       encoding: "utf8",
     });
@@ -263,7 +251,6 @@ describe("scripts/build-and-run-mac.sh", () => {
   });
 });
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 // Platform contract: macOS tooling must not select Homebrew Bash through PATH.
 const nativeScripts = [
   "scripts/lib/plistbuddy.sh",

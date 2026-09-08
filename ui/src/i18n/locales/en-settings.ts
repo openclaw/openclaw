@@ -56,6 +56,7 @@ const enSettings = {
     providerFact: "Provider: {provider}",
     backendFact: "Crabbox backend: {backend}",
     classFact: "Class: {value}",
+    operatingSystemFact: "Operating system: {value}",
     ttlFact: "Max lifetime: {value}",
     idleFact: "Idle stop: {value}",
     desktopFact: "Desktop: {value}",
@@ -66,6 +67,10 @@ const enSettings = {
       backend: "Crabbox backend",
       backendHelp: "The backend passed to Crabbox, such as AWS, Azure, or Hetzner.",
       backendPlaceholder: "hetzner",
+      operatingSystem: "Operating system",
+      operatingSystemHelp:
+        "Options come from this profile's advertised operating systems. Choose Provider default to clear a saved target, including one no longer advertised.",
+      providerDefault: "Provider default",
       machineClass: "Machine class",
       machineClassHelp:
         "Enter a class accepted by the selected Crabbox backend and binary. The provider determines its effective sizing.",
@@ -80,7 +85,7 @@ const enSettings = {
       setupPlaceholder: "command -v node || install-node",
       desktop: "Desktop",
       desktopHelp:
-        "Warm a direct or coordinator-backed AWS or Azure worker, or a coordinator-backed Hetzner worker, with node-carried Browser and Terminal access. Existing workers must be reprovisioned after this changes.",
+        "Linux only. Warm a direct or coordinator-backed AWS or Azure worker, or a coordinator-backed Hetzner worker, with node-carried Browser and Terminal access. Existing workers must be reprovisioned after this changes.",
       binary: "Crabbox binary",
       binaryHelp: "Optional absolute path to the Crabbox executable on the gateway.",
       binaryPlaceholder: "/usr/local/bin/crabbox",
@@ -94,6 +99,8 @@ const enSettings = {
       profileExists: "Choose another profile ID; this one already exists.",
       profileMissing: "This profile changed or was removed. Reload the page and try again.",
       backend: "Enter a Crabbox backend, such as aws, azure, or hetzner.",
+      target:
+        "Use an operating system ID of up to 64 characters without surrounding spaces, or choose Provider default.",
       machineClass: "Enter a machine class of 1 to 128 characters.",
       ttl: "Enter a positive Go duration for max lifetime, such as 8h or 90m.",
       idleTimeout: "Enter a positive Go duration for idle stop, such as 45m.",

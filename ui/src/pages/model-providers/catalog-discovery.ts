@@ -42,12 +42,12 @@ type CreateOptions = {
 export function createCatalogDiscoveryController(
   options: CreateOptions,
 ): CatalogDiscoveryController {
-  let discovering = false;
+  let pending: AbortController | null = null;
   let error: string | null = null;
 
   const controller: CatalogDiscoveryController = {
     get discovering() {
-      return discovering;
+      return pending !== null;
     },
     get error() {
       return error;
@@ -56,19 +56,20 @@ export function createCatalogDiscoveryController(
       void discover();
     },
     retry() {
-      error = null;
-      options.requestUpdate();
       void discover();
     },
     reset() {
-      discovering = false;
+      const retired = pending;
+      pending = null;
       error = null;
+      retired?.abort();
+      options.requestUpdate();
     },
   };
 
   async function discover(): Promise<void> {
     const agentId = options.getAgentId();
-    if (!agentId || discovering) {
+    if (!agentId || pending) {
       return;
     }
     const gateway = options.getGateway();
@@ -78,22 +79,29 @@ export function createCatalogDiscoveryController(
     }
     const agentEpoch = options.getAgentEpoch();
     const clientEpoch = gateway.epoch;
+    const request = new AbortController();
     const ownsResult = () =>
+      pending === request &&
       gateway.isCurrent({ client, epoch: clientEpoch }) &&
       options.getAgentId() === agentId &&
       options.getAgentEpoch() === agentEpoch;
-    discovering = true;
+    pending = request;
     error = null;
     options.requestUpdate();
     try {
-      const result = await loadModelCatalog(client, { agentId, refreshIfDue: true });
-      if (ownsResult() && result.models) {
+      const result = await loadModelCatalog(client, {
+        agentId,
+        refreshIfDue: true,
+        signal: request.signal,
+      });
+      if (ownsResult()) {
         const data = options.getData();
         if (data) {
           options.setData({
             ...data,
             models: result.models,
             providerOutcomes: result.providerOutcomes ?? [],
+            catalogError: null,
           });
         }
       }
@@ -102,8 +110,8 @@ export function createCatalogDiscoveryController(
         error = formatUiError(failure, "request failed");
       }
     } finally {
-      if (ownsResult()) {
-        discovering = false;
+      if (pending === request) {
+        pending = null;
         options.requestUpdate();
       }
     }

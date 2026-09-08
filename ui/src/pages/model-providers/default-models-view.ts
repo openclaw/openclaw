@@ -64,6 +64,7 @@ function modelOptions(models: ModelPickerEntry[]): ModelPickerOption[] {
     options.push({
       value: ref,
       label: model.name || ref,
+      ...(model.available === false ? { disabled: true } : {}),
       ...(model.provider ? { provider: model.provider } : {}),
     });
   }

@@ -1,7 +1,10 @@
 // Broad helper coverage for runEmbeddedAttempt prompt, stream, and tool seams.
 import { describe, expect, it, vi } from "vitest";
 import { streamSimple } from "../../../llm/stream.js";
-import { textToolResult } from "../../test-helpers/sparse-transcript.test-support.js";
+import {
+  textToolResult,
+  textAssistant,
+} from "../../test-helpers/sparse-transcript.test-support.js";
 
 vi.mock("../context-engine-capabilities.js", () => ({
   resolveContextEngineCapabilities: async () => ({ llm: undefined }),
@@ -1102,10 +1105,7 @@ describe("wrapStreamFnTrimToolCallNames", () => {
               message: { role: "assistant", content: [{ type: "toolCall", name: " read " }] },
             },
           ],
-          resultMessage: {
-            role: "assistant",
-            content: [{ type: "text", text: "resolved to allowed tool" }],
-          },
+          resultMessage: textAssistant("resolved to allowed tool"),
         }),
       )
       .mockImplementationOnce(() =>
@@ -1682,10 +1682,7 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
         role: "user",
         content: [{ type: "text", text: "earlier question" }],
       },
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "stale assistant answer" }],
-      },
+      textAssistant("stale assistant answer"),
     ];
     const baseFn = vi.fn((_model, _context) =>
       createFakeStream({ events: [], resultMessage: { role: "assistant", content: [] } }),
@@ -1720,10 +1717,7 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
         role: "user",
         content: [{ type: "text", text: "earlier question" }],
       },
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "stale model answer" }],
-      },
+      textAssistant("stale model answer"),
     ];
     const baseFn = vi.fn((_model, _context) =>
       createFakeStream({ events: [], resultMessage: { role: "assistant", content: [] } }),

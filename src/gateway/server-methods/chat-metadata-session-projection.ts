@@ -60,7 +60,7 @@ export async function prepareChatMetadataModelProjection(params: {
   const [modelCatalog, readModels] = await Promise.all([
     projector.projectCatalog(),
     prepareModelsListResult({
-      context: params.context,
+      source: { kind: "gateway", context: params.context },
       agentId: params.facts.agentId,
       params: { view: "configured" },
       preloadedCatalog: {

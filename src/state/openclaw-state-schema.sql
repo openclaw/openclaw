@@ -2151,9 +2151,10 @@ CREATE TABLE IF NOT EXISTS worker_session_placement_moves (
   source_owner_epoch INTEGER NOT NULL CHECK (source_owner_epoch >= 1),
   target_kind TEXT NOT NULL CHECK (target_kind IN ('gateway', 'profile', 'device')),
   target_id TEXT,
-  -- Keep this nullable column constraint-free so lazy ALTER TABLE produces the
-  -- same shape as fresh databases; placement-move code validates its value.
+  -- Keep these nullable columns constraint-free so lazy ALTER TABLE produces the
+  -- same shape as fresh databases; placement-move code validates their values.
   target_machine_class TEXT,
+  target_os TEXT,
   -- Explicit source abandonment is a durable operator decision. Keep the bit
   -- bare and nullable so same-version older readers can safely omit it.
   abandon_source INTEGER,

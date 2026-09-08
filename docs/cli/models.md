@@ -90,6 +90,10 @@ Command failures, such as failure to resolve a required config secret, also exit
 nonzero. In JSON mode, these can return a command error instead of the status
 object; check the process exit code as well as the output.
 
+Non-secret placeholders can appear as `marker(<value>)`, such as `secretref-managed`
+or an environment variable name. These labels describe the credential source; they
+are not the resolved secret.
+
 Options:
 
 | Flag                      | Effect                                                                                                        |
@@ -122,24 +126,55 @@ For OpenAI ChatGPT/Codex OAuth troubleshooting, `openclaw models status`, `openc
 
 ### List
 
-`openclaw models list` is read-only: it reads config, auth profiles, existing catalog state, and provider-owned catalog rows, but never rewrites `models.json`.
+`openclaw models list` reads published model inventory. It does not start model
+provider discovery or rewrite `models.json`. This also applies to `--all` and
+`--provider <id>`.
 
-Options: `--all` (full catalog), `--local` (filter to local models), `--provider <id>`, `--agent <id>`, `--json`, `--plain`. `--agent` selects that agent's auth store, workspace, and provider catalog context; explicit multi-agent fleets do not need a default owner when it is present.
+```bash
+openclaw models list --agent <agentId>
+openclaw models list --agent <agentId> --provider <providerId> --json
+openclaw models list --agent <agentId> --refresh
+```
+
+When a local Gateway is running, or a remote Gateway is selected by configuration
+or environment, the command reads that Gateway's catalog. `--agent` selects an
+agent on that Gateway. Provider filtering, model visibility and availability use
+the Gateway's captured config and auth facts. The command does not resolve local
+model-provider secrets for that request.
+
+A selected Gateway must advertise `published-model-catalog`. If it does not,
+update or restart it and retry. Connection, authorization and capability errors
+are reported directly; they do not switch the command to a different local list.
+
+Without a running local Gateway or an explicit Gateway target, the command
+identifies that it is showing the local cached catalog. This fallback can prepare
+configured and static facts and resolve its configured authentication, but starts
+model discovery only when `--refresh` is supplied.
+
+Use `--refresh` to acquire provider inventory before listing. A failed refresh
+warns while showing available published rows. Successful empty acquisition stays
+empty; it does not restore the old discovered rows. If the published owner is not
+ready, retry after Gateway startup or the current refresh finishes.
+
+Options: `--all` (full published catalog), `--refresh` (provider discovery),
+`--local` (local endpoints), `--provider <id>`, `--agent <id>`, `--json`, and
+`--plain`. A provider filter reads the full published inventory for that provider,
+so it does not require `--all`.
 
 Notes:
 
-- The `Auth` column uses read-only checks. For OpenAI routes, it matches each API and base URL to eligible profiles, credentials, and command-scoped SecretRefs. If route policy is unavailable, an OpenAI row stays unknown instead of using provider-level auth. Other providers and legacy checks use provider-level behavior. For a configured native CLI route, a full or provider-filtered list can run the local auth-status check from the provider. That native result is authoritative; a separate provider credential does not prove the CLI login. The default list stays lazy and shows native CLI authentication as unknown. Synthetic-auth metadata does not prove native account authentication. The command does not load the full provider runtime. It does not read keychain secrets or call provider APIs. It does not prove exact execution readiness.
-- `models list --all --provider <id>` can include provider-owned static catalog rows from plugin manifests or bundled provider catalog metadata even when you have not authenticated with that provider yet. Those rows still show as unavailable until matching auth is configured.
-- `models list` keeps the control plane responsive while provider catalog discovery is slow. The default and configured views fall back to configured or synthetic model rows after a short wait and let discovery finish in the background. Use `--all` when you need the exact full discovered catalog and are willing to wait for provider discovery.
-- Broad `models list --all` merges manifest catalog rows over registry rows without loading provider runtime supplement hooks. Provider-filtered manifest fast paths use only providers marked `static`; providers marked `refreshable` stay registry/cache-backed and append manifest rows as supplements, while providers marked `runtime` stay on registry/runtime discovery.
-- `models list` keeps native model metadata and runtime caps distinct. In table output, `Ctx` shows `contextTokens/contextWindow` when an effective runtime cap differs from the native context window; JSON rows include `contextTokens` when a provider exposes that cap.
-- For provider-owned routes, `models list` projects one logical provider/model row onto the selected route. `Input` and `Ctx` come only from an exact physical-route catalog row, with explicit configured logical overrides applied last; unresolved route selection shows unknown capability fields instead of borrowing sibling-route metadata.
-- Configured model IDs retain their case. For example, `Reader` and `reader` keep separate rows with their own names, context limits, and input types. Provider-declared aliases still apply.
-- Models marked `missing` retain their configured aliases in the `Tags` column and JSON `tags`.
-- `models list --provider <id>` filters by provider id, such as `moonshot` or `openai`. It does not accept display labels from interactive provider pickers, such as `Moonshot AI`.
-- Model refs are parsed by splitting on the **first** `/`. If the model ID includes `/` (OpenRouter-style), include the provider prefix (example: `openrouter/moonshotai/kimi-k2`).
-- If you omit the provider, OpenClaw resolves the input as an alias first, then as a unique configured-provider match for that exact model id, and only then falls back to the configured default provider with a deprecation warning. If that provider no longer exposes the configured default model, OpenClaw falls back to the first configured provider/model instead of surfacing a stale removed-provider default.
-- `models status` may show `marker(<value>)` in auth output for non-secret placeholders (for example `OPENAI_API_KEY`, `secretref-managed`, `minimax-oauth`, `oauth:chutes`, `ollama-local`) instead of masking them as secrets.
+- The `Auth` column uses prepared credential and runtime evidence. A separate API key does not prove a native CLI login. Unknown readiness stays unknown, and catalog metadata does not prove that a model request will succeed. See [Read status correctly](/cli/models#read-status-correctly).
+- Static catalog rows can remain visible without authentication. Listing them does not grant permission to select a restricted model or change `modelPolicy.allow`.
+- `Ctx` shows `contextTokens/contextWindow` when a runtime cap differs from the native context window. JSON retains `contextTokens` when provided.
+- `Input` and `Ctx` use the selected physical route plus explicit configured logical overrides. Unresolved route metadata stays unknown instead of borrowing another route's capabilities.
+- Configured model IDs retain case. For example, `Reader` and `reader` remain distinct. Provider-owned aliases still apply, and configured aliases remain in the table tags and JSON output.
+- `--provider` takes a provider ID, such as `moonshot`, rather than a picker label such as `Moonshot AI`.
+- Model refs split on the first `/`. Include the provider prefix when the model ID contains `/`, for example `openrouter/moonshotai/kimi-k2`.
+
+Provider discovery through `models list --refresh` is separate from the hosted
+metadata download performed by `models refresh`, described below. See the
+[Gateway catalog request](/gateway/protocol/operator-methods#modelslist-views)
+for the wire controls.
 
 ### Refresh the hosted catalog
 
@@ -165,6 +200,11 @@ openclaw models set-image <model-or-alias>
 ```
 
 `set` writes `agents.defaults.model.primary`; `set-image` writes `agents.defaults.imageModel.primary`. Both accept `provider/model` or a configured alias. `set` also repairs Codex/Copilot runtime plugin installs when the newly selected model needs one; `set-image` does not. Neither command accepts `--agent`; they always write agent defaults.
+
+If you omit the provider when selecting a model, OpenClaw tries a configured alias,
+then a unique configured-provider match for that exact model ID, and finally the
+configured default provider with a deprecation warning. If that provider no longer
+exposes the configured default, the first configured provider/model is used.
 
 ### Scan
 

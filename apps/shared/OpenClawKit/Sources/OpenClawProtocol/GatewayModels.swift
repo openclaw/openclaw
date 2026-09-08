@@ -8632,6 +8632,7 @@ public struct SessionsDispatchParams: Codable, Sendable {
     public let deviceid: String?
     public let autodevice: Bool?
     public let machineclass: String?
+    public let os: String?
 
     public init(
         key: String,
@@ -8639,7 +8640,8 @@ public struct SessionsDispatchParams: Codable, Sendable {
         profileid: String? = nil,
         deviceid: String? = nil,
         autodevice: Bool? = nil,
-        machineclass: String? = nil)
+        machineclass: String? = nil,
+        os: String? = nil)
     {
         self.key = key
         self.agentid = agentid
@@ -8647,6 +8649,7 @@ public struct SessionsDispatchParams: Codable, Sendable {
         self.deviceid = deviceid
         self.autodevice = autodevice
         self.machineclass = machineclass
+        self.os = os
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -8656,6 +8659,7 @@ public struct SessionsDispatchParams: Codable, Sendable {
         case deviceid = "deviceId"
         case autodevice = "autoDevice"
         case machineclass = "machineClass"
+        case os
     }
 }
 
@@ -8798,28 +8802,32 @@ public struct SessionMoveProfileTarget: Codable, Sendable {
     public let kind: String
     public let profileid: String
     public let machineclass: String?
+    public let os: String?
 
     public init(
         profileid: String,
-        machineclass: String? = nil
+        machineclass: String? = nil,
+        os: String? = nil
     )
     {
         self.kind = "profile"
         self.profileid = profileid
         self.machineclass = machineclass
+        self.os = os
     }
 
     private enum CodingKeys: String, CodingKey {
         case kind
         case profileid = "profileId"
         case machineclass = "machineClass"
+        case os
     }
 
     public init(from decoder: Decoder) throws {
         let rawContainer = try decoder.container(keyedBy: GatewayAnyCodingKey.self)
         let unexpectedKeys = rawContainer.allKeys
             .map(\.stringValue)
-            .filter { !Set(["kind", "profileId", "machineClass"]).contains($0) }
+            .filter { !Set(["kind", "profileId", "machineClass", "os"]).contains($0) }
         if !unexpectedKeys.isEmpty {
             throw DecodingError.dataCorrupted(
                 .init(
@@ -8840,6 +8848,7 @@ public struct SessionMoveProfileTarget: Codable, Sendable {
         self.kind = "profile"
         self.profileid = try container.decode(String.self, forKey: .profileid)
         self.machineclass = try container.decodeIfPresent(String.self, forKey: .machineclass)
+        self.os = try container.decodeIfPresent(String.self, forKey: .os)
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -8847,6 +8856,7 @@ public struct SessionMoveProfileTarget: Codable, Sendable {
         try container.encode("profile", forKey: .kind)
         try container.encode(profileid, forKey: .profileid)
         try container.encodeIfPresent(machineclass, forKey: .machineclass)
+        try container.encodeIfPresent(os, forKey: .os)
     }
 }
 
@@ -16531,6 +16541,8 @@ public struct ModelChoice: Codable, Sendable {
     public let unavailablereason: AnyCodable?
     public let unavailableuntil: Int?
     public let contextwindow: Int?
+    public let contexttokens: Int?
+    public let local: Bool?
     public let contextwindows: [[String: AnyCodable]]?
     public let contextwindowdefault: String?
     public let reasoning: Bool?
@@ -16553,6 +16565,8 @@ public struct ModelChoice: Codable, Sendable {
         unavailablereason: AnyCodable? = nil,
         unavailableuntil: Int? = nil,
         contextwindow: Int? = nil,
+        contexttokens: Int? = nil,
+        local: Bool? = nil,
         contextwindows: [[String: AnyCodable]]? = nil,
         contextwindowdefault: String? = nil,
         reasoning: Bool? = nil,
@@ -16574,6 +16588,8 @@ public struct ModelChoice: Codable, Sendable {
         self.unavailablereason = unavailablereason
         self.unavailableuntil = unavailableuntil
         self.contextwindow = contextwindow
+        self.contexttokens = contexttokens
+        self.local = local
         self.contextwindows = contextwindows
         self.contextwindowdefault = contextwindowdefault
         self.reasoning = reasoning
@@ -16597,6 +16613,8 @@ public struct ModelChoice: Codable, Sendable {
         case unavailablereason = "unavailableReason"
         case unavailableuntil = "unavailableUntil"
         case contextwindow = "contextWindow"
+        case contexttokens = "contextTokens"
+        case local
         case contextwindows = "contextWindows"
         case contextwindowdefault = "contextWindowDefault"
         case reasoning
@@ -16675,6 +16693,8 @@ public struct ModelsAuthStatusParams: Codable, Sendable {
 
 public struct ModelsListParams: Codable, Sendable {
     public let agentid: String?
+    public let provider: String?
+    public let includedetails: Bool?
     public let includeprovidercapabilities: Bool?
     public let preparedonly: Bool?
     public let refresh: Bool?
@@ -16682,12 +16702,16 @@ public struct ModelsListParams: Codable, Sendable {
 
     public init(
         agentid: String? = nil,
+        provider: String? = nil,
+        includedetails: Bool? = nil,
         includeprovidercapabilities: Bool? = nil,
         preparedonly: Bool? = nil,
         refresh: Bool? = nil,
         view: AnyCodable? = nil)
     {
         self.agentid = agentid
+        self.provider = provider
+        self.includedetails = includedetails
         self.includeprovidercapabilities = includeprovidercapabilities
         self.preparedonly = preparedonly
         self.refresh = refresh
@@ -16696,6 +16720,8 @@ public struct ModelsListParams: Codable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case agentid = "agentId"
+        case provider
+        case includedetails = "includeDetails"
         case includeprovidercapabilities = "includeProviderCapabilities"
         case preparedonly = "preparedOnly"
         case refresh

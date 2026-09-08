@@ -239,9 +239,16 @@ async function listWorkerProfilesWithMachines(context: GatewayRequestContext) {
         executionMode ? { executionMode, executionModes } : {},
       );
       try {
-        const options = await context.workerEnvironmentService?.listMachineOptions?.(summary.id);
+        const [options, operatingSystems] = await Promise.all([
+          context.workerEnvironmentService?.listMachineOptions?.(summary.id),
+          context.workerEnvironmentService?.listOperatingSystems?.(summary.id),
+        ]);
         const machines = options ?? [];
-        return machines.length > 0 ? Object.assign(resolvedSummary, { machines }) : resolvedSummary;
+        return Object.assign(
+          resolvedSummary,
+          machines.length > 0 ? { machines } : {},
+          operatingSystems && operatingSystems.length > 1 ? { operatingSystems } : {},
+        );
       } catch (error) {
         context.logGateway.warn(
           `worker machine catalog unavailable (${summary.id}): ${formatForLog(error)}`,

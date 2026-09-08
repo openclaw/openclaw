@@ -25,6 +25,7 @@ import {
   snapshotDirectoryContents,
   snapshotSharedStateArtifacts,
   tempDirs,
+  UNREACHABLE_GATEWAY_URL,
 } from "./gateway-backed-exit.process.test-support.js";
 import {
   EMPTY_STABILITY_SNAPSHOT,
@@ -761,6 +762,55 @@ describe("gateway-backed CLI process exit", () => {
         }
         await lock?.release();
       }
+    },
+  );
+
+  it.each([
+    { label: "devices list", args: ["devices", "list"], machineOutput: false },
+    { label: "devices list --json", args: ["devices", "list", "--json"], machineOutput: true },
+    { label: "nodes status", args: ["nodes", "status"], machineOutput: false },
+    { label: "nodes status --json", args: ["nodes", "status", "--json"], machineOutput: true },
+  ])(
+    "renders a $label URL override without explicit credentials as expected guidance, not a crash",
+    async ({ label, args, machineOutput }) => {
+      const root = tempDirs.make(`openclaw-${label.replaceAll(/[ -]+/g, "-")}-explicit-auth-`);
+      // Configured credentials must not leak to a caller-supplied URL; the producer
+      // rejects the override before any socket opens, so the target never listens.
+      const { stateDir, configPath } = await prepareGatewayCliFixture(root, {
+        mode: "local",
+        auth: { mode: "token", token: "configured-token" },
+      });
+
+      const result = await runIsolatedGatewayCli({
+        args: [...args, "--url", UNREACHABLE_GATEWAY_URL, "--timeout", "250"],
+        root,
+        stateDir,
+        configPath,
+      });
+
+      expect(result).toMatchObject({ code: 1, signal: null });
+      if (machineOutput) {
+        expect(JSON.parse(result.stdout)).toEqual({
+          ok: false,
+          error: {
+            type: "cli_error",
+            message: expect.stringContaining("gateway url override requires explicit credentials"),
+          },
+        });
+      } else {
+        expect(result.stdout).toBe("");
+      }
+      expect(result.stderr).toContain("gateway url override requires explicit credentials");
+      // The shared console redaction masks the word after "--password"; assert around it.
+      expect(result.stderr).toContain("Fix: pass --token or --password");
+      expect(result.stderr).toContain("--url (or gatewayToken in tools).");
+      expect(result.stderr).toContain("remove --url to use the configured target.");
+      expect(result.stderr).toContain(`Config: ${configPath}`);
+      expect(result.stderr).not.toContain("The CLI command failed");
+      expect(result.stderr).not.toContain("Could not start the CLI");
+      expect(result.stderr).not.toContain("OPENCLAW_DEBUG");
+      expect(result.stderr).not.toContain("Stack:");
+      expect(result.stderr).not.toContain("openclaw doctor");
     },
   );
 

@@ -1,6 +1,7 @@
 // Agents gateway methods expose agent listing, config mutation, workspace file
 // reads/writes, identity merging, and safe deletion for operator clients.
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { normalizeOptionalString as resolveOptionalStringParam } from "@openclaw/normalization-core/string-coerce";
 import {
@@ -82,6 +83,7 @@ import {
   WORKSPACE_BOOTSTRAP_FILENAMES,
 } from "../../agents/workspace.js";
 import { applyAgentConfig } from "../../commands/agents.config.js";
+import { trashAllowedRoots } from "../../commands/cleanup-utils.js";
 import {
   readConfigFileSnapshotForWrite,
   withConfigMutationExclusive,
@@ -412,7 +414,20 @@ async function removeAgentPath(
     // fs-safe pins traversal and identity for validation; Trash has no fd-relative move API, so
     // replacement after this check and before its rename is the accepted residual race bound.
     assertCurrent();
-    await movePathToTrash(trashPath);
+    // statAgentCleanupPath verified the declared parent; fs-safe's default roots (home/tmp)
+    // alone refuse every path of a volume-backed state dir. Keep those defaults so the
+    // directory behind a workspace symlink stays fenced exactly as shipped, while the link
+    // itself may always move (accepted edge: a link target beside its link is trashed too).
+    await movePathToTrash(trashPath, {
+      allowedRoots: [
+        ...trashAllowedRoots(
+          cleanupPath.sourcePaths,
+          cleanupPath.kind === "symlink" ? cleanupPath.canonicalPath : undefined,
+        ),
+        os.homedir(),
+        os.tmpdir(),
+      ],
+    });
     return { removed: { path: pathname, method: "trash" } };
   } catch (error) {
     if (!isMissingPathError(error)) {

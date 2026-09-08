@@ -6289,47 +6289,45 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
     ]);
   });
 
-  it("keeps placement-owned target machine class absent during generic repair and open", () => {
-    const stateDir = createTempStateDir();
-    const databasePath = materializeCurrentStateDatabase(stateDir);
-    const previousSchema = OPENCLAW_STATE_SCHEMA_SQL.replace(
-      "  -- Keep this nullable column constraint-free so lazy ALTER TABLE produces the\n" +
-        "  -- same shape as fresh databases; placement-move code validates its value.\n" +
-        "  target_machine_class TEXT,\n",
-      "",
-    );
-    const tableStart = previousSchema.indexOf(
-      "CREATE TABLE IF NOT EXISTS worker_session_placement_moves (",
-    );
-    const tableEnd = previousSchema.indexOf("\n) STRICT;", tableStart);
+  it.each(["target_machine_class", "target_os"])(
+    "keeps placement-owned %s absent during generic repair and open",
+    (columnName) => {
+      const stateDir = createTempStateDir();
+      const databasePath = materializeCurrentStateDatabase(stateDir);
+      const previousSchema = OPENCLAW_STATE_SCHEMA_SQL.replace(`  ${columnName} TEXT,\n`, "");
+      const tableStart = previousSchema.indexOf(
+        "CREATE TABLE IF NOT EXISTS worker_session_placement_moves (",
+      );
+      const tableEnd = previousSchema.indexOf("\n) STRICT;", tableStart);
 
-    const { DatabaseSync } = requireNodeSqlite();
-    const legacyDb = new DatabaseSync(databasePath);
-    legacyDb.exec(`
+      const { DatabaseSync } = requireNodeSqlite();
+      const legacyDb = new DatabaseSync(databasePath);
+      legacyDb.exec(`
       DROP TABLE worker_session_placement_moves;
       ${previousSchema.slice(tableStart, tableEnd + "\n) STRICT;".length)}
     `);
-    legacyDb.close();
+      legacyDb.close();
 
-    const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
-    expect(repairOpenClawStateDatabaseSchemaIfNeeded(options).warnings).toEqual([]);
-    const repairedDb = new DatabaseSync(databasePath, { readOnly: true });
-    try {
-      const repairedColumns = repairedDb
+      const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
+      expect(repairOpenClawStateDatabaseSchemaIfNeeded(options).warnings).toEqual([]);
+      const repairedDb = new DatabaseSync(databasePath, { readOnly: true });
+      try {
+        const repairedColumns = repairedDb
+          .prepare("PRAGMA table_info(worker_session_placement_moves)")
+          .all() as Array<{ name?: string }>;
+        expect(repairedColumns.map((column) => column.name)).not.toContain(columnName);
+      } finally {
+        repairedDb.close();
+      }
+
+      const reopened = openOpenClawStateDatabase(options);
+      const columns = reopened.db
         .prepare("PRAGMA table_info(worker_session_placement_moves)")
         .all() as Array<{ name?: string }>;
-      expect(repairedColumns.map((column) => column.name)).not.toContain("target_machine_class");
-    } finally {
-      repairedDb.close();
-    }
 
-    const reopened = openOpenClawStateDatabase(options);
-    const columns = reopened.db
-      .prepare("PRAGMA table_info(worker_session_placement_moves)")
-      .all() as Array<{ name?: string }>;
-
-    expect(columns.map((column) => column.name)).not.toContain("target_machine_class");
-  });
+      expect(columns.map((column) => column.name)).not.toContain(columnName);
+    },
+  );
 
   it("adds staged worker-result refs during the v5 state migration", () => {
     const stateDir = createTempStateDir();

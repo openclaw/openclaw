@@ -78,10 +78,17 @@ export function isGatewayCredentialsCliError(
   );
 }
 
+function isGatewayExplicitAuthCliError(error: unknown): error is Error {
+  // Same lean structural classification as the credentials preflight above: the
+  // producer message already carries the complete --url/--token remedy.
+  return error instanceof Error && error.name === "GatewayExplicitAuthRequiredError";
+}
+
 export function isExpectedCliError(error: unknown): error is Error {
   return (
     error instanceof ExpectedCliError ||
     isGatewayCredentialsCliError(error) ||
+    isGatewayExplicitAuthCliError(error) ||
     isGatewayTransportError(error)
   );
 }

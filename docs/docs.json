@@ -1377,8 +1377,16 @@
                 "group": "Install overview",
                 "pages": [
                   "install/index",
-                  "install/installer",
-                  "install/node"
+                  "install/installer"
+                ]
+              },
+              {
+                "group": "Runtimes",
+                "pages": [
+                  "install/node",
+                  "install/node-compatibility",
+                  "install/bun",
+                  "install/bun-compatibility"
                 ]
               },
               {
@@ -1403,7 +1411,6 @@
                 "group": "Containers",
                 "pages": [
                   "install/ansible",
-                  "install/bun",
                   "install/docker",
                   "install/nix",
                   "install/podman"
