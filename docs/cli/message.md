@@ -25,6 +25,25 @@ openclaw message <subcommand> [flags]
 - Channel-prefixed targets (for example `discord:channel:123`) resolve the
   owning plugin without an explicit `--channel`.
 
+## Agent ownership
+
+`openclaw message` uses the configured
+[System Agent](/gateway/config-agents/heartbeat-compaction-and-streaming#agents.defaults.systemagent)
+as its agent owner, falling back to a retained legacy owner or the sole configured
+agent when the System Agent is unset.
+
+In an explicit multi-agent configuration without an owner, the command stops
+before sending. Choose an existing agent ID from `openclaw agents list`, set it
+as the System Agent, then retry:
+
+```bash
+openclaw config set agents.defaults.systemAgent.agentId <id>
+```
+
+This setting also selects the owner for other ambient system work. The message
+command does not accept `--agent`; `--channel` and `--account` select the channel
+and channel account.
+
 ## Target formats (`-t, --target`)
 
 | Channel             | Format                                                                                                     |
@@ -88,6 +107,9 @@ unresolved SecretRef on the selected channel/account fails the action closed.
 | `permissions`   | Discord, Matrix                                                                                                 | `--target`                                                     | Matrix: available only when encryption is enabled and verification actions are allowed.                                                                                                                                                                                                                |
 | `search`        | Discord                                                                                                         | `--guild-id`, `--query`                                        | `--channel-id`, `--channel-ids` (repeat), `--author-id`, `--author-ids` (repeat), `--limit`.                                                                                                                                                                                                           |
 | `member info`   | Discord, Matrix, Microsoft Teams, Slack                                                                         | `--user-id`                                                    | `--guild-id` (Discord).                                                                                                                                                                                                                                                                                |
+
+Reaction listings show labels, counts, and available users as plain terminal text.
+Use `--json` for the complete channel result.
 
 The legacy `message read --include-thread` spelling remains accepted for existing
 scripts but has no effect.

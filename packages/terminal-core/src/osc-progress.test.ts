@@ -9,7 +9,7 @@ describe("OSC progress", () => {
     expect(supportsOscProgress({ WT_SESSION: "1" }, false)).toBe(false);
   });
 
-  it("writes sanitized OSC 9;4 progress sequences", () => {
+  it("writes OSC 9;4 progress sequences without labels", () => {
     const writes: string[] = [];
     const controller = createOscProgressController({
       env: { TERM_PROGRAM: "ghostty" },
@@ -22,9 +22,9 @@ describe("OSC progress", () => {
     controller.clear();
 
     expect(writes).toEqual([
-      "\u001b]9;4;3;;Buildbad\u001b\\",
-      "\u001b]9;4;1;43;Build\u001b\\",
-      "\u001b]9;4;0;0;Build\u001b\\",
+      "\u001b]9;4;3;0\u001b\\",
+      "\u001b]9;4;1;43\u001b\\",
+      "\u001b]9;4;0;0\u001b\\",
     ]);
   });
 });

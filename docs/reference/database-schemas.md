@@ -20,6 +20,26 @@ OpenClaw stores control-plane state in a global SQLite database and agent data i
 
 The task registry uses the global control-plane database. Runtime trajectory events live with their sessions in the per-agent database or a configured shared session SQLite store.
 
+### Plugin state listing index
+
+Plugin keyed stores use the shared `plugin_state_entries` table. Its listing
+index includes `expires_at` after the existing plugin, namespace, creation-time,
+and entry-key columns, so live-row counts can read the index without fetching
+stored values. Quotas, TTL cutoffs, ordering, and row contents are unchanged.
+
+Writable startup and `openclaw doctor --fix` replace the older four-column
+definition through canonical index repair, without a schema-version bump. The
+repair builds temporary indexes and runs the existing table and full-file
+integrity checks; allow for extra disk space and work proportional to stored
+entries during the first repair.
+
+An older build can rebuild the same index back to its expected definition.
+Full-schema read-only validation rejects a mismatched definition until a
+writable owner repairs it; lightweight readers that validate only the numeric
+schema version may read either shape. See the
+[accepted index design](https://github.com/openclaw/openclaw/issues/142244) for
+upgrade, reverse-repair, and performance proof requirements.
+
 ### Mentions Inbox
 
 The [mentions Inbox](/concepts/multi-user#temporary-mentions-inbox) uses existing
@@ -258,12 +278,16 @@ already validate the optional pending-input table may reject the added column
 despite sharing version 19. Consumed source receipts remain until their session
 window is deleted, so rewriting a transcript cannot make an old input runnable again.
 
-The placement-move table uses this same-version rule for its nullable bare
-`abandon_source INTEGER` column. The feature lazily ensures the column on first
-move use. `NULL` means ordinary reconcile-first movement; `1` records the
-operator's explicit offline-device abandonment decision so restart recovery
-cannot accidentally resume remote reconciliation. Older readers ignore the
-column and can reopen the same database safely.
+The placement-move table uses this same-version rule for its bare nullable
+`abandon_source INTEGER`, `target_machine_class TEXT`, and `target_os TEXT`
+columns. The feature ensures these columns only on first move use; database
+startup does not add them, and the schema version remains unchanged.
+`target_machine_class` and `target_os` retain explicit profile-target overrides;
+`NULL` means no override. For `abandon_source`, `NULL` means ordinary
+reconcile-first movement; `1` records the operator's explicit offline-device
+abandonment decision so restart recovery cannot accidentally resume remote
+reconciliation. Older readers ignore the added columns and can reopen the same
+database safely; they do not implement the newer operating-system override.
 
 Conversation associations use the same rule for the nullable bare
 `route_context_json TEXT` column. The database-open repair ensures the column
@@ -649,6 +673,8 @@ JSON output is identified by `schema: "openclaw.state-schema-preflight.v1"`.
 
 Use a SQLite online backup or another WAL-aware snapshot produced while the source is safely coordinated. The resulting preflight input must be one consolidated file with no sibling `-wal`, `-shm`, or `-journal`; sidecars make the result `indeterminate`. Do not copy only the main `.sqlite` file from an active WAL database. Preflight the exact runtime that will be activated; a package version or numeric schema version alone does not prove same-version shape compatibility.
 
+Diagnostic paths that prepare their own private read-only snapshots use the size-derived child-process budget described under [Integrity checks](/reference/database-schemas#integrity-checks).
+
 ## Agent schema history
 
 | Version | Change                                                                                                                                                                                                                                                 | First release                                   |
@@ -795,7 +821,21 @@ Background verification errors retain the original name and message and append b
 
 Agent database maintenance fences other writers with a 60-second lease in the shared state database. A dedicated worker renews that lease during synchronous integrity scans and migration phases. Maintenance still checks the exact persisted owner before mutations and commit, and stops if the heartbeat fails or ownership expires or changes. Finishing or cancelling maintenance stops renewal before releasing the lease; process death leaves at most the remaining lease duration.
 
-Maintenance schema admission runs its initial full-file integrity check in a read-only child process when that check is outside a write transaction. The scan has a 30-second execution limit; the connection and maintenance lease remain held until the child process closes, including on cancellation or timeout. Schema changes, index repairs, and compaction retain their synchronous phases.
+Asynchronous agent-database admission and maintenance run their initial full-file integrity check in a read-only child process when that check is outside a write transaction. The connection and owning scope remain held until the child closes, including on cancellation or timeout. Schema changes, index repairs, and compaction retain their synchronous phases.
+
+The integrity child and both asynchronous and synchronous read-only snapshot workers share a lifetime budget: 30 seconds for startup and shutdown plus one second per 32 MiB of source database file size, rounded up, capped at 30 minutes. A full copy or full scan reads the whole file at least once; the budget allows for a conservative cold-cache read rate of 32 MiB/s. A 9.4 GiB database gets 331 seconds. Budgets above 30 seconds are logged once per call at debug level with the operation, path, size, and applied budget, keeping ordinary CLI output quiet. If the snapshot worker cannot stat the source, it uses the 30-second base budget and lets the child report the underlying error.
+
+Integrity-child timeout and incomplete-exit errors include `lastObservedPhase`:
+
+| Value             | Last observation                                                                          |
+| ----------------- | ----------------------------------------------------------------------------------------- |
+| `starting`        | The parent has not received a child phase.                                                |
+| `opening`         | The child announced file-identity checks and opening a read-only connection.              |
+| `checking`        | The connection opened, and the child announced the full integrity and foreign-key checks. |
+| `closing`         | The child announced connection cleanup after checking or an error.                        |
+| `result-received` | The parent received a final result and is waiting for child closure.                      |
+
+These phases describe messages the parent received, not the child's exact current location or native CPU time. `checking` does not distinguish the integrity check from the foreign-key check. A final result can report failure; phase messages never establish successful validation or release ownership.
 
 Startup errors containing `state lease heartbeat did not become ready` include `phase=startup`, the settlement trigger (`timeout` or `message`), and the status observed before the parent marks failure. `status=starting` distinguishes readiness still pending from `status=lost`, where loss was already recorded. `elapsedMs` measures monotonic time since heartbeat startup began; `timeoutMs` is the startup wait budget, capped at five seconds or the remaining initial lease lifetime. These fields do not establish why startup stalled or ownership was lost.
 
@@ -803,7 +843,7 @@ The heartbeat proves ownership, not migration progress. A live but stuck mainten
 
 ## Troubleshooting
 
-`SQLite read-only worker` failures append `code` and numeric SQLite `errcode` diagnostics when the underlying error supplies valid values, including through a bounded cause chain. Report the full code suffix when investigating a failure. A generic `disk I/O error` or `SQLITE_IOERR` alone does not prove the disk is full.
+`SQLite read-only worker` failures append `code` and numeric SQLite `errcode` diagnostics when the underlying error supplies valid values, including through a bounded cause chain. Report the full code suffix when investigating a failure. Snapshot and integrity-child timeout errors include the applied budget and source file size; snapshot timeouts report an unknown size if the source stat failed. Integrity-child timeouts also retain `lastObservedPhase`. A generic `disk I/O error` or `SQLITE_IOERR` alone does not prove the disk is full.
 
 ### Why you cannot go back after updating to 2026.7.2
 

@@ -11,6 +11,7 @@ import ai.openclaw.app.R
 import ai.openclaw.app.SecurePrefs
 import ai.openclaw.app.chat.ChatCacheScope
 import ai.openclaw.app.chat.ChatController
+import ai.openclaw.app.chat.ChatOutboxStatus
 import ai.openclaw.app.chat.ChatThinkingLevelOption
 import ai.openclaw.app.chat.questionsForSession
 import ai.openclaw.app.closeNodeRuntimeTestFixture
@@ -88,6 +89,7 @@ import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasAnyDescendant
+import androidx.compose.ui.test.hasAnySibling
 import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasScrollAction
@@ -175,6 +177,7 @@ import org.robolectric.shadows.ShadowDialog
 import org.robolectric.shadows.ShadowSpeechRecognizer
 import java.util.UUID
 import java.util.concurrent.ConcurrentLinkedQueue
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.ceil
 import kotlin.math.roundToInt
 
@@ -603,6 +606,63 @@ class ChatComposerLayoutTest {
       composeRule.onNodeWithContentDescription(nativeString("Details")).performClick()
       readerHeaderControl("Jump to latest").assertDoesNotExist()
       composeRule.onNodeWithContentDescription(nativeString("Close")).performClick()
+    }
+  }
+
+  @Test
+  fun expandingTheOnlyLoadedUserPromptOffersJumpWithoutPriorScrolling() {
+    val head = "The original user prompt starts here."
+    val tail = "The original user prompt ends here."
+    val prompt = (listOf(head) + List(40) { "Original user paragraph ${it + 1}." } + tail).joinToString("\n\n")
+    withReaderHistory(assistantCount = 0, userText = prompt) { model ->
+      val transcript = readerTranscript()
+      val viewport = transcript.getUnclippedBoundsInRoot()
+      val range = transcript.fetchSemanticsNode().config[SemanticsProperties.VerticalScrollAxisRange]
+      assertEquals("The unchanged loaded prompt starts at the live edge", 0f, range.value(), 0f)
+      readerHeaderControl("Jump to latest").assertDoesNotExist()
+      val viewAll = composeRule.onNode(hasText(nativeString("View all")) and hasClickAction())
+      val button = viewAll.assertIsDisplayed().assertIsEnabled().getUnclippedBoundsInRoot()
+      assertTrue(
+        "View all must already be wholly visible without any preparatory scroll",
+        button.left >= viewport.left && button.right <= viewport.right && button.top >= viewport.top && button.bottom <= viewport.bottom,
+      )
+
+      // The disclosure is the first reader action; a preceding drag would hide this premise.
+      viewAll.performClick()
+      composeRule.waitForIdle()
+      assertEquals(1, model.chatMessages.value.size)
+      assertEquals(
+        prompt,
+        model.chatMessages.value
+          .single()
+          .content
+          .mapNotNull { it.text }
+          .joinToString("\n"),
+      )
+      assertEquals(0, model.pendingRunCount.value)
+      assertTrue(model.chatStreamingAssistantText.value == null)
+      val beginning = readerMarkerBounds(head, speaker = "You")
+      val ending = readerMarkerBounds(tail, speaker = "You")
+      assertTrue(
+        "Actual disclosure must reveal the first prompt glyphs",
+        beginning.left >= viewport.left && beginning.right <= viewport.right && beginning.top >= viewport.top && beginning.bottom <= viewport.bottom,
+      )
+      assertTrue("The expanded prompt's ending must now be below the viewport", ending.top > viewport.bottom)
+      assertTrue(
+        "BringIntoView must actually move the transcript away from latest",
+        transcript.fetchSemanticsNode().config[SemanticsProperties.VerticalScrollAxisRange].value() > 0f,
+      )
+      assertReaderHeaderControl("Jump to latest")
+      readerHeaderControl("Jump to latest").performClick()
+      composeRule.waitForIdle()
+      val restoredEnding = readerMarkerBounds(tail, speaker = "You")
+      assertTrue(
+        "The actual header Jump callback must reveal the prompt's ending",
+        restoredEnding.left >= viewport.left && restoredEnding.right <= viewport.right && restoredEnding.top >= viewport.top && restoredEnding.bottom <= viewport.bottom,
+      )
+      assertEquals(0f, transcript.fetchSemanticsNode().config[SemanticsProperties.VerticalScrollAxisRange].value(), 0f)
+      readerHeaderControl("Jump to latest").assertDoesNotExist()
+      assertEquals("Disclosure and Jump preserve the transcript viewport", viewport, transcript.getUnclippedBoundsInRoot())
     }
   }
 
@@ -2700,6 +2760,191 @@ class ChatComposerLayoutTest {
     attachment?.let { composeRule.onNodeWithText(it.fileName).assertIsDisplayed() }
   }
 
+  @Test
+  fun connectedEmptyChatDoesNotClaimGatewayOfflineWhileHealthIsPending() =
+    withConnectedUnreadyEmptyChat(rejectHealth = false) { _, _, _ ->
+      composeRule.onNodeWithText(nativeString("Gateway offline")).assertDoesNotExist()
+      composeRule.onNodeWithText(nativeString("Chat not ready")).assertIsDisplayed()
+      composeRule.onNodeWithText(nativeString("Use Refresh chat to check Gateway health.")).assertIsDisplayed()
+    }
+
+  @Test
+  fun connectedEmptyChatDoesNotClaimGatewayOfflineAfterHealthFails() =
+    withConnectedUnreadyEmptyChat(rejectHealth = true) { _, _, _ ->
+      composeRule.onNodeWithText(nativeString("Gateway offline")).assertDoesNotExist()
+      composeRule.onNodeWithText(nativeString("Chat not ready")).assertIsDisplayed()
+      composeRule.onNodeWithText(nativeString("Use Refresh chat to check Gateway health.")).assertIsDisplayed()
+    }
+
+  @Test
+  fun connectedChatWithFailedHealthQueuesAndSendsAfterRecovery() =
+    withConnectedUnreadyEmptyChat(rejectHealth = true) { model, sent, recover ->
+      val owner = model.captureChatShareOwner()
+      val message = "Readiness recovery control"
+      val editor = composeRule.onNode(hasSetTextAction())
+      editor.performTextReplacement(message)
+      composeRule.onNodeWithContentDescription(nativeString("Send")).assertIsEnabled().performClick()
+      composeRule.waitUntil {
+        composeRule.runOnIdle {
+          owner !in model.chatComposerState.sendStates.value &&
+            model.chatOutboxItems.value
+              .singleOrNull()
+              ?.status == ChatOutboxStatus.Queued
+        }
+      }
+      assertTrue(sent.isEmpty())
+      editor.assert(SemanticsMatcher.expectValue(SemanticsProperties.EditableText, AnnotatedString("")))
+      assertTrue(model.gatewayConnectionDisplay.value.isConnected)
+      assertFalse(model.chatHealthOk.value)
+      recover()
+      composeRule.waitUntil {
+        composeRule.runOnIdle { model.chatHealthOk.value && sent.isNotEmpty() }
+      }
+      assertEquals(listOf(JsonPrimitive(message)), sent.map { it["message"] })
+      assertTrue(model.gatewayConnectionDisplay.value.isConnected)
+    }
+
+  @Test
+  fun emptyChatLabelsFollowHealthRecoveryAndActualDisconnect() =
+    withConnectedUnreadyEmptyChat(rejectHealth = false) { model, _, recover ->
+      recover()
+      composeRule.waitUntil {
+        composeRule.runOnIdle {
+          model.gatewayConnectionDisplay.value.isConnected && model.chatHealthOk.value &&
+            !model.chatHistoryLoading.value && model.chatMessages.value.isEmpty()
+        }
+      }
+      composeRule.onNodeWithText(nativeString("Ready when you are")).assertIsDisplayed()
+      composeRule.onNodeWithText(nativeString("Start with a prompt, or use voice.")).assertIsDisplayed()
+      composeRule.onNodeWithText(nativeString("Gateway offline")).assertDoesNotExist()
+      composeRule.onNodeWithText(nativeString("Chat not ready")).assertDoesNotExist()
+      composeRule.runOnUiThread { model.disconnect() }
+      composeRule.waitUntil {
+        composeRule.runOnIdle {
+          !model.gatewayConnectionDisplay.value.isConnected && !model.isConnected.value &&
+            !model.chatHealthOk.value && model.chatMessages.value.isEmpty()
+        }
+      }
+      composeRule
+        .onNode(
+          hasText(nativeString("Gateway offline")) and
+            hasAnySibling(hasText(nativeString("Use the recovery options below to reconnect."))),
+        ).assertIsDisplayed()
+      composeRule.onNodeWithText(nativeString("Use the recovery options below to reconnect.")).assertIsDisplayed()
+      composeRule.onNodeWithText(nativeString("Chat not ready")).assertDoesNotExist()
+    }
+
+  private fun withConnectedUnreadyEmptyChat(
+    rejectHealth: Boolean,
+    assertions: (MainViewModel, ConcurrentLinkedQueue<JsonObject>, () -> Unit) -> Unit,
+  ) {
+    prefs.gatewayRegistry.upsert(
+      GatewayRegistryEntry(
+        stableId = AndroidScreenshotFixture.gatewayId,
+        kind = GatewayRegistryEntryKind.MANUAL,
+        name = "Test gateway",
+      ),
+    )
+    prefs.gatewayRegistry.setActive(AndroidScreenshotFixture.gatewayId)
+    val model = showChat(viewportHeight = { 720.dp })
+    val requestField = ChatController::class.java.getDeclaredField("requestGatewayForGateway").apply { isAccessible = true }
+
+    @Suppress("UNCHECKED_CAST")
+    val originalRequest = requestField.get(controller) as suspend (String, String, String?) -> String
+    val leaseField = ChatController::class.java.getDeclaredField("captureRequestLease").apply { isAccessible = true }
+
+    @Suppress("UNCHECKED_CAST")
+    val originalLease = leaseField.get(controller) as (ChatCacheScope?) -> GatewaySession.RequestLease?
+    val healthEntered = CompletableDeferred<Unit>()
+    val releaseHealth = CompletableDeferred<Unit>()
+    val healthFinished = CompletableDeferred<Unit>()
+    val failHealth = AtomicBoolean(rejectHealth)
+    val sent = ConcurrentLinkedQueue<JsonObject>()
+    val sessionKey = "agent:main:readiness-empty"
+    val request: suspend (String, String, String?) -> String = { gatewayId, method, params ->
+      when (method) {
+        "chat.history" -> {
+          """{"sessionId":"readiness-empty","messages":[]}"""
+        }
+
+        "question.list" -> {
+          """{"questions":[]}"""
+        }
+
+        "progressCard.get" -> {
+          """{"card":null}"""
+        }
+
+        "health" -> {
+          healthEntered.complete(Unit)
+          try {
+            releaseHealth.await()
+            check(!failHealth.get()) { "Synthetic health failure" }
+            originalRequest(gatewayId, method, params)
+          } finally {
+            healthFinished.complete(Unit)
+          }
+        }
+
+        "chat.send" -> {
+          val payload = Json.parseToJsonElement(requireNotNull(params)).jsonObject
+          sent.add(payload)
+          buildJsonObject {
+            put("runId", payload.getValue("idempotencyKey"))
+            put("status", JsonPrimitive("started"))
+          }.toString()
+        }
+
+        else -> {
+          originalRequest(gatewayId, method, params)
+        }
+      }
+    }
+    val captureLease: (ChatCacheScope?) -> GatewaySession.RequestLease? = { scope ->
+      originalLease(scope)?.let { lease ->
+        GatewaySession.RequestLease(
+          endpointStableId = lease.endpointStableId,
+          isCurrentImpl = lease::isCurrent,
+          commitIfCurrentImpl = lease::commitIfCurrent,
+        ) { method, params, timeout, withEnqueue ->
+          if (method == "health") {
+            withEnqueue {}
+            request(lease.endpointStableId, method, params)
+          } else {
+            lease.request(method, params, timeout, withEnqueue)
+          }
+        }
+      }
+    }
+    try {
+      requestField.set(controller, request)
+      leaseField.set(controller, captureLease)
+      if (rejectHealth) releaseHealth.complete(Unit)
+      composeRule.runOnUiThread { controller.load(sessionKey, ownerAgentId = "main") }
+      composeRule.waitUntil {
+        composeRule.runOnIdle {
+          healthEntered.isCompleted && (!rejectHealth || healthFinished.isCompleted) &&
+            model.gatewayConnectionDisplay.value.isConnected && model.isConnected.value &&
+            model.chatSessionKey.value == sessionKey && !model.chatHistoryLoading.value &&
+            model.chatMessages.value.isEmpty() && !model.chatHealthOk.value &&
+            model.pendingRunCount.value == 0 && model.chatOutboxItems.value.isEmpty()
+        }
+      }
+      assertEquals(!rejectHealth, !healthFinished.isCompleted)
+      assertTrue(controller.isCurrentComposerOwner(model.captureChatShareOwner()))
+      println("CHAT_READINESS connected=true historyComplete=true rows=0 health=false healthFinished=${healthFinished.isCompleted}")
+      assertions(model, sent) {
+        failHealth.set(false)
+        releaseHealth.complete(Unit)
+        composeRule.runOnUiThread { controller.refresh() }
+      }
+    } finally {
+      releaseHealth.complete(Unit)
+      leaseField.set(controller, originalLease)
+      requestField.set(controller, originalRequest)
+    }
+  }
+
   private fun withReaderHistory(
     assistantCount: Int,
     assistantText: (Int) -> String = { "Reader answer ${it + 1}" },
@@ -2711,10 +2956,11 @@ class ChatComposerLayoutTest {
     displayFeatures: (() -> List<DisplayFeature>)? = null,
     additionalAssistantMessages: () -> List<String> = { emptyList() },
     onRequest: (String) -> Unit = {},
+    userText: String = "Reader prompt",
     assertions: (MainViewModel) -> Unit,
   ) {
     val sessionKey = "agent:main:reader-history"
-    val texts = listOf("Reader prompt") + List(assistantCount, assistantText)
+    val texts = listOf(userText) + List(assistantCount, assistantText)
 
     fun history() =
       buildJsonObject {
@@ -2778,10 +3024,13 @@ class ChatComposerLayoutTest {
     }
   }
 
-  private fun readerMarkerBounds(marker: String): DpRect {
+  private fun readerMarkerBounds(
+    marker: String,
+    speaker: String = "OpenClaw",
+  ): DpRect {
     val target =
       composeRule.onNode(
-        hasText(marker) and hasAnyAncestor(hasContentDescription(nativeString("OpenClaw"))),
+        hasText(marker) and hasAnyAncestor(hasContentDescription(nativeString(speaker))),
         useUnmergedTree = true,
       )
     val layouts = mutableListOf<TextLayoutResult>()

@@ -7,6 +7,7 @@ type CloudWorkerConfigPatch = { patch: Record<string, unknown>; replacePaths: st
 export type CloudWorkerProfileDraft = {
   id: string;
   backend: string;
+  target: string;
   machineClass: string;
   ttl: string;
   idleTimeout: string;
@@ -20,6 +21,7 @@ export type ConfiguredCloudWorkerProfile = {
   providerId: string;
   install: "bundle" | "npm";
   backend: string;
+  target: string;
   machineClass: string;
   ttl: string;
   idleTimeout: string;
@@ -33,6 +35,7 @@ export type CloudWorkerDraftError =
   | "profileExists"
   | "profileMissing"
   | "backend"
+  | "target"
   | "machineClass"
   | "ttl"
   | "idleTimeout"
@@ -76,6 +79,7 @@ export function readCloudWorkerProfiles(
           providerId: normalizeOptionalString(raw.provider) ?? "",
           install: raw.install === "npm" ? "npm" : "bundle",
           backend: stringSetting(settings, "provider"),
+          target: stringSetting(settings, "target"),
           machineClass: stringSetting(settings, "class"),
           ttl: stringSetting(settings, "ttl"),
           idleTimeout: stringSetting(settings, "idleTimeout"),
@@ -94,6 +98,7 @@ export function createCloudWorkerDraft(
   return {
     id: profile?.id ?? "",
     backend: profile?.backend ?? "",
+    target: profile?.target ?? "",
     machineClass: profile?.machineClass ?? "",
     ttl: profile?.ttl || "8h",
     idleTimeout: profile?.idleTimeout || "45m",
@@ -120,6 +125,9 @@ export function validateCloudWorkerDraft(
   }
   if (!draft.backend.trim()) {
     return "backend";
+  }
+  if (draft.target !== draft.target.trim() || draft.target.length > 64) {
+    return "target";
   }
   const machineClass = draft.machineClass.trim();
   if (!machineClass || machineClass.length > 128) {
@@ -165,6 +173,7 @@ export function buildCloudWorkerUpsertPatch(
   // Omitted settings merge in place; resending opaque nulls would delete them.
   const settings = {
     provider: draft.backend.trim(),
+    target: draft.target || null,
     class: draft.machineClass.trim(),
     ttl: draft.ttl.trim(),
     idleTimeout: draft.idleTimeout.trim(),
@@ -221,7 +230,7 @@ export function buildCloudWorkerDeletePatch(
 
 export function cloudWorkerProfileStatus(
   profileId: string,
-  advertisedIds: ReadonlySet<string>,
+  advertisedIds: ReadonlySet<string> | ReadonlyMap<string, unknown>,
   catalogLoaded: boolean,
 ): CloudWorkerProfileStatus {
   if (!catalogLoaded) {

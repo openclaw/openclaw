@@ -139,9 +139,11 @@ describe("prepared model catalog worker plugin scope", () => {
         } = await projectSnapshot(params?.readOnly === false);
         return snapshot;
       };
+    let published = await projectSnapshot(false);
     registerGatewayModelCatalogPrivateAccess(loadGatewayModelCatalogSnapshot, {
-      loadDeferred: async (params) => await projectSnapshot(params?.readOnly === false),
-      readPrepared: async () => await projectSnapshot(false),
+      loadDeferred: async (params) =>
+        (published = await projectSnapshot(params?.readOnly === false)),
+      readPrepared: async () => published,
     });
     const respond = vi.fn();
     const context = Object.assign({} as GatewayRequestContext, {
@@ -153,8 +155,13 @@ describe("prepared model catalog worker plugin scope", () => {
       modelsHandlers["models.list"],
       'modelsHandlers["models.list"] test invariant',
     )({
-      req: { type: "req", id: "models-list-worker-scope", method: "models.list", params: {} },
-      params: { view: "all" },
+      req: {
+        type: "req",
+        id: "models-list-worker-scope",
+        method: "models.list",
+        params: { view: "all", refresh: true },
+      },
+      params: { view: "all", refresh: true },
       respond: respond as RespondFn,
       client: null,
       isWebchatConnect: () => false,

@@ -11,7 +11,7 @@ import {
   normalizeModelCompat,
 } from "openclaw/plugin-sdk/provider-model-shared";
 import { buildProviderToolCompatFamilyHooks } from "openclaw/plugin-sdk/provider-tools";
-import { applyFeatherlessConfig, FEATHERLESS_DEFAULT_MODEL_REF } from "./onboard.js";
+import { applyFeatherlessConnectionConfig, FEATHERLESS_DEFAULT_MODEL_REF } from "./onboard.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 import {
   FEATHERLESS_BASE_URL,
@@ -81,7 +81,7 @@ export default defineSingleProviderPluginEntry({
     docsPath: "/providers/featherless",
     manifestAuth: {
       defaultModel: FEATHERLESS_DEFAULT_MODEL_REF,
-      applyConfig: applyFeatherlessConfig,
+      applyConfig: applyFeatherlessConnectionConfig,
       noteTitle: "Featherless AI",
       noteMessage: [
         "Featherless AI serves open models through an OpenAI-compatible API.",

@@ -399,6 +399,17 @@ With `--json`, stdout contains one JSON document. Doctor panels and other
 diagnostics go to stderr, so stdout can be parsed directly. Failed doctor or
 plugin finalization steps still exit non-zero.
 
+Doctor repair uses the same enabled-plugin and default-check selection as
+ordinary Doctor lint. Opt-in checks, including the managed Codex version probe,
+do not run during routine finalization. Explicit candidate checks still run
+when requested with `doctor --lint --only codex/managed-app-server`.
+The version probe has a five-second deadline, terminates its process group
+where supported, and bounds output draining when a descendant retains a pipe.
+A timed-out probe cannot be accepted merely because its direct child exited
+successfully. Nonfatal Doctor warnings appear in `postUpdate.doctor.warnings`;
+finalization reports `status: "warning"` and exits successfully when no other
+step fails. Codex runtime readiness remains owned by its plugin after restart.
+
 Finalization (including the supervisor-facing `update finalize` command) records
 phase starts and finishes immediately on stderr and in the update run ledger.
 The defaults are 30 seconds for preflight admission, config validation, config backup, and completion
@@ -415,6 +426,14 @@ remains alive ten seconds after its terminal JSON, stderr and the ledger
 record active resource types and unsettled disposer names, then the process
 exits with its recorded outcome. A retained handle cannot withhold the
 supervisor's result indefinitely.
+Both stall diagnostics also include `childProcesses`: up to eight descendant
+processes with `pid`, `parentPid`, and an executable name (`command`). Arguments,
+environment values, and executable paths are omitted. `childProcessesTruncated`
+indicates omitted entries; `childProcessInspection: "unavailable"` means the
+process list could not be read. A null `command` means that process's executable
+name was unavailable. Inspection runs only after a stall and adds at
+most one second to the exit bound. Phase-failure JSON includes the same fields.
+Preserve these diagnostics and the phase receipts when reporting a blocked child.
 Human repair can still wait for a recovery choice or repair agent; its exit grace
 starts after recovery finishes. Completion-cache refresh remains best effort
 when its child can be stopped within the phase budget. A phase that exceeds its

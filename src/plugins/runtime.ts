@@ -1,6 +1,7 @@
 // Coordinates active plugin runtime registries and event hooks.
 import { onAgentEvent } from "../infra/agent-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import {
@@ -19,7 +20,9 @@ import { markPluginRegistryActive, markPluginRegistryRetired } from "./registry-
 import type { PluginRegistry } from "./registry-types.js";
 import { getActivePluginChannelRegistrySnapshotFromState } from "./runtime-channel-state.js";
 import { PLUGIN_REGISTRY_STATE, type RegistryState } from "./runtime-state.js";
-import { getPluginRuntimeGatewayRequestScope } from "./runtime/gateway-request-scope.js";
+import { getPluginRegistryForContext } from "./runtime/gateway-request-scope.js";
+
+export { getPluginRegistryForContext };
 
 const log = createSubsystemLogger("plugins/runtime");
 
@@ -264,15 +267,6 @@ export function getActivePluginRegistryWorkspaceDir(): string | undefined {
   return state.workspaceDir ?? undefined;
 }
 
-/** Reads registration/request/active registry precedence without initializing a cold runtime. */
-export function getPluginRegistryForContext(): PluginRegistry | null {
-  return (
-    state.registrationContext?.registry ??
-    getPluginRuntimeGatewayRequestScope()?.pluginRegistry ??
-    getActivePluginRegistry()
-  );
-}
-
 export function requireActivePluginRegistry(): PluginRegistry {
   const registry = getPluginRegistryForContext();
   if (registry) {
@@ -431,14 +425,17 @@ export async function clearActivePluginRegistry(): Promise<void> {
   const completion = previousTail
     .catch(() => undefined)
     .then(async () => {
+      const cleanupWork = new AsyncWorkScope();
       try {
         if (previousRegistry) {
           await waitForPluginCommandExecutions(previousRegistry);
           if (registryHasPluginHostCleanupWork(previousRegistry)) {
-            await cleanupPreviousPluginHostRegistry({ previousRegistry });
+            await cleanupWork.track(() => cleanupPreviousPluginHostRegistry({ previousRegistry }));
           }
         }
       } finally {
+        // A cleanup timeout advances other hooks, but its actual descendants still own state.
+        await cleanupWork.drain();
         // A handler-triggered clear may publish a successor before its own drain settles.
         // Never let the retired generation's tail erase that successor's host state.
         if (state.activeRegistry === null && state.activeVersion === clearVersion) {

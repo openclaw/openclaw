@@ -880,10 +880,13 @@ wa-switch {
   --wa-color-focus: var(--ring);
 }
 
-/* Web Awesome dropdown items ship `cursor: pointer` on their shadow host.
+/* Keep neutral menu hover, keyboard focus, and open submenus on the active theme.
+   Web Awesome dropdown items ship `cursor: pointer` on their shadow host.
    Document rules beat `:host`, so route them through the policy here — and
    re-add the disabled cue this override would otherwise clobber. */
 wa-dropdown-item {
+  --wa-color-neutral-fill-normal: var(--bg-hover);
+
   cursor: var(--cursor-action);
 }
 

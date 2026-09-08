@@ -6,6 +6,7 @@ import { normalizeOptionalString, uniqueStrings } from "openclaw/plugin-sdk/stri
 import { Type } from "typebox";
 import type { OpenClawPluginApi } from "../runtime-api.js";
 import { resolveConfiguredHttpTimeoutMs } from "./client-timeout.js";
+import { createFeishuClient } from "./client.js";
 import { FeishuDocSchema, type FeishuDocParams } from "./doc-schema.js";
 import { BATCH_SIZE, insertBlocksInBatches } from "./docx-batch-insert.js";
 import { updateColorText } from "./docx-color-text.js";
@@ -1158,211 +1159,180 @@ async function listAppScopes(client: Lark.Client) {
 // ============ Tool Registration ============
 
 export function registerFeishuDocTools(api: OpenClawPluginApi) {
-  if (!api.config) {
-    return;
-  }
-
-  // Register if enabled on any account; account routing is resolved per execution.
-  const toolsCfg = resolveAnyEnabledFeishuToolsConfig(api.config);
-
   type FeishuDocExecuteParams = FeishuDocParams & { accountId?: string };
 
-  const getClient = (params: { accountId?: string } | undefined, defaultAccountId?: string) =>
-    createFeishuToolClient({
-      api,
-      executeParams: params,
-      defaultAccountId,
-      requiredTool: { family: "doc", label: "Doc" },
-    });
-
-  const getMediaMaxBytes = (
-    params: { accountId?: string } | undefined,
-    defaultAccountId?: string,
-  ) =>
-    (resolveFeishuToolAccount({
-      api,
-      executeParams: params,
-      defaultAccountId,
-      requiredTool: { family: "doc", label: "Doc" },
-    }).config?.mediaMaxMb ?? 30) *
-    1024 *
-    1024;
-
-  const getImageReadTimeoutMs = (
-    params: { accountId?: string } | undefined,
-    defaultAccountId?: string,
-  ) =>
-    resolveConfiguredHttpTimeoutMs(
-      resolveFeishuToolAccount({
-        api,
-        executeParams: params,
-        defaultAccountId,
-        requiredTool: { family: "doc", label: "Doc" },
-      }),
-    );
-
-  // Main document tool with action-based dispatch
-  if (toolsCfg.doc) {
-    api.registerTool(
-      (ctx) => {
-        const defaultAccountId = ctx.agentAccountId;
-        const mediaLocalRoots = resolveDocToolLocalRoots(ctx);
-        const trustedRequesterOpenId =
-          ctx.messageChannel === "feishu"
-            ? normalizeOptionalString(ctx.requesterSenderId)
-            : undefined;
-        return {
-          name: "feishu_doc",
-          resultContentSource: "network",
-          label: "Feishu Doc",
-          description:
-            "Feishu document operations. Actions: read, write, append, insert, create, list_blocks, get_block, update_block, delete_block, create_table, write_table_cells, create_table_with_values, insert_table_row, insert_table_column, delete_table_rows, delete_table_columns, merge_table_cells, upload_image, upload_file, color_text",
-          parameters: FeishuDocSchema,
-          async execute(_toolCallId, params) {
-            const p = params as FeishuDocExecuteParams;
-            try {
-              // Feishu creates title-only docs; flattened tool schemas can still expose
-              // sibling `content`, so reject it before creating an empty document.
-              if (p.action === "create" && Object.hasOwn(p, "content")) {
-                return json({
-                  error:
-                    'Feishu document creation does not support content. Call action "create" first, then call action "write" with the returned document_id as doc_token.',
-                });
-              }
-              const client = getClient(p, defaultAccountId);
-              switch (p.action) {
-                case "read":
-                  return json(await readDoc(client, p.doc_token));
-                case "write":
-                  return json(
-                    await writeDoc(
-                      client,
-                      p.doc_token,
-                      p.content,
-                      getMediaMaxBytes(p, defaultAccountId),
-                      getImageReadTimeoutMs(p, defaultAccountId),
-                      api.logger,
-                    ),
-                  );
-                case "append":
-                  return json(
-                    await appendDoc(
-                      client,
-                      p.doc_token,
-                      p.content,
-                      getMediaMaxBytes(p, defaultAccountId),
-                      getImageReadTimeoutMs(p, defaultAccountId),
-                      api.logger,
-                    ),
-                  );
-                case "insert":
-                  return json(
-                    await insertDoc(
-                      client,
-                      p.doc_token,
-                      p.content,
-                      p.after_block_id,
-                      getMediaMaxBytes(p, defaultAccountId),
-                      getImageReadTimeoutMs(p, defaultAccountId),
-                      api.logger,
-                    ),
-                  );
-                case "create":
-                  return json(
-                    await createDoc(client, p.title, p.folder_token, {
-                      grantToRequester: p.grant_to_requester,
-                      requesterOpenId: trustedRequesterOpenId,
-                    }),
-                  );
-                case "list_blocks":
-                  return json(await listBlocks(client, p.doc_token));
-                case "get_block":
-                  return json(await getBlock(client, p.doc_token, p.block_id));
-                case "update_block":
-                  return json(await updateBlock(client, p.doc_token, p.block_id, p.content));
-                case "delete_block":
-                  return json(await deleteBlock(client, p.doc_token, p.block_id));
-                case "create_table":
-                  return json(
-                    await createTable(
-                      client,
-                      p.doc_token,
-                      p.row_size,
-                      p.column_size,
-                      p.parent_block_id,
-                      p.column_width,
-                    ),
-                  );
-                case "write_table_cells":
-                  return json(
-                    await writeTableCells(client, p.doc_token, p.table_block_id, p.values),
-                  );
-                case "create_table_with_values":
-                  return json(
-                    await createTableWithValues(
-                      client,
-                      p.doc_token,
-                      p.row_size,
-                      p.column_size,
-                      p.values,
-                      p.parent_block_id,
-                      p.column_width,
-                    ),
-                  );
-                case "upload_image":
-                  return json(
-                    await uploadImageBlock(
-                      client,
-                      p.doc_token,
-                      getMediaMaxBytes(p, defaultAccountId),
-                      getImageReadTimeoutMs(p, defaultAccountId),
-                      mediaLocalRoots,
-                      p.url,
-                      p.file_path,
-                      p.parent_block_id,
-                      p.filename,
-                      p.index,
-                      p.image, // data URI or plain base64
-                    ),
-                  );
-                case "upload_file":
-                  return json(
-                    await uploadFileBlock(
-                      client,
-                      p.doc_token,
-                      getMediaMaxBytes(p, defaultAccountId),
-                      mediaLocalRoots,
-                      p.url,
-                      p.file_path,
-                      p.parent_block_id,
-                      p.filename,
-                    ),
-                  );
-                case "color_text":
-                  return json(await updateColorText(client, p.doc_token, p.block_id, p.content));
-                case "insert_table_row":
-                case "insert_table_column":
-                case "delete_table_rows":
-                case "delete_table_columns":
-                case "merge_table_cells":
-                  return json(await patchTable(client, p));
-                default:
-                  return json({ error: "Unknown action" });
-              }
-            } catch (err) {
-              return json({ error: formatErrorMessage(err) });
+  api.registerTool(
+    (ctx) => {
+      const cfg = ctx.runtimeConfig ?? ctx.config ?? api.config;
+      if (!cfg || !resolveAnyEnabledFeishuToolsConfig(cfg).doc) {
+        return null;
+      }
+      const defaultAccountId = ctx.agentAccountId;
+      const mediaLocalRoots = resolveDocToolLocalRoots(ctx);
+      const trustedRequesterOpenId =
+        ctx.messageChannel === "feishu"
+          ? normalizeOptionalString(ctx.requesterSenderId)
+          : undefined;
+      return {
+        name: "feishu_doc",
+        resultContentSource: "network",
+        label: "Feishu Doc",
+        description:
+          "Feishu document operations. Actions: read, write, append, insert, create, list_blocks, get_block, update_block, delete_block, create_table, write_table_cells, create_table_with_values, insert_table_row, insert_table_column, delete_table_rows, delete_table_columns, merge_table_cells, upload_image, upload_file, color_text",
+        parameters: FeishuDocSchema,
+        async execute(_toolCallId, params) {
+          const p = params as FeishuDocExecuteParams;
+          try {
+            // Feishu creates title-only docs; flattened tool schemas can still expose
+            // sibling `content`, so reject it before creating an empty document.
+            if (p.action === "create" && Object.hasOwn(p, "content")) {
+              return json({
+                error:
+                  'Feishu document creation does not support content. Call action "create" first, then call action "write" with the returned document_id as doc_token.',
+              });
             }
-          },
-        };
-      },
-      { name: "feishu_doc" },
-    );
-  }
+            const account = resolveFeishuToolAccount({
+              cfg,
+              executeParams: p,
+              defaultAccountId,
+              requiredTool: { family: "doc", label: "Doc" },
+            });
+            const client = createFeishuClient(account);
+            const mediaMaxBytes = (account.config.mediaMaxMb ?? 30) * 1024 * 1024;
+            const imageReadTimeoutMs = resolveConfiguredHttpTimeoutMs(account);
+            switch (p.action) {
+              case "read":
+                return json(await readDoc(client, p.doc_token));
+              case "write":
+                return json(
+                  await writeDoc(
+                    client,
+                    p.doc_token,
+                    p.content,
+                    mediaMaxBytes,
+                    imageReadTimeoutMs,
+                    api.logger,
+                  ),
+                );
+              case "append":
+                return json(
+                  await appendDoc(
+                    client,
+                    p.doc_token,
+                    p.content,
+                    mediaMaxBytes,
+                    imageReadTimeoutMs,
+                    api.logger,
+                  ),
+                );
+              case "insert":
+                return json(
+                  await insertDoc(
+                    client,
+                    p.doc_token,
+                    p.content,
+                    p.after_block_id,
+                    mediaMaxBytes,
+                    imageReadTimeoutMs,
+                    api.logger,
+                  ),
+                );
+              case "create":
+                return json(
+                  await createDoc(client, p.title, p.folder_token, {
+                    grantToRequester: p.grant_to_requester,
+                    requesterOpenId: trustedRequesterOpenId,
+                  }),
+                );
+              case "list_blocks":
+                return json(await listBlocks(client, p.doc_token));
+              case "get_block":
+                return json(await getBlock(client, p.doc_token, p.block_id));
+              case "update_block":
+                return json(await updateBlock(client, p.doc_token, p.block_id, p.content));
+              case "delete_block":
+                return json(await deleteBlock(client, p.doc_token, p.block_id));
+              case "create_table":
+                return json(
+                  await createTable(
+                    client,
+                    p.doc_token,
+                    p.row_size,
+                    p.column_size,
+                    p.parent_block_id,
+                    p.column_width,
+                  ),
+                );
+              case "write_table_cells":
+                return json(await writeTableCells(client, p.doc_token, p.table_block_id, p.values));
+              case "create_table_with_values":
+                return json(
+                  await createTableWithValues(
+                    client,
+                    p.doc_token,
+                    p.row_size,
+                    p.column_size,
+                    p.values,
+                    p.parent_block_id,
+                    p.column_width,
+                  ),
+                );
+              case "upload_image":
+                return json(
+                  await uploadImageBlock(
+                    client,
+                    p.doc_token,
+                    mediaMaxBytes,
+                    imageReadTimeoutMs,
+                    mediaLocalRoots,
+                    p.url,
+                    p.file_path,
+                    p.parent_block_id,
+                    p.filename,
+                    p.index,
+                    p.image, // data URI or plain base64
+                  ),
+                );
+              case "upload_file":
+                return json(
+                  await uploadFileBlock(
+                    client,
+                    p.doc_token,
+                    mediaMaxBytes,
+                    mediaLocalRoots,
+                    p.url,
+                    p.file_path,
+                    p.parent_block_id,
+                    p.filename,
+                  ),
+                );
+              case "color_text":
+                return json(await updateColorText(client, p.doc_token, p.block_id, p.content));
+              case "insert_table_row":
+              case "insert_table_column":
+              case "delete_table_rows":
+              case "delete_table_columns":
+              case "merge_table_cells":
+                return json(await patchTable(client, p));
+              default:
+                return json({ error: "Unknown action" });
+            }
+          } catch (err) {
+            return json({ error: formatErrorMessage(err) });
+          }
+        },
+      };
+    },
+    { name: "feishu_doc" },
+  );
 
-  // Keep feishu_app_scopes as independent tool
-  if (toolsCfg.scopes) {
-    api.registerTool(
-      (ctx) => ({
+  api.registerTool(
+    (ctx) => {
+      const cfg = ctx.runtimeConfig ?? ctx.config ?? api.config;
+      if (!cfg || !resolveAnyEnabledFeishuToolsConfig(cfg).scopes) {
+        return null;
+      }
+      return {
         name: "feishu_app_scopes",
         resultContentSource: "network",
         label: "Feishu App Scopes",
@@ -1373,7 +1343,7 @@ export function registerFeishuDocTools(api: OpenClawPluginApi) {
           try {
             const result = await listAppScopes(
               createFeishuToolClient({
-                api,
+                cfg,
                 defaultAccountId: ctx.agentAccountId,
                 requiredTool: { family: "scopes", label: "App Scopes" },
               }),
@@ -1383,9 +1353,9 @@ export function registerFeishuDocTools(api: OpenClawPluginApi) {
             return json({ error: formatErrorMessage(err) });
           }
         },
-      }),
-      { name: "feishu_app_scopes" },
-    );
-  }
+      };
+    },
+    { name: "feishu_app_scopes" },
+  );
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

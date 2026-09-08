@@ -5,6 +5,7 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
+import { createApiKeyCredential, oauthCred } from "./credential-fixtures.test-support.js";
 import {
   isSafeOAuthOwnerRefreshResult,
   isSafeOAuthPostClaimSettlement,
@@ -83,11 +84,7 @@ describe("overlayRuntimeExternalOAuthProfiles", () => {
     const store: AuthProfileStore = {
       version: 1,
       profiles: {
-        "openai:default": {
-          type: "api_key",
-          provider: "openai",
-          key: "sk-test",
-        },
+        "openai:default": createApiKeyCredential("openai", "sk-test"),
       },
       order: {
         openai: ["openai:default"],
@@ -98,13 +95,12 @@ describe("overlayRuntimeExternalOAuthProfiles", () => {
       const overlaid = overlayRuntimeExternalOAuthProfiles(store, [
         {
           profileId: "openai:default",
-          credential: {
-            type: "oauth",
+          credential: oauthCred({
             provider: "openai",
             access: "access-1",
             refresh: "refresh-1",
             expires: Date.now() + 60_000,
-          },
+          }),
         },
       ]);
 
@@ -135,33 +131,30 @@ describe("overlayRuntimeExternalOAuthProfiles", () => {
       version: 1,
       runtimeExternalProfileIds: ["minimax:minimax-cli"],
       profiles: {
-        "anthropic:claude-cli": {
-          type: "oauth",
+        "anthropic:claude-cli": oauthCred({
           provider: "anthropic",
           access: "old-access",
           refresh: "old-refresh",
           expires: 1,
-        },
-        "minimax:minimax-cli": {
-          type: "oauth",
+        }),
+        "minimax:minimax-cli": oauthCred({
           provider: "minimax-portal",
           access: "minimax-access",
           refresh: "minimax-refresh",
           expires: 1,
-        },
+        }),
       },
     };
 
     const overlaid = overlayRuntimeExternalOAuthProfiles(store, [
       {
         profileId: "anthropic:claude-cli",
-        credential: {
-          type: "oauth",
+        credential: oauthCred({
           provider: "anthropic",
           access: "new-access",
           refresh: "new-refresh",
           expires: 2,
-        },
+        }),
       },
     ]);
 
@@ -177,13 +170,12 @@ describe("overlayRuntimeExternalOAuthProfiles", () => {
       runtimeExternalProfileIds: ["minimax:minimax-cli"],
       runtimeExternalProfileIdsAuthoritative: true,
       profiles: {
-        "minimax:minimax-cli": {
-          type: "oauth",
+        "minimax:minimax-cli": oauthCred({
           provider: "minimax-portal",
           access: "minimax-access",
           refresh: "minimax-refresh",
           expires: 1,
-        },
+        }),
       },
     };
 
@@ -200,13 +192,12 @@ describe("overlayRuntimeExternalOAuthProfiles", () => {
       version: 1,
       runtimePersistedProfileIds: ["openai:default"],
       profiles: {
-        "openai:default": {
-          type: "oauth",
+        "openai:default": oauthCred({
           provider: "openai",
           access: "persisted-access",
           refresh: "persisted-refresh",
           expires: 1,
-        },
+        }),
       },
     };
 
@@ -214,13 +205,12 @@ describe("overlayRuntimeExternalOAuthProfiles", () => {
       {
         profileId: "openai:default",
         persistence: "persisted",
-        credential: {
-          type: "oauth",
+        credential: oauthCred({
           provider: "openai",
           access: "external-access",
           refresh: "external-refresh",
           expires: 2,
-        },
+        }),
       },
     ]);
 

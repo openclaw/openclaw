@@ -127,6 +127,7 @@ export type {
   WorkerLease,
   WorkerLeaseStatus,
   WorkerMachineOption,
+  WorkerOperatingSystem,
   WorkerProfile,
   WorkerProvider,
   WorkerSshEndpoint,

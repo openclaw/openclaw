@@ -120,7 +120,10 @@ export function resolveChangedDockerSeedLanes(changedPaths: string[]) {
     if (normalizedPath.startsWith("scripts/e2e/lib/fleet-cache/")) {
       selected.add("fleet-cache");
     }
-    if (PUBLISHED_UPGRADE_OWNER_RE.test(normalizedPath)) {
+    if (
+      PUBLISHED_UPGRADE_OWNER_RE.test(normalizedPath) &&
+      (!normalizedPath.startsWith("src/") || !isTestOnlyPath(normalizedPath))
+    ) {
       selected.add("published-upgrade-survivor");
     }
     for (const lane of DOCKER_SEED_LANES_BY_PATH[normalizedPath] ?? []) {

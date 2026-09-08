@@ -843,6 +843,11 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
       const run = f.run(false, f.repo, method);
       expect(run.status, run.output).toBe(0);
       const state = f.state();
+      const submissions = state.calls.filter((call) => call[1] === "pr" && call[2] === "merge");
+      expect(submissions).toHaveLength(1);
+      expect(
+        submissions[0]?.filter((arg) => ["--squash", "--merge", "--rebase"].includes(arg)),
+      ).toEqual([`--${method}`]);
       const landed = state.pr.mergeCommit!.oid;
       expect(state.observationReads).toBe(5);
       expect(state.mainAdvances).toHaveLength(2);
