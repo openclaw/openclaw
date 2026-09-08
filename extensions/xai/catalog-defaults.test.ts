@@ -121,3 +121,50 @@ it.each([
     expect(result.provider.models.some((model) => model.id === "auto")).toBe(false);
   },
 );
+
+it.each([
+  { name: "an existing selection", primary: "xai/grok-4.5", expected: "xai/grok-4.5" },
+  { name: "a fresh selection", primary: undefined, expected: "xai/grok-4.6" },
+])("applies registered API-key setup with $name", async ({ primary, expected }) => {
+  const provider = await registerSingleProviderPlugin(plugin);
+  const method = provider.auth.find((entry) => entry.id === "api-key");
+  if (!method?.runNonInteractive) {
+    throw new Error("expected the registered non-interactive xAI API-key method");
+  }
+  const config: OpenClawConfig = {
+    agents: {
+      defaults: {
+        model: {
+          ...(primary ? { primary } : {}),
+          fallbacks: ["xai/grok-4.3", "xai/grok-build-0.1"],
+        },
+        models: { "xai/grok-4.5": { alias: "Pinned", params: { temperature: 0.7 } } },
+      },
+    },
+  };
+  const result = await method.runNonInteractive({
+    authChoice: "xai-api-key",
+    config,
+    baseConfig: config,
+    opts: {},
+    runtime: {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: (code) => {
+        throw new Error("Unexpected setup exit: " + code);
+      },
+    },
+    resolveApiKey: async () => ({ key: "synthetic-existing-profile", source: "profile" }),
+    toApiKeyCredential: () => {
+      throw new Error("Existing profile must not be rewritten");
+    },
+  });
+  expect(result?.agents?.defaults?.model).toEqual({
+    primary: expected,
+    fallbacks: ["xai/grok-4.3", "xai/grok-build-0.1"],
+  });
+  expect(result?.agents?.defaults?.models?.["xai/grok-4.5"]).toEqual({
+    alias: "Pinned",
+    params: { temperature: 0.7 },
+  });
+});

@@ -196,6 +196,7 @@ export default defineSingleProviderPluginEntry({
         envVar: "XAI_API_KEY",
         promptMessage: "Enter xAI API key",
         defaultModel: XAI_DEFAULT_MODEL_REF,
+        preserveExistingPrimary: true,
         applyConfig: (cfg) => applyXaiConfig(cfg),
         wizard: {
           groupLabel: "xAI (Grok)",
