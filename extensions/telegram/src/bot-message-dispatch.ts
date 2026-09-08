@@ -198,19 +198,16 @@ async function prepareTelegramSticker(params: {
   const formattedDescription = `[Sticker${stickerContext ? ` ${stickerContext}` : ""}] ${description}`;
   sticker.cachedDescription = description;
   if (!stickerSupportsVision) {
-    const isCaptionlessSticker =
-      !context.ctxPayload.RawBody?.trim() && context.ctxPayload.StickerMediaIncluded === true;
     context.ctxPayload.Body = includeStickerDescription({
       body: context.ctxPayload.Body,
       formattedDescription,
     });
-    context.ctxPayload.BodyForAgent =
-      isCaptionlessSticker && !context.ctxPayload.BodyForAgent?.trim()
-        ? formattedDescription
-        : includeStickerDescription({
-            body: context.ctxPayload.BodyForAgent,
-            formattedDescription,
-          });
+    // Reply finalization projects BodyForAgent from the canonical agent text.
+    context.ctxPayload.agentText = includeStickerDescription({
+      body: context.ctxPayload.agentText ?? context.ctxPayload.BodyForAgent,
+      formattedDescription,
+    });
+    context.ctxPayload.BodyForAgent = context.ctxPayload.agentText;
     context.ctxPayload.SkipStickerMediaUnderstanding = true;
   }
   cacheSticker({
