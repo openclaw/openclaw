@@ -24,6 +24,8 @@ export async function runGatewayServicesHealth(ctx: DoctorHealthFlowContext): Pr
   if (ctx.gatewayMaintenanceActive) {
     return;
   }
+  const { noteMacForeignLaunchdJobs } = await import("../commands/doctor-foreign-launchd-jobs.js");
+  await noteMacForeignLaunchdJobs(ctx.options, ctx.runtime, ctx.env ?? process.env);
   if (!isDefaultInstallIdentity(ctx.env ?? process.env)) {
     note(NON_DEFAULT_INSTALL_SERVICE_SKIP_REASON, "Gateway");
     return;

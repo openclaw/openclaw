@@ -490,6 +490,48 @@ describe("printDaemonStatus", () => {
     expectMockLineContains(runtime.error, "wsl hint");
   });
 
+  it.each([false, true])("prints foreign launchd jobs and correlation with json=%s", (json) => {
+    const job = {
+      label: "ai.openclaw.test.w15.restart",
+      program: "/tmp/openclaw-test/restart.sh",
+      keepAlive: true,
+      gatewayActions: ["restart" as const],
+      safeToRemove: true,
+    };
+    const forcedRestartSummary = { count: 3, windowMs: 600_000 };
+    printDaemonStatus(
+      {
+        service: {
+          label: "LaunchAgent",
+          loadState: { status: "loaded" },
+          loadedText: "loaded",
+          notLoadedText: "not loaded",
+          runtime: { status: "running", pid: 8000 },
+          foreignLaunchdJobs: [job],
+          forcedRestartSummary,
+        },
+        extraServices: [],
+      },
+      { json },
+    );
+
+    if (json) {
+      expect(runtime.writeJson).toHaveBeenCalledWith(
+        expect.objectContaining({
+          service: expect.objectContaining({ foreignLaunchdJobs: [job], forcedRestartSummary }),
+        }),
+      );
+    } else {
+      expectMockLineContains(runtime.error, "Foreign launchd jobs detected");
+      expectMockLineContains(runtime.error, job.label);
+      expectMockLineContains(runtime.error, job.program);
+      expectMockLineContains(runtime.error, "keepalive=true");
+      expectMockLineContains(runtime.error, "Gateway lifecycle=restart");
+      expectMockLineContains(runtime.error, "3 external forced Gateway restart(s)");
+      expectMockLineContains(runtime.error, formatCliCommand("openclaw doctor --fix"));
+    }
+  });
+
   it("prints stale updater launchd job guidance", () => {
     printDaemonStatus(
       {

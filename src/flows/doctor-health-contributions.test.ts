@@ -398,6 +398,10 @@ vi.mock("../commands/doctor-platform-notes.js", () => ({
   noteMacStaleOpenClawUpdateLaunchdJobs: mocks.noteMacStaleOpenClawUpdateLaunchdJobs,
 }));
 
+vi.mock("../commands/doctor-foreign-launchd-jobs.js", () => ({
+  noteMacForeignLaunchdJobs: vi.fn().mockResolvedValue(undefined),
+}));
+
 vi.mock("../gateway/credentials-secret-inputs.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../gateway/credentials-secret-inputs.js")>();
   return {
