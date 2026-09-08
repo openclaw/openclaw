@@ -420,8 +420,8 @@ place, and a running Gateway can otherwise try to load core or plugin files
 mid-swap. Restart the Gateway after the package manager finishes so it picks up
 the new install.
 
-Release packages include generated compatibility files for the recorded previous
-stable updater's lazy imports, including the 2026.9.1 service restart path. These
+Release packages include generated compatibility files for lazy imports from
+updaters in the supported upgrade window, including the 2026.9.1 service restart path. These
 files let the old updater finish after its installation is replaced. They do not
 preserve a running Gateway's old module state, cover arbitrary plugin imports,
 or make rollback into an older published package safe without restarting.

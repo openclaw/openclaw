@@ -1,4 +1,5 @@
 // Runtime Postbuild tests cover runtime postbuild script behavior.
+import childProcess from "node:child_process";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -11,6 +12,8 @@ import {
   discoverStaticExtensionAssets,
 } from "../../scripts/lib/static-extension-assets.mts";
 import {
+  parseUpdateCompatibilityInventory,
+  readUpdateCompatibilityInventory,
   recordUpdateCompatibilityRelease,
   writeUpdateCompatibilityChunks,
   type UpdateCompatibilityInventory,
@@ -1275,6 +1278,193 @@ describe("previous release update compatibility", () => {
       ].join("\n"),
     );
   }
+
+  function writeWindowInventory(root: string): string {
+    const release = recordFixture().releases[0];
+    const output = path.join(root, "inventory.json");
+    write(
+      root,
+      "inventory.json",
+      JSON.stringify({
+        schemaVersion: 1,
+        releases: [
+          release,
+          { ...release, version: "2026.9.2", chunks: [] },
+          { ...release, version: "2026.9.3", chunks: [] },
+        ],
+      }),
+    );
+    return output;
+  }
+
+  function runInventoryCli(
+    args: string[],
+    replies: Array<{ args: string[]; value: unknown }> = [],
+  ) {
+    const root = createTempDir("update-compat-npm-");
+    const bin = path.join(root, "bin");
+    const callsFile = path.join(root, "calls.json");
+    const stub = path.join(bin, "npm.cjs");
+    write(
+      root,
+      "bin/npm.cjs",
+      [
+        `#!${process.execPath}`,
+        'const fs = require("node:fs");',
+        `const callsFile = ${JSON.stringify(callsFile)};`,
+        `const replies = ${JSON.stringify(replies)};`,
+        'const calls = fs.existsSync(callsFile) ? JSON.parse(fs.readFileSync(callsFile, "utf8")) : [];',
+        "const args = process.argv.slice(2);",
+        "const reply = replies[calls.length];",
+        "calls.push(args);",
+        "fs.writeFileSync(callsFile, JSON.stringify(calls));",
+        'if (!reply || JSON.stringify(reply.args) !== JSON.stringify(args)) throw new Error("unexpected npm call: " + JSON.stringify(args));',
+        "console.log(JSON.stringify(reply.value));",
+      ].join("\n"),
+    );
+    if (process.platform === "win32") {
+      write(root, "bin/npm.cmd", `@"${process.execPath}" "${stub}" %*\r\n`);
+    } else {
+      fsSync.copyFileSync(stub, path.join(bin, "npm"));
+      fsSync.chmodSync(path.join(bin, "npm"), 0o755);
+    }
+    const result = childProcess.spawnSync(
+      process.execPath,
+      [path.join(MODULE_ROOT, "scripts/update-compat-inventory.mts"), ...args],
+      {
+        encoding: "utf8",
+        env: { ...process.env, PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}` },
+        timeout: 30_000,
+      },
+    );
+    const calls: unknown = fsSync.existsSync(callsFile)
+      ? JSON.parse(fsSync.readFileSync(callsFile, "utf8"))
+      : [];
+    return { result, calls };
+  }
+
+  it("records an ordered supported window, including releases without post-swap imports, offline", () => {
+    const root = createTempDir("update-compat-window-");
+    const output = path.join(root, "inventory.json");
+    const args = ["--output", output];
+    for (const version of ["2026.9.3", "2026.9.1", "2026.9.2"]) {
+      const packageDir = path.join(root, version);
+      write(packageDir, "package.json", JSON.stringify({ name: "openclaw", version }));
+      write(
+        packageDir,
+        "dist/build-info.json",
+        JSON.stringify({ version, buildId: version, commit: "0".repeat(40) }),
+      );
+      write(packageDir, "dist/entry.js", "export {};\n");
+      args.push("--release", `${packageDir}=${integrity}`);
+    }
+    const generated = runInventoryCli(args);
+    expect(generated.result.status, generated.result.stderr).toBe(0);
+    expect(generated.calls).toEqual([]);
+    expect(
+      readUpdateCompatibilityInventory(output).releases.map(({ version, chunks }) => ({
+        version,
+        chunks,
+      })),
+    ).toEqual([
+      { version: "2026.9.1", chunks: [] },
+      { version: "2026.9.2", chunks: [] },
+      { version: "2026.9.3", chunks: [] },
+    ]);
+    const checked = runInventoryCli([...args, "--check"]);
+    expect(checked.result.status, checked.result.stderr).toBe(0);
+    expect(checked.calls).toEqual([]);
+  });
+
+  it.each(["npm 11", "npm 12"])(
+    "checks %s latest and beta coverage without refetching recorded integrity",
+    (npmVersion) => {
+      const output = writeWindowInventory(createTempDir("update-compat-tag-coverage-"));
+      const tags = { latest: "2026.9.3", beta: "2026.9.2" };
+      const npmArgs = ["view", "openclaw", "dist-tags", "--json"];
+      const { result, calls } = runInventoryCli(
+        ["--check", "--output", output],
+        [{ args: npmArgs, value: npmVersion === "npm 12" ? [tags] : tags }],
+      );
+      expect(result.status, result.stderr).toBe(0);
+      expect(calls).toEqual([npmArgs]);
+    },
+  );
+
+  it.each([
+    { latest: "2026.9.3", beta: "2026.9.4-beta.1", missing: "2026.9.4-beta.1" },
+    { latest: "2026.9.4", beta: "2026.9.4", missing: "2026.9.4" },
+  ])(
+    "prints a complete refresh command when $missing leaves the window",
+    ({ latest, beta, missing }) => {
+      const output = writeWindowInventory(createTempDir("update-compat-tag-refresh-"));
+      const newIntegrity = `sha512-${Buffer.alloc(64, 1).toString("base64")}`;
+      const tags = { latest, beta };
+      const expectedCalls = [
+        ["view", "openclaw", "dist-tags", "--json"],
+        ["view", `openclaw@${missing}`, "dist.integrity", "--json"],
+      ];
+      const { result, calls } = runInventoryCli(
+        ["--check", "--output", output],
+        [
+          { args: expectedCalls[0]!, value: latest === beta ? [tags] : tags },
+          { args: expectedCalls[1]!, value: latest === beta ? [newIntegrity] : newIntegrity },
+        ],
+      );
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("pnpm update:compat:gen --output");
+      expect(result.stderr).toContain(output);
+      expect(result.stderr).toContain(
+        [
+          ...["2026.9.1", "2026.9.2", "2026.9.3"].map(
+            (version) => `--release .artifacts/update-compat/${version}/package=${integrity}`,
+          ),
+          `--release .artifacts/update-compat/${missing}/package=${newIntegrity}`,
+        ].join(" "),
+      );
+      expect(calls).toEqual(expectedCalls);
+    },
+  );
+
+  it.each([
+    { tags: { beta: "2026.9.3" }, invalid: "latest" },
+    { tags: { latest: "2026.9.3", beta: "not-a-release" }, invalid: "beta" },
+  ])("refuses an absent or invalid $invalid dist-tag", ({ tags, invalid }) => {
+    const output = writeWindowInventory(createTempDir("update-compat-invalid-tags-"));
+    const npmArgs = ["view", "openclaw", "dist-tags", "--json"];
+    const { result, calls } = runInventoryCli(
+      ["--check", "--output", output],
+      [{ args: npmArgs, value: tags }],
+    );
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(`dist-tag ${invalid} is missing or invalid`);
+    expect(calls).toEqual([npmArgs]);
+  });
+
+  it("refuses conflicting release origins before writing any bridge", () => {
+    const inventory = recordFixture();
+    const newer = structuredClone(inventory.releases[0]);
+    newer.version = "2026.9.2";
+    const firstExport = newer.chunks[0]?.exports[0];
+    if (!firstExport) {
+      throw new Error("Fixture has no recorded export");
+    }
+    firstExport.origin.module = "src/cli/update-cli/different.ts";
+    inventory.releases.push(newer);
+    const conflict =
+      /Release inventories disagree about service-abcdefgh.js:mode: 2026.9.1 uses .*; 2026.9.2 uses/;
+    expect(() => parseUpdateCompatibilityInventory(inventory)).toThrow(conflict);
+    const root = createTempDir("update-compat-conflict-");
+    candidate(root);
+    expect(() =>
+      writeUpdateCompatibilityChunks({
+        distDir: path.join(root, "dist"),
+        sourceDir: root,
+        inventory,
+      }),
+    ).toThrow(conflict);
+    expect(fsSync.existsSync(path.join(root, "dist/service-abcdefgh.js"))).toBe(false);
+  });
 
   it("keeps compatibility facades out of current runtime alias selection on rebuild", async () => {
     const inventory = recordFixture();

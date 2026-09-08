@@ -237,7 +237,7 @@ For beta, stable, and full profiles, Linux (`ubuntu`) cross-OS lanes gate npm pu
 7. When Code SHA equals Release SHA, retain its successful full validation parent and exact prepared npm/OCI descriptors. Only for a later genuine CHANGELOG-only descendant, optionally run SHA-pinned Full Release Validation with evidence reuse: the complete delta must be exactly `CHANGELOG.md`, and the parent must record `changelog-only-release-v1`, point at green Code evidence, and dispatch no product child lanes. That path still prepares and qualifies new Release SHA package/image bytes. Either path must satisfy every required profile gate. Regular final artifacts include SDK reports for both npm `beta` and `latest`; review the report and 8-character acknowledgement for the channel you will publish.
 8. Save that successful Full Release Validation run as both the validation run and `preflight_run_id`. Its read-only npm workflow builds and packs the root/core packages once, checks source in parallel, and qualifies the exact bytes with the final changelog. Docker images build in parallel and are preserved for later promotion. Review the **Plugin SDK API diff** summary. If it reports changes, inspect the readable diff (also uploaded as `plugin-sdk-api-release-diff-<run-id>-<run-attempt>`) and record the 8-character acknowledgement digest printed by the report; omit the acknowledgement when it reports no Plugin SDK API changes. Standalone `OpenClaw NPM Release` with `preflight_only=true` remains available for focused preflight and recovery.
 
-   Prepared packing reuses the exact preflight build while retaining package smoke checks, inventory generation, docs and changelog preparation, and source restoration. Ordinary source packing still performs a clean package build.
+   Prepared packing reuses the exact preflight build while retaining package smoke checks, inventory generation, docs and changelog preparation, and source restoration. It also runs `pnpm update:compat:check` against npm's current `latest` and `beta` tags before packing. Ordinary source packing still performs a clean package build without that registry freshness check.
 
    If the packaged changelog exceeds 500 KiB, packaging keeps every editorial note and replaces only the complete contribution record with a link to the full record in the exact release tag's `CHANGELOG.md`. The full source changelog and contributor credits remain unchanged after postpack restoration. Editorial notes must still satisfy the release-note minimum, and packaging fails if the compact result still exceeds the cap.
 
@@ -299,19 +299,34 @@ For correction artifact preparation, validate the immutable SHA with `--target-r
 ### Previous updater compatibility
 
 Before freezing the release, refresh `scripts/lib/update-compat-inventory.json`
-from the previous stable npm artifact. Verify the tarball against npm's
-`dist.integrity`, then extract it and run:
+from every release in the supported upgrade window. The current window includes
+2026.9.1, 2026.9.2, and 2026.9.3. Download each npm tarball and verify it against
+its published `dist.integrity` before extracting it. Pass each verified artifact
+to the recorder with a repeatable `--release` argument:
 
 ```bash
 pnpm update:compat:gen \
-  --package-dir <extracted-package-directory> \
-  --integrity <verified-npm-dist.integrity>
+  --release '<unpacked-2026.9.1-directory>=<verified-npm-dist.integrity>' \
+  --release '<unpacked-2026.9.2-directory>=<verified-npm-dist.integrity>' \
+  --release '<unpacked-2026.9.3-directory>=<verified-npm-dist.integrity>'
 ```
 
-Run `pnpm update:compat:check` with the same arguments to verify the recorded inventory. Replace the previous
-stable entry rather than accumulating releases; the recorder accepts at most
-one additional beta via `--beta-package-dir` and `--beta-integrity`.
-It scans emitted lazy imports in the updater, service, and CLI cleanup source
+The recorder writes releases in version order and replaces the recorded set.
+Drop releases older than the supported upgrade window when regenerating it;
+the inventory must not accumulate indefinitely. A release with no post-swap
+imports still has an entry with an empty chunk list, so coverage is explicit.
+Conflicting origins for the same chunk export across releases fail generation.
+
+`pnpm update:compat:check` reads `npm view openclaw dist-tags --json` and requires
+the versions tagged `latest` and `beta` to be present, even when both tags refer
+to stable versions or the same version. A missing version fails with the exact
+`pnpm update:compat:gen` command to run after verifying and unpacking the listed
+artifacts. `pnpm release:prep`, version preparation, and prepared-release packing
+run this check. Ordinary PR checks and source packing do not query npm for it.
+To verify deterministic regeneration offline, run `pnpm update:compat:check`
+with the same `--release` arguments used for generation.
+
+The recorder scans emitted lazy imports in the updater, service, and CLI cleanup source
 regions and records required export origins. The wizard entry is excluded
 because it starts before replacement. `runtime-postbuild` generates hashed
 compatibility files by re-exporting the candidate's corresponding symbols;
@@ -321,8 +336,15 @@ without replacement. The package carries the inventory in
 candidate's bridges. Existing older compatibility aliases remain separately
 owned by their original upgrade contracts.
 
-Run `update-first-hop-compat` and the published upgrade survivor lane from the
-recorded stable package. Native Windows proof must invoke the old updater with
+The default `update-first-hop-compat` lane runs each recorded release against the
+candidate, with separate artifacts per version. It requires the installed build
+identity and a restarted service, including for same-version or lower-version
+explicit candidate tarballs. The 2026.9.1 negative control demonstrates the
+missing restart import; releases that already preload that helper record the
+negative control as not applicable while retaining the positive first-hop and
+bridge-free future-hop checks. An explicit source tarball still selects one
+baseline. Run the published upgrade survivor lane from the oldest supported
+release as well. Native Windows proof must invoke the old updater with
 a registered Scheduled Task and verify its restart without a subsequent manual
 `gateway start`. Import compatibility alone does not prove that old and new
 modules share process-local state.
