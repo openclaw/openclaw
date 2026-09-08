@@ -13,6 +13,7 @@ import {
   beginGatewayRestartSignalAdmission,
   getActiveGatewayRootWorkCount,
   isGatewayRestartDraining,
+  recoverGatewayRestartDrainAfterFailedSignal,
   rollbackGatewayRestartSignalFence,
   runWithGatewayIndependentRootWorkAdmission,
   type GatewayRestartSignalAdmissionLease,
@@ -91,6 +92,16 @@ function clearPendingRestartSignalAdmission(): boolean {
 /** Releases a signal fence when the run loop rejects or fails to handle the signal. */
 export function rollbackGatewayRestartSignalAdmission(): boolean {
   return clearPendingRestartSignalAdmission();
+}
+
+/**
+ * Recovers admission when a restart handler failed after marking the one-way
+ * drain, so the surviving process would otherwise refuse new work forever.
+ * Reversible fences are released first; only a stuck one-way drain escalates.
+ */
+export function recoverGatewayRestartDrainAfterFailedSignalAdmission(): boolean {
+  clearPendingRestartSignalAdmission();
+  return recoverGatewayRestartDrainAfterFailedSignal();
 }
 
 function armPendingRestartTimer(requestedDueAt: number, nowMs: number): void {

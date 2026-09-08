@@ -1176,7 +1176,12 @@ export async function runGatewayLoop(params: {
         // Best-effort: the eager reference itself is the recovery path.
       }
       try {
-        eagerLifecycleRuntime.rollbackGatewayRestartSignalAdmission();
+        // No restart will arrive to reset runtime state, so a drain marked
+        // before the failure must be recovered here: the reversible-fence
+        // rollback is a no-op once one-way drain owns admission, which would
+        // leave this surviving process refusing all new root and subordinate
+        // work (subagents, plugin relays, queued commands) for its lifetime.
+        eagerLifecycleRuntime.recoverGatewayRestartDrainAfterFailedSignalAdmission();
         // A later signal must repeat the synchronous close transition even if
         // this handler failed after marking the one-way drain.
         restartDrainingMarked = false;

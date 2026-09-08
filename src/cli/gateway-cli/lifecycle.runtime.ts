@@ -14,6 +14,7 @@ export {
   isGatewaySigusr1RestartExternallyAllowed,
   markGatewaySigusr1RestartHandled,
   peekGatewaySigusr1RestartReason,
+  recoverGatewayRestartDrainAfterFailedSignalAdmission,
   resetGatewayRestartStateForInProcessRestart,
   requestGatewayRestartWithSignalAdmission,
   rollbackGatewayRestartSignalAdmission,

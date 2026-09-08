@@ -9,7 +9,7 @@ import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 type GatewaySuspendAdmissionPhase = GatewaySuspension["phase"];
 
 type AdmissionCloseReason = "restart-signal fence" | "restart drain" | "suspend phase";
-type AdmissionReopenReason = "restart-signal fence" | "suspend phase";
+type AdmissionReopenReason = "restart-signal fence" | "suspend phase" | "failed restart drain";
 
 export class GatewayDrainingError extends Error {
   constructor(message = "Gateway is draining; new tasks are not accepted") {
@@ -305,6 +305,42 @@ export function beginGatewayRestartSignalAdmission(): GatewayRestartSignalAdmiss
  */
 export function rollbackGatewayRestartSignalFence(): boolean {
   return clearRestartSignalFence();
+}
+
+/**
+ * Reopens admission after a restart handler failed *after* marking the one-way
+ * drain, so no in-process restart will arrive to reset runtime state.
+ *
+ * `rollbackGatewayRestartSignalFence` cannot recover this: it is a documented
+ * no-op once one-way drain owns admission. Without this escape hatch the
+ * surviving process keeps `restartDraining` set for its whole lifetime and
+ * silently refuses every new root and subordinate work item, while already
+ * admitted work still completes -- so the gateway looks healthy and only
+ * newly submitted work (subagents, plugin relays, queued commands) fails with
+ * `GatewayDrainingError`.
+ *
+ * Only failed-restart recovery may call this. A committed restart must keep the
+ * one-way guarantee and reset state through `resetGatewayWorkAdmission`.
+ */
+export function recoverGatewayRestartDrainAfterFailedSignal(): boolean {
+  if (!GATEWAY_WORK_ADMISSION_STATE.restartDraining) {
+    return clearRestartSignalFence();
+  }
+  GATEWAY_WORK_ADMISSION_STATE.restartDraining = false;
+  GATEWAY_WORK_ADMISSION_STATE.restartSignalPending = false;
+  GATEWAY_WORK_ADMISSION_STATE.restartSignalGeneration += 1;
+  // The old controller stays aborted: work that already observed the drain
+  // signal must not be resurrected. Later admissions get a fresh signal.
+  GATEWAY_WORK_ADMISSION_STATE.restartDrainController = new AbortController();
+  resolveSuspendOpenWaiters();
+  if (GATEWAY_WORK_ADMISSION_STATE.suspendPhase === "accepting") {
+    logAdmissionReopened("failed restart drain");
+  } else {
+    admissionLog.info(
+      "restart drain recovered after failed restart signal; suspension remains closed",
+    );
+  }
+  return true;
 }
 
 /** Root RPC/timer admission. Nested work in the same async chain counts once. */

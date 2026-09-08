@@ -16,6 +16,7 @@ import {
   isGatewayWorkAdmissionClosed,
   markGatewayRestartDraining,
   onGatewaySuspendAdmissionChange,
+  recoverGatewayRestartDrainAfterFailedSignal,
   retainGatewayRootWorkAdmissionContinuation,
   resetGatewayWorkAdmission,
   rollbackGatewayRestartSignalFence,
@@ -696,4 +697,67 @@ it("does not wake deferred internal work into a restart drain", async () => {
   markGatewayRestartDraining();
 
   await expect(pending).rejects.toBeInstanceOf(GatewayDrainingError);
+});
+
+it("recovers stuck one-way drain when a restart handler failed after marking it", () => {
+  markGatewayRestartDraining();
+  // The reversible-fence rollback cannot recover a one-way drain, which is how
+  // a failed restart handler used to wedge admission for the process lifetime.
+  expect(rollbackGatewayRestartSignalFence()).toBe(false);
+  expect(isGatewayWorkAdmissionClosed()).toBe(true);
+  expect(isGatewaySubordinateWorkAdmissionClosed()).toBe(true);
+
+  expect(recoverGatewayRestartDrainAfterFailedSignal()).toBe(true);
+
+  expect(isGatewayWorkAdmissionClosed()).toBe(false);
+  expect(isGatewaySubordinateWorkAdmissionClosed()).toBe(false);
+  // New work must admit again, and observe a fresh (unaborted) drain signal.
+  expect(getGatewayRestartDrainSignal().aborted).toBe(false);
+  const admitted = tryBeginGatewayRootWorkAdmission("after-failed-restart");
+  expect(admitted?.ownsRoot).toBe(true);
+  admitted?.release();
+});
+
+it("recovers a failed restart drain that superseded a suspension", () => {
+  const suspension = tryBeginGatewaySuspendAdmission(() => {});
+  expect(suspension?.commit()).toBe(true);
+  // Marking the drain supersedes the suspension, so the failed restart leaves
+  // the drain as the only thing holding admission closed.
+  markGatewayRestartDraining();
+  expect(getGatewaySuspendAdmissionPhase()).toBe("accepting");
+
+  expect(recoverGatewayRestartDrainAfterFailedSignal()).toBe(true);
+
+  expect(isGatewayWorkAdmissionClosed()).toBe(false);
+  const admitted = tryBeginGatewayRootWorkAdmission("after-superseded-suspension");
+  expect(admitted?.ownsRoot).toBe(true);
+  admitted?.release();
+});
+
+it("reopens a stuck restart drain for a live suspension owner", () => {
+  markGatewayRestartDraining();
+  expect(recoverGatewayRestartDrainAfterFailedSignal()).toBe(true);
+
+  // Recovery restores normal admission control: a later suspension can close
+  // admission again and release it on its own terms.
+  const suspension = tryBeginGatewaySuspendAdmission(() => {});
+  expect(suspension?.commit()).toBe(true);
+  expect(isGatewayWorkAdmissionClosed()).toBe(true);
+  expect(suspension?.release()).toBe(true);
+  expect(isGatewayWorkAdmissionClosed()).toBe(false);
+});
+
+it("leaves a committed restart drain one-way for the reset boundary", () => {
+  markGatewayRestartDraining();
+  const signal = getGatewayRestartDrainSignal();
+  expect(signal.aborted).toBe(true);
+
+  // A committed restart never calls the failed-signal recovery; it resets
+  // runtime state instead, so the drain stays closed until that boundary.
+  expect(isGatewayWorkAdmissionClosed()).toBe(true);
+  markGatewayRestartDraining();
+  expect(isGatewayWorkAdmissionClosed()).toBe(true);
+
+  resetGatewayWorkAdmission();
+  expect(isGatewayWorkAdmissionClosed()).toBe(false);
 });
