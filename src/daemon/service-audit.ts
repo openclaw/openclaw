@@ -638,7 +638,12 @@ async function auditGatewayRuntime(
           runtime.status === "probe-failed"
             ? "Gateway service Bun runtime probe failed."
             : "Gateway service uses an unsupported Bun runtime; Bun 1.4+ with WAL-reset-safe node:sqlite is required.",
-        detail: runtime.status === "probe-failed" ? runtime.error.message : execPath,
+        detail:
+          runtime.status === "probe-failed"
+            ? runtime.error.message
+            : runtime.sqliteSelectionError
+              ? `${execPath}: ${runtime.sqliteSelectionError}`
+              : execPath,
         level: "recommended",
       });
     }

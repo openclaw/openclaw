@@ -62,7 +62,12 @@ describe("native app i18n inventory", () => {
       },
     ] satisfies NativeI18nEntry[];
 
-    const serialized = serializeNativeI18nInventory(entries);
+    const contextualEntries: NativeI18nEntry[] = [...entries];
+    contextualEntries[0] = {
+      ...expectDefined(entries[0], "first inventory entry"),
+      sourceContext: "request-only owner excerpt",
+    };
+    const serialized = serializeNativeI18nInventory(contextualEntries);
     const lines = serialized.trimEnd().split("\n");
 
     expect(JSON.parse(serialized)).toEqual({ version: 2, entries });
@@ -72,6 +77,36 @@ describe("native app i18n inventory", () => {
       `    ${JSON.stringify(entries[1])}`,
     ]);
     expect(serialized.endsWith("\n")).toBe(true);
+  });
+
+  it("carries bounded nearby owner code without changing stable inventory data", () => {
+    const source = [
+      `// distant prefix ${"x".repeat(2000)}`,
+      "fun statusRow(runPending: Boolean) {",
+      "  Button(enabled = !runPending) {",
+      '    Text("Run Pending")',
+      "  }",
+      `// trailing owner text ${"💡".repeat(1000)}`,
+      "}",
+    ].join("\n");
+    const candidates = extractNativeI18nCandidates("android", "apps/android/Status.kt", source);
+    const secondary = extractNativeI18nCandidates(
+      "android",
+      "apps/android/ZStatus.kt",
+      'Text("Run Pending")',
+    );
+    const entries = assignNativeI18nIds([...secondary, ...candidates]);
+    const entry = expectDefined(
+      entries.find((item) => item.source === "Run Pending"),
+      "status label",
+    );
+
+    expect(entry.sourceContext).toContain("Button(enabled = !runPending)");
+    expect(entry.sourceContext).toContain('Text("Run Pending")');
+    expect(entry.sourceContext?.length).toBeLessThanOrEqual(1200);
+    expect(assignNativeI18nIds([...candidates, ...secondary])).toEqual(entries);
+    expect(serializeNativeI18nInventory(entries)).not.toContain("sourceContext");
+    expect(serializeNativeI18nInventory(entries)).not.toContain("Button(enabled");
   });
 
   it("merges sites and hashes only surface plus source", () => {
@@ -940,6 +975,159 @@ describe("native app i18n inventory", () => {
       ).toEqual({ [entry.id]: "Öppna" });
     } finally {
       cleanupTempDirs(tempDirs);
+    }
+  });
+
+  it.each([
+    "clean",
+    "missing",
+    "source",
+    "glossary",
+    "legacy",
+    "legacy-missing",
+    "legacy-glossary",
+  ])("adds selected refresh to ordinary %s locale work", async (scenario) => {
+    const tempDirs: string[] = [];
+    const translationsDir = makeTempDir(tempDirs, "openclaw-native-i18n-");
+    const selected = testEntry("native.apple.open", "apple", "Open");
+    const other = testEntry("native.apple.close", "apple", "Close");
+    const artifactPath = path.join(translationsDir, "sv.json");
+    try {
+      await syncNativeLocale("sv", [selected, other], {
+        glossary: [],
+        translationsDir,
+        translate: async () =>
+          new Map([
+            [selected.id, "Tidigare"],
+            [other.id, "Stäng"],
+          ]),
+      });
+      const previous = JSON.parse(await readFile(artifactPath, "utf8"));
+      if (scenario === "missing") {
+        delete previous.translations[other.id];
+      }
+      if (scenario.startsWith("legacy")) {
+        previous.version = 1;
+        previous.entries = [
+          { id: selected.id, source: selected.source, translated: "Tidigare" },
+          { id: other.id, source: other.source, translated: "Stäng" },
+        ];
+        if (scenario === "legacy-missing") {
+          previous.entries.pop();
+        }
+        delete previous.translations;
+      }
+      await writeFile(artifactPath, JSON.stringify(previous));
+      const currentOther =
+        scenario === "source"
+          ? expectDefined(
+              assignNativeI18nIds([
+                {
+                  kind: "ui-call",
+                  line: 1,
+                  path: "apps/ios/Close.swift",
+                  source: "Close now",
+                  surface: "apple",
+                },
+              ])[0],
+              "edited source",
+            )
+          : other;
+      const pendingIds: string[] = [];
+      await syncNativeLocale("sv", [selected, currentOther], {
+        refreshIds: [selected.id, selected.id],
+        glossary: scenario.endsWith("glossary") ? [{ source: "Close", target: "Stäng" }] : [],
+        translationsDir,
+        translate: async (pending) => {
+          pendingIds.push(...pending.map((entry) => entry.id));
+          return new Map(pending.map((entry) => [entry.id, "Uppdaterad"]));
+        },
+      });
+      const refreshOther = scenario !== "clean" && scenario !== "legacy";
+      expect(pendingIds.toSorted()).toEqual(
+        (refreshOther ? [selected.id, currentOther.id] : [selected.id]).toSorted(),
+      );
+      expect(JSON.parse(await readFile(artifactPath, "utf8")).translations).toEqual({
+        [selected.id]: "Uppdaterad",
+        [currentOther.id]: refreshOther ? "Uppdaterad" : "Stäng",
+      });
+    } finally {
+      cleanupTempDirs(tempDirs);
+    }
+  });
+
+  it("rejects unknown refresh IDs before provider calls or artifact writes", async () => {
+    const tempDirs: string[] = [];
+    const translationsDir = makeTempDir(tempDirs, "openclaw-native-i18n-");
+    const artifactPath = path.join(translationsDir, "sv.json");
+    let called = false;
+    try {
+      await writeFile(artifactPath, "existing artifact bytes");
+      await expect(
+        syncNativeLocale("sv", [testEntry("native.apple.open", "apple", "Open")], {
+          refreshIds: ["native.apple.unknown"],
+          glossary: [],
+          translationsDir,
+          translate: async () => {
+            called = true;
+            return new Map();
+          },
+        }),
+      ).rejects.toThrow("unknown native refresh ID");
+      expect(called).toBe(false);
+      expect(await readFile(artifactPath, "utf8")).toBe("existing artifact bytes");
+    } finally {
+      cleanupTempDirs(tempDirs);
+    }
+  });
+
+  it("validates and normalizes bounded CLI refresh selectors", () => {
+    const base = ["sync", "--write", "--locale", "sv"];
+    expect(
+      parseNativeI18nCommand([
+        ...base,
+        "--refresh-id",
+        "native.apple.b",
+        "--refresh-id",
+        "native.apple.a",
+        "--refresh-id",
+        "native.apple.b",
+      ]).refreshIds,
+    ).toEqual(["native.apple.a", "native.apple.b"]);
+    const ids = Array.from({ length: 64 }, (_, index) => `native.apple.${index}`);
+    const firstId = expectDefined(ids[0], "first refresh ID");
+    expect(
+      parseNativeI18nCommand([
+        ...base,
+        ...ids.flatMap((id) => ["--refresh-id", id]),
+        "--refresh-id",
+        firstId,
+      ]).refreshIds,
+    ).toHaveLength(64);
+    expect(() =>
+      parseNativeI18nCommand([
+        ...base,
+        ...[...ids, "native.apple.extra"].flatMap((id) => ["--refresh-id", id]),
+      ]),
+    ).toThrow("64 distinct");
+    expect(() => parseNativeI18nCommand([...base, "--refresh-id"])).toThrow("requires an ID");
+    expect(() => parseNativeI18nCommand([...base, "--refresh-id", "--force"])).toThrow(
+      "requires an ID",
+    );
+    expect(() => parseNativeI18nCommand([...base, "--force", "--refresh-id", firstId])).toThrow(
+      "cannot combine",
+    );
+    for (const args of [
+      ["sync"],
+      ["sync", "--write"],
+      ["sync", "--locale", "sv"],
+      ["baseline", "--write"],
+      ["check"],
+      ["verify"],
+    ]) {
+      expect(() => parseNativeI18nCommand([...args, "--refresh-id", firstId])).toThrow(
+        "requires `sync --write --locale",
+      );
     }
   });
 

@@ -24,6 +24,7 @@ import {
   handleCronCliError,
   printCronJson,
   printCronShow,
+  requireCronJobId,
   warnIfCronSchedulerDisabled,
 } from "./shared.js";
 
@@ -115,7 +116,7 @@ function registerCronToggleCommand(params: {
       .action(async (id, opts) => {
         try {
           const res = await callGatewayFromCli("cron.update", opts, {
-            id,
+            id: requireCronJobId(id),
             patch: { enabled: params.enabled },
           });
           printCronJson(res);
@@ -139,7 +140,7 @@ export function registerCronSimpleCommands(cron: Command) {
       .argument("<id>", "Job id")
       .action(async (id, opts) => {
         try {
-          const res = await callGatewayFromCli("cron.remove", opts, { id });
+          const res = await callGatewayFromCli("cron.remove", opts, { id: requireCronJobId(id) });
           printCronJson(res);
         } catch (err) {
           handleCronCliError(err);
@@ -166,7 +167,7 @@ export function registerCronSimpleCommands(cron: Command) {
       .argument("<id>", "Job id")
       .action(async (id, opts) => {
         try {
-          const res = await callGatewayFromCli("cron.get", opts, { id: String(id) });
+          const res = await callGatewayFromCli("cron.get", opts, { id: requireCronJobId(id) });
           printCronJson(res);
         } catch (err) {
           handleCronCliError(err);
@@ -180,13 +181,14 @@ export function registerCronSimpleCommands(cron: Command) {
       .description("Show an automation")
       .argument("<id>", "Job id or exact name")
       .option("--json", "Output JSON", false)
-      .action(async (id, opts) => {
+      .action(async (idArg, opts) => {
         try {
-          const { job, deliveryPreview } = await findCronJobByIdOrName(opts, String(id), {
+          const id = requireCronJobId(idArg);
+          const { job, deliveryPreview } = await findCronJobByIdOrName(opts, id, {
             includeDeliveryPreview: !opts.json,
           });
           if (!job) {
-            throw new CronCliError(formatCronLookupMiss(String(id)));
+            throw new CronCliError(formatCronLookupMiss(id));
           }
           if (opts.json) {
             printCronJson(enrichCronJsonWithStatus(job));
@@ -215,10 +217,7 @@ export function registerCronSimpleCommands(cron: Command) {
               `Conflicting job ids: positional "${argId}" and --id "${flagId}".`,
             );
           }
-          const id = argId ?? flagId;
-          if (!id) {
-            throw new CronCliError("Missing job id. Pass it positionally or with --id.");
-          }
+          const id = requireCronJobId(argId ?? flagId, "Pass it positionally or with --id.");
           const limit = parseStrictPositiveInteger(opts.limit ?? "50");
           if (limit === undefined) {
             throw new CronCliError("Invalid --limit (must be a positive integer).");
@@ -254,8 +253,9 @@ export function registerCronSimpleCommands(cron: Command) {
         "Polling interval for --wait",
         CRON_RUN_WAIT_POLL_INTERVAL_DEFAULT,
       )
-      .action(async (id, opts, command) => {
+      .action(async (idArg, opts, command) => {
         try {
+          const id = requireCronJobId(idArg);
           let waitTimeoutMs = 0;
           let pollIntervalMs = 0;
           if (opts.wait) {
@@ -276,7 +276,7 @@ export function registerCronSimpleCommands(cron: Command) {
             }
             const run = await waitForCronRunCompletion({
               opts,
-              jobId: String(id),
+              jobId: id,
               runId: result.runId,
               timeoutMs: waitTimeoutMs,
               pollIntervalMs,

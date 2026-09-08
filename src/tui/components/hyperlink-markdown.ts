@@ -7,13 +7,13 @@ import type {
 } from "@earendil-works/pi-tui";
 import { Markdown } from "@earendil-works/pi-tui";
 import { addOsc8Hyperlinks, extractUrls } from "../osc8-hyperlinks.js";
-import { isolateRtlRenderedLine, sanitizeMarkdownSource } from "../tui-formatters.js";
+import { isolateRtlRenderedLine, sanitizeTerminalControlsAndBinary } from "../tui-formatters.js";
 
 function sanitizeMarkdownDisplayText(text: string): string {
   if (!text) {
     return text;
   }
-  return sanitizeMarkdownSource(text) || "(no output)";
+  return sanitizeTerminalControlsAndBinary(text) || "(no output)";
 }
 
 /**

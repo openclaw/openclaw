@@ -33,6 +33,7 @@ import {
   writeGitHubOutput,
 } from "../../scripts/ci-changed-scope.mjs";
 import { resolveShardPlans, runShardPlans } from "../../scripts/ci-run-node-test-shard.mts";
+import { resolveChangedDockerSeedLanes } from "../../scripts/lib/ci-changed-node-test-plan.mts";
 import { createNodeTestShardBundles } from "../../scripts/lib/ci-node-test-plan.mts";
 import { visitModuleSpecifiers } from "../../scripts/lib/guard-inventory-utils.mjs";
 import { pnpmLockfileDocuments } from "../../scripts/lib/pnpm-lockfile-documents.mjs";
@@ -3897,6 +3898,32 @@ NODE
       },
     });
     expect(parallelism).toContain("&& 3 || 1");
+  });
+
+  it.each([
+    { eventName: "pull_request" as const, production: false, expected: false },
+    { eventName: "pull_request" as const, production: true, expected: true },
+    { eventName: "push" as const, production: false, expected: true },
+  ])("routes published-upgrade proof for $eventName (production=$production)", (options) => {
+    const changedPaths = [
+      "src/commands/doctor-config-preflight.admission.process.test.ts",
+      "src/commands/doctor-config-runtime.test-support.ts",
+      ...(options.production ? ["src/commands/doctor-config-preflight.ts"] : []),
+    ];
+    const selected = resolveChangedDockerSeedLanes(changedPaths);
+    const result = runCiManifestFixture({
+      bundledPlanner: true,
+      runNode: false,
+      changedPaths,
+      eventName: options.eventName,
+      scopeEnv: { GITHUB_REF: "refs/heads/main" },
+      changedPlannerSource: `export const resolveChangedDockerSeedLanes = () => ${JSON.stringify(selected)};`,
+    });
+    expect(result.status, result.output).toBe(0);
+    expect(result.outputs.run_docker_seed_e2e).toBe(String(options.expected));
+    expect(result.outputs.docker_seed_lanes).toBe(
+      options.expected ? "published-upgrade-survivor" : "",
+    );
   });
 
   it.each([

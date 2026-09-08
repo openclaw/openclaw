@@ -237,6 +237,7 @@ Tips:
 - On connect, the TUI loads the latest history (default 200 messages).
 - Reconnect and event-gap recovery reconcile active runs with history, retaining concurrent and newly observed runs without reviving runs that exact history has excluded.
 - Streaming responses update in place until finalized.
+- Long words, email addresses, and identifiers wrap to the terminal width without inserting spaces into message text.
 - Failed assistant attachments show an actionable warning alongside any reply text. Attachment summaries use generic media kinds without exposing filenames or source URLs.
 - Messages sent to the same session from another client appear automatically.
 - The TUI also listens to agent tool events for richer tool cards.
