@@ -339,6 +339,13 @@ function supportsMobilePairingReconnectForTarget(targetRoot: string | undefined)
   );
 }
 
+function supportsCorruptPluginUpdateForTarget(targetRoot: string | undefined): boolean {
+  return (
+    !targetRoot ||
+    existsSync(resolve(targetRoot, "src/cli/update-cli/update-command-plugin-preflight.ts"))
+  );
+}
+
 function expandedUpgradeSurvivorLaneName(
   poolLaneName: string,
   baselineSpec: string | undefined,
@@ -812,30 +819,32 @@ export function resolveDockerE2ePlan(options: DockerE2ePlanOptions) {
       : options.liveMode === "only"
         ? applyLiveMode([...retriedMainLanes, ...retriedTailLanes], options.liveMode)
         : applyLiveMode(retriedMainLanes, options.liveMode);
-  if (
-    options.allowFrozenTargetScenarioOmissions &&
-    !supportsUpdateFirstHopCompatForTarget(options.upgradeSurvivorTargetRoot)
-  ) {
-    const filteredLanes = configuredLanes.filter((lane) => lane.name !== "update-first-hop-compat");
-    if (filteredLanes.length !== configuredLanes.length) {
-      omittedUnsupportedLaneNames.add("update-first-hop-compat");
-      configuredLanes = filteredLanes;
-    }
-  }
-  if (
-    options.allowFrozenTargetScenarioOmissions &&
-    !supportsMobilePairingReconnectForTarget(options.upgradeSurvivorTargetRoot)
-  ) {
-    const filteredLanes = configuredLanes.filter(
-      (lane) => !lane.name.includes("mobile-pairing-reconnect"),
-    );
-    if (filteredLanes.length !== configuredLanes.length) {
-      for (const lane of configuredLanes) {
-        if (lane.name.includes("mobile-pairing-reconnect")) {
+  if (options.allowFrozenTargetScenarioOmissions) {
+    const unsupportedLaneRules = [
+      {
+        matches: (lane: DockerE2eLane) => lane.name === "update-first-hop-compat",
+        supported: supportsUpdateFirstHopCompatForTarget(options.upgradeSurvivorTargetRoot),
+      },
+      {
+        matches: (lane: DockerE2eLane) => lane.name.includes("mobile-pairing-reconnect"),
+        supported: supportsMobilePairingReconnectForTarget(options.upgradeSurvivorTargetRoot),
+      },
+      {
+        matches: (lane: DockerE2eLane) => lane.name === "update-corrupt-plugin",
+        supported: supportsCorruptPluginUpdateForTarget(options.upgradeSurvivorTargetRoot),
+      },
+    ];
+    for (const rule of unsupportedLaneRules) {
+      if (rule.supported) {
+        continue;
+      }
+      const retainedLanes = configuredLanes.filter((lane) => !rule.matches(lane));
+      if (retainedLanes.length !== configuredLanes.length) {
+        for (const lane of configuredLanes.filter(rule.matches)) {
           omittedUnsupportedLaneNames.add(lane.name);
         }
+        configuredLanes = retainedLanes;
       }
-      configuredLanes = filteredLanes;
     }
   }
   const configuredTailLanes =
