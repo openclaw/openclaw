@@ -57,8 +57,8 @@ export type CodexPluginReadiness = {
 };
 
 /** Runtime support is not account-wide permission to browse, connect or invoke apps. */
-async function readCodexHostedAppsSupport(
-  context: CodexPluginCommandContext,
+export async function readCodexHostedAppsSupport(
+  context: Pick<CodexPluginCommandContext, "request" | "threadId">,
   account: CodexPluginReadiness["account"],
 ): Promise<CodexHostedAppsSupport> {
   if (account.status !== "known") {
@@ -99,7 +99,7 @@ async function readCodexHostedAppsSupport(
   return features.value === undefined ? "unknown" : features.value ? "supported" : "disabled";
 }
 
-function describeCodexHostedAppsSupport(support: CodexHostedAppsSupport): string {
+export function describeCodexHostedAppsSupport(support: CodexHostedAppsSupport): string {
   switch (support) {
     case "supported":
       return "Hosted apps: supported by this runtime; account connections and action permissions are checked separately.";
@@ -144,18 +144,6 @@ export function codexPluginAppPageLinks(readiness: CodexPluginReadiness): v2.App
     const authorized = metadata.get(app.id);
     return authorized ? [{ ...app, name: authorized.name, installUrl: authorized.installUrl }] : [];
   });
-}
-
-export function canRecheckCodexPluginApps(
-  readiness: CodexPluginReadiness,
-): readiness is CodexPluginReadiness & { detail: v2.PluginDetail } {
-  return (
-    readiness.openClawEnabled &&
-    readiness.summary?.installed === true &&
-    readiness.summary.enabled &&
-    readiness.detail !== undefined &&
-    codexPluginAppPageLinks(readiness).length > 0
-  );
 }
 
 /** Reads existing snapshots only. Neither metadata nor installation proves a live connection. */
@@ -310,12 +298,11 @@ export async function readCodexPluginReadiness(params: {
 export function formatCodexPluginReadiness(
   readiness: CodexPluginReadiness,
   page = 1,
-  options: { rechecked?: boolean } = {},
 ): PluginCommandResult {
   const summary = readiness.summary;
   const catalog = pluginCatalogState(summary);
   const hasApps = Boolean(readiness.detail?.apps.length);
-  const canRecheck = canRecheckCodexPluginApps(readiness);
+  const canRefreshHostedApps = readiness.hostedSupport === "supported";
   const lines = [
     `Plugin: ${display(readiness.commandId)}`,
     `Agent: ${display(readiness.agentId)} · Profile: ${display(readiness.profileId ?? "native Codex account (profile unknown)")}`,
@@ -348,12 +335,6 @@ export function formatCodexPluginReadiness(
     );
   }
   const blocks: MessagePresentationBlock[] = [{ type: "text", text: lines.join("\n") }];
-  if (options.rechecked) {
-    blocks.unshift({
-      type: "text",
-      text: "App inventory check completed. A hosted refresh was requested; Codex does not report whether it replaced the snapshot. OpenClaw app-access changes take effect on your next message; use /new or /reset after connecting.",
-    });
-  }
   if (readiness.diagnostic) {
     blocks.push({ type: "text", text: readiness.diagnostic });
   }
@@ -423,18 +404,16 @@ export function formatCodexPluginReadiness(
       }
       blocks.push({
         type: "text",
-        text: options.rechecked
-          ? "Snapshot freshness is unknown; Codex may retain its snapshot and this does not verify a live call. No conversation policy was changed."
-          : `Snapshot freshness is unknown; this read does not refresh hosted tools or verify a live call. After connecting, run /codex plugins recheck ${readiness.commandId}, then /new or /reset. OpenClaw app-access changes take effect on your next message.`,
+        text: "Snapshot freshness is unknown; status reads do not refresh hosted tools or verify a live call. After connecting, /codex apps refresh refreshes hosted inventory for the current Codex account/runtime, across all apps. The plugin button performs that same refresh, then shows this plugin's status. Existing conversations keep their admitted app policy; use /new or /reset after connecting.",
       });
       blocks.push({
         type: "buttons",
         buttons: [
           {
-            label: canRecheck ? "Recheck app tools" : "Check status",
+            label: canRefreshHostedApps ? "Refresh hosted apps, then check status" : "Check status",
             action: {
               type: "command",
-              command: `/codex plugins ${canRecheck ? "recheck" : "status"} ${readiness.commandId}`,
+              command: `/codex plugins ${canRefreshHostedApps ? "recheck" : "status"} ${readiness.commandId}`,
             },
           },
         ],
@@ -474,7 +453,7 @@ function display(value: string): string {
   return formatCodexDisplayText(value.slice(0, 120));
 }
 
-function formatBoundAccount(evidence: CodexPluginReadiness["account"]): string {
+export function formatBoundAccount(evidence: CodexPluginReadiness["account"]): string {
   const account = evidence.status === "known" ? evidence.value.account : undefined;
   if (isJsonObject(account) && account.type === "chatgpt") {
     const email = typeof account.email === "string" ? account.email : "email unknown";

@@ -13,6 +13,7 @@ import {
   releaseLeasedSharedCodexAppServerClient,
 } from "./app-server/shared-client.js";
 import { readCodexAccountAuthOverview } from "./command-account.js";
+import { refreshCodexHostedApps } from "./command-apps-refresh.js";
 import {
   canMutateCodexHost,
   CODEX_HOST_INSPECTION_AUTH_ERROR,
@@ -110,6 +111,22 @@ export async function handleCodexSubcommand(
   const sandboxBlock = resolveCodexNativeCommandSandboxBlock(ctx, normalized, rest);
   if (sandboxBlock) {
     return { text: sandboxBlock };
+  }
+  if (normalized === "apps") {
+    if (rest.length !== 1 || rest[0]?.toLowerCase() !== "refresh") {
+      return {
+        text: "Usage: /codex apps refresh — refresh hosted app inventory for the current Codex account/runtime.",
+      };
+    }
+    if (!canMutateCodexHost(ctx)) {
+      return {
+        text: "Only an owner or operator.admin gateway client can refresh hosted app inventory.",
+      };
+    }
+    return await withCodexPluginCommandContext(
+      { deps, ctx, pluginConfig: options.pluginConfig },
+      (context) => refreshCodexHostedApps(context),
+    );
   }
   if (normalized === "plugins") {
     if (!deps.codexPluginsManagementIo) {

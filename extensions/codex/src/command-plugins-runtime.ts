@@ -20,7 +20,7 @@ import { readCodexConversationBindingData } from "./conversation-binding-data.js
 const SCOPE_CHANGED_MESSAGE =
   "Codex account, conversation, or plugin policy changed. Run the command again.";
 
-/** One account and physical connection for an operator's plugin inspection or refresh. */
+/** One account and physical connection for plugin inspection or hosted app refresh. */
 export type CodexPluginCommandContext = {
   request: <T>(method: string, params?: unknown) => Promise<T>;
   workspaceDir: string;
@@ -116,7 +116,9 @@ export async function withCodexPluginCommandContext<T>(
         const currentConversation = readCodexConversationBindingData(
           await ctx.getCurrentConversationBinding(),
         );
-        const currentPolicy = JSON.stringify(await deps.codexPluginsManagementIo?.readConfig());
+        const currentPolicy = JSON.stringify(
+          (await deps.codexPluginsManagementIo?.readConfig()) ?? {},
+        );
         const currentAuthBinding = await readAuthBinding();
         // Reads can outlive cancellation; never publish after the request scope ends.
         assertCurrent();

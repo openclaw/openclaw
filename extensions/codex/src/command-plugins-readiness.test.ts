@@ -4,9 +4,12 @@ import { defaultCodexAppInventoryCache } from "./app-server/app-inventory-cache.
 import type { CodexAppsInstalledParams } from "./app-server/protocol-control-plane.js";
 import type { v2 } from "./app-server/protocol.js";
 import { CodexAppServerRpcError } from "./app-server/rpc-error.js";
+import { createCodexTestBindingStore } from "./app-server/session-binding.test-helpers.js";
+import { handleCodexSubcommand } from "./command-handlers.js";
 import type { CodexPluginsManagementIO } from "./command-plugin-config.js";
 import { handleCodexPluginsSubcommand } from "./command-plugins-management.js";
 import type { CodexPluginCommandContext } from "./command-plugins-runtime.js";
+import * as commandRuntime from "./command-plugins-runtime.js";
 
 const ctx: PluginCommandContext = {
   config: {},
@@ -20,12 +23,16 @@ const ctx: PluginCommandContext = {
   detachConversationBinding: async () => ({ removed: false }),
 };
 
-afterEach(() => defaultCodexAppInventoryCache.clear());
+afterEach(() => {
+  defaultCodexAppInventoryCache.clear();
+  vi.restoreAllMocks();
+});
 
 function fixture(
   options: {
     threadId?: string | null;
     appCount?: number;
+    otherApp?: boolean;
     pluginName?: string;
     disabled?: boolean;
     blocked?: boolean;
@@ -36,6 +43,7 @@ function fixture(
     refreshedRuntime?: v2.InstalledApp[];
     accountType?: "chatgpt" | "apiKey";
     appsFeature?: boolean;
+    threadAppsFeature?: boolean;
     missingMetadata?: boolean;
     detailPolicy?: Partial<v2.PluginSummary>;
     catalog?: { marketplace: string; kind: string };
@@ -69,6 +77,9 @@ function fixture(
     category: null,
     installUrl: `https://chatgpt.com/apps/app-${index}`,
   }));
+  const inventoryApps = options.otherApp
+    ? [...apps, { ...apps[0]!, id: "other-app", name: "Other plugin app" }]
+    : apps;
   const request = vi.fn(async (method: string, params?: unknown): Promise<unknown> => {
     if (method === options.failMethod) {
       if (options.unsupported) {
@@ -92,7 +103,14 @@ function fixture(
         break;
       case "experimentalFeature/list":
         response = {
-          data: [{ name: "apps", enabled: options.appsFeature ?? true }],
+          data: [
+            {
+              name: "apps",
+              enabled: (params as { threadId?: string }).threadId
+                ? (options.threadAppsFeature ?? options.appsFeature ?? true)
+                : (options.appsFeature ?? true),
+            },
+          ],
           nextCursor: null,
         };
         break;
@@ -134,7 +152,7 @@ function fixture(
               ? options.refreshedRuntime
               : undefined) ??
             options.runtime ??
-            apps.map((app) => ({
+            inventoryApps.map((app) => ({
               id: app.id,
               runtimeName: app.name,
               enabled: true,
@@ -146,9 +164,11 @@ function fixture(
         response = {
           apps: options.missingMetadata
             ? []
-            : apps.map((app) =>
-                Object.assign({}, app, { pluginDisplayNames: ["Notes"], toolSummaries: null }),
-              ),
+            : inventoryApps
+                .filter((app) => (params as { appIds: string[] }).appIds.includes(app.id))
+                .map((app) =>
+                  Object.assign({}, app, { pluginDisplayNames: ["Notes"], toolSummaries: null }),
+                ),
           missingAppIds: options.missingMetadata ? apps.map((app) => app.id) : [],
         };
         break;
@@ -475,7 +495,75 @@ describe("Codex plugin status command", () => {
   });
 });
 
-describe("Codex plugin recheck command", () => {
+describe("Codex hosted app refresh", () => {
+  it("refreshes hosted inventory without requiring a configured plugin", async () => {
+    const test = fixture({ appCount: 2, threadAppsFeature: false });
+    vi.spyOn(commandRuntime, "withCodexPluginCommandContext").mockImplementation(
+      async (_params, run) => await run({ ...test.context, current: {} }),
+    );
+
+    const result = await handleCodexSubcommand(
+      { ...ctx, args: "apps refresh", commandBody: "/codex apps refresh" },
+      { deps: { bindingStore: createCodexTestBindingStore() } },
+    );
+
+    expect(test.request).toHaveBeenCalledWith("app/installed", { forceRefresh: true });
+    expect(test.request).toHaveBeenCalledWith("experimentalFeature/list", { limit: 100 });
+    expect(test.request).toHaveBeenCalledWith("app/read", {
+      appIds: ["app-0", "app-1"],
+      includeTools: true,
+    });
+    expect(test.request.mock.calls.some(([method]) => method.startsWith("plugin/"))).toBe(false);
+    expect(result.text).toContain("current Codex account/runtime");
+    expect(result.text).toContain("/codex plugins status");
+    expect(test.io.mutate).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { args: "apps", owner: true, expected: "Usage: /codex apps refresh" },
+    { args: "apps refresh notes", owner: true, expected: "Usage: /codex apps refresh" },
+    { args: "apps refresh", owner: false, expected: "Only an owner or operator.admin" },
+  ])(
+    "rejects $args for owner=$owner before opening a runtime",
+    async ({ args, owner, expected }) => {
+      const acquire = vi.spyOn(commandRuntime, "withCodexPluginCommandContext");
+      const result = await handleCodexSubcommand(
+        { ...ctx, args, senderIsOwner: owner },
+        { deps: { bindingStore: createCodexTestBindingStore() } },
+      );
+      expect(result.text).toContain(expected);
+      expect(acquire).not.toHaveBeenCalled();
+    },
+  );
+
+  it("refreshes other apps too when a plugin selects the follow-up status", async () => {
+    const test = fixture({ otherApp: true });
+    const result = await handleCodexPluginsSubcommand(
+      ctx,
+      ["recheck", "notes"],
+      test.io,
+      test.runtime,
+    );
+
+    expect(test.request).toHaveBeenCalledWith("app/read", {
+      appIds: ["app-0", "other-app"],
+      includeTools: true,
+    });
+    expect(
+      defaultCodexAppInventoryCache
+        .read({
+          key: test.context.appCacheKey,
+          request: test.context.request,
+          suppressRefresh: true,
+        })
+        .snapshot?.apps.map((app) => app.id),
+    ).toEqual(["app-0", "other-app"]);
+    expect(result.text).toContain("Plugin: notes＠company-tools");
+    expect(result.text).not.toContain("Other plugin app");
+    expect(result.text).toContain("current Codex account/runtime");
+    expect(test.io.mutate).not.toHaveBeenCalled();
+  });
+
   it("refreshes account inventory once while retaining the current thread's restricted policy", async () => {
     const test = fixture({
       runtime: [{ id: "app-0", runtimeName: "App 0", enabled: false, callable: false }],
@@ -487,13 +575,12 @@ describe("Codex plugin recheck command", () => {
       test.io,
       test.runtime,
     );
-    expect(result.text).toContain("App inventory check completed");
+    expect(result.text).toContain("Hosted app refresh request completed");
     expect(result.text).toContain("disabled by effective Codex app policy");
     expect(result.text).toContain("/new or /reset");
     expect(result.text).toContain("Snapshot freshness is unknown");
     expect(result.text).not.toContain("callable in this thread's runtime snapshot");
     expect(test.request.mock.calls.filter(([method]) => method === "app/installed")).toEqual([
-      ["app/installed", { threadId: "thread-a", forceRefresh: false }],
       ["app/installed", { forceRefresh: true }],
       ["app/installed", { threadId: "thread-a", forceRefresh: false }],
     ]);
@@ -510,9 +597,29 @@ describe("Codex plugin recheck command", () => {
     { options: { disabled: true }, expected: "disabled for new conversations" },
     { options: { blocked: true }, expected: "blocked by marketplace policy" },
     { options: { appCount: 0 }, expected: "No hosted apps declared" },
+    { options: { missingMetadata: true }, expected: "app-page permissions are unknown" },
+  ])("preserves $expected after the account-wide refresh", async ({ options, expected }) => {
+    const test = fixture(options);
+    const result = await handleCodexPluginsSubcommand(
+      ctx,
+      ["recheck", "notes"],
+      test.io,
+      test.runtime,
+    );
+    expect(result.text).toContain(expected);
+    expect(result.text).toContain("Hosted app refresh request completed");
+    expect(test.request).toHaveBeenCalledWith("app/installed", { forceRefresh: true });
+    expect(test.io.mutate).not.toHaveBeenCalled();
+    expect(test.runtime.install).not.toHaveBeenCalled();
+  });
+
+  it.each([
     { options: { accountType: "apiKey" as const }, expected: "ChatGPT sign-in" },
     { options: { appsFeature: false }, expected: "disabled in this Codex runtime" },
-    { options: { missingMetadata: true }, expected: "app-page permissions are unknown" },
+    {
+      options: { failMethod: "experimentalFeature/list" },
+      expected: "Hosted app support is unknown",
+    },
   ])("does not refresh when $expected", async ({ options, expected }) => {
     const test = fixture(options);
     const result = await handleCodexPluginsSubcommand(
@@ -522,7 +629,7 @@ describe("Codex plugin recheck command", () => {
       test.runtime,
     );
     expect(result.text).toContain(expected);
-    expect(result.text).not.toContain("check completed");
+    expect(result.text).not.toContain("request completed");
     expect(test.request).not.toHaveBeenCalledWith("app/installed", { forceRefresh: true });
     expect(test.io.mutate).not.toHaveBeenCalled();
   });
@@ -545,7 +652,7 @@ describe("Codex plugin recheck command", () => {
         reason: "aborted",
         mayHaveWritten: true,
       }),
-      expected: "The recheck was cancelled",
+      expected: "The hosted app refresh was cancelled",
     },
   ])(
     "reports $expected without claiming success or exposing provider data",
@@ -558,9 +665,9 @@ describe("Codex plugin recheck command", () => {
         test.runtime,
       );
       expect(result.text).toContain(expected);
-      expect(result.text).toContain("/codex plugins recheck notes@company-tools");
+      expect(result.text).toContain("/codex apps refresh");
       expect(result.text).toContain("Previous inventory was not confirmed");
-      expect(result.text).not.toContain("check completed");
+      expect(result.text).not.toContain("request completed");
       expect(result.text).not.toContain("private upstream response");
       expect(test.io.mutate).not.toHaveBeenCalled();
     },

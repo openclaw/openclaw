@@ -20,7 +20,7 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CodexAppInventoryCache } from "./app-server/app-inventory-cache.js";
 import { applyCodexAppServerAuthProfile } from "./app-server/auth-bridge.js";
-import { refreshCodexPluginAppRuntimeState } from "./app-server/plugin-activation.js";
+import { refreshCodexAppRuntimeState } from "./app-server/plugin-activation.js";
 import { createCodexTestBindingStore } from "./app-server/session-binding.test-helpers.js";
 import * as sharedClients from "./app-server/shared-client.js";
 import { createClientHarness } from "./app-server/test-support.js";
@@ -140,6 +140,20 @@ async function fixture(stableAccount = true) {
 }
 
 describe("Codex plugin command context", () => {
+  it("can inspect a runtime without plugin management configuration", async () => {
+    const test = await fixture();
+    test.deps.codexPluginsManagementIo = undefined;
+    const current = await withCodexPluginCommandContext(
+      { ...test, pluginConfig: {} },
+      async (context) => {
+        await context.validateCurrent();
+        return context.current;
+      },
+    );
+    expect(current).toEqual({});
+    expect(test.release).toHaveBeenCalledOnce();
+  });
+
   it.each([true, false])(
     "rejects an account replaced during preparation (stored account %s)",
     async (stableAccount) => {
@@ -487,7 +501,7 @@ describe("Codex plugin command context", () => {
       await expect(
         withCodexPluginCommandContext({ ...test, pluginConfig: {} }, async (context) => {
           appCacheKey = context.appCacheKey;
-          await refreshCodexPluginAppRuntimeState({
+          await refreshCodexAppRuntimeState({
             request: context.request,
             appCache,
             appCacheKey,

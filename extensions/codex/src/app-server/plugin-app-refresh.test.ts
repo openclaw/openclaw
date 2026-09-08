@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { CodexAppInventoryCache } from "./app-inventory-cache.js";
 import { codexAppInventoryResponse } from "./app-inventory.test-helpers.js";
-import { refreshCodexPluginAppRuntimeState } from "./plugin-activation.js";
+import { refreshCodexAppRuntimeState } from "./plugin-activation.js";
 import type { v2 } from "./protocol.js";
 
 const connectedApp: v2.AppInfo = {
@@ -23,7 +23,7 @@ describe("explicit Codex plugin app refresh", () => {
       ),
     );
 
-    await refreshCodexPluginAppRuntimeState({
+    await refreshCodexAppRuntimeState({
       request,
       appCache,
       appCacheKey: "selected-runtime",
@@ -52,7 +52,7 @@ describe("explicit Codex plugin app refresh", () => {
     const failure = new Error("Hosted connector refresh unavailable");
 
     await expect(
-      refreshCodexPluginAppRuntimeState({
+      refreshCodexAppRuntimeState({
         request: async () => {
           throw failure;
         },
@@ -84,7 +84,7 @@ describe("explicit Codex plugin app refresh", () => {
     });
     const request = vi.fn(async (method, params) => codexAppInventoryResponse(method, [], params));
 
-    await refreshCodexPluginAppRuntimeState({ request, appCache, appCacheKey: key });
+    await refreshCodexAppRuntimeState({ request, appCache, appCacheKey: key });
     finishOldRefresh();
     await oldRefresh;
 

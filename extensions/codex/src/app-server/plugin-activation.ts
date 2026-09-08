@@ -245,7 +245,7 @@ export async function refreshCodexPluginRuntimeState(params: {
 
   if (params.appCache && params.appCacheKey) {
     try {
-      await refreshCodexPluginAppRuntimeState({
+      await refreshCodexAppRuntimeState({
         ...params,
         appCache: params.appCache,
         appCacheKey: params.appCacheKey,
@@ -261,7 +261,7 @@ export async function refreshCodexPluginRuntimeState(params: {
 }
 
 /** Refreshes hosted app tools without reloading unrelated active threads. */
-export async function refreshCodexPluginAppRuntimeState(params: {
+export async function refreshCodexAppRuntimeState(params: {
   request: CodexPluginRuntimeRequest;
   appCache: CodexAppInventoryCache;
   appCacheKey: string;

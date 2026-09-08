@@ -7,6 +7,7 @@ import type { PluginCommandContext, PluginCommandResult } from "openclaw/plugin-
 import { CODEX_PLUGINS_MARKETPLACE_NAME } from "./app-server/config.js";
 import { isOpenAiCuratedMarketplaceName } from "./app-server/plugin-inventory.js";
 import type { v2 } from "./app-server/protocol.js";
+import { refreshCodexHostedApps } from "./command-apps-refresh.js";
 import { canMutateCodexHost } from "./command-authorization.js";
 import { formatCodexDisplayText } from "./command-formatters.js";
 import { buildCodexPluginAppLinks } from "./command-plugin-app-links.js";
@@ -27,7 +28,6 @@ import {
   codexPluginAppPageLinks,
   readCodexPluginReadiness,
 } from "./command-plugins-readiness.js";
-import { recheckCodexPluginReadiness } from "./command-plugins-recheck.js";
 import type { CodexPluginCommandContext } from "./command-plugins-runtime.js";
 import {
   buildCodexCommandPickerPresentation,
@@ -148,7 +148,7 @@ export async function handleCodexPluginsSubcommand(
         };
       }
       if (normalized === "recheck") {
-        return await recheckCodexPluginReadiness(context, configured.configKey);
+        return await refreshCodexHostedApps(context, configured.configKey);
       }
       return formatCodexPluginReadiness(
         await readCodexPluginReadiness({
@@ -325,7 +325,8 @@ function buildPluginsHelp(): string {
     "- /codex plugins list                       show explicitly configured plugins",
     "- /codex plugins available                  list discoverable Codex marketplaces",
     "- /codex plugins status <name>@<marketplace> [page]  inspect app readiness without refreshing",
-    "- /codex plugins recheck <configured-plugin>  refresh app inventory after connecting",
+    "- /codex apps refresh                      refresh all hosted apps for the current Codex account/runtime",
+    "- /codex plugins recheck <configured-plugin>  refresh all hosted apps, then show this plugin's status",
     "- /codex plugins install <name>@<marketplace>  install and authorize one plugin",
     "- /codex plugins enable <name>              enable a configured plugin",
     "- /codex plugins disable <name>             disable a configured plugin",
@@ -530,7 +531,8 @@ async function installCodexPlugin(
           type: "buttons",
           buttons: [
             {
-              label: appLinks.length > 0 ? "Recheck app tools" : "Check status",
+              label:
+                appLinks.length > 0 ? "Refresh hosted apps, then check status" : "Check status",
               action: {
                 type: "command",
                 command: `/codex plugins ${appLinks.length > 0 ? "recheck" : "status"} ${requestedId}`,

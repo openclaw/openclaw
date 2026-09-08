@@ -403,6 +403,7 @@ export function buildHelp(): string {
     "- /codex diagnostics [note]",
     "- /codex computer-use [status|install]",
     "- /codex account",
+    "- /codex apps refresh                       refresh hosted inventory for the current Codex account/runtime",
     "- /codex mcp",
     "- /codex skills",
     "- /codex plugins [list|enable|disable]",

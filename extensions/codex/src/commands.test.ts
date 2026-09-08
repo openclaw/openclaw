@@ -500,6 +500,7 @@ describe("codex command", () => {
       "/codex fast menu",
       "/codex computer-use menu",
       "/codex account",
+      "/codex apps refresh",
       "/codex help",
     ]);
   });
