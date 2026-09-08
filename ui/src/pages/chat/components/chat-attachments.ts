@@ -17,7 +17,7 @@ import {
   releaseChatAttachmentPayload,
 } from "../attachment-payload-store.ts";
 import { admitAttachmentFiles } from "./chat-attachment-admission.ts";
-import { resolveAttachmentFileIcon } from "./chat-attachment-file-icon.ts";
+import { renderCompactAttachmentFile } from "./chat-attachment-file.ts";
 
 const CHAT_ATTACHMENT_ACCEPT =
   "image/*,audio/*,video/*,application/pdf,text/*,.csv,.json,.md,.txt,.zip," +
@@ -192,32 +192,6 @@ function pastedTextPreview(attachment: ChatAttachment): string {
   return (
     pastedTextPreviews.get(attachment) ?? attachment.fileName ?? t("chat.attachments.attachedFile")
   );
-}
-
-function renderCompactAttachmentFile(attachment: ChatAttachment) {
-  const resolved = resolveAttachmentFileIcon(
-    attachment.fileName ?? "attachment",
-    attachment.mimeType,
-  );
-  const glyph =
-    resolved.family === "video"
-      ? icons.play
-      : resolved.family === "audio"
-        ? icons.music
-        : icons.fileText;
-  return html`
-    <openclaw-tooltip .content=${attachment.fileName ?? t("chat.attachments.attachedFile")}>
-      <div class="chat-attachment-file">
-        <span class="chat-attachment-file__icon" data-family=${resolved.family}>${glyph}</span>
-        <span class="chat-attachment-file__body">
-          <span class="chat-attachment-file__name"
-            >${attachment.fileName ?? t("chat.attachments.attachedFile")}</span
-          >
-          <span class="chat-attachment-file__type">${resolved.extensionLabel}</span>
-        </span>
-      </div>
-    </openclaw-tooltip>
-  `;
 }
 
 function appendPastedTextToDraft(draft: string, text: string): string {
