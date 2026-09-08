@@ -92,7 +92,7 @@ import type { IdentityConfig } from "../../config/types.base.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isMissingPathError } from "../../infra/errors.js";
 import { withAgentExecApprovalsRemoved } from "../../infra/exec-approvals.js";
-import { root, FsSafeError, type ReadResult } from "../../infra/fs-safe.js";
+import { root, FsSafeError, trashAllowedRoots, type ReadResult } from "../../infra/fs-safe.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import { movePathToTrash } from "../../plugin-sdk/browser-maintenance.js";
 import { normalizeAgentIdStrict } from "../../routing/session-key.js";
@@ -412,7 +412,14 @@ async function removeAgentPath(
     // fs-safe pins traversal and identity for validation; Trash has no fd-relative move API, so
     // replacement after this check and before its rename is the accepted residual race bound.
     assertCurrent();
-    await movePathToTrash(trashPath);
+    // statAgentCleanupPath verified this parent; without explicit roots fs-safe only
+    // allows home/tmp and refuses every path of a volume-backed state dir.
+    await movePathToTrash(trashPath, {
+      allowedRoots: trashAllowedRoots(
+        trashPath,
+        cleanupPath.kind === "symlink" ? cleanupPath.canonicalPath : undefined,
+      ),
+    });
     return { removed: { path: pathname, method: "trash" } };
   } catch (error) {
     if (!isMissingPathError(error)) {
