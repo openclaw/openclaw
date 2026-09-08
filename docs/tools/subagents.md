@@ -415,6 +415,11 @@ a **bounded sample** of at most three runs, not a complete list; read
 `runCount` for the real total. At most eight groups are emitted, while
 `sharedCwdGroupTotal` reports the exact total. Only the sampled runs carry a
 group id; rows outside the sample or in omitted groups carry none. The
+selection is deterministic: groups are ordered by descending `runCount` and
+then by directory, so the cap keeps the most contended directories, and each
+sample is ordered by run id. Identical live state yields identical ids,
+samples, and reported directories regardless of the order the runs started or
+were listed in. The
 human-readable view emits each reported path once in a matching
 `shared working directories` section; sampled rows carry only
 `[shared cwd group N]`.

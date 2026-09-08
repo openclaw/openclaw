@@ -69,7 +69,7 @@ type SubagentSharedCwdGroup = {
   /** Exact live-run count for the group. */
   runCount: number;
   /**
-   * At most `SHARED_CWD_RUN_SAMPLE_MAX` run ids, in list order. A sample,
+   * At most `SHARED_CWD_RUN_SAMPLE_MAX` run ids, ordered by run id. A sample,
    * not an inventory — read `runCount` for the real total.
    */
   runIds: string[];
@@ -214,6 +214,14 @@ function sharedCwdGroupKey(identity: string) {
   return process.platform === "win32" ? identity.toLowerCase() : identity;
 }
 
+/** Locale-independent code-unit ordering; `localeCompare` would vary by host ICU data. */
+function compareCodeUnits(a: string, b: string) {
+  if (a === b) {
+    return 0;
+  }
+  return a < b ? -1 : 1;
+}
+
 /**
  * Cap a shared directory for display, keeping the tail.
  *
@@ -281,16 +289,36 @@ function buildSharedCwdIndex(params: {
       runIds: [run.runId],
     });
   }
+  // Order the report by keys that depend only on live state, before the caps
+  // narrow it.
+  //
+  // `groups` iterates in insertion order and `runIds` accumulate in encounter
+  // order, both inherited from `sortSubagentRuns`, which compares start
+  // timestamps only. Runs that started in the same millisecond therefore keep
+  // whatever order the caller's array happened to have — and that permutation
+  // would otherwise decide the group ids, which runs each group samples, and
+  // (past `SHARED_CWD_GROUP_MAX`) which directories are reported at all, for
+  // identical live state.
+  //
+  // Groups sort by descending live-run count so the cap keeps the most
+  // contended directories, with the canonical grouping key as the tiebreak;
+  // samples sort by run id. Both tiebreaks are unique — one group per key, one
+  // record per run id — so each comparator is a total order and the reported
+  // shape is a function of the live runs alone.
+  const orderedGroups = [...groups]
+    .filter(([, group]) => group.runIds.length >= 2)
+    .map(([key, group]) => ({
+      key,
+      displayPath: group.displayPath,
+      runIds: group.runIds.toSorted(compareCodeUnits),
+    }))
+    .toSorted((a, b) => b.runIds.length - a.runIds.length || compareCodeUnits(a.key, b.key));
   const sharedCwdGroups: SubagentSharedCwdGroup[] = [];
   const groupIdByRunId = new Map<string, number>();
-  let sharedCwdGroupTotal = 0;
-  for (const group of groups.values()) {
-    if (group.runIds.length < 2) {
-      continue;
-    }
-    sharedCwdGroupTotal += 1;
+  const sharedCwdGroupTotal = orderedGroups.length;
+  for (const group of orderedGroups) {
     if (sharedCwdGroups.length >= SHARED_CWD_GROUP_MAX) {
-      continue;
+      break;
     }
     const id = sharedCwdGroups.length + 1;
     const sampledRunIds = group.runIds.slice(0, SHARED_CWD_RUN_SAMPLE_MAX);

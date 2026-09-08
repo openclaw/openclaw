@@ -41,7 +41,8 @@
  *      `subagents` tool emits for `action: "list"` and asserts the advisory's
  *      whole-response contribution is capped — the P0 regression. Also drives
  *      25 shared directories across 50 children to prove only eight directory
- *      summaries are model-visible.
+ *      summaries are model-visible, and that permuting that equal-timestamp
+ *      cohort leaves the ids, samples, and reported directories identical.
  *
  * Run: pnpm tsx scripts/proof-135480-subagent-shared-cwd-advisory.ts
  */
@@ -222,7 +223,11 @@ async function main(): Promise<void> {
     check("the native and ACP rows refer to the same group", () => {
       assert.equal(list.active.find((item) => item.runId === nativeRun.runId)?.sharedCwdGroupId, 1);
       assert.equal(list.active.find((item) => item.runId === acpRun.runId)?.sharedCwdGroupId, 1);
-      assert.deepEqual(groupFor(list, nativeRun.runId)?.runIds, [nativeRun.runId, acpRun.runId]);
+      // The sample is ordered by run id, not by which runtime was seen first.
+      assert.deepEqual(
+        groupFor(list, nativeRun.runId)?.runIds,
+        [nativeRun.runId, acpRun.runId].toSorted(),
+      );
     });
   }
 
@@ -254,7 +259,7 @@ async function main(): Promise<void> {
         id: 1,
         path: canonical,
         runCount: 2,
-        runIds: [realRun.runId, linkRun.runId],
+        runIds: [realRun.runId, linkRun.runId].toSorted(),
       });
       assert.equal(list.active.find((item) => item.runId === linkRun.runId)?.sharedCwdGroupId, 1);
     });
@@ -467,6 +472,37 @@ async function main(): Promise<void> {
         16,
       );
       assert.ok(manyList.text.includes("shared working directories (8/25 shown):"));
+    });
+
+    // `sortSubagentRuns` compares start timestamps only, so this
+    // same-millisecond cohort reaches the advisory in whatever order the
+    // caller's array had. With 25 groups against a cap of 8, that order used to
+    // decide the group ids, the samples, and which directories were reported at
+    // all. Permuting it must now leave the whole report unchanged.
+    const summarizeMany = (input: SubagentRunRecord[]) => {
+      const list = listFor(manyStore, input).list;
+      return JSON.stringify({
+        total: list.sharedCwdGroupTotal,
+        groups: list.sharedCwdGroups,
+        // Sorted so the comparison isolates group assignment from the row
+        // ordering the permutation legitimately changes.
+        assignments: list.active
+          .map((item) => `${item.runId}=${item.sharedCwdGroupId ?? "none"}`)
+          .toSorted(),
+      });
+    };
+    const inOrderSummary = summarizeMany(manyRuns);
+    const reversedSummary = summarizeMany(manyRuns.toReversed());
+    const interleavedSummary = summarizeMany([
+      ...manyRuns.filter((_unused, i) => i % 2 === 1),
+      ...manyRuns.filter((_unused, i) => i % 2 === 0),
+    ]);
+    console.log(
+      `   reported directories: ${manyList.sharedCwdGroups.map((group) => path.basename(group.path)).join(", ")}`,
+    );
+    check("permuting equal-timestamp runs leaves the whole report identical", () => {
+      assert.equal(reversedSummary, inOrderSummary);
+      assert.equal(interleavedSummary, inOrderSummary);
     });
   }
 

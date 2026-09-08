@@ -728,8 +728,9 @@ describe("buildSubagentList", () => {
         {
           id: 1,
           path: canonical,
+          // The sample is ordered by run id, not by which alias was seen first.
+          runIds: [runA.runId, runB.runId].toSorted(),
           runCount: 2,
-          runIds: [runA.runId, runB.runId],
         },
       ]);
       expect(byRunId.get(runA.runId)?.sharedCwdGroupId).toBe(1);
@@ -921,6 +922,79 @@ describe("buildSubagentList", () => {
       for (const group of groups.slice(8)) {
         expect(list.text).not.toContain(path.resolve(group.dir));
       }
+    });
+
+    // Regression for encounter-order leakage: `sortSubagentRuns` compares start
+    // timestamps only, so a same-millisecond cohort reaches the advisory in
+    // whatever order the caller's array had. Group ids, samples, and — past the
+    // group cap — the reported directories must not move with it.
+    it("reports identical shared-cwd groups for permuted equal-timestamp runs", async () => {
+      const now = Date.now();
+      // Ten groups against a cap of eight forces the report to choose, and the
+      // single three-run group outranks the two-run ties on live-run count.
+      const groupSpecs = [
+        { tag: "zz", runIndexes: [0, 1, 2] },
+        ...Array.from({ length: 9 }, (_unused, groupIndex) => ({
+          tag: String(groupIndex).padStart(2, "0"),
+          runIndexes: [0, 1],
+        })),
+      ];
+      const dirForTag = (tag: string) => path.join(testWorkspaceDir, `perm-group-${tag}`);
+      const storePath = path.join(testWorkspaceDir, "sessions-shared-cwd-permuted.json");
+      const runs: SubagentRunRecord[] = [];
+      for (const spec of groupSpecs) {
+        for (const runIndex of spec.runIndexes) {
+          // Every run carries the identical createdAt/startedAt from `makeRun`.
+          const run = makeRun(`perm-${spec.tag}-${runIndex}`, now);
+          runs.push(run);
+          addSubagentRunForTests(run);
+          await seedSessionEntry(storePath, run.childSessionKey, dirForTag(spec.tag));
+        }
+      }
+      const cfg = { session: { store: storePath } } as OpenClawConfig;
+      const summarize = (input: SubagentRunRecord[]) => {
+        const list = buildSubagentList({ cfg, runs: input, recentMinutes: 30 });
+        return {
+          total: list.sharedCwdGroupTotal,
+          groups: list.sharedCwdGroups,
+          // Sorted so the comparison isolates group assignment from the row
+          // ordering the permutation legitimately changes.
+          assignments: list.active
+            .map((item) => `${item.runId}=${item.sharedCwdGroupId ?? "none"}`)
+            .toSorted(),
+        };
+      };
+
+      const inOrder = summarize(runs);
+      const reversed = summarize(runs.toReversed());
+      const interleaved = summarize([
+        ...runs.filter((_unused, i) => i % 2 === 1),
+        ...runs.filter((_unused, i) => i % 2 === 0),
+      ]);
+
+      expect(reversed).toEqual(inOrder);
+      expect(interleaved).toEqual(inOrder);
+      // Pin the ordering itself, not only its stability across permutations.
+      expect(inOrder.total).toBe(10);
+      expect(inOrder.groups[0]).toEqual({
+        id: 1,
+        path: path.resolve(dirForTag("zz")),
+        runCount: 3,
+        runIds: ["run-perm-zz-0", "run-perm-zz-1", "run-perm-zz-2"],
+      });
+      expect(inOrder.groups.map((group) => group.path)).toEqual([
+        path.resolve(dirForTag("zz")),
+        ...Array.from({ length: 7 }, (_unused, groupIndex) =>
+          path.resolve(dirForTag(String(groupIndex).padStart(2, "0"))),
+        ),
+      ]);
+      // The two lowest-ranked groups stay unreported under every permutation.
+      for (const tag of ["07", "08"]) {
+        expect(inOrder.groups.some((group) => group.path === path.resolve(dirForTag(tag)))).toBe(
+          false,
+        );
+      }
+      expect(inOrder.assignments.filter((entry) => entry.endsWith("=none"))).toHaveLength(4);
     });
 
     it("does not flag a live run whose only directory peer has ended", async () => {
