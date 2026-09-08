@@ -434,6 +434,7 @@ type DispatchWrapperSpec = {
   name: string;
   unwrap?: (argv: string[], platform?: NodeJS.Platform) => string[] | null;
   transparentUsage?: boolean | ((argv: string[], platform?: NodeJS.Platform) => boolean);
+  changesExecutableLookup?: true;
 };
 
 const DISPATCH_WRAPPER_SPECS: readonly DispatchWrapperSpec[] = [
@@ -494,6 +495,7 @@ const DISPATCH_WRAPPER_SPECS: readonly DispatchWrapperSpec[] = [
   { name: "watch" },
   {
     name: "xcrun",
+    changesExecutableLookup: true,
     unwrap: (argv, platform) =>
       supportsXcrunDispatchWrapper(platform) ? unwrapXcrunInvocation(argv) : null,
     transparentUsage: (_argv, platform) => supportsXcrunDispatchWrapper(platform),
@@ -514,6 +516,7 @@ type DispatchWrapperUnwrapResult =
   | { kind: "unwrapped"; wrapper: string; argv: string[] };
 
 type DispatchWrapperTrustPlan = {
+  dispatchChainComplete: boolean;
   argv: string[];
   wrappers: string[];
   wrapperInvocations: DispatchWrapperInvocation[];
@@ -594,6 +597,7 @@ function blockedDispatchWrapperPlan(params: {
     wrappers: params.wrappers,
     wrapperInvocations: params.wrapperInvocations,
     policyBlocked: true,
+    dispatchChainComplete: false,
     blockedWrapper: params.blockedWrapper,
   };
 }
@@ -642,7 +646,15 @@ export function resolveDispatchWrapperTrustPlan(
       });
     }
   }
-  return { argv: current, wrappers, wrapperInvocations, policyBlocked: false };
+  return {
+    argv: current,
+    wrappers,
+    wrapperInvocations,
+    policyBlocked: false,
+    dispatchChainComplete: wrappers.every(
+      (wrapper) => !DISPATCH_WRAPPER_SPEC_BY_NAME.get(wrapper)?.changesExecutableLookup,
+    ),
+  };
 }
 
 export function hasDispatchEnvManipulation(argv: string[]): boolean {

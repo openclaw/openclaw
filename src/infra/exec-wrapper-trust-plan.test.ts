@@ -1,16 +1,14 @@
 // Covers trust-plan unwrapping for exec command wrappers.
 import { describe, expect, test } from "vitest";
-import {
-  hasUnboundExecDispatchWrapperIdentity,
-  resolveExecWrapperTrustPlan,
-} from "./exec-wrapper-trust-plan.js";
+import { resolveExecWrapperTrustPlan } from "./exec-wrapper-trust-plan.js";
 
 test.each(["darwin", "linux", "win32"] as const)(
   "retains an unbound outer dispatcher when policy unwrapping stops on %s",
   (platform) => {
-    expect(hasUnboundExecDispatchWrapperIdentity(["xcrun", "env", "FOO=bar", "ls"], platform)).toBe(
-      true,
-    );
+    expect(
+      resolveExecWrapperTrustPlan(["xcrun", "env", "FOO=bar", "ls"], undefined, platform)
+        .dispatchChain,
+    ).toBeNull();
   },
 );
 
@@ -418,6 +416,11 @@ describe("resolveExecWrapperTrustPlan", () => {
     if (!enabled) {
       return;
     }
-    expect(resolveExecWrapperTrustPlan(argv, depth, platform)).toEqual(expected);
+    const { dispatchChain: _dispatchChain, ...policyPlan } = resolveExecWrapperTrustPlan(
+      argv,
+      depth,
+      platform,
+    );
+    expect(policyPlan).toEqual(expected);
   });
 });

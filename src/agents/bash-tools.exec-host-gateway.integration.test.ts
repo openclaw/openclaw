@@ -95,16 +95,20 @@ describe.skipIf(process.platform === "win32")("gateway dispatch executable bindi
   }
 
   it.each([
-    { approval: "auto", executable: "env" },
-    { approval: "auto", executable: "ls" },
-    { approval: "human", executable: "env" },
-    { approval: "human", executable: "ls" },
+    { approval: "auto", executable: "env", command: "env ls *.txt" },
+    { approval: "auto", executable: "ls", command: "env ls *.txt" },
+    { approval: "auto", executable: "ls", command: "ls *.txt" },
+    { approval: "human", executable: "env", command: "env ls *.txt" },
+    { approval: "human", executable: "ls", command: "env ls *.txt" },
   ] as const)(
-    "rejects real PATH substitution of $executable after $approval approval before spawn",
-    async ({ approval, executable }) => {
+    "rejects real PATH substitution of $executable after $approval approval of $command before spawn",
+    async ({ approval, executable, command }) => {
       fs.writeFileSync(path.join(root, "approved.txt"), "fixture");
-      for (const command of ["env", "ls"]) {
-        const resolved = resolveExecutablePath(command, { env: process.env, useCache: false });
+      for (const executableName of ["env", "ls"]) {
+        const resolved = resolveExecutablePath(executableName, {
+          env: process.env,
+          useCache: false,
+        });
         expect(resolved).toBeDefined();
         expect(pathLooksMutableForShellPayloadSync(resolved ?? "")).toBe(false);
       }
@@ -139,7 +143,7 @@ describe.skipIf(process.platform === "win32")("gateway dispatch executable bindi
       });
       const tool = makeTool(approval === "auto" ? "auto" : "ask", autoReviewer);
       try {
-        const result = await tool.execute("dispatch-binding-call", { command: "env ls *.txt" });
+        const result = await tool.execute("dispatch-binding-call", { command });
         expect(approved).toBe(true);
         expect(resolveExecutablePath(executable, { env: process.env, useCache: false })).toBe(
           replacement,
@@ -166,56 +170,72 @@ describe.skipIf(process.platform === "win32")("gateway dispatch executable bindi
     },
   );
 
-  it("really executes the approved unpinned wrapper glob and returns stdout without substitution", async () => {
-    fs.writeFileSync(path.join(root, "approved.txt"), "fixture");
-    const supervisor = createProcessSupervisor();
-    spawn.mockImplementation((input) => supervisor.spawn(input));
-    const autoReviewer = vi.fn<ExecAutoReviewer>(async () => ({
-      decision: "allow-once",
-      risk: "low",
-      rationale: "list fixture files",
-    }));
-    const result = await makeTool("auto", autoReviewer).execute("dispatch-positive-call", {
-      command: "env ls *.txt",
-    });
-    expect(autoReviewer).toHaveBeenCalledWith(
-      expect.objectContaining({ command: "env ls *.txt", reason: "execution-plan-miss" }),
-    );
-    expect(callGatewayTool).not.toHaveBeenCalled();
-    expect(spawn.mock.calls.length).toBe(1);
-    expect(result.details).toMatchObject({ status: "completed", exitCode: 0 });
-    expect(result.content[0]).toMatchObject({ text: expect.stringContaining("approved.txt") });
-  });
-
-  it.each(["xcrun ls *.txt", "command ls *.txt", "exec ls *.txt", "builtin echo *.txt"])(
-    "routes unbindable dispatch %s to human approval without auto-review",
+  it.each(["env ls *.txt", "ls *.txt"])(
+    "really executes approved unpinned %s and returns stdout without substitution",
     async (command) => {
-      fs.copyFileSync("/usr/bin/true", path.join(binDir, "xcrun"));
+      fs.writeFileSync(path.join(root, "approved.txt"), "fixture");
+      const supervisor = createProcessSupervisor();
+      spawn.mockImplementation((input) => supervisor.spawn(input));
       const autoReviewer = vi.fn<ExecAutoReviewer>(async () => ({
         decision: "allow-once",
         risk: "low",
-        rationale: "would approve if called",
+        rationale: "list fixture files",
       }));
-      vi.mocked(callGatewayTool).mockResolvedValue({ decision: "deny" });
-      const result = await makeTool("auto", autoReviewer).execute("dispatch-human-call", {
+      const result = await makeTool("auto", autoReviewer).execute("dispatch-positive-call", {
         command,
       });
-      expect(autoReviewer).not.toHaveBeenCalled();
-      expect(callGatewayTool).toHaveBeenCalledWith(
-        "exec.approval.request",
-        expect.anything(),
-        expect.objectContaining({
-          command,
-          warningText: expect.stringContaining(
-            "Exec auto-review skipped: dispatch wrapper identity cannot be bound",
-          ),
-        }),
-        expect.anything(),
+      expect(autoReviewer).toHaveBeenCalledWith(
+        expect.objectContaining({ command, reason: "execution-plan-miss" }),
       );
-      expect(result.details.status).toBe("failed");
-      expect(spawn.mock.calls.length).toBe(0);
+      expect(callGatewayTool).not.toHaveBeenCalled();
+      expect(spawn.mock.calls.length).toBe(1);
+      expect(result.details).toMatchObject({ status: "completed", exitCode: 0 });
+      expect(result.content[0]).toMatchObject({ text: expect.stringContaining("approved.txt") });
     },
   );
+
+  it.each([
+    "env FOO=bar ls *.txt",
+    "sh -c 'ls *.txt'",
+    "xcrun ls *.txt",
+    "command ls *.txt",
+    "exec ls *.txt",
+    "builtin echo *.txt",
+  ])("routes unbindable dispatch %s to human approval without auto-review", async (command) => {
+    fs.copyFileSync("/usr/bin/true", path.join(binDir, "xcrun"));
+    const autoReviewer = vi.fn<ExecAutoReviewer>(async () => ({
+      decision: "allow-once",
+      risk: "low",
+      rationale: "would approve if called",
+    }));
+    const recordedSpawn = spawn.getMockImplementation()!;
+    spawn.mockImplementation(async (...args) => {
+      fs.writeFileSync(path.join(root, "spawn-marker"), "recorded");
+      return recordedSpawn(...args);
+    });
+    vi.mocked(callGatewayTool).mockImplementation(async () => {
+      fs.writeFileSync(path.join(binDir, "ls"), "", { mode: 0o755 });
+      return { decision: "deny" };
+    });
+    const result = await makeTool("auto", autoReviewer).execute("dispatch-human-call", {
+      command,
+    });
+    expect(autoReviewer).not.toHaveBeenCalled();
+    expect(callGatewayTool).toHaveBeenCalledWith(
+      "exec.approval.request",
+      expect.anything(),
+      expect.objectContaining({
+        command,
+        warningText: expect.stringContaining(
+          "Exec auto-review skipped: dispatch chain cannot be bound",
+        ),
+      }),
+      expect.anything(),
+    );
+    expect(result.details.status).toBe("failed");
+    expect(spawn.mock.calls.length).toBe(0);
+    expect(fs.existsSync(path.join(root, "spawn-marker"))).toBe(false);
+  });
 
   it.each(["busybox", "toybox"])(
     "retains opaque interpreter rejection for %s shell applets with a resolved binary",

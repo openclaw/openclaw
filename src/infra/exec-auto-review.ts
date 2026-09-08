@@ -76,7 +76,7 @@ export const EXEC_AUTO_REVIEW_SHELL_STARTUP_WARNING =
   "Exec auto-review skipped: login or interactive shell startup requires human approval";
 
 export const EXEC_AUTO_REVIEW_DISPATCH_IDENTITY_WARNING =
-  "Exec auto-review skipped: dispatch wrapper identity cannot be bound";
+  "Exec auto-review skipped: dispatch chain cannot be bound";
 
 /** Keeps reviewer and provider explanations safe for human-facing approval text. */
 export function normalizeExecAutoReviewRationale(value: unknown, fallback: string): string {

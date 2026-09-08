@@ -8,11 +8,15 @@ import {
 } from "./dispatch-wrapper-resolution.js";
 import {
   extractBindableShellWrapperInlineCommand,
+  extractShellWrapperInlineCommand,
+  hasPosixShellStartupBeforeInlineCommand,
   isShellWrapperExecutable,
   unwrapKnownShellMultiplexerInvocation,
 } from "./shell-wrapper-resolution.js";
 
 type ExecWrapperTrustPlan = {
+  // Null when policy projection cannot describe every actual executable dispatch.
+  dispatchChain: string[][] | null;
   argv: string[];
   policyArgv: string[];
   wrapperChain: string[];
@@ -31,6 +35,7 @@ function blockedExecWrapperTrustPlan(params: {
   blockedWrapper: string;
 }): ExecWrapperTrustPlan {
   return {
+    dispatchChain: null,
     argv: params.argv,
     policyArgv: params.policyArgv ?? params.argv,
     wrapperChain: params.wrapperChain,
@@ -48,11 +53,21 @@ function finalizeExecWrapperTrustPlan(
   wrapperChain: string[],
   wrapperInvocations: DispatchWrapperInvocation[],
   policyBlocked: boolean,
+  dispatchChainComplete: boolean,
 ): ExecWrapperTrustPlan {
   const rawExecutable = argv[0]?.trim() ?? "";
   const shellWrapperExecutable =
     !policyBlocked && rawExecutable.length > 0 && isShellWrapperExecutable(rawExecutable);
   const plan: ExecWrapperTrustPlan = {
+    dispatchChain:
+      dispatchChainComplete &&
+      !policyBlocked &&
+      rawExecutable &&
+      (!shellWrapperExecutable ||
+        (extractShellWrapperInlineCommand(argv) === null &&
+          !hasPosixShellStartupBeforeInlineCommand(argv)))
+        ? [...wrapperInvocations.map(({ sourceArgv }) => sourceArgv), argv]
+        : null,
     argv,
     policyArgv,
     wrapperChain,
@@ -125,6 +140,7 @@ export function resolveExecWrapperTrustPlan(
   let current = argv;
   let policyArgv = argv;
   let sawShellMultiplexer = false;
+  let dispatchChainComplete = true;
   const wrapperChain: string[] = [];
   const wrapperInvocations: DispatchWrapperInvocation[] = [];
   for (let depth = 0; depth < maxDepth; depth += 1) {
@@ -134,6 +150,7 @@ export function resolveExecWrapperTrustPlan(
       platform,
     );
     wrapperInvocations.push(...dispatchPlan.wrapperInvocations);
+    dispatchChainComplete &&= dispatchPlan.dispatchChainComplete;
     if (dispatchPlan.policyBlocked) {
       return blockedExecWrapperTrustPlan({
         argv: dispatchPlan.argv,
@@ -166,6 +183,7 @@ export function resolveExecWrapperTrustPlan(
       });
     }
     if (shellArgvCarrierUnwrap.kind === "unwrapped") {
+      dispatchChainComplete = false;
       wrapperChain.push(shellArgvCarrierUnwrap.wrapper);
       wrapperInvocations.push({
         wrapper: shellArgvCarrierUnwrap.wrapper,
@@ -192,6 +210,7 @@ export function resolveExecWrapperTrustPlan(
       });
     }
     if (shellMultiplexerUnwrap.kind === "unwrapped") {
+      dispatchChainComplete = false;
       wrapperChain.push(shellMultiplexerUnwrap.wrapper);
       wrapperInvocations.push({
         wrapper: shellMultiplexerUnwrap.wrapper,
@@ -251,24 +270,12 @@ export function resolveExecWrapperTrustPlan(
     }
   }
 
-  return finalizeExecWrapperTrustPlan(current, policyArgv, wrapperChain, wrapperInvocations, false);
-}
-
-const UNBOUND_DISPATCH_IDENTITIES = new Set([
-  "xcrun",
-  "busybox",
-  "toybox",
-  ...TRANSPARENT_SHELL_ARGV_CARRIERS,
-]);
-
-/** These dispatchers select embedded applets, toolchains, or shell builtin behavior. */
-export function hasUnboundExecDispatchWrapperIdentity(
-  argv: string[],
-  platform: NodeJS.Platform = process.platform,
-): boolean {
-  const plan = resolveExecWrapperTrustPlan(argv, undefined, platform);
-  return (
-    plan.wrapperInvocations.some(({ wrapper }) => UNBOUND_DISPATCH_IDENTITIES.has(wrapper)) ||
-    (plan.blockedWrapper !== undefined && UNBOUND_DISPATCH_IDENTITIES.has(plan.blockedWrapper))
+  return finalizeExecWrapperTrustPlan(
+    current,
+    policyArgv,
+    wrapperChain,
+    wrapperInvocations,
+    false,
+    dispatchChainComplete,
   );
 }

@@ -1693,9 +1693,9 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
   );
 
   it.runIf(process.platform !== "win32").each([
-    { approval: "auto", driftAt: "reviewer" },
-    { approval: "human", driftAt: "commit" },
     { approval: "auto", driftAt: "unchanged" },
+    { approval: "human", driftAt: "commit" },
+    { approval: "human", driftAt: "unchanged" },
   ] as const)(
     "checks executable identity for $approval approval when resolution is $driftAt",
     async ({ approval, driftAt }) => {
@@ -1720,10 +1720,11 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
             },
           };
         });
-      const autoReviewer = vi.fn<ExecAutoReviewer>(() => {
-        changed = driftAt === "reviewer";
-        return { decision: "allow-once", rationale: "lists fixture files", risk: "low" };
-      });
+      const autoReviewer = vi.fn<ExecAutoReviewer>(() => ({
+        decision: "allow-once",
+        rationale: "lists fixture files",
+        risk: "low",
+      }));
       const commitAuthorization: HandleSystemRunInvokeOptions["commitExecAuthorization"] = async (
         params,
       ) => {
@@ -1743,8 +1744,14 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
           commitExecAuthorization: commitAuthorization,
         });
 
-        expect(autoReviewer).toHaveBeenCalledTimes(approval === "auto" ? 1 : 0);
-        if (driftAt === "unchanged") {
+        expect(autoReviewer).not.toHaveBeenCalled();
+        if (approval === "auto") {
+          expect(invoke.runCommand).not.toHaveBeenCalled();
+          expectInvokeErrorMessage(
+            invoke.sendInvokeResult,
+            "Exec auto-review skipped: dispatch chain cannot be bound",
+          );
+        } else if (driftAt === "unchanged") {
           expect(invoke.runCommand).toHaveBeenCalledTimes(1);
           expectInvokeOk(invoke.sendInvokeResult);
         } else {

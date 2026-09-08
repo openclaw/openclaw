@@ -177,15 +177,23 @@ carry every executable identity inside a shell wrapper across the approval wait.
 commands, identity revalidation starts when the approved invocation reaches the node's local
 policy evaluation, so it does not detect substitutions made earlier in the remote approval wait.
 
-In `mode=auto`, dispatch through `xcrun`, BusyBox/Toybox applets, or shell
-`builtin`/`command`/`exec` carriers skips automatic review with
-`Exec auto-review skipped: dispatch wrapper identity cannot be bound`. When existing binding
-checks succeed, these forms require human approval. Their toolchain, embedded applet, or builtin
-identities are outside the ordinary external-file binding contract. Existing binding rejections
-remain in force. Every external wrapper's own executable file must resolve, including exceptional
-dispatchers; otherwise binding is rejected. Shell carriers are exempt from file binding only in
-shell command position. When another external wrapper launches a carrier name, or the request
-uses direct argv execution, that name is bound as an external executable too.
+In `mode=auto`, reviewer-approved unpinned execution requires the complete dispatch chain to be
+identity-bound. The authorization plan must succeed, every candidate must use direct transport,
+and every wrapper and final executable must have a recorded executable operand. Policy-blocked
+or incomplete trust plans cannot establish eligibility. Pinned commands retain their existing
+review behavior.
+
+Shell `-c` wrappers, `env` with assignments, `xcrun`, BusyBox/Toybox applets, shell
+`builtin`/`command`/`exec` dispatch, and anything else whose complete chain cannot be bound skip
+automatic review with `Exec auto-review skipped: dispatch chain cannot be bound`. When existing
+binding checks succeed, these forms take the one-shot human approval path. Plain commands and
+transparent `env` without assignments remain eligible when all executable identities are bound.
+A gateway reviewing a remote node command requires a prepared pinned command because it cannot
+inspect the node's in-memory executable binding. Existing binding rejections remain in force.
+Every external wrapper's own executable file must still resolve. Shell carriers are exempt from
+file binding only in shell command position; external dispatch binds those names as executable
+files too. There are no persisted data model changes: binding stays in memory for the approval
+lifetime.
 
 In `mode=auto`, POSIX login or interactive shell wrappers skip the reviewer. Bindable commands,
 such as `bash -lc 'printf ok'`, require human approval because their implicit startup files are

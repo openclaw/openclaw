@@ -38,9 +38,9 @@ import {
   requiresExecApproval,
 } from "../infra/exec-approvals.js";
 import { buildAuthorizedShellCommandFromPlan } from "../infra/exec-authorization-render.js";
+import { resolveUnpinnedAutoApprovalEligibility } from "../infra/exec-auto-approval-eligibility.js";
 import {
   defaultExecAutoReviewer,
-  EXEC_AUTO_REVIEW_DISPATCH_IDENTITY_WARNING,
   EXEC_AUTO_REVIEW_SHELL_STARTUP_WARNING,
   resolveExecAutoReviewDecision,
   type ExecAutoReviewDecision,
@@ -48,7 +48,6 @@ import {
 } from "../infra/exec-auto-review.js";
 import type { SafeBinProfile } from "../infra/exec-safe-bin-policy.js";
 import { hasPosixShellStartupBeforeInlineCommand } from "../infra/exec-wrapper-resolution.js";
-import { hasUnboundExecDispatchWrapperIdentity } from "../infra/exec-wrapper-trust-plan.js";
 import {
   prepareSystemRunMutableFileBinding,
   revalidateSystemRunMutableFileBinding,
@@ -936,9 +935,23 @@ export async function processGatewayAllowlist(
   }
   const requiresAsk =
     policyRequiresAsk || (durableApprovalRequiresBinding && mutableFileApprovalRequiresOneShot);
+  const autoReviewEnforcedCommand =
+    gatewayEnforcedCommand?.ok === true ? gatewayEnforcedCommand.command : undefined;
+  const autoReviewBlockedByShellStartup = allowlistEval.segments.some((segment) =>
+    hasPosixShellStartupBeforeInlineCommand(segment.argv),
+  );
+  const unpinnedEligibility =
+    autoReviewEnforcedCommand !== undefined
+      ? { eligible: true as const }
+      : resolveUnpinnedAutoApprovalEligibility({
+          authorizationPlan: allowlistEval.authorizationPlan,
+          binding: mutableFileBinding,
+        });
   // Mutable operands and unenforceable patterns cannot authorize later cwd/env bindings.
   const approvalAllowAlwaysPersistence =
     mutableFileApprovalRequiresOneShot ||
+    (params.autoReview === true &&
+      (autoReviewBlockedByShellStartup || !unpinnedEligibility.eligible)) ||
     (requiresAllowlistPlanApproval && allowAlwaysPersistence.kind === "patterns")
       ? ONE_SHOT_ALLOW_ALWAYS
       : allowAlwaysPersistence;
@@ -990,19 +1003,16 @@ export async function processGatewayAllowlist(
     const autoReviewResolvedPath = autoReviewSingleSegment
       ? resolveExecutionTargetTrustPath(autoReviewSingleSegment.resolution, params.workdir)
       : undefined;
-    const autoReviewEnforcedCommand =
-      gatewayEnforcedCommand?.ok === true ? gatewayEnforcedCommand.command : undefined;
-    const autoReviewBlockedByShellStartup = allowlistEval.segments.some((segment) =>
-      hasPosixShellStartupBeforeInlineCommand(segment.argv),
-    );
     if (params.autoReview === true && autoReviewBlockedByShellStartup) {
       params.warnings.push(EXEC_AUTO_REVIEW_SHELL_STARTUP_WARNING);
     }
-    const autoReviewBlockedByDispatchIdentity = allowlistEval.segments.some((segment) =>
-      hasUnboundExecDispatchWrapperIdentity(segment.sourceArgv ?? segment.argv),
-    );
-    if (params.autoReview === true && autoReviewBlockedByDispatchIdentity) {
-      params.warnings.push(EXEC_AUTO_REVIEW_DISPATCH_IDENTITY_WARNING);
+    const autoReviewBlockedByDispatchIdentity = !unpinnedEligibility.eligible;
+    if (
+      params.autoReview === true &&
+      !autoReviewBlockedByShellStartup &&
+      !unpinnedEligibility.eligible
+    ) {
+      params.warnings.push(unpinnedEligibility.reason);
     }
     const canAutoReviewApprovalMiss =
       params.autoReview === true &&

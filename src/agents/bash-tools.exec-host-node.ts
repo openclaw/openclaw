@@ -15,7 +15,6 @@ import {
 } from "../infra/exec-approvals.js";
 import {
   defaultExecAutoReviewer,
-  EXEC_AUTO_REVIEW_DISPATCH_IDENTITY_WARNING,
   EXEC_AUTO_REVIEW_SHELL_STARTUP_WARNING,
   resolveExecAutoReviewDecision,
 } from "../infra/exec-auto-review.js";
@@ -95,7 +94,7 @@ export async function executeNodeHostCommand(
     inlineEvalHit,
     requiresSecurityAuditSuppressionApproval,
     autoReviewBlockedByShellStartup,
-    autoReviewBlockedByDispatchIdentity,
+    autoReviewEligibility,
     autoReviewArgv,
     allowAlwaysPersistence,
   } = approvalAnalysis;
@@ -263,8 +262,13 @@ export async function executeNodeHostCommand(
     if (params.autoReview === true && hostAsk !== "always" && autoReviewBlockedByShellStartup) {
       params.warnings.push(EXEC_AUTO_REVIEW_SHELL_STARTUP_WARNING);
     }
-    if (params.autoReview === true && hostAsk !== "always" && autoReviewBlockedByDispatchIdentity) {
-      params.warnings.push(EXEC_AUTO_REVIEW_DISPATCH_IDENTITY_WARNING);
+    if (
+      params.autoReview === true &&
+      hostAsk !== "always" &&
+      !autoReviewBlockedByShellStartup &&
+      !autoReviewEligibility.eligible
+    ) {
+      params.warnings.push(autoReviewEligibility.reason);
     }
     const autoReviewHasBoundCommand = analysisOk && autoReviewArgv !== undefined;
     // Remote policy may be stricter; local auto-review cannot bypass that floor.
@@ -277,7 +281,7 @@ export async function executeNodeHostCommand(
     let autoReviewRequiresHumanApproval =
       autoReviewBlockedByNodePolicy ||
       (params.autoReview === true && autoReviewBlockedByShellStartup) ||
-      (params.autoReview === true && autoReviewBlockedByDispatchIdentity) ||
+      (params.autoReview === true && !autoReviewEligibility.eligible) ||
       (params.autoReview === true && hostAsk !== "always" && !autoReviewHasBoundCommand) ||
       requiresSecurityAuditSuppressionApproval;
     if (
@@ -286,7 +290,7 @@ export async function executeNodeHostCommand(
       autoReviewHasBoundCommand &&
       !autoReviewBlockedByNodePolicy &&
       !autoReviewBlockedByShellStartup &&
-      !autoReviewBlockedByDispatchIdentity &&
+      autoReviewEligibility.eligible &&
       !requiresSecurityAuditSuppressionApproval
     ) {
       const reviewer = params.autoReviewer ?? defaultExecAutoReviewer;
@@ -444,7 +448,9 @@ export async function executeNodeHostCommand(
         inlineApprovedByAsk = true;
         inlineApprovalId = approvalId;
         inlineApprovalDecision =
-          outcome.decision === "allow-always" && inlineEvalHit === null
+          outcome.decision === "allow-always" &&
+          inlineEvalHit === null &&
+          allowAlwaysPersistence.kind !== "one-shot"
             ? "allow-always"
             : outcome.decision === "allow-once" || outcome.decision === "allow-always"
               ? "allow-once"
@@ -551,7 +557,8 @@ export async function executeNodeHostCommand(
                 approved: approvalSource ? undefined : approvedByAsk,
                 approvalDecision: approvalSource
                   ? null
-                  : approvalDecision === "allow-always" && inlineEvalHit !== null
+                  : approvalDecision === "allow-always" &&
+                      (inlineEvalHit !== null || allowAlwaysPersistence.kind === "one-shot")
                     ? "allow-once"
                     : approvalDecision,
                 approvalSource,

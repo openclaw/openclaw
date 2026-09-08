@@ -11,11 +11,11 @@ import {
   buildSystemRunApprovalEnvBinding,
   matchSystemRunApprovalBinding,
   missingSystemRunApprovalBinding,
-  normalizeSystemRunApprovalPlan,
   prepareSystemRunMutableFileBinding,
   prepareSystemRunMutableFileApproval,
   revalidateSystemRunMutableFileBinding,
 } from "./system-run-approval-binding.js";
+import { normalizeSystemRunApprovalPlan } from "./system-run-approval-plan.js";
 import * as mutableFilePolicy from "./system-run-mutable-file-policy.js";
 
 function expectOk<T extends { ok: boolean }>(result: T): T & { ok: true } {

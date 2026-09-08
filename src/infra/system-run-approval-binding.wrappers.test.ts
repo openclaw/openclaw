@@ -2,6 +2,9 @@ import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { withTempDir } from "../test-utils/temp-dir.js";
+import { MAX_DISPATCH_WRAPPER_DEPTH } from "./dispatch-wrapper-resolution.js";
+import { planShellAuthorization } from "./exec-authorization-plan.js";
+import { resolveUnpinnedAutoApprovalEligibility } from "./exec-auto-approval-eligibility.js";
 import { resolveCommandResolutionFromArgv } from "./exec-command-resolution.js";
 import {
   APPROVAL_SCRIPT_OPERAND_DRIFT_DENIED_MESSAGE,
@@ -13,6 +16,62 @@ import {
 const systemPath = "/usr/bin:/bin";
 
 describe.runIf(process.platform !== "win32")("dispatch wrapper executable binding", () => {
+  it.each([
+    { command: "ls *.txt", eligible: true },
+    { command: "env ls *.txt", eligible: true },
+    { command: "env FOO=bar ls *.txt", eligible: false },
+    { command: "sh -c 'ls *.txt'", eligible: false },
+    { command: `${"env ".repeat(MAX_DISPATCH_WRAPPER_DEPTH)}ls *.txt`, eligible: true },
+    { command: `${"env ".repeat(MAX_DISPATCH_WRAPPER_DEPTH + 1)}ls *.txt`, eligible: false },
+    { command: "command ls *.txt", eligible: false },
+    { command: "exec ls *.txt", eligible: false },
+  ])("requires complete dispatch binding for $command", async ({ command, eligible }) => {
+    const env = { PATH: systemPath };
+    const authorizationPlan = await planShellAuthorization({ command, env });
+    const prepared = await prepareSystemRunMutableFileBinding({
+      command: { kind: "shell", text: command },
+      env,
+    });
+    if (!prepared.ok) {
+      throw new Error(prepared.message);
+    }
+    expect(
+      resolveUnpinnedAutoApprovalEligibility({ authorizationPlan, binding: prepared.binding })
+        .eligible,
+    ).toBe(eligible);
+  });
+
+  it.each(["env", "ls"])(
+    "requires the recorded operand for %s in a complete chain",
+    async (executable) => {
+      const command = "env ls *.txt";
+      const env = { PATH: systemPath };
+      const authorizationPlan = await planShellAuthorization({ command, env });
+      const prepared = await prepareSystemRunMutableFileBinding({
+        command: { kind: "shell", text: command },
+        env,
+      });
+      if (!prepared.ok) {
+        throw new Error(prepared.message);
+      }
+      expect(
+        resolveUnpinnedAutoApprovalEligibility({ authorizationPlan, binding: prepared.binding })
+          .eligible,
+      ).toBe(true);
+      prepared.binding.operands = prepared.binding.operands.filter(
+        (operand) =>
+          operand.snapshot.path !==
+          fs.realpathSync(executable === "env" ? "/usr/bin/env" : "/bin/ls"),
+      );
+      expect(
+        resolveUnpinnedAutoApprovalEligibility({ authorizationPlan, binding: prepared.binding }),
+      ).toEqual({
+        eligible: false,
+        reason: "Exec auto-review skipped: dispatch chain cannot be bound",
+      });
+    },
+  );
+
   describe.each(["builtin", "command", "exec"])("%s dispatch position", (carrier) => {
     it.each([
       { name: "initial shell builtin", shellCommand: true, prefix: [], external: false },
