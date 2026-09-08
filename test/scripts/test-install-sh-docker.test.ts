@@ -2568,38 +2568,8 @@ if [[ "\${1:-}" == */verify-fs-safe-native.mjs ]]; then
   exit 0
 fi
 if [[ "\${1:-}" == */openclaw.mjs ]]; then
-  shift
-  if [ "\${1:-}" = "--version" ]; then
-    echo "OpenClaw 2026.6.17"
-  elif [ "\${1:-}" = "--help" ]; then
-    echo "Usage: openclaw"
-  elif [ "\${1:-}" = "infer" ]; then
-    printf '[{"id":"google"},{"id":"openai"},{"id":"xai"}]\n'
-  elif [ "\${1:-}" = "status" ] && [ "$FAKE_STATUS_EXIT" != "0" ]; then
-    echo "synthetic Bun status failure" >&2
-    exit "$FAKE_STATUS_EXIT"
-  elif [ "\${1:-}" = "status" ] || { [ "\${1:-}" = "plugins" ] && [ "\${2:-}" = "list" ]; }; then
-    echo '{}'
-  elif [ "\${1:-}" = "agent" ]; then
-    printf '{"path":"/v1/responses"}\n' >>"$MOCK_REQUEST_LOG"
-    printf '{"payloads":[{"text":"%s"}]}\n' "$SUCCESS_MARKER"
-  elif [ "\${1:-}" = "gateway" ] && [ "\${2:-}" = "health" ]; then
-    echo '{"ok":true}'
-  elif [ "\${1:-}" = "gateway" ]; then
-    port=""
-    while [ "$#" -gt 0 ]; do
-      if [ "$1" = "--port" ]; then
-        port="$2"
-        break
-      fi
-      shift
-    done
-    exec node -e 'const http=require("node:http"); const port=Number(process.argv[1]); http.createServer((req,res)=>{res.writeHead(200,{"content-type":"text/plain"});res.end("ok")}).listen(port,"127.0.0.1",()=>console.log("[gateway] ready at http://127.0.0.1:"+port))' "$port"
-  else
-    echo "unsupported fake OpenClaw command: $*" >&2
-    exit 1
-  fi
-  exit 0
+  echo "openclaw: the Bun runtime is unsupported because OpenClaw requires node:sqlite." >&2
+  exit 1
 fi
 test "\${1:-}" = "install"
 case " $* " in
@@ -2632,6 +2602,9 @@ exports.redactSensitiveText = (text) => text;
 REDACTOR
 cat >"$package_root/openclaw.mjs" <<'OPENCLAW'
 #!/usr/bin/env node
+import fs from "node:fs";
+import http from "node:http";
+
 const args = process.argv.slice(2);
 if (args[0] === "--version") {
   console.log("OpenClaw 2026.6.17");
@@ -2639,6 +2612,23 @@ if (args[0] === "--version") {
   console.log("Usage: openclaw");
 } else if (args[0] === "infer") {
   console.log(JSON.stringify([{ id: "google" }, { id: "openai" }, { id: "xai" }]));
+} else if (args[0] === "status" && process.env.FAKE_STATUS_EXIT !== "0") {
+  console.error("synthetic Bun status failure");
+  process.exit(Number(process.env.FAKE_STATUS_EXIT));
+} else if (args[0] === "status" || (args[0] === "plugins" && args[1] === "list")) {
+  console.log("{}");
+} else if (args[0] === "agent") {
+  fs.appendFileSync(process.env.MOCK_REQUEST_LOG, '{"path":"/v1/responses"}\\n');
+  console.log(JSON.stringify({ payloads: [{ text: process.env.SUCCESS_MARKER }] }));
+} else if (args[0] === "gateway" && args[1] === "health") {
+  console.log('{"ok":true}');
+} else if (args[0] === "gateway") {
+  const port = Number(args[args.indexOf("--port") + 1]);
+  http.createServer((_req, res) => {
+      res.writeHead(200, { "content-type": "text/plain" });
+      res.end("ok");
+    })
+    .listen(port, "127.0.0.1", () => console.log("[gateway] ready at http://127.0.0.1:" + port));
 } else {
   process.exit(1);
 }
@@ -2673,13 +2663,13 @@ node -e 'const fs=require("node:fs");const p=process.argv[1];const value=JSON.pa
     expect(result.stdout).toContain("bun-global-install-smoke: image providers OK (3 providers)");
     if (statusExit === 0) {
       expect(result.stdout).toContain(
-        "bun-global-install-smoke: Bun 1.4.0 package, CLI, local agent, and Gateway runtime OK",
+        "bun-global-install-smoke: Bun 1.4.0 package install and Node CLI/runtime OK",
       );
     } else {
       expect(result.stderr).toContain("bun global install smoke failed with exit code 23");
       expect(result.stderr).toContain("synthetic Bun status failure");
       expect(result.stderr).not.toContain("failure log omitted");
-      expect(result.stdout).not.toContain("Gateway runtime OK");
+      expect(result.stdout).not.toContain("Node CLI/runtime OK");
     }
   });
 
