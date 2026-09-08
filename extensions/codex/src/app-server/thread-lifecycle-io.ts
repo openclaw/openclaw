@@ -20,7 +20,7 @@ import { markStartedCodexManagedThread } from "./managed-thread-store.js";
 import { applyCodexNativeSkillIsolation } from "./native-skill-isolation.js";
 import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
 import {
-  attestCodexPluginThreadApps,
+  checkCodexThreadAppAvailability,
   discardUnattestedCodexPluginThread,
 } from "./plugin-thread-attestation.js";
 import {
@@ -219,7 +219,7 @@ export async function resumeExistingCodexThread(
       (params.pluginThreadConfig?.enabled
         ? Object.keys(resumeBinding.pluginAppPolicyContext?.apps ?? {})
         : []);
-    await attestCodexPluginThreadApps({
+    await checkCodexThreadAppAvailability({
       client: params.client,
       threadId: response.thread.id,
       appIds: provisionalAppIds,
@@ -500,12 +500,12 @@ export async function startFreshCodexThread(
   });
   const response = assertCodexThreadStartResponse(threadStartResponse);
   const provisionalAppIds = pluginThreadConfig?.provisionalAppIds;
-  // A deny-by-default app becomes callable only under this exact thread's
-  // allowlist. Never persist or run the thread before Codex confirms it.
+  // Check the effective thread snapshot before persisting the binding.
+  // Unavailable optional apps are diagnostic; snapshot RPC failures still fail closed.
   if (provisionalAppIds?.length) {
     try {
       await lifecycleTiming.measure("plugin-app-attestation", () =>
-        attestCodexPluginThreadApps({
+        checkCodexThreadAppAvailability({
           client: params.client,
           threadId: response.thread.id,
           appIds: provisionalAppIds,
