@@ -35,6 +35,7 @@ import { clearAllCliSessions } from "../agents/cli-session.js";
 import { resetRegisteredAgentHarnessSessions } from "../agents/harness/registry.js";
 import { resolveSessionModelRef } from "../agents/session-model-ref.js";
 import { managedWorktrees } from "../agents/worktrees/service.js";
+import { SessionContinuationResetError } from "../auto-reply/continuation/session-reset.js";
 import {
   buildSessionEndHookPayload,
   buildSessionStartHookPayload,
@@ -352,6 +353,7 @@ async function ensureSessionRuntimeCleanup(params: {
   target: ReturnType<typeof resolveGatewaySessionStoreTarget>;
   sessionId?: string;
   sessionLifecycleRevision?: string;
+  reason: "new" | "reset" | "delete";
   assertCurrent?: () => void;
 }) {
   const assertCurrent = createSessionResetCleanupGuard({
@@ -413,10 +415,18 @@ async function ensureSessionRuntimeCleanup(params: {
   const processScopeKeys = new Set(queueKeys);
   processScopeKeys.add(params.key);
   clearFinishedSessionsForScopes(processScopeKeys);
-  clearSessionResetRuntimeState([...queueKeys], {
-    activeReplySessionId: params.sessionId,
-    agentId: resolveLifecycleAgentId(params.cfg, params.target.agentId),
-  });
+  try {
+    clearSessionResetRuntimeState([...queueKeys], {
+      activeReplySessionId: params.sessionId,
+      agentId: resolveLifecycleAgentId(params.cfg, params.target.agentId),
+      reason: params.reason,
+    });
+  } catch (error) {
+    if (error instanceof SessionContinuationResetError) {
+      return errorShape(ErrorCodes.UNAVAILABLE, error.message);
+    }
+    throw error;
+  }
   if (!params.sessionId) {
     assertCurrent();
     clearBootstrapSnapshot(params.target.canonicalKey);
@@ -872,6 +882,7 @@ export async function cleanupSessionBeforeMutation(params: {
     target: params.target,
     sessionId: params.entry?.sessionId,
     sessionLifecycleRevision: params.entry?.lifecycleRevision,
+    reason: params.reason === "session-reset" ? "reset" : "delete",
     assertCurrent: params.assertCurrent,
   });
   if (cleanupError) {
@@ -1452,6 +1463,7 @@ export async function performGatewaySessionReset(params: {
       await triggerInternalHook(hookEvent);
       params.assertCurrent?.();
       params.assertAuthorizedInstance?.();
+      // Cleanup can fail before rotation when continuation cancellation cannot persist.
       // Destructive cleanup adopts only this existing generation. Finish its durable
       // transition after caller closure; missing-row creation still needs live authority.
       const assertCompletionAuthorized = hadExistingEntry
@@ -1466,6 +1478,7 @@ export async function performGatewaySessionReset(params: {
         target,
         sessionId: entry?.sessionId,
         sessionLifecycleRevision: resetLifecycleRevision,
+        reason: params.reason,
       });
       if (runtimeCleanupError) {
         return { ok: false, error: runtimeCleanupError };

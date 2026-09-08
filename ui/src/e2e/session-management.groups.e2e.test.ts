@@ -5,6 +5,7 @@ import { createControlUiSessionRow as sessionRow } from "../test-helpers/control
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 import {
   actionOpacity,
+  actionPointerEvents,
   activateSelfRemovingControl,
   captureUiProof,
   captureUiProofEnabled,
@@ -329,16 +330,20 @@ suite.define(() => {
       const sidebarResearchPin = sidebarResearch.getByRole("button", { name: "Pin session" });
       await page.mouse.move(900, 500);
       await expect.poll(() => actionOpacity(sidebarResearchPin)).toBe("0");
+      await expect.poll(() => actionPointerEvents(sidebarResearchPin)).toBe("none");
       const sidebarReleasePin = sidebarRows
         .filter({ hasText: "Release planning" })
         .getByRole("button", { name: "Unpin session" });
       await expect.poll(() => actionOpacity(sidebarReleasePin)).toBe("0");
+      await expect.poll(() => actionPointerEvents(sidebarReleasePin)).toBe("none");
       await sidebarResearch.hover();
       await expect.poll(() => actionOpacity(sidebarResearchPin)).toBe("1");
+      await expect.poll(() => actionPointerEvents(sidebarResearchPin)).toBe("auto");
       await captureUiProof(suite, page, "sidebar-sessions.png");
 
       await sidebarRows.filter({ hasText: "Release planning" }).hover();
       await expect.poll(() => actionOpacity(sidebarReleasePin)).toBe("1");
+      await expect.poll(() => actionPointerEvents(sidebarReleasePin)).toBe("auto");
       await sidebarReleasePin.click();
       const pinPatch = await waitForPatch(
         gateway,

@@ -4,6 +4,7 @@ import { recoverDoctorSessionSqliteTargets } from "../commands/doctor-session-sq
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   ensureOpenClawAgentDatabaseSchema,
@@ -11,11 +12,58 @@ import {
   withAgentDatabaseMaintenanceLease,
 } from "./openclaw-agent-db.js";
 import { withLegacySessionParticipantsSchema } from "./openclaw-agent-participants-migration.js";
+import { stageRecipientAuthorityV18Fixture } from "./openclaw-agent-recipient-authority-fixture.test-support.js";
 import { sessionParticipantsSchemaSql } from "./openclaw-agent-session-participants-schema.js";
+import {
+  collectSqliteSchemaShape,
+  createSqliteSchemaShapeFromSql,
+  normalizeSqliteSchemaShapeSql,
+} from "./sqlite-schema-shape.test-support.js";
 
 const sessionKey = "agent:main:participant-migration";
 
 describe("participant identity migration", () => {
+  it("creates the exact fresh-install v19 schema", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const { db } = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
+
+      expect(db.prepare("PRAGMA user_version").get()?.user_version).toBe(
+        OPENCLAW_AGENT_SCHEMA_VERSION,
+      );
+      expect(
+        db.prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'").get()
+          ?.schema_version,
+      ).toBe(OPENCLAW_AGENT_SCHEMA_VERSION);
+      expect(normalizeSqliteSchemaShapeSql(collectSqliteSchemaShape(db))).toEqual(
+        normalizeSqliteSchemaShapeSql(
+          createSqliteSchemaShapeFromSql(new URL("./openclaw-agent-schema.sql", import.meta.url)),
+        ),
+      );
+      expect(
+        db.prepare("SELECT name FROM pragma_table_info('session_participants') ORDER BY cid").all(),
+      ).toEqual([
+        { name: "session_key" },
+        { name: "identity_namespace" },
+        { name: "actor_id" },
+        { name: "contribution_count" },
+        { name: "first_prompted_at" },
+        { name: "last_prompted_at" },
+      ]);
+      expect(
+        db
+          .prepare("SELECT name FROM pragma_table_info('session_recipient_authority') ORDER BY cid")
+          .all(),
+      ).toEqual([
+        { name: "session_key" },
+        { name: "epoch" },
+        { name: "created_at" },
+        { name: "updated_at" },
+      ]);
+      expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+      expect(db.prepare("PRAGMA integrity_check").get()?.integrity_check).toBe("ok");
+    });
+  });
+
   it("rejects a missing aggregate count in the current schema", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const options = { agentId: "main", env: state.env };
@@ -40,7 +88,9 @@ describe("participant identity migration", () => {
       );
       expect(result.skipped).toBe(false);
       const reopened = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
-      expect(reopened.db.prepare("PRAGMA user_version").get()?.user_version).toBe(19);
+      expect(reopened.db.prepare("PRAGMA user_version").get()?.user_version).toBe(
+        OPENCLAW_AGENT_SCHEMA_VERSION,
+      );
     });
   });
 
@@ -77,7 +127,9 @@ describe("participant identity migration", () => {
       expect(result.totals.issues).toBe(0);
       const database = openNodeSqliteDatabase(databasePath, { readOnly: true });
       try {
-        expect(database.prepare("PRAGMA user_version").get()?.user_version).toBe(19);
+        expect(database.prepare("PRAGMA user_version").get()?.user_version).toBe(
+          OPENCLAW_AGENT_SCHEMA_VERSION,
+        );
         expect(
           database
             .prepare("SELECT value_json FROM cache_entries WHERE scope = 'participant-proof'")
@@ -135,7 +187,9 @@ describe("participant identity migration", () => {
           if (scenario === "absent") {
             await migration;
             expect(database.prepare("SELECT * FROM session_participants").all()).toEqual([]);
-            expect(database.prepare("PRAGMA user_version").get()?.user_version).toBe(19);
+            expect(database.prepare("PRAGMA user_version").get()?.user_version).toBe(
+              OPENCLAW_AGENT_SCHEMA_VERSION,
+            );
           } else {
             await expect(migration).rejects.toThrow(
               scenario === "rollback"
@@ -340,10 +394,12 @@ describe("participant identity migration", () => {
               last_prompted_at: null,
             }),
           ]);
-          expect(database.prepare("PRAGMA user_version").get()?.user_version).toBe(19);
+          expect(database.prepare("PRAGMA user_version").get()?.user_version).toBe(
+            OPENCLAW_AGENT_SCHEMA_VERSION,
+          );
           expect(
             database.prepare("SELECT schema_version FROM schema_meta").get()?.schema_version,
-          ).toBe(19);
+          ).toBe(OPENCLAW_AGENT_SCHEMA_VERSION);
           expect(
             database
               .prepare("SELECT entry_json FROM session_nodes WHERE session_key = ?")
@@ -359,4 +415,184 @@ describe("participant identity migration", () => {
       });
     },
   );
+
+  it.each(["covenant", "upstream"] as const)(
+    "converges the %s physical v18 lineage to the exact v19 schema",
+    async (lineage) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+        const validKey = `${sessionKey}:${lineage}:valid`;
+        const malformedKey = `${sessionKey}:${lineage}:malformed`;
+        const importedEpoch = "11111111-1111-4111-8111-111111111111";
+        const retainedEpoch = "22222222-2222-4222-8222-222222222222";
+        await upsertSessionEntryCore(
+          { agentId: "main", env: state.env, sessionKey: validKey },
+          { sessionId: `${lineage}-valid`, updatedAt: 10 },
+        );
+        await upsertSessionEntryCore(
+          { agentId: "main", env: state.env, sessionKey: malformedKey },
+          { sessionId: `${lineage}-malformed`, updatedAt: 20 },
+        );
+        const initial = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
+        const databasePath = initial.path;
+        const { expectedEpoch, originalMalformedEntryJson, originalValidEntryJson } =
+          stageRecipientAuthorityV18Fixture({
+            database: initial.db,
+            importedEpoch,
+            lineage,
+            malformedSessionKey: malformedKey,
+            retainedEpoch,
+            validSessionKey: validKey,
+          });
+        closeOpenClawAgentDatabasesForTest();
+
+        const database = openNodeSqliteDatabase(databasePath);
+        const options = {
+          agentId: "main",
+          path: databasePath,
+          env: state.env,
+        };
+        try {
+          expect(() => ensureOpenClawAgentDatabaseSchema(database, options)).toThrow(
+            /maintenance/iu,
+          );
+          expect(database.prepare("PRAGMA user_version").get()?.user_version).toBe(18);
+          expect(
+            database
+              .prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'")
+              .get()?.schema_version,
+          ).toBe(18);
+
+          await withAgentDatabaseMaintenanceLease({ env: state.env }, async () =>
+            ensureOpenClawAgentDatabaseSchema(database, options),
+          );
+
+          expect(database.prepare("PRAGMA user_version").get()?.user_version).toBe(
+            OPENCLAW_AGENT_SCHEMA_VERSION,
+          );
+          expect(
+            database
+              .prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'")
+              .get()?.schema_version,
+          ).toBe(OPENCLAW_AGENT_SCHEMA_VERSION);
+          expect(normalizeSqliteSchemaShapeSql(collectSqliteSchemaShape(database))).toEqual(
+            normalizeSqliteSchemaShapeSql(
+              createSqliteSchemaShapeFromSql(
+                new URL("./openclaw-agent-schema.sql", import.meta.url),
+              ),
+            ),
+          );
+          expect(
+            database
+              .prepare(
+                `SELECT identity_namespace, actor_id, contribution_count,
+                        first_prompted_at, last_prompted_at
+                 FROM session_participants
+                 WHERE session_key = ?`,
+              )
+              .get(validKey),
+          ).toEqual({
+            identity_namespace: '{"type":"profile"}',
+            actor_id: "profile-a",
+            contribution_count: 3,
+            first_prompted_at: null,
+            last_prompted_at: null,
+          });
+          expect(
+            database
+              .prepare(
+                "SELECT session_key, epoch FROM session_recipient_authority ORDER BY session_key",
+              )
+              .all(),
+          ).toContainEqual({
+            session_key: validKey,
+            epoch: expectedEpoch,
+          });
+          expect(
+            database
+              .prepare("SELECT epoch FROM session_recipient_authority WHERE session_key = ?")
+              .get(malformedKey),
+          ).toBeUndefined();
+          if (lineage === "upstream") {
+            expect(
+              database
+                .prepare("SELECT entry_json, entry_valid FROM session_nodes WHERE session_key = ?")
+                .get(validKey),
+            ).toEqual({
+              entry_json: originalValidEntryJson,
+              entry_valid: 1,
+            });
+            expect(
+              database
+                .prepare("SELECT entry_json, entry_valid FROM session_nodes WHERE session_key = ?")
+                .get(malformedKey),
+            ).toEqual({
+              entry_json: originalMalformedEntryJson,
+              entry_valid: 1,
+            });
+          }
+          expect(database.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+          expect(database.prepare("PRAGMA integrity_check").get()?.integrity_check).toBe("ok");
+        } finally {
+          database.close();
+        }
+
+        const reopened = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
+        expect(reopened.db.prepare("PRAGMA user_version").get()?.user_version).toBe(
+          OPENCLAW_AGENT_SCHEMA_VERSION,
+        );
+        expect(
+          reopened.db
+            .prepare(
+              "SELECT identity_namespace, contribution_count FROM session_participants WHERE session_key = ?",
+            )
+            .get(validKey),
+        ).toEqual({ identity_namespace: '{"type":"profile"}', contribution_count: 3 });
+        expect(
+          reopened.db
+            .prepare("SELECT epoch FROM session_recipient_authority WHERE session_key = ?")
+            .get(validKey),
+        ).toEqual({ epoch: expectedEpoch });
+      });
+    },
+  );
+
+  it("refuses disagreeing v18 markers before either physical migration", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const initial = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
+      const databasePath = initial.path;
+      initial.db.exec(`
+        DROP TABLE session_recipient_authority;
+        PRAGMA user_version = 18;
+        UPDATE schema_meta SET schema_version = 17 WHERE meta_key = 'primary';
+      `);
+      closeOpenClawAgentDatabasesForTest();
+      const database = openNodeSqliteDatabase(databasePath);
+      try {
+        await expect(
+          withAgentDatabaseMaintenanceLease({ env: state.env }, async () =>
+            ensureOpenClawAgentDatabaseSchema(database, {
+              agentId: "main",
+              path: databasePath,
+              env: state.env,
+            }),
+          ),
+        ).rejects.toThrow(/markers disagree/iu);
+        expect(database.prepare("PRAGMA user_version").get()?.user_version).toBe(18);
+        expect(
+          database
+            .prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'")
+            .get()?.schema_version,
+        ).toBe(17);
+        expect(
+          database
+            .prepare(
+              "SELECT name FROM sqlite_schema WHERE type = 'table' AND name = 'session_recipient_authority'",
+            )
+            .get(),
+        ).toBeUndefined();
+      } finally {
+        database.close();
+      }
+    });
+  });
 });

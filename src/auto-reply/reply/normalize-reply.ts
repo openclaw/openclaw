@@ -20,6 +20,7 @@ import {
   stripSilentToken,
 } from "../tokens.js";
 import type { ReplyPayload } from "../types.js";
+import { hasCotFramePrefix } from "./cot-frame.js";
 import type {
   NormalizeReplyOutcome as PayloadNormalizationOutcome,
   NormalizeReplySkipReason,
@@ -88,6 +89,13 @@ export function normalizeReplyPayloadOutcome(
   }
 
   let text = payload.text ?? undefined;
+  // Internal narration stays private even for host-approved heartbeat payloads.
+  if (text && hasCotFramePrefix(text)) {
+    if (!hasContent("")) {
+      return suppress("silent");
+    }
+    text = "";
+  }
   // Monitoring already applied its configured acknowledgment and error-text policy.
   if (!getReplyPayloadMetadata(payload)?.heartbeatReply) {
     const silentToken = opts.silentToken ?? SILENT_REPLY_TOKEN;

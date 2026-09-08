@@ -31,6 +31,7 @@ import type {
   EffectiveToolInventoryResult,
   ResolveEffectiveToolInventoryParams,
 } from "./tools-effective-inventory.types.js";
+import { buildInventoryContinuationToolOpts } from "./tools/continuation-inventory-opts.js";
 
 function listIncludesTool(list: string[] | undefined, toolName: string): boolean {
   if (!Array.isArray(list)) {
@@ -335,6 +336,7 @@ export function resolveEffectiveToolInventory(
     modelId: params.modelId,
   });
 
+  const continuationEnabled = params.cfg?.agents?.defaults?.continuation?.enabled === true;
   const effectiveTools = createOpenClawCodingTools({
     agentId,
     sessionKey: params.sessionKey,
@@ -362,6 +364,11 @@ export function resolveEffectiveToolInventory(
     modelHasVision: params.modelHasVision,
     requireExplicitMessageTarget: params.requireExplicitMessageTarget,
     disableMessageTool: params.disableMessageTool,
+    // Inventory-only path: register continuation tools via stub callbacks when
+    // enabled so /status and tools-effective reflect the full
+    // docs/design/continue-work-signal-v2.md §2.1 surface.
+    // Runtime side effects still only run on live runner paths.
+    ...buildInventoryContinuationToolOpts(continuationEnabled),
   });
   const projectedInventory = buildRuntimeCompatibleToolInventory({
     tools: effectiveTools,

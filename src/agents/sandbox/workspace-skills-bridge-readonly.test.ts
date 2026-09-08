@@ -3,7 +3,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { createSandbox, withTempDir } from "./fs-bridge.test-helpers.js";
+import { createSandbox, withTestDir } from "./fs-bridge.test-helpers.js";
 import { buildSandboxFsMounts, resolveSandboxFsPathWithMounts } from "./fs-paths.js";
 import {
   createRemoteShellSandboxFsBridge,
@@ -18,7 +18,7 @@ const runRemoteShellScript: RemoteShellSandboxHandle["runRemoteShellScript"] =
 
 describe("workspace skills bridge mount policy", () => {
   it("resolves workspace skill roots as read-only", async () => {
-    await withTempDir("openclaw-skills-bridge-", async (stateDir) => {
+    await withTestDir("openclaw-skills-bridge-", async (stateDir) => {
       const workspaceDir = path.join(stateDir, "workspace");
       const skillsWorkspaceDir = path.join(stateDir, "sandbox-state");
       await fs.mkdir(path.join(workspaceDir, "skills", "demo"), { recursive: true });
@@ -57,7 +57,7 @@ describe("workspace skills bridge mount policy", () => {
   it.runIf(process.platform !== "win32")(
     "rejects remote bridge writes under remote-only skill roots",
     async () => {
-      await withTempDir("openclaw-skills-remote-only-", async (stateDir) => {
+      await withTestDir("openclaw-skills-remote-only-", async (stateDir) => {
         const workspaceDir = path.join(stateDir, "workspace");
         const skillsWorkspaceDir = path.join(stateDir, "sandbox-state");
         const remoteWorkspaceDir = path.join(stateDir, "remote-workspace");
@@ -118,7 +118,7 @@ describe("workspace skills bridge mount policy", () => {
   it.runIf(process.platform !== "win32")(
     "rejects remote bridge mkdirp under skill roots from container cwd",
     async () => {
-      await withTempDir("openclaw-skills-remote-cwd-", async (stateDir) => {
+      await withTestDir("openclaw-skills-remote-cwd-", async (stateDir) => {
         const workspaceDir = path.join(stateDir, "workspace");
         const remoteWorkspaceDir = path.join(stateDir, "remote-workspace");
         await fs.mkdir(path.join(workspaceDir, "skills", "demo"), { recursive: true });
@@ -152,7 +152,7 @@ describe("workspace skills bridge mount policy", () => {
 // Canonical path checks invoke GNU readlink/stat on the local fixture host.
 describe.runIf(process.platform === "linux")("workspace skills bridge (GNU shell)", () => {
   it("allows remote bridge writes under absent skill roots", async () => {
-    await withTempDir("openclaw-skills-remote-absent-", async (stateDir) => {
+    await withTestDir("openclaw-skills-remote-absent-", async (stateDir) => {
       const workspaceDir = path.join(stateDir, "workspace");
       await fs.mkdir(workspaceDir, { recursive: true });
       const canonicalWorkspaceDir = await fs.realpath(workspaceDir);
@@ -179,7 +179,7 @@ describe.runIf(process.platform === "linux")("workspace skills bridge (GNU shell
   it("rejects remote bridge writes through symlinks into skill roots", async () => {
     // Symlink resolution must happen on the remote side too; otherwise writes
     // can bypass read-only skill root detection.
-    await withTempDir("openclaw-skills-remote-link-", async (stateDir) => {
+    await withTestDir("openclaw-skills-remote-link-", async (stateDir) => {
       const workspaceDir = path.join(stateDir, "workspace");
       const remoteWorkspaceDir = path.join(stateDir, "remote-workspace");
       await fs.mkdir(workspaceDir, { recursive: true });

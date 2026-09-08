@@ -258,13 +258,9 @@ export function emitTrackedItemEvent(ctx: ToolHandlerContext, itemData: AgentIte
     ctx.state.itemActiveIds.delete(itemData.itemId);
     ctx.state.itemCompletedCount += 1;
   }
-  emitAgentActivityEvent({
+  emitMirroredAgentActivity(ctx, {
     runId: ctx.params.runId,
     ...(ctx.params.sessionKey ? { sessionKey: ctx.params.sessionKey } : {}),
-    stream: "item",
-    data: itemData,
-  });
-  emitAgentEventCallbackBestEffort(ctx, {
     stream: "item",
     data: itemData,
   });
@@ -289,6 +285,17 @@ export function emitAgentEventCallbackBestEffort(
     label: "tool agent event",
     log: ctx.log,
     callback: () => ctx.params.onAgentEvent?.(event),
+  });
+}
+
+export function emitMirroredAgentActivity(
+  ctx: ToolHandlerContext,
+  event: Parameters<typeof emitAgentActivityEvent>[0],
+): void {
+  emitAgentActivityEvent(event);
+  emitAgentEventCallbackBestEffort(ctx, {
+    stream: event.stream,
+    data: event.data,
   });
 }
 
@@ -326,7 +333,14 @@ export function handleToolExecutionStart(
     hideFromChannelProgress?: boolean;
     lifecycleProvenance?: "nested";
   },
+  options?: { deliveryGeneration?: number },
 ): void | Promise<void> {
+  const isCurrentDeliveryGeneration = () =>
+    options?.deliveryGeneration === undefined ||
+    options.deliveryGeneration === ctx.getBlockReplyDeliveryGeneration();
+  if (!isCurrentDeliveryGeneration()) {
+    return;
+  }
   const startToolName = normalizeToolPolicyName(evt.toolName);
   ctx.state.liveEditDiffStateById.delete(evt.toolCallId);
   const isQuestionTool =
@@ -373,7 +387,7 @@ export function handleToolExecutionStart(
     }
     if (isPromiseLike<void>(onBlockReplyFlushResult)) {
       return onBlockReplyFlushResult.then(
-        () => continueToolExecutionStart(),
+        () => (isCurrentDeliveryGeneration() ? continueToolExecutionStart() : undefined),
         (error: unknown) => {
           cancelQuestionPromptReservation();
           throw error;
@@ -384,6 +398,10 @@ export function handleToolExecutionStart(
   };
 
   const continueToolExecutionStart = (): void | Promise<void> => {
+    if (!isCurrentDeliveryGeneration()) {
+      cancelQuestionPromptReservation();
+      return;
+    }
     const rawToolName = evt.toolName;
     const toolName = normalizeToolPolicyName(rawToolName);
     const hideFromChannelProgress = evt.hideFromChannelProgress === true;
@@ -605,7 +623,7 @@ export function handleToolExecutionStart(
       const questionId = questionPromptReservation.questionId;
       void waitForAskUserPromptReady(questionId)
         .then(async (questions) => {
-          if (!questions) {
+          if (!questions || !isCurrentDeliveryGeneration()) {
             return;
           }
           await sendQuestionToolPrompt({

@@ -18,6 +18,7 @@ import {
   resolveSandboxRuntimeStatus,
 } from "../../agents/sandbox.js";
 import { buildConfiguredAgentSystemPrompt } from "../../agents/system-prompt-config.js";
+import { buildInventoryContinuationToolOpts } from "../../agents/tools/continuation-inventory-opts.js";
 import type { WorkspaceBootstrapFile } from "../../agents/workspace.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -224,6 +225,9 @@ export async function resolveCommandsSystemPromptBundle(
     executionWorkspaceDir: targetSessionEntry?.worktree?.canonicalWorkspaceDir ?? workspaceDir,
     skillsSnapshot: targetSessionEntry?.skillsSnapshot,
   });
+  const continuationToolOpts = buildInventoryContinuationToolOpts(
+    params.cfg?.agents?.defaults?.continuation?.enabled === true,
+  );
   const tools = (() => {
     try {
       return createOpenClawCodingTools({
@@ -243,6 +247,7 @@ export async function resolveCommandsSystemPromptBundle(
         senderE164: params.ctx.SenderE164,
         modelProvider: params.provider,
         modelId: params.model,
+        ...continuationToolOpts,
       });
     } catch {
       return [];

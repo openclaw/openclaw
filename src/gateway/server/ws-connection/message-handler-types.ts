@@ -69,6 +69,7 @@ export type GatewayWsMessageHandlerParams = {
   buildRequestContext: () => GatewayRequestContext;
   nodeLifecycleDispatch: GatewayNodeLifecycleDispatchTracker;
   refreshHealthSnapshot: GatewayRequestContext["refreshHealthSnapshot"];
+  refreshHealthAfterConnect?: boolean;
   send: (obj: unknown) => WsSendResult;
   close: (code?: number, reason?: string) => void;
   isClosed: () => boolean;

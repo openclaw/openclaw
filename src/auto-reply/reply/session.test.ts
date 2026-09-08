@@ -31,8 +31,8 @@ import {
   registerSessionBindingAdapter,
 } from "../../infra/outbound/session-binding-service.js";
 import {
-  enqueueSystemEvent,
-  enqueueSystemEventEntry,
+  enqueueSystemEventRaw as enqueueSystemEvent,
+  enqueueSystemEventEntryRaw as enqueueSystemEventEntry,
   peekSystemEvents,
   resetSystemEventsForTest,
 } from "../../infra/system-events.js";
@@ -54,12 +54,17 @@ import {
   resolveIncognitoOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { listTaskFlowRecords } from "../../tasks/task-flow-registry.js";
+import { resetTaskFlowRegistryForTests } from "../../tasks/task-runtime.test-helpers.js";
 import {
   createChannelTestPluginBase,
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { createSessionConversationTestRegistry } from "../../test-utils/session-conversation-registry.js";
+import { consumePendingDelegates, enqueuePendingDelegate } from "../continuation/delegate-store.js";
+import { consumePendingWork } from "../continuation/work-store.js";
+import { enqueuePendingWork } from "../continuation/work-store.test-support.js";
 import { buildCommandContext } from "./commands-context.js";
 import { maybeHandleResetCommand } from "./commands-reset.js";
 import { parseInlineSessionDirectives } from "./directive-handling.parse.js";
@@ -660,7 +665,7 @@ describe("initSessionState guarded initialization", () => {
     ).toContain("preserve the failed transcript");
   });
 
-  it("reports a committed reset as successful when reply cancellation throws", async () => {
+  it("retries retained cancellation through a repeated committed reset", async () => {
     const storePath = await createStorePath("openclaw-session-init-reset-cancel-failure-");
     const sessionKey = "agent:main:matrix:channel:cancel-failure";
     const sessionId = "committed-reset-session";
@@ -676,8 +681,12 @@ describe("initSessionState guarded initialization", () => {
         },
       },
     });
+    let cancellationAttempts = 0;
     const cancel = vi.fn(() => {
-      throw new Error("backend cancellation failed");
+      cancellationAttempts += 1;
+      if (cancellationAttempts <= 3) {
+        throw new Error("backend cancellation failed");
+      }
     });
     const activeReply = createReplyOperation({
       sessionKey,
@@ -686,28 +695,36 @@ describe("initSessionState guarded initialization", () => {
     });
     activeReply.attachBackend({ kind: "embedded", cancel, isStreaming: () => false });
     activeReply.setPhase("running");
+    const createResetParams = () => ({
+      ctx: {
+        Body: "/new",
+        RawBody: "/new",
+        CommandBody: "/new",
+        From: "@owner:example.test",
+        To: "!cancel-failure:example.test",
+        ChatType: "channel",
+        SessionKey: sessionKey,
+        Provider: "matrix",
+        Surface: "matrix",
+      },
+      cfg: { session: { store: storePath, idleMinutes: 999 } } as OpenClawConfig,
+      commandAuthorized: true,
+    });
 
     try {
-      const reset = await initSessionState({
-        ctx: {
-          Body: "/new",
-          RawBody: "/new",
-          CommandBody: "/new",
-          From: "@owner:example.test",
-          To: "!cancel-failure:example.test",
-          ChatType: "channel",
-          SessionKey: sessionKey,
-          Provider: "matrix",
-          Surface: "matrix",
-        },
-        cfg: { session: { store: storePath, idleMinutes: 999 } } as OpenClawConfig,
-        commandAuthorized: true,
-      });
+      await expect(initSessionState(createResetParams())).rejects.toThrow(
+        "Reply backend cancellation failed after 3 attempts",
+      );
 
-      expect(reset.resetTriggered).toBe(true);
-      expect(reset.sessionEntry.mainRestartRecovery).toBeUndefined();
       expect(loadSessionEntry({ storePath, sessionKey })?.mainRestartRecovery).toBeUndefined();
       expect(cancel).toHaveBeenCalledWith("restart");
+      expect(cancel).toHaveBeenCalledTimes(3);
+      expect(replyRunRegistry.isActive(sessionKey)).toBe(true);
+
+      await expect(initSessionState(createResetParams())).rejects.toThrow(
+        "reply session initialization conflicted",
+      );
+      expect(cancel).toHaveBeenCalledTimes(4);
       expect(replyRunRegistry.isActive(sessionKey)).toBe(false);
     } finally {
       activeReply.complete();
@@ -2899,6 +2916,62 @@ describe("initSessionState reset policy", () => {
       });
     }
   });
+
+  it.each([
+    {
+      name: "idle",
+      now: new Date(2026, 0, 18, 5, 30, 0),
+      updatedAt: new Date(2026, 0, 18, 4, 45, 0).getTime(),
+      reset: { mode: "idle" as const, idleMinutes: 30 },
+    },
+    {
+      name: "daily",
+      now: new Date(2026, 0, 18, 5, 0, 0),
+      updatedAt: new Date(2026, 0, 18, 3, 0, 0).getTime(),
+      reset: { mode: "daily" as const, atHour: 4 },
+    },
+  ])("preserves durable continuation claims across implicit $name rollover", async (scenario) => {
+    vi.setSystemTime(scenario.now);
+    resetTaskFlowRegistryForTests();
+    const storePath = await createStorePath(`openclaw-reset-${scenario.name}-continuation-`);
+    const sessionKey = `agent:main:whatsapp:dm:${scenario.name}-continuation`;
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId: `${scenario.name}-continuation-session`,
+        updatedAt: scenario.updatedAt,
+      },
+    });
+    const work = enqueuePendingWork({
+      sessionKey,
+      hop: 1,
+      delayMs: 0,
+      electedAt: Date.now(),
+      dueAt: Date.now(),
+      maxChainLength: 8,
+    });
+    const delegate = enqueuePendingDelegate(sessionKey, {
+      task: `continue after ${scenario.name} rollover`,
+      delayMs: 0,
+    });
+    if (!work || !delegate) {
+      throw new Error("expected durable continuation rows");
+    }
+
+    try {
+      const result = await initSessionState({
+        ctx: { Body: "hello", SessionKey: sessionKey },
+        cfg: { session: { store: storePath, reset: scenario.reset } } as OpenClawConfig,
+      });
+
+      expect(result.isNewSession).toBe(true);
+      expect(result.resetTriggered).toBe(false);
+      expect(consumePendingWork(sessionKey)).toHaveLength(1);
+      expect(consumePendingDelegates(sessionKey)).toHaveLength(1);
+    } finally {
+      resetTaskFlowRegistryForTests();
+    }
+  });
+
   it("drains stale system events when idle rollover creates a new session", async () => {
     vi.setSystemTime(new Date(2026, 0, 18, 5, 30, 0));
     const root = await makeCaseDir("openclaw-reset-idle-system-events-");
@@ -3424,6 +3497,53 @@ describe("initSessionState browser tab cleanup", () => {
       "closeTrackedBrowserTabsForSessions",
     );
     expect(cleanupParams.sessionKeys).toEqual([existingSessionId, sessionKey]);
+  });
+
+  it("cancels durable continuation work and delegates on inline reset", async () => {
+    const storePath = await createStorePath("openclaw-inline-reset-continuation-");
+    const sessionKey = "agent:main:telegram:dm:inline-reset-continuation";
+    const existingSessionId = "inline-reset-continuation-session";
+    resetTaskFlowRegistryForTests();
+    try {
+      await writeSessionStoreFast(storePath, {
+        [sessionKey]: {
+          sessionId: existingSessionId,
+          updatedAt: Date.now(),
+        },
+      });
+      const work = enqueuePendingWork({
+        sessionKey,
+        hop: 1,
+        delayMs: 60_000,
+        electedAt: Date.now(),
+        dueAt: Date.now() + 60_000,
+        maxChainLength: 8,
+      });
+      const delegate = enqueuePendingDelegate(sessionKey, {
+        task: "delegate after inline reset",
+        delayMs: 60_000,
+      });
+      if (!work || !delegate) {
+        throw new Error("expected durable continuation rows");
+      }
+
+      const result = await initSessionState({
+        ctx: {
+          Body: "/new",
+          RawBody: "/new",
+          CommandBody: "/new",
+          SessionKey: sessionKey,
+        },
+        cfg: { session: { store: storePath, idleMinutes: 999 } } as OpenClawConfig,
+      });
+
+      expect(result.isNewSession).toBe(true);
+      const flows = new Map(listTaskFlowRecords().map((flow) => [flow.flowId, flow]));
+      expect(flows.get(work.flowId!)?.status).toBe("cancelled");
+      expect(flows.get(delegate.flowId!)?.status).toBe("cancelled");
+    } finally {
+      resetTaskFlowRegistryForTests();
+    }
   });
 
   it("does not close browser tabs for a fresh session without previous state", async () => {
@@ -4135,6 +4255,8 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
       thinkingLevel: "high",
       reasoningLevel: "low",
       label: "telegram-priority",
+      lastContextPressureBand: 95,
+      pendingPostCompactionDelegates: [{ task: "carry notes", createdAt: 1 }],
     } as const;
     const cases = await runExplicitResetCases({
       storePath,
@@ -4147,7 +4269,20 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
       expect(result.isNewSession, name).toBe(true);
       expect(result.resetTriggered, name).toBe(true);
       expect(result.sessionId, name).toBe(existingSessionId);
-      expectEntryFields(result.sessionEntry, overrides, name);
+      expectEntryFields(
+        result.sessionEntry,
+        {
+          verboseLevel: overrides.verboseLevel,
+          thinkingLevel: overrides.thinkingLevel,
+          reasoningLevel: overrides.reasoningLevel,
+          label: overrides.label,
+        },
+        name,
+      );
+      // Reset keeps durable transcript identity upstream, while continuation
+      // telemetry and queued post-compaction work must not leak into the new turn.
+      expect(result.sessionEntry.lastContextPressureBand, name).toBeUndefined();
+      expect(result.sessionEntry.pendingPostCompactionDelegates, name).toBeUndefined();
     }
   });
 

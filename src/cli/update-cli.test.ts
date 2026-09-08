@@ -15,6 +15,7 @@ import { writePackageDistInventory } from "../../scripts/lib/package-dist-invent
 import { LEGACY_PACKAGE_INSTALL_GUARD_RELATIVE_PATH } from "../../scripts/lib/package-lifecycle-marker.mjs";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { useHermeticOpenclawEnv } from "../../test/vitest/hermetic-openclaw-env.js";
 import { sanitizeTriageUpdateFailure } from "../commands/triage-update.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig, ConfigFileSnapshot } from "../config/types.openclaw.js";
@@ -707,6 +708,7 @@ type UpdateCliScenario = {
 };
 
 describe("update-cli", () => {
+  useHermeticOpenclawEnv();
   // Per-run unique root: concurrent runs on one machine (CI shards, sibling checkouts) must
   // never share fixture paths — some cases write real files and rm them in cleanup. Realpath'd
   // because macOS os.tmpdir() is a /var -> /private/var symlink.

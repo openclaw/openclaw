@@ -1,15 +1,10 @@
-import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
-
-const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
-  afterEach(() => {
-    closeOpenClawAgentDatabasesForTest();
-    cleanup();
-  }),
-);
+import {
+  createOpenClawTestState,
+  type OpenClawTestState,
+} from "../../test-utils/openclaw-test-state.js";
 
 vi.mock("../model-fallback-candidates.js", () => ({
   resolveModelCandidateChain: (params: { provider: string; model: string }) => [
@@ -76,8 +71,9 @@ import { compactEmbeddedAgentSessionDirectOnce } from "./direct-compaction.js";
 const runMock = vi.mocked(runWithModelFallback);
 const compactOnceMock = vi.mocked(compactEmbeddedAgentSessionDirectOnce);
 
+let testState: OpenClawTestState;
+
 function baseParams() {
-  const workspaceDir = tempDirs.make("openclaw-compact-abort-");
   return {
     sessionId: "test-session",
     sessionKey: "agent:main:test-session",
@@ -86,9 +82,9 @@ function baseParams() {
       agentId: "main",
       sessionId: "test-session",
       sessionKey: "agent:main:test-session",
-      storePath: join(workspaceDir, "sessions.json"),
+      storePath: testState.statePath("sessions.json"),
     },
-    workspaceDir,
+    workspaceDir: testState.workspaceDir,
   };
 }
 
@@ -106,9 +102,18 @@ function configWithFallbacks(fallbacks: string[]): OpenClawConfig {
 }
 
 describe("compactEmbeddedAgentSessionDirect abortSignal threading", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    testState = await createOpenClawTestState({
+      label: "compact-abort-signal",
+      applyEnv: false,
+    });
     runMock.mockClear();
     compactOnceMock.mockClear();
+  });
+
+  afterEach(async () => {
+    closeOpenClawAgentDatabasesForTest();
+    await testState.cleanup();
   });
 
   it("forwards params.abortSignal to runWithModelFallback so terminal aborts during compaction short-circuit", async () => {

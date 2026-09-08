@@ -4,6 +4,7 @@
 import { asOptionalRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { createInlineCodeState } from "../../packages/markdown-core/src/code-spans.js";
+import { stripContinuationSignal } from "../auto-reply/continuation/signal.js";
 import {
   parseReplyDirectives,
   type ReplyDirectiveParseResult,
@@ -317,7 +318,7 @@ export function replaceBlockReplyBuffer(
   text: string,
   sourceOffset = 0,
 ) {
-  if (ctx.blockChunker.consumedLength === 0) {
+  if (ctx.blockChunker.consumedLength === 0 && ctx.state.lastBlockReplyText == null) {
     ctx.resetBlockReplyDirectives();
   }
   ctx.blockChunker.replace(text, sourceOffset);
@@ -363,7 +364,32 @@ export function resolveStreamingReply(params: {
     const text = params.previousCleaned;
     return { text, delta: "", replace: false, hasText: Boolean(text.trim()) };
   }
+  return resolveOptimizedStreamingReplyText(params);
+}
 
+/** Removes a completed continuation signal from text bound for a display stream. */
+export function stripContinuationSignalFromDisplayText(text: string): string {
+  const stripped = stripContinuationSignal(text);
+  if (stripped.signal) {
+    return stripped.text;
+  }
+  const trailing = splitTrailingDirective(text);
+  return /^\s*(?:\[\[\s*)?CONT/iu.test(trailing.tail) ? trailing.text : text;
+}
+
+function parseFullStreamingReplyText(text: string): string {
+  return stripContinuationSignalFromDisplayText(parseReplyDirectives(text).text);
+}
+
+function resolveOptimizedStreamingReplyText(params: {
+  evtType: "text_delta" | "text_start" | "text_end";
+  next: string;
+  previousText: string;
+  previousCleaned: string;
+  visibleDelta: string;
+  appendDelta: string | null;
+  parsedStreamDirectives: ReplyDirectiveParseResult | null;
+}) {
   let text: string | undefined;
   let delta: string | undefined;
   let isAppend = false;
@@ -383,9 +409,9 @@ export function resolveStreamingReply(params: {
     isAppend = true;
   }
 
-  text ??= parseReplyDirectives(
+  text ??= parseFullStreamingReplyText(
     params.evtType === "text_end" ? params.next : splitTrailingDirective(params.next).text,
-  ).text;
+  );
   const replace = Boolean(
     !isAppend && params.previousCleaned && !text.startsWith(params.previousCleaned),
   );

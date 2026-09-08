@@ -19,11 +19,11 @@ import {
   getDeliveryQueueEntryOwners,
   loadDeliveryQueueEntries,
   loadDeliveryQueueEntry,
-  moveDeliveryQueueEntryToFailed,
   pruneExpiredDeliveryQueueTombstones,
   updateDeliveryQueueEntry,
   upsertDeliveryQueueEntry,
 } from "./delivery-queue-sqlite.js";
+import { moveDeliveryQueueEntryToFailedForTest } from "./delivery-queue-test-support.js";
 import { resolvePreferredOpenClawTmpDir } from "./tmp-openclaw-dir.js";
 
 describe("delivery-queue-sqlite corrupt JSON resilience", () => {
@@ -173,11 +173,11 @@ describe("delivery-queue-sqlite corrupt JSON resilience", () => {
     });
   });
 
-  describe("moveDeliveryQueueEntryToFailed with corrupt row", () => {
+  describe("moveDeliveryQueueEntryToFailedForTest with corrupt row", () => {
     it("throws ENOENT (unrecoverable corrupt JSON)", () => {
       insertCorruptRow("bad-move", "{corrupt");
 
-      expect(() => moveDeliveryQueueEntryToFailed(QUEUE, "bad-move", stateDir)).toThrow(
+      expect(() => moveDeliveryQueueEntryToFailedForTest(QUEUE, "bad-move", stateDir)).toThrow(
         /No pending test-q delivery queue entry bad-move/,
       );
     });

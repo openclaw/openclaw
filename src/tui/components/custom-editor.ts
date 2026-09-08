@@ -8,6 +8,7 @@ const KITTY_MODIFIERS = {
   ctrl: 4,
 };
 const LOCK_MODIFIER_MASK = 64 + 128;
+const LEGACY_ALT_RECOVERY_WINDOW_MS = 100;
 
 // Decodes Ctrl+Alt layout output into the intended printable AltGr character.
 function decodeAltGrPrintable(data: string): string | undefined {
@@ -42,8 +43,21 @@ function decodeAltGrPrintable(data: string): string | undefined {
   }
 }
 
+// Decodes a legacy Alt chord (ESC + printable byte) back into its printable character.
+function decodeLegacyAltPrintable(data: string): string | undefined {
+  if (data.length !== 2 || !data.startsWith("\u001b")) {
+    return undefined;
+  }
+  const codepoint = data.charCodeAt(1);
+  if (codepoint < 32 || codepoint === 127) {
+    return undefined;
+  }
+  return data[1];
+}
+
 /** Editor with OpenClaw TUI shortcuts layered on top of pi-tui text editing. */
 export class CustomEditor extends Editor {
+  private recoverLegacyAltPrintableUntil = 0;
   onEscape?: () => void;
   onCtrlC?: () => void;
   onCtrlD?: () => void;
@@ -57,10 +71,24 @@ export class CustomEditor extends Editor {
   onAltUp?: () => void;
   shouldSubmitAutocomplete?: (text: string) => boolean;
 
+  recoverNextLegacyAltPrintable(): void {
+    this.recoverLegacyAltPrintableUntil = Date.now() + LEGACY_ALT_RECOVERY_WINDOW_MS;
+  }
+
   /** Preserve raw submit text so the owner chooses local editor dispatch before trimming. */
   override handleInput(data: string): void {
     if (isKeyRelease(data)) {
       return;
+    }
+
+    if (this.recoverLegacyAltPrintableUntil > 0) {
+      const armed = Date.now() <= this.recoverLegacyAltPrintableUntil;
+      this.recoverLegacyAltPrintableUntil = 0;
+      const printable = armed ? decodeLegacyAltPrintable(data) : undefined;
+      if (printable !== undefined) {
+        super.handleInput(printable);
+        return;
+      }
     }
 
     if (matchesKey(data, Key.alt("enter")) && this.onAltEnter) {

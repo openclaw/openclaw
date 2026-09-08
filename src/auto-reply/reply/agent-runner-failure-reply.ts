@@ -402,7 +402,9 @@ export function buildExternalRunFailureReply(
 }
 
 export function markAgentRunFailureReplyPayload<T extends ReplyPayload>(payload: T): T {
-  const marked = markReplyPayloadForSourceSuppressionDelivery(payload);
+  const marked = setReplyPayloadMetadata(markReplyPayloadForSourceSuppressionDelivery(payload), {
+    agentRunFailureReply: true,
+  });
   if (!isSilentReplyText(marked.text, SILENT_REPLY_TOKEN)) {
     marked.isError = true;
   }

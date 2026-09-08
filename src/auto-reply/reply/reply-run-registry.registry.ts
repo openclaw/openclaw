@@ -262,20 +262,53 @@ export function forceClearReplyRunBySessionId(sessionId: string, cause?: unknown
   return operation ? forceClearReplyOperation(operation, cause) : false;
 }
 
+const RESET_CANCELLATION_MAX_ATTEMPTS = 3;
+
+function cancelReplyOperationForReset(operation: ReplyOperation): void {
+  const errors: unknown[] = [];
+  for (let attempt = 0; attempt < RESET_CANCELLATION_MAX_ATTEMPTS; attempt += 1) {
+    try {
+      if (operation.phase === "aborted") {
+        getAttachedBackend(operation)?.cancel("restart");
+      } else {
+        operation.abortForRestart();
+      }
+      // Backend cancellation may synchronously retire this operation and admit a
+      // replacement. Only clear the exact archived operation resolved above.
+      if (replyRunState.activeRunsByKey.get(operation.key) === operation) {
+        operation.complete();
+      }
+      return;
+    } catch (error) {
+      errors.push(error);
+    }
+  }
+  throw new AggregateError(
+    errors,
+    `Reply backend cancellation failed after ${RESET_CANCELLATION_MAX_ATTEMPTS} attempts`,
+  );
+}
+
 export function clearReplyRunForResetBySessionId(sessionId: string): void {
   const operation = resolveReplyRunForCurrentSessionId(sessionId);
   if (!operation || isReplyOperationPreBackendPhase(operation.phase)) {
     return;
   }
-  try {
-    operation.abortForRestart();
-  } finally {
-    // Backend cancellation may synchronously retire this operation and admit a
-    // replacement. Only clear the exact archived operation resolved above.
-    if (replyRunState.activeRunsByKey.get(operation.key) === operation) {
-      operation.complete();
-    }
+  cancelReplyOperationForReset(operation);
+}
+
+/** Retry the exact current-key owner only when an earlier reset already aborted it. */
+export function retryRetainedReplyRunResetBySessionKey(sessionKey: string): boolean {
+  const operation = replyRunRegistry.get(sessionKey);
+  if (
+    operation?.phase !== "aborted" ||
+    operation.result?.kind !== "aborted" ||
+    operation.result.code !== "aborted_for_restart"
+  ) {
+    return false;
   }
+  cancelReplyOperationForReset(operation);
+  return true;
 }
 
 export function waitForReplyRunEndBySessionId(

@@ -1,6 +1,7 @@
 // Protocol Gen script supports OpenClaw repository automation.
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { stripInternalProtocolFields } from "../packages/gateway-protocol/src/schema/internal-fields.js";
 import { ProtocolSchemas } from "../packages/gateway-protocol/src/schema/protocol-schemas.js";
 import { listCoreGatewayMethodMetadata } from "../src/gateway/methods/core-descriptors.js";
 import { writeGeneratedOutput } from "./lib/generated-output-utils.mts";
@@ -36,9 +37,16 @@ function resolveOutputPath(args: string[]): string {
 }
 
 function main() {
+  const schemas: Record<string, unknown> = {};
+  for (const [name, schema] of Object.entries(ProtocolSchemas)) {
+    const publicSchema = stripInternalProtocolFields(schema);
+    if (publicSchema !== undefined) {
+      schemas[name] = publicSchema;
+    }
+  }
   const document = buildProtocolSchemaDocument({
     methods: listCoreGatewayMethodMetadata(),
-    schemas: ProtocolSchemas,
+    schemas,
   });
   // The artifact is a build output with no committed baseline, so this contract
   // check is the only guard between a degraded registry and the published

@@ -156,6 +156,7 @@ vi.mock("../infra/heartbeat-wake.js", async () => {
   return {
     ...actual,
     requestHeartbeat,
+    requestHeartbeatRaw: requestHeartbeat,
     requestHeartbeatAndWait,
   };
 });

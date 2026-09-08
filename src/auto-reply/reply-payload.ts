@@ -248,6 +248,8 @@ export type ReplyPayloadMetadata = {
    * are message-tool-only; sendPolicy deny still wins.
    */
   deliverDespiteSourceReplySuppression?: boolean;
+  /** Host-authored terminal failure copy, distinct from agent/tool warning payloads. */
+  agentRunFailureReply?: boolean;
   /**
    * A message-tool reply to the active internal UI source. The final payload is
    * still the live delivery vehicle; this mirror makes the reply durable for

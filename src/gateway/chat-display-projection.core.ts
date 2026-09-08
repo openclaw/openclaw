@@ -4,6 +4,7 @@ import { normalizeLowercaseStringOrEmpty as normalizeErrorSignal } from "@opencl
 import { renderAssistantRequestFailureCopy } from "../agents/failover/assistant-request-failure-copy.js";
 import { isContextOverflowError } from "../agents/failover/classify.js";
 import { STREAM_ERROR_FALLBACK_TEXT } from "../agents/stream-message-shared.js";
+import { hasRawToolValidationOutput } from "../agents/tool-error-summary.js";
 import { readTranscriptSenderIdentity } from "../chat/sender-identity.js";
 import { classifyGatewayStorageFailure } from "../infra/sqlite-error-diagnostics.js";
 import {
@@ -392,15 +393,41 @@ function projectEmptyAssistantErrorMessages(
     if (message.role !== "assistant" || message.stopReason !== "error") {
       return message;
     }
+    const sanitized = sanitizeChatHistoryMessage(message, Number.MAX_SAFE_INTEGER)
+      .message as Record<string, unknown>;
+    const visibleTexts: string[] = [];
+    if (typeof sanitized.content === "string") {
+      visibleTexts.push(sanitized.content);
+    } else if (Array.isArray(sanitized.content)) {
+      for (const block of sanitized.content) {
+        const entry = asOptionalRecord(block);
+        if (!entry) {
+          continue;
+        }
+        if (isAssistantTextContentType(entry.type) && typeof entry.text === "string") {
+          visibleTexts.push(entry.text);
+        }
+      }
+    }
+    if (typeof sanitized.text === "string") {
+      visibleTexts.push(sanitized.text);
+    }
+    const nonEmptyVisibleTexts = visibleTexts.map((text) => text.trim()).filter(Boolean);
+    const hasUnsafeValidationOutput = nonEmptyVisibleTexts.some(hasRawToolValidationOutput);
     const hasDisplayableStructuredContent =
       hasAssistantDisplayableNonTextContent(message) || hasTranscriptMediaFacts(message);
-    if (hasDisplayableStructuredContent) {
+    if (hasDisplayableStructuredContent && !hasUnsafeValidationOutput) {
       changed = true;
       return sanitizeAssistantErrorDisplayMessage(message);
     }
-    const sanitized = sanitizeChatHistoryMessage(message, Number.MAX_SAFE_INTEGER)
-      .message as Record<string, unknown>;
-    if (!shouldDropAssistantHistoryMessage(sanitized) && hasVisibleAssistantReplyText(sanitized)) {
+    const hasVisibleReplyText = nonEmptyVisibleTexts.some(
+      (text) => text !== STREAM_ERROR_FALLBACK_TEXT && !isSuppressedControlReplyText(text),
+    );
+    if (
+      !hasUnsafeValidationOutput &&
+      !shouldDropAssistantHistoryMessage(sanitized) &&
+      hasVisibleReplyText
+    ) {
       changed = true;
       return sanitizeAssistantErrorDisplayMessage(message);
     }

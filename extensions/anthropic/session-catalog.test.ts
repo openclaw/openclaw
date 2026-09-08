@@ -2355,14 +2355,15 @@ describe("Claude session catalog", () => {
     await fs.appendFile(transcriptPath, `${JSON.stringify({ type: "progress" })}\n`);
     const appendedAt = new Date(baseNow + 2_000);
     await fs.utimes(transcriptPath, appendedAt, appendedAt);
+    const appendedMtimeMs = (await fs.stat(transcriptPath)).mtimeMs;
     // Content writes do not portably change the parent directory mtime. Pin it so only the child
     // mtime component of the tree stamp can invalidate this snapshot on every CI filesystem.
     await fs.utimes(projectDir, fixedDirectoryTime, fixedDirectoryTime);
 
-    expect(initialUpdatedAt).not.toBe(appendedAt.getTime());
+    expect(initialUpdatedAt).not.toBe(appendedMtimeMs);
     await expectClaudeCatalogEventually(home, (page) =>
       expect(page.sessions.find((session) => session.threadId === sessionId)?.updatedAt).toBe(
-        appendedAt.getTime(),
+        appendedMtimeMs,
       ),
     );
   });

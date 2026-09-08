@@ -8,6 +8,10 @@ import { retainGatewayPluginMetadata } from "../plugins/plugin-metadata-lifecycl
 import { clearSecretsRuntimeSnapshotState } from "../secrets/runtime-state.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { startGatewayCoreRuntime } from "./server-core-runtime.js";
+import {
+  readGatewayServerExtraHandlers,
+  readGatewayServerExtraHttpRoutes,
+} from "./server-extra-handlers.js";
 import { prepareGatewayKernelRequestRuntime } from "./server-kernel-request-runtime.js";
 import { prepareGatewayLifecycle } from "./server-lifecycle.js";
 import { registerGatewayModelCatalogPrivateAccess } from "./server-model-catalog-auth.js";
@@ -154,12 +158,15 @@ export async function createGatewayKernel(
       formatRuntimeGatewayAuthTokenWarning,
     });
     closeStartupTrace = bootstrap.startupTrace.close;
+    const serverExtraHandlers = readGatewayServerExtraHandlers(opts);
+    const serverExtraHttpRoutes = readGatewayServerExtraHttpRoutes(opts);
     const runtime = await bootstrap.startupTrace.measure("gateway.kernel-state", () =>
       prepareGatewayKernelState({
         bootstrap,
         bootId,
         port,
         opts,
+        serverExtraHttpRoutes,
         log,
         logChannels,
         logHooks,
@@ -194,6 +201,7 @@ export async function createGatewayKernel(
     const coreRuntime = await runtime.startupTrace.measure("gateway.core-runtime", () =>
       startGatewayCoreRuntime({
         lifecycleRuntime: preparedLifecycleRuntime,
+        serverExtraHandlers,
         port,
         log,
         logDiscovery,

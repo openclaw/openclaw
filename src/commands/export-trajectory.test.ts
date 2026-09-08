@@ -10,8 +10,8 @@ const mocks = vi.hoisted(() => ({
   getRuntimeConfig: vi.fn(),
   loadSessionEntryReadOnly: vi.fn(),
   resolveExplicitStorePath: vi.fn(),
+  resolveSessionStorePathCore: vi.fn(),
   resolveSessionTranscriptReadTarget: vi.fn(),
-  resolveStorePath: vi.fn(),
 }));
 
 vi.mock("../config/config.js", () => ({
@@ -39,7 +39,7 @@ vi.mock("../config/sessions/paths.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../config/sessions/paths.js")>();
   return {
     ...actual,
-    resolveSessionStorePathCore: mocks.resolveStorePath,
+    resolveSessionStorePathCore: mocks.resolveSessionStorePathCore,
   };
 });
 
@@ -75,7 +75,7 @@ describe("exportTrajectoryCommand", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.getRuntimeConfig.mockReturnValue({});
-    mocks.resolveStorePath.mockReturnValue("/tmp/openclaw/sessions.json");
+    mocks.resolveSessionStorePathCore.mockReturnValue("/tmp/openclaw/sessions.json");
     mocks.resolveExplicitStorePath.mockImplementation(
       (params: { storePath: string }) => params.storePath,
     );
@@ -100,7 +100,7 @@ describe("exportTrajectoryCommand", () => {
       runtime,
       "--session-key is required. Run openclaw sessions to choose a session.",
     );
-    expect(mocks.resolveStorePath).not.toHaveBeenCalled();
+    expect(mocks.resolveSessionStorePathCore).not.toHaveBeenCalled();
     expect(mocks.loadSessionEntryReadOnly).not.toHaveBeenCalled();
     expect(mocks.exportTrajectoryForCommand).not.toHaveBeenCalled();
   });
@@ -143,7 +143,7 @@ describe("exportTrajectoryCommand", () => {
         runtime,
         `Failed to decode trajectory export request: ${detail}`,
       );
-      expect(mocks.resolveStorePath).not.toHaveBeenCalled();
+      expect(mocks.resolveSessionStorePathCore).not.toHaveBeenCalled();
       expect(mocks.loadSessionEntryReadOnly).not.toHaveBeenCalled();
       expect(mocks.exportTrajectoryForCommand).not.toHaveBeenCalled();
     },
@@ -155,7 +155,7 @@ describe("exportTrajectoryCommand", () => {
       JSON.stringify({ output: "/tmp/export.json" }),
       "utf8",
     ).toString("base64url");
-    mocks.resolveStorePath.mockReturnValue("/tmp/direct-store.json");
+    mocks.resolveSessionStorePathCore.mockReturnValue("/tmp/direct-store.json");
 
     await exportTrajectoryCommand(
       {
@@ -167,7 +167,7 @@ describe("exportTrajectoryCommand", () => {
     );
 
     expect(mocks.getRuntimeConfig).not.toHaveBeenCalled();
-    expect(mocks.resolveStorePath).toHaveBeenCalledWith("/tmp/direct-store.json", {
+    expect(mocks.resolveSessionStorePathCore).toHaveBeenCalledWith("/tmp/direct-store.json", {
       agentId: "main",
     });
     expect(mocks.loadSessionEntryReadOnly).toHaveBeenCalledWith({
@@ -197,7 +197,7 @@ describe("exportTrajectoryCommand", () => {
       runtime,
       message,
     );
-    expect(mocks.resolveStorePath).not.toHaveBeenCalled();
+    expect(mocks.resolveSessionStorePathCore).not.toHaveBeenCalled();
     expect(mocks.loadSessionEntryReadOnly).not.toHaveBeenCalled();
     expect(mocks.exportTrajectoryForCommand).not.toHaveBeenCalled();
   });
@@ -213,7 +213,7 @@ describe("exportTrajectoryCommand", () => {
       runtime,
       "--store must not be blank",
     );
-    expect(mocks.resolveStorePath).not.toHaveBeenCalled();
+    expect(mocks.resolveSessionStorePathCore).not.toHaveBeenCalled();
     expect(mocks.loadSessionEntryReadOnly).not.toHaveBeenCalled();
     expect(mocks.exportTrajectoryForCommand).not.toHaveBeenCalled();
   });
@@ -235,7 +235,7 @@ describe("exportTrajectoryCommand", () => {
       runtime,
       message,
     );
-    expect(mocks.resolveStorePath).not.toHaveBeenCalled();
+    expect(mocks.resolveSessionStorePathCore).not.toHaveBeenCalled();
     expect(mocks.loadSessionEntryReadOnly).not.toHaveBeenCalled();
     expect(mocks.exportTrajectoryForCommand).not.toHaveBeenCalled();
   });
@@ -243,7 +243,7 @@ describe("exportTrajectoryCommand", () => {
   it("honours a non-blank encoded store and agent", async () => {
     const runtime = createRuntime();
     mocks.getRuntimeConfig.mockReturnValue({ agents: { list: [{ id: "main" }, { id: "work" }] } });
-    mocks.resolveStorePath.mockReturnValue("/tmp/encoded-store.json");
+    mocks.resolveSessionStorePathCore.mockReturnValue("/tmp/encoded-store.json");
     const requestJsonBase64 = Buffer.from(
       JSON.stringify({
         sessionKey: "agent:main:telegram:direct:123",
@@ -255,7 +255,7 @@ describe("exportTrajectoryCommand", () => {
 
     await exportTrajectoryCommand({ requestJsonBase64 }, runtime);
 
-    expect(mocks.resolveStorePath).toHaveBeenCalledWith("/tmp/encoded-store.json", {
+    expect(mocks.resolveSessionStorePathCore).toHaveBeenCalledWith("/tmp/encoded-store.json", {
       agentId: "work",
     });
     expect(mocks.loadSessionEntryReadOnly).toHaveBeenCalledWith({
@@ -267,7 +267,7 @@ describe("exportTrajectoryCommand", () => {
 
   it("routes invalid explicit stores through the command failure owner", async () => {
     const runtime = createRuntime();
-    mocks.resolveStorePath.mockReturnValue("/tmp/missing.sqlite");
+    mocks.resolveSessionStorePathCore.mockReturnValue("/tmp/missing.sqlite");
     mocks.resolveExplicitStorePath.mockImplementationOnce(() => {
       throw new Error("Session store target does not exist: /tmp/missing.sqlite");
     });
@@ -297,11 +297,13 @@ describe("exportTrajectoryCommand", () => {
         agents: { list: [{ id: "main" }, { id: "work" }] },
         session: { store: "/tmp/openclaw/agents/{agentId}/sessions/sessions.json" },
       });
-      mocks.resolveStorePath.mockReturnValue("/tmp/openclaw/agents/work/sessions/sessions.json");
+      mocks.resolveSessionStorePathCore.mockReturnValue(
+        "/tmp/openclaw/agents/work/sessions/sessions.json",
+      );
 
       await exportTrajectoryCommand({ sessionKey, agent: "work" }, runtime);
 
-      expect(mocks.resolveStorePath).toHaveBeenCalledWith(
+      expect(mocks.resolveSessionStorePathCore).toHaveBeenCalledWith(
         "/tmp/openclaw/agents/{agentId}/sessions/sessions.json",
         { agentId: "work" },
       );
@@ -324,7 +326,7 @@ describe("exportTrajectoryCommand", () => {
     "resolves explicit --store %s paths through the shared resolver",
     async (_name, store, resolvedStore) => {
       const runtime = createRuntime();
-      mocks.resolveStorePath.mockReturnValue(resolvedStore);
+      mocks.resolveSessionStorePathCore.mockReturnValue(resolvedStore);
 
       await exportTrajectoryCommand(
         { sessionKey: "agent:work:telegram:direct:123", store },
@@ -332,7 +334,7 @@ describe("exportTrajectoryCommand", () => {
       );
 
       expect(mocks.getRuntimeConfig).not.toHaveBeenCalled();
-      expect(mocks.resolveStorePath).toHaveBeenCalledWith(store, { agentId: "work" });
+      expect(mocks.resolveSessionStorePathCore).toHaveBeenCalledWith(store, { agentId: "work" });
       expect(mocks.resolveExplicitStorePath).toHaveBeenCalledWith({
         storePath: resolvedStore,
         inputStorePath: store,
@@ -351,11 +353,13 @@ describe("exportTrajectoryCommand", () => {
     mocks.getRuntimeConfig.mockReturnValue({
       session: { store: "/tmp/openclaw/agents/{agentId}/sessions/sessions.json" },
     });
-    mocks.resolveStorePath.mockReturnValue("/tmp/openclaw/agents/work/sessions/sessions.json");
+    mocks.resolveSessionStorePathCore.mockReturnValue(
+      "/tmp/openclaw/agents/work/sessions/sessions.json",
+    );
 
     await exportTrajectoryCommand({ sessionKey: "agent:work:telegram:direct:123" }, runtime);
 
-    expect(mocks.resolveStorePath).toHaveBeenCalledWith(
+    expect(mocks.resolveSessionStorePathCore).toHaveBeenCalledWith(
       "/tmp/openclaw/agents/{agentId}/sessions/sessions.json",
       { agentId: "work" },
     );
@@ -366,12 +370,12 @@ describe("exportTrajectoryCommand", () => {
     });
   });
 
-  it("falls back through resolveStorePath when no session.store is configured", async () => {
+  it("falls back through resolveSessionStorePathCore when no session.store is configured", async () => {
     const runtime = createRuntime();
 
     await exportTrajectoryCommand({ sessionKey: "agent:main:telegram:direct:123" }, runtime);
 
-    expect(mocks.resolveStorePath).toHaveBeenCalledWith(undefined, { agentId: "main" });
+    expect(mocks.resolveSessionStorePathCore).toHaveBeenCalledWith(undefined, { agentId: "main" });
     expect(mocks.loadSessionEntryReadOnly).toHaveBeenCalledWith({
       agentId: "main",
       sessionKey: "agent:main:telegram:direct:123",
@@ -385,7 +389,7 @@ describe("exportTrajectoryCommand", () => {
 
     await exportTrajectoryCommand({ sessionKey: "agent:main:telegram:direct:123" }, runtime);
 
-    expect(mocks.resolveStorePath).toHaveBeenCalledWith("", { agentId: "main" });
+    expect(mocks.resolveSessionStorePathCore).toHaveBeenCalledWith("", { agentId: "main" });
     expect(mocks.loadSessionEntryReadOnly).toHaveBeenCalledWith({
       agentId: "main",
       sessionKey: "agent:main:telegram:direct:123",

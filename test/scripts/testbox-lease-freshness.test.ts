@@ -34,6 +34,21 @@ describe("Testbox lease freshness", () => {
     expect(testboxLeaseStaleReasons(fingerprint, { ...fingerprint })).toEqual([]);
   });
 
+  it("rotates a lease when the checkout head changes", () => {
+    expect(
+      testboxLeaseStaleReasons(fingerprint, {
+        ...fingerprint,
+        headSha: "e".repeat(40),
+      }),
+    ).toEqual(["headSha"]);
+  });
+
+  it("ignores the retired working-tree-clean field in legacy fingerprints", () => {
+    expect(
+      testboxLeaseStaleReasons({ ...fingerprint, workingTreeClean: true }, fingerprint),
+    ).toEqual([]);
+  });
+
   it("rejects unknown provenance schemas", () => {
     expect(testboxLeaseStaleReasons({ ...fingerprint, version: 2 }, fingerprint)).toEqual([
       "state schema",
@@ -115,7 +130,8 @@ describe("Testbox lease freshness", () => {
       } else {
         args = [`--blacksmith-${field}`, "changed"];
       }
-      expect(() => fixture.prepare(args)).toThrow(`is stale (${field})`);
+      const staleFields = field === "baseSha" ? "baseSha, headSha" : field;
+      expect(() => fixture.prepare(args)).toThrow(`is stale (${staleFields})`);
       expect(readFileSync(fixture.statePath, "utf8")).toBe(saved);
     },
   );

@@ -476,6 +476,7 @@ export function ensureAdditiveStateColumns(db: DatabaseSync): void {
     repairLegacyTaskAgentAttribution(db);
   }
   repairLegacyTaskDeliveryStatuses(db);
+  ensureColumn(db, "flow_runs", "chain_id TEXT");
   ensureColumns(db, columns.taskRunDetails);
   repairLegacySubagentSuspensionReasons(db);
   repairLegacySubagentExecutionPayloads(db);

@@ -208,6 +208,7 @@ export async function handleEmbeddedPromptFailure(input: {
         failoverProvider: input.provider,
         failoverModel: input.modelId,
         logFallbackDecision: logFailoverDecision,
+        timeout: failoverContext.timeout,
       });
     } else {
       rotated = await input.failover.advanceAuthProfile();

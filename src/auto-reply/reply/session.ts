@@ -107,6 +107,7 @@ import {
 } from "../../utils/delivery-context.shared.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import { resolveCommandTurnTargetSessionKey } from "../command-turn-context.js";
+import { SessionContinuationResetError } from "../continuation/session-reset.js";
 import type {
   FinalizedRuntimeMsgContext,
   FinalizedTemplateContext as TemplateContext,
@@ -116,7 +117,7 @@ import { resolveEffectiveResetTargetSessionKey } from "./acp-reset-target.js";
 import { readBeforeResetMessages } from "./commands-reset-hooks.js";
 import { resolveConversationBindingContextFromMessage } from "./conversation-binding-input.js";
 import { normalizeInboundTextNewlines } from "./inbound-text.js";
-import { replyRunRegistry } from "./reply-run-registry.js";
+import { replyRunRegistry, retryRetainedReplyRunResetBySessionKey } from "./reply-run-registry.js";
 import { resolveRuntimePolicySessionKey } from "./runtime-policy-session-key.js";
 import {
   maybeRetireLegacyMainDeliveryRoute,
@@ -138,6 +139,7 @@ import {
 import {
   clearSessionResetRuntimeState,
   createSessionResetCleanupGuard,
+  SessionResetCleanupError,
   stopSessionResetSubagents,
 } from "./session-reset-cleanup.js";
 import { resolveAuthorizedSessionResetCommand } from "./session-reset-command.js";
@@ -620,6 +622,9 @@ async function initSessionStateAttemptLocked(
     agentId,
     sessionKey: resolveSessionKey(sessionScope, sessionCtxForState, mainKey, agentId),
   });
+  if (resetTriggered) {
+    retryRetainedReplyRunResetBySessionKey(sessionKey);
+  }
   // CRITICAL: Skip cache to ensure fresh data when resolving session identity.
   // Stale cache (especially with multiple gateway processes or on Windows where
   // mtime granularity may miss rapid writes) can cause incorrect sessionId
@@ -1168,11 +1173,19 @@ async function initSessionStateAttemptLocked(
       clearSessionResetRuntimeState([sessionKey, previousSessionEntry.sessionId], {
         activeReplySessionId: previousSessionEntry.sessionId,
         agentId,
+        reason:
+          previousSessionEndReason === "new" ||
+          previousSessionEndReason === "reset" ||
+          previousSessionEndReason === "idle" ||
+          previousSessionEndReason === "daily"
+            ? previousSessionEndReason
+            : "reset",
       });
     } catch (error) {
-      // The replacement is already durable. Runtime cleanup is best-effort and
-      // must not turn a committed reset into a reported initialization failure.
-      log.warn(`failed to clear reset runtime state for session ${sessionKey}: ${String(error)}`);
+      if (error instanceof SessionContinuationResetError) {
+        throw new SessionResetCleanupError(error.message, { cause: error });
+      }
+      throw error;
     }
   }
   sessionEntry = committed.sessionEntry;

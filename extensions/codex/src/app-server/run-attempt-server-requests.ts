@@ -1,11 +1,14 @@
-import { onInternalDiagnosticEvent } from "openclaw/plugin-sdk/diagnostic-runtime";
+import {
+  onInternalDiagnosticEvent,
+  type DiagnosticTraceContext,
+} from "openclaw/plugin-sdk/diagnostic-runtime";
 import { handleCodexAppServerApprovalRequest } from "./approval-bridge.js";
 import { isCodexAppServerApprovalRequest } from "./client.js";
 import { shouldAutoApproveCodexAppServerApprovals } from "./config.js";
 import {
   emitDynamicToolErrorDiagnostic,
-  emitDynamicToolStartedDiagnostic,
   emitDynamicToolTerminalDiagnostic,
+  startDynamicToolDiagnosticExecution,
 } from "./dynamic-tool-diagnostics.js";
 import {
   handleDynamicToolCallWithTimeout,
@@ -197,6 +200,14 @@ export function createCodexAttemptServerRequestController(
       }
       const dynamicToolTimeoutMs = resolveDynamicToolCallTimeoutMs({ call, config: params.config });
       const toolStartedAt = Date.now();
+      const dynamicToolDiagnosticContext = {
+        call,
+        agentId: sessionAgentId,
+        runId: params.runId,
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+      };
+      let dynamicToolTrace: DiagnosticTraceContext | undefined;
       let terminalDiagnosticObserved = false;
       const unsubscribeToolDiagnosticObserver = onInternalDiagnosticEvent(
         (event) => {
@@ -220,45 +231,45 @@ export function createCodexAttemptServerRequestController(
           // Publish the execution claim before persistence yields, so a replay
           // cannot become another owner of this call's progress or result.
           await projector?.transcriptCheckpoint.flush();
-          emitDynamicToolStartedDiagnostic({
-            call,
-            agentId: sessionAgentId,
-            runId: params.runId,
-            sessionId: params.sessionId,
-            sessionKey: params.sessionKey,
-          });
-          const response = await handleDynamicToolCallWithTimeout({
-            call,
-            toolBridge,
-            signal,
-            timeoutMs: dynamicToolTimeoutMs,
-            toolMeta,
-            toolCallOrdinal,
-            onAgentToolResult: params.onAgentToolResult,
-            observeToolTerminal: params.observeToolTerminal,
-            onFallbackSelected: () => {
-              if (toolCallOrdinal !== undefined) {
-                suppressedDynamicToolOutcomeOrdinals.add(toolCallOrdinal);
-              }
-            },
-            onTimeout: () => {
-              trajectoryRecorder?.recordEvent("tool.timeout", {
-                threadId: call.threadId,
-                turnId: call.turnId,
-                toolCallId: call.callId,
-                name: call.tool,
+          const diagnosticExecution = startDynamicToolDiagnosticExecution(
+            dynamicToolDiagnosticContext,
+            async () => {
+              const response = await handleDynamicToolCallWithTimeout({
+                call,
+                toolBridge,
+                signal,
                 timeoutMs: dynamicToolTimeoutMs,
+                toolMeta,
+                toolCallOrdinal,
+                onAgentToolResult: params.onAgentToolResult,
+                observeToolTerminal: params.observeToolTerminal,
+                onFallbackSelected: () => {
+                  if (toolCallOrdinal !== undefined) {
+                    suppressedDynamicToolOutcomeOrdinals.add(toolCallOrdinal);
+                  }
+                },
+                onTimeout: () => {
+                  trajectoryRecorder?.recordEvent("tool.timeout", {
+                    threadId: call.threadId,
+                    turnId: call.turnId,
+                    toolCallId: call.callId,
+                    name: call.tool,
+                    timeoutMs: dynamicToolTimeoutMs,
+                  });
+                },
               });
+              recordCodexDynamicToolResult(
+                projector,
+                call,
+                response,
+                toCodexDynamicToolProtocolResponse(response),
+              );
+              await projector?.transcriptCheckpoint.flush();
+              return response;
             },
-          });
-          recordCodexDynamicToolResult(
-            projector,
-            call,
-            response,
-            toCodexDynamicToolProtocolResponse(response),
           );
-          await projector?.transcriptCheckpoint.flush();
-          return response;
+          dynamicToolTrace = diagnosticExecution.trace;
+          return await diagnosticExecution.execution;
         });
         const response = await execution;
         const protocolResponse = toCodexDynamicToolProtocolResponse(response);
@@ -313,12 +324,9 @@ export function createCodexAttemptServerRequestController(
           })
         ) {
           emitDynamicToolTerminalDiagnostic({
+            ...dynamicToolDiagnosticContext,
+            ...(dynamicToolTrace ? { trace: dynamicToolTrace } : {}),
             response,
-            call,
-            agentId: sessionAgentId,
-            runId: params.runId,
-            sessionId: params.sessionId,
-            sessionKey: params.sessionKey,
             durationMs: toolDurationMs,
           });
         }
@@ -348,11 +356,8 @@ export function createCodexAttemptServerRequestController(
           })
         ) {
           emitDynamicToolErrorDiagnostic({
-            call,
-            agentId: sessionAgentId,
-            runId: params.runId,
-            sessionId: params.sessionId,
-            sessionKey: params.sessionKey,
+            ...dynamicToolDiagnosticContext,
+            ...(dynamicToolTrace ? { trace: dynamicToolTrace } : {}),
             durationMs: Math.max(0, Date.now() - toolStartedAt),
           });
         }

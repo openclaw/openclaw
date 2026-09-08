@@ -1,8 +1,11 @@
 // Covers TUI event handler routing for keyboard and backend events.
+import type { TUI } from "@earendil-works/pi-tui";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import * as failoverClassifier from "../agents/failover/classify.js";
 import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../shared/assistant-error-format.js";
+import { CustomEditor } from "./components/custom-editor.js";
+import { editorTheme } from "./theme/theme.js";
 import { createEventHandlers } from "./tui-event-handlers.js";
 import {
   readTuiSessionProjectionScope,
@@ -35,7 +38,10 @@ type HandlerBtwPresenter = {
   showResult: (...args: unknown[]) => void;
   clear: (...args: unknown[]) => void;
 };
-type HandlerTui = { requestRender: (...args: unknown[]) => void };
+type HandlerTui = {
+  requestRender: (...args: unknown[]) => void;
+  recoverEsc?: (runId: string, validationAbort: boolean) => void;
+};
 type MockChatLog = {
   addLiveUser: MockFn;
   startTool: MockFn;
@@ -51,7 +57,7 @@ type MockBtwPresenter = {
   showResult: MockFn;
   clear: MockFn;
 };
-type MockTui = { requestRender: MockFn };
+type MockTui = { requestRender: MockFn; recoverEsc: MockFn };
 
 function createMockChatLog(): MockChatLog & HandlerChatLog {
   return {
@@ -72,6 +78,27 @@ function createMockBtwPresenter(): MockBtwPresenter & HandlerBtwPresenter {
     showResult: vi.fn(),
     clear: vi.fn(),
   } as unknown as MockBtwPresenter & HandlerBtwPresenter;
+}
+
+/**
+ * Mirrors the runTui() Escape-recovery wiring: a real editor is armed when the
+ * aborted run carries Escape provenance or the handlers report a local
+ * validation abort. The handlers own every other gate, so nothing else is faked.
+ */
+function createEscapeRecoveryHarness(escapeAbortRunIds: readonly string[] = []) {
+  const editor = new CustomEditor({ requestRender: vi.fn() } as unknown as TUI, editorTheme);
+  const escapeAborts = new Set(escapeAbortRunIds);
+  return {
+    editor,
+    tui: {
+      requestRender: vi.fn(),
+      recoverEsc: (runId: string, validationAbort: boolean) => {
+        if (escapeAborts.has(runId) || validationAbort) {
+          editor.recoverNextLegacyAltPrintable();
+        }
+      },
+    },
+  };
 }
 
 function requireFinalizedAssistantText(chatLog: MockChatLog, index = 0): string {
@@ -169,6 +196,13 @@ function makeSessionMessageEvent(
   };
 }
 
+function clearCallbackMock(callback: (...args: never[]) => unknown): void {
+  if (!("mockClear" in callback) || typeof callback.mockClear !== "function") {
+    throw new Error("expected a Vitest mock callback");
+  }
+  callback.mockClear();
+}
+
 describe("tui-event-handlers: handleAgentEvent", () => {
   const makeState = (overrides?: Partial<TuiStateAccess>): TuiStateAccess =>
     makeTuiState({ activeChatRunId: "run-1", ...overrides });
@@ -176,8 +210,11 @@ describe("tui-event-handlers: handleAgentEvent", () => {
   const makeContext = (state: TuiStateAccess) => {
     const chatLog = createMockChatLog();
     const btw = createMockBtwPresenter();
-    const tui = { requestRender: vi.fn() } as unknown as MockTui & HandlerTui;
-    const setActivityStatus = vi.fn();
+    const tui = {
+      requestRender: vi.fn(),
+      recoverEsc: vi.fn(),
+    } as unknown as MockTui & HandlerTui;
+    const setActivityStatus = vi.fn<(text: string) => void>();
     const loadHistory = vi.fn<() => Promise<TuiHistoryLoadResult>>(async () => ({
       loaded: true,
       runOutcome: { state: "completed" },
@@ -221,6 +258,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     btw?: HandlerBtwPresenter;
     localMode?: boolean;
     refreshSessionInfo?: () => Promise<void>;
+    tui?: HandlerTui;
   }) => {
     const state = makeState(params?.state);
     const context = makeContext(state);
@@ -228,7 +266,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     const rawHandlers = createEventHandlers({
       chatLog,
       btw: (params?.btw ?? context.btw) as MockBtwPresenter & HandlerBtwPresenter,
-      tui: context.tui,
+      tui: params?.tui ?? context.tui,
       state,
       localMode: params?.localMode,
       setActivityStatus: context.setActivityStatus,
@@ -255,10 +293,12 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     };
     return {
       ...context,
+      tui: params?.tui ?? context.tui,
       state,
       chatLog,
       btw: (params?.btw ?? context.btw) as MockBtwPresenter & HandlerBtwPresenter,
       ...handlers,
+      setActivityStatus: context.setActivityStatus,
     };
   };
 
@@ -373,7 +413,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
       });
     handleChatEvent({ runId: "run-current", message: { content: "partial" } });
     chatLog.addSystem.mockClear();
-    setActivityStatus.mockClear();
+    clearCallbackMock(setActivityStatus);
 
     reconnectStreamingWatchdog(outcome);
 
@@ -737,20 +777,79 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     expect(state.activeChatRunId).toBeNull();
   });
 
-  it("appends the tool-error summary to the abort line when present", () => {
-    const { chatLog, handleChatEvent } = createHandlersHarness({
+  it("keeps validation diagnostics while recovering a local Escape abort", () => {
+    const { chatLog, loadHistory, handleChatEvent, tui } = createHandlersHarness({
       state: { activeChatRunId: "run-validation-loop" },
+      localMode: true,
     });
 
     handleChatEvent({
       runId: "run-validation-loop",
       state: "aborted",
+      abortOrigin: "tool-validation",
       errorMessage: "edit tool validation failed: edits: must have required properties edits",
     });
 
     expect(chatLog.addSystem).toHaveBeenCalledWith(
       "run aborted: edit tool validation failed: edits: must have required properties edits",
     );
+    expect(tui.recoverEsc).toHaveBeenCalledExactlyOnceWith("run-validation-loop", true);
+    expect(loadHistory).not.toHaveBeenCalled();
+  });
+
+  it("recovers the next printable after an ordinary local Escape abort", () => {
+    const { editor, tui } = createEscapeRecoveryHarness(["run-local-escape"]);
+    const { handleChatEvent } = createHandlersHarness({
+      state: { activeChatRunId: "run-local-escape" },
+      localMode: true,
+      tui,
+    });
+
+    handleChatEvent({
+      runId: "run-local-escape",
+      state: "aborted",
+    });
+    editor.handleInput("\u001bp");
+
+    expect(editor.getText()).toBe("p");
+  });
+
+  it.each([
+    {
+      name: "local /stop abort",
+      localMode: true,
+      abortOrigin: undefined,
+      errorMessage: undefined,
+    },
+    {
+      name: "unrelated local diagnostic abort",
+      localMode: true,
+      abortOrigin: undefined,
+      errorMessage: "edit tool validation failed: invalid arguments",
+    },
+    {
+      name: "remote abort",
+      localMode: false,
+      abortOrigin: "tool-validation" as const,
+      errorMessage: undefined,
+    },
+  ])("does not arm Escape recovery for a $name", ({ localMode, abortOrigin, errorMessage }) => {
+    const { editor, tui } = createEscapeRecoveryHarness();
+    const { handleChatEvent } = createHandlersHarness({
+      state: { activeChatRunId: "run-unrelated-abort" },
+      localMode,
+      tui,
+    });
+
+    handleChatEvent({
+      runId: "run-unrelated-abort",
+      state: "aborted",
+      abortOrigin,
+      errorMessage,
+    });
+    editor.handleInput("\u001bp");
+
+    expect(editor.getText()).toBe("");
   });
 
   it("sanitizes untrusted abort diagnostics before rendering", () => {
@@ -1004,8 +1103,8 @@ describe("tui-event-handlers: handleAgentEvent", () => {
       });
 
     handleChatEvent(makeFinalChatEvent(state, "run-final"));
-    setActivityStatus.mockClear();
-    tui.requestRender.mockClear();
+    clearCallbackMock(setActivityStatus);
+    clearCallbackMock(tui.requestRender);
 
     handleAgentEvent({
       runId: "run-final",
@@ -1015,8 +1114,8 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     expect(setActivityStatus).toHaveBeenCalledWith("finishing context");
     expect(tui.requestRender).toHaveBeenCalled();
 
-    setActivityStatus.mockClear();
-    tui.requestRender.mockClear();
+    clearCallbackMock(setActivityStatus);
+    clearCallbackMock(tui.requestRender);
 
     handleAgentEvent({
       runId: "run-final",
@@ -1041,8 +1140,8 @@ describe("tui-event-handlers: handleAgentEvent", () => {
       runId: "run-local",
       data: { phase: "finishing" },
     });
-    setActivityStatus.mockClear();
-    tui.requestRender.mockClear();
+    clearCallbackMock(setActivityStatus);
+    clearCallbackMock(tui.requestRender);
 
     handleAgentEvent({
       runId: "run-local",
@@ -1085,8 +1184,8 @@ describe("tui-event-handlers: handleAgentEvent", () => {
       runId: "run-new",
       message: { content: "new running" },
     });
-    setActivityStatus.mockClear();
-    tui.requestRender.mockClear();
+    clearCallbackMock(setActivityStatus);
+    clearCallbackMock(tui.requestRender);
 
     handleAgentEvent({
       runId: "run-old",
@@ -1488,7 +1587,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
       question: "what changed?",
       text: "nothing important",
     } satisfies BtwEvent);
-    tui.requestRender.mockClear();
+    clearCallbackMock(tui.requestRender);
 
     handleChatEvent({
       runId: "run-btw",
@@ -1567,7 +1666,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
       question: "what changed?",
       text: "nothing important",
     } satisfies BtwEvent);
-    setActivityStatus.mockClear();
+    clearCallbackMock(setActivityStatus);
 
     handleChatEvent({
       runId: "run-btw",
@@ -1659,7 +1758,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
 
     state.currentSessionKey = "agent:main:other";
     state.activeChatRunId = null;
-    tui.requestRender.mockClear();
+    clearCallbackMock(tui.requestRender);
 
     handleAgentEvent({
       runId: "run-old",
@@ -1703,8 +1802,8 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     refreshSessionInfo.mockClear();
     chatLog.startTool.mockClear();
     btw.clear.mockClear();
-    tui.requestRender.mockClear();
-    setActivityStatus.mockClear();
+    clearCallbackMock(tui.requestRender);
+    clearCallbackMock(setActivityStatus);
 
     handleSessionsChangedEvent({
       sessionKey: "main",
@@ -2049,8 +2148,8 @@ describe("tui-event-handlers: handleAgentEvent", () => {
       runId: "run-other",
       message: { content: "hello" },
     });
-    setActivityStatus.mockClear();
-    tui.requestRender.mockClear();
+    clearCallbackMock(setActivityStatus);
+    clearCallbackMock(tui.requestRender);
 
     handleAgentEvent({
       runId: "run-other",

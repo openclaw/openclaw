@@ -2573,7 +2573,7 @@ describe("tui session actions", () => {
       setActivityStatus,
     });
 
-    await abortActive();
+    await expect(abortActive()).resolves.toBe(true);
 
     expect(abortChat).toHaveBeenCalledWith({
       sessionKey: "agent:main:main",
@@ -2601,7 +2601,7 @@ describe("tui session actions", () => {
       state,
     });
 
-    await abortActive();
+    await expect(abortActive()).resolves.toBe(true);
 
     expect(dropPendingUser).toHaveBeenCalledWith("run-1");
     expect(state.pendingSubmit).toBeNull();
@@ -2625,7 +2625,7 @@ describe("tui session actions", () => {
       state,
     });
 
-    await abortActive();
+    await expect(abortActive()).resolves.toBe(true);
 
     expect(dropPendingUser).not.toHaveBeenCalled();
   });
@@ -2652,7 +2652,7 @@ describe("tui session actions", () => {
       state,
     });
 
-    await abortActive();
+    await expect(abortActive()).resolves.toBe(true);
 
     expect(dropPendingUser).toHaveBeenCalledTimes(1);
     expect(dropPendingUser).toHaveBeenCalledWith("run-queued-terminal");
@@ -2844,7 +2844,7 @@ describe("tui session actions", () => {
       state,
     });
 
-    await abortActive();
+    await expect(abortActive()).resolves.toBe(true);
 
     expect(abortChat).toHaveBeenCalledWith({
       sessionKey: "global",
@@ -2866,7 +2866,7 @@ describe("tui session actions", () => {
       tui: makeTui({ requestRender }),
     });
 
-    await abortActive();
+    await expect(abortActive()).resolves.toBe(false);
 
     expect(addSystem).toHaveBeenCalledWith("no active run", {
       coalesceConsecutive: true,
@@ -2919,7 +2919,7 @@ describe("tui session actions", () => {
       state,
     });
 
-    await abortActive();
+    await expect(abortActive()).resolves.toBe(false);
 
     expect(abortChat).not.toHaveBeenCalled();
     expect(addSystem).toHaveBeenCalledWith(

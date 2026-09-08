@@ -28,6 +28,7 @@ import { renderRateLimitOrOverloadedCopy } from "../../agents/failover/user-copy
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
 import { leaseMcpAppModelContextForTurn } from "../../agents/mcp-app-model-context.js";
 import { createAgentPatchedSessionModelRunGuard } from "../../agents/session-model-auto-revert.js";
+import type { ContinueWorkRequest } from "../../agents/tools/continue-work-tool.js";
 import { readChannelContextGatewayContextResolver } from "../../channels/message-access/admission-evidence.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
@@ -109,11 +110,10 @@ function resolveRunStartupPhase(
     case "process_spawned":
     case "model_call_started":
       return "starting_model";
-    case "tool_execution_started":
-    case "assistant_output_started":
+    default:
+      // Tool execution and assistant output occur after startup has completed.
       return undefined;
   }
-  return undefined;
 }
 
 async function executeAgentTurnInternalLoop(
@@ -196,7 +196,7 @@ async function executeAgentTurnInternalLoop(
         params.followupRun.run.messageProvider ??
         params.sessionCtx.Surface ??
         params.sessionCtx.Provider,
-      trigger: params.isHeartbeat ? "heartbeat" : "user",
+      trigger: params.hookTrigger ?? (params.isHeartbeat ? "heartbeat" : "user"),
     });
   }
   let replyMediaContext: ReplyMediaContext;
@@ -299,6 +299,9 @@ async function executeAgentTurnInternalLoop(
   let fallbackAttempts: RuntimeFallbackAttempt[] = [];
   let fallbackExhausted = false;
   let terminalRunFailed = false;
+  let continueWorkRequests: ContinueWorkRequest[] = [];
+  let compactionTraceparent: string | undefined;
+  let rawContinuationText: string | undefined;
   const modelPatch = createAgentPatchedSessionModelRunGuard({
     cfg: runtimeConfig,
     agentId: params.followupRun.run.agentId,
@@ -382,6 +385,9 @@ async function executeAgentTurnInternalLoop(
       fallbackExhausted = cycle.fallbackExhausted;
       fallbackAttempts = cycle.fallbackAttempts;
       terminalRunFailed = cycle.terminalRunFailed;
+      continueWorkRequests = cycle.continueWorkRequests;
+      compactionTraceparent = cycle.compactionTraceparent;
+      rawContinuationText = cycle.rawContinuationText;
       break;
     } catch (err) {
       if (err instanceof LiveSessionModelSwitchError) {
@@ -515,6 +521,9 @@ async function executeAgentTurnInternalLoop(
     fallbackAttempts,
     didLogHeartbeatStrip: heartbeatState.didLogStrip,
     autoCompactionCount: compaction.count,
+    compactionTraceparent,
+    continueWorkRequests,
+    rawContinuationText,
     directlySentBlockKeys: directlySentBlockKeys.size > 0 ? directlySentBlockKeys : undefined,
     directlySentBlockPayloads: directlySentBlockPayloads.filter(
       (payload): payload is ReplyPayload => payload !== undefined,
@@ -681,6 +690,9 @@ async function executeAgentTurnOutcome(params: AgentTurnParams): Promise<AgentTu
         compactionRequestBudget: internal.compactionRequestBudget,
         ...terminalStatus,
         result: internal.result,
+        continueWorkRequests: internal.continueWorkRequests,
+        compactionTraceparent: internal.compactionTraceparent,
+        rawContinuationText: internal.rawContinuationText,
         resolved: { provider, model },
         fallback: {
           exhausted: internal.fallbackExhausted === true,
@@ -713,8 +725,7 @@ export async function executeAgentTurn(params: AgentTurnParams): Promise<AgentTu
     retainReplyOperationUntilComplete(params.replyOperation);
   }
   const runId = params.opts?.runId ?? crypto.randomUUID();
-  const executionParams =
-    params.opts?.runId === runId ? params : { ...params, opts: { ...params.opts, runId } };
+  const executionParams = { ...params, opts: { ...params.opts, runId } };
   try {
     const result = await executeAgentTurnOutcome(executionParams);
     recordAgentTurnExecutionOutcome(executionParams, result);

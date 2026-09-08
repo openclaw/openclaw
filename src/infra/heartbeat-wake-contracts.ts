@@ -21,7 +21,7 @@ export type HeartbeatWakeSource =
   | "retry"
   | "other";
 
-type HeartbeatWakeOverride = {
+export type HeartbeatWakeOverride = {
   target?: string;
   to?: string | undefined;
   accountId?: string | undefined;
@@ -40,12 +40,37 @@ export type HeartbeatWakeRequest = {
   reason?: string;
   agentId?: string;
   sessionKey?: string;
+  /** Continuation lineage carried from the requesting run into the woken turn. */
+  parentRunId?: string;
   heartbeat?: HeartbeatWakeOverride;
   /** Persisted cron monitor cadence carried with a scheduled heartbeat tick. */
   scheduledEveryMs?: number;
+  /** Original persisted monitor anchor retained across direct retry handoff. */
+  scheduledAnchorMs?: number;
   tasks?: readonly HeartbeatScheduledTask[];
   /** Internal marker for work retained after a spacing/cooldown deferral. */
   retainedWork?: boolean;
 };
 
 export type HeartbeatWakeHandler = (opts: HeartbeatWakeRequest) => Promise<HeartbeatRunResult>;
+
+const TRUSTED_CONTINUATION_ROUTING_MARKER = Symbol.for(
+  "openclaw.heartbeat.trusted-continuation-routing",
+);
+
+export function markTrustedContinuationHeartbeatWake<T extends object>(request: T): T {
+  Object.defineProperty(request, TRUSTED_CONTINUATION_ROUTING_MARKER, {
+    value: true,
+    enumerable: false,
+    configurable: true,
+  });
+  return request;
+}
+
+export function hasTrustedContinuationHeartbeatWake(request: unknown): boolean {
+  return Boolean(
+    request &&
+    typeof request === "object" &&
+    Reflect.get(request, TRUSTED_CONTINUATION_ROUTING_MARKER) === true,
+  );
+}

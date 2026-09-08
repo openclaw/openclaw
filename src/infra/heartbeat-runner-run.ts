@@ -26,7 +26,7 @@ import {
 import { createHeartbeatTypingCallbacks } from "./heartbeat-typing.js";
 import { getHeartbeatWakeAbortSignal, type HeartbeatRunResult } from "./heartbeat-wake.js";
 
-export async function runHeartbeatOnce(opts: HeartbeatRunOptions): Promise<HeartbeatRunResult> {
+export async function runHeartbeatOnceCore(opts: HeartbeatRunOptions): Promise<HeartbeatRunResult> {
   const wake = await resolveHeartbeatWakeStage(opts);
   if (wake.kind === "skipped") {
     return { status: "skipped", reason: wake.reason };
@@ -85,7 +85,7 @@ export async function runHeartbeatOnce(opts: HeartbeatRunOptions): Promise<Heart
         : prepared.hasCronEvents
           ? "cron"
           : "heartbeat",
-      SessionKey: runSessionKey,
+      SessionKey: opts.trustedTargetSessionKey ?? runSessionKey,
       AgentId: agentId,
     } satisfies MsgContext;
     await dispatchInboundMessageWithRoutedChannelDispatcher({
@@ -103,6 +103,8 @@ export async function runHeartbeatOnce(opts: HeartbeatRunOptions): Promise<Heart
           }),
           [REPLY_OPERATION_RUN_STATE]: state,
           heartbeatModelOverride: heartbeat?.model?.trim(),
+          ...(opts.continuationTrigger ? { continuationTrigger: opts.continuationTrigger } : {}),
+          ...(opts.parentRunId ? { parentRunId: opts.parentRunId } : {}),
           ...(prepared.usesHeartbeatResponseTool
             ? {
                 enableHeartbeatTool: true,

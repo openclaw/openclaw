@@ -16,7 +16,7 @@ import {
 import type { OpenClawPluginServiceContext } from "openclaw/plugin-sdk/plugin-entry";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import {
-  enqueueSystemEvent,
+  enqueuePluginSystemEvent,
   resetSystemEventsForTest,
 } from "openclaw/plugin-sdk/system-event-runtime";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
@@ -436,7 +436,7 @@ describe("dreaming service reconciliation", () => {
       });
 
       const sessionKey = "agent:main:main";
-      enqueueSystemEvent(constants.DREAMING_SYSTEM_EVENT_TEXT, {
+      enqueuePluginSystemEvent(constants.DREAMING_SYSTEM_EVENT_TEXT, {
         sessionKey,
         contextKey: "cron:memory-dreaming",
       });
@@ -860,7 +860,7 @@ describe("dreaming service reconciliation", () => {
     });
 
     const sessionKey = "agent:main:main";
-    enqueueSystemEvent(constants.DREAMING_SYSTEM_EVENT_TEXT, {
+    enqueuePluginSystemEvent(constants.DREAMING_SYSTEM_EVENT_TEXT, {
       sessionKey,
       contextKey: "cron:memory-dreaming",
     });
@@ -897,7 +897,7 @@ describe("dreaming service reconciliation", () => {
       getCron: () => harness.cron,
     });
 
-    enqueueSystemEvent(constants.DREAMING_SYSTEM_EVENT_TEXT, {
+    enqueuePluginSystemEvent(constants.DREAMING_SYSTEM_EVENT_TEXT, {
       sessionKey: "agent:main:main",
       contextKey: "cron:memory-dreaming",
     });
@@ -1150,7 +1150,7 @@ describe("dreaming service reconciliation", () => {
     });
 
     const sessionKey = "agent:main:main";
-    enqueueSystemEvent(constants.DREAMING_SYSTEM_EVENT_TEXT, {
+    enqueuePluginSystemEvent(constants.DREAMING_SYSTEM_EVENT_TEXT, {
       sessionKey,
       contextKey: "cron:memory-dreaming",
     });
@@ -1201,7 +1201,7 @@ describe("dreaming service reconciliation", () => {
     });
 
     const sessionKey = "agent:main:main";
-    enqueueSystemEvent(constants.DREAMING_SYSTEM_EVENT_TEXT, {
+    enqueuePluginSystemEvent(constants.DREAMING_SYSTEM_EVENT_TEXT, {
       sessionKey,
       contextKey: "cron:memory-dreaming",
     });

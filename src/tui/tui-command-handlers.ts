@@ -78,7 +78,7 @@ type CommandHandlerContext = {
   loadHistory: () => Promise<unknown>;
   setSession: (key: string, agentId?: string) => Promise<void>;
   refreshAgents: (ownsRefresh?: () => boolean) => Promise<Result<void, string>>;
-  abortActive: (params?: { preferActive?: boolean }) => Promise<void>;
+  abortActive: (params?: { preferActive?: boolean }) => Promise<unknown>;
   setActivityStatus: (text: string) => void;
   formatSessionKey: (key: string) => string;
   applySessionInfoFromPatch: (result: SessionsPatchResult) => void;
@@ -841,7 +841,9 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         finishSessionTransition();
       }
     },
-    abort: async () => await abortActive(),
+    abort: async () => {
+      await abortActive();
+    },
     stop: async () => {
       // Queued client runs can terminalize before the followup executes, so
       // local run ids are not a complete stop target inventory.

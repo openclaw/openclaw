@@ -39,6 +39,52 @@ export function createInMemoryTaskFlowRegistryStore(
     upsertFlow: (flow) => {
       state.flows.set(flow.flowId, structuredClone(flow));
     },
+    upsertFlowsAtomically: (write) => {
+      const ownerCondition = write.ownerCondition;
+      if (ownerCondition) {
+        const currentFlows = [...state.flows.values()]
+          .filter(
+            (flow) =>
+              flow.ownerKey === ownerCondition.ownerKey &&
+              flow.controllerId === ownerCondition.controllerId &&
+              ownerCondition.statuses.includes(flow.status) &&
+              (!ownerCondition.excludeCancelRequested || flow.cancelRequestedAt === undefined),
+          )
+          .map(({ flowId, revision, status }) => ({ flowId, revision, status }))
+          .toSorted((left, right) => left.flowId.localeCompare(right.flowId));
+        const expectedFlows = [...ownerCondition.expectedFlows].toSorted((left, right) =>
+          left.flowId.localeCompare(right.flowId),
+        );
+        if (
+          currentFlows.length !== expectedFlows.length ||
+          currentFlows.some((flow, index) => {
+            const expected = expectedFlows[index];
+            return (
+              !expected ||
+              flow.flowId !== expected.flowId ||
+              flow.revision !== expected.revision ||
+              flow.status !== expected.status
+            );
+          })
+        ) {
+          return false;
+        }
+      }
+      for (const change of write.changes) {
+        const current = state.flows.get(change.flow.flowId);
+        if (
+          change.expectedRevision === undefined
+            ? current !== undefined
+            : current?.revision !== change.expectedRevision
+        ) {
+          return false;
+        }
+      }
+      for (const change of write.changes) {
+        state.flows.set(change.flow.flowId, structuredClone(change.flow));
+      }
+      return true;
+    },
     deleteFlow: (flowId) => {
       state.flows.delete(flowId);
     },

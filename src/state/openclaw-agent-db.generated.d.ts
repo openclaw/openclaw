@@ -329,6 +329,13 @@ export interface SessionProgressCards {
   updated_at: number;
 }
 
+export interface SessionRecipientAuthority {
+  created_at: number;
+  epoch: string;
+  session_key: string;
+  updated_at: number;
+}
+
 export interface SessionSuggestions {
   author_id: string;
   author_label: string | null;
@@ -548,6 +555,7 @@ export interface DB {
   session_participants: SessionParticipants;
   session_pending_inputs: SessionPendingInputs;
   session_progress_cards: SessionProgressCards;
+  session_recipient_authority: SessionRecipientAuthority;
   session_suggestions: SessionSuggestions;
   session_transcript_active_events: SessionTranscriptActiveEvents;
   session_transcript_archives: SessionTranscriptArchives;

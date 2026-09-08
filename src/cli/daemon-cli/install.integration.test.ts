@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { useHermeticOpenclawEnv } from "../../../test/vitest/hermetic-openclaw-env.js";
 import { buildServiceEnvironment } from "../../daemon/service-env.js";
 import type {
   GatewayServiceCommandConfig,
@@ -97,6 +98,9 @@ async function createInstalledServiceCommand() {
 }
 
 describe("runDaemonInstall integration", () => {
+  useHermeticOpenclawEnv({
+    except: ["OPENCLAW_STATE_DIR", "OPENCLAW_CONFIG_PATH"],
+  });
   let envSnapshot: ReturnType<typeof captureEnv>;
   let accountHome: string;
   let tempHome: string;

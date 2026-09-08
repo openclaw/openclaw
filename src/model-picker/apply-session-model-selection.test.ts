@@ -32,7 +32,7 @@ let lifecycleEvents: SessionLifecycleEvent[];
 let unsubscribeLifecycle: () => void;
 
 vi.mock("../infra/system-events.js", () => ({
-  enqueueSystemEvent: (...args: unknown[]) => effects.enqueueSystemEvent(...args),
+  enqueueSystemEventRaw: (...args: unknown[]) => effects.enqueueSystemEvent(...args),
 }));
 vi.mock("../auto-reply/reply/queue.js", () => ({
   refreshQueuedFollowupSession: (...args: unknown[]) =>

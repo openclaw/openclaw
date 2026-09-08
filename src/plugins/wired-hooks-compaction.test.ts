@@ -167,11 +167,11 @@ describe("compaction hook wiring", () => {
     expect(hookMocks.emitAgentEvent).toHaveBeenCalledWith({
       runId: "r1",
       stream: "compaction",
-      data: { phase: "start" },
+      data: expect.objectContaining({ phase: "start" }),
     });
     expect(ctx.params.onAgentEvent).toHaveBeenCalledWith({
       stream: "compaction",
-      data: { phase: "start" },
+      data: expect.objectContaining({ phase: "start" }),
     });
   });
 
@@ -199,12 +199,12 @@ describe("compaction hook wiring", () => {
       expect(hookMocks.emitAgentEvent).toHaveBeenCalledWith({
         runId: "r2",
         stream: "compaction",
-        data: {
+        data: expect.objectContaining({
           phase: "end",
           outcome: "completed",
           willRetry: false,
           completed: true,
-        },
+        }),
       });
       expect(hookMocks.runner.runAfterCompaction).toHaveBeenCalledTimes(terminalAborted ? 0 : 1);
       if (!terminalAborted) {
@@ -243,12 +243,12 @@ describe("compaction hook wiring", () => {
     expect(hookMocks.emitAgentEvent).toHaveBeenCalledWith({
       runId: "r3",
       stream: "compaction",
-      data: {
+      data: expect.objectContaining({
         phase: "end",
         outcome: "completed",
         willRetry: true,
         completed: true,
-      },
+      }),
     });
   });
 
@@ -320,7 +320,17 @@ describe("compaction hook wiring", () => {
       expect(subscription.getLastCompactionTokensAfter()).toBe(50);
       expect(onAgentEvent).toHaveBeenCalledWith({
         stream: "compaction",
-        data: { phase: "end", outcome: "completed", completed: true, willRetry: false },
+        data: {
+          phase: "end",
+          outcome: "completed",
+          completed: true,
+          willRetry: false,
+          trigger: "budget",
+          sessionKey: undefined,
+          compactionCountBefore: 0,
+          compactionCountAfter: 1,
+          compactionCountDelta: 1,
+        },
       });
       expect(hookMocks.runner.runAfterCompaction).not.toHaveBeenCalled();
     } finally {

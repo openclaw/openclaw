@@ -40,7 +40,8 @@ import { createOperationalRunInstanceRef } from "../../admitted-run-context.js";
 import { reserveChildAdmissionSlot } from "../../child-admission.js";
 import { withGatewayToolCallerIdentity } from "../../tools/gateway-caller-context.js";
 import { withParentExecutionIdentity } from "./execution-identity-spawn-context.js";
-import { setSubagentSpawnDepsForTest } from "./subagent-spawn-deps.js";
+import { getSubagentSpawnDeps } from "./subagent-spawn-deps.js";
+import { testing as subagentSpawnTesting } from "./subagent-spawn.test-support.js";
 
 type SessionBindingAdapterCapabilities = NonNullable<SessionBindingAdapter["capabilities"]>;
 
@@ -85,6 +86,7 @@ const hoisted = vi.hoisted(() => {
   const resolveStorePathMock = vi.fn();
   const resolveSessionTranscriptFileMock = vi.fn();
   const areHeartbeatsEnabledMock = vi.fn();
+  const requestHeartbeatNowMock = vi.fn();
   const normalizeChannelIdMock = vi.fn((channelId: string) => {
     const normalized = channelId.trim().toLowerCase();
     return normalized || null;
@@ -93,6 +95,7 @@ const hoisted = vi.hoisted(() => {
   const closeRuntimeOnFailureMock = vi.fn();
   const registerSubagentRunMock = vi.fn();
   const countActiveRunsForSessionMock = vi.fn();
+  const countActiveDescendantRunsMock = vi.fn();
   const getSubagentRunByChildSessionKeyMock = vi.fn();
   const listTasksForOwnerKeyMock = vi.fn();
   const upsertSessionEntryMock = vi.fn();
@@ -133,7 +136,7 @@ const hoisted = vi.hoisted(() => {
       return Object.entries(store).map(([sessionKey, entry]) => ({ sessionKey, entry }));
     };
     return {
-      listSessionEntries: listMockEntries,
+      listSessionEntriesCore: listMockEntries,
       listSessionEntriesReadOnly: listMockEntries,
       loadSessionEntry: loadMockEntry,
       loadSessionEntryReadOnly: loadMockEntry,
@@ -181,11 +184,13 @@ const hoisted = vi.hoisted(() => {
     resolveStorePathMock,
     resolveSessionTranscriptFileMock,
     areHeartbeatsEnabledMock,
+    requestHeartbeatNowMock,
     normalizeChannelIdMock,
     cleanupFailedAcpSpawnMock,
     closeRuntimeOnFailureMock,
     registerSubagentRunMock,
     countActiveRunsForSessionMock,
+    countActiveDescendantRunsMock,
     getSubagentRunByChildSessionKeyMock,
     listTasksForOwnerKeyMock,
     upsertSessionEntryMock,
@@ -245,6 +250,7 @@ vi.mock("../../../gateway/call.js", () => ({
 
 vi.mock("../../../infra/heartbeat-wake.js", () => ({
   areHeartbeatsEnabled: hoisted.areHeartbeatsEnabledMock,
+  requestHeartbeatNow: hoisted.requestHeartbeatNowMock,
 }));
 
 vi.mock("./acp-spawn-parent-stream.js", () => ({
@@ -254,10 +260,24 @@ vi.mock("./acp-spawn-parent-stream.js", () => ({
 vi.mock("../registry/subagent-registry.js", () => ({
   countActiveRunsForSession: hoisted.countActiveRunsForSessionMock,
   // ACP registration deliberately moved behind the shared spawn pipeline.
-  registerSubagentRun: hoisted.registerSubagentRunMock,
+  registerSubagentRun: (record: Record<string, unknown>) => {
+    const result = hoisted.registerSubagentRunMock(record);
+    return (
+      result ?? {
+        status: "new-row-committed",
+        attempted: {
+          runId: String(record.runId),
+          childSessionKey: String(record.childSessionKey),
+          generation: 1,
+          createdAt: 1,
+        },
+      }
+    );
+  },
 }));
 
 vi.mock("../registry/subagent-registry-read.js", () => ({
+  countActiveDescendantRuns: hoisted.countActiveDescendantRunsMock,
   getSubagentRunByChildSessionKey: hoisted.getSubagentRunByChildSessionKeyMock,
 }));
 
@@ -711,10 +731,12 @@ describe("spawnAcpDirect", () => {
     acpRuntimeRegistryTesting.resetAcpRuntimeBackendsForTests();
     replaceSpawnConfig(createDefaultSpawnConfig());
     hoisted.areHeartbeatsEnabledMock.mockReset().mockReturnValue(true);
+    hoisted.requestHeartbeatNowMock.mockReset();
     hoisted.cleanupFailedAcpSpawnMock.mockReset().mockResolvedValue(undefined);
     hoisted.closeRuntimeOnFailureMock.mockReset().mockResolvedValue(undefined);
     hoisted.registerSubagentRunMock.mockReset();
     hoisted.countActiveRunsForSessionMock.mockReset().mockReturnValue(0);
+    hoisted.countActiveDescendantRunsMock.mockReset().mockReturnValue(0);
     hoisted.getSubagentRunByChildSessionKeyMock.mockReset().mockReturnValue(null);
     hoisted.listTasksForOwnerKeyMock.mockReset().mockReturnValue([]);
     hoisted.upsertSessionEntryMock
@@ -1031,8 +1053,10 @@ describe("spawnAcpDirect", () => {
     });
     const operationalRunInstance = createOperationalRunInstanceRef("parent-run");
     const authority = claimAgentRunDelegatedAuthority(operationalRunInstance);
+    const productionDeps = getSubagentSpawnDeps();
+    const defaultDeps = { ...productionDeps };
     let capturedIdentity: AgentRuntimeIdentity | undefined;
-    setSubagentSpawnDepsForTest({
+    subagentSpawnTesting.setDepsForTest({
       hasInProcessGatewayContext: () => true,
       dispatchGatewayMethodInProcess: async <T>(
         _method: string,
@@ -1072,7 +1096,9 @@ describe("spawnAcpDirect", () => {
       );
     } finally {
       releaseAgentRunDelegatedAuthority(authority);
-      setSubagentSpawnDepsForTest();
+      subagentSpawnTesting.setDepsForTest();
+      expect(getSubagentSpawnDeps()).toBe(productionDeps);
+      expect(productionDeps).toEqual(defaultDeps);
     }
   });
 

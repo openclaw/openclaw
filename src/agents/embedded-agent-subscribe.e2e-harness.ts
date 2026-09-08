@@ -81,6 +81,7 @@ export function createParagraphChunkedBlockReplyHarness(params: {
 
 export function createTextEndBlockReplyHarness(params?: {
   onBlockReply?: OnBlockReply;
+  onAgentEvent?: SubscribeEmbeddedAgentSessionParams["onAgentEvent"];
   runId?: string;
   blockReplyChunking?: BlockReplyChunking;
 }): {
@@ -92,6 +93,7 @@ export function createTextEndBlockReplyHarness(params?: {
   const { emit, subscription } = createSubscribedSessionHarness({
     runId: params?.runId ?? "run",
     onBlockReply,
+    onAgentEvent: params?.onAgentEvent,
     blockReplyBreak: "text_end",
     blockReplyChunking: params?.blockReplyChunking,
   });

@@ -1025,7 +1025,6 @@ export function createVideoGenerateTool(options?: {
         prompt,
         requestKey,
         providerId: selectedProvider?.id,
-        config: effectiveCfg,
         scheduleBackgroundWork,
         onAsyncTaskStarted: options?.onAsyncTaskStarted,
         onFailure: (message, meta) => log.warn(message, meta),

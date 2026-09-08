@@ -1,8 +1,6 @@
 import type { NormalizeReplySkipReason } from "../../auto-reply/reply/normalize-reply-skip-reason.js";
-import {
-  HEARTBEAT_SKIP_CRON_IN_PROGRESS,
-  type HeartbeatRunResult,
-} from "../../infra/heartbeat-wake.js";
+import type { HeartbeatRunResult } from "../../infra/heartbeat-wake-contracts.js";
+import { HEARTBEAT_SKIP_CRON_IN_PROGRESS } from "../../infra/heartbeat-wake.js";
 import type { CommandLaneTaskMarker } from "../../process/command-queue.js";
 import {
   type CronActiveJobMarker,

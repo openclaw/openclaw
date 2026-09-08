@@ -673,7 +673,7 @@ Use a SQLite online backup or another WAL-aware snapshot produced while the sour
 | 16      | Legacy top-level transcript media fields retired                                                                                                                                                                                                       | Unreleased                                      |
 | 17      | Tenant-free per-agent lease table retired after the last writer and routing arm were removed ([#121113](https://github.com/openclaw/openclaw/pull/121113), [#121615](https://github.com/openclaw/openclaw/pull/121615))                                | Unreleased                                      |
 | 18      | Canonical participant identity namespaces and explicit unknown historical input times in the existing session-owned aggregate ([#130661](https://github.com/openclaw/openclaw/issues/130661))                                                          | Unreleased                                      |
-| 19      | Source-qualified immutable session creators; historical ambiguity remains unknown                                                                                                                                                                      | Unreleased                                      |
+| 19      | Source-qualified immutable session creators (historical ambiguity remains unknown) and durable session-key recipient-authority generations for delayed named returns, converged with both physical schema-18 lineages                                  | Unreleased                                      |
 
 Version 3 was an unshipped development step folded into version 4.
 
@@ -700,6 +700,14 @@ Membership and recorded contribution aggregates survive. Historical profile time
 The rebuild, data copy, version markers, and foreign-key validation commit atomically. Unknown table shapes or database-local dependents are refused. A failed migration rolls back rather than leaving a partial replacement table. Older builds refuse schema 18; do not decrement either version marker or restore the old unique key. Downgrade recovery requires the verified pre-migration backup.
 
 Normal admission remains bounded at 32 identities. Same-store alias repair sums aggregates; retryable cross-store copies retain the larger recorded aggregate. Repairs preserve already-retained histories above the admission bound. Reset retains logical-session participation, while deletion removes it with the session node.
+
+### Recipient authority convergence
+
+Agent schema 19 adds durable `session_recipient_authority` generations keyed by canonical logical `sessionKey`. Schema 18 existed in two physical forms before these lines converged: upstream schema 18 already had the namespaced participant table but no recipient-authority table, while fork-only schema 18 already had recipient authority and the legacy participant key. The schema-19 migration identifies those steps by physical structure rather than trusting version equality, applies whichever step is absent, and advances `PRAGMA user_version` and `schema_meta.schema_version` together.
+
+For the upstream schema-18 input, the migration creates `session_recipient_authority` and imports only valid embedded UUID-v4 authority epochs. Invalid embedded values never create authority; valid JSON has the obsolete field removed, while malformed Doctor-owned session entries remain rejected rather than being parsed or repaired by runtime migration. For the fork-only schema-18 input, the participant rebuild preserves membership and aggregate counts while retaining only timestamps whose historical source proves them. Both inputs retain the existing maintenance-authority fence, full pre-mutation integrity check, atomic foreign-key validation, and idempotent reopen behavior.
+
+Ordinary runtime readers and writers refuse either schema-18 input and direct operators to `openclaw doctor --fix`; migration requires the stopped-writer maintenance lease. Marker disagreement, unknown table shape, unknown participant dependents, foreign-key failure, and newer schema versions fail closed without partial marker advancement. Do not decrement either schema marker after migration. Downgrade recovery requires the verified, WAL-aware pre-migration backup.
 
 ## State schema history
 

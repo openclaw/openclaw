@@ -5686,7 +5686,16 @@ describe("createTelegramBot", () => {
   });
 
   it("retries model selection callbacks after a bubbled session-store failure", async () => {
-    createTelegramBot({ token: "tok" });
+    // Isolate this bot's session store: the retry path lets the SECOND middleware
+    // chain run through the real session writer, which must not leak into later
+    // files in the sequential Telegram shard.
+    const storePath = path.join(createTelegramBotTestStateDir(), "session-store.json");
+    const config = {
+      channels: { telegram: { dmPolicy: "open", allowFrom: ["*"] } },
+      session: { store: storePath },
+    } satisfies NonNullable<Parameters<typeof createTelegramBot>[0]["config"]>;
+    loadConfig.mockReturnValue(config);
+    createTelegramBot({ token: "tok", config });
     const callbackHandler = getOnHandler("callback_query");
     const runMiddlewareChain = (ctx: Record<string, unknown>) =>
       runTelegramTestMiddlewareChain(middlewareUseSpy, ctx, callbackHandler);

@@ -28,11 +28,15 @@ import { resolveGatewayScopedTools } from "./tool-resolution.js";
 // list/call traffic from the same MCP client.
 const TOOL_CACHE_TTL_MS = 30_000;
 const TOOL_CACHE_MAX_ENTRIES = 256;
-const NATIVE_TOOL_EXCLUDE = new Set(
-  listCoreToolFactoryDescriptors()
+const NATIVE_TOOL_EXCLUDE = new Set([
+  ...listCoreToolFactoryDescriptors()
     .map(({ name }) => name)
     .filter(isCoreCodingSurfaceToolName),
-);
+  // Continuation primitives stay in the gateway catalog for local agents, but
+  // external CLI callers must not drive another session's continuation state.
+  "continue_work",
+  "request_compaction",
+]);
 
 type CachedScopedTools = {
   agentId: string | undefined;

@@ -35,7 +35,7 @@ import {
 } from "./session-cost-usage.js";
 
 type WithOptionalAgentId<T> = T extends (params: infer P) => unknown
-  ? Omit<P, "agentId"> & { agentId?: string }
+  ? Omit<NonNullable<P>, "agentId"> & { agentId?: string }
   : never;
 
 const withMainAgent = <T extends object>(params: T): T & { agentId: string } => ({

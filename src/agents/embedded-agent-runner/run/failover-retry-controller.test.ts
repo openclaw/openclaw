@@ -1,7 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { projectProviderError } from "../../../../packages/ai/src/utils/provider-error.js";
+import { buildAgentRunTerminalOutcomeFromLifecycleEvent } from "../../agent-run-terminal-outcome.js";
 import { FailoverError } from "../../failover-error.js";
 import { resolveRetryAfterMs } from "../../failover/retry-evidence.js";
+import { resolveAgentRunErrorLifecycleFields } from "../../run-termination.js";
 
 const mocks = vi.hoisted(() => ({
   sleepWithAbort: vi.fn(async (_ms: number, _abortSignal?: AbortSignal): Promise<void> => {}),
@@ -390,5 +392,35 @@ describe("createEmbeddedRunFailoverRetryController", () => {
     expect(rateLimitContext.logFallbackDecision).toHaveBeenNthCalledWith(1, "fallback_model", {
       status: 429,
     });
+  });
+
+  it("keeps owner timeout facts on the rate-limit rotation-cap FailoverError", async () => {
+    const advanceAuthProfile = vi.fn(async () => true);
+    const controller = createController(advanceAuthProfile, true);
+    const timeout = { timeoutPhase: "provider" as const, providerStarted: false };
+    const context = { ...rateLimitContext, timeout };
+
+    await expect(controller.advanceRateLimitAuthProfile(context)).resolves.toBe(true);
+    const error = await controller.advanceRateLimitAuthProfile(context).then(
+      () => {
+        throw new Error("expected rate-limit rotation cap FailoverError");
+      },
+      (caught: unknown) => caught,
+    );
+
+    expect(error).toBeInstanceOf(FailoverError);
+    expect(error).toMatchObject({
+      reason: "rate_limit",
+      timeout,
+    } satisfies Partial<FailoverError>);
+    const fields = resolveAgentRunErrorLifecycleFields(error, undefined);
+    expect(fields).toEqual({
+      stopReason: "timeout",
+      timeoutPhase: "provider",
+      providerStarted: false,
+    });
+    expect(
+      buildAgentRunTerminalOutcomeFromLifecycleEvent({ phase: "error", data: fields }).reason,
+    ).toBe("hard_timeout");
   });
 });

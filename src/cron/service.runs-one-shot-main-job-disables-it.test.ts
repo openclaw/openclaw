@@ -2,7 +2,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { resolveAgentMainSessionKey } from "../config/sessions.js";
-import type { HeartbeatRunResult } from "../infra/heartbeat-wake.js";
+import type { HeartbeatRunResult } from "../infra/heartbeat-wake-contracts.js";
 import {
   drainSystemEventEntries,
   enqueueSystemEventWithReceipt,

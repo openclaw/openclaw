@@ -92,6 +92,7 @@ import {
   resolveReplyOperationRunState,
 } from "./reply-operation-run-state.js";
 import { createReplyTimingTracker, isReplyProfilerEnabled } from "./reply-timing-tracker.js";
+import { isContinuationHeartbeatEquivalent } from "./run-provenance.js";
 import { resolveRuntimePolicySessionKey } from "./runtime-policy-session-key.js";
 import { SessionResetCleanupError } from "./session-reset-cleanup.js";
 import { initSessionState, resolveReplySessionPreprocessingState } from "./session.js";
@@ -421,12 +422,14 @@ export async function getReplyFromConfig(
   );
   let provider = defaultProvider;
   let model = defaultModel;
+  const shouldApplyHeartbeatModelOverride =
+    opts?.isHeartbeat === true || isContinuationHeartbeatEquivalent(opts?.continuationTrigger);
   let hasResolvedHeartbeatModelOverride = false;
-  if (opts?.isHeartbeat) {
+  if (shouldApplyHeartbeatModelOverride) {
     // Prefer the resolved per-agent heartbeat model passed from the heartbeat runner,
     // fall back to the global defaults heartbeat model for backward compatibility.
     const heartbeatRaw =
-      normalizeOptionalString(opts.heartbeatModelOverride) ??
+      normalizeOptionalString(opts?.heartbeatModelOverride) ??
       normalizeOptionalString(agentCfg?.heartbeat?.model) ??
       "";
     const heartbeatRef = heartbeatRaw
@@ -880,7 +883,7 @@ export async function getReplyFromConfig(
   const staleHeartbeatAutoFallbackOverride =
     !sessionModelSelectionLocked &&
     isStaleHeartbeatAutoFallbackOverride({
-      isHeartbeat: opts?.isHeartbeat === true,
+      isHeartbeat: shouldApplyHeartbeatModelOverride,
       hasResolvedHeartbeatModelOverride,
       sessionEntry,
       storedOverride: storedModelOverride,

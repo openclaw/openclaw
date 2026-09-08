@@ -84,8 +84,8 @@ import { buildSessionCreationStamp } from "./session-entry-provenance.js";
 import { kickSessionHistoryDiskBudgetMaintenance } from "./session-history-eviction.js";
 import { resolveSessionStorePathForScope } from "./session-store-path.js";
 import { resolveDeliveryProvenCanonicalSessionKey } from "./store-entry.js";
-import type { GroupKeyResolution, InternalSessionEntry as SessionEntry } from "./types.js";
 import { mergeSessionEntry, mergeSessionEntryPreserveActivity } from "./types.js";
+import type { GroupKeyResolution, InternalSessionEntry as SessionEntry } from "./types.js";
 
 export { ensureSessionEntrySync } from "./session-accessor.sqlite-initial-entry.js";
 export {
@@ -98,6 +98,7 @@ export {
 // Public entry API. Async preparation precedes BEGIN; commit revalidates repository snapshots.
 
 type SqliteSessionEntryPatchOptions = SessionEntryPatchOptions & {
+  afterPersistInTransaction?: (database: OpenClawAgentDatabase) => void;
   skipMaintenance?: boolean;
   /** Recheck owner cancellation after async preparation, immediately before committing. */
   shouldCommit?: () => boolean;
@@ -574,6 +575,7 @@ async function patchSqliteSessionEntrySnapshot(
             ...(options.consumePendingReset ? { consumePendingReset: true } : {}),
             previousEntry: selectedPreviousEntry,
           });
+          options.afterPersistInTransaction?.(writeDatabase);
           wrote = true;
           // Identity observers only consume sessionId, already owned by this canonical write.
           const currentIdentity = new Map([[sessionKey, persisted]]);

@@ -36,6 +36,7 @@ export {
   resolveActiveReplyOperationForSessionId,
   resolveActiveReplyRunSessionId,
   resolveActiveReplyRunThreadId,
+  retryRetainedReplyRunResetBySessionKey,
   supersedeReplyRunByRunId,
   waitForReplyOperationOwnerSettlement,
   waitForReplyRunEndBySessionId,

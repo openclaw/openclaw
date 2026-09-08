@@ -327,6 +327,68 @@ export function hasPendingSessionConversationRouteContextColumn(db: DatabaseSync
   return Boolean(columns && !columns.has("route_context_json"));
 }
 
+const SESSION_RECIPIENT_AUTHORITY_SCHEMA_START =
+  "CREATE TABLE IF NOT EXISTS session_recipient_authority (";
+const SESSION_RECIPIENT_AUTHORITY_SCHEMA_END =
+  "CREATE TRIGGER IF NOT EXISTS session_nodes_entry_valid_after_insert";
+
+export function withoutSessionRecipientAuthoritySchema(sql: string): string {
+  const start = sql.indexOf(SESSION_RECIPIENT_AUTHORITY_SCHEMA_START);
+  const end = sql.indexOf(SESSION_RECIPIENT_AUTHORITY_SCHEMA_END, start);
+  if (start === -1 || end === -1) {
+    throw new Error("OpenClaw session recipient authority schema markers are missing.");
+  }
+  return `${sql.slice(0, start)}${sql.slice(end)}`;
+}
+
+export function hasSessionRecipientAuthoritySchema(db: DatabaseSync): boolean {
+  return readSqliteTableColumns(db, "session_recipient_authority") !== null;
+}
+
+/** Moves the unshipped entry-local return epoch to its logical session-key owner. */
+export function migrateSessionRecipientAuthority(db: DatabaseSync): void {
+  if (!hasSessionRecipientAuthoritySchema(db) || !readSqliteTableColumns(db, "session_nodes")) {
+    return;
+  }
+  db.prepare(
+    `INSERT OR IGNORE INTO session_recipient_authority (
+       session_key, epoch, created_at, updated_at
+     )
+     SELECT
+       session_key,
+       CAST(json_extract(entry_json, '$.recipientAuthorityEpoch') AS TEXT),
+       ?,
+       ?
+     FROM session_nodes
+     WHERE CASE
+       WHEN json_valid(entry_json)
+       THEN
+         json_type(entry_json, '$.recipientAuthorityEpoch') = 'text'
+         AND length(json_extract(entry_json, '$.recipientAuthorityEpoch')) = 36
+         AND substr(json_extract(entry_json, '$.recipientAuthorityEpoch'), 9, 1) = '-'
+         AND substr(json_extract(entry_json, '$.recipientAuthorityEpoch'), 14, 1) = '-'
+         AND substr(json_extract(entry_json, '$.recipientAuthorityEpoch'), 19, 1) = '-'
+         AND substr(json_extract(entry_json, '$.recipientAuthorityEpoch'), 24, 1) = '-'
+         AND lower(substr(json_extract(entry_json, '$.recipientAuthorityEpoch'), 15, 1)) = '4'
+         AND lower(substr(json_extract(entry_json, '$.recipientAuthorityEpoch'), 20, 1))
+           GLOB '[89ab]'
+         AND length(replace(json_extract(entry_json, '$.recipientAuthorityEpoch'), '-', '')) = 32
+         AND lower(replace(json_extract(entry_json, '$.recipientAuthorityEpoch'), '-', ''))
+           NOT GLOB '*[^0-9a-f]*'
+       ELSE 0
+     END`,
+  ).run(Date.now(), Date.now());
+  db.exec(
+    `UPDATE session_nodes
+     SET entry_json = json_remove(entry_json, '$.recipientAuthorityEpoch')
+     WHERE CASE
+       WHEN json_valid(entry_json)
+       THEN json_type(entry_json, '$.recipientAuthorityEpoch') IS NOT NULL
+       ELSE 0
+     END`,
+  );
+}
+
 export function hasPendingSessionTranscriptContextEligibilityColumn(db: DatabaseSync): boolean {
   const columns = readSqliteTableColumns(db, "session_transcript_active_events");
   return Boolean(columns && !columns.has("context_eligible"));

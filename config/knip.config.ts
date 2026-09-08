@@ -135,6 +135,8 @@ const repositoryScriptEntries = [
   "scripts/pre-commit/guard-staged-content.mjs!",
   // Generates the checked-in native protocol models from core descriptor metadata.
   "scripts/protocol-gen.ts!",
+  // Accepted return-covenant harnesses execute this tracked product fixture by path.
+  "scripts/return-covenant-fixture-driver.mjs!",
   "scripts/pr-lib/ci-dispatch.mjs!",
   // merge.sh invokes this native review-authority parser by path.
   "scripts/pr-lib/clawsweeper-review-gate.mjs!",
@@ -203,6 +205,8 @@ const rootEntries = [
   "src/entry.ts!",
   // Built as the official image's Docker HEALTHCHECK entrypoint.
   "src/docker-healthcheck.ts!",
+  // Private tsdown entry loaded by the tracked return-covenant fixture script.
+  "src/auto-reply/continuation/return-covenant-fixture/entry.ts!",
   // Uploaded in the worker bundle and launched by rsync; no static host import exists.
   "src/worker/workspace-rsync-receiver.ts!",
   // v2026.9.1 Gateways lazy-import this stable dist entry after an in-place update.
@@ -490,6 +494,45 @@ const config = {
     // Focused media tests consume these explicit seams; production uses the helpers in-module.
     "src/agents/embedded-agent-subscribe.handlers.lifecycle.ts": ["exports"],
     "src/gateway/server-methods/chat-webchat-media.ts": ["exports"],
+    // Continuation and delivery owner tests import these explicit seams. The
+    // all-exports companion config still audits each named consumer.
+    "extensions/codex/src/app-server/dynamic-tools.ts": ["exports"],
+    "extensions/diagnostics-otel/src/continuation-tracer-adapter.ts": ["exports"],
+    "src/agents/delegate-artifact-delivery.ts": ["exports"],
+    "src/agents/delegate-artifacts.ts": ["exports", "types"],
+    "src/agents/embedded-agent-runner/compact-reasons.ts": ["exports", "types"],
+    "src/agents/subagents/registry/subagent-run-liveness.ts": ["exports"],
+    "src/agents/subagents/registry/subagent-session-cleanup.ts": ["exports"],
+    "src/agents/subagents/spawn/subagent-spawn.ts": ["types"],
+    "src/agents/subagent-traceparent-handoff.ts": ["exports"],
+    "src/agents/tools/request-compaction-tool.ts": ["exports"],
+    "src/auto-reply/continuation/context-pressure.ts": ["exports", "types"],
+    "src/auto-reply/continuation/delegate-dispatch-hedge.ts": ["exports"],
+    "src/auto-reply/continuation/delegate-dispatch-recovery.ts": ["exports"],
+    "src/auto-reply/continuation/delegate-dispatch.ts": ["exports"],
+    "src/auto-reply/continuation/delegate-flow-store.ts": ["exports"],
+    "src/auto-reply/continuation/delegate-store-post-compaction.ts": ["exports"],
+    "src/auto-reply/continuation/delegate-store.ts": ["exports"],
+    "src/auto-reply/continuation/delegate-turn-admission.ts": ["exports"],
+    "src/auto-reply/continuation/signal.ts": ["exports"],
+    "src/auto-reply/continuation/state.ts": ["exports"],
+    "src/auto-reply/continuation/work-dispatch.ts": ["exports"],
+    "src/auto-reply/continuation/work-terminal-notice.ts": ["exports"],
+    "src/auto-reply/reply/agent-runner-fallback-candidate.ts": ["exports"],
+    "src/auto-reply/reply/agent-runner-post-compaction-release.ts": ["exports"],
+    "src/auto-reply/reply/no-op-rearm-guard.ts": ["exports", "types"],
+    "src/auto-reply/reply/post-compaction-delegate-delivery.ts": ["types"],
+    "src/auto-reply/reply/post-compaction-delegate-dispatch.ts": ["exports", "types"],
+    "src/auto-reply/reply/run-provenance.ts": ["exports"],
+    "src/auto-reply/reply/session-system-events.ts": ["exports"],
+    "src/commands/status.command-report-data.ts": ["exports"],
+    "src/infra/continuation-tracer.ts": ["exports", "types"],
+    "src/infra/diagnostic-trace-context.ts": ["exports"],
+    "src/infra/heartbeat-reason.ts": ["exports"],
+    "src/infra/session-delivery-queue-storage.ts": ["exports"],
+    "src/process/command-queue-waiters.ts": ["exports"],
+    "src/status/status-text.ts": ["exports"],
+
     // Greeting cache/fact contracts (hash, alert text, store shapes) are
     // asserted by the focused greeting unit tests, not by another prod module.
     "src/system-agent/greeting.ts": ["exports", "types"],

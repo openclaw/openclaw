@@ -337,7 +337,7 @@ import {
   registerInternalHook,
   type InternalHookEvent,
 } from "../../hooks/internal-hooks.js";
-import { enqueueSystemEvent } from "../../infra/system-events.js";
+import { enqueueSystemEventRaw as enqueueSystemEvent } from "../../infra/system-events.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import type { ElevatedLevel } from "../thinking.js";
 import { createModelSelectionStateFixture } from "./model-selection.test-support.js";
@@ -419,7 +419,7 @@ vi.mock("../../config/sessions.js", () => ({
 }));
 
 vi.mock("../../infra/system-events.js", () => ({
-  enqueueSystemEvent: vi.fn(),
+  enqueueSystemEventRaw: vi.fn(),
 }));
 
 vi.mock("./queue.js", () => ({

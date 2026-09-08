@@ -273,6 +273,12 @@ export async function compactEmbeddedAgentSessionDirect(
       Boolean(transcriptBytePreflightAuthority),
     ),
     sessionEntry: entry ? projectPublicSessionEntry(entry) : undefined,
+    // The latest persisted entry outranks the captured request, which outranks the
+    // request's own (possibly stale) session entry snapshot.
+    permissionMode:
+      entry?.permissionMode ?? paramsBase.permissionMode ?? paramsBase.sessionEntry?.permissionMode,
+    sessionRoot:
+      entry?.sessionRoot ?? paramsBase.sessionRoot ?? paramsBase.sessionEntry?.sessionRoot,
     agentHarnessId: lockedHarnessRuntime ?? paramsBase.agentHarnessId,
     modelSelectionLocked: entry?.modelSelectionLocked ?? paramsBase.modelSelectionLocked,
     agentId: runSessionTarget.agentId,

@@ -8,6 +8,17 @@ import type { OpenClawConfig } from "../config/config.js";
 import { setActiveNodeContext } from "../infra/active-node-context.js";
 import { buildSystemPromptParams, resolveSystemPromptRepoRoot } from "./system-prompt-params.js";
 
+vi.mock("../infra/git-root.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../infra/git-root.js")>();
+  return {
+    ...actual,
+    findGitRoot: (startDir: string, options?: { maxDepth?: number }) => {
+      const root = actual.findGitRoot(startDir, options);
+      return root === process.cwd() ? null : root;
+    },
+  };
+});
+
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 async function makeRepoRoot(root: string): Promise<void> {

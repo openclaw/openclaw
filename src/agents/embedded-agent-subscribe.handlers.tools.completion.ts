@@ -4,14 +4,12 @@ import {
   HEARTBEAT_RESPONSE_TOOL_NAME,
   normalizeHeartbeatToolResponse,
 } from "../auto-reply/heartbeat-tool-response.js";
-import {
-  emitAgentActivityEvent,
-  type AgentCommandOutputEventData,
-  type AgentItemEventData,
-  type AgentPatchSummaryEventData,
+import type {
+  AgentCommandOutputEventData,
+  AgentItemEventData,
+  AgentPatchSummaryEventData,
 } from "../infra/agent-activity-events.js";
 import { emitAgentEvent, type AgentApprovalEventData } from "../infra/agent-events.js";
-import type { PluginHookAfterToolCallEvent } from "../plugins/types.js";
 import { projectProgressCardChannelUpdate } from "../session-cards/progress-card-channel-summary.js";
 import { normalizeAcceptedSessionSpawnResult } from "./accepted-session-spawn.js";
 import {
@@ -45,11 +43,11 @@ import {
 } from "./embedded-agent-messaging.js";
 import { mergeEmbeddedRunReplayState } from "./embedded-agent-runner/replay-state.js";
 import { runBestEffortCallback } from "./embedded-agent-subscribe.callback.js";
+import { scheduleEmbeddedAfterToolCallHook } from "./embedded-agent-subscribe.handlers.tools.after-call.js";
 import {
   applyCurrentMessageProvider,
   applyToolSendReceiptForExtraction,
   buildPatchSummaryText,
-  buildProcessTerminalDiagnostic,
   didShellCronAddSucceed,
   emitToolResultOutput,
   extractExecOutput,
@@ -75,6 +73,7 @@ import {
   buildToolItemTitle,
   buildToolStartKey,
   emitAgentEventCallbackBestEffort,
+  emitMirroredAgentActivity,
   emitTrackedItemEvent,
   isExecToolName,
   toolStartData,
@@ -96,6 +95,7 @@ import { readMcpConnectAction } from "./mcp-connect-action.js";
 import { readMcpAppChannelView } from "./mcp-ui-resource.js";
 import type { AgentEvent } from "./runtime/index.js";
 import {
+  buildProcessTerminalDiagnostic,
   createToolValidationErrorSummary,
   hasTerminalControlCharacter,
   summarizeToolValidationError,
@@ -106,22 +106,24 @@ import { isToolResultError, readToolResultDetails } from "./tool-result-error.js
 import { cancelAskUserPromptDelivery } from "./tools/ask-user-tool.js";
 import { isAutomationsToolName } from "./tools/automations-tool-name.js";
 
-/** Handles a tool-execution result and commits replay, media, hook, and error state. */
 export async function handleToolExecutionEnd(
   ctx: ToolHandlerContext,
   evt: Extract<AgentEvent, { type: "tool_execution_end" }>,
+  options?: { deliveryGeneration?: number },
 ) {
-  const rawToolName = evt.toolName;
+  const isCurrentDeliveryGeneration = () =>
+    options?.deliveryGeneration === undefined ||
+    options.deliveryGeneration === ctx.getBlockReplyDeliveryGeneration();
+  if (!isCurrentDeliveryGeneration()) {
+    return { status: "stale" as const };
+  }
+  const { toolName: rawToolName, toolCallId, isError, result } = evt;
   const toolName = normalizeToolPolicyName(rawToolName);
-  const hideFromChannelProgress = evt.hideFromChannelProgress === true;
-  const toolCallId = evt.toolCallId;
   ctx.state.liveEditDiffStateById.delete(toolCallId);
   if (toolName === "ask_user") {
     cancelAskUserPromptDelivery(toolCallId, ctx.params.sessionKey, ctx.params.runId);
   }
   const runId = ctx.params.runId;
-  const isError = evt.isError;
-  const result = evt.result;
   const toolSendReceiptResult = ctx.consumeToolSendReceipt?.(toolCallId);
   const observerIsError = isError || isToolResultError(result);
   const sanitizedResult = sanitizeToolResult(result);
@@ -171,16 +173,13 @@ export async function handleToolExecutionEnd(
     initialCallSummary?.ownerKey,
     structuredReplaySafe,
   );
-  // A racing observer can consume the active wrapper boundary. Settled and
-  // custom producers use their terminal fact, while policy blocks override it.
+  // Settled/custom producers use their terminal fact; policy blocks override racing wrappers.
   const executionStarted =
     (trackedExecutionStarted ?? evt.executionStarted ?? true) && !executionPrevented;
   const meta = callSummary.meta;
   const asyncStarted = !isToolError && isAsyncStartedToolResult(sanitizedResult);
   const asyncTaskIds = asyncStarted ? readAsyncStartedTaskIds(sanitizedResult) : {};
-  // A Code Mode exec that returns "waiting" parked a run the model resumes via
-  // `wait`; record that here so recovery can tell parked nested work apart
-  // from any other still-active lifecycle item.
+  // A "waiting" Code Mode exec remains parked until the model resumes it via `wait`.
   const codeModeSuspended =
     !isToolError &&
     ctx.params.codeModeExecToolNames?.has(toolName) === true &&
@@ -264,7 +263,6 @@ export async function handleToolExecutionEnd(
     });
   }
 
-  // Commit messaging tool evidence on success, discard on error.
   const messagingArgs = applyCurrentMessageProvider(toolName, startArgs, ctx.params.messageChannel);
   const isMessagingInvocation = isMessagingTool(toolName);
   const isMessagingSend = isMessagingInvocation && isMessagingToolSendAction(toolName, startArgs);
@@ -445,7 +443,7 @@ export async function handleToolExecutionEnd(
       commandBearing: callSummary.commandBearing,
       result: eventResult,
       ...(toolErrorSummary ? { toolErrorSummary } : {}),
-      ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
+      ...(evt.hideFromChannelProgress === true ? { hideFromChannelProgress: true } : {}),
     },
   });
   const endedAt = Date.now();
@@ -462,7 +460,7 @@ export async function handleToolExecutionEnd(
     toolCallId,
     startedAt: startData?.startTime,
     endedAt,
-    ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
+    ...(evt.hideFromChannelProgress === true ? { hideFromChannelProgress: true } : {}),
     ...(callSummary.commandBearing && !isExecToolName(toolName)
       ? { suppressChannelProgress: true }
       : {}),
@@ -479,7 +477,7 @@ export async function handleToolExecutionEnd(
       isError: isToolError,
       commandBearing: callSummary.commandBearing,
       ...(toolErrorSummary ? { toolErrorSummary } : {}),
-      ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
+      ...(evt.hideFromChannelProgress === true ? { hideFromChannelProgress: true } : {}),
     },
   });
 
@@ -513,13 +511,9 @@ export async function handleToolExecutionEnd(
         ...(execDetails.status === "approval-unavailable" ? { reason: execDetails.reason } : {}),
         message: execDetails.warningText,
       };
-      emitAgentActivityEvent({
+      emitMirroredAgentActivity(ctx, {
         runId: ctx.params.runId,
         ...(ctx.params.sessionKey ? { sessionKey: ctx.params.sessionKey } : {}),
-        stream: "approval",
-        data: approvalData,
-      });
-      emitAgentEventCallbackBestEffort(ctx, {
         stream: "approval",
         data: approvalData,
       });
@@ -583,13 +577,9 @@ export async function handleToolExecutionEnd(
           ? { cwd: execDetails.cwd }
           : {}),
       };
-      emitAgentActivityEvent({
+      emitMirroredAgentActivity(ctx, {
         runId: ctx.params.runId,
         ...(ctx.params.sessionKey ? { sessionKey: ctx.params.sessionKey } : {}),
-        stream: "command_output",
-        data: outputData,
-      });
-      emitAgentEventCallbackBestEffort(ctx, {
         stream: "command_output",
         data: outputData,
       });
@@ -610,13 +600,9 @@ export async function handleToolExecutionEnd(
             toolCallId,
             message: parsedApprovalResult.body || parsedApprovalResult.raw,
           };
-          emitAgentActivityEvent({
+          emitMirroredAgentActivity(ctx, {
             runId: ctx.params.runId,
             ...(ctx.params.sessionKey ? { sessionKey: ctx.params.sessionKey } : {}),
-            stream: "approval",
-            data: approvalData,
-          });
-          emitAgentEventCallbackBestEffort(ctx, {
             stream: "approval",
             data: approvalData,
           });
@@ -657,13 +643,9 @@ export async function handleToolExecutionEnd(
         deleted: patchSummary.deleted,
         summary: summaryText ?? buildPatchSummaryText(patchSummary),
       };
-      emitAgentActivityEvent({
+      emitMirroredAgentActivity(ctx, {
         runId: ctx.params.runId,
         ...(ctx.params.sessionKey ? { sessionKey: ctx.params.sessionKey } : {}),
-        stream: "patch",
-        data: patchData,
-      });
-      emitAgentEventCallbackBestEffort(ctx, {
         stream: "patch",
         data: patchData,
       });
@@ -683,38 +665,40 @@ export async function handleToolExecutionEnd(
       isToolError,
       result,
       sanitizedResult,
+      deliveryGeneration: options?.deliveryGeneration,
     });
+  }
+  if (!isCurrentDeliveryGeneration()) {
+    return { status: "stale" as const };
   }
   await Promise.resolve(ctx.params.onToolStreamBoundary?.()).catch((error: unknown) => {
     ctx.log.debug(`embedded run tool stream boundary callback failed: ${String(error)}`);
   });
-
-  // Run after_tool_call plugin hook (fire-and-forget)
-  const hookRunnerAfter = ctx.hookRunner ?? (await loadHookRunnerGlobal()).getGlobalHookRunner();
-  if (hookRunnerAfter?.hasHooks("after_tool_call")) {
-    const durationMs = startData?.startTime != null ? Date.now() - startData.startTime : undefined;
-    const hookEvent: PluginHookAfterToolCallEvent = {
-      toolName,
-      params: startArgs,
-      runId,
-      toolCallId,
-      result: sanitizedResult,
-      error: isToolError ? extractToolErrorMessage(sanitizedResult) : undefined,
-      durationMs,
-    };
-    void hookRunnerAfter
-      .runAfterToolCall(hookEvent, {
-        toolName,
-        agentId: ctx.params.agentId,
-        sessionKey: ctx.params.sessionKey,
-        sessionId: ctx.params.sessionId,
-        runId,
-        toolCallId,
-      })
-      .catch((err: unknown) => {
-        ctx.log.warn(`after_tool_call hook failed: tool=${toolName} error=${String(err)}`);
-      });
+  if (!isCurrentDeliveryGeneration()) {
+    return { status: "stale" as const };
   }
   terminal.executedArguments ??= startArgs;
-  return Object.assign(terminal, { isError: observerIsError });
+  const hookRunnerAfter = ctx.hookRunner ?? (await loadHookRunnerGlobal()).getGlobalHookRunner();
+  if (!isCurrentDeliveryGeneration()) {
+    return { status: "stale" as const };
+  }
+  scheduleEmbeddedAfterToolCallHook({
+    ctx,
+    hookRunner: hookRunnerAfter,
+    params: startArgs,
+    result: sanitizedResult,
+    error: isToolError ? extractToolErrorMessage(sanitizedResult) : undefined,
+    startedAt: startData?.startTime,
+    toolName,
+    toolCallId,
+    runId,
+  });
+  const { executionStarted: terminalExecutionStarted, effectReceipt } = terminal;
+  return {
+    ...terminal,
+    status: "completed" as const,
+    isError: observerIsError,
+    executionStarted: terminalExecutionStarted,
+    effectReceipt,
+  };
 }

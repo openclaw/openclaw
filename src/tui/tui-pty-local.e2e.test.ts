@@ -2038,6 +2038,46 @@ export default {
 
   registerValidationLoopTest("local");
 
+  it(
+    "recovers the first printable after an ordinary local Escape abort",
+    async ({ onTestFinished }) => {
+      const fixture = await startLocalModeTui(onTestFinished, {
+        holdFirstResponse: true,
+        followupReplyText: "LOCAL_ESCAPE_FOLLOWUP",
+      });
+      try {
+        await fixture.run.waitForOutput("local ready", LOCAL_STARTUP_TIMEOUT_MS);
+        await fixture.run.write("slow local turn\r");
+        await waitFor({
+          timeoutMs: LOCAL_OUTPUT_TIMEOUT_MS,
+          read: () => (fixture.mockModel.requests().length === 1 ? true : null),
+          onTimeout: () => new Error("local Escape target did not reach the mock provider"),
+        });
+
+        await fixture.run.write("\u001b", { delay: false });
+        await fixture.run.waitForOutput("run aborted", LOCAL_OUTPUT_TIMEOUT_MS);
+        fixture.mockModel.releaseFirstResponse("gpt-5.5");
+
+        await fixture.run.write("\u001bp", { delay: false });
+        await fixture.run.write("rompt after ordinary local abort\r");
+        await waitFor({
+          timeoutMs: LOCAL_OUTPUT_TIMEOUT_MS,
+          read: () => (fixture.mockModel.requests().length === 2 ? true : null),
+          onTimeout: () => new Error("post-Escape prompt did not reach the mock provider"),
+        });
+        expect(JSON.stringify(fixture.mockModel.requests()[1]?.body)).toContain(
+          "prompt after ordinary local abort",
+        );
+        await fixture.run.waitForOutput("LOCAL_ESCAPE_FOLLOWUP", LOCAL_OUTPUT_TIMEOUT_MS);
+        await fixture.run.write("/exit\r", { delay: false });
+        expect((await fixture.run.waitForExit()).exitCode).toBe(0);
+      } finally {
+        await fixture.cleanup();
+      }
+    },
+    LOCAL_TEST_TIMEOUT_MS,
+  );
+
   // Register every Gateway case inside the nested suite so targeted runs retain
   // the fixture's separate startup timeout.
   const gatewayTestRegistrations: Array<() => void> = [];

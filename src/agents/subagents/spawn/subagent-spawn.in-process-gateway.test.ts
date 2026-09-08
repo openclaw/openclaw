@@ -4,21 +4,13 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createExecutionIdentityAdmissionToken } from "../../../audit/execution-identity-admission.js";
-import {
-  clearConfigCache,
-  clearRuntimeConfigSnapshot,
-  getRuntimeConfig,
-} from "../../../config/config.js";
+import { clearConfigCache, clearRuntimeConfigSnapshot } from "../../../config/config.js";
 import { readAgentRuntimeExecutionLineage } from "../../../gateway/agent-runtime-execution-lineage.js";
 import type { AgentRuntimeIdentity } from "../../../gateway/agent-runtime-identity-token.js";
 import { prepareAgentRequestPreflight } from "../../../gateway/agent-turn/agent-request-preflight.js";
 import { createAgentTurnIo } from "../../../gateway/agent-turn/io.js";
 import { readInProcessAgentRuntimeIdentity } from "../../../gateway/in-process-agent-runtime-identity.js";
 import { resolveGatewayAgentTaskTrackingMode } from "../../../gateway/server-methods/agent-task-tracking.js";
-import type {
-  GatewayRequestContext,
-  GatewayRequestOptions,
-} from "../../../gateway/server-methods/types.js";
 import { createSyntheticPluginRuntimeClient } from "../../../gateway/server-plugin-runtime-client.js";
 import type { dispatchGatewayMethodInProcess } from "../../../gateway/server-plugins.js";
 import type { WorkerSessionTurnClaim } from "../../../gateway/worker-environments/placement-record.js";
@@ -57,68 +49,16 @@ import { testing as swarmSchedulerTesting } from "../swarm/swarm-scheduler.test-
 import { withParentExecutionIdentity } from "./execution-identity-spawn-context.js";
 import { buildSubagentExecutionSessionSpawnContext } from "./subagent-spawn-execution-identity.js";
 import { callSubagentGateway } from "./subagent-spawn-gateway.js";
+import {
+  externalCliClient,
+  makeGatewayContext,
+  waitForAssertion,
+} from "./subagent-spawn.in-process-gateway.test-support.js";
 import { spawnSubagentDirect } from "./subagent-spawn.js";
 import { testing as subagentSpawnTesting } from "./subagent-spawn.test-support.js";
 
 const envSnapshot = captureEnv(["OPENCLAW_CONFIG_PATH", "OPENCLAW_STATE_DIR"]);
 let stateDir = "";
-
-function makeGatewayContext(): GatewayRequestContext {
-  return {
-    dedupe: new Map(),
-    addChatRun: vi.fn(),
-    removeChatRun: vi.fn(),
-    chatAbortControllers: new Map(),
-    chatQueuedTurns: new Map(),
-    chatRunBuffers: new Map(),
-    chatDeltaSentAt: new Map(),
-    chatDeltaLastBroadcastLen: new Map(),
-    chatDeltaLastBroadcastText: new Map(),
-    agentDeltaSentAt: new Map(),
-    bufferedAgentEvents: new Map(),
-    chatAbortedRuns: new Map(),
-    clearChatRunState: vi.fn(),
-    agentRunSeq: new Map(),
-    broadcast: vi.fn(),
-    nodeSendToSession: vi.fn(),
-    logGateway: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-    broadcastToConnIds: vi.fn(),
-    getSessionEventSubscriberConnIds: () => new Set(),
-    getRuntimeConfig,
-  } as unknown as GatewayRequestContext;
-}
-
-function externalCliClient(): GatewayRequestOptions["client"] {
-  return {
-    connect: {
-      minProtocol: 1,
-      maxProtocol: 1,
-      client: {
-        id: "cli",
-        version: "test",
-        platform: "test",
-        mode: "cli",
-      },
-      scopes: ["operator.write"],
-    },
-  } as GatewayRequestOptions["client"];
-}
-
-async function waitForAssertion(assertion: () => void, timeoutMs = 2_000): Promise<void> {
-  let lastError: unknown;
-  for (let elapsed = 0; elapsed <= timeoutMs; elapsed += 10) {
-    try {
-      assertion();
-      return;
-    } catch (error) {
-      lastError = error;
-    }
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 10);
-    });
-  }
-  throw lastError;
-}
 
 describe("spawnSubagentDirect in-process Gateway collector launch", () => {
   it("does not construct private lineage while identity collection is disabled", () => {
@@ -619,7 +559,11 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
 
   it("hands a registered collector launch to Gateway as the host", async () => {
     const gatewayContext = makeGatewayContext();
-    const dispatchOptions: Array<{ method: string; forceSyntheticClient?: boolean }> = [];
+    const dispatchOptions: Array<{
+      method: string;
+      forceSyntheticClient?: boolean;
+      allowSyntheticModelOverride?: boolean;
+    }> = [];
     const preflightResults: Array<{
       externalAccepted: boolean;
       externalError?: string;
@@ -632,7 +576,11 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
         params: Record<string, unknown>,
         options?: NonNullable<Parameters<typeof dispatchGatewayMethodInProcess>[2]>,
       ) => {
-        dispatchOptions.push({ method, forceSyntheticClient: options?.forceSyntheticClient });
+        dispatchOptions.push({
+          method,
+          forceSyntheticClient: options?.forceSyntheticClient,
+          allowSyntheticModelOverride: options?.allowSyntheticModelOverride,
+        });
 
         const externalRespond = vi.fn();
         const externalPreflight = prepareAgentRequestPreflight({
@@ -644,7 +592,10 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
 
         const hostRespond = vi.fn();
         const client = options?.forceSyntheticClient
-          ? createSyntheticPluginRuntimeClient({ scopes: options.syntheticScopes })
+          ? createSyntheticPluginRuntimeClient({
+              allowModelOverride: options.allowSyntheticModelOverride,
+              scopes: options.syntheticScopes,
+            })
           : externalCliClient();
         const hostPreflight = prepareAgentRequestPreflight({
           request: params,
@@ -691,7 +642,13 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
     expect(result.status).toBe("accepted");
     expect(result.runId).toBeTruthy();
     await waitForAssertion(() => {
-      expect(dispatchOptions).toEqual([{ method: "agent", forceSyntheticClient: true }]);
+      expect(dispatchOptions).toEqual([
+        {
+          method: "agent",
+          forceSyntheticClient: true,
+          allowSyntheticModelOverride: undefined,
+        },
+      ]);
       expect(preflightResults).toEqual([
         {
           externalAccepted: false,

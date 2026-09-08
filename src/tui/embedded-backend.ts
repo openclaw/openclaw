@@ -7,6 +7,7 @@ import { isAgentLifecycleYieldedWaiting } from "../agents/agent-lifecycle-parent
 import { findAgentRunTerminalOutcome } from "../agents/agent-run-terminal-error.js";
 import {
   AGENT_RUN_TERMINAL_RETRY_GRACE_MS,
+  buildAgentRunTerminalOutcome,
   buildAgentRunTerminalOutcomeFromLifecycleEvent,
   classifyAgentRunTerminalOutcome,
   isDefinitiveRunLifecycle,
@@ -114,6 +115,7 @@ import type {
   TuiSessionCreateOptions,
 } from "./tui-backend.js";
 import { formatTuiErrorMessage } from "./tui-formatters.js";
+import type { TuiChatAbortOrigin } from "./tui-types.js";
 
 const TUI_STATE_BY_TERMINAL_CLASSIFICATION = {
   success: undefined,
@@ -1175,6 +1177,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
     state: "final" | "aborted" | "error",
     detail?: string,
     terminalState: "provisional" | "final" = "final",
+    abortOrigin?: TuiChatAbortOrigin,
   ) {
     this.clearPendingLifecycleError(runId);
     if (run.terminalState === "final" || run.terminalState === terminalState) {
@@ -1207,6 +1210,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
       ...(state !== "final" && (detail || (state === "aborted" && run.toolErrorSummary))
         ? { errorMessage: formatTuiErrorMessage(detail ?? run.toolErrorSummary) }
         : {}),
+      ...(abortOrigin ? { abortOrigin } : {}),
     });
   }
 
@@ -1223,6 +1227,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
     options: {
       visibleText?: string;
       terminalOutcome?: AgentRunTerminalOutcome;
+      abortOrigin?: TuiChatAbortOrigin;
     } = {},
   ): boolean {
     const terminalError =
@@ -1257,7 +1262,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
     ) {
       this.scheduleChatError(runId, run, diagnostic);
     } else {
-      this.emitChatTerminal(runId, run, state, diagnostic);
+      this.emitChatTerminal(runId, run, state, diagnostic, "final", options.abortOrigin);
     }
     return true;
   }
@@ -1306,6 +1311,8 @@ export class EmbeddedTuiBackend implements TuiBackend {
       run.toolErrorSummary = undefined;
     } else if (evt.stream === "tool" && evt.data?.phase === "result") {
       run.toolErrorSummary = readToolValidationErrorSummary(evt.data.toolErrorSummary);
+    } else if (evt.stream === "lifecycle" && lifecyclePhase === "start") {
+      run.toolErrorSummary = undefined;
     }
 
     const assistantLiveChatInput =
@@ -1334,6 +1341,9 @@ export class EmbeddedTuiBackend implements TuiBackend {
     }
 
     const phase = lifecyclePhase;
+    if (Object.hasOwn(evt.data ?? {}, "toolErrorSummary")) {
+      run.toolErrorSummary = readToolValidationErrorSummary(evt.data?.toolErrorSummary);
+    }
     if (phase === "finishing") {
       run.finishing = true;
       run.markQueuedRunReady();
@@ -1348,6 +1358,25 @@ export class EmbeddedTuiBackend implements TuiBackend {
     if (phase === "error") {
       run.buffer = "";
       delete run.assistantScope;
+    }
+    // A tool-validation error summary terminalizes the run as aborted even when the
+    // provider reported no abort, so the safe summary reaches the transcript instead
+    // of a generic blocked/liveness diagnostic. The outcome is forced rather than
+    // classified because a validation loop also trips the blocked-liveness heuristic.
+    if (run.toolErrorSummary) {
+      this.projectTerminalOutcome(
+        evt.runId,
+        run,
+        { ...evt.data, aborted: true, toolErrorSummary: run.toolErrorSummary },
+        {
+          abortOrigin: "tool-validation",
+          terminalOutcome: buildAgentRunTerminalOutcome({
+            status: "error",
+            stopReason: "aborted",
+          }),
+        },
+      );
+      return;
     }
     if (this.projectTerminalOutcome(evt.runId, run, evt.data)) {
       return;

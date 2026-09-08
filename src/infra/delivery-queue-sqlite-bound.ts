@@ -160,9 +160,7 @@ type BoundDeliveryQueueEntry = {
   completeExisting: boolean;
 };
 
-export function inflateDeliveryQueueRow(
-  row: DeliveryQueueSqliteRow,
-): DeliveryQueueEntryState | null {
+function inflateDeliveryQueueRow(row: DeliveryQueueSqliteRow): DeliveryQueueEntryState | null {
   let parsed: DeliveryQueueEntryState;
   try {
     parsed = JSON.parse(row.entry_json) as DeliveryQueueEntryState;

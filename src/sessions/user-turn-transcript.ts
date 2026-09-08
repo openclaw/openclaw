@@ -19,6 +19,7 @@ import {
 import {
   buildLateResolvedMediaMessage,
   isUserMessage,
+  readUserTurnMessageMeta,
   resolvePersistedUserTurnMessage,
 } from "./user-turn-transcript.message.js";
 import {
@@ -95,9 +96,7 @@ async function persistUserTurnTranscript(
     },
     {
       ...(params.cwd ? { cwd: params.cwd } : {}),
-      ...(params.config
-        ? { config: params.config as SessionTranscriptTurnPersistOptions["config"] }
-        : {}),
+      ...(params.config ? { config: params.config } : {}),
       ...(params.expectedSessionId ? { expectedSessionId: params.expectedSessionId } : {}),
       ...(params.initialSessionEntry ? { initialSessionEntry: params.initialSessionEntry } : {}),
       ...(params.expectedSessionState ? { expectedSessionState: params.expectedSessionState } : {}),
@@ -230,6 +229,49 @@ export function createUserTurnTranscriptRecorder(
   let confirmedSteerTargetRunId: string | undefined;
   let pendingInput: Awaited<ReturnType<typeof stageSessionPendingInput>>;
   let staging: Promise<boolean> | undefined;
+  const replacementSessionDeliveryAckIds = new Set<string>();
+  let hasReplacementSessionDeliveryAckIds = false;
+
+  const replaceSessionDeliveryAckIds = (deliveryIds: readonly string[]): boolean => {
+    if (
+      pendingInput ||
+      staging ||
+      selfPersistencePromise ||
+      runtimePersistencePromise ||
+      runtimePersisted ||
+      persisted
+    ) {
+      return false;
+    }
+    hasReplacementSessionDeliveryAckIds = true;
+    replacementSessionDeliveryAckIds.clear();
+    for (const deliveryId of deliveryIds) {
+      const normalized = deliveryId.trim();
+      if (normalized) {
+        replacementSessionDeliveryAckIds.add(normalized);
+      }
+    }
+    return true;
+  };
+
+  const withReplacementSessionDeliveryAckIds = (
+    candidate: PersistedUserTurnMessage | undefined,
+  ): PersistedUserTurnMessage | undefined => {
+    if (!candidate || !hasReplacementSessionDeliveryAckIds) {
+      return candidate;
+    }
+    const metadata = { ...readUserTurnMessageMeta(candidate) };
+    Reflect.deleteProperty(metadata, "sessionDeliveryAckIds");
+    return {
+      ...candidate,
+      __openclaw: {
+        ...metadata,
+        ...(replacementSessionDeliveryAckIds.size > 0
+          ? { sessionDeliveryAckIds: [...replacementSessionDeliveryAckIds] }
+          : {}),
+      },
+    } as PersistedUserTurnMessage;
+  };
 
   const applyReplacementText = (
     candidate: PersistedUserTurnMessage | undefined,
@@ -311,7 +353,7 @@ export function createUserTurnTranscriptRecorder(
         resolvedMessagePromise = Promise.resolve(message);
       }
     }
-    return pendingInput?.message ?? resolved;
+    return withReplacementSessionDeliveryAckIds(pendingInput?.message ?? resolved);
   };
 
   const notifyMessagePersisted = (persistedMessage?: PersistedUserTurnMessage) => {
@@ -542,7 +584,7 @@ export function createUserTurnTranscriptRecorder(
           ...options,
           requestFingerprint: params.pendingInputRequestFingerprint,
           message: candidate,
-          config: target.config as SessionTranscriptTurnPersistOptions["config"],
+          config: target.config,
           prepareMessageAfterIdempotencyCheck: (next) =>
             preparePersistedUserTurnMessageForTranscriptWrite(next, {
               ...target,
@@ -609,6 +651,7 @@ export function createUserTurnTranscriptRecorder(
     getPersistedMessage: () =>
       admittedMessage ?? runtimePersistedMessage ?? persistedResult?.message,
     getAdmissionReceipt: () => admissionReceipt,
+    replaceSessionDeliveryAckIds,
     setAdmissionHandler: (handler) => (admissionHandler = handler),
     markSentToProvider: () => {
       sentToProvider = true;

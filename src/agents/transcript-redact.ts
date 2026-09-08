@@ -5,7 +5,6 @@ import { OPENAI_RESPONSES_APIS } from "@openclaw/ai/internal/openai-responses-pa
  * Applies logging redaction rules to persisted messages while preserving unchanged object identity.
  */
 import { findNormalizedProviderValue } from "@openclaw/model-catalog-core/provider-id";
-import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readLoggingConfig } from "../logging/config.js";
 import { redactSourceInputTextWithConfig } from "../logging/redact-source.js";
@@ -20,6 +19,7 @@ import { readNestedToolActivity } from "../sessions/nested-tool-activity.js";
 import type { ProviderEndpointClass } from "./provider-attribution.js";
 import { resolveProviderEndpoint } from "./provider-attribution.js";
 import type { AgentMessage } from "./runtime/index.js";
+import { isTranscriptToolCallBlock, sanitizeTranscriptToolCallBlock } from "./tool-call-shared.js";
 import {
   copyCodeModeSourceAppend,
   readCodeModeSourceFields,
@@ -32,6 +32,7 @@ import {
   shouldPreserveTranscriptImagePayload,
 } from "./transcript-redact-images.js";
 import { sanitizeCompactionReplayState } from "./transcript-redact-replay.js";
+import { stripInvalidatedTranscriptUserMetadata } from "./transcript-redact-user-metadata.js";
 
 function resolveTranscriptLoggingConfig(cfg?: OpenClawConfig) {
   const configuredLogging = readLoggingConfig();
@@ -542,8 +543,14 @@ function redactTranscriptStructuredValue(
   }
 
   seen.add(value);
-  const sanitizedImageRecord = sanitizeTranscriptImageRecord(value);
-  const source = sanitizedImageRecord ?? value;
+  // Continuation attachment snapshots are durable handoff input, not replayable
+  // transcript content. Apply the shared tool-call projection before any
+  // canonical writer serializes an assistant message (not only CLI mirroring).
+  const sanitizedToolCall: Record<string, unknown> = isTranscriptToolCallBlock(value)
+    ? sanitizeTranscriptToolCallBlock(value)
+    : value;
+  const sanitizedImageRecord = sanitizeTranscriptImageRecord(sanitizedToolCall);
+  const source = sanitizedImageRecord ?? sanitizedToolCall;
   const currentAssistantRoute =
     location === "root" && source.role === "assistant"
       ? resolveTranscriptAssistantRoute(source, cfg)
@@ -712,24 +719,13 @@ function redactTranscriptStructuredValue(
     next ??= { ...source };
     next[key] = redacted;
   }
-  // Redacted source facts no longer identify the producer's sender. Keep display
-  // redaction, but never qualify the replacement bytes as a person or remote actor.
-  if (fieldKey === "__openclaw" && next) {
-    if (next.senderIdentity !== source.senderIdentity || next.senderId !== source.senderId) {
-      delete next.senderIdentity;
-    }
-    if (next.humanMentions !== source.humanMentions) {
-      delete next.humanMentions;
-    }
-  }
-  if (location === "root" && source.role === "user" && next && next.content !== source.content) {
-    const metadata = asOptionalRecord(next["__openclaw"]);
-    if (metadata?.humanMentions !== undefined) {
-      // UTF-16 selections cannot retain their binding after storage redacts the content.
-      const retained = { ...metadata };
-      delete retained.humanMentions;
-      next["__openclaw"] = retained;
-    }
+  if (next) {
+    next = stripInvalidatedTranscriptUserMetadata({
+      fieldKey,
+      location,
+      source,
+      redacted: next,
+    });
   }
   seen.delete(value);
   return next ?? value;

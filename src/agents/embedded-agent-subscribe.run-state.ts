@@ -46,6 +46,9 @@ export function createEmbeddedAgentSubscribeState(
     lastStreamedReasoning: undefined,
     lastBlockReplyText: undefined,
     lastDeliveredBlockReplyText: undefined,
+    deliveredBlockReplyTexts: [],
+    attemptedBlockReplyTexts: [],
+    deferredBlockReplyTexts: [],
     deferBlockReplyDelivery: typeof params.onBeforeTerminalDelivery === "function",
     deferredBlockReplies: [],
     toolExecutionSinceLastBlockReply: false,
@@ -95,6 +98,8 @@ export function createEmbeddedAgentSubscribeState(
     hasToolMediaBlockReply: false,
     visibleBlockReplyCount: 0,
     pendingAssistantReplyDirectives: undefined,
+    deferredAssistantReplyDirectives: undefined,
+    lastDeliveredAssistantReplyDirectives: undefined,
     deterministicApprovalPromptPending: false,
     deterministicApprovalPromptSent: false,
   };

@@ -82,7 +82,7 @@ export function buildLateMediaAttachedProjection(message: AgentMessage): {
   text?: string;
   media: MediaFact[];
 } {
-  const isLateMedia = readOpenClawMessageMeta(message)?.lateMedia === true;
+  const isLateMedia = readUserTurnMessageMeta(message)?.lateMedia === true;
   const media = isLateMedia ? (readPersistedMediaFacts(message) ?? []) : [];
   const text = media
     .flatMap((fact) => {
@@ -93,7 +93,9 @@ export function buildLateMediaAttachedProjection(message: AgentMessage): {
   return { ...(text ? { text } : {}), media };
 }
 
-function readOpenClawMessageMeta(message: AgentMessage): Record<string, unknown> | undefined {
+export function readUserTurnMessageMeta(
+  message: AgentMessage,
+): Record<string, unknown> | undefined {
   return asOptionalRecord(Reflect.get(message, "__openclaw"));
 }
 export function buildPersistedUserTurnMessage(params: UserTurnInput): PersistedUserTurnMessage {
@@ -105,7 +107,12 @@ export function buildPersistedUserTurnMessage(params: UserTurnInput): PersistedU
   // every historical turn serialize identically on the wire. Persisting a stamp
   // here would NOT match the bare-current arrival (the gateway no longer stamps
   // the live turn) — see https://github.com/openclaw/openclaw/issues/3658.
-  const openClawMeta = buildPersistedUserTurnMetadata(params, normalizedMedia);
+  const openClawMeta = {
+    ...buildPersistedUserTurnMetadata(params, normalizedMedia),
+    ...(params.sessionDeliveryAckIds && params.sessionDeliveryAckIds.length > 0
+      ? { sessionDeliveryAckIds: [...new Set(params.sessionDeliveryAckIds)] }
+      : {}),
+  };
   const message: PersistedUserTurnMessage = {
     role: "user",
     ...(params.display === false ? { display: false } : {}),
@@ -159,7 +166,7 @@ export function buildLateResolvedMediaMessage(params: {
       ? `${resolvedIdempotencyKey}:late-media`
       : `late-media:${typeof resolvedTimestamp === "number" ? resolvedTimestamp : Date.now()}`;
   const metadata: Record<string, unknown> = {
-    ...readOpenClawMessageMeta(params.resolvedMessage),
+    ...readUserTurnMessageMeta(params.resolvedMessage),
     lateMedia: true,
   };
   delete metadata.humanMentions;
@@ -173,7 +180,7 @@ export function buildLateResolvedMediaMessage(params: {
 }
 
 function isBeforeAgentRunBlockedMessage(message: AgentMessage): boolean {
-  const marker = readOpenClawMessageMeta(message)?.beforeAgentRunBlocked;
+  const marker = readUserTurnMessageMeta(message)?.beforeAgentRunBlocked;
   return marker !== undefined;
 }
 
@@ -198,8 +205,8 @@ export function mergePreparedUserTurnMessageForRuntime(params: {
   ) {
     return params.runtimeMessage;
   }
-  const runtimeMeta = readOpenClawMessageMeta(params.runtimeMessage);
-  const preparedMeta = readOpenClawMessageMeta(params.preparedMessage);
+  const runtimeMeta = readUserTurnMessageMeta(params.runtimeMessage);
+  const preparedMeta = readUserTurnMessageMeta(params.preparedMessage);
   return {
     ...params.runtimeMessage,
     ...params.preparedMessage,

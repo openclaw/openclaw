@@ -33,7 +33,7 @@ type LegacyDeliveryFixture = Partial<SessionEntry> & {
   origin?: SessionOrigin;
 };
 
-const upsertSessionEntry = (
+const upsertSessionEntryCore = (
   scope: Parameters<typeof upsertCanonicalSessionEntry>[0],
   entry: LegacyDeliveryFixture,
 ) => upsertCanonicalSessionEntry(scope, normalizeLegacySessionEntryDelivery(entry as SessionEntry));
@@ -54,14 +54,14 @@ describe("conversation registry", () => {
 
   it("links multiple direct peers to a shared main context without conflating addresses", async () => {
     const scope = { agentId: "main", sessionKey: "agent:main:main", storePath };
-    await upsertSessionEntry(scope, {
+    await upsertSessionEntryCore(scope, {
       sessionId: "shared-main-session",
       updatedAt: 100,
       chatType: "direct",
       deliveryContext: { channel: "reef", accountId: "default", to: "reef:peer-a" },
       origin: { provider: "reef", accountId: "default", nativeDirectUserId: "peer-a" },
     });
-    await upsertSessionEntry(scope, {
+    await upsertSessionEntryCore(scope, {
       sessionId: "shared-main-session",
       updatedAt: 200,
       chatType: "direct",
@@ -119,7 +119,7 @@ describe("conversation registry", () => {
   it("round-trips authoritative route context on its conversation association", async () => {
     const sessionKey = "agent:main:discord:channel:ops";
     const scope = { agentId: "main", sessionKey, storePath };
-    await upsertSessionEntry(scope, {
+    await upsertSessionEntryCore(scope, {
       sessionId: "ops-session",
       updatedAt: 100,
       chatType: "channel",
@@ -223,7 +223,7 @@ describe("conversation registry", () => {
     const sessionKey = "agent:main:discord:channel:shared";
     const scope = { agentId: "main", sessionKey, storePath };
     const writeRoute = async (target: string, guildId: string, updatedAt: number) => {
-      await upsertSessionEntry(scope, {
+      await upsertSessionEntryCore(scope, {
         sessionId: "shared-session",
         updatedAt,
         chatType: "channel",
@@ -272,7 +272,7 @@ describe("conversation registry", () => {
   it("preserves context across an unobserved rollover and clears it on observed-empty ingress", async () => {
     const sessionKey = "agent:main:discord:channel:rollover";
     const scope = { agentId: "main", sessionKey, storePath };
-    await upsertSessionEntry(scope, {
+    await upsertSessionEntryCore(scope, {
       sessionId: "before-rollover",
       updatedAt: 100,
       chatType: "channel",
@@ -340,7 +340,7 @@ describe("conversation registry", () => {
     { entry_json: JSON.stringify({ sessionId: "wrong-session", updatedAt: 100 }) },
   ])("does not bind an invalid current entry to its primary address: %j", async (invalid) => {
     const scope = { agentId: "main", sessionKey: "agent:main:reef:direct:peer-a", storePath };
-    await upsertSessionEntry(scope, {
+    await upsertSessionEntryCore(scope, {
       sessionId: "peer-a-session",
       updatedAt: 100,
       chatType: "direct",
@@ -361,7 +361,7 @@ describe("conversation registry", () => {
   });
 
   it("orders fresh directory addresses with session-backed conversation activity", async () => {
-    await upsertSessionEntry(
+    await upsertSessionEntryCore(
       { agentId: "main", sessionKey: "agent:main:reef:direct:peer-a", storePath },
       {
         sessionId: "peer-a-session",
@@ -399,7 +399,7 @@ describe("conversation registry", () => {
       [liveSessionKey, "live-session"],
       [staleSessionKey, "stale-session"],
     ] as const) {
-      await upsertSessionEntry(
+      await upsertSessionEntryCore(
         { agentId: "main", sessionKey, storePath },
         {
           sessionId,
@@ -444,7 +444,7 @@ describe("conversation registry", () => {
   it("resolves historical addresses through the current session binding after reset", async () => {
     const sessionKey = "agent:main:reef:direct:peer-a";
     const scope = { agentId: "main", sessionKey, storePath };
-    await upsertSessionEntry(scope, {
+    await upsertSessionEntryCore(scope, {
       sessionId: "old-session",
       updatedAt: 100,
       chatType: "direct",
@@ -454,7 +454,7 @@ describe("conversation registry", () => {
     const [historical] = listConversations({ agentId: "main", storePath }, { channel: "reef" });
     expect(historical?.sessionId).toBe("old-session");
 
-    await upsertSessionEntry(scope, {
+    await upsertSessionEntryCore(scope, {
       sessionId: "current-session",
       updatedAt: 200,
       chatType: "direct",
@@ -473,7 +473,7 @@ describe("conversation registry", () => {
   it("retains a deleted session's address without exposing a stale binding", async () => {
     const sessionKey = "agent:main:reef:direct:peer-a";
     const scope = { agentId: "main", sessionKey, storePath };
-    await upsertSessionEntry(scope, {
+    await upsertSessionEntryCore(scope, {
       sessionId: "deleted-session",
       updatedAt: 100,
       chatType: "direct",

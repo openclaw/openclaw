@@ -25,6 +25,7 @@ type EmbeddedRunReplyItem = {
   interactive?: ReplyPayload["interactive"];
   channelData?: Record<string, unknown>;
   sourceReplyMirror?: { idempotencyKey?: string; transcriptOwner?: true };
+  preserveTextWhitespace?: boolean;
 };
 
 /** Builds transcript mirrors and completion evidence for message-tool source replies. */

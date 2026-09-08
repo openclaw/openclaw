@@ -203,6 +203,20 @@ describe("resolveMcpLoopbackScopedTools", () => {
     expect(scoped.tools).toEqual([]);
   });
 
+  it("excludes self-scheduling continuation controls but keeps continue_delegate", async () => {
+    resolveGatewayScopedTools.mockImplementation((params: { excludeToolNames?: Set<string> }) => {
+      const names = ["continue_work", "request_compaction", "continue_delegate", "message"];
+      return scopedToolFixture(names.filter((name) => !params.excludeToolNames?.has(name)));
+    });
+
+    const scoped = await resolveMcpLoopbackScopedTools(scopeParams());
+
+    expect(scoped.tools.map((tool) => (tool as { name: string }).name)).toEqual([
+      "continue_delegate",
+      "message",
+    ]);
+  });
+
   it("forwards the exact Skill Workshop revision into loopback tool construction", async () => {
     const proposalRevision = {
       agentId: "proposal-owner",

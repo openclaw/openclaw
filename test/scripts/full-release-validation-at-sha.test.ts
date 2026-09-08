@@ -54,6 +54,10 @@ function runGit(cwd: string, args: string[]): string {
   }).trim();
 }
 
+function runBareGit(cwd: string, args: string[]): string {
+  return runGit(cwd, ["--git-dir=.", ...args]);
+}
+
 function createDispatchFixture(
   options: {
     createRefFailure?: "target" | "workflow";
@@ -1164,7 +1168,7 @@ describe("full-release-validation-at-sha", () => {
             `refs/heads/${releaseRef}`,
             "refs/tags/v2026.8.1",
           ]);
-          expect(runGit(fixture.origin, ["tag", "--list", "v2026.8.1-2"])).toBe("");
+          expect(runBareGit(fixture.origin, ["tag", "--list", "v2026.8.1-2"])).toBe("");
         }
         const result = fixture.run([
           "--workflow-sha",
@@ -1284,7 +1288,9 @@ describe("full-release-validation-at-sha", () => {
           ["api", "--method", "DELETE", `repos/openclaw/openclaw/git/refs/heads/${workflowBranch}`],
           ["api", "--method", "DELETE", `repos/openclaw/openclaw/git/refs/heads/${targetBranch}`],
         ]);
-        expect(runGit(fixture.origin, ["for-each-ref", "--format=%(refname)", "refs/heads"])).toBe(
+        expect(
+          runBareGit(fixture.origin, ["for-each-ref", "--format=%(refname)", "refs/heads"]),
+        ).toBe(
           [
             "refs/heads/main",
             `refs/heads/${fixture.releaseRef}`,
@@ -1445,9 +1451,9 @@ describe("full-release-validation-at-sha", () => {
       expect(artifactDownloads[1]?.index).toBeGreaterThan(parentPolls[1]?.index ?? Infinity);
       expect(artifactDownloads[1]?.index).toBeLessThan(parentPolls[2]?.index ?? -Infinity);
       expect(result.stdout).toContain("Parent run status: queued/pending");
-      expect(runGit(fixture.origin, ["for-each-ref", "--format=%(refname)", "refs/heads"])).toBe(
-        "refs/heads/main\nrefs/heads/release/2026.8.1",
-      );
+      expect(
+        runBareGit(fixture.origin, ["for-each-ref", "--format=%(refname)", "refs/heads"]),
+      ).toBe("refs/heads/main\nrefs/heads/release/2026.8.1");
     } finally {
       fixture.cleanup();
     }
@@ -1497,7 +1503,7 @@ describe("full-release-validation-at-sha", () => {
       expect(calls.filter((args) => args[0] === "run" && args[1] === "download")).toHaveLength(1);
       expect(calls.some((args) => args.includes("cancel") || args.includes("watch"))).toBe(false);
       expect(
-        runGit(fixture.origin, [
+        runBareGit(fixture.origin, [
           "for-each-ref",
           "--format=%(refname)",
           "refs/heads/release-ci",
@@ -1666,7 +1672,7 @@ describe("full-release-validation-at-sha", () => {
       expect(result.stderr).toContain("binding is invalid");
       expect(fixture.readWaits()).toEqual([]);
       expect(
-        runGit(fixture.origin, [
+        runBareGit(fixture.origin, [
           "for-each-ref",
           "--format=%(refname)",
           "refs/heads/release-ci",
@@ -1805,7 +1811,7 @@ describe("full-release-validation-at-sha", () => {
           .readCalls(fixture.ghCallsPath)
           .some((args) => args[0] === "api" && ghApiMethod(args) === "DELETE"),
       ).toBe(false);
-      const remoteRefs = runGit(fixture.origin, [
+      const remoteRefs = runBareGit(fixture.origin, [
         "for-each-ref",
         "--format=%(refname)",
         "refs/heads/release-ci",

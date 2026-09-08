@@ -24,7 +24,10 @@ import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
-import type { TaskFlowRegistryStoreSnapshot } from "./task-flow-registry.store.types.js";
+import type {
+  TaskFlowRegistryAtomicWrite,
+  TaskFlowRegistryStoreSnapshot,
+} from "./task-flow-registry.store.types.js";
 import {
   parseOptionalTaskFlowSyncMode,
   parseTaskFlowStatus,
@@ -101,6 +104,7 @@ function rowToFlowRecord(row: FlowRegistryRow): TaskFlowRecord {
     flowId: row.flow_id,
     syncMode: rowToSyncMode(row),
     ownerKey: row.owner_key,
+    ...(row.chain_id ? { chainId: row.chain_id } : {}),
     ...(requesterOrigin ? { requesterOrigin } : {}),
     ...(row.controller_id ? { controllerId: row.controller_id } : {}),
     revision: normalizeSqliteNumber(row.revision) ?? 0,
@@ -127,6 +131,7 @@ export function bindTaskFlowRecord(record: TaskFlowRecord): BoundTaskFlowRecord 
     sync_mode: record.syncMode,
     shape: null,
     owner_key: record.ownerKey,
+    chain_id: record.chainId ?? null,
     requester_origin_json: serializeJson(record.requesterOrigin),
     controller_id: record.controllerId ?? null,
     revision: record.revision,
@@ -157,6 +162,7 @@ function readTaskFlowRegistrySnapshot(db: DatabaseSync): TaskFlowRegistryStoreSn
       "sync_mode",
       "shape",
       "owner_key",
+      "chain_id",
       "requester_origin_json",
       "controller_id",
       "revision",
@@ -261,6 +267,66 @@ export function upsertTaskFlowRegistryRecordToSqlite(flow: TaskFlowRecord) {
   withWriteTransaction(({ db }) => {
     upsertTaskFlowRowInDatabase(db, bindTaskFlowRecord(flow));
   });
+}
+
+export function upsertTaskFlowRegistryRecordsToSqlite(write: TaskFlowRegistryAtomicWrite): boolean {
+  const { changes } = write;
+  if (changes.length === 0) {
+    return true;
+  }
+  let applied = false;
+  withWriteTransaction(({ db }) => {
+    if (write.ownerCondition) {
+      let query = getFlowRegistryKysely(db)
+        .selectFrom("flow_runs")
+        .select(["flow_id", "revision", "status"])
+        .where("owner_key", "=", write.ownerCondition.ownerKey)
+        .where("controller_id", "=", write.ownerCondition.controllerId)
+        .where("status", "in", write.ownerCondition.statuses);
+      if (write.ownerCondition.excludeCancelRequested) {
+        query = query.where("cancel_requested_at", "is", null);
+      }
+      const currentFlows = executeSqliteQuerySync(db, query)
+        .rows.map((row) => ({
+          flowId: row.flow_id,
+          revision: normalizeSqliteNumber(row.revision) ?? 0,
+          status: parseTaskFlowStatus(row.status),
+        }))
+        .toSorted((left, right) => left.flowId.localeCompare(right.flowId));
+      const expectedFlows = [...write.ownerCondition.expectedFlows].toSorted((left, right) =>
+        left.flowId.localeCompare(right.flowId),
+      );
+      if (
+        currentFlows.length !== expectedFlows.length ||
+        currentFlows.some((flow, index) => {
+          const expected = expectedFlows[index];
+          return (
+            !expected ||
+            flow.flowId !== expected.flowId ||
+            flow.revision !== expected.revision ||
+            flow.status !== expected.status
+          );
+        })
+      ) {
+        return;
+      }
+    }
+    for (const change of changes) {
+      const current = readTaskFlowRecord(db, change.flow.flowId);
+      if (
+        change.expectedRevision === undefined
+          ? current !== undefined
+          : current?.revision !== change.expectedRevision
+      ) {
+        return;
+      }
+    }
+    for (const change of changes) {
+      upsertTaskFlowRowInDatabase(db, bindTaskFlowRecord(change.flow));
+    }
+    applied = true;
+  });
+  return applied;
 }
 
 /** Binds only the exact flow selected before admission; lifecycle settlement stays owner-native. */

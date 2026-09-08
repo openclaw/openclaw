@@ -165,6 +165,7 @@
           "description": "Attachment mount hint; visible=true accepts only an omitted or blank mountPath.",
           "properties": {
             "mountPath": {
+              "maxLength": 1024,
               "type": "string"
             }
           },
@@ -182,6 +183,7 @@
                 "type": "string"
               },
               "mimeType": {
+                "maxLength": 256,
                 "type": "string"
               },
               "name": {

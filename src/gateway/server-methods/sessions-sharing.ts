@@ -26,7 +26,9 @@ import {
   loadExactSessionEntryReadOnly,
   patchSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import { advanceSessionRecipientAuthorityInTransaction } from "../../config/sessions/session-accessor.sqlite-recipient-authority.js";
 import { resolveSessionPublicShare } from "../../config/sessions/session-public-share.js";
+import { doesSessionVisibilityRestrictRecipientAuthority } from "../../config/sessions/session-recipient-authority-types.js";
 import { registerSecretValueForRedaction } from "../../logging/secret-redaction-registry.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
@@ -558,13 +560,26 @@ export const sessionSharingHandlers: GatewayRequestHandlers = {
       // session-id check at the storage boundary so an out-of-band row
       // replacement still cannot inherit this visibility change.
       let sessionChanged = false;
-      await patchSessionEntryCore(scope, (entry) => {
-        if (entry.sessionId !== current.entry.sessionId) {
-          sessionChanged = true;
-          return null;
-        }
-        return { visibility };
-      });
+      const restrictsAuthority = doesSessionVisibilityRestrictRecipientAuthority(
+        previous,
+        visibility,
+      );
+      await patchSessionEntryCore(
+        scope,
+        (entry) => {
+          if (entry.sessionId !== current.entry.sessionId) {
+            sessionChanged = true;
+            return null;
+          }
+          return { visibility };
+        },
+        {
+          afterPersistInTransaction: restrictsAuthority
+            ? (database) =>
+                advanceSessionRecipientAuthorityInTransaction(database, current.canonicalKey)
+            : undefined,
+        },
+      );
       if (sessionChanged) {
         throw new Error("session changed before sharing mutation");
       }

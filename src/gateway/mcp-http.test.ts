@@ -1310,7 +1310,17 @@ describe("mcp loopback server", () => {
     expect(call.surface).toBe("loopback");
     expect(call.includeNodeExecTool).toBe(false);
     expect(new Set(call.excludeToolNames)).toEqual(
-      new Set(["read", "write", "edit", "ls", "apply_patch", "exec", "process"]),
+      new Set([
+        "read",
+        "write",
+        "edit",
+        "ls",
+        "apply_patch",
+        "exec",
+        "process",
+        "continue_work",
+        "request_compaction",
+      ]),
     );
   });
 

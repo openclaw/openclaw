@@ -39,6 +39,7 @@ import {
   type HeartbeatToolResponse,
   type MessagingToolSend,
   type MessagingToolSourceReplyPayload,
+  type ToolResultFailureKind,
   wrapToolWithBeforeToolCallHook,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
@@ -86,7 +87,6 @@ import type {
   CodexDynamicToolCallOutputContentItem,
   CodexDynamicToolCallParams,
   CodexDynamicToolCallResponse,
-  CodexDynamicToolDiagnosticTerminalReason,
   CodexDynamicToolDiagnosticTerminalType,
   CodexDynamicToolSpec,
 } from "./protocol.js";
@@ -713,8 +713,8 @@ export function createCodexDynamicToolBridge(params: {
                 signal,
               })
             : toolArgs;
-        const telemetryArgs = isRecord(preparedArgs) ? preparedArgs : args;
-        executedArgs = structuredClone(telemetryArgs);
+        const preparedToolArgs = isRecord(preparedArgs) ? preparedArgs : args;
+        executedArgs = structuredClone(preparedToolArgs);
         const messagingContext = {
           config: params.hookContext?.config,
           currentChannelId: params.hookContext?.currentChannelId,
@@ -754,6 +754,14 @@ export function createCodexDynamicToolBridge(params: {
         const telemetryRawResult = sanitizeToolResult(rawResult);
         const rawIsError = isToolResultError(rawResult);
         const rawResultFailureKind = resolveToolResultFailureKind(rawResult);
+        // The native agentToolResultMiddleware runner observes OpenClaw's
+        // executed args (preparedToolArgs merged with before_tool_call
+        // adjustments), matching the after_tool_call hook view. The legacy
+        // codex app-server extension runner keeps its historical contract of
+        // observing the tool's prepared call args, before before_tool_call
+        // rewrites them. Feeding the merged view to the legacy runner makes a
+        // contract extension's args diverge from the invoked call, so its
+        // assertion throws and its transformed result is silently discarded.
         const middlewareResult = await middlewareRunner.applyToolResultMiddleware({
           threadId: call.threadId,
           turnId: call.turnId,
@@ -768,7 +776,7 @@ export function createCodexDynamicToolBridge(params: {
           turnId: call.turnId,
           toolCallId: call.callId,
           toolName,
-          args: structuredClone(executedArgs),
+          args: structuredClone(preparedToolArgs),
           result: middlewareResult,
         });
         const resultIsError = rawIsError || isToolResultError(result);
@@ -1093,7 +1101,7 @@ function notifyAgentToolResult(
 
 function failedToolResult(
   message: string,
-  status: "blocked" | CodexDynamicToolDiagnosticTerminalReason = "failed",
+  status: ToolResultFailureKind = "failed",
 ): AgentToolResult<unknown> {
   return {
     content: [{ type: "text", text: message }],
@@ -1343,7 +1351,7 @@ function withDiagnosticTerminalType<T extends CodexDynamicToolCallResponse>(
 }
 function withDiagnosticFailureDisposition<T extends CodexDynamicToolCallResponse>(
   response: T,
-  disposition: "blocked" | CodexDynamicToolDiagnosticTerminalReason | undefined,
+  disposition: ToolResultFailureKind | undefined,
 ): T {
   if (!disposition) {
     return response;

@@ -338,6 +338,7 @@ describe("followup queue collect routing", () => {
     expect(calls[0]?.originatingChannel).toBe("slack");
     expect(calls[0]?.originatingTo).toBe("channel:A");
     expect(calls[0]?.originatingChatType).toBe("channel");
+    expect(calls[0]?.currentInboundEventTimestampMs).toBeUndefined();
     expect(calls[0]?.replyOperationRunStates).toEqual(receipts);
     expect(calls[0]?.replyOperationRunStates?.[0]).toBe(receipts[0]);
     expect(calls[0]?.replyOperationRunStates?.[1]).toBe(receipts[1]);
@@ -1737,6 +1738,7 @@ describe("followup queue collect routing", () => {
       throw new Error("expected queued followup");
     }
     first.currentInboundEventKind = "room_event";
+    first.currentInboundEventTimestampMs = 1_000;
     first.currentInboundAudio = true;
     first.currentInboundContext = { text: "room event body" };
     first.abortSignal = controller.signal;
@@ -1757,6 +1759,7 @@ describe("followup queue collect routing", () => {
     expect(calls).toHaveLength(2);
     expect(calls[0]?.prompt).toBe("[OpenClaw room event]");
     expect(calls[0]?.currentInboundEventKind).toBe("room_event");
+    expect(calls[0]?.currentInboundEventTimestampMs).toBe(1_000);
     expect(calls[0]?.currentInboundAudio).toBe(true);
     expect(calls[0]?.currentInboundContext?.text).toBe("room event body");
     expect(calls[0]?.abortSignal).toBe(controller.signal);

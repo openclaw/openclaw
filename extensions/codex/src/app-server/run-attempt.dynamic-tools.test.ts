@@ -1,11 +1,14 @@
 import path from "node:path";
-import { onAgentEvent, type AgentEventPayload } from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
+  onAgentEvent,
+  type AgentEventPayload,
+  type EmbeddedRunAttemptParams,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createProcessPollDeliveryContract } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import {
   emitTrustedDiagnosticEvent,
   hasPendingInternalDiagnosticEvent,
   onInternalDiagnosticEvent,
-  waitForDiagnosticEventsDrained,
   type DiagnosticEventPayload,
 } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { initializeGlobalHookRunner } from "openclaw/plugin-sdk/hook-runtime";
@@ -13,16 +16,18 @@ import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtim
 import { describe, expect, it, vi } from "vitest";
 import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
 import { dynamicToolBuildState } from "./dynamic-tool-build-state.js";
+import { emitDynamicToolTerminalDiagnostic } from "./dynamic-tool-diagnostics.js";
 import {
+  activeDiagnosticToolKeys,
   emitDynamicToolStartedDiagnostic,
-  emitDynamicToolTerminalDiagnostic,
-} from "./dynamic-tool-diagnostics.js";
+  flushDiagnosticEvents,
+} from "./dynamic-tool-diagnostics.test-support.js";
 import { hasPendingDynamicToolTerminalDiagnostic } from "./dynamic-tool-execution.js";
 import type { CodexDynamicToolCallParams } from "./protocol.js";
 import {
   bindProductionHarnessHostCapabilitiesForTest,
-  createParams,
   createCodexRuntimePlanFixture,
+  createParams,
   createRuntimeDynamicTool,
   createStartedThreadHarness,
   runCodexAppServerAttempt,
@@ -32,31 +37,12 @@ import {
 } from "./run-attempt-test-harness.js";
 const testing = {
   hasPendingDynamicToolTerminalDiagnostic,
+  setOpenClawCodingToolsFactoryForTests(
+    factory: NonNullable<typeof dynamicToolBuildState.openClawCodingToolsFactory>,
+  ): void {
+    dynamicToolBuildState.openClawCodingToolsFactory = factory;
+  },
 };
-
-function flushDiagnosticEvents() {
-  return waitForDiagnosticEventsDrained();
-}
-
-function activeDiagnosticToolKeys(events: DiagnosticEventPayload[]): Set<string> {
-  const active = new Set<string>();
-  for (const event of events) {
-    if (event.type === "tool.execution.started") {
-      active.add(
-        `${event.runId ?? event.sessionId ?? event.sessionKey ?? "unknown"}:${event.toolCallId ?? event.toolName}`,
-      );
-    } else if (
-      event.type === "tool.execution.completed" ||
-      event.type === "tool.execution.error" ||
-      event.type === "tool.execution.blocked"
-    ) {
-      active.delete(
-        `${event.runId ?? event.sessionId ?? event.sessionKey ?? "unknown"}:${event.toolCallId ?? event.toolName}`,
-      );
-    }
-  }
-  return active;
-}
 
 setupRunAttemptTestHooks();
 
@@ -280,6 +266,136 @@ describe("runCodexAppServerAttempt dynamic tools", () => {
       "tool.execution.completed",
     ]);
   });
+
+  it("reports a scheduled continuation as completed through the app-server request boundary", async () => {
+    const continuationTool = createRuntimeDynamicTool("continue_delegate");
+    // Upstream validates dynamic tool arguments at the app-server request boundary, so the
+    // continuation fixture must declare the schema its scheduled-delegate call sends.
+    continuationTool.parameters = {
+      type: "object",
+      properties: {
+        task: { type: "string" },
+        mode: { type: "string" },
+      },
+      additionalProperties: false,
+    };
+    continuationTool.execute = vi.fn(async () => ({
+      content: [{ type: "text" as const, text: "Delegate scheduled." }],
+      details: { status: "scheduled", mode: "silent-wake" },
+    }));
+    testing.setOpenClawCodingToolsFactoryForTests(() => [continuationTool]);
+
+    const diagnosticEvents: DiagnosticEventPayload[] = [];
+    const unsubscribeDiagnostics = onInternalDiagnosticEvent((event) =>
+      diagnosticEvents.push(event),
+    );
+    const harness = createStartedThreadHarness();
+    const onAgentToolResult = vi.fn();
+    const params = createParams(
+      path.join(tempDir, "session.jsonl"),
+      path.join(tempDir, "workspace"),
+    );
+    params.disableTools = false;
+    params.model = {
+      ...params.model,
+      compat: {
+        ...(params.model.compat && typeof params.model.compat === "object"
+          ? params.model.compat
+          : {}),
+        supportsTools: true,
+      },
+    } as EmbeddedRunAttemptParams["model"] & { compat: { supportsTools: boolean } };
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    params.onAgentToolResult = onAgentToolResult;
+
+    try {
+      const run = runCodexAppServerAttempt(params, {
+        allowProviderRuntimePluginLoad: false,
+      });
+      await harness.waitForMethod("turn/start", 10_000);
+
+      const toolRequest = harness.handleServerRequest({
+        id: "request-continue-delegate",
+        method: "item/tool/call",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          callId: "call-continue-delegate",
+          namespace: "openclaw",
+          tool: "continue_delegate",
+          arguments: {
+            task: "Return DONE.",
+            mode: "silent-wake",
+          },
+        },
+      });
+      await vi.waitFor(() => expect(continuationTool.execute).toHaveBeenCalledTimes(1), {
+        interval: 1,
+        timeout: 5_000,
+      });
+      const toolResult = (await toolRequest) as {
+        contentItems?: Array<{ text?: string; type?: string }>;
+        success?: boolean;
+      };
+
+      expect(toolResult).toEqual({
+        contentItems: [{ type: "inputText", text: "Delegate scheduled." }],
+        success: true,
+      });
+
+      await harness.notify({
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: {
+            id: "assistant-1",
+            type: "agentMessage",
+            text: "Delegate scheduled.",
+            status: "completed",
+          },
+        },
+      });
+      await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+      await run;
+
+      expect(onAgentToolResult).toHaveBeenCalledWith(
+        expect.objectContaining({
+          toolName: "continue_delegate",
+          isError: false,
+        }),
+      );
+      await vi.waitFor(
+        () =>
+          expect(
+            diagnosticEvents
+              .filter(
+                (
+                  event,
+                ): event is Extract<
+                  DiagnosticEventPayload,
+                  {
+                    type:
+                      | "tool.execution.started"
+                      | "tool.execution.completed"
+                      | "tool.execution.error"
+                      | "tool.execution.blocked";
+                  }
+                > =>
+                  (event.type === "tool.execution.started" ||
+                    event.type === "tool.execution.completed" ||
+                    event.type === "tool.execution.error" ||
+                    event.type === "tool.execution.blocked") &&
+                  event.toolCallId === "call-continue-delegate",
+              )
+              .map((event) => event.type),
+          ).toEqual(["tool.execution.started", "tool.execution.completed"]),
+        { interval: 1, timeout: 5_000 },
+      );
+    } finally {
+      unsubscribeDiagnostics();
+    }
+  }, 240_000);
 
   it.each(["cancelled", "timed_out"] as const)(
     "preserves the %s terminal reason in trusted tool diagnostics",
@@ -813,6 +929,7 @@ describe("runCodexAppServerAttempt dynamic tools", () => {
         durationMs: 1,
         response: {
           success: false,
+          diagnosticTerminalReason: "timed_out",
           contentItems: [
             {
               type: "inputText",
@@ -845,17 +962,20 @@ describe("runCodexAppServerAttempt dynamic tools", () => {
           type: event.type,
           toolName: event.toolName,
           toolCallId: event.toolCallId,
+          terminalReason: event.type === "tool.execution.error" ? event.terminalReason : undefined,
         })),
       ).toEqual([
         {
           type: "tool.execution.started",
           toolName: "echo",
           toolCallId: "call-echo-timeout",
+          terminalReason: undefined,
         },
         {
           type: "tool.execution.error",
           toolName: "echo",
           toolCallId: "call-echo-timeout",
+          terminalReason: "timed_out",
         },
       ]);
     } finally {

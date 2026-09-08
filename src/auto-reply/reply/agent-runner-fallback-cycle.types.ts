@@ -5,6 +5,7 @@ import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/
 import type { FastModeAutoProgressState } from "../../agents/fast-mode.js";
 import type { ContextEngineLogicalTurnLease } from "../../agents/harness/context-engine-logical-turn.js";
 import type { CompactionRequestBudget } from "../../agents/sessions/compaction/request-budget.js";
+import type { ContinueWorkRequest } from "../../agents/tools/continue-work-tool.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ThinkLevel } from "../thinking.js";
@@ -86,6 +87,9 @@ type CompletedFallbackCycle = {
   fallbackExhausted: boolean;
   fallbackAttempts: RuntimeFallbackAttempt[];
   terminalRunFailed: boolean;
+  continueWorkRequests: ContinueWorkRequest[];
+  compactionTraceparent?: string;
+  rawContinuationText?: string;
 };
 
 export type AgentFallbackCycleResult =

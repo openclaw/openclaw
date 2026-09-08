@@ -3,7 +3,10 @@
  *
  * Routes completion payloads through gateway/channel/session paths and records delivery evidence.
  */
+import type { ContinuationTrigger } from "../../../auto-reply/get-reply-options.types.js";
 import { completionRequiresMessageToolDelivery } from "../../../auto-reply/reply/completion-delivery-policy.js";
+import { isContinuationHeartbeatEquivalent } from "../../../auto-reply/reply/run-provenance.js";
+import { normalizeDiagnosticTraceparent } from "../../../infra/diagnostic-trace-context.js";
 import { scheduleSessionDelivery } from "../../../infra/session-delivery-queue-runtime.js";
 import {
   enqueueClaimedSessionDelivery,
@@ -159,6 +162,8 @@ export async function deliverSubagentAnnouncement(params: {
   directIdempotencyKey: string;
   onDeliveryResult?: (delivery: SubagentAnnounceDeliveryResult) => void;
   signal?: AbortSignal;
+  continuationTriggerOverride?: ContinuationTrigger;
+  traceparent?: string;
   resolveGatewayContext?: import("../../../gateway/server-methods/types.js").GatewayContextResolver;
 }): Promise<SubagentAnnounceDeliveryResult> {
   const sourceOwnerChanged = () => params.isSourceSessionEffectsAllowed?.() === false;
@@ -173,6 +178,12 @@ export async function deliverSubagentAnnouncement(params: {
   let durableQueueClaimed = false;
   if (durableGeneratedMediaHandoff) {
     try {
+      const continuationTrigger = isContinuationHeartbeatEquivalent(
+        params.continuationTriggerOverride,
+      )
+        ? params.continuationTriggerOverride
+        : undefined;
+      const traceparent = normalizeDiagnosticTraceparent(params.traceparent);
       const cfg = getSubagentAnnounceRuntimeConfig();
       const canonicalSessionKey = resolveRequesterStoreKey(
         cfg,
@@ -226,6 +237,8 @@ export async function deliverSubagentAnnouncement(params: {
         },
         sourceReplyDeliveryMode,
         ...expectedMedia,
+        ...(continuationTrigger ? { continuationTrigger } : {}),
+        ...(traceparent ? { traceparent, traceparentProvenance: "internal" as const } : {}),
         idempotencyKey: `${params.directIdempotencyKey}:agent-loop`,
       } as const;
       const queued = params.sourceRunId
@@ -320,6 +333,8 @@ export async function deliverSubagentAnnouncement(params: {
         isCompletionOwnedByRequesterYield: params.isCompletionOwnedByRequesterYield,
         requesterIsSubagent: params.requesterIsSubagent,
         expectsCompletionMessage: params.expectsCompletionMessage,
+        continuationTriggerOverride: params.continuationTriggerOverride,
+        ...(params.traceparent ? { traceparent: params.traceparent } : {}),
         createUserTurnTranscriptRecorder: createCompletionUserTurnTranscriptRecorder,
         requireVisibleReply: params.requireVisibleReply,
         onDeliveryResult: params.onDeliveryResult,

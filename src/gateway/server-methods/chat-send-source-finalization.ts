@@ -7,6 +7,7 @@ import {
   appendLocalMediaParentRoots,
   getAgentScopedMediaLocalRoots,
 } from "../../media/local-roots.js";
+import type { ChatTerminalState } from "../chat-abort.js";
 import { attachManagedOutgoingMediaToMessage } from "../managed-image-attachments.js";
 import { loadSessionEntry } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
@@ -58,6 +59,7 @@ type FinalizeChatSendAgentRepliesBase = {
   accountId: string | undefined;
   context: GatewayRequestContext;
   emitFirstAssistantServerTiming: () => void;
+  markTerminalBroadcasted?: (state: ChatTerminalState) => void;
   session: Pick<
     PreparedChatSendSession,
     "agentId" | "backingSessionId" | "cfg" | "clientRunId" | "sessionKey" | "sessionLoadOptions"
@@ -86,7 +88,8 @@ async function finalizeChatSendAgentReplyPayloads(
     suppressFinal?: boolean;
   },
 ): Promise<ChatSendAgentReplyFinalization> {
-  const { accountId, context, emitFirstAssistantServerTiming, session } = params;
+  const { accountId, context, emitFirstAssistantServerTiming, markTerminalBroadcasted, session } =
+    params;
   const { agentId, backingSessionId, cfg, clientRunId, sessionKey, sessionLoadOptions } = session;
   const agentRunReplyPayloads = [...params.payloads];
   if (agentRunReplyPayloads.length === 0) {
@@ -311,6 +314,7 @@ async function finalizeChatSendAgentReplyPayloads(
     if (hasVisibleAssistantFinalMessage(message)) {
       emitFirstAssistantServerTiming();
     }
+    markTerminalBroadcasted?.("final");
     broadcastChatFinal({
       context,
       runId: clientRunId,
@@ -327,16 +331,23 @@ export async function finalizeChatSendSourceReplies(
   params: FinalizeChatSendAgentRepliesBase & {
     deliveredReplies: readonly DeliveredReply[];
     hasReturnedAgentErrorPayloads: boolean;
+    markTerminalBroadcasted: (state: ChatTerminalState) => void;
     suppressFinal?: boolean;
+    terminalAlreadyBroadcasted?: boolean;
   },
 ): Promise<boolean> {
+  // A terminal already broadcast by the lifecycle observer suppresses the settled
+  // final exactly the way a failed turn does.
+  const suppressFinal = params.suppressFinal === true || params.terminalAlreadyBroadcasted === true;
   const result = await finalizeChatSendAgentReplyPayloads({
     accountId: params.accountId,
     context: params.context,
     emitFirstAssistantServerTiming: params.emitFirstAssistantServerTiming,
+    markTerminalBroadcasted: params.markTerminalBroadcasted,
     payloads: selectChatSendAgentReplyPayloads(params),
     session: params.session,
-    suppressFinal: params.suppressFinal,
+    suppressFinal,
   });
-  return result.kind === "delivered" && result.hasSourceReplyTranscriptMirror;
+  // A persisted mirror owns terminal output only when its final was actually broadcast.
+  return !suppressFinal && result.kind === "delivered" && result.hasSourceReplyTranscriptMirror;
 }

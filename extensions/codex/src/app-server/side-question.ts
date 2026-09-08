@@ -70,8 +70,8 @@ import {
 } from "./dynamic-tool-build.js";
 import {
   emitDynamicToolErrorDiagnostic,
-  emitDynamicToolStartedDiagnostic,
   emitDynamicToolTerminalDiagnostic,
+  startDynamicToolDiagnosticExecution,
 } from "./dynamic-tool-diagnostics.js";
 import {
   handleDynamicToolCallWithTimeout,
@@ -634,19 +634,22 @@ export async function runCodexAppServerSideQuestion(
         sessionId: params.sessionId,
         sessionKey: params.sessionKey,
       };
-      emitDynamicToolStartedDiagnostic(diagnosticContext);
-      const toolCall = handleDynamicToolCallWithTimeout({
-        call,
-        toolBridge,
-        signal,
-        timeoutMs,
-        observeToolTerminal: sideRunParams.observeToolTerminal,
-      });
+      const diagnosticExecution = startDynamicToolDiagnosticExecution(diagnosticContext, () =>
+        handleDynamicToolCallWithTimeout({
+          call,
+          toolBridge,
+          signal,
+          timeoutMs,
+          observeToolTerminal: sideRunParams.observeToolTerminal,
+        }),
+      );
+      const toolCall = diagnosticExecution.execution;
       activeDynamicToolCalls.add(toolCall);
       try {
         const response = await toolCall;
         emitDynamicToolTerminalDiagnostic({
           ...diagnosticContext,
+          trace: diagnosticExecution.trace,
           response,
           durationMs: Math.max(0, Date.now() - toolStartedAt),
         });
@@ -657,6 +660,7 @@ export async function runCodexAppServerSideQuestion(
       } catch (error) {
         emitDynamicToolErrorDiagnostic({
           ...diagnosticContext,
+          trace: diagnosticExecution.trace,
           durationMs: Math.max(0, Date.now() - toolStartedAt),
           terminalReason: signal.aborted ? resolveCodexToolAbortTerminalReason(signal) : "failed",
         });
@@ -1269,6 +1273,7 @@ async function createCodexSideToolBridge(input: {
       config: input.params.cfg,
       preparedModelRuntime: input.params.preparedModelRuntime,
       abortSignal: input.signal,
+      disableContinuationTools: true,
       modelProvider: runtimeModel.provider,
       modelId: input.params.model,
       modelCompat:

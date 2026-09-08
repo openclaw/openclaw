@@ -32,6 +32,10 @@ export function buildSubagentSpawnEnvelope(params: {
   nativeCommandGuidanceLines?: string[];
   childDepth?: number;
   maxSpawnDepth?: number;
+  /** Tool names available to the child — used to teach tool-primary vs bracket-only continuation. */
+  toolNames?: string[];
+  /** Whether continuation chaining is enabled. Defaults to config value. */
+  continuationEnabled?: boolean;
 }) {
   const childDepth = params.childDepth ?? 1;
   const maxSpawnDepth = params.maxSpawnDepth ?? DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH;
@@ -94,6 +98,58 @@ export function buildSubagentSpawnEnvelope(params: {
     );
   } else if (childDepth >= 2) {
     lines.push("## Sub-Agent Spawning", "Leaf worker: cannot spawn. Assigned task only.", "");
+  }
+
+  if (canSpawn && params.continuationEnabled) {
+    const toolPrimaryContinuation = params.toolNames?.includes("continue_delegate") === true;
+    lines.push("## Continuation Chaining");
+    if (toolPrimaryContinuation) {
+      lines.push(
+        "Use the `continue_delegate` tool to keep a delegate branch moving without making the parent relay every hop.",
+        "The tool supports structured parameters (`task`, `delaySeconds`, `mode`, `attachments`, `attachAs`) and multi-delegate fan-out.",
+        "The typed `continue_delegate` tool can carry inline attachments into its new child workspace.",
+        "",
+        "Fallback bracket syntax (if the tool call fails or is unavailable):",
+        "  [[CONTINUE_DELEGATE: task description]]",
+        "  [[CONTINUE_DELEGATE: task +30s]]          — delayed spawn",
+        "  [[CONTINUE_DELEGATE: task | silent]]       — silent return (no channel output)",
+        "  [[CONTINUE_DELEGATE: task | silent-wake]]  — silent return + triggers parent turn",
+        "Bracket `[[CONTINUE_DELEGATE: ...]]` syntax cannot carry attachment blobs; reference an existing workspace file instead.",
+        "",
+        "Prefer the tool. Use brackets only as fallback.",
+        "The gateway handles chain tracking and depth limits.",
+        "",
+      );
+    } else {
+      lines.push(
+        "To dispatch a follow-up sub-agent from your output, end your ENTIRE response with:",
+        "  [[CONTINUE_DELEGATE: task description]]",
+        "",
+        "Optional modifiers:",
+        "  [[CONTINUE_DELEGATE: task +30s]]          — delayed spawn",
+        "  [[CONTINUE_DELEGATE: task | silent]]       — silent return (no channel output)",
+        "  [[CONTINUE_DELEGATE: task | silent-wake]]  — silent return + triggers parent turn",
+        "Bracket `[[CONTINUE_DELEGATE: ...]]` syntax cannot carry attachment blobs; reference an existing workspace file instead.",
+        "",
+        "Use `| silent` when the result should only enrich the parent's future context.",
+        "Use `| silent-wake` when the result should enrich the parent and wake it to act.",
+        "The gateway handles chain tracking and depth limits.",
+        "",
+      );
+    }
+  }
+
+  // Teach continue_work regardless of canSpawn — any subagent with continuation
+  // enabled can elect its own next turn within the same session.
+  if (params.continuationEnabled && params.toolNames?.includes("continue_work")) {
+    lines.push(
+      "## Self-Continuation",
+      "Use `continue_work` to take another turn in this same session.",
+      "This keeps your working context intact across turns (no state packing needed).",
+      "Bounded by the same chain-length and cost-cap guards as continue_delegate.",
+      "Use it when you need multiple turns to complete a task.",
+      "",
+    );
   }
 
   lines.push(

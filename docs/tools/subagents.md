@@ -511,7 +511,7 @@ create leaf workers sooner.
     defaults: {
       subagents: {
         maxSpawnDepth: 2, // stop nesting after depth 2 (default: 5, range 1-5)
-        maxChildrenPerAgent: 5, // max active children per agent session (default: 5, range 1-20)
+        maxChildrenPerAgent: 5, // max active children per agent session (default: 5, range 1-10000)
         maxConcurrent: 8, // global concurrency lane cap (default: 8)
         runTimeoutSeconds: 900, // default timeout for sessions_spawn (0 = no timeout)
         announceTimeoutMs: 120000, // gateway announce timeout, excluding accepted queue waits
@@ -570,6 +570,12 @@ from a single orchestrator.
 ### Reset a conversation
 
 A full in-place conversation reset cancels unfinished native subagents associated with that session, including yielded children and children whose completion requester differs from their controller. Chat `/reset` and `sessions.reset` use the same cleanup owner. If child cancellation is incomplete, reset reports a failure before clearing the conversation; inspect the remaining tasks and retry. Child transcripts and unrelated sessions are preserved.
+
+**Interaction with continuation knobs:** when `agents.defaults.continuation.enabled === true`, the per-agent children cap acts as a complementary guard alongside the continuation runaway-safety guards (`maxDelegatesPerTurn`, `maxChainLength`, `costCapTokens`). Token budget (`costCapTokens`) and chain length (`maxChainLength`) remain the primary runaway-safety guards; `maxChildrenPerAgent` provides per-session pressure relief for wide-fanout patterns like large-scale distribution, code-agent fan-out, or batch deployment chains.
+
+**Override-headroom:** the zod schema permits values up to `10000` via config-override. The default stays at `5` for interactive single-agent safety; operators running wide-fanout patterns should raise via `agents.defaults.subagents.maxChildrenPerAgent` in `~/.openclaw/openclaw.json`.
+
+**Hot-reload:** the cap is read at spawn time. Config edits to `openclaw.json` take effect at the next subagent spawn; no gateway restart is needed.
 
 ### Cascade stop
 
@@ -819,8 +825,8 @@ timeout. Those events do not automatically cancel them.
 - Sub-agents still share the same gateway process resources; treat `maxConcurrent` as a safety valve.
 - `sessions_spawn` returns `{ status: "accepted", runId, childSessionKey }` when startup is accepted, without waiting for the child task to finish. Cloud-worker spawns can wait for provisioning before returning this receipt.
 - Sub-agent context only injects `AGENTS.md` (no `SOUL.md`, `IDENTITY.md`, `USER.md`, `MEMORY.md`, or `BOOTSTRAP.md`). Its `## Tools` section carries environment-specific notes. Codex-native subagents follow the same boundary through native `AGENTS.md` discovery, while parent-only persona, identity, and user files are injected as turn-scoped collaboration instructions so children do not clone them.
-- Recursive spawning is enabled through depth `5` by default. Set `maxSpawnDepth` from `1` through `5` to lower the boundary.
-- `maxChildrenPerAgent` caps active children per session (default `5`, range `1-20`).
+- Recursive spawning is enabled through depth `5` by default. Set `maxSpawnDepth` from `1` through `5` to lower the boundary. Depth 2 is recommended for most interactive use cases.
+- `maxChildrenPerAgent` caps active children per session (default `5`, range `1–10000`). Default stays low for interactive single-agent safety; raise via config for wide-fanout patterns (parallel delegate fan-out, batch processing, distributed investigation).
 
 ## Related
 

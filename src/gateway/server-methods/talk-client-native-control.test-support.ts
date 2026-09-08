@@ -463,8 +463,11 @@ export async function withParkedNativeTask(
               onBlockReply: undefined,
               onBlockReplyFlush: undefined,
               sandboxSessionKey: SESSION_KEY,
-              builtinToolNames: new Set(),
-              replaySafeToolNames: new Set(),
+              subscriptionToolTrust: {
+                builtinToolNames: new Set(),
+                replaySafeToolNames: new Set(),
+                trustedLocalMediaToolNames: new Set(),
+              },
             });
           }
           const handle =

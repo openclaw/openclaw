@@ -4,7 +4,8 @@ import {
   projectSessionSnapshotChanges,
   sessionSnapshotTouchedFieldsConflict,
 } from "./session-snapshot-merge.js";
-import { mergeSessionEntry, type InternalSessionEntry as SessionEntry } from "./types.js";
+import { mergeSessionEntry } from "./types.js";
+import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 const initial: SessionEntry = {
   sessionId: "session-1",

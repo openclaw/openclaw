@@ -8,6 +8,7 @@ import { runEmbeddedAgent } from "../../agents/embedded-agent.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import { resolveOpenAIRuntimeProvider } from "../../agents/openai-routing.js";
 import type { CompactionRequestBudget } from "../../agents/sessions/compaction/request-budget.js";
+import type { ContinueWorkRequest } from "../../agents/tools/continue-work-tool.js";
 import { resolveGroupSessionKey } from "../../config/sessions.js";
 import {
   isTrustedMessageActionTurnIngress,
@@ -17,6 +18,7 @@ import {
 } from "../../gateway/message-action-turn-capability.js";
 import { logVerbose } from "../../globals.js";
 import { resolveSessionPinnedHarnessId } from "../../sessions/agent-harness-session-key.js";
+import { sanitizeAssistantFinalAnswerText } from "../../shared/text/assistant-visible-text.js";
 import {
   isMarkdownCapableMessageChannel,
   resolveMessageChannel,
@@ -30,9 +32,14 @@ import {
 } from "./agent-runner-event-handler.js";
 import type { CompletedAgentAuthSelection } from "./agent-runner-execution.types.js";
 import type { AgentFallbackCandidateCommonParams } from "./agent-runner-fallback-cycle.types.js";
+import {
+  computeRequestCompactionContextUsage,
+  releaseQueuedCompactionTolerant,
+} from "./agent-runner-post-compaction-release.js";
 import { buildEmbeddedRunExecutionParams } from "./agent-runner-utils.js";
 import { resolveReplyOperationTerminationFields } from "./reply-operation-abort.js";
 import { markReplyOperationGlobalLaneWaitProgress } from "./reply-run-registry.js";
+import { resolveOperationalRunCompactionCount } from "./run-compaction-count.js";
 import {
   bindSourceReplyDeliveryRuntime,
   readSourceReplyDeliveryRuntime,
@@ -58,6 +65,9 @@ export async function runEmbeddedFallbackCandidate(
   maintenanceAuthProfile?: CompletedAgentAuthSelection;
   compactionRequestBudget?: CompactionRequestBudget;
   bootstrapPromptWarningSignaturesSeen: string[];
+  continueWorkRequests: ContinueWorkRequest[];
+  compactionTraceparent?: string;
+  rawContinuationText?: string;
 }> {
   const turn = params.turn;
   let maintenanceAuthProfile: CompletedAgentAuthSelection | undefined;
@@ -141,6 +151,9 @@ export async function runEmbeddedFallbackCandidate(
         })
       : undefined;
   let attemptCompactionCount = 0;
+  const attemptContinueWorkRequests: ContinueWorkRequest[] = [];
+  let attemptCompactionTraceparent: string | undefined;
+  const continuationEnabled = params.runtimeConfig.agents?.defaults?.continuation?.enabled === true;
   let postCompactionModelAttempted = false;
   let compactionAccounting: CompactionAccountingFact | undefined;
   const lifecycleBackstop = createAgentLifecycleTerminalBackstop({
@@ -168,7 +181,7 @@ export async function runEmbeddedFallbackCandidate(
         messageActionTurnCapability,
         lifecycleGeneration: params.getLifecycleGeneration(),
         allowGatewaySubagentBinding: true,
-        trigger: turn.isHeartbeat ? "heartbeat" : "user",
+        trigger: turn.hookTrigger ?? (turn.isHeartbeat ? "heartbeat" : "user"),
         cronCreatorAuthorityCapability: turn.opts?.cronCreatorAuthorityCapability,
         cronCreatorAuthorityUnavailableReason:
           turn.opts?.turnAdoptionLifecycle?.cronCreatorAuthorityUnavailable,
@@ -211,6 +224,71 @@ export async function runEmbeddedFallbackCandidate(
         suppressTranscriptOnlyAssistantPersistence:
           turn.followupRun.run.suppressTranscriptOnlyAssistantPersistence,
         assistantErrorTranscript: params.assistantErrorTranscript,
+        drainsContinuationDelegateQueue: turn.followupRun.run.drainsContinuationDelegateQueue,
+        continueWorkOpts: continuationEnabled
+          ? {
+              requestContinuation: (request) => {
+                attemptContinueWorkRequests.push(request);
+              },
+            }
+          : undefined,
+        requestCompactionOpts: continuationEnabled
+          ? {
+              sessionId: turn.followupRun.run.sessionId,
+              getContextUsage: () =>
+                computeRequestCompactionContextUsage({
+                  entry: turn.getActiveSessionEntry(),
+                  cfg: params.runtimeConfig,
+                  provider: embeddedRunProvider,
+                  model: params.model,
+                }),
+              triggerCompaction: async (request) => {
+                attemptCompactionTraceparent = request.traceparent;
+                try {
+                  const { compactEmbeddedAgentSession } =
+                    await import("../../agents/embedded-agent-runner/compact.queued.js");
+                  const compactionResult = await compactEmbeddedAgentSession({
+                    sessionId: turn.followupRun.run.sessionId ?? "",
+                    runId: request.runId ?? params.runId,
+                    sessionKey: turn.sessionKey,
+                    sessionFile: turn.followupRun.run.sessionFile ?? "",
+                    workspaceDir: turn.followupRun.run.workspaceDir ?? process.cwd(),
+                    config: params.runtimeConfig,
+                    messageProvider: embeddedContext.messageProvider,
+                    provider: embeddedRunProvider,
+                    model: params.model,
+                    authProfileId: runBaseParams.authProfileId,
+                    customInstructions: request.customInstructions,
+                    trigger: request.trigger,
+                    diagId: request.diagId,
+                    traceparent: request.traceparent,
+                  });
+                  if (compactionResult.ok && compactionResult.compacted) {
+                    await releaseQueuedCompactionTolerant({
+                      activeSessionStore: turn.activeSessionStore,
+                      compactionResult,
+                      followupRun: turn.followupRun,
+                      getActiveSessionEntry: turn.getActiveSessionEntry,
+                      sessionKey: turn.sessionKey,
+                      storePath: turn.storePath,
+                      traceparent: request.traceparent,
+                    });
+                  }
+                  return {
+                    ok: compactionResult.ok,
+                    compacted: compactionResult.compacted,
+                    reason: compactionResult.reason,
+                  };
+                } catch (error) {
+                  return {
+                    ok: false,
+                    compacted: false,
+                    reason: error instanceof Error ? error.message : String(error),
+                  };
+                }
+              },
+            }
+          : undefined,
         prepareAssistantTranscriptMessage: turn.opts?.prepareAssistantTranscriptMessage,
         onAutoCompactionSucceeded: (count) => {
           attemptCompactionCount = Math.max(attemptCompactionCount, count);
@@ -392,7 +470,7 @@ export async function runEmbeddedFallbackCandidate(
       };
       return runEmbeddedAgent(embeddedRunParams);
     });
-    const resultCompactionCount = Math.max(0, result.meta?.agentMeta?.compactionCount ?? 0);
+    const resultCompactionCount = resolveOperationalRunCompactionCount(result.meta);
     attemptCompactionCount = Math.max(attemptCompactionCount, resultCompactionCount);
     return {
       result,
@@ -401,6 +479,16 @@ export async function runEmbeddedFallbackCandidate(
       bootstrapPromptWarningSignaturesSeen: resolveBootstrapWarningSignaturesSeen(
         result.meta?.systemPromptReport,
       ),
+      continueWorkRequests: attemptContinueWorkRequests,
+      compactionTraceparent: attemptCompactionTraceparent,
+      ...(!(result.meta?.error?.kind === "incomplete_turn" && result.meta.replayInvalid === true) &&
+      result.meta?.finalAssistantRawText
+        ? {
+            rawContinuationText: normalizeOptionalString(
+              sanitizeAssistantFinalAnswerText(result.meta.finalAssistantRawText),
+            ),
+          }
+        : {}),
     };
   } finally {
     // Runtime event/result counts are observable, but cannot prove a durable write target.

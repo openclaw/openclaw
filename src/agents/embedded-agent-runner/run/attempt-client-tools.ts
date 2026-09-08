@@ -11,6 +11,7 @@ import { wrapToolWithAbortSignal } from "../../agent-tools.abort.js";
 import { resolveToolLoopDetectionConfig } from "../../agent-tools.js";
 import { isCodeModeExecTool } from "../../code-mode-control-tools.js";
 import { addClientToolsToCodeModeCatalog } from "../../code-mode.js";
+import { isCoreToolResultMediaTrustedName } from "../../embedded-agent-tool-media.js";
 import type { AgentTool } from "../../runtime/index.js";
 import {
   createToolDefinitionFromAgentTool,
@@ -118,9 +119,19 @@ export function prepareEmbeddedAttemptClientTools(params: {
       }),
     );
     const coreBuiltinToolNames = collectCoreBuiltinToolNames(params.uncompactedEffectiveTools, {
-      isPluginTool: (tool) =>
-        Boolean(getPluginToolMeta(tool as Parameters<typeof getPluginToolMeta>[0])),
+      isPluginTool: (tool) => Boolean(getPluginToolMeta(tool)),
     });
+    const trustedPluginLocalMediaToolNames = new Set(
+      params.uncompactedEffectiveTools.flatMap((tool) => {
+        const name = tool.name?.trim();
+        const meta = getPluginToolMeta(tool);
+        return name && meta?.trustedLocalMedia === true ? [name] : [];
+      }),
+    );
+    const trustedLocalMediaToolNames = new Set([
+      ...[...coreBuiltinToolNames].filter(isCoreToolResultMediaTrustedName),
+      ...trustedPluginLocalMediaToolNames,
+    ]);
     const isReplaySafeTool = (tool: { name?: string }) =>
       isAgentToolReplaySafe(tool, params.replaySafetyOptions);
     const replaySafeTools = new Set(params.uncompactedEffectiveTools.filter(isReplaySafeTool));
@@ -155,10 +166,7 @@ export function prepareEmbeddedAttemptClientTools(params: {
     const sideEffectToolOwners = collectSideEffectToolOwners(
       [...params.uncompactedEffectiveTools, ...clientToolDefs],
       {
-        declaredOwner: (tool) =>
-          getPluginToolSideEffectOwnerKey(
-            tool as Parameters<typeof getPluginToolSideEffectOwnerKey>[0],
-          ),
+        declaredOwner: (tool) => getPluginToolSideEffectOwnerKey(tool),
       },
     );
     const addClientToolsToCatalog = params.codeModeControlsEnabledForRun
@@ -202,6 +210,7 @@ export function prepareEmbeddedAttemptClientTools(params: {
       clientToolDefs,
       replaySafeToolNames,
       replaySafeTools,
+      trustedLocalMediaToolNames,
       codeModeExecToolNames,
       sideEffectToolOwners,
       sessionToolAllowlist,
@@ -210,6 +219,12 @@ export function prepareEmbeddedAttemptClientTools(params: {
   const current = buildSurface();
   return {
     ...current,
+    subscriptionToolTrust: {
+      builtinToolNames: current.builtinToolNames,
+      coreBuiltinToolNames: current.coreBuiltinToolNames,
+      replaySafeToolNames: current.replaySafeToolNames,
+      trustedLocalMediaToolNames: current.trustedLocalMediaToolNames,
+    },
     refreshTools: () => {
       const next = buildSurface();
       current.allCustomTools.splice(0, current.allCustomTools.length, ...next.allCustomTools);
@@ -223,6 +238,7 @@ export function prepareEmbeddedAttemptClientTools(params: {
         "builtinToolNames",
         "coreBuiltinToolNames",
         "replaySafeToolNames",
+        "trustedLocalMediaToolNames",
         "codeModeExecToolNames",
       ] as const) {
         current[key].clear();

@@ -253,7 +253,9 @@ describe("handleMessageUpdate text signatures", () => {
     });
 
     expect(flushBlockReplyBuffer).toHaveBeenCalledWith({ assistantMessageIndex: 7 });
-    expect(resetAssistantMessageState).toHaveBeenCalledWith(0);
+    expect(resetAssistantMessageState).toHaveBeenCalledWith(0, {
+      preserveReplyDirectiveState: true,
+    });
     expect(onAssistantMessageStart).toHaveBeenCalledTimes(1);
     expect(onPartialReply).toHaveBeenCalledWith(
       expect.objectContaining({

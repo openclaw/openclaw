@@ -598,9 +598,15 @@ async function runSweepSample(childCount: number): Promise<Sample> {
   const [
     { getSubagentRunsForChildSession, subagentRuns: runs },
     { createSubagentRegistrySweeper },
+    {
+      recordAcceptedSubagentSpawnRollback,
+      rollbackSubagentRunRegistration,
+      settleFailedQueuedSubagentLaunch,
+    },
   ] = await Promise.all([
     import("../src/agents/subagents/registry/subagent-registry-memory.js"),
     import("../src/agents/subagents/registry/subagent-registry-sweeper.js"),
+    import("../src/agents/subagents/registry/subagent-registry.js"),
   ]);
   const now = Date.now();
   runs.clear();
@@ -617,6 +623,10 @@ async function runSweepSample(childCount: number): Promise<Sample> {
     runs,
     resumedRuns: new Set(),
     persist: () => {},
+    persistOrThrow: () => {},
+    recordAcceptedSubagentSpawnRollback,
+    rollbackSubagentRunRegistration,
+    settleFailedQueuedSubagentLaunch,
     clearPendingLifecycleError: () => {},
     clearPendingLifecycleTimeout: () => {},
     clearPendingSubagentRecoveryNotice: () => true,
@@ -624,6 +634,7 @@ async function runSweepSample(childCount: number): Promise<Sample> {
     completeSubagentRunWithRecovery: async () => {
       lostContextCompletions += 1;
     },
+    clearSubagentRunSteerRestart: () => true,
     getGatewayRecoveryRuntime: () => undefined,
     abandonSubagentRestartRecoveryLaunch: () => true,
     clearAcceptedSubagentRestartRecovery: () => true,
@@ -647,6 +658,7 @@ async function runSweepSample(childCount: number): Promise<Sample> {
     discardTerminalDelivery: () => {},
     shouldEmitEndedHookForRun: () => false,
     emitSubagentEndedHookForRun: async () => {},
+    shouldDeferArchive: () => false,
     callGateway: (async <T>() => {
       sessionEffects += 1;
       return {} as T;

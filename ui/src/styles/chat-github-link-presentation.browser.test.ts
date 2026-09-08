@@ -1,7 +1,4 @@
 // Control UI tests cover how GitHub links present in chat when a line wraps.
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { chromium, type Browser } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { readStyleSheet } from "../../../test/helpers/ui-style-fixtures.js";
@@ -87,11 +84,9 @@ type WrapSample = {
 async function probeWrap(
   themeMode: "dark" | "light",
 ): Promise<Record<string, readonly WrapSample[]>> {
-  const fixtureFile = path.join(fixtureDirectory, `${themeMode}.html`);
-  fs.writeFileSync(fixtureFile, fixtureDocument(themeMode), "utf8");
   const page = await browser.newPage();
   try {
-    await page.goto(`file://${fixtureFile}`);
+    await page.setContent(fixtureDocument(themeMode));
     return await page.evaluate(
       (ids: readonly string[]) => {
         const resolve = (selector: string) => {
@@ -141,25 +136,16 @@ async function probeWrap(
 }
 
 let browser: Browser;
-let fixtureDirectory: string;
 
 beforeAll(async () => {
   if (!canRunPlaywrightChromium(chromiumExecutablePath)) {
     return;
   }
-  // Resolve the temp root: macOS hands back a /var symlink and the file:// URL
-  // must be the canonical path.
-  fixtureDirectory = fs.realpathSync(
-    fs.mkdtempSync(path.join(os.tmpdir(), "chat-github-link-presentation-")),
-  );
   browser = await chromium.launch({ executablePath: chromiumExecutablePath, headless: true });
 });
 
 afterAll(async () => {
   await browser?.close();
-  if (fixtureDirectory) {
-    fs.rmSync(fixtureDirectory, { force: true, recursive: true });
-  }
 });
 
 describeGitHubLinkPresentation("chat GitHub link presentation", () => {
@@ -198,11 +184,9 @@ describeGitHubLinkPresentation("chat GitHub link presentation", () => {
   it.each(["light", "dark"] as const)(
     "paints distinct kind icons and visible hover and keyboard focus states in %s",
     async (themeMode) => {
-      const fixtureFile = path.join(fixtureDirectory, `${themeMode}-interaction.html`);
-      fs.writeFileSync(fixtureFile, fixtureDocument(themeMode), "utf8");
       const page = await browser.newPage();
       try {
-        await page.goto(`file://${fixtureFile}`);
+        await page.setContent(fixtureDocument(themeMode));
         const masks: string[] = [];
         for (const id of ["issue", "pull"]) {
           const chip = page.locator(`#${id}`);

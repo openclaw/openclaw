@@ -2,7 +2,9 @@ import type { DatabaseSync } from "node:sqlite";
 import type { SqliteWalMaintenance } from "../infra/sqlite-wal.js";
 import type { OpenClawStateDatabaseOptions } from "./openclaw-state-db.js";
 
-// v19 qualifies immutable creator namespaces without deriving authority from sandbox policy.
+// v19 converges the v18 participant migration with durable session-key return
+// authority (including fork-only v18 authority databases) and qualifies immutable
+// creator namespaces without deriving authority from sandbox policy.
 // v18 separates participant identity namespaces and preserves unknown historical times.
 // v17 retires the tenant-free per-agent state lease table.
 // v16 retires legacy top-level Media* transcript fields. It is a downgrade
@@ -21,7 +23,9 @@ import type { OpenClawStateDatabaseOptions } from "./openclaw-state-db.js";
 // The v4 session/transcript flip and main's v2 memory-identity
 // change is folded in structure-gated migrations, so v2 main DBs and
 // pre-merge v4 flip DBs both converge on this schema.
+export const AGENT_RECIPIENT_AUTHORITY_SCHEMA_VERSION = 19;
 export const OPENCLAW_AGENT_SCHEMA_VERSION = 19;
+export const AGENT_PARTICIPANT_IDENTITY_SCHEMA_VERSION = 18;
 export const AGENT_MEDIA_SCHEMA_VERSION = 17;
 
 /** Open per-agent SQLite database handle plus lifecycle maintenance. */

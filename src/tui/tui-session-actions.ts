@@ -651,7 +651,8 @@ export function createSessionActions(context: SessionActionContext) {
     }
   };
 
-  const abortActive = async (params?: { preferActive?: boolean }) => {
+  /** Resolves true only when this call actually aborted the current selection. */
+  const abortActive = async (params?: { preferActive?: boolean }): Promise<boolean> => {
     if (
       opts.local === true &&
       state.activityStatus === "finishing context" &&
@@ -660,7 +661,7 @@ export function createSessionActions(context: SessionActionContext) {
     ) {
       chatLog.addSystem("agent is finishing context; wait for it to finish before aborting");
       tui.requestRender();
-      return;
+      return false;
     }
     const selection = captureSessionSelection();
     const sessionId = state.currentSessionId;
@@ -688,12 +689,12 @@ export function createSessionActions(context: SessionActionContext) {
         ...(!parseAgentSessionKey(selection.sessionKey) ? { agentId: selection.agentId } : {}),
       });
       if (!isCurrentAbort()) {
-        return;
+        return false;
       }
       if (!result.aborted) {
         chatLog.addSystem("no active run", { coalesceConsecutive: true });
         tui.requestRender();
-        return;
+        return false;
       }
       for (const runId of result.runIds ?? []) {
         const stillTracked =
@@ -714,13 +715,15 @@ export function createSessionActions(context: SessionActionContext) {
       }
       setActivityStatus("aborted");
     } catch (err) {
-      if (!isCurrentAbort()) {
-        return;
+      if (isCurrentAbort()) {
+        chatLog.addSystem(`abort failed: ${formatTuiErrorMessage(err)}`);
+        setActivityStatus("abort failed");
+        tui.requestRender();
       }
-      chatLog.addSystem(`abort failed: ${formatTuiErrorMessage(err)}`);
-      setActivityStatus("abort failed");
+      return false;
     }
     tui.requestRender();
+    return true;
   };
 
   return {

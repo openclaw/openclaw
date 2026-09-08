@@ -9,6 +9,7 @@ import {
 } from "../../../infra/agent-run-registry.js";
 import { normalizeDeliveryContext } from "../../../utils/delivery-context.shared.js";
 import type { DeliveryContext } from "../../../utils/delivery-context.types.js";
+import { deriveContinuationDelegateChildRunId } from "../../subagent-continuation-ids.js";
 import { ownsSwarmRunReservation } from "../swarm/swarm-scheduler.js";
 import { getSubagentRunsForChildSession, subagentRuns } from "./subagent-registry-memory.js";
 import {
@@ -20,6 +21,7 @@ import {
   getSubagentRunByChildSessionKeyFromRuns,
   hasDescendantRunAwaitingSettleFromRuns,
   isSubagentSessionRunActiveFromRuns,
+  listAncestorSessionKeysFromRuns,
   listDescendantRunsForRequesterFromRuns,
   listRunsForControllerFromRuns,
   listRunsForRequesterFromRuns,
@@ -164,6 +166,20 @@ export function listSubagentRunsForRequester(
 ): SubagentRunRecord[] {
   // Request-run lifetime scoping must observe the raw live map, including rows not persisted yet.
   return listRunsForRequesterFromRuns(subagentRuns, requesterSessionKey, options);
+}
+
+/** Returns whether a continuation child was accepted before its registry row was written. */
+export function hasLiveContinuationDelegateChildRun(params: {
+  childSessionKey: string;
+  flowId: string;
+}): boolean {
+  const runContext = getAgentRunContext(deriveContinuationDelegateChildRunId(params.flowId));
+  return runContext?.sessionKey === params.childSessionKey;
+}
+
+/** Lists ancestor session keys for a session, walking the requester chain. */
+export function listAncestorSessionKeys(sessionKey: string): string[] {
+  return listAncestorSessionKeysFromRuns(getSubagentRunsSnapshotForRead(subagentRuns), sessionKey);
 }
 
 /** Returns whether a registry entry still has a live agent run context. */

@@ -7,6 +7,7 @@ import {
   type EmbeddedRunCompactionRecoveryInput,
 } from "./compaction-runtime.js";
 import { createRunRecoveryDiagId } from "./helpers.js";
+import { emitRecoveryContextPressure } from "./recovery-context-pressure.js";
 
 const MAX_TIMEOUT_COMPACTION_ATTEMPTS = 2;
 
@@ -66,6 +67,7 @@ export async function recoverEmbeddedRunTimeout(
       `[timeout-compaction] LLM timed out with high prompt token usage (${Math.round(tokenUsedRatio * 100)}%); ` +
         `attempting compaction before retry (attempt ${input.state.timeoutCompactionAttempts}/${MAX_TIMEOUT_COMPACTION_ATTEMPTS}) diagId=${timeoutDiagId}`,
     );
+    await emitRecoveryContextPressure(input, lastTurnPromptTokens ?? 0);
     const { result: timeoutCompactResult, previousSessionId } = await compactEmbeddedRunForRecovery(
       input,
       {

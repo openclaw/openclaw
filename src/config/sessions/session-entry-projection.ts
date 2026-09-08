@@ -92,6 +92,8 @@ export function projectCompactionAccountingPatch(
     compactionKind?: "context-engine" | "native-harness" | "server-endpoint";
     now?: number;
     tokensAfter?: number;
+    newSessionId?: string;
+    sessionKey?: string;
     transcriptByteCompactionLatch?: NonNullable<
       InternalSessionEntry["transcriptByteCompactionLatch"]
     >;
@@ -109,10 +111,18 @@ export function projectCompactionAccountingPatch(
     transcriptByteCompactionLatch: params.transcriptByteCompactionLatch,
     updatedAt: params.now ?? Date.now(),
     ...(incrementBy > 0 || tokensAfter !== undefined ? COMPACTION_RUN_USAGE_CLEAR_PATCH : {}),
+    lastContextPressureBand: undefined,
     ...(incrementBy > 0 ? { contextBudgetStatus: undefined } : {}),
   };
   if (params.compactionKind === "context-engine") {
     clearAllCliSessions(patch);
+  }
+  if (params.newSessionId && params.newSessionId !== current.sessionId) {
+    patch.sessionId = params.newSessionId;
+    patch.usageFamilyKey = current.usageFamilyKey ?? params.sessionKey;
+    patch.usageFamilySessionIds = Array.from(
+      new Set([...(current.usageFamilySessionIds ?? []), current.sessionId, params.newSessionId]),
+    );
   }
   if (tokensAfter !== undefined) {
     Object.assign(patch, {

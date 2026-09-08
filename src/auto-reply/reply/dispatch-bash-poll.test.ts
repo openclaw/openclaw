@@ -10,7 +10,7 @@ import { createProcessSessionFixture } from "../../agents/bash-process-registry.
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   drainSystemEventEntries,
-  enqueueSystemEventEntry,
+  enqueueSystemEventEntryRaw as enqueueSystemEventEntry,
   enqueueSystemEventWithReceipt,
   peekSystemEventEntries,
 } from "../../infra/system-events.js";

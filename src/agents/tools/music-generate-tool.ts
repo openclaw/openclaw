@@ -664,7 +664,6 @@ export function createMusicGenerateTool(options?: {
         prompt,
         requestKey,
         providerId: selectedProviderId,
-        config: effectiveCfg,
         scheduleBackgroundWork,
         onAsyncTaskStarted: options?.onAsyncTaskStarted,
         onFailure: (message, meta) => log.warn(message, meta),

@@ -6,10 +6,7 @@ import { replaceCompactionReplayOwnerContent } from "@openclaw/ai/transports";
  * Normalizes raw tool-call blocks and synthesizes missing tool results without rewriting trusted local payloads.
  */
 import { safeParseJsonRecord } from "@openclaw/normalization-core";
-import {
-  hasNonEmptyString as hasNonEmptyStringField,
-  readStringValue,
-} from "@openclaw/normalization-core/string-coerce";
+import { hasNonEmptyString as hasNonEmptyStringField } from "@openclaw/normalization-core/string-coerce";
 import {
   classifyToolUseResultPairing,
   makeMissingToolResult as makePairingMissingToolResult,
@@ -21,7 +18,11 @@ import {
   extractToolResultIds,
   hasToolCallInput,
 } from "./tool-call-id.js";
-import { isAllowedToolCallName, normalizeAllowedToolNames } from "./tool-call-shared.js";
+import {
+  isAllowedToolCallName,
+  normalizeAllowedToolNames,
+  sanitizeTranscriptToolCallBlock,
+} from "./tool-call-shared.js";
 
 type RawToolCallBlock = {
   type?: unknown;
@@ -99,26 +100,6 @@ function isFinalizedOpenAIResponsesToolCall(
   return separator > 0 && separator < block.id.length - 1;
 }
 
-function sanitizeToolCallBlock(block: RawToolCallBlock): RawToolCallBlock {
-  // This repair path normalizes replay shape only. Tool payloads are local
-  // trusted-operator transcript state per SECURITY.md, so do not redact or
-  // rewrite sessions_spawn arguments here.
-  const rawName = readStringValue(block.name);
-  const trimmedName = rawName?.trim();
-  const hasTrimmedName = typeof trimmedName === "string" && trimmedName.length > 0;
-  const normalizedName = hasTrimmedName ? trimmedName : undefined;
-  const nameChanged = hasTrimmedName && rawName !== trimmedName;
-
-  if (!nameChanged) {
-    return block;
-  }
-  const next = { ...(block as Record<string, unknown>) };
-  if (nameChanged && normalizedName) {
-    next.name = normalizedName;
-  }
-  return next as RawToolCallBlock;
-}
-
 function countRawToolCallBlocks(content: unknown[]): number {
   let count = 0;
   for (const block of content) {
@@ -142,7 +123,7 @@ function isReplaySafeThinkingAssistantTurn(
     sawToolCall = true;
     const toolCallId = typeof block.id === "string" ? block.id.trim() : "";
     if (
-      !hasToolCallInput(block) ||
+      !hasToolCallInput(block as RawToolCallBlock) ||
       hasPartialJson(block) ||
       !toolCallId ||
       seenToolCallIds.has(toolCallId) ||
@@ -151,7 +132,11 @@ function isReplaySafeThinkingAssistantTurn(
       return false;
     }
     seenToolCallIds.add(toolCallId);
-    if (sanitizeToolCallBlock(block) !== block) {
+    if (
+      sanitizeTranscriptToolCallBlock(block, {
+        preserveLegacyContinueDelegateAttachmentName: true,
+      }) !== block
+    ) {
       return false;
     }
   }
@@ -338,7 +323,9 @@ function repairToolCallInputs(
         messageChanged = true;
       }
       if (isRawToolCallBlock(workBlock)) {
-        const sanitized = sanitizeToolCallBlock(workBlock);
+        const sanitized = sanitizeTranscriptToolCallBlock(
+          workBlock as RawToolCallBlock, // SAFETY: the guard establishes this shape.
+        );
         if (sanitized !== workBlock) {
           changed = true;
           messageChanged = true;

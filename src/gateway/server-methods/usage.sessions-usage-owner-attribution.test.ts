@@ -87,15 +87,16 @@ async function queryUsage(options: {
         ),
       };
       vi.mocked(loadCombinedSessionStoreForGatewayCore).mockReturnValue(fixtureStore);
-      vi.mocked(discoverAllSessions).mockImplementation(async ({ agentId }) =>
-        (options.discovered ?? sharedDiscovery)
+      vi.mocked(discoverAllSessions).mockImplementation(async (params) => {
+        const agentId = params?.agentId ?? "main";
+        return (options.discovered ?? sharedDiscovery)
           .filter((session) => session.agentId === agentId)
           .map(({ sessionId }) => ({
             sessionId,
             sessionFile: path.join(stateDir, "agents", agentId, "sessions", `${sessionId}.jsonl`),
             mtime: agentId === options.newestAgent ? 200 : 100,
-          })),
-      );
+          }));
+      });
       vi.mocked(loadSessionCostSummariesFromCache).mockImplementation(async (params) => ({
         summaries: params.sessions.map(() => ({
           ...createEmptyCostUsageTotals(),

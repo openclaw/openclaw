@@ -24,6 +24,7 @@ import {
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import { onTrustedMessageAuditEvent } from "../../audit/message-audit-events.js";
 import { setReplyPayloadMetadata, type ReplyPayload } from "../../auto-reply/reply-payload.js";
+import { markAgentRunFailureReplyPayload } from "../../auto-reply/reply/agent-runner-failure-reply.js";
 import { getTotalPendingReplies } from "../../auto-reply/reply/dispatcher-registry.js";
 import { markInboundContextLabel } from "../../auto-reply/reply/inbound-context-marker.js";
 import {
@@ -3807,7 +3808,23 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       text: "Codex source reply",
     });
     setAgentRunReplies([sourceReply]);
-    const { context, payload: broadcast } = await sendNewChatRequest({
+    const { context, send } = createChatRequestFixture();
+    let terminalClaimedBeforeBroadcast = false;
+    vi.mocked(context.broadcast).mockImplementation((event, payload) => {
+      if (
+        event === "chat" &&
+        typeof payload === "object" &&
+        payload !== null &&
+        "state" in payload &&
+        payload.state === "final"
+      ) {
+        terminalClaimedBeforeBroadcast =
+          context.chatAbortControllers.get("idem-agent-source-reply")?.chatTerminalBroadcasted ===
+          true;
+      }
+    });
+
+    const broadcast = await send({
       idempotencyKey: "idem-agent-source-reply",
       message: "hello from codex",
     });
@@ -3828,6 +3845,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(assistantEntries.map((entry) => entry.idempotencyKey)).toStrictEqual([
       mirrorIdempotencyKey,
     ]);
+    expect(terminalClaimedBeforeBroadcast).toBe(true);
   });
 
   it("broadcasts a writer-owned settled fallback that is already in the transcript", async () => {
@@ -3935,6 +3953,34 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(extractFirstTextBlock(broadcast)).toBe("⚙️ Codex compaction started • Context 2k/200k");
     const assistantEntries = await readActiveAssistantTranscriptMessages();
     expect(assistantEntries).toStrictEqual([]);
+  });
+
+  it("does not duplicate status notices after lifecycle broadcasts the terminal", async () => {
+    await createTranscriptFixture("openclaw-chat-send-agent-settled-status-notice-");
+    const runId = "idem-agent-settled-status-notice";
+    setAgentRunReplies([
+      {
+        kind: "final",
+        payload: {
+          text: "⚙️ Codex compaction started • Context 2k/200k",
+          isStatusNotice: true,
+        },
+      },
+    ]);
+    const { context, send } = createChatRequestFixture();
+    mockState.onAfterAgentRunStart = () => {
+      const entry = expectDefined(context.chatAbortControllers.get(runId), "active chat run");
+      entry.chatTerminalBroadcasted = true;
+    };
+
+    await send({
+      idempotencyKey: runId,
+      message: "/compact",
+      expectBroadcast: false,
+    });
+
+    expect(context.broadcast).not.toHaveBeenCalled();
+    expect(context.nodeSendToSession).not.toHaveBeenCalled();
   });
 
   it("broadcasts a block status once while ignoring an ordinary agent final", async () => {
@@ -4334,6 +4380,50 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     );
   });
 
+  it("projects a host-authored failure after a recorded successful runtime outcome", async () => {
+    const runId = "idem-agent-terminal-host-failure-after-success";
+    const errorMessage =
+      "I finished the turn, but it did not produce a visible reply. Please try again.";
+    mockState.triggerAgentRunStart = true;
+    mockState.dispatchedReplies = [
+      {
+        kind: "final",
+        payload: markAgentRunFailureReplyPayload({ text: errorMessage }),
+      },
+    ];
+    const dispatch = expectDefined(
+      dispatchInboundMessageMock.getMockImplementation(),
+      "default chat dispatch fixture",
+    );
+    dispatchInboundMessageMock.mockImplementationOnce(async (params: TestDispatchParams) =>
+      recordAgentRunTerminalOutcome(await dispatch(params), "completed"),
+    );
+    const { context, send } = createChatRequestFixture();
+
+    await send({
+      idempotencyKey: runId,
+      message: "please answer visibly",
+      waitFor: "dedupe",
+    });
+
+    expect(
+      context.broadcast.mock.calls
+        .filter(([event]) => event === "chat")
+        .map(([, payload]) => payload),
+    ).toEqual([
+      expect.objectContaining({
+        runId,
+        sessionKey: "agent:main:main",
+        state: "error",
+        errorMessage,
+      }),
+    ]);
+    expect(context.dedupe.get(`chat:${runId}`)).toMatchObject({
+      ok: false,
+      payload: { runId, status: "error", summary: errorMessage },
+    });
+  });
+
   it("does not expose raw media refs when an unbacked source reply has no text", async () => {
     await withTranscriptFixtureState(
       "openclaw-chat-send-agent-source-reply-media-only-",
@@ -4672,7 +4762,13 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       ) {
         mockState.dispatchedReplies.push({
           kind: "final",
-          payload: { text: "⚠️ Exec failed", isError: true },
+          payload:
+            presentation === "warning-only"
+              ? setReplyPayloadMetadata(
+                  { text: "⚠️ Exec failed", isError: true },
+                  { deliverDespiteSourceReplySuppression: true },
+                )
+              : { text: "⚠️ Exec failed", isError: true },
         });
       }
       if (outcome) {

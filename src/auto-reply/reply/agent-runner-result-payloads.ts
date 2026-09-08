@@ -8,20 +8,12 @@ import {
   hasDeliberateSilentTerminalReply,
   hasIntentionalTerminalCompletion,
 } from "../../agents/embedded-agent-runner/result-fallback-classifier.js";
-import {
-  deriveContextPromptTokens,
-  hasBillableUsage,
-  toDiagnosticUsage,
-} from "../../agents/usage.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
-import { emitTrustedDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
-import {
-  createChildDiagnosticTraceContext,
-  freezeDiagnosticTraceContext,
-} from "../../infra/diagnostic-trace-context.js";
 import { isSubagentSessionKey } from "../../routing/session-key.js";
-import { estimateAggregateUsageCost } from "../../utils/usage-format.js";
+import { resolveLiveContinuationRuntimeConfig } from "../continuation/config.js";
+import { stagedPostCompactionDelegateCount } from "../continuation/delegate-store-post-compaction.js";
+import { pendingDelegateCount } from "../continuation/delegate-store.js";
 import { buildFallbackClearedNotice, buildFallbackNotice } from "../fallback-state.js";
 import {
   getReplyPayloadMetadata,
@@ -48,6 +40,7 @@ import {
 } from "./agent-runner-reminder-guard.js";
 import type { accountAgentTurn } from "./agent-runner-result-accounting.js";
 import type { FinalizeReplyAgentRunInput } from "./agent-runner-result.types.js";
+import { emitReplyAgentUsageDiagnostic } from "./agent-runner-usage-diagnostic.js";
 import { resolveResponseUsageLine } from "./agent-runner-usage-line.js";
 import type { PendingContinuationSettlement } from "./get-reply.types.js";
 import { attachMcpAppChannelAction } from "./mcp-app-channel-action.js";
@@ -78,7 +71,6 @@ export async function prepareReplyAgentPayloads(state: {
     replyToChannel,
     replyToMode,
     returnWithQueuedFollowupDrain,
-    runStartedAt,
     runtimePolicySessionKey,
     sessionCtx,
     sessionKey,
@@ -87,16 +79,15 @@ export async function prepareReplyAgentPayloads(state: {
   } = context;
   const {
     configuredFallbackModel,
-    contextTokensUsed,
     directlySentBlockKeys,
     directlySentBlockPayloads,
+    effectiveContinuationSignal,
     fallbackAttempts,
     fallbackExhausted,
     fallbackTransition,
     modelUsed,
     payloadArray: rawPayloadArray,
     preserveUserFacingSessionState,
-    promptTokens,
     providerUsed,
     replyUsageState,
     runId,
@@ -180,6 +171,7 @@ export async function prepareReplyAgentPayloads(state: {
           committedMessagingToolSourceReplyDelivery ||
           runResult.didSendDeterministicApprovalPrompt === true,
       });
+  const hasAcceptedSessionSpawn = (runResult.acceptedSessionSpawns?.length ?? 0) > 0;
   const emptyInteractiveReplyPayload = terminalFailurePayload
     ? undefined
     : buildEmptyInteractiveReplyPayload({
@@ -188,12 +180,35 @@ export async function prepareReplyAgentPayloads(state: {
         silentExpected: followupRun.run.silentExpected,
         allowEmptyAssistantReplyAsSilent: followupRun.run.allowEmptyAssistantReplyAsSilent,
         hasPendingContinuation: pendingContinuation,
+        // Upstream hoists the deliberate-silent classification; the fork's wider
+        // commitment set stays authoritative so a side-effect-only or
+        // session-spawn turn is never re-delivered as an empty interactive reply.
         hasExplicitSilentReply: deliberateSilentTerminalReply,
-        hasCommittedDelivery: successfulTerminalDelivery,
+        hasCommittedDelivery:
+          successfulTerminalDelivery ||
+          (successfulSideEffectDelivery && (directlySentBlockKeys?.size ?? 0) === 0) ||
+          hasAcceptedSessionSpawn,
         hasIntentionalTerminalCompletion: hasIntentionalTerminalCompletion(runResult),
         sessionCtx,
         cfg,
       });
+  const buildTerminalEmptyInteractiveReplyPayload = (heartbeat: boolean) =>
+    buildEmptyInteractiveReplyPayload({
+      isInteractive:
+        followupRun.currentInboundEventKind !== "room_event" &&
+        (followupRun.run.inputProvenance?.kind === undefined ||
+          followupRun.run.inputProvenance.kind === "external_user"),
+      isHeartbeat: heartbeat,
+      silentExpected: followupRun.run.silentExpected,
+      allowEmptyAssistantReplyAsSilent: followupRun.run.allowEmptyAssistantReplyAsSilent,
+      hasPendingContinuation:
+        runResult.meta?.yielded === true || (runResult.meta?.pendingToolCalls?.length ?? 0) > 0,
+      hasExplicitSilentReply: hasDeliberateSilentTerminalReply(runResult),
+      hasCommittedDelivery: false,
+      hasIntentionalTerminalCompletion: hasIntentionalTerminalCompletion(runResult),
+      sessionCtx,
+      cfg,
+    });
   const buildStrandedRetryMissingDeliveryDiagnostic = (): ReplyPayload | undefined => {
     if (!sessionKey || !storePath || followupRun.strandedReplyRetry !== true) {
       return undefined;
@@ -247,20 +262,17 @@ export async function prepareReplyAgentPayloads(state: {
   // Share this state across deliverable lanes so replyToMode=first still threads
   // at most one visible payload without hidden reasoning/commentary consuming it.
   const applyDeliveredReplyToMode = createReplyToModeFilterForChannel(replyToMode, replyToChannel);
+  const isPayloadLaneEnabled = (payload: ReplyPayload): boolean =>
+    (payload.isReasoning !== true || opts?.reasoningPayloadsEnabled === true) &&
+    (payload.isCommentary !== true || opts?.commentaryPayloadsEnabled === true);
   const isGeneratedToolWarning = (payload: ReplyPayload) =>
     getReplyPayloadMetadata(payload)?.toolErrorWarning !== undefined;
   const applyFinalReplyToMode = (payload: ReplyPayload) => {
-    const isDisabledReasoningLane =
-      payload.isReasoning === true && opts?.reasoningPayloadsEnabled !== true;
-    const isDisabledCommentaryLane =
-      payload.isCommentary === true && opts?.commentaryPayloadsEnabled !== true;
+    const payloadLaneEnabled = isPayloadLaneEnabled(payload);
     const isFilteredPayload =
       normalizeReplyPayload(payload, { applyChannelTransforms: false }) === null;
     const shouldDeferToolWarning = yieldAcknowledgmentPayload && isGeneratedToolWarning(payload);
-    return isDisabledReasoningLane ||
-      isDisabledCommentaryLane ||
-      isFilteredPayload ||
-      shouldDeferToolWarning
+    return !payloadLaneEnabled || isFilteredPayload || shouldDeferToolWarning
       ? payload
       : applyDeliveredReplyToMode(payload);
   };
@@ -396,12 +408,23 @@ export async function prepareReplyAgentPayloads(state: {
 
   // Drain any late tool/block deliveries before deciding there's "nothing to send".
   // Otherwise, a late typing trigger (e.g. from a tool callback) can outlive the run and
-  // keep the typing indicator stuck.
+  // keep the typing indicator stuck. A tool-only continuation turn may have no visible
+  // text while still needing delegate consumption/persistence below. Terminal failures are
+  // likewise delivered after normal payload filtering.
+  const hasQueuedDelegateWork =
+    resolveLiveContinuationRuntimeConfig(cfg).enabled &&
+    sessionKey &&
+    (pendingDelegateCount(sessionKey) > 0 || stagedPostCompactionDelegateCount(sessionKey) > 0);
+
   if (
     payloadArray.length === 0 &&
     fallbackNoticePayloads.length === 0 &&
+    !hasQueuedDelegateWork &&
+    !effectiveContinuationSignal &&
     !shouldDeliverTerminalFailure &&
     !yieldAcknowledgmentPayload &&
+    opts?.reasoningPayloadsEnabled !== true &&
+    opts?.commentaryPayloadsEnabled !== true &&
     (!emptyInteractiveReplyPayload || hasSpecificFallbackFailure)
   ) {
     const silentFallbackFailurePayload = await returnSilentFallbackFailureIfNeeded();
@@ -420,11 +443,7 @@ export async function prepareReplyAgentPayloads(state: {
 
   const payloadCandidates = (
     fallbackNoticePayloads.length > 0 ? [...fallbackNoticePayloads, ...payloadArray] : payloadArray
-  ).filter(
-    (payload) =>
-      (payload.isReasoning !== true || opts?.reasoningPayloadsEnabled === true) &&
-      (payload.isCommentary !== true || opts?.commentaryPayloadsEnabled === true),
-  );
+  ).filter(isPayloadLaneEnabled);
   const payloadResult = await buildFinalPayloads(payloadCandidates);
   let { replyPayloads } = payloadResult;
   didLogHeartbeatStrip = payloadResult.didLogHeartbeatStrip;
@@ -457,7 +476,12 @@ export async function prepareReplyAgentPayloads(state: {
     if (silentFallbackFailurePayload) {
       return { kind: "return" as const, value: silentFallbackFailurePayload };
     }
-  } else if (emptyInteractiveReplyPayload && !hasTerminalReplyPayload) {
+  } else if (
+    emptyInteractiveReplyPayload &&
+    !hasTerminalReplyPayload &&
+    !effectiveContinuationSignal &&
+    !hasQueuedDelegateWork
+  ) {
     const emptyPayloadResult = await buildFinalPayloads([emptyInteractiveReplyPayload]);
     replyPayloads = [...replyPayloads, ...emptyPayloadResult.replyPayloads];
     didLogHeartbeatStrip = emptyPayloadResult.didLogHeartbeatStrip;
@@ -495,21 +519,85 @@ export async function prepareReplyAgentPayloads(state: {
   );
   const canDeliverStandaloneFallbackNotice =
     hasDeliveredBlockStream || successfulSideEffectDelivery;
-  if (
-    replyPayloads.length === 0 ||
-    (!hasVisibleReplyPayload && !canDeliverStandaloneFallbackNotice)
-  ) {
+  // Track whether the agent reply was purely a continuation signal (stripped to empty).
+  // Used later to suppress verbose/usage augmentation that would break silent continuation.
+  const wasSilentContinuation = replyPayloads.length === 0 && Boolean(effectiveContinuationSignal);
+
+  if (!hasVisibleReplyPayload && !canDeliverStandaloneFallbackNotice) {
     const silentFallbackFailurePayload = await returnSilentFallbackFailureIfNeeded();
     if (silentFallbackFailurePayload) {
       return { kind: "return" as const, value: silentFallbackFailurePayload };
     }
-    const strandedRetryDiagnostic = buildStrandedRetryMissingDeliveryDiagnostic();
-    if (strandedRetryDiagnostic) {
+    const emptyFallbackPayload =
+      emptyInteractiveReplyPayload ?? buildTerminalEmptyInteractiveReplyPayload(isHeartbeat);
+    if (emptyFallbackPayload && !effectiveContinuationSignal && !hasQueuedDelegateWork) {
+      const emptyPayloadResult = await buildFinalPayloads([emptyFallbackPayload]);
+      if (emptyPayloadResult.replyPayloads.length > 0) {
+        replyOperation.retainFailureUntilComplete();
+        replyOperation.fail(
+          "run_failed",
+          new Error("interactive agent run completed without a visible reply"),
+        );
+        return {
+          kind: "return" as const,
+          value: returnWithQueuedFollowupDrain(
+            emptyPayloadResult.replyPayloads.length === 1
+              ? emptyPayloadResult.replyPayloads[0]
+              : emptyPayloadResult.replyPayloads,
+          ),
+        };
+      }
+    }
+    // If the agent replied with only a continuation signal (e.g. bare CONTINUE_WORK),
+    // the signal was stripped and all payloads became empty. We still need to process
+    // the continuation below. Tool-only delegate turns also pass through here.
+    if (!effectiveContinuationSignal && !hasQueuedDelegateWork) {
+      const strandedRetryDiagnostic = buildStrandedRetryMissingDeliveryDiagnostic();
+      if (strandedRetryDiagnostic) {
+        return {
+          kind: "return" as const,
+          value: returnWithQueuedFollowupDrain(strandedRetryDiagnostic),
+        };
+      }
+      return { kind: "return" as const, value: returnWithQueuedFollowupDrain(undefined) };
+    }
+  }
+  if (
+    replyPayloads.length === 0 &&
+    (opts?.reasoningPayloadsEnabled === true || opts?.commentaryPayloadsEnabled === true) &&
+    !effectiveContinuationSignal &&
+    !hasQueuedDelegateWork
+  ) {
+    const emptyPayloadResult = await buildFinalPayloads(
+      [buildTerminalEmptyInteractiveReplyPayload(false)].filter(
+        (payload): payload is ReplyPayload => payload !== undefined,
+      ),
+    );
+    if (emptyPayloadResult.replyPayloads.length > 0) {
+      replyOperation.retainFailureUntilComplete();
+      replyOperation.fail(
+        "run_failed",
+        new Error("interactive agent run completed without a visible reply"),
+      );
       return {
         kind: "return" as const,
-        value: returnWithQueuedFollowupDrain(strandedRetryDiagnostic),
+        value: returnWithQueuedFollowupDrain(
+          emptyPayloadResult.replyPayloads.length === 1
+            ? emptyPayloadResult.replyPayloads[0]
+            : emptyPayloadResult.replyPayloads,
+        ),
       };
     }
+  }
+  if (
+    replyPayloads.length === 0 &&
+    successfulTerminalDelivery &&
+    !hasDeliveredBlockStream &&
+    (directlySentBlockKeys?.size ?? 0) === 0 &&
+    (directlySentBlockPayloads?.length ?? 0) === 0 &&
+    !effectiveContinuationSignal &&
+    !hasQueuedDelegateWork
+  ) {
     return { kind: "return" as const, value: returnWithQueuedFollowupDrain(undefined) };
   }
 
@@ -565,45 +653,7 @@ export async function prepareReplyAgentPayloads(state: {
 
   await signalTypingIfNeeded(guardedReplyPayloads, typingSignals);
 
-  const diagnosticUsage = runResult.meta?.agentMeta?.diagnosticUsage ?? usage;
-  if (isDiagnosticsEnabled(cfg) && hasBillableUsage(diagnosticUsage)) {
-    const contextUsedTokens = deriveContextPromptTokens({
-      lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
-      promptTokens,
-      usage,
-    });
-    const costUsd = estimateAggregateUsageCost({
-      usage: diagnosticUsage,
-      provider: providerUsed,
-      model: modelUsed,
-      config: cfg,
-      agentDir: followupRun.run.agentDir,
-    });
-    emitTrustedDiagnosticEvent({
-      type: "model.usage",
-      ...(runResult.diagnosticTrace
-        ? {
-            trace: freezeDiagnosticTraceContext(
-              createChildDiagnosticTraceContext(runResult.diagnosticTrace),
-            ),
-          }
-        : {}),
-      sessionKey,
-      sessionId: followupRun.run.sessionId,
-      channel: replyToChannel,
-      agentId: followupRun.run.agentId,
-      provider: providerUsed,
-      model: modelUsed,
-      usage: toDiagnosticUsage(diagnosticUsage),
-      lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
-      context: {
-        limit: contextTokensUsed,
-        ...(contextUsedTokens !== undefined ? { used: contextUsedTokens } : {}),
-      },
-      costUsd,
-      durationMs: Date.now() - runStartedAt,
-    });
-  }
+  emitReplyAgentUsageDiagnostic(state);
 
   const responseUsageSessionRaw =
     activeSessionEntry?.responseUsage ??
@@ -639,5 +689,6 @@ export async function prepareReplyAgentPayloads(state: {
     didLogHeartbeatStrip,
     guardedReplyPayloads,
     responseUsageLine,
+    wasSilentContinuation,
   };
 }

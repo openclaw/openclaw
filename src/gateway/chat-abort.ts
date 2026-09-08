@@ -40,6 +40,9 @@ import {
 
 const DEFAULT_CHAT_RUN_ABORT_GRACE_MS = 60_000;
 
+/** Client-visible terminal kind emitted for a chat run. */
+export type ChatTerminalState = "final" | "aborted" | "error";
+
 export type ChatAbortControllerEntry = {
   controller: AbortController;
   sessionId: string;
@@ -61,6 +64,12 @@ export type ChatAbortControllerEntry = {
   abortStopReason?: string;
   /** Latest argument-free validation diagnostic for operator-initiated aborts. */
   toolErrorSummary?: string;
+  /** True when lifecycle or chat.send already emitted the client-visible terminal. */
+  chatTerminalBroadcasted?: boolean;
+  /** Known terminal kind when the broadcasting producer records one. */
+  chatTerminalState?: ChatTerminalState;
+  /** chat.send still owned terminalization when the lifecycle terminal was observed. */
+  chatSendActiveAtTerminalObservation?: boolean;
   /**
    * False for backend/internal agent runs that may share a session key but must
    * not be projected into operator chat surfaces.

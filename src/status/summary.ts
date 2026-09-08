@@ -20,8 +20,8 @@ import {
 import {
   resolveFreshSessionTotalTokens,
   resolveSessionTotalTokens,
-  type SessionEntry,
 } from "../config/sessions/types.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { listGatewayAgentsBasic } from "../gateway/agent-list.js";
 import { resolveHeartbeatSessionKey } from "../infra/heartbeat-runner-session.js";

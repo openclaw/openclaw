@@ -46,7 +46,8 @@ import {
   buildExpectedTranscriptTurnSessionPatch,
   sessionMatchesExpectedTranscriptTurn,
 } from "./session-transcript-turn-state.js";
-import { mergeSessionEntry, type SessionEntry } from "./types.js";
+import { mergeSessionEntry } from "./types.js";
+import type { SessionEntry } from "./types.js";
 
 type SqliteExpectedSessionTranscriptTurnResult = {
   sessionTurnMutationResult?: SessionTranscriptTurnMutationResult;

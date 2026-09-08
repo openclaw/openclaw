@@ -168,6 +168,7 @@ export {
   replaceSessionEntrySync,
   resolveSessionEntryAccessTarget,
   resolveSessionEntryCandidateTarget,
+  resolveSessionEntryFromStore,
   resolveSessionEntrySelection,
   updateResolvedSessionEntry,
   upsertSessionEntryCore,
@@ -192,6 +193,10 @@ export {
   type RestartTombstoneRecoveryResult,
 } from "./session-accessor.sqlite-recovery.js";
 export { assignSessionOwner } from "./session-accessor.sqlite-owner.js";
+export {
+  captureSessionRecipientAuthority,
+  isSessionRecipientAuthorityCurrent,
+} from "./session-accessor.sqlite-recipient-authority.js";
 export {
   MAX_SESSION_PARTICIPANTS,
   recordSessionParticipant,

@@ -64,6 +64,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
   } = runtime;
   const {
     params,
+    options: attemptOptions,
     preDynamicStartupStages,
     mutable,
     resolvedWorkspace,
@@ -228,6 +229,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
     policyAgentId,
     pluginConfig,
     profilerEnabled,
+    allowProviderRuntimePluginLoad: attemptOptions?.allowProviderRuntimePluginLoad,
     ...(params.cronCreatorAuthorityUnavailableReason === "queued-local-operator" &&
     bundleMcpThreadConfig.staticServerNames.length > 0
       ? {

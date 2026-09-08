@@ -76,6 +76,7 @@ import { createTuiPluginApprovalController } from "./tui-plugin-approvals.js";
 import { createSessionActions } from "./tui-session-actions.js";
 import { TUI_SESSION_LOOKUP_LIMIT } from "./tui-session-list-policy.js";
 import { createTuiRunIdTracker } from "./tui-session-run-coordinator.js";
+import { getPendingSubmitAcceptedRunId } from "./tui-submit-state.js";
 import {
   createEditorSubmitHandler,
   createSubmitBurstCoalescer,
@@ -781,6 +782,7 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
   let remediationShown = false;
   const localRunIds = createTuiRunIdTracker();
   const localBtwRunIds = createTuiRunIdTracker();
+  const localEscapeAbortRunIds = new Set<string>();
 
   const deliverDefault = opts.deliver ?? false;
   const autoMessage = opts.message?.trim();
@@ -1506,7 +1508,21 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
   } = createEventHandlers({
     chatLog,
     btw,
-    tui,
+    // Adapter, not a mutated pi-tui instance: the handlers only render and arm
+    // the local-abort Escape recovery owned by the editor.
+    tui: {
+      requestRender: (force) => tui.requestRender(force),
+      recoverEsc: (runId, validationAbort) => {
+        // One-shot: this Escape's provenance is spent on the first abort it produces.
+        const escapeAbort = localEscapeAbortRunIds.has(runId);
+        if (escapeAbort) {
+          localEscapeAbortRunIds.clear();
+        }
+        if (escapeAbort || validationAbort) {
+          editor.recoverNextLegacyAltPrintable();
+        }
+      },
+    },
     state,
     localMode: isLocalMode,
     setActivityStatus,
@@ -1529,6 +1545,7 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
   });
   invalidateSessionRunOwnership = () => {
     disposeEventHandlers();
+    localEscapeAbortRunIds.clear();
     state.activeChatRunId = null;
     setActivityStatus("idle");
   };
@@ -1655,7 +1672,20 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
       tui.requestRender();
       return;
     }
-    void abortActive();
+    // Only the runs this Escape aborts may arm editor recovery when they end.
+    localEscapeAbortRunIds.clear();
+    if (isLocalMode) {
+      for (const runId of [state.activeChatRunId, getPendingSubmitAcceptedRunId(state)]) {
+        if (runId) {
+          localEscapeAbortRunIds.add(runId);
+        }
+      }
+    }
+    void abortActive().then((aborted) => {
+      if (!aborted) {
+        localEscapeAbortRunIds.clear();
+      }
+    });
   };
   const handleCtrlC = () => {
     const now = Date.now();

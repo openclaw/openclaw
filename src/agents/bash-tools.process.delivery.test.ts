@@ -4,7 +4,7 @@ import { copyInternalToolResultState } from "../../packages/agent-core/src/inter
 import { runWithAgentToolExecutionContext } from "../../packages/agent-core/src/tool-execution-context.js";
 import {
   drainSystemEventEntries,
-  enqueueSystemEventEntry,
+  enqueueSystemEventEntryRaw as enqueueSystemEventEntry,
   enqueueSystemEventWithReceipt,
   peekSystemEventEntries,
 } from "../infra/system-events.js";

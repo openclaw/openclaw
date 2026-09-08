@@ -13,8 +13,7 @@ import {
   scanSessionTranscriptTree,
   selectSessionTranscriptTreePathNodes,
 } from "./transcript-tree.js";
-import type { SessionEntry } from "./types.js";
-import { resolveFreshSessionTotalTokens } from "./types.js";
+import { resolveFreshSessionTotalTokens, type SessionEntry } from "./types.js";
 import { MIN_READABLE_SESSION_VERSION } from "./version.js";
 
 export type ParentForkSourceTranscript = {
