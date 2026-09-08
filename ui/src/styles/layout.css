@@ -1656,6 +1656,31 @@ openclaw-settings-save-indicator:empty {
   flex: 0 0 var(--sidebar-session-group-action-size);
 }
 
+@media (hover: hover) and (pointer: fine) {
+  /* Hover actions replace the resting count instead of moving its column. */
+  .sidebar-session-catalog-grouping,
+  .sidebar-session-catalog-new {
+    position: absolute;
+    top: 50%;
+    right: 10px;
+    transform: translateY(-50%);
+  }
+
+  .sidebar-session-catalog-grouping:has(+ .sidebar-session-catalog-new) {
+    right: calc(10px + var(--sidebar-session-group-action-size) + 8px);
+  }
+
+  .sidebar-session-catalog-new-spacer {
+    display: none;
+  }
+
+  [data-session-section^="catalog:"]
+    > .sidebar-recent-sessions__head:where(:hover, :has(:focus-visible))
+    .sidebar-session-group-count {
+    opacity: 0;
+  }
+}
+
 @media (hover: none), (pointer: coarse) {
   /* Touch has no hover, so the chevron must be the resting state or
      catalog collapsibility becomes undiscoverable. */

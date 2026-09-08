@@ -65,28 +65,31 @@ export function controlUiSessionUrl(
   return url.toString();
 }
 
-export async function assertCatalogCountAlignment(page: Page, catalogIds: readonly string[]) {
-  const catalogs = catalogIds.map((catalogId) =>
-    page.locator(`[data-session-section="catalog:${catalogId}"]`),
+export async function assertSessionSectionCountAlignment(
+  page: Page,
+  sectionIds: readonly string[],
+) {
+  const sections = sectionIds.map((sectionId) =>
+    page.locator(`[data-session-section="${sectionId}"]`),
   );
-  for (const catalog of catalogs) {
-    const toggle = catalog.locator(".sidebar-session-group-toggle");
+  for (const section of sections) {
+    const toggle = section.locator(".sidebar-session-group-toggle");
     if ((await toggle.getAttribute("aria-expanded")) !== "false") {
       await toggle.click();
     }
   }
   const rightEdges = await Promise.all(
-    catalogs.map(async (catalog) => {
-      const bounds = await catalog.locator(".sidebar-session-group-count").boundingBox();
+    sections.map(async (section) => {
+      const bounds = await section.locator(".sidebar-session-group-count").boundingBox();
       if (!bounds) {
-        throw new Error("Expected visible collapsed catalog count");
+        throw new Error("Expected visible collapsed section count");
       }
       return bounds.x + bounds.width;
     }),
   );
   const expected = rightEdges[0];
   if (expected === undefined || rightEdges.some((edge) => Math.abs(edge - expected) > 0.1)) {
-    throw new Error(`Expected aligned catalog count edges, received ${rightEdges.join(", ")}`);
+    throw new Error(`Expected aligned section count edges, received ${rightEdges.join(", ")}`);
   }
 }
 

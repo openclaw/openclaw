@@ -5,7 +5,7 @@ import { beforeEach, expect, it } from "vitest";
 import type { SessionsCatalogHostEvent } from "../../../packages/gateway-protocol/src/index.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
-  assertCatalogCountAlignment,
+  assertSessionSectionCountAlignment,
   controlUiBundledGatewayUrl,
   controlUiBundledSettingsStorageKey,
   controlUiSessionPath,
@@ -123,13 +123,13 @@ suite.define(() => {
             {
               contextTokens: null,
               displayName: "Understanding Startup Phases and Delays",
-              hasActiveRun: true,
+              hasActiveRun: false,
               key: "agent:main:startup-phases",
               kind: "direct",
               label: "Understanding Startup Phases and Delays",
               model: "gpt-5.5",
               modelProvider: "openai",
-              status: "running",
+              status: "idle",
               totalTokens: 0,
               updatedAt: Date.now(),
               worktree: {
@@ -242,7 +242,7 @@ suite.define(() => {
           path: path.join(uiProofArtifactDir, "06-coding-catalog-spacing.png"),
         });
       }
-      await assertCatalogCountAlignment(page, ["codex", "claude"]);
+      await assertSessionSectionCountAlignment(page, ["work", "catalog:codex", "catalog:claude"]);
     } finally {
       await page.close();
     }
