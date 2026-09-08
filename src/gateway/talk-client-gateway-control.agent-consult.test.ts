@@ -810,6 +810,26 @@ describe("Talk client agent consult admission", () => {
     }
   });
 
+  it("rechecks reusable browser ownership after yielding before backend admission", async () => {
+    let current = true;
+    const assertCurrent = vi.fn(() => {
+      if (!current) {
+        throw new Error("Realtime voice session is not active");
+      }
+    });
+    const runner = createRunner();
+    const run = runner.runArgs(
+      { question: "first task" },
+      new AbortController().signal,
+      assertCurrent,
+    );
+    current = false;
+
+    await expect(run).rejects.toThrow("not active");
+    expect(assertCurrent).toHaveBeenCalledOnce();
+    expect(mocks.consultRealtimeVoiceAgent).not.toHaveBeenCalled();
+  });
+
   it("closes the Talk admission when core execution fails", async () => {
     mocks.runEmbeddedAgentCore.mockRejectedValueOnce(new Error("core failed"));
 

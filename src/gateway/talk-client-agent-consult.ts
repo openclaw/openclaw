@@ -511,7 +511,8 @@ export function createTalkClientAgentConsultRunner(params: {
         source,
         agentRuntime: getAgentRuntime(),
       }),
-    runArgs: (args: unknown, signal?: AbortSignal) => runArgs(args, signal),
+    runArgs: (args: unknown, signal?: AbortSignal, assertCurrent?: () => void) =>
+      runArgs(args, signal, undefined, undefined, assertCurrent),
     runOwnedArgs: lifecycleBoundRunArgs,
     runPrompt,
   };

@@ -34,6 +34,11 @@ import { resolveChatSendCallerContext } from "./server-methods/gateway-client-id
 import type { GatewayRequestContext } from "./server-methods/shared-types.js";
 import { resolveOwnedActiveTalkRunTarget } from "./server-methods/talk-client-run-ownership.js";
 import { formatError } from "./server-utils.js";
+import type {
+  LifecycleBoundTalkAgentConsult,
+  ReusableTalkAgentConsult,
+  TalkAgentConsultLifecycleMethods,
+} from "./talk-client-agent-consult.types.js";
 import { registerTalkConnectionCleanup } from "./talk-session-registry.js";
 import type { PreparedTalkSessionTarget } from "./talk-session-target.types.js";
 
@@ -56,21 +61,6 @@ type GatewayControlOwner = {
 type GatewayControlCommands = Parameters<
   NonNullable<RealtimeVoiceGatewayControl["bindControl"]>
 >[0];
-
-type TalkAgentConsultLifecycleMethods = {
-  adoptCompletionClaims?: () => void;
-  claimAppend?: () => boolean;
-  claimFailureAppend?: () => boolean;
-  steer?: RealtimeVoiceAgentConsultRunner;
-};
-
-type LifecycleBoundTalkAgentConsult = ((
-  args: unknown,
-  signal: AbortSignal,
-  ready?: () => Promise<void>,
-  assertCurrent?: () => void,
-) => Promise<{ text: string }>) &
-  TalkAgentConsultLifecycleMethods;
 
 const owners = new Map<string, GatewayControlOwner>();
 const pendingOwners = new Set<GatewayControlOwner>();
@@ -245,7 +235,7 @@ export function createTalkClientGatewayControlOwner(params: {
     "broadcastToConnIds" | "logGateway" | "chatAbortControllers"
   >;
   assertConnectionOpen?: () => void;
-  runToolAgentConsult: (args: unknown, signal: AbortSignal) => Promise<{ text: string }>;
+  runToolAgentConsult: ReusableTalkAgentConsult;
   runAgentConsult: LifecycleBoundTalkAgentConsult;
   appendTranscript: (entry: {
     entryId: string;
@@ -304,7 +294,7 @@ export function createTalkClientGatewayControlOwner(params: {
     }
   };
   const admitConsult = async (
-    runner: (args: unknown, signal: AbortSignal) => Promise<{ text: string }>,
+    runner: ReusableTalkAgentConsult,
     args: unknown,
     consultSignal: AbortSignal,
   ) => {
@@ -315,7 +305,7 @@ export function createTalkClientGatewayControlOwner(params: {
     // would let flush-completion teardown close the owner before the run starts.
     assertActive();
     consultSignal.throwIfAborted();
-    return runner(args, consultSignal);
+    return runner(args, consultSignal, assertActive);
   };
   const awaitProviderConsultReadiness = async (consultSignal: AbortSignal): Promise<void> => {
     assertActive();
@@ -448,7 +438,11 @@ export function createTalkClientGatewayControlOwner(params: {
           );
         }
         await awaitProviderConsultReadiness(delegatedSignal);
-        return await params.runToolAgentConsult({ question: prompt }, delegatedSignal);
+        return await params.runToolAgentConsult(
+          { question: prompt },
+          delegatedSignal,
+          assertActive,
+        );
       } finally {
         consultControllers.delete(consultId);
       }
