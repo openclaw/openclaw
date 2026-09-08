@@ -3295,11 +3295,11 @@ surfaces:
       source_ref: null
       process_version: 3
   - id: automation
-    name: "Automation: cron, hooks, tasks, polling"
+    name: Automation and durable work
     family: core
     level: beta
     level_code: M3
-    rationale: Documented and usable, but scenario proof should cover unattended delivery, retries, and failure visibility.
+    rationale: Cron, hooks, tasks, Task Flow, and durable work surfaces are documented and usable. Scenario proof should cover unattended delivery, recovery, and failure visibility.
     completeness_instructions: references/completeness/automation-cron-hooks-tasks-polling.md
     categories:
       - name: Cron Jobs
@@ -3561,12 +3561,28 @@ surfaces:
           - name: Plugin managedFlows
             coverageIds: [automation.plugin-managedflows]
             description: Covers Plugin managedFlows across managed and mirrored flow modes, flow registry persistence, revision tracking, owner-scoped access, and related task flow behavior.
+          - name: Workboard planning and dispatch
+            coverageIds: [automation.workboard-planning-and-dispatch]
+            description: Workboard card planning, assignment, dependency promotion, and dispatch into task-tracked worker runs.
+          - name: Standing orders and recurring programs
+            coverageIds: [automation.standing-orders-and-recurring-programs]
+            description: Workspace-defined standing authority combined with scheduled triggers, escalation boundaries, and recurring operator programs.
+          - name: Progress cards and completion delivery
+            coverageIds: [automation.progress-cards-and-completion-delivery]
+            description: Durable session progress state, user-visible notifications, and final result delivery for long-running work.
+          - name: Orphan reconciliation and recovery
+            coverageIds: [automation.orphan-reconciliation-and-recovery]
+            description: Recovery of interrupted tasks and flows, stale claim cleanup, cancellation settlement, and visible blocked or lost outcomes.
         docs:
           - docs/automation/tasks.md
           - docs/automation/index.md
+          - docs/automation/standing-orders.md
           - docs/cli/tasks.md
+          - docs/cli/workboard.md
           - docs/automation/taskflow.md
+          - docs/plugins/workboard.md
           - docs/plugins/sdk-runtime.md
+          - docs/tools/progress-card.md
         search_anchors:
           - Task list/show/cancel
           - Task notifications
@@ -3578,6 +3594,10 @@ surfaces:
           - openclaw tasks flow
           - Flow audit and maintenance
           - Plugin managedFlows
+          - Workboard CLI
+          - Standing orders
+          - Progress card
+          - Flow statuses
         category_note: background-task-ledger.md
         human_lts_override: false
       - name: Heartbeat

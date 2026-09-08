@@ -79,8 +79,8 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
       <span className="maturity-surface-meta"><span className="maturity-level-pill maturity-level-beta"><span className="maturity-level-code">M3</span><span>Beta</span></span><span>6 areas - 79% complete</span></span>
     </a>
 
-    <a className="maturity-surface-link" href="#automation-cron-hooks-tasks-polling">
-      <span className="maturity-surface-title">Automation: cron, hooks, tasks, polling</span>
+    <a className="maturity-surface-link" href="#automation-and-durable-work">
+      <span className="maturity-surface-title">Automation and durable work</span>
       <span className="maturity-surface-meta"><span className="maturity-level-pill maturity-level-beta"><span className="maturity-level-code">M3</span><span>Beta</span></span><span>6 areas - 79% complete</span></span>
     </a>
 
@@ -1429,10 +1429,11 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
   </Accordion>
 
-  <Accordion title="Automation: cron, hooks, tasks, polling - M3 Beta - 6 areas">
+  <Accordion title="Automation and durable work - M3 Beta - 6 areas">
+    <a id="automation-and-durable-work" />
     <a id="automation-cron-hooks-tasks-polling" />
 
-    Documented and usable, but scenario proof should cover unattended delivery, retries, and failure visibility.
+    Cron, hooks, tasks, Task Flow, and durable work surfaces are documented and usable. Scenario proof should cover unattended delivery, recovery, and failure visibility.
 
     <div className="maturity-surface-rollup"><span>Coverage Experimental - 49%</span><span>Quality Beta - 72%</span><span>Completeness Beta - 79%</span><span><span className="maturity-lts maturity-lts-none">None</span></span></div>
 
@@ -1483,14 +1484,14 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
       <div className="maturity-category-row">
         <div className="maturity-category-area">
           <span className="maturity-category-title">Background Tasks and Flows</span>
-          <span>10 capabilities</span>
+          <span>14 capabilities</span>
         </div>
         <div><span className="maturity-score maturity-score-clawesome"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-clawesome">Clawesome</span><span>100%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "100%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>68%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "68%" }} /></span></span></div>
         <div><span className="maturity-score maturity-score-beta"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-beta">Beta</span><span>79%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "79%" }} /></span></span></div>
         <div className="maturity-category-docs">
 
-    [Tasks](/automation/tasks), [Index](/automation/index), [Tasks](/cli/tasks), [Taskflow](/automation/taskflow), [Sdk Runtime](/plugins/sdk-runtime)
+    [Tasks](/automation/tasks), [Index](/automation/index), [Standing Orders](/automation/standing-orders), [Tasks](/cli/tasks), [Workboard](/cli/workboard), [Taskflow](/automation/taskflow), [Workboard](/plugins/workboard), [Sdk Runtime](/plugins/sdk-runtime), [Progress Card](/tools/progress-card)
 
     </div>
       </div>
