@@ -786,7 +786,7 @@ describe("canonical session message recovery", () => {
         { role: "assistant", text: answer },
       ];
       expect(visibleText()).toEqual(expected);
-      expect(terminalMessage.content[0].text).toBe(commentary + answer);
+      expect(terminalMessage.content).toEqual([{ type: "text", text: commentary + answer }]);
       if (persistence === "after-final") {
         handlePageGatewayEvent(state, {
           type: "event",
@@ -1046,7 +1046,7 @@ describe("canonical session message recovery", () => {
             ]
           : [{ role: "assistant", text: "After steer. Final unseen suffix." }]),
       ]);
-      expect(terminalMessage.content[0].text).toBe(terminalText);
+      expect(terminalMessage.content).toEqual([{ type: "text", text: terminalText }]);
     },
   );
 
