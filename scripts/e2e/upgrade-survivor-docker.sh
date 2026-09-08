@@ -54,6 +54,7 @@ source "$HARNESS_ROOT_DIR/scripts/lib/frozen-target-compat.sh"
 source "$HARNESS_ROOT_DIR/scripts/e2e/lib/prepublish-plugin-registry.sh"
 
 UPGRADE_SCENARIO_ARGS=()
+UPGRADE_COMPAT_ENV_ARGS=()
 UPGRADE_RUNNER="$HARNESS_ROOT_DIR/scripts/e2e/lib/upgrade-survivor/run.sh"
 UPGRADE_SCENARIO_DIR=""
 UPGRADE_TARGET_TRAIN=""
@@ -80,6 +81,7 @@ NODE
   1) ;;
   *) exit "$context_status" ;;
 esac
+openclaw_resolve_frozen_upgrade_survivor_capabilities "$ROOT_DIR"
 if [ "$UPGRADE_TARGET_TRAIN" = extended-stable ]; then
   # Extended-stable retains shipped state expectations. Regular releases keep
   # the trusted runner and its serving-turn/post-inference assertions together.
@@ -95,8 +97,9 @@ if [ "$UPGRADE_TARGET_TRAIN" = extended-stable ]; then
   UPGRADE_WINDOWS_HELPERS="$(openclaw_resolve_frozen_target_file \
     "$ROOT_DIR" scripts/windows-cmd-helpers.mjs)"
   DOCKER_E2E_WINDOWS_HELPERS_PATH="$UPGRADE_WINDOWS_HELPERS"
-  UPGRADE_BOUNDED_RESPONSE="$(openclaw_resolve_frozen_target_file \
-    "$ROOT_DIR" scripts/lib/bounded-response.mjs)"
+  UPGRADE_BOUNDED_RESPONSE="$HARNESS_ROOT_DIR/scripts/lib/bounded-response.mjs"
+  UPGRADE_DIAGNOSTICS="$HARNESS_ROOT_DIR/scripts/e2e/lib/upgrade-survivor/diagnostics.mjs"
+  UPGRADE_NPM_REGISTRY_SERVER="$HARNESS_ROOT_DIR/scripts/e2e/lib/plugins/npm-registry-server.mjs"
   UPGRADE_PLUGIN_INDEX="$(openclaw_resolve_frozen_target_file \
     "$ROOT_DIR" scripts/e2e/lib/plugin-index-sqlite.mjs)"
   UPGRADE_ENV_LIMITS="$(openclaw_resolve_frozen_target_file \
@@ -105,6 +108,8 @@ if [ "$UPGRADE_TARGET_TRAIN" = extended-stable ]; then
     "$ROOT_DIR" scripts/e2e/lib/text-file-utils.mjs)"
   UPGRADE_SCENARIO_ARGS+=(
     -v "$UPGRADE_SCENARIO_DIR:/app/scripts/e2e/lib/upgrade-survivor:ro"
+    -v "$UPGRADE_DIAGNOSTICS:/app/scripts/e2e/lib/upgrade-survivor/diagnostics.mjs:ro"
+    -v "$UPGRADE_NPM_REGISTRY_SERVER:/app/scripts/e2e/lib/plugins/npm-registry-server.mjs:ro"
     -v "$UPGRADE_NPM_PUBLISH_PLAN:/app/scripts/lib/npm-publish-plan.mjs:ro"
     -v "$UPGRADE_BOUNDED_RESPONSE:/app/scripts/lib/bounded-response.mjs:ro"
     -v "$UPGRADE_PLUGIN_INDEX:/app/scripts/e2e/lib/plugin-index-sqlite.mjs:ro"
@@ -118,6 +123,13 @@ SKIP_BUILD="${OPENCLAW_UPGRADE_SURVIVOR_E2E_SKIP_BUILD:-0}"
 DOCKER_RUN_TIMEOUT="${OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT:-1200s}"
 BASELINE_SPEC="${OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC:-}"
 SCENARIO="${OPENCLAW_UPGRADE_SURVIVOR_SCENARIO:-base}"
+if [ "$OPENCLAW_FROZEN_UPGRADE_SURVIVOR_CLAWHUB_MODE" = legacy ]; then
+  legacy_clawhub_package="@openclaw/whatsapp"
+  [ "$SCENARIO" = configured-plugin-installs ] && legacy_clawhub_package="@openclaw/matrix"
+  UPGRADE_COMPAT_ENV_ARGS+=(
+    -e "OPENCLAW_FROZEN_UPGRADE_SURVIVOR_CLAWHUB_PACKAGE=$legacy_clawhub_package"
+  )
+fi
 UPDATE_RESTART_MODE="${OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE:-manual}"
 if [ "$SCENARIO" = "abandoned-update" ] && [ -z "${OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE:-}" ]; then
   UPDATE_RESTART_MODE="auto-auth"
@@ -346,6 +358,7 @@ if [ "${OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE:-0}" = "1" ]; then
     -e OPENCLAW_UPGRADE_SURVIVOR_CLAWHUB_FIXTURE_SERVER=/tmp/openclaw-clawhub-fixture-server.cjs \
     -e OPENCLAW_UPGRADE_SURVIVOR_CONFIG_PARKING_HELPER=/tmp/openclaw-config-parking.mjs \
     -e OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_SERVER_SCRIPT=/tmp/openclaw-release-harness/scripts/e2e/lib/plugins/npm-registry-server.mjs \
+    ${UPGRADE_COMPAT_ENV_ARGS[@]+"${UPGRADE_COMPAT_ENV_ARGS[@]}"} \
     "${PROBE_ENV_ARGS[@]}" \
     ${LIVE_OPENAI_ENV_ARGS[@]+"${LIVE_OPENAI_ENV_ARGS[@]}"} \
     -v "$ARTIFACT_DIR:/tmp/openclaw-upgrade-survivor-artifacts" \
@@ -400,6 +413,7 @@ docker_e2e_run_with_harness \
   -e OPENCLAW_UPGRADE_SURVIVOR_CLAWHUB_FIXTURE_SERVER=/tmp/openclaw-clawhub-fixture-server.cjs \
   -e OPENCLAW_UPGRADE_SURVIVOR_CONFIG_PARKING_HELPER=/tmp/openclaw-config-parking.mjs \
   -e OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_SERVER_SCRIPT=/tmp/openclaw-release-harness/scripts/e2e/lib/plugins/npm-registry-server.mjs \
+  ${UPGRADE_COMPAT_ENV_ARGS[@]+"${UPGRADE_COMPAT_ENV_ARGS[@]}"} \
   "${PROBE_ENV_ARGS[@]}" \
   -v "$ARTIFACT_DIR:/tmp/openclaw-upgrade-survivor-artifacts" \
   -v "$HARNESS_ROOT_DIR/scripts/e2e/lib/clawhub-fixture-server.cjs:/tmp/openclaw-clawhub-fixture-server.cjs:ro" \

@@ -108,11 +108,11 @@ function runPrepublishAssertion(
   );
 }
 
-function runNoRequestsAssertion(baseUrl?: string, cwd = process.cwd()) {
+function runNoRequestsAssertion(baseUrl?: string, cwd = process.cwd(), env = process.env) {
   return spawnSync(process.execPath, [SCRIPT_PATH, "assert-no-requests", baseUrl ?? ""], {
     cwd,
     encoding: "utf8",
-    env: { ...process.env },
+    env: { ...env },
   });
 }
 
@@ -165,6 +165,15 @@ describe("ClawHub fixture server", () => {
     expect(artifactResponse.headers.get("x-clawhub-artifact-type")).toBe("npm-pack-tarball");
     expect(artifactResponse.headers.get("x-clawhub-artifact-sha256")).toMatch(/^[a-f0-9]{64}$/u);
     expect(Buffer.from(await artifactResponse.arrayBuffer()).length).toBeGreaterThan(100);
+
+    const legacyAssertion = runNoRequestsAssertion(baseUrl, process.cwd(), {
+      ...process.env,
+      OPENCLAW_FROZEN_UPGRADE_SURVIVOR_CLAWHUB_PACKAGE: PACKAGE_NAME,
+    });
+    expect(legacyAssertion.status, legacyAssertion.stderr).toBe(0);
+    expect(legacyAssertion.stdout).toContain(
+      "Verified complete legacy ClawHub artifact audit sequence.",
+    );
 
     const missingResponse = await fetch(`${baseUrl}/missing`);
     expect(missingResponse.status).toBe(404);
