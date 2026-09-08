@@ -977,13 +977,6 @@ h3.plugins-subheader {
 
 /* ---------- responsive ---------- */
 
-@media (max-width: 400px) {
-  .skill-library-import__pickers {
-    flex-direction: column;
-    align-items: flex-start;
-  }
-}
-
 @media (max-width: 640px) {
   openclaw-skills-page .plugins-toolbar--fields {
     display: grid;
