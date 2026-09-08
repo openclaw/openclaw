@@ -1481,6 +1481,16 @@
                     "group": "Discord",
                     "pages": [
                       "channels/discord",
+                      "channels/discord/setup",
+                      "channels/discord/access-control",
+                      "channels/discord/messaging",
+                      "channels/discord/threads-and-sessions",
+                      "channels/discord/rich-messages",
+                      "channels/discord/events",
+                      "channels/discord/voice-channels",
+                      "channels/discord/voice-transcripts",
+                      "channels/discord/voice-follow",
+                      "channels/discord/troubleshooting",
                       "channels/discord-activities"
                     ]
                   },
@@ -1754,6 +1764,16 @@
                   },
                   "plugins/cli-backend-plugins",
                   "plugins/hooks",
+                  {
+                    "group": "Plugin hooks",
+                    "pages": [
+                      "plugins/hooks/reference",
+                      "plugins/hooks/tool-policy",
+                      "plugins/hooks/prompt-and-session",
+                      "plugins/hooks/messages",
+                      "plugins/hooks/lifecycle"
+                    ]
+                  },
                   "plugins/plugin-permission-requests",
                   "plugins/adding-capabilities"
                 ]
@@ -2522,6 +2542,19 @@
                 "group": "Plugin SDK reference",
                 "pages": [
                   "plugins/sdk-overview",
+                  {
+                    "group": "Plugin SDK overview",
+                    "pages": [
+                      "plugins/sdk-overview/imports",
+                      "plugins/sdk-overview/capabilities",
+                      "plugins/sdk-overview/tools-and-commands",
+                      "plugins/sdk-overview/infrastructure",
+                      "plugins/sdk-overview/host-hooks",
+                      "plugins/sdk-overview/cli-and-discovery",
+                      "plugins/sdk-overview/memory-and-context",
+                      "plugins/sdk-overview/events-and-hooks"
+                    ]
+                  },
                   "plugins/manifest",
                   {
                     "group": "Plugin manifest",
@@ -2562,6 +2595,17 @@
                   "plugins/architecture",
                   "plugins/architecture-internals",
                   "plugins/sdk-migration",
+                  {
+                    "group": "Plugin SDK migration",
+                    "pages": [
+                      "plugins/sdk-migration/how-to-migrate",
+                      "plugins/sdk-migration/import-paths",
+                      "plugins/sdk-migration/removed-surfaces",
+                      "plugins/sdk-migration/talk",
+                      "plugins/sdk-migration/compatibility-policy",
+                      "plugins/sdk-migration/removal-timeline"
+                    ]
+                  },
                   "plugins/compatibility",
                   "plugins/sdk-channel-outbound",
                   "plugins/sdk-channel-inbound",

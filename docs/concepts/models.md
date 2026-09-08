@@ -96,11 +96,12 @@ validation also use the published inventory. Missing capability facts do not
 start another provider discovery. Native runtime observations keep their separate
 owner and authentication requirements.
 
-Programmatic catalog loads, including the public SDK loader, also default to
-passive reads. Without a published owner they use existing read-only facts. Callers
-that explicitly request a full refresh keep inventory acquisition; an explicit
-read-only request keeps its narrower refresh scope. Runtime callers can retain
-explicit writable ownership when needed.
+Internal catalog loads default to passive reads. Without a published owner they
+use existing read-only facts. The public SDK's `loadPreparedModelCatalog` and legacy
+`loadModelCatalog` keep their writable default for compatibility and can acquire
+provider inventory. Pass `readOnly: true` for a passive SDK read. Explicit full
+refreshes keep inventory acquisition; explicit read-only requests keep their
+narrower refresh scope.
 
 For models configured to use a CLI runtime, channel picker availability follows that
 runtime's prepared authentication; a provider API key does not substitute for its

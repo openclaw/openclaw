@@ -533,14 +533,8 @@ function renderClawHubDetailDialog(props: SkillsProps) {
       style="--openclaw-modal-width: min(1040px, calc(100vw - 32px));"
       @modal-cancel=${props.onClawHubDetailClose}
     >
-      <div
-        class="md-preview-dialog__panel ${
-          props.clawhubDetailError && !props.clawhubDetailLoading
-            ? "md-preview-dialog__panel--message-only"
-            : ""
-        }"
-      >
-        <div class="md-preview-dialog__header">
+      <div class="exec-approval-card skill-reader-dialog">
+        <div class="exec-approval-header">
           <div class="clawhub-skill-detail__identity">
             ${
               detailImageUrl
@@ -553,20 +547,28 @@ function renderClawHubDetailDialog(props: SkillsProps) {
                   />`
                 : nothing
             }
-            <div class="md-preview-dialog__title">
+            <div class="exec-approval-title">
               ${detail?.skill?.displayName ?? props.clawhubDetailRef}
             </div>
           </div>
-          <button class="btn btn--sm" @click=${props.onClawHubDetailClose}>
-            ${t("skillsPage.close")}
+          <button
+            type="button"
+            class="btn btn--icon btn--ghost"
+            aria-label=${t("skillsPage.close")}
+            @click=${props.onClawHubDetailClose}
+          >
+            ${icons.x}
           </button>
         </div>
-        <div class="md-preview-dialog__body" style="display: grid; gap: 16px;">
+        <div class="skill-reader-dialog__body" style="display: grid; gap: var(--space-4);">
           ${
             props.clawhubDetailLoading
               ? html`<div class="muted">${t("common.loading")}</div>`
               : props.clawhubDetailError
-                ? html`<div class="callout danger">${props.clawhubDetailError}</div>`
+                ? html`<div class="callout danger skill-reader-dialog__error" role="alert">
+                    <span aria-hidden="true">${icons.alertTriangle}</span>
+                    <span>${props.clawhubDetailError}</span>
+                  </div>`
                 : detail?.skill
                   ? html`
                       <div style="font-size: 14px; line-height: 1.5;">
@@ -692,21 +694,23 @@ function renderSkillDetail(skill: SkillStatusEntry, props: SkillsProps) {
       style="--openclaw-modal-width: min(1040px, calc(100vw - 32px));"
       @modal-cancel=${props.onDetailClose}
     >
-      <div class="md-preview-dialog__panel">
-        <div class="md-preview-dialog__header">
-          <div
-            class="md-preview-dialog__title"
-            style="display: flex; align-items: center; gap: 8px;"
-          >
+      <div class="exec-approval-card skill-reader-dialog">
+        <div class="exec-approval-header">
+          <div class="exec-approval-title" style="display: flex; align-items: center; gap: 8px;">
             <span class="statusDot ${skillStatusClass(skill)}"></span>
             ${skill.emoji ? html`<span style="font-size: 18px;">${skill.emoji}</span>` : nothing}
             <span>${skill.name}</span>
           </div>
-          <button class="btn btn--sm" @click=${props.onDetailClose}>
-            ${t("skillsPage.close")}
+          <button
+            type="button"
+            class="btn btn--icon btn--ghost"
+            aria-label=${t("skillsPage.close")}
+            @click=${props.onDetailClose}
+          >
+            ${icons.x}
           </button>
         </div>
-        <div class="md-preview-dialog__body" style="display: grid; gap: 16px;">
+        <div class="skill-reader-dialog__body" style="display: grid; gap: var(--space-4);">
           <div>
             <div style="font-size: 14px; line-height: 1.5; color: var(--text);">
               ${skill.description}

@@ -17,7 +17,7 @@ import { prepareAgentCommandExecution } from "../agents/command/prepare.js";
 import { runEmbeddedAgent } from "../agents/embedded-agent.js";
 import { loadManifestModelCatalog } from "../agents/model-catalog.js";
 import * as modelSelectionModule from "../agents/model-selection.js";
-import { loadPreparedModelCatalog } from "../agents/prepared-model-catalog.js";
+import { readPreparedModelCatalog } from "../agents/prepared-model-catalog.js";
 import { isAgentRunRestartAbortReason } from "../agents/run-termination.js";
 import { callInProcessGatewayTool } from "../agents/tools/in-process-gateway.js";
 import { ensureAgentWorkspace } from "../agents/workspace.js";
@@ -543,7 +543,7 @@ async function runAgentWithSessionKey(sessionKey: string): Promise<void> {
 
 function mockModelCatalogOnce(entries: ReturnType<typeof loadManifestModelCatalog>): void {
   vi.mocked(loadManifestModelCatalog).mockReturnValueOnce(entries);
-  vi.mocked(loadPreparedModelCatalog).mockResolvedValueOnce(entries);
+  vi.mocked(readPreparedModelCatalog).mockResolvedValueOnce(entries);
 }
 
 function installThinkingTestProviders(channels: Parameters<typeof createTestRegistry>[0] = []) {
@@ -598,7 +598,7 @@ beforeEach(() => {
   runtimeSnapshotModule.clearRuntimeConfigSnapshot();
   vi.mocked(runEmbeddedAgent).mockResolvedValue(createDefaultAgentResult());
   vi.mocked(loadManifestModelCatalog).mockReturnValue([]);
-  vi.mocked(loadPreparedModelCatalog).mockResolvedValue([]);
+  vi.mocked(readPreparedModelCatalog).mockResolvedValue([]);
   vi.mocked(loadEnabledClaudeBundleCommands).mockReturnValue([]);
   vi.mocked(modelSelectionModule.isCliProvider).mockImplementation(() => false);
   configIoMocks.readConfigFileSnapshotForWrite.mockResolvedValue({
@@ -1782,7 +1782,7 @@ describe("agentCommand", () => {
         runtime,
       );
 
-      expect(loadPreparedModelCatalog).not.toHaveBeenCalled();
+      expect(readPreparedModelCatalog).not.toHaveBeenCalled();
       expectLastRunProviderModel("openrouter", "openrouter/auto");
       const thinkingDefaultCall = vi.mocked(modelSelectionModule.resolveThinkingDefault).mock
         .calls[0]?.[0];

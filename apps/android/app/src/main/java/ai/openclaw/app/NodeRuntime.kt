@@ -5311,6 +5311,8 @@ class NodeRuntime private constructor(
 
   suspend fun refreshChatSessionBranches(): Boolean = chat.refreshSessionBranches()
 
+  internal fun canSwitchChatSessionBranch(sessionKey: String): Boolean = chat.canSwitchSessionBranch(sessionKey)
+
   suspend fun switchChatSessionBranch(leafEntryId: String): Boolean = chat.switchSessionBranch(chatSessionKey.value, leafEntryId)
 
   fun setChatThinkingLevel(level: String) {

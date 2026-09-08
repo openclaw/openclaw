@@ -68,7 +68,7 @@ vi.mock("../agents/model-catalog.js", () => ({
 
 vi.mock("../agents/prepared-model-catalog.js", () => ({
   loadProviderScopedThinkingCatalog: vi.fn(async () => []),
-  loadPreparedModelCatalog: vi.fn(),
+  readPreparedModelCatalog: vi.fn(),
   loadPreparedModelCatalogSnapshot: vi.fn(async () => ({
     entries: [],
     routeVariants: [],

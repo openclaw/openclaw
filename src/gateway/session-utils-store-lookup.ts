@@ -1,4 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
+import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { listAgentIds } from "../agents/agent-scope.js";
 import { listSubagentRunsForController } from "../agents/subagents/registry/subagent-registry-read.js";
@@ -449,6 +450,63 @@ export function resolveGatewaySessionStoreTargetsReadOnly(params: {
     (selection) =>
       selection.target ??
       expectDefined(selection.plan, "unresolved logical session plan").resolve(),
+  );
+}
+
+function captureSessionStoreTargetResult<T>(resolve: () => T): Result<T, unknown> {
+  try {
+    return ok(resolve());
+  } catch (error) {
+    return err(error);
+  }
+}
+
+/** Read exact groups now, retaining logical errors for the caller's ordered visitor. */
+export function prepareGatewaySessionStoreTargetsReadOnly(params: {
+  cfg: OpenClawConfig;
+  targets: readonly { key: string; agentId?: string }[];
+  projection: SessionEntryListScope["projection"];
+}): Array<Result<GatewaySessionStoreTargetWithStore, unknown>> {
+  const targetDiscoveryCache: GatewaySessionStoreDiscoveryCache = new Map();
+  const requests = params.targets.map((target) =>
+    captureSessionStoreTargetResult(() => {
+      const lookup: GatewaySessionStoreLookupParams = {
+        ...target,
+        key: normalizeOptionalString(target.key) ?? "",
+        cfg: params.cfg,
+        clone: false,
+        readOnly: true,
+        exactRead: true,
+        projection: params.projection,
+        targetDiscoveryCache,
+      };
+      return { lookup, legacy: prepareExplicitDeletedLegacyMainStoreTarget(lookup) };
+    }),
+  );
+  loadGatewaySessionStoreReads(
+    requests.flatMap((request) => (request.ok ? (request.value.legacy?.reads ?? []) : [])),
+  );
+  const selected = requests.map((request) => {
+    if (!request.ok) {
+      return request;
+    }
+    return captureSessionStoreTargetResult(() => {
+      // Only a legacy miss permits fallback; a logical error must stay with its target.
+      const target = request.value.legacy?.resolve();
+      return target ? { target } : { plan: prepareGatewaySessionStoreTarget(request.value.lookup) };
+    });
+  });
+  loadGatewaySessionStoreReads(
+    selected.flatMap((selection) => (selection.ok ? (selection.value.plan?.reads ?? []) : [])),
+  );
+  return selected.map((selection) =>
+    selection.ok
+      ? captureSessionStoreTargetResult(
+          () =>
+            selection.value.target ??
+            expectDefined(selection.value.plan, "unresolved logical session plan").resolve(),
+        )
+      : selection,
   );
 }
 

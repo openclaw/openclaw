@@ -954,7 +954,6 @@ openclaw-chat-page {
   align-items: center;
   gap: 6px;
   color: var(--muted);
-  text-decoration: none;
   transition: color 150ms ease-out;
 }
 
@@ -2122,7 +2121,6 @@ openclaw-chat-video-player {
   gap: 8px;
   min-width: 0;
   color: var(--text);
-  text-decoration: none;
 }
 
 .chat-pr__link--static {
@@ -2368,7 +2366,6 @@ button.chat-pr__diff {
   color: var(--muted);
   font-size: 12px;
   font-weight: 600;
-  text-decoration: none;
   white-space: nowrap;
 }
 

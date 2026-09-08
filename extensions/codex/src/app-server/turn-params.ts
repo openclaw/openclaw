@@ -72,6 +72,7 @@ export function buildTurnStartParams(
     skillsCollaborationInstructions?: string;
     memoryCollaborationInstructions?: string;
     preserveNativeTurnSettings?: boolean;
+    parentLocalEgress?: boolean;
     clearInheritedServiceTier?: boolean;
     sessionStatusAvailable?: boolean;
     messageToolAvailable?: boolean;
@@ -96,6 +97,10 @@ export function buildTurnStartParams(
         memoryCollaborationInstructions: options.memoryCollaborationInstructions,
       })
     : undefined;
+  if (collaborationMode && options.parentLocalEgress) {
+    // Catalog collaboration stays native; parent-local context exists only at inference egress.
+    collaborationMode.settings.developer_instructions = null;
+  }
   const useThreadPermissionProfile = options.appServer.networkProxy && !options.sandboxPolicy;
   const currentSenderContext =
     params.trigger === "user" ? buildCodexCurrentSenderContextValue(params) : undefined;
@@ -223,7 +228,7 @@ export function buildTurnCollaborationMode(
   };
 }
 
-function buildTurnScopedCollaborationInstructions(
+export function buildCodexParentLocalInstructions(
   params: EmbeddedRunAttemptParams,
   options: {
     turnScopedDeveloperInstructions?: string;
@@ -239,10 +244,18 @@ function buildTurnScopedCollaborationInstructions(
   if (params.trigger === "cron") {
     return joinPresentSections(buildCronCollaborationInstructions(), contextInstructions);
   }
-  if (contextInstructions?.trim()) {
-    return joinPresentSections(buildDefaultCollaborationInstructions(), contextInstructions);
-  }
-  return null;
+  return contextInstructions || null;
+}
+
+function buildTurnScopedCollaborationInstructions(
+  params: EmbeddedRunAttemptParams,
+  options: Parameters<typeof buildCodexParentLocalInstructions>[1],
+): string | null {
+  const instructions = buildCodexParentLocalInstructions(params, options);
+  // Shipped external app-server compatibility: preserve its existing collaboration carrier.
+  return instructions && params.trigger !== "cron"
+    ? joinPresentSections(buildDefaultCollaborationInstructions(), instructions)
+    : instructions;
 }
 
 function buildDefaultCollaborationInstructions(): string {

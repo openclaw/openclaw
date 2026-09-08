@@ -66,7 +66,7 @@ menu, it closes without choosing an action. Reopen it explicitly when space
 permits; it does not reopen automatically when the layout recovers. Dismissing
 the menu does not reset Chat's draft, editor, or reader state.
 
-Chat's Model picker, its Permissions page, Thinking effort, and Background tasks sheets initially
+Chat's Model picker, its Permissions page, Thinking effort, Background tasks, and Switch branch sheets initially
 use the largest safe region with usable sheet space, not the trigger's region.
 They keep that region while it remains usable. Valid geometry changes retain
 the same sheet and local state. An invalid opening closes without selecting an
@@ -77,8 +77,15 @@ layout changes retain the opening and its reading state. Switching Gateway,
 agent, or chat closes it; a same-owner disconnect leaves read errors visible
 with Refresh available.
 
-Branch-switching sheets and other dialogs, sheets, and popup menus are not
-fold-adapted yet.
+Switch branch keeps its list and reading position through safe layout changes;
+the title and rows scroll together in short panes. Changing Gateway, agent, or
+chat retires the opening. Reading remains available when a run is pending,
+outbox restoration is incomplete, the current session has outbox items, or a
+branch switch is already in flight. Mutation rows stay disabled in those
+states. Closing or retiring the sheet does not cancel an admitted switch,
+and its completion cannot dismiss a replacement opening.
+
+Other dialogs, sheets, and popup menus are not fold-adapted yet.
 
 ## Wear OS companion
 

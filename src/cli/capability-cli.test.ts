@@ -106,7 +106,7 @@ const mocks = vi.hoisted(() => ({
     typeof import("../agents/memory-search.js").resolveMemorySearchConfig
   >(() => null),
   loadModelCatalog: vi.fn<
-    typeof import("../agents/prepared-model-catalog.js").loadPreparedModelCatalog
+    typeof import("../agents/prepared-model-catalog.js").readPreparedModelCatalog
   >(async () => []),
   prepareSimpleCompletionModelForAgent: vi.fn(async () => ({
     selection: {
@@ -343,8 +343,8 @@ vi.mock("../agents/agent-scope.js", () => ({
 
 vi.mock("../agents/prepared-model-catalog.js", () => ({
   loadProviderScopedThinkingCatalog: vi.fn(async () => []),
-  loadPreparedModelCatalog:
-    mocks.loadModelCatalog as typeof import("../agents/prepared-model-catalog.js").loadPreparedModelCatalog,
+  readPreparedModelCatalog:
+    mocks.loadModelCatalog as typeof import("../agents/prepared-model-catalog.js").readPreparedModelCatalog,
 }));
 
 vi.mock("../agents/simple-completion-runtime.js", () => ({

@@ -733,7 +733,6 @@
 .chat-tool-card__detail-link:hover,
 .chat-tool-card__detail-link:focus-visible {
   color: var(--text);
-  text-decoration: none;
 }
 
 .chat-tool-card__block {
@@ -1174,7 +1173,6 @@
   color: var(--muted);
   font: inherit;
   cursor: var(--cursor-action);
-  text-decoration: none;
 }
 
 .chat-tasks-status__link:hover,

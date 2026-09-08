@@ -451,7 +451,7 @@ export async function loadPreparedModelCatalogSnapshot(
   return (await loadPreparedModelCatalogOwnerSnapshot(params)).modelCatalog;
 }
 
-export async function loadPreparedModelCatalog(
+export async function readPreparedModelCatalog(
   params: LoadPreparedModelCatalogParams = {},
 ): Promise<ModelCatalogEntry[]> {
   return (await loadPreparedModelCatalogSnapshot(params)).entries;

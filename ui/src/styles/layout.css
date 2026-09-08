@@ -70,7 +70,6 @@
   background: var(--panel);
   color: var(--text);
   box-shadow: var(--shadow-md), var(--focus-ring);
-  text-decoration: none;
   transform: translate(-50%, -160%);
   transition: transform var(--duration-fast) var(--ease-out);
 }
@@ -597,7 +596,6 @@ html:is(.openclaw-native-macos, .openclaw-native-nav, .openclaw-native-web-chrom
   border-radius: var(--radius-md);
   background: transparent;
   color: var(--muted);
-  text-decoration: none;
   transition:
     border-color var(--duration-fast) ease,
     background var(--duration-fast) ease,
@@ -608,7 +606,6 @@ html:is(.openclaw-native-macos, .openclaw-native-nav, .openclaw-native-web-chrom
   color: var(--text);
   background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
   border-color: color-mix(in srgb, var(--border) 72%, transparent);
-  text-decoration: none;
 }
 
 .settings-sidebar__item:focus-visible {
@@ -668,12 +665,10 @@ html:is(.openclaw-native-macos, .openclaw-native-nav, .openclaw-native-web-chrom
   padding: 0 9px;
   border-radius: var(--radius-sm);
   color: var(--text);
-  text-decoration: none;
 }
 
 .settings-sidebar__subitem:hover {
   background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
-  text-decoration: none;
 }
 
 .settings-sidebar__subitem--active {
@@ -2021,7 +2016,6 @@ openclaw-settings-save-indicator:empty {
   padding: var(--sidebar-session-link-padding-block) 2px var(--sidebar-session-link-padding-block)
     var(--sidebar-inset);
   color: inherit;
-  text-decoration: none;
 }
 
 .sidebar-child-session-toggle {
@@ -2094,10 +2088,6 @@ openclaw-settings-save-indicator:empty {
   font-size: calc(9px * var(--control-ui-text-scale));
   font-variant-numeric: tabular-nums;
   line-height: 1;
-}
-
-.sidebar-recent-session__link:hover {
-  text-decoration: none;
 }
 
 .viewer-facepile {
@@ -2379,7 +2369,6 @@ openclaw-settings-save-indicator:empty {
   color: var(--text);
   font: inherit;
   text-align: left;
-  text-decoration: none;
   transition:
     background var(--duration-fast) ease,
     box-shadow var(--duration-fast) ease,
@@ -2550,7 +2539,6 @@ wa-dropdown.sidebar-customize-menu::part(menu) {
   font: inherit;
   font-size: calc(13px * var(--control-ui-text-scale));
   text-align: left;
-  text-decoration: none;
 }
 
 /* Keep expanded state separate from :hover so hover media scoping preserves
@@ -3115,7 +3103,6 @@ a:is(
   border: 1px solid transparent;
   background: transparent;
   color: var(--muted);
-  text-decoration: none;
   transition:
     border-color var(--duration-fast) ease,
     background var(--duration-fast) ease,
@@ -3162,7 +3149,6 @@ a:is(
   color: var(--text);
   background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
   border-color: color-mix(in srgb, var(--border) 72%, transparent);
-  text-decoration: none;
 }
 
 .nav-item:hover .nav-item__icon {
@@ -4126,13 +4112,11 @@ wa-dropdown.sidebar-identity-menu::part(menu) {
   font-size: var(--control-ui-text-xs);
   text-overflow: ellipsis;
   white-space: nowrap;
-  text-decoration: none;
 }
 
 .sidebar-footer-build:hover,
 .sidebar-footer-build:focus-visible {
   color: var(--text);
-  text-decoration: none;
 }
 
 .sidebar-footer-build__text {

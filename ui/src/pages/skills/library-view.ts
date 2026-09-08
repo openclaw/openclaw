@@ -2,13 +2,14 @@ import { html, nothing } from "lit";
 import { live } from "lit/directives/live.js";
 import { repeat } from "lit/directives/repeat.js";
 import type { SkillsLibraryMutateParams } from "../../../../packages/gateway-protocol/src/index.ts";
+import { icons } from "../../components/icons.ts";
+import "../../components/modal-dialog.ts";
 import {
   renderSettingsEmpty,
   renderSettingsSection,
   renderSettingsSegmented,
   renderSettingsStatus,
 } from "../../components/settings-ui.ts";
-import "../../components/modal-dialog.ts";
 import { t } from "../../i18n/index.ts";
 import type { SkillLibraryController, LibraryView } from "./library-controller.ts";
 import { renderLibraryIdentity } from "./library-detail.ts";
@@ -228,7 +229,7 @@ function renderLibraryEditor(library: SkillLibraryController) {
     }}
   >
     <form
-      class="md-preview-dialog__panel"
+      class="exec-approval-card skill-reader-dialog"
       @submit=${(event: SubmitEvent) => {
         event.preventDefault();
         void library.save();
@@ -240,19 +241,20 @@ function renderLibraryEditor(library: SkillLibraryController) {
         }
       }}
     >
-      <div class="md-preview-dialog__header">
-        <strong>${draft.entry?.slug ?? t("skillLibrary.create")}</strong
+      <div class="exec-approval-header">
+        <strong class="exec-approval-title">${draft.entry?.slug ?? t("skillLibrary.create")}</strong
         ><button
           type="button"
-          class="btn btn--sm"
+          class="btn btn--icon btn--ghost"
+          aria-label=${t("common.close")}
           ?disabled=${library.busy}
           @click=${() => library.close()}
         >
-          ${t("common.close")}
+          ${icons.x}
         </button>
       </div>
       <div
-        class="md-preview-dialog__body"
+        class="skill-reader-dialog__body"
         style="display: grid; gap: var(--space-4); min-width: 0;"
       >
         <p class="muted">
@@ -542,7 +544,7 @@ function renderLibraryImport(library: SkillLibraryController) {
     }}
   >
     <form
-      class="md-preview-dialog__panel"
+      class="exec-approval-card skill-reader-dialog"
       @submit=${(event: SubmitEvent) => {
         event.preventDefault();
         if (library.importSource) {
@@ -556,14 +558,20 @@ function renderLibraryImport(library: SkillLibraryController) {
         }
       }}
     >
-      <div class="md-preview-dialog__header">
-        <strong>${t("skillLibrary.import")}</strong
-        ><button type="button" class="btn btn--sm" ?disabled=${library.busy} @click=${close}>
-          ${t("common.close")}
+      <div class="exec-approval-header">
+        <strong class="exec-approval-title">${t("skillLibrary.import")}</strong
+        ><button
+          type="button"
+          class="btn btn--icon btn--ghost"
+          aria-label=${t("common.close")}
+          ?disabled=${library.busy}
+          @click=${close}
+        >
+          ${icons.x}
         </button>
       </div>
       <div
-        class="md-preview-dialog__body"
+        class="skill-reader-dialog__body"
         style="display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-4);"
       >
         <p class="muted">

@@ -1,8 +1,12 @@
+import { isDeepStrictEqual } from "node:util";
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
 import { PreparedModelRuntimePublicationSupersededError } from "./prepared-model-runtime.errors.js";
-import type { PreparedModelRuntimeOwner } from "./prepared-model-runtime.types.js";
+import type {
+  PreparedModelCatalogAttempt,
+  PreparedModelRuntimeOwner,
+} from "./prepared-model-runtime.types.js";
 
 const log = createSubsystemLogger("agents/prepared-model-runtime");
 
@@ -14,33 +18,41 @@ const publicationListeners = new Set<(event: PreparedModelRuntimePublicationEven
 
 /** Completes catalog attempts without withdrawing their prepared turn runtime. */
 export function createCatalogAttemptReporter(
-  owner: Pick<PreparedModelRuntimeOwner, "catalogAttemptError">,
+  owner: Pick<PreparedModelRuntimeOwner, "catalogAttempt">,
+  source: PreparedModelCatalogAttempt["source"],
   isCurrent: () => boolean,
 ): {
   published: () => void;
   failed: (error: unknown) => never;
   withRefreshStatus: (catalog: ModelCatalogSnapshot) => ModelCatalogSnapshot;
 } {
+  // Compatible reloads share live status; replacement sources start without the old error.
+  const attempt: PreparedModelCatalogAttempt =
+    owner.catalogAttempt && isDeepStrictEqual(owner.catalogAttempt.source, source)
+      ? owner.catalogAttempt
+      : { source };
   return {
     withRefreshStatus: (catalog) => {
       // Keep the status live on retained inventory without copying an error into its successor.
       Object.defineProperty(catalog, "refreshFailed", {
         enumerable: true,
         get: () =>
-          owner.catalogAttemptError !== undefined ||
+          attempt.error !== undefined ||
           catalog.providerOutcomes?.some((outcome) => outcome.status !== "ready") ||
           undefined,
       });
       return catalog;
     },
     published: () => {
-      delete owner.catalogAttemptError;
+      delete attempt.error;
+      owner.catalogAttempt = attempt;
       notifyPreparedModelRuntimePublication({ phase: "catalog-published" });
     },
     failed: (error) => {
       if (isCurrent() && !(error instanceof PreparedModelRuntimePublicationSupersededError)) {
         const attemptError = toStringifiedError(error);
-        owner.catalogAttemptError = attemptError;
+        attempt.error = attemptError;
+        owner.catalogAttempt = attempt;
         notifyPreparedModelRuntimePublication({ phase: "catalog-failed", error: attemptError });
       }
       throw error;

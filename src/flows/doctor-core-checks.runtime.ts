@@ -24,7 +24,7 @@ import { partitionMcpServersByConnectionScope } from "../agents/mcp-connection-r
 import { findModelInCatalog, type ModelCatalogEntry } from "../agents/model-catalog.js";
 import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
 import { supportsModelTools } from "../agents/model-tool-support.js";
-import { loadPreparedModelCatalog } from "../agents/prepared-model-catalog.js";
+import { readPreparedModelCatalog } from "../agents/prepared-model-catalog.js";
 import { normalizeAgentRuntimeTools } from "../agents/runtime-plan/tools.js";
 import { collectExplicitAllowlist, normalizeToolPolicyName } from "../agents/tool-policy.js";
 import {
@@ -1155,7 +1155,7 @@ export async function collectRuntimeToolSchemaFindings(
       const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
       const collectForAgent = async () => {
         const agentDir = resolveAgentDir(cfg, agentId);
-        const catalog = await loadPreparedModelCatalog({
+        const catalog = await readPreparedModelCatalog({
           config: cfg,
           agentId,
           agentDir,

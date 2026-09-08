@@ -4,34 +4,48 @@ import "../../styles.css";
 import "../../styles/settings.css";
 import "../../styles/agents.css";
 import "../../styles/sidebar-markdown.css";
+import { i18n } from "../../i18n/index.ts";
 import { getRenderedModalDialog } from "../../test-helpers/modal-dialog.ts";
 import { renderAgentFiles } from "./panels-status-files.ts";
 
 const browserMode = "__vitest_browser__" in globalThis;
 let container: HTMLDivElement;
+let tooltipProvider: HTMLElement;
+let viewport: { width: number; height: number };
 
 beforeEach(() => {
+  viewport = { width: window.innerWidth, height: window.innerHeight };
   container = document.createElement("div");
   container.className = "settings-page";
-  document.body.append(container);
+  tooltipProvider = document.createElement("openclaw-tooltip-provider");
+  tooltipProvider.append(container);
+  document.body.append(tooltipProvider);
 });
 
-afterEach(() => {
+afterEach(async () => {
   render(nothing, container);
-  container.remove();
+  tooltipProvider.remove();
+  await i18n.setLocale("en");
+  if (browserMode) {
+    const { page } = await import("vitest/browser");
+    await page.viewport(viewport.width, viewport.height);
+  }
 });
 
-function afterOwnHide(dialog: HTMLElement): Promise<void> {
+function afterOwnTransition(
+  dialog: HTMLElement,
+  eventName: "wa-after-show" | "wa-after-hide",
+): Promise<void> {
   return new Promise((resolve) => {
-    const hidden = (event: Event) => {
+    const completed = (event: Event) => {
       if (event.target !== dialog) {
         return;
       }
-      dialog.removeEventListener("wa-after-hide", hidden);
-      // The real dialog and adapter queue return focus before this observer's task.
+      dialog.removeEventListener(eventName, completed);
+      // Dialog and adapter focus work completes before this observer's next task.
       setTimeout(resolve, 0);
     };
-    dialog.addEventListener("wa-after-hide", hidden);
+    dialog.addEventListener(eventName, completed);
   });
 }
 
@@ -43,36 +57,40 @@ function requireButton(selector: string): HTMLButtonElement {
   return button;
 }
 
-describe.runIf(browserMode)("agent file preview focus", () => {
+function renderPreview(draft: string, onChange = (_name: string, _content: string) => {}) {
+  render(
+    renderAgentFiles({
+      agentId: "main",
+      agentFilesList: {
+        agentId: "main",
+        workspace: "/synthetic/workspace",
+        files: [{ name: "AGENTS.md", path: "/synthetic/workspace/AGENTS.md", missing: false }],
+      },
+      agentFilesLoading: false,
+      agentFilesError: null,
+      agentFileActive: "AGENTS.md",
+      agentFileContents: { "AGENTS.md": "Saved instructions" },
+      agentFileDrafts: { "AGENTS.md": draft },
+      agentFileSaving: false,
+      canWrite: true,
+      onLoadFiles: () => undefined,
+      onSelectFile: () => undefined,
+      onFileDraftChange: onChange,
+      onFileReset: () => undefined,
+      onFileSave: () => undefined,
+    }),
+    container,
+  );
+}
+
+describe.runIf(browserMode)("agent file preview", () => {
   it.each(["edit", "close"] as const)(
     "returns focus to the intended owner after %s and retained reopen",
     async (action) => {
       const { userEvent } = await import("vitest/browser");
       const changes: string[] = [];
       let expectedDraft = "Unsaved file preview draft\n\n".repeat(80);
-      render(
-        renderAgentFiles({
-          agentId: "main",
-          agentFilesList: {
-            agentId: "main",
-            workspace: "/synthetic/workspace",
-            files: [{ name: "AGENTS.md", path: "/synthetic/workspace/AGENTS.md", missing: false }],
-          },
-          agentFilesLoading: false,
-          agentFilesError: null,
-          agentFileActive: "AGENTS.md",
-          agentFileContents: { "AGENTS.md": "Saved instructions" },
-          agentFileDrafts: { "AGENTS.md": expectedDraft },
-          agentFileSaving: false,
-          canWrite: true,
-          onLoadFiles: () => undefined,
-          onSelectFile: () => undefined,
-          onFileDraftChange: (_name, content) => changes.push(content),
-          onFileReset: () => undefined,
-          onFileSave: () => undefined,
-        }),
-        container,
-      );
+      renderPreview(expectedDraft, (_name, content) => changes.push(content));
       const textarea = container.querySelector<HTMLTextAreaElement>(".agent-file-textarea");
       if (!textarea) {
         throw new Error("Missing agent file editor");
@@ -85,10 +103,11 @@ describe.runIf(browserMode)("agent file preview focus", () => {
       for (let opening = 0; opening < 2; opening += 1) {
         textarea.setSelectionRange(textarea.value.length, textarea.value.length);
         preview.focus();
+        // Opening animations may start after dialog.open becomes true.
+        const shown = afterOwnTransition(webAwesomeDialog, "wa-after-show");
         await userEvent.keyboard("{Enter}");
-        await getRenderedModalDialog(container);
-        await expect.poll(() => dialog.open).toBe(true);
-        await Promise.all(dialog.getAnimations().map((animation) => animation.finished));
+        await shown;
+        expect(dialog.open).toBe(true);
         const panel = container.querySelector<HTMLElement>(".md-preview-dialog__panel")!;
         const body = container.querySelector<HTMLElement>(".md-preview-dialog__body")!;
         const bounds = dialog.getBoundingClientRect();
@@ -96,7 +115,7 @@ describe.runIf(browserMode)("agent file preview focus", () => {
         expect(panel.getBoundingClientRect().bottom).toBeLessThanOrEqual(bounds.bottom + 1);
         expect(body.clientHeight).toBeGreaterThan(0);
         expect(body.scrollHeight).toBeGreaterThan(body.clientHeight);
-        const closed = afterOwnHide(webAwesomeDialog);
+        const closed = afterOwnTransition(webAwesomeDialog, "wa-after-hide");
         await userEvent.click(
           requireButton(
             action === "edit" ? '[aria-label="Edit file"]' : '[aria-label="Close preview"]',
@@ -119,6 +138,76 @@ describe.runIf(browserMode)("agent file preview focus", () => {
           expect(changes).toEqual([]);
         }
       }
+    },
+  );
+  it.each([
+    [320, "ru"],
+    [390, "en"],
+    [1440, "en"],
+  ] as const)(
+    "keeps actions aligned and shows metadata by priority in each preview mode at %ipx (%s)",
+    async (width, locale) => {
+      const { page, userEvent } = await import("vitest/browser");
+      await page.viewport(width, 900);
+      await i18n.setLocale(locale);
+      container.classList.add("shell--settings");
+      renderPreview(
+        "# Workspace operating instructions\n\n" + "Readable document content.\n\n".repeat(80),
+      );
+      const preview = requireButton(".agent-file-actions button");
+      const { webAwesomeDialog, dialog } = await getRenderedModalDialog(container);
+      const shown = afterOwnTransition(webAwesomeDialog, "wa-after-show");
+      await userEvent.click(preview);
+      await shown;
+      expect(dialog.open).toBe(true);
+      const identity = container.querySelector<HTMLElement>(".md-preview-dialog__header-main")!;
+      const actions = container.querySelector<HTMLElement>(".md-preview-dialog__actions")!;
+      const meta = container.querySelector<HTMLElement>(".md-preview-dialog__meta")!;
+      const essentialChips = meta.querySelectorAll<HTMLDivElement>('[data-priority="essential"]');
+      const secondaryMetadata = meta.querySelectorAll<HTMLElement>(
+        '[data-priority="secondary"], .md-preview-dialog__chip > span',
+      );
+      expect(essentialChips).toHaveLength(3);
+      expect(secondaryMetadata).toHaveLength(4);
+      const body = container.querySelector<HTMLElement>(".md-preview-dialog__body")!;
+      const normalInset = getComputedStyle(body).paddingInlineStart;
+      for (const mode of ["normal", "fullscreen", "return"]) {
+        if (mode !== "normal") {
+          await userEvent.click(requireButton(".md-preview-expand-btn"));
+        }
+        await expect.poll(() => identity.getBoundingClientRect().width).toBeGreaterThan(1);
+        const name = identity.getBoundingClientRect();
+        const buttons = actions.getBoundingClientRect();
+        expect(name.right).toBeLessThanOrEqual(buttons.left);
+        expect(buttons.top).toBeLessThan(name.bottom);
+        expect(buttons.bottom).toBeGreaterThan(name.top);
+        expect(buttons.right).toBeLessThanOrEqual(dialog.getBoundingClientRect().right);
+        for (const chip of essentialChips) {
+          await expect.element(chip).toBeVisible();
+        }
+        for (const metadata of secondaryMetadata) {
+          if (width <= 400) {
+            await expect.element(metadata).not.toBeVisible();
+          } else {
+            await expect.element(metadata).toBeVisible();
+          }
+        }
+        expect(getComputedStyle(body).paddingInlineStart).toBe(normalInset);
+        body.scrollTop = body.scrollHeight;
+        expect(body.scrollTop).toBeGreaterThan(0);
+        body.scrollTop = 0;
+      }
+      if (width <= 400) {
+        await page.viewport(1440, 900);
+        for (const metadata of secondaryMetadata) {
+          await expect.element(metadata).toBeVisible();
+        }
+      }
+      const closed = afterOwnTransition(webAwesomeDialog, "wa-after-hide");
+      await userEvent.keyboard("{Escape}");
+      await closed;
+      expect(dialog.open).toBe(false);
+      expect(document.activeElement).toBe(preview);
     },
   );
 });

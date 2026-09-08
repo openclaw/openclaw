@@ -149,7 +149,7 @@ The pull request guard stays light: it only starts for changes under `.github/ac
 ### Platform-specific security shards
 
 - `CodeQL Android Critical Security` — scheduled Android security shard. Builds the Android app manually for CodeQL on the smallest Blacksmith Linux runner accepted by workflow sanity. Uploads under `/codeql-critical-security/android`.
-- `CodeQL macOS Critical Security` — weekly/manual macOS security shard. Builds the macOS app manually for CodeQL on GitHub-hosted macOS, filters dependency build results out of uploaded SARIF, and uploads under `/codeql-critical-security/macos`. Kept outside daily defaults because macOS build dominates runtime even when clean.
+- `CodeQL macOS Critical Security` — weekly/manual macOS security shard. Prepares the generated Mermaid resources on GitHub-hosted Linux, then builds the ARM64 macOS app manually for CodeQL on a GitHub-hosted Intel runner without unused index-store or debug-info artifacts; filters dependency build results out of uploaded SARIF; and uploads under `/codeql-critical-security/macos`. Its macOS job has a 90-minute ceiling because the complete traced build and analysis exceed the previous 45-minute budget. Kept outside daily defaults because macOS build dominates runtime even when clean.
 
 ### Critical Quality categories
 

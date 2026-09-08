@@ -12,12 +12,12 @@ import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/ses
 import { clearSessionStoreCacheForTest } from "../../config/sessions/store-writer-state.js";
 import type { ModelAliasIndex } from "./model-selection-directive.js";
 
-const loadPreparedModelCatalog = vi.hoisted(() => vi.fn(async () => modelCatalog));
+const readPreparedModelCatalog = vi.hoisted(() => vi.fn(async () => modelCatalog));
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 vi.mock("../../agents/prepared-model-catalog.js", () => ({
   loadProviderScopedThinkingCatalog: vi.fn(async () => []),
-  loadPreparedModelCatalog,
+  readPreparedModelCatalog,
 }));
 
 import { applyResetModelOverride } from "./session-reset-model.js";
@@ -216,7 +216,7 @@ describe("applyResetModelOverride", () => {
       aliasIndex: fixture.aliasIndex,
     });
 
-    expect(loadPreparedModelCatalog).toHaveBeenCalledWith({
+    expect(readPreparedModelCatalog).toHaveBeenCalledWith({
       config: fixture.cfg,
       agentId: "worker",
       agentDir: "/tmp/shared-agent",

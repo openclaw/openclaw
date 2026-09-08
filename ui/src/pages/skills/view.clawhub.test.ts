@@ -58,7 +58,7 @@ describe("renderSkills ClawHub", () => {
     expect(dialog.open).toBe(true);
 
     const closeButton = container.querySelector<HTMLButtonElement>(
-      ".md-preview-dialog__header .btn",
+      ".skill-reader-dialog .exec-approval-header .btn",
     );
     expect(closeButton).toBeInstanceOf(HTMLButtonElement);
     closeButton!.click();
@@ -154,7 +154,7 @@ describe("renderSkills ClawHub", () => {
     expect(
       Array.from(container.querySelectorAll(".callout")).map((node) => normalizeText(node)),
     ).toEqual(["rate limited", "Installed github"]);
-    expect(normalizeText(container.querySelector(".md-preview-dialog__body")!)).toBe(
+    expect(normalizeText(container.querySelector(".skill-reader-dialog__body")!)).toBe(
       "GitHub integration for OpenClaw By OpenClaw (@openclaw) Latest: v1.2.3 Added search support Platforms: macos, linux Install GitHub",
     );
     expect(container.querySelector<HTMLImageElement>(".clawhub-skill-icon--detail")?.src).toBe(
@@ -163,7 +163,7 @@ describe("renderSkills ClawHub", () => {
     expect(container.querySelector(".clawhub-skill-icon--profile")).toBeNull();
 
     const detailInstallButton = container.querySelector<HTMLButtonElement>(
-      ".md-preview-dialog__body .btn.primary",
+      ".skill-reader-dialog__body .btn.primary",
     );
     expect(detailInstallButton).toBeInstanceOf(HTMLButtonElement);
     detailInstallButton!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
@@ -376,28 +376,6 @@ describe("renderSkills ClawHub", () => {
     expect(detailButton).not.toBeNull();
     detailButton!.click();
     expect(onClawHubDetailOpen).toHaveBeenCalledWith("@alice/email");
-  });
-
-  it("sizes the ClawHub detail dialog to a refusal message instead of a reader", async () => {
-    const container = document.createElement("div");
-    document.body.append(container);
-    dialogRestores.push(() => container.remove());
-
-    render(
-      renderSkills(
-        createProps({
-          clawhubDetailRef: "skills-sh:acme/tools/imap-smtp-email",
-          clawhubDetailError:
-            "ClawHub cannot return details for skills-sh:acme/tools/imap-smtp-email; external skill sources are install-only.",
-        }),
-      ),
-      container,
-    );
-    await Promise.resolve();
-
-    // Without this the panel keeps the tall reader height meant for skill documents, so a
-    // two-line refusal renders in a mostly empty dialog and reads as broken.
-    expect(container.querySelectorAll(".md-preview-dialog__panel--message-only")).toHaveLength(1);
   });
 
   it("renders installed ClawHub verdicts and the local Skill Card tab", async () => {

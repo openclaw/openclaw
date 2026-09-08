@@ -968,7 +968,7 @@ export async function startGatewaySidecars(params: {
         run: async (isStopped) => {
           const [
             { DEFAULT_MODEL, DEFAULT_PROVIDER },
-            { loadPreparedModelCatalog },
+            { readPreparedModelCatalog },
             { getModelRefStatus, resolveConfiguredModelRef, resolveHooksGmailModel },
           ] = await Promise.all([
             loadAgentDefaultsModule(),
@@ -989,7 +989,7 @@ export async function startGatewaySidecars(params: {
                 defaultProvider: DEFAULT_PROVIDER,
                 defaultModel: DEFAULT_MODEL,
               });
-            const catalog = await loadPreparedModelCatalog({
+            const catalog = await readPreparedModelCatalog({
               config: params.cfg,
               readOnly: true,
             });

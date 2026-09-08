@@ -142,7 +142,7 @@ describe("turn model selection status-path differential", () => {
     vi.stubEnv("OPENCLAW_TEST_FAST", "1");
     resetPluginRuntimeStateForTest();
     setActivePluginRegistry(createSessionConversationTestRegistry());
-    vi.spyOn(preparedModelCatalog, "loadPreparedModelCatalog").mockResolvedValue([]);
+    vi.spyOn(preparedModelCatalog, "readPreparedModelCatalog").mockResolvedValue([]);
   });
 
   afterEach(() => {

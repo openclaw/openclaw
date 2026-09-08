@@ -135,7 +135,7 @@ vi.mock("../../infra/channel-summary.js", () => ({
 
 vi.mock("../../agents/prepared-model-catalog.js", () => ({
   loadProviderScopedThinkingCatalog: vi.fn(async () => []),
-  loadPreparedModelCatalog: vi.fn(async () => [
+  readPreparedModelCatalog: vi.fn(async () => [
     { provider: "minimax", id: "m2.7", name: "M2.7" },
     { provider: "openai", id: "gpt-4o-mini", name: "GPT-4o mini" },
   ]),

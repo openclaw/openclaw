@@ -4,7 +4,6 @@
  * observability decisions shared across embedded-agent hot paths.
  */
 import type { TSchema } from "typebox";
-import type { FailoverReason as AgentRuntimeFailoverReason } from "../../../packages/gateway-protocol/src/failover-reasons.js";
 import type {
   ModelApi,
   ProviderModelRouteRuntimePolicy,
@@ -12,6 +11,7 @@ import type {
 } from "../../plugin-sdk/provider-model-types.js";
 import type { ReplyPayload as AgentRuntimeReplyPayload } from "../../shared/reply-payload.types.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
+import type { ModelFallbackResultClassification } from "../model-fallback-attempt.js";
 import type { ProviderModelAuthSourceClassification } from "../provider-model-auth-source-plan.js";
 import type { AgentTool } from "../runtime/index.js";
 
@@ -136,21 +136,6 @@ type AgentRuntimeTranscriptPolicy = {
   allowSyntheticToolResults: boolean;
 };
 
-/** Classified model-call failure or success observation for fallback. */
-type AgentRuntimeOutcomeClassification =
-  | {
-      message: string;
-      reason?: AgentRuntimeFailoverReason;
-      status?: number;
-      code?: string;
-      rawError?: string;
-    }
-  | {
-      error: unknown;
-    }
-  | null
-  | undefined;
-
 /** Runtime hook that classifies run results for model fallback. */
 type AgentRuntimeOutcomeClassifier = (params: {
   provider: string;
@@ -158,7 +143,7 @@ type AgentRuntimeOutcomeClassifier = (params: {
   result: unknown;
   hasDirectlySentBlockReply?: boolean;
   hasBlockReplyPipelineOutput?: boolean;
-}) => AgentRuntimeOutcomeClassification;
+}) => ModelFallbackResultClassification;
 
 /** Resolved provider/model/harness/transport reference for an attempt. */
 type AgentRuntimeResolvedRef = {

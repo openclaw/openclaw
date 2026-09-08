@@ -25,7 +25,7 @@ import { QuestionAnswerUnconfirmedError } from "../agents/harness/gateway-questi
 import { resolveThinkingDefault } from "../agents/model-selection.js";
 import { resolvePublishedModelCatalogOwner } from "../agents/prepared-model-catalog-owner.js";
 import {
-  loadPreparedModelCatalog,
+  readPreparedModelCatalog,
   withPreparedModelCatalogOwner,
 } from "../agents/prepared-model-catalog.js";
 import { getPreparedModelRuntimeAuthMaterializations } from "../agents/prepared-model-runtime-auth.js";
@@ -664,7 +664,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
 
     let thinkingLevel = entry?.thinkingLevel;
     if (!thinkingLevel) {
-      const catalog = await loadPreparedModelCatalog({
+      const catalog = await readPreparedModelCatalog({
         config: cfg,
         agentId: sessionAgentId,
         readOnly: true,
@@ -756,7 +756,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
           agentId: target.agentId,
           patch: opts,
           loadGatewayModelCatalog: () =>
-            loadPreparedModelCatalog({ config: cfg, agentId: target.agentId, readOnly: true }),
+            readPreparedModelCatalog({ config: cfg, agentId: target.agentId, readOnly: true }),
         }),
     });
     if (!applied.ok) {
@@ -808,7 +808,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
       emitCommandHooks: Boolean(opts.parentSessionKey),
       commandSource: "tui:embedded",
       loadGatewayModelCatalog: () =>
-        loadPreparedModelCatalog({
+        readPreparedModelCatalog({
           config: cfg,
           agentId: resolveSessionAgentId({
             sessionKey: opts.key,

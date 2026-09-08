@@ -9,7 +9,7 @@ import { resolveEmbeddedRunAttemptTerminalState } from "./terminal-outcome.js";
 import { resolveSettledTurnFinalizationRequest } from "./terminal-resolution.js";
 
 const SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION =
-  "The previous assistant turn completed its tool calls but did not produce a user-visible answer. Continue from the current transcript and produce the final user-visible answer now. Do not repeat completed tool calls or restart from scratch.";
+  "The previous assistant turn completed its tool calls but did not produce a user-visible answer. Continue from the current transcript and produce the final user-visible answer now. Do not repeat completed tool calls or restart from scratch. Tools are unavailable in this step: it is a text-only pass, so reply with plain text and do not attempt any tool call.";
 
 describe("resolveSettledTurnFinalizationRequest", () => {
   it("requests isolated finalization only for a required settled-tool turn", () => {
