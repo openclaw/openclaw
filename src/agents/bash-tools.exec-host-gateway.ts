@@ -830,6 +830,11 @@ export async function processGatewayAllowlist(
       env: params.env,
     });
     if (!prepared.ok) {
+      // Headless auto-review only helps commands the reviewer can bind; an
+      // unbindable command keeps the same approval-required guidance as ask mode.
+      if (policyRequiresAsk && params.nonInteractiveApproval) {
+        return denyHeadlessApproval();
+      }
       return {
         deniedResult: buildGatewayExecApprovalDeniedToolResult({
           deniedReason: prepared.message,
