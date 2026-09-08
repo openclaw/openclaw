@@ -87,6 +87,62 @@ warnings, workspace status, gateway auth and health, and supervisors.
   <Accordion title="11d. Stale channel plugin cleanup">
     When `openclaw doctor --fix` removes a missing channel plugin, it also removes the dangling channel-scoped config that referenced that plugin: `channels.<id>` entries, heartbeat targets that named the channel, and `agents.*.models["<channel>/*"]` overrides. This prevents Gateway boot loops where the channel runtime is gone but config still asks the gateway to bind to it.
   </Accordion>
+  <Accordion title="11e. Project clone shape">
+    Doctor checks stored project clones registered with `source: "cloned"`. It
+    reports the project name and path, shallow state, every
+    `remote.*.partialclonefilter` and `remote.*.promisor` key (including URL-keyed
+    twins), and `extensions.partialclone` when present. Address-like names replace
+    userinfo with `***` and omit query strings and fragments, including remote-helper
+    and scp-like addresses that are not standard URLs. Full clones produce no
+    finding. Missing or unreadable clones are reported as skipped; other projects
+    are still checked. Agent workspaces and manually registered checkouts are
+    outside this check.
+
+    Each clone uses three local Git reads, each limited to five seconds and
+    64 KiB of captured output. Doctor does not fetch, repack, or change clone
+    configuration, even with `--fix`. Partial clones support managed-worktree
+    object prefetch, but full clones avoid missing-object and shallow-history
+    failures during checkout and snapshot restore.
+
+    For a focused read-only report, run:
+
+    ```bash
+    openclaw doctor --lint --only core/doctor/project-clone-shape --json
+    ```
+
+    The check also runs in ordinary Doctor and `--lint --all`; it is excluded
+    from the default lint profile. Lint inspects the registry through Doctor's
+    private state snapshot.
+
+    Follow Doctor's printed commands in a POSIX shell with access to `origin`.
+    Stop on any failed step. For a shallow partial clone with the usual origin
+    keys, the sequence is:
+
+    ```bash
+    cd /path/to/project-clone
+    git config --unset-all remote.origin.partialclonefilter
+    git fetch --refetch --unshallow origin
+    git rev-list --objects --missing=print --all | grep '^?' | cut -c2- | git fetch origin --no-tags --no-write-fetch-head --recurse-submodules=no --stdin
+    git config --unset-all remote.origin.promisor
+    git repack -a -d
+    ```
+
+    Unset **every** reported `partialclonefilter` key before refetching, including
+    keys such as `remote.https://github.com/openclaw/openclaw.git.partialclonefilter`.
+    Omit `--unshallow` if the repository is not shallow; Git rejects that option
+    for complete history. Keep promisor settings until missing objects have been
+    fetched by ID, then unset every reported `promisor` key and, if present,
+    `extensions.partialclone` before repacking. Doctor prints exact unset commands
+    for plain remote names without `://`, `::`, or `@`. For address-like entries, follow the local lookup and
+    unset instructions before continuing; the original key may contain credentials
+    and must not be copied into shared reports. The redacted name identifies the
+    entry but is not its literal Git config key.
+
+    Rerun Doctor afterward. If history or objects remain missing, recover them
+    from the original repository. Origin may not contain local-only snapshots;
+    see [snapshot restore](/concepts/managed-worktrees#snapshots-cleanup-and-restore).
+
+  </Accordion>
   <Accordion title="12. Gateway auth checks (local token)">
     Doctor checks local gateway token auth readiness.
 

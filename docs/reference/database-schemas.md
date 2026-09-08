@@ -258,12 +258,16 @@ already validate the optional pending-input table may reject the added column
 despite sharing version 19. Consumed source receipts remain until their session
 window is deleted, so rewriting a transcript cannot make an old input runnable again.
 
-The placement-move table uses this same-version rule for its nullable bare
-`abandon_source INTEGER` column. The feature lazily ensures the column on first
-move use. `NULL` means ordinary reconcile-first movement; `1` records the
-operator's explicit offline-device abandonment decision so restart recovery
-cannot accidentally resume remote reconciliation. Older readers ignore the
-column and can reopen the same database safely.
+The placement-move table uses this same-version rule for its bare nullable
+`abandon_source INTEGER`, `target_machine_class TEXT`, and `target_os TEXT`
+columns. The feature ensures these columns only on first move use; database
+startup does not add them, and the schema version remains unchanged.
+`target_machine_class` and `target_os` retain explicit profile-target overrides;
+`NULL` means no override. For `abandon_source`, `NULL` means ordinary
+reconcile-first movement; `1` records the operator's explicit offline-device
+abandonment decision so restart recovery cannot accidentally resume remote
+reconciliation. Older readers ignore the added columns and can reopen the same
+database safely; they do not implement the newer operating-system override.
 
 Conversation associations use the same rule for the nullable bare
 `route_context_json TEXT` column. The database-open repair ensures the column

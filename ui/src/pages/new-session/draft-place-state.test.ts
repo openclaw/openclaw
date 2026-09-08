@@ -3,6 +3,7 @@ import type { WorktreesBranchesResult } from "../../../../packages/gateway-proto
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { DraftCloudProfile } from "./discovery.ts";
+import { DraftCloudMachineState } from "./draft-cloud-machine-state.ts";
 import type { DraftGatewayState } from "./draft-gateway-state.ts";
 import { DraftPlaceBrowser } from "./draft-place-browser.ts";
 import { DraftPlaceState } from "./draft-place-state.ts";
@@ -349,6 +350,50 @@ describe("DraftPlaceState repository selection", () => {
 });
 
 describe("DraftPlaceState cloud machine selection", () => {
+  it("couples class selection to OS while retaining each profile's overrides", () => {
+    const state = new DraftCloudMachineState();
+    const profiles: DraftCloudProfile[] = [
+      {
+        id: "aws",
+        providerId: "crabbox",
+        operatingSystems: [
+          { id: "linux", label: "Linux", default: true },
+          { id: "windows/wsl2", label: "Windows (WSL2)" },
+        ],
+        machines: [
+          { id: "tiny", label: "Tiny Linux", os: "linux", default: true },
+          { id: "fast", label: "Fast Linux", os: "linux" },
+          { id: "tiny", label: "Tiny Windows", os: "windows/wsl2", default: true },
+          { id: "large", label: "Large Windows", os: "windows/wsl2" },
+          { id: "custom", label: "Custom" },
+        ],
+      },
+    ];
+    expect(state.select("aws", "large", profiles)).toBe(false);
+    state.select("aws", "fast", profiles);
+    state.selectOs("aws", "windows/wsl2", profiles);
+    expect(state.resolve("aws")).toBe("");
+    expect(state.resolveOs("aws")).toBe("windows/wsl2");
+    expect(state.machines(profiles[0]!).map((machine) => machine.label)).toEqual([
+      "Tiny Windows",
+      "Large Windows",
+      "Custom",
+    ]);
+    state.select("aws", "large", profiles);
+    state.select("aws", "tiny", profiles);
+    expect(state.resolve("aws")).toBe("");
+    expect(state.resolveOs("aws")).toBe("windows/wsl2");
+    state.select("aws", "custom", profiles);
+    state.selectOs("aws", "linux", profiles);
+    expect(state.resolve("aws")).toBe("custom");
+    expect(state.resolveOs("aws")).toBe("");
+    state.applyPending("other", "large", "other-os");
+    expect(state.resolve("aws")).toBe("custom");
+    expect(state.resolveOs("other")).toBe("other-os");
+    expect(state.selectOs("aws", "windows/wsl2", profiles, true)).toBe(false);
+    expect(state.resolveOs("aws")).toBe("");
+  });
+
   it("uses each profile default and retains only non-default overrides per destination", () => {
     const requestUpdate = vi.fn();
     const gateway = {
@@ -391,21 +436,21 @@ describe("DraftPlaceState cloud machine selection", () => {
     );
 
     state.applyPendingPlacement({ agentId: "main", profileId: "aws" });
-    expect(state.machineClass).toBe("");
+    expect(state.cloudSelection.machineClass).toBe("");
 
     state.cloudMachines.select("aws", "fast", gateway.cloudProfiles);
-    expect(state.machineClass).toBe("fast");
+    expect(state.cloudSelection.machineClass).toBe("fast");
 
     vi.spyOn(state, "worktreeAvailable").mockReturnValue(true);
     state.selectCloudProfile("hetzner");
-    expect(state.machineClass).toBe("");
+    expect(state.cloudSelection.machineClass).toBe("");
     state.cloudMachines.select("hetzner", "beast", gateway.cloudProfiles);
-    expect(state.machineClass).toBe("beast");
+    expect(state.cloudSelection.machineClass).toBe("beast");
 
     state.selectCloudProfile("aws");
-    expect(state.machineClass).toBe("fast");
+    expect(state.cloudSelection.machineClass).toBe("fast");
     state.cloudMachines.select("aws", "standard", gateway.cloudProfiles);
-    expect(state.machineClass).toBe("");
+    expect(state.cloudSelection.machineClass).toBe("");
     expect(requestUpdate).toHaveBeenCalled();
   });
 
@@ -435,13 +480,13 @@ describe("DraftPlaceState cloud machine selection", () => {
     );
 
     state.applyPendingPlacement({ agentId: "main", profileId: "aws", machineClass: "fast" });
-    expect(state.machineClass).toBe("fast");
+    expect(state.cloudSelection.machineClass).toBe("fast");
 
     cloudProfiles.splice(0, cloudProfiles.length, { id: "aws", providerId: "crabbox" });
-    expect(state.machineClass).toBe("fast");
+    expect(state.cloudSelection.machineClass).toBe("fast");
 
     state.applyPendingPlacement({ agentId: "main", profileId: "aws" });
-    expect(state.machineClass).toBe("");
+    expect(state.cloudSelection.machineClass).toBe("");
   });
 
   it.each([
@@ -508,7 +553,7 @@ describe("DraftPlaceState cloud machine selection", () => {
     }
     state.restorePreferenceSelections();
     expect(state.cloudProfileId).toBe("aws");
-    expect(state.machineClass).toBe("fast");
+    expect(state.cloudSelection.machineClass).toBe("fast");
 
     resolveRuntime.mockReturnValue({
       id: "codex",
@@ -519,7 +564,7 @@ describe("DraftPlaceState cloud machine selection", () => {
     state.restorePreferenceSelections();
 
     expect(state.cloudProfileId).toBe("aws");
-    expect(state.machineClass).toBe("fast");
+    expect(state.cloudSelection.machineClass).toBe("fast");
     expect(state.worktree).toBe(true);
     expect(persistPreference).not.toHaveBeenCalled();
   });

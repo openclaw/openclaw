@@ -6,6 +6,7 @@ export {
   resolveClaudeMythos5ModelIdentity,
   resolveClaudeOpus5ModelIdentity,
   resolveClaudeSonnet5ModelIdentity,
+  supportsClaudeAdaptiveThinking,
   supportsClaudeFastMode,
 } from "@openclaw/llm-core";
 export { resolveClaudeThinkingProfile } from "../plugins/provider-claude-thinking.js";

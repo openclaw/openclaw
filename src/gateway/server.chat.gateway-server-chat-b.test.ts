@@ -2256,7 +2256,7 @@ describe("gateway server chat", () => {
                 const projection = Promise.all([
                   projector.projectCatalog(),
                   buildModelsListResult({
-                    context,
+                    source: { kind: "gateway", context },
                     agentId,
                     params: { view: "configured" },
                     preloadedCatalog: {

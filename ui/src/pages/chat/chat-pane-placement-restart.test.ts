@@ -16,11 +16,25 @@ beforeEach(() => {
 afterEach(() => dialogs.cleanup());
 
 describe("chat pane placement restart", () => {
-  it("restarts a failed placement on a selected profile without creating a session", async () => {
+  it("restarts a failed placement on the selected profile OS and machine without creating a session", async () => {
     const request = dialogs.mockRequest(async (method: string) => {
       if (method === "environments.list") {
         return {
-          profiles: [{ id: "aws", providerId: "crabbox" }],
+          profiles: [
+            {
+              id: "aws",
+              providerId: "crabbox",
+              operatingSystems: [
+                { id: "linux", label: "Linux", default: true },
+                { id: "windows/wsl2", label: "Windows (WSL2)" },
+              ],
+              machines: [
+                { id: "tiny", label: "Tiny", os: "linux", default: true },
+                { id: "tiny", label: "Tiny", os: "windows/wsl2", default: true },
+                { id: "fast", label: "Fast", os: "windows/wsl2" },
+              ],
+            },
+          ],
           environments: [],
         };
       }
@@ -62,6 +76,8 @@ describe("chat pane placement restart", () => {
       "Changes that the previous worker did not upload may be lost.",
     );
     document.body.querySelector<HTMLButtonElement>('[data-value="cloud:aws"]')?.click();
+    document.body.querySelector<HTMLButtonElement>('[data-value="os:windows/wsl2"]')?.click();
+    document.body.querySelector<HTMLButtonElement>('[data-value="machine:fast"]')?.click();
     const restartButton = [...document.body.querySelectorAll<HTMLButtonElement>("button")].find(
       (button) => button.textContent?.trim() === "Restart session",
     );
@@ -72,6 +88,8 @@ describe("chat pane placement restart", () => {
       key: session.key,
       agentId: "main",
       profileId: "aws",
+      os: "windows/wsl2",
+      machineClass: "fast",
     });
     expect(request.mock.calls.some(([method]) => method === "sessions.create")).toBe(false);
     expect(refreshReplacement).toHaveBeenCalledWith("main");

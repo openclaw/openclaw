@@ -3,18 +3,12 @@ import path from "node:path";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { Model } from "../llm/types.js";
-import type { PluginMetadataSnapshotOwnerMaps } from "../plugins/plugin-metadata-snapshot.types.js";
-import { normalizeModelCompat } from "../plugins/provider-model-compat.js";
-import {
-  applyProviderResolvedTransportWithPlugin,
-  normalizeProviderResolvedModelWithPlugin,
-} from "../plugins/provider-runtime.js";
-import { isRecord } from "../utils.js";
 import {
   resolveAgentDiscoveryAuthFacts,
   type DiscoverAuthStorageOptions,
 } from "./agent-auth-discovery.js";
 import { resolveModelPluginMetadataSnapshot } from "./model-discovery-context.js";
+import { normalizeDiscoveredAgentModel } from "./model-discovery-normalize.js";
 import type {
   PluginModelCatalogMetadataSnapshot,
   PersistedPluginModelCatalog,
@@ -25,14 +19,6 @@ import {
   type AuthStorage as AgentAuthStorage,
   type ModelRegistry as AgentModelRegistry,
 } from "./sessions/index.js";
-
-type ProviderRuntimeModelLike = Model & {
-  contextTokens?: number;
-};
-
-type DiscoveredProviderRuntimeModelLike = Omit<ProviderRuntimeModelLike, "api"> & {
-  api?: string | null;
-};
 
 const CAPTURED_MODELS_JSON_SOURCE_PATH = "captured:models.json";
 
@@ -47,10 +33,6 @@ type DiscoverModelsOptions = {
   normalizeModels?: boolean;
 };
 
-type NormalizeDiscoveredModelOptions = Pick<DiscoverModelsOptions, "config" | "workspaceDir"> & {
-  providerMetadataOwners?: PluginMetadataSnapshotOwnerMaps;
-};
-
 type DiscoverCapturedModelsOptions = Omit<
   DiscoverModelsOptions,
   "modelsJsonContents" | "normalizeModels" | "pluginCatalogs"
@@ -58,63 +40,6 @@ type DiscoverCapturedModelsOptions = Omit<
   modelsJsonContents: string | null;
   pluginCatalogs: readonly PersistedPluginModelCatalog[];
 };
-
-/** Applies plugin model normalization and transport hooks to discovered agent models. */
-export function normalizeDiscoveredAgentModel<T>(
-  value: T,
-  agentDir: string,
-  options?: NormalizeDiscoveredModelOptions,
-): T {
-  if (!isRecord(value)) {
-    return value;
-  }
-  if (
-    typeof value.id !== "string" ||
-    typeof value.name !== "string" ||
-    typeof value.provider !== "string"
-  ) {
-    return value;
-  }
-  const model = value as unknown as DiscoveredProviderRuntimeModelLike;
-  const runtimeContext = {
-    ...(options?.config !== undefined ? { config: options.config } : {}),
-    ...(options?.workspaceDir !== undefined ? { workspaceDir: options.workspaceDir } : {}),
-  };
-  const pluginNormalized =
-    normalizeProviderResolvedModelWithPlugin({
-      provider: model.provider,
-      modelId: model.id,
-      ...runtimeContext,
-      context: {
-        provider: model.provider,
-        modelId: model.id,
-        model: model as unknown as ProviderRuntimeModelLike,
-        agentDir,
-      },
-    }) ?? model;
-  const transportNormalized =
-    applyProviderResolvedTransportWithPlugin({
-      provider: model.provider,
-      modelId: model.id,
-      ...runtimeContext,
-      context: {
-        provider: model.provider,
-        modelId: model.id,
-        model: pluginNormalized as unknown as ProviderRuntimeModelLike,
-        agentDir,
-      },
-    }) ?? pluginNormalized;
-  if (
-    !isRecord(transportNormalized) ||
-    typeof transportNormalized.id !== "string" ||
-    typeof transportNormalized.name !== "string" ||
-    typeof transportNormalized.provider !== "string" ||
-    typeof transportNormalized.api !== "string"
-  ) {
-    return value;
-  }
-  return normalizeModelCompat(transportNormalized as Model, options?.providerMetadataOwners) as T;
-}
 
 function createOpenClawModelRegistry(
   authStorage: AgentAuthStorage,

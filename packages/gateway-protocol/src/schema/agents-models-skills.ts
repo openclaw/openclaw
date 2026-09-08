@@ -72,6 +72,8 @@ export const ModelChoiceSchema = closedObject({
   /** Earliest known retry time in epoch milliseconds, only for unavailable models. */
   unavailableUntil: Type.Optional(Type.Integer({ minimum: 0 })),
   contextWindow: Type.Optional(Type.Integer({ minimum: 1 })),
+  contextTokens: Type.Optional(Type.Integer({ minimum: 1 })),
+  local: Type.Optional(Type.Boolean()),
   contextWindows: Type.Optional(Type.Array(GatewayContextWindowOptionSchema)),
   contextWindowDefault: Type.Optional(NonEmptyString),
   reasoning: Type.Optional(Type.Boolean()),
@@ -278,6 +280,8 @@ export const AgentsFilesSetResultSchema = closedObject({
 export const ModelsListParamsSchema = Type.Object(
   {
     agentId: Type.Optional(NonEmptyString),
+    provider: Type.Optional(NonEmptyString),
+    includeDetails: Type.Optional(Type.Boolean()),
     includeProviderCapabilities: Type.Optional(Type.Boolean()),
     /** Reuse prepared/cached facts without starting provider discovery. */
     preparedOnly: Type.Optional(Type.Boolean()),

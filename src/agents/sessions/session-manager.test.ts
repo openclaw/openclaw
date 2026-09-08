@@ -4,6 +4,7 @@ import path from "node:path";
 import { redactIdentifier } from "@openclaw/normalization-core/node-crypto";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import {
   formatSqliteSessionFileMarker,
   parseSqliteSessionFileMarker,
@@ -296,11 +297,7 @@ describe("SessionManager.open", () => {
     expect(loadSessionEntry(scope)).toBeUndefined();
     const manager = SessionManager.open(scope, dir);
     expect(loadSessionEntry(scope)).toBeUndefined();
-    const messageId = manager.appendMessage({
-      role: "user",
-      content: "first message",
-      timestamp: 1,
-    });
+    const messageId = manager.appendMessage(makeUserMessage("first message", 1));
 
     await expect(loadTranscriptEvents(scope)).resolves.toEqual([
       expect.objectContaining({

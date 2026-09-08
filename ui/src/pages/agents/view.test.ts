@@ -1032,6 +1032,7 @@ describe("renderAgentFiles", () => {
     ]);
     expect(previewExpandButton.getAttribute("aria-pressed")).toBe("true");
     expect(previewExpandButton.getAttribute("aria-label")).toBe("Collapse preview");
+    expect(previewExpandButton.closest("openclaw-tooltip")?.content).toBe("Collapse preview");
 
     container.querySelector<HTMLButtonElement>('[aria-label="Close preview"]')?.click();
 
@@ -1044,5 +1045,6 @@ describe("renderAgentFiles", () => {
     ]);
     expect(previewExpandButton.getAttribute("aria-pressed")).toBe("false");
     expect(previewExpandButton.getAttribute("aria-label")).toBe("Expand preview");
+    expect(previewExpandButton.closest("openclaw-tooltip")?.content).toBe("Expand preview");
   });
 });
