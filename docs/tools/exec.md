@@ -122,23 +122,27 @@ Example:
 
 `tools.exec.mode` is the canonical persisted policy knob. Runtime security and approval behavior are derived from it.
 
-| Mode        | security    | ask       | Behavior                                                                                                                       |
-| ----------- | ----------- | --------- | ------------------------------------------------------------------------------------------------------------------------------ |
-| `deny`      | `deny`      | `off`     | Exec is denied.                                                                                                                |
-| `allowlist` | `allowlist` | `off`     | Only allowlisted/safe-bin commands run; nothing else is asked.                                                                 |
-| `ask`       | `allowlist` | `on-miss` | Allowlist matches run directly; everything else asks a human.                                                                  |
-| `auto`      | `allowlist` | `on-miss` | Allowlist/safe-bin matches run directly; everything else routes through OpenClaw's native auto reviewer before asking a human. |
-| `full`      | `full`      | `off`     | No approval gate.                                                                                                              |
+| Mode        | security    | ask       | Behavior                                                                                                                        |
+| ----------- | ----------- | --------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| `deny`      | `deny`      | `off`     | Exec is denied.                                                                                                                 |
+| `allowlist` | `allowlist` | `off`     | Only allowlisted/safe-bin commands run; nothing else is asked.                                                                  |
+| `ask`       | `allowlist` | `on-miss` | Allowlist matches run directly; everything else asks a human.                                                                   |
+| `auto`      | `allowlist` | `on-miss` | Allowlist/safe-bin matches run directly; eligible misses receive an `allow`, `deny`, or `ask` verdict from the native reviewer. |
+| `full`      | `full`      | `off`     | No approval gate.                                                                                                               |
 
 Use `/exec ask=always` with a message to require human approval for that run. It does not persist to later messages. Use [session permission modes](/gateway/permission-modes) for session-wide policy.
 
-Auto-review approval is single-use. On the gateway, OpenClaw supplies the resolved executable path to the reviewer and pins execution to that same path. An enforceable command chain or pipeline can be reviewed as one request when every executable resolves and OpenClaw can rebuild the complete command with those exact paths. Commands that cannot be reduced to one enforceable execution plan—such as heredocs, shell expansions, or unsupported wrapper quoting—fall back to human approval even if the model would otherwise allow them.
+Auto-review approval is single-use. The reviewer returns `allow`, `deny`, or `ask`: `allow` runs a low- or medium-risk command once; `deny` returns a reason to the agent, which must choose a materially safer alternative or ask the user rather than work around the denial; `ask` requests human approval. Reviewer failures, timeouts, and invalid responses also ask a human. On the gateway, three consecutive reviewer denials for a session escalate the third command to human approval; a reviewer allowance or resolved human approval resets the count.
+
+On the gateway, commands must still pass the existing mutable-file binding checks before review. Those checks continue to reject heredocs, unresolved executables, and missing script operands. After binding succeeds, commands with globs or chains that cannot be rebuilt with pinned executable paths still receive review. If allowed, they run as written, like a human `allow-once`, with mutable-file and working-directory revalidation. Commands that can be rebuilt keep executable path pinning. Login-shell commands that pass binding can also receive automatic approval; their implicit startup files are not covered by mutable-file operand binding. Node-host auto-review still requires a bound command.
+
+Explicit `ask=always`, security-audit suppression changes, and commands above the review candidate limit go directly to human approval.
 
 Codex app-server command approvals that are not already decided by explicit runtime or native policy use the human approval route. OpenClaw does not run its configured exec reviewer for these requests because Codex does not expose an enforceable resolved executable that can bind the review decision to the command Codex runs.
 
 ### Inline eval (`strictInlineEval`)
 
-When `tools.exec.strictInlineEval` is `true`, inline interpreter-eval forms require reviewer or explicit approval: `python -c`, `node -e`, `ruby -e`, `perl -e`, `php -r`, `lua -e`, `osascript -e`, and similar forms across other supported interpreters and command carriers (`awk`, `find -exec`, `make`, `sed`, `xargs`, and more). In `mode=auto`, the normal exec approval path may let the native auto reviewer allow a clearly low-risk one-off command; direct node-host `system.run` calls still require an explicit approval because they cannot hand the command to a human approval route. If the reviewer asks, the request goes to a human. `allow-always` can still persist benign interpreter/script invocations, but inline-eval forms do not become durable allow rules.
+When `tools.exec.strictInlineEval` is `true`, inline interpreter-eval forms require reviewer or explicit approval: `python -c`, `node -e`, `ruby -e`, `perl -e`, `php -r`, `lua -e`, `osascript -e`, and similar forms across other supported interpreters and command carriers (`awk`, `find -exec`, `make`, `sed`, `xargs`, and more). In `mode=auto`, the normal exec approval path may let the native auto reviewer allow a low- or medium-risk one-off command; direct node-host `system.run` calls still require an explicit approval because they cannot hand the command to a human approval route. A reviewer denial returns to the agent with a reason; `ask` goes to a human. `allow-always` can still persist benign interpreter/script invocations, but inline-eval forms do not become durable allow rules.
 
 ### PATH handling
 

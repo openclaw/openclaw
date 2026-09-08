@@ -48,7 +48,8 @@ differences. File-oriented options are denied for default safe bins; long
 options validate fail-closed (unknown flags and ambiguous abbreviations are
 rejected). Recognized read-only boolean flags of the default bins (for example
 `wc -l`, `tr -d`, `uniq -c`) are accepted, while unrecognized short flags stay
-fail-closed and fall through to manual approval.
+fail-closed and fall through to the configured approval policy, including the
+automatic reviewer in `mode=auto`.
 
 Denied flags by safe-bin profile:
 
@@ -103,8 +104,8 @@ same way. If a wrapper or multiplexer cannot be safely unwrapped, no allowlist
 entry is persisted automatically.
 
 If you allowlist interpreters like `python3` or `node`, prefer
-`tools.exec.strictInlineEval=true` so inline eval still requires an explicit
-approval. In strict mode, `allow-always` can still persist benign
+`tools.exec.strictInlineEval=true` so inline eval still requires reviewer or
+explicit approval. In strict mode, `allow-always` can still persist benign
 interpreter/script invocations, but inline-eval carriers are not persisted
 automatically.
 

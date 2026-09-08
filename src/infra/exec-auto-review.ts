@@ -6,12 +6,17 @@ import { formatErrorMessage } from "./errors.js";
 /** Risk level returned by exec auto-reviewers for approval routing decisions. */
 type ExecAutoReviewRisk = "unknown" | "low" | "medium" | "high";
 
-/** Auto-review outcome: either approve once or send the command to normal approval. */
+/** Auto-review outcome: approve once, reject, or request human approval. */
 export type ExecAutoReviewDecision =
   | {
       decision: "allow-once";
       rationale: string;
-      risk: "low";
+      risk: "low" | "medium";
+    }
+  | {
+      decision: "deny";
+      rationale: string;
+      risk: ExecAutoReviewRisk;
     }
   | {
       decision: "ask";
@@ -63,6 +68,9 @@ export type BoardWidgetAutoReviewInput = {
 export type ExecAutoReviewer = (
   input: ExecAutoReviewInput,
 ) => Promise<ExecAutoReviewDecision> | ExecAutoReviewDecision;
+
+export const EXEC_AUTO_REVIEW_DENIAL_GUIDANCE =
+  "Do not attempt the same outcome through a workaround, indirect execution, or policy circumvention. Proceed only with a materially safer alternative, or ask the user to approve this exact command after explaining the risk.";
 
 /** Keeps reviewer and provider explanations safe for human-facing approval text. */
 export function normalizeExecAutoReviewRationale(value: unknown, fallback: string): string {

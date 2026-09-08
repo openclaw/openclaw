@@ -18,7 +18,10 @@ import {
   defaultExecAutoReviewer,
   resolveExecAutoReviewDecision,
 } from "../infra/exec-auto-review.js";
-import { formatExecApprovalContinuationSourceOutput } from "./bash-tools.exec-approval-output.js";
+import {
+  buildExecAutoReviewDeniedToolResult,
+  formatExecApprovalContinuationSourceOutput,
+} from "./bash-tools.exec-approval-output.js";
 import {
   buildExecApprovalRequesterContext,
   buildExecApprovalTurnSourceContext,
@@ -363,25 +366,43 @@ export async function executeNodeHostCommand(
         ? await abortable(params.signal, pendingDecision)
         : await pendingDecision;
       params.signal?.throwIfAborted();
-      const autoReviewAllowed = decision.decision === "allow-once" && decision.risk === "low";
-      if (autoReviewAllowed) {
-        const approvalId = randomUUID();
-        await registerNodeApproval(approvalId, {
-          requireDeliveryRoute: false,
-          suppressDelivery: true,
-        });
-        await callGatewayTool(
-          "exec.approval.resolve",
-          { timeoutMs: 15_000 },
-          { id: approvalId, decision: "allow-once" },
-          { scopes: [APPROVALS_SCOPE], requireAgentRuntimeIdentity: true },
-        );
-        inlineApprovedByAsk = true;
-        inlineApprovalDecision = "allow-once";
-        inlineApprovalId = approvalId;
-        inlineDispatchAuthority = "auto-review";
+      switch (decision.decision) {
+        case "deny":
+          return buildExecAutoReviewDeniedToolResult({
+            command: prepared.rawCommand,
+            cwd: prepared.cwd,
+            decision,
+            toolCallId: params.toolCallId ?? randomUUID(),
+          });
+        case "ask":
+          break;
+        case "allow-once": {
+          if (decision.risk !== "low" && decision.risk !== "medium") {
+            break;
+          }
+          const approvalId = randomUUID();
+          await registerNodeApproval(approvalId, {
+            requireDeliveryRoute: false,
+            suppressDelivery: true,
+          });
+          await callGatewayTool(
+            "exec.approval.resolve",
+            { timeoutMs: 15_000 },
+            { id: approvalId, decision: "allow-once" },
+            { scopes: [APPROVALS_SCOPE], requireAgentRuntimeIdentity: true },
+          );
+          inlineApprovedByAsk = true;
+          inlineApprovalDecision = "allow-once";
+          inlineApprovalId = approvalId;
+          inlineDispatchAuthority = "auto-review";
+          break;
+        }
+        default:
+          throw new Error("Unsupported exec auto-review decision", {
+            cause: decision satisfies never,
+          });
       }
-      if (!autoReviewAllowed) {
+      if (!inlineApprovedByAsk) {
         autoReviewRequiresHumanApproval = true;
         params.warnings.push(
           `Exec auto-review deferred to human approval (risk=${decision.risk}): ${decision.rationale}`,

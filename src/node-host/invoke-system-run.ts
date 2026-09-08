@@ -31,7 +31,11 @@ import {
   type SkillBinTrustEntry,
 } from "../infra/exec-approvals.js";
 import type { ExecAuthorizationPlan } from "../infra/exec-authorization-plan.js";
-import { resolveExecAutoReviewDecision, type ExecAutoReviewer } from "../infra/exec-auto-review.js";
+import {
+  EXEC_AUTO_REVIEW_DENIAL_GUIDANCE,
+  resolveExecAutoReviewDecision,
+  type ExecAutoReviewer,
+} from "../infra/exec-auto-review.js";
 import type { ExecHostRequest, ExecHostResponse, ExecHostRunResult } from "../infra/exec-host.js";
 import { resolveExecSafeBinRuntimePolicy } from "../infra/exec-safe-bin-runtime-policy.js";
 import {
@@ -89,6 +93,7 @@ type SystemRunInvokeResult = {
 type SystemRunDeniedReason =
   | "security=deny"
   | "approval-required"
+  | "auto-review-denied"
   | "approval-state-write-failed"
   | "allowlist-miss"
   | "execution-plan-miss"
@@ -725,22 +730,41 @@ async function evaluateSystemRunPolicyPhase(
           sessionKey: parsed.sessionKey,
         },
       });
-      if (decision.decision === "allow-once" && decision.risk === "low") {
-        approvalDecision = "allow-once";
-        approvalGrantSource = "auto-review";
-        policy = evaluateSystemRunPolicy({
-          security,
-          ask,
-          analysisOk,
-          allowlistSatisfied,
-          durableApprovalSatisfied: durableApprovalSatisfied || inlineEvalExecutableTrusted,
-          approvalDecision,
-          approved: true,
-          isWindows,
-          cmdInvocation,
-          shellWrapperInvocation: parsed.shellPayload !== null,
-        });
-      } else {
+      switch (decision.decision) {
+        case "deny":
+          await sendSystemRunDenied(opts, parsed.execution, {
+            reason: "auto-review-denied",
+            message: `SYSTEM_RUN_DENIED: auto-review denied (risk=${decision.risk}): ${decision.rationale}\n${EXEC_AUTO_REVIEW_DENIAL_GUIDANCE}`,
+          });
+          return null;
+        case "ask":
+          break;
+        case "allow-once": {
+          if (decision.risk !== "low" && decision.risk !== "medium") {
+            break;
+          }
+          approvalDecision = "allow-once";
+          approvalGrantSource = "auto-review";
+          policy = evaluateSystemRunPolicy({
+            security,
+            ask,
+            analysisOk,
+            allowlistSatisfied,
+            durableApprovalSatisfied: durableApprovalSatisfied || inlineEvalExecutableTrusted,
+            approvalDecision,
+            approved: true,
+            isWindows,
+            cmdInvocation,
+            shellWrapperInvocation: parsed.shellPayload !== null,
+          });
+          break;
+        }
+        default:
+          throw new Error("Unsupported exec auto-review decision", {
+            cause: decision satisfies never,
+          });
+      }
+      if (!policy.allowed) {
         autoReviewDeferredMessage = `${policy.errorMessage} (exec auto-review deferred to human approval: ${decision.rationale})`;
       }
     }

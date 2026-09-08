@@ -45,7 +45,6 @@ import {
   type ExecAutoReviewer,
 } from "../infra/exec-auto-review.js";
 import type { SafeBinProfile } from "../infra/exec-safe-bin-policy.js";
-import { isBlockedShellWrapperCommand } from "../infra/exec-wrapper-resolution.js";
 import {
   prepareSystemRunMutableFileBinding,
   revalidateSystemRunMutableFileBinding,
@@ -62,7 +61,10 @@ import {
   runWithGatewayIndependentRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
 import { markBackgrounded, tail } from "./bash-process-registry.js";
-import { formatExecApprovalContinuationSourceOutput } from "./bash-tools.exec-approval-output.js";
+import {
+  buildExecAutoReviewDeniedToolResult,
+  formatExecApprovalContinuationSourceOutput,
+} from "./bash-tools.exec-approval-output.js";
 import {
   buildExecApprovalRequesterContext,
   buildExecApprovalTurnSourceContext,
@@ -160,6 +162,28 @@ const ONE_SHOT_ALLOW_ALWAYS: AllowAlwaysPersistenceDecision = {
 };
 // Keep compound reviews bounded independently of the serialized prompt cap.
 const MAX_GATEWAY_AUTO_REVIEW_CANDIDATES = 64;
+const MAX_CONSECUTIVE_AUTO_REVIEW_DENIALS = 3;
+const MAX_AUTO_REVIEW_SESSIONS = 256;
+const consecutiveAutoReviewDenials = new Map<string, number>();
+
+function recordAutoReviewDenial(sessionKey: string | undefined): number {
+  if (!sessionKey) {
+    return 1;
+  }
+  const count = Math.min(
+    (consecutiveAutoReviewDenials.get(sessionKey) ?? 0) + 1,
+    MAX_CONSECUTIVE_AUTO_REVIEW_DENIALS,
+  );
+  consecutiveAutoReviewDenials.delete(sessionKey);
+  consecutiveAutoReviewDenials.set(sessionKey, count);
+  if (consecutiveAutoReviewDenials.size > MAX_AUTO_REVIEW_SESSIONS) {
+    const oldest = consecutiveAutoReviewDenials.keys().next().value;
+    if (oldest !== undefined) {
+      consecutiveAutoReviewDenials.delete(oldest);
+    }
+  }
+  return count;
+}
 
 function publishGatewayGuardianReview(
   params: ProcessGatewayAllowlistParams,
@@ -755,10 +779,11 @@ export async function processGatewayAllowlist(
       `Warning: allowlist auto-execution is unavailable on ${process.platform}; reviewer or explicit approval is required.`,
     );
   }
-  if (policyRequiresAsk && params.nonInteractiveApproval) {
+  if (policyRequiresAsk && params.nonInteractiveApproval && params.autoReview !== true) {
     return denyHeadlessApproval();
   }
   const shouldDenyUnpromptedShellExpansion =
+    params.autoReview !== true &&
     requiresAllowlistPlanApproval &&
     allowlistPlanUnavailableReason === "shell expansion in enforced arguments" &&
     hostAsk === "off" &&
@@ -925,9 +950,6 @@ export async function processGatewayAllowlist(
     );
   }
   if (requiresAsk) {
-    if (params.nonInteractiveApproval) {
-      return denyHeadlessApproval();
-    }
     if (!mutableFileBinding) {
       return {
         deniedResult: buildGatewayExecApprovalDeniedToolResult({
@@ -951,65 +973,56 @@ export async function processGatewayAllowlist(
     const authorizationCandidates = allowlistEval.authorizationPlan?.ok
       ? allowlistEval.authorizationPlan.groups.flatMap((group) => group.candidates)
       : [];
-    const executableCandidates = authorizationCandidates.filter(
-      (_candidate, index) => allowlistEval.segmentSatisfiedBy[index] !== "safeBuiltins",
-    );
     const autoReviewSingleSegment =
-      authorizationCandidates.length === 1 ? executableCandidates[0]?.sourceSegment : undefined;
+      authorizationCandidates.length === 1 && allowlistEval.segmentSatisfiedBy[0] !== "safeBuiltins"
+        ? authorizationCandidates[0]?.sourceSegment
+        : undefined;
     const autoReviewResolvedPath = autoReviewSingleSegment
       ? resolveExecutionTargetTrustPath(autoReviewSingleSegment.resolution, params.workdir)
       : undefined;
     const autoReviewEnforcedCommand =
       gatewayEnforcedCommand?.ok === true ? gatewayEnforcedCommand.command : undefined;
-    const autoReviewHasExecutableBinding =
-      authorizationCandidates.length <= MAX_GATEWAY_AUTO_REVIEW_CANDIDATES &&
-      executableCandidates.length > 0 &&
-      autoReviewEnforcedCommand !== undefined &&
-      executableCandidates.every(({ sourceSegment }) =>
-        Boolean(
-          sourceSegment.resolution?.policyBlocked !== true &&
-          (sourceSegment.resolution?.wrapperChain?.length ?? 0) === 0 &&
-          !isBlockedShellWrapperCommand(sourceSegment.argv) &&
-          resolveExecutionTargetTrustPath(sourceSegment.resolution, params.workdir),
-        ),
-      );
     const canAutoReviewApprovalMiss =
       params.autoReview === true &&
       hostAsk !== "always" &&
-      autoReviewHasExecutableBinding &&
-      !requiresHeredocApproval &&
+      Math.max(authorizationCandidates.length, allowlistEval.segments.length) <=
+        MAX_GATEWAY_AUTO_REVIEW_CANDIDATES &&
       !requiresSecurityAuditSuppressionApproval;
     let autoReviewRequiresHumanApproval =
-      (params.autoReview === true && hostAsk !== "always" && !autoReviewHasExecutableBinding) ||
+      (params.autoReview === true && hostAsk !== "always" && !canAutoReviewApprovalMiss) ||
       requiresAllowlistPlanApproval ||
       requiresHeredocApproval ||
       requiresSecurityAuditSuppressionApproval;
-    if (canAutoReviewApprovalMiss && autoReviewEnforcedCommand) {
+    if (canAutoReviewApprovalMiss) {
       const reviewer = params.autoReviewer ?? defaultExecAutoReviewer;
       publishGatewayGuardianReview(params, "in_progress");
       const pendingDecision = resolveExecAutoReviewDecision(reviewer, {
-        command: autoReviewEnforcedCommand,
-        argv: autoReviewSingleSegment?.argv,
+        command: params.command,
+        argv: autoReviewResolvedPath ? autoReviewSingleSegment?.argv : undefined,
         resolvedPath: autoReviewResolvedPath,
         cwd: params.workdir,
         envKeys: Object.keys(params.requestedEnv ?? {}).toSorted(),
         host: "gateway",
         reason: requiresInlineEvalApproval
           ? "strict-inline-eval"
-          : hasGatewayAllowlistMiss({
-                hostSecurity,
-                analysisOk,
-                allowlistSatisfied,
-                durableApprovalSatisfied,
-              })
-            ? "allowlist-miss"
-            : "approval-required",
+          : hasHeredocSegment
+            ? "heredoc"
+            : autoReviewEnforcedCommand === undefined
+              ? "execution-plan-miss"
+              : hasGatewayAllowlistMiss({
+                    hostSecurity,
+                    analysisOk,
+                    allowlistSatisfied,
+                    durableApprovalSatisfied,
+                  })
+                ? "allowlist-miss"
+                : "approval-required",
         analysis: {
           parsed: analysisOk,
           allowlistMatched: allowlistSatisfied,
           durableApprovalMatched: durableApprovalSatisfied,
           inlineEval: requiresInlineEvalApproval,
-          heredoc: requiresHeredocApproval,
+          heredoc: hasHeredocSegment,
         },
         agent: {
           id: params.agentId,
@@ -1027,53 +1040,100 @@ export async function processGatewayAllowlist(
         publishGatewayGuardianReview(params, "aborted");
         throw error;
       }
+      const denialEscalated =
+        decision.decision === "deny" &&
+        recordAutoReviewDenial(params.sessionKey) >= MAX_CONSECUTIVE_AUTO_REVIEW_DENIALS;
       publishGatewayGuardianReview(
         params,
         decision.decision === "allow-once" ? "approved" : "denied",
         decision,
       );
-      if (
-        decision.decision === "allow-once" &&
-        decision.risk === "low" &&
-        autoReviewEnforcedCommand
-      ) {
-        const deniedResult = await revalidateGatewayExecApprovalBinding({
-          binding: approvalMutableFileBinding,
-          cwdSnapshot: approvedCwdSnapshot,
-          command: params.command,
-          cwd: params.workdir,
-        });
-        if (deniedResult) {
-          return { deniedResult };
+      switch (decision.decision) {
+        case "allow-once": {
+          // Custom reviewers still have to satisfy the runtime risk contract.
+          if (decision.risk !== "low" && decision.risk !== "medium") {
+            break;
+          }
+          if (params.sessionKey) {
+            consecutiveAutoReviewDenials.delete(params.sessionKey);
+          }
+          const deniedResult = await revalidateGatewayExecApprovalBinding({
+            binding: approvalMutableFileBinding,
+            cwdSnapshot: approvedCwdSnapshot,
+            command: params.command,
+            cwd: params.workdir,
+          });
+          if (deniedResult) {
+            return { deniedResult };
+          }
+          params.warnings.push(
+            `Exec auto-review allowed once (risk=${decision.risk}): ${decision.rationale}`,
+          );
+          emitGatewayExecApprovalSecurityEvent({
+            action: "exec.approval.approved",
+            outcome: "success",
+            severity: "medium",
+            agentId: params.agentId,
+            hostSecurity,
+            hostAsk,
+            host: "gateway",
+            segmentCount: allowlistEval.segments.length,
+            trigger: params.trigger,
+            decision: "auto-review",
+          });
+          await commitExecutionAuthorization({
+            source: "auto-review",
+            resolvedPath: autoReviewResolvedPath,
+          });
+          return {
+            ...(autoReviewEnforcedCommand === undefined
+              ? { allowWithoutEnforcedCommand: true }
+              : { execCommandOverride: autoReviewEnforcedCommand }),
+            ...(revalidateBeforeExecution ? { revalidateBeforeExecution } : {}),
+          };
         }
-        params.warnings.push(
-          `Exec auto-review allowed once (risk=${decision.risk}): ${decision.rationale}`,
-        );
-        emitGatewayExecApprovalSecurityEvent({
-          action: "exec.approval.approved",
-          outcome: "success",
-          severity: "medium",
-          agentId: params.agentId,
-          hostSecurity,
-          hostAsk,
-          host: "gateway",
-          segmentCount: allowlistEval.segments.length,
-          trigger: params.trigger,
-          decision: "auto-review",
-        });
-        await commitExecutionAuthorization({
-          source: "auto-review",
-          resolvedPath: autoReviewResolvedPath,
-        });
-        return {
-          execCommandOverride: autoReviewEnforcedCommand,
-          ...(revalidateBeforeExecution ? { revalidateBeforeExecution } : {}),
-        };
+        case "deny": {
+          if (denialEscalated) {
+            params.warnings.push(
+              "Exec auto-review denied 3 consecutive commands for this session; escalating to human approval",
+            );
+            break;
+          }
+          emitGatewayExecApprovalSecurityEvent({
+            action: "exec.approval.denied",
+            outcome: "denied",
+            severity: "medium",
+            agentId: params.agentId,
+            hostSecurity,
+            hostAsk,
+            host: "gateway",
+            segmentCount: allowlistEval.segments.length,
+            trigger: params.trigger,
+            decision: "auto-review",
+          });
+          return {
+            deniedResult: buildExecAutoReviewDeniedToolResult({
+              command: params.command,
+              cwd: params.workdir,
+              decision,
+              toolCallId: params.toolCallId,
+            }),
+          };
+        }
+        case "ask":
+          break;
+        default:
+          throw new Error("Unsupported exec auto-review decision", {
+            cause: decision satisfies never,
+          });
       }
       params.warnings.push(
         `Exec auto-review deferred to human approval (risk=${decision.risk}): ${decision.rationale}`,
       );
       autoReviewRequiresHumanApproval = true;
+    }
+    if (params.nonInteractiveApproval) {
+      return denyHeadlessApproval();
     }
 
     const registerGatewayApproval = async (approvalId: string) =>
@@ -1274,6 +1334,9 @@ export async function processGatewayAllowlist(
       }
 
       const { decision, state: resolvedDecision } = approvalOutcome;
+      if (decision !== null && params.sessionKey) {
+        consecutiveAutoReviewDenials.delete(params.sessionKey);
+      }
       const { approvedByAsk } = resolvedDecision;
       let { deniedReason } = resolvedDecision;
 

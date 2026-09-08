@@ -9,14 +9,16 @@ title: Session permission modes
 
 Session permission modes set one session's filesystem boundary and exec escalation reviewer. The boundary is the session's recorded canonical `sessionRoot`, or the selected agent's canonical workspace when no root is recorded. The mode determines what may happen inside or outside that boundary.
 
-| Mode        | Filesystem access                                         | Exec escalation reviewer              |
-| ----------- | --------------------------------------------------------- | ------------------------------------- |
-| `read-only` | Reads under `sessionRoot`; managed mutation tools omitted | None; exec is denied                  |
-| `guarded`   | Reads and writes under `sessionRoot`                      | A human after the allowlist fast path |
-| `workspace` | Reads and writes under `sessionRoot`                      | LLM review, with human fallback       |
-| `full`      | Unrestricted filesystem access                            | None                                  |
+| Mode        | Filesystem access                                         | Exec escalation reviewer                |
+| ----------- | --------------------------------------------------------- | --------------------------------------- |
+| `read-only` | Reads under `sessionRoot`; managed mutation tools omitted | None; exec is denied                    |
+| `guarded`   | Reads and writes under `sessionRoot`                      | A human after the allowlist fast path   |
+| `workspace` | Reads and writes under `sessionRoot`                      | LLM review: allow, deny, or ask a human |
+| `full`      | Unrestricted filesystem access                            | None                                    |
 
 These tool-visibility and exec rules describe OpenClaw-managed tools. Native harnesses can retain their own tool surface under their permission controls; see [Codex runtime policy](/plugins/codex-harness-runtime).
+
+In `workspace` mode, an exec reviewer denial returns a reason to the agent without creating a human approval card. The agent must choose a materially safer alternative or ask the user; it must not work around the denial. Reviewer `ask` verdicts and review failures request human approval. Three consecutive gateway reviewer denials also escalate to a human. Existing command-binding checks and explicit human-approval requirements remain in force; see [Exec modes](/tools/exec#modes).
 
 `full` requires `operator.admin`. The other modes require `operator.write`.
 

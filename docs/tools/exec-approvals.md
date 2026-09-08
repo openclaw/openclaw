@@ -185,13 +185,13 @@ Example schema:
 
 `tools.exec.mode` is the preferred normalized policy surface for host exec:
 
-| Value       | Behavior                                                                                                                                                                  |
-| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `deny`      | Block host exec.                                                                                                                                                          |
-| `allowlist` | Run only allowlisted commands without asking.                                                                                                                             |
-| `ask`       | Use allowlist policy and ask on misses.                                                                                                                                   |
-| `auto`      | Use allowlist policy, run deterministic matches directly, and send approval misses through OpenClaw's native auto reviewer before falling back to a human approval route. |
-| `full`      | Run host exec without approval prompts.                                                                                                                                   |
+| Value       | Behavior                                                                                                                                                    |
+| ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `deny`      | Block host exec.                                                                                                                                            |
+| `allowlist` | Run only allowlisted commands without asking.                                                                                                               |
+| `ask`       | Use allowlist policy and ask on misses.                                                                                                                     |
+| `auto`      | Run deterministic allowlist matches directly; review eligible misses with `allow` (once), `deny` (reason returned to the agent), or `ask` (human approval). |
+| `full`      | Run host exec without approval prompts.                                                                                                                     |
 
 Doctor migrates supported legacy `tools.exec.security` / `tools.exec.ask` pairs
 to `tools.exec.mode`. If a deploy script, template, or config generator still
@@ -259,8 +259,11 @@ Examples that strict mode catches: `python -c`, `node -e`/`--eval`/`-p`,
 `sed`, `make`, `find -exec`, and `xargs` inline forms).
 
 In strict mode these commands need reviewer or explicit approval. With
-`tools.exec.mode: "auto"`, the reviewer may grant one low-risk execution when
-the command has an enforceable plan; otherwise OpenClaw asks a human.
+`tools.exec.mode: "auto"`, eligible commands receive an `allow`, `deny`, or `ask`
+verdict. The reviewer may grant one low- or medium-risk execution, return a denial
+reason to the agent, or ask a human. Gateway commands must pass mutable-file
+binding checks, but do not need a rendered command with pinned paths to receive
+review. See [Exec modes](/tools/exec#modes) for binding limits and escalation.
 `Codex app-server` command approvals that reach the reviewer fallback ask a
 human because their approval requests do not expose an enforceable resolved
 executable.

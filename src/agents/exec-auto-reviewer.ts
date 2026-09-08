@@ -2,7 +2,7 @@
  * Model-backed exec auto-reviewer.
  *
  * This wraps a small reviewer prompt around pending exec requests and converts
- * the model response into conservative allow-once or ask decisions.
+ * the model response into allow-once, deny, or ask decisions.
  */
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { z } from "zod";
@@ -35,7 +35,7 @@ const EXEC_REVIEWER_TIMEOUT = Symbol("exec-reviewer-timeout");
 
 const execAutoReviewResponseSchema = z
   .object({
-    decision: z.enum(["allow", "ask"]),
+    decision: z.enum(["allow", "deny", "ask"]),
     risk: z.enum(["low", "medium", "high", "unknown"]),
     rationale: z.string().optional(),
   })
@@ -260,27 +260,22 @@ function parseExecAutoReviewResponse(text: string): ExecAutoReviewDecision {
     response.data.rationale,
     "exec reviewer did not explain decision",
   );
-  if (decision === "ask") {
-    return {
-      decision: "ask",
-      risk,
-      rationale,
-    };
+  switch (decision) {
+    case "deny":
+    case "ask":
+      return { decision, risk, rationale };
+    case "allow":
+      if (risk !== "low" && risk !== "medium") {
+        return {
+          decision: "ask",
+          risk,
+          rationale: "exec reviewer returned an allow decision with non-low/medium risk",
+        };
+      }
+      return { decision: "allow-once", risk, rationale };
+    default:
+      throw new Error("Unsupported exec auto-review decision", { cause: decision satisfies never });
   }
-
-  if (risk !== "low") {
-    return {
-      decision: "ask",
-      risk,
-      rationale: "exec reviewer returned a non-low allow decision",
-    };
-  }
-
-  return {
-    decision: "allow-once",
-    risk,
-    rationale,
-  };
 }
 
 function extractTextContent(
