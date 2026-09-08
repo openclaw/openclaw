@@ -54,6 +54,24 @@ vi.mock("../../config/sessions/session-accessor.js", () => ({
 }));
 
 describe("resolveOutboundSessionRoute", () => {
+  it("carries a resolved directory display name into the session route", async () => {
+    const route = await resolveOutboundSessionRoute({
+      cfg: perChannelPeerSessionCfg,
+      channel: "guildchat",
+      agentId: "main",
+      target: "user-42",
+      resolvedTarget: {
+        to: "user-42",
+        kind: "user",
+        display: "Alice",
+        source: "directory",
+        resolutionSource: "directory",
+      },
+    });
+
+    expect(route?.displayName).toBe("Alice");
+  });
+
   beforeEach(() => {
     mocks.updateSessionLastRoute.mockClear();
     mocks.resolveStorePath.mockClear();
@@ -664,6 +682,25 @@ describe("ensureOutboundSessionEntry", () => {
       NativeChannelId: "c1",
       OriginatingTo: "channel:C1",
     });
+  });
+
+  it("persists a resolved target display name as presentation metadata", async () => {
+    await ensureOutboundSessionEntry({
+      cfg: {} as OpenClawConfig,
+      channel: "imessage",
+      route: {
+        sessionKey: "agent:main:imessage:direct:+15551234567",
+        baseSessionKey: "agent:main:imessage:direct:+15551234567",
+        peer: { kind: "direct", id: "+15551234567" },
+        chatType: "direct",
+        from: "auto:+15551234567",
+        to: "auto:+15551234567",
+        displayName: "Alice",
+      },
+    });
+
+    const metadata = firstMockArg(mocks.updateSessionLastRoute, "updateSessionLastRoute");
+    expect(metadata.ctx).toMatchObject({ ConversationLabel: "Alice" });
   });
 
   it("persists the canonical direct peer separately from its adapter target", async () => {
