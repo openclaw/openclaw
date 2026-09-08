@@ -2177,7 +2177,7 @@ describe("cli session history", () => {
     ).toEqual([undefined, undefined, "later-import"]);
   });
 
-  it("does not assign a later identity before an unmatched repeated-text import", () => {
+  it("keeps local matches eligible after an unmatched repeated-text import", () => {
     const window = 5 * 60 * 1000;
     const merged = mergeImportedChatHistoryMessages({
       localMessages: [{ role: "assistant", content: "Repeated answer", timestamp: window * 2 }],
@@ -2192,9 +2192,9 @@ describe("cli session history", () => {
       ],
     });
 
-    expect(merged).toHaveLength(3);
+    expect(merged).toHaveLength(2);
     expect(readRecord(merged[0])["__openclaw"]).toBeUndefined();
-    expect(readRecord(readRecord(merged[2])["__openclaw"]).externalId).toBe("later-import");
+    expect(readRecord(readRecord(merged[1])["__openclaw"]).externalId).toBe("later-import");
   });
 
   it("keeps repeated-text order monotonic after an earlier exact-identity match", () => {

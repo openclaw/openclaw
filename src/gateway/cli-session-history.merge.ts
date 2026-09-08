@@ -650,7 +650,6 @@ export function mergeImportedChatHistoryMessages(params: {
     merged.push(imported);
     indexEntry(imported);
     consumedLocalCandidates.add(imported);
-    advanceRoleTextMinimumOrder(imported);
     nextOrder += 1;
     changed = true;
     expanded = true;
