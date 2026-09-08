@@ -1,6 +1,7 @@
 import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   EXEC_AUTO_REVIEW_DENIAL_GUIDANCE,
+  formatExecAutoReviewAssessment,
   type ExecAutoReviewDecision,
 } from "../infra/exec-auto-review.js";
 import type { ExecToolDetails } from "./bash-tools.exec-types.js";
@@ -16,7 +17,7 @@ export function buildExecAutoReviewDeniedToolResult(params: {
   toolCallId?: string;
 }): AgentToolResult<ExecToolDetails> {
   const { decision, command, toolCallId } = params;
-  const text = `Exec denied by auto-review (risk=${decision.risk}): ${decision.rationale}\n${EXEC_AUTO_REVIEW_DENIAL_GUIDANCE}\nCommand: ${command}`;
+  const text = `Exec denied by auto-review (${formatExecAutoReviewAssessment(decision)}): ${decision.rationale}\n${EXEC_AUTO_REVIEW_DENIAL_GUIDANCE}\nCommand: ${command}`;
   return {
     content: [{ type: "text", text }],
     details: {

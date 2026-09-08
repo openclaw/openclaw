@@ -223,6 +223,11 @@ export function createExecTool(
           return createModelExecAutoReviewer(reviewerParams)(input);
         };
       }
+      const reviewCommand = autoReviewer;
+      autoReviewer = (input) => {
+        const transcript = defaults?.reviewTranscript?.();
+        return reviewCommand(transcript ? { ...input, transcript } : input);
+      };
       let params = requestPreparation.normalizeParams(args);
       const resolveExecEnvPrepared = requestPreparation.isResolveExecEnvPrepared(
         args as ExecToolArgs,

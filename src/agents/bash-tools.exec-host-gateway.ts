@@ -42,6 +42,7 @@ import { resolveUnpinnedAutoApprovalEligibility } from "../infra/exec-auto-appro
 import {
   defaultExecAutoReviewer,
   EXEC_AUTO_REVIEW_SHELL_STARTUP_WARNING,
+  formatExecAutoReviewAssessment,
   resolveExecAutoReviewDecision,
   type ExecAutoReviewDecision,
   type ExecAutoReviewer,
@@ -1103,7 +1104,7 @@ export async function processGatewayAllowlist(
             return { deniedResult };
           }
           params.warnings.push(
-            `Exec auto-review allowed once (risk=${decision.risk}): ${decision.rationale}`,
+            `Exec auto-review allowed once (${formatExecAutoReviewAssessment(decision)}): ${decision.rationale}`,
           );
           emitGatewayExecApprovalSecurityEvent({
             action: "exec.approval.approved",
@@ -1164,7 +1165,7 @@ export async function processGatewayAllowlist(
           });
       }
       params.warnings.push(
-        `Exec auto-review deferred to human approval (risk=${decision.risk}): ${decision.rationale}`,
+        `Exec auto-review deferred to human approval (${formatExecAutoReviewAssessment(decision)}): ${decision.rationale}`,
       );
       autoReviewRequiresHumanApproval = true;
     }
