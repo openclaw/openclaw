@@ -200,12 +200,13 @@ export function nodeVersionSatisfiesEngine(
 
 /** Exits through the provided runtime when the current Node runtime is unsupported. */
 export async function assertSupportedRuntime(
-  runtime?: RuntimeEnv,
+  providedRuntime?: RuntimeEnv,
   details: RuntimeDetails = detectRuntime(),
 ): Promise<void> {
   if (runtimeSatisfies(details)) {
     return;
   }
+  let runtime = providedRuntime;
   // Healthy starts need no diagnostic graph; a supplied runtime already owns its error sink.
   if (!runtime) {
     const { formatConsoleDiagnosticBlock } = await import("../logging/json-console-line.js");
