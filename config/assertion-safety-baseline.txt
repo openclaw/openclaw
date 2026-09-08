@@ -1764,7 +1764,7 @@ src/agents/embedded-agent-runner/run/attempt.tool-call-argument-repair.ts	11
 src/agents/embedded-agent-runner/run/auth-profile-success.ts	1
 src/agents/embedded-agent-runner/run/context-recovery-state.ts	2
 src/agents/embedded-agent-runner/run/helpers.ts	3
-src/agents/embedded-agent-runner/run/history-image-prune.ts	8
+src/agents/embedded-agent-runner/run/history-image-prune.ts	4
 src/agents/embedded-agent-runner/run/images.ts	7
 src/agents/embedded-agent-runner/run/incomplete-turn-classification.ts	5
 src/agents/embedded-agent-runner/run/incomplete-turn-recovery.ts	3
