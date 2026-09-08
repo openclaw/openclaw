@@ -753,6 +753,23 @@ describe("config io write", () => {
     expect(persisted.gateway).toEqual({ mode: "local", port: 18789 });
   });
 
+  for (const mode of ["OPENCLAW_CONFIG_READONLY", "OPENCLAW_NIX_MODE"]) {
+    itWithHome(mode + " preserves prefixed config without recovery snapshots", async (home) => {
+      const configPath = configPathForHome(home);
+      const originalRaw = "status output\n" + formatConfig({ gateway: { mode: "local" } });
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(configPath, originalRaw, "utf-8");
+      const io = createHomeConfigIO(home, { env: { VITEST: "true", [mode]: "1" } });
+      const snapshot = await io.readConfigFileSnapshot();
+      expect(snapshot.valid).toBe(false);
+      await expect(io.recoverConfigFromJsonRootSuffix(snapshot)).resolves.toBe(false);
+      expect(await fs.readFile(configPath, "utf-8")).toBe(originalRaw);
+      expect(
+        (await fs.readdir(path.dirname(configPath))).filter((name) => name.includes(".clobbered.")),
+      ).toHaveLength(0);
+    });
+  }
+
   itWithHome("recovers configs polluted by a leading status line", async (home) => {
     const configPath = configPathForHome(home);
     const cleanConfig = {
