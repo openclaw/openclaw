@@ -4,6 +4,7 @@
 
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { type Static, Type } from "typebox";
 import { Compile } from "typebox/compile";
 import type { TLocalizedValidationError } from "typebox/error";
@@ -21,6 +22,7 @@ import type {
 import type { OAuthProviderInterface } from "../../llm/utils/oauth/types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getAgentDir } from "../config.js";
+import { hasUsableCustomProviderApiKey } from "../model-auth-provider-config.js";
 import { parseModelCatalogJson } from "../model-catalog-json.js";
 import { resolveModelPluginMetadataSnapshot } from "../model-discovery-context.js";
 import {
@@ -556,6 +558,9 @@ export class ModelRegistry {
           ? filterGeneratedPluginModelCatalogProviders({
               catalogPluginId: options.catalogPluginId,
               config: this.config,
+              isProviderAvailable: (providerId) =>
+                this.authStorage.hasAuth(normalizeProviderId(providerId)) ||
+                hasUsableCustomProviderApiKey(this.config, providerId),
               parsedCatalog: parsed,
               pluginMetadataSnapshot: this.pluginMetadataSnapshot,
               providers: config.providers,

@@ -2,9 +2,9 @@
 //
 // The initial page load uses the fast prepared catalog (configured models only)
 // so full discovery stays out of first navigation. Opening a default-model picker
-// signals interest; this controller fetches the full catalog through the shared
-// model-catalog store (cooldown + concurrency dedupe) and merges it in without
-// disturbing the saved selection.
+// signals interest; this controller explicitly refreshes the Gateway-owned catalog
+// and merges it in without disturbing the saved selection. Pending opens share
+// this page's request; the Gateway owns concurrent provider acquisition.
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { loadModelCatalog } from "../../lib/model-catalog-store.ts";
@@ -91,7 +91,7 @@ export function createCatalogDiscoveryController(
     try {
       const result = await loadModelCatalog(client, {
         agentId,
-        refreshIfDue: true,
+        refresh: true,
         signal: request.signal,
       });
       if (ownsResult()) {

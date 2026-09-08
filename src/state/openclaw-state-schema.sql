@@ -1274,7 +1274,7 @@ CREATE INDEX IF NOT EXISTS idx_plugin_state_expiry
   WHERE expires_at IS NOT NULL;
 
 CREATE INDEX IF NOT EXISTS idx_plugin_state_listing
-  ON plugin_state_entries(plugin_id, namespace, created_at, entry_key);
+  ON plugin_state_entries(plugin_id, namespace, created_at, entry_key, expires_at);
 
 CREATE TABLE IF NOT EXISTS channel_ingress_events (
   queue_name TEXT NOT NULL,
