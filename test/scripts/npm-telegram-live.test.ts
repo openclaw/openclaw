@@ -593,9 +593,9 @@ describe("package Telegram live Docker E2E", () => {
     ).toBeUndefined();
   });
 
-  it("preserves the frozen 2026.6.35 package projection", () => {
+  it.each(["2026.6.35", "2026.7.33"])("preserves the frozen %s package projection", (version) => {
     const mutateConfig = testing.resolvePackageConfigMutation({
-      OPENCLAW_NPM_TELEGRAM_PACKAGE_VERSION: "2026.6.35",
+      OPENCLAW_NPM_TELEGRAM_PACKAGE_VERSION: version,
     });
     const config = {
       agents: {

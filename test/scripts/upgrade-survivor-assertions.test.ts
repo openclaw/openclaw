@@ -1056,6 +1056,10 @@ describe("upgrade survivor assertions", () => {
                 ),
                 "-v",
                 expect.stringMatching(
+                  /scripts\/e2e\/lib\/upgrade-survivor:\/app\/scripts\/e2e\/lib\/upgrade-survivor-trusted:ro$/u,
+                ),
+                "-v",
+                expect.stringMatching(
                   /npm-publish-plan\.mjs:\/app\/scripts\/lib\/npm-publish-plan\.mjs:ro$/u,
                 ),
                 "-v",

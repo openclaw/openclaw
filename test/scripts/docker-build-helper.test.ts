@@ -5955,6 +5955,8 @@ grep -Fxq preserved "$TMPDIR/caller-fd"
     const upgradeRunner = readFileSync(UPGRADE_SURVIVOR_DOCKER_E2E_PATH, "utf8");
     expectTextToIncludeAll(upgradeRunner, [
       "scripts/e2e/lib/upgrade-survivor",
+      'UPGRADE_TRUSTED_DIAGNOSTICS="/app/scripts/e2e/lib/upgrade-survivor/diagnostics.mjs"',
+      '-e OPENCLAW_UPGRADE_SURVIVOR_TRUSTED_DIAGNOSTICS="$UPGRADE_TRUSTED_DIAGNOSTICS"',
       'UPGRADE_RUNNER="$UPGRADE_SCENARIO_DIR/run.sh"',
       'cp -R "$UPGRADE_SCENARIO_DIR/." "$UPGRADE_SCENARIO_STAGE/"',
       'cp "$UPGRADE_DIAGNOSTICS" "$UPGRADE_SCENARIO_STAGE/diagnostics.mjs"',
@@ -6537,6 +6539,9 @@ process.exit(73);
     const runner = readFileSync(AGENT_BUNDLE_MCP_TOOLS_DOCKER_E2E_PATH, "utf8");
 
     expectTextToIncludeAll(runner, [
+      "scripts/e2e/lib/temp-state-dir.ts \\",
+      "test/e2e/qa-lab/runtime/agent-bundle-mcp-tools-docker-client.ts |",
+      'CLIENT_PATH="$LEGACY_CLIENT_ROOT/test/e2e/qa-lab/runtime/agent-bundle-mcp-tools-docker-client.ts"',
       'ln -s /app/dist "$LEGACY_CLIENT_SOURCE_ROOT/dist"',
       'ln -s /app/node_modules "$LEGACY_CLIENT_SOURCE_ROOT/node_modules"',
       '-v "$LEGACY_CLIENT_SOURCE_ROOT:$LEGACY_CLIENT_ROOT:ro"',

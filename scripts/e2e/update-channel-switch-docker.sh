@@ -227,7 +227,11 @@ node scripts/e2e/lib/update-channel-switch/assertions.mjs assert-config-channel 
 
 status_json="$(openclaw update status --json)"
 printf "%s\n" "$status_json"
-STATUS_JSON="$status_json" node scripts/e2e/lib/update-channel-switch/assertions.mjs assert-status-kind git
+if [ "$OPENCLAW_PACKAGE_ACCEPTANCE_LEGACY_COMPAT" = "1" ]; then
+  STATUS_JSON="$status_json" node scripts/e2e/lib/update-channel-switch/assertions.mjs assert-status-kind package
+else
+  STATUS_JSON="$status_json" node scripts/e2e/lib/update-channel-switch/assertions.mjs assert-status-kind git
+fi
 
 echo "==> git -> package stable channel"
 set +e
