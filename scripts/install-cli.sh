@@ -52,7 +52,9 @@ resolve_openclaw_effective_home() {
 OPENCLAW_EFFECTIVE_HOME="$(resolve_openclaw_effective_home)"
 PREFIX="${OPENCLAW_PREFIX:-${HOME}/.openclaw}"
 OPENCLAW_VERSION="${OPENCLAW_VERSION:-latest}"
-NODE_VERSION="${OPENCLAW_NODE_VERSION:-22.22.3}"
+DEFAULT_NODE_VERSION="24.19.0"
+NODE_VERSION="${OPENCLAW_NODE_VERSION:-$DEFAULT_NODE_VERSION}"
+NODE_VERSION_DEFAULTED="$([[ -z "${OPENCLAW_NODE_VERSION:-}" ]] && echo 1 || echo 0)"
 MIN_NODE_VERSION="22.19.0"
 APK_NODE_BIN_DIR="/usr/bin"
 NPM_LOGLEVEL="${OPENCLAW_NPM_LOGLEVEL:-error}"
@@ -74,7 +76,7 @@ Usage: install-cli.sh [options]
   --git, --github                     Shortcut for --install-method git
   --git-dir, --dir <path>             Checkout directory (default: ~/openclaw, or \$OPENCLAW_HOME/openclaw)
   --version <ver>                     OpenClaw version (default: latest)
-  --node-version <ver>                Node version (default: 22.22.3)
+  --node-version <ver>                Node version (default: 24.19.0; Alpine uses distro Node >=22.19.0)
   --onboard                           Run "openclaw onboard" after install
   --no-onboard                        Skip onboarding (default)
   --set-npm-prefix                    Force npm prefix to ~/.npm-global if current prefix is not writable (Linux)
@@ -269,6 +271,7 @@ parse_args() {
           fail "Missing value for $1"
         fi
         NODE_VERSION="$2"
+        NODE_VERSION_DEFAULTED=0
         shift 2
         ;;
       --install-method|--method)
@@ -767,6 +770,11 @@ install_node() {
   dir="$(node_dir)"
 
   if [[ "$os" == "linux" ]] && command -v apk >/dev/null 2>&1 && is_musl_linux; then
+    if [[ "$NODE_VERSION_DEFAULTED" -eq 1 && "$NODE_VERSION" == "$DEFAULT_NODE_VERSION" ]]; then
+      NODE_VERSION="$MIN_NODE_VERSION"
+      PATH="$(node_dir)/bin:${PATH}"
+      export PATH
+    fi
     install_alpine_node
     return
   fi
@@ -812,7 +820,7 @@ install_node() {
     local required_version
     installed_version="$("$(node_bin)" -v 2>/dev/null || echo unknown)"
     required_version="$(required_node_version)"
-    fail "Installed Node ${NODE_VERSION} must provide Node >= ${required_version} with node:sqlite; found ${installed_version}. Re-run with --node-version 22.22.3 (or newer)"
+    fail "Installed Node ${NODE_VERSION} must provide Node >= ${required_version} with node:sqlite; found ${installed_version}. Re-run with --node-version 24.19.0 (or newer)"
   fi
   emit_json "{\"event\":\"step\",\"name\":\"node\",\"status\":\"ok\",\"version\":\"${NODE_VERSION}\"}"
 }

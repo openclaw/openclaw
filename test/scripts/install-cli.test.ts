@@ -85,7 +85,7 @@ describe("install-cli.sh", () => {
     expect(output).toContain(`git=${join(openclawHome, "openclaw")}`);
   });
 
-  it("defaults user-space Node installs to the current supported Node 22 patch", () => {
+  it("defaults user-space Node installs to Node 24", () => {
     const result = runInstallCliShell(`
       set -euo pipefail
       source "${SCRIPT_PATH}"
@@ -95,9 +95,11 @@ describe("install-cli.sh", () => {
     `);
 
     expect(result.status).toBe(0);
-    expect(result.stdout).toContain("node=22.22.3");
-    expect(result.stdout).toContain("required=22.22.3");
-    expect(result.stdout).toContain("Node version (default: 22.22.3)");
+    expect(result.stdout).toContain("node=24.19.0");
+    expect(result.stdout).toContain("required=24.19.0");
+    expect(result.stdout).toContain(
+      "Node version (default: 24.19.0; Alpine uses distro Node >=22.19.0)",
+    );
   });
 
   it("resolves requested git install versions to checkout refs", () => {
@@ -181,10 +183,7 @@ describe("install-cli.sh", () => {
     mkdirSync(bin, { recursive: true });
     mkdirSync(outer, { recursive: true });
     mkdirSync(repo, { recursive: true });
-    writeFileSync(
-      join(outer, "package.json"),
-      '{\n  "packageManager": "yarn@4.5.0"\n}\n',
-    );
+    writeFileSync(join(outer, "package.json"), '{\n  "packageManager": "yarn@4.5.0"\n}\n');
     writeFileSync(
       join(repo, "package.json"),
       '{\n  "packageManager": "pnpm@11.2.2+sha512.test"\n}\n',
@@ -411,7 +410,7 @@ describe("install-cli.sh", () => {
     }
   });
 
-  it("uses apk-managed Node and Git on Alpine/musl when the existing Node is unusable", () => {
+  it("uses the supported distro Node floor for default Alpine/musl installs", () => {
     const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-cli-alpine-apk-"));
     const bin = join(tmp, "bin");
     const prefix = join(tmp, "prefix");
@@ -471,8 +470,8 @@ describe("install-cli.sh", () => {
           "is_root() { return 0; }",
           `PREFIX=${JSON.stringify(prefix)}`,
           `APK_NODE_BIN_DIR=${JSON.stringify(bin)}`,
-          "NODE_VERSION=22.22.0",
           "install_node",
+          'printf "node-command=%s\\n" "$(command -v node)"',
         ].join("\n"),
         {
           APK_LOG: apkLog,
@@ -484,8 +483,9 @@ describe("install-cli.sh", () => {
       expect(result.status).toBe(0);
       expect(result.stdout).toContain("Installing Node via apk");
       expect(readFileSync(apkLog, "utf8")).toContain("add --no-cache nodejs npm");
-      const nodeLink = join(prefix, "tools", "node-v22.22.0", "bin", "node");
-      const npmLink = join(prefix, "tools", "node-v22.22.0", "bin", "npm");
+      const nodeLink = join(prefix, "tools", "node-v22.19.0", "bin", "node");
+      const npmLink = join(prefix, "tools", "node-v22.19.0", "bin", "npm");
+      expect(result.stdout).toContain(`node-command=${nodeLink}`);
       expect(lstatSync(nodeLink).isSymbolicLink()).toBe(true);
       expect(readlinkSync(nodeLink)).toBe(fakeNode);
       expect(readlinkSync(npmLink)).toBe(fakeNpm);
@@ -970,7 +970,7 @@ describe("install-cli.sh", () => {
     const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-cli-freshness-"));
     const prefix = join(tmp, "prefix");
     const home = join(tmp, "home");
-    const nodeBin = join(prefix, "tools/node-v22.22.3/bin");
+    const nodeBin = join(prefix, "tools/node-v24.19.0/bin");
     const argsLog = join(tmp, "npm-args.log");
     mkdirSync(nodeBin, { recursive: true });
     mkdirSync(home, { recursive: true });
@@ -1006,7 +1006,7 @@ describe("install-cli.sh", () => {
     const prefix = join(tmp, "prefix");
     const home = join(tmp, "home");
     const project = join(tmp, "project");
-    const nodeBin = join(prefix, "tools/node-v22.22.3/bin");
+    const nodeBin = join(prefix, "tools/node-v24.19.0/bin");
     const argsLog = join(tmp, "npm-args.log");
     mkdirSync(nodeBin, { recursive: true });
     mkdirSync(home, { recursive: true });
