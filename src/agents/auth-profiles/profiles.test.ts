@@ -16,6 +16,7 @@ import {
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { AUTH_STORE_VERSION } from "./constants.js";
+import { createApiKeyCredential } from "./credential-fixtures.test-support.js";
 import { testing as externalAuthTesting } from "./external-auth.test-support.js";
 import {
   getRuntimeAuthProfileStoreCredentialMutationToken,
@@ -160,16 +161,8 @@ describe("promoteAuthProfileInOrder", () => {
         const mainStore = (selected: string): AuthProfileStore => ({
           version: AUTH_STORE_VERSION,
           profiles: {
-            "openai:first": {
-              type: "api_key",
-              provider: "openai",
-              key: "sk-first",
-            },
-            "openai:second": {
-              type: "api_key",
-              provider: "openai",
-              key: "sk-second",
-            },
+            "openai:first": createApiKeyCredential("openai", "sk-first"),
+            "openai:second": createApiKeyCredential("openai", "sk-second"),
           },
           order: { openai: [selected] },
         });
@@ -352,11 +345,7 @@ describe("promoteAuthProfileInOrder", () => {
         const siblingStore: RuntimeAuthProfileStore = {
           version: AUTH_STORE_VERSION,
           profiles: {
-            "anthropic:sibling": {
-              type: "api_key",
-              provider: "anthropic",
-              key: "sk-sibling",
-            },
+            "anthropic:sibling": createApiKeyCredential("anthropic", "sk-sibling"),
           },
           runtimeLocalProfileIds: ["anthropic:sibling"],
         };
@@ -411,11 +400,7 @@ describe("promoteAuthProfileInOrder", () => {
           {
             version: AUTH_STORE_VERSION,
             profiles: {
-              "anthropic:broken": {
-                type: "api_key",
-                provider: "anthropic",
-                key: "sk-broken-local",
-              },
+              "anthropic:broken": createApiKeyCredential("anthropic", "sk-broken-local"),
             },
           },
           brokenAgentDir,
@@ -424,11 +409,7 @@ describe("promoteAuthProfileInOrder", () => {
           {
             version: AUTH_STORE_VERSION,
             profiles: {
-              "google:healthy": {
-                type: "api_key",
-                provider: "google",
-                key: "sk-healthy-local",
-              },
+              "google:healthy": createApiKeyCredential("google", "sk-healthy-local"),
             },
           },
           healthyAgentDir,
@@ -725,11 +706,7 @@ describe("promoteAuthProfileInOrder", () => {
         store: {
           version: AUTH_STORE_VERSION,
           profiles: {
-            "openai:temporary": {
-              type: "api_key",
-              provider: "openai",
-              key: "sk-temporary",
-            },
+            "openai:temporary": createApiKeyCredential("openai", "sk-temporary"),
           },
         },
       });
@@ -780,11 +757,7 @@ describe("promoteAuthProfileInOrder", () => {
           const baselineStore: AuthProfileStore = {
             version: AUTH_STORE_VERSION,
             profiles: {
-              "openai:baseline": {
-                type: "api_key",
-                provider: "openai",
-                key: "sk-baseline",
-              },
+              "openai:baseline": createApiKeyCredential("openai", "sk-baseline"),
               "anthropic:external": {
                 type: "oauth",
                 provider: "anthropic",
@@ -828,11 +801,7 @@ describe("promoteAuthProfileInOrder", () => {
             store: {
               version: AUTH_STORE_VERSION,
               profiles: {
-                "openai:temporary": {
-                  type: "api_key",
-                  provider: "openai",
-                  key: "sk-temporary",
-                },
+                "openai:temporary": createApiKeyCredential("openai", "sk-temporary"),
               },
             },
           });
@@ -905,11 +874,7 @@ describe("promoteAuthProfileInOrder", () => {
           store: {
             version: AUTH_STORE_VERSION,
             profiles: {
-              "openai:temporary": {
-                type: "api_key",
-                provider: "openai",
-                key: "sk-temporary",
-              },
+              "openai:temporary": createApiKeyCredential("openai", "sk-temporary"),
             },
           },
         });
@@ -981,11 +946,7 @@ describe("promoteAuthProfileInOrder", () => {
         saveAuthProfileStore({
           version: AUTH_STORE_VERSION,
           profiles: {
-            "openai:baseline": {
-              type: "api_key",
-              provider: "openai",
-              key: "sk-baseline",
-            },
+            "openai:baseline": createApiKeyCredential("openai", "sk-baseline"),
           },
         });
         const capturedRuntime = loadAuthProfileStoreForRuntime(derivedAgentDir);
@@ -998,11 +959,7 @@ describe("promoteAuthProfileInOrder", () => {
           store: {
             version: AUTH_STORE_VERSION,
             profiles: {
-              "openai:temporary": {
-                type: "api_key",
-                provider: "openai",
-                key: "sk-temporary",
-              },
+              "openai:temporary": createApiKeyCredential("openai", "sk-temporary"),
             },
           },
         });
@@ -1123,11 +1080,7 @@ describe("promoteAuthProfileInOrder", () => {
         });
         await upsertAuthProfileWithLock({
           profileId: "anthropic:key",
-          credential: {
-            type: "api_key",
-            provider: "anthropic",
-            key: "  sk-\r\nant\u2502  ",
-          },
+          credential: createApiKeyCredential("anthropic", "  sk-\r\nant\u2502  "),
           agentDir,
         });
 
@@ -1671,11 +1624,7 @@ describe("promoteAuthProfileInOrder", () => {
             refresh: "oauth-refresh",
             expires: Date.now() + 60_000,
           },
-          "openrouter:api-key": {
-            type: "api_key",
-            provider: "openrouter",
-            key: "api-key",
-          },
+          "openrouter:api-key": createApiKeyCredential("openrouter", "api-key"),
         },
         order: { openrouter: ["openrouter:oauth", "openrouter:api-key"] },
         lastGood: { openrouter: "openrouter:oauth" },
@@ -1736,11 +1685,7 @@ describe("promoteAuthProfileInOrder", () => {
       const initialStore: AuthProfileStore = {
         version: AUTH_STORE_VERSION,
         profiles: {
-          "openrouter:api-key": {
-            type: "api_key",
-            provider: "openrouter",
-            key: "api-key",
-          },
+          "openrouter:api-key": createApiKeyCredential("openrouter", "api-key"),
         },
       };
       saveAuthProfileStore(initialStore, agentDir);
@@ -2038,11 +1983,7 @@ describe("setAuthProfileOrder", () => {
         saveAuthProfileStore({
           version: AUTH_STORE_VERSION,
           profiles: {
-            "openai:local": {
-              type: "api_key",
-              provider: "openai",
-              key: "sk-local",
-            },
+            "openai:local": createApiKeyCredential("openai", "sk-local"),
           },
           order: { openai: ["openai:local"] },
         });

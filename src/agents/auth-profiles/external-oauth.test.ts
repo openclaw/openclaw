@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ProviderExternalAuthProfile } from "../../plugins/provider-external-auth.types.js";
 import { resolveAgentCredentialMapFromStore } from "../agent-auth-credentials.js";
 import { addEnvBackedAgentCredentials } from "../agent-auth-discovery-core.js";
+import { createApiKeyCredential } from "./credential-fixtures.test-support.js";
 import { overlayExternalAuthProfiles } from "./external-auth-runtime.js";
 import { syncPersistedExternalCliAuthProfiles } from "./external-auth.js";
 import { testing } from "./external-auth.test-support.js";
@@ -589,11 +590,7 @@ describe("auth external oauth helpers", () => {
 
     const overlaid = overlayExternalAuthProfiles(
       createStore({
-        "openai:default": {
-          type: "api_key",
-          provider: "openai",
-          key: "sk-local",
-        },
+        "openai:default": createApiKeyCredential("openai", "sk-local"),
       }),
     );
 
