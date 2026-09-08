@@ -2397,18 +2397,11 @@ describe("canonical session message recovery", () => {
       renderFrame = callback;
       return 1;
     });
-    let resolveHistory!: (result: {
+    const { promise: history, resolve: resolveHistory } = createDeferred<{
       messages: unknown[];
       sessionId: string;
       thinkingLevel: null;
-    }) => void;
-    const history = new Promise<{
-      messages: unknown[];
-      sessionId: string;
-      thinkingLevel: null;
-    }>((resolve) => {
-      resolveHistory = resolve;
-    });
+    }>();
     const { request, state } = createSessionEventState({ chatDisplayedLeafEntryId: undefined });
     request.mockReturnValue(history);
 
@@ -3473,10 +3466,7 @@ describe("ChatStateController render lifecycle", () => {
   });
 
   it("requests a render before selecting the commit promise", async () => {
-    let resolveCommit: (value: boolean) => void = () => {};
-    const nextCommit = new Promise<boolean>((resolve) => {
-      resolveCommit = resolve;
-    });
+    const { promise: nextCommit, resolve: resolveCommit } = createDeferred<boolean>();
     let completion = Promise.resolve(true);
     const controllers: ReactiveController[] = [];
     const requestUpdate = vi.fn(() => {
@@ -3507,10 +3497,7 @@ describe("ChatStateController render lifecycle", () => {
   });
 
   it("cancels pending commit effects on disconnect", async () => {
-    let resolveCommit: (value: boolean) => void = () => {};
-    const completion = new Promise<boolean>((resolve) => {
-      resolveCommit = resolve;
-    });
+    const { promise: completion, resolve: resolveCommit } = createDeferred<boolean>();
     const host = createControllerHost({
       updateComplete: completion,
     });
@@ -4151,23 +4138,10 @@ describe("refreshChatMetadata", () => {
   );
 
   it("does not apply session metadata after a same-agent session switch", async () => {
-    let resolveMetadata:
-      | ((value: {
-          commands: never[];
-          models: Array<{
-            id: string;
-            name: string;
-            provider: string;
-            available: boolean;
-          }>;
-        }) => void)
-      | undefined;
-    const metadata = new Promise<{
+    const { promise: metadata, resolve: resolveMetadata } = createDeferred<{
       commands: never[];
       models: Array<{ id: string; name: string; provider: string; available: boolean }>;
-    }>((resolve) => {
-      resolveMetadata = resolve;
-    });
+    }>();
     const request = vi.fn(async (method: string, params?: unknown) => {
       expect(method).toBe("chat.metadata");
       expect(params).toEqual({ agentId: "work", sessionKey: "agent:work:main" });
@@ -4215,18 +4189,10 @@ describe("refreshChatMetadata", () => {
   });
 
   it("ignores metadata after switching to a different agent", async () => {
-    let resolveMetadata:
-      | ((value: {
-          commands: never[];
-          models: Array<{ id: string; name: string; provider: string }>;
-        }) => void)
-      | undefined;
-    const metadata = new Promise<{
+    const { promise: metadata, resolve: resolveMetadata } = createDeferred<{
       commands: never[];
       models: Array<{ id: string; name: string; provider: string }>;
-    }>((resolve) => {
-      resolveMetadata = resolve;
-    });
+    }>();
     const request = vi.fn(async () => await metadata);
     const existingCatalog = [
       { id: "work-model", name: "Work Model", provider: "openai", available: true },
@@ -4246,26 +4212,14 @@ describe("refreshChatMetadata", () => {
   });
 
   it("keeps loading owned by the newest agent metadata request", async () => {
-    let resolveWork: (value: {
+    const { promise: workMetadata, resolve: resolveWork } = createDeferred<{
       commands: never[];
       models: Array<{ id: string; name: string; provider: string }>;
-    }) => void = () => {};
-    let resolveOther: (value: {
+    }>();
+    const { promise: otherMetadata, resolve: resolveOther } = createDeferred<{
       commands: never[];
       models: Array<{ id: string; name: string; provider: string }>;
-    }) => void = () => {};
-    const workMetadata = new Promise<{
-      commands: never[];
-      models: Array<{ id: string; name: string; provider: string }>;
-    }>((resolve) => {
-      resolveWork = resolve;
-    });
-    const otherMetadata = new Promise<{
-      commands: never[];
-      models: Array<{ id: string; name: string; provider: string }>;
-    }>((resolve) => {
-      resolveOther = resolve;
-    });
+    }>();
     const request = vi.fn(
       async (_method: string, params?: { agentId?: string }) =>
         await (params?.agentId === "work" ? workMetadata : otherMetadata),
@@ -4295,16 +4249,10 @@ describe("refreshChatMetadata", () => {
   });
 
   it("does not publish metadata after the pane retires its request owner", async () => {
-    let resolveMetadata: (value: {
+    const { promise: pending, resolve: resolveMetadata } = createDeferred<{
       commands: never[];
       models: Array<{ id: string; name: string; provider: string }>;
-    }) => void = () => {};
-    const pending = new Promise<{
-      commands: never[];
-      models: Array<{ id: string; name: string; provider: string }>;
-    }>((resolve) => {
-      resolveMetadata = resolve;
-    });
+    }>();
     const request = vi.fn().mockReturnValue(pending);
     const existingCatalog = [{ id: "existing-model", name: "Existing Model", provider: "openai" }];
     const state = createMetadataState(request, { chatModelCatalog: existingCatalog });
@@ -4477,12 +4425,11 @@ describe("refreshChatModelAuthStatus", () => {
   it.each(["success", "failure"] as const)(
     "ignores a stale auth status %s after reconnecting the same client",
     async (outcome) => {
-      let resolveStatus!: (value: { ts: number; providers: never[] }) => void;
-      let rejectStatus!: (error: unknown) => void;
-      const response = new Promise<{ ts: number; providers: never[] }>((resolve, reject) => {
-        resolveStatus = resolve;
-        rejectStatus = reject;
-      });
+      const {
+        promise: response,
+        resolve: resolveStatus,
+        reject: rejectStatus,
+      } = createDeferred<{ ts: number; providers: never[] }>();
       const request = vi.fn(() => response);
       const currentStatus = { ts: 2, providers: [] };
       const state = {
