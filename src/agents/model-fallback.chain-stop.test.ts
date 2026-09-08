@@ -9,6 +9,7 @@ import {
   it,
   vi,
 } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { createSuiteLogPathTracker } from "../logging/log-test-helpers.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { testApi as loggerTestApi } from "../logging/logger.test-support.js";
@@ -42,9 +43,9 @@ const fallbackOptions = {
   lane: "chain-stop-lane",
 };
 const logPaths = createSuiteLogPathTracker("openclaw-chain-stop-");
+const warn = vi.fn<(...data: unknown[]) => void>();
 let capture: ReturnType<typeof createDiagnosticLogRecordCapture>;
 let previousConsole: typeof loggingState.rawConsole;
-let warn: ReturnType<typeof vi.fn>;
 let logFile: string;
 let laneSequence = 0;
 
@@ -53,7 +54,7 @@ afterAll(() => logPaths.cleanup());
 beforeEach(() => {
   capture = createDiagnosticLogRecordCapture();
   previousConsole = loggingState.rawConsole;
-  warn = vi.fn();
+  warn.mockClear();
   loggingState.rawConsole = { log: vi.fn(), info: vi.fn(), warn, error: vi.fn() };
   logFile = logPaths.nextPath();
   setLoggerOverride({
@@ -90,8 +91,8 @@ function terminalTimeout() {
 }
 
 async function commandLaneTimeout(): Promise<Error> {
-  const entered = Promise.withResolvers<void>();
-  const task = Promise.withResolvers<void>();
+  const entered = createDeferred();
+  const task = createDeferred();
   const release = new AbortController();
   const queued = enqueueCommandInLane(
     `chain-stop-owned-${++laneSequence}`,
@@ -384,9 +385,7 @@ describe("model fallback chain-stop diagnostics", () => {
     const error = { detail: "private non-Error rejection" };
     await expect(
       runFallbackAttempt({
-        run: async () => {
-          throw error;
-        },
+        run: vi.fn<() => Promise<never>>().mockRejectedValue(error),
         provider: "fixture-primary",
         model: "fixture-model",
         attempts: [],
