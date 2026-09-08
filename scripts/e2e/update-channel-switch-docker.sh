@@ -197,7 +197,12 @@ if [ "$OPENCLAW_PACKAGE_ACCEPTANCE_LEGACY_COMPAT" != "1" ]; then
   assert_package_dry_run git dev explicit --channel dev --tag beta
   assert_package_dry_run package dev stored --tag beta
   assert_package_dry_run package stable explicit --channel stable
-  dev_channel_args=()
+  # 7.33 reports a stored dev channel as a package update even though an
+  # explicit --channel dev selects Git. Keep the explicit selector for the
+  # destructive admission and actual switch probes on that frozen contract.
+  if [ "$OPENCLAW_UPDATE_CHANNEL_DRY_RUN_PACKAGE_COMPAT" != "1" ]; then
+    dev_channel_args=()
+  fi
 fi
 
 echo "==> ordinary untracked files still block Git admission"

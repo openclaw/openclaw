@@ -52,6 +52,13 @@ it("projects only stored-dev frozen previews onto package reporting", () => {
   expect(run("explicit", "package").status).toBe(1);
 });
 
+it("keeps explicit dev selection for frozen stored-dev package reporters", () => {
+  const script = readFileSync("scripts/e2e/update-channel-switch-docker.sh", "utf8");
+  expect(script).toContain(
+    'if [ "$OPENCLAW_UPDATE_CHANNEL_DRY_RUN_PACKAGE_COMPAT" != "1" ]; then\n    dev_channel_args=()',
+  );
+});
+
 it("preserves the package-derived Git fixture identity through build and lifecycle completion", async () => {
   const root = tempDirs.make("update-channel-git-fixture-");
   const packageCommit = "a".repeat(40);
