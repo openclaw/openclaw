@@ -158,8 +158,9 @@ jobs:
               process.stdout.write(version);
             ' "$TARGET_CHECKOUT_DIR/package.json")"
             if [[ "$target_version" == "2026.7.33" ]]; then
-              # Kova #116 carries the historical 250% status CLI calibration for this release only.
-              kova_ref="70ea2c5a3bdd206937b4a0bd7460a19a69d8c52a"
+              # Kova #116 carries the historical 250% status CLI calibration for this release only;
+              # Kova #118 keeps process-census time out of CPU scan uncertainty.
+              kova_ref="d1cb301f0577c089b905d20efe5ccbc66b94d226"
             fi
           fi
           if [[ "$kova_ref" == *$'\n'* || "$kova_ref" == *$'\r'* ]]; then

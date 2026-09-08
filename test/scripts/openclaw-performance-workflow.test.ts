@@ -277,6 +277,7 @@ describe("OpenClaw performance workflow", () => {
     expect(resolveTarget.run).toContain('detected_kova_config_contract="canonical"');
     expect(resolveTarget.run).toContain('detected_kova_config_contract="legacy-list"');
     expect(resolveTarget.run).toContain('kova_ref="${KOVA_REF_INPUT:-}"');
+    expect(resolveTarget.run).toContain('kova_ref="d1cb301f0577c089b905d20efe5ccbc66b94d226"');
     expect(resolveTarget.run).toContain('kova_ref="${kova_ref:-$default_kova_ref}"');
     expect(resolveTarget.run).toContain(
       'if [[ -z "$kova_ref" || -z "$kova_config_contract" ]]; then',
