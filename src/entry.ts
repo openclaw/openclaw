@@ -136,7 +136,7 @@ if (
     loadCliDotEnv({ quiet: true });
     await configureGatewayStartupTraceConsoleFormatting(gatewayEntryStartupTrace);
   }
-  assertSupportedRuntime();
+  await assertSupportedRuntime();
   gatewayEntryStartupTrace.mark("bootstrap");
 
   const waitingForCompileCacheRespawn = await respawnWithoutOpenClawCompileCacheIfNeeded({
