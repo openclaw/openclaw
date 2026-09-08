@@ -3016,6 +3016,27 @@ docker_e2e_docker_run_cmd run demo
     );
   });
 
+  it("propagates frozen typed-onboarding ERR traps through nested helpers", () => {
+    const runner = readFileSync(RELEASE_TYPED_ONBOARDING_DOCKER_E2E_PATH, "utf8");
+    const invocation = runner.match(
+      /-i "\$IMAGE_NAME" bash(?<flags>(?: +-[A-Za-z]+)*) scripts\/e2e\/lib\/release-typed-onboarding\/scenario\.sh/u,
+    );
+    expect(invocation?.groups?.flags).toBeDefined();
+    const bashFlags = invocation?.groups?.flags?.trim().split(/ +/u).filter(Boolean) ?? [];
+    const diagnostic = "typed-onboarding diagnostic status=23";
+    const script = `set -euo pipefail
+trap 'status=$?; printf "typed-onboarding diagnostic status=%s\\n" "$status" >&2' ERR
+inner() { return 23; }
+outer() { inner; }
+outer
+`;
+
+    const result = spawnSync("bash", [...bashFlags, "-c", script], { encoding: "utf8" });
+
+    expect(result.status).toBe(23);
+    expect(result.stderr.trim().split("\n")).toEqual([diagnostic]);
+  });
+
   it("prints channel-add failures through the shared E2E logger", () => {
     const script = readFileSync(NPM_ONBOARD_CHANNEL_AGENT_DOCKER_E2E_PATH, "utf8");
     expect(script).toContain(
