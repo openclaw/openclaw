@@ -196,40 +196,26 @@ function findTimestampMatch(
     return undefined;
   }
   const bucketKey = Math.floor(timestamp / DEDUPE_TIMESTAMP_WINDOW_MS);
-  const pickCandidate = (
-    bucket: ComparableHistoryMessage[] | undefined,
-    direction: "earliest" | "latest",
-  ) => {
-    let selected: ComparableHistoryMessage | undefined;
-    for (const candidate of bucket ?? []) {
-      if (consumed.has(candidate)) {
+  let closest: ComparableHistoryMessage | undefined;
+  let closestDistance = Number.POSITIVE_INFINITY;
+  for (const adjacentBucketKey of [bucketKey - 1, bucketKey, bucketKey + 1]) {
+    for (const candidate of summary.buckets.get(adjacentBucketKey) ?? []) {
+      if (consumed.has(candidate) || candidate.timestamp === undefined) {
         continue;
       }
+      const distance = Math.abs(candidate.timestamp - timestamp);
       if (
-        !selected ||
-        (direction === "earliest"
-          ? (candidate.timestamp ?? Infinity) < (selected.timestamp ?? Infinity)
-          : (candidate.timestamp ?? -Infinity) > (selected.timestamp ?? -Infinity))
+        distance <= DEDUPE_TIMESTAMP_WINDOW_MS &&
+        (distance < closestDistance ||
+          (distance === closestDistance && candidate.order < (closest?.order ?? Infinity)))
       ) {
-        selected = candidate;
+        closest = candidate;
+        closestDistance = distance;
       }
     }
-    return selected;
-  };
-  const current = pickCandidate(summary.buckets.get(bucketKey), "earliest");
-  if (current) {
-    return current;
   }
-  const previous = pickCandidate(summary.buckets.get(bucketKey - 1), "latest");
-  if (
-    previous?.timestamp !== undefined &&
-    previous.timestamp >= timestamp - DEDUPE_TIMESTAMP_WINDOW_MS
-  ) {
-    return previous;
-  }
-  const next = pickCandidate(summary.buckets.get(bucketKey + 1), "earliest");
-  if (next?.timestamp !== undefined && next.timestamp <= timestamp + DEDUPE_TIMESTAMP_WINDOW_MS) {
-    return next;
+  if (closest) {
+    return closest;
   }
   return summary.missingTimestamps.find((entry) => !consumed.has(entry));
 }
@@ -338,6 +324,7 @@ export function mergeImportedChatHistoryMessages(params: {
     }
   }
   let changed = false;
+  let expanded = false;
   let nextOrder = merged.length;
   for (const message of params.importedMessages) {
     const externalIdentityKey = resolveImportedExternalIdentityKey(message);
@@ -346,7 +333,11 @@ export function mergeImportedChatHistoryMessages(params: {
     }
     const imported = prepareComparableMessage(message, nextOrder, externalIdentityKey);
     const turnKey = imported.hasCliImageMentions ? imported.cliImageTurnKey : undefined;
-    const imageDuplicate = turnKey ? localImageMediaCandidates.get(turnKey)?.shift() : undefined;
+    const imageCandidates = turnKey ? localImageMediaCandidates.get(turnKey) : undefined;
+    let imageDuplicate = imageCandidates?.shift();
+    while (imageDuplicate && consumedLocalCandidates.has(imageDuplicate)) {
+      imageDuplicate = imageCandidates?.shift();
+    }
     if (imageDuplicate) {
       // Each local image turn suppresses one import while retaining the native
       // identity on the media-bearing row that remains visible.
@@ -382,9 +373,13 @@ export function mergeImportedChatHistoryMessages(params: {
     indexEntry(imported);
     nextOrder += 1;
     changed = true;
+    expanded = true;
   }
   if (!changed) {
     return params.localMessages;
+  }
+  if (!expanded) {
+    return merged.map((entry) => entry.message);
   }
   merged.sort(compareHistoryMessages);
   return merged.map((entry) => entry.message);

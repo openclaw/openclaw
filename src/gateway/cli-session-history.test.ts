@@ -2015,6 +2015,106 @@ describe("cli session history", () => {
     expect(readRecord(readRecord(merged[1])["__openclaw"]).externalId).toBe("timestamped");
   });
 
+  it("selects the closest repeated-text match across timestamp buckets", () => {
+    const bucketBoundary = 5 * 60 * 1000;
+    const merged = mergeImportedChatHistoryMessages({
+      localMessages: [
+        { role: "assistant", content: "Repeated answer", timestamp: bucketBoundary - 1 },
+        { role: "assistant", content: "Repeated answer", timestamp: bucketBoundary + 100 },
+      ],
+      importedMessages: [
+        {
+          role: "assistant",
+          content: "Repeated answer",
+          timestamp: bucketBoundary + 1,
+          __openclaw: {
+            importedFrom: "claude-cli",
+            cliSessionId: "session-1",
+            externalId: "near-previous-bucket",
+          },
+        },
+        {
+          role: "assistant",
+          content: "Repeated answer",
+          timestamp: bucketBoundary + 100,
+          __openclaw: {
+            importedFrom: "claude-cli",
+            cliSessionId: "session-1",
+            externalId: "exact-current-bucket",
+          },
+        },
+      ],
+    });
+
+    expect(readRecord(readRecord(merged[0])["__openclaw"]).externalId).toBe("near-previous-bucket");
+    expect(readRecord(readRecord(merged[1])["__openclaw"]).externalId).toBe("exact-current-bucket");
+  });
+
+  it("does not reuse a text-consumed local row for image deduplication", () => {
+    const localEntryId = "local-image-row";
+    const timestamp = Date.parse("2026-09-01T10:00:00Z");
+    const localMessage = {
+      role: "user",
+      content: "look at this",
+      timestamp,
+      __openclaw: {
+        id: localEntryId,
+        media: [{ kind: "image", contentType: "image/png", path: "/media/inbound/a.png" }],
+      },
+    };
+    const textImport = {
+      role: "user",
+      content: "look at this",
+      timestamp,
+      __openclaw: {
+        importedFrom: "claude-cli",
+        cliSessionId: "session-1",
+        externalId: "text-import",
+      },
+    };
+    const imageImport = {
+      role: "user",
+      content: `look at this\n\n${formatCliImageTurnContext(hashCliImageTurnEntryId(localEntryId))}\n\n@/tmp/openclaw/openclaw-cli-images/${"a".repeat(64)}.png`,
+      timestamp: timestamp + 1,
+      __openclaw: {
+        importedFrom: "claude-cli",
+        cliSessionId: "session-1",
+        externalId: "image-import",
+      },
+    };
+
+    const merged = mergeImportedChatHistoryMessages({
+      localMessages: [localMessage],
+      importedMessages: [textImport, imageImport],
+    });
+
+    expect(merged).toHaveLength(2);
+    expect(readRecord(readRecord(merged[0])["__openclaw"]).externalId).toBe("text-import");
+    expect(readRecord(readRecord(merged[1])["__openclaw"]).externalId).toBe("image-import");
+  });
+
+  it("preserves local transcript order when imports only add metadata", () => {
+    const localMessages = [
+      { role: "assistant", content: "first transcript row", timestamp: 2 },
+      { role: "assistant", content: "second transcript row", timestamp: 1 },
+    ];
+    const importedMessages = localMessages.map((message, index) => ({
+      ...message,
+      __openclaw: {
+        importedFrom: "claude-cli",
+        cliSessionId: "session-1",
+        externalId: `external-${index}`,
+      },
+    }));
+
+    const merged = mergeImportedChatHistoryMessages({ localMessages, importedMessages });
+
+    expect(merged.map((message) => readRecord(message).content)).toEqual([
+      "first transcript row",
+      "second transcript row",
+    ]);
+  });
+
   it("falls back to legacy cliSessionIds when bindings are absent", async () => {
     await withClaudeProjectsDir(async ({ homeDir, sessionId }) => {
       const messages = resolveChatHistoryWithCliSessionImports({
