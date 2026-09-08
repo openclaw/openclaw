@@ -31,11 +31,16 @@ export type UpdateCompatibilityInventory = {
 };
 
 type Binding = { file: string; symbol: string } | { local: string };
+type ModuleBinding = {
+  file: string;
+  symbol: string;
+  origin: UpdateCompatibilityOrigin | undefined;
+};
 type ModuleInfo = {
   imports: Map<string, Binding>;
   exports: Map<string, Binding>;
   stars: string[];
-  declarations: Map<string, UpdateCompatibilityOrigin>;
+  declarations: Map<string, UpdateCompatibilityOrigin | undefined>;
 };
 
 function portable(value: string): string {
@@ -92,7 +97,12 @@ function inspectModule(file: string, source: string, sourceModule?: string): Mod
     stars: [],
     declarations: new Map(),
   };
-  const target = (specifier: string) => path.resolve(path.dirname(file), specifier);
+  const target = (specifier: string) => {
+    const resolved = path.resolve(path.dirname(file), specifier);
+    return sourceModule === undefined
+      ? resolved
+      : resolved.replace(/\.js$/, ".ts").replace(/\.mjs$/, ".mts");
+  };
   const regions = [...source.matchAll(/^\/\/#region (.+)$/gm)];
   let regionIndex = 0;
   let regionOwner: string | undefined;
@@ -144,9 +154,7 @@ function inspectModule(file: string, source: string, sourceModule?: string): Mod
     }
     const owner = sourceModule ?? regionOwner;
     for (const symbol of names) {
-      if (owner) {
-        info.declarations.set(symbol, { module: owner, symbol });
-      }
+      info.declarations.set(symbol, owner ? { module: owner, symbol } : undefined);
       if (
         ts.canHaveModifiers(statement) &&
         ts
@@ -165,17 +173,26 @@ function inspectModule(file: string, source: string, sourceModule?: string): Mod
 
 class ModuleGraph {
   private modules = new Map<string, ModuleInfo>();
+  private sourceDir: string | undefined;
+
+  constructor(sourceDir?: string) {
+    this.sourceDir = sourceDir;
+  }
 
   info(file: string): ModuleInfo {
     let info = this.modules.get(file);
     if (!info) {
-      info = inspectModule(file, fs.readFileSync(file, "utf8"));
+      info = inspectModule(
+        file,
+        fs.readFileSync(file, "utf8"),
+        this.sourceDir === undefined ? undefined : portable(path.relative(this.sourceDir, file)),
+      );
       this.modules.set(file, info);
     }
     return info;
   }
 
-  names(file: string, seen = new Set<string>()): string[] {
+  private exportedNames(file: string, seen = new Set<string>()): string[] {
     if (seen.has(file)) {
       return [];
     }
@@ -185,50 +202,97 @@ class ModuleGraph {
       ...new Set([
         ...info.exports.keys(),
         ...info.stars.flatMap((star) =>
-          this.names(star, seen).filter((name) => name !== "default"),
+          this.exportedNames(star, seen).filter((name) => name !== "default"),
         ),
       ]),
     ].toSorted();
   }
 
-  origin(
-    file: string,
-    symbol: string,
-    seen = new Set<string>(),
-  ): UpdateCompatibilityOrigin | undefined {
-    const key = `${file}:${symbol}`;
+  names(file: string): string[] {
+    return this.exportedNames(file).filter((name) => this.resolveExport(file, name).length === 1);
+  }
+
+  private resolveLocal(file: string, symbol: string, seen: Set<string>): ModuleBinding[] {
+    const key = `local:${file}:${symbol}`;
     if (seen.has(key)) {
-      return undefined;
+      return [];
     }
-    seen.add(key);
+    const next = new Set(seen).add(key);
+    const info = this.info(file);
+    const imported = info.imports.get(symbol);
+    if (imported && "file" in imported) {
+      return this.resolveExport(imported.file, imported.symbol, next);
+    }
+    return info.declarations.has(symbol)
+      ? [{ file, symbol, origin: info.declarations.get(symbol) }]
+      : [];
+  }
+
+  private resolveExport(file: string, symbol: string, seen = new Set<string>()): ModuleBinding[] {
+    const key = `export:${file}:${symbol}`;
+    if (seen.has(key)) {
+      return [];
+    }
+    const next = new Set(seen).add(key);
     const info = this.info(file);
     const binding = info.exports.get(symbol);
     if (binding && "file" in binding) {
-      return this.origin(binding.file, binding.symbol, seen);
+      return this.resolveExport(binding.file, binding.symbol, next);
     }
     if (binding && "local" in binding) {
-      const imported = info.imports.get(binding.local);
-      if (imported && "file" in imported) {
-        return this.origin(imported.file, imported.symbol, seen);
-      }
-      return info.declarations.get(binding.local);
+      return this.resolveLocal(file, binding.local, next);
     }
+    if (symbol === "default") {
+      return [];
+    }
+    const matches = new Map<string, ModuleBinding>();
     for (const star of info.stars) {
-      if (this.names(star).includes(symbol)) {
-        return this.origin(star, symbol, seen);
+      for (const resolved of this.resolveExport(star, symbol, next)) {
+        // ESM compares declaration bindings, not their source-map annotations.
+        matches.set(`${resolved.file}:${resolved.symbol}`, resolved);
       }
     }
-    return undefined;
+    return [...matches.values()];
+  }
+
+  private sourceOrigin(
+    file: string,
+    symbol: string,
+    bindings: ModuleBinding[],
+  ): UpdateCompatibilityOrigin | undefined {
+    if (bindings.length > 1) {
+      throw new Error(
+        `Ambiguous export ${file}:${symbol}; conflicting sources: ${bindings
+          .map((binding) => `${binding.file}:${binding.symbol}`)
+          .toSorted()
+          .join(", ")}`,
+      );
+    }
+    return bindings[0]?.origin;
+  }
+
+  origin(file: string, symbol: string): UpdateCompatibilityOrigin | undefined {
+    return this.sourceOrigin(file, symbol, this.resolveExport(file, symbol));
+  }
+
+  localOrigin(file: string, symbol: string): UpdateCompatibilityOrigin | undefined {
+    return this.sourceOrigin(file, symbol, this.resolveLocal(file, symbol, new Set()));
   }
 }
 
 function consumedExports(node: ts.CallExpression): string[] | undefined {
   let expression: ts.Node = node;
+  let awaited = false;
   while (
     ts.isAwaitExpression(expression.parent) ||
     ts.isParenthesizedExpression(expression.parent)
   ) {
+    awaited ||= ts.isAwaitExpression(expression.parent);
     expression = expression.parent;
+  }
+  // A direct import() is a Promise; its properties are not namespace exports.
+  if (!awaited) {
+    return undefined;
   }
   const parent = expression.parent;
   if (ts.isPropertyAccessExpression(parent) && parent.expression === expression) {
@@ -513,30 +577,19 @@ export function listUpdateCompatibilityChunkPaths(
 function currentOrigin(
   origin: UpdateCompatibilityOrigin,
   sourceDir: string,
-  seen = new Set<string>(),
+  graph: ModuleGraph,
 ): UpdateCompatibilityOrigin {
-  const key = `${origin.module}:${origin.symbol}`;
-  if (seen.has(key)) {
-    throw new Error(`Cyclic source re-export for ${key}`);
-  }
-  seen.add(key);
   const file = path.join(sourceDir, origin.module);
   if (!fs.existsSync(file)) {
     return origin;
   }
-  const info = inspectModule(file, fs.readFileSync(file, "utf8"), origin.module);
-  const exported = info.exports.get(origin.symbol);
-  const binding =
-    exported && "local" in exported
-      ? info.imports.get(exported.local)
-      : (exported ?? info.imports.get(origin.symbol));
-  if (binding && "file" in binding) {
-    const target = binding.file.replace(/\.js$/, ".ts").replace(/\.mjs$/, ".mts");
-    return currentOrigin(
-      { module: portable(path.relative(sourceDir, target)), symbol: binding.symbol },
-      sourceDir,
-      seen,
-    );
+  const resolved = graph.localOrigin(file, origin.symbol) ?? graph.origin(file, origin.symbol);
+  if (resolved) {
+    return resolved;
+  }
+  const info = graph.info(file);
+  if (info.imports.has(origin.symbol) || info.exports.has(origin.symbol)) {
+    throw new Error(`Cannot resolve current source binding ${origin.module}:${origin.symbol}`);
   }
   return origin;
 }
@@ -549,11 +602,12 @@ export function writeUpdateCompatibilityChunks(params: {
 }): string[] {
   const distDir = path.resolve(params.distDir);
   const graph = new ModuleGraph();
+  const sourceGraph = new ModuleGraph(params.sourceDir);
   const required = collectRequiredCompatibilityChunks(params.inventory.releases);
   const origins = new Map<string, UpdateCompatibilityOrigin>();
   for (const chunk of required) {
     for (const entry of chunk.exports) {
-      const origin = currentOrigin(entry.origin, params.sourceDir);
+      const origin = currentOrigin(entry.origin, params.sourceDir, sourceGraph);
       origins.set(`${entry.origin.module}:${entry.origin.symbol}`, origin);
     }
   }

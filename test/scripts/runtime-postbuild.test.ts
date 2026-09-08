@@ -1279,6 +1279,221 @@ describe("previous release update compatibility", () => {
     );
   }
 
+  function recordImportedFixture(expression: string, modules: Record<string, string>) {
+    const root = createTempDir("update-compat-import-graph-");
+    write(
+      root,
+      "package.json",
+      JSON.stringify({ name: "openclaw", version: "2026.9.1", type: "module" }),
+    );
+    write(
+      root,
+      "dist/build-info.json",
+      JSON.stringify({ version: "2026.9.1", buildId: "fixture", commit: "0".repeat(40) }),
+    );
+    write(
+      root,
+      "dist/command.js",
+      [
+        "//#region src/cli/update-cli/update-command-service-command.ts",
+        `export async function restart() { return ${expression}; }`,
+      ].join("\n"),
+    );
+    for (const [file, source] of Object.entries(modules)) {
+      write(root, `dist/${file}`, source);
+    }
+    const inventory: UpdateCompatibilityInventory = {
+      schemaVersion: 1,
+      releases: [recordUpdateCompatibilityRelease({ packageDir: root, integrity })],
+    };
+    return { root, inventory };
+  }
+
+  it.each([
+    {
+      access: "then",
+      expression: 'import("./surface-abcdefgh.js").then((module) => module.x)',
+      names: ["x", "y"],
+    },
+    {
+      access: "catch",
+      expression: 'import("./surface-abcdefgh.js").catch(() => undefined)',
+      names: ["x", "y"],
+    },
+    {
+      access: "finally",
+      expression: 'import("./surface-abcdefgh.js").finally(() => undefined)',
+      names: ["x", "y"],
+    },
+    {
+      access: "awaited property",
+      expression: '(await import("./surface-abcdefgh.js")).x',
+      names: ["x"],
+    },
+    {
+      access: "awaited bracket",
+      expression: '(await import("./surface-abcdefgh.js"))["x"]',
+      names: ["x"],
+    },
+  ])(
+    "records namespace exports instead of Promise methods for $access access",
+    ({ expression, names }) => {
+      const { inventory } = recordImportedFixture(expression, {
+        "surface-abcdefgh.js":
+          "//#region src/infra/values.ts\nconst x = 1; const y = 2; export { x, y };\n",
+      });
+      expect(inventory.releases[0]?.chunks).toMatchObject([
+        {
+          path: "surface-abcdefgh.js",
+          imports: [{ exports: names }],
+          exports: names.map((exported) => ({
+            exported,
+            origin: { module: "src/infra/values.ts", symbol: exported },
+          })),
+        },
+      ]);
+    },
+  );
+
+  it.each(["distinct owners", "the same source annotation"])(
+    "rejects conflicting emitted star bindings with %s and names both sources",
+    (annotation) => {
+      const leftOwner = annotation === "the same source annotation" ? "shared" : "left";
+      const rightOwner = annotation === "the same source annotation" ? "shared" : "right";
+      expect(() =>
+        recordImportedFixture('(await import("./surface-abcdefgh.js")).x', {
+          "surface-abcdefgh.js": 'export * from "./left.mjs"; export * from "./right.mjs";\n',
+          "left.mjs": `//#region src/infra/${leftOwner}.ts\nexport const x = "left";\n`,
+          "right.mjs": `//#region src/infra/${rightOwner}.ts\nexport const x = "right";\n`,
+        }),
+      ).toThrow(/(?=[\s\S]*left\.mjs)(?=[\s\S]*right\.mjs)/);
+    },
+  );
+
+  it("resolves a star diamond to the single declaration shared by both paths", async () => {
+    const { root, inventory } = recordImportedFixture('(await import("./surface-abcdefgh.js")).x', {
+      "surface-abcdefgh.js": 'export * from "./left.mjs"; export * from "./right.mjs";\n',
+      "left.mjs": 'export { x } from "./origin.mjs";\n',
+      "right.mjs": 'export * from "./origin.mjs";\n',
+      "origin.mjs": '//#region src/infra/origin.ts\nexport const x = { value: "shared" };\n',
+    });
+    const namespace = await import(pathToFileURL(path.join(root, "dist/surface-abcdefgh.js")).href);
+    const declaration = await import(pathToFileURL(path.join(root, "dist/origin.mjs")).href);
+    expect(namespace.x).toBe(declaration.x);
+    expect(inventory.releases[0]?.chunks[0]?.exports).toEqual([
+      { exported: "x", origin: { module: "src/infra/origin.ts", symbol: "x" } },
+    ]);
+  });
+
+  it("lets an explicit export resolve an otherwise ambiguous star name", async () => {
+    const { root, inventory } = recordImportedFixture('(await import("./surface-abcdefgh.js")).x', {
+      "surface-abcdefgh.js":
+        'export * from "./left.mjs"; export * from "./right.mjs"; export { x } from "./left.mjs";\n',
+      "left.mjs": '//#region src/infra/left.ts\nexport const x = "left";\n',
+      "right.mjs": '//#region src/infra/right.ts\nexport const x = "right";\n',
+    });
+    const namespace = await import(pathToFileURL(path.join(root, "dist/surface-abcdefgh.js")).href);
+    expect(namespace.x).toBe("left");
+    expect(inventory.releases[0]?.chunks[0]?.exports).toEqual([
+      { exported: "x", origin: { module: "src/infra/left.ts", symbol: "x" } },
+    ]);
+  });
+
+  it.each(["surface.js", "surface-abcdefgh.js"])(
+    "rejects an existing %s whose star ambiguity omits the required export",
+    (target) => {
+      const { inventory } = recordImportedFixture(`(await import("./${target}")).x`, {
+        [target]: '//#region src/infra/original.ts\nexport const x = "original";\n',
+      });
+      const root = createTempDir("update-compat-existing-stars-");
+      write(root, "package.json", '{"type":"module"}\n');
+      write(root, `dist/${target}`, 'export * from "./left.mjs"; export * from "./right.mjs";\n');
+      write(root, "dist/left.mjs", '//#region src/infra/original.ts\nexport const x = "left";\n');
+      write(root, "dist/right.mjs", '//#region src/infra/other.ts\nexport const x = "right";\n');
+      const namespaceHasX = childProcess.execFileSync(
+        process.execPath,
+        [
+          "--input-type=module",
+          "-e",
+          'const namespace = await import(process.argv[1]); console.log(Object.hasOwn(namespace, "x"));',
+          pathToFileURL(path.join(root, "dist", target)).href,
+        ],
+        { encoding: "utf8" },
+      );
+      expect(namespaceHasX.trim()).toBe("false");
+      expect(() =>
+        writeUpdateCompatibilityChunks({
+          distDir: path.join(root, "dist"),
+          sourceDir: root,
+          inventory,
+        }),
+      ).toThrow(`${target} lacks x`);
+    },
+  );
+
+  it.each([
+    {
+      route: "source star forwarding",
+      owner: 'export * from "./moved.js";\n',
+      module: "src/infra/moved.ts",
+      symbol: "oldName",
+    },
+    {
+      route: "a local export alias",
+      owner: 'function newName() { return "current"; } export { newName as oldName };\n',
+      module: "src/infra/old.ts",
+      symbol: "newName",
+    },
+  ])("bridges a moved declaration through $route", async ({ owner, module, symbol }) => {
+    const { inventory } = recordImportedFixture('(await import("./surface-abcdefgh.js")).x', {
+      "surface-abcdefgh.js":
+        '//#region src/infra/old.ts\nfunction oldName() { return "old"; } export { oldName as x };\n',
+    });
+    const root = createTempDir("update-compat-source-forwarding-");
+    write(root, "package.json", '{"type":"module"}\n');
+    write(root, "src/infra/old.ts", owner);
+    if (module !== "src/infra/old.ts") {
+      write(root, module, 'export function oldName() { return "current"; }\n');
+    }
+    write(
+      root,
+      "dist/current.mjs",
+      `//#region ${module}\nfunction ${symbol}() { return "current"; } export { ${symbol} as n };\n`,
+    );
+    writeUpdateCompatibilityChunks({
+      distDir: path.join(root, "dist"),
+      sourceDir: root,
+      inventory,
+    });
+    const bridge = await import(pathToFileURL(path.join(root, "dist/surface-abcdefgh.js")).href);
+    expect(bridge.x()).toBe("current");
+  });
+
+  it("refuses ambiguous source stars and names both possible declaration owners", () => {
+    const { inventory } = recordImportedFixture('(await import("./surface-abcdefgh.js")).x', {
+      "surface-abcdefgh.js":
+        '//#region src/infra/old.ts\nfunction oldName() { return "old"; } export { oldName as x };\n',
+    });
+    const root = createTempDir("update-compat-source-conflict-");
+    write(root, "src/infra/old.ts", 'export * from "./left.js"; export * from "./right.js";\n');
+    for (const side of ["left", "right"]) {
+      write(root, `src/infra/${side}.ts`, `export function oldName() { return "${side}"; }\n`);
+      write(
+        root,
+        `dist/${side}.mjs`,
+        `//#region src/infra/${side}.ts\nfunction oldName() { return "${side}"; } export { oldName as n };\n`,
+      );
+    }
+    expect(() =>
+      writeUpdateCompatibilityChunks({
+        distDir: path.join(root, "dist"),
+        sourceDir: root,
+        inventory,
+      }),
+    ).toThrow(/(?=[\s\S]*left\.ts)(?=[\s\S]*right\.ts)/);
+    expect(fsSync.existsSync(path.join(root, "dist/surface-abcdefgh.js"))).toBe(false);
+  });
+
   function writeWindowInventory(root: string): string {
     const release = recordFixture().releases[0];
     const output = path.join(root, "inventory.json");
