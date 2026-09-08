@@ -33,6 +33,7 @@ type TimestampSummary = {
   missingTimestampCursor: number;
   timestampedByOrder: ComparableHistoryMessage[];
   timestampedOrderCursor: number;
+  timestampRoot?: TimestampCandidateNode;
 };
 
 type RoleTextIndex = Map<string, Map<string, TimestampSummary>>;
@@ -40,6 +41,15 @@ type RoleTextIndex = Map<string, Map<string, TimestampSummary>>;
 type ConsumableCandidates = {
   entries: ComparableHistoryMessage[];
   cursor: number;
+};
+
+type TimestampCandidateNode = {
+  entry: ComparableHistoryMessage;
+  height: number;
+  minOrder: number;
+  maxOrder: number;
+  left?: TimestampCandidateNode;
+  right?: TimestampCandidateNode;
 };
 
 // Claude records CLI-injected @cache-path suffixes as user text. Keep the
@@ -176,6 +186,160 @@ function addTimestampToSummary(summary: TimestampSummary, entry: ComparableHisto
     return;
   }
   summary.timestampedByOrder.push(entry);
+  summary.timestampRoot = insertTimestampCandidate(summary.timestampRoot, entry);
+}
+
+function compareTimestampCandidates(
+  left: ComparableHistoryMessage,
+  right: ComparableHistoryMessage,
+): number {
+  const timestampDifference = (left.timestamp ?? 0) - (right.timestamp ?? 0);
+  return timestampDifference || left.order - right.order;
+}
+
+function timestampCandidateHeight(node: TimestampCandidateNode | undefined): number {
+  return node?.height ?? 0;
+}
+
+function updateTimestampCandidate(node: TimestampCandidateNode): void {
+  node.height =
+    Math.max(timestampCandidateHeight(node.left), timestampCandidateHeight(node.right)) + 1;
+  node.minOrder = Math.min(
+    node.entry.order,
+    node.left?.minOrder ?? Number.POSITIVE_INFINITY,
+    node.right?.minOrder ?? Number.POSITIVE_INFINITY,
+  );
+  node.maxOrder = Math.max(
+    node.entry.order,
+    node.left?.maxOrder ?? Number.NEGATIVE_INFINITY,
+    node.right?.maxOrder ?? Number.NEGATIVE_INFINITY,
+  );
+}
+
+function rotateTimestampCandidateLeft(root: TimestampCandidateNode): TimestampCandidateNode {
+  const next = root.right;
+  if (!next) {
+    return root;
+  }
+  root.right = next.left;
+  next.left = root;
+  updateTimestampCandidate(root);
+  updateTimestampCandidate(next);
+  return next;
+}
+
+function rotateTimestampCandidateRight(root: TimestampCandidateNode): TimestampCandidateNode {
+  const next = root.left;
+  if (!next) {
+    return root;
+  }
+  root.left = next.right;
+  next.right = root;
+  updateTimestampCandidate(root);
+  updateTimestampCandidate(next);
+  return next;
+}
+
+function balanceTimestampCandidate(root: TimestampCandidateNode): TimestampCandidateNode {
+  updateTimestampCandidate(root);
+  const balance = timestampCandidateHeight(root.left) - timestampCandidateHeight(root.right);
+  if (balance > 1) {
+    if (
+      root.left &&
+      timestampCandidateHeight(root.left.left) < timestampCandidateHeight(root.left.right)
+    ) {
+      root.left = rotateTimestampCandidateLeft(root.left);
+    }
+    return rotateTimestampCandidateRight(root);
+  }
+  if (balance < -1) {
+    if (
+      root.right &&
+      timestampCandidateHeight(root.right.right) < timestampCandidateHeight(root.right.left)
+    ) {
+      root.right = rotateTimestampCandidateRight(root.right);
+    }
+    return rotateTimestampCandidateLeft(root);
+  }
+  return root;
+}
+
+function insertTimestampCandidate(
+  root: TimestampCandidateNode | undefined,
+  entry: ComparableHistoryMessage,
+): TimestampCandidateNode {
+  if (!root) {
+    return { entry, height: 1, minOrder: entry.order, maxOrder: entry.order };
+  }
+  if (compareTimestampCandidates(entry, root.entry) < 0) {
+    root.left = insertTimestampCandidate(root.left, entry);
+  } else {
+    root.right = insertTimestampCandidate(root.right, entry);
+  }
+  return balanceTimestampCandidate(root);
+}
+
+function removeTimestampCandidate(
+  root: TimestampCandidateNode | undefined,
+  entry: ComparableHistoryMessage,
+): TimestampCandidateNode | undefined {
+  if (!root) {
+    return undefined;
+  }
+  const comparison = compareTimestampCandidates(entry, root.entry);
+  if (comparison < 0) {
+    root.left = removeTimestampCandidate(root.left, entry);
+  } else if (comparison > 0) {
+    root.right = removeTimestampCandidate(root.right, entry);
+  } else if (!root.left || !root.right) {
+    return root.left ?? root.right;
+  } else {
+    let successor = root.right;
+    while (successor.left) {
+      successor = successor.left;
+    }
+    root.entry = successor.entry;
+    root.right = removeTimestampCandidate(root.right, successor.entry);
+  }
+  return balanceTimestampCandidate(root);
+}
+
+function findFirstTimestampCandidateInRange(
+  root: TimestampCandidateNode | undefined,
+  minimumTimestamp: number,
+  maximumTimestamp: number,
+  minimumOrder: number,
+  maximumOrder = Number.POSITIVE_INFINITY,
+): ComparableHistoryMessage | undefined {
+  if (!root || root.maxOrder < minimumOrder || root.minOrder >= maximumOrder) {
+    return undefined;
+  }
+  const rootTimestamp = root.entry.timestamp ?? 0;
+  let best =
+    rootTimestamp >= minimumTimestamp &&
+    rootTimestamp <= maximumTimestamp &&
+    root.entry.order >= minimumOrder
+      ? root.entry
+      : undefined;
+  const left = rootTimestamp >= minimumTimestamp ? root.left : undefined;
+  const right = rootTimestamp <= maximumTimestamp ? root.right : undefined;
+  const [first, second] =
+    (left?.minOrder ?? Number.POSITIVE_INFINITY) <= (right?.minOrder ?? Number.POSITIVE_INFINITY)
+      ? [left, right]
+      : [right, left];
+  for (const child of [first, second]) {
+    const candidate = findFirstTimestampCandidateInRange(
+      child,
+      minimumTimestamp,
+      maximumTimestamp,
+      minimumOrder,
+      best?.order ?? maximumOrder,
+    );
+    if (candidate && (!best || candidate.order < best.order)) {
+      best = candidate;
+    }
+  }
+  return best;
 }
 
 function findTimestampMatch(
@@ -190,44 +354,66 @@ function findTimestampMatch(
     while (summary.missingTimestampCursor < summary.missingTimestamps.length) {
       const candidate = summary.missingTimestamps[summary.missingTimestampCursor];
       if (candidate && !consumed.has(candidate)) {
-        return candidate;
+        break;
       }
       summary.missingTimestampCursor += 1;
     }
     while (summary.timestampedOrderCursor < summary.timestampedByOrder.length) {
       const candidate = summary.timestampedByOrder[summary.timestampedOrderCursor];
       if (candidate && !consumed.has(candidate)) {
-        return candidate;
+        break;
       }
       summary.timestampedOrderCursor += 1;
     }
-    return undefined;
+    const missing = summary.missingTimestamps[summary.missingTimestampCursor];
+    const timestamped = summary.timestampedByOrder[summary.timestampedOrderCursor];
+    const candidate =
+      missing && (!timestamped || missing.order < timestamped.order) ? missing : timestamped;
+    if (!candidate) {
+      return undefined;
+    }
+    if (candidate === missing) {
+      summary.missingTimestampCursor += 1;
+    } else {
+      summary.timestampedOrderCursor += 1;
+    }
+    return candidate;
   }
-  // Repeated text must retain transcript order. Consuming the nearest row
-  // greedily can cross two adjacent imports and swap their external identities.
-  while (summary.timestampedOrderCursor < summary.timestampedByOrder.length) {
-    const candidate = summary.timestampedByOrder[summary.timestampedOrderCursor];
-    if (!candidate || consumed.has(candidate)) {
+  const minimumOrder =
+    summary.timestampedByOrder[summary.timestampedOrderCursor]?.order ?? Number.POSITIVE_INFINITY;
+  let timestamped = findFirstTimestampCandidateInRange(
+    summary.timestampRoot,
+    timestamp - DEDUPE_TIMESTAMP_WINDOW_MS,
+    timestamp + DEDUPE_TIMESTAMP_WINDOW_MS,
+    minimumOrder,
+  );
+  while (timestamped && consumed.has(timestamped)) {
+    summary.timestampRoot = removeTimestampCandidate(summary.timestampRoot, timestamped);
+    timestamped = findFirstTimestampCandidateInRange(
+      summary.timestampRoot,
+      timestamp - DEDUPE_TIMESTAMP_WINDOW_MS,
+      timestamp + DEDUPE_TIMESTAMP_WINDOW_MS,
+      minimumOrder,
+    );
+  }
+  if (timestamped) {
+    while (
+      summary.timestampedOrderCursor < summary.timestampedByOrder.length &&
+      (summary.timestampedByOrder[summary.timestampedOrderCursor]?.order ??
+        Number.POSITIVE_INFINITY) <= timestamped.order
+    ) {
+      const skipped = summary.timestampedByOrder[summary.timestampedOrderCursor];
+      if (skipped) {
+        summary.timestampRoot = removeTimestampCandidate(summary.timestampRoot, skipped);
+      }
       summary.timestampedOrderCursor += 1;
-      continue;
     }
-    const candidateTimestamp = candidate.timestamp;
-    if (candidateTimestamp === undefined) {
-      summary.timestampedOrderCursor += 1;
-      continue;
-    }
-    if (candidateTimestamp < timestamp - DEDUPE_TIMESTAMP_WINDOW_MS) {
-      summary.timestampedOrderCursor += 1;
-      continue;
-    }
-    if (candidateTimestamp <= timestamp + DEDUPE_TIMESTAMP_WINDOW_MS) {
-      return candidate;
-    }
-    break;
+    return timestamped;
   }
   while (summary.missingTimestampCursor < summary.missingTimestamps.length) {
     const candidate = summary.missingTimestamps[summary.missingTimestampCursor];
     if (candidate && !consumed.has(candidate)) {
+      summary.missingTimestampCursor += 1;
       return candidate;
     }
     summary.missingTimestampCursor += 1;
@@ -343,13 +529,26 @@ export function mergeImportedChatHistoryMessages(params: {
       localImageMediaCandidates.set(turnKey, candidates);
     }
   }
+  for (const message of params.importedMessages) {
+    const externalIdentityKey = resolveImportedExternalIdentityKey(message);
+    const exactIdentityMatch = externalIdentityKey
+      ? exactExternalIdentityIndex.get(externalIdentityKey)
+      : undefined;
+    if (exactIdentityMatch) {
+      consumedLocalCandidates.add(exactIdentityMatch);
+    }
+  }
   let changed = false;
   let expanded = false;
   let nextOrder = merged.length;
   for (const message of params.importedMessages) {
     const externalIdentityKey = resolveImportedExternalIdentityKey(message);
-    if (externalIdentityKey && exactExternalIdentityIndex.has(externalIdentityKey)) {
-      continue;
+    if (externalIdentityKey) {
+      const exactIdentityMatch = exactExternalIdentityIndex.get(externalIdentityKey);
+      if (exactIdentityMatch) {
+        consumedLocalCandidates.add(exactIdentityMatch);
+        continue;
+      }
     }
     const imported = prepareComparableMessage(message, nextOrder, externalIdentityKey);
     const turnKey = imported.hasCliImageMentions ? imported.cliImageTurnKey : undefined;
@@ -380,10 +579,12 @@ export function mergeImportedChatHistoryMessages(params: {
       consumedLocalCandidates.add(imageDuplicate);
       continue;
     }
-    const duplicate = imported.externalIdentityKey
-      ? findRoleTextCandidate(identitylessRoleTextIndex, imported, consumedLocalCandidates)
-      : findRoleTextCandidate(allMessageRoleTextIndex, imported, consumedLocalCandidates);
-    if (!imported.hasCliImageMentions && duplicate) {
+    const duplicate = imported.hasCliImageMentions
+      ? undefined
+      : imported.externalIdentityKey
+        ? findRoleTextCandidate(identitylessRoleTextIndex, imported, consumedLocalCandidates)
+        : findRoleTextCandidate(allMessageRoleTextIndex, imported, consumedLocalCandidates);
+    if (duplicate) {
       const projected = projectImportedIdentity(duplicate.message, imported.message);
       if (projected !== duplicate.message) {
         duplicate.message = projected;
@@ -398,6 +599,9 @@ export function mergeImportedChatHistoryMessages(params: {
     }
     merged.push(imported);
     indexEntry(imported);
+    if (imported.externalIdentityKey) {
+      consumedLocalCandidates.add(imported);
+    }
     nextOrder += 1;
     changed = true;
     expanded = true;
