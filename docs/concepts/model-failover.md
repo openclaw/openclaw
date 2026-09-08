@@ -50,6 +50,13 @@ policy; OpenClaw does not retry them with thinking disabled.
 
 Fallback execution is turn-local. The reply runner persists only fallback notice state so `/status` and transition notices can distinguish the selected model from the model that answered; it does not persist the fallback as the next turn's model selection.
 
+When configured fallback stops because the agent run reaches a final timeout or
+the idle-timeout cost-runaway breaker returns a terminal error, the
+`model-fallback/decision` logger records `model_fallback_chain_stopped` with
+reason `agent_run_terminal_timeout` or `idle_timeout_circuit_breaker`. These are
+terminal stops, not provider failures or requests to try another model; the
+existing run deadline and cost limits still apply.
+
 ## Selection source policy
 
 The selection source controls whether the fallback chain is allowed:

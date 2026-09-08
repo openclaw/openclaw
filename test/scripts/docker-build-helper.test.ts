@@ -3872,6 +3872,7 @@ printf '%s\n' "$status" >"$TMPDIR/status"
     expect(readFileSync(join(workDir, "status"), "utf8")).toBe("57\n");
     expect(existsSync(join(workDir, "gateway.log.authored-config"))).toBe(true);
     expect(JSON.parse(readFileSync(join(workDir, "state", "openclaw.json"), "utf8"))).toEqual({
+      channels: { discord: { dm: { policy: "allowlist" } } },
       plugins: { enabled: false },
       gateway: expect.objectContaining({ reload: { mode: "off" } }),
     });

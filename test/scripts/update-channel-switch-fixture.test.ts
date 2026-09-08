@@ -16,6 +16,42 @@ it("keeps the frozen legacy dev status on its shipped package contract", () => {
   expect(script).toContain("assert-status-kind package");
 });
 
+it("projects only stored-dev frozen previews onto package reporting", () => {
+  const run = (selection: "stored" | "explicit", updateInstallKind: "git" | "package") =>
+    spawnSync(
+      process.execPath,
+      [
+        "scripts/e2e/lib/update-channel-switch/assertions.mjs",
+        "assert-dry-run",
+        "git",
+        "dev",
+        selection,
+      ],
+      {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          OPENCLAW_UPDATE_CHANNEL_DRY_RUN_PACKAGE_COMPAT: "1",
+          UPDATE_JSON: JSON.stringify({
+            dryRun: true,
+            installKind: "package",
+            storedChannel: "dev",
+            effectiveChannel: "dev",
+            updateInstallKind,
+            mode: updateInstallKind === "git" ? "git" : "npm",
+            switchToGit: updateInstallKind === "git",
+            switchToPackage: false,
+          }),
+        },
+      },
+    );
+
+  expect(run("stored", "package").status).toBe(0);
+  expect(run("explicit", "git").status).toBe(0);
+  expect(run("stored", "git").status).toBe(1);
+  expect(run("explicit", "package").status).toBe(1);
+});
+
 it("preserves the package-derived Git fixture identity through build and lifecycle completion", async () => {
   const root = tempDirs.make("update-channel-git-fixture-");
   const packageCommit = "a".repeat(40);

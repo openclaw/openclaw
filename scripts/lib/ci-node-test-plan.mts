@@ -881,6 +881,13 @@ function listTestFiles(rootDir: string): string[] {
   return listTrackedTestFiles(rootDir);
 }
 
+function resolveTestFilesBuildMode(files: readonly string[]): NodeTestPretestBuildMode | undefined {
+  // Planner inventories contain resolved paths. Preserve their exact membership
+  // instead of reparsing every file as a glob against the runtime consumers.
+  const selectedFiles = new Set(files);
+  return resolveVitestPretestBuildMode([{ matchesFile: (file) => selectedFiles.has(file) }]);
+}
+
 function createAutoReplyReplySplitShards(): NodeTestSplitShard[] {
   const files = listTestFiles("src/auto-reply/reply");
   const groups = {
@@ -1657,12 +1664,7 @@ function createUnitFastSplitShards(): NodeTestSplitShard[] {
 function createToolingSplitShards(): NodeTestSplitShard[] {
   const files = listCompactToolingTestFiles();
   // Resolve file ownership once; batch scoring reuses those prepared facts.
-  const buildModes = new Map(
-    files.map((file) => [
-      file,
-      resolveVitestPretestBuildMode([{ configs: [TOOLING_CONFIG], includePatterns: [file] }]),
-    ]),
-  );
+  const buildModes = new Map(files.map((file) => [file, resolveTestFilesBuildMode([file])]));
   const toolingBatchWeight = (batch: string[]) => {
     const mode = mergeVitestPretestBuildModes(batch.map((file) => buildModes.get(file)));
     return (
@@ -2046,9 +2048,9 @@ export function createNodeTestShards(options: NodeTestPlanOptions = {}): NodeTes
           }
         }
 
-        const pretestBuildMode = resolveVitestPretestBuildMode([
-          { configs: splitConfigs, includePatterns },
-        ]);
+        const pretestBuildMode = includePatterns
+          ? resolveTestFilesBuildMode(includePatterns)
+          : resolveVitestPretestBuildMode([{ configs: splitConfigs }]);
 
         return [
           {
@@ -2449,6 +2451,9 @@ function splitOversizedCompactGroup(
   }
   const includePatterns =
     group.includePatterns ?? WHOLE_CONFIG_SPLIT_FILE_LISTERS.get(group.shard_name)?.();
+  const buildModes = new Map(
+    includePatterns?.map((file) => [file, resolveTestFilesBuildMode([file])]) ?? [],
+  );
   const isTooling = /^core-tooling-\d+$/u.test(group.shard_name);
   const packTooling = isTooling && runnerBackend === "github";
   const weightForFile = isTooling ? toolingFileWeight : stripeFileWeight;
@@ -2459,7 +2464,7 @@ function splitOversizedCompactGroup(
   const profileSeconds = Math.max(measuredProfileSeconds, isCliProcess ? totalWeight : 0);
   const splitBuildMode =
     isCliProcess && !runtimePartition
-      ? resolveVitestPretestBuildMode([{ configs: group.configs, includePatterns }])
+      ? mergeVitestPretestBuildModes([...buildModes.values()])
       : undefined;
   const splitBuildSeconds = splitBuildMode ? VITEST_PRETEST_BUILD_SECONDS[splitBuildMode] : 0;
   const hostedProfileSeconds = Math.max(measuredHostedSeconds, isCliProcess ? totalWeight : 0);
@@ -2473,17 +2478,6 @@ function splitOversizedCompactGroup(
 
   // The prerequisite is charged once per emitted job. Include it in placement
   // so a balanced test stripe still leaves room for its runtime build.
-  const buildModes = new Map(
-    isCliProcess || packTooling
-      ? includePatterns.map(
-          (file) =>
-            [
-              file,
-              resolveVitestPretestBuildMode([{ configs: group.configs, includePatterns: [file] }]),
-            ] as const,
-        )
-      : [],
-  );
   const createStripes = (seconds: number) => {
     const files = runtimePartition?.otherFiles ?? includePatterns;
     const batchWeight = (patterns: readonly string[]) => {
@@ -2596,9 +2590,7 @@ function splitOversizedCompactGroup(
     group: {
       ...group,
       includePatterns: patterns,
-      pretestBuildMode: resolveVitestPretestBuildMode([
-        { configs: group.configs, includePatterns: patterns },
-      ]),
+      pretestBuildMode: mergeVitestPretestBuildModes(patterns.map((file) => buildModes.get(file))),
       shard_name: `${group.shard_name}-hosted-${index + 1}`,
       timing_key: timingGeneration.timingKeys[index]!,
     },

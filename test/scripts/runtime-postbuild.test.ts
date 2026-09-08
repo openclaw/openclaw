@@ -7,7 +7,6 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import {
   copyStaticExtensionAssets,
-  copyStaticExtensionAssetsForPackage,
   copyStaticExtensionAssetsToRuntimeOverlay,
   discoverStaticExtensionAssets,
 } from "../../scripts/lib/static-extension-assets.mts";
@@ -241,13 +240,12 @@ describe("runtime postbuild static assets", () => {
     );
   });
 
-  it("copies declared static assets into root and package dist", async () => {
+  it("copies declared static assets into root dist", async () => {
     const rootDir = createTempDir("openclaw-runtime-postbuild-");
     const src = "extensions/acpx/src/runtime-internals/mcp-proxy.mjs";
     const dest = "dist/extensions/acpx/mcp-proxy.mjs";
     const sourcePath = path.join(rootDir, src);
     const destPath = path.join(rootDir, dest);
-    const packageDestPath = path.join(rootDir, "extensions", "acpx", "dist", "mcp-proxy.mjs");
     await fs.mkdir(path.dirname(sourcePath), { recursive: true });
     await fs.writeFile(sourcePath, "proxy-data\n", "utf8");
 
@@ -255,16 +253,7 @@ describe("runtime postbuild static assets", () => {
       rootDir,
       assets: [{ src, dest }],
     });
-    expect(
-      copyStaticExtensionAssetsForPackage({
-        rootDir,
-        pluginDir: "acpx",
-        assets: [{ src, dest }],
-      }),
-    ).toEqual(["dist/mcp-proxy.mjs"]);
-
     expect(await fs.readFile(destPath, "utf8")).toBe("proxy-data\n");
-    expect(await fs.readFile(packageDestPath, "utf8")).toBe("proxy-data\n");
   });
 
   it("stages copied static assets byte-for-byte during the same postbuild run", async () => {

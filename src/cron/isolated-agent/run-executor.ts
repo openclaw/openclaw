@@ -69,6 +69,7 @@ import {
   resolveBootstrapWarningSignaturesSeen,
   resolveCandidateThinkingLevel,
   resolveCronAgentLane,
+  resolveFastModeState,
   runCliAgent,
 } from "./run-execution.runtime.js";
 import { resolveCronFallbacksOverride } from "./run-fallback-policy.js";
@@ -620,6 +621,13 @@ function createCronPromptExecutor(
           bootstrapPromptWarningSignaturesSeen[bootstrapPromptWarningSignaturesSeen.length - 1];
         // CLI providers can resume provider-native sessions; embedded providers
         // use OpenClaw's transcript/session file plus prompt-cache affinity.
+        const fastModeState = resolveFastModeState({
+          cfg: params.cfgWithAgentDefaults,
+          provider: providerOverride,
+          model: modelOverride,
+          agentId: params.agentId,
+          sessionEntry: params.cronSession.sessionEntry,
+        });
         if (cliExecution) {
           // Cron intentionally reuses its durable session id as the run id; turn
           // claims stay unique via per-claim ids and the worker gate handles this
@@ -694,6 +702,8 @@ function createCronPromptExecutor(
                 bootstrapContextRunKind: "cron",
                 bootstrapPromptWarningSignaturesSeen,
                 bootstrapPromptWarningSignature,
+                fastMode: fastModeState.mode,
+                fastModeAutoOnSeconds: fastModeState.fastAutoOnSeconds,
                 fastModeStartedAtMs,
                 fastModeAutoProgressState,
                 isFinalFallbackAttempt: runOptions.isFinalFallbackAttempt,
@@ -737,7 +747,7 @@ function createCronPromptExecutor(
           );
           return result;
         }
-        const { resolveFastModeState, runEmbeddedAgent } = await cronEmbeddedRuntimeLoader.load();
+        const { runEmbeddedAgent } = await cronEmbeddedRuntimeLoader.load();
         const promptCacheKey = resolveIsolatedCronPromptCacheKey({
           job: params.job,
           agentId: params.agentId,
@@ -789,22 +799,11 @@ function createCronPromptExecutor(
           // Fallback selection is turn-local. Revalidate the stored or
           // requested level without rewriting the durable preference.
           thinkLevel: candidateThinkLevel,
-          ...(() => {
-            const fastModeState = resolveFastModeState({
-              cfg: params.cfgWithAgentDefaults,
-              provider: providerOverride,
-              model: modelOverride,
-              agentId: params.agentId,
-              sessionEntry: params.cronSession.sessionEntry,
-            });
-            return {
-              fastMode: fastModeState.mode,
-              fastModeAutoOnSeconds: fastModeState.fastAutoOnSeconds,
-              fastModeStartedAtMs,
-              fastModeAutoProgressState,
-              isFinalFallbackAttempt: runOptions.isFinalFallbackAttempt,
-            };
-          })(),
+          fastMode: fastModeState.mode,
+          fastModeAutoOnSeconds: fastModeState.fastAutoOnSeconds,
+          fastModeStartedAtMs,
+          fastModeAutoProgressState,
+          isFinalFallbackAttempt: runOptions.isFinalFallbackAttempt,
           verboseLevel: params.resolvedVerboseLevel,
           timeoutMs: params.timeoutMs,
           runTimeoutOverrideMs: params.runTimeoutOverrideMs,
