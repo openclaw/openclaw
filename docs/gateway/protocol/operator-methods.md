@@ -156,8 +156,12 @@ remains empty.
 
 The Gateway advertises `session-scoped-model-catalog` for this contract.
 `chat.metadata` remains available to legacy clients; the Control UI reads models
-directly and keeps commands in its metadata cache. Opening its picker performs a
-passive read, without a model-cache timer or implicit provider refresh.
+directly and keeps commands in its metadata cache. Opening a conversation picker
+performs a passive read, without a model-cache timer or implicit provider refresh.
+The Models settings page requests `refresh: true` when a primary, utility, or
+fallback model picker opens, so it can discover additional models on demand.
+Pending opens share that page's request; reopening after completion requests a
+new refresh, and the Gateway shares concurrent provider acquisition.
 
 `preparedOnly: true` and `refresh: true` remain mutually exclusive.
 The Gateway advertises these published-read and details controls as
