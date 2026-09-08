@@ -269,10 +269,9 @@ suite.define(() => {
       expect(await actionSkeletons.count()).toBe(4);
       const actionSkeletonSize = await actionSkeletons.first().evaluate((element) => {
         const rect = element.getBoundingClientRect();
-        return { height: rect.height, width: rect.width };
+        return { x: rect.x, y: rect.y, height: rect.height, width: rect.width };
       });
       expect(actionSkeletonSize.height).toBeCloseTo(30, 3);
-      expect(actionSkeletonSize.width).toBeCloseTo(30, 3);
       expect(
         await actionSkeletons
           .first()
@@ -295,6 +294,14 @@ suite.define(() => {
         .toBe(4);
       expect(await checkingCards.count()).toBe(0);
       expect(await page.locator(".chat-assistant-attachment-card .skeleton").count()).toBe(0);
+      const openButtonSize = await page
+        .locator(".chat-assistant-attachment-card__expand")
+        .first()
+        .evaluate((element) => {
+          const rect = element.getBoundingClientRect();
+          return { x: rect.x, y: rect.y, height: rect.height, width: rect.width };
+        });
+      expect(actionSkeletonSize).toEqual(openButtonSize);
       const finalActionWidths = await page
         .locator(
           ".chat-assistant-attachment-card--compact .chat-assistant-attachment-card__actions",

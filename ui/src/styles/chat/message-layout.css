@@ -727,7 +727,7 @@
   position: absolute;
   inset-block-start: 0;
   inset-inline-end: 0;
-  width: var(--chat-attachment-action-size);
+  width: calc(100% - 38px);
   height: var(--chat-attachment-action-size);
   border-radius: var(--radius-full);
 }
