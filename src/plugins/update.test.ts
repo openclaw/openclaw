@@ -5445,7 +5445,8 @@ describe("updateNpmInstalledPlugins", () => {
     });
   });
 
-  it("forwards dangerous force unsafe install to plugin update installers", async () => {
+  it("forwards install policy acknowledgement to plugin update installers", async () => {
+    const onInstallPolicyWarning = vi.fn(async () => ({ status: "approved" as const }));
     installPluginFromNpmSpecMock.mockResolvedValue(
       createSuccessfulNpmUpdateResult({
         pluginId: "openclaw-codex-app-server",
@@ -5459,11 +5460,11 @@ describe("updateNpmInstalledPlugins", () => {
         spec: "openclaw-codex-app-server@beta",
       }),
       "openclaw-codex-app-server",
-      { dangerouslyForceUnsafeInstall: true },
+      { onInstallPolicyWarning },
     );
 
     expect(npmInstallCall()?.spec).toBe("openclaw-codex-app-server@beta");
-    expect(npmInstallCall()?.dangerouslyForceUnsafeInstall).toBe(true);
+    expect(npmInstallCall()?.onInstallPolicyWarning).toBe(onInstallPolicyWarning);
     expect(npmInstallCall()?.expectedPluginId).toBe("openclaw-codex-app-server");
   });
 
