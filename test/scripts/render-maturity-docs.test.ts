@@ -440,6 +440,13 @@ describe("maturity docs renderer CLI", () => {
     expect(taxonomy).not.toMatch(
       /<div className="maturity-category-docs">[^\n]*\[[^\n]+\]\([^)]+\)[^\n]*<\/div>/,
     );
+    const taxonomyDocument = parseDocsDocument(taxonomy);
+    for (const id of ["imessage", "imessage-and-bluebubbles"]) {
+      expect(
+        taxonomyDocument.ids.filter((candidate: string) => candidate === id),
+        id,
+      ).toHaveLength(1);
+    }
     for (const [markdown, id] of [
       [scorecard, "surface-explorer"],
       [taxonomy, "product-areas"],

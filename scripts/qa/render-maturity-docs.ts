@@ -204,6 +204,10 @@ function markdownSlug(value: string): string {
     .replace(/^-|-$/g, "");
 }
 
+const legacySurfaceAnchors: Readonly<Record<string, readonly string[]>> = {
+  "imessage-bluebubbles": ["imessage-and-bluebubbles"],
+};
+
 function normalizeRoutePath(route: string): string {
   return route.replace(/^\/+/, "").replace(/\/+$/, "");
 }
@@ -1158,6 +1162,7 @@ function renderTaxonomy({
       lines.push(
         `  <Accordion title="${markdownEscape(surfaceName)} - ${markdownEscape(levelText(surface, levels))} - ${surface.categories.length} areas">`,
         `    <a id="${markdownSlug(surfaceName)}" />`,
+        ...(legacySurfaceAnchors[surface.id] ?? []).map((anchor) => `    <a id="${anchor}" />`),
         "",
         `    ${markdownEscape(surface.rationale ?? "")}`,
         "",
