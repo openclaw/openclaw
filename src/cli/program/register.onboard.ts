@@ -19,7 +19,7 @@ import { resolveProviderOnboardAuthFlags } from "../../plugins/provider-auth-cho
 import type { RuntimeEnv } from "../../runtime.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
 import { formatCliCommand } from "../command-format.js";
-import { listExplicitOptionFlagsExcept } from "../command-options.js";
+import { inheritOptionFromParent, listExplicitOptionFlagsExcept } from "../command-options.js";
 import { parseGatewayPortOption } from "../gateway-port-option.js";
 
 function resolveInstallDaemonFlag(command: Command): boolean | undefined {
@@ -66,6 +66,15 @@ async function validateRecommendationParentOptions(
 const AUTH_CHOICE_HELP = formatAuthChoiceChoicesForCli({ includeSkip: true });
 const RECOMMENDATION_READ_PARENT_OPTIONS = new Set(["json"]);
 const RECOMMENDATION_MUTATION_PARENT_OPTIONS = new Set(["agent"]);
+
+function resolveRecommendationAgentOption(command: Command): string | undefined {
+  const source = command.getOptionValueSource("agent");
+  return readStringValue(
+    source && source !== "default"
+      ? command.getOptionValue("agent")
+      : inheritOptionFromParent(command, "agent"),
+  );
+}
 
 type OnboardAuthFlag = {
   readonly cliOption: string;
@@ -327,7 +336,7 @@ export function registerOnboardCommand(program: Command): void {
         }
         const { onboardRecommendationsCommand } =
           await import("../../commands/onboard-recommendations.js");
-        const agent = readStringValue(opts.agent);
+        const agent = resolveRecommendationAgentOption(recommendationsCommand);
         onboardRecommendationsCommand(
           { json, ...(agent !== undefined ? { agent } : {}) },
           defaultRuntime,
@@ -338,8 +347,9 @@ export function registerOnboardCommand(program: Command): void {
   recommendations
     .command("acknowledge")
     .description("Mark the stored onboarding recommendation offer as answered")
+    .option("--agent <id>", "Agent whose onboarding recommendations should be used")
     .option("--retry <id...>", "Leave failed recommendation IDs pending for a later run")
-    .action(async (opts: { retry?: string[] }) => {
+    .action(async (opts: { retry?: string[] }, acknowledgeCommand: Command) => {
       const { defaultRuntime } = await import("../../runtime.js");
       await runCommandWithRuntime(defaultRuntime, async () => {
         if (
@@ -350,7 +360,7 @@ export function registerOnboardCommand(program: Command): void {
         }
         const { acknowledgeOnboardRecommendationsCommand } =
           await import("../../commands/onboard-recommendations.js");
-        const agent = readStringValue(recommendations.opts().agent);
+        const agent = resolveRecommendationAgentOption(acknowledgeCommand);
         acknowledgeOnboardRecommendationsCommand(
           { retry: opts.retry, ...(agent !== undefined ? { agent } : {}) },
           defaultRuntime,
@@ -361,7 +371,8 @@ export function registerOnboardCommand(program: Command): void {
   recommendations
     .command("refresh")
     .description("Clear stored app recommendations so the next onboarding run rescans")
-    .action(async () => {
+    .option("--agent <id>", "Agent whose onboarding recommendations should be used")
+    .action(async (_opts, refreshCommand: Command) => {
       const { defaultRuntime } = await import("../../runtime.js");
       await runCommandWithRuntime(defaultRuntime, async () => {
         if (
@@ -372,7 +383,7 @@ export function registerOnboardCommand(program: Command): void {
         }
         const { refreshOnboardRecommendationsCommand } =
           await import("../../commands/onboard-recommendations.js");
-        const agent = readStringValue(recommendations.opts().agent);
+        const agent = resolveRecommendationAgentOption(refreshCommand);
         refreshOnboardRecommendationsCommand(agent !== undefined ? { agent } : {}, defaultRuntime);
       });
     });
