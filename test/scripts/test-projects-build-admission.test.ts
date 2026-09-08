@@ -819,16 +819,18 @@ describe("test-projects build admission", () => {
     expect(process.exitCode).toBe(failure === "throw" ? 1 : 7);
   });
 
-  it.each([modelTarget, "extensions/browser/src/browser/extension-install.test.ts"])(
-    "starts %s without runtime preparation",
-    async (target) => {
-      await start([target]);
-      expect(await terminal.promise).toMatch(/^\[test\] passed 1 Vitest shard/u);
-      expect(commands.prepare).not.toHaveBeenCalled();
-      expect(commands.prepareE2e).not.toHaveBeenCalled();
-      expect(commands.reader).toHaveBeenCalledOnce();
-    },
-  );
+  it.each([
+    modelTarget,
+    "extensions/browser/src/browser/extension-install.test.ts",
+    "test/e2e/qa-lab/runtime/package-openclaw-for-docker.e2e.test.ts",
+    "packages/sdk/src/app-sdk-external-boundary.e2e.test.ts",
+  ])("starts %s without runtime preparation", async (target) => {
+    await start([target]);
+    expect(await terminal.promise).toMatch(/^\[test\] passed 1 Vitest shard/u);
+    expect(commands.prepare).not.toHaveBeenCalled();
+    expect(commands.prepareE2e).not.toHaveBeenCalled();
+    expect(commands.reader).toHaveBeenCalledOnce();
+  });
 
   it.each(["build", "failed build", "prebuilt"])(
     "admits the built native-host integration after %s",
@@ -890,10 +892,10 @@ describe("test-projects build admission", () => {
     },
   );
 
-  it("coalesces mixed E2E and private QA preparation before marking only E2E prebuilt", async () => {
+  it("coalesces mixed package, E2E and private QA preparation before marking only E2E prebuilt", async () => {
     vi.stubEnv("OPENCLAW_TEST_PROJECTS_PARALLEL", "2");
     const preparation = createPreparationGate<NodeJS.ProcessEnv>(commands.prepareE2e);
-    await start([...targets, e2eTarget]);
+    await start([...targets, e2eTarget, "packages/sdk/src/app-sdk-external-boundary.e2e.test.ts"]);
     try {
       await Promise.race([preparation.started, terminal.promise]);
       expect(commands.prepareE2e).toHaveBeenCalledOnce();

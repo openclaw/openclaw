@@ -994,6 +994,21 @@ describe("redactSensitiveText", () => {
     expect(headerBitmap.slice(header.indexOf("=") + 1).every(Boolean)).toBe(true);
   });
 
+  it("keeps original bitmap offsets after empty values and Unicode line prefixes", () => {
+    const input = '😀safe\r\nbody: code=&safe=1\rclient%5Fsecret="abc";&safe=2';
+    const resolved = resolveRedactOptions({ mode: "tools" });
+    const bitmap = computeSensitiveRedactionBitmap(input, resolved);
+    const secretStart = input.indexOf('"abc"');
+
+    expect(redactSensitiveText(input)).toBe(
+      "😀safe\r\nbody: code=***&safe=1\rclient%5Fsecret=***;&safe=2",
+    );
+    expect(bitmap).toHaveLength(input.length);
+    expect(bitmap.slice(0, secretStart).some(Boolean)).toBe(false);
+    expect(bitmap.slice(secretStart, secretStart + 5).every(Boolean)).toBe(true);
+    expect(bitmap.slice(secretStart + 5).some(Boolean)).toBe(false);
+  });
+
   it("masks token prefixes embedded after adjacent text", () => {
     const token = `ghp_${"a".repeat(5_000)}`;
     const output = redactSensitiveText(`prefix-${token} suffix`, { mode: "tools" });

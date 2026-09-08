@@ -72,6 +72,72 @@ export async function startCronListGateway(token: string): Promise<{ url: string
   return { url: `ws://127.0.0.1:${address.port}` };
 }
 
+/** Fake Gateway whose automation store never contains the requested job id. */
+export async function startCronLookupMissGateway(
+  token: string,
+  jobId: string,
+): Promise<{ calls: string[]; url: string }> {
+  const calls: string[] = [];
+  const wss = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+  activeServers.add(wss);
+  wss.on("connection", (ws) => {
+    sendMinimalGatewayConnectChallenge(ws);
+    ws.on("message", (data) => {
+      const frame = parseMinimalGatewayRequestFrame(data);
+      if (frame.type !== "req" || !frame.id) {
+        return;
+      }
+      if (frame.method === "connect") {
+        expect(frame.params?.auth?.token).toBe(token);
+        sendMinimalGatewayResponse(
+          ws,
+          frame.id,
+          buildMinimalGatewayHelloOkPayload({
+            methods: ["cron.get", "cron.list"],
+            auth: { role: "operator", scopes: ["operator.admin"] },
+          }),
+        );
+        return;
+      }
+      if (typeof frame.method !== "string") {
+        return;
+      }
+      calls.push(frame.method);
+      if (frame.method === "cron.get") {
+        // The typed lookup miss a real Gateway emits for an unknown automation id.
+        ws.send(
+          JSON.stringify({
+            type: "res",
+            id: frame.id,
+            ok: false,
+            error: {
+              code: "INVALID_REQUEST",
+              message: `cron job not found: ${jobId}`,
+              details: { code: "CRON_JOB_NOT_FOUND", jobId },
+            },
+          }),
+        );
+        return;
+      }
+      if (frame.method === "cron.list") {
+        sendMinimalGatewayResponse(ws, frame.id, {
+          jobs: [],
+          snapshotRevision: "test-revision",
+          total: 0,
+          offset: 0,
+          limit: 50,
+          hasMore: false,
+          nextOffset: null,
+          deliveryPreviews: {},
+        });
+      }
+    });
+  });
+  await once(wss, "listening");
+  const address = wss.address() as AddressInfo;
+  return { calls, url: `ws://127.0.0.1:${address.port}` };
+}
+
 export async function startRateLimitedGateway(): Promise<{ url: string }> {
   const wss = new WebSocketServer({ host: "127.0.0.1", port: 0 });
   activeServers.add(wss);

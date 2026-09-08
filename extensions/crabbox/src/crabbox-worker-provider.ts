@@ -347,11 +347,11 @@ export function createCrabboxWorkerProvider(
         });
       }
       if (parsed.desktop) {
-        inspectedParams.inspect = await runProvisionSetupAndWaitReady({
+        // Desktop launchers and XFCE configuration leave SSH and lease metadata unchanged.
+        await runProvisionSetup({
           ...inspectedParams,
           phase: "desktop setup",
           setup: createCrabboxWorkerDesktopSetup(leaseId, wallpaperBase64),
-          sleep,
         });
       }
       if (project && warmImages.lookupLease(leaseId)?.phase !== "enrolled") {

@@ -256,18 +256,8 @@ function wrapLine(text: string, width: number): string[] {
   let bufVisible = 0;
   let lastBreakIndex: number | null = null;
 
-  const pushLine = (value: string) => {
-    const cleaned = value.replace(/\s+$/, "");
-    if (visibleWidth(cleaned) === 0) {
-      return;
-    }
-    lines.push(cleaned);
-  };
-
+  // Explicit newlines emit empty buffers too, keeping sibling cell rows aligned.
   const flushAt = (breakAt: number | null) => {
-    if (buf.length === 0) {
-      return;
-    }
     // Keep the suffix in its buffer: long zero-width runs can exceed the argument
     // limit of a spread-based copy even when their visible width is small.
     const left = breakAt == null || breakAt <= 0 ? buf : buf.splice(0, breakAt);
@@ -296,7 +286,7 @@ function wrapLine(text: string, width: number): string[] {
     const openOsc8 = activeOsc8 ? `${ESC}]8;${activeOsc8.params};${activeOsc8.uri}${BEL}` : "";
     const closeSgr = activeSgr.map((state) => state.close).join("");
 
-    pushLine(`${content.join("")}${closeOsc8}${closeSgr}`);
+    lines.push(`${content.join("")}${closeOsc8}${closeSgr}`.trimEnd());
     if (breakAt == null || breakAt <= 0) {
       buf.length = 0;
       if (openOsc8) {
@@ -338,8 +328,8 @@ function wrapLine(text: string, width: number): string[] {
         return;
       }
       // CRLF is one grapheme; separated CR/LF may retain intervening ANSI controls.
-      skipNextLf = ch === "\r";
       if (ch === "\n" || ch === "\r" || ch === "\r\n") {
+        skipNextLf = ch === "\r";
         flushAt(buf.length);
         return;
       }
@@ -358,8 +348,12 @@ function wrapLine(text: string, width: number): string[] {
 
     buf.push(token);
     bufVisible += token.width;
-    if (token.kind === "char" && isBreakChar(token.value)) {
-      lastBreakIndex = buf.length;
+    if (token.kind === "char") {
+      // Discarded leading spacing must not interrupt a separated CR/LF pair.
+      skipNextLf = false;
+      if (isBreakChar(token.value)) {
+        lastBreakIndex = buf.length;
+      }
     }
   };
 
@@ -395,7 +389,10 @@ function wrapLine(text: string, width: number): string[] {
     return [text];
   }
 
-  flushAt(buf.length);
+  // A trailing newline or reopened style is not another physical row.
+  if (bufVisible > 0) {
+    flushAt(buf.length);
+  }
   return lines.length > 0 ? lines : [""];
 }
 

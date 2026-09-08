@@ -31,6 +31,7 @@ import {
   EMPTY_STABILITY_SNAPSHOT,
   startAgentTurnGateway,
   startCronListGateway,
+  startCronLookupMissGateway,
   startGatewayStabilityRpcServer,
   startNodePairingGateway,
 } from "./gateway-backed-exit.test-helpers.js";
@@ -811,6 +812,67 @@ describe("gateway-backed CLI process exit", () => {
       expect(result.stderr).not.toContain("OPENCLAW_DEBUG");
       expect(result.stderr).not.toContain("Stack:");
       expect(result.stderr).not.toContain("openclaw doctor");
+    },
+  );
+
+  it.each(["--wait-timeout", "--poll-interval"])(
+    "renders an invalid cron run %s duration as operator guidance",
+    async (flag) => {
+      const root = tempDirs.make("openclaw-cron-invalid-duration-");
+      const { stateDir, configPath } = await prepareGatewayCliFixture(root, {
+        mode: "remote",
+        remote: { url: UNREACHABLE_GATEWAY_URL, token: "test-token" },
+      });
+      const result = await runIsolatedGatewayCli({
+        args: ["cron", "run", "missing-job", "--wait", flag, "not-a-duration", "--json"],
+        root,
+        stateDir,
+        configPath,
+      });
+      const message =
+        'Invalid duration: "not-a-duration". Use values like 500ms, 30s, 5m, 2h, or 1h30m.';
+      expect(result).toMatchObject({ code: 1, signal: null, stderr: `${message}\n` });
+      expect(JSON.parse(result.stdout)).toEqual({
+        ok: false,
+        error: { type: "cli_error", message },
+      });
+    },
+  );
+
+  it.each([
+    { label: "human", args: ["cron", "show", "missing-job"], machineOutput: false },
+    { label: "machine", args: ["cron", "show", "missing-job", "--json"], machineOutput: true },
+  ])(
+    "renders a $label-mode cron lookup miss as expected guidance, not a crash",
+    async ({ label, args, machineOutput }) => {
+      const root = tempDirs.make(`openclaw-cron-lookup-miss-${label}-`);
+      const token = "test-token";
+      const gateway = await startCronLookupMissGateway(token, "missing-job");
+      const { stateDir, configPath } = await prepareGatewayCliFixture(root, {
+        mode: "remote",
+        remote: { url: gateway.url, token },
+      });
+
+      const result = await runIsolatedGatewayCli({ args, root, stateDir, configPath });
+
+      const message =
+        "Automation not found: missing-job. Run `openclaw cron list` to see recent automation ids.";
+      expect(result).toMatchObject({ code: 1, signal: null });
+      if (machineOutput) {
+        expect(JSON.parse(result.stdout)).toEqual({
+          ok: false,
+          error: { type: "cli_error", message },
+        });
+      } else {
+        expect(result.stdout).toBe("");
+      }
+      expect(result.stderr).toContain(message);
+      expect(result.stderr).not.toContain("The CLI command failed");
+      expect(result.stderr).not.toContain("Could not start the CLI");
+      expect(result.stderr).not.toContain("OPENCLAW_DEBUG");
+      expect(result.stderr).not.toContain("Stack:");
+      expect(result.stderr).not.toContain("openclaw doctor");
+      expect(gateway.calls).toEqual(["cron.get", "cron.list"]);
     },
   );
 
