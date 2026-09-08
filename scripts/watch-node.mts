@@ -8,7 +8,11 @@ import process from "node:process";
 import { pathToFileURL } from "node:url";
 import { toErrorObject } from "./lib/error-format.mts";
 import { sleep } from "./lib/sleep.mjs";
-import { createRunNodePathClassifier, runNodeWatchedPaths } from "./run-node-watch-paths.mts";
+import {
+  createRunNodePathClassifier,
+  normalizeRunNodePath as normalizePath,
+  runNodeWatchedPaths,
+} from "./run-node-watch-paths.mts";
 
 const WATCH_NODE_RUNNER = "scripts/run-node.mjs";
 const WATCH_RESTART_SIGNAL = "SIGTERM";
@@ -102,8 +106,6 @@ type WatchLock = {
 
 const buildRunnerArgs = (args: string[]) => [WATCH_NODE_RUNNER, ...args];
 const buildDoctorRunnerArgs = () => [WATCH_NODE_RUNNER, "doctor", "--fix", "--non-interactive"];
-
-const normalizePath = (filePath: string) => filePath.replaceAll("\\", "/").replace(/^\.\/+/, "");
 
 const resolveRepoPath = (filePath: unknown, cwd: string) => {
   const rawPath = typeof filePath === "string" ? filePath : "";
