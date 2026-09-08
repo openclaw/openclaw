@@ -156,6 +156,7 @@ it("renders task-shaped placeholders while the initial task list loads", async (
 afterEach(() => {
   document.body.replaceChildren();
   vi.restoreAllMocks();
+  localStorage.removeItem("openclaw.chat.backgroundTasks.collapsed");
 });
 
 describe("background tasks rail state", () => {
@@ -356,6 +357,19 @@ describe("background tasks rail state", () => {
     expect(request.mock.calls.at(-1)?.[1]).toMatchObject({
       sessionKey: "agent:main:another-thread",
     });
+  });
+
+  it("persists the collapsed toggle and restores it when the pane remounts", async () => {
+    const { host } = createHost();
+
+    createBackgroundTasksProps(host).onToggleCollapsed();
+    expect(createBackgroundTasksProps(host).collapsed).toBe(false);
+
+    // Simulate a gateway restart / pane reload: the in-memory host state is gone.
+    const freshHost = createHost().host;
+    freshHost.client = null;
+    freshHost.connected = false;
+    expect(createBackgroundTasksProps(freshHost).collapsed).toBe(false);
   });
 
   it("surfaces cancellation refusals through the rail props", async () => {

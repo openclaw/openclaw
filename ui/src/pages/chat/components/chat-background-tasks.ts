@@ -25,6 +25,7 @@ import {
   taskTimestampMs,
 } from "../../../lib/tasks/data.ts";
 import type { TaskSummary } from "../../../lib/tasks/task-summary.ts";
+import { getSafeLocalStorage } from "../../../local-storage.ts";
 import { newestTaskSnapshot } from "./chat-background-tasks-shared.ts";
 import type { BackgroundTasksProps } from "./chat-background-tasks.types.ts";
 import { deriveSubagentActivity } from "./chat-subagent-activity.ts";
@@ -65,6 +66,26 @@ type BackgroundTasksState = {
   taskDetailErrors: Map<string, string>;
   taskDetailLoadingIds: Set<string>;
 };
+
+const BACKGROUND_TASKS_COLLAPSED_STORAGE_KEY = "openclaw.chat.backgroundTasks.collapsed";
+
+function loadBackgroundTasksCollapsedPreference(): boolean {
+  try {
+    // Default is collapsed; only "0" means the user expanded the rail and wants
+    // that choice restored across restarts.
+    return getSafeLocalStorage()?.getItem(BACKGROUND_TASKS_COLLAPSED_STORAGE_KEY) !== "0";
+  } catch {
+    return true;
+  }
+}
+
+function storeBackgroundTasksCollapsedPreference(collapsed: boolean): void {
+  try {
+    getSafeLocalStorage()?.setItem(BACKGROUND_TASKS_COLLAPSED_STORAGE_KEY, collapsed ? "1" : "0");
+  } catch {
+    // Privacy mode can make localStorage unavailable; the in-memory choice still works.
+  }
+}
 
 export type BackgroundTasksHost = {
   sessionKey: string;
@@ -110,8 +131,10 @@ function getBackgroundTasksState(host: BackgroundTasksHost): BackgroundTasksStat
   const next: BackgroundTasksState = {
     cancellingTaskIds: new Set(),
     // Keep presentation choices across thread switches while discarding all
-    // task data and private details from the previous session scope.
-    collapsed: current?.collapsed ?? true,
+    // task data and private details from the previous session scope. Falling
+    // back to the persisted preference keeps the toggle stable across gateway
+    // restarts; the in-memory value still wins when the pane is remounted.
+    collapsed: current?.collapsed ?? loadBackgroundTasksCollapsedPreference(),
     // The pane increments this epoch even when a reconnect reuses its client.
     // Old snapshots and private task details must never enter the new scope.
     connectionClient: host.client,
@@ -640,6 +663,7 @@ async function cancelBackgroundTask(
 function toggleBackgroundTasks(host: BackgroundTasksHost) {
   const state = getBackgroundTasksState(host);
   state.collapsed = !state.collapsed;
+  storeBackgroundTasksCollapsedPreference(state.collapsed);
   host.requestUpdate?.();
 }
 
