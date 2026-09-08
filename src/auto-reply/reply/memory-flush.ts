@@ -67,7 +67,7 @@ export function resolveResponsesServerCompactionThreshold(params: {
   cfg?: OpenClawConfig;
   provider?: string;
   modelId?: string;
-}): Promise<number | undefined> {
+}): number | undefined {
   const provider = params.provider?.trim();
   const modelId = params.modelId?.trim();
   if (!provider || !modelId) {
