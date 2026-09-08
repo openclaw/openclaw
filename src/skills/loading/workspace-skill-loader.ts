@@ -1,4 +1,3 @@
-// Workspace skill loading turns validated discovery candidates into source-aware skill entries.
 import path from "node:path";
 import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { tryResolveAmbientOwnerAgentId } from "../../agents/agent-scope-config.js";
@@ -53,6 +52,7 @@ const reportedSkillCollisions = new Map<string, true>();
 
 type WorkspaceSkillLoadOptions = {
   executionWorkspaceDir?: string;
+  librarySelections?: SkillSnapshot["librarySelections"];
   config?: OpenClawConfig;
   managedSkillsDir?: string;
   bundledSkillsDir?: string;
@@ -329,6 +329,9 @@ function loadSkillEntries(workspaceDir: string, opts?: WorkspaceSkillLoadOptions
       entries.push(entry);
     }
   }
+  if (opts?.librarySelections?.length) {
+    entries.push(...loadSkillLibrarySelection(opts.librarySelections));
+  }
   return entries;
 }
 
@@ -350,6 +353,8 @@ function resolveEffectiveWorkspaceSkillFilter(opts?: {
 export function resolveWorkspaceSkillPromptEntries(
   workspaceDir: string,
   opts?: {
+    executionWorkspaceDir?: string;
+    librarySelections?: SkillSnapshot["librarySelections"];
     config?: OpenClawConfig;
     managedSkillsDir?: string;
     bundledSkillsDir?: string;
@@ -417,11 +422,7 @@ export function loadVisibleSkills(
     pluginMetadataSnapshot?: PluginMetadataSnapshot;
   },
 ): SkillEntry[] {
-  let entries = loadSkillEntries(workspaceDir, opts);
-  if (opts?.librarySelections?.length) {
-    // Pins are session-owned: append before filtering without mutating the workspace cache.
-    entries = entries.concat(loadSkillLibrarySelection(opts.librarySelections));
-  }
+  const entries = loadSkillEntries(workspaceDir, opts);
   const effectiveSkillFilter = resolveEffectiveWorkspaceSkillFilter(opts);
   return filterSkillEntries(
     entries,

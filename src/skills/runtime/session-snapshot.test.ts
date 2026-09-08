@@ -21,7 +21,6 @@ const {
   buildWorkspaceSkillSnapshotMock,
   ensureSkillsWatcherMock,
   getSkillsSnapshotVersionMock,
-  loadWorkspaceSkillsMock,
   shouldRefreshSnapshotForVersionMock,
 } = vi.hoisted(() => ({
   buildWorkspaceSkillSnapshotMock: vi.fn((..._args: unknown[]) => ({
@@ -31,16 +30,9 @@ const {
   })),
   ensureSkillsWatcherMock: vi.fn(),
   getSkillsSnapshotVersionMock: vi.fn(() => 1),
-  loadWorkspaceSkillsMock: vi.fn(
-    (_workspaceDir: string, _params: { pluginMetadataSnapshot?: PluginMetadataSnapshot }) => [],
-  ),
   shouldRefreshSnapshotForVersionMock: vi.fn((cached = 0, next = 0) =>
     next === 0 ? cached > 0 : cached < next,
   ),
-}));
-
-vi.mock("../loading/workspace-skill-loader.js", () => ({
-  loadWorkspaceSkills: loadWorkspaceSkillsMock,
 }));
 
 vi.mock("../loading/workspace-skill-prompt.js", () => ({
@@ -81,9 +73,9 @@ describe("resolveReusableWorkspaceSkillSnapshot", () => {
       pluginMetadataSnapshot,
     });
 
-    expect(loadWorkspaceSkillsMock).toHaveBeenCalledOnce();
-    expect(loadWorkspaceSkillsMock.mock.calls[0]?.[1].pluginMetadataSnapshot).toBe(
-      pluginMetadataSnapshot,
+    expect(buildWorkspaceSkillSnapshotMock).toHaveBeenCalledWith(
+      TEST_WORKSPACE_DIR,
+      expect.objectContaining({ pluginMetadataSnapshot }),
     );
     expect(ensureSkillsWatcherMock).toHaveBeenCalledWith(
       expect.objectContaining({ pluginMetadataSnapshot }),

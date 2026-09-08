@@ -1,11 +1,8 @@
-// Session snapshot helpers capture and restore runtime skill state for sessions.
 import { stableStringify } from "@openclaw/normalization-core";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { matchesSkillFilter } from "../discovery/filter.js";
-import { loadSkillLibrarySelection } from "../library/selection.js";
-import { loadWorkspaceSkills } from "../loading/workspace-skill-loader.js";
 import { buildSkillSnapshot } from "../loading/workspace-skill-prompt.js";
 import { normalizeWorkspaceSkillRoots } from "../loading/workspace-skill-roots.js";
 import { WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION } from "../types.js";
@@ -53,9 +50,7 @@ export function resolveReusableWorkspaceSkillSnapshot(
 ): ReusableSkillSnapshotResult {
   const normalizedRoots = normalizeWorkspaceSkillRoots({
     agentWorkspaceDir: params.workspaceDir,
-    ...(params.executionWorkspaceDir
-      ? { executionWorkspaceDir: params.executionWorkspaceDir }
-      : {}),
+    executionWorkspaceDir: params.executionWorkspaceDir,
   });
   const skillRoots = normalizedRoots.executionWorkspaceDir
     ? {
@@ -103,21 +98,10 @@ export function resolveReusableWorkspaceSkillSnapshot(
     !matchesSkillFilter(params.existingSnapshot?.skillFilter, params.skillFilter) ||
     skillOverridesChanged;
   const buildSnapshot = () => {
-    const entries = loadWorkspaceSkills(normalizedRoots.agentWorkspaceDir, {
+    const snapshot = buildSkillSnapshot(normalizedRoots.agentWorkspaceDir, {
       executionWorkspaceDir: normalizedRoots.executionWorkspaceDir,
+      librarySelections,
       config: params.config,
-      agentId: params.agentId,
-      skillFilter: params.skillFilter,
-      skillOverrides: params.skillOverrides,
-      eligibility: params.eligibility,
-      pluginMetadataSnapshot: params.pluginMetadataSnapshot,
-    });
-    if (librarySelections?.length) {
-      entries.push(...loadSkillLibrarySelection(librarySelections));
-    }
-    const snapshot = buildSkillSnapshot(params.workspaceDir, {
-      config: params.config,
-      entries,
       preserveEntryOrder: Boolean(skillRoots),
       agentId: params.agentId,
       skillFilter: params.skillFilter,
