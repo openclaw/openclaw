@@ -112,7 +112,10 @@ function clearEmergencyStopInternal(): void {
   emergencyStopReason = undefined;
 }
 
-/** Registers operator handlers with the isolated operator module. */
+/**
+ * Registers operator handlers with the isolated operator module.
+ * Can only be called once during process startup by local-security-gateway-operator.ts.
+ */
 export function registerOperatorBridge(
   secretSymbol: Symbol,
   binder: {

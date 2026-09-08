@@ -199,6 +199,7 @@ export async function runBeforeToolCallHook(args: {
       };
     }
 
+
     if (!initialCorePolicyResult && !shouldRunTrustedPolicies && !hasBeforeToolCallHooks) {
       return withLoopWarning({ blocked: false, params });
     }
