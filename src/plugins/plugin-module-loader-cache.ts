@@ -285,7 +285,10 @@ function createPluginModuleLoader(params: {
     return loaded;
   };
   // When the caller has explicitly opted out of native loading, route every
-  // target through jiti so caller-provided alias rewrites still apply.
+  // target through jiti so caller-provided alias rewrites still apply. jiti's
+  // module cache is Node's CJS require cache: a natively required ESM entry is
+  // visible there, but its ESM-imported chunks are not, so this graph re-evaluates
+  // shared chunks beside a native graph. Callers keep the two graphs disjoint.
   if (!params.tryNative) {
     return (target) =>
       loadCachedTarget(target, () => {
