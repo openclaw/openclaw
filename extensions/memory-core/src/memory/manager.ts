@@ -582,6 +582,94 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     return state;
   }
 
+  /**
+   * Fred context-service seam.
+   *
+   * On this deployment the native OpenClaw memory search is dead (vector
+   * provider = none and fts5 is stripped from the Node build), so
+   * {@link search} returns no memory-corpus hits. A separate context-service
+   * HTTP API holds the ingested memory corpus and answers `POST /getContext`.
+   *
+   * This method routes memory-corpus searches to that service. It returns a
+   * `MemorySearchResult[]` on success (short-circuiting the dead native path)
+   * or `undefined` to fall through to the native body. It is dependency-free
+   * (global `fetch`), bounded by a short abort timeout, and never throws.
+   *
+   * This replaces the runtime dist-patch
+   * `docker/patches/patch-memory-context-service.py`. Once this method exists
+   * in the built dist the patch is a no-op (idempotent marker match).
+   */
+  private async __fredContextServiceSearch(
+    query: string,
+    opts?: {
+      maxResults?: number;
+      minScore?: number;
+      sessionKey?: string;
+      qmdSearchModeOverride?: "query" | "search" | "vsearch";
+      onDebug?: (debug: MemorySearchRuntimeDebug) => void;
+      sources?: MemorySource[];
+      signal?: AbortSignal;
+    },
+  ): Promise<MemorySearchResult[] | undefined> {
+    try {
+      if (typeof fetch !== "function") {
+        return undefined;
+      }
+      // Only serve searches that include the memory corpus. Sessions-only (or
+      // other non-memory) source filters fall through to the native path.
+      const sources = opts?.sources;
+      if (Array.isArray(sources) && sources.length > 0 && !sources.includes("memory")) {
+        return undefined;
+      }
+      const rawBase = process.env.FRED_CONTEXT_SERVICE_URL || "http://context-service:8090";
+      const base = rawBase.replace(/\/+$/, "");
+      const k = typeof opts?.maxResults === "number" && opts.maxResults > 0 ? opts.maxResults : 8;
+      const res = await fetch(`${base}/getContext`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ query, k, mode: "hybrid" }),
+        signal: AbortSignal.timeout(800),
+      });
+      if (!res || !res.ok) {
+        return undefined;
+      }
+      const data = (await res.json()) as { hits?: unknown };
+      const hits = Array.isArray(data.hits) ? data.hits : [];
+      const mapped: MemorySearchResult[] = hits.map(
+        (raw): MemorySearchResult & { id: string; text: string } => {
+          const hit = (raw ?? {}) as {
+            line?: unknown;
+            source?: unknown;
+            text?: unknown;
+            score?: unknown;
+          };
+          const line = typeof hit.line === "number" ? hit.line : 1;
+          const src = typeof hit.source === "string" && hit.source ? hit.source : "memory";
+          const text = typeof hit.text === "string" ? hit.text : "";
+          const score = typeof hit.score === "number" ? hit.score : 0;
+          return {
+            id: `${src}:${line}`,
+            source: "memory",
+            path: src,
+            startLine: line,
+            endLine: line,
+            score,
+            textScore: score,
+            snippet: text,
+            text,
+          };
+        },
+      );
+      const limit =
+        typeof opts?.maxResults === "number" && opts.maxResults > 0
+          ? opts.maxResults
+          : mapped.length;
+      return mapped.slice(0, limit);
+    } catch {
+      return undefined;
+    }
+  }
+
   async search(
     query: string,
     opts?: {
@@ -597,6 +685,15 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     },
   ): Promise<MemorySearchResult[]> {
     opts?.onDebug?.({ backend: "builtin" });
+    try {
+      // oxlint-disable-next-line eslint/no-underscore-dangle -- stable marker consumed by the retiring context-service dist-patch (idempotency).
+      const ctx = await this.__fredContextServiceSearch(query, opts);
+      if (ctx !== undefined) {
+        return ctx;
+      }
+    } catch {
+      // fall through to native search
+    }
     if (this.providerRequirement.mode === "required") {
       await this.ensureProviderInitialized();
       this.assertRequiredProviderAvailable("search");
