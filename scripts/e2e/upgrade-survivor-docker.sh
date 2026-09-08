@@ -86,8 +86,26 @@ if [ "$UPGRADE_TARGET_TRAIN" = extended-stable ]; then
     exit 2
   fi
   UPGRADE_RUNNER="$UPGRADE_SCENARIO_DIR/run.sh"
+  UPGRADE_NPM_PUBLISH_PLAN="$(openclaw_resolve_frozen_target_file \
+    "$ROOT_DIR" scripts/lib/npm-publish-plan.mjs)"
+  UPGRADE_WINDOWS_HELPERS="$(openclaw_resolve_frozen_target_file \
+    "$ROOT_DIR" scripts/windows-cmd-helpers.mjs)"
+  DOCKER_E2E_WINDOWS_HELPERS_PATH="$UPGRADE_WINDOWS_HELPERS"
+  UPGRADE_BOUNDED_RESPONSE="$(openclaw_resolve_frozen_target_file \
+    "$ROOT_DIR" scripts/lib/bounded-response.mjs)"
+  UPGRADE_PLUGIN_INDEX="$(openclaw_resolve_frozen_target_file \
+    "$ROOT_DIR" scripts/e2e/lib/plugin-index-sqlite.mjs)"
+  UPGRADE_ENV_LIMITS="$(openclaw_resolve_frozen_target_file \
+    "$ROOT_DIR" scripts/e2e/lib/env-limits.mjs)"
+  UPGRADE_TEXT_FILE_UTILS="$(openclaw_resolve_frozen_target_file \
+    "$ROOT_DIR" scripts/e2e/lib/text-file-utils.mjs)"
   UPGRADE_SCENARIO_ARGS+=(
     -v "$UPGRADE_SCENARIO_DIR:/app/scripts/e2e/lib/upgrade-survivor:ro"
+    -v "$UPGRADE_NPM_PUBLISH_PLAN:/app/scripts/lib/npm-publish-plan.mjs:ro"
+    -v "$UPGRADE_BOUNDED_RESPONSE:/app/scripts/lib/bounded-response.mjs:ro"
+    -v "$UPGRADE_PLUGIN_INDEX:/app/scripts/e2e/lib/plugin-index-sqlite.mjs:ro"
+    -v "$UPGRADE_ENV_LIMITS:/app/scripts/e2e/lib/env-limits.mjs:ro"
+    -v "$UPGRADE_TEXT_FILE_UTILS:/app/scripts/e2e/lib/text-file-utils.mjs:ro"
   )
 fi
 
