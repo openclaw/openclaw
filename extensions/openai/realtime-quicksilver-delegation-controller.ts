@@ -411,6 +411,7 @@ export class OpenAIQuicksilverDelegationController {
       });
       if (signal.aborted) {
         runner.claimAppend?.();
+        this.revokeRequesterFinal();
         return;
       }
       text = boundOpenAIQuicksilverDelegationResult(result.text);
@@ -423,6 +424,7 @@ export class OpenAIQuicksilverDelegationController {
         extractErrorCode(error) === "ABORT_ERR"
       ) {
         runner.claimAppend?.();
+        this.revokeRequesterFinal();
         return;
       }
       const reason = this.formatErrorMessage(error).replaceAll(/\s+/g, " ").trim();
@@ -437,14 +439,17 @@ export class OpenAIQuicksilverDelegationController {
     }
     if (signal.aborted || this.stopped) {
       runner.claimAppend?.();
+      this.revokeRequesterFinal();
       return;
     }
     const claim = failed ? runner.claimFailureAppend : runner.claimAppend;
     if (claim) {
       if (!claim()) {
+        this.revokeRequesterFinal();
         return;
       }
     } else if (this.completionClaimsAdopted) {
+      this.revokeRequesterFinal();
       this.fail(
         new Error(
           failed
@@ -456,13 +461,18 @@ export class OpenAIQuicksilverDelegationController {
     }
     const delegationId = this.activeDelegationId;
     if (!delegationId) {
+      this.revokeRequesterFinal();
       return;
     }
-    this.sendAppend(
-      { type: "delegation.context.append", delegation_item_id: delegationId },
-      text,
-      "speakable",
-    );
+    if (
+      !this.sendAppend(
+        { type: "delegation.context.append", delegation_item_id: delegationId },
+        text,
+        "speakable",
+      )
+    ) {
+      this.revokeRequesterFinal();
+    }
   }
 
   private appendRequesterFinal(generation: number, text: string): boolean {

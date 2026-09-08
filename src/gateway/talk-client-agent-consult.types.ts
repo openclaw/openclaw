@@ -26,6 +26,7 @@ export type LifecycleBoundTalkAgentConsult = ((
   signal: AbortSignal,
   ready?: () => Promise<void>,
   assertCurrent?: () => void,
+  requesterFinal?: TalkRequesterFinalBinding,
 ) => Promise<{ text: string; yielded?: true }>) &
   TalkAgentConsultLifecycleMethods;
 

@@ -151,6 +151,38 @@ describe("requester final attachment", () => {
     expect(second).not.toHaveBeenCalled();
   });
 
+  it("exact registration revocation cannot delete a newer replacement", () => {
+    const first = vi.fn(() => true);
+    const second = vi.fn(() => true);
+    const firstRegistration = registerRequesterFinalAttachment({ ...base, append: first });
+    registerRequesterFinalAttachment({
+      ...base,
+      requesterTurnRunId: "run-new",
+      append: second,
+    });
+
+    firstRegistration.revoke();
+    expect(
+      promoteRequesterFinalAttachment({
+        requesterAgentId: base.requesterAgentId,
+        requesterSessionKey: base.requesterSessionKey,
+        requesterTurnRunId: "run-new",
+        batchRunIds: ["run-new-child"],
+        rearmGeneration: 3,
+      }),
+    ).toBe(true);
+    expect(
+      consumeRequesterFinalAttachment({
+        ...base,
+        batchRunIds: ["run-new-child"],
+        rearmGeneration: 3,
+        text: "new final",
+      }),
+    ).toBe("appended");
+    expect(first).not.toHaveBeenCalled();
+    expect(second).toHaveBeenCalledExactlyOnceWith("new final");
+  });
+
   it("consumes a throwing callback without changing durable completion", () => {
     registerRequesterFinalAttachment({
       ...base,

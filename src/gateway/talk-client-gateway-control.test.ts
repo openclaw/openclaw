@@ -566,6 +566,64 @@ describe("Talk client Gateway control owner", () => {
     },
   );
 
+  it("rejects a replaced outer owner and forwards exact late-final revocation", async () => {
+    const claimAppend = vi.fn(() => true);
+    const revokeRequesterFinal = vi.fn();
+    const append = vi.fn(() => true);
+    const requesterFinal: { append: (text: string) => boolean } = { append };
+    const runAgentConsult = Object.assign(
+      vi.fn(
+        async (
+          _args: unknown,
+          _signal: AbortSignal,
+          ready?: () => Promise<void>,
+          _assertCurrent?: () => void,
+          receivedRequesterFinal?: typeof requesterFinal,
+        ) => {
+          await ready?.();
+          expect(receivedRequesterFinal).toBe(requesterFinal);
+          return { text: "done" };
+        },
+      ),
+      {
+        claimAppend,
+        claimFailureAppend: vi.fn(() => true),
+        revokeRequesterFinal,
+      },
+    );
+    const common = {
+      voiceSessionId: "voice-replaced-final",
+      sessionTarget,
+      connId: "conn-replaced-final",
+      context: controlContext(),
+      runToolAgentConsult: vi.fn(async () => ({ text: "done" })),
+      runAgentConsult,
+      appendTranscript: vi.fn(async () => undefined),
+      flushTranscript: vi.fn(async () => undefined),
+      closeLogicalSession: vi.fn(async () => undefined),
+    };
+    const owner = createTalkClientGatewayControlOwner(common);
+    const replacement = createTalkClientGatewayControlOwner(common);
+    await owner.adoptProvider(vi.fn(async () => undefined));
+    owner.activate();
+    owner.runAgentConsult.adoptCompletionClaims?.();
+    await expect(
+      owner.runAgentConsult({ prompt: "work", requesterFinal } as never),
+    ).resolves.toEqual({ text: "done" });
+    await replacement.adoptProvider(vi.fn(async () => undefined));
+    replacement.activate();
+
+    try {
+      expect(owner.runAgentConsult.claimAppend?.()).toBe(false);
+      owner.runAgentConsult.revokeRequesterFinal?.();
+      expect(claimAppend).toHaveBeenCalledOnce();
+      expect(revokeRequesterFinal).toHaveBeenCalledOnce();
+    } finally {
+      await owner.close();
+      await replacement.close();
+    }
+  });
+
   it("keeps delegation steering pending until transcript admission publishes the backend", async () => {
     const flush = createDeferred();
     const finish = createDeferred<{ text: string }>();

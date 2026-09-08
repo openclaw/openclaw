@@ -233,6 +233,28 @@ describe("talk realtime gateway relay", () => {
     expect(claimFailureAppend).toHaveBeenCalledOnce();
   });
 
+  it("forwards requester-final revocation through the relay wrapper", () => {
+    const revokeRequesterFinal = vi.fn();
+    const runPrompt = Object.assign(
+      vi.fn<RealtimeVoiceAgentConsultRunner>(async () => ({ text: "done" })),
+      {
+        adoptCompletionClaims: vi.fn(),
+        claimAppend: vi.fn(() => true),
+        claimFailureAppend: vi.fn(() => true),
+        revokeRequesterFinal,
+      },
+    );
+    const runAgentConsult = bindTalkRealtimeRelayAgentConsult(runPrompt as never, () => true);
+
+    (
+      runAgentConsult as RealtimeVoiceAgentConsultRunner & {
+        revokeRequesterFinal?: () => void;
+      }
+    ).revokeRequesterFinal?.();
+
+    expect(revokeRequesterFinal).toHaveBeenCalledOnce();
+  });
+
   beforeEach(async () => {
     testState = await createOpenClawTestState({
       label: "talk-realtime-relay",

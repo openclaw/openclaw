@@ -1,6 +1,7 @@
 import type { OperationalRunInstanceRef } from "../agents/admitted-run-context.js";
 import type { EmbeddedRunCompletionRegistration } from "../agents/embedded-agent-runner/run-state.js";
 import { prepareEmbeddedAgentRunCompletionClaim } from "../agents/embedded-agent-runner/runs.js";
+import { registerRequesterFinalAttachment } from "../agents/subagents/requester-final-attachment.js";
 import { resolveCommandAuthorization } from "../auto-reply/command-auth.js";
 import { resolveInboundReplyToolAuthorityOverlay } from "../auto-reply/reply/reply-tool-authority.js";
 import { normalizeTalkSection } from "../config/talk.js";
@@ -9,7 +10,6 @@ import {
   getAgentEventLifecycleGeneration,
   isAgentEventLifecycleGenerationCurrent,
 } from "../infra/agent-events.js";
-import { registerRequesterFinalAttachment } from "../agents/subagents/requester-final-attachment.js";
 import { createPluginRuntime } from "../plugins/runtime/index.js";
 import {
   GatewayDrainingError,
@@ -38,15 +38,15 @@ import {
 } from "../talk/client-voice-session.js";
 import { registerChatAbortController } from "./chat-abort.js";
 import type { GatewayRequestContext } from "./server-methods/shared-types.js";
-import {
-  resolveTalkAgentConsultAuthority,
-  type TalkAgentConsultAuthority,
-} from "./talk-client-gateway-control.js";
 import type {
   TalkAgentConsultRequest,
   TalkRequesterFinalBinding,
   TalkRequesterFinalRegistration,
 } from "./talk-client-agent-consult.types.js";
+import {
+  resolveTalkAgentConsultAuthority,
+  type TalkAgentConsultAuthority,
+} from "./talk-client-gateway-control.js";
 import type { PreparedTalkSessionTarget } from "./talk-session-target.types.js";
 
 const loadTalkAgentExecution = createLazyRuntimeModule(async () => {
@@ -336,7 +336,7 @@ export function createTalkClientAgentConsultRunner(params: {
               if (owner.requesterFinal) {
                 const registration = registerRequesterFinalAttachment({
                   requesterAgentId: agentId,
-                  requesterSessionKey: sessionKey,
+                  requesterSessionKey: canonicalKey,
                   requesterSessionId: sessionId,
                   requesterTurnRunId: runId,
                   lifecycleGeneration: owner.lifecycleGeneration,
@@ -415,9 +415,9 @@ export function createTalkClientAgentConsultRunner(params: {
       registration.releaseProvisional();
     } else {
       registration.revoke();
-    }
-    if (requesterFinalRegistration === registration) {
-      requesterFinalRegistration = undefined;
+      if (requesterFinalRegistration === registration) {
+        requesterFinalRegistration = undefined;
+      }
     }
     owner.requesterFinalRegistration = undefined;
   };

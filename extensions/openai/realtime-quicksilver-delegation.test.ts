@@ -708,10 +708,22 @@ describe("GPT-Live sideband protocol", () => {
       parseSent(socket).filter(
         (event) =>
           event.type === "delegation.context.append" &&
-          event.delegation_item_id === "delegation-latest" &&
-          event.content[0]?.text === "latest result",
+          event.delegation_item_id === "delegation-latest",
       ),
-    ).toHaveLength(1);
+    ).toEqual([
+      {
+        type: "delegation.context.append",
+        delegation_item_id: "delegation-latest",
+        channel: "speakable",
+        content: [{ type: "input_text", text: "work continues" }],
+      },
+      {
+        type: "delegation.context.append",
+        delegation_item_id: "delegation-latest",
+        channel: "speakable",
+        content: [{ type: "input_text", text: "latest result" }],
+      },
+    ]);
     expect(
       parseSent(socket).filter(
         (event) =>
@@ -723,18 +735,16 @@ describe("GPT-Live sideband protocol", () => {
 
   it("drops queued work when steering fails", async () => {
     let appendRequesterFinal: ((text: string) => boolean) | undefined;
-    const runAgentConsult = vi.fn<ConsultRunner>(
-      async ({ requesterFinal, signal }) => {
-        appendRequesterFinal = requesterFinal?.append;
-        return await new Promise<{ text: string }>((_resolve, reject) => {
-          signal?.addEventListener(
-            "abort",
-            () => reject(signal.reason instanceof Error ? signal.reason : new Error("aborted")),
-            { once: true },
-          );
-        });
-      },
-    );
+    const runAgentConsult = vi.fn<ConsultRunner>(async ({ requesterFinal, signal }) => {
+      appendRequesterFinal = requesterFinal?.append;
+      return await new Promise<{ text: string }>((_resolve, reject) => {
+        signal?.addEventListener(
+          "abort",
+          () => reject(signal.reason instanceof Error ? signal.reason : new Error("aborted")),
+          { once: true },
+        );
+      });
+    });
     let rejectSteering!: (error: Error) => void;
     const steering = new Promise<{ text: string }>((_resolve, reject) => {
       rejectSteering = reject;
@@ -762,14 +772,22 @@ describe("GPT-Live sideband protocol", () => {
 
   it("rejects a revoked completion before provider output", async () => {
     const claimAppend = vi.fn(() => false);
+    const revokeRequesterFinal = vi.fn();
+    let appendRequesterFinal: ((text: string) => boolean) | undefined;
     const { controller, socket } = createDelegationHarness({
       claimAppend,
-      runAgentConsult: vi.fn(async () => ({ text: "stale result" })),
+      revokeRequesterFinal,
+      runAgentConsult: vi.fn(async ({ requesterFinal }) => {
+        appendRequesterFinal = requesterFinal?.append;
+        return { text: "stale result" };
+      }),
     });
 
     delegate(controller, "delegation-stale", "stale task");
 
     await vi.waitFor(() => expect(claimAppend).toHaveBeenCalledOnce());
+    expect(revokeRequesterFinal).toHaveBeenCalledOnce();
+    expect(appendRequesterFinal?.("late stale result")).toBe(false);
     expect(socket.sent).toEqual([]);
   });
 

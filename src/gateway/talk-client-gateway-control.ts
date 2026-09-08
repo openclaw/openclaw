@@ -37,6 +37,7 @@ import { formatError } from "./server-utils.js";
 import type {
   LifecycleBoundTalkAgentConsult,
   ReusableTalkAgentConsult,
+  TalkAgentConsultRequest,
   TalkAgentConsultLifecycleMethods,
 } from "./talk-client-agent-consult.types.js";
 import { registerTalkConnectionCleanup } from "./talk-session-registry.js";
@@ -416,11 +417,22 @@ export function createTalkClientGatewayControlOwner(params: {
     warn,
   });
   let completionClaimsAdopted = false;
+  const claimForCurrentOwner = (claim: "claimAppend" | "claimFailureAppend"): boolean => {
+    let current = true;
+    try {
+      assertActive();
+    } catch {
+      current = false;
+    }
+    const claimed = params.runAgentConsult[claim]?.() === true;
+    return current && claimed;
+  };
   const runAgentConsult = Object.assign(
     async ({
       prompt,
       signal: consultSignal = new AbortController().signal,
-    }: Parameters<RealtimeVoiceAgentConsultRunner>[0]) => {
+      requesterFinal,
+    }: TalkAgentConsultRequest) => {
       assertActive();
       const consultId = Symbol("provider-consult");
       const controller = new AbortController();
@@ -435,6 +447,7 @@ export function createTalkClientGatewayControlOwner(params: {
             delegatedSignal,
             () => awaitProviderConsultReadiness(delegatedSignal),
             assertActive,
+            requesterFinal,
           );
         }
         await awaitProviderConsultReadiness(delegatedSignal);
@@ -453,26 +466,8 @@ export function createTalkClientGatewayControlOwner(params: {
       adoptCompletionClaims: () => {
         completionClaimsAdopted = true;
       },
-      claimAppend: () => {
-        let current = true;
-        try {
-          assertActive();
-        } catch {
-          current = false;
-        }
-        const claimed = params.runAgentConsult.claimAppend?.() === true;
-        return current && claimed;
-      },
-      claimFailureAppend: () => {
-        let current = true;
-        try {
-          assertActive();
-        } catch {
-          current = false;
-        }
-        const claimed = params.runAgentConsult.claimFailureAppend?.() === true;
-        return current && claimed;
-      },
+      claimAppend: () => claimForCurrentOwner("claimAppend"),
+      claimFailureAppend: () => claimForCurrentOwner("claimFailureAppend"),
       revokeRequesterFinal: () => params.runAgentConsult.revokeRequesterFinal?.(),
       steer: params.runAgentConsult.steer
         ? async (request: Parameters<RealtimeVoiceAgentConsultRunner>[0]) => {
