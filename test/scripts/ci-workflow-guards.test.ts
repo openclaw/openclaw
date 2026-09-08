@@ -9055,8 +9055,7 @@ server.listen(0, "127.0.0.1", () => {
       "Setup Node",
       "Clone publish repo",
       "Sync docs into publish repo",
-      "Install docs MDX checker dependency",
-      "Check publish docs MDX",
+      "Cache successful docs validation",
       "Commit publish repo sync",
     ]);
     expect(steps[3]).toEqual({
@@ -9074,9 +9073,13 @@ server.listen(0, "127.0.0.1", () => {
         "persist-credentials": false,
       },
     });
-    expect(steps.slice(1).every((step) => step.if === "env.OPENCLAW_DOCS_SYNC_TOKEN != ''")).toBe(
-      true,
-    );
+    for (const step of steps.slice(1)) {
+      expect(step.if).toBe(
+        step.name === "Cache successful docs validation"
+          ? "env.OPENCLAW_DOCS_SYNC_TOKEN != '' && github.repository == 'openclaw/openclaw' && github.ref == 'refs/heads/main'"
+          : "env.OPENCLAW_DOCS_SYNC_TOKEN != ''",
+      );
+    }
     expect(source).not.toContain("setup-python");
     expect(workflow.concurrency).toEqual({
       group:
@@ -9085,8 +9088,8 @@ server.listen(0, "127.0.0.1", () => {
     });
     const clone = expectDefined(steps[5]?.run, "clone policy");
     const sync = expectDefined(steps[6]?.run, "sync body");
-    const publish = expectDefined(steps[9]?.run, "publication policy");
-    expect(steps[9]?.["working-directory"]).toBe("publish");
+    const publish = expectDefined(steps[8]?.run, "publication policy");
+    expect(steps[8]?.["working-directory"]).toBe("publish");
     for (const policy of [clone, publish]) {
       expect(
         policy.startsWith(
