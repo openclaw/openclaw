@@ -211,7 +211,7 @@ describe.each(["chat", "new-session"] as const)("%s human mentions", (kind) => {
     view.edit("@Al", { data: "@Al" });
     await vi.advanceTimersByTimeAsync(150);
     expect(view.container.querySelectorAll('[role="option"]')).toHaveLength(2);
-    expect(view.container.textContent).toContain("Offline");
+    expect(view.container.textContent).not.toContain("Offline");
     view.key("ArrowDown");
     expect(view.key("Enter").defaultPrevented).toBe(true);
     expect(view.send).not.toHaveBeenCalled();
