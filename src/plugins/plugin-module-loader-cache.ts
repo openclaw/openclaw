@@ -53,7 +53,6 @@ type PluginModuleLoaderCacheEntry = {
   resolveAlias: (specifier: string) => string | undefined;
   tryNative: boolean;
   transformOpenClawDependencies: boolean;
-  cacheKey: string;
   scopedCacheKey: string;
 };
 type PluginModuleLoaderStatsSnapshot = {
@@ -189,7 +188,6 @@ function resolvePluginModuleLoaderCacheEntry(
     resolveAlias: aliases.resolveAlias,
     tryNative,
     transformOpenClawDependencies,
-    cacheKey,
     scopedCacheKey,
   };
 }
