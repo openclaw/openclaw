@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { assert, describe, expect, it } from "vitest";
 import {
   captureUpdateFinalizationDoctorOutput,
   UpdateFinalizationOutput,
@@ -23,7 +23,8 @@ describe("finalization timeout output", () => {
     expect(JSON.stringify(snapshot)).toContain("active database-check");
     expect(JSON.stringify(snapshot)).not.toContain("synthetic");
     expect(JSON.stringify(snapshot)).not.toContain("�");
-    expect(Buffer.byteLength(snapshot.stderr.excerpt!)).toBeLessThanOrEqual(256);
+    assert("excerpt" in snapshot.stderr);
+    expect(Buffer.byteLength(snapshot.stderr.excerpt)).toBeLessThanOrEqual(256);
   });
 
   it.each([false, true])(
@@ -49,7 +50,9 @@ describe("finalization timeout output", () => {
     await output.run(async () => {
       const capture = captureUpdateFinalizationDoctorOutput("post-plugin")!;
       capture(Buffer.alloc(64 * 1024, "x"), "stdout");
-      expect(Buffer.byteLength(output.snapshot()!.stdout.excerpt!)).toBeLessThanOrEqual(256);
+      const boundary = output.snapshot()!.stdout;
+      assert("excerpt" in boundary);
+      expect(Buffer.byteLength(boundary.excerpt)).toBeLessThanOrEqual(256);
       capture(Buffer.from("password=fixture-private"), "stdout");
       capture(Buffer.from("active validation"), "stderr");
     });
