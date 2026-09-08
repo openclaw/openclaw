@@ -1815,7 +1815,7 @@ describe("sendMessageTelegram", () => {
 
   it("chunks markdown above the Telegram text-message limit", async () => {
     botApi.sendMessage.mockResolvedValue({ message_id: 54, chat: { id: "123" } });
-    const markdown = `# Long\n\n${"**section** with _style_ and `code`\n".repeat(3000)}`;
+    const markdown = `# Long\n\n${"**section** with _style_ and `code`\n".repeat(200)}`;
 
     await sendMessageTelegram("123", markdown, {
       cfg: TELEGRAM_TEST_CFG,
@@ -1827,6 +1827,9 @@ describe("sendMessageTelegram", () => {
     const joinedChunks = chunks.join("");
     expect(joinedChunks).toContain("Long");
     expect(joinedChunks).toContain("section");
+    expect(joinedChunks.match(/<b>section<\/b>/g)).toHaveLength(200);
+    expect(joinedChunks.match(/<i>style<\/i>/g)).toHaveLength(200);
+    expect(joinedChunks.match(/<code>code<\/code>/g)).toHaveLength(200);
     expect(chunks.every((chunk) => chunk.length <= 4000)).toBe(true);
     expect(botRawApi.sendRichMessage).not.toHaveBeenCalled();
   });

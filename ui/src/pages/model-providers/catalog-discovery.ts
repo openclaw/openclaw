@@ -1,6 +1,10 @@
-// Reads published model choices when a Models settings picker opens.
-// This controller owns its pending read; the page's explicit Refresh action
-// owns provider acquisition. Neither path changes the saved selection.
+// Demand-driven catalog discovery for the Models settings page.
+//
+// The initial page load reads the published catalog (configured models only)
+// so full discovery stays out of first navigation. Opening a default-model picker
+// signals interest; this controller explicitly refreshes the Gateway-owned catalog
+// and merges it in without disturbing the saved selection. Pending opens share
+// this page's request; the Gateway owns concurrent provider acquisition.
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { loadModelCatalog, modelCatalogRefreshError } from "../../lib/model-catalog-store.ts";
@@ -14,13 +18,13 @@ type DiscoveryGateway = {
 };
 
 export type CatalogDiscoveryController = {
-  /** Whether a catalog read is currently in flight. */
+  /** Whether a discovery request is currently in flight. */
   readonly discovering: boolean;
-  /** A user-facing retry hint when the read failed; null while clean. */
+  /** A user-facing retry hint when discovery failed; null while clean. */
   readonly error: string | null;
   /** Fired when a default-model picker opens. */
   openPicker: () => void;
-  /** Retries a failed catalog read. */
+  /** Retries a failed discovery. */
   retry: () => void;
   /** Resets in-flight/error state (e.g. on agent switch). */
   reset: () => void;
@@ -87,6 +91,7 @@ export function createCatalogDiscoveryController(
     try {
       const result = await loadModelCatalog(client, {
         agentId,
+        refresh: true,
         signal: request.signal,
       });
       if (ownsResult()) {

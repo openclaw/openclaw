@@ -4345,9 +4345,14 @@ NODE
         workflowJob(STABLE_MAIN_CLOSEOUT_WORKFLOW, "verify"),
         "Verify release workflow evidence",
       );
-      const script = evidenceStep.run?.match(
-        /node --input-type=module - "\$RUNNER_TEMP\/release-publish-run.json" <<'NODE'\n([\s\S]*?)\nNODE/u,
-      )?.[1];
+      const script = evidenceStep.run
+        ?.match(
+          /node --input-type=module - "\$RUNNER_TEMP\/release-publish-run.json"[^\n]* <<'NODE'\n([\s\S]*?)\nNODE/u,
+        )?.[1]
+        ?.replace(
+          '"./.closeout-tooling/scripts/lib/stable-release-closeout.mjs"',
+          JSON.stringify(pathToFileURL(resolve("scripts/lib/stable-release-closeout.mjs")).href),
+        );
       expect(script).toBeDefined();
       const root = tempDirs.make("stable-closeout-recovery-");
       const runPath = join(root, "run.json");
@@ -4371,11 +4376,23 @@ NODE
           jobs,
         }),
       );
-      const result = spawnSync(process.execPath, ["--input-type=module", "-", runPath], {
-        input: script,
-        encoding: "utf8",
-        env: { ...process.env, ALLOW_FAILED_PUBLISH_RECOVERY: "true" },
-      });
+      const evidencePath = join(root, "evidence.json");
+      const manifestPath = join(root, "manifest.json");
+      writeFileSync(evidencePath, JSON.stringify({ releasePublishRunId: "12" }));
+      writeFileSync(
+        `${evidencePath}.sha256`,
+        `${createHash("sha256").update(readFileSync(evidencePath)).digest("hex")}  evidence.json\n`,
+      );
+      writeFileSync(manifestPath, "{}");
+      const result = spawnSync(
+        process.execPath,
+        ["--input-type=module", "-", runPath, manifestPath, evidencePath],
+        {
+          input: script,
+          encoding: "utf8",
+          env: { ...process.env, ALLOW_FAILED_PUBLISH_RECOVERY: "true" },
+        },
+      );
       expect(result.status, result.stderr).toBe(ok ? 0 : 1);
       if (ok) {
         expect(result.stdout).toContain("apps may be pending");
