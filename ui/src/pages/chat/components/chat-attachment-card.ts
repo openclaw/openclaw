@@ -20,6 +20,7 @@ export type AttachmentCardHeaderOptions = {
   mimeType?: string;
   sizeBytes?: number;
   downloadHref?: string;
+  downloadPending?: boolean;
   expandLabel?: string;
   onExpand?: () => void;
   visualMode?: AttachmentFileVisualMode;
@@ -141,18 +142,27 @@ export function renderAttachmentCardHeader(options: AttachmentCardHeaderOptions)
             : null
         }
         ${
-          options.downloadHref
-            ? html`<a
+          options.downloadPending
+            ? html`<button
+                type="button"
                 class=${downloadClass}
-                href=${options.downloadHref}
-                download=${options.label}
-                target="_blank"
-                rel="noreferrer"
+                disabled
                 aria-label=${downloadTitle}
-                title=${downloadTitle}
-                >${icons.download}</a
-              >`
-            : null
+              >
+                ${icons.download}
+              </button>`
+            : options.downloadHref
+              ? html`<a
+                  class=${downloadClass}
+                  href=${options.downloadHref}
+                  download=${options.label}
+                  target="_blank"
+                  rel="noreferrer"
+                  aria-label=${downloadTitle}
+                  title=${downloadTitle}
+                  >${icons.download}</a
+                >`
+              : null
         }
         ${
           hasOpenAction

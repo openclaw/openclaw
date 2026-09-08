@@ -53,11 +53,7 @@ function renderSidebarAttachment(
   runtime: AttachmentSidebarRuntime,
 ) {
   const resolution = content.resolveSource?.(onRequestUpdate, runtime);
-  const source = content.resolveSource
-    ? resolution?.status === "ready"
-      ? resolution
-      : null
-    : content;
+  const source = resolution ? (resolution.status === "ready" ? resolution : null) : content;
   const sourceHref = source?.src ?? "";
   const src =
     content.attachmentKind === "audio" ||
@@ -73,31 +69,17 @@ function renderSidebarAttachment(
     const kind = content.attachmentKind ?? (mimeType.startsWith("video/") ? "video" : "document");
     return html`
       <div
-        class="chat-assistant-attachment-card chat-assistant-attachment-card--${kind}"
+        class="chat-assistant-attachment-card chat-assistant-attachment-card--${kind} sidebar-attachment-preview__state-card"
         aria-busy=${pending ? "true" : nothing}
       >
-        <div class="sidebar-attachment-preview__header">
-          ${renderAttachmentCardHeader({
-            kind,
-            label: content.title,
-            mimeType: content.mimeType ?? undefined,
-            sizeBytes: content.sizeBytes,
-            visualMode: "preview-with-favicon",
-          })}
-          ${
-            pending
-              ? html`<button
-                  class="chat-assistant-attachment-card__action sidebar-attachment-preview__download"
-                  type="button"
-                  disabled
-                  aria-label=${t("chat.mediaPlayer.download", { filename: content.title })}
-                  title=${t("common.loading")}
-                >
-                  ${icons.download}
-                </button>`
-              : nothing
-          }
-        </div>
+        ${renderAttachmentCardHeader({
+          kind,
+          label: content.title,
+          mimeType: content.mimeType ?? undefined,
+          sizeBytes: content.sizeBytes,
+          downloadPending: pending,
+          visualMode: "preview-with-favicon",
+        })}
         <div
           class="sidebar-attachment-preview__state"
           style=${styleMap({
@@ -108,9 +90,12 @@ function renderSidebarAttachment(
         >
           ${
             pending
-              ? html`<span class="sidebar-attachment-preview__loading" role="status"
-                  >${t("common.loading")}</span
-                >`
+              ? html`<span
+                  class="sidebar-attachment-preview__loading"
+                  role="status"
+                  aria-label=${t("common.loading")}
+                  ><span class="session-run-spinner" aria-hidden="true"></span
+                ></span>`
               : html`<div class="sidebar-attachment-preview__unavailable">
                   ${t("chat.attachments.previewUnavailable")}
                   ${resolution?.status === "error" ? html`<span>${resolution.reason}</span>` : nothing}
