@@ -247,6 +247,10 @@ stale context metadata on active 4.20 rows. It does not pin active 4.20
 
 ## Features
 
+Unconfigured `web_search`, `x_search`, and `code_execution` requests use Grok 4.6.
+This also applies to existing installations that omit the tool model setting.
+An explicit tool model remains selected; the Grok 4.3 examples below are overrides.
+
 <Warning>
   `x_search` and `code_execution` run on xAI's servers. xAI bills $5 per 1,000
   tool calls, plus the model's input and output tokens. With each tool's
@@ -579,7 +583,7 @@ stale context metadata on active 4.20 rows. It does not pin active 4.20
     | Key               | Type    | Default                   | Description                                      |
     | ----------------- | ------- | ------------------------- | ------------------------------------------------ |
     | `enabled`         | boolean | Automatic for xAI models  | Disable, or opt in for a known non-xAI provider |
-    | `model`           | string  | `grok-4.3`                | Model used for x_search requests                 |
+    | `model`           | string  | `grok-4.6`                | Model used for x_search requests                 |
     | `baseUrl`         | string  | -                         | xAI Responses base URL override                  |
     | `inlineCitations` | boolean | -                         | Include inline citations in results              |
     | `maxTurns`        | number  | -                         | Maximum conversation turns                       |
@@ -616,7 +620,7 @@ stale context metadata on active 4.20 rows. It does not pin active 4.20
     | Key              | Type    | Default                  | Description                                      |
     | ---------------- | ------- | ------------------------ | ------------------------------------------------ |
     | `enabled`        | boolean | Automatic for xAI models | Disable, or opt in for a known non-xAI provider |
-    | `model`          | string  | `grok-4.3`               | Model used for code execution requests           |
+    | `model`          | string  | `grok-4.6`               | Model used for code execution requests           |
     | `maxTurns`       | number  | -                        | Maximum conversation turns                       |
     | `timeoutSeconds` | number  | `30`                     | Request timeout in seconds                       |
 
