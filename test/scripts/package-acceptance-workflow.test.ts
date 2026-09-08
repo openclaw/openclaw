@@ -12432,14 +12432,25 @@ wait_for_run plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
     ]);
     expectTextToIncludeAll(releasingDocs, [
       "Extended-stable also requires a separate npm preflight from trusted `main`",
-      "Do not substitute",
-      "integrated Full Release Validation npm artifact",
+      "supplemental validation-only preflight",
+      "Do not pass",
+      "publication `preflight_run_id`",
+      "Publication continues to use the integrated Full Release",
+      "Validation npm artifact and exact run attempt",
       "--ref main",
       '-f tag="$VALIDATION_SHA"',
       "-f preflight_only=true",
       "-f npm_dist_tag=extended-stable",
       '-f release_candidate_branch="$CONTEXT_REF"',
     ]);
+    for (const text of [releaseCi, releasingDocs]) {
+      expectTextToIncludeAll(text, [
+        "standalone run is a supplemental validation-only preflight",
+        "Do not pass",
+        "publication `preflight_run_id`",
+        "Publication continues to use",
+      ]);
+    }
     expectTextToIncludeAll(ciDocs, [
       'VALIDATION_SHA="<full-commit-sha>"',
       '-f ref="$VALIDATION_SHA"',

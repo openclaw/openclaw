@@ -95,7 +95,9 @@ The helper dispatches from an immutable `release-ci/*` ref at the Tooling SHA,
 passes the Validation SHA as `ref` and `expected_sha`, and records the canonical
 branch as `target_context_ref`. GitHub workflow dispatch `--ref` must name a
 branch or tag; it cannot be a raw SHA. Save the successful run ID and
-`run_attempt` as full validation evidence.
+`run_attempt`. When its manifest contains `publicationArtifacts.npmPreflight`,
+use that same Full Release Validation run and attempt for both npm preflight and
+full validation publication evidence.
 
 Extended-stable also requires a separate npm preflight from trusted `main`:
 
@@ -109,9 +111,11 @@ gh workflow run openclaw-npm-release.yml \
   -f release_candidate_branch="$CONTEXT_REF"
 ```
 
-Save that run's ID and attempt as the npm preflight evidence. Do not substitute
-the integrated Full Release Validation npm artifact for this extended-stable
-preflight.
+This standalone run is a supplemental validation-only preflight. Do not pass
+its run ID as publication `preflight_run_id`: its `main` workflow head is not
+the canonical candidate branch/SHA identity required for standalone
+publication evidence. Publication continues to use the integrated Full Release
+Validation npm artifact and exact run attempt.
 
 Classify failures before editing:
 

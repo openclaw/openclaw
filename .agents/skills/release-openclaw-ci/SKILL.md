@@ -442,9 +442,7 @@ the same candidate. Reject narrow runs, untrusted tooling, mismatched targets,
 and earlier-attempt evidence.
 
 Run the npm preflight separately from trusted `main`. Here `tag` is the exact
-candidate SHA; it is an npm-preflight input, not the workflow transport ref.
-This extended-stable requirement overrides the regular final qualification
-guidance that reuses Full Release Validation's integrated npm artifact:
+candidate SHA; it is an npm-preflight input, not the workflow transport ref:
 
 ```bash
 gh workflow run openclaw-npm-release.yml \
@@ -455,6 +453,12 @@ gh workflow run openclaw-npm-release.yml \
   -f npm_dist_tag=extended-stable \
   -f release_candidate_branch="$CONTEXT_REF"
 ```
+
+This standalone run is a supplemental validation-only preflight. Do not pass
+its run ID as publication `preflight_run_id`: a `main` workflow head does not
+have the canonical candidate branch/SHA identity required by that publication
+input. Publication continues to use the Full Release Validation run's
+manifest-bound integrated npm artifact and exact run attempt.
 
 Product failures need an approved backport. Frozen-target tooling failures need
 the smallest behavior-preserving repair. Provider, approval, runner, or log
