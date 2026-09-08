@@ -57,6 +57,10 @@ type ModelProvidersViewProps = {
   thinkingOverridden: boolean;
   fastMode: FastMode | undefined;
   fastModeOverridden: boolean;
+  /** True while picker-triggered catalog discovery is in flight. */
+  catalogDiscovering: boolean;
+  /** Retryable error from a picker-triggered catalog discovery. */
+  catalogDiscoveryError: string | null;
   configBusy: boolean;
   quickAddSupported: boolean;
   unconfiguredProviders: ProviderOption[];
@@ -95,6 +99,8 @@ type ModelProvidersViewProps = {
   onThinkingReset: () => void;
   onFastModeChange: (mode: FastMode) => void;
   onFastModeReset: () => void;
+  onModelPickerOpen: () => void;
+  onCatalogRetry: () => void;
   onOpenModelSetup: () => void;
 };
 
@@ -529,6 +535,8 @@ export function renderModelProviders(props: ModelProvidersViewProps) {
           fastMode: props.fastMode,
           fastModeOverridden: props.fastModeOverridden,
           loading: true,
+          catalogDiscovering: props.catalogDiscovering,
+          catalogDiscoveryError: props.catalogDiscoveryError,
           canMutate: !configMutationDisabled(props),
           mutationBlockedReason: props.mutationBlockedReason,
           busy: props.busy,
@@ -540,6 +548,8 @@ export function renderModelProviders(props: ModelProvidersViewProps) {
           onThinkingReset: props.onThinkingReset,
           onFastModeChange: props.onFastModeChange,
           onFastModeReset: props.onFastModeReset,
+          onOpen: props.onModelPickerOpen,
+          onCatalogRetry: props.onCatalogRetry,
         })}
       </div>
       ${renderSettingsGroup(renderSettingsLoadingSkeleton())}
@@ -577,6 +587,8 @@ export function renderModelProviders(props: ModelProvidersViewProps) {
         thinkingOverridden: props.thinkingOverridden,
         fastMode: props.fastMode,
         fastModeOverridden: props.fastModeOverridden,
+        catalogDiscovering: props.catalogDiscovering,
+        catalogDiscoveryError: props.catalogDiscoveryError,
         canMutate: !configMutationDisabled(props),
         mutationBlockedReason: props.mutationBlockedReason,
         busy: props.busy,
@@ -588,6 +600,8 @@ export function renderModelProviders(props: ModelProvidersViewProps) {
         onThinkingReset: props.onThinkingReset,
         onFastModeChange: props.onFastModeChange,
         onFastModeReset: props.onFastModeReset,
+        onOpen: props.onModelPickerOpen,
+        onCatalogRetry: props.onCatalogRetry,
       })}
     </div>
     ${renderSettingsSection(

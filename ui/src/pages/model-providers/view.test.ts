@@ -47,6 +47,8 @@ function props(overrides: Partial<ModelProvidersViewProps> = {}): ModelProviders
     thinkingOverridden: true,
     fastMode: false,
     fastModeOverridden: true,
+    catalogDiscovering: false,
+    catalogDiscoveryError: null,
     configBusy: false,
     quickAddSupported: true,
     unconfiguredProviders: [{ id: "anthropic", displayName: "Anthropic" }],
@@ -84,6 +86,8 @@ function props(overrides: Partial<ModelProvidersViewProps> = {}): ModelProviders
     onThinkingReset: () => undefined,
     onFastModeChange: () => undefined,
     onFastModeReset: () => undefined,
+    onModelPickerOpen: () => undefined,
+    onCatalogRetry: () => undefined,
     onOpenModelSetup: () => undefined,
     ...overrides,
   };
@@ -1020,5 +1024,45 @@ describe("renderModelProviders", () => {
       }),
     );
     expect(button(container, "Set API key")).toBeUndefined();
+  });
+
+  it("invokes onModelPickerOpen when any default-model picker opens", () => {
+    const onModelPickerOpen = vi.fn();
+    const container = mount(props({ onModelPickerOpen }));
+    const selects = container.querySelectorAll<HTMLElement>(".model-providers__defaults wa-select");
+    expect(selects.length).toBe(3);
+
+    for (const select of selects) {
+      select.dispatchEvent(new Event("wa-show", { bubbles: true }));
+    }
+
+    expect(onModelPickerOpen).toHaveBeenCalledTimes(3);
+  });
+
+  it("announces catalog discovery in progress without blocking the pickers", () => {
+    const container = mount(props({ catalogDiscovering: true }));
+    const progress = container.querySelector(".model-providers__catalog-progress");
+
+    expect(progress?.getAttribute("role")).toBe("status");
+    expect(text(progress)).toContain("Discovering more models");
+    expect(container.querySelectorAll(".model-providers__defaults wa-select")).toHaveLength(3);
+  });
+
+  it("presents a retry action when catalog discovery fails", () => {
+    const onCatalogRetry = vi.fn();
+    const container = mount(
+      props({
+        catalogDiscoveryError: "catalog unavailable",
+        onCatalogRetry,
+      }),
+    );
+    const progress = container.querySelector(".model-providers__catalog-progress");
+
+    expect(progress?.getAttribute("role")).toBe("alert");
+    expect(text(progress)).toContain("More models could not be discovered.");
+    const retry = progress?.querySelector<HTMLButtonElement>("button");
+    expect(text(retry)).toBe("Retry");
+    retry?.click();
+    expect(onCatalogRetry).toHaveBeenCalledOnce();
   });
 });

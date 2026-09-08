@@ -1040,4 +1040,65 @@ describe("ModelProvidersPage agent scope", () => {
     expect(page.probeResults).toEqual({});
     expect(page.busy).toEqual({});
   });
+
+  it("discovers the full catalog when a picker opens and merges it without clearing saved state", async () => {
+    const { context, request } = createHarness("main");
+    const discovered = [
+      { id: "gpt-5", name: "GPT-5", provider: "openai", available: true },
+      { id: "claude-sonnet", name: "Claude Sonnet", provider: "anthropic", available: true },
+    ];
+    const originalRequest = request.getMockImplementation()!;
+    request.mockImplementation(async (method: string, params?: unknown) => {
+      if (method === "models.list") {
+        const opts = params as { refresh?: boolean; preparedOnly?: boolean } | undefined;
+        if (opts?.refresh === true || opts?.preparedOnly !== true) {
+          return { models: discovered };
+        }
+        return { models: [{ id: "gpt-5", name: "GPT-5", provider: "openai", available: true }] };
+      }
+      return originalRequest(method);
+    });
+    const page = appendPage(context);
+    await waitForFast(() => expect(page.data?.config).toEqual({}));
+    expect(page.data?.models).toEqual([
+      { id: "gpt-5", name: "GPT-5", provider: "openai", available: true },
+    ]);
+
+    await page.discoverPickerCatalog();
+
+    expect(page.data?.models).toEqual(discovered);
+    expect(page.catalogDiscovering).toBe(false);
+    expect(page.catalogDiscoveryError).toBeNull();
+    expect(request).toHaveBeenCalledWith("models.list", {
+      view: "configured",
+      agentId: "main",
+      refresh: true,
+    });
+  });
+
+  it("surfaces a retryable error when picker catalog discovery fails", async () => {
+    const { context, request } = createHarness("main");
+    const originalRequest = request.getMockImplementation()!;
+    let failDiscovery = true;
+    request.mockImplementation(async (method: string, params?: unknown) => {
+      if (method === "models.list") {
+        const opts = params as { refresh?: boolean } | undefined;
+        if (opts?.refresh === true && failDiscovery) {
+          throw new Error("discovery failed");
+        }
+      }
+      return originalRequest(method);
+    });
+    const page = appendPage(context);
+    await waitForFast(() => expect(page.data?.config).toEqual({}));
+
+    await page.discoverPickerCatalog();
+
+    expect(page.catalogDiscoveryError).toContain("discovery failed");
+    expect(page.catalogDiscovering).toBe(false);
+
+    failDiscovery = false;
+    await page.discoverPickerCatalog();
+    expect(page.catalogDiscoveryError).toBeNull();
+  });
 });

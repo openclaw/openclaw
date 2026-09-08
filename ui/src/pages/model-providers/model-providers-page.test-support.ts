@@ -22,6 +22,9 @@ export type ModelProvidersPageTestElement = HTMLElement & {
   addProviderId: string;
   addProviderKey: string;
   addProviderOpen: boolean;
+  catalogDiscovering: boolean;
+  catalogDiscoveryError: string | null;
+  discoverPickerCatalog: () => Promise<void>;
   defaultsDraft: (DefaultModelSelection & Partial<ModelBehaviorConfig>) | null;
   keyDraft: string;
   keyEditorProvider: string | null;
