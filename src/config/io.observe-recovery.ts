@@ -1,5 +1,7 @@
 // Observes and recovers config files that appear missing, corrupt, or clobbered.
 import type fs from "node:fs";
+import path from "node:path";
+import { replaceFileAtomic, replaceFileAtomicSync } from "../infra/replace-file.js";
 import { isRecord } from "../utils.js";
 import { appendConfigAuditRecord, appendConfigAuditRecordSync } from "./io.audit.js";
 import {
@@ -22,8 +24,14 @@ import {
 } from "./io.observe-state.js";
 import { resolveConfigObserveSuspiciousReasons } from "./io.observe-suspicious.js";
 import { hashConfigRaw, resolveConfigSnapshotHash } from "./io.read-helpers.js";
-import type { NormalizedConfigIoDeps } from "./io.types.js";
+import type {
+  ConfigRecoveryCandidatePreparation,
+  NormalizedConfigIoDeps,
+  PrepareConfigRecoveryCandidate,
+} from "./io.types.js";
 import { formatConfigIssueSummary } from "./issue-format.js";
+import { warnIfJSON5CommentsWillBeStripped } from "./json5-comments.js";
+import { ConfigMutationConflictError } from "./mutation-conflict.js";
 import {
   isPluginLocalInvalidConfigSnapshot,
   shouldAttemptLastKnownGoodRecovery,
@@ -51,13 +59,7 @@ async function chmodConfigBestEffort(params: {
   try {
     await params.deps.fs.promises.chmod?.(params.configPath, 0o600);
   } catch (error) {
-    params.deps.logger.warn(
-      formatConfigPermissionHardeningWarning({
-        configPath: params.configPath,
-        context: params.context,
-        error,
-      }),
-    );
+    params.deps.logger.warn(formatConfigPermissionHardeningWarning({ ...params, error }));
   }
 }
 
@@ -69,13 +71,7 @@ function chmodConfigBestEffortSync(params: {
   try {
     params.deps.fs.chmodSync?.(params.configPath, 0o600);
   } catch (error) {
-    params.deps.logger.warn(
-      formatConfigPermissionHardeningWarning({
-        configPath: params.configPath,
-        context: params.context,
-        error,
-      }),
-    );
+    params.deps.logger.warn(formatConfigPermissionHardeningWarning({ ...params, error }));
   }
 }
 type ConfigReadRecoveryParams = {
@@ -83,8 +79,7 @@ type ConfigReadRecoveryParams = {
   configPath: string;
   raw: string;
   parsed: unknown;
-  validateBackup?: (backup: { raw: string; parsed: unknown }) => Promise<boolean>;
-  validateBackupSync?: (backup: { raw: string; parsed: unknown }) => boolean;
+  prepareBackup: PrepareConfigRecoveryCandidate;
   allowBackupRecovery?: () => Promise<boolean>;
 };
 
@@ -92,6 +87,48 @@ type ConfigReadRecoveryResult = {
   raw: string;
   parsed: unknown;
 };
+
+function createRecoveryCommitEffect(params: {
+  deps: ObserveRecoveryDeps;
+  configPath: string;
+  raw: string;
+  beforeCommit?: () => void;
+}): ConfigRecoveryEffect<void> {
+  const beforeCommit = params.beforeCommit;
+  const options = {
+    filePath: params.configPath,
+    content: params.raw,
+    dirMode: 0o700,
+    mode: 0o600,
+    tempPrefix: path.basename(params.configPath),
+    fileSystem: params.deps.fs,
+  };
+  return {
+    sync: () => {
+      replaceFileAtomicSync(options);
+    },
+    async: async () => {
+      await replaceFileAtomic(
+        beforeCommit
+          ? {
+              ...options,
+              // Every rename attempt must revalidate; copy fallback has no final guard.
+              copyFallbackOnPermissionError: false,
+              fileSystem: {
+                promises: {
+                  ...params.deps.fs.promises,
+                  rename: (source: fs.PathLike, destination: fs.PathLike) => {
+                    beforeCommit();
+                    return params.deps.fs.promises.rename(source, destination);
+                  },
+                },
+              },
+            }
+          : options,
+      );
+    },
+  };
+}
 
 type ConfigObserveAuditRecordParams = Parameters<typeof createConfigObserveAuditRecord>[0];
 
@@ -113,15 +150,10 @@ function extractRestoreErrorDetails(error: unknown): {
   if (!error || typeof error !== "object") {
     return { code: null, message: typeof error === "string" ? error : null };
   }
-  const code =
-    "code" in error && typeof (error as { code?: unknown }).code === "string"
-      ? (error as { code: string }).code
-      : null;
-  const message =
-    "message" in error && typeof (error as { message?: unknown }).message === "string"
-      ? (error as { message: string }).message
-      : null;
-  return { code, message };
+  return {
+    code: "code" in error && typeof error.code === "string" ? error.code : null,
+    message: "message" in error && typeof error.message === "string" ? error.message : null,
+  };
 }
 
 function returnOriginalConfigRead(params: ConfigReadRecoveryParams): ConfigReadRecoveryResult {
@@ -137,26 +169,6 @@ function parseBackupConfigRaw(
   } catch {
     return null;
   }
-}
-
-function logBackupRestoreResult(params: {
-  deps: ObserveRecoveryDeps;
-  configPath: string;
-  suspicious: string[];
-  restoredFromBackup: boolean;
-  restoreErrorMessage: string | null;
-}): void {
-  if (params.restoredFromBackup) {
-    params.deps.logger.warn(
-      `Config auto-restored from backup: ${params.configPath} (${params.suspicious.join(", ")})`,
-    );
-    return;
-  }
-  params.deps.logger.warn(
-    `Config auto-restore from backup failed: ${params.configPath} (${params.suspicious.join(", ")}${
-      params.restoreErrorMessage ? `; ${params.restoreErrorMessage}` : ""
-    })`,
-  );
 }
 
 function createBackupRestoreAuditAppendParams(params: {
@@ -269,7 +281,10 @@ function collectPollutedSecretPlaceholders(
 export async function maybeRecoverSuspiciousConfigRead(
   params: ConfigReadRecoveryParams,
 ): Promise<ConfigReadRecoveryResult> {
-  const recovery = recoverSuspiciousConfigRead(params);
+  return await runConfigRecoveryAsync(recoverSuspiciousConfigRead(params));
+}
+
+async function runConfigRecoveryAsync<T>(recovery: ConfigRecoveryOperation<T>): Promise<T> {
   let step = recovery.next();
   while (!step.done) {
     try {
@@ -300,6 +315,59 @@ type ConfigRecoveryEffect<T> = {
   sync: () => T;
   async: () => T | Promise<T>;
 };
+
+type ConfigRecoveryOperation<T> = Generator<ConfigRecoveryEffect<unknown>, T, unknown>;
+type SuspiciousConfigRecoveryPlan = {
+  candidate: ConfigReadRecoveryResult;
+  assertUnchanged: () => void;
+  apply: (
+    beforeCommit?: () => void,
+  ) => ConfigRecoveryOperation<{ restored: boolean; error: unknown }>;
+};
+
+/** Prepare the existing recovery without observing or writing the selected config. */
+export async function prepareSuspiciousConfigRead(params: ConfigReadRecoveryParams): Promise<{
+  candidate: ConfigReadRecoveryResult;
+  apply: (beforeCommit?: () => void) => Promise<void>;
+} | null> {
+  const plan = await runConfigRecoveryAsync(planSuspiciousConfigRead(params));
+  return (
+    plan && {
+      candidate: plan.candidate,
+      apply: async (beforeCommit) => {
+        const assertAllowed = () => {
+          beforeCommit?.();
+          plan.assertUnchanged();
+        };
+        assertAllowed();
+        const result = await runConfigRecoveryAsync(plan.apply(assertAllowed));
+        if (!result.restored) {
+          throw result.error;
+        }
+      },
+    }
+  );
+}
+
+function* recoverSuspiciousConfigRead(
+  params: ConfigReadRecoveryParams,
+): ConfigRecoveryOperation<ConfigReadRecoveryResult> {
+  const plan = yield* planSuspiciousConfigRead(params);
+  if (!plan) {
+    return returnOriginalConfigRead(params);
+  }
+  if (params.allowBackupRecovery) {
+    const allowed = (yield {
+      sync: () => true,
+      async: () => params.allowBackupRecovery?.() ?? true,
+    }) as boolean;
+    if (!allowed) {
+      return returnOriginalConfigRead(params);
+    }
+  }
+  yield* plan.apply();
+  return plan.candidate;
+}
 
 function createConfigRecoveryStatEffect(
   deps: ObserveRecoveryDeps,
@@ -333,9 +401,9 @@ function createConfigBackupReadEffect(
   };
 }
 
-function* recoverSuspiciousConfigRead(
+function* planSuspiciousConfigRead(
   params: ConfigReadRecoveryParams,
-): Generator<ConfigRecoveryEffect<unknown>, ConfigReadRecoveryResult, unknown> {
+): ConfigRecoveryOperation<SuspiciousConfigRecoveryPlan | null> {
   const { deps, configPath, raw, parsed } = params;
   const stat = (yield createConfigRecoveryStatEffect(deps, configPath)) as fs.Stats | null;
   const now = new Date().toISOString();
@@ -362,25 +430,26 @@ function* recoverSuspiciousConfigRead(
     backupBaseline,
   });
   if (!recoveryContext) {
-    return returnOriginalConfigRead(params);
+    return null;
   }
   const { suspicious, suspiciousSignature } = recoveryContext;
   const backupRaw = (yield createConfigBackupReadEffect(deps, backupPath)) as string | null;
   if (!backupRaw) {
-    return returnOriginalConfigRead(params);
+    return null;
   }
   const backupParse = parseBackupConfigRaw(deps, backupRaw);
   if (!backupParse) {
-    return returnOriginalConfigRead(params);
+    return null;
   }
   const backupCandidate = { raw: backupRaw, parsed: backupParse.parsed };
-  const validBackup = (yield {
-    sync: () => params.validateBackupSync?.(backupCandidate) ?? true,
-    async: () => params.validateBackup?.(backupCandidate) ?? true,
-  }) as boolean;
-  if (!validBackup) {
-    return returnOriginalConfigRead(params);
+  const prepared = (yield {
+    sync: () => params.prepareBackup(backupCandidate),
+    async: () => params.prepareBackup(backupCandidate),
+  }) as ConfigRecoveryCandidatePreparation;
+  if (!prepared.ok) {
+    return null;
   }
+  const preparedCandidate = prepared.candidate;
   // Eligibility must describe the approved backup bytes, never an older healthy config.
   const backupStat = (yield createConfigRecoveryStatEffect(deps, backupPath)) as fs.Stats | null;
   const backup = createConfigHealthFingerprint({
@@ -389,83 +458,113 @@ function* recoverSuspiciousConfigRead(
     stat: backupStat,
   });
   if (!backup.gatewayMode) {
-    return returnOriginalConfigRead(params);
+    return null;
   }
-  if (params.allowBackupRecovery) {
-    const allowed = (yield {
-      sync: () => true,
-      async: () => params.allowBackupRecovery?.() ?? true,
-    }) as boolean;
-    if (!allowed) {
-      return returnOriginalConfigRead(params);
-    }
-  }
-  const snapshotParams = {
-    deps,
-    configPath,
-    raw,
-    observedAt: now,
+  return {
+    candidate: preparedCandidate,
+    assertUnchanged: () => {
+      for (const [pathname, expectedRaw, expectedStat] of [
+        [configPath, raw, stat],
+        [backupPath, backupRaw, backupStat],
+      ] as const) {
+        const actualRaw = createConfigBackupReadEffect(deps, pathname).sync();
+        const actualStat = createConfigRecoveryStatEffect(deps, pathname).sync();
+        if (
+          actualRaw !== expectedRaw ||
+          !actualStat ||
+          !expectedStat ||
+          actualStat.dev !== expectedStat.dev ||
+          actualStat.ino !== expectedStat.ino ||
+          actualStat.mtimeMs !== expectedStat.mtimeMs ||
+          actualStat.size !== expectedStat.size
+        ) {
+          throw new ConfigMutationConflictError(
+            "config recovery source changed since preparation",
+            {
+              retryable: false,
+            },
+          );
+        }
+      }
+    },
+    *apply(beforeCommit) {
+      const snapshotParams = {
+        deps,
+        configPath,
+        raw,
+        observedAt: now,
+      };
+      const clobberedPath = (yield {
+        sync: () => persistBoundedClobberedConfigSnapshotSync(snapshotParams),
+        async: () => persistBoundedClobberedConfigSnapshot(snapshotParams),
+      }) as string | null;
+      let restoredFromBackup = false;
+      let restoreError: unknown;
+      try {
+        if (preparedCandidate.raw !== backupRaw) {
+          warnIfJSON5CommentsWillBeStripped({
+            raw: backupRaw,
+            filePath: configPath,
+            warn: (message) => deps.logger.warn(message),
+          });
+        }
+        yield createRecoveryCommitEffect({
+          deps,
+          configPath,
+          raw: preparedCandidate.raw,
+          beforeCommit,
+        });
+        const chmodParams = { deps, configPath, context: "backup restore" };
+        yield {
+          sync: () => chmodConfigBestEffortSync(chmodParams),
+          async: () => chmodConfigBestEffort(chmodParams),
+        };
+        restoredFromBackup = true;
+      } catch (error) {
+        restoreError = error;
+      }
+      const restoreErrorDetails = restoredFromBackup
+        ? { code: null, message: null }
+        : extractRestoreErrorDetails(restoreError);
+      const result = restoredFromBackup
+        ? "auto-restored from backup"
+        : "auto-restore from backup failed";
+      const detail =
+        !restoredFromBackup && restoreErrorDetails.message
+          ? `; ${restoreErrorDetails.message}`
+          : "";
+      deps.logger.warn(`Config ${result}: ${configPath} (${suspicious.join(", ")}${detail})`);
+      const audit = createBackupRestoreAuditAppendParams({
+        deps,
+        configPath,
+        restoredFromBackup,
+        current,
+        suspicious,
+        entry,
+        backup,
+        clobberedPath,
+        backupPath,
+        restoreErrorDetails,
+      });
+      yield {
+        sync: () => appendConfigAuditRecordSync(audit),
+        async: () => appendConfigAuditRecord(audit),
+      };
+      if (restoredFromBackup) {
+        writeConfigHealthStateToStore(
+          deps,
+          updateConfigHealthEntry(healthState, configPath, {
+            ...entry,
+            lastObservedSuspiciousSignature: suspiciousSignature,
+          }),
+        );
+      }
+      return { restored: restoredFromBackup, error: restoreError };
+    },
   };
-  const clobberedPath = (yield {
-    sync: () => persistBoundedClobberedConfigSnapshotSync(snapshotParams),
-    async: () => persistBoundedClobberedConfigSnapshot(snapshotParams),
-  }) as string | null;
-  let restoredFromBackup = false;
-  let restoreError: unknown;
-  try {
-    const options = { encoding: "utf-8" as const, mode: 0o600 };
-    yield {
-      sync: () => deps.fs.writeFileSync(configPath, backupRaw, options),
-      async: () => deps.fs.promises.writeFile(configPath, backupRaw, options),
-    };
-    const chmodParams = { deps, configPath, context: "backup restore" };
-    yield {
-      sync: () => chmodConfigBestEffortSync(chmodParams),
-      async: () => chmodConfigBestEffort(chmodParams),
-    };
-    restoredFromBackup = true;
-  } catch (error) {
-    restoreError = error;
-  }
-  const restoreErrorDetails = restoredFromBackup
-    ? { code: null, message: null }
-    : extractRestoreErrorDetails(restoreError);
-  logBackupRestoreResult({
-    deps,
-    configPath,
-    suspicious,
-    restoredFromBackup,
-    restoreErrorMessage: restoreErrorDetails.message,
-  });
-  const audit = createBackupRestoreAuditAppendParams({
-    deps,
-    configPath,
-    restoredFromBackup,
-    current,
-    suspicious,
-    entry,
-    backup,
-    clobberedPath,
-    backupPath,
-    restoreErrorDetails,
-  });
-  yield {
-    sync: () => appendConfigAuditRecordSync(audit),
-    async: () => appendConfigAuditRecord(audit),
-  };
-  if (restoredFromBackup) {
-    writeConfigHealthStateToStore(
-      deps,
-      updateConfigHealthEntry(healthState, configPath, {
-        ...entry,
-        lastObservedSuspiciousSignature: suspiciousSignature,
-      }),
-    );
-  }
-  return backupCandidate;
 }
 
-export async function promoteConfigSnapshotToLastKnownGood(params: {
+export async function promoteConfigSnapshotToLastKnownGoodCore(params: {
   deps: ObserveRecoveryDeps;
   snapshot: ConfigFileSnapshot;
   logger?: Pick<typeof console, "warn">;
@@ -515,10 +614,11 @@ export async function promoteConfigSnapshotToLastKnownGood(params: {
   return true;
 }
 
-export async function recoverConfigFromLastKnownGood(params: {
+export async function recoverConfigFromLastKnownGoodCore(params: {
   deps: ObserveRecoveryDeps;
   snapshot: ConfigFileSnapshot;
   reason: string;
+  prepareCandidate: PrepareConfigRecoveryCandidate;
 }): Promise<boolean> {
   const { deps, snapshot } = params;
   if (!snapshot.exists || typeof snapshot.raw !== "string") {
@@ -543,13 +643,22 @@ export async function recoverConfigFromLastKnownGood(params: {
   if (!backupRaw || hashConfigRaw(backupRaw) !== promoted.hash) {
     return false;
   }
-  let backupParsed: unknown;
-  try {
-    backupParsed = deps.json5.parse(backupRaw);
-  } catch {
+  const backupParse = parseBackupConfigRaw(deps, backupRaw);
+  if (!backupParse) {
     return false;
   }
-  const polluted = collectPollutedSecretPlaceholders(backupParsed);
+  // Historical bytes become live config only after their owner has migrated and validated them.
+  // This prevents Doctor recovery from exposing a schema-invalid intermediate file.
+  const originalCandidate = { raw: backupRaw, parsed: backupParse.parsed };
+  const prepared = params.prepareCandidate(originalCandidate);
+  if (!prepared.ok) {
+    deps.logger.warn(
+      `Config last-known-good recovery skipped: ${prepared.reason} (${params.reason})`,
+    );
+    return false;
+  }
+  const recoveryCandidate = prepared.candidate;
+  const polluted = collectPollutedSecretPlaceholders(recoveryCandidate.parsed);
   if (polluted.length > 0) {
     deps.logger.warn(
       `Config last-known-good recovery skipped: redacted secret placeholder at ${polluted[0]}`,
@@ -566,15 +675,24 @@ export async function recoverConfigFromLastKnownGood(params: {
     stat,
     observedAt: now,
   });
-  const clobberedPath = await preserveConfigSnapshotAsClobbered({
+  const clobberedPath = await persistBoundedClobberedConfigSnapshot({
     deps,
-    snapshot,
+    configPath: snapshot.path,
+    raw: snapshot.raw,
     observedAt: now,
   });
-  await deps.fs.promises.writeFile(snapshot.path, backupRaw, {
-    encoding: "utf-8",
-    mode: 0o600,
-  });
+  if (recoveryCandidate.raw !== backupRaw) {
+    warnIfJSON5CommentsWillBeStripped({
+      raw: backupRaw,
+      filePath: snapshot.path,
+      warn: (message) => deps.logger.warn(message),
+    });
+  }
+  await createRecoveryCommitEffect({
+    deps,
+    configPath: snapshot.path,
+    raw: recoveryCandidate.raw,
+  }).async();
   await chmodConfigBestEffort({
     deps,
     configPath: snapshot.path,
@@ -607,20 +725,4 @@ export async function recoverConfigFromLastKnownGood(params: {
     }),
   );
   return true;
-}
-
-export async function preserveConfigSnapshotAsClobbered(params: {
-  deps: ObserveRecoveryDeps;
-  snapshot: ConfigFileSnapshot;
-  observedAt?: string;
-}): Promise<string | null> {
-  if (!params.snapshot.exists || typeof params.snapshot.raw !== "string") {
-    return null;
-  }
-  return await persistBoundedClobberedConfigSnapshot({
-    deps: params.deps,
-    configPath: params.snapshot.path,
-    raw: params.snapshot.raw,
-    observedAt: params.observedAt ?? new Date().toISOString(),
-  });
 }

@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# Bash 5.3+ can deadlock writing heredoc pipes on macOS before the reader starts.
+if [[ ${OSTYPE:-} == darwin* && $BASH != /bin/bash ]] && ((BASH_VERSINFO[0] > 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 3))); then
+  exec /bin/bash "$0" "$@"
+fi
 # Deploy OpenClaw to Kubernetes.
 #
 # Secrets are generated in a temp directory and applied server-side.
@@ -8,7 +12,9 @@
 #   ./scripts/k8s/deploy.sh                   # Deploy (requires API key in env or secret already in cluster)
 #   ./scripts/k8s/deploy.sh --create-secret   # Create or update the K8s Secret from env vars
 #   ./scripts/k8s/deploy.sh --show-token      # Print the gateway token after deploy
-#   ./scripts/k8s/deploy.sh --delete          # Tear down
+#   ./scripts/k8s/deploy.sh --delete          # Tear down safely for the selected namespace
+#   ./scripts/k8s/deploy.sh --delete-resources # Delete OpenClaw resources only
+#   ./scripts/k8s/deploy.sh --delete-namespace # Delete the namespace and all resources
 #
 # Environment:
 #   OPENCLAW_NAMESPACE   Kubernetes namespace (default: openclaw)
@@ -34,7 +40,11 @@ Usage: ./scripts/k8s/deploy.sh [OPTION]
   (no args)        Deploy OpenClaw (creates secret from env if needed)
   --create-secret  Create or update the K8s Secret from env vars without deploying
   --show-token     Print the gateway token after deploy or secret creation
-  --delete         Delete the namespace and all resources
+  --delete         Delete the default namespace, or resources only in a custom namespace
+  --delete-resources
+                  Delete OpenClaw resources from the namespace
+  --delete-namespace
+                  Delete the namespace and all resources in it
   -h, --help       Show this help
 
 Environment:
@@ -57,6 +67,12 @@ while [[ $# -gt 0 ]]; do
     --delete)
       MODE="delete"
       ;;
+    --delete-resources)
+      MODE="delete-resources"
+      ;;
+    --delete-namespace)
+      MODE="delete-namespace"
+      ;;
     --show-token)
       SHOW_TOKEN=true
       ;;
@@ -70,11 +86,26 @@ while [[ $# -gt 0 ]]; do
 done
 
 # ---------------------------------------------------------------------------
-# --delete
+# --delete / --delete-namespace
 # ---------------------------------------------------------------------------
-if [[ "$MODE" == "delete" ]]; then
+if [[ "$MODE" == "delete" && "$NS" != "openclaw" ]]; then
+  MODE="delete-resources"
+fi
+
+if [[ "$MODE" == "delete" || "$MODE" == "delete-namespace" ]]; then
   echo "Deleting namespace '$NS' and all resources..."
   kubectl delete namespace "$NS" --ignore-not-found
+  echo "Done."
+  exit 0
+fi
+
+# ---------------------------------------------------------------------------
+# --delete-resources
+# ---------------------------------------------------------------------------
+if [[ "$MODE" == "delete-resources" ]]; then
+  echo "Deleting OpenClaw resources from namespace '$NS'..."
+  kubectl delete -k "$MANIFESTS" -n "$NS" --ignore-not-found
+  kubectl delete secret openclaw-secrets -n "$NS" --ignore-not-found
   echo "Done."
   exit 0
 fi

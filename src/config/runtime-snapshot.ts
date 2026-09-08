@@ -1,10 +1,16 @@
 // Produces redacted runtime config snapshots for diagnostics and UI surfaces.
+import { isDeepStrictEqual } from "node:util";
 import { sha256Base64Url } from "../infra/crypto-digest.js";
 import { clearExecutablePathCache } from "../infra/executable-path.js";
 import {
   resetPublishedConfigRuntimeEnv,
   type PreparedConfigRuntimeEnv,
 } from "./config-env-vars.js";
+import {
+  copyConfigResolutionFacts,
+  getConfigResolutionFacts,
+  serializeConfigResolutionFacts,
+} from "./resolution-facts.js";
 import type { OpenClawConfig } from "./types.js";
 
 export type RuntimeConfigSnapshotRefreshOptions = {
@@ -119,6 +125,7 @@ const managedRuntimeConfigWriteOwners = new Map<
   Set<{ id: symbol; preflight?: ManagedRuntimeConfigWritePreflight }>
 >();
 const runtimeConfigWriteListeners = new Set<(event: RuntimeConfigWriteNotification) => void>();
+const runtimeConfigSnapshotPreparers = new Set<(config: OpenClawConfig) => void>();
 
 function stableConfigStringify(value: unknown): string {
   if (value === null || typeof value !== "object") {
@@ -137,6 +144,14 @@ function stableConfigStringify(value: unknown): string {
 function configSnapshotsMatch(left: OpenClawConfig, right: OpenClawConfig): boolean {
   if (left === right) {
     return true;
+  }
+  // Fresh reads allocate new facts. Compare their complete provenance, not object identity
+  // or just JSON config bytes: same-byte values can name different authored SecretRefs.
+  if (
+    getConfigResolutionFacts(left) !== getConfigResolutionFacts(right) &&
+    !isDeepStrictEqual(serializeConfigResolutionFacts(left), serializeConfigResolutionFacts(right))
+  ) {
+    return false;
   }
   try {
     return stableConfigStringify(left) === stableConfigStringify(right);
@@ -166,10 +181,25 @@ export function setRuntimeConfigSnapshot(
   config: OpenClawConfig,
   sourceConfig?: OpenClawConfig,
 ): void {
+  const factSource = getConfigResolutionFacts(config) !== null ? config : (sourceConfig ?? config);
+  copyConfigResolutionFacts(factSource, config);
+  for (const prepare of runtimeConfigSnapshotPreparers) {
+    prepare(config);
+  }
   clearExecutablePathCache();
   runtimeConfigSnapshot = config;
   runtimeConfigSourceSnapshot = sourceConfig ?? null;
   runtimeConfigSnapshotMetadata = createRuntimeConfigSnapshotMetadata(config, sourceConfig);
+}
+
+export function registerRuntimeConfigSnapshotPreparer(
+  prepare: (config: OpenClawConfig) => void,
+): () => void {
+  runtimeConfigSnapshotPreparers.add(prepare);
+  if (runtimeConfigSnapshot) {
+    prepare(runtimeConfigSnapshot);
+  }
+  return () => runtimeConfigSnapshotPreparers.delete(prepare);
 }
 
 export function setAppliedRuntimeConfigSnapshot(
@@ -192,22 +222,25 @@ export function setRuntimeConfigSourceSnapshotIfCurrent(params: {
   ) {
     return false;
   }
+  copyConfigResolutionFacts(params.sourceConfig, runtimeConfigSnapshot);
   setRuntimeConfigSnapshot(runtimeConfigSnapshot, params.sourceConfig);
   return true;
 }
 
-export function resetConfigRuntimeState(): void {
+export function resetConfigRuntimeState(options: { preserveConfigEnv?: boolean } = {}): void {
   clearExecutablePathCache();
   runtimeConfigSnapshot = null;
   runtimeConfigSourceSnapshot = null;
   runtimeConfigSnapshotMetadata = null;
   runtimeConfigAppliedHash = null;
   runtimeConfigSnapshotRevision = 0;
-  resetPublishedConfigRuntimeEnv();
+  resetPublishedConfigRuntimeEnv({ preserveOwnership: options.preserveConfigEnv });
 }
 
 export function clearRuntimeConfigSnapshot(): void {
-  resetConfigRuntimeState();
+  // Snapshot cleanup leaves process.env intact. Retain its config-owned layer so
+  // the next startup/reload can replace it without treating it as ambient input.
+  resetConfigRuntimeState({ preserveConfigEnv: true });
 }
 
 export function getRuntimeConfigSnapshot(): OpenClawConfig | null {
@@ -301,6 +334,15 @@ export function selectApplicableRuntimeConfig(params: {
     return runtimeConfig;
   }
   return inputConfig;
+}
+
+/** Bind a retained consumer to its current runtime owner while preserving scoped configs. */
+export function createRuntimeConfigReader(inputConfig: OpenClawConfig): () => OpenClawConfig {
+  const followsRuntimeConfig =
+    runtimeConfigSnapshot === inputConfig ||
+    (runtimeConfigSourceSnapshot !== null &&
+      configSnapshotsMatch(inputConfig, runtimeConfigSourceSnapshot));
+  return () => (followsRuntimeConfig ? runtimeConfigSnapshot : null) ?? inputConfig;
 }
 
 export function setRuntimeConfigSnapshotRefreshHandler(

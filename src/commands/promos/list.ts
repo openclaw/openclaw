@@ -1,16 +1,13 @@
 /** Lists active ClawHub promotional model offers. */
 import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
 import { formatCliCommand } from "../../cli/command-format.js";
-import {
-  ClawHubRequestError,
-  fetchClawHubPromotions,
-  type ClawHubPromotion,
-} from "../../infra/clawhub.js";
+import { ClawHubRequestError } from "../../infra/clawhub-client.js";
+import { fetchClawHubPromotions, type ClawHubPromotion } from "../../infra/clawhub-promotions.js";
 import { markPromotionSlugsNotified } from "../../infra/promotions-feed.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
 
 function formatWindowEnd(promotion: ClawHubPromotion): string {
-  const daysLeft = Math.max(0, Math.ceil((promotion.endsAt - Date.now()) / 86_400_000));
+  const daysLeft = Math.max(0, Math.floor((promotion.endsAt - Date.now()) / 86_400_000));
   if (daysLeft === 0) {
     return "ends today";
   }
@@ -32,8 +29,7 @@ export async function promosListCommand(opts: { json?: boolean }, runtime: Runti
     }
     return;
   }
-  // The user has now seen these offers; suppress the one-time passive
-  // discovery notice for them (`models list` reads the same markers).
+  // Retain the explicit notice history without refreshing passive inventory.
   markPromotionSlugsNotified(promotions.map((promotion) => promotion.slug));
   if (opts.json) {
     writeRuntimeJson(runtime, { promotions });

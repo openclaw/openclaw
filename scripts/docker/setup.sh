@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# Bash 5.3+ can deadlock writing heredoc pipes on macOS before the reader starts.
+if [[ ${OSTYPE:-} == darwin* && $BASH != /bin/bash ]] && ((BASH_VERSINFO[0] > 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 3))); then
+  exec /bin/bash "$0" "$@"
+fi
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -542,6 +546,9 @@ export OTEL_EXPORTER_OTLP_TRACES_ENDPOINT="${OTEL_EXPORTER_OTLP_TRACES_ENDPOINT:
 export OTEL_EXPORTER_OTLP_METRICS_ENDPOINT="${OTEL_EXPORTER_OTLP_METRICS_ENDPOINT:-}"
 export OTEL_EXPORTER_OTLP_LOGS_ENDPOINT="${OTEL_EXPORTER_OTLP_LOGS_ENDPOINT:-}"
 export OTEL_EXPORTER_OTLP_PROTOCOL="${OTEL_EXPORTER_OTLP_PROTOCOL:-}"
+export OTEL_EXPORTER_OTLP_TRACES_PROTOCOL="${OTEL_EXPORTER_OTLP_TRACES_PROTOCOL:-}"
+export OTEL_EXPORTER_OTLP_METRICS_PROTOCOL="${OTEL_EXPORTER_OTLP_METRICS_PROTOCOL:-}"
+export OTEL_EXPORTER_OTLP_LOGS_PROTOCOL="${OTEL_EXPORTER_OTLP_LOGS_PROTOCOL:-}"
 export OTEL_SERVICE_NAME="${OTEL_SERVICE_NAME:-}"
 export OTEL_SEMCONV_STABILITY_OPT_IN="${OTEL_SEMCONV_STABILITY_OPT_IN:-}"
 export OPENCLAW_OTEL_PRELOADED="${OPENCLAW_OTEL_PRELOADED:-}"
@@ -749,6 +756,9 @@ upsert_env "$ENV_FILE" \
   OTEL_EXPORTER_OTLP_METRICS_ENDPOINT \
   OTEL_EXPORTER_OTLP_LOGS_ENDPOINT \
   OTEL_EXPORTER_OTLP_PROTOCOL \
+  OTEL_EXPORTER_OTLP_TRACES_PROTOCOL \
+  OTEL_EXPORTER_OTLP_METRICS_PROTOCOL \
+  OTEL_EXPORTER_OTLP_LOGS_PROTOCOL \
   OTEL_SERVICE_NAME \
   OTEL_SEMCONV_STABILITY_OPT_IN \
   OPENCLAW_OTEL_PRELOADED \
@@ -797,9 +807,9 @@ fi
 # it works regardless of the host uid and doesn't require host-side root.
 echo ""
 echo "==> Fixing data-directory permissions"
-# Use -xdev to restrict chown to the config-dir mount only — without it,
-# the recursive chown would cross into the workspace bind mount and rewrite
-# ownership of all user project files on Linux hosts.
+# Prune workspace descendants explicitly: -xdev still crosses bind mounts on
+# the same filesystem. Repair the mount point itself so node can write there,
+# but leave user project file ownership unchanged.
 # Run a no-dereference chown from each entry's directory. This keeps ownership
 # repair for sockets/FIFOs while preventing a swapped symlink leaf from
 # redirecting the root operation outside the mounted tree.
@@ -807,7 +817,7 @@ echo "==> Fixing data-directory permissions"
 # (.openclaw/) inside the workspace gets chowned, not the user's project files.
 run_prestart_gateway --user root --entrypoint sh openclaw-gateway -c \
   'PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin; export PATH; \
-   /usr/bin/find -P /home/node/.openclaw -xdev -execdir /usr/bin/chown -h node:node {} +; \
+   /usr/bin/find -P /home/node/.openclaw -xdev \( ! -path /home/node/.openclaw/workspace -o -prune \) -execdir /usr/bin/chown -h node:node {} +; \
    /usr/bin/chown -h node:node /home/node/.config; \
    /usr/bin/find -P /home/node/.config/openclaw -xdev -execdir /usr/bin/chown -h node:node {} +; \
    if [ -d /home/node/.openclaw/workspace/.openclaw ] && [ ! -L /home/node/.openclaw/workspace/.openclaw ]; then \
@@ -985,4 +995,4 @@ echo "Token: stored in Docker environment/config (not printed)."
 echo ""
 echo "Commands:"
 echo "  ${COMPOSE_HINT} logs -f openclaw-gateway"
-echo "  ${COMPOSE_HINT} exec openclaw-gateway sh -lc 'node dist/index.js health --token \"\$OPENCLAW_GATEWAY_TOKEN\"'"
+echo "  ${COMPOSE_HINT} exec openclaw-gateway sh -lc 'node dist/index.js gateway health --token \"\$OPENCLAW_GATEWAY_TOKEN\"'"

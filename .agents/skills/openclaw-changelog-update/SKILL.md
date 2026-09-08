@@ -6,7 +6,10 @@ description: Regenerate OpenClaw release changelog sections from git history bef
 # OpenClaw Changelog Update
 
 Use this for changelog rewrites and GitHub release-note source text. For regular
-beta/stable, run it after the Code SHA passes Full Release Validation. For
+beta/stable, prepare complete notes before final-source qualification when
+possible; Code SHA may then also be Release SHA. Editorial work may overlap
+Code validation. If notes change afterward, a genuine CHANGELOG-only descendant
+may use the existing product-evidence reuse policy. For
 extended-stable, run it before final exact-head validation and tagging. Do not
 rerun it for tooling retries, resumed publication, or promotion.
 Use it with `release-openclaw-maintainer`; this skill owns changelog content,
@@ -27,8 +30,11 @@ every human `Thanks @...` attribution.
   the target; a newer but divergent tag is not a valid history boundary. Use
   an explicit shipped/main-closeout SHA only when it is also reachable from the
   target.
-- Target ref: the exact green Code SHA. The changelog commit created from this
-  input becomes the Release SHA.
+- Target ref: the exact product-complete history being documented. Its
+  contribution-record target must be an ancestor of the final release target;
+  it need not name a not-yet-created changelog commit. Include any later fixes
+  before finalizing notes. Final notes may be committed before qualification,
+  or afterward as a CHANGELOG-only descendant of a green Code SHA.
 - Canonical main ref: current `origin/main`, fetched before verification. Release
   notes cite the original merged main PR when the same work is carried by a
   backport. A release-branch PR is used only while no forward-port exists on
@@ -36,21 +42,22 @@ every human `Thanks @...` attribution.
 
 ## Workflow
 
-1. Confirm the release branch is at the fully validated Code SHA:
+1. Confirm the release branch and exact history target:
    - `git fetch --tags origin`
    - confirm clean `git status -sb`
-   - record `git rev-parse HEAD` as the Code SHA
-   - record the successful Full Release Validation run id and attempt
-   - stop if any product/version/backport change is still pending
+   - record `git rev-parse HEAD` as the history target
+   - record the Full Release Validation run id and attempt when qualification already exists
+   - finish pending product/version/backport changes before freezing final source; refresh the inventory for actual changes
 2. Audit history, including direct commits:
-   - `git log --first-parent --date=iso-strict --pretty=format:'%h%x09%ad%x09%s' <base-tag>..<target-ref>`
-   - `git log --first-parent --grep='(#' --date=short --pretty=format:'%h%x09%ad%x09%s' <base-tag>..<target-ref>`
+   - `git log --topo-order --date=iso-strict --pretty=format:'%h%x09%ad%x09%s' <base-tag>..<target-ref>`
+   - `git log --topo-order --grep='(#' --date=short --pretty=format:'%h%x09%ad%x09%s' <base-tag>..<target-ref>`
+   - Include every commit reachable from the target but not the base, including merged side branches. Resolve PR associations before deduplicating and subtracting shipped records; retain the existing revert exclusions.
    - also inspect `--since='24 hours ago'` when main moved during the release.
 3. Generate the complete contribution record and editorial manifest before
    writing grouped prose:
 
    ```bash
-   node .agents/skills/openclaw-changelog-update/scripts/verify-release-notes.mjs \
+   node --import tsx .agents/skills/openclaw-changelog-update/scripts/verify-release-notes.mjs \
      --base <base-tag> \
      --target <target-ref> \
      --main-ref origin/main \
@@ -58,6 +65,10 @@ every human `Thanks @...` attribution.
      --manifest /tmp/openclaw-release-<YYYY.M.PATCH>.json \
      --write-ledger
    ```
+
+   Add repeatable `--release-provenance '<40sha> -> #PR[, #PR]'` inputs when
+   release commits cannot carry provenance metadata. These use the same exact
+   marker grammar and current-main validation as commit-body markers.
 
    The verifier automatically reuses public GitHub GraphQL responses from an
    exact base/target SHA snapshot under the worktree's git metadata. Iterative
@@ -69,11 +80,17 @@ every human `Thanks @...` attribution.
      audit; it contains every referenced PR, eligible contributor credit,
      inline issue context, every direct commit, and an editorial-eligibility
      classification for PRs and direct commits
+   - schema version 3 is the required ephemeral manifest contract. Regenerate
+     older manifests; version 2 is not a supported downstream-reader boundary
    - for a historical backfill, add `--seed-ref <pre-backfill-ref>` once so
      contribution records from the prior changelog are retained even when an
      older merged commit omitted its PR number; the verifier excludes records
      for work reverted after the base tag, including beta work reverted before
      the stable release
+   - generated provenance reports in-range PRs separately from retained
+     seed-only PRs, then states the unique row total. A PR present in both
+     inventories counts as in-range; never describe the seed-inclusive total
+     as work merged in the current release range
    - add repeatable `--shipped-ref <prior-shipped-tag>` when the reachable main
      closeout differs from the shipped tag or later forward-port commits
      re-associate PRs that were already released. Each tag is a cumulative
@@ -150,21 +167,27 @@ every human `Thanks @...` attribution.
      PR references explicitly present in active commit subjects/bodies. It
      preserves author/co-author credit and any issue references in the original
      title
+   - the provenance arithmetic and unique total must match the rendered PR
+     rows exactly; candidate validation rejects malformed or forged counts
    - direct commits remain in the manifest with GitHub-resolved author,
      co-author, issue, and editorial-eligibility data. They inform grouped
      prose but are never rendered as a public `#### Direct commits` dump. Add
      direct-commit credit to a grouped bullet only when it shares an explicit
      closing issue reference or at least two distinctive subject terms
-   - the verifier rejects `docs`, `test`, `refactor`, `ci`, `build`, `chore`,
-     and `style` PRs in Highlights, Changes, or Fixes. Keep those internal
-     contributions in the complete PR record, but do not give them editorial
-     release-note space
-   - classify internal-only work from conventional prefixes and clear title
-     signals such as `QA`, `test`, `docs`, `refactor`, `lint`, or `CI`; an
-     untyped title is not automatically editorial
+   - the verifier rejects ordinary `docs`, `test`, `refactor`, `ci`, `build`,
+     `chore`, and `style` PRs in Highlights, Changes, or Fixes. An explicit
+     Conventional Commits `!` marker makes any type editorial-eligible; include
+     its verified user-facing breaking change and migration guidance with the
+     original PR ref and credit. Keep other internal contributions only in the
+     complete PR record
+   - classify conventional titles from their declared type and scope, not
+     incidental words such as `doc` or `build` in their descriptions. For
+     untyped titles, retain internal-work signals such as `QA`, `test`, `docs`,
+     `refactor`, `lint`, or `CI`; eligibility never replaces the source audit
+     that establishes a user-visible outcome
    - do not add GHSA references, advisory IDs, or security advisory slugs to
      changelog entries or GitHub release-note text unless explicitly requested
-   - never thank bots, `@claude`, `@openclaw`, `@clawsweeper`, or `@steipete`
+   - never thank bots, `@claude`, `@codex`, `@openclaw`, `@clawsweeper`, or `@steipete`
    - do not use GitHub's release contributor count as the source of truth; the
      changelog must carry the complete human credit set itself
 7. Sorting preference:
@@ -180,14 +203,15 @@ every human `Thanks @...` attribution.
 9. Check release-note side conditions:
    - inspect `src/plugins/compat/registry.ts`
    - inspect `src/commands/doctor/shared/deprecation-compat.ts`
-   - if any compatibility `removeAfter` is on/before release date, resolve it
-     or explicitly record the blocker before shipping
+   - if a deprecated compatibility record reaches `removeAfter`, remove it when
+     proven safe or move it to `removal-pending` and record the blocker; keep a
+     due `removal-pending` record only until its documented conditions are met
 10. Validate and ship:
 
 - after the manifest-driven rewrite, regenerate and verify the complete
   contribution record before committing:
   ```bash
-  node .agents/skills/openclaw-changelog-update/scripts/verify-release-notes.mjs \
+  node --import tsx .agents/skills/openclaw-changelog-update/scripts/verify-release-notes.mjs \
     --base <base-tag> \
     --target <target-ref> \
     --main-ref origin/main \
@@ -215,7 +239,7 @@ every human `Thanks @...` attribution.
 - after the GitHub release or prerelease is published, verify every matching
   release page against the same source section:
   ```bash
-  node .agents/skills/openclaw-changelog-update/scripts/verify-release-notes.mjs \
+  node --import tsx .agents/skills/openclaw-changelog-update/scripts/verify-release-notes.mjs \
     --base <base-tag> \
     --target <target-ref> \
     --version <YYYY.M.PATCH> \
@@ -225,7 +249,7 @@ every human `Thanks @...` attribution.
 - add one `--release-tag` for every beta and stable page in the train; a
   `### Release verification` tail is permitted, but any other body drift
   fails the check
-- `scripts/render-github-release-notes.mjs` is the canonical release-body
+- `scripts/render-github-release-notes.mts` is the canonical release-body
   renderer used by candidate validation, publish, and verification. When the
   complete `## YYYY.M.PATCH` section fits GitHub's 125,000-character limit and
   the renderer's matching 125,000-byte safety ceiling, the body must contain
@@ -241,18 +265,20 @@ every human `Thanks @...` attribution.
   the immutable attached release evidence; never compact a fitting full
   contribution record just to preserve the optional tail
 - `pnpm release:candidate` performs this deterministic render check from the
-  exact tag before it dispatches Full Release Validation, including when local
+  exact target before it dispatches Full Release Validation, including when local
   generated checks are explicitly skipped
 - `git diff --check`
 - for docs/changelog-only changes, no broad tests are required
-- commit with `scripts/committer "docs(changelog): refresh YYYY.M.PATCH notes" CHANGELOG.md`
-- record the new commit as the Release SHA and require
-  `git diff --name-only <code-sha>..<release-sha>` to print only
-  `CHANGELOG.md`
+- stage `CHANGELOG.md` and commit with `git commit -m "docs(changelog): refresh YYYY.M.PATCH notes"`
 - push the release branch without rebasing it onto moving `main`
-- dispatch SHA-pinned Full Release Validation for the Release SHA with evidence
-  reuse enabled. It must select `changelog-only-release-v1`; any other changed
-  path returns the release to the Code SHA validation loop
+- when all fixes and final notes are committed before fresh full qualification,
+  record that commit as both Code SHA and Release SHA; use the same successful
+  full parent/attempt and its exact publication bytes for both roles
+- only when notes change after Code qualification, require
+  `git diff --name-only <code-sha>..<release-sha>` to print exactly
+  `CHANGELOG.md` before optionally using `changelog-only-release-v1`. That path
+  retains green Code proof and qualifies new Release SHA package bytes. Any
+  other changed path requires fresh product qualification
 
 ## Extended-Stable Variant
 

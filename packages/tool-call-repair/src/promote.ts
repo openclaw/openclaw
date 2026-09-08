@@ -1,5 +1,5 @@
+import { asOptionalObjectRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import type { PlainTextToolCallProtectedRangeResolver } from "./contracts.js";
-// Tool Call Repair module implements promote behavior.
 import { parseStandalonePlainTextToolCallBlocks, type PlainTextToolCallBlock } from "./payload.js";
 
 /** Resolves model-emitted tool names to the exact names allowed by the provider request. */
@@ -43,10 +43,6 @@ export function createPromotedPlainTextToolCallBlock(
     arguments: block.arguments,
     partialArgs: JSON.stringify(block.arguments),
   };
-}
-
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" ? (value as Record<string, unknown>) : undefined;
 }
 
 /** Emits the complete provider-neutral lifecycle for promoted tool-call blocks. */

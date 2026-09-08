@@ -2,6 +2,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION } from "../types.js";
 import type { SkillSnapshot } from "../types.js";
 
@@ -34,8 +35,8 @@ const {
   ),
 }));
 
-vi.mock("../loading/workspace.js", () => ({
-  buildWorkspaceSkillSnapshot: buildWorkspaceSkillSnapshotMock,
+vi.mock("../loading/workspace-skill-prompt.js", () => ({
+  buildSkillSnapshot: buildWorkspaceSkillSnapshotMock,
 }));
 
 vi.mock("./refresh.js", () => ({
@@ -60,6 +61,47 @@ describe("resolveReusableWorkspaceSkillSnapshot", () => {
     shouldRefreshSnapshotForVersionMock.mockImplementation((cached = 0, next = 0) =>
       next === 0 ? cached > 0 : cached < next,
     );
+  });
+
+  it("reuses prepared plugin metadata for watcher reconciliation and skill loading", () => {
+    const pluginMetadataSnapshot = { policyHash: "prepared" } as PluginMetadataSnapshot;
+
+    resolveReusableWorkspaceSkillSnapshot({
+      workspaceDir: TEST_WORKSPACE_DIR,
+      executionWorkspaceDir: "/tmp/execution",
+      config: {},
+      pluginMetadataSnapshot,
+    });
+
+    expect(buildWorkspaceSkillSnapshotMock).toHaveBeenCalledWith(
+      TEST_WORKSPACE_DIR,
+      expect.objectContaining({ pluginMetadataSnapshot }),
+    );
+    expect(ensureSkillsWatcherMock).toHaveBeenCalledWith(
+      expect.objectContaining({ pluginMetadataSnapshot }),
+    );
+  });
+
+  it("reuses complete cached snapshots for fresh sessions until the snapshot version changes", () => {
+    buildWorkspaceSkillSnapshotMock.mockReturnValue({
+      prompt: "cached skills prompt",
+      skills: [{ name: "cached-skill" }],
+      resolvedSkills: [{ name: "cached-skill" }],
+    });
+    const params = { workspaceDir: TEST_WORKSPACE_DIR, config: {} };
+
+    const first = resolveReusableWorkspaceSkillSnapshot(params);
+    const second = resolveReusableWorkspaceSkillSnapshot(params);
+
+    expect(second.snapshot).toBe(first.snapshot);
+    expect(second.snapshot.prompt).toBe("cached skills prompt");
+    expect(second.snapshot.skills).toEqual([{ name: "cached-skill" }]);
+    expect(second.snapshot.resolvedSkills).toEqual([{ name: "cached-skill" }]);
+    expect(buildWorkspaceSkillSnapshotMock).toHaveBeenCalledOnce();
+
+    getSkillsSnapshotVersionMock.mockReturnValue(2);
+    resolveReusableWorkspaceSkillSnapshot(params);
+    expect(buildWorkspaceSkillSnapshotMock).toHaveBeenCalledTimes(2);
   });
 
   it("reuses cached resolvedSkills across calls with the same workspace, version, and filter", () => {

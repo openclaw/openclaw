@@ -1,9 +1,18 @@
 // QA Lab Slack live domain contracts and wire schemas.
-import type { WebClient } from "@slack/web-api";
+import type { ChannelApprovalKind } from "openclaw/plugin-sdk/approval-handler-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { z } from "zod";
-import type { startQaGatewayChild } from "../../gateway-child.js";
+import type { QaGatewayChild } from "../../gateway-child.js";
 import { splitQaModelRef } from "../../model-selection.js";
+
+type SlackQaRuntime = typeof import("@openclaw/slack/test-api.js");
+type CreateSlackWebClient = SlackQaRuntime["createSlackWebClient"];
+
+export type SlackQaWebClient = ReturnType<CreateSlackWebClient>;
+export type SlackQaFetchFunction = NonNullable<
+  NonNullable<Parameters<CreateSlackWebClient>[1]>["fetch"]
+>;
+type WebClient = SlackQaWebClient;
 
 export type SlackQaRuntimeEnv = {
   channelId: string;
@@ -84,7 +93,6 @@ export const SLACK_QA_NATIVE_TABLE = {
 // These scenarios force the Codex harness, whose default provider set is intentionally narrow.
 const SLACK_QA_CODEX_PROVIDER_IDS = new Set(["codex", "openai"]);
 
-export type SlackQaApprovalKind = "exec" | "plugin";
 export type SlackQaApprovalDecision = "allow-always" | "allow-once" | "deny";
 export const SLACK_QA_APPROVAL_ACTION_PREFIX = "openclaw:approval:v1:";
 export const SlackQaApprovalActionValueSchema = z
@@ -110,6 +118,7 @@ export function assertSlackCodexApprovalModelSupported(modelRef: string) {
 
 export type SlackQaMessageScenarioRun = {
   afterNoReply?: (context: SlackQaScenarioContext) => Promise<string | void>;
+  captureBeforeReply?: (messages: readonly SlackObservedMessage[]) => boolean;
   cleanup?: (context: Omit<SlackQaScenarioContext, "sentTs">) => Promise<void>;
   kind?: "message";
   expectReply: boolean;
@@ -149,7 +158,7 @@ export type SlackQaDirectTransportScenarioResult = {
 };
 
 export type SlackQaApprovalScenarioRun = {
-  approvalKind: SlackQaApprovalKind;
+  approvalKind: ChannelApprovalKind;
   decision: SlackQaApprovalDecision;
   kind: "approval";
   token: string;
@@ -191,6 +200,7 @@ export type SlackQaConfigOverrides = {
   messageTool?: boolean;
   progress?: {
     commentary?: boolean;
+    style?: "compact";
     toolProgress: boolean;
     verboseDefault?: "off" | "on" | "full";
   };
@@ -202,7 +212,7 @@ export type SlackQaConfigOverrides = {
 export type SlackQaScenarioContext = {
   channelId: string;
   driverClient: WebClient;
-  gateway: Awaited<ReturnType<typeof startQaGatewayChild>>;
+  gateway: QaGatewayChild;
   postSlackMessage: (params: { text: string; threadTs?: string }) => Promise<{ ts: string }>;
   sentTs: string;
   sutIdentity: SlackAuthIdentity;
@@ -243,7 +253,7 @@ export type SlackObservedMessage = {
 
 export type SlackApprovalArtifact = {
   approvalId: string;
-  approvalKind: SlackQaApprovalKind;
+  approvalKind: ChannelApprovalKind;
   appServerMethod?: SlackQaCodexApprovalMethod;
   channelId?: string;
   codexModelKey?: string;

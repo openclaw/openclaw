@@ -86,21 +86,17 @@ export function formatPluginInstallWithHookFallbackError(
   hookFallback: { error: string; code?: string },
 ): string {
   const formattedPluginError = formatPluginInstallAttemptError(pluginError);
-  const formattedHookError = formatPluginInstallAttemptError(hookFallback.error);
   if (/plugin already exists: .+ \(delete it first\)/.test(pluginError)) {
-    const updateCommand = formatCliCommand("openclaw plugins update <id-or-npm-spec>");
-    return `${formattedPluginError}\nUse \`${updateCommand}\` to upgrade the tracked plugin, or rerun install with \`--force\` to replace it.`;
+    return `${formattedPluginError}\nUse \`${formatCliCommand("openclaw plugins update <id-or-npm-spec>")}\` to upgrade the tracked plugin, or rerun install with \`--force\` to replace it.`;
   }
   if (
     pluginError.startsWith("Invalid extensions directory:") ||
-    pluginError === "Invalid path: must stay within extensions directory"
+    pluginError === "Invalid path: must stay within extensions directory" ||
+    hookFallback.code === HOOK_INSTALL_ERROR_CODE.MISSING_OPENCLAW_HOOKS
   ) {
     return formattedPluginError;
   }
-  if (hookFallback.code === HOOK_INSTALL_ERROR_CODE.MISSING_OPENCLAW_HOOKS) {
-    return formattedPluginError;
-  }
-  return `${formattedPluginError}\nAlso not a valid hook pack: ${formattedHookError}`;
+  return `${formattedPluginError}\nAlso not a valid hook pack: ${formatPluginInstallAttemptError(hookFallback.error)}`;
 }
 
 const MISSING_GIT_FOR_NPM_DEPENDENCY_HINT =
@@ -119,10 +115,6 @@ function formatPluginInstallAttemptError(error: string): string {
 function isMissingGitForNpmDependencyError(error: string): boolean {
   const normalized = normalizeLowercaseStringOrEmpty(error);
   return /\bspawn\s+git\b/u.test(normalized) && /\benoent\b/u.test(normalized);
-}
-
-export function logHookPackRestartHint(runtime: RuntimeEnv = defaultRuntime) {
-  runtime.log("Restart the gateway to load hooks.");
 }
 
 export function logSlotWarnings(warnings: string[], runtime: RuntimeEnv = defaultRuntime) {

@@ -2,15 +2,21 @@
 import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { controlNextRecoverySleep } from "../../test/helpers/infra/delivery-recovery.js";
-import { withTempDir } from "../test-helpers/temp-dir.js";
+import { withTestDir } from "../test-helpers/temp-dir.js";
 import { upsertDeliveryQueueEntry } from "./delivery-queue-sqlite.js";
 const RECOVERY_REPLAY_SPACING_MS = 250;
 const sleepMock = vi.hoisted(() => vi.fn<(ms: number) => Promise<void>>());
 
 vi.mock("../utils/sleep.js", () => ({ sleep: sleepMock }));
 
+import { createInfoWarnErrorLogger } from "../../test/helpers/mock-logger.js";
+import {
+  drainPendingSessionDelivery,
+  recoverPendingSessionDeliveries,
+} from "./session-delivery-queue-recovery.js";
 import {
   deferSessionDelivery,
+  enqueueSessionDelivery,
   failSessionDelivery,
   loadPendingSessionDeliveries,
   markSessionDeliveryAttemptStarted,
@@ -20,11 +26,6 @@ import {
   SessionDeliverySafeRetryError,
   type QueuedSessionDelivery,
 } from "./session-delivery-queue-storage.js";
-import {
-  drainPendingSessionDeliveries,
-  enqueueSessionDelivery,
-  recoverPendingSessionDeliveries,
-} from "./session-delivery-queue.js";
 
 describe("session-delivery queue recovery", () => {
   beforeEach(() => {
@@ -33,7 +34,7 @@ describe("session-delivery queue recovery", () => {
   });
 
   it("replays and acks pending entries on recovery", async () => {
-    await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
+    await withTestDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
       await enqueueSessionDelivery(
         {
           kind: "systemEvent",
@@ -49,11 +50,7 @@ describe("session-delivery queue recovery", () => {
         deliver,
         onSettled,
         stateDir: tempDir,
-        log: {
-          info: vi.fn(),
-          warn: vi.fn(),
-          error: vi.fn(),
-        },
+        log: createInfoWarnErrorLogger(),
       });
 
       expect(deliver).toHaveBeenCalledTimes(1);
@@ -64,7 +61,7 @@ describe("session-delivery queue recovery", () => {
   });
 
   it("lets the delivery owner persist its fence at the side-effect boundary", async () => {
-    await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
+    await withTestDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
       const id = await enqueueSessionDelivery(
         {
           kind: "agentTurn",
@@ -94,7 +91,7 @@ describe("session-delivery queue recovery", () => {
   });
 
   it("retries settlement cleanup without replaying a delivered side effect", async () => {
-    await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
+    await withTestDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
       const id = await enqueueSessionDelivery(
         {
           kind: "agentTurn",
@@ -146,7 +143,7 @@ describe("session-delivery queue recovery", () => {
   });
 
   it("retries dead-letter cleanup without replaying an ambiguous agent turn", async () => {
-    await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
+    await withTestDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
       const id = await enqueueSessionDelivery(
         {
           kind: "agentTurn",
@@ -182,7 +179,7 @@ describe("session-delivery queue recovery", () => {
   });
 
   it("cleans an acknowledged tombstone without replaying delivery", async () => {
-    await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
+    await withTestDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
       await enqueueSessionDelivery(
         {
           kind: "agentTurn",
@@ -213,11 +210,7 @@ describe("session-delivery queue recovery", () => {
       const summary = await recoverPendingSessionDeliveries({
         deliver,
         stateDir: tempDir,
-        log: {
-          info: vi.fn(),
-          warn: vi.fn(),
-          error: vi.fn(),
-        },
+        log: createInfoWarnErrorLogger(),
       });
 
       expect(deliver).not.toHaveBeenCalled();
@@ -227,7 +220,7 @@ describe("session-delivery queue recovery", () => {
   });
 
   it("drains an exhausted acknowledged tombstone without replay or backoff", async () => {
-    await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
+    await withTestDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
       const id = await enqueueSessionDelivery(
         {
           kind: "agentTurn",
@@ -256,14 +249,13 @@ describe("session-delivery queue recovery", () => {
       const deliver = vi.fn(async () => undefined);
       const onSettled = vi.fn(async () => undefined);
 
-      await drainPendingSessionDeliveries({
-        drainKey: "test-acknowledged-cleanup",
+      await drainPendingSessionDelivery({
+        id,
         logLabel: "test acknowledged cleanup",
         deliver,
         onSettled,
         stateDir: tempDir,
         log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-        selectEntry: (candidate) => ({ match: candidate.id === id }),
       });
 
       expect(deliver).not.toHaveBeenCalled();
@@ -278,7 +270,7 @@ describe("session-delivery queue recovery", () => {
     vi.setSystemTime(startedAt);
     try {
       const controlledSleep = controlNextRecoverySleep(sleepMock);
-      await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
+      await withTestDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
         await enqueueSessionDelivery(
           {
             kind: "systemEvent",
@@ -304,11 +296,7 @@ describe("session-delivery queue recovery", () => {
         const recovery = recoverPendingSessionDeliveries({
           deliver,
           stateDir: tempDir,
-          log: {
-            info: vi.fn(),
-            warn: vi.fn(),
-            error: vi.fn(),
-          },
+          log: createInfoWarnErrorLogger(),
         });
 
         await expect(controlledSleep.started).resolves.toBe(RECOVERY_REPLAY_SPACING_MS);
@@ -331,7 +319,7 @@ describe("session-delivery queue recovery", () => {
     vi.setSystemTime(startedAt);
     try {
       const controlledSleep = controlNextRecoverySleep(sleepMock);
-      await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
+      await withTestDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
         for (const text of ["first", "second", "third"]) {
           await enqueueSessionDelivery(
             {
@@ -352,11 +340,7 @@ describe("session-delivery queue recovery", () => {
           deliver,
           stateDir: tempDir,
           maxRecoveryMs: 1,
-          log: {
-            info: vi.fn(),
-            warn: vi.fn(),
-            error: vi.fn(),
-          },
+          log: createInfoWarnErrorLogger(),
         });
 
         await expect(controlledSleep.started).resolves.toBe(1);
@@ -378,7 +362,7 @@ describe("session-delivery queue recovery", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(MAX_DATE_TIMESTAMP_MS));
 
-    await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
+    await withTestDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
       await enqueueSessionDelivery(
         {
           kind: "systemEvent",
@@ -413,7 +397,7 @@ describe("session-delivery queue recovery", () => {
   });
 
   it("keeps failed entries queued with retry metadata for later recovery", async () => {
-    await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
+    await withTestDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
       await enqueueSessionDelivery(
         {
           kind: "agentTurn",
@@ -432,11 +416,7 @@ describe("session-delivery queue recovery", () => {
         }),
         onSettled,
         stateDir: tempDir,
-        log: {
-          info: vi.fn(),
-          warn: vi.fn(),
-          error: vi.fn(),
-        },
+        log: createInfoWarnErrorLogger(),
       });
 
       const [failedEntry] = await loadPendingSessionDeliveries(tempDir);
@@ -448,7 +428,7 @@ describe("session-delivery queue recovery", () => {
   });
 
   it("leaves pre-dispatch failures retryable without claiming side-effect ownership", async () => {
-    await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
+    await withTestDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
       await enqueueSessionDelivery(
         {
           kind: "agentTurn",
@@ -477,7 +457,7 @@ describe("session-delivery queue recovery", () => {
   });
 
   it("releases attempt ownership only for an explicitly safe retry", async () => {
-    await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
+    await withTestDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
       await enqueueSessionDelivery(
         {
           kind: "agentTurn",
@@ -504,7 +484,7 @@ describe("session-delivery queue recovery", () => {
   });
 
   it("defers active agent ownership without consuming retry budget", async () => {
-    await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
+    await withTestDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
       const id = await enqueueSessionDelivery(
         {
           kind: "agentTurn",
@@ -532,7 +512,7 @@ describe("session-delivery queue recovery", () => {
   });
 
   it("does not charge retry budget twice after a charged transition failure", async () => {
-    await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
+    await withTestDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
       const id = await enqueueSessionDelivery(
         {
           kind: "agentTurn",
@@ -563,7 +543,7 @@ describe("session-delivery queue recovery", () => {
   });
 
   it("does not report an explicitly dead-lettered delivery as recovered", async () => {
-    await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
+    await withTestDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
       const id = await enqueueSessionDelivery(
         {
           kind: "agentTurn",
@@ -592,7 +572,7 @@ describe("session-delivery queue recovery", () => {
   });
 
   it("uses the entry retry budget when draining entries", async () => {
-    await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
+    await withTestDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
       const id = await enqueueSessionDelivery(
         {
           kind: "agentTurn",
@@ -608,20 +588,13 @@ describe("session-delivery queue recovery", () => {
       }
 
       const deliver = vi.fn(async () => undefined);
-      await drainPendingSessionDeliveries({
-        drainKey: "test-restart-continuation",
+      await drainPendingSessionDelivery({
+        id,
         logLabel: "test restart continuation",
+        bypassBackoff: true,
         deliver,
         stateDir: tempDir,
-        log: {
-          info: vi.fn(),
-          warn: vi.fn(),
-          error: vi.fn(),
-        },
-        selectEntry: (entry) => ({
-          match: entry.id === id,
-          bypassBackoff: true,
-        }),
+        log: createInfoWarnErrorLogger(),
       });
 
       expect(deliver).toHaveBeenCalledTimes(1);
@@ -630,7 +603,7 @@ describe("session-delivery queue recovery", () => {
   });
 
   it("settles entries moved to failed after drain retry exhaustion", async () => {
-    await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
+    await withTestDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
       const id = await enqueueSessionDelivery(
         {
           kind: "agentTurn",
@@ -645,14 +618,14 @@ describe("session-delivery queue recovery", () => {
 
       const deliver = vi.fn(async () => undefined);
       const onSettled = vi.fn(async () => undefined);
-      await drainPendingSessionDeliveries({
-        drainKey: "test-restart-continuation-exhausted",
+      await drainPendingSessionDelivery({
+        id,
         logLabel: "test restart continuation",
+        bypassBackoff: true,
         deliver,
         onSettled,
         stateDir: tempDir,
         log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-        selectEntry: (entry) => ({ match: entry.id === id, bypassBackoff: true }),
       });
 
       expect(deliver).not.toHaveBeenCalled();
@@ -662,7 +635,7 @@ describe("session-delivery queue recovery", () => {
   });
 
   it("settles entries moved to failed after startup retry exhaustion", async () => {
-    await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
+    await withTestDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
       const id = await enqueueSessionDelivery(
         {
           kind: "agentTurn",
@@ -698,7 +671,7 @@ describe("session-delivery queue recovery", () => {
         vi.useFakeTimers();
       }
       try {
-        await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
+        await withTestDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
           const id = await enqueueSessionDelivery(
             {
               kind: "agentTurn",
@@ -721,13 +694,13 @@ describe("session-delivery queue recovery", () => {
             vi.setSystemTime(new Date(Date.now() + 60_000));
           }
           if (mode === "runtime") {
-            await drainPendingSessionDeliveries({
-              drainKey: `test-started-exhausted-${mode}`,
+            await drainPendingSessionDelivery({
+              id,
               logLabel: "test started reconciliation",
+              bypassBackoff: true,
               deliver,
               stateDir: tempDir,
               log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-              selectEntry: (candidate) => ({ match: candidate.id === id, bypassBackoff: true }),
             });
           } else {
             const summary = await recoverPendingSessionDeliveries({
@@ -753,7 +726,7 @@ describe("session-delivery queue recovery", () => {
   );
 
   it("dead-letters a started agent turn after its bounded reconciliation fails", async () => {
-    await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
+    await withTestDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
       const id = await enqueueSessionDelivery(
         {
           kind: "agentTurn",
@@ -775,13 +748,13 @@ describe("session-delivery queue recovery", () => {
         throw new Error("terminal evidence unavailable");
       });
       const drain = async () =>
-        await drainPendingSessionDeliveries({
-          drainKey: "test-started-reconciliation-failed",
+        await drainPendingSessionDelivery({
+          id,
           logLabel: "test started reconciliation",
+          bypassBackoff: true,
           deliver,
           stateDir: tempDir,
           log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-          selectEntry: (candidate) => ({ match: candidate.id === id, bypassBackoff: true }),
         });
 
       await drain();
@@ -800,7 +773,7 @@ describe("session-delivery queue recovery", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-04-23T00:00:00.000Z"));
 
-    await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
+    await withTestDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
       await enqueueSessionDelivery(
         {
           kind: "systemEvent",
@@ -826,11 +799,7 @@ describe("session-delivery queue recovery", () => {
         deliver,
         stateDir: tempDir,
         maxEnqueuedAt,
-        log: {
-          info: vi.fn(),
-          warn: vi.fn(),
-          error: vi.fn(),
-        },
+        log: createInfoWarnErrorLogger(),
       });
 
       expect(deliver).toHaveBeenCalledTimes(1);

@@ -1,7 +1,5 @@
 // QA Lab Slack Web API and stored-message observations.
 import { isDeepStrictEqual } from "node:util";
-import { createSlackWebClient, sendSlackMessage } from "@openclaw/slack/api.js";
-import type { WebClient } from "@slack/web-api";
 import {
   asPlainRecord,
   countSlackNativeDataBlocks,
@@ -23,10 +21,15 @@ import {
   type SlackMessage,
   slackHistorySchema,
   slackRepliesSchema,
+  type SlackQaWebClient as WebClient,
 } from "./slack-live.contracts.js";
 import { buildSlackInvalidBlocksTableProbe } from "./slack-live.invalid-blocks.js";
+import { loadSlackQaRuntime } from "./slack-plugin.runtime.js";
+
+const SLACK_QA_CHANNEL_HISTORY_LIMIT = 50;
 
 export async function getSlackIdentity(token: string): Promise<SlackAuthIdentity> {
+  const { createSlackWebClient } = loadSlackQaRuntime();
   const client = createSlackWebClient(token, { timeout: SLACK_QA_WEB_API_TIMEOUT_MS });
   const auth = slackAuthTestSchema.parse(await client.auth.test());
   if (!auth.user_id) {
@@ -70,7 +73,7 @@ export async function listSlackMessages(params: {
     await params.client.conversations.history({
       channel: params.channelId,
       inclusive: true,
-      limit: 50,
+      limit: SLACK_QA_CHANNEL_HISTORY_LIMIT,
       oldest: params.oldestTs,
     }),
   );
@@ -253,6 +256,48 @@ export async function waitForSlackStoredMessage(params: {
   client: WebClient;
   description: string;
   matchesMessage: (message: SlackMessage) => boolean;
+  messageId: string;
+  sutIdentity: SlackAuthIdentity;
+  timeoutMs: number;
+}) {
+  const startedAt = Date.now();
+  while (true) {
+    // The capture owner supplies the successful post timestamp. Querying that exact
+    // boundary keeps concurrent shared-channel traffic from evicting the evidence.
+    const history = slackHistorySchema.parse(
+      await params.client.conversations.history({
+        channel: params.channelId,
+        inclusive: true,
+        latest: params.messageId,
+        limit: 1,
+      }),
+    );
+    const messages = history.messages ?? [];
+    const message = messages.find(
+      (entry) =>
+        entry.ts === params.messageId &&
+        isSutSlackMessage(entry, params.sutIdentity) &&
+        params.matchesMessage(entry),
+    );
+    if (message) {
+      return message;
+    }
+    const remainingMs = params.timeoutMs - (Date.now() - startedAt);
+    if (remainingMs <= 0) {
+      break;
+    }
+    await new Promise((resolve) => {
+      setTimeout(resolve, Math.min(1_000, remainingMs));
+    });
+  }
+  throw new Error(`timed out after ${params.timeoutMs}ms waiting for Slack ${params.description}`);
+}
+
+async function waitForSlackStoredMessages(params: {
+  channelId: string;
+  client: WebClient;
+  description: string;
+  messageIds: readonly string[];
   oldestTs: string;
   sutIdentity: SlackAuthIdentity;
   timeoutMs: number;
@@ -264,14 +309,13 @@ export async function waitForSlackStoredMessage(params: {
       client: params.client,
       oldestTs: params.oldestTs,
     });
-    const message = messages.find(
-      (entry) =>
-        entry.ts !== params.oldestTs &&
-        isSutSlackMessage(entry, params.sutIdentity) &&
-        params.matchesMessage(entry),
+    const messagesById = new Map(
+      messages
+        .filter((message) => message.ts && isSutSlackMessage(message, params.sutIdentity))
+        .map((message) => [message.ts as string, message]),
     );
-    if (message) {
-      return message;
+    if (params.messageIds.every((messageId) => messagesById.has(messageId))) {
+      return params.messageIds.map((messageId) => messagesById.get(messageId) as SlackMessage);
     }
     const remainingMs = params.timeoutMs - (Date.now() - startedAt);
     if (remainingMs <= 0) {
@@ -311,6 +355,7 @@ export function isExpectedSlackNativeTableMessage(
 export async function runSlackTableInvalidBlocksFallbackScenario(
   context: SlackQaDirectTransportScenarioContext,
 ): Promise<SlackQaDirectTransportScenarioResult> {
+  const { sendSlackMessage } = loadSlackQaRuntime();
   const probe = buildSlackInvalidBlocksTableProbe();
   const oldestTs = ((Date.now() - 5_000) / 1_000).toFixed(6);
   const originalPostMessage = context.sutWriteClient.chat.postMessage;
@@ -337,14 +382,17 @@ export async function runSlackTableInvalidBlocksFallbackScenario(
         nativeDataFallbackBaseText: probe.summaryText,
       });
     } catch {
-      const [nativeAttempt, fallbackAttempt] = instrumentation.attempts;
+      const [nativeAttempt, ...fallbackAttempts] = instrumentation.attempts;
       if (nativeAttempt?.failureCode !== "invalid_blocks") {
         throw new Error(
           `expected first Slack API failure code invalid_blocks; observed ${nativeAttempt?.failureCode ?? "none"}`,
         );
       }
+      const failedPartIndex = fallbackAttempts.findIndex((attempt) => attempt.status === "failed");
+      const failedAttempt = failedPartIndex >= 0 ? fallbackAttempts[failedPartIndex] : undefined;
+      const failedPart = failedPartIndex >= 0 ? String(failedPartIndex + 1) : "unknown";
       throw new Error(
-        `Slack fallback failed after invalid_blocks; observed ${fallbackAttempt?.failureCode ?? "no fallback API failure code"}`,
+        `Slack fallback part ${failedPart} failed after invalid_blocks; observed ${failedAttempt?.failureCode ?? "no fallback API failure code"}`,
       );
     }
   } finally {
@@ -352,10 +400,25 @@ export async function runSlackTableInvalidBlocksFallbackScenario(
     context.sutWriteClient.chat.postMessage = originalPostMessage;
   }
 
-  const [nativeAttempt, fallbackAttempt] = instrumentation.attempts;
-  if (instrumentation.attempts.length !== 2) {
+  const [nativeAttempt, ...fallbackAttempts] = instrumentation.attempts;
+  const receiptMessageIds = sent.receipt.platformMessageIds;
+  if (receiptMessageIds.length < 2) {
     throw new Error(
-      `expected exactly two Slack API attempts; observed ${instrumentation.attempts.length}`,
+      "Slack oversized fallback receipt did not retain multiple platform message IDs",
+    );
+  }
+  if (new Set(receiptMessageIds).size !== receiptMessageIds.length) {
+    throw new Error("Slack fallback receipt retained duplicate platform message IDs");
+  }
+  if (
+    sent.receipt.primaryPlatformMessageId !== receiptMessageIds[0] ||
+    sent.messageId !== receiptMessageIds.at(-1)
+  ) {
+    throw new Error("Slack fallback receipt did not preserve first-primary and final-message IDs");
+  }
+  if (instrumentation.attempts.length !== receiptMessageIds.length + 1) {
+    throw new Error(
+      `expected one rejected native attempt plus ${receiptMessageIds.length} fallback receipt parts; observed ${instrumentation.attempts.length} Slack API attempts`,
     );
   }
   if (
@@ -368,31 +431,35 @@ export async function runSlackTableInvalidBlocksFallbackScenario(
     );
   }
   if (
-    fallbackAttempt?.status !== "sent" ||
-    fallbackAttempt.nativeDataBlockCount !== 0 ||
-    !fallbackAttempt.formattingDisabled
+    fallbackAttempts.some(
+      (attempt) =>
+        attempt.status !== "sent" ||
+        attempt.nativeDataBlockCount !== 0 ||
+        !attempt.formattingDisabled,
+    )
   ) {
-    throw new Error("Slack fallback did not use one formatting-disabled blockless API request");
+    throw new Error("Slack fallback did not use formatting-disabled blockless API requests");
   }
-  if (fallbackAttempt.text !== probe.fallbackText) {
+  const attemptedFallbackText = fallbackAttempts.map((attempt) => attempt.text).join("");
+  if (attemptedFallbackText !== probe.fallbackText) {
     throw new Error(
-      `Slack fallback API request was incomplete: expected ${probe.fallbackText.length} characters, observed ${describeSlackObservedText(fallbackAttempt.text)}`,
+      `Slack fallback API requests were incomplete: expected ${probe.fallbackText.length} characters, observed ${describeSlackObservedText(attemptedFallbackText)}`,
     );
   }
 
-  const message = await waitForSlackStoredMessage({
+  const messages = await waitForSlackStoredMessages({
     channelId: context.channelId,
     client: context.sutReadClient,
-    description: "stored invalid_blocks fallback message",
-    matchesMessage: (candidate) => candidate.ts === sent.messageId,
+    description: "stored invalid_blocks fallback messages",
+    messageIds: receiptMessageIds,
     oldestTs,
     sutIdentity: context.sutIdentity,
     timeoutMs: context.timeoutMs,
   });
-  const storedText = message.text ?? "";
-  if (countSlackNativeDataBlocks(message.blocks) !== 0) {
+  if (messages.some((message) => countSlackNativeDataBlocks(message.blocks) !== 0)) {
     throw new Error("stored Slack fallback retained a native data block");
   }
+  const storedText = messages.map((message) => message.text ?? "").join("");
   const normalizedStoredText = normalizeSlackAccessibleText(storedText);
   if (!normalizedStoredText.includes(normalizeSlackAccessibleText(probe.firstRowText))) {
     throw new Error(
@@ -409,11 +476,16 @@ export async function runSlackTableInvalidBlocksFallbackScenario(
       `stored Slack fallback was incomplete: expected ${probe.fallbackText.length} characters, observed ${describeSlackObservedText(storedText)}`,
     );
   }
+  const message = messages.at(-1);
+  if (!message) {
+    throw new Error("Slack fallback receipt had no stored message");
+  }
   return {
     details: [
       "direct transport",
       "first API failure=invalid_blocks",
-      "API attempts=2",
+      `API attempts=${instrumentation.attempts.length}`,
+      `fallback chunks=${receiptMessageIds.length}`,
       `data rows=${probe.dataRowCount}`,
       "fallback formatting disabled=true",
       "stored native data blocks=0",
