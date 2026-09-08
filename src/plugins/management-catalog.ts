@@ -26,9 +26,9 @@ import {
   resolveOfficialExternalPluginId,
   resolveOfficialExternalPluginInstall,
   resolveOfficialExternalPluginInstallSources,
-  type HostedOfficialExternalPluginCatalogLoadResult,
   type OfficialExternalPluginCatalogEntry,
 } from "./official-external-plugin-catalog.js";
+import type { OfficialCatalogResult } from "./official-external-plugin-catalog.types.js";
 import {
   getPluginCache,
   getPluginMetadataSnapshotCache,
@@ -40,14 +40,6 @@ import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
 
 export type ManagedPluginCatalogEntry = PluginCatalogEntry;
 export type ManagedPluginCatalog = PluginsListResult;
-
-export type OfficialCatalogResult = Pick<
-  HostedOfficialExternalPluginCatalogLoadResult,
-  "entries"
-> & {
-  error?: string;
-  hostedFeaturedAuthoritative?: boolean;
-};
 
 export function getManagedPluginCache(metadata?: PluginMetadataSnapshot) {
   if (metadata) {
