@@ -5,12 +5,24 @@ import ai.openclaw.app.gateway.GatewaySession
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ProviderModelCatalogRequestTest {
+  @Test
+  fun modelCatalogDistinguishesEmptyPublicationFromRefreshFailure() {
+    val empty = parseGatewayModelCatalog(Json.parseToJsonElement("""{"models":[]}""").jsonObject)
+    val failed = parseGatewayModelCatalog(Json.parseToJsonElement("""{"models":[],"refreshFailed":true}""").jsonObject)
+
+    assertTrue(empty.models.isEmpty())
+    assertEquals(false, empty.refreshFailed)
+    assertTrue(failed.models.isEmpty())
+    assertEquals(true, failed.refreshFailed)
+  }
+
   @Test
   fun prefersEffectiveContextCapOverNativeWindow() {
     val models =
