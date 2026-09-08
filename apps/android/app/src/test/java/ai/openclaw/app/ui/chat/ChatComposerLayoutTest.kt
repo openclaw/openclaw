@@ -11,6 +11,7 @@ import ai.openclaw.app.R
 import ai.openclaw.app.SecurePrefs
 import ai.openclaw.app.chat.ChatCacheScope
 import ai.openclaw.app.chat.ChatController
+import ai.openclaw.app.chat.ChatOutboxStatus
 import ai.openclaw.app.chat.ChatThinkingLevelOption
 import ai.openclaw.app.chat.questionsForSession
 import ai.openclaw.app.closeNodeRuntimeTestFixture
@@ -88,6 +89,7 @@ import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasAnyDescendant
+import androidx.compose.ui.test.hasAnySibling
 import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasScrollAction
@@ -175,6 +177,7 @@ import org.robolectric.shadows.ShadowDialog
 import org.robolectric.shadows.ShadowSpeechRecognizer
 import java.util.UUID
 import java.util.concurrent.ConcurrentLinkedQueue
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.ceil
 import kotlin.math.roundToInt
 
@@ -2755,6 +2758,191 @@ class ChatComposerLayoutTest {
     composeRule.onNodeWithContentDescription("Send").assertIsDisplayed().assertIsEnabled()
     if (text.isNotEmpty()) editor.assertTextEquals(text)
     attachment?.let { composeRule.onNodeWithText(it.fileName).assertIsDisplayed() }
+  }
+
+  @Test
+  fun connectedEmptyChatDoesNotClaimGatewayOfflineWhileHealthIsPending() =
+    withConnectedUnreadyEmptyChat(rejectHealth = false) { _, _, _ ->
+      composeRule.onNodeWithText(nativeString("Gateway offline")).assertDoesNotExist()
+      composeRule.onNodeWithText(nativeString("Chat not ready")).assertIsDisplayed()
+      composeRule.onNodeWithText(nativeString("Use Refresh chat to check Gateway health.")).assertIsDisplayed()
+    }
+
+  @Test
+  fun connectedEmptyChatDoesNotClaimGatewayOfflineAfterHealthFails() =
+    withConnectedUnreadyEmptyChat(rejectHealth = true) { _, _, _ ->
+      composeRule.onNodeWithText(nativeString("Gateway offline")).assertDoesNotExist()
+      composeRule.onNodeWithText(nativeString("Chat not ready")).assertIsDisplayed()
+      composeRule.onNodeWithText(nativeString("Use Refresh chat to check Gateway health.")).assertIsDisplayed()
+    }
+
+  @Test
+  fun connectedChatWithFailedHealthQueuesAndSendsAfterRecovery() =
+    withConnectedUnreadyEmptyChat(rejectHealth = true) { model, sent, recover ->
+      val owner = model.captureChatShareOwner()
+      val message = "Readiness recovery control"
+      val editor = composeRule.onNode(hasSetTextAction())
+      editor.performTextReplacement(message)
+      composeRule.onNodeWithContentDescription(nativeString("Send")).assertIsEnabled().performClick()
+      composeRule.waitUntil {
+        composeRule.runOnIdle {
+          owner !in model.chatComposerState.sendStates.value &&
+            model.chatOutboxItems.value
+              .singleOrNull()
+              ?.status == ChatOutboxStatus.Queued
+        }
+      }
+      assertTrue(sent.isEmpty())
+      editor.assert(SemanticsMatcher.expectValue(SemanticsProperties.EditableText, AnnotatedString("")))
+      assertTrue(model.gatewayConnectionDisplay.value.isConnected)
+      assertFalse(model.chatHealthOk.value)
+      recover()
+      composeRule.waitUntil {
+        composeRule.runOnIdle { model.chatHealthOk.value && sent.isNotEmpty() }
+      }
+      assertEquals(listOf(JsonPrimitive(message)), sent.map { it["message"] })
+      assertTrue(model.gatewayConnectionDisplay.value.isConnected)
+    }
+
+  @Test
+  fun emptyChatLabelsFollowHealthRecoveryAndActualDisconnect() =
+    withConnectedUnreadyEmptyChat(rejectHealth = false) { model, _, recover ->
+      recover()
+      composeRule.waitUntil {
+        composeRule.runOnIdle {
+          model.gatewayConnectionDisplay.value.isConnected && model.chatHealthOk.value &&
+            !model.chatHistoryLoading.value && model.chatMessages.value.isEmpty()
+        }
+      }
+      composeRule.onNodeWithText(nativeString("Ready when you are")).assertIsDisplayed()
+      composeRule.onNodeWithText(nativeString("Start with a prompt, or use voice.")).assertIsDisplayed()
+      composeRule.onNodeWithText(nativeString("Gateway offline")).assertDoesNotExist()
+      composeRule.onNodeWithText(nativeString("Chat not ready")).assertDoesNotExist()
+      composeRule.runOnUiThread { model.disconnect() }
+      composeRule.waitUntil {
+        composeRule.runOnIdle {
+          !model.gatewayConnectionDisplay.value.isConnected && !model.isConnected.value &&
+            !model.chatHealthOk.value && model.chatMessages.value.isEmpty()
+        }
+      }
+      composeRule
+        .onNode(
+          hasText(nativeString("Gateway offline")) and
+            hasAnySibling(hasText(nativeString("Use the recovery options below to reconnect."))),
+        ).assertIsDisplayed()
+      composeRule.onNodeWithText(nativeString("Use the recovery options below to reconnect.")).assertIsDisplayed()
+      composeRule.onNodeWithText(nativeString("Chat not ready")).assertDoesNotExist()
+    }
+
+  private fun withConnectedUnreadyEmptyChat(
+    rejectHealth: Boolean,
+    assertions: (MainViewModel, ConcurrentLinkedQueue<JsonObject>, () -> Unit) -> Unit,
+  ) {
+    prefs.gatewayRegistry.upsert(
+      GatewayRegistryEntry(
+        stableId = AndroidScreenshotFixture.gatewayId,
+        kind = GatewayRegistryEntryKind.MANUAL,
+        name = "Test gateway",
+      ),
+    )
+    prefs.gatewayRegistry.setActive(AndroidScreenshotFixture.gatewayId)
+    val model = showChat(viewportHeight = { 720.dp })
+    val requestField = ChatController::class.java.getDeclaredField("requestGatewayForGateway").apply { isAccessible = true }
+
+    @Suppress("UNCHECKED_CAST")
+    val originalRequest = requestField.get(controller) as suspend (String, String, String?) -> String
+    val leaseField = ChatController::class.java.getDeclaredField("captureRequestLease").apply { isAccessible = true }
+
+    @Suppress("UNCHECKED_CAST")
+    val originalLease = leaseField.get(controller) as (ChatCacheScope?) -> GatewaySession.RequestLease?
+    val healthEntered = CompletableDeferred<Unit>()
+    val releaseHealth = CompletableDeferred<Unit>()
+    val healthFinished = CompletableDeferred<Unit>()
+    val failHealth = AtomicBoolean(rejectHealth)
+    val sent = ConcurrentLinkedQueue<JsonObject>()
+    val sessionKey = "agent:main:readiness-empty"
+    val request: suspend (String, String, String?) -> String = { gatewayId, method, params ->
+      when (method) {
+        "chat.history" -> {
+          """{"sessionId":"readiness-empty","messages":[]}"""
+        }
+
+        "question.list" -> {
+          """{"questions":[]}"""
+        }
+
+        "progressCard.get" -> {
+          """{"card":null}"""
+        }
+
+        "health" -> {
+          healthEntered.complete(Unit)
+          try {
+            releaseHealth.await()
+            check(!failHealth.get()) { "Synthetic health failure" }
+            originalRequest(gatewayId, method, params)
+          } finally {
+            healthFinished.complete(Unit)
+          }
+        }
+
+        "chat.send" -> {
+          val payload = Json.parseToJsonElement(requireNotNull(params)).jsonObject
+          sent.add(payload)
+          buildJsonObject {
+            put("runId", payload.getValue("idempotencyKey"))
+            put("status", JsonPrimitive("started"))
+          }.toString()
+        }
+
+        else -> {
+          originalRequest(gatewayId, method, params)
+        }
+      }
+    }
+    val captureLease: (ChatCacheScope?) -> GatewaySession.RequestLease? = { scope ->
+      originalLease(scope)?.let { lease ->
+        GatewaySession.RequestLease(
+          endpointStableId = lease.endpointStableId,
+          isCurrentImpl = lease::isCurrent,
+          commitIfCurrentImpl = lease::commitIfCurrent,
+        ) { method, params, timeout, withEnqueue ->
+          if (method == "health") {
+            withEnqueue {}
+            request(lease.endpointStableId, method, params)
+          } else {
+            lease.request(method, params, timeout, withEnqueue)
+          }
+        }
+      }
+    }
+    try {
+      requestField.set(controller, request)
+      leaseField.set(controller, captureLease)
+      if (rejectHealth) releaseHealth.complete(Unit)
+      composeRule.runOnUiThread { controller.load(sessionKey, ownerAgentId = "main") }
+      composeRule.waitUntil {
+        composeRule.runOnIdle {
+          healthEntered.isCompleted && (!rejectHealth || healthFinished.isCompleted) &&
+            model.gatewayConnectionDisplay.value.isConnected && model.isConnected.value &&
+            model.chatSessionKey.value == sessionKey && !model.chatHistoryLoading.value &&
+            model.chatMessages.value.isEmpty() && !model.chatHealthOk.value &&
+            model.pendingRunCount.value == 0 && model.chatOutboxItems.value.isEmpty()
+        }
+      }
+      assertEquals(!rejectHealth, !healthFinished.isCompleted)
+      assertTrue(controller.isCurrentComposerOwner(model.captureChatShareOwner()))
+      println("CHAT_READINESS connected=true historyComplete=true rows=0 health=false healthFinished=${healthFinished.isCompleted}")
+      assertions(model, sent) {
+        failHealth.set(false)
+        releaseHealth.complete(Unit)
+        composeRule.runOnUiThread { controller.refresh() }
+      }
+    } finally {
+      releaseHealth.complete(Unit)
+      leaseField.set(controller, originalLease)
+      requestField.set(controller, originalRequest)
+    }
   }
 
   private fun withReaderHistory(

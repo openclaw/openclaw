@@ -93,7 +93,7 @@ describe("status-overview-surface", () => {
           "remote · wss://gateway.example.com (config) · ok(reachable 42ms) · auth token · gateway app 1.2.3",
       },
       { Item: "Gateway auth warning", Value: "warn(warn-text)" },
-      { Item: "Gateway self", Value: "gateway-self" },
+      { Item: "Gateway self", Value: "gateway app 1.2.3" },
       { Item: "Gateway service", Value: "LaunchAgent installed · loaded · running" },
       { Item: "Node service", Value: "node loaded · running (pid 42)" },
       { Item: "Agents", Value: "2 total" },

@@ -22,6 +22,7 @@ import {
   type NpmMetadataCommandRunner,
 } from "./update-check-package-target.js";
 import { updateInstallRootsMatch } from "./update-install-root.js";
+import type { UpdateFetchFailure } from "./update-run-record.js";
 
 type PackageManager = "pnpm" | "bun" | "npm" | "unknown";
 type GitUpdateOptions = { timeoutMs?: number; signal?: AbortSignal };
@@ -39,6 +40,8 @@ type GitUpdateStatus = {
   ahead: number | null;
   behind: number | null;
   fetchOk: boolean | null;
+  countsCached?: true;
+  stale?: UpdateFetchFailure;
   error?: string;
 };
 
