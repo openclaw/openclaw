@@ -48,6 +48,7 @@ function owner(config: OpenClawConfig, entries: ModelCatalogEntry[]): PreparedMo
   return {
     agentDir: "/tmp/model-catalog-passive-test",
     activeProjectKeys: [],
+    catalogOwner: undefined,
     config,
     observationConfig: config,
     isCurrent: () => true,
@@ -105,6 +106,7 @@ describe("loadProviderScopedThinkingCatalog", () => {
       const snapshot: PreparedModelRuntimeSnapshot = {
         agentDir: "/tmp/model-catalog-passive-test",
         activeProjectKeys: [],
+        catalogOwner: undefined,
         config,
         observationConfig: config,
         isCurrent: () => true,
