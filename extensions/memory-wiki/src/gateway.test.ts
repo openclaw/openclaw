@@ -941,6 +941,31 @@ describe("memory-wiki gateway methods", () => {
     expect(readRespondError(respond)).toEqual({ code: "internal_error", message });
   });
 
+  it("rejects wiki.apply without sourceIds before source sync or mutation", async () => {
+    const { config } = await createVault({ prefix: "memory-wiki-gateway-" });
+    const { api, registerGatewayMethod } = createPluginApi();
+    const message = "wiki mutation requires at least one sourceId for create_synthesis.";
+    vi.mocked(normalizeMemoryWikiMutationInput).mockReturnValueOnce({
+      op: "invalid_input",
+      message,
+    });
+
+    registerMemoryWikiGatewayMethods({ api, config });
+    const handler = findGatewayHandler(registerGatewayMethod, "wiki.apply");
+    if (!handler) {
+      throw new Error("wiki.apply handler missing");
+    }
+    const respond = vi.fn();
+    const params = { op: "create_synthesis", title: "Gateway Alpha", body: "Gateway summary." };
+
+    await handler({ params, respond });
+
+    expect(normalizeMemoryWikiMutationInput).toHaveBeenCalledWith(params);
+    expect(syncMemoryWikiImportedSources).not.toHaveBeenCalled();
+    expect(applyMemoryWikiMutation).not.toHaveBeenCalled();
+    expect(readRespondError(respond)).toEqual({ code: "internal_error", message });
+  });
+
   it("applies wiki mutations over the gateway", async () => {
     const { config } = await createVault({ prefix: "memory-wiki-gateway-" });
     const { api, registerGatewayMethod } = createPluginApi();

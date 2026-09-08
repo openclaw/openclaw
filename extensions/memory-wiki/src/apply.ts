@@ -60,6 +60,18 @@ type UpdateMetadataMemoryWikiMutation = {
 
 type ApplyMemoryWikiMutation = CreateSynthesisMemoryWikiMutation | UpdateMetadataMemoryWikiMutation;
 
+/**
+ * Rejected mutation input. Missing provenance is an ordinary caller mistake, so
+ * it is reported as a result the caller can render as a validation failure
+ * instead of an exception that escapes the tool call.
+ */
+type InvalidMemoryWikiMutationInput = {
+  op: "invalid_input";
+  message: string;
+};
+
+export type MemoryWikiMutationInput = ApplyMemoryWikiMutation | InvalidMemoryWikiMutationInput;
+
 type ApplyMemoryWikiMutationResult = {
   changed: boolean;
   operation: ApplyMemoryWikiMutation["op"];
@@ -116,7 +128,7 @@ function normalizeMemoryWikiMutationOp(op: unknown): ApplyMemoryWikiMutation["op
   );
 }
 
-export function normalizeMemoryWikiMutationInput(rawParams: unknown): ApplyMemoryWikiMutation {
+export function normalizeMemoryWikiMutationInput(rawParams: unknown): MemoryWikiMutationInput {
   const params = asNonArrayRecord(rawParams) as {
     op: unknown;
     title?: string;
@@ -138,7 +150,10 @@ export function normalizeMemoryWikiMutationInput(rawParams: unknown): ApplyMemor
       throw new Error("wiki mutation requires body for create_synthesis.");
     }
     if (!params.sourceIds || params.sourceIds.length === 0) {
-      throw new Error("wiki mutation requires at least one sourceId for create_synthesis.");
+      return {
+        op: "invalid_input",
+        message: "wiki mutation requires at least one sourceId for create_synthesis.",
+      };
     }
     const confidence = normalizeMutationConfidence(params as Record<string, unknown>, {
       allowNull: false,

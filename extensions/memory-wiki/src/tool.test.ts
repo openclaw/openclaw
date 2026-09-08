@@ -15,6 +15,18 @@ function asSchemaObject(value: unknown): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
+async function readVaultSnapshot(rootDir: string): Promise<Array<[string, string]>> {
+  const entries = await fs.readdir(rootDir, { recursive: true, withFileTypes: true });
+  const files = entries.filter((entry) => entry.isFile());
+  const snapshot = await Promise.all(
+    files.map(async (entry): Promise<[string, string]> => {
+      const absolute = path.join(entry.parentPath, entry.name);
+      return [path.relative(rootDir, absolute), await fs.readFile(absolute, "utf8")];
+    }),
+  );
+  return snapshot.toSorted(([left], [right]) => left.localeCompare(right));
+}
+
 function unionLiteralValues(schema: Record<string, unknown>): string[] {
   const variants = schema.anyOf ?? schema.oneOf;
   if (!Array.isArray(variants)) {
@@ -149,6 +161,23 @@ describe("memory-wiki tools", () => {
       await expect(fs.readFile(pagePath, "utf8")).resolves.toBe(original);
     },
   );
+
+  it("fails wiki_apply for missing sourceIds without mutating the vault", async () => {
+    const { rootDir, config } = await harness.createVault({ initialize: true });
+    const before = await readVaultSnapshot(rootDir);
+    const tool = createWikiApplyTool(config);
+    const message = "wiki mutation requires at least one sourceId for create_synthesis.";
+
+    const result = await tool.execute("missing-source-ids", {
+      op: "create_synthesis",
+      title: "Alpha Synthesis",
+      body: "Alpha summary body.",
+    });
+
+    expect(result.content).toEqual([{ type: "text", text: message }]);
+    expect(result.details).toEqual({ changed: false, error: message });
+    expect(await readVaultSnapshot(rootDir)).toEqual(before);
+  });
 
   it("returns tool-safe relative report paths from wiki_lint", async () => {
     const { rootDir, config } = await harness.createVault({ initialize: true });

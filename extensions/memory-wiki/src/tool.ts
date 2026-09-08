@@ -237,6 +237,10 @@ export function createWikiApplyTool(
     parameters: WikiApplySchema,
     execute: async (_toolCallId, rawParams) => {
       const mutation = normalizeMemoryWikiMutationInput(rawParams);
+      if (mutation.op === "invalid_input") {
+        // Report the rejection before source sync or any vault write.
+        return textResult(mutation.message, { changed: false, error: mutation.message });
+      }
       await syncImportedSourcesIfNeeded(config, appConfig, signal);
       const result = await applyMemoryWikiMutation({
         config,

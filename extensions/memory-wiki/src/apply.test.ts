@@ -64,6 +64,30 @@ describe("applyMemoryWikiMutation", () => {
     ).toThrow("confidence must be a finite number");
   });
 
+  it("reports missing create_synthesis sourceIds as a validation result", () => {
+    const rejection = {
+      op: "invalid_input",
+      message: "wiki mutation requires at least one sourceId for create_synthesis.",
+    };
+
+    expect(
+      normalizeMemoryWikiMutationInput({
+        op: "create_synthesis",
+        title: "Alpha Synthesis",
+        body: "Alpha summary body.",
+      }),
+    ).toEqual(rejection);
+
+    expect(
+      normalizeMemoryWikiMutationInput({
+        op: "synthesis",
+        title: "Alpha Synthesis",
+        body: "Alpha summary body.",
+        sourceIds: [],
+      }),
+    ).toEqual(rejection);
+  });
+
   it("creates synthesis pages with managed summary blocks and refreshed indexes", async () => {
     const { rootDir, config } = await createVault({ prefix: "memory-wiki-apply-" });
 
