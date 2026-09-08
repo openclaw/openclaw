@@ -1496,8 +1496,6 @@ openclaw-session-discussion {
   align-content: start;
   gap: 12px;
   padding: 16px;
-  opacity: 0;
-  animation: fade-in 0s 150ms forwards;
 }
 
 /* Match the native player's 48px control row and 4px track, without interactive placeholders. */
@@ -1505,31 +1503,29 @@ openclaw-session-discussion {
   position: absolute;
   inset: 0;
   z-index: 2;
+  pointer-events: none;
   background: var(--media-bg);
   color: var(--muted);
 }
 
+.sidebar-attachment-preview__loading,
 .chat-video-skeleton,
-.sidebar-attachment-preview
-  .chat-assistant-attachment-card--video[aria-busy="true"]
-  .chat-assistant-attachment-card__header {
+.chat-assistant-attachment-card--video[aria-busy="true"] .chat-assistant-attachment-card__header {
   opacity: 0;
   animation: fade-in 0s 150ms forwards;
 }
 
-.sidebar-attachment-preview .chat-assistant-attachment-card--video[aria-busy="true"] {
+.chat-assistant-attachment-card--video[aria-busy="true"] {
   video {
-    visibility: hidden;
+    opacity: 0;
   }
-  .chat-assistant-attachment-card__separator {
+  .chat-assistant-attachment-card__separator,
+  .skeleton > svg {
     visibility: hidden;
   }
   .skeleton {
     color: transparent;
     background: var(--skeleton-base, var(--bg-muted));
-  }
-  .skeleton > svg {
-    visibility: hidden;
   }
   .skeleton::after {
     opacity: 0.35;

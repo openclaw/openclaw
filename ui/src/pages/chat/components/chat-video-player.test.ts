@@ -99,6 +99,21 @@ describe("ChatVideoPlayer", () => {
     expect(play).toHaveBeenCalledOnce();
   });
 
+  it("allows resolved downloads and reveals playback when loadeddata is suppressed", async () => {
+    const player = document.createElement("openclaw-chat-video-player");
+    player.preview = true;
+    player.src = "https://example.com/deferred.mp4";
+    player.label = "deferred.mp4";
+    document.body.append(player);
+    await player.updateComplete;
+
+    expect(player.querySelector("a[download]")?.getAttribute("href")).toBe(player.src);
+    expect(player.querySelector('[aria-busy="true"]')).not.toBeNull();
+    player.querySelector("video")!.dispatchEvent(new Event("playing"));
+    await player.updateComplete;
+    expect(player.querySelector('[aria-busy="true"]')).toBeNull();
+  });
+
   it("keeps one video element mounted across 202 preparation", async () => {
     vi.useFakeTimers();
     const fetchMock = vi

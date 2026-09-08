@@ -144,9 +144,8 @@ class ChatVideoPlayer extends OpenClawLightDomContentsElement {
 
   override render() {
     const downloadHref = safeMediaAttachmentHref(this.src);
-    const preparing = this.sourceController.readiness === "preparing";
-    const unavailable = this.sourceController.readiness === "unavailable";
-    if (unavailable) {
+    const preparing = this.sourceController.readiness === "preparing" && !this.preview;
+    if (this.sourceController.readiness === "unavailable") {
       return renderCompactAttachmentCard({
         kind: "video",
         label: this.label,
@@ -178,20 +177,20 @@ class ChatVideoPlayer extends OpenClawLightDomContentsElement {
           mimeType: this.mimeType,
           sizeBytes: this.sizeBytes,
           downloadHref,
-          downloadPending: loading,
+          downloadPending: this.preview && !downloadHref,
           loading,
           expandLabel: t("chat.mediaPlayer.openVideo", { filename: this.label }),
           onExpand,
           visualMode: "preview-with-favicon",
         })}
         ${
-          preparing && !this.preview
+          preparing
             ? html`<div class="chat-assistant-attachment-card__reason chat-media-preparing">
                 ${t("chat.mediaPlayer.preparing")}
               </div>`
             : null
         }
-        <div class="chat-assistant-video-frame" ?hidden=${preparing && !this.preview}>
+        <div class="chat-assistant-video-frame" ?hidden=${preparing}>
           ${
             loading
               ? html`<div
@@ -213,6 +212,9 @@ class ChatVideoPlayer extends OpenClawLightDomContentsElement {
             style=${styleMap(dimensions)}
             ${ref(this.setMedia)}
             @loadeddata=${() => {
+              this.frameReady = true;
+            }}
+            @playing=${() => {
               this.frameReady = true;
             }}
             @emptied=${() => {
