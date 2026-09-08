@@ -235,8 +235,6 @@ export function createExecTool(
       const hookContext = requestPreparation.getExecHookContext(params);
       const preparedWorkdirState = requestPreparation.getResolvedExecWorkdirPreparedState(params);
 
-      const maxOutput = DEFAULT_MAX_OUTPUT;
-      const pendingMaxOutput = DEFAULT_PENDING_MAX_OUTPUT;
       const warnings: string[] = [];
       const getWarningText = () => (warnings.length ? `${warnings.join("\n")}\n\n` : "");
       const approvalWarningText = normalizeOptionalString(defaults?.approvalWarningText);
@@ -554,8 +552,8 @@ export function createExecTool(
             warnings,
             notifySessionKey,
             approvalRunningNoticeMs,
-            maxOutput,
-            pendingMaxOutput,
+            maxOutput: DEFAULT_MAX_OUTPUT,
+            pendingMaxOutput: DEFAULT_PENDING_MAX_OUTPUT,
             cleanupMs,
             processContinuationAvailable: allowBackground,
             trustedSafeBinDirs,
@@ -600,8 +598,8 @@ export function createExecTool(
           containerWorkdir,
           usePty,
           warnings,
-          maxOutput,
-          pendingMaxOutput,
+          maxOutput: DEFAULT_MAX_OUTPUT,
+          pendingMaxOutput: DEFAULT_PENDING_MAX_OUTPUT,
           cleanupMs,
           notifyOnExit,
           notifyOnExitEmptySuccess,
