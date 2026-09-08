@@ -33,7 +33,6 @@ class ChatTextAttachment extends OpenClawLightDomContentsElement {
   @property() sourceIdentity = "";
   @property() label = "";
   @property() mimeType = "";
-  @property({ type: Boolean }) sourcePending = false;
   @property({ type: Number }) sizeBytes: number | undefined;
 
   @state() private text: string | null = null;
@@ -53,16 +52,11 @@ class ChatTextAttachment extends OpenClawLightDomContentsElement {
   }
 
   override willUpdate(changed: PropertyValues<this>): void {
-    if (
-      changed.has("src") ||
-      changed.has("sourceIdentity") ||
-      changed.has("sizeBytes") ||
-      changed.has("sourcePending")
-    ) {
+    if (changed.has("src") || changed.has("sourceIdentity") || changed.has("sizeBytes")) {
       this.cancelLoad();
       this.text = null;
       this.failed = false;
-      if (!this.sourcePending) {
+      if (this.src) {
         void this.loadText();
       }
     }
@@ -125,7 +119,7 @@ class ChatTextAttachment extends OpenClawLightDomContentsElement {
         mimeType: this.mimeType,
         sizeBytes: this.sizeBytes,
         downloadHref: this.src,
-        downloadPending: this.sourcePending,
+        downloadPending: !this.src,
       })}
       ${
         this.failed

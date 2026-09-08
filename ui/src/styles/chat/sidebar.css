@@ -1449,40 +1449,55 @@ openclaw-session-discussion {
   min-height: 30px;
 }
 
+:is(.chat-assistant-attachment-card--video, .chat-assistant-attachment-card--image)
+  .sidebar-attachment-preview__state {
+  min-height: 0;
+  aspect-ratio: var(--preview-ratio, 16 / 9);
+
+  > .sidebar-attachment-preview__loading {
+    display: block;
+    padding: 0;
+
+    > :first-child {
+      height: 100%;
+      border-radius: var(--radius-md);
+    }
+
+    > :not(:first-child) {
+      display: none;
+    }
+  }
+}
+
 .sidebar-attachment-preview__state {
   display: grid;
-  min-height: 180px;
-  place-items: center;
-  background: var(--bg);
-  color: var(--muted);
-}
-
-.sidebar-attachment-preview__image-slot,
-.sidebar-attachment-preview__loading {
-  width: 100%;
-  height: 100%;
-}
-
-.sidebar-attachment-preview__image-slot {
   position: relative;
-}
+  min-height: 180px;
+  background: var(--bg);
 
-.sidebar-attachment-preview__image-slot .sidebar-attachment-preview__image {
-  position: absolute;
-  inset: 0;
-  height: 100%;
+  > * {
+    grid-area: 1 / 1;
+  }
+
+  > .sidebar-attachment-preview__image {
+    position: absolute;
+    height: 100%;
+  }
+
+  &:has(img:not([data-preview="error"])) > .sidebar-attachment-preview__unavailable,
+  &:has(img[data-preview]) > .sidebar-attachment-preview__loading,
+  > img:not([data-preview="ready"]) {
+    display: none;
+  }
 }
 
 .sidebar-attachment-preview__loading {
-  opacity: 0;
-  animation: fade-in 0s 150ms forwards;
-}
-
-.sidebar-attachment-preview__loading--text {
   display: grid;
   align-content: start;
   gap: 12px;
   padding: 16px;
+  opacity: 0;
+  animation: fade-in 0s 150ms forwards;
 }
 
 .sidebar-markdown-shell {

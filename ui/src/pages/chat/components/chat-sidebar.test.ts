@@ -574,15 +574,23 @@ describe("markdown sidebar", () => {
       expect(panel.querySelector('[role="status"]')).toBe(presentation);
       expect(panel.querySelector(".chat-assistant-attachment-card__header")).toBe(header);
       image.dispatchEvent(new Event(outcome));
-      await vi.waitFor(() => expect(panel.querySelector('[role="status"]')).toBeNull());
-      expect(panel.textContent?.includes("Preview unavailable")).toBe(outcome === "error");
+      expect(image.getAttribute("data-preview")).toBe(outcome === "load" ? "ready" : "error");
       src = "/next.png";
       panel.content = { ...panel.content };
-      await vi.waitFor(() => expect(panel.querySelector('[role="status"]')).not.toBeNull());
+      const next = await vi.waitFor(() => {
+        const current = expectDefined(
+          panel.querySelector(".sidebar-attachment-preview__image"),
+          "Next preview image",
+        );
+        expect(current).not.toBe(image);
+        return current;
+      });
       image.dispatchEvent(new Event("load"));
-      expect(panel.querySelector('[role="status"]')).not.toBeNull();
-      panel.querySelector(".sidebar-attachment-preview__image")?.dispatchEvent(new Event("load"));
-      await vi.waitFor(() => expect(panel.querySelector('[role="status"]')).toBeNull());
+      expect(next.hasAttribute("data-preview")).toBe(false);
+      panel.remove();
+      next.dispatchEvent(new Event("load"));
+      document.body.append(panel);
+      expect(next.getAttribute("data-preview")).toBe("ready");
       panel.remove();
     },
   );

@@ -46,7 +46,6 @@ import "./chat-video-player.ts";
 import { openResolvedImage } from "./chat-message-image-open.ts";
 import type { AttachmentSidebarRuntime, SidebarContent } from "./chat-sidebar-content-types.ts";
 import { renderSidebarFile, type FileViewControls } from "./chat-sidebar-file-view.ts";
-import { renderSidebarImage } from "./chat-sidebar-image.ts";
 import { isTextAttachment } from "./chat-text-attachment.ts";
 import "./session-diff-panel.ts";
 
@@ -59,16 +58,19 @@ function renderSidebarAttachment(
 ) {
   const resolution = content.resolveSource?.(onRequestUpdate, runtime);
   const source = resolution ? (resolution.status === "ready" ? resolution : null) : content;
-  const sourceHref = source?.src ?? "";
-  const src =
-    content.attachmentKind === "audio" ||
-    content.attachmentKind === "video" ||
-    content.mimeType?.toLowerCase().startsWith("audio/") ||
-    content.mimeType?.toLowerCase().startsWith("video/")
-      ? safeMediaAttachmentHref(sourceHref)
-      : safeAttachmentHref(sourceHref);
-  const authToken = source?.authToken ?? null;
   const mimeType = content.mimeType?.split(";", 1)[0]?.trim().toLowerCase() ?? "";
+  const kind =
+    content.attachmentKind === "video" || mimeType.startsWith("video/")
+      ? "video"
+      : content.attachmentKind === "audio" || mimeType.startsWith("audio/")
+        ? "audio"
+        : content.attachmentKind === "image" || mimeType.startsWith("image/")
+          ? "image"
+          : "document";
+  const src = (kind === "audio" || kind === "video" ? safeMediaAttachmentHref : safeAttachmentHref)(
+    source?.src ?? "",
+  );
+  const authToken = source?.authToken ?? null;
   const pending = resolution?.status === "pending";
   const inferTypeFromExtension = !mimeType || mimeType === "application/octet-stream";
   const blockedExternalSvg =
@@ -78,10 +80,7 @@ function renderSidebarAttachment(
           isSvgImageMediaPath(src ?? "", undefined) ||
           isSvgImageMediaPath(content.title, undefined)))) &&
     isCrossOriginHttpSource(src ?? "");
-  const imagePreview =
-    (src || pending) &&
-    !blockedExternalSvg &&
-    (content.attachmentKind === "image" || mimeType.startsWith("image/"));
+  const imagePreview = (src || pending) && !blockedExternalSvg && kind === "image";
   if (
     (src || pending) &&
     isTextAttachment(mimeType, content.title) &&
@@ -89,7 +88,6 @@ function renderSidebarAttachment(
   ) {
     return html`<openclaw-chat-text-attachment
       .src=${src ?? ""}
-      .sourcePending=${pending}
       .sourceIdentity=${content.sourceIdentity ?? src ?? ""}
       .label=${content.title}
       .mimeType=${content.mimeType ?? ""}
@@ -97,15 +95,6 @@ function renderSidebarAttachment(
     ></openclaw-chat-text-attachment>`;
   }
   if (!src || imagePreview) {
-    const kind = imagePreview
-      ? "image"
-      : (content.attachmentKind ??
-        (mimeType.startsWith("video/")
-          ? "video"
-          : mimeType.startsWith("image/")
-            ? "image"
-            : "document"));
-    const media = kind === "video" || kind === "image";
     const width = source?.width ?? content.width;
     const height = source?.height ?? content.height;
     return html`
@@ -124,30 +113,40 @@ function renderSidebarAttachment(
         })}
         <div
           class="sidebar-attachment-preview__state"
-          style=${styleMap({
-            "aspect-ratio": media
-              ? width && height
-                ? `${width} / ${height}`
-                : "16 / 9"
-              : undefined,
-            "min-height": media ? "0" : undefined,
-          })}
+          style=${styleMap({ "--preview-ratio": width && height ? `${width} / ${height}` : undefined })}
         >
+          ${pending || imagePreview ? renderAttachmentPreviewSkeleton() : nothing}
           ${
-            imagePreview
-              ? renderSidebarImage(src ?? "", content.title)
-              : pending
-                ? renderAttachmentPreviewSkeleton(media)
-                : html`<div class="sidebar-attachment-preview__unavailable">
-                    ${t("chat.attachments.previewUnavailable")}
-                    ${resolution?.status === "error" ? html`<span>${resolution.reason}</span>` : nothing}
-                  </div>`
+            imagePreview && src
+              ? keyed(
+                  src,
+                  html`<img
+                    class="sidebar-attachment-preview__image"
+                    src=${src}
+                    alt=${content.title}
+                    .onload=${function (this: HTMLImageElement) {
+                      this.dataset.preview = "ready";
+                    }}
+                    .onerror=${function (this: HTMLImageElement) {
+                      this.dataset.preview = "error";
+                    }}
+                  />`,
+                )
+              : nothing
+          }
+          ${
+            pending
+              ? nothing
+              : html`<div class="sidebar-attachment-preview__unavailable">
+                  ${t("chat.attachments.previewUnavailable")}
+                  ${resolution?.status === "error" ? html`<span>${resolution.reason}</span>` : nothing}
+                </div>`
           }
         </div>
       </div>
     `;
   }
-  if (content.attachmentKind === "video" || mimeType.startsWith("video/")) {
+  if (kind === "video") {
     return html`<openclaw-chat-video-player
       .src=${src}
       .sourceIdentity=${content.sourceIdentity ?? content.src ?? src}
@@ -160,7 +159,7 @@ function renderSidebarAttachment(
       .mediaHeight=${source?.height ?? content.height}
     ></openclaw-chat-video-player>`;
   }
-  if (content.attachmentKind === "audio" || mimeType.startsWith("audio/")) {
+  if (kind === "audio") {
     return html`<openclaw-chat-audio-player
       .src=${src}
       .sourceIdentity=${content.sourceIdentity ?? content.src ?? src}

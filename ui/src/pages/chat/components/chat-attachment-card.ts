@@ -1,4 +1,4 @@
-import { html, type TemplateResult } from "lit";
+import { html, nothing, type TemplateResult } from "lit";
 import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
 import { formatBytes } from "../../../lib/agents/display.ts";
@@ -37,19 +37,15 @@ export function renderCompactAttachmentCard(options: AttachmentCardHeaderOptions
   </div>`;
 }
 
-export function renderAttachmentPreviewSkeleton(media = false) {
+export function renderAttachmentPreviewSkeleton() {
   return html`<div
-    class="sidebar-attachment-preview__loading ${media ? "skeleton" : "sidebar-attachment-preview__loading--text"}"
+    class="sidebar-attachment-preview__loading"
     role="status"
     aria-label=${t("common.loading")}
   >
-    ${
-      media
-        ? null
-        : html`<div class="skeleton skeleton-line" aria-hidden="true"></div>
-            <div class="skeleton skeleton-line skeleton-line--long" aria-hidden="true"></div>
-            <div class="skeleton skeleton-line skeleton-line--medium" aria-hidden="true"></div>`
-    }
+    <div class="skeleton skeleton-line" aria-hidden="true"></div>
+    <div class="skeleton skeleton-line skeleton-line--long" aria-hidden="true"></div>
+    <div class="skeleton skeleton-line skeleton-line--medium" aria-hidden="true"></div>
   </div>`;
 }
 
@@ -158,27 +154,20 @@ export function renderAttachmentCardHeader(options: AttachmentCardHeaderOptions)
             : null
         }
         ${
-          options.downloadPending
-            ? html`<button
-                type="button"
+          options.downloadHref || options.downloadPending
+            ? html`<a
                 class=${downloadClass}
-                disabled
+                href=${options.downloadPending ? nothing : options.downloadHref}
+                aria-disabled=${options.downloadPending ? "true" : nothing}
+                role="link"
+                download=${options.label}
+                target="_blank"
+                rel="noreferrer"
                 aria-label=${downloadTitle}
-              >
-                ${icons.download}
-              </button>`
-            : options.downloadHref
-              ? html`<a
-                  class=${downloadClass}
-                  href=${options.downloadHref}
-                  download=${options.label}
-                  target="_blank"
-                  rel="noreferrer"
-                  aria-label=${downloadTitle}
-                  title=${downloadTitle}
-                  >${icons.download}</a
-                >`
-              : null
+                title=${downloadTitle}
+                >${icons.download}</a
+              >`
+            : null
         }
         ${
           hasOpenAction
