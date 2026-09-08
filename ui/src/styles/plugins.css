@@ -235,6 +235,26 @@
   gap: var(--space-3);
 }
 
+.clawhub-skill-detail__body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-content: start;
+  gap: var(--space-3);
+  overflow-wrap: anywhere;
+  font-size: var(--control-ui-text-md);
+  line-height: 1.5;
+}
+
+.clawhub-skill-detail__meta {
+  font-size: var(--control-ui-text-sm);
+}
+
+.clawhub-skill-detail__changelog {
+  border-top: 1px solid var(--border);
+  padding-top: var(--space-3);
+  white-space: pre-wrap;
+}
+
 .clawhub-skill-icon--detail {
   width: 56px;
   height: 56px;

@@ -560,7 +560,7 @@ function renderClawHubDetailDialog(props: SkillsProps) {
             ${icons.x}
           </button>
         </div>
-        <div class="skill-reader-dialog__body" style="display: grid; gap: var(--space-4);">
+        <div class="skill-reader-dialog__body clawhub-skill-detail__body">
           ${
             props.clawhubDetailLoading
               ? html`<div class="muted">${t("common.loading")}</div>`
@@ -571,38 +571,42 @@ function renderClawHubDetailDialog(props: SkillsProps) {
                   </div>`
                 : detail?.skill
                   ? html`
-                      <div style="font-size: 14px; line-height: 1.5;">
-                        ${detail.skill.summary ?? ""}
-                      </div>
+                      <div>${detail.skill.summary ?? ""}</div>
                       ${
-                        detail.owner?.displayName
-                          ? html`<div class="muted" style="font-size: 13px;">
-                              ${t("skillsPage.by")}
-                              ${detail.owner.displayName}${
-                                detail.owner.handle ? html` (@${detail.owner.handle})` : nothing
+                        detail.owner?.displayName || detail.latestVersion
+                          ? html`<div class="clawhub-skill-detail__meta muted">
+                              ${
+                                detail.owner?.displayName
+                                  ? html`${t("skillsPage.by")}
+                                    ${detail.owner.displayName}${
+                                      detail.owner.handle
+                                        ? html` (@${detail.owner.handle})`
+                                        : nothing
+                                    }`
+                                  : nothing
                               }
-                            </div>`
-                          : nothing
-                      }
-                      ${
-                        detail.latestVersion
-                          ? html`<div class="muted" style="font-size: 13px;">
-                              ${t("skillsPage.latest", { version: detail.latestVersion.version })}
+                              ${detail.owner?.displayName && detail.latestVersion ? " · " : nothing}
+                              ${
+                                detail.latestVersion
+                                  ? t("skillsPage.latest", {
+                                      version: detail.latestVersion.version,
+                                    })
+                                  : nothing
+                              }
                             </div>`
                           : nothing
                       }
                       ${
                         detail.latestVersion?.changelog
                           ? html`<div
-                              style="font-size: 13px; border-top: 1px solid var(--border); padding-top: 12px; white-space: pre-wrap;"
-                            >
-                              ${detail.latestVersion.changelog}
-                            </div>`
+                              class="clawhub-skill-detail__changelog"
+                              .textContent=${detail.latestVersion.changelog}
+                            ></div>`
                           : nothing
                       }
                       ${
                         detail.metadata?.os
-                          ? html`<div class="muted" style="font-size: 12px;">
+                          ? html`<div class="clawhub-skill-detail__meta muted">
                               ${t("skillsPage.platforms", { platforms: detail.metadata.os.join(", ") })}
                             </div>`
                           : nothing
