@@ -2786,47 +2786,63 @@ dispatch_workflow_at_ref "$WORKFLOW_REF" "$PARENT_WORKFLOW_SHA" plugin-clawhub-r
       "preview_plugins_npm",
       "Checkout trusted planning tooling",
       "Validate publishable plugin metadata",
+      ".release-tooling",
+      "${{ github.workflow_sha }}",
     ],
     [
       PLUGIN_NPM_RELEASE_WORKFLOW,
       "preview_plugin_pack",
       "Checkout trusted packaging tooling",
       "Prepare immutable npm preflight artifact",
+      ".release-tooling",
+      "${{ github.workflow_sha }}",
     ],
     [
       PLUGIN_CLAWHUB_RELEASE_WORKFLOW,
       "preview_plugins_clawhub",
       "Checkout trusted planning tooling",
       "Validate publishable plugin metadata",
+      ".release-tooling",
+      "${{ github.workflow_sha }}",
     ],
     [
       ".github/workflows/plugin-clawhub-new.yml",
       "resolve_bootstrap_plan",
       "Checkout trusted planning tooling",
       "Validate publishable plugin metadata",
+      ".release-tooling",
+      "${{ github.workflow_sha }}",
+    ],
+    [
+      ".github/workflows/plugin-clawhub-new.yml",
+      "pack_bootstrap_plugins",
+      "Checkout trusted workflow tooling",
+      "Pack immutable ClawHub bootstrap artifacts",
+      ".release-harness",
+      "${{ github.sha }}",
     ],
   ])(
     "initializes independent plugin tooling before %s/%s",
-    (file, jobName, checkoutName, consumerName) => {
+    (file, jobName, checkoutName, consumerName, toolingPath, toolingRef) => {
       const job = workflowJob(file, jobName);
       const checkout = workflowStep(job, checkoutName);
       const setup = workflowStep(job, "Setup Node environment");
       const install = workflowStep(job, "Install trusted plugin tooling dependencies");
       const consumer = workflowStep(job, consumerName);
       expect(checkout.with).toMatchObject({
-        ref: "${{ github.workflow_sha }}",
-        path: ".release-tooling",
+        ref: toolingRef,
+        path: toolingPath,
         "persist-credentials": false,
       });
       expect(checkout.with?.["sparse-checkout"]).toBeUndefined();
-      expect(install["working-directory"]).toBe(".release-tooling");
+      expect(install["working-directory"]).toBe(toolingPath);
       expect(install.env).toMatchObject({ CI: "true" });
       expect(install.run).toBe("pnpm install --frozen-lockfile --prefer-offline --ignore-scripts");
       expect(job.steps!.indexOf(install)).toBeGreaterThan(job.steps!.indexOf(checkout));
       expect(job.steps!.indexOf(install)).toBeGreaterThan(job.steps!.indexOf(setup));
       expect(job.steps!.indexOf(install)).toBeLessThan(job.steps!.indexOf(consumer));
       const root = tempDirs.make("plugin-tooling-install-");
-      const tooling = join(root, ".release-tooling");
+      const tooling = join(root, toolingPath);
       const bin = join(root, "bin");
       mkdirSync(tooling);
       mkdirSync(bin);
