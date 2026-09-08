@@ -268,6 +268,7 @@ export function resolveInitialDoctorHealthContributions(params: {
     createDoctorHealthContribution({
       id: "doctor:active-tool-schema-warnings",
       label: "Active tool schema warnings",
+      updatePolicy: "standalone",
       run: runActiveToolSchemaWarningsHealth,
     }),
     createDoctorHealthContribution({
@@ -293,6 +294,7 @@ export function resolveInitialDoctorHealthContributions(params: {
     createDoctorHealthContribution({
       id: "doctor:project-clone-shape",
       label: "Project clones",
+      updatePolicy: "standalone",
       healthChecks: {
         description: "Partial and shallow registry-owned project clones need manual repair.",
         defaultEnabled: false,
@@ -310,6 +312,7 @@ export function resolveInitialDoctorHealthContributions(params: {
     createDoctorHealthContribution({
       id: "doctor:db-bloat",
       label: "SQLite database size",
+      updatePolicy: "standalone",
       run: runDatabaseBloatHealth,
     }),
     createDoctorHealthContribution({

@@ -15,6 +15,7 @@ export function createDoctorHealthContribution(params: {
   healthChecks?: DoctorContributionHealthCheck | readonly DoctorContributionHealthCheck[];
   hint?: string;
   required?: true;
+  updatePolicy?: DoctorHealthContribution["updatePolicy"];
   run?: (ctx: DoctorHealthFlowContext) => Promise<void>;
 }): DoctorHealthContribution {
   const healthChecks = normalizeHealthChecks(params.id, params.healthChecks);
@@ -35,6 +36,7 @@ export function createDoctorHealthContribution(params: {
     healthChecks,
     healthCheckIds,
     ...(params.required ? { required: true as const } : {}),
+    ...(params.updatePolicy ? { updatePolicy: params.updatePolicy } : {}),
     run:
       params.run ??
       ((ctx) =>

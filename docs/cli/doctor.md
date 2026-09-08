@@ -91,6 +91,14 @@ legacy workspace setup, legacy session stores, and exec approvals. Malformed or
 conflicting input is retained and requires the manual action in the diagnostic.
 The updater uses this repair path before accepting the installed target.
 
+Update-time Doctor omits project-clone inspection, SQLite database-size advice,
+active tool-schema warnings, and workspace backup and memory suggestions. These
+diagnostics do not migrate state or establish restart readiness. Doctor names
+the omitted checks in its output; run `openclaw doctor` after the update to
+inspect them. Update-time Doctor still runs required repairs and final session,
+database, workspace-state, and exec-approval readiness checks. A successful
+update does not mean the omitted diagnostics passed.
+
 This maintenance window also applies when repair ultimately finds no changes.
 Runs without `--fix`, `--repair`, or `--yes` do not enter maintenance.
 Custom state directories remain runtime-only and do not adopt a native service.
