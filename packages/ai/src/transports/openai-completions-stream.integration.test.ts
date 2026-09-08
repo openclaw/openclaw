@@ -6,6 +6,7 @@ import {
   markDiagnosticRunProgress,
   resetDiagnosticRunActivityForTest,
 } from "../../../../src/logging/diagnostic-run-activity.js";
+import { streamOpenAICompletions } from "../providers/openai-completions.js";
 import { registerBuiltInApiProviders } from "../providers/register-builtins.js";
 import { createLlmRuntime } from "../stream.js";
 import { shouldEmitOpenAICompletionsReasoning } from "./openai-completions-stream.js";
@@ -15,6 +16,92 @@ import { makeCompletionsChunk, makeCompletionsModel } from "./openai-completions
 describe("openai completions stream", () => {
   afterAll(() => {
     resetDiagnosticRunActivityForTest();
+  });
+
+  describe.each([
+    {
+      name: "direct",
+      createStream: streamOpenAICompletions,
+      options: { reasoningEffort: "medium" as const },
+    },
+    {
+      name: "managed",
+      createStream: createOpenAICompletionsTransportStreamFn(),
+      options: { reasoning: "medium" as const },
+    },
+  ])("$name eager code context", ({ createStream, options }) => {
+    it.each(["native", "structured"])(
+      "preserves literal tags across %s thinking",
+      async (shape) => {
+        let release: (() => void) | undefined;
+        let fallback: ReturnType<typeof setTimeout> | undefined;
+        let releasedByVisiblePrefix = false;
+        const server = createServer((req, res) => {
+          req.resume();
+          req.on("end", () => {
+            res.writeHead(200, { "content-type": "text/event-stream" });
+            res.write(`data: ${JSON.stringify(makeCompletionsChunk({ content: "Use `" }))}\n\n`);
+            release = () => {
+              const content = "<think>literal</think>` after";
+              const delta =
+                shape === "native"
+                  ? { reasoning_content: "Native reasoning.", content }
+                  : {
+                      content: [
+                        { type: "reasoning", text: "Native reasoning." },
+                        { type: "text", text: content },
+                      ],
+                    };
+              res.write(`data: ${JSON.stringify(makeCompletionsChunk(delta))}\n\n`);
+              res.write(`data: ${JSON.stringify(makeCompletionsChunk({}, "stop"))}\n\n`);
+              res.end("data: [DONE]\n\n");
+            };
+            // Bound a failed eager-prefix assertion without leaving the HTTP response open.
+            fallback = setTimeout(() => release?.(), 2000);
+          });
+        });
+        await new Promise<void>((resolve) => {
+          server.listen(0, "127.0.0.1", resolve);
+        });
+        try {
+          const address = server.address();
+          if (!address || typeof address === "string") {
+            throw new Error("Missing loopback address");
+          }
+          const stream = createStream(
+            makeCompletionsModel({ baseUrl: `http://127.0.0.1:${address.port}/v1` }),
+            { messages: [{ role: "user", content: "Show literal code.", timestamp: 1 }] },
+            { apiKey: "synthetic", ...options },
+          );
+          let visible = "";
+          for await (const event of stream) {
+            if (event.type === "text_delta") {
+              visible += event.delta;
+              if (visible === "Use `" && release) {
+                releasedByVisiblePrefix = true;
+                clearTimeout(fallback);
+                const finish = release;
+                release = undefined;
+                finish();
+              }
+            }
+          }
+          const result = await stream.result();
+          expect(releasedByVisiblePrefix).toBe(true);
+          expect(visible).toBe("Use `<think>literal</think>` after");
+          expect(result.stopReason).toBe("stop");
+          expect(result.content).toContainEqual(
+            expect.objectContaining({ type: "thinking", thinking: "Native reasoning." }),
+          );
+        } finally {
+          clearTimeout(fallback);
+          server.closeAllConnections();
+          await new Promise<void>((resolve, reject) => {
+            server.close((error) => (error ? reject(error) : resolve()));
+          });
+        }
+      },
+    );
   });
 
   it("emits Qwen thinking streams when enabled without reasoning_effort support", async () => {

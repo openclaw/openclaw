@@ -110,7 +110,7 @@ export function createReasoningTagTextPartitioner(): ReasoningTagTextPartitioner
   let blockStart = 0;
   let emitted = 0;
   let holdStart: number | undefined;
-  let heldBacktickStart: number | undefined;
+  let retainedBacktickStart: number | undefined;
   let strictMode = false;
   let pendingTagProbe: PendingTagProbe | undefined;
   let fastPathCheckedThrough = 0;
@@ -118,8 +118,6 @@ export function createReasoningTagTextPartitioner(): ReasoningTagTextPartitioner
   let nonFinalFullParses = 0;
   let nonFinalCodeSpans: Array<[number, number]> | undefined;
   let nonFinalCodeSpansEnd = 0;
-  /** Source length when block-incremental ownership was last parsed. */
-  let nonFinalParseEnd = 0;
   let nonFinalOpenEndedCode = false;
   let nonFinalRetainStart = 0;
   let nonFinalCloseReparseUsed = false;
@@ -130,14 +128,13 @@ export function createReasoningTagTextPartitioner(): ReasoningTagTextPartitioner
     blockStart = source.length;
     emitted = source.length;
     holdStart = undefined;
-    heldBacktickStart = undefined;
+    retainedBacktickStart = undefined;
     pendingTagProbe = undefined;
     fastPathCheckedThrough = 0;
     fastPathCodeSafe = false;
     nonFinalFullParses = 0;
     nonFinalCodeSpans = undefined;
     nonFinalCodeSpansEnd = 0;
-    nonFinalParseEnd = 0;
     nonFinalOpenEndedCode = false;
     nonFinalRetainStart = 0;
     nonFinalCloseReparseUsed = false;
@@ -196,17 +193,15 @@ export function createReasoningTagTextPartitioner(): ReasoningTagTextPartitioner
       let special = -1;
       for (let index = emitted; index < limit; index += 1) {
         const char = source.charAt(index);
-        if (char === "<" || char === "`") {
+        if (char === "`") {
+          // Retain ownership context without withholding ordinary visible bytes.
+          retainedBacktickStart ??= index;
+        } else if (char === "<") {
           special = index;
           break;
         }
       }
       const end = special === -1 ? limit : special;
-      if (special !== -1 && source.charAt(special) === "`") {
-        heldBacktickStart = special;
-        holdStart = emitted;
-        return;
-      }
       const text = source.slice(emitted, end);
       if (text) {
         merge(output, [{ kind: "text", text }]);
@@ -238,7 +233,7 @@ export function createReasoningTagTextPartitioner(): ReasoningTagTextPartitioner
         return;
       }
 
-      if (/[\r\n]/u.test(source.slice(blockStart, special))) {
+      if (/[|\r\n]/u.test(source.slice(blockStart, special))) {
         return;
       }
 
@@ -251,12 +246,22 @@ export function createReasoningTagTextPartitioner(): ReasoningTagTextPartitioner
         const ownership = parseMarkdownOwnership(source.slice(0, limit));
         nonFinalCodeSpans = ownership.codeSpans;
         nonFinalCodeSpansEnd = limit;
-        nonFinalParseEnd = limit;
         nonFinalOpenEndedCode = nonFinalCodeSpans.some(([, spanEnd]) => spanEnd === limit);
         nonFinalRetainStart = ownership.retainStart;
-        fastPathCodeSafe =
-          !source.slice(blockStart, special).includes("`") &&
-          !isInsideCode(special, nonFinalCodeSpans);
+        const precedingCodeSpan = nonFinalCodeSpans.find(
+          ([spanStart, spanEnd]) =>
+            retainedBacktickStart !== undefined &&
+            retainedBacktickStart >= spanStart &&
+            retainedBacktickStart < spanEnd &&
+            spanEnd <= special,
+        );
+        const codeContextSettled = precedingCodeSpan
+          ? !source.slice(precedingCodeSpan[1], special).includes("`")
+          : !source.slice(blockStart, special).includes("`");
+        fastPathCodeSafe = codeContextSettled && !isInsideCode(special, nonFinalCodeSpans);
+        if (fastPathCodeSafe) {
+          retainedBacktickStart = undefined;
+        }
       }
       if (!fastPathCodeSafe) {
         return;
@@ -386,7 +391,7 @@ export function createReasoningTagTextPartitioner(): ReasoningTagTextPartitioner
     const crossedLineBoundary = /[\r\n]/u.test(processedText);
     blockStart = crossedLineBoundary && lastLineStart < end ? lastLineStart : end;
     holdStart = strictMode || reduction.depth > 0 ? end : undefined;
-    heldBacktickStart = undefined;
+    retainedBacktickStart = undefined;
     if (reduction.depth === 0) {
       nonFinalCloseReparseUsed = false;
     }
@@ -437,7 +442,7 @@ export function createReasoningTagTextPartitioner(): ReasoningTagTextPartitioner
     if (pendingTagProbe?.resolved && holdStart !== undefined) {
       pendingTagProbe = undefined;
       holdStart = undefined;
-      heldBacktickStart = undefined;
+      // Completing a tag probe does not settle preceding Markdown delimiters.
     }
     const output: ReasoningTagTextDelta[] = [];
     if (final) {
@@ -445,7 +450,7 @@ export function createReasoningTagTextPartitioner(): ReasoningTagTextPartitioner
     } else {
       emitSafePrefix(source.length, output);
       if (!strictMode && holdStart !== undefined && holdStart < source.length) {
-        const ownershipStart = heldBacktickStart ?? holdStart;
+        const ownershipStart = retainedBacktickStart ?? holdStart;
         const heldLineStart =
           Math.max(
             source.lastIndexOf("\n", Math.max(0, ownershipStart - 1)),
@@ -470,7 +475,7 @@ export function createReasoningTagTextPartitioner(): ReasoningTagTextPartitioner
         const retainedContainerContext = MARKDOWN_CONTAINER_LINE_RE.test(
           source.slice(nonFinalRetainStart),
         );
-        const heldBacktick = heldBacktickStart !== undefined;
+        const heldBacktick = retainedBacktickStart !== undefined;
         let openingRunEnd = ownershipStart;
         while (source.charAt(openingRunEnd) === "`") {
           openingRunEnd += 1;
@@ -493,22 +498,6 @@ export function createReasoningTagTextPartitioner(): ReasoningTagTextPartitioner
           completedBlankBlock &&
           (!retainedContainerContext || appendedStartsTopLevelBlock) &&
           !nonFinalOpenEndedCode;
-        // Only a backtick can close the inline span or fence that keeps a hold open.
-        // One that arrived after the last ownership parse earns one more parse;
-        // without it the stale open-ended verdict refuses every later paragraph
-        // boundary and the hold survives until the stream ends. Containers retain
-        // their whole prefix, so there the reparse waits for geometric growth to
-        // keep total parse work linear in the stream.
-        if (
-          nonFinalFullParses >= 1 &&
-          reusableCodeSpans === undefined &&
-          (heldBacktick || nonFinalOpenEndedCode) &&
-          source.lastIndexOf("`") >= nonFinalParseEnd &&
-          (!retainedContainerContext ||
-            (source.length - nonFinalParseEnd) * 4 >= nonFinalParseEnd - nonFinalRetainStart)
-        ) {
-          nonFinalFullParses = 0;
-        }
         if (
           (shouldTryParser || mayResolveHeldReasoning) &&
           !tableLookaheadPending &&
@@ -521,9 +510,6 @@ export function createReasoningTagTextPartitioner(): ReasoningTagTextPartitioner
             nonFinalFullParses += 1;
           }
           const ownership = reusableCodeSpans ? undefined : parseMarkdownOwnership(source);
-          if (ownership) {
-            nonFinalParseEnd = source.length;
-          }
           nonFinalCloseReparseUsed ||= mayResolveHeldReasoning;
           const codeSpans = reusableCodeSpans ?? ownership?.codeSpans ?? [];
           const retainStart = reusableCodeSpans
@@ -543,23 +529,11 @@ export function createReasoningTagTextPartitioner(): ReasoningTagTextPartitioner
             if (stableNonDelimiter || mayCloseTopLevelBlock) {
               processEnd = source.length;
             } else if (stableCode && heldCodeSpan) {
-              // Release everything this parse already proved: plain text, line
-              // breaks, and every later closed code span. Stop at a tag opener
-              // outside code, at a backtick no closed span owns, or at the span
-              // still open at the end of the source.
               processEnd = heldCodeSpan[1];
               while (processEnd < source.length) {
                 const char = source.charAt(processEnd);
-                if (char === "<") {
+                if (char === "\r" || char === "\n" || char === "<" || char === "`") {
                   break;
-                }
-                if (char === "`") {
-                  const span = codeSpans.find(([spanStart]) => spanStart === processEnd);
-                  if (!span || span[1] === source.length) {
-                    break;
-                  }
-                  processEnd = span[1];
-                  continue;
                 }
                 processEnd += 1;
               }
@@ -595,7 +569,6 @@ export function createReasoningTagTextPartitioner(): ReasoningTagTextPartitioner
       ) {
         nonFinalFullParses += 1;
         const ownership = parseMarkdownOwnership(source);
-        nonFinalParseEnd = source.length;
         const codeSpans = ownership.codeSpans;
         nonFinalRetainStart = ownership.retainStart;
         nonFinalOpenEndedCode = codeSpans.some(([, spanEnd]) => spanEnd === source.length);
@@ -633,7 +606,7 @@ export function createReasoningTagTextPartitioner(): ReasoningTagTextPartitioner
     },
     hasPendingSyntax() {
       return (
-        pendingTagProbe !== undefined || heldBacktickStart !== undefined || reduction.depth > 0
+        pendingTagProbe !== undefined || retainedBacktickStart !== undefined || reduction.depth > 0
       );
     },
     isInsideReasoning() {
