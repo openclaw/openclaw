@@ -10,6 +10,7 @@ import {
   beginGatewayRestartSignalAdmission,
   markGatewayRestartDraining,
   resetGatewayWorkAdmission,
+  tryBeginGatewaySuspendAdmission,
 } from "../../process/gateway-work-admission.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import {
@@ -172,6 +173,40 @@ it("rearms queued ingress after a restart signal rolls back without an idle obse
       await vi.waitFor(() => expect(deliver).toHaveBeenCalledOnce());
     } finally {
       signal?.rollback();
+      await monitor.stop();
+    }
+  });
+});
+
+it("holds queued ingress until host suspension reopens admission", async () => {
+  await withQueue(async (queue) => {
+    const deliver = vi.fn(async (_raw: RawEvent, lifecycle: ChannelIngressMonitorLifecycle) => {
+      await lifecycle.onAdopted();
+    });
+    const monitor = createMonitor(queue, deliver);
+    const suspension = tryBeginGatewaySuspendAdmission(() => {});
+    expect(suspension).not.toBeNull();
+    try {
+      await queue.enqueue(
+        "event-suspend-release",
+        {
+          version: 1,
+          rawEvent: JSON.stringify({ id: "event-suspend-release", lane: "a", text: "deliver me" }),
+        },
+        { laneKey: "lane:a" },
+      );
+      monitor.start();
+
+      await new Promise((resolve) => {
+        setTimeout(resolve, 50);
+      });
+      expect(deliver).not.toHaveBeenCalled();
+
+      expect(suspension?.rollback()).toBe(true);
+      await vi.waitFor(() => expect(deliver).toHaveBeenCalledOnce());
+      await monitor.waitForIdle();
+    } finally {
+      suspension?.rollback();
       await monitor.stop();
     }
   });
