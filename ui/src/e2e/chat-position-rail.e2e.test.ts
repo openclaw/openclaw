@@ -92,8 +92,9 @@ suite.define(() => {
           const markBounds = await markers.evaluateAll((items) =>
             items.map((item) => item.getBoundingClientRect().toJSON()),
           );
+          expect(Math.min(...markBounds.map((bounds) => bounds.width))).toBeGreaterThanOrEqual(44);
           for (let index = 1; index < markBounds.length; index++) {
-            expect(markBounds[index]!.y - markBounds[index - 1]!.y).toBeCloseTo(20, 2);
+            expect(markBounds[index]!.y - markBounds[index - 1]!.y).toBeCloseTo(14, 2);
             expect(markBounds[index]!.y).toBeCloseTo(markBounds[index - 1]!.bottom, 2);
           }
           expect(await markers.first().getAttribute("aria-label")).toContain("1 of 240");
