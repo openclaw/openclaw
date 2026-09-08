@@ -494,23 +494,26 @@ describe("models-config", () => {
     expect(unauthenticatedProviderParsed.providers?.[provider]).toBeUndefined();
   });
 
-  it("leaves keyless catalog authentication to the registry auth owner", () => {
-    expect(unauthenticatedProviderWritePlan.action).toBe("write");
-    expect(unauthenticatedProviderParsed.providers?.["auth-only"]).toBeDefined();
-    if (unauthenticatedProviderWritePlan.action !== "write") {
-      throw new Error("Expected models.json write plan");
-    }
-    const auth = AuthStorage.inMemory();
-    const registry = ModelRegistry.create(auth, "/tmp/openclaw-keyless-catalog/models.json", {
-      includePluginCatalogs: false,
-      modelsJsonContents: unauthenticatedProviderWritePlan.contents,
+  it("leaves keyless catalog authentication to the registry auth owner", async () => {
+    await withTempEnv(["OPENAI_API_KEY"], async () => {
+      unsetEnv(["OPENAI_API_KEY"]);
+      expect(unauthenticatedProviderWritePlan.action).toBe("write");
+      expect(unauthenticatedProviderParsed.providers?.["auth-only"]).toBeDefined();
+      if (unauthenticatedProviderWritePlan.action !== "write") {
+        throw new Error("Expected models.json write plan");
+      }
+      const auth = AuthStorage.inMemory();
+      const registry = ModelRegistry.create(auth, "/tmp/openclaw-keyless-catalog/models.json", {
+        includePluginCatalogs: false,
+        modelsJsonContents: unauthenticatedProviderWritePlan.contents,
+      });
+      const model = registry.find("openai", "gpt-5.5");
+      expect(registry.getError()).toBeUndefined();
+      expect(model).toBeDefined();
+      expect(registry.getAvailable()).not.toContain(model);
+      auth.setRuntimeApiKey("openai", "synthetic-runtime-key");
+      expect(registry.getAvailable()).toContain(model);
     });
-    const model = registry.find("openai", "gpt-5.5");
-    expect(registry.getError()).toBeUndefined();
-    expect(model).toBeDefined();
-    expect(registry.getAvailable()).not.toContain(model);
-    auth.setRuntimeApiKey("openai", "synthetic-runtime-key");
-    expect(registry.getAvailable()).toContain(model);
   });
 
   it("treats empty replace-mode provider sets as authoritative", async () => {
