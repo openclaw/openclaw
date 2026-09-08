@@ -39,17 +39,17 @@ const mocks = vi.hoisted(() => ({
   logWarn: vi.fn(),
   listChannelPlugins: vi.fn((): Array<{ id: "telegram" | "discord" }> => []),
   disposeAllCodeModeRuns: vi.fn(),
-  disposeAgentHarnesses: vi.fn(async () => undefined),
+  disposeAgentHarnesses: vi.fn<() => Promise<void>>(async () => undefined),
   closeProviderTransportDispatcherPool: vi.fn(async () => undefined),
-  disposeAllSessionMcpRuntimes: vi.fn(async () => undefined),
+  disposeAllSessionMcpRuntimes: vi.fn<() => Promise<void>>(async () => undefined),
   triggerInternalHook: vi.fn<TriggerInternalHookMock>(async (_eventValue) => undefined),
-  disposeAllBundleLspRuntimes: vi.fn(async () => undefined),
-  drainRetainedEmbeddingProviders: vi.fn(async () => undefined),
+  disposeAllBundleLspRuntimes: vi.fn<() => Promise<void>>(async () => undefined),
+  drainRetainedEmbeddingProviders: vi.fn<() => Promise<void>>(async () => undefined),
   stopGmailWatcher: vi.fn(async () => undefined),
   disposeAcpSessionManagerInstance: vi.fn(async () => undefined),
   getAcpSessionManager: vi.fn(() => ({})),
   fenceSessionSuspensionWritesForGatewayShutdown: vi.fn(),
-  closePluginStateDatabase: vi.fn(async () => undefined),
+  closePluginStateDatabase: vi.fn<() => Promise<void>>(async () => undefined),
 }));
 const WEBSOCKET_CLOSE_GRACE_MS = 1_000;
 const WEBSOCKET_CLOSE_FORCE_CONTINUE_MS = 250;
@@ -267,6 +267,100 @@ describe("createGatewayCloseHandler", () => {
     }
   });
 
+  it.each(["shutdown", "pre-restart", "harness"] as const)(
+    "retains shared SQLite through actual %s cleanup after grace",
+    async (owner) => {
+      const { createOpenClawTestState } = await import("../test-utils/openclaw-test-state.js");
+      const { openOpenClawStateDatabase } = await import("../state/openclaw-state-db.js");
+      const { closePluginStateDatabase } = await vi.importActual<
+        typeof import("../plugin-state/plugin-state-store.js")
+      >("../plugin-state/plugin-state-store.js");
+      const hooks = await vi.importActual<typeof import("../hooks/internal-hooks.js")>(
+        "../hooks/internal-hooks.js",
+      );
+      const state = await createOpenClawTestState({ label: "shutdown-actual-sqlite" });
+      const database = openOpenClawStateDatabase({ env: state.env });
+      const entered = createDeferredCore();
+      const release = createDeferredCore();
+      const finished = createDeferredCore();
+      const reads: unknown[] = [];
+      const failures: unknown[] = [];
+      const cleanup = vi.fn(async () => {
+        entered.resolve();
+        try {
+          await release.promise;
+          reads.push(database.db.prepare("SELECT 1 AS value").get());
+        } catch (error) {
+          failures.push(error);
+        } finally {
+          finished.resolve();
+        }
+      });
+      const eventKey = `gateway:${owner === "pre-restart" ? "pre-restart" : "shutdown"}`;
+      if (owner === "harness") {
+        const harnesses = await vi.importActual<typeof import("../agents/harness/registry.js")>(
+          "../agents/harness/registry.js",
+        );
+        setActivePluginRegistry(createEmptyPluginRegistry());
+        harnesses.registerAgentHarness({
+          id: "cleanup-sqlite-fixture",
+          label: "Cleanup SQLite fixture",
+          supports: () => ({ supported: true }),
+          runAttempt: async () => {
+            throw new Error("The cleanup fixture does not run attempts");
+          },
+          dispose: cleanup,
+        });
+        mocks.disposeAgentHarnesses.mockImplementation(harnesses.disposeRegisteredAgentHarnesses);
+      } else {
+        hooks.registerInternalHook(eventKey, cleanup);
+        mocks.triggerInternalHook.mockImplementation(hooks.triggerInternalHook);
+      }
+      mocks.closePluginStateDatabase.mockImplementation(async () => closePluginStateDatabase());
+      const httpClose = vi.fn((callback: (error?: Error | null) => void) => callback(null));
+      const close = createGatewayCloseHandler(
+        createGatewayCloseTestDeps({
+          httpServer: { close: httpClose, closeIdleConnections: vi.fn() } as never,
+        }),
+      );
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      let closed = false;
+      const closing = close({
+        reason: "actual cleanup proof",
+        ...(owner === "pre-restart" ? { restartExpectedMs: 1000 } : {}),
+      }).then(() => {
+        closed = true;
+      });
+      try {
+        await entered.promise;
+        await vi.advanceTimersByTimeAsync(
+          owner === "pre-restart"
+            ? GATEWAY_PRE_RESTART_HOOK_TIMEOUT_MS
+            : owner === "harness"
+              ? AGENT_HARNESS_CLOSE_GRACE_MS
+              : GATEWAY_SHUTDOWN_HOOK_TIMEOUT_MS,
+        );
+        await vi.waitFor(() => expect(httpClose).toHaveBeenCalledOnce());
+        expect(database.db.isOpen).toBe(true);
+        expect(closed).toBe(false);
+        expect(mocks.closePluginStateDatabase).not.toHaveBeenCalled();
+      } finally {
+        release.resolve();
+        await finished.promise;
+        await closing;
+        hooks.unregisterInternalHook(eventKey, cleanup);
+        vi.useRealTimers();
+        closePluginStateDatabase();
+        await state.cleanup();
+      }
+      expect(cleanup).toHaveBeenCalledOnce();
+      expect(failures).toEqual([]);
+      expect(reads).toEqual([{ value: 1 }]);
+      expect(database.db.isOpen).toBe(false);
+      expect(mocks.closePluginStateDatabase).toHaveBeenCalledOnce();
+    },
+  );
+
   it("still runs later teardown when cron.stopAndDrain() rejects (no listener strand)", async () => {
     setActivePluginRegistry(createEmptyPluginRegistry());
     const stopAndDrain = vi.fn().mockRejectedValue(new Error("stream watcher stop failed"));
@@ -374,13 +468,21 @@ describe("createGatewayCloseHandler", () => {
   });
 
   it("retains shared state when media cleanup times out", async () => {
+    const { registerMediaCleanupDrain } = await import("./server-media-cleanup-lifecycle.js");
+    const cleanup = createDeferredCore();
+    registerMediaCleanupDrain(cleanup.promise);
     const stopMediaCleanup = vi.fn(async () => "timed-out" as const);
     const close = createGatewayCloseHandler(createGatewayCloseTestDeps({ stopMediaCleanup }));
-
-    const result = await close({ reason: "test" });
-
-    expect(stopMediaCleanup).toHaveBeenCalledTimes(1);
-    expect(mocks.closePluginStateDatabase).not.toHaveBeenCalled();
+    const closing = close({ reason: "test" });
+    try {
+      await vi.waitFor(() => expect(stopMediaCleanup).toHaveBeenCalledTimes(1));
+      expect(mocks.closePluginStateDatabase).not.toHaveBeenCalled();
+    } finally {
+      cleanup.resolve();
+      await closing;
+    }
+    const result = await closing;
+    expect(mocks.closePluginStateDatabase).toHaveBeenCalledOnce();
     expect(result.warnings).toContain("media-cleanup");
   });
 
@@ -848,9 +950,10 @@ describe("createGatewayCloseHandler", () => {
 
   it("continues shutdown and records a warning when gateway shutdown hook stalls", async () => {
     vi.useFakeTimers();
+    const cleanup = createDeferredCore();
     mocks.triggerInternalHook.mockImplementation((event: InternalHookEvent) => {
       if (event.action === "shutdown") {
-        return new Promise<void>(() => {});
+        return cleanup.promise;
       }
       return Promise.resolve(undefined);
     });
@@ -860,7 +963,14 @@ describe("createGatewayCloseHandler", () => {
     );
 
     const closePromise = close({ reason: "test shutdown" });
-    await vi.advanceTimersByTimeAsync(GATEWAY_SHUTDOWN_HOOK_TIMEOUT_MS);
+    try {
+      await vi.advanceTimersByTimeAsync(GATEWAY_SHUTDOWN_HOOK_TIMEOUT_MS);
+      expect(stopTaskRegistryMaintenance).toHaveBeenCalledTimes(1);
+      expect(mocks.closePluginStateDatabase).not.toHaveBeenCalled();
+    } finally {
+      cleanup.resolve();
+      await closePromise;
+    }
     const result = await closePromise;
 
     expect(result.warnings).toContain("gateway:shutdown");
@@ -1979,9 +2089,10 @@ describe("createGatewayCloseHandler", () => {
 
   it("continues restart shutdown and records a warning when gateway pre-restart hook stalls", async () => {
     vi.useFakeTimers();
+    const cleanup = createDeferredCore();
     mocks.triggerInternalHook.mockImplementation((event: InternalHookEvent) => {
       if (event.action === "pre-restart") {
-        return new Promise<void>(() => {});
+        return cleanup.promise;
       }
       return Promise.resolve(undefined);
     });
@@ -1991,7 +2102,14 @@ describe("createGatewayCloseHandler", () => {
       reason: "test restart",
       restartExpectedMs: 123,
     });
-    await vi.advanceTimersByTimeAsync(GATEWAY_PRE_RESTART_HOOK_TIMEOUT_MS);
+    try {
+      await vi.advanceTimersByTimeAsync(GATEWAY_PRE_RESTART_HOOK_TIMEOUT_MS);
+      expect(mocks.stopGmailWatcher).toHaveBeenCalledOnce();
+      expect(mocks.closePluginStateDatabase).not.toHaveBeenCalled();
+    } finally {
+      cleanup.resolve();
+      await closePromise;
+    }
     const result = await closePromise;
 
     expect(result.warnings).toContain("gateway:pre-restart");
@@ -2113,7 +2231,7 @@ describe("createGatewayCloseHandler", () => {
     ]);
   });
 
-  it("continues listener teardown when agent harness disposal never settles", async () => {
+  it("continues listener teardown while agent harness disposal is pending", async () => {
     vi.useFakeTimers();
     let releaseHarnessDisposal: (() => void) | undefined;
     const harnessDisposal = new Promise<undefined>((resolve) => {
@@ -2136,10 +2254,8 @@ describe("createGatewayCloseHandler", () => {
       expect(httpClose).not.toHaveBeenCalled();
 
       await vi.advanceTimersByTimeAsync(AGENT_HARNESS_CLOSE_GRACE_MS);
-      const result = await closePromise;
-
-      expect(result.warnings).toContain("agent-harnesses");
       expect(httpClose).toHaveBeenCalledOnce();
+      expect(mocks.closePluginStateDatabase).not.toHaveBeenCalled();
       expect(
         mocks.logWarn.mock.calls.some(([message]) =>
           String(message).includes("agent-harnesses runtime disposal exceeded 5000ms"),
@@ -2149,6 +2265,7 @@ describe("createGatewayCloseHandler", () => {
       releaseHarnessDisposal?.();
       await closePromise;
     }
+    expect((await closePromise).warnings).toContain("agent-harnesses");
   });
 
   it("starts bundle MCP and LSP runtime disposal concurrently", async () => {
@@ -2179,56 +2296,39 @@ describe("createGatewayCloseHandler", () => {
     }
   });
 
-  it("continues shutdown and records a warning when bundle MCP runtime disposal hangs", async () => {
-    vi.useFakeTimers();
-    mocks.disposeAllSessionMcpRuntimes.mockReturnValue(new Promise(() => {}));
-    const close = createGatewayCloseHandler(createGatewayCloseTestDeps());
-
-    const closePromise = close({ reason: "test shutdown" });
-    await vi.advanceTimersByTimeAsync(5_000);
-    const result = await closePromise;
-
-    expect(result.warnings).toContain("bundle-mcp");
-    expect(
-      mocks.logWarn.mock.calls.some(([message]) =>
-        String(message).includes("bundle-mcp runtime disposal exceeded 5000ms"),
-      ),
-    ).toBe(true);
-  });
-
-  it("continues shutdown and records a warning when bundle LSP runtime disposal hangs", async () => {
-    vi.useFakeTimers();
-    mocks.disposeAllBundleLspRuntimes.mockReturnValue(new Promise(() => {}));
-    const close = createGatewayCloseHandler(createGatewayCloseTestDeps());
-
-    const closePromise = close({ reason: "test shutdown" });
-    await vi.advanceTimersByTimeAsync(5_000);
-    const result = await closePromise;
-
-    expect(result.warnings).toContain("bundle-lsp");
-    expect(
-      mocks.logWarn.mock.calls.some(([message]) =>
-        String(message).includes("bundle-lsp runtime disposal exceeded 5000ms"),
-      ),
-    ).toBe(true);
-  });
-
-  it("continues shutdown when retained embedding provider cleanup hangs", async () => {
-    vi.useFakeTimers();
-    mocks.drainRetainedEmbeddingProviders.mockReturnValue(new Promise(() => {}));
-    const close = createGatewayCloseHandler(createGatewayCloseTestDeps());
-
-    const closePromise = close({ reason: "test shutdown" });
-    await vi.advanceTimersByTimeAsync(5_000);
-    const result = await closePromise;
-
-    expect(result.warnings).toContain("embedding-providers");
-    expect(
-      mocks.logWarn.mock.calls.some(([message]) =>
-        String(message).includes("embedding-providers runtime disposal exceeded 5000ms"),
-      ),
-    ).toBe(true);
-  });
+  it.each([
+    { label: "bundle-mcp", dispose: mocks.disposeAllSessionMcpRuntimes },
+    { label: "bundle-lsp", dispose: mocks.disposeAllBundleLspRuntimes },
+    { label: "embedding-providers", dispose: mocks.drainRetainedEmbeddingProviders },
+  ])(
+    "continues independent teardown while $label cleanup is pending",
+    async ({ label, dispose }) => {
+      vi.useFakeTimers();
+      const cleanup = createDeferredCore();
+      dispose.mockReturnValue(cleanup.promise);
+      const httpClose = vi.fn((callback: (error?: Error | null) => void) => callback(null));
+      const close = createGatewayCloseHandler(
+        createGatewayCloseTestDeps({
+          httpServer: { close: httpClose, closeIdleConnections: vi.fn() } as never,
+        }),
+      );
+      const closePromise = close({ reason: "test shutdown" });
+      try {
+        await vi.advanceTimersByTimeAsync(5_000);
+        expect(httpClose).toHaveBeenCalledOnce();
+        expect(mocks.closePluginStateDatabase).not.toHaveBeenCalled();
+      } finally {
+        cleanup.resolve();
+        await closePromise;
+      }
+      expect((await closePromise).warnings).toContain(label);
+      expect(
+        mocks.logWarn.mock.calls.some(([message]) =>
+          String(message).includes(`${label} runtime disposal exceeded 5000ms`),
+        ),
+      ).toBe(true);
+    },
+  );
 
   it("terminates lingering websocket clients when websocket close exceeds the grace window", async () => {
     vi.useFakeTimers();

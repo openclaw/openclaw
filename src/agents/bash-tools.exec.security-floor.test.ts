@@ -420,52 +420,92 @@ describe("exec security floor", () => {
     });
   });
 
-  it("retains the terminal Guardian review when its approved script changes before execution", async () => {
-    const workdir = tempRoot ?? os.tmpdir();
-    const script = path.join(workdir, "script.sh");
-    fs.writeFileSync(script, "#!/bin/sh\necho approved\n");
-    const autoReviewer = vi.fn<ExecAutoReviewer>(async () => ({
-      decision: "allow-once",
-      risk: "low",
-      rationale: "approved script",
-    }));
-    const tool = createExecTool({
-      host: "gateway",
-      mode: "auto",
-      safeBins: [],
-      autoReviewer,
-      runId: "run-guardian-script",
-      cwd: workdir,
-    });
-    let changedAfterApproval = false;
-    const unsubscribe = onAgentEvent((event) => {
-      if (
-        event.runId === "run-guardian-script" &&
-        event.data.approvalReviewOutcome === "approved"
-      ) {
-        fs.writeFileSync(script, "#!/bin/sh\necho mutated\n");
-        changedAfterApproval = true;
-      }
-    });
-    let result: Awaited<ReturnType<typeof tool.execute>>;
-    try {
-      result = await tool.execute("tool-guardian-script", { command: "sh script.sh" });
-    } finally {
-      unsubscribe();
-    }
+  it.runIf(process.platform !== "win32")(
+    "executes reviewed globs and chains as written",
+    async () => {
+      const workdir = tempRoot ?? os.tmpdir();
+      fs.writeFileSync(path.join(workdir, "first.review-fixture"), "fixture");
+      const command = "ls *.review-fixture; echo chain-complete";
+      const calls = mockApprovalGateway();
+      const autoReviewer = vi.fn<ExecAutoReviewer>(async () => ({
+        decision: "allow-once",
+        risk: "medium",
+        rationale: "project inspection",
+      }));
+      const tool = createExecTool({
+        host: "gateway",
+        mode: "auto",
+        safeBins: [],
+        autoReviewer,
+        cwd: workdir,
+      });
+      const result = await tool.execute("call-reviewed-glob", { command });
+      expect(autoReviewer).toHaveBeenCalledWith(
+        expect.objectContaining({ command, reason: "execution-plan-miss" }),
+      );
+      expect(calls).toEqual([]);
+      expect(result.details).toMatchObject({
+        status: "completed",
+        exitCode: 0,
+        approvalReviewOutcome: "approved",
+      });
+      expect(result.content[0]).toEqual(
+        expect.objectContaining({
+          text: expect.stringContaining("first.review-fixture\nchain-complete"),
+        }),
+      );
+    },
+  );
 
-    expect(changedAfterApproval).toBe(true);
-    expect(result.content[0]).toEqual(
-      expect.objectContaining({
-        text: expect.stringContaining("approval script operand changed before execution"),
-      }),
-    );
-    expect(result.details).toMatchObject({
-      status: "failed",
-      approvalReviewOutcome: "approved",
-      approvalReviews: [{ id: "guardian:tool-guardian-script", status: "approved" }],
-    });
-  });
+  it.each(["sh script.sh", "sh script.sh; ls *.sh"])(
+    "retains Guardian evidence and denies script drift for %s",
+    async (command) => {
+      const workdir = tempRoot ?? os.tmpdir();
+      const script = path.join(workdir, "script.sh");
+      fs.writeFileSync(script, "#!/bin/sh\necho approved\n");
+      const autoReviewer = vi.fn<ExecAutoReviewer>(async () => ({
+        decision: "allow-once",
+        risk: "low",
+        rationale: "approved script",
+      }));
+      const tool = createExecTool({
+        host: "gateway",
+        mode: "auto",
+        safeBins: [],
+        autoReviewer,
+        runId: "run-guardian-script",
+        cwd: workdir,
+      });
+      let changedAfterApproval = false;
+      const unsubscribe = onAgentEvent((event) => {
+        if (
+          event.runId === "run-guardian-script" &&
+          event.data.approvalReviewOutcome === "approved"
+        ) {
+          fs.writeFileSync(script, "#!/bin/sh\necho mutated\n");
+          changedAfterApproval = true;
+        }
+      });
+      let result: Awaited<ReturnType<typeof tool.execute>>;
+      try {
+        result = await tool.execute("tool-guardian-script", { command });
+      } finally {
+        unsubscribe();
+      }
+
+      expect(changedAfterApproval).toBe(true);
+      expect(result.content[0]).toEqual(
+        expect.objectContaining({
+          text: expect.stringContaining("approval script operand changed before execution"),
+        }),
+      );
+      expect(result.details).toMatchObject({
+        status: "failed",
+        approvalReviewOutcome: "approved",
+        approvalReviews: [{ id: "guardian:tool-guardian-script", status: "approved" }],
+      });
+    },
+  );
 
   it("uses agent-scoped host policy when clamping normalized modes", async () => {
     writeExecApprovalsFixture(tempRoot ?? os.tmpdir(), {

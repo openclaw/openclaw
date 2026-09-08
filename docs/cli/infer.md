@@ -127,6 +127,8 @@ A good infer-based skill maps common user intents to the right subcommand, inclu
 
 Text inference and model/provider inspection.
 
+`model list`, `model inspect`, and `model providers` read the selected agent's model catalog. They preserve configured model details and exclude models outside that catalog. Use `infer model --agent <id> list --json` or `infer model --agent <id> inspect --model <provider/model> --json` to select an agent. Provider counts use the same inventory.
+
 ```bash
 openclaw infer model run --prompt "Reply with exactly: smoke-ok" --json
 openclaw infer model run --prompt "Summarize this changelog entry" --model openai/gpt-5.4 --json

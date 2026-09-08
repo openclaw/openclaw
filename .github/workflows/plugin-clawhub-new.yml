@@ -523,6 +523,13 @@ jobs:
           install-bun: "true"
           install-deps: "true"
 
+      - name: Install trusted plugin tooling dependencies
+        working-directory: .release-harness
+        env:
+          CI: "true"
+        # Corepack reads this checkout's packageManager before pnpm processes arguments.
+        run: pnpm install --frozen-lockfile --prefer-offline --ignore-scripts
+
       - name: Materialize locked ClawHub CLI
         id: clawhub_cli
         run: |

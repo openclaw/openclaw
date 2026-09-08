@@ -2085,6 +2085,7 @@ describe("Crabbox worker provider", () => {
       }),
     ).toBe(149 * 60_000 + 15_000);
     expect(setupOrder).toEqual(["desktop", "enrollment"]);
+    expect(calls.filter(({ argv }) => argv[1] === "inspect")).toHaveLength(1);
   });
 
   it.each(["desktop setup", "enrollment preparation", "enrollment completion"] as const)(
@@ -2650,7 +2651,7 @@ describe("Crabbox worker provider", () => {
     expect(calls.filter((argv) => argv[1] === "warmup")).toHaveLength(2);
     expect(
       calls.filter((argv) => argv[1] === "inspect").map((argv) => argv[argv.indexOf("--id") + 1]),
-    ).toEqual([LEASE_ID, LEASE_ID]);
+    ).toEqual([LEASE_ID]);
     expect(calls.at(-1)).toEqual([SIBLING_BINARY, "stop", "--provider", "aws", "--id", LEASE_ID]);
   });
 
@@ -3106,7 +3107,18 @@ describe("Crabbox worker provider", () => {
     }
   });
 
-  it("warns once and disables heartbeat when the Crabbox command is unavailable", async () => {
+  it.each([
+    {
+      name: "command unavailable",
+      stderr: "unexpected argument heartbeat",
+      warning: `Crabbox heartbeat is unavailable for worker lease ${LEASE_ID}; upgrade Crabbox to v0.44.0 or newer for \`crabbox heartbeat\``,
+    },
+    {
+      name: "provider unsupported",
+      stderr: "provider=aws does not support lease heartbeat",
+      warning: `Crabbox provider aws does not support heartbeat for worker lease ${LEASE_ID}`,
+    },
+  ])("warns once and disables heartbeat when $name", async ({ stderr, warning }) => {
     vi.useFakeTimers();
     const calls: string[][] = [];
     const warnings: string[] = [];
@@ -3117,7 +3129,7 @@ describe("Crabbox worker provider", () => {
           return commandResult({ stdout: inspectJson() });
         }
         if (argv[1] === "heartbeat") {
-          return commandResult({ code: 2, stderr: "unexpected argument heartbeat" });
+          return commandResult({ code: 2, stderr });
         }
         return commandResult();
       },
@@ -3133,7 +3145,7 @@ describe("Crabbox worker provider", () => {
 
       expect(calls.filter((argv) => argv[1] === "heartbeat")).toHaveLength(1);
       expect(warnings).toEqual([
-        `Crabbox heartbeat is unavailable for worker lease ${LEASE_ID}; upgrade Crabbox to v0.44.0 or newer for \`crabbox heartbeat\`; cloud worker machines may be reaped after 60m of coordinator-idle time`,
+        `${warning}; cloud worker machines may be reaped after 60m of coordinator-idle time`,
       ]);
     } finally {
       await provider.destroy(lease);
@@ -3174,38 +3186,58 @@ describe("Crabbox worker provider", () => {
     }
   });
 
-  it("keeps heartbeat transport failures out of lifecycle operations and retries", async () => {
-    vi.useFakeTimers();
-    let heartbeatAttempts = 0;
-    const warnings: string[] = [];
-    const provider = providerWithRunner(
-      async (argv) => {
-        if (argv[1] === "inspect") {
-          return commandResult({ stdout: inspectJson() });
-        }
-        if (argv[1] === "heartbeat" && heartbeatAttempts++ === 0) {
-          throw new Error("transport unavailable");
-        }
-        return commandResult();
+  it.each([
+    {
+      name: "transport failures",
+      fail: () => {
+        throw new Error("transport unavailable");
       },
-      (message) => warnings.push(message),
-    );
-    const lease = lifecycleLease();
+      warning: "Crabbox heartbeat could not start",
+    },
+    {
+      name: "claim conflicts",
+      fail: () => commandResult({ code: 2, stderr: `lease ${LEASE_ID} claim changed; retry\n` }),
+      warning: `Crabbox heartbeat failed with exit code 2: lease ${LEASE_ID} claim changed; retry`,
+    },
+  ])(
+    "keeps heartbeat $name out of lifecycle operations and preserves its schedule",
+    async ({ fail, warning }) => {
+      vi.useFakeTimers();
+      let heartbeatAttempts = 0;
+      const warnings: string[] = [];
+      const provider = providerWithRunner(
+        async (argv) => {
+          if (argv[1] === "inspect") {
+            return commandResult({ stdout: inspectJson() });
+          }
+          if (argv[1] === "heartbeat" && heartbeatAttempts++ === 0) {
+            return fail();
+          }
+          return commandResult();
+        },
+        (message) => warnings.push(message),
+      );
+      const lease = lifecycleLease();
 
-    try {
-      await expect(provider.inspect(lease)).resolves.toStrictEqual({ status: "active" });
-      await vi.advanceTimersByTimeAsync(0);
-      expect(heartbeatAttempts).toBe(1);
-      expect(warnings).toHaveLength(1);
+      try {
+        await expect(provider.inspect(lease)).resolves.toStrictEqual({ status: "active" });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(heartbeatAttempts).toBe(1);
+        expect(warnings).toEqual([
+          `${warning}; cloud worker machines may be reaped after 60m of coordinator-idle time`,
+        ]);
 
-      await vi.advanceTimersByTimeAsync(60_000);
-      expect(heartbeatAttempts).toBe(2);
-      expect(warnings).toHaveLength(1);
-    } finally {
-      await provider.destroy(lease);
-      vi.useRealTimers();
-    }
-  });
+        await vi.advanceTimersByTimeAsync(59_999);
+        expect(heartbeatAttempts).toBe(1);
+        await vi.advanceTimersByTimeAsync(1);
+        expect(heartbeatAttempts).toBe(2);
+        expect(warnings).toHaveLength(1);
+      } finally {
+        await provider.destroy(lease);
+        vi.useRealTimers();
+      }
+    },
+  );
 
   it("rejects non-Crabbox lifecycle lease ids before invoking the CLI", async () => {
     let invoked = false;

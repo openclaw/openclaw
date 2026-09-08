@@ -2,6 +2,7 @@
 import { XAI_DEFAULT_MODEL_ID } from "../model-definitions.js";
 import {
   requestXaiResponsesTool,
+  resolveXaiToolDefaultReasoningEffort,
   requireXaiResponseTextCitationsAndInline,
   resolveXaiResponsesEndpoint,
 } from "./responses-tool-shared.js";
@@ -116,7 +117,7 @@ export async function requestXaiXSearch(params: {
       ...params,
       inputText: params.options.query,
       tools: [buildXSearchTool(params.options)],
-      reasoningEffort: params.model === XAI_DEFAULT_X_SEARCH_MODEL ? "none" : undefined,
+      reasoningEffort: resolveXaiToolDefaultReasoningEffort(params.model, "none"),
       errorLabel: "xAI X search failed",
     },
     (data) =>

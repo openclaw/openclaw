@@ -4806,6 +4806,69 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
     );
   });
 
+  it.each(["runtime", "doctor"])(
+    "upgrades the plugin listing index through %s without rewriting entries",
+    (repairPath) => {
+      const stateDir = createTempStateDir();
+      const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
+      const databasePath = materializeCurrentStateDatabase(stateDir);
+      const { DatabaseSync } = requireNodeSqlite();
+      const legacy = new DatabaseSync(databasePath);
+      const entriesSql =
+        "SELECT * FROM plugin_state_entries ORDER BY plugin_id, namespace, entry_key";
+      const metadataSql =
+        "SELECT role, agent_id, schema_version, app_version FROM schema_meta WHERE meta_key = 'primary'";
+      let entries: unknown;
+      let metadata: unknown;
+      try {
+        legacy.exec(`
+          DROP INDEX idx_plugin_state_listing;
+          CREATE INDEX idx_plugin_state_listing
+            ON plugin_state_entries(plugin_id, namespace, created_at, entry_key);
+          INSERT INTO plugin_state_entries VALUES
+            ('plugin', 'written', 'live', '{ "value": 1 }', 10, NULL),
+            ('plugin', 'written', 'at-cutoff', '{ "value": 2 }', 10, 1000),
+            ('plugin', 'sibling', 'expired', '{ "value": 3 }', 20, 999),
+            ('plugin', 'sibling', 'future', '{ "value": 4 }', 20, 1001),
+            ('peer', 'written', 'live', '{ "value": 5 }', 10, NULL);
+        `);
+        entries = legacy.prepare(entriesSql).all();
+        metadata = legacy.prepare(metadataSql).get();
+        expect(metadata).toMatchObject({
+          schema_version: OPENCLAW_STATE_SCHEMA_VERSION,
+          app_version: VERSION,
+        });
+      } finally {
+        legacy.close();
+      }
+
+      if (repairPath === "doctor") {
+        const repaired = repairOpenClawStateDatabaseSchema(options);
+        expect(repaired.warnings).toEqual([]);
+        expect(repaired.changes).toContain("Rebuilt canonical shared-state SQLite indexes (1)");
+      }
+      const upgraded = openOpenClawStateDatabase(options);
+      expect(
+        upgraded.db
+          .prepare("PRAGMA index_info(idx_plugin_state_listing)")
+          .all()
+          .map((row) => row.name),
+      ).toEqual(["plugin_id", "namespace", "created_at", "entry_key", "expires_at"]);
+      expect(upgraded.db.prepare(entriesSql).all()).toEqual(entries);
+      expect(upgraded.db.prepare(metadataSql).get()).toEqual(metadata);
+      expect(readSqliteNumberPragma(upgraded.db, "user_version")).toBe(
+        OPENCLAW_STATE_SCHEMA_VERSION,
+      );
+      const schemaVersion = readSqliteNumberPragma(upgraded.db, "schema_version");
+      closeOpenClawStateDatabaseForTest();
+
+      const reopened = openOpenClawStateDatabase(options);
+      expect(readSqliteNumberPragma(reopened.db, "schema_version")).toBe(schemaVersion);
+      expect(reopened.db.prepare(entriesSql).all()).toEqual(entries);
+      expect(reopened.db.prepare(metadataSql).get()).toEqual(metadata);
+    },
+  );
+
   it("repairs same-version Claw bootstrap columns before runtime schema validation", () => {
     const stateDir = createTempStateDir();
     const env = { OPENCLAW_STATE_DIR: stateDir };

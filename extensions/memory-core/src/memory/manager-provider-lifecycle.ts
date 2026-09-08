@@ -1,5 +1,5 @@
 // Memory Core plugin module owns embedding provider lifecycle.
-import { resolveAgentConfig } from "openclaw/plugin-sdk/agent-runtime";
+import { resolveAgentConfig } from "openclaw/plugin-sdk/agent-scope-runtime";
 import {
   formatErrorMessage,
   readErrorName,

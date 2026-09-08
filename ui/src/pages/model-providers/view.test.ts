@@ -48,6 +48,8 @@ function props(overrides: Partial<ModelProvidersViewProps> = {}): ModelProviders
     thinkingOverridden: true,
     fastMode: false,
     fastModeOverridden: true,
+    catalogDiscovering: false,
+    catalogDiscoveryError: null,
     configBusy: false,
     quickAddSupported: true,
     unconfiguredProviders: [{ id: "anthropic", displayName: "Anthropic" }],
@@ -85,6 +87,8 @@ function props(overrides: Partial<ModelProvidersViewProps> = {}): ModelProviders
     onThinkingReset: () => undefined,
     onFastModeChange: () => undefined,
     onFastModeReset: () => undefined,
+    onModelPickerOpen: () => undefined,
+    onCatalogRetry: () => undefined,
     onOpenModelSetup: () => undefined,
     ...overrides,
   };

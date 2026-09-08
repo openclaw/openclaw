@@ -2924,6 +2924,16 @@ docker_e2e_docker_run_cmd run demo
         /-e OPENCLAW_UPGRADE_SURVIVOR_CONFIG_PARKING_HELPER=\/tmp\/openclaw-config-parking\.mjs/gu,
       ),
     ).toHaveLength(2);
+    expect(
+      runner.match(
+        /-e OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_SERVER_SCRIPT=\/tmp\/openclaw-release-harness\/scripts\/e2e\/lib\/plugins\/npm-registry-server\.mjs/gu,
+      ),
+    ).toHaveLength(2);
+    expect(
+      runner.match(
+        /-v "\$HARNESS_ROOT_DIR\/scripts:\/tmp\/openclaw-release-harness\/scripts:ro"/gu,
+      ),
+    ).toHaveLength(2);
   });
 
   it("keeps upgrade survivor wrappers and the embedded payload valid bash", () => {

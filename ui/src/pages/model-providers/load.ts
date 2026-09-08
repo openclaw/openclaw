@@ -84,14 +84,18 @@ export async function loadModelProvidersData(
         ...(opts.signal ? { signal: opts.signal } : {}),
       }),
     );
-  const catalogRefresh = opts.refresh ? loadConfiguredCatalog({ refresh: true }) : undefined;
+  const authStatusLoad = settleRequest(loadModelAuthStatus(client, opts));
+  // Auth refresh publishes the runtime owner that the catalog must read.
+  const catalogRefresh = opts.refresh
+    ? authStatusLoad.then(() => loadConfiguredCatalog({ refresh: true }))
+    : undefined;
   const catalogLoad = catalogRefresh
     ? catalogRefresh.then((refreshResult) =>
         refreshResult.ok ? refreshResult : loadConfiguredCatalog({ preparedOnly: true }),
       )
     : loadConfiguredCatalog({ preparedOnly: true });
   const [authStatus, catalog, refreshResult, config] = await Promise.all([
-    settleRequest(loadModelAuthStatus(client, opts)),
+    authStatusLoad,
     catalogLoad,
     catalogRefresh ?? Promise.resolve(undefined),
     client

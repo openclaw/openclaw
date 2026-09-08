@@ -17,11 +17,19 @@ import {
   RUNTIME_POSTBUILD_STAMP_FILE,
 } from "../../scripts/lib/local-build-metadata-paths.mts";
 import {
+  UPDATE_COMPATIBILITY_INVENTORY_FILE,
+  writeUpdateCompatibilityChunks,
+} from "../../scripts/lib/update-compat-chunks.mts";
+import {
   acquireRunNodeBuildLock,
   resolveBuildRequirement,
   resolveRuntimePostBuildRequirement,
   runNodeMain,
 } from "../../scripts/run-node.mts";
+import {
+  previousReleaseInventory,
+  writeUpdateCompatibilityBuildFixture,
+} from "../../test/scripts/update-compat-chunks.test-support.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 
 const it = baseIt.extend<{ tmp: string }>({
@@ -172,12 +180,17 @@ async function writeRuntimePostBuildScaffold(tmp: string): Promise<void> {
     [DIST_BUILD_INFO]: '{"buildId":"test-build"}\n',
     [DIST_LEGACY_UPDATE_NODE_RUNNER_COMPAT]: "export function resolveNodeRunner() {}\n",
     [DIST_LEGACY_UPDATE_NODE_RUNNER_COMPAT_ALT]: "export function resolveNodeRunner() {}\n",
-    [DIST_LEGACY_UPDATE_NODE_RUNNER_COMPAT_2026_9_1]: "export function resolveNodeRunner() {}\n",
     [DIST_LEGACY_CLI_EXIT_COMPAT]: "export function hasMemoryRuntime() { return false; }\n",
     [DIST_LEGACY_CLI_EXIT_COMPAT_ALT]: "export function hasMemoryRuntime() { return false; }\n",
     [DIST_OPENCLAW_ALIAS_PACKAGE]:
       '{"name":"openclaw","type":"module","exports":{"./plugin-sdk/core":"./plugin-sdk/core.js"}}\n',
     [DIST_OPENCLAW_ALIAS_PLUGIN_SDK_CORE]: "export * from '../../../../plugin-sdk/core.js';\n",
+  });
+  writeUpdateCompatibilityBuildFixture(tmp);
+  writeUpdateCompatibilityChunks({
+    distDir: path.join(tmp, "dist"),
+    sourceDir: tmp,
+    inventory: previousReleaseInventory,
   });
   await touchProjectFiles(
     tmp,
@@ -187,7 +200,10 @@ async function writeRuntimePostBuildScaffold(tmp: string): Promise<void> {
       DIST_PLUGIN_SDK_CORE,
       DIST_LEGACY_UPDATE_NODE_RUNNER_COMPAT,
       DIST_LEGACY_UPDATE_NODE_RUNNER_COMPAT_ALT,
-      DIST_LEGACY_UPDATE_NODE_RUNNER_COMPAT_2026_9_1,
+      `dist/${UPDATE_COMPATIBILITY_INVENTORY_FILE}`,
+      ...previousReleaseInventory.releases.flatMap((release) =>
+        release.chunks.map((chunk) => `dist/${chunk.path}`),
+      ),
       DIST_LEGACY_CLI_EXIT_COMPAT,
       DIST_LEGACY_CLI_EXIT_COMPAT_ALT,
       DIST_OPENCLAW_ALIAS_PACKAGE,
