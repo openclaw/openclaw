@@ -21,6 +21,7 @@ export type AttachmentCardHeaderOptions = {
   sizeBytes?: number;
   downloadHref?: string;
   downloadPending?: boolean;
+  loading?: boolean;
   expandLabel?: string;
   onExpand?: () => void;
   visualMode?: AttachmentFileVisualMode;
@@ -92,16 +93,19 @@ export function renderAttachmentCardIcon(options: {
   mimeType?: string;
   visualMode?: AttachmentFileVisualMode;
   unavailable?: boolean;
+  loading?: boolean;
 }) {
   return renderAttachmentFileIcon({
     filename: options.label,
     mimeType: options.mimeType,
     mode: options.visualMode ?? "large-placeholder",
     unavailable: options.unavailable,
+    loading: options.loading,
   });
 }
 
 export function renderAttachmentCardHeader(options: AttachmentCardHeaderOptions): TemplateResult {
+  const skeleton = options.loading ? "skeleton" : "";
   const compactPreview = options.visualMode === "preview-with-favicon";
   const formattedSize =
     options.sizeBytes === undefined ? undefined : formatBytes(options.sizeBytes);
@@ -125,13 +129,14 @@ export function renderAttachmentCardHeader(options: AttachmentCardHeaderOptions)
           label: options.label,
           mimeType: options.mimeType,
           visualMode: options.visualMode,
+          loading: options.loading,
         })}
         <span
           class="chat-assistant-attachment-card__details ${
             compactPreview ? "chat-assistant-attachment-card__details--preview" : ""
           }"
         >
-          <span class="chat-assistant-attachment-card__title" title=${options.label}
+          <span class="chat-assistant-attachment-card__title ${skeleton}" title=${options.label}
             >${options.label}</span
           >
           ${
@@ -139,7 +144,9 @@ export function renderAttachmentCardHeader(options: AttachmentCardHeaderOptions)
               ? formattedSize
                 ? html`<span class="chat-assistant-attachment-card__separator" aria-hidden="true"
                       >·</span
-                    ><span class="chat-assistant-attachment-card__meta">${formattedSize}</span>`
+                    ><span class="chat-assistant-attachment-card__meta ${skeleton}"
+                      >${formattedSize}</span
+                    >`
                 : null
               : html`<span class="chat-assistant-attachment-card__meta">${metadata}</span>`
           }
@@ -156,7 +163,7 @@ export function renderAttachmentCardHeader(options: AttachmentCardHeaderOptions)
         ${
           options.downloadHref || options.downloadPending
             ? html`<a
-                class=${downloadClass}
+                class=${`${downloadClass} ${skeleton}`}
                 href=${options.downloadPending ? nothing : options.downloadHref}
                 aria-disabled=${options.downloadPending ? "true" : nothing}
                 role="link"

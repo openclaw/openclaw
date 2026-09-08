@@ -236,7 +236,10 @@ describe("chat pane embedded panels", () => {
       open.click();
       render(
         html`<openclaw-chat-detail-panel
-          .content=${sidebarContent}
+          .content=${{
+            ...expectDefined<SidebarContent>(sidebarContent, "Opened attachment"),
+            sourceIdentity: undefined,
+          }}
           .attachmentRuntime=${{ connectionEpoch: 2, resolveArtifactDownload: secondResolver }}
         ></openclaw-chat-detail-panel>`,
         detail,
@@ -250,27 +253,38 @@ describe("chat pane embedded panels", () => {
       expect(panel.textContent).toContain("recording.mp4");
       expect(panel.textContent).not.toContain("Preview unavailable");
       expect(panel.querySelector('[aria-busy="true"]')).not.toBeNull();
-      expect(panel.querySelector("video")).toBeNull();
+      const video = await vi.waitFor(() =>
+        expectDefined(panel.querySelector("video"), "Pending video"),
+      );
+      expect(video.hasAttribute("src")).toBe(false);
+      expect(video.preload).toBe("auto");
+      const presentation = panel.querySelector('[role="status"]');
+      const header = panel.querySelector(".chat-assistant-attachment-card__header");
       expect(secondResolver).toHaveBeenCalledOnce();
       if (outcome === "error") {
         pending.reject(new Error("Connection lost"));
       } else {
         pending.resolve(outcome === "ready" ? { url: `${source}?mediaTicket=renewed` } : null);
       }
-      await vi.waitFor(async () => {
-        await panel.updateComplete;
-        expect(panel.querySelector('[aria-busy="true"]')).toBeNull();
-      });
       if (outcome === "ready") {
         const player = panel.querySelector<LitElement>("openclaw-chat-video-player");
         await player?.updateComplete;
-        expect(panel.querySelector("video")).not.toBeNull();
-        expect(panel.querySelector("openclaw-chat-video-player")?.src).toBe(
-          `${source}?mediaTicket=renewed`,
+        await vi.waitFor(() =>
+          expect(video.getAttribute("src")).toBe(`${source}?mediaTicket=renewed`),
         );
+        expect(panel.querySelector("video")).toBe(video);
+        expect(panel.querySelector('[role="status"]')).toBe(presentation);
+        expect(panel.querySelector(".chat-assistant-attachment-card__header")).toBe(header);
+        expect(panel.querySelector('[aria-busy="true"]')).not.toBeNull();
+        Object.defineProperty(video, "readyState", { configurable: true, value: 2 });
+        video.dispatchEvent(new Event("loadeddata"));
+        await player?.updateComplete;
+        expect(panel.querySelector('[role="status"]')).toBeNull();
+        expect(panel.querySelector('[aria-busy="true"]')).toBeNull();
         expect(panel.textContent).not.toContain("Preview unavailable");
       } else {
-        expect(panel.textContent).toContain("Preview unavailable");
+        await vi.waitFor(() => expect(panel.textContent).toContain("Preview unavailable"));
+        expect(panel.querySelector('[aria-busy="true"]')).toBeNull();
         expect(panel.querySelector("video")).toBeNull();
       }
       detail.remove();

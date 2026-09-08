@@ -94,6 +94,20 @@ function renderSidebarAttachment(
       .sizeBytes=${source?.sizeBytes ?? content.sizeBytes}
     ></openclaw-chat-text-attachment>`;
   }
+  if (kind === "video" && (src || pending)) {
+    return html`<openclaw-chat-video-player
+      .src=${src ?? ""}
+      .preview=${true}
+      .sourceIdentity=${content.sourceIdentity ?? content.src ?? src ?? ""}
+      .label=${content.title}
+      .mimeType=${content.mimeType ?? ""}
+      .playback=${source?.playback ?? content.playback ?? "native"}
+      .authToken=${authToken}
+      .sizeBytes=${source?.sizeBytes ?? content.sizeBytes}
+      .mediaWidth=${source?.width ?? content.width}
+      .mediaHeight=${source?.height ?? content.height}
+    ></openclaw-chat-video-player>`;
+  }
   if (!src || imagePreview) {
     const width = source?.width ?? content.width;
     const height = source?.height ?? content.height;
@@ -145,19 +159,6 @@ function renderSidebarAttachment(
         </div>
       </div>
     `;
-  }
-  if (kind === "video") {
-    return html`<openclaw-chat-video-player
-      .src=${src}
-      .sourceIdentity=${content.sourceIdentity ?? content.src ?? src}
-      .label=${content.title}
-      .mimeType=${content.mimeType ?? ""}
-      .playback=${source?.playback ?? content.playback ?? "native"}
-      .authToken=${authToken}
-      .sizeBytes=${source?.sizeBytes ?? content.sizeBytes}
-      .mediaWidth=${source?.width ?? content.width}
-      .mediaHeight=${source?.height ?? content.height}
-    ></openclaw-chat-video-player>`;
   }
   if (kind === "audio") {
     return html`<openclaw-chat-audio-player
