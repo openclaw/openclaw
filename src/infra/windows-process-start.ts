@@ -87,8 +87,11 @@ export function readWindowsProcessStartTimeSync(
     return null;
   }
   // Preserve both former 5s attempts inside one deadline. Explicit callers
-  // still keep their smaller end-to-end budget.
-  const deadline = Date.now() + timeoutMs;
+  // still keep their smaller end-to-end budget. Measure the budget on a
+  // monotonic clock: a wall-clock step while the PowerShell probe runs must
+  // neither inflate the WMIC timeout past the caller's budget nor drop the
+  // fallback while real time remains.
+  const startedAtMs = performance.now();
   const powershell = spawnSync(
     windowsPowerShellPath(env),
     [
@@ -112,7 +115,7 @@ export function readWindowsProcessStartTimeSync(
       return startTime;
     }
   }
-  const remainingMs = deadline - Date.now();
+  const remainingMs = Math.max(0, timeoutMs - Math.round(performance.now() - startedAtMs));
   if (remainingMs <= 0) {
     return null;
   }
