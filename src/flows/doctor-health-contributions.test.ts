@@ -3945,7 +3945,7 @@ describe("doctor health contributions", () => {
     await contribution.run(ctx);
 
     expect(mocks.runDoctorHealthRepairs).toHaveBeenCalledWith(expect.any(Object), {
-      checks: [{ id: "plugin/example/unrelated", kind: "plugin", sourceContract: "split" }],
+      checks: [{ id: "plugin/example/unrelated", kind: "plugin" }],
     });
   });
 
@@ -3967,7 +3967,7 @@ describe("doctor health contributions", () => {
 
     expect(mocks.runDoctorHealthRepairs).toHaveBeenCalledWith(
       expect.objectContaining({ env: { OPENCLAW_UPDATE_POST_CORE: "1" } }),
-      { checks: [{ id: "plugin/example/regular", kind: "plugin", sourceContract: "split" }] },
+      { checks: [{ id: "plugin/example/regular", kind: "plugin" }] },
     );
   });
 
