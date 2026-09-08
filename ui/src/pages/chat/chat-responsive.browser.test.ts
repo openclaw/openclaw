@@ -11,6 +11,7 @@ import {
 } from "../../../../test/fixtures/media-playback.js";
 import { readStyleSheet } from "../../../../test/helpers/ui-style-fixtures.js";
 import { finishElementAnimations } from "../../test-helpers/animations.ts";
+import { createControlUiE2eArtifactDir } from "../../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   canRunPlaywrightChromium,
   installMockGateway,
@@ -1807,6 +1808,84 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       await closeBrowserPage(page);
     }
   });
+
+  it.each([
+    [320, 568, 0, 0, "48rem"],
+    [390, 844, 0, 0, "48rem"],
+    [768, 1024, 0, 0, "48rem"],
+    [844, 390, 44, 0, "48rem"],
+    [844, 390, 0, 44, "48rem"],
+    [932, 430, 44, 0, "none"],
+    [390, 844, 0, 0, "82%"],
+    [844, 390, 44, 0, "82%"],
+    [844, 390, 0, 44, "min(1280px, 82%)"],
+    [769, 1024, 0, 0, "none"],
+    [933, 430, 44, 0, "none"],
+    [1600, 900, 0, 0, "48rem"],
+    [1600, 900, 0, 0, "82%"],
+  ] as const)(
+    "aligns composer siblings at %sx%s with safe areas %s/%s and saved width %s",
+    async (width, height, safeLeft, safeRight, maxWidth) => {
+      const page = await openBrowserPage(width, height);
+      try {
+        // Mirror chat-view's sibling hierarchy; only the system safe-area tokens
+        // are synthetic. The production styles own every measured box.
+        await page.setContent(
+          `<!doctype html><html><head><style>${readUiCss()}</style></head>
+          <body style="--safe-area-left: ${safeLeft}px; --safe-area-right: ${safeRight}px">
+            <section class="card chat" style="--chat-thread-max-width: ${maxWidth}">
+              <div class="chat-main__conversation">
+                <div class="chat-thread"><div class="chat-thread-inner">Transcript</div></div>
+                <div class="chat-inline-approval">Approval</div>
+                <div class="chat-prs"><article class="chat-pr">Pull request</article></div>
+                <div class="session-suggestions"><div class="session-suggestion">Suggestion</div></div>
+                <div class="chat-swarm"><div class="chat-swarm__group">Swarm progress</div></div>
+                <div class="agent-chat__composer-shell"><div class="agent-chat__input">Composer</div></div>
+              </div>
+            </section>
+          </body></html>`,
+        );
+        await page.locator(".card.chat").evaluate(finishElementAnimations);
+        await waitForLayoutSettled(page, ".chat-main__conversation > *");
+        if (process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim()) {
+          const artifactDir = createControlUiE2eArtifactDir("composer-sibling-alignment");
+          await page.screenshot({ path: path.join(artifactDir, "geometry.png") });
+        }
+
+        const parent = await getRect(page, ".chat-main__conversation");
+        const composer = await getRect(page, ".agent-chat__composer-shell");
+        const mobile = width <= 768 || (width <= 932 && height <= 500 && width > height);
+        const leftInset = mobile ? Math.max(4, safeLeft) : 18;
+        const rightInset = mobile ? Math.max(4, safeRight) : 18;
+        const maxPixels =
+          maxWidth === "none"
+            ? Infinity
+            : maxWidth === "48rem"
+              ? 768
+              : maxWidth === "82%"
+                ? parent.width * 0.82
+                : Math.min(1280, parent.width * 0.82);
+        const expectedWidth = Math.min(parent.width - leftInset - rightInset, maxPixels);
+        expect(composer.width).toBeCloseTo(expectedWidth, 0);
+        expect(composer.left).toBeCloseTo(
+          parent.left + (parent.width - expectedWidth + leftInset - rightInset) / 2,
+          0,
+        );
+        const siblings = [".chat-prs", ".chat-swarm", ".session-suggestions"];
+        // Desktop approvals intentionally retain the transcript's extra gutter.
+        if (mobile) {
+          siblings.push(".chat-inline-approval");
+        }
+        for (const selector of siblings) {
+          const sibling = await getRect(page, selector);
+          expect(sibling.left, selector).toBeCloseTo(composer.left, 0);
+          expect(sibling.right, selector).toBeCloseTo(composer.right, 0);
+        }
+      } finally {
+        await closeBrowserPage(page);
+      }
+    },
+  );
 
   it("applies configured chat width to tool rows and composer without changing defaults", async () => {
     const page = await openBrowserPage(1600, 900);

@@ -244,7 +244,7 @@
 }
 
 .sidebar-markdown .markdown-inline-image-button:focus-visible {
-  outline: 2px solid var(--focus-ring);
+  outline: 2px solid var(--ring);
   outline-offset: 3px;
 }
 

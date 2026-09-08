@@ -4110,8 +4110,8 @@ td.data-table-key-col {
 .md-preview-dialog__panel {
   position: relative;
   width: 100%;
-  min-height: min(76vh, 820px);
-  max-height: calc(100vh - 32px);
+  min-height: min(76dvh, 820px, var(--openclaw-modal-height-limit));
+  max-height: var(--openclaw-modal-height-limit);
   margin: 0;
   display: flex;
   flex-direction: column;
@@ -4122,10 +4122,6 @@ td.data-table-key-col {
     0 32px 96px rgba(0, 0, 0, 0.48),
     0 1px 0 rgba(255, 255, 255, 0.04) inset;
   overflow: hidden;
-  transition:
-    width var(--duration-normal) var(--ease-out),
-    max-height var(--duration-normal) var(--ease-out),
-    margin var(--duration-normal) var(--ease-out);
 }
 
 /* A refusal or empty-state message is a few lines; without this the reader height reserved for
@@ -4482,12 +4478,6 @@ td.data-table-key-col {
   border-bottom: none;
 }
 
-.md-preview-dialog__panel.fullscreen {
-  width: 100%;
-  max-height: calc(100vh - 20px);
-  margin: 0;
-}
-
 .md-preview-dialog__panel.fullscreen .md-preview-dialog__header {
   align-items: center;
   justify-content: flex-end;
@@ -4526,10 +4516,7 @@ td.data-table-key-col {
 
 @media (max-width: 768px) {
   .md-preview-dialog__panel {
-    width: 100%;
-    min-height: calc(100vh - 12px);
-    max-height: calc(100vh - 12px);
-    margin: 0;
+    min-height: var(--openclaw-modal-height-limit);
     border-radius: var(--radius-xl);
   }
 

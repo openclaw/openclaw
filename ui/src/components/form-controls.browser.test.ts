@@ -1,4 +1,7 @@
 // Control UI tests cover form controls behavior.
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { html, render, type TemplateResult } from "lit";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { readStyleSheet } from "../../../test/helpers/ui-style-fixtures.js";
@@ -6,12 +9,16 @@ import {
   canRunPlaywrightChromium,
   resolvePlaywrightChromiumExecutablePath,
 } from "../test-helpers/control-ui-e2e.ts";
+import { renderJsonTextarea } from "./config-form.node.json.ts";
+import { renderNode } from "./config-form.node.ts";
 
 const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
 const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
 const describeBrowserLayout = chromiumAvailable ? describe : describe.skip;
+// Use a Node path: Vite rewrites asset-shaped new URL() expressions.
+const fontsRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../public/fonts");
 
-type MobileFixture = {
+type ControlsFixture = {
   page: Page;
 };
 
@@ -40,21 +47,66 @@ function readUiCss(): string {
   return files.map((file) => readStyleSheet(file)).join("\n");
 }
 
-function controlsHtml() {
+function settingsControlsHtml(collectionItems: boolean): string {
+  const common = {
+    hints: {},
+    unsupported: new Set<string>(),
+    disabled: false,
+    showLabel: !collectionItems,
+    onPatch: () => {},
+  };
+  // Array/map item callers pass showLabel:false. renderFieldRow owns the
+  // resulting stacked, full-width anatomy; a hand-built inline row at 285px
+  // is not an equivalent fixture (see config-form.node.collection*.ts).
+  const controls = html`
+    <div class="settings-group">
+      ${renderNode({ ...common, schema: { type: "string", title: "Settings name" }, value: "config input", path: ["name"] })}
+      ${renderJsonTextarea({ ...common, schema: { title: "Settings notes" }, value: "config textarea", path: ["notes"] })}
+      ${renderNode({ ...common, schema: { type: "string", title: "Settings provider", enum: ["settings select", "Ag09 selected", "third", "fourth", "fifth", "sixth"] }, value: "settings select", path: ["provider"] })}
+      <div class="settings-row settings-row--actions">
+        <div class="settings-row__control">
+          <button class="btn btn--sm" type="button">Save changes</button
+          ><button class="btn btn--sm" type="button">Reset defaults</button
+          ><button class="btn btn--sm" type="button">Cancel</button>
+        </div>
+      </div>
+    </div>
+  `;
+  return renderedControlsHtml(controls);
+}
+
+function renderedControlsHtml(template: TemplateResult): string {
+  const container = document.createElement("div");
+  render(template, container);
+  // This Node-driven layout suite transfers the real renderer's DOM/state,
+  // not its event handlers. Renderer interaction tests cover those separately.
+  for (const input of container.querySelectorAll("input")) {
+    input.setAttribute("value", input.value);
+  }
+  for (const textarea of container.querySelectorAll("textarea")) {
+    textarea.textContent = textarea.value;
+  }
+  for (const option of container.querySelectorAll("option")) {
+    option.toggleAttribute("selected", option.selected);
+  }
+  return container.innerHTML;
+}
+
+function controlsHtml(collectionItems = false) {
   return `
     <main>
-      <label class="field"><input type="text" value="field input" /></label>
-      <label class="field"><textarea>field textarea</textarea></label>
-      <label class="field"><select><option>field select</option></select></label>
-      <label class="field"><select class="settings-select"><option>field settings select</option></select></label>
+      <label class="field"><span>Display name</span><input type="text" value="field input" /></label>
+      <label class="field"><span>Notes</span><textarea>field textarea</textarea></label>
+      <label class="field"><span>Mode</span><select><option>field select</option><option>Ag09 selected</option></select></label>
+      <label class="field"><span>Provider</span><select class="settings-select"><option>field settings select</option><option>Ag09 selected</option></select></label>
       <label class="field checkbox"><input type="checkbox" /><span>field checkbox</span></label>
       <label class="field checkbox"><input type="radio" /><span>field radio</span></label>
       <input class="settings-sidebar__search-input" value="settings search" />
       <input class="settings-theme-import__input" value="theme" />
       <label class="config-raw-field"><textarea>raw config</textarea></label>
-      <input class="settings-input" value="config input" />
-      <div class="settings-row__control"><textarea class="settings-input">config textarea</textarea></div>
-      <select class="settings-select"><option>settings select</option></select>
+      <section class="shell--settings ${collectionItems ? "settings-stack" : ""}">
+        ${settingsControlsHtml(collectionItems)}
+      </section>
       <input class="usage-date-input" value="2026-05-31" />
       <select class="usage-select"><option>usage select</option></select>
       <input class="usage-query-input" value="usage query" />
@@ -109,13 +161,47 @@ function mediaDeviceRowsHtml() {
   `;
 }
 
-async function openMobileFixture(): Promise<MobileFixture> {
+async function openControlsFixture(
+  options: {
+    mobile: boolean;
+    width: number;
+    paneWidth: number;
+    theme: "light" | "dark";
+    collectionItems?: boolean;
+  } = {
+    mobile: true,
+    width: 390,
+    paneWidth: 390,
+    theme: "light",
+  },
+): Promise<ControlsFixture> {
   let page: Page | undefined;
   try {
-    page = await mobileContext.newPage();
+    page = await (options.mobile ? mobileContext : desktopContext).newPage();
+    await page.setViewportSize({ width: options.width, height: 844 });
+    await page.emulateMedia({ colorScheme: options.theme, reducedMotion: "reduce" });
+    // Match typography.ts: Claw UI uses Instrument Sans; editors use JetBrains
+    // Mono. Serve only these checked-in public assets, without a live Gateway.
+    await page.route("https://form-controls.test/fonts/*", (route) => {
+      const asset = path.posix.basename(new URL(route.request().url()).pathname);
+      return route.fulfill({ path: path.join(fontsRoot, asset) });
+    });
     await page.setContent(
-      `<!doctype html><html data-theme-mode="light"><head><style>${readUiCss()}</style></head><body>${controlsHtml()}</body></html>`,
+      `<!doctype html><html data-theme-mode="${options.theme}"><head><meta name="viewport" content="width=device-width, initial-scale=1.0" /><link rel="stylesheet" href="https://form-controls.test/fonts/instrument-sans.css" /><link rel="stylesheet" href="https://form-controls.test/fonts/jetbrains-mono.css" /><style>${readUiCss()}</style></head><body>${controlsHtml(options.collectionItems ?? false)}</body></html>`,
     );
+    // The fixture models a scrollable pane, not the app shell or its routing.
+    await page.locator("main").evaluate((main, width) => {
+      main.style.width = `${width}px`;
+      main.style.height = "100dvh";
+      main.style.overflow = "auto";
+    }, options.paneWidth);
+    await page.evaluate(() => document.fonts.ready);
+    const loadedFamilies = await page.evaluate(() =>
+      Array.from(document.fonts)
+        .filter((font) => font.status === "loaded")
+        .map((font) => font.family.replaceAll('"', "")),
+    );
+    expect(loadedFamilies).toEqual(expect.arrayContaining(["Instrument Sans", "JetBrains Mono"]));
     return { page };
   } catch (error) {
     await page?.close().catch(() => {});
@@ -123,8 +209,95 @@ async function openMobileFixture(): Promise<MobileFixture> {
   }
 }
 
-async function closeMobileFixture(fixture: MobileFixture): Promise<void> {
+async function closeControlsFixture(fixture: ControlsFixture): Promise<void> {
   await fixture.page.close().catch(() => {});
+}
+
+async function assertFormCopyAndActionsFit(page: Page, collectionItems: boolean): Promise<void> {
+  const geometry = await page.evaluate(() => {
+    const contentBox = (node: HTMLElement) => {
+      const rect = node.getBoundingClientRect();
+      const style = getComputedStyle(node);
+      return {
+        left: rect.left + node.clientLeft + Number.parseFloat(style.paddingLeft),
+        right:
+          rect.left + node.clientLeft + node.clientWidth - Number.parseFloat(style.paddingRight),
+        top: rect.top + node.clientTop + Number.parseFloat(style.paddingTop),
+        bottom:
+          rect.top + node.clientTop + node.clientHeight - Number.parseFloat(style.paddingBottom),
+      };
+    };
+    const inside = (inner: DOMRect, outer: ReturnType<typeof contentBox>) =>
+      inner.width > 0 &&
+      inner.height > 0 &&
+      inner.left >= outer.left - 1 &&
+      inner.right <= outer.right + 1 &&
+      inner.top >= outer.top - 1 &&
+      inner.bottom <= outer.bottom + 1;
+    const overlaps = (a: DOMRect, b: DOMRect) =>
+      a.left < b.right - 1 && b.left < a.right - 1 && a.top < b.bottom - 1 && b.top < a.bottom - 1;
+    const copy = Array.from(
+      document.querySelectorAll<HTMLElement>(
+        ".field > span, .settings-row__title, .settings-row__control > button",
+      ),
+      (node) => {
+        const range = document.createRange();
+        range.selectNodeContents(node);
+        const lines = Array.from(range.getClientRects());
+        return {
+          label: node.textContent,
+          fits: lines.length > 0 && lines.every((line) => inside(line, contentBox(node))),
+        };
+      },
+    );
+    const rows = Array.from(
+      document.querySelectorAll<HTMLElement>(
+        ".field:not(.checkbox), .settings-row:not(.settings-row--actions)",
+      ),
+      (row) => {
+        const label = row.querySelector<HTMLElement>(":scope > span, :scope > .settings-row__text");
+        const control = row.querySelector<HTMLElement>("input, textarea, select");
+        if (!control) {
+          throw new Error("Missing labeled control fixture");
+        }
+        return {
+          label: label?.textContent ?? control.getAttribute("aria-label"),
+          fits: inside(control.getBoundingClientRect(), contentBox(row)),
+          overlap: label
+            ? overlaps(label.getBoundingClientRect(), control.getBoundingClientRect())
+            : false,
+        };
+      },
+    );
+    const cluster = document.querySelector<HTMLElement>(
+      ".settings-row--actions .settings-row__control",
+    );
+    if (!cluster) {
+      throw new Error("Missing action cluster");
+    }
+    const buttons = Array.from(cluster.children, (node) => node.getBoundingClientRect());
+    return {
+      copy,
+      rows,
+      buttonCount: buttons.length,
+      clusterFits: buttons.every((button) => inside(button, contentBox(cluster))),
+      overlap: buttons.some((button, index) =>
+        buttons.slice(index + 1).some((other) => overlaps(button, other)),
+      ),
+    };
+  });
+  expect(geometry.copy).toHaveLength(collectionItems ? 9 : 12);
+  for (const copy of geometry.copy) {
+    expect(copy.fits, copy.label ?? "missing label").toBe(true);
+  }
+  expect(geometry.rows).toHaveLength(7);
+  for (const row of geometry.rows) {
+    expect(row.fits, row.label ?? "missing row label").toBe(true);
+    expect(row.overlap, row.label ?? "missing row label").toBe(false);
+  }
+  expect(geometry.buttonCount).toBe(3);
+  expect(geometry.clusterFits).toBe(true);
+  expect(geometry.overlap).toBe(false);
 }
 
 beforeAll(async () => {
@@ -309,9 +482,9 @@ describeBrowserLayout("settings media device controls", () => {
   });
 });
 
-describeBrowserLayout("touch-primary form controls", () => {
+describeBrowserLayout("form control sizing", () => {
   it("keeps text-entry controls large enough to avoid mobile focus zoom", async () => {
-    const fixture = await openMobileFixture();
+    const fixture = await openControlsFixture();
     const { page } = fixture;
     try {
       const metrics = await page.evaluate(() => {
@@ -323,7 +496,7 @@ describeBrowserLayout("touch-primary form controls", () => {
           ".settings-theme-import__input",
           ".config-raw-field textarea",
           "input.settings-input",
-          ".settings-row__control > textarea.settings-input",
+          ".settings-row__control textarea.settings-input",
           ".settings-select",
           ".usage-date-input",
           ".usage-select",
@@ -352,70 +525,216 @@ describeBrowserLayout("touch-primary form controls", () => {
         expect(size.fontSize, size.selector).toBeGreaterThanOrEqual(16);
       }
     } finally {
-      await closeMobileFixture(fixture);
+      await closeControlsFixture(fixture);
     }
   });
 
-  it("keeps settings select affordances visible in light mode", async () => {
-    const fixture = await openMobileFixture();
-    const { page } = fixture;
-    try {
-      // Both the .field-wrapped and bare settings selects draw the themed
-      // chevron; bare ones once fell back to the misaligned native arrow.
-      const selects = await page.locator("select.settings-select").evaluateAll((nodes) =>
-        nodes.map((node) => {
-          const style = getComputedStyle(node as HTMLElement);
-          return {
-            appearance: style.appearance,
-            image: style.backgroundImage,
-            paddingRight: Number.parseFloat(style.paddingRight),
-            positionX: style.backgroundPositionX,
-            repeat: style.backgroundRepeat,
-          };
-        }),
-      );
+  it.each(
+    [
+      { mobile: false, width: 1200, paneWidth: 720, collectionItems: false },
+      { mobile: false, width: 1200, paneWidth: 285, collectionItems: true },
+      { mobile: true, width: 390, paneWidth: 285, collectionItems: false },
+      { mobile: true, width: 320, paneWidth: 320, collectionItems: false },
+    ].flatMap(({ mobile, width, paneWidth, collectionItems }) =>
+      (["light", "dark"] as const).map((theme) => ({
+        mobile,
+        width,
+        paneWidth,
+        collectionItems,
+        theme,
+      })),
+    ),
+  )(
+    "fits control interiors at 100% and 140%: $width/$paneWidth px, touch=$mobile, collection=$collectionItems, $theme",
+    async (options) => {
+      const fixture = await openControlsFixture(options);
+      const { page } = fixture;
+      try {
+        const controlSelector =
+          '.field input[type="text"], .field textarea, .field select, .shell--settings input, .shell--settings textarea, .shell--settings select';
+        const controls = page.locator(controlSelector);
+        expect(await controls.count()).toBe(7);
+        const defaults = await controls.evaluateAll((nodes) =>
+          nodes.map((node) => {
+            if (
+              !(
+                node instanceof HTMLInputElement ||
+                node instanceof HTMLTextAreaElement ||
+                node instanceof HTMLSelectElement
+              )
+            ) {
+              throw new Error("Missing native form control");
+            }
+            return node.value;
+          }),
+        );
+        const initialEnvironment = await page.evaluate(() => ({
+          width: window.innerWidth,
+          coarse: matchMedia("(pointer: coarse)").matches,
+          scale: getComputedStyle(document.documentElement)
+            .getPropertyValue("--control-ui-text-scale")
+            .trim(),
+        }));
+        expect(initialEnvironment).toEqual({
+          width: options.width,
+          coarse: options.mobile,
+          scale: "1",
+        });
 
-      expect(selects).toHaveLength(2);
-      for (const select of selects) {
-        expect(select.appearance).toBe("none");
-        expect(select.image).not.toBe("none");
-        expect(select.paddingRight).toBeGreaterThanOrEqual(32);
-        expect(select.positionX).toBe("calc(100% - 10px)");
-        expect(select.repeat).toContain("no-repeat");
-      }
-    } finally {
-      await closeMobileFixture(fixture);
-    }
-  });
-
-  it("aligns text controls without stretching checkbox and radio inputs", async () => {
-    const fixture = await openMobileFixture();
-    const { page } = fixture;
-    try {
-      const dimensions = await page.evaluate(() => {
-        const height = (selector: string) => {
-          const node = document.querySelector(selector);
-          if (!(node instanceof HTMLElement)) {
-            throw new Error(`Missing control ${selector}`);
+        for (const scale of [1, 1.4]) {
+          await page.evaluate((value) => {
+            document.documentElement.style.setProperty("--control-ui-text-scale", String(value));
+          }, scale);
+          for (const state of ["default", "edited"] as const) {
+            for (let index = 0; index < defaults.length; index++) {
+              const control = controls.nth(index);
+              const tag = await control.evaluate((node) => node.tagName);
+              const value =
+                state === "default"
+                  ? defaults[index]!
+                  : tag === "SELECT"
+                    ? "Ag09 selected"
+                    : tag === "TEXTAREA"
+                      ? "Ag09\npq78"
+                      : "Ag09 typed";
+              if (tag === "SELECT") {
+                if (state === "default") {
+                  await control.selectOption(value);
+                } else {
+                  await control.selectOption({ label: value });
+                }
+              } else {
+                await control.fill(value);
+              }
+              if (tag === "SELECT" && state === "edited") {
+                expect(
+                  await control
+                    .locator("option:checked")
+                    .evaluate((option) => (option as HTMLOptionElement).text),
+                ).toBe(value);
+              } else {
+                expect(await control.inputValue()).toBe(value);
+              }
+            }
+            const metrics = await controls.evaluateAll((nodes) => {
+              const canvas = document.createElement("canvas");
+              const context = canvas.getContext("2d");
+              if (!context) {
+                throw new Error("Canvas text metrics unavailable");
+              }
+              return nodes.map((node) => {
+                if (
+                  !(
+                    node instanceof HTMLInputElement ||
+                    node instanceof HTMLTextAreaElement ||
+                    node instanceof HTMLSelectElement
+                  )
+                ) {
+                  throw new Error("Missing native form control");
+                }
+                const style = getComputedStyle(node);
+                const px = (value: string) => Number.parseFloat(value);
+                const rect = node.getBoundingClientRect();
+                const value =
+                  node instanceof HTMLSelectElement ? node.selectedOptions[0]!.text : node.value;
+                // Native value glyphs have no DOM Range. Measure their ink budget
+                // with the control font, not just the outside box. This does not
+                // certify the browser's internal baseline placement or rasterization.
+                context.font = `${style.fontStyle} ${style.fontWeight} ${style.fontSize} ${style.fontFamily}`;
+                context.letterSpacing = style.letterSpacing;
+                const lines = value.split("\n").map((line) => context.measureText(line));
+                const inkHeight = Math.max(
+                  ...lines.map(
+                    (line) => line.actualBoundingBoxAscent + line.actualBoundingBoxDescent,
+                  ),
+                );
+                const lineHeight = px(style.lineHeight);
+                return {
+                  label: node.getAttribute("aria-label") ?? node.className + " " + node.tagName,
+                  value,
+                  fontSize: px(style.fontSize),
+                  height: rect.height,
+                  // client dimensions exclude borders and any scrollbar, but still include padding.
+                  innerWidth: node.clientWidth - px(style.paddingLeft) - px(style.paddingRight),
+                  innerHeight: node.clientHeight - px(style.paddingTop) - px(style.paddingBottom),
+                  inkWidth: Math.max(
+                    ...lines.map((line) =>
+                      Math.max(
+                        line.width,
+                        line.actualBoundingBoxLeft + line.actualBoundingBoxRight,
+                      ),
+                    ),
+                  ),
+                  inkHeight:
+                    lines.length > 1 ? inkHeight + (lines.length - 1) * lineHeight : inkHeight,
+                  horizontalScroll: node.scrollWidth - node.clientWidth,
+                  verticalScroll:
+                    node instanceof HTMLTextAreaElement ? node.scrollHeight - node.clientHeight : 0,
+                  settings: node.matches(".settings-input, .settings-select"),
+                  settingsShell: Boolean(node.closest(".shell--settings")),
+                  multiline: node instanceof HTMLTextAreaElement,
+                  chevron:
+                    node instanceof HTMLSelectElement
+                      ? {
+                          appearance: style.appearance,
+                          image: style.backgroundImage,
+                          paddingRight: px(style.paddingRight),
+                          positionX: style.backgroundPositionX,
+                          repeat: style.backgroundRepeat,
+                        }
+                      : null,
+                };
+              });
+            });
+            for (const metric of metrics) {
+              const label = JSON.stringify({ scale, state, ...metric });
+              expect(metric.inkWidth, label).toBeGreaterThan(0);
+              expect(metric.inkHeight, label).toBeGreaterThan(0);
+              // Full-width fit is for these bounded samples, not arbitrary
+              // user/device strings: native selects may truncate long labels.
+              expect(metric.inkWidth, label).toBeLessThanOrEqual(metric.innerWidth + 1);
+              expect(metric.inkHeight, label).toBeLessThanOrEqual(metric.innerHeight + 1);
+              expect(metric.horizontalScroll, label).toBeLessThanOrEqual(1);
+              expect(metric.verticalScroll, label).toBeLessThanOrEqual(1);
+              if (options.mobile) {
+                expect(metric.fontSize, label).toBeGreaterThanOrEqual(16);
+              }
+              if (scale === 1 && !metric.multiline) {
+                expect(metric.height, label).toBe(
+                  metric.settings ? (metric.settingsShell && options.mobile ? 44 : 32) : 38,
+                );
+              }
+              if (metric.chevron) {
+                expect(metric.chevron.appearance, label).toBe("none");
+                expect(metric.chevron.image, label).not.toBe("none");
+                // The 16px themed glyph sits 10px from the right; its reserved
+                // padding is excluded from the value's available width above.
+                expect(metric.chevron.paddingRight, label).toBeGreaterThanOrEqual(32);
+                expect(metric.height, label).toBeGreaterThanOrEqual(16);
+                expect(metric.chevron.positionX, label).toBe("calc(100% - 10px)");
+                expect(metric.chevron.repeat, label).toContain("no-repeat");
+              }
+            }
+            // Prove the scale stimulus reaches a canonical scalable control, rather
+            // than accepting unchanged geometry after a misspelled CSS variable.
+            expect(
+              metrics.find((metric) => metric.label === "Settings name")?.fontSize,
+            ).toBeCloseTo(Math.max(16, 14 * scale), 1);
+            await assertFormCopyAndActionsFit(page, options.collectionItems);
           }
-          return node.getBoundingClientRect().height;
-        };
-        return {
-          checkbox: height('.field input[type="checkbox"]'),
-          radio: height('.field input[type="radio"]'),
-          select: height(".field select"),
-          text: height('.field input[type="text"]'),
-        };
-      });
-
-      expect(dimensions.text).toBe(38);
-      expect(dimensions.select).toBe(38);
-      expect(dimensions.checkbox).toBeLessThan(38);
-      expect(dimensions.radio).toBeLessThan(38);
-    } finally {
-      await closeMobileFixture(fixture);
-    }
-  });
+        }
+        const dimensions = await page
+          .locator('.field input[type="checkbox"], .field input[type="radio"]')
+          .evaluateAll((nodes) => nodes.map((node) => node.getBoundingClientRect().height));
+        expect(dimensions).toHaveLength(2);
+        for (const height of dimensions) {
+          expect(height).toBeLessThan(38);
+        }
+      } finally {
+        await closeControlsFixture(fixture);
+      }
+    },
+  );
 });
 
 describeBrowserLayout("mount fallback cursor", () => {
