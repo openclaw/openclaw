@@ -99,6 +99,19 @@ afterEach(async () => {
 });
 
 describe("OpenAI embedding provider HTTP contract", () => {
+  it("declares the OpenAI input-array cap only for the native endpoint", async () => {
+    const native = await createOpenAiEmbeddingProvider(
+      createOptions({ remote: { baseUrl: "https://api.openai.com/v1" } }),
+    );
+    expect(native.provider.maxInputsPerRequest).toBe(2048);
+
+    const server = await startEmbeddingServer();
+    const custom = await createOpenAiEmbeddingProvider(
+      createOptions({ remote: { baseUrl: server.baseUrl } }),
+    );
+    expect(custom.provider.maxInputsPerRequest).toBeUndefined();
+  });
+
   it.each([
     { name: "omitted", fields: { input_type: "document" } },
     {

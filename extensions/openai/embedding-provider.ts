@@ -26,6 +26,8 @@ const OPENAI_MAX_INPUT_TOKENS: Record<string, number> = {
   "text-embedding-3-large": 8192,
   "text-embedding-ada-002": 8191,
 };
+// OpenAI's embeddings schema caps the input array at 2048 items.
+const OPENAI_MAX_EMBEDDING_INPUTS_PER_REQUEST = 2048;
 
 function normalizeOpenAiModel(model: string): string {
   const trimmed = model.trim();
@@ -54,6 +56,11 @@ export async function createOpenAiEmbeddingProvider(
       client,
       errorPrefix: "openai embeddings failed",
       maxInputTokens: OPENAI_MAX_INPUT_TOKENS[normalizeOpenAiModel(client.model)],
+      // Only the native OpenAI API documents the 2048-item input array; custom
+      // endpoints behind this adapter keep the conservative 64-item fallback.
+      maxInputsPerRequest: isNativeOpenAiBaseUrl(client.baseUrl)
+        ? OPENAI_MAX_EMBEDDING_INPUTS_PER_REQUEST
+        : undefined,
       buildRequestFields: (kind) => {
         const explicit = kind === "query" ? client.queryInputType : client.documentInputType;
         const value = explicit ?? client.inputType;
