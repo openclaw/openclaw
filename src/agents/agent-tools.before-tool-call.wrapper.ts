@@ -14,6 +14,12 @@ import {
 } from "../infra/diagnostic-trace-context.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { getPluginToolMeta } from "../plugins/tool-metadata.js";
+import {
+  evaluateLocalSecurityGateway,
+  isEmergencyStopActive,
+  logToolExecutionCompleted,
+  logToolExecutionStarted,
+} from "../security/local-security-gateway.js";
 import { recordRunSkillUsage } from "../skills/runtime/run-usage.js";
 import { copyBeforeToolCallWrapperMetadata } from "./agent-tool-metadata.js";
 import {
@@ -524,15 +530,54 @@ export function wrapToolWithBeforeToolCallHook(
           toolParams: executeParams,
         });
       }
+
+      // Mandatory Local Security Gateway Evaluation on FINAL post-finalizer execution shape
+      const gatewayEvaluation = await evaluateLocalSecurityGateway({
+        toolName: normalizedToolName,
+        params: executeParams,
+        ...(ctx?.runId && { runId: ctx.runId }),
+        ...(ctx?.sessionId && { sessionId: ctx.sessionId }),
+      });
+
+      if (!gatewayEvaluation.allowed) {
+        return await blockToolCall({
+          reason: gatewayEvaluation.reason,
+          deniedReason:
+            gatewayEvaluation.authorizationResult === "BLOCKED_POLICY"
+              ? "security-gateway-blocked"
+              : "security-gateway-rejected",
+          toolParams: executeParams,
+        });
+      }
+
       // Host capabilities can close while hooks, approval, validation, or
       // steering awaits. Recheck at the final synchronous source boundary.
       signal?.throwIfAborted();
+      if (isEmergencyStopActive()) {
+        return await blockToolCall({
+          reason: "Emergency stop active: Execution halted by operator.",
+          deniedReason: "security-gateway-rejected",
+          toolParams: executeParams,
+        });
+      }
+
       runAgentToolSourceExecutionGuard(tool);
       admitExecution?.();
       onImplementationStart?.();
       recordAdjustedParamsForToolCall(toolCallId, executeParams, ctx?.runId);
       const eventBase = buildEventBase(executeParams);
       recordToolExecutionStarted(toolCallId, ctx?.runId);
+      const gatewayClassification = gatewayEvaluation.classification;
+      const gatewayAuthorizationResult = gatewayEvaluation.authorizationResult;
+
+      logToolExecutionStarted({
+        toolName: normalizedToolName,
+        params: executeParams,
+        classification: gatewayClassification,
+        authorizationResult: gatewayAuthorizationResult,
+        ...(ctx?.runId && { runId: ctx.runId }),
+        ...(ctx?.sessionId && { sessionId: ctx.sessionId }),
+      });
       if (hookOptions.emitDiagnostics) {
         emitTrustedDiagnosticEvent({
           type: "tool.execution.started",
@@ -548,7 +593,26 @@ export function wrapToolWithBeforeToolCallHook(
           result = outcome.ownerDecision
             ? await invoke()
             : await runWithGenericToolActionDecision(tool, toolCallId, invoke);
+          logToolExecutionCompleted({
+            toolName: normalizedToolName,
+            params: executeParams,
+            classification: gatewayClassification,
+            authorizationResult: gatewayAuthorizationResult,
+            ...(ctx?.runId && { runId: ctx.runId }),
+            ...(ctx?.sessionId && { sessionId: ctx.sessionId }),
+            success: true,
+          });
         } catch (error) {
+          logToolExecutionCompleted({
+            toolName: normalizedToolName,
+            params: executeParams,
+            classification: gatewayClassification,
+            authorizationResult: gatewayAuthorizationResult,
+            ...(ctx?.runId && { runId: ctx.runId }),
+            ...(ctx?.sessionId && { sessionId: ctx.sessionId }),
+            success: false,
+            error: String(error),
+          });
           throw hookOptions.protectNetworkErrors !== false &&
             tool.resultContentSource === "network" &&
             getBeforeToolCallFailureDisposition(error) === undefined
