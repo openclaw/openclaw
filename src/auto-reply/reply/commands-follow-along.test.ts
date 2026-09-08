@@ -72,6 +72,6 @@ describe("follow-along command", () => {
     expect(rewrittenBody(params)).toContain('sessionTarget:"current"');
     expect(rewrittenBody(params)).toContain('schedule:{kind:"cron"');
     expect(rewrittenBody(params)).toContain("researcher");
-    expect(rewrittenBody(params)).not.toMatch(/\borphan cron\b/);
+    expect(rewrittenBody(params)).toContain("not an orphan cron");
   });
 });

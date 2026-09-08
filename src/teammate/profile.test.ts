@@ -31,6 +31,11 @@ describe("teammate profile", () => {
       "/var/lib/openclaw/bot:/home/bot:rw",
     );
     expect(next.agents?.defaults?.heartbeat?.every).toBe("30m");
+    expect(next.browser?.defaultProfile).toBe("teammate");
+    expect(next.browser?.profiles?.teammate).toMatchObject({
+      driver: "existing-session",
+      userDataDir: "/var/lib/openclaw/bot/.browser",
+    });
     expect(TEAMMATE_SLA).toContain("worker disk is the computer");
   });
 

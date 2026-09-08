@@ -134,6 +134,7 @@ export function applyTeammateProfile(
         ...baseConfig.browser?.profiles,
         teammate: {
           ...baseConfig.browser?.profiles?.teammate,
+          driver: "existing-session",
           userDataDir: paths.browserDir,
         },
       },
