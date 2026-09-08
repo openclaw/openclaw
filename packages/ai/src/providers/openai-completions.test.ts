@@ -81,6 +81,7 @@ vi.mock("openai", () => {
   return { default: MockOpenAI };
 });
 
+import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
 import { createZeroUsage } from "../usage.test-support.js";
 import {
   streamOpenAICompletions,
@@ -1162,14 +1163,7 @@ describe("OpenAI-compatible completions params", () => {
             ],
             timestamp: 2,
           },
-          {
-            role: "toolResult",
-            toolCallId: "call_search",
-            toolName: "search",
-            content: [{ type: "text", text: "ok" }],
-            isError: false,
-            timestamp: 3,
-          },
+          makeTextToolResult("call_search", "search", "ok", false, 3),
           {
             role: "user",
             content: "continue",

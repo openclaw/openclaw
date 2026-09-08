@@ -2,6 +2,7 @@
 
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { describe, expect, it, vi } from "vitest";
+import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
 import { textToolResult } from "../../test-helpers/sparse-transcript.test-support.js";
 import {
   sanitizeOpenAIResponsesReplayForStream,
@@ -576,14 +577,7 @@ describe("sanitizeOpenAIResponsesReplayForStream", () => {
         ],
       },
       reasoning,
-      {
-        role: "toolResult",
-        toolCallId: "call_async",
-        toolName: "lookup",
-        content: [{ type: "text", text: "Ready" }],
-        isError: false,
-        timestamp: 2,
-      },
+      makeTextToolResult("call_async", "lookup", "Ready", false, 2),
       { role: "user", content: "Include the queued update", timestamp: 3 },
     ];
 
