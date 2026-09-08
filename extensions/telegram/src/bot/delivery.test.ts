@@ -1958,7 +1958,7 @@ describe("deliverReplies", () => {
       bot: createBot({ sendAudio, sendVoice }),
     });
 
-    expect(probeAudioDurationMs).toHaveBeenCalledWith(Buffer.from("audio"));
+    expect(probeAudioDurationMs).toHaveBeenCalledWith(Buffer.from("audio"), testCase.contentType);
     const send = testCase.audioAsVoice ? sendVoice : sendAudio;
     expect(mockCallArg(send, 0, 2)).toMatchObject({ duration: 13 });
   });

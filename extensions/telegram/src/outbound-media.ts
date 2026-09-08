@@ -161,7 +161,10 @@ export function resolveTelegramOutboundMediaSenders<
       send: async (effectiveParams) => {
         const durationMs =
           label === "voice" || label === "audio"
-            ? await (audioDurationMsPromise ??= probeAudioDurationMs(params.media.buffer))
+            ? await (audioDurationMsPromise ??= probeAudioDurationMs(
+                params.media.buffer,
+                params.media.contentType,
+              ))
             : undefined;
         return await method.call(params.api, params.chatId, params.plan.file, {
           ...effectiveParams,

@@ -70,15 +70,25 @@ describe("probeMediaFile", () => {
       return probedPath === "pipe:0" ? "{}" : JSON.stringify({ format: { duration: "0.257" } });
     });
 
-    await expect(probeAudioDurationMs(Buffer.from("audio"))).resolves.toBe(257);
+    await expect(probeAudioDurationMs(Buffer.from("audio"), "audio/ogg")).resolves.toBe(257);
     expect(probedPath).toEqual(expect.stringContaining("media-probe-"));
+    expect(runFfprobe).toHaveBeenCalledWith(
+      expect.arrayContaining(["-f", "ogg", probedPath ?? ""]),
+    );
     await expect(fs.access(probedPath ?? "")).rejects.toThrow();
+  });
+
+  it("skips playlist audio without invoking ffprobe", async () => {
+    await expect(
+      probeAudioDurationMs(Buffer.from("#EXTM3U"), "application/vnd.apple.mpegurl"),
+    ).resolves.toBeUndefined();
+    expect(runFfprobe).not.toHaveBeenCalled();
   });
 
   it("omits buffered audio duration when probing fails", async () => {
     runFfprobe.mockRejectedValueOnce(new Error("ffprobe unavailable"));
 
-    await expect(probeAudioDurationMs(Buffer.from("audio"))).resolves.toBeUndefined();
+    await expect(probeAudioDurationMs(Buffer.from("audio"), "audio/ogg")).resolves.toBeUndefined();
   });
 
   it("returns audio duration from one bounded file probe", async () => {

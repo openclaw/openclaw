@@ -4480,7 +4480,7 @@ describe("sendMessageTelegram", () => {
       asVoice: testCase.asVoice,
     });
 
-    expect(probeAudioDurationMs).toHaveBeenCalledWith(Buffer.from("audio"));
+    expect(probeAudioDurationMs).toHaveBeenCalledWith(Buffer.from("audio"), testCase.contentType);
     const send = testCase.asVoice ? sendVoice : sendAudio;
     expect(firstMockCall(send, `send ${testCase.name} call`)[2]).toMatchObject({ duration: 13 });
   });
