@@ -99,8 +99,8 @@ if [ "$UPGRADE_TARGET_TRAIN" = extended-stable ]; then
     exit 2
   fi
   UPGRADE_RUNNER="$UPGRADE_SCENARIO_DIR/run.sh"
-  UPGRADE_TRUSTED_ASSERTIONS="/app/scripts/e2e/lib/upgrade-survivor-trusted/assertions.mjs"
-  UPGRADE_TRUSTED_DIAGNOSTICS="/app/scripts/e2e/lib/upgrade-survivor-trusted/diagnostics.mjs"
+  UPGRADE_TRUSTED_ASSERTIONS="/tmp/openclaw-release-harness/scripts/e2e/lib/upgrade-survivor/assertions.mjs"
+  UPGRADE_TRUSTED_DIAGNOSTICS="/tmp/openclaw-release-harness/scripts/e2e/lib/upgrade-survivor/diagnostics.mjs"
   UPGRADE_NPM_PUBLISH_PLAN="$(openclaw_resolve_frozen_target_file \
     "$ROOT_DIR" scripts/lib/npm-publish-plan.mjs)"
   UPGRADE_WINDOWS_HELPERS="$(openclaw_resolve_frozen_target_file \
@@ -124,7 +124,6 @@ if [ "$UPGRADE_TARGET_TRAIN" = extended-stable ]; then
   UPGRADE_SCENARIO_ARGS+=(
     -v "$UPGRADE_SCENARIO_STAGE:/app/scripts/e2e/lib/upgrade-survivor:ro"
     -v "$UPGRADE_NPM_REGISTRY_SERVER:/app/scripts/e2e/lib/plugins/npm-registry-server.mjs:ro"
-    -v "$HARNESS_ROOT_DIR/scripts/e2e/lib/upgrade-survivor:/app/scripts/e2e/lib/upgrade-survivor-trusted:ro"
     -v "$UPGRADE_NPM_PUBLISH_PLAN:/app/scripts/lib/npm-publish-plan.mjs:ro"
     -v "$UPGRADE_BOUNDED_RESPONSE:/app/scripts/lib/bounded-response.mjs:ro"
     -v "$UPGRADE_PLUGIN_INDEX:/app/scripts/e2e/lib/plugin-index-sqlite.mjs:ro"
