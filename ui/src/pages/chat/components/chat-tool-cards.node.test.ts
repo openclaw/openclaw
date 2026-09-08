@@ -36,7 +36,12 @@ afterEach(() => {
 
 describe("tool-card extraction", () => {
   const browserDetails = {
-    browserTab: { profile: "managed", target: "host", targetId: "tab-origin" },
+    browserTab: {
+      profile: "managed",
+      target: "host",
+      targetId: "tab-origin",
+      url: "https://example.com",
+    },
   };
 
   it.each(["read", "browser.open", "mcp__other__browser", undefined])(
@@ -65,6 +70,7 @@ describe("tool-card extraction", () => {
         expect(cards).toHaveLength(1);
         expect(cards[0]?.outputText).toBe("ordinary output");
         expect(cards[0]?.preview).toBeUndefined();
+        expect(cards[0]?.browserTab).toBeUndefined();
       }
     },
   );
@@ -95,6 +101,9 @@ describe("tool-card extraction", () => {
       expect(cards[0]?.preview).toEqual(
         browserOrigin ? { kind: "browser-tab", ...browserDetails.browserTab } : undefined,
       );
+      expect(cards[0]?.browserTab).toEqual(
+        browserOrigin ? { profile: "managed", target: "host", targetId: "tab-origin" } : undefined,
+      );
     },
   );
 
@@ -114,6 +123,7 @@ describe("tool-card extraction", () => {
     expect(cards).toHaveLength(2);
     expect(cards[1]?.outputText).toBe("unpaired output");
     expect(cards[1]?.preview).toBeUndefined();
+    expect(cards[1]?.browserTab).toBeUndefined();
   });
 
   it.each(["read", "browser.open", "mcp__other__browser", undefined])(
@@ -135,6 +145,7 @@ describe("tool-card extraction", () => {
         expect(card?.name).toBe("browser");
         expect(card?.outputText).toBe("nested output");
         expect(card?.preview).toBeUndefined();
+        expect(card?.browserTab).toBeUndefined();
         const [paired] = extractToolCards({
           role: "toolResult",
           [nameField]: toolName,
@@ -151,6 +162,7 @@ describe("tool-card extraction", () => {
         });
         expect(paired?.outputText).toBe("nested paired output");
         expect(paired?.preview).toBeUndefined();
+        expect(paired?.browserTab).toBeUndefined();
       }
     },
   );
@@ -207,6 +219,53 @@ describe("tool-card extraction", () => {
   });
 
   it.each([
+    ["about:blank", false],
+    ["about:blank#section", false],
+    ["chrome://newtab", false],
+    ["file:///tmp/page.html", false],
+    ["data:text/html,hello", false],
+    ["javascript:void(0)", false],
+    ["blob:https://example.com/id", false],
+    ["ftp://example.com/file", false],
+    ["/relative", false],
+    ["https://", false],
+    ["", false],
+    [undefined, false],
+    ["http://example.com", true],
+    ["https://example.com/page", true],
+    ["HTTPS://example.com/page", true],
+  ] as const)("keeps routing and raw output while classifying preview URL %s", (url, eligible) => {
+    const browserTab = { profile: "managed", target: "host", targetId: "tab-1" };
+    const details = { browserTab: { ...browserTab, ...(url === undefined ? {} : { url }) } };
+    const output = JSON.stringify({ url });
+    for (const shape of ["standalone", "block", "live"]) {
+      const message =
+        shape === "standalone"
+          ? { role: "toolResult", toolName: "browser", content: output, details }
+          : {
+              role: "assistant",
+              ...(shape === "live"
+                ? {
+                    __openclawToolStreamLive: true,
+                    __openclawToolStreamResultReceived: true,
+                  }
+                : {}),
+              content: [
+                { type: "toolcall", id: "url-call", name: "browser", arguments: {} },
+                { type: "toolresult", id: "url-call", name: "browser", text: output, details },
+              ],
+            };
+      const [card] = extractToolCards(message);
+      expect(card?.outputText).toBe(output);
+      expect(card?.details).toEqual(details);
+      expect(card?.preview).toEqual(
+        eligible ? { kind: "browser-tab", ...browserTab, url } : undefined,
+      );
+      expect(card?.browserTab).toEqual(browserTab);
+    }
+  });
+
+  it.each([
     null,
     [],
     "tab",
@@ -222,9 +281,9 @@ describe("tool-card extraction", () => {
     { targetId: "t1", profile: "p".repeat(129), target: "host" },
     { targetId: "t1", profile: "managed", target: "node", node: "n".repeat(257) },
   ])("ignores malformed browser tabs (%j)", (browserTab) => {
-    expect(
-      extractToolCards({ role: "tool", toolName: "browser", details: { browserTab } })[0]?.preview,
-    ).toBeUndefined();
+    const [card] = extractToolCards({ role: "tool", toolName: "browser", details: { browserTab } });
+    expect(card?.preview).toBeUndefined();
+    expect(card?.browserTab).toBeUndefined();
   });
 
   it("retains exact bounded node identities without provider metadata", () => {
@@ -245,7 +304,8 @@ describe("tool-card extraction", () => {
         },
       },
     });
-    expect(card?.preview).toEqual({ kind: "browser-tab", ...browserTab });
+    expect(card?.browserTab).toEqual(browserTab);
+    expect(card?.preview).toBeUndefined();
   });
 
   it("drops non-string browser metadata and gives canvas previews precedence", () => {
@@ -258,12 +318,7 @@ describe("tool-card extraction", () => {
     };
     expect(
       extractToolCards({ role: "tool", toolName: "browser", details: { browserTab } })[0]?.preview,
-    ).toEqual({
-      kind: "browser-tab",
-      profile: "managed",
-      target: "host",
-      targetId: "tab-1",
-    });
+    ).toBeUndefined();
     const canvas = {
       kind: "canvas",
       view: { id: "cv_app" },

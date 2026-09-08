@@ -75,8 +75,6 @@ async function resolveSpawnModelError(params: {
       agentDir: params.targetAgentDir,
       workspaceDir: params.workspaceDir,
       readOnly: true,
-      providerDiscoveryProviderIds: [provider],
-      scopedLiveProviderDiscovery: true,
     });
   } catch (error) {
     return `sessions_spawn could not verify ${requestedModel ? "the requested model" : "outputSchema model capabilities"}: ${summarizeSpawnError(error)}`;

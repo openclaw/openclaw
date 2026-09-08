@@ -626,18 +626,18 @@ console.log(JSON.stringify({
     ["colored CRLF", "\r\n", "\x1b[31m", "\x1b[39m"],
     ["linked LF", "\n", "\x1b]8;;https://example.com/\x07", "\x1b]8;;\x07"],
   ])(
-    "preserves blank %s lines at their positions across cells",
+    "preserves blank %s lines without adding rows after wrapped spacing",
     (_label, separator, open, close) => {
       const out = renderTable({
         border: "ascii",
-        width: 30,
+        width: 15,
         columns: [
-          { key: "A", header: "A", flex: true },
-          { key: "B", header: "B", flex: true },
+          { key: "A", header: "A", minWidth: 6, maxWidth: 6 },
+          { key: "B", header: "B", minWidth: 6, maxWidth: 6 },
         ],
         rows: [
           {
-            A: `${open}${["", "alpha", "", "omega", "", ""].join(separator)}${close}`,
+            A: `${open}${["", "Read ", "", "Next", "", ""].join(separator)}${close}`,
             B: "0\n1\n2\n3\n4",
           },
         ],
@@ -653,9 +653,9 @@ console.log(JSON.stringify({
         ),
       ).toEqual([
         ["", "0"],
-        ["alpha", "1"],
+        ["Read", "1"],
         ["", "2"],
-        ["omega", "3"],
+        ["Next", "3"],
         ["", "4"],
       ]);
       if (open) {

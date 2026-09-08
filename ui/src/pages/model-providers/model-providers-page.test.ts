@@ -3,7 +3,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ModelsProbeResult } from "../../api/types.ts";
 import type { SelectPicker } from "../../components/select-picker.ts";
-import { updatePickers, choosePickerValue } from "../../test-helpers/select-picker.ts";
+import { choosePickerValue, updatePickers } from "../../test-helpers/select-picker.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import type { DefaultModelSelection } from "./data.ts";
 import { EMPTY_MODEL_PROVIDERS_DATA, type ModelProvidersData } from "./load.ts";
@@ -322,7 +322,7 @@ describe("ModelProvidersPage agent scope", () => {
   });
 
   it("preserves trailing fallbacks when replacing the visible fallback", async () => {
-    const { context, runtimeConfig } = createHarness("main");
+    const { context, request, runtimeConfig } = createHarness("main");
     const model = {
       primary: "openai/gpt-5",
       fallbacks: ["anthropic/claude-sonnet", "google/gemini-pro"],
@@ -348,6 +348,11 @@ describe("ModelProvidersPage agent scope", () => {
     page.requestUpdate();
     await page.updateComplete;
     runtimeConfig.patch.mockClear();
+    const catalog = { models: page.data.models };
+    const originalRequest = request.getMockImplementation()!;
+    request.mockImplementation(async (method: string) =>
+      method === "models.list" ? catalog : originalRequest(method),
+    );
 
     await updatePickers(page);
     const fallback = [...page.querySelectorAll<SelectPicker>("openclaw-select-picker")].find(

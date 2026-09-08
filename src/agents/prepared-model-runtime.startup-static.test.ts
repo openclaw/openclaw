@@ -231,7 +231,7 @@ const {
   refreshPreparedModelRuntimeSnapshots,
   registerPreparedModelRuntimePublicationListener,
 } = await import("./prepared-model-runtime.js");
-const { getAvailablePreparedModelCatalogSnapshot, loadPreparedModelCatalogSnapshot } =
+const { getPreparedModelCatalogSnapshot, loadPreparedModelCatalogSnapshot } =
   await import("./prepared-model-catalog.js");
 const { prepareScopedReadOnlyLiveModelCatalog, prepareScopedReadOnlyModelCatalog } =
   await import("./prepared-model-runtime.scoped-catalog.js");
@@ -623,7 +623,7 @@ describe("prepared model runtime Gateway catalog mode", () => {
       workspaceDir: "/tmp/prepared-static-workspace",
     });
     expect(
-      getAvailablePreparedModelCatalogSnapshot({
+      getPreparedModelCatalogSnapshot({
         agentId: "default",
         config,
         agentDir: "/tmp/prepared-static-agent",
@@ -655,7 +655,7 @@ describe("prepared model runtime Gateway catalog mode", () => {
     expect(mocks.runPreparedModelCatalogWorker).toHaveBeenCalledOnce();
     expect(snapshot?.readFullModelCatalog?.()).toBe(fullCatalog);
     expect(
-      getAvailablePreparedModelCatalogSnapshot({
+      getPreparedModelCatalogSnapshot({
         agentId: "default",
         config,
         agentDir: "/tmp/prepared-static-agent",

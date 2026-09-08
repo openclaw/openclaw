@@ -122,7 +122,7 @@ Probe detail/reason codes to expect when a probe never reaches a model call:
 - `ineligible_profile`: profile is incompatible with provider config for another reason.
 - `no_model`: provider auth exists, but OpenClaw could not resolve a probeable model candidate for that provider.
 
-For OpenAI ChatGPT/Codex OAuth troubleshooting, `openclaw models status`, `openclaw models auth list --provider openai`, and `openclaw config get agents.defaults.model --json` are the quickest way to confirm whether an agent has a usable `openai` OAuth profile for `openai/*` through the native Codex runtime. See [OpenAI provider setup](/providers/openai#check-and-recover-codex-oauth-routing).
+For OpenAI ChatGPT/Codex OAuth troubleshooting, `openclaw models status`, `openclaw models auth list --provider openai`, and `openclaw config get agents.defaults.model --json` are the quickest way to confirm whether an agent has a usable `openai` OAuth profile for `openai/*` through the native Codex runtime. See [OpenAI provider setup](/providers/openai/setup#check-and-recover-codex-oauth-routing).
 
 ### List
 
@@ -166,6 +166,8 @@ Notes:
 - The `Auth` column uses prepared credential and runtime evidence. A separate API key does not prove a native CLI login. Unknown readiness stays unknown, and catalog metadata does not prove that a model request will succeed. See [Read status correctly](/cli/models#read-status-correctly).
 - A provider-level `models.providers.<id>.baseUrl` outside the plugin’s declared native endpoints excludes its implicit catalog rows, including cached discovery. Add the models supported by your proxy to `models.providers.<id>.models`; explicitly authored rows, names, defaults, and aliases remain intact. A model-level URL override alone does not exclude the provider catalog.
 - Static catalog rows can remain visible without authentication. Listing them does not grant permission to select a restricted model or change `modelPolicy.allow`.
+- In merge mode, refreshing generated catalogs preserves manual root models, including models whose provider also has a generated catalog. Explicit replace mode keeps its existing replacement behavior.
+- For plugins that load only when needed (`activation.onStartup: false`), an eligible provider in the cached catalog needs current profile, environment, or provider-config authentication before the catalog contributes implicit rows. Credentials retained only inside a generated catalog do not qualify. Explicit model declarations remain visible.
 - `Ctx` shows `contextTokens/contextWindow` when a runtime cap differs from the native context window. JSON retains `contextTokens` when provided.
 - `Input` and `Ctx` use the selected physical route plus explicit configured logical overrides. Unresolved route metadata stays unknown instead of borrowing another route's capabilities.
 - Configured model IDs retain case. For example, `Reader` and `reader` remain distinct. Provider-owned aliases still apply, and configured aliases remain in the table tags and JSON output.
@@ -174,7 +176,7 @@ Notes:
 
 Provider discovery through `models list --refresh` is separate from the hosted
 metadata download performed by `models refresh`, described below. See the
-[Gateway catalog request](/gateway/protocol/operator-methods#modelslist-views)
+[Gateway catalog request](/gateway/protocol/operator-methods#models-list-views)
 for the wire controls.
 
 ### Refresh the hosted catalog

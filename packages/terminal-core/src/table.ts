@@ -251,12 +251,13 @@ function wrapLine(text: string, width: number): string[] {
     ch === " " || ch === "/" || ch === "-" || ch === "_" || ch === ".";
   let skipNextLf = false;
   let hasChar = false;
+  let logicalLineHasOutput = false;
 
   const buf: AnsiToken[] = [];
   let bufVisible = 0;
   let lastBreakIndex: number | null = null;
 
-  // Explicit newlines emit empty buffers too, keeping sibling cell rows aligned.
+  // A soft wrap can empty the buffer before a newline without creating a blank logical line.
   const flushAt = (breakAt: number | null) => {
     // Keep the suffix in its buffer: long zero-width runs can exceed the argument
     // limit of a spread-based copy even when their visible width is small.
@@ -286,7 +287,10 @@ function wrapLine(text: string, width: number): string[] {
     const openOsc8 = activeOsc8 ? `${ESC}]8;${activeOsc8.params};${activeOsc8.uri}${BEL}` : "";
     const closeSgr = activeSgr.map((state) => state.close).join("");
 
-    lines.push(`${content.join("")}${closeOsc8}${closeSgr}`.trimEnd());
+    if (bufVisible > 0 || !logicalLineHasOutput) {
+      lines.push(`${content.join("")}${closeOsc8}${closeSgr}`.trimEnd());
+      logicalLineHasOutput = true;
+    }
     if (breakAt == null || breakAt <= 0) {
       buf.length = 0;
       if (openOsc8) {
@@ -331,6 +335,7 @@ function wrapLine(text: string, width: number): string[] {
       if (ch === "\n" || ch === "\r" || ch === "\r\n") {
         skipNextLf = ch === "\r";
         flushAt(buf.length);
+        logicalLineHasOutput = false;
         return;
       }
       // Soft-wrap remainders reuse the width measured when each token entered the buffer.

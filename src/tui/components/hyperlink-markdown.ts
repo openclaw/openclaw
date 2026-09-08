@@ -23,7 +23,7 @@ function sanitizeMarkdownDisplayText(text: string): string {
  */
 export class HyperlinkMarkdown implements Component {
   private inner: Markdown;
-  private urls: string[];
+  private urls: ReadonlySet<string>;
   private cachedRender?: { width: number; lines: string[] };
 
   constructor(

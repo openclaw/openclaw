@@ -10,6 +10,7 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import {
@@ -582,6 +583,98 @@ export function standardRevertedHash(message) {
   return undefined;
 }
 
+function verifiedMultiRevertedHashes(hash, subject, body) {
+  if (!/^(?:[a-z][a-z0-9-]*(?:\([^)]+\))?!?:\s*)?revert\b/i.test(subject)) {
+    return [];
+  }
+  const declarations = body
+    .trim()
+    .split(/\n\s*\n/)
+    .map((paragraph) => paragraph.trim())
+    .map((paragraph) =>
+      paragraph.match(
+        /^Reverts ([0-9a-f]{40}(?:, [0-9a-f]{40})*(?:,? and [0-9a-f]{40}))(?:\.| to restore the previous behavior\.)$/i,
+      ),
+    )
+    .filter(Boolean);
+  if (declarations.length !== 1) {
+    return [];
+  }
+  const targets = declarations[0][1].toLowerCase().match(/[0-9a-f]{40}/g);
+  if (new Set(targets).size !== targets.length) {
+    return [];
+  }
+
+  let temporaryDirectory;
+  try {
+    const parents = git(["rev-list", "--parents", "-n", "1", hash]).split(/\s+/);
+    if (parents.length !== 2) {
+      throw new Error("the revert must have exactly one parent");
+    }
+    const parent = parents[1];
+    for (const target of targets) {
+      if (gitCommit(target) !== target || !gitIsAncestor(target, parent)) {
+        throw new Error(`target ${target} must be an existing ancestor of the revert parent`);
+      }
+      if (git(["rev-list", "--parents", "-n", "1", target]).split(/\s+/).length !== 2) {
+        throw new Error(`target ${target} must have exactly one parent`);
+      }
+    }
+    const orderedTargets = git(["rev-list", "--topo-order", parent])
+      .split("\n")
+      .filter((candidate) => targets.includes(candidate));
+    const originalObjects = git(["rev-parse", "--path-format=absolute", "--git-path", "objects"]);
+    temporaryDirectory = mkdtempSync(path.join(tmpdir(), "openclaw-release-revert-"));
+    const objects = path.join(temporaryDirectory, "objects");
+    mkdirSync(objects);
+    const env = {
+      ...process.env,
+      GIT_NO_LAZY_FETCH: "1",
+      GIT_INDEX_FILE: path.join(temporaryDirectory, "index"),
+      GIT_OBJECT_DIRECTORY: objects,
+      GIT_ALTERNATE_OBJECT_DIRECTORIES: [
+        JSON.stringify(originalObjects),
+        process.env.GIT_ALTERNATE_OBJECT_DIRECTORIES,
+      ]
+        .filter(Boolean)
+        .join(path.delimiter),
+    };
+    const privateGit = (args, input) =>
+      execFileSync(
+        "git",
+        ["-c", `core.hooksPath=${path.join(temporaryDirectory, "hooks")}`, ...args],
+        { env, input, maxBuffer: 16 * 1024 * 1024, stdio: ["pipe", "pipe", "pipe"] },
+      );
+    privateGit(["read-tree", parent]);
+    for (const target of orderedTargets) {
+      // Keep patch bytes intact; text decoding corrupts binary/non-UTF-8 reversals.
+      const patch = privateGit([
+        "diff-tree",
+        "--binary",
+        "--full-index",
+        "--no-ext-diff",
+        "--no-textconv",
+        "--no-renames",
+        "-p",
+        `${target}^`,
+        target,
+      ]);
+      privateGit(["apply", "--cached", "--reverse", "--whitespace=nowarn", "-"], patch);
+    }
+    const reversedTree = privateGit(["write-tree"]).toString("utf8").trim();
+    if (reversedTree !== git(["rev-parse", `${hash}^{tree}`])) {
+      throw new Error("declared inverse patches do not reproduce the complete revert tree");
+    }
+    return targets;
+  } catch (error) {
+    fail(`could not verify explicit multi-commit revert ${hash}: ${error.message}`);
+  } finally {
+    if (temporaryDirectory) {
+      rmSync(temporaryDirectory, { recursive: true, force: true });
+    }
+  }
+}
+
 function handlesIn(text) {
   const thanksStart = text.lastIndexOf(" Thanks ");
   if (thanksStart < 0) {
@@ -817,17 +910,26 @@ export function contaminatingPullRequestReferences({
   nodes,
 }) {
   const allowed = new Set([...sourcePullRequests, ...seededPullRequests]);
+  const allowedEditorial = new Set(allowed);
   for (const number of sourceReferences) {
     if (nodes.get(number)?.__typename === "PullRequest") {
-      allowed.add(number);
+      allowedEditorial.add(number);
     }
   }
   const effectiveRecordedReferences = recordedReferences.filter(
     (number) => !excludedRecordedReferences.has(number),
   );
-  return [...new Set([...noteReferences, ...effectiveRecordedReferences])].filter(
-    (number) => nodes.get(number)?.__typename === "PullRequest" && !allowed.has(number),
-  );
+  return [
+    ...new Set([
+      ...noteReferences.filter(
+        (number) =>
+          nodes.get(number)?.__typename === "PullRequest" && !allowedEditorial.has(number),
+      ),
+      ...effectiveRecordedReferences.filter(
+        (number) => nodes.get(number)?.__typename === "PullRequest" && !allowed.has(number),
+      ),
+    ]),
+  ];
 }
 
 function appendReferences(references, additions) {
@@ -1037,6 +1139,9 @@ function canonicalMainCommits(base, mainRef) {
 
 function sourceCommits(base, target, mainRef, releaseProvenance = []) {
   const targetCommit = git(["rev-parse", `${target}^{commit}`]);
+  const targetHistory = new Set(git(["rev-list", targetCommit]).split("\n"));
+  const mainCommit = mainRef ? gitCommit(mainRef, true) : undefined;
+  const mainHistory = mainCommit ? new Set(git(["rev-list", mainCommit]).split("\n")) : new Set();
   if (!gitIsAncestor(base, targetCommit)) {
     fail(`release range base ${base} must be an ancestor of target ${target}`);
   }
@@ -1053,6 +1158,17 @@ function sourceCommits(base, target, mainRef, releaseProvenance = []) {
     "--format=%H%x1f%s%x1f%an%x1f%ae%x1f%cI%x1f%B%x1e",
     `${mergeBase}..${targetCommit}`,
   ]);
+  const revertedTargetsByCommit = new Map();
+  const revertedHashesFor = (hash, subject, body) => {
+    if (!revertedTargetsByCommit.has(hash)) {
+      const standard = standardRevertedHash(body);
+      revertedTargetsByCommit.set(
+        hash,
+        standard ? [standard] : verifiedMultiRevertedHashes(hash, subject, body),
+      );
+    }
+    return revertedTargetsByCommit.get(hash);
+  };
   const commits = new Map();
   const revertsByTarget = new Map();
   for (const record of output.split("\x1e")) {
@@ -1063,8 +1179,8 @@ function sourceCommits(base, target, mainRef, releaseProvenance = []) {
       record.split("\x1f");
     const hash = rawHash.trim();
     const body = bodyParts.join("\x1f");
-    const revertedHash = standardRevertedHash(body);
-    const isRevert = Boolean(revertedHash) || subject.startsWith('Revert "');
+    const revertedHashes = revertedHashesFor(hash, subject, body);
+    const isRevert = revertedHashes.length > 0 || subject.startsWith('Revert "');
     commits.set(hash, {
       authorEmail,
       authorName,
@@ -1072,21 +1188,20 @@ function sourceCommits(base, target, mainRef, releaseProvenance = []) {
       committedAt,
       hash,
       isRevert,
-      revertedHash,
+      revertedHashes,
       subject,
     });
   }
   for (const commit of commits.values()) {
-    if (!commit.revertedHash) {
-      continue;
-    }
-    const targetHash = [...commits.keys()].find((candidate) =>
-      candidate.startsWith(commit.revertedHash),
-    );
-    if (targetHash) {
-      const reverts = revertsByTarget.get(targetHash) ?? [];
-      reverts.push(commit.hash);
-      revertsByTarget.set(targetHash, reverts);
+    for (const revertedHash of commit.revertedHashes) {
+      const targetHash = [...commits.keys()].find((candidate) =>
+        candidate.startsWith(revertedHash),
+      );
+      if (targetHash) {
+        const reverts = revertsByTarget.get(targetHash) ?? [];
+        reverts.push(commit.hash);
+        revertsByTarget.set(targetHash, reverts);
+      }
     }
   }
   const active = new Map();
@@ -1100,7 +1215,7 @@ function sourceCommits(base, target, mainRef, releaseProvenance = []) {
     return value;
   }
   const revertedCommitStates = new Map();
-  function revertedCommitState(ref, seen = new Set()) {
+  function revertedCommitStatesFor(ref, seen = new Set()) {
     let hash;
     try {
       hash = git(["rev-parse", `${ref}^{commit}`]);
@@ -1119,13 +1234,16 @@ function sourceCommits(base, target, mainRef, releaseProvenance = []) {
     const [subject, ...bodyParts] = commitOutput.split("\x1f");
     const body = bodyParts.join("\x1f");
     const message = `${subject}\n${body}`;
-    const revertedHash = standardRevertedHash(body);
-    const targetState = revertedHash ? revertedCommitState(revertedHash, seen) : undefined;
-    const state = targetState
-      ? { ...targetState, depth: targetState.depth + 1 }
-      : { depth: 0, hash, references: referencesIn(message) };
-    revertedCommitStates.set(hash, state);
-    return state;
+    const targets = revertedHashesFor(hash, subject, body);
+    const targetStates = targets.flatMap(
+      (target) => revertedCommitStatesFor(target, new Set(seen)) ?? [],
+    );
+    const states =
+      targetStates.length > 0
+        ? targetStates.map((state) => ({ ...state, depth: state.depth + 1 }))
+        : [{ depth: 0, hash, references: referencesIn(message) }];
+    revertedCommitStates.set(hash, states);
+    return states;
   }
 
   const references = [];
@@ -1187,34 +1305,31 @@ function sourceCommits(base, target, mainRef, releaseProvenance = []) {
     });
   }
   for (const commit of commits.values()) {
-    if (!commit.isRevert || !commit.revertedHash || !isActive(commit.hash)) {
+    if (!commit.isRevert || !isActive(commit.hash)) {
       continue;
     }
-    const targetInRange = [...commits.keys()].some((candidate) =>
-      candidate.startsWith(commit.revertedHash),
-    );
-    if (targetInRange) {
-      continue;
-    }
-    const revertedState = revertedCommitState(commit.revertedHash);
-    if (!revertedState) {
-      continue;
-    }
-    if (revertedState.depth % 2 !== 0) {
-      continue;
-    }
-    revertedCommitHashes.add(revertedState.hash);
-    for (const number of revertedState.references) {
-      revertedReferences.add(number);
+    for (const revertedHash of commit.revertedHashes) {
+      if ([...commits.keys()].some((candidate) => candidate.startsWith(revertedHash))) {
+        continue;
+      }
+      for (const state of revertedCommitStatesFor(revertedHash) ?? []) {
+        if (state.depth % 2 !== 0) {
+          continue;
+        }
+        revertedCommitHashes.add(state.hash);
+        for (const number of state.references) {
+          revertedReferences.add(number);
+        }
+      }
     }
   }
   const activePullRequests = resolveAssociatedPullRequests(
     activeCommits.map((commit) => commit.hash),
     targetTimestamp,
+    targetHistory,
   );
   const provenanceOverrides = collectReleaseProvenanceOverrides(activeCommits, releaseProvenance);
-  const mainCommits = canonicalMainCommits(base, mainRef);
-  const mainCommit = provenanceOverrides.size > 0 ? gitCommit(mainRef, true) : undefined;
+  const mainCommits = canonicalMainCommits(base, mainCommit);
   const mainCommitsByHash = new Map(mainCommits.map((commit) => [commit.hash, commit]));
   const mainCommitsBySubject = new Map();
   for (const commit of mainCommits) {
@@ -1278,6 +1393,7 @@ function sourceCommits(base, target, mainRef, releaseProvenance = []) {
   const candidateMainPullRequests = resolveAssociatedPullRequests(
     [...mainAssociationCandidateHashes],
     Number.POSITIVE_INFINITY,
+    mainHistory,
   );
   for (const { candidates, commit, pullRequestOrigins } of pendingCanonicalMatches) {
     const matches = canonicalMainCommitMatches(
@@ -1305,6 +1421,7 @@ function sourceCommits(base, target, mainRef, releaseProvenance = []) {
   const canonicalMainPullRequests = resolveAssociatedPullRequests(
     [...canonicalMainHashes],
     Number.POSITIVE_INFINITY,
+    mainHistory,
   );
   const resolvedCoauthors = resolveCommitCoauthors(activeCommits);
   const pullRequests = new Set();
@@ -1361,6 +1478,7 @@ function sourceCommits(base, target, mainRef, releaseProvenance = []) {
   for (const revertedPullRequestNumbers of resolveAssociatedPullRequests(
     [...revertedCommitHashes],
     targetTimestamp,
+    new Set([...targetHistory, ...mainHistory]),
   ).values()) {
     for (const number of revertedPullRequestNumbers) {
       revertedPullRequests.add(number);
@@ -1399,6 +1517,7 @@ function sourceCommits(base, target, mainRef, releaseProvenance = []) {
     revertedReferences,
     target: targetCommit,
     targetTimestamp,
+    targetHistory,
   };
 }
 
@@ -1436,7 +1555,7 @@ function graphql(query) {
   throw lastError;
 }
 
-function resolveAssociatedPullRequests(commitHashes, targetTimestamp) {
+function resolveAssociatedPullRequests(commitHashes, targetTimestamp, history) {
   const pullRequestsByCommit = new Map();
   const pending = [];
   function appendPullRequests(commitHash, connection) {
@@ -1448,6 +1567,7 @@ function resolveAssociatedPullRequests(commitHashes, targetTimestamp) {
       const isExactMergeCommit = pullRequest.mergeCommit?.oid === commitHash;
       if (
         pullRequest.mergedAt &&
+        history.has(pullRequest.mergeCommit?.oid) &&
         (isExactMergeCommit || mergedByTarget(pullRequest.mergedAt, targetTimestamp)) &&
         !seen.has(pullRequest.number)
       ) {
@@ -1579,10 +1699,54 @@ function resolveIssueRelationshipPages(nodes) {
   return nodes;
 }
 
+function resolveSourceWorkflowRuns(source, nodes, requiredReferences) {
+  const candidates = new Set();
+  const required = new Set([...requiredReferences, ...source.pullRequests]);
+  for (const commit of source.activeCommits) {
+    if (commit.isRevert) {
+      continue;
+    }
+    const message = `${commit.subject}\n${commit.body}`;
+    // Mask only explicitly labelled, unqualified occurrences. The same number
+    // anywhere else remains an issue/PR requirement, even in a different commit.
+    const remaining = message.replace(
+      /(?<![A-Za-z0-9_])(?:CI(?:[ \t]+run)?|Actions[ \t]+run|workflow[ \t]+run)[ \t]+#([1-9]\d*)(?![A-Za-z0-9_])/gi,
+      (_match, number) => {
+        candidates.add(Number(number));
+        return " ";
+      },
+    );
+    for (const number of referencesIn(remaining)) {
+      required.add(number);
+    }
+  }
+  const runs = [];
+  for (const number of candidates) {
+    if (!source.references.includes(number) || nodes.has(number) || required.has(number)) {
+      continue;
+    }
+    const run = githubApi([`repos/${repo}/actions/runs/${number}`]);
+    if (run?.id === number && run.repository?.full_name === repo) {
+      runs.push({ id: number, repository: repo });
+    }
+  }
+  const runIds = new Set(runs.map((run) => run.id));
+  source.references = source.references.filter((number) => !runIds.has(number));
+  for (const commit of source.activeCommits) {
+    commit.references = commit.references.filter((number) => !runIds.has(number));
+  }
+  for (const number of runIds) {
+    source.coauthorsByReference.delete(number);
+  }
+  return runs;
+}
+
 function resolveReferences(numbers) {
   const nodes = new Map();
-  for (let index = 0; index < numbers.length; index += 40) {
-    const chunk = numbers.slice(index, index + 40);
+  // GitHub's issue-number argument is GraphQL Int; Actions run IDs can exceed it.
+  const issueNumbers = numbers.filter((number) => number <= 2147483647);
+  for (let index = 0; index < issueNumbers.length; index += 40) {
+    const chunk = issueNumbers.slice(index, index + 40);
     const fields = chunk
       .map(
         (number) => `n${number}: repository(owner: "openclaw", name: "openclaw") {
@@ -2043,11 +2207,11 @@ export function ledgerFor(
   priorRecord,
   sourcePullRequests,
   sourceReferences,
-  noteReferences,
   legacyIssuePullRequests,
   revertedReferences,
   shippedBaselines,
   targetTimestamp,
+  targetHistory,
 ) {
   const entries = references.map((number) => {
     const node = nodes.get(number);
@@ -2065,10 +2229,20 @@ export function ledgerFor(
     };
   });
 
-  const recordedPullRequests = new Set([
+  // A resolved reference supplies context; only shipped graph evidence supplies membership.
+  const inRangePullRequestNumbers = new Set([
     ...sourcePullRequests,
-    ...sourceReferences,
-    ...noteReferences,
+    ...[...sourceReferences].filter((number) => {
+      const node = nodes.get(number);
+      return (
+        node?.__typename === "PullRequest" &&
+        targetHistory.has(node.mergeCommit?.oid) &&
+        mergedByTarget(node.mergedAt, targetTimestamp)
+      );
+    }),
+  ]);
+  const recordedPullRequests = new Set([
+    ...inRangePullRequestNumbers,
     ...legacyIssuePullRequests,
     ...priorRecord.pullRequests.keys(),
   ]);
@@ -2081,10 +2255,6 @@ export function ledgerFor(
       !revertedReferences.has(entry.number),
   );
   const issues = entries.filter((entry) => entry.type === "Issue");
-  const inRangePullRequestNumbers = new Set([
-    ...sourcePullRequests,
-    ...[...sourceReferences].filter((number) => nodes.get(number)?.__typename === "PullRequest"),
-  ]);
   const legacyIssues = legacyIssuesByPullRequest(priorRecord, nodes);
   const records = pullRequests.map((entry) => {
     const priorEntry = priorRecord.pullRequests.get(entry.number);
@@ -2354,6 +2524,7 @@ function manifestFor(options, source, ledger, directCommitRecords) {
     mergeBase: source.mergeBase,
     version: options.version,
     shippedBaselines: source.shippedBaselines,
+    workflowRuns: source.workflowRuns,
     source: {
       references: ledger.entries.length,
       ...ledger.provenance,
@@ -2497,27 +2668,11 @@ function main() {
         .join(", ")}`,
     );
   }
-  const references = [...source.references];
+  let references = [...source.references];
   appendReferences(references, noteReferences);
   appendReferences(references, effectiveRenderedRecordReferences);
   appendReferences(references, recordedReferences);
   let nodes = resolveReferences(references);
-  const contamination = contaminatingPullRequestReferences({
-    noteReferences,
-    recordedReferences: effectiveRenderedRecordReferences,
-    excludedRecordedReferences,
-    sourcePullRequests: source.pullRequests,
-    sourceReferences: source.references,
-    seededPullRequests: new Set(priorRecord.pullRequests.keys()),
-    nodes,
-  });
-  if (contamination.length > 0) {
-    fail(
-      `release section contains PRs outside ${options.base}..${options.target}: ${contamination
-        .map((number) => `#${number}`)
-        .join(", ")}; use --seed-ref only for an intentional historical backfill`,
-    );
-  }
   const legacyIssuePullRequests = [...legacyIssuesByPullRequest(priorRecord, nodes).keys()].filter(
     (number) => !shippedExclusions.pullRequests.has(number),
   );
@@ -2530,6 +2685,15 @@ function main() {
     recordTarget: committedRecordTarget,
     source,
   });
+  const workflowRuns = resolveSourceWorkflowRuns(source, nodes, [
+    ...noteReferences,
+    ...effectiveRenderedRecordReferences,
+    ...recordedReferences,
+    ...legacyIssuePullRequests,
+  ]);
+  source.workflowRuns = workflowRuns;
+  const workflowRunIds = new Set(workflowRuns.map((run) => run.id));
+  references = references.filter((number) => !workflowRunIds.has(number));
   const unresolvedSourceReferences = references.filter((number) => !nodes.has(number));
   if (unresolvedSourceReferences.length > 0) {
     fail(
@@ -2600,12 +2764,28 @@ function main() {
     priorRecord,
     source.pullRequests,
     source.references,
-    noteReferences,
     legacyIssuePullRequests,
     source.revertedReferences,
     source.shippedBaselines,
     source.targetTimestamp,
+    source.targetHistory,
   );
+  const contamination = contaminatingPullRequestReferences({
+    noteReferences,
+    recordedReferences: options.writeLedger ? [] : [...renderedRecord.pullRequests.keys()],
+    excludedRecordedReferences,
+    sourcePullRequests: new Set(ledger.pullRequests.map((entry) => entry.number)),
+    sourceReferences: source.references,
+    seededPullRequests: new Set(priorRecord.pullRequests.keys()),
+    nodes,
+  });
+  if (contamination.length > 0) {
+    fail(
+      `release section contains PRs outside ${options.base}..${options.target}: ${contamination
+        .map((number) => `#${number}`)
+        .join(", ")}; use --seed-ref only for an intentional historical backfill`,
+    );
+  }
   const manifest = manifestFor(
     { ...options, target: source.target },
     source,
@@ -2653,6 +2833,7 @@ function main() {
   }
 
   const result = {
+    workflowRuns,
     base: options.base,
     target: source.target,
     mergeBase: source.mergeBase,

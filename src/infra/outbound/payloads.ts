@@ -299,14 +299,13 @@ export function projectOutboundPayloadPlanForOutbound(
   for (const entry of plan) {
     const payload = entry.payload;
     const text = entry.parts.text;
+    // Command delivery consumes this fresh plan synchronously, before further modifiers.
     if (
-      !hasReplyPayloadContent(
-        { ...payload, text, mediaUrls: entry.parts.mediaUrls },
-        {
-          hasChannelData: entry.hasChannelData,
-          extraContent: payload.location != null,
-        },
-      )
+      !entry.parts.hasContent &&
+      !entry.hasPresentation &&
+      !entry.hasInteractive &&
+      !entry.hasChannelData &&
+      payload.location == null
     ) {
       continue;
     }

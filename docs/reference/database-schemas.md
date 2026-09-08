@@ -20,6 +20,26 @@ OpenClaw stores control-plane state in a global SQLite database and agent data i
 
 The task registry uses the global control-plane database. Runtime trajectory events live with their sessions in the per-agent database or a configured shared session SQLite store.
 
+### Plugin state listing index
+
+Plugin keyed stores use the shared `plugin_state_entries` table. Its listing
+index includes `expires_at` after the existing plugin, namespace, creation-time,
+and entry-key columns, so live-row counts can read the index without fetching
+stored values. Quotas, TTL cutoffs, ordering, and row contents are unchanged.
+
+Writable startup and `openclaw doctor --fix` replace the older four-column
+definition through canonical index repair, without a schema-version bump. The
+repair builds temporary indexes and runs the existing table and full-file
+integrity checks; allow for extra disk space and work proportional to stored
+entries during the first repair.
+
+An older build can rebuild the same index back to its expected definition.
+Full-schema read-only validation rejects a mismatched definition until a
+writable owner repairs it; lightweight readers that validate only the numeric
+schema version may read either shape. See the
+[accepted index design](https://github.com/openclaw/openclaw/issues/142244) for
+upgrade, reverse-repair, and performance proof requirements.
+
 ### Mentions Inbox
 
 The [mentions Inbox](/concepts/multi-user#temporary-mentions-inbox) uses existing
@@ -653,6 +673,8 @@ JSON output is identified by `schema: "openclaw.state-schema-preflight.v1"`.
 
 Use a SQLite online backup or another WAL-aware snapshot produced while the source is safely coordinated. The resulting preflight input must be one consolidated file with no sibling `-wal`, `-shm`, or `-journal`; sidecars make the result `indeterminate`. Do not copy only the main `.sqlite` file from an active WAL database. Preflight the exact runtime that will be activated; a package version or numeric schema version alone does not prove same-version shape compatibility.
 
+Diagnostic paths that prepare their own private read-only snapshots use the size-derived child-process budget described under [Integrity checks](/reference/database-schemas#integrity-checks).
+
 ## Agent schema history
 
 | Version | Change                                                                                                                                                                                                                                                 | First release                                   |
@@ -799,7 +821,11 @@ Background verification errors retain the original name and message and append b
 
 Agent database maintenance fences other writers with a 60-second lease in the shared state database. A dedicated worker renews that lease during synchronous integrity scans and migration phases. Maintenance still checks the exact persisted owner before mutations and commit, and stops if the heartbeat fails or ownership expires or changes. Finishing or cancelling maintenance stops renewal before releasing the lease; process death leaves at most the remaining lease duration.
 
-Asynchronous agent-database admission and maintenance run their initial full-file integrity check in a read-only child process when that check is outside a write transaction. The child's lifetime budget is 30 seconds for startup and shutdown plus one second per 32 MiB of database file size, rounded up, capped at 30 minutes. This allows for a conservative cold-cache read rate of 32 MiB/s: a 9.4 GiB database gets 331 seconds. Budgets above 30 seconds are logged with the path and size; timeout errors include the applied budget and size. Read-only snapshot and inspection paths retain their 30-second limit. The connection and owning scope remain held until the child closes, including on cancellation or timeout. Schema changes, index repairs, and compaction retain their synchronous phases.
+Asynchronous agent-database admission and maintenance run their initial full-file integrity check in a read-only child process when that check is outside a write transaction. The connection and owning scope remain held until the child closes, including on cancellation or timeout. Schema changes, index repairs, and compaction retain their synchronous phases.
+
+The integrity child and both asynchronous and synchronous read-only snapshot workers share a lifetime budget: 30 seconds for startup and shutdown plus one second per 32 MiB of source database file size, rounded up, capped at 30 minutes. A full copy or full scan reads the whole file at least once; the budget allows for a conservative cold-cache read rate of 32 MiB/s. A 9.4 GiB database gets 331 seconds. Budgets above 30 seconds are logged once per call at debug level with the operation, path, size, and applied budget, keeping ordinary CLI output quiet. If the snapshot worker cannot stat the source, it uses the 30-second base budget and lets the child report the underlying error.
+
+The synchronous byte-neutral snapshot strategy is for small or quiescent databases. Inspections of a live agent database, including memory-core readiness, use the asynchronous online-backup worker.
 
 Integrity-child timeout and incomplete-exit errors include `lastObservedPhase`:
 
@@ -819,7 +845,7 @@ The heartbeat proves ownership, not migration progress. A live but stuck mainten
 
 ## Troubleshooting
 
-`SQLite read-only worker` failures append `code` and numeric SQLite `errcode` diagnostics when the underlying error supplies valid values, including through a bounded cause chain. Report the full code suffix when investigating a failure. A generic `disk I/O error` or `SQLITE_IOERR` alone does not prove the disk is full.
+`SQLite read-only worker` failures append `code` and numeric SQLite `errcode` diagnostics when the underlying error supplies valid values, including through a bounded cause chain. Report the full code suffix when investigating a failure. Snapshot and integrity-child timeout errors include the applied budget and source file size; snapshot timeouts report an unknown size if the source stat failed. Integrity-child timeouts also retain `lastObservedPhase`. A generic `disk I/O error` or `SQLITE_IOERR` alone does not prove the disk is full.
 
 ### Why you cannot go back after updating to 2026.7.2
 

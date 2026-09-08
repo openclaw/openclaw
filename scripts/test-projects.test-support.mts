@@ -879,11 +879,19 @@ const SOURCE_ROOTS_FOR_IMPORT_GRAPH = [
   "packages",
   "ui/src",
   "ui/config",
+  "ui/public",
   "test",
 ];
 const IMPORTABLE_FILE_EXTENSIONS = [".ts", ".tsx", ".mts", ".cts"];
-const IMPORT_GRAPH_GREP_PATHS = SOURCE_ROOTS_FOR_IMPORT_GRAPH.flatMap((root) =>
-  IMPORTABLE_FILE_EXTENSIONS.map((ext) => `:(glob)${root}/**/*${ext}`),
+function importGraphPathspecs(roots: string[], suffixes: readonly string[]) {
+  return [
+    ...roots.flatMap((root) => suffixes.map((suffix) => `:(glob)${root}/**/*${suffix}`)),
+    ...suffixes.map((suffix) => `:(glob)ui/*${suffix}`),
+  ];
+}
+const IMPORT_GRAPH_GREP_PATHS = importGraphPathspecs(
+  SOURCE_ROOTS_FOR_IMPORT_GRAPH,
+  IMPORTABLE_FILE_EXTENSIONS,
 );
 const TOOLING_IMPORT_GRAPH_ROOTS = [...SOURCE_ROOTS_FOR_IMPORT_GRAPH, "scripts"];
 const TOOLING_IMPORTABLE_FILE_EXTENSIONS = [
@@ -893,8 +901,9 @@ const TOOLING_IMPORTABLE_FILE_EXTENSIONS = [
   ".mjs",
   ".cjs",
 ];
-const TOOLING_IMPORT_GRAPH_GREP_PATHS = TOOLING_IMPORT_GRAPH_ROOTS.flatMap((root) =>
-  TOOLING_IMPORTABLE_FILE_EXTENSIONS.map((ext) => `:(glob)${root}/**/*${ext}`),
+const TOOLING_IMPORT_GRAPH_GREP_PATHS = importGraphPathspecs(
+  TOOLING_IMPORT_GRAPH_ROOTS,
+  TOOLING_IMPORTABLE_FILE_EXTENSIONS,
 );
 const BROAD_CHANGED_ENV_KEY = "OPENCLAW_TEST_CHANGED_BROAD";
 const VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY = "OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS";
@@ -1509,6 +1518,7 @@ function listImportGraphFiles(
   directory: string,
   files: string[] = [],
   extensions: readonly string[] = IMPORTABLE_FILE_EXTENSIONS,
+  recursive = true,
 ) {
   let entries;
   try {
@@ -1520,7 +1530,7 @@ function listImportGraphFiles(
   for (const entry of entries) {
     const relative = normalizePathPattern(path.posix.join(directory, entry.name));
     if (entry.isDirectory()) {
-      if (!isSkippedImportGraphDirectory(entry.name)) {
+      if (recursive && !isSkippedImportGraphDirectory(entry.name)) {
         listImportGraphFiles(cwd, relative, files, extensions);
       }
       continue;
@@ -1580,11 +1590,14 @@ function listImportGraphFilesForCwd(cwd: string, options: ImportGraphOptions = {
   }
   const roots = tooling ? TOOLING_IMPORT_GRAPH_ROOTS : SOURCE_ROOTS_FOR_IMPORT_GRAPH;
   const extensions = tooling ? TOOLING_IMPORTABLE_FILE_EXTENSIONS : IMPORTABLE_FILE_EXTENSIONS;
-  const files =
-    listTrackedTestPlanFiles(
-      cwd,
-      tooling ? TOOLING_IMPORT_GRAPH_GREP_PATHS : IMPORT_GRAPH_GREP_PATHS,
-    ) ?? roots.flatMap((root) => listImportGraphFiles(cwd, root, [], extensions));
+  const files = listTrackedTestPlanFiles(
+    cwd,
+    tooling ? TOOLING_IMPORT_GRAPH_GREP_PATHS : IMPORT_GRAPH_GREP_PATHS,
+  ) ?? [
+    ...roots.flatMap((root) => listImportGraphFiles(cwd, root, [], extensions)),
+    // Root configs are inputs; UI caches and generated sibling trees are not.
+    ...listImportGraphFiles(cwd, "ui", [], extensions, false),
+  ];
   cachedImportGraphFiles.set(cacheKey, files);
   return files;
 }
@@ -1681,9 +1694,7 @@ function listImportGraphGrepMatches(
   const suffixes = testFilesOnly
     ? extensions.flatMap((ext) => [`.test${ext}`, `.spec${ext}`])
     : extensions;
-  const grepPaths = roots.flatMap((root) =>
-    suffixes.map((suffix) => `:(glob)${root}/**/*${suffix}`),
-  );
+  const grepPaths = importGraphPathspecs(roots, suffixes);
   const spawnOptions: SpawnSyncOptionsWithStringEncoding = {
     cwd,
     encoding: "utf8",
@@ -1761,6 +1772,33 @@ function findDirectImporters(
     }
   }
   return skippedBroadTerm && importers.length === 0 && !isTestHelper ? null : importers;
+}
+
+/** Prove an entry is unshared using the canonical targeted reverse-import scan. */
+export function hasImportGraphConsumers(
+  changedPaths: string[],
+  cwd = process.cwd(),
+  options: ImportGraphOptions = {},
+) {
+  const tracked = listTrackedTestPlanFiles(
+    cwd,
+    options.tooling ? TOOLING_IMPORT_GRAPH_GREP_PATHS : IMPORT_GRAPH_GREP_PATHS,
+  );
+  // An incomplete archive/filesystem inventory cannot prove that an entry is unshared.
+  if (tracked === null) {
+    return true;
+  }
+  cachedImportGraphFiles.set(`${cwd}\0${options.tooling ? "tooling" : "source"}`, tracked);
+  const files = new Set(tracked);
+  const extensions = options.tooling
+    ? TOOLING_IMPORTABLE_FILE_EXTENSIONS
+    : IMPORTABLE_FILE_EXTENSIONS;
+  const terms = changedPaths.flatMap((file) => resolveImportGraphSearchTerms(file, extensions));
+  const matches = listImportGraphGrepMatches(cwd, terms, options);
+  return changedPaths.some((file) => {
+    const consumers = files.has(file) ? findDirectImporters(file, matches, extensions) : null;
+    return consumers === null || consumers.length > 0;
+  });
 }
 
 function resolveAffectedTestsFromTargetedImportScan(

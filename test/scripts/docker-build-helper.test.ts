@@ -2924,6 +2924,16 @@ docker_e2e_docker_run_cmd run demo
         /-e OPENCLAW_UPGRADE_SURVIVOR_CONFIG_PARKING_HELPER=\/tmp\/openclaw-config-parking\.mjs/gu,
       ),
     ).toHaveLength(2);
+    expect(
+      runner.match(
+        /-e OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_SERVER_SCRIPT=\/tmp\/openclaw-release-harness\/scripts\/e2e\/lib\/plugins\/npm-registry-server\.mjs/gu,
+      ),
+    ).toHaveLength(2);
+    expect(
+      runner.match(
+        /-v "\$HARNESS_ROOT_DIR\/scripts:\/tmp\/openclaw-release-harness\/scripts:ro"/gu,
+      ),
+    ).toHaveLength(2);
   });
 
   it("keeps upgrade survivor wrappers and the embedded payload valid bash", () => {
@@ -2987,6 +2997,23 @@ docker_e2e_docker_run_cmd run demo
     expect(script).toContain("--suppress-gateway-token-output");
     expect(script).not.toContain("exec 3>&- 2>/dev/null || true");
     expect(script).not.toContain('"$HOME/.openclaw/agents/main/agent/auth-profiles.json"');
+  });
+
+  it("keeps frozen typed onboarding assertions with their config producer", () => {
+    const runner = readFileSync("scripts/e2e/release-typed-onboarding-docker.sh", "utf8");
+
+    expect(runner).toContain(
+      'scripts/e2e/lib/release-scenarios/assertions.mjs \\\n  "$ROOT_DIR/scripts/e2e/lib/release-scenarios/assertions.mjs"',
+    );
+    expect(runner).toContain(
+      'scripts/e2e/lib/fixtures/mock-openai-config.mjs \\\n  "$ROOT_DIR/scripts/e2e/lib/fixtures/mock-openai-config.mjs"',
+    );
+    expect(runner).toContain(
+      '-v "$ONBOARD_ASSERTIONS:/app/scripts/e2e/lib/release-scenarios/assertions.mjs:ro"',
+    );
+    expect(runner).toContain(
+      '-v "$ONBOARD_MOCK_OPENAI_CONFIG:/app/scripts/e2e/lib/fixtures/mock-openai-config.mjs:ro"',
+    );
   });
 
   it("prints channel-add failures through the shared E2E logger", () => {

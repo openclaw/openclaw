@@ -636,7 +636,9 @@ describe("authorized beta focused evidence", () => {
       throw new Error("Docker publication gate is missing");
     }
 
-    expect(gate.environment).toBe("docker-release");
+    expect(docker.jobs?.approve?.environment).toBe("docker-release");
+    expect(gate.environment).toBeUndefined();
+    expect(gate.needs).toContain("approve");
     expect(gate.permissions).toMatchObject({
       actions: "read",
       attestations: "read",

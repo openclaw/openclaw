@@ -23,7 +23,6 @@ import { isRetiredModelPickerProvider } from "../../agents/model-runtime-aliases
 import {
   dedupeModelCatalogEntries,
   LEGACY_MODEL_POLICY_ALLOW_CONFIG_PATH,
-  modelCatalogLogicalKey,
 } from "../../agents/model-selection-shared.js";
 import {
   buildModelAliasIndex,
@@ -33,7 +32,10 @@ import {
   resolveModelRefFromString,
 } from "../../agents/model-selection.js";
 import { createModelVisibilityPolicy } from "../../agents/model-visibility-policy.js";
-import { openAIModelCatalogRoutePolicy } from "../../agents/openai-model-routes.js";
+import {
+  openAIModelCatalogRoutePolicy,
+  resolveModelCatalogIdentityKey,
+} from "../../agents/openai-model-routes.js";
 import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../../agents/openai-routing.js";
 import * as preparedModelCatalog from "../../agents/prepared-model-catalog.js";
 import { getPreparedModelRuntimeAuthStore } from "../../agents/prepared-model-runtime-auth.js";
@@ -235,8 +237,6 @@ async function projectPreparedModelsProviderData(
         }
       : {}),
   });
-  const logicalModelKey = (entry: { provider: string; id: string }) =>
-    openAIModelCatalogRoutePolicy.resolveIdentity(entry)?.key ?? modelCatalogLogicalKey(entry);
   // Configured/default rows may remain visible without auth, but must not
   // reintroduce a model that its provider route contract rejected.
   const incompatibleModelKeys = new Set<string>();
@@ -262,7 +262,7 @@ async function projectPreparedModelsProviderData(
         })),
       });
       if (evaluation.routeResolution?.kind === "incompatible") {
-        incompatibleModelKeys.add(logicalModelKey(entry));
+        incompatibleModelKeys.add(resolveModelCatalogIdentityKey(entry));
       }
       return resolveLogicalModelCatalogEntryState({
         evaluation,
@@ -332,7 +332,7 @@ async function projectPreparedModelsProviderData(
     }
     if (
       incompatibleModelKeys.has(
-        logicalModelKey({ provider: resolved.ref.provider, id: resolved.ref.model }),
+        resolveModelCatalogIdentityKey({ provider: resolved.ref.provider, id: resolved.ref.model }),
       )
     ) {
       return;
@@ -363,7 +363,7 @@ async function projectPreparedModelsProviderData(
   };
 
   for (const entry of visibleCatalog) {
-    if (incompatibleModelKeys.has(logicalModelKey(entry))) {
+    if (incompatibleModelKeys.has(resolveModelCatalogIdentityKey(entry))) {
       continue;
     }
     add(entry.provider, entry.id);
@@ -389,7 +389,10 @@ async function projectPreparedModelsProviderData(
 
   if (
     !incompatibleModelKeys.has(
-      logicalModelKey({ provider: resolvedDefault.provider, id: resolvedDefault.model }),
+      resolveModelCatalogIdentityKey({
+        provider: resolvedDefault.provider,
+        id: resolvedDefault.model,
+      }),
     )
   ) {
     add(resolvedDefault.provider, resolvedDefault.model);
