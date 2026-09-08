@@ -258,7 +258,7 @@ describe("Canvas widget view", () => {
     { label: "older than ten minutes", ageMs: 600_001, wakes: false },
     { label: "missing", ageMs: undefined, wakes: false },
     { label: "non-finite", ageMs: Infinity, wakes: false },
-    { label: "NaN", ageMs: NaN, wakes: false },
+    { label: "NaN", ageMs: Number.NaN, wakes: false },
   ])(
     "keeps the notice but gates wakes when the message timestamp is $label",
     async ({ label, ageMs, wakes }) => {
