@@ -53,7 +53,13 @@ describe("app-tool-stream approval lifecycle", () => {
         result: {
           content: [],
           details: {
-            browserTab: { profile: "managed", target: "host", targetId: "tab-1", title: "Example" },
+            browserTab: {
+              profile: "managed",
+              target: "host",
+              targetId: "tab-1",
+              url: "https://example.com",
+              title: "Example",
+            },
           },
         },
       }),

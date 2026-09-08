@@ -328,7 +328,13 @@ describe("chat transcript rendering", () => {
           timestamp: 2_000,
           content: "Opened",
           details: {
-            browserTab: { profile: "managed", target: "host", targetId: "tab-1", title: "Example" },
+            browserTab: {
+              profile: "managed",
+              target: "host",
+              targetId: "tab-1",
+              url: "https://example.com",
+              title: "Example",
+            },
           },
         },
         { role: "assistant", content: "Done.", timestamp: 3_000 },
