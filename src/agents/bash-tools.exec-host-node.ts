@@ -6,7 +6,6 @@
 import { randomUUID } from "node:crypto";
 import { APPROVALS_SCOPE, WRITE_SCOPE } from "../gateway/operator-scopes.js";
 import {
-  type ExecAsk,
   type ExecSecurity,
   maxAsk,
   minSecurity,
@@ -16,6 +15,7 @@ import {
 } from "../infra/exec-approvals.js";
 import {
   defaultExecAutoReviewer,
+  EXEC_AUTO_REVIEW_DISPATCH_IDENTITY_WARNING,
   EXEC_AUTO_REVIEW_SHELL_STARTUP_WARNING,
   resolveExecAutoReviewDecision,
 } from "../infra/exec-auto-review.js";
@@ -40,6 +40,11 @@ import {
   prepareNodeSystemRun,
   resolveNodeExecutionTarget,
 } from "./bash-tools.exec-host-node-phases.js";
+import {
+  assertCurrentNodeGatewayPolicyAllowsDispatch,
+  type NodeGatewayDispatchAuthority,
+  type NodeGatewayPolicyCheckpoint,
+} from "./bash-tools.exec-host-node-policy.js";
 import type { ExecuteNodeHostCommandParams } from "./bash-tools.exec-host-node.types.js";
 import * as execHostShared from "./bash-tools.exec-host-shared.js";
 import { createApprovalSlug } from "./bash-tools.exec-runtime.js";
@@ -49,64 +54,6 @@ import type { AgentToolResult } from "./runtime/index.js";
 import { callGatewayTool } from "./tools/gateway.js";
 
 const APPROVED_NODE_INVOKE_SCOPES = [WRITE_SCOPE, APPROVALS_SCOPE];
-
-type NodeGatewayDispatchAuthority =
-  | "current-policy"
-  | "human-approval"
-  | "auto-review"
-  | "ask-fallback";
-
-type NodeGatewayPolicyCheckpoint = {
-  hostSecurity: ExecSecurity;
-  hostAsk: ExecAsk;
-  askFallback: ExecSecurity;
-};
-
-async function assertCurrentNodeGatewayPolicyAllowsDispatch(params: {
-  request: ExecuteNodeHostCommandParams;
-  authority: NodeGatewayDispatchAuthority;
-  currentPolicyAllows?: (policy: { hostSecurity: ExecSecurity; hostAsk: ExecAsk }) => boolean;
-  fallbackPolicy?: NodeGatewayPolicyCheckpoint;
-}): Promise<void> {
-  if (params.request.bypassHostApprovalFloors) {
-    return;
-  }
-  const current = await execHostShared.resolveExecHostApprovalContext({
-    agentId: params.request.agentId,
-    security: params.request.security,
-    ask: params.request.ask,
-    host: "node",
-  });
-  // A human grant may bypass ask/allowlist, but never a later deny. Auto-review
-  // additionally cannot stand in for a newly required human decision.
-  if (current.hostSecurity === "deny") {
-    throw new Error("exec denied: host=node security=deny");
-  }
-  if (params.authority === "human-approval") {
-    return;
-  }
-  if (params.authority === "auto-review") {
-    if (current.hostAsk === "always") {
-      throw new Error("exec denied: host=node ask=always requires human approval");
-    }
-    return;
-  }
-  if (params.authority === "ask-fallback") {
-    const expected = params.fallbackPolicy;
-    if (
-      !expected ||
-      current.hostSecurity !== expected.hostSecurity ||
-      current.hostAsk !== expected.hostAsk ||
-      current.askFallback !== expected.askFallback
-    ) {
-      throw new Error("exec denied: host=node fallback policy changed before dispatch");
-    }
-    return;
-  }
-  if (!params.currentPolicyAllows?.(current)) {
-    throw new Error("exec denied: host=node policy changed before dispatch");
-  }
-}
 
 /**
  * Executes a command on a remote node, requesting approval when policy requires it.
@@ -148,6 +95,7 @@ export async function executeNodeHostCommand(
     inlineEvalHit,
     requiresSecurityAuditSuppressionApproval,
     autoReviewBlockedByShellStartup,
+    autoReviewBlockedByDispatchIdentity,
     autoReviewArgv,
     allowAlwaysPersistence,
   } = approvalAnalysis;
@@ -315,6 +263,9 @@ export async function executeNodeHostCommand(
     if (params.autoReview === true && hostAsk !== "always" && autoReviewBlockedByShellStartup) {
       params.warnings.push(EXEC_AUTO_REVIEW_SHELL_STARTUP_WARNING);
     }
+    if (params.autoReview === true && hostAsk !== "always" && autoReviewBlockedByDispatchIdentity) {
+      params.warnings.push(EXEC_AUTO_REVIEW_DISPATCH_IDENTITY_WARNING);
+    }
     const autoReviewHasBoundCommand = analysisOk && autoReviewArgv !== undefined;
     // Remote policy may be stricter; local auto-review cannot bypass that floor.
     const autoReviewBlockedByNodePolicy =
@@ -326,6 +277,7 @@ export async function executeNodeHostCommand(
     let autoReviewRequiresHumanApproval =
       autoReviewBlockedByNodePolicy ||
       (params.autoReview === true && autoReviewBlockedByShellStartup) ||
+      (params.autoReview === true && autoReviewBlockedByDispatchIdentity) ||
       (params.autoReview === true && hostAsk !== "always" && !autoReviewHasBoundCommand) ||
       requiresSecurityAuditSuppressionApproval;
     if (
@@ -334,6 +286,7 @@ export async function executeNodeHostCommand(
       autoReviewHasBoundCommand &&
       !autoReviewBlockedByNodePolicy &&
       !autoReviewBlockedByShellStartup &&
+      !autoReviewBlockedByDispatchIdentity &&
       !requiresSecurityAuditSuppressionApproval
     ) {
       const reviewer = params.autoReviewer ?? defaultExecAutoReviewer;

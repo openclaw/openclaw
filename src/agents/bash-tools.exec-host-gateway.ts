@@ -40,6 +40,7 @@ import {
 import { buildAuthorizedShellCommandFromPlan } from "../infra/exec-authorization-render.js";
 import {
   defaultExecAutoReviewer,
+  EXEC_AUTO_REVIEW_DISPATCH_IDENTITY_WARNING,
   EXEC_AUTO_REVIEW_SHELL_STARTUP_WARNING,
   resolveExecAutoReviewDecision,
   type ExecAutoReviewDecision,
@@ -47,6 +48,7 @@ import {
 } from "../infra/exec-auto-review.js";
 import type { SafeBinProfile } from "../infra/exec-safe-bin-policy.js";
 import { hasPosixShellStartupBeforeInlineCommand } from "../infra/exec-wrapper-resolution.js";
+import { hasUnboundExecDispatchWrapperIdentity } from "../infra/exec-wrapper-trust-plan.js";
 import {
   prepareSystemRunMutableFileBinding,
   revalidateSystemRunMutableFileBinding,
@@ -996,15 +998,23 @@ export async function processGatewayAllowlist(
     if (params.autoReview === true && autoReviewBlockedByShellStartup) {
       params.warnings.push(EXEC_AUTO_REVIEW_SHELL_STARTUP_WARNING);
     }
+    const autoReviewBlockedByDispatchIdentity = allowlistEval.segments.some((segment) =>
+      hasUnboundExecDispatchWrapperIdentity(segment.sourceArgv ?? segment.argv),
+    );
+    if (params.autoReview === true && autoReviewBlockedByDispatchIdentity) {
+      params.warnings.push(EXEC_AUTO_REVIEW_DISPATCH_IDENTITY_WARNING);
+    }
     const canAutoReviewApprovalMiss =
       params.autoReview === true &&
       hostAsk !== "always" &&
       Math.max(authorizationCandidates.length, allowlistEval.segments.length) <=
         MAX_GATEWAY_AUTO_REVIEW_CANDIDATES &&
       !autoReviewBlockedByShellStartup &&
+      !autoReviewBlockedByDispatchIdentity &&
       !requiresSecurityAuditSuppressionApproval;
     let autoReviewRequiresHumanApproval =
       (params.autoReview === true && autoReviewBlockedByShellStartup) ||
+      (params.autoReview === true && autoReviewBlockedByDispatchIdentity) ||
       (params.autoReview === true && hostAsk !== "always" && !canAutoReviewApprovalMiss) ||
       requiresAllowlistPlanApproval ||
       requiresHeredocApproval ||

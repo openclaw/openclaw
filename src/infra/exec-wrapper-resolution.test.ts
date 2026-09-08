@@ -36,6 +36,7 @@ function expectTransparentDispatchWrapperCase(params: {
   expect(resolveDispatchWrapperTrustPlan(params.argv)).toEqual({
     argv: params.effectiveArgv,
     wrappers: [params.wrapper],
+    wrapperInvocations: [{ wrapper: params.wrapper, sourceArgv: params.argv }],
     policyBlocked: false,
   });
 }
@@ -309,6 +310,7 @@ describe("resolveDispatchWrapperTrustPlan", () => {
     expect(resolveDispatchWrapperTrustPlan(["env", "--", "bash", "-lc", "echo hi"])).toEqual({
       argv: ["bash", "-lc", "echo hi"],
       wrappers: ["env"],
+      wrapperInvocations: [{ wrapper: "env", sourceArgv: ["env", "--", "bash", "-lc", "echo hi"] }],
       policyBlocked: false,
     });
   });
@@ -325,6 +327,7 @@ describe("resolveDispatchWrapperTrustPlan", () => {
       expect(resolveDispatchWrapperTrustPlan(argv)).toEqual({
         argv,
         wrappers: [],
+        wrapperInvocations: [],
         policyBlocked: false,
       });
     },
@@ -415,6 +418,10 @@ describe("resolveDispatchWrapperTrustPlan", () => {
     ).toEqual({
       argv: ["bash", "-lc", "echo hi"],
       wrappers: ["nohup", "nice"],
+      wrapperInvocations: [
+        { wrapper: "nohup", sourceArgv: ["nohup", "nice", "-n", "5", "bash", "-lc", "echo hi"] },
+        { wrapper: "nice", sourceArgv: ["nice", "-n", "5", "bash", "-lc", "echo hi"] },
+      ],
       policyBlocked: false,
     });
   });
@@ -429,6 +436,7 @@ describe("resolveDispatchWrapperTrustPlan", () => {
     ).toEqual({
       argv: ["arch", "-arm64", "bash", "-lc", "echo hi"],
       wrappers: [],
+      wrapperInvocations: [],
       policyBlocked: true,
       blockedWrapper: "arch",
     });
@@ -438,6 +446,9 @@ describe("resolveDispatchWrapperTrustPlan", () => {
     expect(resolveDispatchWrapperTrustPlan(["env", "FOO=bar", "bash", "-lc", "echo hi"])).toEqual({
       argv: ["env", "FOO=bar", "bash", "-lc", "echo hi"],
       wrappers: ["env"],
+      wrapperInvocations: [
+        { wrapper: "env", sourceArgv: ["env", "FOO=bar", "bash", "-lc", "echo hi"] },
+      ],
       policyBlocked: true,
       blockedWrapper: "env",
     });
@@ -453,6 +464,12 @@ describe("resolveDispatchWrapperTrustPlan", () => {
     ).toEqual({
       argv: ["script", "-q", "/tmp/session.log", "bash", "-lc", "echo hi"],
       wrappers: ["script"],
+      wrapperInvocations: [
+        {
+          wrapper: "script",
+          sourceArgv: ["script", "-q", "/tmp/session.log", "bash", "-lc", "echo hi"],
+        },
+      ],
       policyBlocked: true,
       blockedWrapper: "script",
     });
@@ -465,6 +482,7 @@ describe("resolveDispatchWrapperTrustPlan", () => {
     expect(resolveDispatchWrapperTrustPlan(argv)).toEqual({
       argv,
       wrappers: ["time"],
+      wrapperInvocations: [{ wrapper: "time", sourceArgv: argv }],
       policyBlocked: true,
       blockedWrapper: "time",
     });
@@ -476,6 +494,9 @@ describe("resolveDispatchWrapperTrustPlan", () => {
     ).toEqual({
       argv: ["timeout", "5s", "bash", "-lc", "echo hi"],
       wrappers: ["nohup"],
+      wrapperInvocations: [
+        { wrapper: "nohup", sourceArgv: ["nohup", "timeout", "5s", "bash", "-lc", "echo hi"] },
+      ],
       policyBlocked: true,
       blockedWrapper: "timeout",
     });

@@ -1,8 +1,9 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
+import path from "node:path";
 import type { SystemRunApprovalFileOperand } from "./exec-approvals.js";
 
-export function hashFileContentsSync(filePath: string): string {
+function hashFileContentsSync(filePath: string): string {
   return crypto.createHash("sha256").update(fs.readFileSync(filePath)).digest("hex");
 }
 
@@ -39,4 +40,29 @@ export function snapshotFileOperandAtPath(params: {
     };
   }
   return { ok: true, snapshot: { argvIndex: params.argvIndex, path: realPath, sha256 } };
+}
+
+export function revalidateApprovedMutableFileOperand(params: {
+  snapshot: SystemRunApprovalFileOperand;
+  argv: string[];
+  cwd: string | undefined;
+}): boolean {
+  const operand = params.argv[params.snapshot.argvIndex]?.trim();
+  if (!operand) {
+    return false;
+  }
+  let realPath: string;
+  try {
+    realPath = fs.realpathSync(path.resolve(params.cwd ?? process.cwd(), operand));
+  } catch {
+    return false;
+  }
+  if (realPath !== params.snapshot.path) {
+    return false;
+  }
+  try {
+    return hashFileContentsSync(realPath) === params.snapshot.sha256;
+  } catch {
+    return false;
+  }
 }

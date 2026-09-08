@@ -338,6 +338,33 @@ describe("missingSystemRunApprovalBinding", () => {
 });
 
 describe("mutable file operand binding", () => {
+  it.runIf(process.platform !== "win32" && process.getuid?.() !== 0)(
+    "binds protected env and ls identities in dispatch order",
+    async () => {
+      const prepared = await prepareSystemRunMutableFileBinding({
+        command: { kind: "shell", text: "env ls" },
+        env: { PATH: "/usr/bin:/bin" },
+      });
+      expect(prepared.ok).toBe(true);
+      if (!prepared.ok) {
+        throw new Error(prepared.message);
+      }
+      expect(prepared.binding.operands.filter((operand) => operand.executable)).toEqual([
+        expect.objectContaining({
+          kind: "identity",
+          snapshot: { argvIndex: 0, path: fs.realpathSync("/usr/bin/env") },
+        }),
+        expect.objectContaining({
+          kind: "identity",
+          snapshot: { argvIndex: 0, path: fs.realpathSync("/bin/ls") },
+        }),
+      ]);
+      await expect(
+        revalidateSystemRunMutableFileBinding({ binding: prepared.binding }),
+      ).resolves.toEqual({ ok: true });
+    },
+  );
+
   it.runIf(process.platform !== "win32")(
     "binds protected executable identity without hashing or requiring one-shot approval",
     async () => {

@@ -31,6 +31,7 @@ import {
   hasPosixShellStartupBeforeInlineCommand,
   isBlockedShellWrapperCommand,
 } from "../infra/exec-wrapper-resolution.js";
+import { hasUnboundExecDispatchWrapperIdentity } from "../infra/exec-wrapper-trust-plan.js";
 import { buildNodeShellCommand } from "../infra/node-shell.js";
 import {
   parsePreparedSystemRunPayload,
@@ -86,6 +87,7 @@ type NodeApprovalAnalysis = {
   inlineEvalHit: InterpreterInlineEvalHit | null;
   requiresSecurityAuditSuppressionApproval: boolean;
   autoReviewBlockedByShellStartup: boolean;
+  autoReviewBlockedByDispatchIdentity: boolean;
   autoReviewArgv?: string[];
   allowAlwaysPersistence: AllowAlwaysPersistenceDecision;
 };
@@ -703,6 +705,16 @@ export async function analyzeNodeApprovalRequirement(params: {
     requiresSecurityAuditSuppressionApproval,
     autoReviewBlockedByShellStartup: autoReviewBindingEval.segments.some((segment) =>
       hasPosixShellStartupBeforeInlineCommand(segment.argv),
+    ),
+    autoReviewBlockedByDispatchIdentity: autoReviewBindingEval.segments.some((segment) =>
+      hasUnboundExecDispatchWrapperIdentity(
+        segment.sourceArgv ?? segment.argv,
+        params.target.platform === "win32"
+          ? "win32"
+          : params.target.platform === "darwin"
+            ? "darwin"
+            : "linux",
+      ),
     ),
     allowAlwaysPersistence: resolveAllowAlwaysPersistenceDecision({
       segments: baseAllowlistEval.segments,

@@ -33,6 +33,7 @@ import {
 import type { ExecAuthorizationPlan } from "../infra/exec-authorization-plan.js";
 import {
   EXEC_AUTO_REVIEW_DENIAL_GUIDANCE,
+  EXEC_AUTO_REVIEW_DISPATCH_IDENTITY_WARNING,
   EXEC_AUTO_REVIEW_SHELL_STARTUP_WARNING,
   resolveExecAutoReviewDecision,
   type ExecAutoReviewer,
@@ -46,6 +47,7 @@ import {
   isShellWrapperInvocation,
   resolveShellWrapperTransportArgv,
 } from "../infra/exec-wrapper-resolution.js";
+import { hasUnboundExecDispatchWrapperIdentity } from "../infra/exec-wrapper-trust-plan.js";
 import {
   inspectHostExecEnvOverrides,
   sanitizeSystemRunEnvOverrides,
@@ -54,7 +56,6 @@ import {
   APPROVAL_SCRIPT_OPERAND_DRIFT_DENIED_MESSAGE,
   normalizeSystemRunApprovalPlan,
   prepareSystemRunExecutableIdentityBinding,
-  revalidateApprovedMutableFileOperand,
   revalidateSystemRunMutableFileBinding,
   resolveMutableFileOperandSnapshotSync,
   type SystemRunMutableFileBinding,
@@ -66,6 +67,7 @@ import {
   captureApprovedCwdSnapshotSync,
   revalidateApprovedCwdSnapshot,
 } from "../infra/system-run-cwd-binding.js";
+import { revalidateApprovedMutableFileOperand } from "../infra/system-run-file-snapshot.js";
 import { logWarn } from "../logger.js";
 import type { NodeHostClient } from "./client.js";
 import {
@@ -691,7 +693,12 @@ async function evaluateSystemRunPolicyPhase(
       security === "allowlist" ||
       effectivePolicy.autoReview)
   ) {
-    const prepared = prepareSystemRunExecutableIdentityBinding({ segments, env: parsed.env });
+    const prepared = prepareSystemRunExecutableIdentityBinding({
+      segments,
+      cwd: parsed.cwd,
+      env: parsed.env,
+      shellCommand: parsed.shellPayload !== null,
+    });
     if (!prepared.ok) {
       await sendSystemRunDenied(opts, parsed.execution, {
         reason: "approval-required",
@@ -706,8 +713,14 @@ async function evaluateSystemRunPolicyPhase(
     const autoReviewBlockedByShellStartup = segments.some((segment) =>
       hasPosixShellStartupBeforeInlineCommand(segment.argv),
     );
+    const autoReviewBlockedByDispatchIdentity = segments.some((segment) =>
+      hasUnboundExecDispatchWrapperIdentity(segment.sourceArgv ?? segment.argv),
+    );
     if (effectivePolicy.autoReview && ask !== "always" && autoReviewBlockedByShellStartup) {
       autoReviewDeferredMessage = `${policy.errorMessage} (${EXEC_AUTO_REVIEW_SHELL_STARTUP_WARNING})`;
+    }
+    if (effectivePolicy.autoReview && ask !== "always" && autoReviewBlockedByDispatchIdentity) {
+      autoReviewDeferredMessage = `${policy.errorMessage} (${EXEC_AUTO_REVIEW_DISPATCH_IDENTITY_WARNING})`;
     }
     const [autoReviewSegment] = segments;
     const directAutoReviewArgvMatchesRequest =
@@ -733,6 +746,7 @@ async function evaluateSystemRunPolicyPhase(
       parsed.approvalPlan !== null &&
       inlineEvalHit === null &&
       !autoReviewBlockedByShellStartup &&
+      !autoReviewBlockedByDispatchIdentity &&
       !requiresSecurityAuditSuppressionApproval &&
       policy.eventReason !== "security=deny";
     if (canAutoReviewApprovalMiss) {

@@ -153,8 +153,9 @@ Custom profile example:
 Approval-backed interpreter/runtime runs are intentionally conservative:
 
 - Exact argv/cwd/env context is always bound.
-- On the gateway, every resolved command-segment executable is bound before human or automatic
-  review and re-checked before launch. Node hosts capture the same identities during local policy
+- On the gateway, the whole ordinary external dispatch chain—each original wrapper executable
+  and the final command-segment executable—is bound before human or automatic review and
+  re-checked before launch. Node hosts capture the same identities during local policy
   evaluation and re-check them before dispatch.
   Protected executables use resolved real-path identity only; writable executables also use a
   content hash. A changed resolution, including a new executable earlier on `PATH`, denies the run.
@@ -175,6 +176,16 @@ keeps its existing direct executable pinning and single script-operand snapshot;
 carry every executable identity inside a shell wrapper across the approval wait. For those inner
 commands, identity revalidation starts when the approved invocation reaches the node's local
 policy evaluation, so it does not detect substitutions made earlier in the remote approval wait.
+
+In `mode=auto`, dispatch through `xcrun`, BusyBox/Toybox applets, or shell
+`builtin`/`command`/`exec` carriers skips automatic review with
+`Exec auto-review skipped: dispatch wrapper identity cannot be bound`. When existing binding
+checks succeed, these forms require human approval. Their toolchain, embedded applet, or builtin
+identities are outside the ordinary external-file binding contract. Existing binding rejections
+remain in force. Every external wrapper's own executable file must resolve, including exceptional
+dispatchers; otherwise binding is rejected. Shell carriers are exempt from file binding only in
+shell command position. When another external wrapper launches a carrier name, or the request
+uses direct argv execution, that name is bound as an external executable too.
 
 In `mode=auto`, POSIX login or interactive shell wrappers skip the reviewer. Bindable commands,
 such as `bash -lc 'printf ok'`, require human approval because their implicit startup files are

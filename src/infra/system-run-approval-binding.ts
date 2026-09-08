@@ -10,11 +10,15 @@ import type {
   SystemRunApprovalPlan,
 } from "./exec-approvals.js";
 import { planShellAuthorization } from "./exec-authorization-plan.js";
-import { resolveCommandResolutionFromArgv } from "./exec-command-resolution.js";
+import {
+  type ExecutableResolution,
+  resolveCommandResolutionFromArgv,
+} from "./exec-command-resolution.js";
+import { resolveExecWrapperTrustPlan } from "./exec-wrapper-trust-plan.js";
 import { normalizeHostOverrideEnvVarKey } from "./host-env-security.js";
 import { resolveEnvironmentValue } from "./process-env.js";
 import { extractShellCommandFromArgv } from "./system-run-command.js";
-import { hashFileContentsSync, snapshotFileOperandAtPath } from "./system-run-file-snapshot.js";
+import { snapshotFileOperandAtPath } from "./system-run-file-snapshot.js";
 import {
   isSystemRunCommandTextBoundInterpreterInvocation,
   resolveSystemRunMutableFileOperandTarget,
@@ -303,31 +307,6 @@ export function resolveMutableFileOperandSnapshotSync(params: {
   });
 }
 
-export function revalidateApprovedMutableFileOperand(params: {
-  snapshot: SystemRunApprovalFileOperand;
-  argv: string[];
-  cwd: string | undefined;
-}): boolean {
-  const operand = params.argv[params.snapshot.argvIndex]?.trim();
-  if (!operand) {
-    return false;
-  }
-  let realPath: string;
-  try {
-    realPath = fs.realpathSync(path.resolve(params.cwd ?? process.cwd(), operand));
-  } catch {
-    return false;
-  }
-  if (realPath !== params.snapshot.path) {
-    return false;
-  }
-  try {
-    return hashFileContentsSync(realPath) === params.snapshot.sha256;
-  } catch {
-    return false;
-  }
-}
-
 export type SystemRunMutableFileBinding = {
   commands: string[][];
   operands: Array<
@@ -455,7 +434,7 @@ function prepareMutableFileBindingsForSegments(params: {
   if (!ordinary.ok) {
     return ordinary;
   }
-  const executables = prepareSystemRunExecutableIdentityBinding(params);
+  const executables = prepareSystemRunExecutableIdentityBinding({ ...params, shellCommand: true });
   if (!executables.ok) {
     return executables;
   }
@@ -472,52 +451,84 @@ function prepareMutableFileBindingsForSegments(params: {
 export function prepareSystemRunExecutableIdentityBinding(params: {
   segments: ExecCommandSegment[];
   env?: NodeJS.ProcessEnv;
+  cwd?: string;
+  shellCommand: boolean;
 }): SystemRunMutableFileBindingResult {
   const operands: SystemRunMutableFileBinding["operands"] = [];
   for (const segment of params.segments) {
-    const execution = segment.resolution?.execution;
-    const resolvedExecutable = execution?.resolvedRealPath ?? execution?.resolvedPath;
-    if (!execution || !resolvedExecutable) {
-      continue;
-    }
-    let realPath: string;
-    try {
-      realPath = fs.realpathSync(resolvedExecutable);
-    } catch {
-      return { ok: false, message: APPROVAL_SCRIPT_OPERAND_DRIFT_DENIED_MESSAGE };
-    }
-    const pathSearch = !looksLikeExplicitPathToken(execution.rawExecutable)
-      ? {
-          path:
-            resolveEnvironmentValue(params.env, "PATH") ??
-            resolveEnvironmentValue(process.env, "PATH") ??
-            "",
-          pathExt:
-            resolveEnvironmentValue(params.env, "PATHEXT") ??
-            resolveEnvironmentValue(process.env, "PATHEXT") ??
-            ".EXE;.CMD;.BAT;.COM",
+    const executions: Array<{ argv: string[]; execution: ExecutableResolution | undefined }> = [];
+    const plan = resolveExecWrapperTrustPlan(segment.sourceArgv ?? segment.argv);
+    let shellCommandPosition = params.shellCommand;
+    for (const { wrapper, sourceArgv } of plan.wrapperInvocations) {
+      // An external wrapper dispatches these names through PATH, not as shell builtins.
+      if (
+        shellCommandPosition &&
+        (wrapper === "builtin" || wrapper === "command" || wrapper === "exec")
+      ) {
+        if (wrapper === "exec") {
+          shellCommandPosition = false;
         }
-      : undefined;
-    if (pathLooksMutableForShellPayloadSync(resolvedExecutable)) {
-      const snapshot = snapshotFileOperandAtPath({ argvIndex: 0, filePath: realPath });
-      if (!snapshot.ok) {
-        return snapshot;
+        continue;
       }
-      operands.push({
-        kind: "mutable",
-        argv: [...segment.argv],
-        snapshot: snapshot.snapshot,
-        executable: true,
-        pathSearch,
-      });
-    } else {
-      operands.push({
-        kind: "identity",
-        argv: [...segment.argv],
-        snapshot: { argvIndex: 0, path: realPath },
-        executable: true,
-        pathSearch,
-      });
+      shellCommandPosition = false;
+      const argv = sourceArgv.slice(0, 1);
+      const execution = resolveCommandResolutionFromArgv(
+        argv,
+        params.cwd,
+        params.env,
+        process.platform,
+        { useCache: false },
+      )?.execution;
+      if (!execution?.resolvedRealPath && !execution?.resolvedPath) {
+        return { ok: false, message: "SYSTEM_RUN_DENIED: approval requires a resolved executable" };
+      }
+      executions.push({ argv, execution });
+    }
+    executions.push({ argv: segment.argv, execution: segment.resolution?.execution });
+    for (const { argv, execution } of executions) {
+      const resolvedExecutable = execution?.resolvedRealPath ?? execution?.resolvedPath;
+      if (!execution || !resolvedExecutable) {
+        continue;
+      }
+      let realPath: string;
+      try {
+        realPath = fs.realpathSync(resolvedExecutable);
+      } catch {
+        return { ok: false, message: APPROVAL_SCRIPT_OPERAND_DRIFT_DENIED_MESSAGE };
+      }
+      const pathSearch = !looksLikeExplicitPathToken(execution.rawExecutable)
+        ? {
+            path:
+              resolveEnvironmentValue(params.env, "PATH") ??
+              resolveEnvironmentValue(process.env, "PATH") ??
+              "",
+            pathExt:
+              resolveEnvironmentValue(params.env, "PATHEXT") ??
+              resolveEnvironmentValue(process.env, "PATHEXT") ??
+              ".EXE;.CMD;.BAT;.COM",
+          }
+        : undefined;
+      if (pathLooksMutableForShellPayloadSync(resolvedExecutable)) {
+        const snapshot = snapshotFileOperandAtPath({ argvIndex: 0, filePath: realPath });
+        if (!snapshot.ok) {
+          return snapshot;
+        }
+        operands.push({
+          kind: "mutable",
+          argv: [...argv],
+          snapshot: snapshot.snapshot,
+          executable: true,
+          pathSearch,
+        });
+      } else {
+        operands.push({
+          kind: "identity",
+          argv: [...argv],
+          snapshot: { argvIndex: 0, path: realPath },
+          executable: true,
+          pathSearch,
+        });
+      }
     }
   }
   return { ok: true, binding: { commands: [], operands } };
