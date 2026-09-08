@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveClaudeCliProjectDirForWorkspace } from "../agents/command/claude-cli-project-dir.js";
 import { noteClaudeCliHealth } from "./doctor-claude-cli.js";
@@ -34,16 +35,8 @@ async function withTempHome<T>(
   }
 }
 
-function noteArg(noteFn: ReturnType<typeof vi.fn>, argIndex: number): unknown {
-  const call = noteFn.mock.calls[0];
-  if (!call) {
-    throw new Error("Expected note call");
-  }
-  return call.at(argIndex);
-}
-
 function noteBody(noteFn: ReturnType<typeof vi.fn>): string {
-  const value = noteArg(noteFn, 0);
+  const value = expectDefined<unknown[]>(noteFn.mock.calls[0], "note call").at(0);
   if (typeof value !== "string") {
     throw new Error("Expected note body");
   }
@@ -51,7 +44,7 @@ function noteBody(noteFn: ReturnType<typeof vi.fn>): string {
 }
 
 function noteTitle(noteFn: ReturnType<typeof vi.fn>): string {
-  const value = noteArg(noteFn, 1);
+  const value = expectDefined<unknown[]>(noteFn.mock.calls[0], "note call").at(1);
   if (typeof value !== "string") {
     throw new Error("Expected note title");
   }
@@ -131,6 +124,47 @@ describe("noteClaudeCliHealth", () => {
       );
 
       expect(noteFn).not.toHaveBeenCalled();
+    });
+  });
+
+  it("probes auth with the same cleared environment as Claude execution", async () => {
+    await withTempHome(({ homeDir, workspaceDir }) => {
+      resolveCliBackendConfigMock.mockReturnValue({
+        id: "claude-cli",
+        pluginId: "anthropic",
+        config: {
+          command: "claude",
+          clearEnv: ["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"],
+        },
+      });
+      const isAuthenticated = vi.fn(() => true);
+
+      noteClaudeCliHealth(
+        {
+          agents: {
+            defaults: { model: "claude-cli/claude-sonnet-4-6" },
+            entries: { main: { default: true } },
+          },
+        },
+        {
+          env: {
+            ANTHROPIC_API_KEY: "ambient-api-key",
+            CLAUDE_CODE_OAUTH_TOKEN: "ambient-oauth-token",
+            CLAUDE_CONFIG_DIR: "/tmp/claude-config",
+            PATH: "/usr/bin",
+          },
+          homeDir,
+          workspaceDir,
+          isAuthenticated,
+          noteFn: vi.fn(),
+          resolveCommandPath: () => "/usr/bin/claude",
+        },
+      );
+
+      expect(isAuthenticated).toHaveBeenCalledWith("/usr/bin/claude", {
+        CLAUDE_CONFIG_DIR: "/tmp/claude-config",
+        PATH: "/usr/bin",
+      });
     });
   });
 

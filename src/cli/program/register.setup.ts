@@ -3,11 +3,10 @@ import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
 import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
-import { rejectOnboardingOption } from "../../commands/onboard-options.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
 import { hasExplicitOptions, listExplicitOptionFlagsExcept } from "../command-options.js";
-import { isUnconfiguredConfigSource } from "../fresh-install-config.js";
+import { shouldStartLocalOnboarding } from "../fresh-install-config.js";
 import {
   registerOnboardAuthOptions,
   registerOnboardGatewayOptions,
@@ -47,27 +46,6 @@ function hasExplicitOnboardingOption(command: Command): boolean {
   });
 }
 
-async function isConfiguredInstance(): Promise<boolean> {
-  const { readConfigFileSnapshot } = await import("../../config/config.js");
-  const snapshot = await readConfigFileSnapshot();
-  if (!snapshot.exists) {
-    return false;
-  }
-  if (!snapshot.valid || snapshot.sourceConfig.gateway?.mode === "remote") {
-    return true;
-  }
-  if (isUnconfiguredConfigSource(snapshot.sourceConfig)) {
-    return false;
-  }
-  // Inference commits before installation finishes; pending local setup must
-  // resume onboarding instead of opening a chat against an unfinished Gateway.
-  const { readLocalOnboardingStateForConfig } =
-    await import("../../state/local-onboarding-state.js");
-  return (
-    readLocalOnboardingStateForConfig(snapshot.path, snapshot.sourceConfig)?.status !== "pending"
-  );
-}
-
 async function runSystemAgentEntry(
   options: Record<string, unknown>,
   runtime: RuntimeEnv,
@@ -92,6 +70,7 @@ async function runOnboardingEntry(
   if (options.baseline) {
     const unsupportedOptions = listExplicitOptionFlagsExcept(commandRuntime, BASELINE_OPTION_NAMES);
     if (unsupportedOptions.length > 0) {
+      const { rejectOnboardingOption } = await import("../../commands/onboard-options.js");
       const message = `--baseline cannot be combined with: ${unsupportedOptions.join(", ")}.`;
       rejectOnboardingOption({ json: options.json === true }, runtime, message);
       return;
@@ -103,7 +82,7 @@ async function runOnboardingEntry(
     );
     return;
   }
-  const onboardingOptions = resolveOnboardCommandOptions(options, commandRuntime, runtime);
+  const onboardingOptions = await resolveOnboardCommandOptions(options, commandRuntime, runtime);
   if (!onboardingOptions) {
     return;
   }
@@ -173,8 +152,11 @@ export function registerSetupCommand(program: Command): void {
       const options = rawOptions as Record<string, unknown>;
       const hasOnboardingFlag = hasExplicitOnboardingOption(commandRuntime);
       const hasSystemAgentRequest = hasExplicitOptions(commandRuntime, ["message", "yes"]);
-      const configured =
-        hasOnboardingFlag || hasSystemAgentRequest ? false : await isConfiguredInstance();
+      let configured = false;
+      if (!hasOnboardingFlag && !hasSystemAgentRequest) {
+        const { readConfigFileSnapshot } = await import("../../config/config.js");
+        configured = !(await shouldStartLocalOnboarding(await readConfigFileSnapshot()));
+      }
       const route = resolveSetupCommandRoute({
         hasOnboardingFlag,
         hasSystemAgentRequest,

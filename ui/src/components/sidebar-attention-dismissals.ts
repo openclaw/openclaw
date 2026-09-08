@@ -4,12 +4,19 @@
 import { gatewayOriginScope } from "@openclaw/gateway-client/browser";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
+import type { ScopeUpgradeState } from "../app/device-scope-upgrade-availability.ts";
 import { getSafeLocalStorage } from "../local-storage.ts";
-import {
-  SIDEBAR_ATTENTION_DISMISSAL_KINDS,
-  type SidebarAttentionDismissal,
-  type SidebarAttentionKind,
-} from "./sidebar-attention-entries.ts";
+
+const SIDEBAR_ATTENTION_DISMISSAL_KINDS = [
+  "cronFailed",
+  "cronOverdue",
+  "modelAuthExpired",
+  "scopeUpgrade",
+  "updateAvailable",
+] as const;
+
+export type SidebarAttentionKind = (typeof SIDEBAR_ATTENTION_DISMISSAL_KINDS)[number];
+export type SidebarAttentionDismissal = { kind: SidebarAttentionKind; signature: string };
 
 export type SidebarAttentionDismissals = Partial<Record<SidebarAttentionKind, string[]>>;
 
@@ -82,6 +89,19 @@ export function dismissSidebarAttention(
   return next;
 }
 
+export function resolveScopeUpgradeDismissal(params: {
+  scopes: readonly string[] | undefined;
+  state: ScopeUpgradeState;
+}): SidebarAttentionDismissal | null {
+  // Manual repair and an actionable upgrade are distinct incidents.
+  return (params.state.phase === "guidance" || params.state.phase === "available") && params.scopes
+    ? {
+        kind: "scopeUpgrade",
+        signature: JSON.stringify([params.state.phase, ...params.scopes.toSorted()]),
+      }
+    : null;
+}
+
 export function resolveUpdateAttentionDismissal(params: {
   gatewayBootId?: string | null;
   updateAvailable?: UpdateAvailable | null;
@@ -121,6 +141,7 @@ export function isSidebarAttentionDismissed(
 function pruneDismissals(
   dismissals: SidebarAttentionDismissals,
   active: readonly SidebarAttentionDismissal[],
+  scope?: { cronInventoryComplete: boolean; modelAuthAgentId: string | null },
 ): SidebarAttentionDismissals {
   const next: SidebarAttentionDismissals = {};
   let changed = false;
@@ -129,9 +150,25 @@ function pruneDismissals(
     if (!stored) {
       continue;
     }
-    const current = stored.filter((signature) =>
-      active.some((dismissal) => dismissal.kind === kind && dismissal.signature === signature),
-    );
+    const current = stored.filter((signature) => {
+      // Selected-agent responses are partial: they may re-arm their own auth
+      // warning, but only an all-agent cron inventory may re-arm cron entries.
+      const authoritative =
+        !scope ||
+        (kind === "modelAuthExpired"
+          ? Boolean(
+              scope.modelAuthAgentId &&
+              (!signature.startsWith("agent:") ||
+                signature.startsWith(`agent:${scope.modelAuthAgentId}\n`)),
+            )
+          : kind === "cronFailed" || kind === "cronOverdue"
+            ? scope.cronInventoryComplete
+            : true);
+      return (
+        !authoritative ||
+        active.some((dismissal) => dismissal.kind === kind && dismissal.signature === signature)
+      );
+    });
     if (current.length > 0) {
       next[kind] = current;
     }
@@ -145,9 +182,10 @@ function pruneDismissals(
 export function reconcileSidebarAttentionDismissals(params: {
   active: readonly SidebarAttentionDismissal[];
   gatewayUrl: string;
+  scope?: { cronInventoryComplete: boolean; modelAuthAgentId: string | null };
 }): SidebarAttentionDismissals {
   const stored = loadDismissals(params.gatewayUrl);
-  const pruned = pruneDismissals(stored, params.active);
+  const pruned = pruneDismissals(stored, params.active, params.scope);
   if (pruned !== stored) {
     saveDismissals(params.gatewayUrl, pruned);
   }

@@ -68,8 +68,14 @@ export function settleRequesterTurnAfterSessionSpawns(params: {
       entry.requesterTurnRunId === requesterTurnRunId &&
       entry.expectsCompletionMessage === true,
   );
+  const requiredRunIds = new Set(
+    params.acceptedSessionSpawns
+      .filter((spawn) => spawn.expectsCompletionMessage === true)
+      .map((spawn) => spawn.runId),
+  );
   for (const entry of entries) {
-    const spawn = spawnsByRunId.get(entry.taskRunId ?? entry.runId);
+    const taskRunId = entry.taskRunId ?? entry.runId;
+    const spawn = spawnsByRunId.get(taskRunId);
     if (
       !spawn ||
       entry.childSessionKey !== spawn.childSessionKey ||
@@ -77,6 +83,12 @@ export function settleRequesterTurnAfterSessionSpawns(params: {
     ) {
       return false;
     }
+    requiredRunIds.delete(taskRunId);
+  }
+  // Accepted completion receipts outlive registry rows. A surviving subset
+  // cannot attest that the whole requester obligation transferred to a wake.
+  if (requiredRunIds.size > 0) {
+    return false;
   }
 
   const firstEntry = entries[0];
@@ -146,6 +158,11 @@ export function settleRequesterTurnAfterSessionSpawns(params: {
       if (entry.delivery) {
         delete entry.delivery.requesterVisibleFinal;
       }
+      if (requesterAlreadyDeliveredFinal) {
+        // The receipt proves this yielded batch already reached requester-visible delivery.
+        // Clear its provisional wake so settling the parent cannot replay the batch.
+        entry.requesterSettleWake = undefined;
+      }
       entry.requesterTurnRunId = undefined;
       entry.requesterTurnYielded = undefined;
       if (entry.retireAfterRequesterTurn === true) {
@@ -179,6 +196,17 @@ export function settleRequesterTurnAfterSessionSpawns(params: {
   ) {
     // Active children keep the frozen batch; their normal completion owner schedules it.
     params.schedule(firstEntry.runId, firstEntry);
+  } else if (
+    !params.requesterYielded &&
+    entries.every((entry) => typeof entry.execution.endedAt === "number")
+  ) {
+    // A terminal child cannot wake while its requester still owns the turn.
+    // Once a normal parent response settles, resume its original per-child delivery.
+    for (const entry of entries) {
+      if (params.runs.has(entry.runId)) {
+        params.schedule(entry.runId, entry);
+      }
+    }
   }
   return true;
 }

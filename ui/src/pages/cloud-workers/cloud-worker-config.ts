@@ -1,19 +1,19 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { collectBaseArrayPaths } from "../../../../src/config/patch-replace-paths.js";
 
-export const CLOUD_WORKER_MACHINE_CLASSES = ["standard", "fast", "large", "beast"] as const;
-const CLOUD_WORKER_MACHINE_CLASS_IDS = new Set<string>(CLOUD_WORKER_MACHINE_CLASSES);
+type CloudWorkerConfigPatch = { patch: Record<string, unknown>; replacePaths: string[] };
 
 export type CloudWorkerProfileDraft = {
   id: string;
   backend: string;
+  target: string;
   machineClass: string;
   ttl: string;
   idleTimeout: string;
   setup: string;
   desktop: boolean;
   binary: string;
-  customClass: boolean;
 };
 
 export type ConfiguredCloudWorkerProfile = {
@@ -21,6 +21,7 @@ export type ConfiguredCloudWorkerProfile = {
   providerId: string;
   install: "bundle" | "npm";
   backend: string;
+  target: string;
   machineClass: string;
   ttl: string;
   idleTimeout: string;
@@ -34,6 +35,7 @@ export type CloudWorkerDraftError =
   | "profileExists"
   | "profileMissing"
   | "backend"
+  | "target"
   | "machineClass"
   | "ttl"
   | "idleTimeout"
@@ -77,6 +79,7 @@ export function readCloudWorkerProfiles(
           providerId: normalizeOptionalString(raw.provider) ?? "",
           install: raw.install === "npm" ? "npm" : "bundle",
           backend: stringSetting(settings, "provider"),
+          target: stringSetting(settings, "target"),
           machineClass: stringSetting(settings, "class"),
           ttl: stringSetting(settings, "ttl"),
           idleTimeout: stringSetting(settings, "idleTimeout"),
@@ -92,17 +95,16 @@ export function readCloudWorkerProfiles(
 export function createCloudWorkerDraft(
   profile?: ConfiguredCloudWorkerProfile,
 ): CloudWorkerProfileDraft {
-  const machineClass = profile?.machineClass || "standard";
   return {
     id: profile?.id ?? "",
     backend: profile?.backend ?? "",
-    machineClass,
+    target: profile?.target ?? "",
+    machineClass: profile?.machineClass ?? "",
     ttl: profile?.ttl || "8h",
     idleTimeout: profile?.idleTimeout || "45m",
     setup: profile?.setup ?? "",
     desktop: profile?.desktop ?? false,
     binary: profile?.binary ?? "",
-    customClass: !CLOUD_WORKER_MACHINE_CLASS_IDS.has(machineClass),
   };
 }
 
@@ -123,6 +125,9 @@ export function validateCloudWorkerDraft(
   }
   if (!draft.backend.trim()) {
     return "backend";
+  }
+  if (draft.target !== draft.target.trim() || draft.target.length > 64) {
+    return "target";
   }
   const machineClass = draft.machineClass.trim();
   if (!machineClass || machineClass.length > 128) {
@@ -145,7 +150,7 @@ export function buildCloudWorkerUpsertPatch(
   config: Readonly<Record<string, unknown>>,
   draft: CloudWorkerProfileDraft,
   editingId: string | null,
-): { patch: Record<string, unknown> } | { error: CloudWorkerDraftError } {
+): CloudWorkerConfigPatch | { error: CloudWorkerDraftError } {
   const profiles = profileRecords(config);
   const error = validateCloudWorkerDraft(draft, profiles, editingId);
   if (error) {
@@ -154,35 +159,49 @@ export function buildCloudWorkerUpsertPatch(
   const id = editingId ?? draft.id;
   const existing = isRecord(profiles[id]) ? profiles[id] : {};
   const existingSettings = profileSettings(existing);
+  // Recheck the authoritative snapshot: a stale rich draft must not overwrite an Advanced profile.
+  if (
+    editingId &&
+    (normalizeOptionalString(existing.provider) !== "crabbox" ||
+      !stringSetting(existingSettings, "class"))
+  ) {
+    return { error: "profileMissing" };
+  }
+  const setup = draft.setup.trim();
+  const clearSetupEnv =
+    !setup && Array.isArray(existingSettings.setupEnv) && existingSettings.setupEnv.length > 0;
+  // Omitted settings merge in place; resending opaque nulls would delete them.
   const settings = {
-    ...existingSettings,
     provider: draft.backend.trim(),
+    target: draft.target || null,
     class: draft.machineClass.trim(),
     ttl: draft.ttl.trim(),
     idleTimeout: draft.idleTimeout.trim(),
-    setup: draft.setup.trim() || null,
+    setup: setup || null,
+    ...(clearSetupEnv ? { setupEnv: null } : {}),
     desktop: draft.desktop ? true : null,
     binary: draft.binary.trim() || null,
   };
   const profile = {
-    ...existing,
     provider: normalizeOptionalString(existing.provider) ?? "crabbox",
     install: existing.install === "npm" ? "npm" : "bundle",
     settings,
   };
   return {
-    patch: {
-      cloudWorkers: {
-        profiles: { ...profiles, [id]: profile },
-      },
-    },
+    patch: { cloudWorkers: { profiles: { [id]: profile } } },
+    replacePaths: clearSetupEnv
+      ? collectBaseArrayPaths(
+          existingSettings.setupEnv,
+          `cloudWorkers.profiles.${id}.settings.setupEnv`,
+        )
+      : [],
   };
 }
 
 export function buildCloudWorkerDeletePatch(
   config: Readonly<Record<string, unknown>>,
   profileId: string,
-): { patch: Record<string, unknown> } | { error: "profileMissing" } {
+): CloudWorkerConfigPatch | { error: "profileMissing" } {
   const profiles = profileRecords(config);
   if (!Object.hasOwn(profiles, profileId)) {
     return { error: "profileMissing" };
@@ -199,18 +218,19 @@ export function buildCloudWorkerDeletePatch(
   return {
     patch: {
       cloudWorkers: {
-        profiles: { ...profiles, [profileId]: null },
+        profiles: { [profileId]: null },
         ...(Object.keys(removedProjectProfiles).length > 0
           ? { projectProfiles: removedProjectProfiles }
           : {}),
       },
     },
+    replacePaths: collectBaseArrayPaths(profiles[profileId], `cloudWorkers.profiles.${profileId}`),
   };
 }
 
 export function cloudWorkerProfileStatus(
   profileId: string,
-  advertisedIds: ReadonlySet<string>,
+  advertisedIds: ReadonlySet<string> | ReadonlyMap<string, unknown>,
   catalogLoaded: boolean,
 ): CloudWorkerProfileStatus {
   if (!catalogLoaded) {

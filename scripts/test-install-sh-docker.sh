@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# Bash 5.3+ can deadlock writing heredoc pipes on macOS before the reader starts.
+if [[ ${OSTYPE:-} == darwin* && $BASH != /bin/bash ]] && ((BASH_VERSINFO[0] > 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 3))); then
+  exec /bin/bash "$0" "$@"
+fi
 set -euo pipefail
 
 HARNESS_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -118,7 +122,9 @@ const packJsonFile = process.argv[3];
 const raw = readFileSync(packJsonFile, "utf8") || "[]";
 const parsed = JSON.parse(raw);
 const budgetOverride = process.env.OPENCLAW_INSTALL_SMOKE_PACK_UNPACKED_BUDGET_BYTES;
-const budgetBytes = budgetOverride ? Number(budgetOverride) : 204 * 1024 * 1024;
+// Both bundled fs-safe loader layouts need all native targets (~31 MiB).
+// Include that payload while retaining the previous package-size headroom.
+const budgetBytes = budgetOverride ? Number(budgetOverride) : 235 * 1024 * 1024;
 if (!Number.isFinite(budgetBytes)) {
   throw new Error(
     `OPENCLAW_INSTALL_SMOKE_PACK_UNPACKED_BUDGET_BYTES must be numeric, got ${JSON.stringify(
@@ -329,6 +335,7 @@ INSTALL_SCRIPT_DOCKER_ARGS=(
 )
 
 for env_name in \
+  OPENCLAW_INSTALL_ALLOW_LEGACY_SAME_VERSION_APPLY \
   OPENCLAW_INSTALL_ALLOW_LEGACY_UPDATE_WARNING \
   OPENCLAW_INSTALL_SELF_UPDATE_WARNING_FIXED_VERSION \
   OPENCLAW_INSTALL_SMOKE_COMMAND_TIMEOUT \

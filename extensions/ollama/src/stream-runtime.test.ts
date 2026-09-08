@@ -424,6 +424,7 @@ describe("createConfiguredOllamaCompatStreamWrapper", () => {
           api: "ollama",
           provider,
           id,
+          input: ["text"],
           contextWindow,
           ...(reasoning === undefined ? {} : { reasoning }),
           ...(params ? { params } : {}),
@@ -535,6 +536,7 @@ describe("createConfiguredOllamaCompatStreamWrapper", () => {
           api: "ollama",
           provider: "ollama-spark",
           id: "ollama-spark/qwen3:32b",
+          input: ["text"],
           contextWindow: 131072,
         };
 
@@ -572,6 +574,7 @@ describe("createConfiguredOllamaCompatStreamWrapper", () => {
           api: "ollama",
           provider: "ollama",
           id: "qwen3:32b",
+          input: ["text"],
           contextWindow: 131072,
         };
 
@@ -661,16 +664,20 @@ describe("convertToOllamaMessages", () => {
     });
   });
 
-  it("converts assistant messages with toolCall content blocks", () => {
+  it("preserves assistant thinking alongside text and tool calls", () => {
     const result = convertAssistantContent([
+      { type: "thinking", thinking: "Check the directory.\n" },
+      { type: "thinking", thinking: "Then report its contents." },
+      { type: "thinking", thinking: "redacted reasoning", redacted: true },
       { type: "text", text: "Let me check." },
       { type: "toolCall", id: "call_1", name: "bash", arguments: { command: "ls" } },
     ]);
-    expect(requireEntry(result, 0, "first converted Ollama message").role).toBe("assistant");
-    expect(requireEntry(result, 0, "first converted Ollama message").content).toBe("Let me check.");
-    expect(requireEntry(result, 0, "first converted Ollama message").tool_calls).toEqual([
-      { id: "call_1", function: { name: "bash", arguments: { command: "ls" } } },
-    ]);
+    expect(requireEntry(result, 0, "first converted Ollama message")).toEqual({
+      role: "assistant",
+      content: "Let me check.",
+      thinking: "Check the directory.\nThen report its contents.",
+      tool_calls: [{ id: "call_1", function: { name: "bash", arguments: { command: "ls" } } }],
+    });
   });
 
   it("preserves assistant tool-call ids before Ollama replay", () => {
@@ -802,15 +809,21 @@ describe("convertToOllamaMessages", () => {
     expect(result).toEqual([{ role: "tool", content: "file1.txt\nfile2.txt" }]);
   });
 
-  it("preserves significant boundary whitespace in tool results", () => {
+  it.each([
+    "  indented\n",
+    `${"file row with significant trailing spaces   \n".repeat(370)}😀\n[Use offset=225 to continue.]\n`,
+  ])("preserves producer-budgeted tool text and continuation on the Ollama wire: %#", (text) => {
     const result = convertToOllamaMessages([
       {
         role: "toolResult",
         toolCallId: "call_ws",
-        content: [{ type: "text", text: "  indented\n" }],
+        toolName: "read",
+        content: [{ type: "text", text }],
       },
     ]);
-    expect(result).toEqual([{ role: "tool", content: "  indented\n", tool_call_id: "call_ws" }]);
+    expect(result).toEqual([
+      { role: "tool", content: text, tool_call_id: "call_ws", tool_name: "read" },
+    ]);
   });
 
   it("converts SDK 'toolResult' role to Ollama 'tool' role", () => {
@@ -1193,7 +1206,54 @@ describe("buildAssistantMessage", () => {
       },
     );
     const result = buildAssistantMessage(response, modelInfo);
-    expect(result.usage.cacheTelemetry).toEqual({ state: "unavailable" });
+    expect(result.usage).toMatchObject({
+      input: 10,
+      output: 2,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 12,
+      cacheTelemetry: { state: "unavailable" },
+    });
+  });
+
+  it("records an available zero cache read when Ollama reports it", () => {
+    const response = createAssistantResponse(
+      { content: "ok" },
+      {
+        prompt_eval_count: 10,
+        prompt_eval_cached_count: 0,
+        eval_count: 2,
+      },
+    );
+    const result = buildAssistantMessage(response, modelInfo);
+    expect(result.usage).toMatchObject({
+      input: 10,
+      output: 2,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 12,
+      cacheTelemetry: { state: "available" },
+    });
+  });
+
+  it("separates cached prompt tokens from uncached input without changing the total", () => {
+    const response = createAssistantResponse(
+      { content: "ok" },
+      {
+        prompt_eval_count: 10,
+        prompt_eval_cached_count: 6,
+        eval_count: 2,
+      },
+    );
+    const result = buildAssistantMessage(response, modelInfo);
+    expect(result.usage).toMatchObject({
+      input: 4,
+      output: 2,
+      cacheRead: 6,
+      cacheWrite: 0,
+      totalTokens: 12,
+      cacheTelemetry: { state: "available" },
+    });
   });
 });
 
@@ -1660,7 +1720,7 @@ async function createOllamaTestStream(params: {
   defaultHeaders?: Record<string, string>;
   model?: Record<string, unknown>;
   context?: Record<string, unknown>;
-  options?: Parameters<ReturnType<typeof createOllamaStreamFn>>[2];
+  options?: Parameters<ReturnType<typeof createOllamaStreamFn>>[2] & Record<string, unknown>;
 }) {
   const streamFn = createOllamaStreamFn(params.baseUrl, params.defaultHeaders);
   return streamFn(
@@ -1668,6 +1728,7 @@ async function createOllamaTestStream(params: {
       id: "qwen3:32b",
       api: "ollama",
       provider: "custom-ollama",
+      input: ["text"],
       contextWindow: 131072,
       ...params.model,
     } as unknown as Parameters<typeof streamFn>[0],
@@ -1707,6 +1768,7 @@ async function createManagedOllamaTestStream(params: {
       id: "qwen3:32b",
       api: "ollama",
       provider: params.providerId ?? "custom-ollama",
+      input: ["text"],
       contextWindow: 131072,
       ...params.model,
     } as unknown as Parameters<typeof streamFn>[0],
@@ -1864,7 +1926,7 @@ describe("createOllamaStreamFn streaming events", () => {
     fetchWithSsrFGuardMock.mockResolvedValue({
       response: new Response("rate limited", {
         status: 429,
-        headers: { "Retry-After": "30" },
+        headers: { "Content-Type": "text/plain;charset=UTF-8", "Retry-After": "30" },
       }),
       release: vi.fn(async () => undefined),
     });
@@ -2172,7 +2234,7 @@ describe("createOllamaStreamFn streaming events", () => {
       ],
       {
         baseUrl: "http://ollama-host:11434",
-        model: { id: "llava" },
+        model: { id: "llava", input: ["text", "image"] },
         context: {
           messages: [{ role: "user", content: [{ type: "image", data: "a".repeat(400) }] }],
         },
@@ -2856,6 +2918,107 @@ describe("createOllamaStreamFn streaming events", () => {
 });
 
 describe("createOllamaStreamFn", () => {
+  it.each([
+    {
+      input: ["text"],
+      expectedUserImages: undefined,
+      expectedToolImages: undefined,
+      expectsOmissionMarkers: true,
+    },
+    {
+      input: ["text", "image"],
+      expectedUserImages: ["dXNlci1pbWFnZQ=="],
+      expectedToolImages: ["dG9vbC1pbWFnZQ=="],
+      expectsOmissionMarkers: false,
+    },
+  ])("projects historical images for model input $input", async (testCase) => {
+    const context = {
+      messages: [
+        {
+          role: "user",
+          content: [
+            { type: "text", text: "user caption" },
+            { type: "image", mimeType: "image/png", data: "dXNlci1pbWFnZQ==" },
+          ],
+        },
+        {
+          role: "toolResult",
+          toolCallId: "call_inspect",
+          toolName: "view_image",
+          content: [
+            { type: "text", text: "tool caption" },
+            { type: "image", mimeType: "image/png", data: "dG9vbC1pbWFnZQ==" },
+          ],
+        },
+      ],
+    };
+    await expectSuccessfulOllamaRequest(
+      {
+        baseUrl: "http://ollama-host:11434",
+        model: { input: testCase.input },
+        context,
+      },
+      ({ body }) => {
+        const messages = body.messages as Array<Record<string, unknown>>;
+        expect(messages[0]?.images).toEqual(testCase.expectedUserImages);
+        expect(messages[1]?.images).toEqual(testCase.expectedToolImages);
+        expect(messages[0]?.content).toContain("user caption");
+        expect(messages[1]?.content).toContain("tool caption");
+        expect(
+          String(messages[0]?.content).includes("(image omitted: model does not support images)"),
+        ).toBe(testCase.expectsOmissionMarkers);
+        expect(
+          String(messages[1]?.content).includes(
+            "(tool image omitted: model does not support images)",
+          ),
+        ).toBe(testCase.expectsOmissionMarkers);
+        expect(messages[1]?.tool_call_id).toBe("call_inspect");
+      },
+    );
+    expect(JSON.stringify(context)).toContain("dXNlci1pbWFnZQ==");
+    expect(JSON.stringify(context)).toContain("dG9vbC1pbWFnZQ==");
+  });
+
+  it.each([
+    {
+      name: "preserves local history by default",
+      baseUrl: "http://ollama-host:11434",
+      model: {},
+      expected: false,
+    },
+    {
+      name: "preserves explicit native history settings",
+      baseUrl: "http://ollama-host:11434",
+      model: { params: { truncate: true, shift: true } },
+      expected: true,
+    },
+    {
+      name: "leaves hosted history settings to the server",
+      baseUrl: "https://ollama.com",
+      model: {},
+      expected: undefined,
+    },
+    {
+      name: "preserves cloud-provider routing through a custom proxy",
+      baseUrl: "https://proxy.example.test",
+      model: { provider: "ollama-cloud", id: "glm-5.2" },
+      expected: undefined,
+    },
+    {
+      name: "leaves locally proxied cloud history settings to the server",
+      baseUrl: "http://ollama-host:11434",
+      model: { id: "qwen3:32b-cloud" },
+      expected: undefined,
+    },
+  ])("$name", async ({ baseUrl, model, expected }) => {
+    await expectSuccessfulOllamaRequest({ baseUrl, model }, ({ body }) => {
+      expect(body.truncate).toBe(expected);
+      expect(body.shift).toBe(expected);
+      expect(requireOptionalRecord(body.options)?.truncate).toBeUndefined();
+      expect(requireOptionalRecord(body.options)?.shift).toBeUndefined();
+    });
+  });
+
   it("normalizes /v1 baseUrl and maps maxTokens + signal", async () => {
     const signal = new AbortController().signal;
     await expectSuccessfulOllamaRequest(
@@ -3035,6 +3198,49 @@ describe("createOllamaStreamFn", () => {
     );
   });
 
+  it("keeps serialized native Ollama tools stable when discovery order changes", async () => {
+    const tools = [
+      {
+        name: "write",
+        description: "Write a file",
+        parameters: {
+          type: "object",
+          properties: { content: { type: "string" } },
+        },
+      },
+      {
+        name: "read",
+        description: "Read a file",
+        parameters: {
+          type: "object",
+          properties: { path: { type: "string" } },
+        },
+      },
+    ];
+    const serializedTools: string[] = [];
+    for (const orderedTools of [tools, tools.toReversed()]) {
+      fetchWithSsrFGuardMock.mockClear();
+      await expectSuccessfulOllamaRequest(
+        {
+          baseUrl: "http://ollama-host:11434",
+          context: {
+            messages: [{ role: "user", content: "hello" }],
+            tools: orderedTools,
+          },
+        },
+        ({ body }) => {
+          expect(body.tools).toHaveLength(2);
+          expect(body.tools).toEqual(
+            expect.arrayContaining(tools.map((tool) => ({ type: "function", function: tool }))),
+          );
+          serializedTools.push(JSON.stringify(body.tools));
+        },
+      );
+    }
+    expect(serializedTools[1]).toBe(serializedTools[0]);
+    expect(tools.map((tool) => tool.name)).toEqual(["write", "read"]);
+  });
+
   it("lets native Ollama tools win over responseFormat", async () => {
     await expectSuccessfulOllamaRequest(
       {
@@ -3126,9 +3332,58 @@ describe("createOllamaStreamFn", () => {
 
   it.each([
     {
+      name: "applies native Ollama runtime sampling overrides",
+      options: { topP: 0.7, seed: 42, frequencyPenalty: -0.5, presencePenalty: 1.25 },
+      expected: { top_p: 0.7, seed: 42, frequency_penalty: -0.5, presence_penalty: 1.25 },
+    },
+    {
+      name: "preserves zero native Ollama runtime sampling overrides",
+      options: { topP: 0, seed: 0, frequencyPenalty: 0, presencePenalty: 0 },
+      expected: { top_p: 0, seed: 0, frequency_penalty: 0, presence_penalty: 0 },
+    },
+    {
+      name: "preserves native Ollama model sampling defaults without runtime overrides",
+      options: {
+        topP: undefined,
+        seed: undefined,
+        frequencyPenalty: undefined,
+        presencePenalty: undefined,
+      },
+      expected: { top_p: 0.9, seed: 7, frequency_penalty: 0.5, presence_penalty: 0.75 },
+    },
+  ])("$name", async ({ options, expected }) => {
+    await expectSuccessfulOllamaRequest(
+      {
+        baseUrl: "http://ollama-host:11434",
+        model: {
+          params: {
+            temperature: 0.8,
+            top_p: 0.9,
+            seed: 7,
+            frequency_penalty: 0.5,
+            presence_penalty: 0.75,
+          },
+        },
+        options,
+      },
+      ({ body }) => {
+        expect(body.options).toMatchObject(expected);
+      },
+    );
+  });
+
+  it.each([
+    {
       name: "sets top_p=1 for native Ollama greedy sampling requests",
       params: { num_ctx: 4096, top_p: 0.9, thinking: false },
       temperature: 0,
+      expectedTopP: 1,
+    },
+    {
+      name: "normalizes runtime topP for native Ollama greedy sampling requests",
+      params: { top_p: 0.9 },
+      temperature: 0,
+      topP: 0.6,
       expectedTopP: 1,
     },
     {
@@ -3143,9 +3398,9 @@ describe("createOllamaStreamFn", () => {
       temperature: 0.2,
       expectedTopP: 0.9,
     },
-  ])("$name", async ({ params, temperature, expectedTopP }) => {
+  ])("$name", async ({ params, temperature, topP, expectedTopP }) => {
     await expectSuccessfulOllamaRequest(
-      { baseUrl: "http://ollama-host:11434", model: { params }, options: { temperature } },
+      { baseUrl: "http://ollama-host:11434", model: { params }, options: { temperature, topP } },
       ({ body }) => {
         const options = requireRecord(body.options, "Ollama sampling options");
         expect(options.temperature).toBe(temperature);
@@ -3483,6 +3738,7 @@ describe("createConfiguredOllamaStreamFn", () => {
               id: "qwen3:32b",
               api: "ollama",
               provider: "ollama-gpu",
+              input: ["text"],
               contextWindow: 131072,
             } as never,
             { messages: [{ role: "user", content: "hello" }] } as never,
@@ -3519,6 +3775,7 @@ describe("createConfiguredOllamaStreamFn", () => {
               id: "qwen3:32b",
               api: "ollama",
               provider: "ollama-gpu",
+              input: ["text"],
               contextWindow: 131072,
             } as never,
             { messages: [{ role: "user", content: "hello" }] } as never,
@@ -3554,6 +3811,7 @@ describe("createConfiguredOllamaStreamFn", () => {
               id: "qwen3:32b",
               api: "ollama",
               provider: "custom-ollama",
+              input: ["text"],
               contextWindow: 131072,
             } as never,
             {

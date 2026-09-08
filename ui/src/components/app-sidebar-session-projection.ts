@@ -31,7 +31,7 @@ type SidebarProjectionInput = {
   catalogIds?: readonly string[];
   sectionOrder?: readonly string[];
   collapsedSections: ReadonlySet<string>;
-  hideEmptyOwnerFilteredGroup: (category: string | undefined, rowCount: number) => boolean;
+  hideEmptyGroups: boolean;
   visibleSessionLimits: ReadonlyMap<string, number>;
   sortMode: SidebarSessionSortMode;
   statusFilter: SidebarSessionStatusFilter;
@@ -174,9 +174,9 @@ export class SidebarSessionProjection {
     };
     this.previousCollapsedSections = new Set(input.collapsedSections);
 
-    const retainedKeys = new Set<string>();
+    const staleKeys = new Set([...this.childModes.keys(), ...this.heldSubtitles.keys()]);
     const observeTree = (session: SidebarRecentSession) => {
-      retainedKeys.add(session.key);
+      staleKeys.delete(session.key);
       if (session.containsActiveDescendant && !this.childModes.has(session.key)) {
         this.childModes.set(session.key, "expanded");
       }
@@ -186,15 +186,9 @@ export class SidebarSessionProjection {
       }
     };
     input.rows.forEach(observeTree);
-    for (const key of this.childModes.keys()) {
-      if (!retainedKeys.has(key)) {
-        this.childModes.delete(key);
-      }
-    }
-    for (const key of this.heldSubtitles.keys()) {
-      if (!retainedKeys.has(key)) {
-        this.heldSubtitles.delete(key);
-      }
+    for (const key of staleKeys) {
+      this.childModes.delete(key);
+      this.heldSubtitles.delete(key);
     }
 
     const { grouping, knownGroups, selfOwnerId, sectionOrder, catalogIds } = input;
@@ -207,7 +201,7 @@ export class SidebarSessionProjection {
     }).filter(
       (section) =>
         section.id !== "pinned" &&
-        !input.hideEmptyOwnerFilteredGroup(section.category, section.rows.length),
+        !(input.hideEmptyGroups && section.category && section.rows.length === 0),
     );
     const sectionIds = new Set<string>(sections.map((section) => section.id));
     for (const sectionId of this.stickySections.keys()) {
@@ -219,9 +213,14 @@ export class SidebarSessionProjection {
     // Coding does not render, while empty custom/Groups sections remain targets.
     // Headerless means no collapse control, so a stored ungrouped-collapsed
     // preference is deliberately inert here; it re-applies once a peer returns.
-    const ungroupedHasPeerHeader = sections.some(
-      (section) => section.id !== "ungrouped" && (section.id !== "work" || section.rows.length > 0),
-    );
+    // Flat mode ("none") holds every native row, so its "Other" label would
+    // lie; it stays headerless even beside catalog sections.
+    const ungroupedHasPeerHeader =
+      input.grouping !== "none" &&
+      sections.some(
+        (section) =>
+          section.id !== "ungrouped" && (section.id !== "work" || section.rows.length > 0),
+      );
     const expandedRows: SidebarRecentSession[] = [];
     const visibleRows: SidebarRecentSession[] = [];
     const limitedSections: SidebarVisibleSections["sections"] = [];
@@ -244,9 +243,10 @@ export class SidebarSessionProjection {
       if (!collapsed) {
         expandedRows.push(...section.rows);
         let optionalSlots = Math.max(0, visibleLimit - requiredRowCount);
+        let retainedSlots = visibleLimit;
         const sticky = this.stickySections.get(section.id);
-        // Union after normal paging keeps newly sorted rows visible without
-        // evicting rows the operator already saw before a run-state transition.
+        // Keep one prior page through run-state and recency changes. An unbounded
+        // union eventually renders the entire roster without a Show more action.
         section.rows = section.rows.filter((row) => {
           if (row.active || row.pinned) {
             return true;
@@ -255,7 +255,11 @@ export class SidebarSessionProjection {
             optionalSlots -= 1;
             return true;
           }
-          return sticky?.has(row.key) === true;
+          if (retainedSlots === 0 || !sticky?.has(row.key)) {
+            return false;
+          }
+          retainedSlots -= 1;
+          return true;
         });
         this.stickySections.set(section.id, new Set(section.rows.map((row) => row.key)));
         visibleRows.push(...section.rows);
@@ -345,6 +349,9 @@ export class SidebarSessionProjection {
     } satisfies SidebarSubtitleParams;
     const value = resolveSidebarSessionSubtitle(params);
     if (!value.subtitle) {
+      if (session.attention.kind === "question") {
+        this.heldSubtitles.delete(session.key);
+      }
       // Transient gaps between event updates keep the last shown line; the
       // hold dies with the run (the hasActiveRun branch above).
       return;

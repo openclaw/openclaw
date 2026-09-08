@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { GatewayRequestError } from "../../api/gateway.ts";
 import { BROWSER_ANNOTATION_EVENT, type BrowserAnnotationEvent } from "./browser-annotation.ts";
 import {
   createBrowserClient,
@@ -59,6 +60,7 @@ describe("BrowserPanelController tab and lifecycle ownership", () => {
     async (completion) => {
       stubScreenshotMedia();
       const previousCapture = createDeferred<unknown>();
+      const captureStarted = createDeferred();
       const openedTab = createDeferred<ReturnType<typeof createBrowserPanelTestTab>>();
       const activeUrl = "https://example.test/active";
       const newUrl = "https://example.test/new";
@@ -74,6 +76,7 @@ describe("BrowserPanelController tab and lifecycle ownership", () => {
         }
         if (envelope.path === "/screenshot") {
           if (envelope.body?.targetId === "active-tab") {
+            captureStarted.resolve();
             return await previousCapture.promise;
           }
           return { path: "/fresh.png", targetId: "raw-new", url: newUrl };
@@ -87,7 +90,7 @@ describe("BrowserPanelController tab and lifecycle ownership", () => {
       const previousView = controller.view;
 
       const capture = controller.refreshAll();
-      await flushBrowserResponses();
+      await captureStarted.promise;
       const opening = controller.openUrl(newUrl, { newTab: true });
       expect(controller.loading).toBe(true);
       expect(controller.view).toBe(previousView);
@@ -140,14 +143,22 @@ describe("BrowserPanelController tab and lifecycle ownership", () => {
     const pendingNavigation = controller.openUrl("https://example.test/rejected", {
       newTab: false,
     });
-    navigation.reject(new Error("Navigation rejected"));
+    navigation.reject(
+      new GatewayRequestError({
+        code: "UNAVAILABLE",
+        message: "Navigation rejected",
+        details: { reason: "navigation_blocked" },
+      }),
+    );
     await pendingNavigation;
     previousCapture.resolve({ path: "/old.png", targetId: "raw-stable", url: initialUrl });
     await pendingCapture;
 
     expect(controller.activeTargetId).toBe("stable-tab");
     expect(controller.view).toBe(previousView);
-    expect(controller.errorText).toBe("Browser request failed: Navigation rejected");
+    expect(controller.errorText).toBe(
+      "Browser request failed: The current browser navigation rules block this address. Select another tab or enter an allowed address.",
+    );
     expect(controller.loading).toBe(false);
   });
 
@@ -876,7 +887,7 @@ describe("BrowserPanelController tab and lifecycle ownership", () => {
 
       host.open = false;
       host.client = replacement.client;
-      controller.synchronizeHostProperties(new Map([["client", previous.client]]));
+      controller.synchronizeClient();
       host.open = true;
       controller.activeTargetId = "tab-b";
       controller.view = createView("tab-b");

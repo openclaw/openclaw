@@ -14,7 +14,7 @@ import type {
   SessionWorkspaceHost,
   SessionWorkspaceState,
 } from "./chat-session-workspace-types.ts";
-import type { SidebarContent } from "./chat-sidebar.ts";
+import type { SidebarSelection } from "./chat-sidebar.ts";
 
 function resolvePaneAgent(state: SessionScopeHostWithKey): string {
   const normalizedKey = normalizeOptionalString(state.sessionKey)?.toLowerCase();
@@ -45,18 +45,18 @@ export function clearSessionWorkspaceTimers(state: SessionWorkspaceHost) {
 
 const checkoutSidebarContents = new WeakSet<object>();
 
-export function trackSessionCheckoutSidebar(content: SidebarContent) {
+export function trackSessionCheckoutSidebar(content: SidebarSelection) {
   checkoutSidebarContents.add(content);
 }
 
-export function openSessionCheckoutSidebar(state: SessionWorkspaceHost, content: SidebarContent) {
+export function openSessionCheckoutSidebar(state: SessionWorkspaceHost, content: SidebarSelection) {
   trackSessionCheckoutSidebar(content);
   state.handleOpenSidebar(content);
 }
 
 function clearSessionCheckoutSidebar(state: SessionWorkspaceHost) {
   if (state.sidebarContent && checkoutSidebarContents.has(state.sidebarContent)) {
-    state.handleOpenSidebar(null);
+    state.sidebarContent = null;
   }
 }
 
@@ -179,11 +179,6 @@ export function loadSessionWorkspace(
     } finally {
       if (isCurrentSessionWorkspace(state, workspace)) {
         workspace.loading = false;
-        const reload = workspace.pendingReload;
-        workspace.pendingReload = false;
-        if (reload) {
-          loadSessionWorkspace(state, workspace);
-        }
       }
       requestWorkspaceUpdate(state);
     }
@@ -191,7 +186,10 @@ export function loadSessionWorkspace(
 }
 
 /** Refresh workspace facts after a run, which may have created a git checkout. */
-export function refreshSessionWorkspaceState(state: SessionWorkspaceHost): boolean {
+export function refreshSessionWorkspaceState(
+  state: SessionWorkspaceHost,
+  refreshFiles: boolean,
+): boolean {
   const workspace = state.sessionWorkspaceState;
   if (!workspace || workspace.sessionKey !== state.sessionKey) {
     return false;
@@ -199,6 +197,10 @@ export function refreshSessionWorkspaceState(state: SessionWorkspaceHost): boole
   const diffOpen =
     workspace.diffContent !== undefined && state.sidebarContent === workspace.diffContent;
   delete workspace.diffContent;
+  if (!refreshFiles) {
+    workspace.pendingReload = true;
+    return diffOpen;
+  }
   if (workspace.loading) {
     workspace.pendingReload = true;
   } else {
@@ -208,7 +210,7 @@ export function refreshSessionWorkspaceState(state: SessionWorkspaceHost): boole
 }
 
 /** Retire facts owned by one checkout without disturbing panel layout or retained drafts. */
-export function retireSessionWorkspaceCheckout(state: SessionWorkspaceHost, presented = true) {
+export function retireSessionWorkspaceCheckout(state: SessionWorkspaceHost) {
   const current = state.sessionWorkspaceState;
   if (!current || current.sessionKey !== state.sessionKey) {
     return;
@@ -217,8 +219,5 @@ export function retireSessionWorkspaceCheckout(state: SessionWorkspaceHost, pres
   clearWorkspaceTimer(current);
   const next = createSessionWorkspaceState(state, current);
   state.sessionWorkspaceState = next;
-  if (presented && state.client && state.connected) {
-    loadSessionWorkspace(state, next);
-  }
   requestWorkspaceUpdate(state);
 }

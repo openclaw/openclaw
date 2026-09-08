@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
   callGateway: vi.fn(),
   collectChannelStatusIssues: vi.fn(),
   buildChannelsTable: vi.fn(),
+  applyLoggingConfig: vi.fn(),
 }));
 
 vi.mock("../plugins/channel-plugin-ids.js", () => ({
@@ -37,6 +38,10 @@ vi.mock("../config/config.js", () => ({
 
 vi.mock("../infra/os-summary.js", () => ({
   resolveOsSummary: mocks.resolveOsSummary,
+}));
+
+vi.mock("../logging/logger.js", () => ({
+  applyLoggingConfig: mocks.applyLoggingConfig,
 }));
 
 vi.mock("./status.scan.bootstrap-shared.js", () => ({
@@ -95,6 +100,8 @@ describe("collectStatusScanOverview", () => {
     mocks.getStatusCommandSecretTargetIds.mockReturnValue([]);
     mocks.readCommandConfigSnapshot.mockResolvedValue({
       snapshot: {
+        path: "/tmp/openclaw.json",
+        exists: true,
         valid: true,
         runtimeConfig: { session: {} },
         sourceConfig: { session: { raw: true } },
@@ -137,7 +144,17 @@ describe("collectStatusScanOverview", () => {
     });
     mocks.callGateway.mockImplementation(async ({ method }: { method?: string }) =>
       method === "status"
-        ? { degradedSecretOwners: [], degradedPlugins: [] }
+        ? {
+            secretEgressProxy: {
+              state: "degraded",
+              caExpiresAt: "2036-09-01T00:00:00.000Z",
+              failedCertificates: 1,
+              message: "Check OpenSSL, then retry.",
+            },
+            degradedSecretOwners: [],
+            degradedPlugins: [],
+            startupMigrationWarning: "Retained legacy state; run openclaw doctor --fix.",
+          }
         : { channelAccounts: {} },
     );
     mocks.collectChannelStatusIssues.mockReturnValue([{ channel: "quietchat", message: "boom" }]);
@@ -152,6 +169,9 @@ describe("collectStatusScanOverview", () => {
       useGatewayCallOverridesForChannelsStatus: true,
     });
 
+    expect(result.runtimeDegradation?.secretEgressProxy?.message).toBe(
+      "Check OpenSSL, then retry.",
+    );
     expect(mocks.readCommandConfigSnapshot).toHaveBeenCalledOnce();
     expect(mocks.callGateway).toHaveBeenCalledTimes(2);
     const channelsRequest = gatewayRequest("channels.status");
@@ -164,6 +184,9 @@ describe("collectStatusScanOverview", () => {
     expect(channelTableCall?.[1]?.showSecrets).toBe(false);
     expect(channelTableCall?.[1]?.sourceConfig).toStrictEqual({ session: { raw: true } });
     expect(result.channelIssues).toEqual([{ channel: "quietchat", message: "boom" }]);
+    expect(result.runtimeDegradation?.startupMigrationWarning).toBe(
+      "Retained legacy state; run openclaw doctor --fix.",
+    );
   });
 
   it("can keep channel overview on metadata-only status paths", async () => {

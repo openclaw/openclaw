@@ -22,7 +22,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { logWarn } from "../logger.js";
 import { isTestDefaultMemorySlotDisabled } from "../plugins/config-state.js";
 import { defaultSlotIdForKey } from "../plugins/slots.js";
-import { getPluginToolMeta } from "../plugins/tools.js";
+import { getPluginToolMeta } from "../plugins/tool-metadata.js";
 import {
   AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE,
   isAgentHarnessSessionKey,
@@ -177,6 +177,8 @@ type InvokeGatewayToolParams = {
   agentTo?: string;
   agentThreadId?: string;
   authenticatedUserProfile?: GatewayClient["authenticatedUserProfile"];
+  /** Host-minted authority from the calling connection; never derived from wire params. */
+  operatorRoleActor?: NonNullable<GatewayClient["internal"]>["operatorRoleActor"];
   operatorScopes?: readonly string[];
   senderIsOwner?: boolean;
   clientCaps?: string[];
@@ -248,11 +250,10 @@ async function invokeGatewayToolWithSignal(
   const authenticatedUserProfile = params.cfg.gateway?.roles
     ? params.authenticatedUserProfile
     : undefined;
+  // HTTP and RPC auth boundaries supply authority independently of profile attribution.
   const client = createSyntheticPluginRuntimeClient({
     ...(authenticatedUserProfile ? { authenticatedUserProfile } : {}),
-    ...(params.senderIsOwner && !authenticatedUserProfile
-      ? { operatorRoleActor: { kind: "system" as const } }
-      : {}),
+    operatorRoleActor: params.operatorRoleActor,
     scopes: params.senderIsOwner ? [ADMIN_SCOPE] : [...(params.operatorScopes ?? [])],
   });
   const primarySessionAuthorizationError = authorizeResolvedSessionMutation({
@@ -307,7 +308,7 @@ async function invokeGatewayToolWithSignal(
       (!existingTarget
         ? authorizeGatewaySessionCreation({
             cfg: params.cfg,
-            profileId: authenticatedUserProfile.profileId,
+            client,
             agentId: targetAgentId,
           })
         : null);
@@ -425,7 +426,11 @@ async function invokeGatewayToolWithSignal(
       await gatewayTool.execute?.(toolCallId, hookResult.params, params.signal);
     const result = authenticatedUserProfile
       ? await withOperatorToolGatewayAuthority(
-          { authenticatedUserProfile, scopes: params.operatorScopes ?? [] },
+          {
+            authenticatedUserProfile,
+            operatorRoleActor: params.operatorRoleActor,
+            scopes: params.operatorScopes ?? [],
+          },
           executeTool,
         )
       : await executeTool();

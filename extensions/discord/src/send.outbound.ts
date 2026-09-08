@@ -1,9 +1,7 @@
-// Discord plugin module implements send.outbound behavior.
 import type { APIChannel, APIGuildForumChannel, APIGuildMediaChannel } from "discord-api-types/v10";
 import { ChannelType } from "discord-api-types/v10";
 import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runtime";
 import type { MarkdownTableMode, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import type { OutboundMediaAccess, PollInput } from "openclaw/plugin-sdk/media-runtime";
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { resolveChunkMode, type ChunkMode } from "openclaw/plugin-sdk/reply-chunking";
@@ -11,8 +9,8 @@ import type { RetryConfig } from "openclaw/plugin-sdk/retry-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { createChannelMessage, createThread, type RequestClient } from "./internal/discord.js";
-import { renderDiscordMarkdown } from "./markdown.js";
 import { rewriteDiscordKnownMentions } from "./mentions.js";
+import { prepareDiscordOutboundText } from "./outbound-text.js";
 import { parseAndResolveChannelRecipient } from "./recipient-resolution.js";
 import {
   createReusableDiscordReplyReference,
@@ -71,6 +69,8 @@ type DiscordSendOpts = {
   onDeliveryResult?: (result: DiscordSendResult) => Promise<void> | void;
   /** @internal Refresh durable custody immediately before Discord REST I/O. */
   onPlatformSendDispatch?: () => Promise<void>;
+  /** @internal Synchronously fence custody after refresh and immediately before Discord REST I/O. */
+  assertPlatformSendAuthorized?: () => void;
 };
 
 type DiscordClientRequest = ReturnType<typeof createDiscordClient>["request"];
@@ -94,6 +94,7 @@ async function sendDiscordThreadTextChunks(params: {
   allowedMentions?: DiscordAllowedMentions;
   onResult?: DiscordSendProgress;
   onPlatformSendDispatch?: () => Promise<void>;
+  assertPlatformSendAuthorized?: () => void;
 }): Promise<void> {
   for (const chunk of params.chunks) {
     await sendDiscordText({
@@ -109,6 +110,7 @@ async function sendDiscordThreadTextChunks(params: {
       maxChars: params.maxChars,
       onResult: params.onResult,
       onPlatformSendDispatch: params.onPlatformSendDispatch,
+      assertPlatformSendAuthorized: params.assertPlatformSendAuthorized,
     });
   }
 }
@@ -178,12 +180,6 @@ export async function sendMessageDiscord(
 ): Promise<DiscordSendResult> {
   const cfg = requireRuntimeConfig(opts.cfg, "Discord send");
   const { token, rest, request, account: accountInfo } = createDiscordClient({ ...opts, cfg });
-  const tableMode = resolveMarkdownTableMode({
-    cfg,
-    channel: "discord",
-    accountId: accountInfo.accountId,
-  });
-  const effectiveTableMode = opts.tableMode ?? tableMode;
   const chunkMode = opts.chunkMode ?? resolveChunkMode(cfg, "discord", accountInfo.accountId);
   const maxLinesPerMessage = opts.maxLinesPerMessage ?? accountInfo.config.maxLinesPerMessage;
   const suppressEmbeds = resolveDiscordSuppressEmbeds({
@@ -198,10 +194,10 @@ export async function sendMessageDiscord(
     typeof accountInfo.config.mediaMaxMb === "number"
       ? accountInfo.config.mediaMaxMb * 1024 * 1024
       : DEFAULT_DISCORD_MEDIA_MAX_MB * 1024 * 1024;
-  const renderedText = renderDiscordMarkdown(text ?? "", effectiveTableMode);
-  const textWithMentions = rewriteDiscordKnownMentions(renderedText, {
-    accountId: accountInfo.accountId,
-    mentionAliases: accountInfo.config.mentionAliases,
+  const { renderedText, textWithMentions } = prepareDiscordOutboundText(text ?? "", {
+    cfg,
+    account: accountInfo,
+    tableMode: opts.tableMode,
   });
   const recipient = await parseAndResolveChannelRecipient(to, cfg, accountInfo.accountId);
   const { channelId } = await resolveChannelId(rest, recipient, request);
@@ -256,6 +252,7 @@ export async function sendMessageDiscord(
       threadRes = (await request(
         async () => {
           await opts.onPlatformSendDispatch?.();
+          opts.assertPlatformSendAuthorized?.();
           return createThread<{ id: string; message?: { id: string; channel_id: string } }>(
             rest,
             channelId,
@@ -323,6 +320,7 @@ export async function sendMessageDiscord(
           maxChars: textLimit,
           onResult: reportResult,
           onPlatformSendDispatch: opts.onPlatformSendDispatch,
+          assertPlatformSendAuthorized: opts.assertPlatformSendAuthorized,
         });
         await sendDiscordThreadTextChunks({
           rest,
@@ -337,6 +335,7 @@ export async function sendMessageDiscord(
           allowedMentions: opts.allowedMentions,
           onResult: reportResult,
           onPlatformSendDispatch: opts.onPlatformSendDispatch,
+          assertPlatformSendAuthorized: opts.assertPlatformSendAuthorized,
         });
       } else {
         await sendDiscordThreadTextChunks({
@@ -352,6 +351,7 @@ export async function sendMessageDiscord(
           allowedMentions: opts.allowedMentions,
           onResult: reportResult,
           onPlatformSendDispatch: opts.onPlatformSendDispatch,
+          assertPlatformSendAuthorized: opts.assertPlatformSendAuthorized,
         });
       }
     } catch (err) {
@@ -400,6 +400,7 @@ export async function sendMessageDiscord(
         maxChars: textLimit,
         onResult: reportResult,
         onPlatformSendDispatch: opts.onPlatformSendDispatch,
+        assertPlatformSendAuthorized: opts.assertPlatformSendAuthorized,
       });
     } else {
       result = await sendDiscordText({
@@ -418,6 +419,7 @@ export async function sendMessageDiscord(
         maxChars: textLimit,
         onResult: reportResult,
         onPlatformSendDispatch: opts.onPlatformSendDispatch,
+        assertPlatformSendAuthorized: opts.assertPlatformSendAuthorized,
       });
     }
   } catch (err) {
@@ -436,8 +438,7 @@ export async function sendMessageDiscord(
     direction: "outbound",
   });
   return {
-    messageId: result.id || "unknown",
-    channelId: result.channel_id ?? channelId,
+    ...toDiscordSendResult(result, channelId),
     receipt: createDiscordSendReceiptFromResults({ results: deliveredResults }),
   };
 }
@@ -498,8 +499,8 @@ async function resolveDiscordStructuredSendContext(
     channelId,
     account: accountInfo,
   } = await resolveDiscordSendTarget(to, opts);
-  const content = opts.content?.trim();
-  const rewrittenContent = content
+  const content = opts.content;
+  const rewrittenContent = content?.trim()
     ? rewriteDiscordKnownMentions(content, {
         accountId: accountInfo.accountId,
         mentionAliases: accountInfo.config.mentionAliases,
@@ -510,6 +511,7 @@ async function resolveDiscordStructuredSendContext(
       const result = (await request(
         async () => {
           await opts.onPlatformSendDispatch?.();
+          opts.assertPlatformSendAuthorized?.();
           return createChannelMessage<{ id: string; channel_id: string }>(rest, channelId, {
             body,
           });

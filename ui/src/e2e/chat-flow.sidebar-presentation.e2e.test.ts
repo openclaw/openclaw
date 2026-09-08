@@ -1,51 +1,48 @@
-import { mkdir } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
+import {
+  takeControlUiElementScreenshot,
+  takeControlUiViewportScreenshot,
+} from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   captureUiProofEnabled,
   chatSessionListResponse,
   createChatFlowE2eSuite,
   expectDefined,
   expectRequestCountStable,
+  controlUiSessionUrl,
   installMockGateway,
   pauseVirtualClock,
   requireRecord,
 } from "./chat-flow.test-support.ts";
+import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
-const terminalMetadataProofDir = path.join(
-  process.cwd(),
-  ".artifacts",
-  "control-ui-e2e",
-  "remote-session-sidebar-metadata",
-);
-const sessionSecondRowProofDir = path.join(
-  process.cwd(),
-  ".artifacts",
-  "control-ui-e2e",
-  "session-status-second-row-implementation",
-);
-const subtitleStabilityProofDir = path.join(
-  process.cwd(),
-  ".artifacts",
-  "control-ui-e2e",
-  "sidebar-subtitle-stability",
-);
+const rosterMatch = { includeGlobal: true };
 
 suite.define(() => {
   it("keeps a running subtitle and row height stable when its session is opened", async () => {
     if (captureUiProofEnabled) {
-      await mkdir(subtitleStabilityProofDir, { recursive: true });
+      await mkdir(path.join(suite.artifactDir, "sidebar-subtitle-stability"), { recursive: true });
     }
     const context = await suite.newBrowserContext({
       locale: "en-US",
       serviceWorkers: "block",
       viewport: { height: 900, width: 1280 },
       ...(captureUiProofEnabled
-        ? { recordVideo: { dir: subtitleStabilityProofDir, size: { height: 900, width: 1280 } } }
+        ? {
+            recordVideo: {
+              dir: path.join(suite.artifactDir, "sidebar-subtitle-stability"),
+              size: { height: 900, width: 1280 },
+            },
+          }
         : {}),
     });
     const page = await context.newPage();
+    await page.addInitScript(() => {
+      localStorage.setItem("openclaw:sidebar:sessions:show-preview", "true");
+    });
     const proofVideo = page.video();
     const firstKey = "agent:main:session-a";
     const secondKey = "agent:main:session-b";
@@ -76,7 +73,7 @@ suite.define(() => {
     });
 
     try {
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, firstKey));
       const secondRow = page.locator(`.sidebar-recent-session[data-session-key="${secondKey}"]`);
       await expect
         .poll(async () =>
@@ -95,9 +92,15 @@ suite.define(() => {
       const heightBefore = await secondRow.evaluate((row) => row.getBoundingClientRect().height);
       if (captureUiProofEnabled) {
         await page.waitForTimeout(800);
-        await secondRow.screenshot({
-          path: path.join(subtitleStabilityProofDir, "01-running-before-open.png"),
-        });
+        await writeFile(
+          path.join(
+            path.join(suite.artifactDir, "sidebar-subtitle-stability"),
+            "01-running-before-open.png",
+          ),
+          await takeControlUiElementScreenshot(page, secondRow, [
+            secondRow.getByText("Using bash"),
+          ]),
+        );
       }
 
       await secondRow.locator("a.sidebar-recent-session__link").click();
@@ -111,15 +114,24 @@ suite.define(() => {
       expect(heightAfter).toBeCloseTo(heightBefore, 1);
       if (captureUiProofEnabled) {
         await page.waitForTimeout(800);
-        await secondRow.screenshot({
-          path: path.join(subtitleStabilityProofDir, "02-running-after-open.png"),
-        });
+        await writeFile(
+          path.join(
+            path.join(suite.artifactDir, "sidebar-subtitle-stability"),
+            "02-running-after-open.png",
+          ),
+          await takeControlUiElementScreenshot(page, secondRow, [
+            secondRow.getByText("Using bash"),
+          ]),
+        );
       }
     } finally {
       await suite.closeBrowserContext(context);
       if (proofVideo) {
         await proofVideo.saveAs(
-          path.join(subtitleStabilityProofDir, "sidebar-subtitle-stability.webm"),
+          path.join(
+            path.join(suite.artifactDir, "sidebar-subtitle-stability"),
+            "sidebar-subtitle-stability.webm",
+          ),
         );
       }
     }
@@ -127,17 +139,27 @@ suite.define(() => {
 
   it("replaces an intermediate running subtitle with the unread final digest", async () => {
     if (captureUiProofEnabled) {
-      await mkdir(terminalMetadataProofDir, { recursive: true });
+      await mkdir(path.join(suite.artifactDir, "remote-session-sidebar-metadata"), {
+        recursive: true,
+      });
     }
     const context = await suite.newBrowserContext({
       locale: "en-US",
       serviceWorkers: "block",
       viewport: { height: 900, width: 1280 },
       ...(captureUiProofEnabled
-        ? { recordVideo: { dir: terminalMetadataProofDir, size: { height: 900, width: 1280 } } }
+        ? {
+            recordVideo: {
+              dir: path.join(suite.artifactDir, "remote-session-sidebar-metadata"),
+              size: { height: 900, width: 1280 },
+            },
+          }
         : {}),
     });
     const page = await context.newPage();
+    await page.addInitScript(() => {
+      localStorage.setItem("openclaw:sidebar:sessions:show-preview", "true");
+    });
     const key = "agent:main:session-a";
     const runId = "run-sidebar-metadata";
     const running = chatSessionListResponse([
@@ -185,17 +207,20 @@ suite.define(() => {
     });
 
     try {
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, key));
       const row = page.locator(`.sidebar-recent-session[data-session-key="${key}"]`);
       await row.getByText("Implementing the repair").waitFor();
       if (captureUiProofEnabled) {
-        await page.screenshot({
-          fullPage: true,
-          path: path.join(terminalMetadataProofDir, "01-running-subtitle.png"),
-        });
+        await writeFile(
+          path.join(
+            path.join(suite.artifactDir, "remote-session-sidebar-metadata"),
+            "01-running-subtitle.png",
+          ),
+          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [row]),
+        );
       }
-      await gateway.setMethodResponse("sessions.list", completed);
-      const listCount = (await gateway.getRequests("sessions.list")).length;
+      await gateway.setSessionsListResponse(completed);
+      const listCount = (await gateway.getRequests("sessions.list", rosterMatch)).length;
       await gateway.emitGatewayEvent("session.message", {
         activeRunIds: [],
         hasActiveRun: false,
@@ -211,15 +236,18 @@ suite.define(() => {
         status: "done",
       });
       await row.getByText("Repair landed cleanly").waitFor();
-      await expectRequestCountStable(gateway, "sessions.list", listCount);
+      await expectRequestCountStable(gateway, "sessions.list", listCount, 500, rosterMatch);
       expect(await row.textContent()).not.toContain("[[");
       if (captureUiProofEnabled) {
-        await page.screenshot({
-          fullPage: true,
-          path: path.join(terminalMetadataProofDir, "02-final-reply-subtitle.png"),
-        });
+        await writeFile(
+          path.join(
+            path.join(suite.artifactDir, "remote-session-sidebar-metadata"),
+            "02-final-reply-subtitle.png",
+          ),
+          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [row]),
+        );
       }
-      const listRequests = await gateway.getRequests("sessions.list");
+      const listRequests = await gateway.getRequests("sessions.list", rosterMatch);
       expect(listRequests.at(-1)?.params).toMatchObject({ includeLastMessage: true });
     } finally {
       await suite.closeBrowserContext(context);
@@ -227,17 +255,13 @@ suite.define(() => {
   });
 
   it("keeps long sidebar labels clipped after a session switch", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     await page.clock.install();
     const sessions = chatSessionListResponse();
     const firstSession = expectDefined(sessions.sessions[0], "first chat session fixture");
     const secondSession = expectDefined(sessions.sessions[1], "second chat session fixture");
-    firstSession.label = "Title fits until actions appear";
+    firstSession.label = "Short";
     secondSession.label =
       "Review and repair the intentionally overlong sidebar session title before navigation ".repeat(
         4,
@@ -248,7 +272,7 @@ suite.define(() => {
     });
 
     try {
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:session-a"));
       const recentRow = page.locator(
         '.sidebar-recent-session[data-session-key="agent:main:session-b"]',
       );
@@ -263,51 +287,10 @@ suite.define(() => {
       }));
       expect(layout.scrollWidth, JSON.stringify(layout)).toBeGreaterThan(layout.clientWidth);
 
-      const hoverOnlyRow = page.locator(
-        '.sidebar-recent-session[data-session-key="agent:main:session-a"]',
-      );
-      const hoverOnlyLabel = hoverOnlyRow.locator(".sidebar-recent-session__name");
-      const restingHoverOnlyLayout = await hoverOnlyLabel.evaluate((label) => {
-        const viewport = label.parentElement as HTMLElement;
-        const style = getComputedStyle(viewport);
-        return {
-          scrollWidth: label.scrollWidth,
-          viewportWidth:
-            viewport.clientWidth -
-            (Number.parseFloat(style.paddingLeft) || 0) -
-            (Number.parseFloat(style.paddingRight) || 0),
-        };
-      });
-      expect(
-        restingHoverOnlyLayout.scrollWidth,
-        JSON.stringify(restingHoverOnlyLayout),
-      ).toBeLessThanOrEqual(restingHoverOnlyLayout.viewportWidth);
-      await hoverOnlyRow.hover();
-      const hoveredHoverOnlyLayout = await hoverOnlyLabel.evaluate((label) => {
-        const viewport = label.parentElement as HTMLElement;
-        const style = getComputedStyle(viewport);
-        return {
-          scrollWidth: label.scrollWidth,
-          viewportWidth:
-            viewport.clientWidth -
-            (Number.parseFloat(style.paddingLeft) || 0) -
-            (Number.parseFloat(style.paddingRight) || 0),
-        };
-      });
-      expect(
-        hoveredHoverOnlyLayout.scrollWidth,
-        JSON.stringify(hoveredHoverOnlyLayout),
-      ).toBeGreaterThan(hoveredHoverOnlyLayout.viewportWidth);
-      await expect
-        .poll(() => hoverOnlyLabel.evaluate((label) => label.classList.value), { timeout: 1_500 })
-        .toContain("hover-marquee--scrolling");
-      await page.mouse.move(0, 0);
-
       // Freeze the clock so the 500ms hover-intent delay elapses only via
       // runFor; a ticking clock let slow runners start the marquee before the
       // "not yet scrolling" asserts below.
       await pauseVirtualClock(page);
-
       await recentRow.dispatchEvent("mouseenter");
       await page.clock.runFor(250);
       expect(await recentLabel.evaluate((label) => label.classList.value)).not.toContain(
@@ -320,7 +303,7 @@ suite.define(() => {
         "hover-marquee--scrolling",
       );
       await recentRow.dispatchEvent("mouseenter");
-      await page.clock.runFor(520);
+      await page.clock.runFor(500);
       await expect
         .poll(() => recentLabel.evaluate((label) => label.classList.value), { timeout: 1_500 })
         .toContain("hover-marquee--scrolling");
@@ -362,42 +345,60 @@ suite.define(() => {
 
   it("keeps session titles on the first line and collapses rows that have no second line", async () => {
     if (captureUiProofEnabled) {
-      await mkdir(sessionSecondRowProofDir, { recursive: true });
+      await mkdir(path.join(suite.artifactDir, "session-status-second-row-implementation"), {
+        recursive: true,
+      });
     }
     const context = await suite.newBrowserContext({
       locale: "en-US",
       serviceWorkers: "block",
       viewport: { height: 900, width: 1280 },
       ...(captureUiProofEnabled
-        ? { recordVideo: { dir: sessionSecondRowProofDir, size: { height: 900, width: 1280 } } }
+        ? {
+            recordVideo: {
+              dir: path.join(suite.artifactDir, "session-status-second-row-implementation"),
+              size: { height: 900, width: 1280 },
+            },
+          }
         : {}),
     });
     const page = await context.newPage();
     const busyKey = "agent:main:busy-session";
     const plainKey = "agent:main:plain-session";
     const longKey = "agent:main:long-title-session";
+    const unreadKey = "agent:main:unread-session";
+    const runningKey = "agent:main:running-session";
     await installMockGateway(page, {
       methodResponses: {
         "sessions.list": chatSessionListResponse([
+          {
+            key: unreadKey,
+            kind: "direct",
+            label: "Movies and recommendations for the weekend",
+            icon: "🎬",
+            updatedAt: 3,
+            unread: true,
+          },
+          {
+            key: runningKey,
+            kind: "direct",
+            label: "Running session",
+            hasActiveRun: true,
+            status: "running",
+            updatedAt: 4,
+          },
           {
             key: busyKey,
             kind: "direct",
             label: "Terminal tab bar redesign proposal",
             updatedAt: 2,
-            activeRunIds: ["run-busy-session"],
-            hasActiveRun: true,
-            observerDigest: {
-              agentId: "main",
-              runId: "run-busy-session",
-              headline:
-                "The isolated clone is ready, but direct Git fetch and every remaining operation continue in the background",
-              health: "on-track",
-              updatedAt: 2,
-              revision: 1,
-            },
+            hasActiveRun: false,
+            lastMessagePreview:
+              "The isolated clone is ready, but direct Git fetch and every remaining operation continue in the background",
             incognito: true,
             hasAutomation: true,
-            status: "running",
+            boardFace: "dashboard",
+            status: "done",
             unread: true,
           },
           {
@@ -411,10 +412,10 @@ suite.define(() => {
             kind: "direct",
             label:
               "An extremely long single-line session title that keeps going and going far past the sidebar width",
+            incognito: true,
             updatedAt: 1,
-            activeRunIds: ["run-long-title"],
-            hasActiveRun: true,
-            status: "running",
+            hasActiveRun: false,
+            status: "done",
             unread: true,
           },
         ]),
@@ -423,15 +424,95 @@ suite.define(() => {
     });
 
     try {
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, plainKey));
       const busyRow = page.locator(`.sidebar-recent-session[data-session-key="${busyKey}"]`);
       const plainRow = page.locator(`.sidebar-recent-session[data-session-key="${plainKey}"]`);
       await busyRow.locator(".session-row-badges").waitFor();
+      expect(await busyRow.locator(".sidebar-recent-session__subtitle").count()).toBe(0);
+      expect(await busyRow.getAttribute("class")).toContain("sidebar-recent-session--single-line");
       if (captureUiProofEnabled) {
-        await page.screenshot({
-          fullPage: true,
-          path: path.join(sessionSecondRowProofDir, "01-second-row-endcap.png"),
-        });
+        await writeFile(
+          path.join(
+            path.join(suite.artifactDir, "session-status-second-row-implementation"),
+            "00-default-hidden-preview.png",
+          ),
+          await takeControlUiElementScreenshot(page, page.locator(".shell-nav"), [busyRow]),
+        );
+      }
+      await page.locator(".sidebar-session-toolbar .sidebar-session-sort").click();
+      const previewToggle = page.locator('wa-dropdown-item[value="show-preview"]');
+      expect(
+        await previewToggle.evaluate(
+          (item) => (item as HTMLElement & { checked: boolean }).checked,
+        ),
+      ).toBe(false);
+      await previewToggle.click();
+      await busyRow.locator(".sidebar-recent-session__subtitle").waitFor();
+      const sidebar = page.locator("openclaw-app-sidebar");
+      expect(await sidebar.getByRole("img", { name: "Dashboard available" }).count()).toBe(0);
+      expect(await sidebar.getByRole("img", { name: "Automation attached" }).count()).toBe(0);
+      const ordinaryBadge = busyRow.locator(".session-row-badge--incognito svg");
+      for (const colorScheme of ["dark", "light"] as const) {
+        await page.emulateMedia({ colorScheme });
+        await expect.poll(() => page.locator("html").getAttribute("data-theme")).toBe(colorScheme);
+        for (const reducedMotion of ["no-preference", "reduce"] as const) {
+          await page.emulateMedia({ reducedMotion });
+          const spinnerColors = await page
+            .locator(`[data-session-key="${runningKey}"]`)
+            .locator(".sidebar-session-indicator .session-glyph__ring")
+            .evaluate((element) => {
+              const style = getComputedStyle(element);
+              const accent = document.createElement("span").style;
+              accent.color = style.getPropertyValue("--accent").trim();
+              return { actual: style.borderTopColor, expected: accent.color };
+            });
+          expect.soft(spinnerColors.actual).toBe(spinnerColors.expected);
+        }
+        await page.emulateMedia({ reducedMotion: "no-preference" });
+        if (captureUiProofEnabled) {
+          await writeFile(
+            path.join(
+              path.join(suite.artifactDir, "session-status-second-row-implementation"),
+              `indicators-${colorScheme}.png`,
+            ),
+            await takeControlUiElementScreenshot(page, page.locator(".shell-nav"), [busyRow]),
+          );
+        }
+      }
+      const shellNav = page.locator(".shell-nav");
+      const sidebarResizer = page.getByRole("separator", { name: "Resize sidebar" });
+      const badgeSizes = [];
+      for (const sidebarWidth of [258, 240]) {
+        if (sidebarWidth === 240) {
+          await sidebarResizer.focus();
+          await page.keyboard.press("Home");
+        }
+        await expect
+          .poll(async () => Math.round((await shellNav.boundingBox())?.width ?? 0))
+          .toBe(sidebarWidth);
+        await page.mouse.move(900, 400);
+        if (captureUiProofEnabled) {
+          await writeFile(
+            path.join(
+              path.join(suite.artifactDir, "session-status-second-row-implementation"),
+              `01-second-row-endcap-${sidebarWidth}.png`,
+            ),
+            await takeControlUiViewportScreenshot(page, page.locator(".shell"), [busyRow]),
+          );
+          await writeFile(
+            path.join(
+              path.join(suite.artifactDir, "session-status-second-row-implementation"),
+              `01-sidebar-${sidebarWidth}.png`,
+            ),
+            await takeControlUiElementScreenshot(page, shellNav, [busyRow]),
+          );
+        }
+        badgeSizes.push(
+          await ordinaryBadge.evaluate((element) => {
+            const { height, width } = element.getBoundingClientRect();
+            return { height, width };
+          }),
+        );
       }
 
       const layout = await busyRow.evaluate((row) => {
@@ -451,9 +532,7 @@ suite.define(() => {
         };
         return {
           atoms: Array.from(
-            row.querySelectorAll(
-              ".sidebar-recent-session__details-endcap :is(svg, .session-run-spinner, .session-unread-dot)",
-            ),
+            row.querySelectorAll(".sidebar-recent-session__details-endcap svg"),
             (element) => {
               const box = element.getBoundingClientRect();
               return { bottom: box.bottom, left: box.left, right: box.right, top: box.top };
@@ -463,14 +542,15 @@ suite.define(() => {
           busyHeight: row.getBoundingClientRect().height,
           endcap: rect(".sidebar-recent-session__details-endcap"),
           name: rect(".sidebar-recent-session__name"),
-          spinner: rect(".session-run-spinner"),
-          state: rect(".session-row-state"),
+          unread: rect(".sidebar-session-indicator .session-unread-dot"),
+          lead: rect(".sidebar-session-indicator"),
           subtitle: rect(".sidebar-recent-session__subtitle"),
         };
       });
       const plain = await plainRow.evaluate((row) => ({
         height: row.getBoundingClientRect().height,
         singleLine: row.classList.contains("sidebar-recent-session--single-line"),
+        nameLeft: row.querySelector(".sidebar-recent-session__name")!.getBoundingClientRect().left,
       }));
 
       // A row with no secondary metadata no longer reserves the second line: it
@@ -478,26 +558,30 @@ suite.define(() => {
       // beneath it. Only rows that actually have a subtitle keep the two-line shape.
       expect(plain.singleLine).toBe(true);
       expect(plain.height).toBeLessThan(layout.busyHeight);
-      // Badges belong to the second line. Comparing centres keeps this true
-      // whatever size the row's glyphs are; the old top-edge slack was
-      // calibrated to one particular glyph size.
-      expect((layout.badges.top + layout.badges.bottom) / 2).toBeGreaterThan(
-        (layout.name.top + layout.name.bottom) / 2,
-      );
+      expect(layout.badges.top).toBeGreaterThanOrEqual(layout.name.bottom - 1);
       expect(layout.name.right).toBeGreaterThan(layout.badges.left);
       expect((layout.badges.top + layout.badges.bottom) / 2).toBeCloseTo(
         (layout.subtitle.top + layout.subtitle.bottom) / 2,
         1,
       );
-      expect((layout.state.top + layout.state.bottom) / 2).toBeCloseTo(
-        (layout.subtitle.top + layout.subtitle.bottom) / 2,
+      expect((layout.unread.top + layout.unread.bottom) / 2).toBeCloseTo(
+        (layout.lead.top + layout.lead.bottom) / 2,
         1,
       );
-      expect(layout.state.left).toBeGreaterThanOrEqual(layout.endcap.left);
-      expect(layout.state.right).toBeLessThanOrEqual(layout.endcap.right);
-      expect(layout.spinner.left).toBeGreaterThanOrEqual(layout.endcap.left);
-      expect(layout.spinner.right).toBeLessThanOrEqual(layout.endcap.right);
-      expect(layout.atoms.length).toBeGreaterThanOrEqual(3);
+      expect((layout.unread.left + layout.unread.right) / 2).toBeCloseTo(
+        (layout.lead.left + layout.lead.right) / 2,
+        1,
+      );
+      expect(layout.unread.right - layout.unread.left).toBe(7);
+      expect(layout.unread.height).toBe(7);
+      expect(layout.unread.left).toBeGreaterThanOrEqual(layout.lead.left);
+      expect(layout.unread.right).toBeLessThanOrEqual(layout.lead.right);
+      expect(layout.unread.top).toBeGreaterThanOrEqual(layout.lead.top);
+      expect(layout.unread.bottom).toBeLessThanOrEqual(layout.lead.bottom);
+      expect(layout.lead.right).toBeLessThanOrEqual(layout.name.left);
+      expect(layout.name.left).toBeCloseTo(plain.nameLeft, 1);
+      expect(await busyRow.locator(".session-row-state").count()).toBe(0);
+      expect(layout.atoms).toHaveLength(1);
       for (const atom of layout.atoms) {
         expect(atom.left).toBeGreaterThanOrEqual(layout.endcap.left);
         expect(atom.right).toBeLessThanOrEqual(layout.endcap.right);
@@ -505,27 +589,34 @@ suite.define(() => {
         expect(atom.bottom).toBeLessThanOrEqual(layout.endcap.bottom);
       }
 
-      // A long title must truncate instead of crushing the collapsed row's icon
-      // endcap: the spinner/unread icons keep their intrinsic width and stay
-      // inside the row, exactly like the two-line endcap under a long subtitle.
+      // Long titles must not crush either the leading unread dot or trailing metadata.
       const longRow = page.locator(`.sidebar-recent-session[data-session-key="${longKey}"]`);
       const longLayout = await longRow.evaluate((row) => {
         const endcap = row.querySelector(".sidebar-recent-session__details-endcap");
         const name = row.querySelector(".sidebar-recent-session__name");
-        if (!endcap || !name) {
+        const lead = row.querySelector(".sidebar-session-indicator");
+        const unread = lead?.querySelector(".session-unread-dot");
+        if (!endcap || !name || !lead || !unread) {
           throw new Error("Missing long-title session row fixture");
         }
         const endcapBox = endcap.getBoundingClientRect();
         const rowBox = row.getBoundingClientRect();
+        const rect = (element: Element) => {
+          const { x, y, left, right, top, bottom, width, height } = element.getBoundingClientRect();
+          return { x, y, left, right, top, bottom, width, height };
+        };
         return {
           atoms: Array.from(
-            endcap.querySelectorAll(":scope :is(svg, .session-run-spinner, .session-unread-dot)"),
+            endcap.querySelectorAll(":scope svg"),
             (element) => element.getBoundingClientRect().width,
           ),
           endcapWidth: endcapBox.width,
           endcapRight: endcapBox.right,
           nameOverflowing: name.scrollWidth > name.clientWidth,
           rowRight: rowBox.right,
+          lead: rect(lead),
+          unread: rect(unread),
+          nameLeft: name.getBoundingClientRect().left,
           singleLine: row.classList.contains("sidebar-recent-session--single-line"),
         };
       });
@@ -535,6 +626,62 @@ suite.define(() => {
       const intrinsicAtomWidth = longLayout.atoms.reduce((sum, width) => sum + width, 0);
       expect(intrinsicAtomWidth).toBeGreaterThan(0);
       expect(longLayout.endcapWidth).toBeGreaterThanOrEqual(intrinsicAtomWidth);
+      expect(longLayout.unread.width).toBe(7);
+      expect(longLayout.unread.height).toBe(7);
+      expect(longLayout.unread.x + longLayout.unread.width / 2).toBeCloseTo(
+        longLayout.lead.x + longLayout.lead.width / 2,
+        1,
+      );
+      expect(longLayout.unread.y + longLayout.unread.height / 2).toBeCloseTo(
+        longLayout.lead.y + longLayout.lead.height / 2,
+        1,
+      );
+      expect(longLayout.unread.left).toBeGreaterThanOrEqual(longLayout.lead.left);
+      expect(longLayout.unread.right).toBeLessThanOrEqual(longLayout.lead.right);
+      expect(longLayout.unread.top).toBeGreaterThanOrEqual(longLayout.lead.top);
+      expect(longLayout.unread.bottom).toBeLessThanOrEqual(longLayout.lead.bottom);
+      expect(longLayout.lead.right).toBeLessThanOrEqual(longLayout.nameLeft);
+      expect(longLayout.nameLeft).toBeCloseTo(plain.nameLeft, 1);
+
+      const unreadRow = page.locator(`.sidebar-recent-session[data-session-key="${unreadKey}"]`);
+      const unreadBadge = unreadRow.locator(
+        ".sidebar-session-indicator .session-glyph__badge--unread",
+      );
+      const unreadTitle = unreadRow.locator(".sidebar-recent-session__name");
+      await unreadBadge.waitFor({ state: "visible" });
+      const restingBadge = await unreadBadge.boundingBox();
+      const restingTitle = await unreadTitle.boundingBox();
+      const restingWidth = await unreadTitle.evaluate((element) => element.clientWidth);
+      await unreadRow.hover();
+      if (captureUiProofEnabled) {
+        await writeFile(
+          path.join(
+            path.join(suite.artifactDir, "session-status-second-row-implementation"),
+            "03-unread-hover.png",
+          ),
+          await takeControlUiElementScreenshot(page, shellNav, [unreadRow]),
+        );
+      }
+      await unreadBadge.waitFor({ state: "visible" });
+      expect(await unreadBadge.boundingBox()).toEqual(restingBadge);
+      expect((await unreadTitle.boundingBox())?.x).toBe(restingTitle?.x);
+      const hoverWidth = await unreadTitle.evaluate((element) => element.clientWidth);
+      const actionReserve = await unreadRow.evaluate((element) =>
+        Number.parseFloat(
+          getComputedStyle(element).getPropertyValue("--session-row-actions-reserve"),
+        ),
+      );
+      // The leading badge stays fixed while the title reserves the full action width.
+      expect(restingWidth - hoverWidth).toBeCloseTo(actionReserve, 0);
+      await page.mouse.move(900, 400);
+      await unreadBadge.waitFor({ state: "visible" });
+      await unreadRow.locator("[data-session-menu]").focus();
+      await unreadBadge.waitFor({ state: "visible" });
+      expect(await unreadBadge.boundingBox()).toEqual(restingBadge);
+      expect((await unreadTitle.boundingBox())?.x).toBe(restingTitle?.x);
+      expect(await unreadTitle.evaluate((element) => element.clientWidth)).toBe(hoverWidth);
+      await sidebarResizer.focus();
+      await unreadBadge.waitFor({ state: "visible" });
 
       await busyRow.hover();
       await expect
@@ -543,8 +690,6 @@ suite.define(() => {
             .locator(".sidebar-recent-session__details-endcap")
             .evaluate((element) => getComputedStyle(element).opacity),
         )
-        // The actions sit on the title line now, so the second line keeps its
-        // status icons instead of trading them for the buttons on hover.
         .toBe("1");
       await expect
         .poll(() =>
@@ -554,44 +699,50 @@ suite.define(() => {
         )
         .toBe("1");
       if (captureUiProofEnabled) {
-        await page.screenshot({
-          fullPage: true,
-          path: path.join(sessionSecondRowProofDir, "02-hover-actions.png"),
-        });
+        await writeFile(
+          path.join(
+            path.join(suite.artifactDir, "session-status-second-row-implementation"),
+            "02-hover-actions.png",
+          ),
+          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [busyRow]),
+        );
       }
       await plainRow.waitFor();
+      for (const size of badgeSizes) {
+        expect(size).toEqual({ height: 12, width: 12 });
+      }
     } finally {
       await suite.closeBrowserContext(context);
     }
   });
 
   it("keeps the authenticated assistant avatar stable across same-agent switches", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const avatarBody = Buffer.from(
       "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl2nPcAAAAASUVORK5CYII=",
       "base64",
     );
-    await page.route(/\/avatar\/main\?meta=1$/, (route) =>
-      route.fulfill({
-        contentType: "application/json",
-        body: JSON.stringify({ avatarUrl: "/avatar/main", avatarStatus: "local" }),
-      }),
-    );
-    await page.route(/\/avatar\/main$/, (route) =>
-      route.fulfill({ contentType: "image/png", body: avatarBody }),
-    );
+    const avatarAuthorizations: Array<string | undefined> = [];
+    await page.route(/\/avatar\/main\?v=fixture$/, (route) => {
+      avatarAuthorizations.push(route.request().headers().authorization);
+      return route.fulfill({ contentType: "image/png", body: avatarBody });
+    });
     await installMockGateway(page, {
-      methodResponses: { "sessions.list": chatSessionListResponse() },
+      methodResponses: {
+        "agent.identity.get": {
+          agentId: "main",
+          name: "OpenClaw",
+          avatar: "/avatar/main?v=fixture",
+          avatarStatus: "local",
+        },
+        "sessions.list": chatSessionListResponse(),
+      },
       sessionKey: "agent:main:session-a",
     });
 
     try {
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:session-a"));
       const documentMarker = await page.evaluate(() => {
         const marker = crypto.randomUUID();
         (window as Window & { __openclawAvatarTestDocument?: string })[
@@ -623,6 +774,7 @@ suite.define(() => {
 
       await expect.poll(() => avatar.getAttribute("src")).toMatch(/^blob:/);
       await expect.poll(() => avatar.isVisible()).toBe(true);
+      expect(avatarAuthorizations).toEqual(["Bearer e2e-device-token"]);
       expect(
         await page.evaluate(
           () =>
@@ -631,406 +783,6 @@ suite.define(() => {
             ],
         ),
       ).toBe(documentMarker);
-    } finally {
-      await suite.closeBrowserContext(context);
-    }
-  });
-
-  it("preserves adopted-row focus across repeated catalog reorders", async () => {
-    const context = await suite.newBrowserContext({});
-    const page = await context.newPage();
-    const firstKey = "agent:main:first-adopted";
-    const secondKey = "agent:main:second-adopted";
-    const catalogResponse = (order: ReadonlyArray<readonly [string, string]>) => ({
-      catalogs: [
-        {
-          id: "codex",
-          label: "Codex",
-          capabilities: { continueSession: true, archive: true },
-          hosts: [
-            {
-              hostId: "gateway:local",
-              label: "Local Codex",
-              kind: "gateway",
-              connected: true,
-              sessions: order.map(([threadId, sessionKey]) => ({
-                threadId,
-                sessionKey,
-                name: threadId,
-                status: "idle",
-                archived: false,
-                canContinue: true,
-                canArchive: true,
-              })),
-            },
-          ],
-        },
-      ],
-    });
-    const initialOrder = [
-      ["First adopted", firstKey],
-      ["Second adopted", secondKey],
-    ] as const;
-    const reversedOrder = initialOrder.toReversed();
-    const gateway = await installMockGateway(page, {
-      featureMethods: ["chat.metadata", "chat.startup", "sessions.catalog.list", "sessions.patch"],
-      methodResponses: {
-        "sessions.list": chatSessionListResponse([
-          {
-            key: firstKey,
-            kind: "direct",
-            label: "First adopted",
-            updatedAt: 2,
-            childSessions: ["agent:main:child"],
-          },
-          { key: secondKey, kind: "direct", label: "Second adopted", updatedAt: 1 },
-        ]),
-        "sessions.catalog.list": catalogResponse(initialOrder),
-      },
-    });
-
-    try {
-      await page.goto(`${suite.server.baseUrl}chat`);
-      const catalog = page.locator('[data-session-section="catalog:codex"]');
-      await catalog.waitFor({ state: "visible" });
-      const toggle = catalog.locator(".sidebar-session-group-toggle");
-      if ((await toggle.getAttribute("aria-expanded")) === "false") {
-        await toggle.click();
-      }
-      const rows = catalog.locator(".sidebar-session-catalog-host__sessions > [data-session-key]");
-      for (const [control, selector] of [
-        ["link", ".sidebar-recent-session__link"],
-        ["child-toggle", "[data-child-session-toggle]"],
-        ["pin", "[data-sidebar-session-pin]"],
-        ["menu", "[data-session-menu]"],
-      ] as const) {
-        const requestCount = (await gateway.getRequests("sessions.catalog.list")).length;
-        await gateway.setMethodResponse("sessions.catalog.list", catalogResponse(initialOrder));
-        await page.evaluate(() => window.dispatchEvent(new Event("focus")));
-        await expect
-          .poll(async () => (await gateway.getRequests("sessions.catalog.list")).length)
-          .toBeGreaterThan(requestCount);
-        await expect
-          .poll(() => rows.evaluateAll((elements) => elements.map((row) => row.dataset.sessionKey)))
-          .toEqual(initialOrder.map(([, sessionKey]) => sessionKey));
-        const focusedControl = catalog.locator(`[data-session-key="${firstKey}"] ${selector}`);
-        await focusedControl.focus();
-        await focusedControl.evaluate((element, value) => {
-          element.setAttribute("data-focus-probe", value);
-        }, control);
-
-        for (const order of [reversedOrder, initialOrder, reversedOrder]) {
-          const reorderRequestCount = (await gateway.getRequests("sessions.catalog.list")).length;
-          await gateway.setMethodResponse("sessions.catalog.list", catalogResponse(order));
-          await page.evaluate(() => window.dispatchEvent(new Event("focus")));
-          await expect
-            .poll(async () => (await gateway.getRequests("sessions.catalog.list")).length)
-            .toBeGreaterThan(reorderRequestCount);
-          await expect
-            .poll(() =>
-              rows.evaluateAll((elements) => elements.map((row) => row.dataset.sessionKey)),
-            )
-            .toEqual(order.map(([, sessionKey]) => sessionKey));
-          expect(await focusedControl.getAttribute("data-focus-probe")).toBe(control);
-          await expect
-            .poll(() => focusedControl.evaluate((element) => element === document.activeElement))
-            .toBe(true);
-        }
-      }
-    } finally {
-      await suite.closeBrowserContext(context);
-    }
-  });
-
-  it("resets an adopted catalog marquee when its label becomes short", async () => {
-    const context = await suite.newBrowserContext({ viewport: { height: 900, width: 1280 } });
-    const page = await context.newPage();
-    const sessionKey = "agent:main:adopted-marquee";
-    const catalogResponse = (name: string) => ({
-      catalogs: [
-        {
-          id: "codex",
-          label: "Codex",
-          capabilities: { continueSession: true, archive: true },
-          hosts: [
-            {
-              hostId: "gateway:local",
-              label: "Local Codex",
-              kind: "gateway",
-              connected: true,
-              sessions: [
-                {
-                  threadId: "thread-adopted-marquee",
-                  sessionKey,
-                  name,
-                  status: "idle",
-                  archived: false,
-                  canContinue: true,
-                  canArchive: true,
-                },
-              ],
-            },
-          ],
-        },
-      ],
-    });
-    const initialName = "Trace every adopted catalog refresh before releasing the sidebar";
-    const gateway = await installMockGateway(page, {
-      featureMethods: ["chat.metadata", "chat.startup", "sessions.catalog.list"],
-      methodResponses: {
-        "sessions.list": chatSessionListResponse([
-          { key: sessionKey, kind: "direct", label: initialName, updatedAt: 1 },
-        ]),
-        "sessions.catalog.list": catalogResponse(initialName),
-      },
-    });
-
-    try {
-      await page.goto(`${suite.server.baseUrl}chat`);
-      const catalog = page.locator('[data-session-section="catalog:codex"]');
-      await catalog.waitFor({ state: "visible" });
-      const toggle = catalog.locator(".sidebar-session-group-toggle");
-      if ((await toggle.getAttribute("aria-expanded")) === "false") {
-        await toggle.click();
-      }
-      const row = catalog.locator(`[data-session-key="${sessionKey}"]`);
-      await row.hover();
-      const menu = row.locator("[data-session-menu]");
-      await expect
-        .poll(() => menu.evaluate((element) => getComputedStyle(element).opacity))
-        .toBe("1");
-      await menu.hover();
-      const label = row.locator(".hover-marquee");
-      await expect
-        .poll(() => label.evaluate((element) => element.classList.value), { timeout: 1_500 })
-        .toContain("hover-marquee--scrolling");
-
-      const requestCount = (await gateway.getRequests("sessions.catalog.list")).length;
-      await gateway.setMethodResponse("sessions.catalog.list", catalogResponse("Short"));
-      await page.evaluate(() => window.dispatchEvent(new Event("focus")));
-      await expect
-        .poll(async () => (await gateway.getRequests("sessions.catalog.list")).length)
-        .toBeGreaterThan(requestCount);
-      await expect.poll(() => label.textContent()).toBe("Short");
-      expect(await row.evaluate((element) => element.matches(":hover"))).toBe(true);
-      await expect
-        .poll(() => label.evaluate((element) => element.classList.value))
-        .not.toContain("hover-marquee--scrolling");
-      await expect
-        .poll(() =>
-          label.evaluate((element) => element.style.getPropertyValue("--hover-marquee-shift")),
-        )
-        .toBe("");
-    } finally {
-      await suite.closeBrowserContext(context);
-    }
-  });
-
-  it("remeasures an adopted marquee when live endcap state changes", async () => {
-    const context = await suite.newBrowserContext({ viewport: { height: 900, width: 1280 } });
-    const page = await context.newPage();
-    const sessionKey = "agent:main:adopted-live-marquee";
-    const label = "Trace every adopted session transition before releasing the sidebar";
-    const catalogResponse = {
-      catalogs: [
-        {
-          id: "codex",
-          label: "Codex",
-          capabilities: { continueSession: true, archive: true },
-          hosts: [
-            {
-              hostId: "gateway:local",
-              label: "Local Codex",
-              kind: "gateway",
-              connected: true,
-              sessions: [
-                {
-                  threadId: "thread-adopted-live-marquee",
-                  sessionKey,
-                  name: label,
-                  status: "idle",
-                  archived: false,
-                  canContinue: true,
-                  canArchive: true,
-                },
-              ],
-            },
-          ],
-        },
-      ],
-    };
-    const sessionResponse = (state: Record<string, unknown> = {}) =>
-      chatSessionListResponse([
-        {
-          key: sessionKey,
-          kind: "direct",
-          label,
-          updatedAt: 1,
-          ...state,
-        },
-      ]);
-    const gateway = await installMockGateway(page, {
-      featureMethods: ["chat.metadata", "chat.startup", "sessions.catalog.list"],
-      methodResponses: {
-        "sessions.list": sessionResponse(),
-        "sessions.catalog.list": catalogResponse,
-      },
-    });
-
-    try {
-      await page.goto(`${suite.server.baseUrl}chat`);
-      const catalog = page.locator('[data-session-section="catalog:codex"]');
-      await catalog.waitFor({ state: "visible" });
-      const toggle = catalog.locator(".sidebar-session-group-toggle");
-      if ((await toggle.getAttribute("aria-expanded")) === "false") {
-        await toggle.click();
-      }
-      const row = catalog.locator(`[data-session-key="${sessionKey}"]`);
-      await row.hover();
-      const menu = row.locator("[data-session-menu]");
-      await expect
-        .poll(() => menu.evaluate((element) => getComputedStyle(element).opacity))
-        .toBe("1");
-      await menu.hover();
-      const marquee = row.locator(".hover-marquee");
-      await expect
-        .poll(() => marquee.evaluate((element) => element.classList.value), { timeout: 1_500 })
-        .toContain("hover-marquee--scrolling");
-      const idleShift = await marquee.evaluate((element) =>
-        Number.parseFloat(getComputedStyle(element).getPropertyValue("--hover-marquee-shift")),
-      );
-
-      const refreshSessions = async (state: Record<string, unknown>) => {
-        const requestCount = (await gateway.getRequests("sessions.list")).length;
-        await gateway.setMethodResponse("sessions.list", sessionResponse(state));
-        await gateway.emitGatewayEvent("sessions.changed", {
-          reason: "update",
-          sessionKey,
-        });
-        await expect
-          .poll(async () => (await gateway.getRequests("sessions.list")).length)
-          .toBeGreaterThan(requestCount);
-      };
-
-      await refreshSessions({
-        activeRunIds: ["run-adopted-live-marquee"],
-        hasActiveRun: true,
-        status: "running",
-        updatedAt: 2,
-      });
-      await row.locator(".session-run-spinner").waitFor();
-      expect(await row.evaluate((element) => element.matches(":hover"))).toBe(true);
-      await expect
-        .poll(() =>
-          marquee.evaluate((element) =>
-            Number.parseFloat(getComputedStyle(element).getPropertyValue("--hover-marquee-shift")),
-          ),
-        )
-        .toBeLessThan(idleShift);
-    } finally {
-      await suite.closeBrowserContext(context);
-    }
-  });
-
-  it("restarts a catalog marquee when its hovered label changes", async () => {
-    const context = await suite.newBrowserContext({ viewport: { height: 900, width: 1280 } });
-    const page = await context.newPage();
-    const catalogResponse = (name: string, pullRequest?: { numbers: number[]; state: "open" }) => ({
-      catalogs: [
-        {
-          id: "codex",
-          label: "Codex",
-          capabilities: { continueSession: true, archive: true },
-          hosts: [
-            {
-              hostId: "gateway:local",
-              label: "Local Codex",
-              kind: "gateway",
-              connected: true,
-              sessions: [
-                {
-                  threadId: "thread-hovered",
-                  name,
-                  status: "idle",
-                  archived: false,
-                  canContinue: true,
-                  canArchive: true,
-                  ...(pullRequest ? { pullRequest } : {}),
-                },
-              ],
-            },
-          ],
-        },
-      ],
-    });
-    const initialName = "Trace the complete native catalog refresh lifecycle before release";
-    const updatedName = "Verify the rewritten catalog title keeps scrolling under the pointer";
-    const gateway = await installMockGateway(page, {
-      featureMethods: ["chat.metadata", "chat.startup", "sessions.catalog.list"],
-      methodResponses: {
-        "sessions.list": chatSessionListResponse(),
-        "sessions.catalog.list": catalogResponse(initialName),
-      },
-    });
-
-    try {
-      await page.goto(`${suite.server.baseUrl}chat`);
-      const catalog = page.locator('[data-session-section="catalog:codex"]');
-      await catalog.waitFor({ state: "visible" });
-      const toggle = catalog.locator(".sidebar-session-group-toggle");
-      if ((await toggle.getAttribute("aria-expanded")) === "false") {
-        await toggle.click();
-      }
-      const row = catalog.locator('[data-session-key$=":thread-hovered"]');
-      await row.hover();
-      const menu = row.locator("[data-catalog-session-menu]");
-      await expect
-        .poll(() => menu.evaluate((element) => getComputedStyle(element).opacity))
-        .toBe("1");
-      await menu.hover();
-      const initialLabel = row.locator(".hover-marquee");
-      await expect
-        .poll(() => initialLabel.evaluate((element) => element.classList.value), { timeout: 1_500 })
-        .toContain("hover-marquee--scrolling");
-
-      const requestCount = (await gateway.getRequests("sessions.catalog.list")).length;
-      await gateway.setMethodResponse("sessions.catalog.list", catalogResponse(updatedName));
-      await page.evaluate(() => window.dispatchEvent(new Event("focus")));
-      await expect
-        .poll(async () => (await gateway.getRequests("sessions.catalog.list")).length)
-        .toBeGreaterThan(requestCount);
-      const label = row.locator(".hover-marquee");
-      await expect.poll(() => label.textContent()).toBe(updatedName);
-      expect(await row.evaluate((element) => element.matches(":hover"))).toBe(true);
-      await expect
-        .poll(() => label.evaluate((element) => element.classList.value), { timeout: 1_500 })
-        .toContain("hover-marquee--scrolling");
-
-      const shiftWithoutBadge = await label.evaluate((element) =>
-        Number.parseFloat(getComputedStyle(element).getPropertyValue("--hover-marquee-shift")),
-      );
-      const badgeRequestCount = (await gateway.getRequests("sessions.catalog.list")).length;
-      await gateway.setMethodResponse(
-        "sessions.catalog.list",
-        catalogResponse(updatedName, { numbers: [125820], state: "open" }),
-      );
-      await page.evaluate(() => window.dispatchEvent(new Event("focus")));
-      await expect
-        .poll(async () => (await gateway.getRequests("sessions.catalog.list")).length)
-        .toBeGreaterThan(badgeRequestCount);
-      await row
-        .locator('.session-row-badge--pull-request[data-pull-request-state="open"]')
-        .waitFor();
-      await expect
-        .poll(() => label.evaluate((element) => element.classList.value), { timeout: 1_500 })
-        .toContain("hover-marquee--scrolling");
-      await expect
-        .poll(() =>
-          label.evaluate((element) =>
-            Number.parseFloat(getComputedStyle(element).getPropertyValue("--hover-marquee-shift")),
-          ),
-        )
-        .toBeLessThan(shiftWithoutBadge);
     } finally {
       await suite.closeBrowserContext(context);
     }

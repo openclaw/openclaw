@@ -26,6 +26,7 @@ import {
   findActiveDegradedSecretOwner,
   SecretSurfaceUnavailableError,
 } from "../../secrets/runtime-degraded-state.js";
+import { isUserModelAuthProfileId } from "../../state/user-model-account-id.js";
 import { normalizeOptionalSecretInput } from "../../utils/normalize-secret-input.js";
 import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
 import { authProfilesLog, CLAUDE_CLI_PROFILE_ID } from "./constants.js";
@@ -43,10 +44,11 @@ import { suggestOAuthProfileIdForLegacyDefault } from "./repair.js";
 import {
   getRuntimeAuthProfileStoreSnapshotCore,
   hasRuntimeAuthProfileStoreSnapshot,
-  setRuntimeAuthProfileStoreSnapshot,
+  updateRuntimeAuthProfileStoreSnapshot,
 } from "./runtime-snapshots.js";
+import { loadAuthProfileStoreForSecretsRuntime } from "./store-runtime.js";
 import {
-  loadAuthProfileStoreForSecretsRuntime,
+  findPersistedAuthProfileCredential,
   resolvePersistedAuthProfileOwnerAgentDir,
 } from "./store.js";
 import type { AuthProfileCredential, AuthProfileStore, OAuthCredential } from "./types.js";
@@ -385,7 +387,9 @@ export async function resolveApiKeyForProfile(
   params: ResolveApiKeyForProfileParams,
 ): Promise<ResolveApiKeyForProfileResult | null> {
   const { cfg, store, profileId } = params;
-  const storedProfile = store.profiles[profileId];
+  const storedProfile = isUserModelAuthProfileId(profileId)
+    ? findPersistedAuthProfileCredential({ agentDir: params.agentDir, profileId })
+    : store.profiles[profileId];
   if (!storedProfile) {
     return null;
   }
@@ -510,7 +514,7 @@ export async function resolveApiKeyForProfile(
     let refreshedStore =
       error instanceof OAuthManagerRefreshError
         ? error.getRefreshedStore()
-        : loadAuthProfileStoreForSecretsRuntime(params.agentDir);
+        : loadAuthProfileStoreForSecretsRuntime(params.agentDir, { profileId });
     const surfacedCause =
       error instanceof OAuthManagerRefreshError && error.cause ? error.cause : error;
     if (isRefreshTokenReusedError(surfacedCause)) {
@@ -543,11 +547,11 @@ export async function resolveApiKeyForProfile(
           if (Object.keys(snapshot.lastGood).length === 0) {
             snapshot.lastGood = undefined;
           }
-          setRuntimeAuthProfileStoreSnapshot(snapshot, params.agentDir);
+          updateRuntimeAuthProfileStoreSnapshot(snapshot, params.agentDir);
         }
       }
       if (clearedLastGood) {
-        refreshedStore = loadAuthProfileStoreForSecretsRuntime(params.agentDir);
+        refreshedStore = loadAuthProfileStoreForSecretsRuntime(params.agentDir, { profileId });
       }
     }
     const fallbackProfileId =

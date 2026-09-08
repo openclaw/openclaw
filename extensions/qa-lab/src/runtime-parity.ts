@@ -6,7 +6,6 @@ import {
   loadSqliteTrajectoryRuntimeEvents,
   type SqliteTrajectoryRuntimeEventForTest,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
-// Qa Lab plugin module implements runtime parity behavior.
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   asFiniteNumber as readFiniteNumber,
@@ -18,7 +17,7 @@ import {
   scanGatewayLogSentinels,
   type GatewayLogSentinelFinding,
 } from "./gateway-log-sentinel.js";
-import { discardIgnoredResponseBody } from "./ignored-response-body.js";
+import { readQaJsonResponse } from "./ignored-response-body.js";
 import * as parity from "./parity-shared.js";
 import {
   buildRuntimeParityCacheDiagnostics,
@@ -36,6 +35,15 @@ export type RuntimeId = "openclaw" | "codex";
 type RuntimeParityStatus = "pass" | "fail" | "skip";
 
 const CANONICAL_RUNTIME_IDS = ["openclaw", "codex"] as const satisfies readonly RuntimeId[];
+
+export function normalizeRuntimePair(
+  pair: [RuntimeId, RuntimeId] | null | undefined,
+): [RuntimeId, RuntimeId] {
+  if (pair?.[0] && pair?.[1]) {
+    return pair;
+  }
+  return ["openclaw", "codex"];
+}
 
 export type RuntimeParityToolCall = {
   tool: string;
@@ -1431,28 +1439,19 @@ async function loadRuntimeParityMockToolCalls(
       policy: { allowPrivateNetwork: true },
       auditContext: "qa-lab-runtime-parity-mock-tool-calls",
     });
-    let payload: unknown;
-    try {
-      if (!response.ok) {
-        await discardIgnoredResponseBody(response);
-        return null;
-      }
-      payload = await response.json();
-    } finally {
-      await release();
-    }
+    const payload = await readQaJsonResponse<unknown>(response, release, "QA runtime parity");
     if (!Array.isArray(payload)) {
       return null;
     }
-    const requests = payload.filter(isMessageRecord).map(
-      (entry): RuntimeParityMockRequestSnapshot => ({
+    const requests = payload
+      .filter(isMessageRecord)
+      .map((entry): RuntimeParityMockRequestSnapshot => ({
         prompt: readNonEmptyString(entry.prompt),
         allInputText: readNonEmptyString(entry.allInputText),
         plannedToolName: readNonEmptyString(entry.plannedToolName),
         plannedToolArgs: entry.plannedToolArgs ?? null,
         toolOutput: readNonEmptyString(entry.toolOutput) ?? "",
-      }),
-    );
+      }));
     return resolveToolCallOrderFromMockRequests(
       filterMockRequestsForParentPrompt(requests, parentPrompt, parentPrompts),
     );
