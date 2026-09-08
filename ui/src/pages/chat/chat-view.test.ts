@@ -2569,49 +2569,69 @@ afterEach(() => {
 });
 
 describe("per-pane chat presentation state", () => {
-  it("moves focus into and back out of thread search for the physical shortcut", async () => {
-    const container = document.createElement("div");
-    document.body.append(container);
-    const onRequestUpdate = vi.fn(() => renderChatInto(container, { onRequestUpdate }));
-    try {
-      renderChatInto(container, { onRequestUpdate });
-      const composer = getComposerTextarea(container);
-      composer.focus();
-      const event = new KeyboardEvent("keydown", {
-        key: "а",
-        code: "KeyF",
-        ctrlKey: true,
-        bubbles: true,
-        cancelable: true,
-      });
+  it.each(["MacIntel", "Win32", "Linux x86_64"])(
+    "uses the platform search shortcut on %s without consuming text navigation",
+    async (platform) => {
+      vi.spyOn(navigator, "platform", "get").mockReturnValue(platform);
+      const primary = platform === "MacIntel" ? { metaKey: true } : { ctrlKey: true };
+      const other = platform === "MacIntel" ? { ctrlKey: true } : { metaKey: true };
+      const container = document.createElement("div");
+      document.body.append(container);
+      const onRequestUpdate = vi.fn(() => renderChatInto(container, { onRequestUpdate }));
+      try {
+        renderChatInto(container, { onRequestUpdate });
+        const composer = getComposerTextarea(container);
+        composer.focus();
+        for (const key of ["f", "а"]) {
+          const navigationEvent = new KeyboardEvent("keydown", {
+            key,
+            code: "KeyF",
+            ...other,
+            bubbles: true,
+            cancelable: true,
+          });
+          composer.dispatchEvent(navigationEvent);
+          expect(navigationEvent.defaultPrevented).toBe(false);
+          expect(container.querySelector(".agent-chat__search-bar")).toBeNull();
+          expect(document.activeElement).toBe(composer);
+          onRequestUpdate.mockClear();
+          const event = new KeyboardEvent("keydown", {
+            key,
+            code: "KeyF",
+            ...primary,
+            bubbles: true,
+            cancelable: true,
+          });
 
-      composer.dispatchEvent(event);
-      await Promise.resolve();
+          composer.dispatchEvent(event);
+          await Promise.resolve();
 
-      expect(event.defaultPrevented).toBe(true);
-      expect(onRequestUpdate).toHaveBeenCalledOnce();
-      expect(document.activeElement).toBe(
-        container.querySelector<HTMLInputElement>('.agent-chat__search-bar input[type="text"]'),
-      );
+          expect(event.defaultPrevented).toBe(true);
+          expect(onRequestUpdate).toHaveBeenCalledOnce();
+          expect(document.activeElement).toBe(
+            container.querySelector<HTMLInputElement>('.agent-chat__search-bar input[type="text"]'),
+          );
 
-      const closeEvent = new KeyboardEvent("keydown", {
-        key: "а",
-        code: "KeyF",
-        ctrlKey: true,
-        bubbles: true,
-        cancelable: true,
-      });
-      document.activeElement?.dispatchEvent(closeEvent);
-      await Promise.resolve();
+          const closeEvent = new KeyboardEvent("keydown", {
+            key,
+            code: "KeyF",
+            ...primary,
+            bubbles: true,
+            cancelable: true,
+          });
+          document.activeElement?.dispatchEvent(closeEvent);
+          await Promise.resolve();
 
-      expect(closeEvent.defaultPrevented).toBe(true);
-      expect(onRequestUpdate).toHaveBeenCalledTimes(2);
-      expect(document.activeElement).toBe(composer);
-      expect(container.querySelector(".agent-chat__search-bar")).toBeNull();
-    } finally {
-      container.remove();
-    }
-  });
+          expect(closeEvent.defaultPrevented).toBe(true);
+          expect(onRequestUpdate).toHaveBeenCalledTimes(2);
+          expect(document.activeElement).toBe(composer);
+          expect(container.querySelector(".agent-chat__search-bar")).toBeNull();
+        }
+      } finally {
+        container.remove();
+      }
+    },
+  );
 
   it("returns focus to the composer when the original target disappears", async () => {
     const container = document.createElement("div");

@@ -158,6 +158,55 @@ describe("CommandPalette lifecycle", () => {
     vi.restoreAllMocks();
   });
 
+  it.each(["MacIntel", "Win32", "Linux x86_64"])(
+    "uses the platform palette shortcut on %s without consuming text editing",
+    async (platform) => {
+      vi.spyOn(navigator, "platform", "get").mockReturnValue(platform);
+      const { gateway } = createGateway(true);
+      const { palette } = await mountPalette(
+        createContext(
+          gateway,
+          vi.fn(async () => null),
+        ),
+      );
+      const editor = document.body.appendChild(document.createElement("textarea"));
+      editor.focus();
+      const primary = platform === "MacIntel" ? { metaKey: true } : { ctrlKey: true };
+      const other = platform === "MacIntel" ? { ctrlKey: true } : { metaKey: true };
+      const chord = (modifiers: KeyboardEventInit) =>
+        new KeyboardEvent("keydown", {
+          key: "л",
+          code: "KeyK",
+          bubbles: true,
+          cancelable: true,
+          ...modifiers,
+        });
+
+      const nativeEdit = chord(other);
+      editor.dispatchEvent(nativeEdit);
+      expect(nativeEdit.defaultPrevented).toBe(false);
+      expect(palette.isOpen).toBe(false);
+      expect(document.activeElement).toBe(editor);
+
+      const open = chord(primary);
+      editor.dispatchEvent(open);
+      await palette.updateComplete;
+      expect(open.defaultPrevented).toBe(true);
+      expect(palette.isOpen).toBe(true);
+      const input = palette.querySelector<HTMLInputElement>(".cmd-palette__input")!;
+      const editQuery = chord(other);
+      input.dispatchEvent(editQuery);
+      expect(editQuery.defaultPrevented).toBe(false);
+      expect(palette.isOpen).toBe(true);
+
+      const close = chord(primary);
+      input.dispatchEvent(close);
+      await palette.updateComplete;
+      expect(close.defaultPrevented).toBe(true);
+      expect(palette.isOpen).toBe(false);
+    },
+  );
+
   it("closes and clears its query before a retained element reconnects", async () => {
     const { gateway } = createGateway(true);
     const list = vi.fn(async () => createSessionResult("agent:main:old", "Old chat"));
