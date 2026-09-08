@@ -1,3 +1,4 @@
+import { writeFile } from "node:fs/promises";
 import { expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
@@ -6,6 +7,86 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
 const suite = createControlUiE2eSuite({ name: "Control UI model and effort controls" });
 
 suite.define(() => {
+  it.each(["chat", "new"])("keeps a large model catalog usable in %s", async (route) => {
+    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+      const models = Array.from({ length: 1_000 }, (_, index) => ({
+        id: `model-${index}`,
+        name: `Model ${String(index).padStart(4, "0")}`,
+        provider: "example",
+        contextWindow: 128_000,
+      }));
+      const gateway = await installMockGateway(page, {
+        agentModel: "example/model-0",
+        models,
+        sessionInfo: { model: "model-0", modelProvider: "example" },
+      });
+      await page.goto(`${suite.server.baseUrl}${route}`);
+      const composer = page.locator(".agent-chat__input").first();
+      const picker = composer.locator(".chat-controls__model-picker");
+      const trigger = picker.locator("[data-chat-model-select]");
+      await expect
+        .poll(() => picker.locator("[data-chat-model-option]").count())
+        .toBe(models.length);
+      await expect.poll(() => trigger.getAttribute("aria-disabled")).toBe("false");
+      const textarea = composer.locator("textarea").first();
+      const cdp = await page.context().newCDPSession(page);
+      await cdp.send("Performance.enable");
+      const before: { metrics: Array<{ name: string; value: number }> } =
+        await cdp.send("Performance.getMetrics");
+      const started = performance.now();
+      await textarea.pressSequentially("catalog proof");
+      expect(await textarea.inputValue()).toBe("catalog proof");
+      const after: typeof before = await cdp.send("Performance.getMetrics");
+      const elapsedMs = performance.now() - started;
+      const metric = (name: string) => {
+        const earlier = before.metrics.find((entry) => entry.name === name)?.value ?? 0;
+        const later = after.metrics.find((entry) => entry.name === name)?.value ?? 0;
+        return (later - earlier) * 1_000;
+      };
+      const timings = {
+        route,
+        models: models.length,
+        elapsedMs,
+        scriptMs: metric("ScriptDuration"),
+        taskMs: metric("TaskDuration"),
+      };
+      console.log(JSON.stringify({ proof: "model-catalog-typing", ...timings }));
+      await trigger.click();
+      await picker.locator("[data-chat-model-search]").fill("Model 0999");
+      const result = picker.locator('[data-chat-model-option="example/model-999"]');
+      await expect.poll(() => result.isVisible()).toBe(true);
+      expect(await picker.locator("[data-chat-model-option]:visible").count()).toBe(1);
+      const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+      if (artifactRoot) {
+        const dir = createControlUiE2eArtifactDir(`large-model-catalog-${route}`, artifactRoot);
+        await writeFile(`${dir}/timings.json`, `${JSON.stringify(timings, null, 2)}\n`);
+        await page.screenshot({ path: `${dir}/filtered-catalog.png`, animations: "disabled" });
+      }
+      const selectionBefore: typeof before = await cdp.send("Performance.getMetrics");
+      const selectionStarted = performance.now();
+      await result.click();
+      await expect.poll(() => trigger.textContent()).toContain("Model 0999");
+      const selectionAfter: typeof before = await cdp.send("Performance.getMetrics");
+      const selectionTimings = {
+        route,
+        models: models.length,
+        elapsedMs: performance.now() - selectionStarted,
+        taskMs:
+          (selectionAfter.metrics.find((entry) => entry.name === "TaskDuration")?.value ?? 0) *
+            1_000 -
+          (selectionBefore.metrics.find((entry) => entry.name === "TaskDuration")?.value ?? 0) *
+            1_000,
+      };
+      console.log(JSON.stringify({ proof: "model-catalog-selection", ...selectionTimings }));
+      await cdp.detach();
+      if (route === "chat") {
+        expect((await gateway.waitForRequest("sessions.patch")).params).toMatchObject({
+          model: "example/model-999",
+        });
+      }
+    });
+  });
+
   it("shows and changes this chat's account without changing the default for new chats", async () => {
     const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
     const artifactDir = artifactRoot
