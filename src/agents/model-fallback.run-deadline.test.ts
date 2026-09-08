@@ -1,10 +1,10 @@
 // A fallback candidate must not inherit a run budget the primary already spent.
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   registerChatAbortController,
+  removeChatAbortControllerEntry,
   type ChatAbortControllerEntry,
 } from "../gateway/chat-abort.js";
-import { resetAgentRunDeadlineRenewersForTest } from "../infra/agent-run-deadline.js";
 import { FailoverError } from "./failover-error.js";
 import { runWithModelFallback } from "./model-fallback-runner.js";
 import { createModelFallbackConfig } from "./test-helpers/model-fallback-config-fixture.js";
@@ -30,9 +30,16 @@ function registerExecutingChatSendRun(entries: Map<string, ChatAbortControllerEn
 }
 
 describe("model fallback run deadline", () => {
+  const entries = new Map<string, ChatAbortControllerEntry>();
+
+  // Removing the entry unregisters its deadline renewer through the same
+  // production path the gateway uses, so no registration leaks between tests
+  // even when an assertion above fails.
+  afterEach(() => {
+    removeChatAbortControllerEntry(entries, RUN_ID);
+  });
+
   it("gives a fallback candidate its own run budget after the primary spent it", async () => {
-    resetAgentRunDeadlineRenewersForTest();
-    const entries = new Map<string, ChatAbortControllerEntry>();
     const now = Date.now();
     registerExecutingChatSendRun(entries, now);
     const entry = entries.get(RUN_ID);
@@ -69,7 +76,6 @@ describe("model fallback run deadline", () => {
   });
 
   it("leaves runs without a registered owner on their existing deadline", async () => {
-    resetAgentRunDeadlineRenewersForTest();
     const run = vi
       .fn()
       .mockImplementationOnce(() => {

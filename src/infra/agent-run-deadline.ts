@@ -65,7 +65,3 @@ export function renewAgentRunDeadline(runId: string | undefined): boolean {
     return false;
   }
 }
-
-export function resetAgentRunDeadlineRenewersForTest(): void {
-  getAgentRunDeadlineState().renewers.clear();
-}
