@@ -598,10 +598,14 @@ function renderClawHubDetailDialog(props: SkillsProps) {
                       }
                       ${
                         detail.latestVersion?.changelog
-                          ? html`<div
-                              class="clawhub-skill-detail__changelog"
-                              .textContent=${detail.latestVersion.changelog}
-                            ></div>`
+                          ? html`<article class="clawhub-skill-detail__changelog sidebar-markdown">
+                              ${unsafeHTML(
+                                toSanitizedMarkdownHtml(detail.latestVersion.changelog, {
+                                  codeBlockChrome: "none",
+                                  mode: "document",
+                                }),
+                              )}
+                            </article>`
                           : nothing
                       }
                       ${
@@ -611,23 +615,25 @@ function renderClawHubDetailDialog(props: SkillsProps) {
                             </div>`
                           : nothing
                       }
-                      <button
-                        class="btn primary"
-                        ?disabled=${skillInstallLocked(props)}
-                        @click=${() => {
-                          if (props.clawhubDetailRef) {
-                            props.onClawHubInstall(props.clawhubDetailRef);
+                      <div class="exec-approval-actions" style="margin-top: 0;">
+                        <button
+                          class="btn primary"
+                          ?disabled=${skillInstallLocked(props)}
+                          @click=${() => {
+                            if (props.clawhubDetailRef) {
+                              props.onClawHubInstall(props.clawhubDetailRef);
+                            }
+                          }}
+                        >
+                          ${
+                            activeClawHubMutation(props, props.clawhubDetailRef ?? "")
+                              ? t("skillsPage.installing")
+                              : props.personalImport
+                                ? t("skillLibrary.import")
+                                : t("skillsPage.installNamed", { name: detail.skill.displayName })
                           }
-                        }}
-                      >
-                        ${
-                          activeClawHubMutation(props, props.clawhubDetailRef ?? "")
-                            ? t("skillsPage.installing")
-                            : props.personalImport
-                              ? t("skillLibrary.import")
-                              : t("skillsPage.installNamed", { name: detail.skill.displayName })
-                        }
-                      </button>
+                        </button>
+                      </div>
                     `
                   : html`<div class="muted">${t("skillsPage.notFound")}</div>`
           }

@@ -13,10 +13,11 @@ afterEach(() => {
 });
 
 describe("ClawHub detail content", () => {
-  it.each([390, 1440])("contains long plain-text details at %ipx", async (width) => {
+  it.each([390, 1440])("contains rendered Markdown details at %ipx", async (width) => {
     await page.viewport(width, 960);
     document.body.append(container);
-    const changelog = `# Release notes\n\n<em>Keep this literal</em>\n${"long_identifier_".repeat(80)}\nLast line`;
+    const code = "long_identifier_".repeat(80);
+    const changelog = `# Release notes\n\nFirst paragraph starts here.\n\n\`\`\`text\n${code}\n\`\`\`\n\n| Change | Status |\n| --- | --- |\n| Preview | Ready |\n\n<img src="javascript:alert(1)" onerror="alert(1)">`;
     render(
       renderSkills(
         createProps({
@@ -45,10 +46,10 @@ describe("ClawHub detail content", () => {
     for (const child of body.children) {
       expect(child.scrollWidth).toBeLessThanOrEqual(child.clientWidth);
     }
-    const changelogElement = Array.from(body.children).find((child) =>
-      child.textContent?.includes("# Release notes"),
-    );
-    expect(changelogElement?.textContent).toBe(changelog);
-    expect(changelogElement?.children).toHaveLength(0);
+    expect(body.querySelector("h1")?.textContent).toBe("Release notes");
+    expect(body.querySelector("article > p")?.textContent).toBe("First paragraph starts here.");
+    expect(body.querySelector("pre code")?.textContent).toBe(`${code}\n`);
+    expect(body.querySelector("td")?.textContent).toBe("Preview");
+    expect(body.querySelector("[onerror], [src^='javascript:']")).toBeNull();
   });
 });
