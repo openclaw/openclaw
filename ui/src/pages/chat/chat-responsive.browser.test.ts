@@ -267,8 +267,9 @@ function expectControlRect(rect: ControlRect | null, label: string): ControlRect
   return rect;
 }
 
-function readUiCss(): string {
-  if (cachedUiCss !== null) {
+// New Session loads composer styles before Chat adds its layout styles.
+function readUiCss(composerFirst = false): string {
+  if (cachedUiCss !== null && !composerFirst) {
     return cachedUiCss;
   }
   const files = [
@@ -276,9 +277,17 @@ function readUiCss(): string {
     "ui/src/styles/layout.css",
     "ui/src/styles/layout.mobile.css",
     "ui/src/styles/components.css",
-    "ui/src/styles/chat/layout.css",
-    "ui/src/styles/chat/message-layout.css",
-    "ui/src/styles/chat/composer.css",
+    ...(composerFirst
+      ? [
+          "ui/src/styles/chat/composer.css",
+          "ui/src/styles/chat/layout.css",
+          "ui/src/styles/chat/message-layout.css",
+        ]
+      : [
+          "ui/src/styles/chat/layout.css",
+          "ui/src/styles/chat/message-layout.css",
+          "ui/src/styles/chat/composer.css",
+        ]),
     "ui/src/styles/chat/composer-queue.css",
     "ui/src/styles/chat/progress-card.css",
     "ui/src/styles/chat/composer-progress.css",
@@ -290,8 +299,11 @@ function readUiCss(): string {
     "ui/src/styles/chat/sidebar.css",
     "ui/src/styles/chat/side-panel.css",
   ];
-  cachedUiCss = files.map((file) => readStyleSheet(file)).join("\n");
-  return cachedUiCss;
+  const css = files.map((file) => readStyleSheet(file)).join("\n");
+  if (!composerFirst) {
+    cachedUiCss = css;
+  }
+  return css;
 }
 
 function iconSvg() {
@@ -1809,29 +1821,33 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
     }
   });
 
-  it.each([
-    [320, 568, 0, 0, "48rem"],
-    [390, 844, 0, 0, "48rem"],
-    [768, 1024, 0, 0, "48rem"],
-    [844, 390, 44, 0, "48rem"],
-    [844, 390, 0, 44, "48rem"],
-    [932, 430, 44, 0, "none"],
-    [390, 844, 0, 0, "82%"],
-    [844, 390, 44, 0, "82%"],
-    [844, 390, 0, 44, "min(1280px, 82%)"],
-    [769, 1024, 0, 0, "none"],
-    [933, 430, 44, 0, "none"],
-    [1600, 900, 0, 0, "48rem"],
-    [1600, 900, 0, 0, "82%"],
-  ] as const)(
-    "aligns composer siblings at %sx%s with safe areas %s/%s and saved width %s",
-    async (width, height, safeLeft, safeRight, maxWidth) => {
+  it.each(
+    (
+      [
+        [320, 568, 0, 0, "48rem"],
+        [390, 844, 0, 0, "48rem"],
+        [768, 1024, 0, 0, "48rem"],
+        [844, 390, 44, 0, "48rem"],
+        [844, 390, 0, 44, "48rem"],
+        [932, 430, 44, 0, "none"],
+        [390, 844, 0, 0, "82%"],
+        [844, 390, 44, 0, "82%"],
+        [844, 390, 0, 44, "min(1280px, 82%)"],
+        [769, 1024, 0, 0, "none"],
+        [933, 430, 44, 0, "none"],
+        [1600, 900, 0, 0, "48rem"],
+        [1600, 900, 0, 0, "82%"],
+      ] as const
+    ).flatMap((entry) => [[...entry, false] as const, [...entry, true] as const]),
+  )(
+    "aligns composer siblings at %sx%s with safe areas %s/%s and saved width %s (composer first: %s)",
+    async (width, height, safeLeft, safeRight, maxWidth, composerFirst) => {
       const page = await openBrowserPage(width, height);
       try {
         // Mirror chat-view's sibling hierarchy; only the system safe-area tokens
         // are synthetic. The production styles own every measured box.
         await page.setContent(
-          `<!doctype html><html><head><style>${readUiCss()}</style></head>
+          `<!doctype html><html><head><style>${readUiCss(composerFirst)}</style></head>
           <body style="--safe-area-left: ${safeLeft}px; --safe-area-right: ${safeRight}px">
             <section class="card chat" style="--chat-thread-max-width: ${maxWidth}">
               <div class="chat-main__conversation">
