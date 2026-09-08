@@ -2646,5 +2646,37 @@
   {
     "source": "Remote test proof",
     "target": "远程测试验证"
+  },
+  {
+    "source": "Code Mode quickstart",
+    "target": "代码模式快速上手"
+  },
+  {
+    "source": "Code Mode configuration",
+    "target": "代码模式配置"
+  },
+  {
+    "source": "Code Mode tool surface",
+    "target": "代码模式工具暴露面"
+  },
+  {
+    "source": "Code Mode guest API",
+    "target": "代码模式来宾 API"
+  },
+  {
+    "source": "Code Mode output",
+    "target": "代码模式输出"
+  },
+  {
+    "source": "Code Mode internals",
+    "target": "代码模式内部机制"
+  },
+  {
+    "source": "Code Mode troubleshooting",
+    "target": "代码模式故障排查"
+  },
+  {
+    "source": "Code Mode maintainer notes",
+    "target": "代码模式维护者说明"
   }
 ]

@@ -1828,6 +1828,19 @@
                     "group": "Tool catalogs and workflows",
                     "pages": [
                       "tools/code-mode",
+                      {
+                        "group": "Code Mode",
+                        "pages": [
+                          "tools/code-mode/quickstart",
+                          "tools/code-mode/configuration",
+                          "tools/code-mode/tool-surface",
+                          "tools/code-mode/guest-api",
+                          "tools/code-mode/output",
+                          "tools/code-mode/internals",
+                          "tools/code-mode/troubleshooting",
+                          "tools/code-mode/maintainers"
+                        ]
+                      },
                       "tools/llm-task",
                       "tools/lobster",
                       "tools/mcp",

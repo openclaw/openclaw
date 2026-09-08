@@ -95,7 +95,7 @@ whose structured results cannot cross the JSON-only bridge stay direct.
 `enabled` defaults to `false`, including when the object sets other Code Mode
 options. To engage code mode only for models whose catalog entry flags
 `compat.codeMode: "preferred"`, enable `"auto"` explicitly. See
-[Code Mode - automatic per-model activation](/tools/code-mode#automatic-per-model-activation).
+[Code Mode - automatic per-model activation](/tools/code-mode/configuration#automatic-per-model-activation).
 
 ```json5
 {
