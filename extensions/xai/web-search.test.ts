@@ -845,7 +845,7 @@ describe("xai provider models", () => {
     expectCatalogEntry("xai/GROK-4.3", grok43);
   });
 
-  it("leaves ids outside the manifest to forward-compat defaults", () => {
+  it("keeps supported non-curated ids out of the published inventory", () => {
     for (const modelId of [
       "grok-latest",
       "grok-4-latest",
@@ -855,7 +855,10 @@ describe("xai provider models", () => {
       "grok-3-mini-fast",
       "grok-3",
     ]) {
-      expect(resolveXaiCatalogEntry(modelId), modelId).toBeUndefined();
+      expect(
+        buildXaiCatalogModels().some((model) => model.id === modelId),
+        modelId,
+      ).toBe(false);
     }
   });
 
@@ -1017,6 +1020,7 @@ describe("xai provider models", () => {
     expect(grok3Mini?.api).toBe("openai-responses");
     expect(grok3Mini?.baseUrl).toBe("https://api.x.ai/v1");
     expect(grok3Mini?.reasoning).toBe(true);
+    expect(grok3Mini?.input).toEqual(["text"]);
     expect(grok3Mini?.cost).toEqual({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
     expect(grok3Mini?.contextWindow).toBe(1_000_000);
     expect(grok3Mini?.maxTokens).toBe(64_000);

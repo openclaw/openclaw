@@ -169,8 +169,9 @@ OpenClaw's flat catalog cost fields record the short-context rates. The current
 historical OpenClaw `grok-build-latest` compatibility alias remains pinned to
 Grok 4.5.
 
-Models outside the curated list have unknown pricing, recorded as zero until
-the manifest includes them. Zero is an unavailable estimate, not a claim that
+Supported non-curated aliases retain their reasoning, input, and token-limit
+metadata without joining the published inventory. Their pricing remains unknown,
+recorded as zero until the manifest includes them. Zero is an unavailable estimate, not a claim that
 the provider charges nothing.
 
 ## Feature coverage

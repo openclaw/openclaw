@@ -4,7 +4,7 @@ import {
   asOptionalRecord,
   normalizeOptionalLowercaseString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { normalizeXaiModelId } from "./model-id.js";
+import { isXaiFrontierModelId, normalizeXaiModelId } from "./model-id.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 
 export const XAI_BASE_URL = manifest.modelCatalog.providers.xai.baseUrl;
@@ -39,11 +39,61 @@ function copyXaiModelDefinition(entry: ModelDefinitionConfig): ModelDefinitionCo
 const XAI_MODEL_CATALOG: readonly ModelDefinitionConfig[] =
   manifest.modelCatalog.providers.xai.models.map(toXaiModelDefinition);
 
-/** Exact curated row for a model id, after xAI alias normalization. */
+/** Curated pricing and supported-family capabilities share one lookup owner. */
 export function resolveXaiCatalogEntry(modelId: string): ModelDefinitionConfig | undefined {
   const normalized = normalizeXaiCatalogModelId(modelId);
   const entry = XAI_MODEL_CATALOG.find((model) => model.id.toLowerCase() === normalized);
-  return entry ? copyXaiModelDefinition(entry) : undefined;
+  if (entry) {
+    return copyXaiModelDefinition(entry);
+  }
+  if (normalized.includes("multi-agent")) {
+    return undefined;
+  }
+  const grok3 = normalized.startsWith("grok-3");
+  const frontier = isXaiFrontierModelId(normalized);
+  const multimodal =
+    normalized === "grok-latest" ||
+    frontier ||
+    normalized.startsWith("grok-4.3") ||
+    normalized.startsWith("grok-4.20") ||
+    normalized.startsWith("grok-4-1") ||
+    normalized.startsWith("grok-4-fast");
+  if (!grok3 && !multimodal && !normalized.startsWith("grok-4")) {
+    return undefined;
+  }
+  const id = normalizeXaiModelId(modelId.trim());
+  return {
+    id,
+    name: id,
+    reasoning: grok3 ? normalized.includes("mini") : !normalized.includes("non-reasoning"),
+    input: multimodal ? ["text", "image"] : ["text"],
+    cost: { ...XAI_UNKNOWN_MODEL_COST },
+    contextWindow: frontier ? 500_000 : XAI_DEFAULT_CONTEXT_WINDOW,
+    maxTokens: normalized.startsWith("grok-4.20") ? 30_000 : XAI_DEFAULT_MAX_TOKENS,
+  };
+}
+
+export function resolveXaiForwardCompatDefinition(
+  modelId: string,
+): ModelDefinitionConfig | undefined {
+  const known = resolveXaiCatalogEntry(modelId);
+  if (known) {
+    return known;
+  }
+  const id = modelId.trim();
+  const lower = normalizeOptionalLowercaseString(id) ?? "";
+  if (!lower.startsWith("grok-") || lower.includes("multi-agent")) {
+    return undefined;
+  }
+  return {
+    id,
+    name: id,
+    reasoning: !lower.includes("non-reasoning"),
+    input: ["text", "image"],
+    cost: { ...XAI_UNKNOWN_MODEL_COST },
+    contextWindow: XAI_DEFAULT_CONTEXT_WINDOW,
+    maxTokens: XAI_DEFAULT_MAX_TOKENS,
+  };
 }
 
 export function buildXaiModelDefinition(): ModelDefinitionConfig {

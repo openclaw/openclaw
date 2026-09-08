@@ -3,21 +3,12 @@ import type {
   ProviderResolveDynamicModelContext,
   ProviderRuntimeModel,
 } from "openclaw/plugin-sdk/plugin-entry";
-import {
-  normalizeModelCompat,
-  type ModelDefinitionConfig,
-} from "openclaw/plugin-sdk/provider-model-shared";
+import { normalizeModelCompat } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import {
-  resolveXaiCatalogEntry,
-  XAI_BASE_URL,
-  XAI_DEFAULT_CONTEXT_WINDOW,
-  XAI_DEFAULT_MAX_TOKENS,
-  XAI_UNKNOWN_MODEL_COST,
-} from "./model-definitions.js";
+import { resolveXaiForwardCompatDefinition, XAI_BASE_URL } from "./model-definitions.js";
 import { normalizeXaiModelId } from "./model-id.js";
 import { applyXaiRuntimeModelCompat } from "./runtime-model-compat.js";
 
@@ -36,27 +27,6 @@ export function isModernXaiModel(modelId: string): boolean {
     return false;
   }
   return XAI_MODERN_MODEL_PREFIXES.some((prefix) => lower.startsWith(prefix));
-}
-
-function resolveXaiForwardCompatDefinition(modelId: string): ModelDefinitionConfig | undefined {
-  const curated = resolveXaiCatalogEntry(modelId);
-  if (curated) {
-    return curated;
-  }
-  const id = modelId.trim();
-  const lower = normalizeOptionalLowercaseString(id) ?? "";
-  if (!lower.startsWith("grok-") || lower.includes("multi-agent")) {
-    return undefined;
-  }
-  return {
-    id,
-    name: id,
-    reasoning: !lower.includes("non-reasoning"),
-    input: ["text", "image"],
-    cost: XAI_UNKNOWN_MODEL_COST,
-    contextWindow: XAI_DEFAULT_CONTEXT_WINDOW,
-    maxTokens: XAI_DEFAULT_MAX_TOKENS,
-  };
 }
 
 export function resolveXaiForwardCompatModel(params: {

@@ -7,6 +7,8 @@ import {
   normalizeOptionalString as trimString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { resolveXaiCatalogEntry } from "../model-definitions.js";
+import { applyXaiRuntimeModelCompat } from "../runtime-model-compat.js";
 import type { XaiWebSearchResponse } from "./web-search-response.types.js";
 
 const XAI_CITATION_MAX_COUNT = 20;
@@ -64,12 +66,21 @@ function buildXaiResponsesToolBody(params: {
   maxTurns?: number;
   reasoningEffort?: "none" | "low" | "medium" | "high";
 }): Record<string, unknown> {
+  const requested = params.reasoningEffort;
+  let reasoningEffort: string | undefined = requested;
+  const model = requested ? resolveXaiCatalogEntry(params.model) : undefined;
+  if (requested && model) {
+    const levels = applyXaiRuntimeModelCompat(model).thinkingLevelMap;
+    const level = requested === "none" ? "off" : requested;
+    // Direct tools must obey the same supported efforts as agent requests.
+    reasoningEffort = levels[level] ?? (level === "off" ? levels.minimal : undefined) ?? undefined;
+  }
   return {
     model: params.model,
     input: [{ role: "user", content: params.inputText }],
     tools: params.tools,
     store: false,
-    ...(params.reasoningEffort ? { reasoning: { effort: params.reasoningEffort } } : {}),
+    ...(reasoningEffort ? { reasoning: { effort: reasoningEffort } } : {}),
     ...(params.maxTurns ? { max_turns: params.maxTurns } : {}),
   };
 }
