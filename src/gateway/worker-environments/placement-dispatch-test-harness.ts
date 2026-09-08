@@ -20,7 +20,10 @@ import { createWorkerPlacementDispatchService } from "./placement-dispatch.js";
 import { createWorkerPlacementRunnerAvailabilityReader } from "./placement-projector.js";
 import { completeReclaimedWorkspaceTeardown } from "./placement-teardown.js";
 import type { WorkerEnvironmentService } from "./service.js";
-import { WorkerTunnelOwnerDisconnectedError } from "./tunnel-contract.js";
+import {
+  WorkerTunnelOwnerDisconnectedError,
+  type WorkerWorkspaceReconcileRequest,
+} from "./tunnel-contract.js";
 import type { WorkerTunnelHandle } from "./tunnel.js";
 import {
   projectWorkspaceResultConflict,
@@ -32,9 +35,17 @@ import {
   type WorkerWorkspaceOperationCoordinator,
 } from "./workspace-operation-coordinator.js";
 
+const runReclaimPreparation: Parameters<
+  typeof createWorkerPlacementDispatchService
+>[0]["runReclaimPreparation"] = async ({ run, authorize, pendingOperations }) => {
+  await pendingOperations?.settled;
+  return await run(authorize);
+};
+
 export function createHarness(
   placementStore: PlacementStore,
   options: {
+    environmentService?: WorkerEnvironmentService;
     runReclaimPreparation?: Parameters<
       typeof createWorkerPlacementDispatchService
     >[0]["runReclaimPreparation"];
@@ -44,6 +55,9 @@ export function createHarness(
     runFailedReclaimBarrier?: Parameters<
       typeof createWorkerPlacementDispatchService
     >[0]["runFailedReclaimBarrier"];
+    prepareGatewayMove?: Parameters<
+      typeof createWorkerPlacementDispatchService
+    >[0]["prepareGatewayMove"];
     failAt?: DispatchStage;
     destroyFails?: boolean;
     destroyFailureCount?: number;
@@ -123,8 +137,8 @@ export function createHarness(
     listPendingWorkspaceResults: () => placementStore.listPendingWorkspaceResults(),
     workspaceResultInstanceId: () => placementStore.workspaceResultInstanceId(),
     validateWorkspaceResultClaim: (claim) => placementStore.validateWorkspaceResultClaim(claim),
-    recordStagedWorkspaceResult: (claim, ref) =>
-      placementStore.recordStagedWorkspaceResult(claim, ref),
+    recordStagedWorkspaceResult: (claim, ref, repositoryWorkspaceId) =>
+      placementStore.recordStagedWorkspaceResult(claim, ref, repositoryWorkspaceId),
     recordWorkspaceResultConflict: (claim, conflict) =>
       placementStore.recordWorkspaceResultConflict(claim, conflict),
     claimTurn: (params) => placementStore.claimTurn(params),
@@ -241,14 +255,18 @@ export function createHarness(
         }),
       };
     }),
-    reconcileWorkspace: vi.fn(async (request) => {
+    reconcileWorkspace: vi.fn(async (request: WorkerWorkspaceReconcileRequest) => {
+      if (request.source.kind !== "local") {
+        throw new Error("Local dispatch fixture received a repository workspace");
+      }
+      const { journal, stagedResult } = request.source;
       log.push("workspace:reconcile");
       if (options.reconcileFails || remainingReconcileFailures > 0) {
         remainingReconcileFailures -= 1;
         throw new Error("workspace conflict");
       }
       if (options.reconcileCommitsManifest !== false) {
-        request.journal.commit(reconciledManifestRef);
+        journal.commit(reconciledManifestRef);
       }
       if (options.terminalizeReclaimOnTunnelDrop) {
         const owned = placementStore.get(REQUEST.sessionId);
@@ -278,8 +296,8 @@ export function createHarness(
         });
         throw options.terminalizedReclaimError ?? new WorkerTunnelOwnerDisconnectedError();
       }
-      if (options.reconcileConflictPaths?.length && request.stagedResult) {
-        request.stagedResult.record(request.stagedResult.ref);
+      if (options.reconcileConflictPaths?.length && stagedResult) {
+        stagedResult.record(stagedResult.ref);
       }
       await options.afterReconcile?.();
       return {
@@ -310,7 +328,7 @@ export function createHarness(
           ? {
               applyPreparedStagedResult: async () => {
                 log.push("workspace:apply-prepared");
-                request.journal.commit(reconciledManifestRef);
+                journal.commit(reconciledManifestRef);
               },
               publishStagedResult: async () => {},
             }
@@ -346,7 +364,7 @@ export function createHarness(
     expiresAtMs: 10_000,
   };
   const environments: WorkerDispatchEnvironmentService &
-    Pick<WorkerEnvironmentService, "recordError"> = {
+    Pick<WorkerEnvironmentService, "recordError" | "requestDestroy"> = {
     recordError: vi.fn((record) => record),
     supportsProviderExecutionMode: vi.fn(() => true),
     create: vi.fn(async () => {
@@ -394,6 +412,7 @@ export function createHarness(
       await options.afterDestroy?.();
       return destroyed;
     }),
+    requestDestroy: (requestedEnvironmentId) => environments.destroy(requestedEnvironmentId),
     reconcileOnce: vi.fn(async () => {
       log.push("environment:reconcile");
     }),
@@ -401,12 +420,15 @@ export function createHarness(
       log.push("environment:reconcile");
     }),
   };
+  if (options.environmentService) {
+    Object.assign(environments, options.environmentService);
+  }
   const service = createWorkerPlacementDispatchService({
     placements,
     environments,
     isShuttingDown: options.isShuttingDown,
-    runReclaimPreparation:
-      options.runReclaimPreparation ?? (async ({ run, authorize }) => await run(authorize)),
+    prepareGatewayMove: options.prepareGatewayMove,
+    runReclaimPreparation: options.runReclaimPreparation ?? runReclaimPreparation,
     runnerAvailability: createWorkerPlacementRunnerAvailabilityReader({
       environments,
       hasCurrentDeviceRunner: () => options.deviceRunnerAvailable === true,
@@ -429,7 +451,7 @@ export function createHarness(
       if (options.recoveryBarrierError) {
         throw options.recoveryBarrierError;
       }
-      await run(options.workspacePath ?? "/gateway/workspace");
+      await run({ kind: "local", path: options.workspacePath ?? "/gateway/workspace" });
     },
     runActivationBarrier: async ({ authorize, activate }) => {
       authorize?.();
@@ -485,7 +507,11 @@ export function createHarness(
             const placement = begin();
             return placement.state === "reclaimed"
               ? placement
-              : await reclaim(options.workspacePath ?? "/gateway/workspace", placement, authorize);
+              : await reclaim(
+                  { kind: "local", path: options.workspacePath ?? "/gateway/workspace" },
+                  placement,
+                  authorize,
+                );
           },
         })),
     runFailedReclaimBarrier:
@@ -499,9 +525,9 @@ export function createHarness(
             return await reclaim(authorize);
           },
         })),
-    resolveWorkspacePath: async () => {
+    resolveWorkspace: async () => {
       fail("workspace");
-      return options.workspacePath ?? "/gateway/workspace";
+      return { kind: "local", path: options.workspacePath ?? "/gateway/workspace" };
     },
     reportWorkspaceResultConflict,
     reportWorkspaceResultRecoveryFailure,
@@ -600,14 +626,15 @@ export const createRecoveryService = (
     runnerAvailability: { read: () => undefined, version: () => 0 },
     workspaceOperations: createWorkerWorkspaceOperationCoordinator(),
     runLocalBarrier: async ({ startDispatch }) => startDispatch(),
-    runRecoveryBarrier: async ({ run }) => await run("/gateway/workspace"),
+    runRecoveryBarrier: async ({ run }) => await run({ kind: "local", path: "/gateway/workspace" }),
     runActivationBarrier: async ({ activate }) => activate(),
     runMoveBarrier: async ({ begin }) => begin(),
     resolveMoveDestination: async () => undefined,
-    runReclaimPreparation: async ({ run, authorize }) => await run(authorize),
-    runReclaimBarrier: async ({ begin, reclaim }) => await reclaim("/gateway/workspace", begin()),
+    runReclaimPreparation,
+    runReclaimBarrier: async ({ begin, reclaim }) =>
+      await reclaim({ kind: "local", path: "/gateway/workspace" }, begin()),
     runFailedReclaimBarrier: async ({ reclaim }) => await reclaim(),
-    resolveWorkspacePath: async () => "/gateway/workspace",
+    resolveWorkspace: async () => ({ kind: "local", path: "/gateway/workspace" }),
     reportWorkspaceResultConflict: async () => {},
     resolveWorkspaceResultConflict: async () => ({ kind: "absent" }),
   });

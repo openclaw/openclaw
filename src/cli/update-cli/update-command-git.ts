@@ -20,6 +20,7 @@ import {
   type CommandRunner as GlobalCommandRunner,
 } from "../../infra/update-global.js";
 import { recordUpdateRunPhase } from "../../infra/update-run-ledger.js";
+import { normalizeFallbackFailureReason } from "../../infra/update-runner-command.js";
 import { readCurrentGitUpdateRecovery } from "../../infra/update-runner-git-recovery.js";
 import {
   readBranchName,
@@ -448,7 +449,8 @@ export async function updateGitInstall(params: {
   beforeGitMutation?: BeforeGitMutation;
   validateCandidate?: (root: string) => Promise<void>;
   onTransaction?: (transaction: PackageUpdateTransaction) => void;
-  managedServiceEnv?: NodeJS.ProcessEnv;
+  onConfigSnapshot?: Parameters<typeof runPackageUpdateDoctor>[0]["onConfigSnapshot"];
+  getManagedServiceEnv: () => NodeJS.ProcessEnv | undefined;
   invocationCwd?: string;
   nodeRunner?: string;
   inspectGitTarget?: UpdateRunnerOptions["inspectGitTarget"];
@@ -511,11 +513,8 @@ export async function updateGitInstall(params: {
       inspectGitTarget: params.inspectGitTarget,
       publishGitCheckout,
       validateCandidate: params.validateCandidate,
-      prepareGitExposure: params.switchToGit
+      prepareGitExposure: installTarget
         ? async (candidateRoot, candidateSha, candidateEnv) => {
-            if (!installTarget) {
-              throw new Error("global install target missing after package-to-Git preflight");
-            }
             const packageName =
               (await readPackageName(installTarget.packageRoot ?? params.root)) ??
               DEFAULT_PACKAGE_NAME;
@@ -531,13 +530,13 @@ export async function updateGitInstall(params: {
               installCwd: candidateRoot,
               expectedGitCheckout: { root: candidateRoot, sha: candidateSha },
               activateGitRoot: updateRoot,
-              // Exact source/runtime verification runs inside package staging; the Git
-              // owner runs the canary after package lifecycle work and before activation.
-              validateCandidate: async () => [],
               onTransaction: params.onTransaction,
               postVerifyStep: (root) =>
                 runPackageUpdateDoctor({
                   ...params,
+                  // Inspection is deferred until the Git target is known; read
+                  // its admitted service profile when backup and Doctor run.
+                  managedServiceEnv: params.getManagedServiceEnv(),
                   root,
                   timeoutMs: effectiveTimeout,
                 }),
@@ -594,7 +593,11 @@ export async function updateGitInstall(params: {
         ...updateResult,
         before,
         status: packageUpdate.failedStep ? "error" : "ok",
-        reason: packageUpdate.failedStep?.name,
+        reason:
+          packageUpdate.reason ??
+          (packageUpdate.failedStep
+            ? normalizeFallbackFailureReason(packageUpdate.failedStep.name)
+            : undefined),
         recovery: packageUpdate.recovery,
         steps: [...steps, ...packageUpdate.steps],
         durationMs: Date.now() - params.startedAt,
@@ -607,7 +610,7 @@ export async function updateGitInstall(params: {
       const [packageOwner, gitOwner, serviceUsesPackage] = await Promise.all([
         fs.realpath(packageRoot).catch(() => null),
         fs.realpath(updateRoot).catch(() => null),
-        gatewayServiceCommandUsesRoot({ root: packageRoot, env: params.managedServiceEnv }),
+        gatewayServiceCommandUsesRoot({ root: packageRoot, env: params.getManagedServiceEnv() }),
       ]);
       // Source publication can fail after stopping an untouched package service.
       // Recover that exact package; its version alone cannot authorize Git source.

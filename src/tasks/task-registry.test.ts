@@ -45,6 +45,11 @@ import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import {
+  createInMemoryTaskRegistryStore,
+  createInMemoryTaskFlowRegistryStore,
+} from "../test-utils/task-registry-store.js";
+import { collectCronHistoryOverflowTaskIds } from "./cron-history-retention.js";
 import { CRON_TASK_KIND } from "./cron-task-contract.js";
 import { SUBAGENT_KILL_TASK_ERROR } from "./detached-task-runtime-contract.js";
 import { ensureTaskRuntimeStateReady } from "./runtime-internal.js";
@@ -207,6 +212,7 @@ function configureTaskRegistryMaintenanceRuntimeForTest(params: {
     reason: string;
   }) => Promise<SessionBindingRecord[]>;
 }): void {
+  const listSnapshotTasks = params.listTaskRecords ?? (() => params.snapshotTasks);
   const emptyAcpEntry = {
     cfg: {} as never,
     storePath: "",
@@ -240,7 +246,14 @@ function configureTaskRegistryMaintenanceRuntimeForTest(params: {
     deleteTaskRecordById: (taskId: string) => params.currentTasks.delete(taskId),
     ensureTaskRegistryReady: () => {},
     getTaskById: (taskId: string) => params.currentTasks.get(taskId),
-    listTaskRecords: params.listTaskRecords ?? (() => params.snapshotTasks),
+    listTaskRecords: listSnapshotTasks,
+    getTaskRegistryMaintenanceSnapshot: () => {
+      const snapshotTasks = listSnapshotTasks();
+      return {
+        taskIds: snapshotTasks.map((task) => task.taskId),
+        cronHistoryOverflowTaskIds: collectCronHistoryOverflowTaskIds(snapshotTasks),
+      };
+    },
     markTaskLostById: (patch: {
       taskId: string;
       endedAt: number;
@@ -394,81 +407,6 @@ function finalizeSubagentTask(
   params: Omit<Parameters<typeof finalizeTaskRecordByRunId>[0], "runId" | "runtime">,
 ) {
   return finalizeTaskRecordByRunId({ runId: task.runId!, runtime: "subagent", ...params });
-}
-
-function createInMemoryTaskRegistryStore() {
-  const tasks = new Map<string, TaskRecord>();
-  const deliveryStates = new Map<string, TaskDeliveryState>();
-  return {
-    loadSnapshot: () => ({
-      tasks: new Map(tasks),
-      deliveryStates: new Map(deliveryStates),
-    }),
-    saveSnapshot: (snapshot: {
-      tasks: Map<string, TaskRecord>;
-      deliveryStates: Map<string, TaskDeliveryState>;
-    }) => {
-      tasks.clear();
-      deliveryStates.clear();
-      for (const [taskId, task] of snapshot.tasks.entries()) {
-        tasks.set(taskId, task);
-      }
-      for (const [taskId, state] of snapshot.deliveryStates.entries()) {
-        deliveryStates.set(taskId, state);
-      }
-    },
-    upsertTaskWithDeliveryState: (params: {
-      task: TaskRecord;
-      deliveryState?: TaskDeliveryState;
-    }) => {
-      tasks.set(params.task.taskId, params.task);
-      if (params.deliveryState) {
-        deliveryStates.set(params.deliveryState.taskId, params.deliveryState);
-      } else {
-        deliveryStates.delete(params.task.taskId);
-      }
-    },
-    upsertTask: (task: TaskRecord) => {
-      tasks.set(task.taskId, task);
-    },
-    deleteTaskWithDeliveryState: (taskId: string) => {
-      tasks.delete(taskId);
-      deliveryStates.delete(taskId);
-    },
-    deleteTask: (taskId: string) => {
-      tasks.delete(taskId);
-      deliveryStates.delete(taskId);
-    },
-    upsertDeliveryState: (state: TaskDeliveryState) => {
-      deliveryStates.set(state.taskId, state);
-    },
-    deleteDeliveryState: (taskId: string) => {
-      deliveryStates.delete(taskId);
-    },
-    close: () => {},
-  };
-}
-
-function createInMemoryTaskFlowRegistryStore() {
-  const flows = new Map<string, TaskFlowRecord>();
-  return {
-    loadSnapshot: () => ({
-      flows: new Map(flows),
-    }),
-    saveSnapshot: (snapshot: { flows: Map<string, TaskFlowRecord> }) => {
-      flows.clear();
-      for (const [flowId, flow] of snapshot.flows.entries()) {
-        flows.set(flowId, flow);
-      }
-    },
-    upsertFlow: (flow: TaskFlowRecord) => {
-      flows.set(flow.flowId, flow);
-    },
-    deleteFlow: (flowId: string) => {
-      flows.delete(flowId);
-    },
-    close: () => {},
-  };
 }
 
 function configureInMemoryTaskStoresForTests() {
@@ -1788,8 +1726,8 @@ describe("task-registry", () => {
       });
       configureTaskFlowRegistryRuntime({
         store: {
+          ...createInMemoryTaskFlowRegistryStore(),
           loadSnapshot,
-          saveSnapshot: () => {},
         },
       });
 
@@ -1843,16 +1781,16 @@ describe("task-registry", () => {
       }));
       configureTaskRegistryRuntime({
         store: {
+          ...createInMemoryTaskRegistryStore(),
           loadSnapshot: loadTaskSnapshot,
-          saveSnapshot: () => {},
         },
       });
       configureTaskFlowRegistryRuntime({
         store: {
+          ...createInMemoryTaskFlowRegistryStore(),
           loadSnapshot: () => {
             throw new Error("SQLITE_CORRUPT: task-flow startup restore failed");
           },
-          saveSnapshot: () => {},
         },
       });
 
@@ -1871,10 +1809,10 @@ describe("task-registry", () => {
       });
       configureTaskRegistryRuntime({
         store: {
+          ...createInMemoryTaskRegistryStore(),
           loadSnapshot: () => {
             throw new Error("SQLITE_IOERR: task startup restore failed");
           },
-          saveSnapshot: () => {},
         },
       });
 
@@ -1916,10 +1854,10 @@ describe("task-registry", () => {
       });
       configureTaskFlowRegistryRuntime({
         store: {
+          ...createInMemoryTaskFlowRegistryStore(),
           loadSnapshot: () => ({
             flows: new Map(),
           }),
-          saveSnapshot: () => {},
           upsertFlow,
         },
       });
@@ -1985,10 +1923,10 @@ describe("task-registry", () => {
       let failUpsert = true;
       configureTaskFlowRegistryRuntime({
         store: {
+          ...createInMemoryTaskFlowRegistryStore(),
           loadSnapshot: () => ({
             flows: new Map(),
           }),
-          saveSnapshot: () => {},
           upsertFlow: () => {
             if (failUpsert) {
               throw new Error("SQLITE_BUSY: database is locked");
@@ -3603,7 +3541,7 @@ describe("task-registry", () => {
     },
   );
 
-  it("does not relist task records for each terminal ACP cleanup check", async () => {
+  it("acquires one task snapshot for terminal ACP cleanup", async () => {
     await withTaskRegistryTempDir(async () => {
       const now = Date.now();
       const tasks = Array.from({ length: 20 }, (_, index) => {
@@ -3780,6 +3718,7 @@ describe("task-registry", () => {
       const now = Date.now();
       configureTaskRegistryRuntime({
         store: {
+          ...createInMemoryTaskRegistryStore(),
           loadSnapshot: () => ({
             tasks: new Map([
               [
@@ -3803,7 +3742,6 @@ describe("task-registry", () => {
             ]),
             deliveryStates: new Map(),
           }),
-          saveSnapshot: () => {},
         },
       });
 
@@ -3931,9 +3869,10 @@ describe("task-registry", () => {
         deleteTaskRecordById: () => false,
         ensureTaskRegistryReady: () => {},
         getTaskById: () => undefined,
-        listTaskRecords: () => {
+        getTaskRegistryMaintenanceSnapshot: () => {
           throw new Error("maintenance boom");
         },
+        listTaskRecords: () => [],
         markTaskLostById: () => null,
         markTaskTerminalById: () => null,
         maybeDeliverTaskTerminalUpdate: async () => null,
@@ -3951,6 +3890,67 @@ describe("task-registry", () => {
       } finally {
         process.off("unhandledRejection", onUnhandledRejection);
       }
+    });
+  });
+
+  it("keeps sweep membership fixed while rereading tasks after awaited cleanup", async () => {
+    await withTaskRegistryTempDir(async () => {
+      const now = Date.now();
+      const parentSessionKey = "agent:main:main";
+      const childSessionKey = "agent:main:acp:snapshot-cleanup";
+      const closing = createTaskFixture("acp", {
+        ownerKey: parentSessionKey,
+        requesterSessionKey: parentSessionKey,
+        childSessionKey,
+        runId: "run-snapshot-cleanup",
+        task: "Close completed child",
+        status: "succeeded",
+        deliveryStatus: "delivered",
+      });
+      const retained = {
+        ...createTaskFixture("cli", {
+          runId: "run-snapshot-retained",
+          task: "Refresh retention during cleanup",
+          status: "succeeded",
+        }),
+        cleanupAfter: now - 1,
+      };
+      const arrived = { ...retained, taskId: "arrived-during-cleanup" };
+      const currentTasks = new Map([
+        [closing.taskId, closing],
+        [retained.taskId, retained],
+      ]);
+      let snapshotReads = 0;
+      const closeAcpSession = vi.fn(async () => {
+        await Promise.resolve();
+        currentTasks.set(retained.taskId, { ...retained, cleanupAfter: now + 86_400_000 });
+        currentTasks.set(arrived.taskId, arrived);
+      });
+      configureTaskRegistryMaintenanceRuntimeForTest({
+        currentTasks,
+        snapshotTasks: [closing, retained],
+        listTaskRecords: () => {
+          snapshotReads += 1;
+          return Array.from(currentTasks.values());
+        },
+        acpEntry: createAcpSessionStoreEntry({
+          sessionKey: childSessionKey,
+          parentSessionKey,
+          mode: "oneshot",
+        }),
+        closeAcpSession,
+      });
+
+      expect(await runTaskRegistryMaintenance()).toEqual({
+        reconciled: 0,
+        recovered: 0,
+        cleanupStamped: 0,
+        pruned: 0,
+      });
+      expect(closeAcpSession).toHaveBeenCalledOnce();
+      expect(snapshotReads).toBe(1);
+      expect(currentTasks.get(retained.taskId)?.cleanupAfter).toBe(now + 86_400_000);
+      expect(currentTasks.has(arrived.taskId)).toBe(true);
     });
   });
 
@@ -4133,6 +4133,7 @@ describe("task-registry", () => {
     await withTaskRegistryTempDir(async () => {
       configureTaskRegistryRuntime({
         store: {
+          ...createInMemoryTaskRegistryStore(),
           loadSnapshot: () => ({
             tasks: new Map([
               [
@@ -4156,7 +4157,6 @@ describe("task-registry", () => {
             ]),
             deliveryStates: new Map(),
           }),
-          saveSnapshot: () => {},
         },
       });
 
@@ -4172,6 +4172,7 @@ describe("task-registry", () => {
     await withTaskRegistryTempDir(async () => {
       configureTaskRegistryRuntime({
         store: {
+          ...createInMemoryTaskRegistryStore(),
           loadSnapshot: () => ({
             tasks: new Map([
               [
@@ -4194,7 +4195,6 @@ describe("task-registry", () => {
             ]),
             deliveryStates: new Map(),
           }),
-          saveSnapshot: () => {},
         },
       });
 
@@ -4211,12 +4211,11 @@ describe("task-registry", () => {
       let durableTasks = new Map<string, ReturnType<typeof createTaskFixture>>();
       configureTaskRegistryRuntime({
         store: {
+          ...createInMemoryTaskRegistryStore(),
           loadSnapshot: () => ({
             tasks: durableTasks,
             deliveryStates: new Map(),
           }),
-          saveSnapshot: () => {},
-          upsertTask: () => {},
           upsertTaskWithDeliveryState: () => {},
         },
       });
@@ -4286,6 +4285,7 @@ describe("task-registry", () => {
       let restoreShouldFail = true;
       configureTaskRegistryRuntime({
         store: {
+          ...createInMemoryTaskRegistryStore(),
           loadSnapshot: () => {
             if (restoreShouldFail) {
               throw new Error("SQLITE_IOERR: initial task restore failed");
@@ -4295,7 +4295,6 @@ describe("task-registry", () => {
               deliveryStates: new Map(),
             };
           },
-          saveSnapshot: () => {},
         },
       });
 
@@ -4341,6 +4340,7 @@ describe("task-registry", () => {
       let restoreError: Error | null = null;
       configureTaskRegistryRuntime({
         store: {
+          ...createInMemoryTaskRegistryStore(),
           loadSnapshot: () => {
             if (restoreError) {
               throw restoreError;
@@ -4350,7 +4350,6 @@ describe("task-registry", () => {
               deliveryStates: new Map(),
             };
           },
-          saveSnapshot: () => {},
         },
       });
       expect(getTaskById(storedTask.taskId)?.taskId).toBe(storedTask.taskId);
@@ -4376,6 +4375,7 @@ describe("task-registry", () => {
       const now = Date.now();
       configureTaskRegistryRuntime({
         store: {
+          ...createInMemoryTaskRegistryStore(),
           loadSnapshot: () => ({
             tasks: new Map([
               [
@@ -4399,7 +4399,6 @@ describe("task-registry", () => {
             ]),
             deliveryStates: new Map(),
           }),
-          saveSnapshot: () => {},
         },
       });
 

@@ -43,6 +43,7 @@ const runtimeConsumers = [
     "src/cli/update-cli/update-command-migrated.test.ts",
     "src/cli/update-cli/update-command-rollback.test.ts",
     "src/cli/update-cli/update-command-post-update-recovery.test.ts",
+    "src/cli/update-cli/update-command-post-update-repair.test.ts",
     "src/cli/update-cli/update-command-service.integration.test.ts",
   ].map((file) => ({
     file,
@@ -50,12 +51,15 @@ const runtimeConsumers = [
     mode: "runtime" as const,
     dir: "",
   })),
-  {
-    file: "src/infra/update-candidate-canary.integration.test.ts",
+  ...[
+    "src/infra/update-candidate-canary.integration.test.ts",
+    "src/infra/update-managed-service-handoff-lifecycle.test.ts",
+  ].map((file) => ({
+    file,
     configs: ["test/vitest/vitest.infra.config.ts"],
-    mode: "runtime",
+    mode: "runtime" as const,
     dir: "src",
-  },
+  })),
   ...[
     "src/commands/doctor-config-preflight.process.test.ts",
     "src/commands/doctor-config-preflight.refusal.process.test.ts",
@@ -67,6 +71,12 @@ const runtimeConsumers = [
     mode: "runtime" as const,
     dir: "src/commands",
   })),
+  {
+    file: "test/e2e/qa-lab/runtime/gateway-codex-delivery-cache.test.ts",
+    configs: ["test/vitest/vitest.tooling.config.ts"],
+    mode: "private-qa",
+    dir: "",
+  },
   {
     file: "test/e2e/qa-lab/runtime/gateway-support-export-runtime.test.ts",
     configs: ["test/vitest/vitest.tooling.config.ts"],
@@ -90,6 +100,7 @@ const runtimeConsumers = [
     "src/gateway/gateway-auth-rewarm.test.ts",
     "src/gateway/gateway-concurrent-streams.test.ts",
     "src/gateway/gateway-cron-process-identity.windows.test.ts",
+    "src/gateway/gateway-route-model-reuse.test.ts",
   ].map((file) => ({
     file,
     configs: ["test/vitest/vitest.gateway-core.config.ts", "test/vitest/vitest.gateway.config.ts"],
@@ -142,12 +153,25 @@ export function mergeVitestPretestBuildModes(
 export function resolveVitestPretestBuildMode(
   selections: readonly VitestRuntimeTestSelection[],
 ): VitestPretestBuildMode | undefined {
+  const preparedSelections = selections.map((selection) => {
+    const includedFiles = new Set<string>();
+    // Keep each pattern hot in Node's bounded glob cache across the small consumer list.
+    // Consumer-first traversal recompiles large include inventories for every file.
+    for (const pattern of selection.includePatterns ?? []) {
+      for (const { file } of runtimeConsumers) {
+        if (!includedFiles.has(file) && path.matchesGlob(file, pattern)) {
+          includedFiles.add(file);
+        }
+      }
+    }
+    return { ...selection, includedFiles };
+  });
   return mergeVitestPretestBuildModes(
     runtimeConsumers
       .filter(({ file, configs: consumerConfigs }) =>
-        selections.some(({ configs, includePatterns, matchesFile }) => {
+        preparedSelections.some(({ configs, includePatterns, matchesFile, includedFiles }) => {
           const included = includePatterns
-            ? includePatterns.some((pattern) => path.matchesGlob(file, pattern))
+            ? includedFiles.has(file)
             : consumerConfigs.some((config) => includesRuntimeConfig(configs, config));
           // Only project the canonical consumers; config loading and test discovery
           // stay with Vitest. Include-file overrides still intersect emitted filters.

@@ -2,6 +2,7 @@ import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/numb
 // Cron scratch CLI: private per-job prompt context reads and compare-and-swap writes.
 import type { Command } from "commander";
 import { addGatewayClientOptions, callGatewayFromCli } from "../gateway-rpc.js";
+import { CronCliError } from "./cron-cli-error.js";
 import { createCronOutputCommand } from "./output-mode.js";
 import { handleCronCliError, printCronJson } from "./shared.js";
 import { readCronScratchContent } from "./trigger-options.js";
@@ -22,7 +23,7 @@ function parseExpectedRevision(value: string | undefined): number | undefined {
   }
   const revision = parseStrictNonNegativeInteger(value);
   if (revision === undefined) {
-    throw new Error("--expected-revision must be a non-negative integer");
+    throw new CronCliError("--expected-revision must be a non-negative integer");
   }
   return revision;
 }
@@ -44,7 +45,7 @@ export function registerCronScratchCommand(cron: Command) {
             opts.unset === true,
           ].filter(Boolean).length;
           if (mutations > 1) {
-            throw new Error("choose only one of --set, --file, or --unset");
+            throw new CronCliError("choose only one of --set, --file, or --unset");
           }
           const current = (await callGatewayFromCli("cron.scratch.get", opts, {
             id: String(id),
@@ -71,7 +72,7 @@ export function registerCronScratchCommand(cron: Command) {
             expectedRevision,
           })) as ScratchSetResult;
           if (!result.ok) {
-            throw new Error(
+            throw new CronCliError(
               `cron scratch changed concurrently (current revision ${result.currentRevision})`,
             );
           }

@@ -1,16 +1,43 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import * as execRunner from "../process/exec-runner.js";
 import * as processExec from "../process/exec.js";
 import type { SpawnResult } from "../process/exec.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import {
   createGitCommandError,
   executeGitCommand,
+  normalizeGitPathForFilesystem,
   requireGitCommand,
   requireGitCommandBuffer,
   requireGitCommandRaw,
 } from "./git-exec.js";
 
 afterEach(() => vi.restoreAllMocks());
+
+describe("Git filesystem paths", () => {
+  it.each([
+    { input: "/c", expected: "C:\\" },
+    { input: "/C", expected: "C:\\" },
+    { input: "/c/", expected: "C:\\" },
+    { input: "/c/Users/example/repo", expected: "C:\\Users\\example\\repo" },
+    { input: "C:\\c\\Users\\example", expected: "C:\\c\\Users\\example" },
+    { input: "C:/Users/example", expected: "C:/Users/example" },
+    { input: "\\\\server\\share\\repo", expected: "\\\\server\\share\\repo" },
+    { input: "relative/repo", expected: "relative/repo" },
+    { input: "/cygdrive/c/repo", expected: "/cygdrive/c/repo" },
+    { input: "/workspace/repo", expected: "/workspace/repo" },
+    { input: "/rr", expected: "/rr" },
+  ])("normalizes only standard MSYS drive paths on Windows: $input", ({ input, expected }) => {
+    expect(normalizeGitPathForFilesystem(input, "win32")).toBe(expected);
+  });
+
+  it.each(["/c", "/C", "/c/", "/c/Users/example/repo"])(
+    "leaves MSYS-shaped text unchanged on non-Windows hosts: %s",
+    (input) => {
+      expect(normalizeGitPathForFilesystem(input, "linux")).toBe(input);
+    },
+  );
+});
 
 const progress = Array.from({ length: 1000 }, (_, i) => `Updating files: ${i}/1000`).join("\r");
 const failure = {
@@ -50,7 +77,11 @@ it.each([
   const args = ["worktree", "add"];
   const result = await executeGitCommand("/repo", args, { timeoutMs });
   const label = `timed out after ${seconds} seconds`;
-  expect(createGitCommandError("git worktree add", result).message).toContain(label);
+  const message = createGitCommandError("git worktree add", result).message;
+  expect(message).toContain(label);
+  expect(message).toContain(
+    `Git did not finish within its ${seconds}s budget; check remote reachability, repository locks, and clone shape (partial clones fetch missing objects lazily).`,
+  );
   await expect(requireGitCommand("/repo", args, { timeoutMs })).rejects.toThrow(label);
   expect(
     commandSpy.mock.calls.map(([, options]) =>
@@ -142,6 +173,13 @@ describe.each([
     },
     {
       termination: "signal",
+      signal: null,
+      code: 0,
+      killed: false,
+      expected: "terminated",
+    },
+    {
+      termination: "signal",
       signal: "SIGKILL",
       outputLimitExceeded: true,
       code: null,
@@ -156,7 +194,9 @@ describe.each([
       expect(message.length).toBeLessThan(400);
       expect(message).toContain("Updating files: 999/1000");
       if (metadata.termination === "timeout") {
-        expect(message).toContain("Check repository access and disk space.");
+        expect(message).toContain(
+          "Git did not finish within its 120s budget; check remote reachability, repository locks, and clone shape (partial clones fetch missing objects lazily).",
+        );
       } else {
         expect(message).not.toMatch(/timed out|timeout/i);
       }
@@ -190,6 +230,17 @@ describe("required Git output", () => {
       await expect(requireGitCommandRaw(root, args)).resolves.toBe(stdout);
       await expect(requireGitCommand(root, args)).resolves.toBe(stdout.trim());
     });
+  });
+
+  it("rejects buffered I/O failures after a zero exit", async () => {
+    const error = Object.assign(new Error("stdout read failed"), {
+      exitCode: 0,
+      outputErrorStream: "stdout",
+    });
+    vi.spyOn(execRunner, "runCommandWithTimeout").mockRejectedValueOnce(error);
+    await expect(
+      requireGitCommandBuffer("/repo", ["cat-file", "blob", "HEAD:file"]),
+    ).rejects.toThrow("git cat-file blob HEAD:file failed");
   });
 
   it("keeps binary output including invalid UTF-8 and terminal control bytes", async () => {

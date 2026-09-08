@@ -61,9 +61,6 @@ function setMediaStoreNetworkDepsForTest(deps?: {
 
 if (process.env.VITEST || process.env.NODE_ENV === "test") {
   (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.mediaStoreTestApi")] = {
-    enforcePlaybackTranscodeCacheLimit,
-    PLAYBACK_TRANSCODE_MAX_CACHE_BYTES,
-    PLAYBACK_TRANSCODE_TTL_MS,
     setMediaStoreNetworkDepsForTest,
   };
 }
@@ -123,12 +120,12 @@ function openMediaStore(maxBytes = MAX_BYTES, rootDir = resolveMediaDir()) {
  * Keeps: alphanumeric, dots, hyphens, underscores, Unicode letters/numbers.
  */
 function sanitizeFilename(name: string): string {
-  const base = sanitizeUntrustedFileName(name, "");
+  // Store keys require NFC; source filesystem paths keep their original spelling.
+  const base = sanitizeUntrustedFileName(name, "").normalize("NFC");
   if (!base) {
     return "";
   }
   const sanitized = base.replace(/[^\p{L}\p{N}._-]+/gu, "_");
-  // Collapse multiple underscores, trim leading/trailing, limit length
   return truncateUtf16Safe(sanitized.replace(/_+/g, "_").replace(/^_|_$/g, ""), 60);
 }
 
@@ -302,11 +299,6 @@ export async function writePlaybackTranscodeCache(params: {
     await prunePlaybackTranscodeCacheToSize();
     return filePath;
   });
-}
-
-/** Serializes maintenance quota scans with cache insertions. */
-async function enforcePlaybackTranscodeCacheLimit(): Promise<void> {
-  await queuePlaybackCacheOperation(prunePlaybackTranscodeCacheToSize);
 }
 
 /** Prunes expired playback renditions and reapplies the fixed cache size budget. */

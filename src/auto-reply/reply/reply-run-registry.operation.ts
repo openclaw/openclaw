@@ -24,11 +24,13 @@ import {
 import {
   abortFrozenOperations,
   attachedBackendByOperation,
+  clearReplyOperationByOperation,
   clearReplyRunState,
   createUserAbortError,
   evictReplyOperationByOperation,
   expireReplyOperationByOperation,
   flushReplyOperationAfterClear,
+  forceClearReplyOperation,
   getAttachedBackend,
   hasCommittedReplyOperationOutcome,
   isReplyOperationAbortable,
@@ -36,16 +38,17 @@ import {
   markReplyRunDiagnosticProgress,
   notifyReplyRunEnded,
   operationsByUpstreamAbortSignal,
+  prepareReplyRunKeyUpdate,
   registerFollowupAdmissionBarrier,
   registerWaitSessionId,
   replyRunState,
+  resolveReplyOperationAgentId,
   retainStateUntilCompleteOperations,
   type ReplyRunAdmissionBarrier,
   runAfterReplyOperationClear,
   startReplyOperationSuccessorBarriers,
   updateFollowupAdmissionSessionId,
   updateSuccessorAdmissionSessionId,
-  waitForReplyBarrierSettlement,
 } from "./reply-run-registry.state.js";
 
 type ReplyBackendCancelReason = "user_abort" | "restart" | "superseded";
@@ -55,6 +58,7 @@ type ReplyOperationAbortCode = Extract<ReplyOperationResult, { kind: "aborted" }
 export function createReplyOperation(params: {
   sessionKey: string;
   sessionId: string;
+  agentId?: string;
   turnKind?: ReplyTurnKind;
   resetTriggered: boolean;
   routeThreadId?: string | number;
@@ -88,12 +92,12 @@ export function createReplyOperation(params: {
   // adoption); every closure below must read this, never params.sessionKey.
   let currentSessionKey = sessionKey;
   let currentSessionId = sessionId;
+  let currentAgentId = resolveReplyOperationAgentId(sessionKey, params.agentId);
   let phase: ReplyOperationPhase = "queued";
   let phaseBeforeGlobalLaneWait: "queued" | "running" | undefined;
   let staleExpiryReason: replyRunSettle.ReplyOperationStaleReason | undefined;
   let result: ReplyOperationResult | null = null;
   let stateCleared = false;
-  let clearBarrierSettlement: Promise<void> | undefined;
   let pendingClearBarrier: ReplyRunAdmissionBarrier | undefined;
   let retainFailureUntilComplete = false;
   let terminalRecovery = false;
@@ -102,7 +106,17 @@ export function createReplyOperation(params: {
   let toolAuthoritySnapshot: ReplyToolAuthoritySnapshot | undefined;
   let toolAuthorityRoute: { provider: string; model: string } | undefined;
   const ownerSettlement = createDeferredCore();
-  const settleOwner = () => ownerSettlement.resolve(undefined);
+  let ownerCompletionBarrier: Promise<void> | undefined;
+  const settleOwner = (): void => {
+    const pending = ownerCompletionBarrier;
+    if (!pending) {
+      ownerSettlement.resolve(undefined);
+      return;
+    }
+    void pending.then(() =>
+      pending === ownerCompletionBarrier ? ownerSettlement.resolve(undefined) : settleOwner(),
+    );
+  };
   const startedAtMs = Date.now();
   const lifecycleGeneration = getAgentEventLifecycleGeneration();
   let lastActivityAtMs = startedAtMs;
@@ -136,17 +150,17 @@ export function createReplyOperation(params: {
     finalizationLease.clear();
     expireReplyOperationByOperation.delete(operation);
     evictReplyOperationByOperation.delete(operation);
+    clearReplyOperationByOperation.delete(operation);
     detachUpstreamAbort();
     const registeredBarrier = afterClearBarrier
       ? registerFollowupAdmissionBarrier(
-          currentSessionKey,
-          currentSessionId,
+          operation,
           afterClearBarrier,
           followupAdmissionBarrierTimeout,
         )
       : pendingClearBarrier;
     pendingClearBarrier = undefined;
-    updateFollowupAdmissionSessionId(currentSessionKey, currentSessionId);
+    updateFollowupAdmissionSessionId(operation);
     // Recovery-owner handoff must begin before the old slot wakes a successor;
     // otherwise that successor can snapshot durable state the handoff then mutates.
     startReplyOperationSuccessorBarriers(operation);
@@ -165,9 +179,8 @@ export function createReplyOperation(params: {
       return;
     }
     void registeredBarrier.settled.then(() =>
-      flushReplyOperationAfterClear(operation, registeredBarrier.sessionId),
+      flushReplyOperationAfterClear(operation, registeredBarrier.source.sessionId),
     );
-    clearBarrierSettlement = registeredBarrier.settled;
   };
 
   const abortInternally = (reason?: unknown) => {
@@ -218,6 +231,9 @@ export function createReplyOperation(params: {
     get sessionId() {
       return currentSessionId;
     },
+    get agentId() {
+      return currentAgentId;
+    },
     turnKind: params.turnKind ?? "visible",
     lifecycleGeneration,
     get routeThreadId() {
@@ -260,6 +276,9 @@ export function createReplyOperation(params: {
     hasOwnedSessionId(candidateSessionId) {
       const normalizedSessionId = normalizeOptionalString(candidateSessionId);
       return normalizedSessionId ? ownedSessionIds.has(normalizedSessionId) : false;
+    },
+    captureOwnedSessionIds() {
+      return new Set(ownedSessionIds);
     },
     recordActivity() {
       finalizationLease.recordActivity();
@@ -389,7 +408,7 @@ export function createReplyOperation(params: {
       registerWaitSessionId(currentSessionKey, currentSessionId);
       currentSessionId = normalizedNextSessionId;
       ownedSessionIds.add(currentSessionId);
-      updateFollowupAdmissionSessionId(currentSessionKey, currentSessionId);
+      updateFollowupAdmissionSessionId(operation);
       updateSuccessorAdmissionSessionId(operation, currentSessionId);
       replyRunState.activeSessionIdsByKey.set(currentSessionKey, currentSessionId);
       replyRunState.activeKeysBySessionId.set(currentSessionId, currentSessionKey);
@@ -400,30 +419,20 @@ export function createReplyOperation(params: {
         reason: "reply_operation:session_updated",
       });
     },
-    updateSessionKey(nextSessionKey) {
-      const normalizedNextKey = normalizeOptionalString(nextSessionKey);
-      if (!normalizedNextKey) {
-        throw new Error("Reply operations require a canonical sessionKey");
-      }
-      if (normalizedNextKey === currentSessionKey) {
+    updateSessionKey(nextSessionKey, agentId) {
+      const update = prepareReplyRunKeyUpdate(operation, nextSessionKey, agentId, stateCleared);
+      if (!update) {
         return;
       }
-      // Only a queued reservation may move slots: once the run started (or the
-      // operation settled), abort/steer/wait paths already resolved this key.
-      if (result || stateCleared || phase !== "queued") {
-        throw new Error(`Cannot rekey reply operation ${currentSessionKey} in phase ${phase}`);
-      }
-      if (replyRunState.activeRunsByKey.has(normalizedNextKey)) {
-        throw new ReplyRunAlreadyActiveError(normalizedNextKey);
-      }
-      if (replyRunState.successorAdmissionBarriersByKey.has(normalizedNextKey)) {
-        throw new ReplyRunSuccessorAdmissionBlockedError(normalizedNextKey);
-      }
       recordActivity();
+      currentAgentId = update.agentId;
+      if (update.sessionKey === currentSessionKey) {
+        return;
+      }
       const previousKey = currentSessionKey;
       replyRunState.activeRunsByKey.delete(previousKey);
       replyRunState.activeSessionIdsByKey.delete(previousKey);
-      currentSessionKey = normalizedNextKey;
+      currentSessionKey = update.sessionKey;
       replyRunState.activeRunsByKey.set(currentSessionKey, operation);
       replyRunState.activeSessionIdsByKey.set(currentSessionKey, currentSessionId);
       replyRunState.activeKeysBySessionId.set(currentSessionId, currentSessionKey);
@@ -494,26 +503,24 @@ export function createReplyOperation(params: {
       operation.complete();
     },
     completeWithAfterClearBarrier(barrier, timeoutMs) {
+      // Admission may time out to free a slot; the old writer settles only when
+      // its actual delivery/persistence barrier finishes, including repeated complete().
+      const completed = Promise.resolve(barrier).then(
+        () => {},
+        () => {},
+      );
+      ownerCompletionBarrier = ownerCompletionBarrier
+        ? Promise.all([ownerCompletionBarrier, completed]).then(() => {})
+        : completed;
       if (!result) {
         setResult({ kind: "completed" });
         phase = "completed";
       }
-      const wasAlreadyCleared = stateCleared;
-      const ownerCompletionSettlement = pendingClearBarrier
-        ? waitForReplyBarrierSettlement(barrier, timeoutMs)
-        : undefined;
       clearState(barrier, timeoutMs);
       // This barrier owns dispatch delivery and terminal persistence. Stale
       // expiry may have already cleared the slot, but recovery must still wait
       // for that old owner's durable work before admitting a queued turn.
-      const completionSettlement = wasAlreadyCleared
-        ? waitForReplyBarrierSettlement(barrier, timeoutMs)
-        : (ownerCompletionSettlement ?? clearBarrierSettlement);
-      if (completionSettlement) {
-        void completionSettlement.then(settleOwner);
-      } else {
-        settleOwner();
-      }
+      settleOwner();
     },
     fail(code, cause) {
       abortFrozenOperations.add(operation);
@@ -560,6 +567,7 @@ export function createReplyOperation(params: {
     },
   };
 
+  clearReplyOperationByOperation.set(operation, clearState);
   expireReplyOperationByOperation.set(operation, (reason, options) => {
     if (
       replyRunState.activeRunsByKey.get(currentSessionKey) !== operation ||
@@ -590,8 +598,7 @@ export function createReplyOperation(params: {
       // Prepare the recovery fence before cancellation, but retain exact lane
       // ownership until cancel returns or the backend re-enters completion.
       pendingClearBarrier = registerFollowupAdmissionBarrier(
-        currentSessionKey,
-        currentSessionId,
+        operation,
         options.afterClearBarrier,
         options.followupAdmissionBarrierTimeout,
       );
@@ -724,13 +731,4 @@ export function createReplyOperation(params: {
   }
 
   return operation;
-}
-
-export function forceClearReplyOperation(operation: ReplyOperation, cause?: unknown): boolean {
-  if (replyRunState.activeRunsByKey.get(operation.key) !== operation) {
-    return false;
-  }
-  operation.fail("run_failed", cause);
-  operation.complete();
-  return true;
 }

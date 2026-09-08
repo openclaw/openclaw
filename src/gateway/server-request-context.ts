@@ -109,7 +109,7 @@ type GatewayRequestContextRuntime = Pick<
     > & {
       configReloader: Pick<
         GatewayCoreRuntime["runtimeState"]["configReloader"],
-        "isConfigReloadSettled"
+        "isConfigReloadSettled" | "getDeferredChannelReloads"
       >;
     };
     lifecycle: Pick<GatewayCoreRuntime["lifecycle"], "closePreludeStarted">;
@@ -144,6 +144,7 @@ type GatewayRequestContextRuntime = Pick<
       | {
           diskSpace: GatewayRequestContext["workerPlacementDiskSpaceReader"];
           runnerAvailability: GatewayRequestContext["workerPlacementRunnerAvailabilityReader"];
+          repositoryWorkspaceMutationService: GatewayRequestContext["workerRepositoryWorkspaceMutationService"];
         }
       | undefined;
   };
@@ -222,6 +223,8 @@ export function createGatewayRequestContext(
   const workerPlacementDiskSpaceReader = runtime.workerPlacementRuntime?.diskSpace;
   const workerPlacementRunnerAvailabilityReader =
     runtime.workerPlacementRuntime?.runnerAvailability;
+  const workerRepositoryWorkspaceMutationService =
+    runtime.workerPlacementRuntime?.repositoryWorkspaceMutationService;
   const {
     invalidateSessionsForDevice: invalidateDeviceTransports,
     disconnectSessionsForDevice: disconnectDeviceTransports,
@@ -242,6 +245,10 @@ export function createGatewayRequestContext(
     getRuntimeConfig,
     isConfigReloadSettled: () =>
       !lifecycle.closePreludeStarted && runtimeState.configReloader.isConfigReloadSettled(),
+    getDeferredChannelReloads: () =>
+      lifecycle.closePreludeStarted
+        ? []
+        : (runtimeState.configReloader.getDeferredChannelReloads?.() ?? []),
     getGatewayMethodRegistry: runtime.getAttachedGatewayMethodRegistry,
     gatewayTlsFingerprint: runtime.gatewayTls.enabled
       ? runtime.gatewayTls.fingerprintSha256
@@ -470,6 +477,9 @@ export function createGatewayRequestContext(
     ...(workerSessionPlacementService ? { workerSessionPlacementService } : {}),
     ...(workerPlacementDiskSpaceReader ? { workerPlacementDiskSpaceReader } : {}),
     ...(workerPlacementRunnerAvailabilityReader ? { workerPlacementRunnerAvailabilityReader } : {}),
+    ...(workerRepositoryWorkspaceMutationService
+      ? { workerRepositoryWorkspaceMutationService }
+      : {}),
     validateAgentRuntimeApprovalAuthority: runtime.validateAgentRuntimeApprovalAuthority,
     ...(runtime.workerPlacementControlAvailable
       ? { workerPlacementDispatchService: runtime.workerPlacementControlAvailable }

@@ -16,7 +16,7 @@ For a pinned data report, provide a structured `report` with `pin: true`. Report
 
 ## How widgets work
 
-For HTML widgets, OpenClaw core validates `widget_code` and wraps it once in the canonical HTML document. For an inline client, core stores that document as a Canvas document and returns a preview handle. The Control UI reads the document over its authenticated Gateway connection and renders it through the dedicated-origin, double-iframe sandbox used by dashboard widgets and MCP Apps. The widget frame does not need its own login session. iOS, Android, macOS, and Linux Quick Chat use isolated web views. Full chat clients restore the widget after history reload; Quick Chat keeps the widget for its active reply.
+For HTML widgets, OpenClaw core validates `widget_code` by parsing every inline JavaScript `<script>` (classic and module), skipping scripts with `src` or a non-JavaScript `type`, then wraps it once in the canonical HTML document. Core rejects the call with the line and column of the first syntax error, so a widget with a broken script is never hosted. For an inline client, core stores that document as a Canvas document and returns a preview handle. The Control UI reads the document over its authenticated Gateway connection and renders it through the dedicated-origin, double-iframe sandbox used by dashboard widgets and MCP Apps. The widget frame does not need its own login session. iOS, Android, macOS, and Linux Quick Chat use isolated web views. Full chat clients restore the widget after history reload; Quick Chat keeps the widget for its active reply.
 
 Channel plugins can register a contextual presenter behind the same core tool. In a configured Discord session, core hands the composed document to the Discord presenter, which stores it and posts the Activity button in the current channel. The model still makes one `show_widget` call; there is no transport-specific widget tool or content kind.
 
@@ -95,7 +95,7 @@ The core tool requires `title` and one content input: `widget_code` for HTML or 
 </ParamField>
 
 <ParamField path="widget_code" type="string">
-  Required for HTML, SVG, or registered source; omit when providing `report`. For inline-widget clients, input beginning with `<svg` after trimming is rendered in SVG mode; maximum length is 262,144 characters. The Discord presenter accepts HTML source up to 48 KiB. A Discord-only route does not advertise or accept registered non-HTML content kinds.
+  Required for HTML, SVG, or registered source; omit when providing `report`. For HTML, core parses every inline JavaScript `<script>` (classic and module), skipping scripts with `src` or a non-JavaScript `type`. The call is rejected with the line and column of the first syntax error, so a widget with a broken script is never hosted. For inline-widget clients, input beginning with `<svg` after trimming is rendered in SVG mode; maximum length is 262,144 characters. The Discord presenter accepts HTML source up to 48 KiB. A Discord-only route does not advertise or accept registered non-HTML content kinds.
 </ParamField>
 
 <ParamField path="report" type="object">
@@ -237,6 +237,18 @@ case-insensitive and grants use lowercase spelling. A grant for one repository
 cannot read another; granting only `https://api.github.com` network access does
 not authorize this binding.
 
+Direct browser fetches to `api.github.com` do not inherit the agent's login and
+share GitHub's anonymous IP quota. Existing widgets using `fetch` should replace
+that call with the binding and replace their GitHub `netOrigins` declaration with
+the repository-scoped tool grant. Check the effective account in **Agent settings
+→ Tools → GitHub account**; administrators can also reach it from **Settings →
+Profile → GitHub connections**.
+
+For refreshable widgets, keep the last successful data and a separate error
+element. Clear the error after a successful read, and keep result containers in
+the document so later refreshes can recover. Show a **Refresh** control for an
+immediate retry.
+
 **Approval shares Actions metadata with the widget and its session audience,
 including metadata from private repositories accessible to the selected agent
 identity.** The host selects the agent override, then the configured System
@@ -283,7 +295,7 @@ Widget documents use restrictive Content Security Policies. Inline style and scr
 
 The Control UI's widget content iframe always omits `allow-same-origin`, even when the global embed mode is `trusted`, so widget scripts cannot read the parent application origin. With scripts enabled, the outer proxy runs on a dedicated origin and relays messages across the frame boundary. In `strict` mode, the Control UI still reads the document through its authenticated Gateway connection, but renders it without scripts or scripted interactions. Native clients use isolated, nonpersistent web views and block navigation away from the hosted widget. The core document host also serves widgets with a `Content-Security-Policy: sandbox allow-scripts` response header, so direct rendering still runs the widget in an opaque origin instead of an application origin. Only render widget code you are willing to execute in that isolated frame.
 
-The iframe also follows [`gateway.controlUi.embedSandbox`](/web/control-ui#hosted-embeds). The default `scripts` tier supports interactive widgets while preserving origin isolation.
+The iframe also follows [`gateway.controlUi.embedSandbox`](/web/control-ui/chat#hosted-embeds). The default `scripts` tier supports interactive widgets while preserving origin isolation.
 
 The accepted WebRTC data-channel egress residual is documented in [Dashboard Architecture](/web/dashboard-architecture#modeled-residual-webrtc-data-channels).
 
@@ -291,7 +303,7 @@ Canvas retains at most 32 widgets per session (or per agent when no session is a
 
 ## Related
 
-- [Control UI hosted embeds](/web/control-ui#hosted-embeds)
+- [Control UI hosted embeds](/web/control-ui/chat#hosted-embeds)
 - [Discord Activities](/channels/discord-activities)
 - [macOS widget panel](/platforms/mac/canvas)
-- [Gateway protocol client capabilities](/gateway/protocol#client-capabilities)
+- [Gateway protocol client capabilities](/gateway/protocol/handshake#client-capabilities)

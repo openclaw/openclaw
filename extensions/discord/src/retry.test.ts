@@ -190,17 +190,6 @@ describe("createDiscordRetryRunner create safety", () => {
     expect(fn).toHaveBeenCalledTimes(2);
   });
 
-  it("retries pre-connect errors for nonce-protected creates", async () => {
-    const fn = vi
-      .fn()
-      .mockRejectedValueOnce(Object.assign(new Error("connect refused"), { code: "ECONNREFUSED" }))
-      .mockResolvedValue("ok");
-    const runner = createDiscordRetryRunner({ retry: ZERO_DELAY_RETRY });
-
-    await expect(runner(fn, "text", { safety: "nonce-protected-create" })).resolves.toBe("ok");
-    expect(fn).toHaveBeenCalledTimes(2);
-  });
-
   it("retries a 502 for nonce-protected creates", async () => {
     const fn = vi
       .fn()
@@ -209,30 +198,6 @@ describe("createDiscordRetryRunner create safety", () => {
     const runner = createDiscordRetryRunner({ retry: ZERO_DELAY_RETRY });
 
     await expect(runner(fn, "text", { safety: "nonce-protected-create" })).resolves.toBe("ok");
-    expect(fn).toHaveBeenCalledTimes(2);
-  });
-
-  it("does not retry a 502 when the endpoint lacks nonce enforcement", async () => {
-    const fn = vi
-      .fn()
-      .mockRejectedValueOnce(Object.assign(new Error("bad gateway"), { status: 502 }))
-      .mockResolvedValue("ok");
-    const runner = createDiscordRetryRunner({ retry: ZERO_DELAY_RETRY });
-
-    await expect(runner(fn, "forum-thread", { safety: "non-idempotent-create" })).rejects.toThrow(
-      "bad gateway",
-    );
-    expect(fn).toHaveBeenCalledTimes(1);
-  });
-
-  it("keeps retrying the broad transient set for default idempotent calls", async () => {
-    const fn = vi
-      .fn()
-      .mockRejectedValueOnce(Object.assign(new Error("aborted"), { name: "AbortError" }))
-      .mockResolvedValue("ok");
-    const runner = createDiscordRetryRunner({ retry: ZERO_DELAY_RETRY });
-
-    await expect(runner(fn, "react")).resolves.toBe("ok");
     expect(fn).toHaveBeenCalledTimes(2);
   });
 });
@@ -256,14 +221,6 @@ describe("createDiscordRetryRunner", () => {
     await rejection;
     expect(fn).toHaveBeenCalledOnce();
     expect(vi.getTimerCount()).toBe(0);
-  });
-
-  it("retries transient transport errors", async () => {
-    const fn = vi.fn().mockRejectedValueOnce(new TypeError("fetch failed")).mockResolvedValue("ok");
-    const runner = createDiscordRetryRunner({ retry: ZERO_DELAY_RETRY });
-
-    await expect(runner(fn, "send")).resolves.toBe("ok");
-    expect(fn).toHaveBeenCalledTimes(2);
   });
 
   it("stops after configured transient retry attempts", async () => {

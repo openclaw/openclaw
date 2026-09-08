@@ -27,6 +27,7 @@ import {
 } from "../infra/kysely-sync.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { listOpenFileDescriptorsForPath } from "../infra/open-file-descriptors.test-support.js";
+import { isPathInside } from "../infra/path-guards.js";
 import { readSqliteNumberPragma } from "../infra/sqlite-pragma.test-support.js";
 import { assertSqliteSchemaContains } from "../infra/sqlite-schema-contract.js";
 import { loadTaskRegistryStateFromSqlite } from "../tasks/task-registry.store.sqlite.js";
@@ -43,10 +44,7 @@ import {
   OPENCLAW_STATE_SCHEMA_VERSION,
 } from "./openclaw-state-db-contract.js";
 import { ensureGitHubPublicationSchema } from "./openclaw-state-db-schema-additive.js";
-import {
-  findOpenClawStateDatabaseSchemaMigrationRequiredError,
-  OpenClawStateDatabaseSchemaMigrationRequiredError,
-} from "./openclaw-state-db-schema-migration-required.js";
+import { OpenClawStateDatabaseSchemaMigrationRequiredError } from "./openclaw-state-db-schema-migration-required.js";
 import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
 import {
   assertOpenClawStateDatabaseForMaintenance,
@@ -188,7 +186,7 @@ function expectStateSchemaMigrationRequired(
     caught = error;
   }
   expect(caught).toBeInstanceOf(OpenClawStateDatabaseSchemaMigrationRequiredError);
-  expect(findOpenClawStateDatabaseSchemaMigrationRequiredError(caught)).toMatchObject(expected);
+  expect(caught).toMatchObject(expected);
 }
 
 function replaceManagedImageRecordsWithLegacyTable(
@@ -5303,7 +5301,7 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
     } catch (error) {
       caught = error;
     }
-    expect(findOpenClawStateDatabaseSchemaMigrationRequiredError(caught)).toBeUndefined();
+    expect(caught).not.toBeInstanceOf(OpenClawStateDatabaseSchemaMigrationRequiredError);
     expect(caught).toBeInstanceOf(Error);
     expect((caught as Error).message).toContain(
       "noncanonical agent database registry schema that cannot be repaired automatically",
@@ -5892,8 +5890,11 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
     let failRemoval = true;
     vi.spyOn(fs, "rmSync").mockImplementation(((pathname, options) => {
       if (
-        fs.realpathSync.native(String(pathname)) === fs.realpathSync.native(privateDirectory) &&
-        failRemoval
+        failRemoval &&
+        isPathInside(
+          fs.realpathSync.native(String(pathname)),
+          fs.realpathSync.native(privateDirectory),
+        )
       ) {
         failRemoval = false;
         const error = new Error("busy");
@@ -6288,47 +6289,45 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
     ]);
   });
 
-  it("keeps placement-owned target machine class absent during generic repair and open", () => {
-    const stateDir = createTempStateDir();
-    const databasePath = materializeCurrentStateDatabase(stateDir);
-    const previousSchema = OPENCLAW_STATE_SCHEMA_SQL.replace(
-      "  -- Keep this nullable column constraint-free so lazy ALTER TABLE produces the\n" +
-        "  -- same shape as fresh databases; placement-move code validates its value.\n" +
-        "  target_machine_class TEXT,\n",
-      "",
-    );
-    const tableStart = previousSchema.indexOf(
-      "CREATE TABLE IF NOT EXISTS worker_session_placement_moves (",
-    );
-    const tableEnd = previousSchema.indexOf("\n) STRICT;", tableStart);
+  it.each(["target_machine_class", "target_os"])(
+    "keeps placement-owned %s absent during generic repair and open",
+    (columnName) => {
+      const stateDir = createTempStateDir();
+      const databasePath = materializeCurrentStateDatabase(stateDir);
+      const previousSchema = OPENCLAW_STATE_SCHEMA_SQL.replace(`  ${columnName} TEXT,\n`, "");
+      const tableStart = previousSchema.indexOf(
+        "CREATE TABLE IF NOT EXISTS worker_session_placement_moves (",
+      );
+      const tableEnd = previousSchema.indexOf("\n) STRICT;", tableStart);
 
-    const { DatabaseSync } = requireNodeSqlite();
-    const legacyDb = new DatabaseSync(databasePath);
-    legacyDb.exec(`
+      const { DatabaseSync } = requireNodeSqlite();
+      const legacyDb = new DatabaseSync(databasePath);
+      legacyDb.exec(`
       DROP TABLE worker_session_placement_moves;
       ${previousSchema.slice(tableStart, tableEnd + "\n) STRICT;".length)}
     `);
-    legacyDb.close();
+      legacyDb.close();
 
-    const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
-    expect(repairOpenClawStateDatabaseSchemaIfNeeded(options).warnings).toEqual([]);
-    const repairedDb = new DatabaseSync(databasePath, { readOnly: true });
-    try {
-      const repairedColumns = repairedDb
+      const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
+      expect(repairOpenClawStateDatabaseSchemaIfNeeded(options).warnings).toEqual([]);
+      const repairedDb = new DatabaseSync(databasePath, { readOnly: true });
+      try {
+        const repairedColumns = repairedDb
+          .prepare("PRAGMA table_info(worker_session_placement_moves)")
+          .all() as Array<{ name?: string }>;
+        expect(repairedColumns.map((column) => column.name)).not.toContain(columnName);
+      } finally {
+        repairedDb.close();
+      }
+
+      const reopened = openOpenClawStateDatabase(options);
+      const columns = reopened.db
         .prepare("PRAGMA table_info(worker_session_placement_moves)")
         .all() as Array<{ name?: string }>;
-      expect(repairedColumns.map((column) => column.name)).not.toContain("target_machine_class");
-    } finally {
-      repairedDb.close();
-    }
 
-    const reopened = openOpenClawStateDatabase(options);
-    const columns = reopened.db
-      .prepare("PRAGMA table_info(worker_session_placement_moves)")
-      .all() as Array<{ name?: string }>;
-
-    expect(columns.map((column) => column.name)).not.toContain("target_machine_class");
-  });
+      expect(columns.map((column) => column.name)).not.toContain(columnName);
+    },
+  );
 
   it("adds staged worker-result refs during the v5 state migration", () => {
     const stateDir = createTempStateDir();

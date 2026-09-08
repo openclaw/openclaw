@@ -25,10 +25,7 @@ import {
   isStoredCredentialCompatibleWithAuthProvider,
 } from "./auth-profiles/order.js";
 import type { AuthProfileCredential, AuthProfileStore } from "./auth-profiles/types.js";
-import {
-  isAuthCooldownBypassedForProvider,
-  resolveProfileUnusableUntil,
-} from "./auth-profiles/usage-state.js";
+import { readInlineProviderApiKeyUsage } from "./auth-profiles/usage-state.js";
 import { resolveEnvApiKey, type EnvApiKeyResult } from "./model-auth-env.js";
 import {
   CUSTOM_LOCAL_AUTH_MARKER,
@@ -571,20 +568,12 @@ export function isConfigBackedInlineProviderApiKey(params: {
   return Boolean(perEntryRawKey && !params.store?.profiles[perEntryRawKey]);
 }
 
-// Reads the inline provider API-key cooldown via usage-state primitives instead
-// of the auth-profiles usage module, so model-auth keeps working in the many
-// tests that partially mock that module. Mirrors the usage-module helper of the
-// same intent, using the same provider normalization as the write side so the
-// `inline-api-key:<provider>` usage id matches what the failure marker records.
+// Use the same normalized usage id as the inline-key failure writer.
 export function resolveInlineProviderApiKeyCooldownUntil(
   store: AuthProfileStore,
   provider: string,
 ): number | null {
-  if (isAuthCooldownBypassedForProvider(provider)) {
-    return null;
-  }
-  const stats = store.usageStats?.[`inline-api-key:${normalizeProviderId(provider)}`];
-  return stats ? resolveProfileUnusableUntil(stats) : null;
+  return readInlineProviderApiKeyUsage(store, provider).unusableUntil;
 }
 
 /** Fails closed while an inline provider API key is inside its billing/auth cooldown. */

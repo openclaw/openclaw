@@ -14,8 +14,6 @@ import {
   type ServiceChildStart,
 } from "./service-child-protocol.js";
 
-const LINEAGE_EXIT_OBSERVATION_MS = 100;
-
 type AnchorState = "starting" | "active" | "closing" | "closed";
 type StdioEntry = "ignore" | "inherit" | "pipe" | number;
 
@@ -274,16 +272,14 @@ export function runServiceChildGroupAnchor(): void {
       lineageClosed = true;
       lineageDone.resolve();
       if (state === "active") {
-        // Pipe EOF and the child exit notification race independently. Wait
-        // briefly for the exact child event before treating EOF as lease loss.
+        // Programs can close inherited descriptors while still running. Keep this
+        // observer waiting for the direct child's exit before reclaiming descendants.
         void (async () => {
-          if (!rootExit) {
-            await Promise.race([rootExited.promise, delay(LINEAGE_EXIT_OBSERVATION_MS)]);
-          }
+          await rootExited.promise;
           if (state !== "active") {
             return;
           }
-          if (rootExit && rootSettlementStarted) {
+          if (rootSettlementStarted) {
             await rootSettledDone.promise;
           }
           if (state !== "active") {
@@ -309,20 +305,33 @@ export function runServiceChildGroupAnchor(): void {
         await requestCleanup("lineage-lost");
       }
     };
-    // Output EOF is independent of lineage EOF. Pipeline closes each forwarded stream
-    // after its final write while the control channel retains descendant authority.
-    pipeline(command.stdout!, process.stdout, () => {
+    // Bun's global streams retain output writers after pipeline completion. Node's
+    // stdio streams must preserve fd 1/2: closing them aborts its later Linux spawnSync census.
+    const stdout = process.versions.bun
+      ? createWriteStream("", { fd: 1, autoClose: true })
+      : process.stdout;
+    const stderr = process.versions.bun
+      ? createWriteStream("", { fd: 2, autoClose: true })
+      : process.stderr;
+    pipeline(command.stdout!, stdout, () => {
       stdoutDrained = true;
       void settleRoot();
     });
-    pipeline(command.stderr!, process.stderr, () => {
+    pipeline(command.stderr!, stderr, () => {
       stderrDrained = true;
       void settleRoot();
     });
     if (start.stdinMode !== "inherit" && command.stdin) {
-      process.stdin.pipe(command.stdin);
-      if (start.stdinMode === "pipe-closed" && process.stdin.readableEnded) {
-        command.stdin.end();
+      const input = process.stdin;
+      const destination = command.stdin;
+      const endInput = () => destination.end();
+      // Own EOF explicitly: pipe's default end check initializes global Bun output writers.
+      input.pipe(destination, { end: false });
+      destination.once("close", () => input.off("end", endInput));
+      if (input.readableEnded) {
+        endInput();
+      } else {
+        input.once("end", endInput);
       }
     }
     command.once("error", (error) => {

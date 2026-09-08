@@ -48,6 +48,8 @@ CMD ["bash"]
 
 FROM ${OPENCLAW_NODE_ALPINE_IMAGE} AS musl
 
+RUN apk add --no-cache bash
+COPY --from=e2e-runner /opt/openclaw-e2e /opt/openclaw-e2e
 COPY scripts/docker/verify-fs-safe-native.mjs /tmp/verify-fs-safe-native.mjs
 
 CMD ["sh"]
@@ -110,6 +112,8 @@ INSTALL_DEPS
 
 FROM bare AS functional
 
+ARG OPENCLAW_FS_SAFE_NATIVE_CONTRACT=required
+
 # The app under test enters through the named BuildKit context, not by copying
 # checkout sources into the image.
 COPY --from=openclaw_package --chown=appuser:appuser openclaw-current.tgz /tmp/openclaw-current.tgz
@@ -124,7 +128,8 @@ RUN tar -xzf /tmp/openclaw-current.tgz -C /app --strip-components=1 \
  && ln -sfn /app /app/node_modules/openclaw \
  && mkdir -p "$HOME/.local/bin" \
  && ln -sf /app/openclaw.mjs "$HOME/.local/bin/openclaw" \
- && node /tmp/verify-fs-safe-native.mjs --package-root /app --mode require \
+ && OPENCLAW_FS_SAFE_NATIVE_CONTRACT="$OPENCLAW_FS_SAFE_NATIVE_CONTRACT" \
+      node /tmp/verify-fs-safe-native.mjs --package-root /app --mode require \
  && rm -f /tmp/openclaw-current.tgz
 
 CMD ["bash"]

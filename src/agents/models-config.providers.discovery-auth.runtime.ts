@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { coerceSecretRef } from "../config/types.secrets.js";
 import { secretRefKey } from "../secrets/ref-contract.js";
@@ -10,6 +11,7 @@ import type {
   ProviderApiKeyResolver,
   ProviderAuthResolver,
 } from "./models-config.providers.secret-helpers.js";
+import { resolveProviderIdForAuth } from "./provider-auth-aliases.js";
 
 const unavailableDiscoveryAuthProfiles = new WeakMap<object, string>();
 
@@ -33,11 +35,13 @@ export async function prepareProviderDiscoveryAuth(
   {
     agentDir,
     authStore,
+    env,
     resolveProviderApiKey,
     resolveProviderAuth,
   }: {
     agentDir: string;
     authStore: AuthProfileStore;
+    env: NodeJS.ProcessEnv;
     resolveProviderApiKey: ProviderApiKeyResolver;
     resolveProviderAuth: ProviderAuthResolver;
   },
@@ -54,12 +58,17 @@ export async function prepareProviderDiscoveryAuth(
           : undefined,
       config?.secrets?.defaults,
     );
-    if (!ref || ref.source === "env") {
+    if (!ref) {
+      continue;
+    }
+    // Cold catalog readers can use env material without a Gateway auth snapshot.
+    const envValue = ref.source === "env" ? normalizeOptionalString(env[ref.id.trim()]) : undefined;
+    if (envValue) {
+      profiles.set(profileId, () => envValue);
       continue;
     }
     try {
       // Only the canonical owner may redeem this exact profile's published ref.
-      // OAuth/env/plain profiles retain their existing discovery semantics.
       const resolved = await resolveApiKeyForProfile({
         cfg: config,
         store: authStore,
@@ -100,19 +109,27 @@ export async function prepareProviderCatalogOAuthAuth(
   {
     agentDir,
     authStore,
+    env,
     provider,
     resolveProviderAuth,
+    isActive,
+    onPreparationFailure,
   }: {
     agentDir: string;
     authStore: AuthProfileStore;
+    env: NodeJS.ProcessEnv;
     provider: string;
     resolveProviderAuth: ProviderAuthResolver;
+    isActive: () => boolean;
+    onPreparationFailure: (profileIds: readonly string[]) => void;
   },
   config?: OpenClawConfig,
 ) {
   const failedProfileIds: string[] = [];
   let preparedProfile: { profileId: string; apiKey: string } | undefined;
-  while (true) {
+  // Let an admitted refresh finish persisting its rotation, but do not start
+  // another candidate after the catalog owner closes preparation admission.
+  while (isActive()) {
     let auth: ReturnType<ProviderAuthResolver>;
     try {
       auth = resolveProviderAuth(provider, { excludeProfileIds: failedProfileIds });
@@ -149,10 +166,20 @@ export async function prepareProviderCatalogOAuthAuth(
     failedProfileIds.push(auth.profileId);
   }
   return (requestedProvider?: string, options?: { oauthMarker?: string }) => {
-    const auth = resolveProviderAuth(requestedProvider?.trim() || provider, {
+    const target = requestedProvider?.trim() || provider;
+    const auth = resolveProviderAuth(target, {
       ...options,
       excludeProfileIds: failedProfileIds,
     });
+    if (
+      auth.mode === "none" &&
+      failedProfileIds.length > 0 &&
+      resolveProviderIdForAuth(target, { config, env }) ===
+        resolveProviderIdForAuth(provider, { config, env })
+    ) {
+      onPreparationFailure(failedProfileIds);
+      return { ...auth, preparationFailed: true };
+    }
     // Refresh owns a separate store; the captured catalog snapshot can still
     // contain the old token. Carry the resolved value for this exact profile.
     return preparedProfile && auth.profileId === preparedProfile.profileId

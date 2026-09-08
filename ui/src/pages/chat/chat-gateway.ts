@@ -4,7 +4,6 @@ import {
   reduceSessionProjectionRunEvent,
 } from "@openclaw/gateway-client/browser";
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { t } from "../../i18n/index.ts";
 import { accumulatedStreamText } from "../../lib/chat/chat-types.ts";
 import { isAssistantHeartbeatAckForDisplay } from "../../lib/chat/heartbeat-display.ts";
@@ -50,6 +49,7 @@ import {
 } from "./stream-segment-pruning.ts";
 import {
   authoritativeHistoryAppliedForRun,
+  normalizeFinalAssistantMessage,
   rememberLiveTerminalRun,
 } from "./terminal-message-identity.ts";
 
@@ -92,24 +92,6 @@ function resolveDeltaChatStreamText(
 function normalizeAbortedAssistantMessage(message: unknown): Record<string, unknown> | null {
   const candidate = asRecord(message);
   return candidate?.role === "assistant" && Array.isArray(candidate.content) ? candidate : null;
-}
-
-function normalizeFinalAssistantMessage(message: unknown): Record<string, unknown> | null {
-  const candidate = asRecord(message);
-  if (
-    !candidate ||
-    (typeof candidate.role === "string" &&
-      normalizeLowercaseStringOrEmpty(candidate.role) !== "assistant") ||
-    (!("content" in candidate) && typeof candidate.text !== "string")
-  ) {
-    return null;
-  }
-  const assistant =
-    typeof candidate.role === "string" ? candidate : { ...candidate, role: "assistant" };
-  // Canonicalize text-only finals before reducing so replay identity includes the reply.
-  return !Object.hasOwn(assistant, "content") && typeof assistant.text === "string"
-    ? { ...assistant, content: [{ type: "text", text: assistant.text }] }
-    : assistant;
 }
 
 function formatGatewayErrorDetail(payload: ChatEventPayload): string | null {
@@ -257,6 +239,9 @@ function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
     reconcileChatRunLifecycle(state, {
       outcome: terminalStatus === "completed" ? "done" : "interrupted",
       sessionStatus,
+      errorMessage: payload.errorMessage?.trim()
+        ? resolveGatewayErrorText(payload, null)
+        : undefined,
       runId: terminalRunId,
       sessionKey: state.sessionKey,
       sessionKeys,
@@ -410,14 +395,16 @@ function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
         discardStreamSegmentIndexes(state, boundary.replacedSegmentIndexes);
         let visibleMessages = materializeVisibleStream({ includeCurrent: false });
         if (boundary.tailMessage && !shouldHideAssistantChatMessage(boundary.tailMessage)) {
-          visibleMessages = appendTerminalAssistantMessage(
-            visibleMessages,
-            rememberLiveTerminalRun(
-              boundary.tailMessage,
-              terminalRunId,
-              boundary.afterBoundaryRunId,
-            ),
+          const liveTail = rememberLiveTerminalRun(
+            boundary.tailMessage,
+            terminalRunId,
+            boundary.afterBoundaryRunId,
           );
+          // A retired commentary item keeps its own identity even when the answer
+          // repeats its text. The sequence fence reconciles only the later answer.
+          visibleMessages = appendTerminalAssistantMessage(visibleMessages, liveTail, {
+            preserveKeyedCommentary: boundary.preserveKeyedCommentary,
+          });
           publishVisibleTerminal(
             boundary.tailMessage,
             visibleMessages,

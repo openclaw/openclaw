@@ -646,13 +646,19 @@ describe("scripts/test-docker-all scheduler", () => {
           ...process.env,
           OPENCLAW_DOCKER_ALL_PLAN_RELEASE_ALL: "1",
           OPENCLAW_DOCKER_ALL_PROFILE: "release-path",
+          OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS: "base legacy-operator-state",
           OPENCLAW_UPGRADE_SURVIVOR_TARGET_ROOT: process.cwd(),
         },
       },
     );
 
     expect(result.status, result.stderr).toBe(0);
-    expect(JSON.parse(result.stdout)).toMatchObject({ profile: "release-path" });
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      profile: "release-path",
+      lanes: expect.arrayContaining([
+        expect.objectContaining({ name: "published-upgrade-survivor-legacy-operator-state" }),
+      ]),
+    });
   });
 
   it("rejects loose numeric runner env vars without a stack trace", () => {
@@ -867,7 +873,7 @@ describe("scripts/test-docker-all scheduler", () => {
     }
   });
 
-  it("fails with truthful artifacts when a frozen target cannot run selected survivor lanes", () => {
+  it("records a successful no-op when an authorized frozen target cannot run selected lanes", () => {
     const root = tempDirs.make("openclaw-docker-all-filtered-");
     const logDir = path.join(root, "logs");
     try {
@@ -887,20 +893,22 @@ describe("scripts/test-docker-all scheduler", () => {
         },
       });
 
-      expect(result.status).toBe(1);
+      expect(result.status).toBe(0);
       expect(result.stdout).toContain("Docker lanes omitted");
-      expect(result.stderr).toContain("resolved zero runnable Docker lanes");
-      expect(result.stderr).toContain("published-upgrade-survivor");
+      expect(result.stdout).toContain("no selected lane is supported by the frozen target");
       const summary = JSON.parse(readFileSync(path.join(logDir, "summary.json"), "utf8"));
-      expect(summary.status).toBe("failed");
+      expect(summary.status).toBe("passed");
       expect(summary.lanes).toEqual([]);
-      expect(summary.omittedUnsupportedLanes).toHaveLength(12);
+      expect(summary.omittedUnsupportedLanes).toHaveLength(13);
       expect(summary.omittedUnsupportedLanes).toContain("published-upgrade-survivor");
+      expect(summary.omittedUnsupportedLanes).toContain(
+        "published-upgrade-survivor-legacy-operator-state",
+      );
       expect(summary.omittedUnsupportedLanes).toContain(
         "published-upgrade-survivor-versioned-runtime-deps",
       );
       const failures = JSON.parse(readFileSync(path.join(logDir, "failures.json"), "utf8"));
-      expect(failures.status).toBe("failed");
+      expect(failures.status).toBe("passed");
       expect(failures.lanes).toEqual([]);
     } finally {
       rmSync(root, { force: true, recursive: true });
@@ -938,7 +946,10 @@ describe("scripts/test-docker-all scheduler", () => {
       } else {
         const plan = JSON.parse(result.stdout);
         expect(plan.lanes).toEqual([]);
-        expect(plan.omittedUnsupportedLanes).toHaveLength(12);
+        expect(plan.omittedUnsupportedLanes).toHaveLength(13);
+        expect(plan.omittedUnsupportedLanes).toContain(
+          "published-upgrade-survivor-legacy-operator-state",
+        );
       }
       expect(existsSync(path.join(logDir, "summary.json"))).toBe(false);
       expect(existsSync(path.join(logDir, "failures.json"))).toBe(false);

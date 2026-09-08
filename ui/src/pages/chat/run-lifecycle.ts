@@ -34,7 +34,7 @@ import type {
   WaitingApprovalStatus,
 } from "./tool-stream-contract.ts";
 // Control UI chat module implements run lifecycle behavior.
-import { resetToolStream, resetToolStreamRun } from "./tool-stream.ts";
+import { resetToolStream, resetToolStreamRun } from "./tool-stream-state.ts";
 
 export const CHAT_RUN_STATUS_TOAST_DURATION_MS = 5_000;
 
@@ -59,6 +59,7 @@ export type LocalTerminalReconcile = {
   runId: string | null;
   phase: ChatRunUiStatus["phase"];
   sessionStatus: TerminalSessionRunStatus;
+  errorMessage?: string;
 };
 
 type TimerHandle = ReturnType<typeof globalThis.setTimeout>;
@@ -93,6 +94,7 @@ type RunLifecycleHost = Omit<
 type ReconcileOptions = {
   outcome?: ChatRunUiStatus["phase"];
   sessionStatus?: TerminalSessionRunStatus;
+  errorMessage?: string;
   runId?: string | null;
   sessionKey?: string | null;
   sessionKeys?: readonly (string | null | undefined)[];
@@ -495,6 +497,7 @@ function reconcileSessionRows(
     sessionKeys: [...keys],
     runId: options.runId ?? host.chatRunId ?? null,
     status,
+    errorMessage: options.errorMessage,
     endedAt: occurredAt,
   };
   if (host.sessionsResult) {
@@ -563,6 +566,7 @@ export function reconcileChatRunLifecycle(host: RunLifecycleHost, options: Recon
         runId,
         phase: options.outcome,
         sessionStatus: options.sessionStatus ?? (options.outcome === "done" ? "done" : "killed"),
+        errorMessage: options.errorMessage,
       };
     }
     if (options.publishRunStatus !== false) {
@@ -626,6 +630,7 @@ function reconcileStaleSelectedSessionRunAfterLocalCompletion(host: RunLifecycle
     {
       outcome: recent.phase,
       sessionStatus: recent.sessionStatus,
+      errorMessage: recent.errorMessage,
       sessionKey: recent.sessionKey,
       runId: recent.runId,
     },

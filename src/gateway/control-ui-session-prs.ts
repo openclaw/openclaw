@@ -11,6 +11,7 @@ import {
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { runGit } from "../agents/worktrees/git.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
+import { getSessionRepositoryWorkspaceStore } from "../state/session-repository-workspaces.js";
 import type {
   ControlUiSessionBranch,
   ControlUiSessionPullRequest,
@@ -36,6 +37,7 @@ import {
   type SessionPullRequestGitContext,
   type SessionPullRequestLocalGitDeps,
 } from "./control-ui-session-prs-local-git.js";
+import { parseGitHubRemoteUrl } from "./github-remote.js";
 import { resolveGitHubForkParent } from "./github-repository-target.js";
 import { loadGatewaySessionEntryReadOnly } from "./session-utils.js";
 
@@ -82,7 +84,7 @@ type CacheEntry = {
   refreshMode: "normal" | "forced" | null;
   // Survives refetch failures so rate-limited refreshes degrade to stale
   // chips instead of clearing the row.
-  lastGood?: { pullRequests: ControlUiSessionPullRequest[]; mergedHeads: MergedPullHead[] };
+  lastGood?: Pick<BranchPullRequestsSnapshot, "pullRequests" | "mergedHeads" | "repository">;
 };
 
 const branchCache = createSessionPullRequestCache<CacheEntry>();
@@ -95,10 +97,10 @@ type LoadSessionPullRequestDeps = SessionPullRequestLocalGitDeps & {
   ) => Promise<SessionPullRequestGitContext | null>;
 };
 
-/** Resolves the checkout root without spawning Git. */
-function resolveSessionPullRequestGitRoot(
+/** Resolve the recorded source before considering a Gateway workspace default. */
+function resolveSessionPullRequestSource(
   params: ControlUiSessionPullRequestsParams,
-): string | null {
+): string | SessionPullRequestGitContext | null {
   const { cfg, entry, storePath, canonicalKey } = loadGatewaySessionEntryReadOnly(
     params.sessionKey,
     {
@@ -117,6 +119,14 @@ function resolveSessionPullRequestGitRoot(
       parseAgentSessionKey(params.sessionKey)?.agentId ??
       resolveDefaultAgentId(cfg),
   );
+  if (entry.repositoryWorkspaceId) {
+    const repository = getSessionRepositoryWorkspaceStore().get(entry.repositoryWorkspaceId);
+    if (!repository || repository.agentId !== agentId || repository.sessionKey !== canonicalKey) {
+      return null;
+    }
+    const remote = parseGitHubRemoteUrl(repository.url);
+    return remote ? { ...remote, branch: repository.branch } : null;
+  }
   const root =
     normalizeOptionalString(entry.spawnedCwd) ??
     normalizeOptionalString(entry.spawnedWorkspaceDir) ??
@@ -135,14 +145,14 @@ async function resolveSessionPullRequestGitContext(
   params: ControlUiSessionPullRequestsParams,
   deps: LoadSessionPullRequestDeps,
 ): Promise<SessionPullRequestGitContext | null> {
-  const root = deps.resolveGitRoot
+  const source = deps.resolveGitRoot
     ? await deps.resolveGitRoot(params)
-    : resolveSessionPullRequestGitRoot(params);
-  if (!root) {
+    : resolveSessionPullRequestSource(params);
+  if (typeof source !== "string") {
     releaseSessionPullRequestLocalGitCache(deps.cacheSignal);
-    return null;
+    return source;
   }
-  return resolveCachedGitContext(root, deps, params.refresh === true);
+  return resolveCachedGitContext(source, deps, params.refresh === true);
 }
 
 // git push's own "create a pull request" hint URL; GitHub resolves the base
@@ -279,7 +289,8 @@ async function resolveSessionBranch(
 ): Promise<ControlUiSessionBranch | undefined> {
   const root = context.root;
   if (!root) {
-    // Stubbed test contexts without a root skip the local-git gates.
+    // Repository-only sessions have no local checkout to inspect. Their recorded
+    // source still exposes publication; the broker validates the accepted checkpoint.
     return {
       owner: context.owner,
       repo: context.repo,
@@ -576,13 +587,18 @@ async function refreshBranchPullRequests(
   entry: CacheEntry,
   token: string | undefined,
 ): Promise<BranchPullRequestsSnapshot> {
+  const repository = { owner: context.owner, repo: context.repo };
   try {
-    const result = await fetchBranchPullRequests(context, fetchImpl, token);
+    const result = { ...(await fetchBranchPullRequests(context, fetchImpl, token)), repository };
     // Degraded state-only chips still become lastGood: a later refresh that
     // rate-limits at the list fetch must serve the proven PRs, not an empty
     // list that would resurrect the Create PR row mid-outage. The shortened
     // expiry makes the next window retry full detail.
-    entry.lastGood = { pullRequests: result.pullRequests, mergedHeads: result.mergedHeads };
+    entry.lastGood = {
+      pullRequests: result.pullRequests,
+      mergedHeads: result.mergedHeads,
+      repository,
+    };
     if (result.rateLimited) {
       entry.expiresAt = Date.now() + RATE_LIMIT_CACHE_MS;
     }
@@ -591,7 +607,13 @@ async function refreshBranchPullRequests(
     const rateLimited = error instanceof ControlUiGitHubError && error.statusCode === 429;
     entry.expiresAt = Date.now() + (rateLimited ? RATE_LIMIT_CACHE_MS : FAILURE_CACHE_MS);
     if (rateLimited) {
-      return { pullRequests: [], mergedHeads: [], ...entry.lastGood, rateLimited: true };
+      return {
+        pullRequests: [],
+        mergedHeads: [],
+        ...entry.lastGood,
+        repository,
+        rateLimited: true,
+      };
     }
     if (entry.lastGood) {
       return { ...entry.lastGood, rateLimited: false };
@@ -619,16 +641,34 @@ export async function loadControlUiSessionPullRequests(
     branchCache.release(deps.cacheSignal);
     return { pullRequests: [], rateLimited: false };
   }
+  if (context.branch === context.defaultBranch) {
+    releaseSessionPullRequestBranchFacts(deps.cacheSignal);
+    branchCache.release(deps.cacheSignal);
+    return {
+      pullRequests: [],
+      repository: { owner: context.owner, repo: context.repo },
+      rateLimited: false,
+    };
+  }
   // Normal polling reuses local Git facts across a poll cycle; forced
   // structural refreshes observe the replacement checkout immediately.
-  const { mergedHeads, ...snapshot } = await cachedBranchPullRequests(
-    context,
-    deps,
-    params.refresh === true,
-  ).catch((error: unknown) => {
-    releaseSessionPullRequestBranchFacts(deps.cacheSignal);
-    throw error;
-  });
+  const result = await cachedBranchPullRequests(context, deps, params.refresh === true).catch(
+    () => {
+      releaseSessionPullRequestBranchFacts(deps.cacheSignal);
+      return null;
+    },
+  );
+  if (!result) {
+    // Local repository identity survives a cold PR lookup failure, but an
+    // unknown PR list must not enable a Create PR row.
+    return {
+      pullRequests: [],
+      repository: { owner: context.owner, repo: context.repo },
+      rateLimited: false,
+      status: "unavailable",
+    };
+  }
+  const { mergedHeads, ...snapshot } = result;
   const branch = await resolveSessionBranch(context, mergedHeads, deps, params.refresh === true);
   return branch ? { ...snapshot, branch } : snapshot;
 }

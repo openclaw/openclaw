@@ -17,7 +17,7 @@ The simplest rescue-bot setup:
 - Run the rescue bot on `--profile rescue`, with its own Telegram bot token.
 - Put the rescue bot on a different base port, e.g. `19789`.
 
-This keeps the rescue bot able to debug or apply config changes if the primary bot is down. Leave at least 20 ports between base ports so derived browser/CDP ports never collide.
+This keeps the rescue bot able to debug or apply config changes if the primary bot is down. Leave at least 120 ports between base ports so derived browser/CDP ports never collide. Each instance reaches base + 110: its browser control port is base + 2, and that port's CDP range runs to base + 110.
 
 ```bash
 # Rescue bot (separate Telegram bot, separate profile, port 19789)
@@ -31,7 +31,7 @@ During `openclaw --profile rescue onboard`:
 
 - Use a separate Telegram bot token, dedicated to the rescue account (easy to keep operator-only, independent from the main bot's channel/app install, and a simple DM-based recovery path).
 - Keep the `rescue` profile name.
-- Use a base port at least 20 higher than the main bot.
+- Use a base port at least 120 higher than the main bot.
 - Accept the default rescue workspace unless you already manage one yourself.
 
 ### What `--profile rescue onboard` changes

@@ -1,4 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
+import { truncateCodePoints } from "@openclaw/normalization-core/code-points";
 // Directive tag helpers parse inline directive tags from user text.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { findCodeRegions, isInsideCode } from "../shared/text/code-regions.js";
@@ -68,13 +69,12 @@ export function replaceOutsideCodeRegions(
 }
 
 function normalizeDirectiveWhitespace(text: string): string {
-  // Extract → normalize prose → restore:
-  // Stash every code block (fenced ``` / ~~~ and indent-code 4-space/tab)
-  // under a sentinel-delimited placeholder so the prose regexes never touch them.
+  // Stash canonical code regions before normalizing prose. Indented code also
+  // occurs inside Markdown containers without any backtick or tilde delimiter.
   const blockSentinel = createBlockSentinel(text);
   const blockPlaceholderRe = new RegExp(`${blockSentinel}(\\d+)${blockSentinel}`, "g");
   const blocks: string[] = [];
-  const codeRegions = text.includes("`") || text.includes("~~~") ? findCodeRegions(text) : [];
+  const codeRegions = findCodeRegions(text);
   let masked = "";
   let cursor = 0;
   // The canonical scanner keeps false closers, indented closers, and open fences intact.
@@ -83,10 +83,7 @@ function normalizeDirectiveWhitespace(text: string): string {
     masked += `${text.slice(cursor, span.start)}${blockSentinel}${blocks.length - 1}${blockSentinel}`;
     cursor = span.end;
   }
-  masked = `${masked}${text.slice(cursor)}`.replace(/(?:(?:^|\n)(?:    |\t)[^\n]*)+/gm, (block) => {
-    blocks.push(block);
-    return `${blockSentinel}${blocks.length - 1}${blockSentinel}`;
-  });
+  masked += text.slice(cursor);
 
   const normalized = masked
     .replace(/\r\n/g, "\n")
@@ -131,7 +128,7 @@ export function sanitizeReplyDirectiveId(rawReplyToId?: string): string | undefi
   // UTF-16 length is an upper bound on the number of code points.
   return sanitized.length <= MAX_REPLY_DIRECTIVE_ID_LENGTH
     ? sanitized
-    : Array.from(sanitized).slice(0, MAX_REPLY_DIRECTIVE_ID_LENGTH).join("");
+    : truncateCodePoints(sanitized, MAX_REPLY_DIRECTIVE_ID_LENGTH);
 }
 
 export function stripInlineDirectiveTagsForDelivery(text: string): StripInlineDirectiveTagsResult {

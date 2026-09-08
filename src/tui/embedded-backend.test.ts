@@ -34,6 +34,7 @@ const formatSessionUsageCostSummaryMock = vi.fn();
 const updateSessionStoreMock = vi.fn();
 const applySessionPatchProjectionMock = vi.fn();
 const projectSessionsPatchEntryMock = vi.fn();
+const projectSessionPatchResultMock = vi.fn();
 const createSessionGoalMock = vi.fn();
 const clearSessionGoalMock = vi.fn();
 const getSessionGoalMock = vi.fn();
@@ -194,9 +195,13 @@ vi.mock("../agents/defaults.js", () => ({
   DEFAULT_PROVIDER: "openai",
 }));
 
-vi.mock("../agents/model-selection.js", () => ({
+vi.mock("../agents/model-selection-shared.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../agents/model-selection-shared.js")>()),
   buildAllowedModelSet: (params: { catalog: unknown[]; agentId?: string }) =>
     buildAllowedModelSetMock(params),
+}));
+
+vi.mock("../agents/model-selection.js", () => ({
   buildConfiguredModelCatalog: ({ cfg }: { cfg: { models?: { providers?: unknown } } }) =>
     Object.entries(
       (cfg.models?.providers as Record<string, { models?: Array<{ id: string }> }>) ?? {},
@@ -275,6 +280,10 @@ vi.mock("../gateway/session-utils.js", () => ({
     storePath: "/tmp/openclaw-sessions.json",
   }),
   resolveSessionModelRef: () => ({ provider: "openai", model: "gpt-5.4" }),
+}));
+
+vi.mock("../gateway/session-utils-model.js", () => ({
+  projectSessionPatchResult: (...args: unknown[]) => projectSessionPatchResultMock(...args),
 }));
 
 vi.mock("../gateway/server-model-catalog.js", () => ({
@@ -431,6 +440,16 @@ describe("EmbeddedTuiBackend", () => {
     );
     projectSessionsPatchEntryMock.mockReset();
     projectSessionsPatchEntryMock.mockResolvedValue({ ok: true, entry: {} });
+    projectSessionPatchResultMock.mockReset();
+    projectSessionPatchResultMock.mockImplementation(
+      (params: { canonicalKey: string; entry: unknown; storePath: string }) => ({
+        ok: true,
+        path: params.storePath,
+        key: params.canonicalKey,
+        entry: params.entry,
+        resolved: { modelProvider: "openai", model: "gpt-5.4" },
+      }),
+    );
     getRuntimeConfigMock.mockReset();
     getRuntimeConfigMock.mockReturnValue({});
     loadGatewayModelCatalogMock.mockReset();
@@ -3053,7 +3072,6 @@ describe("EmbeddedTuiBackend", () => {
       const resolveCanonical = vi
         .spyOn(sessionUtils, "resolveCanonicalGatewaySessionStoreKey")
         .mockReturnValue({ target, primaryKey: "global", entry });
-      const resolveModel = vi.spyOn(sessionUtils, "resolveSessionModelRef");
       projectSessionsPatchEntryMock.mockResolvedValueOnce({ ok: true, entry });
       const backend = new EmbeddedTuiBackend();
       const patch = {
@@ -3074,11 +3092,16 @@ describe("EmbeddedTuiBackend", () => {
             patch,
           }),
         );
-        expect.soft(resolveModel).toHaveBeenCalledWith(expect.anything(), entry, owner);
+        expect.soft(projectSessionPatchResultMock).toHaveBeenCalledWith({
+          canonicalKey: "global",
+          cfg: expect.anything(),
+          entry,
+          storePath: target.storePath,
+          targetAgentId: owner,
+        });
       } finally {
         resolveTarget.mockRestore();
         resolveCanonical.mockRestore();
-        resolveModel.mockRestore();
       }
     },
   );

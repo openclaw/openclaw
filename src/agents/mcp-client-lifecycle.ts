@@ -1,8 +1,8 @@
 import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPError } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
-import { ErrorCode } from "@modelcontextprotocol/sdk/types.js";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { settlesWithin } from "../shared/settle-within.js";
+import { isMcpRequestTimeoutError } from "./mcp-error.js";
 import { OpenClawStreamableHTTPClientTransport } from "./mcp-http-transport.js";
 import { OpenClawStdioClientTransport } from "./mcp-stdio-transport.js";
 import { recordAgentCleanupFailure } from "./run-cleanup-timeout.js";
@@ -58,7 +58,7 @@ export async function connectMcpClient(params: {
       aborted,
     ]);
   } catch (error) {
-    if (deadline.aborted || (isRecord(error) && error.code === ErrorCode.RequestTimeout)) {
+    if (deadline.aborted || isMcpRequestTimeoutError(error)) {
       await disposeMcpClient(
         {
           client: params.client,
@@ -85,17 +85,6 @@ export async function connectMcpClient(params: {
   }
 }
 
-async function settleWithin(promise: Promise<unknown>, timeoutMs: number): Promise<boolean> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  return await Promise.race([
-    promise.then(() => true),
-    new Promise<false>((resolve) => {
-      timer = setTimeout(() => resolve(false), timeoutMs);
-      timer.unref?.();
-    }),
-  ]).finally(() => clearTimeout(timer));
-}
-
 export async function disposeMcpClient(
   session: LifecycleSession,
   timeoutMs = 5_000,
@@ -120,7 +109,7 @@ export async function disposeMcpClient(
       await ignoreCloseFailure(() => session.transport.close());
       await ignoreCloseFailure(() => session.client.close());
     })();
-    const closed = await settleWithin(graceful, timeoutMs);
+    const closed = await settlesWithin(graceful, timeoutMs);
     if (closed) {
       return failed ? "uncertain" : "closed";
     }
@@ -131,7 +120,7 @@ export async function disposeMcpClient(
       session.transportType === "stdio" && transport instanceof OpenClawStdioClientTransport
         ? () => transport.forceClose()
         : () => transport.close();
-    const forced = await settleWithin(
+    const forced = await settlesWithin(
       Promise.all([
         graceful,
         ignoreCloseFailure(closeTransport),

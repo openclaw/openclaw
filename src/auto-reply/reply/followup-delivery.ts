@@ -419,6 +419,12 @@ async function sendFollowupPayloads(params: {
         requesterSenderUsername: turn.queued.run.senderUsername,
         requesterSenderE164: turn.queued.run.senderE164,
         threadId: turn.queued.originatingThreadId,
+        currentMessageId:
+          sameChannelOrigin &&
+          (turn.queued.run.inputProvenance?.kind === undefined ||
+            turn.queued.run.inputProvenance.kind === "external_user")
+            ? turn.queued.messageId
+            : undefined,
         cfg: turn.config,
         mirror:
           metadata?.assistantMessageIndex !== undefined ||
@@ -428,6 +434,12 @@ async function sendFollowupPayloads(params: {
         replyKind: params.kind,
         runId: params.runId,
       });
+      if (!result.delivered && (result.queueCustody === "held" || result.ambiguous)) {
+        logVerbose(
+          `followup queue: route-reply remains pending: ${result.error ?? "unconfirmed delivery"}`,
+        );
+        continue;
+      }
       if (!result.delivered && !result.suppressed) {
         const routeError = result.error ?? "no visible delivery";
         logVerbose(`followup queue: route-reply failed: ${routeError}`);

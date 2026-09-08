@@ -5,6 +5,7 @@ import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
+import type { SessionsListResult } from "../../api/types.ts";
 import { extractText } from "../../lib/chat/message-extract.ts";
 import { handleChatGatewayEvent, type ChatEventPayload } from "./chat-gateway.ts";
 import { getChatHistoryLoadState } from "./chat-history-state.ts";
@@ -17,6 +18,11 @@ import {
   publishChatSessionProjection,
   publishChatSessionProjectionMessages,
 } from "./history-merge.ts";
+import {
+  reconcileChatRunAfterSessionStatePublication,
+  type ChatRunUiStatus,
+  type LocalTerminalReconcile,
+} from "./run-lifecycle.ts";
 import { cacheChatSessionSnapshot, readChatMessagesFromCache } from "./session-message-cache.ts";
 import {
   visibleAssistantStreamParts,
@@ -28,6 +34,8 @@ import {
   rememberAuthoritativeTerminal,
   rememberLiveTerminalRun,
 } from "./terminal-message-identity.ts";
+import { createHost } from "./tool-stream.test-helpers.ts";
+import { handleAgentEvent } from "./tool-stream.ts";
 
 function createState(overrides: Partial<ChatState> = {}): ChatState {
   return {
@@ -53,6 +61,44 @@ function createState(overrides: Partial<ChatState> = {}): ChatState {
     ...overrides,
   };
 }
+
+it("completes an overtaken commentary item from the final cumulative delta without another item", () => {
+  const text = "- first file\n- second file\n\n```python\n    execute()\n```";
+  const state = Object.assign(
+    createState(),
+    createHost({
+      chatRunId: "run-1",
+      chatStream: text.slice(0, -4),
+    }),
+  );
+  handleAgentEvent(state, {
+    sessionKey: "main",
+    runId: "run-1",
+    seq: 1,
+    ts: 1,
+    stream: "item",
+    data: {
+      kind: "preamble",
+      phase: "end",
+      itemId: "commentary-1",
+      progressText: text.replace(/\s+/gu, " "),
+    },
+  });
+  handleChatGatewayEvent(state, {
+    sessionKey: "main",
+    runId: "run-1",
+    seq: 2,
+    state: "delta",
+    message: { role: "assistant", content: [{ type: "text", text }] },
+  });
+  expect(
+    visibleAssistantStreamParts(state, {
+      includeCurrent: true,
+      isHiddenStreamText: () => false,
+    }).map((part) => ({ text: part.text, itemId: part.itemId })),
+  ).toEqual([{ text, itemId: "commentary-1" }]);
+  expect(state.chatStream).toBe(text);
+});
 
 type HistoryResult = {
   messages: Array<unknown>;
@@ -116,40 +162,34 @@ function seedChatSnapshot(
 
 type SessionTestState = ChatState & {
   [key: string]: unknown;
-  chatRunStatus?: { phase: string; runId: string | null; sessionKey: string } | null;
+  chatRunStatus?: ChatRunUiStatus | null;
   knownAgentRunIds: Set<string>;
-  lastLocalTerminalReconcile?: {
-    phase: string;
-    runId: string | null;
-    sessionKey: string;
-    sessionStatus: string;
-  } | null;
-  sessionsResult: {
-    [key: string]: unknown;
-    sessions: Array<Record<string, unknown>>;
-  };
+  lastLocalTerminalReconcile?: LocalTerminalReconcile | null;
+  sessionsResult: SessionsListResult;
 };
 
 function createStateWithRunningSession(overrides: Partial<ChatState>): SessionTestState {
-  const state = createState(overrides) as SessionTestState;
-  state.sessionsResult = {
-    ts: 0,
-    path: "",
-    count: 1,
-    defaults: {},
-    sessions: [
-      {
-        key: "main",
-        kind: "direct",
-        updatedAt: 1,
-        hasActiveRun: true,
-        activeRunIds: ["run-1"],
-        status: "running",
-        startedAt: 100,
-      },
-    ],
+  return {
+    ...createState(overrides),
+    knownAgentRunIds: new Set(["run-1"]),
+    sessionsResult: {
+      ts: 0,
+      path: "",
+      count: 1,
+      defaults: { modelProvider: null, model: null, contextTokens: null },
+      sessions: [
+        {
+          key: "main",
+          kind: "direct",
+          updatedAt: 1,
+          hasActiveRun: true,
+          activeRunIds: ["run-1"],
+          status: "running",
+          startedAt: 100,
+        },
+      ],
+    },
   };
-  return state;
 }
 
 type HistoryToolSegment = { text: string; ts: number; toolCallId?: string };
@@ -1182,6 +1222,7 @@ describe("handleChatGatewayEvent", () => {
           chatStream: "Partial assistant reply",
           chatStreamStartedAt: 100,
         });
+        const staleSessionsResult = state.sessionsResult;
 
         expect(
           handleChatGatewayEvent(state, {
@@ -1199,6 +1240,7 @@ describe("handleChatGatewayEvent", () => {
           hasActiveRun: false,
           status: sessionStatus,
         });
+        expect(state.sessionsResult.sessions[0]?.lastRunError ?? null).toBe(errorSummary);
         expect(state.lastLocalTerminalReconcile?.sessionStatus).toBe(sessionStatus);
         expect(state.chatRunStatus).toMatchObject({
           phase: "interrupted",
@@ -1209,6 +1251,14 @@ describe("handleChatGatewayEvent", () => {
         expect(state.chatRunId).toBeNull();
         expect(state.chatStream).toBeNull();
         expect(state.chatStreamStartedAt).toBeNull();
+
+        state.sessionsResult = staleSessionsResult;
+        expect(reconcileChatRunAfterSessionStatePublication(state)).toBe(true);
+        expect(state.sessionsResult.sessions[0]).toMatchObject({
+          hasActiveRun: false,
+          status: sessionStatus,
+        });
+        expect(state.sessionsResult.sessions[0]?.lastRunError ?? null).toBe(errorSummary);
       } finally {
         vi.useRealTimers();
       }

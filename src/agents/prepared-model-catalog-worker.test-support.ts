@@ -17,7 +17,7 @@ import {
   setActivePluginRegistry,
 } from "../plugins/runtime.js";
 import { replaceRuntimeAuthProfileStoreSnapshots } from "./auth-profiles/runtime-snapshots.js";
-import { ensureAuthProfileStore } from "./auth-profiles/store.js";
+import { ensureAuthProfileStore } from "./auth-profiles/store-runtime.js";
 import {
   encodePluginModelCatalogRelativePath,
   PLUGIN_MODEL_CATALOG_GENERATED_BY,
@@ -466,7 +466,7 @@ async function expectNativeHarnessModelsPublished(params: {
       availability: true,
     });
     const preparedModels = await buildModelsListResult({
-      context,
+      source: { kind: "gateway", context },
       agentId: "main",
       params: { view: "configured" },
       preloadedCatalog: { agentId: "main", config: params.config, snapshot: catalog },

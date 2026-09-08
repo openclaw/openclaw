@@ -13,6 +13,7 @@ import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtim
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createFileBackedSessionManagerForTest } from "../../test/helpers/session-manager-file-fixture.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { makeUserMessage } from "../../test/helpers/user-message.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { attachRuntimeUserTurnTranscriptContext } from "../sessions/user-turn-transcript-runtime-context.js";
 import {
@@ -25,6 +26,7 @@ import { runAgentHarnessBeforeMessageWriteHook } from "./harness/hook-helpers.js
 import { guardSessionManager } from "./session-tool-result-guard-wrapper.js";
 import { sanitizeToolUseResultPairing } from "./session-transcript-repair.js";
 import { makeAgentAssistantMessage } from "./test-helpers/agent-message-fixtures.js";
+import { textToolResult, textAssistant } from "./test-helpers/sparse-transcript.test-support.js";
 
 function assistantToolCall(id: string): AgentMessage {
   return {
@@ -55,10 +57,7 @@ describe("guardSessionManager integration", () => {
     const appendMessage = sm.appendMessage.bind(sm) as unknown as (message: AgentMessage) => void;
 
     appendMessage(assistantToolCall("call_1"));
-    appendMessage({
-      role: "assistant",
-      content: [{ type: "text", text: "followup" }],
-    } as AgentMessage);
+    appendMessage(textAssistant("followup") as AgentMessage);
 
     const messages = getMessages(sm);
 
@@ -84,13 +83,7 @@ describe("guardSessionManager integration", () => {
       model: "delivery-mirror",
       content: [{ type: "text", text: "display copy" }],
     } as AgentMessage);
-    appendMessage({
-      role: "toolResult",
-      toolCallId: "call_1",
-      toolName: "n",
-      content: [{ type: "text", text: "real output" }],
-      isError: false,
-    } as AgentMessage);
+    appendMessage(textToolResult("call_1", "n", "real output", { isError: false }) as AgentMessage);
 
     const messages = getMessages(sm);
 
@@ -440,11 +433,7 @@ describe("guardSessionManager integration", () => {
     });
     const preparedMessage = expectDefined(recorder.message, "expected prepared queued turn");
     const runtimeMessage = attachRuntimeUserTurnTranscriptContext(
-      {
-        role: "user",
-        content: "runtime queued prompt",
-        timestamp: 456,
-      },
+      makeUserMessage("runtime queued prompt", 456),
       { message: preparedMessage, recorder },
     );
     const sm = guardSessionManager(SessionManager.inMemory());
@@ -515,13 +504,9 @@ describe("guardSessionManager integration", () => {
       ],
       stopReason: "toolUse",
     } as AgentMessage);
-    appendMessage({
-      role: "toolResult",
-      toolCallId: "call_1",
-      toolName: "read",
-      content: [{ type: "text", text: "peter@dc.io\n" }],
-      isError: false,
-    } as AgentMessage);
+    appendMessage(
+      textToolResult("call_1", "read", "peter@dc.io\n", { isError: false }) as AgentMessage,
+    );
 
     const messages = getMessages(sm);
 

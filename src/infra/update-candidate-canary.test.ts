@@ -4,7 +4,9 @@ import os from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { validateUpdateCandidateCanary } from "./update-candidate-canary.js";
+import { prepareUpdateCandidateRehearsal } from "./update-candidate-rehearsal.js";
 import { CONTROL_PLANE_UPDATE_SENTINEL_META_ENV } from "./update-control-plane-sentinel.js";
 import {
   POST_CORE_UPDATE_RESULT_PATH_ENV,
@@ -51,7 +53,7 @@ beforeEach(async () => {
   await fs.writeFile(path.join(root, "package.json"), JSON.stringify({ version: "2026.9.1" }));
   mocks.snapshot.mockResolvedValue({
     code: 0,
-    stdout: Buffer.from("[]"),
+    stdout: Buffer.from(JSON.stringify({ versions: [], pluginPaths: {} })),
     stderr: Buffer.alloc(0),
     termination: "exit",
   });
@@ -222,6 +224,63 @@ describe("update candidate canary", () => {
     await expect(fs.access(childEnv.OPENCLAW_STATE_DIR!)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
+  it("reuses caller-owned rehearsal changes across validations until the caller disposes them", async () => {
+    const config: OpenClawConfig = { logging: { level: "info" } };
+    const observed: Array<{ configPath: string; level: string | undefined }> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        const configPath = childEnv.OPENCLAW_CONFIG_PATH!;
+        const current = JSON.parse(await fs.readFile(configPath, "utf8")) as OpenClawConfig;
+        observed.push({ configPath, level: current.logging?.level });
+        return Response.json({ status: "started", ready: true });
+      }),
+    );
+    const rehearsal = await prepareUpdateCandidateRehearsal({
+      candidateRoot: root,
+      config,
+      stateDir: root,
+      env: {},
+      timeoutMs: 3_000,
+    });
+    try {
+      const first = await validateUpdateCandidateCanary({
+        root,
+        stateDir: root,
+        config,
+        env: {},
+        rehearsal,
+        timeoutMs: 3_000,
+      });
+      expect(first.status).toBe("ok");
+      const copied = JSON.parse(await fs.readFile(rehearsal.configPath, "utf8")) as OpenClawConfig;
+      copied.logging = { ...copied.logging, level: "debug" };
+      const repairedConfig = JSON.stringify(copied);
+      await fs.writeFile(rehearsal.configPath, repairedConfig);
+      const second = await validateUpdateCandidateCanary({
+        root,
+        stateDir: root,
+        config,
+        env: {},
+        rehearsal,
+        timeoutMs: 3_000,
+      });
+      expect(second.status).toBe("ok");
+      expect(observed).toEqual([
+        { configPath: rehearsal.configPath, level: "info" },
+        { configPath: rehearsal.configPath, level: "info" },
+        { configPath: rehearsal.configPath, level: "debug" },
+        { configPath: rehearsal.configPath, level: "debug" },
+      ]);
+      expect(mocks.snapshot).toHaveBeenCalledOnce();
+      expect(await fs.readFile(rehearsal.configPath, "utf8")).toBe(repairedConfig);
+      await expect(fs.access(rehearsal.stateDir)).resolves.toBeUndefined();
+    } finally {
+      await rehearsal.cleanup();
+    }
+    await expect(fs.access(rehearsal.stateDir)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
   it.each(["snapshot", "doctor", "plugins", "runtime", "readiness"] as const)(
     "records a failed %s step and cleans private state",
     async (failure) => {
@@ -262,6 +321,9 @@ describe("update candidate canary", () => {
       });
       expect(result.status).toBe("error");
       expect(result.phase).toBe(failure);
+      if (failure === "readiness") {
+        expect(result.steps.at(-1)?.name).toBe("candidate gateway canary");
+      }
       expect(result.steps.some((step) => step.exitCode !== 0)).toBe(true);
       expect(result.logTail.length).toBeLessThanOrEqual(40);
       expect(result.durationMs).toBeLessThan(1_000);
@@ -290,6 +352,29 @@ describe("update candidate canary", () => {
     expect(result.status).toBe("error");
     expect(mocks.snapshot).not.toHaveBeenCalled();
     expect(mocks.spawn).not.toHaveBeenCalled();
+  });
+
+  it("drains a cancelled validation child before deleting its private state", async () => {
+    const controller = new AbortController();
+    mocks.spawn.mockImplementationOnce((_command, _args, options) => {
+      const child = new FakeChild(nextPid++);
+      children.set(child.pid, child);
+      childEnv = options.env;
+      queueMicrotask(() => controller.abort(new Error("repair deadline")));
+      return child;
+    });
+    const result = await validateUpdateCandidateCanary({
+      root,
+      stateDir: root,
+      config: {},
+      env: {},
+      timeoutMs: 3_000,
+      signal: controller.signal,
+    });
+    expect(result.status).toBe("error");
+    expect(mocks.spawn).toHaveBeenCalledOnce();
+    expect(mocks.signal.mock.calls.map(([, signal]) => signal)).toEqual(["SIGTERM", "SIGKILL"]);
+    await expect(fs.access(childEnv.OPENCLAW_STATE_DIR!)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("rejects a zero-exit continuation worker without its compiled schema contract before boot", async () => {
@@ -327,6 +412,68 @@ describe("update candidate canary", () => {
       targetStateDir: string;
     };
     await expect(fs.access(snapshotInput.targetStateDir)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it.each([0, 1])("bounds multibyte stdout at the byte ceiling plus %i", async (overflow) => {
+    runtimeError = true;
+    const baseSpawn = mocks.spawn.getMockImplementation()!;
+    mocks.spawn.mockImplementation((command, args: string[], options) => {
+      if (!args.includes("plugins")) {
+        return baseSpawn(command, args, options);
+      }
+      const child = new FakeChild(nextPid++);
+      const json = JSON.stringify({ plugins: [], padding: "é".repeat(500_000) });
+      const bytes = Buffer.from(
+        json + " ".repeat(1024 * 1024 + overflow - Buffer.byteLength(json)),
+      );
+      queueMicrotask(() => {
+        child.stdout.write(bytes.subarray(0, 600_000));
+        child.stdout.end(bytes.subarray(600_000));
+        child.emit("close", 0);
+      });
+      return child;
+    });
+    const result = await validateUpdateCandidateCanary({
+      root,
+      stateDir: root,
+      config: {},
+      env: {},
+      timeoutMs: 3_000,
+    });
+    expect(result).toMatchObject({ status: "error", phase: overflow ? "plugins" : "runtime" });
+  });
+
+  it("preserves split UTF-8 diagnostics and final unterminated lines on both pipes", async () => {
+    const expected = ["stdout 診断: café 🦞", "stderr 診断: café 🦞"];
+    mocks.spawn.mockImplementationOnce(() => {
+      const child = new FakeChild(nextPid++);
+      queueMicrotask(() => {
+        for (const [index, stream] of [child.stdout, child.stderr].entries()) {
+          // Real pipe chunks may end inside a code point; EOF need not follow a newline.
+          const bytes = Buffer.from(`${expected[index]}\r\n${expected[index]} final`);
+          for (const byte of bytes) {
+            stream.write(Buffer.from([byte]));
+          }
+          stream.end();
+        }
+        child.emit("close", 1);
+      });
+      return child;
+    });
+    const result = await validateUpdateCandidateCanary({
+      root,
+      stateDir: root,
+      config: {},
+      env: {},
+      timeoutMs: 3_000,
+    });
+    expect(result.status).toBe("error");
+    for (const line of expected) {
+      expect(result.logTail).toContain(line);
+      expect(result.logTail).toContain(`${line} final`);
+      expect(result.steps.at(-1)?.stderrTail).toContain(`${line}\n`);
+      expect(result.steps.at(-1)?.stderrTail).toContain(`${line} final`);
+    }
   });
 
   it("omits the entire oversized log line across chunks while preserving following diagnostics", async () => {

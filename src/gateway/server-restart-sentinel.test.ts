@@ -5,13 +5,14 @@ import path from "node:path";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createSolidPngBuffer } from "../../test/helpers/image-fixtures.js";
+import type { RuntimeContextFragment } from "../agents/internal-runtime-context.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import {
   loadTranscriptEvents,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import type { RestartSentinelPayload } from "../infra/restart-sentinel.js";
-import { resolveSystemEventOptionsOwnerAgentId } from "../infra/system-event-ownership.js";
+import { resolveSystemEventOwnerAgentId } from "../infra/system-event-ownership.js";
 import {
   createUpdateRun,
   finishUpdateRun,
@@ -151,7 +152,7 @@ const mocks = vi.hoisted(() => {
         status: "pending" | "failed" | "completed";
       } | null
     >(() => null),
-    ackDelivery: vi.fn(async () => {}),
+    ackDelivery: vi.fn(async (_id: string) => {}),
     failDelivery: vi.fn(async () => {}),
     failDeliveryAfterPlatformSend: vi.fn(async () => {}),
     failDeliveryBeforePlatformSend: vi.fn(async () => {}),
@@ -626,6 +627,13 @@ function mockRestartContinuation(
 let testState: OpenClawTestState;
 
 describe("scheduleRestartSentinelWake", () => {
+  const expectedGeneratedMediaContext: RuntimeContextFragment[] = [
+    {
+      kind: "runtime-instruction",
+      text: "Deliver the generated media listed below to the user.",
+    },
+    { kind: "conversation-data", text: "Generated media:\nMEDIA:/tmp/proof.png" },
+  ];
   afterEach(async () => {
     resetGatewayWorkAdmission();
     vi.useRealTimers();
@@ -815,7 +823,9 @@ describe("scheduleRestartSentinelWake", () => {
       completionRetention: "permanent",
       maxRetries: 45,
     });
-    expect(mocks.ackDelivery).toHaveBeenCalledWith("restart-sentinel-notice:agent:main:main:123");
+    expect(mocks.ackDelivery.mock.calls[0]?.[0]).toBe(
+      "restart-sentinel-notice:agent:main:main:123",
+    );
     expect(mocks.reserveDeliveryAttempt).toHaveBeenCalledWith(
       "restart-sentinel-notice:agent:main:main:123",
       45,
@@ -1384,10 +1394,10 @@ describe("scheduleRestartSentinelWake", () => {
       deliveryQueueId: "restart-sentinel-notice:agent:main:main:123",
     });
     expect(mocks.ackDelivery).not.toHaveBeenCalled();
-    expect(mocks.failDelivery).toHaveBeenCalledWith(
+    expect(mocks.failDelivery.mock.calls[0]?.slice(0, 2)).toEqual([
       "restart-sentinel-notice:agent:main:main:123",
       "platform outcome unknown",
-    );
+    ]);
     expect(mocks.drainPendingDeliveries).toHaveBeenCalledOnce();
     expectRecordFields(mockCallArg(mocks.drainPendingDeliveries), {
       drainKey: "restart-recovery:restart-sentinel-notice:agent:main:main:123",
@@ -1417,10 +1427,10 @@ describe("scheduleRestartSentinelWake", () => {
 
     await scheduleRestartSentinelWake({ deps: {} as never });
 
-    expect(mocks.failDeliveryAfterPlatformSend).toHaveBeenCalledWith(
+    expect(mocks.failDeliveryAfterPlatformSend.mock.calls[0]?.slice(0, 2)).toEqual([
       "restart-sentinel-notice:agent:main:main:123",
       "ack unavailable",
-    );
+    ]);
     expect(mocks.drainPendingDeliveries).toHaveBeenCalledOnce();
     expect(mocks.logWarn).toHaveBeenCalledWith(
       "restart summary: outbound delivery ack failed; queued for recovery: ack unavailable",
@@ -1454,10 +1464,10 @@ describe("scheduleRestartSentinelWake", () => {
 
     await scheduleRestartSentinelWake({ deps: {} as never });
 
-    expect(mocks.failDelivery).toHaveBeenCalledWith(
+    expect(mocks.failDelivery.mock.calls[0]?.slice(0, 2)).toEqual([
       "restart-sentinel-notice:agent:main:main:123",
       "transport still not ready",
-    );
+    ]);
     expect(mocks.recordInboundSessionAndDispatchReply).toHaveBeenCalledTimes(1);
     expectContinuationDispatchFields({ routeSessionKey: "agent:main:main" }, { Body: "continue" });
   });
@@ -1606,6 +1616,7 @@ describe("scheduleRestartSentinelWake", () => {
         expectFinal: true,
         forceSyntheticClient: true,
         internalDeliveryMediaUrls: ["/tmp/proof.png"],
+        runtimeContextFragments: expectedGeneratedMediaContext,
         resolveGatewayContext,
         onAccepted: expect.any(Function),
       },
@@ -1700,6 +1711,7 @@ describe("scheduleRestartSentinelWake", () => {
         expectFinal: true,
         forceSyntheticClient: true,
         internalDeliveryMediaUrls: ["/tmp/proof.png"],
+        runtimeContextFragments: expectedGeneratedMediaContext,
         internalDeliverySuppressText: true,
         onAccepted: expect.any(Function),
       },
@@ -1951,6 +1963,7 @@ describe("scheduleRestartSentinelWake", () => {
         expectFinal: true,
         forceSyntheticClient: true,
         internalDeliveryMediaUrls: ["/tmp/proof.png"],
+        runtimeContextFragments: expectedGeneratedMediaContext,
         internalDeliverySuppressText: true,
         onAccepted: expect.any(Function),
       },
@@ -3500,7 +3513,7 @@ describe("scheduleRestartSentinelWake", () => {
       );
       const eventOptions = mocks.enqueueSystemEvent.mock.calls[0]?.[1];
       expect(eventOptions).toMatchObject({ sessionKey, deliveryContext: context });
-      expect(resolveSystemEventOptionsOwnerAgentId(eventOptions as object)).toBe("ops");
+      expect(resolveSystemEventOwnerAgentId(eventOptions as object)).toBe("ops");
       expect(mocks.requestHeartbeat).toHaveBeenCalledWith({
         source: "restart-sentinel",
         intent: "immediate",
@@ -3541,7 +3554,7 @@ describe("scheduleRestartSentinelWake", () => {
     });
     expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
     const eventOptions = mocks.enqueueSystemEvent.mock.calls[0]?.[1];
-    expect(resolveSystemEventOptionsOwnerAgentId(eventOptions as object)).toBe("ops");
+    expect(resolveSystemEventOwnerAgentId(eventOptions as object)).toBe("ops");
     expect(eventOptions).not.toHaveProperty("deliveryContext");
   });
 
@@ -3560,7 +3573,7 @@ describe("scheduleRestartSentinelWake", () => {
 
     const eventOptions = mocks.enqueueSystemEvent.mock.calls[0]?.[1];
     expect(eventOptions).toMatchObject({ sessionKey: "global" });
-    expect(resolveSystemEventOptionsOwnerAgentId(eventOptions as object)).toBe("ops");
+    expect(resolveSystemEventOwnerAgentId(eventOptions as object)).toBe("ops");
     expect(mocks.requestHeartbeat).toHaveBeenCalledWith({
       source: "restart-sentinel",
       intent: "immediate",

@@ -737,6 +737,21 @@ describe("validateTalkConfigResult", () => {
       }),
     ]);
   });
+
+  it("accepts response-only realtime client routing hints", () => {
+    expectAccepted(validateTalkConfigResult, [
+      {
+        config: {
+          clientHints: {
+            realtime: {
+              modelSource: "gateway",
+              gatewayRelaySupported: false,
+            },
+          },
+        },
+      },
+    ]);
+  });
 });
 
 describe("validateTalkClientCreateParams", () => {
@@ -1010,13 +1025,16 @@ describe("validateModelsListParams", () => {
       { view: "all" },
       { view: "configured", preparedOnly: true },
       { view: "all", refresh: true },
+      { view: "configured", provider: "minimax", includeDetails: true },
     ]);
   });
 
   it("rejects unknown model catalog views and extra fields", () => {
     expectRejected(validateModelsListParams, [
       { view: "available" },
-      { view: "configured", provider: "minimax" },
+      { view: "configured", unexpected: true },
+      { provider: "" },
+      { includeDetails: "yes" },
     ]);
   });
 });

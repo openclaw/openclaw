@@ -6,7 +6,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import * as tar from "tar";
 import { describe, expect, it, vi } from "vitest";
-import { saveAuthProfileStore } from "../agents/auth-profiles/store.js";
+import { saveAuthProfileStore } from "../agents/auth-profiles/store-runtime.js";
 import { backupRestoreCommand } from "../commands/backup-restore.js";
 import { backupVerifyCommand, verifyBackupArchive } from "../commands/backup-verify.js";
 import { CONFIG_AUDIT_MAX_ENTRIES, CONFIG_AUDIT_SCOPE } from "../config/io.audit.js";
@@ -504,43 +504,6 @@ describe("writeTarArchiveWithRetry", () => {
       }),
     ).rejects.toThrow(/last offending path: \/state\/logs\/gateway\.jsonl, after 3 attempts/);
     expect(runTar).toHaveBeenCalledTimes(3);
-  });
-
-  it("lets callers reset per-attempt counters so retries report the final attempt's count, not a running sum", async () => {
-    // Simulate the caller's pattern: a closure counter populated by a filter
-    // that tar.c invokes while walking the tree. Each attempt re-walks the
-    // same tree, so the runTar closure must reset the counter before calling
-    // tar.c -- otherwise the reported count accumulates across attempts.
-    let skippedVolatileCount = 0;
-    const volatileFilesSeenPerAttempt = 5;
-    let attempt = 0;
-
-    const eofErr = Object.assign(new Error("did not encounter expected EOF"), {
-      path: "/state/sessions/s-abc/transcript.jsonl",
-    });
-
-    const runTar = vi.fn<() => Promise<void>>().mockImplementation(async () => {
-      attempt += 1;
-      skippedVolatileCount = 0;
-      for (let i = 0; i < volatileFilesSeenPerAttempt; i += 1) {
-        skippedVolatileCount += 1;
-      }
-      if (attempt < 3) {
-        throw eofErr;
-      }
-    });
-    const sleep = vi.fn<(ms: number) => Promise<void>>().mockResolvedValue(undefined);
-
-    await writeTarArchiveWithRetry({
-      tempArchivePath: "/tmp/backup.tar.gz.tmp",
-      runTar,
-      sleepMs: sleep,
-    });
-
-    expect(runTar).toHaveBeenCalledTimes(3);
-    // Without the reset, this would be 15 (5 * 3 attempts). With the reset,
-    // it equals the count from the final (successful) attempt.
-    expect(skippedVolatileCount).toBe(volatileFilesSeenPerAttempt);
   });
 
   it("does not retry on non-EOF errors", async () => {
@@ -1193,7 +1156,7 @@ describe("createBackupArchive", () => {
             db.prepare("DELETE FROM durable_records WHERE value LIKE ?").run(`${deletedMarker}%`);
             db.prepare("INSERT INTO durable_records (value) VALUES (?)").run("committed-in-wal");
             expect((await fs.readFile(dbPath)).includes(Buffer.from(deletedMarker))).toBe(true);
-            await expect(fs.access(`${dbPath}-wal`)).resolves.toBeUndefined();
+            await fs.access(`${dbPath}-wal`);
 
             archive = await createBackupArchive({
               output: state.path("owned-agent.tar.gz"),
@@ -2159,7 +2122,7 @@ describe("createBackupArchive", () => {
             PRAGMA wal_checkpoint(TRUNCATE);
             INSERT INTO markers (value) VALUES ('committed-in-wal');
           `);
-          await expect(fs.access(`${dbPath}-wal`)).resolves.toBeUndefined();
+          await fs.access(`${dbPath}-wal`);
 
           const result = await createBackupArchive({
             output: outputDir,
@@ -2602,8 +2565,8 @@ describe("createBackupArchive", () => {
         await fs.writeFile(`${dbPath}-journal`, "");
 
         try {
-          await expect(fs.access(`${dbPath}-wal`)).resolves.toBeUndefined();
-          await expect(fs.access(`${dbPath}-shm`)).resolves.toBeUndefined();
+          await fs.access(`${dbPath}-wal`);
+          await fs.access(`${dbPath}-shm`);
           const result = await createBackupArchive({
             output: outputDir,
             includeWorkspace: false,

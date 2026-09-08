@@ -19,6 +19,7 @@ import {
 } from "vitest";
 import { GATEWAY_CLIENT_IDS } from "../../../packages/gateway-protocol/src/client-info.js";
 import { validateExecApprovalRequestParams } from "../../../packages/gateway-protocol/src/index.js";
+import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import { STREAM_ERROR_FALLBACK_TEXT } from "../../agents/stream-message-shared.js";
 import { HEARTBEAT_PROMPT } from "../../auto-reply/heartbeat.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -1960,11 +1961,7 @@ describe("projectChatDisplayMessages", () => {
 
   it("drops channel-final delivery mirrors that duplicate the preceding assistant reply", () => {
     const result = projectChatDisplayMessages([
-      {
-        role: "user",
-        content: "yo big boy",
-        timestamp: 1,
-      },
+      makeUserMessage("yo big boy", 1),
       assistantHistoryMessage("Yo Peter. I’m here.", {
         provider: "openai",
         model: "gpt-5.5",
@@ -1997,11 +1994,7 @@ describe("projectChatDisplayMessages", () => {
         __openclaw: { mirrorIdentity: "run-1:assistant" },
         timestamp: 1,
       }),
-      {
-        role: "user",
-        content: "",
-        timestamp: 2,
-      },
+      makeUserMessage("", 2),
       deliveryMirrorHistoryMessage("Repeated reply", "message-2", 3),
     ]);
 
@@ -2234,6 +2227,18 @@ describe("dropPreSessionStartAnnouncePairs (#85648)", () => {
           timestamp: cutoff - 500,
         },
         { role: "user", content: "fresh imported turn", timestamp: cutoff + 1_000 },
+      ],
+      keptIndexes: [2],
+    },
+    {
+      name: "drops a pre-cutoff settlement wake and its adjacent synthesis",
+      messages: [
+        {
+          ...recordedMessage("user", "All children settled", 1, cutoff - 1_000),
+          provenance: { ...announceProvenance, sourceTool: "subagent_settle" },
+        },
+        recordedMessage("assistant", "old synthesis", 2, cutoff - 500),
+        recordedMessage("user", "fresh user turn", 3, cutoff + 1_000),
       ],
       keptIndexes: [2],
     },
