@@ -427,7 +427,7 @@ If discovery fails or times out, OpenClaw uses a bundled fallback catalog for:
 - GPT-5.5
 - GPT-5.4 mini
 
-The current bundled harness is `@openai/codex` `0.146.0`. A `model/list` probe
+The current bundled harness is `@openai/codex` `0.153.4`. A `model/list` probe
 against that bundled app-server in a GPT-5.6-enabled workspace returned these
 public picker rows:
 
