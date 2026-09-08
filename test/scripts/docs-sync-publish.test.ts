@@ -405,6 +405,14 @@ fs.writeFileSync('package-lock.json', JSON.stringify(lock));
       "ci/local-proof",
       "help/scripts",
       "concepts/qa-e2e-automation",
+      "concepts/qa-e2e-automation/command-surface",
+      "concepts/qa-e2e-automation/operator-flow",
+      "concepts/qa-e2e-automation/scenario-coverage",
+      "concepts/qa-e2e-automation/channel-qa-reference",
+      "concepts/qa-e2e-automation/slack-qa",
+      "concepts/qa-e2e-automation/whatsapp-and-credentials",
+      "concepts/qa-e2e-automation/extending-the-stack",
+      "concepts/qa-e2e-automation/qa-reporting",
       "concepts/personal-agent-benchmark-pack",
     ];
     expect(collectPages(releaseTab)).toEqual(releaseRoutes);
