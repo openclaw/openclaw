@@ -2,13 +2,14 @@ import { html, nothing } from "lit";
 import { live } from "lit/directives/live.js";
 import { repeat } from "lit/directives/repeat.js";
 import type { SkillsLibraryMutateParams } from "../../../../packages/gateway-protocol/src/index.ts";
+import { icons } from "../../components/icons.ts";
+import "../../components/modal-dialog.ts";
 import {
   renderSettingsEmpty,
   renderSettingsSection,
   renderSettingsSegmented,
   renderSettingsStatus,
 } from "../../components/settings-ui.ts";
-import "../../components/modal-dialog.ts";
 import { t } from "../../i18n/index.ts";
 import type { SkillLibraryController, LibraryView } from "./library-controller.ts";
 import { renderLibraryIdentity } from "./library-detail.ts";
@@ -228,7 +229,7 @@ function renderLibraryEditor(library: SkillLibraryController) {
     }}
   >
     <form
-      class="md-preview-dialog__panel"
+      class="md-preview-dialog__panel skill-reader-dialog"
       @submit=${(event: SubmitEvent) => {
         event.preventDefault();
         void library.save();
@@ -241,14 +242,16 @@ function renderLibraryEditor(library: SkillLibraryController) {
       }}
     >
       <div class="md-preview-dialog__header">
-        <strong>${draft.entry?.slug ?? t("skillLibrary.create")}</strong
+        <strong class="md-preview-dialog__title"
+          >${draft.entry?.slug ?? t("skillLibrary.create")}</strong
         ><button
           type="button"
-          class="btn btn--sm"
+          class="btn btn--sm md-preview-icon-btn"
+          aria-label=${t("common.close")}
           ?disabled=${library.busy}
           @click=${() => library.close()}
         >
-          ${t("common.close")}
+          <span aria-hidden="true">${icons.x}</span>
         </button>
       </div>
       <div
@@ -542,7 +545,7 @@ function renderLibraryImport(library: SkillLibraryController) {
     }}
   >
     <form
-      class="md-preview-dialog__panel"
+      class="md-preview-dialog__panel skill-reader-dialog"
       @submit=${(event: SubmitEvent) => {
         event.preventDefault();
         if (library.importSource) {
@@ -557,9 +560,15 @@ function renderLibraryImport(library: SkillLibraryController) {
       }}
     >
       <div class="md-preview-dialog__header">
-        <strong>${t("skillLibrary.import")}</strong
-        ><button type="button" class="btn btn--sm" ?disabled=${library.busy} @click=${close}>
-          ${t("common.close")}
+        <strong class="md-preview-dialog__title">${t("skillLibrary.import")}</strong
+        ><button
+          type="button"
+          class="btn btn--sm md-preview-icon-btn"
+          aria-label=${t("common.close")}
+          ?disabled=${library.busy}
+          @click=${close}
+        >
+          <span aria-hidden="true">${icons.x}</span>
         </button>
       </div>
       <div

@@ -4122,12 +4122,6 @@ td.data-table-key-col {
   overflow: hidden;
 }
 
-/* A refusal or empty-state message is a few lines; without this the reader height reserved for
-   long skill documents leaves the dialog looking broken rather than deliberate. */
-.md-preview-dialog__panel--message-only {
-  min-height: 0;
-}
-
 .md-preview-dialog__header {
   display: flex;
   align-items: flex-start;
@@ -4541,6 +4535,69 @@ td.data-table-key-col {
     width: 100%;
     padding: 20px 16px 22px;
   }
+}
+
+.md-preview-dialog__panel.skill-reader-dialog {
+  --skill-reader-inset: var(--space-5);
+
+  max-height: calc(100dvh - 2 * var(--space-6));
+}
+
+.skill-reader-dialog .md-preview-dialog__header {
+  flex-direction: row;
+  align-items: center;
+  flex-shrink: 0;
+  gap: var(--space-3);
+  padding: var(--skill-reader-inset);
+}
+
+.skill-reader-dialog .md-preview-dialog__header > :first-child {
+  min-width: 0;
+}
+
+.skill-reader-dialog .md-preview-icon-btn,
+.skill-reader-dialog .statusDot {
+  flex-shrink: 0;
+}
+
+.skill-reader-dialog .md-preview-dialog__body {
+  align-content: start;
+  padding: var(--skill-reader-inset);
+}
+
+.skill-reader-dialog .md-preview-dialog__body > p {
+  margin: 0;
+}
+
+.skill-reader-dialog__error {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  overflow-wrap: anywhere;
+}
+
+.skill-reader-dialog__error > [aria-hidden] {
+  display: flex;
+  flex-shrink: 0;
+}
+
+.skill-reader-dialog__error svg {
+  width: var(--space-5);
+  height: var(--space-5);
+}
+
+@media (max-width: 768px) {
+  .md-preview-dialog__panel.skill-reader-dialog {
+    --skill-reader-inset: var(--space-4);
+
+    min-height: 90dvh;
+    max-height: 90dvh;
+  }
+}
+
+/* Keep brief errors content-sized even inside the mobile Skills page. */
+.skill-reader-dialog.md-preview-dialog__panel--message-only {
+  min-height: 0;
 }
 
 @media (prefers-reduced-motion: reduce) {

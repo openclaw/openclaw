@@ -534,7 +534,7 @@ function renderClawHubDetailDialog(props: SkillsProps) {
       @modal-cancel=${props.onClawHubDetailClose}
     >
       <div
-        class="md-preview-dialog__panel ${
+        class="md-preview-dialog__panel skill-reader-dialog ${
           props.clawhubDetailError && !props.clawhubDetailLoading
             ? "md-preview-dialog__panel--message-only"
             : ""
@@ -557,16 +557,24 @@ function renderClawHubDetailDialog(props: SkillsProps) {
               ${detail?.skill?.displayName ?? props.clawhubDetailRef}
             </div>
           </div>
-          <button class="btn btn--sm" @click=${props.onClawHubDetailClose}>
-            ${t("skillsPage.close")}
+          <button
+            type="button"
+            class="btn btn--sm md-preview-icon-btn"
+            aria-label=${t("skillsPage.close")}
+            @click=${props.onClawHubDetailClose}
+          >
+            <span aria-hidden="true">${icons.x}</span>
           </button>
         </div>
-        <div class="md-preview-dialog__body" style="display: grid; gap: 16px;">
+        <div class="md-preview-dialog__body" style="display: grid; gap: var(--space-4);">
           ${
             props.clawhubDetailLoading
               ? html`<div class="muted">${t("common.loading")}</div>`
               : props.clawhubDetailError
-                ? html`<div class="callout danger">${props.clawhubDetailError}</div>`
+                ? html`<div class="callout danger skill-reader-dialog__error" role="alert">
+                    <span aria-hidden="true">${icons.alertTriangle}</span>
+                    <span>${props.clawhubDetailError}</span>
+                  </div>`
                 : detail?.skill
                   ? html`
                       <div style="font-size: 14px; line-height: 1.5;">
@@ -692,7 +700,7 @@ function renderSkillDetail(skill: SkillStatusEntry, props: SkillsProps) {
       style="--openclaw-modal-width: min(1040px, calc(100vw - 32px));"
       @modal-cancel=${props.onDetailClose}
     >
-      <div class="md-preview-dialog__panel">
+      <div class="md-preview-dialog__panel skill-reader-dialog">
         <div class="md-preview-dialog__header">
           <div
             class="md-preview-dialog__title"
@@ -702,11 +710,16 @@ function renderSkillDetail(skill: SkillStatusEntry, props: SkillsProps) {
             ${skill.emoji ? html`<span style="font-size: 18px;">${skill.emoji}</span>` : nothing}
             <span>${skill.name}</span>
           </div>
-          <button class="btn btn--sm" @click=${props.onDetailClose}>
-            ${t("skillsPage.close")}
+          <button
+            type="button"
+            class="btn btn--sm md-preview-icon-btn"
+            aria-label=${t("skillsPage.close")}
+            @click=${props.onDetailClose}
+          >
+            <span aria-hidden="true">${icons.x}</span>
           </button>
         </div>
-        <div class="md-preview-dialog__body" style="display: grid; gap: 16px;">
+        <div class="md-preview-dialog__body" style="display: grid; gap: var(--space-4);">
           <div>
             <div style="font-size: 14px; line-height: 1.5; color: var(--text);">
               ${skill.description}

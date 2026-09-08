@@ -3,6 +3,7 @@ import type {
   SkillLibraryEntry,
   SkillsLibraryReadResult,
 } from "../../../../packages/gateway-protocol/src/index.ts";
+import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
 import { libraryEventControl } from "./library-events.ts";
 import { libraryFileText } from "./library-files.ts";
@@ -39,11 +40,16 @@ export function renderLibraryPinRead(props: {
     style="--openclaw-modal-width: 960px;"
     @modal-cancel=${props.onClose}
   >
-    <div class="md-preview-dialog__panel">
+    <div class="md-preview-dialog__panel skill-reader-dialog">
       <div class="md-preview-dialog__header">
-        <strong>${read.entry.slug}</strong
-        ><button type="button" class="btn btn--sm" @click=${props.onClose}>
-          ${t("common.close")}
+        <strong class="md-preview-dialog__title">${read.entry.slug}</strong
+        ><button
+          type="button"
+          class="btn btn--sm md-preview-icon-btn"
+          aria-label=${t("common.close")}
+          @click=${props.onClose}
+        >
+          <span aria-hidden="true">${icons.x}</span>
         </button>
       </div>
       <div
