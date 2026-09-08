@@ -1722,6 +1722,38 @@ describe("cli session history", () => {
     expect(readRecord(readRecord(merged[0])["__openclaw"]).externalId).toBe("exact-id");
   });
 
+  it("advances repeated-text order from an edited exact-identity import", () => {
+    const timestamp = Date.parse("2026-09-01T10:00:00Z");
+    const exactLocal = {
+      role: "assistant",
+      content: "Edited answer",
+      timestamp,
+      __openclaw: { importedFrom: "claude-cli", externalId: "exact-id" },
+    };
+    const merged = mergeImportedChatHistoryMessages({
+      localMessages: [{ role: "assistant", content: "Original answer", timestamp }, exactLocal],
+      importedMessages: [
+        {
+          role: "assistant",
+          content: "Original answer",
+          timestamp,
+          __openclaw: { importedFrom: "claude-cli", externalId: "exact-id" },
+        },
+        {
+          role: "assistant",
+          content: "Original answer",
+          timestamp,
+          __openclaw: { importedFrom: "claude-cli", externalId: "later-id" },
+        },
+      ],
+    });
+
+    expect(merged).toHaveLength(3);
+    expect(readRecord(merged[0])["__openclaw"]).toBeUndefined();
+    expect(merged[1]).toBe(exactLocal);
+    expect(readRecord(readRecord(merged[2])["__openclaw"]).externalId).toBe("later-id");
+  });
+
   it("does not surface a secret present only in imported history after merge", async () => {
     await withClaudeProjectsDir(async ({ homeDir, sessionId, filePath }) => {
       const importedSecret = "sk-abcdef1234567890xyz";
@@ -2118,6 +2150,44 @@ describe("cli session history", () => {
     ).toEqual(["first-import", undefined, "second-import"]);
   });
 
+  it("shares repeated-text order across identity-specific indexes", () => {
+    const window = 5 * 60 * 1000;
+    const merged = mergeImportedChatHistoryMessages({
+      localMessages: [
+        { role: "assistant", content: "Repeated answer", timestamp: window * 2 },
+        { role: "assistant", content: "Repeated answer", timestamp: 0 },
+      ],
+      importedMessages: [
+        { role: "assistant", content: "Repeated answer", timestamp: 0 },
+        {
+          role: "assistant",
+          content: "Repeated answer",
+          timestamp: window * 2,
+          __openclaw: { importedFrom: "claude-cli", externalId: "later-import" },
+        },
+      ],
+    });
+
+    expect(merged).toHaveLength(3);
+    expect(
+      merged.map((message) => {
+        const meta = readRecord(message)["__openclaw"];
+        return meta ? readRecord(meta).externalId : undefined;
+      }),
+    ).toEqual([undefined, undefined, "later-import"]);
+  });
+
+  it("preserves repeated identityless rows imported without local history", () => {
+    const message = { role: "assistant", content: "Repeated answer", timestamp: 0 };
+
+    const merged = mergeImportedChatHistoryMessages({
+      localMessages: [],
+      importedMessages: [message, { ...message }],
+    });
+
+    expect(merged).toHaveLength(2);
+  });
+
   it("preserves order when timestamp-less imports span both candidate pools", () => {
     const merged = mergeImportedChatHistoryMessages({
       localMessages: [
@@ -2236,9 +2306,10 @@ describe("cli session history", () => {
       ],
     });
 
-    expect(merged).toHaveLength(2);
-    expect(readRecord(readRecord(merged[0])["__openclaw"]).externalId).toBe("timestamp-less");
+    expect(merged).toHaveLength(3);
+    expect(readRecord(merged[0])["__openclaw"]).toBeUndefined();
     expect(readRecord(readRecord(merged[1])["__openclaw"]).externalId).toBe("timestamped");
+    expect(readRecord(readRecord(merged[2])["__openclaw"]).externalId).toBe("timestamp-less");
   });
 
   it("selects the closest repeated-text match across timestamp buckets", () => {
