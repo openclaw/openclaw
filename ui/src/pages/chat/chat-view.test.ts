@@ -2843,7 +2843,7 @@ describe("chat transcript rendering cache", () => {
     });
   });
 
-  it("passes the shared assistant media contract to active streams and continuations", () => {
+  it("shares assistant media context across history, streams, and continuations", () => {
     const onAssistantAttachmentLoaded = vi.fn();
     const onRequestUpdate = vi.fn();
     const onRequestOpenImage = vi.fn(() => 7);
@@ -2852,6 +2852,7 @@ describe("chat transcript rendering cache", () => {
     const resolveArtifactDownload = vi.fn();
     const mediaProps = {
       sessionKey: "agent:media:main",
+      currentAgentId: "current",
       fullMessageAgentId: "media",
       basePath: "/control",
       resourceBasePath: "/resources",
@@ -2875,7 +2876,7 @@ describe("chat transcript rendering cache", () => {
     };
     const expected = {
       sessionKey: mediaProps.sessionKey,
-      agentId: mediaProps.fullMessageAgentId,
+      agentId: mediaProps.currentAgentId,
       runActive: true,
       resourceBasePath: mediaProps.resourceBasePath,
       assistantAttachmentAuthToken: mediaProps.assistantAttachmentAuthToken,
@@ -2923,6 +2924,7 @@ describe("chat transcript rendering cache", () => {
       messages: [{ role: "assistant", content: "Interim answer", timestamp: 1 }],
     });
 
+    expect(renderMessageGroupMock.mock.calls.at(-1)?.[1]).toMatchObject(expected);
     expect(renderMessageGroupMock.mock.calls.at(-1)?.[1].activeContinuation?.options).toMatchObject(
       expected,
     );
