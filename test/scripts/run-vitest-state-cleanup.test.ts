@@ -595,6 +595,10 @@ it.each([
   { args: ["run", "--project=unit"], expected: "live-aware" },
   { args: ["run", "--config", "test/vitest/vitest.live.config.ts"], expected: "live-aware" },
   {
+    args: ["run", "--config", "test/vitest/vitest.package-contract.config.ts"],
+    expected: "live-aware",
+  },
+  {
     args: ["run", "--config", "test/vitest/vitest.full-core-runtime.config.ts", "--project=*"],
     expected: "live-aware",
   },

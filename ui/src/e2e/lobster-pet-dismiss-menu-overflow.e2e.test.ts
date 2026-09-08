@@ -1,10 +1,8 @@
 // Measures the lobster dismiss menu's internal overflow in the real sidebar
 // footer context, with classic (space-taking) scrollbars forced on so the
 // Linux run matches what a macOS "Always show scrollbars" operator sees.
-import path from "node:path";
 import type { BrowserContextOptions, Page } from "playwright";
-import { beforeEach, expect, it } from "vitest";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { expect, it } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -25,14 +23,12 @@ type BrowserLobsterPet = HTMLElement & {
   updateComplete: Promise<unknown>;
 };
 
-let artifactDir: string;
-
 /** Shared setup for a fresh page: mock gateway, load, and park the clock so
  *  the pet's own timers don't fire mid-assertion. Reused across the default
  *  1280x900 context and the per-test contexts below (compact/edge/theme). */
 async function loadControlUiPage(currentPage: Page) {
   await currentPage.clock.install({ time: new Date("2026-07-09T12:00:00") });
-  await installMockGateway(currentPage);
+  await installMockGateway(currentPage, { communityInviteDismissed: false });
   await currentPage.goto(suite.server.baseUrl);
   await currentPage.waitForFunction(() => Boolean(customElements.get("openclaw-lobster-pet")));
   await currentPage.locator("openclaw-app-sidebar").waitFor();
@@ -179,9 +175,6 @@ async function useOversizedDismissLabels(currentPage: Page) {
 }
 
 suite.define(() => {
-  beforeEach(() => {
-    artifactDir = createControlUiE2eArtifactDir("lobster-dismiss-menu-overflow");
-  });
   it("keeps the lobster clickable and its dismissal menu within the viewport on both sidebar ledges", () =>
     withDismissMenuPage({}, async (page) => {
       await configureRealSidebarPet(page, 42);
@@ -193,7 +186,6 @@ suite.define(() => {
       await page.getByText("Dismiss and don't show again", { exact: true }).waitFor();
 
       const inviteMeasurement = await measureDismissMenu(page);
-      await page.screenshot({ path: path.join(artifactDir, "real-sidebar-invite-ledge.png") });
 
       // Asserting on the whole measurement so a regression prints the anchor
       // position and resolved max-height that explain it.
@@ -221,7 +213,6 @@ suite.define(() => {
       await sprite.click({ button: "right" });
       await page.locator("wa-dropdown.lobster-pet-dismiss-menu").waitFor();
       const footerMeasurement = await measureDismissMenu(page);
-      await page.screenshot({ path: path.join(artifactDir, "real-sidebar-footer-ledge.png") });
 
       expect(footerMeasurement).toMatchObject({
         overflowPx: 0,
@@ -258,7 +249,6 @@ suite.define(() => {
       await page.locator("wa-dropdown.lobster-pet-dismiss-menu").waitFor();
 
       const measurement = await measureDismissMenu(page);
-      await page.screenshot({ path: path.join(artifactDir, "control-away-from-edge.png") });
 
       expect(measurement).toMatchObject({ overflowPx: 0 });
     }));
@@ -286,7 +276,6 @@ suite.define(() => {
         })
         .toBe(0);
       const measurement = await measureDismissMenu(page);
-      await page.screenshot({ path: path.join(artifactDir, "long-labels-enlarged-scale.png") });
 
       // Guards against --control-ui-text-scale/the label injection silently
       // no-opping: the rendered label font-size and its unclamped box height
@@ -312,7 +301,6 @@ suite.define(() => {
       await shortPage.getByText("Dismiss and don't show again", { exact: true }).waitFor();
 
       const measurement = await measureDismissMenu(shortPage);
-      await shortPage.screenshot({ path: path.join(artifactDir, "compact-viewport-height.png") });
 
       // At this height even the "top" placement may run short, so Web
       // Awesome's own vertical auto-size may still shrink the menu in place
@@ -348,7 +336,6 @@ suite.define(() => {
         await page.locator("wa-dropdown.lobster-pet-dismiss-menu").waitFor();
 
         const measurement = await measureDismissMenu(page);
-        await page.screenshot({ path: path.join(artifactDir, `edge-${edge}.png`) });
 
         expect(measurement.menuLeft).toBeGreaterThanOrEqual(0);
         expect(measurement.menuRight).toBeLessThanOrEqual(measurement.viewportWidth);
@@ -368,7 +355,6 @@ suite.define(() => {
         await darkPage.getByText("Dismiss and don't show again", { exact: true }).waitFor();
 
         const measurement = await measureDismissMenu(darkPage);
-        await darkPage.screenshot({ path: path.join(artifactDir, "dark-theme.png") });
 
         expect(measurement).toMatchObject({ overflowPx: 0 });
       },

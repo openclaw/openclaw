@@ -325,7 +325,7 @@ async function normalizeDynamicModelDefault(
   agentDir: string,
   options: { config?: OpenClawConfig; workspaceDir?: string },
 ): Promise<Model> {
-  const { normalizeDiscoveredAgentModel } = await import("../agent-model-discovery.js");
+  const { normalizeDiscoveredAgentModel } = await import("../model-discovery-normalize.js");
   return normalizeDiscoveredAgentModel(model, agentDir, options);
 }
 

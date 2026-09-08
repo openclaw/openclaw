@@ -101,7 +101,6 @@ export async function updateNpmInstalledPlugins(params: {
   officialPluginUpdateChannel?: UpdateChannel;
   coreVersion?: string;
   versionBoundPluginIds?: ReadonlySet<string>;
-  dangerouslyForceUnsafeInstall?: boolean;
   onInstallPolicyWarning?: InstallSafetyOverrides["onInstallPolicyWarning"];
   specOverrides?: Record<string, string>;
   onIntegrityDrift?: (params: PluginUpdateIntegrityDriftParams) => boolean | Promise<boolean>;
@@ -483,7 +482,6 @@ export async function updateNpmInstalledPlugins(params: {
           effectiveSpec,
           extensionsDir,
           timeoutMs: params.timeoutMs,
-          dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
           onInstallPolicyWarning: params.onInstallPolicyWarning,
           onBeforePluginArtifactCommit: capabilityConsent.onBeforePluginArtifactCommit,
           expectedIntegrity,

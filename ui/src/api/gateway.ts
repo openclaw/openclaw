@@ -464,6 +464,7 @@ export class GatewayBrowserClient {
           "task-suggestions",
           "terminal-offset-seq",
           "terminal-session-metadata",
+          "terminal-upload-path-style",
           "tool-events",
           "inline-widgets",
           "ui-commands",

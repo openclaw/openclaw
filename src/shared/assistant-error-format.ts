@@ -1,5 +1,6 @@
 // Assistant error formatting helpers normalize assistant-visible error payloads.
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { extractHttpResponseBody } from "./http-error-response.js";
 const ERROR_PAYLOAD_PREFIX_RE =
@@ -41,6 +42,7 @@ type ErrorPayload = Record<string, unknown>;
 type ApiErrorInfo = {
   httpCode?: string;
   type?: string;
+  code?: string;
   message?: string;
   requestId?: string;
 };
@@ -214,7 +216,7 @@ export function parseApiErrorInfo(raw?: string): ApiErrorInfo | null {
   let httpCode: string | undefined;
   let candidate = trimmed;
 
-  const httpPrefix = extractHttpStatusMatch(candidate.match(/^(\d{3})\s+(.+)$/s));
+  const httpPrefix = extractLeadingHttpStatus(candidate);
   if (httpPrefix) {
     httpCode = String(httpPrefix.code);
     candidate = httpPrefix.rest;
@@ -233,17 +235,22 @@ export function parseApiErrorInfo(raw?: string): ApiErrorInfo | null {
         : undefined;
 
   const topType = typeof payload.type === "string" ? payload.type : undefined;
+  const topCode = typeof payload.code === "string" ? payload.code : undefined;
   const topMessage = typeof payload.message === "string" ? payload.message : undefined;
 
   let errType: string | undefined;
+  let errCode: string | undefined;
   let errMessage: string | undefined;
   if (payload.error && typeof payload.error === "object" && !Array.isArray(payload.error)) {
     const err = payload.error as Record<string, unknown>;
     if (typeof err.type === "string") {
       errType = err.type;
     }
-    if (typeof err.code === "string" && !errType) {
-      errType = err.code;
+    if (typeof err.code === "string") {
+      errCode = err.code;
+      if (!errType) {
+        errType = err.code;
+      }
     }
     if (typeof err.message === "string") {
       errMessage = err.message;
@@ -253,9 +260,11 @@ export function parseApiErrorInfo(raw?: string): ApiErrorInfo | null {
     errType = payload.error;
   }
 
+  const code = errCode ?? topCode;
   return {
     httpCode,
     type: errType ?? topType,
+    ...(code === undefined ? {} : { code }),
     message: errMessage ?? topMessage,
     requestId,
   };
@@ -304,4 +313,66 @@ export function formatRawAssistantErrorForUi(raw?: string): string {
   }
 
   return trimmed.length > 600 ? `${truncateUtf16Safe(trimmed, 600)}…` : trimmed;
+}
+
+const REFUSED_TRANSPORT_CODE_RE = /\beconnrefused\b/i;
+const INTERRUPTED_TRANSPORT_CODE_RE = /\beconnreset\b|\beconnaborted\b|\benetreset\b|\bepipe\b/i;
+const DNS_TRANSPORT_CODE_RE = /\benotfound\b|\beai_again\b/i;
+const UNREACHABLE_TRANSPORT_CODE_RE = /\benetunreach\b|\behostunreach\b|\behostdown\b/i;
+
+export function isKnownTransportErrorCode(value: string): boolean {
+  return [
+    REFUSED_TRANSPORT_CODE_RE,
+    INTERRUPTED_TRANSPORT_CODE_RE,
+    DNS_TRANSPORT_CODE_RE,
+    UNREACHABLE_TRANSPORT_CODE_RE,
+  ].some((pattern) => pattern.exec(value)?.[0] === value);
+}
+
+export function formatTransportErrorCopy(raw: string): string | undefined {
+  if (!raw || isCloudflareOrHtmlErrorPage(raw)) {
+    return undefined;
+  }
+  const lower = normalizeLowercaseStringOrEmpty(raw);
+  if (
+    REFUSED_TRANSPORT_CODE_RE.test(raw) ||
+    lower.includes("connection refused") ||
+    lower.includes("actively refused")
+  ) {
+    return "LLM request failed: connection refused by the provider endpoint.";
+  }
+  if (
+    INTERRUPTED_TRANSPORT_CODE_RE.test(raw) ||
+    lower.includes("socket hang up") ||
+    lower.includes("connection reset") ||
+    lower.includes("connection aborted")
+  ) {
+    return "LLM request failed: network connection was interrupted.";
+  }
+  if (
+    DNS_TRANSPORT_CODE_RE.test(raw) ||
+    lower.includes("getaddrinfo") ||
+    lower.includes("no such host") ||
+    lower.includes("dns")
+  ) {
+    return "LLM request failed: DNS lookup for the provider endpoint failed.";
+  }
+  if (
+    UNREACHABLE_TRANSPORT_CODE_RE.test(raw) ||
+    lower.includes("network is unreachable") ||
+    lower.includes("host is unreachable")
+  ) {
+    return "LLM request failed: the provider endpoint is unreachable from this host.";
+  }
+  if (
+    lower.includes("fetch failed") ||
+    lower.includes("connection error") ||
+    lower.includes("network request failed")
+  ) {
+    return "LLM request failed: network connection error.";
+  }
+  if (raw.includes("网络错误") || raw.includes("网络异常") || raw.includes("连接错误")) {
+    return "LLM request failed: provider reported a network error.";
+  }
+  return undefined;
 }

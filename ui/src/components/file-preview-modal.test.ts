@@ -215,11 +215,13 @@ describe("openclaw-file-preview-modal", () => {
     expect(firstChunks.map((chunk) => chunk.textContent ?? "").join("\n")).toBe(firstContents);
 
     body!.scrollTop = 2200;
+    expect(body!.scrollTop).toBe(2200);
 
-    const updatedModal = await renderPreview({ activePath: "second.ts", previewFiles });
-    const updatedBody = updatedModal.shadowRoot?.querySelector<HTMLElement>(".detail-body");
+    modal.activePath = "second.ts";
+    await modal.updateComplete;
+    const updatedBody = modal.shadowRoot?.querySelector<HTMLElement>(".detail-body");
     const secondChunks = [
-      ...(updatedModal.shadowRoot?.querySelectorAll<HTMLElement>(".code-chunk") ?? []),
+      ...(modal.shadowRoot?.querySelectorAll<HTMLElement>(".code-chunk") ?? []),
     ];
 
     expect(updatedBody?.scrollTop).toBe(0);

@@ -2,6 +2,7 @@ import { createServer } from "node:http";
 import path from "node:path";
 import { expect, it } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import { waitForSessionMaintenance } from "../../agents/session-maintenance/coordinator.js";
 import { createSessionMaintenanceFollowup } from "../../agents/session-maintenance/run.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
@@ -151,11 +152,7 @@ it.each(["completed", "interrupted"] as const)(
           totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
         });
         const transcript = SessionManager.open(scope, state.workspaceDir);
-        transcript.appendMessage({
-          role: "user",
-          content: "Remember the Cedar project receipt.",
-          timestamp: 1,
-        });
+        transcript.appendMessage(makeUserMessage("Remember the Cedar project receipt.", 1));
         transcript.appendMessage(
           makeAssistantMessageFixture({
             provider: "test-provider",

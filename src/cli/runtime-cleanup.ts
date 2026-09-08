@@ -9,12 +9,16 @@ export function getPendingCliDisposers(): string[] {
   return [...pendingDisposers.values()];
 }
 
-export async function runCliDisposer(name: string, dispose: () => Promise<void>): Promise<void> {
+export async function runCliDisposer(
+  name: string,
+  dispose: () => Promise<void>,
+  runCleanup?: (dispose: () => Promise<void>) => Promise<void>,
+): Promise<void> {
   const token = Symbol(name);
   pendingDisposers.set(token, name);
   let timer: ReturnType<typeof setTimeout> | undefined;
   const operation = Promise.resolve()
-    .then(dispose)
+    .then(() => (runCleanup ? runCleanup(dispose) : dispose()))
     .finally(() => pendingDisposers.delete(token));
   try {
     await Promise.race([
@@ -34,6 +38,7 @@ export async function runCliDisposer(name: string, dispose: () => Promise<void>)
 }
 
 export async function closeCliResources(cleanup?: CliHarnessCleanup): Promise<void> {
+  const runCleanup = cleanup?.pluginResources?.runCleanup;
   const finalizers: Record<string, () => Promise<void>> = {
     "agent-harnesses": async () => {
       const { listRegisteredAgentHarnesses, disposeRegisteredAgentHarnesses } =
@@ -49,7 +54,7 @@ export async function closeCliResources(cleanup?: CliHarnessCleanup): Promise<vo
       try {
         await Promise.all(
           [...cleanup.harnesses].map(([harness, dispose]) =>
-            runCliDisposer(`agent-harness/${harness.id}`, dispose),
+            runCliDisposer(`agent-harness/${harness.id}`, dispose, runCleanup),
           ),
         );
       } finally {
@@ -98,6 +103,6 @@ export async function closeCliResources(cleanup?: CliHarnessCleanup): Promise<vo
     },
   };
   for (const [name, finalize] of Object.entries(finalizers)) {
-    await runCliDisposer(name, finalize);
+    await runCliDisposer(name, finalize, runCleanup);
   }
 }

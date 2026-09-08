@@ -32,6 +32,13 @@ const parsedArgs = parseArgs(process.argv.slice(2));
 const fix = parsedArgs.fix;
 const releaseTasks: ReleaseTask[] = [
   {
+    id: "update-compatibility",
+    name: "previous updater compatibility",
+    scopes: ["version"],
+    // Registry freshness belongs to release preparation; read-only source checks stay offline.
+    fix: pnpmCommand("update:compat:check"),
+  },
+  {
     id: "root-dependency-ownership",
     name: "root dependency ownership",
     scopes: ["dependencies"],

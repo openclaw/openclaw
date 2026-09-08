@@ -214,6 +214,32 @@ describe("scripts/lib/docker-e2e-plan", () => {
     },
   );
 
+  it("omits corrupt-plugin update admission only for authorized targets without the owner", () => {
+    const targetRoot = tempDirs.make("openclaw-corrupt-update-target-");
+    const unsupported = planFor({
+      selectedLaneNames: ["update-corrupt-plugin"],
+      upgradeSurvivorTargetRoot: targetRoot,
+    });
+    expect(unsupported.lanes).toEqual([]);
+    expect(unsupported.omittedUnsupportedLanes).toEqual(["update-corrupt-plugin"]);
+
+    const unauthorized = planFor({
+      allowFrozenTargetScenarioOmissions: false,
+      selectedLaneNames: ["update-corrupt-plugin"],
+      upgradeSurvivorTargetRoot: targetRoot,
+    });
+    expect(unauthorized.lanes.map((lane) => lane.name)).toEqual(["update-corrupt-plugin"]);
+
+    const preflight = join(targetRoot, "src/cli/update-cli/update-command-plugin-preflight.ts");
+    mkdirSync(dirname(preflight), { recursive: true });
+    writeFileSync(preflight, "export {};\n");
+    const supported = planFor({
+      selectedLaneNames: ["update-corrupt-plugin"],
+      upgradeSurvivorTargetRoot: targetRoot,
+    });
+    expect(supported.lanes.map((lane) => lane.name)).toEqual(["update-corrupt-plugin"]);
+  });
+
   it.each([
     ["catalog", "docker-package-install", {}, 0, ""],
     ["missing package", "docker-package-install", { needsPackage: false }, 1, "package Docker"],

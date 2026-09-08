@@ -6,11 +6,14 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   FUTURE_FIXTURE_VERSION,
+  inspectFirstHopSource,
   LEGACY_UPDATE_COMPAT_CHUNKS,
+  listFirstHopSourceVersions,
   markFutureUpdateFixture,
   packFutureUpdateFixture,
   removeLegacyUpdateCompatChunks,
 } from "../../scripts/e2e/lib/update-first-hop-package-fixtures.mjs";
+import { UPDATE_COMPATIBILITY_CHUNK_HEADER } from "../../scripts/lib/update-compat-contract.mjs";
 import { inspectControlUiRootAssets } from "../../src/infra/control-ui-assets.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
@@ -48,6 +51,136 @@ function makePackageFixture() {
 }
 
 describe("first-hop package fixtures", () => {
+  it("selects recorded baselines and verifies their bytes before choosing restart controls", () => {
+    const root = makePackageFixture();
+    const createSource = (version: string) => {
+      const sourceRoot = tempDirs.make("openclaw-first-hop-source-");
+      writeJson(path.join(sourceRoot, "package/package.json"), { name: "openclaw", version });
+      const tarball = path.join(sourceRoot, "source.tgz");
+      execFileSync("tar", ["-czf", tarball, "-C", sourceRoot, "package"]);
+      return {
+        version,
+        tarball,
+        integrity: `sha512-${createHash("sha512").update(fs.readFileSync(tarball)).digest("base64")}`,
+      };
+    };
+    const sources = {
+      restart: createSource("2026.9.1"),
+      cleanup: createSource("2026.9.2"),
+      empty: createSource("2026.9.3"),
+    };
+    writeJson(path.join(root, "dist/update-compat-inventory.json"), {
+      releases: Object.values(sources).map(({ version, integrity }) => ({
+        version,
+        integrity,
+        chunks:
+          version === "2026.9.1"
+            ? [
+                {
+                  path: "shared-DFJEouXv.js",
+                  imports: [
+                    {
+                      owner: "src/cli/update-cli/update-command-service-command.ts",
+                      exports: ["resolveNodeRunner"],
+                    },
+                  ],
+                },
+              ]
+            : version === "2026.9.2"
+              ? [
+                  {
+                    path: "cleanup-12345678.js",
+                    imports: [{ owner: "src/cli/runtime-cleanup.ts", exports: ["cleanup"] }],
+                  },
+                ]
+              : [],
+      })),
+    });
+    expect(listFirstHopSourceVersions(root)).toEqual(
+      Object.values(sources).map(({ version }) => version),
+    );
+    const inspect = ({ version, tarball }: ReturnType<typeof createSource>) =>
+      inspectFirstHopSource(root, tarball, { version });
+    const contracts = {
+      restart: inspect(sources.restart),
+      cleanup: inspect(sources.cleanup),
+      empty: inspect(sources.empty),
+    };
+    expect(
+      Object.values(contracts).map(({ expectedMissingChunk }) => expectedMissingChunk),
+    ).toEqual(["shared-DFJEouXv.js", null, null]);
+    expect(contracts.cleanup.negativeControl).toEqual({
+      status: "not-applicable",
+      reason: "no-recorded-lazy-service-restart-import",
+    });
+    expect(contracts.empty.negativeControl).toEqual({
+      status: "not-applicable",
+      reason: "source-has-no-recorded-post-swap-imports",
+    });
+    fs.writeFileSync(sources.restart.tarball, "not a tarball");
+    expect(() =>
+      inspectFirstHopSource(root, sources.restart.tarball, { version: sources.restart.version }),
+    ).toThrow("source integrity mismatch");
+    const legacyRoot = path.dirname(sources.restart.tarball);
+    writeJson(path.join(legacyRoot, "package/package.json"), {
+      name: "openclaw",
+      version: "2026.8.2",
+    });
+    execFileSync("tar", ["-czf", sources.restart.tarball, "-C", legacyRoot, "package"]);
+    expect(inspectFirstHopSource(root, sources.restart.tarball)).toMatchObject({
+      version: "2026.8.2",
+      recorded: false,
+      expectedMissingChunk: "shared-Y6bNiw2w.js",
+    });
+    writeJson(path.join(legacyRoot, "package/package.json"), {
+      name: "openclaw",
+      version: "2026.8.1",
+    });
+    execFileSync("tar", ["-czf", sources.restart.tarball, "-C", legacyRoot, "package"]);
+    expect(() => inspectFirstHopSource(root, sources.restart.tarball)).toThrow(
+      "unrecorded first-hop source requires an explicit expected missing chunk",
+    );
+  });
+
+  it("removes the candidate's recorded bridges while retaining its stable entrypoints", () => {
+    const root = makePackageFixture();
+    const bridge = "new-runtime-12345678.mjs";
+    const native = "current-runtime-12345678.mjs";
+    const stable = "new-runtime.js";
+    const metadata = "dist/update-compat-inventory.json";
+    writeJson(path.join(root, metadata), {
+      releases: [{ chunks: [{ path: bridge }, { path: stable }, { path: native }] }],
+    });
+    for (const name of [stable, native]) {
+      fs.writeFileSync(path.join(root, "dist", name), "export {};\n");
+    }
+    fs.writeFileSync(
+      path.join(root, "dist", bridge),
+      `${UPDATE_COMPATIBILITY_CHUNK_HEADER}\nexport {};\n`,
+    );
+    const inventoryPath = path.join(root, "dist/postinstall-inventory.json");
+    writeJson(inventoryPath, [
+      ...JSON.parse(fs.readFileSync(inventoryPath, "utf8")),
+      metadata,
+      `dist/${bridge}`,
+      `dist/${stable}`,
+      `dist/${native}`,
+    ]);
+
+    removeLegacyUpdateCompatChunks(root);
+
+    expect(fs.existsSync(path.join(root, "dist", bridge))).toBe(false);
+    expect(fs.readFileSync(path.join(root, "dist", stable), "utf8")).toBe("export {};\n");
+    expect(fs.readFileSync(path.join(root, "dist", native), "utf8")).toBe("export {};\n");
+    expect(JSON.parse(fs.readFileSync(inventoryPath, "utf8"))).toEqual([
+      "dist/build-info.json",
+      "dist/index.js",
+      metadata,
+      `dist/${stable}`,
+      `dist/${native}`,
+    ]);
+  });
+
   it("removes only the declared legacy compatibility inputs", () => {
     const root = makePackageFixture();
     removeLegacyUpdateCompatChunks(root);
@@ -273,9 +406,9 @@ describe("first-hop package fixtures", () => {
     },
   );
 
-  it.skipIf(process.platform === "win32")(
-    "carries the candidate registry into the first-hop Docker lane",
-    () => {
+  it.skipIf(process.platform === "win32").each(["explicit", "recorded"])(
+    "carries the candidate registry into the first-hop Docker lane with %s sources",
+    (sourceMode) => {
       const root = fs.realpathSync(tempDirs.make("openclaw-first-hop-docker-"));
       const bin = path.join(root, "bin");
       const registry = path.join(root, "registry");
@@ -283,6 +416,23 @@ describe("first-hop package fixtures", () => {
       const tarball = path.join(root, "candidate.tgz");
       fs.mkdirSync(bin);
       fs.cpSync(makePackageFixture(), path.join(root, "package"), { recursive: true });
+      const sourceTarballs: Record<string, string> = {};
+      if (sourceMode === "recorded") {
+        const releases = ["2026.9.1", "2026.9.2", "2026.9.3"].map((version) => {
+          const sourceRoot = path.join(root, version);
+          writeJson(path.join(sourceRoot, "package/package.json"), { name: "openclaw", version });
+          writeJson(path.join(sourceRoot, "package/dist/build-info.json"), { version });
+          const sourceTarball = path.join(root, `openclaw-${version}.tgz`);
+          execFileSync("tar", ["-czf", sourceTarball, "-C", sourceRoot, "package"]);
+          sourceTarballs[version] = sourceTarball;
+          return {
+            version,
+            integrity: `sha512-${createHash("sha512").update(fs.readFileSync(sourceTarball)).digest("base64")}`,
+            chunks: [],
+          };
+        });
+        writeJson(path.join(root, "package/dist/update-compat-inventory.json"), { releases });
+      }
       execFileSync("tar", ["-czf", tarball, "-C", root, "package"]);
       writeJson(path.join(registry, "prepublish-plugin-registry.json"), {
         candidateVersion: "2026.8.1",
@@ -293,7 +443,27 @@ describe("first-hop package fixtures", () => {
         path.join(bin, "docker"),
         `#!${process.execPath}
 import fs from "node:fs";
-if (process.argv[2] === "run") fs.writeFileSync(process.env.DOCKER_ARGS_FILE, JSON.stringify(process.argv.slice(3)));
+import path from "node:path";
+if (process.argv[2] === "run") {
+  const args = process.argv.slice(3);
+  fs.appendFileSync(process.env.DOCKER_ARGS_FILE, JSON.stringify(args) + "\\n");
+  const artifact = args.find(arg => arg.endsWith(":/tmp/openclaw-update-first-hop-artifacts")).split(":")[0];
+  const source = JSON.parse(fs.readFileSync(path.join(artifact, "source.json"), "utf8"));
+  fs.writeFileSync(path.join(artifact, "summary.json"), JSON.stringify({ source }));
+}
+`,
+        { mode: 0o755 },
+      );
+      fs.writeFileSync(
+        path.join(bin, "npm"),
+        `#!${process.execPath}
+import fs from "node:fs";
+import path from "node:path";
+const sources = ${JSON.stringify(sourceTarballs)};
+const version = process.argv[3].slice("openclaw@".length);
+const filename = path.basename(sources[version]);
+fs.copyFileSync(sources[version], path.join(process.argv[process.argv.indexOf("--pack-destination") + 1], filename));
+process.stdout.write(JSON.stringify([{ filename }]));
 `,
         { mode: 0o755 },
       );
@@ -306,7 +476,8 @@ if (process.argv[2] === "run") fs.writeFileSync(process.env.DOCKER_ARGS_FILE, JS
           DOCKER_ARGS_FILE: dockerArgs,
           OPENCLAW_QA_ALLOW_UPDATE_FIRST_HOP: "1",
           OPENCLAW_UPDATE_FIRST_HOP_E2E_SKIP_BUILD: "1",
-          OPENCLAW_UPDATE_FIRST_HOP_SOURCE_PACKAGE_TGZ: tarball,
+          OPENCLAW_UPDATE_FIRST_HOP_SOURCE_PACKAGE_TGZ: sourceMode === "explicit" ? tarball : "",
+          OPENCLAW_UPDATE_FIRST_HOP_EXPECTED_MISSING_CHUNK: "shared-Y6bNiw2w.js",
           OPENCLAW_UPDATE_FIRST_HOP_CANDIDATE_PACKAGE_TGZ: tarball,
           OPENCLAW_UPDATE_FIRST_HOP_ARTIFACT_DIR: path.join(root, "artifacts"),
           OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR: registry,
@@ -316,15 +487,35 @@ if (process.argv[2] === "run") fs.writeFileSync(process.env.DOCKER_ARGS_FILE, JS
         },
       });
       expect(result.status, result.stdout + result.stderr).toBe(0);
-      const args: string[] = JSON.parse(fs.readFileSync(dockerArgs, "utf8"));
-      expect(args[args.indexOf("--entrypoint") + 1]).toBe(
-        "/opt/openclaw-e2e/scripts/e2e/lib/prepublish-plugin-registry.sh",
-      );
-      expect(args).toContain(`${registry}:/tmp/openclaw-prepublish-plugin-registry:ro`);
-      expect(args).toContain(`${tarball}:/tmp/openclaw-update-first-hop-candidate.tgz:ro`);
-      expect(args).toContain("OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_CANDIDATE_VERSION=2026.8.1");
-      expect(args).toContain("bash");
-      expect(args).toContain("scripts/e2e/lib/upgrade-survivor/update-first-hop-compat.sh");
+      const invocations: string[][] = fs
+        .readFileSync(dockerArgs, "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+      expect(invocations).toHaveLength(sourceMode === "explicit" ? 1 : 3);
+      for (const args of invocations) {
+        expect(args[args.indexOf("--entrypoint") + 1]).toBe(
+          "/opt/openclaw-e2e/scripts/e2e/lib/prepublish-plugin-registry.sh",
+        );
+        expect(args).toContain(`${registry}:/tmp/openclaw-prepublish-plugin-registry:ro`);
+        expect(args).toContain(`${tarball}:/tmp/openclaw-update-first-hop-candidate.tgz:ro`);
+        expect(args).toContain("OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_CANDIDATE_VERSION=2026.8.1");
+        expect(args).toContain("bash");
+        expect(args).toContain("scripts/e2e/lib/upgrade-survivor/update-first-hop-compat.sh");
+      }
+      if (sourceMode === "recorded") {
+        const summary = JSON.parse(
+          fs.readFileSync(path.join(root, "artifacts/summary.json"), "utf8"),
+        );
+        expect(
+          summary.sources.map((entry: { source: { version: string } }) => entry.source.version),
+        ).toEqual(["2026.9.1", "2026.9.2", "2026.9.3"]);
+        expect(
+          invocations.every((args) =>
+            args.includes("OPENCLAW_UPDATE_FIRST_HOP_EXPECTED_MISSING_CHUNK="),
+          ),
+        ).toBe(true);
+      }
     },
   );
 });

@@ -559,7 +559,6 @@
 
 .chat-bubble--tool-shell .chat-tool-msg-body > .chat-text {
   max-height: min(46vh, 540px);
-  margin: 0;
   padding: 12px 14px 14px;
   overflow: auto;
   font-family: var(--mono);

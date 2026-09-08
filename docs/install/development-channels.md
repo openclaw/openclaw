@@ -162,8 +162,15 @@ Shows the active channel (with the source that decided it: config, git tag,
 git branch, installed version, or default), install kind (git or package),
 current version, and update availability.
 It also shows the last recorded update run, including a failed fetch. Plain
-`openclaw status` uses cached Git refs; use `openclaw update status` or
-`openclaw status --deep` to request a fresh availability check.
+`openclaw status` uses cached Git refs without fetching. If the latest recorded
+update fetch in the current state directory failed, it shows
+`update check stale: last update fetch failed` with the failure's age and a short
+reason instead of `up to date`. Ahead/behind counts are labeled `cached`.
+A later update run with a completed fetch clears the warning, even if the rest
+of the update is skipped, fails, or rolls back. A manual `git fetch` does not
+clear the recorded warning. Use `openclaw update status` for a fresh availability
+check or run `openclaw update` again. `openclaw status --deep` also fetches for
+that check, without changing the ledger.
 
 ## Tagging best practices
 

@@ -3,8 +3,7 @@
 import type { SessionsListParams } from "../../packages/gateway-protocol/src/index.js";
 import { isPinnableSessionEntry } from "../config/sessions/session-pin-policy.js";
 import type { SessionEntry } from "../config/sessions/types.js";
-
-const SESSIONS_LIST_TOP_N_LIMIT = 200;
+import { sortAndLimitBy } from "../shared/sort-and-limit.js";
 
 export type SessionEntryPair = [string, SessionEntry];
 
@@ -32,44 +31,10 @@ function compareSessionEntryPairs(
   return a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0;
 }
 
-function selectNewestLimitedEntries(
-  entries: SessionEntryPair[],
-  limit: number,
-  sortBy: SessionsListParams["sortBy"],
-): SessionEntryPair[] {
-  const selected: SessionEntryPair[] = [];
-  for (const entry of entries) {
-    const first = selected[0];
-    const beforeFirst = first && compareSessionEntryPairs(entry, first, sortBy) < 0;
-    const worst = selected[limit - 1];
-    if (!beforeFirst && worst && compareSessionEntryPairs(entry, worst, sortBy) >= 0) {
-      continue;
-    }
-    const insertAt = beforeFirst
-      ? 0
-      : selected.findIndex(
-          (candidate, index) => index > 0 && compareSessionEntryPairs(entry, candidate, sortBy) < 0,
-        );
-    if (insertAt >= 0) {
-      selected.splice(insertAt, 0, entry);
-      if (selected.length > limit) {
-        selected.pop();
-      }
-    } else if (selected.length < limit) {
-      selected.push(entry);
-    }
-  }
-  return selected;
-}
-
 export function sortAndLimitSessionEntries(
   entries: SessionEntryPair[],
   limit: number | undefined,
   sortBy: SessionsListParams["sortBy"],
 ): SessionEntryPair[] {
-  if (limit !== undefined && limit <= SESSIONS_LIST_TOP_N_LIMIT) {
-    return selectNewestLimitedEntries(entries, limit, sortBy);
-  }
-  const sorted = entries.toSorted((a, b) => compareSessionEntryPairs(a, b, sortBy));
-  return limit === undefined ? sorted : sorted.slice(0, limit);
+  return sortAndLimitBy(entries, limit, (a, b) => compareSessionEntryPairs(a, b, sortBy));
 }

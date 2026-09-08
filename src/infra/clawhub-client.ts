@@ -15,7 +15,7 @@ import { readResponseTextSnippet, readResponseWithLimit } from "./http-body.js";
 const DEFAULT_CLAWHUB_URL = "https://clawhub.ai";
 const DEFAULT_FETCH_TIMEOUT_MS = 30_000;
 const CLAWHUB_ARCHIVE_MAX_BYTES = 256 * 1024 * 1024;
-export const CLAWHUB_JSON_MAX_BYTES = 16 * 1024 * 1024;
+const CLAWHUB_JSON_MAX_BYTES = 16 * 1024 * 1024;
 const CLAWHUB_ERROR_BODY_MAX_BYTES = 8 * 1024;
 const CLAWHUB_ERROR_BODY_MAX_CHARS = 400;
 

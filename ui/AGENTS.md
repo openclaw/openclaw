@@ -55,3 +55,7 @@ This directory owns Control UI-specific guidance that should not live in the rep
 
 - Keep UI-specific rules here.
 - Leave repo-global architecture, verification, and git workflow rules in the root `AGENTS.md`.
+
+## Visual Proof
+
+- Visual proofs never include the Discord invitation card: the mock and E2E harness seed its canonical browser dismissal before rendering. Dedicated invitation behavior tests may opt into a fresh visitor with `communityInviteDismissed: false`, but do not capture invitation screenshots or videos.

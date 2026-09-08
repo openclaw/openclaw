@@ -334,11 +334,15 @@ describe("cron scheduler status warnings", () => {
     );
 
     await runCronToggle("enable");
+    expect(defaultRuntime.writeJson).toHaveBeenCalledExactlyOnceWith({ ok: true });
 
     if (disabled) {
       expect(defaultRuntime.error).toHaveBeenCalledWith(
         expect.stringContaining("scheduler is disabled"),
       );
+      for (const setting of ["cron.enabled", "OPENCLAW_SKIP_CRON=1"]) {
+        expect(defaultRuntime.error).toHaveBeenCalledWith(expect.stringContaining(setting));
+      }
     } else {
       expect(defaultRuntime.error).not.toHaveBeenCalled();
     }

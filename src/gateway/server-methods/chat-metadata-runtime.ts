@@ -12,7 +12,6 @@ import { getPreparedModelFullCatalogAuth } from "../../agents/prepared-model-run
 import type { PreparedModelRuntimeSnapshot } from "../../agents/prepared-model-runtime.js";
 import { resolveSwarmConfig } from "../../agents/subagents/swarm/swarm-config.js";
 import { resolveRuntimeConfigCacheKey } from "../../config/runtime-snapshot.js";
-import { resolveCollapsedSessionAuthPinSource } from "../../config/sessions/auth-profile-override-provenance.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
@@ -29,6 +28,7 @@ import type {
 } from "./chat-metadata-contract.js";
 import {
   prepareChatMetadataModelProjection,
+  resolveSessionCatalogProfiles,
   projectChatSessionMetadata,
   type ChatMetadataProjectionFacts,
   type PreparedAgentProjection,
@@ -178,24 +178,9 @@ function generationFactsMatch(
   });
 }
 
-function resolveSessionProfiles(sessionEntry: ChatMetadataSessionEntry | undefined): {
-  preferredProfileId?: string;
-  pinnedProfileId?: string;
-} {
-  const profileId = sessionEntry?.authProfileOverride?.trim();
-  if (!profileId) {
-    return {};
-  }
-  const profileSource = resolveCollapsedSessionAuthPinSource(sessionEntry);
-  return {
-    preferredProfileId: profileId,
-    ...(profileSource === "user" ? { pinnedProfileId: profileId } : {}),
-  };
-}
-
 function sessionProjectionKey(
   agentId: string,
-  profiles: ReturnType<typeof resolveSessionProfiles>,
+  profiles: ReturnType<typeof resolveSessionCatalogProfiles>,
 ): string {
   return [
     normalizeAgentId(agentId),
@@ -286,7 +271,7 @@ export function createGatewayChatMetadataRuntime(params: {
   ): Promise<PreparedAgentProjection> => {
     assertOpen();
     assertCurrent?.();
-    const profiles = resolveSessionProfiles(sessionEntry);
+    const profiles = resolveSessionCatalogProfiles(sessionEntry);
     const neutral =
       profiles.preferredProfileId === undefined && profiles.pinnedProfileId === undefined;
     const defaultProfileId = useRequesterDefaults ? requesterProfileId : undefined;
@@ -615,7 +600,7 @@ export function createGatewayChatMetadataRuntime(params: {
   const readStartup = async (
     readParams: ChatStartupProjectionReadParams,
   ): Promise<ChatStartupProjectionResult | undefined> => {
-    const profiles = resolveSessionProfiles(readParams.sessionEntry);
+    const profiles = resolveSessionCatalogProfiles(readParams.sessionEntry);
     const assemble = (
       neutral: PreparedAgentProjection,
       session: PreparedAgentProjection,

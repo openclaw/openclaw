@@ -45,7 +45,13 @@ jobs:
         if: env.OPENCLAW_DOCS_SYNC_TOKEN != ''
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          # Keep ancestry for skip_stale_source, without downloading old file bodies.
+          # Sparse checkout enables blob:none; cone mode also keeps root manifests.
           fetch-depth: 0
+          sparse-checkout: |
+            docs
+            scripts
+            .github/codex/prompts
 
       - name: Checkout ClawHub docs source
         if: env.OPENCLAW_DOCS_SYNC_TOKEN != ''

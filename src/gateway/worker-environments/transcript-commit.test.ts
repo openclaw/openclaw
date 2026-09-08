@@ -8,6 +8,7 @@ import type {
   WorkerTranscriptMessage,
 } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { createNoisyPngBuffer } from "../../../test/helpers/image-fixtures.js";
+import { makeTextToolResult } from "../../../test/helpers/text-tool-result.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/io.js";
 import {
@@ -121,14 +122,7 @@ function createTurnMessages(userText = "Inspect the workspace"): WorkerTranscrip
       stopReason: "toolUse",
       timestamp: 200,
     },
-    {
-      role: "toolResult",
-      toolCallId: "call-read-1",
-      toolName: "read",
-      content: [{ type: "text", text: "Workspace ready." }],
-      isError: false,
-      timestamp: 300,
-    },
+    makeTextToolResult("call-read-1", "read", "Workspace ready.", false, 300),
   ];
 }
 

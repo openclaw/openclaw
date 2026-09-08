@@ -1574,6 +1574,10 @@ openclaw-session-progress-hovercard-provider {
   line-height: 1;
 }
 
+.person-activity-card__hint {
+  padding: 0 16px 12px;
+}
+
 .person-activity-card__status > span {
   width: 6px;
   height: 6px;
@@ -3900,8 +3904,6 @@ td.data-table-key-col {
 }
 
 .agent-select__option {
-  --wa-color-neutral-fill-normal: var(--bg-hover);
-
   padding: 6px 8px;
   border-radius: var(--menu-item-radius);
   color: var(--text);

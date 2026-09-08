@@ -142,9 +142,15 @@ function resolvePackageTelegramScenarios(
   resolveScenarioIds: (scenarioIds: readonly string[]) => string[],
 ) {
   const selection = resolvePackageTelegramScenarioSelection(env);
+  const omittedDefaultScenarioIds =
+    selection.scenarioIds.length === 0
+      ? new Set(normalizeCsvOrLooseStringList(env.OPENCLAW_NPM_TELEGRAM_OMIT_DEFAULT_SCENARIOS))
+      : new Set<string>();
   return {
     ...selection,
-    resolvedScenarioIds: resolveScenarioIds(selection.scenarioIds),
+    resolvedScenarioIds: resolveScenarioIds(selection.scenarioIds).filter(
+      (scenarioId) => !omittedDefaultScenarioIds.has(scenarioId),
+    ),
   };
 }
 

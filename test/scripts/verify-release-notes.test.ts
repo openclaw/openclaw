@@ -1,5 +1,13 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -36,7 +44,7 @@ const verifier = resolve(
   ".agents/skills/openclaw-changelog-update/scripts/verify-release-notes.mjs",
 );
 
-function git(cwd: string, args: string[]): string {
+function git(cwd: string, args: string[], extraEnv: Record<string, string> = {}): string {
   return execFileSync("git", args, {
     cwd,
     encoding: "utf8",
@@ -46,6 +54,7 @@ function git(cwd: string, args: string[]): string {
       GIT_AUTHOR_EMAIL: "test@openclaw.invalid",
       GIT_COMMITTER_NAME: "OpenClaw Test",
       GIT_COMMITTER_EMAIL: "test@openclaw.invalid",
+      ...extraEnv,
     },
   }).trim();
 }
@@ -1103,6 +1112,551 @@ console.log(JSON.stringify({ data }));
       }
     },
   );
+
+  it.each([
+    { message: "Exact-head CI #41 passed.", accepted: true },
+    { message: "CI run #41 passed.", accepted: true },
+    { message: "Actions run #41 passed.", accepted: true },
+    { message: "workflow run #41 passed.", accepted: true },
+    { message: "CI #41 passed.", node: "Issue", accepted: true },
+    { message: "CI #41 passed.", node: "PullRequest", accepted: true },
+    { message: "Related #41.", accepted: false },
+    { message: "CI #41 passed.", reverted: true, other: "Related #41.", accepted: false },
+    { message: "CI #41 passed. Fixes #41.", accepted: false },
+    { message: "CI openclaw/openclaw#41 passed.", accepted: false },
+    { message: "CI #41 passed.", other: "Related #41.", accepted: false },
+    { message: "CI #41 passed.", note: "Related #41.", accepted: false },
+    { message: "CI #41 passed.", identity: "missing", accepted: false },
+    { message: "CI #41 passed.", identity: "wrong-id", accepted: false },
+    { message: "CI #41 passed.", identity: "wrong-repo", accepted: false },
+    { message: "CI #2147483647 passed.", node: "Issue", accepted: true },
+    { message: "CI run #34244092230 passed.", accepted: true },
+    { message: "Related #34244092230.", accepted: false },
+    { message: "CI #34244092230 passed. Fixes #34244092230.", accepted: false },
+    { message: "CI #34244092230 passed.", identity: "missing", accepted: false },
+    { message: "CI #34244092230 passed.", identity: "wrong-id", accepted: false },
+    { message: "CI #34244092230 passed.", identity: "wrong-repo", accepted: false },
+  ])("classifies active workflow references without losing issue accounting: %j", (scenario) => {
+    const referenceNumber = Number(scenario.message.match(/#(\d+)/)?.[1]);
+    const cwd = mkdtempSync(join(tmpdir(), "openclaw-release-notes-runs-"));
+    try {
+      git(cwd, ["init", "-q", "-b", "main"]);
+      writeFileSync(
+        join(cwd, "CHANGELOG.md"),
+        [
+          "# Changelog",
+          "",
+          "## 2026.7.1",
+          "",
+          "### Highlights",
+          "",
+          "- One.",
+          "- Two.",
+          "- Three.",
+          "- Four.",
+          "- Five.",
+          "",
+          "### Changes",
+          "",
+          "### Fixes",
+          "",
+          scenario.note ?? "",
+          "",
+        ].join("\n"),
+      );
+      git(cwd, ["add", "CHANGELOG.md"]);
+      git(cwd, ["commit", "-qm", "chore: base"]);
+      const base = git(cwd, ["rev-parse", "HEAD"]);
+      writeFileSync(join(cwd, "validation.txt"), scenario.message);
+      git(cwd, ["add", "validation.txt"]);
+      git(cwd, ["commit", "-qm", "chore: validation", "-m", scenario.message]);
+      if (scenario.reverted) {
+        git(cwd, ["revert", "--no-edit", "HEAD"]);
+      }
+      if (scenario.other) {
+        git(cwd, ["commit", "--allow-empty", "-qm", "chore: follow-up", "-m", scenario.other]);
+      }
+      const target = git(cwd, ["rev-parse", "HEAD"]);
+      const gh = join(cwd, "gh");
+      writeFileSync(
+        gh,
+        `#!${process.execPath}\n
+const scenario = ${JSON.stringify(scenario)};
+const referenceNumber = ${referenceNumber};
+if (process.argv[3] === "repos/openclaw/openclaw/actions/runs/" + referenceNumber) {
+  require("node:fs").appendFileSync("run-requests", referenceNumber + "\\n");
+  console.log(JSON.stringify(scenario.identity === "missing" ? { message: "Not Found" } : {
+    id: scenario.identity === "wrong-id" ? referenceNumber + 1 : referenceNumber,
+    repository: { full_name: scenario.identity === "wrong-repo" ? "other/repository" : "openclaw/openclaw" },
+    pull_requests: [],
+  }));
+  process.exit(0);
+}
+const query = process.argv.find((arg) => arg.startsWith("query="))?.slice(6) ?? "";
+if ([...query.matchAll(/issueOrPullRequest\\(number: (\\d+)\\)/g)].some(([, number]) => Number(number) > 2147483647)) {
+  console.log(JSON.stringify({ errors: [{ message: "Int cannot represent non 32-bit signed integer value" }] }));
+  process.exit(1);
+}
+const data = {};
+for (const [, alias] of query.matchAll(/(c\\d+): repository/g)) {
+  data[alias] = { object: { associatedPullRequests: { nodes: [], pageInfo: { hasNextPage: false } }, author: { user: { login: "steipete" } } } };
+}
+for (const [, alias] of query.matchAll(/(n\\d+): repository/g)) {
+  data[alias] = { issueOrPullRequest: scenario.node ? {
+    __typename: scenario.node, number: referenceNumber, title: "chore: validation", baseRefName: "main",
+    mergedAt: "2026-01-01T00:00:00Z", mergeCommit: { oid: ${JSON.stringify(target)} }, author: { __typename: "User", login: "steipete" },
+    closingIssuesReferences: { nodes: [], pageInfo: { hasNextPage: false } },
+    closedByPullRequestsReferences: { nodes: [], pageInfo: { hasNextPage: false } },
+  } : null };
+}
+console.log(JSON.stringify({ data }));
+`,
+      );
+      chmodSync(gh, 0o755);
+      const manifestPath = join(cwd, "manifest.json");
+      const result = spawnSync(
+        process.execPath,
+        [
+          verifier,
+          "--base",
+          base,
+          "--target",
+          target,
+          "--main-ref",
+          target,
+          "--version",
+          "2026.7.1",
+          "--manifest",
+          manifestPath,
+          "--write-ledger",
+          "--json",
+        ],
+        { cwd, encoding: "utf8", env: { ...process.env, PATH: `${cwd}:${process.env.PATH}` } },
+      );
+      if (!scenario.accepted) {
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain(
+          `GitHub could not resolve source references: #${referenceNumber}`,
+        );
+        return;
+      }
+      expect(result.stderr).toBe("");
+      expect(result.status, result.stdout).toBe(0);
+      const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+      expect(manifest.source.references).toBe(scenario.node ? 1 : 0);
+      expect(manifest.pullRequests.map((entry: { number: number }) => entry.number)).toEqual(
+        scenario.node === "PullRequest" ? [referenceNumber] : [],
+      );
+      if (!scenario.node) {
+        expect(manifest.directCommits[0].references).toEqual([]);
+        expect(manifest.workflowRuns).toEqual([
+          { id: referenceNumber, repository: "openclaw/openclaw" },
+        ]);
+      } else {
+        expect(() => readFileSync(join(cwd, "run-requests"))).toThrow();
+      }
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    "exact",
+    "double-revert",
+    "before-base",
+    "before-base-double",
+    "before-base-triple",
+    "three-targets",
+    "non-utf8",
+    "overlapping",
+    "extra-change",
+    "partial",
+    "unknown-target",
+    "nonancestor",
+    "merge-target",
+    "abbreviated",
+    "duplicate",
+    "multiple-declarations",
+    "prose",
+    "non-revert-subject",
+  ])("proves explicit multi-commit reversal accounting: %s", (mode) => {
+    const cwd = mkdtempSync(join(tmpdir(), "openclaw-release-notes-multi-revert-"));
+    try {
+      git(cwd, ["init", "-q", "-b", "main"]);
+      const prose = [
+        "# Changelog",
+        "",
+        "## 2026.7.1",
+        "",
+        "### Highlights",
+        "",
+        "- One.",
+        "- Two.",
+        "- Three.",
+        "- Four.",
+        "- Five.",
+        "",
+        "### Changes",
+        "",
+        "### Fixes",
+        "",
+      ].join("\n");
+      writeFileSync(join(cwd, "CHANGELOG.md"), prose);
+      writeFileSync(join(cwd, "alpha.txt"), "original\n");
+      writeFileSync(join(cwd, "beta.bin"), Buffer.from([0, 255, 1]));
+      const commit = (subject: string) => {
+        git(cwd, ["add", "."]);
+        git(cwd, ["commit", "-qm", subject]);
+        return git(cwd, ["rev-parse", "HEAD"]);
+      };
+      const originalBase = commit("chore: baseline");
+      writeFileSync(
+        join(cwd, "alpha.txt"),
+        mode === "non-utf8" ? Buffer.from([97, 255, 10]) : "first\n",
+      );
+      const first = commit("chore: first source (#21)");
+      writeFileSync(join(cwd, "beta.bin"), Buffer.from([0, 254, 2]));
+      if (mode === "overlapping") {
+        writeFileSync(join(cwd, "alpha.txt"), "second\n");
+      }
+      const second = commit("chore: second source (#22)");
+      let third: string | undefined;
+      if (mode === "three-targets") {
+        writeFileSync(join(cwd, "third.txt"), "third\n");
+        third = commit("chore: third source (#23)");
+      }
+      writeFileSync(
+        join(cwd, "CHANGELOG.md"),
+        `${prose}\n### Complete contribution record\n\nThis audited record covers the complete ${originalBase}..${second} history: 2 in-range PRs + 0 retained seed-only PRs = 2 unique PRs.\n\n#### Pull requests\n\n- **PR #21** chore: first source.\n- **PR #22** chore: second source.\n`,
+      );
+      const seed = commit("docs: preserve source ledger");
+      let declaredSecond = second;
+      if (mode === "nonancestor" || mode === "merge-target") {
+        git(cwd, ["checkout", "-qb", "side", originalBase]);
+        writeFileSync(join(cwd, "side.txt"), "side\n");
+        declaredSecond = commit("chore: side source");
+        git(cwd, ["checkout", "-q", "main"]);
+        if (mode === "merge-target") {
+          git(cwd, ["merge", "--no-ff", "-qm", "merge side", "side"]);
+          declaredSecond = git(cwd, ["rev-parse", "HEAD"]);
+        }
+      }
+      git(cwd, [
+        "revert",
+        "--no-commit",
+        ...(third ? [third] : []),
+        second,
+        ...(mode === "partial" ? [] : [first]),
+      ]);
+      if (mode === "extra-change") {
+        writeFileSync(join(cwd, "extra.txt"), "unrelated change\n");
+      }
+      if (mode === "unknown-target") {
+        declaredSecond = "1".repeat(40);
+      }
+      if (mode === "duplicate") {
+        declaredSecond = first;
+      }
+      let declaration = `Reverts ${first} and ${declaredSecond} to restore the previous behavior.`;
+      if (third) {
+        declaration = `Reverts ${first}, ${second}, and ${third}.`;
+      }
+      if (mode === "abbreviated") {
+        declaration = `Reverts ${first.slice(0, 12)} and ${second.slice(0, 12)}.`;
+      } else if (mode === "multiple-declarations") {
+        declaration = `${declaration}\n\n${declaration}`;
+      } else if (mode === "prose") {
+        declaration = `Discussion: ${declaration}`;
+      }
+      git(cwd, ["add", "."]);
+      git(cwd, [
+        "commit",
+        "-qm",
+        mode === "non-revert-subject" ? "chore: describe changes" : "chore: revert source changes",
+        "-m",
+        declaration,
+      ]);
+      let base = mode.startsWith("before-base") ? seed : originalBase;
+      if (mode === "before-base-double") {
+        base = git(cwd, ["rev-parse", "HEAD"]);
+      }
+      if (["double-revert", "before-base-double", "before-base-triple"].includes(mode)) {
+        git(cwd, ["revert", "--no-edit", "HEAD"]);
+      }
+      if (mode === "before-base-triple") {
+        base = git(cwd, ["rev-parse", "HEAD"]);
+        git(cwd, ["revert", "--no-edit", "HEAD"]);
+      }
+      const target = git(cwd, ["rev-parse", "HEAD"]);
+      const associations = { [first]: 21, [second]: 22, ...(third ? { [third]: 23 } : {}) };
+      const gh = join(cwd, "gh");
+      writeFileSync(
+        gh,
+        `#!${process.execPath}\n
+const associations = ${JSON.stringify(associations)};
+const query = process.argv.find((arg) => arg.startsWith("query="))?.slice(6) ?? "";
+const data = {};
+for (const [, alias, hash] of query.matchAll(/(c\\d+): repository[\\s\\S]*?object\\(expression: "([0-9a-f]+)"\\)/g)) {
+ const number = associations[hash];
+ data[alias] = { object: { associatedPullRequests: { nodes: number ? [{ number, mergedAt: "2020-01-01T00:00:00Z", mergeCommit: { oid: hash } }] : [], pageInfo: { hasNextPage: false } }, author: { user: { login: "steipete" } } } };
+}
+for (const [, alias, number] of query.matchAll(/(n\\d+): repository[\\s\\S]*?issueOrPullRequest\\(number: (\\d+)\\)/g)) {
+ data[alias] = { issueOrPullRequest: { __typename: "PullRequest", number: Number(number), title: "chore: source", baseRefName: "main", mergedAt: "2020-01-01T00:00:00Z", author: { __typename: "User", login: "steipete" }, closingIssuesReferences: { nodes: [], pageInfo: { hasNextPage: false } } } };
+}
+console.log(JSON.stringify({ data }));
+`,
+      );
+      chmodSync(gh, 0o755);
+      const privateTmp = join(cwd, "private-proof-tmp");
+      mkdirSync(privateTmp);
+      const index = join(cwd, git(cwd, ["rev-parse", "--git-path", "index"]));
+      const originalIndex = readFileSync(index);
+      const originalObjects = git(cwd, ["count-objects", "-v"]);
+      const hooks = join(cwd, "test-hooks");
+      mkdirSync(hooks);
+      const hook = join(hooks, "post-index-change");
+      writeFileSync(hook, "#!/bin/sh\nprintf unexpected > hook-fired\n");
+      chmodSync(hook, 0o755);
+      git(cwd, ["config", "core.hooksPath", hooks]);
+      git(cwd, ["config", "diff.external", hook]);
+
+      const manifestPath = join(cwd, "manifest.json");
+      const result = spawnSync(
+        process.execPath,
+        [
+          verifier,
+          "--base",
+          base,
+          "--target",
+          target,
+          "--main-ref",
+          target,
+          "--seed-ref",
+          seed,
+          "--version",
+          "2026.7.1",
+          "--manifest",
+          manifestPath,
+          "--write-ledger",
+          "--json",
+        ],
+        {
+          cwd,
+          encoding: "utf8",
+          env: { ...process.env, TMPDIR: privateTmp, PATH: `${cwd}:${process.env.PATH}` },
+        },
+      );
+      expect(readFileSync(index)).toEqual(originalIndex);
+      expect(git(cwd, ["rev-parse", "HEAD"])).toBe(target);
+      expect(git(cwd, ["count-objects", "-v"])).toBe(originalObjects);
+      expect(readdirSync(privateTmp)).toEqual([]);
+      expect(readdirSync(cwd)).not.toContain("hook-fired");
+      if (
+        ["extra-change", "partial", "unknown-target", "nonancestor", "merge-target"].includes(mode)
+      ) {
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain("could not verify explicit multi-commit revert");
+        return;
+      }
+      expect(result.stderr).toBe("");
+      expect(result.status, result.stdout).toBe(0);
+      const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+      const removed = [
+        "exact",
+        "before-base",
+        "before-base-triple",
+        "three-targets",
+        "non-utf8",
+        "overlapping",
+      ].includes(mode);
+      expect(
+        manifest.pullRequests.map((entry: { number: number }) => entry.number).toSorted(),
+      ).toEqual(removed ? [] : [21, 22]);
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    "body-only",
+    "future-associated",
+    "stale-row",
+    "reachable-body",
+    "explicit-seed",
+    "canonical-carrier",
+    "backport-carrier",
+    "provenance-carrier",
+    "unresolved-body",
+  ])("bounds contribution membership to the frozen source graph: %s", (mode) => {
+    const cwd = mkdtempSync(join(tmpdir(), "openclaw-release-notes-membership-"));
+    try {
+      git(cwd, ["init", "-q", "-b", "release"]);
+      const prose = [
+        "# Changelog",
+        "",
+        "## 2026.7.1",
+        "",
+        "### Highlights",
+        "",
+        "- One.",
+        "- Two.",
+        "- Three.",
+        "- Four.",
+        "- Five.",
+        "",
+        "### Changes",
+        "",
+        "### Fixes",
+        "",
+      ].join("\n");
+      writeFileSync(join(cwd, "CHANGELOG.md"), prose);
+      const commitAt = (message: string, day: number) => {
+        git(cwd, ["add", "."]);
+        const date = `2026-07-0${day}T12:00:00Z`;
+        git(cwd, ["commit", "--allow-empty", "-qm", message], {
+          GIT_AUTHOR_DATE: date,
+          GIT_COMMITTER_DATE: date,
+        });
+        return git(cwd, ["rev-parse", "HEAD"]);
+      };
+      const base = commitAt("chore: baseline", 1);
+      writeFileSync(join(cwd, "support.txt"), "independent supporting repair\n");
+      const source = commitAt(
+        "chore: supporting repair (#21)\n\nRelated: #22\nThis repair is independent of the performance work.",
+        2,
+      );
+      git(cwd, ["checkout", "-qb", "later-main"]);
+      writeFileSync(join(cwd, "performance.txt"), "performance implementation\n");
+      const future = commitAt("chore: performance work (#22)", 3);
+      git(cwd, ["checkout", "-q", "release"]);
+      let main = source;
+      let carrier: string | undefined;
+      if (mode === "reachable-body") {
+        git(cwd, ["merge", "--ff-only", "later-main"]);
+      } else if (mode.endsWith("-carrier")) {
+        main = future;
+        commitAt("chore: release preparation", 4);
+        if (mode === "canonical-carrier") {
+          git(cwd, ["cherry-pick", "-x", future], { GIT_COMMITTER_DATE: "2026-07-05T12:00:00Z" });
+          carrier = git(cwd, ["rev-parse", "HEAD"]);
+        } else {
+          writeFileSync(join(cwd, "performance.txt"), "performance implementation\n");
+          carrier = commitAt(
+            mode === "backport-carrier"
+              ? "chore: release performance backport\n\nBackport of #22 to release/fixture."
+              : "chore: carry selected implementation",
+            5,
+          );
+        }
+      }
+      let seed: string | undefined;
+      if (mode === "explicit-seed") {
+        writeFileSync(
+          join(cwd, "CHANGELOG.md"),
+          `${prose}\n### Complete contribution record\n\nThis audited record covers the complete ${base}..${source} history: 1 in-range PR + 1 retained seed-only PR = 2 unique PRs.\n\n#### Pull requests\n\n- **PR #21** chore: supporting repair.\n- **PR #22** chore: performance work.\n`,
+        );
+        seed = commitAt("docs: retain an explicit historical seed", 4);
+      }
+      const target = commitAt("chore: final release preparation", 6);
+      if (
+        [
+          "body-only",
+          "future-associated",
+          "stale-row",
+          "explicit-seed",
+          "unresolved-body",
+        ].includes(mode)
+      ) {
+        expect(() => git(cwd, ["merge-base", "--is-ancestor", future, target])).toThrow();
+        expect(() => git(cwd, ["merge-base", "--is-ancestor", future, main])).toThrow();
+        expect(() => git(cwd, ["cat-file", "-e", `${target}:performance.txt`])).toThrow();
+      }
+      if (mode === "stale-row") {
+        writeFileSync(
+          join(cwd, "CHANGELOG.md"),
+          `${prose}\n### Complete contribution record\n\nThis audited record covers the complete ${base}..${target} history: 2 in-range PRs + 0 retained seed-only PRs = 2 unique PRs.\n\n#### Pull requests\n\n- **PR #21** chore: supporting repair.\n- **PR #22** chore: performance work.\n`,
+        );
+      }
+      const gh = join(cwd, "gh");
+      writeFileSync(
+        gh,
+        `#!${process.execPath}\n
+const mode = ${JSON.stringify(mode)};
+const source = ${JSON.stringify(source)};
+const future = ${JSON.stringify(future)};
+const query = process.argv.find((arg) => arg.startsWith("query="))?.slice(6) ?? "";
+const data = {};
+const nodeFor = (number) => ({ number, mergedAt: number === 21 ? "2026-07-02T12:00:00Z" : "2026-07-03T12:00:00Z", mergeCommit: { oid: number === 21 ? source : future } });
+for (const [, alias, hash] of query.matchAll(/(c\\d+): repository[\\s\\S]*?object\\(expression: "([0-9a-f]+)"\\)/g)) {
+ const numbers = hash === source ? (mode === "future-associated" ? [21, 22] : [21]) : hash === future && mode.endsWith("-carrier") ? [22] : [];
+ data[alias] = { object: { associatedPullRequests: { nodes: numbers.map(nodeFor), pageInfo: { hasNextPage: false } }, author: { user: { login: "steipete" } } } };
+}
+for (const [, alias, rawNumber] of query.matchAll(/(n\\d+): repository[\\s\\S]*?issueOrPullRequest\\(number: (\\d+)\\)/g)) {
+ const number = Number(rawNumber);
+ data[alias] = { issueOrPullRequest: mode === "unresolved-body" && number === 22 ? null : { ...nodeFor(number), __typename: "PullRequest", title: number === 21 ? (mode === "body-only" ? "chore: supporting repair (Related #22)" : "chore: supporting repair") : "chore: performance work", baseRefName: "main", author: { __typename: "User", login: "steipete" }, closingIssuesReferences: { nodes: [], pageInfo: { hasNextPage: false } } } };
+}
+console.log(JSON.stringify({ data }));
+`,
+      );
+      chmodSync(gh, 0o755);
+      const manifestPath = join(cwd, "manifest.json");
+      const args = [
+        verifier,
+        "--base",
+        base,
+        "--target",
+        target,
+        "--main-ref",
+        main,
+        "--version",
+        "2026.7.1",
+        "--manifest",
+        manifestPath,
+        "--json",
+        ...(seed ? ["--seed-ref", seed] : []),
+        ...(mode === "provenance-carrier" ? ["--release-provenance", `${carrier} -> #22`] : []),
+      ];
+      const run = (write: boolean) =>
+        spawnSync(process.execPath, [...args, ...(write ? ["--write-ledger"] : [])], {
+          cwd,
+          encoding: "utf8",
+          env: { ...process.env, PATH: `${cwd}:${process.env.PATH}` },
+        });
+      if (mode === "stale-row") {
+        const stale = run(false);
+        expect(stale.status).not.toBe(0);
+        expect(stale.stderr).toContain("outside");
+      }
+      const result = run(true);
+      if (mode === "unresolved-body") {
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain("could not resolve source references: #22");
+        return;
+      }
+      expect(result.stderr).toBe("");
+      expect(result.status, result.stdout).toBe(0);
+      const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+      const included = mode === "reachable-body" || mode.endsWith("-carrier") || Boolean(seed);
+      expect(
+        manifest.pullRequests.map((entry: { number: number }) => entry.number).toSorted(),
+      ).toEqual(included ? [21, 22] : [21]);
+      expect(manifest.source.inRangePullRequests).toBe(included && !seed ? 2 : 1);
+      expect(manifest.source.retainedSeedOnlyPullRequests).toBe(seed ? 1 : 0);
+      expect(manifest.source.references).toBe(2);
+      if (mode === "body-only") {
+        const generated = readFileSync(join(cwd, "CHANGELOG.md"), "utf8");
+        writeFileSync(
+          join(cwd, "CHANGELOG.md"),
+          generated.replace("**PR #21**", "**PR #21** Related #22."),
+        );
+        const verified = run(false);
+        expect(verified.stderr).toBe("");
+        expect(verified.status, verified.stdout).toBe(0);
+      }
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
 
   it.each([
     { mode: "recover", attempts: 2, error: undefined },

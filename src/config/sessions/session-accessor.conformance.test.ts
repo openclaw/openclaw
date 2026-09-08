@@ -2191,6 +2191,7 @@ describe("sqlite session normalization", () => {
     const env = { ...process.env, OPENCLAW_STATE_DIR: paths.stateDir };
     const canonicalKey = "agent:main:matrix:channel:!MixedCase:example.org";
     const legacyKey = canonicalKey.toLowerCase();
+    const canonicalError = `non-canonical persisted row resolves to session key ${canonicalKey}`;
     const entry = {
       delivery: normalizeSessionDeliveryState({
         context: {
@@ -2208,6 +2209,10 @@ describe("sqlite session normalization", () => {
         "INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at) VALUES (?, ?, ?, ?)",
       )
       .run(legacyKey, entry.sessionId, JSON.stringify(entry), entry.updatedAt);
+    // Exercise delivery-key rejection, not the INSERT trigger's pending-entry state.
+    database.db
+      .prepare("UPDATE session_nodes SET entry_valid = 1 WHERE session_key = ?")
+      .run(legacyKey);
 
     expect(() =>
       loadSessionEntry({
@@ -2216,10 +2221,10 @@ describe("sqlite session normalization", () => {
         sessionKey: canonicalKey,
         storePath: paths.sqlitePath,
       }),
-    ).toThrow("openclaw doctor --fix");
+    ).toThrow(canonicalError);
     expect(() =>
       listSessionEntryRows({ agentId: "main", env, storePath: paths.sqlitePath }),
-    ).toThrow("openclaw doctor --fix");
+    ).toThrow(canonicalError);
     await expect(
       appendTranscriptEvent(
         {

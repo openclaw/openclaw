@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import {
   getAdmittedRunDelegatedAuthority,
   type AdmittedRunContext,
@@ -719,11 +720,7 @@ describe("runMemoryFlushIfNeeded", () => {
         expect(memorySession.getSessionTarget()).toBeUndefined();
         admittedContext = await admission.admit("embedded");
         expect(getAdmittedRunDelegatedAuthority(admittedContext)).toBeDefined();
-        const retained = memorySession.appendMessage({
-          role: "user",
-          content: "Private retained work",
-          timestamp: 1,
-        });
+        const retained = memorySession.appendMessage(makeUserMessage("Private retained work", 1));
         memorySession.appendCompaction("Private summary", retained, 120);
         throw primaryError;
       })

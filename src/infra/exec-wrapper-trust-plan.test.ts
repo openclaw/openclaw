@@ -2,6 +2,16 @@
 import { describe, expect, test } from "vitest";
 import { resolveExecWrapperTrustPlan } from "./exec-wrapper-trust-plan.js";
 
+test.each(["darwin", "linux", "win32"] as const)(
+  "retains an unbound outer dispatcher when policy unwrapping stops on %s",
+  (platform) => {
+    expect(
+      resolveExecWrapperTrustPlan(["xcrun", "env", "FOO=bar", "ls"], undefined, platform)
+        .dispatchChain,
+    ).toBeNull();
+  },
+);
+
 describe("resolveExecWrapperTrustPlan", () => {
   test.each([
     {
@@ -12,6 +22,9 @@ describe("resolveExecWrapperTrustPlan", () => {
         argv: ["curl", "https://example.invalid"],
         policyArgv: ["curl", "https://example.invalid"],
         wrapperChain: ["command"],
+        wrapperInvocations: [
+          { wrapper: "command", sourceArgv: ["command", "curl", "https://example.invalid"] },
+        ],
         policyBlocked: false,
         shellWrapperExecutable: false,
         shellInlineCommand: null,
@@ -25,6 +38,7 @@ describe("resolveExecWrapperTrustPlan", () => {
         argv: ["/tmp/openclaw-test/command", "curl", "https://example.invalid"],
         policyArgv: ["/tmp/openclaw-test/command", "curl", "https://example.invalid"],
         wrapperChain: [],
+        wrapperInvocations: [],
         policyBlocked: false,
         shellWrapperExecutable: false,
         shellInlineCommand: null,
@@ -39,6 +53,7 @@ describe("resolveExecWrapperTrustPlan", () => {
         argv: ["command", "curl", "https://example.invalid"],
         policyArgv: ["command", "curl", "https://example.invalid"],
         wrapperChain: [],
+        wrapperInvocations: [],
         policyBlocked: false,
         shellWrapperExecutable: false,
         shellInlineCommand: null,
@@ -52,6 +67,10 @@ describe("resolveExecWrapperTrustPlan", () => {
         argv: ["python3", "/tmp/run.py"],
         policyArgv: ["python3", "/tmp/run.py"],
         wrapperChain: ["env", "command"],
+        wrapperInvocations: [
+          { wrapper: "env", sourceArgv: ["env", "command", "--", "python3", "/tmp/run.py"] },
+          { wrapper: "command", sourceArgv: ["command", "--", "python3", "/tmp/run.py"] },
+        ],
         policyBlocked: false,
         shellWrapperExecutable: false,
         shellInlineCommand: null,
@@ -65,6 +84,7 @@ describe("resolveExecWrapperTrustPlan", () => {
         argv: ["printf", "ok"],
         policyArgv: ["printf", "ok"],
         wrapperChain: ["builtin"],
+        wrapperInvocations: [{ wrapper: "builtin", sourceArgv: ["builtin", "printf", "ok"] }],
         policyBlocked: false,
         shellWrapperExecutable: false,
         shellInlineCommand: null,
@@ -78,6 +98,9 @@ describe("resolveExecWrapperTrustPlan", () => {
         argv: ["bash", "/tmp/run.sh"],
         policyArgv: ["bash", "/tmp/run.sh"],
         wrapperChain: ["exec"],
+        wrapperInvocations: [
+          { wrapper: "exec", sourceArgv: ["exec", "-a", "friendly-name", "bash", "/tmp/run.sh"] },
+        ],
         policyBlocked: false,
         shellWrapperExecutable: true,
         shellInlineCommand: null,
@@ -91,6 +114,7 @@ describe("resolveExecWrapperTrustPlan", () => {
         argv: ["tcsh", "-c", "echo hi"],
         policyArgv: ["tcsh", "-c", "echo hi"],
         wrapperChain: [],
+        wrapperInvocations: [],
         policyBlocked: false,
         shellWrapperExecutable: true,
         shellInlineCommand: null,
@@ -104,6 +128,7 @@ describe("resolveExecWrapperTrustPlan", () => {
         argv: ["nu", "--commands", "echo hi"],
         policyArgv: ["nu", "--commands", "echo hi"],
         wrapperChain: [],
+        wrapperInvocations: [],
         policyBlocked: false,
         shellWrapperExecutable: true,
         shellInlineCommand: "echo hi",
@@ -117,6 +142,7 @@ describe("resolveExecWrapperTrustPlan", () => {
         argv: ["nu", "--execute", "echo hi"],
         policyArgv: ["nu", "--execute", "echo hi"],
         wrapperChain: [],
+        wrapperInvocations: [],
         policyBlocked: false,
         shellWrapperExecutable: true,
         shellInlineCommand: "echo hi",
@@ -130,6 +156,7 @@ describe("resolveExecWrapperTrustPlan", () => {
         argv: ["nu", "--config=/tmp/evil.nu", "--commands", "echo hi"],
         policyArgv: ["nu", "--config=/tmp/evil.nu", "--commands", "echo hi"],
         wrapperChain: [],
+        wrapperInvocations: [],
         policyBlocked: false,
         shellWrapperExecutable: true,
         shellInlineCommand: null,
@@ -143,6 +170,7 @@ describe("resolveExecWrapperTrustPlan", () => {
         argv: ["nu", "--env-config", "/tmp/evil.nu", "--commands", "echo hi"],
         policyArgv: ["nu", "--env-config", "/tmp/evil.nu", "--commands", "echo hi"],
         wrapperChain: [],
+        wrapperInvocations: [],
         policyBlocked: false,
         shellWrapperExecutable: true,
         shellInlineCommand: null,
@@ -156,6 +184,7 @@ describe("resolveExecWrapperTrustPlan", () => {
         argv: ["yash", "--cmdline", "echo hi"],
         policyArgv: ["yash", "--cmdline", "echo hi"],
         wrapperChain: [],
+        wrapperInvocations: [],
         policyBlocked: false,
         shellWrapperExecutable: true,
         shellInlineCommand: "echo hi",
@@ -169,6 +198,7 @@ describe("resolveExecWrapperTrustPlan", () => {
         argv: ["yash", "-xc", "echo hi"],
         policyArgv: ["yash", "-xc", "echo hi"],
         wrapperChain: [],
+        wrapperInvocations: [],
         policyBlocked: false,
         shellWrapperExecutable: true,
         shellInlineCommand: "echo hi",
@@ -182,6 +212,7 @@ describe("resolveExecWrapperTrustPlan", () => {
         argv: ["command", "-v", "curl"],
         policyArgv: ["command", "-v", "curl"],
         wrapperChain: [],
+        wrapperInvocations: [],
         policyBlocked: true,
         blockedWrapper: "command",
         shellWrapperExecutable: false,
@@ -196,6 +227,7 @@ describe("resolveExecWrapperTrustPlan", () => {
         argv: ["command", "-p", "curl", "https://example.invalid"],
         policyArgv: ["command", "-p", "curl", "https://example.invalid"],
         wrapperChain: [],
+        wrapperInvocations: [],
         policyBlocked: true,
         blockedWrapper: "command",
         shellWrapperExecutable: false,
@@ -210,6 +242,12 @@ describe("resolveExecWrapperTrustPlan", () => {
         argv: ["sh", "-c", "echo hi"],
         policyArgv: ["sh", "-c", "echo hi"],
         wrapperChain: ["caffeinate"],
+        wrapperInvocations: [
+          {
+            wrapper: "caffeinate",
+            sourceArgv: ["/usr/bin/caffeinate", "-d", "-w", "42", "sh", "-c", "echo hi"],
+          },
+        ],
         policyBlocked: false,
         shellWrapperExecutable: true,
         shellInlineCommand: "echo hi",
@@ -223,6 +261,13 @@ describe("resolveExecWrapperTrustPlan", () => {
         argv: ["sh", "-c", "echo hi"],
         policyArgv: ["busybox", "sh", "-c", "echo hi"],
         wrapperChain: ["time", "busybox"],
+        wrapperInvocations: [
+          {
+            wrapper: "time",
+            sourceArgv: ["/usr/bin/time", "-p", "busybox", "sh", "-c", "echo hi"],
+          },
+          { wrapper: "busybox", sourceArgv: ["busybox", "sh", "-c", "echo hi"] },
+        ],
         policyBlocked: false,
         shellWrapperExecutable: true,
         shellInlineCommand: "echo hi",
@@ -236,6 +281,12 @@ describe("resolveExecWrapperTrustPlan", () => {
         argv: ["/usr/bin/script", "-q", "/dev/null", "sh", "-c", "echo hi"],
         policyArgv: ["/usr/bin/script", "-q", "/dev/null", "sh", "-c", "echo hi"],
         wrapperChain: [],
+        wrapperInvocations: [
+          {
+            wrapper: "script",
+            sourceArgv: ["/usr/bin/script", "-q", "/dev/null", "sh", "-c", "echo hi"],
+          },
+        ],
         policyBlocked: true,
         blockedWrapper: "script",
         shellWrapperExecutable: false,
@@ -250,6 +301,12 @@ describe("resolveExecWrapperTrustPlan", () => {
         argv: ["sh", "-c", "echo hi"],
         policyArgv: ["sh", "-c", "echo hi"],
         wrapperChain: ["sandbox-exec"],
+        wrapperInvocations: [
+          {
+            wrapper: "sandbox-exec",
+            sourceArgv: ["/usr/bin/sandbox-exec", "-p", "(allow default)", "sh", "-c", "echo hi"],
+          },
+        ],
         policyBlocked: false,
         shellWrapperExecutable: true,
         shellInlineCommand: "echo hi",
@@ -263,6 +320,7 @@ describe("resolveExecWrapperTrustPlan", () => {
         argv: ["pnpm", "--reporter", "silent", "exec", "--", "tsx", "./run.ts"],
         policyArgv: ["pnpm", "--reporter", "silent", "exec", "--", "tsx", "./run.ts"],
         wrapperChain: [],
+        wrapperInvocations: [],
         policyBlocked: false,
         shellWrapperExecutable: false,
         shellInlineCommand: null,
@@ -276,6 +334,7 @@ describe("resolveExecWrapperTrustPlan", () => {
         argv: ["npx", "--call", "sh -c 'echo hi'"],
         policyArgv: ["npx", "--call", "sh -c 'echo hi'"],
         wrapperChain: [],
+        wrapperInvocations: [],
         policyBlocked: false,
         shellWrapperExecutable: false,
         shellInlineCommand: null,
@@ -289,6 +348,7 @@ describe("resolveExecWrapperTrustPlan", () => {
         argv: ["bash", "--login", "-c", "echo hi"],
         policyArgv: ["bash", "--login", "-c", "echo hi"],
         wrapperChain: [],
+        wrapperInvocations: [],
         policyBlocked: false,
         shellWrapperExecutable: true,
         shellInlineCommand: null,
@@ -302,6 +362,7 @@ describe("resolveExecWrapperTrustPlan", () => {
         argv: ["busybox", "sed", "-n", "1p"],
         policyArgv: ["busybox", "sed", "-n", "1p"],
         wrapperChain: [],
+        wrapperInvocations: [],
         policyBlocked: true,
         blockedWrapper: "busybox",
         shellWrapperExecutable: false,
@@ -317,6 +378,13 @@ describe("resolveExecWrapperTrustPlan", () => {
         argv: ["busybox", "sh", "-lc", "echo hi"],
         policyArgv: ["busybox", "sh", "-lc", "echo hi"],
         wrapperChain: ["nohup", "timeout"],
+        wrapperInvocations: [
+          {
+            wrapper: "nohup",
+            sourceArgv: ["nohup", "timeout", "5s", "busybox", "sh", "-lc", "echo hi"],
+          },
+          { wrapper: "timeout", sourceArgv: ["timeout", "5s", "busybox", "sh", "-lc", "echo hi"] },
+        ],
         policyBlocked: true,
         blockedWrapper: "busybox",
         shellWrapperExecutable: false,
@@ -331,6 +399,13 @@ describe("resolveExecWrapperTrustPlan", () => {
         argv: ["/usr/bin/env", "FOO=bar", "sh", "-lc", "echo hi"],
         policyArgv: ["/usr/bin/env", "FOO=bar", "sh", "-lc", "echo hi"],
         wrapperChain: [],
+        wrapperInvocations: [
+          {
+            wrapper: "time",
+            sourceArgv: ["/usr/bin/time", "-p", "/usr/bin/env", "FOO=bar", "sh", "-lc", "echo hi"],
+          },
+          { wrapper: "env", sourceArgv: ["/usr/bin/env", "FOO=bar", "sh", "-lc", "echo hi"] },
+        ],
         policyBlocked: true,
         blockedWrapper: "env",
         shellWrapperExecutable: false,
@@ -341,6 +416,11 @@ describe("resolveExecWrapperTrustPlan", () => {
     if (!enabled) {
       return;
     }
-    expect(resolveExecWrapperTrustPlan(argv, depth, platform)).toEqual(expected);
+    const { dispatchChain: _dispatchChain, ...policyPlan } = resolveExecWrapperTrustPlan(
+      argv,
+      depth,
+      platform,
+    );
+    expect(policyPlan).toEqual(expected);
   });
 });
