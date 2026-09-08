@@ -79,7 +79,7 @@ openclaw tui --local
 
 ## Pickers + overlays
 
-- Model picker: list available models and set the session override.
+- Model picker: list the selected agent's published models and set the session override. Unavailable choices stay visible with their reason; selecting one shows guidance without changing the session. Choices with unknown availability remain selectable. Gateways predating published catalogs retain their existing selection behavior.
 - Agent picker: choose a different agent.
 - Session picker: shows up to 50 sessions for the current agent updated in the last 7 days. Use `/session <key>` to jump to an older known session.
 - Settings (`/settings`): toggle tool output expansion and thinking visibility. This panel does not control delivery.

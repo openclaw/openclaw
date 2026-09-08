@@ -1727,7 +1727,18 @@ private fun EmptyChatHint(
     verticalArrangement = Arrangement.spacedBy(12.dp),
   ) {
     Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(5.dp)) {
-      Text(text = if (healthOk) nativeString("Ready when you are") else nativeString("Gateway offline"), style = ClawTheme.type.title.copy(fontSize = 18.sp, lineHeight = 23.sp), color = ClawTheme.colors.text)
+      Text(
+        text =
+          if (healthOk) {
+            nativeString("Ready when you are")
+          } else if (gatewayOffline) {
+            nativeString("Gateway offline")
+          } else {
+            nativeString("Chat not ready")
+          },
+        style = ClawTheme.type.title.copy(fontSize = 18.sp, lineHeight = 23.sp),
+        color = ClawTheme.colors.text,
+      )
       Text(
         text =
           if (healthOk) {
@@ -1735,7 +1746,7 @@ private fun EmptyChatHint(
           } else if (gatewayOffline) {
             nativeString("Use the recovery options below to reconnect.")
           } else {
-            nativeString("Chat is checking Gateway health.")
+            nativeString("Use Refresh chat to check Gateway health.")
           },
         style = ClawTheme.type.body,
         color = ClawTheme.colors.textMuted,
