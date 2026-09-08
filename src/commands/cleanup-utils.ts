@@ -15,7 +15,7 @@ import {
 } from "../agents/workspace-state-store.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage, isMissingPathError } from "../infra/errors.js";
-import { movePathToTrash, trashAllowedRoots } from "../infra/fs-safe.js";
+import { movePathToTrash } from "../infra/fs-safe.js";
 import { acquireGatewayLock, GatewayLockError } from "../infra/gateway-lock.js";
 import { hasNodeErrorCode, isPathInside } from "../infra/path-guards.js";
 import { acquireStateDatabaseCoordinator } from "../infra/state-database-coordinator.js";
@@ -97,6 +97,19 @@ export async function moveToTrash(
   assertCurrent?: () => void,
 ): Promise<boolean> {
   return "removed" in (await moveToTrashResult(pathname, runtime, assertCurrent));
+}
+
+/**
+ * Allowed Trash roots for an OpenClaw-owned path: its own parent, plus the resolved
+ * parent when the path is a symlink (fs-safe checks the link target). The fs-safe
+ * default (home + tmp) would refuse state dirs on volumes such as `/data`.
+ */
+export function trashAllowedRoots(targetPath: string, resolvedTargetPath?: string): string[] {
+  const roots = [path.dirname(targetPath)];
+  if (resolvedTargetPath !== undefined) {
+    roots.push(path.dirname(resolvedTargetPath));
+  }
+  return [...new Set(roots)];
 }
 
 async function resolveMoveToTrashSourcePath(targetPath: string): Promise<string> {

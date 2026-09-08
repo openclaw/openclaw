@@ -82,6 +82,7 @@ import {
   WORKSPACE_BOOTSTRAP_FILENAMES,
 } from "../../agents/workspace.js";
 import { applyAgentConfig } from "../../commands/agents.config.js";
+import { trashAllowedRoots } from "../../commands/cleanup-utils.js";
 import {
   readConfigFileSnapshotForWrite,
   withConfigMutationExclusive,
@@ -92,7 +93,7 @@ import type { IdentityConfig } from "../../config/types.base.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isMissingPathError } from "../../infra/errors.js";
 import { withAgentExecApprovalsRemoved } from "../../infra/exec-approvals.js";
-import { root, FsSafeError, trashAllowedRoots, type ReadResult } from "../../infra/fs-safe.js";
+import { root, FsSafeError, type ReadResult } from "../../infra/fs-safe.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import { movePathToTrash } from "../../plugin-sdk/browser-maintenance.js";
 import { normalizeAgentIdStrict } from "../../routing/session-key.js";

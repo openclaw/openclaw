@@ -68,19 +68,6 @@ export async function root(rootDir: string, defaults?: RootDefaults): Promise<Ro
   return await fsSafeRoot(rootDir, defaults);
 }
 
-/**
- * Allowed Trash roots for an OpenClaw-owned path: its own parent, plus the resolved
- * parent when the path is a symlink (fs-safe checks the link target). The fs-safe
- * default (home + tmp) would refuse state dirs on volumes such as `/data`.
- */
-export function trashAllowedRoots(targetPath: string, resolvedTargetPath?: string): string[] {
-  const roots = [path.dirname(targetPath)];
-  if (resolvedTargetPath !== undefined) {
-    roots.push(path.dirname(resolvedTargetPath));
-  }
-  return [...new Set(roots)];
-}
-
 export type ExternalFileWriteOptions = {
   rootDir: string;
   path: string;
