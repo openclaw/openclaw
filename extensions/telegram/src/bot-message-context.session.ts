@@ -566,8 +566,12 @@ export async function buildTelegramInboundContextPayload(params: {
     envelope: envelopeOptions,
   });
   const hasGroupHistoryContext = isGroup;
+  // Keep the multiline tail so text directives such as `/think high\n<task>` still carry
+  // their task past this projection. The core boundary re-normalizes strictly for the
+  // native command view, so per-command argument ownership stays unchanged.
   const commandBody = normalizeCommandBody(rawBody, {
     botUsername: normalizeOptionalLowercaseString(primaryCtx.me?.username),
+    preserveArguments: true,
   });
   const commandSource =
     options?.commandSource ??
