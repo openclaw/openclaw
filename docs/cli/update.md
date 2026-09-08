@@ -418,9 +418,22 @@ and installation work; and 180 seconds for post-plugin Doctor and validation.
 `--timeout` overrides each phase budget.
 
 A phase deadline produces exit code 1 and JSON with `status: "failed"`,
-`stuckPhase`, `elapsedMs`, `error`, and the existing `phaseTimings` array. Owned
-command trees are stopped before the finalizer exits so the supervisor can
-recover. Preserve the phase diagnostic when reporting a stalled update.
+`stuckPhase`, `elapsedMs`, `error`, and the existing `phaseTimings` array. The
+finalizer requests termination of its owned command trees before exiting.
+Preserve the phase diagnostic when reporting a stalled update.
+
+When a fresh Doctor ran in the timed-out phase, `doctorOutput` includes its
+`phase` (`pre-plugin` or `post-plugin`) and separate `stdout` and `stderr`
+diagnostics. Each stream reports `receivedBytes`, `lastOutputAgeMs` (`null` when
+silent), and a redacted `excerpt` capped at 256 UTF-8 bytes. The failed phase's
+ledger detail and stderr retain the same excerpts before exit. Capture is limited
+to 64 KiB per stream; exceeding that cap replaces the text with
+`omitted: "capture-limit"`. An incomplete private key or a redaction error also
+omits the stream text. A recent output age indicates output receipt; it does not
+prove that a migration advanced. Output and heartbeats do not extend the phase
+deadline. These diagnostics do not establish that every descendant has stopped,
+and must not be used as rollback authorization.
+
 Shared CLI disposers have individual five-second deadlines. If the finalizer
 remains alive ten seconds after its terminal JSON, stderr and the ledger
 record active resource types and unsettled disposer names, then the process
