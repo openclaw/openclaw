@@ -208,6 +208,7 @@ export function renderDesktopConnection(options: {
   onDisconnect: () => void;
   onLaunch: (app: WorkerDesktopAppId) => void;
   onTakeControl: () => void;
+  onReturnControl: () => void;
 }) {
   return html`
     <div class="desktop-toolbar desktop-toolbar--connection">
@@ -241,6 +242,19 @@ export function renderDesktopConnection(options: {
           : nothing
       }
       <span class="desktop-toolbar__spacer"></span>
+      ${
+        options.controlling
+          ? html`<button
+              class="desktop-toolbar-action"
+              type="button"
+              title=${t("desktop.returnControl")}
+              aria-label=${t("desktop.returnControl")}
+              @click=${options.onReturnControl}
+            >
+              ${t("desktop.returnControl")}
+            </button>`
+          : nothing
+      }
       <button
         class="desktop-toolbar-action"
         type="button"

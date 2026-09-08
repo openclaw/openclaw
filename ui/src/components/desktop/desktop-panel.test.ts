@@ -530,6 +530,48 @@ describe("embedded desktop panel presentation", () => {
     }).toEqual({ connected: true, connections: 3, disconnects: 2, focus: selectedFocus });
   });
 
+  it("returns control to the agent from the docked toolbar", async () => {
+    const request = vi.fn(async (method: string, params?: { control?: boolean }) =>
+      method === "environments.list"
+        ? { environments: [desktopEnvironment] }
+        : {
+            transport: "rfb",
+            wsPath: "/desktop/observe?token=synthetic",
+            control: params?.control ?? false,
+          },
+    );
+    const connect = vi.fn(async (options: Parameters<DesktopClient["connect"]>[0]) => {
+      options.onConnect?.();
+      return createConnectionHandle();
+    });
+    const panel = createPanel();
+    panel.client = createGatewayClient(request).client;
+    panel.available = true;
+    panel.embedded = true;
+    panel.presented = true;
+    panel.requestedSource = desktopEnvironment.id;
+    panel.desktopClientFactory = () => ({ connect });
+    document.body.append(panel);
+    try {
+      await waitForFast(() => expect(connect).toHaveBeenCalledOnce());
+      clickPanelButton(panel, 'button[aria-label="Take control"]');
+      await waitForFast(() => expect(connect).toHaveBeenCalledTimes(2));
+      clickPanelButton(panel, 'button[aria-label="Return control to agent"]');
+      await waitForFast(() => expect(connect).toHaveBeenCalledTimes(3));
+      expect(request.mock.calls.at(-1)).toEqual([
+        "desktop.observe",
+        {
+          source: { kind: "environment", environmentId: desktopEnvironment.id },
+          control: false,
+        },
+      ]);
+      expect(connect.mock.calls.at(-1)?.[0]?.viewOnly).toBe(true);
+    } finally {
+      panel.remove();
+      await settleTasks();
+    }
+  });
+
   it.each(["before", "after"] as const)(
     "keeps focused session updates current and retains a choice across a lookup started %s selection",
     async (lookupTiming) => {

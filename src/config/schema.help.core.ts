@@ -15,6 +15,8 @@ export const CORE_FIELD_HELP: Record<string, string> = {
     "Optional Discord application ID for Activities. Defaults to the bot application ID learned from Discord at gateway startup.",
   meta: "Backward-readable compatibility metadata retained so older binaries can refuse unsafe config downgrades.",
   "meta.lastTouchedVersion": "OpenClaw version that most recently wrote this config.",
+  "meta.installProfile":
+    'Opt-in install profile. "teammate" pins a persistent worker computer and keeps exec off the gateway host. Existing installs stay unchanged until `openclaw init --mode teammate`.',
   "meta.migrations": "Bounded compatibility markers for completed config migrations.",
   "meta.migrations.modelPolicyAllowlist":
     "Records that legacy model-map restrictions were preserved or evaluated.",
@@ -347,6 +349,10 @@ export const CORE_FIELD_HELP: Record<string, string> = {
     "Optional default working directory for this agent's ACP sessions.",
   "agents.entries.*.identity.avatar":
     "Avatar image path (relative to the agent workspace only) or a remote URL/data URL.",
+  "agents.entries.*.identity.title":
+    "Short Bot title shown in the teammate roster and matched by unique @mentions. This is not identity.theme (a project label such as AXWEL).",
+  "agents.entries.*.identity.job":
+    "One-line job the Bot is hired to do. Shown in the teammate roster; unused as a mention slogan.",
   "agents.defaults.heartbeat.timeoutSeconds":
     "Maximum time in seconds allowed for a heartbeat agent turn before it is aborted. Leave unset to use agents.defaults.timeoutSeconds when set, otherwise the heartbeat cadence capped at 600 seconds.",
   "agents.defaults.heartbeat.agentId":

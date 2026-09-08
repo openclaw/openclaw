@@ -120,6 +120,8 @@ export const AgentSummarySchema = closedObject({
     closedObject({
       name: Type.Optional(NonEmptyString),
       theme: Type.Optional(NonEmptyString),
+      title: Type.Optional(NonEmptyString),
+      job: Type.Optional(NonEmptyString),
       emoji: Type.Optional(NonEmptyString),
       avatar: Type.Optional(NonEmptyString),
       avatarUrl: Type.Optional(NonEmptyString),
@@ -156,6 +158,7 @@ export const AgentsListResultSchema = closedObject({
   selectionRequired: Type.Optional(Type.Boolean()),
   mainKey: NonEmptyString,
   scope: Type.Union([Type.Literal("per-sender"), Type.Literal("global")]),
+  installProfile: Type.Optional(Type.Literal("teammate")),
   agents: Type.Array(AgentSummarySchema),
 });
 
@@ -166,6 +169,8 @@ export const AgentsCreateParamsSchema = closedObject({
   model: Type.Optional(NonEmptyString),
   emoji: Type.Optional(Type.String()),
   avatar: Type.Optional(Type.String()),
+  title: Type.Optional(Type.String()),
+  job: Type.Optional(Type.String()),
 });
 
 /** Result returned after creating an agent. */
@@ -185,6 +190,8 @@ export const AgentsUpdateParamsSchema = closedObject({
   model: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
   emoji: Type.Optional(Type.String()),
   avatar: Type.Optional(Type.String()),
+  title: Type.Optional(Type.String()),
+  job: Type.Optional(Type.String()),
 });
 
 /** Result returned after updating an agent. */

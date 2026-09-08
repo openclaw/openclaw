@@ -36,6 +36,7 @@ export async function resolveDiscordPreflightRoute(params: {
       conversationId: params.messageChannelId,
     }),
     parentConversationId: params.earlyThreadParentId,
+    text: params.preflight.messageText,
   });
   const bindingConversationId = resolveDiscordRuntimeBindingConversationId({
     isDirectMessage: params.isDirectMessage,

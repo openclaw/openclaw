@@ -12,6 +12,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "channels.discord.activities.applicationId": "Discord Activities Application ID",
   meta: "Compatibility Metadata",
   "meta.lastTouchedVersion": "Config Last Touched Version",
+  "meta.installProfile": "Install Profile",
   "meta.migrations": "Config Migration Markers",
   "meta.migrations.modelPolicyAllowlist": "Model Policy Allowlist Migration",
   env: "Environment",
@@ -74,6 +75,8 @@ export const FIELD_LABELS: Record<string, string> = {
   "diagnostics.otel.captureContent": "OpenTelemetry Content Capture",
   "diagnostics.cacheTrace.enabled": "Cache Trace Enabled",
   "agents.entries.*.identity.avatar": "Identity Avatar",
+  "agents.entries.*.identity.title": "Identity Title",
+  "agents.entries.*.identity.job": "Identity Job",
   "agents.entries.*.skills": "Agent Skill Filter",
   "agents.entries.*.cwd": "Agent Working Directory",
   "agents.entries.*.runtime": "Agent Runtime",
@@ -643,6 +646,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.entries.*.sandbox.docker.dangerouslyAllowContainerNamespaceJoin":
     "Agent Sandbox Docker Allow Container Namespace Join",
   "agents.entries.*.sandbox.docker.gpus": "Agent Sandbox Docker GPUs",
+  "agents.entries.*.sandbox.docker.runtime": "Agent Sandbox Docker Runtime",
   "agents.defaults.compaction": "Compaction",
   "agents.defaults.compaction.enabled": "Embedded Auto-Compaction",
   "agents.defaults.compaction.mode": "Compaction Mode",
@@ -692,6 +696,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.defaults.sandbox.docker.dangerouslyAllowContainerNamespaceJoin":
     "Sandbox Docker Allow Container Namespace Join",
   "agents.defaults.sandbox.docker.gpus": "Sandbox Docker GPUs",
+  "agents.defaults.sandbox.docker.runtime": "Sandbox Docker Runtime",
   commands: "Commands",
   "commands.native": "Native Commands",
   "commands.nativeSkills": "Native Skill Commands",

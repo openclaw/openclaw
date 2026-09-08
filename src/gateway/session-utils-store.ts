@@ -350,6 +350,7 @@ export function listAgentsForGateway(
   selectionRequired: boolean;
   mainKey: string;
   scope: SessionScope;
+  installProfile?: "teammate";
   agents: GatewayAgentRow[];
 } {
   const basic = listGatewayAgentsBasic(cfg);
@@ -374,6 +375,8 @@ export function listAgentsForGateway(
       ? {
           name: normalizeOptionalString(entry.identity.name),
           theme: normalizeOptionalString(entry.identity.theme),
+          title: normalizeOptionalString(entry.identity.title),
+          job: normalizeOptionalString(entry.identity.job) ?? normalizeOptionalString(entry.description),
           emoji: normalizeOptionalString(entry.identity.emoji),
           avatar: httpAvatar ?? avatar,
           avatarUrl,
@@ -465,6 +468,7 @@ export function listAgentsForGateway(
     selectionRequired: basic.selectionRequired,
     mainKey: basic.mainKey,
     scope: basic.scope,
+    ...(cfg.meta?.installProfile === "teammate" ? { installProfile: "teammate" as const } : {}),
     agents,
   };
 }

@@ -1053,6 +1053,73 @@ openclaw-settings-save-indicator:empty {
   flex-shrink: 0;
 }
 
+.sidebar-bot-roster {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 0 2px 10px 0;
+  flex-shrink: 0;
+}
+
+.sidebar-bot-roster__bot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 8px;
+  border: none;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text);
+  text-align: start;
+  cursor: pointer;
+}
+
+.sidebar-bot-roster__bot:hover,
+.sidebar-bot-roster__bot.is-active {
+  background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
+}
+
+.sidebar-bot-roster__avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--sidebar-agent-avatar-size, 28px);
+  height: var(--sidebar-agent-avatar-size, 28px);
+  flex: 0 0 auto;
+  overflow: hidden;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
+  font-size: 12px;
+}
+
+.sidebar-bot-roster__avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.sidebar-bot-roster__meta {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+}
+
+.sidebar-bot-roster__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+
+.sidebar-bot-roster__role {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+  font-size: 12px;
+}
+
 .sidebar-brand__actions {
   display: flex;
   align-items: center;

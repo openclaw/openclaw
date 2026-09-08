@@ -66,6 +66,10 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
     "Plugin-defined configuration payload interpreted by that plugin's own schema and validation rules. Use only documented fields from the plugin to prevent ignored or invalid settings.",
   "agents.entries.*.identity.avatar":
     "Agent avatar (workspace-relative path, http(s) URL, or data URI).",
+  "agents.entries.*.identity.title":
+    "Short Bot title shown in the teammate roster and matched by unique @mentions. This is not identity.theme (a project label such as AXWEL).",
+  "agents.entries.*.identity.job":
+    "One-line job the Bot is hired to do. Shown in the teammate roster; unused as a mention slogan.",
   "agents.defaults.model.primary": "Primary model (provider/model).",
   "agents.defaults.model.fallbacks":
     "Ordered fallback models (provider/model). Used when the primary model fails.",

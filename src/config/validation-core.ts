@@ -310,7 +310,7 @@ function collectSandboxContainerEnvIssues(
     const agentSandbox = agent?.entry.sandbox;
     const scope = resolveSandboxScope({ scope: agentSandbox?.scope ?? defaultSandbox?.scope });
     const backend = agentSandbox?.backend?.trim() || defaultSandbox?.backend?.trim() || "docker";
-    if (backend !== "docker" && backend !== "podman") {
+    if (backend !== "docker" && backend !== "podman" && backend !== "firecracker") {
       continue;
     }
     const env = resolveSandboxDockerEnv({

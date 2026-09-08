@@ -192,6 +192,21 @@ export function buildBuiltinChatCommands(
       },
     ),
     defineBuiltinCommand(
+      "follow-along",
+      "Record live UI work on the persistent computer, compile a skill, then offer a weekday job.",
+      "tools",
+      "standard",
+      {
+        nativeName: false,
+        args: [
+          defineCommandArgument("spec", "start | note <text> | stop [skill] | schedule [weekday]", {
+            required: false,
+            captureRemaining: true,
+          }),
+        ],
+      },
+    ),
+    defineBuiltinCommand(
       "loop",
       "Loop a prompt: /loop [interval] <prompt> | /loop status | /loop stop [name]",
       "tools",

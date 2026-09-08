@@ -73,6 +73,29 @@ describe("sandbox explain command", () => {
     );
   });
 
+  it("reports teammate exec off the gateway host", async () => {
+    mockCfg = {
+      meta: { installProfile: "teammate" },
+      tools: { exec: { host: "sandbox" } },
+      agents: {
+        defaults: { sandbox: { mode: "all", scope: "shared" } },
+        list: [{ id: "main" }],
+      },
+    };
+
+    const logs: string[] = [];
+    await sandboxExplainCommand({ json: true }, {
+      log: (msg: string) => logs.push(msg),
+      error: (msg: string) => logs.push(msg),
+      exit: (_code: number) => {},
+    } as unknown as Parameters<typeof sandboxExplainCommand>[1]);
+
+    const parsed = JSON.parse(logs.join(""));
+    expect(parsed.exec.installProfile).toBe("teammate");
+    expect(parsed.exec.effectiveHost).toBe("sandbox");
+    expect(parsed.exec.gatewayExec).toBe(false);
+  });
+
   it("reads a missing session without creating or registering an agent database", async () => {
     await withOpenClawTestState({ label: "sandbox-explain-readonly" }, async (state) => {
       const agentDatabasePath = state.statePath(
@@ -126,6 +149,8 @@ describe("sandbox explain command", () => {
     const parsed = JSON.parse(out);
     expect(parsed).toHaveProperty("docsUrl", "https://docs.openclaw.ai/sandbox");
     expect(parsed).toHaveProperty("sandbox.mode", "all");
+    expect(parsed.exec.gatewayExec).toBe(false);
+    expect(parsed.exec.effectiveHost).toBe("sandbox");
     expect(parsed).toHaveProperty("sandbox.tools.sources.allow.source");
     expect(parsed.fixIt).toEqual([
       "agents.defaults.sandbox.mode=off",

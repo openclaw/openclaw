@@ -62,6 +62,8 @@ openclaw sandbox explain --agent work
 openclaw sandbox explain --json
 ```
 
+Teammate installs (`openclaw init --mode teammate`) pin exec off the gateway host. `sandbox explain --json` includes `exec.effectiveHost` and `exec.gatewayExec`. A teammate profile with `gatewayExec: true` is a drift — `openclaw security audit` reports critical `teammate.exec_on_gateway`.
+
 Unlike `recreate --session`, this accepts short session names (for example `main`) and expands them against the resolved agent.
 An explicit `--agent` is sufficient for multi-agent fleets with no implicit owner; sandbox explanation does not require or guess a default first.
 

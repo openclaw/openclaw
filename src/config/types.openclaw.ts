@@ -89,6 +89,8 @@ export type OpenClawConfig = {
     lastTouchedVersion?: string;
     /** One-time doctor migrations already applied to this config. */
     migrations?: { modelPolicyAllowlist?: true };
+    /** Opt-in install profile. `teammate` is set only by `openclaw init --mode teammate`. */
+    installProfile?: "teammate";
   };
   /** Authentication provider/profile configuration. */
   auth?: AuthConfig;

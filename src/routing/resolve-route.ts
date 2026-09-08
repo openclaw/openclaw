@@ -18,6 +18,7 @@ import {
 } from "./binding-scope.js";
 import { listBindings } from "./bindings.js";
 import { peerKindMatches } from "./peer-kind-match.js";
+import { resolveMentionedAgentId } from "../teammate/mentions.js";
 import {
   buildAgentMainSessionKey,
   buildAgentPeerSessionKey,
@@ -51,6 +52,8 @@ export type ResolveAgentRouteInput = {
   teamId?: string | null;
   /** Discord member role IDs — used for role-based agent routing. */
   memberRoleIds?: string[];
+  /** Inbound message body. Unique @Bot mentions may select a named teammate. */
+  text?: string;
 };
 
 export type ResolvedAgentRoute = {
@@ -76,6 +79,7 @@ export type ResolvedAgentRoute = {
     | "binding.team"
     | "binding.account"
     | "binding.channel"
+    | "mention.agent"
     | "default";
 };
 
@@ -556,6 +560,7 @@ function buildResolvedRouteCacheKey(params: {
   memberRoleIds: string[];
   dmScope: string;
   groupScope: string;
+  mentionAgentId: string;
 }): string {
   return JSON.stringify([
     params.channel,
@@ -568,6 +573,7 @@ function buildResolvedRouteCacheKey(params: {
     params.memberRoleIds.toSorted(),
     params.dmScope,
     params.groupScope,
+    params.mentionAgentId,
   ]);
 }
 
@@ -613,6 +619,7 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
         id: normalizeRouteBindingId(input.parentPeer.id),
       }
     : null;
+  const mentionAgentId = resolveMentionedAgentId(input.cfg, input.text)?.agentId ?? "";
 
   const routeCache =
     !shouldLogDebug && !identityLinks ? resolveRouteCacheForConfig(input.cfg) : null;
@@ -628,6 +635,7 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
         memberRoleIds,
         dmScope,
         groupScope,
+        mentionAgentId,
       })
     : "";
   if (routeCache && routeCacheKey) {
@@ -764,18 +772,6 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
       scopePeer: peer,
       candidates: teamId ? (bindingsIndex.byTeam.get(teamId) ?? []) : [],
     },
-    {
-      matchedBy: "binding.account",
-      enabled: true,
-      scopePeer: peer,
-      candidates: bindingsIndex.byAccount,
-    },
-    {
-      matchedBy: "binding.channel",
-      enabled: true,
-      scopePeer: peer,
-      candidates: bindingsIndex.byChannel,
-    },
   ];
 
   for (const tier of tiers) {
@@ -788,6 +784,44 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
       matchesBindingScope(candidate.match, {
         ...baseScope,
         peer: tier.scopePeer,
+      }),
+    );
+    if (matched) {
+      if (shouldLogDebug) {
+        logDebug(`[routing] match: matchedBy=${tier.matchedBy} agentId=${matched.binding.agentId}`);
+      }
+      return choose(matched.binding.agentId, tier.matchedBy, matched.binding.session);
+    }
+  }
+
+  // Unique @Bot mention wins before channel-wide bindings so a named teammate
+  // can be addressed in a shared channel. Peer/guild/team bindings still win.
+  if (mentionAgentId) {
+    if (shouldLogDebug) {
+      logDebug(`[routing] match: matchedBy=mention.agent agentId=${mentionAgentId}`);
+    }
+    return choose(mentionAgentId, "mention.agent");
+  }
+
+  const channelWideTiers: Array<{
+    matchedBy: Extract<ResolvedAgentRoute["matchedBy"], "binding.account" | "binding.channel">;
+    candidates: EvaluatedBinding[];
+  }> = [
+    {
+      matchedBy: "binding.account",
+      candidates: bindingsIndex.byAccount,
+    },
+    {
+      matchedBy: "binding.channel",
+      candidates: bindingsIndex.byChannel,
+    },
+  ];
+
+  for (const tier of channelWideTiers) {
+    const matched = tier.candidates.find((candidate) =>
+      matchesBindingScope(candidate.match, {
+        ...baseScope,
+        peer,
       }),
     );
     if (matched) {

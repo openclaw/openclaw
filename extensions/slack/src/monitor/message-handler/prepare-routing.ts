@@ -81,6 +81,7 @@ function resolveSlackInitialAgentRoute(params: {
         eventScope: params.eventScope,
       }),
     },
+    text: params.message.text,
   });
   if (!params.eventScope || !params.isDirectMessage || route.dmScope !== "main") {
     return route;

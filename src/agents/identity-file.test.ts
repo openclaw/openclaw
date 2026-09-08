@@ -60,6 +60,22 @@ describe("parseIdentityMarkdown", () => {
     });
   });
 
+  it("parses Title and Job without treating theme as a slogan", async () => {
+    const content = `
+- **Name:** Researcher
+- **Title:** Research
+- **Job:** Pull weekly signups from the admin UI
+- **Theme:** AXWEL
+`;
+    const parsed = await parseIdentityFromContent(content);
+    expect(parsed).toMatchObject({
+      name: "Researcher",
+      title: "Research",
+      job: "Pull weekly signups from the admin UI",
+      theme: "AXWEL",
+    });
+  });
+
   it("strips markdown code spans from values and labels", async () => {
     const content = [
       "- **Name:** `Samantha`",
@@ -114,6 +130,31 @@ Fluent in over six million error messages.
     expect(merged).toContain("- Avatar: avatars/patch.png");
     expect(merged).toContain("## Role");
     expect(merged).toContain("Fluent in over six million error messages.");
+  });
+
+  it("merges Title and Job without clobbering richer identity sections", () => {
+    const content = `
+# IDENTITY.md - Agent Identity
+
+- **Name:** Researcher
+- **Title:** Research intern
+- **Job:** Old job
+
+## Role
+
+Keep the store moving.
+`;
+
+    const merged = mergeIdentityMarkdownContent(content, {
+      title: "Research",
+      job: "Pull weekly signups from the admin UI",
+    });
+
+    expect(merged).toContain("- Title: Research");
+    expect(merged).toContain("- Job: Pull weekly signups from the admin UI");
+    expect(merged).toContain("- **Name:** Researcher");
+    expect(merged).toContain("## Role");
+    expect(merged).toContain("Keep the store moving.");
   });
 
   it("replaces duplicate writable lines with one normalized entry", () => {

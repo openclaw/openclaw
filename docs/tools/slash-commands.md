@@ -299,6 +299,10 @@ user skill directly.
     | --- | --- |
     | `/skill <name> [input]` | Run a skill by name |
     | `/learn [request]` | Draft one reviewable skill from the current conversation or named sources through [Skill Workshop](/tools/skill-workshop) |
+    | `/follow-along start` | Record live UI work on the persistent worker computer |
+    | `/follow-along note\|url\|app <text>` | Add a narration, URL, or app event to the active recording |
+    | `/follow-along stop [skill-name]` | Compile the recording into a reviewable skill and offer a weekday job after two successes |
+    | `/follow-along schedule [weekday]` | Owner-only. Bind the compiled skill to this Bot and conversation as a weekday automations job |
     | `/loop [interval] <prompt>` | Owner-only. Repeat a prompt in this conversation; omit the interval for self-paced checks |
     | `/loop status` | Owner-only. List loops bound to this conversation |
     | `/loop stop [name]` | Owner-only. Stop matching loops bound to this conversation |

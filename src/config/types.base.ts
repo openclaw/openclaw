@@ -355,7 +355,15 @@ export type AgentElevatedAllowFromConfig = Partial<Record<string, Array<string |
 
 export type IdentityConfig = {
   name?: string;
+  /**
+   * Project label (e.g. AXWEL / Procurement). Not a job slogan.
+   * Use `title` / `job` for role copy.
+   */
   theme?: string;
+  /** Short role title shown in the Bot roster (e.g. Researcher). */
+  title?: string;
+  /** One-line job description for the Bot roster. */
+  job?: string;
   emoji?: string;
   /** Avatar image: workspace-relative path, http(s) URL, or data URI. */
   avatar?: string;

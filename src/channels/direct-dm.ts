@@ -133,6 +133,7 @@ export async function dispatchInboundDirectDm(params: DispatchInboundDirectDmPar
     channel: params.channel,
     accountId: params.accountId,
     peer: params.peer,
+    text: params.rawBody,
   });
   const channelIngress = params.resolveChannelIngress
     ? await params.resolveChannelIngress({
@@ -208,6 +209,7 @@ export async function dispatchInboundDirectDmWithRuntime(
     channel: params.channel,
     accountId: params.accountId,
     peer: params.peer,
+    text: params.rawBody,
     runtime: params.runtime.channel,
     sessionStore: params.cfg.session?.store,
   });

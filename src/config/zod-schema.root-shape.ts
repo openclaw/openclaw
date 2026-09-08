@@ -53,6 +53,7 @@ export const OpenClawSchemaShape = {
           modelPolicyAllowlist: z.literal(true).optional(),
         })
         .optional(),
+      installProfile: z.literal("teammate").optional(),
     })
     .optional(),
   env: z

@@ -13,12 +13,14 @@ import {
   buildModelOptions,
   createPrimaryModelExclusion,
   formatAgentRuntimeLabel,
+  formatBotRoleLine,
   formatBytes,
   listSelectableAgents,
   normalizeAgentLabel,
   normalizeAgentTargetLabel,
   resolveAgentSkillsFilter,
   resolveEffectiveModelFallbacks,
+  shouldShowBotRoster,
 } from "./display.ts";
 
 describe("buildModelOptions", () => {
@@ -630,5 +632,30 @@ describe("buildAgentContext", () => {
 
     expect(context.identityName).toBe("大颖");
     expect(context.identityAvatar).toBe("⚙️");
+  });
+});
+
+describe("teammate bot roster", () => {
+  it("hides the roster unless installProfile is teammate", () => {
+    expect(
+      shouldShowBotRoster({
+        agents: [{ id: "main" }, { id: "research" }],
+      }),
+    ).toBe(false);
+    expect(
+      shouldShowBotRoster({
+        installProfile: "teammate",
+        agents: [{ id: "researcher" }],
+      }),
+    ).toBe(true);
+  });
+
+  it("joins title and job and ignores theme slogans", () => {
+    expect(
+      formatBotRoleLine({
+        id: "researcher",
+        identity: { title: "Researcher", job: "Pull facts from the admin UI", theme: "AXWEL" },
+      }),
+    ).toBe("Researcher · Pull facts from the admin UI");
   });
 });

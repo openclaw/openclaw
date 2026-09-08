@@ -66,4 +66,21 @@ describe("security audit exec sandbox host findings", () => {
   ])("$name", async ({ cfg, checkId }) => {
     expect(hasFinding(checkId, await collectSecurityAuditFindings(cfg))).toBe(true);
   });
+
+  it("flags teammate installs whose exec host drifted onto the gateway", async () => {
+    const findings = await collectSecurityAuditFindings({
+      meta: { installProfile: "teammate" },
+      tools: { exec: { host: "gateway" } },
+      agents: {
+        defaults: { sandbox: { mode: "all" } },
+        list: [{ id: "main", default: true }],
+      },
+    });
+    expect(
+      findings.some(
+        (finding) =>
+          finding.checkId === "teammate.exec_on_gateway" && finding.severity === "critical",
+      ),
+    ).toBe(true);
+  });
 });

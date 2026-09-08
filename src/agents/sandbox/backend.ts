@@ -23,6 +23,10 @@ import {
   resolveSshRuntimePaths,
   sshSandboxBackendManager,
 } from "./ssh-backend.js";
+import {
+  createFirecrackerSandboxBackend,
+  firecrackerSandboxBackendManager,
+} from "./firecracker-backend.js";
 
 export type {
   CreateSandboxBackendParams,
@@ -153,6 +157,11 @@ builtinSandboxBackends.set("ssh", {
   manager: sshSandboxBackendManager,
   resolveWorkdir: ({ cfg, scopeKey }) =>
     resolveSshRuntimePaths(cfg.ssh.workspaceRoot, scopeKey).remoteWorkspaceDir,
+});
+builtinSandboxBackends.set("firecracker", {
+  factory: createFirecrackerSandboxBackend,
+  manager: firecrackerSandboxBackendManager,
+  resolveWorkdir: ({ cfg }) => cfg.docker.workdir,
 });
 
 function resolveSandboxBackendRegistration(id: string): RegisteredSandboxBackend | undefined {

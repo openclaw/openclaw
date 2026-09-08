@@ -62,6 +62,12 @@ export type SandboxDockerSettings = {
    * Default behavior blocks container namespace joins to preserve sandbox isolation.
    */
   dangerouslyAllowContainerNamespaceJoin?: boolean;
+  /**
+   * OCI runtime for the sandbox container (e.g. io.containerd.kata.v2 for
+   * Firecracker/Kata). Unset keeps the engine default. Teammate `--backend firecracker`
+   * sets this; it is never an implicit default on existing installs.
+   */
+  runtime?: string;
 };
 
 export type SandboxBrowserSettings = {

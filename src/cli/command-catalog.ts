@@ -83,6 +83,10 @@ const PASSIVE_STARTUP_POLICY = {
 /** Command path registry used before Commander registration has loaded all plugins. */
 export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
   {
+    commandPath: ["init"],
+    policy: { configGuard: "skip", loadPlugins: "never", ensureCliPath: false },
+  },
+  {
     commandPath: ["setup"],
     policy: { configGuard: "skip", loadPlugins: "never", ensureCliPath: false },
   },

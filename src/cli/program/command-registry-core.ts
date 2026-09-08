@@ -19,6 +19,10 @@ import {
 
 const coreEntrySpecs: readonly CommandGroupDescriptorSpec<[ctx: ProgramContext]>[] = [
   [
+    ["init"],
+    async (program) => (await import("./register.init.js")).registerInitCommand(program),
+  ],
+  [
     ["setup", "crestodian"],
     async (program) => (await import("./register.setup.js")).registerSetupCommand(program),
   ],

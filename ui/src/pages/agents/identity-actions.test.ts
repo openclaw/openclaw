@@ -20,7 +20,7 @@ afterEach(() => {
 
 function host(): Parameters<typeof resetIdentityDraft>[0] {
   return {
-    identityDraft: { name: null, emoji: null, avatar: null },
+    identityDraft: { name: null, emoji: null, title: null, job: null, avatar: null },
     identitySaving: false,
     identityError: null,
   };
@@ -249,7 +249,13 @@ describe("agent identity actions", () => {
     });
 
     expect(runExternalMutation).toHaveBeenCalledOnce();
-    expect(state.identityDraft).toEqual({ name: null, emoji: null, avatar: null });
+    expect(state.identityDraft).toEqual({
+      name: null,
+      emoji: null,
+      title: null,
+      job: null,
+      avatar: null,
+    });
     expect(state.identityError).toContain("config.get failed after identity commit");
   });
 });

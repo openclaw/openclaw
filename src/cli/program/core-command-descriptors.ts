@@ -11,6 +11,11 @@ type CoreCliCommandDescriptor = NamedCommandDescriptor;
 /** Static root-command descriptors for the core CLI surface. */
 export const CORE_CLI_COMMAND_DESCRIPTORS = [
   {
+    name: "init",
+    description: "Install profiles; teammate mode pins exec onto a persistent worker",
+    hasSubcommands: false,
+  },
+  {
     name: "setup",
     description: "Chat with OpenClaw; onboard when setup is incomplete",
     hasSubcommands: false,

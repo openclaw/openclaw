@@ -192,6 +192,10 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
     'Optional Docker GPU passthrough value passed to --gpus, for example "all" or "device=GPU-uuid". Requires a compatible host runtime such as NVIDIA Container Toolkit.',
   "agents.entries.*.sandbox.docker.gpus":
     "Per-agent Docker GPU passthrough override for sandbox containers.",
+  "agents.defaults.sandbox.docker.runtime":
+    "Optional OCI runtime for teammate Firecracker/Kata sandboxes (for example io.containerd.kata.v2). Docker remains the default backend; this is not required for a teammate install.",
+  "agents.entries.*.sandbox.docker.runtime":
+    "Per-agent OCI runtime override for sandbox Docker/Firecracker containers.",
   "agents.defaults.sandbox.browser.cdpSourceRange":
     "Optional CIDR allowlist for container-edge CDP ingress (for example 172.21.0.1/32).",
   "agents.entries.*.sandbox.browser.cdpSourceRange":

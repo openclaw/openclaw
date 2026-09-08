@@ -89,6 +89,8 @@ type CreateAgentParams = {
   model?: string;
   emoji?: unknown;
   avatar?: unknown;
+  title?: unknown;
+  job?: unknown;
   agentDir?: string;
   skipBootstrap?: boolean;
   skipOptionalBootstrapFiles?: OptionalBootstrapFileName[];
@@ -263,6 +265,8 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
       name: safeName,
       emoji: params.emoji,
       avatar: params.avatar,
+      title: params.title,
+      job: params.job,
     }) ?? { name: safeName };
   const requestedWorkspace = params.entry?.workspace ?? params.workspace;
   const explicitWorkspace = requestedWorkspace?.trim()

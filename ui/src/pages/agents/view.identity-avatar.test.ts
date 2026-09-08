@@ -136,7 +136,7 @@ it("fetches a persisted settings avatar with the bearer credential", async () =>
 it("renders the upload preview without fetching the persisted settings avatar", async () => {
   const preview = `data:image/png;base64,${avatarPng}`;
   const view = await createView({
-    identityDraft: { name: null, emoji: null, avatar: preview },
+    identityDraft: { name: null, emoji: null, title: null, job: null, avatar: preview },
   });
 
   expect(avatarImage(view)?.getAttribute("src")).toBe(preview);
@@ -155,7 +155,13 @@ it("keeps a missing settings avatar on its fallback and recovers on a new revisi
 
   await changeAvatarRevision(view, 2);
   await waitForFast(() => expect(fetchAvatar).toHaveBeenCalledTimes(2));
-  view.props.identityDraft = { name: "Renamed Beta", emoji: null, avatar: null };
+  view.props.identityDraft = {
+    name: "Renamed Beta",
+    emoji: null,
+    title: null,
+    job: null,
+    avatar: null,
+  };
   view.requestUpdate();
   await view.updateComplete;
   expect(avatarImage(view)).toBeNull();
@@ -182,7 +188,13 @@ it("keeps a decode failure on its fallback across rerenders until the revision c
   expect(avatarImage(view)).toBeNull();
   expect(avatarText(view)).toBe("F");
 
-  view.props.identityDraft = { name: "Renamed Beta", emoji: null, avatar: null };
+  view.props.identityDraft = {
+    name: "Renamed Beta",
+    emoji: null,
+    title: null,
+    job: null,
+    avatar: null,
+  };
   view.requestUpdate();
   await view.updateComplete;
   expect(avatarImage(view)).toBeNull();

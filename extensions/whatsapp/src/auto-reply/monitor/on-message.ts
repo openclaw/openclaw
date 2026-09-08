@@ -147,6 +147,7 @@ export function createWebOnMessageHandler(params: {
         kind: conversationKind,
         id: peerId,
       },
+      text: msg.payload.body,
     });
     const baseConversationRoute =
       conversationKind === "group" ? resolveWhatsAppGroupSessionRoute(baseRoute) : baseRoute;

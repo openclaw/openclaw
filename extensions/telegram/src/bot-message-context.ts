@@ -253,6 +253,7 @@ export const buildTelegramMessageContext = async ({
     threadSpec,
     senderId,
     topicAgentId: topicConfig?.agentId,
+    text: msg.text ?? msg.caption,
   });
   const { bindingMode } = conversationRoute;
   let { route } = conversationRoute;

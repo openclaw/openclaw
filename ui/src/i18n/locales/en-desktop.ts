@@ -25,6 +25,7 @@ const enDesktop = {
     connect: "Connect",
     connecting: "Connecting to desktop…",
     takeControl: "Take control",
+    returnControl: "Return control to agent",
     switchToViewOnly: "Switch to view only",
     viewOnly: "View only",
     control: "Control",

@@ -43,6 +43,8 @@ import {
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { sessionDeliveryChannel } from "../utils/delivery-context.shared.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
+import { resolveTeammateExecPlacement } from "../teammate/exec-bind.js";
+import { TEAMMATE_SLA } from "../teammate/profile.js";
 
 type SandboxExplainOptions = {
   session?: string;
@@ -331,6 +333,7 @@ export async function sandboxExplainCommand(
     agentId: resolvedAgentId,
     sessionKey,
     mainSessionKey,
+    exec: resolveTeammateExecPlacement(cfg, resolvedAgentId),
     sandbox: {
       mode: sandboxCfg.mode,
       scope: sandboxCfg.scope,
@@ -381,6 +384,18 @@ export async function sandboxExplainCommand(
   lines.push(`  ${key("agentId:")} ${value(payload.agentId)}`);
   lines.push(`  ${key("sessionKey:")} ${value(payload.sessionKey)}`);
   lines.push(`  ${key("mainSessionKey:")} ${value(payload.mainSessionKey)}`);
+  lines.push(
+    `  ${key("execHost:")} ${
+      payload.exec.gatewayExec ? err(payload.exec.effectiveHost) : ok(payload.exec.effectiveHost)
+    } ${key("gatewayExec:")} ${
+      payload.exec.gatewayExec ? err("true") : ok("false")
+    }`,
+  );
+  if (payload.exec.installProfile === "teammate") {
+    lines.push(
+      `  ${key("installProfile:")} ${value("teammate")} ${key("sla:")} ${value(TEAMMATE_SLA)}`,
+    );
+  }
   lines.push(
     `  ${key("runtime:")} ${payload.sandbox.sessionIsSandboxed ? warn("sandboxed") : ok("direct")}`,
   );

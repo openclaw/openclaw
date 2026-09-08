@@ -1746,5 +1746,129 @@ describe("binding evaluation cache scalability", () => {
     expect(defaultRoute.agentId).toBe("main");
     expect(defaultRoute.matchedBy).toBe("default");
   });
+
+  test("routes a unique @Bot mention before channel-wide bindings", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        entries: {
+          researcher: {
+            name: "Researcher",
+            identity: { name: "Researcher", title: "Research", theme: "AXWEL" },
+          },
+          writer: { name: "Writer", identity: { name: "Writer", theme: "AXWEL" } },
+        },
+      },
+      bindings: [
+        {
+          type: "route",
+          agentId: "writer",
+          match: { channel: "slack", accountId: "work" },
+        },
+      ],
+    };
+
+    expectResolvedRoute(
+      resolveAgentRoute({
+        cfg,
+        channel: "slack",
+        accountId: "work",
+        peer: { kind: "group", id: "ops" },
+        text: "@Researcher pull this week's signups",
+      }),
+      {
+        agentId: "researcher",
+        matchedBy: "mention.agent",
+      },
+    );
+  });
+
+  test("keeps peer bindings above @Bot mentions", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        entries: {
+          researcher: { name: "Researcher" },
+          ops: { name: "Ops" },
+        },
+      },
+      bindings: [
+        {
+          type: "route",
+          agentId: "ops",
+          match: {
+            channel: "slack",
+            accountId: "work",
+            peer: { kind: "direct", id: "U123" },
+          },
+        },
+      ],
+    };
+
+    expectResolvedRoute(
+      resolveAgentRoute({
+        cfg,
+        channel: "slack",
+        accountId: "work",
+        peer: { kind: "direct", id: "U123" },
+        text: "@Researcher look at this DM",
+      }),
+      {
+        agentId: "ops",
+        matchedBy: "binding.peer",
+      },
+    );
+  });
+
+  test("leaves routing alone when mention text is omitted or ambiguous", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        entries: {
+          researcher: { name: "Researcher" },
+          writer: { name: "Writer" },
+        },
+      },
+      bindings: [
+        {
+          type: "route",
+          agentId: "writer",
+          match: { channel: "slack", accountId: "work" },
+        },
+      ],
+    };
+
+    expectResolvedRoute(
+      resolveAgentRoute({
+        cfg,
+        channel: "slack",
+        accountId: "work",
+        peer: { kind: "group", id: "ops" },
+      }),
+      {
+        agentId: "writer",
+        matchedBy: "binding.account",
+      },
+    );
+    expectResolvedRoute(
+      resolveAgentRoute({
+        cfg,
+        channel: "slack",
+        accountId: "work",
+        peer: { kind: "group", id: "ops" },
+        text: "@Researcher and @Writer please",
+      }),
+      {
+        agentId: "writer",
+        matchedBy: "binding.account",
+      },
+    );
+    expect(
+      resolveAgentRoute({
+        cfg,
+        channel: "slack",
+        accountId: "work",
+        peer: { kind: "group", id: "ops" },
+        text: "talk to @AXWEL",
+      }).matchedBy,
+    ).toBe("binding.account");
+  });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

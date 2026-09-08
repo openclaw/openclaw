@@ -682,6 +682,7 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
       showApps: this.source?.kind === "environment",
       onLaunch: (app) => void this.launchApp(app),
       onTakeControl: () => void this.connectEnvironment(this.environmentId, true),
+      onReturnControl: () => void this.connectEnvironment(this.environmentId, false),
       onDisconnect: () => this.returnToPicker(),
     });
     const dock = this.dockLayout.dock;

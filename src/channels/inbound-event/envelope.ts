@@ -70,6 +70,7 @@ type InboundRouteResolveParams<TConfig, TPeer extends RoutePeerLike> = {
   channel: string;
   accountId: string;
   peer: TPeer;
+  text?: string;
 };
 
 export function createInboundEnvelopeBuilder<TConfig, TEnvelope>(params: {
@@ -112,6 +113,7 @@ export function resolveInboundRouteEnvelopeBuilder<
   channel: string;
   accountId: string;
   peer: TPeer;
+  text?: string;
   resolveAgentRoute: (params: InboundRouteResolveParams<TConfig, TPeer>) => TRoute;
   sessionStore?: string;
   resolveStorePath: (store: string | undefined, opts: { agentId: string }) => string;
@@ -127,6 +129,7 @@ export function resolveInboundRouteEnvelopeBuilder<
     channel: params.channel,
     accountId: params.accountId,
     peer: params.peer,
+    text: params.text,
   });
   const buildEnvelope = createInboundEnvelopeBuilder({
     cfg: params.cfg,
@@ -170,6 +173,7 @@ export function resolveInboundRouteEnvelopeBuilderWithRuntime<
   channel: string;
   accountId: string;
   peer: TPeer;
+  text?: string;
   runtime: InboundRouteEnvelopeRuntime<TConfig, TEnvelope, TRoute, TPeer>;
   sessionStore?: string;
 }): {
@@ -181,6 +185,7 @@ export function resolveInboundRouteEnvelopeBuilderWithRuntime<
     channel: params.channel,
     accountId: params.accountId,
     peer: params.peer,
+    text: params.text,
     resolveAgentRoute: (routeParams) => params.runtime.routing.resolveAgentRoute(routeParams),
     sessionStore: params.sessionStore,
     resolveStorePath: params.runtime.session.resolveStorePath,

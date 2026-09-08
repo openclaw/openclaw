@@ -23,7 +23,7 @@ export type PluginRegistryScope =
   | "all";
 
 // Core-owned backends must keep their registry ownership if a plugin reuses an id.
-const CORE_SANDBOX_BACKEND_IDS = new Set(["docker", "podman", "ssh"]);
+const CORE_SANDBOX_BACKEND_IDS = new Set(["docker", "podman", "ssh", "firecracker"]);
 
 function resolveMemoryPluginIds(
   context: ReturnType<typeof resolvePluginRuntimeLoadContext>,

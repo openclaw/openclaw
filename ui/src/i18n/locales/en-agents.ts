@@ -2,6 +2,7 @@
 export const agentChip = {
   menuLabel: "Agent menu",
   agents: "Agents",
+  bots: "Bots",
   switchAgent: "Switch agent",
   working: "Working…",
   ready: "Ready to chat",
@@ -26,9 +27,13 @@ export const pinning = {
 
 export const identity = {
   title: "Identity",
-  subtitle: "Name, emoji, and avatar shown in chats and the sidebar.",
+  subtitle: "Name, title, job, emoji, and avatar shown in chats and the sidebar.",
   name: "Display name",
   namePlaceholder: "Agent name",
+  roleTitle: "Title",
+  roleTitlePlaceholder: "Research",
+  job: "Job",
+  jobPlaceholder: "Pull weekly signups from the admin UI",
   emoji: "Emoji",
   chooseImage: "Choose image…",
   replaceImage: "Replace image…",

@@ -54,6 +54,7 @@ type ResolveTelegramConversationRouteParams = {
   threadSpec: TelegramThreadSpec;
   senderId?: string | number | null;
   topicAgentId?: string | null;
+  text?: string;
 };
 
 export function buildTelegramConversationRouteContext(params: {
@@ -98,6 +99,7 @@ function resolveTelegramConversationRouteWithRuntimePolicy(
       id: peerId,
     },
     parentPeer,
+    text: params.text,
   });
 
   const rawTopicAgentId = params.topicAgentId?.trim();

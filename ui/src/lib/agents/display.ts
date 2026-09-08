@@ -29,7 +29,7 @@ type AgentRosterEntry = {
   id: string;
   kind?: "agent" | "system";
   name?: string;
-  identity?: { name?: string };
+  identity?: { name?: string; title?: string; job?: string; theme?: string };
 };
 
 /** Ordinary agent targets; system rows remain available to diagnostic surfaces. */
@@ -39,6 +39,25 @@ export function listSelectableAgents<T extends AgentRosterEntry>(agents: readonl
 
 export function selectableAgentsList(agentsList: AgentsListResult): AgentsListResult {
   return { ...agentsList, agents: listSelectableAgents(agentsList.agents) };
+}
+
+/** Title · job for the teammate roster. identity.theme is a project label, not a slogan. */
+export function formatBotRoleLine(
+  agent: AgentRosterEntry,
+  hydratedIdentity?: { title?: string; job?: string } | null,
+): string {
+  const title =
+    normalizeOptionalString(agent.identity?.title) ??
+    normalizeOptionalString(hydratedIdentity?.title);
+  const job =
+    normalizeOptionalString(agent.identity?.job) ?? normalizeOptionalString(hydratedIdentity?.job);
+  return [title, job].filter(Boolean).join(" · ");
+}
+
+export function shouldShowBotRoster(
+  agentsList: Pick<AgentsListResult, "installProfile" | "agents"> | null | undefined,
+): boolean {
+  return agentsList?.installProfile === "teammate";
 }
 
 type GitHubIdentityConfigValue = {

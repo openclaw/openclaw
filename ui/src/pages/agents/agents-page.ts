@@ -117,7 +117,13 @@ class AgentsPage
   readonly agentFileWriteRevisions = new Map<string, number>();
   @state() agentIdentityLoading = false;
   @state() agentIdentityError: string | null = null;
-  @state() identityDraft: AgentIdentityDraft = { name: null, emoji: null, avatar: null };
+  @state() identityDraft: AgentIdentityDraft = {
+    name: null,
+    emoji: null,
+    title: null,
+    job: null,
+    avatar: null,
+  };
   private readonly identityAvatarLoader = new IdentityAvatarController(this);
   @state() identitySaving = false;
   @state() identityError: string | null = null;

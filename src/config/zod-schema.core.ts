@@ -668,6 +668,8 @@ export const IdentitySchema = z
   .object({
     name: z.string().optional(),
     theme: z.string().optional(),
+    title: z.string().optional(),
+    job: z.string().optional(),
     emoji: z.string().optional(),
     avatar: z.string().optional(),
   })

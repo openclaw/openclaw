@@ -36,8 +36,12 @@ import type { IdentityAvatarController } from "../../lib/identity-avatar-loader.
 export type AgentIdentityDraft = {
   name: string | null;
   emoji: string | null;
+  title: string | null;
+  job: string | null;
   avatar: string | null;
 };
+
+export type AgentIdentityField = "name" | "emoji" | "title" | "job";
 
 /** Authenticated image lease the settings preview shares with the roster. */
 export type IdentityAvatarLoader = Pick<IdentityAvatarController, "resolve" | "imageErrorHandler">;
@@ -64,7 +68,7 @@ export function renderAgentOverview(params: {
   modelCatalogStatus: PanelRefreshStatus;
   onConfigReload: () => void;
   onConfigSave: () => void;
-  onIdentityFieldChange: (field: "name" | "emoji", value: string) => void;
+  onIdentityFieldChange: (field: AgentIdentityField, value: string) => void;
   onIdentityAvatarSelect: (file: File) => void;
   onIdentitySave: () => void;
   onModelChange: (agentId: string, modelId: string | null) => void;
@@ -115,6 +119,8 @@ export function renderAgentOverview(params: {
     identityDraft.name ?? params.agentIdentity?.name ?? agent.identity?.name ?? agent.name ?? "";
   const identityEmoji =
     identityDraft.emoji ?? params.agentIdentity?.emoji ?? agent.identity?.emoji ?? "";
+  const identityTitle = identityDraft.title ?? agent.identity?.title ?? "";
+  const identityJob = identityDraft.job ?? agent.identity?.job ?? "";
   // Upload previews are local data URLs; persisted avatars live on a protected
   // Gateway route and must resolve through the authenticated image lease.
   const persistedAvatarUrl = identityDraft.avatar
@@ -127,10 +133,16 @@ export function renderAgentOverview(params: {
     resolveAgentTextAvatar(agent, params.agentIdentity) ??
     (deriveAvatarInitial(identityName || agent.id) || "?");
   const identityDirty =
-    identityDraft.name !== null || identityDraft.emoji !== null || identityDraft.avatar !== null;
+    identityDraft.name !== null ||
+    identityDraft.emoji !== null ||
+    identityDraft.title !== null ||
+    identityDraft.job !== null ||
+    identityDraft.avatar !== null;
   const identityInvalid =
     (identityDraft.name !== null && !identityDraft.name.trim()) ||
-    (identityDraft.emoji !== null && !identityDraft.emoji.trim());
+    (identityDraft.emoji !== null && !identityDraft.emoji.trim()) ||
+    (identityDraft.title !== null && !identityDraft.title.trim()) ||
+    (identityDraft.job !== null && !identityDraft.job.trim());
   const identityBusy = params.identitySaving || !params.canUpdateIdentity;
 
   const handleAvatarFileSelect = (e: Event) => {
@@ -182,6 +194,30 @@ export function renderAgentOverview(params: {
                   ?disabled=${identityBusy}
                   @input=${(e: Event) =>
                     params.onIdentityFieldChange("name", (e.target as HTMLInputElement).value)}
+                />
+              </label>
+              <label class="field">
+                <span>${t("agents.identity.roleTitle")}</span>
+                <input
+                  type="text"
+                  maxlength="64"
+                  .value=${identityTitle}
+                  placeholder=${t("agents.identity.roleTitlePlaceholder")}
+                  ?disabled=${identityBusy}
+                  @input=${(e: Event) =>
+                    params.onIdentityFieldChange("title", (e.target as HTMLInputElement).value)}
+                />
+              </label>
+              <label class="field">
+                <span>${t("agents.identity.job")}</span>
+                <input
+                  type="text"
+                  maxlength="160"
+                  .value=${identityJob}
+                  placeholder=${t("agents.identity.jobPlaceholder")}
+                  ?disabled=${identityBusy}
+                  @input=${(e: Event) =>
+                    params.onIdentityFieldChange("job", (e.target as HTMLInputElement).value)}
                 />
               </label>
               <label class="field agent-identity-editor__emoji">

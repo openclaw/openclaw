@@ -52,6 +52,7 @@ export function resolveDiscordConversationRoute(params: {
   memberRoleIds?: string[];
   peer: RoutePeer;
   parentConversationId?: string | null;
+  text?: string;
 }): ResolvedAgentRoute {
   return resolveAgentRoute({
     cfg: params.cfg,
@@ -63,6 +64,7 @@ export function resolveDiscordConversationRoute(params: {
     parentPeer: params.parentConversationId
       ? { kind: "channel", id: params.parentConversationId }
       : undefined,
+    text: params.text,
   });
 }
 
@@ -79,6 +81,7 @@ export function resolveDiscordBoundConversationRoute(params: {
   boundSessionKey?: string | null;
   configuredRoute?: { route: ResolvedAgentRoute } | null;
   matchedBy?: ResolvedAgentRoute["matchedBy"];
+  text?: string;
 }): ResolvedAgentRoute {
   const route = resolveDiscordConversationRoute({
     cfg: params.cfg,
@@ -92,6 +95,7 @@ export function resolveDiscordBoundConversationRoute(params: {
       conversationId: params.conversationId,
     }),
     parentConversationId: params.parentConversationId,
+    text: params.text,
   });
   return resolveDiscordEffectiveRoute({
     route,

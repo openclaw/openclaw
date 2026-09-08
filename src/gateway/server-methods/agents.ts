@@ -843,6 +843,8 @@ export const agentsHandlers: GatewayRequestHandlers = {
       model: params.model,
       emoji: params.emoji,
       avatar: params.avatar,
+      title: params.title,
+      job: params.job,
     });
     if (result.status === "error") {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, result.message));
@@ -893,6 +895,8 @@ export const agentsHandlers: GatewayRequestHandlers = {
       name: safeName,
       emoji: params.emoji,
       avatar: params.avatar,
+      title: params.title,
+      job: params.job,
     });
     const hasIdentityFields = Boolean(identity);
 

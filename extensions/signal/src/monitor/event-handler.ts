@@ -126,6 +126,7 @@ function resolveSignalInboundRoute(params: {
   isGroup: boolean;
   groupId?: string;
   senderPeerId: string;
+  text?: string;
 }) {
   return resolveAgentRoute({
     cfg: params.cfg,
@@ -135,6 +136,7 @@ function resolveSignalInboundRoute(params: {
       kind: params.isGroup ? "group" : "direct",
       id: params.isGroup ? (params.groupId ?? "unknown") : params.senderPeerId,
     },
+    text: params.text,
   });
 }
 
@@ -217,6 +219,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       isGroup: entry.isGroup,
       groupId: entry.groupId,
       senderPeerId: entry.senderPeerId,
+      text: entry.bodyText,
     });
     const storePath = resolveStorePath(cfg.session?.store, {
       agentId: route.agentId,
@@ -703,6 +706,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       isGroup: last.isGroup,
       groupId: last.groupId,
       senderPeerId: last.senderPeerId,
+      text: last.bodyText,
     });
     const contextBinding: ChannelIngressContextBinding = {
       agentId: route.agentId,

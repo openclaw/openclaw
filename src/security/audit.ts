@@ -38,6 +38,8 @@ import {
   resolveMergedSafeBinProfileFixtures,
 } from "../infra/exec-safe-bin-runtime-policy.js";
 import { listRiskyConfiguredSafeBins } from "../infra/exec-safe-bin-semantics.js";
+import { teammateGatewayExecViolation } from "../teammate/exec-bind.js";
+import { TEAMMATE_SLA } from "../teammate/profile.js";
 import { resolvePluginControlPlaneWorkspace } from "../plugins/control-plane-workspace.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { collectDeepCodeSafetyFindings } from "./audit-deep-code-safety.js";
@@ -924,7 +926,40 @@ function collectExecRuntimeFindings(cfg: OpenClawConfig): SecurityAuditFinding[]
     });
   }
 
+  const teammateViolation = teammateGatewayExecViolation(cfg);
+  if (teammateViolation) {
+    findings.push({
+      checkId: "teammate.exec_on_gateway",
+      severity: "critical",
+      title: "Teammate exec is on the gateway host",
+      detail:
+        `meta.installProfile is teammate but tools.exec effective host is ${teammateViolation.effectiveHost} ` +
+        `(configured ${teammateViolation.configuredHost}). ${TEAMMATE_SLA}`,
+      remediation:
+        'Set tools.exec.host to "sandbox" and agents.defaults.sandbox.mode to "all". Confirm with openclaw sandbox explain --json.',
+    });
+  }
+
   return findings;
+}
+
+function collectTeammateExecFindings(cfg: OpenClawConfig): SecurityAuditFinding[] {
+  const violation = teammateGatewayExecViolation(cfg);
+  if (!violation) {
+    return [];
+  }
+  return [
+    {
+      checkId: "teammate.exec_on_gateway",
+      severity: "critical",
+      title: "Teammate exec is on the gateway host",
+      detail:
+        `meta.installProfile is teammate but tools.exec effective host is ${violation.effectiveHost} ` +
+        `(configured ${violation.configuredHost}). ${TEAMMATE_SLA}`,
+      remediation:
+        'Set tools.exec.host to "sandbox" and agents.defaults.sandbox.mode to "all". Confirm with openclaw sandbox explain --json.',
+    },
+  ];
 }
 
 function collectAgentRosterFindings(cfg: OpenClawConfig): SecurityAuditFinding[] {

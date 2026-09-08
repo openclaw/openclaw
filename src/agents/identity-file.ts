@@ -22,6 +22,8 @@ export type AgentIdentityFile = {
   name?: string;
   emoji?: string;
   theme?: string;
+  title?: string;
+  job?: string;
   creature?: string;
   vibe?: string;
   avatar?: string;
@@ -30,11 +32,22 @@ export type AgentIdentityFile = {
 const WRITABLE_IDENTITY_FIELDS = [
   ["name", "Name"],
   ["theme", "Theme"],
+  ["title", "Title"],
+  ["job", "Job"],
   ["emoji", "Emoji"],
   ["avatar", "Avatar"],
 ] as const satisfies ReadonlyArray<readonly [keyof AgentIdentityFile, string]>;
 
-const RICH_IDENTITY_LABELS = new Set(["name", "creature", "vibe", "theme", "emoji", "avatar"]);
+const RICH_IDENTITY_LABELS = new Set([
+  "name",
+  "creature",
+  "vibe",
+  "theme",
+  "title",
+  "job",
+  "emoji",
+  "avatar",
+]);
 
 const IDENTITY_PLACEHOLDER_VALUES = new Set([
   "not set yet",
@@ -49,7 +62,7 @@ export function sanitizeAgentIdentityLine(value: string): string {
   return value.replace(/\s+/g, " ").trim();
 }
 
-const IDENTITY_CONFIG_FIELDS = ["name", "theme", "emoji", "avatar"] as const;
+const IDENTITY_CONFIG_FIELDS = ["name", "theme", "title", "job", "emoji", "avatar"] as const;
 
 function compactIdentityConfig(identity: IdentityConfig): IdentityConfig | undefined {
   const resolved: IdentityConfig = {};
@@ -66,11 +79,15 @@ export function createAgentIdentityConfig(params: {
   name?: string;
   emoji?: unknown;
   avatar?: unknown;
+  title?: unknown;
+  job?: unknown;
 }): IdentityConfig | undefined {
   return compactIdentityConfig({
     ...(params.name ? { name: sanitizeAgentIdentityLine(params.name) } : {}),
     emoji: sanitizeAgentIdentityLine(normalizeOptionalString(params.emoji) ?? ""),
     avatar: sanitizeAgentIdentityLine(normalizeOptionalString(params.avatar) ?? ""),
+    title: sanitizeAgentIdentityLine(normalizeOptionalString(params.title) ?? ""),
+    job: sanitizeAgentIdentityLine(normalizeOptionalString(params.job) ?? ""),
   });
 }
 
@@ -137,6 +154,12 @@ function parseIdentityMarkdown(content: string): AgentIdentityFile {
     if (label === "theme") {
       identity.theme = value;
     }
+    if (label === "title") {
+      identity.title = value;
+    }
+    if (label === "job") {
+      identity.job = value;
+    }
     if (label === "avatar") {
       identity.avatar = value;
     }
@@ -150,6 +173,8 @@ function identityHasValues(identity: AgentIdentityFile): boolean {
     identity.name ||
     identity.emoji ||
     identity.theme ||
+    identity.title ||
+    identity.job ||
     identity.creature ||
     identity.vibe ||
     identity.avatar,
@@ -216,7 +241,7 @@ function resolveIdentityInsertIndex(lines: string[]): number {
  */
 export function mergeIdentityMarkdownContent(
   content: string | undefined,
-  identity: Pick<AgentIdentityFile, "name" | "theme" | "emoji" | "avatar">,
+  identity: Pick<AgentIdentityFile, "name" | "theme" | "title" | "job" | "emoji" | "avatar">,
 ): string {
   const lines = normalizeIdentityContent(content);
   const nextLines = lines.length > 0 ? [...lines] : ["# IDENTITY.md - Agent Identity", ""];

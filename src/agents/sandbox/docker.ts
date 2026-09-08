@@ -392,6 +392,10 @@ export function buildSandboxCreateArgs(params: {
     args.push("--cap-drop", cap);
   }
   args.push("--security-opt", "no-new-privileges");
+  const runtime = params.cfg.runtime?.trim();
+  if (runtime) {
+    args.push("--runtime", runtime);
+  }
   if (params.cfg.seccompProfile) {
     args.push("--security-opt", `seccomp=${params.cfg.seccompProfile}`);
   }

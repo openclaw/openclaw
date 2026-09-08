@@ -5,7 +5,7 @@ import { t } from "../../i18n/index.ts";
 import { updateAgentIdentity } from "../../lib/agents/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { fileToAvatarDataUrl } from "./avatar-image.ts";
-import type { AgentIdentityDraft } from "./panels-overview.ts";
+import type { AgentIdentityDraft, AgentIdentityField } from "./panels-overview.ts";
 
 type AgentIdentityEditorHost = {
   identityDraft: AgentIdentityDraft;
@@ -23,14 +23,14 @@ function advanceAvatarSelectionEpoch(host: AgentIdentityEditorHost): number {
 
 export function resetIdentityDraft(host: AgentIdentityEditorHost) {
   advanceAvatarSelectionEpoch(host);
-  host.identityDraft = { name: null, emoji: null, avatar: null };
+  host.identityDraft = { name: null, emoji: null, title: null, job: null, avatar: null };
   host.identitySaving = false;
   host.identityError = null;
 }
 
 export function setIdentityDraftField(
   host: AgentIdentityEditorHost,
-  field: "name" | "emoji",
+  field: AgentIdentityField,
   value: string,
 ) {
   host.identityDraft = { ...host.identityDraft, [field]: value };
@@ -71,11 +71,18 @@ export async function saveIdentityDraft(params: {
   // blank edit visible and unsaved instead of pretending it removed a field.
   const name = draft.name?.trim();
   const emoji = draft.emoji?.trim();
+  const title = draft.title?.trim();
+  const job = draft.job?.trim();
   const avatar = draft.avatar ?? undefined;
-  if ((draft.name !== null && !name) || (draft.emoji !== null && !emoji)) {
+  if (
+    (draft.name !== null && !name) ||
+    (draft.emoji !== null && !emoji) ||
+    (draft.title !== null && !title) ||
+    (draft.job !== null && !job)
+  ) {
     return;
   }
-  if (!name && !emoji && !avatar) {
+  if (!name && !emoji && !title && !job && !avatar) {
     resetIdentityDraft(host);
     return;
   }
@@ -87,7 +94,7 @@ export async function saveIdentityDraft(params: {
         if (client !== expectedClient) {
           throw new Error("Connection changed before the agent identity update started.");
         }
-        return updateAgentIdentity(client, { agentId, name, emoji, avatar });
+        return updateAgentIdentity(client, { agentId, name, emoji, title, job, avatar });
       },
       {
         canDispatch: params.canDispatch,

@@ -62,7 +62,7 @@ export function createAgentViewTestProps(
     agentIdentityLoading: false,
     agentIdentityError: null,
     agentIdentityById: {},
-    identityDraft: { name: null, emoji: null, avatar: null },
+    identityDraft: { name: null, emoji: null, title: null, job: null, avatar: null },
     identityAvatarLoader: {
       resolve: (url) => url,
       imageErrorHandler: () => () => undefined,

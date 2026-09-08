@@ -226,6 +226,15 @@ describe("commands registry", () => {
     ]);
   });
 
+  it("registers /follow-along as a standard tools command", () => {
+    const followAlong = requireChatCommand("follow-along");
+    expect(followAlong.nativeName).toBeUndefined();
+    expect(followAlong.textAliases).toEqual(["/follow-along"]);
+    expect(followAlong.category).toBe("tools");
+    expect(followAlong.tier).toBe("standard");
+    expect(followAlong.acceptsArgs).toBe(true);
+  });
+
   it("registers /login natively for Discord, Slack, and Telegram", () => {
     const command = requireChatCommand("login");
     expect(command.textAliases).toEqual(["/login"]);
@@ -594,6 +603,7 @@ describe("commands registry", () => {
     expect(detection.exact.has("/commands")).toBe(true);
     expect(detection.exact.has("/skill")).toBe(true);
     expect(detection.exact.has("/learn")).toBe(true);
+    expect(detection.exact.has("/follow-along")).toBe(true);
     expect(detection.exact.has("/loop")).toBe(true);
     expect(detection.exact.has("/compact")).toBe(true);
     expect(detection.exact.has("/whoami")).toBe(true);

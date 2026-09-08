@@ -217,6 +217,8 @@ type AgentIdentityUpdate = {
   agentId: string;
   name?: string;
   emoji?: string;
+  title?: string;
+  job?: string;
   avatar?: string;
 };
 
@@ -230,6 +232,8 @@ export async function updateAgentIdentity(
     agentId: update.agentId,
     ...(update.name ? { name: update.name } : {}),
     ...(update.emoji ? { emoji: update.emoji } : {}),
+    ...(update.title ? { title: update.title } : {}),
+    ...(update.job ? { job: update.job } : {}),
     ...(update.avatar ? { avatar: update.avatar } : {}),
   });
 }

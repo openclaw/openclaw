@@ -57,6 +57,7 @@ import {
   resolveSidebarConnectionStatus,
 } from "./session-row-badges.ts";
 import { formatSidebarBuildSubtitle } from "./sidebar-build-chip-format.ts";
+import { renderSidebarBotRoster } from "./sidebar-bot-roster.ts";
 
 type AppSidebarRenderHost = AppSidebarSessionNavigationElement & {
   activePluginTabId: string;
@@ -182,6 +183,11 @@ export function renderAppSidebarBrand(host: AppSidebarRenderHost) {
         })}
       </div>
     </div>
+    ${renderSidebarBotRoster({
+      agentsList: host.sessionDataContext?.agents.state.agentsList,
+      activeAgentId: cardAgentId,
+      onSelect: (agentId) => host.switchChipAgent(agentId),
+    })}
   `;
 }
 
