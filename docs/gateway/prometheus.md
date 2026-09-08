@@ -230,6 +230,22 @@ transient failure keeps the last successful windows, advances
 `openclaw_provider_usage_last_attempt_timestamp_seconds`, and sets
 `openclaw_provider_usage_refresh_success` to `0`.
 
+On a fresh start with diagnostics enabled, the exporter requests one background
+refresh during service startup and schedules the next refresh about 60 seconds
+after that attempt completes. A fresh start with diagnostics disabled acquires no
+refresh interest and makes no provider-usage request. Hot-disable releases the
+interest and cancels its next scheduled refresh; hot-enable acquires a new owner
+and starts a fresh background refresh.
+
+<Warning>
+Upgrading an existing installation whose Prometheus exporter and diagnostics are
+already enabled activates this background provider-usage polling the next time
+the upgraded exporter starts. The poll uses the default agent's already configured
+provider credentials. Scrape requests do not trigger it. Disable diagnostics or
+the `diagnostics-prometheus` plugin before upgrading if this automatic provider
+usage traffic is not acceptable for the deployment.
+</Warning>
+
 Changing the selected credential or provider set immediately withdraws the old
 allowance series. New `used_ratio` and reset series appear only after a successful
 observation under the new selection. Derive remaining allowance in PromQL rather

@@ -2,6 +2,7 @@
 import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs/promises";
+import { createServer, type Server } from "node:http";
 import net from "node:net";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -21,6 +22,7 @@ const repoRoot = path.resolve(import.meta.dirname, "../../..");
 const pluginRoot = path.resolve(import.meta.dirname, "..");
 const tempWorkspaces: TempWorkspace[] = [];
 const children: ChildProcess[] = [];
+const servers: Server[] = [];
 
 afterEach(async () => {
   const stopped = await Promise.allSettled(
@@ -30,8 +32,85 @@ afterEach(async () => {
   if (errors.length > 0) {
     throw new AggregateError(errors, "failed to stop Prometheus E2E children");
   }
+  await Promise.all(
+    servers.splice(0).map(
+      (server) =>
+        new Promise<void>((resolve, reject) => {
+          server.close((error) => (error ? reject(error) : resolve()));
+        }),
+    ),
+  );
   await Promise.all(tempWorkspaces.splice(0).map((workspace) => workspace.cleanup()));
 });
+
+async function writeProviderUsageProofPlugin(params: {
+  capabilityPath: string;
+  pluginRoot: string;
+}): Promise<void> {
+  await fs.mkdir(params.pluginRoot, { recursive: true });
+  await fs.writeFile(
+    path.join(params.pluginRoot, "openclaw.plugin.json"),
+    `${JSON.stringify(
+      {
+        id: "provider-usage-proof",
+        providers: ["provider-usage-proof"],
+        contracts: { usageProviders: ["provider-usage-proof"] },
+        configSchema: { type: "object", additionalProperties: false, properties: {} },
+      },
+      null,
+      2,
+    )}\n`,
+    "utf8",
+  );
+  await fs.writeFile(
+    path.join(params.pluginRoot, "index.cjs"),
+    `
+const fs = require("node:fs");
+
+module.exports = {
+  id: "provider-usage-proof",
+  name: "Provider Usage Proof",
+  register(api) {
+    api.registerProvider({
+      id: "provider-usage-proof",
+      label: "Provider Usage Proof",
+      auth: [],
+      resolveUsageAuth() {
+        return { token: "provider-usage-proof-non-secret" };
+      },
+      async fetchUsageSnapshot(ctx) {
+        const response = await ctx.fetchFn(process.env.PROVIDER_USAGE_PROOF_ENDPOINT, {
+          signal: AbortSignal.timeout(ctx.timeoutMs),
+        });
+        if (!response.ok) {
+          throw new Error("provider usage proof endpoint failed");
+        }
+        const payload = await response.json();
+        return {
+          provider: "provider-usage-proof",
+          displayName: "Provider Usage Proof",
+          windows: [{ label: "hour", usedPercent: payload.usedPercent }],
+        };
+      },
+    });
+    api.registerService({
+      id: "provider-usage-proof",
+      start(ctx) {
+        fs.writeFileSync(
+          ${JSON.stringify(params.capabilityPath)},
+          JSON.stringify({
+            observeProviderUsage:
+              typeof ctx.internalDiagnostics?.observeProviderUsage === "function",
+          }),
+        );
+      },
+    });
+  },
+};
+`,
+    "utf8",
+  );
+}
 
 async function reservePort(): Promise<number> {
   const server = net.createServer();
@@ -268,15 +347,39 @@ describe("diagnostics-prometheus managed install runtime", () => {
     const stateDir = path.join(root, "state");
     const configPath = path.join(stateDir, "openclaw.json");
     const gatewayLog = path.join(root, "gateway.log");
+    const disabledGatewayLog = path.join(root, "gateway-disabled.log");
+    const proofPluginRoot = path.join(root, "provider-usage-proof-plugin");
+    const capabilityPath = path.join(root, "provider-usage-capability.json");
     const gatewayPassword = "prometheus-managed-install-test-password";
     const gatewayPort = await reservePort();
+    let providerRequestCount = 0;
+    const providerServer = createServer((_request, response) => {
+      providerRequestCount += 1;
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ usedPercent: 25 }));
+    });
+    servers.push(providerServer);
+    await new Promise<void>((resolve, reject) => {
+      providerServer.once("error", reject);
+      providerServer.listen(0, "127.0.0.1", resolve);
+    });
+    const providerAddress = providerServer.address();
+    if (!providerAddress || typeof providerAddress === "string") {
+      throw new Error("provider usage proof server did not bind a loopback port");
+    }
+    const providerEndpoint = `http://127.0.0.1:${providerAddress.port}/usage`;
     await fs.mkdir(home, { recursive: true });
     await fs.mkdir(stateDir, { recursive: true });
+    await writeProviderUsageProofPlugin({ capabilityPath, pluginRoot: proofPluginRoot });
     await fs.writeFile(
       configPath,
       `${JSON.stringify(
         {
           diagnostics: { enabled: true },
+          plugins: {
+            load: { paths: [proofPluginRoot] },
+            entries: { "provider-usage-proof": { enabled: true } },
+          },
           gateway: {
             mode: "local",
             bind: "loopback",
@@ -326,6 +429,7 @@ describe("diagnostics-prometheus managed install runtime", () => {
       registry,
       stateDir,
     });
+    env.PROVIDER_USAGE_PROOF_ENDPOINT = providerEndpoint;
 
     await runCli(
       ["plugins", "install", `npm:${packageName}@${pluginVersion}`, "--accept-capabilities"],
@@ -385,17 +489,44 @@ describe("diagnostics-prometheus managed install runtime", () => {
     await waitForGateway({ child: gateway, logPath: gatewayLog, port: gatewayPort });
 
     const url = `http://127.0.0.1:${gatewayPort}/api/diagnostics/prometheus`;
+    const scrapeMetrics = async () => {
+      const response = await fetch(url, {
+        headers: { authorization: `Bearer ${gatewayPassword}` },
+      });
+      return { body: await response.text(), response };
+    };
+    await expect
+      .poll(
+        async () => {
+          const capability = JSON.parse(await fs.readFile(capabilityPath, "utf8")) as {
+            observeProviderUsage?: unknown;
+          };
+          return capability.observeProviderUsage;
+        },
+        { timeout: 10_000 },
+      )
+      .toBe(false);
     const unauthenticated = await fetch(url);
     expect([401, 403]).toContain(unauthenticated.status);
-    const authenticated = await fetch(url, {
-      headers: { authorization: `Bearer ${gatewayPassword}` },
-    });
-    const body = await authenticated.text();
+    const { body, response: authenticated } = await scrapeMetrics();
     expect(authenticated.status).toBe(200);
     expect(authenticated.headers.get("content-type")).toContain("text/plain");
     expect(body).toContain(
       'openclaw_telemetry_exporter_total{exporter="diagnostics-prometheus",reason="configured",signal="metrics",status="started"} 1',
     );
+    const providerUsageMetric =
+      'openclaw_provider_usage_used_ratio{provider="provider-usage-proof",window="hour"} 0.25';
+    await expect
+      .poll(async () => (await scrapeMetrics()).body.includes(providerUsageMetric), {
+        timeout: 15_000,
+      })
+      .toBe(true);
+    const requestsBeforeScrapes = providerRequestCount;
+    for (let scrape = 0; scrape < 3; scrape += 1) {
+      expect((await scrapeMetrics()).body).toContain(providerUsageMetric);
+    }
+    const scrapeTriggeredRequests = providerRequestCount - requestsBeforeScrapes;
+    expect(scrapeTriggeredRequests).toBe(0);
     const restrictedHeaders = {
       "x-forwarded-for": "203.0.113.25",
       "x-forwarded-proto": "https",
@@ -480,6 +611,37 @@ describe("diagnostics-prometheus managed install runtime", () => {
       expect(current.observed).toBeGreaterThanOrEqual(previous.observed);
       previous = current;
     }
+
+    await runCli(["config", "set", "diagnostics.enabled", "false", "--strict-json"], env);
+    await expect.poll(async () => (await scrapeMetrics()).body).toBe("");
+    const requestsAfterDiagnosticsDisable = providerRequestCount;
+    await delay(61_000);
+    expect(providerRequestCount).toBe(requestsAfterDiagnosticsDisable);
+    const hotDisableRequestsAfterRelease = providerRequestCount - requestsAfterDiagnosticsDisable;
+
+    await runCli(["config", "set", "diagnostics.enabled", "true", "--strict-json"], env);
+    await expect
+      .poll(() => providerRequestCount, { timeout: 15_000 })
+      .toBeGreaterThan(requestsAfterDiagnosticsDisable);
+    await expect
+      .poll(async () => (await scrapeMetrics()).body.includes(providerUsageMetric), {
+        timeout: 15_000,
+      })
+      .toBe(true);
+
+    await runCli(
+      ["config", "set", "plugins.entries.diagnostics-prometheus.enabled", "false", "--strict-json"],
+      env,
+    );
+    await expect
+      .poll(async () => (await scrapeMetrics()).body.includes(providerUsageMetric))
+      .toBe(false);
+    const requestsAfterPluginRevocation = providerRequestCount;
+    await delay(61_000);
+    expect(providerRequestCount).toBe(requestsAfterPluginRevocation);
+    const pluginRevocationRequestsAfterRelease =
+      providerRequestCount - requestsAfterPluginRevocation;
+
     const gatewayLogs = await fs.readFile(gatewayLog, "utf8");
     expect(gatewayLogs).not.toContain(
       "diagnostics-prometheus: internal diagnostics capability unavailable",
@@ -499,5 +661,71 @@ describe("diagnostics-prometheus managed install runtime", () => {
         { cause },
       );
     }
-  }, 300_000);
+
+    await runCli(
+      ["config", "set", "plugins.entries.diagnostics-prometheus.enabled", "true", "--strict-json"],
+      env,
+    );
+    await runCli(["config", "set", "diagnostics.enabled", "false", "--strict-json"], env);
+    const requestsBeforeDisabledStart = providerRequestCount;
+    const disabledGatewayLogHandle = await fs.open(disabledGatewayLog, "a");
+    const disabledGateway = spawn(
+      process.execPath,
+      ["openclaw.mjs", "gateway", "run", "--bind", "loopback", "--port", String(gatewayPort)],
+      {
+        cwd: repoRoot,
+        env,
+        stdio: ["ignore", disabledGatewayLogHandle.fd, disabledGatewayLogHandle.fd],
+      },
+    );
+    children.push(disabledGateway);
+    const disabledGatewayClosed = once(disabledGateway, "close", { signal });
+    void disabledGatewayClosed.catch(() => {});
+    await disabledGatewayLogHandle.close();
+    await waitForGateway({
+      child: disabledGateway,
+      logPath: disabledGatewayLog,
+      port: gatewayPort,
+    });
+    const disabledStartScrape = await scrapeMetrics();
+    expect(disabledStartScrape.response.status).toBe(200);
+    expect(disabledStartScrape.body).toBe("");
+    await delay(1_000);
+    expect(providerRequestCount).toBe(requestsBeforeDisabledStart);
+    expect(disabledGateway.kill("SIGTERM")).toBe(true);
+    await disabledGatewayClosed;
+    expect(disabledGateway.exitCode).toBe(0);
+    expect(disabledGateway.signalCode).toBeNull();
+
+    const disabledGatewayLogs = await fs.readFile(disabledGatewayLog, "utf8");
+    const allGatewayLogs = `${gatewayLogs}\n${disabledGatewayLogs}`;
+    expect(allGatewayLogs).not.toContain(gatewayPassword);
+    expect(allGatewayLogs).not.toContain(providerEndpoint);
+    expect(allGatewayLogs).not.toContain("provider-usage-proof-non-secret");
+    const sanitizedGatewayLogs = allGatewayLogs
+      .replaceAll(root, "[isolated-root]")
+      .replaceAll("restricted-scraper@example.com", "[operator]")
+      .replace(/\b(?:https?|wss?):\/\/[^\s]+/gu, "[endpoint]")
+      .replace(/\b(?:\d{1,3}\.){3}\d{1,3}\b/gu, "[host]");
+    expect(sanitizedGatewayLogs).not.toMatch(
+      /(?:127\.0\.0\.1|https?:\/\/|wss?:\/\/|restricted-scraper@example\.com)/iu,
+    );
+    await fs.writeFile(
+      path.join(root, "provider-usage-proof-gateway.sanitized.log"),
+      sanitizedGatewayLogs,
+      "utf8",
+    );
+    const sanitizedEvidence = {
+      authenticatedScrape: true,
+      disabledStartRequests: providerRequestCount - requestsBeforeDisabledStart,
+      hotDisableRequestsAfterRelease,
+      nonOfficialObserverGranted: false,
+      pluginRevocationRequestsAfterRelease,
+      providerMetricObserved: true,
+      scrapeTriggeredRequests,
+    };
+    const evidenceText = `${JSON.stringify(sanitizedEvidence, null, 2)}\n`;
+    expect(evidenceText).not.toMatch(/(?:127\.0\.0\.1|https?:\/\/|password|token)/iu);
+    await fs.writeFile(path.join(root, "provider-usage-proof-evidence.json"), evidenceText, "utf8");
+  }, 480_000);
 });
