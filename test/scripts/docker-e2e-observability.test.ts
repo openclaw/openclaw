@@ -64,11 +64,15 @@ run_logged_print_heartbeat signal-proof 30 bash -c 'printf "old log head%0256dre
     const launch = wrapper.match(
       /-i "\$IMAGE_NAME" (bash(?: -[A-Za-z]+)*) scripts\/e2e\/lib\/release-typed-onboarding\/scenario\.sh/u,
     );
-    expect(launch?.[1]).toBe("bash -E");
+    const launchCommand = launch?.[1];
+    expect(launchCommand).toBe("bash -E");
+    if (!launchCommand) {
+      throw new Error("missing typed-onboarding Bash launch");
+    }
 
-    const [bash = "", ...flags] = launch?.[1].split(" ") ?? [];
+    const [, ...flags] = launchCommand.split(" ");
     const result = spawnSync(
-      bash,
+      "bash",
       [
         ...flags,
         "-c",
