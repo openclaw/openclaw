@@ -260,9 +260,17 @@ export default defineSingleProviderPluginEntry({
           }),
         });
       },
-      staticRun: async () => ({
-        provider: buildXaiProvider(),
-      }),
+      staticRun: async (ctx) => {
+        const auth = ctx.resolveProviderAuth(PROVIDER_ID);
+        const authMode =
+          auth.mode === "oauth"
+            ? "oauth"
+            : auth.mode === "token" &&
+                isXaiGrokProxyBaseUrl(ctx.config.models?.providers?.[PROVIDER_ID]?.baseUrl)
+              ? "token"
+              : undefined;
+        return { provider: buildXaiProvider("openai-responses", authMode) };
+      },
     },
     ...buildProviderReplayFamilyHooks({ family: "openai-compatible" }),
     prepareExtraParams: (ctx) => defaultToolStreamExtraParams(ctx.extraParams),

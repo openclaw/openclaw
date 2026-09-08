@@ -172,7 +172,7 @@ describe("xAI OAuth", () => {
         transport
           .get("https://cli-chat-proxy.grok.com")
           .intercept({ path: "/v1/settings" })
-          .reply(200, { default_model: "subscription-fixture" });
+          .reply(200, { default_model: "grok-4.6" });
       }
       const origin = transport.get(new URL(redirectStart).origin);
       origin.intercept({ path: new URL(redirectStart).pathname }).reply(async () => {
@@ -275,10 +275,10 @@ describe("xAI OAuth", () => {
           });
         }
         if (url.endsWith("/models")) {
-          return jsonResponse({ data: [{ id: "subscription-fixture", api_backend: "responses" }] });
+          return jsonResponse({ data: [{ id: "grok-4.6", api_backend: "responses" }] });
         }
         if (url.endsWith("/settings")) {
-          return jsonResponse({ default_model: "subscription-fixture" });
+          return jsonResponse({ default_model: "grok-4.6" });
         }
         if (boundary === "token response") {
           await hold();
@@ -646,10 +646,10 @@ describe("xAI OAuth", () => {
       fetchImpl.mockImplementation(async (input) => {
         const url = requestUrl(input);
         if (url.endsWith("/models")) {
-          return jsonResponse({ data: [{ id: "subscription-fixture", api_backend: "responses" }] });
+          return jsonResponse({ data: [{ id: "grok-4.6", api_backend: "responses" }] });
         }
         if (url.endsWith("/settings")) {
-          return jsonResponse({ default_model: "subscription-fixture" });
+          return jsonResponse({ default_model: "grok-4.6" });
         }
         throw new Error(`Unexpected catalog URL: ${url}`);
       });
@@ -762,10 +762,10 @@ describe("xAI OAuth", () => {
         accountId: "acct-1",
         access: expect.any(String),
       });
-      expect(result.defaultModel).toBe("xai/auto");
+      expect(result.defaultModel).toBe("xai/grok-4.6");
       expect(result.configPatch?.agents?.defaults?.model).toEqual(
         setup === "fresh"
-          ? { primary: "xai/auto" }
+          ? { primary: "xai/grok-4.6" }
           : { primary: "other/selected", fallbacks: ["other/fallback"] },
       );
       expect(result.configPatch?.models?.providers?.xai).toMatchObject({
@@ -774,7 +774,7 @@ describe("xAI OAuth", () => {
         auth: "oauth",
       });
       expect(result.configPatch?.models?.providers?.xai?.models.map((model) => model.id)).toEqual([
-        "subscription-fixture",
+        "grok-4.6",
       ]);
       const savedProvider = result.configPatch?.models?.providers?.xai;
       expect(savedProvider?.models.some((model) => model.id === "auto")).toBe(false);
@@ -785,7 +785,7 @@ describe("xAI OAuth", () => {
       if (setup === "api") {
         expect(savedProvider?.request?.allowPrivateNetwork).toBe(false);
       }
-      expect(result.configPatch?.agents?.defaults?.models?.["xai/auto"]?.alias).toBe("Grok");
+      expect(result.configPatch?.agents?.defaults?.models?.["xai/grok-4.6"]?.alias).toBe("Grok");
       expect(progress.update).toHaveBeenCalledWith("Waiting for xAI device authorization...");
       expect(progress.stop).toHaveBeenCalledWith("xAI OAuth complete");
     },
@@ -824,10 +824,10 @@ describe("xAI OAuth", () => {
     fetchImpl.mockImplementation(async (input) => {
       const url = requestUrl(input);
       if (url.endsWith("/models")) {
-        return jsonResponse({ data: [{ id: "subscription-fixture", api_backend: "responses" }] });
+        return jsonResponse({ data: [{ id: "grok-4.6", api_backend: "responses" }] });
       }
       if (url.endsWith("/settings")) {
-        return jsonResponse({ default_model: "subscription-fixture" });
+        return jsonResponse({ default_model: "grok-4.6" });
       }
       throw new Error(`Unexpected catalog URL: ${url}`);
     });
