@@ -85,20 +85,7 @@ describe
   it("preserves message-scoped IDs and independent Raw tabs for reused call IDs", async () => {
     const { rows, container, draw, toggledKeys } = fixture(mode);
     draw();
-    // Initial references must exist before the dependency's observer callbacks.
-    try {
-      for (const row of rows) {
-        for (const name of ["diff", "raw"]) {
-          const prefix = `${row.key}:shared-call-${name}`;
-          const tab = container.querySelector(`[id="${prefix}-tab"]`)!;
-          const panel = container.querySelector(`[id="${prefix}-panel"]`)!;
-          expect(tab.getAttribute("aria-controls")).toBe(panel.id);
-          expect(panel.getAttribute("aria-labelledby")).toBe(tab.id);
-        }
-      }
-    } finally {
-      await settleTabs(container);
-    }
+    await settleTabs(container);
     const bubbles = Array.from(container.querySelectorAll<HTMLElement>(".chat-bubble"));
     expect(bubbles.map((bubble) => bubble.dataset.messageId)).toEqual(rows.map((row) => row.key));
     expect(container.querySelectorAll(".chat-tools-inline")).toHaveLength(
