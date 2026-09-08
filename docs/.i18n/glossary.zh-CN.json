@@ -2440,6 +2440,42 @@
     "target": "Slack 故障排查"
   },
   {
+    "source": "Discord setup",
+    "target": "Discord 设置"
+  },
+  {
+    "source": "Discord access control",
+    "target": "Discord 访问控制"
+  },
+  {
+    "source": "Discord message behavior",
+    "target": "Discord 消息行为"
+  },
+  {
+    "source": "Discord threads and sessions",
+    "target": "Discord 话题与会话"
+  },
+  {
+    "source": "Discord components and approvals",
+    "target": "Discord 组件与审批"
+  },
+  {
+    "source": "Discord events and operations",
+    "target": "Discord 事件与运维"
+  },
+  {
+    "source": "Discord voice transcripts and meeting notes",
+    "target": "Discord 语音转录与会议记录"
+  },
+  {
+    "source": "Follow users in Discord voice",
+    "target": "在 Discord 语音中跟随用户"
+  },
+  {
+    "source": "Discord troubleshooting",
+    "target": "Discord 故障排查"
+  },
+  {
     "source": "Media understanding pipeline",
     "target": "媒体理解流程"
   },

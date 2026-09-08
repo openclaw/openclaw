@@ -156,7 +156,7 @@ Requirements and failure behavior:
 - The bot needs the Discord Developer Portal **Server Members Intent**.
 - The access group fails closed when Discord returns `Missing Access`, the sender cannot be resolved as a guild member, or the channel belongs to another guild.
 
-More Discord-specific examples: [Discord access control](/channels/discord#access-control-and-routing)
+More Discord-specific examples: [Discord access control](/channels/discord/access-control#access-control-and-routing)
 
 ## Plugin diagnostics
 
