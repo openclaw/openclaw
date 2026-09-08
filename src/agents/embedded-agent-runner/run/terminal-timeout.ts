@@ -1,5 +1,4 @@
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
-import { logModelFallbackChainStopped } from "../../model-fallback-observation.js";
 import { hasMessagingToolDeliveryEvidence } from "../delivery-evidence.js";
 import type { EmbeddedAgentMeta, EmbeddedAgentRunResult } from "../types.js";
 import { copyAttemptDeliveryState } from "./attempt-delivery-state.js";
@@ -29,7 +28,6 @@ type EmbeddedRunTerminalPreparedFacts = {
 };
 
 export function resolveEmbeddedRunTerminalTimeout(input: {
-  fallbackConfigured: boolean;
   terminalPrepared: EmbeddedRunTerminalPreparedFacts;
   attempt: EmbeddedRunAttemptResult;
   terminalState: EmbeddedRunTerminalState;
@@ -79,14 +77,6 @@ export function resolveEmbeddedRunTerminalTimeout(input: {
     ...(typeof providerStarted === "boolean" ? { providerStarted } : {}),
   };
   input.setTerminalLifecycleMeta({ replayInvalid, livenessState, ...timeoutAttribution });
-  if (input.fallbackConfigured) {
-    logModelFallbackChainStopped({
-      reason: "agent_run_terminal_timeout",
-      provider: input.terminalPrepared.agentMeta.provider,
-      model: input.terminalPrepared.agentMeta.model,
-      sessionId: input.terminalPrepared.agentMeta.sessionId,
-    });
-  }
   return {
     payloads: [
       ...(input.terminalPrepared.hasPartialAssistantTextAfterPromptTimeout && !timeoutFinal
@@ -95,6 +85,7 @@ export function resolveEmbeddedRunTerminalTimeout(input: {
       { text: timeoutText, isError: true },
     ],
     meta: {
+      modelFallbackStopReason: "agent_run_terminal_timeout",
       durationMs: Date.now() - input.startedAtMs,
       agentMeta: input.terminalPrepared.agentMeta,
       aborted: terminalAborted,

@@ -119,6 +119,7 @@ export type ModelFallbackResultClassification =
       preserveResultPriority?: number;
     }
   | { error: unknown }
+  | { stopReason: ModelFallbackChainStopReason }
   | null
   | undefined;
 
@@ -300,7 +301,7 @@ export async function runFallbackAttempt<T>(params: {
   attribution?: FailoverAttribution;
   abortSignal?: AbortSignal;
 }): Promise<
-  | { success: ModelFallbackRunResult<T> }
+  | { success: ModelFallbackRunResult<T>; stopped?: true }
   | {
       error: unknown;
       classifiedResult?: ModelFallbackClassifiedResult<T>;
@@ -337,7 +338,18 @@ export async function runFallbackAttempt<T>(params: {
     return { error: runResult.error };
   }
   if (!attemptError) {
+    const stopReason =
+      classification && "stopReason" in classification ? classification.stopReason : undefined;
+    if (stopReason && params.total > 1) {
+      logModelFallbackChainStopped({
+        reason: stopReason,
+        provider: params.provider,
+        model: params.model,
+        ...params.attribution,
+      });
+    }
     return {
+      ...(stopReason ? { stopped: true as const } : {}),
       success: {
         outcome: "completed",
         result: runResult.result,
@@ -379,7 +391,7 @@ function resolveResultClassificationError(
   classification: ModelFallbackResultClassification,
   params: { provider: string; model: string; attribution?: FailoverAttribution },
 ) {
-  if (!classification) {
+  if (!classification || "stopReason" in classification) {
     return null;
   }
   if ("error" in classification) {

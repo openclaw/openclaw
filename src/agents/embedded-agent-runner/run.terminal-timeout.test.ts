@@ -40,7 +40,6 @@ function makeTimeoutInput(
   overrides: Partial<Omit<TimeoutInput, "terminalPrepared">> = {},
 ): TimeoutInput {
   return {
-    fallbackConfigured: true,
     terminalPrepared: {
       timedOutDuringPrompt: true,
       hasSuccessfulFinalAssistantAfterPromptTimeout: false,
@@ -92,26 +91,19 @@ describe("resolveEmbeddedRunTerminalTimeout", () => {
         fallbackSafe: false,
       });
       expect(result?.meta.replayInvalid).toBe(false);
-      expect(logModelFallbackChainStopped).toHaveBeenCalledExactlyOnceWith({
-        reason: "agent_run_terminal_timeout",
-        provider: "openai",
-        model: "gpt-5.6-luna",
-        sessionId: "session-1",
-      });
+      expect(result?.meta.modelFallbackStopReason).toBe("agent_run_terminal_timeout");
       expect(
         classifyEmbeddedAgentRunResultForModelFallback({
           provider: "openai",
           model: "gpt-5.6-luna",
           result,
         }),
-      ).toBeNull();
+      ).toEqual({ stopReason: "agent_run_terminal_timeout" });
     },
   );
 
-  it("does not report a fallback stop when no fallback is configured", () => {
-    const result = resolveEmbeddedRunTerminalTimeout(
-      makeTimeoutInput(makeTimedOutAttempt(), {}, { fallbackConfigured: false }),
-    );
+  it("does not report a fallback stop outside the fallback owner", () => {
+    const result = resolveEmbeddedRunTerminalTimeout(makeTimeoutInput(makeTimedOutAttempt()));
     expect(result?.meta.error?.fallbackSafe).toBe(false);
     expect(logModelFallbackChainStopped).not.toHaveBeenCalled();
   });

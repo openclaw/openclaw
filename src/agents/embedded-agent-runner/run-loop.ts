@@ -631,7 +631,6 @@ export async function runPreparedEmbeddedLoop(
       } = terminalPrepared;
 
       const terminalTimeoutResult = resolveEmbeddedRunTerminalTimeout({
-        fallbackConfigured,
         terminalPrepared,
         attempt: terminalAttempt,
         terminalState: resolvedTerminalState,

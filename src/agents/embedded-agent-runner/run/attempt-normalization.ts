@@ -1,6 +1,5 @@
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import { formatAssistantErrorText } from "../../embedded-agent-helpers.js";
-import { logModelFallbackChainStopped } from "../../model-fallback-observation.js";
 import { normalizeUsage, type UsageLike } from "../../usage.js";
 import { hasOutboundDeliveryEvidence } from "../delivery-evidence.js";
 import { log } from "../logger.js";
@@ -239,15 +238,8 @@ export async function normalizeEmbeddedRunAttempt(input: {
       replayInvalid: input.replayState.replayInvalid ? true : undefined,
       livenessState: "blocked",
     });
-    // Escalating provider failures throw above; only returned stops bypass the outer fallback loop.
-    if (runInput.fallbackConfigured) {
-      logModelFallbackChainStopped({
-        reason: "idle_timeout_circuit_breaker",
-        provider,
-        model: modelId,
-        sessionId: sessionPromptState.sessionId,
-      });
-    }
+    // Escalating provider failures throw above; only returned results carry a terminal stop.
+    result.meta.modelFallbackStopReason = "idle_timeout_circuit_breaker";
     return { action: "complete", result };
   }
   if (attempt.contextBudgetStatus) {

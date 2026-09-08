@@ -196,6 +196,9 @@ export function classifyEmbeddedAgentRunResultForModelFallback(params: {
   if (!isEmbeddedAgentRunResult(params.result)) {
     return null;
   }
+  if (params.result.meta.modelFallbackStopReason) {
+    return { stopReason: params.result.meta.modelFallbackStopReason };
+  }
   if (
     hasIntentionalTerminalCompletion(params.result) ||
     params.result.meta.aborted ||
