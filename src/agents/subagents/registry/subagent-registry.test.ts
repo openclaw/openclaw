@@ -59,6 +59,7 @@ import type {
   SubagentRunParamsOverrides,
   SubagentRunRecordOverrides,
 } from "../../subagent-test-fixtures.test-helpers.js";
+import type { SubagentAnnounceFlowOutcome } from "../announce/subagent-announce.js";
 import { enqueueSwarmRun, releaseSwarmRun } from "../swarm/swarm-scheduler.js";
 import { testing as swarmSchedulerTesting } from "../swarm/swarm-scheduler.test-support.js";
 import {
@@ -193,7 +194,7 @@ const mocks = vi.hoisted(() => ({
   ),
   captureSubagentCompletionReply: vi.fn(async () => "final completion reply"),
   cleanupBrowserSessionsForLifecycleEnd: vi.fn(async () => {}),
-  runSubagentAnnounceFlow: vi.fn(async (): Promise<"delivered" | "retryable"> => "delivered"),
+  runSubagentAnnounceFlow: vi.fn(async (): Promise<SubagentAnnounceFlowOutcome> => "delivered"),
   maybeWakeRequesterAfterAllChildrenSettled: vi.fn(
     async (wakeParams: {
       settledEntry: SubagentRunRecord;
@@ -3129,6 +3130,55 @@ describe("subagent registry seam flow", () => {
     },
   );
 
+  it.each(["intentional_non_delivery", "permanent_failure", "delivered"] as const)(
+    "settles a provisional notification with %s without settling its child",
+    async (notificationOutcome) => {
+      const startedAt = Date.now() - 1_000;
+      const runId = `run-expiry-settled-notification-${notificationOutcome}`;
+      mocks.callGateway.mockImplementation(async (request: { method?: string }) =>
+        request.method === "agent.wait" ? { status: "timeout", startedAt } : {},
+      );
+      mocks.runSubagentAnnounceFlow.mockResolvedValue(notificationOutcome);
+      mod.registerSubagentRun({
+        runId,
+        task: "do not retry a settled notification or finalize its live child",
+        runTimeoutSeconds: 1,
+      });
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledOnce();
+      const run = findRequesterRun(runId);
+      expect(run?.waitExpiryAnnouncedAt).toEqual(expect.any(Number));
+      expect(run?.execution.status).toBe("running");
+      expect(run?.execution.endedAt).toBeUndefined();
+      expect(run?.completion?.resultText).toBeUndefined();
+      expect(mocks.cleanupBrowserSessionsForLifecycleEnd).not.toHaveBeenCalled();
+      expect(mocks.onSubagentEnded).not.toHaveBeenCalled();
+      expect(run?.delivery?.deliveredAt).toBeUndefined();
+      expect(mocks.patchSessionEntryCore).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledOnce();
+
+      // Notification settlement must not suppress the child's later real result.
+      getLifecycleHandler()({
+        runId,
+        stream: "lifecycle",
+        data: {
+          phase: "end",
+          startedAt,
+          endedAt: Date.now(),
+          terminalReply: { disposition: "visible", text: "FINAL after notification settlement" },
+        },
+      });
+      await waitForFast(() => {
+        expect(run?.execution.status).toBe("terminal");
+        expect(run?.completion?.resultText).toBe("FINAL after notification settlement");
+        expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(2);
+        expect(mocks.cleanupBrowserSessionsForLifecycleEnd).toHaveBeenCalledOnce();
+      });
+    },
+  );
+
   it("retries a provisional wait-expiry announcement that was not delivered", async () => {
     const startedAt = Date.now() - 1_000;
     mocks.callGateway.mockImplementation(async (request: { method?: string }) =>
@@ -4205,56 +4255,67 @@ describe("subagent registry seam flow", () => {
     });
   });
 
-  it("publishes aborted agent.wait snapshots only after killed reconciliation", async () => {
-    mockGatewayMethods(mocks.callGateway, {
-      "agent.wait": {
-        status: "ok",
-        startedAt: 100,
-        endedAt: 250,
-        stopReason: "aborted",
-      },
-    });
+  // `rpc` is a cancellation only on a non-ok wait; a model/ACP "stop" that ends
+  // an otherwise successful wait is a normal completion. `aborted` and
+  // `superseded` are cancellations from their reason alone.
+  it.each([
+    { stopReason: "rpc", status: "error" },
+    { stopReason: "aborted", status: "ok" },
+    { stopReason: "superseded", status: "ok" },
+  ] as const)(
+    "publishes $stopReason agent.wait snapshots only after killed reconciliation",
+    async ({ stopReason, status }) => {
+      mockGatewayMethods(mocks.callGateway, {
+        "agent.wait": {
+          status,
+          startedAt: 100,
+          endedAt: 250,
+          stopReason,
+        },
+      });
 
-    mod.registerSubagentRun({
-      runId: "run-aborted-wait",
-      task: "aborted wait",
-      expectsCompletionMessage: true,
-    });
+      mod.registerSubagentRun({
+        runId: `run-${stopReason}-wait`,
+        task: "aborted wait",
+        expectsCompletionMessage: true,
+      });
 
-    await waitForFast(() => {
-      const run = findRequesterRun("run-aborted-wait");
-      expect(run?.endedReason).toBe("subagent-killed");
-      expect(run?.suppressAnnounceReason).toBe("killed");
-    });
-    expect(mocks.runSubagentAnnounceFlow).not.toHaveBeenCalled();
+      await waitForFast(() => {
+        const run = findRequesterRun(`run-${stopReason}-wait`);
+        expect(run?.endedReason).toBe("subagent-killed");
+        expect(run?.suppressAnnounceReason).toBe("killed");
+      });
+      expect(mocks.runSubagentAnnounceFlow).not.toHaveBeenCalled();
 
-    await mod.testing.sweepOnceForTests();
-    await waitForFast(() => expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(1));
-    const announceParams = expectRecordFields(
-      getMockCallArg(mocks.runSubagentAnnounceFlow, 0, 0, "aborted wait announce"),
-      { childRunId: "run-aborted-wait" },
-      "aborted wait announce params",
-    );
-    expectRecordFields(
-      announceParams.outcome,
-      {
-        status: "error",
-        error: "subagent run terminated",
-        startedAt: 100,
-        endedAt: 250,
-        elapsedMs: 150,
-      },
-      "aborted wait announce outcome",
-    );
+      await mod.testing.sweepOnceForTests();
+      await waitForFast(() => expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(1));
+      const announceParams = expectRecordFields(
+        getMockCallArg(mocks.runSubagentAnnounceFlow, 0, 0, "aborted wait announce"),
+        { childRunId: `run-${stopReason}-wait` },
+        "aborted wait announce params",
+      );
+      expectRecordFields(
+        announceParams.outcome,
+        {
+          status: "error",
+          disposition: "killed",
+          error: "subagent run terminated",
+          startedAt: 100,
+          endedAt: 250,
+          elapsedMs: 150,
+        },
+        "aborted wait announce outcome",
+      );
 
-    await waitForFast(() => {
-      expect(
-        mod
-          .listSubagentRunsForRequester("agent:main:main")
-          .some((entry) => entry.runId === "run-aborted-wait"),
-      ).toBe(false);
-    });
-  });
+      await waitForFast(() => {
+        expect(
+          mod
+            .listSubagentRunsForRequester("agent:main:main")
+            .some((entry) => entry.runId === `run-${stopReason}-wait`),
+        ).toBe(false);
+      });
+    },
+  );
 
   it("reconciles a provisionally announced run from persisted terminal state during sweep", async () => {
     mockPendingAgentWait();

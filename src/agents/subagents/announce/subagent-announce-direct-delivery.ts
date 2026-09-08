@@ -44,6 +44,7 @@ import {
   hasFailedSubagentNoOutputCompletion,
   hasMessagingToolDeliveryToSource,
   isDirectMessageDeliveryTarget,
+  isFailedTerminalSubagentCompletion,
   isGatewayAgentRunPending,
 } from "./subagent-announce-completion-delivery.js";
 import {
@@ -199,7 +200,7 @@ export async function sendSubagentAnnounceDirectly(params: {
         ? subagentCompletionEvents[0]
         : undefined;
     const hasFailedTrustedSubagentCompletion =
-      trustedCompletionEvent !== undefined && trustedCompletionEvent.status !== "ok";
+      isFailedTerminalSubagentCompletion(trustedCompletionEvent);
     const hasRequiredSubagentNoOutputCompletion =
       params.expectsCompletionMessage &&
       isSubagentCompletion &&

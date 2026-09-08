@@ -109,6 +109,42 @@ describe("subagent run wait disposition", () => {
     expect(completions[0]?.outcome).toEqual({ status: "timeout", disposition: "exited" });
   });
 
+  // Each case carries the wait status that stop reason actually presents. An
+  // `rpc` stop is only a cancellation when the wait itself is not ok, because a
+  // model/ACP "stop" on a successful wait is an ordinary completion; `aborted`
+  // and `superseded` are cancellations on their reason alone.
+  it.each([
+    { stopReason: "rpc", status: "error" },
+    { stopReason: "aborted", status: "ok" },
+    { stopReason: "superseded", status: "ok" },
+  ] as const)(
+    "retains killed disposition from a $stopReason cancellation snapshot",
+    async ({ stopReason, status }) => {
+      const startedAt = Date.now() - 1_000;
+      const entry = createRunningEntry(startedAt);
+      const { manager, completions, waitExpiries } = createWaitManager({
+        entry,
+        wait: { status, startedAt, endedAt: startedAt + 500, stopReason },
+      });
+
+      await manager.waitForSubagentCompletion(RUN_ID, 50, entry);
+
+      expect(waitExpiries).toHaveLength(0);
+      expect(completions).toHaveLength(1);
+      expect(completions[0]).toMatchObject({
+        reason: "subagent-killed",
+        outcome: {
+          status: "error",
+          disposition: "killed",
+          error: "subagent run terminated",
+          startedAt,
+          endedAt: startedAt + 500,
+          elapsedMs: 500,
+        },
+      });
+    },
+  );
+
   it("re-arms the wait after a transient provisional-expiry publication failure", async () => {
     const entry = createRunningEntry(Date.now() - (RUN_TIMEOUT_SECONDS + 1) * 1_000);
     let attempts = 0;

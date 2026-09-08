@@ -524,7 +524,9 @@ export class SubagentWaitManager {
         ? "subagent run terminated"
         : (waitTerminalOutcome?.error ?? rawWaitError);
       const baseOutcome: SubagentRunOutcome =
-        waitStatus === "error" ? { status: "error", error: waitError } : { status: "ok" };
+        waitStatus === "error"
+          ? { status: "error", error: waitError, ...(waitAborted ? { disposition: "killed" } : {}) }
+          : { status: "ok" };
       const outcome = withSubagentOutcomeTiming(baseOutcome, {
         startedAt: observedStartedAt ?? entry.execution.startedAt,
         endedAt,

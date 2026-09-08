@@ -77,16 +77,22 @@ function resolveTextCompletionDirectFallback(
   return undefined;
 }
 
+/** A provisional wait timeout is not evidence that the child failed. */
+export function isFailedTerminalSubagentCompletion(event: AgentInternalEvent | undefined): boolean {
+  return (
+    event?.type === "task_completion" &&
+    event.source === "subagent" &&
+    event.status !== "ok" &&
+    event.disposition !== "still-running"
+  );
+}
+
 export function hasFailedSubagentNoOutputCompletion(
   events: readonly AgentInternalEvent[] | undefined,
 ) {
   return (
     events?.some(
-      (event) =>
-        event.type === "task_completion" &&
-        event.source === "subagent" &&
-        event.status !== "ok" &&
-        event.result.trim() === "(no output)",
+      (event) => isFailedTerminalSubagentCompletion(event) && event.result.trim() === "(no output)",
     ) === true
   );
 }

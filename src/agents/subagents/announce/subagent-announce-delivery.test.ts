@@ -2050,6 +2050,64 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     expect(sendMessage).toHaveBeenCalledTimes(1);
   });
 
+  // Wait expiry observes only the waiter, not failure of its child. Exercise
+  // the actual DM fallback after the requester supplies no delivered update.
+  it.each([
+    { response: "silent", disposition: "still-running", failedChild: false },
+    { response: "synthesis error", disposition: "still-running", failedChild: false },
+    { response: "silent", disposition: "exited", failedChild: true },
+    { response: "synthesis error", disposition: "exited", failedChild: true },
+    { response: "silent", disposition: "killed", failedChild: true },
+    { response: "synthesis error", disposition: "killed", failedChild: true },
+  ] as const)(
+    "distinguishes provisional expiry from terminal failure for $response / $disposition",
+    async ({ response, disposition, failedChild }) => {
+      const requesterError = "requester synthesis unavailable";
+      const callGateway = createGatewayMock({ result: { payloads: [{ text: "NO_REPLY" }] } });
+      if (response === "synthesis error") {
+        vi.mocked(callGateway).mockRejectedValue(new Error(requesterError));
+      }
+      const sendMessage = createSendMessageMock();
+      const childSessionKey = "agent:worker:subagent:provisional-expiry";
+      const result = await deliverDiscordDirectMessageCompletion({
+        callGateway,
+        sendMessage,
+        sourceTool: "subagent_announce",
+        sourceSessionKey: childSessionKey,
+        internalEvents: taskCompletionEvents({
+          childSessionKey,
+          childSessionId: "provisional-expiry-session",
+          status: "timeout",
+          statusLabel: failedChild ? "timed out" : "wait expired; child stop NOT observed",
+          disposition,
+          result: failedChild
+            ? "(no output)"
+            : "(no output observed before this wait expired; the child may still be working — re-check before acting on this)",
+        }),
+      });
+
+      expect(callGateway).toHaveBeenCalledOnce();
+      if (failedChild) {
+        expect(sendMessage).toHaveBeenCalledOnce();
+        expect(mockCallArg(sendMessage, 0, 0).content).toBe(
+          "A delegated task failed before it could report a result. Please retry the task.",
+        );
+        expectRecordFields(result, { delivered: true, path: "direct" });
+      } else {
+        expect(sendMessage).not.toHaveBeenCalled();
+        // An unobserved stop is neither a failed child nor a delivery receipt.
+        expectRecordFields(result, { delivered: false, path: "direct" });
+        expect(result.requesterVisibleFinalDelivered).toBeUndefined();
+        if (response === "synthesis error") {
+          expect(result.disposition).toBe("retryable");
+          expect(result.error).toContain(requesterError);
+        } else {
+          expect(result.reason).toBe("message_tool_delivery_missing");
+        }
+      }
+    },
+  );
+
   it("delivers a generic notice for failed subagent placeholder output", async () => {
     const callGateway = createPayloadGatewayMock();
     const sendMessage = createSendMessageMock();
