@@ -8,12 +8,13 @@ import { styleMap } from "lit/directives/style-map.js";
 import { t } from "../../../i18n/index.ts";
 import { normalizeMessage } from "../../../lib/chat/message-normalizer.ts";
 import { persistedMessageEntryId } from "../chat-thread-items.ts";
-import { resolveMessageReplyText } from "./chat-message-markdown.ts";
+import { resolveMessageDisplayMarkdown } from "./chat-message-text.ts";
 import type { ChatTranscriptSession } from "./chat-transcript-session.ts";
 
-const MAX_POSITION_MARKERS = 10;
+// At 8px per mark, 32 landmarks keep the rail at most 256px tall. Longer
+// conversations sample evenly while retaining both endpoints and keyboard focus.
+const MAX_POSITION_MARKERS = 32;
 const PREVIEW_LENGTH = 140;
-const PROXIMITY_RADIUS = 3;
 
 type RailInteraction = {
   hoveredId: string | null;
@@ -125,16 +126,19 @@ class ChatPositionRailDirective extends AsyncDirective {
     // Resolve previews only for the bounded set of visible landmarks.
     const markers = indexes.map((candidateIndex, index) => {
       const candidate = candidates[candidateIndex]!;
-      const role = normalizeMessage(candidate.message).role;
+      const normalized = normalizeMessage(candidate.message);
+      const role = normalized.role;
       return {
         id: candidate.id,
+        user: role === "user",
+        ordinal: candidateIndex + 1,
         label: t(
           role === "user"
             ? "chat.thread.positionUserMessage"
             : "chat.thread.positionAssistantMessage",
         ),
         preview: truncateUtf16Safe(
-          resolveMessageReplyText(candidate.message).replace(/\s+/g, " ").trim(),
+          resolveMessageDisplayMarkdown(candidate.message, normalized).replace(/\s+/g, " ").trim(),
           PREVIEW_LENGTH,
         ),
         position: `${((index + 0.5) / count) * 100}%`,
@@ -147,7 +151,6 @@ class ChatPositionRailDirective extends AsyncDirective {
       : markers.find((marker) => marker.id === (interaction.hoveredId ?? interaction.focusedId));
     const rovingMarker =
       markers.find((marker) => marker.id === interaction.rovingId) ?? activeMarker;
-    const previewIndex = previewMarker ? markers.indexOf(previewMarker) : -1;
     const moveFocus = (event: KeyboardEvent, index: number) => {
       const nextIndex =
         event.key === "Home"
@@ -187,22 +190,13 @@ class ChatPositionRailDirective extends AsyncDirective {
             markers,
             (marker) => marker.id,
             (marker, index) => {
-              const proximity =
-                previewIndex < 0
-                  ? 0
-                  : Math.max(0, 1 - Math.abs(index - previewIndex) / PROXIMITY_RADIUS);
               return html`
                 <button
-                  class="chat-position-rail__marker ${marker.id === activeMarker.id ? "chat-position-rail__marker--current" : ""}"
-                  style=${styleMap({
-                    "--chat-position-marker": marker.position,
-                    "--chat-position-proximity-opacity": String(0.18 + 0.72 * proximity),
-                    "--chat-position-proximity-width": `${2 + Math.round(12 * proximity)}px`,
-                  })}
+                  class="chat-position-rail__marker ${marker.user ? "chat-position-rail__marker--user" : ""} ${marker.id === activeMarker.id ? "chat-position-rail__marker--current" : ""}"
                   type="button"
                   data-position-marker-id=${marker.id}
                   tabindex=${marker.id === rovingMarker.id ? "0" : "-1"}
-                  aria-label=${t("chat.thread.positionMarker", { position: String(index + 1), count: String(count), label: marker.label })}
+                  aria-label=${t("chat.thread.positionMarker", { position: String(marker.ordinal), count: String(candidates.length), label: marker.label })}
                   aria-description=${`${marker.preview}. ${t("chat.thread.positionMarkerHint")}`}
                   aria-current=${marker.id === activeMarker.id ? "true" : "false"}
                   @pointerenter=${() => {
@@ -231,7 +225,6 @@ class ChatPositionRailDirective extends AsyncDirective {
                   }}
                   @click=${() => transcript.revealMessage(marker.id)}
                 >
-                  <span class="chat-position-rail__dot" aria-hidden="true"></span>
                   <span class="chat-position-rail__tick" aria-hidden="true"></span>
                 </button>
               `;
@@ -247,7 +240,13 @@ class ChatPositionRailDirective extends AsyncDirective {
                     style=${styleMap({ "--chat-position-preview": previewMarker.position })}
                   >
                     <span class="chat-position-rail__preview-label">${previewMarker.label}</span>
-                    <span class="chat-position-rail__preview-copy">${previewMarker.preview}</span>
+                    ${
+                      previewMarker.preview
+                        ? html`<span class="chat-position-rail__preview-copy"
+                            >${previewMarker.preview}</span
+                          >`
+                        : html`<span class="chat-position-rail__preview-skeleton skeleton"></span>`
+                    }
                   </div>
                 `
               : nothing

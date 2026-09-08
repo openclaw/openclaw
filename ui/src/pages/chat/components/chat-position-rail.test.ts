@@ -143,7 +143,7 @@ describe("conversation position rail", () => {
   });
 
   it("keeps focused previews after pointer exit and resets interaction when the session changes", () => {
-    const messages = Array.from({ length: 12 }, (_, index) =>
+    const messages = Array.from({ length: 40 }, (_, index) =>
       message(
         `message-${index}`,
         index % 2 ? "assistant" : "user",
@@ -166,12 +166,12 @@ describe("conversation position rail", () => {
     try {
       rerender();
       transcript.hostConnected();
-      expect(markers()).toHaveLength(10);
+      expect(markers()).toHaveLength(32);
       expect(preview()).toBeUndefined();
       markers()[4]!.focus();
       expect(preview()).toContain("Checkpoint 5");
       markers()[2]!.dispatchEvent(new Event("pointerenter"));
-      expect(preview()).toContain("Checkpoint 2");
+      expect(preview()).toContain("Checkpoint 3");
       container.querySelector(".chat-position-rail")!.dispatchEvent(new Event("pointerleave"));
       expect(preview()).toContain("Checkpoint 5");
       markers()[4]!.dispatchEvent(
@@ -180,9 +180,13 @@ describe("conversation position rail", () => {
       expect(document.activeElement).toBe(markers()[5]);
       expect(preview()).toContain("Checkpoint 6");
       const focused = document.activeElement;
-      props.messages = [...messages, message("message-12", "user", "Checkpoint 12", 13)];
+      props.messages = [
+        ...messages,
+        message("message-40", "user", "Checkpoint 40", 41),
+        message("message-41", "assistant", "Checkpoint 41", 42),
+      ];
       rerender();
-      expect(markers()).toHaveLength(10);
+      expect(markers()).toHaveLength(32);
       expect(document.activeElement).toBe(focused);
       expect(preview()).toContain("Checkpoint 6");
       focused!.dispatchEvent(

@@ -1,6 +1,9 @@
 import { expect, it } from "vitest";
 import { SIDEBAR_GEOMETRY_COMMIT_EVENT } from "../pages/chat/sidebar-layout.ts";
-import { controlUiBundledSettingsStorageKey } from "../test-helpers/control-ui-e2e.ts";
+import {
+  controlUiBundledSettingsStorageKey,
+  createControlUiMockSameOriginGatewayScript,
+} from "../test-helpers/control-ui-e2e.ts";
 import {
   captureUiProof,
   captureUiProofEnabled,
@@ -27,25 +30,74 @@ suite.define(() => {
         async ({ page }) => {
           const pageErrors: string[] = [];
           page.on("pageerror", (error) => pageErrors.push(error.message));
-          const messages = Array.from({ length: 72 }, (_, index) => ({
+          const messages = Array.from({ length: 240 }, (_, index) => ({
             __openclaw: { id: `position-rail-${index}`, seq: index + 1 },
-            content: [{ text: `Transcript checkpoint ${index}`, type: "text" }],
+            content:
+              index === 0
+                ? [
+                    {
+                      type: "image",
+                      source: {
+                        type: "base64",
+                        media_type: "image/png",
+                        data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jZ1sAAAAASUVORK5CYII=",
+                      },
+                    },
+                  ]
+                : [{ text: `Transcript checkpoint ${index}`, type: "text" }],
             role: index % 2 === 0 ? "user" : "assistant",
             timestamp: Date.UTC(2026, 8, 4, 12, index),
           }));
           await installMockGateway(page, { historyMessages: messages });
+          await page.addInitScript(createControlUiMockSameOriginGatewayScript());
+          await page.addInitScript(
+            ({ key, mode }) => {
+              localStorage.setItem(
+                key,
+                JSON.stringify({
+                  ...JSON.parse(localStorage.getItem(key) ?? "{}"),
+                  theme: mode,
+                  themeMode: mode,
+                }),
+              );
+            },
+            { key: controlUiBundledSettingsStorageKey(suite.server.baseUrl), mode: colorScheme },
+          );
           await page.goto(`${suite.server.baseUrl}chat`);
           const transcript = page.locator(".chat-thread");
           await transcript
             .locator(".chat-virtual-row")
-            .getByText("Transcript checkpoint 71", { exact: true })
+            .getByText("Transcript checkpoint 239", { exact: true })
             .waitFor();
 
           const rail = page.locator(".chat-position-rail");
           const markers = rail.locator(".chat-position-rail__marker");
           const preview = rail.locator(".chat-position-rail__preview-copy");
           await markers.first().waitFor();
-          await expect.poll(() => markers.count()).toBe(10);
+          await expect.poll(() => markers.count()).toBe(32);
+          const track = rail.locator(".chat-position-rail__track");
+          const trackBounds = (await track.boundingBox())!;
+          const transcriptBounds = (await transcript.boundingBox())!;
+          const contentBounds = (await transcript.locator(".chat-thread-inner").boundingBox())!;
+          expect(trackBounds.x).toBeGreaterThanOrEqual(transcriptBounds.x);
+          expect(trackBounds.x + trackBounds.width).toBeLessThan(contentBounds.x);
+          expect(trackBounds.height).toBeCloseTo(256, 2);
+          expect(
+            Math.abs(
+              trackBounds.y +
+                trackBounds.height / 2 -
+                (transcriptBounds.y + transcriptBounds.height / 2),
+            ),
+          ).toBeLessThan(2);
+          const markBounds = await markers.evaluateAll((items) =>
+            items.map((item) => item.getBoundingClientRect().toJSON()),
+          );
+          for (let index = 1; index < markBounds.length; index++) {
+            expect(markBounds[index]!.y - markBounds[index - 1]!.y).toBeGreaterThanOrEqual(6);
+            expect(markBounds[index]!.y).toBeCloseTo(markBounds[index - 1]!.bottom, 2);
+          }
+          expect(await markers.first().getAttribute("aria-label")).toContain("1 of 240");
+          expect(await markers.last().getAttribute("aria-label")).toContain("240 of 240");
           expect(await preview.count()).toBe(0);
           expect(await rail.locator('[role="status"]').count()).toBe(0);
           await captureUiProof(suite, page, "chat-position-rail", "idle.png");
@@ -57,12 +109,12 @@ suite.define(() => {
           await transcript.evaluate((element) => {
             element.scrollTop = element.scrollHeight;
           });
-          await expect.poll(currentMarkerIndex).toBe(9);
+          await expect.poll(currentMarkerIndex).toBe(31);
           await transcript.evaluate((element) => {
             element.scrollTop = Math.round((element.scrollHeight - element.clientHeight) / 2);
           });
           await expect.poll(currentMarkerIndex).toBeGreaterThan(0);
-          await expect.poll(currentMarkerIndex).toBeLessThan(9);
+          await expect.poll(currentMarkerIndex).toBeLessThan(31);
           await transcript.evaluate((element) => {
             element.scrollTop = 0;
           });
@@ -71,7 +123,7 @@ suite.define(() => {
           const composer = page.locator(".agent-chat__composer-combobox textarea");
           await composer.focus();
           await markers.nth(4).hover();
-          await expect.poll(() => preview.textContent()).toContain("Transcript checkpoint 32");
+          await expect.poll(() => preview.textContent()).toContain("Transcript checkpoint 31");
           await expect
             .poll(() =>
               markers
@@ -82,25 +134,31 @@ suite.define(() => {
                   ),
                 ),
             )
-            .toBeGreaterThan(8);
+            .toBe(16);
           const hoveredAppearance = await markers.nth(4).evaluate((marker) => {
-            const markerStyle = getComputedStyle(marker.querySelector(".chat-position-rail__dot")!);
-            const tickStyle = getComputedStyle(marker.querySelector(".chat-position-rail__tick")!);
+            const tick = marker.querySelector(".chat-position-rail__tick")!;
+            const style = getComputedStyle(tick);
             return {
-              background: markerStyle.backgroundColor,
-              opacity: markerStyle.opacity,
-              ring: markerStyle.boxShadow,
-              tickWidth: Number.parseFloat(tickStyle.width),
-              targetWidth: marker.getBoundingClientRect().width,
-              targetHeight: marker.getBoundingClientRect().height,
+              color: style.backgroundColor,
+              width: Number.parseFloat(style.width),
+              height: Number.parseFloat(style.height),
+              ring: style.boxShadow,
             };
           });
-          expect(hoveredAppearance.opacity).toBe("1");
-          expect(hoveredAppearance.background).not.toBe("rgba(0, 0, 0, 0)");
-          expect(hoveredAppearance.ring).not.toBe("none");
-          expect(hoveredAppearance.tickWidth).toBeGreaterThan(8);
-          expect(hoveredAppearance.targetWidth).toBeGreaterThanOrEqual(24);
-          expect(hoveredAppearance.targetHeight).toBeGreaterThanOrEqual(24);
+          expect(hoveredAppearance.width).toBe(16);
+          expect(hoveredAppearance.height).toBe(2);
+          expect(hoveredAppearance.ring).toBe("none");
+          const activeColor = () =>
+            rail
+              .locator('[aria-current="true"] .chat-position-rail__tick')
+              .evaluate((element) => getComputedStyle(element).backgroundColor);
+          expect(hoveredAppearance.color).toBe(await activeColor());
+          expect(
+            await markers
+              .nth(5)
+              .locator(".chat-position-rail__tick")
+              .evaluate((element) => getComputedStyle(element).backgroundColor),
+          ).toBe(await activeColor());
           await captureUiProof(suite, page, "chat-position-rail", "scroll-follow-hover.png");
 
           const previewBounds = await preview.boundingBox();
@@ -110,7 +168,7 @@ suite.define(() => {
             previewBounds!.y + previewBounds!.height / 2,
             { steps: 20 },
           );
-          expect(await preview.textContent()).toContain("Transcript checkpoint 32");
+          expect(await preview.textContent()).toContain("Transcript checkpoint 31");
           await captureUiProof(suite, page, "chat-position-rail", "hover-reading.png");
           await page.keyboard.press("Escape");
           await expect.poll(() => preview.count()).toBe(0);
@@ -120,9 +178,28 @@ suite.define(() => {
 
           await page.mouse.move(600, 100);
           await markers.nth(4).hover();
-          await expect.poll(() => preview.textContent()).toContain("Transcript checkpoint 32");
+          await expect.poll(() => preview.textContent()).toContain("Transcript checkpoint 31");
           await page.mouse.move(600, 100);
           await expect.poll(() => preview.count()).toBe(0);
+          await expect
+            .poll(async () =>
+              markers
+                .nth(4)
+                .locator(".chat-position-rail__tick")
+                .evaluate((element) => Number.parseFloat(getComputedStyle(element).width)),
+            )
+            .toBe(8);
+          expect(
+            await markers
+              .nth(4)
+              .locator(".chat-position-rail__tick")
+              .evaluate((element) => getComputedStyle(element).backgroundColor),
+          ).not.toBe(await activeColor());
+          await markers.first().hover();
+          const skeleton = rail.locator(".chat-position-rail__preview-skeleton");
+          await skeleton.waitFor();
+          expect(await skeleton.boundingBox()).not.toBeNull();
+          await page.mouse.move(600, 100);
           await markers.nth(5).focus();
           await expect.poll(() => preview.textContent()).toContain("Transcript checkpoint 39");
           await markers.nth(5).press("ArrowDown");
@@ -132,10 +209,10 @@ suite.define(() => {
                 () => document.activeElement?.getAttribute("data-position-marker-id") ?? null,
               ),
             )
-            .toBe("position-rail-47");
-          await expect.poll(() => preview.textContent()).toContain("Transcript checkpoint 47");
-          await markers.nth(6).press("Enter");
-          const revealed = transcript.locator('.chat-bubble[data-entry-id="position-rail-47"]');
+            .toBe("position-rail-46");
+          await expect.poll(() => preview.textContent()).toContain("Transcript checkpoint 46");
+          await markers.nth(6).click();
+          const revealed = transcript.locator('.chat-bubble[data-entry-id="position-rail-46"]');
           await expect
             .poll(() =>
               revealed.evaluate((element) => {
@@ -156,7 +233,7 @@ suite.define(() => {
           await expect.poll(currentMarkerIndex).toBe(0);
           await markers.first().press("End");
           await markers.last().press("Enter");
-          await expect.poll(currentMarkerIndex).toBe(9);
+          await expect.poll(currentMarkerIndex).toBe(31);
 
           // Pane-local width matters even inside an otherwise wide desktop.
           await transcript.evaluate((element) => {
@@ -171,13 +248,16 @@ suite.define(() => {
           await page.setViewportSize({ height: 900, width: 900 });
           await markers.first().waitFor({ state: "hidden" });
           await captureUiProof(suite, page, "chat-position-rail", "narrow-pane.png");
+          await page.setViewportSize({ height: 844, width: 390 });
+          await markers.first().waitFor({ state: "hidden" });
+          await captureUiProof(suite, page, "chat-position-rail", "mobile.png");
           await page.setViewportSize({ height: 900, width: 1440 });
           await markers.first().waitFor({ state: "visible" });
           await page.emulateMedia({ reducedMotion: "reduce" });
           expect(
             await markers
               .first()
-              .locator(".chat-position-rail__dot")
+              .locator(".chat-position-rail__tick")
               .evaluate((element) =>
                 Number.parseFloat(getComputedStyle(element).transitionDuration),
               ),
@@ -198,7 +278,7 @@ suite.define(() => {
               )
               .toBe(width);
             await page.goto(`${suite.server.baseUrl}chat`);
-            await transcript.locator(".chat-virtual-row").first().waitFor();
+            await transcript.locator('.chat-bubble[data-entry-id="position-rail-239"]').waitFor();
             await expect
               .poll(() =>
                 transcript.evaluate((element) =>
@@ -210,7 +290,7 @@ suite.define(() => {
             if (width === "48rem") {
               const inner = await transcript.locator(".chat-thread-inner").boundingBox();
               const marker = await markers.first().boundingBox();
-              expect(marker!.x - (inner!.x + inner!.width)).toBeGreaterThanOrEqual(8);
+              expect(inner!.x - (marker!.x + marker!.width)).toBeGreaterThanOrEqual(10);
             }
             await captureUiProof(
               suite,

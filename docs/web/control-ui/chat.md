@@ -51,6 +51,8 @@ Capability toggles stay disabled until the Gateway, session, and runtime config 
 
 ## Chat behavior
 
+On wide desktop panes, a compact rail of horizontal marks sits in the transcript's left gutter. Hover for a short message preview, or click a mark to jump to that message. Tab focuses the rail; arrow keys move between marks, Enter or Space jumps, Home and End select the endpoints, and Escape dismisses the preview. The current section stays highlighted while you scroll. Long conversations show up to 32 evenly spaced landmarks, including the first and last messages. The rail stays hidden on mobile, in narrow or short panes, and when your saved message width leaves too little gutter space. Reduced motion disables mark transitions.
+
 Session dashboards and the Background tasks rail follow the selected conversation's agent, including when multiple agents each use a `global` session. Split panes keep their owners separate; panes showing the same agent and conversation share dashboard updates.
 
 Automatic session titles describe the topic or intended task in your first message.
