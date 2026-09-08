@@ -154,7 +154,9 @@ describe("read-only snapshot deadline", () => {
         mode === "sync"
           ? prepareSqliteReadOnlyLocationSync(source)
           : prepareSqliteReadOnlyLocation(source);
-      await expect(run()).rejects.toThrow(/timed out after 30 seconds.*Stop the Gateway service/);
+      await expect(run()).rejects.toThrow(
+        /timed out after 31 seconds \(budget for 26 B\).*Stop the Gateway service/,
+      );
       expect(performance.now() - started).toBeLessThan(33_000);
       expect(fs.readFileSync(source, "utf8")).toBe("source must stay unchanged");
       expect(fs.readdirSync(path.join(root, "openclaw"))).toEqual([]);

@@ -15,9 +15,12 @@ import {
   WARM_IMAGE_COMMAND_TIMEOUT_MS,
 } from "./crabbox-worker-timeouts.js";
 import {
+  createCheckpointCommands,
   parseCheckpointAvailability,
   parseForkedCheckpoint,
   parseCreatedCheckpoint,
+  type CheckpointContext,
+  type MaintenanceContext,
 } from "./crabbox-worker-warm-image-checkpoint.js";
 import { SCRUB_WORKER_STATE } from "./crabbox-worker-warm-image-scrub.js";
 import {
@@ -36,11 +39,7 @@ import {
 } from "./crabbox-worker-warm-image-store.js";
 
 type CrabboxProfile = ReturnType<typeof parseCrabboxProfile>;
-type CheckpointContext = {
-  binary: string;
-  signal?: AbortSignal;
-  assertCurrent?: () => void;
-};
+type RetirementContext = CheckpointContext | MaintenanceContext;
 type LeaseContext = CheckpointContext & {
   id: string;
   provider: string;
@@ -65,7 +64,7 @@ export function createCrabboxWarmImageManager(dependencies: {
   let store: ReturnType<typeof openCrabboxWarmImageStore> | undefined;
   const warned = new Set<string>();
   const openStore = () => (store ??= openCrabboxWarmImageStore());
-  const assertCurrent = (context: CheckpointContext) => {
+  const assertCurrent = (context: RetirementContext) => {
     context.assertCurrent?.();
     context.signal?.throwIfAborted();
   };
@@ -80,28 +79,7 @@ export function createCrabboxWarmImageManager(dependencies: {
       dependencies.warn(message);
     }
   };
-  const checkpointCommand = async (
-    context: CheckpointContext,
-    action: "create" | "delete" | "fork" | "inspect" | "scrub",
-    args: string[],
-    timeoutMs = WARM_IMAGE_COMMAND_TIMEOUT_MS,
-    input?: string,
-  ): Promise<string> => {
-    assertCurrent(context);
-    const result = await runCrabboxCommand({
-      action: action === "scrub" ? action : `checkpoint ${action}`,
-      args,
-      binary: context.binary,
-      runCommand: dependencies.runCommand,
-      timeoutMs,
-      ...(context.signal ? { signal: context.signal } : {}),
-      ...(input === undefined ? {} : { input }),
-    });
-    if (result.termination !== "exit" || result.code !== 0) {
-      throw crabboxCommandError(action === "scrub" ? action : `checkpoint ${action}`, result);
-    }
-    return result.stdout;
-  };
+  const { checkpointCommand, deleteCheckpoint } = createCheckpointCommands(dependencies.runCommand);
   const sameImage = (left: WarmImageRecord | undefined, right: WarmImageRecord | undefined) =>
     left?.checkpointId === right?.checkpointId && left?.createdAtMs === right?.createdAtMs;
   const pinned = (record: WarmProfileRecord, checkpointId: string) =>
@@ -134,10 +112,10 @@ export function createCrabboxWarmImageManager(dependencies: {
   };
 
   const retireImage = async (
-    context: CheckpointContext,
+    context: RetirementContext,
     key: string,
     record: WarmProfileRecord,
-    timeoutMs = WARM_IMAGE_COMMAND_TIMEOUT_MS,
+    remainingMs: () => number = () => WARM_IMAGE_COMMAND_TIMEOUT_MS,
   ): Promise<void> => {
     const operation = record.operation;
     if (operation?.type !== "retire" || pinned(record, operation.checkpointId)) {
@@ -152,12 +130,9 @@ export function createCrabboxWarmImageManager(dependencies: {
       return;
     }
     try {
-      await checkpointCommand(
-        context,
-        "delete",
-        ["checkpoint", "delete", operation.checkpointId],
-        timeoutMs,
-      );
+      if (!(await deleteCheckpoint(context, operation.checkpointId, remainingMs))) {
+        return;
+      }
     } catch (error) {
       assertCurrent(context);
       if (matches(openStore().lookup(key))) {
@@ -183,10 +158,10 @@ export function createCrabboxWarmImageManager(dependencies: {
   };
 
   const deleteImage = async (
-    context: CheckpointContext,
+    context: RetirementContext,
     key: string,
     record: WarmProfileRecord,
-    timeoutMs = WARM_IMAGE_COMMAND_TIMEOUT_MS,
+    remainingMs: () => number = () => WARM_IMAGE_COMMAND_TIMEOUT_MS,
   ) => {
     if (!record.image || record.operation || pinned(record, record.image.checkpointId)) {
       return;
@@ -202,11 +177,11 @@ export function createCrabboxWarmImageManager(dependencies: {
         JSON.stringify(current) === JSON.stringify(record) ? retiring : undefined,
       )
     ) {
-      await retireImage(context, key, retiring, timeoutMs);
+      await retireImage(context, key, retiring, remainingMs);
     }
   };
 
-  const collectImages = async (context: CheckpointContext, phase: "allocation" | "teardown") => {
+  const collectImages = async (context: RetirementContext, phase: "allocation" | "teardown") => {
     const deadline = Date.now() + WARM_IMAGE_COMMAND_TIMEOUT_MS;
     for (const { key, value } of openStore().entries()) {
       assertCurrent(context);
@@ -228,7 +203,7 @@ export function createCrabboxWarmImageManager(dependencies: {
       if (remaining() <= 0) {
         break;
       }
-      await retireImage(context, key, value, remaining());
+      await retireImage(context, key, value, remaining);
       const current = openStore().lookup(key);
       if (
         current?.image &&
@@ -237,7 +212,7 @@ export function createCrabboxWarmImageManager(dependencies: {
         Date.now() - current.image.lastUsedAtMs >= WARM_IMAGE_RETENTION_MS &&
         remaining() > 0
       ) {
-        await deleteImage(context, key, current, remaining());
+        await deleteImage(context, key, current, remaining);
       }
     }
   };
@@ -252,8 +227,8 @@ export function createCrabboxWarmImageManager(dependencies: {
       if (openStore().entries().length < WARM_IMAGE_MAX_ENTRIES) {
         return;
       }
-      const remaining = deadline - Date.now();
-      if (remaining <= 0) {
+      const remaining = () => deadline - Date.now();
+      if (remaining() <= 0) {
         break;
       }
       if (value.image) {
@@ -413,10 +388,13 @@ export function createCrabboxWarmImageManager(dependencies: {
   };
 
   return {
-    maintain: async (context: CheckpointContext) => {
+    maintain: async (context: MaintenanceContext) => {
       assertCurrent(context);
       assertCrabboxWarmImageMigrationReady();
-      await collectImages(context, "teardown");
+      await collectImages(
+        { ...context, binaries: [...new Set(context.binaries)].toSorted() },
+        "teardown",
+      );
     },
     lookupLease,
     markPrepared: (id: string, baseCommit: string) => markPhase(id, "prepared", baseCommit),

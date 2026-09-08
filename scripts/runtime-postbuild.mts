@@ -22,6 +22,13 @@ import {
   copyStaticExtensionAssets,
   copyStaticExtensionAssetsToRuntimeOverlay,
 } from "./lib/static-extension-assets.mts";
+import {
+  isUpdateCompatibilityChunk,
+  listUpdateCompatibilityChunkPaths,
+  readUpdateCompatibilityInventory,
+  UPDATE_COMPATIBILITY_INVENTORY_FILE,
+  writeUpdateCompatibilityChunks,
+} from "./lib/update-compat-chunks.mts";
 import { writeTextFileIfChanged } from "./runtime-postbuild-shared.mjs";
 import { stageBundledPluginRuntime } from "./stage-bundled-plugin-runtime.mts";
 import { writeBuildInfo } from "./write-build-info.ts";
@@ -54,6 +61,7 @@ const LEGACY_UPDATE_NODE_RUNNER_COMPAT_CHUNK = [
 ].join("\n");
 
 const ROOT = resolveRepoRoot(import.meta.url);
+const UPDATE_COMPATIBILITY_INVENTORY = path.join(ROOT, "scripts/lib/update-compat-inventory.json");
 const ROOT_RUNTIME_ALIAS_PATTERN = /^(?<base>.+\.(?:runtime|contract))-[A-Za-z0-9_-]+\.m?js$/u;
 const ROOT_STABLE_RUNTIME_ALIAS_PATTERN = /^.+\.(?:runtime|contract)\.js$/u;
 const ROOT_RUNTIME_IMPORT_SPECIFIER_PATTERN =
@@ -196,9 +204,9 @@ const LEGACY_PLUGIN_INSTALL_RUNTIME_COMPAT_ALIASES = [
 }));
 /** Compatibility chunks for old updater and CLI exit modules after package replacement. */
 const LEGACY_CLI_EXIT_COMPAT_CHUNKS = [
-  // v2026.8.2, the exact d413210 build, and v2026.9.1 load these after replacing dist/.
+  // v2026.8.2 and the exact d413210 build load these after replacing dist/.
   // Remove only after the source artifacts fall outside the supported upgrade window.
-  ...["shared-Y6bNiw2w.js", "shared-DTaQo6Hi.js", "shared-DFJEouXv.js"].map((fileName) => ({
+  ...["shared-Y6bNiw2w.js", "shared-DTaQo6Hi.js"].map((fileName) => ({
     dest: `dist/${fileName}`,
     contents: LEGACY_UPDATE_NODE_RUNNER_COMPAT_CHUNK,
   })),
@@ -231,6 +239,13 @@ function collectStableRootRuntimeAliasCandidates(distDir: string, fsImpl: typeof
     const match = entry.name.match(ROOT_RUNTIME_ALIAS_PATTERN);
     if (!match?.groups?.base) {
       continue;
+    }
+    try {
+      if (isUpdateCompatibilityChunk(fsImpl.readFileSync(path.join(distDir, entry.name), "utf8"))) {
+        continue;
+      }
+    } catch {
+      // Unreadable candidates still participate in ambiguity detection below.
     }
     const aliasFileName = `${match.groups.base}.js`;
     const candidates = candidatesByAlias.get(aliasFileName) ?? [];
@@ -354,6 +369,10 @@ export function listCoreRuntimePostBuildOutputs(
     ...listStableRootRuntimeAliasOutputs(params),
     ...listLegacyRootRuntimeCompatOutputs(params),
     ...listLegacyCliExitCompatOutputs(params),
+    `dist/${UPDATE_COMPATIBILITY_INVENTORY_FILE}`,
+    ...listUpdateCompatibilityChunkPaths(
+      readUpdateCompatibilityInventory(UPDATE_COMPATIBILITY_INVENTORY),
+    ).map((fileName) => `dist/${fileName}`),
   ].toSorted((left, right) => left.localeCompare(right));
 }
 
@@ -777,6 +796,13 @@ export function runRuntimePostBuild(params: RuntimePostBuildParams = {}) {
     writeLegacyRootRuntimeCompatAliases(phaseParams),
   );
   runPhase("legacy CLI exit compat chunks", () => writeLegacyCliExitCompatChunks(phaseParams));
+  runPhase("previous release update compat chunks", () =>
+    writeUpdateCompatibilityChunks({
+      distDir: path.join(rootDir, "dist"),
+      sourceDir: rootDir,
+      inventory: readUpdateCompatibilityInventory(UPDATE_COMPATIBILITY_INVENTORY),
+    }),
+  );
   runPhase("built plugin control-plane loads", () =>
     verifyBuiltPluginControlPlaneModules(phaseParams),
   );

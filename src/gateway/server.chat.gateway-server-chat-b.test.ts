@@ -2218,7 +2218,10 @@ describe("gateway server chat", () => {
                 string,
                 Promise<{
                   modelCatalog: ModelCatalogEntry[];
-                  metadata: { models: unknown[]; swarmEnabled: boolean };
+                  metadata: {
+                    models: import("../../packages/gateway-protocol/src/index.js").ModelChoice[];
+                    swarmEnabled: boolean;
+                  };
                 }>
               >();
               const projectAgent = (

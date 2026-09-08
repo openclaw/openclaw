@@ -33,6 +33,7 @@ import {
   writeGitHubOutput,
 } from "../../scripts/ci-changed-scope.mjs";
 import { resolveShardPlans, runShardPlans } from "../../scripts/ci-run-node-test-shard.mts";
+import { resolveChangedDockerSeedLanes } from "../../scripts/lib/ci-changed-node-test-plan.mts";
 import { createNodeTestShardBundles } from "../../scripts/lib/ci-node-test-plan.mts";
 import { visitModuleSpecifiers } from "../../scripts/lib/guard-inventory-utils.mjs";
 import { pnpmLockfileDocuments } from "../../scripts/lib/pnpm-lockfile-documents.mjs";
@@ -2826,7 +2827,9 @@ NODE
       contents: "read",
       packages: "write",
     });
-    expect(releaseWorkflow.jobs.publish.environment).toBe("docker-release");
+    expect(releaseWorkflow.jobs.approve.environment).toBe("docker-release");
+    expect(releaseWorkflow.jobs.publish.environment).toBeUndefined();
+    expect(releaseWorkflow.jobs.publish.needs).toContain("approve");
   });
 
   it("forbids moving reusable workflow references", () => {
@@ -3890,13 +3893,133 @@ NODE
         OPENCLAW_DOCKER_ALL_LANES: "${{ needs.preflight.outputs.docker_seed_lanes }}",
         OPENCLAW_DOCKER_ALL_LIVE_MODE: "skip",
         OPENCLAW_DOCKER_E2E_ALLOW_UNRELEASED_CHANGELOG: "1",
-        OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC: "openclaw@latest",
         OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS: "legacy-operator-state",
         OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE: "auto-auth",
         OPENCLAW_DOCKER_ALL_TAIL_PARALLELISM: parallelism,
       },
     });
     expect(parallelism).toContain("&& 3 || 1");
+    expect(run.env).not.toHaveProperty("OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC");
+    const baseline = job.steps.find(
+      (step: WorkflowStep) => step.name === "Resolve published Docker seed upgrade baseline",
+    ) as WorkflowStep;
+    expect(baseline.if).toBe(
+      "contains(format(' {0} ', needs.preflight.outputs.docker_seed_lanes), ' published-upgrade-survivor ')",
+    );
+    expect(baseline.env).toEqual({
+      TARGET_CONTEXT_REF: "${{ inputs.target_context_ref || github.base_ref || github.ref_name }}",
+    });
+    expect(job.steps.indexOf(baseline)).toBeLessThan(job.steps.indexOf(run));
+  });
+
+  it.each([
+    { candidate: "2026.9.3", expected: "openclaw@2026.9.2" },
+    { candidate: "2026.9.2", expected: "openclaw@2026.9.1" },
+    { candidate: "2026.9.4-beta.1", expected: "openclaw@2026.9.3" },
+    { candidate: "2026.9.3-beta.1", expected: "openclaw@2026.9.2" },
+    {
+      candidate: "2026.6.35",
+      context: "extended-stable/2026.6.33",
+      expected: "openclaw@2026.6.34",
+    },
+    { candidate: "2026.6.34", expected: undefined },
+  ])("hands Docker seed a strictly older published baseline for $candidate", (fixture) => {
+    const job = readCiWorkflow().jobs["docker-seed-e2e"];
+    const baseline = job.steps.find(
+      (step: WorkflowStep) => step.name === "Resolve published Docker seed upgrade baseline",
+    ) as WorkflowStep | undefined;
+    const run = job.steps.find(
+      (step: WorkflowStep) => step.name === "Run changed Docker seed owner lanes",
+    ) as WorkflowStep;
+    const root = mkdtempSync(path.join(tmpdir(), "openclaw-ci-upgrade-baseline-"));
+    try {
+      const bin = path.join(root, "bin");
+      const tooling = path.join(root, ".ci-harness", "scripts", "lib");
+      mkdirSync(bin);
+      mkdirSync(tooling, { recursive: true });
+      for (const name of ["release-upgrade-baseline.mjs", "release-version.mjs"]) {
+        copyFileSync(path.resolve("scripts", "lib", name), path.join(tooling, name));
+      }
+      writeFileSync(
+        path.join(root, "package.json"),
+        JSON.stringify({ version: fixture.candidate }),
+      );
+      writeFileSync(
+        path.join(root, ".ci-harness", "package.json"),
+        JSON.stringify({ version: "2026.10.1" }),
+      );
+      symlinkSync(process.execPath, path.join(bin, "node"));
+      writeFileSync(
+        path.join(bin, "npm"),
+        `#!${process.execPath}
+const args = process.argv.slice(2);
+if (JSON.stringify(args) !== JSON.stringify(["view", "openclaw", "versions", "--json", "--silent", "--prefer-online"])) process.exit(2);
+console.log(JSON.stringify(["2026.6.34", "2026.6.35", "2026.9.1", "2026.9.2", "2026.9.3", "2026.9.4-beta.1"]));
+`,
+        { mode: 0o755 },
+      );
+      writeFileSync(
+        path.join(bin, "pnpm"),
+        `#!${process.execPath}
+if (process.argv.slice(2).join(" ") !== "test:docker:all") process.exit(2);
+require("node:fs").writeFileSync("scheduler-baseline", process.env.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC ?? "missing");
+`,
+        { mode: 0o755 },
+      );
+      writeFileSync(path.join(root, "github-env"), "");
+      const inheritedBaseline = run.env?.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC;
+      const result = runWorkflowShellScript(
+        `set -euo pipefail\n${baseline?.run ?? ""}\nset -a\nsource "$GITHUB_ENV"\nset +a\n${run.run}`,
+        {
+          cwd: root,
+          env: {
+            ...process.env,
+            PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}`,
+            GITHUB_ENV: path.join(root, "github-env"),
+            OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC:
+              typeof inheritedBaseline === "string" ? inheritedBaseline : "",
+            TARGET_CONTEXT_REF: fixture.context ?? "main",
+          },
+        },
+      );
+      const receipt = path.join(root, "scheduler-baseline");
+      if (fixture.expected) {
+        expect(result.status, result.stderr).toBe(0);
+        expect(readFileSync(receipt, "utf8")).toBe(fixture.expected);
+      } else {
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain("no published stable OpenClaw baseline predates candidate");
+        expect(existsSync(receipt)).toBe(false);
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    { eventName: "pull_request" as const, production: false, expected: false },
+    { eventName: "pull_request" as const, production: true, expected: true },
+    { eventName: "push" as const, production: false, expected: true },
+  ])("routes published-upgrade proof for $eventName (production=$production)", (options) => {
+    const changedPaths = [
+      "src/commands/doctor-config-preflight.admission.process.test.ts",
+      "src/commands/doctor-config-runtime.test-support.ts",
+      ...(options.production ? ["src/commands/doctor-config-preflight.ts"] : []),
+    ];
+    const selected = resolveChangedDockerSeedLanes(changedPaths);
+    const result = runCiManifestFixture({
+      bundledPlanner: true,
+      runNode: false,
+      changedPaths,
+      eventName: options.eventName,
+      scopeEnv: { GITHUB_REF: "refs/heads/main" },
+      changedPlannerSource: `export const resolveChangedDockerSeedLanes = () => ${JSON.stringify(selected)};`,
+    });
+    expect(result.status, result.output).toBe(0);
+    expect(result.outputs.run_docker_seed_e2e).toBe(String(options.expected));
+    expect(result.outputs.docker_seed_lanes).toBe(
+      options.expected ? "published-upgrade-survivor" : "",
+    );
   });
 
   it.each([

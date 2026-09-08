@@ -223,6 +223,10 @@ also runs against a portable remote-only bridge on every platform. Native
 Python helper coverage remains separate, including macOS; these fixture gates
 do not restrict the [SSH backend's Gateway host](/gateway/sandboxing#ssh-backend).
 
+Tests that discover real bundled provider runtimes declare that prerequisite in
+`scripts/lib/vitest-build-prerequisites.mts`, including Telegram sticker-model
+selection. Local runners and CI prepare those artifacts before admitting workers.
+
 ## Local PR gate
 
 For local PR land/gate checks, run:

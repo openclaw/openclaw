@@ -63,7 +63,7 @@ suite.define(() => {
           deferredMethods: ["sessions.patch"],
           methodResponses: {
             "sessions.list": sessionList,
-            "chat.metadata": {
+            "models.list": {
               commands: [],
               models,
               accountSelection: {
@@ -161,7 +161,7 @@ suite.define(() => {
         await expect.poll(() => trigger.textContent()).toContain(personal.label);
         await gateway.resolveDeferred("sessions.patch", { ok: true });
         await gateway.setMethodResponse("sessions.list", sessionList);
-        await gateway.setMethodResponse("chat.metadata", {
+        await gateway.setMethodResponse("models.list", {
           commands: [],
           models,
           accountSelection: {

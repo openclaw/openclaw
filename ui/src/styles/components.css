@@ -3904,8 +3904,6 @@ td.data-table-key-col {
 }
 
 .agent-select__option {
-  --wa-color-neutral-fill-normal: var(--bg-hover);
-
   padding: 6px 8px;
   border-radius: var(--menu-item-radius);
   color: var(--text);

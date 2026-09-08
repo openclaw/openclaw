@@ -166,7 +166,7 @@ describe("cron preparation plugin ownership", () => {
         });
       for (const [jobId, agentId, calls] of [
         ["first", "main", 1],
-        ["first", "main", 2],
+        ["first", "main", 1],
         ["second", "main", 1],
         ["first", "other", 1],
       ] as const) {

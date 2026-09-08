@@ -2,6 +2,7 @@ import fs from "node:fs";
 import { createServer, type ServerResponse } from "node:http";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
+import { getAiTransportHost } from "@openclaw/ai";
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { resolveAgentDir } from "../../agents/agent-scope-config.js";
@@ -19,6 +20,7 @@ import { resetPreparedModelRuntimeSnapshotsForTest } from "../../agents/prepared
 import { AuthStorage } from "../../agents/sessions/auth-storage.js";
 import { ModelRegistry } from "../../agents/sessions/model-registry.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { resetPluginLoaderTestStateForTest } from "../loader.test-fixtures.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugin-metadata-lifecycle.js";
@@ -39,6 +41,8 @@ it.each([
   "prepare-throw",
   "provider-error",
   "abort",
+  "callback-drain",
+  "cancel-drain",
 ] as const)("keeps direct completion ownership coherent: %s", async (mode) => {
   const roots = createSyncSuiteTempRootTracker("runtime-llm-prepared-owner");
   const root = fs.realpathSync(roots.makeTempDir());
@@ -150,6 +154,97 @@ it.each([
       const setRuntimeKey = vi.spyOn(AuthStorage.prototype, "setRuntimeApiKey");
       const resolveModel = modelResolution.resolveModelAsync;
       const resolver = vi.spyOn(modelResolution, "resolveModelAsync");
+      const drainMode = mode === "callback-drain" || mode === "cancel-drain";
+      const workStarted = createDeferred();
+      let acceptedWorkStarted = false;
+      const finishWork = createDeferred();
+      const workSettled = createDeferred();
+      const parentWork = new AsyncWorkScope();
+      let parentDrain: Promise<void> | undefined;
+      let parentDrained = false;
+      const responseFailure = new Error("fixture response callback failure");
+      const cancellationFailure = new Error("fixture cancellation failure");
+      const transportSpies: Array<{ mockRestore: () => void }> = [];
+      if (drainMode) {
+        const { configureAiTransportRuntimeHost } =
+          await import("../../agents/ai-transport-runtime-host.js");
+        configureAiTransportRuntimeHost();
+        const pluginHost = getAiTransportHost().plugin;
+        const wrap = pluginHost.wrapSimpleCompletionStream;
+        let responses = 0;
+        transportSpies.push(
+          vi.spyOn(pluginHost, "wrapSimpleCompletionStream").mockImplementation((params) => {
+            const stream = wrap(params) ?? params.context.streamFn;
+            return (model, context, options) =>
+              stream(model, context, {
+                ...options,
+                onResponse: async (response, responseModel) => {
+                  await options?.onResponse?.(response, responseModel);
+                  if (++responses !== 1) {
+                    return;
+                  }
+                  if (mode === "cancel-drain") {
+                    throw responseFailure;
+                  }
+                  acceptedWorkStarted = true;
+                  workStarted.resolve();
+                  try {
+                    await finishWork.promise;
+                  } finally {
+                    workSettled.resolve();
+                  }
+                },
+              });
+          }),
+        );
+        if (mode === "cancel-drain") {
+          const realFetch = globalThis.fetch;
+          let wrappedResponse = false;
+          transportSpies.push(
+            vi.spyOn(globalThis, "fetch").mockImplementation(async (...args) => {
+              const response = await realFetch(...args);
+              if (
+                wrappedResponse ||
+                !response.url.startsWith(`http://127.0.0.1:${address.port}/`)
+              ) {
+                return response;
+              }
+              wrappedResponse = true;
+              const reader = response.body?.getReader();
+              if (!reader) {
+                throw new Error("Fixture provider response has no body");
+              }
+              return new Response(
+                new ReadableStream<Uint8Array>({
+                  async pull(controller) {
+                    const { value, done } = await reader.read();
+                    if (done) {
+                      controller.close();
+                    } else {
+                      controller.enqueue(value);
+                    }
+                  },
+                  async cancel(reason) {
+                    acceptedWorkStarted = true;
+                    workStarted.resolve();
+                    try {
+                      await finishWork.promise;
+                      throw cancellationFailure;
+                    } finally {
+                      try {
+                        await reader.cancel(reason);
+                      } finally {
+                        workSettled.resolve();
+                      }
+                    }
+                  },
+                }),
+                { status: response.status, headers: response.headers },
+              );
+            }),
+          );
+        }
+      }
       let currentConfig = cfg;
       const llm = createRuntimeLlm({ getConfig: () => currentConfig });
       const input = (modelId = "lease-model") => ({
@@ -254,13 +349,53 @@ it.each([
           });
           return;
         }
-        const abortController = mode === "abort" ? new AbortController() : undefined;
+        const abortController =
+          mode === "abort" || mode === "callback-drain" ? new AbortController() : undefined;
         const firstStarted = performance.now();
-        const first = start(0, abortController?.signal);
+        const first = drainMode
+          ? parentWork.track(() => start(0, abortController?.signal))
+          : start(0, abortController?.signal);
         await waitForRequest(0, first);
         const firstPreparationMs = performance.now() - firstStarted;
         const firstBuilds = create.mock.calls.length;
         expect(firstBuilds).toBeGreaterThan(0);
+        if (drainMode) {
+          finish(requests[0]!, 0);
+          await Promise.race([
+            workStarted.promise,
+            first.then(() => {
+              throw new Error("Completion settled before accepted fixture work");
+            }),
+          ]);
+          abortController?.abort();
+          await expect(first).resolves.toMatchObject({ text: "" });
+          parentDrain = parentWork.drain().then(() => {
+            parentDrained = true;
+          });
+          const second = start(1);
+          await waitForRequest(1, second);
+          expect.soft(parentDrained).toBe(false);
+          expect.soft(create.mock.calls.length).toBe(firstBuilds);
+          expect(fork.mock.calls).toHaveLength(2);
+          expect(fork.mock.calls[0]![0]).not.toBe(fork.mock.calls[1]![0]);
+          finishWork.resolve();
+          await workSettled.promise;
+          await parentDrain;
+          expect(parentDrained).toBe(true);
+          finish(requests[1]!, 1);
+          await expect(second).resolves.toMatchObject({
+            text: "result-1|/A/v1/chat/completions|Bearer fixture-auth-A",
+          });
+          const buildsAfterSecond = create.mock.calls.length;
+          const third = start(2);
+          await waitForRequest(2, third);
+          expect(create.mock.calls.length).toBe(buildsAfterSecond + 1);
+          finish(requests[2]!, 2);
+          await expect(third).resolves.toMatchObject({
+            text: "result-2|/A/v1/chat/completions|Bearer fixture-auth-A",
+          });
+          return;
+        }
         if (mode === "provider-error" || mode === "abort") {
           if (abortController) {
             abortController.abort();
@@ -349,9 +484,18 @@ it.each([
           });
         }
       } finally {
+        finishWork.resolve();
         finishing = true;
         requests.forEach(finish);
         await Promise.allSettled(pending);
+        if (acceptedWorkStarted) {
+          await workSettled.promise;
+        }
+        await parentDrain;
+        await parentWork.drain();
+        for (const spy of transportSpies) {
+          spy.mockRestore();
+        }
         retained?.release();
         create.mockRestore();
         fork.mockRestore();

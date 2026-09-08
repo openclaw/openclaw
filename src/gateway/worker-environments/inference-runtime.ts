@@ -21,7 +21,6 @@ import { mapThinkingLevel } from "../../agents/embedded-agent-runner/utils.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import { splitTrailingAuthProfile } from "../../agents/model-ref-profile.js";
-import { modelCatalogLogicalKey } from "../../agents/model-selection-shared.js";
 import {
   buildModelAliasIndex,
   normalizeProviderId,
@@ -32,6 +31,7 @@ import {
   createModelVisibilityPolicy,
   RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
 } from "../../agents/model-visibility-policy.js";
+import { resolveModelCatalogIdentityKey } from "../../agents/openai-model-routes.js";
 import {
   acquireAgentRunPreparedModelRuntime,
   type PreparedModelRuntimeSnapshot,
@@ -406,14 +406,14 @@ async function resolveApprovedModel(params: {
         manifestPlugins: manifestSnapshot,
         ...RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
       });
-      const resolvedKey = modelCatalogLogicalKey({
+      const resolvedKey = resolveModelCatalogIdentityKey({
         provider: resolved.ref.provider,
         id: resolved.ref.model,
       });
       // Retained refs stay approved during cold discovery.
       const known =
         policy.allowedCatalog.some(
-          (entry: ModelCatalogEntry) => resolvedKey === modelCatalogLogicalKey(entry),
+          (entry: ModelCatalogEntry) => resolvedKey === resolveModelCatalogIdentityKey(entry),
         ) || policy.retainedKeys.has(resolvedKey);
       if (!known || !policy.allows(resolved.ref)) {
         runtimeLease.release();
@@ -421,7 +421,7 @@ async function resolveApprovedModel(params: {
       }
       const configuredDefaultProfile =
         resolvedKey ===
-        modelCatalogLogicalKey({ provider: defaultModel.provider, id: defaultModel.model })
+        resolveModelCatalogIdentityKey({ provider: defaultModel.provider, id: defaultModel.model })
           ? splitTrailingAuthProfile(
               resolveAgentEffectiveModelPrimary(lifecycleConfig, target.agentId) ?? "",
             ).profile

@@ -7,7 +7,7 @@ import { getRuntimeConfig, type OpenClawConfig } from "../../config/config.js";
 import { resolveStateDir } from "../../config/paths.js";
 import { isMissingPathError, formatErrorMessage } from "../../infra/errors.js";
 import { root as fsRoot } from "../../infra/fs-safe.js";
-import { normalizeGitPathForFilesystem } from "../../infra/git-exec.js";
+import { normalizeGitPathForFilesystem, requireGitCommandOutput } from "../../infra/git-exec.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
@@ -81,6 +81,7 @@ import type {
 export const IDLE_GC_MS = 7 * 24 * 60 * 60 * 1000; // Idle worktrees remain restorable after automatic cleanup.
 export const SNAPSHOT_RETENTION_MS = 30 * 24 * 60 * 60 * 1000; // Snapshot refs expire with their registry affordance.
 export const WORKTREE_GC_INTERVAL_MS = 60 * 60 * 1000;
+const BRANCH_INVENTORY_MAX_OUTPUT_BYTES = 256 * 1024;
 
 const NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/;
 const WORKTREE_CREATE_LEASE_SCOPE = "core:managed-worktrees:create";
@@ -94,6 +95,18 @@ export class WorktreeSnapshotError extends Error {
     super(`worktree snapshot failed; removal aborted: ${snapshotError}`, options);
     this.snapshotError = snapshotError;
   }
+}
+
+function branchInventoryError(command: string, result: GitResult): Error {
+  if (result.outputLimitExceeded) {
+    return new Error(
+      "Repository has too many branches to list safely. Remove obsolete branches and retry.",
+      { cause: commandError(command, result) },
+    );
+  }
+  return new Error("Git could not list repository branches. Check the repository and retry.", {
+    cause: commandError(command, result),
+  });
 }
 
 export type WorktreeRemovalFailureReason =
@@ -1094,41 +1107,47 @@ export class ManagedWorktreeService {
     // ref, so remote-only branches keep their remote-qualified form
     // (origin/feature-a) instead of a bare name git cannot resolve.
     const branches = new Map<string, ManagedWorktreeBranch>();
-    const remoteRaw = await runGit(repository.repoRoot, [
-      "for-each-ref",
-      "--format=%(refname)",
-      "refs/remotes",
-    ]);
-    if (remoteRaw.code === 0) {
-      for (const refname of remoteRaw.stdout.split("\n")) {
-        const trimmed = refname.trim();
-        if (!trimmed.startsWith("refs/remotes/")) {
-          continue;
-        }
-        const withoutPrefix = trimmed.slice("refs/remotes/".length);
-        const slash = withoutPrefix.indexOf("/");
-        if (slash <= 0) {
-          continue;
-        }
-        const shortName = withoutPrefix.slice(slash + 1);
-        // remote HEAD symrefs are pointers, not selectable branches.
-        if (!shortName || shortName === "HEAD") {
-          continue;
-        }
-        branches.set(shortName, { name: withoutPrefix, kind: "remote" });
+    const remoteRaw = await runGit(
+      repository.repoRoot,
+      ["for-each-ref", "--format=%(refname)", "refs/remotes"],
+      { maxOutputBytes: BRANCH_INVENTORY_MAX_OUTPUT_BYTES },
+    );
+    const remoteOutput = requireGitCommandOutput(
+      "git for-each-ref refs/remotes",
+      remoteRaw,
+      branchInventoryError,
+    );
+    for (const refname of remoteOutput.split("\n")) {
+      const trimmed = refname.trim();
+      if (!trimmed.startsWith("refs/remotes/")) {
+        continue;
       }
+      const withoutPrefix = trimmed.slice("refs/remotes/".length);
+      const slash = withoutPrefix.indexOf("/");
+      if (slash <= 0) {
+        continue;
+      }
+      const shortName = withoutPrefix.slice(slash + 1);
+      // remote HEAD symrefs are pointers, not selectable branches.
+      if (!shortName || shortName === "HEAD") {
+        continue;
+      }
+      branches.set(shortName, { name: withoutPrefix, kind: "remote" });
     }
-    const localRaw = await runGit(repository.repoRoot, [
-      "for-each-ref",
-      "--format=%(refname:short)",
-      "refs/heads",
-    ]);
-    if (localRaw.code === 0) {
-      for (const line of localRaw.stdout.split("\n")) {
-        const name = line.trim();
-        if (name) {
-          branches.set(name, { name, kind: "local" });
-        }
+    const localRaw = await runGit(
+      repository.repoRoot,
+      ["for-each-ref", "--format=%(refname:short)", "refs/heads"],
+      { maxOutputBytes: BRANCH_INVENTORY_MAX_OUTPUT_BYTES },
+    );
+    const localOutput = requireGitCommandOutput(
+      "git for-each-ref refs/heads",
+      localRaw,
+      branchInventoryError,
+    );
+    for (const line of localOutput.split("\n")) {
+      const name = line.trim();
+      if (name) {
+        branches.set(name, { name, kind: "local" });
       }
     }
     const remoteHead = await runGit(repository.repoRoot, [

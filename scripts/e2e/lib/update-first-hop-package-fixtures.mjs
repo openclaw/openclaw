@@ -6,7 +6,9 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { isUpdateCompatibilityChunk } from "../../lib/update-compat-contract.mjs";
 
+// Frozen candidates predating the recorded inventory retain their original fixture contract.
 export const LEGACY_UPDATE_COMPAT_CHUNKS = [
   "shared-DTaQo6Hi.js",
   "shared-Y6bNiw2w.js",
@@ -16,6 +18,87 @@ export const FUTURE_FIXTURE_VERSION = "2026.9.99-first-hop.0";
 
 function readJson(filePath) {
   return JSON.parse(fs.readFileSync(filePath, "utf8"));
+}
+
+function readFirstHopReleases(packageRoot) {
+  const inventoryPath = path.join(packageRoot, "dist", "update-compat-inventory.json");
+  if (!fs.existsSync(inventoryPath)) {
+    return [];
+  }
+  const { releases } = readJson(inventoryPath);
+  if (!Array.isArray(releases)) {
+    throw new Error("package fixture compatibility inventory has no releases");
+  }
+  return releases;
+}
+
+export function listFirstHopSourceVersions(packageRoot) {
+  const versions = readFirstHopReleases(packageRoot).map((release) => release.version);
+  if (
+    versions.length === 0 ||
+    new Set(versions).size !== versions.length ||
+    versions.some(
+      (version) =>
+        typeof version !== "string" || !/^\d{4}\.\d+\.\d+(?:-[a-z0-9.-]+)?$/i.test(version),
+    )
+  ) {
+    throw new Error("first-hop defaults require recorded release versions in the candidate");
+  }
+  return versions;
+}
+
+export function inspectFirstHopSource(packageRoot, tarball, options = {}) {
+  const releases = readFirstHopReleases(packageRoot);
+  const integrity = `sha512-${createHash("sha512").update(fs.readFileSync(tarball)).digest("base64")}`;
+  const release = options.version
+    ? releases.find((entry) => entry.version === options.version)
+    : releases.find((entry) => entry.integrity === integrity);
+  if (options.version && (!release || release.integrity !== integrity)) {
+    throw new Error(`first-hop source integrity mismatch for ${options.version}`);
+  }
+  // Verify recorded bytes before asking tar to read any package member.
+  const manifest = JSON.parse(
+    execFileSync("tar", ["-xOf", tarball, "package/package.json"], { encoding: "utf8" }),
+  );
+  if (releases.some((entry) => entry.version === manifest.version) && !release) {
+    throw new Error(`first-hop source integrity mismatch for ${manifest.version}`);
+  }
+  if (
+    manifest.name !== "openclaw" ||
+    typeof manifest.version !== "string" ||
+    (release && manifest.version !== release.version)
+  ) {
+    throw new Error("first-hop source package identity does not match its recorded release");
+  }
+  const restartChunk = release?.chunks.find((chunk) =>
+    chunk.imports.some(
+      (entry) =>
+        entry.owner === "src/cli/update-cli/update-command-service-command.ts" &&
+        entry.exports.includes("resolveNodeRunner"),
+    ),
+  );
+  // The original lane's published baseline predates the recorded inventory.
+  const legacyMissingChunk =
+    !release && manifest.version === "2026.8.2" ? "shared-Y6bNiw2w.js" : undefined;
+  const expectedMissingChunk =
+    options.expectedMissingChunk ?? restartChunk?.path ?? legacyMissingChunk ?? null;
+  if (!release && !expectedMissingChunk) {
+    throw new Error("unrecorded first-hop source requires an explicit expected missing chunk");
+  }
+  return {
+    version: manifest.version,
+    integrity,
+    recorded: Boolean(release),
+    expectedMissingChunk,
+    negativeControl: expectedMissingChunk
+      ? { status: "required", missingChunk: expectedMissingChunk }
+      : {
+          status: "not-applicable",
+          reason: release?.chunks.length
+            ? "no-recorded-lazy-service-restart-import"
+            : "source-has-no-recorded-post-swap-imports",
+        },
+  };
 }
 
 function writeJson(filePath, value) {
@@ -42,8 +125,36 @@ export function removeLegacyUpdateCompatChunks(packageRoot) {
     throw new Error("package fixture inventory is not a string array");
   }
 
+  const compatibilityPath = path.join(paths.root, "dist", "update-compat-inventory.json");
+  const recordedChunks = fs.existsSync(compatibilityPath)
+    ? readJson(compatibilityPath).releases.flatMap((release) =>
+        release.chunks.map((chunk) => chunk.path),
+      )
+    : [];
+  if (
+    recordedChunks.some(
+      (name) =>
+        typeof name !== "string" ||
+        path.isAbsolute(name) ||
+        name.includes("\\") ||
+        name.split("/").includes(".."),
+    )
+  ) {
+    throw new Error("package fixture compatibility inventory has an invalid path");
+  }
+  const chunks = new Set([
+    ...LEGACY_UPDATE_COMPAT_CHUNKS,
+    ...recordedChunks.filter((name) => {
+      if (!/-[A-Za-z0-9_-]{8}\.m?js$/.test(name)) {
+        return false;
+      }
+      return isUpdateCompatibilityChunk(
+        fs.readFileSync(path.join(paths.root, "dist", name), "utf8"),
+      );
+    }),
+  ]);
   const removed = [];
-  for (const name of LEGACY_UPDATE_COMPAT_CHUNKS) {
+  for (const name of chunks) {
     const relativePath = `dist/${name}`;
     const filePath = path.join(paths.root, relativePath);
     if (!fs.existsSync(filePath) || !inventory.includes(relativePath)) {
@@ -142,6 +253,25 @@ function packFutureRuntimeFixture(candidateTarball, outputTarball, sequence = 0)
 
 function main() {
   const [mode, packageRoot, outputTarball, sequence] = process.argv.slice(2);
+  if (mode === "sources" && packageRoot) {
+    process.stdout.write(`${listFirstHopSourceVersions(packageRoot).join("\n")}\n`);
+    return;
+  }
+  if (mode === "source" && packageRoot && outputTarball) {
+    process.stdout.write(
+      `${JSON.stringify(
+        inspectFirstHopSource(packageRoot, outputTarball, {
+          version: sequence || undefined,
+          expectedMissingChunk: sequence
+            ? undefined
+            : process.env.OPENCLAW_UPDATE_FIRST_HOP_EXPECTED_MISSING_CHUNK,
+        }),
+        null,
+        2,
+      )}\n`,
+    );
+    return;
+  }
   if (
     (mode === "future-tarball" || mode === "future-runtime-tarball") &&
     packageRoot &&

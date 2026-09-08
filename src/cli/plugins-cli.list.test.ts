@@ -970,14 +970,16 @@ describe("plugins cli list", () => {
   });
 
   it("reports persisted plugin registry state without refreshing", async () => {
+    // Identical sources: only the changed facets tell the operator what moved.
     inspectPluginRegistryMock.mockResolvedValue({
       state: "stale",
       refreshReasons: ["stale-manifest"],
       differences: [
         {
           pluginId: "demo",
+          changed: ["install", "diagnostics"],
           persistedSource: "/plugins/demo/index.js",
-          derivedSource: "/plugins/demo/dist/index.js",
+          derivedSource: "/plugins/demo/index.js",
         },
       ],
       persisted: {
@@ -999,7 +1001,7 @@ describe("plugins cli list", () => {
     expect(pluginsCliRuntimeLogs.join("\n")).toContain("stale");
     expect(pluginsCliRuntimeLogs.join("\n")).toContain("Refresh reasons:");
     expect(pluginsCliRuntimeLogs.join("\n")).toContain(
-      "demo: persisted /plugins/demo/index.js; derived /plugins/demo/dist/index.js",
+      "demo: install+diagnostics changed; persisted /plugins/demo/index.js; derived /plugins/demo/index.js",
     );
     expect(pluginsCliRuntimeLogs.join("\n")).toContain("openclaw plugins registry --refresh");
   });
@@ -1037,6 +1039,7 @@ describe("plugins cli list", () => {
       differences: [
         {
           pluginId: "demo",
+          changed: ["record"],
           persistedSource: "/plugins/demo/index.js",
           derivedSource: "/plugins/demo/dist/index.js",
         },
@@ -1046,7 +1049,7 @@ describe("plugins cli list", () => {
     });
 
     await expect(runPluginsCommand(["plugins", "registry", "--refresh"])).rejects.toThrow(
-      /demo: persisted \/plugins\/demo\/index\.js; derived \/plugins\/demo\/dist\/index\.js.*openclaw plugins registry --refresh/su,
+      /demo: record changed; persisted \/plugins\/demo\/index\.js; derived \/plugins\/demo\/dist\/index\.js.*openclaw plugins registry --refresh/su,
     );
   });
 
@@ -1058,6 +1061,7 @@ describe("plugins cli list", () => {
       differences: [
         {
           pluginId: "demo",
+          changed: ["record"],
           persistedSource: "/plugins/demo/index.js",
           derivedSource: "/plugins/demo/dist/index.js",
         },
@@ -1077,6 +1081,7 @@ describe("plugins cli list", () => {
       differences: [
         {
           pluginId: "demo",
+          changed: ["record"],
           persistedSource: "/plugins/demo/index.js",
           derivedSource: "/plugins/demo/dist/index.js",
         },

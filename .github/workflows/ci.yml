@@ -610,6 +610,7 @@ jobs:
           def checkout_harness(sha):
               action = ".github/actions/setup-node-env/action.yml"
               evidence_scripts = ("scripts/ios-screenshot-evidence.mjs", "scripts/lib/direct-run.mjs")
+              upgrade_scripts = ("scripts/lib/release-upgrade-baseline.mjs", "scripts/lib/release-version.mjs")
               if kind == "linux-node" and not os.path.isfile(os.path.join(workspace, action)):
                   raise GitFailure(1)
               harness = os.path.join(workspace, ".ci-harness")
@@ -630,6 +631,8 @@ jobs:
                       pathspecs += evidence_scripts
                   elif kind == "preflight":
                       pathspecs += ["scripts/lib/release-context.mjs", "scripts/lib/release-version.mjs"]
+                  if kind == "linux-node":
+                      pathspecs += upgrade_scripts
                   paths = git_output(workspace, "ls-files", "-z", "--", *pathspecs).split("\0")[:-1]
                   run_git(workspace, "checkout-index", "--force", f"--prefix={harness}/", "--", *paths)
               else:
@@ -638,6 +641,8 @@ jobs:
                   sparse_paths = ["/.github/actions/"]
                   if kind in ("platform", "linux-node"):
                       sparse_paths += [f"/{path}" for path in evidence_scripts]
+                  if kind == "linux-node":
+                      sparse_paths += [f"/{path}" for path in upgrade_scripts]
                   # Rooted non-cone patterns keep the kind-owned workflow files exact.
                   # Sparse first, then blob-less avoids downloading a second repository snapshot.
                   run_git(harness, "sparse-checkout", "set", "--no-cone", *sparse_paths)
@@ -5643,12 +5648,23 @@ jobs:
         run: |
           node --input-type=module -e 'import os from "node:os"; console.log(JSON.stringify({ logicalCpuCount: os.availableParallelism(), totalMemoryBytes: os.totalmem() }));'
 
+      - name: Resolve published Docker seed upgrade baseline
+        if: contains(format(' {0} ', needs.preflight.outputs.docker_seed_lanes), ' published-upgrade-survivor ')
+        env:
+          TARGET_CONTEXT_REF: ${{ inputs.target_context_ref || github.base_ref || github.ref_name }}
+        run: |
+          set -euo pipefail
+          candidate_version="$(node -p "require('./package.json').version")"
+          baseline="$(node .ci-harness/scripts/lib/release-upgrade-baseline.mjs \
+            --candidate-version "$candidate_version" \
+            --target-context-ref "$TARGET_CONTEXT_REF")"
+          printf 'OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC=%s\n' "$baseline" >> "$GITHUB_ENV"
+
       - name: Run changed Docker seed owner lanes
         env:
           OPENCLAW_DOCKER_ALL_LANES: ${{ needs.preflight.outputs.docker_seed_lanes }}
           OPENCLAW_DOCKER_ALL_LIVE_MODE: skip
           OPENCLAW_DOCKER_E2E_ALLOW_UNRELEASED_CHANGELOG: "1"
-          OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC: openclaw@latest
           OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS: legacy-operator-state
           OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE: auto-auth
           OPENCLAW_DOCKER_ALL_PARALLELISM: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && github.event_name == 'pull_request' && github.run_attempt == 1 && github.event.pull_request.head.repo.full_name == github.repository && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association) && 3 || 1 }}

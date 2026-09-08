@@ -79,7 +79,7 @@ openclaw tui --local
 
 ## Pickers + overlays
 
-- Model picker: list available models and set the session override.
+- Model picker: list the selected agent's published models and set the session override. Unavailable choices stay visible with their reason; selecting one shows guidance without changing the session. Choices with unknown availability remain selectable. Gateways predating published catalogs retain their existing selection behavior.
 - Agent picker: choose a different agent.
 - Session picker: shows up to 50 sessions for the current agent updated in the last 7 days. Use `/session <key>` to jump to an older known session.
 - Settings (`/settings`): toggle tool output expansion and thinking visibility. This panel does not control delivery.
@@ -237,6 +237,7 @@ Tips:
 - On connect, the TUI loads the latest history (default 200 messages).
 - Reconnect and event-gap recovery reconcile active runs with history, retaining concurrent and newly observed runs without reviving runs that exact history has excluded.
 - Streaming responses update in place until finalized.
+- Long words, email addresses, and identifiers wrap to the terminal width without inserting spaces into message text.
 - Failed assistant attachments show an actionable warning alongside any reply text. Attachment summaries use generic media kinds without exposing filenames or source URLs.
 - Messages sent to the same session from another client appear automatically.
 - The TUI also listens to agent tool events for richer tool cards.
