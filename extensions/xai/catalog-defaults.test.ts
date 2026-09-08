@@ -92,7 +92,7 @@ it.each([
   },
   {
     label: "API key",
-    mode: "api-key" as const,
+    mode: "api_key" as const,
     baseUrl: undefined,
     expectedUrl: "https://api.x.ai/v1",
     expectedAuth: undefined,
@@ -106,7 +106,8 @@ it.each([
       env: {},
       resolveProviderAuth: () => ({
         mode,
-        source: "fixture",
+        source: "profile",
+        apiKey: undefined,
         discoveryApiKey: "selected-fixture",
       }),
       resolveProviderApiKey: () => ({ apiKey: "unselected-fixture" }),

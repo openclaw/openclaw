@@ -169,10 +169,6 @@ describe("xAI OAuth", () => {
           refresh_token: "refresh",
           expires_in: 60,
         });
-        transport
-          .get("https://cli-chat-proxy.grok.com")
-          .intercept({ path: "/v1/settings" })
-          .reply(200, { default_model: "grok-4.6" });
       }
       const origin = transport.get(new URL(redirectStart).origin);
       origin.intercept({ path: new URL(redirectStart).pathname }).reply(async () => {
@@ -276,9 +272,6 @@ describe("xAI OAuth", () => {
         }
         if (url.endsWith("/models")) {
           return jsonResponse({ data: [{ id: "grok-4.6", api_backend: "responses" }] });
-        }
-        if (url.endsWith("/settings")) {
-          return jsonResponse({ default_model: "grok-4.6" });
         }
         if (boundary === "token response") {
           await hold();
@@ -648,9 +641,6 @@ describe("xAI OAuth", () => {
         if (url.endsWith("/models")) {
           return jsonResponse({ data: [{ id: "grok-4.6", api_backend: "responses" }] });
         }
-        if (url.endsWith("/settings")) {
-          return jsonResponse({ default_model: "grok-4.6" });
-        }
         throw new Error(`Unexpected catalog URL: ${url}`);
       });
       vi.stubGlobal("fetch", fetchImpl);
@@ -825,9 +815,6 @@ describe("xAI OAuth", () => {
       const url = requestUrl(input);
       if (url.endsWith("/models")) {
         return jsonResponse({ data: [{ id: "grok-4.6", api_backend: "responses" }] });
-      }
-      if (url.endsWith("/settings")) {
-        return jsonResponse({ default_model: "grok-4.6" });
       }
       throw new Error(`Unexpected catalog URL: ${url}`);
     });
