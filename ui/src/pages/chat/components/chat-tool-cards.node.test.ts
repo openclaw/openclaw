@@ -258,10 +258,10 @@ describe("tool-card extraction", () => {
       const [card] = extractToolCards(message);
       expect(card?.outputText).toBe(output);
       expect(card?.details).toEqual(details);
-      expect(card?.browserTab).toEqual(browserTab);
       expect(card?.preview).toEqual(
         eligible ? { kind: "browser-tab", ...browserTab, url } : undefined,
       );
+      expect(card?.browserTab).toEqual(browserTab);
     }
   });
 
