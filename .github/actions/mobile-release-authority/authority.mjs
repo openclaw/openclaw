@@ -284,15 +284,78 @@ function readRef(fullRef) {
   );
 }
 
+function exactForwardComparison(baseSha, headSha, relationshipError) {
+  let comparison;
+  try {
+    comparison = JSON.parse(
+      gh([
+        "api",
+        `repos/${repository}/compare/${baseSha}...${headSha}`,
+        "--jq",
+        "{status, ahead_by, behind_by, base_commit: {sha: .base_commit.sha}, merge_base_commit: {sha: .merge_base_commit.sha}}",
+      ]),
+    );
+  } catch {
+    fail("Trusted main ancestry lookup failed.");
+  }
+  const expectedKeys = ["ahead_by", "base_commit", "behind_by", "merge_base_commit", "status"];
+  if (
+    comparison === null ||
+    typeof comparison !== "object" ||
+    Array.isArray(comparison) ||
+    JSON.stringify(Object.keys(comparison).toSorted()) !== JSON.stringify(expectedKeys) ||
+    !Number.isSafeInteger(comparison.ahead_by) ||
+    comparison.ahead_by < 0 ||
+    !Number.isSafeInteger(comparison.behind_by) ||
+    comparison.behind_by < 0 ||
+    comparison.base_commit === null ||
+    typeof comparison.base_commit !== "object" ||
+    Array.isArray(comparison.base_commit) ||
+    JSON.stringify(Object.keys(comparison.base_commit)) !== JSON.stringify(["sha"]) ||
+    !/^[0-9a-f]{40}$/u.test(comparison.base_commit.sha) ||
+    comparison.merge_base_commit === null ||
+    typeof comparison.merge_base_commit !== "object" ||
+    Array.isArray(comparison.merge_base_commit) ||
+    JSON.stringify(Object.keys(comparison.merge_base_commit)) !== JSON.stringify(["sha"]) ||
+    !/^[0-9a-f]{40}$/u.test(comparison.merge_base_commit.sha)
+  ) {
+    fail("Trusted main ancestry lookup failed.");
+  }
+  const identical =
+    baseSha === headSha &&
+    comparison.status === "identical" &&
+    comparison.ahead_by === 0 &&
+    comparison.behind_by === 0 &&
+    comparison.base_commit.sha === baseSha &&
+    comparison.merge_base_commit.sha === baseSha;
+  const advanced =
+    baseSha !== headSha &&
+    comparison.status === "ahead" &&
+    comparison.ahead_by > 0 &&
+    comparison.behind_by === 0 &&
+    comparison.base_commit.sha === baseSha &&
+    comparison.merge_base_commit.sha === baseSha;
+  if (!identical && !advanced) {
+    fail(relationshipError);
+  }
+}
+
 function stableReleaseRefs(expectedBase, expectedTarget, requireCurrentMain) {
   const targetFullRef = `refs/heads/${targetRef}`;
   const mainBefore = requireCurrentMain ? readRef("refs/heads/main") : null;
   const targetBefore = readRef(targetFullRef);
-  if (requireCurrentMain && mainBefore !== expectedBase) {
-    fail("Trusted workflow SHA is no longer the exact main branch head.");
-  }
   if (targetBefore !== expectedTarget) {
     fail("Mobile release branch no longer points at the approved target SHA.");
+  }
+  if (requireCurrentMain) {
+    exactForwardComparison(
+      expectedBase,
+      mainBefore,
+      "Trusted workflow SHA is not an ancestor of the observed main branch head.",
+    );
+    if (readRef("refs/heads/main") !== mainBefore) {
+      fail("Main changed during trusted ancestry lookup.");
+    }
   }
   return () => {
     const targetAfter = readRef(targetFullRef);
@@ -301,8 +364,13 @@ function stableReleaseRefs(expectedBase, expectedTarget, requireCurrentMain) {
     }
     if (requireCurrentMain) {
       const mainAfter = readRef("refs/heads/main");
-      if (mainAfter !== mainBefore || mainAfter !== expectedBase) {
-        fail("Main changed during initial mobile release authorization.");
+      exactForwardComparison(
+        mainBefore,
+        mainAfter,
+        "Main did not advance monotonically during mobile release authority validation.",
+      );
+      if (readRef("refs/heads/main") !== mainAfter) {
+        fail("Main changed during trusted ancestry lookup.");
       }
     }
   };
