@@ -534,7 +534,7 @@ describe("canonical image presentation handoff", () => {
     },
   );
 
-  it.each(["removal", "auth", "replacement", "disconnect"] as const)(
+  it.each(["removal", "auth", "replacement", "connection epoch"] as const)(
     "retires a pending native image on %s and ignores its late load and error",
     async (change) => {
       const fixture = await createCanonicalImageTranscript();

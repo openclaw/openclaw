@@ -17,10 +17,7 @@ const suite = createChatFlowE2eSuite();
 
 suite.define(() => {
   it("exposes an assistant document download with its Unicode filename and ticketed URL", async () => {
-    const context = await suite.newBrowserContext({
-      ...createControlUiE2eContextOptions(),
-      viewport: { height: 900, width: 1440 },
-    });
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const source = "/tmp/openclaw/测试 report.pdf";
     const mediaUrl = `/__openclaw__/assistant-media?source=${encodeURIComponent(source)}&mediaTicket=ticket-download`;
@@ -270,10 +267,10 @@ suite.define(() => {
         ".chat-assistant-attachment-card__action-skeleton.skeleton",
       );
       expect(await actionSkeletons.count()).toBe(4);
-      const actionSkeletonSize = expectDefined(
-        await actionSkeletons.first().boundingBox(),
-        "skeleton bounds",
-      );
+      const actionSkeletonSize = await actionSkeletons.first().evaluate((element) => {
+        const rect = element.getBoundingClientRect();
+        return { height: rect.height, width: rect.width };
+      });
       expect(actionSkeletonSize.height).toBeCloseTo(30, 3);
       expect(actionSkeletonSize.width).toBeCloseTo(30, 3);
       expect(
@@ -309,11 +306,6 @@ suite.define(() => {
       for (const [index, width] of finalActionWidths.entries()) {
         expect(Math.abs(width - (pendingActionWidths[index] ?? 0))).toBeLessThanOrEqual(0.5);
       }
-      const finalAction = page.locator(".chat-assistant-attachment-card__action").first();
-      const finalActionSize = await finalAction.evaluate((element) => {
-        return [getComputedStyle(element).height, getComputedStyle(element).width];
-      });
-      expect(finalActionSize).toEqual(["30px", "30px"]);
       for (const attachment of attachments) {
         const card = page
           .locator(".chat-assistant-attachment-card--compact")

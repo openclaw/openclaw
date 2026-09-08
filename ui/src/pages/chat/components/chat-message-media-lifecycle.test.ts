@@ -101,12 +101,13 @@ function ticketResponse(mediaTicket: string, expiresInMs = 90_000) {
   });
 }
 
-function createAvailabilityPane(source: string, authToken: string) {
+function createAvailabilityPane(source: string, authToken: string, policyKey?: string) {
   let latest: ReturnType<typeof resolveAssistantAttachmentAvailability> | undefined;
   const rerender = observeSubscriber(() => {
     latest = resolveAssistantAttachmentAvailability(source, {
       resourceBasePath: "/openclaw",
       authToken,
+      policyKey,
       onRequestUpdate: rerender,
     });
   });
@@ -599,6 +600,89 @@ describe("chat media resource lifecycle", () => {
         mediaTicket: "ticket-after-refresh",
       });
     }
+  });
+
+  it("settles active policy snapshots but revalidates a superseded snapshot after unmount", async () => {
+    const source = `/tmp/openclaw/${crypto.randomUUID()}.png`;
+    const firstResponse = Promise.withResolvers<Response>();
+    const secondResponse = Promise.withResolvers<Response>();
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockReturnValueOnce(firstResponse.promise)
+        .mockReturnValueOnce(secondResponse.promise)
+        .mockImplementationOnce(async () => ticketResponse("current-policy-ticket")),
+    );
+    const first = createAvailabilityPane(source, "shared-token", "full");
+    const second = createAvailabilityPane(source, "shared-token", "workspace");
+    first.rerender();
+    second.rerender();
+    firstResponse.resolve(ticketResponse("first-pane-ticket"));
+    secondResponse.resolve(ticketResponse("second-pane-ticket"));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(first.latest).toMatchObject({ status: "available", mediaTicket: "first-pane-ticket" });
+    expect(second.latest).toMatchObject({ status: "available", mediaTicket: "second-pane-ticket" });
+    releaseChatMediaResourceSubscriber(first.rerender);
+    const remounted = createAvailabilityPane(source, "shared-token", "full");
+    remounted.rerender();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(remounted.latest).toMatchObject({
+      status: "available",
+      mediaTicket: "current-policy-ticket",
+    });
+  });
+
+  it("refreshes an idle attachment immediately when its ticket expired offscreen", async () => {
+    const source = `/tmp/openclaw/${crypto.randomUUID()}.png`;
+    const fetchMock = vi
+      .fn()
+      .mockImplementationOnce(async () => ticketResponse("ticket-before-unmount"))
+      .mockImplementationOnce(async () => ticketResponse("ticket-after-remount"));
+    vi.stubGlobal("fetch", fetchMock);
+    const first = createAvailabilityPane(source, "idle-ticket-token");
+    first.rerender();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(first.latest?.status).toBe("available");
+    releaseChatMediaResourceSubscriber(first.rerender);
+    await vi.advanceTimersByTimeAsync(90_001);
+
+    const remounted = createAvailabilityPane(source, "idle-ticket-token");
+    remounted.rerender();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(remounted.latest).toMatchObject({
+      status: "available",
+      mediaTicket: "ticket-after-remount",
+    });
+  });
+
+  it("keeps automatic renewal when switching to the oldest retained attachment at capacity", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ticketResponse(`ticket-${Date.now()}`)),
+    );
+    const source = `/tmp/openclaw/${crypto.randomUUID()}.png`;
+    for (let index = 0; index < 64; index++) {
+      const pane = createAvailabilityPane(index === 0 ? source : `${source}-${index}`, "original");
+      pane.rerender();
+      await vi.advanceTimersByTimeAsync(0);
+      releaseChatMediaResourceSubscriber(pane.rerender);
+    }
+    let authToken = "replacement";
+    let latest: ReturnType<typeof resolveAssistantAttachmentAvailability> | undefined;
+    const rerender = observeSubscriber(() => {
+      latest = resolveAssistantAttachmentAvailability(source, {
+        resourceBasePath: "/openclaw",
+        authToken,
+        onRequestUpdate: rerender,
+      });
+    });
+    rerender();
+    await vi.advanceTimersByTimeAsync(0);
+    authToken = "original";
+    rerender();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(latest).toMatchObject({ status: "available", mediaTicket: `ticket-${Date.now()}` });
   });
 
   it("stops polling after a definitive ticket refresh rejection and one unavailable retry", async () => {
