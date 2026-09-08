@@ -199,23 +199,36 @@ wrong-SHA tag, parent mismatch, or disallowed parent state fails closed. Other
 privileged writers require their dependent enforcement changes before the
 protected-tag publication route is globally complete.
 
-## Extended-stable exception
+## Extended-stable validation
 
-Extended-stable publish requires a run whose workflow and target are both the
-canonical branch:
+Extended-stable validation uses the same checked helper with an immutable
+trusted-main Tooling SHA. Keep the exact candidate, Tooling SHA, canonical
+context, and workflow transport separate:
 
 ```bash
-RELEASE_SHA="$(git rev-parse HEAD)"
-gh workflow run full-release-validation.yml \
-  --ref extended-stable/YYYY.M.33 \
-  -f ref=extended-stable/YYYY.M.33 \
-  -f expected_sha="$RELEASE_SHA" \
-  -f release_profile=stable
+VALIDATION_SHA="<exact-candidate-sha>"
+TOOLING_SHA="<recorded-full-main-ancestor-sha>"
+CONTEXT_REF="extended-stable/YYYY.M.33"
+pnpm ci:full-release \
+  --sha "$VALIDATION_SHA" \
+  --target-ref "$CONTEXT_REF" \
+  --workflow-sha "$TOOLING_SHA" \
+  -f release_profile=stable \
+  -f run_release_soak=true \
+  -f fail_fast=false \
+  -f rerun_group=all \
+  -f reuse_evidence=false \
+  -f dispatch_release_evidence=false
 ```
 
-Do not use `pnpm ci:full-release` or `release-ci/*`. Publish binds the run's
-branch, head/target SHA, manifest `workflowRef`, ID, and attempt to the canonical
-branch and release commit.
+The helper creates `release-ci/<tooling-prefix>-<unique-id>` at the Tooling SHA,
+dispatches from that named branch, supplies the trusted-main identity, and uses
+the exact Validation SHA for both `ref` and `expected_sha` with the canonical
+branch in `target_context_ref`. GitHub workflow dispatch `--ref` accepts a branch
+or tag, not a raw SHA. Outside extended-stable validation, a direct
+canonical-branch dispatch is valid only when its head is also the trusted
+workflow implementation. Current extended-stable validation uses distinct
+trusted-main tooling and therefore requires the immutable helper.
 
 Backport product failures; make the smallest behavior-preserving repair for
 frozen-target tooling; retry provider, approval, or runner failures without a
