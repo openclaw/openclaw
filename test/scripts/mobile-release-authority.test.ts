@@ -201,6 +201,26 @@ if (gitArgs[0] === "remote" && gitArgs[1] === "get-url") {
 if (gitArgs[0] === "fetch" && !${JSON.stringify(realFetch)}) {
   process.exit(0);
 }
+if (gitArgs[0] === "archive" && process.env.GIT_ARCHIVE_MODE) {
+  const outputArgument = gitArgs.find((value) => value.startsWith("--output="));
+  if (!outputArgument) {
+    console.error("archive test mode requires disk-backed output");
+    process.exit(74);
+  }
+  const outputPath = outputArgument.slice("--output=".length);
+  if (process.env.GIT_ARCHIVE_MODE === "partial-failure") {
+    fs.writeFileSync(outputPath, "partial archive");
+    process.exit(75);
+  }
+  if (process.env.GIT_ARCHIVE_MODE === "corrupt-success") {
+    const result = spawnSync("/usr/bin/git", args, { stdio: "inherit" });
+    if (result.status !== 0) process.exit(result.status ?? 1);
+    fs.writeFileSync(outputPath, "not a tar archive");
+    process.exit(0);
+  }
+  console.error("unknown archive test mode");
+  process.exit(76);
+}
 const result = spawnSync("/usr/bin/git", args, { stdio: "inherit" });
 process.exit(result.status ?? 1);
 `,
@@ -565,6 +585,24 @@ function readGhTrace(file: string): Array<{ args: string[]; token: string }> {
     .map((line) => JSON.parse(line) as { args: string[]; token: string });
 }
 
+function readGitTrace(file: string): string[][] {
+  return fs
+    .readFileSync(file, "utf8")
+    .trim()
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => JSON.parse(line) as string[]);
+}
+
+function archiveSpoolPath(fixture: Fixture): string {
+  const archive = readGitTrace(fixture.gitLog).find((args) => args.includes("archive"));
+  const output = archive?.find((value) => value.startsWith("--output="));
+  if (!output) {
+    throw new Error("git archive did not use disk-backed output");
+  }
+  return output.slice("--output=".length);
+}
+
 function resetState(fixture: Fixture): void {
   fs.rmSync(fixture.stateDir, { recursive: true, force: true });
   fs.mkdirSync(fixture.stateDir);
@@ -773,6 +811,48 @@ describe("mobile release authority", () => {
     });
 
     expect(authorize(fixture).target_sha).toBe(fixture.targetSha);
+  });
+
+  it("authorizes when the trusted scripts archive exceeds the subprocess output buffer", () => {
+    const fixture = createFixture({
+      mutateBase(repository) {
+        writeFile(
+          repository,
+          "scripts/fixtures/unused-large-resource.txt",
+          "x".repeat(8 * 1024 * 1024 + 64 * 1024),
+        );
+      },
+    });
+
+    const result = runAuthority(fixture, "authorize");
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(readOutputs(fixture.outputPath)).toMatchObject({
+      approved: "true",
+      gateway_version: "2026.9.2",
+      target_ref: TARGET_REF,
+      target_sha: fixture.targetSha,
+    });
+    const spool = archiveSpoolPath(fixture);
+    expect(path.dirname(spool).startsWith(fixture.runnerTemp)).toBe(true);
+    expect(fs.existsSync(path.dirname(spool))).toBe(true);
+    expect(fs.existsSync(spool)).toBe(false);
+  });
+
+  it.each([
+    ["partial Git archive", "partial-failure"],
+    ["archive extraction", "corrupt-success"],
+  ] as const)("removes the disk-backed scripts archive after %s failure", (_label, mode) => {
+    const fixture = createFixture();
+
+    const result = runAuthority(fixture, "authorize", { GIT_ARCHIVE_MODE: mode });
+
+    expect(result.status).toBe(1);
+    expect(fs.readFileSync(fixture.outputPath, "utf8")).toBe("");
+    const spool = archiveSpoolPath(fixture);
+    expect(path.dirname(spool).startsWith(fixture.runnerTemp)).toBe(true);
+    expect(fs.existsSync(path.dirname(spool))).toBe(true);
+    expect(fs.existsSync(spool)).toBe(false);
   });
 
   it("rejects a forbidden code commit hidden by a later revert", () => {
