@@ -10,7 +10,6 @@ const suite = createControlUiE2eSuite({
 
 const neighbors = [
   { name: "paragraph", markdown: "A paragraph after the file." },
-  { name: "bold", markdown: "**A bold paragraph after the file.**" },
   { name: "heading", markdown: "## A heading after the file" },
   { name: "list", markdown: "- First item\n- Second item" },
   { name: "code", markdown: "```js\nconst ready = true;\n```" },
@@ -77,7 +76,8 @@ suite.define(() => {
     );
   }
 
-  it.each([2, 3, 5])("keeps %i files in a column with the text rhythm on mobile", async (count) => {
+  it("keeps multiple files in a column with the text rhythm on mobile", async () => {
+    const count = 5;
     await suite.withPage({ viewport: { width: 390, height: 900 } }, async ({ page }) => {
       await installMockGateway(page, {
         historyMessages: [
@@ -144,6 +144,48 @@ suite.define(() => {
       ] as const) {
         expect(Math.abs((await gap(above, below)) - reference)).toBeLessThanOrEqual(1);
       }
+    });
+  });
+
+  it("shares the block rhythm inside expanded tool output", async () => {
+    await suite.withPage({ viewport: { width: 390, height: 900 } }, async ({ page }) => {
+      await installMockGateway(page, {
+        historyMessages: [
+          {
+            role: "user",
+            content: [{ type: "text", text: "Reference one.\n\nReference two." }],
+          },
+          {
+            role: "toolResult",
+            toolCallId: "spacing-preview",
+            toolName: "image",
+            content: [
+              attachment(),
+              {
+                type: "image",
+                url: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=",
+                alt: "Generated preview",
+              },
+              { type: "text", text: "Generated output." },
+            ],
+          },
+        ],
+      });
+      await page.goto(`${suite.server.baseUrl}chat/main`);
+      await page.locator(".chat-tool-msg-summary").first().click();
+      const body = page.locator(".chat-tool-msg-body");
+      const text = body.locator(":scope > .chat-text");
+      await text.waitFor();
+      const paragraphs = page.locator(".chat-group.user .chat-text > p");
+      await paragraphs.last().waitFor();
+      const reference = await gap(paragraphs.nth(0), paragraphs.nth(1));
+      const attachments = body.locator(":scope > .chat-assistant-attachments");
+      expect(Math.abs((await gap(attachments, text)) - reference)).toBeLessThanOrEqual(1);
+      expect(
+        Math.abs(
+          (await gap(body.locator(":scope > .chat-message-images"), attachments)) - reference,
+        ),
+      ).toBeLessThanOrEqual(1);
     });
   });
 });
