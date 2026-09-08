@@ -16,7 +16,7 @@ import {
   isMissingOperatorReadScopeError,
 } from "../../lib/gateway-errors.ts";
 import { loadModelAuthStatus } from "../../lib/model-auth.ts";
-import { loadModelCatalog } from "../../lib/model-catalog-store.ts";
+import { loadModelCatalog, modelCatalogRefreshError } from "../../lib/model-catalog-store.ts";
 import {
   requestProviderUsage,
   type ProviderUsageRequestResult,
@@ -76,24 +76,24 @@ export async function loadModelProvidersData(
   client: GatewayBrowserClient,
   opts: { agentId: string; refresh?: boolean; signal?: AbortSignal },
 ): Promise<ModelProvidersData> {
-  const loadConfiguredCatalog = (loadOpts: { preparedOnly?: true; refresh?: true }) =>
+  const loadConfiguredCatalog = (refresh = false) =>
     settleRequest(
       loadModelCatalog(client, {
         agentId: opts.agentId,
-        ...loadOpts,
+        ...(refresh ? { refresh: true } : {}),
         ...(opts.signal ? { signal: opts.signal } : {}),
       }),
     );
   const authStatusLoad = settleRequest(loadModelAuthStatus(client, opts));
   // Auth refresh publishes the runtime owner that the catalog must read.
   const catalogRefresh = opts.refresh
-    ? authStatusLoad.then(() => loadConfiguredCatalog({ refresh: true }))
+    ? authStatusLoad.then(() => loadConfiguredCatalog(true))
     : undefined;
   const catalogLoad = catalogRefresh
     ? catalogRefresh.then((refreshResult) =>
-        refreshResult.ok ? refreshResult : loadConfiguredCatalog({ preparedOnly: true }),
+        refreshResult.ok ? refreshResult : loadConfiguredCatalog(),
       )
-    : loadConfiguredCatalog({ preparedOnly: true });
+    : loadConfiguredCatalog();
   const [authStatus, catalog, refreshResult, config] = await Promise.all([
     authStatusLoad,
     catalogLoad,
@@ -112,7 +112,7 @@ export async function loadModelProvidersData(
       refreshResult && !refreshResult.ok
         ? errorMessage(refreshResult.error)
         : catalog.ok
-          ? null
+          ? modelCatalogRefreshError(catalog.result)
           : errorMessage(catalog.error),
     config,
     providerUsage: null,

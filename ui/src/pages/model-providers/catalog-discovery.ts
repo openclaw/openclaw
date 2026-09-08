@@ -1,13 +1,9 @@
-// Demand-driven catalog discovery for the Models settings page.
-//
-// The initial page load uses the fast prepared catalog (configured models only)
-// so full discovery stays out of first navigation. Opening a default-model picker
-// signals interest; this controller fetches the full catalog through the shared
-// model-catalog store (cooldown + concurrency dedupe) and merges it in without
-// disturbing the saved selection.
+// Reads published model choices when a Models settings picker opens.
+// This controller owns its pending read; the page's explicit Refresh action
+// owns provider acquisition. Neither path changes the saved selection.
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import { loadModelCatalog } from "../../lib/model-catalog-store.ts";
+import { loadModelCatalog, modelCatalogRefreshError } from "../../lib/model-catalog-store.ts";
 import type { ModelProvidersData } from "./load.ts";
 
 type DiscoveryGateway = {
@@ -18,13 +14,13 @@ type DiscoveryGateway = {
 };
 
 export type CatalogDiscoveryController = {
-  /** Whether a discovery request is currently in flight. */
+  /** Whether a catalog read is currently in flight. */
   readonly discovering: boolean;
-  /** A user-facing retry hint when discovery failed; null while clean. */
+  /** A user-facing retry hint when the read failed; null while clean. */
   readonly error: string | null;
   /** Fired when a default-model picker opens. */
   openPicker: () => void;
-  /** Retries a failed discovery. */
+  /** Retries a failed catalog read. */
   retry: () => void;
   /** Resets in-flight/error state (e.g. on agent switch). */
   reset: () => void;
@@ -91,7 +87,6 @@ export function createCatalogDiscoveryController(
     try {
       const result = await loadModelCatalog(client, {
         agentId,
-        refreshIfDue: true,
         signal: request.signal,
       });
       if (ownsResult()) {
@@ -101,7 +96,7 @@ export function createCatalogDiscoveryController(
             ...data,
             models: result.models,
             providerOutcomes: result.providerOutcomes ?? [],
-            catalogError: null,
+            catalogError: modelCatalogRefreshError(result),
           });
         }
       }

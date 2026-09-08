@@ -322,7 +322,6 @@ suite.define(() => {
           expect(catalogParams.at(-1)).toEqual({
             view: "configured",
             agentId: "reviewer",
-            preparedOnly: true,
           });
           expect(await recovered.count()).toBe(0);
           await page.screenshot({

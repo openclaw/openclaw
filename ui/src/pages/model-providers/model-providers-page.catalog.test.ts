@@ -4,7 +4,6 @@ import { setImmediate } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ModelCatalogResult } from "../../api/types.ts";
 import type { SelectPicker } from "../../components/select-picker.ts";
-import { invalidateModelCatalogCache } from "../../lib/model-catalog-store.ts";
 import { updatePickers } from "../../test-helpers/select-picker.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { EMPTY_MODEL_PROVIDERS_DATA } from "./load.ts";
@@ -71,10 +70,10 @@ const savedModelConfig = {
 function createCatalogHarness() {
   const harness = createHarness("main");
   const originalRequest = harness.request.getMockImplementation()!;
-  const discover = vi.fn<() => Promise<ModelCatalogResult>>();
-  const catalogRequest = async (method: string, params?: { refresh?: boolean }) => {
+  const readCatalog = vi.fn<() => Promise<ModelCatalogResult>>().mockResolvedValue(preparedCatalog);
+  const catalogRequest = async (method: string, _params?: unknown) => {
     if (method === "models.list") {
-      return params?.refresh ? discover() : preparedCatalog;
+      return readCatalog();
     }
     if (method === "config.get") {
       return { config: savedModelConfig, hash: "saved-model-config" };
@@ -82,20 +81,42 @@ function createCatalogHarness() {
     return originalRequest(method);
   };
   harness.request.mockImplementation(catalogRequest);
-  return { ...harness, discover, catalogRequest };
+  return { ...harness, readCatalog, catalogRequest };
 }
 
 describe("ModelProvidersPage catalog discovery", () => {
+  it.each([false, true])(
+    "shows a published catalog failure without changing saved choices (retained rows: %s)",
+    async (hasRows) => {
+      const { context, readCatalog, runtimeConfig } = createCatalogHarness();
+      const page = appendPage(context);
+      await waitForFast(() => expect(page.data?.config).toEqual(savedModelConfig));
+      await page.updateComplete;
+      const models = hasRows ? preparedCatalog.models : [];
+      readCatalog.mockResolvedValue({ models, refreshFailed: true });
+
+      await openModelPicker(page);
+      const warning = hasRows
+        ? "Some models could not be refreshed. Open Models to try again."
+        : "Models unavailable";
+      await waitForFast(() => expect(page.data?.catalogError).toBe(warning));
+      await drainPageUpdates(page);
+      expect(page.data?.models).toEqual(models);
+      expect(page.textContent).toContain(warning);
+      expect(page.data?.config).toEqual(savedModelConfig);
+      expect(runtimeConfig.patch).not.toHaveBeenCalled();
+    },
+  );
+
   it.each([
     { picker: "primary", index: 0 },
     { picker: "utility", index: 1 },
     { picker: "fallback", index: 2 },
   ])(
-    "discovers the full catalog when the $picker picker opens and merges it without clearing saved state",
+    "reads published catalog choices when the $picker picker opens without changing saved state",
     async ({ index: firstPicker }) => {
-      const { context, request, discover, runtimeConfig } = createCatalogHarness();
+      const { context, request, readCatalog, runtimeConfig } = createCatalogHarness();
       const pending = deferred<ModelCatalogResult>();
-      discover.mockReturnValue(pending.promise);
       const discovered: ModelCatalogResult = {
         models: [
           ...preparedCatalog.models,
@@ -112,18 +133,20 @@ describe("ModelProvidersPage catalog discovery", () => {
       const page = appendPage(context);
       await waitForFast(() => expect(page.data?.config).toEqual(savedModelConfig));
       await page.updateComplete;
-      expect(discover).not.toHaveBeenCalled();
+      readCatalog.mockClear();
+      readCatalog.mockReturnValueOnce(pending.promise).mockResolvedValue(discovered);
+      expect(readCatalog).not.toHaveBeenCalled();
       expect(page.data?.models).toEqual(preparedCatalog.models);
       expect(modelPickers(page)).toHaveLength(3);
 
       await openModelPicker(page, firstPicker);
-      expect(discover).toHaveBeenCalledOnce();
+      expect(readCatalog).toHaveBeenCalledOnce();
 
       for (const index of [0, 1, 2, 0]) {
         await openModelPicker(page, index);
       }
       await page.updateComplete;
-      expect(discover).toHaveBeenCalledOnce();
+      expect(readCatalog).toHaveBeenCalledOnce();
       const progress = page.querySelector(".model-providers__catalog-progress");
       expect(progress?.getAttribute("role")).toBe("status");
       expect(progress?.textContent).toContain("Discovering more models");
@@ -169,20 +192,25 @@ describe("ModelProvidersPage catalog discovery", () => {
       );
       expect(page.data?.config).toEqual(savedModelConfig);
       expect(runtimeConfig.patch).not.toHaveBeenCalled();
-      expect(discover).toHaveBeenCalledOnce();
-      expect(request.mock.calls.filter(([method]) => method === "models.list")).toHaveLength(2);
+      expect(readCatalog).toHaveBeenCalledTimes(2);
+      expect(request.mock.calls.filter(([method]) => method === "models.list")).toEqual([
+        ["models.list", { agentId: "main", view: "configured" }, expect.anything()],
+        ["models.list", { agentId: "main", view: "configured" }, expect.anything()],
+        ["models.list", { agentId: "main", view: "configured" }, expect.anything()],
+      ]);
     },
   );
 
   it("surfaces a retryable error when picker catalog discovery fails", async () => {
-    const { context, discover } = createCatalogHarness();
+    const { context, readCatalog } = createCatalogHarness();
     const pending = deferred<ModelCatalogResult>();
-    discover
-      .mockRejectedValueOnce(new Error("discovery failed"))
-      .mockReturnValueOnce(pending.promise);
     const page = appendPage(context);
     await waitForFast(() => expect(page.data?.config).toEqual(savedModelConfig));
     await page.updateComplete;
+    readCatalog.mockClear();
+    readCatalog
+      .mockRejectedValueOnce(new Error("discovery failed"))
+      .mockReturnValueOnce(pending.promise);
 
     await openModelPicker(page);
     await waitForFast(() =>
@@ -198,7 +226,7 @@ describe("ModelProvidersPage catalog discovery", () => {
     expect(retry?.textContent?.trim()).toBe("Retry");
     retry!.click();
     await page.updateComplete;
-    expect(discover).toHaveBeenCalledTimes(2);
+    expect(readCatalog).toHaveBeenCalledTimes(2);
     expect(page.querySelector('.model-providers__catalog-progress[role="status"]')).not.toBeNull();
 
     pending.resolve({
@@ -216,24 +244,27 @@ describe("ModelProvidersPage catalog discovery", () => {
   it.each([false, true])(
     "clears a prior catalog error after successful discovery (unrelated auth error: %s)",
     async (authFails) => {
-      const { context, discover, request, catalogRequest } = createCatalogHarness();
+      const { context, readCatalog, request, catalogRequest } = createCatalogHarness();
       request.mockImplementation(async (method: string, params?: { refresh?: boolean }) => {
         if (method === "models.authStatus" && authFails) {
           throw new Error("Credential status unavailable");
         }
         return catalogRequest(method, params);
       });
-      discover
-        .mockRejectedValueOnce(new Error("Initial catalog unavailable"))
-        .mockResolvedValueOnce({
-          models: [
-            ...preparedCatalog.models,
-            { id: "recovered", name: "Recovered model", provider: "openai", available: true },
-          ],
-        });
+      const recovered = {
+        models: [
+          ...preparedCatalog.models,
+          { id: "recovered", name: "Recovered model", provider: "openai", available: true },
+        ],
+      };
       const page = appendPage(context);
       await waitForFast(() => expect(page.data?.config).toEqual(savedModelConfig));
       await page.updateComplete;
+      readCatalog.mockClear();
+      readCatalog
+        .mockRejectedValueOnce(new Error("Initial catalog unavailable"))
+        .mockResolvedValueOnce(preparedCatalog)
+        .mockResolvedValueOnce(recovered);
 
       page.querySelector<HTMLButtonElement>('button[aria-label="Refresh"]')!.click();
       await waitForFast(() =>
@@ -257,21 +288,21 @@ describe("ModelProvidersPage catalog discovery", () => {
   it.each(["core refresh", "route data"] as const)(
     "keeps newer %s after an older picker response settles",
     async (replacement) => {
-      const { context, request, discover, snapshot } = createCatalogHarness();
+      const { context, request, readCatalog, snapshot } = createCatalogHarness();
       const pending = deferred<ModelCatalogResult>();
       const newer: ModelCatalogResult = {
         models: [{ id: "newer", name: "Newer model", provider: "openai", available: true }],
         providerOutcomes: [{ provider: "openai", status: "ready" }],
       };
-      discover.mockReturnValueOnce(pending.promise).mockResolvedValueOnce(newer);
       const page = appendPage(context);
       await waitForFast(() => expect(page.data?.config).toEqual(savedModelConfig));
       await page.updateComplete;
+      readCatalog.mockClear();
+      readCatalog.mockReturnValueOnce(pending.promise).mockResolvedValueOnce(newer);
       await openModelPicker(page);
-      expect(discover).toHaveBeenCalledOnce();
+      expect(readCatalog).toHaveBeenCalledOnce();
 
-      // A published config change retires the shared catalog before reloading the page.
-      invalidateModelCatalogCache(snapshot.client!);
+      // Core and route replacements retire the pending picker read through the page owner.
       if (replacement === "core refresh") {
         page.querySelector<HTMLButtonElement>('button[aria-label="Refresh"]')!.click();
       } else {
@@ -311,17 +342,17 @@ describe("ModelProvidersPage catalog discovery", () => {
   it.each(["resolve", "reject"] as const)(
     "keeps replacement discovery active when retired discovery completes with %s",
     async (completion) => {
-      const { context, discover, snapshot } = createCatalogHarness();
+      const { context, readCatalog, snapshot } = createCatalogHarness();
       const retired = deferred<ModelCatalogResult>();
       const current = deferred<ModelCatalogResult>();
-      discover.mockReturnValueOnce(retired.promise).mockReturnValueOnce(current.promise);
       const page = appendPage(context);
       await waitForFast(() => expect(page.data?.config).toEqual(savedModelConfig));
       await page.updateComplete;
+      readCatalog.mockClear();
+      readCatalog.mockReturnValueOnce(retired.promise).mockReturnValueOnce(current.promise);
       await openModelPicker(page);
-      expect(discover).toHaveBeenCalledOnce();
+      expect(readCatalog).toHaveBeenCalledOnce();
 
-      invalidateModelCatalogCache(snapshot.client!);
       page.routeData = {
         gateway: context.gateway,
         gatewaySnapshot: snapshot,
@@ -337,7 +368,7 @@ describe("ModelProvidersPage catalog discovery", () => {
       await page.updateComplete;
       await openModelPicker(page, 1);
       await page.updateComplete;
-      expect(discover).toHaveBeenCalledTimes(2);
+      expect(readCatalog).toHaveBeenCalledTimes(2);
 
       if (completion === "resolve") {
         retired.resolve({ models: [{ id: "retired", name: "Retired", provider: "openai" }] });
@@ -352,7 +383,7 @@ describe("ModelProvidersPage catalog discovery", () => {
       ).not.toBeNull();
       expect(page.querySelector('.model-providers__catalog-progress[role="alert"]')).toBeNull();
       await openModelPicker(page, 2);
-      expect(discover).toHaveBeenCalledTimes(2);
+      expect(readCatalog).toHaveBeenCalledTimes(2);
       current.resolve({
         models: [{ id: "current", name: "Current model", provider: "openai", available: true }],
       });
@@ -362,19 +393,20 @@ describe("ModelProvidersPage catalog discovery", () => {
     },
   );
 
-  it("keeps a shared discovery alive when another page retires its subscription", async () => {
-    const { context, discover, snapshot } = createCatalogHarness();
+  it("keeps another page's independent catalog read when one page retires", async () => {
+    const { context, readCatalog, snapshot } = createCatalogHarness();
     const pending = deferred<ModelCatalogResult>();
-    discover.mockReturnValue(pending.promise);
     const first = appendPage(context);
     const second = appendPage(context);
     await waitForFast(() => expect(first.data?.config).toEqual(savedModelConfig));
     await waitForFast(() => expect(second.data?.config).toEqual(savedModelConfig));
     await first.updateComplete;
     await second.updateComplete;
+    readCatalog.mockClear();
+    readCatalog.mockReturnValue(pending.promise);
     await openModelPicker(first);
     await openModelPicker(second);
-    expect(discover).toHaveBeenCalledOnce();
+    expect(readCatalog).toHaveBeenCalledTimes(2);
     first.routeData = {
       gateway: context.gateway,
       gatewaySnapshot: snapshot,
@@ -399,6 +431,6 @@ describe("ModelProvidersPage catalog discovery", () => {
     expect(second.querySelector('[role="option"][data-value="openai/shared"]')).not.toBeNull();
     expect(first.querySelector(".model-providers__catalog-progress")).toBeNull();
     expect(second.querySelector(".model-providers__catalog-progress")).toBeNull();
-    expect(discover).toHaveBeenCalledOnce();
+    expect(readCatalog).toHaveBeenCalledTimes(2);
   });
 });
