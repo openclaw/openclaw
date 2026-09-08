@@ -109,12 +109,23 @@ printf '%s' "$OPENCLAW_FROZEN_UPGRADE_SURVIVOR_CLAWHUB_MODE" > "$MODE_PATH"
         OPENCLAW_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS: "1",
         OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC: baseline,
         MODE_PATH: modePath,
+        TMPDIR: root,
       },
     },
   );
   const [oracle, runner, ...mounts] = result.stdout.trim().split("\n").filter(Boolean);
   const clawhubMode = existsSync(modePath) ? readFileSync(modePath, "utf8") : undefined;
-  return { result, oracle, runner, mounts, selectedOracle, selectedScenario, clawhubMode };
+  const stagedScenario = mounts[0] === "-v" ? mounts[1]?.split(":", 1)[0] : undefined;
+  return {
+    result,
+    oracle,
+    runner,
+    mounts,
+    selectedOracle,
+    selectedScenario,
+    stagedScenario,
+    clawhubMode,
+  };
 }
 
 function writeJson(path: string, value: unknown): void {
@@ -1024,14 +1035,20 @@ describe("upgrade survivor assertions", () => {
             "run.sh",
           ),
         );
+        if (selected) {
+          expect(readFileSync(join(proof.stagedScenario!, "assertions.mjs"), "utf8")).toBe(
+            readFileSync(proof.selectedOracle, "utf8"),
+          );
+          expect(readFileSync(join(proof.stagedScenario!, "diagnostics.mjs"), "utf8")).toBe(
+            readFileSync("scripts/e2e/lib/upgrade-survivor/diagnostics.mjs", "utf8"),
+          );
+        }
         expect(proof.mounts).toEqual(
           selected
             ? [
                 "-v",
-                `${proof.selectedScenario}:/app/scripts/e2e/lib/upgrade-survivor:ro`,
-                "-v",
                 expect.stringMatching(
-                  /diagnostics\.mjs:\/app\/scripts\/e2e\/lib\/upgrade-survivor\/diagnostics\.mjs:ro$/u,
+                  /openclaw-upgrade-scenario\.[^/]+:\/app\/scripts\/e2e\/lib\/upgrade-survivor:ro$/u,
                 ),
                 "-v",
                 expect.stringMatching(

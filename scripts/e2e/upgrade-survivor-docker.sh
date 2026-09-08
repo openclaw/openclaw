@@ -10,6 +10,7 @@ set -euo pipefail
 
 PACKAGE_TGZ=""
 AUTO_PREPUBLISH_PLUGIN_REGISTRY_ROOT=""
+UPGRADE_SCENARIO_STAGE=""
 run_completed="0"
 diagnostics_ready=0
 cleanup_outer() {
@@ -36,6 +37,9 @@ cleanup_outer() {
   if [ -n "$AUTO_PREPUBLISH_PLUGIN_REGISTRY_ROOT" ]; then
     rm -rf "$AUTO_PREPUBLISH_PLUGIN_REGISTRY_ROOT"
   fi
+  if [ -n "$UPGRADE_SCENARIO_STAGE" ]; then
+    rm -rf "$UPGRADE_SCENARIO_STAGE"
+  fi
   if [ "$exit_status" -ne 0 ]; then
     printf '[upgrade-survivor] FAILED (exit %s)\n' "$exit_status" >&2
   fi
@@ -55,6 +59,7 @@ source "$HARNESS_ROOT_DIR/scripts/e2e/lib/prepublish-plugin-registry.sh"
 
 UPGRADE_SCENARIO_ARGS=()
 UPGRADE_COMPAT_ENV_ARGS=()
+UPGRADE_SCENARIO_STAGE=""
 UPGRADE_RUNNER="$HARNESS_ROOT_DIR/scripts/e2e/lib/upgrade-survivor/run.sh"
 UPGRADE_SCENARIO_DIR=""
 UPGRADE_TARGET_TRAIN=""
@@ -106,9 +111,14 @@ if [ "$UPGRADE_TARGET_TRAIN" = extended-stable ]; then
     "$ROOT_DIR" scripts/e2e/lib/env-limits.mjs)"
   UPGRADE_TEXT_FILE_UTILS="$(openclaw_resolve_frozen_target_file \
     "$ROOT_DIR" scripts/e2e/lib/text-file-utils.mjs)"
+  # Build the complete scenario tree before mounting it read-only. A nested
+  # diagnostics bind cannot create its destination beneath a read-only mount.
+  UPGRADE_SCENARIO_STAGE="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-upgrade-scenario.XXXXXX")"
+  cp -R "$UPGRADE_SCENARIO_DIR/." "$UPGRADE_SCENARIO_STAGE/"
+  cp "$UPGRADE_DIAGNOSTICS" "$UPGRADE_SCENARIO_STAGE/diagnostics.mjs"
+  chmod 0755 "$UPGRADE_SCENARIO_STAGE"
   UPGRADE_SCENARIO_ARGS+=(
-    -v "$UPGRADE_SCENARIO_DIR:/app/scripts/e2e/lib/upgrade-survivor:ro"
-    -v "$UPGRADE_DIAGNOSTICS:/app/scripts/e2e/lib/upgrade-survivor/diagnostics.mjs:ro"
+    -v "$UPGRADE_SCENARIO_STAGE:/app/scripts/e2e/lib/upgrade-survivor:ro"
     -v "$UPGRADE_NPM_REGISTRY_SERVER:/app/scripts/e2e/lib/plugins/npm-registry-server.mjs:ro"
     -v "$UPGRADE_NPM_PUBLISH_PLAN:/app/scripts/lib/npm-publish-plan.mjs:ro"
     -v "$UPGRADE_BOUNDED_RESPONSE:/app/scripts/lib/bounded-response.mjs:ro"
