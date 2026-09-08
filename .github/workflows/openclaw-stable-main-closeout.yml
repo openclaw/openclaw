@@ -453,13 +453,17 @@ jobs:
             --pattern "$manifest_asset" \
             --pattern "$manifest_checksum_asset" \
             --dir "$manifest_dir"
-          (
-            cd "$manifest_dir"
-            sha256sum --strict --status -c "$manifest_checksum_asset"
-          ) || {
-            echo "Full Release Validation manifest checksum failed for $EVIDENCE_TAG." >&2
-            exit 1
-          }
+          node --input-type=module - "$manifest_dir/$manifest_asset" <<'NODE'
+          import { readFileSync } from "node:fs";
+          import { basename } from "node:path";
+          import { verifyReleaseEvidenceChecksum } from "./.closeout-tooling/scripts/lib/stable-release-closeout.mjs";
+          const path = process.argv[2];
+          verifyReleaseEvidenceChecksum({
+            assetName: basename(path),
+            assetBytes: readFileSync(path),
+            checksum: readFileSync(`${path}.sha256`, "utf8"),
+          });
+          NODE
           tag_sha="$(git -C "$GITHUB_WORKSPACE/release-tag" rev-parse HEAD)"
           jq -e \
             --arg tag_sha "$tag_sha" \
@@ -486,7 +490,7 @@ jobs:
           fi
           SOURCE_SHA="$tag_sha" node --input-type=module - "$RUNNER_TEMP/release-publish-run.json" "$manifest_dir/$manifest_asset" "$recovery_evidence" <<'NODE'
           import { readFileSync, writeFileSync } from "node:fs";
-          import { createHash } from "node:crypto";
+          import { verifyReleaseEvidenceChecksum } from "./.closeout-tooling/scripts/lib/stable-release-closeout.mjs";
           import { basename } from "node:path";
           const run = JSON.parse(readFileSync(process.argv[2], "utf8"));
           for (const [key, expected] of [
@@ -514,11 +518,7 @@ jobs:
           if (failedRecovery) {
             const bytes = readFileSync(process.argv[4]);
             const checksum = readFileSync(`${process.argv[4]}.sha256`, "utf8");
-            const entry = /^([a-f0-9]{64}) {2}([^\r\n]+)\r?\n?$/.exec(checksum);
-            if (!entry || entry[2] !== basename(process.argv[4]) ||
-              entry[1] !== createHash("sha256").update(bytes).digest("hex")) {
-              throw new Error("Postpublish checksum must bind exactly the recovery evidence filename and bytes.");
-            }
+            verifyReleaseEvidenceChecksum({ assetName: basename(process.argv[4]), assetBytes: bytes, checksum });
             recoveryEvidence = JSON.parse(bytes);
           }
           if (failedRecovery && (recoveryEvidence?.operatorRecovery?.npmPublishRunId !== undefined ||

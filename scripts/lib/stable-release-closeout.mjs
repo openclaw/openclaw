@@ -22,6 +22,13 @@ function sha256(value) {
   return createHash("sha256").update(value).digest("hex");
 }
 
+export function verifyReleaseEvidenceChecksum({ assetName, assetBytes, checksum }) {
+  const entry = /^([a-f0-9]{64}) {2}([^\r\n]+)\r?\n?$/u.exec(checksum);
+  if (!entry || entry[2] !== assetName || entry[1] !== sha256(assetBytes)) {
+    throw new Error(`Release evidence checksum must bind exactly ${assetName} and its bytes.`);
+  }
+}
+
 export function parseStableReleaseTag(tag) {
   return parseStableReleaseTagDetails(tag).baseVersion;
 }

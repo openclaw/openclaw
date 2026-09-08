@@ -242,6 +242,10 @@ describe("stable closeout workflow publication routing", () => {
       .replace(
         "'./.closeout-tooling/scripts/lib/stable-publish-recovery.mjs'",
         JSON.stringify(pathToFileURL(path.resolve("scripts/lib/stable-publish-recovery.mjs")).href),
+      )
+      .replace(
+        '"./.closeout-tooling/scripts/lib/stable-release-closeout.mjs"',
+        JSON.stringify(pathToFileURL(path.resolve("scripts/lib/stable-release-closeout.mjs")).href),
       );
     const dir = mkdtempSync(path.join(tmpdir(), "openclaw-closeout-routing-"));
     tempDirs.push(dir);
@@ -307,10 +311,62 @@ describe("stable closeout workflow publication routing", () => {
     );
     expect(result.status, result.stderr).toBe(scenario.code);
     if ("checksum" in scenario) {
-      expect(result.stderr).toContain("Postpublish checksum must bind exactly");
+      expect(result.stderr).toContain("Release evidence checksum must bind exactly");
     }
     if (scenario.name === "incomplete split selectors") {
       expect(result.stderr).toContain("invalid run or attempt ID");
     }
   });
+});
+
+describe("stable closeout Full Release Validation checksum", () => {
+  it.each(["valid", "wrong-file", "duplicate", "mismatch"])(
+    "checks %s FRV manifest evidence",
+    (kind) => {
+      const workflow = readFileSync(".github/workflows/openclaw-stable-main-closeout.yml", "utf8");
+      const block = workflow.match(
+        /node --input-type=module - "\$manifest_dir\/\$manifest_asset" <<'NODE'\n([\s\S]*?)\n {10}NODE/u,
+      )?.[1];
+      if (!block) {
+        throw new Error("FRV checksum verifier node block missing");
+      }
+      const script = block
+        .split("\n")
+        .map((line) => line.slice(10))
+        .join("\n")
+        .replace(
+          '"./.closeout-tooling/scripts/lib/stable-release-closeout.mjs"',
+          JSON.stringify(
+            pathToFileURL(path.resolve("scripts/lib/stable-release-closeout.mjs")).href,
+          ),
+        );
+      const dir = mkdtempSync(path.join(tmpdir(), "openclaw-frv-checksum-"));
+      tempDirs.push(dir);
+      const file = path.join(dir, "release-manifest.json");
+      writeFileSync(
+        file,
+        JSON.stringify({ runId: "11", runAttempt: "2", targetSha: "a".repeat(40) }),
+      );
+      const digest = createHash("sha256").update(readFileSync(file)).digest("hex");
+      let checksum = `${digest}  release-manifest.json\n`;
+      if (kind === "wrong-file") {
+        checksum = `${digest}  another-file.json\n`;
+      }
+      if (kind === "duplicate") {
+        checksum += checksum;
+      }
+      if (kind === "mismatch") {
+        checksum = `${"b".repeat(64)}  release-manifest.json\n`;
+      }
+      writeFileSync(`${file}.sha256`, checksum);
+      const result = spawnSync(process.execPath, ["--input-type=module", "-", file], {
+        input: script,
+        encoding: "utf8",
+      });
+      expect(result.status, result.stderr).toBe(kind === "valid" ? 0 : 1);
+      if (kind !== "valid") {
+        expect(result.stderr).toContain("Release evidence checksum must bind exactly");
+      }
+    },
+  );
 });
