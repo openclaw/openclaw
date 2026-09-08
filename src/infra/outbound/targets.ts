@@ -570,6 +570,7 @@ export async function resolveHeartbeatDeliveryTargetWithSessionRoute(params: {
         agentId: params.agentId,
         accountId: delivery.accountId,
         target: routeResolvedTarget?.to ?? deliveryTo,
+        ...(ownerRouteMustBeDirect ? { deliveryPurpose: "heartbeat-owner" as const } : {}),
         resolvedTarget: routeResolvedTarget,
         currentSessionKey: params.currentSessionKey,
         threadId: delivery.threadId,

@@ -23,11 +23,15 @@ const {
   assistantThreadsSetStatusMock,
   conversationsInfoMock,
   conversationsOpenMock,
+  usersInfoMock,
+  authTeamsListMock,
   getSlackWriteClientMock,
 } = vi.hoisted(() => ({
   assistantThreadsSetStatusMock: vi.fn(),
   conversationsInfoMock: vi.fn(),
   conversationsOpenMock: vi.fn(),
+  usersInfoMock: vi.fn(),
+  authTeamsListMock: vi.fn(),
   getSlackWriteClientMock: vi.fn(),
 }));
 
@@ -56,10 +60,13 @@ vi.mock("./client.js", async () => {
       info: conversationsInfoMock,
       open: conversationsOpenMock,
     },
+    users: { info: usersInfoMock },
+    auth: { teams: { list: authTeamsListMock } },
   });
   return {
     ...actual,
     createSlackReadClient: vi.fn(createClient),
+    createSlackLookupClient: vi.fn(createClient),
     getSlackWriteClient: getSlackWriteClientMock.mockImplementation(createClient),
   };
 });
@@ -74,6 +81,8 @@ beforeEach(async () => {
   assistantThreadsSetStatusMock.mockResolvedValue({ ok: true });
   conversationsInfoMock.mockReset();
   conversationsOpenMock.mockReset();
+  usersInfoMock.mockReset();
+  authTeamsListMock.mockReset();
   getSlackWriteClientMock.mockClear();
   setSlackRuntime({
     channel: {
@@ -780,6 +789,64 @@ describe("slackPlugin status", () => {
       baseSessionKey: "agent:main:main:account:default:team:t123",
       to: "team:T123:user:U456",
     });
+  });
+
+  it.each(["heartbeat-owner", undefined] as const)(
+    "limits Enterprise workspace discovery to owner heartbeats: %s",
+    async (deliveryPurpose) => {
+      const installation = registerSlackInstallationState("default", "enterprise");
+      usersInfoMock.mockResolvedValue({
+        ok: true,
+        user: { id: "U12345678", enterprise_user: { teams: ["T22222222", "T11111111"] } },
+      });
+      authTeamsListMock.mockResolvedValue({
+        ok: true,
+        teams: [{ id: "T22222222" }, { id: "T11111111" }],
+      });
+      try {
+        const route = await slackPlugin.messaging!.resolveOutboundSessionRoute!({
+          cfg: { channels: { slack: { botToken: "sending-fixture" } } },
+          agentId: "main",
+          target: "user:u12345678",
+          deliveryPurpose,
+        });
+        if (!deliveryPurpose) {
+          expectRecordFields(route, "Detached Enterprise Slack DM route", {
+            to: "user:u12345678",
+          });
+          expect(usersInfoMock).not.toHaveBeenCalled();
+          expect(authTeamsListMock).not.toHaveBeenCalled();
+          return;
+        }
+        expectRecordFields(route, "Enterprise Slack owner DM route", {
+          baseSessionKey: "agent:main:main:account:default:team:t11111111",
+          to: "team:T11111111:user:U12345678",
+          recipientSessionExact: true,
+        });
+        expect(usersInfoMock).toHaveBeenCalledExactlyOnceWith({ user: "U12345678" });
+        expect(conversationsOpenMock).not.toHaveBeenCalled();
+      } finally {
+        installation.release();
+      }
+    },
+  );
+
+  it("preserves an explicit Enterprise user workspace without discovery", async () => {
+    const installation = registerSlackInstallationState("default", "enterprise");
+    try {
+      const route = await slackPlugin.messaging!.resolveOutboundSessionRoute!({
+        cfg: {},
+        agentId: "main",
+        target: "team:T22222222:user:U12345678",
+      });
+      expectRecordFields(route, "Explicit Enterprise Slack DM route", {
+        to: "team:T22222222:user:U12345678",
+      });
+      expect(usersInfoMock).not.toHaveBeenCalled();
+      expect(authTeamsListMock).not.toHaveBeenCalled();
+    } finally {
+      installation.release();
+    }
   });
 
   it("routes a folded bare W user id as a direct session", async () => {
