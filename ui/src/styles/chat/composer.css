@@ -834,7 +834,6 @@
 }
 
 .agent-chat__capability-menu-item {
-  --wa-color-neutral-fill-normal: var(--bg-hover);
   --wa-color-text-normal: var(--text);
 
   display: flex;
@@ -1589,8 +1588,6 @@
 }
 
 .chat-talk-input-picker__item {
-  --wa-color-neutral-fill-normal: var(--bg-hover);
-
   min-height: var(--chat-composer-menu-row-height);
   padding: var(--chat-composer-menu-row-padding);
   border-radius: var(--chat-composer-menu-row-radius);
@@ -2204,7 +2201,7 @@
 
 .slash-menu-item:hover,
 .slash-menu-item--active {
-  background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
+  background: var(--bg-hover);
 }
 
 .slash-menu-copy {
@@ -2856,8 +2853,6 @@
 }
 
 .chat-controls__permission-option {
-  --wa-color-neutral-fill-normal: var(--bg-hover);
-
   display: flex;
   align-items: center;
   gap: var(--chat-composer-menu-row-gap);
