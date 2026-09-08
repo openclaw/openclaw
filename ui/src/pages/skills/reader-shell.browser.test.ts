@@ -48,7 +48,7 @@ describe.runIf(browserMode)("skill reader shell", () => {
         image: style.backgroundImage,
         border: style.border,
         radius: style.borderRadius,
-        button: [button.background, button.border, button.boxShadow, button.width, button.height],
+        button: [button.background, button.border, button.boxShadow],
         icon: [icon.width, icon.height, icon.strokeWidth],
       };
     };

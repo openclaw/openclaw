@@ -4551,8 +4551,20 @@ td.data-table-key-col {
 .skill-reader-dialog .exec-approval-header {
   flex-shrink: 0;
   gap: var(--space-3);
-  padding: var(--skill-reader-inset);
+  padding: var(--space-2) var(--skill-reader-inset);
   border-bottom: 1px solid var(--border);
+}
+
+.skill-reader-dialog .exec-approval-header > .btn--icon {
+  min-width: var(--space-7);
+  height: var(--space-7);
+  padding: 0;
+}
+
+.skill-reader-dialog .exec-approval-header .clawhub-skill-icon {
+  width: var(--space-7);
+  height: var(--space-7);
+  flex-basis: var(--space-7);
 }
 
 .skill-reader-dialog .exec-approval-header > :first-child {
