@@ -37,7 +37,7 @@ export function resolveSqliteInspectionBudget(
           fractionDigits: sizeBytes < 1024n ? 0 : 1,
         });
   if (timeoutMs > SQLITE_INSPECTION_TIMEOUT_MS) {
-    log.info(`SQLite ${operation} for ${pathname}: ${size}, budget ${timeoutMs / 1000} seconds`);
+    log.debug(`SQLite ${operation} for ${pathname}: ${size}, budget ${timeoutMs / 1000} seconds`);
   }
   return { timeoutMs, size };
 }

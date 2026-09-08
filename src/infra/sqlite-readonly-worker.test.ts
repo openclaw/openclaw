@@ -10,14 +10,14 @@ import {
   runSqliteReadOnlyWorkerSync,
 } from "./sqlite-readonly-worker.js";
 
-const logs = vi.hoisted(() => ({ info: vi.fn() }));
+const logs = vi.hoisted(() => ({ debug: vi.fn() }));
 vi.mock("../logging/subsystem.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../logging/subsystem.js")>();
   return {
     ...actual,
     createSubsystemLogger: (...args: Parameters<typeof actual.createSubsystemLogger>) => ({
       ...actual.createSubsystemLogger(...args),
-      info: logs.info,
+      debug: logs.debug,
     }),
   };
 });
@@ -33,7 +33,7 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 beforeEach(() => {
   vi.mocked(execFile).mockClear();
   vi.mocked(spawnSync).mockClear();
-  logs.info.mockClear();
+  logs.debug.mockClear();
 });
 
 function createDatabase(paddingBytes: number | null): string {
@@ -101,14 +101,14 @@ describe.each(["async", "sync"] as const)("SQLite read-only snapshot worker (%s)
     expect(fs.existsSync(snapshot)).toBe(true);
     expectBudget(timeout);
     if (timeout > 30_000) {
-      expect(logs.info).toHaveBeenCalledExactlyOnceWith(
+      expect(logs.debug).toHaveBeenCalledExactlyOnceWith(
         expect.stringContaining(`SQLite read-only snapshot for ${source}:`),
       );
-      expect(logs.info).toHaveBeenCalledWith(
+      expect(logs.debug).toHaveBeenCalledWith(
         expect.stringContaining(`budget ${timeout / 1000} seconds`),
       );
     } else {
-      expect(logs.info).not.toHaveBeenCalled();
+      expect(logs.debug).not.toHaveBeenCalled();
     }
   });
 
@@ -146,6 +146,6 @@ describe.each(["async", "sync"] as const)("SQLite read-only snapshot worker (%s)
     const source = path.join(tempDirs.make("openclaw-snapshot-budget-missing-"), "missing.sqlite");
     await expect(run(source)).rejects.toThrow(/SQLite read-only worker.*ENOENT/);
     expectBudget(30_000);
-    expect(logs.info).not.toHaveBeenCalled();
+    expect(logs.debug).not.toHaveBeenCalled();
   });
 });
