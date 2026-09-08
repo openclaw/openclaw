@@ -539,14 +539,26 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
             });
             results[name] = "blocked";
           };
-          await policy("form", "form-action", () => {
-            const form = document.createElement("form");
-            form.action = `${sinkOrigin}/form`;
-            form.method = "POST";
-            document.body.append(form);
+          // The navigation guard cancels this POST before CSP evaluates it.
+          const form = document.createElement("form");
+          form.action = `${sinkOrigin}/form`;
+          form.method = "POST";
+          document.body.append(form);
+          await new Promise<void>((resolve) => {
+            window.navigation.addEventListener(
+              "navigate",
+              (event) => {
+                results.form =
+                  event.destination.url === form.action && event.defaultPrevented
+                    ? "blocked"
+                    : "allowed";
+                resolve();
+              },
+              { once: true },
+            );
             form.submit();
-            form.remove();
           });
+          form.remove();
           await policy("xhr", "connect-src", () => {
             const xhr = new XMLHttpRequest();
             xhr.open("GET", `${sinkOrigin}/xhr`);
