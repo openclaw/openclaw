@@ -1381,12 +1381,11 @@ export async function prepareSlackMessage(params: {
     );
 
   const ackReactionMessageTs = message.ts;
-  const allowToolOnlyStatusReaction =
-    statusReactionsExplicitlyEnabled && (effectiveWasMentioned || shouldBypassMention);
+  const allowToolOnlyAckReaction = effectiveWasMentioned || shouldBypassMention;
   const shouldSendConfiguredAck = shouldAckReaction();
   const shouldSendAckReaction =
     shouldSendConfiguredAck &&
-    (!sourceRepliesAreToolOnly || allowToolOnlyStatusReaction || isRoomEvent);
+    (!sourceRepliesAreToolOnly || allowToolOnlyAckReaction || isRoomEvent);
   const statusReactionsWillHandle =
     Boolean(ackReactionMessageTs) &&
     !isRoomEvent &&
