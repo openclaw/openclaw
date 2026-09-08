@@ -5485,3 +5485,82 @@ describe("createCodexDynamicToolBridge", () => {
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
+
+describe("automations toolsAllow canonicalization", () => {
+  function createAutomationsBridge() {
+    const execute = vi.fn(async () => textToolResult("scheduled"));
+    const bridge = createCodexDynamicToolBridge({
+      tools: [
+        createTool({ name: "automations", execute }),
+        createTool({ name: "read" }),
+        createTool({ name: "sandbox_exec", catalogMode: "direct-only" }),
+        createTool({ name: "mfs_atlas__work_item_list" }),
+      ],
+      signal: new AbortController().signal,
+      loading: "searchable",
+    });
+    return { bridge, execute };
+  }
+
+  function automationsCall(toolsAllow: unknown[], tool = "automations") {
+    return {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      callId: `call-${tool}-allowlist`,
+      namespace: CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE,
+      tool,
+      arguments: {
+        action: "add",
+        job: {
+          name: "daily-summary",
+          schedule: { kind: "cron", expr: "0 7 * * 1-5", tz: "America/Bogota" },
+          sessionTarget: "isolated",
+          payload: { kind: "agentTurn", message: "Summarize.", toolsAllow },
+        },
+      } as JsonValue,
+    };
+  }
+
+  it("rewrites Codex namespaced names to the canonical names the scheduler caps against", async () => {
+    const { bridge, execute } = createAutomationsBridge();
+
+    const response = await bridge.handleToolCall(
+      automationsCall([
+        "openclaw__read",
+        "openclaw_direct__sandbox_exec",
+        "openclaw__mfs_atlas__work_item_list",
+        "mfs_atlas__work_item_list",
+        "openclaw__not_a_tool_of_this_turn",
+        "*",
+        7,
+      ]),
+    );
+
+    expect(response.success).toBe(true);
+    const executed = requireRecord(callArg(execute, 0, 1, "automations arguments"), "arguments");
+    const job = requireRecord(executed.job, "job");
+    const payload = requireRecord(job.payload, "payload");
+    expect(payload.toolsAllow).toEqual([
+      "read",
+      "sandbox_exec",
+      "mfs_atlas__work_item_list",
+      "mfs_atlas__work_item_list",
+      "openclaw__not_a_tool_of_this_turn",
+      "*",
+      7,
+    ]);
+    expect(payload.message).toBe("Summarize.");
+  });
+
+  it("leaves other tools and already canonical allowlists untouched", async () => {
+    const { bridge, execute } = createAutomationsBridge();
+    const canonical = ["read", "sandbox_exec"];
+
+    await bridge.handleToolCall(automationsCall(canonical));
+
+    const executed = requireRecord(callArg(execute, 0, 1, "automations arguments"), "arguments");
+    const job = requireRecord(executed.job, "job");
+    const payload = requireRecord(job.payload, "payload");
+    expect(payload.toolsAllow).toBe(canonical);
+  });
+});

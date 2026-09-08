@@ -67,6 +67,10 @@ import {
   sliceUtf16Safe,
 } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { CodexDynamicToolsLoading } from "./config.js";
+import {
+  CODEX_AUTOMATIONS_DYNAMIC_TOOL_NAME,
+  canonicalizeCodexAutomationsToolsAllow,
+} from "./dynamic-tool-automations-allowlist.js";
 import { finalizeCodexToolAvailability } from "./dynamic-tool-availability.js";
 import {
   createCodexDynamicToolSpecs,
@@ -664,7 +668,12 @@ export function createCodexDynamicToolBridge(params: {
         });
       }
       const { tool, name: toolName } = toolEntry;
-      const rawArguments = call.arguments;
+      // Code Mode shows OpenClaw tools as `openclaw__<name>`; the scheduler caps
+      // an automation by canonical names, so translate the job allowlist here.
+      const rawArguments =
+        toolName === CODEX_AUTOMATIONS_DYNAMIC_TOOL_NAME
+          ? canonicalizeCodexAutomationsToolsAllow(call.arguments, registeredToolNames)
+          : call.arguments;
       const args = asNonArrayRecord(rawArguments);
       const startedAt = Date.now();
       const signal = composeAbortSignals(params.signal, options?.signal);

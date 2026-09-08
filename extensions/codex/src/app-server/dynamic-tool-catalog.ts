@@ -25,7 +25,7 @@ export type ProjectedCodexDynamicTool<T extends CodexToolDescriptor> = {
 export type CodexDynamicToolSchemaQuarantine = { tool: string; violations: readonly string[] };
 
 /** Namespace attached to OpenClaw-owned dynamic tools exposed to Codex. */
-const CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE = "openclaw";
+export const CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE = "openclaw";
 const CODEX_DYNAMIC_TOOL_NAME_MAX_CHARS = 128;
 const CODEX_DYNAMIC_TOOL_NAME_PATTERN = /^[a-zA-Z0-9_-]+$/u;
 
