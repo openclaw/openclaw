@@ -17,7 +17,8 @@ describe("ClawHub detail content", () => {
     await page.viewport(width, 960);
     document.body.append(container);
     const code = "long_identifier_".repeat(80);
-    const changelog = `# Release notes\n\nFirst paragraph starts here.\n\n\`\`\`text\n${code}\n\`\`\`\n\n| Change | Status |\n| --- | --- |\n| Preview | Ready |\n\n<img src="javascript:alert(1)" onerror="alert(1)">`;
+    const tableIdentifier = "table_identifier_".repeat(80);
+    const changelog = `# Release notes\n\nFirst paragraph starts here.\n\n\`\`\`text\n${code}\n\`\`\`\n\n| Change | Status |\n| --- | --- |\n| ${tableIdentifier} | Ready |\n\n<img src="javascript:alert(1)" onerror="alert(1)">`;
     render(
       renderSkills(
         createProps({
@@ -49,7 +50,10 @@ describe("ClawHub detail content", () => {
     expect(body.querySelector("h1")?.textContent).toBe("Release notes");
     expect(body.querySelector("article > p")?.textContent).toBe("First paragraph starts here.");
     expect(body.querySelector("pre code")?.textContent).toBe(`${code}\n`);
-    expect(body.querySelector("td")?.textContent).toBe("Preview");
+    const table = body.querySelector("table")!;
+    expect(table.scrollWidth).toBeGreaterThan(table.clientWidth);
+    table.scrollLeft = 100;
+    expect(table.scrollLeft).toBeGreaterThan(0);
     expect(body.querySelector("[onerror], [src^='javascript:']")).toBeNull();
   });
 });

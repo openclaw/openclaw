@@ -253,6 +253,10 @@
   padding-top: var(--space-3);
 }
 
+.clawhub-skill-detail__changelog :where(table) {
+  overflow-wrap: normal;
+}
+
 .clawhub-skill-icon--detail {
   width: 56px;
   height: 56px;
