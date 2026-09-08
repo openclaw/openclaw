@@ -147,6 +147,58 @@ describe("personal publication authority and recovery", () => {
     expect(workspace.effects).toEqual(["push"]);
   });
 
+  it("stops offering a pending confirmation once the session is archived", async () => {
+    await persistPublicationTestSession();
+    const controller = new AbortController();
+    const db = openOpenClawStateDatabase().db;
+    ensurePersonalGitHubPublicationSchema(db);
+    db.function("stop_personal_admission", () => {
+      controller.abort();
+      return 1;
+    });
+    db.exec(`CREATE TEMP TRIGGER stop_personal_admission AFTER INSERT ON ${table}
+      BEGIN SELECT stop_personal_admission(); END`);
+    const stopped = preparePersonalGitHubSessionAction(
+      { client, context, signal: controller.signal },
+      { sessionKey: SESSION_KEY },
+    );
+    await expect(coordinator.requestPersonalForSession(request(), stopped)).rejects.toThrow(
+      "current",
+    );
+    db.exec("DROP TRIGGER stop_personal_admission");
+    const row = openOpenClawStateDatabase()
+      .db.prepare(`SELECT request_id, status, execution_id FROM ${table}`)
+      .get() as { request_id: string; status: string; execution_id: null };
+    expect(row).toMatchObject({ status: "requested", execution_id: null });
+    const pending = await rpc("sessions.github.status", {
+      sessionKey: SESSION_KEY,
+      requestId: row.request_id,
+    });
+    expect(pending[1]).toMatchObject({
+      result: { status: "needs_confirmation" },
+      confirmation: { generation, account },
+    });
+    // Archiving preserves sessionId/lifecycleRevision, so only an explicit archivedAt
+    // check can retire the pending confirmation the archived confirm action would reject.
+    await patchSessionEntryCore(
+      { agentId: "main", sessionKey: SESSION_KEY, storePath: path.join(root, "sessions.json") },
+      () => ({ archivedAt: Date.now() }),
+    );
+    const discovered = await rpc("sessions.github.status", {
+      sessionKey: SESSION_KEY,
+      requestId: row.request_id,
+    });
+    expect(discovered[1]).toMatchObject({
+      result: { status: "failed", code: "session_changed" },
+      confirmation: null,
+    });
+    expect((await rpc("sessions.github.options"))[1].pendingPersonal).toMatchObject({
+      result: { status: "failed", code: "session_changed" },
+      confirmation: null,
+    });
+    expect(commands.some((argv) => argv.includes("push"))).toBe(false);
+  });
+
   it("records an in-flight local push response after reset without creating a pull request", async () => {
     const workspace = await createRealPublicationWorkspace("create");
     const session = await persistPublicationTestSession();

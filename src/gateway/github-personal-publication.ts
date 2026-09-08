@@ -124,7 +124,7 @@ export function createPersonalGitHubPublicationCoordinator(
   const status = (
     row: PersonalGitHubPublicationRow,
     action: PersonalGitHubAction,
-    session: { sessionId: string; lifecycleRevision?: string | null },
+    session: { sessionId: string; lifecycleRevision?: string | null; archivedAt?: number | null },
   ): SessionGitHubStatusResult => {
     // The instance ID alone is not liveness: admission can stop before it claims an execution.
     const executing =
@@ -140,8 +140,11 @@ export function createPersonalGitHubPublicationCoordinator(
       publicationKind: "personal",
       requestId: row.request_id,
     });
+    // Archiving keeps sessionId/lifecycleRevision intact, but the confirm action fences
+    // archived sessions; status must stop offering the confirmation it would reject.
     const code =
       row.session_id !== session.sessionId ||
+      session.archivedAt != null ||
       !lifecycle ||
       lifecycle.lifecycle_revision !== (session.lifecycleRevision ?? null)
         ? "session_changed"
@@ -375,6 +378,7 @@ export function createPersonalGitHubPublicationCoordinator(
         agentId: string;
         sessionId: string;
         lifecycleRevision?: string | null;
+        archivedAt?: number | null;
       },
       requestId: string,
     ) {
@@ -392,6 +396,7 @@ export function createPersonalGitHubPublicationCoordinator(
         agentId: string;
         sessionId: string;
         lifecycleRevision?: string | null;
+        archivedAt?: number | null;
       },
     ) {
       action.assertCurrent();

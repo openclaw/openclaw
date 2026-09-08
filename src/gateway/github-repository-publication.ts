@@ -96,9 +96,12 @@ export function createRepositoryGitHubPublicationCoordinator(
       active.get(row.request_id) === row.execution_id;
     const pending = !terminalRepositoryGitHubPublication(row) && !executing;
     const connection = pending ? personalGitHubStatus(action) : null;
+    // Archiving keeps sessionId/lifecycleRevision intact, but the confirm action fences
+    // archived sessions; status must stop offering the confirmation it would reject.
     const mismatch =
       pending &&
       (row.session_id !== session.sessionId ||
+        session.archivedAt != null ||
         row.session_lifecycle_revision !== (session.lifecycleRevision ?? null) ||
         !resolveReceiptOwner(row) ||
         connection?.generation !== row.connection_generation ||
@@ -111,6 +114,7 @@ export function createRepositoryGitHubPublicationCoordinator(
           status: "failed",
           error_code:
             row.session_id !== session.sessionId ||
+            session.archivedAt != null ||
             row.session_lifecycle_revision !== (session.lifecycleRevision ?? null) ||
             !resolveReceiptOwner(row)
               ? "session_changed"

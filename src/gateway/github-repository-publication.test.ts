@@ -870,7 +870,7 @@ describe("repository checkpoint GitHub publication", () => {
     },
   );
 
-  it.each(["turn", "reset", "move"] as const)(
+  it.each(["turn", "reset", "move", "archive"] as const)(
     "requires the same personal owner after restart and a later %s",
     async (boundary) => {
       const f = await repositoryFixture();
@@ -931,6 +931,24 @@ describe("repository checkpoint GitHub publication", () => {
         });
         return;
       }
+      if (boundary === "archive") {
+        // Archiving preserves sessionId/lifecycleRevision; status must still retire the
+        // confirmation because the archived confirm action deterministically rejects it.
+        await patchSessionEntryCore(
+          {
+            agentId: "main",
+            sessionKey: SESSION_KEY,
+            storePath: mocks.loadSession(SESSION_KEY).storePath,
+          },
+          () => ({ archivedAt: Date.now() }),
+        );
+        expect(
+          person.coordinator.personalStatus(person.action, person.action, first.requestId),
+        ).toMatchObject({
+          result: { status: "failed", code: "session_changed" },
+          confirmation: null,
+        });
+      }
       if (boundary === "reset") {
         await f.closeSession("reset");
         const status = await callPersonalPublicationRpc(person, "sessions.github.status", {
@@ -952,6 +970,11 @@ describe("repository checkpoint GitHub publication", () => {
       if (boundary === "reset") {
         expect(confirmed[0]).toBe(false);
         expect(f.runtime.effects).toEqual(["push"]);
+        return;
+      }
+      if (boundary === "archive") {
+        expect(confirmed[0]).toBe(false);
+        expect(f.runtime.effects).toEqual([]);
         return;
       }
       expect(confirmed[0], JSON.stringify(confirmed[2])).toBe(true);

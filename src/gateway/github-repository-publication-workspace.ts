@@ -19,6 +19,7 @@ export type RepositoryPublicationSessionIdentity = {
   sessionKey: string;
   agentId: string;
   lifecycleRevision?: string | null;
+  archivedAt?: number | null;
 };
 export type PreparedRepositoryPublicationSnapshot = {
   snapshot: GitHubRepositoryPublicationSnapshot;
