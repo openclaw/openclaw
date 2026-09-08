@@ -30,8 +30,22 @@ describe("doctor project clone shape", () => {
         );
         urlRemote.username = "user";
         urlRemote.password = ["synthetic", "secret"].join("-");
-        const urlKeys = ["promisor", "partialclonefilter"].map(
-          (field) => `remote.${urlRemote.href}.${field}`,
+        const userInfo = [urlRemote.username, urlRemote.password].join(":");
+        const addressRemotes = [
+          urlRemote.href,
+          ["https", urlRemote.href].join("::"),
+          [userInfo, "example.invalid:org/project.git?opaque=query-private#fragment-private"].join(
+            "@",
+          ),
+          [
+            "odd_scheme",
+            [userInfo, "example.invalid/project.git?opaque=query-private#fragment-private"].join(
+              "@",
+            ),
+          ].join("://"),
+        ];
+        const urlKeys = addressRemotes.flatMap((remote) =>
+          ["promisor", "partialclonefilter"].map((field) => `remote.${remote}.${field}`),
         );
         const source = state.path("source");
         await git(state.root, "init", "-b", "main", source);
@@ -63,8 +77,9 @@ describe("doctor project clone shape", () => {
         await registerClonedProjectRegistry({ path: clone, name: "Stored project", originUrl });
         await registerProjectRegistry({ path: ignored, name: "User checkout" });
         if (shape === "both") {
-          await git(clone, "config", urlKeys[0]!, "true");
-          await git(clone, "config", urlKeys[1]!, "blob:none");
+          for (const key of urlKeys) {
+            await git(clone, "config", key, key.endsWith(".promisor") ? "true" : "blob:none");
+          }
           await git(clone, "config", "extensions.partialclone", "origin");
         }
         const configBefore = await fs.readFile(path.join(clone, ".git", "config"), "utf8");
@@ -116,6 +131,15 @@ describe("doctor project clone shape", () => {
           expect(finding.message).toContain(
             "remote.https://***@example.invalid/project.git.partialclonefilter",
           );
+          for (const remote of [
+            "https::https://***@example.invalid/project.git",
+            "***@example.invalid:org/project.git",
+            "odd_scheme://***@example.invalid/project.git",
+          ]) {
+            for (const field of ["promisor", "partialclonefilter"]) {
+              expect(finding.message).toContain(`remote.${remote}.${field}`);
+            }
+          }
           expect(finding.message).toContain("extensions.partialclone");
           expect(finding.fixHint).toContain(
             "git config --get-regexp '^remote\\..*\\.(promisor|partialclonefilter)$'",
@@ -127,7 +151,7 @@ describe("doctor project clone shape", () => {
             "git config --unset-all remote.origin.partialclonefilter",
           );
           expect(finding.fixHint).toContain("git config --unset-all remote.origin.promisor");
-          expect(finding.fixHint).not.toMatch(/git config --unset-all .*https:/);
+          expect(finding.fixHint).not.toMatch(/git config --unset-all .*(?::\/\/|::|@)/);
         }
         expect(await fs.readFile(path.join(clone, ".git", "config"), "utf8")).toBe(configBefore);
         expect(await git(clone, "rev-parse", "--is-shallow-repository")).toBe(String(shallow));

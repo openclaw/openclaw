@@ -9,18 +9,27 @@ import { listProjectRegistry } from "../projects/project-registry.js";
 const CHECK_ID = "core/doctor/project-clone-shape";
 
 function describeCloneConfigKey(key: string) {
-  const fieldOffset = key.lastIndexOf(".");
-  const url = key.startsWith("remote.")
-    ? URL.parse(key.slice("remote.".length, fieldOffset))
-    : null;
-  if (!url) {
+  if (!key.startsWith("remote.")) {
     return { name: key, urlKey: false };
   }
-  url.username = url.username || url.password ? "***" : "";
-  url.password = "";
-  url.search = "";
-  url.hash = "";
-  return { name: `remote.${url.href}${key.slice(fieldOffset)}`, urlKey: true };
+  const fieldOffset = key.lastIndexOf(".");
+  const remote = key.slice("remote.".length, fieldOffset);
+  if (!/(:\/\/|::|@)/.test(remote)) {
+    return { name: key, urlKey: false };
+  }
+  // Git addresses include remote-helper and scp forms, not just WHATWG URLs.
+  // Preserve transport/scheme labels but conservatively mask through the final @.
+  const transport = /^(?:[^:/?#@]+::)+/.exec(remote)?.[0] ?? "";
+  let address = remote.slice(transport.length);
+  const userInfoEnd = address.lastIndexOf("@");
+  if (userInfoEnd >= 0) {
+    const schemeEnd = address.indexOf("://");
+    const prefixLength =
+      schemeEnd >= 0 && schemeEnd < userInfoEnd ? schemeEnd + 3 : address.startsWith("//") ? 2 : 0;
+    address = `${address.slice(0, prefixLength)}***@${address.slice(userInfoEnd + 1)}`;
+  }
+  address = address.split(/[?#]/, 1)[0] ?? "";
+  return { name: `remote.${transport}${address}${key.slice(fieldOffset)}`, urlKey: true };
 }
 
 async function readCloneGit(root: string, args: string[], optional = false): Promise<string> {

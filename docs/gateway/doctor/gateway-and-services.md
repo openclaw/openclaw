@@ -91,8 +91,9 @@ warnings, workspace status, gateway auth and health, and supervisors.
     Doctor checks stored project clones registered with `source: "cloned"`. It
     reports the project name and path, shallow state, every
     `remote.*.partialclonefilter` and `remote.*.promisor` key (including URL-keyed
-    twins), and `extensions.partialclone` when present. URL-keyed names replace
-    userinfo with `***` and omit query strings and fragments. Full clones produce no
+    twins), and `extensions.partialclone` when present. Address-like names replace
+    userinfo with `***` and omit query strings and fragments, including remote-helper
+    and scp-like addresses that are not standard URLs. Full clones produce no
     finding. Missing or unreadable clones are reported as skipped; other projects
     are still checked. Agent workspaces and manually registered checkouts are
     outside this check.
@@ -132,7 +133,7 @@ warnings, workspace status, gateway auth and health, and supervisors.
     for complete history. Keep promisor settings until missing objects have been
     fetched by ID, then unset every reported `promisor` key and, if present,
     `extensions.partialclone` before repacking. Doctor prints exact unset commands
-    for plain remote names. For URL-keyed entries, follow the local lookup and
+    for plain remote names without `://`, `::`, or `@`. For address-like entries, follow the local lookup and
     unset instructions before continuing; the original key may contain credentials
     and must not be copied into shared reports. The redacted name identifies the
     entry but is not its literal Git config key.
