@@ -2094,6 +2094,7 @@ describe("active-memory plugin", () => {
     hoisted.getActiveMemorySearchManager.mockImplementationOnce(() => new Promise<never>(() => {}));
 
     let settled = false;
+    const isSettled = () => settled;
     const resultPromise = runPromptBuild(
       { prompt: "what did we decide?" },
       {
@@ -2105,7 +2106,7 @@ describe("active-memory plugin", () => {
       settled = true;
     });
     await vi.advanceTimersByTimeAsync(1_500);
-    for (let attempt = 0; attempt < 40 && !settled; attempt += 1) {
+    for (let attempt = 0; attempt < 40 && !isSettled(); attempt += 1) {
       await vi.advanceTimersByTimeAsync(25);
     }
 
