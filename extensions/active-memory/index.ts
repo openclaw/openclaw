@@ -379,29 +379,35 @@ export default definePluginEntry({
               // Lane one is optional and runs inside the preflight deadline.
               // Its own timeout is what is left of that budget, less enough
               // to fall through to model recall before the watchdog fires.
-              const triggerLookupTimeoutMs = Math.max(
-                0,
-                hookDeadline.remainingMs() - TRIGGER_LOOKUP_SETTLE_RESERVE_MS,
-              );
-              laneOne = await resolveTriggerRecall({
-                cfg: liveConfig,
-                agentId: effectiveAgentId,
-                query: searchQuery,
-                message: event.prompt,
-                activeProjectKeys: ctx.activeProjectKeys,
-                signal: AbortSignal.timeout(triggerLookupTimeoutMs),
-                runId: ctx.runId,
-                authorityFingerprint: toolAuthority.fingerprint,
-              }).catch((error: unknown) => {
+              // Without that headroom it is skipped outright: even a zero
+              // delay timer is asynchronous and can lose to the watchdog.
+              const triggerLookupTimeoutMs =
+                hookDeadline.remainingMs() - TRIGGER_LOOKUP_SETTLE_RESERVE_MS;
+              if (triggerLookupTimeoutMs > 0) {
+                laneOne = await resolveTriggerRecall({
+                  cfg: liveConfig,
+                  agentId: effectiveAgentId,
+                  query: searchQuery,
+                  message: event.prompt,
+                  activeProjectKeys: ctx.activeProjectKeys,
+                  signal: AbortSignal.timeout(triggerLookupTimeoutMs),
+                  runId: ctx.runId,
+                  authorityFingerprint: toolAuthority.fingerprint,
+                }).catch((error: unknown) => {
+                  api.logger.debug?.(
+                    `active-memory: lane-1 trigger recall failed: ${toSingleLineErrorMessage(error)}`,
+                  );
+                  return { hasStrongHit: false, injectedCount: 0 };
+                });
+                toolAuthority.assertActive();
+                if (laneOne.context && laneOne.injectedCount > 0 && invocationConfig.logging) {
+                  api.logger.info?.(
+                    `active-memory: lane-1 injected ${laneOne.injectedCount} trigger-matched entries`,
+                  );
+                }
+              } else {
                 api.logger.debug?.(
-                  `active-memory: lane-1 trigger recall failed: ${toSingleLineErrorMessage(error)}`,
-                );
-                return { hasStrongHit: false, injectedCount: 0 };
-              });
-              toolAuthority.assertActive();
-              if (laneOne.context && laneOne.injectedCount > 0 && invocationConfig.logging) {
-                api.logger.info?.(
-                  `active-memory: lane-1 injected ${laneOne.injectedCount} trigger-matched entries`,
+                  "active-memory: lane-1 trigger recall skipped: preflight budget exhausted",
                 );
               }
             }
