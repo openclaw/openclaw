@@ -6,7 +6,14 @@ import { formatErrorMessage } from "./errors.js";
 /** Risk level returned by exec auto-reviewers for approval routing decisions. */
 type ExecAutoReviewRisk = "unknown" | "low" | "medium" | "high";
 
-/** Auto-review outcome: approve once, reject, or request human approval. */
+/**
+ * Auto-review outcome: `allow-once` with low/medium risk permits one execution;
+ * `ask` requests human approval. Plugin consumers must handle `deny` explicitly:
+ * do not run, return the rationale and rejection guidance to the agent, and never
+ * escalate that denial to human approval. The configured exec reviewer maps
+ * provider failures, timeouts, and invalid responses to `ask`; detected
+ * reviewer-directed prompt injection maps to `deny` with high risk.
+ */
 export type ExecAutoReviewDecision =
   | {
       decision: "allow-once";
