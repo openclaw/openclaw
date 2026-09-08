@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { parseSessionEntries, SessionManager } from "../sessions/index.js";
-import { textToolResult } from "../test-helpers/sparse-transcript.test-support.js";
+import { textToolResult, textAssistant } from "../test-helpers/sparse-transcript.test-support.js";
 
 const roots: string[] = [];
 
@@ -171,10 +171,7 @@ describe("readTranscriptState", () => {
         id: "legacy-orphan-child",
         parentId: "legacy-orphan",
         timestamp: "2026-05-16T00:00:08.000Z",
-        message: {
-          role: "assistant",
-          content: [{ type: "text", text: "still reachable from the orphan root" }],
-        },
+        message: textAssistant("still reachable from the orphan root"),
       }),
     ]);
 

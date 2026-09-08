@@ -9,6 +9,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { transformMessages } from "../../packages/ai/src/transcript-transform.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { makeTextToolResult } from "../../test/helpers/text-tool-result.js";
+import { makeUserMessage } from "../../test/helpers/user-message.js";
 import {
   appendTranscriptMessage,
   listSessionPendingInputs,
@@ -124,11 +125,7 @@ describe("guardSessionManager transcript updates", () => {
 
   it("reloads the session manager after atomic compaction persistence rolls back", async () => {
     const { sessionManager, root, target } = await openPersistedSessionManager();
-    const keptId = sessionManager.appendMessage({
-      role: "user",
-      content: "keep",
-      timestamp: 1,
-    });
+    const keptId = sessionManager.appendMessage(makeUserMessage("keep", 1));
     const guarded = guardSessionManager(sessionManager, {
       withCompactionPersistence: (append, validateAppend) =>
         persistCompactionBoundaryWithSessionEntrySync(target, {
@@ -225,11 +222,7 @@ describe("guardSessionManager transcript updates", () => {
       expect(listSessionPendingInputs(target)).toEqual({ items: [], total: 0 });
       expect(approvalHook).toHaveBeenCalledOnce();
 
-      const unstagedId = guarded.appendMessage({
-        role: "user",
-        content: "Unstaged source",
-        timestamp: 3,
-      });
+      const unstagedId = guarded.appendMessage(makeUserMessage("Unstaged source", 3));
       expect(approvalHook).toHaveBeenCalledTimes(2);
       expect(guarded.getEntry(unstagedId)).toMatchObject({
         message: { role: "user", content: "[approved] Unstaged source" },

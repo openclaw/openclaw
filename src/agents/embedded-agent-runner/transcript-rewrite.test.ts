@@ -7,6 +7,7 @@ import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
 import {
   appendTranscriptMessage,
@@ -64,11 +65,7 @@ function createReadRewriteSession(options?: { tailAssistantText?: string }) {
   // must re-append downstream entries after replacing the tool result.
   const sessionManager = SessionManager.inMemory();
   const entryIds = appendSessionMessages(sessionManager, [
-    asAppendMessage({
-      role: "user",
-      content: "read file",
-      timestamp: 1,
-    }),
+    asAppendMessage(makeUserMessage("read file", 1)),
     asAppendMessage({
       role: "assistant",
       content: [{ type: "toolCall", id: "call_1", name: "read", arguments: {} }],
@@ -98,11 +95,7 @@ function createReadRewriteSession(options?: { tailAssistantText?: string }) {
 function createExecRewriteSession() {
   const sessionManager = SessionManager.inMemory();
   const entryIds = appendSessionMessages(sessionManager, [
-    asAppendMessage({
-      role: "user",
-      content: "run tool",
-      timestamp: 1,
-    }),
+    asAppendMessage(makeUserMessage("run tool", 1)),
     asAppendMessage({
       role: "toolResult",
       toolCallId: "call_1",
@@ -621,11 +614,9 @@ describe("rewriteTranscriptEntriesInSessionManager", () => {
         }).changed,
       ).toBe(false);
       expect(await loadTranscriptEvents(target)).toEqual(rowsBeforeNoop);
-      SessionManager.openBounded(target, { maxBytes: 64_000, maxEvents: 20 }).appendMessage({
-        role: "user",
-        content: "next turn",
-        timestamp: 5,
-      });
+      SessionManager.openBounded(target, { maxBytes: 64_000, maxEvents: 20 }).appendMessage(
+        makeUserMessage("next turn", 5),
+      );
       manager = SessionManager.open(target);
       expect(manager.getBranch()).toHaveLength(expectedLength + 1);
       await waitForSessionTranscriptProjection(target);

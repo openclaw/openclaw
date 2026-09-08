@@ -2,6 +2,7 @@ import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import {
   appendTranscriptMessage,
   loadTranscriptEvents,
@@ -220,11 +221,7 @@ it("keeps generated entry ids unique outside a bounded transcript tail", async (
   const messageId = "deadbeef-0000-4000-8000-000000000000";
   const thinkingId = "deadbeef-0000-4000-8000-000000000001";
   uuidQueue.push(messageId);
-  const appended = manager.appendMessageWithTranscriptAnchor({
-    role: "user",
-    content: "persisted",
-    timestamp: 2,
-  });
+  const appended = manager.appendMessageWithTranscriptAnchor(makeUserMessage("persisted", 2));
 
   expect(appended).toMatchObject({ entryId: messageId, anchor: { effectiveParentId: "tail" } });
   uuidQueue.push(thinkingId);
@@ -276,11 +273,7 @@ it("excludes interleaved display payloads without inventing events or losing fen
   const bounded = SessionManager.openBounded(scope, limits);
   expect(bounded.getAppendParentId()).toBe(tailId);
   expect(bounded.buildSessionContext()).toEqual(manager.buildSessionContext());
-  const appended = bounded.appendMessageWithTranscriptAnchor({
-    role: "user",
-    content: "current",
-    timestamp: 2,
-  });
+  const appended = bounded.appendMessageWithTranscriptAnchor(makeUserMessage("current", 2));
   expect(appended.anchor?.effectiveParentId).toBe(tailId);
   if (!appended.anchor) {
     throw new Error("missing admission anchor");
@@ -449,11 +442,7 @@ it("preserves explicit reset retention of excluded user input in a bounded reope
     excludeFromContext: true,
   } as Parameters<SessionManager["appendMessage"]>[0]);
   manager.appendResetBoundary("new", retained);
-  const current = manager.appendMessageWithTranscriptAnchor({
-    role: "user",
-    content: "fresh",
-    timestamp: 3,
-  });
+  const current = manager.appendMessageWithTranscriptAnchor(makeUserMessage("fresh", 3));
   const raw = await loadTranscriptEvents(scope);
   expect(manager.buildSessionContext().messages).toMatchObject([
     { content: "explicitly retained" },

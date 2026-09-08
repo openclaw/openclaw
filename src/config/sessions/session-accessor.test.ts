@@ -6,6 +6,7 @@ import { redactIdentifier } from "@openclaw/normalization-core/node-crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
 import { cleanupTempDirs, makeTempDir } from "../../../test/helpers/temp-dir.js";
+import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
@@ -3580,11 +3581,7 @@ describe("session accessor seam", () => {
       cwd: tempDir,
       messages: [
         {
-          message: {
-            role: "user",
-            content: "hello",
-            timestamp: 100,
-          },
+          message: makeUserMessage("hello", 100),
         },
         {
           message: {
@@ -4149,11 +4146,7 @@ describe("session accessor seam", () => {
     }
     const queuedAppendPromise = appendTranscriptMessage(scope, {
       cwd: tempDir,
-      message: {
-        role: "user",
-        content: "queued prompt",
-        timestamp: 200,
-      },
+      message: makeUserMessage("queued prompt", 200),
     });
     resumeShouldAppend();
 

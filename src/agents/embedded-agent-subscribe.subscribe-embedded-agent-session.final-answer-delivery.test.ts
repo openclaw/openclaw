@@ -22,6 +22,7 @@ import {
   createOpenAiResponsesTextEvent,
   type OpenAiResponsesTextEventPhase,
 } from "./embedded-agent-subscribe.openai-responses.test-helpers.js";
+import { textAssistant } from "./test-helpers/sparse-transcript.test-support.js";
 
 describe("text_end snapshot reconciliation", () => {
   it.each([
@@ -441,10 +442,7 @@ describe("subscribeEmbeddedAgentSession", () => {
     expect(extractTextPayloads(onBlockReply.mock.calls)).toEqual(["Hello block"]);
     expect(subscription.assistantTexts).toEqual(["Hello block"]);
 
-    const assistantMessage = {
-      role: "assistant",
-      content: [{ type: "text", text: "Hello block" }],
-    } as AssistantMessage;
+    const assistantMessage = textAssistant("Hello block") as AssistantMessage;
 
     emit({ type: "message_end", message: assistantMessage });
 
@@ -464,10 +462,7 @@ describe("subscribeEmbeddedAgentSession", () => {
 
     emit({
       type: "message_end",
-      message: {
-        role: "assistant",
-        content: [{ type: "text", text: "Final visible reply." }],
-      } as AssistantMessage,
+      message: textAssistant("Final visible reply.") as AssistantMessage,
     });
     await Promise.resolve();
 
@@ -486,10 +481,7 @@ describe("subscribeEmbeddedAgentSession", () => {
 
     emitAssistantTextDelta({ emit, delta: "Hello block" });
 
-    const assistantMessage = {
-      role: "assistant",
-      content: [{ type: "text", text: "Hello block" }],
-    } as AssistantMessage;
+    const assistantMessage = textAssistant("Hello block") as AssistantMessage;
 
     // Simulate a provider that ends the message without emitting text_end.
     emit({ type: "message_end", message: assistantMessage });
@@ -521,10 +513,7 @@ describe("subscribeEmbeddedAgentSession", () => {
 
     emit({
       type: "message_end",
-      message: {
-        role: "assistant",
-        content: [{ type: "text", text: "Legacy answer" }],
-      } as AssistantMessage,
+      message: textAssistant("Legacy answer") as AssistantMessage,
     });
 
     expect(onBlockReply).toHaveBeenCalledTimes(1);

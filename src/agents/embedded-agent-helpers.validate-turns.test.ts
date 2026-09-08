@@ -3,8 +3,9 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { describe, expect, it } from "vitest";
+import { makeUserMessage } from "../../test/helpers/user-message.js";
 import { validateAnthropicTurns, validateGeminiTurns } from "./embedded-agent-helpers.js";
-import { textToolResult } from "./test-helpers/sparse-transcript.test-support.js";
+import { textToolResult, textAssistant } from "./test-helpers/sparse-transcript.test-support.js";
 
 function asMessages(messages: unknown[]): AgentMessage[] {
   return messages as AgentMessage[];
@@ -162,14 +163,8 @@ describe("validateGeminiTurns", () => {
         toolUseId: "tool-1",
         content: [{ type: "text", text: "Found data" }],
       },
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "Here's the answer" }],
-      },
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "Extra thoughts" }],
-      },
+      textAssistant("Here's the answer"),
+      textAssistant("Extra thoughts"),
       { role: "user", content: "Request 2" },
     ]);
 
@@ -202,10 +197,7 @@ describe("validateAnthropicTurns", () => {
   it("should return alternating user/assistant unchanged", () => {
     const msgs = asMessages([
       { role: "user", content: [{ type: "text", text: "Question" }] },
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "Answer" }],
-      },
+      textAssistant("Answer"),
       { role: "user", content: [{ type: "text", text: "Follow-up" }] },
     ]);
     const result = validateAnthropicTurns(msgs);
@@ -335,14 +327,8 @@ describe("validateAnthropicTurns", () => {
   it("merges consecutive assistant messages", () => {
     const msgs = asMessages([
       { role: "user", content: [{ type: "text", text: "Question" }] },
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "Answer 1" }],
-      },
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "Answer 2" }],
-      },
+      textAssistant("Answer 1"),
+      textAssistant("Answer 2"),
     ]);
 
     const result = validateAnthropicTurns(msgs);
@@ -475,16 +461,8 @@ describe("validateAnthropicTurns consecutive user turns", () => {
   });
 
   it("preserves string content while merging content", () => {
-    const previous = {
-      role: "user",
-      content: "before",
-      timestamp: 1000,
-    } as Extract<AgentMessage, { role: "user" }>;
-    const current = {
-      role: "user",
-      content: "after",
-      timestamp: 2000,
-    } as Extract<AgentMessage, { role: "user" }>;
+    const previous = makeUserMessage("before", 1000) as Extract<AgentMessage, { role: "user" }>;
+    const current = makeUserMessage("after", 2000) as Extract<AgentMessage, { role: "user" }>;
 
     const [merged] = validateAnthropicTurns([previous, current]);
     expect(merged?.role).toBe("user");

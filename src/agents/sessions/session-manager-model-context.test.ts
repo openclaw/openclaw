@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { StatementSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
+import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import {
   appendTranscriptEvent,
   replaceTranscriptEvents,
@@ -254,11 +255,7 @@ it.each(["whole", "reset", "compaction", "reset-compaction", "leaf", "opaque"])(
       expect(fingerprint()).toBe(before);
       source.branch(source.getLeafId()!);
       await waitForSessionTranscriptProjection(scope);
-      const admitted = source.appendMessageWithTranscriptAnchor({
-        role: "user",
-        content: "current turn",
-        timestamp: 7,
-      });
+      const admitted = source.appendMessageWithTranscriptAnchor(makeUserMessage("current turn", 7));
       if (!admitted.anchor) {
         throw new Error("missing admission");
       }
@@ -539,11 +536,7 @@ it.each(
       const source = SessionManager.open(scope);
       source.appendMessage({ role: "user", content: "previous", timestamp: 1 });
       await waitForSessionTranscriptProjection(scope);
-      const admitted = source.appendMessageWithTranscriptAnchor({
-        role: "user",
-        content: "current",
-        timestamp: 2,
-      });
+      const admitted = source.appendMessageWithTranscriptAnchor(makeUserMessage("current", 2));
       if (!admitted.anchor) {
         throw new Error("missing admission");
       }
