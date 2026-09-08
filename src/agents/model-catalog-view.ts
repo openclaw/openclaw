@@ -1,20 +1,18 @@
-/** Keeps raw catalog operands and logical row projection on the same captured input. */
+/** Keeps public and private runtime projections on the same captured catalog. */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ModelAuthAvailabilityEvaluation } from "./model-auth-availability.js";
 import {
-  findModelCatalogRouteDonor,
   projectModelCatalogEntryForRoute,
   resolveConfiguredModelCatalogOverrides,
   type ModelCatalogRouteProjection,
 } from "./model-catalog-route.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
-import { buildAllowedModelSet } from "./model-selection-shared.js";
 import {
   openAIModelCatalogRoutePolicy,
   resolveModelCatalogIdentityKey,
 } from "./openai-model-routes.js";
 
-/** Captures route variants without filtering the raw catalog used by execution callers. */
+/** Indexes physical variants for paired logical catalog projection. */
 export function createModelCatalogView(params: {
   cfg: OpenClawConfig;
   catalog: ModelCatalogEntry[];
@@ -37,17 +35,8 @@ export function createModelCatalogView(params: {
     }
   }
   return {
-    // A terminal history or setting callback needs this operand, not projected public rows.
-    catalog: params.catalog,
     logicalEntries: [...logicalEntries.values()],
     variantsOf,
-    selectAgent(paramsForAgent: { agentId?: string; defaultProvider: string }) {
-      return buildAllowedModelSet({
-        cfg: params.cfg,
-        catalog: params.catalog,
-        ...paramsForAgent,
-      }).allowedCatalog;
-    },
     project(entry: ModelCatalogEntry, evaluation: ModelAuthAvailabilityEvaluation) {
       const projection: ModelCatalogRouteProjection =
         evaluation.routeResolution === null
@@ -65,23 +54,12 @@ export function createModelCatalogView(params: {
         entry,
         policy: openAIModelCatalogRoutePolicy,
       });
-      return {
-        entry: projectModelCatalogEntryForRoute({
-          entry,
-          projection,
-          ...(variants ? { catalog: variants } : {}),
-          ...(overrides ? { overrides } : {}),
-        }),
-        donor:
-          projection.kind === "selected"
-            ? findModelCatalogRouteDonor({
-                entry,
-                route: projection.route,
-                policy: openAIModelCatalogRoutePolicy,
-                ...(variants ? { catalog: variants } : {}),
-              })
-            : undefined,
-      };
+      return projectModelCatalogEntryForRoute({
+        entry,
+        projection,
+        ...(variants ? { catalog: variants } : {}),
+        ...(overrides ? { overrides } : {}),
+      });
     },
   };
 }

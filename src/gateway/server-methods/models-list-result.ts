@@ -23,10 +23,7 @@ import {
 import type { ModelCatalogSnapshot, ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import { createModelFastModeResolver } from "../../agents/model-fast-mode.js";
 import { modelKey } from "../../agents/model-ref-shared.js";
-import {
-  dedupeModelCatalogEntries,
-  modelCatalogLogicalKey,
-} from "../../agents/model-selection-shared.js";
+import { dedupeModelCatalogEntries } from "../../agents/model-selection-shared.js";
 import {
   createModelVisibilityPolicy,
   RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
@@ -34,6 +31,7 @@ import {
 import {
   createOpenAIModelRoutesResolver,
   openAIModelCatalogRoutePolicy,
+  resolveModelCatalogIdentityKey,
 } from "../../agents/openai-model-routes.js";
 import { publishedModelCatalogOwnerMatchesAgent } from "../../agents/prepared-model-catalog-owner.js";
 import type { ResolvedPublishedModelCatalogOwner } from "../../agents/prepared-model-catalog.types.js";
@@ -103,14 +101,7 @@ export function createGatewayAgentModelCatalogProjector(params: ModelsListAuthPr
         view.logicalEntries.map(async (entry) => {
           const routeVariants = view.variantsOf(entry) ?? [entry];
           const evaluation = evaluateNative(entry, await evaluateEntry(entry, routeVariants));
-          const { entry: projected, donor } = view.project(entry, evaluation);
-          if (donor && Object.hasOwn(donor, "compat")) {
-            projected.compat = donor.compat;
-          }
-          if (donor && Object.hasOwn(donor, "params")) {
-            projected.params = donor.params;
-          }
-          return projected;
+          return view.project(entry, evaluation).runtimeEntry;
         }),
       )),
   };
@@ -493,8 +484,6 @@ export async function prepareModelsListResult(
     manifestPlugins: metadataSnapshot,
   });
   const { evaluateEntry } = projector;
-  const evaluationKey = (entry: ModelCatalogEntry) =>
-    openAIModelCatalogRoutePolicy.resolveIdentity(entry)?.key ?? modelCatalogLogicalKey(entry);
   const evaluations = new Map<string, ModelAuthAvailabilityEvaluation>();
   const readCatalog = await prepareLogicalVisibleModelCatalog({
     cfg,
@@ -511,7 +500,7 @@ export async function prepareModelsListResult(
       const host = await evaluateEntry(entry, variants);
       return () => {
         const evaluation = evaluateNative(entry, host);
-        evaluations.set(evaluationKey(entry), evaluation);
+        evaluations.set(resolveModelCatalogIdentityKey(entry), evaluation);
         const routeManaged = evaluation.routeResolution !== null;
         const syntheticLocal =
           !routeManaged &&
@@ -548,7 +537,7 @@ export async function prepareModelsListResult(
       models: readCatalog()
         .filter(matchesProvider)
         .map((entry) => {
-          const evaluation = evaluations.get(evaluationKey(entry));
+          const evaluation = evaluations.get(resolveModelCatalogIdentityKey(entry));
           if (!evaluation) {
             throw new Error("Model catalog publication omitted prepared auth evaluation");
           }
