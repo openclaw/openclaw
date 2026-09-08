@@ -146,6 +146,7 @@
      the surface's own floor is taller than the editor plus these insets. */
   --chat-composer-editor-inset-inline: 14px;
   --chat-composer-editor-inset-block: 6px;
+  --chat-attachment-hit-slop: calc(var(--chat-composer-editor-inset-block) * 2);
   /* The editor is a reading and writing surface, not a compact form field, so it
      owns a 16px base instead of the shared control token, whose 14px base only
      reaches 16px through an iOS zoom floor — text that size by accident does not
@@ -590,7 +591,7 @@
   min-height: var(--chat-composer-control-size);
   margin-top: auto;
   margin-bottom: 4px;
-  padding-block: 6px;
+  padding-block: var(--chat-composer-editor-inset-block);
   padding-inline: 8px;
 }
 
@@ -2080,6 +2081,12 @@
     overscroll-behavior: contain;
   }
 
+  .agent-chat__input:has(.chat-attachments-preview) {
+    /* The rail's overhang must also clear this outer scrollport. */
+    padding-block-start: var(--chat-attachment-hit-slop);
+    padding-inline-end: var(--chat-attachment-hit-slop);
+  }
+
   .agent-chat__input:has(.agent-chat__attach-menu[open]) {
     overflow: visible;
   }
@@ -2297,20 +2304,36 @@
 
 .chat-attachments-preview {
   display: flex;
-  gap: 18px;
+  gap: calc(var(--chat-composer-editor-inset-block) * 3);
   flex-wrap: nowrap;
   flex-shrink: 0;
-  width: 100%;
-  max-width: 100%;
-  margin-top: 4px;
-  padding-block-start: 18px;
-  padding-block-end: 5px;
-  padding-inline: 18px;
-  margin-bottom: 2px;
+  /* Extend only the scrollport's transparent bounds for the original remove
+     target and focus ring. The extra padding cancels the overlap, so the chips
+     keep the editor's visible inset without clipping the controls. */
+  width: calc(100% + var(--chat-attachment-hit-slop));
+  max-width: calc(100% + var(--chat-attachment-hit-slop));
+  margin-block-start: calc(-1 * var(--chat-attachment-hit-slop));
+  margin-inline-end: calc(-1 * var(--chat-attachment-hit-slop));
+  padding-block: calc(var(--chat-composer-editor-inset-block) * 2 + var(--chat-attachment-hit-slop))
+    var(--chat-composer-editor-inset-block);
+  padding-inline: var(--chat-composer-editor-inset-inline)
+    calc(var(--chat-composer-editor-inset-inline) + var(--chat-attachment-hit-slop));
   overflow-x: auto;
   overflow-y: hidden;
   overscroll-behavior-inline: contain;
   scrollbar-width: none;
+}
+
+/* The attachment rail supplies the same gap before the editor as the footer
+   supplies after it; the editor keeps its own symmetric block padding. */
+.agent-chat__input:has(.chat-attachments-preview) .agent-chat__composer-input-row {
+  padding-block-start: 0;
+}
+
+@media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
+  .chat-attachments-preview {
+    padding-block-end: calc(var(--chat-box-inset) / 2);
+  }
 }
 
 .chat-attachments-preview::-webkit-scrollbar {
@@ -2318,21 +2341,31 @@
 }
 
 .chat-attachments-preview[data-scrollable="true"][data-at-start="true"][data-at-end="false"] {
-  mask-image: linear-gradient(to right, black 0, black calc(100% - 18px), transparent 100%);
+  mask-image: linear-gradient(
+    to right,
+    black 0,
+    black calc(100% - var(--chat-composer-editor-inset-inline)),
+    transparent 100%
+  );
 }
 
 .chat-attachments-preview[data-scrollable="true"][data-at-start="false"][data-at-end="false"] {
   mask-image: linear-gradient(
     to right,
     transparent 0,
-    black 18px,
-    black calc(100% - 18px),
+    black var(--chat-composer-editor-inset-inline),
+    black calc(100% - var(--chat-composer-editor-inset-inline)),
     transparent 100%
   );
 }
 
 .chat-attachments-preview[data-scrollable="true"][data-at-start="false"][data-at-end="true"] {
-  mask-image: linear-gradient(to right, transparent 0, black 18px, black 100%);
+  mask-image: linear-gradient(
+    to right,
+    transparent 0,
+    black var(--chat-composer-editor-inset-inline),
+    black 100%
+  );
 }
 
 .chat-attachment-thumb {
@@ -2466,8 +2499,8 @@
   width: 44px;
   height: 44px;
   padding: 12px;
-  border-radius: calc(12px + 7px * var(--openclaw-corner-radius-scale));
-  corner-shape: superellipse(1.5);
+  border-radius: 50%;
+  corner-shape: round;
   border: none;
   background: color-mix(in srgb, var(--bg) 82%, transparent);
   background-clip: content-box;

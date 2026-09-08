@@ -30,6 +30,7 @@ describe("composer overflow presentation", () => {
     styles.textContent = [baseStyles, composerStyles, goalStyles].join("\n");
     document.head.append(styles);
     container = document.createElement("div");
+    container.className = "agent-chat__input";
     container.style.width = "760px";
     document.body.append(container);
   });

@@ -4293,26 +4293,69 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
   it.each([
     [320, 568],
     [393, 852],
+    [844, 390],
+    [1440, 1000],
   ] as const)(
-    "insets attachment previews from the composer edge at %sx%s",
+    "aligns attachment previews with draft text without clipping remove targets at %sx%s",
     async (width, height) => {
       const page = await openFixture(width, height, { composerAttachment: true });
       try {
         await expectNoHorizontalOverflow(page);
+        await page.locator(".chat-attachment-remove").focus();
+        await page.locator(".chat-attachment-remove").evaluate(finishElementAnimations);
+        await page.locator(".agent-chat__input").evaluate((node) => {
+          node.scrollTop = 0;
+        });
         const input = await getBoundingBox(
           page,
           ".agent-chat__composer-shell > .agent-chat__input",
         );
         const preview = await getBoundingBox(page, ".chat-attachments-preview");
         const attachment = await getBoundingBox(page, ".chat-attachment-thumb");
-        const previewPaddingTop = await page
-          .locator(".chat-attachments-preview")
-          .evaluate((node) => Number.parseFloat(getComputedStyle(node).paddingTop));
+        const remove = await getBoundingBox(page, ".chat-attachment-remove");
+        const topHits = await page.locator(".chat-attachment-remove").evaluate((node) => {
+          const bounds = node.getBoundingClientRect();
+          return [1, 3].map(
+            (offset) =>
+              document.elementFromPoint(bounds.x + bounds.width / 2, bounds.y + offset) === node,
+          );
+        });
+        const textStart = await page
+          .locator(".agent-chat__composer-combobox > textarea")
+          .evaluate(
+            (node) =>
+              node.getBoundingClientRect().x +
+              Number.parseFloat(getComputedStyle(node).paddingLeft),
+          );
 
         expect(attachment.x - input.x).toBeGreaterThanOrEqual(9.5);
-        expect(previewPaddingTop).toBe(18);
+        expect(Math.abs(attachment.x - textStart)).toBeLessThanOrEqual(0.5);
         expect(preview.x).toBeGreaterThanOrEqual(input.x);
-        expect(preview.x + preview.width).toBeLessThanOrEqual(input.x + input.width + 1);
+        expect(remove.y).toBeGreaterThanOrEqual(preview.y);
+        expect(remove.x + remove.width).toBeLessThanOrEqual(preview.x + preview.width);
+        expect(remove.width).toBeGreaterThanOrEqual(TOUCH_TARGET_MIN_PX);
+        expect(remove.height).toBeGreaterThanOrEqual(TOUCH_TARGET_MIN_PX);
+        expect(topHits).toEqual([true, true]);
+
+        await page.locator(".chat-attachments-preview").evaluate((node) => {
+          const firstAttachment = node.querySelector(".chat-attachment-thumb")!;
+          for (let index = 0; index < 7; index++) {
+            node.append(firstAttachment.cloneNode(true));
+          }
+          node.scrollLeft = node.scrollWidth;
+        });
+        const lastRemove = page.locator(".chat-attachment-remove").last();
+        await lastRemove.focus();
+        await lastRemove.evaluate(finishElementAnimations);
+        const rightHits = await lastRemove.evaluate((node) => {
+          const bounds = node.getBoundingClientRect();
+          return [1, 3].map(
+            (offset) =>
+              document.elementFromPoint(bounds.right - offset, bounds.y + bounds.height / 2) ===
+              node,
+          );
+        });
+        expect(rightHits).toEqual([true, true]);
       } finally {
         await closeBrowserPage(page);
       }
