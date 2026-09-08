@@ -3,6 +3,7 @@
 import { html, render } from "lit";
 import { guard } from "lit/directives/guard.js";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { createDeferred } from "../../../../../test/helpers/promise.js";
 import { resolveAssistantAttachmentAvailability } from "./chat-message-attachment-availability.ts";
 import { renderMessageImages } from "./chat-message-images.ts";
 import {
@@ -604,8 +605,8 @@ describe("chat media resource lifecycle", () => {
 
   it("settles active policy snapshots but revalidates a superseded snapshot after unmount", async () => {
     const source = `/tmp/openclaw/${crypto.randomUUID()}.png`;
-    const firstResponse = Promise.withResolvers<Response>();
-    const secondResponse = Promise.withResolvers<Response>();
+    const firstResponse = createDeferred<Response>();
+    const secondResponse = createDeferred<Response>();
     vi.stubGlobal(
       "fetch",
       vi
