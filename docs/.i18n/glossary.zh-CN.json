@@ -2814,5 +2814,29 @@
   {
     "source": "Gateway and install lifecycle hooks",
     "target": "Gateway 与安装生命周期 Hook"
+  },
+  {
+    "source": "How to migrate a plugin",
+    "target": "如何迁移插件"
+  },
+  {
+    "source": "Import path reference",
+    "target": "导入路径参考"
+  },
+  {
+    "source": "Removed surfaces and replacements",
+    "target": "已移除的接口与替代方案"
+  },
+  {
+    "source": "Talk and realtime voice migration",
+    "target": "Talk 与实时语音迁移"
+  },
+  {
+    "source": "Compatibility policy and records",
+    "target": "兼容性策略与记录"
+  },
+  {
+    "source": "Removal timeline",
+    "target": "移除时间线"
   }
 ]
