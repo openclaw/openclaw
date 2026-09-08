@@ -63,7 +63,12 @@ export function matchesPluginProviderEndpoint(
     (endpoint.hosts ?? []).includes(params.host) ||
     (endpoint.hostSuffixes ?? []).some((suffix) => hostMatchesSuffix(params.host, suffix)) ||
     Boolean(
-      params.normalizedBaseUrl && (endpoint.baseUrls ?? []).includes(params.normalizedBaseUrl),
+      params.normalizedBaseUrl &&
+      (endpoint.baseUrls ?? []).some(
+        (baseUrl) =>
+          baseUrl === params.normalizedBaseUrl ||
+          normalizePluginProviderBaseUrl(baseUrl) === params.normalizedBaseUrl,
+      ),
     )
   );
 }

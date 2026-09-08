@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { isProviderCatalogSourceAllowed } from "../plugins/provider-config-owner.js";
 import { planEffectiveModelCatalogRows } from "./index.js";
 
 const registry = {
@@ -121,4 +122,18 @@ describe("provider endpoint catalog eligibility", () => {
       }).rows.map((row) => row.id),
     ).toEqual(["adapter-model"]);
   });
+  it.each(["https://NATIVE.example/v1/", "native.example/v1?ignored=1#fragment"])(
+    "normalizes endpoint-only declarations %s",
+    (baseUrl) => {
+      expect(
+        isProviderCatalogSourceAllowed({
+          provider: "fixture",
+          config: providerConfig("https://native.example/v1"),
+          plugin: {
+            providerEndpoints: [{ endpointClass: "openai-public", baseUrls: [baseUrl] }],
+          },
+        }),
+      ).toBe(true);
+    },
+  );
 });

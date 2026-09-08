@@ -247,7 +247,16 @@ async function resolvePluginImplicitProviders(
           ? (ownerProviderIds ?? [])
           : (ownerProviderIds ?? []).filter((id) => matchesProviderPluginRef(provider, id));
     const providerIds = scopedProviderIds?.filter(includeProvider);
-    if (providerIds?.length === 0 || (providerIds === undefined && !includeProvider(provider.id))) {
+    const catalogProviderRefs = [
+      provider.id,
+      ...(provider.aliases ?? []),
+      ...(provider.hookAliases ?? []),
+      ...(catalogCountsByPluginId.get(pluginId) === 1 ? (manifest?.providers ?? []) : []),
+    ];
+    if (
+      providerIds?.length === 0 ||
+      (providerIds === undefined && !catalogProviderRefs.some(includeProvider))
+    ) {
       continue;
     }
     const catalogConfig = buildPluginCatalogConfig(ctx, provider);
@@ -470,15 +479,31 @@ export async function prepareImplicitProviderStaticCatalog(
   const staticCatalogProviderIds = params.staticCatalogProviderIds
     ? new Set(params.staticCatalogProviderIds.map((provider) => normalizeProviderId(provider)))
     : undefined;
-  const eligibleProviders = providers.filter((provider) =>
-    isProviderCatalogSourceAllowed({
-      provider: provider.id,
-      config: params.config,
-      plugin: params.pluginMetadataSnapshot?.manifestRegistry.plugins.find(
-        (plugin) => plugin.id === (provider.pluginId ?? provider.id),
-      ),
-    }),
-  );
+  const eligibleProviders = providers.filter((provider) => {
+    const pluginId = provider.pluginId ?? normalizeProviderId(provider.id);
+    const plugin = params.pluginMetadataSnapshot?.manifestRegistry.plugins.find(
+      (candidate) => candidate.id === pluginId,
+    );
+
+    const soleStaticCatalog =
+      providers.filter(
+        (candidate) =>
+          (candidate.pluginId ?? normalizeProviderId(candidate.id)) === pluginId &&
+          candidate.staticCatalog,
+      ).length === 1;
+    const providerRefs = discoveryScope?.get(pluginId) ?? [
+      provider.id,
+      ...(provider.aliases ?? []),
+      ...(provider.hookAliases ?? []),
+      ...(soleStaticCatalog ? (plugin?.providers ?? []) : []),
+    ];
+    // A shared static hook can still serve an eligible selected sibling identity.
+    return providerRefs.some(
+      (providerRef) =>
+        (soleStaticCatalog || matchesProviderPluginRef(provider, providerRef)) &&
+        isProviderCatalogSourceAllowed({ provider: providerRef, config: params.config, plugin }),
+    );
+  });
   const prepared = await prepareProviderStaticCatalog({
     providers: staticCatalogProviderIds
       ? eligibleProviders.filter((provider) => {
@@ -517,7 +542,7 @@ export async function prepareImplicitProviderStaticCatalog(
           : { provider: entry.provider, result: { providers: Object.fromEntries(eligible) } };
       }),
       ...providers
-        .filter((provider) => !eligibleProviders.includes(provider))
+        .filter((provider) => provider.staticCatalog && !eligibleProviders.includes(provider))
         .map((provider) => ({ provider, result: { providers: {} } })),
     ]),
   });

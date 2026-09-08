@@ -420,7 +420,20 @@ async function loadBundledProviderStaticCatalogModels(params: {
     );
     const includeProvider = (provider: string) =>
       isProviderCatalogSourceAllowed({ provider, plugin, config: params.cfg });
-    if (!includeProvider(catalogProvider.id)) {
+    const soleStaticCatalog =
+      providers.filter(
+        (candidate) =>
+          (candidate.pluginId ?? normalizeProviderId(candidate.id)) ===
+            (catalogProvider.pluginId ?? normalizeProviderId(catalogProvider.id)) &&
+          candidate.staticCatalog,
+      ).length === 1;
+    const providerRefs = [
+      catalogProvider.id,
+      ...(catalogProvider.aliases ?? []),
+      ...(catalogProvider.hookAliases ?? []),
+      ...(soleStaticCatalog ? (plugin?.providers ?? []) : []),
+    ];
+    if (!providerRefs.some(includeProvider)) {
       continue;
     }
     const preparedResultKey = `${catalogProvider.pluginId ?? ""}\0${normalizeProviderId(catalogProvider.id)}`;

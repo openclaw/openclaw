@@ -6,6 +6,7 @@ import {
 import { normalizeUniqueSingleOrTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginManifestRecord } from "./manifest-registry.types.js";
+import type { PluginManifestProviderEndpoint } from "./manifest-types.js";
 import {
   matchesPluginProviderEndpoint,
   normalizePluginProviderBaseUrl,
@@ -15,7 +16,9 @@ import {
 export function isProviderCatalogSourceAllowed(params: {
   provider: string;
   config?: OpenClawConfig;
-  plugin?: Pick<PluginManifestRecord, "modelCatalog" | "providerEndpoints">;
+  plugin?: Pick<PluginManifestRecord, "modelCatalog"> & {
+    providerEndpoints?: readonly PluginManifestProviderEndpoint[];
+  };
 }): boolean {
   const configuredBaseUrl = findNormalizedProviderValue(
     params.config?.models?.providers,
