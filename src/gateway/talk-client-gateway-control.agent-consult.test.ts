@@ -734,6 +734,71 @@ describe("Talk client agent consult admission", () => {
     }
   });
 
+  it("does not let a stale runner revoke a replacement completion claim", async () => {
+    const staleWaiting = deferred<void>();
+    const releaseStale = deferred<void>();
+    const currentStarted = deferred<void>();
+    const finishCurrent = deferred<void>();
+    let invocation = 0;
+    mocks.consultRealtimeVoiceAgent.mockImplementation(async (params: ConsultParams) => {
+      const currentInvocation = (invocation += 1);
+      if (currentInvocation === 1) {
+        staleWaiting.resolve();
+        await releaseStale.promise;
+      }
+      params.onRunStarted?.({ runId: "run-talk", sessionId: "session-talk", timeoutMs: 1 });
+      if (currentInvocation === 2) {
+        currentStarted.resolve();
+        await finishCurrent.promise;
+      }
+      return { text: "done" };
+    });
+    const runnerOptions = {
+      ownerConnId: "connection-owner",
+      isRunCurrent: () => true,
+    };
+    const staleRunner = createRunner(vi.fn(), undefined, runnerOptions);
+    const currentRunner = createRunner(vi.fn(), undefined, runnerOptions);
+    let staleCurrent = true;
+    const staleRun = staleRunner.runOwnedArgs(
+      { question: "stale task" },
+      undefined,
+      undefined,
+      () => {
+        if (!staleCurrent) {
+          throw new Error("Realtime voice session is not active");
+        }
+      },
+    );
+    await staleWaiting.promise;
+    staleCurrent = false;
+    const currentRun = currentRunner.runOwnedArgs(
+      { question: "replacement task" },
+      undefined,
+      undefined,
+      () => {},
+    );
+    await currentStarted.promise;
+
+    try {
+      releaseStale.resolve();
+      const [staleSettlement] = await Promise.allSettled([staleRun]);
+      expect(currentRunner.runOwnedArgs.claimFailureAppend()).toBe(true);
+      expect(staleSettlement?.status).toBe("rejected");
+      if (staleSettlement?.status === "rejected") {
+        expect(String(staleSettlement.reason)).toContain("not active");
+      }
+      finishCurrent.resolve();
+      await expect(currentRun).resolves.toEqual({ text: "done" });
+    } finally {
+      releaseStale.resolve();
+      finishCurrent.resolve();
+      await Promise.allSettled([staleRun, currentRun]);
+      staleRunner.runOwnedArgs.claimFailureAppend();
+      currentRunner.runOwnedArgs.claimFailureAppend();
+    }
+  });
+
   it("installs steering ownership before readiness and delays backend admission", async () => {
     const ready = deferred<void>();
     const finish = deferred<void>();
@@ -799,7 +864,7 @@ describe("Talk client agent consult admission", () => {
       expect(mocks.controlRealtimeVoiceAgentRun).not.toHaveBeenCalled();
       ready.resolve();
       await steering;
-      expect(assertCurrent).toHaveBeenCalledTimes(2);
+      expect(assertCurrent).toHaveBeenCalledTimes(3);
       expect(mocks.consultRealtimeVoiceAgent).toHaveBeenCalledOnce();
       expect(mocks.controlRealtimeVoiceAgentRun).toHaveBeenCalledOnce();
       finish.resolve();

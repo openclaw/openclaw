@@ -308,9 +308,6 @@ export function createTalkClientAgentConsultRunner(params: {
               ) {
                 throw new Error("The active Talk consult admission is no longer current");
               }
-              owner.identity = { runId, sessionId };
-              owner.completionClaim = prepareEmbeddedAgentRunCompletionClaim(sessionId, runId);
-              void owner.completionClaim.registered.then(owner.resolveRegistration);
             }
             if (params.registerRun) {
               params.registerRun({ runId });
@@ -322,6 +319,12 @@ export function createTalkClientAgentConsultRunner(params: {
                 runId,
                 config: params.config,
               });
+            }
+            if (owner) {
+              assertCurrent?.();
+              owner.identity = { runId, sessionId };
+              owner.completionClaim = prepareEmbeddedAgentRunCompletionClaim(sessionId, runId);
+              void owner.completionClaim.registered.then(owner.resolveRegistration);
             }
             if (confirmationGrant) {
               bindAuthorizedClientVoiceConfirmation({ grant: confirmationGrant, runId });
