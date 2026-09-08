@@ -535,6 +535,17 @@ function renderLibraryImport(library: SkillLibraryController) {
   if (!library.importOpen) {
     return nothing;
   }
+  const selectedFiles = library.importSelection;
+  const selectionLabel = selectedFiles.length
+    ? t(selectedFiles.length === 1 ? "skillLibrary.selectedFile" : "skillLibrary.selectedFiles", {
+        count: String(selectedFiles.length),
+        names:
+          selectedFiles
+            .slice(0, 2)
+            .map((file) => file.webkitRelativePath || file.name)
+            .join(", ") + (selectedFiles.length > 2 ? ", …" : ""),
+      })
+    : t("skillLibrary.noFilesSelected");
   const close = () => library.close();
   return html`<openclaw-modal-dialog
     label=${t("skillLibrary.import")}
@@ -653,26 +664,10 @@ function renderLibraryImport(library: SkillLibraryController) {
                     class="settings-row__desc"
                     aria-live="polite"
                   >
-                    ${
-                      library.importSelection.length
-                        ? t(
-                            library.importSelection.length === 1
-                              ? "skillLibrary.selectedFile"
-                              : "skillLibrary.selectedFiles",
-                            {
-                              count: String(library.importSelection.length),
-                              names:
-                                library.importSelection
-                                  .slice(0, 2)
-                                  .map((file) => file.webkitRelativePath || file.name)
-                                  .join(", ") + (library.importSelection.length > 2 ? ", …" : ""),
-                            },
-                          )
-                        : t("skillLibrary.noFilesSelected")
-                    }
+                    ${selectionLabel}
                   </small>
                   ${
-                    library.importSelection.length
+                    selectedFiles.length
                       ? html`<button
                           type="button"
                           class="btn btn--sm btn--ghost"
@@ -698,9 +693,7 @@ function renderLibraryImport(library: SkillLibraryController) {
         <button
           type="submit"
           class="btn primary"
-          ?disabled=${
-            library.busy || (!library.importSource && library.importSelection.length === 0)
-          }
+          ?disabled=${library.busy || (!library.importSource && selectedFiles.length === 0)}
         >
           ${library.busy ? t("common.loading") : t("skillLibrary.import")}
         </button>

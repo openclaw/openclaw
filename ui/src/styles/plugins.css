@@ -968,12 +968,7 @@ h3.plugins-subheader {
 .skill-library-import {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  align-content: start;
   gap: var(--space-4);
-}
-
-.skill-library-import > p {
-  margin: 0;
 }
 
 .skill-library-import > .btn {
