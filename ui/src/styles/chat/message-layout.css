@@ -218,9 +218,24 @@
 
 .chat-position-rail__preview-copy {
   display: -webkit-box;
+  max-height: 3lh;
   overflow: hidden;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 3;
+  overflow-wrap: anywhere;
+}
+
+.chat-position-rail__preview-copy :where(p, h1, h2, h3, h4, ul, ol, blockquote, pre) {
+  margin: 0;
+  font: inherit;
+}
+
+.chat-position-rail__preview-copy :where(ul, ol) {
+  padding-inline-start: 1.25em;
+}
+
+.chat-position-rail__preview-copy :where(code) {
+  font-family: var(--mono);
 }
 
 .chat-thread-inner > :first-child {
