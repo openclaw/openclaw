@@ -1,6 +1,7 @@
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 import { describe, expect, it, vi } from "vitest";
 import { createTlonCitationResolver } from "./cites.js";
+import { extractMessageText, resolveAuthorizedMessageText } from "./utils.js";
 
 const NEST = "chat/~public/general";
 
@@ -91,5 +92,27 @@ describe("createTlonCitationResolver scry path composition", () => {
 
     expect(scry).not.toHaveBeenCalled();
     expect(resolved).toBe("");
+  });
+
+  it.each([
+    ["nest", { nest: 123, where: "/msg/~attacker-ship/12345" }],
+    ["where", { nest: NEST, where: 123 }],
+  ])("keeps the containing message when a citation has a non-string %s", async (_field, chan) => {
+    const { scry, resolveAllCites } = makeResolver();
+    const content = [
+      { block: { cite: { chan } } },
+      { inline: ["~bot-ship please summarize this"] },
+    ];
+    const rawText = extractMessageText(content);
+
+    await expect(
+      resolveAuthorizedMessageText({
+        rawText,
+        content,
+        authorizedForCites: true,
+        resolveAllCites,
+      }),
+    ).resolves.toBe(rawText);
+    expect(scry).not.toHaveBeenCalled();
   });
 });
