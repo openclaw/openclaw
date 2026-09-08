@@ -2360,6 +2360,7 @@ openclaw-settings-save-indicator:empty {
   color: var(--text);
   font: inherit;
   text-align: left;
+  text-decoration: none;
   transition:
     background var(--duration-fast) ease,
     box-shadow var(--duration-fast) ease,
