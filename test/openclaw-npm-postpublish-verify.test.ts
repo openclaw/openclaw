@@ -1203,6 +1203,28 @@ describe("collectInstalledRootDependencyManifestErrors", () => {
     },
   );
 
+  it("accepts byte-matched ownership from an additional trusted companion manifest root", () => {
+    const { installRoot, packageRoot } = makeCompanionImportFixture({
+      companions: [],
+      ownership: companionOwnership,
+      source: companionSource,
+    });
+    const trustedManifestRoot = join(installRoot, "trusted-extensions");
+    writePackageFile(trustedManifestRoot, "discord/package.json", {
+      name: "@openclaw/discord",
+      version: "2026.7.33",
+      dependencies: { "@discordjs/voice": "0.19.2" },
+    });
+
+    try {
+      expect(
+        collectInstalledRootDependencyManifestErrors(packageRoot, [trustedManifestRoot]),
+      ).toStrictEqual([]);
+    } finally {
+      rmSync(installRoot, { recursive: true, force: true });
+    }
+  });
+
   it.each<{
     name: string;
     companions: Array<{ id: string; name?: string; dependencies: Record<string, string> }>;
