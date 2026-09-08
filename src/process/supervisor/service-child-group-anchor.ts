@@ -5,7 +5,6 @@ import { Socket } from "node:net";
 import { pipeline, type Readable } from "node:stream";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { GRACEFUL_CANCEL_TIMEOUT_MS } from "./cancellation-policy.js";
-import { shouldRequestLineageCleanup } from "./service-child-group-anchor-policy.js";
 import { hasLiveOwnedProcessGroupMembers } from "./service-child-group-ownership.js";
 import {
   encodeServiceChildMessage,
@@ -14,8 +13,6 @@ import {
   type ServiceChildControlMessage,
   type ServiceChildStart,
 } from "./service-child-protocol.js";
-
-const LINEAGE_EXIT_OBSERVATION_MS = 100;
 
 type AnchorState = "starting" | "active" | "closing" | "closed";
 type StdioEntry = "ignore" | "inherit" | "pipe" | number;
@@ -275,16 +272,14 @@ export function runServiceChildGroupAnchor(): void {
       lineageClosed = true;
       lineageDone.resolve();
       if (state === "active") {
-        // Pipe EOF and the child exit notification race independently. Wait
-        // briefly for the exact child event before treating EOF as lease loss.
+        // Programs can close inherited descriptors while still running. Keep this
+        // observer waiting for the direct child's exit before reclaiming descendants.
         void (async () => {
-          if (!rootExit) {
-            await Promise.race([rootExited.promise, delay(LINEAGE_EXIT_OBSERVATION_MS)]);
-          }
-          if (!shouldRequestLineageCleanup(state, Boolean(rootExit))) {
+          await rootExited.promise;
+          if (state !== "active") {
             return;
           }
-          if (rootExit && rootSettlementStarted) {
+          if (rootSettlementStarted) {
             await rootSettledDone.promise;
           }
           if (state !== "active") {
@@ -359,12 +354,6 @@ export function runServiceChildGroupAnchor(): void {
       rootResultDelivery = send({ type: "root-result", code, signal });
       rootExited.resolve();
       void settleRoot();
-      // Lineage EOF may have happened while the root was still alive. In that case the
-      // EOF observer intentionally leaves cleanup alone so valid roots can survive
-      // closefrom(); resume the existing bounded cleanup path once the root exits.
-      if (lineageClosed && state === "active") {
-        void requestCleanup("lineage-lost");
-      }
     });
   };
 
