@@ -73,6 +73,7 @@ import {
   HOOK_TIMEOUT_RECOVERY_GRACE_MS,
   MAX_SETUP_GRACE_TIMEOUT_MS,
   MAX_TIMEOUT_MS,
+  TRIGGER_LOOKUP_SETTLE_RESERVE_MS,
   type ConversationRecallContext,
 } from "./types.js";
 
@@ -375,13 +376,20 @@ export default definePluginEntry({
               chatIdAllowed
             ) {
               toolAuthority.assertActive();
+              // Lane one is optional and runs inside the preflight deadline.
+              // Its own timeout is what is left of that budget, less enough
+              // to fall through to model recall before the watchdog fires.
+              const triggerLookupTimeoutMs = Math.max(
+                0,
+                hookDeadline.remainingMs() - TRIGGER_LOOKUP_SETTLE_RESERVE_MS,
+              );
               laneOne = await resolveTriggerRecall({
                 cfg: liveConfig,
                 agentId: effectiveAgentId,
                 query: searchQuery,
                 message: event.prompt,
                 activeProjectKeys: ctx.activeProjectKeys,
-                signal: AbortSignal.timeout(HOOK_TIMEOUT_RECOVERY_GRACE_MS),
+                signal: AbortSignal.timeout(triggerLookupTimeoutMs),
                 runId: ctx.runId,
                 authorityFingerprint: toolAuthority.fingerprint,
               }).catch((error: unknown) => {

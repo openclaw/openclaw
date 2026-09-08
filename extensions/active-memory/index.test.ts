@@ -2074,6 +2074,54 @@ describe("active-memory plugin", () => {
     expect(runEmbeddedAgent).toHaveBeenCalledTimes(1);
   });
 
+  it("continues model recall when optional trigger lookup exhausts the remaining preflight budget", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    vi.spyOn(AbortSignal, "timeout").mockImplementation((delayMs: number) => {
+      const controller = new AbortController();
+      setTimeout(() => {
+        controller.abort(new DOMException("trigger lookup timed out", "TimeoutError"));
+      }, delayMs);
+      return controller.signal;
+    });
+    // Preflight setup consumes most of the budget before lane one starts, so a
+    // fresh or fixed-offset trigger timeout would still lose to the watchdog.
+    vi.spyOn(api.runtime.state, "openKeyedStore").mockReturnValue({
+      lookup: async () =>
+        await new Promise<undefined>((resolve) => {
+          setTimeout(() => resolve(undefined), 1_000);
+        }),
+    });
+    hoisted.getActiveMemorySearchManager.mockImplementationOnce(() => new Promise<never>(() => {}));
+
+    let settled = false;
+    const resultPromise = runPromptBuild(
+      { prompt: "what did we decide?" },
+      {
+        sessionKey: "agent:main:telegram:direct:owner",
+        messageProvider: "telegram",
+        channelId: "owner",
+      },
+    ).finally(() => {
+      settled = true;
+    });
+    await vi.advanceTimersByTimeAsync(1_500);
+    for (let attempt = 0; attempt < 40 && !settled; attempt += 1) {
+      await vi.advanceTimersByTimeAsync(25);
+    }
+
+    const result = await resultPromise;
+    expect(runEmbeddedAgent).toHaveBeenCalledTimes(1);
+    expect(typeof result?.prependContext).toBe("string");
+    expect(
+      hasDebugLine("active-memory: lane-1 trigger recall failed: trigger lookup timed out"),
+    ).toBe(true);
+    expect(
+      vi
+        .mocked(api.logger.warn)
+        .mock.calls.some((call: unknown[]) => String(call[0]).includes("preflight timed out")),
+    ).toBe(false);
+  });
+
   it("frames the blocking memory subagent as a memory search agent for another model", async () => {
     await runPromptBuild({
       prompt: "What is my favorite food? strict-style-check",
