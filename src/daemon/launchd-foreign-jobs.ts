@@ -3,7 +3,6 @@ import { constants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
-import { hasTopLevelShellControlOperator, splitShellArgs } from "../utils/shell-argv.js";
 import { resolveGatewayLaunchAgentLabel, resolveNodeLaunchAgentLabel } from "./constants.js";
 import {
   execLaunchctl,
@@ -71,73 +70,59 @@ function lifecycleAction(args: string[]): GatewayAction | undefined {
     : undefined;
 }
 
-// Verify blank/comment lines, set -e/-u/-x/+e/+u/+x or -o pipefail, literal
-// openclaw_*/OPENCLAW_* assignments, then the first lifecycle call (optional
-// exec or resolved helper, no unresolved words). CR, heredocs, continuations,
-// control/substitution syntax and other preludes are report-only.
+const SCRIPT_HELPER_NAME = /(?:openclaw_|OPENCLAW_)[A-Za-z0-9_]*/;
+const SCRIPT_LITERAL_EXEC = String.raw`(?:openclaw(?:\.mjs)?|/(?:[A-Za-z0-9_.-]+/)*openclaw(?:\.mjs)?)`;
+const SCRIPT_HELPER_REF = String.raw`\$(?:${SCRIPT_HELPER_NAME.source}|\{${SCRIPT_HELPER_NAME.source}\})`;
+// JavaScript's $ can stop before a final Unicode separator; require the raw end.
+const SCRIPT_LINE_END = String.raw`$(?![\s\S])`;
+const SCRIPT_EXECUTABLE = new RegExp(`^${SCRIPT_LITERAL_EXEC}${SCRIPT_LINE_END}`);
+const SCRIPT_ASSIGNMENT = new RegExp(
+  String.raw`^[ \t]*(?:export[ \t]+)?(${SCRIPT_HELPER_NAME.source})=([A-Za-z0-9_./-]+)[ \t]*${SCRIPT_LINE_END}`,
+);
+const SCRIPT_INVOCATION = new RegExp(
+  String.raw`^[ \t]*(?:exec[ \t]+)?(${SCRIPT_LITERAL_EXEC}|${SCRIPT_HELPER_REF}|"${SCRIPT_HELPER_REF}")[ \t]+gateway[ \t]+(restart|start|stop)((?:[ \t]+[A-Za-z0-9_.=/:-]+)*)[ \t]*${SCRIPT_LINE_END}`,
+);
+
+// Match raw lines only: blank/comments, allowed set flags, unquoted literal
+// helper assignments, then the first lifecycle call (optional exec/helper).
+// Shell syntax is never dequoted or expanded; unmatched text is report-only.
 function scriptActions(script: string): GatewayAction[] {
-  if (
-    script.includes("\r") ||
-    script.includes("<<") ||
-    script.includes("\\\n") ||
-    /''|""/.test(script)
-  ) {
+  if (script.includes("\r") || script.includes("<<") || script.includes("\\\n")) {
     return [];
   }
   const variables = new Map<string, string>();
   for (const line of script.split("\n")) {
-    const words = splitShellArgs(line);
-    if (!words) {
-      return [];
-    }
-    if (!words.length) {
+    if (/^[ \t]*(?:#.*)?$(?![\s\S])/.test(line)) {
       continue;
     }
-    if (hasTopLevelShellControlOperator(line) || /`|\$\(/.test(line)) {
-      return [];
-    }
-    const safeSet =
-      words[0] === "set" &&
-      words.length > 1 &&
-      (words.slice(1).every((word) => ["-e", "-u", "-x", "+e", "+u", "+x"].includes(word)) ||
-        (words.length === 3 && words[1] === "-o" && words[2] === "pipefail"));
-    if (safeSet) {
+    if (
+      /^[ \t]*set(?:[ \t]+[+-][eux])+[ \t]*$(?![\s\S])/.test(line) ||
+      /^[ \t]*set[ \t]+-o[ \t]+pipefail[ \t]*$(?![\s\S])/.test(line)
+    ) {
       continue;
     }
-    const assignmentWords = words[0] === "export" ? words.slice(1) : words;
-    const assignment =
-      assignmentWords.length === 1
-        ? assignmentWords[0]?.match(/^((?:openclaw_|OPENCLAW_)[A-Za-z0-9_]*)=([A-Za-z0-9_./-]+)$/)
-        : null;
+    const assignment = SCRIPT_ASSIGNMENT.exec(line);
     if (assignment?.[1] && assignment[2]) {
       variables.set(assignment[1], assignment[2]);
       continue;
     }
-    const commandIndex = words[0] === "exec" ? 1 : 0;
-    const variable = words[commandIndex]?.match(
-      /^\$(?:([A-Za-z_][A-Za-z0-9_]*)|\{([A-Za-z_][A-Za-z0-9_]*)\})$/,
-    );
-    if (variable) {
-      // Only an explicit literal assignment proves an indirect CLI command.
-      const expandsCommand =
-        /^\s*(?:exec\s+)?"\$(?:[A-Za-z_][A-Za-z0-9_]*|\{[A-Za-z_][A-Za-z0-9_]*\})"\s/.test(line);
-      const name = variable[1] ?? variable[2];
-      words[commandIndex] = expandsCommand && name ? (variables.get(name) ?? "") : "";
-    }
-    if (words.some((word) => /[$`]/.test(word))) {
+    const invocation = SCRIPT_INVOCATION.exec(line);
+    const executable = invocation?.[1];
+    const action = invocation?.[2];
+    if (!executable || (action !== "restart" && action !== "start" && action !== "stop")) {
       return [];
     }
-    const command = words[0] === "exec" ? words.slice(1) : words;
-    const executable = command[0] ?? "";
-    const cliName = path.basename(executable);
-    if (
-      !["openclaw", "openclaw.mjs"].includes(cliName) ||
-      (executable !== cliName && !path.isAbsolute(executable))
-    ) {
+    if (!SCRIPT_EXECUTABLE.test(executable)) {
+      const name = executable.match(SCRIPT_HELPER_NAME)?.[0];
+      const resolved = name && variables.get(name);
+      if (!resolved || !SCRIPT_EXECUTABLE.test(resolved)) {
+        return [];
+      }
+    }
+    if (/(?:^|[ \t])(?:-h|--help|-V|--version)(?:[ \t]|$)/.test(invocation?.[3] ?? "")) {
       return [];
     }
-    const action = lifecycleAction(command);
-    return action ? [action] : [];
+    return [action];
   }
   return [];
 }

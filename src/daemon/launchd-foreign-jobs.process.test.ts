@@ -103,9 +103,10 @@ it.skipIf(!hasGuiLaunchd).each(["interpreter", "direct"] as const)(
       const cli = path.join(dir, "openclaw");
       const script = path.join(dir, "validator.sh");
       await fs.writeFile(cli, "#!/bin/sh\nexec /bin/sleep 120\n", { mode: 0o700 });
+      expect(cli).toMatch(/^[A-Za-z0-9_./-]+$/);
       await fs.writeFile(
         script,
-        `#!/bin/bash\nopenclaw_bin="${cli}"\n"$openclaw_bin" gateway restart\nfor attempt in 1 2; do\n  "$openclaw_bin" gateway status\n  /bin/sleep 1\ndone\n`,
+        `#!/bin/bash\nopenclaw_bin=${cli}\n"$openclaw_bin" gateway restart\nfor attempt in 1 2; do\n  "$openclaw_bin" gateway status\n  /bin/sleep 1\ndone\n`,
         { mode: 0o700 },
       );
       for (const label of labels) {

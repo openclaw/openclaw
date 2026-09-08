@@ -110,7 +110,39 @@ describe("foreign launchd command classification", () => {
   });
 
   it.each([
-    ['#!/bin/sh\nopenclaw_bin="/opt/bin/openclaw"\n"$openclaw_bin" gateway restart\n', ["restart"]],
+    ['#!/bin/sh\nopenclaw_bin="/opt/bin/openclaw"\n"$openclaw_bin" gateway restart\n', []],
+    [
+      "#!/bin/sh\nset -e\n'openclaw_bin=/opt/bin/openclaw'\n\"$openclaw_bin\" gateway restart\n",
+      [],
+    ],
+    ["#!/bin/sh\n/opt/*/openclaw gateway restart\n", []],
+    ["#!/bin/sh\n~/bin/openclaw gateway restart\n", []],
+    [
+      '#!/bin/sh\nopenclaw_bin=/usr/local/bin/openclaw\n"$openclaw_bin" gateway restart\n',
+      ["restart"],
+    ],
+    [
+      '#!/bin/sh\nopenclaw_bin=/usr/local/bin/openclaw\n"${openclaw_bin}" gateway restart\n',
+      ["restart"],
+    ],
+    [
+      "#!/bin/sh\nopenclaw_bin=/usr/local/bin/openclaw\n$openclaw_bin gateway restart\n",
+      ["restart"],
+    ],
+    [
+      "#!/bin/sh\nopenclaw_bin=/usr/local/bin/openclaw\n${openclaw_bin} gateway restart\n",
+      ["restart"],
+    ],
+    ["#!/bin/sh\nexec /usr/local/bin/openclaw gateway restart --profile work\n", ["restart"]],
+    ["#!/bin/sh\nopenclaw gateway restart --help\n", []],
+    ['#!/bin/sh\n"openclaw" gateway restart\n', []],
+    ['#!/bin/sh\nset "-e"\nopenclaw gateway restart\n', []],
+    ['#!/bin/sh\nopenclaw_bin=/bin/echo\n"$openclaw_bin" gateway restart\n', []],
+    ["#!/bin/sh\nopenclaw gateway restart\u2028", []],
+    [
+      '#!/bin/sh\nopenclaw_bin=/usr/local/bin/openclaw\u2028\n"$openclaw_bin" gateway restart\n',
+      [],
+    ],
     [
       '#!/bin/sh\r\nopenclaw_bin=/usr/local/bin/openclaw\r\n"$openclaw_bin" gateway restart\r\n',
       [],
