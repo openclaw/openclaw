@@ -305,6 +305,7 @@ export const ModelsListParamsSchema = Type.Object(
 export const ModelsAuthStatusParamsSchema = closedObject({
   refresh: Type.Optional(Type.Boolean()),
   agentId: Type.Optional(Type.String()),
+  sessionKey: Type.Optional(NonEmptyString),
 });
 
 /** Removes saved model-provider credentials from one configured agent. */

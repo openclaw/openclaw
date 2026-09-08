@@ -1,7 +1,11 @@
 // Control UI tests cover provider quota summary behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ModelAuthStatusProvider } from "../api/types.ts";
-import { collectProviderQuotaGroups, formatQuotaReset } from "./provider-quota-summary.ts";
+import {
+  collectOAuthProfileQuotaGroups,
+  collectProviderQuotaGroups,
+  formatQuotaReset,
+} from "./provider-quota-summary.ts";
 
 describe("formatQuotaReset", () => {
   afterEach(() => {
@@ -147,5 +151,137 @@ describe("collectProviderQuotaGroups", () => {
       () => false,
     );
     expect(groups).toEqual([]);
+  });
+});
+
+describe("collectOAuthProfileQuotaGroups", () => {
+  it("keeps effective OAuth profiles in auth order and marks the active profile", () => {
+    const groups = collectOAuthProfileQuotaGroups(
+      {
+        ts: 1,
+        sessionKey: "agent:main:main",
+        activeProfileId: "openai:second",
+        activeProfileSource: "user",
+        providers: [
+          {
+            provider: "openai",
+            displayName: "OpenAI",
+            status: "ok",
+            profileOrder: ["openai:second", "openai:first", "openai:second"],
+            profiles: [
+              {
+                profileId: "openai:first",
+                type: "oauth",
+                status: "ok",
+                displayName: "First",
+                usage: {
+                  status: "ready",
+                  providerId: "openai",
+                  windows: [
+                    { label: "5h", usedPercent: 10.4 },
+                    { label: "Day", usedPercent: 77 },
+                    { label: "Week", usedPercent: 20 },
+                  ],
+                },
+              },
+              {
+                profileId: "openai:second",
+                type: "oauth",
+                status: "ok",
+                email: "second@example.com",
+                usage: {
+                  status: "ready",
+                  providerId: "openai",
+                  plan: "Plus",
+                  windows: [{ label: "Week", usedPercent: 42.6 }],
+                },
+              },
+              {
+                profileId: "openai:api",
+                type: "api_key",
+                status: "static",
+                usage: { status: "ready", providerId: "openai", windows: [] },
+              },
+              {
+                profileId: "openai:outside-order",
+                type: "oauth",
+                status: "ok",
+                usage: { status: "unavailable", providerId: "openai" },
+              },
+            ],
+          },
+        ],
+      },
+      () => true,
+    );
+
+    expect(groups).toEqual([
+      {
+        providers: ["openai"],
+        displayName: "OpenAI",
+        profiles: [
+          {
+            profileId: "openai:second",
+            label: "second@example.com",
+            accountEmail: "second@example.com",
+            plan: "Plus",
+            active: true,
+            activeSource: "user",
+            status: "ready",
+            windows: [{ label: "Week", usedPercent: 43 }],
+          },
+          {
+            profileId: "openai:first",
+            label: "First",
+            active: false,
+            status: "ready",
+            windows: [
+              { label: "5h", usedPercent: 10 },
+              { label: "Week", usedPercent: 20 },
+            ],
+          },
+        ],
+      },
+    ]);
+  });
+
+  it("keeps unavailable profile states isolated", () => {
+    const profiles = [
+      { profileId: "expired", status: "expired" as const },
+      { profileId: "cooldown", status: "cooldown" as const, until: 1_800_000_000_000 },
+      { profileId: "unavailable", status: "unavailable" as const },
+    ];
+    const groups = collectOAuthProfileQuotaGroups(
+      {
+        ts: 1,
+        providers: [
+          {
+            provider: "openai",
+            displayName: "OpenAI",
+            status: "expired",
+            profileOrder: profiles.map((profile) => profile.profileId),
+            profiles: profiles.map((profile) => ({
+              profileId: profile.profileId,
+              type: "oauth" as const,
+              status: profile.status === "expired" ? "expired" : "ok",
+              usage: { ...profile, providerId: "openai" },
+            })),
+          },
+        ],
+      },
+      () => true,
+    );
+
+    expect(
+      groups[0]?.profiles.map(({ profileId, status, until }) => ({
+        profileId,
+        status,
+        until,
+      })),
+    ).toEqual([
+      { profileId: "expired", status: "expired", until: undefined },
+      { profileId: "cooldown", status: "cooldown", until: 1_800_000_000_000 },
+      { profileId: "unavailable", status: "unavailable", until: undefined },
+    ]);
   });
 });

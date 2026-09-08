@@ -231,6 +231,7 @@ export async function refreshChatModelAuthStatus(host: ChatPageHost, opts?: { re
     const result = await loadModelAuthStatus(client, {
       ...opts,
       agentId,
+      sessionKey: host.sessionKey,
     });
     if (!ownsRequest()) {
       return;

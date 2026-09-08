@@ -65,11 +65,12 @@ export function listEffectiveModelAuthProviders(
 
 export async function loadModelAuthStatus(
   client: GatewayBrowserClient,
-  opts: { agentId: string; refresh?: boolean; signal?: AbortSignal },
+  opts: { agentId: string; sessionKey?: string; refresh?: boolean; signal?: AbortSignal },
 ): Promise<ModelAuthStatusResult> {
   const params = {
     ...(opts?.refresh ? { refresh: true } : {}),
     agentId: opts.agentId,
+    ...(opts.sessionKey?.trim() ? { sessionKey: opts.sessionKey.trim() } : {}),
   };
   const request = async (signal?: AbortSignal) => {
     const result = signal

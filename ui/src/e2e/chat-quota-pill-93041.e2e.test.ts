@@ -53,6 +53,58 @@ const authStatusWithUsage = {
   ],
 };
 
+const authStatusWithProfileUsage = {
+  ts: baseTime,
+  sessionKey: "agent:main:main",
+  activeProfileId: "openai:second",
+  activeProfileSource: "auto",
+  providers: [
+    {
+      provider: "openai",
+      displayName: "OpenAI",
+      status: "ok",
+      profileOrder: ["openai:first", "openai:second", "openai:expired"],
+      profiles: [
+        {
+          profileId: "openai:first",
+          type: "oauth",
+          status: "ok",
+          displayName: "First account",
+          usage: {
+            status: "ready",
+            providerId: "openai",
+            windows: [
+              { label: "5h", usedPercent: 12 },
+              { label: "Week", usedPercent: 34 },
+            ],
+          },
+        },
+        {
+          profileId: "openai:second",
+          type: "oauth",
+          status: "ok",
+          displayName: "Second account",
+          usage: {
+            status: "ready",
+            providerId: "openai",
+            windows: [
+              { label: "5h", usedPercent: 56 },
+              { label: "Week", usedPercent: 78 },
+            ],
+          },
+        },
+        {
+          profileId: "openai:expired",
+          type: "oauth",
+          status: "expired",
+          displayName: "Expired account",
+          usage: { status: "expired", providerId: "openai" },
+        },
+      ],
+    },
+  ],
+};
+
 const gatewayInjectedSessions = {
   count: 1,
   defaults: { contextTokens: 200_000, model: "gateway-injected", modelProvider: "openai" },
@@ -397,6 +449,34 @@ suite.define(() => {
       expect(popoverText).not.toContain("openclaw");
       expect(popoverText).not.toContain("gateway-injected");
       expect(popoverText).not.toContain("Model:");
+    } finally {
+      await closeChat(fixture);
+    }
+  });
+
+  it("renders ordered OAuth profile quotas and highlights the active account", async () => {
+    const fixture = await openChat(authStatusWithProfileUsage, {
+      "sessions.list": gatewayInjectedSessions,
+    });
+    const { page } = fixture;
+    try {
+      const popover = await openVisibleQuotaPopover(page);
+      const profiles = popover.locator("[data-chat-oauth-profile]");
+      expect(await profiles.count()).toBe(3);
+      expect(
+        await profiles.evaluateAll((rows) =>
+          rows.map((row) => row.getAttribute("data-chat-oauth-profile")),
+        ),
+      ).toEqual(["openai:first", "openai:second", "openai:expired"]);
+      expect(
+        await popover
+          .locator('[data-chat-oauth-profile-active="true"]')
+          .getAttribute("data-chat-oauth-profile"),
+      ).toBe("openai:second");
+      expect((await profiles.nth(2).textContent()) ?? "").toContain("Sign-in expired");
+      await popover.screenshot({
+        path: path.join(artifactDir, "02a-oauth-profile-usage-popover.png"),
+      });
     } finally {
       await closeChat(fixture);
     }

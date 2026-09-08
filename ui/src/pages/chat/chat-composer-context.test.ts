@@ -169,6 +169,102 @@ describe("renderChatComposer context usage", () => {
     ).toBe("/control/usage");
   });
 
+  it("renders compact per-profile OAuth quota and isolates profile failures", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_700_000_000_000);
+    const container = renderComposer({
+      selectedSession: {
+        key: "main",
+        kind: "direct",
+        updatedAt: null,
+        totalTokens: 46_000,
+        contextTokens: 200_000,
+        modelProvider: "openclaw",
+      },
+      sessions: {
+        sessions: [],
+        defaults: { contextTokens: 200_000 },
+      } as never,
+      providerUsage: {
+        basePath: "/control",
+        modelAuthStatusResult: {
+          ts: Date.now(),
+          sessionKey: "agent:main:main",
+          activeProfileId: "openai:second",
+          activeProfileSource: "auto",
+          providers: [
+            {
+              provider: "openai",
+              displayName: "OpenAI",
+              status: "ok",
+              profileOrder: ["openai:first", "openai:second", "openai:expired"],
+              profiles: [
+                {
+                  profileId: "openai:first",
+                  type: "oauth",
+                  status: "ok",
+                  displayName: "First",
+                  usage: {
+                    status: "ready",
+                    providerId: "openai",
+                    windows: [
+                      { label: "5h", usedPercent: 12 },
+                      { label: "Week", usedPercent: 34 },
+                    ],
+                  },
+                },
+                {
+                  profileId: "openai:second",
+                  type: "oauth",
+                  status: "ok",
+                  displayName: "Second",
+                  usage: {
+                    status: "cooldown",
+                    providerId: "openai",
+                    until: Date.now() + 2 * 3_600_000,
+                  },
+                },
+                {
+                  profileId: "openai:expired",
+                  type: "oauth",
+                  status: "expired",
+                  displayName: "Expired",
+                  usage: { status: "expired", providerId: "openai" },
+                },
+                {
+                  profileId: "openai:api",
+                  type: "api_key",
+                  status: "static",
+                },
+              ],
+            },
+          ],
+        },
+      },
+    });
+
+    const profileRows = [...container.querySelectorAll("[data-chat-oauth-profile]")];
+    expect(profileRows.map((row) => row.getAttribute("data-chat-oauth-profile"))).toEqual([
+      "openai:first",
+      "openai:second",
+      "openai:expired",
+    ]);
+    expect(profileRows.map((row) => row.textContent?.replace(/\s+/g, " ").trim())).toEqual([
+      "First 5-hour limit 12% Weekly 34%",
+      "Second Active Available in 2h",
+      "Expired Sign-in expired",
+    ]);
+    expect(
+      container
+        .querySelector("[data-chat-oauth-profile-active='true']")
+        ?.getAttribute("data-chat-oauth-profile"),
+    ).toBe("openai:second");
+    expect(container.textContent).not.toContain("openai:api");
+    expect(container.querySelector("[data-chat-provider-usage='true']")?.getAttribute("href")).toBe(
+      "/control/usage",
+    );
+  });
+
   it("deduplicates provider aliases and hides cost estimates for subscriptions", () => {
     const resetAt = Date.now() + 2 * 3_600_000 + 45_000;
     const usage = {

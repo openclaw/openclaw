@@ -31,6 +31,21 @@ export type ModelAuthStatusProfile = {
   displayName?: string;
   email?: string;
   lastUsedAt?: number;
+  /** Profile-scoped provider quota. Credential material is never projected. */
+  usage?: ModelAuthProfileUsage;
+};
+
+export type ModelAuthProfileUsage = {
+  status: "ready" | "expired" | "cooldown" | "unavailable";
+  /** Normalized provider id used for the quota request. */
+  providerId?: UsageProviderId;
+  windows?: UsageWindow[];
+  summary?: string;
+  plan?: string;
+  billing?: ProviderUsageBilling[];
+  accountEmail?: string;
+  /** End of an active cooldown/unavailable window, when known. */
+  until?: number;
 };
 
 export type ModelAuthStatusProvider = {
@@ -72,6 +87,10 @@ export type ModelAuthStatusResult = {
   /** Snapshot build time, ms since epoch. 0 = never loaded (UI fallback sentinel). */
   ts: number;
   providers: ModelAuthStatusProvider[];
+  /** Canonical session whose effective auth profile was inspected. */
+  sessionKey?: string;
+  activeProfileId?: string;
+  activeProfileSource?: "auto" | "user" | "user-link";
   /** Missing preparation is unknown auth health, not a failed Gateway connection. */
   unavailable?: {
     code: "PREPARED_MODEL_AUTH_UNAVAILABLE";

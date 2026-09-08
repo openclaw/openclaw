@@ -264,7 +264,9 @@ describe("Models auth params schemas", () => {
       {},
       { refresh: true, agentId: "writer" },
       { agentId: "" },
+      { agentId: "writer", sessionKey: "agent:writer:main" },
     );
+    expectRejected(ModelsAuthStatusParamsSchema, { sessionKey: "" });
     expectAccepted(
       ModelsAuthLogoutParamsSchema,
       {

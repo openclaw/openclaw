@@ -9,8 +9,11 @@ import { t } from "../../../i18n/index.ts";
 import { formatCompactTokenCount, formatCost } from "../../../lib/format.ts";
 import { isMonitoredAuthProvider } from "../../../lib/model-auth.ts";
 import {
+  collectOAuthProfileQuotaGroups,
   collectProviderQuotaGroups,
   formatQuotaReset,
+  type OAuthProfileQuotaGroup,
+  type OAuthProfileQuotaSummary,
   type ProviderQuotaGroup,
   type ProviderUsageDisplayProps,
   type QuotaBudgetSummary,
@@ -322,6 +325,85 @@ function renderQuotaGroup(group: ProviderQuotaGroup, usageHref: string) {
   `;
 }
 
+function formatOAuthProfileStatus(profile: OAuthProfileQuotaSummary): string {
+  if (profile.status === "expired") {
+    return t("chat.composer.contextUsage.profileExpired");
+  }
+  if (profile.status === "cooldown") {
+    const until = formatQuotaReset(profile.until);
+    return until
+      ? t("chat.composer.contextUsage.profileCooldownUntil", { time: until })
+      : t("chat.composer.contextUsage.profileCooldown");
+  }
+  return t("chat.composer.contextUsage.profileUnavailable");
+}
+
+function renderOAuthProfile(profile: OAuthProfileQuotaSummary) {
+  const accountEmail = profile.accountEmail?.trim();
+  const showAccountEmail = accountEmail && accountEmail !== profile.label;
+  const hasUsage = profile.status === "ready" && profile.windows.length > 0;
+  return html`
+    <div
+      class="context-usage__profile ${profile.active ? "context-usage__profile--active" : ""}"
+      data-chat-oauth-profile=${profile.profileId}
+      data-chat-oauth-profile-active=${profile.active ? "true" : "false"}
+    >
+      <div class="context-usage__profile-head">
+        <div class="context-usage__profile-identity">
+          <strong title=${profile.label}>${profile.label}</strong>
+          ${showAccountEmail ? html`<span title=${accountEmail}>${accountEmail}</span>` : nothing}
+        </div>
+        <div class="context-usage__profile-badges">
+          ${
+            profile.active
+              ? html`<span class="context-usage__profile-active"
+                  >${t("chat.composer.contextUsage.profileActive")}</span
+                >`
+              : nothing
+          }
+          ${
+            profile.plan
+              ? html`<span class="context-usage__plan-badge">${profile.plan}</span>`
+              : nothing
+          }
+        </div>
+      </div>
+      ${
+        hasUsage
+          ? html`<div class="context-usage__limits">
+              ${profile.windows.map((limit) => renderQuotaLimitRow(limit))}
+            </div>`
+          : html`<div class="context-usage__profile-status">
+              ${formatOAuthProfileStatus(profile)}
+            </div>`
+      }
+    </div>
+  `;
+}
+
+function renderOAuthProfileQuotaGroup(group: OAuthProfileQuotaGroup, usageHref: string) {
+  return html`
+    <div class="context-usage__section-label context-usage__plan-header">
+      <span>${t("chat.composer.contextUsage.oauthProfiles")}</span>
+      <a
+        class="context-usage__plan-link"
+        href=${usageHref}
+        data-chat-provider-usage="true"
+        aria-label=${t("chat.composer.contextUsage.openUsage")}
+      >
+        ${icons.externalLink}
+      </a>
+    </div>
+    <div class="context-usage__profiles">
+      ${group.profiles.map((profile) => renderOAuthProfile(profile))}
+    </div>
+    <div class="context-usage__provenance" data-chat-usage-provider="true">
+      <span>${t("sessionsView.provider")}:</span>
+      <strong>${group.displayName}</strong>
+    </div>
+  `;
+}
+
 export function renderContextNotice(
   session: GatewaySessionRow | undefined,
   defaultContextTokens: number | null,
@@ -334,15 +416,28 @@ export function renderContextNotice(
         isMonitoredAuthProvider,
       )
     : [];
+  const oauthProfileGroups = options.providerUsage
+    ? collectOAuthProfileQuotaGroups(
+        options.providerUsage.modelAuthStatusResult ?? null,
+        isMonitoredAuthProvider,
+      )
+    : [];
   const currentProvider =
     session?.modelProvider?.trim() || latestAssistantProvider(options.messages);
   const normalizedProvider = currentProvider?.toLowerCase();
+  const currentOAuthProfileGroup =
+    (normalizedProvider
+      ? oauthProfileGroups.find((group) =>
+          group.providers.some((id) => id.trim().toLowerCase() === normalizedProvider),
+        )
+      : undefined) ??
+    oauthProfileGroups.find((group) => group.profiles.some((profile) => profile.active));
   const currentGroup = normalizedProvider
     ? quotaGroups.find((group) =>
         group.providers.some((id) => id.trim().toLowerCase() === normalizedProvider),
       )
     : undefined;
-  if (!model && !currentGroup) {
+  if (!model && !currentOAuthProfileGroup && !currentGroup) {
     return nothing;
   }
   const summary = model
@@ -361,7 +456,7 @@ export function renderContextNotice(
   // profile served the run, so a provider with both an API key and a
   // subscription resolves to subscription display (per-run credential
   // attribution is #102807).
-  const showCosts = !currentGroup;
+  const showCosts = !currentOAuthProfileGroup && !currentGroup;
   const usageHref = `${normalizeBasePath(options.providerUsage?.basePath ?? "")}/usage`;
   const formatStat = (value: number | null) =>
     value === null ? t("usage.common.emptyValue") : formatCompactTokenCount(value);
@@ -478,7 +573,13 @@ export function renderContextNotice(
                 `
               : nothing
           }
-          ${currentGroup ? renderQuotaGroup(currentGroup, usageHref) : nothing}
+          ${
+            currentOAuthProfileGroup
+              ? renderOAuthProfileQuotaGroup(currentOAuthProfileGroup, usageHref)
+              : currentGroup
+                ? renderQuotaGroup(currentGroup, usageHref)
+                : nothing
+          }
         </section>
       </details>
     </div>

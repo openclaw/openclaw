@@ -61,6 +61,24 @@ export type ProviderQuotaGroup = {
   budgets: QuotaBudgetSummary[];
 };
 
+export type OAuthProfileQuotaSummary = {
+  profileId: string;
+  label: string;
+  accountEmail?: string;
+  plan?: string;
+  active: boolean;
+  activeSource?: ModelAuthStatusResult["activeProfileSource"];
+  status: "ready" | "expired" | "cooldown" | "unavailable";
+  until?: number;
+  windows: QuotaLimitSummary[];
+};
+
+export type OAuthProfileQuotaGroup = {
+  providers: string[];
+  displayName: string;
+  profiles: OAuthProfileQuotaSummary[];
+};
+
 function clampPercent(value: number): number {
   return Math.max(0, Math.min(100, Math.round(value)));
 }
@@ -147,4 +165,68 @@ export function collectProviderQuotaGroups(
     });
   }
   return groups.map((entry) => entry.group);
+}
+
+/**
+ * Projects only effective OAuth profiles, preserving explicit auth.order and
+ * dropping API keys, repeated ids, and inventory rows excluded by that order.
+ */
+export function collectOAuthProfileQuotaGroups(
+  status: ModelAuthStatusResult | null,
+  filter: (provider: ModelAuthStatusProvider) => boolean,
+): OAuthProfileQuotaGroup[] {
+  const groups: OAuthProfileQuotaGroup[] = [];
+  for (const provider of (status?.providers ?? []).filter(filter)) {
+    const profileById = new Map(provider.profiles.map((profile) => [profile.profileId, profile]));
+    const orderedIds =
+      provider.profileOrder ?? provider.profiles.map((profile) => profile.profileId);
+    const seen = new Set<string>();
+    const profiles: OAuthProfileQuotaSummary[] = [];
+    const providerIds = new Set<string>([provider.provider]);
+    for (const profileId of orderedIds) {
+      if (seen.has(profileId)) {
+        continue;
+      }
+      seen.add(profileId);
+      const profile = profileById.get(profileId);
+      const usage = profile?.usage;
+      if (!profile || profile.type !== "oauth" || !usage) {
+        continue;
+      }
+      if (usage.providerId) {
+        providerIds.add(usage.providerId);
+      }
+      const windows = (usage.windows ?? [])
+        .filter((window) => window.label === "5h" || window.label === "Week")
+        .map((window) => {
+          const summary: QuotaLimitSummary = {
+            label: window.label,
+            usedPercent: clampPercent(window.usedPercent),
+          };
+          if (window.resetAt !== undefined) {
+            summary.resetAt = window.resetAt;
+          }
+          return summary;
+        });
+      profiles.push({
+        profileId,
+        label: profile.displayName?.trim() || profile.email?.trim() || profileId,
+        ...(usage.accountEmail || profile.email
+          ? { accountEmail: usage.accountEmail ?? profile.email }
+          : {}),
+        ...(usage.plan ? { plan: usage.plan } : {}),
+        active: status?.activeProfileId === profileId,
+        ...(status?.activeProfileId === profileId && status.activeProfileSource
+          ? { activeSource: status.activeProfileSource }
+          : {}),
+        status: usage.status,
+        ...(usage.until ? { until: usage.until } : {}),
+        windows,
+      });
+    }
+    if (profiles.length > 0) {
+      groups.push({ providers: [...providerIds], displayName: provider.displayName, profiles });
+    }
+  }
+  return groups;
 }

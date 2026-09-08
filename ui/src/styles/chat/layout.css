@@ -892,7 +892,9 @@ openclaw-chat-page {
   bottom: calc(100% + 10px);
   z-index: 70;
   width: min(300px, calc(100vw - 42px));
+  max-height: min(560px, calc(100vh - 96px));
   padding: 14px;
+  overflow-y: auto;
   color: var(--popover-foreground);
   animation: fade-in 150ms var(--ease-out);
 }
@@ -982,6 +984,85 @@ openclaw-chat-page {
   font-size: 12px;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.context-usage__profiles {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.context-usage__profile {
+  padding: 9px;
+  border: 1px solid color-mix(in srgb, var(--border) 65%, transparent);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--muted) 6%, transparent);
+}
+
+.context-usage__profile--active {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+
+.context-usage__profile-head,
+.context-usage__profile-badges {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.context-usage__profile-head {
+  justify-content: space-between;
+}
+
+.context-usage__profile-identity {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+}
+
+.context-usage__profile-identity strong,
+.context-usage__profile-identity span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.context-usage__profile-identity strong {
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.context-usage__profile-identity span,
+.context-usage__profile-status {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.context-usage__profile-badges {
+  flex-shrink: 0;
+}
+
+.context-usage__profile-active {
+  padding: 2px 5px;
+  border-radius: var(--radius-full);
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.context-usage__profile-status {
+  margin-top: 8px;
+}
+
+.context-usage__profile .context-usage__limits {
+  gap: 8px;
+  margin-top: 8px;
 }
 
 .context-usage__limits {

@@ -48,6 +48,16 @@ const mocks = vi.hoisted(() => ({
     void agentDir;
     return { version: 1, profiles: {} };
   }),
+  resolveApiKeyForProfile: vi.fn(async (params: { profileId: string }) => ({
+    apiKey: `resolved-${params.profileId}`,
+  })),
+  resolveSessionEntryAccessTarget: vi.fn((params: { agentId: string; sessionKey: string }) => ({
+    agentId: params.agentId,
+    canonicalKey: params.sessionKey,
+    requestedKey: params.sessionKey,
+    storeKey: params.sessionKey,
+    entry: undefined,
+  })),
   listProfilesForProvider: vi.fn((): string[] => []),
   removeAuthProfilesAcrossOwnerStores: vi.fn(async (): Promise<boolean> => true),
   removeProviderAuthProfilesWithLock: vi.fn(async (): Promise<AuthProfileStore | null> => ({
@@ -99,11 +109,22 @@ vi.mock("../../agents/auth-profiles.js", async () => {
     ...actual,
     ensureAuthProfileStoreWithoutExternalProfiles:
       mocks.ensureAuthProfileStoreWithoutExternalProfiles,
+    resolveApiKeyForProfile: mocks.resolveApiKeyForProfile,
     listProfilesForProvider: mocks.listProfilesForProvider,
     removeAuthProfilesAcrossOwnerStores: mocks.removeAuthProfilesAcrossOwnerStores,
     removeProviderAuthProfilesWithLock: mocks.removeProviderAuthProfilesWithLock,
     resolvePersistedAuthProfileOwnerAgentDir: mocks.resolvePersistedAuthProfileOwnerAgentDir,
     setAuthProfileOrder: mocks.setAuthProfileOrder,
+  };
+});
+
+vi.mock("../../config/sessions/session-accessor.js", async () => {
+  const actual = await vi.importActual<typeof import("../../config/sessions/session-accessor.js")>(
+    "../../config/sessions/session-accessor.js",
+  );
+  return {
+    ...actual,
+    resolveSessionEntryAccessTarget: mocks.resolveSessionEntryAccessTarget,
   };
 });
 
@@ -338,6 +359,18 @@ function resetAuthStatusMocks(): void {
     version: 1,
     profiles: {},
   });
+  mocks.resolveApiKeyForProfile.mockImplementation(async (params: { profileId: string }) => ({
+    apiKey: `resolved-${params.profileId}`,
+  }));
+  mocks.resolveSessionEntryAccessTarget.mockImplementation(
+    (params: { agentId: string; sessionKey: string }) => ({
+      agentId: params.agentId,
+      canonicalKey: params.sessionKey,
+      requestedKey: params.sessionKey,
+      storeKey: params.sessionKey,
+      entry: undefined,
+    }),
+  );
   mocks.listProfilesForProvider.mockReturnValue([]);
   mocks.removeAuthProfilesAcrossOwnerStores.mockResolvedValue(true);
   mocks.removeProviderAuthProfilesWithLock.mockResolvedValue({ version: 1, profiles: {} });
@@ -1628,6 +1661,208 @@ describe("models.authStatus", () => {
 
     await handler(createOptions());
     expect(mocks.loadProviderUsageSummary).not.toHaveBeenCalled();
+  });
+
+  it("returns ordered profile quota with session-active provenance and isolated states", async () => {
+    const expires = Date.now() + 24 * 60 * 60_000;
+    const cooldownUntil = Date.now() + 60 * 60_000;
+    const profileHealth = (
+      profileId: string,
+      type: "oauth" | "api_key",
+      status: "ok" | "expired" | "missing" | "static",
+    ) => ({
+      profileId,
+      provider: "openai",
+      type,
+      status,
+      source: "store" as const,
+      label: profileId,
+    });
+    const first = profileHealth("openai:first", "oauth", "ok");
+    const second = profileHealth("openai:second", "oauth", "ok");
+    const expired = profileHealth("openai:expired", "oauth", "expired");
+    const cooling = profileHealth("openai:cooling", "oauth", "ok");
+    const missing = profileHealth("openai:missing", "oauth", "missing");
+    const outsideOrder = profileHealth("openai:outside", "oauth", "ok");
+    const apiKey = profileHealth("openai:api", "api_key", "static");
+    setPreparedAuthStore({
+      version: 1,
+      order: {
+        openai: [
+          second.profileId,
+          first.profileId,
+          expired.profileId,
+          cooling.profileId,
+          missing.profileId,
+          apiKey.profileId,
+          second.profileId,
+        ],
+      },
+      profiles: {
+        [first.profileId]: {
+          type: "oauth",
+          provider: "openai",
+          access: "first-secret",
+          refresh: "first-refresh",
+          expires,
+          displayName: "First",
+        },
+        [second.profileId]: {
+          type: "oauth",
+          provider: "openai",
+          access: "second-secret",
+          refresh: "second-refresh",
+          expires,
+          displayName: "Second",
+        },
+        [expired.profileId]: {
+          type: "oauth",
+          provider: "openai",
+          access: "expired-secret",
+          refresh: "expired-refresh",
+          expires: Date.now() - 1,
+        },
+        [cooling.profileId]: {
+          type: "oauth",
+          provider: "openai",
+          access: "cooling-secret",
+          refresh: "cooling-refresh",
+          expires,
+        },
+        [missing.profileId]: {
+          type: "oauth",
+          provider: "openai",
+          access: "missing-secret",
+          refresh: "missing-refresh",
+          expires,
+        },
+        [outsideOrder.profileId]: {
+          type: "oauth",
+          provider: "openai",
+          access: "outside-secret",
+          refresh: "outside-refresh",
+          expires,
+        },
+        [apiKey.profileId]: { type: "api_key", provider: "openai", key: "api-secret" },
+      },
+      usageStats: { [cooling.profileId]: { cooldownUntil } },
+    });
+    const profiles = [first, second, expired, cooling, missing, outsideOrder, apiKey];
+    mocks.buildAuthHealthSummary.mockReturnValue({
+      now: Date.now(),
+      warnAfterMs: 0,
+      profiles,
+      providers: [
+        {
+          provider: "openai",
+          status: "expired",
+          profiles,
+          effectiveProfiles: profiles,
+        },
+      ],
+    });
+    mocks.resolveSessionEntryAccessTarget.mockReturnValue({
+      agentId: "main",
+      canonicalKey: "agent:main:main",
+      requestedKey: "main",
+      storeKey: "agent:main:main",
+      entry: {
+        sessionId: "session-1",
+        updatedAt: 1,
+        authProfileOverride: second.profileId,
+        authProfileOverrideSource: "user",
+      },
+    } as never);
+    mocks.loadProviderUsageSummary
+      .mockResolvedValueOnce({
+        updatedAt: 1,
+        providers: [
+          {
+            provider: "openai",
+            displayName: "OpenAI",
+            accountEmail: "second@example.com",
+            windows: [
+              { label: "5h", usedPercent: 22 },
+              { label: "Week", usedPercent: 33 },
+            ],
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        updatedAt: 1,
+        providers: [
+          {
+            provider: "openai",
+            displayName: "OpenAI",
+            accountEmail: "first@example.com",
+            windows: [
+              { label: "5h", usedPercent: 44 },
+              { label: "Week", usedPercent: 55 },
+            ],
+          },
+        ],
+      });
+
+    const result = await readAuthStatus({ sessionKey: "main" });
+
+    expect(result).toMatchObject({
+      sessionKey: "agent:main:main",
+      activeProfileId: second.profileId,
+      activeProfileSource: "user",
+    });
+    const provider = expectDefined(result.providers[0], "OpenAI auth status");
+    const usageById = new Map(
+      provider.profiles.map((profile) => [profile.profileId, profile.usage]),
+    );
+    expect(usageById.get(second.profileId)).toMatchObject({
+      status: "ready",
+      accountEmail: "second@example.com",
+      windows: [
+        { label: "5h", usedPercent: 22 },
+        { label: "Week", usedPercent: 33 },
+      ],
+    });
+    expect(usageById.get(first.profileId)).toMatchObject({
+      status: "ready",
+      accountEmail: "first@example.com",
+    });
+    expect(usageById.get(expired.profileId)).toEqual({
+      status: "expired",
+      providerId: "openai",
+    });
+    expect(usageById.get(cooling.profileId)).toEqual({
+      status: "cooldown",
+      providerId: "openai",
+      until: cooldownUntil,
+    });
+    expect(usageById.get(missing.profileId)).toEqual({
+      status: "unavailable",
+      providerId: "openai",
+    });
+    expect(usageById.get(outsideOrder.profileId)).toBeUndefined();
+    expect(usageById.get(apiKey.profileId)).toBeUndefined();
+    expect(mocks.loadProviderUsageSummary).toHaveBeenCalledTimes(2);
+    expect(
+      mocks.loadProviderUsageSummary.mock.calls.map(
+        ([options]) =>
+          (options as { auth?: Array<{ authProfileId?: string }> }).auth?.[0]?.authProfileId,
+      ),
+    ).toEqual([second.profileId, first.profileId]);
+    expect(JSON.stringify(result)).not.toMatch(
+      /first-secret|second-secret|first-refresh|second-refresh|api-secret/,
+    );
+
+    await readAuthStatus({ sessionKey: "main" });
+    expect(mocks.loadProviderUsageSummary).toHaveBeenCalledTimes(2);
+
+    const readOnly = createOptions({ sessionKey: "main" }, ["operator.read"]);
+    await handler(readOnly);
+    const readOnlyResult = firstRespondCall(readOnly)?.[1] as ModelAuthStatusResult;
+    expect(readOnlyResult.providers[0]?.profiles[0]?.usage).not.toHaveProperty("accountEmail");
+
+    mocks.listAgentIds.mockReturnValue(["main", "writer"]);
+    await readAuthStatus({ agentId: "writer", sessionKey: "agent:writer:main" });
+    expect(mocks.loadProviderUsageSummary).toHaveBeenCalledTimes(4);
   });
 
   it("routes claude-cli OAuth profiles to Anthropic usage with plan and billing", async () => {
