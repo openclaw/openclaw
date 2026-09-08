@@ -1,9 +1,9 @@
 // Shared attachment controls for chat and new-session composers.
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { html, nothing } from "lit";
-import { ref } from "lit/directives/ref.js";
 import { icons } from "../../../components/icons.ts";
 import type { ImageLightboxItem } from "../../../components/image-lightbox.ts";
+import { scrollState } from "../../../components/scroll-state.ts";
 import "../../../components/tooltip.ts";
 import "../../../components/web-awesome.ts";
 import { t } from "../../../i18n/index.ts";
@@ -18,7 +18,6 @@ import {
 } from "../attachment-payload-store.ts";
 import { admitAttachmentFiles } from "./chat-attachment-admission.ts";
 import { resolveAttachmentFileIcon } from "./chat-attachment-file-icon.ts";
-import { syncChatAttachmentRailScroll } from "./chat-attachment-viewport.ts";
 
 const CHAT_ATTACHMENT_ACCEPT =
   "image/*,audio/*,video/*,application/pdf,text/*,.csv,.json,.md,.txt,.zip," +
@@ -679,15 +678,7 @@ export function renderAttachmentPreview(props: ChatAttachmentControlsProps) {
     return nothing;
   }
   return html`
-    <div
-      class="chat-attachments-preview"
-      ${ref(syncChatAttachmentRailScroll)}
-      @scroll=${(event: Event) => {
-        if (event.currentTarget instanceof Element) {
-          syncChatAttachmentRailScroll(event.currentTarget);
-        }
-      }}
-    >
+    <div class="chat-attachments-preview" ${scrollState(true)}>
       ${attachments.map((att) =>
         att.browserAnnotation
           ? renderBrowserAnnotationAttachment(att, att.browserAnnotation, props)

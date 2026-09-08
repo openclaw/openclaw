@@ -260,6 +260,16 @@ export function createProcessSupervisor(): ProcessSupervisor & {
       return settleConstructionResult(startingTerminationReason);
     }
 
+    // Finish fallible argument preparation before affecting a surviving scope or arming cancellation.
+    if (input.mode !== "anchored-shell" && input.argv.length === 0) {
+      throw new Error("spawn argv cannot be empty");
+    }
+    const resolvedArgs = input.mode === "child" ? input.resolveArgs?.() : undefined;
+    if (owner.terminationReason) {
+      return settleConstructionResult(owner.terminationReason);
+    }
+    input.assertCurrent?.();
+
     if (input.replaceExistingScope && scopeKey) {
       // Scope admission already waited for predecessor startups. Do not
       // cancel this replacement or later runs reserved behind its fence.
@@ -356,9 +366,6 @@ export function createProcessSupervisor(): ProcessSupervisor & {
     };
 
     try {
-      if (input.mode !== "anchored-shell" && input.argv.length === 0) {
-        throw new Error("spawn argv cannot be empty");
-      }
       // Reserve the join before construction: a timeout result does not release
       // resources acquired later, or hide cleanup when readiness rejects after spawn.
       const cleanup = createDeferredCore();
@@ -395,7 +402,7 @@ export function createProcessSupervisor(): ProcessSupervisor & {
             : createChildAdapter({
                 assertCurrent: input.assertCurrent,
                 ...(requireProcessTree && !external ? { ownProcessTree: true as const } : {}),
-                argv: input.argv,
+                argv: resolvedArgs ? [...input.argv, ...resolvedArgs] : input.argv,
                 argv0: input.argv0,
                 cwd: input.cwd,
                 env: input.env,

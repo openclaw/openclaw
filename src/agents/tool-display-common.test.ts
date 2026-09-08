@@ -7,6 +7,98 @@ import { describe, expect, it } from "vitest";
 import { resolveToolVerbAndDetailForArgs } from "./tool-display-common.js";
 import { formatToolDetail, formatToolSummary, resolveToolDisplay } from "./tool-display.js";
 
+describe("tool detail separators", () => {
+  it.each([
+    {
+      input: { name: "read", args: { path: "/notes/Project · Notes.md" } },
+      expected: "from /notes/Project · Notes.md",
+    },
+    {
+      input: { name: "web_search", args: { query: "Project · Notes" } },
+      expected: 'for "Project · Notes"',
+    },
+    {
+      input: {
+        name: "image",
+        args: { path: "/notes/Project · Notes.png", prompt: "Summarize A · B" },
+      },
+      expected: "path /notes/Project · Notes.png, prompt Summarize A · B",
+    },
+    {
+      input: { name: "custom_tool", meta: "Project · Notes" },
+      expected: "Project · Notes",
+    },
+    {
+      input: {
+        name: "exec",
+        args: {
+          command: 'cat "/notes/Project · Notes.md"',
+          host: "node",
+          node: "preview-node",
+          workdir: "/app",
+        },
+      },
+      expected:
+        'show /notes/Project · Notes.md (in /app), node: preview-node, `cat "/notes/Project · Notes.md"`',
+    },
+    {
+      input: {
+        name: "exec",
+        args: { command: "npm install", host: "node", node: "preview-node", workdir: "/app" },
+      },
+      expected: "install dependencies (in /app), node: preview-node, `npm install`",
+    },
+  ])("preserves literal details and formats owned separators: $expected", ({ input, expected }) => {
+    expect(formatToolDetail(resolveToolDisplay(input))).toBe(expected);
+  });
+});
+
+describe("bounded tool detail previews", () => {
+  it("stops reading an upload batch once the preview and ellipsis are determined", () => {
+    let reads = 0;
+    const paths = new Proxy(
+      Array.from({ length: 1_000 }, (_, index) => `/uploads/photo-${index + 1}.jpg`),
+      {
+        get(target, key, receiver) {
+          if (typeof key === "string" && /^\d+$/.test(key)) {
+            reads++;
+          }
+          return Reflect.get(target, key, receiver);
+        },
+      },
+    );
+
+    expect(resolveToolDisplay({ name: "browser", args: { action: "upload", paths } }).detail).toBe(
+      "/uploads/photo-1.jpg, /uploads/photo-2.jpg, /uploads/photo-3.jpg…",
+    );
+    expect(reads).toBeLessThanOrEqual(4);
+  });
+
+  it.each([
+    { value: [], expected: undefined, includeFalsy: false },
+    { value: [null, "", false, 0], expected: undefined, includeFalsy: false },
+    { value: [null, "", false, 0], expected: "false, 0", includeFalsy: true },
+    { value: ["a", "b", "c", "", null], expected: "a, b, c", includeFalsy: false },
+    { value: ["a", "b", "c", "", "d"], expected: "a, b, c…", includeFalsy: false },
+    { value: [["a", "b", "c", "d"], [], "e"], expected: "a, b, c…, e", includeFalsy: false },
+    {
+      value: "\n  First line\r\nSecond line\nThird line",
+      expected: "First line",
+      includeFalsy: false,
+    },
+  ])("preserves compact detail semantics: $value", ({ value, expected, includeFalsy }) => {
+    expect(
+      resolveToolVerbAndDetailForArgs({
+        toolKey: "custom_tool",
+        args: { note: value },
+        fallbackDetailKeys: ["note"],
+        detailMode: "first",
+        detailCoerce: { includeFalsy },
+      }).detail,
+    ).toBe(expected);
+  });
+});
+
 function isHighSurrogate(codeUnit: number): boolean {
   return codeUnit >= 0xd800 && codeUnit <= 0xdbff;
 }

@@ -20,6 +20,79 @@ afterEach(() => {
 });
 
 describe("CronPage lifecycle", () => {
+  it.each([false, true])(
+    "shows an internal catalog failure and empty recovery (retained rows: %s)",
+    async (hasRows) => {
+      const fallback = createRequest();
+      let result = {
+        models: [{ provider: "fixture", id: "obsolete", name: "Obsolete model" }],
+        refreshFailed: false,
+      };
+      const client = createTestGatewayClient((method) =>
+        method === "models.list" ? result : fallback(method),
+      );
+      const gateway = createGateway(client, true);
+      const page = createPage(createContext(gateway), { render: true });
+      await waitForCronPage(() => expect(page.cronModelSuggestions).toEqual(["obsolete"]));
+
+      result = {
+        models: hasRows ? [{ provider: "fixture", id: "current", name: "Current model" }] : [],
+        refreshFailed: true,
+      };
+      gateway.emitRetiredEvent({ type: "event", event: "chat.metadata.changed", payload: {} });
+      await waitForCronPage(() =>
+        expect(page.cronModelSuggestions).toEqual(hasRows ? ["current"] : []),
+      );
+      expect(page.textContent).toContain(
+        hasRows
+          ? "Some models could not be refreshed. Open Models to try again."
+          : "Models unavailable",
+      );
+
+      result = { models: [], refreshFailed: false };
+      gateway.emitRetiredEvent({ type: "event", event: "chat.metadata.changed", payload: {} });
+      await waitForCronPage(() =>
+        expect(page.textContent).not.toContain(
+          hasRows ? "Some models could not be refreshed" : "Models unavailable",
+        ),
+      );
+      expect(page.cronModelSuggestions).toEqual([]);
+    },
+  );
+
+  it("shows a fulfilled catalog acquisition failure and clears it after publication recovers", async () => {
+    const fallback = createRequest();
+    let failed = false;
+    const client = createTestGatewayClient((method) =>
+      method === "models.list"
+        ? {
+            models: [{ provider: "ollama", id: "retained", name: "Retained model" }],
+            refreshFailed: failed,
+            providerOutcomes: [{ provider: "ollama", status: failed ? "unavailable" : "ready" }],
+          }
+        : fallback(method),
+    );
+    const gateway = createGateway(client, true);
+    const page = createPage(createContext(gateway), { render: true });
+    await waitForCronPage(() => expect(page.cronModelSuggestions).toEqual(["retained"]));
+
+    failed = true;
+    gateway.emitRetiredEvent({ type: "event", event: "chat.metadata.changed", payload: {} });
+    await waitForCronPage(() =>
+      expect(page.textContent).toContain(
+        "Some models could not be refreshed. Open Models to try again.",
+      ),
+    );
+    expect(page.cronModelSuggestions).toEqual(["retained"]);
+
+    failed = false;
+    gateway.emitRetiredEvent({ type: "event", event: "chat.metadata.changed", payload: {} });
+    await waitForCronPage(() =>
+      expect(page.textContent).not.toContain("Some models could not be refreshed"),
+    );
+    expect(page.cronModelSuggestions).toEqual(["retained"]);
+  });
+
   it.each(["publication", "agent", "connection", "gateway", "detach"])(
     "rejects a retired catalog result and error after %s changes",
     async (change) => {

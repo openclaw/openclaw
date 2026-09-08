@@ -1,3 +1,5 @@
+import { expectDefined } from "@openclaw/normalization-core";
+import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SystemPresence } from "../infra/system-presence.js";
@@ -6,42 +8,60 @@ import { authorizeOperatorScopesForRequiredScope, READ_SCOPE } from "./method-sc
 import { isGatewayClientProfilePending } from "./server-methods/gateway-client-identity.js";
 import type { GatewayClient } from "./server-methods/types.js";
 import { isGatewayAdmin, prepareSessionSharing } from "./session-sharing.js";
-import {
-  resolveGatewaySessionStoreTargetWithStore,
-  type GatewaySessionStoreDiscoveryCache,
-} from "./session-utils-store-lookup.js";
+import { prepareGatewaySessionStoreTargetsReadOnly } from "./session-utils-store-lookup.js";
 import { resolveCanonicalSessionStoreMatchFromStoreKeys } from "./session-utils-store.js";
+
+type PresenceTarget = { canonicalKey: string; entry: SessionEntry } | undefined;
 
 /** One synchronous snapshot/fanout owns these reads; never reuse them across broadcasts. */
 export function createPresenceRecipientProjection(params: {
   cfg: OpenClawConfig;
   presence: SystemPresence[];
 }): (client: GatewayClient | null) => SystemPresence[] {
-  const targets = new Map<string, { canonicalKey: string; entry: SessionEntry } | undefined>();
-  const targetDiscoveryCache: GatewaySessionStoreDiscoveryCache = new Map();
+  let targets: Map<string, Result<PresenceTarget, unknown>> | undefined;
+  const prepareTargets = () => {
+    const keys = [...new Set(params.presence.flatMap((row) => row.watchedSessions ?? []))];
+    const prepared = prepareGatewaySessionStoreTargetsReadOnly({
+      cfg: params.cfg,
+      projection: "full",
+      targets: keys.map((sessionKey) => {
+        const parsed = parseAgentSessionKey(sessionKey);
+        // Viewer declarations qualify sentinels; their stored keys remain global/unknown.
+        return {
+          key: parsed?.rest === "global" || parsed?.rest === "unknown" ? parsed.rest : sessionKey,
+          agentId: parsed?.agentId,
+        };
+      }),
+    });
+    return new Map<string, Result<PresenceTarget, unknown>>(
+      keys.map((sessionKey, index) => {
+        const result = expectDefined(prepared[index], "prepared presence target");
+        if (!result.ok) {
+          return [sessionKey, result];
+        }
+        try {
+          const target = result.value;
+          const match = resolveCanonicalSessionStoreMatchFromStoreKeys(
+            target.store,
+            target.storeKeys,
+          );
+          return [
+            sessionKey,
+            ok(match ? { canonicalKey: target.canonicalKey, entry: match.entry } : undefined),
+          ];
+        } catch (error) {
+          return [sessionKey, err(error)];
+        }
+      }),
+    );
+  };
   const resolveTarget = (sessionKey: string) => {
-    if (!targets.has(sessionKey)) {
-      const parsed = parseAgentSessionKey(sessionKey);
-      // Viewer declarations wrap sentinel keys with their agent. The stored key
-      // remains global/unknown in that agent's store, not a literal prefixed row.
-      const key =
-        parsed?.rest === "global" || parsed?.rest === "unknown" ? parsed.rest : sessionKey;
-      const target = resolveGatewaySessionStoreTargetWithStore({
-        cfg: params.cfg,
-        key,
-        agentId: parsed?.agentId,
-        readOnly: true,
-        exactRead: true,
-        clone: false,
-        targetDiscoveryCache,
-      });
-      const match = resolveCanonicalSessionStoreMatchFromStoreKeys(target.store, target.storeKeys);
-      targets.set(
-        sessionKey,
-        match ? { canonicalKey: target.canonicalKey, entry: match.entry } : undefined,
-      );
+    // Dormant until an eligible recipient visits a watch; errors retain visitor order.
+    const result = expectDefined((targets ??= prepareTargets()).get(sessionKey), "presence target");
+    if (!result.ok) {
+      throw result.error;
     }
-    return targets.get(sessionKey);
+    return result.value;
   };
   return (client) => {
     // Match system-presence RPC access before projecting any rows: even idle

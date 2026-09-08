@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# Bash 5.3+ can deadlock writing heredoc pipes on macOS before the reader starts.
+if [[ ${OSTYPE:-} == darwin* && $BASH != /bin/bash ]] && ((BASH_VERSINFO[0] > 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 3))); then
+  exec /bin/bash "$0" "$@"
+fi
 # Exercises package-to-git and git-to-package update channel switching in Docker.
 # Both package and git fixtures are derived from the same prepared npm tarball.
 set -euo pipefail
@@ -103,6 +107,10 @@ OPENCLAW_PACKAGE_ACCEPTANCE_LEGACY_COMPAT="$(
   node scripts/e2e/lib/package-compat.mjs "$package_version"
 )"
 export OPENCLAW_PACKAGE_ACCEPTANCE_LEGACY_COMPAT
+OPENCLAW_UPDATE_CHANNEL_DRY_RUN_PACKAGE_COMPAT="$(
+  node scripts/e2e/lib/package-compat.mjs update-channel-dry-run "$package_version"
+)"
+export OPENCLAW_UPDATE_CHANNEL_DRY_RUN_PACKAGE_COMPAT
 command -v openclaw >/dev/null
 openclaw_e2e_enable_openclaw_cli_timeout
 
@@ -170,13 +178,13 @@ printf "%s\n" "$status_json"
 STATUS_JSON="$status_json" node scripts/e2e/lib/update-channel-switch/assertions.mjs assert-status-kind package
 
 assert_package_dry_run() {
-  local expected_kind="$1" expected_channel="$2"
-  shift 2
+  local expected_kind="$1" expected_channel="$2" selection="$3"
+  shift 3
   local preview
   preview="$(openclaw update --dry-run --json --no-restart "$@")"
   printf "%s\n" "$preview"
   UPDATE_JSON="$preview" node scripts/e2e/lib/update-channel-switch/assertions.mjs \
-    assert-dry-run "$expected_kind" "$expected_channel"
+    assert-dry-run "$expected_kind" "$expected_channel" "$selection"
   node scripts/e2e/lib/update-channel-switch/assertions.mjs assert-config-channel dev
 }
 dev_channel_args=(--channel dev)
@@ -184,11 +192,11 @@ dev_channel_args=(--channel dev)
 if [ "$OPENCLAW_PACKAGE_ACCEPTANCE_LEGACY_COMPAT" != "1" ]; then
   echo "==> package dry-run channel and one-off tag precedence"
   openclaw config set update.channel dev
-  assert_package_dry_run git dev
-  assert_package_dry_run git dev --channel dev
-  assert_package_dry_run git dev --channel dev --tag beta
-  assert_package_dry_run package dev --tag beta
-  assert_package_dry_run package stable --channel stable
+  assert_package_dry_run git dev stored
+  assert_package_dry_run git dev explicit --channel dev
+  assert_package_dry_run git dev explicit --channel dev --tag beta
+  assert_package_dry_run package dev stored --tag beta
+  assert_package_dry_run package stable explicit --channel stable
   dev_channel_args=()
 fi
 
@@ -198,11 +206,14 @@ set +e
 dirty_json="$(openclaw update "${dev_channel_args[@]}" --yes --json --no-restart)"
 dirty_status=$?
 set -e
-if [ "$dirty_status" -eq 0 ] && [ "$OPENCLAW_PACKAGE_ACCEPTANCE_LEGACY_COMPAT" != "1" ]; then
-  echo "Git update unexpectedly admitted ordinary untracked user notes" >&2
+# Historical update CLIs can report a blocked structured result with exit zero.
+# The assertion proves the update was rejected and no checkout state changed.
+if [ "$OPENCLAW_PACKAGE_ACCEPTANCE_LEGACY_COMPAT" != "1" ] && [ "$dirty_status" -ne 1 ]; then
+  echo "expected current dirty-worktree update to exit 1, got $dirty_status" >&2
   exit 1
 fi
-UPDATE_JSON="$dirty_json" node scripts/e2e/lib/update-channel-switch/assertions.mjs   assert-dirty-update "$git_root" "$fixture_sha"
+UPDATE_JSON="$dirty_json" node scripts/e2e/lib/update-channel-switch/assertions.mjs \
+  assert-dirty-update "$git_root" "$fixture_sha"
 node -e "require(\"node:fs\").unlinkSync(process.argv[1])" "$git_root/operator-update-notes.tmp"
 
 echo "==> package -> git dev channel"
@@ -220,7 +231,11 @@ node scripts/e2e/lib/update-channel-switch/assertions.mjs assert-config-channel 
 
 status_json="$(openclaw update status --json)"
 printf "%s\n" "$status_json"
-STATUS_JSON="$status_json" node scripts/e2e/lib/update-channel-switch/assertions.mjs assert-status-kind git
+if [ "$OPENCLAW_PACKAGE_ACCEPTANCE_LEGACY_COMPAT" = "1" ]; then
+  STATUS_JSON="$status_json" node scripts/e2e/lib/update-channel-switch/assertions.mjs assert-status-kind package
+else
+  STATUS_JSON="$status_json" node scripts/e2e/lib/update-channel-switch/assertions.mjs assert-status-kind git
+fi
 
 echo "==> git -> package stable channel"
 set +e

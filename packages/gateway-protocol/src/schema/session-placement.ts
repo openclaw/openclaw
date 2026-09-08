@@ -205,6 +205,7 @@ const WorkerMachineClassSchema = Type.String({
   minLength: 1,
   maxLength: WORKER_MACHINE_CLASS_MAX_LENGTH,
 });
+const WorkerOperatingSystemIdSchema = Type.String({ minLength: 1, maxLength: 64 });
 
 /**
  * Requests one-way dispatch to an explicit or automatically selected device (`operator.write`),
@@ -221,6 +222,7 @@ export const SessionsDispatchParamsSchema = Type.Object(
     deviceId: Type.Optional(NonEmptyString),
     autoDevice: Type.Optional(Type.Literal(true)),
     machineClass: Type.Optional(WorkerMachineClassSchema),
+    os: Type.Optional(WorkerOperatingSystemIdSchema),
   },
   {
     additionalProperties: false,
@@ -236,6 +238,7 @@ export const SessionsDispatchParamsSchema = Type.Object(
             { required: ["profileId"] },
             { required: ["autoDevice"] },
             { required: ["machineClass"] },
+            { required: ["os"] },
           ],
         },
       },
@@ -246,6 +249,7 @@ export const SessionsDispatchParamsSchema = Type.Object(
             { required: ["profileId"] },
             { required: ["deviceId"] },
             { required: ["machineClass"] },
+            { required: ["os"] },
           ],
         },
       },
@@ -256,6 +260,7 @@ export const SessionsDispatchParamsSchema = Type.Object(
             { required: ["deviceId"] },
             { required: ["autoDevice"] },
             { required: ["machineClass"] },
+            { required: ["os"] },
           ],
         },
       },
@@ -314,6 +319,7 @@ export const SessionMoveProfileTargetSchema = closedObject({
   kind: Type.Literal("profile"),
   profileId: WorkerIdentifierSchema,
   machineClass: Type.Optional(WorkerMachineClassSchema),
+  os: Type.Optional(WorkerOperatingSystemIdSchema),
 });
 
 /** Moves the session to one paired device worker. */

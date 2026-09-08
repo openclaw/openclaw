@@ -485,9 +485,13 @@ describe("loadWebMedia", () => {
     expect(many.qualities).toEqual([70, 60, 50, 40]);
   });
 
-  it.each(["png", "jpeg", "webp"] as const)(
-    "preserves accepted original %s bytes and metadata with and without hard limits",
-    async (format) => {
+  it.each(
+    (["png", "jpeg", "webp"] as const).flatMap((format) =>
+      [format, "heic", "heif"].map((extension) => ({ format, extension })),
+    ),
+  )(
+    "preserves original $format bytes with .$extension filename and image limits",
+    async ({ format, extension }) => {
       const { optimizeImageBufferForWebMedia } = await import("./web-media.js");
       const sourcePng = createSolidPngBuffer(32, 16, { r: 12, g: 34, b: 56 });
       let buffer =
@@ -504,11 +508,22 @@ describe("loadWebMedia", () => {
       }
       const original = Buffer.from(buffer);
       const contentType = `image/${format}`;
-      const fileName = `portrait.${format}`;
+      const fileName = `portrait.${extension}`;
+      const filePath = path.join(fixtureRoot, fileName);
+      await fs.writeFile(filePath, buffer);
       for (const imageCompression of [
         undefined,
         { models: [{ maxSidePx: 32, maxPixels: 1024 }] },
       ]) {
+        const loaded = await loadWebMedia(filePath, {
+          localRoots: [fixtureRoot],
+          maxBytes: 1024 * 1024,
+          imageCompression,
+        });
+        expect(loaded.buffer).toEqual(original);
+        expect(loaded.contentType).toBe(contentType);
+        expect(loaded.fileName).toBe(fileName);
+
         const result = await optimizeImageBufferForWebMedia({
           buffer,
           contentType,

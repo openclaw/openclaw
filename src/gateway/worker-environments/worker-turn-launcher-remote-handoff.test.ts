@@ -3,6 +3,7 @@ import path from "node:path";
 import { Value } from "typebox/value";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WorkerConnectRequestFrameSchema } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
+import { makeTextToolResult } from "../../../test/helpers/text-tool-result.js";
 import {
   makeAgentAssistantMessage,
   makeAgentUserMessage,
@@ -87,14 +88,7 @@ describe("worker turn launcher remote handoff", () => {
     );
     manager.appendCustomMessageEntry("context", "Custom durable context", true, {});
     manager.appendCompaction("Compacted durable context", earlierRequestId, 100);
-    manager.appendMessage({
-      role: "toolResult",
-      toolCallId: "call-1",
-      toolName: "read",
-      content: [{ type: "text", text: "result" }],
-      isError: false,
-      timestamp: 12,
-    });
+    manager.appendMessage(makeTextToolResult("call-1", "read", "result", false, 12));
     let descriptor: WorkerLaunchDescriptor | undefined;
     const environment = browserEnvironment();
     const bootstrapReceipt = environment.bootstrapReceipt;
@@ -389,14 +383,9 @@ describe("worker turn launcher remote handoff", () => {
     const firstKeptEntryId = manager.appendMessage(
       makeAgentUserMessage({ content: "Earlier request", timestamp: 17 }),
     );
-    manager.appendMessage({
-      role: "toolResult",
-      toolCallId: "shared-call",
-      toolName: "read",
-      content: [{ type: "text", text: "Discarded owner result" }],
-      isError: false,
-      timestamp: 18,
-    });
+    manager.appendMessage(
+      makeTextToolResult("shared-call", "read", "Discarded owner result", false, 18),
+    );
     manager.appendMessage(
       makeAgentAssistantMessage({
         content: [{ type: "toolCall", id: "shared-call", name: "read", arguments: {} }],
@@ -404,14 +393,9 @@ describe("worker turn launcher remote handoff", () => {
         timestamp: 19,
       }),
     );
-    manager.appendMessage({
-      role: "toolResult",
-      toolCallId: "shared-call",
-      toolName: "read",
-      content: [{ type: "text", text: "Kept owner result" }],
-      isError: false,
-      timestamp: 20,
-    });
+    manager.appendMessage(
+      makeTextToolResult("shared-call", "read", "Kept owner result", false, 20),
+    );
     manager.appendMessage(
       makeAgentAssistantMessage({
         content: [{ type: "text", text: "Earlier reply" }],

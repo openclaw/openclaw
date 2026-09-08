@@ -1,3 +1,4 @@
+import { mkdirSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
@@ -10,6 +11,7 @@ import { prepareCurrentGitHubPublicationIdentity } from "./github-publication-av
 import { handleGatewayRequest } from "./server-methods.js";
 import type { GatewayRequestContext, RespondFn } from "./server-methods/types.js";
 import {
+  prepareGatewaySessionStoreTargetsReadOnly,
   resolveGatewaySessionStoreTargetWithStore,
   resolveGatewaySessionStoreTargetsReadOnly,
 } from "./session-utils-store-lookup.js";
@@ -52,6 +54,103 @@ async function withGlobalSessions(mainKey: string, run: (cfg: OpenClawConfig) =>
 }
 
 describe("global session lookup ownership", () => {
+  it("prepares full selected entries while retaining an independent target error", async () => {
+    await withGlobalSessions("main", async (cfg) => {
+      await replaceSessionEntry(
+        { agentId: "research", sessionKey: "global" },
+        {
+          sessionId: "research-global",
+          updatedAt: 1,
+          skillsSnapshot: { prompt: "selected synthetic prompt", skills: [] },
+        },
+      );
+      const results = prepareGatewaySessionStoreTargetsReadOnly({
+        cfg,
+        projection: "full",
+        targets: [{ key: "agent:research:main" }, { key: "agent:main:main", agentId: "research" }],
+      });
+      expect(results).toMatchObject([
+        {
+          ok: true,
+          value: {
+            agentId: "research",
+            store: { global: { skillsSnapshot: { prompt: "selected synthetic prompt" } } },
+          },
+        },
+        { ok: false, error: { message: expect.stringContaining('belongs to "main"') } },
+      ]);
+    });
+  });
+
+  it("keeps deferred errors in visitor order without changing eager batch failure order", async () => {
+    await withStateDirEnv("gateway-deferred-lookup-errors-", async ({ stateDir }) => {
+      const cfg: OpenClawConfig = {
+        agents: { ownership: "explicit", entries: { main: {}, research: {} } },
+        session: { store: path.join(stateDir, "agents", "{agentId}", "sessions", "sessions.json") },
+      };
+      for (const directory of ["Retired Agent", "retired-agent"]) {
+        const storePath = path.join(stateDir, "agents", directory, "sessions", "sessions.json");
+        mkdirSync(path.dirname(storePath), { recursive: true });
+        await replaceSessionEntry(
+          { agentId: "retired-agent", sessionKey: "agent:retired-agent:main", storePath },
+          {
+            sessionId: directory === "Retired Agent" ? "retired-first" : "retired-second",
+            updatedAt: 1,
+          },
+        );
+      }
+      const targets = [
+        { key: "agent:retired-agent:main" },
+        { key: "agent:main:main", agentId: "research" },
+      ];
+      expect(() => resolveGatewaySessionStoreTargetsReadOnly({ cfg, targets })).toThrow(
+        'belongs to "main"',
+      );
+      const results = prepareGatewaySessionStoreTargetsReadOnly({
+        cfg,
+        targets,
+        projection: "full",
+      });
+      expect(results).toMatchObject([
+        { ok: false, error: { message: expect.stringContaining("duplicate rows") } },
+        { ok: false, error: { message: expect.stringContaining('belongs to "main"') } },
+      ]);
+    });
+  });
+
+  it.each([false, true])(
+    "does not plan a replacement after a deleted-main match or selection error (duplicate: %s)",
+    async (duplicate) => {
+      await withStateDirEnv("gateway-prepared-legacy-owner-", async ({ stateDir }) => {
+        const cfg: OpenClawConfig = {
+          agents: { ownership: "explicit", entries: { research: {} } },
+          session: {
+            store: path.join(stateDir, "agents", "{agentId}", "sessions", "sessions.json"),
+          },
+        };
+        const key = "agent:main:retained";
+        for (const sessionKey of duplicate ? [key, "agent:main:main"] : [key]) {
+          await replaceSessionEntry(
+            { agentId: "main", sessionKey },
+            { sessionId: sessionKey, updatedAt: 1 },
+          );
+        }
+        // Normal planning rejects this explicit replacement owner. Legacy success
+        // and duplicate selection errors must both finish before that boundary.
+        const results = prepareGatewaySessionStoreTargetsReadOnly({
+          cfg,
+          targets: [{ key, agentId: "research" }],
+          projection: "full",
+        });
+        expect(results).toMatchObject(
+          duplicate
+            ? [{ ok: false, error: { message: expect.stringContaining("duplicate rows") } }]
+            : [{ ok: true, value: { agentId: "main", store: { [key]: { sessionId: key } } } }],
+        );
+      });
+    },
+  );
+
   it.each(["single", "batch", "read-only"] as const)(
     "preserves qualified main aliases and ordinary global keys through %s reads",
     async (mode) => {

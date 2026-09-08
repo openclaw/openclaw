@@ -400,6 +400,9 @@ describe("Control UI Vite config", () => {
     const resultAliasIndex = aliases.findIndex(
       (alias) => alias.find === "@openclaw/normalization-core/result",
     );
+    const stableStringifyAliasIndex = aliases.findIndex(
+      (alias) => alias.find === "@openclaw/normalization-core/stable-stringify",
+    );
     const rootAliasIndex = aliases.findIndex(
       (alias) => alias.find === "@openclaw/normalization-core",
     );
@@ -407,8 +410,13 @@ describe("Control UI Vite config", () => {
       find: "@openclaw/normalization-core/result",
       replacement: path.join(repoRoot, "packages/normalization-core/src/result.ts"),
     });
+    expect(aliases[stableStringifyAliasIndex]).toEqual({
+      find: "@openclaw/normalization-core/stable-stringify",
+      replacement: path.join(repoRoot, "packages/normalization-core/src/stable-stringify.ts"),
+    });
     expect(resultAliasIndex).toBeGreaterThanOrEqual(0);
-    expect(rootAliasIndex).toBeGreaterThan(resultAliasIndex);
+    expect(stableStringifyAliasIndex).toBeGreaterThanOrEqual(0);
+    expect(rootAliasIndex).toBeGreaterThan(stableStringifyAliasIndex);
   });
 
   it("uses Node package resolution for external packages inherited by worktrees", () => {

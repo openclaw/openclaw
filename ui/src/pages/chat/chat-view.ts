@@ -65,6 +65,7 @@ export type ChatProps = Omit<
   | "onRetryQueuedMessage"
   | "onDiscardQueuedMessage"
   | "onFocusComposer"
+  | "onAddToChat"
   | "onOpenSession"
   | "onSend"
 > &
@@ -204,6 +205,14 @@ export function renderChat(props: ChatProps) {
         onDiscardQueuedMessage: props.onQueueRemove,
         onCompanionPrefill:
           props.canSend && !props.suggestionComposer ? props.onCompanionPrefill : undefined,
+        onAddToChat:
+          props.canSend && !props.suggestionComposer
+            ? (question) => {
+                const draft = props.getDraft?.() ?? props.draft;
+                props.onDraftChange(draft ? `${draft}\n\n${question}` : question);
+                requestUpdate();
+              }
+            : undefined,
         onOpenSession: props.onSessionSelect,
         onFocusComposer: () =>
           chatSection

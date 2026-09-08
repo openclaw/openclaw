@@ -23,14 +23,13 @@ export function hasConfigSearchCriteria(criteria: ConfigSearchCriteria | undefin
 export function parseConfigSearchQuery(query: string): ConfigSearchCriteria {
   const tags: string[] = [];
   const seen = new Set<string>();
-  const raw = query.trim();
-  const stripped = raw.replace(/(^|\s)tag:([^\s]+)/gi, (_, leading: string, token: string) => {
+  const stripped = query.replace(/(?:^|\s)tag:([^\s]+)/gi, (_, token: string) => {
     const normalized = normalizeLowercaseStringOrEmpty(token);
     if (normalized && !seen.has(normalized)) {
       seen.add(normalized);
       tags.push(normalized);
     }
-    return leading;
+    return "";
   });
   return {
     text: normalizeLowercaseStringOrEmpty(stripped),

@@ -1,5 +1,4 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { readAcpSessionMetaBatch } from "../acp/runtime/session-meta.js";
 import { readSessionRuntimeOwnership } from "../agents/harness/session-runtime-ownership.js";
 import { normalizeStoredOverrideModel } from "../agents/model-selection.js";
@@ -24,7 +23,6 @@ import {
   buildStoreChildSessionIndex,
   resolveEstimatedSessionCostUsd,
   resolvePositiveNumber,
-  resolveRuntimeChildSessionKeys,
 } from "./session-utils-core.js";
 
 export function buildSessionListRowMetadataContext(params: {
@@ -53,7 +51,6 @@ export function buildSingleRowStoreChildSessionsByKey(params: {
     keys: [params.key],
     now: params.now,
     subagentRuns: params.subagentRuns,
-    requireCurrentController: true,
   });
 }
 
@@ -98,39 +95,6 @@ export function resolveSessionSelectedModelRef(params: {
   });
   params.rowContext.selectedModelByOverrideRef.set(key, selected);
   return selected;
-}
-
-export function mergeChildSessionKeys(
-  runtimeChildSessions: string[] | undefined,
-  storeChildSessions: string[] | undefined,
-): string[] | undefined {
-  if (!runtimeChildSessions?.length) {
-    return storeChildSessions?.length ? storeChildSessions : undefined;
-  }
-  if (!storeChildSessions?.length) {
-    return runtimeChildSessions;
-  }
-  return uniqueStrings([...runtimeChildSessions, ...storeChildSessions]);
-}
-
-export function resolveChildSessionKeys(
-  controllerSessionKey: string,
-  store: Record<string, SessionEntry>,
-  now = Date.now(),
-  subagentRuns?: SessionListRowContext["subagentRuns"],
-): string[] | undefined {
-  const runtimeChildSessions = resolveRuntimeChildSessionKeys(
-    controllerSessionKey,
-    now,
-    subagentRuns,
-  );
-  const storeChildSessions = buildStoreChildSessionIndex({
-    store,
-    keys: [controllerSessionKey],
-    now,
-    subagentRuns,
-  }).get(controllerSessionKey);
-  return mergeChildSessionKeys(runtimeChildSessions, storeChildSessions);
 }
 
 export function resolveTranscriptUsageFallback(params: {

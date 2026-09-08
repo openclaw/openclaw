@@ -73,6 +73,7 @@ function createDispatchFixture(
     runDiscoveryMisses?: number;
     targetAlreadyRemote?: boolean;
     includeTargetRef?: boolean;
+    releaseRef?: string;
     workflowSource?: string;
     targetSource?: Record<string, string>;
   } = {},
@@ -88,7 +89,7 @@ function createDispatchFixture(
   const runDiscoveryIndexPath = join(root, "run-discovery-index.txt");
   const preloadPath = join(root, "immediate-poll.mjs");
   const waitCallsPath = join(root, "wait-calls.txt");
-  const releaseRef = "release/2026.8.1";
+  const releaseRef = options.releaseRef ?? "release/2026.8.1";
   mkdirSync(checkout);
   mkdirSync(binDir);
   writeFileSync(gitCallsPath, "");
@@ -1296,6 +1297,74 @@ describe("full-release-validation-at-sha", () => {
       }
     },
   );
+
+  it("dispatches the canonical extended-stable tuple without conflating its SHAs", () => {
+    const contextRef = "extended-stable/2026.8.33";
+    const fixture = createDispatchFixture({
+      releaseRef: contextRef,
+      targetSource: {
+        "package.json": '{"version":"2026.8.33"}\n',
+        "CHANGELOG.md":
+          "## 2026.8.33\n\nRelease notes for the complete extended-stable candidate.\n",
+      },
+    });
+    try {
+      const result = fixture.run([
+        "--sha",
+        fixture.targetSha,
+        "--target-ref",
+        contextRef,
+        "--workflow-sha",
+        fixture.workflowSha,
+        "-f",
+        "release_profile=stable",
+        "-f",
+        "run_release_soak=true",
+        "-f",
+        "fail_fast=false",
+        "-f",
+        "rerun_group=all",
+        "-f",
+        "reuse_evidence=false",
+        "-f",
+        "dispatch_release_evidence=false",
+      ]);
+      expect(result.status, result.stderr).toBe(0);
+      const calls = fixture.readCalls(fixture.ghCallsPath);
+      const dispatch = calls.find((args) => args[0] === "workflow" && args[1] === "run");
+      const transportRef = dispatch?.[4] ?? "";
+      expect(transportRef).toMatch(
+        new RegExp(`^release-ci/${fixture.workflowSha.slice(0, 12)}-[0-9]+$`, "u"),
+      );
+      expect(transportRef).not.toBe(fixture.targetSha);
+      expect(transportRef).not.toBe(fixture.workflowSha);
+      const inputs = Object.fromEntries(
+        (dispatch ?? [])
+          .filter((_value, index, args) => args[index - 1] === "-f")
+          .map((assignment) => {
+            const separator = assignment.indexOf("=");
+            return [assignment.slice(0, separator), assignment.slice(separator + 1)];
+          }),
+      );
+      expect(inputs).toMatchObject({
+        ref: fixture.targetSha,
+        expected_sha: fixture.targetSha,
+        target_context_ref: contextRef,
+        release_profile: "stable",
+        run_release_soak: "true",
+        fail_fast: "false",
+        rerun_group: "all",
+        reuse_evidence: "false",
+        dispatch_release_evidence: "false",
+      });
+      expect(inputs.ref).not.toBe(contextRef);
+      expect(inputs.trusted_workflow_json).toBe(
+        JSON.stringify({ fullRef: "refs/heads/main", ref: "main", sha: fixture.workflowSha }),
+      );
+    } finally {
+      fixture.cleanup();
+    }
+  });
 
   it.each([
     { failure: "target" as const, created: 0, deleted: 0 },

@@ -323,8 +323,9 @@ describe("plugin npm extended-stable workflow", () => {
     expect(preflightCheckout.with).toMatchObject({
       ref: "${{ github.workflow_sha }}",
       path: ".release-tooling",
-      "sparse-checkout": "packages/normalization-core\nscripts\nsrc/plugins\n",
+      "persist-credentials": false,
     });
+    expect(preflightCheckout.with).not.toHaveProperty("sparse-checkout");
     const pack = step(parsed.jobs?.preview_plugin_pack, "Prepare immutable npm preflight artifact");
     expect(pack.run).toContain(".release-tooling/scripts/plugin-npm-publish.sh");
     expect(pack.run).toContain('--repo-root "$GITHUB_WORKSPACE"');

@@ -228,8 +228,7 @@ describe("sidebar attention refresh ownership", () => {
     const { element, trigger } = await mountAttention();
     trigger.click();
 
-    await import("./sidebar-attention-panel.runtime.ts");
-    await element.updateComplete;
+    await waitForFast(() => expect(element.querySelector(".sidebar-issues-panel")).not.toBeNull());
     const panel = element.querySelector(".sidebar-issues-panel");
     expect(panel).not.toBeNull();
     expect(panel?.closest("openclaw-menu-surface")).not.toBeNull();

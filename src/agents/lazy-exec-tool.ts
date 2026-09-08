@@ -56,6 +56,7 @@ export function createLazyExecTool(
         describeExecTool({
           hasCronTool: defaults?.hasCronTool === true,
           hasProcessTool: defaults?.processToolAvailabilityRef?.value,
+          autoReview: defaults?.mode === "auto",
         })
       );
     },

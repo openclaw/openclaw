@@ -339,6 +339,7 @@ Error={{printf "%.4096s" .State.Error}}' "$container_id" 2>&1
 
 docker_e2e_harness_mount_args() {
   local harness_root="${DOCKER_E2E_HARNESS_ROOT_DIR:-$ROOT_DIR}"
+  local windows_helpers="${DOCKER_E2E_WINDOWS_HELPERS_PATH:-$harness_root/scripts/windows-cmd-helpers.mjs}"
   DOCKER_E2E_HARNESS_ARGS=(
     -v "$harness_root/scripts/e2e:/app/scripts/e2e:ro"
     -v "$harness_root/scripts/docker/verify-fs-safe-native.mjs:/app/scripts/docker/verify-fs-safe-native.mjs:ro"
@@ -350,7 +351,7 @@ docker_e2e_harness_mount_args() {
     -v "$harness_root/test/e2e/qa-lab:/app/test/e2e/qa-lab:ro"
     -v "$harness_root/test/helpers:/app/test/helpers:ro"
     -v "$harness_root/scripts/prepublish-plugin-registry-artifact.mjs:/app/scripts/prepublish-plugin-registry-artifact.mjs:ro"
-    -v "$harness_root/scripts/windows-cmd-helpers.mjs:/app/scripts/windows-cmd-helpers.mjs:ro"
+    -v "$windows_helpers:/app/scripts/windows-cmd-helpers.mjs:ro"
   )
 }
 

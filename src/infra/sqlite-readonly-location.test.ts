@@ -536,6 +536,38 @@ describe("prepareSqliteReadOnlyLocation", () => {
     );
   });
 
+  it.each([
+    {
+      boundary: "tail start",
+      stderr: `🤖${"x".repeat(3_999)}`,
+      expectedTail: "x".repeat(3_999),
+    },
+    {
+      boundary: "Node stderr buffer end",
+      stderr: `${"x".repeat(1024 * 1024 - 1)}🤖${"x".repeat(4_096)}`,
+      expectedTail: `${"x".repeat(3_999)}�`,
+    },
+  ])("keeps worker stderr valid at the $boundary", async ({ stderr, expectedTail }) => {
+    const tempDir = tempDirs.make("openclaw-sqlite-readonly-stderr-");
+    const preloadPath = path.join(tempDir, "stderr-preload.cjs");
+    fs.writeFileSync(
+      preloadPath,
+      `process.once("beforeExit", () => process.stderr.write(${JSON.stringify(stderr)}));`,
+    );
+    const missingPath = path.join(tempDir, "missing.db");
+
+    await withEnvAsync({ NODE_OPTIONS: `--require=${preloadPath}` }, async () => {
+      let message = "";
+      try {
+        await prepareSqliteReadOnlyLocation(missingPath);
+      } catch (error) {
+        message = error instanceof Error ? error.message : String(error);
+      }
+
+      expect(message.split("stderr (tail): ")[1]).toBe(expectedTail);
+    });
+  });
+
   it("propagates sync public entry point failures", () => {
     const missingPath = path.join(tempDirs.make("openclaw-sqlite-readonly-missing-"), "missing.db");
     expect(() => prepareSqliteReadOnlyLocationSync(missingPath)).toThrow(

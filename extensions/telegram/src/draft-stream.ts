@@ -572,11 +572,14 @@ export function createTelegramDraftStream(params: {
     if (plan.nextPageIndex <= 0 || plan.nextPageIndex >= plan.pages.length) {
       return undefined;
     }
+    const fullSourceText = plan.pages[0]?.fullSourceText;
+    if (fullSourceText === undefined) {
+      return undefined;
+    }
     const acceptedSourceText = plan.pages
       .slice(0, plan.nextPageIndex)
       .map((page) => page.sourceText)
       .join("");
-    const fullSourceText = plan.pages[0]?.fullSourceText;
     if (!fullSourceText?.startsWith(acceptedSourceText)) {
       return undefined;
     }

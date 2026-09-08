@@ -1,73 +1,13 @@
 // Irc type declarations define plugin contracts.
 import type { BaseProbeResult } from "openclaw/plugin-sdk/channel-contract";
-import type { ChannelDeliveryStreamingConfig } from "openclaw/plugin-sdk/channel-outbound";
-import type {
-  DmConfig,
-  DmPolicy,
-  GroupPolicy,
-  GroupToolPolicyBySenderConfig,
-  GroupToolPolicyConfig,
-  MarkdownConfig,
-  OpenClawConfig,
-  ReplyToMode,
-} from "openclaw/plugin-sdk/config-contracts";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { IrcAccountConfigInput } from "./config-schema.js";
 
-export type IrcChannelConfig = {
-  requireMention?: boolean;
-  tools?: GroupToolPolicyConfig;
-  toolsBySender?: GroupToolPolicyBySenderConfig;
-  skills?: string[];
-  enabled?: boolean;
-  allowFrom?: Array<string | number>;
-  systemPrompt?: string;
-};
-
-export type IrcNickServConfig = {
-  enabled?: boolean;
-  service?: string;
-  password?: string;
-  passwordFile?: string;
-  register?: boolean;
-  registerEmail?: string;
-};
-
-export type IrcAccountConfig = {
-  name?: string;
-  enabled?: boolean;
-  replyToMode?: ReplyToMode;
-  /** Allow channel-initiated config writes (default: true). */
-  configWrites?: boolean;
-  /** Per-channel health-monitor override; disables monitor restarts when false. */
-  healthMonitor?: { enabled?: boolean };
-  /**
-   * Break-glass override: allow nick-only allowlist matching.
-   * Default behavior requires host/user-qualified identities.
-   */
-  dangerouslyAllowNameMatching?: boolean;
-  host?: string;
-  port?: number;
-  tls?: boolean;
-  nick?: string;
-  username?: string;
-  realname?: string;
-  password?: string;
-  passwordFile?: string;
-  nickserv?: IrcNickServConfig;
-  dmPolicy?: DmPolicy;
-  allowFrom?: Array<string | number>;
+export type IrcChannelConfig = NonNullable<NonNullable<IrcAccountConfigInput["groups"]>[string]>;
+export type IrcNickServConfig = NonNullable<IrcAccountConfigInput["nickserv"]>;
+export type IrcAccountConfig = Omit<IrcAccountConfigInput, "groups"> & {
   defaultTo?: string;
-  groupPolicy?: GroupPolicy;
-  groupAllowFrom?: Array<string | number>;
   groups?: Record<string, IrcChannelConfig>;
-  channels?: string[];
-  markdown?: MarkdownConfig;
-  historyLimit?: number;
-  dmHistoryLimit?: number;
-  dms?: Record<string, DmConfig>;
-  textChunkLimit?: number;
-  streaming?: ChannelDeliveryStreamingConfig;
-  responsePrefix?: string;
-  mediaMaxMb?: number;
 };
 
 type IrcConfig = IrcAccountConfig & {

@@ -473,7 +473,7 @@ provider logs a warning and skips the entry instead of capturing continuously.
 Configure at most one `whenOccupied: true` entry per Discord account and guild,
 even when the channel IDs differ: a Discord bot can occupy only one voice channel
 per guild. Later conflicting entries are skipped with a warning. For the complete
-listen-only setup, see [Discord meeting notes](/channels/discord#meeting-notes).
+listen-only setup, see [Discord meeting notes](/channels/discord/voice-transcripts#meeting-notes).
 
 The meeting provider ids are `google-meet`, `teams`, and `zoom`. Their aliases
 are `googlemeet`/`meet`, `teams-meetings`/`microsoft-teams`/`msteams`, and

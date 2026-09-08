@@ -62,7 +62,9 @@ export async function registerPluginCliCommands(
       // startup registrars past close, including help/completion on a prepared program.
       return Object.assign({}, entry, {
         register: async (target: Command) => {
-          const deferred = createPluginCliLoadSession(getPluginCache());
+          const deferred = createPluginCliLoadSession(getPluginCache(), {
+            resources: session.resources,
+          });
           try {
             const fresh = await loadPluginCliRegistrationEntriesWithDefaults({
               cfg,

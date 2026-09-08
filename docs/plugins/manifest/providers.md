@@ -146,6 +146,8 @@ Each provider entry can include:
 
 Use `providerEndpoints` for endpoint classification that generic request policy must know before provider runtime loads. Core still owns the meaning of each `endpointClass`; plugin manifests own the host and base URL metadata.
 
+The same endpoint metadata controls implicit model catalog eligibility when an operator sets `models.providers.<id>.baseUrl`. Catalog, alias, and native model base URLs also count as declared endpoints. A nonmatching provider-level URL excludes manifest, discovered, static, and generated catalog rows; explicitly authored models remain in the inventory. Plugins without native endpoint declarations keep their existing discovery behavior. Host and suffix matching retain their request-classification rules, so catalog eligibility does not establish exact-origin trust or prove a request can succeed.
+
 Officially externalized provider plugins are excluded from the core dist, so
 their manifests are invisible until installed. Their `providerEndpoints` must
 also be mirrored in `scripts/lib/official-external-provider-catalog.json` so

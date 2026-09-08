@@ -36,8 +36,8 @@ import { renderRewindButton } from "./chat-message-confirmation.ts";
 import {
   renderMessageActionButtons,
   renderReplyButton,
+  prepareChatMessageRender,
   resolveMessageActionDetails,
-  type MessageActionDetails,
   type MessageReplyTarget,
 } from "./chat-message-markdown.ts";
 import { renderChatSendStatus, type ChatSendStatusActions } from "./chat-message-send-status.ts";
@@ -103,7 +103,8 @@ type RenderMessageGroupOptions = Omit<
     rewindDisabled?: boolean;
     activeContinuation?: ActiveContinuation;
     turnRecap?: TurnRecap;
-    frameContent?: unknown;
+    /** Frame bodies are pre-rendered by the frame owner; ordinary groups omit them. */
+    frameContent?: readonly unknown[];
     frameActionOwner?: MessageGroup["messages"][number] | null;
     latestAssistant?: boolean;
   };
@@ -112,14 +113,14 @@ type RenderMessageGroupOptions = Omit<
 // this bounds auto-retries to 3 before the manual retry affordance takes over.
 const FULL_MESSAGE_RETRY_REVISION_LIMIT = 6;
 
-function prepareMessageActions(
+function prepareGroupMessage(
   group: MessageGroup,
   item: MessageGroup["messages"][number],
   opts: RenderMessageGroupOptions,
-): MessageActionDetails | null {
-  const details = resolveMessageActionDetails({
+) {
+  const source = prepareChatMessageRender(item.message);
+  const details = resolveMessageActionDetails(source, {
     ...opts,
-    message: item.message,
     messageId: item.key,
     canFetchFullMessage: Boolean(opts.loadFullAssistantMessage && opts.sessionKey),
     senderLabel: resolveMessageGroupSenderLabel(group, opts),
@@ -136,16 +137,15 @@ function prepareMessageActions(
       opts.onToggleAssistantMessageExpanded?.(messageId);
     }
   }
-  return details;
+  return { item, source, actions: details };
 }
 
-function buildGroupedMessageRenderOptions(
+function renderPreparedGroupMessage(
   group: MessageGroup,
-  item: MessageGroup["messages"][number],
   index: number,
   opts: RenderMessageGroupOptions,
-  actionDetails: MessageActionDetails | null = prepareMessageActions(group, item, opts),
-): GroupedMessageRenderOptions {
+  { item, source, actions: actionDetails }: ReturnType<typeof prepareGroupMessage>,
+) {
   let assistantMessageDisclosure: AssistantMessageDisclosure | undefined;
   const fullMessage = actionDetails?.fullMessage;
   if (fullMessage && opts.loadFullAssistantMessage && opts.onToggleAssistantMessageExpanded) {
@@ -161,19 +161,24 @@ function buildGroupedMessageRenderOptions(
         : {}),
     };
   }
-  return {
-    ...opts,
-    isStreaming: group.isStreaming && index === group.messages.length - 1,
-    entryId: persistedMessageEntryId(item.message) ?? undefined,
-    entryAnimated:
-      normalizeRoleForGrouping(group.role) === "user" &&
-      shouldAnimateUserTurnEntry(item.key, item.message),
-    duplicateCount: item.duplicateCount ?? 1,
-    showToolCalls: opts.showToolCalls ?? true,
-    autoExpandToolCalls: opts.autoExpandToolCalls ?? false,
-    assistantMessageDisclosure,
-    messageActions: actionDetails,
-  };
+  return renderGroupedMessage(
+    source,
+    item.key,
+    {
+      ...opts,
+      isStreaming: group.isStreaming && index === group.messages.length - 1,
+      entryId: persistedMessageEntryId(item.message) ?? undefined,
+      entryAnimated:
+        normalizeRoleForGrouping(group.role) === "user" &&
+        shouldAnimateUserTurnEntry(item.key, item.message),
+      duplicateCount: item.duplicateCount ?? 1,
+      showToolCalls: opts.showToolCalls ?? true,
+      autoExpandToolCalls: opts.autoExpandToolCalls ?? false,
+      assistantMessageDisclosure,
+      messageActions: actionDetails,
+    },
+    opts.onOpenSidebar,
+  );
 }
 
 function isPeerSenderGroup(
@@ -268,11 +273,11 @@ export function renderActivityGroup(
           activityExpanded
             ? groups.map((group) =>
                 group.messages.map((item, index) =>
-                  renderGroupedMessage(
-                    item.message,
-                    item.key,
-                    buildGroupedMessageRenderOptions(group, item, index, opts),
-                    opts.onOpenSidebar,
+                  renderPreparedGroupMessage(
+                    group,
+                    index,
+                    opts,
+                    prepareGroupMessage(group, item, opts),
                   ),
                 ),
               )
@@ -339,12 +344,7 @@ export function renderMessageGroupContent(group: MessageGroup, opts: RenderMessa
     return renderActivityGroup([group], opts, "continuation");
   }
   const messages = group.messages.map((item, index) =>
-    renderGroupedMessage(
-      item.message,
-      item.key,
-      buildGroupedMessageRenderOptions(group, item, index, opts),
-      opts.onOpenSidebar,
-    ),
+    renderPreparedGroupMessage(group, index, opts, prepareGroupMessage(group, item, opts)),
   );
   return html`${messages}${
     opts.showToolCalls === false ? nothing : renderBrowserTabPreviews([group], opts)
@@ -383,11 +383,11 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
       ? [opts.frameActionOwner]
       : []
     : group.messages;
-  const messageActionDetails = actionOwners.map((item) => prepareMessageActions(group, item, opts));
+  const preparedMessages = actionOwners.map((item) => prepareGroupMessage(group, item, opts));
   const lastMessageIndex = group.messages.length - 1;
   const footerActionDetails = ownsRunFrame
-    ? (messageActionDetails[0] ?? null)
-    : (messageActionDetails[lastMessageIndex] ?? null);
+    ? (preparedMessages[0]?.actions ?? null)
+    : (preparedMessages[lastMessageIndex]?.actions ?? null);
   const footerActionMessageKey = ownsRunFrame
     ? opts.frameActionOwner?.key
     : group.messages[lastMessageIndex]?.key;
@@ -477,15 +477,10 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
         }
         ${
           opts.frameContent ??
-          group.messages.map((item, index) => {
-            const actionDetails = messageActionDetails[index];
+          preparedMessages.map((prepared, index) => {
+            const { item, actions: actionDetails } = prepared;
             return html`
-              ${renderGroupedMessage(
-                item.message,
-                item.key,
-                buildGroupedMessageRenderOptions(group, item, index, opts, actionDetails),
-                opts.onOpenSidebar,
-              )}
+              ${renderPreparedGroupMessage(group, index, opts, prepared)}
               ${
                 actionDetails && index < lastMessageIndex && !ownsRunFrame
                   ? html`
