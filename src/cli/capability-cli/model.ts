@@ -31,8 +31,6 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { callGateway, randomIdempotencyKey } from "../../gateway/call.js";
 import { ADMIN_SCOPE } from "../../gateway/operator-scopes.js";
 import { convertHeicToJpeg } from "../../media/media-services.js";
-import { planEffectiveModelCatalogRows } from "../../model-catalog/index.js";
-import { loadManifestMetadataSnapshot } from "../../plugins/manifest-contract-eligibility.js";
 import { defaultRuntime } from "../../runtime.js";
 import { getProviderEnvVars } from "../../secrets/provider-env-vars.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
@@ -62,19 +60,7 @@ async function loadModelCatalogForInspection(cfg: OpenClawConfig, rawAgentId?: s
   const agentId =
     rawAgentId === undefined ? undefined : resolveCapabilityProviderAgentId(cfg, rawAgentId);
   const prepared = await loadPreparedModelCatalog({ config: cfg, agentId, readOnly: true });
-  const metadataSnapshot = loadManifestMetadataSnapshot({ config: cfg, env: process.env });
-  const manifest = planEffectiveModelCatalogRows({
-    registry: metadataSnapshot.manifestRegistry,
-    config: cfg,
-  }).rows;
-  const entries = new Map<string, (typeof prepared)[number] | (typeof manifest)[number]>();
-  for (const entry of manifest) {
-    entries.set(`${entry.provider}\0${entry.id}`, entry);
-  }
-  for (const entry of prepared) {
-    entries.set(`${entry.provider}\0${entry.id}`, entry);
-  }
-  return [...entries.values()].toSorted(
+  return prepared.toSorted(
     (a, b) => a.provider.localeCompare(b.provider) || a.id.localeCompare(b.id),
   );
 }

@@ -446,6 +446,7 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 
   <Accordion title="Rich message formatting">
     Outbound text uses standard Telegram HTML messages by default, readable across current clients: bold, italic, links, code, spoilers, quotes — not Bot API 10.3 rich-only blocks (native tables, details, rich media, formulas).
+    Fenced code retains its literal content and spacing, including fence examples inside the block.
 
     Opt into Bot API 10.3 rich messages:
 

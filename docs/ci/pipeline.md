@@ -74,6 +74,13 @@ the job's uploaded artifacts.
 | `openclaw-performance`           | Separate workflow: daily/on-demand Kova runtime performance reports with mock-provider, deep-profile, and GPT 5.6 live lanes                                                                                                                                                                             | Scheduled and manual dispatch                          |
 | `docs-external-links`            | Separate workflow: Docs External Link Audit checks external documentation links with lychee and uploads a report; it reports findings without failing, so it never blocks a pull request                                                                                                                 | Scheduled and manual dispatch                          |
 
+Ordinary pull requests that change only independent Control UI unit-test entries
+keep all three UI unit rows, performance checks, and existing type/lint gates,
+without repeating dedicated UI E2E jobs. Browser and Node test entries, shared
+fixtures/helpers, production or build inputs, and tests imported by another
+owner retain E2E coverage. Main pushes, manual validation, and frozen targets
+keep their existing selection.
+
 The `docker-seed-e2e` job selects the executable owners of changed E2E helpers
 and the published-upgrade regression gate through one scheduler invocation.
 The published lane runs `legacy-operator-state` against only `openclaw@latest`

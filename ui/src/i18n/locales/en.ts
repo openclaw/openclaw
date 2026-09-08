@@ -128,6 +128,7 @@ export const en: TranslationMap & {
     colorMode: "Color mode",
     colorModeOption: "Color mode: {mode}",
     search: "Search",
+    pickerNoMatches: "No matches",
     save: "Save",
     saving: "Saving…",
     saveAndPublish: "Save & Publish",
@@ -944,6 +945,8 @@ export const en: TranslationMap & {
     gatewayNamed: "Gateway · {name}",
     cloudWorker: "Cloud · {profile}",
     cloudWorkerMachine: "{profile} · {machine}",
+    cloudWorkerOsMachine: "{profile} · {os} · {machine}",
+    cloudWorkerOs: "{profile} · {os}",
     cloudWorkerProvider: "Cloud worker provider: {provider}",
     cloudRuntimeUnsupported: "The {runtime} runtime does not support cloud workers.",
     cloudProfileRuntimeUnsupported:
@@ -992,6 +995,7 @@ export const en: TranslationMap & {
     registerProject: "Register as project",
     cloud: "Cloud",
     machine: "Machine",
+    operatingSystem: "Operating system",
     machineShape: "{cpu} vCPU · {memory} GB",
     machineCpu: "{cpu} vCPU",
     machineMemory: "{memory} GB",
@@ -3882,6 +3886,7 @@ export const en: TranslationMap & {
       retry: "Retry",
       frameResolverMissing: "Widget content is unavailable.",
       sandboxUnavailable: "Widget sandbox host is unavailable.",
+      runtimeError: "Script error: {message}",
       frameAuthorizationFailed: "Widget authorization failed after repeated refresh attempts.",
       sandboxOriginRequired:
         "Widget authorization failed after repeated refresh attempts. If the gateway runs behind a reverse proxy or tunnel that does not route the widget sandbox port, set mcp.apps.sandboxOrigin to a dedicated public origin routed to the sandbox listener.",
@@ -4628,7 +4633,6 @@ export const en: TranslationMap & {
     },
     mentions: {
       menu: "Mention a person",
-      loading: "Loading people…",
       empty: "No eligible people found.",
       truncated: "Keep typing to find more people.",
       online: "Online",
@@ -5320,6 +5324,7 @@ export const en: TranslationMap & {
       actions: "Message actions",
       selectionActions: "Selection actions",
       askInSideChat: "Ask in side chat",
+      addToChat: "Add to chat",
       rewind: "Rewind",
       rewindConfirm: "Rewind to before this message?",
       dontAskAgain: "Don't ask again",

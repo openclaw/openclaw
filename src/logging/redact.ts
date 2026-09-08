@@ -322,29 +322,81 @@ function hasEncodedOrInvisibleFormKey(key: string): boolean {
   );
 }
 
-function redactFormEncodedPairs(
-  value: string,
-  options?: { maskValues?: "fixed" | "hinted"; onlyEncodedOrInvisibleKeys?: boolean },
-): string {
-  return value
-    .split("&")
-    .map((pair) => {
+type SensitiveAssignmentKind = "form" | "url" | "encoded" | "context";
+
+// Visit one grammar pass in source order. The sinks keep replacement and original-offset
+// coverage separate; later text passes still detect assignments in the rewritten text.
+function visitSensitiveAssignments(
+  text: string,
+  kind: SensitiveAssignmentKind,
+  visit: (start: number, end: number, maskable: string) => void,
+): void {
+  if (!text || (kind === "url" && !text.includes("?"))) {
+    return;
+  }
+  if (
+    kind === "encoded" &&
+    !text.includes("%") &&
+    text.replace(FORM_BODY_KEY_OBFUSCATION_RE, "") === text
+  ) {
+    return;
+  }
+  if (kind === "context" && !/[=:]/u.test(text)) {
+    return;
+  }
+  const visitPair = (key: string, token: string, valueOffset: number): void => {
+    if (kind === "encoded" && !hasEncodedOrInvisibleFormKey(key)) {
+      return;
+    }
+    if (!isSensitiveBodyKey(key)) {
+      return;
+    }
+    const { maskable, maskStart, maskEnd } = splitSecretValueForMask(token);
+    visit(valueOffset + maskStart, valueOffset + maskEnd, maskable);
+  };
+  if (kind === "form") {
+    let cursor = 0;
+    for (const pair of text.split("&")) {
       const equalsIndex = pair.indexOf("=");
-      if (equalsIndex < 0) {
-        return pair;
+      if (equalsIndex >= 0) {
+        visitPair(
+          pair.slice(0, equalsIndex),
+          pair.slice(equalsIndex + 1),
+          cursor + equalsIndex + 1,
+        );
       }
-      const key = pair.slice(0, equalsIndex);
-      if (options?.onlyEncodedOrInvisibleKeys && !hasEncodedOrInvisibleFormKey(key)) {
-        return pair;
-      }
-      if (!isSensitiveBodyKey(key)) {
-        return pair;
-      }
-      const token = pair.slice(equalsIndex + 1);
-      const masked = maskSecretValue(token, { hinted: options?.maskValues === "hinted" });
-      return `${key}=${masked}`;
-    })
-    .join("&");
+      cursor += pair.length + 1;
+    }
+    return;
+  }
+  const pattern =
+    kind === "url"
+      ? URL_QUERY_PAIR_RE
+      : kind === "encoded"
+        ? ENCODED_FORM_PAIR_RE
+        : FORM_BODY_CONTEXT_SINGLE_PAIR_RE;
+  const keyIndex = kind === "context" ? 3 : 2;
+  // These private synchronous sinks cannot re-enter the scanner. Release regex state on errors too.
+  pattern.lastIndex = 0;
+  try {
+    for (let match = pattern.exec(text); match; match = pattern.exec(text)) {
+      const prefix = match[1] ?? "";
+      const key = match[keyIndex] ?? "";
+      visitPair(key, match[keyIndex + 1] ?? "", match.index + prefix.length + key.length + 1);
+    }
+  } finally {
+    pattern.lastIndex = 0;
+  }
+}
+
+function redactAssignmentValues(text: string, kind: SensitiveAssignmentKind): string {
+  const parts: string[] = [];
+  let cursor = 0;
+  visitSensitiveAssignments(text, kind, (start, end, maskable) => {
+    parts.push(text.slice(cursor, start), kind === "url" ? maskToken(maskable) : "***");
+    cursor = end;
+  });
+  return parts.length > 0 ? parts.join("") + text.slice(cursor) : text;
 }
 
 function markBitmapRange(bitmap: boolean[], start: number, end: number): void {
@@ -355,168 +407,39 @@ function markBitmapRange(bitmap: boolean[], start: number, end: number): void {
   }
 }
 
-function markSensitiveFormEncodedPairValues(
-  bitmap: boolean[],
-  value: string,
-  offset: number,
-  options?: { onlyEncodedOrInvisibleKeys?: boolean },
-): void {
-  let cursor = 0;
-  for (const pair of value.split("&")) {
-    const pairStart = cursor;
-    const pairEnd = pairStart + pair.length;
-    cursor = pairEnd + 1;
-
-    const equalsIndex = pair.indexOf("=");
-    if (equalsIndex < 0) {
-      continue;
-    }
-    const key = pair.slice(0, equalsIndex);
-    if (options?.onlyEncodedOrInvisibleKeys && !hasEncodedOrInvisibleFormKey(key)) {
-      continue;
-    }
-    if (!isSensitiveBodyKey(key)) {
-      continue;
-    }
-
-    const token = pair.slice(equalsIndex + 1);
-    const secretValue = splitSecretValueForMask(token);
-    const valueStart = pairStart + equalsIndex + 1 + secretValue.maskStart;
-    const valueEnd = pairStart + equalsIndex + 1 + secretValue.maskEnd;
-    markBitmapRange(bitmap, offset + valueStart, offset + valueEnd);
-  }
-}
-
-function redactUrlQueryPairs(text: string): string {
-  if (!text || !text.includes("?")) {
-    return text;
-  }
-  return text.replace(URL_QUERY_PAIR_RE, (match, prefix: string, key: string, token: string) => {
-    if (!isSensitiveBodyKey(key)) {
-      return match;
-    }
-    return `${prefix}${key}=${maskSecretValue(token, { hinted: true })}`;
-  });
-}
-
-function markUrlQueryPairRedactions(text: string, bitmap: boolean[]): void {
-  if (!text || !text.includes("?")) {
-    return;
-  }
-  for (const match of text.matchAll(URL_QUERY_PAIR_RE)) {
-    if (match.index === undefined) {
-      continue;
-    }
-    const prefix = match[1] ?? "";
-    const key = match[2] ?? "";
-    const token = match[3] ?? "";
-    if (!isSensitiveBodyKey(key)) {
-      continue;
-    }
-    const secretValue = splitSecretValueForMask(token);
-    const valueOffset = match.index + prefix.length + key.length + 1;
-    markBitmapRange(bitmap, valueOffset + secretValue.maskStart, valueOffset + secretValue.maskEnd);
-  }
-}
-
-function redactEncodedFormPairs(text: string): string {
-  if (!text || (!text.includes("%") && text.replace(FORM_BODY_KEY_OBFUSCATION_RE, "") === text)) {
-    return text;
-  }
-  return text.replace(ENCODED_FORM_PAIR_RE, (match, prefix: string, key: string, token: string) => {
-    if (!hasEncodedOrInvisibleFormKey(key) || !isSensitiveBodyKey(key)) {
-      return match;
-    }
-    return `${prefix}${key}=${maskSecretValue(token)}`;
-  });
-}
-
-function markEncodedFormPairRedactions(text: string, bitmap: boolean[], offset = 0): void {
-  if (!text || (!text.includes("%") && text.replace(FORM_BODY_KEY_OBFUSCATION_RE, "") === text)) {
-    return;
-  }
-  for (const match of text.matchAll(ENCODED_FORM_PAIR_RE)) {
-    if (match.index === undefined) {
-      continue;
-    }
-    const prefix = match[1] ?? "";
-    const key = match[2] ?? "";
-    const token = match[3] ?? "";
-    if (!hasEncodedOrInvisibleFormKey(key) || !isSensitiveBodyKey(key)) {
-      continue;
-    }
-    const secretValue = splitSecretValueForMask(token);
-    const valueOffset = match.index + prefix.length + key.length + 1;
-    markBitmapRange(
-      bitmap,
-      offset + valueOffset + secretValue.maskStart,
-      offset + valueOffset + secretValue.maskEnd,
-    );
-  }
-}
-
-function redactFormBodyContextSinglePairs(text: string): string {
-  if (!text || !/[=:]/u.test(text)) {
-    return text;
-  }
-  return text.replace(
-    FORM_BODY_CONTEXT_SINGLE_PAIR_RE,
-    (match, prefix: string, _quote: string, key: string, token: string, suffix: string) => {
-      if (!isSensitiveBodyKey(key)) {
-        return match;
-      }
-      return `${prefix}${key}=${maskSecretValue(token)}${suffix}`;
-    },
-  );
-}
-
-function markFormBodyContextSinglePairRedactions(
+function markAssignmentValues(
   text: string,
+  kind: SensitiveAssignmentKind,
   bitmap: boolean[],
   offset = 0,
 ): void {
-  if (!text || !/[=:]/u.test(text)) {
-    return;
-  }
-  for (const match of text.matchAll(FORM_BODY_CONTEXT_SINGLE_PAIR_RE)) {
-    if (match.index === undefined) {
-      continue;
-    }
-    const prefix = match[1] ?? "";
-    const key = match[3] ?? "";
-    const token = match[4] ?? "";
-    if (!isSensitiveBodyKey(key)) {
-      continue;
-    }
-    const secretValue = splitSecretValueForMask(token);
-    const valueOffset = match.index + prefix.length + key.length + 1;
-    markBitmapRange(
-      bitmap,
-      offset + valueOffset + secretValue.maskStart,
-      offset + valueOffset + secretValue.maskEnd,
-    );
-  }
+  visitSensitiveAssignments(text, kind, (start, end) => {
+    markBitmapRange(bitmap, offset + start, offset + end);
+  });
 }
 
 function redactFormBodyLine(text: string): string {
   if (!text) {
     return text;
   }
-  const contextRedacted = redactFormBodyContextSinglePairs(redactEncodedFormPairs(text));
+  const contextRedacted = redactAssignmentValues(
+    redactAssignmentValues(text, "encoded"),
+    "context",
+  );
   if (!contextRedacted.includes("&")) {
     return contextRedacted;
   }
   if (FORM_BODY_RE.test(contextRedacted)) {
-    return redactFormEncodedPairs(contextRedacted);
+    return redactAssignmentValues(contextRedacted, "form");
   }
   const redacted = contextRedacted.replace(
     FORM_BODY_SUBSTRING_RE,
     (match, prefix: string, body: string) => {
-      const redactedBody = redactFormEncodedPairs(body);
+      const redactedBody = redactAssignmentValues(body, "form");
       return redactedBody === body ? match : `${prefix}${redactedBody}`;
     },
   );
-  return redactFormBodyContextSinglePairs(redactEncodedFormPairs(redacted));
+  return redactAssignmentValues(redactAssignmentValues(redacted, "encoded"), "context");
 }
 
 function redactFormBody(text: string): string {
@@ -538,13 +461,13 @@ function markFormBodyLineRedactions(text: string, bitmap: boolean[], offset: num
   if (!text) {
     return;
   }
-  markEncodedFormPairRedactions(text, bitmap, offset);
-  markFormBodyContextSinglePairRedactions(text, bitmap, offset);
+  markAssignmentValues(text, "encoded", bitmap, offset);
+  markAssignmentValues(text, "context", bitmap, offset);
   if (!text.includes("&")) {
     return;
   }
   if (FORM_BODY_RE.test(text)) {
-    markSensitiveFormEncodedPairValues(bitmap, text, offset);
+    markAssignmentValues(text, "form", bitmap, offset);
     return;
   }
   for (const match of text.matchAll(FORM_BODY_SUBSTRING_RE)) {
@@ -553,7 +476,7 @@ function markFormBodyLineRedactions(text: string, bitmap: boolean[], offset: num
     }
     const prefix = match[1] ?? "";
     const body = match[2] ?? "";
-    markSensitiveFormEncodedPairValues(bitmap, body, offset + match.index + prefix.length);
+    markAssignmentValues(body, "form", bitmap, offset + match.index + prefix.length);
   }
 }
 
@@ -750,7 +673,7 @@ function redactText(
     next = redactStructuredAuthHeaders(next, "***");
   }
   if (options?.redactFormBodies) {
-    next = redactUrlQueryPairs(next);
+    next = redactAssignmentValues(next, "url");
     next = redactFormBody(next);
   }
   for (const pattern of patterns) {
@@ -825,7 +748,7 @@ export function computeSensitiveRedactionBitmap(
     }
   }
   if (resolved.redactFormBodies) {
-    markUrlQueryPairRedactions(text, bitmap);
+    markAssignmentValues(text, "url", bitmap);
     markFormBodyRedactions(text, bitmap);
   }
   for (const pattern of resolved.patterns) {
@@ -1219,7 +1142,7 @@ export function redactSensitiveLines(lines: string[], resolved: ResolvedRedactOp
     return exactRedactedLines;
   }
   const redactedLines = resolved.redactFormBodies
-    ? exactRedactedLines.map((line) => redactFormBody(redactUrlQueryPairs(line)))
+    ? exactRedactedLines.map((line) => redactFormBody(redactAssignmentValues(line, "url")))
     : exactRedactedLines;
   let redacted = redactedLines.join("\n");
   if (resolved.redactStructuredAuthHeaders) {

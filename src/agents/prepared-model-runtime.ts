@@ -249,6 +249,7 @@ export async function publishPreparedModelRuntimeSnapshot(
 /** Activates lifecycle publication for direct embedded runtimes without a gateway startup. */
 export async function activateStandalonePreparedModelRuntime(
   rawInput: PreparedModelRuntimeInput,
+  options: Pick<PreparedModelRuntimePublicationOptions, "catalogMode"> = {},
 ): Promise<PreparedModelRuntimeSnapshot | undefined> {
   const assertLifetime = captureModelRuntimeLifetime();
   const input = normalizePreparedModelRuntimeInput(rawInput);
@@ -257,7 +258,7 @@ export async function activateStandalonePreparedModelRuntime(
   // One writer per owner key prevents conflicting config activations from alternately
   // superseding each other's generation while preserving each caller's requested snapshot.
   const activation = previous.then(
-    async () => await activateStandalonePreparedModelRuntimeNow(input, assertLifetime),
+    async () => await activateStandalonePreparedModelRuntimeNow(input, assertLifetime, options),
   );
   const tail = activation.then(
     () => undefined,
@@ -276,6 +277,7 @@ export async function activateStandalonePreparedModelRuntime(
 async function activateStandalonePreparedModelRuntimeNow(
   input: PreparedModelRuntimeInput,
   assertLifetime: () => void,
+  options: Pick<PreparedModelRuntimePublicationOptions, "catalogMode">,
 ): Promise<PreparedModelRuntimeSnapshot | undefined> {
   for (;;) {
     assertLifetime();
@@ -297,7 +299,7 @@ async function activateStandalonePreparedModelRuntimeNow(
           ...input,
           preserveWorkspaceDirOnRefresh: input.workspaceDir !== undefined,
         },
-        { provenance: "standalone" },
+        { ...options, provenance: "standalone" },
       );
     } catch (error) {
       if (!(error instanceof PreparedModelRuntimePublicationSupersededError)) {

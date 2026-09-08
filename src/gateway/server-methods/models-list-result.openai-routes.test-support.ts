@@ -33,19 +33,6 @@ export function providerCatalogEntry(provider: string, id: string): ModelCatalog
   return { ...catalogEntry(id, "openai-completions"), provider };
 }
 
-export function registerTestCatalogAccess(
-  context: GatewayRequestContext,
-  readPrepared?: () => Promise<PreparedGatewayModelCatalogSnapshot | undefined>,
-): void {
-  registerGatewayModelCatalogPrivateAccess(context.loadGatewayModelCatalogSnapshot, {
-    loadDeferred: async (params) =>
-      (await context.loadGatewayModelCatalogSnapshot(
-        params,
-      )) as PreparedGatewayModelCatalogSnapshot,
-    readPrepared: readPrepared ?? (async () => undefined),
-  });
-}
-
 type ListModelsParams = {
   agentId?: string;
   agentDir?: string;
@@ -94,6 +81,7 @@ export function createModelsListTestContext(params: ListModelsParams) {
       ...(params.staticEntries ? { staticEntries: params.staticEntries } : {}),
       authMaterializations: [],
     }) satisfies PreparedGatewayModelCatalogSnapshot;
+  let publishedEntries = params.publishedCatalog ?? params.catalog;
   const loadGatewayModelCatalogSnapshot = async (loadParams?: object) => {
     if (params.catalogLoadDelayMs !== undefined) {
       await new Promise<void>((resolve) => {
@@ -101,15 +89,15 @@ export function createModelsListTestContext(params: ListModelsParams) {
       });
     }
     const readOnly = loadParams && "readOnly" in loadParams && loadParams.readOnly === true;
-    return createCatalogSnapshot(
-      readOnly && params.preparedCatalog ? params.preparedCatalog : params.catalog,
-    );
+    const entries = readOnly && params.preparedCatalog ? params.preparedCatalog : params.catalog;
+    if (!readOnly) {
+      publishedEntries = entries;
+    }
+    return createCatalogSnapshot(entries);
   };
   registerGatewayModelCatalogPrivateAccess(loadGatewayModelCatalogSnapshot, {
     loadDeferred: loadGatewayModelCatalogSnapshot,
-    readPrepared: params.publishedCatalog
-      ? async () => createCatalogSnapshot(params.publishedCatalog ?? [])
-      : loadGatewayModelCatalogSnapshot,
+    readPrepared: async () => createCatalogSnapshot(publishedEntries),
   });
   const context = {
     getRuntimeConfig: () => config,
@@ -124,7 +112,7 @@ export async function listModels(params: ListModelsParams) {
   const agentId = params.agentId ?? "main";
   const config = params.cfg ?? ({} as OpenClawConfig);
   return await buildModelsListResult({
-    context,
+    source: { kind: "gateway", context },
     agentId,
     params: {
       view: params.view ?? "all",

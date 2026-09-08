@@ -41,13 +41,13 @@ OAuth client.
     openclaw models auth login --provider xai --method oauth
     ```
 
-    With no existing primary model, OAuth setup selects `xai/auto`. The plugin
-    resolves that stable ref from xAI's authenticated model catalog and remote
-    default, so future xAI default changes do not require an OpenClaw update.
+    With no existing primary model, OAuth setup selects the curated default,
+    `xai/grok-4.6`. Authenticated discovery updates available model rows without
+    changing that default.
     It preserves an existing primary; opt in explicitly when needed:
 
     ```bash
-    openclaw models set xai/auto
+    openclaw models set xai/grok-4.6
     ```
 
     Rerun full onboarding only if you intentionally want to change Gateway,
@@ -56,8 +56,7 @@ OAuth client.
   </Step>
   <Step title="API-key path">
     API-key setup still works for xAI Console keys and for media surfaces
-    that need key-backed provider config. It keeps Grok 4.3 as the
-    regional-safe setup default:
+    that need key-backed provider config. It uses the same Grok 4.6 setup default:
 
     ```bash
     openclaw models auth login --provider xai --method api-key
@@ -68,7 +67,7 @@ OAuth client.
   <Step title="Pick a model">
     ```json5
     {
-      agents: { defaults: { model: { primary: "xai/auto" } } },
+      agents: { defaults: { model: { primary: "xai/grok-4.6" } } },
     }
     ```
   </Step>
@@ -98,10 +97,9 @@ subscription quota are separate billing buckets.
 - If a previous OAuth login left xAI using the API-key endpoint or catalog,
   rerun `openclaw models auth login --provider xai --method oauth`. A successful
   login refreshes the subscription catalog and proxy route from your account.
-  It preserves your primary model and fallbacks; the moving alias remains
-  discovery-owned so it can follow later default changes.
+  It preserves your primary model and fallbacks.
 - If sign-in succeeds but Grok is not the default model, run
-  `openclaw models set xai/auto`. OAuth login preserves an existing
+  `openclaw models set xai/grok-4.6`. OAuth login preserves an existing
   primary model unless you explicitly change it.
 - Inspect saved xAI auth profiles:
 
@@ -112,6 +110,14 @@ subscription quota are separate billing buckets.
 
 - xAI decides which accounts can receive OAuth API tokens. If an account is
   not eligible, use the API-key path or check the subscription on xAI's side.
+
+Existing `xai/auto` selections on the Grok subscription route are retired.
+Run `openclaw doctor --fix` to replace affected config and session selections
+with `xai/grok-4.6`. Doctor preserves account pins and fallbacks, and leaves
+custom endpoints unchanged. For a pinned session, an unavailable account or a
+disallowed successor keeps the selection unchanged, with a diagnostic explaining
+the required action. Unpinned config can be repaired from its declared
+subscription route. You can also choose a permitted concrete model explicitly.
 
 For a manually managed Grok subscription token, set `models.providers.xai.auth`
 to `"token"` and `models.providers.xai.baseUrl` to
@@ -143,11 +149,15 @@ see [legacy compatibility and moving aliases](#legacy-compatibility-and-moving-a
 | Grok 4.20      | `grok-4.20-0309-reasoning`, `grok-4.20-0309-non-reasoning`   |
 
 <Tip>
-Use `xai/auto` to follow xAI's authenticated OAuth default, or select a concrete
-id such as `xai/grok-4.6` to remain pinned. API-key setup keeps Grok 4.3 as the
-regional-safe default; Grok 4.6, Grok 4.5, `grok-build-0.1`, and both dated
+OAuth and API-key setup use `xai/grok-4.6` as the curated default.
+Grok 4.5, `grok-build-0.1`, Grok 4.3, and both dated
 Grok 4.20 variants remain selectable.
 </Tip>
+
+The plugin manifest owns the curated list. Ordinary API-key setup keeps that
+inventory in the plugin instead of copying it into your configuration;
+`models.mode: "replace"` still receives the curated rows. Explicit model rows
+remain unchanged. OAuth login retains its authenticated account catalog.
 
 Catalog context and token-cost metadata follows xAI's live
 [model pages](https://docs.x.ai/developers/models) and
@@ -158,6 +168,11 @@ OpenClaw's flat catalog cost fields record the short-context rates. The current
 [Grok Build](https://docs.x.ai/build/overview) coding agent uses Grok 4.6. The
 historical OpenClaw `grok-build-latest` compatibility alias remains pinned to
 Grok 4.5.
+
+Supported non-curated aliases retain their reasoning, input, and token-limit
+metadata without joining the published inventory. Their pricing remains unknown,
+recorded as zero until the manifest includes them. Zero is an unavailable estimate, not a claim that
+the provider charges nothing.
 
 ## Feature coverage
 
@@ -215,9 +230,8 @@ current Grok 4.20 aliases verbatim so xAI retains control of stable, latest,
 beta, experimental, and dated alias semantics. The global `grok-latest` alias is
 also preserved verbatim.
 
-xAI retired the following exact ids. OpenClaw keeps them as hidden compatibility
-rows for shipped configurations, with the limits and pricing of their current
-redirect targets:
+xAI retired the following exact ids. Existing configurations keep their
+normalization and transport paths; uncurated model names use unknown pricing:
 
 | Retired ids                                                          | Current behavior                 |
 | -------------------------------------------------------------------- | -------------------------------- |
@@ -232,6 +246,10 @@ stale context metadata on active 4.20 rows. It does not pin active 4.20
 `beta-latest` aliases to a dated snapshot.
 
 ## Features
+
+Unconfigured `web_search`, `x_search`, and `code_execution` requests use Grok 4.6.
+This also applies to existing installations that omit the tool model setting.
+An explicit tool model remains selected; the Grok 4.3 examples below are overrides.
 
 <Warning>
   `x_search` and `code_execution` run on xAI's servers. xAI bills $5 per 1,000
@@ -565,7 +583,7 @@ stale context metadata on active 4.20 rows. It does not pin active 4.20
     | Key               | Type    | Default                   | Description                                      |
     | ----------------- | ------- | ------------------------- | ------------------------------------------------ |
     | `enabled`         | boolean | Automatic for xAI models  | Disable, or opt in for a known non-xAI provider |
-    | `model`           | string  | `grok-4.3`                | Model used for x_search requests                 |
+    | `model`           | string  | `grok-4.6`                | Model used for x_search requests                 |
     | `baseUrl`         | string  | -                         | xAI Responses base URL override                  |
     | `inlineCitations` | boolean | -                         | Include inline citations in results              |
     | `maxTurns`        | number  | -                         | Maximum conversation turns                       |
@@ -602,7 +620,7 @@ stale context metadata on active 4.20 rows. It does not pin active 4.20
     | Key              | Type    | Default                  | Description                                      |
     | ---------------- | ------- | ------------------------ | ------------------------------------------------ |
     | `enabled`        | boolean | Automatic for xAI models | Disable, or opt in for a known non-xAI provider |
-    | `model`          | string  | `grok-4.3`               | Model used for code execution requests           |
+    | `model`          | string  | `grok-4.6`               | Model used for code execution requests           |
     | `maxTurns`       | number  | -                        | Maximum conversation turns                       |
     | `timeoutSeconds` | number  | `30`                     | Request timeout in seconds                       |
 

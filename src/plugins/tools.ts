@@ -811,7 +811,6 @@ export function resolvePluginTools(params: {
   const blockedPlugins = new Set<string>();
   const factoryTimingStartedAt = Date.now();
   const factoryTimings: PluginToolFactoryTiming[] = [];
-  const manifestPluginsById = new Map(snapshot.plugins.map((plugin) => [plugin.id, plugin]));
 
   for (const entry of registry.tools) {
     if (!scopedPluginIds.has(entry.pluginId)) {
@@ -844,7 +843,7 @@ export function resolvePluginTools(params: {
       blockedPlugins.add(entry.pluginId);
       continue;
     }
-    const manifestPlugin = manifestPluginsById.get(entry.pluginId);
+    const manifestPlugin = snapshot.byPluginId.get(entry.pluginId);
     const declaredNames = entry.names ?? [];
     const availabilityNames =
       declaredNames.length > 0 ? declaredNames : (entry.declaredNames ?? []);

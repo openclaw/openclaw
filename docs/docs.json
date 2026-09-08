@@ -1377,8 +1377,16 @@
                 "group": "Install overview",
                 "pages": [
                   "install/index",
-                  "install/installer",
-                  "install/node"
+                  "install/installer"
+                ]
+              },
+              {
+                "group": "Runtimes",
+                "pages": [
+                  "install/node",
+                  "install/node-compatibility",
+                  "install/bun",
+                  "install/bun-compatibility"
                 ]
               },
               {
@@ -1403,7 +1411,6 @@
                 "group": "Containers",
                 "pages": [
                   "install/ansible",
-                  "install/bun",
                   "install/docker",
                   "install/nix",
                   "install/podman"
@@ -1747,6 +1754,16 @@
                   },
                   "plugins/cli-backend-plugins",
                   "plugins/hooks",
+                  {
+                    "group": "Plugin hooks",
+                    "pages": [
+                      "plugins/hooks/reference",
+                      "plugins/hooks/tool-policy",
+                      "plugins/hooks/prompt-and-session",
+                      "plugins/hooks/messages",
+                      "plugins/hooks/lifecycle"
+                    ]
+                  },
                   "plugins/plugin-permission-requests",
                   "plugins/adding-capabilities"
                 ]
@@ -1821,6 +1838,19 @@
                     "group": "Tool catalogs and workflows",
                     "pages": [
                       "tools/code-mode",
+                      {
+                        "group": "Code Mode",
+                        "pages": [
+                          "tools/code-mode/quickstart",
+                          "tools/code-mode/configuration",
+                          "tools/code-mode/tool-surface",
+                          "tools/code-mode/guest-api",
+                          "tools/code-mode/output",
+                          "tools/code-mode/internals",
+                          "tools/code-mode/troubleshooting",
+                          "tools/code-mode/maintainers"
+                        ]
+                      },
                       "tools/llm-task",
                       "tools/lobster",
                       "tools/mcp",
@@ -1979,6 +2009,19 @@
                       "providers/nvidia",
                       "providers/ollama-cloud",
                       "providers/openai",
+                      {
+                        "group": "OpenAI",
+                        "pages": [
+                          "providers/openai/setup",
+                          "providers/openai/models",
+                          "providers/openai/runtimes",
+                          "providers/openai/coverage-and-cost",
+                          "providers/openai/image-and-video",
+                          "providers/openai/voice-and-speech",
+                          "providers/openai/azure",
+                          "providers/openai/advanced"
+                        ]
+                      },
                       "providers/opencode",
                       "providers/opencode-go",
                       "providers/perplexity-provider",
@@ -2194,11 +2237,21 @@
                     "group": "Security and sandboxing",
                     "pages": [
                       "gateway/security/index",
+                      "gateway/security/trust-model",
+                      "gateway/security/running-the-audit",
+                      "gateway/security/audit-checks",
+                      "gateway/security/hardened-baseline",
+                      "gateway/security/access-control",
+                      "gateway/security/prompt-injection",
+                      "gateway/security/tool-permissions",
+                      "gateway/security/browser-control",
+                      "gateway/security/network-exposure",
+                      "gateway/security/secrets-and-storage",
                       "gateway/security/exposure-runbook",
+                      "gateway/security/rate-limiting",
+                      "gateway/security/operator-incident-response",
                       "gateway/security/secure-file-operations",
                       "gateway/security/dependency-locking",
-                      "gateway/security/audit-checks",
-                      "gateway/security/rate-limiting",
                       "gateway/operator-scopes",
                       "gateway/sandboxing",
                       "gateway/openshell",
@@ -2519,6 +2572,17 @@
                   "plugins/architecture",
                   "plugins/architecture-internals",
                   "plugins/sdk-migration",
+                  {
+                    "group": "Plugin SDK migration",
+                    "pages": [
+                      "plugins/sdk-migration/how-to-migrate",
+                      "plugins/sdk-migration/import-paths",
+                      "plugins/sdk-migration/removed-surfaces",
+                      "plugins/sdk-migration/talk",
+                      "plugins/sdk-migration/compatibility-policy",
+                      "plugins/sdk-migration/removal-timeline"
+                    ]
+                  },
                   "plugins/compatibility",
                   "plugins/sdk-channel-outbound",
                   "plugins/sdk-channel-inbound",
@@ -2596,6 +2660,7 @@
                 "group": "Release notes",
                 "pages": [
                   "releases/index",
+                  "releases/2026.9.3",
                   "releases/2026.9.2",
                   "releases/2026.9.1",
                   "releases/2026.8.2",
@@ -2623,6 +2688,17 @@
                 "group": "Testing and CI",
                 "pages": [
                   "reference/test",
+                  {
+                    "group": "Tests",
+                    "pages": [
+                      "reference/test/local",
+                      "reference/test/lanes",
+                      "reference/test/docker",
+                      "reference/test/performance",
+                      "reference/test/runner-internals",
+                      "reference/test/remote-proof"
+                    ]
+                  },
                   "ci",
                   {
                     "group": "CI",
@@ -2640,6 +2716,19 @@
                   },
                   "help/scripts",
                   "concepts/qa-e2e-automation",
+                  {
+                    "group": "QA stack",
+                    "pages": [
+                      "concepts/qa-e2e-automation/command-surface",
+                      "concepts/qa-e2e-automation/operator-flow",
+                      "concepts/qa-e2e-automation/scenario-coverage",
+                      "concepts/qa-e2e-automation/channel-qa-reference",
+                      "concepts/qa-e2e-automation/slack-qa",
+                      "concepts/qa-e2e-automation/whatsapp-and-credentials",
+                      "concepts/qa-e2e-automation/extending-the-stack",
+                      "concepts/qa-e2e-automation/qa-reporting"
+                    ]
+                  },
                   "concepts/personal-agent-benchmark-pack"
                 ]
               }

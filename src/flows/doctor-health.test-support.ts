@@ -4,6 +4,7 @@ import { createConfigIO } from "../config/io.factory.js";
 import { hashConfigRaw } from "../config/io.read-helpers.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { createDoctorHealthContribution } from "./doctor-health-contribution.js";
 import type { DoctorHealthFlowContext } from "./doctor-health-contributions.js";
 
 const mocks = vi.hoisted(() => ({
@@ -214,7 +215,20 @@ export function registerDoctorConfigReceiptTests(
     "preserves health warnings in the update result (advisory=%s)",
     async (advisory) => {
       mocks.runContributions.mockImplementation(async (ctx) => {
-        ctx.updateWarnings = ["plugin/example: version probe timed out"];
+        await createDoctorHealthContribution({
+          id: "doctor:fixture-warning",
+          label: "Fixture warning",
+          healthChecks: {
+            description: "Optional fixture maintenance",
+            detect: async () => [
+              {
+                checkId: "core/doctor/fixture-warning",
+                severity: "warning",
+                message: "optional maintenance incomplete",
+              },
+            ],
+          },
+        }).run(ctx);
         if (advisory) {
           ctx.postInstallDoctorResult = postInstallAdvisory;
         }
@@ -232,7 +246,7 @@ export function registerDoctorConfigReceiptTests(
         result: {
           ...(advisory ? postInstallAdvisory : { status: "ok" }),
           configHash: "unchanged",
-          warnings: ["plugin/example: version probe timed out"],
+          warnings: ["core/doctor/fixture-warning: optional maintenance incomplete"],
         },
       });
       expect(runtime.exit).not.toHaveBeenCalledWith(1);

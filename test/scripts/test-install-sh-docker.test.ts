@@ -1407,6 +1407,8 @@ printf 'status=%s\\n' "$status"
     expect(wrapper).toContain(
       'FROZEN_PAYLOAD_DIR="${OPENCLAW_INSTALL_SMOKE_FROZEN_PAYLOAD_DIR:-}"',
     );
+    expect(wrapper).toContain('FROZEN_NODE_VERSION="${OPENCLAW_INSTALL_SMOKE_NODE_VERSION:-}"');
+    expect(wrapper).toContain('-e "OPENCLAW_NODE_VERSION=$FROZEN_NODE_VERSION"');
     expect(runner).toContain("Run official installer one-liner for latest release tarball");
     expect(runner).toContain("run_installer_pipeline");
     expect(runner).toContain('--version "$FRESH_TAG_URL"');
@@ -2298,7 +2300,7 @@ syncBuiltinESMExports();
     },
   );
 
-  it("packs the current tree and verifies the installed package runtime through Bun", () => {
+  it("packs the current tree and capability-binds the installed package runtime", () => {
     const script = readFileSync(BUN_GLOBAL_SMOKE_PATH, "utf8");
     const assertions = readFileSync(BUN_GLOBAL_ASSERTIONS_PATH, "utf8");
     const packageHelper = readFileSync(DOCKER_E2E_PACKAGE_HELPER_PATH, "utf8");
@@ -2315,6 +2317,10 @@ syncBuiltinESMExports();
     expect(script).not.toContain("npm pack --ignore-scripts --json --pack-destination");
     expect(script).toContain('"$bun_path" install -g --trust "$PACKAGE_TGZ" --no-progress');
     expect(script).toContain('"$openclaw_bin" --help');
+    expect(script).toContain('grep -Fq "Bun runtime is unsupported" "$DIRECT_BUN_LOG"');
+    expect(script).toContain('grep -Fq "node:sqlite" "$DIRECT_BUN_LOG"');
+    expect(script).toContain('runtime_command=("$openclaw_bin")');
+    expect(script).toContain('return "$direct_bun_status"');
     expect(script).toContain("OPENCLAW_BUN_GLOBAL_SMOKE_PROOF_PATH");
     expect(script).toContain("infer image providers --json");
     expect(script).toContain("assert-image-providers");
@@ -2495,19 +2501,34 @@ syncBuiltinESMExports();
     {
       name: "uses bundled AI bytes when a prebuilt tarball is provided",
       bundledAi: true,
+      bunRuntime: "supported",
       statusExit: 0,
     },
     {
       name: "installs an older tarball with no bundled AI dependency unchanged",
       bundledAi: false,
+      bunRuntime: "supported",
       statusExit: 0,
     },
     {
       name: "preserves redirected Bun command diagnostics and exit status",
       bundledAi: true,
+      bunRuntime: "supported",
       statusExit: 23,
     },
-  ])("$name", ({ bundledAi, statusExit }) => {
+    {
+      name: "uses Node for a Bun-installed package that explicitly rejects the Bun runtime",
+      bundledAi: true,
+      bunRuntime: "unsupported",
+      statusExit: 0,
+    },
+    {
+      name: "does not hide an unexpected direct Bun runtime failure",
+      bundledAi: true,
+      bunRuntime: "unexpected-failure",
+      statusExit: 0,
+    },
+  ])("$name", ({ bundledAi, bunRuntime, statusExit }) => {
     const tempDir = tempDirs.make("openclaw-bun-prebuilt-");
     const packageDir = join(tempDir, "fixture", "package");
     const aiDir = join(packageDir, "node_modules", "@openclaw", "ai");
@@ -2568,8 +2589,16 @@ if [[ "\${1:-}" == */verify-fs-safe-native.mjs ]]; then
   exit 0
 fi
 if [[ "\${1:-}" == */openclaw.mjs ]]; then
-  echo "openclaw: the Bun runtime is unsupported because OpenClaw requires node:sqlite." >&2
-  exit 1
+  if [ "$FAKE_BUN_RUNTIME" = "unsupported" ]; then
+    echo 'openclaw: the Bun runtime is unsupported because OpenClaw requires node:sqlite.' >&2
+    exit 1
+  fi
+  if [ "$FAKE_BUN_RUNTIME" = "unexpected-failure" ]; then
+    echo 'synthetic direct Bun runtime failure' >&2
+    exit 42
+  fi
+  shift
+  exec node "$BUN_INSTALL/install/global/node_modules/openclaw/openclaw.mjs" "$@"
 fi
 test "\${1:-}" = "install"
 case " $* " in
@@ -2646,6 +2675,7 @@ node -e 'const fs=require("node:fs");const p=process.argv[1];const value=JSON.pa
         ...process.env,
         BUN_BIN: bunPath,
         EXPECT_AI_OVERRIDE: bundledAi ? "1" : "0",
+        FAKE_BUN_RUNTIME: bunRuntime,
         FAKE_STATUS_EXIT: String(statusExit),
         FAKE_STATE_PATH: statePath,
         FAKE_AI_TARBALL_PATH: aiTarballPath,
@@ -2655,21 +2685,27 @@ node -e 'const fs=require("node:fs");const p=process.argv[1];const value=JSON.pa
       },
     });
 
-    expect(result.status, result.stderr).toBe(statusExit);
+    const expectedExit = bunRuntime === "unexpected-failure" ? 42 : statusExit;
+    expect(result.status, result.stderr).toBe(expectedExit);
     expect(existsSync(path.dirname(readFileSync(statePath, "utf8").trim()))).toBe(false);
     if (bundledAi) {
       expect(existsSync(path.dirname(readFileSync(aiTarballPath, "utf8").trim()))).toBe(false);
     }
-    expect(result.stdout).toContain("bun-global-install-smoke: image providers OK (3 providers)");
-    if (statusExit === 0) {
+    if (bunRuntime !== "unexpected-failure") {
+      expect(result.stdout).toContain("bun-global-install-smoke: image providers OK (3 providers)");
+    }
+    if (bunRuntime === "unexpected-failure") {
+      expect(result.stderr).toContain("synthetic direct Bun runtime failure");
+      expect(result.stdout).not.toContain("Gateway runtime OK");
+    } else if (statusExit === 0) {
       expect(result.stdout).toContain(
-        "bun-global-install-smoke: Bun 1.4.0 package install and Node CLI/runtime OK",
+        `bun-global-install-smoke: Bun 1.4.0 install with ${bunRuntime === "supported" ? "Bun" : "Node"} CLI, local agent, and Gateway runtime OK`,
       );
     } else {
       expect(result.stderr).toContain("bun global install smoke failed with exit code 23");
       expect(result.stderr).toContain("synthetic Bun status failure");
       expect(result.stderr).not.toContain("failure log omitted");
-      expect(result.stdout).not.toContain("Node CLI/runtime OK");
+      expect(result.stdout).not.toContain("Gateway runtime OK");
     }
   });
 
@@ -2877,6 +2913,7 @@ node -e 'const fs=require("node:fs");const p=process.argv[1];const value=JSON.pa
     expect(workflow).toContain("PAYLOAD_DIR: ${{ runner.temp }}/install-smoke-candidate-payload");
     expect(workflow).toContain("$PAYLOAD_DIR/install-cli.sh:/tmp/install-cli.sh:ro");
     expect(workflow).toContain("bash /tmp/install-cli.sh --prefix /tmp/openclaw-cli");
+    expect(workflow.match(/-e OPENCLAW_NODE_VERSION="\$\{NODE_VERSION\}"/gu)).toHaveLength(2);
     expect(workflow).toContain("rockylinux:9@sha256:");
     expect(workflow).toContain("pnpm-workspace.yaml");
     expect(workflow).toContain("workspace.patchedDependencies");

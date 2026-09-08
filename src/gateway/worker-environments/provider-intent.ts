@@ -48,6 +48,7 @@ export function createWorkerProviderIntent(options: WorkerProviderIntentOptions)
         profileSnapshot: WorkerProfile;
       };
       machineClass?: string;
+      os?: string;
       executionMode?: WorkerExecutionMode;
       projectPath?: string;
       signal?: AbortSignal;
@@ -56,6 +57,7 @@ export function createWorkerProviderIntent(options: WorkerProviderIntentOptions)
     const {
       inherited: requestedInherited,
       machineClass,
+      os,
       executionMode,
       projectPath,
       signal,
@@ -71,6 +73,7 @@ export function createWorkerProviderIntent(options: WorkerProviderIntentOptions)
     }
     const provisionSnapshot = {
       ...(machineClass === undefined ? {} : { machineClass }),
+      ...(os === undefined ? {} : { os }),
       ...(executionMode === undefined ? {} : { executionMode }),
     };
     if (options.isStopping()) {
@@ -107,6 +110,7 @@ export function createWorkerProviderIntent(options: WorkerProviderIntentOptions)
               }))) ||
           (inherited === undefined &&
             (existing.profileSnapshot.machineClass !== machineClass ||
+              existing.profileSnapshot.os !== os ||
               existing.profileSnapshot.executionMode !== executionMode))
         ) {
           throw serviceError("invalid_profile", "Idempotency key belongs to another profile");
@@ -165,7 +169,10 @@ export function createWorkerProviderIntent(options: WorkerProviderIntentOptions)
         projectPath &&
         provider.supportsProjectPreparation?.(
           requireWorkerProfile(profileSnapshot.settings),
-          machineClass,
+          typeof profileSnapshot.machineClass === "string"
+            ? profileSnapshot.machineClass
+            : undefined,
+          typeof profileSnapshot.os === "string" ? profileSnapshot.os : undefined,
         )
       ) {
         if (!options.projectNamespace) {

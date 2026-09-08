@@ -30,6 +30,7 @@ function mount(
   });
   view.docId = docId;
   view.sessionKey = "agent:main:widget-test";
+  view.messageTimestamp = Date.now();
   view.connectionGeneration = getCanvasWidgetFrameConnectionGeneration();
   parent.append(view);
   return view;
@@ -190,6 +191,94 @@ describe("Canvas widget view", () => {
       .toContain("Sandbox host URL is invalid");
     expect(view.querySelector("iframe")).toBeNull();
   });
+
+  it("shows a bounded script error and wakes the session only once across document remounts", async () => {
+    const client = { request: vi.fn().mockResolvedValue(documentView) };
+    const view = mount(client, "cv_runtime_error");
+    view.title = "Status".repeat(20);
+    const frame = await frameFor(view);
+    const report = {
+      type: "openclaw:widget-runtime-error",
+      message: "x".repeat(600),
+      source: "https://example.test/private/widget.js",
+      line: 12,
+      column: 7,
+    };
+    message(frame, report, [], "https://wrong.example");
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        source: window,
+        origin: new URL(frame.src).origin,
+        data: report,
+      }),
+    );
+    expect(client.request).toHaveBeenCalledOnce();
+    message(frame, report);
+    message(frame, report);
+    message(frame, { ...report, message: "Another failure" });
+    await view.updateComplete;
+    expect(client.request).toHaveBeenCalledTimes(2);
+    expect(client.request).toHaveBeenLastCalledWith("wake", {
+      mode: "now",
+      sessionKey: view.sessionKey,
+      text: `Inline widget "${view.title.slice(0, 80)}" (cv_runtime_error) threw a script error after rendering: ${"x".repeat(500)}, line 12, column 7. Fix the script and show the widget again; if show_widget is unavailable in this turn, reply with the corrected widget code and show it on the next turn.`,
+    });
+    expect(view.querySelector('[role="status"]')?.textContent).toBe(
+      `Script error: ${"x".repeat(500)}`,
+    );
+    expect(view.querySelector("iframe")).toBe(frame);
+    view.remove();
+    const remount = await frameFor(mount(client, "cv_runtime_error"));
+    message(remount, report);
+    expect(client.request).toHaveBeenCalledTimes(3);
+  });
+
+  it("ignores stale sessions and malformed errors and omits invalid locations", async () => {
+    const client = { request: vi.fn().mockResolvedValue(documentView) };
+    const view = mount(client, "cv_runtime_invalid");
+    const frame = await frameFor(view);
+    const report = { type: "openclaw:widget-runtime-error", message: "Missing element" };
+    message(frame, { ...report, message: { message: "Invalid" } });
+    view.sessionKey = "agent:main:changed";
+    message(frame, report);
+    expect(client.request).toHaveBeenCalledOnce();
+    await view.updateComplete;
+    const current = await frameFor(view);
+    message(current, { ...report, line: Infinity, column: 1.5 });
+    await view.updateComplete;
+    expect(client.request).toHaveBeenLastCalledWith("wake", {
+      mode: "now",
+      sessionKey: view.sessionKey,
+      text: 'Inline widget "" (cv_runtime_invalid) threw a script error after rendering: Missing element. Fix the script and show the widget again; if show_widget is unavailable in this turn, reply with the corrected widget code and show it on the next turn.',
+    });
+  });
+
+  it.each([
+    { label: "exactly ten minutes old", ageMs: 600_000, wakes: true },
+    { label: "older than ten minutes", ageMs: 600_001, wakes: false },
+    { label: "missing", ageMs: undefined, wakes: false },
+    { label: "non-finite", ageMs: Infinity, wakes: false },
+    { label: "NaN", ageMs: Number.NaN, wakes: false },
+  ])(
+    "keeps the notice but gates wakes when the message timestamp is $label",
+    async ({ label, ageMs, wakes }) => {
+      const now = 1_800_000_000_000;
+      vi.spyOn(Date, "now").mockReturnValue(now);
+      const client = { request: vi.fn().mockResolvedValue(documentView) };
+      const view = mount(client, `cv_runtime_age_${label}`);
+      view.messageTimestamp = ageMs === undefined ? undefined : now - ageMs;
+      const frame = await frameFor(view);
+      message(frame, { type: "openclaw:widget-runtime-error", message: "Missing element" });
+      await view.updateComplete;
+      expect(view.querySelector('[role="status"]')?.textContent).toBe(
+        "Script error: Missing element",
+      );
+      expect(client.request.mock.calls.filter(([method]) => method === "wake")).toHaveLength(
+        wakes ? 1 : 0,
+      );
+      expect(view.querySelector("iframe")).toBe(frame);
+    },
+  );
 
   it("refreshes theme tokens inside a shadow-root chat without reloading the document", async () => {
     // jsdom does not allocate browsing contexts for shadow-root iframes; Chromium covers them end to end.

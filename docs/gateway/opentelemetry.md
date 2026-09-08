@@ -140,6 +140,8 @@ paths.
   more for the flush, so an unreachable collector cannot hold the command open.
   A collector that accepts the connection but never answers can still delay exit
   until the exporter's own request timeout (`OTEL_EXPORTER_OTLP_TIMEOUT`).
+  Plugin registration resources remain open until exporter cleanup finishes,
+  even when either wait times out.
   In JSON output mode, these one-shot runs suppress only the stdout JSONL log
   sink so command stdout stays reserved for the JSON response; OTLP traces,
   metrics, and logs continue when configured.

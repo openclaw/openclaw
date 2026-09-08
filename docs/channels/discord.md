@@ -351,6 +351,7 @@ Supported blocks:
 
 - `text`, `section`, `separator`, `actions`, `media-gallery`, `file`
 - Action rows allow up to 5 buttons or a single select menu
+- Buttons support emoji, including link buttons
 - Select types: `string`, `user`, `role`, `mentionable`, `channel`
 
 By default, components are single use. Set `components.reusable=true` to allow buttons, selects, and forms to be used multiple times until they expire.
@@ -366,6 +367,7 @@ File attachments:
 - `file` blocks must point to an attachment reference (`attachment://<filename>`)
 - Provide the attachment via `media`/`path`/`filePath` (single file); use `media-gallery` for multiple files
 - Use `filename` to override the upload name when it should match the attachment reference
+- Attachment captions preserve text-block order and repeated paragraphs
 
 Modal forms:
 

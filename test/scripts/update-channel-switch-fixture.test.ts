@@ -10,6 +10,12 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
+it("keeps the frozen legacy dev status on its shipped package contract", () => {
+  const script = readFileSync("scripts/e2e/update-channel-switch-docker.sh", "utf8");
+  expect(script).toContain('if [ "$OPENCLAW_PACKAGE_ACCEPTANCE_LEGACY_COMPAT" = "1" ]; then');
+  expect(script).toContain("assert-status-kind package");
+});
+
 it("preserves the package-derived Git fixture identity through build and lifecycle completion", async () => {
   const root = tempDirs.make("update-channel-git-fixture-");
   const packageCommit = "a".repeat(40);

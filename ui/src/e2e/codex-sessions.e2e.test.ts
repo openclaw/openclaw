@@ -129,7 +129,7 @@ suite.define(() => {
               label: "Understanding Startup Phases and Delays",
               model: "gpt-5.5",
               modelProvider: "openai",
-              status: "idle",
+              status: "done",
               totalTokens: 0,
               updatedAt: Date.now(),
               worktree: {
@@ -145,7 +145,7 @@ suite.define(() => {
           catalogs: [
             {
               id: "codex",
-              label: "Codex",
+              label: "Codex Native Sessions with a Deliberately Long Provider Label",
               capabilities: { continueSession: true, archive: true, startTerminal: true },
               hosts: [
                 {

@@ -208,6 +208,7 @@ function markdownSlug(value: string): string {
 }
 
 const legacySurfaceAnchors: Readonly<Record<string, readonly string[]>> = {
+  "control-ui": ["gateway-web-app"],
   "imessage-bluebubbles": ["imessage-and-bluebubbles"],
 };
 

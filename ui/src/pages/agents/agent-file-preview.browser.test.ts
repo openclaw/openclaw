@@ -49,7 +49,7 @@ describe.runIf(browserMode)("agent file preview focus", () => {
     async (action) => {
       const { userEvent } = await import("vitest/browser");
       const changes: string[] = [];
-      let expectedDraft = "Unsaved file preview draft";
+      let expectedDraft = "Unsaved file preview draft\n\n".repeat(80);
       render(
         renderAgentFiles({
           agentId: "main",
@@ -89,6 +89,13 @@ describe.runIf(browserMode)("agent file preview focus", () => {
         await getRenderedModalDialog(container);
         await expect.poll(() => dialog.open).toBe(true);
         await Promise.all(dialog.getAnimations().map((animation) => animation.finished));
+        const panel = container.querySelector<HTMLElement>(".md-preview-dialog__panel")!;
+        const body = container.querySelector<HTMLElement>(".md-preview-dialog__body")!;
+        const bounds = dialog.getBoundingClientRect();
+        expect(panel.getBoundingClientRect().top).toBeGreaterThanOrEqual(bounds.top - 1);
+        expect(panel.getBoundingClientRect().bottom).toBeLessThanOrEqual(bounds.bottom + 1);
+        expect(body.clientHeight).toBeGreaterThan(0);
+        expect(body.scrollHeight).toBeGreaterThan(body.clientHeight);
         const closed = afterOwnHide(webAwesomeDialog);
         await userEvent.click(
           requireButton(
