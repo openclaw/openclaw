@@ -56,8 +56,13 @@ class NodeRuntimeAgentSelectionTest {
               response.get()
             }
 
-            "models.authStatus" -> """{"providers":[{"provider":"current-credential","status":"ok","profiles":[]}]}"""
-            else -> error("Unexpected catalog request: $method")
+            "models.authStatus" -> {
+              """{"providers":[{"provider":"current-credential","status":"ok","profiles":[]}]}"""
+            }
+
+            else -> {
+              error("Unexpected catalog request: $method")
+            }
           }
         }
         runtime.refreshProviderModels()
@@ -93,8 +98,13 @@ class NodeRuntimeAgentSelectionTest {
               response.get()
             }
 
-            "models.authStatus" -> authResponse.get()
-            else -> error("Unexpected catalog request: $method")
+            "models.authStatus" -> {
+              authResponse.get()
+            }
+
+            else -> {
+              error("Unexpected catalog request: $method")
+            }
           }
         }
         runtime.refreshModelCatalog()
@@ -111,7 +121,12 @@ class NodeRuntimeAgentSelectionTest {
 
         assertTrue(runtime.modelCatalog.value.isEmpty())
         assertTrue(runtime.providerModelCatalog.value.isEmpty())
-        assertEquals("missing", runtime.modelAuthProviders.value.single().status)
+        assertEquals(
+          "missing",
+          runtime.modelAuthProviders.value
+            .single()
+            .status,
+        )
         assertFalse("An unavailable empty result must show the refresh failure", runtime.providerModelCatalogErrorText.value.isNullOrBlank())
       } finally {
         closeNodeRuntimeTestFixture(runtime)
@@ -133,8 +148,13 @@ class NodeRuntimeAgentSelectionTest {
               response.get()
             }
 
-            "models.authStatus" -> """{"providers":[]}"""
-            else -> error("Unexpected catalog request: $method")
+            "models.authStatus" -> {
+              """{"providers":[]}"""
+            }
+
+            else -> {
+              error("Unexpected catalog request: $method")
+            }
           }
         }
         runtime.refreshModelCatalog()
@@ -295,9 +315,17 @@ class NodeRuntimeAgentSelectionTest {
               ?.jsonPrimitive
               ?.content ?: "alpha"
           when (method) {
-            "models.list" -> """{"models":[{"id":"$agentId-model","provider":"fixture","name":"$agentId"}]}"""
-            "models.authStatus" -> """{"providers":[{"provider":"$agentId-credential","status":"ok","profiles":[]}]}"""
-            else -> error("Unexpected model request: $method")
+            "models.list" -> {
+              """{"models":[{"id":"$agentId-model","provider":"fixture","name":"$agentId"}]}"""
+            }
+
+            "models.authStatus" -> {
+              """{"providers":[{"provider":"$agentId-credential","status":"ok","profiles":[]}]}"""
+            }
+
+            else -> {
+              error("Unexpected model request: $method")
+            }
           }
         }
         runtime.selectChatAgent("beta")
@@ -348,12 +376,19 @@ class NodeRuntimeAgentSelectionTest {
                   """{"models":[{"id":"$agentId-current","provider":"fixture"}]}"""
                 }
 
-                else -> """{"models":[{"id":"alpha-model","provider":"fixture"}]}"""
+                else -> {
+                  """{"models":[{"id":"alpha-model","provider":"fixture"}]}"""
+                }
               }
             }
 
-            "models.authStatus" -> """{"providers":[{"provider":"$agentId-credential","status":"ok","profiles":[]}]}"""
-            else -> error("Unexpected model request: $method")
+            "models.authStatus" -> {
+              """{"providers":[{"provider":"$agentId-credential","status":"ok","profiles":[]}]}"""
+            }
+
+            else -> {
+              error("Unexpected model request: $method")
+            }
           }
         }
         runtime.selectChatAgent("alpha")
@@ -385,9 +420,24 @@ class NodeRuntimeAgentSelectionTest {
 
         newResponse.complete(Unit)
         withTimeout(2_000) { repeat(4) { newReads.receive().join() } }
-        assertEquals("alpha-current", runtime.modelCatalog.value.single().id)
-        assertEquals("alpha-current", runtime.providerModelCatalog.value.single().id)
-        assertEquals("alpha-credential", runtime.modelAuthProviders.value.single().id)
+        assertEquals(
+          "alpha-current",
+          runtime.modelCatalog.value
+            .single()
+            .id,
+        )
+        assertEquals(
+          "alpha-current",
+          runtime.providerModelCatalog.value
+            .single()
+            .id,
+        )
+        assertEquals(
+          "alpha-credential",
+          runtime.modelAuthProviders.value
+            .single()
+            .id,
+        )
         assertEquals(null, runtime.providerModelCatalogErrorText.value)
         assertFalse(runtime.providerModelCatalogRefreshing.value)
       } finally {
@@ -411,8 +461,13 @@ class NodeRuntimeAgentSelectionTest {
               if (hold.get() == 1) response.await() else """{"models":[{"id":"retained","provider":"fixture"}]}"""
             }
 
-            "models.authStatus" -> """{"providers":[]}"""
-            else -> error("Unexpected model request: $method")
+            "models.authStatus" -> {
+              """{"providers":[]}"""
+            }
+
+            else -> {
+              error("Unexpected model request: $method")
+            }
           }
         }
         runtime.selectChatAgent("alpha")
