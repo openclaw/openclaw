@@ -2085,12 +2085,12 @@ surfaces:
           reason: none
           human_override: false
   - id: windows-app
-    name: Native Windows companion app
+    name: Windows App / Node
     family: platform-app
     level:
-      id: planned
-      code: M0
-      label: Planned
+      id: beta
+      code: M3
+      label: Beta
     scores:
       quality:
         score: 19

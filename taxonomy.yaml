@@ -6377,11 +6377,11 @@ surfaces:
       source_ref: null
       process_version: 3
   - id: windows-app
-    name: Native Windows companion app
+    name: Windows App / Node
     family: platform-app
-    level: planned
-    level_code: M0
-    rationale: Planned only.
+    level: beta
+    level_code: M3
+    rationale: The Windows App ships signed x64 and ARM64 installers from openclaw/openclaw-windows-node with local or remote Gateway setup, native chat, diagnostics, updates, and opt-in Windows node capabilities.
     completeness_instructions: references/completeness/native-windows-companion-app.md
     categories:
       - name: Installation and Updates
@@ -6389,7 +6389,7 @@ surfaces:
         features:
           - name: Official app download
             coverageIds: [windows-app.official-app-download]
-            description: Official app download or installer path for the native Windows companion app.
+            description: Official Windows App download and installer path.
           - name: MSI/MSIX/App Installer/winget-style packaging
             coverageIds: [windows-app.installer-packaging]
             description: MSI/MSIX/App Installer/winget-style packaging, signing, update, rollback, uninstall, and desktop entries
@@ -6403,8 +6403,8 @@ surfaces:
           - docs/platforms/windows.md
           - docs/install/index.md
         search_anchors:
-          - Native Windows companion apps are planned
-          - Windows companion app
+          - Windows App
+          - Windows Node
           - App Installer
           - winget
         category_note: packaging-install-update-desktop-integration.md
@@ -6427,7 +6427,8 @@ surfaces:
           - docs/gateway/pairing.md
           - docs/gateway/remote.md
         search_anchors:
-          - Windows companion app
+          - Windows App
+          - Windows Node
           - local Gateway
           - remote Gateway
           - pairing
@@ -6448,7 +6449,8 @@ surfaces:
         search_anchors:
           - WebChat
           - Gateway WebSocket
-          - Windows companion app
+          - Windows App
+          - Windows Node
         category_note: native-chat-session-controls.md
         human_lts_override: false
       - name: Status and Repair
@@ -6474,7 +6476,8 @@ surfaces:
           - docs/gateway/doctor.md
           - docs/gateway/index.md
         search_anchors:
-          - Windows companion app
+          - Windows App
+          - Windows Node
           - Gateway status
           - doctor repair
           - system tray

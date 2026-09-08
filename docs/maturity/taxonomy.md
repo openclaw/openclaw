@@ -162,6 +162,11 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
       <span className="maturity-surface-meta"><span className="maturity-level-pill maturity-level-alpha"><span className="maturity-level-code">M2</span><span>Alpha</span></span><span>4 areas - 66% complete</span></span>
     </a>
 
+    <a className="maturity-surface-link" href="#windows-app-node">
+      <span className="maturity-surface-title">Windows App / Node</span>
+      <span className="maturity-surface-meta"><span className="maturity-level-pill maturity-level-beta"><span className="maturity-level-code">M3</span><span>Beta</span></span><span>5 areas - 21% complete</span></span>
+    </a>
+
     <a className="maturity-surface-link" href="#kubernetes-hosting">
       <span className="maturity-surface-title">Kubernetes hosting</span>
       <span className="maturity-surface-meta"><span className="maturity-level-pill maturity-level-alpha"><span className="maturity-level-code">M2</span><span>Alpha</span></span><span>4 areas - 61% complete</span></span>
@@ -175,11 +180,6 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
     <a className="maturity-surface-link" href="#watchos-companion-surfaces">
       <span className="maturity-surface-title">watchOS companion surfaces</span>
       <span className="maturity-surface-meta"><span className="maturity-level-pill maturity-level-experimental"><span className="maturity-level-code">M1</span><span>Experimental</span></span><span>5 areas - 44% complete</span></span>
-    </a>
-
-    <a className="maturity-surface-link" href="#native-windows-companion-app">
-      <span className="maturity-surface-title">Native Windows companion app</span>
-      <span className="maturity-surface-meta"><span className="maturity-level-pill maturity-level-experimental"><span className="maturity-level-code">M0</span><span>Planned</span></span><span>5 areas - 21% complete</span></span>
     </a>
 
   </Tab>
@@ -3138,10 +3138,10 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
   </Accordion>
 
-  <Accordion title="Native Windows companion app - M0 Planned - 5 areas">
+  <Accordion title="Windows App / Node - M3 Beta - 5 areas">
     <a id="native-windows-companion-app" />
 
-    Planned only.
+    The Windows App ships signed x64 and ARM64 installers from openclaw/openclaw-windows-node with local or remote Gateway setup, native chat, diagnostics, updates, and opt-in Windows node capabilities.
 
     <div className="maturity-surface-rollup"><span>Coverage Experimental - 0%</span><span>Quality Experimental - 19%</span><span>Completeness Experimental - 21%</span><span><span className="maturity-lts maturity-lts-none">None</span></span></div>
 
