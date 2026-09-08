@@ -3889,7 +3889,7 @@ async function updateCommandInternal(opts: UpdateCommandOptions): Promise<void> 
         ),
       );
     }
-    defaultRuntime.exit(0);
+    defaultRuntime.exit(result.reason === "dirty" ? 1 : 0);
     return;
   }
 
