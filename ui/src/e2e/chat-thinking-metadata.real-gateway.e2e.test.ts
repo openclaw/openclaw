@@ -86,6 +86,9 @@ suite.define(() => {
     };
     const browserMethods: string[] = [];
     let text: string | null | undefined;
+    let stage = "create session";
+    let lastPageText: string | null | undefined;
+    const browserErrors: string[] = [];
     let tableOptions: Array<string | null> | undefined;
     let draftModel: string | null | undefined;
     try {
@@ -120,65 +123,78 @@ suite.define(() => {
       await suite.withPage(
         { locale: "en-US", serviceWorkers: "block", viewport: { width: 1280, height: 900 } },
         async ({ page }) => {
-          page.on("websocket", (socket) => {
-            socket.on("framesent", ({ payload }) => {
-              const frame: { type: string; method?: string } = JSON.parse(payload.toString());
-              if (frame.type === "req" && frame.method) {
-                browserMethods.push(frame.method);
-              }
-            });
-          });
-          await page.goto(url.href);
-          await waitForControlUiGatewayReady(page);
-          const composer = page.getByRole("textbox", { name: "Chat composer", exact: true });
-          await composer.waitFor({ state: "visible" });
-          await composer.fill("/think");
-          await composer.press("Tab");
-          await expect.poll(() => composer.inputValue()).toBe("/think ");
-          await composer.press("Enter");
+          page.on("pageerror", (error) => browserErrors.push(error.message));
           try {
-            await expect
-              .poll(
-                async () => {
-                  text = await page.getByRole("log").textContent();
-                  return text;
-                },
-                { timeout: 30_000 },
-              )
-              .toContain("Current thinking level: Unknown.");
-            expect(text).toContain("Options: none.");
+            stage = "open Chat";
+            page.on("websocket", (socket) => {
+              socket.on("framesent", ({ payload }) => {
+                const frame: { type: string; method?: string } = JSON.parse(payload.toString());
+                if (frame.type === "req" && frame.method) {
+                  browserMethods.push(frame.method);
+                }
+              });
+            });
+            await page.goto(url.href);
+            await waitForControlUiGatewayReady(page);
+            const composer = page.getByRole("textbox", { name: "Chat composer", exact: true });
+            await composer.waitFor({ state: "visible" });
+            await composer.fill("/think");
+            await composer.press("Tab");
+            await expect.poll(() => composer.inputValue()).toBe("/think ");
+            await composer.press("Enter");
+            try {
+              await expect
+                .poll(
+                  async () => {
+                    text = await page.getByRole("log").textContent();
+                    return text;
+                  },
+                  { timeout: 30_000 },
+                )
+                .toContain("Current thinking level: Unknown.");
+              expect(text).toContain("Options: none.");
+            } finally {
+              await page.screenshot({ path: path.join(suite.artifactDir, "thinking-status.png") });
+            }
+            expect(await composer.inputValue()).toBe("");
+            expect(await page.getByRole("slider").count()).toBe(0);
+
+            stage = "open Sessions";
+            await page.goto(new URL("/sessions", url).href);
+            await waitForControlUiGatewayReady(page);
+            const session = page
+              .locator("tr[aria-controls]")
+              .filter({ hasText: "Thinking status" });
+            await session.waitFor({ state: "visible" });
+            await session.press("Enter");
+            const thinking = page.locator(".session-details-row select").first();
+            await thinking.waitFor({ state: "visible" });
+            tableOptions = await thinking
+              .locator("option")
+              .evaluateAll((options) => options.map((option) => option.getAttribute("value")));
+            expect(tableOptions).toEqual([""]);
+            await thinking.locator("..").screenshot({
+              path: path.join(suite.artifactDir, "session-thinking.png"),
+            });
+
+            stage = "open New session";
+            await page.getByRole("link", { name: "New session", exact: true }).first().click();
+            await page.waitForURL((current) => current.pathname === "/new");
+            await waitForControlUiGatewayReady(page);
+            const modelControl = page.locator("[data-chat-model-select='true']");
+            await expect.poll(() => modelControl.textContent()).toContain("No effort");
+            draftModel = await modelControl.textContent();
+            expect(await page.locator("[data-chat-thinking-slider='true']").count()).toBe(0);
+            await page.locator(".chat-controls__model-settings").screenshot({
+              path: path.join(suite.artifactDir, "draft-thinking.png"),
+            });
           } finally {
-            await page.screenshot({ path: path.join(suite.artifactDir, "thinking-status.png") });
+            lastPageText = await page.locator("body").textContent();
+            await page.screenshot({ path: path.join(suite.artifactDir, "last-page.png") });
           }
-          expect(await composer.inputValue()).toBe("");
-          expect(await page.getByRole("slider").count()).toBe(0);
-
-          await page.goto(new URL("/sessions", url).href);
-          await waitForControlUiGatewayReady(page);
-          const session = page.locator("tr[aria-controls]").filter({ hasText: "Thinking status" });
-          await session.waitFor({ state: "visible" });
-          await session.press("Enter");
-          const thinking = page.locator(".session-details-row select").first();
-          await thinking.waitFor({ state: "visible" });
-          tableOptions = await thinking
-            .locator("option")
-            .evaluateAll((options) => options.map((option) => option.getAttribute("value")));
-          expect(tableOptions).toEqual([""]);
-          await thinking.locator("..").screenshot({
-            path: path.join(suite.artifactDir, "session-thinking.png"),
-          });
-
-          await page.goto(new URL("/new", url).href);
-          await waitForControlUiGatewayReady(page);
-          const modelControl = page.locator("[data-chat-model-select='true']");
-          await expect.poll(() => modelControl.textContent()).toContain("No effort");
-          draftModel = await modelControl.textContent();
-          expect(await page.locator("[data-chat-thinking-slider='true']").count()).toBe(0);
-          await page.locator(".chat-controls__model-settings").screenshot({
-            path: path.join(suite.artifactDir, "draft-thinking.png"),
-          });
         },
       );
+      stage = "session readback";
       const after: SessionsListResult = JSON.parse(
         await call("sessions.list", { agentId: "main", limit: 50 }),
       );
@@ -191,7 +207,16 @@ suite.define(() => {
       expect(browserMethods).not.toContain("sessions.patch");
     } finally {
       const serialized = JSON.stringify(
-        { commands, browserMethods, text, tableOptions, draftModel },
+        {
+          commands,
+          browserMethods,
+          browserErrors,
+          stage,
+          lastPageText,
+          text,
+          tableOptions,
+          draftModel,
+        },
         null,
         2,
       )

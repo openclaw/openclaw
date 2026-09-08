@@ -780,7 +780,7 @@ suite.define(() => {
 
   it("reuses ready model metadata while a remembered worktree choice validates", async () => {
     await withNewSessionPage(BASE_CONTEXT, async (page) => {
-      const models = MODELS;
+      const models = NEW_SESSION_MODEL_CATALOG;
       const branches = GIT_BRANCHES;
       const gateway = await installMockGateway(page, {
         workspaceGit: true,
