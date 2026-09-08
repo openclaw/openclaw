@@ -200,7 +200,7 @@ function expectedMaturityScorePercent(): number {
 }
 
 describe("maturity docs renderer CLI", () => {
-  it("renders mirror routes and public redirects with destination fragment precedence", () => {
+  it("rejects unresolved taxonomy routes and anchors while accepting published mirrors", () => {
     const fixtureDir = tempDirs.make("openclaw-maturity-docs-links-");
     const docsRoot = path.join(fixtureDir, "docs");
     const taxonomyPath = path.join(fixtureDir, "taxonomy.yaml");
@@ -213,9 +213,11 @@ describe("maturity docs renderer CLI", () => {
       ["docs/legacy-fragment.md#source-section", "[Source Section](/guide#destination-section)"],
       ["docs/legacy-empty.md#source-section", "[Source Section](/guide)"],
       ["docs/guide.md#direct-section", "[Direct Section](/guide#direct-section)"],
+      ["docs/guide.md#missing-section", null],
       ["docs/direct.mdx#direct-section", "[Direct Section](/direct#direct-section)"],
       ["docs/legacy-page.md", "[Legacy Page](/guide)"],
       ["docs/clawhub/publishing.md", "[Publishing](/clawhub/publishing)"],
+      ["docs/clawhub/publishing.md#missing-section", null],
       ["docs/clawhub/skill-format.md", "[Skill Format](/clawhub/skill-format)"],
       ["docs/clawhub/security-audits.md", "[Security Audits](/clawhub/security-audits)"],
       ["docs/clawhub/index.md", "[Index](/clawhub/index)"],
@@ -338,11 +340,30 @@ describe("maturity docs renderer CLI", () => {
       "--strict-inputs",
     );
 
-    expect(result.stderr).toBe("");
-    expect(result.status).toBe(0);
-    const taxonomy = fs.readFileSync(path.join(outputDir, "maturity", "taxonomy.md"), "utf8");
-    const renderedLinks = taxonomy.match(/\[[^\]]+\]\([^)]+\)/g);
-    expect(renderedLinks).toEqual(links.flatMap(([, link]) => (link === null ? [] : [link])));
+    expect(result.status).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain("maturity taxonomy has invalid docs references");
+    for (const invalidPath of [
+      "docs/clawhub/unknown.md",
+      "docs/clawhub/publishing.md#missing-section",
+      "docs/guide.md#missing-section",
+      "docs/unknown.md",
+      "docs/legacy-missing.md",
+      "docs/internal/private.md",
+      "docs/legacy-private.md",
+      "https://example.test/guide#external",
+      "docs/legacy-external.md",
+      "docs/legacy-chain.md",
+    ]) {
+      expect(result.stderr).toContain(invalidPath);
+    }
+    for (const publishedMirror of [
+      "docs/clawhub/skill-format.md",
+      "docs/clawhub/security-audits.md",
+      "docs/clawhub/index.md",
+    ]) {
+      expect(result.stderr).not.toContain(publishedMirror);
+    }
   });
 
   it("checks maturity inputs without requiring QA evidence artifacts", () => {

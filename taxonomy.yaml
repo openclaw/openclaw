@@ -4974,8 +4974,7 @@ surfaces:
             coverageIds: [app-sdk.app-plugin-boundary]
             description: Clear distinction between external app integrations and in-process plugin authoring.
         docs:
-          - docs/concepts/openclaw-sdk.md
-          - docs/reference/openclaw-sdk-api-design.md
+          - docs/gateway/external-apps.md
         search_anchors:
           - OpenClaw App SDK overview
           - What ships today
@@ -5003,8 +5002,7 @@ surfaces:
             coverageIds: [app-sdk.scopes-and-redaction]
             description: Token scopes, secret-forwarding defaults, and redaction boundaries.
         docs:
-          - docs/concepts/openclaw-sdk.md
-          - docs/reference/openclaw-sdk-api-design.md
+          - docs/gateway/external-apps.md
           - docs/gateway/protocol.md
           - docs/gateway/security/index.md
         search_anchors:
@@ -5038,8 +5036,7 @@ surfaces:
             coverageIds: [app-sdk.session-controls]
             description: Patch, abort, and compact operations.
         docs:
-          - docs/concepts/openclaw-sdk.md
-          - docs/reference/openclaw-sdk-api-design.md
+          - docs/gateway/external-apps.md
           - docs/gateway/protocol.md
         search_anchors:
           - Run an agent
@@ -5070,8 +5067,7 @@ surfaces:
             coverageIds: [app-sdk.questions]
             description: Question handling alongside approval flows.
         docs:
-          - docs/concepts/openclaw-sdk.md
-          - docs/reference/openclaw-sdk-api-design.md
+          - docs/gateway/external-apps.md
           - docs/gateway/protocol.md
         search_anchors:
           - Stream events
@@ -5104,8 +5100,7 @@ surfaces:
             coverageIds: [app-sdk.environments]
             description: Managed environment provider lifecycle and metadata.
         docs:
-          - docs/concepts/openclaw-sdk.md
-          - docs/reference/openclaw-sdk-api-design.md
+          - docs/gateway/external-apps.md
         search_anchors:
           - Models, tools, artifacts, and approvals
           - ToolSpace model
@@ -5133,7 +5128,7 @@ surfaces:
             coverageIds: [app-sdk.public-package-contract]
             description: Package publication and reusable-client expectations tracked explicitly.
         docs:
-          - docs/reference/openclaw-sdk-api-design.md
+          - docs/gateway/external-apps.md
           - docs/concepts/typebox.md
           - docs/gateway/protocol.md
         search_anchors:
@@ -8852,7 +8847,6 @@ surfaces:
           - docs/gateway/health.md
           - docs/plugins/plugin-inventory.md
           - docs/channels/index.md
-          - docs/docs.json
         search_anchors:
           - Google Cloud project setup
           - Chat app configuration

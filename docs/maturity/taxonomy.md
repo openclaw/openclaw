@@ -1890,7 +1890,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
         <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>50%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "50%" }} /></span></span></div>
         <div className="maturity-category-docs">
 
-    [Openclaw Sdk](/gateway/external-apps), [Openclaw Sdk Api Design](/gateway/external-apps)
+    [External Apps](/gateway/external-apps)
 
     </div>
       </div>
@@ -1904,7 +1904,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
         <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>54%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "54%" }} /></span></span></div>
         <div className="maturity-category-docs">
 
-    [Openclaw Sdk](/gateway/external-apps), [Openclaw Sdk Api Design](/gateway/external-apps), [Protocol](/gateway/protocol), [Index](/gateway/security/index)
+    [External Apps](/gateway/external-apps), [Protocol](/gateway/protocol), [Index](/gateway/security/index)
 
     </div>
       </div>
@@ -1918,7 +1918,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
         <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>52%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "52%" }} /></span></span></div>
         <div className="maturity-category-docs">
 
-    [Openclaw Sdk](/gateway/external-apps), [Openclaw Sdk Api Design](/gateway/external-apps), [Protocol](/gateway/protocol)
+    [External Apps](/gateway/external-apps), [Protocol](/gateway/protocol)
 
     </div>
       </div>
@@ -1932,7 +1932,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
         <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>52%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "52%" }} /></span></span></div>
         <div className="maturity-category-docs">
 
-    [Openclaw Sdk](/gateway/external-apps), [Openclaw Sdk Api Design](/gateway/external-apps), [Protocol](/gateway/protocol)
+    [External Apps](/gateway/external-apps), [Protocol](/gateway/protocol)
 
     </div>
       </div>
@@ -1946,7 +1946,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
         <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>53%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "53%" }} /></span></span></div>
         <div className="maturity-category-docs">
 
-    [Openclaw Sdk](/gateway/external-apps), [Openclaw Sdk Api Design](/gateway/external-apps)
+    [External Apps](/gateway/external-apps)
 
     </div>
       </div>
@@ -1960,7 +1960,7 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
         <div><span className="maturity-score maturity-score-alpha"><span className="maturity-score-label"><span className="maturity-level-pill maturity-level-alpha">Alpha</span><span>55%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "55%" }} /></span></span></div>
         <div className="maturity-category-docs">
 
-    [Openclaw Sdk Api Design](/gateway/external-apps), [Typebox](/concepts/typebox), [Protocol](/gateway/protocol)
+    [External Apps](/gateway/external-apps), [Typebox](/concepts/typebox), [Protocol](/gateway/protocol)
 
     </div>
       </div>

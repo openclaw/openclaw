@@ -26,6 +26,7 @@ import {
   type QaMaturityTaxonomyLevel,
   type QaMaturityTaxonomySurface,
 } from "../../extensions/qa-lab/src/scorecard-taxonomy.js";
+import { parseDocsDocument, resolveDocsFragment } from "../lib/docs-markdown.mjs";
 import { collectMirroredDocsRoutes } from "../lib/docs-published-routes.mts";
 
 const DEFAULT_TAXONOMY_PATH = "taxonomy.yaml";
@@ -73,6 +74,8 @@ type RenderInputs = {
 type DocsRouteIndex = {
   routes: Set<string>;
   redirects: Map<string, string>;
+  localRouteFiles: Map<string, string>;
+  localRouteIds: Map<string, Set<string>>;
 };
 
 type RenderMaturityScorecardInputs = Pick<RenderInputs, "taxonomy" | "scores" | "coverage"> & {
@@ -215,8 +218,10 @@ function normalizeRoutePath(route: string): string {
 function collectDocsRouteIndex(docsRoot: string): DocsRouteIndex {
   const routes = new Set<string>();
   const redirects = new Map<string, string>();
+  const localRouteFiles = new Map<string, string>();
+  const localRouteIds = new Map<string, Set<string>>();
   if (!fs.existsSync(docsRoot)) {
-    return { routes, redirects };
+    return { routes, redirects, localRouteFiles, localRouteIds };
   }
   const visit = (dir: string): void => {
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -227,12 +232,12 @@ function collectDocsRouteIndex(docsRoot: string): DocsRouteIndex {
         }
         visit(fullPath);
       } else if (entry.isFile() && /\.(md|mdx)$/i.test(entry.name)) {
-        routes.add(
-          path
-            .relative(docsRoot, fullPath)
-            .replaceAll(path.sep, "/")
-            .replace(/\.(md|mdx)$/i, ""),
-        );
+        const route = path
+          .relative(docsRoot, fullPath)
+          .replaceAll(path.sep, "/")
+          .replace(/\.(md|mdx)$/i, "");
+        routes.add(route);
+        localRouteFiles.set(route, fullPath);
       }
     }
   };
@@ -254,7 +259,63 @@ function collectDocsRouteIndex(docsRoot: string): DocsRouteIndex {
       redirects.set(normalizeRoutePath(redirect.source), normalizeRoutePath(redirect.destination));
     }
   }
-  return { routes, redirects };
+  return { routes, redirects, localRouteFiles, localRouteIds };
+}
+
+function localDocsRouteIds(route: string, docsRouteIndex: DocsRouteIndex): Set<string> | undefined {
+  const cached = docsRouteIndex.localRouteIds.get(route);
+  if (cached) {
+    return cached;
+  }
+  const sourceFile = docsRouteIndex.localRouteFiles.get(route);
+  if (!sourceFile) {
+    return undefined;
+  }
+  const ids = new Set(parseDocsDocument(fs.readFileSync(sourceFile, "utf8")).ids);
+  docsRouteIndex.localRouteIds.set(route, ids);
+  return ids;
+}
+
+function validateTaxonomyDocsReferences(
+  taxonomy: QaMaturityTaxonomy,
+  docsRouteIndex: DocsRouteIndex,
+): void {
+  const errors: string[] = [];
+  for (const surface of taxonomy.surfaces) {
+    for (const category of surface.categories) {
+      for (const docPath of category.docs ?? []) {
+        const trimmedPath = docPath.trim();
+        const publicPath = trimmedPath.startsWith("docs/")
+          ? trimmedPath.slice("docs/".length)
+          : trimmedPath;
+        const [pagePath = "", sourceAnchor] = publicPath.split("#", 2);
+        const route = pagePath.replace(/\.(md|mdx)$/i, "");
+        const resolved = docsRouteIndex.routes.has(route)
+          ? route
+          : docsRouteIndex.redirects.get(route);
+        const [resolvedRoute = "", redirectAnchor] = (resolved ?? "").split("#", 2);
+        if (!resolvedRoute || !docsRouteIndex.routes.has(resolvedRoute)) {
+          errors.push(
+            `${surface.id}/${category.id}: ${docPath} does not resolve to a published docs route`,
+          );
+          continue;
+        }
+        const anchor = redirectAnchor ?? sourceAnchor;
+        const ids = localDocsRouteIds(resolvedRoute, docsRouteIndex);
+        if (anchor && (!ids || !resolveDocsFragment(`#${anchor}`, ids))) {
+          const reason = ids
+            ? "targets a missing docs anchor"
+            : "targets an unverifiable anchor on a mirrored docs route";
+          errors.push(`${surface.id}/${category.id}: ${docPath} ${reason}`);
+        }
+      }
+    }
+  }
+  if (errors.length > 0) {
+    throw new Error(
+      `maturity taxonomy has invalid docs references:\n${errors.map((error) => `- ${error}`).join("\n")}`,
+    );
+  }
 }
 
 function docsLink(docPath: string, docsRouteIndex: DocsRouteIndex): string | undefined {
@@ -1202,15 +1263,18 @@ function writeOrCheck(outputPath: string, content: string, check: boolean): bool
 
 function checkEvidenceIndependentInputs({
   args,
+  docsRouteIndex,
   scoresPath,
   taxonomy,
   taxonomyPath,
 }: {
   args: Args;
+  docsRouteIndex: DocsRouteIndex;
   scoresPath: string;
   taxonomy: QaMaturityTaxonomy;
   taxonomyPath: string;
 }): void {
+  validateTaxonomyDocsReferences(taxonomy, docsRouteIndex);
   const { warnings } = readValidatedQaMaturityScoreSources({
     scoresPath,
     taxonomy,
@@ -1238,9 +1302,11 @@ function main(): void {
   const docsRoot = path.normalize(args.docsRoot);
   const outputDir = path.normalize(args.outputDir);
   const taxonomy = readQaMaturityTaxonomySource(taxonomyPath);
+  const docsRouteIndex = collectDocsRouteIndex(docsRoot);
   if (args.check && !args.evidenceDir?.trim()) {
     checkEvidenceIndependentInputs({
       args: { ...args, outputDir },
+      docsRouteIndex,
       scoresPath,
       taxonomy,
       taxonomyPath,
@@ -1250,6 +1316,8 @@ function main(): void {
     );
     return;
   }
+
+  validateTaxonomyDocsReferences(taxonomy, docsRouteIndex);
 
   const evidenceSummaries = readEvidenceSummaries(args.evidenceDir);
   if (!args.allowFailures) {
@@ -1291,7 +1359,7 @@ function main(): void {
       "maturity/taxonomy.md",
       renderTaxonomy({
         coverage,
-        docsRouteIndex: collectDocsRouteIndex(docsRoot),
+        docsRouteIndex,
         taxonomy,
         scores,
       }),
