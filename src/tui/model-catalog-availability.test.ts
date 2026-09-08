@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { ModelDefinitionConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { buildModelsListResult } from "../gateway/server-methods/models-list-result.js";
 import {
@@ -7,6 +8,18 @@ import {
 } from "../gateway/server-methods/models-list-result.openai-routes.test-support.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+
+function configuredModel(name: string): ModelDefinitionConfig {
+  return {
+    id: "choice",
+    name,
+    reasoning: false,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 32768,
+    maxTokens: 4096,
+  };
+}
 
 describe("terminal model catalog availability", () => {
   it("keeps ready, unavailable and unknown published facts distinct", async () => {
@@ -27,18 +40,18 @@ describe("terminal model catalog availability", () => {
                 baseUrl: "https://ready.invalid/v1",
                 api: "openai-completions",
                 apiKey: "synthetic-ready-key",
-                models: [{ id: "choice", name: "Ready" }],
+                models: [configuredModel("Ready")],
               },
               waiting: {
                 baseUrl: "https://waiting.invalid/v1",
                 api: "openai-completions",
                 auth: "api-key",
-                models: [{ id: "choice", name: "Waiting" }],
+                models: [configuredModel("Waiting")],
               },
               unknown: {
                 baseUrl: "https://unknown.invalid/v1",
                 api: "openai-completions",
-                models: [{ id: "choice", name: "Unknown" }],
+                models: [configuredModel("Unknown")],
               },
             },
           },
