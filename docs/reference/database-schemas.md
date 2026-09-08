@@ -20,6 +20,26 @@ OpenClaw stores control-plane state in a global SQLite database and agent data i
 
 The task registry uses the global control-plane database. Runtime trajectory events live with their sessions in the per-agent database or a configured shared session SQLite store.
 
+### Plugin state listing index
+
+Plugin keyed stores use the shared `plugin_state_entries` table. Its listing
+index includes `expires_at` after the existing plugin, namespace, creation-time,
+and entry-key columns, so live-row counts can read the index without fetching
+stored values. Quotas, TTL cutoffs, ordering, and row contents are unchanged.
+
+Writable startup and `openclaw doctor --fix` replace the older four-column
+definition through canonical index repair, without a schema-version bump. The
+repair builds temporary indexes and runs the existing table and full-file
+integrity checks; allow for extra disk space and work proportional to stored
+entries during the first repair.
+
+An older build can rebuild the same index back to its expected definition.
+Full-schema read-only validation rejects a mismatched definition until a
+writable owner repairs it; lightweight readers that validate only the numeric
+schema version may read either shape. See the
+[accepted index design](https://github.com/openclaw/openclaw/issues/142244) for
+upgrade, reverse-repair, and performance proof requirements.
+
 ### Mentions Inbox
 
 The [mentions Inbox](/concepts/multi-user#temporary-mentions-inbox) uses existing
