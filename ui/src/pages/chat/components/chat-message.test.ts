@@ -4948,6 +4948,48 @@ describe("grouped chat rendering", () => {
     expect(container.querySelector(".chat-text")?.textContent?.trim()).toBe("Blocked\nDone");
   });
 
+  it.each([false, true])(
+    "places user video previews in the image gallery (with image: %s)",
+    (withImage) => {
+      const container = document.body.appendChild(document.createElement("div"));
+      const onOpenSidebar = vi.fn();
+      const videoUrl = "https://cdn.example/clip%2Emp4?download=1";
+      renderGroupedMessage(
+        container,
+        createUserMessage([
+          ...(withImage
+            ? [createMediaBlock({ url: "/media/inbound/reference.png", alt: "Reference" })]
+            : []),
+          createAttachmentBlock(videoUrl, "video", "Recording.mp4", "video/mp4"),
+          { type: "text", text: "Check this recording." },
+        ]),
+        "user",
+        { showToolCalls: false, onOpenSidebar },
+      );
+
+      const bubble = container.querySelector(".chat-bubble--with-images");
+      const gallery = bubble?.querySelector(":scope > .chat-message-images");
+      expect(gallery).toBeInstanceOf(HTMLElement);
+      expect(gallery?.querySelectorAll(".chat-image-frame")).toHaveLength(withImage ? 2 : 1);
+      expect(bubble?.querySelector(":scope > .chat-text")?.textContent).toContain(
+        "Check this recording.",
+      );
+      expect(container.querySelector("video, openclaw-chat-video-player")).toBeNull();
+      const preview = gallery?.querySelector<HTMLButtonElement>(
+        ".chat-video-preview .chat-message-image-button",
+      );
+      expect(preview).toBeInstanceOf(HTMLButtonElement);
+      preview?.click();
+      expect(onOpenSidebar).toHaveBeenCalledWith(
+        expect.objectContaining({
+          kind: "attachment",
+          attachmentKind: "video",
+          src: videoUrl,
+        }),
+      );
+    },
+  );
+
   it("renders transcript video URLs with encoded extensions as cards", () => {
     const container = document.body.appendChild(document.createElement("div"));
     const mediaUrl = "https://cdn.example/clip%2Emp4?download=1";

@@ -1,5 +1,5 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { html, noChange, nothing } from "lit";
+import { html, noChange, nothing, type TemplateResult } from "lit";
 import { AsyncDirective, directive } from "lit/async-directive.js";
 import { Directive } from "lit/directive.js";
 import { keyed } from "lit/directives/keyed.js";
@@ -355,7 +355,11 @@ class MessageImagesDirective extends Directive {
   private canonicalMessageKey: string | undefined;
   private localSubmission = false;
 
-  override render(images: ImageBlock[], opts?: ImageRenderOptions) {
+  override render(
+    images: ImageBlock[],
+    opts?: ImageRenderOptions,
+    previews: TemplateResult[] = [],
+  ) {
     const scope = JSON.stringify([
       opts?.connectionEpoch,
       opts?.authToken?.trim(),
@@ -410,14 +414,15 @@ class MessageImagesDirective extends Directive {
     this.localSubmission =
       localSubmission &&
       !(opts?.canonicalMessageKey && images.every((image) => image.factIndex !== undefined));
-    if (!images.length) {
+    const mediaCount = images.length + previews.length;
+    if (!mediaCount) {
       return nothing;
     }
     const layoutClasses = [
       "chat-message-images",
-      images.length === 1 ? "chat-message-images--single" : "chat-message-images--gallery",
-      images.length === 2 || images.length === 4 ? "chat-message-images--two-column" : "",
-      images.length === 5 ? "chat-message-images--five" : "",
+      mediaCount === 1 ? "chat-message-images--single" : "chat-message-images--gallery",
+      mediaCount === 2 || mediaCount === 4 ? "chat-message-images--two-column" : "",
+      mediaCount === 5 ? "chat-message-images--five" : "",
     ]
       .filter(Boolean)
       .join(" ");
@@ -427,6 +432,7 @@ class MessageImagesDirective extends Directive {
         ({ key }) => key,
         ({ image }) => html`${renderMessageImageResource(image, opts)}`,
       )}
+      ${previews}
     </div>`;
   }
 }
