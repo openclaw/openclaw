@@ -106,6 +106,10 @@ with the failed outcome, even when strict discovery returns no rows.
 They cannot widen a retained successful list, including an empty list. Changes to
 provider, plugin, auth, environment, or workspace identity invalidate incompatible inventory.
 
+Automations and command-palette model search show a warning when a provider refresh
+fails, while keeping the models returned by the Gateway. Open Models to retry the
+refresh. A successful empty result clears the discovered choices and warning.
+
 A successful provider result takes precedence over retained rows, even when
 another credential reports failure. Catalog results describe one provider's model
 list; OpenClaw does not guess which old models belonged to each credential.
@@ -329,6 +333,11 @@ visible after the next Gateway restart. Remote data can update or add models
 only for providers declared by installed plugin manifests. It cannot supply API
 base URLs or request headers, and a catalog older than the installed release's
 build stamp is ignored.
+
+The Gateway reports when a checked catalog needs a restart to become active,
+including a bundle downloaded by another process. Repeated checks of the same
+source and generation do not repeat the notice. Checking for an update does not
+activate the downloaded rows or prices.
 
 The hosted file is published from the public
 [`openclaw/catalog`](https://github.com/openclaw/catalog) GitHub repository.

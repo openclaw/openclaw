@@ -194,16 +194,7 @@ function isAgentRunTerminalTimeout(err: unknown): boolean {
   return findAgentRunTerminalOutcome(err)?.status === "timeout";
 }
 
-/**
- * Name the condition that stops the whole fallback chain from inside a single
- * candidate attempt, or `undefined` when the error is an ordinary candidate
- * failure that the runner should classify.
- *
- * The conditions and their order are unchanged from the boolean chain this
- * replaced; the only new capability is that the matching one can be named. Each
- * of these paths rethrows past every observation hook, so before this a stopped
- * chain and a chain with no candidate left looked identical in the logs.
- */
+/** Preserve stop precedence while naming the first matching condition. */
 function resolveChainStopReason(params: {
   err: unknown;
   harnessPreflight: boolean;

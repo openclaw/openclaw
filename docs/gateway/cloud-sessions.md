@@ -73,6 +73,8 @@ If you choose a source in the Desktop picker, the panel keeps that choice when t
 
 The machine must already support desktop viewing. For cloud workers, enable the [Cloud Worker Desktop lab and desktop profile setting](/gateway/cloud-workers#desktop-interactive). Opening Desktop starts in view-only mode and does not change the machine's permissions or the agent's tool policy. The global Desktop command in the command palette still opens the machine picker, including on chat pages.
 
+To enter text from your local clipboard, take control and choose **Keyboard** before pasting with **Command+V** on macOS or **Ctrl+V** on Windows and Linux. The Keyboard field sends the pasted text to the remote desktop; shortcuts directed at the desktop canvas still operate on the remote machine. Keyboard input stays disabled until the control connection is ready.
+
 ## Desktop and computer control
 
 A desktop-enabled cloud session uses the same machine for the chat Desktop panel and the agent's `computer` tool. Enable the **Cloud Worker Desktop** lab and provision a Crabbox profile with `settings.desktop: true`. OpenClaw starts the worker's CUA provider inside the provisioned desktop session; the agent does not need to discover or choose a paired computer. Both OpenClaw and Codex sessions use this binding. A paired-device session instead uses that device's enabled Computer Control provider.

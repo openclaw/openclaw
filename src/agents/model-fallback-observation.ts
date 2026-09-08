@@ -347,10 +347,6 @@ export function logModelFallbackDecision(
   return fallbackStepFields;
 }
 
-/**
- * Reasons the fallback chain can stop inside a candidate attempt, before the
- * runner's classification sees the error. Ordered as the checks are evaluated.
- */
 export type ModelFallbackChainStopReason =
   | "agent_run_terminal_timeout"
   | "command_lane_task_timeout"
@@ -361,16 +357,7 @@ export type ModelFallbackChainStopReason =
   | "agent_run_restart_abort"
   | "terminal_abort_wrapper";
 
-/**
- * Record that a candidate attempt stopped the whole chain.
- *
- * Deliberately NOT a `candidate_failed` decision: these paths are local or
- * terminal conditions rather than provider/model failures, and attributing them
- * to the candidate is exactly what the rethrows exist to avoid. This is a
- * separate diagnostic that names which condition matched, so an operator can
- * tell a stopped chain from a chain that never had another candidate. Emitting
- * nothing at all leaves no way to distinguish them after the fact.
- */
+/** Record a local or terminal stop separately from provider-failure decisions. */
 export function logModelFallbackChainStopped(params: {
   reason: ModelFallbackChainStopReason;
   provider: string;
@@ -382,8 +369,13 @@ export function logModelFallbackChainStopped(params: {
   if (!decisionLog.isEnabled("warn")) {
     return;
   }
-  const errorName =
-    params.error instanceof Error && params.error.name ? params.error.name : undefined;
+  let errorName: string | undefined;
+  try {
+    const name: unknown = params.error instanceof Error ? params.error.name : undefined;
+    errorName = typeof name === "string" && name ? name : undefined;
+  } catch {
+    // Optional diagnostic metadata must not replace the original stop error.
+  }
   decisionLog.warn("model fallback chain stopped", {
     event: "model_fallback_chain_stopped",
     tags: ["error_handling", "model_fallback", "chain_stopped"],

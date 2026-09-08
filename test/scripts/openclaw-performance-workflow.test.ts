@@ -240,9 +240,9 @@ describe("OpenClaw performance workflow", () => {
 
   it("pins the Kova evaluator with release validation contracts", () => {
     const workflow = readFileSync(WORKFLOW, "utf8");
-    const canonicalKovaRef = "e4d865f55f655a77df169a7be01877608c3260b9";
-    const legacyKovaRef = "e4d865f55f655a77df169a7be01877608c3260b9";
-    const trustedLiveKovaRef = "e4d865f55f655a77df169a7be01877608c3260b9";
+    const canonicalKovaRef = "065d2ffd535f12fd0f3a15c412a08a456f580260";
+    const legacyKovaRef = "065d2ffd535f12fd0f3a15c412a08a456f580260";
+    const trustedLiveKovaRef = "065d2ffd535f12fd0f3a15c412a08a456f580260";
     const install = findStep("Install OCM and Kova");
     const installRun = install.run ?? "";
     const targetCheckout = findStep("Checkout target metadata", "resolve_target");
@@ -267,7 +267,7 @@ describe("OpenClaw performance workflow", () => {
       "${{ inputs.kova_config_contract }}",
     );
     expect(targetCheckout.with?.["sparse-checkout"]).toBe(
-      "src/config/zod-schema.agent-defaults.ts",
+      "package.json\nsrc/config/zod-schema.agent-defaults.ts\n",
     );
     expect(resolveTarget.run).toContain(
       'schema_path="${TARGET_CHECKOUT_DIR}/src/config/zod-schema.agent-defaults.ts"',
