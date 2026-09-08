@@ -77,7 +77,8 @@ function readFinalContentIdentity(message: unknown): string | null {
   try {
     return `content:${stableStringify([
       identity?.role ?? "assistant",
-      typeof message === "string" ? message : (record?.content ?? null),
+      display.text,
+      display.hasNonText ? (record?.content ?? null) : null,
       metadata?.media ?? null,
       identity?.isImported
         ? [
@@ -86,7 +87,6 @@ function readFinalContentIdentity(message: unknown): string | null {
             metadata?.externalId ?? null,
           ]
         : null,
-      ...(display.usesFallbackText ? [record?.text] : []),
     ])}`;
   } catch {
     return null;

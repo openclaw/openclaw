@@ -104,6 +104,68 @@ describe("terminal snapshot reconciliation", () => {
     ]);
   });
 
+  it("promotes equivalent string and block terminal content", () => {
+    const runId = "string-terminal-run";
+    const user = {
+      role: "user",
+      content: [{ text: "Please finish the repair.", type: "text" }],
+      __openclaw: { id: "user-prompt", idempotencyKey: `${runId}:user`, seq: 1 },
+    };
+    const persisted = createAssistantMessage("The repair is complete.", {
+      id: "assistant-final",
+      seq: 2,
+      runId,
+    });
+    let state = reduceSessionProjection(createSessionProjection(scope), {
+      type: "runTerminal",
+      runId,
+      status: "completed",
+      message: "The repair is complete.",
+    });
+    state = projectLiveSessionMessage(state, "The repair is complete.", { runId });
+
+    expect(reconcileSessionProjectionSnapshot(state, [user, persisted], scope).messages).toEqual([
+      user,
+      persisted,
+    ]);
+  });
+
+  it("restores an inferred terminal when later history reveals a tool boundary", () => {
+    const runId = "partial-history-run";
+    const user = {
+      role: "user",
+      content: [{ text: "Please inspect the repository.", type: "text" }],
+      __openclaw: { id: "user-prompt", idempotencyKey: `${runId}:user`, seq: 1 },
+    };
+    const synthetic = createAssistantMessage("Still working.");
+    const earlier = createAssistantMessage("Still working.", {
+      id: "assistant-earlier",
+      seq: 2,
+      runId,
+    });
+    const laterToolBoundary = {
+      role: "assistant",
+      content: [
+        { type: "text", text: "Checking another file." },
+        { type: "toolCall", id: "read-2", name: "read", arguments: { path: "src/index.ts" } },
+      ],
+      __openclaw: { id: "assistant-tool-boundary", seq: 3, runId },
+    };
+    let state = reduceSessionProjection(createSessionProjection(scope), {
+      type: "runTerminal",
+      runId,
+      status: "completed",
+      message: synthetic,
+    });
+    state = projectLiveSessionMessage(state, synthetic, { runId });
+    state = reconcileSessionProjectionSnapshot(state, [user, earlier], scope);
+    expect(state.messages).toEqual([user, earlier]);
+
+    expect(
+      reconcileSessionProjectionSnapshot(state, [user, earlier, laterToolBoundary], scope).messages,
+    ).toEqual([user, earlier, laterToolBoundary, synthetic]);
+  });
+
   it("retains an unsequenced terminal when matching content precedes a later tool boundary", () => {
     const runId = "partial-history-run";
     const user = {

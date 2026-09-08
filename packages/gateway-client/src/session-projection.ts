@@ -69,6 +69,7 @@ export type SessionProjectionRun = {
   status: SessionProjectionRunStatus;
   message?: unknown;
   acceptedFinalMessageIdentities?: readonly string[];
+  snapshotTerminalReconciled?: boolean;
   stopReason?: string;
   errorKind?: string;
   errorMessage?: string;
@@ -450,6 +451,7 @@ export function reconcileSessionProjectionSnapshot(
     return createSessionProjection(scope, visibleMessages);
   }
   let entries = createProjectionEntries(visibleMessages);
+  const runs: Record<string, SessionProjectionRun> = { ...state.runs };
   for (const current of state.entries) {
     if (
       (!current.live && !current.pending) ||
@@ -458,17 +460,31 @@ export function reconcileSessionProjectionSnapshot(
       continue;
     }
     const matches = entries.filter((entry) => entryMatches(entry, current, true));
-    const run = current.identity?.runId ? state.runs[current.identity.runId] : undefined;
-    if (
-      (matches.length === 1 && !isUnsequencedLiveTerminal(current, run)) ||
-      hasUniqueSnapshotTerminalMatch(current, matches, run, entries)
-    ) {
+    const run = current.identity?.runId ? runs[current.identity.runId] : undefined;
+    const terminalMatch = hasUniqueSnapshotTerminalMatch(current, matches, run, entries);
+    if ((matches.length === 1 && !isUnsequencedLiveTerminal(current, run)) || terminalMatch) {
+      if (terminalMatch && current.identity?.runId && run && !run.snapshotTerminalReconciled) {
+        runs[current.identity.runId] = { ...run, snapshotTerminalReconciled: true };
+      }
       continue;
     }
-    entries = insertEntry(entries, current, state.runs);
+    entries = insertEntry(entries, current, runs);
+  }
+  for (const [runId, run] of Object.entries(runs)) {
+    if (!run.snapshotTerminalReconciled || !hasDisplayableSessionMessage(run.message)) {
+      continue;
+    }
+    const terminal = createEntry(run.message, { envelope: { runId }, live: true });
+    const matches = entries.filter((entry) => entryMatches(entry, terminal, true));
+    if (hasUniqueSnapshotTerminalMatch(terminal, matches, run, entries)) {
+      continue;
+    }
+    entries = insertEntry(entries, terminal, runs);
+    runs[runId] = { ...run, snapshotTerminalReconciled: false };
   }
   return {
     ...withEntries(state, entries),
+    runs,
     scope: { ...state.scope, ...scope },
     hasTransportGap: false,
   };
