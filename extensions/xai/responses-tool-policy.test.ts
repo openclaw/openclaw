@@ -10,6 +10,7 @@ const connection = { apiKey: "synthetic-tool-fixture", timeoutSeconds: 5 };
 const callers = [
   {
     name: "web_search",
+    grok43Effort: "low",
     run: (model: string) =>
       requestXaiWebSearch({
         ...connection,
@@ -21,6 +22,7 @@ const callers = [
   },
   {
     name: "x_search",
+    grok43Effort: "none",
     run: (model: string) =>
       requestXaiXSearch({
         ...connection,
@@ -32,6 +34,7 @@ const callers = [
   },
   {
     name: "code_execution",
+    grok43Effort: "low",
     run: (model: string) => requestXaiCodeExecution({ ...connection, model, task: "fixture" }),
   },
 ];
@@ -65,4 +68,15 @@ it.each(callers)("preserves an explicit model and omitted effort for $name", asy
   const body = await new Request("https://api.x.ai/v1/responses", init).json();
   expect(body.model).toBe("grok-4.5");
   expect(body.reasoning).toBeUndefined();
+});
+
+it.each(callers)("preserves explicit Grok 4.3 effort for $name", async ({ run, grok43Effort }) => {
+  const request = vi.fn<typeof fetch>(async () => Response.json({ output_text: "fixture result" }));
+  vi.stubGlobal("fetch", withFetchPreconnect(request));
+  await run("grok-4.3");
+  const body = await new Request(
+    "https://api.x.ai/v1/responses",
+    request.mock.calls[0]?.[1],
+  ).json();
+  expect(body).toMatchObject({ model: "grok-4.3", reasoning: { effort: grok43Effort } });
 });

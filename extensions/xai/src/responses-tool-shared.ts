@@ -59,6 +59,14 @@ export function resolveXaiResponsesEndpoint(baseUrl?: unknown): string {
   return `${(trimString(baseUrl) ?? XAI_RESPONSES_BASE_URL).replace(/\/+$/, "")}/responses`;
 }
 
+export function resolveXaiToolDefaultReasoningEffort(
+  model: string,
+  preferred: "none" | "low",
+): "none" | "low" | undefined {
+  // Per-model tool defaults must survive changes to the setup default.
+  return model === "grok-4.3" || model === "grok-4.6" ? preferred : undefined;
+}
+
 function buildXaiResponsesToolBody(params: {
   model: string;
   inputText: string;
