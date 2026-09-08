@@ -2177,6 +2177,65 @@ describe("cli session history", () => {
     ).toEqual([undefined, undefined, "later-import"]);
   });
 
+  it("does not assign a later identity before an unmatched repeated-text import", () => {
+    const window = 5 * 60 * 1000;
+    const merged = mergeImportedChatHistoryMessages({
+      localMessages: [{ role: "assistant", content: "Repeated answer", timestamp: window * 2 }],
+      importedMessages: [
+        { role: "assistant", content: "Repeated answer", timestamp: 0 },
+        {
+          role: "assistant",
+          content: "Repeated answer",
+          timestamp: window * 2,
+          __openclaw: { importedFrom: "claude-cli", externalId: "later-import" },
+        },
+      ],
+    });
+
+    expect(merged).toHaveLength(3);
+    expect(readRecord(merged[0])["__openclaw"]).toBeUndefined();
+    expect(readRecord(readRecord(merged[2])["__openclaw"]).externalId).toBe("later-import");
+  });
+
+  it("keeps repeated-text order monotonic after an earlier exact-identity match", () => {
+    const window = 5 * 60 * 1000;
+    const merged = mergeImportedChatHistoryMessages({
+      localMessages: [
+        {
+          role: "assistant",
+          content: "Repeated answer",
+          timestamp: 0,
+          __openclaw: { importedFrom: "claude-cli", externalId: "exact-id" },
+        },
+        { role: "assistant", content: "Repeated answer", timestamp: window },
+        { role: "assistant", content: "Repeated answer", timestamp: window * 3 },
+      ],
+      importedMessages: [
+        { role: "assistant", content: "Repeated answer", timestamp: window * 3 },
+        {
+          role: "assistant",
+          content: "Repeated answer",
+          timestamp: 0,
+          __openclaw: { importedFrom: "claude-cli", externalId: "exact-id" },
+        },
+        {
+          role: "assistant",
+          content: "Repeated answer",
+          timestamp: window,
+          __openclaw: { importedFrom: "claude-cli", externalId: "later-id" },
+        },
+      ],
+    });
+
+    expect(merged).toHaveLength(4);
+    expect(
+      merged.map((message) => {
+        const meta = readRecord(message)["__openclaw"];
+        return meta ? readRecord(meta).externalId : undefined;
+      }),
+    ).toEqual(["exact-id", undefined, "later-id", undefined]);
+  });
+
   it("preserves repeated identityless rows imported without local history", () => {
     const message = { role: "assistant", content: "Repeated answer", timestamp: 0 };
 

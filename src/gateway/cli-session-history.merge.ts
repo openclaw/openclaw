@@ -348,6 +348,16 @@ export function mergeImportedChatHistoryMessages(params: {
   const roleTextMinimumOrder = new Map<string, number>();
   const localImageMediaCandidates = new Map<string, ConsumableCandidates>();
   const consumedLocalCandidates = new Set<ComparableHistoryMessage>();
+  const advanceRoleTextMinimumOrder = (
+    entry: ComparableHistoryMessage,
+    matchedOrder = entry.order,
+  ) => {
+    if (!entry.role || !entry.text) {
+      return;
+    }
+    const key = JSON.stringify([entry.role, entry.text]);
+    roleTextMinimumOrder.set(key, Math.max(roleTextMinimumOrder.get(key) ?? 0, matchedOrder + 1));
+  };
   const indexEntry = (entry: ComparableHistoryMessage) => {
     if (entry.externalIdentityKey) {
       exactExternalIdentityIndex.set(entry.externalIdentityKey, entry);
@@ -389,12 +399,7 @@ export function mergeImportedChatHistoryMessages(params: {
       const exactIdentityMatch = exactExternalIdentityIndex.get(externalIdentityKey);
       if (exactIdentityMatch) {
         consumedLocalCandidates.add(exactIdentityMatch);
-        if (imported.role && imported.text) {
-          roleTextMinimumOrder.set(
-            JSON.stringify([imported.role, imported.text]),
-            exactIdentityMatch.order + 1,
-          );
-        }
+        advanceRoleTextMinimumOrder(imported, exactIdentityMatch.order);
         continue;
       }
     }
@@ -424,12 +429,7 @@ export function mergeImportedChatHistoryMessages(params: {
         changed = true;
       }
       consumedLocalCandidates.add(imageDuplicate);
-      if (imageDuplicate.role && imageDuplicate.text) {
-        roleTextMinimumOrder.set(
-          JSON.stringify([imageDuplicate.role, imageDuplicate.text]),
-          imageDuplicate.order + 1,
-        );
-      }
+      advanceRoleTextMinimumOrder(imported, imageDuplicate.order);
       continue;
     }
     const roleTextKey =
@@ -461,14 +461,13 @@ export function mergeImportedChatHistoryMessages(params: {
         changed = true;
       }
       consumedLocalCandidates.add(duplicate);
-      if (roleTextKey) {
-        roleTextMinimumOrder.set(roleTextKey, duplicate.order + 1);
-      }
+      advanceRoleTextMinimumOrder(imported, duplicate.order);
       continue;
     }
     merged.push(imported);
     indexEntry(imported);
     consumedLocalCandidates.add(imported);
+    advanceRoleTextMinimumOrder(imported);
     nextOrder += 1;
     changed = true;
     expanded = true;
