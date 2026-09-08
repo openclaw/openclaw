@@ -206,10 +206,11 @@ export async function updateSessionStoreAfterAgentRun(params: {
   }
   const metadataPatch = preserveUserFacingRunState
     ? {
-        // Preserved-state runs must not alter perceived session state, so the
-        // unread-driving lastActivityAt stays untouched here.
+        // Preserve model/usage state, but honor the independent activity
+        // signal so completed user-facing handoffs can mark sessions unread.
         updatedAt: next.updatedAt,
         ...(touchInteraction ? { lastInteractionAt: next.lastInteractionAt } : {}),
+        ...(touchActivity ? { lastActivityAt: next.lastActivityAt } : {}),
       }
     : next;
   const maintenanceConfig = resolveMaintenanceConfigFromInput(cfg.session?.maintenance);
@@ -222,8 +223,7 @@ export async function updateSessionStoreAfterAgentRun(params: {
     (currentEntry, context) => {
       if (
         (!context.existingEntry && hadPreExistingEntry) ||
-        (!preserveUserFacingRunState &&
-          context.existingEntry &&
+        (context.existingEntry &&
           !isSameSessionLifecycleOwner(context.existingEntry, expectedSession))
       ) {
         // Successor acceptance owns identity changes. Finalizers may update only

@@ -4,9 +4,15 @@ import { resolveFastModeState } from "../../agents/fast-mode.js";
 import { consolidateLiveModelSwitchAfterRun } from "../../agents/live-model-switch.js";
 import { resolveCollapsedSessionAuthPinSource } from "../../config/sessions/auth-profile-override-provenance.js";
 import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
+import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import { logVerbose } from "../../globals.js";
-import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../sessions/input-provenance.js";
+import { hasOutboundReplyContent } from "../../plugin-sdk/reply-payload.js";
+import {
+  isProgressCardRefreshInputProvenance,
+  shouldPreserveUserFacingSessionStateForInputProvenance,
+} from "../../sessions/input-provenance.js";
 import { resolveFallbackTransition } from "../fallback-state.js";
+import { isReplyPayloadTerminalContent } from "../reply-payload.js";
 import { normalizeVerboseLevel } from "../thinking.js";
 import type { ReplyPayload } from "../types.js";
 import { refreshSessionEntryFromStore, resolveFallbackOriginModel } from "./agent-runner-core.js";
@@ -100,13 +106,14 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
   const expectedSession = latestCompaction?.target ?? {
     sessionId: activeSessionEntry?.sessionId ?? followupRun.run.sessionId,
     lifecycleRevision: activeSessionEntry?.lifecycleRevision,
+    // An explicit undefined is a known absence and still fences a replacement writer.
+    activeWriterRunId: (activeSessionEntry as InternalSessionEntry | undefined)?.activeWriterRunId,
   };
   const operation = context.replyOperation;
-  const authorize = latestCompaction
-    ? () => operation !== undefined && replyRunRegistry.get(operation.key) === operation
-    : undefined;
+  const authorize = operation ? () => replyRunRegistry.get(operation.key) === operation : undefined;
 
   const runResult = execution.result;
+  const payloadArray = runResult.payloads ?? [];
   const fallbackProvider = execution.resolved.provider;
   const fallbackModel = execution.resolved.model;
   const fallbackExhausted = execution.fallback.exhausted;
@@ -114,6 +121,14 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
   const hasDirectlySentBlockReply = execution.hasDirectlySentBlockReply;
   const directBlockDeliveries = execution.directBlockDeliveries;
   const terminalFailurePayload = execution.terminalFailurePayload;
+  const hasVisibleTerminalPayload = (payload: ReplyPayload | undefined) =>
+    payload !== undefined &&
+    isReplyPayloadTerminalContent(payload) &&
+    hasOutboundReplyContent(payload, { trimText: true });
+  const hasUserVisibleReply =
+    hasDirectlySentBlockReply ||
+    payloadArray.some(hasVisibleTerminalPayload) ||
+    hasVisibleTerminalPayload(terminalFailurePayload);
   const { autoCompactionCount, didLogHeartbeatStrip } = execution;
 
   if (
@@ -141,8 +156,6 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
       );
     }
   }
-
-  const payloadArray = runResult.payloads ?? [];
 
   if (blockReplyPipeline) {
     await blockReplyPipeline.flush({ force: true });
@@ -211,6 +224,9 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
   recordReplyUsageState(runId, replyUsageState);
   const verboseEnabled = resolvedVerboseLevel !== "off";
   const preserveUserFacingSessionState = shouldPreserveUserFacingSessionStateForInputProvenance(
+    followupRun.run.inputProvenance,
+  );
+  const isProgressCardRefresh = isProgressCardRefreshInputProvenance(
     followupRun.run.inputProvenance,
   );
   const fallbackStateEntry =
@@ -315,6 +331,7 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
     contextTokensSource,
     contextBudgetStatus:
       compactionCount === undefined ? runResult.meta?.agentMeta?.contextBudgetStatus : undefined,
+    touchActivity: !isHeartbeat && !isProgressCardRefresh && hasUserVisibleReply,
     systemPromptReport: runResult.meta?.systemPromptReport,
     preserveFreshTotalTokensOnStaleUsage: preflightCompactionApplied,
     agentHarnessId: runResult.meta?.agentMeta?.agentHarnessId,
