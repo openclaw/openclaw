@@ -5,7 +5,11 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
-import { isPrePartialFailureRecoveryTarget } from "../../scripts/e2e/lib/npm-telegram-live/resolve-target-scenarios.mts";
+import {
+  isPrePartialFailureRecoveryTarget,
+  isPreSettledEmptyResponseTarget,
+  resolveFrozenTelegramScenarioOmissions,
+} from "../../scripts/e2e/lib/npm-telegram-live/resolve-target-scenarios.mts";
 import { testing } from "../../scripts/e2e/npm-telegram-live-runner.ts";
 import { privateLocalOnlyPluginSdkEntrypoints } from "../../scripts/lib/plugin-sdk-entries.mts";
 
@@ -428,6 +432,48 @@ describe("package Telegram live Docker E2E", () => {
     expect(isPrePartialFailureRecoveryTarget(root)).toBe(true);
     writeOwner("extensions/telegram/src/draft-stream.ts", "waitForInFlight();");
     expect(isPrePartialFailureRecoveryTarget(root)).toBe(false);
+  });
+
+  it("omits settled empty-response recovery until the frozen source owns its scenario", () => {
+    const root = mkTempRoot();
+    const scenario = path.join(
+      root,
+      "qa/scenarios/channels/telegram-empty-response-after-write-recovery.yaml",
+    );
+
+    expect(isPreSettledEmptyResponseTarget(root)).toBe(true);
+    mkdirSync(path.dirname(scenario), { recursive: true });
+    writeFileSync(scenario, "id: telegram-empty-response-after-write-recovery\n");
+    expect(isPreSettledEmptyResponseTarget(root)).toBe(false);
+  });
+
+  it("combines only the unsupported frozen Telegram scenario contracts", () => {
+    const root = mkTempRoot();
+    const writeOwner = (relativePath: string, source: string) => {
+      const file = path.join(root, relativePath);
+      mkdirSync(path.dirname(file), { recursive: true });
+      writeFileSync(file, source);
+    };
+    writeOwner("src/agents/embedded-agent-subscribe.ts", "void params.onPartialReply(data);");
+    writeOwner("extensions/telegram/src/draft-stream.ts", "flush: loop.flush,");
+    writeOwner(
+      "extensions/telegram/src/bot-message-dispatch.ts",
+      "enqueueDraftLaneEvent(async () => {});",
+    );
+
+    expect(resolveFrozenTelegramScenarioOmissions(root)).toEqual([
+      "telegram-partial-failure-recovery",
+      "telegram-empty-response-after-write-recovery",
+    ]);
+    writeOwner("extensions/telegram/src/draft-stream.ts", "waitForInFlight();");
+    expect(resolveFrozenTelegramScenarioOmissions(root)).toEqual([
+      "telegram-empty-response-after-write-recovery",
+    ]);
+    writeOwner(
+      "qa/scenarios/channels/telegram-empty-response-after-write-recovery.yaml",
+      "id: telegram-empty-response-after-write-recovery\n",
+    );
+    expect(resolveFrozenTelegramScenarioOmissions(root)).toEqual([]);
   });
 
   it("rejects multiple explicit RTT scenario ids", () => {

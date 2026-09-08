@@ -3,7 +3,8 @@ import { appendFileSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
-const CURRENT_ONLY_SCENARIO = "telegram-partial-failure-recovery";
+const PARTIAL_FAILURE_RECOVERY_SCENARIO = "telegram-partial-failure-recovery";
+const SETTLED_EMPTY_RESPONSE_SCENARIO = "telegram-empty-response-after-write-recovery";
 
 function readSource(sourceRoot: string, relativePath: string): string | undefined {
   try {
@@ -26,6 +27,22 @@ export function isPrePartialFailureRecoveryTarget(sourceRoot: string): boolean {
   );
 }
 
+export function isPreSettledEmptyResponseTarget(sourceRoot: string): boolean {
+  return (
+    readSource(
+      sourceRoot,
+      "qa/scenarios/channels/telegram-empty-response-after-write-recovery.yaml",
+    ) === undefined
+  );
+}
+
+export function resolveFrozenTelegramScenarioOmissions(sourceRoot: string): string[] {
+  return [
+    ...(isPrePartialFailureRecoveryTarget(sourceRoot) ? [PARTIAL_FAILURE_RECOVERY_SCENARIO] : []),
+    ...(isPreSettledEmptyResponseTarget(sourceRoot) ? [SETTLED_EMPTY_RESPONSE_SCENARIO] : []),
+  ];
+}
+
 function main(): void {
   const sourceRoot = process.argv[2];
   const selectedSha = process.env.OPENCLAW_SELECTED_SHA;
@@ -39,10 +56,11 @@ function main(): void {
   if (actualSha !== selectedSha) {
     throw new Error("frozen Telegram source checkout does not match package source SHA");
   }
-  if (isPrePartialFailureRecoveryTarget(sourceRoot)) {
+  const omittedScenarios = resolveFrozenTelegramScenarioOmissions(sourceRoot);
+  if (omittedScenarios.length > 0) {
     appendFileSync(
       output,
-      `OPENCLAW_NPM_TELEGRAM_OMIT_DEFAULT_SCENARIOS=${CURRENT_ONLY_SCENARIO}\n`,
+      `OPENCLAW_NPM_TELEGRAM_OMIT_DEFAULT_SCENARIOS=${omittedScenarios.join(",")}\n`,
     );
   }
 }

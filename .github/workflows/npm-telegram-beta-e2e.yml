@@ -343,6 +343,7 @@ jobs:
           sparse-checkout: |
             extensions/telegram/src/bot-message-dispatch.ts
             extensions/telegram/src/draft-stream.ts
+            qa/scenarios/channels/telegram-empty-response-after-write-recovery.yaml
             src/agents/embedded-agent-subscribe.ts
 
       - name: Resolve frozen package Telegram scenarios
