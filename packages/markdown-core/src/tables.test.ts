@@ -115,6 +115,32 @@ describe("convertMarkdownTables", () => {
     },
   );
 
+  it("preserves authored emphasis across bullet cells", () => {
+    const rendered = convertMarkdownTables(
+      "| Name | Value |\n| --- | --- |\n| Entry | **bold** and _italic_ |",
+      "bullets",
+    );
+    const parsed = new MarkdownIt().render(rendered);
+
+    expect(parsed).toContain("<strong>bold</strong>");
+    expect(parsed).toContain("<em>italic</em>");
+    expect(parsed).not.toContain("\\*");
+    expect(parsed).not.toContain("\\_");
+  });
+
+  it("preserves escaped backticks followed by real code spans in bullet cells", () => {
+    const rendered = convertMarkdownTables(
+      "| A | B |\n| --- | --- |\n| a | \\` literal and `code` |",
+      "bullets",
+    );
+    const parsed = new MarkdownIt().render(rendered);
+
+    expect(parsed).toContain("<code>code</code>");
+    expect(parsed).toContain("` literal and ");
+    // The escaped backtick stays a literal and must not consume the code closer.
+    expect(parsed).not.toContain("code\\`");
+  });
+
   it("chooses a code fence that contains literal backtick runs", () => {
     const rendered = convertMarkdownTables(
       "| A | B |\n| --- | --- |\n| 1 | ````a```b```` |",

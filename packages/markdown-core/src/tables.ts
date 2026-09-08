@@ -1,53 +1,70 @@
 import { expectDefined } from "@openclaw/normalization-core/expect";
-import { buildCodeSpanIndex } from "./code-spans.js";
+import { fromMarkdown } from "mdast-util-from-markdown";
 import { getMarkdownTableSource, markdownToIRWithMeta, type MarkdownTableMeta } from "./ir.js";
 import { renderMarkdownCodeTable, renderMarkdownTableBullets } from "./table-layout.js";
 import type { MarkdownTableMode } from "./types.js";
 
 // The bullets render path reassembles raw cell Markdown next to generated `**` markers
-// and `• ` prefixes. A bare emphasis or code delimiter inside one cell can then pair
-// with those generated markers or with a delimiter in a later cell, shifting emphasis
-// and code-span boundaries across the whole bullet block (inline code and emphasis
-// both span softbreaks within the rendered paragraph). Escaping bare delimiters in the
-// source cell markdown keeps every stray delimiter literal at its own position. Authored
-// spans are already parsed into the IR at this point and authored escapes keep their
-// backslash, so ordinary cells stay byte-identical.
-const BARE_CELL_DELIMITERS = /(?<!\\)[*_`]/gu;
+// and `• ` prefixes. A delimiter left literal in one cell can pair with those generated
+// markers or with a delimiter in a later cell, shifting emphasis and code-span boundaries
+// across the whole bullet block (both span softbreaks within the rendered paragraph).
+// The inline parser decides which delimiters are literal: authored emphasis, code spans,
+// and links keep their delimiters (their syntax lives in non-text nodes), while text
+// nodes own the literal `*`/`_`/`` ` `` runs. Escaping only those keeps authored markup
+// rendering while strays stay confined to their own cell.
+const CELL_DELIMITER_CANDIDATES = /[*_`]/u;
+
+type PositionedNode = {
+  type?: string;
+  position?: { start?: { offset?: number }; end?: { offset?: number } };
+  children?: PositionedNode[];
+};
 
 /**
- * Finds code-span coverage that only includes closed spans: the scanner reports an
- * open-at-EOF run as covered, but that run has no closer in this markdown, so it is a
- * stray whose delimiters must still be escaped.
+ * Ranges of cell source that the inline parser owns as literal text. Delimiters inside
+ * them are orphans on this embedded surface; delimiters outside them belong to parsed
+ * emphasis, code spans, or links and must survive rendering.
  */
-function closedCodeSpanLookup(markdown: string): (offset: number) => boolean {
-  const { isInside, inlineState } = buildCodeSpanIndex(markdown);
-  const spans: Array<[number, number]> = [];
-  let start: number | undefined;
-  for (let offset = 0; offset <= markdown.length; offset += 1) {
-    const inside = offset < markdown.length && isInside(offset);
-    if (inside && start === undefined) {
-      start = offset;
+function literalTextRanges(markdown: string): Array<[number, number]> {
+  const ranges: Array<[number, number]> = [];
+  const visit = (node: PositionedNode): void => {
+    const start = node.position?.start?.offset;
+    const end = node.position?.end?.offset;
+    if (node.type === "text" && start !== undefined && end !== undefined) {
+      ranges.push([start, end]);
+      return;
     }
-    if (!inside && start !== undefined) {
-      spans.push([start, offset]);
-      start = undefined;
+    for (const child of node.children ?? []) {
+      visit(child);
     }
-  }
-  const last = spans.at(-1);
-  const kept = inlineState.open && last && last[1] === markdown.length ? spans.slice(0, -1) : spans;
-  return (offset) => kept.some(([from, to]) => offset >= from && offset < to);
+  };
+  visit(fromMarkdown(markdown) as PositionedNode);
+  return ranges;
 }
 
 function ownCellDelimiters(markdown: string): string {
-  if (!/[*_`]/.test(markdown)) {
+  if (!CELL_DELIMITER_CANDIDATES.test(markdown)) {
     return markdown;
   }
-  // Closed code spans own their delimiters, and `\\*` or `` \` `` are not delimiters at
-  // all. Everything else is an orphan on this embedded surface.
-  const isInsideClosedSpan = closedCodeSpanLookup(markdown);
-  return markdown.replaceAll(BARE_CELL_DELIMITERS, (delimiter, offset: number) =>
-    isInsideClosedSpan(offset) ? delimiter : `\\${delimiter}`,
-  );
+  const ranges = literalTextRanges(markdown);
+  const isLiteral = (offset: number): boolean =>
+    ranges.some(([from, to]) => offset >= from && offset < to);
+  let owned = "";
+  let offset = 0;
+  while (offset < markdown.length) {
+    const char = markdown[offset];
+    if (char === "\\") {
+      // A backslash escapes the following byte; keep the pair verbatim so
+      // already-escaped delimiters and literal backslashes stay untouched.
+      owned += markdown.slice(offset, offset + 2);
+      offset += 2;
+      continue;
+    }
+    const isDelimiter = char === "*" || char === "_" || char === "`";
+    owned += isDelimiter && isLiteral(offset) ? `\\${char}` : char;
+    offset += 1;
+  }
+  return owned;
 }
 
 function renderTableSource(
