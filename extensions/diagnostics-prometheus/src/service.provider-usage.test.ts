@@ -27,6 +27,12 @@ type ProviderUsageListener = (snapshot: {
 }) => void;
 
 describe("diagnostics-prometheus provider usage", () => {
+  it("declares diagnostics enablement as a service replacement boundary", () => {
+    const exporter = createDiagnosticsPrometheusExporter();
+
+    expect(exporter.service.reload).toEqual({ configPrefixes: ["diagnostics.enabled"] });
+  });
+
   it("does not acquire provider usage while diagnostics are disabled", async () => {
     const exporter = createDiagnosticsPrometheusExporter();
     const observeProviderUsage = vi.fn();
@@ -98,5 +104,60 @@ describe("diagnostics-prometheus provider usage", () => {
 
     exporter.service.stop?.();
     expect(unsubscribe).toHaveBeenCalledOnce();
+  });
+
+  it("releases and reacquires provider usage across diagnostics replacement", async () => {
+    const exporter = createDiagnosticsPrometheusExporter();
+    const listeners: ProviderUsageListener[] = [];
+    const releases = [vi.fn(), vi.fn()];
+    const observeProviderUsage = vi.fn(async (listener: ProviderUsageListener) => {
+      listeners.push(listener);
+      return expectDefined(releases[listeners.length - 1], "provider usage release");
+    });
+    const context = (enabled: boolean) => ({
+      config: { diagnostics: { enabled } } as never,
+      stateDir: "/tmp/openclaw-prometheus-test",
+      logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+      internalDiagnostics: {
+        emit: vi.fn(),
+        onEvent: () => vi.fn(),
+        observeProviderUsage,
+        reportExporterHealth: vi.fn(),
+      } as TrustedExporterInternalDiagnostics,
+    });
+    const snapshot = {
+      generation: 1,
+      providers: [
+        {
+          provider: "openai",
+          windows: [{ window: "5h", usedRatio: 0.15 }],
+          refreshSuccess: true,
+          refreshOutcome: "success" as const,
+        },
+      ],
+    };
+
+    await exporter.service.start(context(true));
+    expect(observeProviderUsage).toHaveBeenCalledOnce();
+    expectDefined(listeners[0], "initial provider usage listener")(snapshot);
+    expect(exporter.render()).toContain("openclaw_provider_usage_used_ratio");
+
+    await exporter.service.stop?.();
+    await exporter.service.start(context(false));
+    expect(releases[0]).toHaveBeenCalledOnce();
+    expect(observeProviderUsage).toHaveBeenCalledOnce();
+    expect(exporter.render()).not.toContain("openclaw_provider_usage_");
+
+    expectDefined(listeners[0], "retired provider usage listener")(snapshot);
+    expect(exporter.render()).not.toContain("openclaw_provider_usage_");
+
+    await exporter.service.stop?.();
+    await exporter.service.start(context(true));
+    expect(observeProviderUsage).toHaveBeenCalledTimes(2);
+    expectDefined(listeners[1], "replacement provider usage listener")(snapshot);
+    expect(exporter.render()).toContain("openclaw_provider_usage_used_ratio");
+
+    await exporter.service.stop?.();
+    expect(releases[1]).toHaveBeenCalledOnce();
   });
 });

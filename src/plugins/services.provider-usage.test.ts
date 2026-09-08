@@ -43,7 +43,13 @@ function providerUsageCapability(ctx: OpenClawPluginServiceContext | undefined) 
 describe("provider usage diagnostics capability", () => {
   it("grants the capability only to the official Prometheus exporter and releases it on stop", async () => {
     const release = vi.fn();
-    const observeProviderUsage = vi.fn(async () => release);
+    let publish: ProviderUsageMetricsListener | undefined;
+    const observeProviderUsage = vi.fn(
+      async ({ listener }: { listener: ProviderUsageMetricsListener }) => {
+        publish = listener;
+        return release;
+      },
+    );
     const otelContexts: OpenClawPluginServiceContext[] = [];
     await startPluginServices({
       registry: createRegistry(
@@ -66,10 +72,15 @@ describe("provider usage diagnostics capability", () => {
     });
     const capability = providerUsageCapability(prometheusContexts[0]);
     expect(capability).toBeTypeOf("function");
-    await capability?.(() => {});
+    const listener = vi.fn();
+    await capability?.(listener);
     expect(observeProviderUsage).toHaveBeenCalledOnce();
+    publish?.({ generation: 1, providers: [] });
+    expect(listener).toHaveBeenCalledOnce();
     await handle.stop();
     expect(release).toHaveBeenCalledOnce();
+    publish?.({ generation: 2, providers: [] });
+    expect(listener).toHaveBeenCalledOnce();
   });
 
   it("carries lease revocation through asynchronous observer acquisition", async () => {

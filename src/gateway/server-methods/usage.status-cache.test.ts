@@ -586,6 +586,24 @@ describe("usage.status provider usage cache", () => {
     }
   });
 
+  it("does not schedule provider requests after the observer is released", async () => {
+    vi.useFakeTimers();
+    const release = observeProviderUsageMetrics({
+      getConfig: () => config,
+      listener: () => {},
+      refreshIntervalMs: 1_000,
+    });
+    try {
+      await vi.waitFor(() => expect(mocks.loadProviderUsageSummary).toHaveBeenCalledOnce());
+      release();
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(mocks.loadProviderUsageSummary).toHaveBeenCalledOnce();
+    } finally {
+      release();
+      vi.useRealTimers();
+    }
+  });
+
   it("invalidates cached usage when the runtime config changes", async () => {
     const configFor = (baseUrl: string) =>
       ({ ...config, models: { providers: { openai: { baseUrl, models: [] } } } }) as OpenClawConfig;
