@@ -184,6 +184,8 @@ describe("status update with Git and the update ledger", () => {
       await git(remote, "commit", "--allow-empty", "-m", "newer");
       await git(remote, "tag", "v2000.1.1");
       const run = createUpdateRun({ trigger: "cli", target: { kind: "git" } });
+      // Git versions differ in whether a rejected tag fetch advances branch refs.
+      await git(install.root, "fetch", "--no-tags", "origin");
       const failed = await runCommand(["git", "fetch", "--tags", "origin"], {
         cwd: install.root,
         timeoutMs: 5000,
