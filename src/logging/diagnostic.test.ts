@@ -506,7 +506,8 @@ describe("stuck session diagnostics threshold", () => {
     const warnSpy = vi.spyOn(diagnosticLogger, "warn").mockImplementation(() => undefined);
 
     vi.setSystemTime(0);
-    startEnabledDiagnosticHeartbeat({ recoverStuckSession });
+    // No loop monitor reading: heartbeat lateness stays the only stall evidence.
+    startEnabledDiagnosticHeartbeat({ recoverStuckSession, sampleLiveness: () => null });
     logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "processing" });
 
     vi.setSystemTime(120_001);
@@ -516,7 +517,7 @@ describe("stuck session diagnostics threshold", () => {
     const delayedHeartbeat = loggerMessages(warnSpy).find((message) =>
       message.includes("liveness heartbeat delayed"),
     );
-    expect(delayedHeartbeat).toMatch(/overdue=\d+ms elapsed=\d+ms/u);
+    expect(delayedHeartbeat).toMatch(/overdue=\d+ms elapsed=\d+ms eventLoopDelayMaxMs=unknown/u);
     const timing = delayedHeartbeat?.match(/overdue=(\d+)ms elapsed=(\d+)ms/u);
     expect(Number(timing?.[2]) - Number(timing?.[1])).toBe(30_000);
     expect(recoverStuckSession).not.toHaveBeenCalled();
@@ -533,9 +534,13 @@ describe("stuck session diagnostics threshold", () => {
   it("defers a material heartbeat stall even when elapsed time is below the abort threshold", () => {
     const recoverStuckSession = vi.fn();
     const warnSpy = vi.spyOn(diagnosticLogger, "warn").mockImplementation(() => undefined);
+    let eventLoopDelayMaxMs = 0;
 
     vi.setSystemTime(0);
-    startEnabledDiagnosticHeartbeat({ recoverStuckSession });
+    startEnabledDiagnosticHeartbeat({
+      recoverStuckSession,
+      sampleLiveness: () => ({ reasons: [], intervalMs: 30_000, eventLoopDelayMaxMs }),
+    });
     logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "processing" });
     markDiagnosticEmbeddedRunStarted({ sessionId: "s1", sessionKey: "main" });
 
@@ -548,12 +553,18 @@ describe("stuck session diagnostics threshold", () => {
     });
     vi.advanceTimersByTime(10_000);
 
+    // The loop monitor recorded the 5s stall that made this tick late.
+    eventLoopDelayMaxMs = 5_000;
     vi.setSystemTime(35_000);
     vi.advanceTimersByTime(30_000);
 
-    expectLoggerMessageContaining(warnSpy, "liveness heartbeat delayed");
+    expectLoggerMessageContaining(
+      warnSpy,
+      "eventLoopDelayMaxMs=5000; deferring recovery decisions",
+    );
     expect(recoverStuckSession).not.toHaveBeenCalled();
 
+    eventLoopDelayMaxMs = 0;
     vi.advanceTimersByTime(30_000);
 
     expectRecoveryCall(
@@ -594,6 +605,36 @@ describe("stuck session diagnostics threshold", () => {
       { sessionId: "s1", sessionKey: "main", queueDepth: 0, allowActiveAbort: true },
       ["ageMs", "stateGeneration"],
     );
+  });
+
+  it("recovers on late heartbeat ticks when the event loop stayed responsive (#142200)", () => {
+    const recoverStuckSession = vi.fn();
+    const warnSpy = vi.spyOn(diagnosticLogger, "warn").mockImplementation(() => undefined);
+
+    vi.setSystemTime(0);
+    startEnabledDiagnosticHeartbeat({
+      recoverStuckSession,
+      // Reporter's WSL2 readings: the 30s timer wakes ~1.5s late while loop delay stays ~13ms.
+      sampleLiveness: () => ({
+        reasons: [],
+        intervalMs: 31_500,
+        eventLoopDelayP99Ms: 10,
+        eventLoopDelayMaxMs: 13,
+      }),
+    });
+    logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "processing" });
+
+    for (let tick = 0; tick < 3; tick += 1) {
+      vi.setSystemTime(Date.now() + 1_500);
+      vi.advanceTimersByTime(30_000);
+    }
+
+    expectRecoveryCall(
+      recoverStuckSession,
+      { sessionId: "s1", sessionKey: "main", queueDepth: 0 },
+      ["ageMs", "stateGeneration"],
+    );
+    expectNoLoggerMessageContaining(warnSpy, "liveness heartbeat delayed");
   });
 
   it("does not warn while a processing session continues reporting progress", () => {

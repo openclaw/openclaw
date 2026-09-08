@@ -646,14 +646,16 @@ export async function prepareGatewayLifecycle(params: {
       getConfig: getRuntimeConfig,
       startupGraceMs: 60_000,
       sampleLiveness: () => {
-        const sample = readinessEventLoopHealth.persistentDegradationSnapshot();
-        if (!sample || sample.degradedSinceMs == null) {
+        // Loop-delay evidence is fresh every tick; warning reasons need persistent degradation.
+        const sample = readinessEventLoopHealth.snapshot();
+        if (!sample) {
           return null;
         }
+        const persistent = readinessEventLoopHealth.persistentDegradationSnapshot();
         return {
-          reasons: sample.reasons,
+          reasons: persistent?.reasons ?? [],
           intervalMs: sample.intervalMs,
-          degradedSinceMs: sample.degradedSinceMs,
+          degradedSinceMs: persistent?.degradedSinceMs ?? undefined,
           eventLoopDelayP99Ms: sample.delayP99Ms,
           eventLoopDelayMaxMs: sample.delayMaxMs,
           eventLoopUtilization: sample.utilization,

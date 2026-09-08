@@ -122,6 +122,7 @@ type DiagnosticWorkSnapshot = {
 };
 
 type DiagnosticLivenessSample = {
+  /** Empty when the window was healthy; the heartbeat then uses only the loop-delay evidence. */
   reasons: DiagnosticLivenessWarningReason[];
   intervalMs: number;
   degradedSinceMs?: number;
@@ -347,9 +348,6 @@ function sampleDiagnosticLiveness(now: number): DiagnosticLivenessSample | null 
   }
   if (cpuCoreRatio >= DEFAULT_LIVENESS_CPU_CORE_RATIO_WARN) {
     reasons.push("cpu");
-  }
-  if (reasons.length === 0) {
-    return null;
   }
 
   return {
@@ -1158,21 +1156,31 @@ export function startDiagnosticHeartbeat(
     lastDiagnosticHeartbeatTickAt = now;
     const heartbeatOverdueMs = Math.max(0, heartbeatElapsedMs - DIAGNOSTIC_HEARTBEAT_INTERVAL_MS);
     const inStartupGrace = livenessGraceUntil > 0 && now < livenessGraceUntil;
-    // Observe ordinary timer jitter at the scheduled tick so it cannot consume
-    // a run's remaining recovery budget. Material lateness can also hide queued
-    // progress events, so the next healthy heartbeat owns recovery instead.
-    const recoveryObservationNow = now - heartbeatOverdueMs;
-    const shouldDeferRecovery = heartbeatOverdueMs >= DEFAULT_LIVENESS_EVENT_LOOP_DELAY_WARN_MS;
-    if (shouldDeferRecovery && !inStartupGrace) {
-      diag.warn(
-        `liveness heartbeat delayed: overdue=${Math.round(heartbeatOverdueMs)}ms elapsed=${Math.round(heartbeatElapsedMs)}ms; deferring recovery decisions`,
-      );
-    }
     pruneDiagnosticSessionStates(now, true);
     const work = getDiagnosticWorkSnapshot(now);
     const rawLivenessSample = (opts?.sampleLiveness ?? sampleDiagnosticLiveness)(now, work);
     // Keep sampling during grace so event-loop delay baselines reset, but suppress startup-only reports.
-    const livenessSample = inStartupGrace ? null : rawLivenessSample;
+    const livenessSample =
+      inStartupGrace || !rawLivenessSample || rawLivenessSample.reasons.length === 0
+        ? null
+        : rawLivenessSample;
+    // Observe ordinary timer jitter at the scheduled tick so it cannot consume
+    // a run's remaining recovery budget. A stalled event loop can also hide queued
+    // progress events, so the next healthy heartbeat owns recovery instead.
+    // Timer lateness alone is not that evidence: VM hosts wake a 30s timer late while
+    // the loop stays responsive (#142200), so defer only when the loop monitor saw a
+    // matching stall. Without a monitor reading, lateness remains the only evidence.
+    const recoveryObservationNow = now - heartbeatOverdueMs;
+    const eventLoopDelayMaxMs = rawLivenessSample?.eventLoopDelayMaxMs;
+    const shouldDeferRecovery =
+      heartbeatOverdueMs >= DEFAULT_LIVENESS_EVENT_LOOP_DELAY_WARN_MS &&
+      (eventLoopDelayMaxMs === undefined ||
+        eventLoopDelayMaxMs >= DEFAULT_LIVENESS_EVENT_LOOP_DELAY_WARN_MS);
+    if (shouldDeferRecovery && !inStartupGrace) {
+      diag.warn(
+        `liveness heartbeat delayed: overdue=${Math.round(heartbeatOverdueMs)}ms elapsed=${Math.round(heartbeatElapsedMs)}ms eventLoopDelayMaxMs=${formatOptionalDiagnosticMetric(eventLoopDelayMaxMs)}; deferring recovery decisions`,
+      );
+    }
     const shouldEmitLivenessEvent =
       livenessSample !== null && shouldEmitDiagnosticLivenessEvent(now);
     const shouldEmitLivenessWarning =
