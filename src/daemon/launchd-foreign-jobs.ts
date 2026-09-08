@@ -27,6 +27,27 @@ const MAX_JOBS = 64;
 const INSPECTION_TIMEOUT_MS = 2_000;
 const MAX_FILE_BYTES = 64 * 1024;
 const SHELLS = new Set(["sh", "bash", "zsh", "dash", "ksh"]);
+const SHELL_EXECUTION_ENV_NAMES = new Set([
+  "SHELLOPTS",
+  "BASHOPTS",
+  "BASH_ENV",
+  "ENV",
+  "ZDOTDIR",
+  "POSIXLY_CORRECT",
+  "IFS",
+  "CDPATH",
+  "PS4",
+  "BASH_XTRACEFD",
+]);
+
+function hasShellExecutionEnvironment(environment: string): boolean {
+  for (const [, name] of environment.matchAll(/^\t\t(.+?) => /gm)) {
+    if (name && (SHELL_EXECUTION_ENV_NAMES.has(name) || name.startsWith("BASH_"))) {
+      return true;
+    }
+  }
+  return false;
+}
 
 function isCandidate(label: string, env: NodeJS.ProcessEnv): boolean {
   return (
@@ -40,7 +61,9 @@ function isCandidate(label: string, env: NodeJS.ProcessEnv): boolean {
   );
 }
 
-function lifecycleAction(args: string[]): GatewayAction | undefined {
+function lifecycleInvocation(
+  args: string[],
+): { action: GatewayAction; program: string } | undefined {
   if (args.some((arg) => ["--help", "-h", "--version", "-V"].includes(arg))) {
     return undefined;
   }
@@ -51,13 +74,20 @@ function lifecycleAction(args: string[]): GatewayAction | undefined {
       words = words.slice(1);
     }
   }
+  const program = words[0] ?? "";
+  if (!path.isAbsolute(program)) {
+    return undefined;
+  }
   if (["node", "bun"].includes(path.basename(words[0] ?? ""))) {
     words = words.slice(1);
     if (path.basename(words[0] ?? "") !== "openclaw.mjs") {
       return undefined;
     }
   }
-  if (!["openclaw", "openclaw.mjs"].includes(path.basename(words[0] ?? ""))) {
+  if (
+    !path.isAbsolute(words[0] ?? "") ||
+    !["openclaw", "openclaw.mjs"].includes(path.basename(words[0] ?? ""))
+  ) {
     return undefined;
   }
   words = words.slice(1);
@@ -66,12 +96,12 @@ function lifecycleAction(args: string[]): GatewayAction | undefined {
   }
   const action = words[1];
   return words[0] === "gateway" && (action === "restart" || action === "start" || action === "stop")
-    ? action
+    ? { action, program }
     : undefined;
 }
 
 const SCRIPT_HELPER_NAME = /(?:openclaw_|OPENCLAW_)[A-Za-z0-9_]*/;
-const SCRIPT_LITERAL_EXEC = String.raw`(?:openclaw(?:\.mjs)?|/(?:[A-Za-z0-9_.-]+/)*openclaw(?:\.mjs)?)`;
+const SCRIPT_LITERAL_EXEC = String.raw`/(?:[A-Za-z0-9_.-]+/)*openclaw(?:\.mjs)?`;
 const SCRIPT_HELPER_REF = String.raw`\$(?:${SCRIPT_HELPER_NAME.source}|\{${SCRIPT_HELPER_NAME.source}\})`;
 // JavaScript's $ can stop before a final Unicode separator; require the raw end.
 const SCRIPT_LINE_END = String.raw`$(?![\s\S])`;
@@ -83,9 +113,10 @@ const SCRIPT_INVOCATION = new RegExp(
   String.raw`^[ \t]*(?:exec[ \t]+)?(${SCRIPT_LITERAL_EXEC}|${SCRIPT_HELPER_REF}|"${SCRIPT_HELPER_REF}")[ \t]+gateway[ \t]+(restart|start|stop)((?:[ \t]+[A-Za-z0-9_.=/:-]+)*)[ \t]*${SCRIPT_LINE_END}`,
 );
 
-// Match raw lines only: blank/comments, allowed set flags, unquoted literal
-// helper assignments, then the first lifecycle call (optional exec/helper).
-// Shell syntax is never dequoted or expanded; unmatched text is report-only.
+// Verify literal, straight-line prefixes ending in a Gateway lifecycle call to
+// an absolute OpenClaw path; inspectJob also excludes shell-altering job environments.
+// Other syntax is report-only. This checks metadata, not binary executability,
+// interpreter availability or quarantine, and never dequotes or expands shell words.
 function scriptActions(script: string): GatewayAction[] {
   if (script.includes("\r") || script.includes("<<") || script.includes("\\\n")) {
     return [];
@@ -229,19 +260,39 @@ async function inspectJob(
   }
   let actions: GatewayAction[] = [];
   let diagnostic: string | undefined;
+  const shellEnvironmentDiagnostic = hasShellExecutionEnvironment(environment)
+    ? "Shell environment alters execution; left unchanged."
+    : undefined;
   const command = args.length ? [program, ...args.slice(1)] : [program];
-  const direct = lifecycleAction(command);
-  if (direct) {
-    actions = [direct];
-  } else if (SHELLS.has(path.basename(program))) {
+  const direct = path.isAbsolute(program) ? lifecycleInvocation(command) : undefined;
+  const programName = path.basename(program);
+  const isShell = SHELLS.has(programName);
+  // A CLI basename can also name an owned shell launcher. Check that header
+  // before accepting direct argv when the job carries shell-altering environment.
+  const programScript =
+    !isShell &&
+    (shellEnvironmentDiagnostic ||
+      !["openclaw", "openclaw.mjs", "node", "bun", "env"].includes(programName))
+      ? await readOwnedText(program)
+      : undefined;
+  let isShellScript = programScript !== undefined && hasShellShebang(programScript);
+  // env executes its selected program directly, including an owned shell launcher.
+  if (shellEnvironmentDiagnostic && direct && direct.program !== program) {
+    const selectedScript = await readOwnedText(direct.program);
+    isShellScript ||= selectedScript !== undefined && hasShellShebang(selectedScript);
+  }
+  if (shellEnvironmentDiagnostic && (isShell || isShellScript)) {
+    diagnostic = shellEnvironmentDiagnostic;
+  } else if (direct) {
+    actions = [direct.action];
+  } else if (isShell) {
     const script = await readShellScript(command.slice(1));
     actions = script ? scriptActions(script) : [];
     diagnostic = actions.length
       ? undefined
       : "Shell command could not be verified; left unchanged.";
-  } else if (!["openclaw", "openclaw.mjs", "node", "bun", "env"].includes(path.basename(program))) {
-    const script = await readOwnedText(program);
-    actions = script && hasShellShebang(script) ? scriptActions(script) : [];
+  } else if (isShellScript && programScript !== undefined) {
+    actions = scriptActions(programScript);
   }
   return {
     label,

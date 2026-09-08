@@ -128,10 +128,13 @@ openclaw gateway status
 openclaw health
 ```
 
-Doctor only removes foreign OpenClaw-namespace jobs with a confirmed Gateway
-lifecycle invocation. Detection can inspect directly executed, user-owned
-scripts with supported shell shebangs. Lifecycle commands that depend on
-unresolved shell expansions remain report-only.
+Doctor removes a foreign job only when its literal, straight-line script or
+direct arguments invoke an absolute OpenClaw path with a Gateway lifecycle
+subcommand. Shell jobs must also have no launchd environment entries that alter
+shell execution. Everything outside this contract is reported and left unchanged.
+This is command-metadata verification; it does not probe binary executability,
+interpreter availability, or quarantine state.
+
 Doctor preserves managed LaunchAgents, unrelated labels,
 and jobs whose purpose cannot be established, and names every removal even
 in noninteractive runs. Service repair remains disabled for an isolated install

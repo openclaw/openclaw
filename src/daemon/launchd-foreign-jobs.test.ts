@@ -91,7 +91,32 @@ describe("foreign launchd command classification", () => {
       ["start"],
     ],
     ["ai.openclaw.echo", ["/bin/echo", "openclaw", "gateway", "restart"], []],
-    ["ai.openclaw.inline", ["/bin/sh", "-c", "openclaw gateway restart"], ["restart"]],
+    ["ai.openclaw.inline", ["/bin/sh", "-c", "openclaw gateway restart"], []],
+    [
+      "ai.openclaw.inline-absolute",
+      ["/bin/sh", "-c", "/usr/local/bin/openclaw gateway restart"],
+      ["restart"],
+    ],
+    ["ai.openclaw.bare", ["openclaw", "gateway", "restart"], []],
+    ["ai.openclaw.env-bare", ["/usr/bin/env", "openclaw", "gateway", "restart"], []],
+    ["ai.openclaw.node-bare-entry", ["/usr/bin/node", "openclaw.mjs", "gateway", "restart"], []],
+    ["ai.openclaw.node-bare-runtime", ["node", "/opt/openclaw.mjs", "gateway", "restart"], []],
+    ["ai.openclaw.bun", ["/opt/bin/bun", "/opt/openclaw.mjs", "gateway", "restart"], ["restart"]],
+    [
+      "ai.openclaw.bun-relative-entry",
+      ["/opt/bin/bun", "./openclaw.mjs", "gateway", "restart"],
+      [],
+    ],
+    [
+      "ai.openclaw.env-node",
+      ["/usr/bin/env", "/usr/bin/node", "/opt/openclaw.mjs", "gateway", "restart"],
+      ["restart"],
+    ],
+    [
+      "ai.openclaw.env-bare-node",
+      ["/usr/bin/env", "node", "/opt/openclaw.mjs", "gateway", "restart"],
+      [],
+    ],
     ["ai.openclaw.help", ["/opt/bin/openclaw", "gateway", "restart", "--help"], []],
     ["ai.openclaw.help-short", ["/opt/bin/openclaw", "gateway", "restart", "-h"], []],
     ["ai.openclaw.exec", ["exec", "openclaw", "gateway", "restart"], []],
@@ -110,6 +135,9 @@ describe("foreign launchd command classification", () => {
   });
 
   it.each([
+    ["#!/bin/sh\nopenclaw gateway restart\n", []],
+    ["#!/bin/sh\n/usr/local/bin/openclaw gateway restart\n", ["restart"]],
+    ['#!/bin/sh\nopenclaw_bin=openclaw\n"$openclaw_bin" gateway restart\n', []],
     ['#!/bin/sh\nopenclaw_bin="/opt/bin/openclaw"\n"$openclaw_bin" gateway restart\n', []],
     [
       "#!/bin/sh\nset -e\n'openclaw_bin=/opt/bin/openclaw'\n\"$openclaw_bin\" gateway restart\n",
@@ -161,7 +189,7 @@ describe("foreign launchd command classification", () => {
       '#!/bin/sh\nexport OPENCLAW_BIN=/usr/local/bin/openclaw\n"$OPENCLAW_BIN" gateway restart\n',
       ["restart"],
     ],
-    ["#!/bin/sh\nset -e -u -x +e +u +x\nopenclaw gateway restart\n", ["restart"]],
+    ["#!/bin/sh\nset -e -u -x +e +u +x\n/usr/local/bin/openclaw gateway restart\n", ["restart"]],
     ["#!/bin/sh\nset -eu\nopenclaw gateway restart\n", []],
     ["#!/bin/sh\nexec >/dev/null\nopenclaw gateway restart\n", []],
     ["#!/bin/sh\nUID=/usr/local/bin/openclaw gateway restart\n", []],
@@ -235,6 +263,99 @@ describe("foreign launchd command classification", () => {
     }
     expect(exec.mock.calls.map(([args]) => args)).toEqual([["list"]]);
   });
+
+  it.each(["inline", "script", "direct"] as const)(
+    "rejects shell-altering environment names for %s launches without examining values",
+    async (mode) => {
+      const file = path.join(dir, "validate.sh");
+      await fs.writeFile(file, "#!/bin/bash\nset -x\n/usr/local/bin/openclaw gateway restart\n");
+      const args =
+        mode === "inline"
+          ? ["/bin/bash", "-xc", "/usr/local/bin/openclaw gateway restart"]
+          : mode === "direct"
+            ? [file]
+            : ["/bin/bash", file];
+      for (const name of [
+        "SHELLOPTS",
+        "BASHOPTS",
+        "BASH_ENV",
+        "ENV",
+        "ZDOTDIR",
+        "POSIXLY_CORRECT",
+        "IFS",
+        "CDPATH",
+        "PS4",
+        "BASH_XTRACEFD",
+        "BASH_CUSTOM",
+        "BASH_FUNC_example%%",
+      ]) {
+        addJob(
+          label,
+          args,
+          `\tenvironment = {\n\t\t${name} => ${name === "SHELLOPTS" ? "noexec" : "ignored"}\n\t}\n`,
+        );
+        expect((await findForeignLaunchdJobs({}))[0], name).toMatchObject({
+          gatewayActions: [],
+          safeToRemove: false,
+          diagnostic: "Shell environment alters execution; left unchanged.",
+        });
+      }
+      addJob(
+        label,
+        args,
+        "\tenvironment = {\n\t\tPATH => /usr/bin:/bin\n\t\tHOME => /home/operator\n\t\tOPENCLAW_EXAMPLE => SHELLOPTS=noexec BASH_ENV=ignored\n\t}\n",
+      );
+      expect((await findForeignLaunchdJobs({}))[0]).toMatchObject({
+        gatewayActions: ["restart"],
+        safeToRemove: true,
+      });
+    },
+  );
+
+  it.each([false, true])(
+    "leaves non-shell CLI verification unaffected by shell environment names (env: %s)",
+    async (viaEnv) => {
+      const file = path.join(dir, "openclaw");
+      await fs.writeFile(file, "#!/usr/bin/env node\n");
+      addJob(
+        label,
+        [...(viaEnv ? ["/usr/bin/env"] : []), file, "gateway", "restart"],
+        "\tenvironment = {\n\t\tSHELLOPTS => noexec\n\t}\n",
+      );
+      expect((await findForeignLaunchdJobs({}))[0]).toMatchObject({
+        gatewayActions: ["restart"],
+        safeToRemove: true,
+      });
+    },
+  );
+
+  it.each(
+    ["openclaw", "openclaw.mjs", "node", "bun", "env"].flatMap((name) =>
+      (name === "env" ? [false] : [false, true]).map((viaEnv) => ({ name, viaEnv })),
+    ),
+  )(
+    "guards an executed shell script even when its filename is $name (env: $viaEnv)",
+    async ({ name, viaEnv }) => {
+      const file = path.join(dir, name);
+      await fs.writeFile(file, "#!/bin/bash\n/usr/local/bin/openclaw gateway restart\n");
+      const prefix =
+        name === "env"
+          ? [file, "/usr/local/bin/openclaw"]
+          : name === "node" || name === "bun"
+            ? [file, "/opt/openclaw.mjs"]
+            : [file];
+      addJob(
+        label,
+        [...(viaEnv ? ["/usr/bin/env"] : []), ...prefix, "gateway", "restart"],
+        "\tenvironment = {\n\t\tSHELLOPTS => noexec\n\t}\n",
+      );
+      expect((await findForeignLaunchdJobs({}))[0]).toMatchObject({
+        gatewayActions: [],
+        safeToRemove: false,
+        diagnostic: "Shell environment alters execution; left unchanged.",
+      });
+    },
+  );
 
   it.each([
     { shebang: "#!/bin/bash", verified: true },
