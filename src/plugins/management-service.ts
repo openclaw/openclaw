@@ -26,6 +26,10 @@ import {
 } from "./control-plane-workspace.js";
 import { getProcessGatewayPluginMetadataSnapshot } from "./current-plugin-metadata-state.js";
 import {
+  emptyInstalledPluginComponents,
+  projectInstalledPluginComponents,
+} from "./installed-plugin-components.js";
+import {
   createInstalledPluginEnabledPredicate,
   isInstalledPluginEnabled,
 } from "./installed-plugin-index.js";
@@ -562,6 +566,7 @@ export const inspectManagedPlugin = withManagedPluginCache(
     const enabled = isInstalledPluginEnabled(metadata.index, pluginId, params.config);
     const pendingReview = resolvePendingPluginCapabilityReview(pluginId);
     if (pendingReview) {
+      const manifest = metadata.byPluginId.get(pluginId);
       return {
         ok: true,
         plugin: {
@@ -573,6 +578,10 @@ export const inspectManagedPlugin = withManagedPluginCache(
           enabled,
         },
         declared: pendingReview.declared,
+        components: projectInstalledPluginComponents({
+          manifest,
+          declared: pendingReview.declared,
+        }),
         grants: pendingReview.grants,
         reviewToken: pendingReview.reviewToken,
         ...(pendingReview.source ? { source: pendingReview.source } : {}),
@@ -639,6 +648,7 @@ export const inspectManagedPlugin = withManagedPluginCache(
         ...(source ? { source } : {}),
         ...summary,
         declared,
+        components: projectInstalledPluginComponents({ manifest, declared }),
         reviewToken: computeDeclaredSurfaceHash(declared),
         ...(trust ? { trust } : {}),
       };
@@ -684,6 +694,7 @@ export const inspectManagedPlugin = withManagedPluginCache(
           : {}),
       },
       ...summary,
+      components: emptyInstalledPluginComponents(),
       reviewToken: computeDeclaredSurfaceHash(summary.declared),
     };
   },

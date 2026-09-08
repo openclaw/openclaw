@@ -610,7 +610,7 @@ export async function fetchClawHubPluginVersionCategories(
 }
 
 export async function fetchClawHubPluginDetail(
-  params: ClawHubReadOptions & { packageName: string },
+  params: ClawHubReadOptions & { packageName: string; version?: string },
 ): Promise<ClawHubPluginDetail> {
   const value = await fetchClawHubJson<unknown>({
     baseUrl: params.baseUrl,
@@ -650,7 +650,7 @@ export async function fetchClawHubPluginDetail(
     timeoutMs: params.timeoutMs,
     fetchImpl: params.fetchImpl,
   };
-  const version = catalog.latestVersion;
+  const version = params.version ?? catalog.latestVersion;
   const [versionsValue, versionValue, readme] = await Promise.all([
     fetchClawHubJson<unknown>({
       ...shared,

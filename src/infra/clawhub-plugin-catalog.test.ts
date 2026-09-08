@@ -312,13 +312,13 @@ describe("ClawHub plugin catalog client", () => {
           nextCursor: null,
         });
       }
-      if (url.pathname.endsWith("/versions/1.2.3")) {
+      if (url.pathname.endsWith("/versions/1.2.2")) {
         return jsonResponse({
           package: { name: "memory-plus", displayName: "Memory Plus", family: "code-plugin" },
           version: {
-            version: "1.2.3",
-            createdAt: 300,
-            changelog: "Current release",
+            version: "1.2.2",
+            createdAt: 200,
+            changelog: "Previous release",
             pluginManifestSummary: {
               schemaVersion: 1,
               configFields: [
@@ -379,14 +379,15 @@ describe("ClawHub plugin catalog client", () => {
     const detail = await fetchClawHubPluginDetail({
       baseUrl: "https://example.com",
       packageName: "memory-plus",
+      version: "1.2.2",
       fetchImpl,
     });
 
     expect(requestedUrls).toEqual([
       "/api/v1/packages/memory-plus",
       "/api/v1/packages/memory-plus/versions?limit=10",
-      "/api/v1/packages/memory-plus/versions/1.2.3",
-      "/api/v1/packages/memory-plus/file?path=README.md&preview=1&version=1.2.3",
+      "/api/v1/packages/memory-plus/versions/1.2.2",
+      "/api/v1/packages/memory-plus/file?path=README.md&preview=1&version=1.2.2",
     ]);
     expect(detail).toMatchObject({
       packageName: "memory-plus",

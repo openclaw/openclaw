@@ -250,6 +250,142 @@ describe("plugin management Gateway handlers", () => {
     });
   });
 
+  it("enriches an installed plugin by exact package identity and installed version", async () => {
+    const inspection = {
+      ok: true,
+      reviewToken,
+      plugin: {
+        id: "community-plugin",
+        name: "Community Plugin",
+        version: "1.2.3",
+        origin: "global",
+        installed: true,
+        enabled: false,
+      },
+      source: { kind: "clawhub", packageName: "community/plugin" },
+      declared: {
+        channels: [],
+        providers: [],
+        tools: [],
+        contracts: [],
+        hooks: [],
+        mcpServers: [],
+        cliCommands: [],
+        cliBackends: [],
+        skills: [],
+        dangerousConfigFlags: [],
+      },
+      components: {
+        mapped: [],
+        skills: [],
+        mcpServers: [],
+        commands: [],
+        hooks: [],
+        lspServers: [],
+        unavailable: { capabilities: [], mcpServers: [], lspServers: [] },
+      },
+      grants: {
+        hooks: {
+          allowPromptInjection: { effective: false },
+          allowConversationAccess: { effective: false },
+        },
+      },
+    } as const;
+    managementMocks.inspect.mockResolvedValue(inspection);
+    managementMocks.list.mockResolvedValue({
+      plugins: [
+        {
+          id: "community-plugin",
+          name: "Community Plugin",
+          packageName: "community/plugin",
+          version: "1.2.3",
+          installed: true,
+          enabled: false,
+          state: "disabled",
+        },
+      ],
+      diagnostics: [],
+      mutationAllowed: true,
+    });
+    catalogMocks.detail.mockResolvedValue({
+      packageName: "community/plugin",
+      displayName: "Community Plugin",
+      family: "code-plugin",
+      isOfficial: true,
+      categories: ["tools"],
+      latestVersion: "1.3.0",
+      topics: [],
+      configFields: [],
+      mcpServers: [],
+      skills: [],
+      versions: [],
+    });
+
+    const result = await callHandler("plugins.inspect", { pluginId: "community-plugin" });
+
+    expect(catalogMocks.detail).toHaveBeenCalledWith({
+      packageName: "community/plugin",
+      version: "1.2.3",
+    });
+    expect(result).toMatchObject({
+      ok: true,
+      response: {
+        catalog: {
+          plugin: { catalog: { name: "Community Plugin" } },
+          detail: { packageName: "community/plugin" },
+        },
+      },
+    });
+  });
+
+  it("keeps installed inspection usable when ClawHub enrichment fails", async () => {
+    const inspection = {
+      ok: true,
+      reviewToken,
+      plugin: {
+        id: "community-plugin",
+        name: "Community Plugin",
+        version: "1.2.3",
+        installed: true,
+        enabled: false,
+      },
+      source: { kind: "clawhub", packageName: "community/plugin" },
+      declared: {
+        channels: [],
+        providers: [],
+        tools: [],
+        contracts: [],
+        hooks: [],
+        mcpServers: [],
+        cliCommands: [],
+        cliBackends: [],
+        skills: [],
+        dangerousConfigFlags: [],
+      },
+      components: {
+        mapped: [],
+        skills: [],
+        mcpServers: [],
+        commands: [],
+        hooks: [],
+        lspServers: [],
+        unavailable: { capabilities: [], mcpServers: [], lspServers: [] },
+      },
+      grants: {
+        hooks: {
+          allowPromptInjection: { effective: false },
+          allowConversationAccess: { effective: false },
+        },
+      },
+    } as const;
+    managementMocks.inspect.mockResolvedValue(inspection);
+    catalogMocks.detail.mockRejectedValue(new Error("offline"));
+
+    const result = await callHandler("plugins.inspect", { pluginId: "community-plugin" });
+
+    expect(result).toEqual({ ok: true, response: inspection, error: undefined });
+  });
+
   it("maps plugin-only ClawHub search results to the public DTO", async () => {
     searchMock.mockResolvedValue([
       {

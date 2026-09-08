@@ -160,10 +160,29 @@ describe("plugin lifecycle protocol validators", () => {
           allowConversationAccess: { effective: false },
         },
       },
+      components: {
+        mapped: ["skills", "mcpServers", "commands", "hooks", "lspServers"],
+        skills: ["triage"],
+        mcpServers: ["notion"],
+        commands: ["search"],
+        hooks: ["SessionStart"],
+        lspServers: ["typescript"],
+        unavailable: {
+          capabilities: ["agents"],
+          mcpServers: ["remote-only"],
+          lspServers: [],
+        },
+      },
     };
 
     expect(Value.Check(PluginsInspectResultSchema, result)).toBe(true);
     expect(Value.Check(PluginsInspectResultSchema, { ...result, reviewToken: "" })).toBe(false);
+    expect(
+      Value.Check(PluginsInspectResultSchema, {
+        ...result,
+        components: { ...result.components, unexpected: [] },
+      }),
+    ).toBe(false);
     const { reviewToken: _reviewToken, ...withoutReviewToken } = result;
     expect(Value.Check(PluginsInspectResultSchema, withoutReviewToken)).toBe(false);
     const { contracts: _contracts, ...withoutContracts } = result.declared;

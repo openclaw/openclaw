@@ -284,25 +284,6 @@ export const CapabilityConsentErrorDetailsSchema = closedObject({
   acceptedAt: Type.Optional(NonEmptyString),
 });
 
-/** Consent-relevant snapshot of one plugin for install/enable review. */
-export const PluginsInspectResultSchema = closedObject({
-  ok: Type.Literal(true),
-  plugin: closedObject({
-    id: NonEmptyString,
-    name: NonEmptyString,
-    version: Type.Optional(NonEmptyString),
-    description: Type.Optional(Type.String()),
-    origin: Type.Optional(NonEmptyString),
-    installed: Type.Boolean(),
-    enabled: Type.Boolean(),
-  }),
-  source: Type.Optional(PluginInspectSourceSchema),
-  declared: PluginDeclaredSurfaceSchema,
-  reviewToken: NonEmptyString,
-  grants: PluginOperatorGrantsSchema,
-  trust: Type.Optional(PluginInstallTrustSchema),
-});
-
 const PluginCapabilityAcknowledgmentSchema = closedObject({
   reviewToken: NonEmptyString,
 });
@@ -503,6 +484,44 @@ export const PluginsCatalogGetResultSchema = closedObject({
   detail: PluginDiscoveryDetailSchema,
 });
 
+/** Runtime-supported installed component lists plus detected-but-unavailable bundle facts. */
+export const PluginInstalledComponentsSchema = closedObject({
+  /** Runtime-supported capability families; item arrays may be empty when names are unavailable. */
+  mapped: Type.Array(NonEmptyString),
+  skills: Type.Array(NonEmptyString),
+  mcpServers: Type.Array(NonEmptyString),
+  commands: Type.Array(NonEmptyString),
+  hooks: Type.Array(NonEmptyString),
+  lspServers: Type.Array(NonEmptyString),
+  unavailable: closedObject({
+    capabilities: Type.Array(NonEmptyString),
+    mcpServers: Type.Array(NonEmptyString),
+    lspServers: Type.Array(NonEmptyString),
+  }),
+});
+
+/** Consent snapshot plus the installed-version presentation projection used by Control UI. */
+export const PluginsInspectResultSchema = closedObject({
+  ok: Type.Literal(true),
+  plugin: closedObject({
+    id: NonEmptyString,
+    name: NonEmptyString,
+    version: Type.Optional(NonEmptyString),
+    description: Type.Optional(Type.String()),
+    origin: Type.Optional(NonEmptyString),
+    installed: Type.Boolean(),
+    enabled: Type.Boolean(),
+  }),
+  source: Type.Optional(PluginInspectSourceSchema),
+  declared: PluginDeclaredSurfaceSchema,
+  components: PluginInstalledComponentsSchema,
+  reviewToken: NonEmptyString,
+  grants: PluginOperatorGrantsSchema,
+  trust: Type.Optional(PluginInstallTrustSchema),
+  /** Exact installed-version ClawHub metadata when a canonical package match exists. */
+  catalog: Type.Optional(PluginsCatalogGetResultSchema),
+});
+
 /** Trusted official-catalog or acknowledged ClawHub install request. */
 export const PluginsInstallParamsSchema = Type.Union([
   closedObject({
@@ -573,6 +592,7 @@ export type PluginsInspectResult = Static<typeof PluginsInspectResultSchema>;
 export type PluginHookGrant = Static<typeof PluginHookGrantSchema>;
 export type PluginInspectSource = Static<typeof PluginInspectSourceSchema>;
 export type PluginDeclaredSurface = Static<typeof PluginDeclaredSurfaceSchema>;
+export type PluginInstalledComponents = Static<typeof PluginInstalledComponentsSchema>;
 export type PluginOperatorGrants = Static<typeof PluginOperatorGrantsSchema>;
 export type PluginInstallTrust = Static<typeof PluginInstallTrustSchema>;
 export type PluginsSearchParams = Static<typeof PluginsSearchParamsSchema>;
