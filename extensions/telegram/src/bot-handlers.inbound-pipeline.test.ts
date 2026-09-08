@@ -68,4 +68,52 @@ describe("buildTelegramInboundDebounceKey", () => {
       buildTelegramInboundDebounceConversationKey({ chatId: 7, threadSpec: { scope: "none" } }),
     ).toBe("7");
   });
+
+  it("isolates private DM topics by thread id", () => {
+    const dmTopic100 = buildTelegramInboundDebounceConversationKey({
+      chatId: 7,
+      threadSpec: { id: 100, scope: "dm" },
+    });
+    const dmTopic200 = buildTelegramInboundDebounceConversationKey({
+      chatId: 7,
+      threadSpec: { id: 200, scope: "dm" },
+    });
+    const dmNoThread = buildTelegramInboundDebounceConversationKey({
+      chatId: 7,
+      threadSpec: { scope: "dm" },
+    });
+    const forumTopic100 = buildTelegramInboundDebounceConversationKey({
+      chatId: 7,
+      threadSpec: { id: 100, scope: "forum" },
+    });
+
+    // Distinct DM topics get distinct keys
+    expect(dmTopic100).toBe("7:dm-topic:100");
+    expect(dmTopic200).toBe("7:dm-topic:200");
+    expect(dmTopic100).not.toBe(dmTopic200);
+
+    // DM with no thread stays chat-scoped
+    expect(dmNoThread).toBe("7");
+    expect(dmTopic100).not.toBe(dmNoThread);
+
+    // DM topic and forum topic with same id do not collide
+    expect(dmTopic100).not.toBe(forumTopic100);
+
+    // Full debounce keys differ across DM topics
+    expect(
+      buildTelegramInboundDebounceKey({
+        accountId: "default",
+        conversationKey: dmTopic100,
+        senderId: "42",
+        debounceLane: "default",
+      }),
+    ).not.toBe(
+      buildTelegramInboundDebounceKey({
+        accountId: "default",
+        conversationKey: dmTopic200,
+        senderId: "42",
+        debounceLane: "default",
+      }),
+    );
+  });
 });
