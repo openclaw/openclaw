@@ -529,18 +529,19 @@ export function createCrabboxWorkerProvider(
             context.assertCurrent();
           };
           assertCurrent();
-          const binaries = new Set(
-            context.profiles.map((profile) => resolveBinary(parseCrabboxProfile(profile).binary)),
-          );
-          if (binaries.size !== 1) {
-            warn(
-              "Crabbox warm-image maintenance requires one configured CLI executable; retained images were not changed. Check cloud worker profile binary settings.",
-            );
-            return;
-          }
-          // The standard CLI shares its process-configured catalog across backend profiles.
-          // Checkpoint records, rather than the current profile, own native deletion routing.
-          await warmImages.maintain({ binary: [...binaries][0]!, signal, assertCurrent });
+          // Records have no binary owner: try sorted executables until deletion or all report absent.
+          // Crabbox prints `checkpoint absent id=<id>` with exit 0 (internal/cli/checkpoint.go).
+          await warmImages.maintain({
+            binaries: [
+              ...new Set(
+                context.profiles.map((profile) =>
+                  resolveBinary(parseCrabboxProfile(profile).binary),
+                ),
+              ),
+            ],
+            signal,
+            assertCurrent,
+          });
         })
         .finally(() => {
           maintenanceInFlight = undefined;
