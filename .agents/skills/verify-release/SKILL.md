@@ -60,9 +60,11 @@ Use these checks only for the regular orchestrated release track.
    - Check the Plugin ClawHub Release workflow conclusion and publish job count.
    - Use OpenClaw itself for live registry proof:
      `openclaw plugins search <known-plugin> --json`.
-   - Install one official plugin from ClawHub in an isolated HOME:
-     `openclaw plugins install clawhub:@openclaw/matrix --pin`.
-     Prefer `matrix` unless that plugin is not in the expected set.
+   - Install one official plugin at the exact requested release version from
+     ClawHub in an isolated HOME:
+     `openclaw plugins install clawhub:@openclaw/matrix@<VERSION>`.
+     Prefer `matrix` unless that plugin is not in the expected set. ClawHub
+     versions belong in the spec; `--pin` is only supported for npm installs.
 5. Release workflows:
    - Verify conclusions for release notes evidence links:
      Full Release Validation, OpenClaw Release Checks, OpenClaw NPM Release,
