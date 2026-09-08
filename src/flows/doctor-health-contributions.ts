@@ -22,6 +22,7 @@ import {
   resolveDoctorMode,
   resolveDoctorWorkspaceDir,
 } from "./doctor-health-contribution-utils.js";
+import { recordDoctorHealthWarnings } from "./doctor-health-contribution.js";
 import { resolveFinalDoctorHealthContributions } from "./doctor-health-contributions-final.js";
 import { resolveInitialDoctorHealthContributions } from "./doctor-health-contributions-initial.js";
 import { normalizeHealthCheck } from "./health-check-adapter.js";
@@ -537,7 +538,9 @@ async function runDoctorHealthContributionList(
         throw error;
       }
       const { note } = await loadNoteModule();
-      note(`${contribution.id} run failed: ${scrubDoctorErrorMessage(error)}`, "Doctor warnings");
+      const message = `${contribution.id} run failed: ${scrubDoctorErrorMessage(error)}`;
+      note(message, "Doctor warnings");
+      recordDoctorHealthWarnings(ctx, [], [message]);
     }
   }
 }
