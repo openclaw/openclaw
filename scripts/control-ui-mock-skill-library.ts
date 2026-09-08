@@ -231,31 +231,13 @@ function installSkillLibraryMock(
       }
       if (params.action === "commit") {
         uploads.delete(params.uploadId ?? "");
-        respond({
-          state: "published",
-          target: "personal",
-          entry: {
-            skillId: `mock-uploaded-${upload.slug}`,
-            slug: upload.slug,
-            name: `s_${upload.slug.replaceAll("-", "_").slice(0, 24)}`,
-            description: "Imported archive fixture",
-            ownerProfileId: viewer,
-            ownerLabel: viewer === "profile-alice" ? "Alice" : "Bob",
-            authorProfileId: viewer,
-            shared: false,
-            enabled: true,
-            removed: false,
-            revision: "f".repeat(64),
-            createdAt: Date.now(),
-            updatedAt: Date.now(),
-            canEdit: true,
-          },
-          sessionActivation: "new-sessions",
-          nextAction: "Imported for new sessions; attach it explicitly to use it here.",
-        });
-        return;
+        params.slug = upload.slug;
+        params.content = `---\nname: ${upload.slug}\ndescription: Imported archive fixture\n---\n\nReview the source material before drafting.\n`;
+        params.files = [];
+        method = "skills.library.save";
       }
     }
+
     const current = params.skillId ? entries.get(params.skillId) : undefined;
     if (
       params.skillId &&

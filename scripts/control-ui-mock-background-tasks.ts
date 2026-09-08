@@ -1,3 +1,9 @@
+import type {
+  TaskSummary,
+  TasksListParams,
+} from "../packages/gateway-protocol/src/schema/tasks.js";
+import type { ControlUiMockGateway } from "../ui/src/test-helpers/control-ui-e2e.ts";
+
 function historyMessage(role: "assistant" | "user", text: string, timestamp: number) {
   return {
     content: [{ type: "text", text }],
@@ -8,14 +14,14 @@ function historyMessage(role: "assistant" | "user", text: string, timestamp: num
   };
 }
 
-function finishedTask(n: number, now: number, sessionKey: string) {
+function finishedTask(n: number, now: number, sessionKey: string): TaskSummary {
   const status = n === 3 ? "failed" : n === 4 ? "cancelled" : n === 5 ? "timed_out" : "completed";
-  const task = {
+  const task: TaskSummary = {
     id: `task-mock-finished-${n}`,
     taskId: `task-mock-finished-${n}`,
     status,
     runtime: "subagent",
-    agentId: "openclaw-mock",
+    agentId: "main",
     title: `Finished mock task number ${n} with a fairly long title`,
     createdAt: now - n * 600_000,
     startedAt: now - n * 600_000,
@@ -41,31 +47,18 @@ function finishedTask(n: number, now: number, sessionKey: string) {
   };
 }
 
-function taskDetailCase(task: { id: string; title: string } & Record<string, unknown>) {
-  return {
-    match: { taskId: task.id },
-    response: {
-      task: {
-        ...task,
-        prompt: `Inspect ${task.title.toLowerCase()} and report the current execution path.`,
-      },
-    },
-  };
-}
-
 export function buildBackgroundTasksMock(baseTime: number) {
   const now = Date.now();
   const taskSessionKey = "agent:openclaw-mock:subagent:mock-task-1";
-  const secondTaskSessionKey = "agent:openclaw-mock:subagent:mock-task-2";
   const requesterSessionKey = "agent:main:main";
   const cliSessionKey = "agent:main:production-export";
-  const tasks = [
+  const tasks: TaskSummary[] = [
     {
       id: "task-mock-queued",
       taskId: "task-mock-queued",
       status: "queued",
       runtime: "subagent",
-      agentId: "openclaw-mock",
+      agentId: "main",
       title: "Capture the narrow mobile layout",
       createdAt: now - 8_000,
       updatedAt: now - 8_000,
@@ -97,7 +90,7 @@ export function buildBackgroundTasksMock(baseTime: number) {
       kind: "exec",
       status: "running",
       runtime: "cli",
-      agentId: "openclaw-mock",
+      agentId: "main",
       title: "Audit gateway event scope guards",
       createdAt: now - 95_000,
       startedAt: now - 95_000,
@@ -114,7 +107,8 @@ export function buildBackgroundTasksMock(baseTime: number) {
     finishedTask(5, now, requesterSessionKey),
   ];
   return {
-    sessions: [taskSessionKey, secondTaskSessionKey].map((key) => ({ key })),
+    tasks,
+    sessions: [taskSessionKey].map((key) => ({ key })),
     sessionTranscripts: {
       [taskSessionKey]: {
         messages: [
@@ -131,110 +125,75 @@ export function buildBackgroundTasksMock(baseTime: number) {
         ],
         thinkingLevel: null,
       },
-      [secondTaskSessionKey]: {
-        messages: [
-          historyMessage(
-            "user",
-            "Audit the gateway task-event scope guards.",
-            baseTime + 41 * 60_000,
-          ),
-          historyMessage(
-            "assistant",
-            "Comparing requester, owner, and child-session event routing.",
-            baseTime + 41 * 60_000 + 6_000,
-          ),
-        ],
-        thinkingLevel: null,
-      },
-    },
-    methodResponses: {
-      // Subagents exercise their activity rows; the detached CLI task exercises
-      // the aggregate status row that production shows after a foreground turn.
-      "tasks.list": {
-        cases: [
-          {
-            match: { status: ["queued", "running"], sessionKey: requesterSessionKey },
-            response: {
-              tasks: tasks.filter(
-                (task) =>
-                  task.sessionKey === requesterSessionKey &&
-                  (task.status === "queued" || task.status === "running"),
-              ),
-            },
-          },
-          {
-            match: {
-              status: ["completed", "failed", "timed_out", "cancelled"],
-              sessionKey: requesterSessionKey,
-              sortBy: "endedAt",
-            },
-            response: {
-              tasks: tasks.filter(
-                (task) =>
-                  task.sessionKey === requesterSessionKey &&
-                  (task.status === "completed" ||
-                    task.status === "failed" ||
-                    task.status === "timed_out" ||
-                    task.status === "cancelled"),
-              ),
-            },
-          },
-          {
-            match: { status: ["queued", "running"], sessionKey: cliSessionKey },
-            response: {
-              tasks: tasks.filter(
-                (task) =>
-                  task.sessionKey === cliSessionKey &&
-                  (task.status === "queued" || task.status === "running"),
-              ),
-            },
-          },
-          {
-            match: { status: ["queued", "running"], limit: 500 },
-            response: {
-              tasks: tasks.filter((task) => task.status === "queued" || task.status === "running"),
-            },
-          },
-          {
-            match: {
-              status: ["completed", "failed", "timed_out", "cancelled"],
-              sortBy: "endedAt",
-              limit: 200,
-            },
-            response: {
-              tasks: tasks.filter(
-                (task) =>
-                  task.status === "completed" ||
-                  task.status === "failed" ||
-                  task.status === "timed_out" ||
-                  task.status === "cancelled",
-              ),
-            },
-          },
-          { match: { limit: 500 }, response: { tasks } },
-          // Production scopes chat task queries to their session. The empty
-          // fallback prevents main-session work from appearing in unrelated chats.
-          { response: { tasks: [] } },
-        ],
-      },
-      "tasks.get": { cases: tasks.map(taskDetailCase) },
-      "tasks.cancel": {
-        cases: tasks.map((task) => ({
-          match: { taskId: task.id },
-          response: {
-            found: true,
-            cancelled: task.status === "queued" || task.status === "running",
-            reason:
-              task.status === "queued" || task.status === "running"
-                ? "Cancelled from the Control UI mock."
-                : "Task is already terminal.",
-            task:
-              task.status === "queued" || task.status === "running"
-                ? { ...task, status: "cancelled", endedAt: now, updatedAt: now }
-                : task,
-          },
-        })),
-      },
     },
   };
+}
+
+function installBackgroundTasksMock(seed: TaskSummary[]): void {
+  const gateway = (window as Window & { openclawControlUiE2eGateway?: ControlUiMockGateway })
+    .openclawControlUiE2eGateway;
+  if (!gateway) {
+    return;
+  }
+  const tasks = new Map(seed.map((task) => [task.id, task]));
+  gateway.setRequestHandler("tasks.list", ({ params: input, respond }) => {
+    const params = (input ?? {}) as TasksListParams;
+    const statuses = typeof params.status === "string" ? [params.status] : params.status;
+    const sortBy = params.sortBy ?? "updatedAt";
+    const rows = Array.from(tasks.values()).filter(
+      (task) =>
+        (!params.sessionKey ||
+          [task.sessionKey, task.childSessionKey, task.ownerKey].includes(params.sessionKey)) &&
+        (params.sessionKey || !params.agentId || task.agentId === params.agentId) &&
+        (!statuses || statuses.includes(task.status)),
+    );
+    rows.sort((a, b) => Number(b[sortBy] ?? 0) - Number(a[sortBy] ?? 0));
+    const offset = Number(params.cursor ?? 0);
+    const limit = params.limit ?? 500;
+    respond({
+      tasks: rows.slice(offset, offset + limit),
+      ...(offset + limit < rows.length ? { nextCursor: String(offset + limit) } : {}),
+    });
+  });
+  gateway.setRequestHandler("tasks.get", ({ params: input, respond }) => {
+    const task = tasks.get((input as { taskId: string }).taskId);
+    respond(
+      task
+        ? {
+            task: {
+              ...task,
+              prompt: `Inspect ${task.title?.toLowerCase()} and report the current execution path.`,
+            },
+          }
+        : { __mockError: { code: "INVALID_REQUEST", message: "Mock task not found." } },
+    );
+  });
+  gateway.setRequestHandler("tasks.cancel", ({ params: input, respond, emit }) => {
+    const task = tasks.get((input as { taskId: string }).taskId);
+    if (!task) {
+      respond({ found: false, cancelled: false, reason: "Mock task not found." });
+      return;
+    }
+    const cancelled = task.status === "queued" || task.status === "running";
+    if (cancelled) {
+      task.status = "cancelled";
+      task.endedAt = Date.now();
+      task.updatedAt = task.endedAt;
+      task.progressSummary = undefined;
+      task.terminalSummary = "Cancelled from the Control UI mock.";
+    }
+    respond({
+      found: true,
+      cancelled,
+      reason: cancelled ? task.terminalSummary : "Task is already terminal.",
+      task,
+    });
+    if (cancelled) {
+      emit("task", { action: "upserted", task });
+    }
+  });
+}
+
+export function backgroundTasksMockInitScript(baseTime: number): string {
+  return `(() => { const __name = (target) => target; (${installBackgroundTasksMock.toString()})(${JSON.stringify(buildBackgroundTasksMock(baseTime).tasks)}); })();`;
 }

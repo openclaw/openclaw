@@ -216,45 +216,14 @@ export function buildChatAttachmentHistory(baseTime: number): unknown[] {
       sizeBytes: assetSize(fileName),
     },
   });
-  const sectionTitle = (text: string, timestamp: number) => ({
+  const textMessage = (text: string, timestamp: number) => ({
     role: "assistant",
     content: [{ type: "text", text }],
     timestamp,
   });
-  const leadIn = Array.from({ length: 10 }, (_, index) => [
-    {
-      role: "user",
-      content: [
-        {
-          type: "text",
-          text: `Review batch ${index + 1} of the launch materials and keep the visual findings grouped by file type.`,
-        },
-      ],
-      timestamp: baseTime - (20 - index * 2) * 60_000,
-    },
-    {
-      role: "assistant",
-      content: [
-        {
-          type: "text",
-          text: `Batch ${index + 1} is indexed. I kept the source labels and accessibility notes so this long transcript can exercise virtualized remounts.`,
-        },
-      ],
-      timestamp: baseTime - (19 - index * 2) * 60_000,
-    },
-  ]).flat();
-  const followUp = Array.from({ length: 8 }, (_, index) => ({
+  const leadIn = Array.from({ length: 20 }, (_, index) => ({
+    ...textMessage(`Attachment review ${index + 1}.`, baseTime - (20 - index) * 60_000),
     role: index % 2 === 0 ? "user" : "assistant",
-    content: [
-      {
-        type: "text",
-        text:
-          index % 2 === 0
-            ? `Compare the attachment previews after scroll pass ${index / 2 + 1}.`
-            : "The preview dimensions and download labels remain stable after the virtualized row remounted.",
-      },
-    ],
-    timestamp: baseTime + (20 + index) * 60_000,
   }));
   return [
     ...leadIn,
@@ -282,7 +251,7 @@ export function buildChatAttachmentHistory(baseTime: number): unknown[] {
       ],
       timestamp: baseTime,
     },
-    sectionTitle("Documents", baseTime + 1),
+    textMessage("Documents", baseTime + 1),
     {
       role: "assistant",
       content: [
@@ -299,7 +268,7 @@ export function buildChatAttachmentHistory(baseTime: number): unknown[] {
       ],
       timestamp: baseTime + 2,
     },
-    sectionTitle("File icon families", baseTime + 3),
+    textMessage("File icon families", baseTime + 3),
     {
       role: "assistant",
       content: [
@@ -314,13 +283,13 @@ export function buildChatAttachmentHistory(baseTime: number): unknown[] {
       ],
       timestamp: baseTime + 4,
     },
-    sectionTitle("HTML", baseTime + 5),
+    textMessage("HTML", baseTime + 5),
     {
       role: "assistant",
       content: [documentAttachment("preview.html", "text/html")],
       timestamp: baseTime + 6,
     },
-    sectionTitle("CSV / XLSX", baseTime + 7),
+    textMessage("CSV / XLSX", baseTime + 7),
     {
       role: "assistant",
       content: [
@@ -333,7 +302,7 @@ export function buildChatAttachmentHistory(baseTime: number): unknown[] {
       ],
       timestamp: baseTime + 8,
     },
-    sectionTitle("Before — current generic delivery cards", baseTime + 9),
+    textMessage("Before — current generic delivery cards", baseTime + 9),
     {
       role: "assistant",
       content: [
@@ -350,7 +319,7 @@ export function buildChatAttachmentHistory(baseTime: number): unknown[] {
       ],
       timestamp: baseTime + 10,
     },
-    sectionTitle("After — approved playback and silent fallback", baseTime + 11),
+    textMessage("After — approved playback and silent fallback", baseTime + 11),
     {
       role: "assistant",
       content: [
@@ -397,13 +366,13 @@ export function buildChatAttachmentHistory(baseTime: number): unknown[] {
       ],
       timestamp: baseTime + 12,
     },
-    sectionTitle("Archive", baseTime + 13),
+    textMessage("Archive", baseTime + 13),
     {
       role: "assistant",
       content: [documentAttachment("bundle.zip", "application/zip")],
       timestamp: baseTime + 14,
     },
-    sectionTitle("Unavailable / failed / removed", baseTime + 15),
+    textMessage("Unavailable / failed / removed", baseTime + 15),
     {
       role: "assistant",
       content: [
@@ -437,7 +406,6 @@ export function buildChatAttachmentHistory(baseTime: number): unknown[] {
       ],
       timestamp: baseTime + 16,
     },
-    ...followUp,
   ];
 }
 

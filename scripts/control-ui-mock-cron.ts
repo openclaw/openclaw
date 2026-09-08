@@ -84,8 +84,6 @@ export function buildCronMocks(baseTime: number, options: { richAttention?: bool
       lastDurationMs: 8_420,
       consecutiveErrors: 2,
       lastDeliveryStatus: "not-requested",
-      lastFailureNotificationDelivered: true,
-      lastFailureNotificationDeliveryStatus: "delivered",
     },
   };
   const extraFailedJobs: CronJob[] = richAttention
@@ -230,7 +228,7 @@ export function buildCronMocks(baseTime: number, options: { richAttention?: bool
     durationMs: job.state?.lastDurationMs,
     error: job.state?.lastError,
     deliveryStatus: "not-requested",
-    model: index === 1 ? "claude-sonnet-4-6" : "gpt-5.6-sol",
+    model: index === 1 ? "claude-sonnet-4-6" : "gpt-5",
     provider: index === 1 ? "anthropic" : "openai",
   }));
   const runs: CronRunLogEntry[] = [
@@ -260,7 +258,7 @@ export function buildCronMocks(baseTime: number, options: { richAttention?: bool
       summary: "Classified 23 messages and prepared 6 replies.",
       deliveryStatus: "not-requested",
       deliverySuppressionReason: "Delivery mode is none for this inbox-only automation.",
-      model: "gpt-5.6-sol",
+      model: "gpt-5",
       provider: "openai",
     },
   ];
@@ -276,7 +274,7 @@ export function buildCronMocks(baseTime: number, options: { richAttention?: bool
       durationMs: 42_000 + index * 2_500,
       summary: `Completed an on-demand run for ${job.name}.`,
       deliveryStatus: "not-requested",
-      model: "gpt-5.6-sol",
+      model: "gpt-5",
       provider: "openai",
     },
   }));

@@ -36,11 +36,15 @@ import {
   resolveSourcePackageAliasesForVite,
   resolveTsconfigPathAliasesForVite,
 } from "../ui/vite.config.ts";
+import { approvalMockInitScript } from "./control-ui-mock-approvals.ts";
 import {
   buildChatAttachmentHistory,
   createChatAttachmentFixturePlugin,
 } from "./control-ui-mock-attachments.ts";
-import { buildBackgroundTasksMock } from "./control-ui-mock-background-tasks.ts";
+import {
+  backgroundTasksMockInitScript,
+  buildBackgroundTasksMock,
+} from "./control-ui-mock-background-tasks.ts";
 import {
   buildChannelsPairingMock,
   buildChannelsStatusMock,
@@ -50,13 +54,14 @@ import { buildCronMocks } from "./control-ui-mock-cron.ts";
 import { createStandaloneMockIsolationPlugins } from "./control-ui-mock-isolation.ts";
 import {
   buildPluginCatalogMock,
-  buildPluginInspectMock,
-  buildPluginLifecycleMocks,
-  buildPluginSetEnabledMock,
+  pluginLifecycleMockInitScript,
 } from "./control-ui-mock-plugins.ts";
 import { createControlUiPreviewInitScript } from "./control-ui-mock-preview.ts";
 import { skillLibraryMockInitScript } from "./control-ui-mock-skill-library.ts";
-import { buildSkillWorkshopMocks } from "./control-ui-mock-skill-workshop.js";
+import {
+  buildSkillWorkshopMocks,
+  skillWorkshopMockInitScript,
+} from "./control-ui-mock-skill-workshop.js";
 
 type CliOptions = {
   allowedHosts: string[];
@@ -403,7 +408,7 @@ function sessionRow(
   const { model, modelProvider, ...extra } = options;
   return createControlUiSessionRow(key, label, updatedAt, {
     contextTokens: 200_000,
-    model: model ?? "gpt-5.6-luna",
+    model: model ?? "gpt-5-mini",
     modelProvider: modelProvider ?? "openai",
     ...extra,
   });
@@ -414,7 +419,7 @@ function sessionsListResponse(sessions: Array<{ key: string }>, options: Session
     count: sessions.length,
     defaults: {
       contextTokens: 200_000,
-      model: "gpt-5.6-luna",
+      model: "gpt-5-mini",
       modelProvider: "openai",
     },
     hasMore: options.hasMore,
@@ -498,10 +503,10 @@ function buildActivitySessionRows(baseTime: number) {
     molty: { type: "agent", id: "profile-molty", label: "Molty" },
     riley: { type: "human", id: "presence-riley", label: "Riley" },
     colin: { type: "human", id: "presence-colin", label: "Colin" },
-    patricia: {
+    patrick: {
       type: "human",
       id: "presence-patricia",
-      label: "patricia.erichsen@example.com",
+      label: "Patrick",
     },
     unresolved: { type: "human", id: "147591189530201337" },
   } as const;
@@ -512,16 +517,16 @@ function buildActivitySessionRows(baseTime: number) {
     ["api-notes", "Gateway API notes", owners.molty, 20 * 60_000],
     ["design-review", "Activity feed design review", owners.colin, hour],
     ["archive-audit", "Archive retention audit", owners.unresolved, 3 * hour],
-    ["support-handoff", "Support handoff", owners.patricia, 6 * hour],
+    ["support-handoff", "Support handoff", owners.patrick, 6 * hour],
     ["mobile-smoke", "Mobile layout smoke test", owners.riley, 18 * hour],
     ["provider-matrix", "Provider matrix cleanup", owners.molty, 30 * hour],
     ["docs-pass", "Operator docs pass", owners.colin, 2 * day],
-    ["queue-review", "Queue behavior review", owners.patricia, 2.5 * day],
+    ["queue-review", "Queue behavior review", owners.patrick, 2.5 * day],
     ["identity-trace", "Identity trace", owners.unresolved, 3 * day],
     ["channel-followup", "Channel delivery follow-up", owners.riley, 4 * day],
     ["tooling-refresh", "Tooling refresh", owners.molty, 5 * day],
     ["fixture-polish", "Mock fixture polish", owners.colin, 6 * day],
-    ["weekly-summary", "Weekly activity summary", owners.patricia, 6.5 * day],
+    ["weekly-summary", "Weekly activity summary", owners.patrick, 6.5 * day],
   ] as const;
   const automationKeys = new Set(["release-check", "api-notes", "design-review"]);
   return fixtures.map(([key, label, owner, age]) =>
@@ -819,8 +824,8 @@ function buildModelProviderMocks(baseTime: number) {
         supportsTools: true,
       },
       {
-        id: "gpt-5.6-luna",
-        name: "GPT-5.6 Luna",
+        id: "gpt-5-mini",
+        name: "GPT-5 Mini",
         provider: "openai",
         available: true,
         contextWindow: 200_000,
@@ -828,13 +833,12 @@ function buildModelProviderMocks(baseTime: number) {
           { id: "low", label: "Low" },
           { id: "medium", label: "Medium" },
           { id: "high", label: "High" },
-          { id: "xhigh", label: "Extra high" },
         ],
         thinkingDefault: "medium",
         reasoning: true,
         supportsTools: true,
       },
-      { id: "gpt-5.6-sol", name: "GPT-5.6 Sol", provider: "openai", available: true },
+      { id: "gpt-5", name: "GPT-5", provider: "openai", available: true },
       { id: "gemini-3-pro", name: "Gemini 3 Pro", provider: "google", available: false },
       { id: "openrouter/auto", name: "OpenRouter Auto", provider: "openrouter", available: true },
     ],
@@ -912,7 +916,7 @@ function buildProfileUsageMocks(baseTime: number) {
           },
           {
             provider: "openai",
-            model: "gpt-5.6-luna",
+            model: "gpt-5-mini",
             count: 4_000,
             totals: usageCostTotals(Math.round(lifetimeTokens * 0.3)),
           },
@@ -1322,58 +1326,19 @@ function chatHistoryMessage(role: "assistant" | "user", text: string, timestamp:
 }
 
 function buildScrollableChatHistory(baseTime: number): unknown[] {
-  const topics = [
-    [
-      "Audit the release checklist against the current branch.",
-      "The checklist has three sections: packaging, migration safety, and operator-visible proof.",
-    ],
-    [
-      "Summarize the accessibility review.",
-      "## Accessibility review\n\n- Keyboard order is stable.\n- Images have descriptive labels.\n- The narrow layout preserves the composer.",
-    ],
-    [
-      "Compare the desktop and phone captures.",
-      "Desktop keeps the context rail open; the phone layout moves navigation into a drawer without changing the transcript order.",
-    ],
-    [
-      "Record the risky edge cases.",
-      "The main risks are stale streaming state, attachments remounting without their source URL, and terminal runs losing their visible outcome.",
-    ],
-    [
-      "What changed in the provider defaults?",
-      "The session uses **GPT-5.6 Luna** with medium reasoning. The picker also exposes low, high, and extra-high choices.",
-    ],
-    [
-      "Prepare a compact handoff.",
-      "### Handoff\n\n1. Reproduce the surface.\n2. Verify its gateway shape.\n3. Capture both themes and widths.",
-    ],
-    [
-      "Check whether the scheduled digest is healthy.",
-      "The digest last completed successfully and its next weekday run is scheduled. The calendar sync still needs attention.",
-    ],
-    [
-      "Review the channel dashboard.",
-      "WhatsApp and Telegram are connected. Discord is configured but paused with an actionable intent warning.",
-    ],
-    [
-      "List the plugin states.",
-      "Bundled channel plugins are enabled, one installed plugin is disabled, and two catalog plugins remain available to install.",
-    ],
-    [
-      "Finish with a realistic status note.",
-      "The fixture now spans long-form Markdown, session activity, tools, model controls, and terminal outcomes without using private data.",
-    ],
-  ] as const;
-  const messages: unknown[] = topics.flatMap(([request, response], index) => {
+  const messages: unknown[] = Array.from({ length: 10 }, (_, index) => {
     const timestamp = baseTime + index * 3 * 60_000;
     return [
-      chatHistoryMessage("user", request, timestamp),
-      chatHistoryMessage("assistant", response, timestamp + 35_000),
+      chatHistoryMessage("user", `Review section ${index + 1}.`, timestamp),
+      chatHistoryMessage(
+        "assistant",
+        `## Section ${index + 1}\n\n- Source reviewed.\n- **Follow-up:** capture the result.`,
+        timestamp + 35_000,
+      ),
     ];
-  });
+  }).flat();
 
-  // A complete tool-bearing run exercises the collapsed activity rollup and
-  // the explicit tool-call/result pairing used by current transcript code.
+  // Paired tool calls/results exercise the collapsed activity rollup.
   const workTurnBase = baseTime + 31 * 60_000;
   messages.push(
     chatHistoryMessage(
@@ -1417,16 +1382,12 @@ function buildScrollableChatHistory(baseTime: number): unknown[] {
           type: "tool_result",
           id: "mock-work-exec",
           name: "exec",
-          text: "12 focused checks passed.",
+          text: "Synthetic command completed.",
         },
       ],
       timestamp: workTurnBase + 95_000,
     },
-    chatHistoryMessage(
-      "assistant",
-      "Refactored the render guard and reran the suite; all 12 tests pass.",
-      workTurnBase + 172_000,
-    ),
+    chatHistoryMessage("assistant", "The sample command completed.", workTurnBase + 172_000),
     {
       role: "assistant",
       content: [
@@ -1479,14 +1440,11 @@ function buildApprovalChatHistory(baseTime: number): unknown[] {
       __openclaw: { id: "approval-analysis", runId, seq: 1 },
     },
     {
-      role: "assistant",
-      content: [
-        {
-          type: "text",
-          text: "The export requires operator approval before it can leave the mock workstation.",
-        },
-      ],
-      timestamp: baseTime + 45_000,
+      ...chatHistoryMessage(
+        "assistant",
+        "The export requires operator approval before it can leave the mock workstation.",
+        baseTime + 45_000,
+      ),
       __openclaw: { id: "approval-wait", runId, seq: 2 },
     },
     {
@@ -1502,26 +1460,6 @@ function buildApprovalChatHistory(baseTime: number): unknown[] {
   ];
 }
 
-function buildParentChatHistory(baseTime: number): unknown[] {
-  return [
-    chatHistoryMessage(
-      "user",
-      "Organize the filing research and delegate receipt checks.",
-      baseTime,
-    ),
-    chatHistoryMessage(
-      "assistant",
-      "I split the work into source verification, receipt classification, and a final summary. The receipt worker is still active in the child-session tree.",
-      baseTime + 30_000,
-    ),
-    chatHistoryMessage(
-      "assistant",
-      "Two background tasks completed, one was cancelled after the scope changed, and one timed out waiting for the remote preview.",
-      baseTime + 60_000,
-    ),
-  ];
-}
-
 function buildCancelledChatHistory(baseTime: number): unknown[] {
   const runId = "mock-cancelled-run";
   return [
@@ -1531,27 +1469,21 @@ function buildCancelledChatHistory(baseTime: number): unknown[] {
       baseTime,
     ),
     {
-      role: "assistant",
-      content: [
-        {
-          type: "text",
-          text: "I collected the usage window and started comparing the configured default.",
-        },
-      ],
-      timestamp: baseTime + 15_000,
+      ...chatHistoryMessage(
+        "assistant",
+        "I collected the usage window and started comparing the configured default.",
+        baseTime + 15_000,
+      ),
       __openclaw: { id: "cancelled-partial", runId, seq: 1 },
     },
     {
-      role: "assistant",
-      content: [
-        {
-          type: "text",
-          text: "The provider session expired, so the run stopped before changing any defaults.",
-        },
-      ],
+      ...chatHistoryMessage(
+        "assistant",
+        "The operator cancelled the run before it changed any defaults.",
+        baseTime + 35_000,
+      ),
       stopReason: "stop",
       openclawAbort: { aborted: true, origin: "operator", runId },
-      timestamp: baseTime + 35_000,
       __openclaw: { id: "cancelled-terminal", runId, seq: 2 },
     },
   ];
@@ -2045,7 +1977,7 @@ async function createChatPickerScenario(
       execCwd: "/Users/demo/Projects/openclaw",
       owner: { actor: { type: "human", id: "presence-riley", label: "Riley" } },
       status: "failed",
-      lastRunError: "Model access expired: openai/gpt-5.6-luna",
+      lastRunError: "Model access expired: openai/gpt-5-mini",
     }),
     sessionRow("agent:main:work-openclaw", "OpenClaw work checkout", baseTime - 85_000, {
       createdActor: MOCK_ACTOR_PETER,
@@ -2148,7 +2080,6 @@ async function createChatPickerScenario(
   const profileUsage = buildProfileUsageMocks(Date.now());
   const modelProviders = buildModelProviderMocks(Date.now());
   const skillWorkshop = buildSkillWorkshopMocks(Date.now());
-  const pluginLifecycle = buildPluginLifecycleMocks();
   const richAttention = fixture === "approval";
   const cronMocks = buildCronMocks(Date.now(), { richAttention });
   const updateFixtureNow = Date.now();
@@ -2209,49 +2140,19 @@ async function createChatPickerScenario(
               : fixture === "workboard"
                 ? workboardMocks.sessionKey
                 : "agent:main:main";
+  const summaryHistory = buildFixtureSummaryHistory(
+    baseTime,
+    "Inspect this session.",
+    "The current state is available in the session controls.",
+  );
   const fixtureHistories: Partial<Record<NonNullable<CliOptions["fixture"]>, unknown[]>> = {
     approval: buildApprovalChatHistory(baseTime),
     attachments: buildChatAttachmentHistory(baseTime),
     "code-fences": buildCodeFenceChatHistory(baseTime),
-    dashboards: buildFixtureSummaryHistory(
-      baseTime,
-      "Build a release-health dashboard from the latest checks.",
-      "The dashboard tracks package readiness, channel delivery, and rollback ownership. One check is still running and the remaining cards are current.",
-    ),
-    goal: buildFixtureSummaryHistory(
-      baseTime,
-      "Keep the mobile parity goal moving and show the next concrete step.",
-      "The objective is active. Desktop and phone layouts are mapped; the next step is verifying the expanded goal panel without pushing the composer below the viewport.",
-    ),
-    swarm: buildFixtureSummaryHistory(
-      baseTime,
-      "Research the public-opinion brief in parallel.",
-      "Five workers are covering polling, labor, health, governance, and media signals. Three are active, one completed, and one failed with a visible terminal state.",
-    ),
-    "update-available": buildFixtureSummaryHistory(
-      baseTime,
-      "Check the stable update and preserve the home-server automation.",
-      "A stable package update is available. The automation remains pinned and no update has been started from this fixture.",
-    ),
     "update-blocked": buildCancelledChatHistory(baseTime),
-    "update-failed": buildFixtureSummaryHistory(
-      baseTime,
-      "Explain why the cloud worker update failed.",
-      "The checkout is still active, but the update stopped before replacement because the working tree had local changes. The operator can review those changes and retry.",
-    ),
-    workboard: buildFixtureSummaryHistory(
-      baseTime,
-      "Summarize the product-operations workboard.",
-      "The board separates intake, active work, review, and completed cards, with a compact dashboard face for capture.",
-    ),
-    board: buildFixtureSummaryHistory(
-      baseTime,
-      "Open the standalone board fixture.",
-      "The standalone fixture renders the board canvas without requiring a live session.",
-    ),
   };
   const historyMessages = fixture
-    ? (fixtureHistories[fixture] ?? buildScrollableChatHistory(baseTime))
+    ? (fixtureHistories[fixture] ?? summaryHistory)
     : buildScrollableChatHistory(baseTime);
   const planInFlightRun = {
     runId: PLAN_DEMO_RUN_ID,
@@ -2366,6 +2267,7 @@ async function createChatPickerScenario(
       "sessions.patch",
       "sessions.patchMany",
       "sessions.search",
+      "skills.workshop.read",
       "skills.proposals.apply",
       "skills.proposals.evaluate",
       "skills.proposals.historyScan",
@@ -2431,7 +2333,7 @@ async function createChatPickerScenario(
         ...(fixture === undefined || fixture === "goal" ? { inFlightRun: planInFlightRun } : {}),
       },
       "agent:main:production-export": { messages: buildApprovalChatHistory(baseTime) },
-      "agent:main:tax-research": { messages: buildParentChatHistory(baseTime) },
+      "agent:main:tax-research": { messages: summaryHistory },
       "agent:main:model-budget": { messages: buildCancelledChatHistory(baseTime) },
       "agent:main:archived-launch-notes": {
         messages: buildFixtureSummaryHistory(
@@ -2454,11 +2356,11 @@ async function createChatPickerScenario(
         },
       },
       "agent:main:dashboard:release-health": {
-        messages: fixtureHistories.dashboards ?? [],
+        messages: summaryHistory,
       },
-      "agent:main:home-server": { messages: fixtureHistories["update-available"] ?? [] },
-      "agent:main:cloud-refactor": { messages: fixtureHistories["update-failed"] ?? [] },
-      [workboardMocks.sessionKey]: { messages: fixtureHistories.workboard ?? [] },
+      "agent:main:home-server": { messages: summaryHistory },
+      "agent:main:cloud-refactor": { messages: summaryHistory },
+      [workboardMocks.sessionKey]: { messages: summaryHistory },
     },
     // Lights up the footer facepile and who's-online roster; the email-only
     // entry keeps the roster's no-display-name row exercised.
@@ -2494,7 +2396,8 @@ async function createChatPickerScenario(
       },
       {
         id: "presence-patricia",
-        email: "patricia.erichsen@example.com",
+        name: "Patrick",
+        email: "patrick.erichsen@example.com",
         onlineSince: activityTime - 12 * 60_000,
         lastActivityAt: activityTime - 30_000,
         deviceFamily: "iPhone",
@@ -2504,7 +2407,6 @@ async function createChatPickerScenario(
       },
     ],
     methodResponses: {
-      ...backgroundTasks.methodResponses,
       ...cronMocks,
       "progressCard.get": { card: null },
       "users.self": { profile: selfProfile },
@@ -2829,82 +2731,9 @@ async function createChatPickerScenario(
           },
         ],
       },
-      // Pending exec approvals recover through the same list seam as the real
-      // Inbox. Keep this fixture small enough to inspect both rows at once.
-      "exec.approval.list":
-        fixture === "approval"
-          ? [
-              {
-                id: "mock-production-export-approval",
-                request: {
-                  command: "openclaw export --target production",
-                  agentId: "main",
-                  sessionKey: "agent:main:production-export",
-                  host: "mock-workstation.invalid",
-                  cwd: "/Users/demo/Projects/openclaw",
-                  security: "full",
-                  ask: "on-miss",
-                  allowedDecisions: ["allow-once", "allow-always", "deny"],
-                },
-                createdAtMs: updateFixtureNow - 7 * 60_000,
-                expiresAtMs: updateFixtureNow + 4 * 60 * 60_000,
-              },
-              {
-                id: "mock-worktree-cleanup-approval",
-                request: {
-                  command: "git -C /mock/workspace clean -nd",
-                  agentId: "release",
-                  sessionKey: "agent:main:worktree-cleanup",
-                  host: "mock-workstation.invalid",
-                  cwd: "/mock/workspace",
-                  security: "sandboxed",
-                  ask: "always",
-                  allowedDecisions: ["allow-once", "deny"],
-                },
-                createdAtMs: updateFixtureNow - 6 * 60_000,
-                expiresAtMs: updateFixtureNow + 4 * 60 * 60_000,
-              },
-            ]
-          : [],
       "plugin.approval.list": [],
       "openclaw.approval.list": [],
-      "exec.approval.resolve": { ok: true },
       "plugin.approval.resolve": { ok: true },
-      "approval.resolve": { ok: true },
-      "sessions.messages.subscribe": {
-        cases: [
-          {
-            match: { key: "agent:main:production-export", includeApprovals: true },
-            response: {
-              key: "agent:main:production-export",
-              approvalReplay: {
-                sessionKey: "agent:main:production-export",
-                updatedAtMs: updateFixtureNow - 60_000,
-                truncated: false,
-                approvals: [
-                  {
-                    id: "mock-production-export-approval",
-                    urlPath: "/api/approvals/mock-production-export-approval",
-                    createdAtMs: updateFixtureNow - 7 * 60_000,
-                    expiresAtMs: updateFixtureNow + 4 * 60 * 60_000,
-                    status: "pending",
-                    sourceSessionKey: "agent:main:production-export",
-                    presentation: {
-                      kind: "exec",
-                      commandText: "openclaw export --target production",
-                      commandPreview: "Export the prepared release bundle",
-                      warningText: "This action writes outside the preview workspace.",
-                      host: "mock-workstation.invalid",
-                      agentId: "main",
-                      allowedDecisions: ["allow-once", "allow-always", "deny"],
-                    },
-                  },
-                ],
-              },
-            },
-          },
-        ],
-      },
       "sessions.patch": { ok: true },
       "sessions.diff": buildSessionDiffMock(),
       // The worktrees page assumes the gateway contract shape; without this
@@ -2937,12 +2766,6 @@ async function createChatPickerScenario(
           },
         ],
       },
-      "plugins.list": buildPluginCatalogMock(),
-      "plugins.inspect": buildPluginInspectMock(),
-      "plugins.search": pluginLifecycle.search,
-      "plugins.install": pluginLifecycle.install,
-      "plugins.setEnabled": buildPluginSetEnabledMock(),
-      "plugins.uninstall": pluginLifecycle.uninstall,
       "channels.status": buildChannelsStatusMock(baseTime),
       "channels.pairing.list": buildChannelsPairingMock(baseTime),
       "channels.pairing.approve": {
@@ -2983,13 +2806,6 @@ async function createChatPickerScenario(
       "wizard.start": channelWizard.start,
       "wizard.next": channelWizard.next,
       "wizard.cancel": { status: "cancelled" },
-      "skills.proposals.list": skillWorkshop.list,
-      "skills.proposals.inspect": skillWorkshop.inspect,
-      "skills.proposals.historyStatus": skillWorkshop.historyStatus,
-      "skills.proposals.historyScan": skillWorkshop.historyScan,
-      "skills.proposals.evaluate": skillWorkshop.evaluate,
-      "skills.proposals.apply": skillWorkshop.apply,
-      "skills.proposals.reject": skillWorkshop.reject,
       "skills.proposals.requestRevision": skillWorkshop.requestRevision,
       "usage.cost": profileUsage.cost,
       "sessions.usage": profileUsage.sessions,
@@ -3530,7 +3346,12 @@ async function createMockGatewayPlugin(
   const initScript = escapeScriptContent(createControlUiMockGatewayInitScript(prepared.scenario));
   const sameOriginGatewayScript = escapeScriptContent(createControlUiMockSameOriginGatewayScript());
   const statefulInitScript = escapeScriptContent(
-    createControlUiPreviewInitScript() + skillLibraryMockInitScript(prepared.scenario.models),
+    createControlUiPreviewInitScript() +
+      skillLibraryMockInitScript(prepared.scenario.models) +
+      pluginLifecycleMockInitScript() +
+      skillWorkshopMockInitScript(Date.now()) +
+      backgroundTasksMockInitScript(Date.now()) +
+      approvalMockInitScript(fixture === "approval"),
   );
   const bootstrapBody = JSON.stringify(createControlUiMockBootstrapConfig(prepared.scenario));
   const pluginIconIds = new Set(
@@ -3625,7 +3446,7 @@ async function createMockGatewayPlugin(
     transformIndexHtml(html) {
       return html.replace(
         "</head>",
-        `${attachmentThemeToggle}    <script data-openclaw-control-ui-mock-storage>\n      try {\n        localStorage.setItem("openclaw.i18n.locale", "en");\n        localStorage.setItem("openclaw:control-ui:community-invite", JSON.stringify({ dismissedAtMs: 1770000000000 }));\n      } catch {}\n    </script>\n    <script data-openclaw-control-ui-mock-gateway>\n${sameOriginGatewayScript}\n${initScript}\n${statefulInitScript}\n    </script>\n  </head>`,
+        `${attachmentThemeToggle}    <script data-openclaw-control-ui-mock-storage>\n      try {\n        localStorage.setItem("openclaw.i18n.locale", "en");\n      } catch {}\n    </script>\n    <script data-openclaw-control-ui-mock-gateway>\n${sameOriginGatewayScript}\n${initScript}\n${statefulInitScript}\n    </script>\n  </head>`,
       );
     },
   };
