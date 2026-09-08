@@ -1129,7 +1129,15 @@ console.log(JSON.stringify({ data }));
     { message: "CI #41 passed.", identity: "missing", accepted: false },
     { message: "CI #41 passed.", identity: "wrong-id", accepted: false },
     { message: "CI #41 passed.", identity: "wrong-repo", accepted: false },
+    { message: "CI #2147483647 passed.", node: "Issue", accepted: true },
+    { message: "CI run #34244092230 passed.", accepted: true },
+    { message: "Related #34244092230.", accepted: false },
+    { message: "CI #34244092230 passed. Fixes #34244092230.", accepted: false },
+    { message: "CI #34244092230 passed.", identity: "missing", accepted: false },
+    { message: "CI #34244092230 passed.", identity: "wrong-id", accepted: false },
+    { message: "CI #34244092230 passed.", identity: "wrong-repo", accepted: false },
   ])("classifies active workflow references without losing issue accounting: %j", (scenario) => {
+    const referenceNumber = Number(scenario.message.match(/#(\d+)/)?.[1]);
     const cwd = mkdtempSync(join(tmpdir(), "openclaw-release-notes-runs-"));
     try {
       git(cwd, ["init", "-q", "-b", "main"]);
@@ -1174,23 +1182,28 @@ console.log(JSON.stringify({ data }));
         gh,
         `#!${process.execPath}\n
 const scenario = ${JSON.stringify(scenario)};
-if (process.argv[3] === "repos/openclaw/openclaw/actions/runs/41") {
-  require("node:fs").appendFileSync("run-requests", "41\\n");
+const referenceNumber = ${referenceNumber};
+if (process.argv[3] === "repos/openclaw/openclaw/actions/runs/" + referenceNumber) {
+  require("node:fs").appendFileSync("run-requests", referenceNumber + "\\n");
   console.log(JSON.stringify(scenario.identity === "missing" ? { message: "Not Found" } : {
-    id: scenario.identity === "wrong-id" ? 42 : 41,
+    id: scenario.identity === "wrong-id" ? referenceNumber + 1 : referenceNumber,
     repository: { full_name: scenario.identity === "wrong-repo" ? "other/repository" : "openclaw/openclaw" },
     pull_requests: [],
   }));
   process.exit(0);
 }
 const query = process.argv.find((arg) => arg.startsWith("query="))?.slice(6) ?? "";
+if ([...query.matchAll(/issueOrPullRequest\\(number: (\\d+)\\)/g)].some(([, number]) => Number(number) > 2147483647)) {
+  console.log(JSON.stringify({ errors: [{ message: "Int cannot represent non 32-bit signed integer value" }] }));
+  process.exit(1);
+}
 const data = {};
 for (const [, alias] of query.matchAll(/(c\\d+): repository/g)) {
   data[alias] = { object: { associatedPullRequests: { nodes: [], pageInfo: { hasNextPage: false } }, author: { user: { login: "steipete" } } } };
 }
 for (const [, alias] of query.matchAll(/(n\\d+): repository/g)) {
   data[alias] = { issueOrPullRequest: scenario.node ? {
-    __typename: scenario.node, number: 41, title: "chore: validation", baseRefName: "main",
+    __typename: scenario.node, number: referenceNumber, title: "chore: validation", baseRefName: "main",
     mergedAt: "2026-01-01T00:00:00Z", mergeCommit: { oid: ${JSON.stringify(target)} }, author: { __typename: "User", login: "steipete" },
     closingIssuesReferences: { nodes: [], pageInfo: { hasNextPage: false } },
     closedByPullRequestsReferences: { nodes: [], pageInfo: { hasNextPage: false } },
@@ -1222,7 +1235,9 @@ console.log(JSON.stringify({ data }));
       );
       if (!scenario.accepted) {
         expect(result.status).not.toBe(0);
-        expect(result.stderr).toContain("GitHub could not resolve source references: #41");
+        expect(result.stderr).toContain(
+          `GitHub could not resolve source references: #${referenceNumber}`,
+        );
         return;
       }
       expect(result.stderr).toBe("");
@@ -1230,11 +1245,13 @@ console.log(JSON.stringify({ data }));
       const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
       expect(manifest.source.references).toBe(scenario.node ? 1 : 0);
       expect(manifest.pullRequests.map((entry: { number: number }) => entry.number)).toEqual(
-        scenario.node === "PullRequest" ? [41] : [],
+        scenario.node === "PullRequest" ? [referenceNumber] : [],
       );
       if (!scenario.node) {
         expect(manifest.directCommits[0].references).toEqual([]);
-        expect(manifest.workflowRuns).toEqual([{ id: 41, repository: "openclaw/openclaw" }]);
+        expect(manifest.workflowRuns).toEqual([
+          { id: referenceNumber, repository: "openclaw/openclaw" },
+        ]);
       } else {
         expect(() => readFileSync(join(cwd, "run-requests"))).toThrow();
       }

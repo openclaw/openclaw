@@ -1743,8 +1743,10 @@ function resolveSourceWorkflowRuns(source, nodes, requiredReferences) {
 
 function resolveReferences(numbers) {
   const nodes = new Map();
-  for (let index = 0; index < numbers.length; index += 40) {
-    const chunk = numbers.slice(index, index + 40);
+  // GitHub's issue-number argument is GraphQL Int; Actions run IDs can exceed it.
+  const issueNumbers = numbers.filter((number) => number <= 2147483647);
+  for (let index = 0; index < issueNumbers.length; index += 40) {
+    const chunk = issueNumbers.slice(index, index + 40);
     const fields = chunk
       .map(
         (number) => `n${number}: repository(owner: "openclaw", name: "openclaw") {
