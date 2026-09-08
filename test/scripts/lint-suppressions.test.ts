@@ -210,6 +210,7 @@ describe("production lint suppressions", () => {
         "src/agents/mcp-http-transport.ts|unicorn/prefer-add-event-listener|6",
         // JSON parser causes can quote reflected credentials from authenticated provider responses.
         "src/agents/provider-http-errors.ts|preserve-caught-error|1",
+        "src/agents/sandbox/environment-mcp.ts|unicorn/prefer-add-event-listener|3",
         "src/agents/sessions/session-manager-entries.ts|unicorn/prefer-structured-clone|1",
         // Context preparation owns the mapped descriptor array until rendering.
         "src/agents/system-prompt.ts|unicorn/no-array-sort|1",

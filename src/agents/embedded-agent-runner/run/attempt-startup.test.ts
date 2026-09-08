@@ -44,14 +44,14 @@ describe("prepareEmbeddedSkills", () => {
     vi.clearAllMocks();
   });
 
-  it("restores environment overrides when later preparation fails", () => {
+  it("restores environment overrides when later preparation fails", async () => {
     const restore = vi.fn();
     mocks.applySkillEnvOverrides.mockReturnValue(restore);
     mocks.mapSandboxSkillEntriesForPrompt.mockImplementation(() => {
       throw new Error("skill prompt mapping failed");
     });
 
-    expect(() =>
+    await expect(
       prepareEmbeddedSkills({
         includeCodeModeSkills: true,
         attempt: { config: {} } as EmbeddedRunAttemptParams,
@@ -59,12 +59,12 @@ describe("prepareEmbeddedSkills", () => {
         sandbox: null,
         sessionAgentId: "main",
       }),
-    ).toThrow("skill prompt mapping failed");
+    ).rejects.toThrow("skill prompt mapping failed");
     expect(restore).toHaveBeenCalledOnce();
   });
 
-  it("does not load skills or apply their environment during settled finalization", () => {
-    const prepared = prepareEmbeddedSkills({
+  it("does not load skills or apply their environment during settled finalization", async () => {
+    const prepared = await prepareEmbeddedSkills({
       includeCodeModeSkills: true,
       attempt: { operation: "settled-tool-finalization" } as EmbeddedRunAttemptParams,
       effectiveWorkspace: "/tmp/workspace",

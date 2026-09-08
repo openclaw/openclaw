@@ -349,7 +349,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
     readPath: path.posix.join(mount.containerPath, "SKILL.md"),
   }));
   if (pluginSandbox?.enabled && !pluginSandbox.readOnlyResourceMounts?.length && skillsSnapshot) {
-    const prepared = prepareEmbeddedSkills({
+    const prepared = await prepareEmbeddedSkills({
       applySkillEnvironment: false,
       includeCodeModeSkills: false,
       attempt: {

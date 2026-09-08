@@ -129,6 +129,7 @@ function evaluateRuntimeRequires(params: RuntimeRequirementEvalParams): boolean 
 export function evaluateRuntimeEligibility(
   params: {
     os?: string[];
+    platform?: string;
     remotePlatforms?: string[];
     always?: boolean;
   } & RuntimeRequirementEvalParams,
@@ -137,7 +138,7 @@ export function evaluateRuntimeEligibility(
   const remotePlatforms = params.remotePlatforms ?? [];
   if (
     osList.length > 0 &&
-    !osList.includes(process.platform) &&
+    !osList.includes(params.platform ?? process.platform) &&
     !remotePlatforms.some((platform) => osList.includes(platform))
   ) {
     return false;
