@@ -86,9 +86,12 @@ describe("terminal file upload", () => {
 
   it("uses declared native CLI path syntax without treating a title as a shell", () => {
     const shell = "claude --resume 12345678…";
-    expect(quoteTerminalUploadPath("/tmp/report.pdf", shell, "native")).toBe("/tmp/report.pdf");
+    expect(quoteTerminalUploadPath("/tmp/report.pdf", shell, "native")).toBe('"/tmp/report.pdf"');
     expect(quoteTerminalUploadPath("/tmp/it's final.pdf", shell, "native")).toBe(
-      "'/tmp/it'\\''s final.pdf'",
+      '"/tmp/it\'s final.pdf"',
+    );
+    expect(quoteTerminalUploadPath('/tmp/reviewer"s $notes`\\draft.pdf', shell, "native")).toBe(
+      '"/tmp/reviewer\\"s \\$notes\\`\\\\draft.pdf"',
     );
     for (const filePath of [
       "C:\\Users\\O'Brien\\$cash%value!\\report final.pdf",

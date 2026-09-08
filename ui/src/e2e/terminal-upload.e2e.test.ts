@@ -84,7 +84,7 @@ suite.define(() => {
           const input = (await gateway.getRequests("terminal.input"))[0]?.params as {
             data?: string;
           };
-          expect(input.data).toBe("'/tmp/openclaw-terminal-upload/reviewer'\\''s notes.pdf'");
+          expect(input.data).toBe('"/tmp/openclaw-terminal-upload/reviewer\'s notes.pdf"');
           expect(input.data).not.toMatch(/[\r\n]/);
           await expect.poll(async () => await page.locator(".tp-upload-card").count()).toBe(0);
           expect(await gateway.getRequests("terminal.upload")).toHaveLength(1);

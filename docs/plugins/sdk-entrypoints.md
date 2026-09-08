@@ -342,7 +342,7 @@ export default definePluginEntry({
   argv, environment, credentials, or a Gateway agent as native account selection.
 
   Paired-node plans that run an interactive CLI directly can declare
-  `uploadPathStyle: "native"` when it accepts POSIX shell-style quoted paths and
+  `uploadPathStyle: "native"` when it accepts double-quoted POSIX paths and
   simple double-quoted Windows drive or UNC paths as file references. Native
   Windows formatting preserves apostrophes and backslashes, and rejects double
   quotes and control characters. Declare the same contract through

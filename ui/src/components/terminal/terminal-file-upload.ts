@@ -1,3 +1,4 @@
+import { containsAsciiControlCharacter } from "@openclaw/normalization-core/string-normalization";
 import type {
   TerminalUploadPathStyle,
   TerminalUploadResult,
@@ -57,8 +58,7 @@ export function quoteTerminalUploadPath(
   uploadPathStyle?: TerminalUploadPathStyle,
 ): string {
   if (uploadPathStyle === "native") {
-    // eslint-disable-next-line no-control-regex -- Native paths must not inject terminal control input.
-    if (/[\u0000-\u001f\u007f]/u.test(filePath)) {
+    if (containsAsciiControlCharacter(filePath)) {
       throw new Error(t("terminal.uploadInvalidNativePath"));
     }
     if (/^(?:[a-z]:[\\/]|\\\\)/iu.test(filePath)) {
@@ -71,7 +71,8 @@ export function quoteTerminalUploadPath(
     if (!filePath.startsWith("/")) {
       throw new Error(t("terminal.uploadInvalidNativePath"));
     }
-    return quotePosixUploadPath(filePath);
+    // Native path readers remove outer quotes and backslash escapes, not shell quote concatenation.
+    return `"${filePath.replace(/[\\"$`]/gu, "\\$&")}"`;
   }
   const shellName = shell.split(/[\\/]/u).pop()?.toLowerCase() ?? "";
   if (/^(?:pwsh|powershell)(?:\.exe)?$/u.test(shellName)) {

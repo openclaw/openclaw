@@ -95,11 +95,21 @@ describe("OpenClawTerminalPanel upload lifecycle", () => {
   });
 
   it.each([
-    { receiver: "shell", shell: "/bin/zsh", uploadPathStyle: undefined },
-    { receiver: "native CLI", shell: "claude --resume 12345678…", uploadPathStyle: "native" },
+    {
+      receiver: "shell",
+      shell: "/bin/zsh",
+      uploadPathStyle: undefined,
+      expectedInput: "'/tmp/openclaw upload/scan final.pdf'",
+    },
+    {
+      receiver: "native CLI",
+      shell: "claude --resume 12345678…",
+      uploadPathStyle: "native",
+      expectedInput: '"/tmp/openclaw upload/scan final.pdf"',
+    },
   ] as const)(
     "uploads dropped files into a $receiver without executing input",
-    async ({ shell, uploadPathStyle }) => {
+    async ({ shell, uploadPathStyle, expectedInput }) => {
       const controller = createTerminalController();
       createGhosttyTerminalMock.mockResolvedValue(controller);
       const requests: Array<{ method: string; params: unknown }> = [];
@@ -155,9 +165,7 @@ describe("OpenClawTerminalPanel upload lifecycle", () => {
           },
         });
       });
-      expect(controller.terminal.paste).toHaveBeenCalledWith(
-        "'/tmp/openclaw upload/scan final.pdf'",
-      );
+      expect(controller.terminal.paste).toHaveBeenCalledWith(expectedInput);
       expect(controller.terminal.paste).not.toHaveBeenCalledWith(expect.stringContaining("\n"));
     },
   );
