@@ -140,7 +140,6 @@ describe("ConfigPage session observer models", () => {
     await writerLoad;
     expect(state.sessionObserverModels).toEqual(writerModels);
 
-    modelCatalogStore.invalidateModelCatalogCache(client);
     selection.selectedId = "main";
     page.requestUpdate();
     await settleLitElement(page);
@@ -184,7 +183,6 @@ describe("ConfigPage session observer models", () => {
     });
     const client = { request } as unknown as GatewayBrowserClient;
     const { page, state, provider } = await mount(client);
-    modelCatalogStore.invalidateModelCatalogCache(client);
     const pending = state.sessionObserverModelsTask.run();
     expect(state.sessionObserverModels).toEqual(original);
     await vi.advanceTimersByTimeAsync(30_000);

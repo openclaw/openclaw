@@ -231,7 +231,7 @@ describe("chat pane composer controls", () => {
       cached: true,
       connected: true,
       error: "metadata unavailable",
-      message: null,
+      message: "Some models could not be refreshed. Open Models to try again.",
     },
     {
       label: "failed without a snapshot",

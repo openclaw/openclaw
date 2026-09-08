@@ -18,14 +18,13 @@ export function renderChatModelCatalogState(
   if (!state || (state.status === "ready" && hasSelectableOptions)) {
     return nothing;
   }
-  if (state.status === "error" && hasOptions) {
-    return nothing;
-  }
   const label =
     state.status === "offline"
       ? t("common.offline")
       : state.status === "error"
-        ? errorLabel
+        ? hasOptions
+          ? t("chat.modelControls.modelsRefreshFailed")
+          : errorLabel
         : state.status === "ready"
           ? t("chat.modelControls.noModelsAvailable")
           : t("chat.modelControls.loadingModels");

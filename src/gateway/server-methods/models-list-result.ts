@@ -3,6 +3,7 @@ import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type {
   ModelChoice,
   ModelsListParams,
+  ModelsListResult,
 } from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import type { RuntimeAuthMaterialization } from "../../agents/auth-profiles/runtime-materializations.js";
@@ -50,6 +51,9 @@ import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snaps
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { loadDeferredCatalog, readPreparedCatalog } from "../server-model-catalog-auth.js";
 import { resolveGatewayModelThinkingProfile } from "../session-utils-model.js";
+import { resolveChatAccountSelection } from "./chat-account-selection.js";
+import type { ChatMetadataReadParams, ChatMetadataSessionEntry } from "./chat-metadata-contract.js";
+import { resolveSessionCatalogProfiles } from "./chat-metadata-session-projection.js";
 import { resolveModelProviderCapabilities } from "./model-provider-capabilities.js";
 import {
   createModelsListAuthProjection,
@@ -71,10 +75,6 @@ type ModelsListEntryWithCapabilities = ModelChoice;
 type ApiKeyProviderCapabilities = {
   providers: ReadonlyMap<string, boolean>;
   resolveProvider(provider: string): string;
-};
-type ModelsListResult = {
-  models: ModelsListEntryWithCapabilities[];
-  providerOutcomes?: ReturnType<typeof projectProviderCatalogOutcomes>;
 };
 type PreparedModelsListResult = {
   read: () => ModelsListResult;
@@ -234,6 +234,7 @@ type BuildModelsListResultParams = {
   source: ModelsListCatalogSource;
   agentId?: string;
   requesterProfileId?: string;
+  readScope?: ChatMetadataReadParams;
   params: ModelsListParams;
   preloadedCatalog?: {
     agentId: string;
@@ -254,6 +255,7 @@ export async function buildModelsListResult(
       "Model catalog changed while preparing this result. Retry the request.",
     );
   }
+  params.readScope?.draftAccountSelection?.assertCurrent();
   return prepared.read();
 }
 
@@ -262,6 +264,14 @@ export async function prepareModelsListResult(
   params: BuildModelsListResultParams,
 ): Promise<PreparedModelsListResult> {
   const { source } = params;
+  const scope = params.readScope;
+  const draft = scope?.draftAccountSelection;
+  const sessionEntry: ChatMetadataSessionEntry | undefined = draft
+    ? { authProfileOverride: draft.authProfileId, authProfileOverrideSource: "user" }
+    : scope?.sessionEntry;
+  const profiles = resolveSessionCatalogProfiles(sessionEntry);
+  const useRequesterDefaults = !scope?.sessionKey && !scope?.sessionEntry;
+  draft?.assertCurrent();
   const currentConfig =
     source.kind === "gateway" ? source.context.getRuntimeConfig : getRuntimeConfig;
   const publishedOwner = source.kind === "published" ? source.owner : undefined;
@@ -348,6 +358,8 @@ export async function prepareModelsListResult(
   const { defaultModel } = preparedCatalog;
   const preparedRuntimeAuthModes = preparedProjectionOwner?.authModes;
   const preparedRuntimeAuthMaterializations = preparedProjectionOwner?.authMaterializations;
+  // Capture authority again after acquisition and before hydrating a personal projection.
+  draft?.assertCurrent();
   const projector =
     (usedPreloadedCatalog ? params.catalogProjector : undefined) ??
     createGatewayAgentModelCatalogProjector({
@@ -365,7 +377,11 @@ export async function prepareModelsListResult(
         ? isPreparedModelCatalogFull(publishedOwner.modelCatalog)
         : ownerSnapshot?.catalogComplete === true,
       // Provider-config inventory describes shared authored configuration, not personal accounts.
-      requesterProfileId: view === "provider-config" ? undefined : params.requesterProfileId,
+      requesterProfileId:
+        view === "provider-config" || !useRequesterDefaults
+          ? undefined
+          : (draft?.owner ?? params.requesterProfileId),
+      ...(view === "provider-config" ? {} : profiles),
       routeResolverFactory: params.routeResolverFactory,
       pluginRegistry: preparedPluginRegistry,
       isCurrent,
@@ -404,9 +420,21 @@ export async function prepareModelsListResult(
     !providerFilter || normalizeProvider(entry.provider) === providerFilter;
   const { routeVariants, providerOutcomes } = projector.snapshot;
   const publicProviderOutcomes = projectProviderCatalogOutcomes(providerOutcomes);
-  const outcomeProjection = publicProviderOutcomes?.length
-    ? { providerOutcomes: publicProviderOutcomes }
-    : {};
+  draft?.assertCurrent();
+  const outcomeProjection = {
+    ...(publicProviderOutcomes?.length ? { providerOutcomes: publicProviderOutcomes } : {}),
+    ...(snapshot.refreshFailed ? { refreshFailed: true } : {}),
+    ...(view === "provider-config" || (!scope && !params.requesterProfileId)
+      ? {}
+      : {
+          accountSelection: resolveChatAccountSelection({
+            authStore: projector.authStore,
+            sessionEntry,
+            requesterProfileId:
+              draft?.owner ?? scope?.requesterProfileId ?? params.requesterProfileId,
+          }),
+        }),
+  };
   const includeProviderCapabilities = params.params.includeProviderCapabilities === true;
   const capableProviders = includeProviderCapabilities
     ? apiKeyProviderCapabilities({ cfg, metadataSnapshot, workspaceDir })

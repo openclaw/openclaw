@@ -140,6 +140,25 @@ whose owner becomes stale during projection is rejected for retry.
   `contextTokens`, and a `local` endpoint classification. It does not expose
   endpoint URLs, headers, credentials, costs or runtime request parameters.
 
+For a conversation picker, pass `sessionKey` to read the session's canonical
+agent and saved account selection. A conflicting `agentId` is rejected. The
+viewer's current account default does not replace a saved session's selection.
+For a new draft, `authProfileId` previews a retained account owned by the
+identified caller with `operator.read` access. It does not save an account
+default. `sessionKey` and `authProfileId` are mutually exclusive.
+
+Session and identified-account results include `accountSelection` display facts
+with the models. Collaborators do not receive another person's private account
+locator. The `provider-config` view remains shared authored inventory and omits
+account selection. `refreshFailed: true` reports a failed acquisition while
+compatible rows remain usable; recovery clears it. A successful empty catalog
+remains empty.
+
+The Gateway advertises `session-scoped-model-catalog` for this contract.
+`chat.metadata` remains available to legacy clients; the Control UI reads models
+directly and keeps commands in its metadata cache. Opening its picker performs a
+passive read, without a model-cache timer or implicit provider refresh.
+
 `preparedOnly: true` and `refresh: true` remain mutually exclusive.
 The Gateway advertises these published-read and details controls as
 `published-model-catalog`. Clients that require this contract must check the

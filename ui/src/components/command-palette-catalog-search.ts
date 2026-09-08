@@ -1,11 +1,6 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
-import type {
-  AgentsListResult,
-  CronJobsListResult,
-  ModelCatalogResult,
-  SkillStatusReport,
-} from "../api/types.ts";
+import type { AgentsListResult, CronJobsListResult, SkillStatusReport } from "../api/types.ts";
 import {
   SETTINGS_SEARCHABLE_SUBPAGE_ROUTES,
   settingsNavigationLabelForRoute,
@@ -15,6 +10,7 @@ import {
 import type { RouteId } from "../app-route-paths.ts";
 import type { NativeDeviceSettingsCapability } from "../app/native-device-settings.ts";
 import { t } from "../i18n/index.ts";
+import { loadModelCatalog } from "../lib/model-catalog-store.ts";
 import type { PluginListResult } from "../lib/plugins/index.ts";
 import { SETTINGS_SEARCH_TARGETS } from "../pages/config/settings-targets.ts";
 import type { IconName } from "./icons.ts";
@@ -325,16 +321,14 @@ export async function loadCommandPaletteCatalogItems(params: {
     requestIfAvailable<SkillStatusReport>("skills.status", { agentId: params.agentId }),
     requestIfAvailable<PluginListResult>("plugins.list", {}),
     params.methodAvailable("models.list")
-      ? params.client
-          .request<ModelCatalogResult>("models.list", {
-            view: "configured",
-            agentId: params.agentId,
-            preparedOnly: true,
-          })
-          .catch(() => {
-            modelRequestFailed = true;
-            return null;
-          })
+      ? loadModelCatalog(params.client, {
+          view: "configured",
+          agentId: params.agentId,
+          preparedOnly: true,
+        }).catch(() => {
+          modelRequestFailed = true;
+          return null;
+        })
       : null,
   ]);
 
