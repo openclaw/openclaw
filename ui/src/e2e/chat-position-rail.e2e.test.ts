@@ -299,7 +299,7 @@ suite.define(() => {
                   ),
               ),
             )
-            .toEqual([8, 12, 20, 28, 40, 28, 20, 12, 8]);
+            .toEqual([8, 12, 16, 24, 32, 24, 16, 12, 8]);
           await expect
             .poll(strokeColors)
             .toEqual(restingColors.map((color, index) => (index === 4 ? colors.text : color)));

@@ -75,7 +75,7 @@
   position: absolute;
   top: 0;
   left: 10px;
-  width: 48px;
+  width: 44px;
   transform: translateY(-50%);
 }
 
@@ -127,7 +127,7 @@
   z-index: 1;
   display: flex;
   align-items: center;
-  width: 48px;
+  width: 44px;
   height: 12px;
   padding: 0;
   border: 0;
@@ -180,22 +180,22 @@
   + .chat-position-rail__marker
   + .chat-position-rail__marker
   .chat-position-rail__tick {
-  width: 20px;
+  width: 16px;
 }
 
 .chat-position-rail__marker:has(+ .chat-position-rail__marker:hover) .chat-position-rail__tick,
 .chat-position-rail__marker:hover + .chat-position-rail__marker .chat-position-rail__tick {
-  width: 28px;
+  width: 24px;
 }
 
 .chat-position-rail__marker:hover .chat-position-rail__tick {
-  width: 40px;
+  width: 32px;
 }
 
 .chat-position-rail__preview {
   position: absolute;
   top: var(--chat-position-preview);
-  left: calc(100% + 4px);
+  left: 100%;
   display: grid;
   width: 200px;
   gap: 4px;
@@ -208,16 +208,6 @@
   font-size: 12px;
   line-height: 1.35;
   transform: translateY(-50%);
-}
-
-/* Keep the pointer path to the preview contiguous across its small gap. */
-.chat-position-rail__preview::after {
-  position: absolute;
-  top: 0;
-  right: 100%;
-  width: 4px;
-  height: 100%;
-  content: "";
 }
 
 .chat-position-rail__preview-label {
