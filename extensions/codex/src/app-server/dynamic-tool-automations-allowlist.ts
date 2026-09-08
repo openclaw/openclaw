@@ -25,11 +25,17 @@ const CODEX_DYNAMIC_TOOL_NAMESPACE_PREFIXES = [
 /**
  * Returns the canonical tool name for a Codex namespaced entry when the
  * remainder is a tool of this turn; every other value is returned unchanged.
+ * An exact registered name always wins: a plugin may legitimately register a
+ * canonical tool name that starts with a namespace prefix, and translating it
+ * would change the requested selection instead of resolving an alias.
  */
-export function canonicalizeCodexNamespacedToolName(
+function canonicalizeCodexNamespacedToolName(
   name: string,
   knownToolNames: ReadonlySet<string>,
 ): string {
+  if (knownToolNames.has(name)) {
+    return name;
+  }
   for (const prefix of CODEX_DYNAMIC_TOOL_NAMESPACE_PREFIXES) {
     if (!name.startsWith(prefix)) {
       continue;
@@ -81,7 +87,7 @@ export function canonicalizeCodexAutomationsToolsAllow(
   if (!changed) {
     return args;
   }
-  return {
+  const canonicalArgs = {
     ...args,
     job: {
       ...job,
@@ -90,5 +96,7 @@ export function canonicalizeCodexAutomationsToolsAllow(
         toolsAllow: canonicalToolsAllow,
       },
     },
-  } as JsonValue;
+  };
+  // SAFETY: records narrowed from a JsonValue; only string entries were replaced with strings.
+  return canonicalArgs as JsonValue;
 }

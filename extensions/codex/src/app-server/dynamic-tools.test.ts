@@ -5487,7 +5487,7 @@ describe("createCodexDynamicToolBridge", () => {
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
 
 describe("automations toolsAllow canonicalization", () => {
-  function createAutomationsBridge() {
+  function createAutomationsBridge(extraToolNames: string[] = []) {
     const execute = vi.fn(async () => textToolResult("scheduled"));
     const bridge = createCodexDynamicToolBridge({
       tools: [
@@ -5495,6 +5495,7 @@ describe("automations toolsAllow canonicalization", () => {
         createTool({ name: "read" }),
         createTool({ name: "sandbox_exec", catalogMode: "direct-only" }),
         createTool({ name: "mfs_atlas__work_item_list" }),
+        ...extraToolNames.map((name) => createTool({ name })),
       ],
       signal: new AbortController().signal,
       loading: "searchable",
@@ -5550,6 +5551,19 @@ describe("automations toolsAllow canonicalization", () => {
       7,
     ]);
     expect(payload.message).toBe("Summarize.");
+  });
+
+  it("keeps an exact registered name even when it starts with a namespace prefix", async () => {
+    const { bridge, execute } = createAutomationsBridge(["openclaw__read"]);
+
+    await bridge.handleToolCall(
+      automationsCall(["openclaw__read", "openclaw__openclaw__read", "openclaw_direct__read"]),
+    );
+
+    const executed = requireRecord(callArg(execute, 0, 1, "automations arguments"), "arguments");
+    const job = requireRecord(executed.job, "job");
+    const payload = requireRecord(job.payload, "payload");
+    expect(payload.toolsAllow).toEqual(["openclaw__read", "openclaw__read", "read"]);
   });
 
   it("leaves other tools and already canonical allowlists untouched", async () => {
