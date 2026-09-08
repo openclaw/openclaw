@@ -1,8 +1,8 @@
 import type { PluginInstallRecordMapState } from "../config/plugin-install-record-map.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import type { InstalledPluginIndex } from "./installed-plugin-index-types.js";
+import type { OfficialCatalogResult } from "./management-catalog.js";
 import type { PluginManifestRecord } from "./manifest-registry.types.js";
-import type { HostedOfficialExternalPluginCatalogLoadResult } from "./official-external-plugin-catalog.types.js";
 import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.types.js";
 import type { PluginDependencyStatus } from "./status-dependencies-core.js";
 
@@ -21,7 +21,7 @@ export type PluginCacheManagement<TCache> = {
     snapshot: PluginMetadataSnapshot;
   };
   dependencyStatus: WeakMap<PluginManifestRecord, PluginDependencyStatus>;
-  officialCatalog?: Promise<HostedOfficialExternalPluginCatalogLoadResult>;
+  officialCatalog?: Promise<OfficialCatalogResult>;
 };
 
 export function createPluginCacheManagement<TCache>(): PluginCacheManagement<TCache> {

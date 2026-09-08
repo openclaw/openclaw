@@ -148,12 +148,10 @@ export function prepareCatalogEntries(entries: readonly OfficialExternalPluginCa
  */
 function overlayBundledOfficialPluginCatalogMetadata(
   entries: readonly OfficialExternalPluginCatalogEntry[],
-  bundledEntries: readonly OfficialExternalPluginCatalogEntry[] = listOfficialExternalPluginCatalogEntries(),
-  options: { hostedFeaturedAuthoritative: boolean } = {
-    hostedFeaturedAuthoritative: false,
-  },
+  options: { hostedFeaturedAuthoritative: boolean },
 ): OfficialExternalPluginCatalogEntry[] {
-  const bundledFacts = entries.length > 0 ? bundledEntries.map(prepareCatalogEntry) : [];
+  const bundledFacts =
+    entries.length > 0 ? listOfficialExternalPluginCatalogEntries().map(prepareCatalogEntry) : [];
   return entries.map((entry) => {
     const { clawhub, npmPackage } = prepareCatalogEntry(entry);
     const matches = bundledFacts.filter(
@@ -188,9 +186,17 @@ function overlayBundledOfficialPluginCatalogMetadata(
 export async function loadOfficialCatalog(): Promise<OfficialCatalogResult> {
   const cache = getManagedPluginCache();
   if (!cache.officialCatalog) {
-    const promise = Promise.resolve().then(() =>
-      loadConfiguredHostedOfficialExternalPluginCatalogEntries(),
-    );
+    const promise = loadConfiguredHostedOfficialExternalPluginCatalogEntries().then((result) => {
+      const hostedFeaturedAuthoritative =
+        result.source === "hosted" || result.source === "hosted-snapshot";
+      return {
+        entries: overlayBundledOfficialPluginCatalogMetadata(result.entries, {
+          hostedFeaturedAuthoritative,
+        }),
+        hostedFeaturedAuthoritative,
+        ...("error" in result ? { error: result.error } : {}),
+      };
+    });
     cache.officialCatalog = promise;
     void promise.catch(() => {
       if (cache.officialCatalog === promise) {
@@ -198,16 +204,7 @@ export async function loadOfficialCatalog(): Promise<OfficialCatalogResult> {
       }
     });
   }
-  const result = await cache.officialCatalog;
-  const hostedFeaturedAuthoritative =
-    result.source === "hosted" || result.source === "hosted-snapshot";
-  return {
-    entries: overlayBundledOfficialPluginCatalogMetadata(result.entries, undefined, {
-      hostedFeaturedAuthoritative,
-    }),
-    hostedFeaturedAuthoritative,
-    ...("error" in result ? { error: result.error } : {}),
-  };
+  return cache.officialCatalog;
 }
 
 export function normalizeKinds(kind: string | readonly string[] | undefined): string[] | undefined {
