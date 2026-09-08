@@ -61,7 +61,7 @@ if ! docker_e2e_run_with_harness \
   -e "OPENCLAW_TEST_STATE_SCRIPT_B64=$OPENCLAW_TEST_STATE_SCRIPT_B64" \
   "${DOCKER_E2E_PACKAGE_ARGS[@]}" \
   -v "$SCENARIO_PATH:/app/scripts/e2e/lib/release-typed-onboarding/scenario.sh:ro" \
-  -i "$IMAGE_NAME" bash scripts/e2e/lib/release-typed-onboarding/scenario.sh >"$run_log" 2>&1; then
+  -i "$IMAGE_NAME" bash -E scripts/e2e/lib/release-typed-onboarding/scenario.sh >"$run_log" 2>&1; then
   docker_e2e_print_log "$run_log"
   exit 1
 fi

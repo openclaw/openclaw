@@ -59,6 +59,39 @@ run_logged_print_heartbeat signal-proof 30 bash -c 'printf "old log head%0256dre
     expect(readdirSync(tempDir)).toEqual([]);
   });
 
+  it("inherits frozen typed-onboarding failure diagnostics into helpers", () => {
+    const wrapper = readFileSync("scripts/e2e/release-typed-onboarding-docker.sh", "utf8");
+    const launch = wrapper.match(
+      /-i "\$IMAGE_NAME" (bash(?: -[A-Za-z]+)*) scripts\/e2e\/lib\/release-typed-onboarding\/scenario\.sh/u,
+    );
+    expect(launch?.[1]).toBe("bash -E");
+
+    const [bash = "", ...flags] = launch?.[1].split(" ") ?? [];
+    const result = spawnSync(
+      bash,
+      [
+        ...flags,
+        "-c",
+        `
+set -euo pipefail
+dump_debug_logs() { printf 'dump:%s\\n' "$1" >&2; }
+trap 'status=$?; dump_debug_logs "$status"; exit "$status"' ERR
+install_package() { return 42; }
+run_scenario() {
+  install_package
+  printf 'unreachable\\n'
+}
+run_scenario
+`,
+      ],
+      { encoding: "utf8" },
+    );
+
+    expect(result.status, result.stderr).toBe(42);
+    expect(result.stdout).toBe("");
+    expect(result.stderr.trim().split("\n")).toEqual(["dump:42"]);
+  });
+
   it.each([
     [0, "", true],
     [1, "", true],
@@ -138,7 +171,7 @@ fi
       );
       const dockerCommands = readFileSync(path.join(tempDir, "docker-cleanup"), "utf8");
       expect(dockerCommands.trimEnd().split("\n").at(-1)).toBe("rm -f proof-container");
-      expect(readdirSync(tempDir).sort()).toEqual(["container-stdin", "docker-cleanup"]);
+      expect(readdirSync(tempDir).toSorted()).toEqual(["container-stdin", "docker-cleanup"]);
       expect(result.stdout).not.toContain("old log head");
       if (status === 0) {
         expect(result.stdout).toBe("");
