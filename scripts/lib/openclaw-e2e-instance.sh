@@ -267,7 +267,7 @@ openclaw_e2e_install_package() {
     if [ -f "$log_file" ]; then
       openclaw_e2e_print_log "$log_file" >&2
     fi
-    exit 1
+    return "$install_status"
   fi
 }
 openclaw_e2e_find_dep_package() {

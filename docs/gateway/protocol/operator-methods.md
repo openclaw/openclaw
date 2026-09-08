@@ -158,10 +158,17 @@ The Gateway advertises `session-scoped-model-catalog` for this contract.
 `chat.metadata` remains available to legacy clients; the Control UI reads models
 directly and keeps commands in its metadata cache. Opening a conversation picker
 performs a passive read, without a model-cache timer or implicit provider refresh.
-The Models settings page requests `refresh: true` when a primary, utility, or
-fallback model picker opens, so it can discover additional models on demand.
-Pending opens share that page's request; reopening after completion requests a
-new refresh, and the Gateway shares concurrent provider acquisition.
+The Models settings page uses `preparedOnly: true` for its initial load, then
+requests `refresh: true` the first time a primary, utility, or fallback model
+picker opens for the current core-data snapshot. Pending opens share that page's request; completed reopens read the
+current published catalog without acquiring providers again. Explicit **Retry**
+requests a new acquisition. Replacing core settings data, the page, agent, or
+Gateway resets this request state. Core data reloads after configuration changes,
+so the next picker open can discover models from newly configured providers.
+Usable choices remain available when refresh fails.
+This replaces the former five-minute automatic refresh policy; elapsed time alone
+does not make a reopened Settings picker refresh. The Gateway shares concurrent
+provider acquisition.
 
 `preparedOnly: true` and `refresh: true` remain mutually exclusive.
 The Gateway advertises these published-read and details controls as

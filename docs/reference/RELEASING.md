@@ -237,7 +237,7 @@ For beta, stable, and full profiles, Linux (`ubuntu`) cross-OS lanes gate npm pu
 7. When Code SHA equals Release SHA, retain its successful full validation parent and exact prepared npm/OCI descriptors. Only for a later genuine CHANGELOG-only descendant, optionally run SHA-pinned Full Release Validation with evidence reuse: the complete delta must be exactly `CHANGELOG.md`, and the parent must record `changelog-only-release-v1`, point at green Code evidence, and dispatch no product child lanes. That path still prepares and qualifies new Release SHA package/image bytes. Either path must satisfy every required profile gate. Regular final artifacts include SDK reports for both npm `beta` and `latest`; review the report and 8-character acknowledgement for the channel you will publish.
 8. Save that successful Full Release Validation run as both the validation run and `preflight_run_id`. Its read-only npm workflow builds and packs the root/core packages once, checks source in parallel, and qualifies the exact bytes with the final changelog. Docker images build in parallel and are preserved for later promotion. Review the **Plugin SDK API diff** summary. If it reports changes, inspect the readable diff (also uploaded as `plugin-sdk-api-release-diff-<run-id>-<run-attempt>`) and record the 8-character acknowledgement digest printed by the report; omit the acknowledgement when it reports no Plugin SDK API changes. Standalone `OpenClaw NPM Release` with `preflight_only=true` remains available for focused preflight and recovery.
 
-   Prepared packing reuses the exact preflight build while retaining package smoke checks, inventory generation, docs and changelog preparation, and source restoration. Ordinary source packing still performs a clean package build.
+   Prepared packing reuses the exact preflight build while retaining package smoke checks, inventory generation, docs and changelog preparation, and source restoration. It also runs `pnpm update:compat:check` against npm's current `latest` and `beta` tags before packing. Ordinary source packing still performs a clean package build without that registry freshness check.
 
    If the packaged changelog exceeds 500 KiB, packaging keeps every editorial note and replaces only the complete contribution record with a link to the full record in the exact release tag's `CHANGELOG.md`. The full source changelog and contributor credits remain unchanged after postpack restoration. Editorial notes must still satisfy the release-note minimum, and packaging fails if the compact result still exceeds the cap.
 
@@ -295,6 +295,85 @@ A legacy fallback correction tag may reuse base-package evidence only when the c
 For correction artifact preparation, validate the immutable SHA with `--target-ref release/YYYY.M.PATCH-N` before tagging, or the exact `vYYYY.M.PATCH-N` context after tagging. The existing `target_context_ref` workflow input carries the same context. This preserves the intended correction tag in both npm and Docker artifacts; a base-version package is accepted only when `vYYYY.M.PATCH` resolves to that same SHA. The package bytes keep their original version, and publishers still require artifacts sealed for the exact final tag. A base-context Full Release Validation run does not authorize reusing its base-tag publication artifacts for a correction.
 
 ## Release preflight
+
+### Previous updater compatibility
+
+Before freezing the release, refresh `scripts/lib/update-compat-inventory.json`
+from every release in the supported upgrade window. The current window includes
+2026.9.1, 2026.9.2, and 2026.9.3. Download each npm tarball and verify it against
+its published `dist.integrity` before extracting it. Pass each verified artifact
+to the recorder with a repeatable `--release` argument:
+
+```bash
+pnpm update:compat:gen \
+  --release '<unpacked-2026.9.1-directory>=<verified-npm-dist.integrity>' \
+  --release '<unpacked-2026.9.2-directory>=<verified-npm-dist.integrity>' \
+  --release '<unpacked-2026.9.3-directory>=<verified-npm-dist.integrity>'
+```
+
+The recorder writes releases in version order and replaces the recorded set.
+Drop releases older than the supported upgrade window when regenerating it;
+the inventory must not accumulate indefinitely. A release with no post-swap
+imports still has an entry with an empty chunk list, so coverage is explicit.
+Conflicting origins for the same chunk export across releases fail generation.
+
+`pnpm update:compat:check` reads `npm view openclaw dist-tags --json` and requires
+the versions tagged `latest` and `beta` to be present, even when both tags refer
+to stable versions or the same version. A missing version fails with the exact
+`pnpm update:compat:gen` command to run after verifying and unpacking the listed
+artifacts. `pnpm release:prep`, version preparation, and prepared-release packing
+run this check. Ordinary PR checks and source packing do not query npm for it.
+To verify deterministic regeneration offline, run `pnpm update:compat:check`
+with the same `--release` arguments used for generation.
+
+The recorder scans emitted lazy imports in the updater, service, and CLI cleanup source
+regions and records required export origins. The wizard entry is excluded
+because it starts before replacement. `runtime-postbuild` generates hashed
+compatibility files by re-exporting the candidate's corresponding symbols;
+missing or ambiguous mappings fail the build. Stable entrypoints are checked
+without replacement. The package carries the inventory in
+`dist/update-compat-inventory.json`, so negative and future fixtures remove that
+candidate's bridges. Existing older compatibility aliases remain separately
+owned by their original upgrade contracts.
+
+The default `update-first-hop-compat` lane runs each recorded release against the
+candidate, with separate artifacts per version. It requires the installed build
+identity and a restarted service, including for same-version or lower-version
+explicit candidate tarballs. The 2026.9.1 negative control demonstrates the
+missing restart import; releases that already preload that helper record the
+negative control as not applicable while retaining the positive first-hop and
+bridge-free future-hop checks. An explicit source tarball still selects one
+baseline. Run the published upgrade survivor lane from the oldest supported
+release as well. Native Windows proof must invoke the old updater with
+a registered Scheduled Task and verify its restart without a subsequent manual
+`gateway start`. Import compatibility alone does not prove that old and new
+modules share process-local state.
+
+### Design proposal: immutable runtime generations
+
+A durable replacement would install each version in an immutable generation
+directory and switch an installation pointer. Launchers must resolve that
+pointer before starting Node so lazy imports keep the process's original tree.
+Retain generations until their processes have exited. This is a proposal, not
+the current update layout.
+
+The design must preserve npm's ownership and bookkeeping: `npm ls -g`, later
+global installs and uninstall, lifecycle scripts, and generated launchers must
+still work. Unix uses `<prefix>/lib/node_modules` and `<prefix>/bin`; Windows
+uses `<prefix>/node_modules` and prefix-root launchers. A mutable junction alone
+does not pin old imports, and Windows pointer replacement must respect open
+handles and junction semantics. npm must not replace or orphan the retained
+generation anchor during its next install.
+
+pnpm owns a global project, manifests, lockfiles, virtual-store links, and
+version-dependent package groups; its cleanup must not collect live generations.
+Bun also owns a shared global project and separate binary directory, and its
+Windows binary launchers currently cannot be relocated by this updater.
+Generation activation must preserve sibling packages and the existing
+concurrent-project checks for both managers. These constraints need separate
+design approval and package-manager integration proof before implementation.
+
+### Required checks
 
 - Run `pnpm check:test-types` before release preflight so test TypeScript stays covered outside the faster local `pnpm check` gate.
 - Run `pnpm check:architecture` before release preflight so the broader import cycle and architecture boundary checks are green outside the faster local gate.

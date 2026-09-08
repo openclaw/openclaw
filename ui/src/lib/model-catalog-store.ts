@@ -9,13 +9,17 @@ export type ModelCatalogReadScope = Pick<
   "agentId" | "sessionKey" | "authProfileId"
 >;
 
-export function modelCatalogRefreshError(result: ModelCatalogResult): string | null {
+export function modelCatalogRefreshError(
+  result: ModelCatalogResult,
+  failureMessage?: string,
+): string | null {
   return result.refreshFailed
-    ? t(
-        result.models.length
-          ? "chat.modelControls.modelsRefreshFailed"
-          : "chat.modelControls.modelsUnavailable",
-      )
+    ? (failureMessage ??
+        t(
+          result.models.length
+            ? "chat.modelControls.modelsRefreshFailed"
+            : "chat.modelControls.modelsUnavailable",
+        ))
     : null;
 }
 

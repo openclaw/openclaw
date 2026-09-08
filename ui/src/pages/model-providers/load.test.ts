@@ -20,11 +20,7 @@ describe("loadModelProvidersData", () => {
       });
       const result = await loadModelProvidersData(client, { agentId: "main" });
       expect(result.models).toEqual(models);
-      expect(result.catalogError).toBe(
-        hasRows
-          ? "Some models could not be refreshed. Open Models to try again."
-          : "Models unavailable",
-      );
+      expect(result.catalogError).toBe("More models could not be discovered.");
       expect(result.error).toBeNull();
     },
   );

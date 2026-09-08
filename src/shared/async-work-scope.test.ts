@@ -10,6 +10,25 @@ import {
 import { createDeferredCore } from "./deferred.js";
 
 describe("async work scope", () => {
+  it("settles work for cleanup without closing its captured tracker, then fences final drain", async () => {
+    const scope = new AsyncWorkScope();
+    const track = await scope.track(captureAsyncWorkTracker);
+    scope.beginClose();
+    const cleanup = vi.fn(async () => {
+      await Promise.resolve();
+    });
+    await scope.runWhenIdle(() => {
+      expect(getAsyncWorkSignal()).toBe(scope.signal);
+      return track(cleanup);
+    });
+    expect(cleanup).toHaveBeenCalledOnce();
+    const drained = scope.drain();
+    const late = vi.fn();
+    await expect(track(late)).rejects.toThrow("Async work scope is closed");
+    expect(late).not.toHaveBeenCalled();
+    await drained;
+  });
+
   it("joins an inherited descendant after its parent returns", async () => {
     const scope = new AsyncWorkScope();
     const gate = createDeferredCore();

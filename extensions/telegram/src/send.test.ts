@@ -1826,7 +1826,6 @@ describe("sendMessageTelegram", () => {
     const chunks = sendMessageTexts(botApi.sendMessage);
     const joinedChunks = chunks.join("");
     expect(joinedChunks).toContain("Long");
-    expect(joinedChunks).toContain("section");
     expect(joinedChunks.match(/<b>section<\/b>/g)).toHaveLength(200);
     expect(joinedChunks.match(/<i>style<\/i>/g)).toHaveLength(200);
     expect(joinedChunks.match(/<code>code<\/code>/g)).toHaveLength(200);
@@ -5663,34 +5662,22 @@ describe("editMessageTelegram", () => {
       name: "buttons undefined keeps existing keyboard",
       text: "hi",
       buttons: undefined as Parameters<typeof buildInlineKeyboard>[0],
-      expectedCalls: 1,
       firstExpectNoReplyMarkup: true,
-      parseFallback: false,
     },
     {
       name: "buttons empty clears keyboard",
       text: "hi",
       buttons: [] as Parameters<typeof buildInlineKeyboard>[0],
-      expectedCalls: 1,
       firstExpectReplyMarkup: { inline_keyboard: [] } as Record<string, unknown>,
-      parseFallback: false,
     },
     {
-      name: "rich edit preserves cleared keyboard",
+      name: "HTML edit preserves cleared keyboard",
       text: "<bad> html",
       buttons: [] as Parameters<typeof buildInlineKeyboard>[0],
-      expectedCalls: 1,
       firstExpectReplyMarkup: { inline_keyboard: [] } as Record<string, unknown>,
-      parseFallback: false,
     },
   ])("$name", async (testCase) => {
-    if (testCase.parseFallback) {
-      botApi.editMessageText
-        .mockRejectedValueOnce(new Error("400: Bad Request: can't parse entities"))
-        .mockResolvedValueOnce({ message_id: 1, chat: { id: "123" } });
-    } else {
-      botApi.editMessageText.mockResolvedValue({ message_id: 1, chat: { id: "123" } });
-    }
+    botApi.editMessageText.mockResolvedValue({ message_id: 1, chat: { id: "123" } });
 
     await editMessageTelegram("123", 1, testCase.text, {
       token: "tok",
@@ -5700,7 +5687,7 @@ describe("editMessageTelegram", () => {
 
     expect(botCtorSpy, testCase.name).toHaveBeenCalledTimes(1);
     expect(firstMockCall(botCtorSpy, "bot constructor call")[0], testCase.name).toBe("tok");
-    expect(botApi.editMessageText, testCase.name).toHaveBeenCalledTimes(testCase.expectedCalls);
+    expect(botApi.editMessageText, testCase.name).toHaveBeenCalledTimes(1);
 
     const firstParams = requireRecord(
       firstMockCall(botApi.editMessageText, "editMessageText call")[3],
@@ -5712,14 +5699,6 @@ describe("editMessageTelegram", () => {
     }
     if ("firstExpectReplyMarkup" in testCase && testCase.firstExpectReplyMarkup) {
       expect(firstParams.reply_markup, testCase.name).toEqual(testCase.firstExpectReplyMarkup);
-    }
-
-    if ("secondExpectReplyMarkup" in testCase && testCase.secondExpectReplyMarkup) {
-      const secondParams = requireRecord(
-        mockCall(botApi.editMessageText, 1, "second editMessageText call")[3],
-        "second edit params",
-      );
-      expect(secondParams.reply_markup, testCase.name).toEqual(testCase.secondExpectReplyMarkup);
     }
   });
 

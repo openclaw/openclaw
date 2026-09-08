@@ -16,12 +16,14 @@ import { loggingState } from "../logging/state.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getPluginCache, getScopedPluginCache, type PluginCache } from "../plugins/plugin-cache.js";
 import { withSecureTestNodeExecPath } from "../secrets/test-node-command.test-support.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import type { LocalOnboardingState } from "../state/local-onboarding-state.js";
 import { captureEnv, withEnvAsync } from "../test-utils/env.js";
 import { ExpectedCliError } from "./failure-output.js";
 import { getGatewayRunRuntimeHooks } from "./gateway-cli/runtime-hooks.js";
 import type { RootHelpRenderOptions } from "./program/root-help.js";
-import { registerSignalExitBarrier } from "./signal-exit-barrier.js";
+import { getPendingCliDisposers } from "./runtime-cleanup.js";
+import { registerSignalExitBarrier, waitForSignalExitBarriers } from "./signal-exit-barrier.js";
 
 const TLS_FINGERPRINT = "ab".repeat(32);
 const PREFIXED_TLS_FINGERPRINT = `sha256:${TLS_FINGERPRINT.toUpperCase()}`;
@@ -3432,6 +3434,43 @@ describe("runCli exit behavior", () => {
       exitSpy.mockRestore();
       processOnceSpy.mockRestore();
     }
+  });
+
+  it("keeps the original signal proxy stop pending through bounded command cleanup", async () => {
+    const handle = makeProxyHandle();
+    const route = createDeferredCore<boolean>();
+    const stopping = createDeferredCore();
+    const resume = createDeferredCore();
+    startProxyMock.mockResolvedValueOnce(handle);
+    tryRouteCliMock.mockReturnValueOnce(route.promise);
+    stopProxyMock.mockImplementationOnce(async () => {
+      stopping.resolve();
+      await resume.promise;
+    });
+    const running = runCli(["node", "openclaw", "plugins", "marketplace", "list"]);
+    let barrier: Promise<void> | undefined;
+    const stderr = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await vi.waitFor(() => expect(tryRouteCliMock).toHaveBeenCalled());
+      barrier = waitForSignalExitBarriers();
+      await stopping.promise;
+      vi.useFakeTimers();
+      route.resolve(true);
+      await vi.waitFor(() => expect(getPendingCliDisposers()).toContain("managed-proxy"));
+      await vi.advanceTimersByTimeAsync(5_000);
+      await running;
+      expect(getPendingCliDisposers()).toContain("managed-proxy");
+      expect(stderr).toHaveBeenCalledWith(expect.stringContaining("managed-proxy"));
+      expect(stopProxyMock).toHaveBeenCalledExactlyOnceWith(handle);
+    } finally {
+      route.resolve(true);
+      resume.resolve();
+      vi.useRealTimers();
+      await barrier;
+      await running;
+      stderr.mockRestore();
+    }
+    expect(getPendingCliDisposers()).not.toContain("managed-proxy");
   });
 
   it("synchronously kills the managed proxy during hard process exit", async () => {

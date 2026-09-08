@@ -9,6 +9,8 @@ import type {
   ModelCatalogEntry,
   ModelCatalogProviderOutcome,
 } from "../../api/types.ts";
+import { t } from "../../i18n/index.ts";
+import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { resolveEditableSnapshotConfig } from "../../lib/config/config-state-model.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import {
@@ -22,6 +24,8 @@ import {
   type ProviderUsageRequestResult,
 } from "../../lib/provider-usage-request.ts";
 import { requestSessionUsage } from "../../lib/sessions/usage.ts";
+
+registerSettingsEnglish();
 
 /** Local session-spend window shown on each card. */
 export const MODEL_PROVIDERS_COST_DAYS = 30;
@@ -112,7 +116,7 @@ export async function loadModelProvidersData(
       refreshResult && !refreshResult.ok
         ? errorMessage(refreshResult.error)
         : catalog.ok
-          ? modelCatalogRefreshError(catalog.result)
+          ? modelCatalogRefreshError(catalog.result, t("modelProviders.defaults.discoverFailed"))
           : errorMessage(catalog.error),
     config,
     providerUsage: null,
