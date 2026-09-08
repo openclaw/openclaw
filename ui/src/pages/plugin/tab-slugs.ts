@@ -3,7 +3,7 @@ import {
   normalizeRoutePath,
 } from "@openclaw/uirouter";
 import type { RouteLocation } from "@openclaw/uirouter";
-import { NATIVE_ROUTE_SEGMENTS, pathForRoute } from "../../app-route-paths.ts";
+import { APP_ROUTE_DEFINITIONS, NATIVE_ROUTE_SEGMENTS } from "../../app-route-definitions.ts";
 
 export const INTERNAL_PLUGIN_PATH_PARAM = "__openclawPluginPath";
 type PluginTab = { pluginId: string; id: string; slug?: string };
@@ -56,14 +56,17 @@ export function pluginTabSlugFromPath(pathname: string, basePath = ""): PluginTa
 export function pluginTabLocation(tab: PluginTab, basePath = ""): RouteLocation {
   const slug = pluginTabSlug(tab);
   return {
-    pathname: slug ? `${normalizeBasePath(basePath)}/${slug}` : pathForRoute("plugin", basePath),
+    pathname: `${normalizeBasePath(basePath)}${slug ? `/${slug}` : APP_ROUTE_DEFINITIONS.plugin.path}`,
     search: slug ? "" : `?${new URLSearchParams({ plugin: tab.pluginId, id: tab.id })}`,
     hash: "",
   };
 }
 
 export function canonicalPluginTabLocation(location: RouteLocation, basePath = ""): RouteLocation {
-  if (normalizeRoutePath(location.pathname) !== pathForRoute("plugin", basePath)) {
+  if (
+    normalizeRoutePath(location.pathname) !==
+    `${normalizeBasePath(basePath)}${APP_ROUTE_DEFINITIONS.plugin.path}`
+  ) {
     return location;
   }
   const search = new URLSearchParams(location.search);
