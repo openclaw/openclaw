@@ -297,7 +297,7 @@ suite.define(() => {
       // must explicitly unmount it before the sidebar becomes display:none.
       await openSessionMenu();
       const beforeKeyboardCollapse = await hiddenActionCounts();
-      await page.keyboard.press("Meta+B");
+      await page.keyboard.press("ControlOrMeta+B");
       await expectDesktopCollapsed();
       await expect.poll(() => sessionMenu.count()).toBe(0);
       await expectHiddenShortcutsInert(beforeKeyboardCollapse);
@@ -353,7 +353,7 @@ suite.define(() => {
         .toBe(0);
       await openSessionMenu();
       const beforeDrawerCollapse = await hiddenActionCounts();
-      await page.keyboard.press("Meta+B");
+      await page.keyboard.press("ControlOrMeta+B");
       await expectDrawerClosed();
       await expect.poll(() => sessionMenu.count()).toBe(0);
       await expect
