@@ -319,7 +319,7 @@ describe("sessions_history redaction", () => {
     expect(requests).toEqual([]);
   });
 
-  it("ignores offset when an anchored read is requested", async () => {
+  it.each([0, 4])("ignores offset %i when an anchored read is requested", async (offset) => {
     const requests: CallGatewayRequest[] = [];
     const tool = createSessionsHistoryTool({
       config: {},
@@ -328,39 +328,14 @@ describe("sessions_history redaction", () => {
         return { messages: [{ role: "assistant", content: "latest" }] } as T;
       },
     });
-
-    const result = await tool.execute("call-1", {
-      sessionKey: "main",
-      offset: 0,
-      messageId: "message-1",
-    });
+    const args = { sessionKey: "main", offset, messageId: "message-1" };
+    const result = await tool.execute("call-1", args);
     const request = requireGatewayRequest(requests, "chat.history");
 
     expect(request.params).toMatchObject({ sessionKey: "main", messageId: "message-1" });
-    expect((request.params as Record<string, unknown>).offset).toBeUndefined();
-    expect((result.details as Record<string, unknown>).offset).toBeUndefined();
-  });
-
-  it("ignores a non-zero offset when an anchored read is requested", async () => {
-    const requests: CallGatewayRequest[] = [];
-    const tool = createSessionsHistoryTool({
-      config: {},
-      callGateway: async <T = Record<string, unknown>>(request: CallGatewayRequest): Promise<T> => {
-        requests.push(request);
-        return { messages: [{ role: "assistant", content: "latest" }] } as T;
-      },
-    });
-
-    const result = await tool.execute("call-1", {
-      sessionKey: "main",
-      offset: 4,
-      messageId: "message-1",
-    });
-    const request = requireGatewayRequest(requests, "chat.history");
-
-    expect(request.params).toMatchObject({ sessionKey: "main", messageId: "message-1" });
-    expect((request.params as Record<string, unknown>).offset).toBeUndefined();
-    expect((result.details as Record<string, unknown>).offset).toBeUndefined();
+    expect(request.params).not.toHaveProperty("offset");
+    expect(result.details).not.toHaveProperty("offset");
+    expect(args).toEqual({ sessionKey: "main", offset, messageId: "message-1" });
   });
 
   it("rejects sessionId without messageId", async () => {

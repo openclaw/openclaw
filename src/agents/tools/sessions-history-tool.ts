@@ -63,7 +63,7 @@ const SessionsHistoryToolSchema = Type.Object({
     Type.String({
       minLength: 1,
       description:
-        "Anchored read: return history around this message id. Mutually exclusive with offset.",
+        "Return history around this message id. Ignores offset; limit still bounds the window.",
     }),
   ),
   sessionId: Type.Optional(
@@ -471,10 +471,7 @@ export function createSessionsHistoryTool(opts?: {
       if (sessionId && !messageId) {
         throw new ToolInputError("sessionId requires messageId");
       }
-      // Anchored reads window history around messageId, so a caller-passed
-      // offset is redundant. Models frequently emit `offset: 0` next to an
-      // anchor because the two pagination modes are easy to conflate; treat
-      // the offset as absent instead of failing the entire call.
+      // Keep redundant model arguments out of the strict Gateway pagination contract.
       const paginationOffset = messageId ? undefined : offset;
       const includeTools = Boolean(params.includeTools);
       const {
