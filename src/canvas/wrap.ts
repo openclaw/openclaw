@@ -188,6 +188,22 @@ export function buildWidgetDocument(
     "window.sendPrompt=text=>{void sendPrompt(text);};" +
     'define(window,"sendPrompt",{value:window.sendPrompt,writable:false,configurable:false});' +
     'post({type:"openclaw:widget-bridge-ready"},"*");})();</script>';
+  const errorBridge =
+    "<script>(()=>{if(!window.parent||window.parent===window)return;" +
+    "const post=window.parent.postMessage.bind(window.parent);const listen=window.addEventListener.bind(window);" +
+    "const stringify=String;const slice=Function.prototype.call.bind(String.prototype.slice);" +
+    "const replace=Function.prototype.call.bind(String.prototype.replace);const integer=Number.isInteger;" +
+    "const seen=new Set();const has=seen.has.bind(seen);const add=seen.add.bind(seen);let count=0;" +
+    "const report=(event,rejection)=>{try{if(count>=3)return;" +
+    'if(!rejection&&typeof event.message!=="string"&&!event.error)return;' +
+    "const reason=rejection?event.reason:undefined;" +
+    "const message=slice(stringify(rejection?(reason?.message??reason):(event.error?.message??event.message)),0,500);" +
+    "if(has(message))return;" +
+    'const data={type:"openclaw:widget-runtime-error",message};' +
+    'if(typeof event.filename==="string"){const source=slice(replace(replace(event.filename,/[?#].*$/,""),/^.*[\\\\/]/,""),0,200);if(source)data.source=source;}' +
+    "if(integer(event.lineno))data.line=event.lineno;if(integer(event.colno))data.column=event.colno;" +
+    'add(message);count++;post(data,"*");}catch{}};' +
+    'listen("error",event=>report(event,false),true);listen("unhandledrejection",event=>report(event,true),true);})();</script>';
   /*
    * The host may push a new theme after every theme change. Each message is a
    * full snapshot: omitted or invalid tokens are removed so a theme switch
@@ -274,5 +290,5 @@ export function buildWidgetDocument(
     : "'none'";
   const scriptSources = options.scriptOrigins?.length ? ` ${options.scriptOrigins.join(" ")}` : "";
   return `<!doctype html>
-<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'${scriptSources}; img-src data:; connect-src ${connectSources};"><title>${escapeHtml(title)}</title><style>${WIDGET_BASE_STYLES}</style></head><body${bodyClass}>${widgetBridge}${themeBridge}${chatHostBridge}${snapshotBridge}${sizeReporter}${widgetCode}</body></html>`;
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'${scriptSources}; img-src data:; connect-src ${connectSources};"><title>${escapeHtml(title)}</title><style>${WIDGET_BASE_STYLES}</style></head><body${bodyClass}>${widgetBridge}${errorBridge}${themeBridge}${chatHostBridge}${snapshotBridge}${sizeReporter}${widgetCode}</body></html>`;
 }

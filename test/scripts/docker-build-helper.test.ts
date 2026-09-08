@@ -2924,6 +2924,16 @@ docker_e2e_docker_run_cmd run demo
         /-e OPENCLAW_UPGRADE_SURVIVOR_CONFIG_PARKING_HELPER=\/tmp\/openclaw-config-parking\.mjs/gu,
       ),
     ).toHaveLength(2);
+    expect(
+      runner.match(
+        /-e OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_SERVER_SCRIPT=\/tmp\/openclaw-release-harness\/scripts\/e2e\/lib\/plugins\/npm-registry-server\.mjs/gu,
+      ),
+    ).toHaveLength(2);
+    expect(
+      runner.match(
+        /-v "\$HARNESS_ROOT_DIR\/scripts:\/tmp\/openclaw-release-harness\/scripts:ro"/gu,
+      ),
+    ).toHaveLength(2);
   });
 
   it("keeps upgrade survivor wrappers and the embedded payload valid bash", () => {
@@ -2987,6 +2997,23 @@ docker_e2e_docker_run_cmd run demo
     expect(script).toContain("--suppress-gateway-token-output");
     expect(script).not.toContain("exec 3>&- 2>/dev/null || true");
     expect(script).not.toContain('"$HOME/.openclaw/agents/main/agent/auth-profiles.json"');
+  });
+
+  it("keeps frozen typed onboarding assertions with their config producer", () => {
+    const runner = readFileSync("scripts/e2e/release-typed-onboarding-docker.sh", "utf8");
+
+    expect(runner).toContain(
+      'scripts/e2e/lib/release-scenarios/assertions.mjs \\\n  "$ROOT_DIR/scripts/e2e/lib/release-scenarios/assertions.mjs"',
+    );
+    expect(runner).toContain(
+      'scripts/e2e/lib/fixtures/mock-openai-config.mjs \\\n  "$ROOT_DIR/scripts/e2e/lib/fixtures/mock-openai-config.mjs"',
+    );
+    expect(runner).toContain(
+      '-v "$ONBOARD_ASSERTIONS:/app/scripts/e2e/lib/release-scenarios/assertions.mjs:ro"',
+    );
+    expect(runner).toContain(
+      '-v "$ONBOARD_MOCK_OPENAI_CONFIG:/app/scripts/e2e/lib/fixtures/mock-openai-config.mjs:ro"',
+    );
   });
 
   it("prints channel-add failures through the shared E2E logger", () => {
@@ -3162,7 +3189,7 @@ docker_e2e_docker_run_cmd run demo
     );
     expect(upgradeSurvivor).toContain('DOCKER_E2E_HARNESS_ROOT_DIR="$HARNESS_ROOT_DIR"');
     expect(upgradeSurvivor).toContain(
-      '-v "$HARNESS_ROOT_DIR/scripts/e2e/lib/upgrade-survivor/run.sh:/tmp/openclaw-upgrade-survivor-run.sh:ro"',
+      '-v "$UPGRADE_RUNNER:/tmp/openclaw-upgrade-survivor-run.sh:ro"',
     );
     expect(upgradeSurvivor).toContain(
       'timeout --kill-after=30s "$DOCKER_RUN_TIMEOUT" bash /tmp/openclaw-upgrade-survivor-run.sh',
@@ -5892,14 +5919,13 @@ grep -Fxq preserved "$TMPDIR/caller-fd"
     );
   });
 
-  it("uses each authorized frozen release's shipped scenario assertions", () => {
+  it("uses each authorized frozen release's shipped scenario contract files", () => {
     for (const [runnerPath, assertionPath] of [
       [CODEX_ON_DEMAND_DOCKER_E2E_PATH, "scripts/e2e/lib/codex-on-demand/assertions.mjs"],
       [
         NPM_ONBOARD_CHANNEL_AGENT_DOCKER_E2E_PATH,
         "scripts/e2e/lib/npm-onboard-channel-agent/assertions.mjs",
       ],
-      [UPGRADE_SURVIVOR_DOCKER_E2E_PATH, "scripts/e2e/lib/upgrade-survivor/assertions.mjs"],
       [
         PLUGIN_UPDATE_CORRUPT_DOCKER_E2E_PATH,
         "scripts/e2e/lib/plugin-update/corrupt-update-scenario.sh",
@@ -5910,6 +5936,44 @@ grep -Fxq preserved "$TMPDIR/caller-fd"
       expect(runner).toContain(`openclaw_resolve_frozen_target_file`);
       expect(runner).toContain(`${assertionPath}:ro`);
     }
+
+    const codexRunner = readFileSync(CODEX_ON_DEMAND_DOCKER_E2E_PATH, "utf8");
+    expectTextToIncludeAll(codexRunner, [
+      "scripts/e2e/lib/codex-on-demand/doctor-checks.mjs",
+      'if [ -n "$CODEX_DOCTOR_CHECKS" ]',
+      "OPENCLAW_CODEX_DOCTOR_CHECKS_ENABLED=$CODEX_DOCTOR_CHECKS_ENABLED",
+      'if [ "$OPENCLAW_CODEX_DOCTOR_CHECKS_ENABLED" = "1" ]',
+    ]);
+
+    const onboardingRunner = readFileSync(NPM_ONBOARD_CHANNEL_AGENT_DOCKER_E2E_PATH, "utf8");
+    expectTextToIncludeAll(onboardingRunner, [
+      "scripts/e2e/lib/fixtures/mock-openai-config.mjs",
+      "ONBOARD_MOCK_OPENAI_CONFIG",
+      '-v "$ONBOARD_MOCK_OPENAI_CONFIG:/app/scripts/e2e/lib/fixtures/mock-openai-config.mjs:ro"',
+    ]);
+
+    const upgradeRunner = readFileSync(UPGRADE_SURVIVOR_DOCKER_E2E_PATH, "utf8");
+    expectTextToIncludeAll(upgradeRunner, [
+      "scripts/e2e/lib/upgrade-survivor",
+      'UPGRADE_RUNNER="$UPGRADE_SCENARIO_DIR/run.sh"',
+      'cp -R "$UPGRADE_SCENARIO_DIR/." "$UPGRADE_SCENARIO_STAGE/"',
+      'cp "$UPGRADE_DIAGNOSTICS" "$UPGRADE_SCENARIO_STAGE/diagnostics.mjs"',
+      '-v "$UPGRADE_SCENARIO_STAGE:/app/scripts/e2e/lib/upgrade-survivor:ro"',
+      '-v "$UPGRADE_NPM_REGISTRY_SERVER:/app/scripts/e2e/lib/plugins/npm-registry-server.mjs:ro"',
+      '-v "$UPGRADE_NPM_PUBLISH_PLAN:/app/scripts/lib/npm-publish-plan.mjs:ro"',
+      'DOCKER_E2E_WINDOWS_HELPERS_PATH="$UPGRADE_WINDOWS_HELPERS"',
+      '-v "$UPGRADE_BOUNDED_RESPONSE:/app/scripts/lib/bounded-response.mjs:ro"',
+      '-v "$UPGRADE_PLUGIN_INDEX:/app/scripts/e2e/lib/plugin-index-sqlite.mjs:ro"',
+      '-v "$UPGRADE_ENV_LIMITS:/app/scripts/e2e/lib/env-limits.mjs:ro"',
+      '-v "$UPGRADE_TEXT_FILE_UTILS:/app/scripts/e2e/lib/text-file-utils.mjs:ro"',
+      '-v "$UPGRADE_RUNNER:/tmp/openclaw-upgrade-survivor-run.sh:ro"',
+    ]);
+    expect(upgradeRunner).not.toContain("UPGRADE_ASSERTION_ARGS");
+
+    const updateRunner = readFileSync(UPDATE_CHANNEL_SWITCH_DOCKER_E2E_PATH, "utf8");
+    expect(updateRunner).toContain('assert-dirty-update "$git_root" "$fixture_sha"');
+    expect(updateRunner).toContain('[ "$OPENCLAW_PACKAGE_ACCEPTANCE_LEGACY_COMPAT" != "1" ]');
+    expect(updateRunner).toContain('[ "$dirty_status" -ne 1 ]');
   });
 
   it("serves the version-matched Codex candidate during package onboarding", () => {
@@ -6949,8 +7013,9 @@ process.exit(73);
     const runner = readFileSync(GATEWAY_NETWORK_DOCKER_E2E_PATH, "utf8");
     expect(runner).toContain('[[ "$FROZEN_CONTEXT" == "1" ]]');
     expect(runner).toContain("scripts/e2e/lib/gateway-network/client.mjs");
-    expect(runner).toContain('-v "$LEGACY_GATEWAY_LIB:/tmp/openclaw-selected-e2e-lib:ro"');
-    expect(runner).toContain("node /tmp/openclaw-selected-e2e-lib/gateway-network/client.mjs");
+    expect(runner).toContain('-v "$LEGACY_GATEWAY_LIB:/app/scripts/e2e/lib:ro"');
+    expect(runner).toContain("node /app/scripts/e2e/lib/gateway-network/client.mjs");
+    expect(runner).not.toContain("/tmp/openclaw-selected-e2e-lib");
     expect(runner).not.toContain("/tmp/openclaw-gateway-network-client.mjs");
   });
 
@@ -7095,7 +7160,6 @@ process.exit(73);
       "--allow-unreleased-changelog",
       'local harness_root="${DOCKER_E2E_HARNESS_ROOT_DIR:-$ROOT_DIR}"',
       '-v "$harness_root/scripts/prepublish-plugin-registry-artifact.mjs:/app/scripts/prepublish-plugin-registry-artifact.mjs:ro"',
-      '-v "$harness_root/scripts/windows-cmd-helpers.mjs:/app/scripts/windows-cmd-helpers.mjs:ro"',
       '-v "$harness_root/packages/gateway-client/src:/app/packages/gateway-client/src:ro"',
       '-v "$harness_root/packages/normalization-core/package.json:/app/packages/normalization-core/package.json:ro"',
       '-v "$harness_root/packages/normalization-core/src:/app/packages/normalization-core/src:ro"',
@@ -7126,6 +7190,26 @@ done
       "/trusted-harness/test/helpers:/app/test/helpers:ro",
       "/trusted-harness/scripts/prepublish-plugin-registry-artifact.mjs:/app/scripts/prepublish-plugin-registry-artifact.mjs:ro",
       "/trusted-harness/scripts/windows-cmd-helpers.mjs:/app/scripts/windows-cmd-helpers.mjs:ro",
+    ]);
+  });
+
+  it("selects one release-owned Windows helper mount", () => {
+    const script = repoRootShell`
+export DOCKER_E2E_HARNESS_ROOT_DIR=/trusted-harness
+export DOCKER_E2E_WINDOWS_HELPERS_PATH=/selected/scripts/windows-cmd-helpers.mjs
+source "$ROOT_DIR/scripts/lib/docker-e2e-package.sh"
+docker_e2e_harness_mount_args
+for ((index = 1; index < \${#DOCKER_E2E_HARNESS_ARGS[@]}; index += 2)); do
+  printf "%s\\n" "\${DOCKER_E2E_HARNESS_ARGS[$index]}"
+done
+`;
+    const mounts = execFileSync("bash", ["-lc", script], { encoding: "utf8" })
+      .trim()
+      .split("\n")
+      .filter((mount) => mount.endsWith(":/app/scripts/windows-cmd-helpers.mjs:ro"));
+
+    expect(mounts).toEqual([
+      "/selected/scripts/windows-cmd-helpers.mjs:/app/scripts/windows-cmd-helpers.mjs:ro",
     ]);
   });
 

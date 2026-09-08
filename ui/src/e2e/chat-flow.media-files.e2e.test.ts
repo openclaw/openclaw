@@ -260,7 +260,7 @@ suite.define(() => {
         const rect = element.getBoundingClientRect();
         return { height: rect.height, width: rect.width };
       });
-      expect(metadataSize.height).toBe(14);
+      expect(metadataSize.height).toBeCloseTo(14, 3);
       expect(metadataSize.width).toBeGreaterThanOrEqual(112);
       expect(metadataSize.width).toBeLessThanOrEqual(144);
       const actionSkeletons = checkingCards.locator(

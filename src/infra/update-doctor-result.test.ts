@@ -18,10 +18,12 @@ afterEach(async () => {
 describe("post-install doctor result IPC", () => {
   it.each([
     { status: "ok" as const, configHash: "unchanged" },
+    { status: "ok" as const, warnings: ["plugin/example: version probe timed out"] },
     { status: "error" as const, configHash: "a".repeat(64), configInputHash: "b".repeat(64) },
     {
       ...createDeferredConfiguredPluginRepairDoctorResult(["deferred repair"]),
       configHash: "b".repeat(64),
+      warnings: ["plugin/example: version probe timed out"],
     },
     createDeferredConfiguredPluginRepairDoctorResult(["legacy child advisory"]),
   ])("round-trips $status results and consumes the file", async (result) => {
@@ -31,6 +33,32 @@ describe("post-install doctor result IPC", () => {
 
     await expect(consumeUpdatePostInstallDoctorResult(resultPath)).resolves.toEqual(result);
     await expect(fs.access(resultPath)).rejects.toThrow();
+  });
+
+  it("bounds warning count and length before writing and after reading", async () => {
+    const resultPath = createUpdatePostInstallDoctorResultPath();
+    resultPaths.push(resultPath);
+    const warnings = [
+      "   ",
+      ...Array.from({ length: 40 }, (_, index) => `${index}: ${"x".repeat(600)}`),
+    ];
+    const expected = warnings.slice(1, 33).map((warning) => warning.slice(0, 500));
+
+    await writeUpdatePostInstallDoctorResult({ resultPath, result: { status: "ok", warnings } });
+    expect(JSON.parse(await fs.readFile(resultPath, "utf8"))).toEqual({
+      status: "ok",
+      warnings: expected,
+    });
+    await expect(consumeUpdatePostInstallDoctorResult(resultPath)).resolves.toEqual({
+      status: "ok",
+      warnings: expected,
+    });
+
+    await fs.writeFile(resultPath, JSON.stringify({ status: "ok", warnings }));
+    await expect(consumeUpdatePostInstallDoctorResult(resultPath)).resolves.toEqual({
+      status: "ok",
+      warnings: expected,
+    });
   });
 
   it("rejects result paths outside the secure OpenClaw temp root", async () => {

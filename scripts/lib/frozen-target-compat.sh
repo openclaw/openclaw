@@ -43,6 +43,7 @@ openclaw_resolve_frozen_target_file() {
   local source_root="${1:?missing selected source root}" \
     relative_path="${2:?missing selected relative path}" \
     fallback_path="${3:-}" context_status=0
+  local frozen_missing_path="${4-$fallback_path}"
 
   openclaw_prepare_frozen_target_context "$source_root" || context_status=$?
   case "$context_status" in
@@ -51,6 +52,8 @@ openclaw_resolve_frozen_target_file() {
         printf '%s\n' "$source_root/$relative_path"
         return
       fi
+      printf '%s\n' "$frozen_missing_path"
+      return
       ;;
     1) ;;
     *) return "$context_status" ;;
@@ -68,6 +71,23 @@ openclaw_frozen_target_source_contains() {
   # Do not use grep -q here: every caller has pipefail enabled, and a matching
   # early exit can turn git show's SIGPIPE into a false "capability absent".
   git -C "$source_root" show "$OPENCLAW_SELECTED_SHA:$relative_path" 2>/dev/null | grep -F -- "$needle" >/dev/null
+}
+
+openclaw_resolve_frozen_upgrade_survivor_capabilities() {
+  local source_root="${1:?missing selected source root}" authorization_status=0
+
+  export OPENCLAW_FROZEN_UPGRADE_SURVIVOR_CLAWHUB_MODE="current"
+  openclaw_prepare_frozen_target_context "$source_root" || authorization_status=$?
+  [ "$authorization_status" -eq 1 ] && return 0
+  [ "$authorization_status" -eq 0 ] || return "$authorization_status"
+
+  # The older shipped installer fetched its official companion through ClawHub
+  # and therefore owns a three-request audit instead of the current idle ledger.
+  if ! openclaw_frozen_target_source_has_path "$source_root" src/infra/clawhub-install-trust.ts &&
+    openclaw_frozen_target_source_contains \
+      "$source_root" src/plugins/clawhub.ts 'from "../infra/clawhub.js"'; then
+    export OPENCLAW_FROZEN_UPGRADE_SURVIVOR_CLAWHUB_MODE="legacy"
+  fi
 }
 
 openclaw_resolve_frozen_live_cli_backend_package_mode() {

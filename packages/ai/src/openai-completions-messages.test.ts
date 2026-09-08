@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { makeTextToolResult } from "../../../test/helpers/text-tool-result.js";
 import { convertMessages } from "./openai-completions-messages.js";
 import type { ProviderContext, ProviderModel } from "./provider-types.js";
 import { resolveOpenAICompletionsCompat } from "./transports/openai-completions-compat.js";
@@ -114,17 +115,7 @@ describe("convertMessages assistant text replay", () => {
       const converted = convertMessages(
         model,
         {
-          messages: [
-            assistant,
-            {
-              role: "toolResult",
-              toolCallId: "call_lookup",
-              toolName: "lookup",
-              content: [{ type: "text", text: "found" }],
-              isError: false,
-              timestamp: 3,
-            },
-          ],
+          messages: [assistant, makeTextToolResult("call_lookup", "lookup", "found", false, 3)],
         },
         { ...resolveOpenAICompletionsCompat(model), requiresThinkingAsText },
       );
@@ -391,22 +382,8 @@ describe("convertMessages parallel tool-result image ownership", () => {
     const context: Context = {
       messages: [
         makeToolCallAssistant(["call_a", "call_b"], ["lookup", "search"]),
-        {
-          role: "toolResult",
-          toolCallId: "call_a",
-          toolName: "lookup",
-          content: [{ type: "text", text: "found it" }],
-          isError: false,
-          timestamp: 2,
-        },
-        {
-          role: "toolResult",
-          toolCallId: "call_b",
-          toolName: "search",
-          content: [{ type: "text", text: "no results" }],
-          isError: false,
-          timestamp: 3,
-        },
+        makeTextToolResult("call_a", "lookup", "found it", false, 2),
+        makeTextToolResult("call_b", "search", "no results", false, 3),
       ],
     };
 

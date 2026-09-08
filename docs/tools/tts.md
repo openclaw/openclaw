@@ -873,6 +873,7 @@ When `tts.auto` is enabled, OpenClaw:
   auto-TTS behavior for the assistant's answer.
 - Skips TTS if the reply already contains structured media.
 - Skips very short replies (under 10 chars).
+- Skips replies dominated by fenced code; inline code and surrounding prose remain eligible for speech.
 - Summarizes long replies when summaries are enabled, using
   `summaryModel` (or `agents.defaults.model.primary`).
 - Attaches the generated audio to the reply.

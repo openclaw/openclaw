@@ -24,6 +24,7 @@ vi.mock("@anthropic-ai/sdk", () => ({
   },
 }));
 
+import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
 import { createZeroUsage } from "../usage.test-support.js";
 import { streamAnthropic, streamSimpleAnthropic } from "./anthropic.js";
 
@@ -900,14 +901,7 @@ describe("Anthropic provider", () => {
             ],
             { stopReason: "toolUse" },
           ),
-          {
-            role: "toolResult",
-            toolCallId: "call_1",
-            toolName: "lookup",
-            content: [{ type: "text", text: "42" }],
-            isError: false,
-            timestamp: 0,
-          },
+          makeTextToolResult("call_1", "lookup", "42", false, 0),
         ],
       },
     );
@@ -1011,14 +1005,7 @@ describe("Anthropic provider", () => {
             ],
             { model: model.id, stopReason: "toolUse" },
           ),
-          {
-            role: "toolResult",
-            toolCallId: "call_1",
-            toolName: "lookup",
-            content: [{ type: "text", text: "42" }],
-            isError: false,
-            timestamp: 0,
-          },
+          makeTextToolResult("call_1", "lookup", "42", false, 0),
         ],
       },
     );

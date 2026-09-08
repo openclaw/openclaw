@@ -16,6 +16,11 @@ When Gateway status reports degraded SecretRef owners, doctor prints a **Secret 
 
 When channel ingress events are dead-lettered, doctor names each affected channel account and points to [`openclaw channels dead-letters list`](/cli/channels#inbound-dead-letters) for inspection and recovery.
 
+Doctor warns when a registry-owned project clone is partial or shallow. It names
+the clone, shallow state, and partial-clone config keys, including URL-keyed
+remote twins. It prints manual repair commands; `--fix` does not fetch or repack
+these clones. Agent workspaces and manually registered checkouts are excluded.
+
 When the Gateway has exporter health facts, doctor reports the latest trusted
 per-signal state and transport under **Telemetry exporters**. The summary is
 redacted and does not include endpoint values, headers, certificates, payloads,
@@ -308,6 +313,16 @@ manifests, and workspace migration blockers. If both kinds remain, Doctor report
 both next steps. Do not delete preserved backups to clear the warning.
 
 ## Structured health checks
+
+To inspect registry clone shape, run
+`openclaw doctor --lint --only core/doctor/project-clone-shape --json`.
+This check also runs in ordinary Doctor and `--lint --all`. Unreadable clones
+produce a skipped-inspection warning without aborting the remaining checks.
+Repair guidance removes all partial-clone filters, refetches from origin
+(unshallowing only when needed), fetches missing objects by ID, clears promisor
+settings and `extensions.partialclone`, then repacks. See the
+[repair sequence](/gateway/doctor#11e-project-clone-shape) before running these
+network and disk operations manually.
 
 Modern doctor checks use a small split contract:
 
@@ -674,6 +689,7 @@ restored artifacts with SQLite rows before importing.
 - If `openclaw.json` cannot be parsed and no last-known-good config can be recovered, `doctor --fix` leaves the file unchanged and exits with an error instead of writing a partial replacement. The error points to `openclaw config validate` for the exact parse position and explains how to edit or regenerate the config.
 - Set `OPENCLAW_SERVICE_REPAIR_POLICY=external` when another supervisor owns the gateway lifecycle. Doctor still reports gateway/service health and applies non-service repairs, but skips service install/start/restart/bootstrap and legacy service cleanup.
 - Doctor reports the managed Gateway's applied heap limit and the adaptive derivation used for the current host or container memory limit. Use `openclaw gateway status` for the same report outside a repair pass.
+- Doctor and `openclaw gateway status` skip systemd content repair advice when the manager reports a masked or otherwise unloaded unit. Loaded-unit checks, readable-file fallback after a failed manager query, and unrelated backup or credential diagnostics remain active.
 - On Linux, doctor ignores inactive extra gateway-like systemd units and does not rewrite command/entrypoint metadata for a running systemd gateway service during repair. Stop the service first, or use `openclaw gateway install --force` to rewrite the managed base unit. If a systemd drop-in overrides `ExecStart=` or `WorkingDirectory=`, inspect it with `systemctl --user cat <unit>.service` and update or remove that drop-in yourself; reinstalling the base does not replace it. `Environment=` drop-ins remain supported.
 - `doctor --fix --non-interactive` preserves the installed gateway service definition, including during update repair. Run `openclaw gateway install` for a missing service, or `openclaw gateway install --force` from the intended installation to replace its launcher and managed environment.
 - State integrity checks detect orphan transcript files in the sessions directory. Archiving them as `.deleted.<timestamp>` requires interactive confirmation; `--fix`, `--yes`, and headless runs leave them in place.
@@ -694,7 +710,7 @@ restored artifacts with SQLite rows before importing.
 - Doctor includes a memory-search readiness check and can recommend `openclaw configure --section model` when embedding credentials are missing.
 - Doctor warns when no command owner is configured. The command owner is the human operator account allowed to run owner-only commands and approve dangerous actions. DM pairing only lets someone talk to the bot; if you approved a sender before first-owner bootstrap existed, set `commands.ownerAllowFrom` explicitly.
 - Doctor reports an info note when Codex-mode agents are configured and personal Codex CLI assets exist in the operator's Codex home. Local Codex app-server launches use isolated per-agent homes; install the Codex plugin first if needed, then use `openclaw migrate plan codex` to inventory assets that should be promoted deliberately.
-- Doctor warns when skills allowed for the default agent are unavailable in the current runtime environment (missing bins, env vars, config, or OS requirements). `doctor --fix` can disable those unavailable skills with `skills.entries.<skill>.enabled=false`; install/configure the missing requirement instead if you want to keep the skill active.
+- Doctor warns when skills allowed for the default agent are unavailable in the current runtime environment (missing bins, env vars, config, or OS requirements). `doctor --fix` can disable those unavailable skills with `skills.entries.<skill>.enabled=false` and lists the changes without asking you to repeat the repair. Updater-driven repair leaves optional skill enablement unchanged. Install/configure the missing requirement instead if you want to keep the skill active.
 - If sandbox mode is enabled but Docker is unavailable, doctor reports a high-signal warning with remediation (`install Docker` or `openclaw config set agents.defaults.sandbox.mode off`).
 - Doctor identifies per-agent `agents.entries.<id>.sandbox` Docker, browser, and prune overrides ignored under shared scope. It also warns when an agent's explicit primary model omits fallbacks and therefore disables the defaults' fallback chain; both diagnostics use canonical agent paths after legacy roster normalization.
 - If legacy sandbox registry files or shard directories are present (`~/.openclaw/sandbox/containers.json`, `~/.openclaw/sandbox/browsers.json`, `~/.openclaw/sandbox/containers/`, or `~/.openclaw/sandbox/browsers/`), doctor reports them; `--fix` migrates valid entries into SQLite and quarantines invalid legacy files.

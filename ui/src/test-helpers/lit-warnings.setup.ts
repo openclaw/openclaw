@@ -49,7 +49,8 @@ if (typeof Element !== "undefined" && !("moveBefore" in Element.prototype)) {
 
 // JSDOM exposes partial ElementInternals. Web Awesome form controls require
 // the form-associated methods even when tests do not mount them in a form.
-if (typeof HTMLElement !== "undefined") {
+// Browser tests need native CustomStateSet so CSS :state() observes real state.
+if (typeof HTMLElement !== "undefined" && !("__vitest_browser__" in globalThis)) {
   Object.defineProperty(HTMLElement.prototype, "attachInternals", {
     configurable: true,
     value() {

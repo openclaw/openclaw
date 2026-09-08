@@ -10,7 +10,10 @@ import type {
   SandboxFsBridgeContext,
 } from "./backend-handle.types.js";
 import { SANDBOX_FILE_IDENTITY } from "./file-mutation-identity.js";
-import { SANDBOX_PINNED_MUTATION_PYTHON_SHELL_LITERAL } from "./fs-bridge-mutation-helper.js";
+import {
+  buildPinnedMutationArgs,
+  SANDBOX_PINNED_MUTATION_PYTHON_SHELL_LITERAL,
+} from "./fs-bridge-mutation-helper.js";
 import {
   SANDBOX_CREATE_EXISTS_EXIT_CODE,
   SANDBOX_READ_NOT_FOUND_EXIT_CODE,
@@ -110,13 +113,11 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
       signal: params.signal,
     });
     const result = await this.runMutation({
-      args: [
-        "read",
-        pinned.mountRootPath,
-        pinned.relativeParentPath,
-        pinned.basename,
-        ...(params.maxBytes === undefined ? [] : [String(params.maxBytes)]),
-      ],
+      args: buildPinnedMutationArgs({
+        kind: "read",
+        pinned,
+        maxBytes: params.maxBytes,
+      }),
       signal: params.signal,
       allowFailure: true,
     });
@@ -147,7 +148,10 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
       signal: params.signal,
     });
     const result = await this.runMutation({
-      args: ["readdir", pinned.mountRootPath, pinned.relativeParentPath],
+      args: buildPinnedMutationArgs({
+        kind: "readdir",
+        pinned: { mountRootPath: pinned.mountRootPath, relativePath: pinned.relativeParentPath },
+      }),
       signal: params.signal,
     });
     return parseDirectoryEntries(result.stdout.toString("utf8"));
@@ -185,16 +189,12 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
       signal: params.signal,
     });
     await this.runMutation({
-      args: [
-        "copy",
-        sourcePinned.mountRootPath,
-        sourcePinned.relativeParentPath,
-        sourcePinned.basename,
-        destinationPinned.mountRootPath,
-        destinationPinned.relativeParentPath,
-        destinationPinned.basename,
-        params.mkdir !== false ? "1" : "0",
-      ],
+      args: buildPinnedMutationArgs({
+        kind: "copy",
+        source: sourcePinned,
+        destination: destinationPinned,
+        mkdir: params.mkdir !== false,
+      }),
       signal: params.signal,
     });
   }
@@ -225,13 +225,11 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
       ? params.data
       : Buffer.from(params.data, params.encoding ?? "utf8");
     await this.runMutation({
-      args: [
-        "write",
-        pinned.mountRootPath,
-        pinned.relativeParentPath,
-        pinned.basename,
-        params.mkdir !== false ? "1" : "0",
-      ],
+      args: buildPinnedMutationArgs({
+        kind: "write",
+        pinned,
+        mkdir: params.mkdir !== false,
+      }),
       stdin: buffer,
       signal: params.signal,
     });
@@ -258,13 +256,11 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
       ? params.data
       : Buffer.from(params.data, params.encoding ?? "utf8");
     const result = await this.runMutation({
-      args: [
-        "create",
-        pinned.mountRootPath,
-        pinned.relativeParentPath,
-        pinned.basename,
-        params.mkdir !== false ? "1" : "0",
-      ],
+      args: buildPinnedMutationArgs({
+        kind: "create",
+        pinned,
+        mkdir: params.mkdir !== false,
+      }),
       stdin: buffer,
       allowFailure: true,
       signal: params.signal,
@@ -301,7 +297,10 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
       signal: params.signal,
     });
     await this.runMutation({
-      args: ["mkdirp", pinned.mountRootPath, pinned.relativeParentPath],
+      args: buildPinnedMutationArgs({
+        kind: "mkdirp",
+        pinned: { mountRootPath: pinned.mountRootPath, relativePath: pinned.relativeParentPath },
+      }),
       signal: params.signal,
     });
   }
@@ -332,14 +331,12 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
       signal: params.signal,
     });
     await this.runMutation({
-      args: [
-        "remove",
-        pinned.mountRootPath,
-        pinned.relativeParentPath,
-        pinned.basename,
-        params.recursive ? "1" : "0",
-        params.force === false ? "0" : "1",
-      ],
+      args: buildPinnedMutationArgs({
+        kind: "remove",
+        pinned,
+        recursive: params.recursive,
+        force: params.force,
+      }),
       signal: params.signal,
       allowFailure: params.force !== false,
     });
@@ -372,16 +369,11 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
       signal: params.signal,
     });
     await this.runMutation({
-      args: [
-        "rename",
-        fromPinned.mountRootPath,
-        fromPinned.relativeParentPath,
-        fromPinned.basename,
-        toPinned.mountRootPath,
-        toPinned.relativeParentPath,
-        toPinned.basename,
-        "1",
-      ],
+      args: buildPinnedMutationArgs({
+        kind: "rename",
+        source: fromPinned,
+        destination: toPinned,
+      }),
       signal: params.signal,
     });
   }

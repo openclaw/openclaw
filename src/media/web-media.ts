@@ -168,8 +168,6 @@ function resolveWebMediaOptions(params: {
 // without letting a tight channel cap buffer up to the 100MB document bound.
 const IMAGE_OPTIMIZE_HEADROOM_FACTOR = 4;
 
-const HEIC_MIME_RE = /^image\/hei[cf]$/i;
-const HEIC_EXT_RE = /\.(heic|heif)$/i;
 const WINDOWS_DRIVE_RE = /^[A-Za-z]:[\\/]/;
 const HOST_READ_ALLOWED_DOCUMENT_MIMES = new Set([
   "application/msword",
@@ -509,16 +507,6 @@ function formatCapReduce(label: string, cap: number, size: number): string {
   return `${label} could not be reduced below ${formatMediaSize(cap)} (got ${formatMediaSize(size)})`;
 }
 
-function isHeicSource(opts: { contentType?: string; fileName?: string }): boolean {
-  if (opts.contentType && HEIC_MIME_RE.test(opts.contentType.trim())) {
-    return true;
-  }
-  if (opts.fileName && HEIC_EXT_RE.test(opts.fileName.trim())) {
-    return true;
-  }
-  return false;
-}
-
 function assertHostReadMediaAllowed(params: {
   sniffedContentType?: string;
   contentType?: string;
@@ -766,7 +754,6 @@ function resolvePreservableOriginalImageContentType(params: {
   buffer: Buffer;
   cap: number;
   contentType?: string;
-  fileName?: string;
   policy?: ImageCompressionPolicy;
 }): string | null {
   if (params.buffer.length > params.cap) {
@@ -787,10 +774,6 @@ function resolvePreservableOriginalImageContentType(params: {
   if (declaredContentType?.startsWith("image/") && !declaredPreservableContentType) {
     return null;
   }
-  const resolvedContentType = declaredPreservableContentType ?? actualContentType;
-  if (isHeicSource({ contentType: resolvedContentType, fileName: params.fileName })) {
-    return null;
-  }
   const preferredSide =
     resolveImageCompressionGrid(params.policy).sides[0] ?? DEFAULT_VISION_MAX_SIDE;
   if (
@@ -799,7 +782,7 @@ function resolvePreservableOriginalImageContentType(params: {
   ) {
     return null;
   }
-  return resolvedContentType;
+  return declaredPreservableContentType ?? actualContentType;
 }
 
 function isPreservableImageMime(
@@ -949,7 +932,6 @@ export async function optimizeImageBufferForWebMedia(params: {
     buffer: params.buffer,
     cap,
     contentType: params.contentType,
-    fileName: params.fileName,
     policy: params.imageCompression,
   });
   if (originalContentType) {

@@ -681,40 +681,31 @@ test("process poll resets retryInMs when output appears and clears on completion
 });
 
 test.each([
-  { name: "below the retained tail", outputLength: 1_999, expectsOmissionNote: false },
-  { name: "at the retained tail", outputLength: 2_000, expectsOmissionNote: false },
-  { name: "above the retained tail", outputLength: 2_001, expectsOmissionNote: false },
-])(
-  "process poll returns unread finished output $name",
-  async ({ outputLength, expectsOmissionNote }) => {
-    const sessionId = `sess-finished-tail-${outputLength}`;
-    const { processTool, session } = createProcessSessionHarness(sessionId);
-    const earlierMarker = "[earlier-output]";
-    const latestMarker = "[latest-output]";
-    const fillerLength = outputLength - earlierMarker.length - latestMarker.length;
-    const aggregated = `${earlierMarker}${"x".repeat(fillerLength)}${latestMarker}`;
+  { name: "below the retained tail", outputLength: 1_999 },
+  { name: "at the retained tail", outputLength: 2_000 },
+  { name: "above the retained tail", outputLength: 2_001 },
+])("process poll returns unread finished output $name", async ({ outputLength }) => {
+  const sessionId = `sess-finished-tail-${outputLength}`;
+  const { processTool, session } = createProcessSessionHarness(sessionId);
+  const earlierMarker = "[earlier-output]";
+  const latestMarker = "[latest-output]";
+  const fillerLength = outputLength - earlierMarker.length - latestMarker.length;
+  const aggregated = `${earlierMarker}${"x".repeat(fillerLength)}${latestMarker}`;
 
-    appendOutput(session, "stdout", aggregated);
-    markExited(session, 0, null, "completed");
+  appendOutput(session, "stdout", aggregated);
+  markExited(session, 0, null, "completed");
 
-    const poll = await pollSession(processTool, "toolcall-finished-tail", sessionId);
-    const text = poll.content[0]?.type === "text" ? poll.content[0].text : "";
-    const details = poll.details as { aggregated?: string };
+  const poll = await pollSession(processTool, "toolcall-finished-tail", sessionId);
+  const text = poll.content[0]?.type === "text" ? poll.content[0].text : "";
+  const details = poll.details as { aggregated?: string };
 
-    expect(aggregated).toHaveLength(outputLength);
-    expect(details.aggregated).toBe(aggregated);
-    expect(text).toContain(latestMarker);
-    if (expectsOmissionNote) {
-      expect(text).not.toContain(earlierMarker);
-      expect(text).toContain("earlier retained output is omitted");
-      expect(text).toContain("action=log with offset and limit");
-    } else {
-      expect(text).toContain(earlierMarker);
-      expect(text).not.toContain("earlier retained output is omitted");
-    }
-    expect(text).not.toContain("discarded at the retention cap");
-  },
-);
+  expect(aggregated).toHaveLength(outputLength);
+  expect(details.aggregated).toBe(aggregated);
+  expect(text).toContain(latestMarker);
+  expect(text).toContain(earlierMarker);
+  expect(text).not.toContain("earlier retained output is omitted");
+  expect(text).not.toContain("discarded at the retention cap");
+});
 
 test.each([
   { name: "below the retained tail", outputLength: 1_500, aggregateCap: 1_000 },

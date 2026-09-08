@@ -1,4 +1,5 @@
 // Covers the standalone Vitest E2E config shape.
+import { readdirSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
   normalizeConfigPath,
@@ -6,6 +7,7 @@ import {
 } from "../../test/helpers/vitest-config-paths.js";
 import { BUNDLED_PLUGIN_E2E_TEST_GLOB } from "../../test/vitest/vitest.bundled-plugin-paths.ts";
 import e2eConfig, { createE2EVitestConfig } from "../../test/vitest/vitest.e2e.config.ts";
+import { resolveRepoRootPath } from "../../test/vitest/vitest.shared.config.ts";
 import { createTuiPtyVitestConfig } from "../../test/vitest/vitest.tui-pty.config.ts";
 
 describe("e2e vitest config", () => {
@@ -34,23 +36,16 @@ describe("e2e vitest config", () => {
 
   it("keeps every terminal integration test exclusively in the serial PTY lane", () => {
     const tuiPtyConfig = createTuiPtyVitestConfig({});
-    const tuiPtyTests = [
-      "src/tui/tui-auth-child-pty.e2e.test.ts",
-      "src/tui/tui-pty-harness.e2e.test.ts",
-      "src/tui/tui-session-identity-pty.e2e.test.ts",
-      "src/tui/tui-reset-transition-pty.e2e.test.ts",
-      "src/tui/tui-task-suggestions-pty.e2e.test.ts",
-      "src/tui/tui-error-pty.e2e.test.ts",
-      "src/tui/tui-hyperlinks-pty.e2e.test.ts",
-      "src/tui/tui-picker-cancel-pty.e2e.test.ts",
-      "src/tui/tui-pty-local.e2e.test.ts",
-    ];
+    const tuiPtyTests = readdirSync(resolveRepoRootPath("src/tui"))
+      .filter((name) => name.endsWith(".e2e.test.ts"))
+      .map((name) => `src/tui/${name}`);
 
     expect(e2eConfig.test?.exclude).toEqual(expect.arrayContaining(tuiPtyTests));
-    expect(tuiPtyConfig.test?.include).toEqual(
+    expect(tuiPtyConfig.test?.include?.toSorted()).toEqual(
       tuiPtyTests
         .filter((target) => !target.endsWith("tui-pty-local.e2e.test.ts"))
-        .map((target) => target.replace(/^src\//u, "")),
+        .map((target) => target.replace(/^src\//u, ""))
+        .toSorted(),
     );
     expect(tuiPtyConfig.test?.fileParallelism).toBe(false);
     expect(tuiPtyConfig.test?.maxWorkers).toBe(1);

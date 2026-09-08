@@ -53,7 +53,12 @@ describe("models.list configured static entries", () => {
           return respond.mock.calls[0]?.[1];
         };
         const shared = await read();
-        expect(await read(alice.id)).toEqual(shared);
+        expect(shared).toEqual({ models: [] });
+        const unconfiguredPersonal = {
+          models: [],
+          accountSelection: { kind: "automatic", label: "Automatic account selection" },
+        };
+        expect(await read(alice.id)).toEqual(unconfiguredPersonal);
         connectUserModelAccount({
           ownerProfileId: alice.id,
           credential: {
@@ -72,14 +77,14 @@ describe("models.list configured static entries", () => {
             expect.objectContaining({ id: "gpt-5.6-luna", available: true }),
           ]),
         });
-        expect(await read(bob.id)).toEqual(shared);
+        expect(await read(bob.id)).toEqual(unconfiguredPersonal);
         expect(await read()).toEqual(shared);
 
         const merged = ensureProfileForEmail("alice-new@example.test");
         linkEmail("alice@example.test", merged.id);
         expect(await read(alice.id)).toEqual(connected);
         clearUserProfileAuthLink({ profileId: merged.id, provider: "openai" });
-        expect(await read(alice.id)).toEqual(shared);
+        expect(await read(alice.id)).toEqual(unconfiguredPersonal);
       },
     );
   });

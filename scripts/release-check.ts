@@ -631,6 +631,7 @@ export function createPackedCompletionSmokeEnv(
 }
 
 export function collectPackedInstalledPackageVerificationErrors(params: {
+  additionalCompanionManifestRoots?: string[];
   expectedVersion: string;
   installedBinaryVersion?: string;
   packageRoot: string;
@@ -639,6 +640,7 @@ export function collectPackedInstalledPackageVerificationErrors(params: {
     readFileSync(join(params.packageRoot, "package.json"), "utf8"),
   ) as { version?: string };
   const errors = collectInstalledPackageErrors({
+    additionalCompanionManifestRoots: params.additionalCompanionManifestRoots,
     expectedVersion: params.expectedVersion,
     installedVersion: packageJson.version?.trim() ?? "",
     packageRoot: params.packageRoot,
@@ -674,6 +676,9 @@ function verifyPackedInstalledPackage(params: {
     },
   ).trim();
   const errors = collectPackedInstalledPackageVerificationErrors({
+    // The selected source checkout is immutable release input. Its companion
+    // manifests are the exact inputs packed by the following plugin preflight.
+    additionalCompanionManifestRoots: [resolve("extensions")],
     expectedVersion: params.expectedVersion,
     installedBinaryVersion,
     packageRoot: params.packageRoot,

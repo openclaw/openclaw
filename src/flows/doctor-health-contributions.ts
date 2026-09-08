@@ -22,10 +22,11 @@ import {
   resolveDoctorMode,
   resolveDoctorWorkspaceDir,
 } from "./doctor-health-contribution-utils.js";
+import { recordDoctorHealthWarnings } from "./doctor-health-contribution.js";
 import { resolveFinalDoctorHealthContributions } from "./doctor-health-contributions-final.js";
 import { resolveInitialDoctorHealthContributions } from "./doctor-health-contributions-initial.js";
 import { normalizeHealthCheck } from "./health-check-adapter.js";
-import type { DetectableHealthCheckInput } from "./health-check-runner-types.js";
+import type { DoctorHealthCheck } from "./health-check-runner-types.js";
 import type { HealthCheckContext, HealthFinding } from "./health-checks.js";
 
 export type { DoctorHealthFlowContext } from "./doctor-health-contribution-types.js";
@@ -417,7 +418,7 @@ async function detectSystemdLingerFindings(
 
 async function runShellCompletionHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { doctorShellCompletion } = await import("../commands/doctor-completion.js");
-  await doctorShellCompletion(ctx.runtime, ctx.prompter, {
+  await doctorShellCompletion(ctx.prompter, {
     nonInteractive: ctx.options.nonInteractive,
   });
 }
@@ -478,11 +479,11 @@ function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
 }
 
 export async function resolveDoctorContributionHealthChecks(): Promise<
-  readonly DetectableHealthCheckInput[]
+  readonly DoctorHealthCheck[]
 > {
   const { createCoreHealthChecks } = await import("./doctor-core-checks.js");
   const checksById = new Map(createCoreHealthChecks().map((check) => [check.id, check]));
-  const checks: DetectableHealthCheckInput[] = [];
+  const checks: DoctorHealthCheck[] = [];
   for (const contribution of resolveDoctorHealthContributions()) {
     if (contribution.healthChecks.length > 0) {
       checks.push(...contribution.healthChecks.map(normalizeHealthCheck));
@@ -537,7 +538,9 @@ async function runDoctorHealthContributionList(
         throw error;
       }
       const { note } = await loadNoteModule();
-      note(`${contribution.id} run failed: ${scrubDoctorErrorMessage(error)}`, "Doctor warnings");
+      const message = `${contribution.id} run failed: ${scrubDoctorErrorMessage(error)}`;
+      note(message, "Doctor warnings");
+      recordDoctorHealthWarnings(ctx, [], [message]);
     }
   }
 }
