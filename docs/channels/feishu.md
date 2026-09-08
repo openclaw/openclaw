@@ -346,6 +346,8 @@ Feishu/Lark supports streaming replies via interactive cards (Card Kit streaming
 
 Set `streaming.mode: "off"` to send the completed reply without streaming updates; long replies still split at the message limits above. `renderMode: "raw"` (plain text instead of cards) also disables streaming cards. `streaming.block.enabled` is off by default; enable it only when you want completed assistant blocks flushed before the final reply. Legacy boolean `streaming` and the flat `blockStreaming` / `blockStreamingCoalesce` / `chunkMode` keys migrate to this nested shape via `openclaw doctor --fix`.
 
+Feishu can close a card's streaming mode on its own — for example after a long tool phase with no card updates. When that happens the card stops accepting updates, so it keeps whatever text it last showed and the completed reply arrives as a separate static card or message. Expect the visible prefix to appear twice in that case; the full answer is the later message.
+
 Replies with controls use native cards for command buttons and HTTP(S) links, including when streaming is off. The card carries the reply text; attachments remain separate messages. Unsupported controls and cards that exceed Feishu's size limits keep their full labels in a readable fallback. That fallback remains a separate message when a later reply streams. A final controls reply replaces an active streaming preview without sending the preview text again; error controls after a completed answer remain separate. If Feishu cannot delete or clear a replaced preview, delivery reports a failure and retains the original message receipt.
 
 ### Quota optimization

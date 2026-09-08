@@ -16,6 +16,7 @@ import { requestFeishuApi } from "./comment-shared.js";
 import { readFeishuJsonResponse } from "./json-response.js";
 import { resolveFeishuCardTemplate, type CardHeaderConfig } from "./send.js";
 import { resolveStreamingCardSendMode } from "./streaming-card-send-mode.js";
+import { isFeishuTerminalStreamError } from "./streaming-card-terminal-codes.js";
 import type { FeishuDomain } from "./types.js";
 
 type Credentials = {
@@ -48,7 +49,29 @@ type FeishuStreamingCloseResult = {
   visibleReplySent: boolean;
   content?: string;
   messageId?: string;
+  /**
+   * CardKit accepted the caller's final text. False when the card is left frozen on
+   * an earlier snapshot, so the caller can still deliver the answer another way.
+   * Visible content and a delivered final answer are separate facts.
+   */
+  finalTextAccepted?: boolean;
 };
+
+/**
+ * A CardKit request the API rejected, keeping the numeric code so callers can tell a
+ * terminal stream closure from a retryable failure.
+ *
+ * `name` is deliberately left as the inherited "Error": operators grep these lines and
+ * the existing log assertions pin `String(error)` byte-for-byte.
+ */
+export class FeishuCardKitError extends Error {
+  readonly code: number | undefined;
+
+  constructor(action: string, data: CardKitResponse) {
+    super(`${action} failed: ${data.msg ?? "unknown error"} (code=${String(data.code)})`);
+    this.code = data.code;
+  }
+}
 
 /** Provider finalization failed after a streaming card may already be visible. */
 export class FeishuStreamingFinalizationError extends Error {
@@ -148,7 +171,7 @@ async function assertSuccessfulCardKitResponse(
   }
   const data = await readFeishuJsonResponse<CardKitResponse>(response, auditContext);
   if (data.code !== 0) {
-    throw new Error(`${action} failed: ${data.msg ?? "unknown error"} (code=${String(data.code)})`);
+    throw new FeishuCardKitError(action, data);
   }
 }
 
@@ -253,6 +276,13 @@ export class FeishuStreamingSession {
   private state: CardState | null = null;
   private queue: Promise<void> = Promise.resolve();
   private closed = false;
+  /**
+   * CardKit retired this card's stream. Kept separate from `closed` ("we finalized"),
+   * because `closeWithResult` and `discard` early-return on `closed` and would drop the
+   * receipt and accepted-content facts the caller still needs.
+   */
+  private streamClosedByServer = false;
+  private streamClosedCause: unknown;
   private log?: (msg: string) => void;
   private lastUpdateTime = 0;
   private pendingText: string | null = null;
@@ -404,6 +434,21 @@ export class FeishuStreamingSession {
     this.log?.(`Started streaming: cardId=${cardId}${messageId ? `, messageId=${messageId}` : ""}`);
   }
 
+  /**
+   * A terminal CardKit rejection means the card's stream no longer exists, so every
+   * later patch is rejected too. Retire the stream at its producer: drop queued text
+   * and cancel the pending flush so nothing already scheduled fires.
+   */
+  private retireIfStreamClosedByServer(error: unknown): void {
+    if (this.streamClosedByServer || !isFeishuTerminalStreamError(error)) {
+      return;
+    }
+    this.streamClosedByServer = true;
+    this.streamClosedCause = error;
+    this.pendingText = null;
+    this.clearFlushTimer();
+  }
+
   private async updateCardContent(
     text: string,
     onError?: (error: unknown) => void,
@@ -449,6 +494,7 @@ export class FeishuStreamingSession {
       }
       return true;
     } catch (error) {
+      this.retireIfStreamClosedByServer(error);
       onError?.(error);
       return false;
     }
@@ -499,6 +545,7 @@ export class FeishuStreamingSession {
       }
       return true;
     } catch (error) {
+      this.retireIfStreamClosedByServer(error);
       onError?.(error);
       return false;
     }
@@ -512,7 +559,7 @@ export class FeishuStreamingSession {
   }
 
   private schedulePendingFlush(): void {
-    if (this.flushTimer || !this.pendingText || this.closed) {
+    if (this.flushTimer || !this.pendingText || this.closed || this.streamClosedByServer) {
       return;
     }
     const delayMs = Math.max(0, this.updateThrottleMs - (Date.now() - this.lastUpdateTime));
@@ -530,7 +577,8 @@ export class FeishuStreamingSession {
 
   private async flushPendingUpdate(): Promise<void> {
     this.queue = this.queue.then(async () => {
-      if (!this.state || this.closed) {
+      // Retirement can land while this flush waits its turn in the queue.
+      if (!this.state || this.closed || this.streamClosedByServer) {
         return;
       }
       const nextText = this.pendingText;
@@ -558,6 +606,11 @@ export class FeishuStreamingSession {
     // The caller supplies the complete current card text. CardKit derives its own
     // display delta, so merging snapshots here can duplicate divergent reasoning.
     this.state.currentText = text;
+    if (this.streamClosedByServer) {
+      // The stream is gone. Keep tracking what the caller wanted so finalization can
+      // report whether that text was ever accepted, but issue no further patches.
+      return;
+    }
     this.pendingText = text;
     this.clearFlushTimer();
 
@@ -625,6 +678,28 @@ export class FeishuStreamingSession {
     this.closed = true;
     this.clearFlushTimer();
     await this.queue;
+
+    if (this.streamClosedByServer) {
+      // CardKit already retired this stream, so the final content write, the note
+      // update and the settings PATCH would each be rejected. Tear down locally and
+      // report only the text CardKit accepted.
+      const retiredState = this.state;
+      const acceptedText = retiredState.sentText;
+      const visibleContentSent = Boolean(acceptedText.trim());
+      const requestedText = finalText ?? this.pendingText ?? retiredState.currentText;
+      this.state = null;
+      this.pendingText = null;
+      this.log?.(`Streaming card closed by server: cardId=${retiredState.cardId}`);
+      const retiredResult: FeishuStreamingCloseResult = {
+        visibleReplySent: visibleContentSent,
+        finalTextAccepted: requestedText === acceptedText,
+        ...(visibleContentSent ? { content: acceptedText } : {}),
+        ...(retiredState.messageId ? { messageId: retiredState.messageId } : {}),
+      };
+      // Streaming mode was never closed by us; report the terminal cause rather than
+      // a silent success, so the caller can still deliver the complete answer.
+      throw new FeishuStreamingFinalizationError(this.streamClosedCause, retiredResult);
+    }
 
     const text = finalText ?? this.pendingText ?? this.state.currentText;
     const apiBase = resolveApiBase(this.creds.domain);
@@ -712,6 +787,8 @@ export class FeishuStreamingSession {
     this.log?.(`Closed streaming: cardId=${finalState.cardId}`);
     const result: FeishuStreamingCloseResult = {
       visibleReplySent: visibleContentSent,
+      // sentText advances only for an accepted write, so this is the accepted-final fact.
+      finalTextAccepted: finalState.sentText === text,
       ...(visibleContentSent ? { content: finalState.sentText } : {}),
       ...(finalState.messageId ? { messageId: finalState.messageId } : {}),
     };
@@ -761,6 +838,6 @@ export class FeishuStreamingSession {
   }
 
   isActive(): boolean {
-    return this.state !== null && !this.closed;
+    return this.state !== null && !this.closed && !this.streamClosedByServer;
   }
 }

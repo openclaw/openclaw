@@ -350,6 +350,7 @@ describe("FeishuStreamingSession", () => {
 
       await expect(session.closeWithResult("The accepted answer")).resolves.toEqual({
         visibleReplySent: true,
+        finalTextAccepted: true,
         content: "The accepted answer",
       });
       expect(method === "reply" ? reply : create).toHaveBeenCalledOnce();
@@ -1350,6 +1351,183 @@ describe("FeishuStreamingSession", () => {
 
     expect(authTokens).toEqual(["token-1", "token-2"]);
     dateNow.mockRestore();
+  });
+
+  // Regression coverage for #139443: CardKit retires a card's stream server-side after
+  // an idle window (200850) and rejects every later request against it (300309).
+  const CARD_STREAMING_TIMEOUT_CODE = 200850;
+  const STREAMING_MODE_CLOSED_CODE = 300309;
+
+  function createTerminalStreamSession(
+    appId: string,
+    deps: StreamingFetchDeps,
+    log?: (msg: string) => void,
+    lastUpdateTime?: number,
+  ): FeishuStreamingSession {
+    const session = new FeishuStreamingSession(
+      {} as never,
+      { appId, appSecret: "secret" },
+      log,
+      deps,
+    );
+    setStreamingSessionInternals(session, {
+      state: {
+        cardId: `card_${appId}`,
+        messageId: `om_${appId}`,
+        sequence: 4,
+        currentText: "Working on it.",
+        sentText: "Working on it.",
+        hasNote: false,
+      },
+      ...(lastUpdateTime === undefined ? {} : { lastUpdateTime }),
+    });
+    return session;
+  }
+
+  it("retires a stream CardKit closed with 200850 instead of blind-retrying every later patch", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(10_000);
+
+    const contentUpdateAttempts: string[] = [];
+    const servedCodes: number[] = [];
+    const deps = createMemoryFetch((url, body) => {
+      if (url.pathname.includes("/auth/")) {
+        return jsonResponse({ code: 0, msg: "ok", tenant_access_token: "token", expire: 7200 });
+      }
+      if (url.pathname.includes("/elements/content/content")) {
+        contentUpdateAttempts.push((JSON.parse(body) as { content: string }).content);
+        // The idle timer fires once; the stream is gone for every later patch.
+        const code =
+          contentUpdateAttempts.length === 1
+            ? CARD_STREAMING_TIMEOUT_CODE
+            : STREAMING_MODE_CLOSED_CODE;
+        servedCodes.push(code);
+        return jsonResponse({
+          code,
+          msg:
+            code === CARD_STREAMING_TIMEOUT_CODE
+              ? "ErrMsg: card streaming timeout; "
+              : "ErrMsg: streaming mode is closed; ",
+        });
+      }
+      return jsonResponse({ code: 0, msg: "ok" });
+    });
+
+    const log = vi.fn();
+    const session = createTerminalStreamSession("terminal_stream_139443", deps, log, 10_000);
+
+    // Every snapshot grows by more than STREAMING_SIGNIFICANT_DELTA_CHARS against the
+    // frozen sentText, so an unretired session force-flushes each one past the 160 ms
+    // throttle and issues one PUT per snapshot without any simulated time passing.
+    let text = "Working on it.";
+    for (let index = 0; index < 6; index += 1) {
+      text = `${text}\nstreamed answer paragraph ${String(index).padStart(2, "0")}`;
+      await session.update(text);
+    }
+
+    // Byte-for-byte the journal line quoted in the issue.
+    expect(String(log.mock.calls[0]?.[0])).toBe(
+      "Update failed: Error: Update card content failed: ErrMsg: card streaming timeout;  (code=200850)",
+    );
+    expect(
+      contentUpdateAttempts,
+      "the session must stop patching a stream CardKit reported closed",
+    ).toHaveLength(1);
+    expect(servedCodes.filter((code) => code === STREAMING_MODE_CLOSED_CODE)).toEqual([]);
+    expect(
+      session.isActive(),
+      "a stream CardKit has closed must not report itself active to the reply dispatcher",
+    ).toBe(false);
+  });
+
+  it("does not PATCH close settings on a stream CardKit already reported as closed", async () => {
+    const requestPaths: string[] = [];
+    const deps = createMemoryFetch((url) => {
+      if (url.pathname.includes("/auth/")) {
+        return jsonResponse({ code: 0, msg: "ok", tenant_access_token: "token", expire: 7200 });
+      }
+      requestPaths.push(url.pathname);
+      if (url.pathname.includes("/elements/content")) {
+        return jsonResponse({
+          code: CARD_STREAMING_TIMEOUT_CODE,
+          msg: "ErrMsg: card streaming timeout; ",
+        });
+      }
+      return jsonResponse({
+        code: STREAMING_MODE_CLOSED_CODE,
+        msg: "ErrMsg: streaming mode is closed; ",
+      });
+    });
+
+    const session = createTerminalStreamSession("terminal_close_139443", deps);
+    await session.update("Working on it.\nstreamed answer paragraph 00");
+    const closeError = await session
+      .closeWithResult("Working on it.\nfinal answer", { note: "Agent: agent" })
+      .then(() => undefined)
+      .catch((error: unknown) => error);
+
+    expect(
+      requestPaths.filter((pathname) => pathname.endsWith("/settings")),
+      "closeWithResult must not PATCH streaming settings on a stream CardKit reported closed",
+    ).toEqual([]);
+    expect(closeError).toBeInstanceOf(FeishuStreamingFinalizationError);
+    // The card keeps its receipt and its stale visible text, but the final answer was
+    // never accepted, so the caller must still deliver it.
+    expect((closeError as FeishuStreamingFinalizationError).result).toMatchObject({
+      visibleReplySent: true,
+      finalTextAccepted: false,
+      content: "Working on it.",
+      messageId: "om_terminal_close_139443",
+    });
+  });
+
+  it("reports the final text as accepted when CardKit accepts the closing write", async () => {
+    const deps = createMemoryFetch((url) => {
+      if (url.pathname.includes("/auth/")) {
+        return jsonResponse({ code: 0, msg: "ok", tenant_access_token: "token", expire: 7200 });
+      }
+      return jsonResponse({ code: 0, msg: "ok" });
+    });
+
+    const session = createTerminalStreamSession("accepted_close_139443", deps);
+    const result = await session.closeWithResult("Working on it.\nfinal answer");
+
+    expect(result).toMatchObject({
+      visibleReplySent: true,
+      finalTextAccepted: true,
+      content: "Working on it.\nfinal answer",
+    });
+  });
+
+  it("keeps a stream active after a retryable CardKit body error", async () => {
+    const deps = createMemoryFetch((url) => {
+      if (url.pathname.includes("/auth/")) {
+        return jsonResponse({ code: 0, msg: "ok", tenant_access_token: "token", expire: 7200 });
+      }
+      return jsonResponse({ code: 19001, msg: "sequence rejected" });
+    });
+
+    const session = createTerminalStreamSession("retryable_body_139443", deps);
+    await session.update("Working on it.\nstreamed answer paragraph 00");
+
+    expect(
+      session.isActive(),
+      "a sequence rejection is retryable and must not retire the stream",
+    ).toBe(true);
+  });
+
+  it("keeps a stream active after an HTTP 429 update rejection", async () => {
+    const deps = createMemoryFetch((url) => {
+      if (url.pathname.includes("/auth/")) {
+        return jsonResponse({ code: 0, msg: "ok", tenant_access_token: "token", expire: 7200 });
+      }
+      return jsonResponse({ code: 0, msg: "rate limited" }, 429);
+    });
+
+    const session = createTerminalStreamSession("retryable_429_139443", deps);
+    await session.update("Working on it.\nstreamed answer paragraph 00");
+
+    expect(session.isActive(), "a rate-limited update must not retire the stream").toBe(true);
   });
 });
 

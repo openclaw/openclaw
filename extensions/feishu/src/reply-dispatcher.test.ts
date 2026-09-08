@@ -2716,6 +2716,66 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     });
   });
 
+  // Regression coverage for #139443.
+  it("stops queueing streaming patches once the session retires a CardKit-closed stream", async () => {
+    const { result, options } = createDispatcherHarness();
+    await options.onReplyStart?.();
+    result.replyOptions.onPartialReply?.({ text: "Working on it." });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const instance = requireStreamingInstance(0);
+    const patchesBeforeRetirement = instance.update.mock.calls.length;
+    // CardKit retires the stream on the next patch; a repaired session stops reporting
+    // itself active, which is the dispatcher's only liveness signal.
+    instance.update.mockImplementation(async () => {
+      instance.active = false;
+    });
+
+    for (let index = 0; index < 6; index += 1) {
+      result.replyOptions.onPartialReply?.({
+        text: `Working on it.\nstreamed answer paragraph ${String(index).padStart(2, "0")}`,
+      });
+    }
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(
+      instance.update.mock.calls.length - patchesBeforeRetirement,
+      "the dispatcher must not keep patching a stream whose owner reports it retired",
+    ).toBeLessThanOrEqual(1);
+  });
+
+  it("delivers the complete answer statically when a server-closed stream kept only a stale partial", async () => {
+    const { result, options } = createDispatcherHarness();
+    result.replyOptions.onPartialReply?.({ text: "Working on it." });
+    const finalText = "Working on it.\nHere is the complete answer the user must still receive.";
+    const delivery = await options.deliver({ text: finalText }, { kind: "final" });
+    // 200850 froze the card after "Working on it." was accepted, so the final write and
+    // the close were both rejected: the card is visible but the answer never landed.
+    requireStreamingInstance(0).closeWithResult.mockRejectedValueOnce(
+      new FeishuStreamingFinalizationError(
+        new Error("Update card content failed: ErrMsg: streaming mode is closed;  (code=300309)"),
+        {
+          visibleReplySent: true,
+          finalTextAccepted: false,
+          content: "Working on it.",
+          messageId: "om_stream",
+        },
+      ),
+    );
+
+    await Promise.resolve(options.onIdle?.()).catch(() => undefined);
+    await Promise.resolve(delivery?.finalization).catch(() => undefined);
+
+    const staticSends = [
+      ...sendStructuredCardFeishuMock.mock.calls,
+      ...sendMessageFeishuMock.mock.calls,
+    ].map((call) => String((call[0] as { text?: string } | undefined)?.text ?? ""));
+    expect(
+      staticSends,
+      "a card frozen on a stale partial is not a delivered answer; the dispatcher must fall back to the static path",
+    ).toContain(finalText);
+  });
+
   it("allows recovery after a final rewrite leaves only an earlier preview visible", async () => {
     const { result, options } = createDispatcherHarness();
     result.replyOptions.onPartialReply?.({ text: "accepted preview" });

@@ -314,6 +314,8 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     result: FeishuReplyDeliveryResult;
     generation?: number;
     error?: unknown;
+    /** The owning session confirmed CardKit accepted the final text. */
+    finalTextAccepted?: boolean;
   };
   type ClosedStreamingSettlement = StreamingCloseOutcome & {
     content: string;
@@ -527,6 +529,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     result: FeishuReplyDeliveryResult,
     error?: unknown,
     disposition: StreamingDisposition = "closed",
+    finalTextAccepted?: boolean,
   ) => {
     if (generation === undefined || (!content && disposition === "closed")) {
       return;
@@ -536,6 +539,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       result,
       content,
       ...(error === undefined ? {} : { error }),
+      ...(finalTextAccepted === undefined ? {} : { finalTextAccepted }),
     });
   };
 
@@ -564,6 +568,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       await updateQueueToClose;
       let result = noVisibleFeishuReplyDelivery;
       let finalizationError: unknown;
+      let finalTextAccepted: boolean | undefined;
       if (streamingToClose?.isActive()) {
         statusLine = "";
         const text = buildCombinedStreamText(finalizedReasoningText, finalizedAnswerText);
@@ -582,6 +587,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           closed = error.result;
           finalizationError = error;
         }
+        finalTextAccepted = closed.finalTextAccepted;
         result = createFeishuReplyDeliveryResult({
           results: [closed],
           visibleReplySent: closed.visibleReplySent,
@@ -624,11 +630,13 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           result,
           finalizationError,
           disposition,
+          finalTextAccepted,
         );
       }
       return {
         ...outcome,
         result,
+        ...(finalTextAccepted === undefined ? {} : { finalTextAccepted }),
         ...(finalizationError === undefined ? {} : { error: finalizationError }),
       };
     } catch (error: unknown) {
@@ -993,8 +1001,12 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     result: FeishuReplyDeliveryResult | undefined,
     content: string | undefined,
     infoKind?: string,
+    finalTextAccepted?: boolean,
   ): Promise<FeishuReplyDeliveryResult | undefined> => {
-    if (result?.visibleReplySent === true || !content?.trim()) {
+    // A card frozen on a stale partial is visible, but it is not the delivered answer.
+    // When its owner reports the final text was never accepted, fall back to the static
+    // path even though a receipt exists; the receipt stays attached to the card.
+    if ((result?.visibleReplySent === true && finalTextAccepted !== false) || !content?.trim()) {
       return result;
     }
     const cardHeader = resolveCardHeader(agentId, identity);
@@ -1059,6 +1071,9 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
               ? {
                   disposition: closeOutcome.disposition,
                   result: finalized,
+                  ...(closeOutcome.finalTextAccepted === undefined
+                    ? {}
+                    : { finalTextAccepted: closeOutcome.finalTextAccepted }),
                   ...(closeOutcome.error === undefined ? {} : { error: closeOutcome.error }),
                 }
               : claimClosedStreamingResult(
@@ -1084,6 +1099,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
                 providerFinalized,
                 completion.result.content,
                 completion.infoKind,
+                claimedSettlement?.finalTextAccepted,
               );
             } catch (fallbackError: unknown) {
               const fallbackPartial = isChannelPartialDeliveryError(fallbackError)
@@ -1202,6 +1218,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
             finalized,
             paramsLocal.content,
             paramsLocal.infoKind,
+            settlement?.finalTextAccepted,
           )) ?? finalized;
       }
     } catch (fallbackError: unknown) {
