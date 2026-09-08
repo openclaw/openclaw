@@ -7,7 +7,7 @@ read_when:
 title: "Slack QA"
 ---
 
-### Slack QA
+## Slack QA
 
 ```bash
 pnpm openclaw qa slack
@@ -113,7 +113,7 @@ Output artifacts:
   `OPENCLAW_QA_SLACK_APPROVAL_CHECKPOINT_DIR`; contains checkpoint JSON,
   acknowledgement JSON, and pending/resolved screenshots.
 
-#### Setting up the Slack workspace
+### Setting up the Slack workspace
 
 The lane needs two distinct Slack apps in one workspace, plus a channel both
 bots are members of:

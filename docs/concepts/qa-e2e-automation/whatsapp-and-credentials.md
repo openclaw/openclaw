@@ -7,7 +7,7 @@ read_when:
 title: "WhatsApp QA and credentials"
 ---
 
-### WhatsApp QA
+## WhatsApp QA
 
 ```bash
 pnpm openclaw qa whatsapp
@@ -114,7 +114,7 @@ Output artifacts:
 - `qa-suite-summary.json`
 - `qa-evidence.json` - evidence entries for the live transport checks.
 
-### Convex credential pool
+## Convex credential pool
 
 Buzz, Discord, Slack, Telegram, and WhatsApp lanes can lease credentials from a
 shared Convex pool instead of reading the per-lane env vars documented in
