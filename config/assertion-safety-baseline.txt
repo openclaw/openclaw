@@ -110,7 +110,6 @@ extensions/browser/src/browser/system-profiles.ts	1
 extensions/browser/src/browser/test-port.ts	1
 extensions/browser/src/browser/unhandled-rejections.ts	2
 extensions/browser/src/cli/browser-cli-actions-input/register.batch.ts	1
-extensions/browser/src/cli/browser-cli-actions-input/register.element.ts	2
 extensions/browser/src/cli/browser-cli-inspect.ts	2
 extensions/browser/src/cli/browser-cli-manage.ts	3
 extensions/browser/src/cli/browser-cli-shared.ts	1
