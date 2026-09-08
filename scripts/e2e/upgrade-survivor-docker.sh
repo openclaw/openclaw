@@ -55,6 +55,17 @@ LANE_ARTIFACT_SUFFIX="$(resolve_lane_artifact_suffix)"
 LANE_ARTIFACT_SUFFIX="${LANE_ARTIFACT_SUFFIX//[^A-Za-z0-9_.-]/_}"
 ARTIFACT_DIR="${OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_DIR:-$ROOT_DIR/.artifacts/upgrade-survivor/$LANE_ARTIFACT_SUFFIX}"
 DOCKER_RUN_USER_ARGS=()
+PREPUBLISH_PLUGIN_REGISTRY_ARGS=()
+if [ -n "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR:-}" ]; then
+  if [ ! -f "$OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR/prepublish-plugin-registry.json" ]; then
+    echo "OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR must contain prepublish-plugin-registry.json" >&2
+    exit 1
+  fi
+  PREPUBLISH_PLUGIN_REGISTRY_ARGS+=(
+    -e OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR=/tmp/openclaw-prepublish-plugin-registry
+    -v "$OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR:/tmp/openclaw-prepublish-plugin-registry:ro"
+  )
+fi
 PROBE_ENV_ARGS=(
   -e OPENCLAW_UPGRADE_SURVIVOR_PROBE_TIMEOUT_MS="$PROBE_TIMEOUT_MS"
   -e OPENCLAW_UPGRADE_SURVIVOR_PROBE_ATTEMPT_TIMEOUT_MS="$PROBE_ATTEMPT_TIMEOUT_MS"
@@ -161,6 +172,7 @@ if [ "${OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE:-0}" = "1" ]; then
     -e OPENCLAW_UPGRADE_SURVIVOR_STATUS_BUDGET_SECONDS="$STATUS_BUDGET_SECONDS" \
     "${PROBE_ENV_ARGS[@]}" \
     -v "$ARTIFACT_DIR:/tmp/openclaw-upgrade-survivor-artifacts" \
+    "${PREPUBLISH_PLUGIN_REGISTRY_ARGS[@]}" \
     "${DOCKER_E2E_PACKAGE_ARGS[@]}" \
     "${DOCKER_RUN_USER_ARGS[@]}" \
     "$IMAGE_NAME" \
@@ -189,6 +201,7 @@ docker_e2e_run_with_harness \
   -e OPENCLAW_UPGRADE_SURVIVOR_STATUS_BUDGET_SECONDS="$STATUS_BUDGET_SECONDS" \
   "${PROBE_ENV_ARGS[@]}" \
   -v "$ARTIFACT_DIR:/tmp/openclaw-upgrade-survivor-artifacts" \
+  "${PREPUBLISH_PLUGIN_REGISTRY_ARGS[@]}" \
   "${DOCKER_E2E_PACKAGE_ARGS[@]}" \
   "${DOCKER_RUN_USER_ARGS[@]}" \
   "$IMAGE_NAME" \

@@ -1,12 +1,18 @@
 // ClawHub Fixture Server tests cover the local package fixture HTTP contract.
-import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import {
+  execFileSync,
+  spawn,
+  spawnSync,
+  type ChildProcessWithoutNullStreams,
+} from "node:child_process";
+import { createHash } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, describe, expect, it } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../helpers/temp-dir.js";
 
-const SCRIPT_PATH = "scripts/e2e/lib/clawhub-fixture-server.cjs";
+const SCRIPT_PATH = path.resolve("scripts/e2e/lib/clawhub-fixture-server.cjs");
 const PACKAGE_NAME = "@openclaw/kitchen-sink";
 const PACKAGE_PATH = `/api/v1/packages/${encodeURIComponent(PACKAGE_NAME)}`;
 const KITCHEN_SINK_VERSION = "0.2.5";
@@ -42,11 +48,11 @@ async function stopServer(child: ChildProcessWithoutNullStreams) {
   }
 }
 
-async function startFixtureServer(profile: string) {
+async function startFixtureServer(profile: string, args: string[] = [], cwd = process.cwd()) {
   const root = makeTempDir(tempDirs, "openclaw-clawhub-fixture-server-");
   const portFile = path.join(root, "port");
-  const child = spawn(process.execPath, [SCRIPT_PATH, profile, portFile], {
-    cwd: process.cwd(),
+  const child = spawn(process.execPath, [SCRIPT_PATH, profile, portFile, ...args], {
+    cwd,
     env: { ...process.env },
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -119,7 +125,63 @@ describe("ClawHub fixture server", () => {
 
     expect(result.status).toBe(1);
     expect(result.stderr).toContain(
-      "usage: clawhub-fixture-server.cjs <kitchen-sink-plugin|plugins> <port-file>",
+      "usage: clawhub-fixture-server.cjs <kitchen-sink-plugin|plugins|prepublish-artifacts> <port-file> [manifest-file]",
     );
+    const assertion = spawnSync(process.execPath, [SCRIPT_PATH, "assert-no-requests", ""], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      env: { ...process.env },
+    });
+    expect(assertion.status).toBe(1);
+    expect(assertion.stderr).toContain("assert-no-requests requires <base-url>");
+  });
+
+  it("serves exact prepublish plugin artifacts and audits an empty request ledger", async () => {
+    const root = makeTempDir(tempDirs, "openclaw-clawhub-prepublish-");
+    const isolatedCwd = makeTempDir(tempDirs, "openclaw-clawhub-isolated-");
+    const packageDir = path.join(root, "package");
+    const tarball = "openclaw-whatsapp-2026.7.33.tgz";
+    const tarballPath = path.join(root, tarball);
+    const version = "2026.7.33";
+    mkdirSync(packageDir);
+    writeFileSync(
+      path.join(packageDir, "package.json"),
+      `${JSON.stringify({ name: "@openclaw/whatsapp", version, openclaw: { extensions: ["./index.js"] } })}\n`,
+    );
+    writeFileSync(
+      path.join(packageDir, "openclaw.plugin.json"),
+      `${JSON.stringify({ id: "whatsapp", configSchema: { type: "object" } })}\n`,
+    );
+    execFileSync("tar", ["-czf", tarballPath, "-C", root, "package"]);
+    const archive = readFileSync(tarballPath);
+    const sha256 = createHash("sha256").update(archive).digest("hex");
+    const manifestPath = path.join(root, "prepublish-plugin-registry.json");
+    writeFileSync(
+      manifestPath,
+      `${JSON.stringify({ packages: [{ name: "@openclaw/whatsapp", version, tarball, sha256 }] })}\n`,
+    );
+
+    const { baseUrl } = await startFixtureServer(
+      "prepublish-artifacts",
+      [manifestPath],
+      isolatedCwd,
+    );
+    const emptyAssertion = spawnSync(
+      process.execPath,
+      [SCRIPT_PATH, "assert-no-requests", baseUrl],
+      { cwd: isolatedCwd, encoding: "utf8", env: { ...process.env } },
+    );
+    expect(emptyAssertion.status).toBe(0);
+
+    const packageResponse = await fetch(
+      `${baseUrl}/api/v1/packages/${encodeURIComponent("@openclaw/whatsapp")}`,
+    );
+    expect(await packageResponse.json()).toMatchObject({
+      package: { name: "@openclaw/whatsapp", runtimeId: "whatsapp", latestVersion: version },
+    });
+    const artifactResponse = await fetch(
+      `${baseUrl}/api/v1/packages/${encodeURIComponent("@openclaw/whatsapp")}/versions/${version}/artifact/download`,
+    );
+    expect(Buffer.from(await artifactResponse.arrayBuffer())).toEqual(archive);
   });
 });

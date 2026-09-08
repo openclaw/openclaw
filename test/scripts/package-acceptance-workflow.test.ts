@@ -783,10 +783,19 @@ describe("package artifact reuse", () => {
     expect(publishedUpgradeSurvivor).toContain("upgrade survivor restart probe");
     expect(publishedUpgradeSurvivor).toContain("write_update_restart_service_secretref_env");
     expect(publishedUpgradeSurvivor).toContain("GATEWAY_AUTH_TOKEN_REF=%s");
+    expect(publishedUpgradeSurvivor).toContain("OPENCLAW_CLAWHUB_URL=%s");
+    expect(publishedUpgradeSurvivor).toContain("park-restart-probe");
+    expect(publishedUpgradeSurvivor).toContain(
+      'restore "$OPENCLAW_CONFIG_PATH" "$authored_config"',
+    );
     expect(publishedUpgradeSurvivor).toContain(
       "env -u OPENCLAW_GATEWAY_TOKEN -u OPENCLAW_GATEWAY_PASSWORD openclaw",
     );
     expect(publishedUpgradeSurvivor).toContain("phase prepare-update-restart-probe");
+    expect(publishedUpgradeSurvivor).toContain("phase configure-clawhub-fixture");
+    expect(publishedUpgradeSurvivor.indexOf("phase configure-clawhub-fixture")).toBeLessThan(
+      publishedUpgradeSurvivor.indexOf("phase prepare-update-restart-probe"),
+    );
     expect(publishedUpgradeSurvivor).toContain("openclaw@(alpha|beta|latest|");
     expect(publishedUpgradeSurvivor).toContain("plugin_deps_cleanup_plugin_dirs");
     expect(publishedUpgradeSurvivor).toContain('"$(package_root)/extensions/$plugin"');

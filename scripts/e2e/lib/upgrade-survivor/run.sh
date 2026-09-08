@@ -2,6 +2,7 @@
 set -Eeuo pipefail
 
 source scripts/lib/openclaw-e2e-instance.sh
+source scripts/e2e/lib/upgrade-survivor/update-restart-auth.sh
 
 export npm_config_loglevel=error
 export npm_config_fund=false
@@ -52,6 +53,7 @@ FAILURE_PHASE=""
 FAILURE_MESSAGE=""
 gateway_pid=""
 plugin_registry_pid=""
+clawhub_fixture_pid=""
 baseline_spec=""
 baseline_version=""
 baseline_version_expected="0"
@@ -224,9 +226,8 @@ NODE
 }
 
 cleanup() {
-  if [ -n "${plugin_registry_pid:-}" ]; then
-    kill "$plugin_registry_pid" >/dev/null 2>&1 || true
-  fi
+  openclaw_e2e_stop_process "${plugin_registry_pid:-}"
+  openclaw_e2e_stop_process "${clawhub_fixture_pid:-}"
   openclaw_e2e_terminate_gateways "${gateway_pid:-}"
   if [ -s "$SYSTEMCTL_SHIM_PID_FILE" ]; then
     local shim_pid
@@ -235,6 +236,40 @@ cleanup() {
       openclaw_e2e_terminate_gateways "$shim_pid"
     fi
   fi
+}
+
+wait_for_fixture_port() {
+  local pid="$1" port_file="$2" log_file="$3" label="$4"
+  for _ in $(seq 1 100); do
+    [ -s "$port_file" ] && return 0
+    openclaw_e2e_process_alive "$pid" || break
+    sleep 0.1
+  done
+  openclaw_e2e_print_log "$log_file" >&2
+  echo "Timed out waiting for upgrade survivor $label." >&2
+  return 1
+}
+
+configure_clawhub_fixture() {
+  unset OPENCLAW_CLAWHUB_URL CLAWHUB_URL
+  [ -z "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR:-}" ] && return 0
+  local fixture_root="$ARTIFACT_ROOT/clawhub-fixture" port_file log_file
+  port_file="$fixture_root/port"
+  log_file="$fixture_root/server.log"
+  mkdir -p "$fixture_root"
+  rm -f "$port_file"
+  node "${OPENCLAW_UPGRADE_SURVIVOR_CLAWHUB_FIXTURE_SERVER:-scripts/e2e/lib/clawhub-fixture-server.cjs}" \
+    prepublish-artifacts "$port_file" \
+    "$OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR/prepublish-plugin-registry.json" >"$log_file" 2>&1 &
+  clawhub_fixture_pid="$!"
+  wait_for_fixture_port "$clawhub_fixture_pid" "$port_file" "$log_file" "ClawHub fixture"
+  export OPENCLAW_CLAWHUB_URL="http://127.0.0.1:$(cat "$port_file")"
+}
+
+assert_prepublish_fixture_idle() {
+  [ -n "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR:-}" ] || return 0
+  node "${OPENCLAW_UPGRADE_SURVIVOR_CLAWHUB_FIXTURE_SERVER:-scripts/e2e/lib/clawhub-fixture-server.cjs}" \
+    assert-no-requests "$OPENCLAW_CLAWHUB_URL"
 }
 
 on_error() {
@@ -961,12 +996,16 @@ write_update_restart_service_secretref_env() {
   local dotenv_path="$OPENCLAW_STATE_DIR/.env"
   local tmp_path="$dotenv_path.tmp.$$"
   if [ -f "$dotenv_path" ]; then
-    grep -v '^GATEWAY_AUTH_TOKEN_REF=' "$dotenv_path" >"$tmp_path" || true
+    grep -Ev '^(GATEWAY_AUTH_TOKEN_REF|OPENCLAW_CLAWHUB_URL)=' "$dotenv_path" >"$tmp_path" || true
   else
     : >"$tmp_path"
   fi
   # Managed restarts resolve SecretRefs from service-owned durable env, not the update caller.
   printf 'GATEWAY_AUTH_TOKEN_REF=%s\n' "$GATEWAY_AUTH_TOKEN_REF" >>"$tmp_path"
+  if [ -n "${OPENCLAW_CLAWHUB_URL:-}" ]; then
+    printf 'OPENCLAW_CLAWHUB_URL=%s\n' "$OPENCLAW_CLAWHUB_URL" >>"$tmp_path"
+  fi
+  chmod 600 "$tmp_path"
   mv "$tmp_path" "$dotenv_path"
 }
 
@@ -976,10 +1015,38 @@ prepare_update_restart_probe() {
   fi
   echo "Preparing configured-auth gateway for automatic update restart."
   install_update_restart_systemctl_shim
-  seed_update_restart_probe_device_auth
-  start_gateway legacy-ready-log-ok
-  write_update_restart_service_secretref_env
-  install_update_restart_service_unit
+  local probe_status=0 restore_status=0
+  local authored_config="$RUNTIME_ROOT/baseline-authored-openclaw.json"
+  local parking_helper="${OPENCLAW_UPGRADE_SURVIVOR_CONFIG_PARKING_HELPER:-scripts/e2e/lib/upgrade-survivor/config-parking.mjs}"
+  # Bootstrap service auth while keeping candidate-era plugin config away from
+  # the historical baseline. The updater must receive that config unchanged.
+  node "$parking_helper" \
+    park-restart-probe "$OPENCLAW_CONFIG_PATH" "$authored_config" 18789 || probe_status=$?
+  if [ "$probe_status" -eq 0 ]; then
+    seed_update_restart_probe_device_auth || probe_status=$?
+  fi
+  if [ "$probe_status" -eq 0 ]; then
+    start_gateway legacy-ready-log-ok || probe_status=$?
+  fi
+  if [ "$probe_status" -eq 0 ]; then
+    write_update_restart_service_secretref_env || probe_status=$?
+  fi
+  if [ "$probe_status" -eq 0 ]; then
+    assert_prepublish_fixture_idle || probe_status=$?
+  fi
+  if [ "$probe_status" -eq 0 ]; then
+    install_update_restart_service_unit || probe_status=$?
+  fi
+  # Service installation can replace the bootstrap PID. Stop through the
+  # manager so its current PID remains owned until shutdown is verified.
+  stop_update_restart_probe_gateway "$COMMAND_TIMEOUT" || return "$?"
+  if [ -e "$authored_config" ]; then
+    node "$parking_helper" restore "$OPENCLAW_CONFIG_PATH" "$authored_config" || restore_status=$?
+  fi
+  if [ "$restore_status" -ne 0 ]; then
+    return "$restore_status"
+  fi
+  return "$probe_status"
 }
 
 assert_baseline_state() {
@@ -1173,7 +1240,10 @@ start_gateway() {
   if [ "$UPDATE_RESTART_MODE" = "auto-auth" ]; then
     printf '%s\n' "$gateway_pid" >"$SYSTEMCTL_SHIM_PID_FILE"
   fi
-  openclaw_e2e_wait_gateway_ready "$gateway_pid" "$GATEWAY_LOG" 360 "$port" "${1:-strict}"
+  if ! openclaw_e2e_wait_gateway_ready "$gateway_pid" "$GATEWAY_LOG" 360 "$port" "${1:-strict}"; then
+    openclaw_e2e_print_log "$GATEWAY_LOG" >&2
+    return 1
+  fi
   ready_epoch="$(node -e "process.stdout.write(String(Date.now()))")"
   start_seconds=$(((ready_epoch - start_epoch + 999) / 1000))
   if [ "$start_seconds" -gt "$budget" ]; then
@@ -1232,6 +1302,7 @@ phase seed-source-only-plugin-shadow seed_source_only_plugin_shadow
 phase assert-baseline assert_baseline_state
 phase seed-legacy-runtime-deps-symlink seed_legacy_runtime_deps_symlink
 phase resolve-candidate resolve_candidate_version
+phase configure-clawhub-fixture configure_clawhub_fixture
 phase prepare-update-restart-probe prepare_update_restart_probe
 phase update-candidate update_candidate
 phase root-managed-vps-cli-usable assert_root_managed_vps_cli_usable

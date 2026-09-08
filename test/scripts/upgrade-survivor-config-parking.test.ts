@@ -1,12 +1,107 @@
-import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync, spawnSync } from "node:child_process";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 const PARKING_SCRIPT = "scripts/e2e/lib/upgrade-survivor/config-parking.mjs";
+const RUNNER_SCRIPT = "scripts/e2e/lib/upgrade-survivor/run.sh";
+const RESTART_AUTH_SCRIPT = "scripts/e2e/lib/upgrade-survivor/update-restart-auth.sh";
+const DOCKER_WRAPPER_SCRIPT = "scripts/e2e/upgrade-survivor-docker.sh";
 
 describe("upgrade survivor config parking", () => {
+  it("loads restart lifecycle helpers and mounts a supplied prepublish registry", () => {
+    const runner = readFileSync(RUNNER_SCRIPT, "utf8");
+    const wrapper = readFileSync(DOCKER_WRAPPER_SCRIPT, "utf8");
+    expect(runner).toContain("source scripts/e2e/lib/upgrade-survivor/update-restart-auth.sh");
+    expect(wrapper).toContain(
+      "-e OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR=/tmp/openclaw-prepublish-plugin-registry",
+    );
+    expect(wrapper).toContain(
+      '-v "$OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR:/tmp/openclaw-prepublish-plugin-registry:ro"',
+    );
+    expect(wrapper.match(/"\$\{PREPUBLISH_PLUGIN_REGISTRY_ARGS\[@\]\}"/gu)).toHaveLength(2);
+  });
+
+  it("propagates an early baseline gateway readiness failure", () => {
+    const root = mkdtempSync(join(tmpdir(), "openclaw-restart-readiness-"));
+    try {
+      const source = readFileSync(RUNNER_SCRIPT, "utf8");
+      const start = source.lastIndexOf("\nstart_gateway() {");
+      const end = source.indexOf("\nensure_gateway_started()", start);
+      const gateway = join(root, "openclaw");
+      writeFileSync(gateway, "#!/usr/bin/env bash\nsleep 30\n");
+      chmodSync(gateway, 0o755);
+      const result = spawnSync(
+        "bash",
+        [
+          "-c",
+          `set -uo pipefail
+openclaw_e2e_read_positive_int_env() { printf '90\\n'; }
+openclaw_e2e_wait_gateway_ready() { return 1; }
+openclaw_e2e_print_log() { :; }
+${source.slice(start + 1, end)}
+UPDATE_RESTART_MODE=manual
+GATEWAY_LOG=${JSON.stringify(join(root, "gateway.log"))}
+start_gateway
+status=$?
+[ -z "\${gateway_pid:-}" ] || kill "$gateway_pid" >/dev/null 2>&1 || true
+exit "$status"`,
+        ],
+        { env: { ...process.env, PATH: `${root}:${process.env.PATH}` } },
+      );
+      expect(result.status, result.stderr.toString()).toBe(1);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("stops the service-owned replacement gateway before restoration", () => {
+    const root = mkdtempSync(join(tmpdir(), "openclaw-restart-stop-"));
+    try {
+      const systemctl = join(root, "systemctl");
+      writeFileSync(
+        systemctl,
+        `#!/usr/bin/env bash
+printf '%s\\n' "$*" >>"$SYSTEMCTL_LOG"
+case "$*" in
+  *stop*)
+    pid="$(cat "$SYSTEMCTL_PID_FILE")"
+    kill "$pid"
+    rm -f "$SYSTEMCTL_PID_FILE" ;;
+  *is-active*) exit 3 ;;
+esac
+`,
+      );
+      chmodSync(systemctl, 0o755);
+      const result = spawnSync(
+        "bash",
+        [
+          "-c",
+          `set -euo pipefail
+source ${JSON.stringify(RESTART_AUTH_SCRIPT)}
+export SYSTEMCTL_LOG=${JSON.stringify(join(root, "systemctl.log"))}
+export SYSTEMCTL_PID_FILE=${JSON.stringify(join(root, "systemctl.pid"))}
+export OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_DAEMON_LOG=${JSON.stringify(join(root, "gateway.log"))}
+sleep 30 &
+replacement_pid=$!
+printf '%s\\n' "$replacement_pid" >"$SYSTEMCTL_PID_FILE"
+openclaw_e2e_maybe_timeout() { shift; "$@"; }
+openclaw_e2e_probe_tcp() { return 1; }
+openclaw_e2e_print_log() { :; }
+stop_update_restart_probe_gateway 10s
+[ ! -e "$SYSTEMCTL_PID_FILE" ]
+grep -q -- '--user stop openclaw-gateway.service' "$SYSTEMCTL_LOG"
+! kill -0 "$replacement_pid" >/dev/null 2>&1`,
+        ],
+        { env: { ...process.env, PATH: `${root}:${process.env.PATH}` } },
+      );
+      expect(result.status, result.stderr.toString()).toBe(0);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("parks a minimal auth-only gateway config and restores authored bytes", () => {
     const root = mkdtempSync(join(tmpdir(), "openclaw-config-parking-"));
     try {
