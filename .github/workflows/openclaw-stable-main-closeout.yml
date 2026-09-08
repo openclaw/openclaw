@@ -453,17 +453,7 @@ jobs:
             --pattern "$manifest_asset" \
             --pattern "$manifest_checksum_asset" \
             --dir "$manifest_dir"
-          node --input-type=module - "$manifest_dir/$manifest_asset" <<'NODE'
-          import { readFileSync } from "node:fs";
-          import { basename } from "node:path";
-          import { verifyReleaseEvidenceChecksum } from "./.closeout-tooling/scripts/lib/stable-release-closeout.mjs";
-          const path = process.argv[2];
-          verifyReleaseEvidenceChecksum({
-            assetName: basename(path),
-            assetBytes: readFileSync(path),
-            checksum: readFileSync(`${path}.sha256`, "utf8"),
-          });
-          NODE
+          node .closeout-tooling/scripts/verify-stable-main-closeout.mjs verify-checksum "$manifest_dir/$manifest_asset"
           tag_sha="$(git -C "$GITHUB_WORKSPACE/release-tag" rev-parse HEAD)"
           jq -e \
             --arg tag_sha "$tag_sha" \

@@ -496,7 +496,7 @@ async function verifyNpm(evidence, manifest, run, fullRef, directory) {
   return receipts;
 }
 
-export function verifyRecoveryDockerIndexes(manifest) {
+function verifyRecoveryDockerIndexes(manifest) {
   const results = [];
   for (const registry of ["ghcr.io/openclaw/openclaw", "docker.io/openclaw/openclaw"]) {
     for (const variant of manifest.includeBrowser ? ["default", "browser"] : ["default"]) {
