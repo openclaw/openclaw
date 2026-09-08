@@ -39,6 +39,9 @@ const repositoryScriptEntries = [
   // Invoked by the documented macOS Computer Use live-proof shell rig.
   "scripts/dev/computer-use-macos-live-proof.ts!",
   "scripts/dev/ios-node-e2e.ts!",
+  // Documented real-process supervised TaskFlow failure proof.
+  "scripts/dev/supervised-task-process-proof.ts!",
+  "scripts/dev/supervised-task-runtime-proof.ts!",
   "scripts/diffs-shiki-curated.ts!",
   // Reusable Docker workflows invoke this from the downloaded .release-harness tree.
   "scripts/docker-e2e.mts!",

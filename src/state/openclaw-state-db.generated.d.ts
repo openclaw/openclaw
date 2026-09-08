@@ -1380,6 +1380,24 @@ export interface TaskDeliveryState {
   task_id: string;
 }
 
+export interface TaskFlowEpisodes {
+  deadline_at_ms: number;
+  due_at_ms: number;
+  episode: number;
+  flow_id: string;
+  phase: string;
+  record_json: string;
+  revision: number;
+}
+
+export interface TaskFlowSupervisors {
+  expires_at_ms: number;
+  flow_id: string | null;
+  observed_at_ms: number;
+  owner_id: string;
+  stopped_at_ms: number | null;
+}
+
 export interface TaskRuns {
   agent_id: string | null;
   child_session_key: string | null;
@@ -1790,6 +1808,8 @@ export interface DB {
   state_leases: StateLeases;
   subagent_runs: SubagentRuns;
   task_delivery_state: TaskDeliveryState;
+  task_flow_episodes: TaskFlowEpisodes;
+  task_flow_supervisors: TaskFlowSupervisors;
   task_runs: TaskRuns;
   update_runs: UpdateRuns;
   user_preferences: UserPreferences;

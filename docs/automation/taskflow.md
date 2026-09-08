@@ -183,4 +183,156 @@ Flows coordinate tasks, not replace them. A single flow may drive multiple backg
 - [Background Tasks](/automation/tasks) - the detached work ledger that flows coordinate
 - [CLI: tasks](/cli/tasks) - CLI command reference for `openclaw tasks flow`
 - [Automation Overview](/automation) - all automation mechanisms at a glance
+
+## Experimental supervised episodes
+
+The supervised TaskFlow PoC adds an **opt-in native controller**. It does not
+change managed or mirrored flows: creating those records still does not schedule
+execution. Supervised episodes use `openclaw tasks supervise`, separate from
+`tasks flow`, and currently support Codex and Claude CLI full-turn adapters.
+
+The controller owns continuation between attempts. Returning a final chat answer
+does not finish an episode. Each attempt must return a structured decision that
+the controller commits before releasing its ownership. A task needs a recorded
+objective and observable success criteria. If the operator omits them, a bounded,
+tool-free first attempt must define them or ask for input. Accepted criteria cannot
+be silently lowered by later attempts. Partial success is allowed only for a
+nonempty, preaccepted subset of those criteria.
+
+### Start a supervised task
+
+Configure a dedicated agent with an explicit per-model `agentRuntime.id` of
+`codex` or `claude-cli`, and authenticate through that runtime's normal owner.
+Use `openai/<model>` for Codex and `anthropic/<model>` for Claude CLI in this PoC.
+Claude CLI is the configured runtime, not the canonical model provider.
+See [CLI backends](/gateway/cli-backends). Do not put credentials in a task file.
+
+Create `task.json` with these fields:
+
+| Field                     | Requirement                                                                                                                                         |
+| ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `flowId`                  | Optional unique identifier; generated when omitted.                                                                                                 |
+| `agentId`                 | Existing configured agent.                                                                                                                          |
+| `model`                   | Explicit `provider/model` reference matching the chosen runtime.                                                                                    |
+| `runtime`                 | `codex` or `claude-cli`.                                                                                                                            |
+| `prompt`                  | Nonempty request, at most 4,096 characters.                                                                                                         |
+| `goal`                    | Optional `{ objective, success: [{ id, description }], partial: [id] }`. Maximum 32 criteria; IDs are unique. Omit to request supervised inference. |
+| `policy.deadlineAt`       | Future Unix epoch milliseconds; the episode cannot renew this deadline.                                                                             |
+| `policy.maxAttempts`      | Integer from 1 to 100, including goal definition.                                                                                                   |
+| `policy.attemptTimeoutMs` | Integer from 1,000 to 3,600,000, capped by the episode deadline.                                                                                    |
+
+The file and each stored episode are limited to 64 KiB. Admission refuses more
+than 128 active episodes. An attempt is an OpenClaw full turn, not necessarily
+one physical provider request: existing internal runtime retries remain inside it.
+
+```bash
+# Own this one task in the foreground until it reaches an endpoint.
+openclaw tasks supervise run task.json
+
+# Alternatively, keep a supervisor running in a separate terminal/service.
+openclaw tasks supervise work
+
+# Admit to an already observed general supervisor.
+openclaw tasks supervise start task.json
+openclaw tasks supervise show <flowId>
+```
+
+`run` supervises only its own flow; it does not promise continuation for unrelated
+tasks. `work` supervises all opted-in episodes in the selected state database.
+If its worker loses custody unexpectedly, `work` replaces it with a new owner;
+it never renews a revoked identity. Failed readmission exits nonzero. An explicit
+SIGINT or SIGTERM stops the daemon without rearming it.
+Runtime preparation finishes before a supervisor advertises readiness; slow
+cold loading is not an armed worker. Explicitly starting supervision creates the
+optional tables. A normal Gateway
+then observes that activation and supervises episodes through its post-ready
+service lifecycle, including after restart. Minimal/test and update-canary
+Gateways do not activate this service. Normal installations without the tables
+remain non-creating. Keep a Gateway or `work` service running for unattended
+continuation; a progress card, presence indicator, or open Beads issue is not a
+supervisor.
+
+### Interpret status and endpoints
+
+`show` reports the episode and freshness-qualified custody:
+
+| Field/value                | Meaning                                                                                                                                                               |
+| -------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `continuation: armed`      | A scope-compatible supervisor has a current durable heartbeat and owns the continuation scan. This is an observation, not proof of uninterrupted future availability. |
+| `continuation: unknown`    | No fresh supervisor observation exists. Do not say the task will continue automatically.                                                                              |
+| `continuation: stopped`    | This episode has an immutable endpoint.                                                                                                                               |
+| `execution: attempt_owned` | An unexpired attempt and its supervisor still own execution. This does not prove a model call is currently consuming tokens.                                          |
+| `execution: not_observed`  | No current attempt execution is established. A timer may still be armed.                                                                                              |
+| `operatorRequired: true`   | The episode ended `input_required`; an explicit response is necessary. `false` alone does not mean healthy supervision.                                               |
+
+Observers normally renew every second and expire after ten seconds. The output
+includes observation and expiry timestamps. Readers do not repair or create
+state. SQL claims and exact attempt fences prevent a stale owner from settling a
+successor's work. The last completed/interrupted attempt ID is a transcript
+lookup aid, never permission to replay that attempt.
+
+The endpoint kinds are `succeeded`, `partial`, `input_required`, `failed`, and
+`cancelled`. Success/partial require evidence entries matching accepted criteria.
+The decision protocol is supplied through the system-instruction boundary; task
+content remains separate. Malformed decisions fail closed without searching prose
+for a convenient success object. `acceptedBy: model` explicitly means model-reported evidence, not independent
+verification of the real-world outcome. Cancelling revokes further authorized
+dispatch; it does not claim to undo or physically stop every effect already sent.
+
+An interrupted attempt with a durable dispatch reservation ends `input_required`
+with unknown effects. It is not automatically replayed. The conservative reservation
+precedes runtime invocation, so a crash in that gap can also require reconciliation.
+A claimed attempt without a reservation can be reclaimed; the attempt budget
+still advances. `effects` describes the final/current attempt, not a guarantee
+that the entire task was effect-free. `attempt_completed` is not an exactly-once
+side-effect receipt.
+
+```bash
+openclaw tasks supervise cancel <flowId>
+openclaw tasks supervise resume <flowId> response.json
+```
+
+`response.json` must contain `{ "episode": <currentEpisode>, "input": "...",
+"policy": { ... } }` with fresh finite bounds. Resume requires a current general
+supervisor and opens a new episode; the old input endpoint remains immutable.
+Duplicate responses for the previous episode are refused. `list` returns up to
+256 retained episodes. All supervised command output is JSON. Foreground `run`
+returns exit status 0 only for success/partial, otherwise 1.
+
+### Guarantees and PoC limits
+
+With a functioning supervisor, writable database, advancing clock, and eventual
+CPU scheduling, each admitted episode reaches a recorded endpoint within its
+finite deadline plus reconciliation delay. Deadline processing does not wait
+for a hung model promise. During a whole-host outage or database failure, the
+system cannot honestly promise timely endpoint publication: status becomes
+unknown, and a restarted owner reconciles when those dependencies return.
+
+This PoC restricts attempts to reasoning and the permitted OpenClaw file tools.
+Detached processes, child agents, arbitrary external-event listeners, outbound
+notifications, and Discord presence projection are not supervised here. It does
+not provide a general external-effect transaction ledger or independently judge
+goal semantics. Episode and expired-owner records are retained; automatic
+retention/archival is not implemented. Keeping owner tombstones prevents stale
+processes from resurrecting revoked identities. These additive tables leave
+legacy `flow_runs` untouched; older builds ignore supervised episodes and **do
+not continue them**. Upstream schema acceptance and broader task-tool integration
+remain separate from this experimental branch.
+
+Developer proofs (run from the source checkout):
+
+```bash
+node scripts/run-vitest.mjs src/tasks/supervised-task.test.ts src/tasks/supervised-task.gateway.test.ts src/tasks/supervised-task.agent.test.ts
+node scripts/run-vitest.mjs src/commands/tasks-supervise.test.ts
+pnpm tsx scripts/dev/supervised-task-process-proof.ts
+pnpm tsx scripts/dev/supervised-task-runtime-proof.ts codex <provider/model> <report.json>
+pnpm tsx scripts/dev/supervised-task-runtime-proof.ts claude-cli <provider/model> <report.json>
+```
+
+The process proof uses synthetic decisions, real SQLite connections, concurrent
+processes, and SIGKILL. The runtime proof uses the actual adapters and verifies an
+independently generated fixture marker. It creates isolated OpenClaw state and
+keeps its transcripts for inspection, while native authentication stays with the
+host runtime. It never copies authentication files or starts the live Gateway.
+
 - [Automations](/automation/cron-jobs) - scheduled jobs that may feed into flows

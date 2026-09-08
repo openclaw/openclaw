@@ -16,6 +16,7 @@ import { runCommandWithRuntime } from "../cli-utils.js";
 import { inheritOptionFromParent } from "../command-options.js";
 import { parseCliEnumFilter } from "../enum-filter.js";
 import { ExpectedCliError } from "../failure-output.js";
+import { registerSupervisedTasksCommand } from "./register.tasks-supervise.js";
 
 type TasksParentOption = "json" | "runtime" | "status";
 const TASKS_PARENT_OPTIONS = ["json", "runtime", "status"] as const;
@@ -116,6 +117,7 @@ export function registerTasksCommand(program: Command): void {
     );
   });
   tasksCmd.enablePositionalOptions();
+  registerSupervisedTasksCommand(tasksCmd);
 
   addTasksListOptions(tasksCmd.command("list").description("List tracked background tasks")).action(
     async (_opts, command) => {
