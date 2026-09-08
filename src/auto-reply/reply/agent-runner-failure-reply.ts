@@ -3,6 +3,7 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   buildOAuthRefreshFailureLoginCommand,
+  buildOAuthRefreshFailureRecoveryText,
   classifyOAuthRefreshFailure,
   classifyOAuthRefreshFailureError,
   formatOAuthRefreshFailureLoginCommandMarkdown,
@@ -319,7 +320,9 @@ export function buildExternalRunFailureReply(
       return {
         text: providerLoginRecovery
           ? `⚠️ ${providerLoginRecovery.hint} You can also re-auth with ${loginCommandMarkdown} on the gateway.`
-          : `⚠️ Model login expired on the gateway${providerText}. Re-auth with ${loginCommandMarkdown} in a terminal, then try again.`,
+          : buildOAuthRefreshFailureRecoveryText(oauthRefreshFailure, {
+              includeProfileId: options?.includeAuthProfileId,
+            }),
         ...(providerLoginRecovery ? { presentation: providerLoginRecovery.presentation } : {}),
         isGenericRunnerFailure: false,
       };

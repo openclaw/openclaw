@@ -44,6 +44,41 @@ describe("createAgentLifecycleTerminalBackstop", () => {
     expect(JSON.stringify(event)).not.toContain(rawDiagnostic);
   });
 
+  it.each([
+    { reason: "auth", status: 401 },
+    { reason: "session_expired", status: 410 },
+  ] as const)(
+    "publishes claude-cli re-auth recovery text for a %o login expiry",
+    ({ reason, status }) => {
+      emitAgentEvent.mockClear();
+      const raw = "Failed to authenticate: OAuth session expired and could not be refreshed";
+      const error = new FailoverError(raw, {
+        reason,
+        provider: "claude-cli",
+        model: "claude-opus-5",
+        status,
+        rawError: raw,
+      });
+      const terminal = createAgentLifecycleTerminalBackstop({
+        runId: "claude-cli-login-expired",
+        getLifecycleGeneration: () => "test-generation",
+        resolveTerminationFields: () => ({}),
+      });
+
+      terminal.emit("error", error);
+
+      const event = emitAgentEvent.mock.calls[0]?.[0];
+      expect(event.data.error).toBe(
+        "\u26a0\ufe0f Model login expired on the gateway for claude-cli. Re-auth with `claude auth login && openclaw models auth login --provider anthropic --method cli` in a terminal, then try again.",
+      );
+      expect(event.data.errorObservation).toMatchObject({
+        provider: "claude-cli",
+        providerRuntimeFailureKind: "auth_refresh",
+      });
+      expect(event.data.error).not.toBe(raw);
+    },
+  );
+
   it.each(["typed", "raw"] as const)(
     "publishes bounded selected-profile recovery from %s failures without discovering providers",
     (kind) => {
