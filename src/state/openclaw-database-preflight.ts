@@ -633,8 +633,9 @@ export async function preflightOpenClawDatabaseSchemas(options: {
       }
       inspectedAgentPaths.add(realAgentPath);
       inspectedAgentTargets.add(inspectionKey);
+      // Live agents keep committing during inspection. Online backup preserves
+      // database/WAL contents while allowing SQLite to update SHM read marks.
       agentSnapshot = await prepareSqliteReadOnlyLocation(realAgentPath, {
-        preserveSourceArtifacts: true,
         signal: options.signal,
       });
       options.signal?.throwIfAborted();
