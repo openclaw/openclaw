@@ -13,9 +13,23 @@ import {
   isFutureDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
 } from "@openclaw/normalization-core/number-coercion";
-import type { ChatAbortControllerEntry } from "./chat-abort.js";
 
 const DEFAULT_CHAT_RUN_ABORT_GRACE_MS = 60_000;
+
+/**
+ * The exact fields {@link renewChatRunExecutionDeadline} reads and writes.
+ *
+ * Declared structurally so this module stays a leaf. `chat-abort.ts` imports
+ * and re-exports from here, so importing the abort registry's entry type back
+ * closes a type-graph cycle that `check:madge-import-cycles` rejects. A real
+ * abort controller entry satisfies this shape.
+ */
+export type ChatRunDeadlineEntry = {
+  controller: AbortController;
+  /** False until lane admission reaches the execution boundary. */
+  executionStarted?: boolean;
+  expiresAtMs: number;
+};
 
 export function resolveChatRunExpiresAtMs(params: {
   now: number;
@@ -71,7 +85,7 @@ export function resolveAgentRunExpiresAtMs(params: {
  * revived.
  */
 export function renewChatRunExecutionDeadline(params: {
-  entries: Map<string, ChatAbortControllerEntry>;
+  entries: ReadonlyMap<string, ChatRunDeadlineEntry>;
   runId: string;
   controller: AbortController;
   timeoutMs: number;
