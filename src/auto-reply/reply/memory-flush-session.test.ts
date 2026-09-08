@@ -1,5 +1,6 @@
 import path from "node:path";
 import { expect, it } from "vitest";
+import { makeTextToolResult } from "../../../test/helpers/text-tool-result.js";
 import {
   assembleHarnessContextEngine,
   bootstrapHarnessContextEngine,
@@ -177,14 +178,7 @@ it.each(["compaction", "reset"] as const)(
           stopReason: "toolUse",
         }),
       );
-      source.appendMessage({
-        role: "toolResult",
-        toolCallId: "read-call",
-        toolName: "read",
-        content: [{ type: "text", text: "Paired result" }],
-        isError: false,
-        timestamp: 4,
-      });
+      source.appendMessage(makeTextToolResult("read-call", "read", "Paired result", false, 4));
       const boundary =
         boundaryType === "compaction"
           ? source.appendCompaction("Summary", opaqueCut, 100)

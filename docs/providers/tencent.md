@@ -1,12 +1,12 @@
 ---
-summary: "Tencent Cloud TokenHub and TokenPlan setup for hy3"
+summary: "Tencent Cloud TokenHub and TokenPlan setup for hy4-preview"
 title: "Tencent Cloud (TokenHub / TokenPlan)"
 read_when:
-  - You want to use Tencent hy3 with OpenClaw
+  - You want to use Tencent hy4-preview with OpenClaw
   - You need the TokenHub or TokenPlan API key setup
 ---
 
-Install the official Tencent Cloud provider plugin to access Tencent Hy3 through two endpoints — TokenHub (`tencent-tokenhub`) and TokenPlan (`tencent-tokenplan`) — using an OpenAI-compatible API.
+Install the official Tencent Cloud provider plugin to access Tencent Hunyuan chat models (`hy4-preview`, `hy3`) through two endpoints — TokenHub (`tencent-tokenhub`) and TokenPlan (`tencent-tokenplan`) — using an OpenAI-compatible API.
 
 | Property                  | Value                                                 |
 | ------------------------- | ----------------------------------------------------- |
@@ -22,13 +22,13 @@ Install the official Tencent Cloud provider plugin to access Tencent Hy3 through
 | TokenHub base URL         | `https://tokenhub.tencentmaas.com/v1`                 |
 | TokenHub global base URL  | `https://tokenhub-intl.tencentmaas.com/v1` (override) |
 | TokenPlan base URL        | `https://api.lkeap.cloud.tencent.com/plan/v3`         |
-| Default model             | `tencent-tokenhub/hy3`                                |
+| Default model             | `tencent-tokenhub/hy4-preview`                        |
 
 ## Quick start
 
 <Steps>
   <Step title="Create a Tencent API key">
-    Create an API key for Tencent Cloud TokenHub and TokenPlan. If you choose a limited access scope for the key, include **hy3** (and **hy3 preview** if you plan to use it on TokenHub) in the allowed models.
+    Create an API key for Tencent Cloud TokenHub and TokenPlan. If you choose a limited access scope for the key, include **hy4 preview** (and **hy3** / **hy3 preview** if you plan to use them on TokenHub) in the allowed models.
   </Step>
   <Step title="Run onboarding">
     <CodeGroup>
@@ -97,17 +97,29 @@ openclaw onboard --non-interactive \
 
 ## Built-in catalog
 
-| Model ref                      | Name                   | Input | Context | Max output | Notes                      |
-| ------------------------------ | ---------------------- | ----- | ------- | ---------- | -------------------------- |
-| `tencent-tokenhub/hy3-preview` | hy3 preview (TokenHub) | text  | 256,000 | 128,000    | deprecated; use `hy3`      |
-| `tencent-tokenhub/hy3`         | hy3 (TokenHub)         | text  | 256,000 | 128,000    | reasoning-enabled; current |
-| `tencent-tokenplan/hy3`        | hy3 (TokenPlan)        | text  | 256,000 | 128,000    | reasoning-enabled; current |
+| Model ref                       | Name                    | Input | Context   | Max output | Notes                          |
+| ------------------------------- | ----------------------- | ----- | --------- | ---------- | ------------------------------ |
+| `tencent-tokenhub/hy4-preview`  | hy4 preview (TokenHub)  | text  | 1,024,000 | 64,000     | reasoning-enabled; **default** |
+| `tencent-tokenhub/hy3`          | hy3 (TokenHub)          | text  | 256,000   | 128,000    | reasoning-enabled; previous GA |
+| `tencent-tokenhub/hy3-preview`  | hy3 preview (TokenHub)  | text  | 256,000   | 128,000    | deprecated; use `hy4-preview`  |
+| `tencent-tokenplan/hy4-preview` | hy4 preview (TokenPlan) | text  | 1,024,000 | 64,000     | reasoning-enabled; **default** |
+| `tencent-tokenplan/hy3`         | hy3 (TokenPlan)         | text  | 256,000   | 128,000    | reasoning-enabled; previous GA |
 
-hy3 is Tencent Hunyuan's large MoE language model for reasoning, long-context instruction following, code, and agent workflows. Tencent's OpenAI-compatible examples use `hy3` as the model id and support standard chat-completions tool calling plus `reasoning_effort`.
+`hy4-preview` is Tencent Hunyuan's large MoE language model for reasoning, long-context instruction following, code, and agent workflows. Tencent's OpenAI-compatible examples use `hy4-preview` as the model id and support standard chat-completions tool calling plus `reasoning_effort`.
 
-<Tip>
-  The model id is `hy3`. Do not confuse it with Tencent's `HY-3D-*` models, which are 3D generation APIs and are not the OpenClaw chat model configured by this provider.
-</Tip>
+## Existing TokenHub configurations
+
+Fresh onboarding selects `hy4-preview` on both endpoints. Existing TokenHub
+configurations follow a separate migration policy: when a TokenHub model
+allowlist is configured, `openclaw doctor --fix` changes a deprecated
+`tencent-tokenhub/hy3-preview` primary to `tencent-tokenhub/hy3`, not Hy4.
+This applies to string and object primary settings and preserves fallbacks,
+custom aliases, and unrelated settings. Explicit `hy3` and `hy4-preview`
+primaries stay unchanged.
+
+The catalog recommendation for `hy3-preview` remains `hy4-preview`, but it is
+not the Doctor migration destination. Moving to Hy4 is an explicit choice:
+review its different pricing and verify model access for the selected endpoint.
 
 ## Advanced configuration
 

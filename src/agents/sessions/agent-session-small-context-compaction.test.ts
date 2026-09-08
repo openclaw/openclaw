@@ -1,6 +1,7 @@
 import type { Context, Model, SimpleStreamOptions } from "openclaw/plugin-sdk/llm";
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
+import { makeTextToolResult } from "../../../test/helpers/text-tool-result.js";
 import { applyAgentCompactionSettingsFromConfig } from "../agent-settings.js";
 import { buildRuntimeContextCustomMessage } from "../embedded-agent-runner/run/runtime-context-prompt.js";
 import { agentSessionAutomaticCompaction } from "./agent-session-compaction.js";
@@ -216,14 +217,9 @@ describe("AgentSession small-context compaction", () => {
           "toolUse",
         ),
       );
-      sessionManager.appendMessage({
-        role: "toolResult",
-        toolCallId: "archive-read",
-        toolName: "read",
-        content: [{ type: "text", text: "The project uses blue buttons." }],
-        isError: false,
-        timestamp: 3,
-      });
+      sessionManager.appendMessage(
+        makeTextToolResult("archive-read", "read", "The project uses blue buttons.", false, 3),
+      );
       sessionManager.appendMessage({
         role: "user",
         content: "Continue the project.",

@@ -328,7 +328,6 @@ export async function runPluginUpdateAttempt(params: {
   effectiveSpec?: string;
   extensionsDir?: string;
   timeoutMs?: number;
-  dangerouslyForceUnsafeInstall?: boolean;
   onInstallPolicyWarning?: InstallSafetyOverrides["onInstallPolicyWarning"];
   onBeforePluginArtifactCommit?: PluginInstallArtifactConsentHandler;
   expectedIntegrity?: string;
@@ -356,7 +355,6 @@ export async function runPluginUpdateAttempt(params: {
               extensionsDir: params.extensionsDir,
               timeoutMs: params.timeoutMs,
               ...dryRunOption,
-              dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
               onInstallPolicyWarning: params.onInstallPolicyWarning,
               onBeforePluginArtifactCommit: params.onBeforePluginArtifactCommit,
               trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
@@ -382,7 +380,6 @@ export async function runPluginUpdateAttempt(params: {
                 extensionsDir: params.extensionsDir,
                 timeoutMs: params.timeoutMs,
                 ...dryRunOption,
-                dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
                 onInstallPolicyWarning: params.onInstallPolicyWarning,
                 onBeforePluginArtifactCommit: params.onBeforePluginArtifactCommit,
                 expectedPluginId: params.pluginId,
@@ -398,7 +395,6 @@ export async function runPluginUpdateAttempt(params: {
                   extensionsDir: params.extensionsDir,
                   timeoutMs: params.timeoutMs,
                   ...dryRunOption,
-                  dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
                   onInstallPolicyWarning: params.onInstallPolicyWarning,
                   onBeforePluginArtifactCommit: params.onBeforePluginArtifactCommit,
                   expectedPluginId: params.pluginId,
@@ -414,7 +410,6 @@ export async function runPluginUpdateAttempt(params: {
                   extensionsDir: params.extensionsDir,
                   timeoutMs: params.timeoutMs,
                   ...dryRunOption,
-                  dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
                   onInstallPolicyWarning: params.onInstallPolicyWarning,
                   onBeforePluginArtifactCommit: params.onBeforePluginArtifactCommit,
                   expectedPluginId: params.pluginId,
@@ -456,7 +451,6 @@ export async function runPluginUpdateAttempt(params: {
         extensionsDir: params.extensionsDir,
         timeoutMs: params.timeoutMs,
         ...dryRunOption,
-        dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
         onInstallPolicyWarning: params.onInstallPolicyWarning,
         onBeforePluginArtifactCommit: params.onBeforePluginArtifactCommit,
         expectedPluginId: params.pluginId,

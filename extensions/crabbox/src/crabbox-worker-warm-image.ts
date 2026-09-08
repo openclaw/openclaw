@@ -5,14 +5,18 @@ import { crabboxCommandError } from "./crabbox-worker-command-error.js";
 import { runCrabboxCommand, type CrabboxCommandRunner } from "./crabbox-worker-command.js";
 import {
   buildCrabboxAllocationArgs,
-  nonEmptyString,
   resolveCrabboxWarmImageProfileKey,
   type parseCrabboxProfile,
   type resolveCrabboxProvisionProfile,
 } from "./crabbox-worker-profile.js";
 import {
+  checkpointCaptureTimeoutMs,
+  WARM_IMAGE_CAPTURE_TIMEOUT_MS,
+  WARM_IMAGE_COMMAND_TIMEOUT_MS,
+} from "./crabbox-worker-timeouts.js";
+import {
   parseCheckpointAvailability,
-  parseCheckpointJson,
+  parseForkedCheckpoint,
   parseCreatedCheckpoint,
 } from "./crabbox-worker-warm-image-checkpoint.js";
 import { SCRUB_WORKER_STATE } from "./crabbox-worker-warm-image-scrub.js";
@@ -52,26 +56,6 @@ type AllocationContext = LeaseContext & {
 // Match the existing paired-device dormancy ceiling before reclaiming idle images.
 const WARM_IMAGE_RETENTION_MS = 14 * 24 * 60 * 60 * 1_000;
 const WARM_IMAGE_REFRESH_MS = 24 * 60 * 60 * 1_000;
-const WARM_IMAGE_COMMAND_TIMEOUT_MS = 60_000;
-// Scrub and create ride a full `crabbox run`/snapshot round trip (SSH, workspace
-// owner, coordinator posts); 60s starves them under coordinator latency and the
-// capture silently degrades to cold-only. Live-measured on AWS 2026-08-26.
-const WARM_IMAGE_CAPTURE_TIMEOUT_MS = 180_000;
-// Machine0 image save stops the source and waits for image availability even with --wait=false.
-const WARM_IMAGE_MACHINE0_CAPTURE_TIMEOUT_MS = 600_000;
-
-const checkpointCaptureTimeoutMs = (provider: string) =>
-  provider === "machine0" ? WARM_IMAGE_MACHINE0_CAPTURE_TIMEOUT_MS : WARM_IMAGE_CAPTURE_TIMEOUT_MS;
-
-export function resolveCrabboxWarmImageCaptureTimeoutMs(provider: string): number {
-  // Bound collection, verification, missing-image deletion, capacity reclamation,
-  // and predecessor retirement as well as scrub/create; core must await the owner.
-  return (
-    5 * WARM_IMAGE_COMMAND_TIMEOUT_MS +
-    WARM_IMAGE_CAPTURE_TIMEOUT_MS +
-    checkpointCaptureTimeoutMs(provider)
-  );
-}
 
 export function createCrabboxWarmImageManager(dependencies: {
   runCommand: CrabboxCommandRunner;
@@ -300,7 +284,11 @@ export function createCrabboxWarmImageManager(dependencies: {
     const key = resolveCrabboxWarmImageProfileKey(profile, context.projectKey);
     const replay = lookupLease(context.id);
     if (replay) {
-      if (replay.key !== key || replay.machineClass !== profile.class) {
+      if (
+        replay.key !== key ||
+        replay.machineClass !== profile.class ||
+        (replay.os ?? "linux") !== profile.target
+      ) {
         throw new Error(
           "Crabbox provision retry changed its recorded profile or project identity.",
         );
@@ -363,6 +351,7 @@ export function createCrabboxWarmImageManager(dependencies: {
           [context.id]: {
             choice,
             machineClass: profile.class,
+            os: profile.target,
             phase: "pending",
             runtimeIdentity: structuredClone(context.nodeRuntimeIdentity),
           },
@@ -479,11 +468,12 @@ export function createCrabboxWarmImageManager(dependencies: {
             return;
           }
           if (
+            (owner.os ?? "linux") !== context.profile.target ||
             key !==
-            resolveCrabboxWarmImageProfileKey(
-              { ...context.profile, class: owner.machineClass },
-              owner.projectKey,
-            )
+              resolveCrabboxWarmImageProfileKey(
+                { ...context.profile, class: owner.machineClass },
+                owner.projectKey,
+              )
           ) {
             throw new Error("Crabbox capture profile does not match its recorded allocation.");
           }
@@ -569,7 +559,9 @@ export function createCrabboxWarmImageManager(dependencies: {
           creating = openStore().update(key, (current) =>
             current?.operation?.type === "capture" &&
             current.operation.id === captureId &&
-            current.allocations[context.id]?.phase === owner.phase
+            current.allocations[context.id]?.phase === owner.phase &&
+            current.allocations[context.id]?.machineClass === owner.machineClass &&
+            current.allocations[context.id]?.os === owner.os
               ? { ...current, operation: { ...current.operation, phase: "creating" } }
               : undefined,
           );
@@ -682,12 +674,24 @@ export function createCrabboxWarmImageManager(dependencies: {
 
     async allocate(context: AllocationContext): Promise<WarmAllocationRecord["choice"]> {
       assertCurrent(context);
+      if (!context.profile.warmImage) {
+        const replay = lookupLease(context.id);
+        if (
+          replay &&
+          ((replay.os ?? "linux") !== context.profile.target ||
+            replay.machineClass !== context.profile.class)
+        ) {
+          throw new Error(
+            "Crabbox provision retry changed its recorded operating system or machine class.",
+          );
+        }
+      }
       if (context.profile.warmImage) {
         assertCrabboxWarmImageMigrationReady();
         const owner = await selectAllocation(context, context.profile);
         if (owner.choice.kind === "checkpoint") {
           const checkpointId = owner.choice.checkpointId;
-          const fork = parseCheckpointJson(
+          parseForkedCheckpoint(
             await checkpointCommand(
               context,
               "fork",
@@ -700,17 +704,8 @@ export function createCrabboxWarmImageManager(dependencies: {
               ],
               context.timeoutMs(),
             ),
-            "fork",
+            { checkpointId, leaseId: context.id, provider: context.provider, slug: context.slug },
           );
-          if (
-            fork.checkpointId !== checkpointId ||
-            fork.leaseId !== context.id ||
-            fork.provider !== context.provider ||
-            fork.slug !== context.slug ||
-            !nonEmptyString(fork.workdir)
-          ) {
-            throw new Error("Crabbox checkpoint fork returned an invalid lease identity");
-          }
           openStore().update(owner.key, (current) =>
             current?.image?.checkpointId === checkpointId
               ? {

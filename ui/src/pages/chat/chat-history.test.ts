@@ -367,10 +367,7 @@ describe("rewindChatHistory", () => {
   });
 
   it("reconciles committed rewind history without overwriting a replacement draft", async () => {
-    let resolveRewind!: (result: { editorText?: string }) => void;
-    const rewind = new Promise<{ editorText?: string }>((resolve) => {
-      resolveRewind = resolve;
-    });
+    const { promise: rewind, resolve: resolveRewind } = createDeferred<{ editorText?: string }>();
     const canonical = { role: "assistant", content: "canonical history after rewind" };
     const state = createState({ messages: [canonical] }) as TestState & {
       handleChatDraftChange: ReturnType<typeof vi.fn>;
@@ -520,10 +517,8 @@ describe("switchChatHistoryBranch", () => {
   });
 
   it("starts a fresh snapshot and rejects in-flight history after a same-key branch switch", async () => {
-    let resolvePreviousHistory!: (result: ChatHistoryResult) => void;
-    const previousHistory = new Promise<ChatHistoryResult>((resolve) => {
-      resolvePreviousHistory = resolve;
-    });
+    const { promise: previousHistory, resolve: resolvePreviousHistory } =
+      createDeferred<ChatHistoryResult>();
     const previous = { role: "assistant", content: "private old branch" };
     const selected = { role: "assistant", content: "selected branch" };
     const state = createState({ messages: [selected] }) as TestState & {
@@ -701,10 +696,7 @@ describe("canonical history snapshot projection", () => {
   });
 
   it("coalesces stale history while distinct live peer messages update the transcript", async () => {
-    let resolveHistory!: (history: ChatHistoryResult) => void;
-    const history = new Promise<ChatHistoryResult>((resolve) => {
-      resolveHistory = resolve;
-    });
+    const { promise: history, resolve: resolveHistory } = createDeferred<ChatHistoryResult>();
     const first = message("user", "shared prompt", {
       id: "canonical-web-same-text",
       idempotencyKey: "web-same-text-run:user",
@@ -749,10 +741,7 @@ describe("canonical history snapshot projection", () => {
   });
 
   it("preserves pending input appended while the authoritative request is in flight", async () => {
-    let resolveHistory!: (history: ChatHistoryResult) => void;
-    const history = new Promise<ChatHistoryResult>((resolve) => {
-      resolveHistory = resolve;
-    });
+    const { promise: history, resolve: resolveHistory } = createDeferred<ChatHistoryResult>();
     const first = message("user", "first prompt", { id: "first-user", seq: 1 });
     const pending = message("user", "concurrent prompt", {
       idempotencyKey: "concurrent-run:user",

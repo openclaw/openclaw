@@ -34,6 +34,7 @@ import {
   TOOL_PAYLOAD_REDACT_PATTERNS,
 } from "./redact-patterns.js";
 import { redactRegisteredSecretValues } from "./secret-redaction-registry.js";
+import { shouldRedactStructuredAuthorizationCode } from "./structured-authorization-code.js";
 
 type RedactSensitiveMode = "off" | "tools";
 type RedactPattern = string | RegExp;
@@ -1017,6 +1018,7 @@ function redactSensitiveFieldValueWithOptions(
   value: string,
   options: RedactOptions,
   path: readonly string[] = [key],
+  objectPath = true,
 ): string {
   const exactRedacted = redactRegisteredSecretValues(value, maskToken);
   if (isPublicShareIdPath(path)) {
@@ -1054,7 +1056,13 @@ function redactSensitiveFieldValueWithOptions(
     return redacted;
   }
   const normalizedStructuredKey = key.toLowerCase();
-  if (shouldRedactStructuredAuthorizationCode(normalizedStructuredKey, path)) {
+  if (
+    shouldRedactStructuredAuthorizationCode(
+      normalizedStructuredKey,
+      path,
+      objectPath ? value : undefined,
+    )
+  ) {
     return maskToken(value);
   }
   if (
@@ -1104,34 +1112,6 @@ export function redactModelVisibleSensitiveFieldValueWithConfig(
   );
 }
 
-function pathEndsWith(path: readonly string[], suffix: readonly string[]): boolean {
-  if (path.length < suffix.length) {
-    return false;
-  }
-  return suffix.every((part, index) => path[path.length - suffix.length + index] === part);
-}
-
-function shouldRedactStructuredAuthorizationCode(
-  normalizedKey: string,
-  path: readonly string[],
-): boolean {
-  if (normalizedKey !== "code") {
-    return false;
-  }
-  const normalizedPath = path.map((part) => part.toLowerCase());
-  if (
-    normalizedPath.length === 1 ||
-    pathEndsWith(normalizedPath, ["error", "code"]) ||
-    pathEndsWith(normalizedPath, ["nodeerror", "code"]) ||
-    pathEndsWith(normalizedPath, ["status", "code"]) ||
-    pathEndsWith(normalizedPath, ["details", "code"]) ||
-    pathEndsWith(normalizedPath, ["warnings", "code"])
-  ) {
-    return false;
-  }
-  return true;
-}
-
 function shouldRedactStructuredPrimitiveField(key: string, path: readonly string[]): boolean {
   const normalizedKey = key.toLowerCase();
   return (
@@ -1152,9 +1132,10 @@ function redactStructuredSecretValue(
   seen: WeakSet<object>,
   options: RedactOptions,
   path: readonly string[] = key ? [key] : [],
+  objectPath = true,
 ): unknown {
   if (typeof value === "string") {
-    return redactSensitiveFieldValueWithOptions(key, value, options, path);
+    return redactSensitiveFieldValueWithOptions(key, value, options, path, objectPath);
   }
   if (value === null || value === undefined) {
     return value;
@@ -1167,7 +1148,9 @@ function redactStructuredSecretValue(
       return "[Circular]";
     }
     seen.add(value);
-    const out = value.map((entry) => redactStructuredSecretValue(key, entry, seen, options, path));
+    const out = value.map((entry) =>
+      redactStructuredSecretValue(key, entry, seen, options, path, false),
+    );
     seen.delete(value);
     return out;
   }
@@ -1182,7 +1165,14 @@ function redactStructuredSecretValue(
     const entries = Object.entries(value);
     for (const entry of entries) {
       const [name, child] = entry;
-      entry[1] = redactStructuredSecretValue(name, child, seen, options, [...path, name]);
+      entry[1] = redactStructuredSecretValue(
+        name,
+        child,
+        seen,
+        options,
+        [...path, name],
+        objectPath,
+      );
     }
     seen.delete(value);
     // Define own data properties so JSON field names cannot change the output prototype.

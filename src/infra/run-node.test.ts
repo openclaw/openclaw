@@ -1,5 +1,5 @@
 // Tests node process runner lifecycle and captured output.
-import type { SpawnOptions } from "node:child_process";
+import { execFileSync, spawnSync as realSpawnSync, type SpawnOptions } from "node:child_process";
 import { EventEmitter } from "node:events";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
@@ -364,6 +364,40 @@ function createBuildRequirementDeps(
     configFiles: [ROOT_TSCONFIG, ROOT_PACKAGE, ROOT_TSDOWN].map((filePath) =>
       path.join(tmp, filePath),
     ),
+  };
+}
+
+async function trackProjectWithGit(tmp: string) {
+  const git = (...args: string[]) =>
+    execFileSync(
+      "git",
+      ["-c", `core.hooksPath=${path.join(tmp, ".git", "disabled-hooks")}`, ...args],
+      { cwd: tmp, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
+    ).trim();
+  git("init", "--quiet", "--template=");
+  git("config", "core.quotePath", "true");
+  git("add", "--all");
+  git(
+    "-c",
+    "user.name=OpenClaw Test",
+    "-c",
+    "user.email=test@openclaw.invalid",
+    "-c",
+    "commit.gpgsign=false",
+    "commit",
+    "--quiet",
+    "-m",
+    "test: track runner fixture",
+  );
+  const stamp = `${JSON.stringify({ head: git("rev-parse", "HEAD") })}\n`;
+  await writeProjectFiles(tmp, {
+    [BUILD_STAMP]: stamp,
+    [RUNTIME_POSTBUILD_STAMP]: stamp,
+  });
+  await touchProjectFiles(tmp, [BUILD_STAMP, RUNTIME_POSTBUILD_STAMP], BUILD_TIME);
+  return {
+    git,
+    deps: { ...createBuildRequirementDeps(tmp), env: {}, spawnSync: realSpawnSync },
   };
 }
 
@@ -1003,7 +1037,7 @@ describe("run-node script", () => {
 
     const runRuntimePostBuild = vi.fn();
     const { spawnCalls, spawn, spawnSync } = createCurrentGitSpawnRecorder({
-      gitStatus: ` M ${EXTENSION_PACKAGE}\n`,
+      gitStatus: ` M ${EXTENSION_PACKAGE}\0`,
     });
     const exitCode = await runStatusCommand({
       tmp,
@@ -1170,7 +1204,7 @@ describe("run-node script", () => {
 
     const runRuntimePostBuild = vi.fn();
     const { spawnCalls, spawn, spawnSync } = createCurrentGitSpawnRecorder({
-      gitStatus: ` M ${EXTENSION_MANIFEST}\n`,
+      gitStatus: ` M ${EXTENSION_MANIFEST}\0`,
     });
     const exitCode = await runStatusCommand({
       tmp,
@@ -1525,7 +1559,7 @@ describe("run-node script", () => {
     });
 
     const { spawnCalls, spawn, spawnSync } = createCurrentGitSpawnRecorder({
-      gitStatus: ` M ${EXTENSION_README}\n`,
+      gitStatus: ` M ${EXTENSION_README}\0`,
     });
     const exitCode = await runStatusCommand({
       tmp,
@@ -1553,7 +1587,7 @@ describe("run-node script", () => {
     });
 
     const { spawnCalls, spawn, spawnSync } = createCurrentGitSpawnRecorder({
-      gitStatus: ` M ${EXTENSION_MANIFEST}\n`,
+      gitStatus: ` M ${EXTENSION_MANIFEST}\0`,
     });
     const exitCode = await runStatusCommand({
       tmp,
@@ -1567,18 +1601,68 @@ describe("run-node script", () => {
     await expectManifestId(tmp, DIST_EXTENSION_MANIFEST, "demo");
   });
 
-  it("reports dirty watched source trees as an explicit build reason", async ({ tmp }) => {
-    await setupStampedProject(tmp, { trackConfig: true });
+  it.for([
+    { filePath: ROOT_SRC, watched: true },
+    { filePath: "src/café.ts", watched: true },
+    { filePath: "extensions/demo/src/café.ts", watched: true },
+    { filePath: "src/café.test.ts", watched: false },
+    { filePath: "src/..ignored.test.ts", watched: false },
+    ...(process.platform === "win32"
+      ? []
+      : [
+          { filePath: "src/left -> right.ts", watched: true },
+          { filePath: 'src/"quoted".ts', watched: true },
+          { filePath: "src/tab\tname.ts", watched: true },
+          { filePath: "src/line\nname.ts", watched: true },
+          { filePath: "src/ignored.test.ts ", watched: true },
+          { filePath: "src/name\\part.ts", watched: true },
+          { filePath: "src/name\\part.test.ts", watched: false },
+        ]),
+  ])(
+    "reports watched source changes with real Git: $filePath",
+    async ({ filePath, watched }, { tmp }) => {
+      await setupStampedProject(tmp, {
+        files: { [filePath]: "export const value = 1;\n" },
+        trackConfig: true,
+      });
+      const { git, deps } = await trackProjectWithGit(tmp);
+      expect(resolveBuildRequirement(deps)).toEqual({ shouldBuild: false, reason: "clean" });
 
-    const requirement = resolveBuildRequirement(
-      createBuildRequirementDeps(tmp, { gitStatus: ` M ${ROOT_SRC}\n` }),
-    );
+      await fs.writeFile(resolvePath(tmp, filePath), "export const value = 2;\n");
+      await touchProjectFiles(tmp, [filePath], NEW_TIME);
+      for (const quotePath of ["true", "false"]) {
+        git("config", "core.quotePath", quotePath);
+        expect(resolveBuildRequirement(deps)).toEqual({
+          shouldBuild: watched,
+          reason: watched ? "dirty_watched_tree" : "clean",
+        });
+      }
+      const { spawnSync } = createSpawnRecorder();
+      expect(resolveBuildRequirement({ ...deps, spawnSync })).toEqual({
+        shouldBuild: watched,
+        reason: watched ? "source_mtime_newer" : "clean",
+      });
+    },
+  );
 
-    expect(requirement).toEqual({
-      shouldBuild: true,
-      reason: "dirty_watched_tree",
-    });
-  });
+  it.for([
+    { source: "src/café.ts", target: "src/café.test.ts", watched: true },
+    { source: "src/café.test.ts", target: "src/café.ts", watched: true },
+    { source: "src/café.test.ts", target: "src/renamed.test.ts", watched: false },
+  ])(
+    "checks both rename sides with real Git: $source to $target",
+    async ({ source, target, watched }, { tmp }) => {
+      await setupStampedProject(tmp, { files: { [source]: "export {};\n" } });
+      const { git, deps } = await trackProjectWithGit(tmp);
+      git("config", "status.renames", "true");
+      git("mv", "--", source, target);
+
+      expect(resolveBuildRequirement(deps)).toEqual({
+        shouldBuild: watched,
+        reason: watched ? "dirty_watched_tree" : "clean",
+      });
+    },
+  );
 
   it.each([
     { label: "gateway RPC", args: ["gateway", "call", "status", "--json"] },
@@ -1594,7 +1678,7 @@ describe("run-node script", () => {
 
       const runRuntimePostBuild = vi.fn();
       const { spawnCalls, spawn, spawnSync } = createCurrentGitSpawnRecorder({
-        gitStatus: ` M ${ROOT_SRC}\n`,
+        gitStatus: ` M ${ROOT_SRC}\0`,
       });
       const exitCode = await runStatusCommand({
         tmp,
@@ -1643,7 +1727,7 @@ describe("run-node script", () => {
     } as unknown as NodeJS.WriteStream;
     const runRuntimePostBuild = vi.fn();
     const { spawnCalls, spawn, spawnSync } = createCurrentGitSpawnRecorder({
-      gitStatus: ` M ${ROOT_SRC}\n`,
+      gitStatus: ` M ${ROOT_SRC}\0`,
     });
     const clientRun = runNodeCommand(tmp, {
       args: ["dashboard", "--no-open", "--yes"],
@@ -1740,7 +1824,7 @@ describe("run-node script", () => {
     });
 
     const requirement = resolveBuildRequirement(
-      createBuildRequirementDeps(tmp, { gitStatus: ` M ${EXTENSION_PACKAGE}\n` }),
+      createBuildRequirementDeps(tmp, { gitStatus: ` M ${EXTENSION_PACKAGE}\0` }),
     );
 
     expect(requirement).toEqual({
@@ -2128,7 +2212,7 @@ describe("run-node script", () => {
       trackConfig: true,
     });
 
-    const deps = createBuildRequirementDeps(tmp, { gitStatus: ` M ${EXTENSION_MANIFEST}\n` });
+    const deps = createBuildRequirementDeps(tmp, { gitStatus: ` M ${EXTENSION_MANIFEST}\0` });
 
     expect(resolveBuildRequirement(deps)).toEqual({
       shouldBuild: false,
@@ -2153,7 +2237,7 @@ describe("run-node script", () => {
         });
 
         const requirement = resolveRuntimePostBuildRequirement(
-          createBuildRequirementDeps(tmp, { gitStatus: ` M ${implementationPath}\n` }),
+          createBuildRequirementDeps(tmp, { gitStatus: ` M ${implementationPath}\0` }),
         );
 
         expect(requirement).toEqual({
@@ -2188,7 +2272,7 @@ describe("run-node script", () => {
 
     const requirement = resolveBuildRequirement(
       createBuildRequirementDeps(tmp, {
-        gitStatus: ` M ${GENERATED_PLUGIN_ASSET_BUNDLE_HASH}\n M ${GENERATED_PLUGIN_ASSET_BUNDLE}\n`,
+        gitStatus: ` M ${GENERATED_PLUGIN_ASSET_BUNDLE_HASH}\0 M ${GENERATED_PLUGIN_ASSET_BUNDLE}\0`,
       }),
     );
 
@@ -2198,23 +2282,61 @@ describe("run-node script", () => {
     });
   });
 
-  it("reports bundled skill edits as runtime postbuild inputs", async ({ tmp }) => {
-    await setupStampedProject(tmp, {
-      files: {
-        [EXTENSION_MANIFEST]: '{"id":"demo","skills":["./skills/SKILL.md"]}\n',
-        [EXTENSION_SKILL]: "# Demo\n",
-        [RUNTIME_POSTBUILD_STAMP]: '{"head":"abc123"}\n',
-      },
-      trackConfig: true,
-    });
+  it.for([
+    { label: "SKILL.md", fileName: "SKILL.md", changedFile: null, shouldSync: true },
+    { label: "café.md", fileName: "café.md", changedFile: null, shouldSync: true },
+    ...(process.platform === "win32"
+      ? []
+      : [
+          {
+            label: "POSIX backslash inside declared skills",
+            fileName: "notes\\part.md",
+            changedFile: null,
+            shouldSync: true,
+          },
+          {
+            label: "POSIX backslash outside declared skills",
+            fileName: "SKILL.md",
+            changedFile: "skills\\notes.md",
+            shouldSync: false,
+          },
+        ]),
+  ])(
+    "reports bundled skill edits as runtime postbuild inputs: $label",
+    async ({ fileName, changedFile, shouldSync }, { tmp }) => {
+      const skillPath = bundledPluginFile("demo", `skills/${fileName}`);
+      const changedPath = changedFile ? bundledPluginFile("demo", changedFile) : skillPath;
+      const manifest = JSON.stringify({ id: "demo", skills: ["./skills"] });
+      await setupStampedProject(tmp, {
+        files: {
+          [EXTENSION_INDEX]: "export default {};\n",
+          [EXTENSION_MANIFEST]: manifest,
+          [skillPath]: "# Demo\n",
+          [DIST_EXTENSION_INDEX]: "export default {};\n",
+          [DIST_EXTENSION_MANIFEST]: manifest,
+          [bundledDistPluginFile("demo", `skills/${fileName}`)]: "# Demo\n",
+          [DIST_RUNTIME_EXTENSION_INDEX]: "export default {};\n",
+          [DIST_RUNTIME_EXTENSION_MANIFEST]: manifest,
+          [`dist-runtime/extensions/demo/skills/${fileName}`]: "# Demo\n",
+          ...(changedFile ? { [changedPath]: "# Notes\n" } : {}),
+        },
+        trackConfig: true,
+      });
+      const { deps } = await trackProjectWithGit(tmp);
+      expect(resolveRuntimePostBuildRequirement(deps)).toEqual({
+        shouldSync: false,
+        reason: "clean",
+      });
 
-    const deps = createBuildRequirementDeps(tmp, { gitStatus: ` M ${EXTENSION_SKILL}\n` });
-
-    expect(resolveRuntimePostBuildRequirement(deps)).toEqual({
-      shouldSync: true,
-      reason: "dirty_runtime_postbuild_inputs",
-    });
-  });
+      await fs.writeFile(resolvePath(tmp, changedPath), "# Updated\n");
+      await touchProjectFiles(tmp, [changedPath], NEW_TIME);
+      expect(resolveBuildRequirement(deps)).toEqual({ shouldBuild: false, reason: "clean" });
+      expect(resolveRuntimePostBuildRequirement(deps)).toEqual({
+        shouldSync,
+        reason: shouldSync ? "dirty_runtime_postbuild_inputs" : "clean",
+      });
+    },
+  );
 
   it("repairs missing bundled plugin metadata without rerunning tsdown", async ({ tmp }) => {
     await setupStampedProject(tmp, {
@@ -2295,7 +2417,7 @@ describe("run-node script", () => {
     });
 
     const { spawnCalls, spawn, spawnSync } = createCurrentGitSpawnRecorder({
-      gitStatus: ` M ${ROOT_TSDOWN}\n`,
+      gitStatus: ` M ${ROOT_TSDOWN}\0`,
     });
     const exitCode = await runStatusCommand({
       tmp,

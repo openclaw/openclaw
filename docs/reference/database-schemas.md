@@ -258,12 +258,16 @@ already validate the optional pending-input table may reject the added column
 despite sharing version 19. Consumed source receipts remain until their session
 window is deleted, so rewriting a transcript cannot make an old input runnable again.
 
-The placement-move table uses this same-version rule for its nullable bare
-`abandon_source INTEGER` column. The feature lazily ensures the column on first
-move use. `NULL` means ordinary reconcile-first movement; `1` records the
-operator's explicit offline-device abandonment decision so restart recovery
-cannot accidentally resume remote reconciliation. Older readers ignore the
-column and can reopen the same database safely.
+The placement-move table uses this same-version rule for its bare nullable
+`abandon_source INTEGER`, `target_machine_class TEXT`, and `target_os TEXT`
+columns. The feature ensures these columns only on first move use; database
+startup does not add them, and the schema version remains unchanged.
+`target_machine_class` and `target_os` retain explicit profile-target overrides;
+`NULL` means no override. For `abandon_source`, `NULL` means ordinary
+reconcile-first movement; `1` records the operator's explicit offline-device
+abandonment decision so restart recovery cannot accidentally resume remote
+reconciliation. Older readers ignore the added columns and can reopen the same
+database safely; they do not implement the newer operating-system override.
 
 Conversation associations use the same rule for the nullable bare
 `route_context_json TEXT` column. The database-open repair ensures the column
@@ -795,7 +799,19 @@ Background verification errors retain the original name and message and append b
 
 Agent database maintenance fences other writers with a 60-second lease in the shared state database. A dedicated worker renews that lease during synchronous integrity scans and migration phases. Maintenance still checks the exact persisted owner before mutations and commit, and stops if the heartbeat fails or ownership expires or changes. Finishing or cancelling maintenance stops renewal before releasing the lease; process death leaves at most the remaining lease duration.
 
-Maintenance schema admission runs its initial full-file integrity check in a read-only child process when that check is outside a write transaction. The scan has a 30-second execution limit; the connection and maintenance lease remain held until the child process closes, including on cancellation or timeout. Schema changes, index repairs, and compaction retain their synchronous phases.
+Asynchronous agent-database admission and maintenance run their initial full-file integrity check in a read-only child process when that check is outside a write transaction. The child's lifetime budget is 30 seconds for startup and shutdown plus one second per 32 MiB of database file size, rounded up, capped at 30 minutes. This allows for a conservative cold-cache read rate of 32 MiB/s: a 9.4 GiB database gets 331 seconds. Budgets above 30 seconds are logged with the path and size; timeout errors include the applied budget and size. Read-only snapshot and inspection paths retain their 30-second limit. The connection and owning scope remain held until the child closes, including on cancellation or timeout. Schema changes, index repairs, and compaction retain their synchronous phases.
+
+Integrity-child timeout and incomplete-exit errors include `lastObservedPhase`:
+
+| Value             | Last observation                                                                          |
+| ----------------- | ----------------------------------------------------------------------------------------- |
+| `starting`        | The parent has not received a child phase.                                                |
+| `opening`         | The child announced file-identity checks and opening a read-only connection.              |
+| `checking`        | The connection opened, and the child announced the full integrity and foreign-key checks. |
+| `closing`         | The child announced connection cleanup after checking or an error.                        |
+| `result-received` | The parent received a final result and is waiting for child closure.                      |
+
+These phases describe messages the parent received, not the child's exact current location or native CPU time. `checking` does not distinguish the integrity check from the foreign-key check. A final result can report failure; phase messages never establish successful validation or release ownership.
 
 Startup errors containing `state lease heartbeat did not become ready` include `phase=startup`, the settlement trigger (`timeout` or `message`), and the status observed before the parent marks failure. `status=starting` distinguishes readiness still pending from `status=lost`, where loss was already recorded. `elapsedMs` measures monotonic time since heartbeat startup began; `timeoutMs` is the startup wait budget, capped at five seconds or the remaining initial lease lifetime. These fields do not establish why startup stalled or ownership was lost.
 

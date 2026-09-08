@@ -2514,5 +2514,77 @@
   {
     "source": "Automation troubleshooting",
     "target": "自动化故障排查"
+  },
+  {
+    "source": "Test suites and commands",
+    "target": "测试套件与命令"
+  },
+  {
+    "source": "Live and Docker/Parallels workflows",
+    "target": "Live 与 Docker/Parallels 工作流"
+  },
+  {
+    "source": "Docker test runners",
+    "target": "Docker 测试运行器"
+  },
+  {
+    "source": "QA-specific runners",
+    "target": "QA 专用运行器"
+  },
+  {
+    "source": "Contract tests",
+    "target": "契约测试"
+  },
+  {
+    "source": "Writing and adding tests",
+    "target": "编写与添加测试"
+  },
+  {
+    "source": "Provider model catalogs",
+    "target": "提供商模型目录"
+  },
+  {
+    "source": "Provider hook families",
+    "target": "提供商 Hook 族"
+  },
+  {
+    "source": "Provider hook wiring",
+    "target": "提供商 Hook 接线"
+  },
+  {
+    "source": "Provider voice capabilities",
+    "target": "提供商语音能力"
+  },
+  {
+    "source": "Provider media and search",
+    "target": "提供商媒体与搜索"
+  },
+  {
+    "source": "Run doctor",
+    "target": "运行 Doctor"
+  },
+  {
+    "source": "What doctor checks",
+    "target": "Doctor 检查内容"
+  },
+  {
+    "source": "Config and migration repairs",
+    "target": "配置与迁移修复"
+  },
+  {
+    "source": "Provider and route repairs",
+    "target": "提供商与路由修复"
+  },
+  {
+    "source": "State, session, and plugin repairs",
+    "target": "状态、会话与插件修复"
+  },
+  {
+    "source": "Gateway, service, and security checks",
+    "target": "Gateway、服务与安全检查"
+  },
+  {
+    "source": "Workspace tips and Dreams UI actions",
+    "target": "工作区提示与 Dreams UI 操作"
   }
 ]

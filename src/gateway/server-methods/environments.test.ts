@@ -125,6 +125,7 @@ const workerService = (overrides: Partial<TestWorkerService> = {}) => ({
   inventoryVersion: vi.fn(() => 0),
   supportsExecutionMode: vi.fn(() => false),
   listMachineOptions: vi.fn(async () => undefined),
+  listOperatingSystems: vi.fn(async () => undefined),
   create: vi.fn(async () => workerRecord()),
   destroy: vi.fn(async () => workerRecord({ state: "destroyed" })),
   destroyUnattached: vi.fn(async () => workerRecord({ state: "destroyed" })),
@@ -564,43 +565,49 @@ describe("environment gateway methods", () => {
         cpu: 32,
         memoryGb: 64,
         default: true,
+        os: "os-a",
       };
       const listMachineOptions = vi.fn(async (profileId: string) =>
         profileId === "aws" ? [standardMachine] : optionlessMachines,
       );
-      const [ok, payload] = await callEnvironmentMethod(
-        "environments.list",
-        {},
-        {
-          service: workerService({
-            listMachineOptions,
-            supportsExecutionMode: vi.fn(
-              (profileId, mode) => profileId === "aws" || mode === "remote-exec",
-            ),
-          }),
-        },
+      const systems = [
+        { id: "os-a", label: "OS A", default: true },
+        { id: "os-b", label: "OS B" },
+      ];
+      const listOperatingSystems = vi.fn(async (profileId: string) =>
+        profileId === "aws" ? systems : [systems[0]!],
       );
+      const service = workerService({
+        listMachineOptions,
+        listOperatingSystems,
+        supportsExecutionMode: vi.fn(
+          (profileId, mode) => profileId === "aws" || mode === "remote-exec",
+        ),
+      });
+      const [ok, payload] = await callEnvironmentMethod("environments.list", {}, { service });
 
       expect(ok).toBe(true);
-      expect(payload).toMatchObject({
-        profiles: [
-          {
-            id: "aws",
-            providerId: "crabbox",
-            executionMode: "worker-turn",
-            executionModes: ["worker-turn", "remote-exec"],
-            machines: [standardMachine],
-          },
-          {
-            id: "zeta",
-            providerId: "static-ssh",
-            executionMode: "remote-exec",
-            executionModes: ["remote-exec"],
-          },
-        ],
-      });
+      const profiles = (payload as { profiles: unknown[] }).profiles;
+      expect(profiles).toMatchObject([
+        {
+          id: "aws",
+          providerId: "crabbox",
+          executionMode: "worker-turn",
+          executionModes: ["worker-turn", "remote-exec"],
+          machines: [standardMachine],
+          operatingSystems: systems,
+        },
+        {
+          id: "zeta",
+          providerId: "static-ssh",
+          executionMode: "remote-exec",
+          executionModes: ["remote-exec"],
+        },
+      ]);
       expect(listMachineOptions.mock.calls).toEqual([["aws"], ["zeta"]]);
-      expect((payload as { profiles: unknown[] }).profiles[1]).not.toHaveProperty("machines");
+      expect(listOperatingSystems.mock.calls).toEqual([["aws"], ["zeta"]]);
+      expect(profiles[1]).not.toHaveProperty("machines");
+      expect(profiles[1]).not.toHaveProperty("operatingSystems");
     },
   );
 
@@ -1039,29 +1046,23 @@ describe("environment gateway methods", () => {
     expect(reconcileActive).toHaveBeenCalledExactlyOnceWith("worker-1");
   });
 
-  it("rejects an unknown worker environment on destroy", async () => {
+  it.each([
+    [
+      "environment_not_found",
+      "unknown environmentId",
+      ErrorCodes.INVALID_REQUEST,
+      "unknown environmentId",
+    ],
+    [
+      "provider_not_found",
+      "private provider details",
+      ErrorCodes.UNAVAILABLE,
+      "worker environment destruction failed",
+    ],
+  ])("maps destroy %s errors", async (serviceCode, detail, code, message) => {
     const service = workerService({
       destroyUnattached: vi.fn(async () => {
-        throw new FakeWorkerServiceError("environment_not_found", "unknown environmentId");
-      }),
-    });
-    const [ok, , error] = await callEnvironmentMethod(
-      "environments.destroy",
-      { environmentId: "missing" },
-      { service },
-    );
-
-    expect(ok).toBe(false);
-    expect(error).toEqual({
-      code: ErrorCodes.INVALID_REQUEST,
-      message: "unknown environmentId",
-    });
-  });
-
-  it("returns unavailable without provider details when destroy fails", async () => {
-    const service = workerService({
-      destroyUnattached: vi.fn(async () => {
-        throw new FakeWorkerServiceError("provider_not_found", "private provider details");
+        throw new FakeWorkerServiceError(serviceCode, detail);
       }),
     });
     const [ok, , error] = await callEnvironmentMethod(
@@ -1069,11 +1070,7 @@ describe("environment gateway methods", () => {
       { environmentId: "worker-1" },
       { service },
     );
-
     expect(ok).toBe(false);
-    expect(error).toEqual({
-      code: ErrorCodes.UNAVAILABLE,
-      message: "worker environment destruction failed",
-    });
+    expect(error).toEqual({ code, message });
   });
 });

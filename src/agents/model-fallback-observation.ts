@@ -346,3 +346,48 @@ export function logModelFallbackDecision(
   });
   return fallbackStepFields;
 }
+
+export type ModelFallbackChainStopReason =
+  | "agent_run_terminal_timeout"
+  | "command_lane_task_timeout"
+  | "agent_harness_preflight"
+  | "sandbox_provisioning"
+  | "caller_signal_aborted"
+  | "agent_run_direct_abort"
+  | "agent_run_restart_abort"
+  | "terminal_abort_wrapper";
+
+/** Record a local or terminal stop separately from provider-failure decisions. */
+export function logModelFallbackChainStopped(params: {
+  reason: ModelFallbackChainStopReason;
+  provider: string;
+  model: string;
+  sessionId?: string;
+  lane?: string;
+  error?: unknown;
+}): void {
+  if (!decisionLog.isEnabled("warn")) {
+    return;
+  }
+  let errorName: string | undefined;
+  try {
+    const name: unknown = params.error instanceof Error ? params.error.name : undefined;
+    errorName = typeof name === "string" && name ? name : undefined;
+  } catch {
+    // Optional diagnostic metadata must not replace the original stop error.
+  }
+  decisionLog.warn("model fallback chain stopped", {
+    event: "model_fallback_chain_stopped",
+    tags: ["error_handling", "model_fallback", "chain_stopped"],
+    sessionId: params.sessionId,
+    lane: params.lane,
+    reason: params.reason,
+    candidateProvider: params.provider,
+    candidateModel: params.model,
+    errorName,
+    consoleMessage:
+      `model fallback chain stopped: reason=${params.reason} ` +
+      `candidate=${sanitizeForLog(params.provider)}/${sanitizeForLog(params.model)}` +
+      (errorName ? ` errorName=${sanitizeForLog(errorName)}` : ""),
+  });
+}

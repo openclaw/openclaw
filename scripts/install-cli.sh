@@ -1,5 +1,31 @@
 #!/usr/bin/env bash
+
+# Bash 5.3+ can deadlock writing heredoc pipes on macOS before the reader starts.
+if [[ ${OSTYPE:-} == darwin* && $BASH != /bin/bash ]] && ((BASH_VERSINFO[0] > 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 3))); then
+  if (return 0 2>/dev/null); then
+    printf '%s\n' 'Run this installer with /bin/bash on macOS instead of sourcing it.' >&2
+    return 1
+  fi
+  case "${BASH_SOURCE[0]:-}" in
+    ""|bash|-bash|/dev/stdin)
+      # Bash reads piped scripts unbuffered; stdin now starts after this guard.
+      OPENCLAW_INSTALLER_REEXEC_FILE="$(mktemp "${TMPDIR:-/tmp}/openclaw-installer.XXXXXX")" || exit 1
+      export OPENCLAW_INSTALLER_REEXEC_FILE
+      trap 'rm -f -- "$OPENCLAW_INSTALLER_REEXEC_FILE"' EXIT
+      { printf '#!/bin/bash\n'; cat; } > "$OPENCLAW_INSTALLER_REEXEC_FILE" || exit 1
+      exec /bin/bash "$OPENCLAW_INSTALLER_REEXEC_FILE" "$@"
+      ;;
+    *) exec /bin/bash "$0" "$@" ;;
+  esac
+fi
+
 set -euo pipefail
+
+# The re-executed shell has the script open, so unlink its private copy now.
+if [[ -n "${OPENCLAW_INSTALLER_REEXEC_FILE:-}" && "${BASH_SOURCE[0]:-}" == "$OPENCLAW_INSTALLER_REEXEC_FILE" ]]; then
+  rm -f -- "$OPENCLAW_INSTALLER_REEXEC_FILE"
+fi
+unset OPENCLAW_INSTALLER_REEXEC_FILE
 
 # OpenClaw CLI installer (non-interactive, no onboarding)
 # Usage: curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install-cli.sh | bash -s -- [--json] [--prefix <path>] [--version <ver>] [--node-version <ver>] [--onboard]
@@ -1663,7 +1689,7 @@ install_openclaw_from_git() {
     pnpm_prefer_offline_args=(--prefer-offline)
   fi
   emit_json step name dependencies status start
-  CI="${CI:-true}" run_pnpm -C "$repo_dir" install "${pnpm_prefer_offline_args[@]}" "$install_lockfile_flag"
+  CI="${CI:-true}" run_pnpm -C "$repo_dir" install ${pnpm_prefer_offline_args[@]+"${pnpm_prefer_offline_args[@]}"} "$install_lockfile_flag"
   emit_json step name dependencies status ok
 
   emit_json step name control-ui status start

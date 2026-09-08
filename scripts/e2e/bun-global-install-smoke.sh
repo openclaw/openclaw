@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# Bash 5.3+ can deadlock writing heredoc pipes on macOS before the reader starts.
+if [[ ${OSTYPE:-} == darwin* && $BASH != /bin/bash ]] && ((BASH_VERSINFO[0] > 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 3))); then
+  exec /bin/bash "$0" "$@"
+fi
 set -Eeuo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -37,6 +41,7 @@ INSTALL_LOG=""
 UNTRUSTED_LOG=""
 CLI_STATUS_LOG=""
 CLI_PLUGINS_LOG=""
+DIRECT_BUN_LOG=""
 MOCK_LOG=""
 MOCK_REQUEST_LOG=""
 LOCAL_AGENT_LOG=""
@@ -64,6 +69,7 @@ dump_debug_logs() {
     "$UNTRUSTED_LOG" \
     "$CLI_STATUS_LOG" \
     "$CLI_PLUGINS_LOG" \
+    "$DIRECT_BUN_LOG" \
     "$MOCK_LOG" \
     "$MOCK_REQUEST_LOG" \
     "$LOCAL_AGENT_LOG" \
@@ -334,20 +340,22 @@ NODE
   echo "==> OpenClaw help through Bun global install"
   run_with_timeout "$COMMAND_TIMEOUT_MS" "$openclaw_bin" --help >/dev/null
 
-  run_bun_cli() {
-    run_with_timeout "$COMMAND_TIMEOUT_MS" "$bun_path" "$openclaw_entry" "$@"
+  run_installed_cli() {
+    run_with_timeout "$COMMAND_TIMEOUT_MS" "$openclaw_bin" "$@"
   }
 
-  echo "==> Installed package entry under Bun"
-  run_bun_cli --version
-  run_bun_cli --help >/dev/null
-  pushd "$HOME" >/dev/null
-  run_with_timeout "$COMMAND_TIMEOUT_MS" "$bun_path" run --bun openclaw --version
-  popd >/dev/null
+  echo "==> Installed package rejects direct Bun runtime execution"
+  DIRECT_BUN_LOG="$SMOKE_DIR/direct-bun.log"
+  if run_with_timeout "$COMMAND_TIMEOUT_MS" "$bun_path" "$openclaw_entry" --version \
+    >"$DIRECT_BUN_LOG" 2>&1; then
+    echo "OpenClaw unexpectedly ran under the unsupported Bun runtime" >&2
+    exit 1
+  fi
+  grep -F "Bun runtime is unsupported" "$DIRECT_BUN_LOG" >/dev/null
 
-  echo "==> OpenClaw image providers under Bun"
+  echo "==> OpenClaw image providers from Bun global install"
   local providers_json
-  providers_json="$(run_bun_cli infer image providers --json)"
+  providers_json="$(run_installed_cli infer image providers --json)"
   OPENCLAW_IMAGE_PROVIDERS_JSON="$providers_json" node scripts/e2e/lib/bun-global-install/assertions.mjs assert-image-providers
 
   read -r gateway_port mock_port < <(reserve_runtime_ports)
@@ -359,15 +367,15 @@ NODE
     "$mock_port" \
     "$gateway_port"
 
-  echo "==> Representative CLI state under Bun"
-  run_bun_cli status --json --timeout 1 >"$CLI_STATUS_LOG" 2>&1
-  run_bun_cli plugins list --json >"$CLI_PLUGINS_LOG" 2>&1
+  echo "==> Representative CLI state from Bun global install"
+  run_installed_cli status --json --timeout 1 >"$CLI_STATUS_LOG" 2>&1
+  run_installed_cli plugins list --json >"$CLI_PLUGINS_LOG" 2>&1
 
-  echo "==> Local mocked agent turn under Bun"
+  echo "==> Local mocked agent turn from Bun global install"
   MOCK_PID="$(openclaw_e2e_start_mock_openai "$mock_port" "$MOCK_LOG")"
   openclaw_e2e_wait_mock_openai "$mock_port"
   : >"$MOCK_REQUEST_LOG"
-  run_bun_cli agent --local \
+  run_installed_cli agent --local \
     --agent main \
     --session-id bun-global-local-agent \
     --message "Return marker $success_marker" \
@@ -379,22 +387,21 @@ NODE
     "$LOCAL_AGENT_LOG" \
     "$MOCK_REQUEST_LOG"
 
-  echo "==> Gateway health and mocked agent turn under Bun"
+  echo "==> Gateway health and mocked agent turn from Bun global install"
   : >"$MOCK_REQUEST_LOG"
   GATEWAY_PID="$(
     openclaw_e2e_start_tracked_process \
       "$GATEWAY_LOG" \
-      "$bun_path" \
-      "$openclaw_entry" \
+      "$openclaw_bin" \
       gateway \
       --port "$gateway_port" \
       --bind loopback
   )"
   openclaw_e2e_wait_gateway_ready "$GATEWAY_PID" "$GATEWAY_LOG" 300 "$gateway_port"
-  run_bun_cli gateway health \
+  run_installed_cli gateway health \
     --token "$OPENCLAW_GATEWAY_TOKEN" \
     --json >"$GATEWAY_HEALTH_LOG" 2>&1
-  run_bun_cli agent \
+  run_installed_cli agent \
     --agent main \
     --session-id bun-global-gateway-agent \
     --message "Return marker $success_marker" \
@@ -406,7 +413,7 @@ NODE
     "$GATEWAY_AGENT_LOG" \
     "$MOCK_REQUEST_LOG"
 
-  echo "bun-global-install-smoke: Bun $bun_version package, CLI, local agent, and Gateway runtime OK"
+  echo "bun-global-install-smoke: Bun $bun_version package install and Node CLI/runtime OK"
 
   if [ -n "${OPENCLAW_BUN_GLOBAL_SMOKE_PROOF_PATH:-}" ]; then
     node --input-type=module - \

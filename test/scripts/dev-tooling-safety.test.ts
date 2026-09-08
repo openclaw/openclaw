@@ -432,22 +432,18 @@ describe("script-specific dev tooling hardening", () => {
     const signals: NodeJS.Signals[] = [];
     const stopper = tuiPtyWatchTesting.createChildStopper(
       { kill: () => true },
-      {
-        signalChild(_child, signal: NodeJS.Signals): void {
-          signals.push(signal);
-        },
-        sigkillGraceMs: 20,
-        sigtermGraceMs: 10,
+      (_child, signal: NodeJS.Signals): void => {
+        signals.push(signal);
       },
     );
 
     stopper.stop();
     expect(signals).toEqual(["SIGINT"]);
 
-    await vi.advanceTimersByTimeAsync(10);
+    await vi.advanceTimersByTimeAsync(500);
     expect(signals).toEqual(["SIGINT", "SIGTERM"]);
 
-    await vi.advanceTimersByTimeAsync(20);
+    await vi.advanceTimersByTimeAsync(5_000);
     expect(signals).toEqual(["SIGINT", "SIGTERM", "SIGKILL"]);
   });
 

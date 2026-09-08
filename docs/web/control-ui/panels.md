@@ -61,9 +61,11 @@ Images, PDFs, archives, and other file types are accepted up to 16 MiB per file.
 
 Renaming staged files or retrying failed cleanup does not restart an already scheduled cleanup deadline.
 
-If staging stays locked after a process crash, follow the lock error's recovery steps: stop all Gateway and node-host processes using that staging directory, remove only the lock directory named in the error, and restart them. This leaves staged files intact. An incomplete lock record is never cleared automatically because it cannot prove that another writer has stopped.
+If staging stays locked after a process crash, locate the relative lock directory named in the error on the machine that owns the terminal: the Gateway host for a local terminal or the paired node for a node terminal. On Windows, resolve it under the home directory of the account running that Gateway or node host. On POSIX hosts, resolve it under that process's system temporary directory; check its service environment because `TMPDIR`, `TMP`, or `TEMP` can differ from your shell's settings. Then stop all Gateway and node-host processes using that staging root, remove only the named lock directory, and restart them. This leaves staged files intact. An incomplete lock record is never cleared automatically because it cannot prove that another writer has stopped.
 
 Path insertion supports PowerShell, `cmd.exe`, and recognized POSIX shells (`sh`, Bash, Dash, Ash, Ksh, Zsh, and Fish), including Git Bash on Windows. Other shell overrides are refused because their quoting rules cannot be inferred safely; run the Gateway inside WSL for a native WSL terminal and Linux upload paths. `cmd.exe` paths containing `%` or `!` are also refused because that shell expands those characters even inside double quotes.
+
+Paired-node Codex, Claude Code, OpenCode, and Pi terminals also support uploaded-path insertion, including Windows paths with spaces and apostrophes. The inserted input remains editable and is never automatically submitted.
 
 Codex and Claude Code sessions discovered in the sessions sidebar can open in their native CLI inside the same terminal panel. In **Settings › Chat**, set **Open Codex/Claude threads in** to **Terminal** to make a normal row click open `codex resume` or `claude --resume`; the default remains the read-only OpenClaw viewer. A row's right-click or kebab menu always offers both choices, and the viewer header includes **Open in terminal** when that session is eligible.
 

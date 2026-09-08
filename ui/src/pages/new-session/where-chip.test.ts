@@ -3,7 +3,11 @@ import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import { renderWhereChip, resolveWhereChip } from "./where-chip.ts";
 
-function renderPicker(isAdmin: boolean, autoPlacementMode?: "least-busy" | "eligible-order") {
+function renderPicker(
+  isAdmin: boolean,
+  autoPlacementMode?: "least-busy" | "eligible-order",
+  selection: Partial<Parameters<typeof resolveWhereChip>[0]> = {},
+) {
   const state = resolveWhereChip({
     environments: [
       {
@@ -34,13 +38,14 @@ function renderPicker(isAdmin: boolean, autoPlacementMode?: "least-busy" | "elig
     cloudProfiles: [{ id: "aws", providerId: "crabbox" }],
     cloudProfileId: "",
     deviceId: "",
+    ...selection,
   });
   const container = document.createElement("div");
   render(
     renderWhereChip({
       state,
       gatewayName: "",
-      cloudProfileId: "",
+      cloudProfileId: selection.cloudProfileId ?? "",
       deviceId: "",
       worktreeAvailable: true,
       submitting: false,
@@ -64,6 +69,54 @@ function renderPicker(isAdmin: boolean, autoPlacementMode?: "least-busy" | "elig
 }
 
 describe("Where chip", () => {
+  it.each([
+    { os: undefined, machineClass: undefined, label: "aws", machine: "Tiny Linux" },
+    { os: "linux", machineClass: "tiny", label: "aws · Tiny Linux", machine: "Tiny Linux" },
+    {
+      os: "windows/wsl2",
+      machineClass: undefined,
+      label: "aws · Windows (WSL2)",
+      machine: "Tiny Windows",
+    },
+    {
+      os: "windows/wsl2",
+      machineClass: "tiny",
+      label: "aws · Windows (WSL2) · Tiny Windows",
+      machine: "Tiny Windows",
+    },
+  ])("renders OS and class choices for $label", ({ os, machineClass, label, machine }) => {
+    const container = renderPicker(true, undefined, {
+      cloudProfileId: "aws",
+      os,
+      machineClass,
+      cloudProfiles: [
+        {
+          id: "aws",
+          providerId: "crabbox",
+          operatingSystems: [
+            { id: "linux", label: "Linux", default: true },
+            { id: "windows/wsl2", label: "Windows (WSL2)" },
+          ],
+          machines: [
+            { id: "tiny", label: "Tiny Linux", os: "linux", default: true },
+            { id: "tiny", label: "Tiny Windows", os: "windows/wsl2", default: true },
+            { id: "custom", label: "Custom" },
+          ],
+        },
+      ],
+    });
+    expect(container.querySelector(".new-session-page__trigger-label")?.textContent).toBe(label);
+    expect(container.querySelectorAll('[data-value="machine:tiny"]')).toHaveLength(1);
+    expect(container.querySelector('[data-value="machine:tiny"]')?.textContent).toContain(machine);
+    expect(container.querySelector('[data-value="machine:custom"]')).not.toBeNull();
+    const osRow = container.querySelector('[data-value="os:linux"]');
+    expect(osRow?.textContent).toContain("Default");
+    expect(osRow?.hasAttribute("data-popover")).toBe(false);
+    expect(
+      osRow?.compareDocumentPosition(container.querySelector('[data-value="machine:tiny"]')!),
+    ).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+  });
+
   it("keeps capacity structured and exposes busy slots without an ambiguous visible fraction", () => {
     const state = resolveWhereChip({
       environments: [

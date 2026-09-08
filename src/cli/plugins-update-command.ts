@@ -418,7 +418,6 @@ async function runPluginUpdateCommandUnlocked(
 
   const installPolicyWarningAcknowledgement = resolveInstallPolicyWarningAcknowledgementCliOptions({
     acknowledgeInstallPolicyWarning: params.opts.acknowledgeInstallPolicyWarning,
-    dangerouslyForceUnsafeInstall: params.opts.dangerouslyForceUnsafeInstall,
     allowPrompt: !params.opts.dryRun,
   });
   const deferredInstallTransactions: PluginInstallTransaction[] = [];
@@ -610,7 +609,7 @@ async function runPluginUpdateCommandUnlocked(
       );
       if (pluginResult.changed) {
         await refreshPluginRegistryAfterConfigMutation({
-          config: nextConfig,
+          configPath: sourceSnapshot?.writeOptions.ownedConfigPathForWrite,
           reason: "source-changed",
           installRecords: nextPluginInstallRecords,
           invalidateRuntimeCache: false,

@@ -6,17 +6,17 @@ counts:
 rollups:
   surface_average:
     quality:
-      score: 64
-      label: Alpha
-    completeness:
-      score: 71
-      label: Beta
-  category_average:
-    quality:
-      score: 66
+      score: 65
       label: Alpha
     completeness:
       score: 72
+      label: Beta
+  category_average:
+    quality:
+      score: 67
+      label: Alpha
+    completeness:
+      score: 73
       label: Beta
 surfaces:
   - id: gateway
@@ -39,9 +39,9 @@ surfaces:
       total_categories: 13
     last_score_run:
       status: complete
-      completed_at: 2026-08-02
+      completed_at: 2026-09-08
       by: codex
-      source_ref: openclaw@9bb7a3c8fd7a60284e2623f70e9f088ec74b3b36
+      source_ref: openclaw@da37d47920d102044a4cb33f8cd688b4abc3c2a6
       process_version: 3
     categories:
       - name: Approvals and Remote Execution
@@ -207,9 +207,9 @@ surfaces:
       total_categories: 7
     last_score_run:
       status: complete
-      completed_at: 2026-08-02
+      completed_at: 2026-09-08
       by: codex
-      source_ref: openclaw@9bb7a3c8fd7a60284e2623f70e9f088ec74b3b36
+      source_ref: openclaw@da37d47920d102044a4cb33f8cd688b4abc3c2a6
       process_version: 3
     categories:
       - name: CLI Setup
@@ -309,9 +309,9 @@ surfaces:
       total_categories: 9
     last_score_run:
       status: complete
-      completed_at: 2026-08-02
+      completed_at: 2026-09-08
       by: codex
-      source_ref: openclaw@9bb7a3c8fd7a60284e2623f70e9f088ec74b3b36
+      source_ref: openclaw@da37d47920d102044a4cb33f8cd688b4abc3c2a6
       process_version: 3
     categories:
       - name: Authoring and Packaging plugins
@@ -433,9 +433,9 @@ surfaces:
       total_categories: 9
     last_score_run:
       status: complete
-      completed_at: 2026-08-02
+      completed_at: 2026-09-08
       by: codex
-      source_ref: openclaw@9bb7a3c8fd7a60284e2623f70e9f088ec74b3b36
+      source_ref: openclaw@da37d47920d102044a4cb33f8cd688b4abc3c2a6
       process_version: 3
     categories:
       - name: Agent Turn Execution
@@ -557,9 +557,9 @@ surfaces:
       total_categories: 9
     last_score_run:
       status: complete
-      completed_at: 2026-08-02
+      completed_at: 2026-09-08
       by: codex
-      source_ref: openclaw@9bb7a3c8fd7a60284e2623f70e9f088ec74b3b36
+      source_ref: openclaw@da37d47920d102044a4cb33f8cd688b4abc3c2a6
       process_version: 3
     categories:
       - name: CLI Session and Transcript Management
@@ -681,9 +681,9 @@ surfaces:
       total_categories: 8
     last_score_run:
       status: complete
-      completed_at: 2026-08-02
+      completed_at: 2026-09-08
       by: codex
-      source_ref: openclaw@9bb7a3c8fd7a60284e2623f70e9f088ec74b3b36
+      source_ref: openclaw@da37d47920d102044a4cb33f8cd688b4abc3c2a6
       process_version: 3
     categories:
       - name: Channel Actions Commands and Approvals
@@ -794,9 +794,9 @@ surfaces:
       total_categories: 6
     last_score_run:
       status: complete
-      completed_at: 2026-08-02
+      completed_at: 2026-09-08
       by: codex
-      source_ref: openclaw@9bb7a3c8fd7a60284e2623f70e9f088ec74b3b36
+      source_ref: openclaw@da37d47920d102044a4cb33f8cd688b4abc3c2a6
       process_version: 3
     categories:
       - name: Approval Policy and Tool Safeguards
@@ -885,9 +885,9 @@ surfaces:
       total_categories: 5
     last_score_run:
       status: complete
-      completed_at: 2026-08-02
+      completed_at: 2026-09-08
       by: codex
-      source_ref: openclaw@9bb7a3c8fd7a60284e2623f70e9f088ec74b3b36
+      source_ref: openclaw@da37d47920d102044a4cb33f8cd688b4abc3c2a6
       process_version: 3
     categories:
       - name: Health and Repair
@@ -965,9 +965,9 @@ surfaces:
       total_categories: 6
     last_score_run:
       status: complete
-      completed_at: 2026-08-02
+      completed_at: 2026-09-08
       by: codex
-      source_ref: openclaw@9bb7a3c8fd7a60284e2623f70e9f088ec74b3b36
+      source_ref: openclaw@da37d47920d102044a4cb33f8cd688b4abc3c2a6
       process_version: 3
     categories:
       - name: Cron Jobs
@@ -1056,9 +1056,9 @@ surfaces:
       total_categories: 6
     last_score_run:
       status: complete
-      completed_at: 2026-08-02
+      completed_at: 2026-09-08
       by: codex
-      source_ref: openclaw@9bb7a3c8fd7a60284e2623f70e9f088ec74b3b36
+      source_ref: openclaw@da37d47920d102044a4cb33f8cd688b4abc3c2a6
       process_version: 3
     categories:
       - name: Media Intake and Access
@@ -1147,9 +1147,9 @@ surfaces:
       total_categories: 6
     last_score_run:
       status: complete
-      completed_at: 2026-08-02
+      completed_at: 2026-09-08
       by: codex
-      source_ref: openclaw@9bb7a3c8fd7a60284e2623f70e9f088ec74b3b36
+      source_ref: openclaw@da37d47920d102044a4cb33f8cd688b4abc3c2a6
       process_version: 3
     categories:
       - name: Talk Providers
@@ -1238,9 +1238,9 @@ surfaces:
       total_categories: 6
     last_score_run:
       status: complete
-      completed_at: 2026-08-02
+      completed_at: 2026-09-08
       by: codex
-      source_ref: openclaw@9bb7a3c8fd7a60284e2623f70e9f088ec74b3b36
+      source_ref: openclaw@da37d47920d102044a4cb33f8cd688b4abc3c2a6
       process_version: 3
     categories:
       - name: Browser Realtime Talk
@@ -1329,9 +1329,9 @@ surfaces:
       total_categories: 5
     last_score_run:
       status: complete
-      completed_at: 2026-08-02
+      completed_at: 2026-09-08
       by: codex
-      source_ref: openclaw@9bb7a3c8fd7a60284e2623f70e9f088ec74b3b36
+      source_ref: openclaw@da37d47920d102044a4cb33f8cd688b4abc3c2a6
       process_version: 3
     categories:
       - name: Runtime Modes
@@ -1409,9 +1409,9 @@ surfaces:
       total_categories: 4
     last_score_run:
       status: complete
-      completed_at: 2026-08-02
+      completed_at: 2026-09-08
       by: codex
-      source_ref: openclaw@9bb7a3c8fd7a60284e2623f70e9f088ec74b3b36
+      source_ref: openclaw@da37d47920d102044a4cb33f8cd688b4abc3c2a6
       process_version: 3
     categories:
       - name: Publishing
@@ -1478,9 +1478,9 @@ surfaces:
       total_categories: 6
     last_score_run:
       status: complete
-      completed_at: 2026-08-02
+      completed_at: 2026-09-08
       by: codex
-      source_ref: openclaw@9bb7a3c8fd7a60284e2623f70e9f088ec74b3b36
+      source_ref: openclaw@da37d47920d102044a4cb33f8cd688b4abc3c2a6
       process_version: 3
     categories:
       - name: Client API
@@ -1569,9 +1569,9 @@ surfaces:
       total_categories: 7
     last_score_run:
       status: complete
-      completed_at: 2026-08-02
+      completed_at: 2026-09-08
       by: codex
-      source_ref: openclaw@9bb7a3c8fd7a60284e2623f70e9f088ec74b3b36
+      source_ref: openclaw@da37d47920d102044a4cb33f8cd688b4abc3c2a6
       process_version: 3
     categories:
       - name: CLI Setup
@@ -1671,9 +1671,9 @@ surfaces:
       total_categories: 8
     last_score_run:
       status: complete
-      completed_at: 2026-08-02
+      completed_at: 2026-09-08
       by: codex
-      source_ref: openclaw@9bb7a3c8fd7a60284e2623f70e9f088ec74b3b36
+      source_ref: openclaw@da37d47920d102044a4cb33f8cd688b4abc3c2a6
       process_version: 3
     categories:
       - name: Canvas
@@ -1784,9 +1784,9 @@ surfaces:
       total_categories: 5
     last_score_run:
       status: complete
-      completed_at: 2026-08-02
+      completed_at: 2026-09-08
       by: codex
-      source_ref: openclaw@9bb7a3c8fd7a60284e2623f70e9f088ec74b3b36
+      source_ref: openclaw@da37d47920d102044a4cb33f8cd688b4abc3c2a6
       process_version: 3
     categories:
       - name: Host Setup and Updates
@@ -1848,78 +1848,78 @@ surfaces:
     name: Linux companion app
     family: platform-app
     level:
-      id: planned
-      code: M0
-      label: Planned
+      id: beta
+      code: M3
+      label: Beta
     scores:
       quality:
-        score: 19
-        label: Experimental
+        score: 71
+        label: Beta
       completeness:
-        score: 21
-        label: Experimental
+        score: 76
+        label: Beta
     lts:
       status: none
       supported_categories: 0
       total_categories: 5
     last_score_run:
       status: complete
-      completed_at: 2026-08-02
+      completed_at: 2026-09-08
       by: codex
-      source_ref: openclaw@9bb7a3c8fd7a60284e2623f70e9f088ec74b3b36
+      source_ref: openclaw@da37d47920d102044a4cb33f8cd688b4abc3c2a6
       process_version: 3
     categories:
       - name: App Distribution
         quality:
-          score: 19
-          label: Experimental
+          score: 76
+          label: Beta
         completeness:
-          score: 21
-          label: Experimental
+          score: 84
+          label: Stable
         lts:
           supported: false
           reason: none
           human_override: false
       - name: Gateway Connectivity
         quality:
-          score: 19
-          label: Experimental
+          score: 74
+          label: Beta
         completeness:
-          score: 21
-          label: Experimental
+          score: 82
+          label: Stable
         lts:
           supported: false
           reason: none
           human_override: false
       - name: Chat and Sessions
         quality:
-          score: 19
-          label: Experimental
+          score: 68
+          label: Alpha
         completeness:
-          score: 21
-          label: Experimental
+          score: 74
+          label: Beta
         lts:
           supported: false
           reason: none
           human_override: false
       - name: Desktop Capabilities
         quality:
-          score: 19
-          label: Experimental
+          score: 64
+          label: Alpha
         completeness:
-          score: 21
-          label: Experimental
+          score: 61
+          label: Alpha
         lts:
           supported: false
           reason: none
           human_override: false
       - name: Status and Diagnostics
         quality:
-          score: 19
-          label: Experimental
+          score: 72
+          label: Beta
         completeness:
-          score: 21
-          label: Experimental
+          score: 79
+          label: Beta
         lts:
           supported: false
           reason: none
@@ -1944,9 +1944,9 @@ surfaces:
       total_categories: 6
     last_score_run:
       status: complete
-      completed_at: 2026-08-02
+      completed_at: 2026-09-08
       by: codex
-      source_ref: openclaw@9bb7a3c8fd7a60284e2623f70e9f088ec74b3b36
+      source_ref: openclaw@da37d47920d102044a4cb33f8cd688b4abc3c2a6
       process_version: 3
     categories:
       - name: WSL Setup
@@ -2035,9 +2035,9 @@ surfaces:
       total_categories: 4
     last_score_run:
       status: complete
-      completed_at: 2026-08-02
+      completed_at: 2026-09-08
       by: codex
-      source_ref: openclaw@9bb7a3c8fd7a60284e2623f70e9f088ec74b3b36
+      source_ref: openclaw@da37d47920d102044a4cb33f8cd688b4abc3c2a6
       process_version: 3
     categories:
       - name: CLI
@@ -2104,9 +2104,9 @@ surfaces:
       total_categories: 5
     last_score_run:
       status: complete
-      completed_at: 2026-08-02
+      completed_at: 2026-09-08
       by: codex
-      source_ref: openclaw@9bb7a3c8fd7a60284e2623f70e9f088ec74b3b36
+      source_ref: openclaw@da37d47920d102044a4cb33f8cd688b4abc3c2a6
       process_version: 3
     categories:
       - name: Installation and Updates
@@ -2184,9 +2184,9 @@ surfaces:
       total_categories: 7
     last_score_run:
       status: complete
-      completed_at: 2026-08-02
+      completed_at: 2026-09-08
       by: codex
-      source_ref: openclaw@9bb7a3c8fd7a60284e2623f70e9f088ec74b3b36
+      source_ref: openclaw@da37d47920d102044a4cb33f8cd688b4abc3c2a6
       process_version: 3
     categories:
       - name: Media Capture
@@ -2286,9 +2286,9 @@ surfaces:
       total_categories: 7
     last_score_run:
       status: complete
-      completed_at: 2026-08-02
+      completed_at: 2026-09-08
       by: codex
-      source_ref: openclaw@9bb7a3c8fd7a60284e2623f70e9f088ec74b3b36
+      source_ref: openclaw@da37d47920d102044a4cb33f8cd688b4abc3c2a6
       process_version: 3
     categories:
       - name: Media and Sharing
@@ -2388,9 +2388,9 @@ surfaces:
       total_categories: 5
     last_score_run:
       status: complete
-      completed_at: 2026-08-02
+      completed_at: 2026-09-08
       by: codex
-      source_ref: openclaw@9bb7a3c8fd7a60284e2623f70e9f088ec74b3b36
+      source_ref: openclaw@da37d47920d102044a4cb33f8cd688b4abc3c2a6
       process_version: 3
     categories:
       - name: Delivery and Recovery
@@ -2468,9 +2468,9 @@ surfaces:
       total_categories: 4
     last_score_run:
       status: complete
-      completed_at: 2026-08-02
+      completed_at: 2026-09-08
       by: codex
-      source_ref: openclaw@9bb7a3c8fd7a60284e2623f70e9f088ec74b3b36
+      source_ref: openclaw@da37d47920d102044a4cb33f8cd688b4abc3c2a6
       process_version: 3
     categories:
       - name: Setup and Compatibility
@@ -2537,9 +2537,9 @@ surfaces:
       total_categories: 4
     last_score_run:
       status: complete
-      completed_at: 2026-08-02
+      completed_at: 2026-09-08
       by: codex
-      source_ref: openclaw@9bb7a3c8fd7a60284e2623f70e9f088ec74b3b36
+      source_ref: openclaw@da37d47920d102044a4cb33f8cd688b4abc3c2a6
       process_version: 3
     categories:
       - name: Container Setup
@@ -2606,9 +2606,9 @@ surfaces:
       total_categories: 4
     last_score_run:
       status: complete
-      completed_at: 2026-08-02
+      completed_at: 2026-09-08
       by: codex
-      source_ref: openclaw@9bb7a3c8fd7a60284e2623f70e9f088ec74b3b36
+      source_ref: openclaw@da37d47920d102044a4cb33f8cd688b4abc3c2a6
       process_version: 3
     categories:
       - name: Deployment Setup
@@ -2675,9 +2675,9 @@ surfaces:
       total_categories: 5
     last_score_run:
       status: complete
-      completed_at: 2026-08-02
+      completed_at: 2026-09-08
       by: codex
-      source_ref: openclaw@9bb7a3c8fd7a60284e2623f70e9f088ec74b3b36
+      source_ref: openclaw@da37d47920d102044a4cb33f8cd688b4abc3c2a6
       process_version: 3
     categories:
       - name: Install Handoff
@@ -2755,9 +2755,9 @@ surfaces:
       total_categories: 6
     last_score_run:
       status: complete
-      completed_at: 2026-08-02
+      completed_at: 2026-09-08
       by: codex
-      source_ref: openclaw@9bb7a3c8fd7a60284e2623f70e9f088ec74b3b36
+      source_ref: openclaw@da37d47920d102044a4cb33f8cd688b4abc3c2a6
       process_version: 3
     categories:
       - name: Channel Setup and Operations
@@ -2846,9 +2846,9 @@ surfaces:
       total_categories: 5
     last_score_run:
       status: complete
-      completed_at: 2026-08-02
+      completed_at: 2026-09-08
       by: codex
-      source_ref: openclaw@9bb7a3c8fd7a60284e2623f70e9f088ec74b3b36
+      source_ref: openclaw@da37d47920d102044a4cb33f8cd688b4abc3c2a6
       process_version: 3
     categories:
       - name: Channel Setup and Operations
@@ -2926,9 +2926,9 @@ surfaces:
       total_categories: 5
     last_score_run:
       status: complete
-      completed_at: 2026-08-02
+      completed_at: 2026-09-08
       by: codex
-      source_ref: openclaw@9bb7a3c8fd7a60284e2623f70e9f088ec74b3b36
+      source_ref: openclaw@da37d47920d102044a4cb33f8cd688b4abc3c2a6
       process_version: 3
     categories:
       - name: Channel Setup and Operations
@@ -3006,9 +3006,9 @@ surfaces:
       total_categories: 5
     last_score_run:
       status: complete
-      completed_at: 2026-08-02
+      completed_at: 2026-09-08
       by: codex
-      source_ref: openclaw@9bb7a3c8fd7a60284e2623f70e9f088ec74b3b36
+      source_ref: openclaw@da37d47920d102044a4cb33f8cd688b4abc3c2a6
       process_version: 3
     categories:
       - name: Channel Setup and Operations
@@ -3067,7 +3067,7 @@ surfaces:
           reason: human_override
           human_override: true
   - id: imessage-bluebubbles
-    name: iMessage and BlueBubbles
+    name: iMessage
     family: channel
     level:
       id: beta
@@ -3086,9 +3086,9 @@ surfaces:
       total_categories: 5
     last_score_run:
       status: complete
-      completed_at: 2026-08-02
+      completed_at: 2026-09-08
       by: codex
-      source_ref: openclaw@9bb7a3c8fd7a60284e2623f70e9f088ec74b3b36
+      source_ref: openclaw@da37d47920d102044a4cb33f8cd688b4abc3c2a6
       process_version: 3
     categories:
       - name: Channel Setup and Operations
@@ -3166,9 +3166,9 @@ surfaces:
       total_categories: 5
     last_score_run:
       status: complete
-      completed_at: 2026-08-02
+      completed_at: 2026-09-08
       by: codex
-      source_ref: openclaw@9bb7a3c8fd7a60284e2623f70e9f088ec74b3b36
+      source_ref: openclaw@da37d47920d102044a4cb33f8cd688b4abc3c2a6
       process_version: 3
     categories:
       - name: Channel Setup and Operations
@@ -3246,9 +3246,9 @@ surfaces:
       total_categories: 5
     last_score_run:
       status: complete
-      completed_at: 2026-08-02
+      completed_at: 2026-09-08
       by: codex
-      source_ref: openclaw@9bb7a3c8fd7a60284e2623f70e9f088ec74b3b36
+      source_ref: openclaw@da37d47920d102044a4cb33f8cd688b4abc3c2a6
       process_version: 3
     categories:
       - name: Channel Setup and Operations
@@ -3326,9 +3326,9 @@ surfaces:
       total_categories: 6
     last_score_run:
       status: complete
-      completed_at: 2026-08-02
+      completed_at: 2026-09-08
       by: codex
-      source_ref: openclaw@9bb7a3c8fd7a60284e2623f70e9f088ec74b3b36
+      source_ref: openclaw@da37d47920d102044a4cb33f8cd688b4abc3c2a6
       process_version: 3
     categories:
       - name: Channel Setup and Operations
@@ -3417,9 +3417,9 @@ surfaces:
       total_categories: 5
     last_score_run:
       status: complete
-      completed_at: 2026-08-02
+      completed_at: 2026-09-08
       by: codex
-      source_ref: openclaw@9bb7a3c8fd7a60284e2623f70e9f088ec74b3b36
+      source_ref: openclaw@da37d47920d102044a4cb33f8cd688b4abc3c2a6
       process_version: 3
     categories:
       - name: Channel Setup and Operations
@@ -3497,9 +3497,9 @@ surfaces:
       total_categories: 4
     last_score_run:
       status: complete
-      completed_at: 2026-08-02
+      completed_at: 2026-09-08
       by: codex
-      source_ref: openclaw@9bb7a3c8fd7a60284e2623f70e9f088ec74b3b36
+      source_ref: openclaw@da37d47920d102044a4cb33f8cd688b4abc3c2a6
       process_version: 3
     categories:
       - name: Channel Setup and Operations
@@ -3566,9 +3566,9 @@ surfaces:
       total_categories: 4
     last_score_run:
       status: complete
-      completed_at: 2026-08-02
+      completed_at: 2026-09-08
       by: codex
-      source_ref: openclaw@9bb7a3c8fd7a60284e2623f70e9f088ec74b3b36
+      source_ref: openclaw@da37d47920d102044a4cb33f8cd688b4abc3c2a6
       process_version: 3
     categories:
       - name: Channel Setup and Operations
@@ -3635,9 +3635,9 @@ surfaces:
       total_categories: 5
     last_score_run:
       status: complete
-      completed_at: 2026-08-02
+      completed_at: 2026-09-08
       by: codex
-      source_ref: openclaw@9bb7a3c8fd7a60284e2623f70e9f088ec74b3b36
+      source_ref: openclaw@da37d47920d102044a4cb33f8cd688b4abc3c2a6
       process_version: 3
     categories:
       - name: Channel Setup and Operations
@@ -3715,9 +3715,9 @@ surfaces:
       total_categories: 5
     last_score_run:
       status: complete
-      completed_at: 2026-08-02
+      completed_at: 2026-09-08
       by: codex
-      source_ref: openclaw@9bb7a3c8fd7a60284e2623f70e9f088ec74b3b36
+      source_ref: openclaw@da37d47920d102044a4cb33f8cd688b4abc3c2a6
       process_version: 3
     categories:
       - name: Model and Auth
@@ -3795,9 +3795,9 @@ surfaces:
       total_categories: 5
     last_score_run:
       status: complete
-      completed_at: 2026-08-02
+      completed_at: 2026-09-08
       by: codex
-      source_ref: openclaw@9bb7a3c8fd7a60284e2623f70e9f088ec74b3b36
+      source_ref: openclaw@da37d47920d102044a4cb33f8cd688b4abc3c2a6
       process_version: 3
     categories:
       - name: Provider Auth and Recovery
@@ -3875,9 +3875,9 @@ surfaces:
       total_categories: 5
     last_score_run:
       status: complete
-      completed_at: 2026-08-02
+      completed_at: 2026-09-08
       by: codex
-      source_ref: openclaw@9bb7a3c8fd7a60284e2623f70e9f088ec74b3b36
+      source_ref: openclaw@da37d47920d102044a4cb33f8cd688b4abc3c2a6
       process_version: 3
     categories:
       - name: Provider Setup and Credentials
@@ -3955,9 +3955,9 @@ surfaces:
       total_categories: 4
     last_score_run:
       status: complete
-      completed_at: 2026-08-02
+      completed_at: 2026-09-08
       by: codex
-      source_ref: openclaw@9bb7a3c8fd7a60284e2623f70e9f088ec74b3b36
+      source_ref: openclaw@da37d47920d102044a4cb33f8cd688b4abc3c2a6
       process_version: 3
     categories:
       - name: Provider Setup and Auth
@@ -4024,9 +4024,9 @@ surfaces:
       total_categories: 5
     last_score_run:
       status: complete
-      completed_at: 2026-08-02
+      completed_at: 2026-09-08
       by: codex
-      source_ref: openclaw@9bb7a3c8fd7a60284e2623f70e9f088ec74b3b36
+      source_ref: openclaw@da37d47920d102044a4cb33f8cd688b4abc3c2a6
       process_version: 3
     categories:
       - name: Provider Setup, Lifecycle, and Diagnostics
@@ -4104,9 +4104,9 @@ surfaces:
       total_categories: 3
     last_score_run:
       status: complete
-      completed_at: 2026-08-02
+      completed_at: 2026-09-08
       by: codex
-      source_ref: openclaw@9bb7a3c8fd7a60284e2623f70e9f088ec74b3b36
+      source_ref: openclaw@da37d47920d102044a4cb33f8cd688b4abc3c2a6
       process_version: 3
     categories:
       - name: Hosted LLM Providers
@@ -4162,9 +4162,9 @@ surfaces:
       total_categories: 4
     last_score_run:
       status: complete
-      completed_at: 2026-08-02
+      completed_at: 2026-09-08
       by: codex
-      source_ref: openclaw@9bb7a3c8fd7a60284e2623f70e9f088ec74b3b36
+      source_ref: openclaw@da37d47920d102044a4cb33f8cd688b4abc3c2a6
       process_version: 3
     categories:
       - name: Search Providers
@@ -4231,9 +4231,9 @@ surfaces:
       total_categories: 3
     last_score_run:
       status: complete
-      completed_at: 2026-08-02
+      completed_at: 2026-09-08
       by: codex
-      source_ref: openclaw@9bb7a3c8fd7a60284e2623f70e9f088ec74b3b36
+      source_ref: openclaw@da37d47920d102044a4cb33f8cd688b4abc3c2a6
       process_version: 3
     categories:
       - name: Browser Automation
@@ -4289,9 +4289,9 @@ surfaces:
       total_categories: 5
     last_score_run:
       status: complete
-      completed_at: 2026-08-02
+      completed_at: 2026-09-08
       by: codex
-      source_ref: openclaw@9bb7a3c8fd7a60284e2623f70e9f088ec74b3b36
+      source_ref: openclaw@da37d47920d102044a4cb33f8cd688b4abc3c2a6
       process_version: 3
     categories:
       - name: Media Routing and Discovery

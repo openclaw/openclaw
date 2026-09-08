@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import type { WorkerProvider } from "openclaw/plugin-sdk/plugin-entry";
 import { createPluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-store-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { CrabboxOperatingSystem } from "./crabbox-worker-profile.js";
 
 type WorkerNodeRuntimeIdentity = NonNullable<
   NonNullable<Parameters<WorkerProvider["provision"]>[2]>["nodeRuntimeIdentity"]
@@ -21,6 +22,8 @@ export type WarmImageRecord = {
 export type WarmAllocationRecord = {
   choice: { kind: "cold" } | { kind: "checkpoint"; checkpointId: string };
   machineClass: string;
+  /** Absent in existing Linux allocations. */
+  os?: CrabboxOperatingSystem;
   phase: "pending" | "prepared" | "enrolled";
   baseCommit?: string;
   /** Frozen target; preparation/enrollment must verify it before capture can publish it. */

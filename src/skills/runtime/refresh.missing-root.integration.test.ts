@@ -11,6 +11,49 @@ vi.mock("../loading/plugin-skills.js", () => ({
   resolvePluginSkillRootsFromMetadata: () => [],
 }));
 
+it.each(["create", "edit"] as const)(
+  "refreshes cached skills after %s during initial watcher registration",
+  async (operation) => {
+    const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "skills-scan-proof-")));
+    const workspaceDir = path.join(root, "workspace");
+    const skillDir = path.join(workspaceDir, "skills", "scan-proof");
+    const skillFile = path.join(skillDir, "SKILL.md");
+    const contents = (description: string) =>
+      `---\nname: scan-proof\ndescription: ${description}\n---\n`;
+    const { ensureSkillsWatcher, closeSkillsWatchers } = await import("./refresh.js");
+    const { loadWorkspaceSkills } = await import("../loading/workspace-skill-loader.js");
+    const options = { config: {}, agentId: "main" };
+    try {
+      await fs.mkdir(path.dirname(skillDir), { recursive: true });
+      if (operation === "edit") {
+        await fs.mkdir(skillDir, { recursive: true });
+        await fs.writeFile(skillFile, contents("Before registration"));
+      }
+      ensureSkillsWatcher({ workspaceDir, ...options });
+      const cached = loadWorkspaceSkills(workspaceDir, options);
+      expect(cached.find((entry) => entry.skill.name === "scan-proof")?.skill.description).toBe(
+        operation === "edit" ? "Before registration" : undefined,
+      );
+      // Keep the write in this turn, before native watcher registration, so
+      // refresh cannot depend on receiving a subsequent file-change event.
+      nativeFs.mkdirSync(skillDir, { recursive: true });
+      nativeFs.writeFileSync(skillFile, contents("After registration"));
+      await expect
+        .poll(
+          () =>
+            loadWorkspaceSkills(workspaceDir, options).find(
+              (entry) => entry.skill.name === "scan-proof",
+            )?.skill.description,
+          { timeout: 3_000 },
+        )
+        .toBe("After registration");
+    } finally {
+      await closeSkillsWatchers();
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  },
+);
+
 it("refreshes skills created beneath an initially missing project skills root", async () => {
   const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "skills-root-proof-")));
   const workspaceDir = path.join(root, "workspace");
@@ -47,9 +90,8 @@ it("refreshes skills created beneath an initially missing project skills root", 
       });
     });
     const existingSkill = path.join(workspaceDir, "skills", "existing", "SKILL.md");
-    // Chokidar readiness can precede missing-parent registration, and parent
-    // registration does not await child watches. Observe both native watches
-    // before writing the positive control or creating the absent parents.
+    // This control covers writes after registration; the cases above cover
+    // cached discovery while the initial scan is still pending.
     await vi.waitFor(() => {
       expect(registeredPaths.has(workspaceDir)).toBe(true);
       expect(registeredPaths.has(path.dirname(existingSkill))).toBe(true);

@@ -1,3 +1,4 @@
+import { normalizeUpdatePostInstallDoctorWarnings } from "../infra/update-doctor-result.js";
 import type {
   DoctorContributionHealthCheck,
   DoctorHealthContribution,
@@ -110,12 +111,32 @@ async function runStructuredDoctorHealthContribution(params: {
   );
   params.ctx.cfg = result.config;
   renderStructuredHealthFindings(params.ctx, result.findings);
+  // Display retains original findings; finalization records only unresolved warnings.
+  recordDoctorHealthWarnings(
+    params.ctx,
+    dryRun ? result.findings : result.remainingFindings,
+    result.warnings,
+  );
   for (const warning of result.warnings) {
     params.ctx.runtime.error(warning);
   }
   for (const change of result.changes) {
     params.ctx.runtime.log(change);
   }
+}
+
+export function recordDoctorHealthWarnings(
+  ctx: DoctorHealthFlowContext,
+  findings: readonly HealthFinding[],
+  warnings: readonly string[] = [],
+): void {
+  ctx.updateWarnings = normalizeUpdatePostInstallDoctorWarnings([
+    ...(ctx.updateWarnings ?? []),
+    ...findings
+      .filter((finding) => finding.severity === "warning")
+      .map((finding) => `${finding.checkId}: ${finding.message}`),
+    ...warnings,
+  ]);
 }
 
 export function renderStructuredHealthFindings(

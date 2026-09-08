@@ -29,11 +29,15 @@ async function repository(name: string) {
   return { root, baseCommit: await requireGit(root, ["rev-parse", "HEAD"]) };
 }
 
-function createService(provision: WorkerProvider["provision"], providerCallTimeoutMs?: number) {
+function createService(
+  provision: WorkerProvider["provision"],
+  providerCallTimeoutMs?: number,
+  supportsProjectPreparation: WorkerProvider["supportsProjectPreparation"] = () => true,
+) {
   let credentialIndex = 0;
   return support.createService(
     support.createProvider({
-      supportsProjectPreparation: () => true,
+      supportsProjectPreparation,
       provision,
     }),
     {
@@ -219,53 +223,58 @@ describe("worker provider project preparation ownership", () => {
     expect(support.testState.bootstrapWorker).not.toHaveBeenCalled();
   });
 
-  it("persists project identity and the Git base before provision and replays them after restart and HEAD advance", async () => {
-    const git = await repository("project");
-    const projects: ProjectPreparation[] = [];
-    const operationIds: string[] = [];
-    const provision: WorkerProvider["provision"] = async (_profile, operationId, options) => {
-      const project = expectDefined(options?.project, "provider project preparation");
-      projects.push(project);
-      operationIds.push(operationId);
-      const record = support.testState.store
-        .list()
-        .find((entry) => entry.provisionOperationId === operationId);
-      expect(record).toMatchObject({
-        state: "provisioning",
-        leaseId: null,
-        profileSnapshot: {
-          project: { key: project.key, root: git.root, baseCommit: git.baseCommit },
-        },
-      });
-      expect(project.key).toMatch(/^[a-f0-9]{64}$/u);
-      expect(project.baseCommit).toBe(git.baseCommit);
-      expect(() => project.assertCurrent()).not.toThrow();
-      if (projects.length === 1) {
-        throw new Error("provider response was lost after allocation");
-      }
-      return { leaseId: "lease-project", ssh: support.SSH_ENDPOINT };
-    };
-    const first = createService(provision);
-    await expect(
-      first.create("development", "project-replay", undefined, undefined, git.root),
-    ).rejects.toMatchObject({ code: "provider_failure" });
-    expect(projects[0]?.signal.aborted).toBe(true);
-    await fs.writeFile(path.join(git.root, "input.txt"), "newer project HEAD\n");
-    await requireGit(git.root, ["commit", "--quiet", "-am", "advance"]);
-    expect(await requireGit(git.root, ["rev-parse", "HEAD"])).not.toBe(git.baseCommit);
-    await support.reopenWorkerEnvironmentStore();
+  it.each([undefined, "large"])(
+    "persists and replays project identity with a legacy provider hook (machineClass=%s)",
+    async (machineClass) => {
+      const git = await repository("project");
+      const projects: ProjectPreparation[] = [];
+      const operationIds: string[] = [];
+      const provision: WorkerProvider["provision"] = async (_profile, operationId, options) => {
+        const project = expectDefined(options?.project, "provider project preparation");
+        projects.push(project);
+        operationIds.push(operationId);
+        const record = support.testState.store
+          .list()
+          .find((entry) => entry.provisionOperationId === operationId);
+        expect(record).toMatchObject({
+          state: "provisioning",
+          leaseId: null,
+          profileSnapshot: {
+            project: { key: project.key, root: git.root, baseCommit: git.baseCommit },
+          },
+        });
+        expect(project.key).toMatch(/^[a-f0-9]{64}$/u);
+        expect(project.baseCommit).toBe(git.baseCommit);
+        expect(() => project.assertCurrent()).not.toThrow();
+        if (projects.length === 1) {
+          throw new Error("provider response was lost after allocation");
+        }
+        return { leaseId: "lease-project", ssh: support.SSH_ENDPOINT };
+      };
+      const supportsProjectPreparation = (_profile: unknown, selectedClass?: string) =>
+        selectedClass === machineClass;
+      const first = createService(provision, undefined, supportsProjectPreparation);
+      await expect(
+        first.create("development", "project-replay", machineClass, undefined, git.root),
+      ).rejects.toMatchObject({ code: "provider_failure" });
+      expect(projects[0]?.signal.aborted).toBe(true);
+      await fs.writeFile(path.join(git.root, "input.txt"), "newer project HEAD\n");
+      await requireGit(git.root, ["commit", "--quiet", "-am", "advance"]);
+      expect(await requireGit(git.root, ["rev-parse", "HEAD"])).not.toBe(git.baseCommit);
+      await support.reopenWorkerEnvironmentStore();
 
-    const restarted = createService(provision);
-    await expect(
-      restarted.create("development", "project-replay", undefined, undefined, git.root),
-    ).resolves.toMatchObject({ state: "ready", leaseId: "lease-project" });
-    expect(operationIds).toHaveLength(2);
-    expect(operationIds[1]).toBe(operationIds[0]);
-    expect(projects[1]?.key).toBe(projects[0]?.key);
-    expect(projects[1]?.baseCommit).toBe(git.baseCommit);
-    expect(projects[1]).not.toBe(projects[0]);
-    expect(projects[1]?.signal.aborted).toBe(true);
-  });
+      const restarted = createService(provision, undefined, supportsProjectPreparation);
+      await expect(
+        restarted.create("development", "project-replay", machineClass, undefined, git.root),
+      ).resolves.toMatchObject({ state: "ready", leaseId: "lease-project" });
+      expect(operationIds).toHaveLength(2);
+      expect(operationIds[1]).toBe(operationIds[0]);
+      expect(projects[1]?.key).toBe(projects[0]?.key);
+      expect(projects[1]?.baseCommit).toBe(git.baseCommit);
+      expect(projects[1]).not.toBe(projects[0]);
+      expect(projects[1]?.signal.aborted).toBe(true);
+    },
+  );
 
   it("rejects another project root using the same idempotency key before calling the provider", async () => {
     const first = await repository("first-project");

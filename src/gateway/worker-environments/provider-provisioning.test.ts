@@ -30,14 +30,22 @@ describe("worker environment service", () => {
           provisionOperationId: operationId,
         });
         expect(profile).toEqual({ region: "test" });
-        expect(options).toEqual({ machineClass: "large" });
+        expect(options).toEqual({ machineClass: "large", os: "os-a" });
         return allocate;
       },
     );
     const service = support.createService(support.createProvider({ provision, prepareProvision }));
-    await expect(service.create("development", "prepared-request", "large")).resolves.toMatchObject(
-      { state: "ready", leaseId: "lease-prepared" },
-    );
+    await expect(
+      service.create(
+        "development",
+        "prepared-request",
+        "large",
+        undefined,
+        undefined,
+        undefined,
+        "os-a",
+      ),
+    ).resolves.toMatchObject({ state: "ready", leaseId: "lease-prepared" });
     expect(prepareProvision).toHaveBeenCalledOnce();
     expect(allocate).toHaveBeenCalledOnce();
     expect(provision).not.toHaveBeenCalled();
@@ -145,19 +153,30 @@ describe("worker environment service", () => {
           profileSnapshot: {
             install: "bundle",
             machineClass: "beast",
+            os: "os-a",
             settings: { region: "test" },
           },
         });
         support.getDevelopmentProfile().settings = { region: "mutated" };
         expect(profile).toEqual({ region: "test" });
-        expect(options).toEqual({ machineClass: "beast" });
+        expect(options).toEqual({ machineClass: "beast", os: "os-a" });
         return { leaseId: "lease-1", ssh: support.SSH_ENDPOINT };
       },
     });
 
     const workerService = support.createService(provider);
-    const result = await workerService.create("development", "request-1", "beast");
-    const repeated = await workerService.create("development", "request-1", "beast");
+    const create = (machineClass = "beast", os: string | undefined = "os-a") =>
+      workerService.create(
+        "development",
+        "request-1",
+        machineClass,
+        undefined,
+        undefined,
+        undefined,
+        os,
+      );
+    const result = await create();
+    const repeated = await create();
 
     expect(result).toMatchObject({ state: "ready", leaseId: "lease-1", ownerEpoch: 1 });
     expect(repeated.environmentId).toBe(result.environmentId);
@@ -188,9 +207,24 @@ describe("worker environment service", () => {
       deliveredAtMs: support.testState.nowMs,
     });
     expect(workerService.takeMintedCredential(binding)).toBeUndefined();
-    await expect(workerService.create("development", "request-1", "fast")).rejects.toMatchObject({
-      code: "invalid_profile",
-    });
+    for (const [machineClass, os] of [
+      ["fast", "os-a"],
+      ["beast", "os-b"],
+      ["beast", undefined],
+    ]) {
+      await expect(
+        workerService.create(
+          "development",
+          "request-1",
+          machineClass,
+          undefined,
+          undefined,
+          undefined,
+          os,
+        ),
+      ).rejects.toMatchObject({ code: "invalid_profile" });
+    }
+    expect(operationIds).toHaveLength(1);
   });
 
   it("requires explicit placement modes before provider allocation", async () => {
@@ -395,16 +429,26 @@ describe("worker environment service", () => {
     });
   });
 
-  it("delegates configured machine options to the profile provider", async () => {
-    const listMachineOptions = vi.fn(async () => [
-      { id: "standard", label: "Standard", cpu: 32, memoryGb: 64, default: true },
-    ]);
-    const workerService = support.createService(support.createProvider({ listMachineOptions }));
+  it("preserves per-OS machine identities and defaults from the profile provider", async () => {
+    const machines = [
+      { id: "standard", label: "Standard", cpu: 32, memoryGb: 64, default: true, os: "os-a" },
+      { id: "standard", label: "Standard", default: true, os: "os-b" },
+      { id: "shared", label: "Shared" },
+    ];
+    const systems = [
+      { id: "os-a", label: "OS A", default: true },
+      { id: "os-b", label: "OS B" },
+    ];
+    const listMachineOptions = vi.fn(async () => machines);
+    const listOperatingSystems = vi.fn(async () => systems);
+    const workerService = support.createService(
+      support.createProvider({ listMachineOptions, listOperatingSystems }),
+    );
 
-    await expect(workerService.listMachineOptions("development")).resolves.toEqual([
-      { id: "standard", label: "Standard", cpu: 32, memoryGb: 64, default: true },
-    ]);
+    await expect(workerService.listMachineOptions("development")).resolves.toEqual(machines);
+    await expect(workerService.listOperatingSystems("development")).resolves.toEqual(systems);
     expect(listMachineOptions).toHaveBeenCalledWith({ region: "test" });
+    expect(listOperatingSystems).toHaveBeenCalledWith({ region: "test" });
   });
 
   it.each([
@@ -416,6 +460,21 @@ describe("worker environment service", () => {
       ],
     ],
     ["blank ids", [{ id: " ", label: "Fast" }]],
+    ["untrimmed OS ids", [{ id: "fast", label: "Fast", os: " os-a" }]],
+    [
+      "duplicate per-OS ids",
+      [
+        { id: "fast", label: "Fast", os: "os-a" },
+        { id: "fast", label: "Faster", os: "os-a" },
+      ],
+    ],
+    [
+      "multiple defaults for one OS",
+      [
+        { id: "standard", label: "Standard", default: true, os: "os-a" },
+        { id: "fast", label: "Fast", default: true, os: "os-a" },
+      ],
+    ],
     ["malformed labels", [{ id: "fast", label: 16 }]],
     ["non-positive CPU counts", [{ id: "fast", label: "Fast", cpu: 0 }]],
     ["non-integer memory sizes", [{ id: "fast", label: "Fast", memoryGb: 63.5 }]],
@@ -429,7 +488,7 @@ describe("worker environment service", () => {
     ],
     [
       "over-limit catalogs",
-      Array.from({ length: 33 }, (_, index) => ({ id: `machine-${index}`, label: "Machine" })),
+      Array.from({ length: 65 }, (_, index) => ({ id: `machine-${index}`, label: "Machine" })),
     ],
   ])("omits %s returned by a worker provider", async (_name, options) => {
     const provider = support.createProvider();
@@ -439,14 +498,39 @@ describe("worker environment service", () => {
     await expect(workerService.listMachineOptions("development")).resolves.toBeUndefined();
   });
 
+  it.each(
+    [
+      [],
+      [
+        { id: "os-a", label: "OS A" },
+        { id: "os-a", label: "Duplicate" },
+      ],
+      [
+        { id: "os-a", label: "OS A", default: true },
+        { id: "os-b", label: "OS B", default: true },
+      ],
+      [{ id: " os-a", label: "OS A" }],
+      [{ id: "os-a", label: " OS A" }],
+      [{ id: "os-a", label: "OS A", settings: {} }],
+      Array.from({ length: 9 }, (_, index) => ({ id: `os-${index}`, label: "OS" })),
+    ].map((systems) => ({ systems })),
+  )("omits malformed operating-system catalog %#", async ({ systems }) => {
+    const provider = support.createProvider();
+    Object.defineProperty(provider, "listOperatingSystems", { value: async () => systems });
+    const workerService = support.createService(provider);
+    await expect(workerService.listOperatingSystems("development")).resolves.toBeUndefined();
+  });
+
   it("creates a nested environment from its parent's snapshot after config drift", async () => {
     const provisionedProfiles: WorkerProfile[] = [];
+    const operatingSystems: Array<string | undefined> = [];
     let lease = 0;
     let credential = 0;
     const workerService = support.createService(
       support.createProvider({
-        provision: async (profile) => {
+        provision: async (profile, _operationId, options) => {
           provisionedProfiles.push(structuredClone(profile));
+          operatingSystems.push(options?.os);
           lease += 1;
           return { leaseId: `lease-${lease}`, ssh: support.SSH_ENDPOINT };
         },
@@ -455,25 +539,50 @@ describe("worker environment service", () => {
         generateWorkerCredential: () => `nested-worker-credential-${(credential += 1)}`,
       },
     );
-    const parent = await workerService.create("development", "parent-profile-snapshot");
+    const parent = await workerService.create(
+      "development",
+      "parent-profile-snapshot",
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      "os-a",
+    );
     support.getDevelopmentProfile().settings = { region: "mutated" };
     support.getDevelopmentProfile().provider = "FaKe";
 
+    const inherited = {
+      profileId: parent.profileId,
+      providerId: parent.providerId,
+      profileSnapshot: parent.profileSnapshot,
+    };
     const child = await workerService.createFromProfileSnapshot(
-      {
-        profileId: parent.profileId,
-        providerId: parent.providerId,
-        profileSnapshot: parent.profileSnapshot,
-      },
+      inherited,
       "child-profile-snapshot",
     );
 
     expect(provisionedProfiles).toEqual([{ region: "test" }, { region: "test" }]);
+    expect(operatingSystems).toEqual(["os-a", "os-a"]);
     expect(child).toMatchObject({
       profileId: parent.profileId,
       providerId: parent.providerId,
       profileSnapshot: parent.profileSnapshot,
     });
+    await expect(
+      workerService.createFromProfileSnapshot(inherited, "child-profile-snapshot"),
+    ).resolves.toMatchObject({ environmentId: child.environmentId });
+    await expect(
+      workerService.createFromProfileSnapshot(
+        inherited,
+        "child-profile-snapshot",
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        "os-b",
+      ),
+    ).rejects.toMatchObject({ code: "invalid_profile" });
+    expect(operatingSystems).toHaveLength(2);
   });
 
   it.each([

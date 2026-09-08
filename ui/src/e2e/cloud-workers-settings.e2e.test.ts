@@ -143,6 +143,7 @@ suite.define(() => {
               install: "bundle",
               settings: {
                 provider: "hetzner",
+                target: null,
                 class: "standard",
                 ttl: "8h",
                 idleTimeout: "45m",
@@ -248,6 +249,7 @@ suite.define(() => {
               install: "bundle",
               settings: {
                 provider: "daytona",
+                target: null,
                 class: "batch/ARM64.v2",
                 ttl: "12h",
                 idleTimeout: "45m",
@@ -317,6 +319,7 @@ suite.define(() => {
               install: "bundle",
               settings: {
                 provider: "aws",
+                target: null,
                 class: "custom",
                 ttl: "8h",
                 idleTimeout: "45m",

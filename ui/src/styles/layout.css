@@ -1363,6 +1363,9 @@ openclaw-settings-save-indicator:empty {
 }
 
 .sidebar-recent-sessions__head {
+  --sidebar-session-group-action-size: 22px;
+  --sidebar-session-group-count-slot: 24px;
+
   position: relative;
   display: flex;
   align-items: center;
@@ -1608,8 +1611,8 @@ openclaw-settings-save-indicator:empty {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 22px;
-  height: 22px;
+  width: var(--sidebar-session-group-action-size);
+  height: var(--sidebar-session-group-action-size);
   flex: 0 0 auto;
   border: none;
   border-radius: var(--radius-sm);
@@ -1645,6 +1648,35 @@ openclaw-settings-save-indicator:empty {
   stroke-width: 1.7px;
   stroke-linecap: round;
   stroke-linejoin: round;
+}
+
+/* Reserve the new-session button's width so provider counts line up. */
+.sidebar-session-catalog-new-spacer {
+  width: var(--sidebar-session-group-action-size);
+  height: var(--sidebar-session-group-action-size);
+  flex: 0 0 var(--sidebar-session-group-action-size);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  /* Keep hover actions immediately left of the fixed count. */
+  .sidebar-session-catalog-grouping,
+  .sidebar-session-catalog-new {
+    position: absolute;
+    top: 50%;
+    right: calc(10px + var(--sidebar-session-group-count-slot));
+    transform: translateY(-50%);
+  }
+
+  .sidebar-session-catalog-grouping:has(+ .sidebar-session-catalog-new) {
+    right: calc(
+      10px + var(--sidebar-session-group-count-slot) + var(--sidebar-session-group-action-size) +
+        8px
+    );
+  }
+
+  .sidebar-session-catalog-new-spacer {
+    display: none;
+  }
 }
 
 @media (hover: none), (pointer: coarse) {
@@ -1748,7 +1780,7 @@ openclaw-settings-save-indicator:empty {
   align-items: center;
   gap: 8px;
   min-height: 19px;
-  padding: 1px 12px 1px var(--sidebar-inset);
+  padding: 1px 10px 1px var(--sidebar-inset);
   color: color-mix(in srgb, var(--muted) 82%, var(--text) 18%);
 }
 
@@ -1767,7 +1799,7 @@ openclaw-settings-save-indicator:empty {
   font-size: calc(10px * var(--control-ui-text-scale));
   font-variant-numeric: tabular-nums;
   opacity: 0.68;
-  text-align: center;
+  text-align: right;
 }
 
 .sidebar-session-catalog-host__count--error {
@@ -1791,7 +1823,7 @@ openclaw-settings-save-indicator:empty {
   gap: var(--sidebar-row-gap);
   width: 100%;
   min-height: 18px;
-  padding: 2px 12px 0 var(--sidebar-inset);
+  padding: 2px 10px 0 var(--sidebar-inset);
   border: 0;
   border-radius: var(--radius-sm);
   background: transparent;
@@ -1846,7 +1878,7 @@ openclaw-settings-save-indicator:empty {
   color: color-mix(in srgb, var(--muted) 55%, var(--text) 45%);
   font-size: calc(10px * var(--control-ui-text-scale));
   font-variant-numeric: tabular-nums;
-  text-align: center;
+  text-align: right;
 }
 
 .sidebar-session-catalog-project > .sidebar-session-pagination--catalog {

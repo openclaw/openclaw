@@ -1,6 +1,10 @@
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { describe, expect, it, vi } from "vitest";
-import { resolveCrabboxProvisionProfile } from "./crabbox-worker-profile.js";
+import {
+  parseCrabboxProfile,
+  resolveCrabboxProvisionProfile,
+  resolveCrabboxWarmImageProfileKey,
+} from "./crabbox-worker-profile.js";
 import {
   WARM_IMAGE_MAX_ALLOCATIONS,
   type WarmProfileRecord,
@@ -75,6 +79,28 @@ function fixture(failCreate = false, onCommand?: (argv: string[]) => void) {
 }
 
 describe("Crabbox durable allocation admission", () => {
+  it("preserves persisted Linux profile keys", () => {
+    const linux = parseCrabboxProfile(PROFILE);
+    const historicalKey = "e35cd88dba7a4bea90d23da00f994d326515a833ab64fdaa982c5c346bfc9e0f";
+    expect(resolveCrabboxWarmImageProfileKey(linux)).toBe(historicalKey);
+  });
+
+  it("records Linux and replays historical allocations without os as Linux", async () => {
+    const { manager, context } = fixture();
+    const owner = manager();
+    const allocation = context("cbx_historical_linux");
+    await owner.allocate(allocation);
+    expect(owner.lookupLease(allocation.id)).toMatchObject({
+      machineClass: "standard",
+      os: "linux",
+    });
+    const store = openWarmImageStore();
+    const entry = store.entries()[0]!;
+    delete entry.value.allocations[allocation.id]!.os;
+    store.register(entry.key, entry.value);
+    await expect(manager().allocate(allocation)).resolves.toEqual({ kind: "cold" });
+  });
+
   it.each([
     { nodeBootstrapSha256: "b".repeat(64) },
     { executionMode: "remote-exec" as const },

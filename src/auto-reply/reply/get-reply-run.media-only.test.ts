@@ -549,7 +549,7 @@ describe("runPreparedReply media-only handling", () => {
       expect(ensureSkillSnapshot).toHaveBeenCalledWith(
         expect.objectContaining({
           workspaceDir: "/tmp/agent-workspace",
-          executionSkillsDir: "/tmp/project/packages/app/skills",
+          executionWorkspaceDir: "/tmp/project/packages/app",
         }),
       );
     } finally {
@@ -896,6 +896,29 @@ describe("runPreparedReply media-only handling", () => {
     expect(call.followupRun.run.thinkLevel).toBe("off");
     expect(sessionEntry.thinkingLevel).toBe("high");
     expect(sessionStore["session-key"]?.thinkingLevel).toBe("high");
+  });
+
+  it.each([
+    ["telegram", "direct", "automatic"],
+    ["telegram", "group", "automatic"],
+    ["slack", "direct", "automatic"],
+    ["slack", "group", "automatic"],
+    ["telegram", "direct", "message_tool_only"],
+    ["telegram", "group", "message_tool_only"],
+    ["slack", "direct", "message_tool_only"],
+    ["slack", "group", "message_tool_only"],
+  ] as const)("allows a silent heartbeat for %s %s %s", async (channel, chatType, deliveryMode) => {
+    await runPrepared({
+      opts: { isHeartbeat: true, sourceReplyDeliveryMode: deliveryMode },
+      ctx: { ...createInboundTurn("Heartbeat check-in", channel, chatType), WasMentioned: true },
+      sessionCtx: createSessionTurn("Heartbeat check-in", channel, chatType),
+    });
+
+    const call = requireRunReplyAgentCall();
+    expect(call.followupRun.run).toMatchObject({
+      allowEmptyAssistantReplyAsSilent: true,
+      terminalReplyExpectation: "optional",
+    });
   });
 
   it("keeps empty-assistant silence disabled for direct runs by default", async () => {
@@ -2789,7 +2812,7 @@ describe("runPreparedReply media-only handling", () => {
     expect(call?.shouldSteer).toBe(false);
     expect(call?.shouldFollowup).toBe(true);
     expect(call?.isActive).toBe(true);
-    expect(call?.followupRun.run.terminalReplyExpectation).toBeUndefined();
+    expect(call?.followupRun.run.terminalReplyExpectation).toBe("optional");
   });
 
   it.each([

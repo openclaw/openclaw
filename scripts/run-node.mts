@@ -176,7 +176,8 @@ const resolvePrivateQaRequiredDistEntries = (distRoot: string) => [
 ];
 const isExcludedSource = (filePath: string, sourceRoot: string, sourceRootName: string) => {
   const relativePath = normalizePath(path.relative(sourceRoot, filePath));
-  if (relativePath.startsWith("..")) {
+  // A basename starting with ".." still belongs to the source root.
+  if (relativePath === ".." || relativePath.startsWith("../")) {
     return false;
   }
   return !isBuildRelevantRunNodePath(path.posix.join(sourceRootName, relativePath));
@@ -228,7 +229,16 @@ const readGitStatus = (deps: RunNodeRequirementDeps, paths: string[] = runNodeWa
   try {
     const result = deps.spawnSync(
       "git",
-      ["status", "--porcelain", "--untracked-files=normal", "--", ...paths],
+      // NUL framing preserves filenames; separate delete/add records keep both rename sides.
+      [
+        "status",
+        "--porcelain=v1",
+        "-z",
+        "--no-renames",
+        "--untracked-files=normal",
+        "--",
+        ...paths,
+      ],
       {
         cwd: deps.cwd,
         encoding: "utf8",
@@ -246,9 +256,8 @@ const readGitStatus = (deps: RunNodeRequirementDeps, paths: string[] = runNodeWa
 
 const parseGitStatusPaths = (output: string) =>
   output
-    .split("\n")
-    .flatMap((line) => line.slice(3).split(" -> "))
-    .map((entry) => normalizePath(entry.trim()))
+    .split("\0")
+    .map((entry) => entry.slice(3))
     .filter(Boolean);
 
 const hasDirtySourceTree = (deps: RunNodeRequirementDeps) => {
@@ -256,17 +265,15 @@ const hasDirtySourceTree = (deps: RunNodeRequirementDeps) => {
   if (output === null) {
     return null;
   }
-  return parseGitStatusPaths(output).some((repoPath) => {
-    const normalizedPath = normalizePath(repoPath).replace(/^\.\/+/, "");
-    return (
-      isBuildRelevantRunNodePath(normalizedPath) ||
-      isDirtyBundledPluginPackageEntryChangeWithoutBuiltOutputs(normalizedPath, deps)
-    );
-  });
+  return parseGitStatusPaths(output).some(
+    (repoPath) =>
+      isBuildRelevantRunNodePath(repoPath) ||
+      isDirtyBundledPluginPackageEntryChangeWithoutBuiltOutputs(repoPath, deps),
+  );
 };
 
 const isRuntimePostBuildRelevantPath = (repoPath: string) => {
-  const normalizedPath = normalizePath(repoPath).replace(/^\.\/+/, "");
+  const normalizedPath = normalizePath(repoPath);
   if (runtimePostBuildStaticAssetPaths.has(normalizedPath)) {
     return true;
   }

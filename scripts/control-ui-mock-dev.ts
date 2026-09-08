@@ -2259,7 +2259,7 @@ async function createChatPickerScenario(
           {
             id: "codex",
             label: "Codex",
-            capabilities: { continueSession: true, archive: false },
+            capabilities: { continueSession: true, archive: false, startTerminal: true },
             hosts: [
               {
                 hostId: "gateway",

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 // @vitest-environment node
 import { contextBudgetStatusFixture } from "../../../../src/config/sessions/context-budget.test-support.js";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type {
   GatewaySessionRow,
@@ -230,10 +231,7 @@ describe("executeSlashCommand directives", () => {
   });
 
   it("does not patch through a replacement connection after loading session state", async () => {
-    let resolveList: ((value: SessionsListResult) => void) | undefined;
-    const listResult = new Promise<SessionsListResult>((resolve) => {
-      resolveList = resolve;
-    });
+    const { promise: listResult, resolve: resolveList } = createDeferred<SessionsListResult>();
     const request = vi.fn(async (method: string) => {
       if (method === "sessions.list") {
         return await listResult;
@@ -264,10 +262,7 @@ describe("executeSlashCommand directives", () => {
   });
 
   it("rechecks live scopes before patching after loading session state", async () => {
-    let resolveList: ((value: SessionsListResult) => void) | undefined;
-    const listResult = new Promise<SessionsListResult>((resolve) => {
-      resolveList = resolve;
-    });
+    const { promise: listResult, resolve: resolveList } = createDeferred<SessionsListResult>();
     const request = vi.fn(async (method: string) => {
       if (method === "sessions.list") {
         return await listResult;

@@ -4385,7 +4385,7 @@ NODE
       "CodeQL macOS Xcode selection",
     );
 
-    expect(codeqlJob["runs-on"]).toBe("blacksmith-12vcpu-macos-26");
+    expect(codeqlJob["runs-on"]).toBe("macos-26");
     expect(codeqlSelect.run).toContain("/Applications/Xcode_26.6.app/Contents/Developer");
     expect(codeqlSelect.run).toContain('if [[ "$xcode_version" != 26.6* ]]; then');
 
@@ -7137,6 +7137,7 @@ server.listen(0, "127.0.0.1", () => {
         name: "fixture",
         openclaw: { schemaVersions: { agent: 17, state: 6 } },
         scripts: {
+          "pnpm:devPreinstall": "node scripts/check-install-dependency-ownership.mjs",
           postinstall: "node scripts/postinstall-bundled-plugins.mjs",
           preinstall: "node scripts/preinstall-package-manager-warning.mjs",
           prepare: "node scripts/prepare-git-hooks.mjs",
@@ -7171,6 +7172,7 @@ server.listen(0, "127.0.0.1", () => {
       for (const relativePath of [
         "node-version.mjs",
         ".github/actions/setup-node-env/install-dependencies.sh",
+        "scripts/check-install-dependency-ownership.mjs",
         "scripts/prepare-git-hooks.mjs",
         "scripts/lib/package-lifecycle-marker.mjs",
       ]) {
@@ -7189,6 +7191,7 @@ server.listen(0, "127.0.0.1", () => {
         scripts: {
           test: "vitest run --reporter=dot",
           prepare: "node scripts/prepare-git-hooks.mjs",
+          "pnpm:devPreinstall": "node scripts/check-install-dependency-ownership.mjs",
           postinstall: "node scripts/postinstall-bundled-plugins.mjs",
           preinstall: "node scripts/preinstall-package-manager-warning.mjs",
         },
@@ -7202,6 +7205,7 @@ server.listen(0, "127.0.0.1", () => {
         name: "fixture",
         openclaw: { schemaVersions: { agent: 17, state: 7 } },
         scripts: {
+          "pnpm:devPreinstall": "node scripts/check-install-dependency-ownership.mjs",
           postinstall: "node scripts/postinstall-bundled-plugins.mjs",
           preinstall: "node scripts/preinstall-package-manager-warning.mjs",
           prepare: "node scripts/prepare-git-hooks.mjs",
@@ -7214,6 +7218,7 @@ server.listen(0, "127.0.0.1", () => {
       writeManifest({
         name: "fixture",
         scripts: {
+          "pnpm:devPreinstall": "node scripts/check-install-dependency-ownership.mjs",
           postinstall: "node scripts/postinstall-bundled-plugins.mjs",
           preinstall: "node scripts/preinstall-package-manager-warning.mjs",
           prepare: "node scripts/prepare-git-hooks.mjs",
@@ -7234,6 +7239,7 @@ server.listen(0, "127.0.0.1", () => {
       writeManifest({
         name: "fixture",
         scripts: {
+          "pnpm:devPreinstall": "node scripts/check-install-dependency-ownership.mjs",
           postinstall: "node scripts/postinstall-bundled-plugins.mjs",
           preinstall: "node scripts/preinstall-package-manager-warning.mjs",
           prepare: "node scripts/prepare-git-hooks.mjs",
@@ -7257,6 +7263,7 @@ server.listen(0, "127.0.0.1", () => {
       writeManifest({
         name: "fixture",
         scripts: {
+          "pnpm:devPreinstall": "node scripts/check-install-dependency-ownership.mjs",
           postinstall: "node scripts/postinstall-bundled-plugins.mjs",
           preinstall: "node scripts/preinstall-package-manager-warning.mjs",
           prepare: "node scripts/prepare-git-hooks.mjs",
@@ -14678,6 +14685,59 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     ).toEqual(row.groups);
   });
 
+  it("provisions ripgrep for real filesystem contract selections", () => {
+    const contract = "src/agents/filesystem-tools-output-contract.test.ts";
+    const nativeTools = "src/agents/sessions/tools/index.test.ts";
+    const unrelated = "src/agents/run-wait.test.ts";
+    const selections = [
+      { targets: [contract] },
+      { includePatterns: [contract] },
+      { includePatterns: ["src/agents/filesystem-*.test.ts"] },
+      { targets: [nativeTools] },
+      { includePatterns: [unrelated] },
+      { shardName: "agentic-agents-core-runtime" },
+      { shardName: "agentic-agents-support" },
+      { shardName: "agentic-agents-core-runtime", includePatterns: [unrelated] },
+      { groups: [{ shard_name: "agentic-agents-core-runtime", includePatterns: [contract] }] },
+      { groups: [{ shard_name: "agentic-agents-support", includePatterns: [nativeTools] }] },
+      { groups: [{ shard_name: "agentic-agents-core-runtime", includePatterns: [unrelated] }] },
+      { groups: [{ shard_name: "agentic-agents-core-runtime" }] },
+    ];
+    const result = runCiManifestFixture({
+      bundledPlanner: true,
+      nodeTestShards: selections.map((selection, index) =>
+        Object.assign(
+          {
+            checkName: `grep-${index}`,
+            configs: ["test/vitest/vitest.agents-core.config.ts"],
+            requiresDist: false,
+            runner: "ubuntu-24.04",
+            shardName: "compact-small-1",
+          },
+          selection,
+        ),
+      ),
+    });
+    expect(result.status, result.output).toBe(0);
+    const matrix = JSON.parse(
+      expectDefined(result.outputs.checks_node_core_nondist_matrix, "non-dist Node matrix"),
+    ) as { include: { requires_ripgrep?: boolean }[] };
+    expect(matrix.include.map((row) => Boolean(row.requires_ripgrep))).toEqual([
+      true,
+      true,
+      true,
+      true,
+      false,
+      true,
+      true,
+      false,
+      true,
+      true,
+      false,
+      true,
+    ]);
+  });
+
   it("fails and retries quiet Node test shard stalls quickly", () => {
     const workflow = readCiWorkflow();
     const preflightJob = workflow.jobs.preflight;
@@ -15224,6 +15284,13 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(fullReleaseDispatch.env.CHILD_WORKFLOW_KIND).toBe("ci");
     expect(fullReleaseDispatch.run).toContain('dispatch_child ci.yml "$dispatch_run_name"');
     expect(fullReleaseDispatch.run).toContain('-f target_ref="$TARGET_SHA"');
+    expect(compatibilityJob.steps.at(-1)?.run).toContain(
+      "src/config/sessions/session-accessor.test.ts",
+    );
+    expect(compatibilityJob.steps.at(-1)?.run).toContain(
+      "src/config/sessions/store-writer.test.ts",
+    );
+    expect(compatibilityJob.steps.at(-1)?.run).toContain("src/config/sessions/sessions.test.ts");
   });
 
   it.skipIf(process.platform === "win32")("ci-gate rejects an unexpected selected skip", () => {
@@ -15416,6 +15483,8 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       );
       const protocolOutput = "${{ needs.validate_selected_ref.outputs.protocol_base_revision }}";
       const trustedInput = "${{ inputs.trusted_ref || inputs.ref }}";
+
+      expect(qaWorkflow.env.OPENCLAW_TSDOWN_MAX_OLD_SPACE_MB).toBe("8192");
 
       expect(qaWorkflow.on.workflow_call.inputs.trusted_ref).toEqual({
         description: "Optional trusted branch, tag, or SHA identity for an immutable ref",
@@ -15976,6 +16045,25 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     );
     expect(ensurePlaywrightStep.run).toContain("scripts/ensure-playwright-chromium.mts");
     expect(ensurePlaywrightStep.run).toContain("scripts/ensure-playwright-chromium.mjs");
+    const prepareSandboxStep = expectDefined(
+      qaShardJob.steps.find(
+        (step: WorkflowStep) => step.name === "Prepare Docker sandbox image when selected",
+      ),
+      "QA sandbox image preparation",
+    );
+    expect(prepareSandboxStep["working-directory"]).toBe("selected");
+    expect(prepareSandboxStep.env?.SCENARIO_IDS_JSON).toBe("${{ toJSON(matrix.scenarioIds) }}");
+    expect(prepareSandboxStep.run).toBe(`set -euo pipefail
+if jq -e '
+  index("openclaw-sandbox-workspace-isolation") != null or
+  index("agent-sandboxed-exec-behavior") != null
+' <<<"$SCENARIO_IDS_JSON" >/dev/null; then
+  scripts/sandbox-setup.sh
+fi
+`);
+    expect(qaShardJob.steps.indexOf(prepareSandboxStep)).toBeLessThan(
+      qaShardJob.steps.findIndex((step: WorkflowStep) => step.name === "Run QA profile shard"),
+    );
     const runProfileStep = qaShardJob.steps.find(
       (step: WorkflowStep) => step.name === "Run QA profile shard",
     );
@@ -16277,6 +16365,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     const validateManifestStep = publishJob.steps.find(
       (step: WorkflowStep) => step.name === "Validate QA evidence manifest",
     );
+    expect(validateManifestStep.id).toBe("validate_evidence");
     expect(validateManifestStep.run).toContain("qa-profile-evidence-manifest.json");
     expect(validateManifestStep.run).toContain("qa-evidence.json profile must be all");
     expect(validateManifestStep.run).toContain("QA evidence manifest profile must be all");
@@ -16286,6 +16375,14 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     );
     expect(validateManifestStep.run).toContain("profilePlanSha256");
     expect(validateManifestStep.run).toContain("rerun the QA Profile Evidence workflow");
+    expect(validateManifestStep.run).toContain("counts.fail === 0 && counts.blocked === 0");
+    expect(validateManifestStep.run).toContain("scorecard_passed=");
+    expect(validateManifestStep.run).toContain("### Maturity scorecard result");
+    expect(publishJob.outputs).toEqual({
+      blocked_count: "${{ steps.validate_evidence.outputs.blocked_count }}",
+      failed_count: "${{ steps.validate_evidence.outputs.failed_count }}",
+      scorecard_passed: "${{ steps.validate_evidence.outputs.scorecard_passed }}",
+    });
 
     expect(qaAggregateJob.outputs.artifact_name).toBe(
       "${{ steps.evidence.outputs.artifact_name }}",
@@ -16377,6 +16474,25 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     ]) {
       expect(publishPrJob.if).toContain(fragment);
     }
+    expect(publishPrJob.if).not.toContain("needs.publish.outputs.scorecard_passed");
+
+    const resultJob = maturityWorkflow.jobs.maturity_result;
+    expect(resultJob.needs).toEqual(["publish", "publish_generated_pr"]);
+    expect(resultJob.if.replace(/\s+/gu, " ")).toBe(
+      "${{ always() && needs.publish.result == 'success' && (needs.publish_generated_pr.result == 'success' || needs.publish_generated_pr.result == 'skipped') }}",
+    );
+    const resultGateStep = resultJob.steps.find(
+      (step: WorkflowStep) => step.name === "Fail incomplete maturity evidence",
+    );
+    expect(resultGateStep.env).toEqual({
+      BLOCKED_COUNT: "${{ needs.publish.outputs.blocked_count }}",
+      FAILED_COUNT: "${{ needs.publish.outputs.failed_count }}",
+      SCORECARD_PASSED: "${{ needs.publish.outputs.scorecard_passed }}",
+    });
+    expect(resultGateStep.run).toContain('[[ "$SCORECARD_PASSED" != "true" ]]');
+    expect(resultGateStep.run).toContain(
+      "Generated maturity PR was still published when requested.",
+    );
     const trustedPublishCheckoutStep = publishPrJob.steps.find(
       (step: WorkflowStep) => step.name === "Checkout trusted workflow source",
     );
@@ -16508,7 +16624,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
         ],
       };
 
-      const writeEvidence = () => {
+      const writeEvidence = (status: "pass" | "fail" = "pass") => {
         writeFileSync(
           evidencePath,
           `${JSON.stringify({
@@ -16516,7 +16632,13 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
             schemaVersion: 2,
             generatedAt: "2026-08-05T00:00:00.000Z",
             evidenceMode: "full",
-            entries: [],
+            entries: [
+              {
+                test: { kind: "scenario", id: "scenario-one", title: "Scenario one" },
+                coverage: [],
+                result: { status },
+              },
+            ],
             profile: "all",
             profilePlan: {
               profile: "all",
@@ -16561,6 +16683,8 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
         runWorkflowShellScript(consumerScript, {
           env: {
             ...process.env,
+            GITHUB_OUTPUT: path.join(root, "consumer-output"),
+            GITHUB_STEP_SUMMARY: path.join(root, "consumer-summary"),
             QA_EVIDENCE_PATH: evidencePath,
             TARGET_SHA: targetSha,
           },
@@ -16578,6 +16702,29 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
           protocolBaseSha,
           targetSha,
         });
+        const completeConsumer = runConsumer();
+        expect(
+          completeConsumer.status,
+          `${completeConsumer.stdout}${completeConsumer.stderr}`,
+        ).toBe(0);
+        expect(readFileSync(path.join(root, "consumer-output"), "utf8")).toContain(
+          "scorecard_passed=true",
+        );
+
+        writeEvidence("fail");
+        writeFileSync(path.join(root, "consumer-output"), "", "utf8");
+        const failedEvidenceConsumer = runConsumer();
+        expect(
+          failedEvidenceConsumer.status,
+          `${failedEvidenceConsumer.stdout}${failedEvidenceConsumer.stderr}`,
+        ).toBe(0);
+        expect(readFileSync(path.join(root, "consumer-output"), "utf8")).toContain(
+          "scorecard_passed=false",
+        );
+        expect(readFileSync(path.join(root, "consumer-output"), "utf8")).toContain(
+          "failed_count=1",
+        );
+
         const manifest = JSON.parse(completeManifest) as Record<string, unknown>;
         manifest.profilePlanSha256 = "0".repeat(64);
         writeFileSync(manifestPath, `${JSON.stringify(manifest)}\n`, "utf8");
@@ -16589,6 +16736,39 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       } finally {
         rmSync(root, { force: true, recursive: true });
       }
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "fails the maturity workflow result gate when evidence is not passing",
+    () => {
+      const maturityWorkflow = readMaturityScorecardWorkflow();
+      const gateStep = maturityWorkflow.jobs.maturity_result.steps.find(
+        (step: WorkflowStep) => step.name === "Fail incomplete maturity evidence",
+      );
+      const gateScript = expectDefined(gateStep?.run, "maturity result gate");
+      const failed = runWorkflowShellScript(gateScript, {
+        env: {
+          ...process.env,
+          BLOCKED_COUNT: "51",
+          FAILED_COUNT: "28",
+          SCORECARD_PASSED: "false",
+        },
+      });
+      expect(failed.status).toBe(1);
+      expect(`${failed.stdout}${failed.stderr}`).toContain(
+        "28 failed and 51 blocked scenarios. Generated maturity PR was still published when requested.",
+      );
+
+      const passed = runWorkflowShellScript(gateScript, {
+        env: {
+          ...process.env,
+          BLOCKED_COUNT: "0",
+          FAILED_COUNT: "0",
+          SCORECARD_PASSED: "true",
+        },
+      });
+      expect(passed.status).toBe(0);
     },
   );
 

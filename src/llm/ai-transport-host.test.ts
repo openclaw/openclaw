@@ -15,6 +15,27 @@ import "./ai-transport-host.js";
 afterEach(resetSecretRedactionRegistryForTest);
 
 describe("OpenClaw provider error redaction", () => {
+  it("preserves a nested transport code after installed host redaction", () => {
+    const cause = Object.assign(new Error("getaddrinfo failed at fixture.invalid"), {
+      code: "EAI_AGAIN",
+      authorization: "Bearer fixture-sensitive-authorization",
+    });
+    const projected = projectProviderError(new Error("Connection error.", { cause }));
+    expect(projected).toEqual({
+      stopReason: "error",
+      errorMessage: "Connection error.",
+      errorCode: "EAI_AGAIN",
+    });
+  });
+
+  it("keeps registered transport strings secret in provider errors", () => {
+    registerSecretValueForRedaction("EAI_AGAIN");
+    const cause = Object.assign(new Error("lookup failed"), { code: "EAI_AGAIN" });
+    expect(projectProviderError(new Error("Connection error.", { cause })).errorCode).not.toBe(
+      "EAI_AGAIN",
+    );
+  });
+
   it("redacts registered opaque secrets from ordinary provider error messages", () => {
     const secret = "opaque-configured-provider-value";
     registerSecretValueForRedaction(secret);

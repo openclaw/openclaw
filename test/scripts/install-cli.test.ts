@@ -27,6 +27,7 @@ import {
   writeNpmInstallRetryFixture,
   writeNpmLifecycleFixture,
 } from "./install-npm-fixtures.js";
+import { findDarwinReexecBash } from "./install-reexec-fixtures.js";
 import { linkPnpmBootstrapShellTools } from "./test-helpers.js";
 
 const SCRIPT_PATH = "scripts/install-cli.sh";
@@ -65,6 +66,37 @@ function writeInstalledOpenClawEntry(nodeDir: string) {
 
 describe("install-cli.sh", () => {
   const script = readFileSync(SCRIPT_PATH, "utf8");
+
+  it("re-execs a streamed installer on Darwin Bash 5.3+ without leaving a temp file", (context) => {
+    const bash = findDarwinReexecBash();
+    if (!bash) {
+      context.skip("Requires a Darwin host with Bash 5.3+ installed");
+      return;
+    }
+    const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-reexec-"));
+    try {
+      const result = spawnSync(bash, ["-s", "--", "--help"], {
+        input: script,
+        encoding: "utf8",
+        timeout: 10_000,
+        env: {
+          ...process.env,
+          HOME: tmp,
+          TMPDIR: tmp,
+          BASH_ENV: "",
+          ENV: "",
+          OPENCLAW_INSTALL_SH_NO_RUN: "0",
+          OPENCLAW_INSTALL_CLI_SH_NO_RUN: "0",
+        },
+      });
+      expect(result.status, result.stdout + result.stderr).toBe(0);
+      expect(result.stdout).toContain("Usage: install-cli.sh [options]");
+      expect(result.stderr).not.toContain("Run this installer with /bin/bash");
+      expect(readdirSync(tmp)).toEqual([]);
+    } finally {
+      rmSync(tmp, { force: true, recursive: true });
+    }
+  });
 
   it("fails a low-space fresh Git install before Node or checkout work", () => {
     const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-cli-disk-low-"));
@@ -634,7 +666,7 @@ describe("install-cli.sh", () => {
       'require_openclaw_version_compatible "$resolved_version"',
     );
     const dependencyInstallIndex = script.indexOf(
-      'CI="${CI:-true}" run_pnpm -C "$repo_dir" install "${pnpm_prefer_offline_args[@]}" "$install_lockfile_flag"',
+      'CI="${CI:-true}" run_pnpm -C "$repo_dir" install ${pnpm_prefer_offline_args[@]+"${pnpm_prefer_offline_args[@]}"} "$install_lockfile_flag"',
     );
     const wrapperIndex = script.indexOf(
       'publish_executable_wrapper "${PREFIX}/bin/openclaw"',
@@ -1225,7 +1257,7 @@ HOOK
     expect(result.stdout).toContain("moving=--no-frozen-lockfile");
     expect(result.stdout).toContain("immutable=--frozen-lockfile");
     expect(script).toContain(
-      'CI="${CI:-true}" run_pnpm -C "$repo_dir" install "${pnpm_prefer_offline_args[@]}" "$install_lockfile_flag"',
+      'CI="${CI:-true}" run_pnpm -C "$repo_dir" install ${pnpm_prefer_offline_args[@]+"${pnpm_prefer_offline_args[@]}"} "$install_lockfile_flag"',
     );
   });
 
@@ -1248,7 +1280,7 @@ HOOK
     expect(result.stdout).toContain("upper=false");
     expect(result.stdout).toContain("lower=false");
     expect(script).toContain(
-      'run_pnpm -C "$repo_dir" install "${pnpm_prefer_offline_args[@]}" "$install_lockfile_flag"',
+      'run_pnpm -C "$repo_dir" install ${pnpm_prefer_offline_args[@]+"${pnpm_prefer_offline_args[@]}"} "$install_lockfile_flag"',
     );
   });
 

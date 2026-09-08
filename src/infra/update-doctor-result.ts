@@ -31,7 +31,22 @@ export type UpdatePostInstallDoctorResult = (
         details: string[];
       };
     }
-) & { configHash?: string; configInputHash?: string };
+) & { configHash?: string; configInputHash?: string; warnings?: string[] };
+
+/** Keep optional health diagnostics bounded across Doctor and its update parent. */
+export function normalizeUpdatePostInstallDoctorWarnings(warnings: readonly string[]): string[] {
+  const normalized: string[] = [];
+  for (const warning of warnings) {
+    const message = warning.trim().slice(0, 500);
+    if (message) {
+      normalized.push(message);
+      if (normalized.length === 32) {
+        break;
+      }
+    }
+  }
+  return normalized;
+}
 
 type DoctorConfigCapture = { path: string; hash: string; inputHash?: string };
 const doctorConfigWrites = new AsyncLocalStorage<DoctorConfigCapture>();
@@ -99,12 +114,21 @@ export async function writeUpdatePostInstallDoctorResult(params: {
   result: UpdatePostInstallDoctorResult;
 }): Promise<void> {
   const resultPath = resolveSafeUpdatePostInstallDoctorResultPath(params.resultPath);
+  const { warnings, ...result } = params.result;
+  const normalizedWarnings = normalizeUpdatePostInstallDoctorWarnings(warnings ?? []);
   // Advisory details can contain config-derived IDs; pre-existing paths must fail closed.
-  await fs.writeFile(resultPath, `${JSON.stringify(params.result)}\n`, {
-    encoding: "utf8",
-    mode: 0o600,
-    flag: "wx",
-  });
+  await fs.writeFile(
+    resultPath,
+    `${JSON.stringify({
+      ...result,
+      ...(normalizedWarnings.length ? { warnings: normalizedWarnings } : {}),
+    })}\n`,
+    {
+      encoding: "utf8",
+      mode: 0o600,
+      flag: "wx",
+    },
+  );
 }
 
 export async function consumeUpdatePostInstallDoctorResult(
@@ -131,6 +155,15 @@ function parseUpdatePostInstallDoctorResult(value: unknown): UpdatePostInstallDo
     return null;
   }
   const record = value as Record<string, unknown>;
+  const warnings = record.warnings;
+  if (
+    warnings !== undefined &&
+    (!Array.isArray(warnings) ||
+      !warnings.every((warning): warning is string => typeof warning === "string"))
+  ) {
+    return null;
+  }
+  const normalizedWarnings = normalizeUpdatePostInstallDoctorWarnings(warnings ?? []);
   const configHash = record.configHash;
   if (
     configHash !== undefined &&
@@ -149,6 +182,7 @@ function parseUpdatePostInstallDoctorResult(value: unknown): UpdatePostInstallDo
   const configWrite = {
     ...(configHash === undefined ? {} : { configHash }),
     ...(configInputHash === undefined ? {} : { configInputHash }),
+    ...(normalizedWarnings.length ? { warnings: normalizedWarnings } : {}),
   };
   if (record.status === "ok" || record.status === "error") {
     return { status: record.status, ...configWrite };

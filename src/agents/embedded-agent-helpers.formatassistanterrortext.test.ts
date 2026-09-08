@@ -560,6 +560,20 @@ describe("formatAssistantErrorText", () => {
     expect(formatAssistantErrorText(msg)).toBe("Provider finish_reason: error");
   });
 
+  it.each([
+    ["EAI_AGAIN", "LLM request failed: DNS lookup for the provider endpoint failed."],
+    ["ENOTFOUND", "LLM request failed: DNS lookup for the provider endpoint failed."],
+    ["ECONNREFUSED", "LLM request failed: connection refused by the provider endpoint."],
+    ["ECONNRESET", "LLM request failed: network connection was interrupted."],
+    ["ENETUNREACH", "LLM request failed: the provider endpoint is unreachable from this host."],
+    ["UNRECOGNIZED", "LLM request failed: network connection error."],
+    ["DNS_CONFIG_INVALID", "LLM request failed: network connection error."],
+  ])("uses structured transport code %s with a generic provider message", (errorCode, expected) => {
+    const message = { ...makeAssistantError("Connection error."), errorCode };
+    expect(formatAssistantErrorText(message)).toBe(expected);
+    expect(formatUserFacingAssistantErrorText(message)).toBe(expected);
+  });
+
   it("returns a connection-refused message for ECONNREFUSED failures", () => {
     const msg = makeAssistantError("connect ECONNREFUSED 127.0.0.1:443 during upstream call");
     expect(formatAssistantErrorText(msg)).toBe(

@@ -52,8 +52,16 @@ export type WorkerProfile = Readonly<Record<string, PluginJsonValue>>;
 export type WorkerMachineOption = Readonly<{
   id: string;
   label: string;
+  os?: string;
   cpu?: number;
   memoryGb?: number;
+  default?: boolean;
+}>;
+
+/** Provider-owned operating system choices for one configured worker profile. */
+export type WorkerOperatingSystem = Readonly<{
+  id: string;
+  label: string;
   default?: boolean;
 }>;
 
@@ -226,6 +234,7 @@ export type WorkerProvider = {
   id: string;
   /** Process-stable choices available for this profile; omit the hook to hide machine selection. */
   listMachineOptions?: (profile: WorkerProfile) => Promise<readonly WorkerMachineOption[]>;
+  listOperatingSystems?: (profile: WorkerProfile) => Promise<readonly WorkerOperatingSystem[]>;
   /** Omission advertises no placement support; multiple modes use their canonical order. */
   supportedExecutionModes?:
     | readonly [WorkerExecutionMode]
@@ -238,7 +247,11 @@ export type WorkerProvider = {
   /** Provider allocates a node host through the environment-owned enrollment callback. */
   requiresNodeEnrollment?: boolean;
   /** Prepare a pristine project before enrollment so it can be included in a reusable image. */
-  supportsProjectPreparation?: (profile: WorkerProfile, machineClass?: string) => boolean;
+  supportsProjectPreparation?: (
+    profile: WorkerProfile,
+    machineClass?: string,
+    os?: string,
+  ) => boolean;
   /**
    * Resolve the exact cleanup handle for this operation, even if no machine was created.
    * Must not provision, start, renew, run setup, enroll, or wait for transport readiness.
@@ -260,6 +273,7 @@ export type WorkerProvider = {
       signal?: AbortSignal;
       executionMode?: WorkerExecutionMode;
       machineClass?: string;
+      os?: string;
       nodeRuntimeIdentity?: WorkerNodeRuntimeIdentity;
       prepareNodeRuntime?: () => Promise<WorkerNodeRuntimePreparation>;
       beginNodeEnrollment?: () => Promise<WorkerNodeEnrollment>;

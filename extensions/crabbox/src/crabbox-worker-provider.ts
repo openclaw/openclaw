@@ -31,6 +31,7 @@ import {
   nonEmptyString,
   operationLeaseId,
   operationSlug,
+  parseCrabboxOperatingSystem,
   parseCrabboxProfile,
   resolveCrabboxBinary,
   resolveCrabboxProvisionProfile,
@@ -61,12 +62,10 @@ import {
   resolveCrabboxLifecycleTimeoutMs,
   resolveCrabboxProvisionBaseTimeoutMs,
   resolveCrabboxProvisionCallTimeoutMs,
+  resolveCrabboxWarmImageCaptureTimeoutMs,
 } from "./crabbox-worker-timeouts.js";
 import { loadCrabboxWorkerWallpaperBase64 } from "./crabbox-worker-wallpaper.js";
-import {
-  createCrabboxWarmImageManager,
-  resolveCrabboxWarmImageCaptureTimeoutMs,
-} from "./crabbox-worker-warm-image.js";
+import { createCrabboxWarmImageManager } from "./crabbox-worker-warm-image.js";
 
 export { resolveOpenClawRoot } from "./crabbox-worker-profile.js";
 
@@ -189,7 +188,7 @@ export function createCrabboxWorkerProvider(
     });
     return defaultBinary;
   };
-  const listMachineOptions = createCrabboxMachineOptionsResolver({
+  const machineOptions = createCrabboxMachineOptionsResolver({
     resolveBinary,
     runCommand,
     warn,
@@ -249,6 +248,7 @@ export function createCrabboxWorkerProvider(
     const { profile: parsed, forwardedEnv } = resolveCrabboxProvisionProfile(
       profile,
       options?.machineClass,
+      options?.os,
     );
     const nodeRuntimeIdentity = options?.nodeRuntimeIdentity;
     if (parsed.warmImage && !nodeRuntimeIdentity) {
@@ -546,13 +546,17 @@ export function createCrabboxWorkerProvider(
           maintenanceInFlight = undefined;
         }));
     },
-    listMachineOptions,
+    ...machineOptions,
     supportedExecutionModes: ["worker-turn", "remote-exec"],
     provisionBeforeInstallation: true,
     requiresNodeEnrollment: true,
-    supportsProjectPreparation(profile, machineClass) {
+    supportsProjectPreparation(profile, machineClass, os) {
       const parsed = parseCrabboxProfile(profile);
-      return resolveCrabboxWarmImageProfile(parsed, machineClass ?? parsed.class).warmImage;
+      return resolveCrabboxWarmImageProfile(
+        parsed,
+        machineClass ?? parsed.class,
+        os === undefined ? parsed.target : parseCrabboxOperatingSystem(os),
+      ).warmImage;
     },
     resolveAllocation,
     resolveProvisionTimeoutMs(profile) {
@@ -602,13 +606,14 @@ export function createCrabboxWorkerProvider(
       // Fence the provider keepalive before teardown so an in-flight touch cannot reschedule.
       await heartbeats.stop(context.id);
       // Lifecycle profiles omit placement overrides. Successful enrollment records
-      // the class that owns both the default warm policy and reusable image after restart.
+      // the class and OS that own the warm policy and reusable image after restart.
       let captureError: unknown;
       try {
         const allocation = warmImages.lookupLease(context.id);
         const captureProfile = resolveCrabboxWarmImageProfile(
           profile,
           allocation?.machineClass ?? profile.class,
+          allocation ? (allocation.os ?? "linux") : profile.target,
         );
         if (captureProfile.warmImage) {
           await warmImages.capture({ ...context, profile: captureProfile });

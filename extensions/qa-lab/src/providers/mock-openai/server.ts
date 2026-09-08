@@ -1531,19 +1531,18 @@ async function buildResponsesPayload(
     return buildAssistantEvents(buildAssistantText(input, body));
   }
   if (isActiveEmptyResponseSideEffectRecovery || isActiveEmptyResponseSideEffectExhaustion) {
+    if (allInputText.includes(QA_SETTLED_TOOL_TERMINAL_CONTINUATION_NEEDLE)) {
+      return buildAssistantEvents(
+        isActiveEmptyResponseSideEffectExhaustion
+          ? ""
+          : (exactMarkerDirective ?? exactReplyDirective ?? "TELEGRAM-EMPTY-WRITE-RECOVERED-OK"),
+      );
+    }
     if (!hasCompletedToolOutput) {
       return buildToolCallEventsWithArgs("write", {
         path: "qa-empty-response-side-effect.txt",
         content: "side effect completed once\n",
       });
-    }
-    if (isActiveEmptyResponseSideEffectExhaustion) {
-      return buildAssistantEvents("");
-    }
-    if (allInputText.includes(QA_SETTLED_TOOL_TERMINAL_CONTINUATION_NEEDLE)) {
-      return buildAssistantEvents(
-        exactMarkerDirective ?? exactReplyDirective ?? "TELEGRAM-EMPTY-WRITE-RECOVERED-OK",
-      );
     }
     return buildAssistantEvents("");
   }

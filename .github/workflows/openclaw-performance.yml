@@ -88,9 +88,9 @@ env:
   OCM_VERSION: v0.2.33
   OCM_LINUX_X64_SHA256: 06b0e46791e750eb044e4a898b6643ad5e7b20224fe0c64f160e35a42f08d00a
   KOVA_REPOSITORY: openclaw/Kova
-  KOVA_CANONICAL_CONFIG_REF: e4d865f55f655a77df169a7be01877608c3260b9
-  KOVA_LEGACY_LIST_CONFIG_REF: e4d865f55f655a77df169a7be01877608c3260b9
-  KOVA_TRUSTED_LIVE_REF: e4d865f55f655a77df169a7be01877608c3260b9
+  KOVA_CANONICAL_CONFIG_REF: 11b56553e4c4e93ddf99a53617a139b2c9e9efef
+  KOVA_LEGACY_LIST_CONFIG_REF: 11b56553e4c4e93ddf99a53617a139b2c9e9efef
+  KOVA_TRUSTED_LIVE_REF: 11b56553e4c4e93ddf99a53617a139b2c9e9efef
   PERFORMANCE_MODEL_ID: gpt-5.6-luna
   # Release matrices cold-build the candidate runtime before measurement.
   KOVA_SCENARIO_TIMEOUT_MS: ${{ inputs.profile == 'release' && '900000' || '300000' }}
@@ -119,7 +119,9 @@ jobs:
         with:
           ref: ${{ inputs.target_ref || github.sha }}
           path: .artifacts/performance-target
-          sparse-checkout: src/config/zod-schema.agent-defaults.ts
+          sparse-checkout: |
+            package.json
+            src/config/zod-schema.agent-defaults.ts
           sparse-checkout-cone-mode: false
           fetch-depth: 1
           persist-credentials: false
@@ -148,6 +150,20 @@ jobs:
 
           kova_ref="${KOVA_REF_INPUT:-}"
           kova_config_contract="${KOVA_CONFIG_CONTRACT_INPUT:-}"
+          if [[ -z "$kova_ref" ]]; then
+            target_version="$(node -e '
+              const fs = require("node:fs");
+              const version = JSON.parse(fs.readFileSync(process.argv[1], "utf8")).version;
+              if (typeof version !== "string") process.exit(1);
+              process.stdout.write(version);
+            ' "$TARGET_CHECKOUT_DIR/package.json")"
+            if [[ "$target_version" == "2026.7.33" ]]; then
+              # Kova #116 carries the historical 250% status CLI calibration for this release only;
+              # Kova #118 keeps process-census time out of CPU scan uncertainty;
+              # Kova #119 discovers a starting gateway before its zero baseline is lost.
+              kova_ref="11b56553e4c4e93ddf99a53617a139b2c9e9efef"
+            fi
+          fi
           if [[ "$kova_ref" == *$'\n'* || "$kova_ref" == *$'\r'* ]]; then
             echo "::error::kova_ref must be a single line."
             exit 1

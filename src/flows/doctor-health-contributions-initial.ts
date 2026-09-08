@@ -282,13 +282,30 @@ export function resolveInitialDoctorHealthContributions(params: {
       healthChecks: {
         description: "Low disk space around the OpenClaw state directory is a finding.",
         defaultEnabled: false,
-        async detect(ctx) {
+        async detect() {
           const { collectDiskSpaceHealthFindings } =
             await import("../commands/doctor-disk-space.js");
-          return collectDiskSpaceHealthFindings(ctx.cfg);
+          return collectDiskSpaceHealthFindings();
         },
       },
       run: runDiskSpaceHealth,
+    }),
+    createDoctorHealthContribution({
+      id: "doctor:project-clone-shape",
+      label: "Project clones",
+      healthChecks: {
+        description: "Partial and shallow registry-owned project clones need manual repair.",
+        defaultEnabled: false,
+        async detect(ctx) {
+          const { collectProjectCloneShapeHealthFindings } =
+            await import("../commands/doctor-project-clone-shape.js");
+          return await collectProjectCloneShapeHealthFindings(ctx.cfg);
+        },
+      },
+      async run(ctx) {
+        const { noteProjectCloneShape } = await import("../commands/doctor-project-clone-shape.js");
+        await noteProjectCloneShape(ctx.cfg);
+      },
     }),
     createDoctorHealthContribution({
       id: "doctor:db-bloat",

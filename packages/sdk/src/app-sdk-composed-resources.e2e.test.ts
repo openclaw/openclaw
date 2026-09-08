@@ -139,6 +139,7 @@ async function createFakeGateway(): Promise<FakeGateway> {
     supportsExecutionMode: (profileId, mode) =>
       profileId === "development" && mode === "worker-turn",
     listMachineOptions: async () => undefined,
+    listOperatingSystems: async () => undefined,
     create: async (_profileId: string, _idempotencyKey: string) => {
       const requested = workerRecord("requested");
       worker = workerRecord("ready");

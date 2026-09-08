@@ -63,6 +63,10 @@ export function createAgentViewTestProps(
     agentIdentityError: null,
     agentIdentityById: {},
     identityDraft: { name: null, emoji: null, avatar: null },
+    identityAvatarLoader: {
+      resolve: (url) => url,
+      imageErrorHandler: () => () => undefined,
+    },
     identitySaving: false,
     identityError: null,
     agentSkills: {

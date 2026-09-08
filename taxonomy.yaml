@@ -4974,8 +4974,7 @@ surfaces:
             coverageIds: [app-sdk.app-plugin-boundary]
             description: Clear distinction between external app integrations and in-process plugin authoring.
         docs:
-          - docs/concepts/openclaw-sdk.md
-          - docs/reference/openclaw-sdk-api-design.md
+          - docs/gateway/external-apps.md
         search_anchors:
           - OpenClaw App SDK overview
           - What ships today
@@ -5003,8 +5002,7 @@ surfaces:
             coverageIds: [app-sdk.scopes-and-redaction]
             description: Token scopes, secret-forwarding defaults, and redaction boundaries.
         docs:
-          - docs/concepts/openclaw-sdk.md
-          - docs/reference/openclaw-sdk-api-design.md
+          - docs/gateway/external-apps.md
           - docs/gateway/protocol.md
           - docs/gateway/security/index.md
         search_anchors:
@@ -5038,8 +5036,7 @@ surfaces:
             coverageIds: [app-sdk.session-controls]
             description: Patch, abort, and compact operations.
         docs:
-          - docs/concepts/openclaw-sdk.md
-          - docs/reference/openclaw-sdk-api-design.md
+          - docs/gateway/external-apps.md
           - docs/gateway/protocol.md
         search_anchors:
           - Run an agent
@@ -5070,8 +5067,7 @@ surfaces:
             coverageIds: [app-sdk.questions]
             description: Question handling alongside approval flows.
         docs:
-          - docs/concepts/openclaw-sdk.md
-          - docs/reference/openclaw-sdk-api-design.md
+          - docs/gateway/external-apps.md
           - docs/gateway/protocol.md
         search_anchors:
           - Stream events
@@ -5104,8 +5100,7 @@ surfaces:
             coverageIds: [app-sdk.environments]
             description: Managed environment provider lifecycle and metadata.
         docs:
-          - docs/concepts/openclaw-sdk.md
-          - docs/reference/openclaw-sdk-api-design.md
+          - docs/gateway/external-apps.md
         search_anchors:
           - Models, tools, artifacts, and approvals
           - ToolSpace model
@@ -5133,7 +5128,7 @@ surfaces:
             coverageIds: [app-sdk.public-package-contract]
             description: Package publication and reusable-client expectations tracked explicitly.
         docs:
-          - docs/reference/openclaw-sdk-api-design.md
+          - docs/gateway/external-apps.md
           - docs/concepts/typebox.md
           - docs/gateway/protocol.md
         search_anchors:
@@ -5796,31 +5791,31 @@ surfaces:
   - id: linux-app
     name: Linux companion app
     family: platform-app
-    level: planned
-    level_code: M0
-    rationale: Docs say native Linux companion apps are planned; Gateway is the supported Linux path today.
+    level: beta
+    level_code: M3
+    rationale: The Tauri companion ships in stable releases with local and remote Gateway onboarding, managed-runtime setup, hosted Control UI windows, Quick Chat, tray integration, and systemd lifecycle handling; native media capture and some recovery paths remain incomplete.
     completeness_instructions: references/completeness/linux-companion-app.md
     categories:
       - name: App Distribution
         id: app-distribution
         features:
-          - name: Native app package
+          - name: Native app packages
             coverageIds: [linux-app.native-app-package]
-            description: Native Linux companion-app package availability and installation path.
+            description: Stable-release Debian and AppImage bundles with documented installation paths.
           - name: Distro package targets
             coverageIds: [linux-app.distro-package-targets]
-            description: Distro package targets, desktop files, icons, autostart, and update metadata
+            description: Debian and AppImage packaging, desktop files, icons, autostart, and update metadata.
           - name: Official release metadata
             coverageIds: [linux-app.official-release-metadata]
-            description: Official release metadata for downstream consoles
+            description: Checksums, release assets, and signed AppImage update metadata.
         docs:
           - docs/platforms/linux.md
           - docs/platforms/index.md
           - docs/install/index.md
         search_anchors:
-          - Native Linux companion apps are planned
-          - Linux app
-          - Gateway service install
+          - Desktop companion
+          - Stable releases
+          - AppImage
         category_note: packaging-install-update-desktop-integration.md
         human_lts_override: false
       - name: Gateway Connectivity
@@ -5828,80 +5823,80 @@ surfaces:
         features:
           - name: Local Gateway attach and status
             coverageIds: [linux-app.local-gateway-attach-and-status]
-            description: Local Gateway attach, start, and status behavior from a Linux app.
+            description: Local Gateway detection, managed-runtime installation, systemd lifecycle control, and status handling.
           - name: Gateway pairing and auth
             coverageIds: [linux-app.gateway-pairing-and-auth]
-            description: Gateway auth and device pairing from a native Linux client.
+            description: Shared authentication, persistent device identity, device-token pairing, and TLS trust handling.
           - name: Remote mode
             coverageIds: [linux-app.remote-mode]
-            description: Remote mode through direct URL, SSH tunnel, or Tailscale
+            description: Remote mode through discovery, direct URL, SSH tunnel, or Tailscale.
           - name: Local and remote resource boundaries
             coverageIds: [linux-app.local-and-remote-resource-boundaries]
-            description: Local and remote resource boundaries for a Linux companion client.
+            description: Route-scoped Control UI windows and locality-aware ownership of services, credentials, and resources.
         docs:
           - docs/platforms/linux.md
           - docs/gateway/index.md
           - docs/gateway/pairing.md
           - docs/gateway/remote.md
         search_anchors:
-          - Linux app
-          - Gateway service install
-          - remote Gateway
-          - pairing
+          - First-run setup
+          - On another computer
+          - Gateway authentication
+          - device identity
         category_note: gateway-connection-pairing-local-remote.md
         human_lts_override: false
       - name: Chat and Sessions
         id: chat-and-sessions
         features:
-          - name: Native Linux chat window
+          - name: Quick Chat
             coverageIds: [linux-app.native-linux-chat-window]
-            description: Native Linux chat window behavior, status, and operator-visible verification.
-          - name: Transcript
+            description: Native Quick Chat entry point, agent switching, send state, and reconnect guidance.
+          - name: Session-scoped transcript
             coverageIds: [linux-app.transcript]
-            description: Transcript, composer, session picker, model picker, send/abort/follow-up controls
+            description: Selected-agent main-session transcript, composer, streamed plain-text replies, and follow-up behavior.
           - name: Gateway chat transport
             coverageIds: [linux-app.gateway-chat-transport]
-            description: Gateway WebSocket chat transport from a Linux desktop client.
+            description: Credential-isolated native Gateway WebSocket transport with device authentication and TLS pinning.
         docs:
           - docs/platforms/linux.md
           - docs/gateway/protocol.md
           - docs/web/webchat.md
         search_anchors:
-          - WebChat
-          - Gateway WebSocket
-          - chat history
+          - Quick Chat
+          - Gateway unreachable
+          - selected agent's main session
         category_note: native-chat-session-controls.md
         human_lts_override: false
       - name: Desktop Capabilities
         id: desktop-capabilities
         features:
-          - name: Linux desktop permissions
+          - name: Desktop integration
             coverageIds: [linux-app.linux-desktop-permissions]
-            description: Linux desktop permissions for notifications, microphone, screen, camera, accessibility, portals, and desktop-environment APIs
+            description: Tray, notifications, global shortcuts, and X11/Wayland-specific behavior.
           - name: Secret storage
             coverageIds: [linux-app.secret-storage]
-            description: Secret storage for Gateway token, device identity, approval socket token, and app settings
+            description: Owner-only storage for Gateway credentials, device identity, device tokens, and app settings.
           - name: Sandbox/package posture
             coverageIds: [linux-app.sandbox-package-posture]
-            description: Sandbox/package posture for Flatpak/Snap/AppImage or system packages
+            description: Runtime and dependency posture for Debian packages and AppImages.
           - name: Linux native node identity
             coverageIds: [linux-app.linux-native-node-identity]
-            description: Linux native node identity and capability advertisement
+            description: Persistent native device identity, capability advertisement, and pairing lifecycle.
           - name: Host command execution
             coverageIds: [linux-app.host-command-execution]
-            description: Host command execution through system.run and related desktop tools.
+            description: Host command execution and approval handling through the bundled Linux Node plugin.
           - name: Desktop tools
             coverageIds: [linux-app.desktop-tools]
-            description: Desktop tools such as screen, camera, notifications, Canvas, and local command execution
+            description: Notifications, camera, location, and command execution exposed by the bundled Linux Node plugin.
           - name: Linux native Talk
             coverageIds: [linux-app.linux-native-talk]
-            description: Linux native Talk, push-to-talk, voice wake, and transcription
+            description: Realtime Talk availability and documented fallback when WebKitGTK microphone capture is unavailable.
           - name: Microphone capture
             coverageIds: [linux-app.microphone-capture]
-            description: Microphone capture, screen/camera capture, desktop context sensing, and local media attachment flows
+            description: Microphone and camera capture behavior across the embedded WebView and bundled node capabilities.
           - name: Native media permissions
             coverageIds: [linux-app.native-media-permissions]
-            description: Native media permissions and foreground/background behavior
+            description: Native media permission, foreground/background, and desktop-session behavior.
         docs:
           - docs/platforms/linux.md
           - docs/tools/exec-approvals.md
@@ -5911,14 +5906,11 @@ surfaces:
           - docs/nodes/talk.md
           - docs/nodes/camera.md
         search_anchors:
-          - Native Linux companion apps are planned
-          - Linux app
-          - Exec approvals
-          - headless node host
+          - Node capabilities
+          - system.notify
           - system.run
-          - Talk mode
-          - microphone capture
-          - camera
+          - Quick Chat shortcut
+          - Realtime voice Talk
         category_note: desktop-permissions-secrets-sandbox.md
         human_lts_override: false
       - name: Status and Diagnostics
@@ -5926,43 +5918,42 @@ surfaces:
         features:
           - name: Native Linux app readiness
             coverageIds: [linux-app.native-linux-app-readiness]
-            description: Native Linux app readiness states
+            description: First-run, connecting, ready, degraded, and recovery states for the native app.
           - name: Gateway health/status display
             coverageIds: [linux-app.gateway-health-status-display]
-            description: Gateway health/status display behavior, status, and operator-visible verification.
+            description: Gateway health, connection, pairing, authentication, and TLS status shown to the operator.
           - name: Log/transcript opening
             coverageIds: [linux-app.log-transcript-opening]
-            description: Log/transcript opening and locality-aware resource handling
+            description: Log and transcript opening with locality-aware resource handling.
           - name: Doctor/repair affordances
             coverageIds: [linux-app.doctor-repair-affordances]
-            description: Doctor/repair affordances and systemd lifecycle diagnostics
+            description: Retry, restart, reinstall, and systemd lifecycle diagnostics.
           - name: Linux tray/status item
             coverageIds: [linux-app.linux-tray-status-item]
-            description: Linux tray/status item behavior, status, and operator-visible verification.
+            description: Tray availability, dashboard routes, Quick Chat, shortcut controls, and quit behavior.
           - name: Runtime status row
             coverageIds: [linux-app.runtime-status-row]
-            description: Runtime status row and native notifications
+            description: Managed-runtime status and native notification feedback.
           - name: Desktop-environment integration
             coverageIds: [linux-app.desktop-environment-integration]
-            description: Desktop-environment integration for GNOME/KDE/Wayland/X11 tray behavior
+            description: GNOME, KDE, Wayland, and X11 tray and shortcut behavior.
         docs:
           - docs/platforms/linux.md
           - docs/start/openclaw.md
           - docs/gateway/doctor.md
         search_anchors:
-          - Gateway service install
-          - openclaw status
-          - Control UI
-          - Linux app
-          - status
-          - desktop notifications
+          - systemd user service
+          - Quick Chat
+          - Gateway unreachable
+          - Host sleep
+          - Desktop notifications
         category_note: diagnostics-health-operator-repair.md
         human_lts_override: false
     last_score_run:
       status: complete
-      completed_at: "2026-05-30"
+      completed_at: "2026-09-08"
       by: codex
-      source_ref: null
+      source_ref: openclaw@22d6219be8f2e82676331088fc6133768b3f3401
       process_version: 3
   - id: wsl
     name: Windows via WSL2
@@ -8422,11 +8413,11 @@ surfaces:
       source_ref: null
       process_version: 3
   - id: imessage-bluebubbles
-    name: iMessage and BlueBubbles
+    name: iMessage
     family: channel
     level: beta
     level_code: M3
-    rationale: Supported iMessage runs through imsg on a signed-in macOS Messages host; legacy BlueBubbles configs require migration. Keep macOS permissions, SSH wrapper, SIP/private API, and migration caveats visible.
+    rationale: Supported iMessage runs through imsg on a signed-in macOS Messages host. Keep macOS permissions, SSH wrapper, SIP/private API, and legacy BlueBubbles migration caveats visible without presenting the removed transport as an active channel.
     completeness_instructions: references/completeness/imessage-bluebubbles.md
     categories:
       - name: Channel Setup and Operations
@@ -8455,13 +8446,13 @@ surfaces:
             description: Covers Probe runtime health across local and remote `imsg rpc`, `cliPath`, `dbPath`, `remoteHost`, and related imsg transport, host requirements, and permissions behavior.
           - name: Account setup prompts
             coverageIds: [imessage-bluebubbles.account-setup-prompts]
-            description: Covers setup prompts, policy writes, account merging, default account selection, and account configuration behavior for iMessage/BlueBubbles.
+            description: Covers setup prompts, policy writes, account merging, default account selection, and account configuration behavior for iMessage.
           - name: Account status checks
             coverageIds: [imessage-bluebubbles.account-status-checks]
-            description: Covers account status output, setup state, account merging, and default account selection for iMessage/BlueBubbles.
+            description: Covers account status output, setup state, account merging, and default account selection for iMessage.
           - name: Doctor repair checks
             coverageIds: [imessage-bluebubbles.doctor-repair-checks]
-            description: Covers doctor checks, setup repair prompts, and policy verification for iMessage/BlueBubbles account configuration.
+            description: Covers doctor checks, setup repair prompts, and policy verification for iMessage account configuration.
           - name: Account Config
             coverageIds: [imessage-bluebubbles.account-config]
             description: Covers Account Config across setup prompts, policy writes, account merging, default account selection, and related setup, status, doctor, and account config behavior.
@@ -8483,7 +8474,7 @@ surfaces:
           - account status
           - doctor checks
           - Account Config
-          - imessage / bluebubbles setup, status, doctor, and account config
+          - iMessage setup, status, doctor, and account config
           - setup, status, doctor, and account config
         category_note: setup-status-doctor-and-account-config.md
         human_lts_override: false
@@ -8510,7 +8501,6 @@ surfaces:
             description: Covers System Prompts across `groupPolicy`, `groupAllowFrom`, `groups`, wildcard registry entries, `requireMention`, mention patterns, per-group tools, per-group system prompts, group sessions, and warnings for allowlist misconfiguration.
         docs:
           - docs/channels/imessage.md
-          - docs/channels/imessage-from-bluebubbles.md
           - docs/gateway/config-channels.md
         search_anchors:
           - Authorize direct senders
@@ -8519,7 +8509,7 @@ surfaces:
           - Group Policy
           - Mentions
           - System Prompts
-          - imessage / bluebubbles group policy, mentions, and system prompts
+          - iMessage group policy, mentions, and system prompts
           - group policy, mentions, and system prompts
         category_note: dm-pairing-access-and-session-routing.md
         human_lts_override: false
@@ -8573,19 +8563,18 @@ surfaces:
             description: Covers Message Tool across private API probing, action availability, action config gates, tapback mapping, edit/unsend/reply/effects/group management, `send-rich --file`, message-tool visibility/target grammar, and action dispatch errors.
         docs:
           - docs/channels/imessage.md
-          - docs/channels/imessage-from-bluebubbles.md
           - docs/gateway/config-channels.md
         search_anchors:
           - Media
           - Attachments
           - Remote Fetch
           - Chunking
-          - imessage / bluebubbles media, attachments, remote fetch, and chunking
+          - iMessage media, attachments, remote fetch, and chunking
           - media, attachments, remote fetch, and chunking
           - Native Actions
           - Private API
           - Message Tool
-          - imessage / bluebubbles native actions, private api, and message tool
+          - iMessage native actions, private api, and message tool
           - native actions, private api, and message tool
         category_note: media-attachments-remote-fetch-and-chunking.md
         human_lts_override: false
@@ -8607,15 +8596,15 @@ surfaces:
           - Native Approvals
           - Reactions
           - Operator Control
-          - imessage / bluebubbles native approvals, reactions, and operator control
+          - iMessage native approvals, reactions, and operator control
           - native approvals, reactions, and operator control
         category_note: native-approvals-reactions-and-operator-control.md
         human_lts_override: false
     last_score_run:
       status: complete
-      completed_at: "2026-05-30"
+      completed_at: "2026-09-08"
       by: codex
-      source_ref: null
+      source_ref: openclaw@19537f3e957ce8720cfdf22a35e7f0bb3e6b7741
       process_version: 3
   - id: signal
     name: Signal
@@ -8858,7 +8847,6 @@ surfaces:
           - docs/gateway/health.md
           - docs/plugins/plugin-inventory.md
           - docs/channels/index.md
-          - docs/docs.json
         search_anchors:
           - Google Cloud project setup
           - Chat app configuration

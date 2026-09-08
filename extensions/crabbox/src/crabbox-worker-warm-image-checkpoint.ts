@@ -4,7 +4,7 @@ import type { WarmImageRecord } from "./crabbox-worker-warm-image-store.js";
 
 const CHECKPOINT_ID_PATTERN = /^chk_[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/u;
 
-export function parseCheckpointJson(stdout: string, action: string): Record<string, unknown> {
+function parseCheckpointJson(stdout: string, action: string): Record<string, unknown> {
   let parsed: unknown;
   try {
     parsed = JSON.parse(stdout);
@@ -37,6 +37,22 @@ export function parseCreatedCheckpoint(
   // This parser consumes only successful `checkpoint create --wait` results.
   // Crabbox owns readiness; provider-native state names are not a portable readiness signal.
   return { checkpointId, kind, state: "available" };
+}
+
+export function parseForkedCheckpoint(
+  stdout: string,
+  expected: { checkpointId: string; leaseId: string; provider: string; slug: string },
+): void {
+  const fork = parseCheckpointJson(stdout, "fork");
+  if (
+    fork.checkpointId !== expected.checkpointId ||
+    fork.leaseId !== expected.leaseId ||
+    fork.provider !== expected.provider ||
+    fork.slug !== expected.slug ||
+    !nonEmptyString(fork.workdir)
+  ) {
+    throw new Error("Crabbox checkpoint fork returned an invalid lease identity");
+  }
 }
 
 export function parseCheckpointAvailability(stdout: string): "available" | "pending" | "missing" {

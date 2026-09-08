@@ -164,6 +164,8 @@ describe("minimal npm extended-stable workflow", () => {
     expect(sourceAncestry).toMatchObject({
       env: {
         RELEASE_ANCESTRY_MODE: "merge-base",
+        RELEASE_ANCESTRY_SOURCE_REF:
+          "${{ inputs.release_candidate_branch != '' && format('refs/heads/{0}', inputs.release_candidate_branch) || '' }}",
         RELEASE_ANCESTRY_TARGET_REF: "refs/heads/main",
       },
     });
@@ -443,6 +445,9 @@ describe("minimal npm extended-stable workflow", () => {
     });
     expect(plugins.run).toContain("--selection-mode all-publishable");
     expect(plugins.run).toContain("--npm-dist-tag extended-stable");
+    expect(plugins.run).toContain(
+      'node --import "$tooling_dir/scripts/tsx.mjs" "$tooling_dir/scripts/plugin-npm-release-plan.ts"',
+    );
     // A validation target can predate this verifier; plugin runtime qualification
     // must run from the trusted workflow checkout while inspecting target packages.
     expect(plugins.run).toMatch(

@@ -8288,6 +8288,15 @@ Update and merge these partial structured summaries.`,
       });
       expect(outputText(recoveredPayload)).toBe("TELEGRAM-EMPTY-WRITE-RECOVERED-OK");
 
+      const statefulRecoveredPayload = await expectOpenAiNonStreamingResponsesJson(server, {
+        input: [
+          ...precedingInput,
+          makeUserInput(QA_EMPTY_RESPONSE_SIDE_EFFECT_RECOVERY_PROMPT),
+          makeUserInput(QA_SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION),
+        ],
+      });
+      expect(outputText(statefulRecoveredPayload)).toBe("TELEGRAM-EMPTY-WRITE-RECOVERED-OK");
+
       const cronRecoveredPayload = await expectOpenAiNonStreamingResponsesJson<{
         output?: Array<{ content?: Array<{ text?: string }> }>;
       }>(server, {

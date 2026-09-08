@@ -551,6 +551,8 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
       store.hasPendingNodeEnrollmentSetup(setupId, deviceId),
     listMachineOptions: async (profileId: string) =>
       providerLifecycle.listMachineOptions(profileId),
+    listOperatingSystems: async (profileId: string) =>
+      providerLifecycle.listOperatingSystems(profileId),
     create: async (
       profileId: string,
       idempotencyKey: string,
@@ -558,6 +560,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
       executionMode?: WorkerExecutionMode,
       projectPath?: string,
       signal?: AbortSignal,
+      os?: string,
     ) => {
       if (executionMode) {
         requireProviderExecutionMode(configuredProfileProviderId(profileId), executionMode);
@@ -565,6 +568,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
       return environmentAccess.project(
         await providerLifecycle.createWithProfile(profileId, idempotencyKey, {
           machineClass,
+          os,
           executionMode,
           projectPath,
           signal,
@@ -578,6 +582,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
       executionMode?: WorkerExecutionMode,
       projectPath?: string,
       signal?: AbortSignal,
+      os?: string,
     ) => {
       requireProviderExecutionMode(profile.providerId, executionMode);
       return environmentAccess.project(
@@ -587,6 +592,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
             profileSnapshot: profile.profileSnapshot,
           },
           machineClass,
+          os,
           executionMode,
           projectPath,
           signal,

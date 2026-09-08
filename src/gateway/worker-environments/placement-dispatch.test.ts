@@ -9,6 +9,7 @@ import {
   openOpenClawStateDatabase,
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { resolveWorkerPlacementDestination } from "./placement-destination.js";
 import {
   type DispatchStage,
   type PlacementStore,
@@ -90,7 +91,12 @@ describe("worker placement dispatch", () => {
       profileSnapshot: { install: "bundle" as const, settings: { region: "parent" } },
     };
 
-    await harness.service.dispatch({ ...REQUEST, inheritedProfile, machineClass: "beast" });
+    await harness.service.dispatch({
+      ...REQUEST,
+      inheritedProfile,
+      machineClass: "beast",
+      os: "os-a",
+    });
 
     expect(harness.environments.create).not.toHaveBeenCalled();
     expect(harness.environments.createFromProfileSnapshot).toHaveBeenCalledWith(
@@ -100,7 +106,23 @@ describe("worker placement dispatch", () => {
       REQUEST.executionMode,
       path.join(root, "workspace"),
       undefined,
+      "os-a",
     );
+  });
+
+  it("normalizes profile OS overrides and rejects choices without a profile", () => {
+    const cfg = { cloudWorkers: { profiles: { cloud: { provider: "fake" } } } };
+    expect(resolveWorkerPlacementDestination({ cfg, profileId: " cloud ", os: " os-a " })).toEqual({
+      ok: true,
+      value: { profileId: "cloud", os: "os-a" },
+    });
+    for (const target of [
+      { profileId: "cloud", os: " " },
+      { deviceId: "device", os: "os-a" },
+      { os: "os-a" },
+    ]) {
+      expect(resolveWorkerPlacementDestination({ cfg, ...target }).ok).toBe(false);
+    }
   });
 
   it("reports the final durable placement after startup failure teardown", async () => {

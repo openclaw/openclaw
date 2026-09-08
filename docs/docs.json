@@ -1735,6 +1735,16 @@
                   "plugins/tool-plugins",
                   "plugins/sdk-channel-plugins",
                   "plugins/sdk-provider-plugins",
+                  {
+                    "group": "Provider plugins",
+                    "pages": [
+                      "plugins/sdk-provider-plugins/model-catalogs",
+                      "plugins/sdk-provider-plugins/hook-families",
+                      "plugins/sdk-provider-plugins/runtime-hooks",
+                      "plugins/sdk-provider-plugins/voice-and-audio",
+                      "plugins/sdk-provider-plugins/media-and-search"
+                    ]
+                  },
                   "plugins/cli-backend-plugins",
                   "plugins/hooks",
                   "plugins/plugin-permission-requests",
@@ -2146,6 +2156,18 @@
                       "gateway/health",
                       "gateway/heartbeat",
                       "gateway/doctor",
+                      {
+                        "group": "Doctor",
+                        "pages": [
+                          "gateway/doctor/running",
+                          "gateway/doctor/checks",
+                          "gateway/doctor/config-migrations",
+                          "gateway/doctor/provider-repairs",
+                          "gateway/doctor/state-and-sessions",
+                          "gateway/doctor/gateway-and-services",
+                          "gateway/doctor/workspace-and-dreams"
+                        ]
+                      },
                       "gateway/audit",
                       "gateway/telemetry",
                       "logging",
@@ -2646,6 +2668,17 @@
                 "group": "Testing",
                 "pages": [
                   "help/testing",
+                  {
+                    "group": "Testing guide",
+                    "pages": [
+                      "help/testing/suites",
+                      "help/testing/live-workflows",
+                      "help/testing/docker",
+                      "help/testing/qa-runners",
+                      "help/testing/contracts",
+                      "help/testing/writing-tests"
+                    ]
+                  },
                   "help/testing-updates-plugins",
                   "help/testing-live"
                 ]

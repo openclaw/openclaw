@@ -531,7 +531,11 @@ describe("scripts/test-projects changed-target routing", () => {
     (scriptPath) => {
       expectChangedTargets(
         [scriptPath],
-        ["test/scripts/direct-run-entrypoints.test.ts", "test/scripts/lint-status.test.ts"],
+        [
+          "test/scripts/direct-run-entrypoints.test.ts",
+          "test/scripts/lint-status.test.ts",
+          "test/scripts/local-check-runtime.test.ts",
+        ],
       );
     },
   );
@@ -2277,7 +2281,7 @@ describe("scripts/test-projects changed-target routing", () => {
   it("routes mac restart helpers through restart-mac owner tests", () => {
     expectChangedTargets(
       ["scripts/lib/restart-mac-gateway.sh"],
-      ["test/scripts/restart-mac.test.ts"],
+      ["test/scripts/build-and-run-mac.test.ts", "test/scripts/restart-mac.test.ts"],
     );
   });
 
