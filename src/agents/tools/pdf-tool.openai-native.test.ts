@@ -5,6 +5,7 @@ import { isRecord } from "../../utils.js";
 import * as pdfNativeProviders from "./pdf-native-providers.js";
 import {
   createPdfToolInfraStub,
+  FAKE_PDF_MEDIA,
   resetPdfToolAuthEnv,
   withTempPdfAgentDir,
 } from "./pdf-tool.test-support.js";
@@ -77,6 +78,91 @@ describe("createPdfTool OpenAI native routing", () => {
       expect(extractSpy).not.toHaveBeenCalled();
       expect(result.content).toEqual([{ type: "text", text: "native OpenAI summary" }]);
       expectDetails(result.details, { native: true, model: OPENAI_PDF_MODEL });
+    });
+  });
+
+  it.each([
+    { pages: "1,3-4", expected: { pageNumbers: [1, 3, 4] } },
+    { password: " fixture password ", expected: { password: " fixture password " } },
+    { pages: "2", password: "fixture", expected: { pageNumbers: [2], password: "fixture" } },
+  ])("preserves OpenAI extraction options: $expected", async ({ expected, ...options }) => {
+    await withTempPdfAgentDir(async (agentDir) => {
+      await stubPdfToolInfra(agentDir, {
+        provider: "openai",
+        api: "openai-responses",
+        baseUrl: "https://api.openai.com/v1",
+      });
+      const nativeSpy = vi.spyOn(pdfNativeProviders, "openaiAnalyzePdf");
+      const extractSpy = vi.spyOn(pdfExtractModule, "extractPdfContent").mockResolvedValue({
+        text: "Selected and decrypted content",
+        images: [],
+      });
+      completeMock.mockResolvedValue({
+        role: "assistant",
+        stopReason: "stop",
+        content: [{ type: "text", text: "fallback summary" }],
+      });
+      const { createPdfTool } = await import("./pdf-tool.js");
+      const tool = createPdfTool({ config: withPdfModel(OPENAI_PDF_MODEL), agentDir });
+      if (!tool) {
+        throw new Error("expected pdf tool");
+      }
+
+      const result = await tool.execute("t1", { pdf: "/tmp/doc.pdf", ...options });
+
+      expect(extractSpy).toHaveBeenCalledWith(expect.objectContaining(expected));
+      expect(nativeSpy).not.toHaveBeenCalled();
+      expect(result.content).toEqual([{ type: "text", text: "fallback summary" }]);
+      expectDetails(result.details, { native: false, model: OPENAI_PDF_MODEL });
+    });
+  });
+
+  it.each([
+    { label: "combined limit", sizes: [25_000_000, 25_000_000], native: true },
+    { label: "combined limit plus one byte", sizes: [25_000_000, 25_000_001], native: false },
+    { label: "six individually valid PDFs", sizes: Array(6).fill(9_000_000), native: false },
+    { label: "single file below limit", sizes: [49_999_999], native: true },
+    { label: "single file at strict limit", sizes: [50_000_000], native: false },
+  ])("routes original PDF sizes at $label", async ({ sizes, native }) => {
+    await withTempPdfAgentDir(async (agentDir) => {
+      const { loadSpy } = await stubPdfToolInfra(agentDir, {
+        provider: "openai",
+        api: "openai-responses",
+        baseUrl: "https://api.openai.com/v1",
+      });
+      for (const size of sizes) {
+        loadSpy.mockResolvedValueOnce({ ...FAKE_PDF_MEDIA, buffer: Buffer.alloc(size) });
+      }
+      const nativeSpy = vi
+        .spyOn(pdfNativeProviders, "openaiAnalyzePdf")
+        .mockResolvedValue("native summary");
+      const extractSpy = vi.spyOn(pdfExtractModule, "extractPdfContent").mockResolvedValue({
+        text: "Extracted content",
+        images: [],
+      });
+      completeMock.mockResolvedValue({
+        role: "assistant",
+        stopReason: "stop",
+        content: [{ type: "text", text: "fallback summary" }],
+      });
+      const { createPdfTool } = await import("./pdf-tool.js");
+      const tool = createPdfTool({ config: withPdfModel(OPENAI_PDF_MODEL), agentDir });
+      if (!tool) {
+        throw new Error("expected pdf tool");
+      }
+
+      const result = await tool.execute("t1", {
+        pdfs: sizes.map((_, index) => `/tmp/doc-${index}.pdf`),
+        maxBytesMb: 60,
+      });
+
+      expect(nativeSpy).toHaveBeenCalledTimes(native ? 1 : 0);
+      expect(extractSpy).toHaveBeenCalledTimes(native ? 0 : sizes.length);
+      expect(completeMock).toHaveBeenCalledTimes(native ? 0 : 1);
+      expect(result.content).toEqual([
+        { type: "text", text: native ? "native summary" : "fallback summary" },
+      ]);
+      expectDetails(result.details, { native, model: OPENAI_PDF_MODEL });
     });
   });
 

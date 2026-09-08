@@ -7,7 +7,7 @@ read_when:
   - You are debugging native PDF mode vs extraction fallback
 ---
 
-`pdf` analyzes one or more PDF documents and returns text. It uses native document input on Anthropic and Google models, and falls back to text/image extraction for every other provider.
+`pdf` analyzes one or more PDF documents and returns text. It uses native document input on Anthropic, Google, and supported OpenAI Responses routes, and falls back to text/image extraction otherwise.
 
 ## Availability
 
@@ -35,7 +35,7 @@ Analysis prompt.
 </ParamField>
 
 <ParamField path="pages" type="string">
-Page filter like `1-5` or `1,3,7-9`. Not supported in native provider mode.
+Page filter like `1-5` or `1,3,7-9`. OpenAI uses extraction when this is set. Not supported with Anthropic or Google native PDF input.
 </ParamField>
 
 <ParamField path="password" type="string">
@@ -68,16 +68,17 @@ Other URI schemes (for example `ftp://`) return `details.error = "unsupported_pd
 
 ### Native provider mode
 
-Used for provider `anthropic` and `google` (the only providers that currently declare native PDF document support). Raw PDF bytes go directly to the provider API as a native document/inline-PDF part per file.
+Used for providers `anthropic` and `google`, and for `openai` with the `openai-responses` transport at the official HTTPS `api.openai.com` endpoint. Raw PDF bytes go directly to the provider API as a native document/inline-PDF part per file. OpenAI receives the complete documents as `input_file` parts; local extraction page limits do not apply to native input.
 
 Limits:
 
-- `pages` is not supported; if set, the tool throws `pages is not supported with native PDF providers`.
-- `password` is not supported; if set, the tool throws `password is not supported with native PDF providers`. Use a non-native model for encrypted PDFs.
+- Anthropic and Google reject `pages` and `password` with `pages is not supported with native PDF providers` or `password is not supported with native PDF providers`. Use an extraction-capable route for these options.
+- OpenAI uses extraction when `pages` or `password` is set, preserving page filtering and encrypted-PDF support.
+- OpenAI native input requires each PDF to be smaller than `50,000,000` bytes and all PDFs together to be at most `50,000,000` bytes. Larger requests use extraction. These conservative decimal-byte bounds follow the [OpenAI file input limits](https://developers.openai.com/api/docs/guides/file-inputs#usage-considerations); the per-PDF loader cap still applies first.
 
 ### Extraction fallback mode
 
-Used for every other provider.
+Used for every other provider, custom OpenAI endpoints, ChatGPT/Codex transports, and OpenAI requests that need filtering, decryption, or exceed the native file limits.
 
 1. Extract text from the selected pages (up to `agents.defaults.pdfMaxPages`, default `20`) via the bundled `document-extract` plugin, which uses the `clawpdf` package (PDFium WebAssembly) for text and image extraction.
 2. If the extracted text is shorter than `200` characters, render the same pages to PNG images. The render budget is `4,000,000` pixels total, shared across all pages needing images (allocated proportionally per remaining page, not per page), so text pages that already have enough text skip rendering entirely.
