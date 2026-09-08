@@ -46,8 +46,7 @@ import {
   QA_THINKING_VISIBILITY_MAX_PROMPT_RE,
   QA_EMPTY_RESPONSE_RECOVERY_PROMPT_RE,
   QA_EMPTY_RESPONSE_EXHAUSTION_PROMPT_RE,
-  QA_EMPTY_RESPONSE_SIDE_EFFECT_RECOVERY_PROMPT_RE,
-  QA_EMPTY_RESPONSE_SIDE_EFFECT_EXHAUSTION_PROMPT_RE,
+  QA_EMPTY_RESPONSE_SIDE_EFFECT_PROMPT_RE,
   QA_REPEATED_REQUEST_RECOVERY_PROMPT_RE,
   QA_REPEATED_REQUEST_QUEUED_REPLY_PROMPT_RE,
   QA_REPEATED_REQUEST_QUEUED_REPLY_MARKER,
@@ -332,10 +331,13 @@ function isStreamingToolProgressContinuationText(text: string) {
   );
 }
 
-function extractLatestScenarioFamilyPrompt(texts: string[]) {
+function extractLatestScenarioFamilyPrompt(
+  texts: string[],
+  familyPattern = QA_STREAMING_TOOL_PROGRESS_FAMILY_PROMPT_RE,
+) {
   let envelope = "";
   for (const text of texts.toReversed()) {
-    if (QA_STREAMING_TOOL_PROGRESS_FAMILY_PROMPT_RE.test(text)) {
+    if (familyPattern.test(text)) {
       envelope = text;
       break;
     }
@@ -346,10 +348,7 @@ function extractLatestScenarioFamilyPrompt(texts: string[]) {
   if (!envelope) {
     return "";
   }
-  const pattern = new RegExp(
-    QA_STREAMING_TOOL_PROGRESS_FAMILY_PROMPT_RE.source,
-    `${QA_STREAMING_TOOL_PROGRESS_FAMILY_PROMPT_RE.flags}g`,
-  );
+  const pattern = new RegExp(familyPattern.source, `${familyPattern.flags}g`);
   let latestIndex = -1;
   for (const match of envelope.matchAll(pattern)) {
     latestIndex = match.index;
@@ -1209,14 +1208,17 @@ async function buildResponsesPayload(
   const hasEmptyResponseRetryInstruction =
     allInputText.includes(QA_EMPTY_RESPONSE_RETRY_NEEDLE) ||
     allInputText.includes(QA_SETTLED_TOOL_TERMINAL_CONTINUATION_NEEDLE);
-  const isActiveEmptyResponseSideEffectRecovery =
-    QA_EMPTY_RESPONSE_SIDE_EFFECT_RECOVERY_PROMPT_RE.test(prompt) ||
-    (prompt.includes(QA_SETTLED_TOOL_TERMINAL_CONTINUATION_NEEDLE) &&
-      QA_EMPTY_RESPONSE_SIDE_EFFECT_RECOVERY_PROMPT_RE.test(allInputText));
-  const isActiveEmptyResponseSideEffectExhaustion =
-    QA_EMPTY_RESPONSE_SIDE_EFFECT_EXHAUSTION_PROMPT_RE.test(prompt) ||
-    (prompt.includes(QA_SETTLED_TOOL_TERMINAL_CONTINUATION_NEEDLE) &&
-      QA_EMPTY_RESPONSE_SIDE_EFFECT_EXHAUSTION_PROMPT_RE.test(allInputText));
+  const currentPrompt = splitMockConversationContext(prompt).current;
+  const isSettledToolContinuation = currentPrompt.includes(
+    QA_SETTLED_TOOL_TERMINAL_CONTINUATION_NEEDLE,
+  );
+  // Only a current continuation may reuse a previous scenario prompt.
+  const sideEffectPrompt = extractLatestScenarioFamilyPrompt(
+    isSettledToolContinuation ? allUserTexts : [currentPrompt],
+    QA_EMPTY_RESPONSE_SIDE_EFFECT_PROMPT_RE,
+  );
+  const sideEffectKind =
+    QA_EMPTY_RESPONSE_SIDE_EFFECT_PROMPT_RE.exec(sideEffectPrompt)?.[1]?.toLowerCase();
   const hasCallableCodeMode = hasCodeModeExecSurface(toolDeclarationBody);
   const canCallSessionsSpawn =
     hasToolDefinition(toolDeclarationBody, "sessions_spawn") || hasCallableCodeMode;
@@ -1530,12 +1532,14 @@ async function buildResponsesPayload(
   if (/remember this fact/i.test(prompt)) {
     return buildAssistantEvents(buildAssistantText(input, body));
   }
-  if (isActiveEmptyResponseSideEffectRecovery || isActiveEmptyResponseSideEffectExhaustion) {
-    if (allInputText.includes(QA_SETTLED_TOOL_TERMINAL_CONTINUATION_NEEDLE)) {
+  if (sideEffectKind) {
+    if (isSettledToolContinuation) {
       return buildAssistantEvents(
-        isActiveEmptyResponseSideEffectExhaustion
+        sideEffectKind === "exhaustion"
           ? ""
-          : (exactMarkerDirective ?? exactReplyDirective ?? "TELEGRAM-EMPTY-WRITE-RECOVERED-OK"),
+          : (extractExactMarkerDirective(sideEffectPrompt) ??
+              extractExactReplyDirective(sideEffectPrompt) ??
+              "TELEGRAM-EMPTY-WRITE-RECOVERED-OK"),
       );
     }
     if (!hasCompletedToolOutput) {

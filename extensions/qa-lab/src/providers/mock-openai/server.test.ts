@@ -1,6 +1,5 @@
 import { once } from "node:events";
 import { runInNewContext } from "node:vm";
-// Qa Lab tests cover server plugin behavior.
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it } from "vitest";
@@ -334,6 +333,28 @@ function makeToolOutput(output: unknown) {
 
 function makeToolOutputWithCallId(callId: string, output: unknown) {
   return { type: "function_call_output" as const, call_id: callId, output };
+}
+
+async function completeSideEffectScenario(server: MockServer, kind: "recovery" | "exhaustion") {
+  const kickoff = makeUserInput(
+    kind === "recovery"
+      ? QA_EMPTY_RESPONSE_SIDE_EFFECT_RECOVERY_PROMPT
+      : QA_EMPTY_RESPONSE_SIDE_EFFECT_EXHAUSTION_PROMPT,
+  );
+  const plan = await expectOpenAiNonStreamingResponsesJson(server, { input: [kickoff] });
+  const write = outputToolCall(plan, "write");
+  const input = [
+    kickoff,
+    ...outputItems(plan),
+    makeToolOutputWithCallId(
+      outputToolCallId(write, "previous-write"),
+      "Successfully wrote 27 bytes to qa-empty-response-side-effect.txt",
+    ),
+    makeUserInput(QA_SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION),
+  ];
+  const settled = await expectOpenAiNonStreamingResponsesJson(server, { input });
+  expect(outputText(settled)).toBe(kind === "recovery" ? "TELEGRAM-EMPTY-WRITE-RECOVERED-OK" : "");
+  return [...input, ...outputItems(settled)];
 }
 
 function makeAnthropicUserText(text: string) {
@@ -8251,13 +8272,18 @@ Update and merge these partial structured summaries.`,
       history: "earlier reply directive",
       precedingInput: [makeUserInput("Earlier check: exact marker: `PREVIOUS-SCENARIO-OK`.")],
     },
+    { history: "settled recovery", completedScenario: "recovery" as const },
+    { history: "settled exhaustion", completedScenario: "exhaustion" as const },
   ])(
     "scripts settled continuation after a side-effecting write with $history",
-    async ({ precedingInput }) => {
+    async ({ precedingInput = [], completedScenario }) => {
       const server = await startMockServer();
+      const historyInput = completedScenario
+        ? await completeSideEffectScenario(server, completedScenario)
+        : precedingInput;
 
       const toolPlan = await expectOpenAiStreamingResponsesText(server, {
-        input: [...precedingInput, makeUserInput(QA_EMPTY_RESPONSE_SIDE_EFFECT_RECOVERY_PROMPT)],
+        input: [...historyInput, makeUserInput(QA_EMPTY_RESPONSE_SIDE_EFFECT_RECOVERY_PROMPT)],
       });
       expect(toolPlan).toContain('"name":"write"');
 
@@ -8269,7 +8295,7 @@ Update and merge these partial structured summaries.`,
         output?: Array<{ content?: Array<{ text?: string }> }>;
       }>(server, {
         input: [
-          ...precedingInput,
+          ...historyInput,
           makeUserInput(QA_EMPTY_RESPONSE_SIDE_EFFECT_RECOVERY_PROMPT),
           toolOutput,
         ],
@@ -8280,7 +8306,7 @@ Update and merge these partial structured summaries.`,
         output?: Array<{ content?: Array<{ text?: string }> }>;
       }>(server, {
         input: [
-          ...precedingInput,
+          ...historyInput,
           makeUserInput(QA_EMPTY_RESPONSE_SIDE_EFFECT_RECOVERY_PROMPT),
           makeUserInput(QA_SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION),
           toolOutput,
@@ -8290,7 +8316,7 @@ Update and merge these partial structured summaries.`,
 
       const statefulRecoveredPayload = await expectOpenAiNonStreamingResponsesJson(server, {
         input: [
-          ...precedingInput,
+          ...historyInput,
           makeUserInput(QA_EMPTY_RESPONSE_SIDE_EFFECT_RECOVERY_PROMPT),
           makeUserInput(QA_SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION),
         ],
@@ -8329,32 +8355,60 @@ Update and merge these partial structured summaries.`,
     },
   );
 
-  it("keeps settled write finalization empty for host fallback coverage", async () => {
-    const server = await startMockServer();
-    const toolPlan = await expectOpenAiStreamingResponsesText(server, {
-      input: [makeUserInput(QA_EMPTY_RESPONSE_SIDE_EFFECT_EXHAUSTION_PROMPT)],
-    });
-    expect(toolPlan).toContain('"name":"write"');
+  it.each(["fresh", "recovery", "exhaustion"] as const)(
+    "keeps settled write finalization empty for host fallback coverage with %s history",
+    async (history) => {
+      const server = await startMockServer();
+      const precedingInput =
+        history === "fresh" ? [] : await completeSideEffectScenario(server, history);
+      const toolPlan = await expectOpenAiStreamingResponsesText(server, {
+        input: [...precedingInput, makeUserInput(QA_EMPTY_RESPONSE_SIDE_EFFECT_EXHAUSTION_PROMPT)],
+      });
+      expect(toolPlan).toContain('"name":"write"');
 
-    const toolOutput = {
-      type: "function_call_output" as const,
-      output: "Successfully wrote 27 bytes to qa-empty-response-side-effect.txt",
-    };
-    for (const includeFinalizationPrompt of [false, true, true]) {
-      const payload = await expectOpenAiNonStreamingResponsesJson<{
-        output?: Array<{ content?: Array<{ text?: string }> }>;
-      }>(server, {
+      const toolOutput = {
+        type: "function_call_output" as const,
+        output: "Successfully wrote 27 bytes to qa-empty-response-side-effect.txt",
+      };
+      for (const includeFinalizationPrompt of [false, true, true]) {
+        const payload = await expectOpenAiNonStreamingResponsesJson<{
+          output?: Array<{ content?: Array<{ text?: string }> }>;
+        }>(server, {
+          input: [
+            ...precedingInput,
+            makeUserInput(QA_EMPTY_RESPONSE_SIDE_EFFECT_EXHAUSTION_PROMPT),
+            ...(includeFinalizationPrompt
+              ? [makeUserInput(QA_SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION)]
+              : []),
+            toolOutput,
+          ],
+        });
+        expect(payload.output?.[0]?.content?.[0]?.text).toBe("");
+      }
+    },
+  );
+
+  it.each(["recovery", "exhaustion"] as const)(
+    "starts a fresh %s scenario after projected settled history",
+    async (kind) => {
+      const server = await startMockServer();
+      const history = await completeSideEffectScenario(server, "exhaustion");
+      const prompt =
+        kind === "recovery"
+          ? QA_EMPTY_RESPONSE_SIDE_EFFECT_RECOVERY_PROMPT
+          : QA_EMPTY_RESPONSE_SIDE_EFFECT_EXHAUSTION_PROMPT;
+      const response = await expectOpenAiNonStreamingResponsesJson(server, {
         input: [
-          makeUserInput(QA_EMPTY_RESPONSE_SIDE_EFFECT_EXHAUSTION_PROMPT),
-          ...(includeFinalizationPrompt
-            ? [makeUserInput(QA_SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION)]
-            : []),
-          toolOutput,
+          makeUserInput(
+            `<conversation_context>\n${JSON.stringify(history)}\n</conversation_context>\n\nCurrent user request:\n${prompt}`,
+          ),
         ],
       });
-      expect(payload.output?.[0]?.content?.[0]?.text).toBe("");
-    }
-  });
+      expect(outputToolArgsFromItem(outputToolCall(response, "write"))).toMatchObject({
+        path: "qa-empty-response-side-effect.txt",
+      });
+    },
+  );
 
   it("reports a failed Code Mode read honestly through ordinary continuation", async () => {
     const server = await startMockServer();
