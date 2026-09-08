@@ -166,6 +166,46 @@ describe("terminal snapshot reconciliation", () => {
     ).toEqual([user, earlier, laterToolBoundary, synthetic]);
   });
 
+  it.each(["inferred", "runTerminal", "stopReason"])(
+    "does not restore a removed or filtered %s terminal",
+    (evidence) => {
+      const runId = "retired-terminal-run";
+      const user = {
+        role: "user",
+        content: "Finish the task.",
+        __openclaw: { id: "user", seq: 1, runId },
+      };
+      const synthetic = createAssistantMessage("The task is complete.");
+      const persisted = {
+        ...createAssistantMessage("The task is complete.", {
+          id: "final",
+          seq: 2,
+          runId,
+          ...(evidence === "runTerminal" ? { runTerminal: true } : {}),
+        }),
+        ...(evidence === "stopReason" ? { stopReason: "stop" } : {}),
+      };
+      let state = reduceSessionProjection(createSessionProjection(scope), {
+        type: "runTerminal",
+        runId,
+        status: "completed",
+        message: synthetic,
+      });
+      state = projectLiveSessionMessage(state, synthetic, { runId });
+      state = reconcileSessionProjectionSnapshot(state, [user, persisted], scope);
+      expect(state.messages).toEqual([user, persisted]);
+
+      const removed = reconcileSessionProjectionSnapshot(state, [user], scope);
+      expect(removed.messages).toEqual([user]);
+      expect(reconcileSessionProjectionSnapshot(removed, [user], scope).messages).toEqual([user]);
+      const filtered = reconcileSessionProjectionSnapshot(state, [user, persisted], scope, {
+        shouldIncludeMessage: (message) => message === user,
+      });
+      expect(filtered.messages).toEqual([user]);
+      expect(reconcileSessionProjectionSnapshot(filtered, [user], scope).messages).toEqual([user]);
+    },
+  );
+
   it("retains an unsequenced terminal when matching content precedes a later tool boundary", () => {
     const runId = "partial-history-run";
     const user = {

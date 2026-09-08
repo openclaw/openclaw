@@ -4,7 +4,7 @@ import { asNullableRecord as readRecord } from "@openclaw/normalization-core/rec
 import {
   canRecoverSessionProjectionFinal,
   hasSessionProjectionAcceptedFinal,
-  hasUniqueSnapshotTerminalMatch,
+  findUniqueSnapshotTerminalMatch,
   isUnsequencedLiveTerminal,
   readSessionProjectionFinalMessageIdentity,
 } from "./session-projection-final-identity.js";
@@ -69,7 +69,10 @@ export type SessionProjectionRun = {
   status: SessionProjectionRunStatus;
   message?: unknown;
   acceptedFinalMessageIdentities?: readonly string[];
-  snapshotTerminalReconciled?: boolean;
+  inferredSnapshotTerminal?: {
+    entry: SessionProjectionEntry;
+    matchedIdentity: SessionMessageIdentity;
+  };
   stopReason?: string;
   errorKind?: string;
   errorMessage?: string;
@@ -461,26 +464,47 @@ export function reconcileSessionProjectionSnapshot(
     }
     const matches = entries.filter((entry) => entryMatches(entry, current, true));
     const run = current.identity?.runId ? runs[current.identity.runId] : undefined;
-    const terminalMatch = hasUniqueSnapshotTerminalMatch(current, matches, run, entries);
+    const terminalMatch = findUniqueSnapshotTerminalMatch(current, matches, run, entries);
     if ((matches.length === 1 && !isUnsequencedLiveTerminal(current, run)) || terminalMatch) {
-      if (terminalMatch && current.identity?.runId && run && !run.snapshotTerminalReconciled) {
-        runs[current.identity.runId] = { ...run, snapshotTerminalReconciled: true };
+      if (
+        terminalMatch?.inferred &&
+        terminalMatch.entry.identity &&
+        current.identity?.runId &&
+        run
+      ) {
+        // Tentative history matches retain their original live ordering until confirmed.
+        runs[current.identity.runId] = {
+          ...run,
+          inferredSnapshotTerminal: {
+            entry: current,
+            matchedIdentity: terminalMatch.entry.identity,
+          },
+        };
       }
       continue;
     }
     entries = insertEntry(entries, current, runs);
   }
   for (const [runId, run] of Object.entries(runs)) {
-    if (!run.snapshotTerminalReconciled || !hasDisplayableSessionMessage(run.message)) {
+    const inferred = run.inferredSnapshotTerminal;
+    if (!inferred) {
       continue;
     }
-    const terminal = createEntry(run.message, { envelope: { runId }, live: true });
-    const matches = entries.filter((entry) => entryMatches(entry, terminal, true));
-    if (hasUniqueSnapshotTerminalMatch(terminal, matches, run, entries)) {
+    // Removal and visibility policy retire a candidate; neither contradicts its identity.
+    const candidateRemains = entries.some((entry) =>
+      sameTranscriptIdentity(entry.identity, inferred.matchedIdentity),
+    );
+    const visible = options.shouldIncludeMessage?.(inferred.entry.message) !== false;
+    const matches = entries.filter((entry) => entryMatches(entry, inferred.entry, true));
+    const terminalMatch = findUniqueSnapshotTerminalMatch(inferred.entry, matches, run, entries);
+    if (candidateRemains && visible && terminalMatch?.inferred) {
       continue;
     }
-    entries = insertEntry(entries, terminal, runs);
-    runs[runId] = { ...run, snapshotTerminalReconciled: false };
+    if (candidateRemains && visible && !terminalMatch) {
+      entries = insertEntry(entries, inferred.entry, runs);
+    }
+    const { inferredSnapshotTerminal: _inferred, ...settledRun } = run;
+    runs[runId] = settledRun;
   }
   return {
     ...withEntries(state, entries),

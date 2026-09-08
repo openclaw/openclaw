@@ -164,12 +164,12 @@ export function hasSessionProjectionAcceptedFinal(
 }
 
 /** Match an unsequenced live terminal to exactly one durable same-run terminal row. */
-export function hasUniqueSnapshotTerminalMatch(
+export function findUniqueSnapshotTerminalMatch(
   current: TerminalProjectionEntry,
   matches: readonly TerminalProjectionEntry[],
   run: TerminalProjectionRun | undefined,
   snapshot: readonly TerminalProjectionEntry[],
-): boolean {
+): { entry: TerminalProjectionEntry; inferred: boolean } | null {
   if (
     !current.live ||
     current.identity?.role !== "assistant" ||
@@ -178,11 +178,11 @@ export function hasUniqueSnapshotTerminalMatch(
     !run ||
     run.status === "streaming"
   ) {
-    return false;
+    return null;
   }
   const terminalContent = readFinalContentIdentity(current.message);
   if (!terminalContent || readFinalContentIdentity(run.message) !== terminalContent) {
-    return false;
+    return null;
   }
   const durableTerminalMatches = matches.filter((entry) => {
     const metadata = readRecord(readRecord(entry.message)?.["__openclaw"]);
@@ -194,7 +194,15 @@ export function hasUniqueSnapshotTerminalMatch(
       readFinalContentIdentity(entry.message) === terminalContent
     );
   });
-  return durableTerminalMatches.length === 1;
+  const entry = durableTerminalMatches.length === 1 ? durableTerminalMatches[0] : undefined;
+  if (!entry) {
+    return null;
+  }
+  const metadata = readRecord(readRecord(entry.message)?.["__openclaw"]);
+  return {
+    entry,
+    inferred: metadata?.runTerminal !== true && !hasTerminalStopReason(entry.message),
+  };
 }
 
 /** Check whether ordinary single-match promotion needs terminal-content verification. */
