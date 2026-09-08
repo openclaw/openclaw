@@ -737,7 +737,6 @@ linuxIt.each([
       action: "ensure-base-commit",
       baseAvailableAfter: 1,
       fetchResults: [result],
-      realClock: true,
       realDrain: true,
       scenario: "scenario" in entry ? entry.scenario : undefined,
       cancelDuringCleanup: "cancelDuringCleanup" in entry,
