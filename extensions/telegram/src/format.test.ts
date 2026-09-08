@@ -179,9 +179,9 @@ describe("markdownToTelegramHtml", () => {
     const html = markdownToTelegramHtml(markdown, { tableMode: "block" });
     const chunks = markdownToTelegramChunks(markdown, 4096, { tableMode: "block" });
 
-    expect(html).toContain(`<pre><code>${table}\n</code></pre>`);
+    expect(html).toContain("<pre><code>| A   | B   |\n| --- | --- |\n| 1   | 2   |\n</code></pre>");
     expect(chunks.map((chunk) => chunk.html)).toEqual([html]);
-    expect(chunks[0]?.text).toContain("| 1 | 2 |");
+    expect(chunks[0]?.text).toContain("| 1   | 2   |");
     if (before) {
       expect(html).toContain("Before");
     }
