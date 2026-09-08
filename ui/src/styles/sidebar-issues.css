@@ -19,8 +19,6 @@
   background: var(--bg-elevated);
   color: var(--text);
   box-shadow: var(--shadow-sm);
-  /* Scaling during entry skews the tab group's keyboard-scroll measurements. */
-  animation: fade-in 140ms var(--ease-out);
 }
 
 .sidebar-issues-panel__backdrop,
