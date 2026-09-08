@@ -373,7 +373,6 @@ h3.plugins-subheader {
 .plugins-group__link {
   color: var(--muted);
   font-size: var(--control-ui-text-xs);
-  text-decoration: none;
   white-space: nowrap;
 }
 

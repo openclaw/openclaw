@@ -1659,7 +1659,6 @@ openclaw-session-progress-hovercard-provider {
   margin: 0 -6px;
   border-radius: var(--radius-sm);
   color: var(--text);
-  text-decoration: none;
 }
 
 .person-activity-card__session-copy {
@@ -2483,7 +2482,6 @@ openclaw-chat-session-rail {
   color: var(--text);
   font-size: 10.5px;
   line-height: 1;
-  text-decoration: none;
 }
 
 .chat-session-rail__pr:hover {
@@ -4581,7 +4579,6 @@ td.data-table-key-col {
   border-radius: var(--radius-full);
   background: color-mix(in srgb, var(--card) 86%, transparent);
   color: inherit;
-  text-decoration: none;
   transition:
     background-color var(--duration-fast) var(--ease-in-out),
     border-color var(--duration-fast) var(--ease-in-out),
@@ -4896,7 +4893,6 @@ td.data-table-key-col {
 
 .agent-tool-jump {
   color: var(--accent);
-  text-decoration: none;
   align-self: end;
   margin-left: auto;
 }
@@ -6073,8 +6069,9 @@ td.data-table-key-col {
   color: inherit;
 }
 
-.person-activity-link:not(:hover, :focus-visible) {
-  text-decoration: none;
+.person-activity-link:not(:where(.learn-more-link)):hover,
+.person-activity-link:not(:where(.learn-more-link)):focus-visible {
+  text-decoration-line: underline;
 }
 
 .person-activity-avatar-link {

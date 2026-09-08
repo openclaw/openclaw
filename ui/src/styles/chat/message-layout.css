@@ -594,7 +594,6 @@
   color: var(--text);
   font-size: 13px;
   font-weight: 600;
-  text-decoration: none;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -668,7 +667,6 @@
   color: var(--text);
   background: transparent;
   font: inherit;
-  text-decoration: none;
   cursor: var(--cursor-action);
   transition:
     color 120ms ease,
@@ -679,7 +677,6 @@
 .chat-assistant-attachment-card__action:hover {
   color: var(--text-strong);
   background: color-mix(in srgb, var(--media-foreground) 8%, transparent);
-  text-decoration: none;
 }
 
 .chat-assistant-attachment-card__action:focus-visible {

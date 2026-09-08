@@ -493,7 +493,6 @@
    opacity, which composited the link toward its background and cost another 1.1. */
 .chat-text :where(a) {
   color: var(--link);
-  text-decoration: underline;
   text-decoration-color: color-mix(in srgb, currentColor 45%, transparent);
   text-underline-offset: 2px;
 }
@@ -789,7 +788,6 @@
 :is(.chat-text, .sidebar-markdown) .markdown-external-image > a:hover {
   background: color-mix(in srgb, var(--text) 13%, transparent);
   color: var(--link-hover);
-  text-decoration: none;
 }
 
 /* Code surfaces must lift off the host bubble in every theme. --secondary equals
