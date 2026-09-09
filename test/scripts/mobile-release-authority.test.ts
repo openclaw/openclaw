@@ -1796,6 +1796,7 @@ describe("mobile release authority", () => {
         };
       };
       permissions: Record<string, string>;
+      "run-name": string;
     };
     const validationJob = workflow.jobs["validate-target"];
     const validationSteps = validationJob.steps;
@@ -1829,6 +1830,9 @@ describe("mobile release authority", () => {
     );
 
     expect(workflow.name).toBe("Android Emulator Diagnostic");
+    expect(workflow["run-name"]).toBe(
+      "Android emulator diagnostic instrumented (${{ inputs.target_sha }})",
+    );
     expect(Object.keys(workflow.on)).toEqual(["workflow_dispatch"]);
     expect(workflow.on.workflow_dispatch.inputs.target_sha).toEqual({
       description: "Exact lowercase 40-character commit SHA to diagnose",
@@ -1875,6 +1879,15 @@ describe("mobile release authority", () => {
     );
     expect(steps[initializeIndex]?.run).toContain(
       'echo "DIAGNOSTIC_DIR=$DIAGNOSTIC_DIR" >>"$GITHUB_ENV"',
+    );
+    expect(steps[initializeIndex]?.run).toContain(
+      "printf 'host_cpu=%s\\n' \"$(sysctl -n machdep.cpu.brand_string)\"",
+    );
+    expect(steps[initializeIndex]?.run).toContain(
+      "printf 'host_logical_cpus=%s\\n' \"$(sysctl -n hw.logicalcpu)\"",
+    );
+    expect(steps[initializeIndex]?.run).toContain(
+      "printf 'host_memory_bytes=%s\\n' \"$(sysctl -n hw.memsize)\"",
     );
     expect(validationSteps[validationTrustedCheckoutIndex]).toMatchObject({
       uses: "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
@@ -1988,8 +2001,73 @@ describe("mobile release authority", () => {
       'printf \'no\\n\' | avdmanager create avd --force --name "$AVD_NAME" --package "$SYSTEM_IMAGE" --device "$DEVICE_PROFILE"',
     );
     expect(diagnostic).toContain(
-      'emulator_args=(-avd "$AVD_NAME" -no-window -no-audio -no-boot-anim)',
+      'emulator_args=(-avd "$AVD_NAME" -no-window -no-audio -no-boot-anim -verbose -show-kernel)',
     );
+    expect(diagnostic).toContain("capture_accel_check() {");
+    expect(diagnostic).toContain("accel_check_timeout_seconds=10");
+    expect(diagnostic).toContain('emulator -accel-check >"$accel_raw" 2>&1 &');
+    expect(diagnostic).toContain(
+      'head -c 16384 "$accel_raw" >"$DIAGNOSTIC_DIR/emulator-accel-check.txt"',
+    );
+    expect(diagnostic).toContain(
+      'printf \'exit_status=%s\\n\' "$accel_status" >>"$DIAGNOSTIC_DIR/emulator-accel-check.txt"',
+    );
+    expect(diagnostic).toContain(
+      'printf \'timed_out=%s\\n\' "$accel_timed_out" >>"$DIAGNOSTIC_DIR/emulator-accel-check.txt"',
+    );
+    expect(diagnostic).toContain("sample_owned_qemu() {");
+    expect(diagnostic).toContain(
+      'printf \'\\n[%s] owned_emulator_pid=%s\\n\' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$emulator_pid"',
+    );
+    expect(diagnostic).toContain(
+      'ps -p "$emulator_pid" -o pid=,ppid=,%cpu=,rss=,stat=,etime=,command=',
+    );
+    expect(diagnostic).toContain('>>"$DIAGNOSTIC_DIR/owned-qemu-samples.log" 2>&1');
+    expect(diagnostic.match(/\bsample_owned_qemu\b/gu)).toHaveLength(4);
+
+    const accelFunctionStart = diagnostic.indexOf("capture_accel_check() {");
+    const accelFunctionEnd = diagnostic.indexOf("\n\nsample_owned_qemu()", accelFunctionStart);
+    expect(accelFunctionStart).toBeGreaterThanOrEqual(0);
+    expect(accelFunctionEnd).toBeGreaterThan(accelFunctionStart);
+    const accelFunction = diagnostic
+      .slice(accelFunctionStart, accelFunctionEnd)
+      .replace("accel_check_timeout_seconds=10", "accel_check_timeout_seconds=1");
+    const runAccelCheck = (emulatorSource: string) => {
+      const root = tempRoots.make("openclaw-android-emulator-accel-check-");
+      const bin = path.join(root, "bin");
+      const diagnosticDir = path.join(root, "diagnostic");
+      fs.mkdirSync(bin);
+      fs.mkdirSync(diagnosticDir);
+      fs.writeFileSync(path.join(bin, "emulator"), emulatorSource, { mode: 0o755 });
+      const result = spawnSync(
+        "/bin/bash",
+        ["-c", `set -euo pipefail\n${accelFunction}\ncapture_accel_check\n`],
+        {
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            DIAGNOSTIC_DIR: diagnosticDir,
+            PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}`,
+          },
+          timeout: 5_000,
+        },
+      );
+      return {
+        output: fs.readFileSync(path.join(diagnosticDir, "emulator-accel-check.txt"), "utf8"),
+        result,
+      };
+    };
+
+    const nonzeroAccel = runAccelCheck("#!/bin/bash\nprintf 'unavailable\\n'\nexit 7\n");
+    expect(nonzeroAccel.result.status, nonzeroAccel.result.stderr).toBe(0);
+    expect(nonzeroAccel.output).toContain("unavailable");
+    expect(nonzeroAccel.output).toContain("exit_status=7");
+    expect(nonzeroAccel.output).toContain("timed_out=false");
+
+    const timedOutAccel = runAccelCheck("#!/bin/bash\nexec sleep 30\n");
+    expect(timedOutAccel.result.status, timedOutAccel.result.stderr).toBe(0);
+    expect(timedOutAccel.output).toContain("exit_status=124");
+    expect(timedOutAccel.output).toContain("timed_out=true");
     expect(diagnostic).toContain(
       "device_deadline=$((SECONDS + ANDROID_SCREENSHOT_EMULATOR_TIMEOUT_SECONDS))",
     );

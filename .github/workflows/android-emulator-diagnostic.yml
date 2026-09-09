@@ -1,6 +1,6 @@
 name: Android Emulator Diagnostic
 
-run-name: Android emulator diagnostic (${{ inputs.target_sha }})
+run-name: Android emulator diagnostic instrumented (${{ inputs.target_sha }})
 
 on:
   workflow_dispatch:
@@ -113,6 +113,9 @@ jobs:
             printf 'runner_arch=%s\n' "$RUNNER_ARCH"
             printf 'runner_image=%s\n' "${ImageOS:-unknown}"
             printf 'runner_image_version=%s\n' "${ImageVersion:-unknown}"
+            printf 'host_cpu=%s\n' "$(sysctl -n machdep.cpu.brand_string)"
+            printf 'host_logical_cpus=%s\n' "$(sysctl -n hw.logicalcpu)"
+            printf 'host_memory_bytes=%s\n' "$(sysctl -n hw.memsize)"
             uname -a
             sw_vers
           } >"$DIAGNOSTIC_DIR/runner.txt"
@@ -138,6 +141,57 @@ jobs:
           set -euo pipefail
           emulator_pid=""
           adb_started=0
+
+          capture_accel_check() {
+            local accel_raw="$DIAGNOSTIC_DIR/emulator-accel-check.raw"
+            local accel_check_timeout_seconds=10
+            local accel_deadline
+            local accel_pid
+            local accel_status
+            local accel_timed_out=false
+
+            emulator -accel-check >"$accel_raw" 2>&1 &
+            accel_pid=$!
+            accel_deadline=$((SECONDS + accel_check_timeout_seconds))
+            while kill -0 "$accel_pid" 2>/dev/null; do
+              if (( SECONDS >= accel_deadline )); then
+                accel_timed_out=true
+                if kill "$accel_pid" 2>/dev/null; then
+                  :
+                fi
+                if kill -0 "$accel_pid" 2>/dev/null && kill -9 "$accel_pid" 2>/dev/null; then
+                  :
+                fi
+                break
+              fi
+              sleep 1
+            done
+            if wait "$accel_pid"; then
+              accel_status=0
+            else
+              accel_status=$?
+            fi
+            if [[ "$accel_timed_out" == "true" ]]; then
+              accel_status=124
+            fi
+            head -c 16384 "$accel_raw" >"$DIAGNOSTIC_DIR/emulator-accel-check.txt"
+            rm -f "$accel_raw"
+            printf 'exit_status=%s\n' "$accel_status" >>"$DIAGNOSTIC_DIR/emulator-accel-check.txt"
+            printf 'timed_out=%s\n' "$accel_timed_out" >>"$DIAGNOSTIC_DIR/emulator-accel-check.txt"
+          }
+
+          sample_owned_qemu() {
+            sample_status=0
+            {
+              printf '\n[%s] owned_emulator_pid=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$emulator_pid"
+              ps -p "$emulator_pid" -o pid=,ppid=,%cpu=,rss=,stat=,etime=,command=
+            } >>"$DIAGNOSTIC_DIR/owned-qemu-samples.log" 2>&1 || sample_status=$?
+            if [[ "$sample_status" -ne 0 ]]; then
+              printf 'sample_status=%s\n' "$sample_status" \
+                >>"$DIAGNOSTIC_DIR/owned-qemu-samples.log"
+            fi
+            return 0
+          }
 
           cleanup() {
             status=$?
@@ -173,6 +227,7 @@ jobs:
           trap 'exit 143' TERM
 
           emulator -version >"$DIAGNOSTIC_DIR/emulator-version.txt" 2>&1
+          capture_accel_check
           sdkmanager --list_installed >"$DIAGNOSTIC_DIR/sdk-packages.txt" 2>&1
           avdmanager list device >"$DIAGNOSTIC_DIR/avd-devices.txt" 2>&1
           adb start-server
@@ -186,12 +241,13 @@ jobs:
           printf 'no\n' | avdmanager create avd --force --name "$AVD_NAME" --package "$SYSTEM_IMAGE" --device "$DEVICE_PROFILE"
           cp "$HOME/.android/avd/${AVD_NAME}.avd/config.ini" "$DIAGNOSTIC_DIR/avd-config.ini"
 
-          emulator_args=(-avd "$AVD_NAME" -no-window -no-audio -no-boot-anim)
+          emulator_args=(-avd "$AVD_NAME" -no-window -no-audio -no-boot-anim -verbose -show-kernel)
           printf '%q ' "${emulator_args[@]}" >"$DIAGNOSTIC_DIR/emulator-args.txt"
           printf '\n' >>"$DIAGNOSTIC_DIR/emulator-args.txt"
           emulator "${emulator_args[@]}" >"$DIAGNOSTIC_DIR/emulator.log" 2>&1 &
           emulator_pid=$!
           printf 'emulator_pid=%s\n' "$emulator_pid" >"$DIAGNOSTIC_DIR/process-status.log"
+          sample_owned_qemu
 
           device_deadline=$((SECONDS + ANDROID_SCREENSHOT_EMULATOR_TIMEOUT_SECONDS))
           serial=""
@@ -210,6 +266,7 @@ jobs:
               echo "::error::Multiple Android devices appeared during diagnostic startup"
               exit 1
             fi
+            sample_owned_qemu
             ps -p "$emulator_pid" -o pid=,ppid=,stat=,etime=,command= \
               >>"$DIAGNOSTIC_DIR/process-status.log" 2>&1
             kill -0 "$emulator_pid"
@@ -229,6 +286,7 @@ jobs:
                 "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$serial" "${boot_completed:-unset}"
               adb devices -l
             } >>"$DIAGNOSTIC_DIR/adb-observations.log" 2>&1
+            sample_owned_qemu
             ps -p "$emulator_pid" -o pid=,ppid=,stat=,etime=,command= \
               >>"$DIAGNOSTIC_DIR/process-status.log" 2>&1
             kill -0 "$emulator_pid"
