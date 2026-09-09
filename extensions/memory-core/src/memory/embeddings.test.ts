@@ -439,7 +439,7 @@ describe("createEmbeddingProvider", () => {
   it("lets managed local-service startup finish before charging the search deadline", async () => {
     vi.useFakeTimers();
     let finishStartup: (() => void) | undefined;
-    const acquireLocalService = vi.fn(
+    const acquireLocalService = vi.fn<MemoryCoreAcquireLocalService>(
       async () =>
         await new Promise<{ release: () => void }>((resolve) => {
           finishStartup = () => resolve({ release: vi.fn() });
