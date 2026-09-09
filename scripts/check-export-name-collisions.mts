@@ -627,27 +627,25 @@ export function resolveExportModulePath(
   return candidates.find((candidate) => modulesByPath.has(candidate)) ?? null;
 }
 
-function collectTransitiveExportNames(
-  modulePath: string,
-  modulesByPath: ReadonlyMap<string, ModuleExports>,
-  visiting = new Set<string>(),
-): Set<string> {
-  if (visiting.has(modulePath)) {
-    return new Set();
-  }
-  const moduleExports = modulesByPath.get(modulePath);
-  if (!moduleExports) {
-    return new Set();
-  }
-  const nextVisiting = new Set(visiting).add(modulePath);
-  const names = new Set(moduleExports.exportedNames);
-  for (const specifier of moduleExports.starExportSpecifiers) {
-    const targetPath = resolveExportModulePath(modulePath, specifier, modulesByPath);
-    if (!targetPath) {
+function collectSdkExportNames(modulesByPath: ReadonlyMap<string, ModuleExports>): Set<string> {
+  const names = new Set<string>();
+  const reachablePaths = new Set(
+    [...modulesByPath.keys()].filter((modulePath) => modulePath.startsWith("src/plugin-sdk/")),
+  );
+  // Set iteration visits newly added targets once, including shared and cyclic barrels.
+  for (const modulePath of reachablePaths) {
+    const moduleExports = modulesByPath.get(modulePath);
+    if (!moduleExports) {
       continue;
     }
-    for (const name of collectTransitiveExportNames(targetPath, modulesByPath, nextVisiting)) {
+    for (const name of moduleExports.exportedNames) {
       names.add(name);
+    }
+    for (const specifier of moduleExports.starExportSpecifiers) {
+      const targetPath = resolveExportModulePath(modulePath, specifier, modulesByPath);
+      if (targetPath) {
+        reachablePaths.add(targetPath);
+      }
     }
   }
   return names;
@@ -661,7 +659,6 @@ const intentionalSameNameFamilies = new Set(["testing", "testApi"]);
 function analyzeExportNames(modules: SourceModule[]) {
   const aliasingReExports: AliasingReExport[] = [];
   const filesByName = new Map<string, Set<string>>();
-  const sdkExportNames = new Set<string>();
   const modulesByPath = new Map<string, ModuleExports>();
   for (const sourceModule of modules.toSorted((left, right) =>
     left.path.localeCompare(right.path),
@@ -685,14 +682,7 @@ function analyzeExportNames(modules: SourceModule[]) {
       }
     }
   }
-  for (const modulePath of modulesByPath.keys()) {
-    if (!modulePath.startsWith("src/plugin-sdk/")) {
-      continue;
-    }
-    for (const name of collectTransitiveExportNames(modulePath, modulesByPath)) {
-      sdkExportNames.add(name);
-    }
-  }
+  const sdkExportNames = collectSdkExportNames(modulesByPath);
 
   const collisions: ExportNameCollision[] = [];
   for (const [name, fileSet] of filesByName) {
