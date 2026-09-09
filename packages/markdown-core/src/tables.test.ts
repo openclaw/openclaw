@@ -189,6 +189,26 @@ describe("convertMarkdownTables", () => {
     expect(rendered.endsWith(references)).toBe(true);
   });
 
+  it("preserves delimiter-bearing reference labels against document definitions in bullets", () => {
+    const references = "\n\n[api_v1]: https://example.com";
+    const rendered = convertMarkdownTables(
+      "| Name | Value |\n| --- | --- |\n| Entry | [manual][api_v1] |" + references,
+      "bullets",
+    );
+    const parsed = new MarkdownIt().render(rendered);
+
+    // The reference label keeps its underscore so the definition still matches.
+    expect(rendered).toContain("[manual][api_v1]");
+    expect(parsed).toContain('<a href="https://example.com">manual</a>');
+    // Bracket text without a matching definition is still delimiter-isolated.
+    const unlabeled = convertMarkdownTables(
+      "| A | B |\n| --- | --- |\n| x | [a_b] stays literal |",
+      "bullets",
+    );
+
+    expect(unlabeled).toContain("[a\\_b]");
+  });
+
   it("preserves CRLF source around a table", () => {
     const before = "Keep \\*literal\\*.\r\n\r\n";
     const after = "\r\n\r\nAfter.\r\n";
