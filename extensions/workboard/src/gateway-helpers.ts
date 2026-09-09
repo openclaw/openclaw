@@ -41,10 +41,12 @@ export function registerWorkboardResultMethods(
     api.registerGatewayMethod(
       method,
       (context) =>
-        Promise.resolve(handler(context)).then(
-          (result) => context.respond(true, result),
-          (error: unknown) => respondError(context.respond, error),
-        ),
+        Promise.resolve()
+          .then(() => handler(context))
+          .then(
+            (result) => context.respond(true, result),
+            (error: unknown) => respondError(context.respond, error),
+          ),
       { scope },
     );
   }

@@ -69,7 +69,11 @@ describe("plugin Gateway returned values", () => {
       });
     } finally {
       if (gateway) {
-        await disconnectGatewayClient(gateway.client);
+        try {
+          await disconnectGatewayClient(gateway.client);
+        } finally {
+          await gateway.server.close({ reason: "plugin Gateway returned-value proof complete" });
+        }
       }
       if (previous.HOME === undefined) {
         delete process.env.HOME;
