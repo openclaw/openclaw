@@ -604,6 +604,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
       agentId: sessionAgentId,
       storePath,
       store,
+      readSource,
       entry,
       canonicalKey,
     } = loadGatewaySessionEntryReadOnly(opts.sessionKey, {
@@ -682,6 +683,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
       cfg,
       storePath,
       store,
+      readSource,
       key: canonicalKey,
       entry,
       agentId: sessionAgentId,

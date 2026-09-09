@@ -158,6 +158,7 @@ function mockCombinedStore(
   store: Record<string, SessionEntry>,
   owners: ReadonlyArray<readonly [string, string]>,
 ) {
+  const loadSessionEntry = (key: string) => store[key];
   vi.mocked(loadCombinedSessionStoreForGatewayCore).mockReturnValue({
     durableTargets: [],
     storePath: "(multiple)",
@@ -167,6 +168,7 @@ function mockCombinedStore(
         key,
         {
           agentId,
+          modelSource: { entry: store[key], loadSessionEntry },
           storeTarget: { agentId, storePath: `/tmp/agents/${agentId}/agent/openclaw-agent.sqlite` },
         },
       ]),

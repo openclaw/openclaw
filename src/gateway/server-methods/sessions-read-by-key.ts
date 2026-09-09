@@ -5,6 +5,7 @@ import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { createSessionListEntryFilter } from "../session-sharing.js";
 import { readRecentSessionMessagesWithStatsAsync } from "../session-transcript-readers.js";
 import { buildSessionListRowMetadataContext } from "../session-utils-projection.js";
+import { createGatewaySessionEntryReader } from "../session-utils-store-lookup.js";
 import { buildGatewaySessionRow } from "../session-utils.js";
 import { readPreparedServerMethodModelCatalog } from "./optional-model-catalog.js";
 import { readSessionPlacementFields } from "./session-placement-read-projection.js";
@@ -64,6 +65,15 @@ export const sessionByKeyReadHandlers: GatewayRequestHandlers = {
       cfg,
       storePath,
       store,
+      modelSource: {
+        entry,
+        loadSessionEntry: createGatewaySessionEntryReader({
+          cfg,
+          agentId: target.agentId,
+          store,
+          readSource: target.readSource,
+        }),
+      },
       key: target.canonicalKey,
       entry,
       agentId: target.agentId,

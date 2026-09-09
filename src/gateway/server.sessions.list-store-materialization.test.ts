@@ -5,6 +5,7 @@
 import path from "node:path";
 import { expect, test, vi } from "vitest";
 import * as sessionsConfig from "../config/sessions.js";
+import { canPrewarmCombinedSessionStoresForGateway } from "../config/sessions/combined-store-gateway.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import type { SessionEntry } from "../config/sessions/types.js";
@@ -165,7 +166,7 @@ test("startup prewarm reuses requested durable targets when no incognito store i
   const matcher = vi.spyOn(agentDatabaseRegistry, "createOpenClawAgentDatabasePathMatcher");
   try {
     expect(
-      sessionsConfig.canPrewarmCombinedSessionStoresForGateway(
+      canPrewarmCombinedSessionStoresForGateway(
         {
           agents: { list: [{ id: "main", default: true }] },
           session: { store: storeTemplate },

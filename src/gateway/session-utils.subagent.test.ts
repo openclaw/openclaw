@@ -28,7 +28,6 @@ import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { listSessionFixture } from "./session-list.test-support.js";
-import { buildSingleRowStoreChildSessionsByKey } from "./session-utils-projection.js";
 import {
   loadCombinedSessionStoreForGatewayCore,
   resolveGatewayModelSupportsImages,
@@ -246,14 +245,6 @@ describe("session list subagent metadata", () => {
     expect(all.sessions.find((session) => session.key === controlParentKey)?.childSessions).toEqual(
       [childSessionKey],
     );
-
-    expect(
-      buildSingleRowStoreChildSessionsByKey({
-        store,
-        key: navigationParentKey,
-        now,
-      }).get(navigationParentKey),
-    ).toEqual([childSessionKey]);
   });
 
   test("includes subagent status timing and direct child session keys", async () => {
@@ -1234,9 +1225,6 @@ describe("session list subagent metadata", () => {
       const after = await list();
       expect((await list(parentKey)).sessions).toEqual([]);
       expect(after.sessions.find((row) => row.key === parentKey)?.childSessions).toBeUndefined();
-      expect(
-        buildSingleRowStoreChildSessionsByKey({ store, key: parentKey, now }).get(parentKey),
-      ).toBeUndefined();
     },
   );
 

@@ -20,14 +20,11 @@ import type { SessionEntryPair } from "./session-list-order.js";
 import { resolveStoredSessionKeyForAgentStore } from "./session-store-key.js";
 import { readRecentSessionUsageFromTranscript as readScopedRecentSessionUsageFromTranscript } from "./session-transcript-readers.js";
 import type {
+  GatewaySessionModelSource,
   SessionActorProfileIdentity,
   SessionListRowContext,
 } from "./session-utils-contracts.js";
-import {
-  buildStoreChildSessionIndex,
-  resolveEstimatedSessionCostUsd,
-  resolvePositiveNumber,
-} from "./session-utils-core.js";
+import { resolveEstimatedSessionCostUsd, resolvePositiveNumber } from "./session-utils-core.js";
 
 export function buildSessionListRowMetadataContext(params: {
   now: number;
@@ -44,26 +41,11 @@ export function buildSessionListRowMetadataContext(params: {
   };
 }
 
-export function buildSingleRowStoreChildSessionsByKey(params: {
-  store: Record<string, SessionEntry>;
-  key: string;
-  now: number;
-  subagentRuns?: SessionListRowContext["subagentRuns"];
-}): Map<string, string[]> {
-  return buildStoreChildSessionIndex({
-    store: params.store,
-    keys: [params.key],
-    now: params.now,
-    subagentRuns: params.subagentRuns,
-  });
-}
-
 export function resolveSessionSelectedModelRef(params: {
   cfg: OpenClawConfig;
-  entry?: SessionEntry;
+  source: GatewaySessionModelSource;
   agentId: string;
   sessionKey?: string;
-  sessionStore?: Record<string, SessionEntry>;
   rowContext?: SessionListRowContext;
   allowPluginNormalization?: boolean;
 }): ReturnType<typeof resolveSessionModelRef> & {
@@ -74,7 +56,7 @@ export function resolveSessionSelectedModelRef(params: {
     config: params.cfg,
     agentId: params.agentId,
     sessionKey: params.sessionKey,
-    sessionEntry: params.entry,
+    sessionEntry: params.source.entry,
   });
   if (ownership?.modelRef) {
     return { ...ownership.modelRef, storedOverrideSource: null };
@@ -83,10 +65,11 @@ export function resolveSessionSelectedModelRef(params: {
     allowPluginNormalization: params.allowPluginNormalization,
   });
   const storedOverride = resolveStoredModelOverride({
-    sessionEntry: params.entry,
-    sessionStore: params.sessionStore,
+    // A prepared miss is authoritative; the presentation store can contain another owner's alias.
+    loadSessionEntry: params.source.loadSessionEntry,
+    sessionEntry: params.source.entry,
     sessionKey: params.sessionKey,
-    parentSessionKey: params.entry?.parentSessionKey,
+    parentSessionKey: params.source.entry?.parentSessionKey,
     defaultProvider: configuredDefault.provider,
     allowPluginNormalization: params.allowPluginNormalization,
   });

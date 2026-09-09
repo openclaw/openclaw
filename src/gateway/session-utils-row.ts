@@ -47,7 +47,10 @@ import { resolveStoredSessionKeyForAgentStore } from "./session-store-key.js";
 import { buildSessionSwarmSummary } from "./session-swarm-summary.js";
 import { readSessionTerminalModelFromTranscript } from "./session-transcript-readers.js";
 import { readSessionTitleFieldsFromTranscript as readScopedSessionTitleFieldsFromTranscript } from "./session-transcript-title-reader.js";
-import type { SessionListRowContext } from "./session-utils-contracts.js";
+import type {
+  GatewaySessionModelSource,
+  SessionListRowContext,
+} from "./session-utils-contracts.js";
 import {
   buildCompactionCheckpointPreview,
   deriveSessionTitle,
@@ -85,6 +88,7 @@ export function buildGatewaySessionRow(params: {
   cfg: OpenClawConfig;
   storePath: string;
   store: Record<string, SessionEntry>;
+  modelSource?: GatewaySessionModelSource;
   key: string;
   entry?: InternalSessionEntry;
   modelCatalog?: SessionListModelCatalog | ModelCatalogEntry[];
@@ -154,9 +158,8 @@ export function buildGatewaySessionRow(params: {
   const selectedModel = resolveSessionSelectedModelRef({
     cfg,
     sessionKey: key,
-    entry,
+    source: params.modelSource ?? { entry, loadSessionEntry: (parentKey) => store[parentKey] },
     agentId: sessionAgentId,
-    sessionStore: store,
     rowContext,
     allowPluginNormalization: !lightweight,
   });

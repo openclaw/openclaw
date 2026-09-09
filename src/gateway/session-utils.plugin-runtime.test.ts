@@ -6,6 +6,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { resolveSessionStorePathCore, type SessionEntry } from "../config/sessions.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
+import { sessionStoreTargetsFixture } from "./session-list.test-support.js";
 
 const normalizeProviderModelIdWithPluginMock = vi.fn();
 const loadPluginManifestRegistryCoreMock = vi.hoisted(() =>
@@ -59,12 +60,12 @@ describe("gateway session list plugin runtime normalization", () => {
 
     const listed = await sessionUtils.listSessionsFromStoreAsync({
       cfg,
-      targetsBySessionKey: new Map(
-        Object.keys(store).map((key) => [
-          key,
-          { agentId: "main", storeTarget: { agentId: "main", storePath: "" } },
-        ]),
-      ),
+      targetsBySessionKey: sessionStoreTargetsFixture({
+        cfg,
+        storePath: "",
+        store,
+        agentId: "main",
+      }),
       storePath: "",
       store,
       opts: {},
