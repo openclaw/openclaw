@@ -272,7 +272,7 @@ suite.define(() => {
         return { height: rect.height, width: rect.width };
       });
       expect(actionSkeletonSize.height).toBeCloseTo(30, 3);
-      expect(actionSkeletonSize.width).toBeCloseTo(64, 3);
+      expect(actionSkeletonSize.width).toBeCloseTo(30, 3);
       expect(
         await actionSkeletons
           .first()

@@ -229,6 +229,40 @@ describe("conversation position rail", () => {
     }
   });
 
+  it.each(["user", "assistant"])("renders safe Markdown in %s previews", (role) => {
+    const messages = [
+      message(
+        "formatted",
+        role,
+        "**Important** *detail* `code`\n\n- [Guide](https://example.com)\n<script>alert(1)</script>",
+        1,
+      ),
+      message("next", role === "user" ? "assistant" : "user", "Next turn", 2),
+    ];
+    const props = threadProps("rail-markdown", "agent:main:markdown", messages);
+    const transcript = createTestTranscript();
+    const container = document.body.appendChild(document.createElement("div"));
+    const rerender = () => {
+      render(renderChatThread(props, transcript), container);
+      transcript.hostUpdated();
+    };
+    props.onRequestUpdate = rerender;
+    try {
+      rerender();
+      transcript.hostConnected();
+      container.querySelector<HTMLButtonElement>(".chat-position-rail__marker")!.focus();
+      const preview = container.querySelector(".chat-position-rail__preview-copy")!;
+      expect(preview.querySelector("strong")?.textContent).toBe("Important");
+      expect(preview.querySelector("em")?.textContent).toBe("detail");
+      expect(preview.querySelector("code")?.textContent).toBe("code");
+      expect(preview.querySelector("li a")?.textContent).toBe("Guide");
+      expect(preview.querySelector("script")).toBeNull();
+      expect(preview.closest("[inert]")).not.toBeNull();
+    } finally {
+      transcript.hostDisconnected();
+    }
+  });
+
   it("uses the visible completed answer and keeps attachment-only user landmarks", () => {
     const messages = [
       message("question", "user", "Inspect the design", 1),

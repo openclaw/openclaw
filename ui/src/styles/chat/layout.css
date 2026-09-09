@@ -1115,8 +1115,8 @@ openclaw-chat-video-player {
 }
 
 .chat-audio-player:focus-visible {
-  outline: 2px solid var(--focus-ring);
-  outline-offset: 2px;
+  outline: 2px solid var(--ring);
+  outline-offset: -2px;
 }
 
 .chat-audio-player__toggle {
@@ -1144,7 +1144,7 @@ openclaw-chat-video-player {
 }
 
 .chat-audio-player__toggle:focus-visible {
-  outline: 2px solid var(--focus-ring);
+  outline: 2px solid var(--ring);
   outline-offset: 2px;
 }
 
@@ -1200,7 +1200,7 @@ openclaw-chat-video-player {
 }
 
 .chat-audio-player__seek:focus-visible {
-  outline: 2px solid var(--focus-ring);
+  outline: 2px solid var(--ring);
   outline-offset: 4px;
 }
 
@@ -1235,7 +1235,7 @@ openclaw-chat-video-player {
 
 .chat-audio-player__waveform:has(.chat-audio-player__seek:focus-visible) {
   border-radius: 4px;
-  outline: 2px solid var(--focus-ring);
+  outline: 2px solid var(--ring);
   outline-offset: 2px;
 }
 
@@ -1274,7 +1274,7 @@ openclaw-chat-video-player {
 }
 
 .chat-audio-player__volume:focus-visible {
-  outline: 2px solid var(--focus-ring);
+  outline: 2px solid var(--ring);
   outline-offset: 2px;
 }
 
@@ -2707,20 +2707,12 @@ button.chat-pr__diff {
     --chat-composer-top-margin: 6px;
   }
 
-  .chat-inline-approval {
-    width: calc(100% - 8px);
-  }
-
   .chat-main__conversation
     > .agent-chat__composer-shell:not(:has(> .agent-chat__progress-float))::before,
   .chat-main__conversation
     > openclaw-plugin-view[data-plugin-composer]
     .agent-chat__composer-shell:not(:has(> .agent-chat__progress-float))::before {
     inset-inline: calc(var(--chat-thread-gutter) - var(--chat-mobile-edge-inset, 4px));
-  }
-
-  .session-suggestions {
-    width: calc(100% - 8px);
   }
 }
 

@@ -116,15 +116,16 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
         "models.list": {
           cases: [
             {
-              match: { view: "configured", agentId: "main", preparedOnly: true },
-              response: { models: [] },
-            },
-            {
               match: { view: "configured", agentId: "main", refresh: true },
               response: {
                 models: [],
+                refreshFailed: true,
                 providerOutcomes: [{ provider: "openai", status: "auth-rejected" }],
               },
+            },
+            {
+              match: { view: "configured", agentId: "main" },
+              response: { models: [] },
             },
           ],
         },
@@ -169,7 +170,7 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
       ).toHaveLength(0);
       expect(await gateway.getRequests("models.list")).toEqual([
         expect.objectContaining({
-          params: { agentId: "main", preparedOnly: true, view: "configured" },
+          params: { agentId: "main", view: "configured" },
         }),
       ]);
       expect(await page.getByRole("heading", { name: "Add provider" }).count()).toBe(0);
@@ -657,7 +658,7 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
       ).toHaveLength(0);
       expect(await gateway.getRequests("models.list")).toEqual([
         expect.objectContaining({
-          params: { agentId: "main", preparedOnly: true, view: "configured" },
+          params: { agentId: "main", view: "configured" },
         }),
       ]);
       await expect.poll(async () => openaiCard.textContent()).toContain("API key set in config");

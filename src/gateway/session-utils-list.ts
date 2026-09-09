@@ -8,11 +8,6 @@ import {
 import type { SessionsListParams } from "../../packages/gateway-protocol/src/index.js";
 import { listAgentIds } from "../agents/agent-scope-config.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
-import {
-  countActiveDescendantRuns,
-  getSessionDisplaySubagentRunByChildSessionKey,
-} from "../agents/subagents/registry/subagent-registry-read.js";
-import { shouldKeepSubagentRunChildLink } from "../agents/subagents/registry/subagent-run-liveness.js";
 import { tryResolveLegacyCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
 import type { SessionEntry } from "../config/sessions.js";
 import type { GatewayStoredSessionTargets } from "../config/sessions/combined-store-gateway.js";
@@ -49,8 +44,7 @@ import {
   deriveSessionTitle,
   buildStoreChildSessionIndex,
   isFinitePositiveTimestamp,
-  isCurrentSessionChildOwner,
-  shouldKeepStoreOnlyChildLink,
+  resolveSessionChildOwners,
 } from "./session-utils-core.js";
 import { getSessionDefaults } from "./session-utils-model.js";
 import {
@@ -70,7 +64,6 @@ import type {
 
 // Bound synchronous projection work without repeatedly requeueing cheap prepared rows.
 const SESSIONS_LIST_YIELD_INTERVAL_MS = 12;
-const SESSIONS_LIST_ROW_CONTEXT_THRESHOLD = 10;
 
 const SESSIONS_LIST_DEFAULT_LIMIT = 100;
 const SESSIONS_LIST_TRANSCRIPT_FIELD_ROWS = 100;
@@ -237,25 +230,12 @@ function filterSessionEntries(params: {
         return false;
       }
       const filterRowContext = resolveSessionListRowContext(params);
-      const latest = filterRowContext
-        ? filterRowContext.subagentRuns.getDisplaySubagentRun(key)
-        : getSessionDisplaySubagentRunByChildSessionKey(key);
-      const keepSpawned = latest
-        ? isCurrentSessionChildOwner({
-            entry,
-            ownerSessionKey: spawnedBy,
-            controllerSessionKey:
-              normalizeOptionalString(latest.controllerSessionKey) ||
-              normalizeOptionalString(latest.requesterSessionKey),
-          }) &&
-          shouldKeepSubagentRunChildLink(latest, {
-            activeDescendants: filterRowContext
-              ? filterRowContext.subagentRuns.countActiveDescendantRuns(key)
-              : countActiveDescendantRuns(key),
-            now,
-          })
-        : shouldKeepStoreOnlyChildLink(entry, now) &&
-          (entry.spawnedBy === spawnedBy || entry.parentSessionKey === spawnedBy);
+      const keepSpawned = resolveSessionChildOwners({
+        key,
+        entry,
+        now,
+        subagentRuns: filterRowContext?.subagentRuns,
+      }).includes(spawnedBy);
       if (!keepSpawned) {
         return false;
       }
@@ -466,15 +446,8 @@ function prepareSessionList(params: ListSessionsFromStoreParams) {
     ownerFirstActorId: params.ownerFirstActorId,
     projectActiveRun: params.projectActiveRun,
   });
-  // The two registry caches can differ after an external worker write. Preserve
-  // live child reads where the existing short-list path did not prepare a snapshot.
-  const usePreparedChildReads =
-    Boolean(rowContext) ||
-    hasSpawnedByFilter ||
-    filteredSessionKeys.size > 0 ||
-    selection.entries.length > SESSIONS_LIST_ROW_CONTEXT_THRESHOLD;
-  const sharedRowContext =
-    usePreparedChildReads || selection.entries.length > 0 ? getRowContext() : undefined;
+  // Filtering, child links, and row display share one registry snapshot per response.
+  const sharedRowContext = selection.entries.length > 0 ? getRowContext() : undefined;
   const storePath = hasIncognito ? params.storePath : (params.durableStorePath ?? params.storePath);
   const storeChildSessionsByKey = buildStoreChildSessionIndex({
     store,
@@ -484,9 +457,8 @@ function prepareSessionList(params: ListSessionsFromStoreParams) {
       ),
     ],
     now,
-    subagentRuns: usePreparedChildReads ? sharedRowContext?.subagentRuns : undefined,
+    subagentRuns: sharedRowContext?.subagentRuns,
     excludedChildKeys: filteredSessionKeys,
-    requireCurrentController: !usePreparedChildReads,
   });
   populateSessionListAcpMetadata({
     cfg,

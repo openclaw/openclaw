@@ -20,7 +20,6 @@ import {
   type TestChatPane,
 } from "./chat-pane.test-support.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
-import { reloadChatIdentityForConfigChange } from "./chat-state-refresh.ts";
 import { cancelChatStreamRenderFrame } from "./chat-state-render.ts";
 import { renderChat } from "./chat-view.ts";
 import { projectSessionApprovalReplay } from "./session-approval-projection.ts";
@@ -501,34 +500,5 @@ describe("global chat pane feature ownership", () => {
     await pane.updateComplete;
     expect(pane.chatProps?.progressCard).toEqual(main);
     expect(reads).toBe(2);
-  });
-});
-
-describe("chat pane config change identity refresh", () => {
-  it("reloads the assistant identity when config changes", async () => {
-    const requestUpdate = vi.fn();
-    const loadAssistantIdentity = vi.fn(async () => undefined);
-    const host = {
-      mediaPolicyEpoch: 0,
-      assistantIdentityRequestVersion: 0,
-      connected: false,
-      client: null,
-      requestUpdate,
-      loadAssistantIdentity,
-    } as unknown as ChatPageHost;
-
-    reloadChatIdentityForConfigChange(host);
-
-    // set-identity arrives as config.changed: the cached assistantName must be
-    // reloaded (message labels, stream footer, and composer all read it), not
-    // just the avatar.
-    expect(loadAssistantIdentity).toHaveBeenCalledOnce();
-    expect(host.mediaPolicyEpoch).toBe(1);
-    expect(host.assistantIdentityRequestVersion).toBe(1);
-    expect(requestUpdate).toHaveBeenCalled();
-    await vi.waitFor(() => {
-      // The avatar refresh settles with a final render pass.
-      expect(requestUpdate.mock.calls.length).toBeGreaterThanOrEqual(2);
-    });
   });
 });

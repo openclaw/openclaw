@@ -44,7 +44,15 @@ suite.define(() => {
                       },
                     },
                   ]
-                : [{ text: `Transcript checkpoint ${index}`, type: "text" }],
+                : [
+                    {
+                      text:
+                        index === 1
+                          ? "![Preview](data:image/gif;base64,R0lGODlhAAQABIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7)"
+                          : `Transcript **checkpoint ${index}** with \`code\` and *emphasis*.`,
+                      type: "text",
+                    },
+                  ],
             role: index % 2 === 0 ? "user" : "assistant",
             timestamp: Date.UTC(2026, 8, 4, 12, index),
           }));
@@ -67,7 +75,7 @@ suite.define(() => {
           const transcript = page.locator(".chat-thread");
           await transcript
             .locator(".chat-virtual-row")
-            .getByText("Transcript checkpoint 239", { exact: true })
+            .getByText("Transcript checkpoint 239 with code and emphasis.", { exact: true })
             .waitFor();
 
           const rail = page.locator(".chat-position-rail");
@@ -241,8 +249,25 @@ suite.define(() => {
           await page.mouse.wheel(0, -6000);
           await expect.poll(() => scroller.evaluate((element) => element.scrollTop)).toBe(0);
           await expect.poll(fades).toEqual({ top: false, bottom: true });
+          await markers.nth(1).hover();
+          const previewImage = preview.locator("img");
+          await expect
+            .poll(() => previewImage.evaluate((image: HTMLImageElement) => image.naturalHeight))
+            .toBe(1024);
+          expect(
+            await preview.evaluate(
+              (element) =>
+                element.getBoundingClientRect().height /
+                Number.parseFloat(getComputedStyle(element).lineHeight),
+            ),
+          ).toBeLessThanOrEqual(3.01);
+          await page.mouse.move(600, 100);
+
           await markers.nth(4).hover();
           await expect.poll(() => preview.textContent()).toContain("Transcript checkpoint 4");
+          expect(await preview.locator("strong").textContent()).toBe("checkpoint 4");
+          expect(await preview.locator("code").textContent()).toBe("code");
+          expect(await preview.locator("em").textContent()).toBe("emphasis");
           expect(await transcript.evaluate((element) => element.scrollTop)).toBe(readerOffset);
           expect(await scroller.evaluate((element) => element.scrollTop)).toBe(0);
           // Pointer focus must not move an edge mark before its click completes.
@@ -328,7 +353,9 @@ suite.define(() => {
           await expect.poll(strokeSizes).toEqual(["8px × 2px"]);
           await expect.poll(visibilityMatchesViewport).toBe(true);
           await markers.first().hover();
-          await expect.poll(() => preview.textContent()).toBe("Preview unavailable");
+          await expect
+            .poll(async () => (await preview.textContent())?.trim())
+            .toBe("Preview unavailable");
           expect(await preview.boundingBox()).not.toBeNull();
           await page.mouse.move(600, 100);
           await markers.nth(5).focus();

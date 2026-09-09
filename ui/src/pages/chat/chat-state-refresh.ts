@@ -16,11 +16,7 @@ import {
   isUiSelectedGlobalSessionKey,
   parseAgentSessionKey,
 } from "../../lib/sessions/session-key.ts";
-import {
-  invalidateChatAvatarCache,
-  refreshChatAvatar,
-  resolveAgentIdForSession,
-} from "./chat-avatar.ts";
+import { refreshChatAvatar, resolveAgentIdForSession } from "./chat-avatar.ts";
 import { applyRemoteSlashCommandsResult, refreshSlashCommands } from "./chat-commands.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import { loadChatHistory } from "./chat-history.ts";
@@ -131,21 +127,6 @@ export function applyChatAgentOwnerTransition(
   void refreshChatModelAuthStatus(host).finally(() => host.requestUpdate?.());
   void host.loadAssistantIdentity();
   host.requestUpdate?.();
-}
-
-/**
- * Config writes (e.g. `openclaw agents set-identity`) arrive as config.changed.
- * The roster-backed tab title refreshes on its own, but the chat page caches
- * assistantName until reload. Reload it so message labels, the stream footer,
- * and the composer follow the new identity live.
- */
-export function reloadChatIdentityForConfigChange(host: ChatPageHost): void {
-  host.mediaPolicyEpoch = (host.mediaPolicyEpoch ?? 0) + 1;
-  host.requestUpdate?.();
-  invalidateChatAvatarCache(host);
-  host.assistantIdentityRequestVersion += 1;
-  void refreshChatAvatar(host).finally(() => host.requestUpdate?.());
-  void host.loadAssistantIdentity();
 }
 
 function bindChatMetadata(host: ChatPageHost): ChatMetadataBinding | undefined {

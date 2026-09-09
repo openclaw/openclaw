@@ -736,7 +736,7 @@
 }
 
 .chat-text :where(.markdown-inline-image-button:focus-visible) {
-  outline: 2px solid var(--focus-ring);
+  outline: 2px solid var(--ring);
   outline-offset: 3px;
 }
 
@@ -963,8 +963,13 @@
 
 .code-block-expand:focus-visible,
 .code-block-wrap:focus-visible {
-  outline: 2px solid var(--focus-ring);
+  outline: 2px solid var(--ring);
   outline-offset: 2px;
+}
+
+.code-block-expand:focus-visible {
+  /* Keep the bottom edge inside the clipped code wrapper. */
+  outline-offset: -2px;
 }
 
 .chat-group.user .chat-text :where(pre) {

@@ -48,7 +48,9 @@ let resolveDecision: (result: { decision: string }) => void;
 let decisionEntered: Deferred;
 beforeEach(async ({ onTestFinished }) => {
   const previousRegistry = captureActivePluginRegistrySnapshot();
-  onTestFinished(() => rollbackStagedPluginRegistry(previousRegistry));
+  onTestFinished(() => {
+    rollbackStagedPluginRegistry(previousRegistry);
+  });
   // A real Gateway already loaded its ingress channel before executing a tool.
   // Keep this node-policy fixture from cold-loading the whole A2A plugin graph.
   stageActivePluginRegistry(

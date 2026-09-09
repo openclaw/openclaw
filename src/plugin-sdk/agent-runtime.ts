@@ -52,13 +52,15 @@ type LoadModelCatalogCompatibilityParams = LoadPreparedModelCatalogParams & {
 
 /** @deprecated Use loadPreparedModelCatalog or getPreparedModelCatalogSnapshot. */
 export async function loadModelCatalog(params: LoadModelCatalogCompatibilityParams = {}) {
-  const { agentId, agentDir, cacheOnly, config, env, readOnly, workspaceDir } = params;
+  const { agentId, agentDir, cacheOnly, config, env, readOnly, refreshFullCatalog, workspaceDir } =
+    params;
   const preparedParams: LoadPreparedModelCatalogParams = {
     ...(agentId ? { agentId } : {}),
     ...(agentDir ? { agentDir } : {}),
     ...(config ? { config } : {}),
     ...(env ? { env } : {}),
     ...(readOnly !== undefined ? { readOnly } : {}),
+    ...(refreshFullCatalog !== undefined ? { refreshFullCatalog } : {}),
     ...(workspaceDir ? { workspaceDir } : {}),
   };
   if (cacheOnly) {

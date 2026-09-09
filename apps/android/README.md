@@ -171,6 +171,13 @@ Install the API 36 Google APIs and API 34 Wear OS system images in the local
 Android SDK. Use `--form-factor phone|wear` with `--avd` or `--device` to
 explicitly capture one form factor from another emulator.
 
+For local branch-switching proof, launch a debug build with the intent extras
+`openclaw.screenshotMode=true` and `openclaw.screenshotScene=branches`. This Chat
+scene has 12 local branch alternatives and no active run. Switching updates the
+selected branch and transcript only in fixture memory, never on a live Gateway.
+Start a fresh app process before choosing a scene; restarting only the Activity
+reuses the process runtime. Same-scene re-entry retains the selected branch.
+
 `pnpm android:release:archive` builds signed release artifacts into `apps/android/build/release-artifacts/` and writes `.sha256` checksum files:
 
 - Play build: `openclaw-<version>-play-release.aab`

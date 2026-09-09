@@ -300,22 +300,27 @@ async function withPreparedModelCatalogOwnerPolicy<T>(
   configPolicy: PreparedModelCatalogConfigPolicy,
   read: (snapshot: PreparedModelRuntimeSnapshot) => T | Promise<T>,
 ): Promise<T> {
-  const publishedReadOnlyOwner = params.readOnly
-    ? getPreparedModelCatalogOwnerSnapshot(params)
+  // Ordinary reads stay passive; explicit refresh keeps its existing writable default.
+  const request = {
+    ...params,
+    readOnly: params.readOnly ?? params.refreshFullCatalog !== true,
+  };
+  const publishedReadOnlyOwner = request.readOnly
+    ? getPreparedModelCatalogOwnerSnapshot(request)
     : undefined;
   const { snapshot, release } = await resolvePreparedModelCatalogOwnerSnapshotWithPolicy(
-    params,
+    request,
     configPolicy,
   );
   try {
     // Only published owners expose generation caches; temporary reads use their prepared facts.
     const owner =
-      params.readOnly && !publishedReadOnlyOwner
+      request.readOnly && !publishedReadOnlyOwner
         ? snapshot
         : await materializeRequestedModelCatalog(
             snapshot,
-            params.readOnly,
-            params.refreshFullCatalog,
+            request.readOnly,
+            request.refreshFullCatalog,
           );
     // Projection must finish before a temporary lease retires its liveness predicate.
     return await read(owner);
@@ -439,8 +444,9 @@ export async function loadResolvedPublishedModelCatalogOwner(
 export async function loadPreparedModelCatalogSnapshot(
   params: LoadPreparedModelCatalogParams = {},
 ): Promise<ModelCatalogSnapshot> {
-  if (params.readOnly && params.providerDiscoveryProviderIds) {
-    return loadScopedReadOnlyModelCatalog(params);
+  const readOnly = params.readOnly ?? params.refreshFullCatalog !== true;
+  if (readOnly && params.providerDiscoveryProviderIds) {
+    return loadScopedReadOnlyModelCatalog({ ...params, readOnly });
   }
   return (await loadPreparedModelCatalogOwnerSnapshot(params)).modelCatalog;
 }
