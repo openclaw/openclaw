@@ -311,10 +311,10 @@ describe("buildBootstrapContextFiles", () => {
     expect(result?.content).toContain("[...1 more policy lines omitted...]");
     expect(result?.content.length).toBeLessThanOrEqual(600);
   });
-  it("prioritizes non-Latin mandatory policy markers", () => {
+  it("prioritizes Traditional Chinese mandatory bullets", () => {
     const earlyShort = "- Early normal ".padEnd(20, "a");
     const earlyLong = "- Normal payload ".padEnd(70, "b");
-    const urgent = "🔴 禁止共享账号 ".padEnd(140, "字");
+    const urgent = "- 嚴禁共用登入帳號 ".padEnd(140, "字");
     const lateShort = "- Late normal ".padEnd(20, "d");
     const [result] = buildBootstrapContextFiles(
       [makeMiddleBootstrapFile([earlyShort, "", earlyLong, "", urgent, "", lateShort])],
