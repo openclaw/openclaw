@@ -3347,13 +3347,10 @@ describe("updateNpmInstalledPlugins", () => {
     });
   });
 
-  it.each(
-    [false, true].flatMap((dryRun) =>
-      ["2026.9.1", "v2026.9.1"].map((version) => ({ dryRun, version })),
-    ),
-  )(
-    "reports newer ClawHub releases for exact-pinned trusted official installs (dryRun=$dryRun, version=$version)",
-    async ({ dryRun, version }) => {
+  it.each([false, true])(
+    "reports newer ClawHub releases for exact-pinned trusted official installs (dryRun=%s)",
+    async (dryRun) => {
+      const version = "2026.9.1";
       const installPath = createInstalledPackageDir({
         name: "@openclaw/diagnostics-otel",
         version: "2026.9.1",
@@ -3406,6 +3403,68 @@ describe("updateNpmInstalledPlugins", () => {
       expect(result.config.plugins?.installs?.["diagnostics-otel"]?.spec).toBe(
         `clawhub:@openclaw/diagnostics-otel@${version}`,
       );
+    },
+  );
+
+  it.each(
+    [
+      {
+        name: "official",
+        pluginId: "diagnostics-otel",
+        packageName: "@openclaw/diagnostics-otel",
+        clawhubUrl: "https://clawhub.ai",
+        clawhubChannel: "official" as const,
+      },
+      {
+        name: "community",
+        pluginId: "demo",
+        packageName: "demo",
+        clawhubUrl: "https://clawhub.ai",
+        clawhubChannel: "community" as const,
+      },
+      {
+        name: "custom registry",
+        pluginId: "demo",
+        packageName: "demo",
+        clawhubUrl: "https://registry.example.test",
+        clawhubChannel: "community" as const,
+      },
+    ].flatMap((source) => [false, true].map((dryRun) => ({ name: source.name, source, dryRun }))),
+  )(
+    "preserves an unresolved literal selector for $name updates (dryRun=$dryRun)",
+    async ({ source: { pluginId, packageName, clawhubUrl, clawhubChannel }, dryRun }) => {
+      const spec = `clawhub:${packageName}@v2026.9.1`;
+      const installPath = createInstalledPackageDir({
+        name: packageName,
+        version: "2026.9.1",
+      });
+      installPluginFromClawHubMock.mockResolvedValue({
+        ok: false,
+        error: "Unknown ClawHub version v2026.9.1",
+      });
+      const config = createClawHubInstallConfig({
+        pluginId,
+        installPath,
+        clawhubPackage: packageName,
+        clawhubUrl,
+        clawhubChannel,
+        spec,
+      });
+
+      const result = await updateNpmInstalledPlugins({
+        config,
+        dryRun,
+        syncOfficialPluginInstalls: true,
+      });
+
+      expect(clawHubInstallCall()?.spec).toBe(spec);
+      expect(result.outcomes[0]).toMatchObject({
+        pluginId,
+        status: "error",
+        message: expect.stringContaining("Unknown ClawHub version v2026.9.1"),
+      });
+      expect(result.config.plugins?.installs?.[pluginId]?.spec).toBe(spec);
+      expect(fetchClawHubPackageDetailMock).not.toHaveBeenCalled();
     },
   );
 

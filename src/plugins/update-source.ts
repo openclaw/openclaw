@@ -639,28 +639,12 @@ export function resolveClawHubUpdateSpecs(params: {
     params.officialSpecOverride ??
     params.record.resolvedSpec ??
     `clawhub:${clawhubPackage}`;
-  const specs = resolveClawHubInstallSpecsForUpdateChannel({
+  return resolveClawHubInstallSpecsForUpdateChannel({
     spec: recordSpec,
     updateChannel: params.updateChannel,
     officialPackageName: params.officialPackageName,
     coreVersion: params.coreVersion,
   });
-  return {
-    ...specs,
-    installSpec: normalizeExactClawHubInstallSpec(specs.installSpec),
-  };
-}
-
-function normalizeExactClawHubInstallSpec(spec: string | undefined): string | undefined {
-  if (!spec) {
-    return undefined;
-  }
-  const parsed = parseClawHubPluginSpec(spec);
-  const version = normalizeExactSemverVersion(parsed?.version);
-  if (!parsed?.name || !version || parsed.version === version) {
-    return spec;
-  }
-  return `clawhub:${parsed.name}@${version}`;
 }
 
 /** Identity matching permits id/path cleanup, never an implicit registry-source switch. */
