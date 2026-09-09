@@ -428,9 +428,7 @@ export type GatewayRequestHandlerOptions = {
  * return a value for an implicit success response. Keep the result visible in
  * the public type so plugin authors can use that form without casts.
  */
-export type GatewayRequestHandler = (
-  opts: GatewayRequestHandlerOptions,
-) => Promise<unknown> | unknown;
+export type GatewayRequestHandler = (opts: GatewayRequestHandlerOptions) => Promise<unknown> | void;
 
 /** Registry fragment keyed by gateway protocol method name. */
 export type GatewayRequestHandlers = Record<string, GatewayRequestHandler>;
