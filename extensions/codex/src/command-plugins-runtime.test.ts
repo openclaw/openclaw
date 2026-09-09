@@ -210,6 +210,7 @@ describe("Codex plugin command context", () => {
     expect(test.request).toHaveBeenCalledWith(
       "account/login/start",
       expect.objectContaining({ type: "chatgptAuthTokens" }),
+      { assertCurrent: undefined },
     );
     expect(test.release).toHaveBeenCalledOnce();
   });
