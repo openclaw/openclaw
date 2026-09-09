@@ -9,6 +9,7 @@
       - any-glob-to-any-file:
           - "extensions/geolocation/**"
           - "docs/plugins/geolocation.md"
+          - "docs/plugins/reference/geolocation.md"
 "plugin: file-transfer":
   - changed-files:
       - any-glob-to-any-file:
@@ -68,6 +69,7 @@
       - any-glob-to-any-file:
           - "extensions/logbook/**"
           - "docs/plugins/logbook.md"
+          - "docs/plugins/reference/logbook.md"
 "plugin: imap":
   - changed-files:
       - any-glob-to-any-file:
@@ -78,6 +80,8 @@
       - any-glob-to-any-file:
           - "extensions/google-meet/**"
           - "docs/plugins/google-meet.md"
+          - "docs/plugins/google-meet/**"
+          - "docs/plugins/reference/google-meet.md"
 "plugin: teams-meetings":
   - changed-files:
       - any-glob-to-any-file:
@@ -611,6 +615,7 @@
       - any-glob-to-any-file:
           - "extensions/copilot/**"
           - "docs/plugins/copilot.md"
+          - "docs/plugins/reference/copilot.md"
 "extensions: kimi-coding":
   - changed-files:
       - any-glob-to-any-file:
