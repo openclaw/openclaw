@@ -269,7 +269,7 @@ The app keeps a registry of every gateway it has paired with, so you can keep op
 
 The **Channels**, **Dreaming**, **Health** logs, **Skills**, and **Usage** pages keep their last loaded data while refreshing. A failed first load shows an error rather than empty counts or default health values. When refreshes overlap, only the latest request updates the page's data, error, and progress. Disconnecting clears the displayed summaries.
 
-On **Health**, **Chat: Not ready** means chat health is unconfirmed or its check failed; the Gateway can still be **Online**. The chat header's accessibility status uses the same readiness wording. Use **Refresh chat** in chat actions to check again; **Refresh Logs** only reloads logs.
+On **Health**, **Chat: Not ready** means chat health is unconfirmed or its check failed; the Gateway can still be **Online**. The chat header's accessibility status uses the same readiness wording. Use **Refresh chat** in chat actions to check again; **Refresh Logs** only reloads logs. The Overview's Gateway card reports connection status and highlights known issues, not overall system health.
 
 ### Presence alive beacons
 
