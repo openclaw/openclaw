@@ -12,6 +12,7 @@ import { parseTcpPort } from "../infra/tcp-port.js";
 import { resolveLaunchAgentPlistPath } from "./launchd.js";
 import { parseKeyValueOutput } from "./runtime-parse.js";
 import { auditGatewayRuntime, SERVICE_RUNTIME_AUDIT_CODES } from "./service-audit-runtime.js";
+import type { GatewayServiceCommand, ServiceConfigIssue } from "./service-audit-types.js";
 import { getMinimalServicePathPartsFromEnv, SERVICE_PROXY_ENV_KEYS } from "./service-env.js";
 import {
   collectInlineManagedServiceEnvKeys,
@@ -21,26 +22,11 @@ import {
   readEnvironmentValueSource,
 } from "./service-managed-env.js";
 import { isNonMinimalServicePathEntry, normalizeServicePathEntry } from "./service-path-policy.js";
-import type { GatewayServiceEnvironmentValueSource } from "./service-types.js";
 import { execSystemctlUser } from "./systemd-exec.js";
 import { resolveSystemdServiceName, resolveSystemdUnitPath } from "./systemd-service-files.js";
 import { parseSystemdEnvAssignments, splitSystemdLogicalLines } from "./systemd-unit.js";
 
-export type GatewayServiceCommand = {
-  programArguments: string[];
-  workingDirectory?: string;
-  environment?: Record<string, string>;
-  environmentValueSources?: Record<string, GatewayServiceEnvironmentValueSource>;
-  sourcePath?: string;
-} | null;
-
-export type ServiceConfigIssue = {
-  code: string;
-  message: string;
-  detail?: string;
-  environmentKeys?: string[];
-  level?: "recommended" | "aggressive";
-};
+export type { GatewayServiceCommand, ServiceConfigIssue } from "./service-audit-types.js";
 
 export type ServiceConfigAudit =
   | { ok: true; issues: ServiceConfigIssue[]; runtimeNote?: string }

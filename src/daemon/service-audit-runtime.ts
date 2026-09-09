@@ -8,7 +8,7 @@ import {
   resolveNodeRuntimeInfo,
   resolveSystemNodePath,
 } from "./runtime-paths.js";
-import type { GatewayServiceCommand, ServiceConfigIssue } from "./service-audit.js";
+import type { GatewayServiceCommand, ServiceConfigIssue } from "./service-audit-types.js";
 
 export const SERVICE_RUNTIME_AUDIT_CODES = {
   gatewayRuntimeBun: "gateway-runtime-bun",
