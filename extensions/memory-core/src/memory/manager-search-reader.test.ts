@@ -286,7 +286,10 @@ describe("read-only memory search manager", () => {
     const oldCfg = createConfig({ provider: "none", model: "old-model", vectorEnabled: false });
     const oldReader = await getReader(oldCfg);
     trackManager(oldReader);
-    const originalClose = RuntimeMemoryIndexManager.prototype.close;
+    const originalClose = Reflect.get(
+      RuntimeMemoryIndexManager.prototype,
+      "close",
+    ) as RuntimeMemoryIndexManager["close"];
     let failedOldClose = false;
     let failedCandidateClose = false;
     const retainedCandidates: RuntimeMemoryIndexManager[] = [];
