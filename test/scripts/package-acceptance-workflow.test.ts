@@ -31,6 +31,21 @@ import {
 } from "../helpers/release-workflow-timeouts.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
+// The release policy page is an index over docs/reference/releasing/**. Read the
+// whole tree so these assertions follow the content instead of a single file
+// path. The walk is recursive for the same reason the docs/ci walk below is: a
+// flat readdir silently drops any future subdirectory and turns a content move
+// into a failure.
+function readReleasingDocs() {
+  return [
+    readFileSync("docs/reference/RELEASING.md", "utf8"),
+    ...readdirSync("docs/reference/releasing", { encoding: "utf8", recursive: true })
+      .filter((name) => name.endsWith(".md"))
+      .toSorted()
+      .map((name) => readFileSync(`docs/reference/releasing/${name}`, "utf8")),
+  ].join("\n");
+}
+
 const PACKAGE_ACCEPTANCE_WORKFLOW = ".github/workflows/package-acceptance.yml";
 const LIVE_E2E_WORKFLOW = ".github/workflows/openclaw-live-and-e2e-checks-reusable.yml";
 const INSTALL_SMOKE_REUSABLE_WORKFLOW = ".github/workflows/install-smoke-reusable.yml";
@@ -11336,7 +11351,7 @@ promote_windows_release_assets
     ].join("\n");
     const androidWorkflow = readFileSync(ANDROID_RELEASE_WORKFLOW, "utf8");
     const androidDocs = readFileSync("docs/platforms/android.md", "utf8");
-    const releaseDocs = readFileSync("docs/reference/RELEASING.md", "utf8");
+    const releaseDocs = readReleasingDocs();
     const approvalScript = readFileSync("scripts/validate-release-publish-approval.mjs", "utf8");
     const androidJob = workflowJob(ANDROID_RELEASE_WORKFLOW, "publish_signed_android_apk");
     const setupNode = workflowStep(androidJob, "Setup Node environment");
@@ -12394,7 +12409,9 @@ wait_for_run plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
     // assertion follows the content instead of a single file path. The walk is
     // recursive because docs/ci pages are themselves split into subdirectories
     // (docs/ci/scope-and-routing/*); a flat readdir silently drops those and
-    // turns a content move into a failure.
+    // turns a content move into a failure. The release policy page is an index
+    // over docs/reference/releasing/** for the same reason; readReleasingDocs()
+    // walks it the same way.
     const ciDocs = [
       readFileSync("docs/ci.md", "utf8"),
       ...readdirSync("docs/ci", { encoding: "utf8", recursive: true })
@@ -12411,7 +12428,7 @@ wait_for_run plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
         .toSorted()
         .map((name) => readFileSync(`docs/reference/full-release-validation/${name}`, "utf8")),
     ].join("\n");
-    const releasingDocs = readFileSync("docs/reference/RELEASING.md", "utf8");
+    const releasingDocs = readReleasingDocs();
 
     expect(nightly).toContain('-f expected_sha="$SHA"');
     const canonicalExtendedStableDispatch = [
