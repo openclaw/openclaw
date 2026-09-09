@@ -121,6 +121,569 @@ const supportFiles = {
   ],
 };
 
+// Acquisition inputs only. Dialect decisions remain in the shared resolver owners.
+const selectedMetadata = {
+  onboard: ["src/config/zod-schema.ts"],
+  "release-typed-onboarding": [
+    "src/commands/onboard-hooks.ts",
+    "scripts/e2e/lib/release-typed-onboarding/scenario.sh",
+    "scripts/e2e/lib/release-scenarios/assertions.mjs",
+    "scripts/e2e/lib/fixtures/mock-openai-config.mjs",
+  ],
+  "session-runtime-context": [
+    "src/state/openclaw-agent-db-session-migrations.ts",
+    "src/commands/doctor-session-transcripts.ts",
+    "src/agents/embedded-agent-runner/run/runtime-context-prompt.ts",
+  ],
+  "mcp-code-mode-gateway": ["src/agents/memory-search.ts", "src/agents/code-mode-namespaces.ts"],
+  "agent-bundle-mcp-tools": [
+    "package.json",
+    "scripts/e2e/agent-bundle-mcp-tools-docker-client.ts",
+    "test/e2e/qa-lab/runtime/agent-bundle-mcp-tools-docker-client.ts",
+    "scripts/e2e/lib/temp-state-dir.ts",
+    "src/agents/agent-bundle-mcp-manager-api.ts",
+    "src/agents/agent-bundle-mcp-runtime.ts",
+  ],
+  "gateway-network": [
+    "scripts/e2e/lib/gateway-network/client.mjs",
+    "scripts/e2e/lib/gateway-network/client.mts",
+  ],
+  plugins: [
+    "scripts/e2e/lib/plugins/assertions.mjs",
+    "src/config/types.messages.ts",
+    "src/config/types.plugins.ts",
+    "src/plugin-sdk/session-store-runtime.ts",
+    "src/plugins/uninstall-package-plan.ts",
+  ],
+  "live-cli-backend": ["scripts/print-cli-backend-live-metadata.ts"],
+  "update-channel-switch": ["src/cli/update-cli/update-command.ts"],
+  "upgrade-survivor": [
+    "package.json",
+    "src/infra/clawhub-install-trust.ts",
+    "src/plugins/clawhub.ts",
+    "scripts/e2e/lib/upgrade-survivor",
+    "scripts/lib/npm-publish-plan.mjs",
+    "scripts/windows-cmd-helpers.mjs",
+    "scripts/e2e/lib/plugin-index-sqlite.mjs",
+    "scripts/e2e/lib/env-limits.mjs",
+    "scripts/e2e/lib/text-file-utils.mjs",
+  ],
+};
+
+function workflowRequest(env) {
+  const serialized = env.ADMISSION_INPUTS ?? "{}";
+  if (typeof serialized !== "string" || Buffer.byteLength(serialized, "utf8") > 48 * 1024) {
+    throw new Error("invalid workflow inputs");
+  }
+  const raw = JSON.parse(serialized);
+  if (
+    !raw ||
+    Array.isArray(raw) ||
+    typeof raw !== "object" ||
+    Object.values(raw).some((value) => !["string", "boolean", "number"].includes(typeof value))
+  ) {
+    throw new Error("invalid workflow inputs");
+  }
+  const get = (name, fallback = "") => raw[name] ?? fallback;
+  const flag = (value) => value === true || value === "true";
+  const profile =
+    env.ADMISSION_RELEASE_PROFILE || get("release_test_profile", get("release_profile", "stable"));
+  const options = {
+    releaseProfile: profile === "minimum" ? "beta" : profile,
+    phase: get("phase", "all"),
+    rerunGroup: get("rerun_group", "all"),
+    runReleaseSoak: flag(get("run_release_soak")) || profile === "stable" || profile === "full",
+    qaFilterSeen: flag(env.ADMISSION_QA_FILTER_SEEN),
+    liveSuiteFilter: env.ADMISSION_REPO_LIVE_SUITE_FILTER ?? get("live_suite_filter"),
+    liveModelsOnly: flag(get("live_models_only")),
+    liveModelProviders: get("live_model_providers"),
+    includeLiveSuites: flag(get("include_live_suites", true)),
+    includeReleasePathSuites: flag(get("include_release_path_suites", true)),
+    includeOpenWebUI: flag(get("include_openwebui")),
+    includeRepoE2e: flag(get("include_repo_e2e", true)),
+    prepareOnly: flag(get("prepare_only")),
+    dockerLanes: get("docker_lanes"),
+    targetedDockerLaneGroupSize: String(get("targeted_docker_lane_group_size", 1)),
+    suiteProfile: get("suite_profile", "package"),
+    telegramMode: get("telegram_mode", "none"),
+    telegramScenarios: get("telegram_scenarios"),
+    upgradeSurvivorBaseline:
+      env.ADMISSION_BASELINE ?? get("published_upgrade_survivor_baseline", "openclaw@latest"),
+    upgradeSurvivorBaselines:
+      env.ADMISSION_BASELINES ?? get("published_upgrade_survivor_baselines"),
+    upgradeSurvivorBaselineScope:
+      env.ADMISSION_BASELINE_SCOPE ??
+      get("published_upgrade_survivor_baseline_scope", "all-scenarios"),
+    upgradeSurvivorScenarios: get("published_upgrade_survivor_scenarios"),
+    baselinesResolved: env.ADMISSION_BASELINES_RESOLVED === "true",
+    packageOverride: Boolean(String(get("release_package_spec")).trim()),
+    acceptanceOverride: Boolean(String(get("package_acceptance_package_spec")).trim()),
+  };
+  const workflow = env.ADMISSION_WORKFLOW;
+  if (workflow === "parent") {
+    options.upgradeSurvivorScenarios = options.runReleaseSoak ? "reported-issues" : "";
+  }
+  return {
+    version: 2,
+    repository: text(env.GITHUB_REPOSITORY, "repository"),
+    selected: {
+      root: text(env.ADMISSION_SELECTED_ROOT, "selected root"),
+      sha: text(env.ADMISSION_SELECTED_SHA, "selected SHA"),
+    },
+    tooling: {
+      root: text(env.ADMISSION_TOOLING_ROOT, "tooling root"),
+      sha: text(env.ADMISSION_TOOLING_SHA, "tooling SHA"),
+    },
+    allowFrozenTargetScenarioOmissions:
+      flag(get("allow_frozen_target_scenario_omissions")) ||
+      (workflow === "parent" && Boolean(get("target_context_ref"))),
+    workflow,
+    options,
+    requestedBaselines: {
+      baseline: get("published_upgrade_survivor_baseline", "openclaw@latest"),
+      baselines: get("published_upgrade_survivor_baselines"),
+      scope: get("published_upgrade_survivor_baseline_scope", "all-scenarios"),
+      scenarios: options.upgradeSurvivorScenarios,
+    },
+    binding: {
+      workflowRef: text(env.ADMISSION_WORKFLOW_REF, "workflow ref"),
+      inputsDigest: createHash("sha256")
+        .update(
+          JSON.stringify(
+            Object.fromEntries(
+              Object.keys(raw)
+                .toSorted()
+                .map((key) => [key, raw[key]]),
+            ),
+          ),
+        )
+        .digest("hex"),
+      coveragePolicy: text(env.ADMISSION_COVERAGE_POLICY ?? "", "coverage policy"),
+      candidateRequestDigest: text(
+        env.ADMISSION_CANDIDATE_REQUEST_DIGEST ?? "",
+        "candidate request digest",
+      ),
+      packageSourceSha: text(env.ADMISSION_PACKAGE_SOURCE_SHA ?? "", "package source SHA"),
+      packageSha256: text(env.ADMISSION_PACKAGE_SHA256 ?? "", "package digest"),
+      packageVersion: text(env.ADMISSION_PACKAGE_VERSION ?? "", "package version"),
+      stage: text(env.ADMISSION_STAGE ?? "source", "admission stage"),
+    },
+    provenance: {
+      runId: text(env.GITHUB_RUN_ID, "run id"),
+      runAttempt: text(env.GITHUB_RUN_ATTEMPT, "run attempt"),
+    },
+  };
+}
+
+async function planWorkflowAdmission(input) {
+  const {
+    createPackageAcceptanceSelection,
+    createReleaseCheckSelection,
+    createReleaseSourceSelection,
+    RELEASE_PACKAGE_ACCEPTANCE_LANES,
+  } = await import("./plan-release-workflow-matrix.mjs");
+  const { releasePathChunkLanes } = await import("./lib/docker-e2e-scenarios.mts");
+  const { createPluginPrereleaseTestPlan } = await import("./lib/plugin-prerelease-test-plan.mts");
+  const { parseUpgradeSurvivorScenarios } = await import("./lib/upgrade-survivor-policy.mjs");
+  object(
+    input,
+    [
+      "version",
+      "repository",
+      "selected",
+      "tooling",
+      "allowFrozenTargetScenarioOmissions",
+      "workflow",
+      "options",
+      "requestedBaselines",
+      "binding",
+      "provenance",
+    ],
+    "workflow admission",
+  );
+  if (
+    input.version !== 2 ||
+    input.repository !== "openclaw/openclaw" ||
+    !["parent", "release-checks", "reusable", "package"].includes(input.workflow)
+  ) {
+    throw new Error("invalid workflow admission identity");
+  }
+  for (const key of ["selected", "tooling"]) {
+    object(input[key], ["root", "sha"], `${key} identity`);
+    text(input[key].root, `${key} root`);
+    if (!/^[a-f0-9]{40}$/u.test(input[key].sha)) {
+      throw new Error(`missing exact ${key} source SHA`);
+    }
+  }
+  const allow = boolean(input.allowFrozenTargetScenarioOmissions);
+  const options = object(
+    input.options,
+    [
+      "releaseProfile",
+      "phase",
+      "rerunGroup",
+      "runReleaseSoak",
+      "qaFilterSeen",
+      "liveSuiteFilter",
+      "liveModelsOnly",
+      "liveModelProviders",
+      "includeLiveSuites",
+      "includeReleasePathSuites",
+      "includeOpenWebUI",
+      "includeRepoE2e",
+      "prepareOnly",
+      "dockerLanes",
+      "targetedDockerLaneGroupSize",
+      "suiteProfile",
+      "telegramMode",
+      "telegramScenarios",
+      "upgradeSurvivorBaseline",
+      "upgradeSurvivorBaselines",
+      "upgradeSurvivorBaselineScope",
+      "upgradeSurvivorScenarios",
+      "baselinesResolved",
+      "packageOverride",
+      "acceptanceOverride",
+    ],
+    "workflow selection",
+  );
+  for (const [key, value] of Object.entries(options)) {
+    if (typeof value === "string") {
+      if (
+        [
+          "dockerLanes",
+          "liveModelProviders",
+          "telegramScenarios",
+          "upgradeSurvivorBaselines",
+          "upgradeSurvivorScenarios",
+        ].includes(key)
+      ) {
+        tokenListText(value, "selection value");
+      } else {
+        text(value, "selection value");
+      }
+    } else {
+      boolean(value);
+    }
+  }
+  object(
+    input.binding,
+    [
+      "workflowRef",
+      "inputsDigest",
+      "coveragePolicy",
+      "candidateRequestDigest",
+      "packageSourceSha",
+      "packageSha256",
+      "packageVersion",
+      "stage",
+    ],
+    "workflow binding",
+  );
+  for (const value of Object.values(input.binding)) {
+    text(value, "binding");
+  }
+  if (
+    !/^[a-f0-9]{64}$/u.test(input.binding.inputsDigest) ||
+    !input.binding.workflowRef?.startsWith(`openclaw/openclaw/.github/workflows/`)
+  ) {
+    throw new Error("missing workflow input binding");
+  }
+  if (
+    input.workflow === "package" &&
+    input.binding.stage !== "known-source" &&
+    (!/^[a-f0-9]{40}$/u.test(input.binding.packageSourceSha) ||
+      !/^[a-f0-9]{64}$/u.test(input.binding.packageSha256) ||
+      !input.binding.packageVersion?.trim())
+  ) {
+    throw new Error("complete resolved package identity is required");
+  }
+  object(input.provenance, ["runId", "runAttempt"], "attempt provenance");
+  if (
+    !/^[1-9][0-9]*$/u.test(input.provenance.runId) ||
+    !/^[1-9][0-9]*$/u.test(input.provenance.runAttempt)
+  ) {
+    throw new Error("invalid run attempt provenance");
+  }
+  if (input.binding.packageSourceSha && input.binding.packageSourceSha !== input.selected.sha) {
+    throw new Error("package source differs from selected source");
+  }
+  const obligations = [];
+  const requestedBaselines = object(
+    input.requestedBaselines,
+    ["baseline", "baselines", "scope", "scenarios"],
+    "requested baselines",
+  );
+  for (const [key, value] of Object.entries(requestedBaselines)) {
+    if (key === "baselines" || key === "scenarios") {
+      tokenListText(value, "requested baseline");
+    } else {
+      text(value, "requested baseline");
+    }
+  }
+  const baselineOptions = options.baselinesResolved
+    ? options
+    : {
+        ...options,
+        upgradeSurvivorBaseline: "",
+        upgradeSurvivorBaselines: "",
+        upgradeSurvivorBaselineScope: "all-scenarios",
+      };
+  const selections = [];
+  const add = (overrides) =>
+    selections.push(createReleaseSourceSelection({ ...baselineOptions, ...overrides }));
+  if (input.workflow === "reusable") {
+    add({});
+  } else if (input.workflow === "package") {
+    const profile = createPackageAcceptanceSelection(options);
+    add({
+      dockerLanes: profile.docker_lanes,
+      includeOpenWebUI: profile.include_openwebui,
+      includeReleasePathSuites: profile.include_release_path_suites,
+      includeLiveSuites: false,
+    });
+  } else {
+    const releaseGroups = [
+      "all",
+      "install-smoke",
+      "cross-os",
+      "live-e2e",
+      "package",
+      "qa",
+      "qa-parity",
+      "qa-live",
+    ];
+    if (releaseGroups.includes(options.rerunGroup)) {
+      const groups = createReleaseCheckSelection({
+        ...options,
+        repoLiveSuiteFilter: options.liveSuiteFilter,
+        phase: input.workflow === "parent" ? "all" : options.phase,
+      });
+      if (groups.live_e2e_scheduled) {
+        add({
+          includeLiveSuites: true,
+          includeReleasePathSuites: false,
+          includeOpenWebUI: false,
+          dockerLanes: "",
+        });
+      }
+      if (groups.docker_required && !options.packageOverride) {
+        add({
+          includeLiveSuites: false,
+          includeReleasePathSuites: true,
+          includeOpenWebUI: options.releaseProfile !== "beta",
+          dockerLanes: "",
+        });
+      }
+      if (
+        groups.package_acceptance_scheduled &&
+        !options.packageOverride &&
+        !options.acceptanceOverride
+      ) {
+        add({
+          includeLiveSuites: false,
+          includeReleasePathSuites: false,
+          includeOpenWebUI: false,
+          dockerLanes: RELEASE_PACKAGE_ACCEPTANCE_LANES,
+        });
+      }
+      if (groups.package_required && (options.packageOverride || options.acceptanceOverride)) {
+        obligations.push({ kind: "package-source", status: "UNRESOLVED" });
+      }
+    }
+    if (input.workflow === "parent" && ["all", "plugin-prerelease"].includes(options.rerunGroup)) {
+      add({
+        includeLiveSuites: false,
+        includeReleasePathSuites: false,
+        includeOpenWebUI: false,
+        dockerLanes: createPluginPrereleaseTestPlan().dockerLanes.join(" "),
+      });
+    }
+  }
+  const docker = selections.flatMap((selection) => selection.docker);
+  const explicitConsumers = [...new Set(selections.flatMap((selection) => selection.consumers))];
+  const consumers = new Set(explicitConsumers);
+  const codexSuites = [...new Set(selections.flatMap((selection) => selection.codexSuites))];
+  const possibleLanes = [];
+  let mobilePairingSelected = false;
+  for (const selection of docker) {
+    const lanes =
+      selection.lanes ??
+      releasePathChunkLanes(selection.chunk, {
+        releaseProfile: selection.releaseProfile,
+        includeOpenWebUI: selection.includeOpenWebUI,
+      }).map(({ name }) => name);
+    possibleLanes.push(...lanes);
+    const survivorLanes = lanes.filter((lane) =>
+      /^(published-upgrade-survivor|update-migration)(-|$)/u.test(lane),
+    );
+    if (
+      allow &&
+      survivorLanes.length &&
+      (survivorLanes.some((lane) => lane.includes("mobile-pairing-reconnect")) ||
+        parseUpgradeSurvivorScenarios(selection.scenarios ?? "").includes(
+          "mobile-pairing-reconnect",
+        ))
+    ) {
+      mobilePairingSelected = true;
+    }
+  }
+  for (const name of possibleLanes) {
+    const consumer = consumerForLane(name);
+    if (consumer) {
+      consumers.add(consumer);
+    }
+  }
+  if (
+    possibleLanes.some((lane) => /^(published-upgrade-survivor|update-migration)(-|$)/u.test(lane))
+  ) {
+    if (!options.baselinesResolved) {
+      obligations.push({
+        kind: "upgrade-baselines",
+        status: "UNRESOLVED",
+        requested: requestedBaselines,
+      });
+    } else {
+      const { normalizeUpgradeSurvivorBaselineSpec, parseUpgradeSurvivorBaselineSpecs } =
+        await import("./lib/upgrade-survivor-policy.mjs");
+      const specs = [
+        normalizeUpgradeSurvivorBaselineSpec(options.upgradeSurvivorBaseline),
+        ...parseUpgradeSurvivorBaselineSpecs(options.upgradeSurvivorBaselines),
+      ];
+      if (!specs[0] || specs.some((spec) => !/^openclaw@[0-9]/u.test(spec))) {
+        throw new Error("unresolved upgrade baselines at the execution boundary");
+      }
+    }
+  }
+  const sourcePaths = new Set();
+  if (allow) {
+    for (const consumer of consumers) {
+      for (const path of selectedMetadata[
+        consumer === "kitchen-sink-plugin" ? "plugins" : consumer
+      ] ?? []) {
+        sourcePaths.add(path);
+      }
+      for (const [path] of targetFiles[consumer] ?? []) {
+        sourcePaths.add(path);
+      }
+    }
+    if (codexSuites.length) {
+      sourcePaths.add("extensions/codex/provider-catalog.ts");
+      sourcePaths.add("scripts/test-live-codex-harness-docker.sh");
+    }
+  }
+  if (consumers.has("codex-on-demand")) {
+    sourcePaths.add("extensions/codex/package.json");
+  }
+  const fsSafeNative = selections.some((selection) => selection.fsSafeNative);
+  if (fsSafeNative && allow) {
+    sourcePaths.add("package.json");
+    sourcePaths.add("src/infra/fs-safe-defaults.ts");
+  }
+  for (const [lane, path] of [
+    ["update-first-hop-compat", "scripts/runtime-postbuild.mts"],
+    ["update-corrupt-plugin", "src/cli/update-cli/update-command-plugin-preflight.ts"],
+  ]) {
+    if (possibleLanes.includes(lane)) {
+      sourcePaths.add(path);
+    }
+  }
+  if (mobilePairingSelected) {
+    sourcePaths.add("src/gateway/node-command-policy.ts");
+  }
+  if (
+    possibleLanes.some((lane) => /^(published-upgrade-survivor|update-migration)(-|$)/u.test(lane))
+  ) {
+    sourcePaths.add("scripts/e2e/lib/upgrade-survivor/assertions.mjs");
+  }
+  if (docker.length > 256) {
+    throw new Error("too many selected Docker groups");
+  }
+  return {
+    docker,
+    consumers: [...consumers].toSorted((left, right) => (left < right ? -1 : left > right ? 1 : 0)),
+    explicitConsumers,
+    codexSuites,
+    fsSafeNative,
+    preparationLanes: [...new Set(selections.flatMap((selection) => selection.preparationLanes))],
+    sourcePaths: [...sourcePaths].toSorted((left, right) =>
+      left < right ? -1 : left > right ? 1 : 0,
+    ),
+    sourceHistory: fsSafeNative && allow,
+    parserRequired: allow && consumers.has("agent-bundle-mcp-tools"),
+    obligations,
+    requestedBaselines,
+  };
+}
+
+async function preflightWorkflow(input) {
+  const plan = await planWorkflowAdmission(input);
+  if (
+    (input.workflow === "reusable" || input.binding.stage === "resolved-package") &&
+    plan.obligations.some((obligation) => obligation.kind === "upgrade-baselines")
+  ) {
+    throw new Error("unresolved upgrade baselines at the execution boundary");
+  }
+  const common = {
+    version: 1,
+    repository: input.repository,
+    selected: input.selected,
+    tooling: input.tooling,
+    allowFrozenTargetScenarioOmissions: input.allowFrozenTargetScenarioOmissions,
+  };
+  // Evaluate each baseline/scenario group without collapsing the execution owner's pairing.
+  const evaluations = plan.docker.map((docker) =>
+    preflightFrozenTargetContracts({ ...common, selection: { docker } }),
+  );
+  evaluations.push(
+    preflightFrozenTargetContracts({
+      ...common,
+      selection: {
+        consumers: plan.explicitConsumers,
+        codexSuites: plan.codexSuites,
+        fsSafeNative: plan.fsSafeNative,
+      },
+    }),
+  );
+  const executionStates = evaluations.flatMap((evaluation) => [
+    ...(evaluation.docker ? [evaluation.docker.status] : []),
+    ...evaluation.contracts
+      .filter((contract) => contract.consumer !== "fs-safe-native")
+      .map((contract) => contract.status),
+  ]);
+  const content = {
+    version: 2,
+    repository: input.repository,
+    selectedSha: input.selected.sha,
+    toolingSha: input.tooling.sha,
+    workflow: input.workflow,
+    binding: input.binding,
+    options: input.options,
+    requestedBaselines: plan.requestedBaselines,
+    obligations: plan.obligations,
+    preparationLanes: plan.preparationLanes,
+    evaluations,
+    status: plan.obligations.length
+      ? "UNRESOLVED"
+      : executionStates.includes("ADMITTED")
+        ? "ADMITTED"
+        : executionStates.length
+          ? "NOT RUN"
+          : plan.preparationLanes.length
+            ? "PREPARATION ONLY"
+            : "UNSELECTED",
+  };
+  const bytes = JSON.stringify(content);
+  if (Buffer.byteLength(bytes) > maxRecordBytes) {
+    throw new Error("workflow admission record exceeds limit");
+  }
+  return {
+    ...content,
+    digest: createHash("sha256").update(bytes).digest("hex"),
+    provenance: input.provenance,
+  };
+}
+
 function object(value, keys, label) {
   if (
     !value ||
@@ -142,6 +705,15 @@ function text(value, label, limit = 4096) {
       throw new Error(`invalid ${label}`);
     }
   }
+  return value;
+}
+
+function tokenListText(value, label) {
+  if (typeof value !== "string") {
+    throw new Error(`invalid ${label}`);
+  }
+  // Preserve list whitespace for the owning parser without admitting other controls.
+  text(value.replace(/[\t\r\n]/gu, " "), label);
   return value;
 }
 
@@ -262,8 +834,8 @@ function preflightFrozenTargetContracts(input) {
       planReleaseAll: boolean(value.planReleaseAll),
       liveMode: parseLiveMode(text(value.liveMode ?? "all", "live mode")),
       includeOpenWebUI: boolean(value.includeOpenWebUI),
-      baselines: text(value.baselines ?? "", "baselines"),
-      scenarios: text(value.scenarios ?? "", "scenarios"),
+      baselines: tokenListText(value.baselines ?? "", "baselines"),
+      scenarios: tokenListText(value.scenarios ?? "", "scenarios"),
     };
     const result = resolveDockerE2ePlan({
       allowFrozenTargetScenarioOmissions: allow,
@@ -516,11 +1088,22 @@ function preflightFrozenTargetContracts(input) {
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   try {
-    const [file, ...extra] = process.argv.slice(2);
+    const args = process.argv.slice(2);
+    if (args.length === 1 && args[0] === "--workflow-request") {
+      process.stdout.write(`${JSON.stringify(workflowRequest(process.env))}\n`);
+      process.exit(0);
+    }
+    const planOnly = args[0] === "--plan";
+    const [file, ...extra] = planOnly ? args.slice(1) : args;
     if (!file || extra.length || !statSync(file).isFile() || statSync(file).size > 64 * 1024) {
       throw new Error("expected one bounded admission request file");
     }
-    const result = preflightFrozenTargetContracts(JSON.parse(readFileSync(file, "utf8")));
+    const input = JSON.parse(readFileSync(file, "utf8"));
+    const result = planOnly
+      ? await planWorkflowAdmission(input)
+      : input.version === 2
+        ? await preflightWorkflow(input)
+        : preflightFrozenTargetContracts(input);
     process.stdout.write(`${JSON.stringify(result)}\n`);
   } catch (error) {
     console.error(`frozen admission: ${error.message}`);

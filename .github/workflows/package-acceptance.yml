@@ -445,6 +445,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     outputs:
+      tooling_sha: ${{ steps.tooling.outputs.sha }}
       docker_lanes: ${{ steps.profile.outputs.docker_lanes }}
       include_live_suites: ${{ steps.profile.outputs.include_live_suites }}
       include_openwebui: ${{ steps.profile.outputs.include_openwebui }}
@@ -459,8 +460,8 @@ jobs:
       package_sha256: ${{ steps.resolve.outputs.sha256 }}
       package_version: ${{ steps.resolve.outputs.package_version }}
       prepublish_plugin_registry_json: ${{ steps.registry_identity.outputs.json }}
-      published_upgrade_survivor_baseline: ${{ steps.upgrade_survivor_baselines.outputs.baseline }}
-      published_upgrade_survivor_baselines: ${{ steps.upgrade_survivor_baselines.outputs.baselines }}
+      published_upgrade_survivor_baseline: ${{ steps.exact_baselines.outputs.baseline }}
+      published_upgrade_survivor_baselines: ${{ steps.exact_baselines.outputs.baselines }}
       published_upgrade_survivor_baseline_scope: ${{ steps.upgrade_survivor_baselines.outputs.baseline_scope }}
       published_upgrade_survivor_scenarios: ${{ inputs.published_upgrade_survivor_scenarios }}
       telegram_enabled: ${{ steps.profile.outputs.telegram_enabled }}
@@ -475,6 +476,25 @@ jobs:
           filter: blob:none
           persist-credentials: false
 
+      - name: Validate exact package tooling checkout
+        id: tooling
+        env:
+          JOB_CONTEXT: ${{ toJSON(job) }}
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import { execFileSync } from 'node:child_process';
+          import { appendFileSync } from 'node:fs';
+          const job = JSON.parse(process.env.JOB_CONTEXT);
+          const sha = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+          if (job.workflow_repository !== 'openclaw/openclaw' ||
+              job.workflow_repository !== process.env.GITHUB_REPOSITORY ||
+              !/^[0-9a-f]{40}$/.test(job.workflow_sha) || sha !== job.workflow_sha) {
+            throw new Error('package workflow_ref must resolve to the exact called trusted tooling SHA before setup');
+          }
+          appendFileSync(process.env.GITHUB_OUTPUT, `sha=${sha}\n`);
+          NODE
+
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
@@ -482,6 +502,33 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           install-bun: ${{ inputs.source == 'ref' && 'true' || 'false' }}
           install-deps: "true"
+
+      - name: Select acceptance profile
+        id: profile
+        env:
+          SOURCE: ${{ inputs.source }}
+          SUITE_PROFILE: ${{ inputs.suite_profile }}
+          CUSTOM_DOCKER_LANES: ${{ inputs.docker_lanes }}
+          TELEGRAM_MODE: ${{ inputs.telegram_mode }}
+          TELEGRAM_SCENARIOS: ${{ inputs.telegram_scenarios }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          node --input-type=module <<'NODE'
+          import { appendFileSync } from 'node:fs';
+          import { createPackageAcceptanceSelection } from './scripts/plan-release-workflow-matrix.mjs';
+          const selection = createPackageAcceptanceSelection({
+            suiteProfile: process.env.SUITE_PROFILE,
+            dockerLanes: process.env.CUSTOM_DOCKER_LANES,
+            telegramMode: process.env.TELEGRAM_MODE,
+            telegramScenarios: process.env.TELEGRAM_SCENARIOS,
+          });
+          for (const [key, value] of Object.entries(selection)) {
+            appendFileSync(process.env.GITHUB_OUTPUT, `${key}=${value}\n`);
+          }
+          appendFileSync(process.env.GITHUB_OUTPUT, `package_artifact_name=${process.env.PACKAGE_ARTIFACT_NAME}\n`);
+          NODE
 
       - name: Validate prerelease plugin registry input
         id: registry_input
@@ -633,11 +680,89 @@ jobs:
           run-id: ${{ inputs.artifact_run_id }}
           github-token: ${{ github.token }}
 
+      - name: Resolve known package source
+        id: known_source
+        if: inputs.source == 'ref'
+        env:
+          PACKAGE_REF: ${{ inputs.package_ref }}
+        run: |
+          bash scripts/github/resolve-openclaw-ref.sh \
+            --ref "$PACKAGE_REF" --github-output "$GITHUB_OUTPUT"
+
+      - name: Acquire known package source
+        if: inputs.source == 'ref'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ steps.known_source.outputs.sha }}
+          path: .frozen-target
+          fetch-depth: 1
+          filter: blob:none
+          sparse-checkout: package.json
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
+      - name: Plan known package source admission
+        id: known_selection
+        if: inputs.source == 'ref'
+        env:
+          ADMISSION_WORKFLOW: package
+          ADMISSION_INPUTS: ${{ toJSON(inputs) }}
+          ADMISSION_SELECTED_ROOT: ${{ github.workspace }}/.frozen-target
+          ADMISSION_SELECTED_SHA: ${{ steps.known_source.outputs.sha }}
+          ADMISSION_TOOLING_ROOT: ${{ github.workspace }}
+          ADMISSION_TOOLING_SHA: ${{ steps.tooling.outputs.sha }}
+          ADMISSION_WORKFLOW_REF: ${{ format('{0}/.github/workflows/package-acceptance.yml@{1}', github.repository, steps.tooling.outputs.sha) }}
+          ADMISSION_STAGE: known-source
+        run: &package_admission_plan |
+          set -euo pipefail
+          umask 077
+          node "$ADMISSION_TOOLING_ROOT/scripts/preflight-frozen-target-contracts.mjs" --workflow-request > "$RUNNER_TEMP/frozen-admission-request.json"
+          node "$ADMISSION_TOOLING_ROOT/scripts/preflight-frozen-target-contracts.mjs" --plan "$RUNNER_TEMP/frozen-admission-request.json" > "$RUNNER_TEMP/frozen-admission-selection.json"
+
+      - name: Acquire known package contract objects
+        if: inputs.source == 'ref'
+        env:
+          ADMISSION_SELECTED_ROOT: ${{ github.workspace }}/.frozen-target
+          ADMISSION_SELECTED_SHA: ${{ steps.known_source.outputs.sha }}
+        run: &package_contract_acquisition |
+          set -euo pipefail
+          if [[ "$(jq -r '.sourceHistory' "$RUNNER_TEMP/frozen-admission-selection.json")" == true ]]; then
+            if [[ "$(git -C "$ADMISSION_SELECTED_ROOT" rev-parse --is-shallow-repository)" == true ]]; then
+              git -C "$ADMISSION_SELECTED_ROOT" fetch --unshallow --filter=blob:none --no-tags origin "$ADMISSION_SELECTED_SHA"
+            fi
+            git -C "$ADMISSION_SELECTED_ROOT" fetch --filter=blob:none --no-tags origin '+refs/heads/extended-stable/*:refs/remotes/origin/extended-stable/*'
+          fi
+          node --input-type=module <<'NODE'
+          import { readFileSync } from 'node:fs';
+          import { execFileSync } from 'node:child_process';
+          const paths = JSON.parse(readFileSync(`${process.env.RUNNER_TEMP}/frozen-admission-selection.json`, 'utf8')).sourcePaths;
+          const git = (...args) => execFileSync('git', ['-C', process.env.ADMISSION_SELECTED_ROOT, ...args], { timeout: 120000, maxBuffer: 64 * 1024 * 1024 });
+          if (!paths.length) process.exit(0);
+          const objects = git('ls-tree', '-r', '--format=%(objectname)', process.env.ADMISSION_SELECTED_SHA, '--', ...paths).toString().trim().split('\n').filter(Boolean);
+          if (objects.length > 4096) throw new Error('selected contract closure exceeds limit');
+          let bytes = 0;
+          for (const oid of new Set(objects)) {
+            const size = Number(git('cat-file', '-s', oid).toString());
+            if (size > 16 * 1024 * 1024 || (bytes += size) > 64 * 1024 * 1024) throw new Error('selected contract bytes exceed limit');
+            git('cat-file', 'blob', oid);
+          }
+          NODE
+
+      - name: Admit known package source before packing
+        if: inputs.source == 'ref'
+        env:
+          ADMISSION_TOOLING_ROOT: ${{ github.workspace }}
+        run: |
+          set -euo pipefail
+          env -i PATH="$PATH" LANG=C.UTF-8 \
+            node "$ADMISSION_TOOLING_ROOT/scripts/preflight-frozen-target-contracts.mjs" \
+            "$RUNNER_TEMP/frozen-admission-request.json" > "$RUNNER_TEMP/frozen-admission-known-source.json"
+
       - name: Resolve package candidate
         id: resolve
         env:
           SOURCE: ${{ inputs.source }}
-          PACKAGE_REF: ${{ inputs.package_ref }}
+          PACKAGE_REF: ${{ steps.known_source.outputs.sha || inputs.package_ref }}
           PACKAGE_SPEC: ${{ inputs.package_spec }}
           PACKAGE_URL: ${{ inputs.package_url }}
           PACKAGE_SHA256: ${{ inputs.package_sha256 }}
@@ -707,91 +832,6 @@ jobs:
             }
           fi
 
-      - name: Select acceptance profile
-        id: profile
-        env:
-          SOURCE: ${{ inputs.source }}
-          SUITE_PROFILE: ${{ inputs.suite_profile }}
-          CUSTOM_DOCKER_LANES: ${{ inputs.docker_lanes }}
-          TELEGRAM_MODE: ${{ inputs.telegram_mode }}
-          TELEGRAM_SCENARIOS: ${{ inputs.telegram_scenarios }}
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          include_release_path_suites=false
-          include_openwebui=false
-          include_live_suites=false
-          docker_lanes=""
-
-          case "$SUITE_PROFILE" in
-            smoke)
-              docker_lanes="npm-onboard-channel-agent gateway-network config-reload"
-              ;;
-            package)
-              docker_lanes="npm-onboard-channel-agent doctor-switch update-channel-switch skill-install update-corrupt-plugin upgrade-survivor update-first-hop-compat published-upgrade-survivor root-managed-vps-upgrade update-restart-auth plugins-offline plugin-update"
-              ;;
-            telegram)
-              if [[ "$TELEGRAM_MODE" == "none" ]]; then
-                echo "telegram_mode must not be none when suite_profile=telegram." >&2
-                exit 1
-              fi
-              telegram_scenario=""
-              telegram_scenario_count=0
-              while IFS= read -r raw_scenario || [[ -n "$raw_scenario" ]]; do
-                scenario="${raw_scenario#"${raw_scenario%%[![:space:]]*}"}"
-                scenario="${scenario%"${scenario##*[![:space:]]}"}"
-                if [[ -n "$scenario" ]]; then
-                  telegram_scenario="$scenario"
-                  ((telegram_scenario_count += 1))
-                fi
-              done < <(printf '%s' "$TELEGRAM_SCENARIOS" | tr ',' '\n')
-              if [[ "$telegram_scenario_count" -ne 1 ]]; then
-                echo "telegram_scenarios must contain exactly one scenario when suite_profile=telegram." >&2
-                exit 1
-              fi
-              TELEGRAM_SCENARIOS="$telegram_scenario"
-              ;;
-            product)
-              docker_lanes="npm-onboard-channel-agent doctor-switch update-channel-switch skill-install update-corrupt-plugin upgrade-survivor update-first-hop-compat published-upgrade-survivor root-managed-vps-upgrade update-restart-auth plugins plugin-update mcp-channels cron-mcp-cleanup openai-web-search-minimal openwebui"
-              include_openwebui=true
-              ;;
-            full)
-              include_release_path_suites=true
-              include_openwebui=true
-              ;;
-            custom)
-              docker_lanes="$CUSTOM_DOCKER_LANES"
-              if [[ -z "${docker_lanes// }" ]]; then
-                echo "docker_lanes is required when suite_profile=custom." >&2
-                exit 1
-              fi
-              if [[ "$docker_lanes" == *"openwebui"* ]]; then
-                include_openwebui=true
-              fi
-              ;;
-            *)
-              echo "Unknown suite_profile: $SUITE_PROFILE" >&2
-              exit 1
-              ;;
-          esac
-
-          telegram_enabled=false
-          if [[ "$TELEGRAM_MODE" != "none" ]]; then
-            telegram_enabled=true
-          fi
-
-          {
-            echo "docker_lanes=$docker_lanes"
-            echo "include_release_path_suites=$include_release_path_suites"
-            echo "include_openwebui=$include_openwebui"
-            echo "include_live_suites=$include_live_suites"
-            echo "telegram_enabled=$telegram_enabled"
-            echo "telegram_mode=$TELEGRAM_MODE"
-            echo "telegram_scenarios=$TELEGRAM_SCENARIOS"
-            echo "package_artifact_name=${PACKAGE_ARTIFACT_NAME}"
-          } >> "$GITHUB_OUTPUT"
-
       - name: Resolve published upgrade survivor baselines
         id: upgrade_survivor_baselines
         env:
@@ -852,6 +892,112 @@ jobs:
           fi
           node --import tsx scripts/resolve-upgrade-survivor-baselines.mts "${args[@]}" >/dev/null
           echo "baseline=$fallback_baseline" >> "$GITHUB_OUTPUT"
+
+      - name: Pin published upgrade baseline versions
+        id: exact_baselines
+        env:
+          BASELINE: ${{ steps.upgrade_survivor_baselines.outputs.baseline }}
+          BASELINES: ${{ steps.upgrade_survivor_baselines.outputs.baselines }}
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import { appendFileSync } from 'node:fs';
+          import { execFileSync } from 'node:child_process';
+          import { normalizeUpgradeSurvivorBaselineSpec, parseUpgradeSurvivorBaselineSpecs } from './scripts/lib/upgrade-survivor-policy.mjs';
+          import { resolveNpmJsonString } from './scripts/lib/npm-json-output.mts';
+          const captured = new Map();
+          const exact = raw => {
+            const spec = normalizeUpgradeSurvivorBaselineSpec(raw);
+            if (!spec) throw new Error('missing upgrade baseline');
+            if (!captured.has(spec)) {
+              const value = /^openclaw@[0-9]/u.test(spec) ? spec :
+                normalizeUpgradeSurvivorBaselineSpec(resolveNpmJsonString(JSON.parse(execFileSync('npm',
+                  ['view', spec, 'version', '--json', '--silent', '--prefer-online'],
+                  { encoding: 'utf8', timeout: 60000, maxBuffer: 1024 * 1024 }))));
+              if (!/^openclaw@[0-9]/u.test(value ?? '')) throw new Error('upgrade baseline did not resolve to an exact version');
+              captured.set(spec, value);
+            }
+            return captured.get(spec);
+          };
+          const baseline = exact(process.env.BASELINE);
+          const baselines = parseUpgradeSurvivorBaselineSpecs(process.env.BASELINES).map(exact);
+          appendFileSync(process.env.GITHUB_OUTPUT, `baseline=${baseline}\nbaselines=${(baselines.length ? baselines : [baseline]).join(' ')}\n`);
+          NODE
+
+      - name: Validate resolved package source
+        env:
+          PACKAGE_SOURCE_SHA: ${{ steps.resolve.outputs.package_source_sha }}
+          KNOWN_SOURCE_SHA: ${{ steps.known_source.outputs.sha }}
+        run: |
+          set -euo pipefail
+          [[ "$PACKAGE_SOURCE_SHA" =~ ^[a-f0-9]{40}$ ]] || {
+            echo "Exact package source is required for selected source-contract admission." >&2
+            exit 1
+          }
+          [[ -z "$KNOWN_SOURCE_SHA" || "$KNOWN_SOURCE_SHA" == "$PACKAGE_SOURCE_SHA" ]] || {
+            echo "Resolved package source differs from the admitted pre-pack source." >&2
+            exit 1
+          }
+          bash scripts/github/resolve-openclaw-ref.sh \
+            --ref "$PACKAGE_SOURCE_SHA" --expected-sha "$PACKAGE_SOURCE_SHA"
+
+      - name: Acquire resolved package source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ steps.resolve.outputs.package_source_sha }}
+          path: .frozen-target
+          fetch-depth: 1
+          filter: blob:none
+          sparse-checkout: package.json
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
+      - name: Plan frozen source admission
+        id: frozen_selection
+        env:
+          ADMISSION_WORKFLOW: package
+          ADMISSION_INPUTS: ${{ toJSON(inputs) }}
+          ADMISSION_SELECTED_ROOT: ${{ github.workspace }}/.frozen-target
+          ADMISSION_TOOLING_ROOT: ${{ github.workspace }}
+          ADMISSION_TOOLING_SHA: ${{ steps.tooling.outputs.sha }}
+          ADMISSION_WORKFLOW_REF: ${{ format('{0}/.github/workflows/package-acceptance.yml@{1}', github.repository, steps.tooling.outputs.sha) }}
+          ADMISSION_SELECTED_SHA: ${{ steps.resolve.outputs.package_source_sha }}
+          ADMISSION_PACKAGE_SOURCE_SHA: ${{ steps.resolve.outputs.package_source_sha }}
+          ADMISSION_PACKAGE_SHA256: ${{ steps.resolve.outputs.sha256 }}
+          ADMISSION_PACKAGE_VERSION: ${{ steps.resolve.outputs.package_version }}
+          ADMISSION_BASELINE: ${{ steps.exact_baselines.outputs.baseline }}
+          ADMISSION_BASELINES: ${{ steps.exact_baselines.outputs.baselines }}
+          ADMISSION_BASELINE_SCOPE: ${{ steps.upgrade_survivor_baselines.outputs.baseline_scope }}
+          ADMISSION_BASELINES_RESOLVED: "true"
+          ADMISSION_STAGE: resolved-package
+        run: *package_admission_plan
+
+      - name: Acquire selected contract objects
+        env:
+          ADMISSION_SELECTED_ROOT: ${{ github.workspace }}/.frozen-target
+          ADMISSION_SELECTED_SHA: ${{ steps.resolve.outputs.package_source_sha }}
+        run: *package_contract_acquisition
+
+      - name: Admit frozen source contracts
+        id: frozen_admission
+        env:
+          ADMISSION_TOOLING_ROOT: ${{ github.workspace }}
+        run: |
+          set -euo pipefail
+          env -i PATH="$PATH" LANG=C.UTF-8 \
+            node "$ADMISSION_TOOLING_ROOT/scripts/preflight-frozen-target-contracts.mjs" \
+            "$RUNNER_TEMP/frozen-admission-request.json" > "$RUNNER_TEMP/frozen-admission.json"
+          printf 'digest=%s\n' "$(jq -er '.digest' "$RUNNER_TEMP/frozen-admission.json")" >> "$GITHUB_OUTPUT"
+
+      - name: Upload frozen admission diagnostic
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: frozen-source-admission-package-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/frozen-admission.json
+            ${{ runner.temp }}/frozen-admission-known-source.json
+          if-no-files-found: error
+          retention-days: 7
 
       - name: Upload package-under-test artifact
         id: upload_package
@@ -958,7 +1104,7 @@ jobs:
       - name: Checkout package workflow ref
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ inputs.workflow_ref }}
+          ref: ${{ needs.resolve_package.outputs.tooling_sha }}
           fetch-depth: 1
           persist-credentials: false
 
@@ -1006,7 +1152,7 @@ jobs:
       - name: Checkout package workflow ref
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ inputs.workflow_ref }}
+          ref: ${{ needs.resolve_package.outputs.tooling_sha }}
           fetch-depth: 1
           persist-credentials: false
 
@@ -1098,7 +1244,7 @@ jobs:
     uses: ./.github/workflows/openclaw-live-and-e2e-checks-reusable.yml
     with: &docker_acceptance_inputs
       advisory: ${{ inputs.advisory || false }}
-      ref: ${{ needs.resolve_package.outputs.package_source_sha || inputs.workflow_ref }}
+      ref: ${{ needs.resolve_package.outputs.package_source_sha }}
       include_repo_e2e: false
       include_release_path_suites: ${{ needs.resolve_package.outputs.include_release_path_suites == 'true' }}
       include_openwebui: ${{ needs.resolve_package.outputs.include_openwebui == 'true' }}
@@ -1221,7 +1367,7 @@ jobs:
       prepublish_plugin_registry_artifact_run_attempt: ${{ fromJSON(needs.resolve_package.outputs.prepublish_plugin_registry_json || '{}').prepublishPluginRegistryArtifactRunAttempt || '' }}
       prepublish_plugin_registry_manifest_sha256: ${{ fromJSON(needs.resolve_package.outputs.prepublish_plugin_registry_json || '{}').prepublishPluginRegistryManifestSha256 || '' }}
       package_label: openclaw@${{ needs.resolve_package.outputs.package_version }}
-      harness_ref: ${{ inputs.workflow_ref }}
+      harness_ref: ${{ needs.resolve_package.outputs.tooling_sha }}
       provider_mode: ${{ needs.resolve_package.outputs.telegram_mode }}
       scenario: ${{ needs.resolve_package.outputs.telegram_scenarios }}
     secrets:
