@@ -318,6 +318,7 @@
     <string name="native_2c75802a5f8df5f8" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"사람 및 연락처 정보 찾기"</string>
     <string name="native_2c9cce8250d746e3" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"기기 식별 정보 필요"</string>
     <string name="native_2cd62f7a670b2819" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OpenClaw 스레드"</string>
+    <string name="native_2cdce23a4be96a27" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gallery is unavailable. Open the system picker to choose media."</string>
     <string name="native_2cee6c17e5e55571" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"동시 실행 슬롯 대기 중"</string>
     <string name="native_2d4dfe885f84629e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"사진 라이브러리 접근을 허용하세요."</string>
     <string name="native_2d6416405eb44982" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"이전 응답에서 이미 이 승인 요청을 처리했습니다."</string>
@@ -371,6 +372,7 @@
     <string name="native_34ef570432852cd6" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"언제든 시작할 수 있습니다"</string>
     <string name="native_3514b4452a987ac0" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"말하는 중 · 답변 대기 중"</string>
     <string name="native_352a5b4c1246d1bf" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"권한이 부여되지 않음"</string>
+    <string name="native_352cfc749e55222e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gallery"</string>
     <string name="native_35322b5bb5a218a1" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"변경 사항 저장"</string>
     <string name="native_354496484f14daf5" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway가 자동화 실행을 거부했습니다."</string>
     <string name="native_35458ac899311b76" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Session Send"</string>
@@ -383,6 +385,7 @@
     <string name="native_35e70a7ab8a0d399" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"다음 하트비트"</string>
     <string name="native_36409c59c2b80eff" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"소금물에 절이는 중"</string>
     <string name="native_364802f3894668df" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"연락처 쓰기"</string>
+    <string name="native_3661ce6ea05a5a4a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Getting location…"</string>
     <string name="native_367ccfda39b62aa7" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"이 검색과 일치하는 설치된 Skills가 없습니다."</string>
     <string name="native_36adcd07b9bda0b9" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"최근 실행"</string>
     <string name="native_36c725ddb20f8bd3" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"음성 대화 제공업체 설정"</string>
@@ -484,6 +487,7 @@
     <string name="native_4578d6b453171ffe" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"뒤로 돌아가 세션을 선택하면 해당 대시보드가 열립니다."</string>
     <string name="native_45989de49fb7f66d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"상세 정보"</string>
     <string name="native_45a64dc17588f2ca" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s/%2$s 온라인"</string>
+    <string name="native_45a747b7340ae98d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Context –"</string>
     <string name="native_45a8847c4a6b2c81" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s개 앱의 전달이 허용되었습니다."</string>
     <string name="native_460b3a7da007b7af" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"채팅"</string>
     <string name="native_4646155e9edc9859" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"분주히 움직이는 중"</string>
@@ -544,6 +548,7 @@
     <string name="native_4efca0d10c5feb8e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"정보"</string>
     <string name="native_4f1bc100d1dccc1e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"해당 이미지에서 설정용 QR 코드를 찾을 수 없습니다. openclaw qr로 생성한 QR 코드를 선택하거나 설정 코드를 직접 입력하세요."</string>
     <string name="native_4fe3cdd404ea0290" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"permissions"</string>
+    <string name="native_50009ce1da4d15e1" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"File"</string>
     <string name="native_5047cfb3b607e7d0" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"노드와 페어링된 기기를 불러오려면 Gateway에 연결하세요."</string>
     <string name="native_5051902c7b6a368b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"브랜치 전환"</string>
     <string name="native_5083cd4b96b0d09d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Skills 없음"</string>
@@ -879,6 +884,7 @@
     <string name="native_7fbff9b88be06388" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"데스크톱을 사용하려면 Gateway가 연결되어 있어야 합니다"</string>
     <string name="native_7fc04e3053dfde2a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"설치 옵션"</string>
     <string name="native_7fe837d777c45948" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s시간 후"</string>
+    <string name="native_811b8b955556caa0" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Voice options"</string>
     <string name="native_812fc837108361ba" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"관리자 권한 필요"</string>
     <string name="native_8169e4741bbe5fa4" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"set groups"</string>
     <string name="native_8193ee8a22d25208" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"모델 고정"</string>
@@ -930,6 +936,7 @@
     <string name="native_8998824610d49175" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OpenClaw에 무엇이든 물어보세요"</string>
     <string name="native_89bbfe23c3917a3f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"계속하려면 다시 연결하세요"</string>
     <string name="native_8a20f46d5276b474" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s개 페어링됨"</string>
+    <string name="native_8a3cfc29ce72c15f" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Context %1$s"</string>
     <string name="native_8a51ea11834daf37" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"\"%1$s\"을 적용하고 Gateway에서 Skill Workshop 상태를 새로 고칩니다."</string>
     <string name="native_8a6ec210c09d2e1d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway 오프라인"</string>
     <string name="native_8a7716cbcbf66686" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"호스트 및 도구 정책에 따라 승인 요청 없이 실행합니다."</string>
@@ -1034,6 +1041,7 @@
     <string name="native_97f939ea59854238" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"다음 깨우기"</string>
     <string name="native_97fddf2d43e8dfc8" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"실행 실패"</string>
     <string name="native_9827c4e9db45bc8e" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s/%2$s"</string>
+    <string name="native_9833e6ac40f62763" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Use current location"</string>
     <string name="native_986fd0aa615e6919" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"최근 로그 항목이 없습니다."</string>
     <string name="native_98a017c8728e2b99" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"수동 Gateway"</string>
     <string name="native_98d254a311d0e820" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"그룹 이름 변경"</string>
@@ -1122,6 +1130,7 @@
     <string name="native_a6a20a23827b4cbd" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s의 결과를 알 수 없습니다. 다시 연결하고 Skills를 새로고침한 후 다시 시도하세요; Gateway는 일치하는 설치가 아직 실행 중이면 안전하게 해당 작업에 합류합니다."</string>
     <string name="native_a6bd489d95504499" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"저장 정보 삭제"</string>
     <string name="native_a6cda369816c943c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"페어링된 Gateway가 없습니다."</string>
+    <string name="native_a6e600a10fede40f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Context"</string>
     <string name="native_a757bc0928d19377" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s · %2$s"</string>
     <string name="native_a7779b096e663c47" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"&lt;가려진 비밀 정보&gt;"</string>
     <string name="native_a79bcff159841b0f" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"문제 %1$s개"</string>
@@ -1240,6 +1249,7 @@
     <string name="native_bae9264d6d972b80" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"summarize"</string>
     <string name="native_baeefbad50a33e7c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"강조 색상"</string>
     <string name="native_bb4f2558e4333834" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"위젯 이미지가 다운로드 폴더에 저장됨"</string>
+    <string name="native_bbb4106e814467bd" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Listening…"</string>
     <string name="native_bbe5fc3b9ef39f99" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"시작 중…"</string>
     <string name="native_bc198f2a7e49ad71" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s 토큰"</string>
     <string name="native_bc19cec293228fb8" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"클라이언트 오류"</string>
@@ -1270,6 +1280,7 @@
     <string name="native_c08ac736a5e29c29" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"다음 페이지"</string>
     <string name="native_c0be048b378aa057" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"ClawHub가 %1$s의 설치 가능한 버전을 반환하지 않았습니다."</string>
     <string name="native_c0dd528567bf67e2" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"자동화 실행이 알 수 없는 상태로 종료되었습니다."</string>
+    <string name="native_c1000aa75b889da7" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Add your current location to the draft. Review it before sending."</string>
     <string name="native_c126029e43f5ff90" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"오프라인 대기열이 가득 찼습니다(메시지 %1$s개); 먼저 대기 중인 항목을 삭제하세요."</string>
     <string name="native_c1272aab485f1172" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"공개 Gateway에는 wss:// 또는 Tailscale Serve가 필요합니다. ws://는 localhost, .local 호스트, Android 에뮬레이터 및 사설 LAN IP에서 허용됩니다."</string>
     <string name="native_c12a06263b75eb23" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"스킬 세부 정보를 불러오려면 Gateway에 연결하세요."</string>
@@ -1389,6 +1400,7 @@
     <string name="native_d1a574e23344c407" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway 비밀번호가 유효하지 않습니다"</string>
     <string name="native_d1af697abaff485f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"기기 페어링 변경 사항을 확인하지 못했습니다. 새로고침한 후 다시 시도하세요."</string>
     <string name="native_d1bf045bb524dae5" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"세부 정보 보기"</string>
+    <string name="native_d1c463a8611bc644" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Location permission is required. Allow it in Android settings or try again."</string>
     <string name="native_d1e9567da9a8a4b0" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Bash"</string>
     <string name="native_d2089be672953d11" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"토큰"</string>
     <string name="native_d20f43f925e706ce" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"연결된 OpenClaw 에이전트는 사용자가 활성화한 기기 기능을 사용할 수 있습니다. 연결하려는 Gateway와 에이전트를 신뢰하는 경우에만 계속하세요."</string>
@@ -1601,6 +1613,7 @@
     <string name="native_f200366d0c4352cb" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Skill Workshop 제안을 검토하지 못했습니다."</string>
     <string name="native_f20c879465551f0d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"고정됨"</string>
     <string name="native_f211f2bf832dda14" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"프로필 &amp; 기기"</string>
+    <string name="native_f2232e8ae9a9a953" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Could not get your location. Check device location settings and try again."</string>
     <string name="native_f2316e644b1d2621" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"나중에 전송할 메시지를 대기열에 추가하지 못했습니다."</string>
     <string name="native_f24a1d904fd1b482" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"격리"</string>
     <string name="native_f24bcd9352795c36" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"일정 · %1$s"</string>

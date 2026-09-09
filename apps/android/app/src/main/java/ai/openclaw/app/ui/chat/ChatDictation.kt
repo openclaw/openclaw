@@ -398,9 +398,10 @@ internal fun ChatComposerMicButton(
   onToggleDictation: () -> Unit,
   onStartVoiceNote: () -> Unit,
   modifier: Modifier = Modifier,
+  onOpenVoiceOptions: (() -> Unit)? = null,
 ) {
   val hapticFeedback = LocalHapticFeedback.current
-  val interactionEnabled = dictationActive || dictationEnabled || voiceNoteEnabled
+  val interactionEnabled = dictationActive || dictationEnabled || voiceNoteEnabled || onOpenVoiceOptions != null
   val longPressAction: (() -> Unit)? =
     if (voiceNoteEnabled) {
       {
@@ -425,30 +426,37 @@ internal fun ChatComposerMicButton(
           enabled = interactionEnabled,
           onClickLabel = dictationActionLabel,
           role = Role.Button,
-          onLongClickLabel = if (voiceNoteEnabled) voiceNoteRecordLabel() else null,
-          onLongClick = longPressAction,
+          onLongClickLabel =
+            if (onOpenVoiceOptions != null) {
+              nativeString("Voice options")
+            } else if (voiceNoteEnabled) {
+              voiceNoteRecordLabel()
+            } else {
+              null
+            },
+          onLongClick = if (dictationActive) null else onOpenVoiceOptions ?: longPressAction,
           onClick = {
-            if (dictationActive || dictationEnabled) onToggleDictation()
+            if (dictationActive || dictationEnabled) onToggleDictation() else onOpenVoiceOptions?.invoke()
           },
         ),
     shape = CircleShape,
     color = Color.Transparent,
     contentColor =
       when {
-        dictationActive -> ClawTheme.colors.primaryText
+        dictationActive -> ClawTheme.colors.primary
         dictationEnabled || voiceNoteEnabled -> ClawTheme.colors.textMuted
         else -> ClawTheme.colors.textSubtle
       },
   ) {
     Box(
-      modifier = Modifier.padding(8.dp).background(if (dictationActive) ClawTheme.colors.primary else Color.Transparent, CircleShape),
+      modifier = Modifier.padding(8.dp),
       contentAlignment = Alignment.Center,
     ) {
-      Icon(
-        imageVector = if (dictationActive) Icons.Default.Stop else Icons.Outlined.MicNone,
-        contentDescription = null,
-        modifier = Modifier.size(20.dp),
-      )
+      if (dictationActive) {
+        LiveTalkWaveform(active = true, modifier = Modifier.size(20.dp))
+      } else {
+        Icon(imageVector = Icons.Outlined.MicNone, contentDescription = null, modifier = Modifier.size(20.dp))
+      }
     }
   }
 }

@@ -318,6 +318,7 @@
     <string name="native_2c75802a5f8df5f8" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Cari orang dan detail kontak"</string>
     <string name="native_2c9cce8250d746e3" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Identitas perangkat diperlukan"</string>
     <string name="native_2cd62f7a670b2819" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Utas OpenClaw"</string>
+    <string name="native_2cdce23a4be96a27" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gallery is unavailable. Open the system picker to choose media."</string>
     <string name="native_2cee6c17e5e55571" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Menunggu slot konkurensi"</string>
     <string name="native_2d4dfe885f84629e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Izinkan akses ke galeri foto."</string>
     <string name="native_2d6416405eb44982" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Respons sebelumnya telah menyelesaikan permintaan persetujuan ini."</string>
@@ -371,6 +372,7 @@
     <string name="native_34ef570432852cd6" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Siap kapan pun Anda siap"</string>
     <string name="native_3514b4452a987ac0" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Berbicara · menunggu balasan"</string>
     <string name="native_352a5b4c1246d1bf" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Tidak diberikan"</string>
+    <string name="native_352cfc749e55222e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gallery"</string>
     <string name="native_35322b5bb5a218a1" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Simpan Perubahan"</string>
     <string name="native_354496484f14daf5" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway menolak eksekusi otomatisasi."</string>
     <string name="native_35458ac899311b76" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Session Send"</string>
@@ -383,6 +385,7 @@
     <string name="native_35e70a7ab8a0d399" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Detak berikutnya"</string>
     <string name="native_36409c59c2b80eff" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Merendam dalam air garam"</string>
     <string name="native_364802f3894668df" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Tulis Kontak"</string>
+    <string name="native_3661ce6ea05a5a4a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Getting location…"</string>
     <string name="native_367ccfda39b62aa7" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Tidak ada Skills terinstal yang cocok dengan pencarian ini."</string>
     <string name="native_36adcd07b9bda0b9" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Proses terbaru"</string>
     <string name="native_36c725ddb20f8bd3" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Penyiapan Penyedia Bicara"</string>
@@ -484,6 +487,7 @@
     <string name="native_4578d6b453171ffe" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Kembali dan pilih sesi untuk membuka dasbornya."</string>
     <string name="native_45989de49fb7f66d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Detail"</string>
     <string name="native_45a64dc17588f2ca" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s/%2$s online"</string>
+    <string name="native_45a747b7340ae98d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Context –"</string>
     <string name="native_45a8847c4a6b2c81" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s aplikasi diizinkan meneruskan."</string>
     <string name="native_460b3a7da007b7af" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Obrolan"</string>
     <string name="native_4646155e9edc9859" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Bergegas"</string>
@@ -544,6 +548,7 @@
     <string name="native_4efca0d10c5feb8e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Tentang"</string>
     <string name="native_4f1bc100d1dccc1e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Tidak ditemukan kode QR penyiapan dalam gambar tersebut. Pilih QR yang dihasilkan oleh openclaw qr, atau masukkan kode penyiapan secara manual."</string>
     <string name="native_4fe3cdd404ea0290" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"permissions"</string>
+    <string name="native_50009ce1da4d15e1" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"File"</string>
     <string name="native_5047cfb3b607e7d0" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Hubungkan ke Gateway untuk memuat node dan perangkat yang dipasangkan."</string>
     <string name="native_5051902c7b6a368b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Ganti cabang"</string>
     <string name="native_5083cd4b96b0d09d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Tidak ada keterampilan"</string>
@@ -879,6 +884,7 @@
     <string name="native_7fbff9b88be06388" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Desktop memerlukan gateway yang terhubung"</string>
     <string name="native_7fc04e3053dfde2a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Opsi Instalasi"</string>
     <string name="native_7fe837d777c45948" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Dalam %1$s jam"</string>
+    <string name="native_811b8b955556caa0" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Voice options"</string>
     <string name="native_812fc837108361ba" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Akses admin diperlukan"</string>
     <string name="native_8169e4741bbe5fa4" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"set groups"</string>
     <string name="native_8193ee8a22d25208" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Sematkan model"</string>
@@ -930,6 +936,7 @@
     <string name="native_8998824610d49175" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Tanyakan apa saja kepada OpenClaw"</string>
     <string name="native_89bbfe23c3917a3f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Hubungkan kembali untuk melanjutkan"</string>
     <string name="native_8a20f46d5276b474" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s dipasangkan"</string>
+    <string name="native_8a3cfc29ce72c15f" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Context %1$s"</string>
     <string name="native_8a51ea11834daf37" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Tindakan ini akan menerapkan \"%1$s\" dan memperbarui status Skill Workshop dari gateway."</string>
     <string name="native_8a6ec210c09d2e1d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway offline"</string>
     <string name="native_8a7716cbcbf66686" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Jalankan tanpa permintaan persetujuan, sesuai kebijakan host dan alat."</string>
@@ -1034,6 +1041,7 @@
     <string name="native_97f939ea59854238" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Aktivasi Berikutnya"</string>
     <string name="native_97fddf2d43e8dfc8" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Eksekusi gagal"</string>
     <string name="native_9827c4e9db45bc8e" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s/%2$s"</string>
+    <string name="native_9833e6ac40f62763" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Use current location"</string>
     <string name="native_986fd0aa615e6919" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Tidak ada entri log terbaru."</string>
     <string name="native_98a017c8728e2b99" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway Manual"</string>
     <string name="native_98d254a311d0e820" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Ubah nama grup"</string>
@@ -1122,6 +1130,7 @@
     <string name="native_a6a20a23827b4cbd" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Hasil untuk %1$s tidak diketahui. Hubungkan kembali, muat ulang Skills, lalu coba lagi; Gateway akan bergabung dengan aman ke proses instalasi yang sesuai dan masih berjalan."</string>
     <string name="native_a6bd489d95504499" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Lupakan"</string>
     <string name="native_a6cda369816c943c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Tidak ada Gateway yang dipasangkan."</string>
+    <string name="native_a6e600a10fede40f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Context"</string>
     <string name="native_a757bc0928d19377" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s · %2$s"</string>
     <string name="native_a7779b096e663c47" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"&lt;rahasia disamarkan&gt;"</string>
     <string name="native_a79bcff159841b0f" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s masalah"</string>
@@ -1240,6 +1249,7 @@
     <string name="native_bae9264d6d972b80" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"summarize"</string>
     <string name="native_baeefbad50a33e7c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Warna aksen"</string>
     <string name="native_bb4f2558e4333834" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gambar widget disimpan ke Unduhan"</string>
+    <string name="native_bbb4106e814467bd" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Listening…"</string>
     <string name="native_bbe5fc3b9ef39f99" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Memulai…"</string>
     <string name="native_bc198f2a7e49ad71" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s token"</string>
     <string name="native_bc19cec293228fb8" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Kesalahan klien"</string>
@@ -1270,6 +1280,7 @@
     <string name="native_c08ac736a5e29c29" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Halaman berikutnya"</string>
     <string name="native_c0be048b378aa057" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"ClawHub tidak mengembalikan versi yang dapat diinstal untuk %1$s."</string>
     <string name="native_c0dd528567bf67e2" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Eksekusi otomatisasi selesai dengan status yang tidak diketahui."</string>
+    <string name="native_c1000aa75b889da7" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Add your current location to the draft. Review it before sending."</string>
     <string name="native_c126029e43f5ff90" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Antrean luring penuh (%1$s pesan); hapus item dalam antrean terlebih dahulu."</string>
     <string name="native_c1272aab485f1172" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway publik memerlukan wss:// atau Tailscale Serve. ws:// diizinkan untuk localhost, host .local, emulator Android, dan IP LAN privat."</string>
     <string name="native_c12a06263b75eb23" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Hubungkan ke Gateway untuk memuat detail keterampilan."</string>
@@ -1389,6 +1400,7 @@
     <string name="native_d1a574e23344c407" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Kata sandi Gateway tidak valid"</string>
     <string name="native_d1af697abaff485f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Tidak dapat memverifikasi perubahan pemasangan perangkat. Segarkan dan coba lagi."</string>
     <string name="native_d1bf045bb524dae5" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Lihat detail"</string>
+    <string name="native_d1c463a8611bc644" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Location permission is required. Allow it in Android settings or try again."</string>
     <string name="native_d1e9567da9a8a4b0" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Bash"</string>
     <string name="native_d2089be672953d11" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Token"</string>
     <string name="native_d20f43f925e706ce" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Agen OpenClaw yang terhubung dapat menggunakan kemampuan perangkat yang Anda aktifkan. Lanjutkan hanya jika Anda memercayai Gateway dan agen yang Anda hubungkan."</string>
@@ -1601,6 +1613,7 @@
     <string name="native_f200366d0c4352cb" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Tidak dapat memeriksa proposal Skill Workshop."</string>
     <string name="native_f20c879465551f0d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Disematkan"</string>
     <string name="native_f211f2bf832dda14" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Profil &amp; perangkat"</string>
+    <string name="native_f2232e8ae9a9a953" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Could not get your location. Check device location settings and try again."</string>
     <string name="native_f2316e644b1d2621" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Tidak dapat mengantrekan pesan untuk dikirim nanti."</string>
     <string name="native_f24a1d904fd1b482" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Karantina"</string>
     <string name="native_f24bcd9352795c36" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Jadwal · %1$s"</string>

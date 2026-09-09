@@ -5,7 +5,7 @@ OpenClaw Android is the officially released Google Play app. It connects to an O
 ### App features
 
 - Pair with a Gateway using a QR code, setup code, or manual connection. Gateway credentials are stored encrypted.
-- Stream chat replies, choose models and reasoning effort, manage session permissions, and expand task progress. The compact composer keeps one control row; tap the model name for permissions and usage details, or the effort dial for Fast mode. Dictation, voice messages, and Talk are part of Chat, not a separate Voice tab.
+- Stream chat replies, choose models and reasoning effort, manage session permissions, and expand task progress. The composer keeps attachments to the left of the draft and voice input to the right, with model, effort, and context controls below. Tap the microphone for dictation; its waveform replaces the microphone while listening, and tapping again stops dictation. Long-press for voice messages or Talk. Tap the model name for permissions and usage details, or the effort dial for Fast mode.
 - Select agents, pin sessions, and browse available native session catalogs from the sidebar. Connecting creates or adopts a dedicated Android session without resetting its history. Native sessions keep their runtime-owned model: Android shows that ownership instead of offering a model change. New session starts independently of the current native thread. Generic child-session forks and new worktrees are unavailable for those sessions; supported message-level forks remain available.
 - Search from Overview or Settings to find settings by their displayed name or category, alongside quick actions and recent threads. Local destinations such as Appearance, Profile, and Licenses work without connecting a Gateway. Back from a settings detail returns to the screen that opened search; Desktop appears only when the connected Gateway supports it.
 - Choose a theme family, color mode, accent, and app language in **Settings → Appearance**. Theme and accent edits sync with a connected writable profile. Read-only or unknown-profile edits, including new edits after restarting offline, stay on the device; choose them again after connecting to sync. Already profile-bound edits wait for that profile to reconnect, without discarding or replacing newer device-local choices.
@@ -59,14 +59,23 @@ space is limited; opening the keyboard does not move them to another region.
 If the keyboard covers that region entirely, dismiss the keyboard to reach the
 prompt again.
 
-Chat actions and Add attachment (Photos, Videos, Files) menus stay in the safe
+Chat actions and voice options menus stay in the safe
 region containing their trigger. These popups remain focusable without becoming
 keyboard (IME) targets. If folds, insets, or layout changes invalidate an open
 menu, it closes without choosing an action. Reopen it explicitly when space
 permits; it does not reopen automatically when the layout recovers. Dismissing
 the menu does not reset Chat's draft, editor, or reader state.
 
-Chat's Model picker, its Permissions page, Thinking effort, Background tasks, and Switch branch sheets initially
+Chat's attachment picker opens on Gallery, with File and Location tabs below.
+Supported devices show Android's embedded photo picker without whole-library
+permission. Other devices, or a failed embedded picker, offer the system picker.
+File also provides video selection. Location requests foreground permission and
+adds a map link to the draft for review before sending. Closing a picker preserves
+the draft; switching conversations retires the opening. Embedded gallery selections
+enter the draft only after Done. Android grants access when an item is selected;
+dismissing the sheet does not undo that platform grant.
+
+Chat's attachment picker, Model picker, its Permissions page, Thinking effort, Background tasks, and Switch branch sheets initially
 use the largest safe region with usable sheet space, not the trigger's region.
 They keep that region while it remains usable. Valid geometry changes retain
 the same sheet and local state. An invalid opening closes without selecting an
