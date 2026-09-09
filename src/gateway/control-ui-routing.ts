@@ -91,9 +91,12 @@ export function classifyControlUiRequest(params: {
     if (classifyNodeWorkspaceTransferPath(pathname) !== "outside") {
       return { kind: "not-control-ui" };
     }
-    // Keep plugin-owned HTTP routes outside the root-mounted Control UI SPA
-    // fallback so untrusted plugins cannot claim arbitrary UI paths.
-    if (pathname === "/plugins" || pathname.startsWith("/plugins/")) {
+    // The marketplace owns browser reads of the exact root. Descendants and
+    // non-document requests remain in the plugin HTTP namespace.
+    if (
+      (pathname === "/plugins" && (!isReadHttpMethod(method) || !spaFallback)) ||
+      pathname.startsWith("/plugins/")
+    ) {
       return { kind: "not-control-ui" };
     }
     if (pathname === "/api" || pathname.startsWith("/api/")) {
