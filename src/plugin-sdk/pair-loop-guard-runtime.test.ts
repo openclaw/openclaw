@@ -403,6 +403,78 @@ describe("conversation burst budget", () => {
     ).toEqual({ suppressed: true, cooldownUntilMs: 2_003 });
   });
 
+  it("reports the later conversation deadline while both budgets are in cooldown", () => {
+    const guard = createPairLoopGuard();
+    // Pair limit 1, conversation limit 4, 5s cooldown, unique events
+    // a1/a2/b1/b2/a3 at 0/1/2/3/4ms. a3 trips the conversation budget at t=4
+    // while bot-a's pair cooldown, started at t=1, is still running.
+    const strictBase = {
+      ...base,
+      settings: { ...burstSettings, maxEventsPerWindow: 1, maxConversationBotEvents: 4 },
+    };
+
+    expect(
+      guard.recordAndCheck({ ...strictBase, senderId: "bot-a", eventId: "a1", nowMs: 0 }),
+    ).toEqual({ suppressed: false });
+    expect(
+      guard.recordAndCheck({ ...strictBase, senderId: "bot-a", eventId: "a2", nowMs: 1 }),
+    ).toEqual({ suppressed: true, cooldownUntilMs: 5_001 });
+    expect(
+      guard.recordAndCheck({ ...strictBase, senderId: "bot-b", eventId: "b1", nowMs: 2 }),
+    ).toEqual({ suppressed: false });
+    expect(
+      guard.recordAndCheck({ ...strictBase, senderId: "bot-b", eventId: "b2", nowMs: 3 }),
+    ).toEqual({ suppressed: true, cooldownUntilMs: 5_003 });
+    // bot-a's pair deadline is 5_001, but the conversation stays suppressed
+    // until 5_004, which is the real earliest admission time.
+    expect(
+      guard.recordAndCheck({ ...strictBase, senderId: "bot-a", eventId: "a3", nowMs: 4 }),
+    ).toEqual({ suppressed: true, cooldownUntilMs: 5_004 });
+  });
+
+  it("keeps an active conversation deadline when a shorter pair cooldown starts", () => {
+    const guard = createPairLoopGuard();
+    // A config reload can shorten cooldownSeconds while a conversation cooldown
+    // is still running, so a pair trip afterwards carries the shorter deadline.
+    const longCooldown = {
+      ...base,
+      settings: {
+        ...burstSettings,
+        maxEventsPerWindow: 1_000,
+        cooldownMs: 600_000,
+        maxConversationBotEvents: 4,
+      },
+    };
+    expect(
+      guard.recordAndCheck({ ...longCooldown, senderId: "bot-a", eventId: "e0", nowMs: 0 }),
+    ).toEqual({ suppressed: false });
+    expect(
+      guard.recordAndCheck({ ...longCooldown, senderId: "bot-a", eventId: "e1", nowMs: 1 }),
+    ).toEqual({ suppressed: false });
+    expect(
+      guard.recordAndCheck({ ...longCooldown, senderId: "bot-b", eventId: "e2", nowMs: 2 }),
+    ).toEqual({ suppressed: false });
+    expect(
+      guard.recordAndCheck({ ...longCooldown, senderId: "bot-b", eventId: "e3", nowMs: 3 }),
+    ).toEqual({ suppressed: false });
+    expect(
+      guard.recordAndCheck({ ...longCooldown, senderId: "bot-a", eventId: "e4", nowMs: 4 }),
+    ).toEqual({ suppressed: true, cooldownUntilMs: 600_004 });
+
+    const shortCooldown = {
+      ...longCooldown,
+      settings: { ...longCooldown.settings, maxEventsPerWindow: 1, cooldownMs: 5_000 },
+    };
+    expect(
+      guard.recordAndCheck({ ...shortCooldown, senderId: "bot-c", eventId: "e5", nowMs: 5 }),
+    ).toEqual({ suppressed: true, cooldownUntilMs: 600_004 });
+    // bot-c's own pair trips at t=6 under the reloaded 5s cooldown; the
+    // conversation cooldown it is already inside still runs to 600_004.
+    expect(
+      guard.recordAndCheck({ ...shortCooldown, senderId: "bot-c", eventId: "e6", nowMs: 6 }),
+    ).toEqual({ suppressed: true, cooldownUntilMs: 600_004 });
+  });
+
   it("lets slow multi-bot traffic drain out of the window", () => {
     const guard = createPairLoopGuard();
     // Three senders posting round-robin every 4 minutes: the 10-minute window

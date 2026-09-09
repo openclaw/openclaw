@@ -252,6 +252,28 @@ function countCurrentWindowEvents(entry: PairLoopGuardEntry, nowMs: number): num
   return entry.recentEvents.filter((event) => event.timestampMs <= nowMs).length;
 }
 
+/**
+ * Combines the pair and conversation verdicts for one event. An event can sit
+ * inside both cooldowns at once, and callers render the returned deadline as
+ * the remaining suppression window, so reporting the earlier of the two would
+ * understate when the event could actually be admitted.
+ */
+function latestActiveCooldown(
+  pairResult: PairLoopGuardResult,
+  burstResult: PairLoopGuardResult,
+): PairLoopGuardResult {
+  if (!pairResult.suppressed) {
+    return burstResult;
+  }
+  if (!burstResult.suppressed) {
+    return pairResult;
+  }
+  return {
+    suppressed: true,
+    cooldownUntilMs: Math.max(pairResult.cooldownUntilMs, burstResult.cooldownUntilMs),
+  };
+}
+
 /** Creates an in-memory pair-loop guard with bounded periodic pruning. */
 export function createPairLoopGuard(params?: { pruneIntervalMs?: number }): PairLoopGuard {
   const tracked = new Map<string, PairLoopGuardEntry>();
@@ -407,7 +429,10 @@ export function createPairLoopGuard(params?: { pruneIntervalMs?: number }): Pair
     // suppresses it, so a live storm remains armed through pair cooldown gaps.
     const burstResult = recordConversationBurstAndCheck({ ...paramsLocal, nowMs });
     if (entry.cooldownStartedAtMs <= nowMs && entry.cooldownUntilMs > nowMs) {
-      return { suppressed: true, cooldownUntilMs: entry.cooldownUntilMs };
+      return latestActiveCooldown(
+        { suppressed: true, cooldownUntilMs: entry.cooldownUntilMs },
+        burstResult,
+      );
     }
     // Replay identity prevents either budget from being consumed twice, but it must not bypass
     // an already-active conversation cooldown returned by the burst bucket above.
@@ -424,7 +449,10 @@ export function createPairLoopGuard(params?: { pruneIntervalMs?: number }): Pair
       entry.cooldownUntilMs = nowMs + cooldownMs;
       // Keep only future records during cooldown; past events should not extend suppression.
       entry.recentEvents = entry.recentEvents.filter((event) => event.timestampMs > nowMs);
-      return { suppressed: true, cooldownUntilMs: entry.cooldownUntilMs };
+      return latestActiveCooldown(
+        { suppressed: true, cooldownUntilMs: entry.cooldownUntilMs },
+        burstResult,
+      );
     }
 
     return burstResult;
