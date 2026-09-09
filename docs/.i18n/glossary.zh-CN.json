@@ -3256,6 +3256,46 @@
     "target": "配置 — 聊天命令"
   },
   {
+    "source": "Microsoft Teams setup",
+    "target": "Microsoft Teams 设置"
+  },
+  {
+    "source": "Microsoft Teams access control",
+    "target": "Microsoft Teams 访问控制"
+  },
+  {
+    "source": "Microsoft Teams authentication",
+    "target": "Microsoft Teams 身份验证"
+  },
+  {
+    "source": "Microsoft Teams manifest and permissions",
+    "target": "Microsoft Teams 清单与权限"
+  },
+  {
+    "source": "Microsoft Teams configuration",
+    "target": "Microsoft Teams 配置"
+  },
+  {
+    "source": "Microsoft Teams message behavior",
+    "target": "Microsoft Teams 消息行为"
+  },
+  {
+    "source": "Microsoft Teams cards and actions",
+    "target": "Microsoft Teams 卡片与操作"
+  },
+  {
+    "source": "Microsoft Teams troubleshooting",
+    "target": "Microsoft Teams 故障排查"
+  },
+  {
+    "source": "Groups",
+    "target": "群组"
+  },
+  {
+    "source": "Security",
+    "target": "安全"
+  },
+  {
     "source": "ACP agents quickstart",
     "target": "ACP 智能体快速上手"
   },

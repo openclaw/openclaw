@@ -1511,7 +1511,20 @@
                       "channels/matrix-push-rules"
                     ]
                   },
-                  "channels/msteams",
+                  {
+                    "group": "Microsoft Teams",
+                    "pages": [
+                      "channels/msteams",
+                      "channels/msteams/setup",
+                      "channels/msteams/access-control",
+                      "channels/msteams/authentication",
+                      "channels/msteams/manifest-and-permissions",
+                      "channels/msteams/configuration",
+                      "channels/msteams/messaging",
+                      "channels/msteams/cards-and-actions",
+                      "channels/msteams/troubleshooting"
+                    ]
+                  },
                   "channels/signal",
                   {
                     "group": "Slack",

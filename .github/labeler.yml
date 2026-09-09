@@ -161,6 +161,7 @@
       - any-glob-to-any-file:
           - "extensions/msteams/**"
           - "docs/channels/msteams.md"
+          - "docs/channels/msteams/**"
 "channel: nextcloud-talk":
   - changed-files:
       - any-glob-to-any-file:
