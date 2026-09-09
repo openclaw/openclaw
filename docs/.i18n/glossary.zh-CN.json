@@ -3292,32 +3292,36 @@
     "target": "配置 — 聊天命令"
   },
   {
-    "source": "The trust boundary",
-    "target": "信任边界"
+    "source": "Ollama setup",
+    "target": "Ollama 设置"
   },
   {
-    "source": "Policy as code",
-    "target": "策略即代码"
+    "source": "Ollama model discovery",
+    "target": "Ollama 模型发现"
   },
   {
-    "source": "Identity and roles",
-    "target": "身份与角色"
+    "source": "Ollama node-local inference",
+    "target": "Ollama 节点本地推理"
   },
   {
-    "source": "Secrets",
-    "target": "密钥"
+    "source": "Ollama vision and image description",
+    "target": "Ollama 视觉与图像描述"
   },
   {
-    "source": "Versioned state, guarded upgrades",
-    "target": "版本化状态与受保护的升级"
+    "source": "Ollama configuration",
+    "target": "Ollama 配置"
   },
   {
-    "source": "Provenance",
-    "target": "溯源"
+    "source": "Ollama config recipes",
+    "target": "Ollama 配置示例"
   },
   {
-    "source": "OpenClaw and Hermes Agent",
-    "target": "OpenClaw 与 Hermes Agent"
+    "source": "Ollama advanced configuration",
+    "target": "Ollama 高级配置"
+  },
+  {
+    "source": "Ollama troubleshooting",
+    "target": "Ollama 故障排查"
   },
   {
     "source": "ACP agents quickstart",
@@ -3504,58 +3508,6 @@
     "target": "Telegram 故障排查"
   },
   {
-    "source": "Sub-agent slash command",
-    "target": "子智能体斜杠命令"
-  },
-  {
-    "source": "Sub-agent tool reference",
-    "target": "子智能体工具参考"
-  },
-  {
-    "source": "Thread-bound sub-agent sessions",
-    "target": "线程绑定的子智能体会话"
-  },
-  {
-    "source": "Nested sub-agents and authentication",
-    "target": "嵌套子智能体与鉴权"
-  },
-  {
-    "source": "Sub-agent announce",
-    "target": "子智能体通报"
-  },
-  {
-    "source": "Sub-agent tool policy",
-    "target": "子智能体工具策略"
-  },
-  {
-    "source": "Sub-agent concurrency, recovery, and stopping",
-    "target": "子智能体并发、恢复与停止"
-  },
-  {
-    "source": "Swarm collectors",
-    "target": "Swarm 收集器"
-  },
-  {
-    "source": "Run the Gateway",
-    "target": "运行 Gateway 网关"
-  },
-  {
-    "source": "Restart and supervision",
-    "target": "重启与进程监管"
-  },
-  {
-    "source": "Query a running Gateway",
-    "target": "查询运行中的 Gateway 网关"
-  },
-  {
-    "source": "Manage the Gateway service",
-    "target": "管理 Gateway 网关服务"
-  },
-  {
-    "source": "Discover gateways (Bonjour)",
-    "target": "发现 Gateway 网关（Bonjour）"
-  },
-  {
     "source": "Microsoft Teams setup",
     "target": "Microsoft Teams 设置"
   },
@@ -3594,5 +3546,85 @@
   {
     "source": "Security",
     "target": "安全"
+  },
+  {
+    "source": "Run the Gateway",
+    "target": "运行 Gateway 网关"
+  },
+  {
+    "source": "Restart and supervision",
+    "target": "重启与进程监管"
+  },
+  {
+    "source": "Query a running Gateway",
+    "target": "查询运行中的 Gateway 网关"
+  },
+  {
+    "source": "Manage the Gateway service",
+    "target": "管理 Gateway 网关服务"
+  },
+  {
+    "source": "Discover gateways (Bonjour)",
+    "target": "发现 Gateway 网关（Bonjour）"
+  },
+  {
+    "source": "Sub-agent slash command",
+    "target": "子智能体斜杠命令"
+  },
+  {
+    "source": "Sub-agent tool reference",
+    "target": "子智能体工具参考"
+  },
+  {
+    "source": "Thread-bound sub-agent sessions",
+    "target": "线程绑定的子智能体会话"
+  },
+  {
+    "source": "Nested sub-agents and authentication",
+    "target": "嵌套子智能体与鉴权"
+  },
+  {
+    "source": "Sub-agent announce",
+    "target": "子智能体通报"
+  },
+  {
+    "source": "Sub-agent tool policy",
+    "target": "子智能体工具策略"
+  },
+  {
+    "source": "Sub-agent concurrency, recovery, and stopping",
+    "target": "子智能体并发、恢复与停止"
+  },
+  {
+    "source": "Swarm collectors",
+    "target": "Swarm 收集器"
+  },
+  {
+    "source": "The trust boundary",
+    "target": "信任边界"
+  },
+  {
+    "source": "Policy as code",
+    "target": "策略即代码"
+  },
+  {
+    "source": "Identity and roles",
+    "target": "身份与角色"
+  },
+  {
+    "source": "Secrets",
+    "target": "密钥"
+  },
+  {
+    "source": "Versioned state, guarded upgrades",
+    "target": "版本化状态与受保护的升级"
+  },
+  {
+    "source": "Provenance",
+    "target": "溯源"
+  },
+  {
+    "source": "OpenClaw and Hermes Agent",
+    "target": "OpenClaw 与 Hermes Agent"
   }
 ]

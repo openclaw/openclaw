@@ -2184,6 +2184,20 @@
                       "providers/llmman",
                       "providers/lmstudio",
                       "providers/ollama",
+                      {
+                        "group": "Ollama",
+                        "pages": [
+                          "providers/ollama/setup",
+                          "providers/ollama/model-discovery",
+                          "providers/ollama/node-local-inference",
+                          "providers/ollama/vision",
+                          "providers/ollama/configuration",
+                          "providers/ollama/recipes",
+                          "providers/ollama/web-search",
+                          "providers/ollama/advanced",
+                          "providers/ollama/troubleshooting"
+                        ]
+                      },
                       "providers/sglang",
                       "providers/vllm"
                     ]
