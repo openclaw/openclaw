@@ -93,7 +93,7 @@ local proof.
   "id": "my-plugin",
   "name": "My Plugin",
   "description": "Adds a custom tool to OpenClaw",
-  "categories": ["tools"],
+  "categories": ["other"],
   "contracts": {
     "tools": ["my_tool"]
   },
@@ -112,6 +112,10 @@ local proof.
     Published external plugins should point runtime entries at built JavaScript
     files. See [SDK entry points](/plugins/sdk-entrypoints) for the full entry
     point contract.
+
+    Choose one [catalog category](/plugins/manifest#catalog-categories) for the
+    plugin's main user purpose. This generic example uses `other`; a calendar
+    plugin would use `scheduling`, and a coding helper would use `developer-tools`.
 
     Every plugin needs a manifest, even with no config. Runtime tools must
     appear in `contracts.tools` so OpenClaw can discover ownership without

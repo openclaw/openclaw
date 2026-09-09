@@ -261,7 +261,7 @@ The anchors from the single-page version still resolve here.
 | `name`                               | No       | `string`                     | Human-readable plugin name.                                                                                                                                                                                                                                                                                                                                                                      |
 | `description`                        | No       | `string`                     | Short summary shown in plugin surfaces.                                                                                                                                                                                                                                                                                                                                                          |
 | `catalog`                            | No       | `object`                     | Optional presentation hints for plugin catalog surfaces. This metadata does not install, enable, or grant trust to a plugin.                                                                                                                                                                                                                                                                     |
-| `categories`                         | No       | `string[]`                   | One to three controlled catalog category slugs, ordered with the primary category first. Bundled plugins must declare at least one category.                                                                                                                                                                                                                                                     |
+| `categories`                         | No       | `string[]`                   | One to three controlled catalog category slugs, ordered with the primary category first. Bundled plugins must declare exactly one active category.                                                                                                                                                                                                                                               |
 | `version`                            | No       | `string`                     | Informational plugin version.                                                                                                                                                                                                                                                                                                                                                                    |
 | `uiHints`                            | No       | `Record<string, object>`     | UI labels, placeholders, and sensitivity hints for config fields.                                                                                                                                                                                                                                                                                                                                |
 
@@ -273,41 +273,46 @@ order, explicit bindings, and plugin trust checks still apply.
 
 ## Catalog categories
 
-Declare `categories` in `openclaw.plugin.json` so every catalog consumer reads the same
-package-owned classification. The array accepts one to three unique slugs. Put the plugin's
-primary category first; catalog surfaces can group it there while still matching every declared
-category in search and filters.
+Choose the one category that best describes why someone would install the plugin.
+Use its main user purpose, not every tool, provider, or runtime capability it exposes.
+For example, a coding-agent harness belongs in `developer-tools`, document extraction
+belongs in `documents-files`, and a messaging adapter belongs in `channels` even when
+it also provides workspace tools.
 
-The active categories below are listed in browse order. Choose the work the plugin
-helps with, rather than adding a category merely because it exposes tools.
+Bundled OpenClaw plugins declare exactly one active category. New ClawHub publications
+also accept exactly one declared category, using the same array shape, or omit the
+field for ClawHub to generate a category.
 
-| Slug                  | Use for                                                          |
-| --------------------- | ---------------------------------------------------------------- |
-| `channels`            | Messaging and channel transports                                 |
-| `models`              | Model providers, inference engines, and model routing            |
-| `memory`              | Long-term memory, retrieval, and memory stores                   |
-| `context`             | Context engines, extraction, and context management              |
-| `voice`               | Speech, transcription, and calling                               |
-| `web`                 | Web search, browsing, and fetching                               |
-| `media`               | Image, video, music, and other media generation or understanding |
-| `security`            | Authentication, policy, secrets, and sandboxing                  |
-| `integrations`        | General service connectors and integration platforms             |
-| `developer-tools`     | Coding, debugging, testing, and software development             |
-| `infrastructure`      | Hosting, deployment, systems administration, and observability   |
-| `documents-files`     | Reading, writing, organizing, and exchanging documents and files |
-| `inbox-collaboration` | Email, shared inboxes, meetings, and team collaboration          |
-| `productivity`        | Tasks, projects, notes, and personal work organization           |
-| `scheduling`          | Calendars, appointments, and booking                             |
-| `finance-payments`    | Financial analysis, accounting, billing, and payments            |
-| `sales-marketing`     | CRM, sales, marketing, and customer outreach                     |
-| `data-analytics`      | Databases, data processing, analytics, and reporting             |
-| `agent-orchestration` | Coordinating agents, delegated tasks, and approval workflows     |
-| `research`            | Research workflows, source discovery, and evidence synthesis     |
-| `other`               | Plugins that do not fit a more specific controlled category      |
+OpenClaw's manifest reader continues to accept one to three unique, ordered categories
+so previously installed and published packages remain readable. When reading older
+multiple-category declarations, the first remains primary and all remain searchable.
+The stricter new-publication rule does not invalidate an installed plugin's manifest.
 
-For example, a document extraction plugin can declare `documents-files` first and
-`context` second. A general connector belongs in `integrations`; a calendar connector
-usually belongs in `scheduling`.
+The active categories below are listed in browse order:
+
+| Slug                  | Use for                                                                                                                                                                                                                   |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `channels`            | Human-agent messaging transports and channel adapters. Choose this when the main purpose is letting people talk to the agent through a messaging service, even if the adapter also exposes workspace tools.               |
+| `models`              | General model providers, inference backends, and model routing. Specialized speech or media generators belong in Voice or Media when that is their main purpose.                                                          |
+| `memory`              | Durable agent memory, embeddings, and retrieval across conversations. Building or compacting the active conversation context belongs in Context.                                                                          |
+| `context`             | Building, selecting, compacting, or managing the active conversation context. Durable memory storage and retrieval belong in Memory.                                                                                      |
+| `voice`               | Speech synthesis, transcription, voice calls, and spoken interaction. Music and general media creation or analysis belong in Media.                                                                                       |
+| `web`                 | General web search, browser control, and fetching web pages. A tool whose main purpose is a specific research or business workflow belongs in that workflow's category.                                                   |
+| `media`               | Creating, transforming, or understanding images, video, music, and other media. Spoken interaction and transcription belong in Voice.                                                                                     |
+| `security`            | Protecting access and enforcing trust through authentication, authorization, credential controls, security auditing, or policy. Authentication incidental to another purpose does not belong here.                        |
+| `integrations`        | General connectors, API bridges, and service integration platforms without a more specific user purpose. A connector to a particular workflow belongs in that workflow's category; exposing tools or MCP is not enough.   |
+| `developer-tools`     | Writing, reviewing, testing, and debugging software, including coding agents, coding-agent harnesses, and development environments. General coordination of agents belongs in Agent orchestration.                        |
+| `infrastructure`      | Deploying, hosting, monitoring, and operating systems, networks, services, execution environments, and agent runtimes. Coding-agent harnesses belong in Developer tools; agent delegation belongs in Agent orchestration. |
+| `documents-files`     | Reading, creating, extracting, transferring, and managing documents and files. Software code review belongs in Developer tools; task and project management belongs in Productivity.                                      |
+| `inbox-collaboration` | Managing email, inboxes, team communication, and collaborative workspaces. Providing a transport for people to talk to the agent belongs in Channels.                                                                     |
+| `productivity`        | Managing tasks, notes, projects, plans, and personal or team work. Appointments and availability belong in Scheduling; document processing belongs in Documents & files.                                                  |
+| `scheduling`          | Calendars, appointments, availability, and booking. Technical job scheduling belongs with the workflow it supports, or Infrastructure for general system scheduling.                                                      |
+| `finance-payments`    | Payments, billing, accounting, banking, trading, and financial workflows. General business reporting belongs in Data & analytics.                                                                                         |
+| `sales-marketing`     | Customer relationships, sales, customer support, outreach, campaigns, and marketing operations. General email or chat management belongs in Inbox & collaboration.                                                        |
+| `data-analytics`      | Querying databases, processing datasets, analysis, reporting, and business intelligence. Agent memory storage belongs in Memory; operational telemetry belongs in Infrastructure.                                         |
+| `agent-orchestration` | Coordinating agents, delegating work, and running multi-step agent workflows. Coding-agent harnesses belong in Developer tools; hosting and operating runtimes belong in Infrastructure.                                  |
+| `research`            | Investigating topics, evaluating sources, working with scientific literature, and synthesizing evidence. General web search, browsing, and page fetching belong in Web.                                                   |
+| `other`               | Use only when the plugin's main purpose does not fit another category or the available evidence is insufficient. Do not use this just because a plugin has several capabilities.                                          |
 
 Legacy `tools`, `runtime`, and `gateway` declarations remain valid so existing
 packages keep loading. They are retired from the active browse taxonomy. Choose
@@ -316,7 +321,7 @@ translated into a different category.
 
 Omission remains valid for external plugin compatibility. When an external catalog supplies a
 derived fallback, an explicit package declaration takes precedence. Bundled OpenClaw plugins must
-declare at least one category.
+declare exactly one active category.
 
 ## JSON Schema requirements
 
