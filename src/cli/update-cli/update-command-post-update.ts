@@ -503,6 +503,7 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
           result: resultWithPostUpdate,
           opts: params.opts,
           refreshServiceEnv: refreshGatewayServiceEnv,
+          serviceRuntimeRefreshRequired: params.serviceRuntimeRefreshRequired,
           serviceUpdateVerdict,
           serviceEnv: gatewayServiceEnv,
           serviceInstallEnv: gatewayServiceInstallEnv,
@@ -539,10 +540,12 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
         reason: verificationFailure,
         recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
       };
+      const canRepairService =
+        serviceMutationAllowed && !skipLegacyServiceRestart && !postVerificationRepairAttempted;
       const recovered = await recoverFailedResult(
         failure,
         false,
-        serviceMutationAllowed && !skipLegacyServiceRestart && !postVerificationRepairAttempted
+        verificationFailure !== "service-runtime-refresh-failed" && canRepairService
           ? (result) =>
               repairUpdateService({
                 result,
@@ -640,7 +643,9 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
         });
         pendingRestartAtMs ??= Date.now();
         restartScriptPath = null;
-        refreshGatewayServiceEnv = false;
+        if (!params.serviceRuntimeRefreshRequired) {
+          refreshGatewayServiceEnv = false;
+        }
         if (params.coreAlreadyCurrent) {
           await notifyRestart();
         }

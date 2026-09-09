@@ -1,6 +1,6 @@
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { assertOpenClawStateWriteAllowedAtPath } from "../../state/openclaw-state-ownership.js";
-import { readPackageVersion, UpdatePreMutationError } from "./shared.js";
+import { readPackageVersion, resolveNodeRunner, UpdatePreMutationError } from "./shared.js";
 import { inspectUpdateDatabaseContexts } from "./update-command-database-context.js";
 import {
   formatUpdateAncestryBlockMessage,
@@ -16,6 +16,7 @@ import type { FinishUpdateParams } from "./update-command-post-update-types.js";
 import { finishUpdate } from "./update-command-post-update.js";
 import {
   GatewayServiceUpdateOwnershipError,
+  resolvePackageRuntimePreflight,
   type ManagedServiceRootRedirect,
 } from "./update-command-service-plan.js";
 import {
@@ -43,6 +44,7 @@ export async function finishAlreadyCurrentUpdate(
     | "ownedManagedUpdateEnv"
   > & {
     managedServiceRootRedirect: ManagedServiceRootRedirect | null;
+    runtimeTarget?: { version: string; nodeEngine: string | null };
     stop: () => void;
     refuseUpdate: (reason: string, message?: string) => Promise<void>;
   },
@@ -68,6 +70,24 @@ export async function finishAlreadyCurrentUpdate(
       managedServiceRootRedirect: params.managedServiceRootRedirect,
     };
     const admission = await inspectUpdateDatabaseContexts(inspection);
+    const service = admission.service;
+    const runtime = await resolvePackageRuntimePreflight({
+      target: params.runtimeTarget,
+      installedRoot: params.root,
+      nodeRunner: service?.serviceNodeRunner ?? params.packageUpdateNodeRunner,
+      fallbackNodeRunner:
+        params.shouldRestart &&
+        service?.running &&
+        service.serviceUpdateVerdict?.kind === "owned" &&
+        service.serviceUpdateVerdict.refreshDefinition
+          ? resolveNodeRunner()
+          : undefined,
+      timeoutMs: params.updateStepTimeoutMs,
+    });
+    if (!runtime.ok) {
+      throw new UpdatePreMutationError("node-runtime-preflight", runtime.error);
+    }
+    const packageUpdateNodeRunner = runtime.value.nodeRunner;
     const context = admission.contexts.at(-1)!;
     await preflightConfiguredNpmPluginTargets({
       config: context.configSnapshot.sourceConfig,
@@ -97,7 +117,7 @@ export async function finishAlreadyCurrentUpdate(
                 ? undefined
                 : (result.after.version ?? undefined),
             timeoutMs: params.updateStepTimeoutMs,
-            nodeRunner: params.packageUpdateNodeRunner,
+            nodeRunner: packageUpdateNodeRunner,
             invocationCwd: params.invocationCwd,
             stopProgress: params.stop,
           }),
@@ -132,6 +152,8 @@ export async function finishAlreadyCurrentUpdate(
     params.stop();
     await finishUpdate({
       ...params,
+      packageUpdateNodeRunner,
+      serviceRuntimeRefreshRequired: runtime.value.replacedNodeRunner !== undefined,
       result: { ...result, status: "skipped", reason: "already-current" },
       coreAlreadyCurrent: true,
       mutationStarted: false,

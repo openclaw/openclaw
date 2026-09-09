@@ -530,6 +530,7 @@ async function updateCommandInternal(
     startedAt,
     controlPlaneUpdateSentinelMeta,
     packageUpdateNodeRunner: packageUpdateNodeRunner ?? managedServiceNodeRunner,
+    runtimeTarget: packageRuntimeTarget,
     managedServiceRootRedirect,
     stop: presentation.stop,
     refuseUpdate,

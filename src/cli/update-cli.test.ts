@@ -10761,6 +10761,136 @@ describe("update-cli", () => {
     },
   );
 
+  it.each([
+    { fallback: false, restart: true, writable: true, refreshFails: false },
+    { fallback: true, restart: true, writable: true, refreshFails: false },
+    { fallback: true, restart: false, writable: true, refreshFails: false },
+    { fallback: true, restart: true, writable: false, refreshFails: false },
+    { fallback: true, restart: true, writable: true, refreshFails: true },
+  ])(
+    "admits managed Node before already-current plugin maintenance ($fallback, restart=$restart, writable=$writable, refreshFails=$refreshFails)",
+    async ({ fallback, restart, writable, refreshFails }) => {
+      const servicePrefix = tempDirs.make("openclaw-current-runtime-");
+      const { nodeModules, root, serviceNode, serviceNpm, serviceNpmReal, entrypoint } =
+        await setupServicePackageAtPrefix({ prefix: servicePrefix, version: "2026.9.3" });
+      mockPackageInstallStatus(root);
+      readPackageVersion.mockResolvedValue("2026.9.3");
+      primeServiceCommand([serviceNode, entrypoint, "gateway"]);
+      serviceLoaded.mockResolvedValue(true);
+      if (!writable) {
+        serviceDefinitionMutationCapability.mockResolvedValue({
+          kind: "sealed",
+          detail: "test service owner",
+        });
+      }
+      serviceReadRuntime.mockResolvedValue({
+        status: "running",
+        pid: gatewayFixturePid,
+        state: "running",
+      });
+      primeNpmChannelTag("latest", "2026.9.3");
+      vi.mocked(fetchNpmPackageTargetStatus).mockResolvedValue(
+        packageTargetStatus({ version: "2026.9.3", nodeEngine: ">=24.16.0 <25 || >=26.1.0" }),
+      );
+      nodeVersionSatisfiesEngine.mockImplementation(
+        (version) => fallback && version === process.versions.node,
+      );
+      mockFileBackedPathExists();
+      vi.mocked(resolveGatewayInstallEntrypoint).mockReset();
+      mockServicePackageCommands({
+        nodeModules,
+        packageRoot: root,
+        targetVersion: "2026.9.3",
+        npmCommands: [serviceNpm, serviceNpmReal!],
+        nodeVersions: {
+          [serviceNode]: "v22.23.1",
+          [process.execPath]: `v${process.versions.node}`,
+        },
+      });
+      const fixtureCommand = requireValue(
+        vi.mocked(runCommandWithTimeout).getMockImplementation(),
+        "runtime fixture command",
+      );
+      vi.mocked(runCommandWithTimeout).mockImplementation(async (argv, options) => {
+        if (argv[2] === "gateway" && argv[3] === "install") {
+          if (refreshFails) {
+            return commandResult({ code: 1, stderr: "runtime refresh failed" });
+          }
+          primeServiceCommand([argv[0], entrypoint, "gateway"]);
+        }
+        return fixtureCommand(argv, options);
+      });
+      const installPath = createCaseDir("current-runtime-plugin");
+      await fs.mkdir(installPath, { recursive: true });
+      await writeJsonFixture(path.join(installPath, "package.json"), {
+        name: "@openclaw/brave-plugin",
+        version: "2026.9.2",
+      });
+      const record: PluginInstallRecord = {
+        source: "npm",
+        spec: "@openclaw/brave-plugin",
+        installPath,
+        version: "2026.9.2",
+      };
+      loadInstalledPluginIndexInstallRecords.mockResolvedValue({ brave: record });
+      const updated = { ...record, version: "2026.9.3" };
+      mockNpmPluginOutcomes(
+        [
+          {
+            pluginId: "brave",
+            status: "updated",
+            currentVersion: "2026.9.2",
+            nextVersion: "2026.9.3",
+            message: "Updated brave.",
+          },
+        ],
+        true,
+        { ...baseConfig, plugins: { ...baseConfig.plugins, installs: { brave: updated } } },
+      );
+      runPostCorePluginConvergenceSpy.mockResolvedValueOnce({
+        ...postCoreConvergenceResult(),
+        installRecords: { brave: updated },
+      });
+
+      if (!fallback || !restart || !writable) {
+        await expect(updateCommand({ yes: true, restart, json: true })).rejects.toEqual(
+          new ExitError(1),
+        );
+        expect(lastWriteJsonCall()).toMatchObject({
+          status: "error",
+          reason: "node-runtime-preflight",
+        });
+        expect(getErrorOutput()).toContain(
+          "Use a compatible version of the Node runtime that owns the managed Gateway service",
+        );
+        expectNoSideEffects(
+          updateNpmInstalledPlugins,
+          syncPluginsForUpdateChannel,
+          serviceStop,
+          serviceRestart,
+        );
+      } else if (refreshFails) {
+        await expect(updateCommand({ yes: true, json: true })).rejects.toEqual(new ExitError(1));
+        expect(unattendedRepair).not.toHaveBeenCalled();
+        expect(freshRestartCalls()).toHaveLength(0);
+        expect(serviceRestart).not.toHaveBeenCalled();
+        expect((await serviceReadCommand(process.env))?.programArguments[0]).toBe(serviceNode);
+      } else {
+        await updateCommand({ yes: true, json: true });
+        expect(lastWriteJsonCall()).toMatchObject({
+          status: "ok",
+          postUpdate: { plugins: { changed: true } },
+        });
+        const install = gatewayCommandCall(entrypoint, "install");
+        expect(install?.[0][0]).toBe(process.execPath);
+        expect((await serviceReadCommand(process.env))?.programArguments[0]).toBe(process.execPath);
+        expect(serviceStop).toHaveBeenCalledOnce();
+        expect(freshRestartCalls()).toHaveLength(0);
+      }
+      expect(packageInstallCommandCall()).toBeUndefined();
+    },
+  );
+
   it("refreshes the managed service to current Node when its baked Node cannot run the target", async () => {
     const servicePrefix = tempDirs.make("openclaw-service-prefix-");
     const { nodeModules, root, serviceNode, serviceNpm, serviceNpmReal, entrypoint } =
