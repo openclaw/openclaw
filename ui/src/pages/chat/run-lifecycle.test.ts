@@ -121,13 +121,14 @@ describe("handleAbortChat", () => {
     expect(request).not.toHaveBeenCalledWith("chat.abort", expect.anything());
   });
 
-  it("retires a stale local run when chat.abort reports nothing to abort", async () => {
-    // The Gateway finished this run, but its terminal event never reached the browser.
+  it("settles through the authoritative refresh when chat.abort reports nothing to abort", async () => {
+    // The Gateway finished this run, but its lifecycle notifications never reached the browser.
     const request = vi.fn(async () => ({ ok: true, aborted: false, runIds: [] }));
+    const refreshCurrentChat = vi.fn(async () => {});
     const host = makeAbortHost({
       client: createTestGatewayClient(request),
       chatRunId: "run-finished",
-      chatStream: "partial reply",
+      refreshCurrentChat,
     });
 
     const outcome = await handleAbortChat(host, { preserveDraft: true });
@@ -137,31 +138,36 @@ describe("handleAbortChat", () => {
       sessionKey: "agent:main",
       runId: "run-finished",
     });
-    expect(host.chatRunId).toBeNull();
-    expect(host.chatRunSessionAbortable).toBeUndefined();
-    expect(host.chatStream).toBe("partial reply");
+    expect(refreshCurrentChat).toHaveBeenCalledTimes(1);
+    // Only the refreshed Gateway row may clear the run; a finalizing run keeps ownership.
+    expect(host.chatRunId).toBe("run-finished");
     expect(host.chatError ?? null).toBeNull();
   });
 
-  it("keeps local run ownership when chat.abort aborts the live run", async () => {
+  it("keeps event-driven settlement when chat.abort aborts the live run", async () => {
     const request = vi.fn(async () => ({ ok: true, aborted: true, runIds: ["run-live"] }));
+    const refreshCurrentChat = vi.fn(async () => {});
     const host = makeAbortHost({
       client: createTestGatewayClient(request),
       chatRunId: "run-live",
+      refreshCurrentChat,
     });
 
     const outcome = await handleAbortChat(host, { preserveDraft: true });
 
     expect(outcome).toBe("aborted");
+    expect(refreshCurrentChat).not.toHaveBeenCalled();
     expect(host.chatRunId).toBe("run-live");
   });
 
-  it("retires a stale recovered embedded run when sessions.abort reports no active run", async () => {
+  it("settles a recovered embedded run when sessions.abort reports no active run", async () => {
     const request = vi.fn(async () => ({ ok: true, abortedRunId: null, status: "no-active-run" }));
+    const refreshCurrentChat = vi.fn(async () => {});
     const host = makeAbortHost({
       client: createTestGatewayClient(request),
       chatRunId: "run-embedded-finished",
       chatRunSessionAbortable: true,
+      refreshCurrentChat,
     });
 
     const outcome = await handleAbortChat(host, { preserveDraft: true });
@@ -171,7 +177,7 @@ describe("handleAbortChat", () => {
       key: "agent:main",
       runId: "run-embedded-finished",
     });
-    expect(host.chatRunId).toBeNull();
+    expect(refreshCurrentChat).toHaveBeenCalledTimes(1);
   });
 
   it("shows reconnect guidance when an offline session run has no browser run identity", async () => {

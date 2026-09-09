@@ -382,6 +382,8 @@ suite.define(() => {
     const gateway = await installMockGateway(currentPage, {
       sessionKey,
       methodResponses: { "chat.abort": { ok: true, aborted: false, runIds: [] } },
+      // The Gateway's own row already reports the run terminal.
+      sessionInfo: { hasActiveRun: false, status: "done" },
     });
 
     await currentPage.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));

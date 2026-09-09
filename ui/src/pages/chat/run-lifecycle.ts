@@ -113,16 +113,22 @@ type ReconcileOptions = {
   requestUpdate?: boolean;
 };
 
-type ChatAbortRunState = SessionScopeHost &
-  RunLifecycleHost & {
-    client: GatewayBrowserClient | null;
-    connected: boolean;
-    sessionKey: string;
-    chatRunId?: string | null;
-    chatRunSessionAbortable?: boolean;
-    lastError?: string | null;
-    chatError?: string | null;
-  };
+type ChatAbortRunState = SessionScopeHost & {
+  client: GatewayBrowserClient | null;
+  connected: boolean;
+  sessionKey: string;
+  chatRunId?: string | null;
+  chatRunSessionAbortable?: boolean;
+  lastError?: string | null;
+  chatError?: string | null;
+  /**
+   * Authoritative transcript and session-row refresh owned by the chat page.
+   * A Stop the Gateway answers with "nothing to abort" settles through it, so
+   * only a terminal Gateway row clears the local run; a run that is still
+   * finalizing keeps its ownership and visible activity.
+   */
+  refreshCurrentChat?: () => Promise<void>;
+};
 
 type ChatAbortIntentBase = {
   sourceClient: GatewayBrowserClient;
@@ -319,22 +325,17 @@ async function requestChatAbort(
 }
 
 /**
- * The Gateway no longer owns this exact run, so its terminal event never
- * reached this browser. Drop local ownership so the composer leaves its Stop
- * state; the caller refreshes the transcript and session row from canonical
- * Gateway state instead of guessing the run's outcome here.
+ * The Gateway had nothing to abort for the exact run this browser still owns:
+ * either its lifecycle notifications never arrived or the run is finalizing.
+ * Neither case is decided here; the authoritative refresh reconciles the
+ * session row and transcript, clearing the run only once the Gateway reports
+ * it terminal.
  */
-function retireStaleLocalRun(state: ChatAbortRunState, runId: string): boolean {
+async function settleNoopAbort(state: ChatAbortRunState, runId: string): Promise<void> {
   if (state.chatRunId !== runId) {
-    return false;
+    return;
   }
-  reconcileChatRunLifecycle(state, {
-    runId,
-    clearLocalRun: true,
-    clearToolStreamForRun: true,
-    clearRunStatus: true,
-  });
-  return true;
+  await state.refreshCurrentChat?.();
 }
 
 function currentChatAbortIntent(
@@ -369,7 +370,7 @@ async function abortChatRun(state: ChatAbortRunState): Promise<ChatAbortOutcome>
     return "failed";
   }
   if (intent.runId !== null && result.noActiveRun) {
-    retireStaleLocalRun(state, intent.runId);
+    await settleNoopAbort(state, intent.runId);
     return "no-active-run";
   }
   return "aborted";
@@ -400,7 +401,7 @@ export async function replayPendingChatAbort(host: ChatAbortHost): Promise<boole
   const result = await requestChatAbort(client, intent);
   if (result.ok) {
     if (result.noActiveRun) {
-      retireStaleLocalRun(host, intent.runId);
+      await settleNoopAbort(host, intent.runId);
     }
     return true;
   }
