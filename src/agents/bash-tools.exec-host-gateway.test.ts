@@ -1656,44 +1656,65 @@ Command: ${command}`;
     expect(result.deniedResult?.details.status).toBe("failed");
   });
 
-  it("fails closed before approval when a heredoc command cannot be operand-bound", async () => {
-    const command = "python3 - <<'PY'\nprint('ok')\nPY";
-    const authorizationPlan = await planShellAuthorization({
-      command,
-      env: process.env,
-    });
-    expect(authorizationPlan).toMatchObject({ ok: false, reason: "heredoc" });
-    requiresExecApprovalMock.mockReturnValue(true);
-    evaluateShellAllowlistWithAuthorizationMock.mockReturnValue({
-      allowlistMatches: [],
-      analysisOk: false,
-      allowlistSatisfied: false,
-      segments: [],
-      segmentAllowlistEntries: [],
-      segmentSatisfiedBy: [],
-      authorizationPlan,
-    });
-    resolveExecHostApprovalContextMock.mockReturnValue({
-      approvals: { allowlist: [], file: { version: 1, agents: {} } },
-      hostSecurity: "allowlist",
-      hostAsk: "on-miss",
-      askFallback: "deny",
-    });
-
-    const result = await runGatewayAllowlist({
-      command,
-      ask: "on-miss",
+  it.each([
+    {
+      command: "python3 - <<'PY'\nprint('ok')\nPY",
+      reason: "heredoc",
+      denial: "approval cannot safely bind this command",
       autoReview: true,
-    });
+    },
+    {
+      command: "pnpm install --frozen-lockfile > .openclaw/tmp/install.log 2>&1",
+      reason: "redirect",
+      denial: "approval cannot safely bind shell redirections",
+      autoReview: true,
+    },
+    {
+      command: "git diff > .openclaw/tmp/change.patch",
+      reason: "redirect",
+      denial: "approval cannot safely bind shell redirections",
+      autoReview: false,
+    },
+  ])(
+    "fails closed before approval for $reason with autoReview=$autoReview",
+    async ({ command, reason, denial, autoReview }) => {
+      const authorizationPlan = await planShellAuthorization({
+        command,
+        env: process.env,
+      });
+      expect(authorizationPlan).toMatchObject({ ok: false, reason });
+      requiresExecApprovalMock.mockReturnValue(true);
+      evaluateShellAllowlistWithAuthorizationMock.mockReturnValue({
+        allowlistMatches: [],
+        analysisOk: false,
+        allowlistSatisfied: false,
+        segments: [],
+        segmentAllowlistEntries: [],
+        segmentSatisfiedBy: [],
+        authorizationPlan,
+      });
+      resolveExecHostApprovalContextMock.mockReturnValue({
+        approvals: { allowlist: [], file: { version: 1, agents: {} } },
+        hostSecurity: "allowlist",
+        hostAsk: "on-miss",
+        askFallback: "deny",
+      });
 
-    expect(defaultExecAutoReviewerMock).not.toHaveBeenCalled();
-    expect(createAndRegisterDefaultExecApprovalRequestMock).not.toHaveBeenCalled();
-    expect(result.deniedResult?.content[0]).toEqual(
-      expect.objectContaining({
-        text: expect.stringContaining("approval cannot safely bind this command"),
-      }),
-    );
-  });
+      const result = await runGatewayAllowlist({
+        command,
+        ask: "on-miss",
+        autoReview,
+      });
+
+      expect(defaultExecAutoReviewerMock).not.toHaveBeenCalled();
+      expect(createAndRegisterDefaultExecApprovalRequestMock).not.toHaveBeenCalled();
+      expect(result.deniedResult?.content[0]).toEqual(
+        expect.objectContaining({
+          text: expect.stringContaining(denial),
+        }),
+      );
+    },
+  );
 
   it("does not activate allowlist fallback for a full-policy heredoc without an approval", async () => {
     const command = "python3 - <<'PY'\nprint('ok')\nPY";

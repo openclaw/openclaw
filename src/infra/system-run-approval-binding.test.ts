@@ -933,7 +933,7 @@ describe("mutable file operand binding", () => {
         }),
       ).resolves.toEqual({
         ok: false,
-        message: "SYSTEM_RUN_DENIED: approval cannot safely bind this command",
+        message: "SYSTEM_RUN_DENIED: approval cannot safely bind shell redirections",
       });
     });
   });

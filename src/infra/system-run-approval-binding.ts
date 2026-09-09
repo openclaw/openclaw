@@ -546,7 +546,12 @@ export async function prepareSystemRunMutableFileBinding(params: {
   if (!plan.ok) {
     return {
       ok: false,
-      message: "SYSTEM_RUN_DENIED: approval cannot safely bind this command",
+      // Keep parser errors private, but distinguish unsupported redirection from
+      // approval delivery failures. This rejection happens before registration.
+      message:
+        plan.reason === "redirect"
+          ? "SYSTEM_RUN_DENIED: approval cannot safely bind shell redirections"
+          : "SYSTEM_RUN_DENIED: approval cannot safely bind this command",
     };
   }
   if (plan.groups.some((group) => group.candidates.length > 1)) {
