@@ -54,7 +54,7 @@ Low-level (raw RPC):
 openclaw nodes invoke --node <idOrNameOrIp> --command device.info --params '{}'
 ```
 
-`nodes invoke` blocks `system.run` and `system.run.prepare`; those commands only run through the `exec` tool with `host=node` (see above). Higher-level helpers exist for the common "give the agent a MEDIA attachment" workflows (camera, screen, location, below).
+`nodes invoke` blocks `system.run` and `system.run.prepare`; those commands only run through the `exec` tool with `host=node` (see above). Higher-level helpers exist for the common "give the agent a MEDIA attachment" workflows (camera, screen, location: see [Node device commands](/nodes/device-commands)).
 
 Long-running streaming node commands use additive `node.invoke.progress`
 events. Each event carries the invoke ID, a zero-based sequence number, and a
