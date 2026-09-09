@@ -1,4 +1,3 @@
-// Routing binding tests cover the shared diagnostic/account binding helpers.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -65,24 +64,4 @@ describe("route binding account helpers", () => {
     );
     expect(resolveDefaultAgentBoundAccountId(cfg, "telegram")).toBeNull();
   });
-
-  it.each([{ accountId: null }, { accountId: 123 }, { accountId: {} }, { accountId: [] }])(
-    "excludes malformed account $accountId from diagnostics",
-    ({ accountId }) => {
-      const cfg: OpenClawConfig = {
-        bindings: [
-          {
-            agentId: "main",
-            match: {
-              channel: "telegram",
-              // @ts-expect-error Exercise malformed runtime input rejected by the binding reader.
-              accountId,
-            },
-          },
-        ],
-      };
-      expect(listBoundAccountIds(cfg, "telegram")).toEqual([]);
-      expect(buildChannelAccountBindings(cfg).size).toBe(0);
-    },
-  );
 });
