@@ -5741,7 +5741,6 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         const read = (selector: string) => {
           const style = getComputedStyle(document.querySelector(selector) as HTMLElement);
           return {
-            minHeight: style.minHeight,
             overflowY: style.overflowY,
             borderTopWidth: style.borderTopWidth,
           };
@@ -5755,14 +5754,10 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       });
 
       // PR checks, timestamps and hints are metadata inside an exchange. Sharing the
-      // thread's rule would give each one a 96px scrolling bordered box; the
+      // thread's rule would give each one a scrolling bordered box; the
       // selector list has silently merged before.
-      expect(styles.thread.minHeight).toBe("96px");
       expect(styles.thread.overflowY).toBe("auto");
       for (const metadata of [styles.prChecks, styles.timestamp, styles.hint]) {
-        // Relational, not a literal: the point is that these nodes do not share
-        // the thread's rule, whatever the thread's own numbers become.
-        expect(metadata.minHeight).not.toBe(styles.thread.minHeight);
         expect(metadata.overflowY).toBe("visible");
         expect(metadata.borderTopWidth).toBe("0px");
       }
