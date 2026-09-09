@@ -518,7 +518,8 @@ try {
           "foreach ($case in @(",
           "  @{ version = 'v24.19.0'; text = $true; expected = $true },",
           "  @{ version = 'v24.19.0'; text = $false; expected = $false },",
-          "  @{ version = 'v24.15.0'; text = $true; expected = $true },",
+          "  @{ version = 'v24.15.0+vendor.1'; text = $true; expected = $false },",
+          "  @{ version = 'v26.0.0+vendor.1'; text = $true; expected = $false },",
           "  @{ version = 'v24.15.0'; text = $false; expected = $false },",
           "  @{ version = 'v22.23.2'; text = $true; expected = $false }",
           ")) {",
@@ -1524,7 +1525,7 @@ try {
     expectBatchedPowerShellCase("sqlite-versions");
   });
 
-  runIfPowerShell("admits capable Node builds and rejects broken supported builds", () => {
+  runIfPowerShell("requires the numeric floor and SQLite round trips before reusing Node", () => {
     expectBatchedPowerShellCase("node-capabilities");
   });
 

@@ -592,10 +592,10 @@ linked_node_is_usable() {
 
   current_version="$("$(node_bin)" -v 2>/dev/null || echo "")"
   required_version="$(required_node_version)"
-  if ! parse_node_release_version "$current_version" || ((NODE_RELEASE_VERSION_MAJOR < 24)); then
+  if ! node_release_version_is_supported "$current_version"; then
     return 1
   fi
-  if [[ "$NODE_VERSION_REQUESTED" == "1" ]] && ! semver_at_least "$NODE_RELEASE_VERSION_CORE" "$required_version"; then
+  if ! semver_at_least "$NODE_RELEASE_VERSION_CORE" "$required_version"; then
     return 1
   fi
   candidate_bin="$(node_dir)/bin"
@@ -639,10 +639,7 @@ linked_node_is_usable() {
     } finally {
       db.close();
     }
-  ' --no-warnings >/dev/null || return 1
-  if ! node_version_is_supported "$NODE_RELEASE_VERSION_CORE"; then
-    log "Node ${NODE_RELEASE_VERSION_CORE}: unsupported version, capability probe passed"
-  fi
+  ' --no-warnings >/dev/null
 }
 
 linked_node_sqlite_version() {

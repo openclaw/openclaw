@@ -1863,7 +1863,7 @@ node_binary_is_supported() {
     if [[ ! "$major" =~ ^[0-9]+$ || ! "$minor" =~ ^[0-9]+$ || ! "$patch" =~ ^[0-9]+$ ]]; then
         return 1
     fi
-    ((major >= 24)) &&
+    node_version_components_are_supported "$major" "$minor" "$patch" &&
         node_binary_has_safe_sqlite "$node_bin"
 }
 
@@ -2227,9 +2227,6 @@ check_node() {
         NODE_VERSION="$(node_major_version || true)"
         if node_is_supported; then
             ui_success "Node.js v$(node -v | cut -d'v' -f2) found"
-            if ! node_version_is_supported; then
-                ui_info "Node $(node -v): unsupported version, capability probe passed"
-            fi
             print_active_node_paths || true
             return 0
         else

@@ -4,7 +4,7 @@ import { normalizeNullableString } from "@openclaw/normalization-core/string-coe
 import { detectCurrentSqliteCapabilities, nodeRuntimeFailure } from "../../node-sqlite.mjs";
 import { resolveSystemNodeInfo } from "../daemon/runtime-paths.js";
 import { tryReadJson } from "./json-files.js";
-import { nodeVersionSatisfiesPackageEngine } from "./runtime-guard.js";
+import { nodeVersionSatisfiesEngine } from "./runtime-guard.js";
 import type { UpdateStepResult } from "./update-runner-types.js";
 
 const MAX_PACKAGE_JSON_BYTES = 1024 * 1024;
@@ -32,19 +32,19 @@ export async function checkGitCandidateNodeRuntime(
   const engine = await readCandidateNodeEngine(root);
   const currentVersion = process.versions.node;
   const capabilityError = nodeRuntimeFailure(currentVersion, detectCurrentSqliteCapabilities());
-  if (!capabilityError && nodeVersionSatisfiesPackageEngine(currentVersion, engine) !== false) {
+  if (!capabilityError && nodeVersionSatisfiesEngine(currentVersion, engine) !== false) {
     return null;
   }
 
   const systemNode = await resolveSystemNodeInfo({
-    acceptNodeVersion: (version) => nodeVersionSatisfiesPackageEngine(version, engine) !== false,
+    acceptNodeVersion: (version) => nodeVersionSatisfiesEngine(version, engine) !== false,
   });
   let systemDiagnostic: string;
   if (systemNode?.status === "probe-failed") {
     systemDiagnostic = `System Node compatibility remains unknown because its probe failed: ${systemNode.error.message}`;
   } else if (
     systemNode?.status === "supported" &&
-    nodeVersionSatisfiesPackageEngine(systemNode.version, engine) !== false
+    nodeVersionSatisfiesEngine(systemNode.version, engine) !== false
   ) {
     systemDiagnostic =
       "OpenClaw did not select or activate another runtime. " +

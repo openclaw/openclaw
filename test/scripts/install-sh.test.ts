@@ -3156,16 +3156,26 @@ EOF
     expect(result.stdout).toContain("status=1");
   });
 
-  it.each([
-    { version: "24.19.0", defect: "none", expected: 0 },
-    { version: "24.19.0", defect: "text", expected: 1 },
-    { version: "24.15.0", defect: "none", expected: 0 },
-    { version: "24.19.0", defect: "blob", expected: 1 },
-    { version: "24.19.0", defect: "json", expected: 1 },
-    { version: "22.23.2", defect: "none", expected: 1 },
-  ])(
-    "checks installer SQLite round trips for $version/$defect",
-    ({ version, defect, expected }) => {
+  it.each(
+    [
+      { version: "24.19.0", defect: "none", expected: 0 },
+      { version: "24.19.0", defect: "text", expected: 1 },
+      { version: "24.15.0+vendor.1", defect: "none", expected: 1 },
+      { version: "26.0.0+vendor.1", defect: "none", expected: 1 },
+      { version: "24.19.0", defect: "blob", expected: 1 },
+      { version: "24.19.0", defect: "json", expected: 1 },
+      { version: "22.23.2", defect: "none", expected: 1 },
+    ].flatMap(({ version, defect, expected }) =>
+      ["install.sh", "install-cli.sh"].map((installer) => ({
+        version,
+        defect,
+        expected,
+        installer,
+      })),
+    ),
+  )(
+    "requires the numeric floor and SQLite round trips in $installer for $version/$defect",
+    ({ version, defect, expected, installer }) => {
       const tmp = mkdtempSync(join(tmpdir(), "openclaw-installer-sqlite-"));
       const nodePath = join(tmp, "node");
       const npmPath = join(tmp, "npm");
@@ -3198,9 +3208,8 @@ EOF
       chmodSync(nodePath, 0o755);
       chmodSync(npmPath, 0o755);
       try {
-        for (const installer of ["install.sh", "install-cli.sh"]) {
-          const result = runInstallShell(
-            `
+        const result = runInstallShell(
+          `
           source "scripts/${installer}"
           PATH="$FIXTURE_ROOT:$PATH"
           node_bin() { printf '%s/node' "$FIXTURE_ROOT"; }
@@ -3209,17 +3218,19 @@ EOF
           ${installer === "install.sh" ? "node_is_supported" : "linked_node_is_usable"}
           printf 'verdict=%s\\n' "$?"
         `,
-            {
-              FIXTURE_ROOT: tmp,
-              FAKE_NODE_VERSION: version,
-              SQLITE_DEFECT: defect,
-              REAL_NODE: nodeExecutable,
-              FAKE_SQLITE_JS: fakeSqlite,
-              OPENCLAW_INSTALL_CLI_SH_NO_RUN: "1",
-            },
-          );
-          expect(result.status, result.stderr).toBe(0);
-          expect(result.stdout, `${installer}: ${result.stderr}`).toContain(`verdict=${expected}`);
+          {
+            FIXTURE_ROOT: tmp,
+            FAKE_NODE_VERSION: version,
+            SQLITE_DEFECT: defect,
+            REAL_NODE: nodeExecutable,
+            FAKE_SQLITE_JS: fakeSqlite,
+            OPENCLAW_INSTALL_CLI_SH_NO_RUN: "1",
+          },
+        );
+        expect(result.status, result.stderr).toBe(0);
+        expect(result.stdout, `${installer}: ${result.stderr}`).toContain(`verdict=${expected}`);
+        if (defect === "text") {
+          expect(result.stderr).toContain("node:sqlite truncates TEXT at embedded NUL");
         }
         const powershellProbe = readFileSync("scripts/install.ps1", "utf8").match(
           /\$sqliteProbe = @'\n([\s\S]*?)\n'@/u,
@@ -3230,8 +3241,8 @@ EOF
           env: { ...process.env, SQLITE_DEFECT: defect },
         });
         expect(probe.status, probe.stderr).toBe(0);
-        const result: unknown = JSON.parse(probe.stdout);
-        expect(result).toMatchObject({
+        const probeResult: unknown = JSON.parse(probe.stdout);
+        expect(probeResult).toMatchObject({
           available: true,
           version: "3.51.3",
           text: defect !== "text",

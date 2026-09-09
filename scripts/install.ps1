@@ -249,7 +249,7 @@ Write-Host "[OK] Windows detected" -ForegroundColor Green
 
 # Check for Node.js
 function Test-NodeVersionSupported {
-    param([string]$Version, [switch]$CapabilityGate)
+    param([string]$Version)
 
     if ([string]::IsNullOrWhiteSpace($Version)) {
         return $false
@@ -276,9 +276,6 @@ function Test-NodeVersionSupported {
         $patch -gt $maxSafeInteger
     ) {
         return $false
-    }
-    if ($CapabilityGate) {
-        return ($major -ge 24)
     }
     if ($major -eq 24) {
         return ($minor -ge 16)
@@ -360,14 +357,11 @@ process.stdout.write(JSON.stringify(result));
         $sqliteVersion = $sqlite.version
         if ($nodeVersion) {
             if (
-                (Test-NodeVersionSupported -Version $nodeVersion -CapabilityGate) -and
+                (Test-NodeVersionSupported -Version $nodeVersion) -and
                 (Test-NodeSqliteSupported -Version $sqliteVersion) -and
                 $sqlite.text -and $sqlite.blob -and $sqlite.json -and -not $sqlite.error
             ) {
                 Write-Host "[OK] Node.js $nodeVersion found" -ForegroundColor Green
-                if (-not (Test-NodeVersionSupported -Version $nodeVersion)) {
-                    Write-Host "[!] Node $nodeVersion`: unsupported version, capability probe passed" -ForegroundColor Yellow
-                }
                 return $true
             } elseif ($sqlite.available -and -not $sqlite.text -and -not $sqlite.error) {
                 Write-Host "[!] Node $nodeVersion`: node:sqlite truncates TEXT at embedded NUL (nodejs/node#61954); use 24.16+/26.1+ or a build with the fix" -ForegroundColor Yellow
@@ -375,7 +369,7 @@ process.stdout.write(JSON.stringify(result));
             } elseif ($sqlite.error -or -not $sqlite.blob -or -not $sqlite.json) {
                 Write-Host "[!] Node $nodeVersion`: node:sqlite NUL round-trip capability probe failed; use 24.16+/26.1+ or a build with the fix" -ForegroundColor Yellow
                 return $false
-            } elseif (Test-NodeVersionSupported -Version $nodeVersion -CapabilityGate) {
+            } elseif (Test-NodeVersionSupported -Version $nodeVersion) {
                 $sqliteVersionLabel = if ([string]::IsNullOrWhiteSpace($sqliteVersion)) {
                     "unavailable"
                 } else {

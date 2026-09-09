@@ -166,7 +166,10 @@ function parseMinimumNodeEngine(engine: string | null): Semver | null {
 }
 
 /** Returns whether a Node version satisfies a supported engine range, or null if unsupported. */
-function nodeVersionSatisfiesEngine(version: string | null, engine: string | null): boolean | null {
+export function nodeVersionSatisfiesEngine(
+  version: string | null,
+  engine: string | null,
+): boolean | null {
   const minimum = parseMinimumNodeEngine(engine);
   if (minimum) {
     return isNodeVersionAtLeast(parseNodeReleaseVersion(version), minimum);
@@ -200,18 +203,6 @@ function nodeVersionSatisfiesEngine(version: string | null, engine: string | nul
     }
   }
   return satisfied;
-}
-
-/** The current decoder floor is capability-based; unrelated target engine constraints still apply. */
-export function nodeVersionSatisfiesPackageEngine(
-  version: string | null,
-  engine: string | null,
-): boolean | null {
-  if (engine?.replace(/\s+/gu, " ").trim() === ">=24.16.0 <25 || >=26.1.0") {
-    const release = parseNodeReleaseVersion(version);
-    return release !== null && release.major >= 24;
-  }
-  return nodeVersionSatisfiesEngine(version, engine);
 }
 
 /** Exits through the provided runtime when the current Node runtime is unsupported. */

@@ -137,22 +137,26 @@ describe("package runtime compatibility guidance", () => {
   }
 
   it.each([
-    ["24.16.0", false, false],
-    ["24.15.0+vendor.1", true, true],
-  ] as const)("checks SQLite capabilities for target runtime %s", async (node, text, admitted) => {
-    probeState.text = text;
-    vi.stubGlobal("process", { ...process, versions: { ...process.versions, node } });
-    const result = await resolvePackageRuntimePreflight({
-      target: {
-        version: "2026.9.3",
-        nodeEngine: ">=24.16.0 <25 || >=26.1.0",
-      },
-    });
-    expect(result.ok).toBe(admitted);
-    if (!result.ok) {
-      expect(result.error).toContain("nodejs/node#61954");
-    }
-  });
+    ["24.16.0", false, "nodejs/node#61954"],
+    ["24.15.0+vendor.1", true, "The requested package requires >=24.16.0 <25 || >=26.1.0."],
+    ["24.19.0", true, null],
+  ] as const)(
+    "requires target engines and SQLite capabilities for Node %s",
+    async (node, text, error) => {
+      probeState.text = text;
+      vi.stubGlobal("process", { ...process, versions: { ...process.versions, node } });
+      const result = await resolvePackageRuntimePreflight({
+        target: {
+          version: "2026.9.3",
+          nodeEngine: ">=24.16.0 <25 || >=26.1.0",
+        },
+      });
+      expect(result.ok).toBe(error === null);
+      if (!result.ok) {
+        expect(result.error).toContain(error);
+      }
+    },
+  );
 
   it("preserves a compatible target", async () => {
     await expect(
@@ -178,37 +182,57 @@ describe("package runtime compatibility guidance", () => {
     expect(result).toMatchObject({ ok: false, error: expect.stringContaining("probe timed out") });
   });
 
-  it("selects a proven lossless fallback when the recorded decoder is broken", async () => {
-    const sqliteProbe = { available: true, version: "3.51.3", text: true, blob: true, json: true };
-    vi.mocked(resolveNodeRuntimeInfo)
-      .mockResolvedValueOnce({
-        status: "unsupported",
-        version: "24.16.0",
-        sqliteVersion: "3.51.3",
-        nodeSharedSqlite: false,
-        sqliteProbe: { ...sqliteProbe, text: false },
-        capabilityError: "broken TEXT decoder",
-      })
-      .mockResolvedValueOnce({
-        status: "supported",
-        version: "24.15.0+vendor.1",
-        sqliteVersion: "3.51.3",
-        nodeSharedSqlite: false,
-        sqliteProbe,
-      });
-    await expect(
-      resolvePackageRuntimePreflight({
+  it.each([
+    ["24.15.0+vendor.1", false],
+    ["24.19.0", true],
+  ] as const)(
+    "requires target engines for a lossless fallback Node %s",
+    async (version, admitted) => {
+      const sqliteProbe = {
+        available: true,
+        version: "3.51.3",
+        text: true,
+        blob: true,
+        json: true,
+      };
+      vi.mocked(resolveNodeRuntimeInfo)
+        .mockResolvedValueOnce({
+          status: "unsupported",
+          version: "24.16.0",
+          sqliteVersion: "3.51.3",
+          nodeSharedSqlite: false,
+          sqliteProbe: { ...sqliteProbe, text: false },
+          capabilityError: "broken TEXT decoder",
+        })
+        .mockResolvedValueOnce({
+          status: "supported",
+          version,
+          sqliteVersion: "3.51.3",
+          nodeSharedSqlite: false,
+          sqliteProbe,
+        });
+      const result = await resolvePackageRuntimePreflight({
         target: { version: "2026.9.3", nodeEngine: ">=24.16.0 <25 || >=26.1.0" },
         nodeRunner: "/fixture/old/node",
         fallbackNodeRunner: "/fixture/fixed/node",
-      }),
-    ).resolves.toEqual({
-      ok: true,
-      value: {
-        nodeRunner: "/fixture/fixed/node",
-        replacedNodeRunner: "/fixture/old/node",
-        targetVersion: "2026.9.3",
-      },
-    });
-  });
+      });
+      if (admitted) {
+        expect(result).toEqual({
+          ok: true,
+          value: {
+            nodeRunner: "/fixture/fixed/node",
+            replacedNodeRunner: "/fixture/old/node",
+            targetVersion: "2026.9.3",
+          },
+        });
+      } else {
+        expect(result).toMatchObject({
+          ok: false,
+          error: expect.stringContaining(
+            "The requested package requires >=24.16.0 <25 || >=26.1.0.",
+          ),
+        });
+      }
+    },
+  );
 });

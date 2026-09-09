@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { DatabaseSync } from "node:sqlite";
 import { runInNewContext } from "node:vm";
 import { describe, expect, it, vi } from "vitest";
@@ -68,6 +69,20 @@ describe("SQLite NUL capability probe", () => {
 
   it("round-trips NULs through the real loaded SQLite binding", () => {
     expect(probeSqlite(DatabaseSync)).toMatchObject({
+      available: true,
+      text: true,
+      blob: true,
+      json: true,
+    });
+  });
+
+  it("executes the serialized SQLite probe in a fresh Node process", () => {
+    const output = execFileSync(
+      process.execPath,
+      ["-e", `process.stdout.write(JSON.stringify(${SQLITE_CAPABILITY_PROBE}))`],
+      { encoding: "utf8", timeout: 10_000 },
+    );
+    expect(JSON.parse(output)).toMatchObject({
       available: true,
       text: true,
       blob: true,

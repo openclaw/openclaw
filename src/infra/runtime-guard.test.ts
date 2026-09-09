@@ -4,7 +4,7 @@ import {
   assertSupportedRuntime,
   isSupportedBunVersion,
   isSupportedNodeVersion,
-  nodeVersionSatisfiesPackageEngine,
+  nodeVersionSatisfiesEngine,
   parseSemver,
 } from "./runtime-guard.js";
 
@@ -87,26 +87,26 @@ describe("runtime-guard", () => {
   });
 
   it("checks node versions against simple engine ranges", () => {
-    expect(nodeVersionSatisfiesPackageEngine("22.22.3", ">=22.22.3")).toBe(true);
-    expect(nodeVersionSatisfiesPackageEngine("22.22.2", ">=22.22.3")).toBe(false);
-    expect(nodeVersionSatisfiesPackageEngine("24.15.0", ">=22.22.3")).toBe(true);
-    expect(nodeVersionSatisfiesPackageEngine("22.22.3", "^22.22.3")).toBeNull();
+    expect(nodeVersionSatisfiesEngine("22.22.3", ">=22.22.3")).toBe(true);
+    expect(nodeVersionSatisfiesEngine("22.22.2", ">=22.22.3")).toBe(false);
+    expect(nodeVersionSatisfiesEngine("24.15.0", ">=22.22.3")).toBe(true);
+    expect(nodeVersionSatisfiesEngine("22.22.3", "^22.22.3")).toBeNull();
   });
 
-  it("defers the current decoder engine range to capability validation", () => {
+  it("preserves the target package's numeric engine range", () => {
     const engine = ">=24.16.0 <25 || >=26.1.0";
-    expect(nodeVersionSatisfiesPackageEngine("22.23.2", engine)).toBe(false);
-    expect(nodeVersionSatisfiesPackageEngine("22.22.2", engine)).toBe(false);
-    expect(nodeVersionSatisfiesPackageEngine("23.11.0", engine)).toBe(false);
-    expect(nodeVersionSatisfiesPackageEngine("24.14.1", engine)).toBe(true);
-    expect(nodeVersionSatisfiesPackageEngine("24.15.0", engine)).toBe(true);
-    expect(nodeVersionSatisfiesPackageEngine("24.16.0", engine)).toBe(true);
-    expect(nodeVersionSatisfiesPackageEngine("25.8.1", engine)).toBe(true);
-    expect(nodeVersionSatisfiesPackageEngine("25.9.0", engine)).toBe(true);
-    expect(nodeVersionSatisfiesPackageEngine("26.0.0", engine)).toBe(true);
-    expect(nodeVersionSatisfiesPackageEngine("26.1.0", engine)).toBe(true);
-    expect(nodeVersionSatisfiesPackageEngine(null, engine)).toBe(false);
-    expect(nodeVersionSatisfiesPackageEngine("unknown", engine)).toBe(false);
+    expect(nodeVersionSatisfiesEngine("22.23.2", engine)).toBe(false);
+    expect(nodeVersionSatisfiesEngine("22.22.2", engine)).toBe(false);
+    expect(nodeVersionSatisfiesEngine("23.11.0", engine)).toBe(false);
+    expect(nodeVersionSatisfiesEngine("24.14.1", engine)).toBe(false);
+    expect(nodeVersionSatisfiesEngine("24.15.0+vendor.1", engine)).toBe(false);
+    expect(nodeVersionSatisfiesEngine("24.16.0", engine)).toBe(true);
+    expect(nodeVersionSatisfiesEngine("25.8.1", engine)).toBe(false);
+    expect(nodeVersionSatisfiesEngine("25.9.0", engine)).toBe(false);
+    expect(nodeVersionSatisfiesEngine("26.0.0", engine)).toBe(false);
+    expect(nodeVersionSatisfiesEngine("26.1.0", engine)).toBe(true);
+    expect(nodeVersionSatisfiesEngine(null, engine)).toBe(false);
+    expect(nodeVersionSatisfiesEngine("unknown", engine)).toBe(false);
   });
 
   it.each([

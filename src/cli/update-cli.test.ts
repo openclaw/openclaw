@@ -139,7 +139,7 @@ const databasePreflightMocks = vi.hoisted(() => ({
 const restartHealthTestControl = vi.hoisted(() => ({
   snapshot: undefined as unknown,
 }));
-const nodeVersionSatisfiesPackageEngine = vi.fn();
+const nodeVersionSatisfiesEngine = vi.fn();
 const resolveNodeRuntimeInfo =
   vi.fn<(typeof import("../daemon/runtime-paths.js"))["resolveNodeRuntimeInfo"]>();
 const execFile = vi.fn((...args: unknown[]) => {
@@ -347,7 +347,7 @@ vi.mock("../daemon/runtime-paths.js", async (importOriginal) => ({
 }));
 
 vi.mock("../infra/runtime-guard.js", () => ({
-  nodeVersionSatisfiesPackageEngine,
+  nodeVersionSatisfiesEngine,
   parseSemver: (version: string | null) => {
     if (!version) {
       return null;
@@ -2018,7 +2018,7 @@ describe("update-cli", () => {
       packageSpec: "openclaw@2026.6.33",
     });
     primeNpmChannelTag("latest", "9999.0.0");
-    nodeVersionSatisfiesPackageEngine.mockReturnValue(true);
+    nodeVersionSatisfiesEngine.mockReturnValue(true);
     resolveNodeRuntimeInfo.mockResolvedValue({
       status: "supported",
       version: process.versions.node,
@@ -5660,7 +5660,7 @@ describe("update-cli", () => {
       });
     }
     if (failure === "package runtime") {
-      nodeVersionSatisfiesPackageEngine.mockReturnValue(false);
+      nodeVersionSatisfiesEngine.mockReturnValue(false);
     }
 
     await withEnvAsync(
@@ -5735,7 +5735,7 @@ describe("update-cli", () => {
         .mockResolvedValue(
           packageTargetStatus({ nodeEngine: compatible ? ">=999.0.0" : ">=22.19.0" }),
         );
-      nodeVersionSatisfiesPackageEngine.mockImplementation(
+      nodeVersionSatisfiesEngine.mockImplementation(
         (_version: string | null, engine: string | null) => engine !== ">=999.0.0",
       );
 
@@ -7190,7 +7190,7 @@ describe("update-cli", () => {
     vi.mocked(fetchNpmPackageTargetStatus).mockResolvedValue(
       packageTargetStatus({ target: "latest", version: "2026.3.23-2" }),
     );
-    nodeVersionSatisfiesPackageEngine.mockReturnValue(false);
+    nodeVersionSatisfiesEngine.mockReturnValue(false);
 
     await expect(updateCommand({ yes: true })).rejects.toEqual(new ExitError(1));
 
@@ -10691,7 +10691,7 @@ describe("update-cli", () => {
       }
       return commandResult();
     });
-    nodeVersionSatisfiesPackageEngine.mockReturnValue(false);
+    nodeVersionSatisfiesEngine.mockReturnValue(false);
 
     await expect(updateCommand({ yes: true, restart: false })).rejects.toEqual(new ExitError(1));
 
@@ -10815,7 +10815,7 @@ describe("update-cli", () => {
       vi.mocked(fetchNpmPackageTargetStatus).mockResolvedValue(
         packageTargetStatus({ version: "2026.9.3", nodeEngine: ">=24.16.0 <25 || >=26.1.0" }),
       );
-      nodeVersionSatisfiesPackageEngine.mockImplementation(
+      nodeVersionSatisfiesEngine.mockImplementation(
         (version) => fallback && version === process.versions.node,
       );
       resolveNodeRuntimeInfo.mockImplementation(async (nodePath) => {
@@ -10947,7 +10947,7 @@ describe("update-cli", () => {
         nodeEngine: ">=24.15.0 <25",
       }),
     );
-    nodeVersionSatisfiesPackageEngine.mockImplementation(
+    nodeVersionSatisfiesEngine.mockImplementation(
       (version: string | null) => version === "24.15.0",
     );
     resolveNodeRuntimeInfo.mockImplementation(async (nodePath) => {

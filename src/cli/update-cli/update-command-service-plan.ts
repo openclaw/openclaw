@@ -14,7 +14,7 @@ import type { GatewayServiceCommandConfig } from "../../daemon/service-types.js"
 import { resolveGatewayService } from "../../daemon/service.js";
 import { assertGatewayServiceMutationAllowed } from "../../infra/gateway-supervision.js";
 import { tryReadJson } from "../../infra/json-files.js";
-import { nodeVersionSatisfiesPackageEngine } from "../../infra/runtime-guard.js";
+import { nodeVersionSatisfiesEngine } from "../../infra/runtime-guard.js";
 import { parseTcpPortFromArgs } from "../../infra/tcp-port.js";
 import { resolveNodeRunner } from "./shared.js";
 
@@ -137,7 +137,7 @@ export async function resolvePackageRuntimePreflight(params: {
   });
   const satisfies = runtime.failure
     ? false
-    : nodeVersionSatisfiesPackageEngine(runtime.version, target.nodeEngine);
+    : nodeVersionSatisfiesEngine(runtime.version, target.nodeEngine);
   const targetVersion = target.version;
   const unchangedRuntime = { ...unchanged(), targetVersion };
   if (satisfies === true) {
@@ -151,7 +151,7 @@ export async function resolvePackageRuntimePreflight(params: {
     });
     const fallbackSatisfies = fallbackRuntime.failure
       ? false
-      : nodeVersionSatisfiesPackageEngine(fallbackRuntime.version, target.nodeEngine);
+      : nodeVersionSatisfiesEngine(fallbackRuntime.version, target.nodeEngine);
     if (fallbackSatisfies === true) {
       return ok({
         nodeRunner: fallbackNodeRunner,

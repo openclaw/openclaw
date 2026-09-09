@@ -22,7 +22,11 @@ The exact engines expression is `>=24.16.0 <25 || >=26.1.0`. It remains the docu
 
 ## How the gate decides
 
-Startup, doctor, Gateway runtime selection, update preflight, and installer runtime validation check the actual `node:sqlite` binding: it must be present, load a WAL-safe SQLite library, and preserve embedded and trailing NULs through TEXT, BLOB, and JSON round trips. The probe uses an in-memory database and caches the current process result; checks of another executable run the same probe in that executable with a bounded timeout. A build within the supported version table is refused if the probe fails. A Node 24 or newer release outside the table that passes is admitted with the note `unsupported version, capability probe passed`: its capabilities meet the correctness gate, but it remains outside the tested support policy. This permits vendor backports without claiming support for their version. Node 22 and 23 remain excluded, and package manager engine checks still apply. Update preflight preserves unrelated target requirements, such as a future higher Node minimum.
+Startup, doctor, Gateway runtime selection, update preflight, and installer runtime validation check the actual `node:sqlite` binding: it must be present, load a WAL-safe SQLite library, and preserve embedded and trailing NULs through TEXT, BLOB, and JSON round trips. The probe uses an in-memory database and caches the current process result; checks of another executable run the same probe in that executable with a bounded timeout. A build within the supported version table is refused if the probe fails.
+
+The running package's startup guard and Gateway runtime selection admit a Node 24 or newer release outside the table when the probe passes, with the note `unsupported version, capability probe passed`. Its capabilities meet this package's correctness gate, but it remains outside the tested support policy. This permits vendor backports without claiming support for their version. Node 22 and 23 remain excluded, and package manager engine checks still apply.
+
+Installers retain the numeric Node requirement and add the probe as a second gate. Package and Git update preflight also require the selected target's `engines.node` range numerically, including any fallback runtime. A passing probe cannot relax another package's requirements: an older release may still enforce its version table at startup.
 
 ## Why the floors exist
 
