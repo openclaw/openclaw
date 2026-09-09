@@ -23,11 +23,11 @@ import {
   withUpdateCommandExecutorChild,
   type UpdateCommandChildGrant,
 } from "./update-command-executor.js";
+import type { FinishUpdateParams } from "./update-command-finish-types.js";
 import type {
   MigratedUpdateFinalizationInput,
   MigratedUpdateFinalizationResult,
 } from "./update-command-migrated-types.js";
-import type { FinishUpdateParams } from "./update-command-post-update.js";
 import { UpdateCommandRecoveryPendingError } from "./update-command-recovery.js";
 import { UpdateCommandFailure } from "./update-command-result.js";
 import {

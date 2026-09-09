@@ -29,11 +29,9 @@ aligned:
 
 If the resolved registry package version equals the installed version without changing
 the selected channel or installation method, or the Git target SHA equals
-`HEAD`, the run finishes `skipped` with reason `already-current`. A same-version
+`HEAD`, plugin convergence still runs; if plugins remain unchanged, the run finishes `skipped` with reason `already-current`. A same-version
 explicit `--channel` or installation-method change finishes successfully.
-Neither path stops or restarts the Gateway unless the installation method
-changes. Read-only plugin convergence checks can still report repair needs; use
-`openclaw update repair` to apply them.
+Changed plugins restart a running managed Gateway unless `--no-restart` is set; retained exact pins produce the same advisories as a core update without requiring a restart.
 
 Explicit package artifacts, such as tarball paths and URLs, still pass through
 validation and installation when their version matches the installed version.
@@ -452,7 +450,7 @@ reclaim these stages. If an interrupted update leaves one behind, confirm that
 no updater is still using it before removing that exact directory. This separation
 does not make simultaneous package swaps safe.
 
-A matching installed version is an `already-current` no-op. Real updates also
+A matching installed version skips core replacement but still converges plugins. Core updates also
 refresh core-command completion; full plugin-command completion rebuilds remain explicit
 `openclaw completion --write-state` runs.
 

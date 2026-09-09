@@ -108,6 +108,7 @@ export type SystemPromptRuntimeInfo = {
   sessionKey?: string;
   sessionId?: string;
   sessionUrl?: string;
+  gitCoauthorPrompt?: string;
   host?: string;
   os?: string;
   arch?: string;
@@ -1540,6 +1541,7 @@ export function buildAgentSystemPrompt(params: {
   lines.push(
     "## Runtime",
     buildRuntimeLine(runtimeInfo, runtimeChannel, runtimeCapabilities),
+    ...(runtimeInfo?.gitCoauthorPrompt ? [runtimeInfo.gitCoauthorPrompt] : []),
     ...(modelIdentityLine ? [modelIdentityLine] : []),
     `Reasoning=${reasoningLevel}; hidden unless on/stream. Toggle /reasoning; /status shows when enabled.`,
   );

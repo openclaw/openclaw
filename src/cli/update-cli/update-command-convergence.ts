@@ -21,6 +21,7 @@ import {
 } from "./update-command-post-core.js";
 
 export async function convergeUpdatePlugins(params: {
+  coreAlreadyCurrent?: boolean;
   result: UpdateRunResult;
   root: string;
   installKindChanged: boolean;
@@ -35,6 +36,7 @@ export async function convergeUpdatePlugins(params: {
   startedAt: number;
   packageUpdateNodeRunner?: string;
   updateStepTimeoutMs: number;
+  beforeDoctor?: () => Promise<void>;
 }): Promise<{
   resultWithPostUpdate: UpdateRunResult;
   postUpdateConfigSnapshot?: Awaited<ReturnType<typeof readConfigFileSnapshot>>;
@@ -51,11 +53,13 @@ export async function convergeUpdatePlugins(params: {
       }
     : undefined;
 
-  const shouldResumePostCoreInFreshProcess = shouldResumePostCoreUpdateInFreshProcess({
-    result: params.result,
-    downgradeRisk: params.downgradeRisk,
-    installKindChanged: params.installKindChanged,
-  });
+  const shouldResumePostCoreInFreshProcess =
+    !params.coreAlreadyCurrent &&
+    shouldResumePostCoreUpdateInFreshProcess({
+      result: params.result,
+      downgradeRisk: params.downgradeRisk,
+      installKindChanged: params.installKindChanged,
+    });
 
   let postUpdateConfigSnapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>> | undefined;
   if (
@@ -148,12 +152,13 @@ export async function convergeUpdatePlugins(params: {
       }
 
       if (postCorePluginUpdate) {
-        // Both package paths release the plugin lease before Doctor. The outer
-        // finalizer keeps the service stopped through this fresh migration pass.
+        // Release the plugin lease before fresh Doctor. The finalizer either
+        // retains its stopped interval or parks an already-current core here.
         const completedPluginUpdate = await completePostCorePluginUpdate({
           root: postUpdateRoot,
           pluginUpdate: postCorePluginUpdate,
           freshDoctorRequired: postCorePluginUpdate.changed,
+          beforeDoctor: params.beforeDoctor,
           yes: params.opts.yes === true,
           json: params.opts.json === true,
           timeoutMs: params.updateStepTimeoutMs,
@@ -163,7 +168,7 @@ export async function convergeUpdatePlugins(params: {
         postUpdateConfigSnapshot = completedPluginUpdate.configSnapshot;
       }
 
-      const resultWithPostUpdate: UpdateRunResult = postCorePluginUpdate
+      let resultWithPostUpdate: UpdateRunResult = postCorePluginUpdate
         ? {
             ...params.result,
             status: postCorePluginUpdate.status === "error" ? "error" : params.result.status,
@@ -174,6 +179,15 @@ export async function convergeUpdatePlugins(params: {
             },
           }
         : params.result;
+      if (
+        params.coreAlreadyCurrent &&
+        resultWithPostUpdate.status !== "error" &&
+        (postCorePluginUpdate?.changed ||
+          (params.requestedChannel !== null && params.requestedChannel !== params.storedChannel))
+      ) {
+        resultWithPostUpdate = { ...resultWithPostUpdate, status: "ok" };
+        delete resultWithPostUpdate.reason;
+      }
       if (params.opts.run) {
         recordUpdateRunStep(
           params.opts.run.runId,

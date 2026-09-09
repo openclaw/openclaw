@@ -4,6 +4,10 @@ import type {
   CommandEntry,
   CommandsListParams,
   ModelChoice,
+  QuestionGetResult,
+  QuestionListResult,
+  QuestionResolveParams,
+  QuestionResolveResult,
   SessionsListParams,
   SessionsPatchParams,
   SessionsPatchResult,
@@ -208,6 +212,9 @@ export type TuiBackend = {
   listCommands?: (opts?: CommandsListParams) => Promise<CommandEntry[]>;
   listPluginApprovals?: () => Promise<unknown>;
   resolvePluginApproval?: (id: string, decision: TuiApprovalDecision) => Promise<{ ok?: boolean }>;
+  listQuestions?: () => Promise<QuestionListResult>;
+  getQuestion?: (id: string) => Promise<QuestionGetResult>;
+  resolveQuestion?: (params: QuestionResolveParams) => Promise<QuestionResolveResult>;
   getTaskSuggestionActionCapabilities?: () => TuiTaskSuggestionActionCapabilities;
   listTaskSuggestions?: () => Promise<TaskSuggestion[]>;
   acceptTaskSuggestion?: (taskId: string) => Promise<TaskSuggestionsAcceptResult>;

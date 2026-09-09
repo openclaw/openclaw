@@ -232,6 +232,47 @@ describe("post-activation repair after rollback refusal or failure", () => {
     vi.spyOn(defaultRuntime, "error").mockImplementation(() => undefined);
   });
 
+  it("terminalizes a failed final native read after current-core plugin parking", async () => {
+    const params = fixture();
+    params.coreAlreadyCurrent = true;
+    params.preManagedServiceStop!.stopped = false;
+    params.result.status = "skipped";
+    params.result.reason = "already-current";
+    params.result.before = params.result.after;
+    mocks.stop.mockResolvedValue({ ...params.preManagedServiceStop!, stopped: true });
+    mocks.converge.mockImplementation(
+      async (convergence: {
+        result: FinishUpdateParams["result"];
+        beforeDoctor?: () => Promise<void>;
+      }) => {
+        await convergence.beforeDoctor?.();
+        mocks.readService.mockRejectedValueOnce(new Error("final native query failed"));
+        return {
+          resultWithPostUpdate: {
+            ...convergence.result,
+            postUpdate: { plugins: { status: "ok", changed: true } },
+          },
+          postUpdateConfigSnapshot: params.configSnapshot,
+        };
+      },
+    );
+    await expect(finishUpdate(params)).rejects.toMatchObject({
+      exitCode: 1,
+      result: {
+        status: "error",
+        reason: "state-migrated-no-rollback",
+        steps: expect.arrayContaining([
+          expect.objectContaining({ name: "post-update verification", exitCode: 1 }),
+        ]),
+      },
+    });
+    expect(getUpdateRun(params.opts.run!.runId, { env: params.opts.run!.env })).toMatchObject({
+      status: "failed",
+    });
+    expect(mocks.stop).toHaveBeenCalledOnce();
+    expect(mocks.restart).not.toHaveBeenCalled();
+  });
+
   it.each([
     { rollback: "blocked", repaired: true },
     { rollback: "blocked", repaired: false },

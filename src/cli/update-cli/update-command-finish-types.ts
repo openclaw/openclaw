@@ -9,6 +9,7 @@ import type { UpdateCommandOptions } from "./shared.js";
 import type { UpdateRestartParams } from "./update-command-restart-context.js";
 import type { UpdateServiceLoadBoundary } from "./update-command-service-load.js";
 export type FinishUpdateParams = UpdateRestartParams & {
+  coreAlreadyCurrent?: boolean;
   serviceLoadBoundary?: UpdateServiceLoadBoundary;
   failure?: { cause: unknown; detail: string };
   mutationStarted: boolean;

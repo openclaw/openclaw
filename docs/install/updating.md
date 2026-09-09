@@ -26,8 +26,7 @@ the old Gateway serves, then activates and verifies the update.
 openclaw update
 ```
 
-An already-installed registry package version or Git target SHA finishes as
-`skipped` / `already-current` without stopping or restarting the Gateway.
+An already-installed registry package version or Git target SHA still runs plugin convergence, preserves exact pins with retained-pin advisories, and restarts a running managed Gateway only when plugins change and `--no-restart` is not set; unchanged runs finish as `skipped` / `already-current`.
 An explicit package artifact (for example, a tarball path or URL) is validated
 and installed even when its version matches; matching versions do not prove
 that two artifacts contain the same code.
@@ -165,7 +164,7 @@ starting the Gateway.
 
 The OpenClaw owner can say "update" (the agent uses the `gateway` action
 `update.run`) or send `/update`. The candidate validates while the old Gateway
-serves, and an already-current update does not restart it. Update runs can send
+serves, and an already-current update restarts it only when plugins change. Update runs can send
 these notices in that chat as the Gateway observes the recorded milestones:
 
 1. An acknowledgement when the update is accepted.

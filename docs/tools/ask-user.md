@@ -23,6 +23,11 @@ You can answer from any supported conversation surface:
   multi-question prompts, the panel shows one question at a time and advances
   through a short stepper. After resolution, the panel closes and the chat
   keeps only a compact answer summary.
+- The TUI shows a question prompt in both Gateway and local modes. Use arrow
+  keys or number keys to choose an option, **Other…** to type an answer, or
+  **Skip**. Multi-select prompts let you toggle choices before confirming;
+  multi-question prompts advance one question at a time. Press Esc to return
+  to the composer without answering, then `/question` to reopen the prompt.
 - Telegram renders each choice as a full-width native button for one
   single-select question. **Other…** switches to Telegram's reply input without
   resolving the question.
@@ -35,7 +40,7 @@ You can answer from any supported conversation surface:
 
 Questions from a standalone [attached MCP client](/cli/attach) do not carry an
 OpenClaw run's creator binding. Answer those using the question controls in the
-Control UI or native app, not an ordinary channel message.
+Control UI, TUI, or native app, not an ordinary channel message.
 
 OpenClaw always enables a free-text **Other** answer. The agent must not add an
 `Other` option to the authored option list.
@@ -46,15 +51,20 @@ without it entering the chat, the transcript, or the model's context.
 
 ## Platform behavior
 
-Answers work on every supported conversation surface. The web Control UI uses a
-docked stepper that replaces the composer while expanded; collapsing it restores
-the full composer beneath a slim question bar. iOS, macOS, and Android show
+Answers work on every supported conversation surface. The web Control UI and
+TUI show one question at a time; collapsing the prompt restores the composer
+with a slim pending-question indicator. The TUI's `/question` command reopens
+it, and a plain reply still answers an eligible pending question. iOS, macOS, and Android show
 inline cards; multiple questions stay stacked as an intentional touch-friendly
-idiom. Every platform keeps the question-to-answer summary in the active chat
-timeline without timed eviction, and **Skip** is available everywhere.
+idiom. The TUI keeps a compact resolution notice in the chat; other platforms
+keep the question-to-answer summary without timed eviction. **Skip** is
+available everywhere and declines the entire prompt.
 
 Multi-question and multi-select prompts degrade to readable text on messaging
-channels. The Control UI keeps the full structured stepper.
+channels. The Control UI and TUI keep the full structured stepper. The TUI shows
+the time remaining, dismisses expired prompts, and restores pending questions
+for the selected session after reconnecting or switching sessions. Local mode
+keeps questions in the running process; they do not survive exiting the TUI.
 
 ## Timeout and no answer
 

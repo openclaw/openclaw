@@ -57,6 +57,34 @@ function buildInstructions(overrides: Partial<EmbeddedRunAttemptParams> = {}): s
   });
 }
 
+describe("buildDeveloperInstructions Git co-authors", () => {
+  it.each([{}, { promptMode: "minimal" }, { promptMode: "none" }, { disableTools: true }] as const)(
+    "includes exact session credit before extra instructions (%j)",
+    (overrides) => {
+      const params = createParams({
+        agentId: "work",
+        sessionKey: "agent:work:shared",
+        gitCoauthorPrompt:
+          "Git co-authors: add these exact trailers to every commit you make from this session.\n" +
+          "Co-authored-by: ada <20+ada@users.noreply.github.com>",
+        extraSystemPrompt: "Extra system instructions.",
+        ...overrides,
+      });
+      const instructions = buildDeveloperInstructions(params);
+
+      expect(instructions.split("\n\n").slice(-2)).toEqual([
+        "Git co-authors: add these exact trailers to every commit you make from this session.\n" +
+          "Co-authored-by: ada <20+ada@users.noreply.github.com>",
+        "Extra system instructions.",
+      ]);
+    },
+  );
+
+  it("omits the section when there is nobody to credit", () => {
+    expect(buildInstructions()).not.toContain("Git co-authors:");
+  });
+});
+
 describe("buildDeveloperInstructions delegation guidance", () => {
   it("shares the visible-session delegation policy with a canonical main session", () => {
     const instructions = buildInstructions();

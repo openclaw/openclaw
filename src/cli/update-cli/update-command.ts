@@ -1,6 +1,4 @@
 // Main update orchestration for source checkouts and package installs.
-import { confirm, isCancel } from "@clack/prompts";
-import { stylePromptMessage } from "../../../packages/terminal-core/src/prompt-style.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { formatConfigIssueLines } from "../../config/issue-format.js";
 import { disableCurrentOpenClawUpdateLaunchdJob } from "../../daemon/launchd.js";
@@ -38,6 +36,7 @@ import { CLI_NAME } from "../cli-name.js";
 import { createUpdateProgress } from "./progress.js";
 import {
   DEFAULT_PACKAGE_NAME,
+  confirmUpdateDowngrade,
   normalizeTag,
   readPackageName,
   readPackageVersion,
@@ -508,9 +507,26 @@ async function updateCommandInternal(
     return;
   }
 
+  const currentCoreFinalization = {
+    root,
+    requestedChannel,
+    storedChannel,
+    channel,
+    shouldRestart,
+    updateStepTimeoutMs,
+    invocationCwd,
+    startedAt,
+    controlPlaneUpdateSentinelMeta,
+    packageUpdateNodeRunner: packageUpdateNodeRunner ?? managedServiceNodeRunner,
+    runtimeTarget: packageRuntimeTarget,
+    managedServiceRootRedirect,
+    stop: presentation.stop,
+    refuseUpdate,
+  };
   if (packageAlreadyCurrent) {
     const { finishAlreadyCurrentUpdate } = await import("./update-execution.runtime.js");
     await finishAlreadyCurrentUpdate({
+      ...currentCoreFinalization,
       legacyConfigPlan,
       opts,
       result: {
@@ -527,34 +543,12 @@ async function updateCommandInternal(
     return;
   }
 
-  if (downgradeRisk && !opts.yes) {
-    if (!process.stdin.isTTY || opts.json) {
-      finishUpdateRun(
-        run.runId,
-        { status: "skipped", reason: "downgrade-confirmation-required" },
-        { env: run.env },
-      );
-      defaultRuntime.error(
-        "Downgrade confirmation required.\nDowngrading can break configuration. Re-run in a TTY to confirm.",
-      );
-      defaultRuntime.exit(1);
-      return;
-    }
-
-    const targetLabel = targetVersion ?? `${tag} (unknown)`;
-    const message = `Downgrading from ${currentVersion} to ${targetLabel} can break configuration. Continue?`;
-    const ok = await confirm({
-      message: stylePromptMessage(message),
-      initialValue: false,
-    });
-    if (isCancel(ok) || !ok) {
-      finishUpdateRun(run.runId, { status: "skipped", reason: "cancelled" }, { env: run.env });
-      if (!opts.json) {
-        defaultRuntime.log(theme.muted("Update cancelled."));
-      }
-      defaultRuntime.exit(0);
-      return;
-    }
+  if (
+    downgradeRisk &&
+    !opts.yes &&
+    !(await confirmUpdateDowngrade({ opts, currentVersion, targetVersion, tag }))
+  ) {
+    return;
   }
 
   if (updateInstallKind === "git" && opts.tag && !opts.json) {
@@ -677,9 +671,12 @@ async function updateCommandInternal(
   if (result.status === "skipped" && result.reason === "already-current") {
     stop();
     await finishAlreadyCurrentUpdate({
+      ...currentCoreFinalization,
+      root: result.root ?? root,
       opts,
       result,
-      env: ownedManagedUpdateContext?.env,
+      ownedManagedUpdateEnv: ownedManagedUpdateContext?.env,
+      packageUpdateNodeRunner: packageUpdateNodeRunner ?? managedServiceNodeRunner,
       legacyConfigPlan,
     });
     return;

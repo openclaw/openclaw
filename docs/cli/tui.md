@@ -90,6 +90,11 @@ Aliases: `openclaw chat` and `openclaw terminal` invoke this command with
 - Local mode adds `/auth [provider]` to the TUI command surface.
 - Plugin approval gates still apply in local mode: tools that require approval
   prompt for a decision in the terminal, nothing is silently auto-approved.
+- [`ask_user` questions](/web/tui#questions) appear as interactive prompts in
+  both modes. Esc collapses a prompt without answering; `/question` reopens it.
+- Gateway mode accepts [`secrets`](/tools/secrets) requests in a masked input
+  with a read-only allowed-host list. Local mode cannot fulfill store-bound
+  requests; use `openclaw secrets store` or the Control UI with a running Gateway.
 - Session [goals](/tools/goal) appear in the footer and can be managed with
   `/goal`.
 

@@ -73,6 +73,7 @@ import {
 import { createLocalShellRunner } from "./tui-local-shell.js";
 import { createOverlayHandlers } from "./tui-overlays.js";
 import { createTuiPluginApprovalController } from "./tui-plugin-approvals.js";
+import { createTuiQuestionController } from "./tui-questions.js";
 import { createSessionActions } from "./tui-session-actions.js";
 import { TUI_SESSION_LOOKUP_LIMIT } from "./tui-session-list-policy.js";
 import { createTuiRunIdTracker } from "./tui-session-run-coordinator.js";
@@ -904,6 +905,7 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
   const header = new Text("", 1, 0);
   const statusContainer = new Container();
   const footer = new Text("", 1, 0);
+  const questionStatus = new Text("", 1, 0);
   const chatLog = new ChatLog();
   const connectionNotices: string[] = [];
   const addConnectionNotice = (text: string) => {
@@ -924,6 +926,7 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
   root.addChild(chatLog);
   root.addChild(statusContainer);
   root.addChild(footer);
+  root.addChild(questionStatus);
   root.addChild(editor);
 
   const resolveDynamicSlashCommandsKey = () => state.currentAgentId;
@@ -1409,6 +1412,27 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
   };
 
   const { openOverlay, closeOverlay } = createOverlayHandlers(tui, editor);
+  const questions = createTuiQuestionController({
+    client,
+    chatLog,
+    getAgentId: () => state.currentAgentId,
+    getSessionKey: () => state.currentSessionKey,
+    openOverlay,
+    closeOverlay,
+    requestRender: () => tui.requestRender(),
+    onPendingChange: (text) => questionStatus.setText(theme.accent(text)),
+  });
+  const reportQuestionRefreshError = () => {
+    chatLog.addSystem("question refresh failed; reconnect or use /question to retry");
+    tui.requestRender();
+  };
+  const refreshQuestions = async () => {
+    try {
+      await questions.refresh();
+    } catch {
+      reportQuestionRefreshError();
+    }
+  };
   const pluginApprovals = createTuiPluginApprovalController({
     client,
     chatLog,
@@ -1486,6 +1510,7 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
   });
   notifySessionChanged = () => {
     pluginApprovals.sessionChanged();
+    void questions.sessionChanged().catch(reportQuestionRefreshError);
     taskSuggestions.sessionChanged();
   };
 
@@ -1561,6 +1586,7 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
     };
     disposeEventHandlers();
     pluginApprovals?.dispose();
+    questions.dispose();
     taskSuggestions?.dispose();
     beginTuiShutdown({
       stopCommandScopes: () => localShell.shutdown(),
@@ -1622,6 +1648,7 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
     isRunObserved,
     flushPendingHistoryRefreshIfIdle,
     runAuthFlow,
+    reopenQuestion: () => questions.reopen().catch(reportQuestionRefreshError),
     requestExit,
   });
 
@@ -1740,6 +1767,7 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
       return;
     }
     pluginApprovals?.handleEvent(evt.event, evt.payload);
+    questions.handleEvent(evt.event, evt.payload);
     taskSuggestions?.handleEvent(evt.event, evt.payload);
     if (evt.event === "chat") {
       handleChatEvent(evt.payload);
@@ -1815,6 +1843,10 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
       }
       updateHeader();
       updateAutocompleteProvider();
+      await refreshQuestions();
+      if (!ownsConnection()) {
+        return;
+      }
       try {
         await pluginApprovals?.refresh();
       } catch (err) {
@@ -1925,6 +1957,7 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
     setConnectionStatus(`event gap: expected ${info.expected}, got ${info.received}`, 5000);
     addConnectionNotice(`gateway event gap: expected ${info.expected}, got ${info.received}`);
     reconcileHistoryAfterGap();
+    void refreshQuestions();
     void (async () => {
       try {
         await pluginApprovals?.refresh();
@@ -1960,6 +1993,7 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
       disposeStatus();
       disposeEventHandlers();
       pluginApprovals?.dispose();
+      questions.dispose();
       taskSuggestions?.dispose();
       if (isLocalMode) {
         setConsoleSubsystemFilter(previousConsoleSubsystemFilter);
