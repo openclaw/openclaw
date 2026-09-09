@@ -1,6 +1,7 @@
 /** Test-only Copilot boundary for host/plugin integration suites. */
 import {
   CopilotClient,
+  CopilotRequestHandler,
   CopilotSession,
   type AssistantMessageEvent,
   type ResumeSessionConfig,
@@ -8,8 +9,8 @@ import {
   type SessionEvent,
   type Tool,
 } from "@github/copilot-sdk";
-import { createCopilotAgentHarness } from "./harness.js";
-import { createCopilotClientPool } from "./src/runtime.js";
+import { createCopilotAgentHarness, type CopilotSessionBinding } from "./harness.js";
+import { createCopilotClientPool, type CopilotClientPool } from "./src/runtime.js";
 
 type CopilotSessionConfigProbe = {
   availableTools: readonly string[] | undefined;
@@ -127,6 +128,161 @@ export function createCopilotToolPolicyHarnessFixtureForTest(outputPath: string)
     harness,
     resumeConfigs,
     writeResults,
+    async dispose() {
+      await harness.dispose?.();
+      await pool.dispose();
+    },
+  };
+}
+
+type NativeModelRequestBody = {
+  messages?: Array<{ content?: unknown; role?: unknown; tool_call_id?: unknown }>;
+  stream?: unknown;
+  tools?: Array<{ function?: { name?: unknown } }>;
+};
+
+type NativeModelRequestProbe = { restricted: boolean; streaming: boolean; toolNames: string[] };
+
+class NativePolicyRequestHandler extends CopilotRequestHandler {
+  constructor(private readonly requests: NativeModelRequestProbe[]) {
+    super();
+  }
+
+  protected override async sendRequest(request: Request): Promise<Response> {
+    // SAFETY: this handler is installed only on the fixture's OpenAI chat-completions provider.
+    const body = (await request.json()) as NativeModelRequestBody;
+    const messages = body.messages ?? [];
+    const toolNames = (body.tools ?? [])
+      .map((tool) => tool.function?.name)
+      .filter((name): name is string => typeof name === "string");
+    const restricted = messages.some(
+      (message) =>
+        message.role === "user" &&
+        typeof message.content === "string" &&
+        message.content.includes("This question must be blocked"),
+    );
+    const answeredAllowedQuestion = messages.some(
+      (message) => message.role === "tool" && message.tool_call_id === "call_ask_user_allowed",
+    );
+    const answeredRestrictedQuestion = messages.some(
+      (message) => message.role === "tool" && message.tool_call_id === "call_ask_user_restricted",
+    );
+    this.requests.push({ restricted, streaming: body.stream === true, toolNames });
+
+    const callAskUser =
+      toolNames.includes("ask_user") &&
+      (restricted ? !answeredRestrictedQuestion : !answeredAllowedQuestion);
+    const message = callAskUser
+      ? {
+          role: "assistant",
+          content: null,
+          tool_calls: [
+            {
+              id: restricted ? "call_ask_user_restricted" : "call_ask_user_allowed",
+              type: "function",
+              function: {
+                name: "ask_user",
+                arguments: JSON.stringify({
+                  questions: [
+                    {
+                      id: "live_proof_mode",
+                      header: "Proof mode",
+                      question: restricted
+                        ? "This question must be blocked"
+                        : "Select the live proof mode",
+                      options: [
+                        { label: "Alpha (Recommended)", description: "Use alpha mode." },
+                        { label: "Beta", description: "Use beta mode." },
+                      ],
+                    },
+                  ],
+                }),
+              },
+            },
+          ],
+        }
+      : {
+          role: "assistant",
+          content: restricted ? "RESTRICTED-NO-ASK-USER" : "ALLOWED-AFTER-ANSWER",
+        };
+    return Response.json({
+      id: `chatcmpl-copilot-policy-${this.requests.length}`,
+      object: "chat.completion",
+      created: 0,
+      model: "gpt-5.4-mini",
+      choices: [{ index: 0, message, finish_reason: callAskUser ? "tool_calls" : "stop" }],
+      usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+    });
+  }
+}
+
+function withNativeFixtureProvider(config: SessionConfig): SessionConfig;
+function withNativeFixtureProvider(config: ResumeSessionConfig): ResumeSessionConfig;
+function withNativeFixtureProvider(
+  config: SessionConfig | ResumeSessionConfig,
+): SessionConfig | ResumeSessionConfig {
+  const { gitHubToken: _gitHubToken, ...configWithoutGitHubToken } = config;
+  return {
+    ...configWithoutGitHubToken,
+    provider: {
+      type: "openai",
+      wireApi: "completions",
+      baseUrl: "https://copilot-policy-fixture.invalid/v1",
+      apiKey: "copilot-policy-fixture-key",
+      modelId: "gpt-5.4-mini",
+      wireModel: "gpt-5.4-mini",
+    },
+  };
+}
+
+function createNativePolicyPool(requests: NativeModelRequestProbe[]): CopilotClientPool {
+  const activeClients = new Set<CopilotClient>();
+  return {
+    async acquire(key, options) {
+      const { copilotHome, gitHubToken: _gitHubToken, ...clientOptions } = options;
+      const client = new CopilotClient({
+        ...clientOptions,
+        baseDirectory: copilotHome,
+        requestHandler: new NativePolicyRequestHandler(requests),
+        useLoggedInUser: false,
+      });
+      activeClients.add(client);
+      return {
+        key,
+        client: {
+          createSession: (config: SessionConfig) =>
+            client.createSession(withNativeFixtureProvider(config)),
+          resumeSession: (sessionId: string, config: ResumeSessionConfig) =>
+            client.resumeSession(sessionId, withNativeFixtureProvider(config)),
+          stop: () => client.stop(),
+          // SAFETY: the wrapper delegates every harness-used client operation to the real SDK client.
+        } as unknown as CopilotClient,
+      };
+    },
+    async dispose() {
+      const results = await Promise.all([...activeClients].map((client) => client.stop()));
+      activeClients.clear();
+      return results.flat();
+    },
+    async release() {},
+    size() {
+      return activeClients.size;
+    },
+  };
+}
+
+/** Runs the real Copilot CLI and SDK against a deterministic model-layer request handler. */
+export function createNativeCopilotPolicyHarnessFixtureForTest(sessionStore: {
+  delete(key: string): boolean;
+  lookup(key: string): CopilotSessionBinding | undefined;
+  register(key: string, value: CopilotSessionBinding): void;
+}) {
+  const requests: NativeModelRequestProbe[] = [];
+  const pool = createNativePolicyPool(requests);
+  const harness = createCopilotAgentHarness({ pool, sessionStore });
+  return {
+    harness,
+    requests,
     async dispose() {
       await harness.dispose?.();
       await pool.dispose();
