@@ -38,7 +38,7 @@ import {
   renderPluginDeclaredCapabilities,
   renderPluginGrants,
 } from "./consent-dialog.ts";
-import { renderPluginDetailShell } from "./detail-shell.ts";
+import { renderPluginDetailRows, renderPluginDetailShell } from "./detail-shell.ts";
 import { buildInstalledPluginDetailTabs, type InstalledPluginDetailTab } from "./detail-tabs.ts";
 import { renderPluginOfficialBadge } from "./plugin-card.ts";
 import { pluginRowKey, type PluginRowMessage } from "./plugin-row-message.ts";
@@ -434,14 +434,6 @@ function renderAccess(props: DetailProps): TemplateResult {
   `;
 }
 
-function renderInstalledComponentRows(values: readonly string[]): TemplateResult {
-  return html`<div class="plugin-catalog-detail__rows">
-    ${values.map(
-      (value) => html`<article class="plugin-catalog-detail__row"><h3>${value}</h3></article>`,
-    )}
-  </div>`;
-}
-
 function renderInstalledAdvanced(props: DetailProps): TemplateResult {
   if (!props.inspection) {
     return renderSettingsLoadingSkeleton({ rows: 3, carapace: true });
@@ -504,19 +496,19 @@ function renderInstalledTabPanel(
       ${renderConfiguration(props, plugin)}`;
   }
   if (tab === "skills" && components) {
-    return renderInstalledComponentRows(components.skills);
+    return renderPluginDetailRows(components.skills);
   }
   if (tab === "mcpServers" && components) {
-    return renderInstalledComponentRows(components.mcpServers);
+    return renderPluginDetailRows(components.mcpServers);
   }
   if (tab === "commands" && components) {
-    return renderInstalledComponentRows(components.commands);
+    return renderPluginDetailRows(components.commands);
   }
   if (tab === "hooks" && components) {
-    return renderInstalledComponentRows(components.hooks);
+    return renderPluginDetailRows(components.hooks);
   }
   if (tab === "lspServers" && components) {
-    return renderInstalledComponentRows(components.lspServers);
+    return renderPluginDetailRows(components.lspServers);
   }
   if (tab === "compatibility" && catalog) {
     return renderPluginDetailCompatibility(catalog);

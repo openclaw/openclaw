@@ -77,3 +77,11 @@ export function renderPluginDetailShell<T extends string>(props: {
     </section>
   </section>`;
 }
+
+export function renderPluginDetailRows(values: readonly string[]): TemplateResult {
+  return html`<div class="plugin-catalog-detail__rows">
+    ${values.map(
+      (value) => html`<article class="plugin-catalog-detail__row"><h3>${value}</h3></article>`,
+    )}
+  </div>`;
+}
