@@ -703,9 +703,7 @@ extension SettingsProTab {
             Text("Add Gateway")
                 .font(OpenClawType.subheadSemiBold)
         } footer: {
-            if let warning = self.tailnetWarningText {
-                Text(warning).font(OpenClawType.footnote).foregroundStyle(OpenClawBrand.warn)
-            } else if let status = self.setupStatusLine {
+            if let status = self.setupStatusLine {
                 Text(status)
                     .font(OpenClawType.footnote)
             }

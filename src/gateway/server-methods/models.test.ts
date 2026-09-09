@@ -1072,6 +1072,7 @@ describe("models.list", () => {
                 source: "implicit",
               },
               available: false,
+              supportsFastMode: false,
               unavailableReason: "missing-auth",
               tags: ["default"],
             },

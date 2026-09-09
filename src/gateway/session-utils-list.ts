@@ -264,6 +264,7 @@ function filterSessionEntries(params: {
         cfg,
         search,
         now,
+        store,
         visibleEntries: candidateEntries,
         targetsBySessionKey: expectDefined(params.targetsBySessionKey, "search row owners"),
         getRowContext: params.getRowContext,

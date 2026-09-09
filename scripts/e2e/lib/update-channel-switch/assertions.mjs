@@ -10,7 +10,7 @@ const controlUiHtml = "<!doctype html><title>fixture</title>\n";
 
 function usage() {
   console.error(
-    "usage: assertions.mjs <prepare-git-fixture|write-control-ui|assert-update|assert-dry-run|assert-config-channel|assert-status-kind|assert-installed-version|assert-runtime-staging-clean|assert-dirty-update> [...]",
+    "usage: assertions.mjs <prepare-git-fixture|write-control-ui|assert-update|assert-dry-run|assert-config-channel|assert-status-kind|assert-installed-version|assert-runtime-staging-clean|assert-dirty-exit|assert-dirty-update> [...]",
   );
   process.exit(2);
 }
@@ -234,15 +234,21 @@ function assertConfigChannel(channel) {
   );
 }
 
-function assertDryRun(kind, channel) {
+function assertDryRun(kind, channel, selection) {
   const preview = JSON.parse(process.env.UPDATE_JSON ?? "");
+  const reportedKind =
+    kind === "git" &&
+    selection === "stored" &&
+    process.env.OPENCLAW_UPDATE_CHANNEL_DRY_RUN_PACKAGE_COMPAT === "1"
+      ? "package"
+      : kind;
   assert.equal(preview.dryRun, true);
   assert.equal(preview.installKind, "package");
   assert.equal(preview.storedChannel, "dev");
   assert.equal(preview.effectiveChannel, channel);
-  assert.equal(preview.updateInstallKind, kind);
-  assert.equal(preview.mode, kind === "git" ? "git" : "npm");
-  assert.equal(preview.switchToGit, kind === "git");
+  assert.equal(preview.updateInstallKind, reportedKind);
+  assert.equal(preview.mode, reportedKind === "git" ? "git" : "npm");
+  assert.equal(preview.switchToGit, reportedKind === "git");
   assert.equal(preview.switchToPackage, false);
 }
 
@@ -262,6 +268,17 @@ function assertInstalledVersion(root, expectedVersion) {
   }
 }
 
+function assertDirtyExit(statusRaw, legacyCompat, frozenCompat) {
+  const status = Number(statusRaw);
+  const acceptsZero = legacyCompat === "1" || frozenCompat === "1";
+  if (status === 1 || (status === 0 && acceptsZero)) {
+    return;
+  }
+  throw new Error(
+    `unexpected dirty-worktree update exit ${statusRaw}; expected ${acceptsZero ? "0 or 1" : "1"}`,
+  );
+}
+
 switch (command) {
   case "prepare-git-fixture":
     prepareGitFixture(args[0] ?? "/tmp/openclaw-git");
@@ -278,11 +295,14 @@ switch (command) {
   case "assert-dirty-update":
     assertDirtyUpdate(args[0], args[1]);
     break;
+  case "assert-dirty-exit":
+    assertDirtyExit(args[0], args[1], args[2]);
+    break;
   case "assert-config-channel":
     assertConfigChannel(args[0]);
     break;
   case "assert-dry-run":
-    assertDryRun(args[0], args[1]);
+    assertDryRun(args[0], args[1], args[2]);
     break;
   case "assert-status-kind":
     assertStatusKind(args[0]);

@@ -540,7 +540,7 @@ describeControlUiE2e("GitHub link hover cards", () => {
     await page.clock.runFor(300);
     await captureArtifact(page, "github-hovercard-title-tooltip");
     await expect.poll(() => page.locator("openclaw-tooltip[open]").count()).toBe(0);
-    expect(await pullLink.getAttribute("title")).toBe("");
+    expect(await pullLink.getAttribute("title")).toBeNull();
     await expect.poll(() => card.locator("img").count()).toBe(1);
     expect((await gateway.getRequests("controlUi.githubPreview")).length).toBe(1);
     const pullBox = await card.boundingBox();

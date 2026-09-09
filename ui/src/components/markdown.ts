@@ -5,6 +5,7 @@ import { routeIdFromPath } from "../app-route-paths.ts";
 import { resolveControlUiPaths } from "../app/browser.ts";
 import { i18n, t } from "../i18n/index.ts";
 import { truncateText } from "../lib/format.ts";
+import { parseGitHubLinkTarget } from "./github-link-target.ts";
 import { renderAssistantTranscriptPlainTextFallback } from "./markdown-assistant-transcript.ts";
 import { renderMarkdownCodeBlock } from "./markdown-code-blocks.ts";
 import { isHostLocalMarkdownFileHref } from "./markdown-file-links.ts";
@@ -435,6 +436,34 @@ function normalizeDocsRootHref(href: string): string {
   }
 }
 
+function hasMarkdownContentName(node: Node): boolean {
+  if (node.nodeType === Node.TEXT_NODE) {
+    return Boolean(node.textContent?.trim());
+  }
+  if (
+    !(node instanceof Element) ||
+    node.getAttribute("aria-hidden")?.trim().toLowerCase() === "true"
+  ) {
+    return false;
+  }
+  if (node.matches("img[alt]")) {
+    return Boolean(node.getAttribute("alt")?.trim());
+  }
+  if (node.matches("progress")) {
+    // A progress value names its containing link; fallback text does not.
+    const valueText = node.getAttribute("aria-valuetext");
+    if (valueText !== null) {
+      return Boolean(valueText.trim());
+    }
+    return (
+      node.hasAttribute("value") ||
+      node.hasAttribute("aria-valuenow") ||
+      Boolean(node.getAttribute("aria-label")?.trim() || node.getAttribute("title")?.trim())
+    );
+  }
+  return [...node.childNodes].some(hasMarkdownContentName);
+}
+
 function installHooks() {
   if (hooksInstalled) {
     return;
@@ -462,10 +491,22 @@ function installHooks() {
 
     // Block dangerous URL schemes (javascript:, data:, vbscript:, etc.)
     try {
-      const url = new URL(normalizedHref, window.location.href);
+      const url = new URL(normalizedHref, document.baseURI);
       if (url.protocol !== "http:" && url.protocol !== "https:" && url.protocol !== "mailto:") {
         node.removeAttribute("href");
         return;
+      }
+      if (parseGitHubLinkTarget(url.href)) {
+        for (const element of [node, ...node.querySelectorAll("[title]")]) {
+          const title = element.getAttribute("title");
+          // A progress control needs a label; its value only names an enclosing link.
+          const hasContentName = !element.matches("progress") && hasMarkdownContentName(element);
+          if (title && !hasContentName && !element.getAttribute("aria-label")?.trim()) {
+            element.setAttribute("aria-label", title);
+          }
+          // The rendered content owns the name; native hints must not survive preview closure.
+          element.removeAttribute("title");
+        }
       }
       if (url.origin === window.location.origin && isControlUiRoutePath(url.pathname)) {
         node.removeAttribute("rel");

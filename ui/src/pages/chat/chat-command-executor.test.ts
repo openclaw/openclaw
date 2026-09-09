@@ -747,7 +747,7 @@ describe("executeSlashCommand directives", () => {
     expect(request).toHaveBeenNthCalledWith(1, "sessions.list", {});
   });
 
-  it("reports the current thinking level for bare /think", async () => {
+  it("reports unknown thinking metadata instead of guessing from the model", async () => {
     const request = vi.fn(async (method: string, _payload?: unknown) => {
       if (method === "sessions.list") {
         return {
@@ -781,9 +781,9 @@ describe("executeSlashCommand directives", () => {
 
     expect(result.content).toBe(
       [
-        t("chat.commandResults.thinking.current", { level: "low" }),
+        t("chat.commandResults.thinking.current", { level: "Unknown" }),
         t("chat.commandResults.options", {
-          options: "default, off, minimal, low, medium, high",
+          options: "Unknown",
         }),
       ].join("\n"),
     );
@@ -852,9 +852,9 @@ describe("executeSlashCommand directives", () => {
 
     expect(result.content).toBe(
       [
-        t("chat.commandResults.thinking.current", { level: "off" }),
+        t("chat.commandResults.thinking.current", { level: "Unknown" }),
         t("chat.commandResults.options", {
-          options: "default, off, minimal, low, medium, high",
+          options: "Unknown",
         }),
       ].join("\n"),
     );
@@ -1132,6 +1132,7 @@ describe("executeSlashCommand directives", () => {
             row("agent:main:main", {
               modelProvider: "deepseek",
               model: "deepseek-v4-pro",
+              thinkingDefault: "low",
               thinkingLevels: [
                 { id: "off", label: "off" },
                 { id: "minimal", label: "minimal" },
@@ -1180,10 +1181,7 @@ describe("executeSlashCommand directives", () => {
     expect(setMax.content).toBe(t("chat.commandResults.thinking.set", { level: "**max**" }));
   });
 
-  it("does not use extended defaults for session with different model when thinkingLevels is empty (#76482)", async () => {
-    // Regression: when session model differs from defaults and session has no thinkingLevels,
-    // we should NOT blindly use defaults (which could have extra levels like xhigh/max
-    // from a different model). The client-side fallback uses the base thinking levels.
+  it("does not borrow another model's defaults when thinking metadata is absent (#76482)", async () => {
     const request = vi.fn(async (method: string, _payload?: unknown) => {
       if (method === "sessions.list") {
         return {
@@ -1228,9 +1226,9 @@ describe("executeSlashCommand directives", () => {
 
     expect(status.content).toBe(
       [
-        t("chat.commandResults.thinking.current", { level: "low" }),
+        t("chat.commandResults.thinking.current", { level: "Unknown" }),
         t("chat.commandResults.options", {
-          options: "default, off, minimal, low, medium, high",
+          options: "Unknown",
         }),
       ].join("\n"),
     );
@@ -1270,13 +1268,54 @@ describe("executeSlashCommand directives", () => {
 
     expect(status.content).toBe(
       [
-        t("chat.commandResults.thinking.current", { level: "low" }),
+        t("chat.commandResults.thinking.current", { level: "Unknown" }),
         t("chat.commandResults.options", {
-          options: "default, off, minimal, low, medium, high",
+          options: "Unknown",
         }),
       ].join("\n"),
     );
   });
+
+  it.each([true, false])(
+    "keeps known empty thinking support distinct from unknown support (empty: %s)",
+    async (empty) => {
+      const request = vi.fn(async (method: string) => {
+        if (method === "sessions.list") {
+          return createSessionsResult([
+            row("agent:main:main", {
+              modelProvider: "thinking-fixture",
+              model: "selected",
+              ...(empty ? { thinkingLevels: [] } : {}),
+            }),
+          ]);
+        }
+        if (method === "sessions.patch") {
+          return { ok: true };
+        }
+        throw new Error(`unexpected method: ${method}`);
+      });
+
+      const result = await executeSlashCommand(
+        createTestGatewayClient(request),
+        "agent:main:main",
+        "think",
+        "high",
+      );
+
+      if (empty) {
+        expect(result.content).toBe(
+          t("chat.commandResults.thinking.unsupported", { level: "high", options: "none" }),
+        );
+        expectNoRequestCall(request, "sessions.patch");
+      } else {
+        expect(result.content).toBe(t("chat.commandResults.thinking.set", { level: "**high**" }));
+        expect(request).toHaveBeenCalledWith("sessions.patch", {
+          key: "agent:main:main",
+          thinkingLevel: "high",
+        });
+      }
+    },
+  );
 
   it("reports the current verbose level for bare /verbose", async () => {
     const request = vi.fn(async (method: string, _payload?: unknown) => {

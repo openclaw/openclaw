@@ -276,7 +276,7 @@ sidebarTitle: "Voice and speech"
     | Android realtime Talk | Pending an Android device live-proof flip; Android stays on native Talk |
 
     These rows describe implemented transports, not account entitlement or
-    complete model capability parity. See the [Discord voice policy limits](/channels/discord#voice-channels)
+    complete model capability parity. See the [Discord voice policy limits](/channels/discord/voice-channels#voice-channels)
     and [Voice Call tool limits](/plugins/voice-call#realtime-voice-conversations) before
     selecting an unlisted or private route for those consumers.
 

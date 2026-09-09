@@ -156,6 +156,7 @@ export function buildGatewaySessionRow(params: {
     sessionKey: key,
     entry,
     agentId: sessionAgentId,
+    sessionStore: store,
     rowContext,
     allowPluginNormalization: !lightweight,
   });
@@ -500,7 +501,10 @@ export function buildGatewaySessionRow(params: {
     model: rowModelIdentity.model,
     activeModelProvider: activeFallback.active ? runtimeModels.active.provider : undefined,
     activeModel: activeFallback.active ? runtimeModels.active.model : undefined,
-    modelOverrideSource: resolveSessionModelOverrideSource(entry),
+    modelOverrideSource:
+      selectedModel.storedOverrideSource === "parent"
+        ? "inherited"
+        : resolveSessionModelOverrideSource(entry),
     modelSelectionLocked: entry?.modelSelectionLocked,
     agentRuntime: projectWorkerPlacementAgentRuntime(thinkingProjection.agentRuntime),
     contextTokens,

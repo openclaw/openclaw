@@ -343,6 +343,28 @@ describe("resolvePreferredNodePath", () => {
     expect(execFile).toHaveBeenCalledTimes(1);
   });
 
+  it("finds a later system Node accepted by the target engine", async () => {
+    const targetCompatibleNode = "/opt/homebrew/opt/node/bin/node";
+    mockNodePathPresent(darwinNode, targetCompatibleNode);
+    const execFile = vi
+      .fn()
+      .mockResolvedValueOnce(nodeRuntime("24.16.0"))
+      .mockResolvedValueOnce(nodeRuntime("26.8.1"));
+
+    const result = await resolveSystemNodeInfo({
+      env: {},
+      platform: "darwin",
+      execFile,
+      acceptNodeVersion: (version) => version?.startsWith("26.") === true,
+    });
+
+    expect(result).toMatchObject({
+      path: targetCompatibleNode,
+      version: "26.8.1",
+      status: "supported",
+    });
+  });
+
   it.each([
     {
       reason: "its version is unsupported",

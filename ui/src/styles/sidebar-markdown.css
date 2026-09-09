@@ -91,7 +91,6 @@
    link colors side by side. */
 .sidebar-markdown :where(a) {
   color: var(--link);
-  text-decoration: underline;
   text-decoration-color: color-mix(in srgb, var(--link) 40%, transparent);
   text-underline-offset: 2px;
   transition: text-decoration-color var(--duration-fast) ease;

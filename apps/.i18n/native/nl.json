@@ -343,6 +343,7 @@
     "native.android.37c430fb826c446f": "audio",
     "native.android.37ca0160a9368a86": "OpenClaw buildtijdstempel",
     "native.android.3833561b14a68b4b": "Leesbaar detail uit het gatewaylogboek.",
+    "native.android.38661fce5fca374f": "Releaseplan ${(branchLeaves.indexOf(leaf) + 1).toString().padStart(2, '0')}",
     "native.android.387fc9194ff7aa9b": "Meer laden",
     "native.android.3881e845a4e699c7": "Telefoon kan de Gateway bereiken",
     "native.android.38b7fdfac0cbc42d": "Maak verbinding met je Gateway om het scherm van een machine te bekijken.",

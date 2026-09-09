@@ -1445,6 +1445,127 @@ openclaw-session-discussion {
   color: var(--muted);
 }
 
+.sidebar-attachment-preview__state-card .chat-assistant-attachment-card__actions {
+  min-height: 30px;
+}
+
+:is(.chat-assistant-attachment-card--video, .chat-assistant-attachment-card--image)
+  .sidebar-attachment-preview__state {
+  min-height: 0;
+  aspect-ratio: var(--preview-ratio, 16 / 9);
+
+  > .sidebar-attachment-preview__loading {
+    display: block;
+    padding: 0;
+
+    > :first-child {
+      height: 100%;
+      border-radius: var(--radius-md);
+    }
+
+    > :not(:first-child) {
+      display: none;
+    }
+  }
+}
+
+.sidebar-attachment-preview__state {
+  display: grid;
+  position: relative;
+  min-height: 180px;
+  background: var(--bg);
+
+  > * {
+    grid-area: 1 / 1;
+  }
+
+  > .sidebar-attachment-preview__image {
+    position: absolute;
+    height: 100%;
+  }
+
+  &:has(img:not([data-preview="error"])) > .sidebar-attachment-preview__unavailable,
+  &:has(img[data-preview]) > .sidebar-attachment-preview__loading,
+  > img:not([data-preview="ready"]) {
+    display: none;
+  }
+}
+
+.sidebar-attachment-preview__loading {
+  display: grid;
+  align-content: start;
+  gap: 12px;
+  padding: 16px;
+}
+
+/* Match the native player's 48px control row and 4px track, without interactive placeholders. */
+.chat-video-skeleton {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  pointer-events: none;
+  background: var(--media-bg);
+  color: var(--muted);
+}
+
+.sidebar-attachment-preview__loading,
+.chat-video-skeleton,
+.chat-assistant-attachment-card--video[aria-busy="true"] .chat-assistant-attachment-card__header {
+  opacity: 0;
+  animation: fade-in 0s 150ms forwards;
+}
+
+.chat-assistant-attachment-card--video[aria-busy="true"] {
+  video {
+    opacity: 0;
+  }
+  .chat-assistant-attachment-card__separator,
+  .skeleton > svg {
+    visibility: hidden;
+  }
+  .skeleton {
+    color: transparent;
+    background: var(--skeleton-base, var(--bg-muted));
+  }
+  .skeleton::after {
+    opacity: 0.35;
+  }
+}
+
+.chat-video-skeleton__controls {
+  position: absolute;
+  inset: auto 0 24px;
+  display: grid;
+  grid-template-columns: 48px 1fr repeat(3, 48px);
+  height: 48px;
+  place-items: center;
+  letter-spacing: normal;
+  font:
+    14px / 48px Roboto-Regular,
+    Roboto,
+    sans-serif;
+
+  > span {
+    display: flex;
+    gap: 4px;
+    justify-self: start;
+    white-space: nowrap;
+  }
+  svg {
+    width: 16px;
+    height: 16px;
+  }
+  > svg:last-child {
+    transform: rotate(90deg);
+  }
+}
+
+.chat-video-skeleton__timeline {
+  position: absolute;
+  inset: auto 16px 20px;
+  height: 4px;
+}
+
 .sidebar-markdown-shell {
   display: grid;
   gap: 14px;

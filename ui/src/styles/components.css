@@ -1091,6 +1091,7 @@ openclaw-session-owner-chip {
 }
 
 .btn {
+  color: inherit;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -1659,7 +1660,6 @@ openclaw-session-progress-hovercard-provider {
   margin: 0 -6px;
   border-radius: var(--radius-sm);
   color: var(--text);
-  text-decoration: none;
 }
 
 .person-activity-card__session-copy {
@@ -2483,7 +2483,6 @@ openclaw-chat-session-rail {
   color: var(--text);
   font-size: 10.5px;
   line-height: 1;
-  text-decoration: none;
 }
 
 .chat-session-rail__pr:hover {
@@ -4124,12 +4123,6 @@ td.data-table-key-col {
   overflow: hidden;
 }
 
-/* A refusal or empty-state message is a few lines; without this the reader height reserved for
-   long skill documents leaves the dialog looking broken rather than deliberate. */
-.md-preview-dialog__panel--message-only {
-  min-height: 0;
-}
-
 .md-preview-dialog__header {
   display: flex;
   align-items: flex-start;
@@ -4272,7 +4265,9 @@ td.data-table-key-col {
 
 .md-preview-dialog__meta {
   display: flex;
-  flex-wrap: wrap;
+  flex-shrink: 0;
+  overflow-x: auto;
+  scrollbar-width: thin;
   gap: 8px;
   padding: 0 22px 16px;
   border-bottom: 1px solid color-mix(in srgb, var(--border) 88%, white 6%);
@@ -4285,9 +4280,10 @@ td.data-table-key-col {
 
 .md-preview-dialog__chip {
   display: inline-flex;
+  flex-shrink: 0;
+  white-space: nowrap;
   align-items: center;
   gap: 8px;
-  max-width: 100%;
   min-height: 32px;
   padding: 6px 12px;
   border-radius: var(--radius-full);
@@ -4478,42 +4474,6 @@ td.data-table-key-col {
   border-bottom: none;
 }
 
-.md-preview-dialog__panel.fullscreen .md-preview-dialog__header {
-  align-items: center;
-  justify-content: flex-end;
-  gap: 0;
-  padding: 10px 12px;
-}
-
-.md-preview-dialog__panel.fullscreen .md-preview-dialog__header-main {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  margin: -1px;
-  padding: 0;
-  overflow: hidden;
-  clip-path: inset(50%);
-  white-space: nowrap;
-  border: 0;
-}
-
-.md-preview-dialog__panel.fullscreen .md-preview-dialog__actions {
-  margin-left: auto;
-}
-
-.md-preview-dialog__panel.fullscreen .md-preview-dialog__meta {
-  display: none;
-}
-
-.md-preview-dialog__panel.fullscreen .md-preview-dialog__body {
-  padding: clamp(10px, 1.5vw, 18px);
-}
-
-.md-preview-dialog__panel.fullscreen .md-preview-dialog__reader {
-  width: min(100%, 96ch);
-  padding: clamp(24px, 3vw, 52px);
-}
-
 @media (max-width: 768px) {
   .md-preview-dialog__panel {
     min-height: var(--openclaw-modal-height-limit);
@@ -4526,22 +4486,172 @@ td.data-table-key-col {
     padding: 16px 16px 14px;
   }
 
-  .md-preview-dialog__actions {
-    justify-content: flex-end;
-    flex-wrap: wrap;
-  }
-
-  .md-preview-dialog__meta {
-    padding: 0 16px 14px;
-  }
-
   .md-preview-dialog__body {
     padding: 14px;
   }
 
   .md-preview-dialog__reader {
     width: 100%;
-    padding: 20px 16px 22px;
+    padding: var(--space-4);
+  }
+
+  .agent-file-preview .md-preview-dialog__header {
+    flex-direction: row;
+    align-items: center;
+    gap: var(--space-2);
+    padding: var(--space-3);
+  }
+
+  .md-preview-dialog__eyebrow {
+    display: none;
+  }
+
+  .md-preview-dialog__title-wrap {
+    gap: var(--space-1);
+  }
+
+  .agent-file-preview .md-preview-dialog__title {
+    font-size: var(--control-ui-text-lg);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .md-preview-dialog__actions {
+    gap: var(--space-1);
+  }
+
+  .md-preview-dialog__meta {
+    padding: 0 var(--space-3) var(--space-2);
+  }
+
+  .agent-file-preview .md-preview-dialog__body {
+    padding: var(--space-3);
+  }
+
+  .md-preview-dialog__reader.sidebar-markdown h1 {
+    font-size: 1.65em;
+    line-height: 1.25;
+  }
+
+  .md-preview-dialog__reader.sidebar-markdown h2 {
+    font-size: 1.35em;
+  }
+
+  .md-preview-dialog__reader.sidebar-markdown h3 {
+    font-size: 1.15em;
+  }
+}
+
+@media (max-width: 400px) {
+  .agent-file-preview .btn.md-preview-icon-btn {
+    width: var(--space-7);
+    height: var(--space-7);
+    min-width: var(--space-7);
+    min-height: var(--space-7);
+    border-color: transparent;
+    border-radius: var(--radius-md);
+    background: transparent;
+    color: var(--muted);
+    box-shadow: none;
+  }
+
+  .agent-file-preview .btn.md-preview-icon-btn:hover:not(:disabled) {
+    border-color: transparent;
+    background: var(--bg-hover);
+    color: var(--text);
+    box-shadow: none;
+  }
+
+  .agent-file-preview .md-preview-dialog__meta {
+    overflow: clip;
+  }
+
+  .agent-file-preview .md-preview-dialog__chip[data-priority="secondary"],
+  .agent-file-preview .md-preview-dialog__chip > span {
+    display: none;
+  }
+}
+
+/* Use the same card and ghost close control as Connect machine and confirmations. */
+.exec-approval-card.skill-reader-dialog {
+  --skill-reader-inset: var(--space-5);
+
+  height: fit-content;
+  min-height: 0;
+  max-height: var(--openclaw-modal-max-height, calc(100dvh - 2 * var(--space-6)));
+  padding: 0;
+  overflow: hidden;
+}
+
+.skill-reader-dialog .exec-approval-header {
+  flex-shrink: 0;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--skill-reader-inset);
+  border-bottom: 1px solid var(--border);
+}
+
+.skill-reader-dialog .exec-approval-header > .btn--icon {
+  min-width: var(--space-7);
+  height: var(--space-7);
+  padding: 0;
+}
+
+.skill-reader-dialog .exec-approval-header .clawhub-skill-icon {
+  width: var(--space-7);
+  height: var(--space-7);
+  flex-basis: var(--space-7);
+}
+
+.skill-reader-dialog .exec-approval-header > :first-child {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.skill-reader-dialog .btn--icon,
+.skill-reader-dialog .statusDot {
+  flex-shrink: 0;
+}
+
+.skill-reader-dialog__body {
+  flex: 0 1 auto;
+  min-height: 0;
+  align-content: start;
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding: var(--skill-reader-inset);
+}
+
+.skill-reader-dialog__body > p {
+  margin: 0;
+}
+
+.skill-reader-dialog__error {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  overflow-wrap: anywhere;
+}
+
+.skill-reader-dialog__error > [aria-hidden] {
+  display: flex;
+  flex-shrink: 0;
+}
+
+.skill-reader-dialog__error svg {
+  width: var(--space-5);
+  height: var(--space-5);
+}
+
+@media (max-width: 768px) {
+  .exec-approval-card.skill-reader-dialog {
+    --skill-reader-inset: var(--space-4);
+  }
+}
+
+@media (max-width: 640px) {
+  .exec-approval-card.skill-reader-dialog {
+    max-height: var(--openclaw-modal-max-height, 90dvh);
   }
 }
 
@@ -4581,7 +4691,6 @@ td.data-table-key-col {
   border-radius: var(--radius-full);
   background: color-mix(in srgb, var(--card) 86%, transparent);
   color: inherit;
-  text-decoration: none;
   transition:
     background-color var(--duration-fast) var(--ease-in-out),
     border-color var(--duration-fast) var(--ease-in-out),
@@ -4896,7 +5005,6 @@ td.data-table-key-col {
 
 .agent-tool-jump {
   color: var(--accent);
-  text-decoration: none;
   align-self: end;
   margin-left: auto;
 }
@@ -6073,8 +6181,9 @@ td.data-table-key-col {
   color: inherit;
 }
 
-.person-activity-link:not(:hover, :focus-visible) {
-  text-decoration: none;
+.person-activity-link:not(:where(.learn-more-link)):hover,
+.person-activity-link:not(:where(.learn-more-link)):focus-visible {
+  text-decoration-line: underline;
 }
 
 .person-activity-avatar-link {

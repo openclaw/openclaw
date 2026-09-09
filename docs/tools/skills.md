@@ -98,7 +98,7 @@ the same captured file content.
 The skill entry includes the node locator. Its files, relative references, and
 binaries live on the node, so load and execute it with
 `exec host=node node=<node-id>`. Restart the node host after changing its skill
-files. See [Nodes](/nodes#node-hosted-skills) for pairing and off-switches.
+files. See [Nodes](/nodes/mcp-and-skills#node-hosted-skills) for pairing and off-switches.
 
 ## Per-agent vs shared skills
 

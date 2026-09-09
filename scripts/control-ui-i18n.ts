@@ -19,9 +19,11 @@ import {
 import { isStrictAffirmativeValue } from "./lib/arg-utils.mts";
 import {
   hashControlUiTranslationText,
-  loadControlUiSourceCatalog,
   loadControlUiTranslationMemory,
   materializeControlUiLocaleCatalog,
+} from "./lib/control-ui-i18n-catalog-values.ts";
+import {
+  loadControlUiSourceCatalog,
   readControlUiSourceCatalog,
 } from "./lib/control-ui-i18n-catalog.ts";
 import { CONTROL_UI_LOCALE_ENTRIES } from "./lib/control-ui-i18n-config.ts";

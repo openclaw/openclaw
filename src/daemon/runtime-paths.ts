@@ -322,6 +322,7 @@ export async function resolveSystemNodeInfo(params: {
   env?: Record<string, string | undefined>;
   platform?: NodeJS.Platform;
   execFile?: ExecFileAsync;
+  acceptNodeVersion?: (version: string | null) => boolean;
 }): Promise<SystemNodeInfo | null> {
   const env = params.env ?? process.env;
   const platform = params.platform ?? process.platform;
@@ -338,7 +339,7 @@ export async function resolveSystemNodeInfo(params: {
     }
     const runtime = await resolveRuntimeInfo(systemNode, "node", execFileImpl, env);
     const info = { path: systemNode, ...runtime };
-    if (info.status === "supported") {
+    if (info.status === "supported" && (params.acceptNodeVersion?.(info.version) ?? true)) {
       return info;
     }
     // If any available candidate could not be probed, lack of support is not established.

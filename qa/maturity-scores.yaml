@@ -946,7 +946,7 @@ surfaces:
           reason: human_override
           human_override: true
   - id: automation
-    name: "Automation: cron, hooks, tasks, polling"
+    name: Automation and durable work
     family: core
     level:
       id: beta
@@ -2085,12 +2085,12 @@ surfaces:
           reason: none
           human_override: false
   - id: windows-app
-    name: Native Windows companion app
+    name: Windows App / Node
     family: platform-app
     level:
-      id: planned
-      code: M0
-      label: Planned
+      id: beta
+      code: M3
+      label: Beta
     scores:
       quality:
         score: 19
@@ -2449,7 +2449,7 @@ surfaces:
           reason: none
           human_override: false
   - id: small-linux
-    name: Raspberry Pi and small Linux devices
+    name: ChromeOS, Raspberry Pi, and small Linux devices
     family: platform-app
     level:
       id: beta

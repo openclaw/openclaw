@@ -86,6 +86,8 @@ export type DoctorHealthContribution = FlowContribution & {
   kind: "core";
   surface: "health";
   required?: true;
+  /** Diagnostics with no update migration or readiness dependency stay in standalone Doctor. */
+  updatePolicy?: "standalone";
   healthChecks: readonly DoctorHealthCheck[];
   healthCheckIds: readonly string[];
   run: (ctx: DoctorHealthFlowContext) => Promise<void>;

@@ -343,6 +343,7 @@
     "native.android.37c430fb826c446f": "音频",
     "native.android.37ca0160a9368a86": "OpenClaw 构建时间戳",
     "native.android.3833561b14a68b4b": "可读的 Gateway 日志详情。",
+    "native.android.38661fce5fca374f": "发布计划 ${(branchLeaves.indexOf(leaf) + 1).toString().padStart(2, '0')}",
     "native.android.387fc9194ff7aa9b": "加载更多",
     "native.android.3881e845a4e699c7": "手机可以访问 Gateway",
     "native.android.38b7fdfac0cbc42d": "连接到你的 Gateway 以查看设备屏幕。",

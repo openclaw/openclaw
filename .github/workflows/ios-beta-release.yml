@@ -229,6 +229,16 @@ jobs:
           ./scripts/install-swift-tools.sh "$swift_tools_dir"
           echo "$swift_tools_dir" >> "$GITHUB_PATH"
 
+      - name: Install Watch Rust toolchain
+        if: hashFiles('apps/shared/OpenClawWatchRTC/Cargo.toml') != ''
+        run: |
+          set -euo pipefail
+          export PATH="$HOME/.cargo/bin:$PATH"
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          watch_toolchain="$(awk -F '"' '/^channel =/ { print $2; exit }' apps/shared/OpenClawWatchRTC/rust-toolchain.toml)"
+          test -n "$watch_toolchain"
+          rustup toolchain install "$watch_toolchain" --profile minimal --component rust-src
+
       - name: Refresh trusted authority before store access
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -269,6 +279,8 @@ jobs:
           OPENCLAW_MOBILE_RELEASE_INTENT_PATH: ${{ runner.temp }}/mobile-release-intent-ios/intent.json
           OPENCLAW_MOBILE_RELEASE_REF_MODE: intent
           OPENCLAW_MOBILE_RELEASE_TARGET_REF: ${{ needs.authorize.outputs.target_ref }}
+          SCAN_APP_NAME: OpenClaw
+          SCAN_DEPLOYMENT_TARGET_VERSION: "18.0"
           TESTFLIGHT_INTERNAL_GROUP: ${{ vars.TESTFLIGHT_INTERNAL_GROUP }}
         run: |
           set -euo pipefail

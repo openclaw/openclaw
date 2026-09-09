@@ -662,7 +662,7 @@ suite.define(() => {
   it("keeps overlay motion anchored to its owning interaction", async () => {
     const page = await openPage({ nativeNav: false });
 
-    await page.keyboard.press("Meta+K");
+    await page.keyboard.press("ControlOrMeta+K");
     const palette = page.locator(".cmd-palette");
     const paletteDialog = page.locator("openclaw-modal-dialog.palette");
     await page.locator(".cmd-palette__input:not([disabled])").waitFor({ state: "visible" });

@@ -235,6 +235,28 @@
   gap: var(--space-3);
 }
 
+.clawhub-skill-detail__body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-content: start;
+  gap: var(--space-3);
+  overflow-wrap: anywhere;
+  font-size: var(--control-ui-text-md);
+}
+
+.clawhub-skill-detail__meta {
+  font-size: var(--control-ui-text-sm);
+}
+
+.clawhub-skill-detail__changelog {
+  border-top: 1px solid var(--border);
+  padding-top: var(--space-3);
+}
+
+.clawhub-skill-detail__changelog :where(table) {
+  overflow-wrap: normal;
+}
+
 .clawhub-skill-icon--detail {
   width: 56px;
   height: 56px;
@@ -373,7 +395,6 @@ h3.plugins-subheader {
 .plugins-group__link {
   color: var(--muted);
   font-size: var(--control-ui-text-xs);
-  text-decoration: none;
   white-space: nowrap;
 }
 
@@ -964,6 +985,16 @@ h3.plugins-subheader {
 
 .plugins-consent__actions {
   justify-content: flex-end;
+}
+
+.skill-library-import {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-4);
+}
+
+.skill-library-import > .btn {
+  justify-self: end;
 }
 
 /* ---------- responsive ---------- */

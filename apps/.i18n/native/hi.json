@@ -343,6 +343,7 @@
     "native.android.37c430fb826c446f": "ऑडियो",
     "native.android.37ca0160a9368a86": "OpenClaw बिल्ड टाइमस्टैम्प",
     "native.android.3833561b14a68b4b": "पढ़ने योग्य Gateway लॉग विवरण.",
+    "native.android.38661fce5fca374f": "रिलीज़ योजना ${(branchLeaves.indexOf(leaf) + 1).toString().padStart(2, '0')}",
     "native.android.387fc9194ff7aa9b": "और लोड करें",
     "native.android.3881e845a4e699c7": "फ़ोन Gateway तक पहुँच सकता है",
     "native.android.38b7fdfac0cbc42d": "मशीन की स्क्रीन देखने के लिए अपने Gateway से कनेक्ट करें।",

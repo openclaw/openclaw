@@ -208,8 +208,11 @@ function markdownSlug(value: string): string {
 }
 
 const legacySurfaceAnchors: Readonly<Record<string, readonly string[]>> = {
+  automation: ["automation-cron-hooks-tasks-polling"],
   "control-ui": ["gateway-web-app"],
   "imessage-bluebubbles": ["imessage-and-bluebubbles"],
+  "small-linux": ["raspberry-pi-and-small-linux-devices"],
+  "windows-app": ["native-windows-companion-app"],
 };
 
 function normalizeRoutePath(route: string): string {

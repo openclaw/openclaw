@@ -343,6 +343,7 @@
     "native.android.37c430fb826c446f": "เสียง",
     "native.android.37ca0160a9368a86": "เวลาประทับของบิลด์ OpenClaw",
     "native.android.3833561b14a68b4b": "รายละเอียดบันทึกของ Gateway ที่อ่านได้",
+    "native.android.38661fce5fca374f": "แผนการออกเวอร์ชัน ${(branchLeaves.indexOf(leaf) + 1).toString().padStart(2, '0')}",
     "native.android.387fc9194ff7aa9b": "โหลดเพิ่มเติม",
     "native.android.3881e845a4e699c7": "โทรศัพท์สามารถเชื่อมต่อกับ Gateway ได้",
     "native.android.38b7fdfac0cbc42d": "เชื่อมต่อกับ Gateway ของคุณเพื่อดูหน้าจอของเครื่อง",

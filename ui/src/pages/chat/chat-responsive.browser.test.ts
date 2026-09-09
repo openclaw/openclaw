@@ -1,3 +1,4 @@
+// @vitest-environment node
 // Control UI tests cover chat responsive behavior.
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
@@ -1720,7 +1721,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
     }
   });
 
-  it("insets only the bundled logo inside the unchanged avatar box", async () => {
+  it("insets only the bundled logo and keeps the user edge neutral", async () => {
     const page = await openBrowserPage(430, 720);
     try {
       await page.setContent(`<!doctype html><html><head><style>${readUiCss()}</style></head><body>
@@ -1770,6 +1771,38 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           borderWidth: "1px",
         },
       ]);
+
+      for (const theme of ["dark", "light"]) {
+        const edge = await page.evaluate((mode) => {
+          document.documentElement.dataset.themeMode = mode;
+          const probe = document.createElement("span");
+          probe.style.border = "1px solid var(--border)";
+          document.body.append(probe);
+          const neutralColor = getComputedStyle(probe).borderTopColor;
+          probe.style.borderColor = "color-mix(in srgb, var(--accent) 20%, transparent)";
+          const accentColor = getComputedStyle(probe).borderTopColor;
+          const avatar = document.querySelector("img.chat-avatar.user");
+          if (!avatar) {
+            throw new Error("Expected user avatar fixture");
+          }
+          const avatarStyle = getComputedStyle(avatar);
+          const result = {
+            accentColor,
+            borderColor: avatarStyle.borderTopColor,
+            borderStyle: avatarStyle.borderTopStyle,
+            borderWidth: avatarStyle.borderTopWidth,
+            neutralColor,
+            outlineStyle: avatarStyle.outlineStyle,
+          };
+          probe.remove();
+          return result;
+        }, theme);
+        expect(edge.borderColor).toBe(edge.neutralColor);
+        expect(edge.borderColor).not.toBe(edge.accentColor);
+        expect(edge.borderStyle).toBe("solid");
+        expect(edge.borderWidth).toBe("1px");
+        expect(edge.outlineStyle).toBe("none");
+      }
     } finally {
       await closeBrowserPage(page);
     }
@@ -4081,8 +4114,9 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       const page = await openFixture(width, height);
       try {
         await expectNoHorizontalOverflow(page);
-        // Measure the settled footer row after the context ring's 200ms entrance animation.
-        await page.waitForTimeout(220);
+        // Wall-clock sleeps can expire before Chromium advances compositor animations
+        // on a contended CI runner. Measure the footer after its finite entrance effect.
+        await page.locator(".context-ring").evaluate(finishElementAnimations);
         const controls = await page.evaluate(() => {
           const rectFor = (selector: string) => {
             const node = document.querySelector(selector) as HTMLElement | null;
@@ -4179,6 +4213,9 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         expect(rectsOverlap(model, send)).toBe(false);
         const contextModelGap = model.x - (context.x + context.width);
         expect(contextModelGap).toBeGreaterThanOrEqual(-1);
+        expect(
+          Math.abs(context.y + context.height / 2 - (model.y + model.height / 2)),
+        ).toBeLessThanOrEqual(2);
         const composerFontSizes = await page.evaluate(() => {
           const textareaNode = document.querySelector<HTMLTextAreaElement>(
             ".agent-chat__composer-combobox > textarea",
@@ -4239,11 +4276,6 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         if (width <= 768) {
           expect(send.width).toBeCloseTo(32, 2);
           expect(send.height).toBeCloseTo(32, 2);
-          for (const control of [model, context]) {
-            expect(
-              Math.abs(control.y + control.height / 2 - (model.y + model.height / 2)),
-            ).toBeLessThanOrEqual(2);
-          }
           expect(footer.height).toBeLessThanOrEqual(53);
         } else {
           // The editor reads at input size, while the controls around it stay
@@ -4293,26 +4325,69 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
   it.each([
     [320, 568],
     [393, 852],
+    [844, 390],
+    [1440, 1000],
   ] as const)(
-    "insets attachment previews from the composer edge at %sx%s",
+    "aligns attachment previews with draft text without clipping remove targets at %sx%s",
     async (width, height) => {
       const page = await openFixture(width, height, { composerAttachment: true });
       try {
         await expectNoHorizontalOverflow(page);
+        await page.locator(".chat-attachment-remove").focus();
+        await page.locator(".chat-attachment-remove").evaluate(finishElementAnimations);
+        await page.locator(".agent-chat__input").evaluate((node) => {
+          node.scrollTop = 0;
+        });
         const input = await getBoundingBox(
           page,
           ".agent-chat__composer-shell > .agent-chat__input",
         );
         const preview = await getBoundingBox(page, ".chat-attachments-preview");
         const attachment = await getBoundingBox(page, ".chat-attachment-thumb");
-        const previewPaddingTop = await page
-          .locator(".chat-attachments-preview")
-          .evaluate((node) => Number.parseFloat(getComputedStyle(node).paddingTop));
+        const remove = await getBoundingBox(page, ".chat-attachment-remove");
+        const topHits = await page.locator(".chat-attachment-remove").evaluate((node) => {
+          const bounds = node.getBoundingClientRect();
+          return [1, 3].map(
+            (offset) =>
+              document.elementFromPoint(bounds.x + bounds.width / 2, bounds.y + offset) === node,
+          );
+        });
+        const textStart = await page
+          .locator(".agent-chat__composer-combobox > textarea")
+          .evaluate(
+            (node) =>
+              node.getBoundingClientRect().x +
+              Number.parseFloat(getComputedStyle(node).paddingLeft),
+          );
 
         expect(attachment.x - input.x).toBeGreaterThanOrEqual(9.5);
-        expect(previewPaddingTop).toBe(18);
+        expect(Math.abs(attachment.x - textStart)).toBeLessThanOrEqual(0.5);
         expect(preview.x).toBeGreaterThanOrEqual(input.x);
-        expect(preview.x + preview.width).toBeLessThanOrEqual(input.x + input.width + 1);
+        expect(remove.y).toBeGreaterThanOrEqual(preview.y);
+        expect(remove.x + remove.width).toBeLessThanOrEqual(preview.x + preview.width);
+        expect(remove.width).toBeGreaterThanOrEqual(TOUCH_TARGET_MIN_PX);
+        expect(remove.height).toBeGreaterThanOrEqual(TOUCH_TARGET_MIN_PX);
+        expect(topHits).toEqual([true, true]);
+
+        await page.locator(".chat-attachments-preview").evaluate((node) => {
+          const firstAttachment = node.querySelector(".chat-attachment-thumb")!;
+          for (let index = 0; index < 7; index++) {
+            node.append(firstAttachment.cloneNode(true));
+          }
+          node.scrollLeft = node.scrollWidth;
+        });
+        const lastRemove = page.locator(".chat-attachment-remove").last();
+        await lastRemove.focus();
+        await lastRemove.evaluate(finishElementAnimations);
+        const rightHits = await lastRemove.evaluate((node) => {
+          const bounds = node.getBoundingClientRect();
+          return [1, 3].map(
+            (offset) =>
+              document.elementFromPoint(bounds.right - offset, bounds.y + bounds.height / 2) ===
+              node,
+          );
+        });
+        expect(rightHits).toEqual([true, true]);
       } finally {
         await closeBrowserPage(page);
       }

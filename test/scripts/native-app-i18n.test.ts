@@ -719,7 +719,7 @@ describe("native app i18n inventory", () => {
           hasSite(
             entry,
             (site) =>
-              site.path === "apps/ios/Sources/Gateway/GatewayConnectionController.swift" &&
+              site.path === "apps/ios/Sources/Gateway/GatewayConnectionSupport.swift" &&
               site.kind === "ui-localized-call-multiline",
           ) &&
           entry.source ===
@@ -732,11 +732,11 @@ describe("native app i18n inventory", () => {
           hasSite(
             entry,
             (site) =>
-              site.path === "apps/ios/Sources/Gateway/GatewayConnectionController.swift" &&
+              site.path === "apps/ios/Sources/Gateway/GatewayConnectionSupport.swift" &&
               site.kind === "ui-localized-call-multiline",
           ) &&
           entry.source ===
-            "Can't reach gateway at %1$@:%2$@. Verify Tailscale Serve is enabled and publishes this Gateway.",
+            "Can't reach gateway at %1$@:%2$@. Check the address and your network connection.",
       ),
     ).toBe(true);
     expect(entries.some((entry) => entry.source === "Approve this device on the gateway.\n")).toBe(

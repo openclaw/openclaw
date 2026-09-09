@@ -166,6 +166,7 @@ describe("curated meeting capture", () => {
       await page.updateComplete;
       const control = page.querySelector<HTMLInputElement>(`input[name="${field}"]`)!;
       const fields = [...page.querySelectorAll("input")].map((item) => item.name);
+      input(page, "title", "Not yet submitted");
       const refresh = startedRefresh ?? (await beginRefresh());
       try {
         if (health === "error") {
@@ -185,6 +186,9 @@ describe("curated meeting capture", () => {
         if (health !== "pending") {
           await vi.waitFor(() => expect(refresh.disabled).toBe(false));
         }
+        expect(page.querySelector<HTMLInputElement>('input[name="title"]')?.value).toBe(
+          "Not yet submitted",
+        );
         expect(page.querySelector<HTMLSelectElement>('select[name="providerId"]')?.value).toBe(
           original.providerId,
         );
@@ -889,18 +893,6 @@ describe("curated meeting capture", () => {
     ).toBe(true);
     expect(page.querySelector("wa-switch")?.hasAttribute("disabled")).toBe(true);
     expect(runtimeConfig.state.configFormDirty).toBe(false);
-  });
-
-  it("keeps source form edits intact through a health refresh", async () => {
-    const { page } = await mount();
-    click(page, "Edit source 1");
-    await page.updateComplete;
-    const title = page.querySelector<HTMLInputElement>('input[name="title"]')!;
-    title.value = "Not yet submitted";
-    click(page, "Refresh");
-    await vi.waitFor(() => expect(page.textContent).toContain("Not active"));
-    await page.updateComplete;
-    expect(title.value).toBe("Not yet submitted");
   });
 
   it("retains newly entered locators while a health refresh is pending", async () => {

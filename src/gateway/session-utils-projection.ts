@@ -12,6 +12,10 @@ import type { GatewayStoredSessionTargets } from "../config/sessions/combined-st
 import { resolveConcreteSessionStorePath } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import {
+  resolveStoredModelOverride,
+  type StoredModelOverride,
+} from "../sessions/stored-model-overrides.js";
 import type { SessionEntryPair } from "./session-list-order.js";
 import { resolveStoredSessionKeyForAgentStore } from "./session-store-key.js";
 import { readRecentSessionUsageFromTranscript as readScopedRecentSessionUsageFromTranscript } from "./session-transcript-readers.js";
@@ -59,9 +63,12 @@ export function resolveSessionSelectedModelRef(params: {
   entry?: SessionEntry;
   agentId: string;
   sessionKey?: string;
+  sessionStore?: Record<string, SessionEntry>;
   rowContext?: SessionListRowContext;
   allowPluginNormalization?: boolean;
-}): ReturnType<typeof resolveSessionModelRef> {
+}): ReturnType<typeof resolveSessionModelRef> & {
+  storedOverrideSource: StoredModelOverride["source"] | null;
+} {
   // Ownership is session-specific; never reuse the ordinary override cache for native tuples.
   const ownership = readSessionRuntimeOwnership({
     config: params.cfg,
@@ -70,16 +77,39 @@ export function resolveSessionSelectedModelRef(params: {
     sessionEntry: params.entry,
   });
   if (ownership?.modelRef) {
-    return ownership.modelRef;
+    return { ...ownership.modelRef, storedOverrideSource: null };
   }
+  const configuredDefault = resolveSessionModelRef(params.cfg, undefined, params.agentId, {
+    allowPluginNormalization: params.allowPluginNormalization,
+  });
+  const storedOverride = resolveStoredModelOverride({
+    sessionEntry: params.entry,
+    sessionStore: params.sessionStore,
+    sessionKey: params.sessionKey,
+    parentSessionKey: params.entry?.parentSessionKey,
+    defaultProvider: configuredDefault.provider,
+    allowPluginNormalization: params.allowPluginNormalization,
+  });
+  const selectedEntry = storedOverride
+    ? {
+        providerOverride: storedOverride.provider,
+        modelOverride: storedOverride.model,
+        ...(storedOverride.routeResolution === "resolved"
+          ? { modelOverrideRouteResolution: "resolved" as const }
+          : {}),
+      }
+    : undefined;
   const override = normalizeStoredOverrideModel({
-    providerOverride: params.entry?.providerOverride,
-    modelOverride: params.entry?.modelOverride,
+    providerOverride: selectedEntry?.providerOverride,
+    modelOverride: selectedEntry?.modelOverride,
   });
   if (!params.rowContext) {
-    return resolveSessionModelRef(params.cfg, params.entry, params.agentId, {
-      allowPluginNormalization: params.allowPluginNormalization,
-    });
+    return {
+      ...resolveSessionModelRef(params.cfg, selectedEntry, params.agentId, {
+        allowPluginNormalization: params.allowPluginNormalization,
+      }),
+      storedOverrideSource: storedOverride?.source ?? null,
+    };
   }
   const key = [
     normalizeAgentId(params.agentId),
@@ -88,13 +118,13 @@ export function resolveSessionSelectedModelRef(params: {
   ].join("\0");
   const cached = params.rowContext.selectedModelByOverrideRef.get(key);
   if (cached) {
-    return cached;
+    return { ...cached, storedOverrideSource: storedOverride?.source ?? null };
   }
-  const selected = resolveSessionModelRef(params.cfg, params.entry, params.agentId, {
+  const selected = resolveSessionModelRef(params.cfg, selectedEntry, params.agentId, {
     allowPluginNormalization: params.allowPluginNormalization,
   });
   params.rowContext.selectedModelByOverrideRef.set(key, selected);
-  return selected;
+  return { ...selected, storedOverrideSource: storedOverride?.source ?? null };
 }
 
 export function resolveTranscriptUsageFallback(params: {

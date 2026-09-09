@@ -640,20 +640,24 @@ describe("session transcript projection", () => {
     expect(state.messages).toEqual([first, second]);
   });
 
-  it("does not merge native messages with colliding imported provider-local IDs", () => {
-    const native = createMessage("user", "native", { id: "provider-local", seq: 1 });
-    const imported = createMessage("user", "imported", {
-      id: "provider-local",
-      seq: 2,
-      importedFrom: "claude-cli",
-      cliSessionId: "cli-session",
-      externalId: "provider-local",
-    });
-    let state = projectLiveSessionMessage(createSessionProjection(primaryScope), native);
-    state = projectLiveSessionMessage(state, imported);
+  it.each([undefined, { source: "", rawSeq: 1 }, { source: "foreign", rawSeq: -1 }])(
+    "keeps imported ID collisions separate without valid placement (%j)",
+    (transcriptPosition) => {
+      const native = createMessage("user", "native", { id: "provider-local", seq: 1 });
+      const imported = createMessage("user", "imported", {
+        id: "provider-local",
+        seq: 2,
+        importedFrom: "claude-cli",
+        cliSessionId: "cli-session",
+        externalId: "provider-local",
+        transcriptPosition,
+      });
+      let state = projectLiveSessionMessage(createSessionProjection(primaryScope), native);
+      state = projectLiveSessionMessage(state, imported);
 
-    expect(state.messages).toEqual([native, imported]);
-  });
+      expect(state.messages).toEqual([native, imported]);
+    },
+  );
 
   it("does not merge incomplete imported source tuples", () => {
     const first = createMessage("user", "same words", {
