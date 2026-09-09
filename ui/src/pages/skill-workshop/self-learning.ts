@@ -27,11 +27,11 @@ export function resolveSelfLearning(
   }
   const workshop = asRecord(asRecord(config.skills)?.workshop);
   // The Gateway defaults an absent autonomous mode to automatic self-learning.
-  const enabled = asRecord(workshop?.autonomous)?.mode !== "off";
+  const mode = asRecord(workshop?.autonomous)?.mode ?? "auto";
   return {
-    enabled,
+    enabled: mode !== "off",
     weeklyReviewsPaused:
-      enabled &&
+      mode === "auto" &&
       runtimeConfig?.state.configLoading === false &&
       asRecord(config.cron)?.enabled === false,
     busy,

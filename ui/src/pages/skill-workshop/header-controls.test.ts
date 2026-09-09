@@ -38,6 +38,18 @@ describe("skill workshop header tabs", () => {
     ["cron enabled", { cron: { enabled: true } }, false, false],
     ["default cron", {}, false, false],
     [
+      "propose mode with cron disabled",
+      { cron: { enabled: false }, skills: { workshop: { autonomous: { mode: "propose" } } } },
+      false,
+      false,
+    ],
+    [
+      "propose mode with cron enabled",
+      { cron: { enabled: true }, skills: { workshop: { autonomous: { mode: "propose" } } } },
+      false,
+      false,
+    ],
+    [
       "self-learning off",
       { cron: { enabled: false }, skills: { workshop: { autonomous: { mode: "off" } } } },
       false,
