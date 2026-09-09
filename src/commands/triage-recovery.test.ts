@@ -100,7 +100,11 @@ describe("triage external recovery handoff", () => {
     });
     expect(mocks.spawn).toHaveBeenCalledExactlyOnceWith(
       `/usr/local/bin/${agent}`,
-      agent === "opencode" ? ["--prompt", expect.any(String)] : [expect.any(String)],
+      agent === "claude"
+        ? ["--safe-mode", expect.any(String)]
+        : agent === "opencode"
+          ? ["--prompt", expect.any(String)]
+          : [expect.any(String)],
       expect.objectContaining({ stdio: "inherit" }),
     );
   });
@@ -185,7 +189,7 @@ describe("triage external recovery handoff", () => {
       );
       expect(mocks.spawn).toHaveBeenCalledExactlyOnceWith(
         "/usr/local/bin/claude",
-        [expect.any(String)],
+        ["--safe-mode", expect.any(String)],
         expect.objectContaining({
           cwd: state.workspaceDir,
           stdio: "inherit",
@@ -196,7 +200,7 @@ describe("triage external recovery handoff", () => {
           }),
         }),
       );
-      const prompt = String(mocks.spawn.mock.calls[0]?.[1]?.[0]);
+      const prompt = String(mocks.spawn.mock.calls[0]?.[1]?.[1]);
       expect(prompt).toContain("injected-doctor-failure");
       expect(prompt).toContain("2026.8.25");
       expect(prompt).toContain("2026.8.26");
@@ -266,7 +270,7 @@ describe("triage external recovery handoff", () => {
 
         expect(mocks.spawn).toHaveBeenCalledExactlyOnceWith(
           "/usr/local/bin/claude",
-          [expect.stringContaining("injected-doctor-failure")],
+          ["--safe-mode", expect.stringContaining("injected-doctor-failure")],
           expect.objectContaining({ cwd: state.workspaceDir, stdio: "inherit" }),
         );
         const output = JSON.stringify([runtime.log.mock.calls, runtime.error.mock.calls]);

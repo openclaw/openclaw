@@ -926,7 +926,7 @@ describe("triageCommand", () => {
       expect(prompt).toContain('Repair A&B at 100%: ! "quoted"');
       expect(prompt).toContain("\n");
       expect(command).toBe(nodeSource === "current" ? currentNode : pathNode);
-      expect(argv).toEqual([entrypoint, prompt]);
+      expect(argv).toEqual([entrypoint, "--safe-mode", prompt]);
       expect(options?.stdio).toBe("inherit");
       expect(options?.shell).not.toBe(true);
       expect(options?.windowsHide).not.toBe(true);
@@ -998,7 +998,7 @@ describe("triageCommand", () => {
     const promptPath = String(runtime.log.mock.calls[0]?.[0]).replace("Debugging prompt: ", "");
     expect(mocks.spawn).toHaveBeenCalledExactlyOnceWith(
       `/usr/local/bin/${agent}`,
-      [await fs.readFile(promptPath, "utf8")],
+      [...(agent === "claude" ? ["--safe-mode"] : []), await fs.readFile(promptPath, "utf8")],
       {
         stdio: "inherit",
         env: {

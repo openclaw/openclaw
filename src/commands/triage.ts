@@ -463,7 +463,13 @@ export async function triageCommand(
       return;
     }
     runtime.log(`Starting ${handoff.agent}; use --agent <name> to select another coding agent.`);
-    const args = handoff.agent === "opencode" ? ["--prompt", prompt] : [prompt];
+    // Project startup hooks can block the repair prompt before Claude's first turn.
+    const args =
+      handoff.agent === "claude"
+        ? ["--safe-mode", prompt]
+        : handoff.agent === "opencode"
+          ? ["--prompt", prompt]
+          : [prompt];
     // Artifact I/O can outlive the admitted update attempt. Recheck its exact
     // owner immediately before handing control to a local coding agent.
     if (!isCurrent()) {

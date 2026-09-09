@@ -17,6 +17,8 @@ openclaw triage
 
 In an interactive terminal, triage starts the first directly launchable agent on `PATH` in this detection order: Claude Code (`claude`), Codex (`codex`), OpenCode (`opencode`), then Pi (`pi`). An explicit `openclaw triage` invocation prints the selected agent and passes a bounded repair prompt directly, without a picker or launch confirmation. The agent uses its existing authentication, sandbox, and approval settings.
 
+Claude Code starts with `--safe-mode`, which disables custom hooks, plugins, and project instructions while retaining authentication and built-in tools. This prevents project startup hooks, such as dependency installation, from delaying the repair prompt. Printed manual commands use Claude's normal customization settings.
+
 Choose a particular agent with `--agent`, or collect diagnostics without starting one with `--json` or `--non-interactive`:
 
 ```bash
