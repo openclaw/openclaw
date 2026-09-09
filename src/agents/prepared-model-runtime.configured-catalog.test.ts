@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
-import { prepareConfiguredRuntimeFacts } from "./prepared-model-runtime.configured-catalog.js";
+import { prepareCapturedRuntimeFacts } from "./prepared-model-runtime.configured-catalog.js";
 import { AuthStorage, ModelRegistry } from "./sessions/index.js";
 
 describe("configured catalog registry composition", () => {
@@ -59,7 +59,7 @@ describe("configured catalog registry composition", () => {
       input: { config },
       configuredModelRefs: [{ provider: "donor-fixture", modelId: "selected" }],
     };
-    const { modelCatalog } = prepareConfiguredRuntimeFacts({
+    const { modelCatalog } = prepareCapturedRuntimeFacts({
       agentFacts,
       workspaceFacts: { configuredCatalogEntries: [configured], inlineProviderModels: [] },
       templateModelRegistry: registry,

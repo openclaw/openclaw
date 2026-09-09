@@ -4,7 +4,7 @@ import type { ModelCatalogEntry } from "./model-catalog.types.js";
 function isCatalogModelApi(
   value: string | undefined,
 ): value is NonNullable<ModelCatalogEntry["api"]> {
-  return value !== undefined && (MODEL_APIS as readonly string[]).includes(value);
+  return value !== undefined && MODEL_APIS.some((api) => api === value);
 }
 
 /** Shared metadata projection; keep transport headers and authoring fields out of catalog entries. */

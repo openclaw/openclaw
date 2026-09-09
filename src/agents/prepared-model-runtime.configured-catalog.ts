@@ -1,5 +1,6 @@
 import type { ModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { dedupeByKey } from "../shared/dedupe-by-key.js";
 import type { InlineModelEntry } from "./embedded-agent-runner/model.inline-provider.js";
 import { modelCatalogRowToEntry } from "./model-catalog-entry.js";
 import type { ModelCatalogEntry } from "./model-catalog.js";
@@ -44,12 +45,6 @@ function createConfiguredModelCatalogSnapshot(params: {
       addEntry(modelCatalogRowToEntry(model));
     }
   }
-  // Configured fields remain authoritative; merge mode also exposes already captured rows.
-  if (params.agentFacts.input.config.models?.mode !== "replace") {
-    for (const model of params.templateModelRegistry.getAll()) {
-      addEntry(modelCatalogRowToEntry(model));
-    }
-  }
   const configuredEntries = [...entries.values()];
   const staticEntries = params.configuredRuntimeModels.map(({ model }) =>
     modelCatalogRowToEntry(model),
@@ -73,4 +68,22 @@ export function prepareConfiguredRuntimeFacts(params: {
     configuredRuntimeModels: params.configuredRuntimeModels,
     inlineProviderModels: params.workspaceFacts.inlineProviderModels,
   };
+}
+
+/** Startup can expose captured rows; full refresh overlays only configured membership. */
+export function prepareCapturedRuntimeFacts(
+  params: Parameters<typeof prepareConfiguredRuntimeFacts>[0],
+): PreparedModelRuntimeCatalogFacts {
+  const facts = prepareConfiguredRuntimeFacts(params);
+  if (params.agentFacts.input.config.models?.mode === "replace") {
+    return facts;
+  }
+  const entries = dedupeByKey(
+    [
+      ...facts.modelCatalog.entries,
+      ...params.templateModelRegistry.getAll().map(modelCatalogRowToEntry),
+    ],
+    resolveModelCatalogIdentityKey,
+  );
+  return { ...facts, modelCatalog: { ...facts.modelCatalog, entries, routeVariants: entries } };
 }

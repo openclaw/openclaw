@@ -26,6 +26,7 @@ import {
 } from "./embedded-agent-runner/model.inline-provider.js";
 import type { StaticModelIdMatcher } from "./embedded-agent-runner/model.static-id.js";
 import { resolveConfiguredModelHarnessRuntime } from "./harness-runtimes.js";
+import type { ModelCatalogEntry } from "./model-catalog.types.js";
 import type { AuthStorageData } from "./sessions/auth-storage.js";
 import { resolveEffectiveAgentRuntime } from "./thinking-runtime.js";
 
