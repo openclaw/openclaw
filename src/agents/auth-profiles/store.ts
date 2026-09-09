@@ -27,7 +27,6 @@ import {
   assertAuthProfileMigrationCandidates,
   assertAuthProfileMigrationReady,
   assertAuthProfileMigrationStateAtDatabasePath,
-  excludeAuthProfileMigrationProviders,
   listLegacyAuthProfileSources,
   warnLegacyAuthProfileSourcesIgnored,
 } from "./legacy-source-diagnostic.js";
@@ -1703,9 +1702,12 @@ export function createAuthProfileStoreRuntime(
           },
           env,
         );
-      let store = mode ? authProfileRuntimeMode.run(mode, load) : authProfileRuntimeMode.exit(load);
+      const store = mode
+        ? authProfileRuntimeMode.run(mode, load)
+        : authProfileRuntimeMode.exit(load);
+      // Supplied shared snapshots must still honor their owner's all-provider refusal.
       for (const owner of owners.values()) {
-        store = excludeAuthProfileMigrationProviders(store, owner.databasePath, config);
+        assertAuthProfileMigrationStateAtDatabasePath(owner.databasePath, undefined, config, true);
       }
       return store;
     };

@@ -181,8 +181,9 @@ remain owner-wide.
 
 Session migration guards use the same pinned runtime config as model discovery
 and the requested model's endpoint to resolve endpoint-dependent provider aliases.
-Prepared credentials keep their stored provider realm when a model overrides
-the provider's endpoint. If the requested provider needs
+Prepared session views retain canonical profiles from both owners and validate
+their SecretRefs; migration metadata does not filter these profiles. The
+endpoint-aware request guards decide admission. If the requested provider needs
 an endpoint to identify its credential realm and that context is missing, any
 pending migration refusal blocks it. An explicitly configured unrelated endpoint
 remains usable.

@@ -23,7 +23,6 @@ import {
   resolveAuthProfileDatabasePath,
 } from "./sqlite.js";
 import { AUTH_PROFILE_MIGRATION_COMMAND } from "./store-unreadable-error.js";
-import type { AuthProfileStore } from "./types.js";
 
 export { AuthProfileStoreUnreadableError } from "./store-unreadable-error.js";
 export {
@@ -210,16 +209,16 @@ export class AuthProfileMigrationRequiredError extends Error {
     this.affectedProviders = affectedProviders;
   }
 
-  blocksProvider(provider?: string, config?: OpenClawConfig, storedCredential = false): boolean {
+  blocksProvider(provider?: string, config?: OpenClawConfig): boolean {
     if (!provider || !this.affectedProviders) {
       return true;
     }
-    if (!storedCredential && hasUnresolvedProviderAuthEndpoint(provider, { config })) {
+    if (hasUnresolvedProviderAuthEndpoint(provider, { config })) {
       return true;
     }
     const requested = resolveProviderIdForAuth(provider, {
       config,
-      storedCredential: storedCredential || config === undefined,
+      storedCredential: config === undefined,
     });
     return this.affectedProviders.some(
       (affected) =>
@@ -355,27 +354,6 @@ export function assertAuthProfileMigrationReady(
     config,
     deferScopedRefusals,
   });
-}
-
-/** Read-only preparation excludes unavailable providers without releasing their owner fence. */
-export function excludeAuthProfileMigrationProviders(
-  store: AuthProfileStore,
-  databasePath: string,
-  config?: OpenClawConfig,
-): AuthProfileStore {
-  assertAuthProfileMigrationStateAtDatabasePath(databasePath, undefined, config, true);
-  const error = migrationRequiredByDatabase.get(databasePath);
-  if (!error) {
-    return store;
-  }
-  return {
-    ...store,
-    profiles: Object.fromEntries(
-      Object.entries(store.profiles).filter(
-        ([, credential]) => !error.blocksProvider(credential.provider, config, true),
-      ),
-    ),
-  };
 }
 
 export function clearAuthProfileMigrationDiagnostics(): void {

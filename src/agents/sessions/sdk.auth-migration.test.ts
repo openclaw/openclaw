@@ -182,4 +182,74 @@ describe("SDK migration guard endpoint context", () => {
       },
     );
   });
+
+  it.each([
+    { name: "local key across a shared Arcee refusal", secretRef: false, provider: "arcee" },
+    { name: "local SecretRef across a shared Arcee refusal", secretRef: true, provider: "arcee" },
+    {
+      name: "unaffected provider beside a shared Arcee refusal",
+      secretRef: false,
+      provider: "openai",
+    },
+  ])("preserves $name", async ({ secretRef, provider }) => {
+    const localKey = "synthetic-local-account-key";
+    const otherKey = "synthetic-other-account-key";
+    const unaffectedKey = "synthetic-unaffected-account-key";
+    await withOpenClawTestState(
+      {
+        layout: "state-only",
+        prefix: "auth-owner-preservation-",
+        env: {
+          ARCEEAI_API_KEY: otherKey,
+          OPENAI_API_KEY: unaffectedKey,
+          UNRESOLVED_LOCAL_ARCEE: undefined,
+        },
+      },
+      async (state) => {
+        await state.writeJson("agents/main/agent/auth-profiles.json", {
+          version: 1,
+          profiles: {
+            "arcee:default": { type: "api_key", provider: "arcee", key: "synthetic-legacy-key" },
+          },
+        });
+        const agentDir = state.agentDir("worker");
+        await mkdir(agentDir, { recursive: true });
+        writePersistedAuthProfileStoreRaw(
+          {
+            version: 1,
+            profiles: {
+              "arcee:default": {
+                type: "api_key",
+                provider: "arcee",
+                ...(secretRef
+                  ? { keyRef: { source: "env", provider: "default", id: "UNRESOLVED_LOCAL_ARCEE" } }
+                  : { key: localKey }),
+              },
+            },
+          },
+          agentDir,
+        );
+        const baseUrl = "https://openrouter.ai/api/v1";
+        const config = { models: { providers: { arcee: { baseUrl, models: [] } } } };
+        const fallback = vi.fn(() => otherKey);
+        const resolve = async () => {
+          const storage = AuthStorage.forAgent(agentDir, config);
+          storage.setFallbackResolver(fallback);
+          return await storage.getApiKey(provider, provider === "arcee" ? { baseUrl } : undefined);
+        };
+        if (secretRef) {
+          await expect(resolve()).rejects.toThrow(
+            "requires the active secrets runtime to materialize SecretRef credentials",
+          );
+        } else {
+          const credential = await resolve();
+          expect(
+            credential === (provider === "arcee" ? localKey : unaffectedKey),
+            "returned credential belongs to the selected account",
+          ).toBe(true);
+        }
+        expect(fallback).not.toHaveBeenCalled();
+      },
+    );
+  });
 });
