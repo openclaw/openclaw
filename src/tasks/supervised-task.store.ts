@@ -19,6 +19,7 @@ import {
   expireSupervisedTask,
 } from "./supervised-task.transitions.js";
 import {
+  serializeSupervisedTaskForWrite,
   validateSupervisedTask,
   type SupervisedDecision,
   type SupervisedGoal,
@@ -92,8 +93,8 @@ function write<T>(operation: (db: DatabaseSync) => T, options: Options): T {
   );
 }
 
-function rowForTask(task: SupervisedTask) {
-  validateSupervisedTask(task);
+function rowForTask(task: SupervisedTask, previous?: SupervisedTask) {
+  const recordJson = serializeSupervisedTaskForWrite(task, previous);
   return {
     flow_id: task.flowId,
     episode: task.episode,
@@ -101,7 +102,7 @@ function rowForTask(task: SupervisedTask) {
     phase: task.phase,
     due_at_ms: task.dueAt,
     deadline_at_ms: task.policy.deadlineAt,
-    record_json: JSON.stringify(task),
+    record_json: recordJson,
   };
 }
 
@@ -130,7 +131,7 @@ function replaceTask(
     db,
     getNodeSqliteKysely<Database>(db)
       .updateTable("task_flow_episodes")
-      .set(rowForTask(task))
+      .set(rowForTask(task, previous))
       .where("flow_id", "=", previous.flowId)
       .where("episode", "=", previous.episode)
       .where("revision", "=", previous.revision),
@@ -168,7 +169,13 @@ export function heartbeatTaskSupervisor(
   options: Options = {},
   flowId?: string,
 ): void {
-  if (!ownerId || !Number.isSafeInteger(ttlMs) || ttlMs < 1000 || ttlMs > 60_000) {
+  if (
+    !ownerId ||
+    ownerId.length > 128 ||
+    !Number.isSafeInteger(ttlMs) ||
+    ttlMs < 1000 ||
+    ttlMs > 60_000
+  ) {
     throw new Error("Invalid supervisor heartbeat");
   }
   write((db) => {
@@ -423,7 +430,11 @@ export function failSupervisedAttempt(
       task,
       endSupervisedTask(task, {
         kind: uncertain ? "input_required" : "failed",
-        reason,
+        reason: !reason.trim()
+          ? "Supervisor failure supplied no diagnostic detail"
+          : reason.length > 4096 || Buffer.byteLength(JSON.stringify(reason)) > 4096
+            ? "Supervisor failure detail omitted because it exceeds the diagnostic budget"
+            : reason,
         ...(uncertain
           ? { question: "Inspect the attempt outcome and reconcile any effects before resuming." }
           : {}),

@@ -68,12 +68,13 @@ function requireSupervisor(): string {
   return ownerId;
 }
 
-async function startWorker(runtime: RuntimeEnv, onlyFlowId?: string) {
+async function startWorker(runtime: RuntimeEnv, onlyFlowId?: string, canObserve?: () => boolean) {
   const { prepareSupervisedAgentRuntime, runSupervisedAgentAttempt } =
     await import("../tasks/supervised-task.agent.js");
   await prepareSupervisedAgentRuntime();
   return startSupervisedTaskWorker({
     onlyFlowId,
+    canObserve,
     runAttempt: runSupervisedAgentAttempt,
     onError: () =>
       runtime.error(
@@ -139,13 +140,19 @@ export async function startSupervisedTaskCommand(
 ): Promise<void> {
   const definition = DefinitionSchema.parse(await readDefinition(filename));
   definition.flowId ??= randomUUID();
-  const worker = foreground ? await startWorker(runtime, definition.flowId) : undefined;
+  // Advertise admission custody without touching an existing task with this ID.
+  // Only this invocation's successful create opens observation and dispatch.
+  let admitted = false;
+  const worker = foreground
+    ? await startWorker(runtime, definition.flowId, () => admitted)
+    : undefined;
   try {
     const task = createSupervisedTask(
       definition,
       worker?.ownerId ?? requireSupervisor(),
       Date.now(),
     );
+    admitted = true;
     print(runtime, inspectTaskSupervision(task.flowId, Date.now()));
     if (worker) {
       await keepWorkerAlive(worker, () => Boolean(getSupervisedTask(task.flowId)?.endpoint));

@@ -749,3 +749,11 @@ describe("command-path-policy", () => {
     ).toBe("bypass");
   });
 });
+
+// Executing supervised tasks is not a passive task-status query.
+it.each(["run", "work"])("bootstraps configured policy hooks for supervised %s", (action) => {
+  expectResolvedPolicy(["tasks", "supervise", action], {
+    loadPlugins: "always",
+    networkProxy: "default",
+  });
+});

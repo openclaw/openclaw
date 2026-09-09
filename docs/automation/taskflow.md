@@ -225,6 +225,21 @@ The file and each stored episode are limited to 64 KiB. Admission refuses more
 than 128 active episodes. An attempt is an OpenClaw full turn, not necessarily
 one physical provider request: existing internal runtime retries remain inside it.
 
+New active writes reserve serialized UTF-8 headroom: prompt, goal, and next-step
+content together may use 40 KiB, control metadata 8 KiB, and an endpoint 16 KiB.
+The total record limit remains 64 KiB. These are JSON byte limits, including
+escaping, not character counts. Oversized admission or resume is rejected
+transactionally; an oversized model update preserves the owned attempt so it can
+receive a compact failure endpoint. Diagnostic omission is explicit, never silent
+evidence truncation. Supervisor owner IDs are limited to 128 characters.
+
+Records written by earlier PoC builds remain readable. Control-only claim and
+dispatch transitions preserve their unchanged content. A legacy active record
+above the new content limit can execute and reach a compact endpoint when the
+total still fits. An already maximally full legacy record may lack endpoint space; this repair
+does not discard its content or migrate it. Reconcile those records before relying
+on the endpoint guarantee below.
+
 ```bash
 # Own this one task in the foreground until it reaches an endpoint.
 openclaw tasks supervise run task.json
@@ -239,6 +254,9 @@ openclaw tasks supervise show <flowId>
 
 `run` supervises only its own flow; it does not promise continuation for unrelated
 tasks. `work` supervises all opted-in episodes in the selected state database.
+Foreground execution opens only after this invocation successfully creates its
+episode. A rejected duplicate ID must not claim, dispatch, or terminate the
+existing ready or waiting episode.
 If its worker loses custody unexpectedly, `work` replaces it with a new owner;
 it never renews a revoked identity. Failed readmission exits nonzero. An explicit
 SIGINT or SIGTERM stops the daemon without rearming it.
@@ -309,6 +327,11 @@ system cannot honestly promise timely endpoint publication: status becomes
 unknown, and a restarted owner reconciles when those dependencies return.
 
 This PoC restricts attempts to reasoning and the permitted OpenClaw file tools.
+Codex's narrow allowlist disables its bundled native shell/file capability and
+uses OpenClaw-owned file tools. The same narrow cap selects no native tools for
+Claude CLI; it uses MCP-backed OpenClaw file tools. The mutation proof exercises
+those actual transports, not native Codex apply_patch or native Claude Edit/Write.
+Native CLI permissions and rollback of already dispatched effects are not proven.
 Detached processes, child agents, arbitrary external-event listeners, outbound
 notifications, and Discord presence projection are not supervised here. It does
 not provide a general external-effect transaction ledger or independently judge
@@ -327,6 +350,10 @@ node scripts/run-vitest.mjs src/commands/tasks-supervise.test.ts
 pnpm tsx scripts/dev/supervised-task-process-proof.ts
 pnpm tsx scripts/dev/supervised-task-runtime-proof.ts codex <provider/model> <report.json>
 pnpm tsx scripts/dev/supervised-task-runtime-proof.ts claude-cli <provider/model> <report.json>
+pnpm tsx scripts/dev/supervised-task-coding-proof.ts codex openai/<model> <report.json>
+pnpm tsx scripts/dev/supervised-task-coding-proof.ts claude-cli anthropic/<model> <report.json>
+pnpm tsx scripts/dev/supervised-task-mutation-proof.ts codex openai/<model> <report.json>
+pnpm tsx scripts/dev/supervised-task-mutation-proof.ts claude-cli anthropic/<model> <report.json>
 ```
 
 The process proof uses synthetic decisions, real SQLite connections, concurrent
@@ -334,5 +361,31 @@ processes, and SIGKILL. The runtime proof uses the actual adapters and verifies 
 independently generated fixture marker. It creates isolated OpenClaw state and
 keeps its transcripts for inspection, while native authentication stays with the
 host runtime. It never copies authentication files or starts the live Gateway.
+
+The coding proof starts with broken graph-validation and scheduling modules.
+It requires two file-editing attempts, closes and reopens SQLite during a durable
+wait, replaces the supervisor, and checks the result with 84 host-owned assertions
+outside the model workspace. The original broken fixture must fail those checks.
+The model does not run a shell or receive the verifier as a tool. The host runs
+model-written modules inside a Linux Bubblewrap namespace with read-only fixture
+and verifier mounts, no host home or task-state mounts, no network, and Node
+permissions denying writes and subprocesses. This proof requires `/usr/bin/bwrap`
+and Linux user namespaces; missing isolation fails closed rather than falling
+back to unrestricted execution.
+
+Standalone `run` and `work` initialize configured plugins and normal execution
+bootstrap before publishing supervision readiness. Passive `show`, `list`, and
+admission commands do not start plugin execution.
+
+The mutation proof uses that standalone CLI bootstrap, then pauses a real fixture
+mutation in a configured policy hook,
+then cancels or expires its SQL attempt before allowing that hook to return
+normally. A matching positive control must write successfully. Inspect the
+correlated authority rejection as well as unchanged bytes and the immutable
+endpoint; an unrelated backend failure is not a permission-fence proof. Expiry
+uses the real reconciler with the recorded expiry timestamp, not a wall-clock
+timing test. This exercises admission before permission returns, not rollback or
+physical cancellation after permission. These live proofs use existing runtime
+authentication and incur model usage; they are not part of the ordinary unit suite.
 
 - [Automations](/automation/cron-jobs) - scheduled jobs that may feed into flows

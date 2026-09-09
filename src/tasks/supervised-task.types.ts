@@ -106,6 +106,7 @@ const SupervisedTaskSchema = z.strictObject({
 export type SupervisedTask = z.infer<typeof SupervisedTaskSchema>;
 export type SupervisedPolicy = z.infer<typeof SupervisedPolicySchema>;
 
+/** Reads retain the original 64-KiB contract, including pre-headroom records. */
 export function validateSupervisedTask(value: unknown): SupervisedTask {
   const task = SupervisedTaskSchema.parse(value);
   if (Buffer.byteLength(JSON.stringify(task)) > 64 * 1024) {
@@ -132,4 +133,45 @@ export function validateSupervisedTask(value: unknown): SupervisedTask {
     throw new Error("Supervised attempt exceeds its bounded deadline");
   }
   return task;
+}
+
+/** Reserve durable room for an attempt and its endpoint before accepting content. */
+export function serializeSupervisedTaskForWrite(
+  value: SupervisedTask,
+  previous?: SupervisedTask,
+): string {
+  const task = validateSupervisedTask(value);
+  const { prompt, goal, next, endpoint, ...control } = task;
+  if (!endpoint) {
+    // Claims/dispatch carry already-admitted content, including historical rows.
+    // Requiring new headroom for an unchanged legacy payload would prevent its
+    // execution and stop the shared worker. Admission/resume have no prior row;
+    // model content updates still must fit the new budget atomically.
+    const carriesAcceptedContent =
+      previous &&
+      !previous.endpoint &&
+      previous.flowId === task.flowId &&
+      previous.episode === task.episode &&
+      previous.prompt === prompt &&
+      previous.next === next &&
+      JSON.stringify(previous.goal) === JSON.stringify(goal);
+    if (
+      !carriesAcceptedContent &&
+      Buffer.byteLength(JSON.stringify({ prompt, goal, next })) > 40 * 1024
+    ) {
+      throw new Error("Supervised task content budget exceeds reserved endpoint headroom");
+    }
+    // Include the endpoint key/envelope so the disjoint budgets also bound the
+    // full serialized record. IDs are schema-bounded; owners are bounded before
+    // their heartbeat is admitted, not only when they attempt to claim work.
+    if (Buffer.byteLength(JSON.stringify({ ...control, endpoint: null })) > 8 * 1024) {
+      throw new Error("Supervised task control metadata exceeds its headroom budget");
+    }
+  } else if (Buffer.byteLength(JSON.stringify(endpoint)) > 16 * 1024) {
+    throw new Error("Supervised task endpoint exceeds its serialized payload budget");
+  }
+  // Legacy records may exceed the new content budget. They remain readable and
+  // can terminate without rewriting their accepted content when the complete
+  // endpoint still fits the original hard cap. Evidence is never truncated.
+  return JSON.stringify(task);
 }

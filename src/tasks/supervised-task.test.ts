@@ -15,6 +15,7 @@ import {
   getSupervisedTask,
   heartbeatTaskSupervisor,
   inspectTaskSupervision,
+  listSupervisedTasks,
   reconcileSupervisedTasks,
   reserveSupervisedDispatch,
   resumeSupervisedTask,
@@ -79,6 +80,294 @@ afterEach(() => {
 });
 
 describe("supervised TaskFlow custody", () => {
+  it.each(["cancel", "execute"] as const)(
+    "preserves pre-headroom content during %s without starving other work",
+    async (action) => {
+      vi.useFakeTimers();
+      vi.setSystemTime(1000);
+      const { task, options } = fixture();
+      // An older writer admitted this record under the original aggregate cap.
+      // Seed that historical shape directly, not through the stricter new writer.
+      const legacy = {
+        ...task,
+        goal: {
+          objective: "Keep the historical accepted goal intact",
+          success: Array.from({ length: 14 }, (_, index) => ({
+            id: `legacy-${index}`,
+            description: "x".repeat(4096),
+          })),
+          partial: [],
+        },
+      };
+      const serialized = JSON.stringify(legacy);
+      expect(Buffer.byteLength(serialized)).toBeGreaterThan(40 * 1024);
+      expect(Buffer.byteLength(serialized)).toBeLessThan(64 * 1024 - 1024);
+      const { db } = openOpenClawStateDatabase(options);
+      db.prepare("UPDATE task_flow_episodes SET record_json = ? WHERE flow_id = ?").run(
+        serialized,
+        task.flowId,
+      );
+      closeOpenClawStateDatabaseForTest();
+      expect(getSupervisedTask(task.flowId, options)).toEqual(legacy);
+      if (action === "execute") {
+        const sibling = createSupervisedTask(
+          {
+            agentId: "poc",
+            runtime: "codex",
+            model: "openai/test",
+            prompt: "Other work",
+            goal,
+            policy,
+          },
+          "owner-a",
+          1000,
+          options,
+        );
+        const onError = vi.fn();
+        const worker = startSupervisedTaskWorker({
+          options,
+          runAttempt: async (claimed) => complete(claimed),
+          onError,
+        });
+        workers.push(worker);
+        await vi.advanceTimersByTimeAsync(3000);
+        expect(getSupervisedTask(task.flowId, options)).toMatchObject({
+          phase: "succeeded",
+          goal: legacy.goal,
+          prompt: legacy.prompt,
+          next: legacy.next,
+        });
+        expect(getSupervisedTask(sibling.flowId, options)?.phase).toBe("succeeded");
+        expect(worker.stopped).toBe(false);
+        expect(onError).not.toHaveBeenCalled();
+        return;
+      }
+      const cancelled = cancelSupervisedTask(task.flowId, 1001, options);
+      expect(cancelled).toMatchObject({
+        goal: legacy.goal,
+        prompt: legacy.prompt,
+        next: legacy.next,
+        phase: "cancelled",
+        endpoint: { effects: "not_dispatched" },
+      });
+      closeOpenClawStateDatabaseForTest();
+      expect(getSupervisedTask(task.flowId, options)).toEqual(cancelled);
+    },
+  );
+
+  it("rejects near-cap admission before inserting an episode", () => {
+    const { options } = fixture();
+    const before = listSupervisedTasks(options);
+    const largeGoal = {
+      objective: "Retain room to record a task endpoint",
+      success: Array.from({ length: 14 }, (_, index) => ({
+        id: `criterion-${index}`,
+        description: "x".repeat(4096),
+      })),
+      partial: [],
+    };
+    expect(() =>
+      createSupervisedTask(
+        {
+          flowId: "near-cap",
+          agentId: "poc",
+          model: "openai/test",
+          runtime: "codex",
+          prompt: "Complete the criteria",
+          goal: largeGoal,
+          policy,
+        },
+        "owner-a",
+        1000,
+        options,
+      ),
+    ).toThrow(/budget|headroom/i);
+    expect(listSupervisedTasks(options)).toEqual(before);
+    expect(getSupervisedTask("near-cap", options)).toBeUndefined();
+  });
+
+  it.each(["x", "\u0000", "漢"])(
+    "keeps the largest admissible %j content claimable and terminable",
+    (unit) => {
+      const { options } = fixture();
+      // Find the admission boundary through the real store, independently of
+      // the chosen budget constants. Cancel probes so they consume no capacity.
+      const input = (count: number) => ({
+        agentId: "poc",
+        model: "openai/test",
+        runtime: "codex" as const,
+        prompt: "Complete the criteria",
+        goal: {
+          objective: "Retain room for control metadata and an endpoint",
+          success: Array.from({ length: 16 }, (_, index) => ({
+            id: `criterion-${index}`,
+            description: unit.repeat(count),
+          })),
+          partial: [],
+        },
+        policy,
+      });
+      let low = 1;
+      let high = 4096;
+      while (low < high) {
+        const candidate = Math.ceil((low + high) / 2);
+        let admitted: SupervisedTask;
+        try {
+          admitted = createSupervisedTask(input(candidate), "owner-a", 1000, options);
+        } catch (error) {
+          expect(String(error)).toMatch(/budget|headroom|64 KiB/i);
+          high = candidate - 1;
+          continue;
+        }
+        cancelSupervisedTask(admitted.flowId, 1000, options);
+        low = candidate;
+      }
+      expect(low).toBeGreaterThan(1);
+      const task = createSupervisedTask(input(low), "owner-a", 1000, options);
+      const ownerId = "\u0000".repeat(128);
+      heartbeatTaskSupervisor(ownerId, 1000, 10_000, options);
+      const claimed = claimSupervisedTask(task.flowId, ownerId, 1000, options)!;
+      const dispatched = reserveSupervisedDispatch(claimed, 1001, options);
+      closeOpenClawStateDatabaseForTest();
+      reconcileSupervisedTasks(11_001, options);
+      const endpoint = getSupervisedTask(task.flowId, options)!;
+      expect(endpoint).toMatchObject({
+        goal: task.goal,
+        prompt: task.prompt,
+        next: task.next,
+        lastAttemptId: dispatched.attempt!.id,
+        phase: "input_required",
+        endpoint: { effects: "unknown" },
+      });
+      expect(Buffer.byteLength(JSON.stringify(endpoint))).toBeLessThanOrEqual(64 * 1024);
+      const { db } = openOpenClawStateDatabase(options);
+      const stored = db
+        .prepare("SELECT record_json FROM task_flow_episodes WHERE flow_id = ?")
+        .get(task.flowId);
+      // Verify the actual persisted JSON, including escaping and UTF-8, rather
+      // than measuring a separately reconstructed approximation of its payload.
+      expect(stored?.record_json).toBe(JSON.stringify(endpoint));
+      expect(Buffer.byteLength(String(stored?.record_json))).toBeLessThanOrEqual(64 * 1024);
+    },
+  );
+
+  it.each(["define_goal", "continue", "succeeded"] as const)(
+    "rejects oversized %s atomically and still permits a compact endpoint",
+    (kind) => {
+      const { options } = fixture();
+      const largeGoal = {
+        objective: "Complete the listed checks",
+        success: Array.from({ length: 16 }, (_, index) => ({
+          id: `criterion-${index}`,
+          description: "x".repeat(kind === "define_goal" ? 3500 : 1800),
+        })),
+        partial: [],
+      };
+      const task = createSupervisedTask(
+        {
+          agentId: "poc",
+          model: "openai/test",
+          runtime: "codex",
+          prompt: "Work",
+          ...(kind === "define_goal" ? {} : { goal: largeGoal }),
+          policy,
+        },
+        "owner-a",
+        1000,
+        options,
+      );
+      const attempt = reserveSupervisedDispatch(
+        claimSupervisedTask(task.flowId, "owner-a", 1000, options)!,
+        1000,
+        options,
+      );
+      const decision =
+        kind === "define_goal"
+          ? { kind, goal: largeGoal }
+          : kind === "continue"
+            ? { kind, next: "\u0000".repeat(4096) }
+            : {
+                kind,
+                summary: "Checked",
+                evidence: largeGoal.success.map(({ id }) => ({
+                  criterionId: id,
+                  observation: "漢".repeat(400),
+                })),
+              };
+      expect(() => settleSupervisedDecision(attempt, decision, 1001, options)).toThrow(
+        /budget|headroom/i,
+      );
+      expect(getSupervisedTask(task.flowId, options)).toEqual(attempt);
+      expect(
+        failSupervisedAttempt(attempt, "Decision exceeds the accepted budget", 1002, options),
+      ).toMatchObject({
+        phase: "input_required",
+        goal: task.goal,
+        next: task.next,
+        endpoint: { effects: "unknown" },
+      });
+    },
+  );
+
+  it("rejects oversized resume without changing the immutable input episode", () => {
+    const { options } = fixture();
+    const task = createSupervisedTask(
+      {
+        agentId: "poc",
+        model: "openai/test",
+        runtime: "codex",
+        prompt: "Work",
+        goal: {
+          ...goal,
+          success: Array.from({ length: 8 }, (_, index) => ({
+            id: `criterion-${index}`,
+            description: "x".repeat(3800),
+          })),
+          partial: [],
+        },
+        policy,
+      },
+      "owner-a",
+      1000,
+      options,
+    );
+    const attempt = reserveSupervisedDispatch(
+      claimSupervisedTask(task.flowId, "owner-a", 1000, options)!,
+      1000,
+      options,
+    );
+    const endpoint = failSupervisedAttempt(attempt, "Need operator context", 1001, options)!;
+    expect(() =>
+      resumeSupervisedTask(task.flowId, 1, "\u0000".repeat(4096), policy, "owner-a", 1002, options),
+    ).toThrow(/budget|headroom/i);
+    expect(getSupervisedTask(task.flowId, options)).toEqual(endpoint);
+    expect(getSupervisedTask(task.flowId, options, 2)).toBeUndefined();
+  });
+
+  it("rejects an overlong supervisor identity before inserting it", () => {
+    const { options } = fixture();
+    const { db } = openOpenClawStateDatabase(options);
+    const before = db.prepare("SELECT * FROM task_flow_supervisors ORDER BY owner_id").all();
+    expect(() => heartbeatTaskSupervisor("x".repeat(129), 1000, 10_000, options)).toThrow();
+    expect(db.prepare("SELECT * FROM task_flow_supervisors ORDER BY owner_id").all()).toEqual(
+      before,
+    );
+  });
+
+  it("records bounded explicit diagnostics when supervisor failure detail is oversized", () => {
+    const { task, claim, options } = fixture();
+    const attempt = reserveSupervisedDispatch(claim(), 1000, options);
+    const endpoint = failSupervisedAttempt(attempt, "\u0000".repeat(4096), 1001, options)!;
+    expect(endpoint).toMatchObject({
+      phase: "input_required",
+      goal: task.goal,
+      next: task.next,
+      endpoint: { effects: "unknown" },
+    });
+    expect(endpoint.endpoint!.reason).toMatch(/detail.*(exceed|omit)|budget/i);
+    expect(Buffer.byteLength(JSON.stringify(endpoint.endpoint))).toBeLessThanOrEqual(16 * 1024);
+  });
+
   it("keeps inspection non-creating and refuses admission without a supervisor", () => {
     const options = { env: { OPENCLAW_STATE_DIR: tempDirs.make("supervised-unarmed-") } };
     expect(inspectTaskSupervision("missing", 1000, options)).toBeUndefined();
