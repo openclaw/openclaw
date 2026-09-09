@@ -3,7 +3,9 @@ import type { MarkdownTableMode } from "openclaw/plugin-sdk/config-contracts";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   FILE_REF_EXTENSIONS_WITH_TLD,
+  findCodeRegions,
   isAutoLinkedFileRef,
+  isInsideCode,
   markdownToIR,
   type MarkdownLinkSpan,
   type MarkdownIR,
@@ -112,14 +114,8 @@ function isTelegramListBoundaryLine(line: string): boolean {
   return /^[ \t]*(?:\d+\.|#{1,6})[ \t]+\S/.test(line);
 }
 
-function isMarkdownIndentedCodeLine(line: string): boolean {
-  return /^(?: {4}|\t)/.test(line);
-}
-
 function shouldPreserveTelegramListBoundarySpacing(previous: string, next: string): boolean {
   return (
-    !isMarkdownIndentedCodeLine(previous) &&
-    !isMarkdownIndentedCodeLine(next) &&
     isTelegramBulletLine(previous) &&
     isTelegramListBoundaryLine(next) &&
     leadingWhitespaceLength(next) <= leadingWhitespaceLength(previous)
@@ -127,25 +123,25 @@ function shouldPreserveTelegramListBoundarySpacing(previous: string, next: strin
 }
 
 function preserveTelegramListBoundarySpacing(markdown: string): string {
-  const lines = markdown.split("\n");
-  const out: string[] = [];
-  let inFence = false;
+  // Preserve literal fence examples and indented code when separating prose lists.
+  let codeRegions: ReturnType<typeof findCodeRegions> | undefined;
   let previousLine = "";
-
-  for (const line of lines) {
-    const normalizedLine = line.replace(/\r$/, "");
-    const isFenceLine = /^[ \t]*(?:```|~~~)/.test(normalizedLine);
-    if (!inFence && shouldPreserveTelegramListBoundarySpacing(previousLine, normalizedLine)) {
-      out.push("");
-    }
-    out.push(line);
-    if (isFenceLine) {
-      inFence = !inFence;
-    }
-    previousLine = normalizedLine;
-  }
-
-  return out.join("\n");
+  let previousOffset = 0;
+  let offset = 0;
+  return markdown
+    .split("\n")
+    .map((line) => {
+      const normalizedLine = line.replace(/\r$/, "");
+      const insertBoundary =
+        shouldPreserveTelegramListBoundarySpacing(previousLine, normalizedLine) &&
+        !isInsideCode(previousOffset, (codeRegions ??= findCodeRegions(markdown))) &&
+        !isInsideCode(offset, codeRegions);
+      previousLine = normalizedLine;
+      previousOffset = offset;
+      offset += line.length + 1;
+      return insertBoundary ? `\n${line}` : line;
+    })
+    .join("\n");
 }
 
 function parseTelegramLegacyMarkdown(markdown: string, tableMode?: MarkdownTableMode): MarkdownIR {

@@ -162,7 +162,7 @@ describe("Codex app-server client runtime", () => {
     });
   });
 
-  it("rejects a refreshed token from a different ChatGPT workspace", async () => {
+  it("rejects a refreshed token from a different previous ChatGPT workspace", async () => {
     const harness = createClientHarness();
     clients.push(harness.client);
     ensureCodexAppServerClientRuntime(harness.client, {
@@ -173,7 +173,10 @@ describe("Codex app-server client runtime", () => {
     harness.send({
       id: "refresh-other-workspace",
       method: "account/chatgptAuthTokens/refresh",
-      params: { reason: "unauthorized", previousAccountId: "original-workspace" },
+      params: {
+        reason: "unauthorized",
+        previousAccountId: "original-workspace",
+      },
     });
 
     await vi.waitFor(() => expect(harness.writes.length).toBeGreaterThan(0));

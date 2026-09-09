@@ -1,6 +1,7 @@
 import { html, nothing, render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { renderGroupedMessage } from "./chat-message-bubble.ts";
+import { prepareChatMessageRender } from "./chat-message-markdown.ts";
 
 const containers: HTMLElement[] = [];
 afterEach(() => {
@@ -45,7 +46,7 @@ function fixture(mode: "inline" | "standalone") {
   const draw = () =>
     render(
       html`${rows.map((row) =>
-        renderGroupedMessage(row.message, row.key, {
+        renderGroupedMessage(prepareChatMessageRender(row.message), row.key, {
           isStreaming: false,
           showReasoning: false,
           showToolCalls: true,

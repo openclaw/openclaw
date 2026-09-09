@@ -7,13 +7,12 @@ vi.mock("openclaw/plugin-sdk/provider-auth", () => ({
   isProviderApiKeyConfigured: isProviderApiKeyConfiguredMock,
 }));
 
+import { discoverDeepInfraModels, discoverDeepInfraSurfaces } from "./provider-models.js";
 import {
   buildDeepInfraModelDefinition,
   DEEPINFRA_DEFAULT_MODEL_REF,
   DEEPINFRA_MODEL_CATALOG,
-  discoverDeepInfraModels,
-  discoverDeepInfraSurfaces,
-} from "./provider-models.js";
+} from "./provider-static-catalog.js";
 
 const DEEPINFRA_MODELS_URL =
   "https://api.deepinfra.com/v1/openai/models?sort_by=openclaw&filter=with_meta";

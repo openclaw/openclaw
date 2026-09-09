@@ -17,6 +17,7 @@ import {
   pathForPluginsHubTab,
   pathForWorkboardBoard,
   pluginsHubTabFromPath,
+  restoreBridgedRouteLocation,
   routeIdFromPath,
   routePageSpec,
   type RouteId,
@@ -440,6 +441,42 @@ describe("Dynamic route startup bridge", () => {
       route.component = originalComponent;
     }
   });
+});
+
+describe("Bridged route locations", () => {
+  it.each([
+    ["absent", "?", "/ui/activity", ""],
+    ["empty", "?bridge=&bridge=%2Fignored&q=release", "", "?q=release"],
+    [
+      "repeated",
+      "?q=first&bridge=%2Fui%2Factivity%2Fada-12345678&q=second&bridge=%2Fignored",
+      "/ui/activity/ada-12345678",
+      "?q=first&q=second",
+    ],
+    ["bridge-only", "?bridge=%2Fui%2Factivity%2Fada-12345678", "/ui/activity/ada-12345678", ""],
+    [
+      "other namespace",
+      "?other=%2Fui%2Fworkboard&q=release",
+      "/ui/activity",
+      "?other=%2Fui%2Fworkboard&q=release",
+    ],
+    [
+      "encoded query",
+      "?bridge=%2Fui%2Factivity%2Fa%252Fb&q=hello%20world&q=a%2Bb",
+      "/ui/activity/a%2Fb",
+      "?q=hello+world&q=a%2Bb",
+    ],
+  ])(
+    "restores %s bridge input without changing the source",
+    (_label, search, pathname, nextSearch) => {
+      const location = Object.freeze({ pathname: "/ui/activity", search, hash: "#sessions" });
+      const restored = restoreBridgedRouteLocation(location, "bridge");
+
+      expect(restored).toEqual({ pathname, search: nextSearch, hash: "#sessions" });
+      expect(restored).not.toBe(location);
+      expect(location).toEqual({ pathname: "/ui/activity", search, hash: "#sessions" });
+    },
+  );
 });
 
 describe("Agent panel route paths", () => {

@@ -42,6 +42,37 @@ export function normalizePluginProviderBaseUrl(value: string): string | undefine
   return normalizeOptionalLowercaseString(url.toString().replace(/\/+$/, ""));
 }
 
+function hostMatchesSuffix(host: string, suffix: string): boolean {
+  if (!suffix) {
+    return false;
+  }
+  return suffix.startsWith(".") || suffix.startsWith("-")
+    ? host.endsWith(suffix)
+    : host === suffix || host.endsWith(`.${suffix}`);
+}
+
+/** Shares declared endpoint matching between request classification and catalog eligibility. */
+export function matchesPluginProviderEndpoint(
+  endpoint: PluginManifestProviderEndpoint,
+  params: {
+    host: string;
+    normalizedBaseUrl?: string;
+  },
+): boolean {
+  return (
+    (endpoint.hosts ?? []).includes(params.host) ||
+    (endpoint.hostSuffixes ?? []).some((suffix) => hostMatchesSuffix(params.host, suffix)) ||
+    Boolean(
+      params.normalizedBaseUrl &&
+      (endpoint.baseUrls ?? []).some(
+        (baseUrl) =>
+          baseUrl === params.normalizedBaseUrl ||
+          normalizePluginProviderBaseUrl(baseUrl) === params.normalizedBaseUrl,
+      ),
+    )
+  );
+}
+
 function prepareProviderEndpoints(value: unknown): PluginManifestProviderEndpoint[] {
   if (!Array.isArray(value)) {
     return [];

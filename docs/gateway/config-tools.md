@@ -95,7 +95,7 @@ whose structured results cannot cross the JSON-only bridge stay direct.
 `enabled` defaults to `false`, including when the object sets other Code Mode
 options. To engage code mode only for models whose catalog entry flags
 `compat.codeMode: "preferred"`, enable `"auto"` explicitly. See
-[Code Mode - automatic per-model activation](/tools/code-mode#automatic-per-model-activation).
+[Code Mode - automatic per-model activation](/tools/code-mode/configuration#automatic-per-model-activation).
 
 ```json5
 {
@@ -172,7 +172,7 @@ Further restrict tools for specific providers or models. Order: base profile →
 
 ### `tools.toolsBySender`
 
-Restricts tools for the current turn's originating requester. This is defense-in-depth on top of channel access control; sender values must come from the channel adapter, not message text. It does not authenticate other content in the model prompt; see [Requester-scoped controls and prompt context](/gateway/security#requester-scoped-controls-and-prompt-context).
+Restricts tools for the current turn's originating requester. This is defense-in-depth on top of channel access control; sender values must come from the channel adapter, not message text. It does not authenticate other content in the model prompt; see [Requester-scoped controls and prompt context](/gateway/security/hardened-baseline#requester-scoped-controls-and-prompt-context).
 
 ```json5
 {

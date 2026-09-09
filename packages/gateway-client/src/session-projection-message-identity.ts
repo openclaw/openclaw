@@ -59,6 +59,16 @@ export function readSessionMessageIdentity(
   const importedFrom = readSessionProjectionString(metadata?.importedFrom);
   const cliSessionId = readSessionProjectionString(metadata?.cliSessionId);
   const externalId = readSessionProjectionString(metadata?.externalId);
+  const position = readRecord(metadata?.transcriptPosition);
+  const positionSource = readSessionProjectionString(position?.source);
+  const hasCanonicalPosition =
+    positionSource !== null &&
+    positionSource.length <= 128 &&
+    typeof position?.rawSeq === "number" &&
+    Number.isSafeInteger(position.rawSeq) &&
+    position.rawSeq >= 0;
+  // Reader-owned placement keeps a local row native when CLI history enriches its provenance.
+  const isImported = !hasCanonicalPosition && Boolean(importedFrom || cliSessionId || externalId);
   const idempotencyKey =
     readSessionProjectionString(metadata?.idempotencyKey) ??
     readSessionProjectionString(record.idempotencyKey) ??
@@ -95,10 +105,10 @@ export function readSessionMessageIdentity(
     idempotencyKey,
     sendId: role === "user" ? (persistedRunId ?? runId) : null,
     runId,
-    isImported: Boolean(importedFrom || cliSessionId || externalId),
+    isImported,
     // Imported IDs belong to their provider and CLI session, never the native ID namespace.
     externalSource:
-      importedFrom && cliSessionId && externalId
+      isImported && importedFrom && cliSessionId && externalId
         ? JSON.stringify([importedFrom, cliSessionId, externalId])
         : null,
   };

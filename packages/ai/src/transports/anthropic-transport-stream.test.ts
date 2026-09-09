@@ -6,6 +6,7 @@ import type { AssistantMessage, Model } from "@openclaw/llm-core";
  */
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { makeUserMessage } from "../../../../test/helpers/user-message.js";
 import {
   configureAiTransportHost,
   getAiTransportHost,
@@ -3270,13 +3271,7 @@ describe("anthropic transport stream", () => {
     {
       name: "blank user content",
       context: {
-        messages: [
-          {
-            role: "user",
-            content: " \n\t ",
-            timestamp: 0,
-          },
-        ],
+        messages: [makeUserMessage(" \n\t ", 0)],
       } as AnthropicStreamContext,
     },
   ])(

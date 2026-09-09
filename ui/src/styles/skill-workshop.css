@@ -1328,6 +1328,23 @@
   pointer-events: none;
 }
 
+.sw-self-learning-warning {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--warn-strong);
+  font-size: 12.5px;
+}
+
+.sw-self-learning-warning svg {
+  width: 14px;
+  height: 14px;
+}
+
+.sw-self-learning-warning a {
+  color: inherit;
+}
+
 .sw-self-learning-toggle__track {
   position: relative;
   width: 32px;

@@ -485,40 +485,6 @@ describe("marketplace plugins", () => {
     });
   });
 
-  it("passes dangerous force unsafe install through to marketplace path installs", async () => {
-    await withTempDir("openclaw-marketplace-test-", async (rootDir) => {
-      const pluginDir = path.join(rootDir, "plugins", "frontend-design");
-      const manifestPath = await writeLocalMarketplaceFixture({
-        rootDir,
-        pluginDir,
-        manifest: {
-          plugins: [
-            {
-              name: "frontend-design",
-              source: "./plugins/frontend-design",
-            },
-          ],
-        },
-      });
-      installPluginFromPathMock.mockResolvedValue({
-        ok: true,
-        pluginId: "frontend-design",
-        targetDir: "/tmp/frontend-design",
-        version: "0.1.0",
-        extensions: ["index.ts"],
-      });
-
-      await installPluginFromMarketplace({
-        marketplace: manifestPath,
-        plugin: "frontend-design",
-        dangerouslyForceUnsafeInstall: true,
-      });
-
-      expect(installPluginInput().path).toBe(pluginDir);
-      expect(installPluginInput().dangerouslyForceUnsafeInstall).toBe(true);
-    });
-  });
-
   it("passes install policy acknowledgement through to marketplace path installs", async () => {
     await withTempDir("openclaw-marketplace-test-", async (rootDir) => {
       const pluginDir = path.join(rootDir, "plugins", "frontend-design");

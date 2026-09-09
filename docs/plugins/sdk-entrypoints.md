@@ -341,6 +341,17 @@ export default definePluginEntry({
   its existing cwd fallback contract. Node payloads must not accept executable,
   argv, environment, credentials, or a Gateway agent as native account selection.
 
+  Paired-node plans that run an interactive CLI directly can declare
+  `uploadPathStyle: "native"` when it accepts double-quoted POSIX paths and
+  simple double-quoted Windows drive or UNC paths as file references. Native
+  Windows formatting preserves apostrophes and backslashes, and rejects double
+  quotes and control characters. Declare the same contract through
+  `terminal.uploadPathStyle` in `createSessionCatalogFamily(...)`. Leave the field
+  absent for shells or other input syntaxes. The Gateway includes it in
+  `terminal.upload` results only for clients advertising
+  `terminal-upload-path-style`. Without an upload style, clients use the terminal's
+  shell quoting rules.
+
   The terminal manager retains the native title and actual connection/agent owner
   across attach and reconnect. Clients advertise `terminal-session-metadata` to
   receive attach title/owner and list titles; older closed response shapes stay

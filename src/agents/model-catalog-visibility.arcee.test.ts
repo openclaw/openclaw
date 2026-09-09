@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { projectModelCatalogEntryForRoute } from "./model-catalog-route.js";
 import {
   resolveLogicalModelCatalogEntryState,
   resolveLogicalVisibleModelCatalog,
@@ -65,6 +66,25 @@ describe("provider-owned catalog identity", () => {
         }),
     });
   }
+
+  it("keeps logical identity in both public and runtime unmanaged rows", () => {
+    const { entry, runtimeEntry } = projectModelCatalogEntryForRoute({
+      entry: authored,
+      projection: { kind: "unmanaged" },
+      overrides: { name: "Selected account model" },
+    });
+
+    for (const row of [entry, runtimeEntry]) {
+      expect(row).toMatchObject({
+        provider: "arcee",
+        id: "trinity-large-thinking",
+        name: "Selected account model",
+        contextWindow: 32768,
+      });
+    }
+    expect(authored.id).toBe("arcee-ai/trinity-large-thinking");
+    expect(authored.name).toBe("Authored default");
+  });
 
   it("joins equivalent provider-owned spellings before authored metadata projection", async () => {
     const rows = await project([

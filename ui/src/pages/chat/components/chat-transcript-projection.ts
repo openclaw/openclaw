@@ -257,12 +257,10 @@ export function projectChatTranscript(
     props.userId,
   );
   const isDirectThread = defaultAvatarPlacement === "footer";
-  // Precedence: explicit prop, subagent classification/spawnedBy/key → none, direct → footer, else gutter.
+  // Precedence: explicit prop, subagent classification/key → none, direct → footer, else gutter.
   const avatarPlacement =
     props.avatarPlacement ??
-    (activeSession?.classification === "subagent" ||
-    activeSession?.spawnedBy ||
-    isSubagentSessionKey(props.sessionKey)
+    (activeSession?.classification === "subagent" || isSubagentSessionKey(props.sessionKey)
       ? "none"
       : defaultAvatarPlacement);
   const showLoadingSkeleton = props.loading && chatItems.length === 0 && !hasTypingActors;
@@ -284,7 +282,7 @@ export function projectChatTranscript(
     onOpenSidebar: props.onOpenSidebar,
     sessionKey: props.sessionKey,
     boardProvider: props.boardProvider,
-    agentId: props.fullMessageAgentId,
+    agentId: props.currentAgentId ?? props.fullMessageAgentId,
     runActive: props.runActive,
     onOpenWorkspaceFile: props.onOpenWorkspaceFile,
     onRequestUpdate: requestUpdate,
@@ -322,6 +320,7 @@ export function projectChatTranscript(
         : null;
     return {
       ...sharedMessageRenderOptions,
+      transcriptVisible: props.transcriptVisible,
       latestBrowserTabs,
       showReasoning,
       showToolCalls: props.showToolCalls,
@@ -341,7 +340,6 @@ export function projectChatTranscript(
       onToggleToolExpanded: toggleToolCardExpanded,
       assistantName: props.assistantName,
       assistantAvatar: assistantIdentity.avatar,
-      agentId: props.currentAgentId ?? props.fullMessageAgentId,
       agents: props.agents,
       senderAgentAvatars: props.senderAgentAvatars,
       mainKey: props.mainKey,
@@ -647,6 +645,7 @@ export function projectChatTranscript(
     JSON.stringify([...latestBrowserTabs]),
     props.sessionKey,
     props.presented,
+    props.transcriptVisible,
     // Invalidate settled rows when spawn metadata arrives, not on activity/title patches.
     avatarPlacement,
     props.boardProvider,

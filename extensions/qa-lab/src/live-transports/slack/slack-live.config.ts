@@ -302,6 +302,7 @@ export function buildSlackQaConfig(
                         commandText: "raw" as const,
                         label: false,
                         maxLines: 4,
+                        ...(progressOverrides.style ? { style: progressOverrides.style } : {}),
                         toolProgress: progressOverrides.toolProgress,
                         ...(progressOverrides.commentary === undefined
                           ? {}

@@ -1,4 +1,6 @@
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import { once } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -6,6 +8,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   captureTargetDatabaseSchemaContext,
   checkTargetDatabaseSchemasForContexts,
+  hasSchemaRefusal,
 } from "../cli/update-cli/schema-preflight.js";
 import { resolveConfiguredAgentDatabaseCandidatePaths } from "../config/sessions/targets.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -82,7 +85,7 @@ function createFixture(storeDirectory?: string) {
   };
 }
 
-function sourceArtifacts(paths: string[]): unknown {
+function sourceArtifacts(paths: string[], allowReadMarks: string[] = []): unknown {
   // Observe in a child too: opening/closing these in the writer's process can
   // itself release POSIX locks and would invalidate the writer-isolation probe.
   const result = spawnSync(
@@ -90,18 +93,24 @@ function sourceArtifacts(paths: string[]): unknown {
     [
       "-e",
       `const fs = require('node:fs'), path = require('node:path'), crypto = require('node:crypto');
+       const allowReadMarks = JSON.parse(process.argv[1]);
        const record = file => {
          const s = fs.statSync(file, { bigint: true });
+         const readMarks = allowReadMarks.some(database => file === database + '-shm');
+         const bytes = s.isFile() ? fs.readFileSync(file) : undefined;
+         if (readMarks) bytes.fill(0, 100, 120);
          return { file, mode: String(s.mode), dev: String(s.dev), ino: String(s.ino),
-           size: String(s.size), mtime: String(s.mtimeNs), ctime: String(s.ctimeNs),
-           ...(s.isFile() ? { hash: crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex') }
+           size: String(s.size),
+           ...(!readMarks ? { mtime: String(s.mtimeNs), ctime: String(s.ctimeNs) } : {}),
+           ...(bytes ? { hash: crypto.createHash('sha256').update(bytes).digest('hex') }
              : { entries: fs.readdirSync(file).sort() }) };
        };
-       console.log(JSON.stringify(process.argv.slice(1).map(file => ({
+       console.log(JSON.stringify(process.argv.slice(2).map(file => ({
          directory: record(path.dirname(file)),
          family: ['', '-wal', '-shm', '-journal'].map(suffix => file + suffix)
            .filter(fs.existsSync).map(record)
        }))));`,
+      JSON.stringify(allowReadMarks),
       ...paths,
     ],
     { encoding: "utf8" },
@@ -352,12 +361,14 @@ describe("schema preflight source artifacts", () => {
     expect(sourceArtifacts(fixture.paths)).toEqual(before);
   });
 
-  it("reads newer committed schema versions from live WAL without blocking or changing the family", async () => {
+  it("reads newer live WAL schemas without changing contents beyond agent SHM read marks", async () => {
     const fixture = createFixture();
     fixture.state.db.exec(`PRAGMA user_version = ${supportedVersions.state + 10};`);
     fixture.main.db.exec(`PRAGMA user_version = ${supportedVersions.agent + 10};`);
     fixture.worker.db.exec(`PRAGMA user_version = ${supportedVersions.agent + 10};`);
-    const before = sourceArtifacts(fixture.paths);
+    // SQLite's WAL-index read-mark array occupies bytes 100..119 of SHM.
+    const allowReadMarks = [fixture.main.path, fixture.worker.path];
+    const before = sourceArtifacts(fixture.paths, allowReadMarks);
     let eventLoopServiced = false;
     const immediate = setImmediate(() => {
       eventLoopServiced = true;
@@ -377,11 +388,119 @@ describe("schema preflight source artifacts", () => {
         [fixture.main.path, supportedVersions.agent + 10],
         [fixture.worker.path, supportedVersions.agent + 10],
       ]);
-      expect(sourceArtifacts(fixture.paths)).toEqual(before);
+      expect(sourceArtifacts(fixture.paths, allowReadMarks)).toEqual(before);
     } finally {
       clearImmediate(immediate);
     }
   });
+
+  it.each(["compatible", "incompatible"] as const)(
+    "inspects %s agent schemas while an independent WAL writer keeps committing",
+    async (outcome) => {
+      const fixture = createFixture();
+      const foundVersion = supportedVersions.agent + (outcome === "incompatible" ? 1 : 0);
+      // A 64 MiB source makes each byte-copy attempt overlap real commits.
+      fixture.main.db.exec(`
+        CREATE TABLE payloads (value BLOB NOT NULL) STRICT;
+        WITH RECURSIVE rows(n) AS (VALUES(1) UNION ALL SELECT n + 1 FROM rows WHERE n < 1024)
+        INSERT INTO payloads SELECT zeroblob(65536) FROM rows;
+        CREATE TABLE heartbeat (value INTEGER NOT NULL) STRICT;
+        INSERT INTO heartbeat VALUES (0);
+        PRAGMA user_version = ${foundVersion};
+      `);
+      fixture.close();
+      const mainHash = () =>
+        createHash("sha256").update(fs.readFileSync(fixture.main.path)).digest("hex");
+      const mainBefore = mainHash();
+      const stateBefore = sourceArtifacts([fixture.state.path]);
+      const writer = spawn(
+        process.execPath,
+        [
+          "--input-type=module",
+          "--eval",
+          `
+          import { DatabaseSync } from "node:sqlite";
+          const database = new DatabaseSync(process.argv[1]);
+          database.exec("PRAGMA journal_mode = WAL; PRAGMA wal_autocheckpoint = 0;");
+          const write = database.prepare("UPDATE heartbeat SET value = value + 1");
+          let commits = 0;
+          function commit() {
+            write.run();
+            commits += 1;
+            setImmediate(commit);
+          }
+          process.on("message", () => process.send(commits));
+          process.on("disconnect", () => process.exit());
+          commit();
+          process.send(commits);
+          `,
+          fixture.main.path,
+        ],
+        { stdio: ["ignore", "ignore", "pipe", "ipc"] },
+      );
+      let stderr = "";
+      writer.stderr?.setEncoding("utf8").on("data", (chunk: string) => {
+        stderr += chunk;
+      });
+      const closed = once(writer, "close");
+      // IPC samples committed progress without attaching a reader to the source.
+      const receiveProgress = async () => {
+        const [commits] = await Promise.race([
+          once(writer, "message"),
+          closed.then(() => {
+            throw new Error(`SQLite writer exited during inspection: ${stderr}`);
+          }),
+        ]);
+        if (typeof commits !== "number") {
+          throw new Error("SQLite writer did not report its committed progress");
+        }
+        return commits;
+      };
+      try {
+        await receiveProgress();
+        const walBefore = fs.readFileSync(`${fixture.main.path}-wal`);
+        for (const inspect of [
+          () => preflightOpenClawDatabaseSchemas({ env: fixture.env, supportedVersions }),
+          () =>
+            checkTargetDatabaseSchemasForContexts(supportedVersions, [
+              { env: fixture.env, config: {} },
+            ]),
+        ]) {
+          const before = receiveProgress();
+          writer.send("progress");
+          const commitsBefore = await before;
+          const result = await inspect();
+          const after = receiveProgress();
+          writer.send("progress");
+          expect(await after).toBeGreaterThan(commitsBefore);
+          expect(writer.exitCode).toBeNull();
+          expect(result.indeterminate).toEqual([]);
+          expect(result.incompatible).toEqual(
+            outcome === "compatible"
+              ? []
+              : [expect.objectContaining({ kind: "agent", path: fixture.main.path, foundVersion })],
+          );
+          expect(hasSchemaRefusal(result)).toBe(outcome === "incompatible");
+        }
+        // The writer appends WAL frames. Inspection must not checkpoint the main
+        // database or rewrite any preexisting WAL bytes while those commits run.
+        expect(mainHash()).toBe(mainBefore);
+        const wal = fs.openSync(`${fixture.main.path}-wal`, "r");
+        try {
+          const prefix = Buffer.alloc(walBefore.length);
+          expect(fs.readSync(wal, prefix, 0, prefix.length, 0)).toBe(prefix.length);
+          expect(prefix).toEqual(walBefore);
+        } finally {
+          fs.closeSync(wal);
+        }
+        expect(sourceArtifacts([fixture.state.path])).toEqual(stateBefore);
+      } finally {
+        writer.kill();
+        await closed;
+      }
+    },
+    30_000,
+  );
 
   it("ignores uncommitted writer versions without ending the owning transactions", async () => {
     const fixture = createFixture();
@@ -390,14 +509,15 @@ describe("schema preflight source artifacts", () => {
       opened.db.exec("BEGIN IMMEDIATE; PRAGMA user_version = 999;");
     }
     try {
-      const before = sourceArtifacts(fixture.paths);
+      const allowReadMarks = [fixture.main.path, fixture.worker.path];
+      const before = sourceArtifacts(fixture.paths, allowReadMarks);
       const locks =
         process.platform === "linux" ? fixture.paths.map(readMainDatabasePosixLocks) : [];
       expect(await checkTargetDatabaseSchemas(supportedVersions, fixture.env)).toEqual({
         incompatible: [],
         indeterminate: [],
       });
-      expect(sourceArtifacts(fixture.paths)).toEqual(before);
+      expect(sourceArtifacts(fixture.paths, allowReadMarks)).toEqual(before);
       for (const opened of databases) {
         expect(opened.db.isTransaction).toBe(true);
         expect(opened.db.prepare("PRAGMA user_version").get()).toEqual({ user_version: 999 });

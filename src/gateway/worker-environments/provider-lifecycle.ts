@@ -27,6 +27,7 @@ import {
 import { createWorkerProvisionCancellation } from "./provider-provisioning-cancellation.js";
 import {
   normalizeWorkerMachineOptions,
+  normalizeWorkerOperatingSystems,
   requireProviderOperationTimeoutMs,
   requireWorkerLease,
   requireWorkerLeaseStatus,
@@ -96,6 +97,17 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
     const provider = options.resolveProvider(profile.provider);
     return normalizeWorkerMachineOptions(
       await provider?.listMachineOptions?.(requireWorkerProfile(profile.settings ?? {})),
+    );
+  };
+
+  const listOperatingSystems = async (profileId: string) => {
+    const profile = options.getConfig().cloudWorkers?.profiles?.[profileId];
+    if (!profile) {
+      return undefined;
+    }
+    const provider = options.resolveProvider(profile.provider);
+    return normalizeWorkerOperatingSystems(
+      await provider?.listOperatingSystems?.(requireWorkerProfile(profile.settings ?? {})),
     );
   };
 
@@ -250,6 +262,8 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
         typeof record.profileSnapshot.machineClass === "string"
           ? record.profileSnapshot.machineClass
           : undefined;
+      const os =
+        typeof record.profileSnapshot.os === "string" ? record.profileSnapshot.os : undefined;
       enrollmentOperation = nodeProvisioning.createEnrollmentOperation(
         record,
         provider,
@@ -260,7 +274,7 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
       const project = readWorkerProjectSnapshot(record.profileSnapshot.project);
       if (project) {
         if (
-          !provider.supportsProjectPreparation?.(profile, machineClass) ||
+          !provider.supportsProjectPreparation?.(profile, machineClass, os) ||
           !options.projectNamespace
         ) {
           throw new Error("Worker provider cannot resume its prepared project contract");
@@ -283,9 +297,15 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
         });
       }
       const provisionOptions =
-        machineClass || executionMode || enrollmentOperation || projectOperation || cancellation
+        machineClass ||
+        os ||
+        executionMode ||
+        enrollmentOperation ||
+        projectOperation ||
+        cancellation
           ? {
               ...(machineClass ? { machineClass } : {}),
+              ...(os ? { os } : {}),
               ...(executionMode ? { executionMode } : {}),
               ...(enrollmentOperation
                 ? {
@@ -683,6 +703,7 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
     destroy,
     identityResolverFor,
     listMachineOptions,
+    listOperatingSystems,
     providerFor,
     reconcileRecord,
   };

@@ -18,7 +18,7 @@ import type { RealtimeVoiceBridge } from "openclaw/plugin-sdk/realtime-voice";
 import { isLiveTestEnabled } from "openclaw/plugin-sdk/test-live";
 import { describe, expect, it } from "vitest";
 import plugin from "./index.js";
-import { buildGoogleLiveCatalogProvider } from "./provider-catalog.js";
+import { buildGoogleLiveCatalogProvider } from "./provider-catalog-runtime.js";
 import { buildGoogleRealtimeVoiceProvider } from "./realtime-voice-provider.js";
 import { createGeminiWebSearchProvider } from "./src/gemini-web-search-provider.js";
 

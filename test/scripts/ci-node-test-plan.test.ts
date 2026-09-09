@@ -440,6 +440,9 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       "ui/src/styles/cursor-policy.node.test.ts",
     ]);
     expect(resolvePolicyTestTargets(["docs/web/control-ui.md"])).toEqual([]);
+    expect(resolvePolicyTestTargets(["extensions/anthropic/openclaw.plugin.json"])).toEqual([
+      "src/agents/model-ref-shared.test.ts",
+    ]);
   });
 
   it("matches policy owners only for exact changed paths", () => {
@@ -1753,6 +1756,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       "src/commands/doctor-heartbeat-cadence-migration.test.ts",
       "src/commands/doctor-heartbeat-scratch-migration.test.ts",
       "src/commands/doctor-heartbeat-session-target.test.ts",
+      "src/commands/doctor-heartbeat-source-archive.test.ts",
       "src/commands/doctor-heartbeat-task-migration.test.ts",
       "src/commands/doctor-session-canonical-keys.memory.test.ts",
       "src/commands/doctor-session-canonical-keys.retention.test.ts",
@@ -2211,6 +2215,11 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       Array.from({ length: 10 }, (_, index) => `test/scripts/zz-growth-probe-${index}.test.ts`),
       ["test/scripts/openclaw-performance-crabbox.test.ts"],
       ["test/scripts/install-smoke-ref-admission.test.ts"],
+      [
+        "test/scripts/npm-package-locks-report.test.ts",
+        "test/scripts/openclaw-performance-crabbox.test.ts",
+        "test/scripts/install-smoke-ref-admission.test.ts",
+      ],
     ];
     const growthFiles = new Set([inventoryGrowthFile, ...extraInventories.flat()]);
     const isHostedToolingGroup = (group: { shard_name: string }) =>
@@ -3123,6 +3132,16 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     expect(createChangedExtensionFallbackShards([target])).toEqual([]);
   });
 
+  it("prepares the sticker provider runtime in extension fallback", () => {
+    const target = "extensions/telegram/src/sticker-cache.selection.test.ts";
+    const owners = createChangedExtensionFallbackShards([target]).filter((shard) =>
+      (shard.groups ?? [shard]).some((group) => group.includePatterns?.includes(target)),
+    );
+
+    expect(owners).toHaveLength(1);
+    expect(owners[0]?.pretestBuildMode).toBe("runtime");
+  });
+
   it("retains the changed host plugin test when the store-alias diff forces fallback", () => {
     expect(createChangedNodeTestShards(STORE_ALIAS_CHANGED_PATHS)).toBeNull();
     const options = {
@@ -3293,20 +3312,27 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
           // Allocation may change, but every file must retain its complete execution policy.
           tooling: nonPlugin
             .filter(isRepartitionableTooling)
-            .flatMap((group) =>
-              expectDefined(group.includePatterns, "repartitionable tooling membership").map(
-                (file) => ({
-                  parent: toolingParent(group),
-                  file,
-                  configs: group.configs,
-                  env: group.env,
-                  pretestBuildMode: group.pretestBuildMode,
-                  requiresDist: group.requiresDist,
-                  runner: group.runner,
-                  exclusive: isExclusiveCompactShardName(group.shard_name),
-                }),
-              ),
-            )
+            .flatMap((group) => {
+              const files = expectDefined(
+                group.includePatterns,
+                "repartitionable tooling membership",
+              );
+              // A split can move tests out of the compiler's larger runner group.
+              expect(group.runner).toBe(
+                files.includes("test/scripts/write-unified-entry-dts.test.ts")
+                  ? DEFAULT_NODE_TEST_RUNNER
+                  : BUNDLED_NODE_TEST_RUNNER,
+              );
+              return files.map((file) => ({
+                parent: toolingParent(group),
+                file,
+                configs: group.configs,
+                env: group.env,
+                pretestBuildMode: group.pretestBuildMode,
+                requiresDist: group.requiresDist,
+                exclusive: isExclusiveCompactShardName(group.shard_name),
+              }));
+            })
             .toSorted((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b))),
         };
       };
@@ -3363,7 +3389,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
           expectTimingFamilies(mutated);
           expect(
             () => expect(policies(mutated)).toEqual(policies(before)),
-            `${mutation} must fail policy equality even with valid timing keys`,
+            `${mutation} must fail policy validation even with valid timing keys`,
           ).toThrow();
         }
         for (const identity of ["parent", "part"] as const) {

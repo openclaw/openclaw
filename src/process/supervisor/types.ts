@@ -108,6 +108,8 @@ type SpawnBaseInput = {
 type SpawnChildInput = SpawnBaseInput & {
   mode: "child";
   argv: string[];
+  /** Append invocation arguments after queued scope admission, immediately before child construction. */
+  resolveArgs?: () => string[];
   /** Preserve a distinct invocation name while executing argv[0]. */
   argv0?: string;
   /** Preserve a caller-prepared environment without environment-mutating spawn wrappers. */

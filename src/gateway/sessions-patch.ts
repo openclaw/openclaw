@@ -117,9 +117,9 @@ export function resolveSessionPatchModelSelection(params: {
     provider: resolved.ref.provider,
     model: resolved.ref.model,
     ...(profile ? { profile } : {}),
-    isDefault:
-      resolved.ref.provider === params.defaultProvider &&
-      resolved.ref.model === params.defaultModel,
+    // A concrete model request is a pin even when it currently equals the
+    // configured default. Only the explicit null patch represents Default.
+    isDefault: false,
   };
 }
 
@@ -628,6 +628,7 @@ function* projectSessionPatchSteps(
         entry: next,
         currentProvider: next.providerOverride ?? next.modelProvider ?? resolvedDefault.provider,
         selection,
+        explicitDefaultSelection: raw === null,
         profileOverride: selection.profile,
         ...(params.providerAuthMetadataSnapshot
           ? { metadataSnapshot: params.providerAuthMetadataSnapshot }

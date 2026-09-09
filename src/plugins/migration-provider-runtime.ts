@@ -3,9 +3,8 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getLoadedRuntimePluginRegistry } from "./active-runtime-registry.js";
 import { withBundledPluginEnablementCompat } from "./bundled-compat.js";
 import { listBundledPluginMetadata } from "./bundled-plugin-metadata.js";
-import { loadPluginRegistryHandle } from "./loader.js";
+import { acquirePluginRegistryForInspection } from "./loader.js";
 import { resolveManifestContractRuntimePluginResolution } from "./manifest-contract-runtime.js";
-import { isPluginRegistryRetired } from "./registry-lifecycle.js";
 import type { PluginRegistry } from "./registry-types.js";
 import { withPluginRuntimeRegistryScope } from "./runtime/gateway-request-scope.js";
 import type { MigrationProviderPlugin } from "./types.js";
@@ -14,25 +13,6 @@ type MigrationProviderPluginResolution = {
   pluginIds: string[];
   bundledCompatPluginIds: string[];
 };
-
-let standaloneMigrationRegistrySlot:
-  | {
-      config: OpenClawConfig | undefined;
-      pluginIdsKey: string;
-      registry: PluginRegistry;
-    }
-  | undefined;
-
-function migrationPluginIdsKey(pluginIds: readonly string[]): string {
-  return JSON.stringify(pluginIds);
-}
-
-function findMigrationProviderById(
-  entries: ReadonlyArray<{ provider: MigrationProviderPlugin }>,
-  providerId: string,
-): MigrationProviderPlugin | undefined {
-  return entries.find((entry) => entry.provider.id === providerId)?.provider;
-}
 
 function bindMigrationProviderToRegistry(
   provider: MigrationProviderPlugin,
@@ -54,20 +34,6 @@ function bindMigrationProviderToRegistry(
     plan: (ctx) => withPluginRuntimeRegistryScope(registry, () => provider.plan(ctx)),
     apply: (ctx, plan) => withPluginRuntimeRegistryScope(registry, () => provider.apply(ctx, plan)),
   };
-}
-
-function resolveMigrationProviderRegistry(params: { cfg?: OpenClawConfig; pluginIds: string[] }) {
-  const active = getLoadedRuntimePluginRegistry({ requiredPluginIds: params.pluginIds });
-  if (active) {
-    return active;
-  }
-  const standalone = standaloneMigrationRegistrySlot;
-  return standalone &&
-    !isPluginRegistryRetired(standalone.registry) &&
-    standalone.config === params.cfg &&
-    standalone.pluginIdsKey === migrationPluginIdsKey(params.pluginIds)
-    ? standalone.registry
-    : undefined;
 }
 
 function resolveMigrationProviderPluginResolution(params: {
@@ -117,83 +83,68 @@ function mergeMigrationProviders(
   return [...merged.values()].toSorted((a, b) => a.id.localeCompare(b.id));
 }
 
-export function ensureStandaloneMigrationProviderRegistryLoaded(
+/** Keep provider callbacks and opaque plans inside the operation that owns their registration. */
+export async function withPluginMigrationProviders<T>(
   params: {
     cfg?: OpenClawConfig;
     providerId?: string;
-  } = {},
-): void {
+    /** Report final cleanup failure only after the consuming operation succeeded. */
+    onCleanupError?: (error: unknown) => void | Promise<void>;
+  },
+  run: (providers: MigrationProviderPlugin[]) => Promise<T>,
+): Promise<T> {
+  const activeRegistry = getLoadedRuntimePluginRegistry();
+  const activeProviders = activeRegistry?.migrationProviders ?? [];
+  if (
+    params.providerId &&
+    activeProviders.some(({ provider }) => provider.id === params.providerId)
+  ) {
+    return await run(mergeMigrationProviders(activeProviders, []));
+  }
   const resolution = resolveMigrationProviderPluginResolution(params);
-  if (resolution.pluginIds.length === 0) {
-    return;
+  if (
+    resolution.pluginIds.length === 0 ||
+    getLoadedRuntimePluginRegistry({ requiredPluginIds: resolution.pluginIds })
+  ) {
+    return await run(mergeMigrationProviders(activeProviders, []));
   }
   const compatConfig = withBundledPluginEnablementCompat({
     config: params.cfg,
     pluginIds: resolution.bundledCompatPluginIds,
   });
-  const registry = loadPluginRegistryHandle({
+  const acquisition = await acquirePluginRegistryForInspection({
     ...(compatConfig === undefined ? {} : { config: compatConfig }),
     onlyPluginIds: resolution.pluginIds,
-    activate: false,
   });
-  standaloneMigrationRegistrySlot = registry
-    ? {
-        config: params.cfg,
-        pluginIdsKey: migrationPluginIdsKey(resolution.pluginIds),
-        registry,
-      }
-    : undefined;
-}
-
-export function resolvePluginMigrationProvider(params: {
-  providerId: string;
-  cfg?: OpenClawConfig;
-}): MigrationProviderPlugin | undefined {
-  const activeRegistry = getLoadedRuntimePluginRegistry();
-  const activeProvider = findMigrationProviderById(
-    activeRegistry?.migrationProviders ?? [],
-    params.providerId,
-  );
-  if (activeProvider) {
-    return activeProvider;
+  let result: T;
+  try {
+    const providers = acquisition.registry.migrationProviders.map(({ provider }) => ({
+      provider: bindMigrationProviderToRegistry(provider, acquisition.registry),
+    }));
+    result = await run(mergeMigrationProviders(activeProviders, providers));
+  } catch (error) {
+    const failures = [error];
+    try {
+      await acquisition.release();
+    } catch (disposalError) {
+      failures.push(disposalError);
+    }
+    if (failures.length > 1) {
+      throw new AggregateError(
+        failures,
+        "Migration failed and its plugin resources could not be disposed",
+        { cause: error },
+      );
+    }
+    throw error;
   }
-
-  const resolution = resolveMigrationProviderPluginResolution({
-    cfg: params.cfg,
-    providerId: params.providerId,
-  });
-  const pluginIds = resolution.pluginIds;
-  if (pluginIds.length === 0) {
-    return undefined;
+  try {
+    await acquisition.release();
+  } catch (error) {
+    if (!params.onCleanupError) {
+      throw error;
+    }
+    await params.onCleanupError(error);
   }
-  const registry = resolveMigrationProviderRegistry({
-    cfg: params.cfg,
-    pluginIds,
-  });
-  const provider = findMigrationProviderById(registry?.migrationProviders ?? [], params.providerId);
-  return provider && registry ? bindMigrationProviderToRegistry(provider, registry) : undefined;
-}
-
-export function resolvePluginMigrationProviders(
-  params: {
-    cfg?: OpenClawConfig;
-  } = {},
-): MigrationProviderPlugin[] {
-  const activeRegistry = getLoadedRuntimePluginRegistry();
-  const activeProviders = activeRegistry?.migrationProviders ?? [];
-  const resolution = resolveMigrationProviderPluginResolution({ cfg: params.cfg });
-  const pluginIds = resolution.pluginIds;
-  if (pluginIds.length === 0) {
-    return mergeMigrationProviders(activeProviders, []);
-  }
-  const registry = resolveMigrationProviderRegistry({
-    cfg: params.cfg,
-    pluginIds,
-  });
-  const scopedProviders = registry
-    ? registry.migrationProviders.map(({ provider }) => ({
-        provider: bindMigrationProviderToRegistry(provider, registry),
-      }))
-    : [];
-  return mergeMigrationProviders(activeProviders, scopedProviders);
+  return result;
 }

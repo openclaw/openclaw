@@ -1630,6 +1630,7 @@ function resolveAllowedModelSelection(
 
 export type ModelVisibilityPolicy = {
   allowAny: boolean;
+  configuredCatalog: readonly ModelCatalogEntry[];
   allowedCatalog: ModelCatalogEntry[];
   allowedKeys: Set<string>;
   policyAliasIndex: ModelAliasIndex;
@@ -1652,14 +1653,6 @@ export type ModelVisibilityPolicy = {
     view?: "default" | "configured" | "all";
   }) => ModelCatalogEntry[];
 };
-
-/** Canonical logical identity shared by visibility and physical route rows. */
-export function modelCatalogLogicalKey(entry: Pick<ModelCatalogEntry, "provider" | "id">): string {
-  const provider = normalizeProviderId(entry.provider);
-  const model = splitTrailingAuthProfile(entry.id).model;
-  const id = resolveProviderModelCatalogId({ provider, modelId: model }) ?? model;
-  return normalizeLowercaseStringOrEmpty(modelKey(provider, id));
-}
 
 export function dedupeModelCatalogEntries(
   entries: readonly ModelCatalogEntry[],
@@ -1696,7 +1689,7 @@ export function createModelVisibilityPolicyWithFallbacks(
   const { visibility, policyAliasIndex, selectionAliasIndex, configuredCatalog } = prepared;
   const wildcardModelKeys = visibility.wildcardModelKeys;
   const allowed = buildAllowedModelSetFromPrepared(params, prepared);
-  const configuredKeys = new Set(configuredCatalog.map(modelCatalogLogicalKey));
+  const configuredKeys = new Set(configuredCatalog.map(resolveModelCatalogIdentityKey));
   const retainedKeys = new Set<string>();
   const addConfiguredRef = (
     raw: string | undefined,
@@ -1719,7 +1712,7 @@ export function createModelVisibilityPolicyWithFallbacks(
     if (!resolved) {
       return undefined;
     }
-    const key = modelCatalogLogicalKey({
+    const key = resolveModelCatalogIdentityKey({
       provider: resolved.ref.provider,
       id: resolved.ref.model,
     });
@@ -1749,6 +1742,7 @@ export function createModelVisibilityPolicyWithFallbacks(
     allowed.allowAny || isModelKeyAllowedBySet(allowed.allowedKeys, key);
   const policy: ModelVisibilityPolicy = {
     allowAny: allowed.allowAny,
+    configuredCatalog,
     allowedCatalog: allowed.allowedCatalog,
     allowedKeys: allowed.allowedKeys,
     policyAliasIndex,

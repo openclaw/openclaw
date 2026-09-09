@@ -107,6 +107,8 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
   });
   const { isOpenAIResponsesApi, preparedUserTurnMessage, sessionManager, transcriptPolicy } =
     preparedSessionManager;
+  resources.getUserTranscriptContexts =
+    preparedSessionManager.userMessageBoundary.getUserTranscriptContexts;
 
   const state: EmbeddedAttemptSessionRuntimeState = {
     currentTurnImageFailureCount: 0,

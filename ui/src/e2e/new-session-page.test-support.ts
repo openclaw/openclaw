@@ -36,7 +36,39 @@ export function installMockGateway(
   });
 }
 
+export const NEW_SESSION_MODEL_CATALOG = [
+  { id: "gpt-5.5", name: "GPT 5.5", provider: "openai" },
+  { id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6", provider: "anthropic" },
+].map(({ id, name, provider }) => ({
+  id,
+  name,
+  provider,
+  reasoning: true,
+  thinkingLevels: ["off", "minimal", "low", "medium", "high"].map((level) => ({
+    id: level,
+    label: level,
+  })),
+  thinkingDefault: "medium",
+}));
+
 export const WORKSPACE = "/home/peter/openclaw";
+
+export function createCloudAgentsListResponse() {
+  return {
+    agents: [
+      {
+        id: "cloud",
+        identity: { name: "Cloud" },
+        name: "Cloud",
+        workspace: WORKSPACE,
+        workspaceGit: true,
+      },
+    ],
+    defaultId: "cloud",
+    mainKey: "main",
+    scope: "agent",
+  };
+}
 
 export const LOCAL_GIT_WORKSPACE_RESPONSES = {
   "agents.list": {

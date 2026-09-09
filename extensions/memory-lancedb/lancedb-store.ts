@@ -124,6 +124,8 @@ export class MemoryDB {
 
   private async ensureInitialized(): Promise<void> {
     if (this.table) {
+      // Retained handles need an explicit refresh to observe external commits.
+      await this.table.checkoutLatest();
       return;
     }
     if (this.initPromise) {

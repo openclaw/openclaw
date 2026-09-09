@@ -44,7 +44,7 @@ import "./get-reply.test-runtime-mocks.js";
 registerGetReplyBaselineBypass();
 
 type LoadModelCatalogFn =
-  typeof import("../../agents/prepared-model-catalog.js").loadPreparedModelCatalog;
+  typeof import("../../agents/prepared-model-catalog.js").readPreparedModelCatalog;
 
 const mocks = vi.hoisted(() => ({
   buildStatusReply: vi.fn(),
@@ -66,7 +66,7 @@ vi.mock("./commands-status.js", () => ({
 
 vi.mock("../../agents/prepared-model-catalog.js", () => ({
   loadProviderScopedThinkingCatalog: vi.fn(async () => []),
-  loadPreparedModelCatalog: mocks.loadModelCatalog,
+  readPreparedModelCatalog: mocks.loadModelCatalog,
 }));
 
 vi.mock("../../agents/workspace.js", () => ({
@@ -272,8 +272,7 @@ describe("getReplyFromConfig fast test bootstrap", () => {
       expect(mocks.initSessionState).not.toHaveBeenCalled();
       expect(mocks.resolveReplyDirectives).toHaveBeenCalledOnce();
       expect(vi.mocked(runPreparedReplyMock)).toHaveBeenCalledOnce();
-      const preparedReplyParams = requirePreparedReplyParams();
-      expect(preparedReplyParams.cfg).toBe(cfg);
+      expect(requirePreparedReplyParams().cfg).toBe(cfg);
     },
   );
 
@@ -306,6 +305,7 @@ describe("getReplyFromConfig fast test bootstrap", () => {
       createGetReplySessionState({
         sessionKey: "agent:main:slack:channel:C123",
         sessionId: "rotated-session",
+        sessionEntry: { lifecycleRevision: "prepared-revision" },
         storePath: "/tmp/custom-sessions.json",
       }),
     );
@@ -324,6 +324,7 @@ describe("getReplyFromConfig fast test bootstrap", () => {
     expect(onSessionPrepared).toHaveBeenCalledWith({
       sessionKey: "agent:main:slack:channel:C123",
       sessionId: "rotated-session",
+      lifecycleRevision: "prepared-revision",
       storePath: "/tmp/custom-sessions.json",
     });
   });

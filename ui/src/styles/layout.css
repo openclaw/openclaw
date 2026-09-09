@@ -70,7 +70,6 @@
   background: var(--panel);
   color: var(--text);
   box-shadow: var(--shadow-md), var(--focus-ring);
-  text-decoration: none;
   transform: translate(-50%, -160%);
   transition: transform var(--duration-fast) var(--ease-out);
 }
@@ -597,7 +596,6 @@ html:is(.openclaw-native-macos, .openclaw-native-nav, .openclaw-native-web-chrom
   border-radius: var(--radius-md);
   background: transparent;
   color: var(--muted);
-  text-decoration: none;
   transition:
     border-color var(--duration-fast) ease,
     background var(--duration-fast) ease,
@@ -608,7 +606,6 @@ html:is(.openclaw-native-macos, .openclaw-native-nav, .openclaw-native-web-chrom
   color: var(--text);
   background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
   border-color: color-mix(in srgb, var(--border) 72%, transparent);
-  text-decoration: none;
 }
 
 .settings-sidebar__item:focus-visible {
@@ -668,12 +665,10 @@ html:is(.openclaw-native-macos, .openclaw-native-nav, .openclaw-native-web-chrom
   padding: 0 9px;
   border-radius: var(--radius-sm);
   color: var(--text);
-  text-decoration: none;
 }
 
 .settings-sidebar__subitem:hover {
   background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
-  text-decoration: none;
 }
 
 .settings-sidebar__subitem--active {
@@ -1363,6 +1358,9 @@ openclaw-settings-save-indicator:empty {
 }
 
 .sidebar-recent-sessions__head {
+  --sidebar-session-group-action-size: 22px;
+  --sidebar-session-group-count-slot: 24px;
+
   position: relative;
   display: flex;
   align-items: center;
@@ -1608,8 +1606,8 @@ openclaw-settings-save-indicator:empty {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 22px;
-  height: 22px;
+  width: var(--sidebar-session-group-action-size);
+  height: var(--sidebar-session-group-action-size);
   flex: 0 0 auto;
   border: none;
   border-radius: var(--radius-sm);
@@ -1645,6 +1643,54 @@ openclaw-settings-save-indicator:empty {
   stroke-width: 1.7px;
   stroke-linecap: round;
   stroke-linejoin: round;
+}
+
+/* Reserve the new-session button's width so provider counts line up. */
+.sidebar-session-catalog-new-spacer {
+  width: var(--sidebar-session-group-action-size);
+  height: var(--sidebar-session-group-action-size);
+  flex: 0 0 var(--sidebar-session-group-action-size);
+}
+
+.sidebar-session-catalog-action-reserve {
+  display: none;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  /* Keep hover actions immediately left of the fixed count. */
+  .sidebar-session-catalog-grouping,
+  .sidebar-session-catalog-new {
+    position: absolute;
+    top: 50%;
+    right: calc(10px + var(--sidebar-session-group-count-slot));
+    transform: translateY(-50%);
+  }
+
+  .sidebar-recent-sessions__group--catalog-can-create
+    > .sidebar-recent-sessions__head
+    > .sidebar-session-catalog-grouping {
+    right: calc(
+      10px + var(--sidebar-session-group-count-slot) + var(--sidebar-session-group-action-size) +
+        8px
+    );
+  }
+
+  .sidebar-session-catalog-action-reserve {
+    display: block;
+    flex: 0 0
+      calc(var(--sidebar-session-group-count-slot) + var(--sidebar-session-group-action-size));
+  }
+
+  .sidebar-recent-sessions__group--catalog-can-create .sidebar-session-catalog-action-reserve {
+    flex-basis: calc(
+      var(--sidebar-session-group-count-slot) + var(--sidebar-session-group-action-size) +
+        var(--sidebar-session-group-action-size) + 8px
+    );
+  }
+
+  .sidebar-session-catalog-new-spacer {
+    display: none;
+  }
 }
 
 @media (hover: none), (pointer: coarse) {
@@ -1748,7 +1794,7 @@ openclaw-settings-save-indicator:empty {
   align-items: center;
   gap: 8px;
   min-height: 19px;
-  padding: 1px 12px 1px var(--sidebar-inset);
+  padding: 1px 10px 1px var(--sidebar-inset);
   color: color-mix(in srgb, var(--muted) 82%, var(--text) 18%);
 }
 
@@ -1767,7 +1813,7 @@ openclaw-settings-save-indicator:empty {
   font-size: calc(10px * var(--control-ui-text-scale));
   font-variant-numeric: tabular-nums;
   opacity: 0.68;
-  text-align: center;
+  text-align: right;
 }
 
 .sidebar-session-catalog-host__count--error {
@@ -1791,7 +1837,7 @@ openclaw-settings-save-indicator:empty {
   gap: var(--sidebar-row-gap);
   width: 100%;
   min-height: 18px;
-  padding: 2px 12px 0 var(--sidebar-inset);
+  padding: 2px 10px 0 var(--sidebar-inset);
   border: 0;
   border-radius: var(--radius-sm);
   background: transparent;
@@ -1846,7 +1892,7 @@ openclaw-settings-save-indicator:empty {
   color: color-mix(in srgb, var(--muted) 55%, var(--text) 45%);
   font-size: calc(10px * var(--control-ui-text-scale));
   font-variant-numeric: tabular-nums;
-  text-align: center;
+  text-align: right;
 }
 
 .sidebar-session-catalog-project > .sidebar-session-pagination--catalog {
@@ -1970,7 +2016,6 @@ openclaw-settings-save-indicator:empty {
   padding: var(--sidebar-session-link-padding-block) 2px var(--sidebar-session-link-padding-block)
     var(--sidebar-inset);
   color: inherit;
-  text-decoration: none;
 }
 
 .sidebar-child-session-toggle {
@@ -2043,10 +2088,6 @@ openclaw-settings-save-indicator:empty {
   font-size: calc(9px * var(--control-ui-text-scale));
   font-variant-numeric: tabular-nums;
   line-height: 1;
-}
-
-.sidebar-recent-session__link:hover {
-  text-decoration: none;
 }
 
 .viewer-facepile {
@@ -2498,7 +2539,6 @@ wa-dropdown.sidebar-customize-menu::part(menu) {
   font: inherit;
   font-size: calc(13px * var(--control-ui-text-scale));
   text-align: left;
-  text-decoration: none;
 }
 
 /* Keep expanded state separate from :hover so hover media scoping preserves
@@ -3063,7 +3103,6 @@ a:is(
   border: 1px solid transparent;
   background: transparent;
   color: var(--muted);
-  text-decoration: none;
   transition:
     border-color var(--duration-fast) ease,
     background var(--duration-fast) ease,
@@ -3110,7 +3149,6 @@ a:is(
   color: var(--text);
   background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
   border-color: color-mix(in srgb, var(--border) 72%, transparent);
-  text-decoration: none;
 }
 
 .nav-item:hover .nav-item__icon {
@@ -4074,13 +4112,11 @@ wa-dropdown.sidebar-identity-menu::part(menu) {
   font-size: var(--control-ui-text-xs);
   text-overflow: ellipsis;
   white-space: nowrap;
-  text-decoration: none;
 }
 
 .sidebar-footer-build:hover,
 .sidebar-footer-build:focus-visible {
   color: var(--text);
-  text-decoration: none;
 }
 
 .sidebar-footer-build__text {

@@ -7,19 +7,7 @@ import {
 } from "openclaw/plugin-sdk/provider-catalog-shared";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { DEEPINFRA_BASE_URL } from "./media-models.js";
-import {
-  DEEPINFRA_MODEL_CATALOG,
-  buildDeepInfraModelDefinition,
-  discoverDeepInfraModels,
-} from "./provider-models.js";
-
-export function buildStaticDeepInfraProvider(): ModelProviderConfig {
-  return {
-    baseUrl: DEEPINFRA_BASE_URL,
-    api: "openai-completions",
-    models: DEEPINFRA_MODEL_CATALOG.map(buildDeepInfraModelDefinition),
-  };
-}
+import { discoverDeepInfraModels } from "./provider-models.js";
 
 export async function buildDeepInfraProvider(options?: {
   hasApiKey?: boolean;

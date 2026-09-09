@@ -252,7 +252,7 @@ plugin approval support instead of only checking `approvals.exec`.
 
 ## Related
 
-- [Plugin hooks](/plugins/hooks#tool-call-policy)
+- [Plugin hooks](/plugins/hooks/tool-policy#tool-call-policy)
 - [Building plugins](/plugins/building-plugins#registering-tools)
 - [Advanced exec approvals](/tools/exec-approvals-advanced#plugin-approval-forwarding)
 - [Gateway protocol](/gateway/protocol)

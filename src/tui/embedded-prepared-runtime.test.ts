@@ -22,7 +22,7 @@ describe("EmbeddedPreparedModelRuntimeHost", () => {
     await resetPreparedModelRuntimeHarness(state);
   });
 
-  it("reuses its configured publication across two actual run admissions", async () => {
+  it("reuses its live publication across two actual run admissions", async () => {
     mocks.configuredAgentIds = ["default"];
     const config = { agents: { defaults: { model: { primary: "openai/gpt-5.5" } } } };
     const host = new EmbeddedPreparedModelRuntimeHost();
@@ -38,12 +38,13 @@ describe("EmbeddedPreparedModelRuntimeHost", () => {
       runtimePluginSelections: [{ provider: "openai", modelId: "gpt-5.5", agentId: "default" }],
     };
     const first = await acquireAgentRunPreparedModelRuntime(input);
+    expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(1);
     first.release();
     const second = await acquireAgentRunPreparedModelRuntime(input);
     second.release();
 
     expect(second.snapshot).toBe(first.snapshot);
-    expect(mocks.ensureOpenClawModelsJson).not.toHaveBeenCalled();
+    expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(1);
   });
 });
 

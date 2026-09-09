@@ -51,10 +51,27 @@ import {
 const SessionsHistoryToolSchema = Type.Object({
   sessionKey: Type.String(),
   limit: optionalPositiveIntegerSchema(),
-  offset: Type.Optional(Type.Integer({ minimum: 0 })),
+  offset: Type.Optional(
+    Type.Integer({
+      minimum: 0,
+      description:
+        "Plain-pagination offset. Ignored when messageId is set (anchored reads window history around messageId instead).",
+    }),
+  ),
   pendingBefore: optionalPositiveIntegerSchema(),
-  messageId: Type.Optional(Type.String({ minLength: 1 })),
-  sessionId: Type.Optional(Type.String({ minLength: 1 })),
+  messageId: Type.Optional(
+    Type.String({
+      minLength: 1,
+      description:
+        "Return history around this message id. Ignores offset; limit still bounds the window.",
+    }),
+  ),
+  sessionId: Type.Optional(
+    Type.String({
+      minLength: 1,
+      description: "Transcript session id that owns messageId. Requires messageId.",
+    }),
+  ),
   includeTools: Type.Optional(Type.Boolean()),
 });
 
@@ -451,12 +468,11 @@ export function createSessionsHistoryTool(opts?: {
       const pendingBefore = readPositiveIntegerParam(params, "pendingBefore");
       const messageId = readToolStringParam(params, "messageId");
       const sessionId = readToolStringParam(params, "sessionId");
-      if (offset !== undefined && messageId) {
-        throw new ToolInputError("offset and messageId cannot be used together");
-      }
       if (sessionId && !messageId) {
         throw new ToolInputError("sessionId requires messageId");
       }
+      // Keep redundant model arguments out of the strict Gateway pagination contract.
+      const paginationOffset = messageId ? undefined : offset;
       const includeTools = Boolean(params.includeTools);
       const {
         cfg,
@@ -585,7 +601,7 @@ export function createSessionsHistoryTool(opts?: {
               sessionKey: resolvedKey,
               agentId: targetAgentId,
               limit,
-              ...(offset !== undefined ? { offset } : {}),
+              ...(paginationOffset !== undefined ? { offset: paginationOffset } : {}),
               ...(pendingBefore !== undefined ? { pendingBefore } : {}),
               ...(messageId ? { messageId } : {}),
               ...(sessionId ? { sessionId } : {}),

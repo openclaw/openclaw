@@ -8,8 +8,8 @@ title: "Uninstall CLI"
 
 # `openclaw uninstall`
 
-Uninstall the Gateway service and/or local data. The CLI itself is not
-removed; uninstall it via npm/pnpm separately.
+Uninstall the Gateway service and/or local data. There is no separate CLI-removal scope.
+Remove any remaining CLI through the [installation-specific steps](/install/uninstall#remove-the-cli).
 
 ## Options
 

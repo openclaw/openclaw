@@ -1,5 +1,10 @@
-import { describe, expect, it, vi } from "vitest";
+import { assert, describe, expect, it, vi } from "vitest";
+import {
+  GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
+  HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT,
+} from "../../agents/failover/user-copy.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import { getReplyPayloadMetadata } from "../reply-payload.js";
 import type { TemplateContext } from "../templating.js";
 import type { GetReplyOptions } from "../types.js";
 import {
@@ -24,6 +29,42 @@ import type {
 const state = await setupAgentRunnerExecutionTestState();
 
 describe("executeAgentTurn: result and tool delivery", () => {
+  it.each([
+    { stopReason: "error", isHeartbeat: false, failureText: GENERIC_EXTERNAL_RUN_FAILURE_TEXT },
+    { stopReason: "error", isHeartbeat: true, failureText: HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT },
+    { stopReason: "aborted", isHeartbeat: false, failureText: undefined },
+    { stopReason: "superseded", isHeartbeat: false, failureText: undefined },
+  ])(
+    "preserves canonical $stopReason after private partial output (heartbeat=$isHeartbeat)",
+    async (testCase) => {
+      const followupRun = createFollowupRun();
+      followupRun.run.sourceReplyDeliveryMode = "message_tool_only";
+      state.runEmbeddedAgentMock.mockResolvedValueOnce({
+        payloads: [{ text: "Private partial output before the run ended." }],
+        meta: { stopReason: testCase.stopReason },
+      });
+
+      const executeAgentTurn = await getExecuteAgentTurnForTest();
+      const result = await executeAgentTurn({
+        ...createMinimalRunAgentTurnParams({ followupRun }),
+        isHeartbeat: testCase.isHeartbeat,
+      });
+
+      expect(result.kind).toBe("success");
+      if (result.kind === "success") {
+        expect(result.terminalFailurePayload?.text).toBe(testCase.failureText);
+        if (testCase.failureText !== undefined) {
+          assert(result.terminalFailurePayload);
+          expect(result.terminalFailurePayload.isError).toBe(true);
+          expect(
+            getReplyPayloadMetadata(result.terminalFailurePayload)
+              ?.deliverDespiteSourceReplySuppression,
+          ).toBe(true);
+        }
+      }
+    },
+  );
+
   it("forwards media-only tool results without typing text", async () => {
     const onToolResult = vi.fn();
     state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {

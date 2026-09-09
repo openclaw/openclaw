@@ -151,6 +151,7 @@ function createFixture() {
   const resourceEvents: Record<string, string> = {
     session: "own-session",
     sessionManager: "own-manager",
+    getUserTranscriptContexts: "own-user-transcript-contexts",
     removeToolResultContextGuard: "own-context-guards",
     buildAbortSettlePromise: "own-settle-tracker",
     trajectoryRecorder: "own-trajectory",
@@ -254,6 +255,7 @@ describe("prepareEmbeddedAttemptSessionRuntime", () => {
     expect(fixture.order).toEqual([
       "manager",
       "own-manager",
+      "own-user-transcript-contexts",
       "agent-session",
       "own-session",
       "owned-boundary",
@@ -301,6 +303,7 @@ describe("prepareEmbeddedAttemptSessionRuntime", () => {
       fixture.abortActiveSession,
     );
     expect(fixture.resources.buildAbortSettlePromise).toBe(fixture.buildAbortSettlePromise);
+    expect(fixture.resources.getUserTranscriptContexts).toBe(fixture.getUserTranscriptContexts);
     expect(fixture.onSessionYieldReady).toHaveBeenCalledWith({
       abortActiveSession: fixture.abortActiveSession,
       activeSession: fixture.activeSession,

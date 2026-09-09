@@ -6,12 +6,14 @@ import { redactIdentifier } from "@openclaw/normalization-core/node-crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
 import { cleanupTempDirs, makeTempDir } from "../../../test/helpers/temp-dir.js";
+import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
   readSessionProgressCard,
   writeSessionProgressCard,
 } from "../../session-cards/progress-card-store.js";
+import { resolveStoredModelOverride } from "../../sessions/stored-model-overrides.js";
 import {
   onInternalSessionTranscriptUpdate,
   onSessionTranscriptUpdate,
@@ -272,6 +274,60 @@ describe("session accessor seam", () => {
       sessionId: "session-1",
       updatedAt: expect.any(Number),
     });
+  });
+
+  it("preserves explicit default intent across reopen and unrelated whole-entry writes", async () => {
+    const parentKey = "agent:main:dashboard:parent";
+    const childKey = "agent:main:dashboard:child";
+    await replaceSessionEntry(
+      { sessionKey: parentKey, storePath },
+      {
+        sessionId: "parent-session",
+        updatedAt: 1,
+        providerOverride: "anthropic",
+        modelOverride: "claude-sonnet-4-6",
+        modelOverrideSource: "user",
+      },
+    );
+    await replaceSessionEntry(
+      { sessionKey: childKey, storePath },
+      {
+        sessionId: "child-session",
+        updatedAt: 2,
+        parentSessionKey: parentKey,
+        modelOverrideSource: "default",
+      },
+    );
+
+    closeOpenClawAgentDatabasesForTest();
+    const olderReaderEntry = expectDefined(
+      loadSessionEntry({ sessionKey: childKey, storePath }),
+      "reopened child entry",
+    );
+    await replaceSessionEntry(
+      { sessionKey: childKey, storePath },
+      { ...olderReaderEntry, label: "preserved by older reader" },
+    );
+
+    closeOpenClawAgentDatabasesForTest();
+    const reopenedChild = expectDefined(
+      loadSessionEntry({ sessionKey: childKey, storePath }),
+      "re-upgraded child entry",
+    );
+    expect(reopenedChild).toMatchObject({
+      label: "preserved by older reader",
+      modelOverrideSource: "default",
+    });
+    expect(
+      resolveStoredModelOverride({
+        defaultProvider: "openai",
+        sessionEntry: reopenedChild,
+        sessionKey: childKey,
+        sessionStore: Object.fromEntries(
+          listSessionEntriesCore({ storePath }).map(({ sessionKey, entry }) => [sessionKey, entry]),
+        ),
+      }),
+    ).toBeNull();
   });
 
   it("derives a scoped key owner before fixed-store read and write target resolution", async () => {
@@ -3580,11 +3636,7 @@ describe("session accessor seam", () => {
       cwd: tempDir,
       messages: [
         {
-          message: {
-            role: "user",
-            content: "hello",
-            timestamp: 100,
-          },
+          message: makeUserMessage("hello", 100),
         },
         {
           message: {
@@ -4149,11 +4201,7 @@ describe("session accessor seam", () => {
     }
     const queuedAppendPromise = appendTranscriptMessage(scope, {
       cwd: tempDir,
-      message: {
-        role: "user",
-        content: "queued prompt",
-        timestamp: 200,
-      },
+      message: makeUserMessage("queued prompt", 200),
     });
     resumeShouldAppend();
 

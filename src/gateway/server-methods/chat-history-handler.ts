@@ -193,6 +193,7 @@ async function handleChatHistoryRequest({
     storePath,
     store,
     storeKeys,
+    readSource,
     entry,
     canonicalKey,
   } = measureDiagnosticsTimelineSpanSync(
@@ -470,6 +471,7 @@ async function handleChatHistoryRequest({
         cfg,
         storePath,
         store,
+        readSource,
         key: canonicalKey,
         entry,
         agentId: sessionAgentId,

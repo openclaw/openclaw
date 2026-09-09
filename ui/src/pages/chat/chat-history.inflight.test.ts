@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { createChatSubmissions } from "../../app/chat-submissions.ts";
 import { extractText } from "../../lib/chat/message-extract.ts";
@@ -826,10 +827,8 @@ describe("chat history in-flight assistant recovery", () => {
   );
 
   it("does not let delayed history overwrite a newer live run", async () => {
-    let resolveHistory!: (result: ChatHistoryResult) => void;
-    const historyPromise = new Promise<ChatHistoryResult>((resolve) => {
-      resolveHistory = resolve;
-    });
+    const { promise: historyPromise, resolve: resolveHistory } =
+      createDeferred<ChatHistoryResult>();
     const request = vi.fn().mockReturnValue(historyPromise);
     const state = createState(activeHistory("run-reconnected"));
     state.client = { request } as unknown as GatewayBrowserClient;
@@ -846,10 +845,8 @@ describe("chat history in-flight assistant recovery", () => {
   });
 
   it("adopts the snapshot when remount reconciliation replaces an unchanged run map", async () => {
-    let resolveHistory!: (result: ChatHistoryResult) => void;
-    const historyPromise = new Promise<ChatHistoryResult>((resolve) => {
-      resolveHistory = resolve;
-    });
+    const { promise: historyPromise, resolve: resolveHistory } =
+      createDeferred<ChatHistoryResult>();
     const request = vi.fn().mockReturnValue(historyPromise);
     const history = activeHistory("run-reconnected");
     history.inFlightRun!.text = "The response survived navigation.";
@@ -885,10 +882,8 @@ describe("chat history in-flight assistant recovery", () => {
   ])(
     "merges $name same-run delta that arrives before history",
     async ({ snapshotText, deltaText, cumulativeText, expectedTail }) => {
-      let resolveHistory!: (result: ChatHistoryResult) => void;
-      const historyPromise = new Promise<ChatHistoryResult>((resolve) => {
-        resolveHistory = resolve;
-      });
+      const { promise: historyPromise, resolve: resolveHistory } =
+        createDeferred<ChatHistoryResult>();
       const request = vi.fn().mockReturnValue(historyPromise);
       const history = activeHistory("run-reconnected");
       history.messages = [
@@ -921,10 +916,8 @@ describe("chat history in-flight assistant recovery", () => {
   );
 
   it("does not duplicate a live delta already covered by a newer history snapshot", async () => {
-    let resolveHistory!: (result: ChatHistoryResult) => void;
-    const historyPromise = new Promise<ChatHistoryResult>((resolve) => {
-      resolveHistory = resolve;
-    });
+    const { promise: historyPromise, resolve: resolveHistory } =
+      createDeferred<ChatHistoryResult>();
     const request = vi.fn().mockReturnValue(historyPromise);
     const history = activeHistory("run-reconnected");
     history.messages = [
@@ -991,10 +984,8 @@ describe("chat history in-flight assistant recovery", () => {
       ],
     },
   ])("does not revive a live delta covered by $name", async ({ messages }) => {
-    let resolveHistory!: (result: ChatHistoryResult) => void;
-    const historyPromise = new Promise<ChatHistoryResult>((resolve) => {
-      resolveHistory = resolve;
-    });
+    const { promise: historyPromise, resolve: resolveHistory } =
+      createDeferred<ChatHistoryResult>();
     const request = vi.fn().mockReturnValue(historyPromise);
     const history = activeHistory("run-reconnected");
     history.messages = messages;
@@ -1024,10 +1015,8 @@ describe("chat history in-flight assistant recovery", () => {
     { name: "the snapshot run", completedRunId: "run-reconnected" },
     { name: "a newer intervening run", completedRunId: "run-newer" },
   ])("does not resurrect delayed history after $name completes", async ({ completedRunId }) => {
-    let resolveHistory!: (result: ChatHistoryResult) => void;
-    const historyPromise = new Promise<ChatHistoryResult>((resolve) => {
-      resolveHistory = resolve;
-    });
+    const { promise: historyPromise, resolve: resolveHistory } =
+      createDeferred<ChatHistoryResult>();
     const request = vi.fn().mockReturnValue(historyPromise);
     const state = createState(activeHistory("run-reconnected"));
     state.client = { request } as unknown as GatewayBrowserClient;

@@ -118,6 +118,15 @@ G --> S`;
     expect(recovered.textContent).toContain("Recovered");
   });
 
+  it("preserves Unicode at the sandbox error boundary", async () => {
+    const prefix = "No diagram type detected matching given configuration for text: ";
+    const source = `${"x".repeat(935)}😀`;
+
+    await expect(renderMermaidSvg(source, theme)).rejects.toMatchObject({
+      message: `${prefix}${"x".repeat(935)}`,
+    });
+  });
+
   it("blocks image decoding inside Mermaid before the SVG reaches the host", async () => {
     const image = btoa(
       '<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><rect width="10" height="10"/></svg>',

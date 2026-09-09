@@ -1,5 +1,7 @@
-/** Projects physical catalog rows for browse/presentation; never runtime execution. */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+/** Projects one physical donor into separate public and private runtime metadata. */
+import { isCanonicalDottedDecimalIPv4, isLoopbackIpAddress } from "@openclaw/net-policy/ip";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import {
   matchesProviderScopedModelId,
   resolveMergedModelProviderConfig,
@@ -132,7 +134,7 @@ function applyLogicalOverrides(
 }
 
 /** Finds the exact physical row that supplied a selected provider route. */
-export function findModelCatalogRouteDonor(params: {
+function findModelCatalogRouteDonor(params: {
   entry: ModelCatalogEntry;
   route: ProviderModelRouteCandidate;
   policy: ModelCatalogRoutePolicy;
@@ -153,19 +155,19 @@ export function findModelCatalogRouteDonor(params: {
 }
 
 /**
- * Builds one allowlisted logical catalog row.
+ * Builds public and private runtime rows from one selected physical donor.
  *
  * Selected-route capabilities come only from a physical row accepted by the
  * provider-owned matcher. Unresolved managed routes expose identity only.
  * Auth, runtime, request overrides, and other private transport facts never
- * enter the returned catalog shape.
+ * enter the public catalog shape.
  */
 export function projectModelCatalogEntryForRoute(params: {
   entry: ModelCatalogEntry;
   projection: ModelCatalogRouteProjection;
   catalog?: readonly ModelCatalogEntry[];
   overrides?: ModelCatalogLogicalOverrides;
-}): ModelCatalogEntry {
+}): { entry: ModelCatalogEntry; runtimeEntry: ModelCatalogEntry } {
   if (params.projection.kind === "unmanaged") {
     const provider = normalizeProviderId(params.entry.provider);
     const surface = resolveProviderModelPolicySurface(provider);
@@ -173,17 +175,20 @@ export function projectModelCatalogEntryForRoute(params: {
     const id = surface?.resolveModelRoutes
       ? null
       : resolveProviderModelCatalogId({ provider, modelId: params.entry.id, surface });
-    const entry = id && id !== params.entry.id ? { ...params.entry, id } : params.entry;
-    return applyLogicalOverrides(entry, params.overrides);
+    const logicalEntry = id && id !== params.entry.id ? { ...params.entry, id } : params.entry;
+    const entry = applyLogicalOverrides(logicalEntry, params.overrides);
+    return { entry, runtimeEntry: entry };
   }
+
   const id =
     params.projection.policy.resolveIdentity(params.entry)?.id ??
     splitTrailingAuthProfile(params.entry.id).model;
   if (params.projection.kind === "unresolved") {
-    return applyLogicalOverrides(
+    const entry = applyLogicalOverrides(
       logicalIdentity(params.entry, id, params.entry.name),
       params.overrides,
     );
+    return { entry, runtimeEntry: entry };
   }
 
   const { policy, route } = params.projection;
@@ -202,7 +207,7 @@ export function projectModelCatalogEntryForRoute(params: {
   );
   // Only the selected physical donor can supply its prepared policy owner.
   const thinkingPolicy = donor?.[PREPARED_THINKING_POLICY];
-  return applyLogicalOverrides(
+  const entry = applyLogicalOverrides(
     {
       ...projected,
       api: route.api,
@@ -219,4 +224,32 @@ export function projectModelCatalogEntryForRoute(params: {
     },
     params.overrides,
   );
+  return {
+    entry,
+    runtimeEntry: donor
+      ? {
+          ...entry,
+          ...(Object.hasOwn(donor, "compat") ? { compat: donor.compat } : {}),
+          ...(Object.hasOwn(donor, "params") ? { params: donor.params } : {}),
+        }
+      : entry,
+  };
 }
+
+/** Returns true for loopback, wildcard, and mDNS local base URLs. */
+export const isLocalBaseUrl = (baseUrl: string) => {
+  try {
+    const url = new URL(baseUrl);
+    const host = normalizeLowercaseStringOrEmpty(url.hostname).replace(/^\[|\]$/g, "");
+    return (
+      host === "localhost" ||
+      (isCanonicalDottedDecimalIPv4(host) && isLoopbackIpAddress(host)) ||
+      host === "0.0.0.0" ||
+      host === "::" ||
+      host === "::1" ||
+      host.endsWith(".local")
+    );
+  } catch {
+    return false;
+  }
+};

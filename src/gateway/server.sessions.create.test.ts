@@ -1753,15 +1753,9 @@ test("chat.send fences dashboard title persistence from concurrent session delet
     });
     scheduleTitle(params);
   });
-  let finishDispatch: (() => void) | undefined;
-  const dispatchFinished = new Promise<void>((resolve) => {
-    finishDispatch = resolve;
-  });
+  const { promise: dispatchFinished, resolve: finishDispatch } = createDeferredCore();
   let finishTitle: (() => void) | undefined;
-  let markTitleStarted = () => {};
-  const titleStarted = new Promise<void>((resolve) => {
-    markTitleStarted = resolve;
-  });
+  const { promise: titleStarted, resolve: markTitleStarted } = createDeferredCore();
   dashboardTitleGenerationMocks.generate.mockImplementationOnce(async () => {
     markTitleStarted();
     await new Promise<void>((resolve) => {
@@ -1851,11 +1845,8 @@ test("chat.send fences dashboard title persistence from concurrent session delet
 test("chat.send persists a dashboard title while the first turn is still running", async () => {
   const { storePath } = await createSessionStoreDir();
   const { ws } = await openClient();
-  let finishDispatch: (() => void) | undefined;
   let dispatchFinished = false;
-  const dispatchPending = new Promise<void>((resolve) => {
-    finishDispatch = resolve;
-  });
+  const { promise: dispatchPending, resolve: finishDispatch } = createDeferredCore();
   dispatchInboundMessageMock.mockImplementationOnce(async () => {
     await dispatchPending;
     dispatchFinished = true;
@@ -2368,14 +2359,8 @@ test("sessions.create rolls back failed provisioning before a same-key creator p
   const originalRemove = managedWorktrees.remove.bind(managedWorktrees);
   let failedWorktreeId: string | undefined;
   let successorWorktreeId: string | undefined;
-  let releaseRollback = () => {};
-  const rollbackGate = new Promise<void>((resolve) => {
-    releaseRollback = resolve;
-  });
-  let markRollbackStarted = () => {};
-  const rollbackStarted = new Promise<void>((resolve) => {
-    markRollbackStarted = resolve;
-  });
+  const { promise: rollbackGate, resolve: releaseRollback } = createDeferredCore();
+  const { promise: rollbackStarted, resolve: markRollbackStarted } = createDeferredCore();
   const removeSpy = vi.spyOn(managedWorktrees, "remove").mockImplementation(async (params) => {
     if (params.reason === "session-create-failed") {
       failedWorktreeId = params.id;
@@ -2396,7 +2381,12 @@ test("sessions.create rolls back failed provisioning before a same-key creator p
       },
       { client: adminClient },
     );
-    await rollbackStarted;
+    await Promise.race([
+      rollbackStarted,
+      failedPromise.then((result) => {
+        throw new Error(`Creation returned before rollback started: ${JSON.stringify(result)}`);
+      }),
+    ]);
     let successorSettled = false;
     const successorPromise = directSessionReq<{
       entry: {
@@ -2486,6 +2476,7 @@ test("sessions.create provisions and reuses a session worktree for later runs", 
   });
   const root = openClawState.root;
   const workspace = await initializeGitWorkspace(root);
+  await execFileAsync("git", ["-C", workspace, "branch", "selected-base"]);
   closeOpenClawStateDatabaseForTest();
   testState.agentConfig = { workspace };
   const { storePath } = await createSessionStoreDir();
@@ -2506,7 +2497,12 @@ test("sessions.create provisions and reuses a session worktree for later runs", 
       worktree: { id: string; path: string; branch: string };
     }>(
       "sessions.create",
-      { agentId: "main", label: "Release planning", worktree: true },
+      {
+        agentId: "main",
+        label: "Release planning",
+        worktree: true,
+        worktreeBaseRef: "selected-base",
+      },
       { client: { connect: { scopes: ["operator.admin"] } } as never },
     );
 
@@ -2531,12 +2527,13 @@ test("sessions.create provisions and reuses a session worktree for later runs", 
     const originalHead = (await execFileAsync("git", ["-C", worktree!.path, "rev-parse", "HEAD"]))
       .stdout;
 
+    await execFileAsync("git", ["-C", workspace, "branch", "-D", "selected-base"]);
     const recreated = await directSessionReq<{
       entry: { spawnedCwd?: string };
       worktree: { id: string; path: string; branch: string };
     }>(
       "sessions.create",
-      { key, agentId: "main", worktree: true },
+      { key, agentId: "main", worktree: true, worktreeBaseRef: "selected-base" },
       { client: { connect: { scopes: ["operator.admin"] } } as never },
     );
     expect(recreated.ok).toBe(true);
@@ -3213,6 +3210,7 @@ test("sessions.create maps worktree options and preserves a nested workspace cwd
   const workspace = path.join(repoRoot, "packages", "app");
   const worktreePath = path.join(openClawState.root, "managed-worktree");
   const key = "agent:main:dashboard:worktree-options";
+  await execFileAsync("git", ["-C", repoRoot, "branch", "base-branch"]);
   await Promise.all([
     fs.mkdir(workspace, { recursive: true }),
     fs.mkdir(worktreePath, { recursive: true }),
@@ -4112,10 +4110,7 @@ test("sessions.create reset-in-place detaches the prior worktree permission boun
     const removalGate = new Promise<void>((resolve) => {
       releaseWorktreeRemoval = resolve;
     });
-    let markRemovalStarted = () => {};
-    const removalStarted = new Promise<void>((resolve) => {
-      markRemovalStarted = resolve;
-    });
+    const { promise: removalStarted, resolve: markRemovalStarted } = createDeferredCore();
     const removeIfLosslessSpy = vi
       .spyOn(managedWorktrees, "removeIfLossless")
       .mockImplementation(async (id) => {

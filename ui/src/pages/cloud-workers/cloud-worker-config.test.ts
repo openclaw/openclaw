@@ -15,6 +15,7 @@ const configuredProfile = {
   suspendAfter: "30m",
   settings: {
     provider: "aws",
+    target: "linux",
     class: "beast",
     ttl: "24h",
     idleTimeout: "60m",
@@ -62,6 +63,7 @@ describe("cloud worker settings state", () => {
         providerId: "crabbox",
         install: "npm",
         backend: "aws",
+        target: "linux",
         machineClass: "beast",
         ttl: "24h",
         idleTimeout: "60m",
@@ -81,6 +83,8 @@ describe("cloud worker settings state", () => {
     ["profileId", { id: "bad id" }],
     ["profileExists", { id: "production" }],
     ["backend", { backend: " " }],
+    ["target", { target: "x".repeat(65) }],
+    ["target", { target: " linux " }],
     ["machineClass", { machineClass: "" }],
     ["machineClass", { machineClass: "x".repeat(129) }],
     ["ttl", { ttl: "tomorrow" }],
@@ -119,6 +123,7 @@ describe("cloud worker settings state", () => {
               install: "npm",
               settings: {
                 provider: "hetzner",
+                target: "linux",
                 class: "large",
                 ttl: "8h",
                 idleTimeout: "45m",
@@ -142,6 +147,7 @@ describe("cloud worker settings state", () => {
             suspendAfter: "30m",
             settings: {
               provider: "hetzner",
+              target: "linux",
               class: "large",
               ttl: "8h",
               idleTimeout: "45m",
@@ -226,6 +232,7 @@ describe("cloud worker settings state", () => {
       providerId: "crabbox",
       install: "bundle",
       backend: "aws",
+      target: "linux",
       machineClass: "standard",
       ttl: "8h",
       idleTimeout: "45m",
@@ -237,6 +244,31 @@ describe("cloud worker settings state", () => {
       error: "profileMissing",
     });
   });
+
+  it.each(["macos", "windows/wsl2", "retired-os"])(
+    "preserves provider-owned target %s and clears it through merge patch",
+    (target) => {
+      const config = {
+        cloudWorkers: {
+          profiles: {
+            production: {
+              ...configuredProfile,
+              settings: { ...configuredProfile.settings, target },
+            },
+          },
+        },
+      };
+      const draft = createCloudWorkerDraft(readCloudWorkerProfiles(config)[0]);
+      expect(draft.target).toBe(target);
+      const retained = requirePatch(buildCloudWorkerUpsertPatch(config, draft, "production"));
+      expect(applyMergePatch(config, retained.patch)).toEqual(config);
+      const cleared = requirePatch(
+        buildCloudWorkerUpsertPatch(config, { ...draft, target: "" }, "production"),
+      );
+      const next = applyMergePatch(config, cleared.patch);
+      expect(next).not.toHaveProperty("cloudWorkers.profiles.production.settings.target");
+    },
+  );
 
   it("adds only the new profile without resending existing profiles", () => {
     const config = { cloudWorkers: { profiles: { production: configuredProfile } } };
@@ -256,6 +288,7 @@ describe("cloud worker settings state", () => {
               install: "bundle",
               settings: {
                 provider: "hetzner",
+                target: null,
                 class: "standard",
                 ttl: "8h",
                 idleTimeout: "45m",

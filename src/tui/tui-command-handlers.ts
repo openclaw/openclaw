@@ -353,13 +353,30 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         return {
           value: ref,
           label: ref,
-          description: model.name && model.name !== model.id ? model.name : "",
+          description: [
+            model.name !== model.id ? model.name : "",
+            model.available === false ? (model.unavailableReason ?? "unavailable") : "",
+          ]
+            .filter(Boolean)
+            .join(" · "),
         };
       });
       openSelector(
         createSearchableSelectList(items, 9),
-        (value) =>
-          applySessionSetting({ model: value }, `model set to ${value}`, "model set failed"),
+        async (value) => {
+          const model = models.find((entry) => modelKey(entry.provider, entry.id) === value);
+          if (model?.available === false) {
+            const guidance =
+              model.unavailableReason === "cooldown"
+                ? "Wait and retry, or choose another model."
+                : "Run openclaw models auth login or choose another model.";
+            chatLog.addSystem(
+              `model unavailable: ${model.unavailableReason ?? "unavailable"}. ${guidance}`,
+            );
+            return;
+          }
+          await applySessionSetting({ model: value }, `model set to ${value}`, "model set failed");
+        },
         request,
       );
     } catch (err) {

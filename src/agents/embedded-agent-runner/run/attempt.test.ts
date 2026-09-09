@@ -1,6 +1,10 @@
 // Broad helper coverage for runEmbeddedAttempt prompt, stream, and tool seams.
 import { describe, expect, it, vi } from "vitest";
 import { streamSimple } from "../../../llm/stream.js";
+import {
+  textToolResult,
+  textAssistant,
+} from "../../test-helpers/sparse-transcript.test-support.js";
 
 vi.mock("../context-engine-capabilities.js", () => ({
   resolveContextEngineCapabilities: async () => ({ llm: undefined }),
@@ -1101,10 +1105,7 @@ describe("wrapStreamFnTrimToolCallNames", () => {
               message: { role: "assistant", content: [{ type: "toolCall", name: " read " }] },
             },
           ],
-          resultMessage: {
-            role: "assistant",
-            content: [{ type: "text", text: "resolved to allowed tool" }],
-          },
+          resultMessage: textAssistant("resolved to allowed tool"),
         }),
       )
       .mockImplementationOnce(() =>
@@ -1575,6 +1576,15 @@ describe("wrapStreamFnTrimToolCallNames", () => {
 });
 
 describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
+  function expectedRetryMessages() {
+    return [
+      {
+        role: "user",
+        content: [{ type: "text", text: "retry" }],
+      },
+    ];
+  }
+
   it("drops malformed assistant tool calls from outbound context before provider replay", async () => {
     const messages = [
       {
@@ -1603,12 +1613,7 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
 
     expect(baseFn).toHaveBeenCalledTimes(1);
     const seenContext = firstBaseContext(baseFn);
-    expect(seenContext.messages).toEqual([
-      {
-        role: "user",
-        content: [{ type: "text", text: "retry" }],
-      },
-    ]);
+    expect(seenContext.messages).toEqual(expectedRetryMessages());
     expect(seenContext.messages).not.toBe(messages);
   });
 
@@ -1681,10 +1686,7 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
         role: "user",
         content: [{ type: "text", text: "earlier question" }],
       },
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "stale assistant answer" }],
-      },
+      textAssistant("stale assistant answer"),
     ];
     const baseFn = vi.fn((_model, _context) =>
       createFakeStream({ events: [], resultMessage: { role: "assistant", content: [] } }),
@@ -1719,10 +1721,7 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
         role: "user",
         content: [{ type: "text", text: "earlier question" }],
       },
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "stale model answer" }],
-      },
+      textAssistant("stale model answer"),
     ];
     const baseFn = vi.fn((_model, _context) =>
       createFakeStream({ events: [], resultMessage: { role: "assistant", content: [] } }),
@@ -1783,12 +1782,7 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
 
     expect(baseFn).toHaveBeenCalledTimes(1);
     const seenContext = firstBaseContext(baseFn);
-    expect(seenContext.messages).toEqual([
-      {
-        role: "user",
-        content: [{ type: "text", text: "retry" }],
-      },
-    ]);
+    expect(seenContext.messages).toEqual(expectedRetryMessages());
   });
 
   it("drops signed thinking turns for bedrock claude replay when sibling tool calls are not replay-safe", async () => {
@@ -1823,12 +1817,7 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
 
     expect(baseFn).toHaveBeenCalledTimes(1);
     const seenContext = firstBaseContext(baseFn);
-    expect(seenContext.messages).toEqual([
-      {
-        role: "user",
-        content: [{ type: "text", text: "retry" }],
-      },
-    ]);
+    expect(seenContext.messages).toEqual(expectedRetryMessages());
   });
 
   it("drops signed thinking turns when sibling replay tool calls reuse an id", async () => {
@@ -1864,12 +1853,7 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
 
     expect(baseFn).toHaveBeenCalledTimes(1);
     const seenContext = firstBaseContext(baseFn);
-    expect(seenContext.messages).toEqual([
-      {
-        role: "user",
-        content: [{ type: "text", text: "retry" }],
-      },
-    ]);
+    expect(seenContext.messages).toEqual(expectedRetryMessages());
   });
 
   it("keeps signed thinking turns that reuse a mutable earlier tool id", async () => {
@@ -1926,12 +1910,7 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
       role: "assistant",
       content: [{ type: "toolCall", id: "call_1", name: "read", arguments: {} }],
     };
-    const firstResult = {
-      role: "toolResult",
-      toolCallId: "call_1",
-      toolName: "read",
-      content: [{ type: "text", text: "mutable result" }],
-    };
+    const firstResult = textToolResult("call_1", "read", "mutable result");
     const userMessage = {
       role: "user",
       content: [{ type: "text", text: "retry" }],
@@ -2019,12 +1998,7 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
 
     expect(baseFn).toHaveBeenCalledTimes(1);
     const seenContext = firstBaseContext(baseFn);
-    expect(seenContext.messages).toEqual([
-      {
-        role: "user",
-        content: [{ type: "text", text: "retry" }],
-      },
-    ]);
+    expect(seenContext.messages).toEqual(expectedRetryMessages());
   });
 
   it("drops signed thinking turns with non-content attachment payload fields when the result is missing", async () => {
@@ -2078,12 +2052,7 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
 
     expect(baseFn).toHaveBeenCalledTimes(1);
     const seenContext = firstBaseContext(baseFn);
-    expect(seenContext.messages).toEqual([
-      {
-        role: "user",
-        content: [{ type: "text", text: "retry" }],
-      },
-    ]);
+    expect(seenContext.messages).toEqual(expectedRetryMessages());
   });
 
   it("keeps signed thinking turns with sessions_spawn attachments when the tool result is present", async () => {
@@ -2104,12 +2073,7 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
           },
         ],
       },
-      {
-        role: "toolResult",
-        toolCallId: "call_1",
-        toolName: "sessions_spawn",
-        content: [{ type: "text", text: "done" }],
-      },
+      textToolResult("call_1", "sessions_spawn", "done"),
       {
         role: "user",
         content: [{ type: "text", text: "retry" }],
@@ -2379,13 +2343,7 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
         role: "assistant",
         content: [{ type: "toolCall", id: "call_1", name: "   ", arguments: {} }],
       },
-      {
-        role: "toolResult",
-        toolCallId: "call_1",
-        toolName: "",
-        content: [{ type: "text", text: "stale result" }],
-        isError: true,
-      },
+      textToolResult("call_1", "", "stale result", { isError: true }),
     ];
     const baseFn = vi.fn((_model, _context) =>
       createFakeStream({ events: [], resultMessage: { role: "assistant", content: [] } }),
@@ -2433,13 +2391,7 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
         content: [{ type: "toolCall", name: "read", arguments: {} }],
         stopReason: "error",
       },
-      {
-        role: "toolResult",
-        toolCallId: "call_missing",
-        toolName: "read",
-        content: [{ type: "text", text: "stale result" }],
-        isError: false,
-      },
+      textToolResult("call_missing", "read", "stale result", { isError: false }),
       {
         role: "user",
         content: [{ type: "text", text: "retry" }],
@@ -2459,12 +2411,7 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
     const seenContext = firstBaseContext(baseFn) as {
       messages: Array<{ role?: string }>;
     };
-    expect(seenContext.messages).toEqual([
-      {
-        role: "user",
-        content: [{ type: "text", text: "retry" }],
-      },
-    ]);
+    expect(seenContext.messages).toEqual(expectedRetryMessages());
   });
 
   it("drops replayed tool calls that are no longer allowlisted", async () => {
@@ -2473,13 +2420,7 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
         role: "assistant",
         content: [{ type: "toolCall", id: "call_1", name: "write", arguments: {} }],
       },
-      {
-        role: "toolResult",
-        toolCallId: "call_1",
-        toolName: "write",
-        content: [{ type: "text", text: "stale result" }],
-        isError: false,
-      },
+      textToolResult("call_1", "write", "stale result", { isError: false }),
       {
         role: "user",
         content: [{ type: "text", text: "retry" }],
@@ -2499,12 +2440,7 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
     const seenContext = firstBaseContext(baseFn) as {
       messages: Array<{ role?: string }>;
     };
-    expect(seenContext.messages).toEqual([
-      {
-        role: "user",
-        content: [{ type: "text", text: "retry" }],
-      },
-    ]);
+    expect(seenContext.messages).toEqual(expectedRetryMessages());
   });
   it("drops replayed tool names that are no longer allowlisted", async () => {
     const messages = [
@@ -2512,13 +2448,7 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
         role: "assistant",
         content: [{ type: "toolUse", id: "call_1", name: "unknown_tool", input: { path: "." } }],
       },
-      {
-        role: "toolResult",
-        toolCallId: "call_1",
-        toolName: "unknown_tool",
-        content: [{ type: "text", text: "stale result" }],
-        isError: false,
-      },
+      textToolResult("call_1", "unknown_tool", "stale result", { isError: false }),
     ];
     const baseFn = vi.fn((_model, _context) =>
       createFakeStream({ events: [], resultMessage: { role: "assistant", content: [] } }),
@@ -2570,13 +2500,7 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
           { type: "toolCall", name: "read", arguments: {} },
         ],
       },
-      {
-        role: "toolResult",
-        toolCallId: "call_1",
-        toolName: "read",
-        content: [{ type: "text", text: "kept result" }],
-        isError: false,
-      },
+      textToolResult("call_1", "read", "kept result", { isError: false }),
       {
         role: "user",
         content: [{ type: "text", text: "retry" }],
@@ -2750,12 +2674,7 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
     const seenContext = firstBaseContext(baseFn) as {
       messages: Array<{ role?: string; content?: unknown[] }>;
     };
-    expect(seenContext.messages).toEqual([
-      {
-        role: "user",
-        content: [{ type: "text", text: "retry" }],
-      },
-    ]);
+    expect(seenContext.messages).toEqual(expectedRetryMessages());
   });
 
   it("preserves embedded Anthropic user tool_result blocks for non-thinking turns even when immutable replay is enabled", async () => {

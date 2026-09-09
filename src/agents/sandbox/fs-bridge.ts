@@ -12,15 +12,7 @@ import type {
   SandboxFsBridgeContext,
 } from "./backend-handle.types.js";
 import { runDockerSandboxShellCommand } from "./docker-backend.js";
-import {
-  buildPinnedCreatePlan,
-  buildPinnedCopyPlan,
-  buildPinnedMkdirpPlan,
-  buildPinnedReadDirectoryPlan,
-  buildPinnedRemovePlan,
-  buildPinnedRenamePlan,
-  buildPinnedWritePlan,
-} from "./fs-bridge-mutation-helper.js";
+import { buildPinnedMutationPlan } from "./fs-bridge-mutation-helper.js";
 import { SANDBOX_CREATE_EXISTS_EXIT_CODE } from "./fs-bridge-mutation-python.js";
 import { SandboxFsPathGuard } from "./fs-bridge-path-safety.js";
 import { buildStatPlan, type SandboxFsCommandPlan } from "./fs-bridge-shell-command-plans.js";
@@ -93,7 +85,8 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
   }): Promise<DirectoryEntry[]> {
     const target = this.resolveResolvedPath(params);
     const result = await this.runCheckedCommand({
-      ...buildPinnedReadDirectoryPlan({
+      ...buildPinnedMutationPlan({
+        kind: "readdir",
         check: { target, options: { action: "list directories", allowedType: "directory" } },
         pinned: await this.pathGuard.resolveAnchoredPinnedDirectoryEntry(
           target,
@@ -127,7 +120,8 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
       options: { action: "copy files", requireWritable: true } as const,
     };
     await this.runCheckedCommand({
-      ...buildPinnedCopyPlan({
+      ...buildPinnedMutationPlan({
+        kind: "copy",
         sourceCheck,
         destinationCheck,
         source: await this.pathGuard.resolveAnchoredPinnedEntry(source, "copy files"),
@@ -161,7 +155,8 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
       "write files",
     );
     await this.runCheckedCommand({
-      ...buildPinnedWritePlan({
+      ...buildPinnedMutationPlan({
+        kind: "write",
         check: writeCheck,
         pinned: pinnedWriteTarget,
         mkdir: params.mkdir !== false,
@@ -194,7 +189,8 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
       "create files",
     );
     const result = await this.runCheckedCommand({
-      ...buildPinnedCreatePlan({
+      ...buildPinnedMutationPlan({
+        kind: "create",
         check: createCheck,
         pinned: pinnedCreateTarget,
         mkdir: params.mkdir !== false,
@@ -226,7 +222,8 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
       } as const,
     };
     await this.runCheckedCommand({
-      ...buildPinnedMkdirpPlan({
+      ...buildPinnedMutationPlan({
+        kind: "mkdirp",
         check: mkdirCheck,
         pinned: this.pathGuard.resolvePinnedDirectoryEntry(target, "create directories"),
       }),
@@ -252,7 +249,8 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
       } as const,
     };
     await this.runCheckedCommand({
-      ...buildPinnedRemovePlan({
+      ...buildPinnedMutationPlan({
+        kind: "remove",
         check: removeCheck,
         pinned: this.pathGuard.resolvePinnedEntry(target, "remove files"),
         recursive: params.recursive,
@@ -289,11 +287,12 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
       } as const,
     };
     await this.runCheckedCommand({
-      ...buildPinnedRenamePlan({
-        fromCheck,
-        toCheck,
-        from: this.pathGuard.resolvePinnedEntry(from, "rename files"),
-        to: this.pathGuard.resolvePinnedEntry(to, "rename files"),
+      ...buildPinnedMutationPlan({
+        kind: "rename",
+        sourceCheck: fromCheck,
+        destinationCheck: toCheck,
+        source: this.pathGuard.resolvePinnedEntry(from, "rename files"),
+        destination: this.pathGuard.resolvePinnedEntry(to, "rename files"),
       }),
       signal: params.signal,
     });
