@@ -45,9 +45,18 @@ struct DashboardGatewaySnapshot: Codable, Equatable, Sendable {
 }
 
 struct MacGatewayCatalogProfile: Equatable, Sendable {
+    enum AuthKind: Equatable, Sendable {
+        case token
+        case password
+        case browser
+    }
+
     let profile: MacGatewayProfile
     let canPromote: Bool
     var usesBrowserIdentity = false
+    var browserSessionExpiresAt: Date?
+    var authKind: AuthKind?
+    var browserSessionSubject: String?
 }
 
 enum DashboardGatewayCatalog {

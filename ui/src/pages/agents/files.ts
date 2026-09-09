@@ -13,12 +13,27 @@ type AgentFilesState = {
   agentFilesLoading: boolean;
   agentFilesError: string | null;
   agentFileContents: Record<string, string>;
+  agentFileBaseHashes: Record<string, string>;
   agentFileHashes: Record<string, string>;
   agentFileConflict: string | null;
   agentFileDrafts: Record<string, string>;
   agentFileSaving: boolean;
   agentFileWriteRevisions: Map<string, number>;
 };
+
+function withFileHash(
+  hashes: Record<string, string>,
+  name: string,
+  hash: string | undefined,
+): Record<string, string> {
+  const next = { ...hashes };
+  if (hash === undefined) {
+    delete next[name];
+  } else {
+    next[name] = hash;
+  }
+  return next;
+}
 
 async function requestAgentFile(
   state: AgentFilesState,
@@ -79,6 +94,8 @@ async function requestAgentFile(
       const previousBase = state.agentFileContents[name] ?? "";
       const currentDraft = state.agentFileDrafts[name];
       state.agentFileContents = { ...state.agentFileContents, [name]: content };
+      // Refresh may advance the workspace base while a dirty draft keeps its ancestry.
+      state.agentFileBaseHashes = withFileHash(state.agentFileBaseHashes, name, res.file.hash);
       // Reads rebase clean drafts; writes preserve edits made after submission.
       const rebasesDraft =
         resolution === "draft" ||
@@ -88,13 +105,7 @@ async function requestAgentFile(
         state.agentFileDrafts = { ...state.agentFileDrafts, [name]: content };
       }
       if (saving || resolution !== undefined || rebasesDraft) {
-        const hashes = { ...state.agentFileHashes };
-        if (res.file.hash) {
-          hashes[name] = res.file.hash;
-        } else {
-          delete hashes[name];
-        }
-        state.agentFileHashes = hashes;
+        state.agentFileHashes = withFileHash(state.agentFileHashes, name, res.file.hash);
         if (state.agentFileConflict === name) {
           state.agentFileConflict = null;
         }
@@ -148,6 +159,22 @@ export function saveAgentFile(
   return requestAgentFile(state, agentId, name, { kind: "write", content });
 }
 
+export function resetAgentFile(state: AgentFilesState, name: string): void {
+  state.agentFileDrafts = {
+    ...state.agentFileDrafts,
+    [name]: state.agentFileContents[name] ?? "",
+  };
+  state.agentFileHashes = withFileHash(
+    state.agentFileHashes,
+    name,
+    state.agentFileBaseHashes[name],
+  );
+  if (state.agentFileConflict === name) {
+    state.agentFileConflict = null;
+    state.agentFilesError = null;
+  }
+}
+
 export function reloadAgentFile(
   state: AgentFilesState,
   agentId: string,
@@ -166,12 +193,22 @@ export async function overwriteAgentFile(
   name: string,
   content: string,
 ): Promise<boolean> {
+  const client = state.client;
+  const agents = state.agents;
+  const generation = state.requestGeneration;
   const rebased = await requestAgentFile(state, agentId, name, {
     kind: "read",
     force: true,
     resolution: "hash",
   });
-  if (!rebased) {
+  // Publishing the read can retire its scope before this continuation dispatches a write.
+  if (
+    !rebased ||
+    !state.connected ||
+    state.client !== client ||
+    state.agents !== agents ||
+    state.requestGeneration !== generation
+  ) {
     return false;
   }
   return await requestAgentFile(state, agentId, name, { kind: "write", content });

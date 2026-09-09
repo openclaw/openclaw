@@ -507,7 +507,7 @@ suite.define(() => {
     );
   });
 
-  it("streams chip-free subagent rows and retains final diff counts in Review", async () => {
+  it("retires terminal subagent text and retains final diff counts in Review", async () => {
     const activityDir = path.join(
       createControlUiE2eArtifactDir("chat-background-tasks", artifactDir),
       "subagent-activity",
@@ -634,7 +634,7 @@ suite.define(() => {
             taskId: first.taskId,
             kind: first.kind,
             runtime: first.runtime,
-            status: "completed",
+            status: "cancelled",
             title: first.title,
             agentId: first.agentId,
             sessionKey: first.sessionKey,
@@ -644,13 +644,12 @@ suite.define(() => {
             startedAt: first.startedAt,
             updatedAt: baseTime + 2_000,
             endedAt: baseTime + 2_000,
-            terminalSummary: "Ownership review complete",
           },
         });
 
-        await firstRow.getByText("Subagent finished").waitFor();
-        await detailPanel.getByText("Completed").waitFor();
-        expect(await firstRow.textContent()).toContain("Ownership review complete");
+        await firstRow.getByText("Subagent cancelled").waitFor();
+        await detailPanel.getByText("Failed").waitFor();
+        expect(await firstRow.textContent()).not.toContain("Cross-checking requester ownership");
         expect(await activity.locator(".chat-diffstat").count()).toBe(0);
         expect(await detailPanel.locator(".chat-diffstat__add").textContent()).toBe("+14");
         expect(await detailPanel.locator(".chat-diffstat__del").textContent()).toBe("-3");
@@ -659,7 +658,7 @@ suite.define(() => {
         );
         expect(await secondRow.textContent()).toContain("Checking tool card rendering");
         await writeFile(
-          path.join(activityDir, "02-one-subagent-finished.png"),
+          path.join(activityDir, "02-one-subagent-cancelled.png"),
           await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
             firstRow,
             secondRow,

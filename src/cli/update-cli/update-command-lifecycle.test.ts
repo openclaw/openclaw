@@ -5,6 +5,7 @@ const mocks = vi.hoisted(() => ({
   events: [] as string[],
   leaseActive: false,
   readConfig: vi.fn(),
+  doctorWarnings: [] as string[],
 }));
 
 const validConfigSnapshot = {
@@ -41,6 +42,18 @@ vi.mock("../../config/config.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../config/config.js")>()),
   assertConfigWriteAllowedInCurrentMode: vi.fn(),
   readConfigFileSnapshot: mocks.readConfig,
+}));
+
+// This fixture proves lease ordering; process tests cover durable ledger writes.
+vi.mock("../../infra/update-run-ledger.js", () => ({
+  createUpdateRun: vi.fn(() => ({ runId: "lease-order-fixture" })),
+  adoptUpdateRun: vi.fn(() => ({
+    origin: { driver: { host: "lease-order-fixture", pid: 1, startIdentity: "1" } },
+  })),
+  heartbeatUpdateRun: vi.fn(),
+  recordUpdateRunStep: vi.fn(),
+  finishUpdateRun: vi.fn(),
+  recordUpdateRunDiagnostic: vi.fn(),
 }));
 
 vi.mock("../../plugins/installed-plugin-index-records.js", () => ({
@@ -102,12 +115,14 @@ vi.mock("./update-command-config.js", async (importOriginal) => ({
     sourceConfig: {},
     authoredConfig: {},
   })),
-  restoreDroppedPreUpdateChannels: vi.fn((snapshot: unknown) => {
-    record("restore-channels");
+  preparePostCorePluginConfig: vi.fn(async () => {
+    const configSnapshot = await mocks.readConfig();
+    record("prepare-config");
     return {
-      snapshot,
-      changed: false,
-      authoredChannels: [],
+      configSnapshot,
+      configWriteOptions: {},
+      configChanged: false,
+      restoredAuthoredChannels: [],
     };
   }),
 }));
@@ -120,9 +135,12 @@ vi.mock("./update-command-fresh-doctor.js", () => ({
       configSnapshot: validConfigSnapshot,
     };
   }),
-  runUpdateFinalizationDoctorInFreshProcess: vi.fn(async () => {
-    record("fresh-doctor");
-  }),
+  runUpdateFinalizationDoctorInFreshProcess: vi.fn(
+    async (params: { onWarnings?: (warnings: string[]) => void }) => {
+      record("fresh-doctor");
+      params.onWarnings?.(mocks.doctorWarnings);
+    },
+  ),
   withPrePluginUpdateDoctorEnv: async (run: () => Promise<unknown>) => await run(),
 }));
 
@@ -144,27 +162,21 @@ vi.mock("./update-command-post-core.js", async (importOriginal) => ({
 }));
 
 import { updateFinalizeCommand } from "./update-command-finalize.js";
+import { withOwnedManagedUpdateEnv } from "./update-command-managed-context.js";
 import { resumePostCoreUpdate } from "./update-command-resume.js";
 
-function expectLifecycleBoundary(doctorEvent: string): void {
-  const doctorIndex = mocks.events.indexOf(`${doctorEvent}:false`);
-  expect(doctorIndex).toBeGreaterThan(-1);
-  expect(mocks.events).not.toContain(`${doctorEvent}:true`);
+function expectLifecycleBoundary(preLeaseEvent: string): void {
+  const preLeaseIndex = mocks.events.indexOf(`${preLeaseEvent}:false`);
+  expect(preLeaseIndex).toBeGreaterThan(-1);
+  expect(mocks.events).not.toContain(`${preLeaseEvent}:true`);
   const authoritativeReadIndex = mocks.events.findIndex(
-    (event, index) => index > doctorIndex && event === "read-config:true",
+    (event, index) => index > preLeaseIndex && event === "read-config:true",
   );
-  expect(authoritativeReadIndex).toBeGreaterThan(doctorIndex);
-  for (const event of [
-    "persist-channel:true",
-    "restore-channels:true",
-    "installed-records:true",
-    "plugin-update:true",
-  ]) {
+  expect(authoritativeReadIndex).toBeGreaterThan(preLeaseIndex);
+  for (const event of ["prepare-config:true", "installed-records:true", "plugin-update:true"]) {
     expect(mocks.events).toContain(event);
   }
   expect(mocks.events.indexOf("plugin-update:true")).toBeGreaterThan(authoritativeReadIndex);
-  const lastLeaseExit = mocks.events.lastIndexOf("lease-exit:false");
-  expect(mocks.events.indexOf("complete:false")).toBeGreaterThan(lastLeaseExit);
 }
 
 describe("update plugin lifecycle lease boundaries", () => {
@@ -173,6 +185,7 @@ describe("update plugin lifecycle lease boundaries", () => {
     vi.unstubAllEnvs();
     mocks.events = [];
     mocks.leaseActive = false;
+    mocks.doctorWarnings = [];
     mocks.readConfig.mockImplementation(async () => {
       record("read-config");
       return validConfigSnapshot;
@@ -183,7 +196,32 @@ describe("update plugin lifecycle lease boundaries", () => {
     vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => undefined);
   });
 
-  it("runs resume doctors outside the lease and rereads mutation state after acquisition", async () => {
+  it.each(["copied", "live"] as const)(
+    "preserves the %s invocation environment through a failed phase",
+    async (source) => {
+      vi.stubEnv("OPENCLAW_STATE_DIR", "/fixture/invocation-state");
+      const failure = new Error("phase failed");
+      let observedStateDir: string | undefined;
+      try {
+        await expect(
+          withOwnedManagedUpdateEnv(
+            source === "live" ? process.env : { ...process.env },
+            async () => {
+              observedStateDir = process.env.OPENCLAW_STATE_DIR;
+              process.env.OPENCLAW_STATE_DIR = "/fixture/phase-state";
+              throw failure;
+            },
+          ),
+        ).rejects.toBe(failure);
+        expect(observedStateDir).toBe("/fixture/invocation-state");
+        expect(process.env.OPENCLAW_STATE_DIR).toBe("/fixture/invocation-state");
+      } finally {
+        vi.unstubAllEnvs();
+      }
+    },
+  );
+
+  it("returns resumed package work without Doctor completion and rereads state under the lease", async () => {
     await resumePostCoreUpdate({
       root: "/tmp/openclaw",
       channel: "stable",
@@ -191,9 +229,14 @@ describe("update plugin lifecycle lease boundaries", () => {
       timeoutMs: 1_000,
     });
 
-    expectLifecycleBoundary("fresh-doctor");
+    expectLifecycleBoundary("handoff-records");
+    expect(mocks.events).not.toContain("fresh-doctor:false");
+    expect(mocks.events).not.toContain("fresh-doctor:true");
+    expect(mocks.events).not.toContain("config-snapshot:false");
+    expect(mocks.events).not.toContain("config-snapshot:true");
+    expect(mocks.events).not.toContain("complete:false");
+    expect(mocks.events).not.toContain("complete:true");
     expect(mocks.events).toContain("persisted-index:true");
-    expect(mocks.events).toContain("handoff-records:false");
   });
 
   it("runs finalizer doctors outside the lease and rereads mutation state after acquisition", async () => {
@@ -207,6 +250,25 @@ describe("update plugin lifecycle lease boundaries", () => {
     expectLifecycleBoundary("fresh-doctor");
     const doctorIndex = mocks.events.indexOf("fresh-doctor:false");
     expect(mocks.events.slice(0, doctorIndex)).toContain("read-config:true");
+    expect(mocks.events.indexOf("complete:false")).toBeGreaterThan(
+      mocks.events.lastIndexOf("lease-exit:false"),
+    );
     expect(mocks.events).not.toContain("persisted-index:true");
+  });
+
+  it("keeps nonfatal Doctor warnings in terminal JSON without failing finalization", async () => {
+    mocks.doctorWarnings = ["Optional version probe timed out; recheck after restart."];
+    await updateFinalizeCommand({ json: true, yes: true, deferCompletionCache: true });
+
+    expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: "warning",
+        restart: false,
+        postUpdate: expect.objectContaining({
+          doctor: { status: "warning", warnings: mocks.doctorWarnings },
+        }),
+      }),
+    );
+    expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
   });
 });

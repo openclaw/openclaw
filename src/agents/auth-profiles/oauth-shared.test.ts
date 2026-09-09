@@ -1,17 +1,82 @@
 /**
- * Tests shared OAuth credential overlay/replacement policy.
- * Covers runtime-only provenance, cloned store isolation, and stale credential
- * replacement decisions.
+ * Tests shared OAuth credential identity and overlay policy.
+ * Covers runtime-only provenance and cloned store isolation.
  */
 
 import { expectDefined } from "@openclaw/normalization-core";
-import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it, vi } from "vitest";
+import { createApiKeyCredential, oauthCred } from "./credential-fixtures.test-support.js";
 import {
+  isSafeOAuthOwnerRefreshResult,
+  isSafeOAuthPostClaimSettlement,
   overlayRuntimeExternalOAuthProfiles,
-  shouldReplaceStoredOAuthCredential,
 } from "./oauth-shared.js";
 import type { AuthProfileStore, OAuthCredential } from "./types.js";
+
+describe("OAuth refresh identity policy", () => {
+  const credential = (
+    identity: Pick<OAuthCredential, "accountId" | "email"> = {},
+    provider = "openai",
+  ): OAuthCredential => ({
+    type: "oauth",
+    provider,
+    access: "access-token",
+    refresh: "refresh-token",
+    expires: Date.now() + 600_000,
+    ...identity,
+  });
+
+  it.each([
+    {
+      name: "known same identity",
+      claimed: credential({ accountId: "acct-a" }),
+      refreshed: credential({ accountId: "acct-a" }),
+      exactOwner: true,
+      differentOwner: true,
+    },
+    {
+      name: "known different identity",
+      claimed: credential({ accountId: "acct-a" }),
+      refreshed: credential({ accountId: "acct-b" }),
+      exactOwner: false,
+      differentOwner: false,
+    },
+    {
+      name: "both identities unknown",
+      claimed: credential(),
+      refreshed: credential(),
+      exactOwner: true,
+      differentOwner: false,
+    },
+    {
+      name: "unknown identity becomes known",
+      claimed: credential(),
+      refreshed: credential({ accountId: "acct-a" }),
+      exactOwner: true,
+      differentOwner: false,
+    },
+    {
+      name: "known identity becomes unknown",
+      claimed: credential({ accountId: "acct-a" }),
+      refreshed: credential(),
+      exactOwner: false,
+      differentOwner: false,
+    },
+    {
+      name: "provider changes",
+      claimed: credential({ accountId: "acct-a" }),
+      refreshed: credential({ accountId: "acct-a" }, "anthropic"),
+      exactOwner: false,
+      differentOwner: false,
+    },
+  ])(
+    "applies exact-owner and different-owner rules for $name",
+    ({ claimed, refreshed, exactOwner, differentOwner }) => {
+      expect(isSafeOAuthOwnerRefreshResult(claimed, refreshed)).toBe(exactOwner);
+      expect(isSafeOAuthPostClaimSettlement(claimed, refreshed)).toBe(differentOwner);
+    },
+  );
+});
 
 describe("overlayRuntimeExternalOAuthProfiles", () => {
   it("isolates runtime OAuth overlays without structuredClone", () => {
@@ -19,11 +84,7 @@ describe("overlayRuntimeExternalOAuthProfiles", () => {
     const store: AuthProfileStore = {
       version: 1,
       profiles: {
-        "openai:default": {
-          type: "api_key",
-          provider: "openai",
-          key: "sk-test",
-        },
+        "openai:default": createApiKeyCredential("openai", "sk-test"),
       },
       order: {
         openai: ["openai:default"],
@@ -34,13 +95,12 @@ describe("overlayRuntimeExternalOAuthProfiles", () => {
       const overlaid = overlayRuntimeExternalOAuthProfiles(store, [
         {
           profileId: "openai:default",
-          credential: {
-            type: "oauth",
+          credential: oauthCred({
             provider: "openai",
             access: "access-1",
             refresh: "refresh-1",
             expires: Date.now() + 60_000,
-          },
+          }),
         },
       ]);
 
@@ -71,33 +131,30 @@ describe("overlayRuntimeExternalOAuthProfiles", () => {
       version: 1,
       runtimeExternalProfileIds: ["minimax:minimax-cli"],
       profiles: {
-        "anthropic:claude-cli": {
-          type: "oauth",
+        "anthropic:claude-cli": oauthCred({
           provider: "anthropic",
           access: "old-access",
           refresh: "old-refresh",
           expires: 1,
-        },
-        "minimax:minimax-cli": {
-          type: "oauth",
+        }),
+        "minimax:minimax-cli": oauthCred({
           provider: "minimax-portal",
           access: "minimax-access",
           refresh: "minimax-refresh",
           expires: 1,
-        },
+        }),
       },
     };
 
     const overlaid = overlayRuntimeExternalOAuthProfiles(store, [
       {
         profileId: "anthropic:claude-cli",
-        credential: {
-          type: "oauth",
+        credential: oauthCred({
           provider: "anthropic",
           access: "new-access",
           refresh: "new-refresh",
           expires: 2,
-        },
+        }),
       },
     ]);
 
@@ -113,13 +170,12 @@ describe("overlayRuntimeExternalOAuthProfiles", () => {
       runtimeExternalProfileIds: ["minimax:minimax-cli"],
       runtimeExternalProfileIdsAuthoritative: true,
       profiles: {
-        "minimax:minimax-cli": {
-          type: "oauth",
+        "minimax:minimax-cli": oauthCred({
           provider: "minimax-portal",
           access: "minimax-access",
           refresh: "minimax-refresh",
           expires: 1,
-        },
+        }),
       },
     };
 
@@ -136,13 +192,12 @@ describe("overlayRuntimeExternalOAuthProfiles", () => {
       version: 1,
       runtimePersistedProfileIds: ["openai:default"],
       profiles: {
-        "openai:default": {
-          type: "oauth",
+        "openai:default": oauthCred({
           provider: "openai",
           access: "persisted-access",
           refresh: "persisted-refresh",
           expires: 1,
-        },
+        }),
       },
     };
 
@@ -150,35 +205,15 @@ describe("overlayRuntimeExternalOAuthProfiles", () => {
       {
         profileId: "openai:default",
         persistence: "persisted",
-        credential: {
-          type: "oauth",
+        credential: oauthCred({
           provider: "openai",
           access: "external-access",
           refresh: "external-refresh",
           expires: 2,
-        },
+        }),
       },
     ]);
 
     expect(overlaid.runtimePersistedProfileIds).toBeUndefined();
-  });
-
-  it("replaces an existing OAuth credential with an out-of-range expiry", () => {
-    const existing: OAuthCredential = {
-      type: "oauth",
-      provider: "openai-codex",
-      access: "poisoned-access",
-      refresh: "poisoned-refresh",
-      expires: MAX_DATE_TIMESTAMP_MS + 1,
-    };
-    const incoming: OAuthCredential = {
-      type: "oauth",
-      provider: "openai-codex",
-      access: "valid-access",
-      refresh: "valid-refresh",
-      expires: Date.now() + 60_000,
-    };
-
-    expect(shouldReplaceStoredOAuthCredential(existing, incoming)).toBe(true);
   });
 });

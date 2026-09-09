@@ -32,7 +32,9 @@ import {
 } from "../../lib/chat/thinking.ts";
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import { formatCompactTokenCount } from "../../lib/format.ts";
+import { loadModelCatalog } from "../../lib/model-catalog-store.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
+import { resolveSessionContextLimit } from "../../lib/sessions/context-budget.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import {
   DEFAULT_AGENT_ID,
@@ -254,7 +256,9 @@ async function executeModel(
     try {
       const [sessions, models] = await Promise.all([
         listSessions(context, selectedAgentListScope(sessionKey, context)),
-        modelCatalog ? Promise.resolve(modelCatalog) : loadModelCatalog(client, agentId),
+        modelCatalog
+          ? Promise.resolve(modelCatalog)
+          : loadModelCatalog(client, { agentId, sessionKey }).then((result) => result.models),
       ]);
       const { session, defaults } = resolveCommandSessionState(context, sessionKey, sessions);
       const model = session?.model || defaults?.model || "default";
@@ -370,7 +374,7 @@ async function executeThink(
         }),
       };
     }
-    if (!isThinkingLevelOptionForSession(session, defaults, level, modelCatalog)) {
+    if (isThinkingLevelOptionForSession(session, defaults, level, modelCatalog) === false) {
       return {
         content: t("chat.commandResults.thinking.unsupported", {
           level: rawLevel,
@@ -536,7 +540,8 @@ async function executeUsage(
       ? (session.totalTokens ?? null)
       : cumulativeTotal;
     const totalTokensFresh = session.totalTokensFresh !== false;
-    const ctx = session.contextTokens ?? 0;
+    const limit = resolveSessionContextLimit(session);
+    const ctx = limit.tokens;
     const pct =
       contextSnapshotTotal !== null && totalTokensFresh && ctx > 0
         ? Math.round((contextSnapshotTotal / ctx) * 100)
@@ -558,10 +563,15 @@ async function executeUsage(
     ];
     if (pct !== null) {
       lines.push(
-        t("chat.commandResults.usage.context", {
-          percent: `**${pct}%**`,
-          total: formatCompactTokenCount(ctx),
-        }),
+        t(
+          limit.fromLastPrompt
+            ? "chat.commandResults.usage.promptBudget"
+            : "chat.commandResults.usage.context",
+          {
+            percent: `**${pct}%**`,
+            total: formatCompactTokenCount(ctx),
+          },
+        ),
       );
     }
     if (session.model) {
@@ -735,27 +745,15 @@ async function loadThinkingCommandState(
   const agentId = resolveSelectedAgentId(sessionKey, context);
   const [sessions, models] = await Promise.all([
     listSessions(context, selectedAgentListScope(sessionKey, context)),
-    modelCatalog ? Promise.resolve(modelCatalog) : loadModelCatalog(client, agentId),
+    modelCatalog
+      ? Promise.resolve(modelCatalog)
+      : loadModelCatalog(client, { agentId, sessionKey }).then((result) => result.models),
   ]);
   const state = resolveCommandSessionState(context, sessionKey, sessions);
   return {
     ...state,
     models,
   };
-}
-
-async function loadModelCatalog(
-  client: GatewayBrowserClient,
-  agentId: string | undefined,
-): Promise<ModelCatalogEntry[]> {
-  if (!agentId) {
-    return [];
-  }
-  const result = await client.request<{ models: ModelCatalogEntry[] }>("models.list", {
-    agentId,
-    view: "configured",
-  });
-  return result?.models ?? [];
 }
 
 function resolveCommandMessage(
@@ -832,7 +830,7 @@ async function executeSteer(
     );
     const terminalAckContent = formatTerminalSteerAckContent(ackStatus);
     if (terminalAckContent) {
-      return { content: terminalAckContent };
+      return { content: terminalAckContent, failed: true };
     }
     const result: SlashCommandResult = { content: t("chat.commandResults.steer.succeeded") };
     if (ackStatus === "started" || ackStatus === "in_flight") {
@@ -873,7 +871,7 @@ async function executeRedirect(
     const ackStatus = normalizeSteerChatSendAckStatus(resp);
     const terminalAckContent = formatTerminalRedirectAckContent(ackStatus);
     if (terminalAckContent) {
-      return { content: terminalAckContent };
+      return { content: terminalAckContent, failed: true };
     }
     const runId = typeof resp?.runId === "string" ? resp.runId : undefined;
     return {

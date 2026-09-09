@@ -215,7 +215,7 @@ suite.define(() => {
       });
       await page.getByRole("alert").filter({ hasText: "Your draft is preserved" }).waitFor();
       expect(await page.getByLabel("SKILL.md", { exact: true }).inputValue()).toBe(draft);
-      const form = page.locator("form.md-preview-dialog__panel");
+      const form = page.locator("form.skill-reader-dialog");
       expect(await form.evaluate((element) => element.scrollWidth <= element.clientWidth + 1)).toBe(
         true,
       );
@@ -232,7 +232,7 @@ suite.define(() => {
       expect(await importer.getByRole("status").allTextContents()).toEqual([]);
       expect(
         await importer
-          .locator(".md-preview-dialog__body")
+          .locator(".skill-reader-dialog__body")
           .evaluate((element) => element.scrollWidth <= element.clientWidth + 1),
       ).toBe(true);
       await importer.getByLabel("Skill name", { exact: true }).fill("abandoned-import");
@@ -365,14 +365,30 @@ suite.define(() => {
           .evaluate((element: HTMLInputElement) => element.checkValidity()),
       ).toBe(false);
       await page.getByLabel("Skill name", { exact: true }).fill("checklist");
-      await page.locator('input[name="library-import-files"]').setInputFiles([
+      const chooseFiles = page.getByRole("button", { name: "Choose files", exact: true });
+      const [fileChooser] = await Promise.all([
+        page.waitForEvent("filechooser"),
+        chooseFiles.press("Enter"),
+      ]);
+      const selectedFiles = [
         { name: "SKILL.md", mimeType: "text/markdown", buffer: Buffer.from(own.content) },
         { name: "notes.txt", mimeType: "text/plain", buffer: Buffer.from("untouched\r\n") },
-      ]);
-      await page
+      ];
+      await fileChooser.setFiles(selectedFiles);
+      await page.getByText("2 files · SKILL.md, notes.txt", { exact: true }).waitFor();
+      const importSkill = page
         .locator("openclaw-modal-dialog")
-        .getByRole("button", { name: "Import skill", exact: true })
-        .click();
+        .getByRole("button", { name: "Import skill", exact: true });
+      await page.getByRole("button", { name: "Clear", exact: true }).click();
+      expect(await importSkill.isDisabled()).toBe(true);
+      expect(await page.getByText(/SKILL.md, notes.txt/u).count()).toBe(0);
+      expect(await gateway.getRequests("skills.library.save")).toHaveLength(0);
+      const [reselection] = await Promise.all([
+        page.waitForEvent("filechooser"),
+        chooseFiles.press("Enter"),
+      ]);
+      await reselection.setFiles(selectedFiles);
+      await importSkill.click();
       await page.getByRole("button", { name: "Save skill", exact: true }).click();
       expect((await gateway.waitForRequest("skills.library.save")).params).toMatchObject({
         expectedRevision: null,

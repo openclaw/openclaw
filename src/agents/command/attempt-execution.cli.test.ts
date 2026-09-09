@@ -35,7 +35,7 @@ import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
 import { createTestPreparedRunAdmission } from "../admitted-run-context.test-support.js";
 import { buildAgentRunTerminalOutcomeFromLifecycleEvent } from "../agent-run-terminal-outcome.js";
 import { clearRuntimeAuthProfileStoreSnapshots } from "../auth-profiles/runtime-snapshots.js";
-import { saveAuthProfileStore } from "../auth-profiles/store.js";
+import { saveAuthProfileStore } from "../auth-profiles/store-runtime.js";
 import { testing as cliBackendsTesting } from "../cli-backends.test-support.js";
 import { buildPreparedCliRunContext } from "../cli-runner.test-helpers.js";
 import { buildCliRunResult } from "../cli-runner/cli-run-settlement.js";
@@ -835,6 +835,36 @@ describe("CLI attempt execution", () => {
     });
   });
 
+  it.each(["cli", "embedded"] as const)(
+    "preserves recovered dashboard authoring through the %s runtime without inline capability",
+    async (runtime) => {
+      const sessionKey = "agent:main:dashboard:recovered";
+      const sessionEntry = makeSessionEntry("recovered-dashboard-session");
+      const sessionStore = { [sessionKey]: sessionEntry };
+      await writeSessionStoreSeed(sessionStore);
+      runCliAgentMock.mockResolvedValueOnce(makeCliResult("recovered"));
+      runEmbeddedAgentMock.mockResolvedValueOnce({ meta: { durationMs: 1 } });
+
+      await runAgentAttempt({
+        providerOverride: runtime === "cli" ? "claude-cli" : "openai",
+        modelOverride: runtime === "cli" ? "opus" : "gpt-5.4",
+        sessionEntry,
+        sessionKey,
+        sessionStore,
+        storePath,
+        workspaceDir: tmpDir,
+        agentDir,
+        opts: { pinnedWidgetAuthoring: true },
+        runContext: { replyToMode: "all" },
+      });
+
+      const run = runtime === "cli" ? firstRunCliAgentArg() : firstEmbeddedAgentArg();
+      expect(run.pinnedWidgetAuthoring).toBe(true);
+      expect(run.clientCaps).toBeUndefined();
+      expect(run.replyToMode).toBe("all");
+    },
+  );
+
   async function runClaudeCliAttempt(params: {
     sessionKey: string;
     sessionEntry: SessionEntry;
@@ -863,6 +893,39 @@ describe("CLI attempt execution", () => {
       storePath,
     });
   }
+
+  it.each([true, false, "auto"] as const)(
+    "forwards resolved fast mode %s and its logical turn clock to CLI execution",
+    async (fastMode) => {
+      const sessionKey = "agent:main:fast-cli";
+      const sessionEntry = makeSessionEntry("session-fast-cli");
+      const sessionStore = { [sessionKey]: sessionEntry };
+      await writeSessionStoreSeed(sessionStore);
+      runCliAgentMock.mockResolvedValueOnce(makeCliResult("fast result"));
+
+      await runAgentAttempt({
+        providerOverride: "claude-cli",
+        modelOverride: "opus",
+        sessionKey,
+        sessionEntry,
+        sessionStore,
+        storePath,
+        agentDir,
+        workspaceDir: tmpDir,
+        body: "fast mode",
+        runId: "fast-cli-run",
+        fastMode,
+        fastModeStartedAtMs: 1000,
+        fastModeAutoOnSeconds: 15,
+      });
+
+      expect(firstRunCliAgentArg()).toMatchObject({
+        fastMode,
+        fastModeStartedAtMs: 1000,
+        fastModeAutoOnSeconds: 15,
+      });
+    },
+  );
 
   it.each(["assistant_output_started", "tool_execution_started"] as const)(
     "keeps CLI admission separate from observed %s",

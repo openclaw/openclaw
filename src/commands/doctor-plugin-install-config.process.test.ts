@@ -3,7 +3,9 @@ import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import {
+  clearLoadInstalledPluginIndexInstallRecordsCache,
   readPersistedInstalledPluginIndexInstallRecords,
   writePersistedInstalledPluginIndexInstallRecords,
 } from "../plugins/installed-plugin-index-records.js";
@@ -12,6 +14,7 @@ import {
   runBuiltRuntime,
   runIsolatedModuleScript,
 } from "./doctor-config-preflight.process.test-support.js";
+import { doctorConfigRuntimeEntrypoints } from "./doctor-config-runtime.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterAll);
 const doctorArgs = ["doctor", "--fix", "--non-interactive", "--no-workspace-suggestions"];
@@ -21,7 +24,7 @@ beforeAll(() => {
   runtimeRoot = createBuiltRuntime(fs.realpathSync(tempDirs.make("doctor-plugin-config-runtime-")));
 });
 
-function createDoctorFixture() {
+async function createDoctorFixture() {
   const root = fs.realpathSync(tempDirs.make("doctor-plugin-config-"));
   const stateDir = path.join(root, "state");
   const configPath = path.join(stateDir, "openclaw.json");
@@ -39,16 +42,15 @@ function createDoctorFixture() {
     OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
     NO_COLOR: "1",
   };
-  fs.writeFileSync(
-    configPath,
-    JSON.stringify({
-      gateway: { mode: "local", auth: { mode: "none" } },
-      plugins: { enabled: false },
-    }),
-  );
-  const bootstrap = runBuiltRuntime(runtimeRoot, env, doctorArgs, 60_000);
-  expect(bootstrap.status, `${bootstrap.stdout}\n${bootstrap.stderr}`).toBe(0);
-  const config = JSON.parse(fs.readFileSync(configPath, "utf8")) as OpenClawConfig;
+  const config: OpenClawConfig = {
+    gateway: { mode: "local", auth: { mode: "none" } },
+    plugins: { enabled: false },
+    agents: { entries: { main: {} } },
+    meta: { migrations: { modelPolicyAllowlist: true } },
+  };
+  fs.writeFileSync(configPath, JSON.stringify(config));
+  // Start from current config and an existing index; the cases below own Doctor execution.
+  await writePersistedInstalledPluginIndexInstallRecords({}, { stateDir, env, config });
   return { root, stateDir, configPath, env, config };
 }
 
@@ -56,7 +58,7 @@ describe("Doctor retired plugin install config", () => {
   it.each(["empty", "populated", "included", "empty-included"] as const)(
     "removes %s legacy records after preserving the canonical install index",
     async (kind) => {
-      const { root, stateDir, configPath, env, config } = createDoctorFixture();
+      const { root, stateDir, configPath, env, config } = await createDoctorFixture();
       const empty = kind === "empty" || kind === "empty-included";
       const included = kind === "included" || kind === "empty-included";
       const durable = { source: "path" as const, installPath: path.join(root, "current-plugin") };
@@ -92,6 +94,8 @@ describe("Doctor retired plugin install config", () => {
             kind === "empty-included" ? {} : { enabled: false },
           );
         }
+        // Child Doctor writes cannot invalidate the parent process cache.
+        clearLoadInstalledPluginIndexInstallRecordsCache();
         expect(await readPersistedInstalledPluginIndexInstallRecords({ stateDir, env })).toEqual(
           empty ? { existing: durable } : { existing: durable, imported: legacy },
         );
@@ -103,15 +107,12 @@ describe("Doctor retired plugin install config", () => {
   );
 
   it("preserves records when plain Doctor gains config-write consent after preflight", async () => {
-    const { root, stateDir, configPath, env, config } = createDoctorFixture();
+    const { root, stateDir, configPath, env, config } = await createDoctorFixture();
     const legacy = { source: "path" as const, installPath: path.join(root, "missing-plugin") };
     const candidate = { ...config, plugins: { ...config.plugins, installs: { imported: legacy } } };
     fs.writeFileSync(configPath, JSON.stringify({ ...candidate, unknownKey: true }));
-    const writerUrl = new URL(
-      "../flows/doctor-health-contribution-runners.config.ts",
-      import.meta.url,
-    );
-    const configFlowUrl = new URL("./doctor-config-flow.ts", import.meta.url).href;
+    const writerUrl = resolveRuntimeWorkerUrl(doctorConfigRuntimeEntrypoints.configHealth);
+    const configFlowUrl = resolveRuntimeWorkerUrl(doctorConfigRuntimeEntrypoints.configFlow).href;
     const result = await runIsolatedModuleScript(
       env,
       `
@@ -140,13 +141,14 @@ describe("Doctor retired plugin install config", () => {
     const repaired = JSON.parse(fs.readFileSync(configPath, "utf8"));
     expect(repaired.plugins, result.stderr).not.toHaveProperty("installs");
     expect(repaired).not.toHaveProperty("unknownKey");
+    clearLoadInstalledPluginIndexInstallRecordsCache();
     expect(await readPersistedInstalledPluginIndexInstallRecords({ stateDir, env })).toEqual({
       imported: legacy,
     });
   }, 90_000);
 
-  it("leaves malformed source records untouched before other config repairs", () => {
-    const { configPath, env, config } = createDoctorFixture();
+  it("leaves malformed source records untouched before other config repairs", async () => {
+    const { configPath, env, config } = await createDoctorFixture();
     const raw = JSON.stringify({
       ...config,
       unknownKey: true,
@@ -161,19 +163,15 @@ describe("Doctor retired plugin install config", () => {
   }, 90_000);
 
   it("does not replay source records after later registry cleanup", async () => {
-    const { root, stateDir, configPath, env, config } = createDoctorFixture();
+    const { root, stateDir, configPath, env, config } = await createDoctorFixture();
     const legacy = { source: "path", installPath: path.join(root, "missing-plugin") };
     fs.writeFileSync(
       configPath,
       JSON.stringify({ ...config, plugins: { ...config.plugins, installs: { retired: legacy } } }),
     );
-    const configFlowUrl = new URL("./doctor-config-flow.ts", import.meta.url).href;
-    const writerUrl = new URL(
-      "../flows/doctor-health-contribution-runners.config.ts",
-      import.meta.url,
-    ).href;
-    const recordsUrl = new URL("../plugins/installed-plugin-index-records.ts", import.meta.url)
-      .href;
+    const configFlowUrl = resolveRuntimeWorkerUrl(doctorConfigRuntimeEntrypoints.configFlow).href;
+    const writerUrl = resolveRuntimeWorkerUrl(doctorConfigRuntimeEntrypoints.configHealth).href;
+    const recordsUrl = resolveRuntimeWorkerUrl(doctorConfigRuntimeEntrypoints.installRecords).href;
     const result = await runIsolatedModuleScript(
       env,
       `
@@ -206,12 +204,13 @@ describe("Doctor retired plugin install config", () => {
       JSON.parse(fs.readFileSync(path.join(root, "first-write.json"), "utf8")).plugins,
       result.stderr,
     ).not.toHaveProperty("installs");
+    clearLoadInstalledPluginIndexInstallRecordsCache();
     expect(await readPersistedInstalledPluginIndexInstallRecords({ stateDir, env })).toEqual({});
     expect(JSON.parse(fs.readFileSync(configPath, "utf8")).plugins).not.toHaveProperty("installs");
   }, 90_000);
 
   it("preserves enabled custom-path plugin settings before stale-config repair", async () => {
-    const { root, stateDir, configPath, env, config } = createDoctorFixture();
+    const { root, stateDir, configPath, env, config } = await createDoctorFixture();
     const pluginDir = path.join(root, "custom-plugin");
     fs.mkdirSync(pluginDir);
     fs.writeFileSync(
@@ -257,6 +256,7 @@ describe("Doctor retired plugin install config", () => {
     const repaired = JSON.parse(fs.readFileSync(configPath, "utf8")) as OpenClawConfig;
     expect(repaired.plugins, output).not.toHaveProperty("installs");
     expect(repaired.plugins?.entries?.["migration-proof-plugin"], output).toEqual(entry);
+    clearLoadInstalledPluginIndexInstallRecordsCache();
     expect(
       (await readPersistedInstalledPluginIndexInstallRecords({ stateDir, env }))?.[
         "migration-proof-plugin"

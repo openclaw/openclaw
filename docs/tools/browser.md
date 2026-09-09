@@ -160,9 +160,19 @@ that card's browser and tab. This does not change `browser.defaultProfile` or
 another session's selection. Without a session browser target, the panel uses
 the configured default routing.
 
-Preview cards are interactive only when OpenClaw can identify the browser's
-route. Sandbox browser results remain available to the agent but do not open a
-host-browser preview.
+The panel streams the active tab live as the page repaints. It falls back to
+screenshots for node-routed browsers, Chrome MCP existing-session profiles,
+missing Playwright, or stream connection failures. Navigation rules apply to
+the stream: navigating to a blocked address stops it and clears the view.
+
+After an established stream disconnects, the panel refreshes its screenshot
+and retries the stream automatically after a short delay. Annotation and
+inspection keep their captured image until you return to interaction mode.
+
+Preview cards appear only for HTTP(S) page URLs when OpenClaw can identify the
+browser's route. Blank or internal pages remain ordinary tool results. Tab
+actions without a page URL still update the Browser panel's selection. Sandbox
+browser results remain available to the agent but do not open a host-browser preview.
 
 If a listed tab cannot be accessed, the panel explains whether navigation rules
 blocked it or its address could not be verified. Select another tab, enter an
@@ -173,6 +183,12 @@ Following a historical tab never starts a stopped managed browser: a fresh
 launch cannot contain that tab. The panel shows **Start browser** instead, and
 preview cards keep their title and URL without a thumbnail when that target
 is unavailable. Click **Start browser** to launch the browser and show its current tabs.
+
+For local `attachOnly` CDP profiles on macOS and Linux, direct preview screenshots
+preserve the active Chrome tab when OpenClaw can verify that the attached browser
+is running with a visible window. Headless browsers and browsers whose mode cannot
+be verified keep the existing activation behavior so screenshots remain reliable.
+Explicit tab-focus actions still activate the requested tab.
 
 ## Configuration
 
@@ -891,7 +907,7 @@ Compared to the managed `openclaw` profile, existing-session drivers are more co
 
 - **Screenshots** - page captures and `--ref` element captures work; CSS `--element` selectors do not. Playwright is not required for page or ref-based element screenshots. (`--full-page` cannot combine with `--ref` or `--element` on any profile, not just existing-session.)
 - **Actions** - `click`, `type`, `hover`, `scrollIntoView`, `drag`, and `select` require snapshot refs (no CSS selectors). `click-coords` clicks visible viewport coordinates and does not require a snapshot ref. `click` is left-button only (no button overrides or modifiers). `type` does not support `slowly=true`; use `fill` or `press`. `press` does not support `delayMs`. `type`, `hover`, `scrollIntoView`, `drag`, `select`, and `fill` do not support per-call `timeoutMs` overrides; `evaluate` does. `select` accepts a single value. `batch` is not supported; send actions individually.
-- **Wait / upload / dialog** - `wait --url` supports exact, substring, and glob patterns (same as managed); `wait --load networkidle` is not supported on existing-session profiles (it works on managed and raw/remote CDP profiles). Upload hooks require `ref` or `inputRef`, one file at a time, no CSS `element`. Dialog hooks do not support timeout overrides or `dialogId`.
+- **Wait / upload / dialog** - `wait --url` supports exact, substring, and glob patterns (same as managed); `wait --load networkidle` is not supported on existing-session profiles (it works on managed and raw/remote CDP profiles). Upload hooks require `ref` or `inputRef` and do not support CSS `element`; pass multiple paths when the page's file input accepts multiple files. Dialog hooks do not support timeout overrides or `dialogId`.
 - **Dialog visibility** - Managed browser action responses include `blockedByDialog` and `browserState.dialogs.pending` when an action opens a modal dialog; snapshots also include pending dialog state. Respond with `browser dialog --accept/--dismiss --dialog-id <id>` while a dialog is pending. Dialogs handled outside OpenClaw appear under `browserState.dialogs.recent`.
 - **Playwright-only features** - PDF export, download interception, `responsebody`, and the agent actions `requests`, `errors`, `text`, and `emulate` require a Playwright-backed profile, such as the managed `openclaw` profile. Use `snapshot` to inspect an existing-session page.
 

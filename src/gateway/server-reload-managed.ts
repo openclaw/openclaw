@@ -136,6 +136,7 @@ export function startManagedGatewayConfigReloader(
   };
   const {
     applyHotReload,
+    getDeferredChannelReloads,
     acceptRestartConfig,
     beginGatewayRestartLifecycle,
     hasOutstandingGatewayRestart,
@@ -374,7 +375,11 @@ export function startManagedGatewayConfigReloader(
     readSnapshot: params.readSnapshot,
     promoteSnapshot: async (snapshot, _reason) => await params.promoteSnapshot(snapshot),
     subscribeToWrites: params.subscribeToWrites,
-    onConfigCandidateObserved: pauseGatewayRestartForConfigCandidate,
+    onConfigCandidateObserved: () => {
+      // Every writer must expose persisted revisions before runtime acceptance.
+      invalidateConfigGetResponseCache();
+      pauseGatewayRestartForConfigCandidate();
+    },
     onConfigChange: (plan, nextConfig) => {
       assertIrreversibleReloadPlanHasRecoveryOwner(plan, restartRecoveryAvailable);
       params.prepareTerminalConfig(plan, applyRuntimeConfigOverrides(nextConfig));
@@ -526,6 +531,7 @@ export function startManagedGatewayConfigReloader(
       await configReloader.stop();
     },
     hotReloadStatus: configReloader.hotReloadStatus,
+    getDeferredChannelReloads,
     notifyPluginMetadataChanged: configReloader.notifyPluginMetadataChanged,
     // Equal config revisions can still owe a plugin/runtime restart.
     isConfigReloadSettled: () =>

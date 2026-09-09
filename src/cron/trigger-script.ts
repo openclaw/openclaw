@@ -1,9 +1,9 @@
 import crypto from "node:crypto";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   createOperationalRunInstanceRef,
   prepareAgentRunAdmission,
   resolveAdmittedRunActiveAssertion,
+  type AdmittedRunContext,
   type PreparedAgentRunAdmission,
 } from "../agents/admitted-run-context.js";
 import {
@@ -57,7 +57,6 @@ import {
   withGatewayToolCallerIdentity,
 } from "../agents/tools/gateway-caller-context.js";
 import { ensureAgentWorkspace } from "../agents/workspace.js";
-import { parseDurationMs } from "../cli/parse-duration.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayContextResolver } from "../gateway/server-methods/types.js";
 import { formatErrorMessageWithCode } from "../infra/errors.js";
@@ -82,6 +81,12 @@ import {
   MAX_CRON_SCRIPT_TOOL_BUDGET,
 } from "./script-payload.js";
 import type { CronServiceDeps } from "./service/state.js";
+import {
+  parseScriptPayloadResult,
+  parseTriggerResult,
+  scriptFailure,
+  type CronScriptPayloadExecutionResult,
+} from "./trigger-script-result.js";
 import type {
   CronToolsAllowExecTarget,
   CronTriggerEvaluationResult,
@@ -89,7 +94,6 @@ import type {
 } from "./types.js";
 
 const MAX_CONCURRENT_TRIGGER_EVALS = 3;
-const MAX_TRIGGER_STATE_BYTES = 16 * 1024;
 const MAX_CACHED_TRIGGER_RUNTIMES = 128;
 const HEADLESS_TRIGGER_WALL_CLOCK_MS = 30_000;
 const HEADLESS_TRIGGER_TOOL_BUDGET = 5;
@@ -107,7 +111,7 @@ const assertTriggerCodesCoverHeadless: AssertTriggerCodesCoverHeadless = true;
 void assertTriggerCodesCoverHeadless;
 
 type PreparedTriggerRuntime = {
-  tools: AnyAgentTool[];
+  createTools: (admitted: AdmittedRunContext, signal: AbortSignal) => AnyAgentTool[];
   context: HookContext & { config: OpenClawConfig; agentId: string; sessionKey: string };
   pluginRegistry?: PluginRegistry;
 };
@@ -200,34 +204,39 @@ async function prepareTriggerRuntime(
     });
     // Bundle MCP tools are source:"mcp", which the headless bridge excludes.
     // LSP runtimes are session-scoped and intentionally outside trigger v1.
-    const allTools = toolPlan.constructTools
-      ? createOpenClawCodingTools({
-          agentId,
-          exec: { config },
-          sandbox,
-          sessionKey,
-          trigger: "cron",
-          jobId: params.jobId,
-          agentDir,
-          cwd: effectiveWorkspace,
-          workspaceDir: effectiveWorkspace,
-          spawnWorkspaceDir: workspaceDir,
-          config,
-          allowGatewaySubagentBinding: true,
-          includeCoreTools: toolPlan.includeCoreTools,
-          runtimeToolAllowlist: toolPlan.runtimeToolAllowlist,
-          inheritRuntimeToolAllowlist: Boolean(toolPlan.runtimeToolAllowlist),
-          scheduledToolPolicy: resolveScheduledToolPolicyContext({
-            toolsAllow: params.toolsAllow,
-            scheduledToolPolicy: params.scheduledToolPolicy,
-            execTarget: params.execTarget,
-          }),
-          toolConstructionPlan: toolPlan.codingToolConstructionPlan,
-        })
-      : [];
-    const tools = applyEmbeddedAttemptToolsAllow(allTools, params.toolsAllow, {
-      toolMeta: (tool) => getPluginToolMeta(tool),
-    });
+    const createTools: PreparedTriggerRuntime["createTools"] = (admitted, signal) => {
+      const allTools = toolPlan.constructTools
+        ? createOpenClawCodingTools({
+            agentId,
+            runId: admitted.operationalRunInstance.runId,
+            operationalRunInstance: admitted.operationalRunInstance,
+            abortSignal: signal,
+            exec: { config },
+            sandbox,
+            sessionKey,
+            trigger: "cron",
+            jobId: params.jobId,
+            agentDir,
+            cwd: effectiveWorkspace,
+            workspaceDir: effectiveWorkspace,
+            spawnWorkspaceDir: workspaceDir,
+            config,
+            allowGatewaySubagentBinding: true,
+            includeCoreTools: toolPlan.includeCoreTools,
+            runtimeToolAllowlist: toolPlan.runtimeToolAllowlist,
+            inheritRuntimeToolAllowlist: Boolean(toolPlan.runtimeToolAllowlist),
+            scheduledToolPolicy: resolveScheduledToolPolicyContext({
+              toolsAllow: params.toolsAllow,
+              scheduledToolPolicy: params.scheduledToolPolicy,
+              execTarget: params.execTarget,
+            }),
+            toolConstructionPlan: toolPlan.codingToolConstructionPlan,
+          })
+        : [];
+      return applyEmbeddedAttemptToolsAllow(allTools, params.toolsAllow, {
+        toolMeta: (tool) => getPluginToolMeta(tool),
+      });
+    };
     const context = {
       agentId,
       config,
@@ -237,7 +246,7 @@ async function prepareTriggerRuntime(
       loopDetection: resolveToolLoopDetectionConfig({ cfg: config, agentId }),
     };
     return {
-      tools,
+      createTools,
       context,
       ...(pluginRegistry ? { pluginRegistry } : {}),
     };
@@ -262,57 +271,13 @@ function triggerStateNamespace(state: unknown, streamBatch?: string): CodeModeNa
   };
 }
 
-function scriptResultCandidate(
-  result: Extract<CodeModeHeadlessResult, { status: "completed" }>,
-  condition = false,
-) {
-  if (isRecord(result.value) && (!condition || typeof result.value.fire === "boolean")) {
-    return result.value;
-  }
-  for (let index = result.output.length - 1; index >= 0; index -= 1) {
-    const entry = result.output[index];
-    if (isRecord(entry) && entry.type === "json") {
-      return entry.value;
-    }
-  }
-  return undefined;
-}
-
-function scriptFailure(
-  error: string,
-  code: CronTriggerFailureCode = "internal_error",
-): Extract<CronTriggerEvaluationResult, { kind: "error" }> {
-  return { kind: "error", code, error };
-}
-
-function parseTriggerResult(
-  result: Extract<CodeModeHeadlessResult, { status: "completed" }>,
-): CronTriggerEvaluationResult {
-  const candidate = scriptResultCandidate(result, true);
-  if (!isRecord(candidate) || typeof candidate.fire !== "boolean") {
-    return scriptFailure("cron trigger script must return an object with boolean fire");
-  }
-  if (candidate.message !== undefined && typeof candidate.message !== "string") {
-    return scriptFailure("cron trigger script message must be a string");
-  }
-  const state = validateCronState(candidate, "cron trigger");
-  if (!state.ok) {
-    return scriptFailure(state.error, state.code);
-  }
-  return {
-    kind: "evaluated",
-    fire: candidate.fire,
-    ...(typeof candidate.message === "string" ? { message: candidate.message } : {}),
-    ...(state.stateChanged ? { state: state.state } : {}),
-  };
-}
-
 function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
   const runHeadless = deps.runHeadless ?? runCodeModeScriptHeadless;
   const prepareRuntime =
     deps.prepareRuntime ?? ((params) => prepareTriggerRuntime(params, deps.loadPluginRegistry));
   // Config identity is the reload epoch; caching the preparation promise makes
-  // concurrent cold evaluations for one job single-flight.
+  // concurrent cold evaluations for one job single-flight. Cache only preparation:
+  // tool instances capture run authority, abort signals, and secret egress state.
   const runtimeCache = new Map<string, TriggerRuntimeCacheEntry>();
 
   const resolveCachedRuntime = async (
@@ -475,7 +440,7 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
         assertActive();
         registerHeadlessToolSearchCatalog({
           catalogRef,
-          tools: runtime.tools,
+          tools: runtime.createTools(admitted, evaluationScope.signal),
           hookContext: { ...runtime.context, runId },
         });
         const remainingWallClockMs = Math.ceil(evaluationScope.deadline - performance.now());
@@ -512,98 +477,6 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
       clearToolSearchCatalog({ catalogRef });
       evaluationScope.cleanup();
     }
-  };
-}
-
-type CronScriptPayloadExecutionResult =
-  | {
-      kind: "completed";
-      notify?: string;
-      wake?: "now" | "next-heartbeat";
-      stateChanged: boolean;
-      state?: unknown;
-      nextCheck?: { delayMs: number };
-    }
-  | { kind: "error"; code: CronTriggerFailureCode; error: string };
-
-function validateCronState(candidate: Record<string, unknown>, label: string) {
-  if (!Object.hasOwn(candidate, "state")) {
-    return { ok: true as const, stateChanged: false as const };
-  }
-  let serialized: string | undefined;
-  try {
-    serialized = JSON.stringify(candidate.state);
-  } catch (error) {
-    return {
-      ok: false as const,
-      code: "internal_error" as const,
-      error: `${label} state is not JSON-serializable: ${formatErrorMessageWithCode(error)}`,
-    };
-  }
-  if (serialized === undefined) {
-    return {
-      ok: false as const,
-      code: "internal_error" as const,
-      error: `${label} state is not JSON-serializable`,
-    };
-  }
-  if (Buffer.byteLength(serialized, "utf8") > MAX_TRIGGER_STATE_BYTES) {
-    return {
-      ok: false as const,
-      code: "output_limit_exceeded" as const,
-      error: `${label} state exceeds the 16KB limit`,
-    };
-  }
-  return {
-    ok: true as const,
-    stateChanged: true as const,
-    state: JSON.parse(serialized) as unknown,
-  };
-}
-
-function parseScriptPayloadResult(
-  result: Extract<CodeModeHeadlessResult, { status: "completed" }>,
-): CronScriptPayloadExecutionResult {
-  const candidate = scriptResultCandidate(result);
-  if (!isRecord(candidate)) {
-    return scriptFailure("cron script payload must return an object");
-  }
-  if (candidate.notify !== undefined && typeof candidate.notify !== "string") {
-    return scriptFailure("cron script payload notify must be a string");
-  }
-  if (
-    candidate.wake !== undefined &&
-    candidate.wake !== "now" &&
-    candidate.wake !== "next-heartbeat"
-  ) {
-    return scriptFailure('cron script payload wake must be "now" or "next-heartbeat"');
-  }
-  let nextCheck: { delayMs: number } | undefined;
-  if (candidate.nextCheck !== undefined) {
-    if (typeof candidate.nextCheck !== "string") {
-      return scriptFailure("cron script payload nextCheck must be a duration string");
-    }
-    try {
-      const delayMs = parseDurationMs(candidate.nextCheck);
-      if (delayMs <= 0) {
-        throw new Error("duration must be positive");
-      }
-      nextCheck = { delayMs };
-    } catch {
-      return scriptFailure("cron script payload nextCheck must be a positive duration");
-    }
-  }
-  const state = validateCronState(candidate, "cron script payload");
-  if (!state.ok) {
-    return scriptFailure(state.error, state.code);
-  }
-  return {
-    kind: "completed",
-    ...(candidate.notify !== undefined ? { notify: candidate.notify } : {}),
-    ...(candidate.wake !== undefined ? { wake: candidate.wake } : {}),
-    stateChanged: state.stateChanged,
-    ...(state.stateChanged ? { state: state.state } : {}),
-    ...(nextCheck ? { nextCheck } : {}),
   };
 }
 

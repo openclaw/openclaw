@@ -8,6 +8,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { resolveSessionStorePathCore, type SessionEntry } from "../config/sessions.js";
 import { resolveInternalSessionEffectsIdentity } from "../config/sessions/internal-session-key.js";
 import {
+  deleteSessionEntryLifecycle,
   loadExactSessionEntryReadOnly,
   replaceSessionEntry,
   updateSessionEntry,
@@ -348,12 +349,19 @@ describe("single gateway session row child projections", () => {
     await withSingleRowCacheStore(
       "openclaw-single-row-missing-store-",
       "/tmp/openclaw-single-row-missing-store",
-      async () => {
+      async ({ now }) => {
         const databasePath = resolveOpenClawAgentSqlitePath({ agentId: MAIN_AGENT_ID });
-        expect(loadSessionEntry("main", { clone: false }).entry).toBeUndefined();
+        const missing = loadSessionEntry("main", { clone: false });
+        expect(missing.entry).toBeUndefined();
         expect(existsSync(databasePath)).toBe(false);
         expect(loadSessionEntry("main").entry).toBeUndefined();
         expect(existsSync(databasePath)).toBe(true);
+        expect(
+          buildGatewaySessionInfo({ ...missing, key: missing.canonicalKey, now }),
+        ).toMatchObject({
+          pinned: false,
+          pinnedAt: undefined,
+        });
       },
     );
   });
@@ -465,6 +473,39 @@ describe("single gateway session row child projections", () => {
       },
     );
   });
+
+  test.each(["main", "worker"])(
+    "removes deleted runtime-only children from exact rows (%s)",
+    async (agentId) => {
+      await withSingleRowCacheStore(
+        "openclaw-canonical-child-",
+        "/tmp/openclaw-canonical-child",
+        async ({ now, storePath }) => {
+          const parentKey = "agent:main:parent";
+          const childKey = `agent:${agentId}:subagent:child`;
+          const childStorePath = resolveSessionStorePathCore(undefined, { agentId });
+          await seedSessionEntries(storePath, { [parentKey]: parentSession("parent", now) });
+          await replaceSessionEntry(
+            { agentId, storePath: childStorePath, sessionKey: childKey },
+            {
+              sessionId: "child",
+              updatedAt: now,
+            },
+          );
+          setSubagentControllerRun(childKey, parentKey, now);
+          expect(loadGatewaySessionRow(parentKey, { now })?.childSessions).toEqual([childKey]);
+
+          await deleteSessionEntryLifecycle({
+            agentId,
+            storePath: childStorePath,
+            archiveTranscript: false,
+            target: { canonicalKey: childKey, storeKeys: [childKey] },
+          });
+          expect(loadGatewaySessionRow(parentKey, { now })?.childSessions).toBeUndefined();
+        },
+      );
+    },
+  );
 
   test("builds shared subagent metadata context for single-row session lists", async () => {
     await withSingleRowCacheStore(

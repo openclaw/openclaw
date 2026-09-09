@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
+import { verifyAndroidReleaseSource } from "../../apps/android/scripts/build-release-artifacts.ts";
 import {
   mobileReleasePlanDigest,
   writeMobileReleaseIntent,
@@ -200,6 +201,26 @@ if (gitArgs[0] === "remote" && gitArgs[1] === "get-url") {
 if (gitArgs[0] === "fetch" && !${JSON.stringify(realFetch)}) {
   process.exit(0);
 }
+if (gitArgs[0] === "archive" && process.env.GIT_ARCHIVE_MODE) {
+  const outputArgument = gitArgs.find((value) => value.startsWith("--output="));
+  if (!outputArgument) {
+    console.error("archive test mode requires disk-backed output");
+    process.exit(74);
+  }
+  const outputPath = outputArgument.slice("--output=".length);
+  if (process.env.GIT_ARCHIVE_MODE === "partial-failure") {
+    fs.writeFileSync(outputPath, "partial archive");
+    process.exit(75);
+  }
+  if (process.env.GIT_ARCHIVE_MODE === "corrupt-success") {
+    const result = spawnSync("/usr/bin/git", args, { stdio: "inherit" });
+    if (result.status !== 0) process.exit(result.status ?? 1);
+    fs.writeFileSync(outputPath, "not a tar archive");
+    process.exit(0);
+  }
+  console.error("unknown archive test mode");
+  process.exit(76);
+}
 const result = spawnSync("/usr/bin/git", args, { stdio: "inherit" });
 process.exit(result.status ?? 1);
 `,
@@ -212,6 +233,7 @@ function writeGhShim(binDir: string): void {
   fs.writeFileSync(
     shim,
     `#!/usr/bin/env node
+const { spawnSync } = require("node:child_process");
 const fs = require("node:fs");
 const path = require("node:path");
 const args = process.argv.slice(2);
@@ -322,6 +344,73 @@ if (endpoint.includes("/collaborators/")) {
       ? process.env.MOBILE_RECEIPT_ARTIFACT_NAME
       : process.env.MOBILE_INTENT_ARTIFACT_NAME,
     workflow_run: { id: Number(runId) }
+  }) + "\\n");
+} else if (endpoint.includes("/compare/")) {
+  const match = endpoint.match(/\\/compare\\/([0-9a-f]{40})\\.\\.\\.([0-9a-f]{40})$/);
+  const jq = args[args.indexOf("--jq") + 1];
+  const expectedJq =
+    "{status, ahead_by, behind_by, base_commit: {sha: .base_commit.sha}, merge_base_commit: {sha: .merge_base_commit.sha}}";
+  if (!match) {
+    console.error("malformed compare endpoint", endpoint);
+    process.exit(72);
+  }
+  if (jq !== expectedJq) {
+    console.error("unexpected compare projection");
+    process.exit(72);
+  }
+  const mode = next("GH_COMPARE_MODES", "auto");
+  if (mode === "failure") process.exit(73);
+  if (mode === "malformed") {
+    process.stdout.write(JSON.stringify({ status: "ahead" }) + "\\n");
+    process.exit(0);
+  }
+  const base = match[1];
+  const head = match[2];
+  const repository = path.resolve(process.env.MOBILE_ACTION_PATH, "../../..");
+  const isAncestor = (from, to) =>
+    spawnSync("/usr/bin/git", ["-C", repository, "merge-base", "--is-ancestor", from, to]).status === 0;
+  const count = (range) => {
+    const result = spawnSync("/usr/bin/git", ["-C", repository, "rev-list", "--count", range], {
+      encoding: "utf8"
+    });
+    if (result.status !== 0) process.exit(result.status || 74);
+    return Number(result.stdout.trim());
+  };
+  let status;
+  let aheadBy;
+  let behindBy;
+  let mergeBase;
+  if (base === head) {
+    status = "identical";
+    aheadBy = 0;
+    behindBy = 0;
+    mergeBase = base;
+  } else if (isAncestor(base, head)) {
+    status = "ahead";
+    aheadBy = count(base + ".." + head);
+    behindBy = 0;
+    mergeBase = base;
+  } else if (isAncestor(head, base)) {
+    status = "behind";
+    aheadBy = 0;
+    behindBy = count(head + ".." + base);
+    mergeBase = head;
+  } else {
+    status = "diverged";
+    aheadBy = count(base + ".." + head);
+    behindBy = count(head + ".." + base);
+    const result = spawnSync("/usr/bin/git", ["-C", repository, "merge-base", base, head], {
+      encoding: "utf8"
+    });
+    if (result.status !== 0) process.exit(result.status || 75);
+    mergeBase = result.stdout.trim();
+  }
+  process.stdout.write(JSON.stringify({
+    ahead_by: aheadBy,
+    base_commit: { sha: base },
+    behind_by: behindBy,
+    merge_base_commit: { sha: mergeBase },
+    status
   }) + "\\n");
 } else if (endpoint.includes("/git/ref/heads/main")) {
   process.stdout.write(next("GH_MAIN_REFS", process.env.MOBILE_WORKFLOW_SHA) + "\\n");
@@ -533,6 +622,13 @@ function advanceTrustedTooling(
   return workflowSha;
 }
 
+function advanceObservedMain(fixture: Fixture, fromSha: string, branch: string): string {
+  git(fixture.source, "checkout", "-b", branch, fromSha);
+  const mainSha = emptyCommit(fixture.source, `advance ${branch}`);
+  git(fixture.trusted, "fetch", "origin", mainSha);
+  return mainSha;
+}
+
 function runAuthority(fixture: Fixture, phase: string, overrides: NodeJS.ProcessEnv = {}) {
   fs.writeFileSync(fixture.outputPath, "");
   return spawnSync(process.execPath, ["--experimental-strip-types", fixture.scriptPath, phase], {
@@ -562,6 +658,24 @@ function readGhTrace(file: string): Array<{ args: string[]; token: string }> {
     .split("\n")
     .filter(Boolean)
     .map((line) => JSON.parse(line) as { args: string[]; token: string });
+}
+
+function readGitTrace(file: string): string[][] {
+  return fs
+    .readFileSync(file, "utf8")
+    .trim()
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => JSON.parse(line) as string[]);
+}
+
+function archiveSpoolPath(fixture: Fixture): string {
+  const archive = readGitTrace(fixture.gitLog).find((args) => args.includes("archive"));
+  const output = archive?.find((value) => value.startsWith("--output="));
+  if (!output) {
+    throw new Error("git archive did not use disk-backed output");
+  }
+  return output.slice("--output=".length);
 }
 
 function resetState(fixture: Fixture): void {
@@ -742,6 +856,112 @@ describe("mobile release authority", () => {
     expect(receipt.workflowSha).toBe(workflowSha);
   });
 
+  it("authorizes while main advances forward before and during candidate validation", () => {
+    const fixture = createFixture();
+    const mainBefore = advanceObservedMain(fixture, fixture.baseSha, "main-before-validation");
+    const mainAfter = advanceObservedMain(fixture, mainBefore, "main-during-validation");
+
+    const result = runAuthority(fixture, "authorize", {
+      GH_MAIN_REFS: `${mainBefore},${mainBefore},${mainAfter},${mainAfter}`,
+    });
+    const comparisons = readGhTrace(fixture.ghLog)
+      .map(({ args }) => args[1] ?? "")
+      .filter((endpoint) => endpoint.includes("/compare/"));
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(comparisons).toEqual([
+      `repos/${REPOSITORY}/compare/${fixture.baseSha}...${mainBefore}`,
+      `repos/${REPOSITORY}/compare/${mainBefore}...${mainAfter}`,
+    ]);
+  });
+
+  it("admits recovery from current tooling while retaining original receipt tooling", () => {
+    const fixture = createFixture();
+    const outputs = authorize(fixture);
+    signIntentFile(fixture, outputs);
+    const recovery = prepareRecoveryOverrides(fixture, outputs);
+    const recoveryWorkflowSha = recovery.MOBILE_WORKFLOW_SHA as string;
+    const mainBefore = advanceObservedMain(
+      fixture,
+      recoveryWorkflowSha,
+      "recovery-main-before-validation",
+    );
+    const mainAfter = advanceObservedMain(fixture, mainBefore, "recovery-main-during-validation");
+    resetState(fixture);
+
+    const result = runAuthority(fixture, "validate-record", {
+      ...recovery,
+      GH_MAIN_REFS: `${mainBefore},${mainBefore},${mainAfter},${mainAfter}`,
+    });
+    const trace = readGhTrace(fixture.ghLog);
+    const comparisons = trace
+      .map(({ args }) => args[1] ?? "")
+      .filter((endpoint) => endpoint.includes("/compare/"));
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(comparisons).toEqual([
+      `repos/${REPOSITORY}/compare/${recoveryWorkflowSha}...${mainBefore}`,
+      `repos/${REPOSITORY}/compare/${mainBefore}...${mainAfter}`,
+    ]);
+    expect(fs.readFileSync(fixture.ghLog, "utf8")).toContain(
+      `"--source-digest","${fixture.baseSha}"`,
+    );
+  });
+
+  it("rejects divergent and rewound main transitions", () => {
+    const divergent = createFixture();
+    const left = advanceObservedMain(divergent, divergent.baseSha, "main-left");
+    const right = advanceObservedMain(divergent, divergent.baseSha, "main-right");
+    const divergence = runAuthority(divergent, "authorize", {
+      GH_MAIN_REFS: `${left},${left},${right},${right}`,
+    });
+    expect(divergence.status).toBe(1);
+    expect(divergence.stderr).toContain("did not advance monotonically");
+
+    const rewound = createFixture();
+    const workflowSha = advanceTrustedTooling(rewound);
+    const rewind = runAuthority(rewound, "authorize", {
+      GH_MAIN_REFS: `${rewound.baseSha},${rewound.baseSha}`,
+    });
+    expect(rewind.status).toBe(1);
+    expect(rewind.stderr).toContain("not an ancestor of the observed main");
+    expect(workflowSha).not.toBe(rewound.baseSha);
+  });
+
+  it.each(["failure", "malformed"])(
+    "rejects a %s exact-pair ancestry lookup before candidate output",
+    (mode) => {
+      const fixture = createFixture();
+      const result = runAuthority(fixture, "authorize", {
+        GH_COMPARE_MODES: mode,
+      });
+
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("Trusted main ancestry lookup failed");
+      expect(fs.readFileSync(fixture.outputPath, "utf8")).toBe("");
+    },
+  );
+
+  it("rejects main movement inside either ancestry lookup window", () => {
+    const before = createFixture();
+    const beforeMain = advanceObservedMain(before, before.baseSha, "lookup-before");
+    const beforeMoved = advanceObservedMain(before, beforeMain, "lookup-before-moved");
+    const unstableBefore = runAuthority(before, "authorize", {
+      GH_MAIN_REFS: `${beforeMain},${beforeMoved}`,
+    });
+    expect(unstableBefore.status).toBe(1);
+    expect(unstableBefore.stderr).toContain("changed during trusted ancestry lookup");
+
+    const after = createFixture();
+    const afterMain = advanceObservedMain(after, after.baseSha, "lookup-after");
+    const afterMoved = advanceObservedMain(after, afterMain, "lookup-after-moved");
+    const unstableAfter = runAuthority(after, "authorize", {
+      GH_MAIN_REFS: `${after.baseSha},${after.baseSha},${afterMain},${afterMoved}`,
+    });
+    expect(unstableAfter.status).toBe(1);
+    expect(unstableAfter.stderr).toContain("changed during trusted ancestry lookup");
+  });
+
   it("regenerates from Code SHA metadata with the newer Tooling SHA", () => {
     const fixture = createFixture();
     advanceTrustedTooling(fixture, {
@@ -772,6 +992,48 @@ describe("mobile release authority", () => {
     });
 
     expect(authorize(fixture).target_sha).toBe(fixture.targetSha);
+  });
+
+  it("authorizes when the trusted scripts archive exceeds the subprocess output buffer", () => {
+    const fixture = createFixture({
+      mutateBase(repository) {
+        writeFile(
+          repository,
+          "scripts/fixtures/unused-large-resource.txt",
+          "x".repeat(8 * 1024 * 1024 + 64 * 1024),
+        );
+      },
+    });
+
+    const result = runAuthority(fixture, "authorize");
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(readOutputs(fixture.outputPath)).toMatchObject({
+      approved: "true",
+      gateway_version: "2026.9.2",
+      target_ref: TARGET_REF,
+      target_sha: fixture.targetSha,
+    });
+    const spool = archiveSpoolPath(fixture);
+    expect(path.dirname(spool).startsWith(fixture.runnerTemp)).toBe(true);
+    expect(fs.existsSync(path.dirname(spool))).toBe(true);
+    expect(fs.existsSync(spool)).toBe(false);
+  });
+
+  it.each([
+    ["partial Git archive", "partial-failure"],
+    ["archive extraction", "corrupt-success"],
+  ] as const)("removes the disk-backed scripts archive after %s failure", (_label, mode) => {
+    const fixture = createFixture();
+
+    const result = runAuthority(fixture, "authorize", { GIT_ARCHIVE_MODE: mode });
+
+    expect(result.status).toBe(1);
+    expect(fs.readFileSync(fixture.outputPath, "utf8")).toBe("");
+    const spool = archiveSpoolPath(fixture);
+    expect(path.dirname(spool).startsWith(fixture.runnerTemp)).toBe(true);
+    expect(fs.existsSync(path.dirname(spool))).toBe(true);
+    expect(fs.existsSync(spool)).toBe(false);
   });
 
   it("rejects a forbidden code commit hidden by a later revert", () => {
@@ -1427,7 +1689,7 @@ describe("mobile release authority", () => {
       GH_MAIN_REFS: `${recoveryWorkflowSha},${OTHER_SHA}`,
     });
     expect(staleMain.status).toBe(1);
-    expect(staleMain.stderr).toContain("Main changed during initial mobile release authorization");
+    expect(staleMain.stderr).toContain("Main changed during trusted ancestry lookup");
 
     resetState(fixture);
     const successful = runAuthority(fixture, "validate-record", {
@@ -1487,13 +1749,283 @@ describe("mobile release authority", () => {
     expect(source).not.toContain("extraheader");
   });
 
+  it("keeps the Android emulator diagnostic manual, exact-SHA-bound, and secretless", () => {
+    const file = ".github/workflows/android-emulator-diagnostic.yml";
+    const source = fs.readFileSync(file, "utf8");
+    const workflow = parse(source) as {
+      jobs: {
+        "validate-target": {
+          permissions: Record<string, string>;
+          "runs-on": string;
+          steps: Array<{
+            env?: Record<string, string>;
+            name: string;
+            run?: string;
+            uses?: string;
+            with?: Record<string, unknown>;
+          }>;
+          "timeout-minutes": number;
+        };
+        diagnose: {
+          env: Record<string, string>;
+          needs: string;
+          permissions: Record<string, string>;
+          "runs-on": string;
+          steps: Array<{
+            env?: Record<string, string>;
+            if?: string;
+            name: string;
+            run?: string;
+            uses?: string;
+            with?: Record<string, unknown>;
+          }>;
+          "timeout-minutes": number;
+        };
+      };
+      name: string;
+      on: {
+        workflow_dispatch: {
+          inputs: {
+            target_sha: {
+              default?: unknown;
+              description: string;
+              required: boolean;
+              type: string;
+            };
+          };
+        };
+      };
+      permissions: Record<string, string>;
+    };
+    const validationJob = workflow.jobs["validate-target"];
+    const validationSteps = validationJob.steps;
+    const job = workflow.jobs.diagnose;
+    const steps = job.steps;
+    const validateIndex = validationSteps.findIndex((step) => step.name === "Validate target SHA");
+    const validationTrustedCheckoutIndex = validationSteps.findIndex(
+      (step) => step.name === "Checkout trusted Android tooling",
+    );
+    const checkoutIndex = validationSteps.findIndex(
+      (step) => step.name === "Checkout exact target",
+    );
+    const headIndex = validationSteps.findIndex(
+      (step) => step.name === "Verify exact target checkout",
+    );
+    const parityIndex = validationSteps.findIndex(
+      (step) => step.name === "Verify Android toolchain action parity",
+    );
+    const initializeIndex = steps.findIndex(
+      (step) => step.name === "Initialize Android emulator diagnostic",
+    );
+    const trustedCheckoutIndex = steps.findIndex(
+      (step) => step.name === "Checkout trusted Android tooling",
+    );
+    const setupIndex = steps.findIndex((step) => step.name === "Setup Android toolchain");
+    const diagnosticIndex = steps.findIndex(
+      (step) => step.name === "Run phone emulator diagnostic",
+    );
+    const artifactIndex = steps.findIndex(
+      (step) => step.name === "Upload Android emulator diagnostic",
+    );
+
+    expect(workflow.name).toBe("Android Emulator Diagnostic");
+    expect(Object.keys(workflow.on)).toEqual(["workflow_dispatch"]);
+    expect(workflow.on.workflow_dispatch.inputs.target_sha).toEqual({
+      description: "Exact lowercase 40-character commit SHA to diagnose",
+      required: true,
+      type: "string",
+    });
+    expect(workflow.permissions).toEqual({ contents: "read" });
+    expect(Object.keys(workflow.jobs)).toEqual(["validate-target", "diagnose"]);
+    expect(validationJob.permissions).toEqual({ contents: "read" });
+    expect(validationJob["runs-on"]).toBe("ubuntu-24.04");
+    expect(validationJob["timeout-minutes"]).toBe(5);
+    expect(job.permissions).toEqual({ contents: "read" });
+    expect(job.needs).toBe("validate-target");
+    expect(job["runs-on"]).toBe("macos-26-intel");
+    expect(job["timeout-minutes"]).toBe(25);
+    expect(job.env).toEqual({
+      ANDROID_SCREENSHOT_EMULATOR_TIMEOUT_SECONDS: "180",
+      AVD_NAME: "OpenClaw_Screenshots_API36",
+      DEVICE_PROFILE: "pixel_2",
+      SYSTEM_IMAGE: "system-images;android-36;google_apis;x86_64",
+    });
+
+    expect(validateIndex).toBe(0);
+    expect(validationTrustedCheckoutIndex).toBe(validateIndex + 1);
+    expect(checkoutIndex).toBe(validationTrustedCheckoutIndex + 1);
+    expect(headIndex).toBe(checkoutIndex + 1);
+    expect(parityIndex).toBe(headIndex + 1);
+    expect(initializeIndex).toBe(0);
+    expect(trustedCheckoutIndex).toBe(initializeIndex + 1);
+    expect(setupIndex).toBe(trustedCheckoutIndex + 1);
+    expect(diagnosticIndex).toBe(setupIndex + 1);
+    expect(artifactIndex).toBe(diagnosticIndex + 1);
+    expect(validationSteps[validateIndex]?.env).toEqual({
+      TARGET_SHA: "${{ inputs.target_sha }}",
+    });
+    expect(validationSteps[validateIndex]?.run).toContain(
+      '[[ ! "$TARGET_SHA" =~ ^[0-9a-f]{40}$ ]]',
+    );
+    expect(steps[initializeIndex]?.env).toEqual({
+      TARGET_SHA: "${{ inputs.target_sha }}",
+    });
+    expect(steps[initializeIndex]?.run).toContain(
+      'DIAGNOSTIC_DIR="$RUNNER_TEMP/android-emulator-diagnostic"',
+    );
+    expect(steps[initializeIndex]?.run).toContain(
+      'echo "DIAGNOSTIC_DIR=$DIAGNOSTIC_DIR" >>"$GITHUB_ENV"',
+    );
+    expect(validationSteps[validationTrustedCheckoutIndex]).toMatchObject({
+      uses: "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+      with: {
+        ref: "${{ github.workflow_sha }}",
+        "fetch-depth": 1,
+        "persist-credentials": false,
+        "sparse-checkout": ".github/actions/setup-android-toolchain",
+        path: ".mobile-release-tooling",
+      },
+    });
+    expect(validationSteps[checkoutIndex]).toMatchObject({
+      uses: "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+      with: {
+        ref: "${{ inputs.target_sha }}",
+        "fetch-depth": 1,
+        "persist-credentials": false,
+        path: "candidate",
+      },
+    });
+    expect(validationSteps[headIndex]?.env).toEqual({
+      TARGET_SHA: "${{ inputs.target_sha }}",
+    });
+    expect(validationSteps[headIndex]?.run).toContain(
+      'test "$(git -C candidate rev-parse HEAD)" = "$TARGET_SHA"',
+    );
+    expect(steps[trustedCheckoutIndex]).toMatchObject({
+      uses: "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+      with: {
+        ref: "${{ github.workflow_sha }}",
+        "fetch-depth": 1,
+        "persist-credentials": false,
+        "sparse-checkout": ".github/actions/setup-android-toolchain",
+        path: ".mobile-release-tooling",
+      },
+    });
+    expect(steps[setupIndex]).toMatchObject({
+      uses: "./.mobile-release-tooling/.github/actions/setup-android-toolchain",
+      with: {
+        "cache-mode": "off",
+        "install-screenshot-emulators": "true",
+      },
+    });
+    expect(JSON.stringify(steps)).not.toContain("candidate/");
+
+    const parityScript = validationSteps[parityIndex]?.run ?? "";
+    expect(parityScript).toContain("git -C .mobile-release-tooling ls-tree");
+    expect(parityScript).toContain("git -C candidate ls-tree");
+    expect(parityScript).toContain("cat-file blob");
+    expect(parityScript).toContain("cmp -s");
+
+    const actionPath = ".github/actions/setup-android-toolchain/action.yml";
+    const trustedAction = "name: fixture\nruns:\n  using: composite\n  steps: []\n";
+    const runParityGate = (candidate: "matching" | "modified" | "symlink") => {
+      const root = tempRoots.make("openclaw-android-emulator-diagnostic-parity-");
+      const trusted = path.join(root, ".mobile-release-tooling");
+      const target = path.join(root, "candidate");
+      const runnerTemp = path.join(root, "runner-temp");
+      const sentinel = path.join(root, "setup-ran");
+      fs.mkdirSync(runnerTemp);
+      for (const repository of [trusted, target]) {
+        fs.mkdirSync(repository);
+        git(repository, "init", "-q");
+        git(repository, "config", "user.name", "OpenClaw Test");
+        git(repository, "config", "user.email", "test@openclaw.invalid");
+      }
+      writeFile(trusted, actionPath, trustedAction);
+      if (candidate === "symlink") {
+        const candidatePath = path.join(target, actionPath);
+        fs.mkdirSync(path.dirname(candidatePath), { recursive: true });
+        fs.symlinkSync(path.join(trusted, actionPath), candidatePath);
+      } else {
+        writeFile(
+          target,
+          actionPath,
+          candidate === "matching"
+            ? trustedAction
+            : trustedAction.replace("fixture", "substituted"),
+        );
+      }
+      commit(trusted, "trusted action");
+      commit(target, "candidate action");
+
+      const result = spawnSync(
+        "/bin/bash",
+        ["-c", `${parityScript}\nprintf 'setup\\n' >"$SETUP_SENTINEL"\n`],
+        {
+          cwd: root,
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            RUNNER_TEMP: runnerTemp,
+            SETUP_SENTINEL: sentinel,
+          },
+        },
+      );
+      return { result, sentinel };
+    };
+
+    const matching = runParityGate("matching");
+    expect(matching.result.status, matching.result.stderr).toBe(0);
+    expect(fs.readFileSync(matching.sentinel, "utf8")).toBe("setup\n");
+    for (const candidate of ["modified", "symlink"] as const) {
+      const rejected = runParityGate(candidate);
+      expect(rejected.result.status).not.toBe(0);
+      expect(fs.existsSync(rejected.sentinel)).toBe(false);
+    }
+
+    const diagnostic = steps[diagnosticIndex]?.run ?? "";
+    expect(diagnostic).toContain(
+      'printf \'no\\n\' | avdmanager create avd --force --name "$AVD_NAME" --package "$SYSTEM_IMAGE" --device "$DEVICE_PROFILE"',
+    );
+    expect(diagnostic).toContain(
+      'emulator_args=(-avd "$AVD_NAME" -no-window -no-audio -no-boot-anim)',
+    );
+    expect(diagnostic).toContain(
+      "device_deadline=$((SECONDS + ANDROID_SCREENSHOT_EMULATOR_TIMEOUT_SECONDS))",
+    );
+    expect(diagnostic).toContain(
+      "boot_deadline=$((SECONDS + ANDROID_SCREENSHOT_EMULATOR_TIMEOUT_SECONDS))",
+    );
+    expect(diagnostic).toContain('>"$DIAGNOSTIC_DIR/emulator.log" 2>&1 &');
+    expect(diagnostic).toContain("adb devices -l");
+    expect(diagnostic).toContain('>>"$DIAGNOSTIC_DIR/adb-observations.log" 2>&1');
+    expect(diagnostic).toContain('ps -p "$emulator_pid"');
+    expect(diagnostic).toContain('kill "$emulator_pid"');
+    expect(diagnostic).toContain("adb kill-server");
+    expect(steps[artifactIndex]).toMatchObject({
+      if: "always()",
+      uses: "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+      with: {
+        name: "android-emulator-diagnostic-${{ github.run_id }}-${{ github.run_attempt }}",
+        path: "${{ runner.temp }}/android-emulator-diagnostic",
+        "retention-days": 7,
+      },
+    });
+    expect(source).not.toMatch(/\$\{\{\s*secrets\./u);
+    expect(source).not.toContain("environment:");
+    expect(source).not.toMatch(/\b(?:pnpm|gradle|fastlane)\b/iu);
+    expect(source).not.toMatch(/apps-signing|MATCH_PASSWORD|GOOGLE_PLAY|upload-and-record/iu);
+  });
+
   it("keeps upload and recovery credentials inside one protected platform boundary", () => {
     const workflows = [
       {
+        authorityRoot: "apps/ios/build/mobile-release-ci",
         environment: "ios-beta-release",
         file: ".github/workflows/ios-beta-release.yml",
         name: "iOS Beta Release",
         platform: "ios",
+        releaseRunner: "macos-26",
         signingCheckoutName: "Checkout encrypted iOS signing assets",
         signingCheckoutRevalidateName:
           "Revalidate release authority immediately before iOS signing checkout",
@@ -1502,10 +2034,12 @@ describe("mobile release authority", () => {
         setupBeforeSigning: [],
       },
       {
+        authorityRoot: "apps/android/build/mobile-release-ci",
         environment: "android-beta-release",
         file: ".github/workflows/android-beta-release.yml",
         name: "Android Beta Release",
         platform: "android",
+        releaseRunner: "macos-26-intel",
         signingCheckoutName: "Checkout encrypted Android signing assets",
         signingCheckoutRevalidateName:
           "Revalidate release authority immediately before Android signing checkout",
@@ -1522,10 +2056,12 @@ describe("mobile release authority", () => {
     ] as const;
 
     for (const {
+      authorityRoot,
       environment,
       file,
       name,
       platform,
+      releaseRunner,
       signingCheckoutName,
       signingCheckoutRevalidateName,
       signingMaterializeName,
@@ -1540,6 +2076,7 @@ describe("mobile release authority", () => {
             environment?: string;
             if?: unknown;
             needs?: string;
+            "runs-on"?: string;
             steps: Array<{
               "continue-on-error"?: unknown;
               env?: Record<string, string>;
@@ -1584,9 +2121,20 @@ describe("mobile release authority", () => {
         throw new Error(`${file}: missing release job`);
       }
       expect(release.needs).toBe("authorize");
+      expect(release["runs-on"]).toBe(releaseRunner);
       expect(release.if).toBe(
         "inputs.operation == 'upload-and-record' && needs.authorize.outputs.approved == 'true'",
       );
+      const authorityCheckout = release.steps.find(
+        (step) => step.name === "Checkout trusted mobile release authority",
+      );
+      const sinkCheckout = release.steps.find(
+        (step) => step.name === "Refresh trusted authority before store access",
+      );
+      expect(authorityCheckout?.with?.path).toBe(`${authorityRoot}/authority`);
+      expect(sinkCheckout?.with?.path).toBe(`${authorityRoot}/sink`);
+      expect(source).not.toContain(".mobile-release-authority");
+      expect(source).not.toContain(".mobile-release-sink");
       const signingRevalidateIndex = release.steps.findIndex(
         (step) => step.name === "Revalidate release authority immediately before signing access",
       );
@@ -1631,7 +2179,7 @@ describe("mobile release authority", () => {
       }
       for (const stepIndex of signingAuthorityIndexes) {
         expect(release.steps[stepIndex]?.uses, `${file}:${stepIndex}:uses`).toBe(
-          "./.mobile-release-authority/.github/actions/mobile-release-authority",
+          `./${authorityRoot}/authority/.github/actions/mobile-release-authority`,
         );
         expect(release.steps[stepIndex]?.with, `${file}:${stepIndex}:with`).toEqual({
           "authority-run-id": "${{ needs.authorize.outputs.run_id }}",
@@ -1665,6 +2213,9 @@ describe("mobile release authority", () => {
       );
       expect(revalidateIndex).toBeGreaterThan(-1);
       expect(uploadIndex).toBe(revalidateIndex + 1);
+      expect(release.steps[revalidateIndex]?.uses).toBe(
+        `./${authorityRoot}/sink/.github/actions/mobile-release-authority`,
+      );
       expect(intentIndex).toBeGreaterThan(uploadIndex);
       expect(recorderIndex).toBeGreaterThan(intentIndex);
       expect(recordIndex).toBeGreaterThan(recorderIndex);
@@ -1687,10 +2238,22 @@ describe("mobile release authority", () => {
       expect(release.steps[recordIndex]?.with?.operation).toBe("record");
 
       if (platform === "android") {
+        const androidSetupIndex = release.steps.findIndex(
+          (step) => step.name === "Setup Android toolchain",
+        );
+        const accelerationCheckIndex = release.steps.findIndex(
+          (step) => step.name === "Verify Android emulator acceleration",
+        );
         const rubyStep = release.steps.find((step) => step.name === "Setup Ruby");
         const bundleStep = release.steps.find(
           (step) => step.name === "Install locked Fastlane bundle",
         );
+        expect(androidSetupIndex).toBeGreaterThanOrEqual(0);
+        expect(accelerationCheckIndex).toBe(androidSetupIndex + 1);
+        expect(accelerationCheckIndex).toBeLessThan(signingRevalidateIndex);
+        expect(release.steps[accelerationCheckIndex]?.run?.trim()).toBe("emulator -accel-check");
+        expect(release.steps[accelerationCheckIndex]?.if).toBeUndefined();
+        expect(release.steps[accelerationCheckIndex]?.["continue-on-error"]).toBeUndefined();
         expect(rubyStep?.with).toMatchObject({
           "bundler-cache": false,
           "ruby-version": "3.4.10",
@@ -1776,8 +2339,109 @@ describe("mobile release authority", () => {
     }
   });
 
-  it("passes the protected TestFlight group variable only to the iOS upload step", () => {
+  it("keeps trusted pre-upload helper checkouts outside release source dirt", () => {
+    const workflows = [
+      {
+        file: ".github/workflows/ios-beta-release.yml",
+        platform: "ios",
+      },
+      {
+        file: ".github/workflows/android-beta-release.yml",
+        platform: "android",
+      },
+    ] as const;
+
+    for (const { file, platform } of workflows) {
+      const source = fs.readFileSync(file, "utf8");
+      const workflow = parse(source) as {
+        jobs: {
+          release: {
+            steps: Array<{
+              name: string;
+              with?: { path?: string };
+            }>;
+          };
+        };
+      };
+      const authorityPath = workflow.jobs.release.steps.find(
+        (step) => step.name === "Checkout trusted mobile release authority",
+      )?.with?.path;
+      const sinkPath = workflow.jobs.release.steps.find(
+        (step) => step.name === "Refresh trusted authority before store access",
+      )?.with?.path;
+      if (!authorityPath || !sinkPath) {
+        throw new Error(`${file}: missing pre-upload helper checkout path`);
+      }
+
+      const repository = tempRoots.make(`openclaw-mobile-release-source-${platform}-`);
+      git(repository, "init");
+      git(repository, "config", "user.email", "release-test@openclaw.invalid");
+      git(repository, "config", "user.name", "OpenClaw Release Test");
+      copyFile(repository, ".gitignore");
+      copyFile(repository, "apps/android/.gitignore");
+      writeFile(repository, "tracked.txt", "clean\n");
+      const expectedCommit = commit(repository, "test: create release source");
+
+      for (const helperPath of [authorityPath, sinkPath]) {
+        writeFile(
+          repository,
+          path.join(helperPath, ".github/actions/mobile-release-authority/action.yml"),
+          "name: trusted helper\n",
+        );
+      }
+
+      const verifyAppleSource = () =>
+        spawnSync(
+          "/bin/bash",
+          [
+            "scripts/apple-release-source-check.sh",
+            "--root",
+            repository,
+            "--expected-commit",
+            expectedCommit,
+          ],
+          { cwd: process.cwd(), encoding: "utf8" },
+        );
+      const expectCleanSource = () => {
+        expect(() =>
+          verifyAndroidReleaseSource(expectedCommit, { rootDir: repository }),
+        ).not.toThrow();
+        const apple = verifyAppleSource();
+        expect(apple.status, apple.stderr).toBe(0);
+      };
+      const expectDirtySource = () => {
+        expect(() => verifyAndroidReleaseSource(expectedCommit, { rootDir: repository })).toThrow(
+          "Android release builds require a clean Git checkout",
+        );
+        const apple = verifyAppleSource();
+        expect(apple.status).toBe(1);
+        expect(apple.stderr).toContain("Apple release builds require a clean Git checkout.");
+      };
+
+      expectCleanSource();
+      writeFile(repository, "unrelated.txt", "dirty\n");
+      expectDirtySource();
+      fs.unlinkSync(path.join(repository, "unrelated.txt"));
+
+      writeFile(repository, "tracked.txt", "dirty\n");
+      expectDirtySource();
+      writeFile(repository, "tracked.txt", "clean\n");
+
+      writeFile(
+        repository,
+        ".mobile-release-authority/.github/actions/mobile-release-authority/action.yml",
+        "name: obsolete root helper\n",
+      );
+      expectDirtySource();
+    }
+  });
+
+  it("passes protected iOS release inputs only to the iOS upload step", () => {
     const source = fs.readFileSync(".github/workflows/ios-beta-release.yml", "utf8");
+    const project = parse(fs.readFileSync("apps/ios/project.yml", "utf8")) as {
+      name?: string;
+      options?: { deploymentTarget?: { iOS?: string } };
+    };
     const workflow = parse(source) as {
       jobs: Record<
         string,
@@ -1815,5 +2479,75 @@ describe("mobile release authority", () => {
         value: "${{ vars.TESTFLIGHT_INTERNAL_GROUP }}",
       },
     ]);
+
+    const uploadStep = workflow.jobs.release?.steps.find((step) =>
+      step.run?.includes("pnpm ios:release:upload"),
+    );
+    expect(uploadStep?.env).toMatchObject({
+      SCAN_APP_NAME: project.name,
+      SCAN_DEPLOYMENT_TARGET_VERSION: project.options?.deploymentTarget?.iOS,
+    });
+    const scanPlacements = Object.entries(workflow.jobs).flatMap(([jobName, job]) =>
+      job.steps.flatMap((step) =>
+        Object.entries(step.env ?? {})
+          .filter(([envName]) => envName.startsWith("SCAN_"))
+          .map(([envName, value]) => ({ envName, jobName, stepName: step.name, value })),
+      ),
+    );
+    expect(scanPlacements).toEqual([
+      {
+        envName: "SCAN_APP_NAME",
+        jobName: "release",
+        stepName: "Upload and distribute iOS beta",
+        value: project.name,
+      },
+      {
+        envName: "SCAN_DEPLOYMENT_TARGET_VERSION",
+        jobName: "release",
+        stepName: "Upload and distribute iOS beta",
+        value: project.options?.deploymentTarget?.iOS,
+      },
+    ]);
+  });
+
+  it("installs the pinned Watch Rust toolchain before iOS store access", () => {
+    const source = fs.readFileSync(".github/workflows/ios-beta-release.yml", "utf8");
+    const workflow = parse(source) as {
+      jobs: {
+        release: {
+          steps: Array<{
+            if?: string;
+            name: string;
+            run?: string;
+          }>;
+        };
+      };
+    };
+    const releaseSteps = workflow.jobs.release.steps;
+    const xcodeIndex = releaseSteps.findIndex((step) => step.name === "Select Xcode 26");
+    const rustIndex = releaseSteps.findIndex(
+      (step) => step.name === "Install Watch Rust toolchain",
+    );
+    const storeAccessIndex = releaseSteps.findIndex(
+      (step) => step.name === "Refresh trusted authority before store access",
+    );
+    const uploadIndex = releaseSteps.findIndex(
+      (step) => step.name === "Upload and distribute iOS beta",
+    );
+    const rustStep = releaseSteps[rustIndex];
+
+    expect(xcodeIndex).toBeGreaterThanOrEqual(0);
+    expect(rustIndex).toBeGreaterThan(xcodeIndex);
+    expect(storeAccessIndex).toBeGreaterThan(rustIndex);
+    expect(uploadIndex).toBeGreaterThan(storeAccessIndex);
+    expect(rustStep?.if).toBe("hashFiles('apps/shared/OpenClawWatchRTC/Cargo.toml') != ''");
+    expect(rustStep?.run).toContain(
+      `watch_toolchain="$(awk -F '"' '/^channel =/ { print $2; exit }' apps/shared/OpenClawWatchRTC/rust-toolchain.toml)"`,
+    );
+    expect(rustStep?.run).toContain('test -n "$watch_toolchain"');
+    expect(rustStep?.run).toContain(
+      'rustup toolchain install "$watch_toolchain" --profile minimal --component rust-src',
+    );
+    expect(rustStep?.run).toContain('echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"');
   });
 });

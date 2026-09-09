@@ -9,6 +9,7 @@ import type {
   CronJob,
   CronStatus,
 } from "../../api/types.ts";
+import { pathForRoute } from "../../app-route-paths.ts";
 import { renderCronJobsPagination } from "../../components/cron-jobs-pagination.ts";
 import { renderHubTabs } from "../../components/hub-tabs.ts";
 import { icons } from "../../components/icons.ts";
@@ -34,25 +35,15 @@ import {
   formatCronState,
   formatNextRun,
 } from "../../lib/presenter.ts";
-import { resetAgentFilePreview, setPreviewExpandButtonState } from "./agent-file-preview-state.ts";
+import {
+  countLines,
+  countWords,
+  estimateReadingTimeLabel,
+  resetAgentFilePreview,
+  setPreviewExpandButtonState,
+} from "./agent-file-preview-state.ts";
 import { renderAgentFileError } from "./file-conflict-callout.ts";
 import { renderAgentContextSection } from "./panels-overview.ts";
-
-function countWords(text: string) {
-  const normalized = text.trim();
-  return normalized ? normalized.split(/\s+/).length : 0;
-}
-
-function countLines(text: string) {
-  return text.length === 0 ? 0 : text.split(/\r?\n/).length;
-}
-
-function estimateReadingTimeLabel(wordCount: number) {
-  if (wordCount <= 0) {
-    return t("agents.files.emptyDraft");
-  }
-  return t("agents.files.minRead", { count: String(Math.max(1, Math.round(wordCount / 220))) });
-}
 
 function getExtensionLabel(fileName: string) {
   const ext = fileName.split(".").pop()?.trim().toLowerCase();
@@ -266,6 +257,7 @@ export function renderAgentChannels(params: {
 }
 
 export function renderAgentCron(params: {
+  basePath: string;
   context: AgentContext;
   agentId: string;
   jobs: CronJob[];
@@ -347,6 +339,13 @@ export function renderAgentCron(params: {
                     kind: job.enabled ? "ok" : "warn",
                     label: job.enabled ? t("common.enabled") : t("common.disabled"),
                   })}
+                  <a
+                    class="btn btn--sm"
+                    href=${`${pathForRoute("cron", params.basePath)}?job=${encodeURIComponent(job.id)}`}
+                    aria-label=${t("agents.cronPanel.editJob", { name: job.name })}
+                  >
+                    ${t("agents.cronPanel.edit")}
+                  </a>
                   <button
                     class="btn btn--sm"
                     ?disabled=${!params.canRunNow || !job.enabled}
@@ -576,6 +575,7 @@ export function renderAgentFiles(params: {
                             ></textarea>
                           </label>
                           <openclaw-modal-dialog
+                            class="agent-file-preview"
                             manual
                             label=${activeEntry.name}
                             style="--openclaw-modal-width: min(1040px, calc(100vw - 32px));"
@@ -639,15 +639,14 @@ export function renderAgentFiles(params: {
                                         const modal = (e.currentTarget as HTMLElement).closest(
                                           "openclaw-modal-dialog",
                                         ) as OpenClawModalDialog | null;
+                                        const textarea = modal
+                                          ?.closest(".settings-group")
+                                          ?.querySelector<HTMLElement>(".agent-file-textarea");
+                                        modal?.setReturnFocusTarget(textarea ?? null);
                                         modal?.hide();
                                         if (modal) {
                                           resetAgentFilePreview(modal);
                                         }
-                                        const textarea =
-                                          document.querySelector<HTMLElement>(
-                                            ".agent-file-textarea",
-                                          );
-                                        textarea?.focus();
                                       }}
                                     >
                                       <span aria-hidden="true">${icons.edit}</span>
@@ -674,10 +673,13 @@ export function renderAgentFiles(params: {
                                 </div>
                               </div>
                               <div class="md-preview-dialog__meta">
-                                <div class="md-preview-dialog__chip ${previewStatusClass}">
+                                <div
+                                  class="md-preview-dialog__chip ${previewStatusClass}"
+                                  data-priority="essential"
+                                >
                                   <strong>${previewStatusLabel}</strong>
                                 </div>
-                                <div class="md-preview-dialog__chip">
+                                <div class="md-preview-dialog__chip" data-priority="essential">
                                   <strong>${estimateReadingTimeLabel(draftWordCount)}</strong>
                                   <span
                                     >${t("agents.files.words", {
@@ -685,11 +687,11 @@ export function renderAgentFiles(params: {
                                     })}</span
                                   >
                                 </div>
-                                <div class="md-preview-dialog__chip">
+                                <div class="md-preview-dialog__chip" data-priority="secondary">
                                   <strong>${draftLineCount}</strong>
                                   <span>${t("agents.files.lines")}</span>
                                 </div>
-                                <div class="md-preview-dialog__chip">
+                                <div class="md-preview-dialog__chip" data-priority="essential">
                                   <strong>${draftByteSize}</strong>
                                   <span>${previewUpdatedLabel}</span>
                                 </div>

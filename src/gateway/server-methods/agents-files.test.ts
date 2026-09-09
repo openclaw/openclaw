@@ -81,22 +81,26 @@ describe("agents.files.get/set content hashes", () => {
     expect(readMemory()).toBe("# Memory\n- agent learned a birthday\n");
   });
 
-  it("writes when expectedHash matches the current file and returns the new hash", async () => {
-    fs.writeFileSync(path.join(workspace, "MEMORY.md"), "# Memory\n");
+  it.each(["lowercase", "uppercase"])(
+    "writes when the %s expectedHash matches and returns the new hash",
+    async (hashCase) => {
+      fs.writeFileSync(path.join(workspace, "MEMORY.md"), "# Memory\n");
+      const expectedHash = hashContent("# Memory\n");
 
-    const call = await invokeAgentFilesHandler("agents.files.set", {
-      agentId: "main",
-      name: "MEMORY.md",
-      content: "# Memory\n- operator note\n",
-      expectedHash: hashContent("# Memory\n"),
-    });
+      const call = await invokeAgentFilesHandler("agents.files.set", {
+        agentId: "main",
+        name: "MEMORY.md",
+        content: "# Memory\n- operator note\n",
+        expectedHash: hashCase === "uppercase" ? expectedHash.toUpperCase() : expectedHash,
+      });
 
-    expect(call.ok).toBe(true);
-    expect((call.payload as { file: { hash?: string } }).file.hash).toBe(
-      hashContent("# Memory\n- operator note\n"),
-    );
-    expect(readMemory()).toBe("# Memory\n- operator note\n");
-  });
+      expect(call.ok).toBe(true);
+      expect((call.payload as { file: { hash?: string } }).file.hash).toBe(
+        hashContent("# Memory\n- operator note\n"),
+      );
+      expect(readMemory()).toBe("# Memory\n- operator note\n");
+    },
+  );
 
   it("reports a conflict without currentHash when the expected file is gone", async () => {
     const call = await invokeAgentFilesHandler("agents.files.set", {

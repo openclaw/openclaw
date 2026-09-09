@@ -9,6 +9,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   collectCliBootstrapExternalImportErrors,
   collectGatewayRunChunkBudgetErrors,
+  collectNativeHookRelayBundleErrors,
   collectWorkerDeployArtifactErrors,
   listStaticImportSpecifiers,
 } from "../../scripts/check-cli-bootstrap-imports.mts";
@@ -33,7 +34,11 @@ function writeFixture(root: string, relativePath: string, source: string): void 
   writeFileSync(target, source, "utf8");
 }
 
-function writeGatewayRunChunk(root: string, source = "", distDir = "dist"): void {
+function writeGatewayRunChunk(
+  root: string,
+  source = "",
+  { distDir = "dist", chunkName = "run-gateway.js" }: { distDir?: string; chunkName?: string } = {},
+): void {
   writeFixture(root, `${distDir}/string-coerce.js`, "export const normalize = true;");
   const chunkSource = [
     'import "./string-coerce.js";',
@@ -41,7 +46,7 @@ function writeGatewayRunChunk(root: string, source = "", distDir = "dist"): void
     "function addGatewayRunCommand(cmd) { return cmd; }",
     source,
   ].join("\n");
-  writeFixture(root, `${distDir}/run-gateway.js`, chunkSource);
+  writeFixture(root, `${distDir}/${chunkName}`, chunkSource);
   writeFixture(
     root,
     `${distDir}/cli/gateway-run-chunk.json`,
@@ -49,7 +54,7 @@ function writeGatewayRunChunk(root: string, source = "", distDir = "dist"): void
       version: 1,
       chunks: [
         {
-          fileName: "run-gateway.js",
+          fileName: chunkName,
           sha256: createHash("sha256").update(chunkSource).digest("hex"),
         },
       ],
@@ -75,29 +80,36 @@ describe("check-cli-bootstrap-imports", () => {
     ).toEqual(["node:fs", "./side-effect.js", "../value.js"]);
   });
 
-  it("allows a bootstrap graph with builtins and lazy external imports", () => {
-    const root = makeTempRoot();
-    writeFixture(
-      root,
-      "dist/entry.js",
-      `import fs from "node:fs";\nimport "./cli/run-main.js";\nvoid fs;\n`,
-    );
-    writeFixture(
-      root,
-      "dist/cli/run-main.js",
-      `import "../light.js";\nexport async function run() { return import("tslog"); }\n`,
-    );
-    writeFixture(root, "dist/light.js", `import path from "node:path";\nvoid path;\n`);
-    writeGatewayRunChunk(root);
+  it.each(["run-gateway.js", "run-gateway-abc123.mjs"])(
+    "allows builtins and lazy external imports with %s and a mixed-extension graph",
+    (chunkName) => {
+      const root = makeTempRoot();
+      writeFixture(
+        root,
+        "dist/entry.js",
+        `import fs from "node:fs";\nimport "./cli/run-main.js";\nvoid fs;\n`,
+      );
+      writeFixture(
+        root,
+        "dist/cli/run-main.js",
+        `import "../light-abc123.mjs";\nexport async function run() { return import("tslog"); }\n`,
+      );
+      writeFixture(root, "dist/light-abc123.mjs", 'import "./string-coerce.js";\n');
+      writeGatewayRunChunk(root, "", { chunkName });
 
-    expect(collectCliBootstrapExternalImportErrors({ rootDir: root })).toStrictEqual([]);
-    expect(collectGatewayRunChunkBudgetErrors({ rootDir: root })).toStrictEqual([]);
-  });
+      expect(collectCliBootstrapExternalImportErrors({ rootDir: root })).toStrictEqual([]);
+      expect(collectGatewayRunChunkBudgetErrors({ rootDir: root })).toStrictEqual([]);
+      expect(
+        collectGatewayRunChunkBudgetErrors({ rootDir: root, legacyGatewayChunkDiscovery: true }),
+      ).toStrictEqual([]);
+    },
+  );
 
   it("reports external packages in the static bootstrap graph", () => {
     const root = makeTempRoot();
     writeFixture(root, "dist/entry.js", `import "./cli/run-main.js";\n`);
-    writeFixture(root, "dist/cli/run-main.js", `import "../heavy.js";\n`);
+    writeFixture(root, "dist/cli/run-main.js", `import "../bridge-abc123.mjs";\n`);
+    writeFixture(root, "dist/bridge-abc123.mjs", `import "./heavy.js";\n`);
     writeFixture(root, "dist/heavy.js", `import { Logger } from "tslog";\nvoid Logger;\n`);
     writeGatewayRunChunk(root);
 
@@ -131,7 +143,7 @@ describe("check-cli-bootstrap-imports", () => {
 
   it.each(["dist", "custom-output"])("reads only the owned gateway graph under %s", (distDir) => {
     const root = makeTempRoot();
-    writeGatewayRunChunk(root, "", distDir);
+    writeGatewayRunChunk(root, "", { distDir });
     const unrelatedPath = join(root, distDir, "plugins/unrelated.js");
     writeFixture(root, `${distDir}/plugins/unrelated.js`, "export const unrelated = true;");
     const reads: string[] = [];
@@ -222,36 +234,96 @@ describe("check-cli-bootstrap-imports", () => {
     },
   );
 
-  it("reports cold static imports in the gateway run chunk", () => {
+  it.each(["run-gateway.js", "run-gateway-abc123.mjs"])(
+    "reports cold static imports in %s",
+    (chunkName) => {
+      const root = makeTempRoot();
+      writeGatewayRunChunk(root, 'import "./restart-sentinel-abc123.mjs";', { chunkName });
+      writeFixture(root, "dist/restart-sentinel-abc123.mjs", "export const sentinel = true;");
+
+      expect(collectGatewayRunChunkBudgetErrors({ rootDir: root })).toEqual([
+        `Gateway run chunk dist/${chunkName} static graph imports cold path "./restart-sentinel-abc123.mjs" from dist/${chunkName}.`,
+      ]);
+    },
+  );
+
+  it.each(["run-gateway.js", "run-gateway-abc123.mjs"])(
+    "reports transitive cold static imports from %s through a mixed-extension graph",
+    (chunkName) => {
+      const root = makeTempRoot();
+      writeGatewayRunChunk(root, 'import "./gateway-bridge-abc123.mjs";', { chunkName });
+      writeFixture(root, "dist/gateway-bridge-abc123.mjs", 'import "./server-close-abc123.js";');
+      writeFixture(root, "dist/server-close-abc123.js", "export const close = true;");
+
+      expect(collectGatewayRunChunkBudgetErrors({ rootDir: root })).toEqual([
+        `Gateway run chunk dist/${chunkName} static graph imports cold path "./server-close-abc123.js" from dist/gateway-bridge-abc123.mjs.`,
+      ]);
+    },
+  );
+
+  it.each(["run-gateway.js", "run-gateway-abc123.mjs"])("reports an oversized %s", (chunkName) => {
     const root = makeTempRoot();
-    writeGatewayRunChunk(root, 'import "./restart-sentinel-abc123.js";');
-    writeFixture(root, "dist/restart-sentinel-abc123.js", "export const sentinel = true;");
-
-    expect(collectGatewayRunChunkBudgetErrors({ rootDir: root })).toEqual([
-      'Gateway run chunk dist/run-gateway.js static graph imports cold path "./restart-sentinel-abc123.js" from dist/run-gateway.js.',
-    ]);
-  });
-
-  it("reports transitive cold static imports from the gateway run chunk graph", () => {
-    const root = makeTempRoot();
-    writeGatewayRunChunk(root, 'import "./gateway-bridge.js";');
-    writeFixture(root, "dist/gateway-bridge.js", 'import "./server-close-abc123.js";');
-    writeFixture(root, "dist/server-close-abc123.js", "export const close = true;");
-
-    expect(collectGatewayRunChunkBudgetErrors({ rootDir: root })).toEqual([
-      'Gateway run chunk dist/run-gateway.js static graph imports cold path "./server-close-abc123.js" from dist/gateway-bridge.js.',
-    ]);
-  });
-
-  it("reports oversized gateway run chunks", () => {
-    const root = makeTempRoot();
-    writeGatewayRunChunk(root, "x".repeat(10));
-    const gatewayRunChunkBytes = statSync(join(root, "dist", "run-gateway.js")).size;
+    writeGatewayRunChunk(root, "x".repeat(10), { chunkName });
+    const gatewayRunChunkBytes = statSync(join(root, "dist", chunkName)).size;
 
     expect(
       collectGatewayRunChunkBudgetErrors({ rootDir: root, gatewayRunChunkMaxBytes: 50 }),
     ).toEqual([
-      `Gateway run chunk dist/run-gateway.js is ${gatewayRunChunkBytes} bytes, above budget 50 bytes.`,
+      `Gateway run chunk dist/${chunkName} is ${gatewayRunChunkBytes} bytes, above budget 50 bytes.`,
+    ]);
+  });
+
+  it("requires the relay in current builds but accepts older package inventories", () => {
+    const rootDir = makeTempRoot();
+
+    expect(collectNativeHookRelayBundleErrors({ rootDir })).toEqual([]);
+    expect(collectNativeHookRelayBundleErrors({ rootDir, requireNativeHookRelay: true })).toEqual([
+      "CLI bootstrap import guard could not read dist/native-hook-relay/entry.js. Run pnpm build first.",
+    ]);
+  });
+
+  it("accepts a bounded native hook relay graph with shared runtime chunks", () => {
+    const root = makeTempRoot();
+    writeFixture(
+      root,
+      "dist/native-hook-relay/entry.js",
+      'import "../client.js";\nvoid import("../gateway-call.js");\n',
+    );
+    writeFixture(
+      root,
+      "dist/client.js",
+      'import "kysely";\nimport "@openclaw/fs-safe/config";\nimport "@openclaw/fs-safe/advanced";\n',
+    );
+
+    expect(collectNativeHookRelayBundleErrors({ rootDir: root })).toEqual([]);
+  });
+
+  it("reports server owners and static imports that escape the built runtime", () => {
+    const root = makeTempRoot();
+    writeFixture(root, "dist/native-hook-relay/entry.js", 'import "../../outside.js";\n');
+    writeFixture(root, "outside.js", "const MAX_NATIVE_HOOK_RELAY_INVOCATIONS = 200;\n");
+
+    expect(collectNativeHookRelayBundleErrors({ rootDir: root })).toEqual([
+      'Native hook relay static graph contains server marker "MAX_NATIVE_HOOK_RELAY_INVOCATIONS" in outside.js.',
+      'Native hook relay static graph escapes the built runtime via "../../outside.js" from dist/native-hook-relay/entry.js.',
+    ]);
+  });
+
+  it("reports an oversized native hook relay static graph", () => {
+    const root = makeTempRoot();
+    writeFixture(root, "dist/native-hook-relay/entry.js", "x".repeat(100));
+
+    expect(
+      collectNativeHookRelayBundleErrors({ rootDir: root, nativeHookRelayStaticMaxBytes: 50 }),
+    ).toEqual(["Native hook relay static graph is 100 bytes, above budget 50 bytes."]);
+  });
+
+  it("reports unexpected external packages in the native hook relay static graph", () => {
+    const root = makeTempRoot();
+    writeFixture(root, "dist/native-hook-relay/entry.js", 'import "commander";\n');
+
+    expect(collectNativeHookRelayBundleErrors({ rootDir: root })).toEqual([
+      'Native hook relay static graph imports unexpected package "commander" from dist/native-hook-relay/entry.js.',
     ]);
   });
 
@@ -396,6 +468,10 @@ describe("gateway run chunk metadata", () => {
       entry: { "cli/run-main": "entry.ts" },
       outDir: "dist",
       dts: false,
+      outputOptions: {
+        entryFileNames: "[name].js",
+        chunkFileNames: "[name]-[hash].mjs",
+      },
       minify: true,
       sourcemap,
       plugins: [plugin],
@@ -404,6 +480,8 @@ describe("gateway run chunk metadata", () => {
     try {
       const chunks = readGatewayRunChunks(join(root, "dist"));
       expect(chunks).toHaveLength(1);
+      expect(chunks[0]?.filePath).toMatch(/-[A-Za-z0-9_-]+\.mjs$/u);
+      expect(fs.existsSync(join(root, "dist/cli/run-main.js"))).toBe(true);
       expect(chunks[0]?.source).not.toContain("GATEWAY_AUTH_MODES");
       expect(collectGatewayRunChunkBudgetErrors({ rootDir: root })).toEqual([]);
       fs.appendFileSync(chunks[0]!.filePath, "\n// changed after emission\n");
@@ -413,7 +491,9 @@ describe("gateway run chunk metadata", () => {
       // Evidence only, not a timing threshold that would depend on the runner.
       console.log(JSON.stringify({ proof: "gateway-locator-producer", sourcemap, producerMs }));
     } finally {
-      for (const bundle of bundles) await bundle[Symbol.asyncDispose]();
+      for (const bundle of bundles) {
+        await bundle[Symbol.asyncDispose]();
+      }
     }
   });
 
@@ -432,7 +512,9 @@ describe("gateway run chunk metadata", () => {
     try {
       expect(fs.existsSync(join(root, "dist", GATEWAY_RUN_CHUNK_METADATA_PATH))).toBe(false);
     } finally {
-      for (const bundle of bundles) await bundle[Symbol.asyncDispose]();
+      for (const bundle of bundles) {
+        await bundle[Symbol.asyncDispose]();
+      }
     }
   });
 });

@@ -9,7 +9,7 @@ import {
 import { resolveCurrentUserProfileDisplay } from "./current-user-profile-display.js";
 
 export type SessionMessageProjectionState = {
-  streamErrorFallbackPending: boolean;
+  assistantErrorPending: boolean;
   turnBoundaryPending: boolean;
 };
 
@@ -37,7 +37,7 @@ export function attachOpenClawTranscriptMeta(
   };
 }
 
-function readTranscriptMessageIdempotencyKey(message: unknown): string | undefined {
+export function readTranscriptMessageIdempotencyKey(message: unknown): string | undefined {
   if (!message || typeof message !== "object" || Array.isArray(message)) {
     return undefined;
   }
@@ -75,16 +75,16 @@ export function projectSessionMessagePayload(params: {
   });
   const projected = params.projectionState
     ? projectChatDisplayMessagesWithState([rawMessage], {
-        streamErrorFallbackPending: params.projectionState.streamErrorFallbackPending,
+        assistantErrorPending: params.projectionState.assistantErrorPending,
         turnBoundaryPending: params.projectionState.turnBoundaryPending,
       })
     : {
         messages: [projectChatDisplayMessage(rawMessage)],
-        streamErrorFallbackPending: false,
+        assistantErrorPending: false,
         turnBoundaryPending: false,
       };
   const projectionState = {
-    streamErrorFallbackPending: projected.streamErrorFallbackPending,
+    assistantErrorPending: projected.assistantErrorPending,
     turnBoundaryPending: projected.turnBoundaryPending,
   };
   const message = projected.messages[0];
@@ -135,14 +135,32 @@ export function projectTranscriptEntryMessage(
       seq,
     });
   }
+  const parsedTimestamp =
+    typeof record.timestamp === "string" ? Date.parse(record.timestamp) : Number.NaN;
+  if (record.type === "custom_message") {
+    return attachOpenClawTranscriptMeta(
+      {
+        role: "custom",
+        customType: record.customType,
+        content: record.content,
+        display: record.display,
+        details: record.details,
+        timestamp: parsedTimestamp,
+      },
+      {
+        ...(typeof record.id === "string" ? { id: record.id } : {}),
+        recordTimestampMs: parsedTimestamp,
+        transcriptPosition,
+        seq,
+      },
+    );
+  }
   if (record.type !== "compaction" && record.type !== "reset") {
     return null;
   }
   const kind = record.type;
   const compactionIdentity =
     kind === "compaction" ? asOptionalRecord(record["__openclaw"]) : undefined;
-  const parsedTimestamp =
-    typeof record.timestamp === "string" ? Date.parse(record.timestamp) : Number.NaN;
   return {
     role: "system",
     content: [{ type: "text", text: kind === "compaction" ? "Compaction" : "Reset" }],

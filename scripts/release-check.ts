@@ -20,7 +20,6 @@ import { basename, dirname, join, posix, resolve, win32 } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { extract } from "tar";
-import { tsImport } from "tsx/esm/api";
 import { expectDefined } from "../packages/normalization-core/src/expect.js";
 import { COMPLETION_SKIP_PLUGIN_COMMANDS_ENV } from "../src/cli/completion-runtime.ts";
 import { escapeRegExp } from "../src/shared/regexp.js";
@@ -31,6 +30,7 @@ import {
   type ExtensionPackageJson as PackageJson,
 } from "./lib/bundled-extension-manifest.ts";
 import { GATEWAY_RUN_CHUNK_METADATA_VERSION } from "./lib/gateway-run-chunk-metadata.mts";
+import { importToolingTypeScript } from "./lib/import-tooling-typescript.mts";
 import { collectPackUnpackedSizeErrors as collectNpmPackUnpackedSizeErrors } from "./lib/npm-pack-budget.mts";
 import { readPositiveEnvInt } from "./lib/numeric-options.mjs";
 import { isLegacyPluginDependencyInstallStagePath } from "./lib/package-dist-inventory.ts";
@@ -117,6 +117,26 @@ const PACKED_PLUGIN_SDK_TYPESCRIPT_SMOKE_FIXTURE = new URL(
   "./fixtures/packed-plugin-sdk-type-smoke.ts",
   import.meta.url,
 );
+const PACKED_BUNDLED_CHANNEL_ENTRY_SMOKE_ENTRYPOINTS = [
+  "scripts/test-built-bundled-channel-entry-smoke.mts",
+  "scripts/test-built-bundled-channel-entry-smoke.mjs",
+] as const;
+
+export function resolvePackedBundledChannelEntrySmokeCommand(
+  fileExists: (path: string) => boolean = existsSync,
+  nodeExecPath = process.execPath,
+) {
+  const entrypoint = PACKED_BUNDLED_CHANNEL_ENTRY_SMOKE_ENTRYPOINTS.find(fileExists);
+  if (!entrypoint) {
+    throw new Error(
+      "release-check: target does not provide scripts/test-built-bundled-channel-entry-smoke.mts or .mjs",
+    );
+  }
+  return {
+    command: nodeExecPath,
+    args: [...(entrypoint.endsWith(".mts") ? ["--import", "tsx"] : []), entrypoint],
+  };
+}
 
 export function runReleaseCheckCommand(
   invocation: ReleaseCheckCommandInvocation,
@@ -611,6 +631,7 @@ export function createPackedCompletionSmokeEnv(
 }
 
 export function collectPackedInstalledPackageVerificationErrors(params: {
+  additionalCompanionManifestRoots?: string[];
   expectedVersion: string;
   installedBinaryVersion?: string;
   packageRoot: string;
@@ -619,6 +640,7 @@ export function collectPackedInstalledPackageVerificationErrors(params: {
     readFileSync(join(params.packageRoot, "package.json"), "utf8"),
   ) as { version?: string };
   const errors = collectInstalledPackageErrors({
+    additionalCompanionManifestRoots: params.additionalCompanionManifestRoots,
     expectedVersion: params.expectedVersion,
     installedVersion: packageJson.version?.trim() ?? "",
     packageRoot: params.packageRoot,
@@ -654,6 +676,9 @@ function verifyPackedInstalledPackage(params: {
     },
   ).trim();
   const errors = collectPackedInstalledPackageVerificationErrors({
+    // The selected source checkout is immutable release input. Its companion
+    // manifests are the exact inputs packed by the following plugin preflight.
+    additionalCompanionManifestRoots: [resolve("extensions")],
     expectedVersion: params.expectedVersion,
     installedBinaryVersion,
     packageRoot: params.packageRoot,
@@ -953,16 +978,11 @@ function runPackedBundledChannelEntrySmoke(tarballPath: string, packedRoot: stri
     runPackedBundledPluginActivationSmoke(packageRoot, tmpRoot);
     runPackedTaskRegistryControlRuntimeSmoke(packageRoot);
     runPackedPluginSdkTypescriptSmoke(tarballPath, tmpRoot, localPackageTarballs);
+    const bundledChannelEntrySmoke = resolvePackedBundledChannelEntrySmokeCommand();
     runReleaseCheckCommand(
       {
-        command: process.execPath,
-        args: [
-          "--import",
-          "tsx",
-          resolve("scripts/test-built-bundled-channel-entry-smoke.mts"),
-          "--package-root",
-          packageRoot,
-        ],
+        ...bundledChannelEntrySmoke,
+        args: [...bundledChannelEntrySmoke.args, "--package-root", packageRoot],
       },
       {
         stdio: "inherit",
@@ -1279,7 +1299,9 @@ async function verifyPackedContents(
   const workerProducerPath = resolve("src/worker/worker-deploy-entry.ts");
   const workerBundlePath = resolve("src/shared/worker-bundle-hash.ts");
   const workerDeployEntrypoints = existsSync(workerProducerPath)
-    ? Object.entries(await tsImport(pathToFileURL(workerBundlePath).href, import.meta.url))
+    ? Object.entries(
+        await importToolingTypeScript(pathToFileURL(workerBundlePath).href, import.meta.url),
+      )
         .filter(([name]) => /^WORKER_BUNDLE_.*_PATH$/u.test(name))
         .map(([name, value]) => {
           if (typeof value !== "string" || !value.trim()) {
@@ -1313,7 +1335,7 @@ async function verifyPackedContents(
   // Never infer legacy mode from missing output: current targets must rebuild missing metadata.
   const locatorModulePath = resolve("scripts/lib/gateway-run-chunk-metadata.mts");
   const locatorModule = existsSync(locatorModulePath)
-    ? await tsImport(pathToFileURL(locatorModulePath).href, import.meta.url)
+    ? await importToolingTypeScript(pathToFileURL(locatorModulePath).href, import.meta.url)
     : undefined;
   if (
     locatorModule &&

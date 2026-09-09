@@ -31,6 +31,7 @@ import {
   runMemorySearchHealthContribution,
   runSkillsHealth,
   runToolsMdMigrationHealth,
+  runWorkspaceAliasHealth,
   runWorkspaceStatusHealth,
   runWorkspaceSuggestionsHealth,
 } from "./doctor-health-contribution-runners.workspace.js";
@@ -267,6 +268,21 @@ export function resolveFinalDoctorHealthContributions(params: {
         ]
       : []),
     createDoctorHealthContribution({
+      id: "doctor:workspace-alias",
+      label: "Workspace alias",
+      healthChecks: {
+        description:
+          "Persisted workspace aliases must resolve to the canonical target that owns their stored state.",
+        defaultEnabled: true,
+        async detect(ctx) {
+          const { collectRepointedWorkspaceAliasFindings } =
+            await import("../commands/doctor-workspace-alias.js");
+          return collectRepointedWorkspaceAliasFindings(ctx.cfg);
+        },
+      },
+      run: runWorkspaceAliasHealth,
+    }),
+    createDoctorHealthContribution({
       id: "doctor:skills",
       label: "Skills",
       healthCheckIds: ["core/doctor/skills-readiness"],
@@ -350,8 +366,7 @@ export function resolveFinalDoctorHealthContributions(params: {
       id: "doctor:whatsapp-responsiveness",
       label: "WhatsApp responsiveness",
       healthChecks: {
-        description:
-          "WhatsApp responsiveness pressure from degraded Gateway and local TUI clients.",
+        description: "Gateway pressure and local TUI observations when WhatsApp is enabled.",
         defaultEnabled: false,
         async detect(ctx) {
           const { collectWhatsappResponsivenessHealthFindings } =
@@ -424,6 +439,7 @@ export function resolveFinalDoctorHealthContributions(params: {
     createDoctorHealthContribution({
       id: "doctor:workspace-suggestions",
       label: "Workspace suggestions",
+      updatePolicy: "standalone",
       healthCheckIds: ["core/doctor/workspace-suggestions"],
       run: runWorkspaceSuggestionsHealth,
     }),

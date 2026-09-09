@@ -1,5 +1,5 @@
 /**
- * Durable top-level requester settle wake delivery.
+ * Durable requester settle wake delivery.
  *
  * Lifecycle owns the persisted outbox state on retained subagent run rows;
  * this module selects a drained wave and delivers its synthesized wake.
@@ -31,6 +31,10 @@ import type {
   SubagentRunRecord,
 } from "../registry/subagent-registry.types.js";
 import { hasSubagentRunEnded } from "../registry/subagent-run-liveness.js";
+import {
+  consumeRequesterFinalAttachment,
+  revokeRequesterFinalAttachment,
+} from "../requester-final-attachment.js";
 import { getSubagentDepthFromSessionStore } from "../spawn/subagent-depth.js";
 import {
   deliverSubagentAnnouncement,
@@ -178,7 +182,7 @@ function readSharedBatchState(batch: readonly SubagentRunRecord[]): RequesterSet
 }
 
 /**
- * Wakes a registry-less top-level requester once its last spawned child
+ * Wakes a top-level or explicitly yielded nested requester once its last child
  * reaches terminal settle. Durable state transitions happen synchronously
  * through lifecycle-owned callbacks before and after every async delivery.
  */
@@ -201,9 +205,42 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
   if (!requesterSessionKey || !initialState) {
     return false;
   }
+  const finalizeRequesterAttachment = (
+    runIds: readonly string[],
+    state: RequesterSettleWakeBatchState,
+    delivery?: SubagentAnnounceDeliveryResult,
+    requesterSessionId?: string,
+  ): void => {
+    if (
+      !requesterAgentId ||
+      state.requesterYieldBatch !== true ||
+      state.rearmGeneration === undefined
+    ) {
+      return;
+    }
+    const finalText = delivery?.finalAssistantVisibleText?.trim();
+    if (delivery?.delivered && requesterSessionId && finalText) {
+      consumeRequesterFinalAttachment({
+        requesterAgentId,
+        requesterSessionKey,
+        requesterSessionId,
+        batchRunIds: runIds,
+        rearmGeneration: state.rearmGeneration,
+        text: finalText,
+      });
+      return;
+    }
+    revokeRequesterFinalAttachment({
+      requesterAgentId,
+      requesterSessionKey,
+      batchRunIds: runIds,
+      rearmGeneration: state.rearmGeneration,
+    });
+  };
   const admittedRearmGeneration = initialState.rearmGeneration;
   if (isCronSessionKey(requesterSessionKey)) {
     completeBatch([params.settledEntry], initialState.rearmGeneration);
+    finalizeRequesterAttachment([params.settledEntry.runId], initialState);
     return false;
   }
 
@@ -299,6 +336,7 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
         path: "none",
         error: "requester settle wake deferred too many times",
       });
+      finalizeRequesterAttachment(batchRunIds, state);
       return;
     }
     params.transitionBatch(settledBatch, {
@@ -332,17 +370,21 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
   const requesterYieldedAfterDelivery =
     selectedState.afterRequesterYield === true ||
     (selectedState.requesterYieldBatch === true && selectedState.rearmGeneration !== undefined);
+  const requesterDepth = getSubagentDepthFromSessionStore(requesterSessionKey, {
+    cfg,
+    agentId: requesterAgentId,
+  });
+  // Explicit yield transfers continuation to this batch at every depth.
+  // Ordinary nested waves remain owned by the descendant-settle path.
   if (
     requiredSettled.length === 0 ||
     (requiredSettled.length < 2 &&
       !hasUndeliveredRequiredCompletion &&
       !requesterYieldedAfterDelivery) ||
-    getSubagentDepthFromSessionStore(requesterSessionKey, {
-      cfg,
-      agentId: requesterAgentId,
-    }) >= 1
+    (!requesterYieldedAfterDelivery && requesterDepth >= 1)
   ) {
     completeBatch(settledBatch, selectedState.rearmGeneration);
+    finalizeRequesterAttachment(batchRunIds, selectedState);
     return false;
   }
 
@@ -356,6 +398,7 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
       path: "none",
       error: "requester session unavailable",
     });
+    finalizeRequesterAttachment(batchRunIds, selectedState);
     return false;
   }
 
@@ -449,6 +492,7 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
           path: "none",
           error: state.lastError ?? "requester settle wake attempts exhausted",
         });
+        finalizeRequesterAttachment(batchRunIds, state);
         return false;
       }
       attemptIndex = state.attemptCount;
@@ -475,9 +519,9 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
         requesterOrigin: requesterSessionOrigin,
         directOrigin,
         sourceSessionKey: currentSettledEntry.childSessionKey,
-        sourceTool: "subagent_announce",
+        sourceTool: "subagent_settle",
         targetRequesterSessionKey: requesterSessionKey,
-        requesterIsSubagent: false,
+        requesterIsSubagent: requesterDepth >= 1,
         expectsCompletionMessage: false,
         requireDirectDelivery: true,
         ...(requesterYieldedAfterDelivery ? { requireVisibleReply: true } : {}),
@@ -502,6 +546,7 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
           path: "none",
           error: lastError,
         });
+        finalizeRequesterAttachment(batchRunIds, state);
         return false;
       }
       const nextAttemptAt = Date.now() + retryDelayMs;
@@ -524,6 +569,7 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
     }
     if (delivery.delivered) {
       completeBatch(settledBatch, state.rearmGeneration, delivery);
+      finalizeRequesterAttachment(batchRunIds, state, delivery, requesterEntry.sessionId);
       return true;
     }
     if (
@@ -533,6 +579,7 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
       delivery.reason === "requester_abandoned"
     ) {
       completeBatch(settledBatch, state.rearmGeneration, delivery);
+      finalizeRequesterAttachment(batchRunIds, state, delivery, requesterEntry.sessionId);
       return false;
     }
 
@@ -541,6 +588,7 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
     const lastError = delivery.error ?? delivery.reason ?? "undelivered";
     if (attemptCount >= REQUESTER_SETTLE_WAKE_MAX_ATTEMPTS || retryDelayMs === undefined) {
       completeBatch(settledBatch, state.rearmGeneration, { ...delivery, error: lastError });
+      finalizeRequesterAttachment(batchRunIds, state, delivery, requesterEntry.sessionId);
       return false;
     }
     const nextAttemptAt = Date.now() + retryDelayMs;

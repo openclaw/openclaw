@@ -672,24 +672,24 @@ suite.define(() => {
           signInAttempt += 1;
           await section.getByRole("button", { name: "Add account", exact: true }).click();
           const picker = section.locator(".profile-auth-provider");
-          await picker.click();
+          await picker.locator(".picker-select__trigger").click();
           if (captureUiProof) {
-            await expect(picker.locator('wa-option[value="xai"]')).toBeVisible();
+            await expect(picker.locator('[role="option"][data-value="xai"]')).toBeVisible();
             // Web Awesome exposes the options before the owning popup finishes fading in.
             await writeFile(
               path.join(proofDir, `connected-accounts-providers-${signInAttempt}.png`),
               await takeControlUiViewportScreenshot(
                 page,
                 picker.locator('wa-popup [part="popup"]'),
-                [picker.locator('wa-option[value="xai"]')],
+                [picker.locator('[role="option"][data-value="xai"]')],
               ),
             );
           }
-          await picker.locator(`wa-option[value="${providerId}"]`).click();
+          await picker.locator(`[role="option"][data-value="${providerId}"]`).click();
           if (providerId === "openai") {
             const methods = section.locator(".profile-auth-method");
-            await methods.click();
-            await methods.locator('wa-option[value="browser"]').click();
+            await methods.locator(".picker-select__trigger").click();
+            await methods.locator('[role="option"][data-value="browser"]').click();
           }
           await expect(section.locator(".profile-auth-connect-start")).toHaveText("Sign in");
           await section.locator(".profile-auth-connect-start").click();
@@ -840,35 +840,6 @@ suite.define(() => {
         await captureAccounts("connected-accounts-grok-added.png", selectedAccount);
       },
     );
-  });
-
-  it("retries the missing identity bootstrap and opens the profile editor", async () => {
-    await suite.withPage(undefined, async ({ page }) => {
-      const gateway = await installMockGateway(page, {
-        basePath,
-        presenceUsers: testPresenceUsers,
-        methodResponses: {
-          "users.self": { sequence: [{}, { profile: testProfile }] },
-        },
-      });
-
-      const response = await page.goto(new URL(profilePath, suite.server.baseUrl).href);
-      expect(response?.status()).toBe(200);
-
-      const emptyState = page.locator(".profile-identity-empty");
-      await emptyState.waitFor({ timeout: 10_000 });
-      await expect(emptyState.textContent()).resolves.toContain("Identity is not set.");
-      await screenshot(page, "01-identity-not-set.png");
-
-      await page.getByRole("button", { name: "Set identity" }).click();
-
-      await page.locator('.identity-name-control input[type="text"]').waitFor({ timeout: 10_000 });
-      await expect.poll(async () => (await gateway.getRequests("users.self")).length).toBe(2);
-      await expect(page.locator(".identity-name-control input").inputValue()).resolves.toBe(
-        testProfile.displayName,
-      );
-      await screenshot(page, "02-identity-editor.png");
-    });
   });
 
   it("keeps identity refresh single-flight and retries after a failed request", async () => {

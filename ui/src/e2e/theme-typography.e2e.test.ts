@@ -6,7 +6,6 @@ import {
   formatKeyboardShortcutCombo,
   KEYBOARD_SHORTCUT_COMBOS,
 } from "../lib/keyboard-shortcut-contract.ts";
-import { finishElementAnimations } from "../test-helpers/animations.ts";
 import {
   controlUiBundledGatewayUrl,
   defaultControlUiFeatureMethods,
@@ -15,6 +14,7 @@ import {
   waitForControlUiRoute,
   waitForControlUiSettingsTakeover,
 } from "../test-helpers/control-ui-e2e.ts";
+import { openPicker, selectPickerValue } from "../test-helpers/select-picker-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 /*
@@ -114,40 +114,13 @@ async function captureTypography(
   }
 }
 
-async function openPicker(picker: Locator) {
-  await Promise.all([
-    picker.evaluate(
-      (select) =>
-        new Promise<void>((resolve) => {
-          select.addEventListener("wa-after-show", () => resolve(), { once: true });
-        }),
-    ),
-    picker.click(),
-  ]);
-  await picker.locator('wa-popup [part="popup"]').evaluate(finishElementAnimations);
-}
-
-async function selectPickerValue(picker: Locator, value: string) {
-  await picker.evaluate(async (element, nextValue) => {
-    const select = element as HTMLElement & {
-      open: boolean;
-      updateComplete: Promise<unknown>;
-      value: string;
-    };
-    select.value = nextValue;
-    select.open = false;
-    await select.updateComplete;
-    select.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
-  }, value);
-}
-
 suite.define(() => {
   it("previews fonts on demand, applies independent overrides, and restores theme typography", async () => {
     const { page, themeRequests, gateway } = await openThemedChat("dash", "dark");
     await page.goto(`${suite.server.baseUrl}settings/appearance`);
     await waitForControlUiSettingsTakeover(page);
-    const ui = page.locator("#settings-font-ui");
-    const chat = page.locator("#settings-font-chat");
+    const ui = page.locator("openclaw-select-picker:has(#settings-font-ui)");
+    const chat = page.locator("openclaw-select-picker:has(#settings-font-chat)");
     const preview = page.locator(".settings-typography-preview");
     const fontRequests = () =>
       themeRequests.filter(
@@ -180,7 +153,7 @@ suite.define(() => {
     }
     await captureTypography(page, "picker-default");
     await openPicker(ui);
-    await ui.locator('wa-option[value="geist"]').waitFor({ state: "visible" });
+    await ui.locator('[role="option"][data-value="geist"]').waitFor({ state: "visible" });
     await expect.poll(() => fontRequests().length).toBe(9);
     await captureTypography(page, "picker-specimens");
     await selectPickerValue(ui, "geist");
@@ -244,7 +217,7 @@ suite.define(() => {
     async (theme, body, chat, faces, chatSmoothing) => {
       const timestamp = Date.now();
       const text =
-        "Typography carries the theme: chat prose renders in the reading face while chrome, chips, and code keep their own.";
+        "Typography carries the theme: chat prose renders in the reading face while chrome, chips, and code keep their own: `const example = 1`.";
       const { themeRequests, page } = await openThemedChat(theme, "dark", {
         historyMessages: [
           {
@@ -263,6 +236,7 @@ suite.define(() => {
       await expect
         .poll(() => page.locator(".chat-text").last().textContent())
         .toContain("Typography");
+      await page.locator(".chat-text code").waitFor({ state: "visible" });
 
       const report = await page.evaluate(async () => {
         await document.fonts.ready;
@@ -273,6 +247,9 @@ suite.define(() => {
         return {
           buildId: document.documentElement.getAttribute("data-openclaw-control-ui-build-id"),
           chatFontFamily: lastChat ? primary(getComputedStyle(lastChat).fontFamily) : null,
+          codeFontFamily: lastChat?.querySelector("code")
+            ? primary(getComputedStyle(lastChat.querySelector("code")!).fontFamily)
+            : null,
           chatFontSmoothing: lastChat
             ? getComputedStyle(lastChat).getPropertyValue("-webkit-font-smoothing")
             : null,
@@ -301,6 +278,7 @@ suite.define(() => {
       );
       expect(report.bodyFontFamily).toBe(body);
       expect(report.chatFontFamily).toBe(chat);
+      expect(report.codeFontFamily).toBe("JetBrains Mono");
       // Serif chat faces opt out of the app-wide `antialiased` thinning
       // (applyChatFontSmoothing) so their hairlines stay crisp.
       expect(report.chatFontSmoothing).toBe(chatSmoothing);

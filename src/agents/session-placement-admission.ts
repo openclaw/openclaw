@@ -15,12 +15,17 @@ import { resolveEmbeddedRunSessionLanePolicy } from "./embedded-agent-runner/run
 import type { RunEmbeddedAgentParams } from "./embedded-agent-runner/run/params.js";
 import type { EmbeddedAgentRunResult } from "./embedded-agent-runner/types.js";
 import type { SandboxContext } from "./sandbox/types.js";
+import { beginForegroundSessionMaintenance } from "./session-maintenance/coordinator.js";
 import {
   resolveSessionPlacementForcedTerminalSettlement,
   resolveSessionPlacementTurnSettlementAssertion,
   withoutSessionPlacementForcedTerminalSettlement,
 } from "./session-placement-forced-terminal-settlement.js";
 import { settleRequesterAfterSessionSpawns } from "./subagents/registry/subagent-registry.js";
+import {
+  getGatewayToolCallerIdentity,
+  withoutGatewayToolCallerIdentity,
+} from "./tools/gateway-caller-context.js";
 
 export type LocalTurnPlacementClaim = {
   sessionId: string;
@@ -90,6 +95,21 @@ export function captureSessionPlacementCompactionSuccessorAssertion(): SessionPl
   };
 }
 
+// Placement can register a cancellation proxy before runtime/tool preparation.
+// Only an exact continuation retains caller fences; independently admitted work
+// must enter its own runtime scope instead of borrowing its launching tool's.
+function withPlacementTurnCallerScope<T>(
+  params: Pick<RunEmbeddedAgentParams, "admittedRunContext" | "preparedRunAdmission">,
+  task: () => T,
+): T {
+  const instance =
+    params.admittedRunContext?.operationalRunInstance ??
+    params.preparedRunAdmission?.operationalRunInstance;
+  return instance && getGatewayToolCallerIdentity()?.operationalRunInstance === instance
+    ? task()
+    : withoutGatewayToolCallerIdentity(task);
+}
+
 export async function withSessionPlacementTurnAdmission(
   claim: LocalTurnPlacementClaim,
   params: SessionPlacementTurnParams,
@@ -127,10 +147,12 @@ export async function withSessionPlacementTurnAdmission(
     return result;
   };
   const provider = state.provider;
-  const result = await withoutSessionPlacementForcedTerminalSettlement(() =>
-    provider
-      ? provider.executeTurn(claim, params, runAdmittedLocalTurn, admitTurn)
-      : runAdmittedLocalTurn(),
+  const result = await withPlacementTurnCallerScope(params, () =>
+    withoutSessionPlacementForcedTerminalSettlement(() =>
+      provider
+        ? provider.executeTurn(claim, params, runAdmittedLocalTurn, admitTurn)
+        : runAdmittedLocalTurn(),
+    ),
   );
   if (result.meta.executionTrace?.runner === "cli") {
     settleYieldedRequesterAfterPlacementRelease(claim, result);
@@ -144,7 +166,12 @@ export async function withLocalSessionPlacementTurnSettlement(
   task: (assertSettlementCurrent: () => void) => Promise<EmbeddedAgentRunResult>,
   options: Pick<
     RunEmbeddedAgentParams,
-    "abortSignal" | "lifecycleGeneration" | "trigger" | "inputProvenance"
+    | "abortSignal"
+    | "lifecycleGeneration"
+    | "trigger"
+    | "inputProvenance"
+    | "admittedRunContext"
+    | "preparedRunAdmission"
   > = {},
 ): Promise<EmbeddedAgentRunResult> {
   const provider = state.provider;
@@ -165,6 +192,11 @@ export async function withLocalSessionPlacementTurnSettlement(
     assertOwnerCurrent();
   };
   assertCurrent();
+  const releaseForeground =
+    resolveEmbeddedRunSessionLanePolicy(options.trigger, options.inputProvenance).priority ===
+    "foreground"
+      ? await beginForegroundSessionMaintenance(claim.sessionKey ?? claim.sessionId)
+      : undefined;
   const releaseQueuedContext = retainQueuedAgentRunContext(claim.runId, lifecycleGeneration);
   let releaseCapacityWait: (() => void) | undefined;
   try {
@@ -195,8 +227,10 @@ export async function withLocalSessionPlacementTurnSettlement(
             open = false;
           }
         };
-        const result = await withoutSessionPlacementForcedTerminalSettlement(() =>
-          provider ? provider.executeLocalTurn(claim, runLocal) : runLocal(),
+        const result = await withPlacementTurnCallerScope(options, () =>
+          withoutSessionPlacementForcedTerminalSettlement(() =>
+            provider ? provider.executeLocalTurn(claim, runLocal) : runLocal(),
+          ),
         );
         settleYieldedRequesterAfterPlacementRelease(claim, result);
         return result;
@@ -210,6 +244,7 @@ export async function withLocalSessionPlacementTurnSettlement(
       },
     );
   } finally {
+    releaseForeground?.();
     releaseCapacityWait?.();
     releaseQueuedContext?.("abandoned");
   }
@@ -222,13 +257,18 @@ function settleYieldedRequesterAfterPlacementRelease(
   if (!claim.sessionKey || result.meta.yielded !== true || !result.acceptedSessionSpawns?.length) {
     return;
   }
-  settleRequesterAfterSessionSpawns({
+  const settled = settleRequesterAfterSessionSpawns({
     requesterSessionKey: claim.sessionKey,
     requesterAgentId: claim.agentId,
     requesterTurnRunId: claim.runId,
     requesterYielded: true,
     acceptedSessionSpawns: result.acceptedSessionSpawns,
   });
+  if (settled) {
+    // Native attempts may already have settled before placement released.
+    // A second no-op must preserve their earlier successful result.
+    result.requesterContinuationSettled = true;
+  }
 }
 
 /** Resolves an authoritative sandbox only when the live placement owns remote execution. */

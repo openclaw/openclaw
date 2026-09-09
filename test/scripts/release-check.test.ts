@@ -24,6 +24,7 @@ import {
   createPackedTarballInstallArgs,
   prepareReleaseCheckLocalPackageTarballs,
   RELEASE_CHECK_LOCAL_PACKAGE_TARBALL_DIR_ENV,
+  resolvePackedBundledChannelEntrySmokeCommand,
   resolveReleaseCheckLocalPackageTarballs,
   writePackedTarballInstallManifest,
   writePackedBundledPluginActivationConfig,
@@ -37,6 +38,36 @@ function requirePluginEntries(config: { plugins?: { entries?: Record<string, unk
 }
 
 describe("release-check", () => {
+  it("runs the current TypeScript bundled channel smoke when the target provides it", () => {
+    expect(
+      resolvePackedBundledChannelEntrySmokeCommand(
+        (path) => path.endsWith("test-built-bundled-channel-entry-smoke.mts"),
+        "/runtime/node",
+      ),
+    ).toEqual({
+      command: "/runtime/node",
+      args: ["--import", "tsx", "scripts/test-built-bundled-channel-entry-smoke.mts"],
+    });
+  });
+
+  it("runs the frozen JavaScript bundled channel smoke when that is the target contract", () => {
+    expect(
+      resolvePackedBundledChannelEntrySmokeCommand(
+        (path) => path.endsWith("test-built-bundled-channel-entry-smoke.mjs"),
+        "/runtime/node",
+      ),
+    ).toEqual({
+      command: "/runtime/node",
+      args: ["scripts/test-built-bundled-channel-entry-smoke.mjs"],
+    });
+  });
+
+  it("fails closed when the target provides no bundled channel smoke entrypoint", () => {
+    expect(() => resolvePackedBundledChannelEntrySmokeCommand(() => false)).toThrow(
+      "release-check: target does not provide scripts/test-built-bundled-channel-entry-smoke.mts or .mjs",
+    );
+  });
+
   it("loads sparse release tooling and checks the target worker contract", () => {
     const root = mkdtempSync(join(tmpdir(), "openclaw-release-check-target-"));
     try {
@@ -73,11 +104,13 @@ describe("release-check", () => {
         "stale target fixture",
       );
       const moduleUrl = pathToFileURL(join(toolingRoot, "scripts/release-check.ts")).href;
+      const runtimeArgs = process.versions.bun
+        ? []
+        : ["--import", join(toolingRoot, "scripts/tsx.mjs")];
       const output = execFileSync(
         process.execPath,
         [
-          "--import",
-          join(toolingRoot, "scripts/tsx.mjs"),
+          ...runtimeArgs,
           "--input-type=module",
           "--eval",
           `import { readFileSync } from "node:fs";\n` +
@@ -177,13 +210,7 @@ describe("release-check", () => {
         );
         const result = spawnSync(
           process.execPath,
-          [
-            "--import",
-            join(toolingRoot, "scripts/tsx.mjs"),
-            join(toolingRoot, "scripts/release-check.ts"),
-            "--tarball",
-            tarball,
-          ],
+          [...runtimeArgs, join(toolingRoot, "scripts/release-check.ts"), "--tarball", tarball],
           {
             cwd: root,
             encoding: "utf8",
@@ -201,13 +228,7 @@ describe("release-check", () => {
       );
       const emptyPathResult = spawnSync(
         process.execPath,
-        [
-          "--import",
-          join(toolingRoot, "scripts/tsx.mjs"),
-          join(toolingRoot, "scripts/release-check.ts"),
-          "--tarball",
-          tarball,
-        ],
+        [...runtimeArgs, join(toolingRoot, "scripts/release-check.ts"), "--tarball", tarball],
         {
           cwd: root,
           encoding: "utf8",
@@ -225,13 +246,7 @@ describe("release-check", () => {
       );
       const escapingPathResult = spawnSync(
         process.execPath,
-        [
-          "--import",
-          join(toolingRoot, "scripts/tsx.mjs"),
-          join(toolingRoot, "scripts/release-check.ts"),
-          "--tarball",
-          tarball,
-        ],
+        [...runtimeArgs, join(toolingRoot, "scripts/release-check.ts"), "--tarball", tarball],
         {
           cwd: root,
           encoding: "utf8",

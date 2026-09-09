@@ -16,12 +16,10 @@ import { cancelUnreadResponseBody } from "../../infra/http-body.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { readProviderJsonResponse } from "../provider-http-errors.js";
 import { resolveProviderRequestHeaders } from "../provider-request-config.js";
-import { notifyAuthProfileFailureHook, setAuthProfileFailureHook } from "./failure-hook.js";
+import { notifyAuthProfileFailureHook } from "./failure-hook.js";
 import { logAuthProfileFailureStateChange } from "./state-observation.js";
-import {
-  resolvePersistedAuthProfileOwnerAgentDir,
-  updateAuthProfileStoreWithLock,
-} from "./store.js";
+import { updateAuthProfileStoreWithLock } from "./store-runtime.js";
+import { resolvePersistedAuthProfileOwnerAgentDir } from "./store.js";
 import type {
   AuthProfileBlockedSource,
   AuthProfileCooldownClassification,
@@ -34,6 +32,7 @@ import {
   isActiveUnusableWindow,
   isAuthCooldownBypassedForProvider,
   isModelScopedCooldownReason,
+  resolveInlineProviderApiKeyUsageId,
   resolveProfileUnusableUntil,
 } from "./usage-state.js";
 
@@ -42,13 +41,12 @@ export {
   clearExpiredCooldowns,
   getSoonestCooldownExpiry,
   isProfileInCooldown,
+  resolveInlineProviderApiKeyUsageId,
 } from "./usage-state.js";
 
 const authProfileUsageDeps = {
   updateAuthProfileStoreWithLock,
 };
-
-export { setAuthProfileFailureHook };
 
 /** Test-only dependency injection for usage persistence hooks. */
 const testing = {
@@ -103,12 +101,6 @@ async function updateOwnedAuthProfileUsage(
     store.usageStats = { ...store.usageStats, [profileId]: usage };
   }
   return updated;
-}
-
-const INLINE_API_KEY_USAGE_ID_PREFIX = "inline-api-key:";
-
-export function resolveInlineProviderApiKeyUsageId(provider: string): string {
-  return `${INLINE_API_KEY_USAGE_ID_PREFIX}${normalizeProviderId(provider)}`;
 }
 
 const FAILURE_REASON_PRIORITY: AuthProfileFailureReason[] = [
@@ -743,7 +735,7 @@ export function resolveProfilesUnavailableReason(params: {
 }
 
 /** Returns the regular transient-failure cooldown duration for an error count. */
-export function calculateAuthProfileCooldownMs(errorCount: number): number {
+function calculateAuthProfileCooldownMs(errorCount: number): number {
   const normalized = Math.max(1, errorCount);
   if (normalized <= 1) {
     return 30_000; // 30 seconds
@@ -845,43 +837,6 @@ export function resolveProfileUnusableUntilForDisplay(
     return null;
   }
   return resolveProfileUnusableUntil(stats);
-}
-
-export function resolveInlineProviderApiKeyUnusableUntil(
-  store: AuthProfileStore,
-  provider: string,
-): number | null {
-  if (isAuthCooldownBypassedForProvider(provider)) {
-    return null;
-  }
-  const stats = store.usageStats?.[resolveInlineProviderApiKeyUsageId(provider)];
-  if (!stats) {
-    return null;
-  }
-  return resolveProfileUnusableUntil(stats);
-}
-
-function resetUsageStats(
-  existing: ProfileUsageStats | undefined,
-  overrides?: Partial<ProfileUsageStats>,
-): ProfileUsageStats {
-  return {
-    ...existing,
-    errorCount: 0,
-    blockedUntil: undefined,
-    blockedReason: undefined,
-    blockedSource: undefined,
-    blockedModel: undefined,
-    blockedScope: undefined,
-    cooldownUntil: undefined,
-    cooldownReason: undefined,
-    cooldownClassification: undefined,
-    cooldownModel: undefined,
-    disabledUntil: undefined,
-    disabledReason: undefined,
-    failureCounts: undefined,
-    ...overrides,
-  };
 }
 
 function updateUsageStatsEntry(
@@ -1303,52 +1258,4 @@ export async function markInlineProviderApiKeyFailure(params: {
   }
 }
 
-/**
- * Mark a profile as transiently failed. Applies stepped backoff cooldown.
- * Cooldown times: 30s, 1min, 5min (capped).
- * Uses store lock to avoid overwriting concurrent usage updates.
- */
-export async function markAuthProfileCooldown(params: {
-  store: AuthProfileStore;
-  profileId: string;
-  agentDir?: string;
-  runId?: string;
-}): Promise<void> {
-  await markAuthProfileFailure({
-    store: params.store,
-    profileId: params.profileId,
-    reason: "unknown",
-    agentDir: params.agentDir,
-    runId: params.runId,
-  });
-}
-
-/**
- * Clear cooldown for a profile (e.g., manual reset).
- * Uses store lock to avoid overwriting concurrent usage updates.
- */
-export async function clearAuthProfileCooldown(params: {
-  store: AuthProfileStore;
-  profileId: string;
-  agentDir?: string;
-}): Promise<void> {
-  const { store, profileId, agentDir } = params;
-  const updated = await updateOwnedAuthProfileUsage(store, profileId, {
-    agentDir,
-    updater: (freshStore) => {
-      if (!freshStore.usageStats?.[profileId]) {
-        return false;
-      }
-
-      updateUsageStatsEntry(freshStore, profileId, (existing) => resetUsageStats(existing));
-      return true;
-    },
-  });
-  if (updated) {
-    return;
-  }
-  if (updated === null) {
-    logDroppedAuthProfileBookkeeping("clear_cooldown", profileId);
-  }
-}
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -23,6 +23,7 @@ import {
 import { formatContextLimitTruncationNotice } from "./context-truncation-notice.js";
 import { log } from "./logger.js";
 import {
+  hashToolResultProjectionSnapshot,
   recordToolResultPromptProjection,
   type ToolResultPromptProjectionState,
 } from "./session-prompt-state.js";
@@ -229,13 +230,15 @@ export function pruneExpiredCacheTtlToolResults(params: {
     return next ?? unchanged;
   }
   const estimate = params.dropThinkingBlocksForEstimate ? dropThinkingBlocks(messages) : messages;
-  let totalChars = estimate.reduce((sum, message) => sum + cacheTtlMessageChars(message), 0);
+  // Thinking removal preserves positions; reuse costs only within this pruning pass.
+  const messageChars = estimate.map(cacheTtlMessageChars);
+  let totalChars = messageChars.reduce((sum, chars) => sum + chars, 0);
   const charWindow = params.contextWindowTokens * 4;
   if (totalChars / charWindow < 0.3) {
     return next ?? unchanged;
   }
   let pruned = false;
-  const eligible: number[] = [];
+  const eligible: { index: number; chars: number }[] = [];
   for (let index = start; index < cutoff; index++) {
     const message = messages[index];
     if (
@@ -249,7 +252,8 @@ export function pruneExpiredCacheTtlToolResults(params: {
     if (previousMode === "hard") {
       continue;
     }
-    eligible.push(index);
+    const candidate = { index, chars: messageChars[index]! };
+    eligible.push(candidate);
     if (previousMode === "soft") {
       continue;
     }
@@ -257,18 +261,19 @@ export function pruneExpiredCacheTtlToolResults(params: {
     const source = params.messages[index];
     const projected = source?.role === "toolResult" ? softPruneCacheTtlToolResult(source) : source;
     if (projected && projected !== source && projected.role === "toolResult") {
-      totalChars += cacheTtlMessageChars(projected) - cacheTtlMessageChars(message);
+      const projectedChars = cacheTtlMessageChars(projected);
+      totalChars += projectedChars - candidate.chars;
+      candidate.chars = projectedChars;
       recordProjection(index, projected, "soft");
       pruned = true;
     }
   }
-  const output = next ?? unchanged;
   if (
     totalChars / charWindow >= 0.5 &&
     settings.hardClear &&
-    eligible.reduce((sum, index) => sum + cacheTtlMessageChars(output[index]!), 0) >= 50_000
+    eligible.reduce((sum, candidate) => sum + candidate.chars, 0) >= 50_000
   ) {
-    for (const index of eligible) {
+    for (const { index, chars } of eligible) {
       if (totalChars / charWindow < 0.5) {
         break;
       }
@@ -277,7 +282,7 @@ export function pruneExpiredCacheTtlToolResults(params: {
         continue;
       }
       const cleared = clearCacheTtlToolResult(message);
-      totalChars += cacheTtlMessageChars(cleared) - cacheTtlMessageChars(message);
+      totalChars += cacheTtlMessageChars(cleared) - chars;
       recordProjection(index, cleared, "hard");
       pruned = true;
     }
@@ -896,6 +901,15 @@ const cacheTtlProjectionSnapshotSchema = z.object({
     ]),
   ),
   ambiguousToolResultBaseKeys: z.array(z.string()).optional(),
+  frozenToolResults: z
+    .array(
+      z.object({
+        key: z.string(),
+        sourceHash: z.string(),
+        texts: z.array(z.string()).optional(),
+      }),
+    )
+    .optional(),
 });
 
 /** Reads pruned keys from the active transcript branch, never from a sibling branch. */
@@ -903,6 +917,7 @@ export function restoreCacheTtlToolResultProjections(
   projectionState: ToolResultPromptProjectionState,
   entries: readonly { type?: unknown; customType?: unknown; data?: unknown }[],
 ): void {
+  projectionState.lastWrittenSnapshotHash = undefined;
   for (let index = entries.length - 1; index >= 0; index--) {
     const entry = entries[index];
     if (entry?.type === "reset") {
@@ -915,8 +930,26 @@ export function restoreCacheTtlToolResultProjections(
     if (!parsed.success) {
       continue;
     }
+    projectionState.lastWrittenSnapshotHash = hashToolResultProjectionSnapshot({
+      prunedToolResults: parsed.data.prunedToolResults,
+      ambiguousToolResultBaseKeys: parsed.data.ambiguousToolResultBaseKeys ?? [],
+      frozenToolResults: parsed.data.frozenToolResults ?? [],
+    });
     for (const key of parsed.data.ambiguousToolResultBaseKeys ?? []) {
       projectionState.ambiguousBaseKeys.add(key);
+    }
+    for (const { key, sourceHash, texts } of parsed.data.frozenToolResults ?? []) {
+      // A live attempt can be ahead of its last marker; never roll it back.
+      if (projectionState.sourceHashByKey.has(key)) {
+        continue;
+      }
+      projectionState.sourceHashByKey.set(key, sourceHash);
+      projectionState.frozen.add(key);
+      if (texts) {
+        projectionState.replacements.set(key, {
+          content: texts.map((text) => ({ type: "text", text })),
+        });
+      }
     }
     for (const { key, ...mark } of parsed.data.prunedToolResults) {
       if (!projectionState.replacements.get(key)?.cacheTtl) {

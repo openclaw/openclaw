@@ -3,6 +3,7 @@
 import { nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { i18n } from "../../i18n/index.ts";
+import { choosePickerValue, updatePickers } from "../../test-helpers/select-picker.ts";
 import type { ModelProviderCard } from "./data.ts";
 import { renderModelProviders } from "./view.ts";
 
@@ -14,6 +15,11 @@ function card(overrides: Partial<ModelProviderCard> = {}): ModelProviderCard {
     id: "openai",
     displayName: "OpenAI",
     profiles: [],
+    profileProviderIds: {},
+    profileOrders: {},
+    profileOrderStoredProviders: [],
+    profileOrderExplicitProviders: [],
+    profileOrderLocks: {},
     credentialProviderIds: ["openai"],
     logoutTargets: [],
     hasConfigApiKey: false,
@@ -42,9 +48,12 @@ function props(overrides: Partial<ModelProvidersViewProps> = {}): ModelProviders
     thinkingOverridden: true,
     fastMode: false,
     fastModeOverridden: true,
+    catalogDiscovering: false,
+    catalogDiscoveryError: null,
     configBusy: false,
     quickAddSupported: true,
     unconfiguredProviders: [{ id: "anthropic", displayName: "Anthropic" }],
+    canViewProfiles: true,
     canMutate: true,
     mutationBlockedReason: null,
     providerUsageStalled: false,
@@ -54,7 +63,7 @@ function props(overrides: Partial<ModelProvidersViewProps> = {}): ModelProviders
     probeResults: {},
     keyEditorProvider: null,
     keyDraft: "",
-    pendingLogoutProvider: null,
+    profileOrders: {},
     addProviderOpen: false,
     addProviderId: "",
     addProviderKey: "",
@@ -66,8 +75,7 @@ function props(overrides: Partial<ModelProvidersViewProps> = {}): ModelProviders
     onRemoveKey: () => undefined,
     onProbe: () => undefined,
     onRequestLogout: () => undefined,
-    onCancelLogout: () => undefined,
-    onLogout: () => undefined,
+    onProfileOrderChange: () => undefined,
     onAddProviderToggle: () => undefined,
     onAddProviderIdChange: () => undefined,
     onAddProviderKeyChange: () => undefined,
@@ -79,10 +87,50 @@ function props(overrides: Partial<ModelProvidersViewProps> = {}): ModelProviders
     onThinkingReset: () => undefined,
     onFastModeChange: () => undefined,
     onFastModeReset: () => undefined,
+    onModelPickerOpen: () => undefined,
+    onCatalogRetry: () => undefined,
     onOpenModelSetup: () => undefined,
     ...overrides,
   };
 }
+
+it("retains a saved unavailable model without offering it for another default setting", async () => {
+  const onUtilityChange = vi.fn();
+  const container = document.createElement("div");
+  render(
+    renderModelProviders(
+      props({
+        configuredModels: [
+          { provider: "fixture", id: "ready", name: "Ready", available: true },
+          { provider: "fixture", id: "blocked", name: "Blocked", available: false },
+        ],
+        defaultModels: {
+          primary: "fixture/ready",
+          fallbacks: ["fixture/blocked"],
+          utilityModel: "fixture/blocked",
+        },
+        onUtilityChange,
+      }),
+    ),
+    container,
+  );
+
+  await updatePickers(container);
+  const blocked = [...container.querySelectorAll('[role="option"][data-value="fixture/blocked"]')];
+  expect(blocked).toHaveLength(3);
+  expect(blocked.every((option) => option.getAttribute("aria-disabled") === "true")).toBe(true);
+  expect(
+    [...container.querySelectorAll('[role="option"][data-value="fixture/ready"]')].every(
+      (option) => option.getAttribute("aria-disabled") === "false",
+    ),
+  ).toBe(true);
+  const utility = container.querySelector<HTMLButtonElement>("#model-providers-utility-model")!;
+  expect(utility.textContent).toContain("Blocked");
+  await choosePickerValue(utility, "fixture/blocked");
+  expect(onUtilityChange).not.toHaveBeenCalled();
+  await choosePickerValue(utility, "__openclaw_automatic_utility__");
+  expect(onUtilityChange).toHaveBeenCalledExactlyOnceWith(null);
+});
 
 function mount(viewProps: ModelProvidersViewProps): HTMLDivElement {
   const container = document.createElement("div");
@@ -378,7 +426,7 @@ describe("renderModelProviders", () => {
     expect([...groups].every((group) => group.disabled)).toBe(true);
   });
 
-  it("locks provider and default-model mutations while shared config work is pending", () => {
+  it("locks provider and default-model mutations while shared config work is pending", async () => {
     const container = mount(
       props({
         configBusy: true,
@@ -395,7 +443,10 @@ describe("renderModelProviders", () => {
           card({
             hasConfigApiKey: true,
             apiKey: { source: "config" },
-            logoutTargets: [{ provider: "openai", profileIds: ["openai:oauth"] }],
+            profiles: [
+              { profileId: "openai:one", type: "oauth", status: "ok", logoutSupported: true },
+            ],
+            logoutTargets: [{ provider: "openai", profileIds: ["openai:one"] }],
           }),
         ],
         keyEditorProvider: "openai",
@@ -407,9 +458,12 @@ describe("renderModelProviders", () => {
     );
 
     const defaults = container.querySelector(".model-providers__defaults");
-    const defaultSelects = [...(defaults?.querySelectorAll("wa-select") ?? [])];
+    await updatePickers(container);
+    const defaultSelects = [...(defaults?.querySelectorAll("openclaw-select-picker") ?? [])];
     expect(defaultSelects).toHaveLength(3);
-    expect(defaultSelects.every((select) => select.hasAttribute("disabled"))).toBe(true);
+    expect(
+      defaultSelects.every((select) => select.querySelector<HTMLButtonElement>("button")?.disabled),
+    ).toBe(true);
     expect(
       [
         ...(defaults?.querySelectorAll<HTMLButtonElement>(
@@ -425,7 +479,9 @@ describe("renderModelProviders", () => {
     ).toBe(true);
     expect(button(provider!, "Replace key")?.disabled).toBe(true);
     expect(button(provider!, "Remove key")?.disabled).toBe(true);
-    expect(button(provider!, "Log out")?.disabled).toBe(true);
+    expect(
+      provider?.querySelector<HTMLButtonElement>(".model-providers__profile-logout")?.disabled,
+    ).toBe(true);
 
     const addForm = container.querySelector(".model-providers__add-form");
     expect(
@@ -437,7 +493,7 @@ describe("renderModelProviders", () => {
     ).toEqual([true, true, true]);
   });
 
-  it("locks an already-open provider form after mutation access is revoked", () => {
+  it("locks an already-open provider form after mutation access is revoked", async () => {
     const onAddProvider = vi.fn();
     const onAddProviderToggle = vi.fn();
     const container = mount(
@@ -466,10 +522,11 @@ describe("renderModelProviders", () => {
 
     expect(controls.map((control) => control.disabled)).toEqual([true, true, true]);
     const defaults = container.querySelector(".model-providers__defaults");
+    await updatePickers(container);
     expect(
-      [...(defaults?.querySelectorAll("wa-select, wa-radio-group") ?? [])].every((control) =>
-        control.hasAttribute("disabled"),
-      ),
+      [
+        ...(defaults?.querySelectorAll("openclaw-select-picker button, wa-radio-group") ?? []),
+      ].every((control) => control.hasAttribute("disabled")),
     ).toBe(true);
     expect(text(defaults)).not.toContain("operator.admin access");
     addForm?.querySelector<HTMLButtonElement>("button")?.click();
@@ -868,7 +925,7 @@ describe("renderModelProviders", () => {
     expect(text(provider)).not.toContain("Connection failed");
   });
 
-  it("qualifies slash-bearing model IDs with their catalog provider", () => {
+  it("qualifies slash-bearing model IDs with their catalog provider", async () => {
     const container = mount(
       props({
         configuredModels: [
@@ -886,13 +943,14 @@ describe("renderModelProviders", () => {
         },
       }),
     );
+    await updatePickers(container);
     const option = container.querySelector(
-      'wa-option[value="openrouter/anthropic/claude-sonnet-4"]',
+      '[role="option"][data-value="openrouter/anthropic/claude-sonnet-4"]',
     );
-    expect(option?.hasAttribute("selected")).toBe(true);
+    expect(option?.getAttribute("aria-selected") === "true").toBe(true);
   });
 
-  it("renders alias defaults and distinct automatic or disabled utility states", () => {
+  it("renders alias defaults and distinct automatic or disabled utility states", async () => {
     const aliasEntry = {
       id: "claude-opus",
       provider: "anthropic",
@@ -906,12 +964,17 @@ describe("renderModelProviders", () => {
         defaultModels: { primary: "opus", fallbacks: [], utilityModel: null },
       }),
     );
-    expect(automatic.querySelector('wa-option[value="opus"]')?.hasAttribute("selected")).toBe(true);
+    await updatePickers(automatic);
+    expect(
+      automatic
+        .querySelector('[role="option"][data-value="opus"]')
+        ?.getAttribute("aria-selected") === "true",
+    ).toBe(true);
     expect(
       text(
         automatic
-          .querySelectorAll(".model-providers__defaults wa-select")[1]
-          ?.querySelector("wa-option[selected]") ?? null,
+          .querySelectorAll(".model-providers__defaults openclaw-select-picker")[1]
+          ?.querySelector('[role="option"][aria-selected="true"]') ?? null,
       ),
     ).toBe("Auto");
 
@@ -921,11 +984,12 @@ describe("renderModelProviders", () => {
         defaultModels: { primary: "opus", fallbacks: [], utilityModel: "" },
       }),
     );
+    await updatePickers(disabled);
     expect(
       text(
         disabled
-          .querySelectorAll(".model-providers__defaults wa-select")[1]
-          ?.querySelector("wa-option[selected]") ?? null,
+          .querySelectorAll(".model-providers__defaults openclaw-select-picker")[1]
+          ?.querySelector('[role="option"][aria-selected="true"]') ?? null,
       ),
     ).toBe("Disabled");
   });
@@ -950,37 +1014,6 @@ describe("renderModelProviders", () => {
     );
     button(container, "Test connection")?.click();
     expect(onProbe).toHaveBeenCalledWith("openai", ["anthropic", "claude-cli"]);
-  });
-
-  it("shows logout confirmation only for OAuth or token profiles", () => {
-    const onLogout = vi.fn();
-    const container = mount(
-      props({
-        cards: [
-          card({
-            credentialProviderIds: ["openai", "openai-codex"],
-            logoutTargets: [{ provider: "openai-codex", profileIds: ["openai:oauth"] }],
-            profiles: [
-              {
-                profileId: "openai:oauth",
-                type: "oauth",
-                status: "ok",
-                logoutSupported: true,
-              },
-            ],
-          }),
-        ],
-        pendingLogoutProvider: "openai",
-        onLogout,
-      }),
-    );
-    expect(text(container.querySelector(".model-providers__confirm"))).toContain(
-      "Log out of OpenAI?",
-    );
-    container.querySelector<HTMLButtonElement>(".model-providers__confirm .btn.danger")?.click();
-    expect(onLogout).toHaveBeenCalledWith("openai", [
-      { provider: "openai-codex", profileIds: ["openai:oauth"] },
-    ]);
   });
 
   it("uses the original config key for credential mutations", () => {

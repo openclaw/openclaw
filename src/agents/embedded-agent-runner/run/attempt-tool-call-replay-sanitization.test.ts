@@ -2,6 +2,8 @@
 
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { describe, expect, it, vi } from "vitest";
+import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
+import { textToolResult } from "../../test-helpers/sparse-transcript.test-support.js";
 import {
   sanitizeOpenAIResponsesReplayForStream,
   sanitizeReplayToolCallIdsForStream,
@@ -403,6 +405,46 @@ describe("sanitizeReplayToolCallIdsForStream", () => {
 });
 
 describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
+  it("preserves valid Bedrock tool calls while merging appended user turns", () => {
+    const assistant = {
+      role: "assistant",
+      content: [{ type: "toolCall", id: "call_1", name: "read", arguments: {} }],
+    };
+    const baseFn = vi.fn((_model: unknown, _context: unknown) =>
+      createFakeStream({ events: [], resultMessage: { role: "assistant", content: [] } }),
+    );
+    const wrapped = wrapStreamFnSanitizeMalformedToolCalls(baseFn as never, new Set(["read"]), {
+      validateAnthropicTurns: true,
+      validateGeminiTurns: false,
+      preserveSignatures: true,
+      dropThinkingBlocks: false,
+      appendOnlyRuntimeContext: true,
+    });
+    void wrapped(
+      { api: "bedrock-converse-stream" } as never,
+      {
+        messages: [
+          assistant,
+          { role: "user", content: "earlier" },
+          { role: "user", content: "continue" },
+        ],
+      } as never,
+    );
+    const context = baseFn.mock.calls[0]?.[1] as { messages: AgentMessage[] };
+    expect(context.messages[0]).toBe(assistant);
+    expect(context.messages).toEqual([
+      assistant,
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "earlier" },
+          { type: "text", text: "continue" },
+        ],
+        timestamp: undefined,
+      },
+    ]);
+  });
+
   it("keeps valid non-Responses replay inputs pass-through", () => {
     const messages: AgentMessage[] = [
       {
@@ -535,14 +577,7 @@ describe("sanitizeOpenAIResponsesReplayForStream", () => {
         ],
       },
       reasoning,
-      {
-        role: "toolResult",
-        toolCallId: "call_async",
-        toolName: "lookup",
-        content: [{ type: "text", text: "Ready" }],
-        isError: false,
-        timestamp: 2,
-      },
+      makeTextToolResult("call_async", "lookup", "Ready", false, 2),
       { role: "user", content: "Include the queued update", timestamp: 3 },
     ];
 
@@ -604,13 +639,7 @@ describe("sanitizeOpenAIResponsesReplayForStream", () => {
           { type: "toolCall", id: "call_123|fc_123", name: "noop", arguments: {} },
         ],
       } as never,
-      {
-        role: "toolResult",
-        toolCallId: "call_123|fc_123",
-        toolName: "noop",
-        content: [{ type: "text", text: "ok" }],
-        isError: false,
-      } as never,
+      textToolResult("call_123|fc_123", "noop", "ok", { isError: false }) as never,
     ];
 
     expect(sanitizeOpenAIResponsesReplayForStream(messages)).toBe(messages);
@@ -634,13 +663,12 @@ describe("sanitizeOpenAIResponsesReplayForStream", () => {
           },
         ],
       } as never,
-      {
-        role: "toolResult",
-        toolCallId: "call_mock_image_generate_1",
-        toolName: "image_generate",
-        content: [{ type: "text", text: "Background task started for image generation." }],
-        isError: false,
-      } as never,
+      textToolResult(
+        "call_mock_image_generate_1",
+        "image_generate",
+        "Background task started for image generation.",
+        { isError: false },
+      ) as never,
       {
         role: "custom",
         content: "Image generation started; wait for completion.",

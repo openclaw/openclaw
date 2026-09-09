@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { isCommandPaletteShortcut } from "../components/command-palette-contract.ts";
 import { isTerminalPanelShortcut } from "../components/panel-toggle-contract.ts";
 import { t } from "../i18n/index.ts";
@@ -14,15 +14,20 @@ import {
 } from "./keyboard-shortcut-catalog.ts";
 
 describe("keyboard shortcut catalog matching", () => {
+  afterEach(() => vi.restoreAllMocks());
   it.each([
-    { name: "Command", modifiers: { metaKey: true } },
-    { name: "Control", modifiers: { ctrlKey: true } },
-  ])("accepts the $name primary modifier and non-Latin physical letters", ({ modifiers }) => {
-    const event = new KeyboardEvent("keydown", { key: "л", code: "KeyK", ...modifiers });
+    { name: "Command", platform: "MacIntel", modifiers: { metaKey: true } },
+    { name: "Control", platform: "Win32", modifiers: { ctrlKey: true } },
+  ])(
+    "accepts the $name primary modifier and non-Latin physical letters",
+    ({ platform, modifiers }) => {
+      vi.spyOn(navigator, "platform", "get").mockReturnValue(platform);
+      const event = new KeyboardEvent("keydown", { key: "л", code: "KeyK", ...modifiers });
 
-    expect(matchesShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.commandPalette, event)).toBe(true);
-    expect(isCommandPaletteShortcut(event)).toBe(true);
-  });
+      expect(matchesShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.commandPalette, event)).toBe(true);
+      expect(isCommandPaletteShortcut(event)).toBe(true);
+    },
+  );
 
   it.each([
     { name: "both primary modifiers", modifiers: { metaKey: true, ctrlKey: true } },

@@ -1,6 +1,7 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
+import { waitForControlUiProofSurface } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   captureUiProofEnabled,
   copiedViaExec,
@@ -11,16 +12,13 @@ import {
   waitForChatScrollIdle,
 } from "./chat-flow.test-support.ts";
 import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
+import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
 
 suite.define(() => {
   it("exposes an assistant document download with its Unicode filename and ticketed URL", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const source = "/tmp/openclaw/测试 report.pdf";
     const mediaUrl = `/__openclaw__/assistant-media?source=${encodeURIComponent(source)}&mediaTicket=ticket-download`;
@@ -64,11 +62,7 @@ suite.define(() => {
   });
 
   it("renders a direct tool-result image from Gateway history", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const imageData =
       "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M/wHwAF/gL+X3q8AAAAAElFTkSuQmCC";
@@ -100,11 +94,7 @@ suite.define(() => {
   });
 
   it("renders a managed image through an artifact-scoped ticket", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const attachmentId = crypto.randomUUID();
     const artifactId = `artifact_managed_image_${attachmentId}`;
@@ -177,11 +167,7 @@ suite.define(() => {
   });
 
   it("moves a managed document batch from skeletons directly to final cards", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const proofDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim()
       ? suite.artifactDir
@@ -275,19 +261,20 @@ suite.define(() => {
         const rect = element.getBoundingClientRect();
         return { height: rect.height, width: rect.width };
       });
-      expect(metadataSize.height).toBe(14);
+      expect(metadataSize.height).toBeCloseTo(14, 3);
       expect(metadataSize.width).toBeGreaterThanOrEqual(112);
       expect(metadataSize.width).toBeLessThanOrEqual(144);
       const actionSkeletons = checkingCards.locator(
         ".chat-assistant-attachment-card__action-skeleton.skeleton",
       );
       expect(await actionSkeletons.count()).toBe(4);
+      // Ancestor entrance animations must settle before comparing viewport rectangles.
+      await waitForControlUiProofSurface(checkingCards.first(), [actionSkeletons.first()]);
       const actionSkeletonSize = await actionSkeletons.first().evaluate((element) => {
         const rect = element.getBoundingClientRect();
-        return { height: rect.height, width: rect.width };
+        return { x: rect.x, y: rect.y, height: rect.height, width: rect.width };
       });
       expect(actionSkeletonSize.height).toBeCloseTo(30, 3);
-      expect(actionSkeletonSize.width).toBeCloseTo(64, 3);
       expect(
         await actionSkeletons
           .first()
@@ -310,6 +297,14 @@ suite.define(() => {
         .toBe(4);
       expect(await checkingCards.count()).toBe(0);
       expect(await page.locator(".chat-assistant-attachment-card .skeleton").count()).toBe(0);
+      const openButtonSize = await page
+        .locator(".chat-assistant-attachment-card__expand")
+        .first()
+        .evaluate((element) => {
+          const rect = element.getBoundingClientRect();
+          return { x: rect.x, y: rect.y, height: rect.height, width: rect.width };
+        });
+      expect(actionSkeletonSize).toEqual(openButtonSize);
       const finalActionWidths = await page
         .locator(
           ".chat-assistant-attachment-card--compact .chat-assistant-attachment-card__actions",
@@ -357,11 +352,7 @@ suite.define(() => {
       const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim()
         ? suite.artifactDir
         : undefined;
-      const context = await suite.newBrowserContext({
-        locale: "en-US",
-        serviceWorkers: "block",
-        viewport: { height: 900, width: 1280 },
-      });
+      const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
       const page = await context.newPage();
       const requestedMediaUrls: URL[] = [];
       await page.route("**/__openclaw__/assistant-media?**", async (route) => {
@@ -436,11 +427,7 @@ suite.define(() => {
   );
 
   it("evicts and refetches managed image Blob URLs after the cache reaches capacity", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     await page.addInitScript(() => {
       const originalCreateObjectURL = URL.createObjectURL.bind(URL);
@@ -672,11 +659,7 @@ suite.define(() => {
   });
 
   it("copies a code block over a non-secure context via the execCommand fallback", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     // Simulate a plain-HTTP deployment where navigator.clipboard is unavailable.
     await installPlainHttpClipboardCapture(page);
@@ -747,11 +730,7 @@ suite.define(() => {
   });
 
   it("copies a workspace file path over a non-secure context via the execCommand fallback", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     await installPlainHttpClipboardCapture(page);
     const gateway = await installMockGateway(page, {

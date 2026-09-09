@@ -454,6 +454,22 @@ describe("hydrateSwarmSessionRows", () => {
 
     const decorated = { ...stale, status: "done" as const };
     expect(mergeSwarmSessionRows([stale], [decorated])).toEqual([decorated]);
+
+    const firstOnly = row(1);
+    const parent: GatewaySessionRow = { key: "agent:main:parent", kind: "direct" };
+    const changedCurrent = { ...fresh, status: "failed" as const };
+    const lastOnly = row(2);
+    const merged = mergeSwarmSessionRows(
+      [stale, firstOnly],
+      [fresh, parent],
+      [changedCurrent, lastOnly],
+    );
+    expect(merged).toEqual([changedCurrent, firstOnly, parent, lastOnly]);
+    expect(merged[0]).toBe(changedCurrent);
+    expect(merged[1]).toBe(firstOnly);
+    expect(merged[2]).toBe(parent);
+    expect(merged[3]).toBe(lastOnly);
+    expect(mergeSwarmSessionRows([], [], [fresh])).toEqual([fresh]);
   });
 
   it("drops stale hydration results", async () => {

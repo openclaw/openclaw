@@ -45,6 +45,20 @@ Look for:
 - `plugin load failed: dependency tree corrupted; run openclaw doctor --fix` under Channels: the channel config still exists, but plugin registration failed before the channel could load.
 - Provider 401s after re-auth: `openclaw doctor --fix` checks for stale per-agent OAuth auth shadows and removes old copies so all agents resolve the current shared profile.
 
+## Prepared model runtime publication timeout
+
+If startup reports `prepared model runtime publication (...) timed out`, the
+parenthesized detail identifies the pending stage and, during workspace
+preparation, its agent. Collect that error together with
+`openclaw gateway status --deep` and the startup logs.
+
+An `ambient credentials` stage can be waiting for a plugin's external login
+check even when the Gateway process uses little CPU. For Claude CLI, run
+`claude auth status --json` as the Gateway user with the same environment.
+Startup shares this check across workspaces; a large roster should not launch
+one native-login subprocess per agent. A successful `/health` response alone
+does not establish that model runtime publication completed.
+
 ## Split brain installs and newer config guard
 
 Use when a gateway service unexpectedly stops after an update, or logs show one `openclaw` binary is older than the version that last wrote `openclaw.json`.
@@ -77,7 +91,10 @@ openclaw config get meta.lastTouchedVersion
 </Steps>
 
 <Warning>
-For intentional downgrade or emergency recovery only, set `OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS=1` for the single command. Leave it unset for normal operation.
+For an intentional downgrade, follow [Downgrade](/install/updating#downgrade).
+Use the managed compatibility checks or restore the verified pre-update backup
+with its matching release. Do not remove `meta.lastTouchedVersion` or override
+the guard to run older code against migrated state.
 </Warning>
 
 ## Protocol mismatch after rollback
@@ -130,8 +147,8 @@ If the target is intentional, configure both the direct skill root and the allow
 {
   skills: {
     load: {
-      extraDirs: ["~/Projects/manager/skills"],
-      allowSymlinkTargets: ["~/Projects/manager/skills"],
+      extraDirs: ["~/path/to/skills"],
+      allowSymlinkTargets: ["~/path/to/skills"],
     },
   },
 }
@@ -213,7 +230,7 @@ A successful minimal `curl` does not guarantee that real SDK-style requests will
 
 Related:
 
-- [OpenAI-compatible endpoints](/gateway/configuration-reference#openai-compatible-endpoints)
+- [OpenAI-compatible endpoints](/gateway/config-gateway#openai-compatible-endpoints)
 - [Provider configuration](/providers)
 - [Logs](/logging)
 
@@ -265,7 +282,7 @@ Related:
 
 - [Configuration](/gateway/configuration)
 - [Local models](/gateway/local-models)
-- [OpenAI-compatible endpoints](/gateway/configuration-reference#openai-compatible-endpoints)
+- [OpenAI-compatible endpoints](/gateway/config-gateway#openai-compatible-endpoints)
 
 ## Agent run failed with a storage error
 

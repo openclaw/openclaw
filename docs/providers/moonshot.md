@@ -17,6 +17,9 @@ Moonshot and Kimi Coding are **separate providers**, each shipped as a separate 
 
 ## Built-in model catalog
 
+Moonshot and Kimi Coding setup save connection settings and aliases without copying generated catalog rows into your config.
+Explicit `models.mode: "replace"` keeps catalog seeding enabled; custom model rows stay intact.
+
 [//]: # "moonshot-kimi-k2-ids:start"
 
 | Model ref                           | Name                     | Reasoning        | Input              | Context   | Max output |
@@ -33,9 +36,9 @@ and [Kimi K2.7 Code](https://platform.kimi.ai/docs/pricing/chat-k27-code)
 before making cost decisions.
 
 Kimi K3 always reasons and accepts `reasoning_effort` values `low`, `high`,
-and `max` (the default). OpenClaw exposes those exact levels and maps `/think
-xhigh` to `max`; it omits the K2-only `thinking` field and removes sampling
-overrides (`temperature`, `top_p`, `n`, `presence_penalty`, and
+and `max` (the default). On the direct Moonshot route OpenClaw exposes only
+`/think max` and always sends `reasoning_effort: "max"`. It omits the K2-only
+`thinking` field and removes sampling overrides (`temperature`, `top_p`, `n`, `presence_penalty`, and
 `frequency_penalty`) that K3 fixes to provider defaults. Kimi K2.7 Code also
 always uses native thinking but requires both `thinking` and
 `reasoning_effort` to be omitted; the HighSpeed variant uses the same contract.

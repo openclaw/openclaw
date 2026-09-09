@@ -8,7 +8,9 @@ import type { ProviderRuntimePluginHandle } from "../../../plugins/provider-hook
 import { resolveSandboxContext as resolveRealSandboxContext } from "../../sandbox/context.js";
 import type { SandboxContext } from "../../sandbox/types.js";
 import { castAgentMessage } from "../../test-helpers/agent-message-fixtures.js";
+import { resolveAttemptWorkspaceSandbox } from "../../workspace-sandbox.js";
 import { createToolResultPromptProjectionState } from "../session-prompt-state.js";
+import { prepareEmbeddedSkills } from "../skill-runtime.js";
 import { buildEmbeddedForegroundPromptContext } from "./agent-end-context.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
@@ -26,9 +28,7 @@ vi.mock("../../sandbox.js", () => ({ resolveSandboxContext }));
 
 import {
   installEmbeddedAttemptContextGuards,
-  prepareEmbeddedAttemptSkills,
   prepareEmbeddedAttemptSetup,
-  resolveAttemptWorkspaceSandbox,
 } from "./attempt-setup.js";
 
 const TINY_PNG_BASE64 =
@@ -334,7 +334,7 @@ describe("prepareEmbeddedAttemptSetup", () => {
   });
 });
 
-describe("prepareEmbeddedAttemptSkills", () => {
+describe("prepareEmbeddedSkills", () => {
   it.each([
     { label: "unrestricted", toolExecutionAllow: undefined, readable: true },
     { label: "read allowed", toolExecutionAllow: ["read"], readable: true },
@@ -359,7 +359,8 @@ describe("prepareEmbeddedAttemptSkills", () => {
     await writeSkill(executionWorkspace, "execution-workspace-skill");
 
     try {
-      const prepared = prepareEmbeddedAttemptSkills({
+      const prepared = prepareEmbeddedSkills({
+        includeCodeModeSkills: true,
         attempt: {
           bootstrapWorkspaceDir: agentWorkspace,
           config: {},

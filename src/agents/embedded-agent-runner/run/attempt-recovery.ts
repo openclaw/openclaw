@@ -8,6 +8,7 @@ import type { FailoverReason } from "../../embedded-agent-helpers.js";
 import { buildAssistantFailoverSignal } from "../../embedded-agent-helpers/assistant-message-failures.js";
 import { findCliTerminalStopError, resolveFailoverReasonFromError } from "../../failover-error.js";
 import { classifyFailoverSignal } from "../../failover/classify.js";
+import { resolveRetryAfterMs } from "../../failover/retry-evidence.js";
 import { LiveSessionModelSwitchError } from "../../live-model-switch-error.js";
 import { shouldSwitchToLiveModel, clearLiveModelSwitchPending } from "../../live-model-switch.js";
 import type { normalizeUsage } from "../../usage.js";
@@ -215,12 +216,23 @@ export async function recoverEmbeddedRunAttempt(input: {
     );
     throw new LiveSessionModelSwitchError(requestedSelection);
   }
-  const assistantFailure =
+  const assistantSignal =
     attemptAssistant?.stopReason === "error"
-      ? classifyFailoverSignal(buildAssistantFailoverSignal(attemptAssistant), {
-          providerPlugin: runtime.providerRuntimeHandle?.plugin,
-        })
-      : null;
+      ? buildAssistantFailoverSignal(attemptAssistant)
+      : undefined;
+  const assistantFailure = assistantSignal
+    ? classifyFailoverSignal(assistantSignal, {
+        providerPlugin: runtime.providerRuntimeHandle?.plugin,
+      })
+    : null;
+  const assistantOverflowClassification =
+    assistantOverflowCandidate === attemptAssistant
+      ? assistantFailure
+      : assistantOverflowCandidate?.stopReason === "error"
+        ? classifyFailoverSignal(buildAssistantFailoverSignal(assistantOverflowCandidate), {
+            providerPlugin: runtime.providerRuntimeHandle?.plugin,
+          })
+        : null;
   const failureReason = promptError
     ? resolveFailoverReasonFromError(promptError, preparedRuntime.provider)
     : assistantFailure?.kind === "reason"
@@ -309,16 +321,25 @@ export async function recoverEmbeddedRunAttempt(input: {
     failureReason &&
     (await failoverRetryController.maybeRetryTransient({
       reason: failureReason,
-      message: promptError ? formatErrorMessage(promptError) : attemptAssistant?.errorMessage,
+      message: promptError ? formatErrorMessage(promptError) : assistantSignal?.message,
+      retryAfterMs: promptError
+        ? resolveRetryAfterMs(formatErrorMessage(promptError), Date.now(), promptError)
+        : assistantSignal?.retryAfterMs,
       onRetry: async ({ attempt: retryAttempt, maxRetries, delayMs, reason }) => {
         const event = {
           stream: "run_status",
           data: {
             phase: "retrying",
-            message: `${reason === "rate_limit" ? "Rate limited" : "Provider temporarily unavailable"}. Retrying in ${Math.ceil(delayMs / 1_000)}s (${retryAttempt}/${maxRetries}).`,
+            message:
+              reason === "rate_limit"
+                ? `Retrying… ${retryAttempt + 1}/${maxRetries + 1}`
+                : `Provider temporarily unavailable. Retrying in ${Math.ceil(delayMs / 1_000)}s (${retryAttempt}/${maxRetries}).`,
             retryAttempt,
             maxRetries,
             delayMs,
+            attempt: retryAttempt + 1,
+            maxAttempts: maxRetries + 1,
+            reason,
           },
         };
         emitAgentEvent({ runId: params.runId, sessionKey: params.sessionKey, ...event });
@@ -342,8 +363,13 @@ export async function recoverEmbeddedRunAttempt(input: {
     aborted,
     signalOwnedInterruption,
     promptError,
-    assistantErrorText,
-    assistantOverflowCandidate,
+    assistantErrorText:
+      currentAttemptCompletedAssistant !== undefined
+        ? assistantOverflowCandidate?.errorMessage
+        : assistantErrorText,
+    assistantOverflowCandidate: assistantOverflowCandidate
+      ? { message: assistantOverflowCandidate, classification: assistantOverflowClassification }
+      : undefined,
     attemptCompactionCount,
     prepareCurrentTranscriptRetry: sessionPromptState.continueFromCurrentTranscript,
     markOwnedTranscriptRetry: sessionPromptState.markOwnedTranscriptRetry,

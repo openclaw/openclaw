@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { createChannelCapability } from "../../lib/channels/index.ts";
+import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import {
   createContext,
   createGateway,
@@ -19,6 +20,130 @@ afterEach(() => {
 });
 
 describe("CronPage lifecycle", () => {
+  it.each([false, true])(
+    "shows an internal catalog failure and empty recovery (retained rows: %s)",
+    async (hasRows) => {
+      const fallback = createRequest();
+      let result = {
+        models: [{ provider: "fixture", id: "obsolete", name: "Obsolete model" }],
+        refreshFailed: false,
+      };
+      const client = createTestGatewayClient((method) =>
+        method === "models.list" ? result : fallback(method),
+      );
+      const gateway = createGateway(client, true);
+      const page = createPage(createContext(gateway), { render: true });
+      await waitForCronPage(() => expect(page.cronModelSuggestions).toEqual(["obsolete"]));
+
+      result = {
+        models: hasRows ? [{ provider: "fixture", id: "current", name: "Current model" }] : [],
+        refreshFailed: true,
+      };
+      gateway.emitRetiredEvent({ type: "event", event: "chat.metadata.changed", payload: {} });
+      await waitForCronPage(() =>
+        expect(page.cronModelSuggestions).toEqual(hasRows ? ["current"] : []),
+      );
+      expect(page.textContent).toContain(
+        hasRows
+          ? "Some models could not be refreshed. Open Models to try again."
+          : "Models unavailable",
+      );
+
+      result = { models: [], refreshFailed: false };
+      gateway.emitRetiredEvent({ type: "event", event: "chat.metadata.changed", payload: {} });
+      await waitForCronPage(() =>
+        expect(page.textContent).not.toContain(
+          hasRows ? "Some models could not be refreshed" : "Models unavailable",
+        ),
+      );
+      expect(page.cronModelSuggestions).toEqual([]);
+    },
+  );
+
+  it("shows a fulfilled catalog acquisition failure and clears it after publication recovers", async () => {
+    const fallback = createRequest();
+    let failed = false;
+    const client = createTestGatewayClient((method) =>
+      method === "models.list"
+        ? {
+            models: [{ provider: "ollama", id: "retained", name: "Retained model" }],
+            refreshFailed: failed,
+            providerOutcomes: [{ provider: "ollama", status: failed ? "unavailable" : "ready" }],
+          }
+        : fallback(method),
+    );
+    const gateway = createGateway(client, true);
+    const page = createPage(createContext(gateway), { render: true });
+    await waitForCronPage(() => expect(page.cronModelSuggestions).toEqual(["retained"]));
+
+    failed = true;
+    gateway.emitRetiredEvent({ type: "event", event: "chat.metadata.changed", payload: {} });
+    await waitForCronPage(() =>
+      expect(page.textContent).toContain(
+        "Some models could not be refreshed. Open Models to try again.",
+      ),
+    );
+    expect(page.cronModelSuggestions).toEqual(["retained"]);
+
+    failed = false;
+    gateway.emitRetiredEvent({ type: "event", event: "chat.metadata.changed", payload: {} });
+    await waitForCronPage(() =>
+      expect(page.textContent).not.toContain("Some models could not be refreshed"),
+    );
+    expect(page.cronModelSuggestions).toEqual(["retained"]);
+  });
+
+  it.each(["publication", "agent", "connection", "gateway", "detach"])(
+    "rejects a retired catalog result and error after %s changes",
+    async (change) => {
+      const oldResult = createDeferred<{ models: { id: string }[] }>();
+      const oldError = createDeferred();
+      const fallback = createRequest();
+      let reads = 0;
+      const client = createTestGatewayClient((method) => {
+        if (method !== "models.list") {
+          return fallback(method);
+        }
+        reads += 1;
+        if (reads === 1) {
+          return oldResult.promise;
+        }
+        if (reads === 2) {
+          return oldError.promise;
+        }
+        return { models: [{ id: "current-model" }] };
+      });
+      const gateway = createGateway(client, true);
+      const context = createContext(gateway);
+      const page = createPage(context, { render: true });
+      await waitForCronPage(() => expect(reads).toBe(1));
+      gateway.emitRetiredEvent({ type: "event", event: "config.changed", payload: {} });
+      await waitForCronPage(() => expect(reads).toBe(2));
+
+      if (change === "agent") {
+        context.agentSelection.set("writer");
+      } else if (change === "connection") {
+        gateway.emitSnapshot({ phase: "reconnecting" });
+        gateway.emitSnapshot({ phase: "connected" });
+      } else if (change === "gateway") {
+        page.context = createContext(createGateway(client, true));
+        page.requestUpdate();
+      } else if (change === "detach") {
+        page.remove();
+      } else {
+        gateway.emitRetiredEvent({ type: "event", event: "chat.metadata.changed", payload: {} });
+      }
+      const expected = change === "detach" ? [] : ["current-model"];
+      await waitForCronPage(() => expect(page.cronModelSuggestions).toEqual(expected));
+      oldResult.resolve({ models: [{ id: "retired-model" }] });
+      oldError.reject(new Error("Retired catalog error"));
+      await Promise.allSettled([oldResult.promise, oldError.promise]);
+      await page.updateComplete;
+      expect(page.cronModelSuggestions).toEqual(expected);
+      expect(page.textContent).not.toContain("Retired catalog error");
+    },
+  );
+
   it("coalesces a cron event burst into one trailing refresh of the current page", async () => {
     const held = createDeferred();
     let released = false;

@@ -1,5 +1,6 @@
 // Full-entry coverage for retrying an already-capped mid-turn transcript.
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { makeTextToolResult } from "../../../test/helpers/text-tool-result.js";
 import { buildEmbeddedRunnerAssistant } from "../test-helpers/embedded-agent-runner-e2e-fixtures.js";
 import {
   makeAttemptResult,
@@ -21,14 +22,7 @@ const settledExecAssistant = buildEmbeddedRunnerAssistant({
   stopReason: "toolUse" as const,
   timestamp: 1,
 });
-const settledExecResult = {
-  role: "toolResult" as const,
-  toolCallId: "call-exec",
-  toolName: "exec",
-  content: [{ type: "text" as const, text: "command completed" }],
-  isError: false,
-  timestamp: 2,
-};
+const settledExecResult = makeTextToolResult("call-exec", "exec", "command completed", false, 2);
 
 let session: Awaited<ReturnType<typeof createSharedRunIntegrationSession>>;
 let runEmbeddedAgent: Awaited<ReturnType<typeof loadSharedRunIntegrationHarness>>;

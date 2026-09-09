@@ -2,7 +2,6 @@
 // These functions keep terminal styling decisions out of the scan/data layer.
 
 import { formatTimeAgo } from "./format.js";
-import type { StatusReportSection } from "./text-report.js";
 
 type AgentStatusLike = {
   agents: Array<{
@@ -59,9 +58,8 @@ export function buildStatusChannelDetailSections(params: {
   details: ChannelDetailLike[];
   ok: (text: string) => string;
   warn: (text: string) => string;
-}): StatusReportSection[] {
+}) {
   return params.details.map((detail) => ({
-    kind: "table" as const,
     title: detail.title,
     columns: detail.columns.map((column) => ({
       key: column,

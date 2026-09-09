@@ -5,6 +5,7 @@ import { routeIdFromPath } from "../app-route-paths.ts";
 import { resolveControlUiPaths } from "../app/browser.ts";
 import { i18n, t } from "../i18n/index.ts";
 import { truncateText } from "../lib/format.ts";
+import { parseGitHubLinkTarget } from "./github-link-target.ts";
 import { renderAssistantTranscriptPlainTextFallback } from "./markdown-assistant-transcript.ts";
 import { renderMarkdownCodeBlock } from "./markdown-code-blocks.ts";
 import { isHostLocalMarkdownFileHref } from "./markdown-file-links.ts";
@@ -435,6 +436,34 @@ function normalizeDocsRootHref(href: string): string {
   }
 }
 
+function hasMarkdownContentName(node: Node): boolean {
+  if (node.nodeType === Node.TEXT_NODE) {
+    return Boolean(node.textContent?.trim());
+  }
+  if (
+    !(node instanceof Element) ||
+    node.getAttribute("aria-hidden")?.trim().toLowerCase() === "true"
+  ) {
+    return false;
+  }
+  if (node.matches("img[alt]")) {
+    return Boolean(node.getAttribute("alt")?.trim());
+  }
+  if (node.matches("progress")) {
+    // A progress value names its containing link; fallback text does not.
+    const valueText = node.getAttribute("aria-valuetext");
+    if (valueText !== null) {
+      return Boolean(valueText.trim());
+    }
+    return (
+      node.hasAttribute("value") ||
+      node.hasAttribute("aria-valuenow") ||
+      Boolean(node.getAttribute("aria-label")?.trim() || node.getAttribute("title")?.trim())
+    );
+  }
+  return [...node.childNodes].some(hasMarkdownContentName);
+}
+
 function installHooks() {
   if (hooksInstalled) {
     return;
@@ -462,10 +491,22 @@ function installHooks() {
 
     // Block dangerous URL schemes (javascript:, data:, vbscript:, etc.)
     try {
-      const url = new URL(normalizedHref, window.location.href);
+      const url = new URL(normalizedHref, document.baseURI);
       if (url.protocol !== "http:" && url.protocol !== "https:" && url.protocol !== "mailto:") {
         node.removeAttribute("href");
         return;
+      }
+      if (parseGitHubLinkTarget(url.href)) {
+        for (const element of [node, ...node.querySelectorAll("[title]")]) {
+          const title = element.getAttribute("title");
+          // A progress control needs a label; its value only names an enclosing link.
+          const hasContentName = !element.matches("progress") && hasMarkdownContentName(element);
+          if (title && !hasContentName && !element.getAttribute("aria-label")?.trim()) {
+            element.setAttribute("aria-label", title);
+          }
+          // The rendered content owns the name; native hints must not survive preview closure.
+          element.removeAttribute("title");
+        }
       }
       if (url.origin === window.location.origin && isControlUiRoutePath(url.pathname)) {
         node.removeAttribute("rel");
@@ -542,18 +583,16 @@ export function toSanitizedMarkdownHtml(
   options: MarkdownRenderOptions = {},
 ): string {
   const renderOptions = normalizeMarkdownRenderOptions(options);
-  const rawInput = normalizeMarkdownLineBreaks(
+  const renderInput = normalizeMarkdownLineBreaks(
     stripUnsupportedCitationControlMarkers(markdownLocal),
   );
-  const input = rawInput.trim();
-  if (!input) {
+  if (!renderInput.trim()) {
     return "";
   }
-  const renderInput = isMarkdownBlockArtText(rawInput) ? rawInput : input;
-  if (input.length > MARKDOWN_CACHE_MAX_CHARS) {
+  if (renderInput.length > MARKDOWN_CACHE_MAX_CHARS) {
     return renderSanitizedMarkdown(renderInput, renderOptions);
   }
-  const cacheKey = `${i18n.getLocale()}\0${renderOptions.assistantTranscriptRoleHeaders}\0${renderOptions.codeBlockChrome}\0${renderOptions.codeBlockInteraction}\0${renderOptions.fileLinks}\0${renderOptions.interactiveImages}\0${renderOptions.linkFavicons}\0${renderOptions.progressBars}\0${renderOptions.mode}\0${renderOptions.sessionLinks}\0${renderOptions.tableInteractions}\0${renderInput}`;
+  const cacheKey = `${i18n.getLocale()}\0${renderOptions.assistantTranscriptRoleHeaders}\0${renderOptions.codeBlockChrome}\0${renderOptions.codeBlockInteraction}\0${renderOptions.fileLinks}\0${JSON.stringify(renderOptions.githubRepo ? [renderOptions.githubRepo.owner, renderOptions.githubRepo.repo] : null)}\0${renderOptions.interactiveImages}\0${renderOptions.linkFavicons}\0${renderOptions.progressBars}\0${renderOptions.mode}\0${renderOptions.remoteImages}\0${renderOptions.sessionLinks}\0${renderOptions.tableInteractions}\0${renderInput}`;
   const cached = getCachedMarkdown(cacheKey);
   if (cached !== null) {
     return cached;
@@ -585,11 +624,10 @@ export function toStreamingMarkdownParts(
     return ["", renderSanitizedMarkdown(rawInput, renderOptions)];
   }
 
-  const trimmedInput = rawInput.trim();
-  if (!trimmedInput) {
+  if (!rawInput.trim()) {
     return ["", ""];
   }
-  const truncated = truncateText(trimmedInput, MARKDOWN_CHAR_LIMIT);
+  const truncated = truncateText(rawInput, MARKDOWN_CHAR_LIMIT);
   const input = appendMarkdownTruncationNotice(truncated);
 
   const { boundary, tailRepairStart } = splitStableStreamingMarkdown(

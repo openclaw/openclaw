@@ -346,14 +346,10 @@ function preserveDisabledState(original: OpenClawConfig, result: OpenClawConfig)
   }
 
   const pluginId = providerEntry.pluginId;
-  const originalPluginEntry = (
-    original.plugins?.entries as Record<string, Record<string, unknown>> | undefined
-  )?.[pluginId];
-  const resultPluginEntry = (
-    next.plugins?.entries as Record<string, Record<string, unknown>> | undefined
-  )?.[pluginId];
+  const originalPluginEntry = original.plugins?.entries?.[pluginId];
+  const resultPluginEntry = next.plugins?.entries?.[pluginId];
 
-  const nextPlugins = { ...next.plugins } as Record<string, unknown>;
+  const nextPlugins = { ...next.plugins };
 
   if (Array.isArray(original.plugins?.allow)) {
     nextPlugins.allow = [...original.plugins.allow];
@@ -363,7 +359,7 @@ function preserveDisabledState(original: OpenClawConfig, result: OpenClawConfig)
 
   if (resultPluginEntry || originalPluginEntry) {
     const nextEntries = {
-      ...(nextPlugins.entries as Record<string, Record<string, unknown>> | undefined),
+      ...nextPlugins.entries,
     };
     const patchedEntry = { ...resultPluginEntry };
     if (typeof originalPluginEntry?.enabled === "boolean") {
@@ -377,7 +373,7 @@ function preserveDisabledState(original: OpenClawConfig, result: OpenClawConfig)
 
   return {
     ...next,
-    plugins: nextPlugins as OpenClawConfig["plugins"],
+    plugins: nextPlugins,
   };
 }
 

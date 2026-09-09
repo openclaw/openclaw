@@ -13,7 +13,7 @@ import type { CurrentUserProfileDisplay } from "./current-user-profile-display.j
 
 export type GatewayModelThinkingProfile = {
   thinkingLevels: ReturnType<typeof listThinkingLevelOptions>;
-  thinkingDefault: ThinkLevel;
+  thinkingDefault?: ThinkLevel;
 };
 
 export type SessionActorProfileIdentity = Extract<CurrentUserProfileDisplay, { kind: "resolved" }>;

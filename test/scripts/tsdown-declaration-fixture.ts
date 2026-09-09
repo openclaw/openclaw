@@ -164,6 +164,7 @@ export function createFixture(
   // These owners derive runtime inputs from import.meta.url; keep that graph inside the fixture.
   const runtimeEntryOwners = new Set([
     "src/infra/runtime-process-entrypoints.ts",
+    "src/infra/update-managed-service-handoff-runtime-assets.ts",
     "extensions/memory-core/src/memory/manager-search-knn-entrypoint.ts",
     "packages/normalization-core/src/mountinfo-path.ts",
     "packages/normalization-core/src/record-coerce.ts",
@@ -183,6 +184,9 @@ export function createFixture(
     "src/worker/worker-deploy-browser-runtime.ts",
     "extensions/browser/src/browser/playwright-core.runtime.ts",
     "src/infra/net/undici-dispatcher-options.ts",
+    "packages/gateway-client/src/websocket.ts",
+    "src/gateway/server-runtime-state.ts",
+    "src/realtime-transcription/websocket-session.ts",
   ]) {
     write(source, "export {};\n");
   }

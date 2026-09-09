@@ -155,6 +155,7 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
   it("preserves sender and current message routing for compaction", () => {
     const result = buildEmbeddedCompactionRuntimeContext({
       sessionKey: "agent:main:thread:1",
+      pinnedWidgetAuthoring: true,
       messageChannel: "slack",
       messageProvider: "slack",
       chatType: "channel",
@@ -180,6 +181,7 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
       ownerNumbers: ["+15555550123"],
     });
     expect(result.sessionKey).toBe("agent:main:thread:1");
+    expect(result.pinnedWidgetAuthoring).toBe(true);
     expect(result.messageChannel).toBe("slack");
     expect(result.messageProvider).toBe("slack");
     expect(result.chatType).toBe("channel");
@@ -288,7 +290,7 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
     "resolves literal compaction overrides without discovering provider plugins $name",
     ({ models }) => {
       const manifestNormalization = vi
-        .spyOn(manifestModelIdNormalization, "normalizeProviderModelIdWithManifest")
+        .spyOn(manifestModelIdNormalization, "resolveManifestModelIdNormalizationPolicies")
         .mockImplementation(() => {
           throw new Error("literal compaction overrides must not discover plugin manifests");
         });

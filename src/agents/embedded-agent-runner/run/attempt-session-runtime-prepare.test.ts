@@ -48,7 +48,12 @@ type PrepareInput = Parameters<typeof prepareEmbeddedAttemptSessionRuntime>[0];
 
 function createFixture() {
   const order: string[] = [];
-  const sessionManager = { kind: "manager", getBranch: () => [] };
+  const activeMarker = { type: "custom", customType: "openclaw.cache-ttl", data: "active" };
+  const sessionManager = {
+    kind: "manager",
+    getBranch: () => [activeMarker],
+    getEntries: () => [activeMarker, { ...activeMarker, data: "sibling" }],
+  };
   const activeSession = {
     messages: [{ role: "user" }, { role: "assistant" }],
     sessionId: "active-session",
@@ -146,6 +151,7 @@ function createFixture() {
   const resourceEvents: Record<string, string> = {
     session: "own-session",
     sessionManager: "own-manager",
+    getUserTranscriptContexts: "own-user-transcript-contexts",
     removeToolResultContextGuard: "own-context-guards",
     buildAbortSettlePromise: "own-settle-tracker",
     trajectoryRecorder: "own-trajectory",
@@ -242,9 +248,14 @@ describe("prepareEmbeddedAttemptSessionRuntime", () => {
 
     const result = await prepareEmbeddedAttemptSessionRuntime(fixture.input);
 
+    expect(mocks.restoreProjections).toHaveBeenCalledWith(
+      fixture.promptState.toolResults,
+      fixture.sessionManager.getBranch(),
+    );
     expect(fixture.order).toEqual([
       "manager",
       "own-manager",
+      "own-user-transcript-contexts",
       "agent-session",
       "own-session",
       "owned-boundary",
@@ -292,6 +303,7 @@ describe("prepareEmbeddedAttemptSessionRuntime", () => {
       fixture.abortActiveSession,
     );
     expect(fixture.resources.buildAbortSettlePromise).toBe(fixture.buildAbortSettlePromise);
+    expect(fixture.resources.getUserTranscriptContexts).toBe(fixture.getUserTranscriptContexts);
     expect(fixture.onSessionYieldReady).toHaveBeenCalledWith({
       abortActiveSession: fixture.abortActiveSession,
       activeSession: fixture.activeSession,

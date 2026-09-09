@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import { TUI_PTY_FALLBACK_FIXTURE } from "./tui-fallback-fixture-test-support.js";
 import { TUI_PTY_ASSISTANT_FIXTURE_SCRIPT } from "./tui-pty-assistant-fixture-test-support.js";
 import { TUI_PTY_GAP_HISTORY_FIXTURE_SCRIPT } from "./tui-pty-gap-fixture-test-support.js";
 import {
@@ -31,10 +32,15 @@ export async function disposeActiveTuiFixtures(): Promise<void> {
   }
 }
 
-export async function startTuiFixture(opts: { env?: NodeJS.ProcessEnv; execPath?: string } = {}) {
+export async function startTuiFixture(
+  opts: { env?: NodeJS.ProcessEnv; execPath?: string; holdStartupHistory?: boolean } = {},
+) {
   const tempDir = await mkdtemp(path.join(tmpdir(), "openclaw-tui-pty-"));
   const scriptPath = await writeTuiPtyFixtureScript(tempDir);
   const logPath = path.join(tempDir, "fixture-log.jsonl");
+  const startupHistoryReleasePath = opts.holdStartupHistory
+    ? path.join(tempDir, "startup-history.release")
+    : undefined;
   const execPath = opts.execPath ?? process.execPath;
   const run = startPty(execPath, resolveRuntimeWorkerArgv(pathToFileURL(scriptPath), execPath), {
     activeRuns,
@@ -44,14 +50,35 @@ export async function startTuiFixture(opts: { env?: NodeJS.ProcessEnv; execPath?
       OPENCLAW_TUI_PTY_LOG_PATH: logPath,
       NO_COLOR: undefined,
       ...opts.env,
+      OPENCLAW_TUI_PTY_STARTUP_RELEASE_PATH: startupHistoryReleasePath,
     },
     exitTimeoutMs: EXIT_TIMEOUT_MS,
     outputTimeoutMs: OUTPUT_TIMEOUT_MS,
   });
 
+  let releaseStartupHistoryPromise: Promise<void> | undefined;
+  const releaseStartupHistory = () => {
+    releaseStartupHistoryPromise ??= startupHistoryReleasePath
+      ? writeFile(startupHistoryReleasePath, "")
+      : Promise.resolve();
+    return releaseStartupHistoryPromise;
+  };
+  if (startupHistoryReleasePath) {
+    const dispose = run.dispose;
+    // Suite cleanup must release held initialization even when its test never runs.
+    run.dispose = async () => {
+      try {
+        await releaseStartupHistory();
+      } finally {
+        await dispose();
+      }
+    };
+  }
+
   return {
     run,
     logPath,
+    releaseStartupHistory,
     waitForLogEntry: async (predicate: (entry: FixtureLogEntry) => boolean, timeoutMs?: number) =>
       await waitForFixtureLogEntry(logPath, predicate, timeoutMs ?? OUTPUT_TIMEOUT_MS, run.output),
     cleanup: async () => {
@@ -97,6 +124,7 @@ export async function writeTuiPtyFixtureScript(dir: string) {
       const safeThinkingLabel = process.env.OPENCLAW_TUI_PTY_SAFE_THINKING_LABEL;
       const liveReplyHistory: unknown[] = [];
       let liveReplySequence = 0;
+      ${TUI_PTY_FALLBACK_FIXTURE.variables}
       const thinkingLevels = [
         ...(thinkingLabel ? [{ id: "fixture-thinking", label: thinkingLabel }] : []),
         ...(safeThinkingLabel ? [{ id: "fixture-thinking-safe", label: safeThinkingLabel }] : []),
@@ -130,18 +158,7 @@ export async function writeTuiPtyFixtureScript(dir: string) {
           expiresAtMs: Date.now() + 120_000,
         };
       }
-      let pendingPluginApproval: {
-        id: string;
-        request: {
-          title: string;
-          description: string;
-          toolName: string;
-          allowedDecisions: string[];
-          sessionKey: string;
-        };
-        createdAtMs: number;
-        expiresAtMs: number;
-      } | null = initialPluginApprovalSessionKey
+      let pendingPluginApproval: ReturnType<typeof pluginApproval> | null = initialPluginApprovalSessionKey
         ? pluginApproval(initialPluginApprovalSessionKey)
         : null;
       let pendingPluginApprovalRun: { runId: string; sessionKey: string } | null = null;
@@ -209,6 +226,7 @@ export async function writeTuiPtyFixtureScript(dir: string) {
           record("sendChat", opts);
           const runId = opts.runId ?? "run-pty-fixture";
           ${TUI_PTY_RECONNECT_FIXTURE.sendChat}
+          ${TUI_PTY_FALLBACK_FIXTURE.sendChat}
           if (opts.message.startsWith("live reply dedupe proof: ")) {
             const reply = opts.message.endsWith("first") ? "TUI_LIVE_FIRST" : "TUI_LIVE_SECOND";
             const userSequence = ++liveReplySequence;
@@ -460,6 +478,7 @@ export async function writeTuiPtyFixtureScript(dir: string) {
               : null;
           const delayMs =
             rapidSwitchMarker === "A" ? 500 : rapidSwitchMarker === "B" ? 40 : startupDelayMs;
+          ${TUI_PTY_STARTUP_SESSION_FIXTURE.historyBarrier}
           if (delayMs > 0) {
             await new Promise((resolve) => setTimeout(resolve, delayMs));
           }
@@ -541,6 +560,10 @@ export async function writeTuiPtyFixtureScript(dir: string) {
 
         async patchSession(opts: Parameters<TuiBackend["patchSession"]>[0]) {
           record("patchSession", opts);
+          const releasePath = process.env.OPENCLAW_TUI_PTY_PATCH_RELEASE_PATH;
+          while (releasePath && !existsSync(releasePath)) {
+            await new Promise((resolve) => setTimeout(resolve, 5));
+          }
           if (opts.model) {
             currentModel = opts.model;
           }
@@ -578,6 +601,7 @@ export async function writeTuiPtyFixtureScript(dir: string) {
 
         async getGatewayStatus() {
           record("getGatewayStatus");
+          ${TUI_PTY_FALLBACK_FIXTURE.getGatewayStatus}
           this.reconnectSessionSubscription();
           this.emitDisconnect();
           return gatewayStatus;

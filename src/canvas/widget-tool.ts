@@ -1,5 +1,6 @@
 /** Agent-facing inline chat widget tool. */
 import { createHash } from "node:crypto";
+import { truncateCodePoints } from "@openclaw/normalization-core/code-points";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { Type } from "typebox";
 import type { BoardWidgetPutResult } from "../../packages/gateway-protocol/src/index.js";
@@ -32,6 +33,7 @@ import type {
 import { getActivePluginRegistry } from "../plugins/runtime.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { createCanvasDocument } from "./documents.js";
+import { findWidgetScriptSyntaxError } from "./widget-script-syntax.js";
 import { buildWidgetDocument } from "./wrap.js";
 
 const SHOW_WIDGET_REQUIRED_CLIENT_CAPS = ["inline-widgets"];
@@ -89,7 +91,7 @@ function createShowWidgetToolSchema(
     ),
     pin: pinnedOnly
       ? Type.Literal(true, {
-          description: "Required: this scheduled surface can only author pinned widgets",
+          description: "Required: this surface can only author pinned widgets",
         })
       : Type.Optional(
           Type.Boolean({
@@ -151,7 +153,7 @@ type ShowWidgetToolOptions = {
   callGateway?: InProcessGatewayCaller;
   inlineHostEnabled?: boolean;
   inlineClientAvailable?: boolean;
-  /** Scheduled callers without a rendering client may author only durable dashboard widgets. */
+  /** Admitted callers without a rendering client may author only durable dashboard widgets. */
   pinnedOnly?: boolean;
   presenters?: readonly WidgetPresenter[];
   presenterContext?: WidgetPresenterContext;
@@ -257,7 +259,7 @@ function generatedWidgetIdentity(title: string, preferredName: string) {
 
 function boardWidgetTitle(title: string): string | undefined {
   const normalized = title.trim();
-  return normalized ? Array.from(normalized).slice(0, 80).join("") : undefined;
+  return normalized ? truncateCodePoints(normalized, 80) : undefined;
 }
 
 function resolveRetentionScope(options: ShowWidgetToolOptions): string {
@@ -308,7 +310,7 @@ export function createShowWidgetTool(options: ShowWidgetToolOptions = {}): AnyAg
       ? " Use presentation.target to choose a registered device surface."
       : "";
   const usageGuidance = pinnedOnly
-    ? "This scheduled surface is pinned-only: set pin=true to create or update a durable session dashboard widget."
+    ? "This surface is pinned-only: set pin=true to create or update a durable session dashboard widget."
     : "Keep one-off visualizations inline; pin for explicit dashboard requests or multiple non-code visualizations.";
   const destinationGuidance = pinnedOnly
     ? "Author a widget for the current session dashboard. Inline and device presentation are unavailable"
@@ -320,7 +322,7 @@ export function createShowWidgetTool(options: ShowWidgetToolOptions = {}): AnyAg
   return {
     label: "Show Widget",
     name: "show_widget",
-    description: `Visual helps? Make widget. Do not wait for ask. ${usageGuidance} Update HTML by name. Use for comparisons, trends, timelines, flows, hierarchies, dashboards, status, progress, layouts, and choices. Text clearer? Skip. ${destinationGuidance}; kind defaults to html${advertisedRegisteredKinds.length ? ` and registered kinds are ${advertisedRegisteredKinds.join(", ")}` : ""}. Reuse the same explicit name with pin=true and new report data or widget_code to update pinned content. Use name for a stable widget id, tab for a tab slug, size sm|md|lg|xl|full, presentation.frame card|full-bleed|frameless, and after for a sibling widget anchor. Pinned widgets may declare capabilities.netOrigins and capabilities.tools for operator approval. HTML widgets are self-contained HTML or SVG. Dashboard host APIs: openclaw.prompt.send(text), openclaw.state.emit(payload), openclaw.data.read(bindingId, params?), openclaw.action.run(actionId, params?), and openclaw.cron.trigger(jobId). openclaw.host.controlUiBaseUrl is the Control UI origin plus base path after dashboard host initialization, otherwise null; read it at click time. Open links in a new tab with target="_blank" and rel="noopener noreferrer". \`title\` is host metadata. Start directly with content; do not repeat the title or recreate dashboard chrome. ${reportGuidance} HTML is pre-themed with --surface --card --elevated --text --text-strong --muted --border --border-strong --accent --accent-fill --accent-fg --ok --warn --danger --info --radius --font-body --font-mono.${presenterPrompt}`,
+    description: `Visual helps? Make widget. Do not wait for ask. ${usageGuidance} Update pinned HTML by name. Use for comparisons, trends, timelines, flows, hierarchies, dashboards, status, progress, layouts, and choices. Text clearer? Skip. ${destinationGuidance}; kind defaults to html${advertisedRegisteredKinds.length ? ` and registered kinds are ${advertisedRegisteredKinds.join(", ")}` : ""}. Reuse the same explicit name with pin=true and new report data or widget_code to update pinned content. Use name for a stable widget id, tab for a tab slug, size sm|md|lg|xl|full, presentation.frame card|full-bleed|frameless, and after for a sibling widget anchor. Pinned widgets may declare capabilities.netOrigins and capabilities.tools for operator approval. HTML widgets are self-contained HTML or SVG. Inline scripts must parse; syntax errors are rejected with line and column. Runtime script errors surface later as a session event; fix and show again. Dashboard host APIs: openclaw.prompt.send(text), openclaw.state.emit(payload), openclaw.data.read(bindingId, params?), openclaw.action.run(actionId, params?), and openclaw.cron.trigger(jobId). openclaw.host.controlUiBaseUrl is the Control UI origin plus base path after dashboard host initialization, otherwise null; read it at click time. Open links in a new tab with target="_blank" and rel="noopener noreferrer". \`title\` is host metadata. Start directly with content; do not repeat the title or recreate dashboard chrome. ${reportGuidance} HTML is pre-themed with --surface --card --elevated --text --text-strong --muted --border --border-strong --accent --accent-fill --accent-fg --ok --warn --danger --info --radius --font-body --font-mono.${presenterPrompt}`,
     parameters: createShowWidgetToolSchema(
       kinds,
       explicitPresenters,
@@ -350,10 +352,19 @@ export function createShowWidgetTool(options: ShowWidgetToolOptions = {}): AnyAg
           inputName: "widget_code",
           unit: "characters",
         });
+        if (kind === "html") {
+          // Untrimmed so reported line/column match the widget_code the model sent.
+          const scriptError = findWidgetScriptSyntaxError(rawWidgetCode);
+          if (scriptError) {
+            throw new WidgetHtmlInputError(
+              `widget_code has a JavaScript syntax error in inline script ${scriptError.scriptIndex} at line ${scriptError.line}, column ${scriptError.column}: ${scriptError.message}. Offending line: ${scriptError.snippet}. Fix the script and call show_widget again.`,
+            );
+          }
+        }
       }
       const shouldPin = params.pin === true;
       if (pinnedOnly && !shouldPin) {
-        throw new WidgetHtmlInputError("pin=true is required for this scheduled widget surface");
+        throw new WidgetHtmlInputError("pin=true is required for this pinned-only widget surface");
       }
       const capabilities = normalizeBoardWidgetDeclared(
         params.capabilities as { netOrigins?: string[]; tools?: string[] } | undefined,
@@ -369,7 +380,7 @@ export function createShowWidgetTool(options: ShowWidgetToolOptions = {}): AnyAg
       const presentation = asOptionalRecord(params.presentation);
       if (pinnedOnly && presentation?.target !== undefined) {
         throw new WidgetHtmlInputError(
-          "presentation.target is unavailable for this pinned-only scheduled widget surface",
+          "presentation.target is unavailable for this pinned-only widget surface",
         );
       }
       const requestedTarget =

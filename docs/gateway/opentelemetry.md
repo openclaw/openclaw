@@ -78,10 +78,18 @@ transport: these changes do not shut down or reconfigure the host SDK.
 including a value supplied through `${VAR}` interpolation, still resolves this
 field to the retired `grpc` value, run
 [`openclaw doctor --fix`](/cli/doctor). Doctor repairs directly authored values
-and a sole internal single-file include that owns the top-level `diagnostics`
-section. For root or array includes, nested include chains, sibling overrides,
-external include targets, or another ambiguous source, Doctor leaves the files
-unchanged and lists the candidate source file or files to edit manually.
+and the deepest internal single-file include that solely owns the changed
+`diagnostics.otel` keys, including an unambiguous nested include chain. For root
+includes, actual array-entry includes, include arrays, sibling overrides,
+same-path or ancestor merges, changes spanning ownership boundaries, external
+include targets, an owning file that still authors a nested `$include`
+directive, or another ambiguous source, Doctor leaves the files unchanged and
+lists the candidate source file or files to edit manually. When the same run
+also needs a root-owned repair, such as a legacy agent roster, Doctor refuses
+that write; the refused write leaves every file unchanged (earlier writes in the
+same run stay saved), and Doctor names the boundary to repair by hand before
+rerunning, plus the included file or files when the root file authors that
+boundary's `$include` (an agent-roster boundary is named without its file).
 
 When `diagnostics.otel.protocol` is unset, each plugin-owned OTLP signal first
 checks its nonblank `OTEL_EXPORTER_OTLP_*_PROTOCOL` value, then
@@ -132,6 +140,8 @@ paths.
   more for the flush, so an unreachable collector cannot hold the command open.
   A collector that accepts the connection but never answers can still delay exit
   until the exporter's own request timeout (`OTEL_EXPORTER_OTLP_TIMEOUT`).
+  Plugin registration resources remain open until exporter cleanup finishes,
+  even when either wait times out.
   In JSON output mode, these one-shot runs suppress only the stdout JSONL log
   sink so command stdout stays reserved for the JSON response; OTLP traces,
   metrics, and logs continue when configured.
@@ -549,7 +559,7 @@ Only `session.stuck` emits the `openclaw.session.stuck` counter, the
 span. Repeated `session.stuck` diagnostics back off while the session remains
 unchanged, so dashboards should alert on sustained increases rather than
 every heartbeat tick. For the config knob and defaults, see
-[Configuration reference](/gateway/configuration-reference#diagnostics).
+[Configuration reference](/gateway/config-observability#diagnostics).
 
 Liveness warnings also emit:
 
@@ -764,7 +774,7 @@ can be temporarily `null` while its cache refreshes. `usage-cost` provides
 aggregate estimates. Omit `agentScope` or `--all-agents` to scope the report
 to the default agent. For continuously updated clients,
 [subscribe to session changes instead of polling usage reports](/gateway/clients#subscribe-instead-of-polling-usage).
-See the [Gateway RPC method reference](/gateway/protocol#rpc-method-families)
+See the [Gateway RPC method reference](/gateway/protocol/rpc-methods#rpc-method-families)
 for usage methods and request options.
 
 **Message flow**
@@ -868,4 +878,4 @@ OTEL_SDK_DISABLED=true openclaw gateway
 - [Gateway logging internals](/gateway/logging) - WS log styles, subsystem prefixes, and console capture
 - [Diagnostics flags](/diagnostics/flags) - targeted debug-log flags
 - [Diagnostics export](/gateway/diagnostics) - operator support-bundle tool (separate from OTEL export)
-- [Configuration reference](/gateway/configuration-reference#diagnostics) - full `diagnostics.*` field reference
+- [Configuration reference](/gateway/config-observability#diagnostics) - full `diagnostics.*` field reference

@@ -20,10 +20,47 @@ export type ManagedServiceRootRedirect = {
   previousRoot: string;
 };
 
+export type ManagedGatewayUpdateVerdict =
+  | { kind: "absent" | "foreign" }
+  | {
+      kind: "owned";
+      root: string;
+      fingerprint: string;
+      refreshDefinition: boolean;
+      requiresInstallRootRefresh?: boolean;
+    }
+  | { kind: "unresolved"; root: string; fingerprint: string }
+  | { kind: "unavailable"; message: string };
+
 export class GatewayServiceUpdateOwnershipError extends Error {
   constructor(message: string, cause: unknown) {
     super(message, { cause });
     this.name = "GatewayServiceUpdateOwnershipError";
+  }
+}
+
+export function assertGatewayServiceAdmissionUnchanged(
+  expectedService: { serviceUpdateVerdict?: ManagedGatewayUpdateVerdict } | undefined,
+  serviceUpdateVerdict: ManagedGatewayUpdateVerdict,
+): void {
+  const expectedVerdict = expectedService?.serviceUpdateVerdict;
+  if (expectedVerdict && expectedVerdict.kind !== serviceUpdateVerdict.kind) {
+    throw new GatewayServiceUpdateOwnershipError(
+      "Gateway service ownership changed after database admission; run `openclaw gateway status --deep` and retry.",
+      undefined,
+    );
+  }
+  if (
+    expectedVerdict?.kind === "owned" &&
+    serviceUpdateVerdict.kind === "owned" &&
+    expectedVerdict.fingerprint !== serviceUpdateVerdict.fingerprint
+  ) {
+    // Permission to refresh a writable definition after install does not allow
+    // its environment to change between database admission and native preparation.
+    throw new GatewayServiceUpdateOwnershipError(
+      "Gateway service definition changed after database admission; retry against its current configuration.",
+      undefined,
+    );
   }
 }
 
@@ -113,7 +150,7 @@ export async function resolvePackageRuntimePreflight(params: {
       `The requested package requires ${target.nodeEngine}.`,
       runtime.nodeRunner
         ? "Upgrade the Node runtime that owns the managed Gateway service, then rerun `openclaw update`."
-        : "Upgrade to Node 22.22.3+, Node 24.15.0+, or Node 25.9.0+, then rerun `openclaw update`.",
+        : "Upgrade to Node 24.16.0+ or Node 26.1.0+, then rerun `openclaw update`.",
       "Bare `npm i -g openclaw` can silently install an older compatible release.",
       "After upgrading Node, use `npm i -g openclaw@latest`.",
     ].join("\n"),
@@ -141,7 +178,7 @@ async function tryRealpathOrResolve(value: string): Promise<string> {
   return await fs.realpath(path.resolve(value)).catch(() => path.resolve(value));
 }
 
-function resolveManagedServiceNodeRunner(
+export function resolveManagedServiceNodeRunner(
   command: GatewayServiceCommandConfig | null,
 ): string | undefined {
   const args = command?.programArguments ?? [];

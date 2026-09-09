@@ -1,6 +1,11 @@
 // Failure output tests cover CLI error formatting and failure summaries.
 import { describe, expect, it } from "vitest";
-import { GatewayCredentialsRequiredError, GatewayTransportError } from "../gateway/call.js";
+import {
+  GatewayCredentialsRequiredError,
+  GatewayExplicitAuthRequiredError,
+  GatewayTransportError,
+} from "../gateway/call.js";
+import { UpdateSchemaRefusalError } from "../state/openclaw-update-schema-refusal.js";
 import {
   ExpectedCliError,
   formatCliFailureLines,
@@ -11,7 +16,41 @@ import {
 const PLUGIN_POLICY_MESSAGE =
   'The `openclaw workboard` command is provided by the "workboard" plugin, but that bundled plugin is disabled by default. Run `openclaw plugins enable workboard` to enable that CLI surface.';
 
+// Mirrors the producer in ensureExplicitGatewayAuth: the message already carries the remedy.
+const EXPLICIT_GATEWAY_AUTH_MESSAGE = [
+  "gateway url override requires explicit credentials",
+  "Fix: pass --token or --password with --url (or gatewayToken in tools).",
+  "For the default local or SSH-tunneled Gateway, remove --url to use the configured target.",
+  "Config: /tmp/openclaw.json",
+].join("\n");
+
 describe("formatCliJsonFailure", () => {
+  it("preserves the typed schema refusal when a runner migration fails before Doctor starts", () => {
+    const databases = [
+      {
+        kind: "state" as const,
+        path: "/state/openclaw.sqlite",
+        foundVersion: 15,
+        supportedVersion: 16,
+      },
+    ];
+    const error = new UpdateSchemaRefusalError(databases, "2026.9.2", {
+      targetVersion: "2026.9.4",
+      cause: new Error("content migration failed"),
+    });
+    expect(formatCliJsonFailure(error, { env: {} })).toMatchObject({
+      ok: false,
+      error: {
+        type: "cli_error",
+        code: "update-schema-bump-unfenced",
+        updaterVersion: "2026.9.2",
+        message: expect.stringContaining("Deferral failed: content migration failed"),
+        databases,
+        commands: expect.arrayContaining(["openclaw gateway stop", "openclaw doctor --fix"]),
+      },
+    });
+  });
+
   it("uses the canonical typed envelope and redacts the message", () => {
     const token = "sk-abcdefghijklmnopqrstuv";
     const payload = formatCliJsonFailure(new Error(`Authorization: Bearer ${token}`));
@@ -94,6 +133,26 @@ describe("formatCliJsonFailure", () => {
       },
     });
   });
+
+  it.each([
+    { label: "default output", env: {} },
+    { label: "debug output", env: { OPENCLAW_DEBUG: "1" } },
+  ])("keeps explicit gateway auth guidance in the envelope in $label", ({ env }) => {
+    const error = new GatewayExplicitAuthRequiredError(EXPLICIT_GATEWAY_AUTH_MESSAGE);
+
+    const payload = formatCliJsonFailure(error, { env });
+
+    expect(payload).toEqual({
+      ok: false,
+      error: {
+        type: "cli_error",
+        message: expect.stringContaining("gateway url override requires explicit credentials"),
+      },
+    });
+    // The shared machine-output redaction still applies; the remedy lines survive it.
+    expect(payload.error.message).toContain("remove --url to use the configured target.");
+    expect(payload.error.message).toContain("Config: /tmp/openclaw.json");
+  });
 });
 
 describe("formatCliFailureLines", () => {
@@ -156,6 +215,10 @@ describe("formatCliFailureLines", () => {
           method: "device.pair.list",
           configPath: "/tmp/openclaw.json",
         }),
+    },
+    {
+      label: "gateway URL override without explicit credentials",
+      createError: () => new GatewayExplicitAuthRequiredError(EXPLICIT_GATEWAY_AUTH_MESSAGE),
     },
     {
       label: "unreachable gateway",

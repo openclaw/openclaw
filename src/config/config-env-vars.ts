@@ -17,6 +17,8 @@ function isBlockedConfigEnvVar(key: string): boolean {
   return (
     key.toUpperCase() === ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS_ENV ||
     key.toUpperCase() === "OPENCLAW_INCLUDE_ROOTS" ||
+    // Config cannot opt into or out of the host-selected read-only mode.
+    key.toUpperCase() === "OPENCLAW_CONFIG_READONLY" ||
     isDangerousHostEnvVarName(key) ||
     isDangerousHostEnvOverrideVarName(key)
   );
@@ -362,8 +364,15 @@ export function initializePublishedConfigRuntimeEnv(
   pendingConfigRuntimeEnvPublication = null;
 }
 
-export function resetPublishedConfigRuntimeEnv(): void {
-  publishedConfigRuntimeEnvState = { generation: 0, ownedEnv: {}, sourceConfig: null };
+export function resetPublishedConfigRuntimeEnv(
+  options: { preserveOwnership?: boolean } = {},
+): void {
+  publishedConfigRuntimeEnvState = options.preserveOwnership
+    ? {
+        ...publishedConfigRuntimeEnvState,
+        generation: publishedConfigRuntimeEnvState.generation + 1,
+      }
+    : { generation: 0, ownedEnv: {}, sourceConfig: null };
   publishedConfigRuntimeEnvEpoch += 1;
   pendingConfigRuntimeEnvPublication = null;
 }

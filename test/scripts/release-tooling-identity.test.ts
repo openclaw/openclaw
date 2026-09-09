@@ -42,6 +42,17 @@ function protectedIdentity(
 }
 
 describe("release tooling identity", () => {
+  it("rejects a raw commit SHA as the workflow transport ref", () => {
+    expect(() =>
+      resolveReleaseToolingIdentity({
+        workflowContract: "2",
+        workflowFullRef: `refs/heads/${SHA}`,
+        workflowRef: SHA,
+        workflowSha: SHA,
+      }),
+    ).toThrow("workflow ref is not a trusted direct, release-ci, or protected-tag route");
+  });
+
   it.each([
     ["1", "main", "refs/heads/main"],
     ["2", "release/2026.8.1", "refs/heads/release/2026.8.1"],
@@ -118,6 +129,40 @@ describe("release tooling identity", () => {
         workflowSha: SHA,
       }),
     ).toEqual({ ref: "main", fullRef: "refs/heads/main", sha: SHA });
+  });
+
+  it("rejects a release-ci transport whose prefix does not match the Tooling SHA", () => {
+    const releaseCiRef = `release-ci/${OTHER_SHA.slice(0, 12)}-123`;
+    expect(() =>
+      resolveReleaseToolingIdentity({
+        requestedIdentityJson: JSON.stringify({
+          fullRef: "refs/heads/main",
+          ref: "main",
+          sha: SHA,
+        }),
+        workflowContract: "2",
+        workflowFullRef: `refs/heads/${releaseCiRef}`,
+        workflowRef: releaseCiRef,
+        workflowSha: SHA,
+      }),
+    ).toThrow("release-ci workflow ref does not match the workflow SHA");
+  });
+
+  it("rejects a candidate SHA substituted for the release-ci Tooling SHA", () => {
+    const releaseCiRef = `release-ci/${SHA.slice(0, 12)}-123`;
+    expect(() =>
+      resolveReleaseToolingIdentity({
+        requestedIdentityJson: JSON.stringify({
+          fullRef: "refs/heads/main",
+          ref: "main",
+          sha: OTHER_SHA,
+        }),
+        workflowContract: "2",
+        workflowFullRef: `refs/heads/${releaseCiRef}`,
+        workflowRef: releaseCiRef,
+        workflowSha: SHA,
+      }),
+    ).toThrow("release-ci workflow identity must be trusted main");
   });
 
   it("rejects explicit identity that does not match a direct workflow", () => {
@@ -789,10 +834,19 @@ describe.each([
     async (outcome) => {
       const manifestBytes = Buffer.from(`${JSON.stringify(manifest)}\n`);
       const tarballBytes = Buffer.from("prepared package bytes");
+      const npmLockBytes = Buffer.from(
+        `${JSON.stringify({ packages: [{ lock: "x".repeat(3 * 1024 * 1024) }] })}\n`,
+      );
       const zip = new JSZip();
       zip.file("preflight-manifest.json", manifestBytes);
       zip.file(manifest.tarballName, tarballBytes);
       zip.file("dependency-evidence/dependency-evidence-manifest.json", "{}", {
+        createFolders: false,
+      });
+      zip.file("dependency-evidence/npm-package-locks.json", npmLockBytes, {
+        createFolders: false,
+      });
+      zip.file("dependency-evidence/npm-package-locks.md", "# npm package-lock mirrors\n", {
         createFolders: false,
       });
       const archive = await zip.generateAsync({
@@ -848,6 +902,12 @@ describe.each([
             "utf8",
           ),
         ).toBe("{}");
+        expect(readFileSync(join(outputDir, "dependency-evidence/npm-package-locks.json"))).toEqual(
+          npmLockBytes,
+        );
+        expect(
+          readFileSync(join(outputDir, "dependency-evidence/npm-package-locks.md"), "utf8"),
+        ).toBe("# npm package-lock mirrors\n");
       } else {
         await expect(download).rejects.toThrow(
           outcome === "archive changed" ? "digest" : "qualified descriptor",

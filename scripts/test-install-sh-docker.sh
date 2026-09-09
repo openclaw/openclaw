@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# Bash 5.3+ can deadlock writing heredoc pipes on macOS before the reader starts.
+if [[ ${OSTYPE:-} == darwin* && $BASH != /bin/bash ]] && ((BASH_VERSINFO[0] > 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 3))); then
+  exec /bin/bash "$0" "$@"
+fi
 set -euo pipefail
 
 HARNESS_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -279,6 +283,7 @@ UPDATE_HOST_ALIAS="${OPENCLAW_INSTALL_SMOKE_UPDATE_HOST:-host.docker.internal}"
 UPDATE_PORT="${OPENCLAW_INSTALL_SMOKE_UPDATE_PORT:-}"
 UPDATE_EXPECT_VERSION="${OPENCLAW_INSTALL_SMOKE_UPDATE_EXPECT_VERSION:-}"
 FROZEN_PAYLOAD_DIR="${OPENCLAW_INSTALL_SMOKE_FROZEN_PAYLOAD_DIR:-}"
+FROZEN_NODE_VERSION="${OPENCLAW_INSTALL_SMOKE_NODE_VERSION:-}"
 LATEST_DIR="$(mktemp -d)"
 LATEST_FILE="${LATEST_DIR}/latest"
 UPDATE_DIR="$(mktemp -d)"
@@ -321,6 +326,10 @@ if [[ -n "$FROZEN_PAYLOAD_DIR" ]]; then
     echo "ERROR: frozen install-smoke payload requires OPENCLAW_INSTALL_SMOKE_UPDATE_EXPECT_VERSION" >&2
     exit 1
   fi
+  if [[ ! "$FROZEN_NODE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    echo "ERROR: frozen install-smoke payload requires a trusted OPENCLAW_INSTALL_SMOKE_NODE_VERSION" >&2
+    exit 1
+  fi
   INSTALL_SCRIPT_PATH="$FROZEN_PAYLOAD_DIR/install.sh"
   CLI_INSTALL_SCRIPT_PATH="$FROZEN_PAYLOAD_DIR/install-cli.sh"
 fi
@@ -329,8 +338,14 @@ INSTALL_SCRIPT_DOCKER_ARGS=(
   -v "$INSTALL_SCRIPT_PATH:/tmp/openclaw-install.sh:ro"
   -v "$CLI_INSTALL_SCRIPT_PATH:/tmp/openclaw-install-cli.sh:ro"
 )
+if [[ -n "$FROZEN_PAYLOAD_DIR" ]]; then
+  INSTALL_SCRIPT_DOCKER_ARGS+=(
+    -e "OPENCLAW_NODE_VERSION=$FROZEN_NODE_VERSION"
+  )
+fi
 
 for env_name in \
+  OPENCLAW_INSTALL_ALLOW_LEGACY_SAME_VERSION_APPLY \
   OPENCLAW_INSTALL_ALLOW_LEGACY_UPDATE_WARNING \
   OPENCLAW_INSTALL_SELF_UPDATE_WARNING_FIXED_VERSION \
   OPENCLAW_INSTALL_SMOKE_COMMAND_TIMEOUT \

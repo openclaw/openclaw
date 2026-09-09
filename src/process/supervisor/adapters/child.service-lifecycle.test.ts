@@ -129,8 +129,6 @@ describe.skipIf(process.platform === "win32")("POSIX child invocation identity",
         mode: "child",
         argv: [process.execPath, "-e", "process.stdout.write(process.argv0)"],
         argv0: executableAlias,
-        sessionId: `argv0-${mode}`,
-        backendId: "argv0-test",
         stdinMode: "pipe-closed" as const,
       });
 
@@ -191,8 +189,6 @@ describe.skipIf(process.platform === "win32")("service-managed child lifecycle",
           'sleep 60 >/dev/null 2>&1 & child=$!; printf "%s %s\\n" "$$" "$child"; wait',
         ],
         stdinMode: "pipe-closed",
-        sessionId: "service-lifecycle-test",
-        backendId: "service-lifecycle-test",
         timeoutMs: timing.timeoutMs,
         noOutputTimeoutMs: timing.noOutputTimeoutMs,
         onStdout: (chunk) => {
@@ -230,7 +226,7 @@ describe.skipIf(process.platform === "win32")("service-managed child lifecycle",
     `;
     const supervisor = createProcessSupervisor();
     const runId = "service-secret-construction";
-    const cleanupScope = supervisor.acquireScopeCleanup(runId, { requireProcessTree: true });
+    const cleanupScope = supervisor.acquireScopeCleanup(runId, { processTree: "required-all" });
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const pendingRun = supervisor.spawn({
       runId,
@@ -238,8 +234,6 @@ describe.skipIf(process.platform === "win32")("service-managed child lifecycle",
       mode: "child",
       argv: [process.execPath, "-e", command],
       stdinMode: "pipe-closed",
-      sessionId: "service-secret-construction",
-      backendId: "service-secret-construction",
       timeoutMs: 500,
       secretInput: {
         fd: 3,
@@ -252,12 +246,7 @@ describe.skipIf(process.platform === "win32")("service-managed child lifecycle",
       commandPid = startedPid;
       activePids.add(startedPid);
       expect(isAlive(startedPid)).toBe(true);
-      expect(supervisor.getRecord(runId)).toMatchObject({ state: "starting" });
       await vi.advanceTimersByTimeAsync(500);
-      expect(supervisor.getRecord(runId)).toMatchObject({
-        state: "exited",
-        terminationReason: "overall-timeout",
-      });
       const run = await pendingRun;
       await expect(run.wait()).resolves.toMatchObject({
         reason: "overall-timeout",
@@ -497,6 +486,53 @@ describe.skipIf(process.platform === "win32")("service-managed child lifecycle",
     await waitFor(() => !isAlive(rootPid) && !isAlive(descendantPid));
   });
 
+  it("resumes cleanup when a root exits after early lineage EOF", async () => {
+    process.env.OPENCLAW_SERVICE_MARKER = "openclaw";
+    const tempDir = tempDirs.make("openclaw-service-child-delayed-root-exit-");
+    const descendantPath = path.join(tempDir, "descendant.cjs");
+    const descendantPidPath = path.join(tempDir, "descendant.pid");
+    const rootPath = path.join(tempDir, "root.cjs");
+    await writeFile(
+      descendantPath,
+      `
+        const fs = require("node:fs");
+        fs.closeSync(3);
+        fs.writeFileSync(${JSON.stringify(descendantPidPath)}, String(process.pid));
+        setInterval(() => {}, 1000);
+      `,
+      "utf8",
+    );
+    await writeFile(
+      rootPath,
+      `
+        const { spawn } = require("node:child_process");
+        const fs = require("node:fs");
+        spawn(process.execPath, [${JSON.stringify(descendantPath)}], {
+          stdio: ["ignore", 1, 2, 3],
+        });
+        const ready = setInterval(() => {
+          if (!fs.existsSync(${JSON.stringify(descendantPidPath)})) {
+            return;
+          }
+          clearInterval(ready);
+          fs.closeSync(3);
+          setTimeout(() => process.exit(0), 250);
+        }, 5);
+      `,
+      "utf8",
+    );
+    const adapter = await createChildAdapter({
+      argv: [process.execPath, rootPath],
+      stdinMode: "pipe-closed",
+    });
+    const descendantPid = await waitForPidFile(descendantPidPath, 5_000);
+    activePids.add(descendantPid);
+
+    await expect(adapter.wait()).resolves.toEqual({ code: 0, signal: null });
+    await expect(adapter.waitForExtinction?.()).resolves.toBeUndefined();
+    await waitFor(() => !isAlive(descendantPid));
+  });
+
   it("preserves the supervisor TERM grace for a delayed authentic root result", async () => {
     process.env.OPENCLAW_SERVICE_MARKER = "openclaw";
     const tempDir = tempDirs.make("openclaw-service-child-term-grace-");
@@ -545,8 +581,6 @@ describe.skipIf(process.platform === "win32")("service-managed child lifecycle",
       mode: "child",
       argv: [process.execPath, rootPath],
       stdinMode: "pipe-closed",
-      sessionId: "service-term-grace-test",
-      backendId: "service-term-grace-test",
       onStdout: (chunk) => {
         streamedStdout += chunk;
       },
@@ -714,8 +748,6 @@ describe.skipIf(process.platform === "win32")("service-managed child lifecycle",
       mode: "child",
       argv: [process.execPath, "-e", rootScript],
       stdinMode: "pipe-closed",
-      sessionId: "service-incomplete-utf8-test",
-      backendId: "service-incomplete-utf8-test",
       onStdout: (chunk) => {
         streamed += chunk;
       },
@@ -810,10 +842,10 @@ describe.skipIf(process.platform === "win32")("service-managed child lifecycle",
     },
   );
 
-  it("fails closed when the command drops its lineage descriptor early", async () => {
+  it("preserves a root result when the command drops its lineage descriptor early", async () => {
     process.env.OPENCLAW_SERVICE_MARKER = "openclaw";
     const adapter = await createChildAdapter({
-      argv: ["/bin/sh", "-c", `exec 3>&-; trap '' TERM; printf "%s\\n" "$$"; sleep 60`],
+      argv: ["/bin/sh", "-c", `exec 3>&-; printf "%s\\n" "$$"; sleep 0.25`],
       stdinMode: "pipe-closed",
     });
     let output = "";
@@ -824,8 +856,8 @@ describe.skipIf(process.platform === "win32")("service-managed child lifecycle",
     const rootPid = Number.parseInt(output, 10);
     activePids.add(rootPid);
 
-    await expect(adapter.wait()).rejects.toThrow("cleanup identity lost");
-    await expect(adapter.waitForExtinction?.()).rejects.toThrow("cleanup identity lost");
+    await expect(adapter.wait()).resolves.toEqual({ code: 0, signal: null });
+    await expect(adapter.waitForExtinction?.()).resolves.toBeUndefined();
     await waitFor(() => !isAlive(rootPid));
   });
 

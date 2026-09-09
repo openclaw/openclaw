@@ -33,6 +33,7 @@ import {
 } from "../chat-thread.ts";
 import { hasForwardedSource } from "../chat-turn-boundary.ts";
 import { renderAgentRunFrame } from "./chat-agent-run-frame.ts";
+import { resolveChatDefaultAvatarPlacement } from "./chat-author-avatar.ts";
 import { renderBackgroundTasksStatusRow } from "./chat-background-tasks-status.ts";
 import { renderChatDivider, renderChatNotice } from "./chat-divider.ts";
 import { resolveMessageGroupSenderLabel } from "./chat-message-group.ts";
@@ -250,20 +251,18 @@ export function projectChatTranscript(
   const hasForwardedGroups = chatItems.some(
     (item) => item.kind === "group" && hasForwardedSource(item),
   );
-  const isDirectThread =
+  const defaultAvatarPlacement = resolveChatDefaultAvatarPlacement(
     (sessionKind === "direct" || sessionKind === "cron" || sessionKind === "spawn-child") &&
-    !props.userId &&
-    !hasForwardedGroups;
-  // Precedence: explicit prop, subagent classification/spawnedBy/key → none, direct → footer, else gutter.
+      !hasForwardedGroups,
+    props.userId,
+  );
+  const isDirectThread = defaultAvatarPlacement === "footer";
+  // Precedence: explicit prop, subagent classification/key → none, direct → footer, else gutter.
   const avatarPlacement =
     props.avatarPlacement ??
-    (activeSession?.classification === "subagent" ||
-    activeSession?.spawnedBy ||
-    isSubagentSessionKey(props.sessionKey)
+    (activeSession?.classification === "subagent" || isSubagentSessionKey(props.sessionKey)
       ? "none"
-      : isDirectThread
-        ? "footer"
-        : "gutter");
+      : defaultAvatarPlacement);
   const showLoadingSkeleton = props.loading && chatItems.length === 0 && !hasTypingActors;
   const threadContextWindow =
     activeSession?.contextTokens ?? props.sessions?.defaults?.contextTokens ?? null;
@@ -283,7 +282,7 @@ export function projectChatTranscript(
     onOpenSidebar: props.onOpenSidebar,
     sessionKey: props.sessionKey,
     boardProvider: props.boardProvider,
-    agentId: props.fullMessageAgentId,
+    agentId: props.currentAgentId ?? props.fullMessageAgentId,
     runActive: props.runActive,
     onOpenWorkspaceFile: props.onOpenWorkspaceFile,
     onRequestUpdate: requestUpdate,
@@ -299,7 +298,8 @@ export function projectChatTranscript(
     embedSandboxMode: props.embedSandboxMode ?? "scripts",
     allowExternalEmbedUrls: props.allowExternalEmbedUrls ?? false,
     fetchLinkFavicon: props.fetchLinkFavicon,
-    showAssistantAvatar: false,
+    githubRepo: props.githubRepo,
+    showAssistantAvatar: avatarPlacement === "gutter" && Boolean(assistantIdentity.avatar),
   } satisfies StreamGroupOptions;
   const streamGroupOptions = {
     ...sharedMessageRenderOptions,
@@ -320,6 +320,7 @@ export function projectChatTranscript(
         : null;
     return {
       ...sharedMessageRenderOptions,
+      transcriptVisible: props.transcriptVisible,
       latestBrowserTabs,
       showReasoning,
       showToolCalls: props.showToolCalls,
@@ -339,7 +340,6 @@ export function projectChatTranscript(
       onToggleToolExpanded: toggleToolCardExpanded,
       assistantName: props.assistantName,
       assistantAvatar: assistantIdentity.avatar,
-      agentId: props.currentAgentId ?? props.fullMessageAgentId,
       agents: props.agents,
       senderAgentAvatars: props.senderAgentAvatars,
       mainKey: props.mainKey,
@@ -371,9 +371,6 @@ export function projectChatTranscript(
       turnRecap: turnRecapByGroupKey.get(item.key),
       latestAssistant: item.key === latestAssistantItemKey,
     } satisfies Parameters<typeof renderMessageGroup>[1];
-  };
-  const renderGroupItem = (item: MessageGroup) => {
-    return renderMessageGroup(item, renderGroupOptions(item));
   };
   // Only the working indicator shows live usage, so rows without one keep
   // memoizing across usage patches.
@@ -436,7 +433,7 @@ export function projectChatTranscript(
         return nothing;
       }
       if (item.groups.length === 1) {
-        return renderGroupItem(firstGroup);
+        return renderMessageGroup(firstGroup, renderGroupOptions(firstGroup));
       }
       return renderActivityGroup(item.groups, renderGroupOptions(firstGroup));
     }
@@ -450,7 +447,7 @@ export function projectChatTranscript(
       });
     }
     if (item.kind === "group") {
-      return renderGroupItem(item);
+      return renderMessageGroup(item, renderGroupOptions(item));
     }
     if (item.kind === "question") {
       return renderStreamGroup([item], {
@@ -648,6 +645,7 @@ export function projectChatTranscript(
     JSON.stringify([...latestBrowserTabs]),
     props.sessionKey,
     props.presented,
+    props.transcriptVisible,
     // Invalidate settled rows when spawn metadata arrives, not on activity/title patches.
     avatarPlacement,
     props.boardProvider,
@@ -681,6 +679,8 @@ export function projectChatTranscript(
     props.embedSandboxMode ?? "scripts",
     props.allowExternalEmbedUrls ?? false,
     Boolean(props.fetchLinkFavicon),
+    props.githubRepo?.owner,
+    props.githubRepo?.repo,
     threadContextWindow,
     Boolean(props.onSetReply),
     Boolean(props.onRetryQueuedMessage),

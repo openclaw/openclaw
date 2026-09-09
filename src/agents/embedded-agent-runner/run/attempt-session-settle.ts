@@ -5,11 +5,13 @@
 import { formatErrorMessage, toErrorObject } from "../../../infra/errors.js";
 import type { createTrajectoryRuntimeRecorder } from "../../../trajectory/runtime.js";
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
+import { recordAgentCleanupFailure } from "../../run-cleanup-timeout.js";
 import type { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
 import type { AgentSession } from "../../sessions/index.js";
 import { clearToolSearchCatalog, type ToolSearchCatalogRef } from "../../tool-search.js";
 import { log } from "../logger.js";
 import { flushPendingToolResultsAfterIdle } from "../wait-for-idle-before-flush.js";
+import type { UserTranscriptContext } from "./attempt-history.js";
 import type { EmitDiagnosticRunCompleted } from "./attempt-setup.js";
 import { cleanupEmbeddedAttemptResources } from "./attempt-subscription-cleanup.js";
 import { flushEmbeddedAttemptTrajectoryRecorder } from "./attempt-trajectory-flush.js";
@@ -23,6 +25,7 @@ export function createEmbeddedAttemptSessionSettleTracker(
   activeSession: Pick<AgentSession, "abort">,
 ) {
   const inFlight = new Set<Promise<void>>();
+  let abortCleanupFailed = false;
   const trackSettlePromise = (promise: Promise<void>): Promise<void> => {
     inFlight.add(promise);
     const settled = () => {
@@ -34,9 +37,26 @@ export function createEmbeddedAttemptSessionSettleTracker(
 
   return {
     abortActiveSession: (reason?: unknown) =>
-      trackSettlePromise(Promise.resolve(activeSession.abort(reason))),
-    buildAbortSettlePromise: () =>
-      inFlight.size === 0 ? null : Promise.allSettled(inFlight).then<void>(() => undefined),
+      trackSettlePromise(
+        Promise.resolve(activeSession.abort(reason)).catch((error: unknown) => {
+          abortCleanupFailed = true;
+          throw error;
+        }),
+      ),
+    buildAbortSettlePromise: () => {
+      // Abort callbacks can run outside the caller's async context. Record their
+      // retained failure from the cleanup owner that joins settlement.
+      if (abortCleanupFailed) {
+        recordAgentCleanupFailure();
+      }
+      return inFlight.size === 0
+        ? null
+        : Promise.allSettled(inFlight).then(() => {
+            if (abortCleanupFailed) {
+              recordAgentCleanupFailure();
+            }
+          });
+    },
     trackPromptSettlePromise: trackSettlePromise,
   };
 }
@@ -51,6 +71,7 @@ type DisposableRuntime = { dispose(): Promise<void> | void };
 
 export type EmbeddedAttemptSessionResources = {
   session?: AgentSession;
+  getUserTranscriptContexts?: () => readonly UserTranscriptContext[] | undefined;
   sessionManager?: ReturnType<typeof guardSessionManager>;
   removeToolResultContextGuard?: () => void;
   trajectoryRecorder: TrajectoryRecorder | null;
@@ -144,11 +165,13 @@ export async function cleanupEmbeddedAttemptSessionPhase(
       sessionId: attempt.sessionId,
     });
   } catch (err) {
+    recordAgentCleanupFailure();
     cleanupError = err;
   } finally {
     try {
       await input.transcriptLifecycle.dispose();
     } catch (err) {
+      recordAgentCleanupFailure();
       cleanupError ??= err;
     }
   }

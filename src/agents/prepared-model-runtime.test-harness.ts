@@ -22,6 +22,7 @@ const preparedModelRuntimeMocks = vi.hoisted(() => ({
     pluginIds: [],
     index: { plugins: [] },
     manifestRegistry: { plugins: [], diagnostics: [] },
+    declaredProviderOwners: new Map(),
     owners: {
       channels: new Map(),
       channelConfigs: new Map(),
@@ -46,7 +47,7 @@ const preparedModelRuntimeMocks = vi.hoisted(() => ({
   },
   modelRegistry: {
     fork: vi.fn((authStorage: unknown) => ({ authStorage })),
-    getAll: vi.fn(() => []),
+    getAll: vi.fn<() => ModelCatalogSnapshot["entries"]>(() => []),
     find: vi.fn(() => null),
   },
   buildPreparedModelCatalogSnapshot: vi.fn<BuildPreparedModelCatalogSnapshot>(async () => ({
@@ -384,7 +385,7 @@ vi.mock("../logging/subsystem.js", () => ({
 
 type PreparedModelRuntimeTestApi = {
   getPreparedModelRuntimeOwnerCountForTest(): number;
-  resetPreparedModelRuntimeSnapshotsForTest(): void;
+  resetPreparedModelRuntimeSnapshotsForTest(): Promise<void>;
   setModelRuntimeBuildTimeoutMsForTest(timeoutMs: number): void;
 };
 
@@ -398,8 +399,8 @@ export function getPreparedModelRuntimeTestApi(): PreparedModelRuntimeTestApi {
   ] as PreparedModelRuntimeTestApi;
 }
 
-export function resetPreparedModelRuntimeHarness(state: OpenClawTestState): void {
-  getPreparedModelRuntimeTestApi().resetPreparedModelRuntimeSnapshotsForTest();
+export async function resetPreparedModelRuntimeHarness(state: OpenClawTestState): Promise<void> {
+  await getPreparedModelRuntimeTestApi().resetPreparedModelRuntimeSnapshotsForTest();
   agentScopeMocks.resolveAgentDir
     .mockReset()
     .mockImplementation(
@@ -478,6 +479,6 @@ export async function cleanupPreparedModelRuntimeHarness(
     console.warn(`Retained prepared-model fixture after failed test: ${state.root}`);
     return;
   }
-  getPreparedModelRuntimeTestApi().resetPreparedModelRuntimeSnapshotsForTest();
+  await getPreparedModelRuntimeTestApi().resetPreparedModelRuntimeSnapshotsForTest();
   await state.cleanup();
 }

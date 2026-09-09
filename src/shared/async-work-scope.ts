@@ -22,18 +22,26 @@ export class AsyncWorkScope {
     return this.phase !== "open";
   }
 
+  /** Enters synchronous work without inspecting or assimilating its return value. */
+  run<T>(run: () => T): T {
+    if (this.phase === "closed") {
+      throw new Error("Async work scope is closed");
+    }
+    const operation = this.registerWork<void>();
+    try {
+      return currentWorkScope.run(this, run);
+    } finally {
+      operation.resolve();
+    }
+  }
+
   track<T>(run: () => T | Promise<T>): Promise<T> {
     if (this.phase === "closed") {
       return Promise.reject(new Error("Async work scope is closed"));
     }
     // Register before invoking without delaying received node results behind
     // a subsequent socket-close event. Async descendants inherit this exact owner.
-    const operation = createDeferredCore<T>();
-    this.pending.add(operation.promise);
-    void operation.promise.then(
-      () => this.pending.delete(operation.promise),
-      () => this.pending.delete(operation.promise),
-    );
+    const operation = this.registerWork<T>();
     try {
       operation.resolve(currentWorkScope.run(this, run));
     } catch (error) {
@@ -42,12 +50,43 @@ export class AsyncWorkScope {
     return operation.promise;
   }
 
-  beginClose(): void {
+  private registerWork<T>() {
+    const operation = createDeferredCore<T>();
+    this.pending.add(operation.promise);
+    void operation.promise.then(
+      () => this.pending.delete(operation.promise),
+      () => this.pending.delete(operation.promise),
+    );
+    return operation;
+  }
+
+  beginClose(reason?: unknown): void {
     if (this.phase !== "open") {
       return;
     }
     this.phase = "closing";
-    this.controller.abort();
+    this.controller.abort(reason);
+  }
+
+  /** Starts the next phase in the same continuation that observes settled pending work. */
+  runWhenIdle<T>(run: () => T | Promise<T>): Promise<T> {
+    return AsyncWorkScope.runWhenAllIdle(
+      () => [this],
+      () => this.track(run),
+    );
+  }
+
+  /** Reselects owners so work admitted into a later phase is not mistaken for earlier work. */
+  static async runWhenAllIdle<T>(
+    selectScopes: () => readonly AsyncWorkScope[],
+    run: () => T | Promise<T>,
+  ): Promise<T> {
+    let scopes = selectScopes();
+    do {
+      await Promise.allSettled(scopes.flatMap((scope) => [...scope.pending]));
+      scopes = selectScopes();
+    } while (scopes.some((scope) => scope.pending.size > 0));
+    return run();
   }
 
   async drain(): Promise<void> {
