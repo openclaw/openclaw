@@ -1754,8 +1754,21 @@ describe("mobile release authority", () => {
     const source = fs.readFileSync(file, "utf8");
     const workflow = parse(source) as {
       jobs: {
+        "validate-target": {
+          permissions: Record<string, string>;
+          "runs-on": string;
+          steps: Array<{
+            env?: Record<string, string>;
+            name: string;
+            run?: string;
+            uses?: string;
+            with?: Record<string, unknown>;
+          }>;
+          "timeout-minutes": number;
+        };
         diagnose: {
           env: Record<string, string>;
+          needs: string;
           permissions: Record<string, string>;
           "runs-on": string;
           steps: Array<{
@@ -1784,16 +1797,28 @@ describe("mobile release authority", () => {
       };
       permissions: Record<string, string>;
     };
+    const validationJob = workflow.jobs["validate-target"];
+    const validationSteps = validationJob.steps;
     const job = workflow.jobs.diagnose;
     const steps = job.steps;
-    const validateIndex = steps.findIndex((step) => step.name === "Validate target SHA");
-    const trustedCheckoutIndex = steps.findIndex(
+    const validateIndex = validationSteps.findIndex((step) => step.name === "Validate target SHA");
+    const validationTrustedCheckoutIndex = validationSteps.findIndex(
       (step) => step.name === "Checkout trusted Android tooling",
     );
-    const checkoutIndex = steps.findIndex((step) => step.name === "Checkout exact target");
-    const headIndex = steps.findIndex((step) => step.name === "Verify exact target checkout");
-    const parityIndex = steps.findIndex(
+    const checkoutIndex = validationSteps.findIndex(
+      (step) => step.name === "Checkout exact target",
+    );
+    const headIndex = validationSteps.findIndex(
+      (step) => step.name === "Verify exact target checkout",
+    );
+    const parityIndex = validationSteps.findIndex(
       (step) => step.name === "Verify Android toolchain action parity",
+    );
+    const initializeIndex = steps.findIndex(
+      (step) => step.name === "Initialize Android emulator diagnostic",
+    );
+    const trustedCheckoutIndex = steps.findIndex(
+      (step) => step.name === "Checkout trusted Android tooling",
     );
     const setupIndex = steps.findIndex((step) => step.name === "Setup Android toolchain");
     const diagnosticIndex = steps.findIndex(
@@ -1811,8 +1836,12 @@ describe("mobile release authority", () => {
       type: "string",
     });
     expect(workflow.permissions).toEqual({ contents: "read" });
-    expect(Object.keys(workflow.jobs)).toEqual(["diagnose"]);
+    expect(Object.keys(workflow.jobs)).toEqual(["validate-target", "diagnose"]);
+    expect(validationJob.permissions).toEqual({ contents: "read" });
+    expect(validationJob["runs-on"]).toBe("ubuntu-24.04");
+    expect(validationJob["timeout-minutes"]).toBe(5);
     expect(job.permissions).toEqual({ contents: "read" });
+    expect(job.needs).toBe("validate-target");
     expect(job["runs-on"]).toBe("macos-26-intel");
     expect(job["timeout-minutes"]).toBe(25);
     expect(job.env).toEqual({
@@ -1823,22 +1852,54 @@ describe("mobile release authority", () => {
     });
 
     expect(validateIndex).toBe(0);
-    expect(trustedCheckoutIndex).toBe(validateIndex + 1);
-    expect(checkoutIndex).toBe(trustedCheckoutIndex + 1);
+    expect(validationTrustedCheckoutIndex).toBe(validateIndex + 1);
+    expect(checkoutIndex).toBe(validationTrustedCheckoutIndex + 1);
     expect(headIndex).toBe(checkoutIndex + 1);
     expect(parityIndex).toBe(headIndex + 1);
-    expect(setupIndex).toBe(parityIndex + 1);
+    expect(initializeIndex).toBe(0);
+    expect(trustedCheckoutIndex).toBe(initializeIndex + 1);
+    expect(setupIndex).toBe(trustedCheckoutIndex + 1);
     expect(diagnosticIndex).toBe(setupIndex + 1);
     expect(artifactIndex).toBe(diagnosticIndex + 1);
-    expect(steps[validateIndex]?.env).toEqual({
+    expect(validationSteps[validateIndex]?.env).toEqual({
       TARGET_SHA: "${{ inputs.target_sha }}",
     });
-    expect(steps[validateIndex]?.run).toContain('[[ ! "$TARGET_SHA" =~ ^[0-9a-f]{40}$ ]]');
-    expect(steps[validateIndex]?.run).toContain(
+    expect(validationSteps[validateIndex]?.run).toContain(
+      '[[ ! "$TARGET_SHA" =~ ^[0-9a-f]{40}$ ]]',
+    );
+    expect(steps[initializeIndex]?.env).toEqual({
+      TARGET_SHA: "${{ inputs.target_sha }}",
+    });
+    expect(steps[initializeIndex]?.run).toContain(
       'DIAGNOSTIC_DIR="$RUNNER_TEMP/android-emulator-diagnostic"',
     );
-    expect(steps[validateIndex]?.run).toContain(
+    expect(steps[initializeIndex]?.run).toContain(
       'echo "DIAGNOSTIC_DIR=$DIAGNOSTIC_DIR" >>"$GITHUB_ENV"',
+    );
+    expect(validationSteps[validationTrustedCheckoutIndex]).toMatchObject({
+      uses: "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+      with: {
+        ref: "${{ github.workflow_sha }}",
+        "fetch-depth": 1,
+        "persist-credentials": false,
+        "sparse-checkout": ".github/actions/setup-android-toolchain",
+        path: ".mobile-release-tooling",
+      },
+    });
+    expect(validationSteps[checkoutIndex]).toMatchObject({
+      uses: "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+      with: {
+        ref: "${{ inputs.target_sha }}",
+        "fetch-depth": 1,
+        "persist-credentials": false,
+        path: "candidate",
+      },
+    });
+    expect(validationSteps[headIndex]?.env).toEqual({
+      TARGET_SHA: "${{ inputs.target_sha }}",
+    });
+    expect(validationSteps[headIndex]?.run).toContain(
+      'test "$(git -C candidate rev-parse HEAD)" = "$TARGET_SHA"',
     );
     expect(steps[trustedCheckoutIndex]).toMatchObject({
       uses: "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
@@ -1850,21 +1911,6 @@ describe("mobile release authority", () => {
         path: ".mobile-release-tooling",
       },
     });
-    expect(steps[checkoutIndex]).toMatchObject({
-      uses: "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
-      with: {
-        ref: "${{ inputs.target_sha }}",
-        "fetch-depth": 1,
-        "persist-credentials": false,
-        path: "candidate",
-      },
-    });
-    expect(steps[headIndex]?.env).toEqual({
-      TARGET_SHA: "${{ inputs.target_sha }}",
-    });
-    expect(steps[headIndex]?.run).toContain(
-      'test "$(git -C candidate rev-parse HEAD)" = "$TARGET_SHA"',
-    );
     expect(steps[setupIndex]).toMatchObject({
       uses: "./.mobile-release-tooling/.github/actions/setup-android-toolchain",
       with: {
@@ -1872,8 +1918,9 @@ describe("mobile release authority", () => {
         "install-screenshot-emulators": "true",
       },
     });
+    expect(JSON.stringify(steps)).not.toContain("candidate/");
 
-    const parityScript = steps[parityIndex]?.run ?? "";
+    const parityScript = validationSteps[parityIndex]?.run ?? "";
     expect(parityScript).toContain("git -C .mobile-release-tooling ls-tree");
     expect(parityScript).toContain("git -C candidate ls-tree");
     expect(parityScript).toContain("cat-file blob");
