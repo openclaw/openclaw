@@ -2548,7 +2548,14 @@
   flex: 0 0 54px;
   width: 54px;
   height: 54px;
+  padding: 4px;
   color: var(--muted);
+}
+
+.chat-attachment-file__preview img {
+  border-radius: max(0px, calc(var(--chat-attachment-radius) - 5px));
+  outline: 1px solid color-mix(in srgb, var(--border) 45%, transparent);
+  outline-offset: -1px;
 }
 
 .chat-attachment-file__preview > svg {
@@ -2558,8 +2565,8 @@
 
 .chat-attachment-video__play {
   position: absolute;
-  inset-inline-end: 3px;
-  bottom: 3px;
+  inset-inline-end: 7px;
+  bottom: 7px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -2573,6 +2580,8 @@
 .chat-attachment-video__play svg {
   width: 10px;
   height: 10px;
+  fill: currentColor;
+  stroke: none;
 }
 
 .chat-attachment-file__icon {

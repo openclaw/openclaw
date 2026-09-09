@@ -6775,9 +6775,10 @@ describe("chat attachment picker", () => {
     const preview = renderChatView({ attachments: nextAttachments });
     expect(preview.querySelectorAll(".chat-attachment-thumb--file")).toHaveLength(1);
     expect(preview.querySelector(".chat-attachment-file__name")?.textContent).toBe("clip.mp4");
-    expect(preview.querySelector(".chat-attachment-file__icon")?.getAttribute("data-family")).toBe(
-      "video",
-    );
+    expect(
+      preview.querySelector(".chat-attachment-file--video .chat-attachment-file__preview svg"),
+    ).not.toBeNull();
+    expect(preview.querySelector(".chat-attachment-file__preview img")).toBeNull();
     expect(preview.querySelector(".chat-attachment-file__type")?.textContent).toBe("MP4");
   });
 });
