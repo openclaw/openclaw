@@ -19,7 +19,11 @@ function catalog(name: string, pluginName: string, path?: string): v2.PluginList
             enabled: false,
             installPolicy: "AVAILABLE",
             authPolicy: "ON_USE",
-            interface: { shortDescription: "Summarize\nsource code" },
+            interface: {
+              displayName: "Security\nReview",
+              developerName: "Example\u0000Labs",
+              shortDescription: "Summarize\nsource code",
+            },
           },
         ],
       },
@@ -53,7 +57,11 @@ describe("Codex marketplace plugin discovery", () => {
       "security-review@company-tools",
       "workspace-review@workspace-directory",
     ]);
-    expect(result.plugins[0]?.description).toBe("Summarize source code");
+    expect(result.plugins[0]).toMatchObject({
+      displayName: "Security Review",
+      developerName: "Example Labs",
+      description: "Summarize source code",
+    });
   });
 
   it("preserves authorized workspace catalogs when another supplemental category fails", async () => {

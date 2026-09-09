@@ -57,16 +57,20 @@ export function formatCodexAvailablePlugins(
           : plugin.available
             ? "available"
             : "unavailable";
+        const title = plugin.displayName ? `${formatCodexDisplayText(plugin.displayName)} — ` : "";
+        const publisher = plugin.developerName
+          ? formatCodexDisplayText(plugin.developerName)
+          : "Not provided";
         const description = plugin.description
-          ? ` - ${formatCodexDisplayText(plugin.description)}`
-          : "";
-        return `- ${plugin.id} (${state})${description}`;
+          ? formatCodexDisplayText(plugin.description)
+          : "No description provided.";
+        return `- ${title}${plugin.id} (${state})\n  Publisher: ${publisher}. ${description}`;
       }),
     );
   }
   lines.push(
     ...warnings.map((warning) => `Warning: ${formatCodexDisplayText(warning)}`),
-    "Search names, marketplaces, or descriptions: /codex plugins available <query>",
+    "Search names, titles, publishers, marketplaces, or descriptions: /codex plugins available <query>",
     "To authorize one plugin, an owner or operator.admin must send:",
     "/codex plugins install <plugin>@<marketplace>",
   );

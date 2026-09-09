@@ -244,13 +244,16 @@ from `plugins.entries.codex.config.codexPlugins.plugins`.
 
 `available [query] [--page <n>]` requires an owner or `operator.admin`. It reads
 Codex's marketplace catalogs using the bound workspace, including repository-local
-plugins, without installing or enabling them. Search matches names, marketplaces,
+plugins, without installing or enabling them. Search matches names, display titles, publishers, marketplaces,
 and descriptions case-insensitively across the full returned catalog before
 showing ten results per page. **Next page** and **Previous page** preserve your
 search; channels without buttons show the commands to send. Search text is limited
 to 100 characters. Use `--` before literal search text containing `--page`.
 
-Results retain marketplace-qualified identities and availability restrictions.
+Results show display titles, publishers, and descriptions when supplied by Codex,
+with explicit placeholders for missing publishers or descriptions. They retain
+marketplace-qualified identities and availability restrictions; display titles
+and publisher names do not change installation identity.
 This searches Codex catalogs, not OpenClaw's plugin registry or every ChatGPT
 connection. The owner-scoped `codex_plugins` model tool uses the same search
 matching and is also read-only: it can recommend an exact install command but

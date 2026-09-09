@@ -5,7 +5,7 @@ import type { v2 } from "./app-server/protocol.js";
 // Codex permits dots between plugin-name segments, but not in marketplace names.
 const PLUGIN_NAME_PATTERN = /^[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*$/;
 const MARKETPLACE_NAME_PATTERN = /^[A-Za-z0-9_-]+$/;
-const MAX_PLUGIN_DESCRIPTION_LENGTH = 160;
+const MAX_PLUGIN_METADATA_LENGTH = 160;
 const SUPPLEMENTAL_MARKETPLACE_KINDS = [
   "workspace-directory",
   "shared-with-me",
@@ -18,6 +18,8 @@ export type CodexAvailablePlugin = {
   id: string;
   pluginName: string;
   marketplaceName: string;
+  displayName?: string;
+  developerName?: string;
   description?: string;
   installed: boolean;
   enabled: boolean;
@@ -49,7 +51,9 @@ export function filterCodexMarketplacePlugins(
     (plugin) =>
       (!marketplace || plugin.marketplaceName === marketplace) &&
       (!normalizedQuery ||
-        `${plugin.id} ${plugin.description ?? ""}`.toLowerCase().includes(normalizedQuery)),
+        `${plugin.id} ${plugin.displayName ?? ""} ${plugin.developerName ?? ""} ${plugin.description ?? ""}`
+          .toLowerCase()
+          .includes(normalizedQuery)),
   );
 }
 
@@ -143,10 +147,17 @@ export async function discoverCodexMarketplacePlugins(params: {
         continue;
       }
       const previous = discovered.get(id);
+      const pluginInterface = readRecord(summary.interface);
       const next: CodexAvailablePlugin = {
         id,
         pluginName,
         marketplaceName: marketplace.name,
+        displayName: boundedCatalogText(pluginInterface?.displayName) || undefined,
+        developerName: boundedCatalogText(pluginInterface?.developerName) || undefined,
+        description:
+          boundedCatalogText(pluginInterface?.shortDescription) ||
+          boundedCatalogText(pluginInterface?.longDescription) ||
+          undefined,
         installed: summary.installed,
         enabled: summary.enabled,
         available:
@@ -162,10 +173,6 @@ export async function discoverCodexMarketplacePlugins(params: {
           : {}),
         summaryId: summary.id,
       };
-      const description = pluginDescription(summary);
-      if (description) {
-        next.description = description;
-      }
       if (
         previous &&
         (previous.marketplacePath !== next.marketplacePath ||
@@ -227,16 +234,10 @@ function pluginSlug(summary: v2.PluginSummary, marketplaceName: string): string 
   return PLUGIN_NAME_PATTERN.test(summary.name) ? summary.name : undefined;
 }
 
-function pluginDescription(summary: v2.PluginSummary): string | undefined {
-  const pluginInterface = readRecord(summary.interface);
-  const description = pluginInterface?.shortDescription;
-  if (typeof description !== "string") {
-    return undefined;
+function boundedCatalogText(value: unknown): string {
+  if (typeof value !== "string") {
+    return "";
   }
-  return boundedCatalogText(description) || undefined;
-}
-
-function boundedCatalogText(value: string): string {
   let sanitized = "";
   for (const character of value) {
     const codePoint = character.codePointAt(0);
@@ -245,5 +246,5 @@ function boundedCatalogText(value: string): string {
         ? " "
         : character;
   }
-  return sanitized.replace(/\s+/g, " ").trim().slice(0, MAX_PLUGIN_DESCRIPTION_LENGTH);
+  return sanitized.replace(/\s+/g, " ").trim().slice(0, MAX_PLUGIN_METADATA_LENGTH);
 }

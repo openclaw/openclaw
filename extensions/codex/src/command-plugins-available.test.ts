@@ -29,7 +29,11 @@ function catalogRuntime(description = "Review project notes") {
                 pluginSummary("github", "company-tools", {
                   installed: true,
                   enabled: true,
-                  interface: { shortDescription: "Read pull requests" },
+                  interface: {
+                    displayName: "Repository Companion",
+                    developerName: "Example Labs",
+                    shortDescription: "Read pull requests",
+                  },
                 }),
               ],
             },
@@ -38,7 +42,7 @@ function catalogRuntime(description = "Review project notes") {
               plugins: [
                 pluginSummary("github", "openai-curated-remote", {
                   availability: "DISABLED_BY_ADMIN",
-                  interface: { shortDescription: "Inspect issues" },
+                  interface: { longDescription: "Inspect issues" },
                 }),
               ],
             },
@@ -62,7 +66,9 @@ describe("Codex available plugin search and pages", () => {
       runtime,
     );
 
-    expect(result.text).toContain("github@company-tools (installed)");
+    expect(result.text).toContain("Repository Companion — github@company-tools (installed)");
+    expect(result.text).toContain("Publisher: Example Labs. Read pull requests");
+    expect(result.text).toContain("Publisher: Not provided. Inspect issues");
     expect(result.text).toContain("github@openai-curated-remote (unavailable)");
     expect(result.text).toContain("of 2");
     expect(result.text).not.toContain("catalog-00@");
@@ -77,16 +83,29 @@ describe("Codex available plugin search and pages", () => {
     );
     expect(description.text).toContain("github@company-tools");
     expect(description.text).not.toContain("github@openai-curated-remote");
+    for (const query of ["Repository Companion", "EXAMPLE LABS"]) {
+      const matched = await handleCodexPluginsSubcommand(
+        fakeCtx,
+        ["available", query],
+        io,
+        runtime,
+      );
+      expect(matched.text).toContain("github@company-tools");
+      expect(matched.text).toContain("of 1 matches");
+    }
   });
 
   it("makes every result reachable through the returned page commands", async () => {
-    const runtime = catalogRuntime();
+    const runtime = catalogRuntime("");
     const io = inMemoryIO();
     let result = await handleCodexPluginsSubcommand(fakeCtx, ["available"], io, runtime);
     expect(result.text).toContain("Showing 1–10 of 37");
+    expect(result.text).toContain("Publisher: Not provided. No description provided.");
     expect(result.text).not.toContain("catalog-10@");
     const pluginRows = (text: string | undefined) =>
-      [...(text ?? "").matchAll(/^- ([a-z0-9-]+@[a-z0-9-]+) \(/gm)].map((match) => match[1]);
+      [...(text ?? "").matchAll(/^- (?:[^\n]*? — )?([a-z0-9-]+@[a-z0-9-]+) \(/gm)].map(
+        (match) => match[1],
+      );
     const seen = pluginRows(result.text);
     for (const page of [2, 3, 4]) {
       const next = buttonCommands(result).find((command) => command.includes(`--page ${page}`));
