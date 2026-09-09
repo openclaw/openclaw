@@ -1,10 +1,22 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { RealtimeVoiceBridgeSession } from "../talk/session-runtime.js";
 
-const consultRealtimeVoiceAgent = vi.hoisted(() => vi.fn(async () => ({ text: "done" })));
+// Mirrors the real entry point's first substantive act: reject subordinate
+// work while the inherited root-work admission is closed (issue #141279).
+const consultRealtimeVoiceAgent = vi.hoisted(() =>
+  vi.fn(async () => {
+    const { GatewayDrainingError, isGatewaySubordinateWorkAdmissionClosed } =
+      await import("../process/gateway-work-admission.js");
+    if (isGatewaySubordinateWorkAdmissionClosed()) {
+      throw new GatewayDrainingError();
+    }
+    return { text: "done" };
+  }),
+);
 
 vi.mock("../talk/agent-consult-runtime.js", () => ({ consultRealtimeVoiceAgent }));
 
+import { tryBeginGatewayRootWorkAdmission } from "../process/gateway-work-admission.js";
 import { createMeetingRealtimeEngineBindings } from "./agent-consult.js";
 import type {
   MeetingAgentConsultSurface,
@@ -179,5 +191,43 @@ describe("createMeetingRealtimeEngineBindings", () => {
     expect(consultRealtimeVoiceAgent).toHaveBeenCalledTimes(1);
     expect(submitToolResult).toHaveBeenCalledTimes(1);
     expect(events.map((event) => event.type)).toEqual(["tool.progress"]);
+  });
+
+  it("consults successfully from a released root-work context (issue #142610)", async () => {
+    const lease = tryBeginGatewayRootWorkAdmission("test-meeting-consult");
+    if (!lease) {
+      throw new Error("root-work admission unavailable in test");
+    }
+    let resume: () => void = () => {};
+    let insideReleasedContext: Promise<void> = Promise.resolve();
+
+    const insideChain = lease.run(async () => {
+      insideReleasedContext = (async () => {
+        // Pause inside the request's async chain, then let the test release
+        // the admission; the continuation still carries the (now released)
+        // context, exactly like the meeting-bot callback from issue #142610.
+        await new Promise<void>((resolve) => {
+          resume = resolve;
+        });
+        await createBindings("Support").consultAgent({
+          meetingSessionId: "meeting-released",
+          args: { question: "What should I say?" },
+          transcript: [],
+        });
+      })();
+      await insideReleasedContext;
+    });
+    // Releasing only works while the chain is paused; resuming after release
+    // runs the consult inside the released context.
+    lease.release();
+    resume();
+
+    await expect(insideReleasedContext).resolves.toBeUndefined();
+    await expect(insideChain).resolves.toBeUndefined();
+    expect(consultRealtimeVoiceAgent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:support:subagent:test-meeting:meeting-released",
+      }),
+    );
   });
 });
