@@ -67,7 +67,7 @@ export function resolveLegacyCliRuntimeAlias(
   return alias ? { provider: alias.provider, runtime: alias.runtime } : undefined;
 }
 
-function resolveLegacyRuntimeModelProviderAlias(
+export function resolveLegacyRuntimeModelProviderAlias(
   provider: string,
 ): LegacyRuntimeModelProviderAlias | undefined {
   return LEGACY_ALIAS_BY_PROVIDER.get(normalizeLegacyRuntimeProviderId(provider));
