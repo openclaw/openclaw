@@ -171,7 +171,7 @@ deny rules still apply. See [Tool access configuration](/gateway/config-tools).
 Select a card to open its listing inside the Control UI: plugins open in
 **Plugins**, and skills open in **Skills**. A plugin's **Install** button opens
 the existing installation review; a skill's **Install** button opens its details.
-**Not now** dismisses the card from the current view.
+**Dismiss** dismisses the card from the current view.
 
 An installed capability shows a green checkmark and **Installed**. This means the
 plugin package or linked skill is present. A plugin may still need to be enabled,

@@ -13,6 +13,7 @@ import { loadSkillStatusReport } from "../../../lib/skills/status-report.ts";
 import { GatewayPageController } from "../../../lit/gateway-page-controller.ts";
 import { OpenClawLightDomElement } from "../../../lit/openclaw-element.ts";
 import { CatalogIconController } from "../../plugins/catalog-icon-controller.ts";
+import { renderPluginOfficialBadge } from "../../plugins/plugin-card.ts";
 import "../../../styles/chat/clawhub-card.css";
 
 /** The transcript identifies the listing; its current catalog owner supplies status and actions. */
@@ -144,38 +145,37 @@ class ChatClawHubCard extends OpenClawLightDomElement {
     const failed = this.statusTask.status === TaskStatus.ERROR;
     const icon = card.iconUrl ? this.iconUrls[card.iconUrl] : undefined;
     return html`
-      <div class="chat-clawhub-card" data-clawhub-id=${card.id}>
+      <div class="card chat-clawhub-card" data-clawhub-id=${card.id}>
         <button class="chat-clawhub-card__listing" type="button" @click=${() => this.openListing()}>
           <span class="chat-clawhub-card__icon" aria-hidden="true">
             ${icon ? html`<img src=${icon} alt="" />` : icons.plug}
           </span>
           <span class="chat-clawhub-card__identity">
-            <span class="chat-clawhub-card__name"
-              >${card.name}
-              ${card.official ? html`<span class="chat-clawhub-card__official" aria-label=${t("pluginsPage.official")}>${icons.badgeCheck}</span>` : nothing}
+            <span class="card-title chat-clawhub-card__name"
+              >${card.name} ${card.official ? renderPluginOfficialBadge() : nothing}
             </span>
-            ${card.description ? html`<span class="chat-clawhub-card__description">${card.description}</span>` : nothing}
+            ${card.description ? html`<span class="card-sub">${card.description}</span>` : nothing}
           </span>
         </button>
         <div class="chat-clawhub-card__actions" aria-live="polite">
           ${
             ready && card.installed
-              ? html`<span class="chat-clawhub-card__installed"
+              ? html`<span class="chip chip-ok chat-clawhub-card__installed"
                   >${icons.check}<span>${t("pluginsPage.installed")}</span></span
                 >`
               : ready
                 ? html`<button
                       type="button"
-                      class="chat-clawhub-card__dismiss"
+                      class="btn chat-clawhub-card__dismiss"
                       @click=${() => {
                         this.dismissed = true;
                       }}
                     >
-                      ${t("chat.clawhub.notNow")}
+                      ${t("common.dismiss")}
                     </button>
                     <button
                       type="button"
-                      class="chat-clawhub-card__install"
+                      class="btn primary chat-clawhub-card__install"
                       @click=${() => this.openListing(this.statusTask.value?.canInstall === true)}
                     >
                       ${this.statusTask.value?.canInstall ? t("pluginsPage.install") : t("chat.clawhub.viewDetails")}
@@ -183,14 +183,12 @@ class ChatClawHubCard extends OpenClawLightDomElement {
                 : failed
                   ? html`<button
                       type="button"
-                      class="chat-clawhub-card__dismiss"
+                      class="btn chat-clawhub-card__dismiss"
                       @click=${() => this.statusTask.run()}
                     >
                       ${t("chat.clawhub.retryStatus")}
                     </button>`
-                  : html`<span class="chat-clawhub-card__checking"
-                      >${t("chat.clawhub.checking")}</span
-                    >`
+                  : html`<span class="muted">${t("chat.clawhub.checking")}</span>`
           }
         </div>
       </div>

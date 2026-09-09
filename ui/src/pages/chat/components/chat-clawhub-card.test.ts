@@ -67,6 +67,7 @@ describe("ClawHub chat recommendations", () => {
       { id: recommendation.id },
       expect.anything(),
     );
+    expect(card.querySelector(".chat-clawhub-card__dismiss")?.textContent?.trim()).toBe("Dismiss");
     card.querySelector<HTMLButtonElement>(".chat-clawhub-card__listing")!.click();
     expect(context.navigate).toHaveBeenLastCalledWith("plugins", {
       pathname: `/plugins/${recommendation.id}`,
@@ -102,7 +103,7 @@ describe("ClawHub chat recommendations", () => {
         "View details",
       ),
     );
-    expect(card.querySelector(".chat-clawhub-card__official")).toBeNull();
+    expect(card.querySelector(".plugin-official-badge")).toBeNull();
     card.querySelector<HTMLButtonElement>(".chat-clawhub-card__install")!.click();
     expect(context.navigate).toHaveBeenLastCalledWith("plugins", {
       pathname: `/plugins/${recommendation.id}`,
