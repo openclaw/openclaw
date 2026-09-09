@@ -1,4 +1,3 @@
-// Signal plugin module implements monitor.tool result harness behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -352,7 +351,8 @@ export function installSignalToolResultTestHooks() {
       },
     } as unknown as PluginRuntime);
     config = {
-      messages: { responsePrefix: "PFX" },
+      // Mocked final replies exercise transport behavior independently of harness defaults.
+      messages: { responsePrefix: "PFX", visibleReplies: "automatic" },
       session: { store: signalToolResultSessionStore.path },
       channels: {
         signal: {
