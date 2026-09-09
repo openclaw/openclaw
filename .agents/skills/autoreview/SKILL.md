@@ -194,7 +194,16 @@ fails or returns an invalid report reports `reviewer_unavailable` with exit 1.
 A failed later pass never publishes a partial review report.
 
 ```json
-{"schema_version":1,"status":"reviewer_unavailable","exit_code":1,"engine":"codex","report_produced":false,"reason":"engine_failed","reviewer_exit_code":124,"timed_out":true}
+{
+  "schema_version": 1,
+  "status": "reviewer_unavailable",
+  "exit_code": 1,
+  "engine": "codex",
+  "report_produced": false,
+  "reason": "engine_failed",
+  "reviewer_exit_code": 124,
+  "timed_out": true
+}
 ```
 
 `reason` is `engine_failed`, `invalid_report`, or `runtime_validation_failed`
