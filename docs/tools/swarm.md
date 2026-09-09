@@ -569,6 +569,8 @@ remaining run ids until `pending` is empty. Collector mode supports native
 OpenClaw sub-agents; it does not support ACP runtime, thread binding, visible
 sessions, or persistent session mode.
 
+<a id="limits-and-roadmap" />
+
 ## Limits
 
 Swarm runs one-shot collector children; there is no stateful multi-turn worker
