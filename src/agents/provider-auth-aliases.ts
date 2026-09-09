@@ -70,6 +70,10 @@ function resolveProviderAuthAliasCandidates(
   );
 }
 
+function resolveProviderAuthEndpoint(provider: string, config: OpenClawConfig | undefined) {
+  return resolveMergedModelProviderConfig(config, provider)?.baseUrl?.trim().replace(/\/+$/, "");
+}
+
 function matchesProviderAuthEndpoint(
   provider: string,
   candidate: PluginProviderAuthAliasCandidate,
@@ -81,10 +85,27 @@ function matchesProviderAuthEndpoint(
   if (params?.storedCredential) {
     return false;
   }
-  const baseUrl = resolveMergedModelProviderConfig(params?.config, provider)
-    ?.baseUrl?.trim()
-    .replace(/\/+$/, "");
+  const baseUrl = resolveProviderAuthEndpoint(provider, params?.config);
   return baseUrl !== undefined && candidate.baseUrls.includes(baseUrl);
+}
+
+/** A migration guard cannot select a credential realm without the route's endpoint. */
+export function hasUnresolvedProviderAuthEndpoint(
+  provider: string,
+  params?: ProviderAuthAliasLookupParams,
+): boolean {
+  const normalized = normalizeProviderId(provider);
+  if (resolveProviderAuthEndpoint(normalized, params?.config)) {
+    return false;
+  }
+  return (
+    resolveProviderAuthAliasCandidates(params)
+      .get(normalized)
+      ?.some(
+        (candidate) =>
+          candidate.baseUrls !== undefined && shouldUsePluginAuthAliases(candidate.plugin, params),
+      ) ?? false
+  );
 }
 
 /** Resolve canonical auth provider aliases from plugin metadata. */

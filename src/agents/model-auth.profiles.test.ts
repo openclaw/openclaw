@@ -123,26 +123,6 @@ vi.mock("../plugins/setup-registry.js", async () => {
   };
 });
 
-vi.mock("./provider-auth-aliases.js", () => ({
-  resolveProviderAuthAliasMap: () => ({}),
-  resolveProviderIdForAuth: (provider: string) => {
-    const normalized = provider.trim().toLowerCase();
-    if (normalized === "modelstudio" || normalized === "qwencloud") {
-      return "qwen";
-    }
-    if (normalized === "z.ai" || normalized === "z-ai") {
-      return "zai";
-    }
-    if (normalized === "opencode-go-auth") {
-      return "opencode-go";
-    }
-    if (normalized === "bedrock" || normalized === "aws-bedrock") {
-      return "amazon-bedrock";
-    }
-    return normalized;
-  },
-}));
-
 vi.mock("./model-auth-env-vars.js", () => {
   // Workspace-provided auth evidence is only trusted when the plugin is in the
   // effective allowlist, mirroring runtime plugin scoping.

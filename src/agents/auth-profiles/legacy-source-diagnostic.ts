@@ -3,7 +3,10 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { shortenHomePath } from "../../utils.js";
-import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
+import {
+  hasUnresolvedProviderAuthEndpoint,
+  resolveProviderIdForAuth,
+} from "../provider-auth-aliases.js";
 import { coerceLegacyFlatCredential } from "./legacy-flat-credential.js";
 import {
   listLegacyAuthProfileSources,
@@ -207,11 +210,17 @@ export class AuthProfileMigrationRequiredError extends Error {
     this.affectedProviders = affectedProviders;
   }
 
-  blocksProvider(provider?: string, config?: OpenClawConfig): boolean {
+  blocksProvider(provider?: string, config?: OpenClawConfig, storedCredential = false): boolean {
     if (!provider || !this.affectedProviders) {
       return true;
     }
-    const requested = resolveProviderIdForAuth(provider, { config });
+    if (!storedCredential && hasUnresolvedProviderAuthEndpoint(provider, { config })) {
+      return true;
+    }
+    const requested = resolveProviderIdForAuth(provider, {
+      config,
+      storedCredential: storedCredential || config === undefined,
+    });
     return this.affectedProviders.some(
       (affected) =>
         resolveProviderIdForAuth(affected, { config, storedCredential: true }) === requested,
@@ -363,7 +372,7 @@ export function excludeAuthProfileMigrationProviders(
     ...store,
     profiles: Object.fromEntries(
       Object.entries(store.profiles).filter(
-        ([, credential]) => !error.blocksProvider(credential.provider, config),
+        ([, credential]) => !error.blocksProvider(credential.provider, config, true),
       ),
     ),
   };

@@ -6,6 +6,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
+import { projectModelProviderConfig } from "../../config/model-provider-config.js";
 import { resolveStateDir } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isSqliteLockError } from "../../infra/sqlite-transaction.js";
@@ -1674,7 +1675,7 @@ export function createAuthProfileStoreRuntime(
   }
 
   /** Retain read owners, never copies of their migration refusals, for a session facade. */
-  function createAuthProfileStoreReadScope(agentDir: string, config?: OpenClawConfig) {
+  function createAuthProfileStoreReadScope(agentDir: string, config: OpenClawConfig | undefined) {
     const mode = authProfileRuntimeMode.getStore();
     const env = { ...(mode?.kind === "agent-dir" ? mode.env : process.env) };
     const effectiveAgentDir = mode?.kind === "agent-dir" ? mode.agentDir : agentDir;
@@ -1717,14 +1718,18 @@ export function createAuthProfileStoreRuntime(
         [...owners.keys()]
           .map((databasePath) => getRuntimeAuthProfileStoreSnapshotAtDatabasePath(databasePath))
           .filter((snapshot) => snapshot !== undefined),
-      assertProviderReady: (provider?: string) => {
+      assertProviderReady: (provider?: string, baseUrl?: string) => {
+        const requestConfig =
+          config && provider && baseUrl !== undefined
+            ? projectModelProviderConfig(config, provider, { baseUrl })
+            : config;
         for (const owner of owners.values()) {
           assertAuthProfileMigrationCandidates({
             databasePath: owner.databasePath,
             candidates: owner.candidates,
             hasCredentials: () => Object.keys(owner.readStore()?.profiles ?? {}).length > 0,
             provider,
-            config,
+            config: requestConfig,
           });
         }
       },

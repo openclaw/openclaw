@@ -26,7 +26,7 @@ export type LockResult<T> = {
 
 export interface AuthStorageBackend {
   read?(): string | undefined;
-  assertProviderReady?(provider?: string): void;
+  assertProviderReady?(provider?: string, baseUrl?: string): void;
   withLock<T>(fn: (current: string | undefined) => LockResult<T>): T;
   withLockAsync<T>(fn: (current: string | undefined) => Promise<LockResult<T>>): Promise<T>;
 }

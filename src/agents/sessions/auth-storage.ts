@@ -267,8 +267,8 @@ class SqliteAuthStorageBackend implements AuthStorageBackend {
     return this.scope.agentDir;
   }
 
-  assertProviderReady(provider?: string): void {
-    this.scope.assertProviderReady(provider);
+  assertProviderReady(provider?: string, baseUrl?: string): void {
+    this.scope.assertProviderReady(provider, baseUrl);
   }
 
   read(): string {
@@ -361,7 +361,7 @@ class SqliteAuthStorageBackend implements AuthStorageBackend {
 
 function createSqliteAuthStorageBackend(
   agentDir: string,
-  config?: OpenClawConfig,
+  config: OpenClawConfig | undefined,
 ): SqliteAuthStorageBackend {
   const scope = createAuthProfileStoreReadScope(agentDir, config);
   const preparedStore = materializeAuthStorageStore(scope.store, scope.getRuntimeSnapshots());
@@ -392,15 +392,15 @@ export class FileAuthStorageBackend implements AuthStorageBackend {
   }
 
   private getDelegate(): SqliteAuthStorageBackend {
-    return (this.delegate ??= createSqliteAuthStorageBackend(this.agentDir));
+    return (this.delegate ??= createSqliteAuthStorageBackend(this.agentDir, undefined));
   }
 
   read(): string {
     return this.getDelegate().read();
   }
 
-  assertProviderReady(provider?: string): void {
-    this.getDelegate().assertProviderReady(provider);
+  assertProviderReady(provider?: string, baseUrl?: string): void {
+    this.getDelegate().assertProviderReady(provider, baseUrl);
   }
 
   withLock<T>(fn: (current: string | undefined) => LockResult<T>): T {
@@ -466,7 +466,7 @@ export class AuthStorage {
       });
     }
     assertDeprecatedAuthStoragePathAbsent(authPath);
-    return AuthStorage.forAgent(authPath ? dirname(authPath) : getAgentDir());
+    return AuthStorage.forAgent(authPath ? dirname(authPath) : getAgentDir(), undefined);
   }
 
   static fromStorage(storage: AuthStorageBackend): AuthStorage {
@@ -736,7 +736,7 @@ export class AuthStorage {
    */
   async getApiKey(
     providerId: string,
-    options?: { includeFallback?: boolean },
+    options?: { includeFallback?: boolean; baseUrl?: string },
   ): Promise<string | undefined> {
     // Runtime override takes highest priority
     const runtimeKey = this.runtimeOverrides.get(providerId);
@@ -744,7 +744,7 @@ export class AuthStorage {
       return runtimeKey;
     }
 
-    this.storage.assertProviderReady?.(providerId);
+    this.storage.assertProviderReady?.(providerId, options?.baseUrl);
 
     const canonicalLoadError = this.getCanonicalLoadError();
     if (canonicalLoadError) {
@@ -754,7 +754,7 @@ export class AuthStorage {
     }
 
     const apiKey = await this.resolveStoredOrFallbackApiKey(providerId, options);
-    this.storage.assertProviderReady?.(providerId);
+    this.storage.assertProviderReady?.(providerId, options?.baseUrl);
     return apiKey;
   }
 
