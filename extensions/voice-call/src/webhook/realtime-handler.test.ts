@@ -1544,9 +1544,11 @@ describe("RealtimeCallHandler path routing", () => {
         return undefined;
       },
     );
+    const sendUserMessage = vi.fn();
     const bridge = makeBridge({
       supportsToolResultContinuation: true,
       submitToolResult,
+      sendUserMessage,
     });
     const createBridge = vi.fn(
       (request: Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0]) => {
@@ -1630,6 +1632,10 @@ describe("RealtimeCallHandler path routing", () => {
               result.status === "working",
           ),
         ).toHaveLength(2);
+        expect(sendUserMessage).toHaveBeenCalledTimes(1);
+        expect(sendUserMessage).toHaveBeenCalledWith(
+          'Internal OpenClaw voice playback result.\nDo not call openclaw_agent_consult or any other tool for this message.\nSpeak this exact OpenClaw answer to the caller, without adding, removing, or rephrasing words.\nAnswer: "One sec."',
+        );
 
         resolveConsult?.({ text: "The basement lights are on." });
 
@@ -1823,7 +1829,14 @@ describe("RealtimeCallHandler path routing", () => {
             );
           }
         }
-        expect(sendUserMessage).not.toHaveBeenCalled();
+        if (path === "native") {
+          expect(sendUserMessage).toHaveBeenCalledTimes(1);
+          expect(sendUserMessage).toHaveBeenCalledWith(
+            expect.stringContaining('Answer: "One sec."'),
+          );
+        } else {
+          expect(sendUserMessage).not.toHaveBeenCalled();
+        }
         expect(closeBridge).not.toHaveBeenCalled();
         expect(ws.readyState).toBe(WebSocket.OPEN);
         expect(hostTool.mock.calls[0]?.[2].abortSignal?.aborted).toBe(

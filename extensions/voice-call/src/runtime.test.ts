@@ -605,6 +605,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
 
   it("wires realtime consults and keeps outbound calls off inbound number routes", async () => {
     const config = createBaseConfig();
+    config.responseTimeoutMs = 1_234;
     config.inboundPolicy = "allowlist";
     config.numbers["+15550009999"] = {
       agentId: "inbound-route",
@@ -682,6 +683,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
     expect(consultParams.spawnedBy).toBe("agent:main:discord:channel:general");
     expect(consultParams.messageProvider).toBe("voice");
     expect(consultParams.lane).toBe("voice");
+    expect(consultParams.timeoutMs).toBe(30_000);
     expect(consultParams.provider).toBe("openai");
     expect(consultParams.model).toBe("gpt-5.4");
     expect(consultParams.toolsAllow).toEqual([

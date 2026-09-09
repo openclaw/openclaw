@@ -448,7 +448,6 @@ export async function createVoiceCallRuntime(params: {
             model,
             thinkLevel,
             fastMode: effectiveConfig.realtime.consultFastMode,
-            timeoutMs: effectiveConfig.responseTimeoutMs,
             spawnedBy: requesterSessionKey,
             contextMode: requesterSessionKey ? "fork" : undefined,
             toolsAllow: resolveRealtimeVoiceAgentConsultToolsAllow(

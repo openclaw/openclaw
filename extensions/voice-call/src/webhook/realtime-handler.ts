@@ -11,6 +11,7 @@ import {
 import {
   buildRealtimeVoiceAgentConsultWorkingResponse,
   buildRealtimeVoiceAgentErrorProviderResult,
+  buildRealtimeVoiceSpeakExactMessage,
   calculateMulawRms,
   createRealtimeVoiceSessionHarness,
   createSpeechThresholdGate,
@@ -65,6 +66,7 @@ const FORCED_CONSULT_RESULT_MAX_CHARS = 1800;
 const FORCED_CONSULT_REASON = "provider_final_transcript_without_openclaw_agent_consult";
 const CONSULT_TRANSCRIPT_SETTLE_MS = 350;
 const CONSULT_TRANSCRIPT_SETTLE_MAX_MS = 1_000;
+const CONSULT_ACKNOWLEDGEMENT = "One sec.";
 const MAX_PARTIAL_USER_TRANSCRIPT_CHARS = 1_200;
 const RECENT_FINAL_USER_TRANSCRIPT_TTL_MS = 2_000;
 const BARGE_IN_REQUIRED_LOUD_CHUNKS = 2;
@@ -1860,7 +1862,7 @@ export class RealtimeCallHandler {
       await bridge.submitToolResult(bridgeCallId, result);
       emitFinalToolEvent(result);
     };
-    const submitWorkingResponse = async (): Promise<void> => {
+    const submitWorkingResponse = async (speakAcknowledgement = false): Promise<void> => {
       if (
         handler &&
         name === REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME &&
@@ -1878,6 +1880,14 @@ export class RealtimeCallHandler {
           callId: bridgeCallId,
           payload: { name, status: "working" },
         });
+        if (speakAcknowledgement) {
+          bridge.sendUserMessage(
+            buildRealtimeVoiceSpeakExactMessage({
+              text: CONSULT_ACKNOWLEDGEMENT,
+              surfaceLabel: "the caller",
+            }),
+          );
+        }
       }
     };
     if (name === REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME) {
@@ -1968,7 +1978,7 @@ export class RealtimeCallHandler {
       this.nativeConsultsInFlightByCallId.set(callId, state);
       void (async () => {
         try {
-          await submitWorkingResponse();
+          await submitWorkingResponse(true);
           if (state.cancelled) {
             return undefined;
           }
