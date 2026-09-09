@@ -1217,6 +1217,11 @@
   }
 }
 
+/* A display-contents anchor transfers its block gap to the first rendered box. */
+.chat-bubble:not(.chat-bubble--with-images) > .chat-message-avatar-anchor > :first-child {
+  margin-block-start: inherit;
+}
+
 .chat-text > * + *,
 .chat-text > * + .markdown-external-image {
   margin-block-start: var(--chat-block-gap);

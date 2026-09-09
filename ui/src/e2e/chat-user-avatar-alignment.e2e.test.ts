@@ -33,17 +33,17 @@ suite.define(() => {
         ],
       });
       await page.goto(`${suite.server.baseUrl}chat`);
-      const group = page.locator(".chat-group.user");
-      const avatar = group.locator(".chat-avatar:visible");
-      await avatar.waitFor();
-      const bubble = (await group.locator(".chat-text").boundingBox())!;
-      const avatarBox = (await avatar.boundingBox())!;
-      expect(Math.abs(avatarBox.y - bubble.y)).toBeLessThanOrEqual(1);
-      expect(
-        self ? avatarBox.x > bubble.x + bubble.width : avatarBox.x + avatarBox.width < bubble.x,
-      ).toBe(true);
+      const visibleAvatar = page.locator(".chat-group.user .chat-avatar:visible");
+      const [offset, leftGap, rightGap, height] = await visibleAvatar.evaluate((node) => {
+        const group = node.closest(".chat-group")!;
+        const body = group.querySelector(".chat-text")!.getBoundingClientRect();
+        const avatar = node.getBoundingClientRect();
+        return [avatar.y - body.y, body.x - avatar.right, avatar.x - body.right, body.height];
+      });
+      expect(Math.abs(offset)).toBeLessThanOrEqual(1);
+      expect(self ? rightGap : leftGap).toBeGreaterThan(0);
       if (text.includes("\n")) {
-        expect(bubble.height).toBeGreaterThan(100);
+        expect(height).toBeGreaterThan(100);
       }
     });
   });
