@@ -30,9 +30,10 @@ const MERMAID_RENDERER_ASSET = /^assets\/mermaid\.min-[\w-]+\.js$/u;
 const MERMAID_RENDERER_GZIP_BYTES = 960 * KIB;
 // Locale catalogs are named Vite chunks loaded only after a language selection.
 // Bound them separately so catalog growth cannot relax ordinary application chunks.
-const CONTROL_UI_LOCALE_ASSET_PREFIXES = CONTROL_UI_LOCALE_ENTRIES.map(
-  ({ locale }) => `assets/${locale}-`,
-);
+const CONTROL_UI_LOCALE_ASSET_PATTERNS = CONTROL_UI_LOCALE_ENTRIES.map(({ locale }) => ({
+  locale,
+  pattern: new RegExp(`^assets/${escapeRegExp(locale)}-[^/]+\\.js$`, "u"),
+}));
 const CONTROL_UI_LOCALE_GZIP_BYTES = 300 * KIB;
 
 // Small, explicit headroom over the optimized baseline. Budget changes should
@@ -120,11 +121,25 @@ function largestAsset(assets: Array<ReturnType<typeof readAssetMetrics>>) {
   )[0]!;
 }
 
-function isControlUiLocaleAsset(file: string): boolean {
-  return (
-    file.endsWith(".js") &&
-    CONTROL_UI_LOCALE_ASSET_PREFIXES.some((prefix) => file.startsWith(prefix))
-  );
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+}
+
+function controlUiLocaleForAsset(file: string): string | null {
+  return CONTROL_UI_LOCALE_ASSET_PATTERNS.find(({ pattern }) => pattern.test(file))?.locale ?? null;
+}
+
+function largestControlUiLocaleAssetCount(
+  assets: Array<ReturnType<typeof readAssetMetrics>>,
+): number {
+  const counts = new Map<string, number>();
+  for (const asset of assets) {
+    const locale = controlUiLocaleForAsset(asset.file);
+    if (locale) {
+      counts.set(locale, (counts.get(locale) ?? 0) + 1);
+    }
+  }
+  return Math.max(0, ...counts.values());
 }
 
 export function collectControlUiPerformanceMetrics(distDir: string) {
@@ -144,9 +159,10 @@ export function collectControlUiPerformanceMetrics(distDir: string) {
   });
   const jsAssets = assets.filter((asset) => asset.type === "js");
   const mermaidRenderer = jsAssets.filter((asset) => MERMAID_RENDERER_ASSET.test(asset.file));
-  const localeCatalogs = jsAssets.filter((asset) => isControlUiLocaleAsset(asset.file));
+  const localeCatalogs = jsAssets.filter((asset) => controlUiLocaleForAsset(asset.file) !== null);
   const ordinaryJsAssets = jsAssets.filter(
-    (asset) => !MERMAID_RENDERER_ASSET.test(asset.file) && !isControlUiLocaleAsset(asset.file),
+    (asset) =>
+      !MERMAID_RENDERER_ASSET.test(asset.file) && controlUiLocaleForAsset(asset.file) === null,
   );
   const cssAssets = assets.filter((asset) => asset.type === "css");
   if (ordinaryJsAssets.length === 0 || cssAssets.length === 0 || startup.length === 0) {
@@ -212,6 +228,12 @@ export function evaluateControlUiPerformanceBudgets(
       "count",
     ],
     [
+      "locale catalog JS assets per locale",
+      largestControlUiLocaleAssetCount(metrics.localeCatalogs),
+      1,
+      "count",
+    ],
+    [
       "largest locale catalog JS gzip",
       Math.max(0, ...metrics.localeCatalogs.map((asset) => asset.gzipBytes)),
       CONTROL_UI_LOCALE_GZIP_BYTES,
@@ -219,7 +241,7 @@ export function evaluateControlUiPerformanceBudgets(
     ],
     [
       "startup locale catalog JS assets",
-      metrics.startup.assets.filter((asset) => isControlUiLocaleAsset(asset.file)).length,
+      metrics.startup.assets.filter((asset) => controlUiLocaleForAsset(asset.file) !== null).length,
       0,
       "count",
     ],
@@ -379,7 +401,7 @@ export function formatControlUiPerformanceReport(
   if (metrics.localeCatalogs.length > 0) {
     const largestLocaleCatalog = largestAsset(metrics.localeCatalogs);
     lines.push(
-      `  locale catalog JS: ${formatAssetSummary(summarizeAssets(metrics.localeCatalogs))} (largest: ${largestLocaleCatalog.file}, ${formatControlUiPerformanceBytes(largestLocaleCatalog.gzipBytes)} gzip; limits: ${CONTROL_UI_LOCALE_ENTRIES.length} deferred assets, ${formatControlUiPerformanceBytes(CONTROL_UI_LOCALE_GZIP_BYTES)} each; forbidden at startup)`,
+      `  locale catalog JS: ${formatAssetSummary(summarizeAssets(metrics.localeCatalogs))} (largest: ${largestLocaleCatalog.file}, ${formatControlUiPerformanceBytes(largestLocaleCatalog.gzipBytes)} gzip; limits: ${CONTROL_UI_LOCALE_ENTRIES.length} deferred assets total, 1 per locale, ${formatControlUiPerformanceBytes(CONTROL_UI_LOCALE_GZIP_BYTES)} each; forbidden at startup)`,
     );
   }
   if (

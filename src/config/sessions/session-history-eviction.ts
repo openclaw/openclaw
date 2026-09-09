@@ -572,7 +572,7 @@ async function enforceSessionHistoryMaintenanceSerialized(
             diagnostics,
           );
           if (!reclamationPlan) {
-            return { kind: "protected" as const };
+            return null;
           }
           const reclaimed = await runSqliteSessionReclamation({
             diagnostics,
@@ -588,18 +588,14 @@ async function enforceSessionHistoryMaintenanceSerialized(
             return null;
           }
           return {
-            kind: "reclaimed" as const,
             archivedTranscripts: reclaimed.value.archivedTranscripts,
           };
         });
       },
     });
     if (!eviction) {
-      continue;
-    }
-    if (eviction.kind === "protected") {
-      // A peer may have freed space during materialization. Recheck after both
-      // holds release so stale pressure cannot evict another candidate.
+      // A no-op can outlive a peer freeing space. Refresh after both holds
+      // release so the next candidate cannot use stale physical pressure.
       usage = await measureSessionPhysicalDiskUsage(params.storePath);
       continue;
     }
@@ -683,6 +679,7 @@ async function enforceSessionHistoryMaintenanceSerialized(
             ),
         });
         if (!deletion.deleted) {
+          usage = await measureSessionPhysicalDiskUsage(params.storePath);
           continue;
         }
         removedEntries += 1;

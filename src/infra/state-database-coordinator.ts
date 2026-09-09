@@ -39,7 +39,7 @@ type CoordinatorOptions = {
 };
 
 export class StateDatabaseCoordinatorContentionError extends SqliteCoordinatorError {
-  constructor(family: CoordinatorFamily) {
+  constructor(readonly family: CoordinatorFamily) {
     super(`another OpenClaw process owns ${family}`);
     this.name = "StateDatabaseCoordinatorContentionError";
   }

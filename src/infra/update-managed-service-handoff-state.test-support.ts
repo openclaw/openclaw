@@ -1,7 +1,6 @@
 import { createRequire } from "node:module";
-import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
-import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "./kysely-sync.js";
+import { readRestartSentinelRowSync } from "./restart-sentinel-store.js";
 
 const storeModulePath = createRequire(import.meta.url).resolve("@openclaw/fs-safe/store");
 
@@ -12,19 +11,11 @@ export function managedServiceStateUpdateScript(statePath: string, update: strin
   }).updateOr({}, (state) => { ${update}; return state; })`;
 }
 
-type GatewayRestartSentinelDatabase = Pick<OpenClawStateKyselyDatabase, "gateway_restart_sentinel">;
-
-export function readRestartSentinelPayload(env: NodeJS.ProcessEnv, key = "current"): unknown {
-  const { db } = openOpenClawStateDatabase({ env });
-  const stateDb = getNodeSqliteKysely<GatewayRestartSentinelDatabase>(db);
-  const row = executeSqliteQueryTakeFirstSync(
-    db,
-    stateDb
-      .selectFrom("gateway_restart_sentinel")
-      .select(["version", "payload_json", "updated_at_ms"])
-      .where("sentinel_key", "=", key),
-  );
-  return row
-    ? { version: row.version, payload: JSON.parse(row.payload_json), revision: row.updated_at_ms }
-    : null;
+// The JSON shadow can retain fields that the Gateway's typed reader cannot see.
+export function readRestartSentinelPayload(env: NodeJS.ProcessEnv): unknown {
+  const current = readRestartSentinelRowSync(openOpenClawStateDatabase({ env }).db);
+  if (current.kind === "invalid") {
+    throw new Error("Expected a valid typed restart sentinel fixture");
+  }
+  return current.kind === "valid" ? current.sentinel : null;
 }

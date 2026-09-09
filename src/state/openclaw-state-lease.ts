@@ -5,6 +5,7 @@ import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coerci
 import { computeBackoff, sleepWithAbort } from "../infra/backoff.js";
 import { createSqliteLifecycleAggregateError } from "../infra/sqlite-coordinator.js";
 import { isSqliteLockError } from "../infra/sqlite-transaction.js";
+import { StateDatabaseCoordinatorContentionError } from "../infra/state-database-coordinator.js";
 import { loggingState } from "../logging/state.js";
 import { isOpenClawStateSchemaFastPathEligible } from "./openclaw-state-db-fast-path.js";
 import { withExistingOpenClawStateDatabaseArtifactPreservingReadOnly } from "./openclaw-state-db-readonly.js";
@@ -262,6 +263,15 @@ function release(
   );
 }
 
+// A competing lifecycle writer has not admitted the transaction. Retry within
+// the existing async budget, but never retry schema, handle, or release failures.
+function isLeaseWriteContention(error: unknown): boolean {
+  return (
+    isSqliteLockError(error) ||
+    (error instanceof StateDatabaseCoordinatorContentionError && error.family === "state-lifecycle")
+  );
+}
+
 async function releaseBestEffort(params: Parameters<typeof release>[0]): Promise<void> {
   const deadline = performance.now() + RELEASE_RETRY_TIMEOUT_MS;
   let attempt = 0;
@@ -271,7 +281,7 @@ async function releaseBestEffort(params: Parameters<typeof release>[0]): Promise
       return;
     } catch (error) {
       const now = performance.now();
-      if (!isSqliteLockError(error) || now >= deadline) {
+      if (!isLeaseWriteContention(error) || now >= deadline) {
         return;
       }
       attempt += 1;
@@ -327,7 +337,7 @@ export async function withOpenClawStateLease<T>(
       if (error instanceof OpenClawStateLeaseError) {
         throw error;
       }
-      if (!isSqliteLockError(error)) {
+      if (!isLeaseWriteContention(error)) {
         throw leaseError(
           "OPENCLAW_STATE_LEASE_STORAGE_FAILED",
           `failed to acquire ${validated.leaseLabel} ${validated.scope}/${validated.key}`,
