@@ -282,7 +282,7 @@ Codex `app/installed` with `forceRefresh: true` and no `threadId`, and reads
 metadata for the returned apps. It does not refresh marketplace catalogs,
 reinstall plugin bundles, or reload native MCP servers.
 
-After refreshing, use `/codex plugins status <configured-plugin>` to inspect
+After refreshing, use `/codex plugins status <name>@<marketplace>` to inspect
 one plugin. Status never forces a hosted refresh. Disabled or blocked plugins
 remain disabled or blocked, but do not prevent an otherwise permitted hosted
 refresh.

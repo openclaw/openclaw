@@ -531,7 +531,7 @@ describe("Codex hosted app refresh", () => {
     });
     expect(test.request.mock.calls.some(([method]) => method.startsWith("plugin/"))).toBe(false);
     expect(result.text).toContain("current Codex account/runtime");
-    expect(result.text).toContain("/codex plugins status");
+    expect(result.text).toContain("/codex plugins status <name>@<marketplace>");
     expect(test.io.mutate).not.toHaveBeenCalled();
   });
 
@@ -556,7 +556,7 @@ describe("Codex hosted app refresh", () => {
     const refresh = await refreshHostedApps(test.context);
     const result = await handleCodexPluginsSubcommand(
       ctx,
-      ["status", "notes"],
+      ["status", "notes@company-tools"],
       test.io,
       test.runtime,
     );
@@ -589,7 +589,7 @@ describe("Codex hosted app refresh", () => {
     const refresh = await refreshHostedApps(test.context);
     const result = await handleCodexPluginsSubcommand(
       ctx,
-      ["status", "notes"],
+      ["status", "notes@company-tools"],
       test.io,
       test.runtime,
     );
@@ -621,7 +621,7 @@ describe("Codex hosted app refresh", () => {
     const refresh = await refreshHostedApps(test.context);
     const result = await handleCodexPluginsSubcommand(
       ctx,
-      ["status", "notes"],
+      ["status", "notes@company-tools"],
       test.io,
       test.runtime,
     );

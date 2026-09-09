@@ -71,7 +71,7 @@ export async function refreshCodexHostedApps(
       },
       {
         type: "text",
-        text: "Use /codex plugins status to inspect a configured plugin.",
+        text: "Use /codex plugins list to find configured plugins, then /codex plugins status <name>@<marketplace> to inspect one.",
       },
     ],
   };
