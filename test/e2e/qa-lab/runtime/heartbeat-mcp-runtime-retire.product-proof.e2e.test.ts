@@ -234,7 +234,7 @@ function redact(text: string, replacements: Array<[string, string]>): string {
   // Bearer credentials first: the generic key/value pass would otherwise
   // consume the scheme word and leave the token behind it intact.
   return out
-    .replace(/Bearer\s+\S+/g, "Bearer <redacted>")
+    .replace(/bearer\s+\S+/gi, "Bearer <redacted>")
     .replace(/(token|secret|apiKey|api_key|authorization)(["'=: ]+)[^\s"',}]+/gi, "$1$2<redacted>")
     .replace(/\/(?:home|Users)\/[^/\s"'│]+/g, "<home>")
     .replaceAll(os.hostname(), "<host>");
