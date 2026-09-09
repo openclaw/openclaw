@@ -3129,6 +3129,16 @@
                       "ci/runners",
                       "ci/capacity",
                       "ci/release-validation",
+                      {
+                        "group": "Release validation",
+                        "pages": [
+                          "ci/release-validation/full-release-validation",
+                          "ci/release-validation/live-and-e2e-shards",
+                          "ci/release-validation/package-acceptance",
+                          "ci/release-validation/install-smoke-and-docker-e2e",
+                          "ci/release-validation/plugin-prerelease"
+                        ]
+                      },
                       "ci/scheduled-workflows",
                       "ci/local-proof"
                     ]

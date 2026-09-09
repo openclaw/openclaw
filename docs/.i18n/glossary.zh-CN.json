@@ -2492,6 +2492,26 @@
     "target": "发布验证工作流"
   },
   {
+    "source": "Full Release Validation",
+    "target": "完整发布验证"
+  },
+  {
+    "source": "Live and E2E shards",
+    "target": "实时与端到端分片"
+  },
+  {
+    "source": "Package Acceptance",
+    "target": "软件包验收"
+  },
+  {
+    "source": "Install smoke and Docker E2E",
+    "target": "安装冒烟与 Docker 端到端测试"
+  },
+  {
+    "source": "Plugin Prerelease",
+    "target": "插件预发布"
+  },
+  {
     "source": "Scheduled and maintenance workflows",
     "target": "定时与维护工作流"
   },
