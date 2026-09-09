@@ -111,7 +111,10 @@ export function resolveSourceCheckoutDependencyDiagnostic(
       continue;
     }
     const extensionsDir = path.join(packageRoot, "extensions");
-    if (!hasUsableBundledPluginTree(extensionsDir)) {
+    if (
+      !isPluginInPackageBundledRoots({ rootDir: extensionsDir, packageRoot }) ||
+      !hasUsableBundledPluginTree(extensionsDir)
+    ) {
       continue;
     }
     if (pluginCacheExistsSync(path.join(packageRoot, "node_modules", ".pnpm"))) {
@@ -173,11 +176,15 @@ export function resolveBundledDirFromPackageRoot(packageRoot: string): string | 
   const runtimeExtensionsDir = path.join(packageRoot, "dist-runtime", "extensions");
   if (isSourceCheckoutRoot(packageRoot)) {
     return [builtExtensionsDir, runtimeExtensionsDir, path.join(packageRoot, "extensions")].find(
-      hasUsableBundledPluginTree,
+      (rootDir) =>
+        isPluginInPackageBundledRoots({ rootDir, packageRoot }) &&
+        hasUsableBundledPluginTree(rootDir),
     );
   }
   return pluginCacheExistsSync(builtExtensionsDir)
-    ? [runtimeExtensionsDir, builtExtensionsDir].find(pluginCacheExistsSync)
+    ? [runtimeExtensionsDir, builtExtensionsDir].find((rootDir) =>
+        isPluginInPackageBundledRoots({ rootDir, packageRoot }),
+      )
     : undefined;
 }
 

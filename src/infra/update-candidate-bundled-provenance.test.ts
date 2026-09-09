@@ -1,16 +1,19 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
+import * as bundledMetadata from "../plugins/bundled-plugin-metadata.js";
 import { loadPluginManifestRegistryCore } from "../plugins/manifest-registry.js";
+import * as pluginCacheFiles from "../plugins/plugin-cache-files.js";
 import { createPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
 import {
   closeOpenClawStateDatabaseByPath,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import { projectUpdateCandidatePlugins } from "./update-candidate-plugins.js";
 import { prepareUpdateCandidateRehearsal } from "./update-candidate-rehearsal.js";
 
 async function writePlugin(directory: string, id: string, generation: string) {
@@ -42,6 +45,9 @@ it.each([
   { kind: "renamed candidate directory", bundled: true },
   { kind: "split candidate runtime", bundled: true },
   { kind: "source checkout alongside built runtime", bundled: true },
+  { kind: "candidate in-package fallback", bundled: true },
+  { kind: "candidate escaping fallback", bundled: false },
+  { kind: "candidate escaping fallback with external install", bundled: false },
   { kind: "external path", bundled: false },
   { kind: "source symlink escapes bundled directory", bundled: false },
   { kind: "candidate symlink escapes bundled directory", bundled: false },
@@ -64,12 +70,15 @@ it.each([
     kind === "split candidate runtime" ? "dist-runtime" : "dist",
     "extensions",
   );
+  const candidateFallback = kind.startsWith("candidate ") && kind.includes("fallback");
+  const escapingFallback = kind.startsWith("candidate escaping fallback");
   const candidatePlugin = path.join(
-    candidateBundled,
+    candidateFallback ? path.join(candidateHost, "extensions") : candidateBundled,
     kind === "renamed candidate directory" ? "renamed-demo" : "demo",
   );
-  const externalSource =
-    kind === "external path" || kind === "source symlink escapes bundled directory";
+  const externalInstall =
+    kind === "external path" || kind === "candidate escaping fallback with external install";
+  const externalSource = externalInstall || kind === "source symlink escapes bundled directory";
   const sourcePlugin = externalSource ? path.join(root, "external", "demo") : livePlugin;
   const shared = path.join(sourceState, "state", "openclaw.sqlite");
   let cleanupRehearsal: (() => Promise<void>) | undefined;
@@ -82,7 +91,20 @@ it.each([
       );
     }
     await fs.mkdir(liveBundled, { recursive: true });
+    await fs.mkdir(path.join(liveHost, "src"));
+    await fs.writeFile(path.join(liveHost, "pnpm-workspace.yaml"), "packages: []\n");
     await fs.mkdir(candidateBundled, { recursive: true });
+    if (candidateFallback) {
+      await fs.mkdir(path.join(candidateHost, "src"));
+      await fs.writeFile(path.join(candidateHost, ".git"), "");
+      await fs.writeFile(path.join(candidateHost, "pnpm-workspace.yaml"), "packages: []\n");
+      await writePlugin(path.join(candidateBundled, "another"), "another", "built candidate");
+      if (escapingFallback) {
+        const externalFallback = path.join(root, "external-fallback");
+        await fs.mkdir(externalFallback);
+        await fs.symlink(externalFallback, path.dirname(candidatePlugin), "junction");
+      }
+    }
     if (kind === "candidate bundled root escapes package") {
       const externalBundled = path.join(root, "external-bundled");
       await fs.mkdir(externalBundled);
@@ -91,14 +113,12 @@ it.each([
     }
     await writePlugin(sourcePlugin, "demo", "live");
     if (kind === "source checkout alongside built runtime") {
-      await fs.mkdir(path.join(liveHost, "src"));
       await fs.writeFile(path.join(liveHost, ".git"), "");
-      await fs.writeFile(path.join(liveHost, "pnpm-workspace.yaml"), "packages: []\n");
       await writePlugin(path.join(sourceBundled, "another"), "another", "built live");
     }
     if (kind === "source symlink escapes bundled directory") {
       await fs.symlink(sourcePlugin, livePlugin, "junction");
-    } else if (kind === "external path") {
+    } else if (externalInstall) {
       await writePlugin(livePlugin, "demo", "bundled live");
     }
     if (kind === "split candidate runtime") {
@@ -115,7 +135,7 @@ it.each([
         "candidate",
       );
     }
-    let locator = kind === "external path" ? sourcePlugin : livePlugin;
+    let locator = externalInstall ? sourcePlugin : livePlugin;
     if (kind === "symlink") {
       locator = path.join(root, "demo-alias");
       await fs.symlink(livePlugin, locator, "junction");
@@ -164,13 +184,11 @@ it.each([
         async (file) => (await fs.stat(file)).mode,
       ),
     );
-    if (kind === "candidate bundled root escapes package" && process.platform !== "win32") {
+    const outsideCandidate = kind === "candidate bundled root escapes package" || escapingFallback;
+    if (outsideCandidate && process.platform !== "win32") {
       await fs.chmod(candidatePlugin, 0o777);
     }
-    const candidateMode =
-      kind === "candidate bundled root escapes package"
-        ? (await fs.stat(candidatePlugin)).mode
-        : undefined;
+    const candidateMode = outsideCandidate ? (await fs.stat(candidatePlugin)).mode : undefined;
     const rehearsal = await prepareUpdateCandidateRehearsal({
       config,
       candidateRoot: candidateHost,
@@ -217,6 +235,49 @@ it.each([
   } finally {
     closeOpenClawStateDatabaseForTest();
     await cleanupRehearsal?.();
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+it.each(["source", "candidate"])("does not enumerate an outside %s fallback", async (side) => {
+  const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "candidate-fallback-")));
+  const sourceHost = path.join(root, "source-host");
+  const candidateHost = path.join(root, "candidate-host");
+  const external = path.join(root, "outside");
+  const fallback = path.join(side === "source" ? sourceHost : candidateHost, "extensions");
+  const installed = path.join(external, "demo");
+  const metadata = vi.spyOn(bundledMetadata, "listBundledPluginMetadata");
+  const directoryReads = vi.spyOn(pluginCacheFiles, "readPluginCacheDirectory");
+  try {
+    for (const host of [sourceHost, candidateHost]) {
+      await fs.mkdir(path.join(host, "src"), { recursive: true });
+      await fs.writeFile(path.join(host, "package.json"), JSON.stringify({ name: "openclaw" }));
+      await fs.writeFile(path.join(host, ".git"), "");
+      await fs.writeFile(path.join(host, "pnpm-workspace.yaml"), "packages: []\n");
+      await writePlugin(path.join(host, "dist", "extensions", "another"), "another", "bundled");
+    }
+    await writePlugin(installed, "demo", "external");
+    await fs.symlink(external, fallback, "junction");
+    const projected = await withPluginCache(createPluginCache(), () =>
+      projectUpdateCandidatePlugins({
+        stateDir: path.join(root, "state"),
+        targetStateDir: path.join(root, "copy"),
+        candidateRoot: candidateHost,
+        config: { plugins: { installs: { demo: { source: "path", installPath: installed } } } },
+        env: {
+          OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(sourceHost, "dist", "extensions"),
+          OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
+        },
+      }),
+    );
+    expect(directoryReads.mock.calls.map(([directory]) => directory)).not.toContain(fallback);
+    expect(metadata.mock.calls.map(([options]) => options?.scanDir)).not.toContain(fallback);
+    expect(await fs.readFile(path.join(projected[installed]!, "index.js"), "utf8")).toBe(
+      'export default "external";',
+    );
+  } finally {
+    directoryReads.mockRestore();
+    metadata.mockRestore();
     await fs.rm(root, { recursive: true, force: true });
   }
 });

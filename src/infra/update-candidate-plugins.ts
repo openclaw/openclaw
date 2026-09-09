@@ -25,6 +25,7 @@ import {
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
+import { resolveOpenClawPackageRootSync } from "./openclaw-root.js";
 import { hasNodeErrorCode, isPathInside } from "./path-guards.js";
 import { resolveUpdateCandidatePluginPath } from "./update-candidate-paths.js";
 import { copyUpdateCandidatePluginTrees } from "./update-candidate-plugin-tree.js";
@@ -35,9 +36,11 @@ function bundledPluginRedirects(
 ): Map<string, string> {
   const redirects = new Map<string, string>();
   const sourceDir = resolveBundledPluginsDir(env);
+  const sourcePackageRoot = sourceDir && resolveOpenClawPackageRootSync({ cwd: sourceDir });
   const candidateDir = resolveBundledDirFromPackageRoot(candidateRoot);
   if (
     !sourceDir ||
+    !sourcePackageRoot ||
     !candidateDir ||
     !isPluginInPackageBundledRoots({ rootDir: candidateDir, packageRoot: candidateRoot })
   ) {
@@ -50,8 +53,14 @@ function bundledPluginRedirects(
     ),
   );
   for (const directory of [sourceDir, resolveBundledSourceCheckoutExtensionsDir(sourceDir)]) {
-    const sourceReal = directory && pluginCacheRealpathSync(directory, true);
-    if (!directory || !sourceReal) {
+    if (
+      !directory ||
+      !isPluginInPackageBundledRoots({ rootDir: directory, packageRoot: sourcePackageRoot })
+    ) {
+      continue;
+    }
+    const sourceReal = pluginCacheRealpathSync(directory, true);
+    if (!sourceReal) {
       continue;
     }
     for (const source of listBundledPluginMetadata({

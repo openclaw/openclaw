@@ -14,6 +14,7 @@ import { resolveCompatibilityHostVersion } from "../version.js";
 import { detectBundleManifestFormat, loadBundleManifest } from "./bundle-manifest.js";
 import {
   hasUsableBundledPluginTree,
+  isPluginInPackageBundledRoots,
   resolveBundledPluginsDir,
   resolveSourceCheckoutDependencyDiagnostic,
 } from "./bundled-dir.js";
@@ -674,7 +675,15 @@ export function resolveBundledSourceCheckoutExtensionsDir(
     return undefined;
   }
   const legacyRoot = buildLegacyBundledRootPath(bundledRoot);
-  if (!legacyRoot || !isSourceCheckoutExtensionsDir(legacyRoot)) {
+  // Discovery must not touch a root that containment has not admitted.
+  if (
+    !legacyRoot ||
+    !isPluginInPackageBundledRoots({
+      rootDir: legacyRoot,
+      packageRoot: path.dirname(legacyRoot),
+    }) ||
+    !isSourceCheckoutExtensionsDir(legacyRoot)
+  ) {
     return undefined;
   }
   return legacyRoot;
