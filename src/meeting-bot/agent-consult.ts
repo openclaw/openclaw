@@ -3,6 +3,11 @@ import { resolveDefaultAgentId } from "../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { PluginRuntime, RuntimeLogger } from "../plugins/runtime/types.js";
+import {
+  GatewayDrainingError,
+  runOutsideGatewayRootWorkAdmission,
+  tryBeginGatewayRootWorkAdmission,
+} from "../process/gateway-work-admission.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { consultRealtimeVoiceAgent } from "../talk/agent-consult-runtime.js";
 import {
@@ -129,27 +134,38 @@ async function consultMeetingAgent(params: {
   const requesterSessionKey =
     normalizeOptionalString(params.requesterSessionKey) ?? `agent:${agentId}:main`;
   const sessionKey = `agent:${agentId}:subagent:${params.surface.id}:${params.meetingSessionId}`;
-  return await consultRealtimeVoiceAgent({
-    cfg: params.config,
-    agentRuntime: params.runtime.agent,
-    logger: params.logger,
-    agentId,
-    sessionKey,
-    messageProvider: params.surface.provider,
-    lane: params.surface.lane,
-    runIdPrefix: `${params.surface.id}:${params.meetingSessionId}`,
-    spawnedBy: requesterSessionKey,
-    contextMode: "fork",
-    args: params.args,
-    transcript: params.transcript,
-    surface: params.surface.surface,
-    userLabel: params.surface.userLabel,
-    assistantLabel: params.surface.assistantLabel,
-    questionSourceLabel: params.surface.questionSourceLabel,
-    toolsAllow: resolveRealtimeVoiceAgentConsultToolsAllow(params.toolPolicy),
-    extraSystemPrompt: params.surface.extraSystemPrompt,
-    abortSignal: params.abortSignal,
-  });
+  // The consult must not inherit the root-work admission of the long-finished
+  // request that created the meeting: that context is already released, so
+  // enqueueCommandInLane would reject the consult with a misleading "Gateway
+  // is draining" error. Acquire a fresh admission, exactly like the browser
+  // Talk path does.
+  const admission = runOutsideGatewayRootWorkAdmission(tryBeginGatewayRootWorkAdmission);
+  if (!admission) {
+    throw new GatewayDrainingError();
+  }
+  return await admission.run(() =>
+    consultRealtimeVoiceAgent({
+      cfg: params.config,
+      agentRuntime: params.runtime.agent,
+      logger: params.logger,
+      agentId,
+      sessionKey,
+      messageProvider: params.surface.provider,
+      lane: params.surface.lane,
+      runIdPrefix: `${params.surface.id}:${params.meetingSessionId}`,
+      spawnedBy: requesterSessionKey,
+      contextMode: "fork",
+      args: params.args,
+      transcript: params.transcript,
+      surface: params.surface.surface,
+      userLabel: params.surface.userLabel,
+      assistantLabel: params.surface.assistantLabel,
+      questionSourceLabel: params.surface.questionSourceLabel,
+      toolsAllow: resolveRealtimeVoiceAgentConsultToolsAllow(params.toolPolicy),
+      extraSystemPrompt: params.surface.extraSystemPrompt,
+      abortSignal: params.abortSignal,
+    }),
+  );
 }
 
 async function handleMeetingRealtimeConsultToolCall(params: {
