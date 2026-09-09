@@ -172,21 +172,85 @@ describe("createChannelProgressDraftCompositor quiet drafts", () => {
         );
         await progress.pushApprovalEvent({ phase: "resolved", approvalId: "approval-1" });
         expect(update.mock.lastCall?.[0]).not.toContain("Run checks");
+      } finally {
+        progress.cancel();
+      }
+    },
+  );
+
+  it("starts and flushes a quiet draft for a non-zero exit", async () => {
+    const update = vi.fn();
+    const progress = createTestProgressDraftCompositor({
+      entry: {
+        streaming: {
+          mode: "progress",
+          progress: { toolProgress: false, maxLines: 3, label: false },
+        },
+      },
+      update,
+    });
+    try {
+      await progress.pushCommandOutputEvent({
+        phase: "end",
+        toolCallId: "failed-command",
+        exitCode: 1,
+      });
+      expect(progress.hasStarted).toBe(true);
+      expect(update.mock.lastCall?.[0]).toContain("exit 1");
+      expect(update.mock.lastCall?.[1]).toMatchObject({ flush: true });
+    } finally {
+      progress.cancel();
+    }
+  });
+
+  it.each([
+    { presentation: undefined, toolProgress: false, maxLines: 1 },
+    { presentation: undefined, toolProgress: false, maxLines: 3 },
+    { presentation: "summary" as const, toolProgress: false, maxLines: 1 },
+    { presentation: "summary" as const, toolProgress: true, maxLines: 3 },
+  ])(
+    "keeps exits above a full quiet plan through reasoning and commentary ($presentation, $toolProgress, $maxLines)",
+    async ({ presentation, toolProgress, maxLines }) => {
+      const update = vi.fn();
+      const progress = createTestProgressDraftCompositor({
+        presentation,
+        entry: {
+          streaming: {
+            mode: "progress",
+            progress: { toolProgress, maxLines, commentary: true, label: false },
+          },
+        },
+        update,
+      });
+      try {
+        await progress.pushPlanProgress([
+          { step: "Inspect", status: "completed" },
+          { step: "Repair", status: "in_progress" },
+          { step: "Verify", status: "pending" },
+        ]);
         await progress.pushCommandOutputEvent({
           phase: "end",
           toolCallId: "failed-command",
           exitCode: 1,
         });
-        // Non-zero exits stay eligible for quiet-mode display but do not take
-        // capacity from a full plan or receive attention-only immediate flushes.
-        expect(
-          progress
-            .getSnapshot()
-            .lines.some(
-              (line) => typeof line === "object" && "text" in line && line.text.includes("exit 1"),
-            ),
-        ).toBe(true);
-        expect(update.mock.lastCall?.[1]).not.toMatchObject({ flush: true });
+        expect(update.mock.lastCall?.[0]).toContain("exit 1");
+        expect(update.mock.lastCall?.[1]).toMatchObject({ flush: true });
+        for (let index = 0; index < 5; index++) {
+          await progress.pushToolEvent({
+            name: "read",
+            toolCallId: `read-${index}`,
+            phase: "start",
+          });
+          await progress.pushReasoningProgress(`Thinking ${index}`, { snapshot: true });
+          expect(update.mock.lastCall?.[0]).toContain("exit 1");
+          await progress.pushCommentaryProgress(`Inspecting file ${index}`, {
+            itemId: `comment-${index}`,
+          });
+          expect(update.mock.lastCall?.[0]).toContain("exit 1");
+        }
+        expect(update.mock.lastCall?.[0].split("\n").filter(Boolean).length).toBeLessThanOrEqual(
+          maxLines,
+        );
         await progress.pushCommandOutputEvent({
           phase: "end",
           toolCallId: "failed-command",
@@ -199,30 +263,51 @@ describe("createChannelProgressDraftCompositor quiet drafts", () => {
     },
   );
 
-  it("keeps a non-zero exit visible when the quiet draft has room", async () => {
-    const update = vi.fn();
-    const progress = createTestProgressDraftCompositor({
-      entry: {
-        streaming: {
-          mode: "progress",
-          progress: { toolProgress: false, maxLines: 3, label: false },
+  it.each(["failed", "error", "blocked"])(
+    "flushes and retains explicit %s status while tool progress is enabled",
+    async (status) => {
+      const update = vi.fn();
+      const progress = createTestProgressDraftCompositor({
+        entry: {
+          streaming: {
+            mode: "progress",
+            progress: { toolProgress: true, maxLines: 3, commentary: true, label: false },
+          },
         },
-      },
-      update,
-    });
-    try {
-      await progress.start();
-      await progress.pushCommandOutputEvent({
-        phase: "end",
-        toolCallId: "failed-command",
-        exitCode: 1,
+        update,
       });
-      expect(update.mock.lastCall?.[0]).toContain("exit 1");
-      expect(update.mock.lastCall?.[1]).not.toMatchObject({ flush: true });
-    } finally {
-      progress.cancel();
-    }
-  });
+      try {
+        await progress.pushPlanProgress([
+          { step: "Inspect", status: "completed" },
+          { step: "Repair", status: "in_progress" },
+          { step: "Verify", status: "pending" },
+        ]);
+        await progress.pushItemEvent({
+          itemId: "attention-item",
+          kind: "tool",
+          name: "read",
+          status,
+          progressText: "Check access",
+        });
+        expect(update.mock.lastCall?.[0]).toContain("Check access");
+        expect(update.mock.lastCall?.[1]).toMatchObject({ flush: true });
+        for (let index = 0; index < 5; index++) {
+          await progress.pushToolEvent({
+            name: "read",
+            toolCallId: `read-${index}`,
+            phase: "start",
+          });
+          await progress.pushCommentaryProgress(`Inspecting file ${index}`, {
+            itemId: `comment-${index}`,
+          });
+        }
+        expect(update.mock.lastCall?.[0]).toContain("Check access");
+        expect(update.mock.lastCall?.[0].split("\n").filter(Boolean).length).toBeLessThanOrEqual(3);
+      } finally {
+        progress.cancel();
+      }
+    },
+  );
 
   it("lets new activity replace old non-zero exits without collapsing the plan", async () => {
     const update = vi.fn();

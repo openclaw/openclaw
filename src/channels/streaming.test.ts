@@ -6,8 +6,6 @@ import {
   buildChannelProgressDraftLineForEntry,
   formatChannelProgressDraftText,
   formatPlanChecklistLines,
-  isChannelProgressAttentionLine,
-  isChannelProgressPriorityLine,
   normalizeAgentPlanSteps,
   isChannelProgressDraftWorkToolName,
   mergeChannelProgressDraftLine,
@@ -22,25 +20,6 @@ import {
 } from "./streaming.js";
 
 describe("buildChannelProgressDraftLine", () => {
-  it("does not reserve attention capacity for non-zero command exits", () => {
-    const exitLine = {
-      kind: "command-output" as const,
-      label: "Exec",
-      text: "🛠️ exit 1",
-      status: "exit 1",
-    };
-    expect(isChannelProgressAttentionLine(exitLine)).toBe(true);
-    expect(isChannelProgressPriorityLine(exitLine)).toBe(false);
-    expect(
-      isChannelProgressAttentionLine({
-        kind: "tool",
-        label: "Deploy",
-        text: "Deploy failed",
-        status: "failed",
-      }),
-    ).toBe(true);
-  });
-
   it("keeps non-zero exits in the legacy quiet summary", () => {
     expect(
       formatChannelProgressDraftText({
@@ -299,6 +278,23 @@ describe("backend tool-name casing", () => {
 });
 
 describe("mergeChannelProgressDraftLine", () => {
+  it("preserves SDK default retention of non-zero exits over newer activity", () => {
+    const exit = {
+      id: "command-1",
+      kind: "command-output" as const,
+      label: "Exec",
+      text: "🛠️ exit 1",
+      status: "exit 1",
+    };
+    const lines = mergeChannelProgressDraftLine(
+      [exit, { id: "read-1", kind: "tool", label: "Read", text: "Read first file" }],
+      { id: "read-2", kind: "tool", label: "Read", text: "Read second file" },
+      { maxLines: 2 },
+    );
+
+    expect(lines.map((line) => line.text)).toEqual(["🛠️ exit 1", "Read second file"]);
+  });
+
   it("keeps identical visible lines distinct when their stable ids differ", () => {
     const first = { id: "tool-1", kind: "tool" as const, text: "bash", label: "bash" };
     const second = { id: "tool-2", kind: "tool" as const, text: "bash", label: "bash" };
@@ -418,6 +414,31 @@ describe("streaming config resolution", () => {
 });
 
 describe("progress narration", () => {
+  it.each([undefined, "summary"] as const)(
+    "preserves SDK default exit priority over a full plan (presentation=%s)",
+    (presentation) => {
+      const text = formatChannelProgressDraftText({
+        presentation,
+        entry: {
+          streaming: {
+            mode: "progress",
+            progress: { toolProgress: true, label: false, maxLines: 3 },
+          },
+        },
+        lines: [{ kind: "command-output", label: "Exec", text: "🛠️ exit 1", status: "exit 1" }],
+        plan: [
+          { step: "Inspect", status: "completed" },
+          { step: "Repair", status: "in_progress" },
+          { step: "Verify", status: "pending" },
+        ],
+      });
+
+      expect(text).toContain("exit 1");
+      expect(text).toContain("Repair");
+      expect(text.split("\n").filter(Boolean)).toHaveLength(3);
+    },
+  );
+
   it("preserves the shipped plain checklist option", () => {
     expect(
       formatPlanChecklistLines(
