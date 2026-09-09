@@ -218,8 +218,8 @@ function extractHeadings(raw) {
   let fenceMarker = null;
 
   for (const rawLine of lines) {
-    const trimmed = rawLine.trim();
-    const fenceMatch = /^(?<marker>`{3,}|~{3,})(?<trailing>.*)$/u.exec(trimmed);
+    const trimmed = rawLine.trimStart();
+    const fenceMatch = /^(?<marker>`{3,}|~{3,})/u.exec(trimmed);
     if (fenceMatch) {
       const marker = fenceMatch.groups.marker;
       if (!fenceMarker) {
@@ -227,7 +227,7 @@ function extractHeadings(raw) {
       } else if (
         marker[0] === fenceMarker[0] &&
         marker.length >= fenceMarker.length &&
-        fenceMatch.groups.trailing.trim().length === 0
+        /^[ \t]*$/u.test(trimmed.slice(marker.length))
       ) {
         fenceMarker = null;
       }
