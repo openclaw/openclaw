@@ -1,4 +1,5 @@
 import { registryContainsRuntimePluginIds } from "../plugins/active-runtime-registry.js";
+import { capturePluginLifecycleAuthority } from "../plugins/registry-lifecycle.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { augmentPreparedModelCatalogWithAgentHarness } from "./harness/model-catalog.js";
 import { resolveAgentRuntimePluginLoadPlan } from "./harness/runtime-plugin-load-plan.js";
@@ -7,7 +8,37 @@ import type {
   PreparedModelRuntimeCatalogMode,
   PreparedModelRuntimeInput,
   PreparedModelRuntimePluginGeneration,
+  PreparedMediaCapabilityProviderAcquisition,
+  PreparedMediaCapabilityProviderSource,
 } from "./prepared-model-runtime.types.js";
+
+/** Retains the original source and checks its captured authority only for new admission. */
+export function acquirePreparedMediaCapabilityProviders(
+  source: PreparedMediaCapabilityProviderSource,
+  providers: PreparedMediaCapabilityProviderAcquisition["providers"],
+): PreparedMediaCapabilityProviderAcquisition {
+  const isCurrent = capturePluginLifecycleAuthority(source.registry, undefined, {
+    scopedRuntime: true,
+  });
+  let released = false;
+  const assertOpen = () => {
+    if (released || !isCurrent?.()) {
+      throw new Error(
+        "The media provider setup changed before generation started. Retry the request with the current provider setup.",
+      );
+    }
+  };
+  assertOpen();
+  const claim = source.resources.retain();
+  return {
+    providers,
+    assertOpen,
+    release: () => {
+      released = true;
+      return claim.release();
+    },
+  };
+}
 
 // Lineage is cache identity only. Derived generations still require the exact open
 // parent lease at admission; they never become configured publication authority.
@@ -32,14 +63,16 @@ export function preparedPluginGenerationSupportsSelections(
     selections: input.runtimePluginSelections,
     metadataSnapshot: generation.pluginMetadataSnapshot,
   });
-  // Failed loads are recorded generation outcomes, not missing owners. Preserve their
-  // diagnostics without making unrelated configured harnesses a condition of borrowing.
+  // Failed and disabled loads are recorded generation outcomes, not missing owners.
+  // Borrowing preserves those outcomes; downstream model resolution owns availability.
   return (
     registry !== undefined &&
     (plan.pluginIds ?? []).every(
       (id) =>
-        registry.plugins.some((plugin) => plugin.id === id && plugin.status === "error") ||
-        registryContainsRuntimePluginIds(registry, [id]),
+        registry.plugins.some(
+          (plugin) =>
+            plugin.id === id && (plugin.status === "error" || plugin.status === "disabled"),
+        ) || registryContainsRuntimePluginIds(registry, [id]),
     )
   );
 }
@@ -60,6 +93,7 @@ export function createPreparedPluginGeneration(params: {
   inboundPluginRegistry: PreparedModelRuntimePluginGeneration["inboundPluginRegistry"];
   inlineProviderModels: PreparedModelRuntimePluginGeneration["inlineProviderModels"];
   mediaCapabilityProviders: PreparedModelRuntimePluginGeneration["mediaCapabilityProviders"];
+  mediaCapabilityProviderSource?: PreparedModelRuntimePluginGeneration["mediaCapabilityProviderSource"];
   messageToolCatalog: PreparedModelRuntimePluginGeneration["messageToolCatalog"];
   pluginMetadataSnapshot: PreparedModelRuntimePluginGeneration["pluginMetadataSnapshot"];
   preparedStaticProviderCatalog: PreparedModelRuntimePluginGeneration["preparedStaticProviderCatalog"];
@@ -81,6 +115,7 @@ export function createPreparedPluginGeneration(params: {
       pluginMetadataSnapshot: params.pluginMetadataSnapshot,
       pluginRegistry: params.runtimePluginRegistry,
       mediaCapabilityProviders: params.mediaCapabilityProviders,
+      mediaCapabilityProviderSource: params.mediaCapabilityProviderSource,
       messageToolCatalog: params.messageToolCatalog,
       preparedStaticProviderCatalog: params.preparedStaticProviderCatalog,
     });
@@ -102,6 +137,9 @@ export function createPreparedPluginGeneration(params: {
     ...(params.mediaCapabilityProviders
       ? { mediaCapabilityProviders: params.mediaCapabilityProviders }
       : {}),
+    ...(params.mediaCapabilityProviderSource
+      ? { mediaCapabilityProviderSource: params.mediaCapabilityProviderSource }
+      : {}),
     ...(params.preparedStaticProviderCatalog
       ? { preparedStaticProviderCatalog: params.preparedStaticProviderCatalog }
       : {}),
@@ -118,6 +156,7 @@ export async function buildPreparedPluginModelCatalog(params: {
   };
   catalogMode: PreparedModelRuntimeCatalogMode;
   modelRegistry: Parameters<typeof buildPreparedModelCatalogSnapshot>[0]["modelRegistry"];
+  providerOutcomes?: Parameters<typeof buildPreparedModelCatalogSnapshot>[0]["providerOutcomes"];
   pluginGeneration: PreparedModelRuntimePluginGeneration;
 }) {
   const { credentials, input } = params.agentFacts;
@@ -129,6 +168,7 @@ export async function buildPreparedPluginModelCatalog(params: {
       config: input.config,
       modelRegistry: params.modelRegistry,
       metadataSnapshot,
+      providerOutcomes: params.providerOutcomes,
       includeProviderPluginAugmentation: params.catalogMode === "live",
       ...(input.env ? { env: input.env } : {}),
       ...(input.readOnly ? { readOnly: true } : {}),

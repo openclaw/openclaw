@@ -7,6 +7,7 @@ import { readPersistedMediaFacts } from "../../../../src/media/media-facts.js";
 import { stripEnvelope } from "../../../../src/shared/chat-envelope.js";
 import { extractAssistantPhaseText } from "../../../../src/shared/chat-message-content.js";
 import { stripThinkingTags } from "../strip-thinking-tags.ts";
+import { projectImportedMessageForDisplay } from "./imported-message-display.ts";
 
 const textCache = new WeakMap<object, string | null>();
 const thinkingCache = new WeakMap<object, string | null>();
@@ -36,9 +37,11 @@ export function extractText(message: unknown): string | null {
   if (message == null) {
     return null;
   }
-  const m = message as Record<string, unknown>;
+  const projected = projectImportedMessageForDisplay(message);
+  const m = projected as Record<string, unknown>;
   const role = typeof m.role === "string" ? m.role : "";
-  const raw = role === "assistant" ? extractAssistantPhaseText(message) : extractRawText(message);
+  const raw =
+    role === "assistant" ? extractAssistantPhaseText(projected) : extractRawText(projected);
   if (!raw) {
     return null;
   }
@@ -152,19 +155,6 @@ export function readTranscriptMediaEntries(message: unknown): Array<{
         ]
       : [];
   });
-}
-
-export function formatReasoningMarkdown(text: string): string {
-  const trimmed = text.trim();
-  if (!trimmed) {
-    return "";
-  }
-  const lines = trimmed
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .map((line) => `_${line}_`);
-  return lines.length ? ["_Reasoning:_", ...lines].join("\n") : "";
 }
 
 function isTextOnlyContent(content: unknown): boolean {

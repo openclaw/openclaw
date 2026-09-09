@@ -27,6 +27,7 @@ import {
   runWithCronCreatorAuthorityCapability,
   runWithCronCreatorAuthorityResolver,
 } from "../cron-creator-authority-context.js";
+import { textAssistant } from "../test-helpers/sparse-transcript.test-support.js";
 import { createCronTool } from "./cron-tool.js";
 import { getGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 
@@ -2176,10 +2177,7 @@ describe("cron tool", () => {
       .mockResolvedValueOnce({
         messages: [
           { role: "user", content: [{ type: "text", text: "Discussed Q2 budget" }] },
-          {
-            role: "assistant",
-            content: [{ type: "text", text: "We agreed to review on Tuesday." }],
-          },
+          textAssistant("We agreed to review on Tuesday."),
           { role: "user", content: [{ type: "text", text: "Remind me about the thing at 2pm" }] },
         ],
       })

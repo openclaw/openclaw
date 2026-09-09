@@ -4,6 +4,7 @@ import {
   INTERNAL_WORKBOARD_PATH_PARAM,
   pathForRoute,
   pathForWorkboardBoard,
+  restoreBridgedRouteLocation,
   workboardBoardIdFromPath,
 } from "../../app-route-paths.ts";
 // Existing Workboard URLs persist this value for the all-boards route.
@@ -16,17 +17,9 @@ export type WorkboardRouteData = {
 };
 
 export function workboardRouteLocation(location: RouteLocation): RouteLocation {
-  const params = new URLSearchParams(location.search);
   // The router's private bridge must not masquerade as the public legacy
   // `board` query, or its canonical redirect survives after the real path wins.
-  const pathname = params.get(INTERNAL_WORKBOARD_PATH_PARAM) ?? location.pathname;
-  params.delete(INTERNAL_WORKBOARD_PATH_PARAM);
-  const search = params.toString();
-  return {
-    pathname,
-    search: search ? `?${search}` : "",
-    hash: location.hash,
-  };
+  return restoreBridgedRouteLocation(location, INTERNAL_WORKBOARD_PATH_PARAM);
 }
 
 export function resolveWorkboardRouteLocation(

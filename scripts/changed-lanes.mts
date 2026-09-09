@@ -11,14 +11,14 @@ const GIT_OUTPUT_MAX_BUFFER = 64 * 1024 * 1024;
 const IMPLAUSIBLE_NO_MERGE_BASE_DIFF_PATHS = 200;
 const RAW_SYNC_CHANGED_LANES_ENV = "OPENCLAW_CHANGED_LANES_RAW_SYNC";
 
-// Source files knip's production scan reads. Any edit to one of these can orphan
-// an export -- including an import-only edit that drops a barrel re-export's last
-// consumer -- so the scan is selected by path, not by inspecting changed lines.
-const DEADCODE_SOURCE_PATH_RE = /^(?:src|extensions|ui|packages)\/.+\.[cm]?[jt]sx?$/u;
+// Application, script, and test sources read by the export scans. Import-only
+// edits and deleted tests can orphan exports in unchanged files, so select by
+// path rather than inspecting changed lines.
+const DEADCODE_SOURCE_PATH_RE = /^(?:src|extensions|ui|packages|scripts|test)\/.+\.[cm]?[jt]sx?$/u;
 
-/** Returns whether any changed path is production source knip scans. */
+/** Returns whether a changed source path selects the existing export scans. */
 export function hasDeadcodeScannedSource(changedPaths: string[]): boolean {
-  return changedPaths.map(normalizeChangedPath).some((p) => DEADCODE_SOURCE_PATH_RE.test(p));
+  return changedPaths.some((path) => DEADCODE_SOURCE_PATH_RE.test(path));
 }
 
 const PROTOCOL_EVENT_COVERAGE_INPUT_RE =
@@ -26,11 +26,10 @@ const PROTOCOL_EVENT_COVERAGE_INPUT_RE =
 
 export function hasProtocolEventCoverageInput(changedPaths: string[]): boolean {
   // Match the guard's scan roots and excluded directories, including deleted inputs.
-  return changedPaths
-    .map(normalizeChangedPath)
-    .some(
-      (p) => PROTOCOL_EVENT_COVERAGE_INPUT_RE.test(p) && !/\/(?:Tests|\.build|build)\//u.test(p),
-    );
+  return changedPaths.some(
+    (path) =>
+      PROTOCOL_EVENT_COVERAGE_INPUT_RE.test(path) && !/\/(?:Tests|\.build|build)\//u.test(path),
+  );
 }
 
 const SCRIPTS_TYPECHECK_PATH_RE =
@@ -85,16 +84,14 @@ export function isConfigDocSchemaSourcePath(file: string): boolean {
 
 /** Config docs consume core schema/help plus the bundled plugin metadata pipeline. */
 export function hasConfigDocInput(changedPaths: string[]): boolean {
-  return changedPaths
-    .map(normalizeChangedPath)
-    .some(
-      (changedPath) =>
-        !getChangedPathFacts(changedPath).isChangedLaneTest &&
-        (CONFIG_DOC_BASELINE_PATHS.has(changedPath) ||
-          isConfigDocSchemaSourcePath(changedPath) ||
-          CONFIG_DOC_INPUT_PATH_RE.test(changedPath) ||
-          BUNDLED_CHANNEL_CONFIG_METADATA_PATH_RE.test(changedPath)),
-    );
+  return changedPaths.some(
+    (changedPath) =>
+      !getChangedPathFacts(changedPath).isChangedLaneTest &&
+      (CONFIG_DOC_BASELINE_PATHS.has(changedPath) ||
+        isConfigDocSchemaSourcePath(changedPath) ||
+        CONFIG_DOC_INPUT_PATH_RE.test(changedPath) ||
+        BUNDLED_CHANNEL_CONFIG_METADATA_PATH_RE.test(changedPath)),
+  );
 }
 
 /**
@@ -112,6 +109,9 @@ export const RELEASE_METADATA_PATHS = new Set([
   "apps/mobile/version.json",
   ...CONFIG_DOC_BASELINE_PATHS,
   "docs/install/updating.md",
+  "docs/install/updating/automatic-updates.md",
+  "docs/install/updating/rollback-and-recovery.md",
+  "docs/install/updating/update-methods.md",
   "package.json",
 ]);
 
@@ -173,7 +173,7 @@ export function createEmptyChangedLanes() {
 }
 
 export function isChangedLaneTestPath(changedPath: string) {
-  return getChangedPathFacts(normalizeChangedPath(changedPath)).isChangedLaneTest;
+  return getChangedPathFacts(changedPath).isChangedLaneTest;
 }
 
 /**
@@ -184,9 +184,9 @@ export function detectChangedLanes(
   changedPaths: string[],
   options: DetectChangedLanesOptions = {},
 ): ChangedLaneResult {
-  const paths = [...new Set(changedPaths.map(normalizeChangedPath).filter(Boolean))]
-    .toSorted((left, right) => left.localeCompare(right))
-    .filter((changedPath) => changedPath !== "--");
+  const paths = [...new Set(changedPaths.filter(Boolean))].toSorted((left, right) =>
+    left.localeCompare(right),
+  );
   const lanes = createEmptyChangedLanes();
   const reasons = [];
   let extensionImpactFromCore = false;
@@ -457,13 +457,13 @@ export function listChangedPathsFromGit(params: {
 }
 
 function runGitNameOnlyDiff(extraArgs: string[], cwd = process.cwd()): string[] {
-  const output = execFileSync("git", ["diff", "--name-only", ...extraArgs], {
+  const output = execFileSync("git", ["diff", "--name-only", "-z", ...extraArgs], {
     cwd,
     stdio: ["ignore", "pipe", "pipe"],
     encoding: "utf8",
     maxBuffer: GIT_OUTPUT_MAX_BUFFER,
   });
-  return output.split("\n").map(normalizeChangedPath).filter(Boolean);
+  return output.split("\0").filter(Boolean);
 }
 
 function gitOutputText(value: unknown) {
@@ -484,26 +484,20 @@ function isGitNoMergeBaseError(error: unknown) {
 }
 
 function runGitLsFiles(extraArgs: string[], cwd = process.cwd()): string[] {
-  const output = execFileSync("git", ["ls-files", ...extraArgs], {
+  const output = execFileSync("git", ["ls-files", "-z", ...extraArgs], {
     cwd,
     stdio: ["ignore", "pipe", "pipe"],
     encoding: "utf8",
     maxBuffer: GIT_OUTPUT_MAX_BUFFER,
   });
-  return output.split("\n").map(normalizeChangedPath).filter(Boolean);
+  return output.split("\0").filter(Boolean);
 }
 
 /**
  * Lists staged changed paths for pre-commit checks.
  */
 export function listStagedChangedPaths(cwd = process.cwd()) {
-  const output = execFileSync("git", ["diff", "--cached", "--name-only", "--diff-filter=ACMRD"], {
-    cwd,
-    stdio: ["ignore", "pipe", "pipe"],
-    encoding: "utf8",
-    maxBuffer: GIT_OUTPUT_MAX_BUFFER,
-  });
-  return output.split("\n").map(normalizeChangedPath).filter(Boolean);
+  return runGitNameOnlyDiff(["--cached", "--diff-filter=ACMRD"], cwd);
 }
 
 /**
@@ -512,55 +506,37 @@ export function listStagedChangedPaths(cwd = process.cwd()) {
 function classifyPackageJsonChangeFromGit(params: PackageJsonGitParams) {
   try {
     const { before, after } = readPackageJsonBeforeAfter(params);
-    if (isLiveDockerPackageScriptOnlyChange(before, after)) {
-      return "liveDockerTooling";
-    }
-    return isPackageScriptOnlyChange(before, after) ? "tooling" : null;
+    return classifyPackageJsonScriptChange(before, after);
   } catch {
     return null;
   }
 }
 
-/**
- * Checks whether package scripts changed only live Docker script entries.
- * @internal Directly tested script implementation detail.
- */
-export function isLiveDockerPackageScriptOnlyChange(before: string, after: string): boolean {
+function classifyPackageJsonScriptChange(
+  before: string,
+  after: string,
+): "liveDockerTooling" | "tooling" | null {
   const beforePackage = parsePackageJson(before);
   const afterPackage = parsePackageJson(after);
   if (!beforePackage || !afterPackage) {
-    return false;
+    return null;
   }
-  const beforeAllowed = extractLiveDockerPackageScripts(beforePackage);
-  const afterAllowed = extractLiveDockerPackageScripts(afterPackage);
-  const beforeStripped = stripLiveDockerPackageScripts(beforePackage);
-  const afterStripped = stripLiveDockerPackageScripts(afterPackage);
-
-  return (
-    stableStringify(beforeStripped) === stableStringify(afterStripped) &&
-    stableStringify(beforeAllowed) !== stableStringify(afterAllowed)
-  );
-}
-
-/**
- * Checks whether package.json changes are limited to scripts.
- * @internal Directly tested script implementation detail.
- */
-export function isPackageScriptOnlyChange(before: string, after: string): boolean {
-  const beforePackage = parsePackageJson(before);
-  const afterPackage = parsePackageJson(after);
-  if (!beforePackage || !afterPackage) {
-    return false;
+  const { scripts: beforeScripts, ...beforeMetadata } = beforePackage;
+  const { scripts: afterScripts, ...afterMetadata } = afterPackage;
+  if (
+    stableStringify(beforeMetadata) !== stableStringify(afterMetadata) ||
+    stableStringify(isRecord(beforeScripts) ? beforeScripts : {}) ===
+      stableStringify(isRecord(afterScripts) ? afterScripts : {})
+  ) {
+    return null;
   }
-  const beforeScripts = extractPackageScripts(beforePackage);
-  const afterScripts = extractPackageScripts(afterPackage);
-  const beforeStripped = stripPackageScripts(beforePackage);
-  const afterStripped = stripPackageScripts(afterPackage);
-
-  return (
-    stableStringify(beforeStripped) === stableStringify(afterStripped) &&
-    stableStringify(beforeScripts) !== stableStringify(afterScripts)
-  );
+  // Coercing missing/non-record scripts to {} must not grant the narrower live-Docker lane.
+  return isRecord(beforeScripts) &&
+    isRecord(afterScripts) &&
+    stableStringify(withoutLiveDockerScripts(beforeScripts)) ===
+      stableStringify(withoutLiveDockerScripts(afterScripts))
+    ? "liveDockerTooling"
+    : "tooling";
 }
 
 function parsePackageJson(value: string) {
@@ -596,39 +572,10 @@ function readGitText(ref: string, filePath: string) {
   });
 }
 
-function extractLiveDockerPackageScripts(packageJson: Record<string, unknown>) {
-  const scripts = packageJson.scripts;
-  if (!isRecord(scripts)) {
-    return {};
-  }
+function withoutLiveDockerScripts(scripts: Record<string, unknown>) {
   return Object.fromEntries(
-    Object.entries(scripts).filter(([name]) => LIVE_DOCKER_PACKAGE_SCRIPT_RE.test(name)),
+    Object.entries(scripts).filter(([name]) => !LIVE_DOCKER_PACKAGE_SCRIPT_RE.test(name)),
   );
-}
-
-function stripLiveDockerPackageScripts(packageJson: Record<string, unknown>) {
-  const clone = structuredClone(packageJson);
-  const scripts = clone.scripts;
-  if (!isRecord(scripts)) {
-    return clone;
-  }
-  for (const name of Object.keys(scripts)) {
-    if (LIVE_DOCKER_PACKAGE_SCRIPT_RE.test(name)) {
-      delete scripts[name];
-    }
-  }
-  return clone;
-}
-
-function extractPackageScripts(packageJson: Record<string, unknown>) {
-  const scripts = packageJson.scripts;
-  return isRecord(scripts) ? scripts : {};
-}
-
-function stripPackageScripts(packageJson: Record<string, unknown>) {
-  const clone = structuredClone(packageJson);
-  delete clone.scripts;
-  return clone;
 }
 
 /**
@@ -694,6 +641,7 @@ function parseArgs(argv: string[]) {
     },
   );
   parsed.paths.push(...explicitPaths);
+  parsed.paths = parsed.paths.map((changedPath) => normalizeChangedPath(changedPath));
   return parsed;
 }
 

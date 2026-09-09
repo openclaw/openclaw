@@ -5,9 +5,14 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withLocalAgentCronJobsRemoved } from "../cron/local-service.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
+  bindLegacyPluginSdkResourceHost,
+  getLegacyPluginSdkResourceHost,
+} from "../plugins/legacy-sdk-resource-host.js";
+import {
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeGatewayRequestScope,
 } from "../plugins/runtime/gateway-request-scope.js";
+import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { loadGatewayConfigRevisionProjector } from "./config-revision-token.js";
 import { NodeRegistry } from "./node-registry.js";
 import type { ChannelRuntimeSnapshot } from "./server-channel-runtime.types.js";
@@ -51,6 +56,7 @@ const unavailableCron: GatewayCronServiceContract = {
   remove: async () => cronUnavailable(),
   removeStaleJobFamily: async () => cronUnavailable(),
   removeAgentJobsTransactional: async () => cronUnavailable(),
+  quiesceJobs: async () => cronUnavailable(),
   run: async () => cronUnavailable(),
   enqueueRun: async () => cronUnavailable(),
   getJob: () => undefined,
@@ -90,6 +96,7 @@ function createLocalGatewayRequestContext(
   });
   const context: GatewayRequestContext = {
     localEmbedded: true,
+    trackExecution: trackAsyncWork,
     deps: params.deps,
     configRevisionProjector: loadGatewayConfigRevisionProjector({ env: process.env }),
     cron,
@@ -192,6 +199,7 @@ export function withLocalGatewayRequestScope<T>(
   // Session admission retains the instance binding after dropping request context.
   const resolveGatewayContext = () => context;
   context.resolveGatewayContext = resolveGatewayContext;
+  bindLegacyPluginSdkResourceHost(resolveGatewayContext, getLegacyPluginSdkResourceHost());
   return withPluginRuntimeGatewayRequestScope(
     {
       ...existing,

@@ -248,11 +248,16 @@ suite.define(() => {
   it.each(["navigation", "replacement open", "reconnection", "outside pointer", "Escape"] as const)(
     "keeps pending Inbox intent current across %s",
     async (action) => {
-      const page = await openPage({ pathname: "new" });
-      const held = await holdModuleResponse(
-        page,
-        /\/assets\/sidebar-attention-panel\.runtime-[^/?]+\.js(?:\?.*)?$/u,
-      );
+      let held!: Awaited<ReturnType<typeof holdModuleResponse>>;
+      const page = await openPage({
+        pathname: "new",
+        beforeNavigate: async (targetPage) => {
+          held = await holdModuleResponse(
+            targetPage,
+            /\/assets\/sidebar-attention-panel\.runtime-[^/?]+\.js(?:\?.*)?$/u,
+          );
+        },
+      });
       const attention = await page
         .locator("openclaw-app-sidebar openclaw-sidebar-attention")
         .elementHandle();
@@ -606,13 +611,12 @@ suite.define(() => {
       await toolbar.getByRole("button", { name: "Collapse sidebar" }).click();
     }
     await openChatSidePanelType(page, "Side chat");
-    const panel = page.getByRole("region", { name: "Side panel" });
     await focusChatSidePanel(page);
 
     const shellControls = page.locator(
       ".macos-titlebar-controls button:visible, .sidebar-attention--floating button:visible",
     );
-    const panelControls = panel.locator('[data-region-header="main"] :is(button, wa-tab):visible');
+    const panelControls = page.locator(".chat-pane__actions button:visible");
     const shellBoxes = await Promise.all(
       Array.from({ length: await shellControls.count() }, (_, index) =>
         shellControls.nth(index).boundingBox(),
@@ -658,7 +662,7 @@ suite.define(() => {
   it("keeps overlay motion anchored to its owning interaction", async () => {
     const page = await openPage({ nativeNav: false });
 
-    await page.keyboard.press("Meta+K");
+    await page.keyboard.press("ControlOrMeta+K");
     const palette = page.locator(".cmd-palette");
     const paletteDialog = page.locator("openclaw-modal-dialog.palette");
     await page.locator(".cmd-palette__input:not([disabled])").waitFor({ state: "visible" });

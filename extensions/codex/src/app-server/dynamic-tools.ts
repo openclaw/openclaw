@@ -64,8 +64,10 @@ import {
   estimateToolResultTextChars,
   resolveLiveToolResultMaxChars,
   sliceToolResultTextToBudget,
+  sliceUtf16Safe,
 } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { CodexDynamicToolsLoading } from "./config.js";
+import { createCodexAutomationsToolsAllowResolver } from "./dynamic-tool-automations-allowlist.js";
 import { finalizeCodexToolAvailability } from "./dynamic-tool-availability.js";
 import {
   createCodexDynamicToolSpecs,
@@ -595,6 +597,14 @@ export function createCodexDynamicToolBridge(params: {
   };
   const executionSnapshotStates = new Map<string, ExecutionSnapshotState>();
   const directToolNames = params.directToolNames;
+  const specs =
+    inheritedSpecs ??
+    createCodexDynamicToolSpecs({
+      entries: registeredSpecTools,
+      loading: params.loading ?? "searchable",
+      directToolNames,
+    });
+  const resolveAutomationsToolsAllow = createCodexAutomationsToolsAllowResolver(specs);
   let readRemoteWorkspaceFile: CodexRemoteWorkspaceFileReader | undefined;
   return {
     availableTools: availableTools.map((entry) => entry.tool),
@@ -611,13 +621,7 @@ export function createCodexDynamicToolBridge(params: {
           loading: params.loading ?? "searchable",
           directToolNames,
         }),
-    specs:
-      inheritedSpecs ??
-      createCodexDynamicToolSpecs({
-        entries: registeredSpecTools,
-        loading: params.loading ?? "searchable",
-        directToolNames,
-      }),
+    specs,
     resultContentSourceForTool: (toolName) => toolMap.get(toolName)?.tool.resultContentSource,
     sideEffectOwnerKeyForTool: (toolName) => {
       const tool = toolMap.get(toolName)?.tool;
@@ -663,7 +667,8 @@ export function createCodexDynamicToolBridge(params: {
         });
       }
       const { tool, name: toolName } = toolEntry;
-      const rawArguments = call.arguments;
+      const rawArguments =
+        toolName === "automations" ? resolveAutomationsToolsAllow(call.arguments) : call.arguments;
       const args = asNonArrayRecord(rawArguments);
       const startedAt = Date.now();
       const signal = composeAbortSignals(params.signal, options?.signal);
@@ -1085,9 +1090,8 @@ function notifyAgentToolResult(
       isError,
     });
   } catch (error) {
-    embeddedAgentLog.warn(
-      `onAgentToolResult handler failed: tool=${toolName} error=${String(error)}`,
-    );
+    const message = formatToolExecutionErrorMessage(error, "Unknown error");
+    embeddedAgentLog.warn(`onAgentToolResult handler failed: tool=${toolName} error=${message}`);
   }
 }
 
@@ -1391,10 +1395,53 @@ function normalizeToolResultMaxChars(maxChars: number): number {
     ? Math.floor(maxChars)
     : DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS;
 }
+function sanitizeToolTextRuns(
+  rawContent: Array<TextContent | ImageContent>,
+): Array<TextContent | ImageContent> {
+  const content: Array<TextContent | ImageContent> = [];
+  for (let index = 0; index < rawContent.length;) {
+    const item = rawContent[index]!;
+    if (item.type !== "text") {
+      content.push(item);
+      index += 1;
+      continue;
+    }
+
+    const textRun: TextContent[] = [];
+    while (index < rawContent.length) {
+      const next = rawContent[index]!;
+      if (next.type !== "text") {
+        break;
+      }
+      textRun.push(next);
+      index += 1;
+    }
+
+    const sanitizedText = sanitizeToolResult(textRun.map((entry) => entry.text).join(""));
+    let offset = 0;
+    content.push(
+      ...textRun.map((entry, runIndex) => {
+        const targetEnd =
+          runIndex === textRun.length - 1
+            ? sanitizedText.length
+            : Math.min(sanitizedText.length, offset + entry.text.length);
+        const text = sliceUtf16Safe(sanitizedText, offset, targetEnd);
+        const sanitized = Object.assign({}, entry, { text });
+        offset += text.length;
+        return sanitized;
+      }),
+    );
+  }
+  return content;
+}
 function convertToolContents(
-  content: Array<TextContent | ImageContent>,
+  rawContent: Array<TextContent | ImageContent>,
   toolResultMaxChars = DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS,
 ): CodexDynamicToolCallOutputContentItem[] {
+  // Adjacent text items form one model-visible stream, so sanitize each full run before
+  // repartitioning and budgeting. Image blocks keep their bytes; the storage-oriented
+  // whole-result branch of sanitizeToolResult would drop them.
+  const content = sanitizeToolTextRuns(rawContent);
   const maxChars = normalizeToolResultMaxChars(toolResultMaxChars);
   const totalTextChars = content.reduce(
     (total, item) => total + (item.type === "text" ? item.text.length : 0),

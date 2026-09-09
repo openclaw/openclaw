@@ -1,15 +1,29 @@
 // Verifies optional plugin tool registration and absence handling.
+import { AsyncLocalStorage } from "node:async_hooks";
+import { getEventListeners } from "node:events";
+import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { normalizeToolParameters } from "../agents/agent-tools.schema.js";
 import { DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY } from "../agents/tool-policy.js";
+import { createInvalidConfigError, throwInvalidConfig } from "../config/io.invalid-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SecretRef } from "../config/types.secrets.js";
+import { createDedupeCache } from "../infra/dedupe.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { loggingState } from "../logging/state.js";
+import { AsyncWorkScope, getAsyncWorkSignal, trackAsyncWork } from "../shared/async-work-scope.js";
 import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
+import { createPluginRecord } from "./loader-records.js";
 import type { PluginLoadOptions } from "./loader-types.js";
+import {
+  bindPluginRuntimeArtifactSelection,
+  resolvePluginRuntimeArtifactSelection,
+} from "./plugin-runtime-artifact-selection.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
+import { markPluginRegistryRetired } from "./registry-lifecycle.js";
+import type { PluginRegistry } from "./registry-types.js";
 import { appendRuntimePluginToolGrant } from "./tool-grant-allowlist.js";
 
 type MockRegistryToolEntry = {
@@ -88,7 +102,6 @@ let resolvePluginTools: typeof import("./tools.js").resolvePluginTools;
 let ensureStandalonePluginToolRegistryLoaded: typeof import("./tools.js").ensureStandalonePluginToolRegistryLoaded;
 let buildPluginToolMetadataKey: typeof import("./tool-metadata.js").buildPluginToolMetadataKey;
 let getPluginToolMeta: typeof import("./tool-metadata.js").getPluginToolMeta;
-let resetPluginToolDescriptorCacheForTest: typeof import("./tools.test-fixtures.js").resetPluginToolDescriptorCacheForTest;
 let getActivePluginRegistry: typeof import("./runtime.js").getActivePluginRegistry;
 let resetPluginRuntimeStateForTest: typeof import("./runtime.js").resetPluginRuntimeStateForTest;
 let setActivePluginRegistry: typeof import("./runtime.js").setActivePluginRegistry;
@@ -198,11 +211,10 @@ function createResolveToolsParams(params?: {
 
 function createToolRegistry(entries: MockRegistryToolEntry[]) {
   return {
-    plugins: entries.map((entry) => ({
-      id: entry.pluginId,
-      origin: entry.origin ?? "bundled",
-      status: "loaded",
-    })),
+    ...createEmptyPluginRegistry(),
+    plugins: entries.map((entry) =>
+      createToolRuntimeRecord(entry.pluginId, entry.source, entry.origin),
+    ),
     tools: entries,
     diagnostics: [] as Array<{
       level: string;
@@ -211,6 +223,25 @@ function createToolRegistry(entries: MockRegistryToolEntry[]) {
       message: string;
     }>,
   };
+}
+
+function createToolRuntimeRecord(
+  id: string,
+  source = `/tmp/${id}.js`,
+  origin: MockRegistryToolEntry["origin"] = "bundled",
+) {
+  const artifact = {
+    source,
+    rootDir: path.dirname(source),
+    origin,
+    preferBuiltPluginArtifacts: false,
+  };
+  const record = createPluginRecord({ id, ...artifact, enabled: true, configSchema: true });
+  bindPluginRuntimeArtifactSelection(record, {
+    preferBuiltPluginArtifacts: false,
+    runtimeEntry: resolvePluginRuntimeArtifactSelection({ ...artifact, entryKind: "runtime" }),
+  });
+  return record;
 }
 
 function setRegistry(
@@ -225,6 +256,8 @@ function setRegistry(
     plugins: entries
       .map((entry) => ({
         id: entry.pluginId,
+        source: entry.source,
+        rootDir: path.dirname(entry.source),
         origin: entry.origin ?? "bundled",
         enabledByDefault: true,
         channels: [],
@@ -369,11 +402,7 @@ function createOptionalDemoActiveRegistry() {
     config: createContext().config,
     plugin: createToolManifest("optional-demo", ["optional_tool"]),
   });
-  const registry = {
-    plugins: [{ id: "optional-demo", status: "loaded" }],
-    tools: [createOptionalDemoEntry()],
-    diagnostics: [],
-  };
+  const registry = createToolRegistry([createOptionalDemoEntry()]);
   setActivePluginRegistry?.(registry as never, "test-tool-registry", "gateway-bindable", "/tmp");
   return registry;
 }
@@ -398,7 +427,11 @@ function installToolManifestSnapshots(params: {
   env?: NodeJS.ProcessEnv;
   plugins: Record<string, unknown>[];
 }) {
-  const plugins = params.plugins;
+  const plugins = params.plugins.map((plugin): Record<string, unknown> => ({
+    rootDir: "/tmp",
+    source: `/tmp/${String(plugin.id)}.js`,
+    ...plugin,
+  }));
   const snapshot = {
     policyHash: resolveInstalledPluginIndexPolicyHash(params.config),
     workspaceDir: "/tmp",
@@ -586,7 +619,6 @@ describe("resolvePluginTools optional tools", () => {
     ({ clearPluginMetadataLifecycleCaches } = await import("./plugin-metadata-lifecycle.js"));
     ({ setCurrentPluginMetadataSnapshot } =
       await import("./current-plugin-metadata.test-support.js"));
-    ({ resetPluginToolDescriptorCacheForTest } = await import("./tools.test-fixtures.js"));
   });
 
   beforeEach(() => {
@@ -612,13 +644,11 @@ describe("resolvePluginTools optional tools", () => {
     });
     resetPluginRuntimeStateForTest?.();
     clearPluginMetadataLifecycleCaches?.();
-    resetPluginToolDescriptorCacheForTest?.();
   });
 
   afterEach(() => {
     resetPluginRuntimeStateForTest?.();
     clearPluginMetadataLifecycleCaches?.();
-    resetPluginToolDescriptorCacheForTest?.();
     setLoggerOverride(null);
     loggingState.rawConsole = null;
     resetLogger();
@@ -713,6 +743,150 @@ describe("resolvePluginTools optional tools", () => {
         pluginSource: "/tmp/optional-demo.js",
       },
     ]);
+  });
+
+  it.each(["same", "foreign", "already-aborted", "retired", "parent-close"] as const)(
+    "retains plugin cancellation context through late descendants: %s",
+    async (dispatch) => {
+      const work = new AsyncWorkScope();
+      const controller = new AbortController();
+      const reason = new Error("cancel the owned call");
+      const installListener = createDeferred();
+      const listening = createDeferred();
+      const observed = createDeferred();
+      const finishCleanup = createDeferred();
+      let invokeInPlugin: ReturnType<typeof AsyncLocalStorage.snapshot> | undefined;
+      let signalReceived: AbortSignal | undefined;
+      let workSignal: AbortSignal | undefined;
+      let callbackPlugin: string | undefined;
+      let callbackReason: unknown;
+      let callbackWork: AbortSignal | undefined;
+      let sourceRegistry: PluginRegistry | undefined;
+      let descendant: Promise<void> | undefined;
+      let cleanupFinished = false;
+      setRegistry([
+        createNamedToolEntry("multi", "owned_tool", {
+          factory: () => ({
+            ...makeTool("owned_tool"),
+            execute(_id: string, _args: unknown, signal?: AbortSignal) {
+              signalReceived = expectDefined(signal, "Expected the tool cancellation signal");
+              workSignal = expectDefined(getAsyncWorkSignal(), "Expected an admitted work scope");
+              sourceRegistry = expectDefined(
+                getPluginRuntimeGatewayRequestScope()?.pluginRegistry,
+                "Expected the executing tool registry",
+              );
+              invokeInPlugin = AsyncLocalStorage.snapshot();
+              const cancellation = dispatch === "parent-close" ? workSignal : signalReceived;
+              descendant = trackAsyncWork(async () => {
+                await installListener.promise;
+                const abort = () => {
+                  callbackPlugin = getPluginRuntimeGatewayRequestScope()?.pluginId;
+                  callbackReason = cancellation.reason;
+                  callbackWork = getAsyncWorkSignal();
+                  observed.resolve();
+                };
+                cancellation.addEventListener("abort", abort, { once: true });
+                if (cancellation.aborted) {
+                  abort();
+                }
+                listening.resolve();
+                try {
+                  await finishCleanup.promise;
+                } finally {
+                  cancellation.removeEventListener("abort", abort);
+                  cleanupFinished = true;
+                }
+              });
+              return Promise.resolve({ content: [{ type: "text" as const, text: "cached" }] });
+            },
+          }),
+        }),
+        createNamedToolEntry("optional-demo", "cancel_tool", {
+          factory: () => ({
+            ...makeTool("cancel_tool"),
+            async execute() {
+              controller.abort(reason);
+              return { content: [] };
+            },
+          }),
+        }),
+      ]);
+      const tools = resolvePluginTools(createResolveToolsParams());
+      const tool = expectDefined(
+        tools.find((candidate) => candidate.name === "owned_tool"),
+        "Expected the owned tool",
+      );
+      const cancel = expectDefined(
+        tools.find((candidate) => candidate.name === "cancel_tool"),
+        "Expected the cancelling tool",
+      );
+      try {
+        if (dispatch === "already-aborted") {
+          controller.abort(reason);
+        }
+        const result = await work.track(() => tool.execute("owned", {}, controller.signal));
+        expect(result.content).toEqual([{ type: "text", text: "cached" }]);
+        expect(cleanupFinished).toBe(false);
+        expect(workSignal?.aborted).toBe(false);
+        installListener.resolve();
+        await listening.promise;
+        if (dispatch === "foreign") {
+          await cancel.execute("cancel", {});
+        } else if (dispatch === "parent-close") {
+          work.beginClose(reason);
+        } else if (dispatch !== "already-aborted") {
+          if (dispatch === "retired") {
+            markPluginRegistryRetired(sourceRegistry);
+          }
+          expectDefined(
+            invokeInPlugin,
+            "Expected the captured plugin context",
+          )(() => controller.abort(reason));
+        }
+        await observed.promise;
+        expect(callbackPlugin).toBe("multi");
+        expect(callbackWork).toBe(workSignal);
+        expect(callbackReason).toBe(reason);
+        expect(cleanupFinished).toBe(false);
+        if (dispatch === "parent-close") {
+          expect(signalReceived?.aborted).toBe(false);
+        }
+        if (dispatch === "retired") {
+          await expect(tool.execute("new", {}, controller.signal)).rejects.toThrow(
+            "tool runtime is no longer active",
+          );
+        }
+      } finally {
+        installListener.resolve();
+        finishCleanup.resolve();
+        await descendant;
+        await work.drain();
+      }
+      expect(cleanupFinished).toBe(true);
+      expect(getEventListeners(controller.signal, "abort")).toHaveLength(0);
+      expect(getEventListeners(work.signal, "abort")).toHaveLength(0);
+    },
+  );
+
+  it("refuses managed tool admission after the captured work owner closes", async () => {
+    const execute = vi.fn(async () => ({ content: [] }));
+    setRegistry([
+      createNamedToolEntry("multi", "owned_tool", {
+        factory: () => ({ ...makeTool("owned_tool"), execute }),
+      }),
+    ]);
+    const tool = expectDefined(
+      resolvePluginTools(createResolveToolsParams())[0],
+      "Expected the resolved tool",
+    );
+    const work = new AsyncWorkScope();
+    const controller = new AbortController();
+    const invoke = work.run(() =>
+      AsyncLocalStorage.bind(() => tool.execute("closed", {}, controller.signal)),
+    );
+    await work.drain();
+    await expect(invoke()).rejects.toThrow("Async work scope is closed");
+    expect(execute).not.toHaveBeenCalled();
   });
 
   it("wraps every array tool callback and restores caller scope after errors", async () => {
@@ -1071,7 +1245,7 @@ describe("resolvePluginTools optional tools", () => {
     expectLoaderSelectedOnlyPluginIds(["optional-demo"]);
   });
 
-  it("uses owner-prepared load facts through cold and warm resolution without rediscovery", async () => {
+  it("uses owner-prepared load facts and last-manifest metadata without rediscovery", async () => {
     const context = createContext();
     const config = context.config;
     const registry = createToolRegistry([createOptionalDemoEntry()]);
@@ -1079,6 +1253,9 @@ describe("resolvePluginTools optional tools", () => {
     const metadataSnapshot = installToolManifestSnapshots({
       config,
       plugins: [
+        createToolManifest("optional-demo", ["optional_tool"], {
+          toolMetadata: { optional_tool: { optional: true, sideEffecting: false } },
+        }),
         createToolManifest("optional-demo", ["optional_tool"], {
           toolMetadata: { optional_tool: { optional: true, sideEffecting: true } },
         }),
@@ -1176,11 +1353,7 @@ describe("resolvePluginTools optional tools", () => {
       ],
     });
     const partialRegistry = createToolRegistry([multiEntry]);
-    partialRegistry.plugins.push({
-      id: "optional-demo",
-      origin: "bundled",
-      status: "loaded",
-    });
+    partialRegistry.plugins.push(createToolRuntimeRecord("optional-demo"));
     const fullRegistry = createToolRegistry([multiEntry, optionalEntry]);
     setActivePluginRegistry?.(
       partialRegistry as never,
@@ -1264,11 +1437,7 @@ describe("resolvePluginTools optional tools", () => {
       ],
     });
     const staleRegistry = createToolRegistry([multiEntry]);
-    staleRegistry.plugins.push({
-      id: "optional-demo",
-      origin: "bundled",
-      status: "loaded",
-    });
+    staleRegistry.plugins.push(createToolRuntimeRecord("optional-demo"));
     const freshRegistry = createToolRegistry([multiEntry, optionalEntry]);
     setActivePluginRegistry?.(
       staleRegistry as never,
@@ -1303,7 +1472,7 @@ describe("resolvePluginTools optional tools", () => {
     const factory = vi.fn(() => makeTool("x_search"));
     setActivePluginRegistry(
       {
-        plugins: [{ id: "xai", status: "loaded" }],
+        plugins: [createToolRuntimeRecord("xai")],
         tools: [
           {
             pluginId: "xai",
@@ -1386,7 +1555,7 @@ describe("resolvePluginTools optional tools", () => {
     const factory = vi.fn(() => makeTool("x_search"));
     setActivePluginRegistry(
       {
-        plugins: [{ id: "xai", status: "loaded" }],
+        plugins: [createToolRuntimeRecord("xai")],
         tools: [
           {
             pluginId: "xai",
@@ -2420,14 +2589,15 @@ describe("resolvePluginTools optional tools", () => {
     },
   );
 
-  it("reuses display descriptors with one current-context runtime instance", async () => {
+  it("assembles current factory metadata with its matching executor", async () => {
     const outputSchema = { type: "object", properties: { ok: { type: "boolean" } } };
     let hideFromChannelProgress = true;
     const factory = vi.fn((rawCtx: unknown) => {
       const ctx = rawCtx as { sessionId?: string };
       return {
         ...makeTool("cached_tool"),
-        displaySummary: "Cached tool summary",
+        description: hideFromChannelProgress ? "initial description" : "current description",
+        displaySummary: hideFromChannelProgress ? "Initial summary" : "Current summary",
         hideFromChannelProgress,
         outputSchema,
         async execute() {
@@ -2464,8 +2634,9 @@ describe("resolvePluginTools optional tools", () => {
     expect(first[0]?.outputSchema).toBe(outputSchema);
     expect(second[0]?.outputSchema).toBe(outputSchema);
     expect(first[0]?.hideFromChannelProgress).toBe(true);
-    expect(second[0]?.hideFromChannelProgress).toBe(true);
-    expect(second[0]?.displaySummary).toBe("Cached tool summary");
+    expect(second[0]?.hideFromChannelProgress).toBe(false);
+    expect(second[0]?.description).toBe("current description");
+    expect(second[0]?.displaySummary).toBe("Current summary");
     expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
 
     await expect(second[0]?.execute("call", {}, undefined)).resolves.toEqual({
@@ -2473,10 +2644,10 @@ describe("resolvePluginTools optional tools", () => {
     });
     expect(factory).toHaveBeenCalledTimes(2);
     expect(factory.mock.results[1]?.value.hideFromChannelProgress).toBe(false);
-    expect(second[0]?.hideFromChannelProgress).toBe(true);
+    expect(second[0]?.hideFromChannelProgress).toBe(false);
   });
 
-  it("executes cached plugin tools from the published generation without rescanning manifests", async () => {
+  it("executes prepared plugin tools without rescanning manifests or polling config", async () => {
     const context = createContext();
     const runtimeConfig: OpenClawConfig = {
       ...context.config,
@@ -2497,7 +2668,7 @@ describe("resolvePluginTools optional tools", () => {
     resolvePluginTools(createResolveToolsParams({ context: toolContext }));
     const [cachedTool] = resolvePluginTools(createResolveToolsParams({ context: toolContext }));
     expect(cachedTool?.name).toBe("cached_generation_tool");
-    expect(getRuntimeConfig).toHaveBeenCalledTimes(2);
+    expect(getRuntimeConfig).not.toHaveBeenCalled();
 
     const manifestRegistry = await import("./manifest-registry-installed.js");
     const manifestScan = vi
@@ -2510,7 +2681,7 @@ describe("resolvePluginTools optional tools", () => {
         content: [{ type: "text", text: "ok" }],
       });
       expect(manifestScan).not.toHaveBeenCalled();
-      expect(getRuntimeConfig).toHaveBeenCalledTimes(2);
+      expect(getRuntimeConfig).not.toHaveBeenCalled();
       expect(factory).toHaveBeenCalledTimes(2);
     } finally {
       manifestScan.mockRestore();
@@ -2664,7 +2835,7 @@ describe("resolvePluginTools optional tools", () => {
     expect(factory).toHaveBeenCalledTimes(2);
   });
 
-  it("reuses cached plugin tool descriptors across session identity changes", async () => {
+  it("binds each tool assembly to its own session context", async () => {
     const factory = vi.fn((rawCtx: unknown) => {
       const ctx = rawCtx as { sessionId?: string };
       return {
@@ -2717,7 +2888,7 @@ describe("resolvePluginTools optional tools", () => {
     ["direct-operator", "delegated"],
     ["delegated", "direct-operator"],
   ] as const)(
-    "reconstructs cached plugin executors with the current %s then %s origin",
+    "binds executors to the current %s then %s origin",
     async (firstOrigin, secondOrigin) => {
       const factory = vi.fn((rawCtx: unknown) => {
         const ctx = rawCtx as { conversationReadOrigin?: string };
@@ -2948,21 +3119,114 @@ describe("resolvePluginTools optional tools", () => {
     expect(factory).toHaveBeenCalledOnce();
   });
 
-  it.each([false, true])(
-    "does not retain bundled authority after owner replacement (assembled: %s)",
-    async (assembled) => {
+  it("does not drop a non-restricted sibling tool when the manifest contract also declares feishu_chat", () => {
+    // A non-bundled Feishu registration whose factory produces feishu_doc (not
+    // host-restricted) must survive delegated resolution even when the plugin's
+    // manifest contract still declares feishu_chat. The host-restricted gate
+    // must consider only the names the registration actually produces, not the
+    // full declared contract, or it collaterally drops unrelated tools.
+    const context = createConfiguredFeishuToolContext("delegated");
+    const factory = vi.fn(() => makeTool("feishu_doc"));
+    setRegistry(
+      [
+        {
+          pluginId: "feishu",
+          optional: false,
+          origin: "workspace",
+          source: "/tmp/feishu.js",
+          names: ["feishu_doc"],
+          declaredNames: ["feishu_doc", "feishu_chat"],
+          factory,
+        },
+      ],
+      context.config,
+    );
+
+    const tools = resolvePluginTools(createResolveToolsParams({ context }));
+
+    expectResolvedToolNames(tools, ["feishu_doc"]);
+    expect(factory).toHaveBeenCalledOnce();
+  });
+
+  it("blocks a host-restricted tool returned by a non-bundled factory in delegated runs", () => {
+    // A non-bundled Feishu registration produces feishu_doc (names), but its
+    // factory returns feishu_chat — a host-restricted conversation-read tool
+    // declared in the manifest contract. The pre-factory gate allows the
+    // registration through (names has no feishu_chat), but the post-factory
+    // check must block the returned feishu_chat in delegated runs so the
+    // restriction cannot be bypassed by factory output.
+    const context = createConfiguredFeishuToolContext("delegated");
+    const factory = vi.fn(() => [makeTool("feishu_doc"), makeTool("feishu_chat")]);
+    setRegistry(
+      [
+        {
+          pluginId: "feishu",
+          optional: false,
+          origin: "workspace",
+          source: "/tmp/feishu.js",
+          names: ["feishu_doc"],
+          declaredNames: ["feishu_doc", "feishu_chat"],
+          factory,
+        },
+      ],
+      context.config,
+    );
+
+    const tools = resolvePluginTools(createResolveToolsParams({ context }));
+
+    expectResolvedToolNames(tools, ["feishu_doc"]);
+    expect(factory).toHaveBeenCalledOnce();
+  });
+
+  it("allows a host-restricted tool returned by a bundled factory in delegated runs", () => {
+    // Bundled Feishu registrations are trusted for conversation-read tools.
+    // The post-factory check must not block feishu_chat from a bundled factory
+    // even in delegated runs, preserving bundled behavior.
+    const context = createConfiguredFeishuToolContext("delegated");
+    const factory = vi.fn(() => makeTool("feishu_chat"));
+    setRegistry(
+      [
+        {
+          pluginId: "feishu",
+          optional: false,
+          origin: "bundled",
+          source: "/tmp/bundled-feishu.js",
+          names: ["feishu_chat"],
+          declaredNames: ["feishu_chat"],
+          factory,
+        },
+      ],
+      context.config,
+    );
+
+    const tools = resolvePluginTools(createResolveToolsParams({ context }));
+
+    expectResolvedToolNames(tools, ["feishu_chat"]);
+    expect(factory).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    { assembled: false, warm: false },
+    { assembled: true, warm: false },
+    { assembled: false, warm: true },
+    { assembled: true, warm: true },
+  ])(
+    "does not retain bundled authority after owner replacement (assembled: $assembled, warm: $warm)",
+    async ({ assembled, warm }) => {
       const context = createConfiguredFeishuToolContext("delegated");
       const bundledFactory = vi.fn(() => makeTool("feishu_chat"));
-      setFeishuConversationToolRegistry({
+      const originalRegistry = setFeishuConversationToolRegistry({
         config: context.config,
         factory: bundledFactory,
         origin: "bundled",
         source: "/tmp/bundled-feishu.js",
       });
-      resolvePluginTools(createResolveToolsParams({ context }));
+      if (warm) {
+        resolvePluginTools(createResolveToolsParams({ context }));
+      }
       const [cachedTool] = resolvePluginTools(createResolveToolsParams({ context }));
       expect(cachedTool?.name).toBe("feishu_chat");
-      expect(bundledFactory).toHaveBeenCalledTimes(2);
+      expect(bundledFactory).toHaveBeenCalledTimes(warm ? 2 : 1);
       const retainedTool = assembled ? { ...cachedTool } : cachedTool;
 
       const externalFactory = vi.fn(() => makeTool("feishu_chat"));
@@ -2995,13 +3259,57 @@ describe("resolvePluginTools optional tools", () => {
       });
 
       await expect(retainedTool?.execute?.("call", {}, undefined)).rejects.toThrow(
-        "plugin tool runtime missing",
+        "tool runtime is no longer active",
       );
       expect(externalFactory).not.toHaveBeenCalled();
+      setActivePluginRegistry(
+        originalRegistry as never,
+        "reactivated-feishu",
+        "gateway-bindable",
+        "/tmp",
+      );
+      await expect(retainedTool?.execute?.("reactivated", {}, undefined)).rejects.toThrow(
+        "tool runtime is no longer active",
+      );
     },
   );
 
-  it("retains cold-loaded plugin tools for cached descriptor execution after active registry replacement", async () => {
+  it.each(["recordless", "disabled", "removed"] as const)(
+    "retains the original lifecycle authority for %s tool registrations",
+    async (ownership) => {
+      const prepareArguments = vi.fn((args: unknown) => args);
+      const execute = vi.fn(async () => ({ content: [{ type: "text", text: "ok" }] }));
+      const registry = setRegistry([
+        createNamedToolEntry("direct-owner", "direct_tool", {
+          factory: () => ({ ...makeTool("direct_tool"), prepareArguments, execute }),
+        }),
+      ]);
+      if (ownership === "recordless") {
+        registry.plugins.length = 0;
+      }
+      const [tool] = resolvePluginTools(createResolveToolsParams());
+      expect(tool?.prepareArguments?.({ input: true })).toEqual({ input: true });
+      await expect(tool?.execute("live", {})).resolves.toEqual({
+        content: [{ type: "text", text: "ok" }],
+      });
+
+      if (ownership === "disabled") {
+        registry.plugins[0]!.enabled = false;
+      } else if (ownership === "removed") {
+        registry.plugins.length = 0;
+      } else {
+        setActivePluginRegistry(createEmptyPluginRegistry());
+      }
+      expect(() => tool?.prepareArguments?.({ input: false })).toThrow(
+        "tool runtime is no longer active",
+      );
+      await expect(tool?.execute("stale", {})).rejects.toThrow("tool runtime is no longer active");
+      expect(prepareArguments).toHaveBeenCalledTimes(1);
+      expect(execute).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it("retains a scoped plugin registry across unrelated active registry replacement", async () => {
     const factory = vi.fn(() => makeTool("cached_lifecycle_tool"));
     const gatewayRegistry = setRegistry([
       {
@@ -3012,18 +3320,21 @@ describe("resolvePluginTools optional tools", () => {
         factory,
       },
     ]);
-    const first = resolvePluginTools(
-      createResolveToolsParams({
+    const scopedRegistry = createToolRegistry(gatewayRegistry.tools);
+    const first = resolvePluginTools({
+      ...createResolveToolsParams({
         toolAllowlist: ["cached_lifecycle_tool"],
         allowGatewaySubagentBinding: true,
       }),
-    );
-    const [tool] = resolvePluginTools(
-      createResolveToolsParams({
+      runtimeRegistry: scopedRegistry as never,
+    });
+    const [tool] = resolvePluginTools({
+      ...createResolveToolsParams({
         toolAllowlist: ["cached_lifecycle_tool"],
         allowGatewaySubagentBinding: true,
       }),
-    );
+      runtimeRegistry: scopedRegistry as never,
+    });
     expectResolvedToolNames(first, ["cached_lifecycle_tool"]);
     expect(tool?.name).toBe("cached_lifecycle_tool");
     expect(factory).toHaveBeenCalledTimes(2);
@@ -3036,16 +3347,9 @@ describe("resolvePluginTools optional tools", () => {
       factory: () => makeTool("unrelated_live_tool"),
     };
     const replacementRegistry = createToolRegistry([unrelatedEntry]);
-    replacementRegistry.plugins.push({
-      id: "cache-lifecycle-test",
-      origin: "bundled",
-      status: "loaded",
-    });
+    replacementRegistry.plugins.push(createToolRuntimeRecord("cache-lifecycle-test"));
     setActivePluginRegistry?.(replacementRegistry as never, "provider-runtime", "default", "/tmp");
     loadOpenClawPluginsMock.mockReset();
-    loadOpenClawPluginsMock
-      .mockReturnValueOnce(gatewayRegistry)
-      .mockReturnValue(createToolRegistry([]));
 
     await expect(tool?.execute("call-1", {}, undefined)).resolves.toEqual({
       content: [{ type: "text", text: "ok" }],
@@ -3053,14 +3357,14 @@ describe("resolvePluginTools optional tools", () => {
     await expect(tool?.execute("call-2", {}, undefined)).resolves.toEqual({
       content: [{ type: "text", text: "ok" }],
     });
-    expect(loadOpenClawPluginsMock).toHaveBeenCalledTimes(1);
+    expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
     expect(getActivePluginRegistry?.()).toBe(replacementRegistry);
     expect(getActivePluginRegistry?.()?.tools.map((entry) => entry.pluginId)).toContain(
       "unrelated-live",
     );
   });
 
-  it("does not reuse cached plugin tool descriptors across sandbox context changes", () => {
+  it("omits tools when the current factory context is sandboxed", () => {
     const factory = vi.fn((rawCtx: unknown) => {
       const ctx = rawCtx as { sandboxed?: boolean };
       return ctx.sandboxed ? null : makeTool("sandbox_sensitive_tool");
@@ -3310,10 +3614,7 @@ describe("resolvePluginTools optional tools", () => {
     });
     const heavyFactory = vi.fn(() => makeTool("heavy_tool"));
     const activeRegistry = {
-      plugins: [
-        { id: "optional-demo", status: "loaded" },
-        { id: "heavy-startup", status: "loaded" },
-      ],
+      plugins: [createToolRuntimeRecord("optional-demo"), createToolRuntimeRecord("heavy-startup")],
       tools: [
         createOptionalDemoEntry(),
         {
@@ -3370,8 +3671,8 @@ describe("resolvePluginTools optional tools", () => {
     const memorySearchFactory = vi.fn(() => [makeTool("memory_search"), makeTool("memory_get")]);
     const activeRegistry = {
       plugins: [
-        { id: "memory-core", status: "loaded" },
-        { id: "memory-lancedb", status: "disabled" },
+        createToolRuntimeRecord("memory-core"),
+        { id: "memory-lancedb", origin: "bundled", status: "disabled" },
       ],
       tools: [
         {
@@ -3435,7 +3736,7 @@ describe("resolvePluginTools optional tools", () => {
       });
     });
     const loadedRegistry = {
-      plugins: [{ id: "memory-core", status: "loaded" }],
+      plugins: [createToolRuntimeRecord("memory-core")],
       tools: [
         {
           pluginId: "memory-core",
@@ -3450,7 +3751,7 @@ describe("resolvePluginTools optional tools", () => {
     };
     setActivePluginRegistry(
       {
-        plugins: [{ id: "memory-core", status: "loaded" }],
+        plugins: [createToolRuntimeRecord("memory-core")],
         tools: [],
         diagnostics: [],
       } as never,
@@ -3605,6 +3906,72 @@ describe("resolvePluginTools optional tools", () => {
     const tools = resolvePluginTools(createResolveToolsParams({ toolAllowlist: ["*"] }));
 
     expectResolvedToolNames(tools, ["optional_tool"]);
+  });
+  it("reports changed config diagnostics once without blaming the dependent plugin (#137694)", () => {
+    const logger = { error: vi.fn() };
+    const loggedConfigPaths = createDedupeCache({ ttlMs: 0, maxSize: 4096 });
+    let message = "first error";
+    setRegistry([
+      createNamedToolEntry("memory-wiki", "memory_wiki_tool", {
+        factory: () =>
+          throwInvalidConfig({
+            configPath: "/tmp/openclaw.json",
+            issues: [{ path: "plugins.entries.owner.config", message }],
+            logger,
+            loggedConfigPaths,
+          }),
+      }),
+    ]);
+    const errorSpy = vi.fn();
+    loggingState.rawConsole = { log: vi.fn(), info: vi.fn(), warn: vi.fn(), error: errorSpy };
+    setLoggerOverride({ level: "silent", consoleLevel: "error" });
+
+    for (const nextMessage of ["first error", "first error", "second error", "second error"]) {
+      message = nextMessage;
+      expectResolvedToolNames(
+        resolvePluginTools(createResolveToolsParams({ toolAllowlist: ["*"] })),
+        [],
+      );
+    }
+    expect(logger.error.mock.calls).toEqual([
+      ["Invalid config at /tmp/openclaw.json:\n- plugins.entries.owner.config: first error"],
+      ["Invalid config at /tmp/openclaw.json:\n- plugins.entries.owner.config: second error"],
+    ]);
+    expect(errorSpy).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["unlogged invalid-config", createInvalidConfigError("/tmp/openclaw.json", "invalid property")],
+    ["ordinary factory", new Error("factory unavailable")],
+    [
+      "unreadable-message factory",
+      Object.defineProperty(new Error("unreadable message"), "message", {
+        get() {
+          throw new Error("message getter failed");
+        },
+      }),
+    ],
+  ])("still logs %s errors from plugin factories (#137694)", (_kind, error) => {
+    setRegistry([
+      createNamedToolEntry("memory-wiki", "memory_wiki_tool", {
+        factory: () => {
+          throw error;
+        },
+      }),
+      createNamedToolEntry("healthy-plugin", "healthy_tool"),
+    ]);
+    const errorSpy = vi.fn();
+    loggingState.rawConsole = { log: vi.fn(), info: vi.fn(), warn: vi.fn(), error: errorSpy };
+    setLoggerOverride({ level: "silent", consoleLevel: "error" });
+
+    expectResolvedToolNames(
+      resolvePluginTools(createResolveToolsParams({ toolAllowlist: ["*"] })),
+      ["healthy_tool"],
+    );
+    expect(errorSpy).toHaveBeenCalledOnce();
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining("plugin tool failed (memory-wiki)"),
+    );
   });
 });
 

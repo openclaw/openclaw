@@ -360,6 +360,33 @@ describe("prepareSqliteReadOnlyLocation", () => {
     expect(fs.readdirSync(path.join(cacheRoot, "openclaw"))).toEqual([]);
   });
 
+  it.each([
+    { mode: "async", prepare: prepareSqliteReadOnlyLocationInProcess },
+    { mode: "sync", prepare: prepareSqliteReadOnlyLocationSyncInProcess },
+  ])("preserves malformed header diagnostics during $mode inspection", async ({ prepare }) => {
+    const databasePath = createTempDatabasePath();
+    fs.writeFileSync(databasePath, "not a sqlite database");
+    const before = readFamily(databasePath);
+    let prepared: Awaited<ReturnType<typeof prepare>> | undefined;
+    try {
+      await expect(
+        (async () => {
+          prepared = await prepare(databasePath);
+          const sqlite = requireNodeSqlite();
+          const snapshot = new sqlite.DatabaseSync(prepared.location, { readOnly: true });
+          try {
+            snapshot.prepare("PRAGMA user_version;").get();
+          } finally {
+            snapshot.close();
+          }
+        })(),
+      ).rejects.toThrow("file is not a database");
+    } finally {
+      prepared?.cleanup();
+    }
+    expect(readFamily(databasePath)).toEqual(before);
+  });
+
   it("preserves source corruption without reporting a snapshot staging quota failure", async () => {
     const cacheRoot = tempDirs.make("openclaw-sqlite-snapshot-corrupt-source-");
     const sqlite = requireNodeSqlite();
@@ -507,6 +534,38 @@ describe("prepareSqliteReadOnlyLocation", () => {
     await expect(prepareSqliteReadOnlyLocation(missingPath)).rejects.toThrow(
       /SQLite read-only worker .*ENOENT.*\(code=ENOENT\)/u,
     );
+  });
+
+  it.each([
+    {
+      boundary: "tail start",
+      stderr: `🤖${"x".repeat(3_999)}`,
+      expectedTail: "x".repeat(3_999),
+    },
+    {
+      boundary: "Node stderr buffer end",
+      stderr: `${"x".repeat(1024 * 1024 - 1)}🤖${"x".repeat(4_096)}`,
+      expectedTail: `${"x".repeat(3_999)}�`,
+    },
+  ])("keeps worker stderr valid at the $boundary", async ({ stderr, expectedTail }) => {
+    const tempDir = tempDirs.make("openclaw-sqlite-readonly-stderr-");
+    const preloadPath = path.join(tempDir, "stderr-preload.cjs");
+    fs.writeFileSync(
+      preloadPath,
+      `process.once("beforeExit", () => process.stderr.write(${JSON.stringify(stderr)}));`,
+    );
+    const missingPath = path.join(tempDir, "missing.db");
+
+    await withEnvAsync({ NODE_OPTIONS: `--require=${preloadPath}` }, async () => {
+      let message = "";
+      try {
+        await prepareSqliteReadOnlyLocation(missingPath);
+      } catch (error) {
+        message = error instanceof Error ? error.message : String(error);
+      }
+
+      expect(message.split("stderr (tail): ")[1]).toBe(expectedTail);
+    });
   });
 
   it("propagates sync public entry point failures", () => {

@@ -41,6 +41,7 @@ scenario:
       finalMarker: CLAUDE-COMPACTION-TELEGRAM-FINAL-OK
       fixtureSource: |-
         #!/usr/bin/env node
+        const { createInterface } = require("node:readline");
         if (process.argv.includes("auth") && process.argv.includes("status")) {
           process.stdout.write(`${JSON.stringify({ loggedIn: true, authMethod: "fixture" })}\n`);
           process.exit(0);
@@ -51,24 +52,42 @@ scenario:
         }
         const sessionIndex = process.argv.indexOf("--session-id");
         const sessionId = sessionIndex >= 0 ? process.argv[sessionIndex + 1] : "00000000-0000-4000-8000-000000000001";
-        const frames = [
-          { type: "init", session_id: sessionId },
-          { type: "assistant", message: { id: "msg-commentary-1", content: [{ type: "text", text: "CLAUDE-COMMENTARY-ONE" }], stop_reason: null } },
-          { type: "assistant", message: { id: "msg-commentary-1", content: [{ type: "text", text: "CLAUDE-COMMENTARY-ONE" }, { type: "tool_use", id: "tool-1", name: "Read", input: { file_path: "fixture-one.txt" } }], stop_reason: null } },
-          { type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "tool-1", content: "fixture one", is_error: false }] } },
-          { type: "system", subtype: "status", status: "compacting" },
-          { type: "system", subtype: "status", status: null, compact_result: "success" },
-          { type: "assistant", message: { id: "msg-commentary-2", content: [{ type: "text", text: "CLAUDE-COMMENTARY-TWO" }], stop_reason: null } },
-          { type: "assistant", message: { id: "msg-commentary-2", content: [{ type: "text", text: "CLAUDE-COMMENTARY-TWO" }, { type: "tool_use", id: "tool-2", name: "Read", input: { file_path: "fixture-two.txt" } }], stop_reason: null } },
-          { type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "tool-2", content: "fixture two", is_error: false }] } },
-          { type: "assistant", message: { id: "msg-final", content: [{ type: "text", text: "CLAUDE-COMPACTION-TELEGRAM-FINAL-OK" }], stop_reason: "end_turn" } },
-          { type: "result", subtype: "success", session_id: sessionId, result: "CLAUDE-COMPACTION-TELEGRAM-FINAL-OK", is_error: false }
-        ];
+        const send = (frame) => process.stdout.write(`${JSON.stringify(frame)}\n`);
         const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-        (async () => {
+        const emitTurn = async () => {
+          const frames = [
+            { type: "init", session_id: sessionId },
+            { type: "assistant", message: { id: "msg-commentary-1", content: [{ type: "text", text: "CLAUDE-COMMENTARY-ONE" }], stop_reason: null } },
+            { type: "assistant", message: { id: "msg-commentary-1", content: [{ type: "text", text: "CLAUDE-COMMENTARY-ONE" }, { type: "tool_use", id: "tool-1", name: "Read", input: { file_path: "fixture-one.txt" } }], stop_reason: null } },
+            { type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "tool-1", content: "fixture one", is_error: false }] } },
+            { type: "system", subtype: "status", status: "compacting" },
+            { type: "system", subtype: "status", status: null, compact_result: "success" },
+            { type: "assistant", message: { id: "msg-commentary-2", content: [{ type: "text", text: "CLAUDE-COMMENTARY-TWO" }], stop_reason: null } },
+            { type: "assistant", message: { id: "msg-commentary-2", content: [{ type: "text", text: "CLAUDE-COMMENTARY-TWO" }, { type: "tool_use", id: "tool-2", name: "Read", input: { file_path: "fixture-two.txt" } }], stop_reason: null } },
+            { type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "tool-2", content: "fixture two", is_error: false }] } },
+            { type: "assistant", message: { id: "msg-final", content: [{ type: "text", text: "CLAUDE-COMPACTION-TELEGRAM-FINAL-OK" }], stop_reason: "end_turn" } },
+            { type: "result", subtype: "success", session_id: sessionId, result: "CLAUDE-COMPACTION-TELEGRAM-FINAL-OK", is_error: false }
+          ];
           for (const frame of frames) {
-            process.stdout.write(`${JSON.stringify(frame)}\n`);
+            send(frame);
             await sleep(frame.type === "system" && frame.status === "compacting" ? 1500 : 250);
+          }
+        };
+        (async () => {
+          for await (const line of createInterface({ input: process.stdin })) {
+            const message = JSON.parse(line);
+            if (message.type === "control_request" && message.request?.subtype === "initialize") {
+              send({
+                type: "control_response",
+                response: {
+                  subtype: "success",
+                  request_id: message.request_id,
+                  response: { commands: [], models: [] }
+                }
+              });
+            } else if (message.type === "user") {
+              await emitTurn();
+            }
           }
         })().catch((error) => {
           process.stderr.write(`${error instanceof Error ? error.stack : String(error)}\n`);

@@ -5,6 +5,7 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { DEFAULT_SIDEBAR_ENTRIES, normalizeSidebarEntries } from "../app-navigation.ts";
+import { configuredUiDevGateway } from "../dev-gateway.ts";
 import { isSupportedLocale } from "../i18n/index.ts";
 import { normalizeBoardSessionViews, type BoardSessionViews } from "../lib/board/settings.ts";
 import { getSafeLocalStorage, getSafeSessionStorage } from "../local-storage.ts";
@@ -69,21 +70,6 @@ const CSS_WIDTH_IDENTIFIER_RE = /[A-Za-z][A-Za-z0-9-]*/g;
 const CSS_WIDTH_SIMPLE_RE = /^(?:\d+(?:\.\d+)?|\.\d+)(?:px|rem|em|ch|vw|vh|vmin|vmax|%)$/i;
 const CSS_WIDTH_MAX_LENGTH = 96;
 
-function hasBalancedParentheses(value: string): boolean {
-  let depth = 0;
-  for (const char of value) {
-    if (char === "(") {
-      depth++;
-    } else if (char === ")") {
-      depth--;
-      if (depth < 0) {
-        return false;
-      }
-    }
-  }
-  return depth === 0;
-}
-
 function hasAllowedWidthIdentifiers(value: string): boolean {
   for (const match of value.matchAll(CSS_WIDTH_IDENTIFIER_RE)) {
     const identifier = match[0].toLowerCase();
@@ -114,7 +100,7 @@ export function normalizeChatMessageMaxWidth(value: unknown): string | undefined
   }
   if (
     !CSS_WIDTH_ALLOWED_CHARS.test(normalized) ||
-    !hasBalancedParentheses(normalized) ||
+    !CSS.supports("max-width", normalized) ||
     !hasAllowedWidthIdentifiers(normalized)
   ) {
     return undefined;
@@ -194,6 +180,7 @@ export const UI_APPEARANCE_DEFAULTS = {
 
 export type UiSettings = {
   gatewayUrl: string;
+  // In-memory Gateway secret; only token-mode hello may persist it.
   token: string;
   sessionKey: string;
   lastActiveSessionKey: string;
@@ -263,6 +250,10 @@ function deriveDefaultGatewayUrl(): { pageUrl: string; effectiveUrl: string } {
   const proto = location.protocol === "https:" ? "wss" : "ws";
   const basePath = resolveControlUiPaths(location.pathname)[0];
   const pageUrl = `${proto}://${location.host}${basePath}`;
+  const devGateway = configuredUiDevGateway();
+  if (devGateway) {
+    return { pageUrl, effectiveUrl: devGateway.gatewayUrl };
+  }
   if (!isViteDevPage()) {
     return { pageUrl, effectiveUrl: pageUrl };
   }
@@ -455,7 +446,9 @@ export function loadSettings(gatewayUrl = livePreferenceOwner?.gatewayUrl()): Ui
   return { ...preferences, token: loadSessionToken(preferences.gatewayUrl) };
 }
 
-export function loadUiPreferences(targetGatewayUrl?: string): UiPreferences {
+export function loadUiPreferences(
+  targetGatewayUrl = configuredUiDevGateway()?.gatewayUrl,
+): UiPreferences {
   const cached = unpersistedSettings;
   if (
     cached &&
@@ -652,7 +645,6 @@ export function loadLocalUserIdentity(): LocalUserIdentity {
 }
 
 function persistSettings(next: UiSettings, options: { selectGateway?: boolean } = {}) {
-  persistSessionToken(next.gatewayUrl, next.token);
   const storage = getSafeLocalStorage();
   const scope = gatewayOriginScope(next.gatewayUrl);
   const scopedKey = settingsKeyForGateway(next.gatewayUrl);

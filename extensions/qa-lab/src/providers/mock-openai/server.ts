@@ -46,8 +46,7 @@ import {
   QA_THINKING_VISIBILITY_MAX_PROMPT_RE,
   QA_EMPTY_RESPONSE_RECOVERY_PROMPT_RE,
   QA_EMPTY_RESPONSE_EXHAUSTION_PROMPT_RE,
-  QA_EMPTY_RESPONSE_SIDE_EFFECT_RECOVERY_PROMPT_RE,
-  QA_EMPTY_RESPONSE_SIDE_EFFECT_EXHAUSTION_PROMPT_RE,
+  QA_EMPTY_RESPONSE_SIDE_EFFECT_PROMPT_RE,
   QA_REPEATED_REQUEST_RECOVERY_PROMPT_RE,
   QA_REPEATED_REQUEST_QUEUED_REPLY_PROMPT_RE,
   QA_REPEATED_REQUEST_QUEUED_REPLY_MARKER,
@@ -177,7 +176,7 @@ import {
   extractAllToolOutputText,
   extractUserTextAfterLatestToolOutput,
   extractSlackMpimRetainedBotNonce,
-  extractAllUserTexts,
+  extractUserTurnTexts,
   extractInstructionsText,
   extractAllRequestTexts,
   buildWhatsAppPendingHistoryReply,
@@ -332,10 +331,13 @@ function isStreamingToolProgressContinuationText(text: string) {
   );
 }
 
-function extractLatestScenarioFamilyPrompt(texts: string[]) {
+function extractLatestScenarioFamilyPrompt(
+  texts: string[],
+  familyPattern = QA_STREAMING_TOOL_PROGRESS_FAMILY_PROMPT_RE,
+) {
   let envelope = "";
   for (const text of texts.toReversed()) {
-    if (QA_STREAMING_TOOL_PROGRESS_FAMILY_PROMPT_RE.test(text)) {
+    if (familyPattern.test(text)) {
       envelope = text;
       break;
     }
@@ -346,10 +348,7 @@ function extractLatestScenarioFamilyPrompt(texts: string[]) {
   if (!envelope) {
     return "";
   }
-  const pattern = new RegExp(
-    QA_STREAMING_TOOL_PROGRESS_FAMILY_PROMPT_RE.source,
-    `${QA_STREAMING_TOOL_PROGRESS_FAMILY_PROMPT_RE.flags}g`,
-  );
+  const pattern = new RegExp(familyPattern.source, `${familyPattern.flags}g`);
   let latestIndex = -1;
   for (const match of envelope.matchAll(pattern)) {
     latestIndex = match.index;
@@ -992,7 +991,7 @@ async function buildResponsesPayload(
   const pendingCommandProgress = (
     progressInput: ResponsesInputItem[],
     command: string,
-    allowsFailure = false,
+    expectedOutcome: "success" | "failure" | "either" = "success",
   ) => {
     const progress = readProgressCommand(progressInput, command);
     if (progress.error) {
@@ -1005,7 +1004,12 @@ async function buildResponsesPayload(
         timeout: 30_000,
       });
     }
-    return progress.failed && !allowsFailure ? buildAssistantEvents("BUG-TOOL-FAILED") : null;
+    if (expectedOutcome === "failure" && !progress.failed) {
+      return buildAssistantEvents("BUG-TOOL-DID-NOT-FAIL");
+    }
+    return progress.failed && expectedOutcome === "success"
+      ? buildAssistantEvents("BUG-TOOL-FAILED")
+      : null;
   };
   const allInputText = extractAllRequestTexts(input, body);
   const hasCompactionRetryDurableContext = allInputText.includes(
@@ -1171,7 +1175,7 @@ async function buildResponsesPayload(
     (typeof toolJson?.error === "string" && toolJson.error.trim().length > 0);
   const promptExactReplyDirective = extractExactReplyDirective(prompt);
   const promptExactMarkerDirective = extractExactMarkerDirective(prompt);
-  const allUserTexts = extractAllUserTexts(input);
+  const allUserTexts = extractUserTurnTexts(input);
   const allUserText = allUserTexts.join("\n");
   const scenarioFamilyPrompt = extractLatestScenarioFamilyPrompt(allUserTexts) || prompt;
   const scenarioFamilyReplyDirective =
@@ -1204,14 +1208,17 @@ async function buildResponsesPayload(
   const hasEmptyResponseRetryInstruction =
     allInputText.includes(QA_EMPTY_RESPONSE_RETRY_NEEDLE) ||
     allInputText.includes(QA_SETTLED_TOOL_TERMINAL_CONTINUATION_NEEDLE);
-  const isActiveEmptyResponseSideEffectRecovery =
-    QA_EMPTY_RESPONSE_SIDE_EFFECT_RECOVERY_PROMPT_RE.test(prompt) ||
-    (prompt.includes(QA_SETTLED_TOOL_TERMINAL_CONTINUATION_NEEDLE) &&
-      QA_EMPTY_RESPONSE_SIDE_EFFECT_RECOVERY_PROMPT_RE.test(allInputText));
-  const isActiveEmptyResponseSideEffectExhaustion =
-    QA_EMPTY_RESPONSE_SIDE_EFFECT_EXHAUSTION_PROMPT_RE.test(prompt) ||
-    (prompt.includes(QA_SETTLED_TOOL_TERMINAL_CONTINUATION_NEEDLE) &&
-      QA_EMPTY_RESPONSE_SIDE_EFFECT_EXHAUSTION_PROMPT_RE.test(allInputText));
+  const currentPrompt = splitMockConversationContext(prompt).current;
+  const isSettledToolContinuation = currentPrompt.includes(
+    QA_SETTLED_TOOL_TERMINAL_CONTINUATION_NEEDLE,
+  );
+  // Only a current continuation may reuse a previous scenario prompt.
+  const sideEffectPrompt = extractLatestScenarioFamilyPrompt(
+    isSettledToolContinuation ? allUserTexts : [currentPrompt],
+    QA_EMPTY_RESPONSE_SIDE_EFFECT_PROMPT_RE,
+  );
+  const sideEffectKind =
+    QA_EMPTY_RESPONSE_SIDE_EFFECT_PROMPT_RE.exec(sideEffectPrompt)?.[1]?.toLowerCase();
   const hasCallableCodeMode = hasCodeModeExecSurface(toolDeclarationBody);
   const canCallSessionsSpawn =
     hasToolDefinition(toolDeclarationBody, "sessions_spawn") || hasCallableCodeMode;
@@ -1525,20 +1532,21 @@ async function buildResponsesPayload(
   if (/remember this fact/i.test(prompt)) {
     return buildAssistantEvents(buildAssistantText(input, body));
   }
-  if (isActiveEmptyResponseSideEffectRecovery || isActiveEmptyResponseSideEffectExhaustion) {
+  if (sideEffectKind) {
+    if (isSettledToolContinuation) {
+      return buildAssistantEvents(
+        sideEffectKind === "exhaustion"
+          ? ""
+          : (extractExactMarkerDirective(sideEffectPrompt) ??
+              extractExactReplyDirective(sideEffectPrompt) ??
+              "TELEGRAM-EMPTY-WRITE-RECOVERED-OK"),
+      );
+    }
     if (!hasCompletedToolOutput) {
       return buildToolCallEventsWithArgs("write", {
         path: "qa-empty-response-side-effect.txt",
         content: "side effect completed once\n",
       });
-    }
-    if (isActiveEmptyResponseSideEffectExhaustion) {
-      return buildAssistantEvents("");
-    }
-    if (allInputText.includes(QA_SETTLED_TOOL_TERMINAL_CONTINUATION_NEEDLE)) {
-      return buildAssistantEvents(
-        exactMarkerDirective ?? exactReplyDirective ?? "TELEGRAM-EMPTY-WRITE-RECOVERED-OK",
-      );
     }
     return buildAssistantEvents("");
   }
@@ -1819,7 +1827,11 @@ async function buildResponsesPayload(
       const pending = pendingCommandProgress(
         progressInput,
         command,
-        /completes or fails/iu.test(scenarioFamilyPrompt),
+        /command fails/iu.test(scenarioFamilyPrompt)
+          ? "failure"
+          : /completes or fails/iu.test(scenarioFamilyPrompt)
+            ? "either"
+            : "success",
       );
       if (pending) {
         return pending;

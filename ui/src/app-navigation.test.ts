@@ -23,7 +23,7 @@ import {
 import { createApplicationRouter, routeIdFromPath, type RouteId } from "./app-routes.ts";
 import { sessionRefFromPath } from "./app-session-route-paths.ts";
 import { sessionNavigationTarget } from "./lib/sessions/route-navigation.ts";
-import { pluginTabKey, pluginTabRefFromSearch, pluginTabSearch } from "./pages/plugin/route.ts";
+import { pluginTabKey, pluginTabRefFromSearch } from "./pages/plugin/route.ts";
 
 /**
  * All route identifiers derived from core sidebar routes, plugin-owned native
@@ -268,11 +268,12 @@ describe("subtitleForRoute", () => {
       agents: "Workspaces, tools, identities.",
       skills: "Skills and API keys.",
       plugins: "Install and manage optional capabilities.",
-      "skill-workshop": "Review, refine, and apply proposals before they become live skills.",
+      "skill-workshop":
+        "The skills your agent uses now, suggestions waiting for review, and past decisions.",
       devices: "Paired devices, pairing approvals, and exec bindings.",
       "cloud-workers": "Profiles and machine sizes for cloud sessions.",
       profile: "Your display name, avatar, and identity on this gateway.",
-      communications: "Messages and text-to-speech settings.",
+      communications: "Messages, text-to-speech, and meeting capture settings.",
       appearance: "Theme and UI settings.",
       lobsterdex: "Every lobster palette that has visited this browser.",
       automation: "Commands, hooks, automations, and plugins.",
@@ -573,13 +574,13 @@ describe("plugin tabs route", () => {
   it("round-trips the shared /plugin route", () => {
     expect(pathForRoute("plugin", "")).toBe("/plugin");
     expect(routeIdFromPath("/plugin", "")).toBe("plugin");
-    // The tab id travels in the search, not the pathname.
+    // Generic tab URLs carry their reference in the search.
     expect(routeIdFromPath("/plugin/logbook", "")).toBeNull();
   });
 
-  it("round-trips a namespaced tab reference through the search", () => {
+  it("reads a namespaced tab reference from the generic URL", () => {
     const ref = { pluginId: "logbook", id: "logbook" };
-    expect(pluginTabRefFromSearch(pluginTabSearch(ref))).toEqual(ref);
+    expect(pluginTabRefFromSearch("?plugin=logbook&id=logbook")).toEqual(ref);
     expect(pluginTabKey(ref)).toBe("logbook/logbook");
     // Distinct plugins with the same local tab id stay distinct.
     expect(pluginTabKey({ pluginId: "other", id: "logbook" })).not.toBe(pluginTabKey(ref));

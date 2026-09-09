@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# Bash 5.3+ can deadlock writing heredoc pipes on macOS before the reader starts.
+if [[ ${OSTYPE:-} == darwin* && $BASH != /bin/bash ]] && ((BASH_VERSINFO[0] > 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 3))); then
+  exec /bin/bash "$0" "$@"
+fi
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -74,8 +78,8 @@ openclaw_e2e_eval_test_state_from_b64 \"\${OPENCLAW_TEST_STATE_SCRIPT_B64:?missi
 openclaw_e2e_write_state_env
 entry=\"\$(openclaw_e2e_resolve_entrypoint)\"
 mkdir -p /tmp/openclaw-browser-cdp
-find dist -maxdepth 1 -type f -name 'pw-ai-*.js' ! -name 'pw-ai-state-*' -exec mv {} /tmp/openclaw-browser-cdp/ \;
-if find dist -maxdepth 1 -type f -name 'pw-ai-*.js' ! -name 'pw-ai-state-*' | grep -q .; then
+find dist -maxdepth 1 -type f \( -name 'pw-ai-*.js' -o -name 'pw-ai-*.mjs' \) ! -name 'pw-ai-state-*' -exec mv {} /tmp/openclaw-browser-cdp/ \;
+if find dist -maxdepth 1 -type f \( -name 'pw-ai-*.js' -o -name 'pw-ai-*.mjs' \) ! -name 'pw-ai-state-*' | grep -q .; then
   echo 'failed to disable Playwright AI snapshot chunk for raw CDP smoke' >&2
   exit 1
 fi

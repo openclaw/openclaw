@@ -3,7 +3,11 @@ import { closedObject } from "./closed-object.js";
 import { HumanMentionsSchema } from "./human-mentions.js";
 import { ChatAttachmentsSchema } from "./logs-chat.js";
 import { NonEmptyString, SessionLabelString } from "./primitives.js";
-import { SessionPermissionModeSchema, SessionToolOverridesSchema } from "./sessions-row.js";
+import {
+  SessionPermissionModeSchema,
+  SessionRepositorySourceSchema,
+  SessionToolOverridesSchema,
+} from "./sessions-row.js";
 import { SessionVisibilitySchema } from "./sessions-sharing-values.js";
 
 export const SESSION_CREATE_RETRY_WINDOW_MS = 4 * 60_000;
@@ -57,6 +61,8 @@ export const SessionsCreateParamsSchema = closedObject({
         "When sessions.create creates a distinct child, whether that child succeeds its parent and emits the parent's terminal session_end. Requires parentSessionKey and emitCommandHooks. False keeps the parent active; omission preserves legacy behavior.",
     }),
   ),
+  // Applies only to the initial turn, matching chat.send (0 = no timeout).
+  timeoutMs: Type.Optional(Type.Integer({ minimum: 0 })),
   task: Type.Optional(Type.String()),
   message: Type.Optional(Type.String()),
   mentions: Type.Optional(HumanMentionsSchema),
@@ -74,6 +80,8 @@ export const SessionsCreateParamsSchema = closedObject({
       description: "Prepare a remote project before the initial agent turn; operator.write.",
     }),
   ),
+  /** Remote-owned source; create, dispatch, then send the initial turn. */
+  repository: Type.Optional(SessionRepositorySourceSchema),
   worktree: Type.Optional(Type.Boolean()),
   worktreeBaseRef: Type.Optional(
     Type.String({

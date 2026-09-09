@@ -21,6 +21,7 @@ import {
 import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
 import type { TemplateContext } from "../templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
+import type { AgentTurnParams } from "./agent-runner-execution.types.js";
 import type { buildEmbeddedRunExecutionParams } from "./agent-runner-utils.js";
 import type { FollowupRun } from "./queue.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
@@ -265,7 +266,10 @@ vi.mock("./current-turn-images.js", () => ({
   resolveCurrentTurnImages: (params: unknown) => state.resolveCurrentTurnImagesMock(params),
 }));
 
-vi.mock("./agent-runner-utils.js", () => ({
+vi.mock("./agent-runner-utils.js", async () => ({
+  resolveRunThinkingLevelForFallbackCandidate: (
+    await vi.importActual<typeof import("./agent-runner-utils.js")>("./agent-runner-utils.js")
+  ).resolveRunThinkingLevelForFallbackCandidate,
   buildEmbeddedRunExecutionParams: (
     params: Parameters<typeof buildEmbeddedRunExecutionParams>[0],
   ) =>
@@ -398,6 +402,7 @@ export type EmbeddedAgentParams = {
   sessionKey?: string;
   prompt?: string;
   transcriptPrompt?: string;
+  currentInboundContext?: RunEmbeddedAgentInternalParams["currentInboundContext"];
   lifecycleGeneration?: string;
   onDeferredLifecycleOwner?: (owner: DeferredEmbeddedRunLifecycleOwner) => void;
   onCompactionAccounting?: RunEmbeddedAgentInternalParams["onCompactionAccounting"];
@@ -612,6 +617,37 @@ export function makeTestSessionStorePath(): string {
     useAutoCleanupTempDirTracker(onTestFinished).make("openclaw-agent-execution-store-"),
     "sessions.json",
   );
+}
+
+export function createAgentTurnExecutionDefaults() {
+  return {
+    blockReplyPipeline: null,
+    blockStreamingEnabled: false,
+    resolvedBlockStreamingBreak: "message_end",
+    applyReplyToMode: (payload) => payload,
+    shouldEmitToolResult: () => true,
+    shouldEmitToolOutput: () => false,
+    pendingToolTasks: new Set<Promise<void>>(),
+    resetSessionAfterRoleOrderingConflict: async () => false,
+    isHeartbeat: false,
+    sessionKey: "main",
+    getActiveSessionEntry: () => undefined,
+    resolvedVerboseLevel: "off",
+  } satisfies Partial<AgentTurnParams>;
+}
+
+export function createRunAgentTurnParams(followupRun: FollowupRun): AgentTurnParams {
+  return {
+    commandBody: "hello",
+    followupRun,
+    sessionCtx: {
+      Provider: "whatsapp",
+      MessageSid: "msg",
+    },
+    opts: {},
+    typingSignals: createMockTypingSignaler(),
+    ...createAgentTurnExecutionDefaults(),
+  };
 }
 
 export function createMinimalRunAgentTurnParams(overrides?: {

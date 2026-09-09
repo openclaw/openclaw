@@ -14,6 +14,8 @@ import {
 } from "../media-understanding/entry-capabilities.js";
 import { buildMediaUnderstandingCapabilityRegistry } from "../media-understanding/provider-capability-registry.js";
 import { resolveVoiceModelRefs } from "../tts/voice-models.js";
+import { getPath } from "./path-utils.js";
+import { PROVIDER_REQUEST_SECRET_FIELD_GROUPS } from "./provider-request-secret-fields.js";
 import { collectAgentMemorySearchAssignments } from "./runtime-config-collectors-memory.js";
 import { collectAgentSandboxAssignments } from "./runtime-config-collectors-sandbox.js";
 import { collectTtsApiKeyAssignments } from "./runtime-config-collectors-tts.js";
@@ -105,7 +107,6 @@ function collectModelProviderAssignments(params: {
         context: params.context,
         active: providerIsActive,
         inactiveReason: "provider is disabled.",
-        collectTransportSecrets: true,
         owner,
       });
     }
@@ -383,65 +384,17 @@ function collectProviderRequestAssignments(params: {
   context: ResolverContext;
   active?: boolean;
   inactiveReason?: string;
-  collectTransportSecrets?: boolean;
   owner?: SecretAssignmentOwner;
 }): void {
-  const headers = isRecord(params.request.headers) ? params.request.headers : undefined;
-  if (headers) {
-    for (const [headerKey, headerValue] of Object.entries(headers)) {
-      collectRuntimeSecretInputAssignment({
-        value: headerValue,
-        path: `${params.pathPrefix}.headers.${headerKey}`,
-        expected: "string",
-        defaults: params.defaults,
-        context: params.context,
-        active: params.active,
-        inactiveReason: params.inactiveReason,
-        owner: params.owner,
-        apply: (value) => {
-          headers[headerKey] = value;
-        },
-      });
+  for (const { path, fields } of PROVIDER_REQUEST_SECRET_FIELD_GROUPS) {
+    const target = getPath(params.request, [...path]);
+    if (!isRecord(target)) {
+      continue;
     }
-  }
-
-  const auth = isRecord(params.request.auth) ? params.request.auth : undefined;
-  if (auth) {
-    collectRuntimeSecretInputAssignment({
-      value: auth.token,
-      path: `${params.pathPrefix}.auth.token`,
-      expected: "string",
-      defaults: params.defaults,
-      context: params.context,
-      active: params.active,
-      inactiveReason: params.inactiveReason,
-      owner: params.owner,
-      apply: (value) => {
-        auth.token = value;
-      },
-    });
-    collectRuntimeSecretInputAssignment({
-      value: auth.value,
-      path: `${params.pathPrefix}.auth.value`,
-      expected: "string",
-      defaults: params.defaults,
-      context: params.context,
-      active: params.active,
-      inactiveReason: params.inactiveReason,
-      owner: params.owner,
-      apply: (value) => {
-        auth.value = value;
-      },
-    });
-  }
-
-  const collectTlsAssignments = (tls: Record<string, unknown> | undefined, pathPrefix: string) => {
-    if (!tls) {
-      return;
-    }
-    for (const key of ["ca", "cert", "key", "passphrase"] as const) {
+    const pathPrefix = `${params.pathPrefix}.${path.join(".")}`;
+    const collect = (key: string, value: unknown) => {
       collectRuntimeSecretInputAssignment({
-        value: tls[key],
+        value,
         path: `${pathPrefix}.${key}`,
         expected: "string",
         defaults: params.defaults,
@@ -449,25 +402,20 @@ function collectProviderRequestAssignments(params: {
         active: params.active,
         inactiveReason: params.inactiveReason,
         owner: params.owner,
-        apply: (value) => {
-          tls[key] = value;
+        apply: (resolved) => {
+          target[key] = resolved;
         },
       });
+    };
+    if (fields === "*") {
+      for (const [key, value] of Object.entries(target)) {
+        collect(key, value);
+      }
+    } else {
+      for (const key of fields) {
+        collect(key, target[key]);
+      }
     }
-  };
-
-  if (params.collectTransportSecrets !== false) {
-    // Transport credentials can live below direct TLS or proxy TLS config; model-provider
-    // request surfaces opt out when those nested transport secrets are owned elsewhere.
-    collectTlsAssignments(
-      isRecord(params.request.tls) ? params.request.tls : undefined,
-      `${params.pathPrefix}.tls`,
-    );
-    const proxy = isRecord(params.request.proxy) ? params.request.proxy : undefined;
-    collectTlsAssignments(
-      isRecord(proxy?.tls) ? proxy.tls : undefined,
-      `${params.pathPrefix}.proxy.tls`,
-    );
   }
 }
 
@@ -491,70 +439,44 @@ function collectMediaRequestAssignments(params: {
   const isCapabilityEnabled = (capability: (typeof capabilityKeys)[number]) =>
     (isRecord(media[capability]) ? media[capability] : undefined)?.enabled !== false;
 
-  const collectModelAssignments = (
-    models: unknown,
-    pathPrefix: string,
-    resolveOwnerId: (index: number) => string,
-    resolveActivity: (rawModel: Record<string, unknown>) => {
-      active: boolean;
-      inactiveReason: string;
-    },
-  ) => {
-    if (!Array.isArray(models)) {
-      return;
-    }
+  const models = media.models;
+  if (Array.isArray(models)) {
     models.forEach((rawModel, index) => {
       if (!isRecord(rawModel) || !isRecord(rawModel.request)) {
         return;
       }
-      const { active, inactiveReason } = resolveActivity(rawModel);
+      const entry = rawModel as MediaUnderstandingModelConfig;
+      const configuredCapabilities = resolveConfiguredMediaEntryCapabilities(entry);
+      // Shared models are active only for enabled capabilities; explicit tags also
+      // keep provider metadata loading lazy when the config already has the answer.
+      const capabilities =
+        configuredCapabilities ??
+        resolveEffectiveMediaEntryCapabilities({
+          entry,
+          providerRegistry: getProviderRegistry(),
+        });
+      const active = capabilities?.some((capability) => isCapabilityEnabled(capability)) ?? false;
+      const inactiveReason =
+        capabilities && capabilities.length > 0
+          ? `all configured media capabilities for this shared model are disabled: ${capabilities.join(", ")}.`
+          : "shared media model does not declare capabilities and none could be inferred from its provider.";
       collectProviderRequestAssignments({
         request: rawModel.request,
-        pathPrefix: `${pathPrefix}.${index}.request`,
+        pathPrefix: `tools.media.models.${index}.request`,
         defaults: params.defaults,
         context: params.context,
         active,
         inactiveReason,
         owner: {
           ownerKind: "capability",
-          ownerId: resolveOwnerId(index),
+          ownerId: runtimeMediaModelSecretOwnerId(index),
           requiredForGateway: false,
           disposition: "isolate",
           contract: rawModel,
         },
       });
     });
-  };
-
-  collectModelAssignments(
-    media.models,
-    "tools.media.models",
-    (index) => runtimeMediaModelSecretOwnerId({ source: "shared", index }),
-    (rawModel) => {
-      const entry = rawModel as MediaUnderstandingModelConfig;
-      const configuredCapabilities = resolveConfiguredMediaEntryCapabilities(entry);
-      // Shared models are active only for enabled capabilities; when the config omits explicit
-      // capabilities, provider metadata is the contract for which media sections can use it.
-      const capabilities =
-        configuredCapabilities ??
-        resolveEffectiveMediaEntryCapabilities({
-          entry,
-          source: "shared",
-          providerRegistry: getProviderRegistry(),
-        });
-      if (!capabilities || capabilities.length === 0) {
-        return {
-          active: false,
-          inactiveReason:
-            "shared media model does not declare capabilities and none could be inferred from its provider.",
-        };
-      }
-      return {
-        active: capabilities.some((capability) => isCapabilityEnabled(capability)),
-        inactiveReason: `all configured media capabilities for this shared model are disabled: ${capabilities.join(", ")}.`,
-      };
-    },
-  );
+  }
 
   for (const capability of capabilityKeys) {
     const section = isRecord(media[capability]) ? media[capability] : undefined;

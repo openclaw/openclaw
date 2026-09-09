@@ -11,7 +11,6 @@ import {
   resolveAgentDir,
   resolveAgentEffectiveModelPrimary,
   resolveAgentWorkspaceDir,
-  resolveDefaultAgentId,
 } from "../../agents/agent-scope.js";
 import { resolveSessionAuthSelection } from "../../agents/auth-profiles/session-override.js";
 import { applyExtraParamsToAgent } from "../../agents/embedded-agent-runner/extra-params.js";
@@ -22,7 +21,6 @@ import { mapThinkingLevel } from "../../agents/embedded-agent-runner/utils.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import { splitTrailingAuthProfile } from "../../agents/model-ref-profile.js";
-import { modelCatalogLogicalKey } from "../../agents/model-selection-shared.js";
 import {
   buildModelAliasIndex,
   normalizeProviderId,
@@ -33,16 +31,15 @@ import {
   createModelVisibilityPolicy,
   RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
 } from "../../agents/model-visibility-policy.js";
+import { resolveModelCatalogIdentityKey } from "../../agents/openai-model-routes.js";
 import {
   acquireAgentRunPreparedModelRuntime,
   type PreparedModelRuntimeSnapshot,
 } from "../../agents/prepared-model-runtime.js";
 import { projectProviderModelRouteConfig } from "../../agents/provider-model-route.js";
 import { registerProviderStreamForModel } from "../../agents/provider-stream.js";
-import {
-  prepareSimpleCompletionModel,
-  type PreparedSimpleCompletionModel,
-} from "../../agents/simple-completion-runtime.js";
+import { prepareSimpleCompletionModel } from "../../agents/simple-completion-runtime.js";
+import type { PreparedSimpleCompletionModel } from "../../agents/simple-completion.types.js";
 import { normalizeUsage, hasObservedModelUsage } from "../../agents/usage.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -317,16 +314,7 @@ function emitWorkerInferenceUsage(params: WorkerInferenceUsageParams): void {
 
 const DEFAULT_DEPENDENCIES: WorkerInferenceRuntimeDependencies = {
   now: Date.now,
-  resolveSessionTarget: (config, sessionId) => {
-    const target = resolveWorkerSessionTarget(config, sessionId);
-    if (!target) {
-      return undefined;
-    }
-    return {
-      ...target,
-      agentId: target.agentId ?? resolveDefaultAgentId(config),
-    };
-  },
+  resolveSessionTarget: resolveWorkerSessionTarget,
   acquireRuntimeLease: acquireAgentRunPreparedModelRuntime,
   resolveDefaultModel: resolveDefaultModelForAgent,
   resolveSessionAuthSelection,
@@ -416,14 +404,14 @@ async function resolveApprovedModel(params: {
         manifestPlugins: manifestSnapshot,
         ...RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
       });
-      const resolvedKey = modelCatalogLogicalKey({
+      const resolvedKey = resolveModelCatalogIdentityKey({
         provider: resolved.ref.provider,
         id: resolved.ref.model,
       });
       // Retained refs stay approved during cold discovery.
       const known =
         policy.allowedCatalog.some(
-          (entry: ModelCatalogEntry) => resolvedKey === modelCatalogLogicalKey(entry),
+          (entry: ModelCatalogEntry) => resolvedKey === resolveModelCatalogIdentityKey(entry),
         ) || policy.retainedKeys.has(resolvedKey);
       if (!known || !policy.allows(resolved.ref)) {
         runtimeLease.release();
@@ -431,7 +419,7 @@ async function resolveApprovedModel(params: {
       }
       const configuredDefaultProfile =
         resolvedKey ===
-        modelCatalogLogicalKey({ provider: defaultModel.provider, id: defaultModel.model })
+        resolveModelCatalogIdentityKey({ provider: defaultModel.provider, id: defaultModel.model })
           ? splitTrailingAuthProfile(
               resolveAgentEffectiveModelPrimary(lifecycleConfig, target.agentId) ?? "",
             ).profile

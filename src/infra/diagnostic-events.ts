@@ -443,6 +443,11 @@ type DiagnosticGatewayEventLoopSampleEvent = DiagnosticBaseEvent & {
   delayMaxMs: number;
 };
 
+type DiagnosticGcEvent = DiagnosticBaseEvent & {
+  type: "diagnostic.gc";
+  durationMs: number;
+};
+
 export type DiagnosticHeartbeatEvent = DiagnosticBaseEvent & {
   type: "diagnostic.heartbeat";
   webhooks: {
@@ -859,6 +864,7 @@ export type DiagnosticEventPayload =
   | DiagnosticRunProgressEvent
   | DiagnosticRunExecutionPhaseEvent
   | DiagnosticGatewayEventLoopSampleEvent
+  | DiagnosticGcEvent
   | DiagnosticHeartbeatEvent
   | DiagnosticLivenessWarningEvent
   | DiagnosticPhaseCompletedEvent
@@ -1006,6 +1012,7 @@ const MAX_ASYNC_DIAGNOSTIC_EVENTS = 10_000;
 const MAX_ASYNC_DIAGNOSTIC_EVENTS_PER_TURN = 100;
 const DIAGNOSTIC_EVENTS_STATE_KEY = Symbol.for("openclaw.diagnosticEvents.state.v1");
 const ASYNC_DIAGNOSTIC_EVENT_TYPES = new Set<DiagnosticEventPayload["type"]>([
+  "diagnostic.gc",
   "gateway.event_loop.sample",
   "gateway.rpc",
   "tool.execution.started",
@@ -1578,25 +1585,34 @@ export function emitFailoverEvent(event: Omit<DiagnosticFailoverEvent, "seq" | "
   });
 }
 
+function registerDiagnosticEventListener<T>(
+  state: DiagnosticEventsGlobalState,
+  listeners: Map<T, InternalDiagnosticEventInterest<DiagnosticEventPayload["type"]> | undefined>,
+  listener: T,
+  filter?: InternalDiagnosticEventInterest<DiagnosticEventPayload["type"]>,
+): () => void {
+  if (listeners.has(listener)) {
+    updateInternalDiagnosticEventInterest(listeners.get(listener), -1);
+  }
+  listeners.set(listener, filter);
+  updateInternalDiagnosticEventInterest(filter, 1);
+  setInternalDiagnosticEventListenerCounts(state.listeners.size, state.trustedListeners.size);
+  return () => {
+    const interest = listeners.get(listener);
+    if (listeners.delete(listener)) {
+      updateInternalDiagnosticEventInterest(interest, -1);
+    }
+    setInternalDiagnosticEventListenerCounts(state.listeners.size, state.trustedListeners.size);
+  };
+}
+
 /** Subscribes to diagnostic events with dispatcher metadata. */
 export function onInternalDiagnosticEvent(
   listener: DiagnosticEventListener,
   filter?: InternalDiagnosticEventInterest<DiagnosticEventPayload["type"]>,
 ): () => void {
   const state = getDiagnosticEventsState();
-  if (state.listeners.has(listener)) {
-    updateInternalDiagnosticEventInterest(state.listeners.get(listener), -1);
-  }
-  state.listeners.set(listener, filter);
-  updateInternalDiagnosticEventInterest(filter, 1);
-  setInternalDiagnosticEventListenerCounts(state.listeners.size, state.trustedListeners.size);
-  return () => {
-    const interest = state.listeners.get(listener);
-    if (state.listeners.delete(listener)) {
-      updateInternalDiagnosticEventInterest(interest, -1);
-    }
-    setInternalDiagnosticEventListenerCounts(state.listeners.size, state.trustedListeners.size);
-  };
+  return registerDiagnosticEventListener(state, state.listeners, listener, filter);
 }
 
 /** Subscribes to diagnostic events plus trusted private payload data. */
@@ -1605,19 +1621,7 @@ export function onTrustedInternalDiagnosticEvent(
   filter?: InternalDiagnosticEventInterest<DiagnosticEventPayload["type"]>,
 ): () => void {
   const state = getDiagnosticEventsState();
-  if (state.trustedListeners.has(listener)) {
-    updateInternalDiagnosticEventInterest(state.trustedListeners.get(listener), -1);
-  }
-  state.trustedListeners.set(listener, filter);
-  updateInternalDiagnosticEventInterest(filter, 1);
-  setInternalDiagnosticEventListenerCounts(state.listeners.size, state.trustedListeners.size);
-  return () => {
-    const interest = state.trustedListeners.get(listener);
-    if (state.trustedListeners.delete(listener)) {
-      updateInternalDiagnosticEventInterest(interest, -1);
-    }
-    setInternalDiagnosticEventListenerCounts(state.listeners.size, state.trustedListeners.size);
-  };
+  return registerDiagnosticEventListener(state, state.trustedListeners, listener, filter);
 }
 
 /** Subscribes to trusted metadata-only tool execution events, even when diagnostics are disabled. */
@@ -1659,7 +1663,7 @@ export function onDiagnosticEvent(listener: (evt: DiagnosticEventPayload) => voi
       }
       listener(event);
     },
-    { exclude: ["log.record", "gateway.rpc", "gateway.event_loop.sample"] },
+    { exclude: ["log.record", "gateway.rpc", "gateway.event_loop.sample", "diagnostic.gc"] },
   );
 }
 

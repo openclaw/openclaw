@@ -34,8 +34,6 @@ import type {
   SidebarRegionCallbacks,
 } from "./chat-sidebar-region-types.ts";
 
-const DASHBOARD_COMMAND = "/dashboard ";
-
 function panelType(
   definitions: SidebarPanelDefinition[],
   slot: SidebarSlotId,
@@ -81,6 +79,85 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
   @property({ type: Number }) availableWidth = 0;
   private previousGeometry = "";
   private contentMounted = false;
+  private focusedSurface: Element | null = null;
+  private nativeCloseListeners: AbortController | undefined;
+
+  override connectedCallback(): void {
+    super.connectedCallback();
+    this.nativeCloseListeners = new AbortController();
+    const options = { capture: true, signal: this.nativeCloseListeners.signal };
+    // The region renders its content into siblings, not into this element.
+    // Document focus also clears the owner when another pane or chrome wins it.
+    document.addEventListener("pointerdown", this.trackFocus, options);
+    document.addEventListener("focusin", this.trackFocus, options);
+    window.addEventListener("openclaw:native-close-focused-panel", this.closeFocusedPanel, options);
+  }
+
+  override disconnectedCallback(): void {
+    this.nativeCloseListeners?.abort();
+    this.nativeCloseListeners = undefined;
+    this.focusedSurface = null;
+    super.disconnectedCallback();
+  }
+
+  private readonly trackFocus = (event: Event): void => {
+    const surface = event
+      .composedPath()
+      .find(
+        (node): node is Element =>
+          node instanceof Element && node.matches("[data-region], [data-region-header]"),
+      );
+    this.focusedSurface =
+      surface && surface.closest(".sidebar-region") === this.parentElement ? surface : null;
+  };
+
+  private readonly closeFocusedPanel = (event: Event): void => {
+    if (event.defaultPrevented || !this.layout.open || this.layout.expanded || !this.callbacks) {
+      return;
+    }
+    const browserScope = event instanceof CustomEvent ? event.detail?.browserScope : undefined;
+    // Native browser content is a separate NSView, so its responder scope is
+    // authoritative over the dashboard document's previous DOM focus.
+    const browser =
+      typeof browserScope === "string"
+        ? [
+            ...(this.parentElement?.querySelectorAll<HTMLElement>("[data-native-browser-scope]") ??
+              []),
+          ].find((element) => element.dataset.nativeBrowserScope === browserScope)
+        : undefined;
+    const frame =
+      document.activeElement instanceof HTMLIFrameElement
+        ? document.activeElement.closest("[data-region]")
+        : null;
+    const surface =
+      typeof browserScope === "string"
+        ? browser?.closest("[data-region]")
+        : (frame ?? this.focusedSurface);
+    const active = sidebarActivePanel(this.layout);
+    if (
+      !active ||
+      !surface?.isConnected ||
+      surface.closest(".sidebar-region") !== this.parentElement ||
+      !surface.matches('[data-region="side"], [data-region-header="side"]') ||
+      surface.closest('[hidden], [inert], [aria-hidden="true"]') ||
+      document.openClawModalLayers?.size ||
+      document.querySelector("dialog[open], [aria-modal='true']")
+    ) {
+      return;
+    }
+    event.preventDefault();
+    // Keep successive Close commands in the tab strip after its content unmounts.
+    const header = this.parentElement?.querySelector('[data-region-header="side"]') ?? null;
+    this.focusedSurface = header;
+    this.callbacks.closeSlot(active.slot);
+    // The callback invalidates the parent first; await this region's next commit.
+    this.requestUpdate();
+    void this.updateComplete.then(() => {
+      if (this.layout.open && this.focusedSurface === header && header?.isConnected) {
+        header.querySelector<HTMLElement>("wa-tab[active]")?.focus();
+      }
+    });
+  };
 
   deliverPanelEvent(slot: SidebarSlotId, event: Event): boolean {
     const panel = this.parentElement?.querySelector<HTMLElement>(
@@ -189,11 +266,7 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
     `;
   }
 
-  private renderHeaderActions(panelActions: TemplateResult | typeof nothing | null, main = false) {
-    const expandLabel = t(
-      this.layout.expanded ? "chat.sidePanel.restore" : "chat.sidePanel.expand",
-    );
-    const sideVisible = this.layout.open === true && !this.layout.expanded;
+  private renderHeaderActions(panelActions: TemplateResult | typeof nothing | null) {
     return html`<div class="rail-header__actions side-panel__actions">
       ${
         panelActions
@@ -202,51 +275,19 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
             </span>`
           : nothing
       }
-      ${
-        main
-          ? html`<span class="side-panel__action-group">
-              <openclaw-tooltip .content=${expandLabel}>
-                <button
-                  class="rail-header__action side-panel__expand"
-                  type="button"
-                  aria-pressed=${String(this.layout.expanded === true)}
-                  aria-label=${expandLabel}
-                  @click=${() => this.callbacks?.setExpanded(this.layout.expanded !== true)}
-                >
-                  ${this.layout.expanded ? icons.minimize : icons.maximize}
-                </button>
-              </openclaw-tooltip>
-            </span>`
-          : nothing
-      }
       <span class="side-panel__action-group side-panel__action-group--close">
-        <openclaw-tooltip .content=${t(main ? "chat.sidePanel.label" : "common.close")}>
+        <openclaw-tooltip .content=${t("common.close")}>
           <button
             class="rail-header__action side-panel__minimize"
             type="button"
-            aria-label=${t(main ? "chat.sidePanel.label" : "common.close")}
-            @click=${() => this.callbacks?.setOpen(main ? !sideVisible : false)}
+            aria-label=${t("common.close")}
+            @click=${() => this.callbacks?.setOpen(false)}
           >
-            ${main ? icons.panelRightOpen : icons.x}
+            ${icons.x}
           </button>
         </openclaw-tooltip>
       </span>
     </div>`;
-  }
-
-  private renderMainHeader() {
-    const main = sidebarMainPanel(this.layout);
-    if (!this.layout.open && !this.layout.expanded && (!main || main.slot === "conversation")) {
-      return nothing;
-    }
-    const type = panelType(this.panelDefinitions, main?.slot ?? "conversation");
-    return html`<header
-      class="rail-header side-panel__header side-panel__main-header"
-      data-region-header="main"
-    >
-      <span class="side-panel__main-title">${type.icon}${type.label}</span>
-      ${this.renderHeaderActions(main ? (this.panelActions[main.slot] ?? null) : null, true)}
-    </header>`;
   }
 
   private renderEmpty(panel?: SidebarPanel) {
@@ -261,22 +302,14 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
         })}
       </div>`;
     }
-    const dashboard = panelType(this.panelDefinitions, "dashboard");
-    const panelTypes = [
-      ...this.panelTypes().filter((type) => type.slot !== "dashboard"),
-      dashboard,
-    ];
     return html`<div class="side-panel-empty side-panel-empty--selector">
       <div class="side-panel-empty__types" role="list">
-        ${panelTypes.map(
+        ${this.panelTypes().map(
           (type) => html`<button
             class="side-panel-empty__type"
             type="button"
             role="listitem"
-            @click=${() =>
-              type.slot === "dashboard"
-                ? this.callbacks?.appendComposerText(DASHBOARD_COMMAND)
-                : this.callbacks?.openSlot(type.slot)}
+            @click=${() => this.callbacks?.openSlot(type.slot)}
           >
             ${renderPanelTypeOption(type)}
           </button>`,
@@ -375,18 +408,7 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
           : nothing
       }
       <section class="side-panel" aria-label=${t("chat.sidePanel.label")}>
-        ${this.renderMainHeader()}
-        ${
-          column && sidebarSidePanels(this.layout).length > 0
-            ? this.renderHeader(column)
-            : html`<header
-                class="rail-header side-panel__header side-panel__header--empty"
-                data-region-header="side"
-              >
-                <strong class="side-panel__empty-header-title">${t("chat.sidePanel.label")}</strong>
-                ${this.renderHeaderActions(null)}
-              </header>`
-        }
+        ${column && sidebarSidePanels(this.layout).length > 0 ? this.renderHeader(column) : nothing}
         ${this.contentMounted ? this.renderBody(column) : nothing}
       </section>`;
   }

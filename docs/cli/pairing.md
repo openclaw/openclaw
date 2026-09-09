@@ -2,7 +2,7 @@
 summary: "CLI reference for `openclaw pairing` (approve/list pairing requests)"
 read_when:
   - You're using pairing-mode DMs and need to approve senders
-title: "Pairing"
+title: "Pairing CLI"
 ---
 
 # `openclaw pairing`
@@ -27,6 +27,12 @@ openclaw pairing approve <code>
 openclaw pairing approve telegram <code>
 openclaw pairing approve --channel telegram --account work <code> --notify
 ```
+
+Use `--account <accountId>` to restrict either command to one channel account.
+If you omit `--account`, `list` shows pending requests across the channel's accounts,
+and `approve` uses the account belonging to the matching request. Explicitly empty
+or whitespace-only values, such as `--account ""`, are rejected with
+`--account must not be blank`.
 
 ## `pairing list`
 
@@ -59,7 +65,7 @@ If `commands.ownerAllowFrom` is empty when you approve a pairing code, the CLI a
 
 The command owner is the human operator account allowed to run owner-only commands and approve dangerous actions such as `/diagnostics`, `/export-session`, `/export-trajectory`, `/config`, and exec approvals. Pairing only lets a sender talk to the agent; it does not by itself grant owner privileges beyond this one-time bootstrap.
 
-If you approved a sender before this bootstrap existed, run `openclaw doctor`; it warns when no command owner is configured and shows the exact `openclaw config set commands.ownerAllowFrom ...` command to fix it.
+If you approved a sender before the first-owner bootstrap shipped in 2026.4.29, run `openclaw doctor`; it warns when no command owner is configured and shows the exact `openclaw config set commands.ownerAllowFrom ...` command to fix it.
 
 ## Related
 

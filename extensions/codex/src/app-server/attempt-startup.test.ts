@@ -37,7 +37,6 @@ import { releaseCodexSandboxExecServerEnvironment } from "./sandbox-exec-server.
 import { createSandboxContext } from "./sandbox-exec-server.test-helpers.js";
 import { resetCodexTestBindingStore } from "./session-binding.test-helpers.js";
 import {
-  clearSharedCodexAppServerClient,
   clearSharedCodexAppServerClientAndWait,
   createIsolatedCodexAppServerClient,
   getLeasedSharedCodexAppServerClient,
@@ -142,11 +141,11 @@ function isProcessAlive(pid: number): boolean {
 }
 
 describe("startCodexAttemptThread", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.useRealTimers();
     vi.stubEnv("CODEX_API_KEY", "");
     vi.stubEnv("OPENAI_API_KEY", "");
-    clearSharedCodexAppServerClient();
+    await clearSharedCodexAppServerClientAndWait();
     // Direct runtime tests supply the plugin root normally owned by loader registration.
     setManagedCodexPluginRoot(fileURLToPath(new URL("../../", import.meta.url)));
     defaultCodexPluginMetadataCache.clear();
@@ -157,7 +156,7 @@ describe("startCodexAttemptThread", () => {
 
   afterEach(async () => {
     vi.useRealTimers();
-    clearSharedCodexAppServerClient();
+    await clearSharedCodexAppServerClientAndWait();
     setManagedCodexPluginRoot(undefined);
     defaultCodexPluginMetadataCache.clear();
     vi.restoreAllMocks();
@@ -319,12 +318,14 @@ describe("startCodexAttemptThread", () => {
       "account/login/start",
       "config/read",
       "configRequirements/read",
+      "account/read",
     ]);
     expect(readHarnessRequestMethods(second)).toEqual([
       "initialize",
       "account/login/start",
       "config/read",
       "configRequirements/read",
+      "account/read",
       "thread/start",
     ]);
     expect(startSpy).toHaveBeenCalledTimes(2);
@@ -424,7 +425,7 @@ describe("startCodexAttemptThread", () => {
     );
     expect(
       readHarnessMessages(harness.writes.slice(writesBeforeRestart)).map(({ method }) => method),
-    ).toEqual(["config/read", "configRequirements/read"]);
+    ).toEqual(["config/read", "configRequirements/read", "account/read"]);
 
     result.turnRoute.release();
     result.releaseSharedClientLease();

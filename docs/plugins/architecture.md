@@ -142,6 +142,8 @@ One `PluginCache` starts on the first plugin metadata access, including CLI pref
 
 Plugin-aware config validation, startup auto-enable, and Gateway plugin bootstrap consume that snapshot instead of rebuilding manifest/index metadata independently. `PluginLookUpTable` is derived from the same snapshot and adds the startup plugin plan for the current runtime config.
 
+Channel setup catalogs retain the requested workspace and load-path scope, including raw plugin shadows, so trust filtering can select the appropriate installed alternative.
+
 After startup, runtime readers reuse that inventory without filesystem discovery, manifest rereads, or freshness checks. Narrow plugin selections are in-memory views of the same inventory. Changing config, account state, or an agent's run workspace does not invalidate it. Plugin installs, updates, removals, manifest edits, and discovery-root changes become visible to the runtime after a Gateway restart.
 
 Model-id normalization policies are prepared with each snapshot or narrowed view. Model selection, catalogs, and runtime normalization carry that view forward instead of rebuilding policies from its plugin list. An empty view remains authoritative and cannot inherit policies from a broader process snapshot.
@@ -160,7 +162,17 @@ Activation policy and runtime bindings have a separate lifetime. Hot reload can 
 
 A provider or harness plugin load failure remains recorded in its runtime generation. It makes that plugin unavailable without superseding the generation or blocking models that use healthy plugins. Inspect the failing owner with `openclaw plugins inspect <id> --runtime --json`. Use `openclaw doctor --fix` for supported installation repairs, or fix the reported problem in plugin code, then restart the Gateway to load the repaired plugin.
 
-Each plugin service startup attempt owns one cleanup operation, including failed starts. Hot replacement uses a five-second cleanup deadline; a timeout revokes the old service's capabilities and rejects the replacement. Final Gateway shutdown still joins pending cleanup during its separate five-second grace, without invoking the service's stop handler again.
+Read-only model validation, effective tool inventory, and isolated model probes acquire their own registrations when they need executable provider or harness hooks. Concurrent callers share the prepared generation, and its lifecycle disposers run after the final borrower and any unfinished preparation or catalog work settle. Cancellation does not close a registration while its callback is still running. Process shutdown revokes these registry views before joining their remaining work and disposal. Catalog reads that need only metadata do not acquire these executable registrations.
+
+Each plugin service startup attempt owns one cleanup operation, including failed starts. Cleanup waits for the issued startup work to settle, even if a caller has stopped waiting. Hot replacement uses a five-second cleanup deadline; a timeout revokes the old service's capabilities and rejects the replacement. Final Gateway shutdown waits up to five seconds before continuing independent teardown, then joins the same cleanup before retiring shared plugin state, registries, secrets, and metadata. It does not invoke the service's stop handler again. If a service restart fails, an explicit reload retry still includes selected services whose restart had not begun.
+
+Gateway shutdown also joins actual harness, MCP, LSP, embedding, and media cleanup after their initial grace periods. When clearing the active registry, plugin host cleanup can advance to later hooks after a timeout, but registry resets and shared database closure wait for its actual completion. These waits preserve resources for cleanup; they do not restore a retired plugin's runtime authority.
+
+Executable CLI cleanup reports each disposer that exceeds five seconds and proceeds with later cleanup without canceling the pending work. On macOS with Node's system CA support enabled, automatic exit after command completion waits for this pending cleanup to finish. Explicit command exit requests and the update exit watchdog retain their bounded behavior.
+
+Standalone plugin and Codex supervision MCP stdio services retain their discovered registrations through accepted tool work, harness cleanup, and nested SDK provider lookups. Terminal shutdown cancels and joins handlers before releasing these registrations and awaiting their resource disposers. Transport-close and registration-disposal failures reach the serving caller. Programmatic servers created from supplied tools leave those resources with the caller; closing and reconnecting the same server does not dispose them.
+
+Hot registry publication does not wait for retired host cleanup; terminal shutdown also joins cleanup already started by earlier registry replacements before resetting shared state. Activation and rollback apply only to their captured registry version. An activation superseded by a lifecycle callback reports an error.
 
 The cache rule is documented in [Plugin architecture internals](/plugins/architecture-internals#plugin-cache-boundary): Gateway retains one cache generation, while explicit management operations use isolated generations of the same cache. There are no wall-clock TTLs for Gateway metadata.
 
@@ -442,7 +454,7 @@ For bundled workspace package names, keep the plugin id anchored in the npm name
 <Note>
 **Trust note:** `plugins.allow` permits **plugin ids** to load; it does not verify source provenance or choose which same-id copy loads. An auto-discovered workspace plugin does not shadow a bundled plugin merely because that id is enabled or allowlisted.
 
-For intentional local overrides, use `plugins.load.paths` to select the plugin path. Tracked global installs can also override ordinary bundled copies, while bundled plugins from `OPENCLAW_DEV_SOURCE_ROOT` retain priority over tracked globals. See [Discovery precedence](/plugins/manifest#discovery-precedence-duplicate-plugin-ids) for the full order.
+For intentional local overrides, use `plugins.load.paths` to select the plugin path. Tracked global installs can also override ordinary bundled copies, while bundled plugins from `OPENCLAW_DEV_SOURCE_ROOT` retain priority over tracked globals. See [Discovery precedence](/plugins/manifest/package-json#discovery-precedence-duplicate-plugin-ids) for the full order.
 
 An alias of the same independently validated bundled entry retains bundled provenance; a different local copy does not inherit trust from its name or allowlist entry. Checkout runners supply the development selector automatically, including for compiled plugins. See [development debugging](</help/debugging#dev-profile-%2B-dev-gateway-(--dev)>).
 
@@ -471,3 +483,5 @@ For the load pipeline, registry model, provider runtime hooks, Gateway HTTP rout
 - [Building plugins](/plugins/building-plugins)
 - [Plugin manifest](/plugins/manifest)
 - [Plugin SDK setup](/plugins/sdk-setup)
+- [Context engines](/concepts/context-engine)
+- [Plugin Runtime](/plugins/sdk-runtime) - the `api.runtime` helpers plugins call

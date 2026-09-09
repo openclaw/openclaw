@@ -2,7 +2,7 @@
 // profile persistence, and rate limiting through a real Gateway owner.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { withTestTimeout } from "../../test/helpers/promise.js";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import { resolveDefaultAgentDir } from "../agents/agent-scope.js";
@@ -23,6 +23,25 @@ import { getFreePort } from "../test-utils/ports.js";
 import { GatewayClient, GatewayClientRequestError } from "./client.js";
 import { invalidateConfigGetResponseCache } from "./config-get-response.js";
 import { startGatewayServerCore } from "./server-start.js";
+
+const reloadBarrier = vi.hoisted(() => ({ wait: undefined as Promise<void> | undefined }));
+
+vi.mock("./config-reload.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./config-reload.js")>();
+  return {
+    ...actual,
+    startGatewayConfigReloader: (
+      options: Parameters<typeof actual.startGatewayConfigReloader>[0],
+    ) =>
+      actual.startGatewayConfigReloader({
+        ...options,
+        onHotReload: async (...args) => {
+          await reloadBarrier.wait;
+          return await options.onHotReload(...args);
+        },
+      }),
+  };
+});
 
 const CONFIG_SECRETREF_RPC_TIMEOUT_MS = 20_000;
 const GATEWAY_TOKEN = "config-rpc-synthetic-token";
@@ -71,7 +90,7 @@ function requireConfigObject(value: unknown, label: string): Record<string, unkn
   return value as Record<string, unknown>;
 }
 
-beforeEach(async () => {
+async function startConfigRpcGateway() {
   state = await createOpenClawTestState({
     label: "config-rpc",
     env: {
@@ -94,7 +113,8 @@ beforeEach(async () => {
   const port = await getFreePort();
   server = await startGatewayServerCore(port, {
     auth: { mode: "token", token: GATEWAY_TOKEN },
-    controlUiEnabled: true,
+    // These config RPCs do not exercise browser asset serving or preparation.
+    controlUiEnabled: false,
     hotReloadRecovery,
   });
   const connected = createDeferredCore();
@@ -119,9 +139,9 @@ beforeEach(async () => {
   client.start();
   await withTestTimeout(connected.promise, 10_000, "gateway connect timeout");
   await server.startupSettled;
-});
+}
 
-afterEach(async () => {
+async function stopConfigRpcGateway() {
   // This core fixture has no run loop. Retire direct RPC restart timers before
   // teardown and after its owners drain so they cannot reach the next case.
   await runQaGatewayFixture(
@@ -141,7 +161,7 @@ afterEach(async () => {
     () => vi.restoreAllMocks(),
     () => expect(hotReloadRecovery).not.toHaveBeenCalled(),
   );
-});
+}
 
 async function resetTempDir(name: string): Promise<string> {
   const dir = state.path("fixtures", name);
@@ -230,14 +250,6 @@ function makeRouteBinding(index: number) {
   };
 }
 
-async function expectSchemaLookupInvalid(pathValue: unknown) {
-  const res = await rpcReq<{ ok?: boolean }>(requireClient(), "config.schema.lookup", {
-    pathValue,
-  });
-  expect(res.ok).toBe(false);
-  expect(res.error?.message ?? "").toContain("invalid config.schema.lookup params");
-}
-
 async function writeUnresolvedAuthProfileTokenRef(missingEnvVar: string) {
   deleteTestEnvValue(missingEnvVar);
   const authStorePath = path.join(resolveDefaultAgentDir({}), "auth-profiles.json");
@@ -262,12 +274,18 @@ async function writeUnresolvedAuthProfileTokenRef(missingEnvVar: string) {
   );
 }
 
-beforeEach(() => {
-  rateLimitEpochMs += 60_000;
-  vi.spyOn(Date, "now").mockReturnValue(rateLimitEpochMs);
-});
+function installConfigWriteGatewayHooks() {
+  beforeEach(startConfigRpcGateway);
+  beforeEach(() => {
+    rateLimitEpochMs += 60_000;
+    vi.spyOn(Date, "now").mockReturnValue(rateLimitEpochMs);
+  });
+  afterEach(stopConfigRpcGateway);
+}
 
 describe("gateway config methods", () => {
+  installConfigWriteGatewayHooks();
+
   it("reloads owners independently and reports a changed unresolved owner as cold", async () => {
     const original = await getCurrentConfigObject();
     const secretFile = path.join(await resetTempDir("owner-reload"), "secrets.json");
@@ -415,6 +433,39 @@ describe("gateway config methods", () => {
     expect(res.error?.message ?? "").toContain("active SecretRef resolution failed");
     const afterHash = await getConfigHash();
     expect(afterHash).toBe(current.hash);
+  });
+
+  it("uses fresh revisions after agent create, update, and delete before reload applies", async () => {
+    vi.mocked(Date.now).mockRestore();
+    const operations = [
+      {
+        method: "agents.create",
+        params: { name: "revision-worker", workspace: state.path("revision-workspace") },
+      },
+      { method: "agents.update", params: { agentId: "revision-worker", name: "Ready" } },
+      { method: "agents.delete", params: { agentId: "revision-worker", deleteFiles: false } },
+    ];
+    for (const operation of operations) {
+      const before = await getConfigHash();
+      const gate = createDeferredCore();
+      reloadBarrier.wait = gate.promise;
+      try {
+        const changed = await rpcReq(requireClient(), operation.method, operation.params);
+        expect(changed.ok, changed.error?.message).toBe(true);
+
+        const current = await getCurrentConfigObject();
+        gate.resolve();
+        const patched = await rpcReq(requireClient(), "config.patch", {
+          baseHash: current.hash,
+          raw: JSON.stringify({ agents: { entries: { main: { name: operation.method } } } }),
+        });
+        expect(patched.ok, patched.error?.message).toBe(true);
+        expect(current.hash).not.toBe(before);
+      } finally {
+        gate.resolve();
+        reloadBarrier.wait = undefined;
+      }
+    }
   });
 
   it("round-trips config.set and returns the live config path", async () => {
@@ -1033,108 +1084,61 @@ describe("gateway config methods", () => {
     expect(error?.details?.issues?.[0]?.path).toBe("gateway.bind");
   });
 
-  it("returns a path-scoped config schema lookup", async () => {
-    const res = await rpcReq<{
-      path: string;
-      hintPath?: string;
-      children?: Array<{ key: string; path: string; required: boolean; hintPath?: string }>;
-      schema?: { properties?: unknown };
-    }>(requireClient(), "config.schema.lookup", {
-      path: "gateway.auth",
-    });
+  it.each(["config.set", "config.apply", "config.patch"] as const)(
+    "preserves literal nulls in full replacements and patch deletion through %s",
+    async (method) => {
+      const original = await getCurrentConfigObject();
+      const seed = structuredClone(original.config);
+      const agents = requireConfigObject(seed.agents, "agents");
+      const defaults = requireConfigObject(agents.defaults ?? {}, "agent defaults");
+      agents.defaults = { ...defaults, params: { temperature: 0.2, topP: 0.8 } };
 
-    expect(res.ok, res.error?.message).toBe(true);
-    expect(res.payload?.path).toBe("gateway.auth");
-    expect(res.payload?.hintPath).toBe("gateway.auth");
-    const tokenChild = res.payload?.children?.find((child) => child.key === "token");
-    expect(tokenChild?.key).toBe("token");
-    expect(tokenChild?.path).toBe("gateway.auth.token");
-    expect(tokenChild?.hintPath).toBe("gateway.auth.token");
-    expect(res.payload?.schema?.properties).toBeUndefined();
-  });
+      try {
+        await writeJsonFile(original.path, seed);
+        invalidateConfigGetResponseCache();
+        const current = await getCurrentConfigObject();
+        const next = structuredClone(current.config);
+        const nextAgents = requireConfigObject(next.agents, "agents");
+        const nextDefaults = requireConfigObject(nextAgents.defaults, "agent defaults");
+        nextDefaults.params = { temperature: null, nested: { value: null } };
+        const patch = { agents: { defaults: { params: { temperature: null, topP: null } } } };
 
-  it("returns consistent help and reload metadata for plugin enablement", async () => {
-    const res = await rpcReq<{
-      path: string;
-      schema?: { description?: string };
-      reloadKind?: string;
-      hintPath?: string;
-      hint?: { help?: string };
-    }>(requireClient(), "config.schema.lookup", {
-      path: "plugins.entries.sample-plugin.enabled",
-    });
+        const res = await rpcReq(requireClient(), method, {
+          raw: JSON.stringify(method === "config.patch" ? patch : next),
+          baseHash: current.hash,
+        });
 
-    expect(res.ok, res.error?.message).toBe(true);
-    expect(res.payload).toMatchObject({
-      path: "plugins.entries.sample-plugin.enabled",
-      reloadKind: "hot",
-      hintPath: "plugins.entries.*.enabled",
-    });
-    const description = res.payload?.schema?.description;
-    expect(description).toMatch(/default hybrid reload mode/i);
-    expect(description).toMatch(/hot-reload the plugin runtime/i);
-    expect(description).not.toMatch(/restart required/i);
-    expect(res.payload?.hint?.help).toBe(description);
-  });
-
-  it("rejects config.schema.lookup when the path is missing", async () => {
-    const res = await rpcReq<{ ok?: boolean }>(requireClient(), "config.schema.lookup", {
-      path: "gateway.notReal.path",
-    });
-
-    expect(res.ok).toBe(false);
-    expect(res.error?.message).toBe("config schema path not found");
-  });
-
-  it.each([
-    { name: "rejects config.schema.lookup when the path is only whitespace", pathLocal: "   " },
-    {
-      name: "rejects config.schema.lookup when the path exceeds the protocol limit",
-      pathLocal: `gateway.${"a".repeat(1020)}`,
+        expect(res.ok, res.error?.message).toBe(true);
+        const persisted = JSON.parse(await fs.readFile(original.path, "utf-8"));
+        expect(persisted.agents.defaults).toStrictEqual({
+          ...defaults,
+          params: method === "config.patch" ? {} : { temperature: null, nested: { value: null } },
+        });
+      } finally {
+        await restoreConfigFileForTest(original);
+        invalidateConfigGetResponseCache();
+      }
     },
-    {
-      name: "rejects config.schema.lookup when the path contains invalid characters",
-      pathLocal: "gateway.auth\nspoof",
-    },
-    {
-      name: "rejects config.schema.lookup when the path is not a string",
-      pathLocal: 42,
-    },
-  ])("$name", async ({ pathLocal }) => {
-    await expectSchemaLookupInvalid(pathLocal);
-  });
+  );
 
-  it("rejects prototype-chain config.schema.lookup paths without reflecting them", async () => {
-    const res = await rpcReq<{ ok?: boolean }>(requireClient(), "config.schema.lookup", {
-      path: "constructor",
-    });
+  it("returns noop for config.patch when authored config is unchanged", async () => {
+    const current = await getCurrentConfigObject();
 
-    expect(res.ok).toBe(false);
-    expect(res.error?.message).toBe("config schema path not found");
-  });
-
-  it("returns noop for config.patch when config is unchanged", async () => {
-    const current = await rpcReq<{
-      config?: Record<string, unknown>;
-      hash?: string;
-    }>(requireClient(), "config.get", {});
-    expect(current.ok).toBe(true);
-
-    // Patch with the same config — no actual changes
+    // Replaying runtime defaults would explicitly author them into the source config.
     const res = await rpcReq<{
       ok?: boolean;
       noop?: boolean;
       config?: Record<string, unknown>;
     }>(requireClient(), "config.patch", {
-      raw: JSON.stringify(current.payload?.config ?? {}),
-      baseHash: current.payload?.hash,
+      raw: JSON.stringify(current.config),
+      baseHash: current.hash,
     });
 
     expect(res.ok, res.error?.message).toBe(true);
     expect(res.payload?.noop).toBe(true);
     // Config hash should not change (no file write)
     const after = await rpcReq<{ hash?: string }>(requireClient(), "config.get", {});
-    expect(after.payload?.hash).toBe(current.payload?.hash);
+    expect(after.payload?.hash).toBe(current.hash);
   });
 
   it("acknowledges sandbox config only after the runtime snapshot applies it", async () => {
@@ -1571,6 +1575,8 @@ describe("gateway config methods", () => {
 });
 
 describe("gateway config.apply", () => {
+  installConfigWriteGatewayHooks();
+
   it("rejects config.apply when SecretRef resolution fails", async () => {
     const missingEnvVar = `OPENCLAW_MISSING_SECRETREF_APPLY_${Date.now()}`;
     deleteTestEnvValue(missingEnvVar);
@@ -1619,6 +1625,97 @@ describe("gateway config.apply", () => {
     });
     expect(res.ok).toBe(false);
     expect(res.error?.message ?? "").toContain("raw");
+  });
+});
+
+describe("gateway config schema lookup", () => {
+  // Schema lookups leave config and runtime owners unchanged between cases.
+  beforeAll(startConfigRpcGateway);
+  afterAll(stopConfigRpcGateway);
+
+  it("returns a path-scoped config schema lookup", async () => {
+    const res = await rpcReq<{
+      path: string;
+      hintPath?: string;
+      children?: Array<{ key: string; path: string; required: boolean; hintPath?: string }>;
+      schema?: { properties?: unknown };
+    }>(requireClient(), "config.schema.lookup", {
+      path: "gateway.auth",
+    });
+
+    expect(res.ok, res.error?.message).toBe(true);
+    expect(res.payload?.path).toBe("gateway.auth");
+    expect(res.payload?.hintPath).toBe("gateway.auth");
+    const tokenChild = res.payload?.children?.find((child) => child.key === "token");
+    expect(tokenChild?.key).toBe("token");
+    expect(tokenChild?.path).toBe("gateway.auth.token");
+    expect(tokenChild?.hintPath).toBe("gateway.auth.token");
+    expect(res.payload?.schema?.properties).toBeUndefined();
+  });
+
+  it("returns consistent help and reload metadata for plugin enablement", async () => {
+    const res = await rpcReq<{
+      path: string;
+      schema?: { description?: string };
+      reloadKind?: string;
+      hintPath?: string;
+      hint?: { help?: string };
+    }>(requireClient(), "config.schema.lookup", {
+      path: "plugins.entries.sample-plugin.enabled",
+    });
+
+    expect(res.ok, res.error?.message).toBe(true);
+    expect(res.payload).toMatchObject({
+      path: "plugins.entries.sample-plugin.enabled",
+      reloadKind: "hot",
+      hintPath: "plugins.entries.*.enabled",
+    });
+    const description = res.payload?.schema?.description;
+    expect(description).toMatch(/default hybrid reload mode/i);
+    expect(description).toMatch(/hot-reload the plugin runtime/i);
+    expect(description).not.toMatch(/restart required/i);
+    expect(res.payload?.hint?.help).toBe(description);
+  });
+
+  it("rejects config.schema.lookup when the path is missing", async () => {
+    const res = await rpcReq<{ ok?: boolean }>(requireClient(), "config.schema.lookup", {
+      path: "gateway.notReal.path",
+    });
+
+    expect(res.ok).toBe(false);
+    expect(res.error?.message).toBe("config schema path not found");
+  });
+
+  it.each([
+    { name: "rejects config.schema.lookup when the path is only whitespace", pathLocal: "   " },
+    {
+      name: "rejects config.schema.lookup when the path exceeds the protocol limit",
+      pathLocal: `gateway.${"a".repeat(1020)}`,
+    },
+    {
+      name: "rejects config.schema.lookup when the path contains invalid characters",
+      pathLocal: "gateway.auth\nspoof",
+    },
+    {
+      name: "rejects config.schema.lookup when the path is not a string",
+      pathLocal: 42,
+    },
+  ])("$name", async ({ pathLocal }) => {
+    const res = await rpcReq(requireClient(), "config.schema.lookup", { path: pathLocal });
+    expect(res.ok).toBe(false);
+    expect(res.error).toMatchObject({
+      code: "INVALID_REQUEST",
+      message: expect.stringContaining("invalid config.schema.lookup params: at /path:"),
+    });
+  });
+
+  it("rejects prototype-chain config.schema.lookup paths without reflecting them", async () => {
+    const res = await rpcReq<{ ok?: boolean }>(requireClient(), "config.schema.lookup", {
+      path: "constructor",
+    });
+
+    expect(res.ok).toBe(false);
+    expect(res.error?.message).toBe("config schema path not found");
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

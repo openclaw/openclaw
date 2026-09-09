@@ -14,6 +14,7 @@ import {
   channelToNpmTag,
   DEV_BRANCH,
   resolveDevUpstreamRefs,
+  selectNpmChannelVersion,
   type UpdateChannel,
 } from "./update-channels.js";
 import {
@@ -21,6 +22,7 @@ import {
   type NpmMetadataCommandRunner,
 } from "./update-check-package-target.js";
 import { updateInstallRootsMatch } from "./update-install-root.js";
+import type { UpdateFetchFailure } from "./update-run-record.js";
 
 type PackageManager = "pnpm" | "bun" | "npm" | "unknown";
 type GitUpdateOptions = { timeoutMs?: number; signal?: AbortSignal };
@@ -38,6 +40,8 @@ type GitUpdateStatus = {
   ahead: number | null;
   behind: number | null;
   fetchOk: boolean | null;
+  countsCached?: true;
+  stale?: UpdateFetchFailure;
   error?: string;
 };
 
@@ -608,17 +612,7 @@ export async function resolveNpmChannelTag(params: {
     fetchTag(channelTag),
     fetchTag("latest"),
   ]);
-  if (!latestStatus.version) {
-    return channelStatus;
-  }
-  if (!channelStatus.version) {
-    return latestStatus;
-  }
-  const cmp = compareSemverStrings(channelStatus.version, latestStatus.version);
-  if (cmp != null && cmp < 0) {
-    return latestStatus;
-  }
-  return channelStatus;
+  return selectNpmChannelVersion(channelStatus, latestStatus);
 }
 
 export function compareSemverStrings(a: string | null, b: string | null): number | null {

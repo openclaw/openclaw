@@ -1,4 +1,3 @@
-// Covers provider plugin registration and runtime composition.
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
@@ -13,8 +12,6 @@ import type { ProviderPlugin } from "./types.js";
 type ResolveRuntimePluginRegistry = typeof import("./loader.js").resolveRuntimePluginRegistry;
 type ResolveCompatibleRuntimePluginRegistry =
   typeof import("./loader.js").resolveCompatibleRuntimePluginRegistry;
-type GetRuntimePluginRegistryForLoadOptions =
-  typeof import("./loader.js").getRuntimePluginRegistryForLoadOptions;
 type LoadOpenClawPlugins = typeof import("./loader.js").loadOpenClawPlugins;
 type IsPluginRegistryLoadInFlight = typeof import("./loader.js").isPluginRegistryLoadInFlight;
 type LoadPluginManifestRegistry =
@@ -22,17 +19,19 @@ type LoadPluginManifestRegistry =
 type LoadPluginMetadataSnapshot =
   typeof import("./plugin-metadata-snapshot.js").loadPluginMetadataSnapshot;
 type LoadPluginRegistrySnapshot = typeof import("./plugin-registry.js").loadPluginRegistrySnapshot;
+type LoadPluginRegistrySnapshotWithMetadata =
+  typeof import("./plugin-registry.js").loadPluginRegistrySnapshotWithMetadata;
 type ApplyPluginAutoEnable = typeof import("../config/plugin-auto-enable.js").applyPluginAutoEnable;
 type SetActivePluginRegistry = typeof import("./runtime.js").setActivePluginRegistry;
 
 const resolveRuntimePluginRegistryMock = vi.fn<ResolveRuntimePluginRegistry>();
-const getRuntimePluginRegistryForLoadOptionsMock = vi.fn<GetRuntimePluginRegistryForLoadOptions>();
 const resolveCompatibleRuntimePluginRegistryMock = vi.fn<ResolveCompatibleRuntimePluginRegistry>();
 const loadOpenClawPluginsMock = vi.fn<LoadOpenClawPlugins>();
 const isPluginRegistryLoadInFlightMock = vi.fn<IsPluginRegistryLoadInFlight>((_options) => false);
 const loadPluginManifestRegistryMock = vi.fn<LoadPluginManifestRegistry>();
 const loadPluginMetadataSnapshotMock = vi.fn<LoadPluginMetadataSnapshot>();
 const loadPluginRegistrySnapshotMock = vi.fn<LoadPluginRegistrySnapshot>();
+const loadPluginRegistrySnapshotWithMetadataMock = vi.fn<LoadPluginRegistrySnapshotWithMetadata>();
 const getCurrentPluginMetadataSnapshotMock = vi.fn();
 const applyPluginAutoEnableMock = vi.fn<ApplyPluginAutoEnable>();
 
@@ -470,12 +469,14 @@ describe("resolvePluginProviders", () => {
       resolveCompatibleRuntimePluginRegistry: (
         ...args: Parameters<ResolveCompatibleRuntimePluginRegistry>
       ) => resolveCompatibleRuntimePluginRegistryMock(...args),
-      getRuntimePluginRegistryForLoadOptions: (
-        ...args: Parameters<GetRuntimePluginRegistryForLoadOptions>
-      ) => getRuntimePluginRegistryForLoadOptionsMock(...args),
       resolveRuntimePluginRegistry: (...args: Parameters<ResolveRuntimePluginRegistry>) =>
         resolveRuntimePluginRegistryMock(...args),
     }));
+    vi.doMock("./providers.runtime.js", async () => {
+      const { createProviderRegistryResolver } = await import("./providers.runtime-core.js");
+      const loader = await import("./loader.js");
+      return createProviderRegistryResolver(loader);
+    });
     vi.doMock("../config/plugin-auto-enable.js", () => ({
       applyPluginAutoEnable: (...args: Parameters<ApplyPluginAutoEnable>) =>
         applyPluginAutoEnableMock(...args),
@@ -508,6 +509,9 @@ describe("resolvePluginProviders", () => {
         ...actual,
         loadPluginRegistrySnapshot: (...args: Parameters<LoadPluginRegistrySnapshot>) =>
           loadPluginRegistrySnapshotMock(...args),
+        loadPluginRegistrySnapshotWithMetadata: (
+          ...args: Parameters<LoadPluginRegistrySnapshotWithMetadata>
+        ) => loadPluginRegistrySnapshotWithMetadataMock(...args),
         resolvePluginContributionOwners: resolvePluginContributionOwnersFixture,
         resolveProviderOwners: resolveProviderOwnersFixture,
       };
@@ -604,12 +608,12 @@ describe("resolvePluginProviders", () => {
 
     expectOwningPluginIds("setup-only-cli");
     loadPluginMetadataSnapshotMock.mockClear();
-    loadPluginRegistrySnapshotMock.mockClear();
+    loadPluginRegistrySnapshotWithMetadataMock.mockClear();
     expect(resolveOwningPluginIdsForProviderRef({ provider: "setup-only-cli" })).toEqual([
       "setup-only-backend-owner",
     ]);
     expect(loadPluginMetadataSnapshotMock).not.toHaveBeenCalled();
-    expect(loadPluginRegistrySnapshotMock).toHaveBeenCalledOnce();
+    expect(loadPluginRegistrySnapshotWithMetadataMock).toHaveBeenCalledOnce();
   });
 
   it("maps explicit provider refs to provider or cli-backend owners", () => {
@@ -621,6 +625,59 @@ describe("resolvePluginProviders", () => {
       pluginIds: ["anthropic"],
     });
   });
+
+  it.each([true, false])(
+    "resolves installed owners with prepared manifest metadata: %s",
+    (prepared) => {
+      const plugins = [
+        createManifestProviderPlugin({
+          id: "first-owner",
+          providerIds: ["direct-provider"],
+          cliBackends: ["shared-cli"],
+        }),
+        createManifestProviderPlugin({
+          id: "second-owner",
+          providerIds: [],
+          setup: { cliBackends: ["SHARED-CLI"] },
+          enabledByDefault: false,
+        }),
+      ];
+      setManifestPlugins(plugins);
+      const snapshot = createProviderRegistrySnapshotFixture();
+      loadPluginRegistrySnapshotMock.mockReturnValue(snapshot);
+      loadPluginRegistrySnapshotWithMetadataMock.mockReturnValue({
+        snapshot,
+        source: "derived",
+        diagnostics: [],
+        ...(prepared
+          ? {
+              manifestRegistry: {
+                plugins: [
+                  ...plugins,
+                  createManifestProviderPlugin({
+                    id: "not-installed",
+                    providerIds: ["direct-provider"],
+                    cliBackends: ["shared-cli"],
+                  }),
+                ],
+                diagnostics: [],
+              },
+            }
+          : {}),
+      });
+      loadPluginManifestRegistryMock.mockClear();
+
+      expect(resolveProviderRefOwnership({ provider: " DIRECT-PROVIDER " })).toEqual({
+        status: "owned",
+        pluginIds: ["first-owner"],
+      });
+      expect(resolveProviderRefOwnership({ provider: " Shared-CLI " })).toEqual({
+        status: "ambiguous",
+        pluginIds: ["first-owner", "second-owner"],
+      });
+      expect(loadPluginManifestRegistryMock).toHaveBeenCalledTimes(prepared ? 0 : 2);
+    },
+  );
 
   it("marks explicit provider refs with multiple owners as ambiguous", () => {
     setManifestPlugins([
@@ -690,6 +747,7 @@ describe("resolvePluginProviders", () => {
     expectOwningPluginIds("openai", ["openai"]);
 
     expect(loadPluginMetadataSnapshotMock).not.toHaveBeenCalled();
+    expect(loadPluginRegistrySnapshotWithMetadataMock).not.toHaveBeenCalled();
     expect(getCurrentPluginMetadataSnapshotMock).toHaveBeenCalledWith({
       config: undefined,
       env: undefined,
@@ -697,20 +755,32 @@ describe("resolvePluginProviders", () => {
     });
   });
 
-  it("uses current metadata owner maps for cli backend provider refs", () => {
-    const plugins = [
-      createManifestProviderPlugin({
-        id: "anthropic",
-        providerIds: [],
-        cliBackends: ["claude-cli"],
-      }),
-    ];
-    getCurrentPluginMetadataSnapshotMock.mockReturnValue(createMetadataSnapshotFixture(plugins));
+  it.each(["current", "supplied"])(
+    "uses %s metadata owner maps for cli backend provider refs",
+    (source) => {
+      const plugins = [
+        createManifestProviderPlugin({
+          id: "anthropic",
+          providerIds: [],
+          cliBackends: ["claude-cli"],
+        }),
+      ];
+      const metadataSnapshot = createMetadataSnapshotFixture(plugins);
+      if (source === "current") {
+        getCurrentPluginMetadataSnapshotMock.mockReturnValue(metadataSnapshot);
+      }
 
-    expect(resolveOwningPluginIdsForProviderRef({ provider: "claude-cli" })).toEqual(["anthropic"]);
+      expect(
+        resolveOwningPluginIdsForProviderRef({
+          provider: "claude-cli",
+          ...(source === "supplied" ? { metadataSnapshot } : {}),
+        }),
+      ).toEqual(["anthropic"]);
 
-    expect(loadPluginMetadataSnapshotMock).not.toHaveBeenCalled();
-  });
+      expect(loadPluginMetadataSnapshotMock).not.toHaveBeenCalled();
+      expect(loadPluginRegistrySnapshotWithMetadataMock).not.toHaveBeenCalled();
+    },
+  );
 
   it("keeps normalized case-variant owners from current metadata maps", () => {
     const plugins = [
@@ -766,6 +836,7 @@ describe("resolvePluginProviders", () => {
     ).toEqual(["fresh-owner"]);
 
     expect(getCurrentPluginMetadataSnapshotMock).not.toHaveBeenCalled();
+    expect(loadPluginRegistrySnapshotWithMetadataMock).not.toHaveBeenCalled();
   });
 
   it("maps manifest provider auth aliases to the target provider owner", () => {
@@ -800,7 +871,6 @@ describe("resolvePluginProviders", () => {
   beforeEach(() => {
     setActivePluginRegistry(createEmptyPluginRegistry());
     resolveRuntimePluginRegistryMock.mockReset();
-    getRuntimePluginRegistryForLoadOptionsMock.mockReset();
     resolveCompatibleRuntimePluginRegistryMock.mockReset();
     loadOpenClawPluginsMock.mockReset();
     isPluginRegistryLoadInFlightMock.mockReset();
@@ -810,6 +880,12 @@ describe("resolvePluginProviders", () => {
     loadPluginRegistrySnapshotMock.mockImplementation(() =>
       createProviderRegistrySnapshotFixture(),
     );
+    loadPluginRegistrySnapshotWithMetadataMock.mockReset();
+    loadPluginRegistrySnapshotWithMetadataMock.mockImplementation(() => ({
+      snapshot: createProviderRegistrySnapshotFixture(),
+      source: "derived",
+      diagnostics: [],
+    }));
     getCurrentPluginMetadataSnapshotMock.mockReset();
     getCurrentPluginMetadataSnapshotMock.mockReturnValue(undefined);
     const provider: ProviderPlugin = {
@@ -820,9 +896,6 @@ describe("resolvePluginProviders", () => {
     const registry = createEmptyPluginRegistry();
     registry.providers.push({ pluginId: "google", provider, source: "bundled" });
     resolveRuntimePluginRegistryMock.mockReturnValue(registry);
-    getRuntimePluginRegistryForLoadOptionsMock.mockImplementation((...args) =>
-      resolveRuntimePluginRegistryMock(...args),
-    );
     loadOpenClawPluginsMock.mockReturnValue(registry);
     loadPluginManifestRegistryMock.mockReset();
     applyPluginAutoEnableMock.mockReset();
@@ -1470,7 +1543,6 @@ describe("resolvePluginProviders", () => {
 
     expect(providers).toStrictEqual([]);
     expect(resolveRuntimePluginRegistryMock).not.toHaveBeenCalled();
-    expect(getRuntimePluginRegistryForLoadOptionsMock).not.toHaveBeenCalled();
   });
 
   it("does not auto-activate workspace runtime owners by default", () => {
@@ -1492,7 +1564,6 @@ describe("resolvePluginProviders", () => {
 
     expect(providers).toStrictEqual([]);
     expect(resolveRuntimePluginRegistryMock).not.toHaveBeenCalled();
-    expect(getRuntimePluginRegistryForLoadOptionsMock).not.toHaveBeenCalled();
   });
 
   it("keeps explicit provider requests scoped when runtime owner activation resolves nothing", () => {
@@ -1517,7 +1588,6 @@ describe("resolvePluginProviders", () => {
 
     expect(providers).toStrictEqual([]);
     expect(resolveRuntimePluginRegistryMock).not.toHaveBeenCalled();
-    expect(getRuntimePluginRegistryForLoadOptionsMock).not.toHaveBeenCalled();
   });
 
   it("does not keep explicitly trusted disabled workspace setup owners discoverable", () => {

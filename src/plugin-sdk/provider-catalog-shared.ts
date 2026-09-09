@@ -18,6 +18,8 @@ export type {
   ProviderCatalogResult,
 } from "../plugins/types.js";
 
+export { resolveMergedModelProviderConfig } from "../config/model-provider-config.js";
+
 export {
   buildManifestModelProviderConfig,
   buildManifestProviderCatalogFamily,
@@ -25,6 +27,7 @@ export {
   buildSingleProviderApiKeyCatalog,
   findCatalogTemplate,
   readManifestProviderDefaultModelRef,
+  resolveFirstProviderCatalogAuth,
   type ManifestProviderCatalogEntry,
   type ManifestProviderCatalogSurface,
 } from "../plugins/provider-catalog.js";

@@ -100,21 +100,32 @@ and records `gate=token`, without a strength. Rejections before authentication r
 a strength. `min: "mutable"` remains valid and accepts any classified strength; lowering
 the minimum does not bypass the sender allowlist or freshness checks.
 
-The default minimum remains `verified`; `asserted` and `verified` admission are
-unchanged. An explicit `min: "unverified"` now admits no-evidence mail and DMARC
-`temperror` results, which previously required `min: "mutable"`. Authenticator
-exceptions still cause retries unless an explicitly trusted header satisfies the floor.
+The default minimum is `verified`. An explicit `min: "unverified"` admits
+no-evidence mail and DMARC `temperror` results. Authenticator exceptions cause
+retries unless an explicitly trusted header satisfies the floor.
 
-Configure a sender-bound token only when an allowlisted sender cannot produce useful DKIM or DMARC authentication:
+Configure a sender-bound token only when an allowlisted sender cannot produce useful DKIM or DMARC authentication. `addressTokens` is a per-account key; add it inside the account entry, alongside `allowedSenders` and `senderAuth`:
 
 ```json5 validate=false
 {
-  addressTokens: [
-    {
-      token: "<long-random-token>",
-      senders: ["scanner@example.com"],
+  plugins: {
+    entries: {
+      imap: {
+        config: {
+          accounts: {
+            personal: {
+              addressTokens: [
+                {
+                  token: "<long-random-token>",
+                  senders: ["scanner@example.com"],
+                },
+              ],
+            },
+          },
+        },
+      },
     },
-  ],
+  },
 }
 ```
 

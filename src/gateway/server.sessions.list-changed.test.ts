@@ -14,6 +14,7 @@ import {
   projectSessionDeliveryFields,
 } from "../utils/delivery-context.shared.js";
 import { createGatewayBroadcaster } from "./server-broadcast.js";
+import { GatewayClientRegistry } from "./server/client-registry.js";
 import { embeddedRunMock, rpcReq, testState, writeSessionStore } from "./test-helpers.js";
 import {
   setupGatewaySessionsTestHarness,
@@ -698,7 +699,7 @@ test("sessions.changed mutations reach plugin subscribers without websocket clie
   await writeMainSessionStore({ label: "Original title" });
   const received = vi.fn();
   const unsubscribe = subscribePluginSessionsChanged(received);
-  const { broadcastToConnIds } = createGatewayBroadcaster({ clients: new Set() });
+  const { broadcastToConnIds } = createGatewayBroadcaster({ clients: new GatewayClientRegistry() });
 
   try {
     await invokeSessionMutation({
@@ -889,7 +890,7 @@ test("sessions.list yields before responding during bulk transcript hydration", 
   const payload = expectRespondPayload(respond);
   const session = findSession(payload, "agent:main:bulk-0");
   expectFields(session, {
-    derivedTitle: "title 0",
+    derivedTitle: "Title 0",
     lastMessagePreview: "last 0",
   });
 });

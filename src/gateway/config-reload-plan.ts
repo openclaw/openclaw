@@ -11,6 +11,7 @@ import {
   getActivePluginHttpRouteRegistryVersion,
 } from "../plugins/runtime.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/account-id.js";
+import { isTranscriptTitleOnlyConfigChange } from "../transcripts/config-reload.js";
 import { isPlainObject } from "../utils.js";
 import { canHotReloadGatewayAuthCredentials } from "./auth-resolve.js";
 
@@ -31,6 +32,7 @@ export type GatewayReloadPlan = {
   reconcileSystemJobs?: boolean;
   reloadPlugins: boolean;
   restartChannels: Set<ChannelKind>;
+  restartServices?: Set<string>;
   disposeMcpRuntimes: boolean;
   /** Account targets; absent means no targeted restarts for hand-built plans. */
   restartChannelAccounts?: Map<ChannelKind, Set<string>>;
@@ -56,6 +58,7 @@ export function isNoopGatewayReloadPlan(plan: GatewayReloadPlan): boolean {
     plan.hotReasons.length === 0 &&
     RELOAD_ACTIONS.every((action) => !plan[action]) &&
     plan.restartChannels.size === 0 &&
+    (plan.restartServices?.size ?? 0) === 0 &&
     (plan.restartChannelAccounts?.size ?? 0) === 0
   );
 }
@@ -65,6 +68,7 @@ type ReloadPolicy = {
   kind: "restart" | "hot" | "none";
   actions?: readonly ReloadAction[];
   channels?: readonly ChannelPlugin[];
+  services?: readonly string[];
   accountScoped?: boolean;
 };
 type ReloadRule = Omit<ReloadPolicy, "prefixes"> & { prefix: string };
@@ -79,10 +83,55 @@ type GatewayReloadPlanOptions = {
   /** Candidate config used to reject removed, unknown, or unresolvable account targets. */
   candidateConfig?: OpenClawConfig;
   previousConfig?: OpenClawConfig;
+  /** Authored comparison snapshots retain intent that runtime overlays may hide. */
+  previousCompareConfig?: OpenClawConfig;
+  candidateCompareConfig?: OpenClawConfig;
 };
 
 const PLUGIN_INSTALL_TIMESTAMP_KEYS = ["installedAt", "resolvedAt"] as const;
 const AUTH_CREDENTIAL_PATHS = ["gateway.auth.token", "gateway.auth.password"];
+const SHARED_CHANNEL_PREFIXES = [
+  "agents.defaults.mediaMaxMb",
+  "channels.defaults",
+  "channels.modelByChannel",
+  "messages.inbound",
+  "messages.ackReactionScope",
+  "commands",
+  "accessGroups",
+  "tts",
+  "surfaces",
+  "acp.stream",
+  "diagnostics.flags",
+];
+
+function matchesReloadPrefix(path: string, prefix: string): boolean {
+  if (prefix.includes("*")) {
+    const segments = path.split(".");
+    return prefix
+      .split(".")
+      .every((segment, index) =>
+        segment === "*" ? Boolean(segments[index]) : segment === segments[index],
+      );
+  }
+  return path === prefix || path.startsWith(`${prefix}.`);
+}
+
+function compareReloadRules(left: ReloadRule, right: ReloadRule): number {
+  const leftSegments = left.prefix.split(".");
+  const rightSegments = right.prefix.split(".");
+  // A long record key must not outrank a deeper wildcard policy boundary.
+  return (
+    rightSegments.length - leftSegments.length ||
+    leftSegments.filter((segment) => segment === "*").length -
+      rightSegments.filter((segment) => segment === "*").length
+  );
+}
+
+function expandReloadPolicies(policies: ReloadPolicy[]): ReloadRule[] {
+  return policies
+    .flatMap(({ prefixes, ...policy }) => prefixes.map((prefix) => ({ ...policy, prefix })))
+    .toSorted(compareReloadRules);
+}
 
 const CORE_RELOAD_POLICIES: ReloadPolicy[] = [
   { prefixes: ["gateway.remote", "gateway.reload"], kind: "none" },
@@ -104,12 +153,10 @@ const CORE_RELOAD_POLICIES: ReloadPolicy[] = [
       "gateway.http.securityHeaders.strictTransportSecurity",
       "gateway.tools",
       "gateway.cliAgents",
-      "gateway.publicOrigin",
       "gateway.controlUi.enabled",
       "gateway.controlUi.environment",
       "gateway.controlUi.communityInvite",
       "gateway.controlUi.github",
-      "gateway.controlUi.toolTitles",
       "gateway.controlUi.sessionObserver",
       "gateway.controlUi.embedSandbox",
       "gateway.controlUi.allowExternalEmbedUrls",
@@ -124,6 +171,7 @@ const CORE_RELOAD_POLICIES: ReloadPolicy[] = [
       "gateway.push.apns.relay",
       "gateway.terminal",
       "gateway.auth.rateLimit",
+      "diagnostics.enabled",
       "discovery.mdns.mode",
       "mcp.apps.sandboxOrigin",
       "agents.defaults",
@@ -170,7 +218,7 @@ const CORE_RELOAD_POLICIES: ReloadPolicy[] = [
     actions: ["reconcileSystemJobs"],
   },
   { prefixes: ["cron"], kind: "hot", actions: ["restartCron"] },
-  { prefixes: ["mcp"], kind: "hot", actions: ["disposeMcpRuntimes"] },
+  { prefixes: ["mcp", "gateway.publicOrigin"], kind: "hot", actions: ["disposeMcpRuntimes"] },
   // Capability ownership changes replace the plugin generation that owns its routes.
   {
     prefixes: ["talk.provider", "talk.realtime.provider"],
@@ -227,7 +275,6 @@ const DEFAULT_RELOAD_POLICIES: ReloadPolicy[] = [
     ],
     kind: "hot",
   },
-  { prefixes: ["session.scope", "session.store"], kind: "hot", actions: ["refreshHooksPolicy"] },
   { prefixes: ["plugins"], kind: "hot", actions: ["reloadPlugins", "disposeMcpRuntimes"] },
   { prefixes: ["gateway", "discovery"], kind: "restart" },
 ];
@@ -249,6 +296,28 @@ function getReloadPolicyCatalog() {
     return cachedCatalog;
   }
   const channelPlugins = listChannelPlugins();
+  const servicePolicies = (registry?.services ?? []).map(({ service }) => ({
+    prefixes: service.reload?.configPrefixes ?? [],
+    services: [service.id],
+  }));
+  const channelPolicies = channelPlugins.flatMap((plugin): ReloadPolicy[] => [
+    {
+      prefixes: plugin.reload?.configPrefixes ?? [],
+      kind: "hot",
+      channels: [plugin],
+      accountScoped: plugin.reload?.accountScopedRestart,
+    },
+    { prefixes: plugin.reload?.noopPrefixes ?? [], kind: "none", channels: [plugin] },
+  ]);
+  const channelRules = expandReloadPolicies(channelPolicies);
+  const sharedPrefixes = new Set([
+    ...SHARED_CHANNEL_PREFIXES,
+    ...channelRules
+      .filter(({ prefix }) =>
+        SHARED_CHANNEL_PREFIXES.some((root) => matchesReloadPrefix(prefix, root)),
+      )
+      .map(({ prefix }) => prefix),
+  ]);
   const policies: ReloadPolicy[] = [
     ...CORE_RELOAD_POLICIES,
     ...(registry?.reloads ?? []).flatMap(({ registration }) =>
@@ -260,48 +329,53 @@ function getReloadPolicyCatalog() {
         ] as const
       ).map(([kind, prefixes]) => ({ kind, prefixes: prefixes ?? [] })),
     ),
-    ...channelPlugins.flatMap((plugin): ReloadPolicy[] => [
-      {
-        prefixes: plugin.reload?.configPrefixes ?? [],
-        kind: "hot",
-        channels: [plugin],
-        accountScoped: plugin.reload?.accountScopedRestart,
-      },
-      { prefixes: plugin.reload?.noopPrefixes ?? [], kind: "none" },
-    ]),
+    // Shared policy belongs to every loaded channel. One owner's opt-out must
+    // not suppress sibling refreshes; undeclared owners remain restart-bound.
+    ...Array.from(sharedPrefixes, (prefix): ReloadPolicy => {
+      const channels = channelPlugins.filter(
+        (plugin) =>
+          channelRules.find(
+            (rule) => rule.channels?.includes(plugin) && matchesReloadPrefix(prefix, rule.prefix),
+          )?.kind !== "none",
+      );
+      const hasService = servicePolicies.some(({ prefixes }) =>
+        prefixes.some((owner) => matchesReloadPrefix(prefix, owner)),
+      );
+      return { prefixes: [prefix], kind: channels.length || hasService ? "hot" : "none", channels };
+    }),
+    ...channelPolicies,
     ...channelPlugins.map((plugin): ReloadPolicy => ({
       prefixes: [`plugins.entries.${plugin.id}`],
       kind: "hot",
       actions: ["reloadPlugins", "disposeMcpRuntimes"],
       channels: [plugin],
     })),
-    // Channel snapshots capture shared policy. Fan out by default while
-    // preserving explicit plugin/channel policies above on equal-prefix ties.
-    {
-      prefixes: [
-        "agents.defaults.mediaMaxMb",
-        "channels.defaults",
-        "channels.modelByChannel",
-        "messages.inbound",
-        "messages.ackReactionScope",
-        "commands",
-        "accessGroups",
-        "tts",
-        "surfaces",
-        "acp.stream",
-        "diagnostics.flags",
-      ],
-      kind: "hot",
-      channels: channelPlugins,
-    },
+    { prefixes: ["session.scope", "session.store"], kind: "hot", actions: ["refreshHooksPolicy"] },
     ...DEFAULT_RELOAD_POLICIES,
   ];
-  const rules = policies.flatMap(({ prefixes, ...policy }) =>
-    prefixes.map((prefix) => ({ ...policy, prefix })),
-  );
+  const ownedRules = expandReloadPolicies(policies);
+  const rules = [
+    ...ownedRules,
+    // Narrow service declarations retain existing owner actions, including
+    // channel account targeting, while supplying their own hot classification.
+    ...servicePolicies.flatMap(({ prefixes }) =>
+      prefixes.map((prefix): ReloadRule => ({
+        ...ownedRules.find((owner) => matchesReloadPrefix(prefix, owner.prefix)),
+        kind: "hot",
+        prefix,
+      })),
+    ),
+  ];
+  for (const rule of rules) {
+    rule.services = servicePolicies
+      .filter((service) =>
+        service.prefixes.some((owner) => matchesReloadPrefix(rule.prefix, owner)),
+      )
+      .flatMap((service) => service.services);
+  }
   // Narrow config contracts must override broad owner fallbacks. Sort once per
   // registry snapshot so the hot path can retain first-match semantics.
-  rules.sort((a, b) => b.prefix.length - a.prefix.length);
+  rules.sort(compareReloadRules);
   cachedCatalog = {
     registry,
     version,
@@ -316,9 +390,7 @@ export function listConfigReloadRefinementPrefixes(): string[] {
 }
 
 function matchRule(path: string): ReloadRule | undefined {
-  return getReloadPolicyCatalog().rules.find(
-    ({ prefix }) => path === prefix || path.startsWith(`${prefix}.`),
-  );
+  return getReloadPolicyCatalog().rules.find(({ prefix }) => matchesReloadPrefix(path, prefix));
 }
 
 export function resolveConfigReloadMetadata(path: string): ConfigReloadMetadata {
@@ -348,61 +420,29 @@ function getPluginInstallRecords(config: unknown): Record<string, unknown> {
   return isPlainObject(installs) ? installs : {};
 }
 
-function listPluginInstallRecordDiffPaths(
-  prevConfig: unknown,
-  nextConfig: unknown,
-  visit: (record: {
-    id: string;
-    prevRecord: unknown;
-    nextRecord: unknown;
-    paths: string[];
-  }) => void,
-): string[] {
+export function resolvePluginInstallReloadMetadata(prevConfig: unknown, nextConfig: unknown) {
   const prevInstalls = getPluginInstallRecords(prevConfig);
   const nextInstalls = getPluginInstallRecords(nextConfig);
   const ids = new Set([...Object.keys(prevInstalls), ...Object.keys(nextInstalls)]);
-  const paths: string[] = [];
+  const noopPaths: string[] = [];
+  const forceChangedPaths: string[] = [];
 
   for (const id of ids) {
-    visit({ id, prevRecord: prevInstalls[id], nextRecord: nextInstalls[id], paths });
+    const prevRecord = prevInstalls[id];
+    const nextRecord = nextInstalls[id];
+    if (!isPlainObject(prevRecord) || !isPlainObject(nextRecord)) {
+      // A dotted install id can collide with a timestamp path; whole records must still reload.
+      forceChangedPaths.push(`plugins.installs.${id}`);
+      continue;
+    }
+    for (const key of PLUGIN_INSTALL_TIMESTAMP_KEYS) {
+      if (prevRecord[key] !== nextRecord[key]) {
+        noopPaths.push(`plugins.installs.${id}.${key}`);
+      }
+    }
   }
 
-  return paths;
-}
-
-export function listPluginInstallTimestampMetadataPaths(
-  prevConfig: unknown,
-  nextConfig: unknown,
-): string[] {
-  return listPluginInstallRecordDiffPaths(
-    prevConfig,
-    nextConfig,
-    ({ id, prevRecord, nextRecord, paths }) => {
-      if (!isPlainObject(prevRecord) || !isPlainObject(nextRecord)) {
-        return;
-      }
-      for (const key of PLUGIN_INSTALL_TIMESTAMP_KEYS) {
-        if (prevRecord[key] !== nextRecord[key]) {
-          paths.push(`plugins.installs.${id}.${key}`);
-        }
-      }
-    },
-  );
-}
-
-export function listPluginInstallWholeRecordPaths(
-  prevConfig: unknown,
-  nextConfig: unknown,
-): string[] {
-  return listPluginInstallRecordDiffPaths(
-    prevConfig,
-    nextConfig,
-    ({ id, prevRecord, nextRecord, paths }) => {
-      if (!isPlainObject(prevRecord) || !isPlainObject(nextRecord)) {
-        paths.push(`plugins.installs.${id}`);
-      }
-    },
-  );
+  return { noopPaths, forceChangedPaths };
 }
 
 function extractAccountIdFromPath(channel: ChannelId, path: string): string | null {
@@ -412,7 +452,7 @@ function extractAccountIdFromPath(channel: ChannelId, path: string): string | nu
   return id && id !== DEFAULT_ACCOUNT_ID ? id : null;
 }
 
-function isResolvableChannelAccount(params: {
+function isInspectableChannelAccount(params: {
   plugin: ChannelPlugin;
   accountId: string;
   config: OpenClawConfig;
@@ -421,7 +461,9 @@ function isResolvableChannelAccount(params: {
     if (!params.plugin.config.listAccountIds(params.config).includes(params.accountId)) {
       return false;
     }
-    params.plugin.config.resolveAccount(params.config, params.accountId);
+    const inspectAccount =
+      params.plugin.config.inspectAccount ?? params.plugin.config.resolveAccount;
+    inspectAccount(params.config, params.accountId);
     return true;
   } catch {
     return false;
@@ -448,12 +490,29 @@ export function buildGatewayReloadPlan(
     reconcileSystemJobs: false,
     reloadPlugins: false,
     restartChannels: new Set(),
+    restartServices: new Set(),
     disposeMcpRuntimes: false,
     restartChannelAccounts,
     noopPaths: [],
   };
 
   for (const path of changedPaths) {
+    // Arrays diff at their parent path. Titles configure future admissions;
+    // retaining this exact live capture must not rename or finalize its archive.
+    if (
+      path === "transcripts.autoStart" &&
+      !forceChangedPaths.has(path) &&
+      options.previousConfig &&
+      options.candidateConfig &&
+      options.candidateConfig.gateway?.reload?.mode !== "off" &&
+      isTranscriptTitleOnlyConfigChange(
+        options.previousCompareConfig ?? options.previousConfig,
+        options.candidateCompareConfig ?? options.candidateConfig,
+      )
+    ) {
+      plan.noopPaths.push(path);
+      continue;
+    }
     const isTimestampNoop =
       !forceChangedPaths.has(path) &&
       (noopPaths.size > 0 ? noopPaths.has(path) : isPluginInstallTimestampPath(path));
@@ -480,12 +539,15 @@ export function buildGatewayReloadPlan(
     for (const action of rule?.actions ?? []) {
       plan[action] = true;
     }
+    for (const service of rule?.services ?? []) {
+      plan.restartServices?.add(service);
+    }
     for (const plugin of rule?.channels ?? []) {
       const accountId = rule?.accountScoped ? extractAccountIdFromPath(plugin.id, path) : null;
       if (
         accountId === null ||
         (options.candidateConfig &&
-          !isResolvableChannelAccount({ plugin, accountId, config: options.candidateConfig }))
+          !isInspectableChannelAccount({ plugin, accountId, config: options.candidateConfig }))
       ) {
         plan.restartChannels.add(plugin.id);
         continue;

@@ -38,6 +38,8 @@ export async function updateAgentConfigEntry(params: {
 }): Promise<void> {
   await mutateConfigFileWithRetry({
     afterWrite: { mode: "auto" },
+    // Identity replacement may intentionally reduce the configuration size.
+    ...(params.identity ? { writeOptions: { allowConfigSizeDrop: true } } : {}),
     mutate: (draft) => {
       if (!isConfiguredAgent(draft, params.agentId)) {
         throw new AgentConfigPreconditionError(`agent "${params.agentId}" not found`);
@@ -59,6 +61,7 @@ export async function deleteAgentConfigEntry(params: {
   agentId: string;
   validate?: (agent: AgentConfig) => void;
   validateConfig?: (config: OpenClawConfig) => void;
+  assertCurrent?: () => void;
   allowMissing?: boolean;
   allowConfigSizeDrop?: boolean;
   fallbackWorkspace?: string;
@@ -70,6 +73,7 @@ export async function deleteAgentConfigEntry(params: {
     afterWrite: { mode: "auto" },
     writeOptions: {
       allowedAgentRosterRemovals: [params.agentId],
+      assertConfigPathForWrite: params.assertCurrent,
       ...(params.allowConfigSizeDrop ? { allowConfigSizeDrop: true } : {}),
     },
     mutate: (draft) => {

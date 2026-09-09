@@ -7,6 +7,7 @@ import type {
   SessionsCatalogReadParams,
   SessionsCatalogReadResult,
 } from "../../packages/gateway-protocol/src/schema/sessions-catalog.js";
+import type { TerminalUploadPathStyle } from "../../packages/gateway-protocol/src/schema/terminal.js";
 import { listAgentIds, resolveSessionAgentIds } from "../agents/agent-scope.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -28,6 +29,10 @@ export type SessionCatalogListProviderParams = {
   listNodes?: () => ReturnType<PluginRuntime["nodes"]["list"]>;
   /** Publishes completed hosts without waiting for slower machines in the same list. */
   onHost?: (host: SessionCatalogHost) => void;
+  /** Register bounded host publication work before `list` settles; includes the onHost callback. */
+  waitUntil?: (completion: Promise<void>) => void;
+  /** Catalog owner retirement, independent of the requesting connection's lifetime. */
+  signal?: AbortSignal;
 };
 export type SessionCatalogReadProviderParams = Omit<SessionsCatalogReadParams, "catalogId"> & {
   /** Gateway always supplies this; optional only for pre-existing external provider types. */
@@ -86,6 +91,8 @@ export type SessionCatalogTerminalPlan =
       paramsJSON: string;
       cwd?: string;
       title?: string;
+      /** Opt in only for native CLI text input, never for a shell receiver. */
+      uploadPathStyle?: TerminalUploadPathStyle;
     };
 
 export type SessionCatalogCreateTarget = {

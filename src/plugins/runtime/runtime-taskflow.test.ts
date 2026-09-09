@@ -21,8 +21,8 @@ function requireCreatedFlow<T>(flow: T | null): T {
   return flow;
 }
 
-afterEach(() => {
-  resetRuntimeTaskTestState();
+afterEach(async () => {
+  await resetRuntimeTaskTestState();
 });
 
 describe("runtime TaskFlow", () => {

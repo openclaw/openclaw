@@ -82,7 +82,9 @@ Model refs follow the pattern `openrouter/<provider>/<model>`. For the full list
 available providers and models, see [/concepts/model-providers](/concepts/model-providers).
 </Note>
 
-Bundled fallback models, used when live catalog discovery is unavailable:
+Bundled starter models enrich a nonempty public catalog. A failed live request
+reports a discovery failure rather than substituting these rows; a successful
+empty response stays empty:
 
 | Model ref                         | Notes                        |
 | --------------------------------- | ---------------------------- |
@@ -481,5 +483,17 @@ does **not** inject those OpenRouter-specific headers or Anthropic cache markers
   </Card>
   <Card title="Configuration reference" href="/gateway/configuration-reference" icon="gear">
     Full config reference for agents, models, and providers.
+  </Card>
+  <Card title="Arcee" href="/providers/arcee" icon="server">
+    Arcee models reachable with an OpenRouter key.
+  </Card>
+  <Card title="Image generation" href="/tools/image-generation" icon="image">
+    Shared image tool parameters and provider selection.
+  </Card>
+  <Card title="Video generation" href="/tools/video-generation" icon="video">
+    Shared video tool parameters and provider selection.
+  </Card>
+  <Card title="Music generation" href="/tools/music-generation" icon="music">
+    Shared music tool parameters and provider selection.
   </Card>
 </CardGroup>

@@ -154,7 +154,7 @@ The agent has three tools for working with memory:
 - **`intent`** — creates, lists, or explicitly cancels event-conditioned
   standing intents. Time-based reminders continue to use scheduled tasks.
 
-Both tools are provided by the active memory plugin (default: `memory-core`).
+All three tools are provided by the active memory plugin (default: `memory-core`).
 
 ## Memory search
 
@@ -218,6 +218,10 @@ Before [compaction](/concepts/compaction) summarizes your conversation,
 OpenClaw runs a silent turn that reminds the agent to save important context
 to memory files. This is on by default; set
 `agents.defaults.compaction.memoryFlush.enabled: false` to turn it off.
+
+The flush uses a private copy of the conversation, so its housekeeping messages
+never appear in later user turns, even if interrupted. Its writes to memory files
+are still saved normally.
 
 Memory flushing requires writable workspace access. Sessions whose sandbox
 requires read-only or no workspace access skip the flush, including sessions

@@ -6,7 +6,7 @@ import ai.openclaw.app.GatewayChannelSummary
 import ai.openclaw.app.GatewayChannelsSummary
 import ai.openclaw.app.GatewayConnectionDisplay
 import ai.openclaw.app.GatewayConnectionProblem
-import ai.openclaw.app.GatewayNodeApprovalState
+import ai.openclaw.app.GatewayNodeCapabilityApproval
 import ai.openclaw.app.GatewayNodeSummary
 import ai.openclaw.app.GatewayNodesDevicesSummary
 import ai.openclaw.app.GatewayPendingDeviceSummary
@@ -423,8 +423,7 @@ class ShellScreenLogicTest {
                   deviceFamily = "Android",
                   paired = true,
                   connected = true,
-                  approvalState = GatewayNodeApprovalState.PendingApproval,
-                  pendingRequestId = null,
+                  approvalState = GatewayNodeCapabilityApproval.PendingApproval(null),
                   capabilities = emptyList(),
                   commands = emptyList(),
                 ),
@@ -478,8 +477,7 @@ class ShellScreenLogicTest {
                   deviceFamily = "Android",
                   paired = true,
                   connected = true,
-                  approvalState = GatewayNodeApprovalState.PendingReapproval,
-                  pendingRequestId = "node-request",
+                  approvalState = GatewayNodeCapabilityApproval.PendingReapproval("node-request"),
                   capabilities = emptyList(),
                   commands = emptyList(),
                 ),
@@ -633,8 +631,7 @@ class ShellScreenLogicTest {
                   deviceFamily = null,
                   paired = true,
                   connected = index <= 2,
-                  approvalState = GatewayNodeApprovalState.Approved,
-                  pendingRequestId = null,
+                  approvalState = GatewayNodeCapabilityApproval.Approved,
                   capabilities = emptyList(),
                   commands = emptyList(),
                 )
@@ -653,19 +650,28 @@ class ShellScreenLogicTest {
   }
 
   @Test
-  fun overviewGatewayCardOnlyClaimsNominalWhenNoAttentionExists() {
+  fun overviewGatewayCardDoesNotClaimHealthWhenProviderAvailabilityIsUnknown() {
+    val attentionRows =
+      homeAttentionRows(
+        isConnected = true,
+        pendingApprovals = 0,
+        channelsSummary = emptyChannels(),
+        nodesDevicesSummary = emptyNodesDevices(),
+        readyProviderCount = 0,
+        unknownProviderCount = 1,
+      )
     val cards =
       overviewMetricCardSpecs(
         isConnected = true,
-        hasAttention = false,
+        hasAttention = attentionRows.isNotEmpty(),
         nodesDevicesSummary = emptyNodesDevices(),
         pendingApprovals = 0,
         sessionCount = 0,
       )
 
     val gateway = cards.single { it.title == "Gateway" }
-    assertEquals("Healthy", gateway.value)
-    assertEquals("All systems nominal", gateway.subtitle)
+    assertEquals("Online", gateway.value)
+    assertEquals("No highlighted items", gateway.subtitle)
     assertEquals(ClawStatus.Success, gateway.status)
   }
 
@@ -786,41 +792,33 @@ class ShellScreenLogicTest {
   }
 
   @Test
-  fun settingsSectionTitlesGroupPowerSettingsByMeaning() {
-    assertEquals("Connection", settingsSectionTitleForRoute(SettingsRoute.Gateway).resolveNativeText())
-    assertEquals("Connection", settingsSectionTitleForRoute(SettingsRoute.NodesDevices).resolveNativeText())
-    assertEquals("Agents & automation", settingsSectionTitleForRoute(SettingsRoute.SystemAgent).resolveNativeText())
-    assertEquals("Agents & automation", settingsSectionTitleForRoute(SettingsRoute.ProvidersModels).resolveNativeText())
-    assertEquals("Agents & automation", settingsSectionTitleForRoute(SettingsRoute.Approvals).resolveNativeText())
-    assertEquals("Agents & automation", settingsSectionTitleForRoute(SettingsRoute.CronJobs).resolveNativeText())
-    assertEquals("Phone context & privacy", settingsSectionTitleForRoute(SettingsRoute.PhoneCapabilities).resolveNativeText())
-    assertEquals("Phone context & privacy", settingsSectionTitleForRoute(SettingsRoute.Notifications).resolveNativeText())
-    assertEquals("Profile & device", settingsSectionTitleForRoute(SettingsRoute.Appearance).resolveNativeText())
-    assertEquals("Diagnostics", settingsSectionTitleForRoute(SettingsRoute.Health).resolveNativeText())
-  }
-
-  @Test
   fun settingsSectionsPreserveMeaningfulOrder() {
     val sections =
       settingsSections(
         listOf(
           settingsRow(SettingsRoute.Voice),
-          settingsRow(SettingsRoute.Agents),
+          settingsRow(SettingsRoute.SystemAgent),
           settingsRow(SettingsRoute.Gateway),
           settingsRow(SettingsRoute.Appearance),
+          settingsRow(SettingsRoute.ProvidersModels),
+          settingsRow(SettingsRoute.Approvals),
+          settingsRow(SettingsRoute.NodesDevices),
+          settingsRow(SettingsRoute.CronJobs),
+          settingsRow(SettingsRoute.PhoneCapabilities),
+          settingsRow(SettingsRoute.Notifications),
           settingsRow(SettingsRoute.Health),
         ),
       )
 
     assertEquals(
       listOf(
-        "Connection",
-        "Agents & automation",
-        "Phone context & privacy",
-        "Profile & device",
-        "Diagnostics",
+        "Connection" to listOf(SettingsRoute.Gateway, SettingsRoute.NodesDevices),
+        "Agents & automation" to listOf(SettingsRoute.SystemAgent, SettingsRoute.ProvidersModels, SettingsRoute.Approvals, SettingsRoute.CronJobs),
+        "Phone context & privacy" to listOf(SettingsRoute.Voice, SettingsRoute.PhoneCapabilities, SettingsRoute.Notifications),
+        "Profile & device" to listOf(SettingsRoute.Appearance),
+        "Diagnostics" to listOf(SettingsRoute.Health),
       ),
-      sections.map { it.title.resolveNativeText() },
+      sections.map { section -> section.title.resolveNativeText() to section.rows.map { it.route } },
     )
   }
 
@@ -890,7 +888,7 @@ class ShellScreenLogicTest {
 
   private fun emptyNodesDevices(): GatewayNodesDevicesSummary = GatewayNodesDevicesSummary(nodes = emptyList(), pendingDevices = emptyList(), pairedDevices = emptyList())
 
-  private fun settingsRow(route: SettingsRoute): SettingsRow = SettingsRow(verbatimText(route.name), verbatimText("Value"), Icons.Default.Settings, route = route)
+  private fun settingsRow(route: SettingsRoute): SettingsRow = SettingsRow(route, verbatimText("Value"))
 
   private fun authProblem(code: String): GatewayConnectionProblem =
     GatewayConnectionProblem(

@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { gitNullConfigPath } from "../infra/git-exec.js";
 import { runCommandBuffered } from "../process/exec.js";
 import { githubPublicationUnsafeConfigArgs } from "./github-publication-base.js";
 
@@ -68,7 +69,10 @@ export async function assertSafeGitPublicationWorkspace(
   cwd: string,
   run: (argv: string[], options?: GitCommandOptions) => Promise<GitCommandResult>,
 ): Promise<void> {
-  const isolatedConfig = { GIT_CONFIG_GLOBAL: os.devNull, GIT_CONFIG_SYSTEM: os.devNull };
+  const isolatedConfig = {
+    GIT_CONFIG_GLOBAL: gitNullConfigPath(),
+    GIT_CONFIG_SYSTEM: gitNullConfigPath(),
+  };
   const [localUnsafe, worktreeConfig] = await Promise.all([
     run(githubPublicationUnsafeConfigArgs("--local"), { cwd, env: isolatedConfig }),
     run(
@@ -134,20 +138,29 @@ async function readOptionalAttributeFile(file: string): Promise<Buffer | undefin
   }
 }
 
-async function assertGitHubPublicationTreeHasNoFilters(
+export async function readGitHubPublicationTree(
   cwd: string,
   workspaceTree: string,
   run: (argv: string[], options?: GitCommandOptions) => Promise<GitCommandResult>,
-): Promise<void> {
+): Promise<Buffer> {
   const listing = await run(["git", "ls-tree", "-r", "-z", "--full-tree", workspaceTree], {
     cwd,
     maxOutputBytes: TREE_LISTING_MAX_OUTPUT_BYTES,
   });
   if (listing.code !== 0) {
-    throw new Error("GitHub publication workspace attributes could not be verified.");
+    throw new Error("GitHub publication workspace tree could not be verified.");
   }
+  return listing.stdout;
+}
+
+async function assertGitHubPublicationTreeHasNoFilters(
+  cwd: string,
+  workspaceTree: string,
+  run: (argv: string[], options?: GitCommandOptions) => Promise<GitCommandResult>,
+): Promise<void> {
+  const listing = await readGitHubPublicationTree(cwd, workspaceTree, run);
   const attributeObjects = new Set<string>();
-  for (const record of listing.stdout.toString("latin1").split("\0")) {
+  for (const record of listing.toString("latin1").split("\0")) {
     const tab = record.indexOf("\t");
     if (tab < 0) {
       continue;
@@ -214,17 +227,21 @@ export async function captureGitHubPublicationWorkspaceSnapshot(params: {
   const sourceHeadCommit = await command(["git", "rev-parse", "--verify", "HEAD^{commit}"], {
     cwd: params.cwd,
   });
-  const sourceIndexTree = await git(["write-tree"]);
+  const index = path.resolve(params.cwd, await git(["rev-parse", "--git-path", "index"]));
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-github-snapshot-"));
   try {
-    const env: NodeJS.ProcessEnv = {
+    const env = {
       GIT_ATTR_NOSYSTEM: "1",
-      GIT_CONFIG_GLOBAL: os.devNull,
-      GIT_CONFIG_SYSTEM: os.devNull,
+      GIT_CONFIG_GLOBAL: gitNullConfigPath(),
+      GIT_CONFIG_SYSTEM: gitNullConfigPath(),
       GIT_INDEX_FILE: path.join(tempDir, "index"),
     };
-    await git(["read-tree", sourceHeadCommit], env);
+    // Preserve staged path inventory, and keep write-tree cache updates off the real index.
+    await step(() => fs.copyFile(index, env.GIT_INDEX_FILE));
+    const sourceIndexTree = await git(["write-tree"], env);
     await git(["-c", `core.attributesFile=${os.devNull}`, "add", "-A"], env);
+    // Normalize after removals, retaining intent-to-add paths and ignoring copied stat caches.
+    await git(["-c", `core.attributesFile=${os.devNull}`, "add", "--renormalize", "-u"], env);
     const workspaceTree = await git(["write-tree"], env);
     await step(() =>
       assertGitHubPublicationTreeHasNoFilters(params.cwd, workspaceTree, runPublicationCommand),

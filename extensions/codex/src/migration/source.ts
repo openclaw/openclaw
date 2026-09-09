@@ -62,6 +62,7 @@ export type CodexSource = {
 type CodexSourceDiscoveryOptions = {
   input?: string;
   memoryOnly?: boolean;
+  authOnly?: boolean;
   evaluatePluginMigrationEligibility?: boolean;
   verifyPluginApps?: boolean;
 };
@@ -569,21 +570,22 @@ export async function discoverCodexSource(
   const authPath = path.join(codexHome, "auth.json");
   const modelsCachePath = path.join(codexHome, "models_cache.json");
   const hooksPath = path.join(codexHome, "hooks", "hooks.json");
-  const memoryFiles = await discoverCodexMemorySources(codexHome);
-  const codexSkills = options.memoryOnly
+  const skipAssets = options.memoryOnly === true || options.authOnly === true;
+  const memoryFiles = options.authOnly ? [] : await discoverCodexMemorySources(codexHome);
+  const codexSkills = skipAssets
     ? []
     : await discoverSkillDirs({
         root: codexSkillsDir,
         sourceLabel: "Codex skill",
         excludeSystem: true,
       });
-  const personalAgentSkills = options.memoryOnly
+  const personalAgentSkills = skipAssets
     ? []
     : await discoverSkillDirs({
         root: agentsSkillsDir,
         sourceLabel: "personal AgentSkill",
       });
-  const sourcePluginDiscovery: { plugins: CodexPluginSource[]; error?: string } = options.memoryOnly
+  const sourcePluginDiscovery: { plugins: CodexPluginSource[]; error?: string } = skipAssets
     ? { plugins: [] }
     : await discoverInstalledCuratedPlugins(codexHome, options);
   const sourcePluginNames = new Set(
@@ -591,17 +593,15 @@ export async function discoverCodexSource(
       plugin.pluginName ? [plugin.pluginName] : [],
     ),
   );
-  const cachedPlugins = (options.memoryOnly ? [] : await discoverPluginDirs(codexHome)).filter(
-    (plugin) => {
-      const normalizedName = sanitizePluginName(plugin.name);
-      return !sourcePluginNames.has(normalizedName);
-    },
-  );
+  const cachedPlugins = (skipAssets ? [] : await discoverPluginDirs(codexHome)).filter((plugin) => {
+    const normalizedName = sanitizePluginName(plugin.name);
+    return !sourcePluginNames.has(normalizedName);
+  });
   const plugins = [...sourcePluginDiscovery.plugins, ...cachedPlugins].toSorted((a, b) =>
     a.source.localeCompare(b.source),
   );
   const archivePaths: CodexArchiveSource[] = [];
-  if (!options.memoryOnly && (await exists(configPath))) {
+  if (!skipAssets && (await exists(configPath))) {
     archivePaths.push({
       id: "archive:config.toml",
       path: configPath,
@@ -609,7 +609,7 @@ export async function discoverCodexSource(
       message: "Codex config is archived for manual review; it is not activated automatically",
     });
   }
-  if (!options.memoryOnly && (await exists(hooksPath))) {
+  if (!skipAssets && (await exists(hooksPath))) {
     archivePaths.push({
       id: "archive:hooks/hooks.json",
       path: hooksPath,

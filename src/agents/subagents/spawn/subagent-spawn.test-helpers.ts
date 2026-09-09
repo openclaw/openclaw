@@ -260,13 +260,12 @@ export async function loadSubagentSpawnModuleForTest(params: {
     formatThinkingLevels: (levels: string[]) => levels.join(", "),
     normalizeThinkLevel: (level: unknown) => normalizeOptionalString(level),
     DEFAULT_SUBAGENT_MAX_CHILDREN_PER_AGENT: 5,
-    DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH: 3,
     ADMIN_SCOPE: "operator.admin",
     AGENT_LANE_SUBAGENT: "subagent",
     getRuntimeConfig: () =>
       params.getRuntimeConfig?.() ??
       createSubagentSpawnTestConfig(params.workspaceDir ?? os.tmpdir()),
-    loadPreparedModelCatalog: (...args: unknown[]) =>
+    readPreparedModelCatalog: (...args: unknown[]) =>
       params.loadPreparedModelCatalogMock?.(...args) ?? [],
     resolveProviderRefOwnership: (...args: unknown[]) =>
       params.resolveProviderRefOwnershipMock?.(...args) ?? {

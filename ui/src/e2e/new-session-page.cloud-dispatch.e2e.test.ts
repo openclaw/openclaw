@@ -1,5 +1,6 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { CLOUD_PROFILE_RETRY_DELAYS_MS } from "../pages/new-session/cloud-profile-discovery.ts";
@@ -7,6 +8,7 @@ import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-
 import { tooltipTitleText } from "./control-ui-e2e-suite.test-support.ts";
 import {
   ONE_PIXEL_PNG_B64,
+  NEW_SESSION_MODEL_CATALOG,
   SESSION_LIST_DEFAULTS,
   TARGET_REPO,
   WORKSPACE,
@@ -14,6 +16,7 @@ import {
   captureUiProofEnabled,
   controlUiSessionPath,
   controlUiSessionUrl,
+  createCloudAgentsListResponse,
   createNewSessionPageE2eSuite,
   createdSessionListResult,
   expectPendingSessionPlacementStartupBeforeRuntime,
@@ -112,6 +115,7 @@ suite.define(() => {
         : {}),
     });
     const page = await context.newPage();
+    await page.clock.install();
     const runtimeLoad = createDeferred();
     let runtimeRequested = false;
     await page.route(SESSION_PLACEMENT_STARTUP_RUNTIME_REQUEST, async (route) => {
@@ -122,6 +126,7 @@ suite.define(() => {
     const sessionKey = "agent:cloud:cloud-e2e";
     const gateway = await installMockGateway(page, {
       defaultAgentId: "cloud",
+      models: NEW_SESSION_MODEL_CATALOG,
       operatorScopes: ["operator.admin", "operator.read", "operator.write"],
       deferredMethods: ["sessions.dispatch"],
       featureMethods: [
@@ -135,20 +140,7 @@ suite.define(() => {
       workspaceGit: true,
       sessionKey: "agent:cloud:neutral-e2e",
       methodResponses: {
-        "agents.list": {
-          agents: [
-            {
-              id: "cloud",
-              identity: { name: "Cloud" },
-              name: "Cloud",
-              workspace: WORKSPACE,
-              workspaceGit: true,
-            },
-          ],
-          defaultId: "cloud",
-          mainKey: "main",
-          scope: "agent",
-        },
+        "agents.list": createCloudAgentsListResponse(),
         "projects.list": {
           projects: [
             {
@@ -380,10 +372,11 @@ suite.define(() => {
         await page.keyboard.press("Escape");
       }
 
-      await page.clock.install();
-      await gateway.setMethodResponse("environments.list", {
-        __mockError: { code: "UNAVAILABLE", message: "profile catalog remains unavailable" },
-      });
+      const profileCatalogError = {
+        code: "UNAVAILABLE",
+        message: "profile catalog remains unavailable",
+      };
+      await gateway.setMethodResponse("environments.list", { __mockError: profileCatalogError });
       await gateway.deferNext("environments.list");
       const requestsBeforePersistentFailure = (await gateway.getRequests("environments.list"))
         .length;
@@ -398,15 +391,19 @@ suite.define(() => {
           await takeControlUiViewportScreenshot(page, page.locator(".shell"), [startButton]),
         );
       }
-      await gateway.rejectDeferred("environments.list", {
-        code: "UNAVAILABLE",
-        message: "profile catalog remains unavailable",
-      });
+      await gateway.rejectDeferred("environments.list", profileCatalogError);
 
+      // A recorded request is not a processed failure. Let the page settle and
+      // schedule its next retry before advancing the clock.
+      await expect.poll(() => startButton.isDisabled()).toBe(false);
       for (const delayMs of CLOUD_PROFILE_RETRY_DELAYS_MS) {
+        await gateway.deferNext("environments.list");
         const requestsBeforeRetry = (await gateway.getRequests("environments.list")).length;
         await page.clock.fastForward(delayMs + 1);
         await gateway.waitForRequest("environments.list", { after: requestsBeforeRetry });
+        await expect.poll(() => startButton.isDisabled()).toBe(true);
+        await gateway.rejectDeferred("environments.list", profileCatalogError);
+        await expect.poll(() => startButton.isDisabled()).toBe(false);
       }
       await page.clock.resume();
       expect(await gateway.getRequests("environments.list")).toHaveLength(
@@ -477,8 +474,7 @@ suite.define(() => {
           await takeControlUiViewportScreenshot(page, page.locator(".shell"), [startupStatus]),
         );
       }
-      const describeRequestsAfterNavigation = (await gateway.getRequests("sessions.describe"))
-        .length;
+      await gateway.waitForRequest("sessions.describe", { match: { key: sessionKey } });
       await expect.poll(() => page.url()).toContain(controlUiSessionPath(sessionKey));
       await expect
         .poll(() => page.locator(".agent-chat__composer-combobox textarea").isDisabled())
@@ -535,11 +531,24 @@ suite.define(() => {
         ["starting", 4, "Starting…"],
       ] as const) {
         await publishPlacement(state, generation, label, state === "starting");
+        await page.clock.runFor(250);
         expect(await gateway.getRequests("sessions.send")).toHaveLength(0);
       }
-      expect(await gateway.getRequests("sessions.describe")).toHaveLength(
-        describeRequestsAfterNavigation,
-      );
+      // This single-page fixture pairs each Swarm child read with its parent read.
+      // Placement updates must not add an unpaired describe for the same session.
+      const parentReads = (await gateway.getRequests()).filter((request) => {
+        const params = asNullableRecord(request.params);
+        return (
+          (request.method === "sessions.describe" && params?.key === sessionKey) ||
+          (request.method === "sessions.list" && params?.spawnedBy === sessionKey)
+        );
+      });
+      for (let index = 0; index < parentReads.length; index += 2) {
+        expect(parentReads.slice(index, index + 2)).toMatchObject([
+          { method: "sessions.list", params: { spawnedBy: sessionKey } },
+          { method: "sessions.describe", params: { key: sessionKey } },
+        ]);
+      }
       const neutralRow = page.locator('[data-session-key="agent:cloud:neutral-e2e"] a');
       await neutralRow.waitFor();
       await neutralRow.click();

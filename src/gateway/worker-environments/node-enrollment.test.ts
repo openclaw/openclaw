@@ -117,6 +117,11 @@ describe("worker node enrollment", () => {
       ),
       fs.writeFile(path.join(packageRoot, "openclaw.mjs"), 'import "./dist/entry.js";'),
       fs.writeFile(path.join(packageRoot, "node-version.mjs"), "export const supported = true;"),
+      fs.writeFile(path.join(packageRoot, "node-sqlite.mjs"), "export const probe = true;"),
+      fs.writeFile(
+        path.join(packageRoot, "node-runtime-update.mjs"),
+        "export const update = true;",
+      ),
       fs.writeFile(path.join(packageRoot, "dist/entry.js"), "export const ready = true;"),
       fs.writeFile(
         path.join(packageRoot, "dist/build-info.json"),
@@ -161,6 +166,10 @@ describe("worker node enrollment", () => {
     "169.254.10.2",
     "0.0.0.0",
     "[::]",
+    "[::ffff:0.0.0.0]",
+    "[::ffff:0:0]",
+    "[64:ff9b::0.0.0.0]",
+    "[64:ff9b::]",
     "[fe80::1]",
     "[febf::1]",
   ])("rejects unreachable cloud Gateway host %s before preparing artifacts", async (host) => {
@@ -172,7 +181,7 @@ describe("worker node enrollment", () => {
 
     await expect(manager.prepare(createRequested())).rejects.toThrow(
       new Error(
-        `Cloud node bootstrap resolved a Gateway address that a cloud worker cannot reach (ws://${host}:19821, from plugins.entries.device-pair.config.publicUrl). Set gateway.publicOrigin (or plugins.entries.device-pair.config.publicUrl) to a URL reachable from the worker, such as a Tailscale Funnel or a reverse-proxied public origin with gateway.trustedProxies, then redispatch.`,
+        `Cloud node bootstrap resolved a Gateway address that a cloud worker cannot reach (ws://${new URL(`http://${host}`).hostname}:19821, from plugins.entries.device-pair.config.publicUrl). Set gateway.publicOrigin (or plugins.entries.device-pair.config.publicUrl) to a URL reachable from the worker, such as a Tailscale Funnel or a reverse-proxied public origin with gateway.trustedProxies, then redispatch.`,
       ),
     );
     expect(prepareArtifact).not.toHaveBeenCalled();
@@ -182,7 +191,7 @@ describe("worker node enrollment", () => {
     const prepareArtifact = vi.fn(async () => artifact());
     const manager = createManager({ prepareArtifact });
 
-    await expect(manager.prepare(createRequested())).resolves.toBeUndefined();
+    await expect(manager.prepare(createRequested())).resolves.toBe(artifact().tarballSha256);
     expect(prepareArtifact).toHaveBeenCalledOnce();
   });
 

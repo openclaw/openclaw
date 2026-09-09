@@ -1,7 +1,9 @@
+import { EventEmitter } from "node:events";
 import path from "node:path";
+import type { FSWatcherEventMap } from "chokidar";
 import { expect, vi } from "vitest";
 
-type WatchEvent = "add" | "addDir" | "all" | "change" | "unlink" | "unlinkDir" | "raw" | "error";
+type WatchEvent = keyof FSWatcherEventMap;
 type WatchCallback = (...args: unknown[]) => void;
 type WatchOptions = {
   depth: number;
@@ -14,20 +16,22 @@ type WatchOptions = {
 };
 
 function createMockWatcher() {
-  const handlers = new Map<WatchEvent, WatchCallback[]>();
+  const events = new EventEmitter();
   const watcher = {
     closed: false,
     on: vi.fn((event: WatchEvent, callback: WatchCallback) => {
-      handlers.set(event, [...(handlers.get(event) ?? []), callback]);
+      events.on(event, callback);
       return watcher;
     }),
     close: vi.fn(async () => {
+      if (watcher.closed) {
+        return;
+      }
       watcher.closed = true;
+      events.removeAllListeners();
     }),
     emit: (event: WatchEvent, ...args: unknown[]) => {
-      for (const callback of handlers.get(event) ?? []) {
-        callback(...args);
-      }
+      events.emit(event, ...args);
     },
   };
   return watcher;

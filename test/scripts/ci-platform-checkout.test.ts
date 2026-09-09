@@ -236,7 +236,12 @@ it.concurrent.each([
             report.commands.some(
               ({ args }) =>
                 args.join(" ") ===
-                "sparse-checkout set --no-cone /.github/actions/ /scripts/ios-screenshot-evidence.mjs /scripts/lib/direct-run.mjs",
+                [
+                  "sparse-checkout set --no-cone /.github/actions/ /scripts/ios-screenshot-evidence.mjs /scripts/lib/direct-run.mjs",
+                  ...(linux
+                    ? ["/scripts/lib/release-upgrade-baseline.mjs /scripts/lib/release-version.mjs"]
+                    : []),
+                ].join(" "),
             ),
           ).toBe(true);
           expect(report.commands.at(-1)?.args).toEqual([
@@ -330,10 +335,11 @@ it.concurrent.each([
       "scripts/lib/direct-run.mjs": "workflow direct-run script\n",
     };
     const releasePolicy = Object.fromEntries(
-      ["scripts/lib/release-context.mjs", "scripts/lib/release-version.mjs"].map((name) => [
-        name,
-        readFileSync(name, "utf8"),
-      ]),
+      [
+        "scripts/lib/release-context.mjs",
+        "scripts/lib/release-version.mjs",
+        "scripts/lib/release-upgrade-baseline.mjs",
+      ].map((name) => [name, readFileSync(name, "utf8")]),
     );
     const candidateFiles = {
       "candidate-only.txt": "candidate stays intact\n",
@@ -345,6 +351,10 @@ it.concurrent.each([
     let workflowRevision = "";
     let candidateAction = files[action];
     let candidateEvidenceScripts: Record<string, string> = evidenceScripts;
+    const existingExcludes = retained
+      ? "/saved-artifact/\n/.ci-harness/\n"
+      : "# Existing local excludes\r\n/saved-artifact/";
+    let readSourceStatus: (() => string[]) | undefined;
     await withCiCheckoutFixture(
       `${linux ? "linux:" : ""}configured`,
       (root) => {
@@ -357,15 +367,30 @@ it.concurrent.each([
           .split(/\r?\n/u)[0];
         const gitConfig = path.join(root, "gitconfig");
         writeFileSync(gitConfig, "");
+        const gitTemplate = path.join(root, "git-template");
+        mkdirSync(path.join(gitTemplate, "info"), { recursive: true });
+        writeFileSync(path.join(gitTemplate, "info/exclude"), existingExcludes);
         const gitEnv = {
           GIT_CONFIG_NOSYSTEM: "1",
           GIT_CONFIG_GLOBAL: gitConfig,
+          GIT_TEMPLATE_DIR: gitTemplate,
           GIT_TERMINAL_PROMPT: "0",
           GIT_AUTHOR_NAME: "Checkout fixture",
           GIT_AUTHOR_EMAIL: "checkout@example.invalid",
           GIT_COMMITTER_NAME: "Checkout fixture",
           GIT_COMMITTER_EMAIL: "checkout@example.invalid",
         };
+        readSourceStatus = () =>
+          execFileSync(
+            expectDefined(git, "real Git executable"),
+            ["-C", path.join(root, "workspace"), "status", "--porcelain", "--untracked-files=all"],
+            {
+              env: { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, ...gitEnv },
+              encoding: "utf8",
+            },
+          )
+            .split(/\r?\n/u)
+            .filter(Boolean);
         const run = (...args: string[]) =>
           execFileSync(expectDefined(git, "real Git executable"), ["-C", source, ...args], {
             env: { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, ...gitEnv },
@@ -406,7 +431,10 @@ it.concurrent.each([
           for (const [name, contents] of Object.entries(candidateEvidenceScripts)) {
             writeFileSync(path.join(source, name), contents);
           }
-          run("add", action, ...Object.keys(evidenceScripts));
+          for (const name of Object.keys(releasePolicy)) {
+            writeFileSync(path.join(source, name), "throw new Error('candidate policy');\n");
+          }
+          run("add", action, ...Object.keys(evidenceScripts), ...Object.keys(releasePolicy));
           run("commit", "--no-gpg-sign", "-m", "selected candidate");
           revision = run("rev-parse", "HEAD");
         } else if (workflow === "missing") {
@@ -498,6 +526,11 @@ it.concurrent.each([
           expect(existsSync(harness)).toBe(false);
           return;
         }
+        const sourceStatus = expectDefined(readSourceStatus, "native source status");
+        expect(sourceStatus()).toEqual([]);
+        expect(readFileSync(path.join(workspace, ".git/info/exclude"), "utf8")).toBe(
+          retained ? existingExcludes : `${existingExcludes}\n/.ci-harness/\n`,
+        );
         if (workflow === "same") {
           expect(existsSync(path.join(harness, ".git"))).toBe(false);
         }
@@ -511,12 +544,32 @@ it.concurrent.each([
           }
         }
         for (const [name, contents] of Object.entries(releasePolicy)) {
-          expect(existsSync(path.join(harness, name))).toBe(preflight);
-          if (preflight) {
+          const ownsPolicy = preflight
+            ? name !== "scripts/lib/release-upgrade-baseline.mjs"
+            : kind === "linux-node" && name !== "scripts/lib/release-context.mjs";
+          expect(existsSync(path.join(harness, name))).toBe(ownsPolicy);
+          if (ownsPolicy) {
             expect(readFileSync(path.join(harness, name), "utf8")).toBe(contents);
             writeFileSync(path.join(workspace, name), "throw new Error('candidate policy');\n");
             expect(readFileSync(path.join(harness, name), "utf8")).toBe(contents);
           }
+        }
+        if (kind === "linux-node") {
+          const versions = path.join(root, "published-versions.json");
+          writeFileSync(versions, JSON.stringify(["2026.9.1", "2026.9.2", "2026.9.3"]));
+          const resolved = spawnSync(
+            process.execPath,
+            [
+              path.join(harness, "scripts/lib/release-upgrade-baseline.mjs"),
+              "--candidate-version",
+              "2026.9.3",
+              "--versions-json",
+              versions,
+            ],
+            { cwd: workspace, encoding: "utf8" },
+          );
+          expect(resolved.status, resolved.stderr).toBe(0);
+          expect(resolved.stdout.trim()).toBe("openclaw@2026.9.2");
         }
         if (posix) {
           // Git tracks only executable state; checkout materialization applies the process umask.
@@ -531,10 +584,27 @@ it.concurrent.each([
             "/.github/actions/",
             "/scripts/ios-screenshot-evidence.mjs",
             "/scripts/lib/direct-run.mjs",
+            ...(kind === "linux-node"
+              ? ["/scripts/lib/release-upgrade-baseline.mjs", "/scripts/lib/release-version.mjs"]
+              : []),
           ]);
         }
         writeFileSync(path.join(workspace, action), "later candidate edit\n");
         expect(readFileSync(path.join(harness, action), "utf8")).toBe(files[action]);
+        for (const name of [
+          "saved-artifact/ignored.txt",
+          "nested/.ci-harness/source.ts",
+          "untracked-source.ts",
+        ]) {
+          mkdirSync(path.dirname(path.join(workspace, name)), { recursive: true });
+          writeFileSync(path.join(workspace, name), "later source or artifact\n");
+        }
+        const dirty = sourceStatus();
+        expect(dirty).toContain(` M ${action}`);
+        expect(dirty.filter((line) => line.startsWith("?? "))).toEqual([
+          "?? nested/.ci-harness/source.ts",
+          "?? untracked-source.ts",
+        ]);
       },
     );
   },
@@ -573,7 +643,7 @@ it.skipIf(process.platform === "win32").each(["census", "corrupt-report", "timeo
     const preload = String.raw`
 import cp from "node:child_process";
 import fs from "node:fs";
-import { syncBuiltinESMExports } from "node:module";
+import { syncFixtureBuiltinExports } from ${JSON.stringify(new URL("./fixtures/ci-fixture-runtime.cjs", import.meta.url).href)};
 import path from "node:path";
 if (process.argv[2] === "sentinel" && fault === "timeout") {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);
@@ -613,7 +683,7 @@ if (process.argv[2] === "supervise") {
     }
     return result;
   };
-  syncBuiltinESMExports();
+  syncFixtureBuiltinExports();
 }
 `;
     // Use the actual outer namespace owner, including its cleanup on exit code 1.
@@ -626,11 +696,10 @@ if (process.argv[2] === "supervise") {
 import assert from "node:assert/strict";
 import cp from "node:child_process";
 import fs from "node:fs";
-import { syncBuiltinESMExports } from "node:module";
+import { fixturePreloadEnv, syncFixtureBuiltinExports } from ${JSON.stringify(new URL("./fixtures/ci-fixture-runtime.cjs", import.meta.url).href)};
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { mock } from "node:test";
-import { pathToFileURL } from "node:url";
 const timeoutFault = process.argv[2] === "timeout";
 let root, failure;
 let supervisor, ready, onReady;
@@ -646,7 +715,7 @@ if (timeoutFault) {
     supervisor.on("message", onReady);
     return supervisor;
   };
-  syncBuiltinESMExports();
+  syncFixtureBuiltinExports();
 }
 try {
   const { withCiCheckoutFixture } = await import(process.argv[1]);
@@ -656,7 +725,7 @@ try {
     fs.writeFileSync(path.join(root, "checkout.sh"), "exit 0\n");
     const preload = path.join(root, "fault.mjs");
     fs.writeFileSync(preload, "const fault = " + JSON.stringify(process.argv[2]) + ";\n" + process.argv[3]);
-    return { NODE_OPTIONS: "--import=" + pathToFileURL(preload).href };
+    return fixturePreloadEnv(preload);
   }, (report, result, stderr) => {
     throw new Error("unexpected completed report: " + JSON.stringify({ report, result, stderr }));
   }).catch(error => {
@@ -693,7 +762,7 @@ try {
     mock.timers.reset();
     supervisor?.off("message", onReady);
     cp.fork = fork;
-    syncBuiltinESMExports();
+    syncFixtureBuiltinExports();
   }
 }
 console.log(JSON.stringify({ root, outerRoot: tmpdir(), failure,
@@ -723,7 +792,7 @@ process.exitCode = 1;
     };
     try {
       console.log(`${fault}: ${JSON.stringify({ result, ...evidence, stderr })}`);
-      expect(result, stderr).toEqual({ code: 1, signal: null });
+      expect(result, stderr).toEqual({ code: 1, signal: null, groupJoined: true });
       expect(existsSync(evidence.outerRoot), "outer runner did not remove its own namespace").toBe(
         false,
       );
@@ -836,8 +905,7 @@ cp.spawnSync = (command, args, options) => {
   }
   return spawnSync(command, args, options);
 };
-require("node:module").syncBuiltinESMExports();
-''')
+''' + "\nrequire(" + json.dumps(sys.argv[5]) + ").syncFixtureBuiltinExports();\n")
     with subprocess.Popen([sys.executable, "-I", "-S", "-c", "import sys; sys.stdin.read()"],
                           stdin=subprocess.PIPE) as child, contextlib.ExitStack() as cleanup:
         if os.name == "nt":
@@ -894,6 +962,7 @@ print("fixture lifetime contract passed")
       ciCheckoutFixture,
       fileURLToPath(new URL("./fixtures/ci-windows-process-census.py", import.meta.url)),
       new URL("./fixtures/ci-windows-process-census.mjs", import.meta.url).href,
+      fileURLToPath(new URL("./fixtures/ci-fixture-runtime.cjs", import.meta.url)),
     ],
     { encoding: "utf8", timeout: 15_000, killSignal: "SIGKILL" },
   );
@@ -1205,7 +1274,11 @@ owner.main()
   ]);
 });
 
-it.each(["raises", "malformed traceback"])("keeps terminal exit 125 with %s metadata", (fault) => {
+it.each(
+  ["raises", "malformed traceback"].flatMap((fault) =>
+    [false, true].map((cyclic) => ({ fault, cyclic })),
+  ),
+)("keeps terminal exit 125 with $fault metadata (cyclic=$cyclic)", ({ fault, cyclic }) => {
   const { diagnostic } = runOwnerDiagnostic(`
 class BrokenMetadata(Exception):
     def __getattribute__(self, name):
@@ -1214,7 +1287,10 @@ class BrokenMetadata(Exception):
         if name == "__traceback__" and ${JSON.stringify(fault)} == "malformed traceback":
             return self
         return super().__getattribute__(name)
-raise BrokenMetadata(secret)
+error = BrokenMetadata(secret)
+if ${cyclic ? "True" : "False"}:
+    error.__context__ = error
+raise error
 `);
   expect(diagnostic).toBe("unavailable");
 });

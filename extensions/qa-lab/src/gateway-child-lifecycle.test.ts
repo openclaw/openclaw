@@ -530,6 +530,7 @@ describe.skipIf(process.platform === "win32")("QA gateway lifetime ownership", (
       },
     });
     const gateway = await owner.start();
+    expect(gateway.cliCommand).toBeUndefined();
     pids();
     const denied = vi.spyOn(fs, "rm").mockImplementation(async (target, options) => {
       if (target === gateway.tempRoot) {

@@ -52,26 +52,27 @@ generation.
 The bundled `fal` image-generation provider defaults to
 `fal/fal-ai/flux/dev`.
 
-| Capability     | Value                                                              |
-| -------------- | ------------------------------------------------------------------ |
-| Max images     | 4 per request; Krea 2: 1 per request                               |
-| Size overrides | `1024x1024`, `1024x1536`, `1536x1024`, `1024x1792`, `1792x1024`    |
-| Aspect ratio   | Supported everywhere except Flux image-to-image                    |
-| Resolution     | `1K`, `2K`, `4K` (per-model limits below)                          |
-| Output format  | `png` (default) or `jpeg`; Krea 2 rejects `outputFormat` overrides |
+| Capability     | Value                                                                                   |
+| -------------- | --------------------------------------------------------------------------------------- |
+| Max images     | 4 per request; Krea 2: 1 per request                                                    |
+| Size overrides | `1024x1024`, `1024x1536`, `1536x1024`, `1024x1792`, `1792x1024`                         |
+| Aspect ratio   | Supported everywhere except Flux image-to-image                                         |
+| Resolution     | `1K`, `2K`, `4K` (per-model limits below)                                               |
+| Output format  | `png` (default) or `jpeg`; GPT Image 2.5 also supports `webp`; Krea 2 rejects overrides |
 
 Edit requests (reference images via the shared `image` / `images` parameters)
 route to a per-model edit endpoint with per-model reference limits:
 
-| Model family              | Model ref after `fal/`                 | Edit endpoint     | Max reference images |
-| ------------------------- | -------------------------------------- | ----------------- | -------------------- |
-| Flux and other fal models | `fal-ai/flux/dev` (default)            | `/image-to-image` | 1                    |
-| GPT Image                 | `openai/gpt-image-*`                   | `/edit`           | 10                   |
-| Grok Imagine              | `xai/grok-imagine-image`               | `/edit`           | 3                    |
-| Nano Banana (legacy)      | `fal-ai/nano-banana`                   | `/edit`           | 3                    |
-| Nano Banana 2             | `fal-ai/nano-banana-*`                 | `/edit`           | 14                   |
-| Nano Banana 2 Lite        | `google/nano-banana-2-lite`            | `/edit`           | 14                   |
-| Krea 2                    | `krea/v2/{medium,large}/text-to-image` | none (style refs) | 10 style references  |
+| Model family              | Model ref after `fal/`                                | Edit endpoint     | Max reference images |
+| ------------------------- | ----------------------------------------------------- | ----------------- | -------------------- |
+| Flux and other fal models | `fal-ai/flux/dev` (default)                           | `/image-to-image` | 1                    |
+| GPT Image 2.5             | `openai/gpt-image-2.5/{flare,sunburst}/text-to-image` | sibling `/edit`   | 16                   |
+| Older GPT Image           | `openai/gpt-image-*`                                  | `/edit`           | 10                   |
+| Grok Imagine              | `xai/grok-imagine-image`                              | `/edit`           | 3                    |
+| Nano Banana (legacy)      | `fal-ai/nano-banana`                                  | `/edit`           | 3                    |
+| Nano Banana 2             | `fal-ai/nano-banana-*`                                | `/edit`           | 14                   |
+| Nano Banana 2 Lite        | `google/nano-banana-2-lite`                           | `/edit`           | 14                   |
+| Krea 2                    | `krea/v2/{medium,large}/text-to-image`                | none (style refs) | 10 style references  |
 
 <Warning>
 Flux image-to-image requests do **not** support `aspectRatio` overrides. GPT
@@ -82,6 +83,47 @@ aspect-ratio subset. Grok Imagine has its own ratio list (including `2:1`,
 `20:9`, `19.5:9`, and their inverses) and only accepts `1K`/`2K` resolutions;
 legacy Nano Banana and Nano Banana 2 Lite reject `resolution` overrides.
 </Warning>
+
+### GPT Image 2.5
+
+Select either variant:
+
+- `fal/openai/gpt-image-2.5/flare/text-to-image`
+- `fal/openai/gpt-image-2.5/sunburst/text-to-image`
+
+References select the sibling `/edit` endpoint. You can also select
+`fal/openai/gpt-image-2.5/flare/edit` or `fal/openai/gpt-image-2.5/sunburst/edit`
+explicitly.
+
+Both variants support `quality: "low"`, `"medium"`, `"high"`, `"xhigh"`,
+`"max"`, or `"auto"`. The fal default is `high`.
+They accept `background: "transparent"`, `"opaque"`, or `"auto"`.
+For transparency, use `outputFormat: "png"` or `"webp"`.
+These controls do not change older fal models.
+
+Use `size: "auto"` or explicit dimensions such as `1536x864`.
+Dimensions must be divisible by 16, with no edge above 3840 pixels.
+Total pixels must be 655,360-8,294,400, with an aspect ratio from 1:3 to 3:1.
+OpenClaw converts aspect-ratio hints to valid dimensions.
+For example, `aspectRatio: "3:2"` produces `1536x1024`.
+Use `size` to choose exact dimensions. OpenClaw rejects invalid explicit sizes.
+These models reject `resolution` overrides. Edits without geometry hints keep
+fal's automatic size selection.
+
+```bash
+openclaw infer image generate \
+  --model fal/openai/gpt-image-2.5/flare/text-to-image \
+  --prompt "A simple red circle sticker" \
+  --quality low --size 1024x1024 --json
+
+openclaw infer image edit \
+  --model fal/openai/gpt-image-2.5/sunburst/edit \
+  --file /path/to/reference.png \
+  --prompt "Keep the shape and change the color to blue" \
+  --quality low --size auto --json
+```
+
+### Krea 2
 
 Krea 2 models use fal's native Krea payload schema. OpenClaw sends
 `aspect_ratio`, `creativity`, and `image_style_references` instead of the
@@ -100,9 +142,9 @@ Krea 2 exposes aspect ratio, not `image_size`, in fal's request schema. Prefer
 and rejects `resolution` for Krea rather than dropping it.
 
 Use `outputFormat: "png"` when you want PNG output from fal models that expose
-`output_format`. fal does not declare an explicit transparent-background
-control in OpenClaw, so `background: "transparent"` is reported as an ignored
-override for fal models.
+`output_format`. Outside GPT Image 2.5, fal models do not declare a
+transparent-background control in OpenClaw. They report `background` as an
+ignored override.
 Krea 2 endpoints do not expose an `output_format` request field through fal, so
 OpenClaw rejects `outputFormat` overrides for Krea requests.
 

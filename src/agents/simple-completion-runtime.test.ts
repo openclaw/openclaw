@@ -38,6 +38,7 @@ vi.mock("./prepared-model-runtime.js", () => ({
 }));
 
 vi.mock("../plugins/runtime/generation-scope.js", () => ({
+  getPluginRuntimeGenerationRegistry: () => undefined,
   withPluginRuntimeGenerationScope: (_snapshot: unknown, run: () => unknown) => run(),
 }));
 
@@ -60,7 +61,7 @@ vi.mock("./embedded-agent-runner/model.js", () => ({
   resolveModelAsync: hoisted.resolveModelAsyncMock,
 }));
 
-vi.mock("./auth-profiles/store.js", () => ({
+vi.mock("./auth-profiles/store-runtime.js", () => ({
   ensureAuthProfileStore: hoisted.ensureAuthProfileStoreMock,
 }));
 
@@ -86,7 +87,7 @@ vi.mock("../plugins/provider-runtime.runtime.js", () => ({
 
 import {
   prepareSimpleCompletionModel,
-  prepareSimpleCompletionModelForAgent,
+  acquireSimpleCompletionModelForAgent,
   resolveSimpleCompletionSelectionForAgent,
 } from "./simple-completion-runtime.js";
 
@@ -796,7 +797,7 @@ describe("prepareSimpleCompletionModel", () => {
   });
 });
 
-describe("prepareSimpleCompletionModelForAgent", () => {
+describe("acquireSimpleCompletionModelForAgent", () => {
   it("resolves explicit aliases in the selected agent scope", () => {
     const cfg = {
       agents: {
@@ -858,7 +859,7 @@ describe("prepareSimpleCompletionModelForAgent", () => {
       mode: "api-key",
     });
 
-    const result = await prepareSimpleCompletionModelForAgent({
+    const result = await acquireSimpleCompletionModelForAgent({
       cfg,
       agentId: "main",
       useUtilityModel: true,
@@ -866,23 +867,29 @@ describe("prepareSimpleCompletionModelForAgent", () => {
       modelResolver,
     });
 
-    expectPreparedModelResult(result);
-    expect(result.selection.provider).toBe("openai");
-    expect(result.selection.modelId).toBe("gpt-5.5");
-    expect(result.model).toMatchObject({
-      id: "gpt-5.5",
-      api: "openai-responses",
-      baseUrl: "https://api.openai.com/v1",
-    });
-    expect(modelResolver).toHaveBeenCalledTimes(2);
-    expect(
-      (callArg(hoisted.getApiKeyForModelMock, 1) as { model?: { api?: string } }).model?.api,
-    ).toBe("openai-responses");
-    // Route materialization re-resolves the model on a multi-agent config; both
-    // calls must keep the authorized agentId or the second falls back to
-    // resolveDefaultAgentId, which throws on a multi-agent config.
-    expect(modelResolver.mock.calls[0]?.[4]).toMatchObject({ agentId: "main" });
-    expect(modelResolver.mock.calls[1]?.[4]).toMatchObject({ agentId: "main" });
+    try {
+      expectPreparedModelResult(result);
+      expect(result.selection.provider).toBe("openai");
+      expect(result.selection.modelId).toBe("gpt-5.5");
+      expect(result.model).toMatchObject({
+        id: "gpt-5.5",
+        api: "openai-responses",
+        baseUrl: "https://api.openai.com/v1",
+      });
+      expect(modelResolver).toHaveBeenCalledTimes(2);
+      expect(
+        (callArg(hoisted.getApiKeyForModelMock, 1) as { model?: { api?: string } }).model?.api,
+      ).toBe("openai-responses");
+      // Route materialization re-resolves the model on a multi-agent config; both
+      // calls must keep the authorized agentId or the second falls back to
+      // resolveDefaultAgentId, which throws on a multi-agent config.
+      expect(modelResolver.mock.calls[0]?.[4]).toMatchObject({ agentId: "main" });
+      expect(modelResolver.mock.calls[1]?.[4]).toMatchObject({ agentId: "main" });
+    } finally {
+      if (!("error" in result)) {
+        result.release();
+      }
+    }
   });
 
   it("keeps the Codex route for OAuth auth", async () => {
@@ -900,7 +907,7 @@ describe("prepareSimpleCompletionModelForAgent", () => {
       mode: "oauth",
     });
 
-    const result = await prepareSimpleCompletionModelForAgent({
+    const result = await acquireSimpleCompletionModelForAgent({
       cfg,
       agentId: "main",
       modelRef: "openai/gpt-5.5",
@@ -908,14 +915,20 @@ describe("prepareSimpleCompletionModelForAgent", () => {
       modelResolver,
     });
 
-    expectPreparedModelResult(result);
-    expect(result.selection.modelId).toBe("gpt-5.5");
-    expect(result.model).toMatchObject({
-      api: "openai-chatgpt-responses",
-      baseUrl: "https://chatgpt.com/backend-api/codex",
-    });
-    expect(modelResolver).toHaveBeenCalledTimes(1);
-    expect(hoisted.getApiKeyForModelMock).toHaveBeenCalledTimes(2);
+    try {
+      expectPreparedModelResult(result);
+      expect(result.selection.modelId).toBe("gpt-5.5");
+      expect(result.model).toMatchObject({
+        api: "openai-chatgpt-responses",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+      });
+      expect(modelResolver).toHaveBeenCalledTimes(1);
+      expect(hoisted.getApiKeyForModelMock).toHaveBeenCalledTimes(2);
+    } finally {
+      if (!("error" in result)) {
+        result.release();
+      }
+    }
   });
 
   it("keeps an authored custom OpenAI route untouched", async () => {
@@ -941,19 +954,25 @@ describe("prepareSimpleCompletionModelForAgent", () => {
       mode: "api-key",
     });
 
-    const result = await prepareSimpleCompletionModelForAgent({
+    const result = await acquireSimpleCompletionModelForAgent({
       cfg,
       agentId: "main",
       skipAgentDiscovery: true,
       modelResolver,
     });
 
-    expectPreparedModelResult(result);
-    expect(result.model).toMatchObject({
-      api: "openai-responses",
-      baseUrl: "https://relay.example/v1",
-    });
-    expect(modelResolver).toHaveBeenCalledTimes(1);
+    try {
+      expectPreparedModelResult(result);
+      expect(result.model).toMatchObject({
+        api: "openai-responses",
+        baseUrl: "https://relay.example/v1",
+      });
+      expect(modelResolver).toHaveBeenCalledTimes(1);
+    } finally {
+      if (!("error" in result)) {
+        result.release();
+      }
+    }
   });
 
   it("honors an explicit model ref while selecting its auth-compatible route", async () => {
@@ -970,7 +989,7 @@ describe("prepareSimpleCompletionModelForAgent", () => {
       mode: "api-key",
     });
 
-    const result = await prepareSimpleCompletionModelForAgent({
+    const result = await acquireSimpleCompletionModelForAgent({
       cfg,
       agentId: "main",
       modelRef: "openai/gpt-5.5",
@@ -978,8 +997,14 @@ describe("prepareSimpleCompletionModelForAgent", () => {
       modelResolver,
     });
 
-    expectPreparedModelResult(result);
-    expect(result.selection).toMatchObject({ provider: "openai", modelId: "gpt-5.5" });
-    expect(result.model).toMatchObject({ id: "gpt-5.5", api: "openai-responses" });
+    try {
+      expectPreparedModelResult(result);
+      expect(result.selection).toMatchObject({ provider: "openai", modelId: "gpt-5.5" });
+      expect(result.model).toMatchObject({ id: "gpt-5.5", api: "openai-responses" });
+    } finally {
+      if (!("error" in result)) {
+        result.release();
+      }
+    }
   });
 });

@@ -106,6 +106,7 @@ function createButtonComponent(params: {
     class DynamicLinkButton extends LinkButton {
       label = params.spec.label;
       url = linkUrl;
+      override emoji = params.spec.emoji;
       override disabled = params.spec.disabled ?? false;
     }
     return { component: new DynamicLinkButton() };

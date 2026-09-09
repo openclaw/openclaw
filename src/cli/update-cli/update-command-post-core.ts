@@ -20,6 +20,13 @@ import { readJsonIfExists, writeJson } from "../../infra/json-files.js";
 import type { UpdateChannel } from "../../infra/update-channels.js";
 import { compareSemverStrings } from "../../infra/update-check.js";
 import {
+  CONTROL_PLANE_UPDATE_SENTINEL_META_ENV,
+  readControlPlaneUpdateSentinelMeta,
+  UPDATE_RUN_ID_ENV,
+  type ControlPlaneUpdateSentinelMetaFile,
+} from "../../infra/update-control-plane-sentinel.js";
+import { resolveUpdateInstallRoot } from "../../infra/update-install-root.js";
+import {
   buildPostCoreHandoffEnv,
   POST_CORE_UPDATE_ENV,
   POST_CORE_UPDATE_CHANNEL_ENV,
@@ -41,11 +48,11 @@ import {
   writePostCoreSourceConfigFile,
 } from "./update-command-config.js";
 import type { PostCorePluginUpdateResult } from "./update-command-plugins.js";
+import { isPackageManagerUpdateMode } from "./update-command-service-command.js";
 import {
   disableUpdatedPackageCompileCacheEnv,
   stripGatewayServiceMarkerEnv,
 } from "./update-command-service-env.js";
-import { isPackageManagerUpdateMode } from "./update-command-service-recovery.js";
 
 const POST_CORE_UPDATE_RESULT_POLL_MS = 100;
 // v2026.4.29 first shipped target-owned channel persistence during resume.
@@ -364,11 +371,24 @@ export async function continuePostCoreUpdateInFreshProcess(params: {
       requestedChannel: params.requestedChannel,
       sourceConfigPath: params.preUpdateConfig ? sourceConfigPath : undefined,
     });
+    const sentinelMeta = await readControlPlaneUpdateSentinelMeta(baseEnv);
+    if (sentinelMeta?.root) {
+      // Activation can replace a pnpm generation. Bind only this child to the
+      // activated root; the helper retains its original recovery/lease identity.
+      const sentinelPath = path.join(resultDir, "sentinel-meta.json");
+      const sentinel: ControlPlaneUpdateSentinelMetaFile = {
+        version: 1,
+        meta: { ...sentinelMeta, root: resolveUpdateInstallRoot(params.root) },
+      };
+      await fs.writeFile(sentinelPath, JSON.stringify(sentinel), { mode: 0o600 });
+      handoffEnv[CONTROL_PLANE_UPDATE_SENTINEL_META_ENV] = sentinelPath;
+    }
     const child = spawn(nodeRunner, argv, {
       stdio: childStdio,
       env: {
         ...handoffEnv,
         OPENCLAW_UPDATE_IN_PROGRESS: "1",
+        ...(params.opts.run ? { [UPDATE_RUN_ID_ENV]: params.opts.run.runId } : {}),
         [POST_CORE_UPDATE_ENV]: "1",
         [POST_CORE_UPDATE_CHANNEL_ENV]: params.channel,
         [POST_CORE_UPDATE_RESULT_PATH_ENV]: resultPath,
@@ -469,8 +489,23 @@ export async function continuePostCoreUpdateInFreshProcess(params: {
   }
 }
 
-export function didCoreUpdateChangeInstall(result: UpdateRunResult): boolean {
-  if (isPackageManagerUpdateMode(result.mode)) {
+export function shouldResumePostCoreUpdateInFreshProcess(params: {
+  result: UpdateRunResult;
+  downgradeRisk: boolean;
+  installKindChanged?: boolean;
+}): boolean {
+  const { result } = params;
+  if (
+    result.status !== "ok" ||
+    (params.downgradeRisk &&
+      (compareSemverStrings(result.after?.version ?? "", POST_CORE_CONFIG_WRITER_MIN_VERSION) ??
+        -1) < 0)
+  ) {
+    return false;
+  }
+  // A package-to-git switch can retain the target SHA and version while moving
+  // the package root; the old process's hashed chunks are still unsafe.
+  if (params.installKindChanged === true || isPackageManagerUpdateMode(result.mode)) {
     return true;
   }
   if (result.mode !== "git") {
@@ -484,22 +519,4 @@ export function didCoreUpdateChangeInstall(result: UpdateRunResult): boolean {
   const beforeVersion = normalizeOptionalString(result.before?.version);
   const afterVersion = normalizeOptionalString(result.after?.version);
   return Boolean(beforeVersion && afterVersion && beforeVersion !== afterVersion);
-}
-
-export function shouldResumePostCoreUpdateInFreshProcess(params: {
-  result: UpdateRunResult;
-  downgradeRisk: boolean;
-  installKindChanged?: boolean;
-}): boolean {
-  // A package-to-git switch can land on the same version already cloned at its
-  // target SHA. The package root still changed, so old hashed chunks are unsafe.
-  return (
-    params.result.status === "ok" &&
-    (!params.downgradeRisk ||
-      (compareSemverStrings(
-        params.result.after?.version ?? "",
-        POST_CORE_CONFIG_WRITER_MIN_VERSION,
-      ) ?? -1) >= 0) &&
-    (params.installKindChanged === true || didCoreUpdateChangeInstall(params.result))
-  );
 }

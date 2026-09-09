@@ -1,7 +1,7 @@
 import {
   buildCredentialSafetyPrompt,
   buildDelegationGuidanceSection,
-  buildHarnessVisibleReplyGuidance,
+  buildUiPresentationPrompt,
   buildSkillWorkshopPromptSection,
   resolveMainSessionDelegationMode,
   SKILL_WORKSHOP_TOOL_NAME,
@@ -31,6 +31,7 @@ export type CodexThreadPromptContext = Pick<
   | "sourceReplyDeliveryMode"
   | "promptMode"
   | "extraSystemPrompt"
+  | "gitCoauthorPrompt"
 >;
 
 export function buildDeveloperInstructions(
@@ -38,7 +39,6 @@ export function buildDeveloperInstructions(
   options: { dynamicTools?: readonly CodexDynamicToolSpec[] } = {},
 ): string {
   const deferredToolNames = new Set<string>();
-  let secretsToolName: string | undefined;
   let showWidgetToolName: string | undefined;
   let dashboardToolName: string | undefined;
   let portalToolName: string | undefined;
@@ -47,8 +47,8 @@ export function buildDeveloperInstructions(
   let hasSessionsYield = false;
   let hasSubagentsList = false;
   let hasSessionsSend = false;
+  let hasControlTools = false;
   let hasSeenDirectNamespace = false;
-  let messageToolAvailable = options.dynamicTools ? false : params.disableMessageTool !== true;
   for (const spec of options.dynamicTools ?? []) {
     const isDirectNamespace =
       spec.type === "namespace" &&
@@ -62,9 +62,6 @@ export function buildDeveloperInstructions(
       const qualifiedName = spec.type === "namespace" ? `${spec.name}.${name}` : name;
       if (tool.deferLoading === true && name) {
         deferredToolNames.add(name);
-      }
-      if (name === "secrets" && params.disableTools !== true) {
-        secretsToolName ??= qualifiedName;
       }
       if (name === "show_widget") {
         showWidgetToolName ??= qualifiedName;
@@ -80,7 +77,7 @@ export function buildDeveloperInstructions(
       hasSessionsYield ||= isDirectNamespace && name === "sessions_yield";
       hasSubagentsList ||= name === "subagents";
       hasSessionsSend ||= name === "sessions_send";
-      messageToolAvailable ||= name === "message";
+      hasControlTools ||= name === "openclaw" || name === "gateway";
     }
   }
   const nativeCommandGuidance = listRegisteredPluginAgentPromptGuidance({
@@ -137,18 +134,14 @@ export function buildDeveloperInstructions(
           hasSessionsSend,
         }).join("\n")
       : undefined,
-    buildHarnessVisibleReplyGuidance({
-      sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
-      messageToolAvailable,
-      uiPresentation:
-        params.disableTools !== true &&
-        params.promptMode !== "minimal" &&
-        params.promptMode !== "none"
-          ? { showWidgetToolName, dashboardToolName, portalToolName }
-          : undefined,
+    params.disableTools !== true && params.promptMode !== "minimal" && params.promptMode !== "none"
+      ? buildUiPresentationPrompt({ showWidgetToolName, dashboardToolName, portalToolName })
+      : undefined,
+    buildCredentialSafetyPrompt({
+      controlToolsAvailable: params.disableTools !== true && hasControlTools,
     }),
-    buildCredentialSafetyPrompt(secretsToolName),
     nativeCommandGuidance,
+    params.gitCoauthorPrompt,
     params.extraSystemPrompt,
   ];
   return sections.filter((section) => typeof section === "string" && section.trim()).join("\n\n");

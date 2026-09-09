@@ -277,10 +277,8 @@ export const QA_THINKING_VISIBILITY_OFF_PROMPT_RE = /qa thinking visibility chec
 export const QA_THINKING_VISIBILITY_MAX_PROMPT_RE = /qa thinking visibility check max/i;
 export const QA_EMPTY_RESPONSE_RECOVERY_PROMPT_RE = /empty response continuation qa check/i;
 export const QA_EMPTY_RESPONSE_EXHAUSTION_PROMPT_RE = /empty response exhaustion qa check/i;
-export const QA_EMPTY_RESPONSE_SIDE_EFFECT_RECOVERY_PROMPT_RE =
-  /empty response after write recovery qa check/i;
-export const QA_EMPTY_RESPONSE_SIDE_EFFECT_EXHAUSTION_PROMPT_RE =
-  /empty response after write exhaustion qa check/i;
+export const QA_EMPTY_RESPONSE_SIDE_EFFECT_PROMPT_RE =
+  /empty response after write (recovery|exhaustion) qa check/i;
 export const QA_REPEATED_REQUEST_RECOVERY_PROMPT_RE = /repeated request recovery gateway qa check/i;
 export const QA_REPEATED_REQUEST_QUEUED_REPLY_PROMPT_RE =
   /repeated request queued reply gateway qa check/i;

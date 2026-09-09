@@ -3,6 +3,7 @@
  * Verifies plugin metadata aliases, origin priority, trust, and cache behavior.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { buildDeclaredProviderOwnerIndex } from "../plugins/provider-owner-index.js";
 
 const pluginRegistryMocks = vi.hoisted(() => {
   const loadManifestRegistry = vi.fn();
@@ -56,7 +57,10 @@ import type { InstalledPluginIndexRecord } from "../plugins/installed-plugin-ind
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import { createPluginCache, getPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
+import { snapshotReaderSlot } from "../plugins/plugin-metadata-snapshot-readers.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
+import { resolveAuthProfileOrderWithMetadata } from "./auth-profiles/order.js";
+import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { createProviderAuthResolver } from "./models-config.providers.secrets.js";
 import { resolveProviderAuthAliasMap, resolveProviderIdForAuth } from "./provider-auth-aliases.js";
 
@@ -122,6 +126,7 @@ function createPluginMetadataSnapshot(params: {
     diagnostics: [],
     byPluginId: new Map(params.plugins.map((plugin) => [plugin.id, plugin])),
     normalizePluginId: (pluginId) => pluginId,
+    declaredProviderOwners: buildDeclaredProviderOwnerIndex(params.plugins),
     owners: {
       channels: new Map(),
       channelConfigs: new Map(),
@@ -145,17 +150,114 @@ function createPluginMetadataSnapshot(params: {
 }
 
 async function prepareAliasSnapshot(plugins: PluginManifestRecord[]) {
-  const metadata = await vi.importActual<typeof import("../plugins/plugin-metadata-snapshot.js")>(
-    "../plugins/plugin-metadata-snapshot.js",
-  );
-  const source = createPluginMetadataSnapshot({ plugins });
-  const snapshot = metadata.restorePluginMetadataSnapshot(
-    metadata.rebasePluginMetadataSnapshotManifestRegistry(source, source.manifestRegistry),
-  );
-  return { metadata, snapshot };
+  const readers = Object.getOwnPropertyDescriptors(snapshotReaderSlot);
+  try {
+    const metadata = await vi.importActual<typeof import("../plugins/plugin-metadata-snapshot.js")>(
+      "../plugins/plugin-metadata-snapshot.js",
+    );
+    const source = createPluginMetadataSnapshot({ plugins });
+    const snapshot = metadata.restorePluginMetadataSnapshot(
+      metadata.rebasePluginMetadataSnapshotManifestRegistry(source, source.manifestRegistry),
+    );
+    return { metadata, snapshot };
+  } finally {
+    // importActual retains this fixture's mocked dependencies. Its readers must
+    // not outlive the fixture or replace another file's provider metadata.
+    for (const key of Reflect.ownKeys(snapshotReaderSlot)) {
+      Reflect.deleteProperty(snapshotReaderSlot, key);
+    }
+    Object.defineProperties(snapshotReaderSlot, readers);
+  }
 }
 
 describe("provider auth aliases", () => {
+  it("uses the canonical configured provider endpoint for auth aliases", () => {
+    const plugin = createPluginManifestRecord({
+      id: "arcee",
+      origin: "bundled",
+      providerAuthAliases: {
+        arcee: { provider: "openrouter", baseUrls: ["https://openrouter.ai/api/v1"] },
+      },
+    });
+    const metadataSnapshot = { plugins: [plugin] };
+    const direct = { baseUrl: "https://api.arcee.ai/api/v1", models: [] };
+    const routed = { baseUrl: "https://openrouter.ai/api/v1", models: [] };
+    expect(
+      resolveProviderIdForAuth("arcee", {
+        config: { models: { providers: { Arcee: routed, arcee: direct } } },
+        metadataSnapshot,
+      }),
+    ).toBe("arcee");
+    expect(
+      resolveProviderIdForAuth("arcee", {
+        config: { models: { providers: { arcee: routed, " arcee ": direct } } },
+        metadataSnapshot,
+      }),
+    ).toBe("arcee");
+  });
+
+  it.each([
+    ["ordered", ["openrouter:work", "openrouter:default"]],
+    ["empty", []],
+  ])("preserves an explicit %s endpoint-account order", (_name, profileIds) => {
+    const plugin = createPluginManifestRecord({
+      id: "arcee",
+      origin: "bundled",
+      providerAuthAliases: {
+        arcee: { provider: "openrouter", baseUrls: ["https://openrouter.ai/api/v1"] },
+      },
+    });
+    const store: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        "arcee:default": { type: "api_key", provider: "arcee", key: "direct-key" },
+        "openrouter:default": { type: "api_key", provider: "openrouter", key: "router-key" },
+        "openrouter:work": { type: "api_key", provider: "openrouter", key: "work-key" },
+      },
+    };
+    const result = resolveAuthProfileOrderWithMetadata({
+      cfg: {
+        models: { providers: { arcee: { baseUrl: "https://openrouter.ai/api/v1", models: [] } } },
+        auth: { order: { openrouter: profileIds } },
+      },
+      authAliasLookupParams: { metadataSnapshot: { plugins: [plugin] } },
+      store,
+      provider: "arcee",
+      preferredProfile: "arcee:default",
+    });
+    expect(result).toEqual({ profileIds, hasExplicitOrder: true });
+  });
+
+  it.each([
+    ["https://openrouter.ai/api/v1", "openrouter"],
+    ["https://openrouter.ai/v1/", "openrouter"],
+    ["https://api.arcee.ai/api/v1", "arcee"],
+    ["https://proxy.example/api/v1", "arcee"],
+    ["https://openrouter.ai.example/api/v1", "arcee"],
+    ["https://openrouter.ai/api/v1?account=other", "arcee"],
+    ["http://openrouter.ai/api/v1", "arcee"],
+  ])("constrains endpoint auth aliases for %s", (baseUrl, expected) => {
+    const plugin = createPluginManifestRecord({
+      id: "arcee",
+      origin: "bundled",
+      providerAuthAliases: {
+        arcee: {
+          provider: "openrouter",
+          baseUrls: ["https://openrouter.ai/api/v1", "https://openrouter.ai/v1"],
+        },
+      },
+    });
+    const params = {
+      config: { models: { providers: { arcee: { baseUrl, models: [] } } } },
+      metadataSnapshot: { plugins: [plugin] },
+    };
+    expect(resolveProviderIdForAuth("arcee", params)).toBe(expected);
+    expect(resolveProviderAuthAliasMap(params).arcee).toBe(
+      expected === "openrouter" ? "openrouter" : undefined,
+    );
+    expect(resolveProviderIdForAuth("arcee", { ...params, storedCredential: true })).toBe("arcee");
+  });
+
   beforeEach(() => {
     clearPluginMetadataLifecycleCaches();
     pluginRegistryMocks.loadPluginManifestRegistryForInstalledIndex.mockReset();

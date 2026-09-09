@@ -1,6 +1,6 @@
 // Numeric budget flag/env helpers shared by benchmark and performance scripts.
 /** Parse an optional non-negative budget number from CLI or env text. */
-export function parseBudgetNumber(raw: string | undefined, label: string): number | null {
+function parseBudgetNumber(raw: string | undefined, label: string): number | null {
   const value = raw?.trim();
   if (!value) {
     return null;
@@ -32,7 +32,7 @@ export function budgetFloatFlag<Key extends string>(flag: string, key: Key) {
         flag,
         nextIndex: index + 1,
         repeatable: false,
-        apply(target: Record<Key, number>) {
+        apply(target: Record<Key, number | null>) {
           const parsed = parseBudgetNumber(value, flag);
           if (parsed === null) {
             throw new Error(`${flag} requires a value`);

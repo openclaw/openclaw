@@ -59,6 +59,32 @@ Explicit copy flows, such as `openclaw agents add`, use this portability policy:
 
 Non-portable profiles remain available through the shared read-through base unless the target agent signs in separately and creates its own local profile.
 
+During OAuth refresh, the current credential generation is replaced by an inert
+durable marker. Pending markers remain ineligible by default and are ordered only
+by runtime paths that immediately pass them to the settlement-aware resolver.
+Failed markers are terminal and require the operator to authenticate again.
+
+Agent-local peers never receive copied rotated refresh material. A peer removes
+its marker and inherits the shared credential only after verifying that the
+shared credential belongs to the same account. If that identity cannot be
+verified, the peer remains terminally fenced instead of inheriting another
+account.
+
+## Plugin SDK OAuth validation
+
+`resolveApiKeyForProfile`, exported from `openclaw/plugin-sdk/agent-runtime`,
+accepts an optional `validateOAuthCredential` callback. The resolver calls it
+before returning an OAuth credential and before persisting or adopting a
+refreshed credential. The callback also applies when a legacy
+`provider:default` profile falls back to a replacement OAuth profile.
+
+Throwing from the callback rejects that credential. A rejected fallback is not
+returned or refreshed, and the original selected-profile refresh failure remains
+the operator-facing error. Rejecting an active refresh or settlement generation
+fails closed and can leave that generation and its peers terminally fenced, so
+the operator must authenticate again. Callers that omit the callback retain the
+existing resolution and fallback behavior.
+
 `openclaw agent exec` preserves the original shared-store root when switching to temporary run state. Its bounded credential scope reads portable `api_key` and `token` profiles from that shared store without persisting copies; the configured agent's local profiles still win. Shared OAuth profiles are excluded from this temporary scope, even with `copyToAgents: true`, so the run does not acquire another refresh owner. `--auth-env-only` disables stored credential access entirely.
 
 Auth writes that explicitly select a state directory, including isolated QA staging, use that directory's shared store for ownership and OAuth deduplication. Their runtime publication and rollback retain the same owner; another process-local state root is not an inherited base. An unrelated outer database may be older, newer, or unreadable without blocking an isolated write, but an unreadable or newer database in the selected target still fails closed. Writes without an explicit state directory retain the normal ambient state and agent-directory configuration.
@@ -75,11 +101,45 @@ Personal pins keep the existing same-provider failover policy: ordered shared ac
 
 Do not write `type: "aws-sdk"` into the credential store; stored credentials are only `api_key`, `token`, or `oauth`. If a legacy `auth-profiles.json` has such a marker, `openclaw doctor --fix` moves it to `auth.profiles` and removes the marker from the store.
 
+When a selected stored profile is removed, credential-scoped model discovery reports `selected_auth_profile_unavailable` before consulting dynamic model metadata. Restore the credential or select another configured profile; registering the model does not repair missing authentication. Config-only AWS SDK profiles remain valid without a stored credential. Chat admission and agent commands retain an explicit same-provider selection when its credential disappears so authentication can report recovery. Stale automatic selections and selections for incompatible providers are still cleared.
+
 ## Explicit auth order filtering
 
 - When `auth.order.<provider>` or the auth-store order override is set for a provider, `models status --probe` only probes profile ids that remain in the resolved auth order for that provider. The stored override wins over `auth.order` config.
 - A stored profile for that provider that is omitted from the explicit order is not silently tried later. Probe output reports it with `reasonCode: excluded_by_auth_order` and the detail `Excluded by auth.order for this provider.`
 - A valid session user pin is an explicit per-session exception: OpenClaw tries that profile first even when it is omitted from the provider order, then uses the ordered same-provider profiles as retry candidates. A cooldown or disabled window applies only to the affected profile; it does not suppress its eligible siblings.
+
+Prepared agent requests use their selected plugin metadata, configuration, workspace, and environment for auth profile eligibility, ordering, and environment credential evidence. An empty selected plugin set remains authoritative; another request’s plugin aliases cannot add profiles or change the credential owner.
+
+## Model catalog discovery
+
+Stored-profile selection for model discovery follows the canonical auth order and
+eligibility rules. A cooldown limited to one model does not suppress account-wide
+catalog discovery. Configured subscription modes remain attached to direct
+credentials, and successful OAuth preparation supplies the resolved current token
+to its catalog consumer rather than the captured store's older token.
+
+Environment-backed profiles keep usable values from the discovery environment,
+including cold command and worker paths. When that material is missing, only the
+selected profile's activated snapshot may supply it; otherwise discovery reports
+`unavailable` before catalog HTTP. Reference names are never sent as credentials
+or replaced with another profile's credential. On a Gateway, restore the secret
+and run `openclaw secrets reload` before retrying discovery.
+
+When every eligible OAuth candidate fails preparation, discovery reports
+`unavailable` with the attempted profile identities instead of treating the
+provider as unconfigured. Compatible prior inventory remains available. A usable
+fallback credential still supplies its own catalog result.
+
+When a catalog deadline expires, late provider results are discarded before
+finalization. An already-started hook or OAuth refresh may finish, including
+persisting a rotated credential, but cannot publish to the expired catalog run.
+
+API-key-oriented and full-auth catalog callbacks retain their existing source
+priorities. Plugins must keep credential bytes and their authentication mode from
+the same selection. Catalog failure and recovery preserve the
+[model inventory contract](/concepts/models#selection-source-and-fallback-strictness);
+they do not change message-execution profile rotation or session pins.
 
 ## Probe target resolution
 

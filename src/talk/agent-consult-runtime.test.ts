@@ -561,6 +561,37 @@ describe("realtime voice agent consult runtime", () => {
     expect(runEmbeddedAgent).not.toHaveBeenCalled();
   });
 
+  it("allows an independent consult when only the requester session is locked", async () => {
+    const { runtime, runEmbeddedAgent, sessionStore } = createAgentRuntime();
+    sessionStore["agent:main:main"] = {
+      sessionId: "locked-requester",
+      updatedAt: 1,
+      agentHarnessId: "codex",
+      modelSelectionLocked: true,
+    };
+
+    await expect(
+      consultRealtimeVoiceAgent({
+        cfg: {} as never,
+        agentRuntime: runtime as never,
+        logger: { warn: vi.fn() },
+        agentId: "meet-consult",
+        sessionKey: "agent:meet-consult:subagent:google-meet:meet-independent",
+        spawnedBy: "agent:main:main",
+        contextMode: "fork",
+        messageProvider: "google-meet",
+        lane: "google-meet",
+        runIdPrefix: "google-meet:meet-independent",
+        args: { question: "Check the meeting." },
+        transcript: [],
+        surface: "a private Google Meet",
+        userLabel: "Participant",
+      }),
+    ).resolves.toEqual({ text: "Speak this." });
+    expect(sessionForkMocks.forkSessionEntryFromParent).not.toHaveBeenCalled();
+    expect(requireEmbeddedAgentCall(runEmbeddedAgent).agentId).toBe("meet-consult");
+  });
+
   it("fresh-checks archive state after a queued lifecycle mutation", async () => {
     const { runtime, runEmbeddedAgent, sessionStore } = createAgentRuntime();
     const sessionKey = "voice:archive-race";
@@ -693,6 +724,38 @@ describe("realtime voice agent consult runtime", () => {
     expect(warn).toHaveBeenCalledWith(
       "[talk] agent consult produced no answer: agent returned no speakable text",
     );
+  });
+
+  it("returns a yielded acknowledgement immediately without waiting for a visible final", async () => {
+    const warn = vi.fn();
+    const { runtime, runEmbeddedAgent } = createAgentRuntime();
+    runEmbeddedAgent.mockResolvedValueOnce({
+      payloads: [],
+      meta: {
+        yielded: true,
+        yieldAcknowledgment: "  Working on it.   I will report back.  ",
+      },
+    });
+
+    const result = await consultRealtimeVoiceAgent({
+      cfg: {} as never,
+      agentRuntime: runtime as never,
+      logger: { warn },
+      sessionKey: "voice:yielded",
+      messageProvider: "voice",
+      lane: "voice",
+      runIdPrefix: "voice:yielded",
+      args: { question: "Investigate this" },
+      transcript: [],
+      surface: "a live voice session",
+      userLabel: "Caller",
+    });
+
+    expect(result).toEqual({
+      text: "Working on it. I will report back.",
+      yielded: true,
+    });
+    expect(warn).not.toHaveBeenCalled();
   });
 
   it("forks requester context and inherits its required creator isolation", async () => {

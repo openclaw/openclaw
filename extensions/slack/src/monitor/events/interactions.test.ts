@@ -272,6 +272,16 @@ type TestSlackClient = {
   chat: { update: (...args: unknown[]) => unknown };
 };
 
+function singleButtonBlocks(blockId: string, actionId: string) {
+  return [
+    {
+      type: "actions",
+      block_id: blockId,
+      elements: [{ type: "button", action_id: actionId }],
+    },
+  ];
+}
+
 function createContext(overrides?: {
   dmEnabled?: boolean;
   dmPolicy?: "open" | "allowlist" | "pairing" | "disabled";
@@ -933,13 +943,7 @@ describe("registerSlackInteractionEvents", () => {
         message: {
           ts: "100.200",
           text: "fallback",
-          blocks: [
-            {
-              type: "actions",
-              block_id: "codex_actions",
-              elements: [{ type: "button", action_id: "codex" }],
-            },
-          ],
+          blocks: singleButtonBlocks("codex_actions", "codex"),
         },
       },
       action: {
@@ -1122,13 +1126,7 @@ describe("registerSlackInteractionEvents", () => {
         message: {
           ts: "100.200",
           text: "fallback",
-          blocks: [
-            {
-              type: "actions",
-              block_id: "codex_actions",
-              elements: [{ type: "button", action_id: "codex" }],
-            },
-          ],
+          blocks: singleButtonBlocks("codex_actions", "codex"),
         },
       },
       action: {
@@ -1205,13 +1203,7 @@ describe("registerSlackInteractionEvents", () => {
         message: {
           ts: "100.200",
           text: "fallback",
-          blocks: [
-            {
-              type: "actions",
-              block_id: "codex_actions",
-              elements: [{ type: "button", action_id: "codex" }],
-            },
-          ],
+          blocks: singleButtonBlocks("codex_actions", "codex"),
         },
       },
       action: {
@@ -1265,13 +1257,7 @@ describe("registerSlackInteractionEvents", () => {
         message: {
           ts: "100.200",
           text: "fallback",
-          blocks: [
-            {
-              type: "actions",
-              block_id: "reply_actions",
-              elements: [{ type: "button", action_id: "openclaw:reply_button" }],
-            },
-          ],
+          blocks: singleButtonBlocks("reply_actions", "openclaw:reply_button"),
         },
       },
       action: {
@@ -1379,13 +1365,7 @@ describe("registerSlackInteractionEvents", () => {
         message: {
           ts: "100.200",
           text: "fallback",
-          blocks: [
-            {
-              type: "actions",
-              block_id: "codex_actions",
-              elements: [{ type: "button", action_id: "codex" }],
-            },
-          ],
+          blocks: singleButtonBlocks("codex_actions", "codex"),
         },
       },
       action: {
@@ -1406,13 +1386,7 @@ describe("registerSlackInteractionEvents", () => {
         message: {
           ts: "100.200",
           text: "fallback",
-          blocks: [
-            {
-              type: "actions",
-              block_id: "codex_actions",
-              elements: [{ type: "button", action_id: "codex" }],
-            },
-          ],
+          blocks: singleButtonBlocks("codex_actions", "codex"),
         },
       },
       action: {
@@ -1468,13 +1442,7 @@ describe("registerSlackInteractionEvents", () => {
         message: {
           ts: "100.200",
           text: "Approve this bind?",
-          blocks: [
-            {
-              type: "actions",
-              block_id: "bind_actions",
-              elements: [{ type: "button", action_id: "openclaw:reply_button" }],
-            },
-          ],
+          blocks: singleButtonBlocks("bind_actions", "openclaw:reply_button"),
         },
       },
       action: {
@@ -1696,19 +1664,7 @@ describe("registerSlackInteractionEvents", () => {
       applied: false,
       approval: { status: "denied", decision: "deny" },
     });
-    const { ctx, app, getHandler } = createContext({
-      cfg: {
-        channels: {
-          slack: {
-            execApprovals: {
-              enabled: true,
-              approvers: ["U123"],
-              target: "both",
-            },
-          },
-        },
-      },
-    });
+    const { ctx, app, getHandler } = createContext();
     registerSlackInteractionEvents({ ctx: ctx as never });
 
     const respond = vi.fn().mockResolvedValue(undefined);
@@ -1779,19 +1735,7 @@ describe("registerSlackInteractionEvents", () => {
   });
 
   it("shows canonical typed approval truth when the clicked message update fails", async () => {
-    const { ctx, app, getHandler } = createContext({
-      cfg: {
-        channels: {
-          slack: {
-            execApprovals: {
-              enabled: true,
-              approvers: ["U123"],
-              target: "both",
-            },
-          },
-        },
-      },
-    });
+    const { ctx, app, getHandler } = createContext();
     app.client.chat.update.mockRejectedValueOnce(new Error("message update failed"));
     registerSlackInteractionEvents({ ctx: ctx as never });
     const respond = vi.fn().mockResolvedValue(undefined);
@@ -1822,19 +1766,7 @@ describe("registerSlackInteractionEvents", () => {
   });
 
   it("tells the clicker when a typed approval is no longer pending", async () => {
-    const { ctx, app, getHandler } = createContext({
-      cfg: {
-        channels: {
-          slack: {
-            execApprovals: {
-              enabled: true,
-              approvers: ["U123"],
-              target: "both",
-            },
-          },
-        },
-      },
-    });
+    const { ctx, app, getHandler } = createContext();
     resolveApprovalOverGatewayMock.mockRejectedValueOnce(
       new Error("unknown or expired approval id"),
     );
@@ -1934,13 +1866,7 @@ describe("registerSlackInteractionEvents", () => {
         message: {
           ts: "100.200",
           text: "Plugin approval required",
-          blocks: [
-            {
-              type: "actions",
-              block_id: "plugin_actions",
-              elements: [{ type: "button", action_id: "openclaw:approval_button:1:1" }],
-            },
-          ],
+          blocks: singleButtonBlocks("plugin_actions", "openclaw:approval_button:1:1"),
         },
       },
       action: {
@@ -2015,13 +1941,7 @@ describe("registerSlackInteractionEvents", () => {
         message: {
           ts: "100.200",
           text: "Plugin approval required",
-          blocks: [
-            {
-              type: "actions",
-              block_id: "plugin_actions",
-              elements: [{ type: "button", action_id: "openclaw:reply_button" }],
-            },
-          ],
+          blocks: singleButtonBlocks("plugin_actions", "openclaw:reply_button"),
         },
       },
       action: {
@@ -2091,13 +2011,7 @@ describe("registerSlackInteractionEvents", () => {
         message: {
           ts: "100.200",
           text: "Plugin approval required",
-          blocks: [
-            {
-              type: "actions",
-              block_id: "plugin_actions",
-              elements: [{ type: "button", action_id: "openclaw:reply_button" }],
-            },
-          ],
+          blocks: singleButtonBlocks("plugin_actions", "openclaw:reply_button"),
         },
       },
       action: {
@@ -2169,13 +2083,7 @@ describe("registerSlackInteractionEvents", () => {
         message: {
           ts: "100.200",
           text: "Plugin approval required",
-          blocks: [
-            {
-              type: "actions",
-              block_id: "plugin_actions",
-              elements: [{ type: "button", action_id: "openclaw:reply_button" }],
-            },
-          ],
+          blocks: singleButtonBlocks("plugin_actions", "openclaw:reply_button"),
         },
       },
       action: {
@@ -2275,13 +2183,7 @@ describe("registerSlackInteractionEvents", () => {
           message: {
             ts: "100.200",
             text: "Exec approval required",
-            blocks: [
-              {
-                type: "actions",
-                block_id: "exec_actions",
-                elements: [{ type: "button", action_id: "openclaw:reply_button" }],
-              },
-            ],
+            blocks: singleButtonBlocks("exec_actions", "openclaw:reply_button"),
           },
         },
         action: {
@@ -2330,13 +2232,7 @@ describe("registerSlackInteractionEvents", () => {
         message: {
           ts: "100.200",
           text: "Exec approval required",
-          blocks: [
-            {
-              type: "actions",
-              block_id: "exec_actions",
-              elements: [{ type: "button", action_id: "openclaw:reply_button" }],
-            },
-          ],
+          blocks: singleButtonBlocks("exec_actions", "openclaw:reply_button"),
         },
       },
       action: {
@@ -2645,13 +2541,7 @@ describe("registerSlackInteractionEvents", () => {
         message: {
           ts: "777.888",
           text: "fallback",
-          blocks: [
-            {
-              type: "actions",
-              block_id: "verify_block",
-              elements: [{ type: "button", action_id: "openclaw:verify" }],
-            },
-          ],
+          blocks: singleButtonBlocks("verify_block", "openclaw:verify"),
         },
       },
       action: "not-an-action-object" as unknown as Record<string, unknown>,
