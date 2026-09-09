@@ -297,6 +297,41 @@ describe("plugin discovery identity and local join", () => {
     });
   });
 
+  it("keeps installed packages when ClawHub publication exists but the search page omits them", () => {
+    const items = joinClawHubPluginCatalog({
+      remote: [],
+      published: [remote],
+      local: {
+        plugins: [
+          {
+            id: "memory-plus",
+            name: "Memory Plus",
+            clawhubPackage: remote.packageName,
+            origin: "global",
+            installed: true,
+            enabled: false,
+            state: "disabled",
+          },
+        ],
+        diagnostics: [],
+        mutationAllowed: true,
+      },
+      includeBundledOnly: true,
+      intent: "all",
+      query: "memory",
+    });
+
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({
+      catalog: { packageName: remote.packageName, name: "Memory Plus" },
+      local: { pluginId: "memory-plus", installed: true, state: "disabled" },
+    });
+    expect(resolvePluginDiscoveryIdentity(items[0]?.id ?? "")).toEqual({
+      origin: "local",
+      identity: remote.packageName,
+    });
+  });
+
   it("filters bundled entries for unified search and keeps them ahead of ClawHub results", () => {
     const local = {
       plugins: [

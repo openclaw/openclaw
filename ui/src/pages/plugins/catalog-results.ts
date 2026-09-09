@@ -201,7 +201,10 @@ function renderSection(params: {
   if (!params.loading && !params.error && params.items.length === 0) {
     return nothing;
   }
-  return html`<section class="plugin-catalog-section" data-catalog-section=${params.id}>
+  return html`<section
+    class="plugin-catalog-section ${params.onViewAll ? "plugin-catalog-section--expandable" : ""}"
+    data-catalog-section=${params.id}
+  >
     <header class="plugin-catalog-section__header">
       <h2>${params.title}</h2>
       ${
@@ -230,6 +233,40 @@ function renderSection(params: {
             </div>`
     }
   </section>`;
+}
+
+function renderPagination(props: PluginCatalogResultsProps): TemplateResult | typeof nothing {
+  if (!props.canGoPrevious && !props.canGoNext) {
+    return nothing;
+  }
+  return html`<nav
+    class="plugin-catalog-pagination"
+    aria-label=${t("pluginsPage.catalogPaginationLabel")}
+  >
+    ${
+      props.canGoPrevious
+        ? html`<button
+            type="button"
+            class="btn btn--sm oc-action oc-action-ghost"
+            ?disabled=${props.paging}
+            @click=${props.onPreviousPage}
+          >
+            ${t("pluginsPage.previousPage")}
+          </button>`
+        : nothing
+    }
+    <span aria-live="polite">
+      ${t("pluginsPage.pageNumber", { page: String(props.pageNumber) })}
+    </span>
+    <button
+      type="button"
+      class="btn btn--sm oc-action oc-action-ghost"
+      ?disabled=${props.paging || !props.canGoNext}
+      @click=${props.onNextPage}
+    >
+      ${t("pluginsPage.nextPage")}
+    </button>
+  </nav>`;
 }
 
 function renderCategoryChips(props: PluginCatalogResultsProps): TemplateResult {
@@ -301,38 +338,7 @@ function renderRawResults(props: PluginCatalogResultsProps): TemplateResult {
         (plugin) => renderCatalogCard(plugin, props),
       )}
     </div>
-    ${
-      props.canGoPrevious || props.canGoNext
-        ? html`<nav
-            class="plugin-catalog-pagination"
-            aria-label=${t("pluginsPage.catalogPaginationLabel")}
-          >
-            ${
-              props.canGoPrevious
-                ? html`<button
-                    type="button"
-                    class="btn btn--sm oc-action oc-action-ghost"
-                    ?disabled=${props.paging}
-                    @click=${props.onPreviousPage}
-                  >
-                    ${t("pluginsPage.previousPage")}
-                  </button>`
-                : nothing
-            }
-            <span aria-live="polite">
-              ${t("pluginsPage.pageNumber", { page: String(props.pageNumber) })}
-            </span>
-            <button
-              type="button"
-              class="btn btn--sm oc-action oc-action-ghost"
-              ?disabled=${props.paging || !props.canGoNext}
-              @click=${props.onNextPage}
-            >
-              ${t("pluginsPage.nextPage")}
-            </button>
-          </nav>`
-        : nothing
-    }`;
+    ${renderPagination(props)}`;
 }
 
 function renderGroupedCatalog(props: PluginCatalogResultsProps): TemplateResult {
@@ -396,6 +402,7 @@ function renderGroupedCatalog(props: PluginCatalogResultsProps): TemplateResult 
       items: uncategorized,
       props,
     })}
+    ${renderPagination(props)}
   `;
 }
 

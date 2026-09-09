@@ -519,6 +519,52 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
     }
   });
 
+  it("keeps every Uncategorized card visible at the mobile shelf limit", async () => {
+    const context = await newContext({ height: 852, width: 393 });
+    const page = await context.newPage();
+    const uncategorized = Array.from({ length: 3 }, (_, index) => ({
+      ...matrixDiscoveryPlugin,
+      id: `ch_dW5jYXRlZ29yaXplZA_${index}`,
+      catalog: {
+        ...matrixDiscoveryPlugin.catalog,
+        name: `Uncategorized ${index + 1}`,
+        categories: ["missing-category"],
+      },
+    }));
+    await installMockGateway(page, {
+      featureMethods: pluginMethods,
+      methodResponses: {
+        ...pluginMethodResponses(),
+        "plugins.catalog.browse": { items: uncategorized },
+      },
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}plugins`);
+      const explore = page.getByRole("region", { name: "Explore plugins" });
+      const featured = explore.locator('[data-catalog-section="featured"]');
+      const unmatched = explore.locator('[data-catalog-section="uncategorized"]');
+      await unmatched.getByRole("link", { name: "Uncategorized 3" }).waitFor();
+
+      const visibleCardCount = async (selector: string) =>
+        page
+          .locator(selector)
+          .evaluateAll(
+            (cards) => cards.filter((card) => getComputedStyle(card).display !== "none").length,
+          );
+      expect(await visibleCardCount('[data-catalog-section="featured"] .plugin-catalog-card')).toBe(
+        2,
+      );
+      expect(
+        await visibleCardCount('[data-catalog-section="uncategorized"] .plugin-catalog-card'),
+      ).toBe(3);
+      expect(await featured.getByRole("button", { name: "View all" }).count()).toBe(1);
+      expect(await unmatched.getByRole("button", { name: "View all" }).count()).toBe(0);
+    } finally {
+      await context.close();
+    }
+  });
+
   it("keeps plugin mutations unavailable to read-only operators", async () => {
     const context = await newContext();
     const page = await context.newPage();

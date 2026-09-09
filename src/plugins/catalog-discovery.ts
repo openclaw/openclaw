@@ -22,7 +22,7 @@ function normalizedAlias(value: string | null | undefined): string | undefined {
 }
 
 function localIdentityAliases(plugin: PluginCatalogEntry): string[] {
-  const aliases = [plugin.id, plugin.packageName];
+  const aliases = [plugin.id, plugin.packageName, plugin.clawhubPackage];
   if (plugin.install?.source === "clawhub") {
     aliases.push(plugin.install.packageName);
   }
@@ -181,10 +181,18 @@ export function joinClawHubPluginCatalog(params: {
     return remote;
   }
   const publishedLocalPlugins = new Set<PluginCatalogEntry>();
-  for (const plugin of [...(params.published ?? []), ...params.remote]) {
+  for (const plugin of params.remote) {
     const localPlugin = findLocalPlugin(plugin, localIndex);
     if (localPlugin) {
       publishedLocalPlugins.add(localPlugin);
+    }
+  }
+  if (params.includeBundledOnly) {
+    for (const plugin of params.published ?? []) {
+      const localPlugin = findLocalPlugin(plugin, localIndex);
+      if (localPlugin && !(params.intent === "all" && localPlugin.installed)) {
+        publishedLocalPlugins.add(localPlugin);
+      }
     }
   }
   const query = normalizedAlias(params.query);
@@ -217,22 +225,23 @@ function localDiscoveryCategories(plugin: PluginCatalogEntry): string[] {
 }
 
 function localDiscoveryIdentity(plugin: PluginCatalogEntry): string {
-  return plugin.packageName ?? plugin.id;
+  return plugin.clawhubPackage ?? plugin.packageName ?? plugin.id;
 }
 
 function projectLocalDiscoveryEntry(
   plugin: PluginCatalogEntry,
   mutationAllowed: boolean,
 ): PluginDiscoveryEntry {
+  const packageName = plugin.clawhubPackage ?? plugin.packageName;
   return {
     id: encodeLocalPluginDiscoveryId(localDiscoveryIdentity(plugin)),
     catalog: {
       name: plugin.name,
-      ...(plugin.packageName ? { packageName: plugin.packageName } : {}),
+      ...(packageName ? { packageName } : {}),
       ...(plugin.description ? { summary: plugin.description } : {}),
       official: false,
       categories: localDiscoveryCategories(plugin),
-      publishedToClawHub: false,
+      publishedToClawHub: Boolean(plugin.clawhubPackage),
       ...(plugin.version ? { latestVersion: plugin.version } : {}),
     },
     local: projectLocalFacts(plugin, mutationAllowed, false),

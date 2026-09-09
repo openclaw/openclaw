@@ -708,7 +708,7 @@ a.installed-plugins-card .installed-plugins-card__art > img.plugins-icon {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
-  .plugin-catalog-section .plugin-catalog-card:nth-child(n + 7) {
+  .plugin-catalog-section--expandable .plugin-catalog-card:nth-child(n + 7) {
     display: none;
   }
 }
@@ -718,7 +718,7 @@ a.installed-plugins-card .installed-plugins-card__art > img.plugins-icon {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .plugin-catalog-section .plugin-catalog-card:nth-child(n + 5) {
+  .plugin-catalog-section--expandable .plugin-catalog-card:nth-child(n + 5) {
     display: none;
   }
 }
@@ -734,7 +734,7 @@ a.installed-plugins-card .installed-plugins-card__art > img.plugins-icon {
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .plugin-catalog-section .plugin-catalog-card:nth-child(n + 3) {
+  .plugin-catalog-section--expandable .plugin-catalog-card:nth-child(n + 3) {
     display: none;
   }
 }

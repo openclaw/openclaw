@@ -76,6 +76,7 @@ describe("ClawHub message recommendations", () => {
                   {
                     id: "whatsapp",
                     name: "Local WhatsApp",
+                    clawhubPackage: remotePlugin.packageName,
                     installed: true,
                     enabled: false,
                     state: "needs-setup",

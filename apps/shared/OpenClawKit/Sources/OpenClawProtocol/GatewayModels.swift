@@ -21675,6 +21675,8 @@ public struct PluginCatalogEntry: Codable, Sendable {
     public let id: String
     public let name: String
     public let packagename: String?
+    public let clawhubpackage: String?
+    public let catalogid: String?
     public let description: String?
     public let version: String?
     public let kind: [String]?
@@ -21696,6 +21698,8 @@ public struct PluginCatalogEntry: Codable, Sendable {
         id: String,
         name: String,
         packagename: String? = nil,
+        clawhubpackage: String? = nil,
+        catalogid: String? = nil,
         description: String? = nil,
         version: String? = nil,
         kind: [String]? = nil,
@@ -21716,6 +21720,8 @@ public struct PluginCatalogEntry: Codable, Sendable {
         self.id = id
         self.name = name
         self.packagename = packagename
+        self.clawhubpackage = clawhubpackage
+        self.catalogid = catalogid
         self.description = description
         self.version = version
         self.kind = kind
@@ -21738,6 +21744,8 @@ public struct PluginCatalogEntry: Codable, Sendable {
         case id
         case name
         case packagename = "packageName"
+        case clawhubpackage = "clawhubPackage"
+        case catalogid = "catalogId"
         case description
         case version
         case kind
@@ -22574,11 +22582,14 @@ public struct PluginsCatalogCategoriesResult: Codable, Sendable {
 
 public struct PluginsCatalogGetParams: Codable, Sendable {
     public let id: String
+    public let version: String?
 
     public init(
-        id: String)
+        id: String,
+        version: String? = nil)
     {
         self.id = id
+        self.version = version
     }
 }
 

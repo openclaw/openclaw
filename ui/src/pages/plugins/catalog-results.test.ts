@@ -221,15 +221,19 @@ describe("renderPluginCatalogResults", () => {
     const tools = container.querySelector('[data-catalog-section="tools"]');
 
     expect(tools?.querySelectorAll(".plugin-catalog-card")).toHaveLength(8);
+    expect(tools?.classList.contains("plugin-catalog-section--expandable")).toBe(true);
     tools?.querySelector<HTMLButtonElement>(".plugin-catalog-section__view-all")?.click();
     expect(onCategoryChange).toHaveBeenCalledWith("tools");
   });
 
   it("preserves every catalog result under Uncategorized when category metadata is unavailable", () => {
+    const onNextPage = vi.fn();
     const container = mount(
       baseProps({
         categories: [],
         categoriesError: "Category metadata unavailable",
+        canGoNext: true,
+        onNextPage,
         result: {
           items: Array.from({ length: 10 }, (_, index) => plugin(`catalog-result-${index}`)),
         },
@@ -244,6 +248,9 @@ describe("renderPluginCatalogResults", () => {
     const uncategorized = container.querySelector('[data-catalog-section="uncategorized"]');
     expect(uncategorized?.querySelectorAll(".plugin-catalog-card")).toHaveLength(10);
     expect(uncategorized?.querySelector(".plugin-catalog-section__view-all")).toBeNull();
+    expect(uncategorized?.classList.contains("plugin-catalog-section--expandable")).toBe(false);
+    container.querySelector<HTMLButtonElement>(".plugin-catalog-pagination button")?.click();
+    expect(onNextPage).toHaveBeenCalledOnce();
   });
 
   it("groups only entries without a matching catalog category under Uncategorized", () => {
