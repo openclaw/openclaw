@@ -5120,6 +5120,7 @@ jobs:
             -only-testing:OpenClawTests/WatchSessionActivationGateTests \
             -only-testing:OpenClawTests/OpenClawTypographyTests \
             -only-testing:OpenClawTests/NotificationServingPreferenceTests \
+            -only-testing:OpenClawTests/RootTabsPresentationTests \
             -only-testing:OpenClawTests/RootTabsSourceGuardTests \
             -only-testing:OpenClawTests/TraceHeadingVisualProofTests \
             test
