@@ -548,7 +548,9 @@ export function loadCombinedSessionStoreForGatewayCore(
   store: Record<string, SessionEntry>;
   targetsBySessionKey: GatewayStoredSessionTargets;
 } {
-  const projection = opts.projection ?? "full";
+  // Store-wide metadata reads must not materialize saved prompts for every row.
+  // Consumers of retained prompt fields opt into the full projection.
+  const projection = opts.projection ?? "list";
   // Count admission and projection share this exact target set. Otherwise an optional
   // prewarm can approve one database and synchronously materialize another.
   const {
