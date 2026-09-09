@@ -1,3 +1,5 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import type { TriageUpdateFailure } from "../commands/triage-update.js";
 import { buildRestartSentinelRow, parseRestartSentinelEnvelope } from "./restart-sentinel-store.js";
 import { managedServiceStateUpdateScript } from "./update-managed-service-handoff-state.test-support.js";
@@ -76,6 +78,7 @@ export type ManagedServiceManagerBoundaryResult = {
   sentinel: unknown;
   log: string;
   commandTimings: ManagedServiceCommandTiming[];
+  triageDeadline?: { requestedMs: number; descendantPid: number };
   savedFailure: { path: string; mode: number; contents: TriageUpdateFailure } | null;
   sensitiveFilesRemoved: boolean;
 };
@@ -501,6 +504,63 @@ export function createManagedServiceCancellationPreload(params: {
       return child;
     };
   }`;
+}
+
+export async function prepareManagedServiceTriageClockPreload(
+  params: { root: string; scriptPath: string; statePath: string },
+  triageCommandArgv: string[],
+  triageInputPath: string,
+  env: NodeJS.ProcessEnv,
+): Promise<NodeJS.ProcessEnv> {
+  const preloadPath = path.join(params.root, "triage-clock-preload.cjs");
+  const commandArgv = [...triageCommandArgv, "--update-result", triageInputPath];
+  // Only the generated helper advances its diagnostic timer. The installed
+  // command, its descendant, recovery, and lease clocks stay native.
+  const source = `if (process.argv[1] === ${JSON.stringify(params.scriptPath)}) {
+    const fs = require("node:fs");
+    const children = require("node:child_process");
+    const spawn = children.spawn;
+    const setTimeout = global.setTimeout;
+    const clearTimeout = global.clearTimeout;
+    const polls = new Map();
+    let diagnostic;
+    let captured = false;
+    children.spawn = (command, args, options) => {
+      const child = spawn(command, args, options);
+      if (command === ${JSON.stringify(commandArgv[0])} &&
+          (args.at(-1) === ${JSON.stringify(JSON.stringify(commandArgv))} ||
+           JSON.stringify(args.slice(-${commandArgv.length - 1})) === ${JSON.stringify(JSON.stringify(commandArgv.slice(1)))})) {
+        diagnostic = child;
+        child.once("close", () => { diagnostic = undefined; });
+      }
+      return child;
+    };
+    global.clearTimeout = (timer) => {
+      clearInterval(polls.get(timer));
+      polls.delete(timer);
+      return clearTimeout(timer);
+    };
+    global.setTimeout = (callback, delay, ...args) => {
+      const timer = setTimeout(callback, delay, ...args);
+      if (!diagnostic || delay !== 60_000) return timer;
+      if (captured) throw new Error("duplicate diagnostic deadline");
+      captured = true;
+      const poll = setInterval(() => {
+        if (!fs.existsSync(${JSON.stringify(path.join(params.root, "triage-descendant-ready"))})) return;
+        const descendantPid = Number(fs.readFileSync(${JSON.stringify(path.join(params.root, "triage-descendant-ready"))}, "utf8"));
+        const state = JSON.parse(fs.readFileSync(${JSON.stringify(params.statePath)}, "utf8"));
+        if (state.triageDescendantPid !== descendantPid) return;
+        process.kill(descendantPid, 0);
+        global.clearTimeout(timer);
+        fs.writeFileSync(${JSON.stringify(path.join(params.root, "triage-deadline.json"))}, JSON.stringify({ requestedMs: delay, descendantPid }));
+        callback.apply(timer, args);
+      }, 5);
+      polls.set(timer, poll);
+      return timer;
+    };
+  }`;
+  await fs.writeFile(preloadPath, source);
+  return { ...env, NODE_OPTIONS: `${env.NODE_OPTIONS ?? ""} --require ${preloadPath}`.trim() };
 }
 
 export function createManagedServiceLaunchdClockPreload(params: {

@@ -21,6 +21,7 @@ import {
 import {
   createManagedServiceCancellationPreload,
   createManagedServiceLaunchdClockPreload,
+  prepareManagedServiceTriageClockPreload,
   createManagedServiceUpdaterFixtureScript,
   createManagedServiceManagerFixtureScript,
   type ManagedServiceCommandTiming,
@@ -347,6 +348,15 @@ export function createManagedServiceManagerBoundary({
       let helperEnv = options?.repair
         ? await prepareManagedRepairSpawnEnv(root, childEnv)
         : childEnv;
+      const triageDeadlinePath = path.join(root, "triage-deadline.json");
+      if (options?.triageHang) {
+        helperEnv = await prepareManagedServiceTriageClockPreload(
+          { root, scriptPath, statePath },
+          commandFixture.triageCommandArgv,
+          String(generated.triageInputPath),
+          helperEnv,
+        );
+      }
       if (options?.launchdTeardown?.clockEachCommandMs || options?.recoveryClockAdvanceMs) {
         const preloadPath = path.join(root, "launchd-clock-preload.cjs");
         await fs.writeFile(
@@ -662,6 +672,9 @@ export function createManagedServiceManagerBoundary({
         >,
         sentinel: readRestartSentinelPayload({ OPENCLAW_STATE_DIR: root }),
         log: await fs.readFile(String(generated.logPath), "utf8"),
+        ...(options?.triageHang
+          ? { triageDeadline: JSON.parse(await fs.readFile(triageDeadlinePath, "utf8")) }
+          : {}),
         savedFailure,
         sensitiveFilesRemoved: (
           await Promise.all((generated.sensitivePaths as string[]).map(pathExists))
