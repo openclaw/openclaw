@@ -41,8 +41,25 @@ function literalTextRanges(markdown: string): Array<[number, number]> {
       visit(child);
     }
   };
+  // SAFETY: fromMarkdown returns the mdast Root; nodes structurally match PositionedNode.
   visit(fromMarkdown(markdown) as PositionedNode);
   return ranges;
+}
+
+/**
+ * Canonical form for reference identifiers, mirroring micromark's
+ * `normalizeIdentifier` (which markdown-it's normalizeReference matches):
+ * collapse Markdown whitespace, trim, then lower- AND uppercase. The double
+ * case fold is required — `ß`.toLowerCase() stays `ß` while its definition
+ * identifier was already folded to `SS`, so lowercasing alone misses valid
+ * references.
+ */
+function normalizeReferenceIdentifier(value: string): string {
+  return value
+    .replace(/[\t\n\r ]+/gu, " ")
+    .replace(/^ | $/gu, "")
+    .toLowerCase()
+    .toUpperCase();
 }
 
 /** Collects the identifiers of reference definitions declared anywhere in the document. */
@@ -50,13 +67,13 @@ function collectReferenceIdentifiers(markdown: string): Set<string> {
   const identifiers = new Set<string>();
   const visit = (node: PositionedNode): void => {
     if (node.type === "definition" && typeof node.identifier === "string") {
-      // Mirror markdown-it's normalizeReference: fold whitespace, case-fold.
-      identifiers.add(node.identifier.trim().replace(/\s+/gu, " ").toLowerCase());
+      identifiers.add(normalizeReferenceIdentifier(node.identifier));
     }
     for (const child of node.children ?? []) {
       visit(child);
     }
   };
+  // SAFETY: fromMarkdown returns the mdast Root; nodes structurally match PositionedNode.
   visit(fromMarkdown(markdown) as PositionedNode);
   return identifiers;
 }
@@ -77,7 +94,7 @@ function referenceSpans(markdown: string, identifiers: Set<string>): ReferenceSp
   for (const match of markdown.matchAll(reference)) {
     const start = match.index ?? 0;
     const [source, label = "", ref = ""] = match;
-    const identifier = (ref === "" ? label : ref).trim().replace(/\s+/gu, " ").toLowerCase();
+    const identifier = normalizeReferenceIdentifier(ref === "" ? label : ref);
     if (!identifiers.has(identifier)) {
       continue;
     }
@@ -165,7 +182,10 @@ export function convertMarkdownTables(markdown: string, mode: MarkdownTableMode)
     autolink: false,
     tableMode: "block",
   });
-  const referenceIdentifiers = /(^|\n)\s*\[[^\]]+\]:\s*/u.test(markdown)
+  // Gate the definition-collecting parse on any `[…]:` shape: definitions may be
+  // nested in block quotes or list items, so a line-anchored precheck would miss
+  // documents whose only definitions live inside a container.
+  const referenceIdentifiers = /\[[^\]\n]+\]:/u.test(markdown)
     ? collectReferenceIdentifiers(markdown)
     : new Set<string>();
   let cursor = 0;

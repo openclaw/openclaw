@@ -209,6 +209,32 @@ describe("convertMarkdownTables", () => {
     expect(unlabeled).toContain("[a\\_b]");
   });
 
+  it("preserves reference labels whose only definition lives in a block quote", () => {
+    const rendered = convertMarkdownTables(
+      "| Name | Value |\n| --- | --- |\n| Entry | [manual][api_v1] |\n\n> [api_v1]: https://example.com",
+      "bullets",
+    );
+    const parsed = new MarkdownIt().render(rendered);
+
+    // The block-quoted definition still backs the reference, so the label must
+    // keep its underscore for the link to resolve.
+    expect(rendered).toContain("[manual][api_v1]");
+    expect(parsed).toContain('<a href="https://example.com">manual</a>');
+  });
+
+  it("preserves reference labels that differ from definitions by Unicode case folding", () => {
+    const rendered = convertMarkdownTables(
+      "| Name | Value |\n| --- | --- |\n| Entry | [manual][straße_v1] |\n\n[straße_v1]: https://example.com",
+      "bullets",
+    );
+    const parsed = new MarkdownIt().render(rendered);
+
+    // micromark folds identifiers with lower+uppercase (ß → SS), so matching
+    // must use the same fold or the underscore gets escaped and the link dies.
+    expect(rendered).toContain("[manual][straße_v1]");
+    expect(parsed).toContain('<a href="https://example.com">manual</a>');
+  });
+
   it("preserves CRLF source around a table", () => {
     const before = "Keep \\*literal\\*.\r\n\r\n";
     const after = "\r\n\r\nAfter.\r\n";
