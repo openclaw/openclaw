@@ -1,16 +1,17 @@
 // Control UI tests cover deferred Workboard deletion behavior.
 import { copyFile, mkdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
+import type { WorkboardCard } from "@openclaw/workboard-contract";
 import type { BrowserContext, Page } from "playwright";
 import { expect, it } from "vitest";
 import { createControlUiE2eSuite } from "../../e2e/control-ui-e2e-suite.test-support.ts";
-import type { WorkboardCard } from "../../lib/workboard/index.ts";
 import { createControlUiE2eArtifactDir } from "../../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   controlUiE2eWaitTimeoutMs,
   installMockGateway,
   type MockGatewayControls,
 } from "../../test-helpers/control-ui-e2e.ts";
+import { workboardUi } from "../../test-helpers/control-ui-workboard-fixture.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI Workboard deferred deletion E2E",
@@ -156,6 +157,7 @@ suite.define(() => {
     const recorded = await newRecordedPage(artifacts);
     try {
       const gateway = await installMockGateway(recorded.page, {
+        ...workboardUi,
         methodResponses: {
           "config.get": configResponse(),
           "sessions.list": {
