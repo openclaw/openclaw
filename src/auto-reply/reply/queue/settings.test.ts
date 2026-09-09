@@ -13,6 +13,48 @@ describe("resolveQueueSettingsCore", () => {
     });
   });
 
+  it.each([
+    { name: "no selection", overrides: {}, mode: "followup" },
+    {
+      name: "global config",
+      overrides: { cfg: { messages: { queue: { mode: "steer" as const } } } },
+      mode: "steer",
+    },
+    {
+      name: "channel config",
+      overrides: {
+        cfg: {
+          messages: {
+            queue: { mode: "collect" as const, byChannel: { telegram: "steer" as const } },
+          },
+        },
+      },
+      mode: "steer",
+    },
+    {
+      name: "session override",
+      overrides: { sessionEntry: { sessionId: "test", updatedAt: 0, queueMode: "steer" as const } },
+      mode: "steer",
+    },
+    {
+      name: "inline directive",
+      overrides: {
+        inlineMode: "steer" as const,
+        sessionEntry: { sessionId: "test", updatedAt: 0, queueMode: "collect" as const },
+      },
+      mode: "steer",
+    },
+  ])("resolves the ambient queue policy from $name", ({ overrides, mode }) => {
+    expect(
+      resolveQueueSettingsCore({
+        cfg: {},
+        channel: "telegram",
+        defaultMode: "followup",
+        ...overrides,
+      }).mode,
+    ).toBe(mode);
+  });
+
   it("uses the short debounce when collect is selected globally", () => {
     expect(
       resolveQueueSettingsCore({

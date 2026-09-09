@@ -70,6 +70,12 @@ Room events use strict visible delivery. Final assistant text is private. The ag
 
 Typing and lifecycle status reactions stay suppressed for room events. The one explicit receipt exception is `messages.ackReactionScope: "all"`, which sends the configured ack reaction; use any narrower scope or `"off"` when the room must remain completely silent.
 
+## Corrections during active work
+
+Without an explicit queue mode, room events wait for the active task to finish. To let accepted, unmentioned corrections steer ongoing work, select `messages.queue.mode: "steer"`, a channel override under `messages.queue.byChannel`, or `/queue steer` for the session. Existing sender and room allowlists still apply; mention gating must be off for the message to be accepted.
+
+Steering takes effect at the active runtime's supported boundary, not by interrupting an already-running tool. If the runtime cannot accept it, the correction waits for a later turn. Final replies, typing, and reactions retain the room's quiet-delivery rules. See [Steering queue](/concepts/queue-steering).
+
 ## Discord example
 
 ```json5

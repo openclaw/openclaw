@@ -31,6 +31,7 @@ import {
   resolveInboundUserContextPromptJoiner,
 } from "./inbound-meta.js";
 import { prepareReplyConversation } from "./prompt-session-context.js";
+import { resolveQueueSettingsCore } from "./queue/settings.js";
 import { REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS, createReplyOperation } from "./reply-run-registry.js";
 import { getActiveReplyRunCount } from "./reply-run-registry.registry.js";
 import { testing as replyRunTesting } from "./reply-run-registry.test-support.js";
@@ -3531,16 +3532,37 @@ describe("runPreparedReply media-only handling", () => {
     expect(call?.followupRun.currentInboundContext?.text).not.toContain("Current event:");
   });
 
-  it("steers active room events with their runtime context", async () => {
+  it.each([
+    { name: "implicit default", queue: undefined, shouldSteer: false, mode: "followup" },
+    {
+      name: "explicit steering",
+      queue: { mode: "steer" as const },
+      shouldSteer: true,
+      mode: "steer",
+    },
+    {
+      name: "channel steering",
+      queue: { mode: "followup" as const, byChannel: { telegram: "steer" as const } },
+      shouldSteer: true,
+      mode: "steer",
+    },
+    {
+      name: "channel followup",
+      queue: { mode: "steer" as const, byChannel: { telegram: "followup" as const } },
+      shouldSteer: false,
+      mode: "followup",
+    },
+    {
+      name: "explicit collect",
+      queue: { mode: "collect" as const },
+      shouldSteer: false,
+      mode: "collect",
+    },
+  ])("preserves room context under $name", async ({ queue, shouldSteer, mode }) => {
     const queueSettings = await import("./queue/settings-runtime.js");
     const embeddedAgentRuntime = await import("../../agents/embedded-agent.runtime.js");
     const abortController = new AbortController();
-    vi.mocked(queueSettings.resolveQueueSettings).mockReturnValueOnce({
-      mode: "steer",
-      debounceMs: 500,
-      cap: 20,
-      dropPolicy: "summarize",
-    });
+    vi.mocked(queueSettings.resolveQueueSettings).mockImplementationOnce(resolveQueueSettingsCore);
     vi.mocked(embeddedAgentRuntime.resolveActiveEmbeddedRunSessionId)
       .mockReturnValueOnce("active-session")
       .mockReturnValueOnce("active-session");
@@ -3551,6 +3573,7 @@ describe("runPreparedReply media-only handling", () => {
     vi.mocked(buildInboundUserContextPrefix).mockReturnValueOnce("room context");
 
     await runPrepared({
+      cfg: { messages: { queue } },
       opts: { abortSignal: abortController.signal },
       ctx: {
         ...createInboundTurn("ambient", "telegram", "group"),
@@ -3564,10 +3587,10 @@ describe("runPreparedReply media-only handling", () => {
     });
 
     const call = requireLastRunReplyAgentCall();
-    expect(call.shouldSteer).toBe(true);
+    expect(call.shouldSteer).toBe(shouldSteer);
     expect(call.shouldFollowup).toBe(true);
     expect(call.isActive).toBe(true);
-    expect(call.resolvedQueue.mode).toBe("steer");
+    expect(call.resolvedQueue.mode).toBe(mode);
     expect(call.followupRun.prompt).toBe("#992 Alice: ambient");
     expect(call.followupRun.currentInboundEventKind).toBe("room_event");
     expect(call.followupRun.abortSignal).toBe(abortController.signal);

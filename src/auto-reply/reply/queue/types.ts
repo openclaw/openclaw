@@ -59,6 +59,8 @@ export type ResolveQueueSettingsParams = {
   channel?: string;
   sessionEntry?: SessionEntry;
   inlineMode?: QueueMode;
+  /** Admission fallback when no directive, session override, or config selects a mode. */
+  defaultMode?: QueueMode;
   inlineOptions?: Partial<QueueSettings>;
   pluginDebounceMs?: number;
 };

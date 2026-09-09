@@ -12,6 +12,8 @@ When a normal prompt arrives while a session run is already streaming and the qu
 
 This page covers queue-mode steering for normal inbound messages in `steer` mode. In `followup` or `collect` mode, normal messages skip this path and wait until the active run finishes. For the explicit `/steer <message>` command, see [Steer](/tools/steer).
 
+[Ambient room events](/channels/ambient-room-events#corrections-during-active-work) are an exception to the default: they wait for follow-up unless steering is explicitly selected in configuration or for the session.
+
 ## Runtime boundary
 
 Steering does not interrupt a tool call that is already running. The OpenClaw runtime checks at tool-launch boundaries as well as model boundaries:
