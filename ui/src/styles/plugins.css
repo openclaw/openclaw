@@ -1888,7 +1888,26 @@ h3.plugins-subheader {
 
 .plugin-catalog-detail {
   display: grid;
-  gap: var(--space-6);
+  grid-template-columns: minmax(0, 1fr) minmax(220px, 280px);
+  grid-template-areas:
+    "breadcrumb breadcrumb"
+    "main sidebar"
+    "tabs sidebar"
+    "panel sidebar";
+  gap: var(--space-4) var(--space-8);
+}
+
+.plugin-catalog-detail--no-sidebar {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-areas:
+    "breadcrumb"
+    "main"
+    "tabs"
+    "panel";
+}
+
+.plugin-catalog-detail > .plugins-settings-breadcrumb {
+  grid-area: breadcrumb;
 }
 
 .plugin-catalog-detail__back {
@@ -1911,13 +1930,7 @@ h3.plugins-subheader {
 }
 
 .plugin-catalog-detail__hero {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(220px, 280px);
-  gap: var(--space-8);
-}
-
-.plugin-catalog-detail--no-sidebar .plugin-catalog-detail__hero {
-  grid-template-columns: minmax(0, 1fr);
+  display: contents;
 }
 
 .plugin-installed-detail__configuration-label {
@@ -1948,6 +1961,7 @@ h3.plugins-subheader {
 }
 
 .plugin-catalog-detail__hero main {
+  grid-area: main;
   min-width: 0;
 }
 
@@ -2024,6 +2038,7 @@ h3.plugins-subheader {
 
 .plugin-catalog-detail__sidebar {
   display: grid;
+  grid-area: sidebar;
   align-content: start;
   gap: var(--space-4);
 }
@@ -2157,21 +2172,25 @@ h3.plugins-subheader {
 }
 
 .plugin-catalog-detail__loading-tabs {
+  grid-area: tabs;
   width: min(640px, 75%);
   height: 40px;
 }
 
 .plugin-catalog-detail__loading-readme {
+  grid-area: panel;
   width: min(820px, 80%);
   height: 220px;
 }
 
 .plugin-catalog-detail__tabs {
+  grid-area: tabs;
   width: 100%;
   overflow-x: auto;
 }
 
 .plugin-catalog-detail__panel {
+  grid-area: panel;
   min-width: 0;
 }
 
@@ -2517,8 +2536,18 @@ h3.plugins-subheader {
   }
 
   .plugin-catalog-detail__hero {
-    grid-template-columns: 1fr;
-    gap: var(--space-5);
+    display: contents;
+  }
+
+  .plugin-catalog-detail {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas:
+      "breadcrumb"
+      "main"
+      "sidebar"
+      "tabs"
+      "panel";
+    gap: var(--space-4);
   }
 
   .plugin-catalog-detail__definition-list > div {

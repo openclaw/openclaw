@@ -188,6 +188,83 @@ describe("plugin discovery identity and local join", () => {
     expect(items.map((item) => item.catalog.name)).toEqual(["Private Bundle"]);
   });
 
+  it("does not repeat local-only entries on remote cursor pages", () => {
+    const items = joinClawHubPluginCatalog({
+      remote: [remote],
+      published: [],
+      local: {
+        plugins: [
+          {
+            id: "private-bundle",
+            name: "Private Bundle",
+            origin: "bundled",
+            installed: false,
+            enabled: false,
+            state: "not-installed",
+          },
+        ],
+        diagnostics: [],
+        mutationAllowed: true,
+      },
+      includeBundledOnly: true,
+      intent: "all",
+      cursor: "page-two",
+    });
+
+    expect(items.map((item) => item.catalog.name)).toEqual(["Memory Plus"]);
+  });
+
+  it("keeps unmatched installed entries in All search and deduplicates remote matches", () => {
+    const items = joinClawHubPluginCatalog({
+      remote: [remote],
+      published: [],
+      local: {
+        plugins: [
+          {
+            id: "workspace-memory",
+            name: "Memory Workspace",
+            origin: "workspace",
+            installed: true,
+            enabled: true,
+            state: "enabled",
+          },
+          {
+            id: "global-memory",
+            name: "Memory Sidecar",
+            origin: "global",
+            installed: true,
+            enabled: false,
+            state: "disabled",
+          },
+          {
+            id: "memory-plus",
+            name: "Memory Remote Local",
+            origin: "global",
+            installed: true,
+            enabled: false,
+            state: "needs-setup",
+          },
+        ],
+        diagnostics: [],
+        mutationAllowed: true,
+      },
+      includeBundledOnly: true,
+      intent: "all",
+      query: "memory",
+    });
+
+    expect(items.map((item) => item.catalog.name)).toEqual([
+      "Memory Sidecar",
+      "Memory Workspace",
+      "Memory Plus",
+    ]);
+    expect(items[2]?.local).toMatchObject({
+      pluginId: "memory-plus",
+      state: "needs-setup",
+      action: "manage",
+    });
+  });
+
   it("filters bundled entries for unified search and keeps them ahead of ClawHub results", () => {
     const local = {
       plugins: [

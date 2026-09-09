@@ -141,6 +141,53 @@ describe("renderPluginCatalogResults", () => {
     expect(onCategoryChange).toHaveBeenCalledWith("tools");
   });
 
+  it("preserves every catalog result under Uncategorized when category metadata is unavailable", () => {
+    const container = mount(
+      baseProps({
+        categories: [],
+        categoriesError: "Category metadata unavailable",
+        result: {
+          items: Array.from({ length: 10 }, (_, index) => plugin(`catalog-result-${index}`)),
+        },
+      }),
+    );
+
+    expect(
+      [...container.querySelectorAll<HTMLElement>("[data-catalog-section]")].map(
+        (section) => section.dataset.catalogSection,
+      ),
+    ).toEqual(["featured", "trending", "uncategorized"]);
+    const uncategorized = container.querySelector('[data-catalog-section="uncategorized"]');
+    expect(uncategorized?.querySelectorAll(".plugin-catalog-card")).toHaveLength(10);
+    expect(uncategorized?.querySelector(".plugin-catalog-section__view-all")).toBeNull();
+  });
+
+  it("groups only entries without a matching catalog category under Uncategorized", () => {
+    const container = mount(
+      baseProps({
+        result: {
+          items: [
+            plugin("matched"),
+            plugin("unmatched", {
+              catalog: {
+                name: "unmatched",
+                official: true,
+                categories: ["missing-category"],
+              },
+            }),
+          ],
+        },
+      }),
+    );
+
+    const tools = container.querySelector('[data-catalog-section="tools"]');
+    const uncategorized = container.querySelector('[data-catalog-section="uncategorized"]');
+    expect(tools?.querySelectorAll(".plugin-catalog-card")).toHaveLength(1);
+    expect(tools?.querySelector('[data-plugin-id="matched"]')).not.toBeNull();
+    expect(uncategorized?.querySelectorAll(".plugin-catalog-card")).toHaveLength(1);
+    expect(uncategorized?.querySelector('[data-plugin-id="unmatched"]')).not.toBeNull();
+  });
+
   it("shows exactly one top-right status or install action and omits download counts", () => {
     const onInstall = vi.fn();
     const installed = plugin("installed", {

@@ -167,7 +167,7 @@ export function joinClawHubPluginCatalog(params: {
       local: projectLocalFacts(localPlugin, params.local.mutationAllowed),
     };
   });
-  if (!params.includeBundledOnly) {
+  if ((!params.includeBundledOnly && params.intent !== "all") || params.cursor) {
     return remote;
   }
   const publishedLocalPlugins = new Set<PluginCatalogEntry>();
@@ -179,7 +179,12 @@ export function joinClawHubPluginCatalog(params: {
   }
   const query = normalizedAlias(params.query);
   const localOnly = params.local.plugins
-    .filter((plugin) => plugin.origin === "bundled" && !publishedLocalPlugins.has(plugin))
+    .filter(
+      (plugin) =>
+        !publishedLocalPlugins.has(plugin) &&
+        ((params.intent === "all" && plugin.installed) ||
+          (params.includeBundledOnly && plugin.origin === "bundled")),
+    )
     .filter((plugin) => {
       const categories = localDiscoveryCategories(plugin);
       if (params.category && !categories.includes(params.category)) {

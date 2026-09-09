@@ -348,7 +348,7 @@ describe("PluginsPage", () => {
           "clawhub:example-plugin",
         );
       } else if (action === "enable") {
-        await page.updateEnabled("workboard", true);
+        await page.consentController.updateEnabled("workboard", true);
       } else {
         await page.uninstall("community-thing", "plugin:community-thing");
       }
@@ -580,7 +580,7 @@ describe("PluginsPage", () => {
     await waitForFast(() =>
       expect(request).toHaveBeenCalledWith("plugins.uninstall", { pluginId: "community-thing" }),
     );
-    await page.updateEnabled("workboard", true);
+    await page.consentController.updateEnabled("workboard", true);
 
     uninstallResult.resolve({
       ok: true,

@@ -197,7 +197,7 @@ function renderSection(params: {
   loading?: boolean;
   error?: string | null;
   onRetry?: () => void;
-  onViewAll: () => void;
+  onViewAll?: () => void;
   props: PluginCatalogResultsProps;
 }): TemplateResult | typeof nothing {
   if (!params.loading && !params.error && params.items.length === 0) {
@@ -206,13 +206,17 @@ function renderSection(params: {
   return html`<section class="plugin-catalog-section" data-catalog-section=${params.id}>
     <header class="plugin-catalog-section__header">
       <h2>${params.title}</h2>
-      <button
-        type="button"
-        class="btn btn--sm plugin-catalog-section__view-all oc-action oc-action-ghost"
-        @click=${params.onViewAll}
-      >
-        ${t("pluginsPage.viewAllInstalledPlugins")}
-      </button>
+      ${
+        params.onViewAll
+          ? html`<button
+              type="button"
+              class="btn btn--sm plugin-catalog-section__view-all oc-action oc-action-ghost"
+              @click=${params.onViewAll}
+            >
+              ${t("pluginsPage.viewAllInstalledPlugins")}
+            </button>`
+          : nothing
+      }
     </header>
     ${
       params.loading
@@ -221,7 +225,7 @@ function renderSection(params: {
           ? renderError(params.error, params.onRetry)
           : html`<div class="plugin-catalog-grid">
               ${repeat(
-                params.items.slice(0, SECTION_SIZE),
+                params.onViewAll ? params.items.slice(0, SECTION_SIZE) : params.items,
                 (plugin) => plugin.id,
                 (plugin) => renderCatalogCard(plugin, params.props),
               )}
@@ -336,12 +340,11 @@ function renderRawResults(props: PluginCatalogResultsProps): TemplateResult {
 function renderGroupedCatalog(props: PluginCatalogResultsProps): TemplateResult {
   const items = props.result?.items ?? [];
   const categories = props.categories.toSorted((left, right) => left.order - right.order);
-  const hasAnySection =
-    props.featured.length > 0 ||
-    props.trending.length > 0 ||
-    categories.some((category) =>
-      items.some((plugin) => plugin.catalog.categories.includes(category.slug)),
-    );
+  const categorySlugs = new Set(categories.map((category) => category.slug));
+  const uncategorized = items.filter(
+    (plugin) => !plugin.catalog.categories.some((category) => categorySlugs.has(category)),
+  );
+  const hasAnySection = props.featured.length > 0 || props.trending.length > 0 || items.length > 0;
   if (
     !hasAnySection &&
     !props.loading &&
@@ -389,6 +392,12 @@ function renderGroupedCatalog(props: PluginCatalogResultsProps): TemplateResult 
           props,
         }),
     )}
+    ${renderSection({
+      id: "uncategorized",
+      title: t("pluginsPage.categoryUncategorized"),
+      items: uncategorized,
+      props,
+    })}
   `;
 }
 
