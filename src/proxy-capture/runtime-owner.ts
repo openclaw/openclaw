@@ -31,6 +31,7 @@ export function resolveRuntimeDeps(deps: DebugProxyCaptureRuntimeDeps = {}) {
     persistEventPayload:
       deps.persistEventPayload ??
       ((store, payload) =>
+        // SAFETY: The default writer receives real stores; lightweight test stores supply their own writer.
         persistEventPayload(store as ReturnType<typeof getDebugProxyCaptureStore>, payload)),
     safeJsonString: deps.safeJsonString ?? safeJsonString,
     fetchTarget: deps.fetchTarget ?? globalThis,
@@ -77,23 +78,21 @@ export function resolveDebugProxyFetchTransport(
 }
 
 export function hasDebugProxyFetchPatch(
-  fetchTarget: typeof globalThis,
+  fetchTarget: GlobalFetchPatchTarget,
   admission: CaptureAdmission,
 ): boolean {
-  return (
-    (fetchTarget as GlobalFetchPatchTarget)[DEBUG_PROXY_FETCH_PATCH_KEY]?.admission === admission
-  );
+  return fetchTarget[DEBUG_PROXY_FETCH_PATCH_KEY]?.admission === admission;
 }
 
 /** Keep wrapper identity and its admission together for matching-owner teardown. */
 export function registerDebugProxyFetchPatch(
-  fetchTarget: typeof globalThis,
+  fetchTarget: GlobalFetchPatchTarget,
   originalFetch: typeof globalThis.fetch,
   patchedFetch: typeof globalThis.fetch,
   admission: CaptureAdmission,
 ): void {
   const patch = { originalFetch, admission };
-  (fetchTarget as GlobalFetchPatchTarget)[DEBUG_PROXY_FETCH_PATCH_KEY] = patch;
+  fetchTarget[DEBUG_PROXY_FETCH_PATCH_KEY] = patch;
   globalFetchPatches.set(patchedFetch, patch);
   fetchTarget.fetch = patchedFetch;
 }
@@ -102,7 +101,7 @@ export function uninstallDebugProxyGlobalFetchPatch(
   deps: DebugProxyCaptureRuntimeDeps = {},
   admission?: CaptureAdmission,
 ): void {
-  const fetchTarget = resolveRuntimeDeps(deps).fetchTarget as GlobalFetchPatchTarget;
+  const fetchTarget: GlobalFetchPatchTarget = resolveRuntimeDeps(deps).fetchTarget;
   const state = fetchTarget[DEBUG_PROXY_FETCH_PATCH_KEY];
   if (!state || (admission && state.admission !== admission)) {
     return;
@@ -112,7 +111,8 @@ export function uninstallDebugProxyGlobalFetchPatch(
 }
 
 export function isDebugProxyGlobalFetchPatchInstalled(): boolean {
-  return Boolean((globalThis as GlobalFetchPatchTarget)[DEBUG_PROXY_FETCH_PATCH_KEY]);
+  const fetchTarget: GlobalFetchPatchTarget = globalThis;
+  return Boolean(fetchTarget[DEBUG_PROXY_FETCH_PATCH_KEY]);
 }
 
 function captureOwnerKey(settings: DebugProxySettings): string {
