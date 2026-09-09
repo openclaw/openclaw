@@ -26,7 +26,10 @@ export function createModelsProviderData(
   const runtimeChoicesByProvider = new Map(providers.map((provider) => [provider, [builtin]]));
   const runtimeChoicesByModel = new Map(
     [...byProvider].flatMap(([provider, models]) =>
-      [...models].map((model) => [`${provider}/${model}`, [builtin]] as const),
+      [...models].map<[string, ModelsRuntimeChoice[]]>((model) => [
+        `${provider}/${model}`,
+        [builtin],
+      ]),
     ),
   );
   return {

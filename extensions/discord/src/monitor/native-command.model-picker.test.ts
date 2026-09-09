@@ -127,7 +127,9 @@ function createInteraction(params?: { userId?: string; values?: string[] }): Moc
     reply: vi.fn().mockResolvedValue({ ok: true }),
     followUp: vi.fn().mockResolvedValue({ ok: true }),
     update: vi.fn().mockResolvedValue({ ok: true }),
-    editReply: vi.fn().mockResolvedValue({ ok: true }),
+    editReply: vi
+      .fn<(_payload?: unknown) => Promise<{ ok: boolean }>>()
+      .mockResolvedValue({ ok: true }),
     acknowledge: vi.fn(),
     acknowledged: false,
     client: {},
