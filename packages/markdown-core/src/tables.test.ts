@@ -276,6 +276,45 @@ describe("convertMarkdownTables", () => {
     expect(parsed).toContain('<a href="https://example.com/docs">guide</a>');
   });
 
+  it("preserves references backed by a continued block-quote definition", () => {
+    const rendered = convertMarkdownTables(
+      "| Name | Value |\n| --- | --- |\n| Entry | [manual][api_ v1] |\n\n> [api_\n> v1]: https://example.com",
+      "bullets",
+    );
+    const parsed = new MarkdownIt().render(rendered);
+
+    // The definition's continuation lines belong to the block quote; the cell
+    // passes through untouched so the renderer's own label folding resolves it.
+    expect(rendered).toContain("[manual][api_ v1]");
+    expect(parsed).toContain('<a href="https://example.com">manual</a>');
+  });
+
+  it("preserves references whose label contains an escaped closing bracket", () => {
+    const rendered = convertMarkdownTables(
+      "| Name | Value |\n| --- | --- |\n| Entry | [manual][api\\]_v1] |\n\n[api\\]_v1]: https://example.com",
+      "bullets",
+    );
+    const parsed = new MarkdownIt().render(rendered);
+
+    // The renderer skips the escaped `]` while reading the label; the cell must
+    // keep its exact source bytes for the definition match to survive.
+    expect(rendered).toContain("[manual][api\\]_v1]");
+    expect(parsed).toContain('<a href="https://example.com">manual</a>');
+  });
+
+  it("passes bracket-bearing cells through untouched while definitions exist", () => {
+    const rendered = convertMarkdownTables(
+      "| A | B |\n| --- | --- |\n| x | [not a ref * stray] |\n\n[other]: https://example.com",
+      "bullets",
+    );
+
+    // A stray `*` in a bracket cell would normally be delimiter-isolated, but
+    // any `[` cell might be a reference while definitions exist; the cell keeps
+    // main's exact bytes by design instead of approximating reference grammar.
+    expect(rendered).toContain("[not a ref * stray]");
+    expect(rendered).not.toContain("\\*");
+  });
+
   it("preserves CRLF source around a table", () => {
     const before = "Keep \\*literal\\*.\r\n\r\n";
     const after = "\r\n\r\nAfter.\r\n";
