@@ -31,7 +31,9 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-function pendingCapture(): WarmProfileRecord {
+function pendingCapture(
+  phase: "scrubbing" | "creating" | "uncertain" = "creating",
+): WarmProfileRecord {
   const now = Date.now();
   return {
     version: 2,
@@ -49,7 +51,7 @@ function pendingCapture(): WarmProfileRecord {
       startedAtMs: now - 1_200_000,
       leaseId: "cbx_capture",
       provider: "aws",
-      phase: "creating",
+      phase,
     },
   };
 }
@@ -188,20 +190,31 @@ describe("Crabbox warm-image CLI", () => {
     expect(openCrabboxWarmImageStore().lookup("profile")).toEqual(replacement);
   });
 
-  it("prints the exact manual recovery command and pending checkpoint deletion", async () => {
-    const record = pendingCapture();
-    openCrabboxWarmImageStore().register("profile", record);
-    openCrabboxWarmImageStore().register("retiring", {
-      ...record,
-      operation: { type: "retire", checkpointId: "chk_predecessor" },
-    });
+  it.each(["scrubbing", "creating", "uncertain"] as const)(
+    "prints guidance for an old %s capture and pending deletion",
+    async (phase) => {
+      const record = pendingCapture(phase);
+      openCrabboxWarmImageStore().register("profile", record);
+      openCrabboxWarmImageStore().register("retiring", {
+        ...record,
+        operation: { type: "retire", checkpointId: "chk_predecessor" },
+      });
 
-    await runCli();
+      await runCli();
 
-    expect(output).toContain(
-      `openclaw crabbox warm-images --recover ${SELECTOR} --acknowledge-provider-cleanup`,
-    );
-    expect(output).toContain("Stop the owning Gateway and capture processes");
-    expect(output).toContain("Checkpoint deletion pending: chk_predecessor");
-  });
+      if (phase === "uncertain") {
+        expect(output).toContain(
+          `openclaw crabbox warm-images --recover ${SELECTOR} --acknowledge-provider-cleanup`,
+        );
+        expect(output).toContain("Stop the owning Gateway and capture processes");
+      } else {
+        expect(output).toContain("may still be");
+        expect(output).not.toContain("paused");
+        expect(output).not.toContain("--recover");
+        expect(output).not.toContain("Stop the owning Gateway");
+      }
+      expect(output).toContain("Checkpoint deletion pending: chk_predecessor");
+      expect(openCrabboxWarmImageStore().lookup("profile")).toEqual(record);
+    },
+  );
 });

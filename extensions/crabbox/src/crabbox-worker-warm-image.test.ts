@@ -209,7 +209,7 @@ describe("Crabbox profile warm images", () => {
     // Capture phases ride a full crabbox run/snapshot round trip; 60s starves
     // them under coordinator latency (live-measured on AWS 2026-08-26).
     expect(scrub?.options.timeoutMs).toBe(180_000);
-    expect(calls[1]?.options.timeoutMs).toBe(180_000);
+    expect(calls[1]?.options.timeoutMs).toBe(48 * 60_000);
     expect(provider.resolveDestroyTimeoutMs?.(PROFILE)).toBeGreaterThanOrEqual(
       calls.reduce((total, call) => total + call.options.timeoutMs, 0),
     );
@@ -335,6 +335,8 @@ describe("Crabbox profile warm images", () => {
       "--mode",
       "native",
       "--wait",
+      "--wait-timeout",
+      "2700000ms",
       "--json",
     ]);
     calls.length = 0;
@@ -345,11 +347,22 @@ describe("Crabbox profile warm images", () => {
   });
 
   it.each([
-    { backend: "aws", kind: "aws-ebs-snapshot", nativeState: "completed" },
-    { backend: "machine0", kind: "machine0-image", nativeState: "ACTIVE" },
+    { backend: "aws", kind: "aws-ebs-snapshot", nativeState: "completed", sourceLifecycleMs: 0 },
+    {
+      backend: "daytona",
+      kind: "daytona-snapshot",
+      nativeState: "active",
+      sourceLifecycleMs: 3 * 60_000,
+    },
+    {
+      backend: "machine0",
+      kind: "machine0-image",
+      nativeState: "ACTIVE",
+      sourceLifecycleMs: 30 * 60_000,
+    },
   ])(
     "reuses waited $backend images without repeating readiness inspection",
-    async ({ backend, kind, nativeState }) => {
+    async ({ backend, kind, nativeState, sourceLifecycleMs }) => {
       const profile = { ...PROFILE, provider: backend };
       const { provider, calls } = createWarmProvider(({ argv }) => {
         if (argv[2] === "create") {
@@ -387,10 +400,14 @@ describe("Crabbox profile warm images", () => {
         "--mode",
         "native",
         "--wait",
+        "--wait-timeout",
+        "2700000ms",
         "--json",
+        ...(backend === "daytona" ? ["--no-reboot=false"] : []),
         ...(backend === "machine0" ? ["--strategy", "image"] : []),
       ]);
-      expect(create?.options.timeoutMs).toBe(backend === "machine0" ? 600_000 : 180_000);
+      // Native capture gets Crabbox's 45m plus command overhead and separate source recovery.
+      expect(create?.options.timeoutMs).toBe(48 * 60_000 + sourceLifecycleMs);
       const scrub = calls.find(({ options }) =>
         options.input?.toString().includes("CRABBOX_SCRUB_NODE_SCRIPT"),
       );

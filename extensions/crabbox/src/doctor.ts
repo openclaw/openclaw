@@ -7,7 +7,8 @@ import * as doctorRuntime from "./crabbox-worker-doctor-runtime.js";
 import { CRABBOX_WORKER_PROVIDER_ID, findCrabboxBinary } from "./crabbox-worker-profile.js";
 import {
   crabboxWarmImageRecoveryHint,
-  isCrabboxWarmImageCapturePaused,
+  CRABBOX_WARM_IMAGE_WAIT_HINT,
+  isCrabboxWarmImageCaptureUncertain,
   listCrabboxWarmImages,
 } from "./crabbox-worker-warm-image-store.js";
 
@@ -148,16 +149,18 @@ export function registerCrabboxWorkerProviderDoctorChecks(
             target: image.profileKey,
           } as const;
           if (image.capture) {
-            const paused = isCrabboxWarmImageCapturePaused(image.capture);
+            const uncertain = isCrabboxWarmImageCaptureUncertain(image.capture);
             findings.push({
               ...details,
-              severity: paused ? "warning" : "info",
-              message: paused
+              severity: uncertain || image.capture.stale ? "warning" : "info",
+              message: uncertain
                 ? `Warm-image capture ${image.capture.selector} is paused; its provider outcome requires manual reconciliation.`
-                : `Warm-image capture ${image.capture.selector} is in progress.`,
-              fixHint: paused
+                : image.capture.stale
+                  ? `Warm-image capture ${image.capture.selector} is taking longer than usual.`
+                  : `Warm-image capture ${image.capture.selector} is in progress.`,
+              fixHint: uncertain
                 ? crabboxWarmImageRecoveryHint(image.capture.selector)
-                : "Allow the current capture to finish; inspect `openclaw crabbox warm-images --json` if it remains pending.",
+                : CRABBOX_WARM_IMAGE_WAIT_HINT,
             });
           }
           if (image.retirement) {
