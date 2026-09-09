@@ -225,7 +225,50 @@ describe("fetchZaiUsage", () => {
       },
       {
         label: "Monthly",
-        usedPercent: 0,
+        usedPercent: 40,
+        resetAt: undefined,
+      },
+    ]);
+  });
+
+  it("parses string-typed numerics instead of treating them as missing", async () => {
+    const mockFetch = createProviderUsageFetch(async () =>
+      makeResponse(200, {
+        success: true,
+        code: "200",
+        data: {
+          planName: "Team",
+          limits: [
+            {
+              type: "TOKENS_LIMIT",
+              percentage: "32",
+              unit: "3",
+              number: "6",
+            },
+            {
+              type: "TIME_LIMIT",
+              percentage: "40",
+              unit: "1",
+              number: "30",
+            },
+          ],
+        },
+      }),
+    );
+
+    const result = await fetchZaiUsage("key", 5000, mockFetch);
+
+    expect(result.error).toBeUndefined();
+    expect(result.plan).toBe("Team");
+    expect(result.windows).toEqual([
+      {
+        label: "Tokens (6h)",
+        usedPercent: 32,
+        resetAt: undefined,
+      },
+      {
+        label: "Monthly",
+        usedPercent: 40,
         resetAt: undefined,
       },
     ]);
