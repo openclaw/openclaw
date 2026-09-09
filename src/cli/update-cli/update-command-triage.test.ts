@@ -637,7 +637,7 @@ describe("update failure triage boundary", () => {
               `  nodeOptions: process.env.NODE_OPTIONS,\n` +
               `  updateInProgress: process.env.OPENCLAW_UPDATE_IN_PROGRESS,\n` +
               `  released: fs.existsSync(${JSON.stringify(releasedPath)}),\n` +
-              `  prompt: process.argv[2],\n` +
+              `  prompt: process.argv.at(-1),\n` +
               `}) + "\\n");\n` +
               `process.exitCode = ${agentExitCode};\n`,
             { mode: 0o700 },
