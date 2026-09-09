@@ -482,7 +482,15 @@ describe("plugin management Gateway handlers", () => {
       nextCursor: "opaque-next",
     });
     managementMocks.list.mockResolvedValue({
-      plugins: [{ ...workboard, installed: true, enabled: true, state: "enabled" }],
+      plugins: [
+        {
+          ...workboard,
+          clawhubPackage: "memory-plus",
+          installed: true,
+          enabled: true,
+          state: "enabled",
+        },
+      ],
       diagnostics: [],
       mutationAllowed: true,
     });
