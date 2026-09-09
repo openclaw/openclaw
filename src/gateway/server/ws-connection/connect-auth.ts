@@ -55,6 +55,27 @@ import type {
 
 const unauthorizedHandshakeLogLimiter = new HandshakeAuthLogLimiter();
 
+export async function revalidateGatewayOperatorDeviceToken(
+  context: GatewayConnectPhaseContext,
+  state: AuthenticatedGatewayConnect,
+): Promise<boolean> {
+  // Close the pre-registration race here. Once registered, canonical
+  // invalidation owns the grant; ordinary reapproval may rotate its token.
+  const token = context.connectParams.auth?.deviceToken;
+  if (!state.device || !token) {
+    return false;
+  }
+  const verified = await verifyDeviceToken({
+    deviceId: state.device.id,
+    token,
+    role: state.role,
+    scopes: state.scopes,
+    requiredSharedGatewaySessionGeneration:
+      context.handler.getRequiredSharedGatewaySessionGeneration?.(),
+  });
+  return verified.ok && !context.handler.isClosed();
+}
+
 export async function authenticateGatewayConnect(
   context: GatewayConnectPhaseContext,
 ): Promise<AuthenticatedGatewayConnect | undefined> {
@@ -149,12 +170,13 @@ async function authenticateGatewayConnectCore(
     clientIp: browserRateLimitClientIp,
   });
   const {
-    sharedAuthOk,
+    sharedAuthOk: resolvedSharedAuthOk,
     pendingSharedAuthFailure,
     bootstrapTokenCandidate,
     deviceTokenCandidate,
     deviceTokenCandidateSource,
   } = connectAuthState;
+  const sharedAuthOk = !context.handler.operatorDeviceTokenOnly && resolvedSharedAuthOk;
   let { authResult, authOk, authMethod } = connectAuthState;
   let rejectedPendingSharedAuthFailure = pendingSharedAuthFailure;
   const settleRejectedSharedAuthFailure = async () => {
@@ -378,6 +400,7 @@ async function authenticateGatewayConnectCore(
     role,
     scopes,
     requireBootstrapToken: startupBootstrapConnect,
+    requireDeviceToken: context.handler.operatorDeviceTokenOnly,
     rateLimiter: authRateLimiter,
     clientIp: browserRateLimitClientIp,
     async verifyBootstrapToken({
@@ -524,13 +547,15 @@ async function authenticateGatewayConnectCore(
     scopes = applyConnectionScopeCap({ scopes, upgradeReq });
     connectParams.scopes = scopes;
   }
-  const controlUiPairingKind = shouldSkipControlUiPairing({
-    isControlUi,
-    device,
-    role,
-    authMode: resolvedAuth.mode,
-    authMethod,
-  });
+  const controlUiPairingKind = context.handler.operatorDeviceTokenOnly
+    ? null
+    : shouldSkipControlUiPairing({
+        isControlUi,
+        device,
+        role,
+        authMode: resolvedAuth.mode,
+        authMethod,
+      });
 
   return {
     resolvedAuth,

@@ -148,8 +148,9 @@ export async function finishGatewayStartup(params: {
     "gateway.ws-imports",
     () => import("./server-ws-runtime.js"),
   );
-  await startupTrace.measure("gateway.ws-attach", () =>
+  const operatorHttp = await startupTrace.measure("gateway.ws-attach", () =>
     attachGatewayWsHandlers({
+      controlUiBasePath,
       wss,
       clients,
       connectionWork: runtime.connectionWork,
@@ -180,6 +181,8 @@ export async function finishGatewayStartup(params: {
       context: gatewayRequestContext,
     }),
   );
+  runtime.operatorHttpRequestHandler.current = operatorHttp.handleRequest;
+  registerGatewayLifetimeSidecars([{ stop: operatorHttp.close }]);
   await startupTrace.measure("http.listen", () => startListening());
   kernel.setDispatchReady(true);
   startupTrace.mark("http.bound");

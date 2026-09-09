@@ -36,9 +36,11 @@ import type { WebSocketHeartbeatDiagnostics } from "../websocket-keepalive.js";
 import { formatForLog, logWs } from "../ws-log.js";
 import { refreshClientPresence } from "./client-presence.js";
 import type {
+  GatewayConnectionDelivery,
   GatewayConnectionTransport,
   PrepareGatewayAuthenticatedReceive,
 } from "./connection-transport.js";
+import { sendGatewayConnectionFrame } from "./connection-transport.js";
 import { getHealthVersion, incrementPresenceVersion } from "./health-state.js";
 import { broadcastPresenceSnapshot } from "./presence-events.js";
 import { sanitizeWsLogValue, stringMetaValue } from "./ws-connection-diagnostics.js";
@@ -118,7 +120,7 @@ type AttachGatewayConnectionParams = GatewayConnectionOptions & {
   connectionKind: NonNullable<GatewayWsClient["connectionKind"]>;
   request: IncomingMessage;
   ingressAttribution: GatewayIngressAttribution | undefined;
-  releasePreauth: () => void;
+  releasePreauth: (reason: "authenticated" | "closed") => void;
   addresses: Pick<
     GatewayWsMessageHandlerParams,
     "remoteAddr" | "remotePort" | "localAddr" | "localPort" | "endpoint"
@@ -127,6 +129,8 @@ type AttachGatewayConnectionParams = GatewayConnectionOptions & {
   pluginSurfaceBaseUrl?: string;
   originCheckMetrics: WsOriginCheckMetrics;
   prepareAuthenticatedReceive: PrepareGatewayAuthenticatedReceive;
+  operatorDeviceTokenOnly?: true;
+  resolveFrameIngress?: GatewayWsMessageHandlerParams["resolveFrameIngress"];
   attachTransport?: (lifecycle: GatewayConnectionLifecycle) => (() => void) | void;
   onAuthenticated?: (
     client: GatewayWsClient,
@@ -169,8 +173,9 @@ export function attachGatewayConnection(params: AttachGatewayConnectionParams) {
     buildRequestContext,
   } = params;
   if (connectionWork.isClosing) {
+    params.releasePreauth("closed");
     socket.terminate();
-    return;
+    return undefined;
   }
   let client: GatewayWsClient | null = null,
     closed = false;
@@ -218,12 +223,12 @@ export function attachGatewayConnection(params: AttachGatewayConnectionParams) {
     }
   };
 
-  const releasePreauthBudget = () => {
+  const releasePreauthBudget = (reason: "authenticated" | "closed") => {
     if (!holdsPreauthBudget) {
       return;
     }
     holdsPreauthBudget = false;
-    params.releasePreauth();
+    params.releasePreauth(reason);
   };
 
   const setLastFrameMeta = (meta: { type?: string; method?: string; id?: string }) => {
@@ -240,6 +245,7 @@ export function attachGatewayConnection(params: AttachGatewayConnectionParams) {
   const handshakeTimeoutMs = resolvePreauthHandshakeTimeoutMs({
     configuredTimeoutMs: params.preauthHandshakeTimeoutMs,
   });
+  const handshakeExpiresAtMs = openedAt + handshakeTimeoutMs;
   const handshakeTimer = setTimeout(() => {
     if (!client) {
       handshakeState = "failed";
@@ -269,7 +275,7 @@ export function attachGatewayConnection(params: AttachGatewayConnectionParams) {
     stopKeepalive?.();
     cleanupTransport?.();
     cleanupTransport = undefined;
-    releasePreauthBudget();
+    releasePreauthBudget("closed");
     try {
       socket.close(code, reason);
     } catch {
@@ -293,7 +299,7 @@ export function attachGatewayConnection(params: AttachGatewayConnectionParams) {
     close(1012, connectionKind === "worker" ? "gateway-shutdown" : "service restart");
   });
 
-  const send = (obj: unknown) => {
+  const send = (obj: unknown, delivery?: GatewayConnectionDelivery) => {
     if (closed) {
       return { kind: "unavailable" } as const;
     }
@@ -323,7 +329,7 @@ export function attachGatewayConnection(params: AttachGatewayConnectionParams) {
       return { kind: "serialization", error } as const;
     }
     try {
-      socket.send(encoded);
+      sendGatewayConnectionFrame(socket, encoded, undefined, delivery);
       return { kind: "sent" } as const;
     } catch {
       socket.terminate();
@@ -333,7 +339,7 @@ export function attachGatewayConnection(params: AttachGatewayConnectionParams) {
   };
 
   const connectNonce = randomUUID();
-  if (connectionKind === "gateway") {
+  if (connectionKind === "gateway" && !params.operatorDeviceTokenOnly) {
     send({
       type: "event",
       event: "connect.challenge",
@@ -557,7 +563,7 @@ export function attachGatewayConnection(params: AttachGatewayConnectionParams) {
         }
       }
     }
-    releasePreauthBudget();
+    releasePreauthBudget("authenticated");
     next.connectionSignal = connectionController.signal;
     client = next;
     clients.add(next);
@@ -603,19 +609,21 @@ export function attachGatewayConnection(params: AttachGatewayConnectionParams) {
   };
   cleanupTransport = params.attachTransport?.(connectionLifecycle);
   if (connectionKind === "worker") {
-    return;
+    return undefined;
   }
 
   if (!ingressAttribution || ingressAttribution.kind === "unattributable-proxy") {
     setCloseCause("missing-ingress-attribution");
     logWsControl.warn(`gateway websocket missing prepared ingress attribution conn=${connId}`);
     close(1008, "gateway ingress attribution required");
-    return;
+    return undefined;
   }
 
   attachGatewayWsMessageHandlerOnDemand({
     ...connectionLifecycle,
     socket,
+    operatorDeviceTokenOnly: params.operatorDeviceTokenOnly,
+    resolveFrameIngress: params.resolveFrameIngress,
     prepareAuthenticatedReceive: params.prepareAuthenticatedReceive,
     upgradeReq,
     ingressAttribution,
@@ -649,4 +657,5 @@ export function attachGatewayConnection(params: AttachGatewayConnectionParams) {
     originCheckMetrics,
     logHealth,
   });
+  return { connId, challenge: { nonce: connectNonce, ts: openedAt }, handshakeExpiresAtMs };
 }

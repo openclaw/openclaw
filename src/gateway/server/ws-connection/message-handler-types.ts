@@ -20,6 +20,9 @@ import type { GatewayConnectionWork } from "../../server-connection-work.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "../../server-methods/types.js";
 import type {
   GatewayConnectionTransport,
+  GatewayConnectionDelivery,
+  GatewayConnectionFrame,
+  GatewayConnectionIngress,
   PrepareGatewayAuthenticatedReceive,
 } from "../connection-transport.js";
 import type { GatewayWsBrowserOrigin, GatewayWsClient, WsHandshakePhase } from "../ws-types.js";
@@ -38,6 +41,10 @@ type WsSendResult = { kind: "sent" | "unavailable" } | { kind: "serialization"; 
 
 export type GatewayWsMessageHandlerParams = {
   socket: GatewayConnectionTransport;
+  /** HTTP transport admission is narrower than the general Gateway handshake. */
+  operatorDeviceTokenOnly?: true;
+  resolveFrameIngress?: (data: GatewayConnectionFrame) => GatewayConnectionIngress;
+  isIngressCurrent?: () => boolean;
   prepareAuthenticatedReceive: PrepareGatewayAuthenticatedReceive;
   connectionWork: GatewayConnectionWork;
   upgradeReq: IncomingMessage;
@@ -73,7 +80,7 @@ export type GatewayWsMessageHandlerParams = {
   buildRequestContext: () => GatewayRequestContext;
   nodeLifecycleDispatch: GatewayNodeLifecycleDispatchTracker;
   refreshHealthSnapshot: GatewayRequestContext["refreshHealthSnapshot"];
-  send: (obj: unknown) => WsSendResult;
+  send: (obj: unknown, delivery?: GatewayConnectionDelivery) => WsSendResult;
   close: (code?: number, reason?: string) => void;
   isClosed: () => boolean;
   clearHandshakeTimer: () => void;
@@ -113,7 +120,7 @@ export type GatewayConnectPhaseContext = {
     message: string,
     options?: Parameters<typeof errorShape>[2],
   ) => void;
-  sendFrame: (obj: unknown) => Promise<void>;
+  sendFrame: (obj: unknown, delivery?: GatewayConnectionDelivery) => Promise<void>;
   isWebchatConnect: (params: ConnectParams | null | undefined) => boolean;
   runDetachedConnectWork: (run: () => Promise<void>, onError: (error: unknown) => void) => void;
   pendingNodePairingCleanup: {

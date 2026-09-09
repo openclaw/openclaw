@@ -545,7 +545,7 @@ export async function handleGatewayRequest(
       };
       opts.sessionMutationCommitGuard?.();
       entry?.assertOpen();
-      if (signal?.aborted) {
+      if (signal?.aborted || hasCurrentClientAuthority?.() === false) {
         return;
       }
       // No await between the final fence, ownership handoff, and actual invocation.

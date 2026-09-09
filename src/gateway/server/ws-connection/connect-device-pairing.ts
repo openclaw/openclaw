@@ -10,7 +10,7 @@ import {
   ConnectErrorDetailCodes,
   type ConnectPairingRequiredReason,
 } from "../../../../packages/gateway-protocol/src/connect-error-details.js";
-import { ErrorCodes, errorShape } from "../../../../packages/gateway-protocol/src/index.js";
+import { ErrorCodes } from "../../../../packages/gateway-protocol/src/index.js";
 import { getRuntimeConfigSnapshot } from "../../../config/runtime-snapshot.js";
 import {
   approveBootstrapDevicePairing,
@@ -65,14 +65,12 @@ export async function authorizeGatewayConnectDevice(
     connId,
     buildRequestContext,
     close,
-    send,
     setHandshakeState,
     setCloseCause,
     logGateway,
     requestOrigin,
   } = context.handler;
   const {
-    frame,
     connectParams,
     configSnapshot,
     reportedClientIp,
@@ -106,12 +104,11 @@ export async function authorizeGatewayConnectDevice(
     if (closeCause) {
       setCloseCause(closeCause.cause, closeCause.meta);
     }
-    send({
-      type: "res",
-      id: frame.id,
-      ok: false,
-      error: errorShape(ErrorCodes.NOT_PAIRED, message, details ? { details } : undefined),
-    });
+    context.sendHandshakeErrorResponse(
+      ErrorCodes.NOT_PAIRED,
+      message,
+      details ? { details } : undefined,
+    );
     close(1008, truncateCloseReason(closeReason ?? message));
   };
   const roleConfiguredHumanOperator = role === "operator" && Boolean(configSnapshot.gateway?.roles);
@@ -164,6 +161,10 @@ export async function authorizeGatewayConnectDevice(
       reason: ConnectPairingRequiredReason,
       existingPairedDevice: Awaited<ReturnType<typeof getPairedDevice>> | null = null,
     ) => {
+      if (context.handler.operatorDeviceTokenOnly) {
+        failPairingHandshake({ message: "HTTP connections require an already-paired device" });
+        return false;
+      }
       const pairingStateAllowsRequestedAccess = (
         pairedCandidate: Awaited<ReturnType<typeof getPairedDevice>>,
         requestedScopes = scopes,
@@ -550,7 +551,8 @@ export async function authorizeGatewayConnectDevice(
   // Device tokens do not carry profile identity and existing broader grants may be reused.
   // Team-role operators must reauthenticate as their verified person on every connection.
   const { deviceToken, bootstrapDeviceTokens } =
-    roleConfiguredHumanOperator && authResult.user?.trim()
+    context.handler.operatorDeviceTokenOnly ||
+    (roleConfiguredHumanOperator && authResult.user?.trim())
       ? { deviceToken: null, bootstrapDeviceTokens: [] }
       : await issueGatewayConnectDeviceTokens({
           state: { ...state, scopes, handoffBootstrapProfile },

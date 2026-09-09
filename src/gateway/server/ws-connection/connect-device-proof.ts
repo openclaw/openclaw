@@ -1,6 +1,6 @@
 // Gateway WebSocket device proof binds the signed identity to the connect request.
 import { resolveDeviceAuthConnectErrorDetailCode } from "../../../../packages/gateway-protocol/src/connect-error-details.js";
-import { ErrorCodes, errorShape } from "../../../../packages/gateway-protocol/src/index.js";
+import { ErrorCodes } from "../../../../packages/gateway-protocol/src/index.js";
 import {
   deriveDeviceIdFromPublicKey,
   normalizeDevicePublicKeyBase64Url,
@@ -29,8 +29,8 @@ export function verifyGatewayConnectDeviceProof(
   if (!device) {
     return { ok: true, devicePublicKey: null, deviceAuthPayloadVersion: null };
   }
-  const { frame, connectParams } = context;
-  const { send, close, setHandshakeState, setCloseCause } = context.handler;
+  const { connectParams } = context;
+  const { close, setHandshakeState, setCloseCause } = context.handler;
   const rejectDeviceAuthInvalid = (reason: string, message: string) => {
     emitGatewayAuthSecurityEvent({
       action: "gateway.auth.failed",
@@ -51,13 +51,8 @@ export function verifyGatewayConnectDeviceProof(
       client: connectParams.client.id,
       deviceId: device.id,
     });
-    send({
-      type: "res",
-      id: frame.id,
-      ok: false,
-      error: errorShape(ErrorCodes.INVALID_REQUEST, message, {
-        details: { code: resolveDeviceAuthConnectErrorDetailCode(reason), reason },
-      }),
+    context.sendHandshakeErrorResponse(ErrorCodes.INVALID_REQUEST, message, {
+      details: { code: resolveDeviceAuthConnectErrorDetailCode(reason), reason },
     });
     close(1008, message);
   };

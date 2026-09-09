@@ -83,18 +83,22 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
     client: GatewayWsClient,
     frameBytes: number,
     admission?: "continuation",
+    isIngressCurrent?: () => boolean,
   ): Promise<void> => {
     // After handshake, accept only req frames
     if (!validateRequestFrame(parsed)) {
-      send({
-        type: "res",
-        id: (parsed as { id?: unknown })?.id ?? "invalid",
-        ok: false,
-        error: errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid request frame: ${formatValidationErrors(validateRequestFrame.errors)}`,
-        ),
-      });
+      send(
+        {
+          type: "res",
+          id: (parsed as { id?: unknown })?.id ?? "invalid",
+          ok: false,
+          error: errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            `invalid request frame: ${formatValidationErrors(validateRequestFrame.errors)}`,
+          ),
+        },
+        { isCurrent: isIngressCurrent },
+      );
       return;
     }
     const req = parsed;
@@ -102,6 +106,10 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
     logWs("in", "req", { connId, id: req.id, method: req.method });
     const context = buildRequestContext();
     const hasCurrentClientAuthority = () => {
+      if (isIngressCurrent?.() === false) {
+        close(4001, "connection ingress changed");
+        return false;
+      }
       if (closeInvalidatedClient(client, req.method)) {
         return false;
       }
@@ -136,13 +144,17 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
       try {
         let responseOk = ok;
         let responseError = error;
-        let sendResult = send({ type: "res", id: req.id, ok, payload, error });
+        const delivery = { isCurrent: isIngressCurrent };
+        let sendResult = send({ type: "res", id: req.id, ok, payload, error }, delivery);
         if (sendResult.kind === "serialization") {
           const detail = formatForLog(sendResult.error);
           logGateway.error(`response serialization failed method=${req.method}: ${detail}`);
           responseOk = false;
           responseError = errorShape(ErrorCodes.UNAVAILABLE, "response serialization failed");
-          sendResult = send({ type: "res", id: req.id, ok: responseOk, error: responseError });
+          sendResult = send(
+            { type: "res", id: req.id, ok: responseOk, error: responseError },
+            delivery,
+          );
         }
         diagnostics?.response(
           sendResult.kind === "sent" ? (responseOk ? "ok" : "error") : "unavailable",

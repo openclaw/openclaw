@@ -1,6 +1,8 @@
+import { createGatewayOperatorHttpRuntime } from "./operator-http.js";
 // WebSocket runtime adapter wires a built GatewayRequestContext into the lower
 // level connection handler and shared gateway WebSocket plumbing.
 import type { GatewayRequestContext } from "./server-methods/types.js";
+import type { GatewayConnectionOptions } from "./server/connection.js";
 import {
   attachGatewayWsConnectionHandler,
   type AttachGatewayWsConnectionHandlerParams,
@@ -17,16 +19,13 @@ type GatewayWsRuntimeParams = Omit<
 };
 
 /** Attaches websocket handlers for an already-created gateway request context. */
-export function attachGatewayWsHandlers(params: GatewayWsRuntimeParams) {
-  attachGatewayWsConnectionHandler({
-    wss: params.wss,
+export function attachGatewayWsHandlers(
+  params: GatewayWsRuntimeParams & { controlUiBasePath: string },
+) {
+  const connectionOptions: GatewayConnectionOptions = {
     clients: params.clients,
     connectionWork: params.connectionWork,
     bootId: params.bootId,
-    preauthConnectionBudget: params.preauthConnectionBudget,
-    port: params.port,
-    gatewayHost: params.gatewayHost,
-    pluginSurfaceScheme: params.pluginSurfaceScheme,
     getPluginNodeCapabilities: params.getPluginNodeCapabilities,
     getResolvedAuth: params.getResolvedAuth,
     getRequiredSharedGatewaySessionGeneration: params.getRequiredSharedGatewaySessionGeneration,
@@ -44,10 +43,13 @@ export function attachGatewayWsHandlers(params: GatewayWsRuntimeParams) {
     logWsControl: params.logWsControl,
     extraHandlers: params.extraHandlers,
     getMethodRegistry: params.getMethodRegistry,
-    ...(params.workerConnectionService
-      ? { workerConnectionService: params.workerConnectionService }
-      : {}),
     broadcast: params.broadcast,
     buildRequestContext: () => params.context,
+  };
+  attachGatewayWsConnectionHandler({ ...params, ...connectionOptions });
+  return createGatewayOperatorHttpRuntime({
+    ...connectionOptions,
+    basePath: params.controlUiBasePath,
+    preauthConnectionBudget: params.preauthConnectionBudget,
   });
 }

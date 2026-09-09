@@ -148,6 +148,7 @@ export async function createGatewayHttpTransport(params: {
   startListening: () => Promise<void>;
   wss: WebSocketServer;
   preauthConnectionBudget: PreauthConnectionBudget;
+  operatorHttpRequestHandler: { current?: import("./operator-http.js").OperatorHttpRequestHandler };
   portalService: GatewayPortalService;
   getTailscaleIngressEndpoint: () => GatewayTailscaleIngressEndpoint | undefined;
   getMcpAppSandboxPort: () => number | undefined;
@@ -318,6 +319,9 @@ export async function createGatewayHttpTransport(params: {
     },
   });
   const preauthConnectionBudget = createPreauthConnectionBudget();
+  const operatorHttpRequestHandler: {
+    current?: import("./operator-http.js").OperatorHttpRequestHandler;
+  } = {};
 
   const httpServers: HttpServer[] = [];
   const gatewayHttpServers: HttpServer[] = [];
@@ -340,6 +344,8 @@ export async function createGatewayHttpTransport(params: {
       openAiChatCompletionsEnabled: params.openAiChatCompletionsEnabled,
       openResponsesEnabled: params.openResponsesEnabled,
       handleWatchNodeRequest: params.handleWatchNodeRequest,
+      handleOperatorRequest: (req, res) =>
+        operatorHttpRequestHandler.current?.(req, res) ?? Promise.resolve(false),
       handleHooksRequest,
       handleMcpOAuthCallbackRequest,
       handlePluginRequest,
@@ -571,6 +577,7 @@ export async function createGatewayHttpTransport(params: {
     startListening,
     wss,
     preauthConnectionBudget,
+    operatorHttpRequestHandler,
     portalService,
     getTailscaleIngressEndpoint: () => tailscaleIngressEndpoint,
     getMcpAppSandboxPort: () => mcpAppSandboxPort,

@@ -1,9 +1,10 @@
 ---
-summary: "Gateway WS transport: packages, frame shapes, limits, and WebRTC Talk control"
+summary: "Gateway transports: WebSocket, paired-operator HTTP, frame limits, and WebRTC Talk control"
 read_when:
   - Choosing the gateway protocol or client package to install
   - Sizing frames, payload limits, or compression behavior
   - Implementing Gateway-controlled WebRTC Talk
+  - Connecting an already-paired operator over HTTPS polling
 title: "Gateway protocol transport"
 sidebarTitle: "Transport and framing"
 doc-schema-version: 1
@@ -97,6 +98,132 @@ HTTP scope failures mirror the `MISSING_SCOPE` object under `error.details` and
 use HTTP status `403`.
 
 Side-effecting methods require idempotency keys (see schema).
+
+## Operator HTTP transport
+
+Already-paired operator clients can carry the same Gateway request, response,
+and event frames over HTTPS instead of WebSocket. This is a transport building
+block, not a complete standalone Apple Watch or Wear OS setup flow. Initial
+pairing, native credential provisioning, and background execution are separate
+client responsibilities.
+
+Use `<basePath>/api/operator/connections`, where `basePath` is the configured
+Control UI base path, or empty when none is configured. HTTPS is required except
+on direct loopback. A trusted HTTPS proxy must forward `X-Forwarded-Proto: https`.
+Requests and responses use JSON and `Cache-Control: no-store`; do not follow
+redirects with credentials.
+
+### Begin and authenticate
+
+Send `POST` to the base route with `{}`. A `201` response contains:
+
+```json validate=false
+{
+  "connectionId": "connection-id",
+  "connectionKey": "connection-local-key",
+  "challenge": { "nonce": "challenge-nonce", "ts": 1788912000000 },
+  "handshakeExpiresAtMs": 1788912010000,
+  "limits": {
+    "maxPreauthPayloadBytes": 65536,
+    "maxPayloadBytes": 26214400,
+    "maxBufferedBytes": 52428800,
+    "maxQueuedFrames": 256,
+    "maxBatchFrames": 64,
+    "maxPollWaitMs": 25000,
+    "idleTimeoutMs": 60000,
+    "maxConnections": 256
+  }
+}
+```
+
+Every subsequent request requires
+`Authorization: Bearer <connectionKey>`. This random 256-bit key identifies one
+in-memory connection; it is not a paired-device credential. Never put it in a
+URL, cookie, or log. Begin does not authenticate the device.
+
+Submit a standard signed `connect` frame to
+`POST <base>/{connectionId}/frames`, using `challenge.nonce` for the device
+signature. The signed POST supplies the actual authentication ingress. Its
+envelope starts with `clientSeq: 1` and `ack: 0`:
+
+```json validate=false
+{
+  "clientSeq": 1,
+  "ack": 0,
+  "frame": { "type": "req", "id": "connect", "method": "connect", "params": {} }
+}
+```
+
+Replace `params` with the normal [signed connect parameters](/gateway/protocol/auth).
+This transport requires `role: "operator"`, a signed device identity, and only
+`auth.deviceToken`. Shared secrets, bootstrap tokens, and ambient proxy or
+Tailscale identity cannot replace device-token verification. Connect does not
+issue a new credential. Existing profile and session-access policy still applies;
+deployments requiring a verified person cannot use a device token as that identity.
+
+Requested and effective scopes are limited to `operator.read`, `operator.write`,
+`operator.approvals`, and `operator.talk`. Admin, pairing, questions, and Talk
+secret scopes are excluded. Methods use the ordinary Gateway authorization
+policy; the transport does not maintain a separate RPC allowlist.
+
+### Send, poll, and acknowledge
+
+- Frame submission returns `202 { "acceptedClientSeq": 1 }`. This confirms
+  sequence reservation, not RPC completion. Wait for this receipt before sending
+  the next sequence; RPC responses may complete out of order.
+- Retry an uncertain submission only on the same logical connection, with the
+  same `clientSeq` and frame. The last accepted frame is deduplicated by JSON
+  value, independent of object key order and envelope ACK. Gaps, older sequences,
+  and conflicting retries return `409`.
+- Poll with `POST <base>/{connectionId}/poll` and
+  `{ "ack": 0, "waitMs": 25000 }`. Only one poll may be active. `waitMs: 0`
+  returns immediately.
+- A `200` poll returns `{acceptedClientSeq, frames:[{cursor,frame}]}`.
+  Output cursors start at 1 and are unrelated to Gateway event `seq`.
+  `hello-ok.server.connId` equals the begin response's `connectionId`.
+- ACK is cumulative and monotonic; repeating it is allowed. It cannot exceed a
+  cursor whose containing response finished writing. Unacknowledged output may
+  replay; acknowledge only after processing it.
+- `device.scopes.waitUpgrade` uses the existing external approval flow. Persist
+  an approved replacement device token and its scopes **before ACK or reconnect**.
+  Ordinary reapproval may rotate that token without closing the current narrow
+  connection. Explicit token rotation, revocation, or device removal retires it
+  and suppresses queued and replayable authenticated output.
+- Cancelling a poll does not cancel an RPC. Server send completion means the
+  containing HTTP response finished writing, not that output was enqueued or
+  acknowledged. Repeated aborted writes eventually retire the connection.
+
+Connections expire after 60 seconds without accepted transport activity.
+The handshake has its own deadline reported by begin. Payload and buffer limits
+match WebSocket limits; the queue additionally caps frame count and poll batches.
+Begin shares the Gateway's per-client preauth budget, and at most 256 logical
+HTTP connections, including retained closed connections, exist per runtime.
+
+### Closure and recovery
+
+`DELETE <base>/{connectionId>` returns `204` and retires the connection.
+A poll can return `closed: {code, reason, resyncRequired: true}`. On closure,
+overflow, or Gateway restart, create a new connection and resynchronize state.
+Do not automatically replay an uncertain write across logical connections.
+
+Transport errors have `{error:{code,message,resyncRequired?}}`. Common statuses
+are `400` invalid envelope, `401` missing or invalid connection key, `403`
+disallowed ingress or insecure transport, `404` missing/expired connection,
+`409` sequence/ACK/poll conflict, `410` frame submission to a closed connection,
+`413` payload limit, `408` body timeout, `429` connection capacity, and `503`
+Gateway shutdown. RPC errors remain ordinary Gateway response frames.
+
+Ingress is bound to the original client IP, listener attribution, Host, Origin,
+and forwarding/scope headers. Network movement or a changed forwarding policy
+closes the logical connection, even if the new path would be more trusted.
+Reconnect with a fresh signed challenge; there is no network-handoff continuity
+or promotion to local authority. Current origin policy is checked again after
+awaited work and before dispatch and output.
+
+Authenticated output is discarded on retirement, including hello and upgrade
+grants. Only explicitly classified rejected-handshake output may remain briefly
+available for terminal delivery. All connection keys, sequence state, and output
+queues are in memory and are lost on restart.
 
 ## Gateway-controlled WebRTC Talk
 

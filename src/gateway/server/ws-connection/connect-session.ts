@@ -48,10 +48,12 @@ import { truncateCloseReason } from "../close-reason.js";
 import type { GatewayWsClient } from "../ws-types.js";
 import {
   rejectGatewayConnectOrigin,
+  HTTP_OPERATOR_SCOPES,
   rejectUnavailableProfileConnect,
   resolveEffectiveConnectionScopes,
   resolveGatewayConnectPolicyFailure,
 } from "./connect-admission.js";
+import { revalidateGatewayOperatorDeviceToken } from "./connect-auth.js";
 import { sendGatewayHello } from "./connect-hello.js";
 import { prepareGatewayNodeConnect } from "./connect-node-session.js";
 import {
@@ -72,10 +74,6 @@ type AuthenticatedNodePairingAdmission = NonNullable<
 > & {
   authenticated: { nodeId: string; publicKey: string; token: string };
 };
-
-function isReleasedVersion(version: string): boolean {
-  return RELEASED_VERSION_RE.test(version);
-}
 
 export async function attachAuthenticatedGatewayConnect(
   context: GatewayConnectPhaseContext,
@@ -99,6 +97,7 @@ export async function attachAuthenticatedGatewayConnect(
     logWsControl,
     requestHost,
     requestOrigin,
+    operatorDeviceTokenOnly,
   } = context.handler;
   const {
     connectParams,
@@ -243,15 +242,16 @@ export async function attachAuthenticatedGatewayConnect(
           context.configSnapshot,
         )
       : undefined;
-  const scopes = rolePolicy
-    ? effectiveScopes.scopes.filter((scope) =>
+  const scopes = effectiveScopes.scopes.filter(
+    (scope) =>
+      (!operatorDeviceTokenOnly || HTTP_OPERATOR_SCOPES.includes(scope)) &&
+      (!rolePolicy ||
         roleScopesAllow({
           role: "operator",
           requestedScopes: [scope],
           allowedScopes: rolePolicy.scopes,
-        }),
-      )
-    : effectiveScopes.scopes;
+        })),
+  );
   state.scopes = scopes;
   connectParams.scopes = scopes;
   const addedIdentityScopes = effectiveScopes.addedIdentityScopes.filter((scope) =>
@@ -484,8 +484,8 @@ export async function attachAuthenticatedGatewayConnect(
         clientVersion &&
         gatewayVersion &&
         clientVersion !== gatewayVersion &&
-        isReleasedVersion(gatewayVersion) &&
-        isReleasedVersion(clientVersion)
+        RELEASED_VERSION_RE.test(gatewayVersion) &&
+        RELEASED_VERSION_RE.test(clientVersion)
       ) {
         logWsControl.info(
           `node version mismatch conn=${connId} client=${formatForLog(clientLabel)} clientVersion=${formatForLog(clientVersion)} gatewayVersion=${gatewayVersion}; closing for supervisor restart`,
@@ -525,6 +525,10 @@ export async function attachAuthenticatedGatewayConnect(
     }
   }
 
+  if (operatorDeviceTokenOnly && !(await revalidateGatewayOperatorDeviceToken(context, state))) {
+    close(4001, "device authorization changed");
+    return;
+  }
   const policyFailure = resolveGatewayConnectPolicyFailure(context, state);
   if (policyFailure) {
     await releasePendingNodePairingCleanup();
