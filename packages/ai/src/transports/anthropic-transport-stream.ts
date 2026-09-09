@@ -35,6 +35,7 @@ import {
   applyClaudeRequestContract,
   ANTHROPIC_CLAUDE_CODE_BILLING_SYSTEM_BLOCK,
   ANTHROPIC_CLAUDE_CODE_VERSION,
+  bindsClaudeThinkingPrefix,
   defaultsClaudeAdaptiveThinking,
   mapAnthropicStopReason,
   prepareClaudeNoPrefillRequestContext,
@@ -345,9 +346,11 @@ async function convertAnthropicMessages(
     allowReasoningContentReplay?: boolean;
     compaction?: AnthropicCompactionBlock;
     replayThinkingEnabled?: boolean;
+    cacheBreakpointOptOutMessageIndexes?: Set<number>;
   },
 ): Promise<Array<Record<string, unknown>>> {
   const params: Array<Record<string, unknown>> = [];
+  const retainRuntimeContext = bindsClaudeThinkingPrefix(model);
   const imageBudget = createAnthropicInlineImageBudget();
   const allowReasoningContentReplay = options.allowReasoningContentReplay === true;
   const replayThinkingEnabled = options.replayThinkingEnabled !== false;
@@ -367,6 +370,9 @@ async function convertAnthropicMessages(
     if (msg.role === "user") {
       if (typeof msg.content === "string") {
         if (msg.content.trim().length > 0) {
+          if (msg.runtimeContextCarrier && !retainRuntimeContext) {
+            options.cacheBreakpointOptOutMessageIndexes?.add(params.length);
+          }
           const userParam = {
             role: "user",
             content: sanitizeTransportPayloadText(msg.content),
@@ -414,6 +420,9 @@ async function convertAnthropicMessages(
       );
       if (filteredBlocks.length === 0) {
         continue;
+      }
+      if (msg.runtimeContextCarrier && !retainRuntimeContext) {
+        options.cacheBreakpointOptOutMessageIndexes?.add(params.length);
       }
       const userParam = {
         role: "user",
@@ -957,10 +966,12 @@ async function buildAnthropicParams(
     authProfileId: options?.authProfileId,
     sessionId: options?.sessionId,
   });
+  const cacheBreakpointOptOutMessageIndexes = new Set<number>();
   const messages = await convertAnthropicMessages(replayPlan.messages, model, isOAuthToken, {
     allowReasoningContentReplay: supportsReasoningContentReplay(model),
     compaction: replayPlan.compaction,
     replayThinkingEnabled,
+    cacheBreakpointOptOutMessageIndexes,
   });
   const params: Record<string, unknown> = {
     model: resolveAnthropicRequestModelId(model),
@@ -1059,8 +1070,7 @@ async function buildAnthropicParams(
       params.tool_choice = projectedToolChoice;
     }
   }
-  // Anthropic-family carriers are append-only, so they are stable cache anchors too.
-  applyAnthropicPayloadPolicyToParams(params, payloadPolicy, new Set());
+  applyAnthropicPayloadPolicyToParams(params, payloadPolicy, cacheBreakpointOptOutMessageIndexes);
   return { params, toolProjection, usedCompactionReplay: replayPlan.compaction !== undefined };
 }
 

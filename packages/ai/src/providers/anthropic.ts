@@ -75,6 +75,7 @@ import {
   applyClaudeRequestContract,
   ANTHROPIC_CLAUDE_CODE_BILLING_SYSTEM_BLOCK,
   ANTHROPIC_CLAUDE_CODE_VERSION,
+  bindsClaudeThinkingPrefix,
   mapAnthropicStopReason,
   prepareClaudeNoPrefillRequestContext,
   resolveAnthropicThinkingEffort,
@@ -1192,6 +1193,8 @@ async function convertMessages(
   compaction?: AnthropicCompactionBlock,
 ): Promise<MessageParam[]> {
   const params: MessageParam[] = [];
+  const cacheBreakpointOptOutMessageIndexes = new Set<number>();
+  const retainRuntimeContext = bindsClaudeThinkingPrefix(model);
   const imageBudget = createAnthropicInlineImageBudget();
 
   // Transform messages for cross-provider compatibility
@@ -1209,6 +1212,9 @@ async function convertMessages(
     if (msg.role === "user") {
       if (typeof msg.content === "string") {
         if (msg.content.trim().length > 0) {
+          if (msg.runtimeContextCarrier && !retainRuntimeContext) {
+            cacheBreakpointOptOutMessageIndexes.add(params.length);
+          }
           params.push({
             role: "user",
             content: sanitizeSurrogates(msg.content),
@@ -1240,6 +1246,9 @@ async function convertMessages(
         });
         if (filteredBlocks.length === 0) {
           continue;
+        }
+        if (msg.runtimeContextCarrier && !retainRuntimeContext) {
+          cacheBreakpointOptOutMessageIndexes.add(params.length);
         }
         params.push({
           role: "user",
@@ -1355,8 +1364,12 @@ async function convertMessages(
   }
 
   if (cacheControl) {
-    // Anthropic-family carriers are append-only, so they are stable cache anchors too.
-    applyAnthropicCacheControlToMessages(params, cacheControl, messageCacheControlLimit, new Set());
+    applyAnthropicCacheControlToMessages(
+      params,
+      cacheControl,
+      messageCacheControlLimit,
+      cacheBreakpointOptOutMessageIndexes,
+    );
   }
 
   return params;

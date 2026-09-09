@@ -140,66 +140,41 @@ describe("Anthropic thinking-binding transport parity", () => {
     }
   });
 
-  it("keeps append-only carriers as stable cache anchors through a tool loop in both paths", async () => {
+  it.each([
+    { retained: false, blocks: false },
+    { retained: false, blocks: true },
+    { retained: true, blocks: false },
+    { retained: true, blocks: true },
+  ])("anchors cache before transient runtime context: %j", async ({ retained, blocks }) => {
+    const carrierContent = blocks
+      ? [{ type: "text" as const, text: "Runtime context" }]
+      : "Runtime context";
     const messages: Context["messages"] = [
       { role: "user", content: "Question", timestamp: 1 },
       {
         role: "user",
-        content: "Retained runtime context",
+        content: carrierContent,
         timestamp: 2,
         runtimeContextCarrier: true,
       },
     ];
+    const model = retained ? { id: "claude-fable-5-1" } : undefined;
     for (const implementation of ["provider", "transport"] as const) {
-      const first = await captureAnthropicRequest(implementation, {
+      const { payload } = await captureAnthropicRequest(implementation, {
+        model,
         context: { ...context, messages },
       });
-      const continued = await captureAnthropicRequest(implementation, {
-        context: {
-          ...context,
-          messages: [
-            ...messages,
-            {
-              role: "assistant",
-              api: anthropicModel.api,
-              provider: anthropicModel.provider,
-              model: anthropicModel.id,
-              timestamp: 3,
-              stopReason: "toolUse",
-              usage: {
-                input: 1,
-                output: 1,
-                cacheRead: 0,
-                cacheWrite: 0,
-                totalTokens: 2,
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-              },
-              content: [
-                { type: "thinking", thinking: "Think", thinkingSignature: "synthetic-signature" },
-                { type: "toolCall", id: "call_1", name: "lookup", arguments: { query: "value" } },
-              ],
-            },
-            {
-              role: "toolResult",
-              toolCallId: "call_1",
-              toolName: "lookup",
-              timestamp: 4,
-              content: [{ type: "text", text: "Answer" }],
-              isError: false,
-            },
-          ],
+      const wire = payload.messages as Array<{ content: unknown }>;
+      expect(wire[retained ? 1 : 0]?.content).toEqual([
+        {
+          type: "text",
+          text: retained ? "Runtime context" : "Question",
+          cache_control: { type: "ephemeral" },
         },
-      });
-      const firstMessages = first.payload.messages as Array<Record<string, unknown>>;
-      const continuedMessages = continued.payload.messages as Array<Record<string, unknown>>;
-      expect(firstMessages[1]).toEqual({
-        role: "user",
-        content: [
-          { type: "text", text: "Retained runtime context", cache_control: { type: "ephemeral" } },
-        ],
-      });
-      expect(JSON.stringify(continuedMessages.slice(0, 2))).toBe(JSON.stringify(firstMessages));
-      expect(continuedMessages[2]?.role).toBe("assistant");
+      ]);
+      if (!retained) {
+        expect(wire[1]?.content).toEqual(carrierContent);
+      }
     }
   });
 
