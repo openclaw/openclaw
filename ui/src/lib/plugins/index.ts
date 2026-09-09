@@ -45,10 +45,11 @@ export function loadPluginDiscoveryDetail(
   client: GatewayBrowserClient,
   id: string,
   signal?: AbortSignal,
+  version?: string,
 ): Promise<PluginDiscoveryDetailResult> {
   return client.request<PluginDiscoveryDetailResult>(
     "plugins.catalog.get",
-    { id },
+    { id, ...(version ? { version } : {}) },
     signal ? { signal } : undefined,
   );
 }

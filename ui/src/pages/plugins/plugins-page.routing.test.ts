@@ -260,6 +260,82 @@ describe("PluginsPage routing", () => {
     await refresh;
   });
 
+  it("renders local settings before optional ClawHub presentation settles", async () => {
+    const plugin = createPlugin({
+      catalogId: "ch_QG9wZW5jbGF3L3dvcmtib2FyZA",
+      clawhubPackage: "@openclaw/workboard",
+      version: "1.2.3",
+    });
+    const result = createResult(plugin);
+    const catalog = {
+      plugin: {
+        id: plugin.catalogId,
+        catalog: {
+          name: "Workboard",
+          packageName: "@openclaw/workboard",
+          official: true,
+          categories: ["tools"],
+        },
+        local: {
+          present: true,
+          installed: true,
+          enabled: false,
+          state: "disabled" as const,
+          pluginId: plugin.id,
+          action: "manage" as const,
+        },
+      },
+      detail: {
+        origin: "clawhub" as const,
+        packageName: "@openclaw/workboard",
+        topics: [],
+        configuration: [],
+        mcpServers: [],
+        skills: [],
+        versions: [],
+      },
+    };
+    let resolveCatalog!: (value: typeof catalog) => void;
+    const catalogPending = new Promise<typeof catalog>((resolve) => {
+      resolveCatalog = resolve;
+    });
+    const { client, request } = createClient(async (method) => {
+      if (method === "plugins.inspect") {
+        return createInspectResult();
+      }
+      if (method === "plugins.catalog.get") {
+        return catalogPending;
+      }
+      return result;
+    });
+    const harness = createGateway(client);
+    const context = createContext(harness.gateway);
+    const routeData = createPluginsRouteData(
+      harness.gateway,
+      result,
+      createPluginsRouteLocation("/settings/plugins/workboard"),
+    );
+    const { page } = await mountPage(context, routeData);
+    await switchToSettingsSurface(page, routeData);
+
+    await vi.waitFor(() => expect(page.querySelector("h1")?.textContent).toContain("Workboard"));
+    expect(page.querySelector(".plugins-settings-detail-actions wa-switch")).not.toBeNull();
+    expect(page.querySelector(".plugin-catalog-detail__sidebar")).toBeNull();
+    expect(request).toHaveBeenCalledWith(
+      "plugins.catalog.get",
+      {
+        id: plugin.catalogId,
+        version: "1.2.3",
+      },
+      undefined,
+    );
+
+    resolveCatalog(catalog);
+    await vi.waitFor(() =>
+      expect(page.querySelector(".plugin-catalog-detail__sidebar")).not.toBeNull(),
+    );
+  });
+
   it("explains required setup in Configuration and blocks enabling", async () => {
     const plugin = createPlugin({
       id: "team-reports",

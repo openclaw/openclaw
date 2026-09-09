@@ -105,7 +105,7 @@ function encodeDiscoveryId(prefix: string, identity: string): string {
   return `${prefix}${Buffer.from(normalized, "utf8").toString("base64url")}`;
 }
 
-function encodePluginDiscoveryId(packageName: string): string {
+export function encodePluginDiscoveryId(packageName: string): string {
   const normalized = packageName.trim();
   if (!normalized) {
     throw new Error("Cannot encode an empty ClawHub package identity.");

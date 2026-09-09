@@ -145,6 +145,8 @@ export const PluginCatalogEntrySchema = closedObject({
   packageName: Type.Optional(NonEmptyString),
   /** Canonical ClawHub identity proven by install provenance or the official catalog. */
   clawhubPackage: Type.Optional(NonEmptyString),
+  /** Opaque discovery identity for loading optional ClawHub presentation metadata. */
+  catalogId: Type.Optional(NonEmptyString),
   description: Type.Optional(Type.String()),
   version: Type.Optional(NonEmptyString),
   kind: Type.Optional(Type.Array(NonEmptyString)),
@@ -414,6 +416,7 @@ export const PluginsCatalogCategoriesResultSchema = closedObject({
 
 export const PluginsCatalogGetParamsSchema = closedObject({
   id: Type.String({ minLength: 1, maxLength: 512, pattern: "^[A-Za-z0-9_-]+$" }),
+  version: Type.Optional(NonEmptyString),
 });
 
 const PluginDiscoveryCompatibilitySchema = closedObject({

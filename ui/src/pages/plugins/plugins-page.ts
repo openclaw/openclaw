@@ -516,6 +516,22 @@ class PluginsPage extends OpenClawLightDomElement {
       if (this.gateway.isCurrent(scope) && this.detail === detail) {
         this.detail = { ...detail, inspection };
       }
+      if (!plugin.catalogId) {
+        return;
+      }
+      try {
+        const catalog = await loadPluginDiscoveryDetail(
+          scope.client,
+          plugin.catalogId,
+          undefined,
+          plugin.version,
+        );
+        if (this.gateway.isCurrent(scope) && this.detail?.pluginId === plugin.id) {
+          this.detail = { ...this.detail, inspection: { ...inspection, catalog } };
+        }
+      } catch {
+        // ClawHub presentation is optional; local capabilities and controls are already visible.
+      }
     } catch (error) {
       if (this.gateway.isCurrent(scope) && this.detail === detail) {
         this.detail = { ...detail, error: formatUiError(error) };
