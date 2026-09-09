@@ -404,7 +404,7 @@ export function formatCodexPluginReadiness(
       }
       blocks.push({
         type: "text",
-        text: "Flags reflect Codex's runtime snapshot; status does not refresh hosted tools. After connecting, /codex plugins refresh refreshes hosted inventory for the current Codex account/runtime, across all apps. Use Check status separately to inspect this plugin without refreshing. Existing conversations keep their admitted app policy; use /new or /reset after connecting.",
+        text: "Flags reflect Codex's runtime snapshot; status does not refresh hosted tools. After connecting, /codex plugins refresh refreshes hosted inventory for the current Codex account/runtime, across all apps. Use Check status separately to inspect this plugin without refreshing. OpenClaw app-access changes take effect on your next message; use /new or /reset after connecting.",
       });
       blocks.push({
         type: "buttons",

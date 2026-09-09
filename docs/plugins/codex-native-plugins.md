@@ -290,9 +290,10 @@ refresh.
 A completed request does not prove that Codex replaced its snapshot or that a
 live tool call will succeed. Refresh never installs, enables, authenticates,
 or replaces a thread, and does not reload other conversations. After connecting,
-use `/new` or `/reset` and inspect status again. Unsupported methods,
-cancellation, and refresh failures provide a retry action without treating the
-previous inventory as confirmed.
+use `/new` or `/reset` and inspect status again. Browser setup does not change
+OpenClaw app access; local app-access changes take effect on the next message.
+Unsupported methods, cancellation, and refresh failures provide a retry action
+without treating the previous inventory as confirmed.
 
 `install`, `enable`, and `disable` require the owner or a gateway client with
 the `operator.admin` scope. OpenClaw's reserved `/codex` command is dispatched

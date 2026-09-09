@@ -612,7 +612,7 @@ describe("Codex hosted app refresh", () => {
   });
 
   it.each([
-    { options: { disabled: true }, expected: "disabled for new conversations" },
+    { options: { disabled: true }, expected: "OpenClaw app access: disabled" },
     { options: { blocked: true }, expected: "blocked by marketplace policy" },
     { options: { appCount: 0 }, expected: "No hosted apps declared" },
     { options: { missingMetadata: true }, expected: "app-page permissions are unknown" },
@@ -682,17 +682,16 @@ describe("Codex hosted app refresh", () => {
     },
   );
 
-  it("rejects the removed plugin recheck command without opening a runtime", async () => {
+  it("rejects unknown plugin commands without opening a runtime", async () => {
     const test = fixture();
     const acquire = vi.spyOn(test.runtime, "withContext");
     const result = await handleCodexPluginsSubcommand(
       ctx,
-      ["recheck", "notes"],
+      ["unknown-action", "notes"],
       test.io,
       test.runtime,
     );
     expect(result.text).toContain("Unknown /codex plugins subcommand");
-    expect(result.text).not.toContain("/codex plugins recheck");
     expect(acquire).not.toHaveBeenCalled();
     expect(test.request).not.toHaveBeenCalled();
     expect(test.io.mutate).not.toHaveBeenCalled();

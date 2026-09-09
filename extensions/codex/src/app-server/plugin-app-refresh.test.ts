@@ -67,7 +67,7 @@ describe("explicit Codex plugin app refresh", () => {
     expect(cached.diagnostic?.message).toBe(failure.message);
   });
 
-  it("does not publish a pre-refresh refresh after the completed recheck removed access", async () => {
+  it("does not publish an older response after a completed refresh removed access", async () => {
     const appCache = new CodexAppInventoryCache();
     const key = "selected-runtime";
     let finishOldRefresh: () => void = () => {};
