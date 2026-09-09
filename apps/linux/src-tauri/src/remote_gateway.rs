@@ -92,7 +92,7 @@ fn is_private_host(host: &str) -> bool {
     }
 }
 
-pub(crate) fn validate_ssh_target(raw: &str) -> Result<(String, u16), String> {
+pub(crate) fn validate_ssh_target(raw: &str) -> Result<(String, Option<u16>), String> {
     let value = raw.trim();
     let invalid = || {
         "Enter a valid SSH target such as operator@gateway.example.com or operator@host:2222."
@@ -124,9 +124,9 @@ pub(crate) fn validate_ssh_target(raw: &str) -> Result<(String, u16), String> {
         if port == 0 {
             return Err(invalid());
         }
-        (host, port)
+        (host, Some(port))
     } else {
-        (host_port, 22)
+        (host_port, None)
     };
     if host.starts_with('-') || host.starts_with(':') || host.ends_with(':') || host.contains('@') {
         return Err(invalid());
@@ -667,13 +667,17 @@ pub(crate) fn start_tunnel(
             "OpenSSH is not installed. Install your system's OpenSSH client.".to_string()
         })?;
 
-    let mut child = Command::new(executable)
+    let mut command = Command::new(executable);
+    command.args([
+        "-N",
+        "-L",
+        &format!("127.0.0.1:{local_port}:127.0.0.1:{remote_port}"),
+    ]);
+    if let Some(ssh_port) = ssh_port {
+        command.args(["-p", &ssh_port.to_string()]);
+    }
+    let mut child = command
         .args([
-            "-N",
-            "-L",
-            &format!("127.0.0.1:{local_port}:127.0.0.1:{remote_port}"),
-            "-p",
-            &ssh_port.to_string(),
             "-o",
             "BatchMode=yes",
             "-o",
@@ -820,11 +824,11 @@ mod tests {
     fn ssh_target_accepts_optional_port_and_rejects_argument_injection() {
         assert_eq!(
             validate_ssh_target("operator@studio.example:2222").expect("target"),
-            ("operator@studio.example".to_string(), 2222)
+            ("operator@studio.example".to_string(), Some(2222))
         );
         assert_eq!(
             validate_ssh_target("studio.local").expect("target"),
-            ("studio.local".to_string(), 22)
+            ("studio.local".to_string(), None)
         );
         for target in [
             "",
