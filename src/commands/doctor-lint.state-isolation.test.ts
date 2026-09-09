@@ -376,6 +376,58 @@ describe("doctor lint state isolation", () => {
     },
   );
 
+  it.each([true, false])(
+    "checks source credentials during isolated lint (exists=%s)",
+    async (exists) => {
+      await withOpenClawTestState(
+        { prefix: "openclaw-doctor-lint-credentials-", env: { OPENCLAW_TEST_FAST: "1" } },
+        async (state) => {
+          await state.writeConfig({
+            gateway: { mode: "local" },
+            channels: { telegram: { dmPolicy: "pairing" } },
+          });
+          const credentials = path.join(state.stateDir, "credentials");
+          if (exists) fs.mkdirSync(credentials, { recursive: true, mode: 0o700 });
+          const actual = await vi.importActual<
+            typeof import("../flows/doctor-health-contributions.js")
+          >("../flows/doctor-health-contributions.js");
+          const check = (await actual.resolveDoctorContributionHealthChecks()).find(
+            (entry) => entry.id === "core/doctor/state-integrity",
+          );
+          if (!check) throw new Error("state-integrity contribution is missing");
+          let isolated = false;
+          mocks.resolveDoctorContributionHealthChecks.mockResolvedValue([
+            check,
+            {
+              id: "core/doctor/runtime-tool-schemas",
+              kind: "core",
+              description: "verifies snapshot isolation",
+              async detect() {
+                isolated = process.env.OPENCLAW_STATE_DIR !== state.stateDir;
+                return [];
+              },
+            },
+          ]);
+          const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+          try {
+            await runDoctorLintCli(runtime, { json: true, includeAllChecks: true });
+            const findings = JSON.parse(String(stdout.mock.calls.at(-1)?.[0])).findings;
+            const oauth = findings.filter((finding: { message: string }) =>
+              finding.message.includes("OAuth dir"),
+            );
+            expect(isolated).toBe(true);
+            expect(oauth).toEqual(
+              exists ? [] : [expect.objectContaining({ severity: "error", path: credentials })],
+            );
+            expect(fs.existsSync(credentials)).toBe(exists);
+          } finally {
+            stdout.mockRestore();
+          }
+        },
+      );
+    },
+  );
+
   it("keeps runtime schema OAuth inspection off the writable source state", async () => {
     const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-doctor-lint-oauth-"));
     const stateDir = path.join(rootDir, "operator-state");
