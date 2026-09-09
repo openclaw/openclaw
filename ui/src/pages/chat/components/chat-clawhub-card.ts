@@ -147,7 +147,7 @@ class ChatClawHubCard extends OpenClawLightDomElement {
       <div class="chat-clawhub-card" data-clawhub-id=${card.id}>
         <button class="chat-clawhub-card__listing" type="button" @click=${() => this.openListing()}>
           <span class="chat-clawhub-card__icon" aria-hidden="true">
-            ${icon ? html`<img src=${icon} alt="" />` : icons.puzzle}
+            ${icon ? html`<img src=${icon} alt="" />` : icons.plug}
           </span>
           <span class="chat-clawhub-card__identity">
             <span class="chat-clawhub-card__name"
