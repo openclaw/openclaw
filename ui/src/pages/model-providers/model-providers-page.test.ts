@@ -234,6 +234,9 @@ describe("ModelProvidersPage agent scope", () => {
 
     expect(agentSelection.set).toHaveBeenCalledWith("writer");
     expect(agentSelection.setScope).not.toHaveBeenCalled();
+    expect(page.querySelector(".page-subtitle")?.textContent).toContain(
+      "Inspect providers and credentials for the selected agent. The agent selector does not change global defaults.",
+    );
   });
 
   it("links the page subtitle to the model providers guide", async () => {
