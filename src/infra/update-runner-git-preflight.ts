@@ -22,6 +22,7 @@ import {
   shouldInstallWithoutScriptsOnWindows,
   shouldRunDevPreflightLint,
 } from "./update-runner-git-commands.js";
+import { checkGitCandidateNodeRuntime } from "./update-runner-git-node-preflight.js";
 import type {
   CommandRunner,
   RunStepOptions,
@@ -313,7 +314,7 @@ async function resolveUpstreamCandidates(params: {
 type PreflightCandidateResult =
   | { status: "ok"; candidateSha: string }
   | { status: "manager-unavailable"; reason: string }
-  | { status: "failed" | "insufficient-space" };
+  | { status: "failed" | "insufficient-space" | "node-runtime-incompatible" };
 
 function classifyPreflightFailure(step: UpdateStepResult): "failed" | "insufficient-space" {
   // pnpm reports filesystem errors on stdout by default. Require the storage
@@ -404,6 +405,11 @@ async function testPreflightCandidate(params: {
   const candidateSha = candidateHead.stdout.trim();
   // A local rebase can change package metadata from the fetched base revision.
   await params.beforeCandidate?.(candidateSha);
+  const nodeRuntimeStep = await checkGitCandidateNodeRuntime(params.worktreeDir, shortSha);
+  if (nodeRuntimeStep) {
+    params.steps.push(nodeRuntimeStep);
+    return { status: "node-runtime-incompatible" };
+  }
   const manager = await resolveUpdateBuildManager(
     params.runCommand,
     params.worktreeDir,
@@ -663,12 +669,15 @@ export async function runGitCandidatePreflight(params: {
         rebaseFrom,
         runLint: !params.targetRevision && shouldRunDevPreflightLint(),
       });
+      // Node requirements and package managers can differ across older revisions.
       if (candidate.status === "ok" || candidate.status === "insufficient-space") {
         tested = candidate;
         break;
       }
-      // A missing manager must not hide another candidate's checkout/build failure.
-      if (tested?.status !== "failed") {
+      // Preserve build failures over manager failures, and manager failures over
+      // runtime-only rejection when a compatible candidate was attempted.
+      const runtimeMismatch = candidate.status === "node-runtime-incompatible";
+      if (tested?.status !== "failed" && (!runtimeMismatch || !tested)) {
         tested = candidate;
       }
     }
@@ -715,7 +724,9 @@ export async function runGitCandidatePreflight(params: {
           ? "preflight-insufficient-space"
           : tested?.status === "manager-unavailable"
             ? tested.reason
-            : "preflight-no-good-commit",
+            : tested?.status === "node-runtime-incompatible"
+              ? "preflight-node-runtime-incompatible"
+              : "preflight-no-good-commit",
     };
   }
   if (cleanupFailed) {

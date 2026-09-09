@@ -288,7 +288,7 @@ contract.
   plugin and project idempotent full snapshots to the external host adapter.
   The hosting controller should not import the Plugin SDK or reconstruct cron
   state from event deltas. See [Safe external cron
-  projection](/plugins/hooks#safe-external-cron-projection).
+  projection](/plugins/hooks/lifecycle#safe-external-cron-projection).
 </Tip>
 
 ## App code vs plugin code

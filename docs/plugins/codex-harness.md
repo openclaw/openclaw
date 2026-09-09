@@ -14,6 +14,11 @@ native compaction, and app-server execution. OpenClaw still owns chat
 channels, session files, model selection, OpenClaw dynamic tools, approvals,
 media delivery, and the visible transcript mirror.
 
+Pasted text saved as a `.txt` attachment is extracted by OpenClaw and included in
+the current turn as untrusted external content, subject to the existing file
+extraction limits. This also applies to adopted and forked Codex sessions with
+locked model selection. Images continue through Codex's native image input.
+
 Remote Codex app-servers can run on a different machine from the Gateway. Set
 `remoteWorkspaceRoot` to validate remote workspace attachment paths. OpenClaw
 transfers authoritative attachment bytes over the existing app-server connection
@@ -36,7 +41,7 @@ authored provider request override. Valid model-scoped `params.fastMode` /
 `params.fast_mode` values and valid cutoff keys are typed agent-runtime
 controls, so they do not count as authored provider request params or select a
 runtime by themselves. See
-[OpenAI implicit agent runtime](/providers/openai#implicit-agent-runtime).
+[OpenAI implicit agent runtime](/providers/openai/runtimes#implicit-agent-runtime).
 If Codex owns auth before Platform versus ChatGPT routing is known, OpenClaw
 still requires every candidate route to declare Codex compatibility. Native
 auth ownership alone never bypasses that route check.

@@ -418,7 +418,7 @@ while continuation uses `operator.write`. Paired-node command advertisement and
 Gateway node policy remain additional requirements for node-backed rows.
 </Note>
 
-See [Nodes: Claude sessions and transcripts](/nodes#claude-sessions-and-transcripts)
+See [Nodes: Claude sessions and transcripts](/nodes/session-catalogs#claude-sessions-and-transcripts)
 for the node command and security boundary.
 
 ## Live model discovery
@@ -656,6 +656,7 @@ OpenClaw supports Anthropic's prompt caching feature for API-key auth.
     - For other direct Anthropic models, `/fast` retains the existing Priority Tier mapping: on uses `service_tier: "auto"` and off uses `service_tier: "standard_only"`.
     - Explicit `serviceTier` or `service_tier` params override `/fast` when both are set.
     - Claude Sonnet 5 supports neither native fast mode nor Priority Tier, so OpenClaw omits both fields.
+    - The Control UI disables confirmed no-op Fast choices, including Sonnet 5 and requests governed by an explicit service tier. Saved Fast preferences remain clearable; unknown route or auth facts preserve existing controls.
 
     </Note>
 

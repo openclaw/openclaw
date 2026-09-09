@@ -910,8 +910,38 @@ describe("devices inventory rendering", () => {
         paired: [
           { deviceId: "ios-1", displayName: "iPhone", platform: "iOS 26.4", roles: ["operator"] },
           { deviceId: "mac-1", displayName: "Mac", platform: "darwin", roles: ["operator"] },
+          {
+            deviceId: "mac-browser",
+            displayName: "Mac browser",
+            platform: "MacIntel",
+            deviceFamily: "Mac",
+            roles: ["operator"],
+          },
+          {
+            deviceId: "ipad-browser",
+            displayName: "iPad browser",
+            platform: "MacIntel",
+            deviceFamily: "iPad",
+            roles: ["operator"],
+          },
+          {
+            deviceId: "legacy-browser",
+            displayName: "Legacy browser",
+            platform: "MacIntel",
+            roles: ["operator"],
+          },
         ],
       },
+      presence: [
+        {
+          instanceId: "unpaired-ipad",
+          host: "Unpaired iPad",
+          platform: "MacIntel",
+          deviceFamily: "iPad",
+          mode: "webchat",
+          ts: 1_000,
+        },
+      ],
     });
     const subs = Array.from(
       getInventorySection(container).querySelectorAll(".device-entry .settings-row__desc"),
@@ -921,6 +951,21 @@ describe("devices inventory rendering", () => {
     expect(subs.some((text) => text.includes("iOS 26.4"))).toBe(true);
     expect(subs.some((text) => text.includes("IOS"))).toBe(false);
     expect(subs.some((text) => text.includes("macOS"))).toBe(true);
+    for (const [name, label] of [
+      ["Mac browser", "macOS"],
+      ["iPad browser", "iPadOS"],
+      ["Legacy browser", "MacIntel"],
+      ["Unpaired iPad", "iPadOS"],
+    ]) {
+      const row = Array.from(container.querySelectorAll(".device-entry")).find(
+        (entry) => entry.querySelector(".settings-row__title")?.textContent === name,
+      );
+      expect(
+        row
+          ?.querySelector(".device-entry__body > .settings-row__desc")
+          ?.textContent?.split(" · ")[0],
+      ).toBe(label);
+    }
   });
 });
 

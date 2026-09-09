@@ -7,7 +7,7 @@ import {
   resolveThinkingDefaultWithRuntimeCatalogCore,
   type ModelAliasIndex,
 } from "../../agents/model-selection.js";
-import { loadPreparedModelCatalog } from "../../agents/prepared-model-catalog.js";
+import { readPreparedModelCatalog } from "../../agents/prepared-model-catalog.js";
 import { resolveChannelModelOverride } from "../../channels/model-overrides.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { isModelSelectionLocked } from "../../sessions/model-overrides.js";
@@ -111,7 +111,7 @@ async function resolveNativeSlashDefaultThinkingLevel(params: {
     provider: params.provider,
     model: params.model,
     loadRuntimeCatalog: () =>
-      loadPreparedModelCatalog({
+      readPreparedModelCatalog({
         config: params.cfg,
         agentId: params.agentId,
         agentDir: params.agentDir,
@@ -288,7 +288,7 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
     };
     const resolvedThinkLevel = normalizeThinkLevel(targetSessionEntry?.thinkingLevel);
     // This fast path has no model-state owner; prepare side-effect-free catalog facts directly.
-    const thinkingCatalog = await loadPreparedModelCatalog({
+    const thinkingCatalog = await readPreparedModelCatalog({
       config: params.cfg,
       agentId: params.agentId,
       agentDir: params.agentDir,

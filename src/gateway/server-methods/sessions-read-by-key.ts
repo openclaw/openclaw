@@ -6,6 +6,7 @@ import { createSessionListEntryFilter } from "../session-sharing.js";
 import { readRecentSessionMessagesWithStatsAsync } from "../session-transcript-readers.js";
 import { buildSessionListRowMetadataContext } from "../session-utils-projection.js";
 import { buildGatewaySessionRow } from "../session-utils.js";
+import { readPreparedServerMethodModelCatalog } from "./optional-model-catalog.js";
 import { readSessionPlacementFields } from "./session-placement-read-projection.js";
 import { loadSessionEntriesForTarget, requireSessionKey } from "./sessions-shared.js";
 import type { GatewayRequestHandlers } from "./types.js";
@@ -21,7 +22,7 @@ function createRoleVisibilityFilter(
 }
 
 export const sessionByKeyReadHandlers: GatewayRequestHandlers = {
-  "sessions.describe": ({ params, respond, context, client }) => {
+  "sessions.describe": async ({ params, respond, context, client }) => {
     if (!assertValidParams(params, validateSessionsDescribeParams, "sessions.describe", respond)) {
       return;
     }
@@ -29,6 +30,19 @@ export const sessionByKeyReadHandlers: GatewayRequestHandlers = {
     if (!key) {
       return;
     }
+    const catalogAgent = resolveRequestedSessionAgentId(
+      context.getRuntimeConfig(),
+      key,
+      params.agentId,
+    );
+    if (!catalogAgent.ok) {
+      respond(false, undefined, catalogAgent.error);
+      return;
+    }
+    const modelCatalog = await readPreparedServerMethodModelCatalog(context, {
+      agentId: catalogAgent.agentId,
+    });
+    // Resolve the visible row after the catalog read yields to configuration or session changes.
     const cfg = context.getRuntimeConfig();
     const requestedAgent = resolveRequestedSessionAgentId(cfg, key, params.agentId);
     if (!requestedAgent.ok) {
@@ -53,6 +67,7 @@ export const sessionByKeyReadHandlers: GatewayRequestHandlers = {
       key: target.canonicalKey,
       entry,
       agentId: target.agentId,
+      modelCatalog: new Map([[catalogAgent.agentId, modelCatalog]]),
       includeDerivedTitles: params.includeDerivedTitles,
       includeLastMessage: params.includeLastMessage,
       transcriptUsageMaxBytes: 64 * 1024,

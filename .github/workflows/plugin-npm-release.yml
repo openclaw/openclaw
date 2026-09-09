@@ -324,6 +324,13 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "false"
 
+      - name: Install trusted plugin tooling dependencies
+        working-directory: .release-tooling
+        env:
+          CI: "true"
+        # Corepack reads this checkout's packageManager before pnpm processes arguments.
+        run: pnpm install --frozen-lockfile --prefer-offline --ignore-scripts
+
       - name: Validate publishable plugin metadata
         env:
           TSX_TSCONFIG_PATH: ${{ github.workspace }}/.release-tooling/tsconfig.json
@@ -495,10 +502,6 @@ jobs:
           ref: ${{ github.workflow_sha }}
           path: .release-tooling
           fetch-depth: 1
-          sparse-checkout: |
-            packages/normalization-core
-            scripts
-            src/plugins
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
@@ -506,6 +509,13 @@ jobs:
           cache-mode: restore
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "false"
+
+      - name: Install trusted plugin tooling dependencies
+        working-directory: .release-tooling
+        env:
+          CI: "true"
+        # Corepack reads this checkout's packageManager before pnpm processes arguments.
+        run: pnpm install --frozen-lockfile --prefer-offline --ignore-scripts
 
       - name: Prepare immutable npm preflight artifact
         id: preflight_artifact

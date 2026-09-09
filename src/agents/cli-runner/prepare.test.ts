@@ -9,6 +9,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import { buildGroupChatContext, buildGroupIntro } from "../../auto-reply/reply/groups.js";
 import {
   createReplyOperation,
@@ -2420,11 +2421,7 @@ describe("prepareCliRunContext", () => {
         id: "msg-1",
         parentId: null,
         timestamp: new Date(1).toISOString(),
-        message: {
-          role: "user",
-          content: "prior room event",
-          timestamp: 1,
-        },
+        message: makeUserMessage("prior room event", 1),
       });
       // Room resumes carry compact event text into the CLI prompt but keep the
       // richer room context in OpenClaw history for reseed and audits.
@@ -2888,17 +2885,40 @@ describe("prepareCliRunContext", () => {
     );
   });
 
-  it("uses cwd for CLI system prompt workspace guidance", async () => {
+  it.each([false, true])("uses admitted CLI repository skills (managed=%s)", async (managed) => {
     const { dir } = fixture.session;
     const taskDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-task-"));
+    const canonicalDir = path.join(dir, "canonical", "packages", "app");
+    const skillDir = path.join(managed ? canonicalDir : taskDir, ".agents", "skills", "task-proof");
+    fs.mkdirSync(skillDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(skillDir, "SKILL.md"),
+      "---\nname: task-proof\ndescription: Task-local proof\n---\n# Proof instructions\n",
+    );
     try {
       const context = await fixture.prepare({
         cwd: taskDir,
+        ...(managed
+          ? {
+              sessionEntry: {
+                sessionId: fixture.session.sessionTarget.sessionId,
+                updatedAt: Date.now(),
+                worktree: {
+                  id: "task",
+                  branch: "task",
+                  repoRoot: path.join(dir, "canonical"),
+                  canonicalWorkspaceDir: canonicalDir,
+                },
+              },
+            }
+          : {}),
       });
 
       expect(context.cwd).toBe(taskDir);
       expect(context.systemPrompt).toContain(`Working directory: ${taskDir}`);
       expect(context.systemPrompt).not.toContain(`Working directory: ${dir}`);
+      expect(context.systemPrompt).toContain("<name>task-proof</name>");
+      expect(context.systemPrompt).toContain(path.join(skillDir, "SKILL.md"));
     } finally {
       fs.rmSync(taskDir, { recursive: true, force: true });
     }
@@ -3361,11 +3381,7 @@ describe("prepareCliRunContext", () => {
         id: "msg-1",
         parentId: null,
         timestamp: new Date(1).toISOString(),
-        message: {
-          role: "user",
-          content: "prior no-compaction ask",
-          timestamp: 1,
-        },
+        message: makeUserMessage("prior no-compaction ask", 1),
       });
 
       const context = await prepare({
@@ -3397,11 +3413,7 @@ describe("prepareCliRunContext", () => {
         id: "msg-1",
         parentId: null,
         timestamp: new Date(1).toISOString(),
-        message: {
-          role: "user",
-          content: "prior resumable ask",
-          timestamp: 1,
-        },
+        message: makeUserMessage("prior resumable ask", 1),
       });
 
       const context = await prepare({
@@ -5667,11 +5679,7 @@ describe("prepareCliRunContext", () => {
           id: "msg-1",
           parentId: null,
           timestamp: recoveredAt,
-          message: {
-            role: "user",
-            content: "prior claude-cli ask",
-            timestamp: 1,
-          },
+          message: makeUserMessage("prior claude-cli ask", 1),
         });
         fixture.appendTranscript({
           id: "result-1",
@@ -5847,11 +5855,7 @@ describe("prepareCliRunContext", () => {
         id: "msg-warm-1",
         parentId: null,
         timestamp: new Date(1).toISOString(),
-        message: {
-          role: "user",
-          content: "earlier warm context",
-          timestamp: 1,
-        },
+        message: makeUserMessage("earlier warm context", 1),
       });
       setCliBackendForPrepareTest({
         liveSession: true,
@@ -6249,11 +6253,7 @@ describe("prepareCliRunContext", () => {
     const { dir, sessionTarget } = fixture.session;
     const durable = SessionManager.open(sessionTarget, dir);
     durable.appendMessage({ role: "user", content: "BORROWED_PREFIX", timestamp: 1 });
-    const retained = durable.appendMessage({
-      role: "user",
-      content: "BORROWED_RETAINED",
-      timestamp: 2,
-    });
+    const retained = durable.appendMessage(makeUserMessage("BORROWED_RETAINED", 2));
     durable.appendCompaction("BORROWED_SUMMARY", retained, 1000);
     durable.appendMessage({ role: "user", content: "BORROWED_TAIL", timestamp: 3 });
     durable.flushPendingPersistence();
@@ -6328,11 +6328,7 @@ describe("prepareCliRunContext", () => {
           ? { ...fixtureTarget, storePath: path.join(dir, "absent", "openclaw-agent.sqlite") }
           : fixtureTarget;
       const durable = SessionManager.open(fixtureTarget, dir);
-      const retained = durable.appendMessage({
-        role: "user",
-        content: "BORROWED_RETAINED",
-        timestamp: 1,
-      });
+      const retained = durable.appendMessage(makeUserMessage("BORROWED_RETAINED", 1));
       durable.appendCompaction("BORROWED_SUMMARY", retained, 1000);
       durable.appendMessage({ role: "user", content: "BORROWED_TAIL", timestamp: 2 });
       durable.flushPendingPersistence();
@@ -6340,11 +6336,7 @@ describe("prepareCliRunContext", () => {
       const entryBefore = loadSessionEntryReadOnly(fixtureTarget);
       const sessionManager = SessionManager.inMemory(dir);
       if (scenario === "raw" || scenario === "compacted") {
-        const kept = sessionManager.appendMessage({
-          role: "user",
-          content: "OWNED_RETAINED",
-          timestamp: 1,
-        });
+        const kept = sessionManager.appendMessage(makeUserMessage("OWNED_RETAINED", 1));
         if (scenario === "compacted") {
           sessionManager.appendCompaction("OWNED_SUMMARY", kept, 1000);
         }
@@ -6625,11 +6617,7 @@ describe("prepareCliRunContext", () => {
         setCliBackendForPrepareTest({ modelAliases: testCase.modelAliases });
       }
       const manager = SessionManager.open(sessionTarget, dir);
-      const firstKeptEntryId = manager.appendMessage({
-        role: "user",
-        content: "RESEED_RETAINED_PREFIX",
-        timestamp: 1,
-      });
+      const firstKeptEntryId = manager.appendMessage(makeUserMessage("RESEED_RETAINED_PREFIX", 1));
       manager.appendCompaction(
         `${testCase.marker} ${"x".repeat(testCase.padding)}`,
         firstKeptEntryId,

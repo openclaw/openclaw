@@ -1,3 +1,9 @@
+import type {
+  TaskSummary,
+  TasksListParams,
+} from "../packages/gateway-protocol/src/schema/tasks.js";
+import type { ControlUiMockGateway } from "../ui/src/test-helpers/control-ui-e2e.ts";
+
 function historyMessage(role: "assistant" | "user", text: string, timestamp: number) {
   return {
     content: [{ type: "text", text }],
@@ -8,42 +14,58 @@ function historyMessage(role: "assistant" | "user", text: string, timestamp: num
   };
 }
 
-function finishedTask(n: number, now: number) {
-  const task = {
+function finishedTask(n: number, now: number, sessionKey: string): TaskSummary {
+  const status = n === 3 ? "failed" : n === 4 ? "cancelled" : n === 5 ? "timed_out" : "completed";
+  const task: TaskSummary = {
     id: `task-mock-finished-${n}`,
     taskId: `task-mock-finished-${n}`,
-    status: n === 3 ? "failed" : "completed",
+    status,
     runtime: "subagent",
-    agentId: "openclaw-mock",
+    agentId: "main",
     title: `Finished mock task number ${n} with a fairly long title`,
     createdAt: now - n * 600_000,
     startedAt: now - n * 600_000,
     endedAt: now - n * 500_000,
     updatedAt: now - n * 500_000,
+    sessionKey,
+    ownerKey: sessionKey,
   };
-  return n === 3
-    ? { ...task, error: "Mock task stopped after finding an invalid event scope." }
-    : { ...task, terminalSummary: `Mock task ${n} completed its assigned inspection.` };
-}
-
-function taskDetailCase(task: { id: string; title: string } & Record<string, unknown>) {
+  if (status === "failed") {
+    return { ...task, error: "The fixture audit found an invalid event scope." };
+  }
+  if (status === "cancelled") {
+    return { ...task, terminalSummary: "Cancelled after the parent session changed direction." };
+  }
+  if (status === "timed_out") {
+    return { ...task, error: "Timed out while waiting for the remote preview to become ready." };
+  }
   return {
-    match: { taskId: task.id },
-    response: {
-      task: {
-        ...task,
-        prompt: `Inspect ${task.title.toLowerCase()} and report the current execution path.`,
-      },
-    },
+    ...task,
+    deliveryStatus: n === 2 ? "session_queued" : "delivered",
+    diffStat: { files: n + 1, added: n * 3, removed: n },
+    terminalSummary: `Mock task ${n} completed its assigned inspection.`,
   };
 }
 
 export function buildBackgroundTasksMock(baseTime: number) {
   const now = Date.now();
   const taskSessionKey = "agent:openclaw-mock:subagent:mock-task-1";
-  const secondTaskSessionKey = "agent:openclaw-mock:subagent:mock-task-2";
   const requesterSessionKey = "agent:main:main";
-  const tasks = [
+  const cliSessionKey = "agent:main:production-export";
+  const tasks: TaskSummary[] = [
+    {
+      id: "task-mock-queued",
+      taskId: "task-mock-queued",
+      status: "queued",
+      runtime: "subagent",
+      agentId: "main",
+      title: "Capture the narrow mobile layout",
+      createdAt: now - 8_000,
+      updatedAt: now - 8_000,
+      progressSummary: "Waiting for a background-task slot",
+      sessionKey: requesterSessionKey,
+      ownerKey: requesterSessionKey,
+    },
     {
       id: "task-mock-running",
       taskId: "task-mock-running",
@@ -65,27 +87,28 @@ export function buildBackgroundTasksMock(baseTime: number) {
     {
       id: "task-mock-running-2",
       taskId: "task-mock-running-2",
+      kind: "exec",
       status: "running",
-      runtime: "subagent",
-      agentId: "openclaw-mock",
+      runtime: "cli",
+      agentId: "main",
       title: "Audit gateway event scope guards",
       createdAt: now - 95_000,
       startedAt: now - 95_000,
       updatedAt: now - 1_000,
       progressSummary: "Comparing agent-scoped task event paths",
       diffStat: { files: 2, added: 55, removed: 21 },
-      sessionKey: requesterSessionKey,
-      ownerKey: requesterSessionKey,
-      childSessionKey: secondTaskSessionKey,
+      sessionKey: cliSessionKey,
+      ownerKey: cliSessionKey,
     },
-    finishedTask(1, now),
-    finishedTask(2, now),
-    finishedTask(3, now),
-    finishedTask(4, now),
-    finishedTask(5, now),
+    finishedTask(1, now, requesterSessionKey),
+    finishedTask(2, now, requesterSessionKey),
+    finishedTask(3, now, requesterSessionKey),
+    finishedTask(4, now, requesterSessionKey),
+    finishedTask(5, now, requesterSessionKey),
   ];
   return {
-    sessions: [taskSessionKey, secondTaskSessionKey].map((key) => ({ key })),
+    tasks,
+    sessions: [taskSessionKey].map((key) => ({ key })),
     sessionTranscripts: {
       [taskSessionKey]: {
         messages: [
@@ -102,26 +125,75 @@ export function buildBackgroundTasksMock(baseTime: number) {
         ],
         thinkingLevel: null,
       },
-      [secondTaskSessionKey]: {
-        messages: [
-          historyMessage(
-            "user",
-            "Audit the gateway task-event scope guards.",
-            baseTime + 41 * 60_000,
-          ),
-          historyMessage(
-            "assistant",
-            "Comparing requester, owner, and child-session event routing.",
-            baseTime + 41 * 60_000 + 6_000,
-          ),
-        ],
-        thinkingLevel: null,
-      },
-    },
-    methodResponses: {
-      // One live subagent task exercises the rail, collapsed badge, and running-task status row.
-      "tasks.list": { tasks },
-      "tasks.get": { cases: tasks.map(taskDetailCase) },
     },
   };
+}
+
+function installBackgroundTasksMock(seed: TaskSummary[]): void {
+  const gateway = (window as Window & { openclawControlUiE2eGateway?: ControlUiMockGateway })
+    .openclawControlUiE2eGateway;
+  if (!gateway) {
+    return;
+  }
+  const tasks = new Map(seed.map((task) => [task.id, task]));
+  gateway.setRequestHandler("tasks.list", ({ params: input, respond }) => {
+    const params = (input ?? {}) as TasksListParams;
+    const statuses = typeof params.status === "string" ? [params.status] : params.status;
+    const sortBy = params.sortBy ?? "updatedAt";
+    const rows = Array.from(tasks.values()).filter(
+      (task) =>
+        (!params.sessionKey ||
+          [task.sessionKey, task.childSessionKey, task.ownerKey].includes(params.sessionKey)) &&
+        (params.sessionKey || !params.agentId || task.agentId === params.agentId) &&
+        (!statuses || statuses.includes(task.status)),
+    );
+    rows.sort((a, b) => Number(b[sortBy] ?? 0) - Number(a[sortBy] ?? 0));
+    const offset = Number(params.cursor ?? 0);
+    const limit = params.limit ?? 500;
+    respond({
+      tasks: rows.slice(offset, offset + limit),
+      ...(offset + limit < rows.length ? { nextCursor: String(offset + limit) } : {}),
+    });
+  });
+  gateway.setRequestHandler("tasks.get", ({ params: input, respond }) => {
+    const task = tasks.get((input as { taskId: string }).taskId);
+    respond(
+      task
+        ? {
+            task: {
+              ...task,
+              prompt: `Inspect ${task.title?.toLowerCase()} and report the current execution path.`,
+            },
+          }
+        : { __mockError: { code: "INVALID_REQUEST", message: "Mock task not found." } },
+    );
+  });
+  gateway.setRequestHandler("tasks.cancel", ({ params: input, respond, emit }) => {
+    const task = tasks.get((input as { taskId: string }).taskId);
+    if (!task) {
+      respond({ found: false, cancelled: false, reason: "Mock task not found." });
+      return;
+    }
+    const cancelled = task.status === "queued" || task.status === "running";
+    if (cancelled) {
+      task.status = "cancelled";
+      task.endedAt = Date.now();
+      task.updatedAt = task.endedAt;
+      task.progressSummary = undefined;
+      task.terminalSummary = "Cancelled from the Control UI mock.";
+    }
+    respond({
+      found: true,
+      cancelled,
+      reason: cancelled ? task.terminalSummary : "Task is already terminal.",
+      task,
+    });
+    if (cancelled) {
+      emit("task", { action: "upserted", task });
+    }
+  });
+}
+
+export function backgroundTasksMockInitScript(baseTime: number): string {
+  return `(() => { const __name = (target) => target; (${installBackgroundTasksMock.toString()})(${JSON.stringify(buildBackgroundTasksMock(baseTime).tasks)}); })();`;
 }

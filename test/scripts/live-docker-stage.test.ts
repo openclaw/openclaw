@@ -373,6 +373,35 @@ export function parseRegistryNpmSpec(spec: string) {
     expect(malformed.stderr).toContain("invalid OPENCLAW_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS");
   });
 
+  it("can omit a contract file absent from an authorized frozen target", () => {
+    const selectedSha = execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd: repoRoot,
+      encoding: "utf8",
+    }).trim();
+    const result = spawnSync(
+      "bash",
+      [
+        "-c",
+        'set -euo pipefail; source "$1"; openclaw_resolve_frozen_target_file "$2" missing/path current-path ""',
+        "test",
+        stageScriptPath,
+        repoRoot,
+      ],
+      {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          OPENCLAW_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS: "1",
+          OPENCLAW_SELECTED_SHA: selectedSha,
+          OPENCLAW_TOOLING_SHA: "b".repeat(40),
+        },
+      },
+    );
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toBe("\n");
+  });
+
   it("keeps a matching frozen-source capability under pipefail", () => {
     const root = tempDirs.make("openclaw-frozen-target-capability-");
     const sourcePath = path.join(root, "scripts/e2e/lib/plugins/assertions.mjs");
@@ -409,15 +438,81 @@ export function parseRegistryNpmSpec(spec: string) {
     expect(result.status, result.stderr).toBe(0);
   });
 
+  it("derives stored-dev preview compatibility from the selected source", () => {
+    const root = tempDirs.make("openclaw-frozen-update-channel-");
+    const sourcePath = path.join(root, "src/cli/update-cli/update-command.ts");
+    mkdirSync(path.dirname(sourcePath), { recursive: true });
+    writeFileSync(
+      sourcePath,
+      'const switchToGit = requestedChannel === "dev" && installKind !== "git";\n',
+    );
+    execFileSync("git", ["init", "-q"], { cwd: root });
+    execFileSync("git", ["config", "user.email", "test@example.invalid"], { cwd: root });
+    execFileSync("git", ["config", "user.name", "Test"], { cwd: root });
+    execFileSync("git", ["add", "."], { cwd: root });
+    execFileSync("git", ["commit", "-qm", "legacy"], { cwd: root });
+    const legacySha = execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd: root,
+      encoding: "utf8",
+    }).trim();
+    writeFileSync(
+      sourcePath,
+      'const switchToGit = installKind !== "git" &&\n  (requestedChannel === "dev" || (selectedChannel === "dev" && explicitTag === null));\n',
+    );
+    execFileSync("git", ["add", "."], { cwd: root });
+    execFileSync("git", ["commit", "-qm", "current"], { cwd: root });
+    const currentSha = execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd: root,
+      encoding: "utf8",
+    }).trim();
+    const run = (selectedSha: string, authorized = true) => {
+      execFileSync("git", ["checkout", "-q", selectedSha], { cwd: root });
+      return spawnSync(
+        "bash",
+        [
+          "-c",
+          'set -euo pipefail; source "$1"; openclaw_resolve_frozen_update_channel_dry_run_mode "$2"; printf "%s:%s\\n" "$OPENCLAW_UPDATE_CHANNEL_DRY_RUN_PACKAGE_COMPAT" "$OPENCLAW_UPDATE_CHANNEL_DIRTY_BLOCK_EXIT_ZERO_COMPAT"',
+          "test",
+          stageScriptPath,
+          root,
+        ],
+        {
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            OPENCLAW_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS: authorized ? "1" : "0",
+            OPENCLAW_SELECTED_SHA: selectedSha,
+            OPENCLAW_TOOLING_SHA: "f".repeat(40),
+          },
+        },
+      );
+    };
+
+    expect(run(legacySha).stdout).toBe("1:1\n");
+    expect(run(currentSha).stdout).toBe("0:0\n");
+    expect(run(legacySha, false).stdout).toBe("0:0\n");
+  });
+
   it("derives frozen harness capabilities only from an authorized selected source", () => {
     const root = tempDirs.make("openclaw-frozen-target-core-dialects-");
     mkdirSync(path.join(root, "src/agents"), { recursive: true });
     mkdirSync(path.join(root, "src/agents/embedded-agent-runner/run"), { recursive: true });
     mkdirSync(path.join(root, "src/commands"), { recursive: true });
     mkdirSync(path.join(root, "scripts"), { recursive: true });
+    mkdirSync(path.join(root, "src/config"), { recursive: true });
+    mkdirSync(path.join(root, "scripts/e2e"), { recursive: true });
     writeFileSync(
       path.join(root, "src/agents/code-mode-namespaces.ts"),
       'export const globals = ["ALL_TOOLS"];\n',
+    );
+    writeFileSync(path.join(root, "src/agents/agent-bundle-mcp-runtime.ts"), "export {};\n");
+    writeFileSync(
+      path.join(root, "scripts/e2e/agent-bundle-mcp-tools-docker-client.ts"),
+      "export {};\n",
+    );
+    writeFileSync(
+      path.join(root, "src/config/zod-schema.ts"),
+      "const wizard = { lastRunAt: true };\n",
     );
     writeFileSync(
       path.join(root, "src/agents/embedded-agent-runner/run/runtime-context-prompt.ts"),
@@ -442,7 +537,7 @@ export function parseRegistryNpmSpec(spec: string) {
     }).trim();
     const resolveCoreDialects = [
       "-c",
-      'set -euo pipefail; source "$1"; openclaw_resolve_frozen_core_harness_capabilities "$2"; openclaw_resolve_frozen_live_cli_backend_package_mode "$2"; printf "%s %s %s %s\\n" "$OPENCLAW_FROZEN_TARGET_SESSION_REPAIR_MODE" "$OPENCLAW_FROZEN_TARGET_MCP_CODE_MODE_CATALOG_MODE" "$OPENCLAW_FROZEN_TARGET_LIVE_CLI_BACKEND_PACKAGE_MODE" "$OPENCLAW_FROZEN_TARGET_RUNTIME_CONTEXT_INPUT_MODE"',
+      'set -euo pipefail; source "$1"; openclaw_resolve_frozen_core_harness_capabilities "$2"; openclaw_resolve_frozen_live_cli_backend_package_mode "$2"; printf "%s|%s|%s|%s|%s|%s\\n" "$OPENCLAW_FROZEN_TARGET_SESSION_REPAIR_MODE" "$OPENCLAW_FROZEN_TARGET_MCP_CODE_MODE_CATALOG_MODE" "$OPENCLAW_FROZEN_TARGET_LIVE_CLI_BACKEND_PACKAGE_MODE" "$OPENCLAW_FROZEN_TARGET_RUNTIME_CONTEXT_INPUT_MODE" "$OPENCLAW_FROZEN_TARGET_ONBOARD_CASES" "$OPENCLAW_FROZEN_TARGET_AGENT_BUNDLE_MCP_MODE"',
       "test",
       stageScriptPath,
       root,
@@ -457,7 +552,7 @@ export function parseRegistryNpmSpec(spec: string) {
     });
 
     expect(strictResult.status, strictResult.stderr).toBe(0);
-    expect(strictResult.stdout.trim()).toBe("sqlite current current producer-fragments");
+    expect(strictResult.stdout.trim()).toBe("sqlite|current|current|producer-fragments||current");
 
     const result = spawnSync("bash", resolveCoreDialects, {
       encoding: "utf8",
@@ -470,7 +565,9 @@ export function parseRegistryNpmSpec(spec: string) {
     });
 
     expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout.trim()).toBe("jsonl legacy legacy legacy-marked-prompt");
+    expect(result.stdout.trim()).toBe(
+      "jsonl|legacy|legacy|legacy-marked-prompt|local-basic,remote-non-interactive,reset,channels,skills|legacy",
+    );
   });
 
   it.each([

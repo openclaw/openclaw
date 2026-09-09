@@ -393,7 +393,6 @@ function getSourceModuleLoader(
     modulePath,
     rootDir: getPluginCacheSource(modulePath).boundaryRoot,
     importerUrl: import.meta.url,
-    preferBuiltDist: true,
     loaderFilename: import.meta.url,
     transformOpenClawDependencies,
     ...(options.createLoaderForTest ? { createLoader: options.createLoaderForTest } : {}),

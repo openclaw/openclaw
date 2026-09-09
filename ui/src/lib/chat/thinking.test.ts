@@ -4,11 +4,56 @@ import {
   formatThinkingCommandOptionsForSession,
   isThinkingLevelOptionForSession,
   resolveChatThinkingSelectState,
+  resolveCurrentThinkingLevel,
   resolveThinkingCommandArgOptionsForSession,
   resolveThinkingLevelInput,
 } from "./thinking.ts";
 
 describe("chat thinking helpers", () => {
+  it("reports unknown capability without inventing thinking choices or a default", () => {
+    const session = { modelProvider: "thinking-fixture", model: "unpublished" };
+    const state = resolveChatThinkingSelectState({
+      catalog: [],
+      session,
+      sessionKey: "agent:main:main",
+      sessionsResult: null,
+    });
+
+    expect(state.options).toEqual([]);
+    expect(state.inherited.value).toBe("");
+    expect(resolveCurrentThinkingLevel(session, undefined, [])).toBe("Unknown");
+    expect(formatThinkingCommandOptionsForSession(session, undefined, [])).toBe("Unknown");
+    expect(isThinkingLevelOptionForSession(session, undefined, "high")).toBeUndefined();
+  });
+
+  it("keeps the selected empty profile distinct from an inherited profile", () => {
+    const session = {
+      modelProvider: "thinking-fixture",
+      model: "no-effort",
+      thinkingLevels: [],
+    };
+    const defaults = {
+      modelProvider: session.modelProvider,
+      model: session.model,
+      contextTokens: null,
+      thinkingLevels: [{ id: "high", label: "High" }],
+      thinkingDefault: "high",
+    };
+    const state = resolveChatThinkingSelectState({
+      catalog: [],
+      defaults,
+      session,
+      sessionKey: "agent:main:main",
+      sessionsResult: null,
+    });
+
+    expect(state.options).toEqual([]);
+    expect(state.inherited.value).toBe("");
+    expect(resolveCurrentThinkingLevel(session, defaults, [])).toBe("Unknown");
+    expect(formatThinkingCommandOptionsForSession(session, defaults, [])).toBe("none");
+    expect(isThinkingLevelOptionForSession(session, defaults, "high")).toBe(false);
+  });
+
   it("keeps a ready empty thinking profile empty for the selected model", () => {
     const model: ModelCatalogEntry = {
       provider: "metadata-fixture",
@@ -17,7 +62,6 @@ describe("chat thinking helpers", () => {
       reasoning: true,
       agentRuntime: { id: "openclaw", source: "model" },
       thinkingLevels: [],
-      thinkingDefault: "off",
     };
     const session = {
       modelProvider: model.provider,
@@ -25,7 +69,6 @@ describe("chat thinking helpers", () => {
       agentRuntime: model.agentRuntime,
       thinkingLevels: model.thinkingLevels,
       thinkingOptions: [],
-      thinkingDefault: model.thinkingDefault,
     };
     const state = resolveChatThinkingSelectState({
       catalog: [model],
@@ -38,8 +81,8 @@ describe("chat thinking helpers", () => {
       options: state.options.map((option) => option.value),
       acceptsHigh: isThinkingLevelOptionForSession(session, undefined, "high", [model]),
       inherited: state.inherited.value,
-    }).toEqual({ options: [], acceptsHigh: false, inherited: "off" });
-    expect(formatThinkingCommandOptionsForSession(session, undefined, [model])).toBe("default");
+    }).toEqual({ options: [], acceptsHigh: false, inherited: "" });
+    expect(formatThinkingCommandOptionsForSession(session, undefined, [model])).toBe("none");
     expect(resolveThinkingCommandArgOptionsForSession(session, undefined, [model])).toEqual([]);
   });
 
@@ -52,14 +95,12 @@ describe("chat thinking helpers", () => {
         name: "No selectable effort",
         reasoning: true,
         agentRuntime: { id: "openclaw", source: "model" },
-        thinkingDefault: "off",
         ...(source === "catalog" ? { thinkingLevels: [] } : {}),
       };
       const session = {
         modelProvider: model.provider,
         model: model.id,
         agentRuntime: model.agentRuntime,
-        thinkingDefault: model.thinkingDefault,
         ...(source === "session labels" ? { thinkingOptions: [] } : {}),
       };
       const defaults = {
@@ -67,7 +108,6 @@ describe("chat thinking helpers", () => {
         model: model.id,
         agentRuntime: model.agentRuntime,
         contextTokens: null,
-        thinkingDefault: model.thinkingDefault,
         ...(source === "defaults" ? { thinkingLevels: [] } : {}),
         ...(source === "default labels" ? { thinkingOptions: [] } : {}),
       };
@@ -83,23 +123,6 @@ describe("chat thinking helpers", () => {
       expect(isThinkingLevelOptionForSession(session, defaults, "high", [model])).toBe(false);
     },
   );
-
-  it("retains generic choices while thinking metadata is missing", () => {
-    const state = resolveChatThinkingSelectState({
-      catalog: [],
-      session: { modelProvider: "metadata-fixture", model: "loading" },
-      sessionKey: "agent:main:main",
-      sessionsResult: null,
-    });
-
-    expect(state.options.map((option) => option.value)).toEqual([
-      "off",
-      "minimal",
-      "low",
-      "medium",
-      "high",
-    ]);
-  });
 
   it("keeps non-reasoning Off-only metadata distinct from an empty profile", () => {
     const model: ModelCatalogEntry = {

@@ -33,6 +33,7 @@ import {
   writeGitHubOutput,
 } from "../../scripts/ci-changed-scope.mjs";
 import { resolveShardPlans, runShardPlans } from "../../scripts/ci-run-node-test-shard.mts";
+import { resolveChangedDockerSeedLanes } from "../../scripts/lib/ci-changed-node-test-plan.mts";
 import { createNodeTestShardBundles } from "../../scripts/lib/ci-node-test-plan.mts";
 import { visitModuleSpecifiers } from "../../scripts/lib/guard-inventory-utils.mjs";
 import { pnpmLockfileDocuments } from "../../scripts/lib/pnpm-lockfile-documents.mjs";
@@ -1993,6 +1994,88 @@ function runControlUiI18nSourceFixture(options: {
 }
 
 describe("ci workflow guards", () => {
+  it("keeps activity unit proof without unrelated dedicated UI E2E on a PR", () => {
+    const manifest = runCiManifestFixture({
+      bundledPlanner: true,
+      eventName: "pull_request",
+      changedPaths: ["ui/src/pages/activity/activity-page.test.ts"],
+      scopeEnv: { OPENCLAW_CI_RUN_UI_TESTS: "true" },
+      changedPlannerSource: `
+        export const hasUiE2eAffectingChange = () => false;
+        export const hasBuildArtifactAffectingChange = () => false;
+        export const createChangedNodeTestShards = (_paths, options) => [{
+          checkName: "dedicated-ui-" + options.dedicatedUiE2e,
+          configs: [], requiresDist: false, runner: "ubuntu-24.04", shardName: "unit",
+        }];
+        export const createChangedExtensionFallbackShards = () => [];
+      `,
+    });
+    expect(manifest.status, manifest.output).toBe(0);
+    const workflow = readCiWorkflow();
+    const context = {
+      eventName: "pull_request" as const,
+      repository: "openclaw/openclaw",
+      runAttempt: 1,
+      preflightOutputs: manifest.outputs,
+    };
+    for (const name of ["checks-ui", "control-ui-performance"]) {
+      expect(evaluateWorkflowExpression(`\${{ ${workflow.jobs[name].if} }}`, context)).toBe(true);
+    }
+    for (const name of ["checks-ui-e2e", "checks-ui-e2e-real-gateway"]) {
+      expect(evaluateWorkflowExpression(`\${{ ${workflow.jobs[name].if} }}`, context)).toBe(false);
+    }
+    expect(JSON.stringify(manifest.outputs)).toContain("dedicated-ui-false");
+    expect(
+      runCiGateFixture(
+        renderCiGateEnvironment(
+          { preflightOutputs: manifest.outputs },
+          {
+            "checks-ui-e2e": "skipped",
+            "checks-ui-e2e-real-gateway": "skipped",
+          },
+        ),
+      ).status,
+    ).toBe(0);
+    expect(
+      runCiGateFixture(
+        renderCiGateEnvironment(
+          { preflightOutputs: manifest.outputs },
+          {
+            "checks-ui": "skipped",
+          },
+        ),
+      ).status,
+    ).toBe(1);
+  });
+
+  it.each([
+    { eventName: "push" as const },
+    { eventName: "workflow_dispatch" as const, historicalCompatibility: false },
+    { eventName: "workflow_dispatch" as const, historicalCompatibility: true },
+    { eventName: "pull_request" as const, repository: "example/openclaw" },
+    { eventName: "pull_request" as const, changedPaths: null },
+    { eventName: "pull_request" as const, missingSelector: true },
+  ])("retains UI E2E outside current known unit-only PR selection %j", (options) => {
+    const manifest = runCiManifestFixture({
+      bundledPlanner: true,
+      changedPaths: ["ui/src/pages/activity/activity-page.test.ts"],
+      scopeEnv: { OPENCLAW_CI_RUN_UI_TESTS: "true" },
+      ...options,
+      changedPlannerSource: `
+        ${"missingSelector" in options && options.missingSelector ? "" : "export const hasUiE2eAffectingChange = () => false;"}
+        export const createChangedNodeTestShards = () => [];
+        export const createChangedExtensionFallbackShards = () => [];
+      `,
+    });
+    // Current PRs with an unusable manifest fail rather than narrowing proof.
+    if ("changedPaths" in options && options.changedPaths === null) {
+      expect(manifest.status).not.toBe(0);
+    } else {
+      expect(manifest.status, manifest.output).toBe(0);
+      expect(manifest.outputs.run_ui_tests).toBe("true");
+      expect(manifest.outputs.run_ui_e2e).toBe("true");
+    }
+  });
   it("isolates mutations between workflow fixtures", () => {
     const workflow = readCiWorkflow();
     const expected = structuredClone(workflow);
@@ -2826,7 +2909,9 @@ NODE
       contents: "read",
       packages: "write",
     });
-    expect(releaseWorkflow.jobs.publish.environment).toBe("docker-release");
+    expect(releaseWorkflow.jobs.approve.environment).toBe("docker-release");
+    expect(releaseWorkflow.jobs.publish.environment).toBeUndefined();
+    expect(releaseWorkflow.jobs.publish.needs).toContain("approve");
   });
 
   it("forbids moving reusable workflow references", () => {
@@ -2995,14 +3080,33 @@ NODE
     const controlUiPublishStep = controlUiFinalize.steps.find(
       (step: { name?: string }) => step.name === "Open or update generated locale PR",
     );
+    const sharedCatalogInputs = [
+      "scripts/lib/control-ui-i18n-catalog.ts",
+      "scripts/lib/control-ui-i18n-catalog-values.ts",
+      "ui/src/i18n/lib/config-hint-translation.ts",
+      "ui/src/lib/fnv1a.ts",
+      "src/config/schema*.ts",
+      "src/config/zod-schema*.ts",
+      "src/config/media-audio-field-metadata.ts",
+      "src/config/talk-defaults.ts",
+      "src/config/channel-config-keys.ts",
+    ];
+    const sharedCatalogInputOwners = [
+      workflow.on.push.paths,
+      nativePublishStep.with["invalidation-paths"].trim().split("\n"),
+      controlUiWorkflow.on.push.paths,
+      controlUiPublishStep.with["invalidation-paths"].trim().split("\n"),
+    ];
+    for (const catalogInput of sharedCatalogInputs) {
+      for (const ownerPaths of sharedCatalogInputOwners) {
+        expect(ownerPaths).toContain(catalogInput);
+      }
+    }
     expect(controlUiPublishStep.with["generated-paths"].trim().split("\n")).toEqual([
       "ui/src/i18n/.i18n/*.tm.jsonl",
       "ui/src/i18n/.i18n/*.meta.json",
       "ui/src/i18n/.i18n/catalog-fallbacks.json",
     ]);
-    expect(controlUiPublishStep.with["invalidation-paths"]).toContain(
-      "scripts/lib/control-ui-i18n-catalog.ts",
-    );
     expect(controlUiPublishStep.with["invalidation-paths"]).toContain(
       "scripts/lib/control-ui-i18n-sync-plan.ts",
     );
@@ -3890,13 +3994,133 @@ NODE
         OPENCLAW_DOCKER_ALL_LANES: "${{ needs.preflight.outputs.docker_seed_lanes }}",
         OPENCLAW_DOCKER_ALL_LIVE_MODE: "skip",
         OPENCLAW_DOCKER_E2E_ALLOW_UNRELEASED_CHANGELOG: "1",
-        OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC: "openclaw@latest",
         OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS: "legacy-operator-state",
         OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE: "auto-auth",
         OPENCLAW_DOCKER_ALL_TAIL_PARALLELISM: parallelism,
       },
     });
     expect(parallelism).toContain("&& 3 || 1");
+    expect(run.env).not.toHaveProperty("OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC");
+    const baseline = job.steps.find(
+      (step: WorkflowStep) => step.name === "Resolve published Docker seed upgrade baseline",
+    ) as WorkflowStep;
+    expect(baseline.if).toBe(
+      "contains(format(' {0} ', needs.preflight.outputs.docker_seed_lanes), ' published-upgrade-survivor ')",
+    );
+    expect(baseline.env).toEqual({
+      TARGET_CONTEXT_REF: "${{ inputs.target_context_ref || github.base_ref || github.ref_name }}",
+    });
+    expect(job.steps.indexOf(baseline)).toBeLessThan(job.steps.indexOf(run));
+  });
+
+  it.each([
+    { candidate: "2026.9.3", expected: "openclaw@2026.9.2" },
+    { candidate: "2026.9.2", expected: "openclaw@2026.9.1" },
+    { candidate: "2026.9.4-beta.1", expected: "openclaw@2026.9.3" },
+    { candidate: "2026.9.3-beta.1", expected: "openclaw@2026.9.2" },
+    {
+      candidate: "2026.6.35",
+      context: "extended-stable/2026.6.33",
+      expected: "openclaw@2026.6.34",
+    },
+    { candidate: "2026.6.34", expected: undefined },
+  ])("hands Docker seed a strictly older published baseline for $candidate", (fixture) => {
+    const job = readCiWorkflow().jobs["docker-seed-e2e"];
+    const baseline = job.steps.find(
+      (step: WorkflowStep) => step.name === "Resolve published Docker seed upgrade baseline",
+    ) as WorkflowStep | undefined;
+    const run = job.steps.find(
+      (step: WorkflowStep) => step.name === "Run changed Docker seed owner lanes",
+    ) as WorkflowStep;
+    const root = mkdtempSync(path.join(tmpdir(), "openclaw-ci-upgrade-baseline-"));
+    try {
+      const bin = path.join(root, "bin");
+      const tooling = path.join(root, ".ci-harness", "scripts", "lib");
+      mkdirSync(bin);
+      mkdirSync(tooling, { recursive: true });
+      for (const name of ["release-upgrade-baseline.mjs", "release-version.mjs"]) {
+        copyFileSync(path.resolve("scripts", "lib", name), path.join(tooling, name));
+      }
+      writeFileSync(
+        path.join(root, "package.json"),
+        JSON.stringify({ version: fixture.candidate }),
+      );
+      writeFileSync(
+        path.join(root, ".ci-harness", "package.json"),
+        JSON.stringify({ version: "2026.10.1" }),
+      );
+      symlinkSync(process.execPath, path.join(bin, "node"));
+      writeFileSync(
+        path.join(bin, "npm"),
+        `#!${process.execPath}
+const args = process.argv.slice(2);
+if (JSON.stringify(args) !== JSON.stringify(["view", "openclaw", "versions", "--json", "--silent", "--prefer-online"])) process.exit(2);
+console.log(JSON.stringify(["2026.6.34", "2026.6.35", "2026.9.1", "2026.9.2", "2026.9.3", "2026.9.4-beta.1"]));
+`,
+        { mode: 0o755 },
+      );
+      writeFileSync(
+        path.join(bin, "pnpm"),
+        `#!${process.execPath}
+if (process.argv.slice(2).join(" ") !== "test:docker:all") process.exit(2);
+require("node:fs").writeFileSync("scheduler-baseline", process.env.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC ?? "missing");
+`,
+        { mode: 0o755 },
+      );
+      writeFileSync(path.join(root, "github-env"), "");
+      const inheritedBaseline = run.env?.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC;
+      const result = runWorkflowShellScript(
+        `set -euo pipefail\n${baseline?.run ?? ""}\nset -a\nsource "$GITHUB_ENV"\nset +a\n${run.run}`,
+        {
+          cwd: root,
+          env: {
+            ...process.env,
+            PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}`,
+            GITHUB_ENV: path.join(root, "github-env"),
+            OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC:
+              typeof inheritedBaseline === "string" ? inheritedBaseline : "",
+            TARGET_CONTEXT_REF: fixture.context ?? "main",
+          },
+        },
+      );
+      const receipt = path.join(root, "scheduler-baseline");
+      if (fixture.expected) {
+        expect(result.status, result.stderr).toBe(0);
+        expect(readFileSync(receipt, "utf8")).toBe(fixture.expected);
+      } else {
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain("no published stable OpenClaw baseline predates candidate");
+        expect(existsSync(receipt)).toBe(false);
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    { eventName: "pull_request" as const, production: false, expected: false },
+    { eventName: "pull_request" as const, production: true, expected: true },
+    { eventName: "push" as const, production: false, expected: true },
+  ])("routes published-upgrade proof for $eventName (production=$production)", (options) => {
+    const changedPaths = [
+      "src/commands/doctor-config-preflight.admission.process.test.ts",
+      "src/commands/doctor-config-runtime.test-support.ts",
+      ...(options.production ? ["src/commands/doctor-config-preflight.ts"] : []),
+    ];
+    const selected = resolveChangedDockerSeedLanes(changedPaths);
+    const result = runCiManifestFixture({
+      bundledPlanner: true,
+      runNode: false,
+      changedPaths,
+      eventName: options.eventName,
+      scopeEnv: { GITHUB_REF: "refs/heads/main" },
+      changedPlannerSource: `export const resolveChangedDockerSeedLanes = () => ${JSON.stringify(selected)};`,
+    });
+    expect(result.status, result.output).toBe(0);
+    expect(result.outputs.run_docker_seed_e2e).toBe(String(options.expected));
+    expect(result.outputs.docker_seed_lanes).toBe(
+      options.expected ? "published-upgrade-survivor" : "",
+    );
   });
 
   it.each([
@@ -4385,7 +4609,122 @@ NODE
       "CodeQL macOS Xcode selection",
     );
 
-    expect(codeqlJob["runs-on"]).toBe("macos-26");
+    const codeqlInitializeIndex = codeqlJob.steps.findIndex(
+      (step: WorkflowStep) => step.name === "Initialize CodeQL",
+    );
+    const codeqlBuildIndex = codeqlJob.steps.findIndex(
+      (step: WorkflowStep) => step.name === "Build macOS for CodeQL",
+    );
+    const codeqlAnalyzeIndex = codeqlJob.steps.findIndex(
+      (step: WorkflowStep) => step.name === "Analyze",
+    );
+    const codeqlBuild = expectDefined(codeqlJob.steps[codeqlBuildIndex], "CodeQL macOS build");
+    const codeqlPrepare = codeql.jobs["prepare-mermaid"];
+    const codeqlPrepareSteps = codeqlPrepare.steps as WorkflowStep[];
+    const codeqlPrepareCheckout = expectDefined(
+      codeqlPrepareSteps.find((step) => step.name === "Checkout"),
+      "CodeQL Mermaid checkout",
+    );
+    const codeqlPrepareSetup = expectDefined(
+      codeqlPrepareSteps.find((step) => step.name === "Setup Node environment"),
+      "CodeQL Mermaid Node setup",
+    );
+    const codeqlPrepareInstall = expectDefined(
+      codeqlPrepareSteps.find((step) => step.name === "Install Mermaid renderer dependencies"),
+      "CodeQL Mermaid dependency install",
+    );
+    const codeqlPrepareAssets = expectDefined(
+      codeqlPrepareSteps.find((step) => step.name === "Prepare Apple Mermaid assets"),
+      "CodeQL Mermaid asset preparation",
+    );
+    const codeqlUpload = expectDefined(
+      codeqlPrepareSteps.find((step) => step.name === "Upload Mermaid assets"),
+      "CodeQL Mermaid artifact upload",
+    );
+    const codeqlDownloadIndex = codeqlJob.steps.findIndex(
+      (step: WorkflowStep) => step.name === "Download Mermaid assets",
+    );
+    const codeqlDownload = expectDefined(
+      codeqlJob.steps[codeqlDownloadIndex],
+      "CodeQL Mermaid artifact download",
+    );
+
+    expect(codeqlPrepare["runs-on"]).toBe("ubuntu-24.04");
+    expect(codeqlPrepare["timeout-minutes"]).toBe(10);
+    expect(codeqlPrepare.permissions).toEqual({ contents: "read" });
+    expect(codeqlPrepare.outputs["artifact-id"]).toBe("${{ steps.upload.outputs.artifact-id }}");
+    expect(codeqlPrepareCheckout.with).toMatchObject({
+      "fetch-depth": 1,
+      "persist-credentials": false,
+      ref: "${{ github.sha }}",
+      submodules: false,
+    });
+    expect(codeqlPrepareSetup.with).toMatchObject({
+      "cache-mode": "restore",
+      "install-bun": "false",
+      "install-deps": "false",
+    });
+    expect(codeqlPrepareInstall.env).toEqual({ CI: "true" });
+    expect(codeqlPrepareInstall.run).toContain(
+      "pnpm install --frozen-lockfile --prefer-offline --optional",
+    );
+    expect(codeqlPrepareInstall.run).toContain("--filter '@openclaw/mermaid-renderer...'");
+    expect(codeqlPrepareInstall.run).toContain("--config.ignore-scripts=false");
+    expect(codeqlPrepareInstall.run).toContain("--config.engine-strict=false");
+    expect(codeqlPrepareInstall.run).toContain("--config.enable-pre-post-scripts=true");
+    expect(codeqlPrepareInstall.run).toContain("--config.side-effects-cache=true");
+    expect(codeqlPrepareAssets.run).toBe("node scripts/prepare-apple-mermaid.mjs");
+    expect(codeqlUpload).toMatchObject({
+      id: "upload",
+      uses: UPLOAD_ARTIFACT_V7,
+      with: {
+        name: "codeql-macos-mermaid-${{ github.run_id }}-${{ github.run_attempt }}",
+        path: "apps/shared/OpenClawKit/Sources/OpenClawChatUI/Resources/Mermaid",
+        "if-no-files-found": "error",
+        "retention-days": 1,
+      },
+    });
+    expect(codeqlPrepareSteps.indexOf(codeqlPrepareInstall)).toBeLessThan(
+      codeqlPrepareSteps.indexOf(codeqlPrepareAssets),
+    );
+    expect(codeqlPrepareSteps.indexOf(codeqlPrepareAssets)).toBeLessThan(
+      codeqlPrepareSteps.indexOf(codeqlUpload),
+    );
+    expect(codeqlJob.needs).toBe("prepare-mermaid");
+    expect(codeqlJob["runs-on"]).toBe("macos-26-intel");
+    expect(codeqlJob["timeout-minutes"]).toBe(90);
+    const codeqlCheckout = expectDefined(
+      codeqlJob.steps.find((step: WorkflowStep) => step.name === "Checkout"),
+      "CodeQL macOS checkout",
+    );
+    expect(codeqlCheckout.with).toMatchObject({
+      "fetch-depth": 1,
+      "persist-credentials": false,
+      ref: "${{ github.sha }}",
+      submodules: false,
+    });
+    expect(
+      codeqlJob.steps.some(
+        (step: WorkflowStep) => step.uses === "./.github/actions/setup-node-env",
+      ),
+    ).toBe(false);
+    expect(
+      codeqlJob.steps.some((step: WorkflowStep) => step.run?.includes("prepare-apple-mermaid.mjs")),
+    ).toBe(false);
+    expect(codeqlDownload).toMatchObject({
+      uses: DOWNLOAD_ARTIFACT_V8,
+      with: {
+        "artifact-ids": "${{ needs.prepare-mermaid.outputs.artifact-id }}",
+        path: "apps/shared/OpenClawKit/Sources/OpenClawChatUI/Resources/Mermaid",
+      },
+    });
+    expect(codeqlDownloadIndex).toBeLessThan(codeqlInitializeIndex);
+    expect(codeqlInitializeIndex).toBeGreaterThanOrEqual(0);
+    expect(codeqlInitializeIndex).toBeLessThan(codeqlBuildIndex);
+    expect(codeqlBuildIndex).toBeLessThan(codeqlAnalyzeIndex);
+    expect(codeqlBuild.run).toBe(
+      "swift build --package-path apps/macos --product OpenClaw --arch arm64 --disable-index-store -debug-info-format none",
+    );
     expect(codeqlSelect.run).toContain("/Applications/Xcode_26.6.app/Contents/Developer");
     expect(codeqlSelect.run).toContain('if [[ "$xcode_version" != 26.6* ]]; then');
 
@@ -8850,8 +9189,7 @@ server.listen(0, "127.0.0.1", () => {
       "Setup Node",
       "Clone publish repo",
       "Sync docs into publish repo",
-      "Install docs MDX checker dependency",
-      "Check publish docs MDX",
+      "Cache successful docs validation",
       "Commit publish repo sync",
     ]);
     expect(steps[3]).toEqual({
@@ -8869,9 +9207,13 @@ server.listen(0, "127.0.0.1", () => {
         "persist-credentials": false,
       },
     });
-    expect(steps.slice(1).every((step) => step.if === "env.OPENCLAW_DOCS_SYNC_TOKEN != ''")).toBe(
-      true,
-    );
+    for (const step of steps.slice(1)) {
+      expect(step.if).toBe(
+        step.name === "Cache successful docs validation"
+          ? "env.OPENCLAW_DOCS_SYNC_TOKEN != '' && github.repository == 'openclaw/openclaw' && github.ref == 'refs/heads/main'"
+          : "env.OPENCLAW_DOCS_SYNC_TOKEN != ''",
+      );
+    }
     expect(source).not.toContain("setup-python");
     expect(workflow.concurrency).toEqual({
       group:
@@ -8880,8 +9222,8 @@ server.listen(0, "127.0.0.1", () => {
     });
     const clone = expectDefined(steps[5]?.run, "clone policy");
     const sync = expectDefined(steps[6]?.run, "sync body");
-    const publish = expectDefined(steps[9]?.run, "publication policy");
-    expect(steps[9]?.["working-directory"]).toBe("publish");
+    const publish = expectDefined(steps[8]?.run, "publication policy");
+    expect(steps[8]?.["working-directory"]).toBe("publish");
     for (const policy of [clone, publish]) {
       expect(
         policy.startsWith(
@@ -9812,7 +10154,6 @@ server.listen(0, "127.0.0.1", () => {
   it("prepares offline Apple assets before CI opens a macOS SwiftPM graph", () => {
     for (const [workflowPath, jobName] of [
       [".github/workflows/ci.yml", "macos-swift"],
-      [".github/workflows/codeql-macos-critical-security.yml", "macos"],
       [".github/workflows/macos-periphery.yml", "scan"],
       [".github/workflows/shared-openclawkit-periphery.yml", "scan-macos"],
     ] as const) {
@@ -12918,7 +13259,11 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
         if (ts.isCallExpression(node) && ts.isIdentifier(node.expression)) {
           // A Gateway created by the suite's server factory supplies its own UI;
           // a separate backend in a test can still use the shared UI bundle.
-          if (inSuiteServer && node.expression.text === "createOpenClawTestInstance") {
+          if (
+            inSuiteServer &&
+            (node.expression.text === "createOpenClawTestInstance" ||
+              node.expression.text === "startProductionControlUiE2eServer")
+          ) {
             ownsPrivateServer = true;
             return;
           }
@@ -12974,12 +13319,16 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       "ui/src/e2e/chat-agent-avatar.real-gateway.e2e.test.ts",
       "ui/src/e2e/chat-loading-performance.real-gateway.e2e.test.ts",
       "ui/src/e2e/chat-project-media.real-gateway.e2e.test.ts",
+      "ui/src/e2e/chat-thinking-metadata.real-gateway.e2e.test.ts",
       "ui/src/e2e/chat-widget-sandbox.real-gateway.e2e.test.ts",
       "ui/src/e2e/child-session-load-errors.e2e.test.ts",
       "ui/src/e2e/command-palette-catalog.real-gateway.e2e.test.ts",
       "ui/src/e2e/cron-duration-save.real-gateway.e2e.test.ts",
+      "ui/src/e2e/device-platform-family.real-gateway.e2e.test.ts",
       "ui/src/e2e/mobile-chat-session-menu.e2e.test.ts",
       "ui/src/e2e/mobile-sidebar-session-menu.e2e.test.ts",
+      "ui/src/e2e/model-picker-search.real-gateway.e2e.test.ts",
+      "ui/src/e2e/new-session-page.cloud-startup.runtime-load.e2e.test.ts",
       "ui/src/e2e/session-management.delete.e2e.test.ts",
       "ui/src/e2e/sidebar-account-footer.e2e.test.ts",
     ]);
@@ -13247,7 +13596,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(uiE2e.permissions).toEqual({ contents: "read" });
     expect(uiE2e.needs).toEqual(["preflight"]);
     expect(uiE2e.if).toBe(
-      "needs.preflight.outputs.run_ui_tests == 'true' && needs.preflight.outputs.compatibility_target != 'true'",
+      "needs.preflight.outputs.run_ui_e2e == 'true' && needs.preflight.outputs.compatibility_target != 'true'",
     );
     expect(uiE2e["runs-on"]).not.toBe(ui["runs-on"]);
     expect(uiE2e["timeout-minutes"]).toBe(25);
@@ -15484,6 +15833,8 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       const protocolOutput = "${{ needs.validate_selected_ref.outputs.protocol_base_revision }}";
       const trustedInput = "${{ inputs.trusted_ref || inputs.ref }}";
 
+      expect(qaWorkflow.env.OPENCLAW_TSDOWN_MAX_OLD_SPACE_MB).toBe("8192");
+
       expect(qaWorkflow.on.workflow_call.inputs.trusted_ref).toEqual({
         description: "Optional trusted branch, tag, or SHA identity for an immutable ref",
         required: false,
@@ -16043,6 +16394,25 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     );
     expect(ensurePlaywrightStep.run).toContain("scripts/ensure-playwright-chromium.mts");
     expect(ensurePlaywrightStep.run).toContain("scripts/ensure-playwright-chromium.mjs");
+    const prepareSandboxStep = expectDefined(
+      qaShardJob.steps.find(
+        (step: WorkflowStep) => step.name === "Prepare Docker sandbox image when selected",
+      ),
+      "QA sandbox image preparation",
+    );
+    expect(prepareSandboxStep["working-directory"]).toBe("selected");
+    expect(prepareSandboxStep.env?.SCENARIO_IDS_JSON).toBe("${{ toJSON(matrix.scenarioIds) }}");
+    expect(prepareSandboxStep.run).toBe(`set -euo pipefail
+if jq -e '
+  index("openclaw-sandbox-workspace-isolation") != null or
+  index("agent-sandboxed-exec-behavior") != null
+' <<<"$SCENARIO_IDS_JSON" >/dev/null; then
+  scripts/sandbox-setup.sh
+fi
+`);
+    expect(qaShardJob.steps.indexOf(prepareSandboxStep)).toBeLessThan(
+      qaShardJob.steps.findIndex((step: WorkflowStep) => step.name === "Run QA profile shard"),
+    );
     const runProfileStep = qaShardJob.steps.find(
       (step: WorkflowStep) => step.name === "Run QA profile shard",
     );
@@ -16344,6 +16714,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     const validateManifestStep = publishJob.steps.find(
       (step: WorkflowStep) => step.name === "Validate QA evidence manifest",
     );
+    expect(validateManifestStep.id).toBe("validate_evidence");
     expect(validateManifestStep.run).toContain("qa-profile-evidence-manifest.json");
     expect(validateManifestStep.run).toContain("qa-evidence.json profile must be all");
     expect(validateManifestStep.run).toContain("QA evidence manifest profile must be all");
@@ -16353,6 +16724,14 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     );
     expect(validateManifestStep.run).toContain("profilePlanSha256");
     expect(validateManifestStep.run).toContain("rerun the QA Profile Evidence workflow");
+    expect(validateManifestStep.run).toContain("counts.fail === 0 && counts.blocked === 0");
+    expect(validateManifestStep.run).toContain("scorecard_passed=");
+    expect(validateManifestStep.run).toContain("### Maturity scorecard result");
+    expect(publishJob.outputs).toEqual({
+      blocked_count: "${{ steps.validate_evidence.outputs.blocked_count }}",
+      failed_count: "${{ steps.validate_evidence.outputs.failed_count }}",
+      scorecard_passed: "${{ steps.validate_evidence.outputs.scorecard_passed }}",
+    });
 
     expect(qaAggregateJob.outputs.artifact_name).toBe(
       "${{ steps.evidence.outputs.artifact_name }}",
@@ -16444,6 +16823,25 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     ]) {
       expect(publishPrJob.if).toContain(fragment);
     }
+    expect(publishPrJob.if).not.toContain("needs.publish.outputs.scorecard_passed");
+
+    const resultJob = maturityWorkflow.jobs.maturity_result;
+    expect(resultJob.needs).toEqual(["publish", "publish_generated_pr"]);
+    expect(resultJob.if.replace(/\s+/gu, " ")).toBe(
+      "${{ always() && needs.publish.result == 'success' && (needs.publish_generated_pr.result == 'success' || needs.publish_generated_pr.result == 'skipped') }}",
+    );
+    const resultGateStep = resultJob.steps.find(
+      (step: WorkflowStep) => step.name === "Fail incomplete maturity evidence",
+    );
+    expect(resultGateStep.env).toEqual({
+      BLOCKED_COUNT: "${{ needs.publish.outputs.blocked_count }}",
+      FAILED_COUNT: "${{ needs.publish.outputs.failed_count }}",
+      SCORECARD_PASSED: "${{ needs.publish.outputs.scorecard_passed }}",
+    });
+    expect(resultGateStep.run).toContain('[[ "$SCORECARD_PASSED" != "true" ]]');
+    expect(resultGateStep.run).toContain(
+      "Generated maturity PR was still published when requested.",
+    );
     const trustedPublishCheckoutStep = publishPrJob.steps.find(
       (step: WorkflowStep) => step.name === "Checkout trusted workflow source",
     );
@@ -16575,7 +16973,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
         ],
       };
 
-      const writeEvidence = () => {
+      const writeEvidence = (status: "pass" | "fail" = "pass") => {
         writeFileSync(
           evidencePath,
           `${JSON.stringify({
@@ -16583,7 +16981,13 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
             schemaVersion: 2,
             generatedAt: "2026-08-05T00:00:00.000Z",
             evidenceMode: "full",
-            entries: [],
+            entries: [
+              {
+                test: { kind: "scenario", id: "scenario-one", title: "Scenario one" },
+                coverage: [],
+                result: { status },
+              },
+            ],
             profile: "all",
             profilePlan: {
               profile: "all",
@@ -16628,6 +17032,8 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
         runWorkflowShellScript(consumerScript, {
           env: {
             ...process.env,
+            GITHUB_OUTPUT: path.join(root, "consumer-output"),
+            GITHUB_STEP_SUMMARY: path.join(root, "consumer-summary"),
             QA_EVIDENCE_PATH: evidencePath,
             TARGET_SHA: targetSha,
           },
@@ -16645,6 +17051,29 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
           protocolBaseSha,
           targetSha,
         });
+        const completeConsumer = runConsumer();
+        expect(
+          completeConsumer.status,
+          `${completeConsumer.stdout}${completeConsumer.stderr}`,
+        ).toBe(0);
+        expect(readFileSync(path.join(root, "consumer-output"), "utf8")).toContain(
+          "scorecard_passed=true",
+        );
+
+        writeEvidence("fail");
+        writeFileSync(path.join(root, "consumer-output"), "", "utf8");
+        const failedEvidenceConsumer = runConsumer();
+        expect(
+          failedEvidenceConsumer.status,
+          `${failedEvidenceConsumer.stdout}${failedEvidenceConsumer.stderr}`,
+        ).toBe(0);
+        expect(readFileSync(path.join(root, "consumer-output"), "utf8")).toContain(
+          "scorecard_passed=false",
+        );
+        expect(readFileSync(path.join(root, "consumer-output"), "utf8")).toContain(
+          "failed_count=1",
+        );
+
         const manifest = JSON.parse(completeManifest) as Record<string, unknown>;
         manifest.profilePlanSha256 = "0".repeat(64);
         writeFileSync(manifestPath, `${JSON.stringify(manifest)}\n`, "utf8");
@@ -16656,6 +17085,39 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       } finally {
         rmSync(root, { force: true, recursive: true });
       }
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "fails the maturity workflow result gate when evidence is not passing",
+    () => {
+      const maturityWorkflow = readMaturityScorecardWorkflow();
+      const gateStep = maturityWorkflow.jobs.maturity_result.steps.find(
+        (step: WorkflowStep) => step.name === "Fail incomplete maturity evidence",
+      );
+      const gateScript = expectDefined(gateStep?.run, "maturity result gate");
+      const failed = runWorkflowShellScript(gateScript, {
+        env: {
+          ...process.env,
+          BLOCKED_COUNT: "51",
+          FAILED_COUNT: "28",
+          SCORECARD_PASSED: "false",
+        },
+      });
+      expect(failed.status).toBe(1);
+      expect(`${failed.stdout}${failed.stderr}`).toContain(
+        "28 failed and 51 blocked scenarios. Generated maturity PR was still published when requested.",
+      );
+
+      const passed = runWorkflowShellScript(gateScript, {
+        env: {
+          ...process.env,
+          BLOCKED_COUNT: "0",
+          FAILED_COUNT: "0",
+          SCORECARD_PASSED: "true",
+        },
+      });
+      expect(passed.status).toBe(0);
     },
   );
 

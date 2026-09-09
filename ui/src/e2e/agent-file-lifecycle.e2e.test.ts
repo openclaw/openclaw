@@ -1,5 +1,7 @@
 // Control UI E2E tests cover visible agent-file save outcomes and agent ownership.
+import type WaTooltip from "@awesome.me/webawesome/dist/components/tooltip/tooltip.js";
 import { expect, it } from "vitest";
+import { waitForControlUiProofSurface } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import {
   agentFileProofDir,
@@ -10,6 +12,7 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
 
 const suite = createControlUiE2eSuite({
   name: "Control UI agent file lifecycle",
+  browserLaunchOptions: { headless: true },
   startServerBeforeBrowser: true,
   unavailableMessage: (executablePath) =>
     `Playwright Chromium is not available at ${executablePath}`,
@@ -65,6 +68,147 @@ function fileGetResponses(mainContent: string) {
 }
 
 suite.define(() => {
+  it("keeps preview tooltip aligned with its expand state", async () => {
+    await suite.withPage(
+      {
+        locale: "en-US",
+        serviceWorkers: "block",
+        viewport: { height: 900, width: 1440 },
+        ...(agentFileProofDir
+          ? { recordVideo: { dir: agentFileProofDir, size: { height: 900, width: 1440 } } }
+          : {}),
+      },
+      async ({ page }) => {
+        const content = "# Preview tooltip fixture\n\nSynthetic preview instructions.\n";
+        const gateway = await installMockGateway(page, {
+          featureMethods: [
+            "agents.files.get",
+            "agents.files.list",
+            "agents.files.set",
+            "agents.list",
+          ],
+          methodResponses: {
+            "agents.list": {
+              defaultId: "main",
+              mainKey: "main",
+              scope: "per-sender",
+              agents: [{ id: "main", name: "Main" }],
+            },
+            "agents.files.get": fileGetResponses(content),
+            "agents.files.list": fileListResponses,
+          },
+          operatorScopes: ["operator.admin", "operator.read", "operator.write"],
+        });
+        await page.goto(`${suite.server.baseUrl}settings/agents/main/files`);
+        const editor = page.locator(".agent-file-textarea");
+        await expect.poll(() => editor.inputValue()).toBe(content);
+        const read = await gateway.waitForRequest("agents.files.get");
+        expect(read.params).toMatchObject({ agentId: "main", name: "AGENTS.md" });
+        const preview = page
+          .locator(".agent-file-actions")
+          .getByRole("button", { name: "Preview", exact: true });
+        const modal = page.locator("openclaw-modal-dialog:has(.md-preview-expand-btn)");
+        const dialog = modal.locator("dialog");
+        const panel = modal.locator(".md-preview-dialog__panel");
+        const reader = modal.locator(".md-preview-dialog__reader");
+        const expand = modal.locator(".md-preview-expand-btn");
+        const tooltip = modal.locator("openclaw-tooltip:has(.md-preview-expand-btn) wa-tooltip");
+        const body = tooltip.locator('[part="body"]');
+        const popup = tooltip.locator('wa-popup [part="popup"]');
+        const hint = tooltip.locator(".tooltip-content");
+        const settlePreview = async () => {
+          await waitForControlUiProofSurface(dialog, [reader]);
+          await waitForControlUiProofSurface(panel, [reader]);
+        };
+        const assertHint = async (label: string, screenshot: string) => {
+          await reader.hover();
+          await expand.hover();
+          await waitForControlUiProofSurface(popup, [body, hint, expand]);
+          const trigger = await expand.elementHandle();
+          expect(trigger).not.toBeNull();
+          try {
+            expect(
+              await tooltip.evaluate(
+                (element, anchor) => (element as WaTooltip).anchor === anchor,
+                trigger,
+              ),
+            ).toBe(true);
+          } finally {
+            await trigger?.dispose();
+          }
+          // Capture the real baseline mismatch before its expected-correct assertion fails.
+          await captureAgentFileScreenshot(page, screenshot);
+          expect((await hint.textContent())?.trim()).toBe(label);
+          expect(await expand.getAttribute("aria-label")).toBe(label);
+          expect(await hint.isVisible()).toBe(true);
+        };
+        const toggle = async () => {
+          await expand.click();
+          await hint.waitFor({ state: "hidden" });
+          await settlePreview();
+        };
+        await preview.click();
+        await settlePreview();
+        const normalBox = await dialog.boundingBox();
+        expect(normalBox).not.toBeNull();
+        expect(await expand.getAttribute("aria-pressed")).toBe("false");
+        expect(await panel.evaluate((element) => element.classList.contains("fullscreen"))).toBe(
+          false,
+        );
+        await assertHint("Expand preview", "tooltip-01-collapsed.png");
+        for (const action of ["collapse", "Close preview", "Edit file", "Escape"]) {
+          await toggle();
+          expect(await expand.getAttribute("aria-pressed")).toBe("true");
+          expect(await panel.evaluate((element) => element.classList.contains("fullscreen"))).toBe(
+            true,
+          );
+          const expandedBox = await dialog.boundingBox();
+          expect(Boolean(normalBox && expandedBox && expandedBox.width > normalBox.width)).toBe(
+            true,
+          );
+          const stage = action.toLowerCase().replaceAll(" ", "-");
+          await assertHint("Collapse preview", `tooltip-${stage}-expanded.png`);
+          if (action === "collapse") {
+            await toggle();
+          } else {
+            if (action === "Escape") {
+              await page.keyboard.press("Escape");
+              await hint.waitFor({ state: "hidden" });
+              expect(await dialog.isVisible()).toBe(true);
+              await page.keyboard.press("Escape");
+            } else {
+              await modal.getByRole("button", { name: action, exact: true }).click();
+            }
+            await dialog.waitFor({ state: "hidden" });
+            expect(await editor.inputValue()).toBe(content);
+            await preview.click();
+            await settlePreview();
+          }
+          expect(await expand.getAttribute("aria-pressed")).toBe("false");
+          expect(await panel.evaluate((element) => element.classList.contains("fullscreen"))).toBe(
+            false,
+          );
+          const resetBox = await dialog.boundingBox();
+          expect(Boolean(resetBox && expandedBox && resetBox.width < expandedBox.width)).toBe(true);
+          await assertHint("Expand preview", `tooltip-${stage}-reset.png`);
+        }
+        await modal.getByRole("button", { name: "Close preview", exact: true }).click();
+        await dialog.waitFor({ state: "hidden" });
+        expect(await editor.inputValue()).toBe(content);
+        expect((await page.locator(".agent-file-sub").textContent())?.trim()).toBe(
+          "/tmp/openclaw-e2e/workspace-main/AGENTS.md",
+        );
+        expect(
+          (await gateway.getRequests()).filter((request) =>
+            ["agents.files.set", "config.set", "config.patch", "config.apply"].includes(
+              request.method,
+            ),
+          ),
+        ).toEqual([]);
+      },
+    );
+  });
+
   it("keeps save errors visible, retries, and rejects stale cross-agent reads", async () => {
     await suite.withPage(
       {

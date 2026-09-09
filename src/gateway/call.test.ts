@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { HelloOk } from "../../packages/gateway-protocol/src/schema/frames.js";
+import { createDeferred } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { DeviceIdentity } from "../infra/device-identity.js";
@@ -18,6 +19,7 @@ import {
   pickPrimaryLanIPv4Mock as pickPrimaryLanIPv4,
   pickPrimaryTailnetIPv4Mock as pickPrimaryTailnetIPv4,
 } from "./gateway-connection.test-mocks.js";
+import { createExpectedBroadOperatorScopes } from "./scope-expectations.test-support.js";
 
 const TLS_FINGERPRINT = "ab".repeat(32);
 
@@ -981,15 +983,7 @@ describe("callGateway url resolution", () => {
 
     await callGatewayCli({ method: "plugin.custom.unclassified" });
 
-    expect(lastClientOptions?.scopes).toEqual([
-      "operator.admin",
-      "operator.read",
-      "operator.write",
-      "operator.approvals",
-      "operator.questions",
-      "operator.pairing",
-      "operator.talk.secrets",
-    ]);
+    expect(lastClientOptions?.scopes).toEqual(createExpectedBroadOperatorScopes());
   });
 
   it("falls back to broad operator scopes for unresolved plugin session actions", async () => {
@@ -1004,15 +998,7 @@ describe("callGateway url resolution", () => {
       },
     });
 
-    expect(lastClientOptions?.scopes).toEqual([
-      "operator.admin",
-      "operator.read",
-      "operator.write",
-      "operator.approvals",
-      "operator.questions",
-      "operator.pairing",
-      "operator.talk.secrets",
-    ]);
+    expect(lastClientOptions?.scopes).toEqual(createExpectedBroadOperatorScopes());
   });
 
   it("passes explicit scopes through, including empty arrays", async () => {
@@ -2451,6 +2437,28 @@ describe("callGateway error details", () => {
     await promise;
 
     expect(errMessage).toContain("gateway closed (1006");
+  });
+
+  it("returns a catalog refresh after the passive-read deadline", async () => {
+    setLocalLoopbackGatewayConfig();
+    vi.useFakeTimers();
+    const response = { models: [{ provider: "fixture", id: "refreshed", name: "Refreshed" }] };
+    const pending = createDeferred<typeof response>();
+    helloMethods = ["models.list"];
+    gatewayClientRequest = async (method, params, requestOpts) => {
+      lastRequestOptions = { method, params, opts: requestOpts };
+      return await pending.promise;
+    };
+    const result = callGateway({
+      method: "models.list",
+      params: { refresh: true },
+      timeoutMs: 210_000,
+    });
+    const outcome = expect(result).resolves.toEqual(response);
+    await vi.advanceTimersByTimeAsync(12_000);
+    expect(lastRequestOptions?.method).toBe("models.list");
+    pending.resolve(response);
+    await outcome;
   });
 
   it("forwards caller timeout to client requests", async () => {

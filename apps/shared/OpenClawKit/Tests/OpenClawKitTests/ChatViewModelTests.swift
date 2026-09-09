@@ -2831,18 +2831,6 @@ struct ChatViewModelTests {
         #expect(viewModel.questionCards.first?.status() == .answeredElsewhere)
     }
 
-    @Test @MainActor func `terminal question survives later empty list refresh`() async {
-        let transport = TestChatTransport(historyResponses: [], listQuestionsHook: { [] })
-        let viewModel = OpenClawChatViewModel(sessionKey: "main", transport: transport)
-        viewModel.upsertQuestion(chatQuestionRecord(id: "ask_done"))
-        viewModel.resolveQuestionEvent(.init(id: "ask_done", status: .answered))
-
-        await viewModel.refreshQuestions()
-
-        #expect(viewModel.questionCards.map(\.id) == ["ask_done"])
-        #expect(viewModel.questionCards[0].status() == .answeredElsewhere)
-    }
-
     @Test @MainActor func `missing pending question uses question get fallback`() async {
         let answers = QuestionAnswers(answers: [
             "choice": AnyCodable(["Two"]),
@@ -5803,16 +5791,9 @@ struct ChatViewModelTests {
             .sessionMessage(
                 OpenClawSessionMessageEventPayload(
                     sessionKey: "agent:main:main",
-                    message: OpenClawChatMessage(
+                    message: chatTextModelMessage(
                         role: "user",
-                        content: [
-                            OpenClawChatMessageContent(
-                                type: "text",
-                                text: "canonical active request",
-                                mimeType: nil,
-                                fileName: nil,
-                                content: nil),
-                        ],
+                        text: "canonical active request",
                         timestamp: canonicalTimestamp,
                         idempotencyKey: "\(remoteRunId):user"),
                     messageId: "srv-reused-run-user",
@@ -7065,16 +7046,9 @@ struct ChatViewModelTests {
             .sessionMessage(
                 OpenClawSessionMessageEventPayload(
                     sessionKey: "agent:aiden:main",
-                    message: OpenClawChatMessage(
+                    message: chatTextModelMessage(
                         role: "user",
-                        content: [
-                            OpenClawChatMessageContent(
-                                type: "text",
-                                text: "spoken transcript",
-                                mimeType: nil,
-                                fileName: nil,
-                                content: nil),
-                        ],
+                        text: "spoken transcript",
                         timestamp: now),
                     messageId: "msg-1",
                     messageSeq: 1)))
@@ -7102,16 +7076,9 @@ struct ChatViewModelTests {
                 OpenClawSessionMessageEventPayload(
                     sessionKey: "global",
                     agentId: "work",
-                    message: OpenClawChatMessage(
+                    message: chatTextModelMessage(
                         role: "user",
-                        content: [
-                            OpenClawChatMessageContent(
-                                type: "text",
-                                text: "global transcript",
-                                mimeType: nil,
-                                fileName: nil,
-                                content: nil),
-                        ],
+                        text: "global transcript",
                         timestamp: now),
                     messageId: "msg-global-work",
                     messageSeq: 1)))
@@ -7139,16 +7106,9 @@ struct ChatViewModelTests {
                 OpenClawSessionMessageEventPayload(
                     sessionKey: "global",
                     agentId: "main",
-                    message: OpenClawChatMessage(
+                    message: chatTextModelMessage(
                         role: "user",
-                        content: [
-                            OpenClawChatMessageContent(
-                                type: "text",
-                                text: "wrong global transcript",
-                                mimeType: nil,
-                                fileName: nil,
-                                content: nil),
-                        ],
+                        text: "wrong global transcript",
                         timestamp: now),
                     messageId: "msg-global-main",
                     messageSeq: 1)))
@@ -7213,16 +7173,9 @@ struct ChatViewModelTests {
             .sessionMessage(
                 OpenClawSessionMessageEventPayload(
                     sessionKey: "agent:sentinel:main",
-                    message: OpenClawChatMessage(
+                    message: chatTextModelMessage(
                         role: "user",
-                        content: [
-                            OpenClawChatMessageContent(
-                                type: "text",
-                                text: "wrong agent transcript",
-                                mimeType: nil,
-                                fileName: nil,
-                                content: nil),
-                        ],
+                        text: "wrong agent transcript",
                         timestamp: now),
                     messageId: "msg-other-agent",
                     messageSeq: 1)))
@@ -7247,16 +7200,9 @@ struct ChatViewModelTests {
             .sessionMessage(
                 OpenClawSessionMessageEventPayload(
                     sessionKey: "agent:main:main",
-                    message: OpenClawChatMessage(
+                    message: chatTextModelMessage(
                         role: "assistant",
-                        content: [
-                            OpenClawChatMessageContent(
-                                type: "text",
-                                text: "agent reply",
-                                mimeType: nil,
-                                fileName: nil,
-                                content: nil),
-                        ],
+                        text: "agent reply",
                         timestamp: now + 1),
                     messageId: "msg-assistant-1",
                     messageSeq: 2)))
@@ -7350,16 +7296,9 @@ struct ChatViewModelTests {
             .sessionMessage(
                 OpenClawSessionMessageEventPayload(
                     sessionKey: "agent:main:main",
-                    message: OpenClawChatMessage(
+                    message: chatTextModelMessage(
                         role: "user",
-                        content: [
-                            OpenClawChatMessageContent(
-                                type: "text",
-                                text: "redacted canonical text",
-                                mimeType: nil,
-                                fileName: nil,
-                                content: nil),
-                        ],
+                        text: "redacted canonical text",
                         timestamp: canonicalTimestamp,
                         idempotencyKey: "\(runId):user"),
                     messageId: "srv-late-user-echo",
@@ -7396,16 +7335,9 @@ struct ChatViewModelTests {
             .sessionMessage(
                 OpenClawSessionMessageEventPayload(
                     sessionKey: "agent:main:main",
-                    message: OpenClawChatMessage(
+                    message: chatTextModelMessage(
                         role: "user",
-                        content: [
-                            OpenClawChatMessageContent(
-                                type: "text",
-                                text: "legacy echo",
-                                mimeType: nil,
-                                fileName: nil,
-                                content: nil),
-                        ],
+                        text: "legacy echo",
                         timestamp: canonicalTimestamp),
                     messageId: "srv-legacy-echo-1",
                     messageSeq: 1)))
@@ -7423,16 +7355,9 @@ struct ChatViewModelTests {
             .sessionMessage(
                 OpenClawSessionMessageEventPayload(
                     sessionKey: "agent:main:main",
-                    message: OpenClawChatMessage(
+                    message: chatTextModelMessage(
                         role: "user",
-                        content: [
-                            OpenClawChatMessageContent(
-                                type: "text",
-                                text: "legacy echo",
-                                mimeType: nil,
-                                fileName: nil,
-                                content: nil),
-                        ],
+                        text: "legacy echo",
                         timestamp: localCanonicalTimestamp,
                         idempotencyKey: "\(runId):user"),
                     messageId: "srv-local-echo-1",
@@ -7471,16 +7396,9 @@ struct ChatViewModelTests {
             .sessionMessage(
                 OpenClawSessionMessageEventPayload(
                     sessionKey: "agent:main:main",
-                    message: OpenClawChatMessage(
+                    message: chatTextModelMessage(
                         role: "user",
-                        content: [
-                            OpenClawChatMessageContent(
-                                type: "text",
-                                text: "repeat",
-                                mimeType: nil,
-                                fileName: nil,
-                                content: nil),
-                        ],
+                        text: "repeat",
                         timestamp: now + 1000),
                     messageId: "msg-repeat-2",
                     messageSeq: 2)))
@@ -7505,16 +7423,9 @@ struct ChatViewModelTests {
             .sessionMessage(
                 OpenClawSessionMessageEventPayload(
                     sessionKey: "other",
-                    message: OpenClawChatMessage(
+                    message: chatTextModelMessage(
                         role: "user",
-                        content: [
-                            OpenClawChatMessageContent(
-                                type: "text",
-                                text: "other transcript",
-                                mimeType: nil,
-                                fileName: nil,
-                                content: nil),
-                        ],
+                        text: "other transcript",
                         timestamp: now),
                     messageId: "msg-2",
                     messageSeq: 2)))

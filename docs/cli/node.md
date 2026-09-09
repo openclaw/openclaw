@@ -43,7 +43,7 @@ For declarative MCP tools, add the normal MCP server shape under
 node host. The node declares the approval-gated `mcp.tools.call.v1` command
 family and publishes listed tools after connecting; changing the server list
 later does not require re-pairing. See
-[Node-hosted MCP servers](/nodes#node-hosted-mcp-servers).
+[Node-hosted MCP servers](/nodes/mcp-and-skills#node-hosted-mcp-servers).
 
 ## Browser proxy (zero-config)
 
@@ -125,7 +125,7 @@ keys. Installed services keep the values in the managed service environment
 file, not in service arguments or inline supervisor definitions. Access
 credentials require HTTPS/WSS; plaintext HTTP/WS fails before SecretRef
 resolution while credential-free plaintext node routes remain unchanged. See
-[Gateway deployments that cannot host nodes](/nodes#gateway-deployments-that-cannot-host-nodes).
+[Gateway deployments that cannot host nodes](/nodes/node-host#gateway-deployments-that-cannot-host-nodes).
 
 For a node connecting to a plaintext `ws://` Gateway, loopback, private IP
 literals, `.local`, and Tailnet `*.ts.net` hosts are accepted. For other

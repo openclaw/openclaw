@@ -1,4 +1,5 @@
 import { html } from "lit";
+import { pathForRoute } from "../../app-route-paths.ts";
 import { renderAgentScopeControl } from "../../components/agent-scope-control.ts";
 import {
   filterSkillWorkshopProposals,
@@ -75,7 +76,11 @@ export function renderSkillWorkshopPage(
             selectedId: state.skillWorkshopAgentId,
             allowAll: false,
           })}
-          ${renderSkillWorkshopHeaderControls(state, { ...renderContext, onModeChange: selectMode })}
+          ${renderSkillWorkshopHeaderControls(state, {
+            ...renderContext,
+            automationHref: `${pathForRoute("automation", context.basePath)}?section=cron`,
+            onModeChange: selectMode,
+          })}
         </div>
         ${(() => {
           const visibleProposals = filterSkillWorkshopProposals(

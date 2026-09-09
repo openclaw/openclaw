@@ -15,6 +15,8 @@ import type {
   CodexConfigRequirementsReadResponse,
   CodexConfigValueWriteParams,
   CodexConfigWriteResponse,
+  CodexExperimentalFeatureListParams,
+  CodexExperimentalFeatureListResponse,
   CodexHooksListParams,
   CodexHooksListResponse,
   CodexInstalledApp,
@@ -392,6 +394,8 @@ type CodexTurnInterruptParams = JsonObject & {
 export type CodexTurnStartParams = JsonObject & {
   threadId: string;
   input: CodexUserInput[];
+  /** Native 0.153.4 flattens these entries into its Responses turn-metadata object. */
+  responsesapiClientMetadata?: Record<string, string> | null;
   additionalContext?: Record<string, { kind: "untrusted" | "application"; value: string }>;
   cwd?: string;
   runtimeWorkspaceRoots?: string[] | null;
@@ -691,6 +695,7 @@ type CodexAppServerRequestParamsOverride = {
   "config/read": CodexConfigReadParams;
   "config/value/write": CodexConfigValueWriteParams;
   "environment/add": { environmentId: string; execServerUrl: string };
+  "experimentalFeature/list": CodexExperimentalFeatureListParams;
   "plugin/installed": CodexPluginInstalledParams;
   "plugin/install": CodexPluginInstallParams;
   "plugin/list": CodexPluginListParams;
@@ -734,6 +739,7 @@ type CodexAppServerRequestResultMap = {
   "configRequirements/read": CodexConfigRequirementsReadResponse;
   "config/value/write": CodexConfigWriteResponse;
   "environment/add": JsonValue;
+  "experimentalFeature/list": CodexExperimentalFeatureListResponse;
   "experimentalFeature/enablement/set": JsonValue;
   "feedback/upload": JsonValue;
   "hooks/list": CodexHooksListResponse;

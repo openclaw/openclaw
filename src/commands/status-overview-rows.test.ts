@@ -287,6 +287,7 @@ describe("status-overview-rows", () => {
     expect(findRowValue(rows, "Version")).toBe(VERSION);
     expect(findRowValue(rows, "OS")).toBe("macOS");
     expect(findRowValue(rows, "Config")).toBe("/tmp/openclaw.json");
+    expect(findRowValue(rows, "Gateway self")).toBe("gateway app 1.2.3");
     expect(findRowValue(rows, "Update")).toContain("behind 2");
     expect(findRowValue(rows, "Update restart")).toBe("restart pending health verification");
     expect(findRowValue(rows, "Security")).toBe("Run: openclaw security audit --deep");
@@ -297,4 +298,23 @@ describe("status-overview-rows", () => {
     expect(findRowValue(rows, "Degraded plugins")).toBe("1 configured-unavailable · discord");
     expect(findRowValue(rows, "Secrets")).toBe("2 diagnostics");
   });
+
+  it.each([null, {}])(
+    "uses unknown only when Gateway self metadata is absent (%j)",
+    (gatewaySelf) => {
+      const params = createStatusCommandOverviewRowsParams();
+      const surface = { ...params.surface, gatewaySelf };
+      const rows = buildStatusAllOverviewRows({
+        ...params,
+        surface,
+        configPath: "/tmp/openclaw.json",
+        secretDiagnosticsCount: 0,
+      });
+
+      expect(findRowValue(rows, "Gateway self")).toBe("unknown");
+      expect(
+        findRowValue(buildStatusCommandOverviewRows({ ...params, surface }), "Gateway self"),
+      ).toBeUndefined();
+    },
+  );
 });

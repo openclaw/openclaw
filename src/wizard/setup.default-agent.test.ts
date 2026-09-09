@@ -41,7 +41,7 @@ vi.mock("./setup.shared.js", async (importOriginal) => {
 });
 
 vi.mock("./setup.migration-import.js", () => ({
-  detectSetupMigrationSources: vi.fn(async () => []),
+  detectSetupMigrationSources: vi.fn(async () => ({ detections: [], providerDescriptors: [] })),
   listSetupMigrationOptions: vi.fn(async () => []),
   runSetupMigrationImport: vi.fn(),
 }));
@@ -161,7 +161,10 @@ describe("runSetupWizard default-agent ownership", () => {
       sourceConfigBeforeMigrations: config,
       issues: [],
     });
-    mocks.writeConfig.mockImplementation(async (nextConfig: OpenClawConfig) => nextConfig);
+    mocks.writeConfig.mockImplementation(async (nextConfig: OpenClawConfig) => ({
+      path: "/tmp/openclaw.json",
+      nextConfig,
+    }));
     mocks.setupSkills.mockImplementation(async (nextConfig: OpenClawConfig) => nextConfig);
     mocks.setupOfficialPlugins.mockImplementation(
       async ({ config: nextConfig }: { config: OpenClawConfig }) => nextConfig,
@@ -194,7 +197,7 @@ describe("runSetupWizard default-agent ownership", () => {
       let persisted: OpenClawConfig | undefined;
       mocks.writeConfig.mockImplementation(async (nextConfig: OpenClawConfig) => {
         persisted = nextConfig;
-        return nextConfig;
+        return { path: "/tmp/openclaw.json", nextConfig };
       });
 
       await runSetupWizard(
@@ -247,7 +250,7 @@ describe("runSetupWizard default-agent ownership", () => {
     let persisted: OpenClawConfig | undefined;
     mocks.writeConfig.mockImplementation(async (nextConfig: OpenClawConfig) => {
       persisted = nextConfig;
-      return nextConfig;
+      return { path: "/tmp/openclaw.json", nextConfig };
     });
 
     await runSetupWizard(

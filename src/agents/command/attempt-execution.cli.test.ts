@@ -894,6 +894,39 @@ describe("CLI attempt execution", () => {
     });
   }
 
+  it.each([true, false, "auto"] as const)(
+    "forwards resolved fast mode %s and its logical turn clock to CLI execution",
+    async (fastMode) => {
+      const sessionKey = "agent:main:fast-cli";
+      const sessionEntry = makeSessionEntry("session-fast-cli");
+      const sessionStore = { [sessionKey]: sessionEntry };
+      await writeSessionStoreSeed(sessionStore);
+      runCliAgentMock.mockResolvedValueOnce(makeCliResult("fast result"));
+
+      await runAgentAttempt({
+        providerOverride: "claude-cli",
+        modelOverride: "opus",
+        sessionKey,
+        sessionEntry,
+        sessionStore,
+        storePath,
+        agentDir,
+        workspaceDir: tmpDir,
+        body: "fast mode",
+        runId: "fast-cli-run",
+        fastMode,
+        fastModeStartedAtMs: 1000,
+        fastModeAutoOnSeconds: 15,
+      });
+
+      expect(firstRunCliAgentArg()).toMatchObject({
+        fastMode,
+        fastModeStartedAtMs: 1000,
+        fastModeAutoOnSeconds: 15,
+      });
+    },
+  );
+
   it.each(["assistant_output_started", "tool_execution_started"] as const)(
     "keeps CLI admission separate from observed %s",
     async (phase) => {

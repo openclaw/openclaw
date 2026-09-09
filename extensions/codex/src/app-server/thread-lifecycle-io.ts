@@ -14,6 +14,7 @@ import {
   isCodexAppServerOverloadError,
   resolveCodexAppServerClientInstanceId,
 } from "./client.js";
+import { assertCodexInferenceRouteConfig } from "./inference-routing.js";
 import { markStartedCodexManagedThread } from "./managed-thread-store.js";
 import { applyCodexNativeSkillIsolation } from "./native-skill-isolation.js";
 import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
@@ -174,7 +175,21 @@ export async function resumeExistingCodexThread(
         abandonClient,
         request: resumeParams,
         signal: params.signal,
-        assertCurrent: configuration.assertCurrent,
+        assertCurrent: () => {
+          configuration.assertCurrent();
+          assertCodexInferenceRouteConfig(
+            params.client,
+            params.inferenceRoute,
+            resumeParams.config,
+          );
+          if (
+            params.inferenceRoute &&
+            resumeParams.modelProvider != null &&
+            resumeParams.modelProvider !== "openai"
+          ) {
+            throw new Error("Codex inference route requires the native OpenAI provider");
+          }
+        },
       }),
     );
     acceptedConfiguration = configuration;
@@ -487,12 +502,23 @@ export async function startFreshCodexThread(
     params.params.hostCapabilities.assertActive();
     params.assertCurrent?.();
   };
+  const assertInferenceCurrent = () => {
+    assertCurrent();
+    assertCodexInferenceRouteConfig(params.client, params.inferenceRoute, startParams.config);
+    if (
+      params.inferenceRoute &&
+      startParams.modelProvider != null &&
+      startParams.modelProvider !== "openai"
+    ) {
+      throw new Error("Codex inference route requires the native OpenAI provider");
+    }
+  };
   const threadStartResponse = await lifecycleTiming.measure("thread-start-request", async () => {
     try {
       assertCurrent();
       return await params.client.request("thread/start", startParams, {
         signal: params.signal,
-        assertCurrent,
+        assertCurrent: assertInferenceCurrent,
       });
     } catch (error) {
       if (error instanceof CodexAppServerRpcError) {

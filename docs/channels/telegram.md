@@ -446,6 +446,7 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 
   <Accordion title="Rich message formatting">
     Outbound text uses standard Telegram HTML messages by default, readable across current clients: bold, italic, links, code, spoilers, quotes — not Bot API 10.3 rich-only blocks (native tables, details, rich media, formulas).
+    Fenced code retains its literal content and spacing, including fence examples inside the block.
 
     Opt into Bot API 10.3 rich messages:
 
@@ -460,6 +461,8 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 ```
 
     When enabled: the agent is told rich messages are available for this bot/account (with the supported Markdown + HTML-island authoring contract); Markdown text renders through OpenClaw's Markdown IR as typed Bot API 10.3 rich blocks (headings, tables, details, checklists, rich media, formulas, maps, collages); media captions still use Telegram HTML captions (rich messages do not replace captions, and captions cap at 1024 characters).
+
+    Ordinary rich body text, including list items, quotes, and disclosure bodies, preserves parsed Markdown spaces and newlines. Entities decode once: `&amp;` displays `&`, while `\&amp;` and `&amp;amp;` display literal `&amp;`. Escaped tags such as `&lt;b&gt;` stay visible text, and image alternatives stay plain text; neither becomes an HTML island. Unsupported HTML stays visible without suppressing Markdown formatting inside it. HTML attributes and recognized inline comments retain their literal source during Markdown parsing; supported attributes are then decoded by the HTML mapper. HTML-island summaries and figure captions keep their separate HTML normalization.
 
     This keeps model text away from Telegram's rich-Markdown sigils, so currency like `$400-600K` is not parsed as math. Long rich text splits automatically across Telegram's limits. Tables over the 20-column limit fall back to a code block.
 
@@ -767,6 +770,8 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
     Inbound: static WEBP is downloaded and processed (placeholder `<media:sticker>`); animated TGS and video WEBM are skipped.
 
     Sticker context fields: `Sticker.emoji`, `Sticker.setName`, `Sticker.fileId`, `Sticker.fileUniqueId`, `Sticker.cachedDescription`. Descriptions are cached in OpenClaw SQLite plugin state to reduce repeated vision calls.
+
+    Sticker descriptions use the configured `agents.defaults.imageModel` before shared automatic image-model selection, including the provider's MiniMax image routing. The sticker description uses one selected model and does not try the configured fallback list if that model fails. A failed description is not cached; general media analysis can still run separately with its normal fallback handling.
 
     Enable sticker actions:
 

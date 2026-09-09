@@ -368,13 +368,19 @@ export function createDiscordDraftPreviewController(params: {
       }
       await draftStream.flush();
     },
-    async cleanup() {
+    async cleanup({ finalDeliveryFailed = false }: { finalDeliveryFailed?: boolean } = {}) {
       try {
         progressDraft.cancel();
         if (finalReplyError !== false) {
           await draftStream?.discardPending();
         }
-        if (finalReplyError !== true && !finalizedViaPreviewMessage && draftStream?.messageId()) {
+        const keepFailedProgressDraft = discordStreamMode === "progress" && finalDeliveryFailed;
+        if (
+          !keepFailedProgressDraft &&
+          finalReplyError !== true &&
+          !finalizedViaPreviewMessage &&
+          draftStream?.messageId()
+        ) {
           await draftStream.clear();
         }
         await draftStream?.cleanupPendingMessages();

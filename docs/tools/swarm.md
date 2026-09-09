@@ -108,7 +108,7 @@ hints only when its catalog contains the native OpenClaw `sessions_spawn`
 tool and the run's execution allowlist permits it. An MCP tool with the same
 name does not qualify. Tool profiles, allow/deny policy, provider rules, and
 sandbox policy can remove the native tool. If the Swarm API is absent, check
-[Code Mode activation](/tools/code-mode#activation) and
+[Code Mode activation](/tools/code-mode/configuration#activation) and
 [Sub-agents](/tools/subagents).
 
 Code Mode waits for collector results internally; its `agents.run()` API does
@@ -237,7 +237,7 @@ apply. Ordinary tool calls and timers share this guest queue but have their own
 notes, and result waits do not consume that quota and retain their existing group,
 VM memory, and snapshot limits. Exceeding the ordinary quota fails the synchronous
 frontier before any new calls from it are dispatched; await smaller ordinary
-batches instead. See [Code Mode](/tools/code-mode#nested-tool-execution)
+batches instead. See [Code Mode](/tools/code-mode/internals#nested-tool-execution)
 for queue, cancellation, and resource-limit semantics.
 
 ### Loop on a decision gate

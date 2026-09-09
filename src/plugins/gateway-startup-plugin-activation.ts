@@ -15,11 +15,7 @@ import type {
   ConfiguredVoiceProviderIds,
   NormalizedPluginsConfig,
 } from "./gateway-startup-plugin-contracts.js";
-import {
-  manifestOwnsConfiguredModelProvider,
-  manifestOwnsConfiguredSpeechProvider,
-  manifestOwnsConfiguredWebSearchProvider,
-} from "./gateway-startup-plugin-providers.js";
+import { manifestOwnsConfiguredModelProvider } from "./gateway-startup-plugin-providers.js";
 import type { InstalledPluginIndex, InstalledPluginIndexRecord } from "./installed-plugin-index.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import { manifestOwnsWorkerProvider } from "./worker-provider-manifest.js";
@@ -57,7 +53,8 @@ type StartupActivationPolicy =
 type StartupContractKey =
   | keyof ConfiguredGenerationProviderIds
   | keyof ConfiguredVoiceProviderIds
-  | "embeddingProviders";
+  | "embeddingProviders"
+  | "webSearchProviders";
 
 export function addRequiredAgentHarnessPluginIds(
   target: Set<string>,
@@ -247,12 +244,16 @@ const GATEWAY_STARTUP_ACTIVATION_POLICIES: readonly {
   {
     policy: "speech",
     matches: ({ manifest, configuredSpeechProviderIds }) =>
-      manifestOwnsConfiguredSpeechProvider({ manifest, configuredSpeechProviderIds }),
+      manifestOwnsConfiguredContract(manifest, "speechProviders", configuredSpeechProviderIds),
   },
   {
     policy: "implicit-external",
     matches: ({ manifest, configuredWebSearchProviderIds }) =>
-      manifestOwnsConfiguredWebSearchProvider({ manifest, configuredWebSearchProviderIds }),
+      manifestOwnsConfiguredContract(
+        manifest,
+        "webSearchProviders",
+        configuredWebSearchProviderIds,
+      ),
   },
   {
     policy: "provider",

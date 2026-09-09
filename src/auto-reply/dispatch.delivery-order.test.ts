@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resetGlobalHookRunner } from "../plugins/hook-runner-global.js";
+import { expectedNoQueuedReplyResult } from "./reply/dispatch-result-expectations.test-support.js";
 import type { ReplyDispatchBeforeDeliver } from "./reply/reply-dispatcher.js";
 import type { ReplyDispatchBeforeDeliverOptions } from "./reply/reply-dispatcher.types.js";
 import { buildTestCtx } from "./reply/test-ctx.js";
@@ -340,10 +341,7 @@ describe("foreground reply delivery order", () => {
 
     await expect(olderDispatch).resolves.toEqual(settledFinalResult());
     const newerResult = await newerDispatch;
-    expect(newerResult).toMatchObject({
-      queuedFinal: false,
-      counts: { tool: 0, block: 0, final: 0 },
-    });
+    expect(newerResult).toMatchObject(expectedNoQueuedReplyResult());
     expect(newerResult.settledReceipt?.anyVisibleDelivered).toBe(false);
     expect(deliveries).toEqual([{ kind: "final", text: "old final" }]);
   });

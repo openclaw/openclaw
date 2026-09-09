@@ -9,6 +9,7 @@ import { saveSkillWorkshopMode } from "./storage.ts";
 
 type SkillWorkshopHeaderProps = {
   selfLearning: SkillWorkshopSelfLearning | null;
+  automationHref: string;
   onSelfLearningToggle: (enabled: boolean) => void;
   // The page owns what a section change resets, so the strip only reports it.
   onModeChange: (mode: SkillWorkshopMode) => void;
@@ -33,7 +34,7 @@ function sectionIcon(icon: TemplateResult) {
 
 export function renderSkillWorkshopHeaderControls(
   state: SkillWorkshopState,
-  { selfLearning, onSelfLearningToggle, onModeChange }: SkillWorkshopHeaderProps,
+  { selfLearning, automationHref, onSelfLearningToggle, onModeChange }: SkillWorkshopHeaderProps,
 ) {
   // A failed or unfinished list read would otherwise publish a stale or
   // zero count as if it were the current inventory.
@@ -72,7 +73,7 @@ export function renderSkillWorkshopHeaderControls(
         variant: "sub",
         onSelect: onModeChange,
       })}
-      ${renderSelfLearningToggle(selfLearning, onSelfLearningToggle)}
+      ${renderSelfLearningToggle(selfLearning, onSelfLearningToggle, automationHref)}
     </div>
   `;
 }

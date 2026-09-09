@@ -420,6 +420,7 @@ describe("loadManifestContractSnapshot", () => {
     mocks.loadPluginMetadataSnapshot.mockReturnValue({
       index: { plugins: [] },
       plugins: [],
+      byPluginId: new Map(),
     });
     mocks.resolvePluginMetadataSnapshot.mockImplementation(
       (params?: Parameters<typeof mocks.loadPluginMetadataSnapshot>[0]) =>
@@ -432,12 +433,14 @@ describe("loadManifestContractSnapshot", () => {
     const snapshot = {
       index: { plugins: [] },
       plugins: [],
+      byPluginId: new Map(),
     };
     mocks.resolvePluginMetadataSnapshot.mockReturnValue(snapshot);
 
     expect(loadManifestContractSnapshot({ config: {}, workspaceDir: "/workspace", env })).toEqual({
       index: snapshot.index,
       plugins: snapshot.plugins,
+      byPluginId: snapshot.byPluginId,
     });
 
     expect(mocks.resolvePluginMetadataSnapshot).toHaveBeenCalledWith({
@@ -454,12 +457,14 @@ describe("loadManifestContractSnapshot", () => {
     const snapshot = {
       index: { plugins: [] },
       plugins: [],
+      byPluginId: new Map(),
     };
     mocks.resolvePluginMetadataSnapshot.mockReturnValue(snapshot);
 
     expect(loadManifestContractSnapshot({ config: {}, env })).toEqual({
       index: snapshot.index,
       plugins: snapshot.plugins,
+      byPluginId: snapshot.byPluginId,
     });
 
     expect(mocks.resolvePluginMetadataSnapshot).toHaveBeenCalledWith({
@@ -472,15 +477,18 @@ describe("loadManifestContractSnapshot", () => {
 
   it("preserves configless default-discovery snapshot compatibility", () => {
     const env = { HOME: "/home/default-config" } as NodeJS.ProcessEnv;
+    const plugin = { id: "demo" };
     const snapshot = {
       index: { plugins: [{ pluginId: "demo" }] },
-      plugins: [{ id: "demo" }],
+      plugins: [plugin],
+      byPluginId: new Map([[plugin.id, plugin]]),
     };
     mocks.loadPluginMetadataSnapshot.mockReturnValue(snapshot);
 
     expect(loadManifestContractSnapshot({ env })).toEqual({
       index: snapshot.index,
       plugins: snapshot.plugins,
+      byPluginId: snapshot.byPluginId,
     });
 
     expect(mocks.resolvePluginMetadataSnapshot).toHaveBeenCalledWith({
@@ -497,15 +505,18 @@ describe("loadManifestContractSnapshot", () => {
 
   it("falls back to the shared metadata snapshot loader", () => {
     const env = { HOME: "/home/fallback" } as NodeJS.ProcessEnv;
+    const plugin = { id: "demo" };
     const snapshot = {
       index: { plugins: [{ pluginId: "demo" }] },
-      plugins: [{ id: "demo" }],
+      plugins: [plugin],
+      byPluginId: new Map([[plugin.id, plugin]]),
     };
     mocks.loadPluginMetadataSnapshot.mockReturnValue(snapshot);
 
     expect(loadManifestContractSnapshot({ config: {}, env })).toEqual({
       index: snapshot.index,
       plugins: snapshot.plugins,
+      byPluginId: snapshot.byPluginId,
     });
 
     expect(mocks.loadPluginMetadataSnapshot).toHaveBeenCalledWith({

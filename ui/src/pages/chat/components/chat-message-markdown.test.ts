@@ -8,7 +8,7 @@ import { handleMarkdownCodeBlockClick } from "../../../components/markdown-code-
 import { extractText } from "../../../lib/chat/message-extract.ts";
 import { normalizeMessage } from "../../../lib/chat/message-normalizer.ts";
 import { persistedMessageEntryId } from "../chat-thread-items.ts";
-import { resolveMessageActionDetails } from "./chat-message-markdown.ts";
+import { prepareChatMessageRender, resolveMessageActionDetails } from "./chat-message-markdown.ts";
 import { renderMessageMarkdown, resolveMessageDisplayMarkdown } from "./chat-message-text.ts";
 
 const cappedMeta = { id: "msg-1", truncated: true, reason: "display-cap" };
@@ -19,13 +19,19 @@ describe("resolveMessageActionDetails full-message eligibility", () => {
     { role: "user", id: "msg-1", shouldFetch: false },
     { role: "user", id: "pending:input-1", shouldFetch: true },
   ])("role=$role capped by metadata -> eligible=$shouldFetch", ({ role, id, shouldFetch }) => {
-    const details = resolveMessageActionDetails({
-      message: { role, content: "Preview\n...(truncated)...", __openclaw: { ...cappedMeta, id } },
-      messageId: "msg-1",
-      canFetchFullMessage: true,
-      onReply: () => {},
-      senderLabel: role,
-    });
+    const details = resolveMessageActionDetails(
+      prepareChatMessageRender({
+        role,
+        content: "Preview\n...(truncated)...",
+        __openclaw: { ...cappedMeta, id },
+      }),
+      {
+        messageId: "msg-1",
+        canFetchFullMessage: true,
+        onReply: () => {},
+        senderLabel: role,
+      },
+    );
     expect(details?.fullMessage?.messageId).toBe(shouldFetch ? id : undefined);
   });
 
@@ -35,8 +41,7 @@ describe("resolveMessageActionDetails full-message eligibility", () => {
       content: "Preview",
       __openclaw: { ...cappedMeta, id: "pending:input-1" },
     };
-    const details = resolveMessageActionDetails({
-      message,
+    const details = resolveMessageActionDetails(prepareChatMessageRender(message), {
       messageId: "pending-render",
       canFetchFullMessage: true,
       getAssistantMessageExpansion: () => ({
@@ -55,26 +60,34 @@ describe("resolveMessageActionDetails full-message eligibility", () => {
   it("does not fetch an assistant message that merely contains the sentinel text", () => {
     // The in-band "...(truncated)..." is ordinary Markdown to the UI; without the
     // Gateway's structural marker it is not evidence of a display cap.
-    const details = resolveMessageActionDetails({
-      message: {
+    const details = resolveMessageActionDetails(
+      prepareChatMessageRender({
         role: "assistant",
         content: "Quoting a log line:\n...(truncated)...\nand continuing normally.",
         __openclaw: { id: "msg-3" },
+      }),
+      {
+        messageId: "msg-3",
+        canFetchFullMessage: true,
+        senderLabel: "assistant",
       },
-      messageId: "msg-3",
-      canFetchFullMessage: true,
-      senderLabel: "assistant",
-    });
+    );
     expect(details?.fullMessage).toBeUndefined();
   });
 
   it("does not fetch an untruncated assistant message", () => {
-    const details = resolveMessageActionDetails({
-      message: { role: "assistant", content: "Complete.", __openclaw: { id: "msg-2" } },
-      messageId: "msg-2",
-      canFetchFullMessage: true,
-      senderLabel: "assistant",
-    });
+    const details = resolveMessageActionDetails(
+      prepareChatMessageRender({
+        role: "assistant",
+        content: "Complete.",
+        __openclaw: { id: "msg-2" },
+      }),
+      {
+        messageId: "msg-2",
+        canFetchFullMessage: true,
+        senderLabel: "assistant",
+      },
+    );
     expect(details?.fullMessage).toBeUndefined();
   });
 
@@ -84,8 +97,7 @@ describe("resolveMessageActionDetails full-message eligibility", () => {
       content: "[chat.history omitted: message too large]",
       __openclaw: { id: "msg-oversized", truncated: true, reason: "oversized" },
     };
-    const details = resolveMessageActionDetails({
-      message,
+    const details = resolveMessageActionDetails(prepareChatMessageRender(message), {
       messageId: "msg-oversized",
       canFetchFullMessage: true,
       onReply: () => {},
@@ -96,8 +108,7 @@ describe("resolveMessageActionDetails full-message eligibility", () => {
     expect(details?.markdown).toBe("This message is too large to display here.");
     expect(details?.replyTarget?.text).toBe("This message is too large to display here.");
 
-    const loaded = resolveMessageActionDetails({
-      message,
+    const loaded = resolveMessageActionDetails(prepareChatMessageRender(message), {
       messageId: "msg-oversized",
       canFetchFullMessage: true,
       getAssistantMessageExpansion: () => ({
@@ -115,16 +126,18 @@ describe("resolveMessageActionDetails full-message eligibility", () => {
   });
 
   it("projects an omitted historical image into reply text", () => {
-    const details = resolveMessageActionDetails({
-      message: {
+    const details = resolveMessageActionDetails(
+      prepareChatMessageRender({
         role: "assistant",
         content: [{ type: "image", omitted: true, bytes: 12 * 1024 }],
         __openclaw: { id: "msg-omitted-image" },
+      }),
+      {
+        messageId: "msg-omitted-image",
+        onReply: () => {},
+        senderLabel: "assistant",
       },
-      messageId: "msg-omitted-image",
-      onReply: () => {},
-      senderLabel: "assistant",
-    });
+    );
 
     expect(details?.replyTarget?.text).toBe("Image · Omitted from history · 12 KB");
   });
@@ -239,8 +252,7 @@ describe("message Markdown source preservation", () => {
     const source = "    *literal*";
     const message = { role: "assistant", content: source, __openclaw: cappedMeta };
     expect(extractText(message)).toBe(source);
-    const details = resolveMessageActionDetails({
-      message,
+    const details = resolveMessageActionDetails(prepareChatMessageRender(message), {
       messageId: "msg-1",
       canFetchFullMessage: true,
       getAssistantMessageExpansion: () => ({ status: "loaded", markdown: source, revision: 1 }),

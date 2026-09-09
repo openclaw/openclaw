@@ -49,10 +49,16 @@ Use these checks only for the regular orchestrated release track.
    - Get exact tag metadata from GitHub, not the local checkout when dirty:
      download `https://api.github.com/repos/openclaw/openclaw/tarball/v<VERSION>`
      into `/tmp/openclaw-v<VERSION>-src`.
-   - Count `extensions/*/package.json` with
-     `openclaw.release.publishToNpm === true` and
-     `openclaw.release.publishToClawHub === true`.
-   - Compare expected counts to workflow job counts:
+   - Derive the full expected npm and ClawHub package sets for the release track
+     with the canonical publication planners/collector from the recorded release
+     Tooling SHA, using the exact tag's package metadata.
+     Do not count raw publish flags: `openclaw.build.bundledDist === true`
+     explicitly defers external publication even when publish flags are set.
+     Record deferred package names and reasons separately.
+   - Reconcile expected package identities, versions, and counts across original
+     publication, previously published versions, and selected recovery runs using
+     immutable publication plans, registry readback, and workflow jobs. A selected
+     recovery subset must not narrow the full expected release set:
      `gh api repos/openclaw/openclaw/actions/runs/<RUN>/jobs --paginate`.
    - Each expected npm plugin must have version `<VERSION>` and
      `dist-tags.latest === <VERSION>`.
@@ -60,9 +66,11 @@ Use these checks only for the regular orchestrated release track.
    - Check the Plugin ClawHub Release workflow conclusion and publish job count.
    - Use OpenClaw itself for live registry proof:
      `openclaw plugins search <known-plugin> --json`.
-   - Install one official plugin from ClawHub in an isolated HOME:
-     `openclaw plugins install clawhub:@openclaw/matrix --pin`.
-     Prefer `matrix` unless that plugin is not in the expected set.
+   - Install one official plugin at the exact requested release version from
+     ClawHub in an isolated HOME:
+     `openclaw plugins install clawhub:@openclaw/matrix@<VERSION>`.
+     Prefer `matrix` unless that plugin is not in the expected set. ClawHub
+     versions belong in the spec; `--pin` is only supported for npm installs.
 5. Release workflows:
    - Verify conclusions for release notes evidence links:
      Full Release Validation, OpenClaw Release Checks, OpenClaw NPM Release,

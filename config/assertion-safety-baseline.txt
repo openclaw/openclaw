@@ -110,7 +110,6 @@ extensions/browser/src/browser/system-profiles.ts	1
 extensions/browser/src/browser/test-port.ts	1
 extensions/browser/src/browser/unhandled-rejections.ts	2
 extensions/browser/src/cli/browser-cli-actions-input/register.batch.ts	1
-extensions/browser/src/cli/browser-cli-actions-input/register.element.ts	2
 extensions/browser/src/cli/browser-cli-inspect.ts	2
 extensions/browser/src/cli/browser-cli-manage.ts	3
 extensions/browser/src/cli/browser-cli-shared.ts	1
@@ -520,7 +519,7 @@ extensions/google/onboard.ts	3
 extensions/google/provider-registration.ts	2
 extensions/google/realtime-voice-provider.ts	6
 extensions/google/transport-stream.ts	13
-extensions/google/vertex-adc.ts	6
+extensions/google/vertex-adc.ts	4
 extensions/google/video-generation-provider.ts	13
 extensions/googlechat/src/accounts.ts	1
 extensions/googlechat/src/actions.ts	1
@@ -1245,7 +1244,6 @@ extensions/telegram/src/sent-message-cache.ts	2
 extensions/telegram/src/state-migrations.ts	2
 extensions/telegram/src/status-issues.ts	1
 extensions/telegram/src/sticker-cache-store.legacy-state.ts	1
-extensions/telegram/src/sticker-cache.ts	2
 extensions/telegram/src/target-writeback.test-shared.ts	12
 extensions/telegram/src/telegram-ingress-drain-factory.ts	1
 extensions/telegram/src/telegram-ingress-drain.ts	5
@@ -1259,7 +1257,7 @@ extensions/telegram/src/thread-bindings.ts	2
 extensions/telegram/src/topic-name-cache.ts	3
 extensions/telegram/src/update-offset-store.ts	1
 extensions/telegram/src/webhook.ts	1
-extensions/tencent/stream.ts	5
+extensions/tencent/stream.ts	4
 extensions/tlon/src/channel.runtime.ts	3
 extensions/tlon/src/channel.ts	2
 extensions/tlon/src/monitor/approval-runtime.ts	2
@@ -1280,7 +1278,7 @@ extensions/twitch/src/config.ts	10
 extensions/twitch/src/monitor.ts	3
 extensions/twitch/src/outbound.ts	2
 extensions/twitch/src/resolver.ts	1
-extensions/twitch/src/setup-surface.ts	6
+extensions/twitch/src/setup-surface.ts	1
 extensions/twitch/src/status.ts	2
 extensions/twitch/src/token.ts	3
 extensions/twitch/src/twitch-ingress.ts	4
@@ -1396,8 +1394,7 @@ extensions/zai/model-definitions.ts	1
 extensions/zalo/setup-api.ts	3
 extensions/zalo/src/accounts.ts	3
 extensions/zalo/src/proxy.ts	1
-extensions/zalo/src/setup-allow-from.ts	3
-extensions/zalo/src/setup-surface.ts	10
+extensions/zalo/src/setup-allow-from.ts	1
 extensions/zalo/src/token.ts	1
 extensions/zalo/src/webhook-spool.ts	1
 extensions/zalouser/src/accounts.ts	1
@@ -1419,7 +1416,6 @@ packages/acp-core/src/types.ts	2
 packages/agent-core/src/agent-loop.ts	3
 packages/agent-core/src/harness/compaction/branch-summarization.ts	1
 packages/agent-core/src/harness/compaction/compaction.ts	2
-packages/agent-core/src/harness/messages.ts	2
 packages/agent-core/src/harness/session/tool-result-pairing.ts	17
 packages/agent-core/src/harness/session/uuid.ts	1
 packages/agent-core/src/harness/utils/truncate.ts	1
@@ -1592,7 +1588,6 @@ src/agents/agent-bundle-mcp-runtime.ts	7
 src/agents/agent-command-restart-recovery.ts	3
 src/agents/agent-command.ts	1
 src/agents/agent-hooks/compaction-safeguard.ts	14
-src/agents/agent-model-discovery.ts	5
 src/agents/agent-project-settings-snapshot.ts	5
 src/agents/agent-run-terminal-delivery.ts	1
 src/agents/agent-run-terminal-error.ts	1
@@ -1767,7 +1762,7 @@ src/agents/embedded-agent-runner/run/attempt.tool-call-argument-repair.ts	11
 src/agents/embedded-agent-runner/run/auth-profile-success.ts	1
 src/agents/embedded-agent-runner/run/context-recovery-state.ts	2
 src/agents/embedded-agent-runner/run/helpers.ts	3
-src/agents/embedded-agent-runner/run/history-image-prune.ts	8
+src/agents/embedded-agent-runner/run/history-image-prune.ts	4
 src/agents/embedded-agent-runner/run/images.ts	7
 src/agents/embedded-agent-runner/run/incomplete-turn-classification.ts	5
 src/agents/embedded-agent-runner/run/incomplete-turn-recovery.ts	3
@@ -1853,7 +1848,6 @@ src/agents/memory-write-provenance.ts	1
 src/agents/minimax-vlm.ts	1
 src/agents/model-auth-label.ts	1
 src/agents/model-auth-model.ts	2
-src/agents/model-catalog.ts	1
 src/agents/model-fallback-attempt.ts	1
 src/agents/model-fallback-runner.ts	2
 src/agents/model-provider-auth.ts	1
@@ -1870,11 +1864,11 @@ src/agents/modes/interactive/theme/theme.ts	11
 src/agents/node-plugin-tools.ts	1
 src/agents/openai-model-routes.ts	2
 src/agents/openclaw-tools.requester-yield.ts	2
-src/agents/plugin-model-catalog.ts	4
+src/agents/plugin-model-catalog.ts	3
 src/agents/plugin-text-transforms.ts	5
 src/agents/prepared-model-catalog.ts	1
 src/agents/prepared-model-catalog.worker.ts	1
-src/agents/prepared-model-runtime.configured.ts	2
+src/agents/prepared-model-runtime.configured.ts	1
 src/agents/prepared-model-runtime.facts.ts	1
 src/agents/prepared-model-runtime.ts	1
 src/agents/provider-attribution.ts	14
@@ -2012,7 +2006,7 @@ src/agents/tools/message-tool-visible-content.ts	9
 src/agents/tools/mobile-ui-tool.ts	5
 src/agents/tools/model-config.helpers.ts	1
 src/agents/tools/music-generate-tool.ts	2
-src/agents/tools/nodes-tool.ts	3
+src/agents/tools/nodes-tool.ts	2
 src/agents/tools/openclaw-delegate-tool.ts	1
 src/agents/tools/pdf-native-providers.ts	2
 src/agents/tools/pdf-tool.ts	3
@@ -2049,7 +2043,7 @@ src/agents/utils/frontmatter.ts	2
 src/agents/utils/tools-manager.ts	2
 src/agents/workspace-legacy-state.ts	2
 src/agents/workspace-state-store.ts	1
-src/agents/workspace.ts	8
+src/agents/workspace.ts	6
 src/agents/worktrees/git.ts	2
 src/agents/worktrees/provisioned-files.ts	3
 src/agents/worktrees/registry.ts	11
@@ -2472,11 +2466,7 @@ src/commands/gateway-status/helpers.ts	11
 src/commands/message-format.ts	17
 src/commands/message.ts	2
 src/commands/models/fallbacks-shared.ts	2
-src/commands/models/list.model-projection.ts	1
-src/commands/models/list.persisted-catalog.ts	2
 src/commands/models/list.probe.ts	2
-src/commands/models/list.registry.ts	3
-src/commands/models/list.rows.ts	1
 src/commands/models/shared.ts	3
 src/commands/onboard-agent.ts	1
 src/commands/onboard-config.ts	3
@@ -2588,7 +2578,7 @@ src/config/sessions/session-accessor.sqlite-title-probes.ts	1
 src/config/sessions/session-accessor.sqlite-transcript-message-append.ts	1
 src/config/sessions/session-accessor.sqlite-transcript-mirror.ts	1
 src/config/sessions/session-accessor.sqlite-transcript-store.ts	2
-src/config/sessions/session-accessor.sqlite-transcript-write.ts	5
+src/config/sessions/session-accessor.sqlite-transcript-write.ts	4
 src/config/sessions/session-accessor.sqlite-visible-cursor.ts	1
 src/config/sessions/session-accessor.transcript-range.ts	3
 src/config/sessions/session-accessor.transcript-turn.ts	1
@@ -2688,8 +2678,7 @@ src/flows/doctor-core-checks.ts	4
 src/flows/doctor-health-contributions-final.ts	1
 src/flows/doctor-health-contributions.ts	1
 src/flows/doctor-removed-workspaces-state-check.ts	2
-src/flows/health-check-adapter.ts	1
-src/flows/search-setup.ts	6
+src/flows/search-setup.ts	1
 src/gateway/agent-runtime-identity-token.ts	1
 src/gateway/agent-turn/agent-dedupe.ts	3
 src/gateway/agent-turn/agent-job.ts	1
@@ -3113,7 +3102,7 @@ src/infra/state-migrations.update-check.ts	2
 src/infra/state-migrations.workspace-setup-store.ts	2
 src/infra/state-migrations.workspace-setup.ts	1
 src/infra/system-presence.ts	2
-src/infra/system-run-approval-binding.ts	3
+src/infra/system-run-approval-binding.ts	1
 src/infra/system-run-approval-context.ts	6
 src/infra/tailscale.ts	9
 src/infra/tmp-openclaw-dir.ts	3
@@ -3654,7 +3643,6 @@ src/tui/tui-session-actions.ts	5
 src/tui/tui-session-events.ts	1
 src/tui/tui-session-projection.ts	2
 src/tui/tui-session-run-coordinator.ts	1
-src/tui/tui-stream-assembler.ts	2
 src/tui/tui-task-suggestions.ts	6
 src/tui/tui.ts	5
 src/utils.ts	1
@@ -3778,7 +3766,7 @@ ui/src/components/mcp-server-form.ts	1
 ui/src/components/model-picker.ts	2
 ui/src/components/onboarding-memory-import.ts	1
 ui/src/components/panel-tab-strip.ts	4
-ui/src/components/select-picker.ts	3
+ui/src/components/select-picker.ts	2
 ui/src/components/sensitive-input.ts	2
 ui/src/components/session-data-controller.ts	1
 ui/src/components/session-data-scroll-controller.ts	1
@@ -3795,7 +3783,7 @@ ui/src/components/theme-mode-toggle.ts	1
 ui/src/components/web-awesome.ts	2
 ui/src/components/wizard-step-controls.ts	4
 ui/src/i18n/lib/registry.ts	2
-ui/src/i18n/lib/translate.ts	3
+ui/src/i18n/lib/translate.ts	1
 ui/src/lib/agents/display.ts	6
 ui/src/lib/board/gateway-provider.ts	2
 ui/src/lib/board/widget-bridge.ts	3
@@ -3810,7 +3798,7 @@ ui/src/lib/chat/tool-display.ts	1
 ui/src/lib/config-form-utils.ts	7
 ui/src/lib/config/config-draft-model.ts	5
 ui/src/lib/cron/index.ts	11
-ui/src/lib/gateway-diagnostics.ts	3
+ui/src/lib/gateway-diagnostics.ts	2
 ui/src/lib/gateway-errors.ts	1
 ui/src/lib/keyboard-shortcuts.ts	1
 ui/src/lib/nodes/index.ts	3

@@ -1377,8 +1377,16 @@
                 "group": "Install overview",
                 "pages": [
                   "install/index",
-                  "install/installer",
-                  "install/node"
+                  "install/installer"
+                ]
+              },
+              {
+                "group": "Runtimes",
+                "pages": [
+                  "install/node",
+                  "install/node-compatibility",
+                  "install/bun",
+                  "install/bun-compatibility"
                 ]
               },
               {
@@ -1403,7 +1411,6 @@
                 "group": "Containers",
                 "pages": [
                   "install/ansible",
-                  "install/bun",
                   "install/docker",
                   "install/nix",
                   "install/podman"
@@ -1474,6 +1481,16 @@
                     "group": "Discord",
                     "pages": [
                       "channels/discord",
+                      "channels/discord/setup",
+                      "channels/discord/access-control",
+                      "channels/discord/messaging",
+                      "channels/discord/threads-and-sessions",
+                      "channels/discord/rich-messages",
+                      "channels/discord/events",
+                      "channels/discord/voice-channels",
+                      "channels/discord/voice-transcripts",
+                      "channels/discord/voice-follow",
+                      "channels/discord/troubleshooting",
                       "channels/discord-activities"
                     ]
                   },
@@ -1692,6 +1709,16 @@
                     "pages": [
                       "plugins/meeting-plugins",
                       "plugins/google-meet",
+                      {
+                        "group": "Google Meet",
+                        "pages": [
+                          "plugins/google-meet/transports",
+                          "plugins/google-meet/oauth-and-artifacts",
+                          "plugins/google-meet/config",
+                          "plugins/google-meet/tool-and-modes",
+                          "plugins/google-meet/troubleshooting"
+                        ]
+                      },
                       "plugins/teams-meetings",
                       "plugins/voice-call",
                       "plugins/zoom-meetings"
@@ -1734,9 +1761,41 @@
                   "plugins/feature-plugins",
                   "plugins/tool-plugins",
                   "plugins/sdk-channel-plugins",
+                  {
+                    "group": "Channel plugins",
+                    "pages": [
+                      "plugins/sdk-channel-plugins/message-adapter",
+                      "plugins/sdk-channel-plugins/durable-ingress",
+                      "plugins/sdk-channel-plugins/status-and-media",
+                      "plugins/sdk-channel-plugins/sessions-and-bindings",
+                      "plugins/sdk-channel-plugins/approvals",
+                      "plugins/sdk-channel-plugins/setup-and-config",
+                      "plugins/sdk-channel-plugins/mention-policy"
+                    ]
+                  },
                   "plugins/sdk-provider-plugins",
+                  {
+                    "group": "Provider plugins",
+                    "pages": [
+                      "plugins/sdk-provider-plugins/model-catalogs",
+                      "plugins/sdk-provider-plugins/hook-families",
+                      "plugins/sdk-provider-plugins/runtime-hooks",
+                      "plugins/sdk-provider-plugins/voice-and-audio",
+                      "plugins/sdk-provider-plugins/media-and-search"
+                    ]
+                  },
                   "plugins/cli-backend-plugins",
                   "plugins/hooks",
+                  {
+                    "group": "Plugin hooks",
+                    "pages": [
+                      "plugins/hooks/reference",
+                      "plugins/hooks/tool-policy",
+                      "plugins/hooks/prompt-and-session",
+                      "plugins/hooks/messages",
+                      "plugins/hooks/lifecycle"
+                    ]
+                  },
                   "plugins/plugin-permission-requests",
                   "plugins/adding-capabilities"
                 ]
@@ -1811,6 +1870,19 @@
                     "group": "Tool catalogs and workflows",
                     "pages": [
                       "tools/code-mode",
+                      {
+                        "group": "Code Mode",
+                        "pages": [
+                          "tools/code-mode/quickstart",
+                          "tools/code-mode/configuration",
+                          "tools/code-mode/tool-surface",
+                          "tools/code-mode/guest-api",
+                          "tools/code-mode/output",
+                          "tools/code-mode/internals",
+                          "tools/code-mode/troubleshooting",
+                          "tools/code-mode/maintainers"
+                        ]
+                      },
                       "tools/llm-task",
                       "tools/lobster",
                       "tools/mcp",
@@ -1969,6 +2041,19 @@
                       "providers/nvidia",
                       "providers/ollama-cloud",
                       "providers/openai",
+                      {
+                        "group": "OpenAI",
+                        "pages": [
+                          "providers/openai/setup",
+                          "providers/openai/models",
+                          "providers/openai/runtimes",
+                          "providers/openai/coverage-and-cost",
+                          "providers/openai/image-and-video",
+                          "providers/openai/voice-and-speech",
+                          "providers/openai/azure",
+                          "providers/openai/advanced"
+                        ]
+                      },
                       "providers/opencode",
                       "providers/opencode-go",
                       "providers/perplexity-provider",
@@ -2146,6 +2231,18 @@
                       "gateway/health",
                       "gateway/heartbeat",
                       "gateway/doctor",
+                      {
+                        "group": "Doctor",
+                        "pages": [
+                          "gateway/doctor/running",
+                          "gateway/doctor/checks",
+                          "gateway/doctor/config-migrations",
+                          "gateway/doctor/provider-repairs",
+                          "gateway/doctor/state-and-sessions",
+                          "gateway/doctor/gateway-and-services",
+                          "gateway/doctor/workspace-and-dreams"
+                        ]
+                      },
                       "gateway/audit",
                       "gateway/telemetry",
                       "logging",
@@ -2172,11 +2269,21 @@
                     "group": "Security and sandboxing",
                     "pages": [
                       "gateway/security/index",
+                      "gateway/security/trust-model",
+                      "gateway/security/running-the-audit",
+                      "gateway/security/audit-checks",
+                      "gateway/security/hardened-baseline",
+                      "gateway/security/access-control",
+                      "gateway/security/prompt-injection",
+                      "gateway/security/tool-permissions",
+                      "gateway/security/browser-control",
+                      "gateway/security/network-exposure",
+                      "gateway/security/secrets-and-storage",
                       "gateway/security/exposure-runbook",
+                      "gateway/security/rate-limiting",
+                      "gateway/security/operator-incident-response",
                       "gateway/security/secure-file-operations",
                       "gateway/security/dependency-locking",
-                      "gateway/security/audit-checks",
-                      "gateway/security/rate-limiting",
                       "gateway/operator-scopes",
                       "gateway/sandboxing",
                       "gateway/openshell",
@@ -2245,6 +2352,15 @@
                 "group": "Nodes and media",
                 "pages": [
                   "nodes/index",
+                  "nodes/pairing-and-status",
+                  "nodes/node-host",
+                  "nodes/node-exec",
+                  "nodes/mcp-and-skills",
+                  "nodes/session-hosting",
+                  "nodes/session-catalogs",
+                  "nodes/file-transfers",
+                  "nodes/command-policy",
+                  "nodes/device-commands",
                   "nodes/presence",
                   "nodes/troubleshooting",
                   {
@@ -2335,6 +2451,18 @@
                     "group": "Diagnostics and security",
                     "pages": [
                       "cli/doctor",
+                      {
+                        "group": "Doctor",
+                        "pages": [
+                          "cli/doctor/running",
+                          "cli/doctor/recovery",
+                          "cli/doctor/lint",
+                          "cli/doctor/health-contract",
+                          "cli/doctor/state-migrations",
+                          "cli/doctor/sqlite-maintenance",
+                          "cli/doctor/checks"
+                        ]
+                      },
                       "cli/secrets",
                       "cli/security",
                       "cli/triage"
@@ -2441,6 +2569,20 @@
                 "group": "Codex harness",
                 "pages": [
                   "plugins/codex-harness-reference",
+                  {
+                    "group": "Codex harness reference",
+                    "pages": [
+                      "plugins/codex-harness-reference/supervision",
+                      "plugins/codex-harness-reference/app-server-transport",
+                      "plugins/codex-harness-reference/approval-and-sandbox",
+                      "plugins/codex-harness-reference/auth",
+                      "plugins/codex-harness-reference/dynamic-tools",
+                      "plugins/codex-harness-reference/timeouts",
+                      "plugins/codex-harness-reference/model-discovery",
+                      "plugins/codex-harness-reference/restricted-turns",
+                      "plugins/codex-harness-reference/workspace-bootstrap-files"
+                    ]
+                  },
                   "plugins/codex-harness-runtime"
                 ]
               },
@@ -2457,6 +2599,19 @@
                 "group": "Plugin SDK reference",
                 "pages": [
                   "plugins/sdk-overview",
+                  {
+                    "group": "Plugin SDK overview",
+                    "pages": [
+                      "plugins/sdk-overview/imports",
+                      "plugins/sdk-overview/capabilities",
+                      "plugins/sdk-overview/tools-and-commands",
+                      "plugins/sdk-overview/infrastructure",
+                      "plugins/sdk-overview/host-hooks",
+                      "plugins/sdk-overview/cli-and-discovery",
+                      "plugins/sdk-overview/memory-and-context",
+                      "plugins/sdk-overview/events-and-hooks"
+                    ]
+                  },
                   "plugins/manifest",
                   {
                     "group": "Plugin manifest",
@@ -2496,7 +2651,31 @@
                 "pages": [
                   "plugins/architecture",
                   "plugins/architecture-internals",
+                  {
+                    "group": "Plugin architecture internals",
+                    "pages": [
+                      "plugins/architecture-internals/load-pipeline",
+                      "plugins/architecture-internals/provider-hooks",
+                      "plugins/architecture-internals/runtime-helpers",
+                      "plugins/architecture-internals/gateway-routes",
+                      "plugins/architecture-internals/channel-surfaces",
+                      "plugins/architecture-internals/packaging",
+                      "plugins/architecture-internals/context-engines",
+                      "plugins/architecture-internals/new-capability"
+                    ]
+                  },
                   "plugins/sdk-migration",
+                  {
+                    "group": "Plugin SDK migration",
+                    "pages": [
+                      "plugins/sdk-migration/how-to-migrate",
+                      "plugins/sdk-migration/import-paths",
+                      "plugins/sdk-migration/removed-surfaces",
+                      "plugins/sdk-migration/talk",
+                      "plugins/sdk-migration/compatibility-policy",
+                      "plugins/sdk-migration/removal-timeline"
+                    ]
+                  },
                   "plugins/compatibility",
                   "plugins/sdk-channel-outbound",
                   "plugins/sdk-channel-inbound",
@@ -2574,6 +2753,7 @@
                 "group": "Release notes",
                 "pages": [
                   "releases/index",
+                  "releases/2026.9.3",
                   "releases/2026.9.2",
                   "releases/2026.9.1",
                   "releases/2026.8.2",
@@ -2594,6 +2774,18 @@
                 "pages": [
                   "reference/RELEASING",
                   "reference/full-release-validation",
+                  {
+                    "group": "Full release validation",
+                    "pages": [
+                      "reference/full-release-validation/dispatch",
+                      "reference/full-release-validation/continuation",
+                      "reference/full-release-validation/extended-stable",
+                      "reference/full-release-validation/stages",
+                      "reference/full-release-validation/release-checks",
+                      "reference/full-release-validation/profiles",
+                      "reference/full-release-validation/evidence"
+                    ]
+                  },
                   "reference/release-performance-sweep"
                 ]
               },
@@ -2601,6 +2793,17 @@
                 "group": "Testing and CI",
                 "pages": [
                   "reference/test",
+                  {
+                    "group": "Tests",
+                    "pages": [
+                      "reference/test/local",
+                      "reference/test/lanes",
+                      "reference/test/docker",
+                      "reference/test/performance",
+                      "reference/test/runner-internals",
+                      "reference/test/remote-proof"
+                    ]
+                  },
                   "ci",
                   {
                     "group": "CI",
@@ -2618,6 +2821,19 @@
                   },
                   "help/scripts",
                   "concepts/qa-e2e-automation",
+                  {
+                    "group": "QA stack",
+                    "pages": [
+                      "concepts/qa-e2e-automation/command-surface",
+                      "concepts/qa-e2e-automation/operator-flow",
+                      "concepts/qa-e2e-automation/scenario-coverage",
+                      "concepts/qa-e2e-automation/channel-qa-reference",
+                      "concepts/qa-e2e-automation/slack-qa",
+                      "concepts/qa-e2e-automation/whatsapp-and-credentials",
+                      "concepts/qa-e2e-automation/extending-the-stack",
+                      "concepts/qa-e2e-automation/qa-reporting"
+                    ]
+                  },
                   "concepts/personal-agent-benchmark-pack"
                 ]
               }
@@ -2646,6 +2862,17 @@
                 "group": "Testing",
                 "pages": [
                   "help/testing",
+                  {
+                    "group": "Testing guide",
+                    "pages": [
+                      "help/testing/suites",
+                      "help/testing/live-workflows",
+                      "help/testing/docker",
+                      "help/testing/qa-runners",
+                      "help/testing/contracts",
+                      "help/testing/writing-tests"
+                    ]
+                  },
                   "help/testing-updates-plugins",
                   "help/testing-live"
                 ]

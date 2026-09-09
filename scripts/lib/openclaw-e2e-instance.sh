@@ -257,6 +257,7 @@ openclaw_e2e_install_package() {
   fi
   echo "Installing $label..."
   if openclaw_e2e_maybe_timeout "$timeout_value" npm install "${args[@]}" "$package_tgz" --no-fund --no-audit >"$log_file" 2>&1; then
+    echo "Installed $label."
     return 0
   else
     local install_status=$?
@@ -267,7 +268,7 @@ openclaw_e2e_install_package() {
     if [ -f "$log_file" ]; then
       openclaw_e2e_print_log "$log_file" >&2
     fi
-    exit 1
+    return "$install_status"
   fi
 }
 openclaw_e2e_find_dep_package() {
