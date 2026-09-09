@@ -1401,6 +1401,14 @@
                 "pages": [
                   "install/backups",
                   "install/updating",
+                  {
+                    "group": "Updating",
+                    "pages": [
+                      "install/updating/update-methods",
+                      "install/updating/automatic-updates",
+                      "install/updating/rollback-and-recovery"
+                    ]
+                  },
                   "install/update-troubleshooting",
                   {
                     "group": "Migrating",

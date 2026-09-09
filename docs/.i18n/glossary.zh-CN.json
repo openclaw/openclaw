@@ -3654,5 +3654,21 @@
   {
     "source": "Matrix accounts and homeservers",
     "target": "Matrix 账户与家庭服务器"
+  },
+  {
+    "source": "Other update methods",
+    "target": "其他更新方式"
+  },
+  {
+    "source": "Update methods",
+    "target": "更新方式"
+  },
+  {
+    "source": "Automatic updates",
+    "target": "自动更新"
+  },
+  {
+    "source": "Rollback and recovery",
+    "target": "回滚与恢复"
   }
 ]
