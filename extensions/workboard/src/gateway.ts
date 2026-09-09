@@ -50,8 +50,9 @@ export function registerWorkboardGatewayMethods(params: {
     [
       "workboard.cards.list",
       READ_SCOPE,
-      async ({ params: requestParams }) =>
-        await listWorkboardCards(store, requestParams.boardId, redactClaimToken),
+      async ({ params: requestParams }): Promise<unknown> => {
+        return await listWorkboardCards(store, requestParams.boardId, redactClaimToken);
+      },
     ],
   ]);
 
