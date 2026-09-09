@@ -14,7 +14,7 @@ import type { WorkerWorkspaceOperationCoordinator } from "./workspace-operation-
 import {
   createWorkspaceResultJournal,
   settleStagedWorkspaceResult,
-} from "./workspace-result-finalize.js";
+} from "./workspace-result-settlement.js";
 import { workerWorkspaceResultRef } from "./workspace-result-staging.js";
 
 export function createRepositoryWorkspaceMutationService(options: {

@@ -27,6 +27,10 @@ export type ActiveWorkerPlacement = Extract<WorkerSessionPlacementRecord, { stat
 
 export class WorkerTurnExecutionError extends Error {}
 
+export class WorkerWorkspaceReconciliationError extends Error {
+  override name = "WorkerWorkspaceReconciliationError";
+}
+
 // Journal-terminal launches get a short cleanup grace before failure is surfaced.
 // This never limits a live launch or a turn still holding its claim.
 const TERMINAL_WORKER_CLEANUP_GRACE_MS = 30_000;

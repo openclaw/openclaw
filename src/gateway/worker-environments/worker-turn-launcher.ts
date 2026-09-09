@@ -6,10 +6,10 @@ import type {
 } from "../../agents/session-placement-admission.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { emitAgentRunStatusEvent } from "../../infra/agent-run-status-events.js";
+import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import { StaleWorkerBuildError } from "./admission.js";
 import { matchesWorkerPlacementTarget } from "./placement-reclaim-contract.js";
 import { placementTurnOwner, sameWorkerSessionTurnClaim } from "./placement-record.js";
-import { createRemoteExecPlacementSandbox } from "./placement-sandbox.js";
 import type {
   WorkerSessionPlacementRecord,
   WorkerSessionPlacementStore,
@@ -27,19 +27,19 @@ import {
   waitForPendingWorkerResult,
   waitForInitialWorkerPlacement,
 } from "./worker-turn-admission.js";
-import { executeWorkerTurn } from "./worker-turn-execution.js";
 import {
   failHandedOffTurn,
   WorkerTurnExecutionError,
+  WorkerWorkspaceReconciliationError,
   type ActiveWorkerPlacement,
   type WorkerTurnEnvironmentService,
 } from "./worker-turn-failure.js";
 import { createWorkerTurnRunOwner, type ActiveWorkerTurn } from "./worker-turn-run-owner.js";
 import type { WorkerWorkspaceOperationCoordinator } from "./workspace-operation-coordinator.js";
-import {
-  executeRemoteExecTurn,
-  WorkerWorkspaceReconciliationError,
-} from "./workspace-result-finalize.js";
+
+const loadWorkerTurnExecution = createLazyRuntimeModule(() => import("./worker-turn-execution.js"));
+const loadRemoteExecTurn = createLazyRuntimeModule(() => import("./workspace-result-finalize.js"));
+const loadPlacementSandbox = createLazyRuntimeModule(() => import("./placement-sandbox.js"));
 
 type ReclaimedWorkerPlacement = Extract<WorkerSessionPlacementRecord, { state: "reclaimed" }>;
 
@@ -115,6 +115,8 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
         sessionKey: placement.sessionKey,
       });
       assertCurrentPlacement("managed workspace");
+      const { createRemoteExecPlacementSandbox } = await loadPlacementSandbox();
+      assertCurrentPlacement("sandbox");
       const sandbox = await createRemoteExecPlacementSandbox({
         config: params.config,
         environments: options.environments,
@@ -316,6 +318,18 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
       let handedOff = false;
       let terminalAtMs: number | undefined;
       try {
+        const execute = remoteExec
+          ? (await loadRemoteExecTurn()).executeRemoteExecTurn
+          : (await loadWorkerTurnExecution()).executeWorkerTurn;
+        // Loading retains the admitted claim; it cannot admit a replacement or
+        // register a run owner after the caller or placement has been revoked.
+        assertAdmissionCurrent();
+        if (
+          !matchesWorkerPlacementTarget(options.placements.get(turnClaim.sessionId), placement) ||
+          !options.placements.validateTurnClaim(turnClaim)
+        ) {
+          throw new Error("Worker placement changed while loading turn execution");
+        }
         if (!remoteExec) {
           activeWorkerTurn = createWorkerTurnRunOwner({
             placements: options.placements,
@@ -350,9 +364,7 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
           turn,
           turnClaim,
         };
-        return remoteExec
-          ? await executeRemoteExecTurn({ ...executionParams, runLocal, assertRunCurrent })
-          : await executeWorkerTurn(executionParams);
+        return await execute({ ...executionParams, runLocal, assertRunCurrent });
       } catch (error) {
         if (error instanceof StaleWorkerBuildError) {
           await options.reconcileActivePlacement(placement.environmentId);

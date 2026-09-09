@@ -36,7 +36,7 @@ import { recoverWorkerWorkspaceReconciliation } from "./workspace-reconcile.js";
 import {
   finalizeWorkspaceResultConflicts,
   settleStagedWorkspaceResult,
-} from "./workspace-result-finalize.js";
+} from "./workspace-result-settlement.js";
 import {
   applyStagedWorkerWorkspaceResult,
   cleanupWorkerWorkspaceResultRef,
