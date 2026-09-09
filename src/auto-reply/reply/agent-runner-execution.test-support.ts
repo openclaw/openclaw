@@ -619,6 +619,23 @@ export function makeTestSessionStorePath(): string {
   );
 }
 
+export function createAgentTurnExecutionDefaults() {
+  return {
+    blockReplyPipeline: null,
+    blockStreamingEnabled: false,
+    resolvedBlockStreamingBreak: "message_end",
+    applyReplyToMode: (payload) => payload,
+    shouldEmitToolResult: () => true,
+    shouldEmitToolOutput: () => false,
+    pendingToolTasks: new Set<Promise<void>>(),
+    resetSessionAfterRoleOrderingConflict: async () => false,
+    isHeartbeat: false,
+    sessionKey: "main",
+    getActiveSessionEntry: () => undefined,
+    resolvedVerboseLevel: "off",
+  } satisfies Partial<AgentTurnParams>;
+}
+
 export function createRunAgentTurnParams(followupRun: FollowupRun): AgentTurnParams {
   return {
     commandBody: "hello",
@@ -629,18 +646,7 @@ export function createRunAgentTurnParams(followupRun: FollowupRun): AgentTurnPar
     },
     opts: {},
     typingSignals: createMockTypingSignaler(),
-    blockReplyPipeline: null,
-    blockStreamingEnabled: false,
-    resolvedBlockStreamingBreak: "message_end",
-    applyReplyToMode: (payload) => payload,
-    shouldEmitToolResult: () => true,
-    shouldEmitToolOutput: () => false,
-    pendingToolTasks: new Set(),
-    resetSessionAfterRoleOrderingConflict: async () => false,
-    isHeartbeat: false,
-    sessionKey: "main",
-    getActiveSessionEntry: () => undefined,
-    resolvedVerboseLevel: "off",
+    ...createAgentTurnExecutionDefaults(),
   };
 }
 
