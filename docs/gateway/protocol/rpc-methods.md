@@ -36,7 +36,7 @@ methods. Treat this as feature discovery, not a full enumeration of
 
 ### Models and usage
 
-- `models.list` returns the runtime-allowed model catalog. See "`models.list` views" below.
+- `models.list` returns the runtime-allowed model catalog. See [`models.list` views](/gateway/protocol/operator-methods#models-list-views).
 - `usage.status` returns provider usage windows/remaining quota summaries. Clients advertising `usage-refreshing` receive an immediate `refreshing: true` placeholder on a cold cache and must refetch on a bounded schedule; other callers block for the cold provider read.
 - `usage.cost` returns aggregated cost usage summaries for a date range. Pass `agentId` for one agent, or `agentScope: "all"` to aggregate configured agents.
 - `doctor.memory.status` returns vector-memory / cached embedding readiness for the active default agent workspace. Pass `{ "probe": true }` or `{ "deep": true }` only for an explicit live embedding provider ping. Pass `{ "agentId": "agent-id" }` to scope Dreaming store stats to one agent workspace; omitting it aggregates configured Dreaming workspaces.
@@ -244,7 +244,7 @@ Outcomes are retained past the credential's own expiry.
 - `cron.runs` accepts an optional non-empty `runId` filter so clients can follow one queued manual run without racing against other history entries for the same job.
 - Skills and tools: `commands.list`, `skills.*`, `tools.catalog`, `tools.effective`, `tools.invoke`. See [Operator helper methods](/gateway/protocol/operator-methods#operator-helper-methods).
 
-### Session list bootstrap
+## Session list bootstrap
 
 Call `sessions.subscribe` with a non-empty `sessions.list` parameter object, such
 as `{ limit: 60, ownerFirst: true }`, to subscribe and load the initial roster in
@@ -277,7 +277,7 @@ exceed the shared page size. Use `nextOffset` to advance and deduplicate rows by
 session key across pages; do not derive the next offset from the displayed row
 count.
 
-### Common event families
+## Common event families
 
 - `chat`: UI chat updates such as `chat.inject` and other transcript-only chat
   events. In protocol v4, delta payloads carry `deltaText`; `message` remains
@@ -344,12 +344,12 @@ count.
 - `plugin.approval.requested` / `plugin.approval.resolved`: plugin approval
   lifecycle.
 
-### Node helper methods
+## Node helper methods
 
 Nodes may call `skills.bins` to fetch the current list of skill executables
 for auto-allow checks.
 
-### Node exec lifecycle events
+## Node exec lifecycle events
 
 Nodes report `system.run` lifecycle through the node-role `node.event` RPC with
 `event: "exec.started"`, `"exec.finished"`, or `"exec.denied"`. These are not the
