@@ -5,13 +5,19 @@ import path from "node:path";
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
+import type { ConfigFileSnapshot } from "../../config/types.openclaw.js";
+import type { PluginInstallRecord } from "../../config/types.plugins.js";
 import { hasErrnoCode } from "../../infra/errors.js";
 import { resolveRequiredHomeDir } from "../../infra/home-dir.js";
 import { resolveOpenClawPackageRoot } from "../../infra/openclaw-root.js";
 import { readPackageName, readPackageVersion } from "../../infra/package-json.js";
 import { normalizePackageTagInput } from "../../infra/package-tag.js";
+import type { PackageUpdateTransaction } from "../../infra/package-update-steps.js";
 import { parseSemver } from "../../infra/runtime-guard.js";
+import type { UpdateStateSchemaVersion } from "../../infra/update-candidate-state.js";
+import type { UpdateChannel } from "../../infra/update-channels.js";
 import { fetchNpmTagVersion } from "../../infra/update-check.js";
+import type { readControlPlaneUpdateSentinelMeta } from "../../infra/update-control-plane-sentinel.js";
 import {
   canResolveRegistryVersionForPackageTarget,
   createGlobalInstallEnv,
@@ -24,9 +30,12 @@ import { runStep } from "../../infra/update-runner-command.js";
 import type { UpdateStepProgress, UpdateStepResult } from "../../infra/update-runner.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
+import type { OpenClawSchemaVersions } from "../../state/openclaw-schema-versions.js";
 import { pathExists } from "../../utils.js";
 import { COMPLETION_SKIP_PLUGIN_COMMANDS_ENV } from "../completion-runtime.js";
 import { isJsonOutputModeActive } from "../json-output-mode.js";
+import type { UpdateConfigSnapshot } from "./update-command-config-snapshot.js";
+import type { UpdateRestartParams } from "./update-command-restart-context.js";
 
 export type UpdateCommandOptions = {
   /** Internal orchestration context, shared across update phases and child processes. */
@@ -44,6 +53,32 @@ export type UpdateCommandOptions = {
   tag?: string;
   timeout?: string;
   yes?: boolean;
+};
+
+export type FinishUpdateParams = UpdateRestartParams & {
+  coreAlreadyCurrent?: boolean;
+  failure?: { cause: unknown; detail: string };
+  mutationStarted: boolean;
+  expectedVersion?: string;
+  previousInstallRoot?: string;
+  installKindChanged: boolean;
+  configSnapshot: ConfigFileSnapshot;
+  requestedChannel: UpdateChannel | null;
+  storedChannel: UpdateChannel | null;
+  channel: UpdateChannel;
+  downgradeRisk: boolean;
+  opts: UpdateCommandOptions;
+  controlPlaneUpdateSentinelMeta: Awaited<ReturnType<typeof readControlPlaneUpdateSentinelMeta>>;
+  preUpdatePluginInstallRecords: Record<string, PluginInstallRecord>;
+  startedAt: number;
+  packageUpdateNodeRunner?: string;
+  packageTransaction?: PackageUpdateTransaction;
+  schemaVersions?: UpdateStateSchemaVersion[];
+  candidateSchemaVersions?: OpenClawSchemaVersions;
+  previousSchemaVersions?: OpenClawSchemaVersions;
+  previousVerified?: boolean;
+  activationConfig?: UpdateConfigSnapshot;
+  rollbackBlockedReason?: "state-migrated-no-rollback" | "rollback-state-unverified";
 };
 
 export type UpdateStatusOptions = {
@@ -481,4 +516,47 @@ export async function tryWriteCompletionCache(
     );
   }
   return "failed";
+}
+
+export async function confirmUpdateDowngrade(params: {
+  opts: UpdateCommandOptions;
+  currentVersion: string | null;
+  targetVersion: string | null;
+  tag: string;
+}): Promise<boolean> {
+  const { confirm, isCancel } = await import("@clack/prompts");
+  const { finishUpdateRun } = await import("../../infra/update-run-ledger.js");
+  const { stylePromptMessage } =
+    await import("../../../packages/terminal-core/src/prompt-style.js");
+  const { opts, currentVersion, targetVersion, tag } = params;
+  const run = opts.run!;
+  if (!process.stdin.isTTY || opts.json) {
+    finishUpdateRun(
+      run.runId,
+      { status: "skipped", reason: "downgrade-confirmation-required" },
+      { env: run.env },
+    );
+    defaultRuntime.error(
+      "Downgrade confirmation required.\nDowngrading can break configuration. Re-run in a TTY to confirm.",
+    );
+    defaultRuntime.exit(1);
+    return false;
+  }
+
+  const targetLabel = targetVersion ?? `${tag} (unknown)`;
+  const message = `Downgrading from ${currentVersion} to ${targetLabel} can break configuration. Continue?`;
+  const ok = await confirm({
+    message: stylePromptMessage(message),
+    initialValue: false,
+  });
+  if (isCancel(ok) || !ok) {
+    finishUpdateRun(run.runId, { status: "skipped", reason: "cancelled" }, { env: run.env });
+    if (!opts.json) {
+      defaultRuntime.log(theme.muted("Update cancelled."));
+    }
+    defaultRuntime.exit(0);
+    return false;
+  }
+
+  return true;
 }
