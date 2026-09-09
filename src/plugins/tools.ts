@@ -19,7 +19,11 @@ import {
 } from "./compat/conversation-read-tools.js";
 import { applyTestPluginDefaults, normalizePluginsConfig } from "./config-state.js";
 import { createInstalledPluginEnabledPredicate } from "./installed-plugin-index.js";
-import { loadPluginRegistryHandle, type PluginLoadOptions } from "./loader.js";
+import {
+  acquirePluginRegistryForInspection,
+  loadPluginRegistryHandle,
+  type PluginLoadOptions,
+} from "./loader.js";
 import {
   isManifestPluginAvailableForControlPlane,
   loadManifestContractSnapshot,
@@ -658,6 +662,15 @@ type PreparedPluginToolRuntime = {
   registry?: PluginRegistry;
 };
 
+type PluginToolLoadState = {
+  context: ReturnType<typeof resolvePluginRuntimeLoadContext>;
+  env: NodeJS.ProcessEnv;
+  loadOptions: PluginLoadOptions;
+  onlyPluginIds: string[];
+  allowlist: PluginToolAllowlist;
+  snapshot: PluginMetadataManifestView;
+};
+
 function resolvePluginToolLoadState(params: {
   context: OpenClawPluginToolContext;
   toolAllowlist?: string[];
@@ -666,16 +679,7 @@ function resolvePluginToolLoadState(params: {
   hasAuthForProvider?: (providerId: string) => boolean;
   env?: NodeJS.ProcessEnv;
   preparedRuntime?: PreparedPluginToolRuntime;
-}):
-  | {
-      context: ReturnType<typeof resolvePluginRuntimeLoadContext>;
-      env: NodeJS.ProcessEnv;
-      loadOptions: PluginLoadOptions;
-      onlyPluginIds: string[];
-      allowlist: PluginToolAllowlist;
-      snapshot: PluginMetadataManifestView;
-    }
-  | undefined {
+}): PluginToolLoadState | undefined {
   const env = params.env ?? process.env;
   const baseConfig = applyTestPluginDefaults(params.context.config ?? {}, env);
   const preparedLoadContext = params.preparedRuntime?.loadContext;
@@ -746,7 +750,7 @@ export function ensureStandalonePluginToolRegistryLoaded(params: {
   });
 }
 
-export function resolvePluginTools(params: {
+type PluginToolResolutionParams = {
   context: OpenClawPluginToolContext;
   existingToolNames?: Set<string>;
   clientCaps?: string[];
@@ -758,14 +762,63 @@ export function resolvePluginTools(params: {
   env?: NodeJS.ProcessEnv;
   runtimeRegistry?: PluginRegistry;
   preparedRuntime?: PreparedPluginToolRuntime;
-}): AnyAgentTool[] {
+};
+
+export type PluginToolRegistryAcquisition = {
+  registry?: PluginRegistry;
+  resolveTools: () => AnyAgentTool[];
+  release: () => Promise<void>;
+};
+
+/** The serving owner retains this view before invoking factories or applying tool policy. */
+export async function acquireStandalonePluginToolRegistry(
+  params: Omit<PluginToolResolutionParams, "runtimeRegistry" | "preparedRuntime">,
+): Promise<PluginToolRegistryAcquisition> {
+  const loadState = resolvePluginToolLoadState(params);
+  if (!loadState || loadState.onlyPluginIds.length === 0) {
+    return { resolveTools: () => [], release: async () => {} };
+  }
+  const acquisition = await acquirePluginRegistryForInspection(loadState.loadOptions);
+  const hasAuthority = capturePluginLifecycleAuthority(acquisition.registry, undefined, {
+    scopedRuntime: true,
+  });
+  return {
+    ...acquisition,
+    resolveTools: () => {
+      if (!hasAuthority?.()) {
+        throw new Error("Plugin tool registry has been released");
+      }
+      return resolvePluginToolsFromRegistry(params, loadState, acquisition.registry);
+    },
+  };
+}
+
+export function resolvePluginTools(params: PluginToolResolutionParams): AnyAgentTool[] {
   // Fast path: when plugins are effectively disabled, avoid discovery/jiti entirely.
   // This matters a lot for unit tests and for tool construction hot paths.
   const loadState = resolvePluginToolLoadState(params);
-  if (!loadState) {
+  if (!loadState || loadState.onlyPluginIds.length === 0) {
     return [];
   }
-  const { context, env, onlyPluginIds, allowlist, loadOptions, snapshot } = loadState;
+  const runtimeRegistry =
+    loadState.context === params.preparedRuntime?.loadContext
+      ? params.preparedRuntime.registry
+      : params.runtimeRegistry;
+  const registry = resolvePluginToolRegistry({
+    loadOptions: loadState.loadOptions,
+    onlyPluginIds: loadState.onlyPluginIds,
+    runtimeRegistry,
+    manifestPlugins: loadState.snapshot.plugins,
+  });
+  return resolvePluginToolsFromRegistry(params, loadState, registry);
+}
+
+function resolvePluginToolsFromRegistry(
+  params: PluginToolResolutionParams,
+  loadState: PluginToolLoadState,
+  registry: PluginRegistry | undefined,
+): AnyAgentTool[] {
+  const { context, env, onlyPluginIds, allowlist, snapshot } = loadState;
   const tools: AnyAgentTool[] = [];
   const existing = params.existingToolNames ?? new Set<string>();
   const existingNormalized = new Set(Array.from(existing, (tool) => normalizeToolPolicyName(tool)));
@@ -775,19 +828,6 @@ export function resolvePluginTools(params: {
   const pluginToolOwnersByName = new Map<string, string>();
   const denylist = normalizeDenylist(params.toolDenylist);
   const clientCaps = new Set(params.clientCaps ?? []);
-  const runtimeRegistry =
-    context === params.preparedRuntime?.loadContext
-      ? params.preparedRuntime.registry
-      : params.runtimeRegistry;
-  if (onlyPluginIds.length === 0) {
-    return tools;
-  }
-  const registry = resolvePluginToolRegistry({
-    loadOptions,
-    onlyPluginIds,
-    runtimeRegistry,
-    manifestPlugins: snapshot.plugins,
-  });
   if (!registry) {
     context.logger.warn(
       `plugin tool registry unavailable for plugin ids [${onlyPluginIds.join(", ")}]`,

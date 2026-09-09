@@ -8,6 +8,7 @@ import { describe, expect, it } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { consumeTrackedToolExecutionStarted } from "../agents/agent-tools.before-tool-call.state.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
+import { LegacyPluginSdkResourceHost } from "../plugins/legacy-sdk-resource-host.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { createToolsMcpServer } from "./tools-stdio-server.js";
 
@@ -81,9 +82,11 @@ describe("plugin tools MCP cancellation", () => {
     }
   });
 
-  it.each(["handler", "descendant"] as const)(
-    "joins native %s work before close releases its database and permits reconnect",
-    async (mode) => {
+  it.each(
+    ["handler", "descendant"].flatMap((mode) => [false, true].map((hosted) => ({ mode, hosted }))),
+  )(
+    "joins native $mode work before close and reconnect (SDK host: $hosted)",
+    async ({ mode, hosted }) => {
       let database = new DatabaseSync(":memory:");
       const started = createDeferred();
       const finish = createDeferred();
@@ -117,7 +120,8 @@ describe("plugin tools MCP cancellation", () => {
           return { content: [{ type: "text", text: "accepted" }], details: {} };
         },
       };
-      const server = createToolsMcpServer({ name: "native-drain", tools: [tool] });
+      const sdkResourceHost = hosted ? new LegacyPluginSdkResourceHost() : undefined;
+      const server = createToolsMcpServer({ name: "native-drain", tools: [tool], sdkResourceHost });
       const clients: Client[] = [];
       const connect = async () => {
         const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
@@ -196,6 +200,7 @@ describe("plugin tools MCP cancellation", () => {
         await siblingClose;
         await Promise.all(clients.map((client) => client.close()));
         await server.close();
+        await sdkResourceHost?.close();
         if (database.isOpen) {
           database.close();
         }

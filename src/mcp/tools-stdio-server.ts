@@ -1,4 +1,5 @@
 // MCP stdio server exposes OpenClaw tools over the MCP stdio transport.
+import { AsyncLocalStorage } from "node:async_hooks";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import {
@@ -8,8 +9,10 @@ import {
   McpError,
 } from "@modelcontextprotocol/sdk/types.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
-import { formatErrorMessage } from "../infra/errors.js";
 import { routeLogsToStderr } from "../logging/console.js";
+import { LegacyPluginSdkResourceHost } from "../plugins/legacy-sdk-resource-host.js";
+import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
+import type { PluginToolRegistryAcquisition } from "../plugins/tools.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { VERSION } from "../version.js";
@@ -50,39 +53,58 @@ class ToolsMcpServer extends Server {
   }
 }
 
-export function createToolsMcpServer(params: { name: string; tools: AnyAgentTool[] }): Server {
+export function createToolsMcpServer(params: {
+  name: string;
+  tools: AnyAgentTool[];
+  sdkResourceHost?: LegacyPluginSdkResourceHost;
+}): Server {
   const handlers = createPluginToolsMcpHandlers(params.tools);
   const server = new ToolsMcpServer(
     { name: params.name, version: VERSION },
     { capabilities: { tools: {} } },
   );
+  const servingContext = params.sdkResourceHost?.run(() => AsyncLocalStorage.snapshot());
+  const runInServingContext = <T>(run: () => T): T =>
+    servingContext ? servingContext(run) : run();
 
   server.setRequestHandler(ListToolsRequestSchema, async (_request, extra) => {
-    return await server.runRequest(handlers.listTools, extra.signal);
+    return await runInServingContext(() => server.runRequest(handlers.listTools, extra.signal));
   });
   server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
-    return await server.runRequest(
-      async () => await handlers.callTool(request.params, extra.signal),
-      extra.signal,
+    // Restore serving authority before runRequest installs the accepted-work scope.
+    return await runInServingContext(() =>
+      server.runRequest(async () => {
+        if (!params.sdkResourceHost) {
+          return await handlers.callTool(request.params, extra.signal);
+        }
+        const controller = new AbortController();
+        const requestContext = AsyncLocalStorage.snapshot();
+        // Protocol cancellation can arrive under another request or process event's context.
+        const abort = () => requestContext(() => controller.abort(extra.signal.reason));
+        extra.signal.addEventListener("abort", abort, { once: true });
+        try {
+          if (extra.signal.aborted) {
+            abort();
+          }
+          return await handlers.callTool(request.params, controller.signal);
+        } finally {
+          extra.signal.removeEventListener("abort", abort);
+        }
+      }, extra.signal),
     );
   });
 
   return server;
 }
 
-export async function connectToolsMcpServerToStdio(
-  server: Server,
-  options: { onShutdown?: () => Promise<void> | void } = {},
-): Promise<void> {
+export async function connectToolsMcpServerToStdio(server: Server): Promise<void> {
   // MCP stdio requires stdout to stay protocol-only.
   routeLogsToStderr();
 
   const transport = new StdioServerTransport();
+  const previousOnClose = server.onclose;
   let shuttingDown = false;
-  let resolveShutdown: (() => void) | undefined;
-  const shutdownComplete = new Promise<void>((resolve) => {
-    resolveShutdown = resolve;
-  });
+  const shutdownComplete = createDeferredCore<unknown[]>();
   const shutdown = () => {
     if (shuttingDown) {
       return;
@@ -92,39 +114,101 @@ export async function connectToolsMcpServerToStdio(
     process.stdin.off("close", shutdown);
     process.off("SIGINT", shutdown);
     process.off("SIGTERM", shutdown);
+    if (server.onclose === onServerClose) {
+      // oxlint-disable-next-line unicorn/prefer-add-event-listener -- MCP Server exposes a callback property, not EventTarget.
+      server.onclose = previousOnClose;
+    }
     void (async () => {
-      let shutdownError: unknown;
       try {
         await server.close();
+        shutdownComplete.resolve([]);
       } catch (error) {
-        shutdownError = error;
-      }
-      try {
-        await options.onShutdown?.();
-      } catch (error) {
-        shutdownError ??= error;
-      } finally {
-        resolveShutdown?.();
-      }
-      if (shutdownError) {
-        process.stderr.write(`MCP stdio shutdown failed: ${formatErrorMessage(shutdownError)}\n`);
+        shutdownComplete.resolve([error]);
       }
     })();
   };
+  const onServerClose = () => {
+    try {
+      previousOnClose?.call(server);
+    } finally {
+      shutdown();
+    }
+  };
 
+  // Transport closure is terminal for this stdio owner, not for the reusable Server class.
+  // oxlint-disable-next-line unicorn/prefer-add-event-listener -- MCP Server exposes a callback property, not EventTarget.
+  server.onclose = onServerClose;
   process.stdin.once("end", shutdown);
   process.stdin.once("close", shutdown);
   process.once("SIGINT", shutdown);
   process.once("SIGTERM", shutdown);
 
+  const failures: unknown[] = [];
   try {
     await server.connect(transport);
   } catch (error) {
+    failures.push(error);
     shutdown();
-    await shutdownComplete;
-    throw error;
   }
-  if (options.onShutdown) {
-    await shutdownComplete;
+  failures.push(...(await shutdownComplete.promise));
+  if (failures.length === 1) {
+    throw failures[0];
+  }
+  if (failures.length > 1) {
+    throw new AggregateError(failures, "MCP connection and transport shutdown failed");
+  }
+}
+
+/** Owns discovered registrations and nested SDK borrows for one terminal stdio service. */
+export async function serveRegisteredToolsMcpServer(params: {
+  acquireRegistry: () => Promise<PluginToolRegistryAcquisition>;
+  createServer: (tools: AnyAgentTool[], sdkResourceHost: LegacyPluginSdkResourceHost) => Server;
+}): Promise<void> {
+  const sdkResourceHost = new LegacyPluginSdkResourceHost();
+  let acquisition: PluginToolRegistryAcquisition | undefined;
+
+  const failures: unknown[] = [];
+  try {
+    await sdkResourceHost.run(async () => {
+      acquisition = await params.acquireRegistry();
+      const owned = acquisition;
+      await withPluginRuntimeRegistryScope(owned.registry, async () => {
+        const server = params.createServer(owned.resolveTools(), sdkResourceHost);
+        await connectToolsMcpServerToStdio(server);
+      });
+    });
+  } catch (error) {
+    failures.push(error);
+  }
+  try {
+    await sdkResourceHost.run(async () => {
+      const registry = acquisition?.registry;
+      if (registry?.agentHarnesses.length) {
+        try {
+          const { disposeRegisteredAgentHarnesses } = await import("../agents/harness/registry.js");
+          await withPluginRuntimeRegistryScope(registry, disposeRegisteredAgentHarnesses);
+        } catch (error) {
+          failures.push(error);
+        }
+      }
+      // SDK results may retain the same source; both owners must release before physical disposal.
+      const released = await Promise.allSettled([
+        Promise.resolve().then(() => acquisition?.release()),
+        Promise.resolve().then(() => sdkResourceHost.close()),
+      ]);
+      for (const result of released) {
+        if (result.status === "rejected") {
+          failures.push(result.reason);
+        }
+      }
+    });
+  } catch (error) {
+    failures.push(error);
+  }
+  if (failures.length === 1) {
+    throw failures[0];
+  }
+  if (failures.length > 1) {
+    throw new AggregateError(failures, "MCP serving and registration cleanup failed");
   }
 }
