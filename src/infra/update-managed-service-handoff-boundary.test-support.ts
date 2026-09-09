@@ -329,7 +329,8 @@ export function createManagedServiceManagerBoundary({
             ? {}
             : { parentExitDeadlineAt: Date.now() + options.systemdHandoffDeadlineMs }),
           ...commandFixture,
-          ...(options?.recoveryHang || options?.triageHang ? { recoveryTimeoutMs: 1000 } : {}),
+          // Triage hangs must reach the diagnostic cap without timing out healthy recovery.
+          ...(options?.recoveryHang ? { recoveryTimeoutMs: 1000 } : {}),
           recovery: { serviceRestartSafe: true, version: "1.0.0" },
           recoveryModulePath,
           commandArgv: [process.execPath, "-e", updaterScript],
