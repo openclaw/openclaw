@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferredCore } from "../../../../src/shared/deferred.js";
 import type { SessionCreateOutcome } from "../../lib/sessions/create.ts";
 import { createSkillWorkshopState, skillWorkshopRouteData } from "./proposals.ts";
 import {
@@ -33,7 +34,7 @@ async function mountLearningPage() {
 describe("Workshop learning session", () => {
   it("starts one ordinary session and opens its acknowledged run", async () => {
     const { context, button } = await mountLearningPage();
-    const creation = Promise.withResolvers<SessionCreateOutcome | null>();
+    const creation = createDeferredCore<SessionCreateOutcome | null>();
     context.sessions.createResult = vi.fn(() => creation.promise);
     button.click();
     button.click();
@@ -71,7 +72,7 @@ describe("Workshop learning session", () => {
 
   it("retains an accepted run without redirecting a replaced Workshop page", async () => {
     const { page, context, button } = await mountLearningPage();
-    const creation = Promise.withResolvers<SessionCreateOutcome | null>();
+    const creation = createDeferredCore<SessionCreateOutcome | null>();
     context.sessions.createResult = vi.fn(() => creation.promise);
     button.click();
     page.remove();

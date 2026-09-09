@@ -45,7 +45,7 @@ import {
 
 // Plugin-wide fuse only; namespace maxEntries still owns normal cache eviction.
 export const MAX_PLUGIN_STATE_VALUE_BYTES = 1_048_576;
-export const MAX_PLUGIN_STATE_ENTRIES_PER_PLUGIN = 50_000;
+const MAX_PLUGIN_STATE_ENTRIES_PER_PLUGIN = 50_000;
 export const MAX_PLUGIN_STATE_BULK_DELETE_ENTRIES = 512;
 const PLUGIN_STATE_EXPIRY_BATCH_ROWS = 1_024;
 export const PLUGIN_STATE_DOCTOR_IMPORT_BATCH_ROWS = 500;
