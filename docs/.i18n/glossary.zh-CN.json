@@ -2800,6 +2800,42 @@
     "target": "浏览器控制风险"
   },
   {
+    "source": "Browser setup",
+    "target": "浏览器设置"
+  },
+  {
+    "source": "Browser profiles",
+    "target": "浏览器配置文件"
+  },
+  {
+    "source": "Browser configuration",
+    "target": "浏览器配置"
+  },
+  {
+    "source": "Remote and hosted browsers",
+    "target": "远程与托管浏览器"
+  },
+  {
+    "source": "Browser security",
+    "target": "浏览器安全"
+  },
+  {
+    "source": "Multi-profile and existing-session attach",
+    "target": "多配置文件与现有会话接入"
+  },
+  {
+    "source": "Isolation and browser selection",
+    "target": "隔离与浏览器选择"
+  },
+  {
+    "source": "Browser troubleshooting",
+    "target": "浏览器故障排查"
+  },
+  {
+    "source": "Browser agent tools",
+    "target": "浏览器代理工具"
+  },
+  {
     "source": "Network exposure",
     "target": "网络暴露面"
   },
