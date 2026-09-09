@@ -126,7 +126,7 @@ Top-level keys under `plugins.entries.voice-call.config` not shown above:
 | `agentId`                       | sole agent   | Agent used for response generation and session storage. Set explicitly with multiple agents.                                    |
 | `responseModel`                 | unset        | Overrides the default model for classic (non-realtime) responses.                                                               |
 | `responseSystemPrompt`          | generated    | Custom system prompt for classic responses.                                                                                     |
-| `responseTimeoutMs`             | `30000`      | Timeout for classic response generation (ms).                                                                                   |
+| `responseTimeoutMs`             | `30000`      | Classic response timeout and realtime supervisor inactivity deadline (ms).                                                      |
 
 Twilio defaults to its US1 REST endpoint. To process calls in a supported
 non-US Region, set `twilio.region` to `ie1` or `au1` and use credentials from

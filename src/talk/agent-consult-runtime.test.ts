@@ -23,6 +23,11 @@ import {
   REALTIME_VOICE_AGENT_CONSULT_SENDER_AUTH_VERSION,
 } from "./agent-consult-runtime.js";
 import {
+  createAgentRuntime,
+  setAgentConsultTestTempDir,
+  testTempPath,
+} from "./agent-consult-runtime.test-support.js";
+import {
   REALTIME_VOICE_AGENT_CONSULT_TOOL,
   resolveRealtimeVoiceAgentConsultTools,
   resolveRealtimeVoiceAgentConsultToolsAllow,
@@ -55,102 +60,6 @@ vi.mock("../auto-reply/reply/session-fork.js", async (importOriginal) => {
 
 let testTempDir: string | undefined;
 const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
-
-function testTempPath(name: string): string {
-  if (!testTempDir) {
-    throw new Error("Expected an isolated consult runtime test directory");
-  }
-  return path.join(testTempDir, name);
-}
-
-function createAgentRuntime(payloads: unknown[] = [{ text: "Speak this." }]) {
-  const sessionStore: Record<
-    string,
-    {
-      sessionId?: string;
-      updatedAt?: number;
-      createdVia?: SessionEntry["createdVia"];
-      createdActor?: SessionEntry["createdActor"];
-      createdAt?: number;
-      sandbox?: SessionEntry["sandbox"];
-      archivedAt?: number;
-      sessionFile?: string;
-      spawnedBy?: string;
-      agentHarnessId?: string;
-      modelSelectionLocked?: boolean;
-      forkedFromParent?: boolean;
-      totalTokens?: number;
-      delivery?: SessionEntry["delivery"];
-      permissionMode?: SessionEntry["permissionMode"];
-      toolOverrides?: SessionEntry["toolOverrides"];
-    }
-  > = {};
-  const runEmbeddedAgent = vi.fn(async (_params?: RunEmbeddedAgentParams) => ({
-    payloads,
-    meta: {},
-  }));
-  const updateSessionStore = vi.fn(
-    async (
-      _storePath: string,
-      mutator: (store: Record<string, { sessionId?: string; updatedAt?: number }>) => unknown,
-    ) => {
-      return await mutator(sessionStore);
-    },
-  );
-  const getSessionEntry = vi.fn(
-    (params: { sessionKey: string }) => sessionStore[params.sessionKey],
-  );
-  const patchSessionEntry = vi.fn(
-    async (params: {
-      sessionKey: string;
-      fallbackEntry?: Record<string, unknown>;
-      update: (
-        entry: Record<string, unknown>,
-      ) => Promise<Record<string, unknown> | null> | Record<string, unknown> | null;
-    }) => {
-      const existing = sessionStore[params.sessionKey] ?? params.fallbackEntry;
-      if (!existing) {
-        return null;
-      }
-      const patch = await params.update({ ...existing });
-      if (!patch) {
-        return existing;
-      }
-      const next = { ...existing, ...patch };
-      sessionStore[params.sessionKey] = next;
-      return next;
-    },
-  );
-  const upsertSessionEntry = vi.fn(
-    async (params: { sessionKey: string; entry: Record<string, unknown> }) => {
-      sessionStore[params.sessionKey] = { ...params.entry };
-    },
-  );
-  return {
-    runtime: {
-      resolveAgentDir: vi.fn(() => testTempPath("agent")),
-      resolveAgentWorkspaceDir: vi.fn(() => testTempPath("workspace")),
-      ensureAgentWorkspace: vi.fn(async () => {}),
-      resolveAgentTimeoutMs: vi.fn(() => 30_000),
-      session: {
-        resolveStorePath: vi.fn(() => testTempPath("sessions.json")),
-        loadSessionStore: vi.fn(() => sessionStore),
-        saveSessionStore: vi.fn(async () => {}),
-        updateSessionStore,
-        getSessionEntry,
-        patchSessionEntry,
-        upsertSessionEntry,
-        resolveSessionFilePath: vi.fn(
-          (_sessionId: string, entry?: { sessionFile?: string }) =>
-            entry?.sessionFile ?? testTempPath("session.json"),
-        ),
-      },
-      runEmbeddedAgent,
-    },
-    runEmbeddedAgent,
-    sessionStore,
-  };
-}
 
 function requireEmbeddedAgentCall(runEmbeddedAgent: {
   mock: { calls: unknown[][] };
@@ -189,6 +98,7 @@ describe("realtime voice agent consult runtime", () => {
     testTempDir = await fs.realpath(
       await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-talk-consult-")),
     );
+    setAgentConsultTestTempDir(testTempDir);
     setTestEnvValue("OPENCLAW_STATE_DIR", testTempDir);
   });
 
@@ -196,6 +106,7 @@ describe("realtime voice agent consult runtime", () => {
     sessionForkMocks.forkSessionEntryFromParent.mockReset();
     const tempDir = testTempDir;
     testTempDir = undefined;
+    setAgentConsultTestTempDir(undefined);
     if (tempDir) {
       closeOpenClawAgentDatabaseByPath(path.join(tempDir, "openclaw-agent.sqlite"));
       clientVoiceSessionTesting.reset();
@@ -246,6 +157,136 @@ describe("realtime voice agent consult runtime", () => {
       }),
     ).rejects.toThrow("voice session closed");
     expect(runEmbeddedAgent).not.toHaveBeenCalled();
+  });
+
+  it("forwards visible partial replies before completion without exposing private lanes", async () => {
+    const { runtime, runEmbeddedAgent } = createAgentRuntime();
+    const partialDelivered = createDeferred();
+    const releaseFinal = createDeferred();
+    const events: Array<{ kind: string; at: number; text?: string }> = [];
+    const startedAt = performance.now();
+    runEmbeddedAgent.mockImplementationOnce(async (params?: RunEmbeddedAgentParams) => {
+      if (!params) {
+        throw new Error("Expected embedded agent params");
+      }
+      expect(params.onReasoningStream).toBeUndefined();
+      expect(params.onToolResult).toBeUndefined();
+      expect(params.onAgentToolResult).toBeUndefined();
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 20);
+      });
+      params.onExecutionPhase?.({
+        phase: "tool_execution_started",
+        tool: "private-tool-name",
+        toolCallId: "private-tool-call",
+      });
+      events.push({ kind: "tool-progress", at: performance.now() });
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 20);
+      });
+      await params.onPartialReply?.({ text: "The first safe sentence." });
+      events.push({ kind: "agent-partial-returned", at: performance.now() });
+      await releaseFinal.promise;
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 20);
+      });
+      events.push({ kind: "agent-completed", at: performance.now() });
+      return { payloads: [{ text: "The first safe sentence. Final detail." }], meta: {} };
+    });
+
+    const consult = consultRealtimeVoiceAgent({
+      cfg: {} as never,
+      agentRuntime: runtime as never,
+      logger: { warn: vi.fn() },
+      sessionKey: "voice:streaming",
+      messageProvider: "voice",
+      lane: "voice",
+      runIdPrefix: "voice-realtime-consult:streaming",
+      args: { question: "Check it" },
+      transcript: [],
+      surface: "a live phone call",
+      userLabel: "Caller",
+      progressTimeoutMs: 1_000,
+      onVisiblePartial: (partial) => {
+        events.push({ kind: "voice-partial", at: performance.now(), text: partial.text });
+        partialDelivered.resolve();
+      },
+    });
+
+    await partialDelivered.promise;
+    const voicePartial = events.find((event) => event.kind === "voice-partial");
+    expect(voicePartial).toBeDefined();
+    expect(events.some((event) => event.kind === "agent-completed")).toBe(false);
+    expect(voicePartial?.text).toBe("The first safe sentence.");
+    releaseFinal.resolve();
+    await expect(consult).resolves.toEqual({
+      text: "The first safe sentence. Final detail.",
+    });
+    expect(voicePartial!.at).toBeLessThan(events.at(-1)!.at);
+    console.log(
+      `[voice-consult-harness] ${JSON.stringify({
+        toolProgressMs: Math.round(
+          events.find((event) => event.kind === "tool-progress")!.at - startedAt,
+        ),
+        firstSupervisorPhraseMs: Math.round(
+          events.find((event) => event.kind === "voice-partial")!.at - startedAt,
+        ),
+        finalResponseMs: Math.round(events.at(-1)!.at - startedAt),
+      })}`,
+    );
+  });
+
+  it("extends the stall deadline only for visible text and tool execution", async () => {
+    const { runtime, runEmbeddedAgent } = createAgentRuntime();
+    let runParams: RunEmbeddedAgentParams | undefined;
+    const started = createDeferred();
+    runEmbeddedAgent.mockImplementationOnce(async (params?: RunEmbeddedAgentParams) => {
+      if (!params) {
+        throw new Error("Expected embedded agent params");
+      }
+      runParams = params;
+      started.resolve();
+      return await new Promise((_resolve, reject) => {
+        params.abortSignal?.addEventListener(
+          "abort",
+          () => {
+            const reason = params.abortSignal?.reason;
+            reject(reason instanceof Error ? reason : new Error("Consult aborted"));
+          },
+          { once: true },
+        );
+      });
+    });
+    vi.useFakeTimers();
+
+    const consult = consultRealtimeVoiceAgent({
+      cfg: {} as never,
+      agentRuntime: runtime as never,
+      logger: { warn: vi.fn() },
+      sessionKey: "voice:progress-timeout",
+      messageProvider: "voice",
+      lane: "voice",
+      runIdPrefix: "voice-realtime-consult:progress-timeout",
+      args: { question: "Check it" },
+      transcript: [],
+      surface: "a live phone call",
+      userLabel: "Caller",
+      progressTimeoutMs: 100,
+      onVisiblePartial: vi.fn(),
+    });
+    const timeoutExpectation = expect(consult).rejects.toMatchObject({ name: "TimeoutError" });
+
+    await started.promise;
+    await vi.advanceTimersByTimeAsync(80);
+    await runParams?.onPartialReply?.({ text: "Visible progress." });
+    await vi.advanceTimersByTimeAsync(80);
+    expect(runParams?.abortSignal?.aborted).toBe(false);
+    runParams?.onExecutionPhase?.({ phase: "tool_execution_started", tool: "read" });
+    await vi.advanceTimersByTimeAsync(80);
+    expect(runParams?.abortSignal?.aborted).toBe(false);
+    await vi.advanceTimersByTimeAsync(21);
+
+    await timeoutExpectation;
   });
 
   it("binds GPT-Live delegated runs to spoken confirmation until completion", async () => {

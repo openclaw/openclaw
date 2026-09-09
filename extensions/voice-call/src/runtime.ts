@@ -455,6 +455,11 @@ export async function createVoiceCallRuntime(params: {
             ),
             extraSystemPrompt: REALTIME_VOICE_CONSULT_SYSTEM_PROMPT,
             abortSignal: handlerContext.abortSignal,
+            progressTimeoutMs: effectiveConfig.responseTimeoutMs,
+            onRunStarted: ({ runId }) => {
+              handlerContext.consultStream?.onRunStarted(runId);
+            },
+            onVisiblePartial: (partial) => handlerContext.consultStream?.onVisiblePartial(partial),
           });
         },
       );

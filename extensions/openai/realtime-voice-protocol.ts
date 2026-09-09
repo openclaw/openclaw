@@ -36,6 +36,8 @@ export abstract class OpenAIRealtimeProtocol {
 
   readonly supportsToolResultSuppression = true;
 
+  readonly supportsOutOfBandSpeech = true;
+
   protected nextMarkSequence = 1;
 
   protected oldestOutstandingMarkSequence: number | null = null;
@@ -256,6 +258,9 @@ export abstract class OpenAIRealtimeProtocol {
   }
 
   handleBargeIn(options?: RealtimeVoiceBargeInOptions): void {
+    // Retire queued side-channel speech even when playback interruption is already
+    // in progress or the audible prefix is below the echo-suppression threshold.
+    this.clearPendingSpeech();
     // Wire observers can synchronously reenter while the sink still owns its snapshot.
     if (this.interruptingPlayback) {
       return;
@@ -267,6 +272,10 @@ export abstract class OpenAIRealtimeProtocol {
       this.interruptingPlayback = false;
     }
     this.drainResponseQueue();
+  }
+
+  clearPendingSpeech(): void {
+    this.standaloneSpeechQueue = [];
   }
 
   private interruptPlayback(options?: RealtimeVoiceBargeInOptions): void {

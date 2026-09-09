@@ -33,6 +33,11 @@ import { normalizeWebhookPath } from "openclaw/plugin-sdk/webhook-ingress";
 import { resolveVoiceCallPublicPathPrefix, type VoiceCallRealtimeConfig } from "../config.js";
 import type { CallManager } from "../manager.js";
 import { REALTIME_VOICE_END_CALL_TOOL_NAME } from "../realtime-call-control.js";
+import {
+  createRealtimeConsultSpeechStream,
+  type RealtimeConsultSpeechStream,
+  type RealtimeConsultVisiblePartial,
+} from "../realtime-consult-speech-stream.js";
 import type { CallRecord, EndReason, NormalizedEvent } from "../types.js";
 import type { WebhookResponsePayload } from "../webhook.types.js";
 import { WebSocket, WebSocketServer } from "../websocket.js";
@@ -47,6 +52,10 @@ import {
 export type ToolHandlerContext = {
   partialUserTranscript?: string;
   abortSignal?: AbortSignal;
+  consultStream?: {
+    onRunStarted: (runId: string) => void;
+    onVisiblePartial: (partial: RealtimeConsultVisiblePartial) => void;
+  };
 };
 type ToolHandlerFn = (
   args: unknown,
@@ -300,6 +309,8 @@ type NativeConsultState = {
   cancelled: boolean;
   cancel: () => void;
   partialUserTranscript?: string;
+  speechStream?: RealtimeConsultSpeechStream;
+  suppressFinalResponse?: boolean;
 };
 
 type NativeConsultOutcome = { kind: "completed"; result: unknown } | { kind: "cancelled" };
@@ -776,6 +787,10 @@ export class RealtimeCallHandler {
       interruptProvider?: (audioPlaybackActive: boolean) => void,
       clearedAudioBytes = 0,
     ): void => {
+      const consultOwner = nativeConsultOwner.current;
+      if (consultOwner) {
+        this.resetConsultSession(callId, consultOwner);
+      }
       const outputAudioActive = harness.talk.outputAudioActive;
       const pendingTelephonyAudio = audioPacer.hasPendingAudio();
       if (
@@ -1858,8 +1873,11 @@ export class RealtimeCallHandler {
         final: true,
       });
     };
-    const submitFinalToolResult = async (result: unknown): Promise<void> => {
-      await bridge.submitToolResult(bridgeCallId, result);
+    const submitFinalToolResult = async (
+      result: unknown,
+      options?: { suppressResponse?: boolean },
+    ): Promise<void> => {
+      await bridge.submitToolResult(bridgeCallId, result, options);
       emitFinalToolEvent(result);
     };
     const submitWorkingResponse = async (speakAcknowledgement = false): Promise<void> => {
@@ -1880,7 +1898,7 @@ export class RealtimeCallHandler {
           callId: bridgeCallId,
           payload: { name, status: "working" },
         });
-        if (speakAcknowledgement) {
+        if (speakAcknowledgement && bridge.bridge.supportsOutOfBandSpeech === true) {
           bridge.sendUserMessage(
             buildRealtimeVoiceSpeakExactMessage({
               text: CONSULT_ACKNOWLEDGEMENT,
@@ -1950,7 +1968,10 @@ export class RealtimeCallHandler {
         if (outcome.kind === "cancelled") {
           return;
         }
-        await submitFinalToolResult(outcome.result);
+        await submitFinalToolResult(
+          outcome.result,
+          existingNativeConsult.suppressFinalResponse ? { suppressResponse: true } : undefined,
+        );
         return;
       }
 
@@ -1971,10 +1992,32 @@ export class RealtimeCallHandler {
         cancelled: false,
         // Provider continuity owns the consult lifetime, not only its eventual result.
         cancel: () => {
+          state.speechStream?.cancel();
           abortController.abort(new Error("Realtime native consult owner was cancelled."));
           releaseCancellation();
         },
       };
+      const supportsIncrementalSpeech =
+        bridge.bridge.supportsOutOfBandSpeech === true &&
+        bridge.bridge.supportsToolResultSuppression === true;
+      const speechStream = supportsIncrementalSpeech
+        ? createRealtimeConsultSpeechStream({
+            deliver: (text) => {
+              if (
+                state.cancelled ||
+                this.nativeConsultsInFlightByCallId.get(callId) !== state ||
+                this.activeBridgesByCallId.get(callId) !== bridge
+              ) {
+                return;
+              }
+              bridge.sendUserMessage(
+                buildRealtimeVoiceSpeakExactMessage({ text, surfaceLabel: "the caller" }),
+              );
+            },
+            onCancel: () => bridge.bridge.clearPendingSpeech?.(),
+          })
+        : undefined;
+      state.speechStream = speechStream;
       this.nativeConsultsInFlightByCallId.set(callId, state);
       void (async () => {
         try {
@@ -1992,15 +2035,27 @@ export class RealtimeCallHandler {
           const context = {
             partialUserTranscript: this.resolveUserTranscriptContext(callId, userTranscriptOwner),
             abortSignal: abortController.signal,
+            consultStream: speechStream
+              ? {
+                  onRunStarted: (runId: string) => speechStream.start(runId),
+                  onVisiblePartial: (partial: RealtimeConsultVisiblePartial) =>
+                    speechStream.push(partial),
+                }
+              : undefined,
           };
           state.partialUserTranscript = context.partialUserTranscript;
           const handlerArgs = withFallbackConsultQuestion(args, context.partialUserTranscript);
           console.log(
             `[voice-call] realtime tool call executing callId=${callId} tool=${name} hasHandler=${Boolean(handler)}`,
           );
-          return !handler
+          const result = !handler
             ? { error: `Tool "${name}" not available` }
             : await handler(handlerArgs, callId, context);
+          const finalText = readSpeakableRealtimeVoiceToolResult(result);
+          if (finalText && speechStream) {
+            state.suppressFinalResponse = speechStream.finish(finalText);
+          }
+          return result;
         } catch (error) {
           return buildRealtimeVoiceAgentErrorProviderResult(error);
         }
@@ -2016,7 +2071,10 @@ export class RealtimeCallHandler {
         console.log(
           `[voice-call] realtime tool call completed callId=${callId} tool=${name} status=${failed ? "error" : "ok"} elapsedMs=${Date.now() - startedAt}${error ? ` error=${error}` : ""}`,
         );
-        await submitFinalToolResult(result);
+        await submitFinalToolResult(
+          result,
+          state.suppressFinalResponse ? { suppressResponse: true } : undefined,
+        );
         if (!failed) {
           this.consumePartialUserTranscript(
             callId,
