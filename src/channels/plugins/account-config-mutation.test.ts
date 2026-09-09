@@ -251,6 +251,13 @@ describe("channel account config mutations", () => {
       ...createChannelTestPluginBase({
         id: "test-chat",
         config: {
+          // The shared base lists a fixed "default"; removal now asks the channel which
+          // accounts it has, so this fixture reports the ones its config declares.
+          listAccountIds: (listCfg) =>
+            Object.keys(
+              (listCfg.channels?.["test-chat"] as { accounts?: Record<string, unknown> })
+                ?.accounts ?? {},
+            ),
           deleteAccount: ({ cfg: inputCfg, accountId }) => {
             const channel = inputCfg.channels?.["test-chat"] as {
               accounts?: Record<string, Record<string, unknown>>;

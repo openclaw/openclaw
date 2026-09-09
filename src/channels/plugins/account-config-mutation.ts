@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { err as resultError, ok, type Result } from "@openclaw/normalization-core/result";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -184,9 +185,44 @@ type PreparedChannelAccountRemoval = {
 };
 
 type ChannelAccountRemovalError = {
-  kind: "unsupported-action";
+  kind: "unsupported-action" | "nothing-to-remove";
   action: ChannelAccountRemovalAction;
 };
+
+function writesSameConfig(a: OpenClawConfig, b: OpenClawConfig): boolean {
+  // Section transforms prune by leaving `undefined` members behind, which the config
+  // writer drops. Compare what would be written, not the in-memory objects.
+  // oxlint-disable-next-line unicorn/prefer-structured-clone -- structuredClone keeps the pruned `undefined` members this must drop.
+  const written = (cfg: OpenClawConfig): unknown => JSON.parse(JSON.stringify(cfg));
+  return isDeepStrictEqual(written(a), written(b));
+}
+
+/**
+ * True when the channel has no such account to remove.
+ *
+ * Two signals, both required, because neither is sound alone: the channel must list the
+ * account, since a removal transform may take more with it than the account named, and
+ * removing it must change the written config, since a listing also reports fallback and
+ * owner-discovered ids that own no configuration.
+ */
+function channelAccountIsAbsent(params: {
+  plugin: ChannelAccountMutationPlugin;
+  cfg: OpenClawConfig;
+  accountId: string;
+}): boolean {
+  if (!params.plugin.config.listAccountIds(params.cfg).includes(params.accountId)) {
+    return true;
+  }
+  const deleteAccount = params.plugin.config.deleteAccount;
+  // A channel that cannot remove an account cannot answer the second question.
+  if (!deleteAccount) {
+    return false;
+  }
+  return writesSameConfig(
+    deleteAccount({ cfg: { ...params.cfg }, accountId: params.accountId }),
+    params.cfg,
+  );
+}
 
 export function prepareChannelAccountRemoval(params: {
   plugin: ChannelAccountMutationPlugin;
@@ -223,6 +259,17 @@ export async function applyPreparedChannelAccountRemoval(params: {
       cfg: { ...params.cfg },
       accountId,
     });
+    // Removal maps any id onto a config key, so deleting an account the channel does not
+    // have leaves the config untouched. Report that instead of running the removal
+    // lifecycle and persisting an unchanged config as a completed deletion. The result is
+    // already computed here, so this repeats channelAccountIsAbsent without re-running the
+    // transform.
+    if (
+      !plugin.config.listAccountIds(params.cfg).includes(accountId) ||
+      writesSameConfig(nextConfig, params.cfg)
+    ) {
+      return resultError({ kind: "nothing-to-remove", action });
+    }
     await plugin.lifecycle?.onAccountRemoved?.({
       prevCfg: params.cfg,
       accountId,
@@ -233,6 +280,12 @@ export async function applyPreparedChannelAccountRemoval(params: {
 
   if (!plugin.config.setAccountEnabled) {
     return resultError({ kind: "unsupported-action", action });
+  }
+  // Disabling writes the account entry, so an account the channel does not have would be
+  // authored here as a brand-new disabled one and reported as the account the operator
+  // meant to stop.
+  if (channelAccountIsAbsent({ plugin, cfg: params.cfg, accountId })) {
+    return resultError({ kind: "nothing-to-remove", action });
   }
   const nextConfig = plugin.config.setAccountEnabled({
     cfg: { ...params.cfg },
