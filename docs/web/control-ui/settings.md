@@ -321,6 +321,11 @@ or replace conflicts. It reports each source's confirmed copy count and warns
 when a failure may have happened after a partial copy. Use the dedicated Import
 Memory page when you need destination selection, a file preview, or replacement.
 
+If an error says that apply completed but its result could not be returned,
+inspect the migration report and destination files before starting another
+import. Retrying the same pending request reuses its recorded outcome while
+the Gateway retains it. A plugin cleanup warning does not undo completed copies.
+
 Planning and applying require `operator.admin`. Every apply creates a verified
 OpenClaw backup when state exists, writes a redacted migration report, and keeps
 item-level backups before replacing existing destination files. See

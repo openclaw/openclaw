@@ -150,10 +150,10 @@ async function runSetupWizardOnce(
   const manualHint = t("wizard.setup.flowAdvancedHint");
   const hasExistingModelConfig =
     resolveAgentModelPrimaryValue(baseConfig.agents?.defaults?.model) !== undefined;
-  const migrationDetections = await detectSetupMigrationSources({ config: baseConfig, runtime });
+  const migrationDiscovery = await detectSetupMigrationSources({ config: baseConfig, runtime });
   const migrationOptions = await listSetupMigrationOptions({
     baseConfig,
-    detections: migrationDetections,
+    ...migrationDiscovery,
   });
   const explicitFlowRaw = opts.flow?.trim();
   const normalizedExplicitFlow = explicitFlowRaw === "manual" ? "advanced" : explicitFlowRaw;
@@ -235,7 +235,7 @@ async function runSetupWizardOnce(
           ...(importFrom ? { importFrom } : {}),
         },
         baseConfig,
-        detections: migrationDetections,
+        ...migrationDiscovery,
         prompter,
         runtime,
         readConfigFile: readValidSetupConfigFile,

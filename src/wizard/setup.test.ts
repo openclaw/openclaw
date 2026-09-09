@@ -128,7 +128,9 @@ const finalizeSetupWizard = vi.hoisted(() =>
 const listChannelPlugins = vi.hoisted(() => vi.fn(() => []));
 const logConfigUpdated = vi.hoisted(() => vi.fn(() => {}));
 const setupInternalHooks = vi.hoisted(() => vi.fn(async (cfg) => cfg));
-const detectSetupMigrationSources = vi.hoisted(() => vi.fn(async () => []));
+const detectSetupMigrationSources = vi.hoisted(() =>
+  vi.fn(async () => ({ detections: [], providerDescriptors: [] })),
+);
 const listSetupMigrationOptions = vi.hoisted(() =>
   vi.fn<ListSetupMigrationOptions>(async () => []),
 );

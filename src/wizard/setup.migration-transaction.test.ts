@@ -38,9 +38,10 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../plugins/migration-provider-runtime.js", () => ({
-  ensureStandaloneMigrationProviderRegistryLoaded: vi.fn(),
-  resolvePluginMigrationProvider: () => mocks.provider,
-  resolvePluginMigrationProviders: () => (mocks.provider ? [mocks.provider] : []),
+  withPluginMigrationProviders: async (
+    _params: unknown,
+    run: (providers: MigrationProviderPlugin[]) => Promise<unknown>,
+  ) => await run(mocks.provider ? [mocks.provider] : []),
 }));
 
 vi.mock("./setup.inference-verification.js", () => ({
