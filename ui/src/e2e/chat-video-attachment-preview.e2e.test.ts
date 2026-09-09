@@ -16,14 +16,22 @@ suite.define(() => {
         await page.goto(`${suite.server.baseUrl}${route}`);
         const input = page.locator(".agent-chat__file-input").first();
         await input.waitFor({ state: "attached" });
+        await page.locator(".shell, .card.chat").evaluateAll(async (elements) => {
+          await Promise.all(
+            elements.flatMap((element) =>
+              element.getAnimations().map((animation) => animation.finished),
+            ),
+          );
+        });
         const resources = await page.evaluateHandle(() => {
           const urls = new Set<string>();
           const media = new Set<HTMLMediaElement>();
+          const errors: string[] = [];
           const create = URL.createObjectURL.bind(URL);
           const revoke = URL.revokeObjectURL.bind(URL);
           const createElement = document.createElement.bind(document);
           const idle = window.requestIdleCallback;
-          const pending: IdleRequestCallback[] = [];
+          const pending: Parameters<typeof window.requestIdleCallback>[] = [];
           const frames: Array<() => void> = [];
           let holdFrames = true;
           document.createElement = new Proxy(createElement, {
@@ -31,6 +39,7 @@ suite.define(() => {
               const element: unknown = Reflect.apply(target, receiver, args);
               if (element instanceof HTMLVideoElement) {
                 media.add(element);
+                element.addEventListener("error", () => errors.push(element.error?.message ?? ""));
                 const requestFrame = element.requestVideoFrameCallback.bind(element);
                 element.requestVideoFrameCallback = (callback) =>
                   requestFrame((now, metadata) => {
@@ -53,15 +62,15 @@ suite.define(() => {
             urls.delete(url);
             revoke(url);
           };
-          window.requestIdleCallback = (callback) => pending.push(callback);
+          window.requestIdleCallback = (...args) => pending.push(args);
           return {
             releaseIdle() {
               window.requestIdleCallback = idle;
-              for (const callback of pending) {
-                idle(callback);
+              for (const args of pending) {
+                idle(...args);
               }
             },
-            pendingFrames: () => frames.length,
+            frameState: () => ({ count: frames.length, decoders: media.size, errors }),
             holdFrames() {
               holdFrames = true;
             },
@@ -79,6 +88,16 @@ suite.define(() => {
               [...media].filter((element) => element.hasAttribute("src")).length,
           };
         });
+        const waitForFrame = async () => {
+          try {
+            await expect
+              .poll(() => resources.evaluate((proof) => proof.frameState().count))
+              .toBe(1);
+          } catch (cause) {
+            const state = await resources.evaluate((proof) => proof.frameState());
+            throw new Error(`Video frame unavailable: ${JSON.stringify(state)}`, { cause });
+          }
+        };
         await input.setInputFiles({ name: "demo.mp4", mimeType: "video/mp4", buffer: video });
         const chip = page.locator(".chat-attachment-thumb");
         const slot = chip.locator(".chat-attachment-file__preview");
@@ -87,10 +106,10 @@ suite.define(() => {
         expect(before).toMatchObject({ width: 54, height: 54 });
         expect(await slot.locator("img").count()).toBe(0);
         await resources.evaluate((proof) => proof.releaseIdle());
-        await expect.poll(() => resources.evaluate((proof) => proof.pendingFrames())).toBe(1);
+        await waitForFrame();
         expect(await slot.locator("img").count()).toBe(0);
         await resources.evaluate((proof) => proof.releaseNextFrame());
-        await expect.poll(() => resources.evaluate((proof) => proof.pendingFrames())).toBe(1);
+        await waitForFrame();
         expect(await slot.locator("img").count()).toBe(0);
         await resources.evaluate((proof) => proof.releaseFrames());
         await slot.locator("img").waitFor();
@@ -131,7 +150,7 @@ suite.define(() => {
           mimeType: "video/mp4",
           buffer: video,
         });
-        await expect.poll(() => resources.evaluate((proof) => proof.pendingFrames())).toBe(1);
+        await waitForFrame();
         await chip.locator(".chat-attachment-remove").click();
         await resources.evaluate((proof) => proof.releaseFrames());
         await expect.poll(() => resources.evaluate((proof) => proof.liveUrls())).toBe(0);
