@@ -3,7 +3,10 @@ import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createStreamingResponse } from "../../test-support/streaming-error-response.js";
+import {
+  cancelTrackedTextResponse,
+  createStreamingResponse,
+} from "../../test-support/streaming-error-response.js";
 type EndpointCall = {
   url: string;
   timeoutSeconds: number;
@@ -97,21 +100,6 @@ function pushMcpHandshake(
       result: { content: [{ type: "text", text: JSON.stringify(toolPayload) }] },
     }),
   );
-}
-function cancelTrackedResponse(text: string, init: ResponseInit) {
-  let canceled = false;
-  const stream = new ReadableStream<Uint8Array>({
-    start(controller) {
-      controller.enqueue(new TextEncoder().encode(text));
-    },
-    cancel() {
-      canceled = true;
-    },
-  });
-  return {
-    response: new Response(stream, init),
-    wasCanceled: () => canceled,
-  };
 }
 beforeEach(() => {
   endpointMockState.calls = [];
@@ -421,10 +409,13 @@ describe("parallel web search provider", () => {
     expect(body.advanced_settings?.max_results).toBe(5);
   });
   it("bounds Parallel API error bodies without using response.text()", async () => {
-    const tracked = cancelTrackedResponse(`${"parallel upstream unavailable ".repeat(1024)}tail`, {
-      status: 503,
-      headers: { "Content-Type": "text/plain" },
-    });
+    const tracked = cancelTrackedTextResponse(
+      `${"parallel upstream unavailable ".repeat(1024)}tail`,
+      {
+        status: 503,
+        headers: { "Content-Type": "text/plain" },
+      },
+    );
     const textSpy = vi.spyOn(tracked.response, "text").mockRejectedValue(new Error("unbounded"));
     endpointMockState.responses.push(tracked.response);
     const error = await paidTool()
@@ -720,7 +711,7 @@ describe("runParallelMcpSearch", () => {
     expect(headerOf(endpointCall(1), "MCP-Protocol-Version")).toBe("2025-06-18");
   });
   it("bounds initialize error bodies without using response.text()", async () => {
-    const tracked = cancelTrackedResponse(`${"parallel mcp unavailable ".repeat(1024)}tail`, {
+    const tracked = cancelTrackedTextResponse(`${"parallel mcp unavailable ".repeat(1024)}tail`, {
       status: 503,
       headers: { "Content-Type": "text/plain" },
     });
