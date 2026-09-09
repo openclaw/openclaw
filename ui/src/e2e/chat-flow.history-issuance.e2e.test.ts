@@ -49,7 +49,7 @@ suite.define(() => {
       const frames = await loader.evaluate(async (node) => {
         // Restart the CSS animation for clock samples even if CI reached this node after completion.
         node.style.animationName = "none";
-        getComputedStyle(node).animationName;
+        void getComputedStyle(node).animationName;
         node.style.animationName = "";
         const animation = node.getAnimations()[0];
         if (!animation) {
