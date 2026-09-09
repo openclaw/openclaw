@@ -184,6 +184,7 @@ async function seedDreamingSessionTranscript(params: {
   sessionKey?: string;
   spawnedBy?: string;
   hookExternalContentSource?: "gmail" | "webhook";
+  updatedAt?: number;
 }): Promise<void> {
   const agentId = params.agentId ?? "main";
   const sessionsDir = resolveSessionTranscriptsDirForAgent(agentId);
@@ -196,7 +197,7 @@ async function seedDreamingSessionTranscript(params: {
     .filter((timestamp) => Number.isFinite(timestamp));
   // Accessor writes run normal maintenance; keep fixture entries fresh while
   // retaining per-message timestamps as the dreaming corpus clock.
-  const updatedAt = Math.max(Date.now(), ...timestamps);
+  const updatedAt = params.updatedAt ?? Math.max(Date.now(), ...timestamps);
   await fs.mkdir(sessionsDir, { recursive: true });
   await upsertSessionEntry({
     agentId,
@@ -2135,6 +2136,55 @@ describe("memory-core dreaming phases", () => {
       expect(after.files[knownStateKey]).toStrictEqual(knownCheckpoint);
     } finally {
       restoreDreamingTestEnv();
+    }
+  });
+
+  it("visits the most recently active sessions first when the sweep cap binds", async () => {
+    // A busy agent can hold more transcripts than one sweep can visit. Ordering
+    // by path alone starves whichever session sorts late, however active it is.
+    const workspaceDir = await createDreamingWorkspace();
+    setDreamingTestEnv(path.join(workspaceDir, ".state"));
+    const baseUpdatedAt = Date.parse("2026-04-05T18:00:00.000Z");
+    const staleSessionIds = Array.from(
+      { length: 24 },
+      (_, index) => `aa-stale-${index.toString().padStart(2, "0")}`,
+    );
+    for (const [index, sessionId] of staleSessionIds.entries()) {
+      await seedDreamingSessionTranscript({
+        sessionId,
+        updatedAt: baseUpdatedAt + index,
+        messages: Array.from({ length: 12 }, (_, messageIndex) => ({
+          role: "user" as const,
+          timestamp: "2026-04-05T18:00:00.000Z",
+          content: `Stale filler ${messageIndex} for ${sessionId}`,
+        })),
+      });
+    }
+    // Sorts last by path, but is the only recently active session.
+    await seedDreamingSessionTranscript({
+      sessionId: "zz-current",
+      updatedAt: baseUpdatedAt + 600_000,
+      messages: [
+        {
+          role: "user",
+          timestamp: "2026-04-05T18:05:00.000Z",
+          content: "Current session shipment must not starve behind the cap.",
+        },
+      ],
+    });
+
+    const { beforeAgentReply } = createHarness(LIGHT_DREAMING_TEST_CONFIG, workspaceDir);
+    try {
+      await withDreamingTestClock(async () => {
+        await triggerLightDreaming(beforeAgentReply, workspaceDir, 5);
+      });
+      const corpus = await fs.readFile(
+        path.join(workspaceDir, "memory", ".dreams", "session-corpus", "2026-04-05.txt"),
+        "utf-8",
+      );
+      expect(corpus).toContain("Current session shipment must not starve behind the cap.");
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
     }
   });
 
