@@ -99,6 +99,22 @@ export function createNativeQuiescenceFixture(mode: string) {
     if (currentRead !== boundary) {
       return undefined;
     }
+    if (mode.includes("-transition-start-pre-")) {
+      // A known failed candidate can leave its restart delay to execute the
+      // next pre-start hook between complete native observation frames.
+      return {
+        runtime: {
+          status: "unknown",
+          state: "activating",
+          subState: "start-pre",
+          systemd: {
+            unit: "openclaw-gateway.service",
+            managerUid: mode.endsWith("foreign-manager") ? 2002 : 2001,
+            nRestarts: mode.endsWith("counter-reversal") ? 0 : 1,
+          },
+        },
+      };
+    }
     if (mode.endsWith("stopped-counter-reversal")) {
       return reversed(true);
     }
@@ -162,6 +178,10 @@ export const nativeAutoRestartModes = [
   "auto-restart-transition-running",
   "auto-restart-transition-settled-rollback",
   "auto-restart-closing-transition-settled-rollback",
+  "auto-restart-transition-start-pre-foreign-manager",
+  "auto-restart-transition-start-pre-counter-reversal",
+  "auto-restart-transition-start-pre-rollback",
+  "auto-restart-closing-transition-start-pre-rollback",
   "auto-restart-transition-unavailable-rollback",
   "auto-restart-closing-transition-unavailable-rollback",
   "auto-restart-transition-stopped-counter-reversal",

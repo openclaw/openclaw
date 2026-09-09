@@ -347,6 +347,19 @@ async function readNativeObservationOnce(
         // its old policy with the new stopped fact: obtain a full fresh read.
         throw new PendingNativeRuntimeObservation(unavailable("restart-settled").message);
       }
+      if (
+        after.status === "unknown" &&
+        next.runtime?.state === "activating" &&
+        after.unit === before.unit &&
+        after.managerUid === before.managerUid &&
+        Number.isSafeInteger(next.runtime.systemd?.nRestarts)
+      ) {
+        // The same failed candidate can leave its restart delay for another
+        // activation attempt during either closing read. This is not a stopped
+        // or serving observation: discard the interval and collect a fresh one.
+        // Counter continuity and the original deadline still govern the retry.
+        throw new PendingNativeRuntimeObservation(unavailable("restart-transition").message);
+      }
       if (after.status === "unknown" && next.runtime?.inspectionFailure) {
         // An incomplete closing runtime query has the same non-authoritative
         // meaning as an incomplete first query. No partial fact permits work.
