@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import type { Locator } from "playwright";
 import { expect, it } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
@@ -139,6 +140,165 @@ suite.define(() => {
       });
     }
   });
+
+  it.each([1440, 390])(
+    "aligns shared-thread media with its author's bubble at %ipx",
+    async (width) => {
+      await suite.withPage({ viewport: { width, height: 900 } }, async ({ page }) => {
+        const imageData = await page.evaluate(() => {
+          const canvas = document.createElement("canvas");
+          canvas.width = 640;
+          canvas.height = 360;
+          canvas.getContext("2d")!.fillRect(0, 0, 640, 360);
+          return canvas.toDataURL().split(",")[1];
+        });
+        await page.route("**/alignment.png*", (route) =>
+          route.fulfill({ contentType: "image/png", body: Buffer.from(imageData, "base64") }),
+        );
+        const video = readFileSync(new URL("./fixtures/video-poster.mp4", import.meta.url));
+        await page.route("**/alignment.mp4", (route) => {
+          const range = route
+            .request()
+            .headers()
+            .range?.match(/^bytes=(\d+)-(\d*)$/);
+          const start = Number(range?.[1] ?? 0);
+          const end = range?.[2] ? Number(range[2]) : video.length - 1;
+          return route.fulfill({
+            status: range ? 206 : 200,
+            contentType: "video/mp4",
+            headers: range ? { "content-range": `bytes ${start}-${end}/${video.length}` } : {},
+            body: video.subarray(start, end + 1),
+          });
+        });
+        const image = { type: "image", url: `${suite.server.baseUrl}alignment.png` };
+        const cases = [
+          { name: "Image and file", media: [image, attachment()] },
+          { name: "Image", media: [image] },
+          {
+            name: "Video",
+            media: [
+              {
+                type: "attachment",
+                attachment: {
+                  kind: "video",
+                  label: "alignment.mp4",
+                  mimeType: "video/mp4",
+                  url: `${suite.server.baseUrl}alignment.mp4`,
+                },
+              },
+            ],
+          },
+          {
+            name: "Gallery",
+            media: Array.from({ length: 5 }, (_, index) => ({
+              ...image,
+              url: `${image.url}?tile=${index}`,
+            })),
+          },
+        ];
+        const users = [
+          {
+            self: true,
+            id: "profile-riley",
+            identity: { type: "profile" as const, id: "profile-riley" },
+            name: "Riley",
+          },
+          {
+            id: "profile-colin",
+            identity: { type: "profile" as const, id: "profile-colin" },
+            name: "Colin",
+          },
+        ];
+        const scenarios = users.flatMap((user) =>
+          cases.map((item) => ({
+            ...item,
+            user,
+            text: `${user.name}: ${item.name}. Please compare the completed update steps with the expected release notes.`,
+          })),
+        );
+        await installMockGateway(page, {
+          presenceUsers: users,
+          historyMessages: scenarios.flatMap(({ user, media, text }) => [
+            { role: "assistant", content: [{ type: "text", text: "Share the next update." }] },
+            {
+              role: "user",
+              content: [...media, { type: "text", text }],
+              __openclaw: {
+                senderId: user.id,
+                senderIdentity: user.identity,
+                senderName: user.name,
+              },
+            },
+          ]),
+        });
+        await page.goto(`${suite.server.baseUrl}chat/main`);
+        await page.locator(".chat-group.user").last().waitFor();
+        await page.locator(".chat-thread").evaluate((node) => {
+          node.scrollTop = 0;
+        });
+        for (const { user, name, text } of scenarios) {
+          const group = page.locator(".chat-group.user").filter({ hasText: text });
+          await group.scrollIntoViewIfNeeded();
+          const previews = group.locator("img.chat-message-image");
+          await expect.poll(() => previews.count()).toBe(name === "Gallery" ? 5 : 1);
+          await expect
+            .poll(() =>
+              previews.evaluateAll((nodes) =>
+                nodes.every(
+                  (node) =>
+                    node instanceof HTMLImageElement && node.complete && node.naturalWidth > 0,
+                ),
+              ),
+            )
+            .toBe(true);
+          expect(await group.evaluate((node) => node.classList.contains("chat-group--peer"))).toBe(
+            !user.self,
+          );
+          expect(
+            await group
+              .locator(".chat-bubble")
+              .evaluate((node) => getComputedStyle(node).backgroundColor),
+          ).toBe("rgba(0, 0, 0, 0)");
+          const bubble = await group.locator(".chat-text").boundingBox();
+          const gallery = await group.locator(".chat-message-images").boundingBox();
+          expect(bubble).not.toBeNull();
+          expect(gallery).not.toBeNull();
+          const edge = user.self ? bubble!.x + bubble!.width : bubble!.x;
+          expect(
+            Math.abs((user.self ? gallery!.x + gallery!.width : gallery!.x) - edge),
+          ).toBeLessThanOrEqual(1);
+          const bounds = await previews.evaluateAll((nodes) =>
+            nodes.map((node) => ({
+              left: node.getBoundingClientRect().left,
+              right: node.getBoundingClientRect().right,
+            })),
+          );
+          const visibleEdge = user.self
+            ? Math.max(...bounds.map((rect) => rect.right))
+            : Math.min(...bounds.map((rect) => rect.left));
+          expect(Math.abs(visibleEdge - edge)).toBeLessThanOrEqual(1);
+          expect(
+            await gap(group.locator(".chat-message-images"), group.locator(".chat-text")),
+          ).toBeGreaterThan(0);
+          if (name === "Image and file") {
+            const card = await group.locator(".chat-assistant-attachment-card").boundingBox();
+            expect(card).not.toBeNull();
+            expect(
+              Math.abs((user.self ? card!.x + card!.width : card!.x) - edge),
+            ).toBeLessThanOrEqual(1);
+          }
+          const groupBox = await group.boundingBox();
+          expect(groupBox).not.toBeNull();
+          expect(Math.min(...bounds.map((rect) => rect.left))).toBeGreaterThanOrEqual(
+            groupBox!.x - 1,
+          );
+          expect(Math.max(...bounds.map((rect) => rect.right))).toBeLessThanOrEqual(
+            groupBox!.x + groupBox!.width + 1,
+          );
+        }
+      });
+    },
+  );
 
   it("preserves nested user fences while sharing the top-level attachment rhythm", async () => {
     await suite.withPage({ viewport: { width: 390, height: 900 } }, async ({ page }) => {
