@@ -13,7 +13,6 @@ import {
   createSpeechProviderRegistry,
   normalizeSpeechProviderId,
 } from "./provider-registry-core.js";
-import { canonicalizeSpeechProviderId, getSpeechProvider } from "./provider-registry.js";
 import type { SpeechProviderConfig, SpeechProviderOverrides } from "./provider-types.js";
 import {
   getResolvedSpeechProviderConfigForVoiceModel,
@@ -27,7 +26,6 @@ import {
 } from "./tts-provider-resolution.js";
 import type { TtsProviderAttempt } from "./tts-runtime-types.js";
 import {
-  getTtsPersona,
   readTtsPrefs,
   normalizeConfiguredSpeechProviderId,
   resolveTtsPersonaFromPrefs,
@@ -98,7 +96,7 @@ function buildTtsFailureResult(
 type TtsProviderReadyResolution =
   | {
       kind: "ready";
-      provider: NonNullable<ReturnType<typeof getSpeechProvider>>;
+      provider: SpeechProviderPlugin;
       providerConfig: SpeechProviderConfig;
       personaProviderConfig?: SpeechProviderConfig;
       synthesisPersona?: ResolvedTtsPersona;
@@ -118,12 +116,9 @@ function resolveReadySpeechProvider(params: {
   persona?: ResolvedTtsPersona;
   voiceModel?: VoiceModelRef;
   requireTelephony?: boolean;
-  providerRegistry?: TtsProviderRegistry;
+  providerRegistry: TtsProviderRegistry;
 }): TtsProviderReadyResolution {
-  const resolvedProvider = (params.providerRegistry?.getSpeechProvider ?? getSpeechProvider)(
-    params.provider,
-    params.cfg,
-  );
+  const resolvedProvider = params.providerRegistry.getSpeechProvider(params.provider, params.cfg);
   if (!resolvedProvider) {
     return {
       kind: "skip",
@@ -188,7 +183,7 @@ function resolveReadySpeechProvider(params: {
 }
 
 async function prepareSpeechSynthesis(params: {
-  provider: NonNullable<ReturnType<typeof getSpeechProvider>>;
+  provider: SpeechProviderPlugin;
   text: string;
   cfg: OpenClawConfig;
   providerConfig: SpeechProviderConfig;
@@ -260,39 +255,15 @@ function resolveTtsRequestConfig(
   return { cfg, config, prefsPath };
 }
 
-export function resolveTtsRequestSetup(params: TtsRequestSetupParams):
+type OwnedTtsRequestSetup =
+  | { error: string }
   | {
       cfg: OpenClawConfig;
       config: ResolvedTtsConfig;
       persona?: ResolvedTtsPersona;
       providers: VoiceProviderCandidate[];
-    }
-  | {
-      error: string;
-    } {
-  const facts = resolveTtsRequestConfig(params);
-  if ("error" in facts) {
-    return facts;
-  }
-  const { cfg, config, prefsPath } = facts;
-
-  const userProvider = resolveTtsProvider(config, prefsPath);
-  const provider = canonicalizeSpeechProviderId(params.providerOverride, cfg) ?? userProvider;
-  return {
-    cfg,
-    config,
-    persona: getTtsPersona(config, prefsPath),
-    providers: params.disableFallback
-      ? [resolvePrimaryTtsProviderCandidate(provider, cfg)]
-      : resolveTtsProviderCandidates(provider, cfg),
-  };
-}
-
-type OwnedTtsRequestSetup =
-  | { error: string }
-  | (Exclude<ReturnType<typeof resolveTtsRequestSetup>, { error: string }> & {
       prepareProviderRegistry: () => Promise<TtsProviderRegistry>;
-    });
+    };
 
 /** Keeps catalog and direct lookup selections in one explicit speech request owner. */
 export async function acquireTtsRequest(params: TtsRequestSetupParams) {
@@ -460,7 +431,7 @@ export async function executeTtsProviderAttempts<TSynthesis, TResult>(params: {
   target: "audio-file" | "voice-note" | "telephony";
   logLabel: string;
   requireTelephony?: boolean;
-  prepareProviderRegistry?: () => Promise<TtsProviderRegistry>;
+  prepareProviderRegistry: () => Promise<TtsProviderRegistry>;
   selectOperation: (params: {
     provider: TtsProvider;
     resolvedProvider: ReadySpeechProvider;
@@ -485,9 +456,7 @@ export async function executeTtsProviderAttempts<TSynthesis, TResult>(params: {
     attemptedProviders.push(provider);
     const providerStart = Date.now();
     try {
-      const providerRegistry = params.prepareProviderRegistry
-        ? await params.prepareProviderRegistry()
-        : undefined;
+      const providerRegistry = await params.prepareProviderRegistry();
       const resolvedProvider = resolveReadySpeechProvider({
         provider,
         cfg,
