@@ -570,6 +570,14 @@ session writes can continue during those checks. It reacquires the writer and
 revalidates current authority before index repair, schema work, or deletion.
 The connection and lease remain owned throughout admission; refusal unwinds that
 owner, and final writer admission remains held until the worker exits.
+
+Disk-budget cleanup rechecks protection after archive materialization. A candidate
+already excluded by that fresh protection set is canceled before worker admission
+and is not counted as reclaimed. After releasing its lifecycle holds, cleanup
+remeasures physical usage before considering another candidate, so space freed by
+a peer does not cause unnecessary eviction. Every admitted worker still performs
+the full integrity, foreign-key, and current-owner checks described here.
+
 Archive publication and cascading deletion remain atomic. Before COMMIT, the
 worker publishes its authorization request in shared memory and waits for the
 parent's current owner check. Synchronous writers service that request at the shared

@@ -1757,6 +1757,7 @@ describe("mobile release authority", () => {
         file: ".github/workflows/ios-beta-release.yml",
         name: "iOS Beta Release",
         platform: "ios",
+        releaseRunner: "macos-26",
         signingCheckoutName: "Checkout encrypted iOS signing assets",
         signingCheckoutRevalidateName:
           "Revalidate release authority immediately before iOS signing checkout",
@@ -1770,6 +1771,7 @@ describe("mobile release authority", () => {
         file: ".github/workflows/android-beta-release.yml",
         name: "Android Beta Release",
         platform: "android",
+        releaseRunner: "macos-26-intel",
         signingCheckoutName: "Checkout encrypted Android signing assets",
         signingCheckoutRevalidateName:
           "Revalidate release authority immediately before Android signing checkout",
@@ -1791,6 +1793,7 @@ describe("mobile release authority", () => {
       file,
       name,
       platform,
+      releaseRunner,
       signingCheckoutName,
       signingCheckoutRevalidateName,
       signingMaterializeName,
@@ -1805,6 +1808,7 @@ describe("mobile release authority", () => {
             environment?: string;
             if?: unknown;
             needs?: string;
+            "runs-on"?: string;
             steps: Array<{
               "continue-on-error"?: unknown;
               env?: Record<string, string>;
@@ -1849,6 +1853,7 @@ describe("mobile release authority", () => {
         throw new Error(`${file}: missing release job`);
       }
       expect(release.needs).toBe("authorize");
+      expect(release["runs-on"]).toBe(releaseRunner);
       expect(release.if).toBe(
         "inputs.operation == 'upload-and-record' && needs.authorize.outputs.approved == 'true'",
       );
@@ -1965,10 +1970,22 @@ describe("mobile release authority", () => {
       expect(release.steps[recordIndex]?.with?.operation).toBe("record");
 
       if (platform === "android") {
+        const androidSetupIndex = release.steps.findIndex(
+          (step) => step.name === "Setup Android toolchain",
+        );
+        const accelerationCheckIndex = release.steps.findIndex(
+          (step) => step.name === "Verify Android emulator acceleration",
+        );
         const rubyStep = release.steps.find((step) => step.name === "Setup Ruby");
         const bundleStep = release.steps.find(
           (step) => step.name === "Install locked Fastlane bundle",
         );
+        expect(androidSetupIndex).toBeGreaterThanOrEqual(0);
+        expect(accelerationCheckIndex).toBe(androidSetupIndex + 1);
+        expect(accelerationCheckIndex).toBeLessThan(signingRevalidateIndex);
+        expect(release.steps[accelerationCheckIndex]?.run?.trim()).toBe("emulator -accel-check");
+        expect(release.steps[accelerationCheckIndex]?.if).toBeUndefined();
+        expect(release.steps[accelerationCheckIndex]?.["continue-on-error"]).toBeUndefined();
         expect(rubyStep?.with).toMatchObject({
           "bundler-cache": false,
           "ruby-version": "3.4.10",
@@ -2151,8 +2168,12 @@ describe("mobile release authority", () => {
     }
   });
 
-  it("passes the protected TestFlight group variable only to the iOS upload step", () => {
+  it("passes protected iOS release inputs only to the iOS upload step", () => {
     const source = fs.readFileSync(".github/workflows/ios-beta-release.yml", "utf8");
+    const project = parse(fs.readFileSync("apps/ios/project.yml", "utf8")) as {
+      name?: string;
+      options?: { deploymentTarget?: { iOS?: string } };
+    };
     const workflow = parse(source) as {
       jobs: Record<
         string,
@@ -2188,6 +2209,35 @@ describe("mobile release authority", () => {
         jobName: "release",
         runsUpload: true,
         value: "${{ vars.TESTFLIGHT_INTERNAL_GROUP }}",
+      },
+    ]);
+
+    const uploadStep = workflow.jobs.release?.steps.find((step) =>
+      step.run?.includes("pnpm ios:release:upload"),
+    );
+    expect(uploadStep?.env).toMatchObject({
+      SCAN_APP_NAME: project.name,
+      SCAN_DEPLOYMENT_TARGET_VERSION: project.options?.deploymentTarget?.iOS,
+    });
+    const scanPlacements = Object.entries(workflow.jobs).flatMap(([jobName, job]) =>
+      job.steps.flatMap((step) =>
+        Object.entries(step.env ?? {})
+          .filter(([envName]) => envName.startsWith("SCAN_"))
+          .map(([envName, value]) => ({ envName, jobName, stepName: step.name, value })),
+      ),
+    );
+    expect(scanPlacements).toEqual([
+      {
+        envName: "SCAN_APP_NAME",
+        jobName: "release",
+        stepName: "Upload and distribute iOS beta",
+        value: project.name,
+      },
+      {
+        envName: "SCAN_DEPLOYMENT_TARGET_VERSION",
+        jobName: "release",
+        stepName: "Upload and distribute iOS beta",
+        value: project.options?.deploymentTarget?.iOS,
       },
     ]);
   });

@@ -107,6 +107,26 @@ openclaw_resolve_frozen_live_cli_backend_package_mode() {
   fi
 }
 
+openclaw_resolve_frozen_update_channel_dry_run_mode() {
+  local source_root="${1:?missing selected source root}" authorization_status=0
+
+  export OPENCLAW_UPDATE_CHANNEL_DRY_RUN_PACKAGE_COMPAT="0"
+  openclaw_prepare_frozen_target_context "$source_root" || authorization_status=$?
+  [ "$authorization_status" -eq 1 ] && return 0
+  [ "$authorization_status" -eq 0 ] || return "$authorization_status"
+
+  # The old CLI routed only an explicit dev request to Git. Recognize that
+  # exact historical owner shape; backports and unknown future shapes stay strict.
+  if openclaw_frozen_target_source_contains \
+    "$source_root" src/cli/update-cli/update-command.ts \
+    'const switchToGit = requestedChannel === "dev" && installKind !== "git";' &&
+    ! openclaw_frozen_target_source_contains \
+      "$source_root" src/cli/update-cli/update-command.ts \
+      'selectedChannel === "dev" && explicitTag === null'; then
+    export OPENCLAW_UPDATE_CHANNEL_DRY_RUN_PACKAGE_COMPAT="1"
+  fi
+}
+
 openclaw_resolve_frozen_plugin_harness_capabilities() {
   local source_root="${1:?missing selected source root}" authorization_status=0
 
@@ -156,9 +176,9 @@ openclaw_resolve_frozen_core_harness_capabilities() {
   [ "$authorization_status" -eq 1 ] && return 0
   [ "$authorization_status" -eq 0 ] || return "$authorization_status"
 
-  # The pre-consent onboarding flow does not accept the wizard record or the
-  # newer guided case. Run its own established non-interactive coverage.
-  if ! openclaw_frozen_target_source_contains "$source_root" src/config/zod-schema.ts 'securityAcknowledgedAt:' &&
+  # Older onboarding schemas do not accept the guided fixture's full wizard
+  # consent record. Run their own established non-interactive coverage.
+  if ! openclaw_frozen_target_source_contains "$source_root" src/config/zod-schema.ts 'accessMode:' &&
     openclaw_frozen_target_source_contains "$source_root" src/config/zod-schema.ts 'lastRunAt:'; then
     export OPENCLAW_FROZEN_TARGET_ONBOARD_CASES="local-basic,remote-non-interactive,reset,channels,skills"
   fi

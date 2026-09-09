@@ -79,6 +79,85 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
   @property({ type: Number }) availableWidth = 0;
   private previousGeometry = "";
   private contentMounted = false;
+  private focusedSurface: Element | null = null;
+  private nativeCloseListeners: AbortController | undefined;
+
+  override connectedCallback(): void {
+    super.connectedCallback();
+    this.nativeCloseListeners = new AbortController();
+    const options = { capture: true, signal: this.nativeCloseListeners.signal };
+    // The region renders its content into siblings, not into this element.
+    // Document focus also clears the owner when another pane or chrome wins it.
+    document.addEventListener("pointerdown", this.trackFocus, options);
+    document.addEventListener("focusin", this.trackFocus, options);
+    window.addEventListener("openclaw:native-close-focused-panel", this.closeFocusedPanel, options);
+  }
+
+  override disconnectedCallback(): void {
+    this.nativeCloseListeners?.abort();
+    this.nativeCloseListeners = undefined;
+    this.focusedSurface = null;
+    super.disconnectedCallback();
+  }
+
+  private readonly trackFocus = (event: Event): void => {
+    const surface = event
+      .composedPath()
+      .find(
+        (node): node is Element =>
+          node instanceof Element && node.matches("[data-region], [data-region-header]"),
+      );
+    this.focusedSurface =
+      surface && surface.closest(".sidebar-region") === this.parentElement ? surface : null;
+  };
+
+  private readonly closeFocusedPanel = (event: Event): void => {
+    if (event.defaultPrevented || !this.layout.open || this.layout.expanded || !this.callbacks) {
+      return;
+    }
+    const browserScope = event instanceof CustomEvent ? event.detail?.browserScope : undefined;
+    // Native browser content is a separate NSView, so its responder scope is
+    // authoritative over the dashboard document's previous DOM focus.
+    const browser =
+      typeof browserScope === "string"
+        ? [
+            ...(this.parentElement?.querySelectorAll<HTMLElement>("[data-native-browser-scope]") ??
+              []),
+          ].find((element) => element.dataset.nativeBrowserScope === browserScope)
+        : undefined;
+    const frame =
+      document.activeElement instanceof HTMLIFrameElement
+        ? document.activeElement.closest("[data-region]")
+        : null;
+    const surface =
+      typeof browserScope === "string"
+        ? browser?.closest("[data-region]")
+        : (frame ?? this.focusedSurface);
+    const active = sidebarActivePanel(this.layout);
+    if (
+      !active ||
+      !surface?.isConnected ||
+      surface.closest(".sidebar-region") !== this.parentElement ||
+      !surface.matches('[data-region="side"], [data-region-header="side"]') ||
+      surface.closest('[hidden], [inert], [aria-hidden="true"]') ||
+      document.openClawModalLayers?.size ||
+      document.querySelector("dialog[open], [aria-modal='true']")
+    ) {
+      return;
+    }
+    event.preventDefault();
+    // Keep successive Close commands in the tab strip after its content unmounts.
+    const header = this.parentElement?.querySelector('[data-region-header="side"]') ?? null;
+    this.focusedSurface = header;
+    this.callbacks.closeSlot(active.slot);
+    // The callback invalidates the parent first; await this region's next commit.
+    this.requestUpdate();
+    void this.updateComplete.then(() => {
+      if (this.layout.open && this.focusedSurface === header && header?.isConnected) {
+        header.querySelector<HTMLElement>("wa-tab[active]")?.focus();
+      }
+    });
+  };
 
   deliverPanelEvent(slot: SidebarSlotId, event: Event): boolean {
     const panel = this.parentElement?.querySelector<HTMLElement>(

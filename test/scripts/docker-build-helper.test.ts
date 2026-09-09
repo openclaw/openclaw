@@ -3016,6 +3016,27 @@ docker_e2e_docker_run_cmd run demo
     );
   });
 
+  it("propagates frozen typed-onboarding ERR traps through nested helpers", () => {
+    const runner = readFileSync(RELEASE_TYPED_ONBOARDING_DOCKER_E2E_PATH, "utf8");
+    const invocation = runner.match(
+      /-i "\$IMAGE_NAME" bash(?<flags>(?: +-[A-Za-z]+)*) scripts\/e2e\/lib\/release-typed-onboarding\/scenario\.sh/u,
+    );
+    expect(invocation?.groups?.flags).toBeDefined();
+    const bashFlags = invocation?.groups?.flags?.trim().split(/ +/u).filter(Boolean) ?? [];
+    const diagnostic = "typed-onboarding diagnostic status=23";
+    const script = `set -euo pipefail
+trap 'status=$?; printf "typed-onboarding diagnostic status=%s\\n" "$status" >&2' ERR
+inner() { return 23; }
+outer() { inner; }
+outer
+`;
+
+    const result = spawnSync("bash", [...bashFlags, "-c", script], { encoding: "utf8" });
+
+    expect(result.status).toBe(23);
+    expect(result.stderr.trim().split("\n")).toEqual([diagnostic]);
+  });
+
   it("prints channel-add failures through the shared E2E logger", () => {
     const script = readFileSync(NPM_ONBOARD_CHANNEL_AGENT_DOCKER_E2E_PATH, "utf8");
     expect(script).toContain(
@@ -3872,6 +3893,7 @@ printf '%s\n' "$status" >"$TMPDIR/status"
     expect(readFileSync(join(workDir, "status"), "utf8")).toBe("57\n");
     expect(existsSync(join(workDir, "gateway.log.authored-config"))).toBe(true);
     expect(JSON.parse(readFileSync(join(workDir, "state", "openclaw.json"), "utf8"))).toEqual({
+      channels: { discord: { dm: { policy: "allowlist" } } },
       plugins: { enabled: false },
       gateway: expect.objectContaining({ reload: { mode: "off" } }),
     });
@@ -5955,6 +5977,8 @@ grep -Fxq preserved "$TMPDIR/caller-fd"
     const upgradeRunner = readFileSync(UPGRADE_SURVIVOR_DOCKER_E2E_PATH, "utf8");
     expectTextToIncludeAll(upgradeRunner, [
       "scripts/e2e/lib/upgrade-survivor",
+      'UPGRADE_TRUSTED_DIAGNOSTICS="/app/scripts/e2e/lib/upgrade-survivor/diagnostics.mjs"',
+      '-e OPENCLAW_UPGRADE_SURVIVOR_TRUSTED_DIAGNOSTICS="$UPGRADE_TRUSTED_DIAGNOSTICS"',
       'UPGRADE_RUNNER="$UPGRADE_SCENARIO_DIR/run.sh"',
       'cp -R "$UPGRADE_SCENARIO_DIR/." "$UPGRADE_SCENARIO_STAGE/"',
       'cp "$UPGRADE_DIAGNOSTICS" "$UPGRADE_SCENARIO_STAGE/diagnostics.mjs"',
@@ -6537,6 +6561,9 @@ process.exit(73);
     const runner = readFileSync(AGENT_BUNDLE_MCP_TOOLS_DOCKER_E2E_PATH, "utf8");
 
     expectTextToIncludeAll(runner, [
+      "scripts/e2e/lib/temp-state-dir.ts \\",
+      "scripts/e2e/agent-bundle-mcp-tools-docker-client.ts |",
+      'CLIENT_PATH="$LEGACY_CLIENT_ROOT/scripts/e2e/agent-bundle-mcp-tools-docker-client.ts"',
       'ln -s /app/dist "$LEGACY_CLIENT_SOURCE_ROOT/dist"',
       'ln -s /app/node_modules "$LEGACY_CLIENT_SOURCE_ROOT/node_modules"',
       '-v "$LEGACY_CLIENT_SOURCE_ROOT:$LEGACY_CLIENT_ROOT:ro"',

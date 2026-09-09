@@ -10,6 +10,98 @@ import {
 import { createDeferredCore } from "./deferred.js";
 
 describe("async work scope", () => {
+  it("excludes newly admitted disposal work while another owner enters its next phase", async () => {
+    const first = new AsyncWorkScope();
+    const second = new AsyncWorkScope();
+    const finishAbort = createDeferredCore();
+    const finishDisposal = createDeferredCore();
+    const disposalStarted = createDeferredCore();
+    let disposing = false;
+    let disposed = false;
+    let secondStarted = false;
+    const abortWork = first.track(() => finishAbort.promise);
+    const selectScopes = () => (disposing ? [second] : [first, second]);
+    const disposal = AsyncWorkScope.runWhenAllIdle(selectScopes, () =>
+      first.track(async () => {
+        disposing = true;
+        disposalStarted.resolve();
+        await finishDisposal.promise;
+        disposed = true;
+      }),
+    );
+    const nextPhase = AsyncWorkScope.runWhenAllIdle(selectScopes, () =>
+      second.track(() => {
+        secondStarted = true;
+      }),
+    );
+    finishAbort.resolve();
+    try {
+      await disposalStarted.promise;
+      await nextTurn();
+      expect(secondStarted).toBe(true);
+      expect(disposed).toBe(false);
+    } finally {
+      finishDisposal.resolve();
+      await Promise.all([abortWork, disposal, nextPhase]);
+      await Promise.all([first.drain(), second.drain()]);
+    }
+  });
+
+  it("preserves synchronous returns and throws without inspecting a thenable", async () => {
+    const scope = new AsyncWorkScope();
+    const readThen = vi.fn(() => {
+      throw new Error("The synchronous caller owns thenable inspection");
+    });
+    const thenable = {
+      // oxlint-disable-next-line unicorn/no-thenable -- The synchronous entry must leave this thenable untouched.
+      get then() {
+        return readThen();
+      },
+    };
+    const value = scope.run(() => {
+      expect(getAsyncWorkSignal()).toBe(scope.signal);
+      return thenable;
+    });
+    expect(value === thenable).toBe(true);
+    const failure = new Error("synchronous failure");
+    let caught: unknown;
+    try {
+      scope.run(() => {
+        throw failure;
+      });
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBe(failure);
+    await scope.drain();
+    expect(readThen).not.toHaveBeenCalled();
+  });
+
+  it("admits synchronous work before a reentrant drain and joins its descendant", async () => {
+    const scope = new AsyncWorkScope();
+    const gate = createDeferredCore();
+    let closing: Promise<void> | undefined;
+    let child: Promise<void> | undefined;
+    let drained = false;
+    scope.run(() => {
+      closing = scope.drain().then(() => {
+        drained = true;
+      });
+      child = trackAsyncWork(() => gate.promise);
+    });
+    try {
+      await nextTurn();
+      expect(drained).toBe(false);
+    } finally {
+      gate.resolve();
+      await child;
+      await closing;
+    }
+    const late = vi.fn();
+    expect(() => scope.run(late)).toThrow("Async work scope is closed");
+    expect(late).not.toHaveBeenCalled();
+  });
+
   it("settles work for cleanup without closing its captured tracker, then fences final drain", async () => {
     const scope = new AsyncWorkScope();
     const track = await scope.track(captureAsyncWorkTracker);

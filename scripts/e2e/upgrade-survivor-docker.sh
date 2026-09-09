@@ -63,6 +63,8 @@ UPGRADE_SCENARIO_STAGE=""
 UPGRADE_RUNNER="$HARNESS_ROOT_DIR/scripts/e2e/lib/upgrade-survivor/run.sh"
 UPGRADE_SCENARIO_DIR=""
 UPGRADE_TARGET_TRAIN=""
+UPGRADE_TRUSTED_ASSERTIONS="scripts/e2e/lib/upgrade-survivor/assertions.mjs"
+UPGRADE_TRUSTED_DIAGNOSTICS="/app/scripts/e2e/lib/upgrade-survivor/diagnostics.mjs"
 context_status=0
 openclaw_prepare_frozen_target_context "$ROOT_DIR" || context_status=$?
 case "$context_status" in
@@ -97,6 +99,8 @@ if [ "$UPGRADE_TARGET_TRAIN" = extended-stable ]; then
     exit 2
   fi
   UPGRADE_RUNNER="$UPGRADE_SCENARIO_DIR/run.sh"
+  UPGRADE_TRUSTED_ASSERTIONS="/tmp/openclaw-release-harness/scripts/e2e/lib/upgrade-survivor/assertions.mjs"
+  UPGRADE_TRUSTED_DIAGNOSTICS="/tmp/openclaw-release-harness/scripts/e2e/lib/upgrade-survivor/diagnostics.mjs"
   UPGRADE_NPM_PUBLISH_PLAN="$(openclaw_resolve_frozen_target_file \
     "$ROOT_DIR" scripts/lib/npm-publish-plan.mjs)"
   UPGRADE_WINDOWS_HELPERS="$(openclaw_resolve_frozen_target_file \
@@ -422,6 +426,8 @@ docker_e2e_run_with_harness \
   -e OPENCLAW_UPGRADE_SURVIVOR_STATUS_BUDGET_SECONDS="$STATUS_BUDGET_SECONDS" \
   -e OPENCLAW_UPGRADE_SURVIVOR_CLAWHUB_FIXTURE_SERVER=/tmp/openclaw-clawhub-fixture-server.cjs \
   -e OPENCLAW_UPGRADE_SURVIVOR_CONFIG_PARKING_HELPER=/tmp/openclaw-config-parking.mjs \
+  -e OPENCLAW_UPGRADE_SURVIVOR_TRUSTED_ASSERTIONS="$UPGRADE_TRUSTED_ASSERTIONS" \
+  -e OPENCLAW_UPGRADE_SURVIVOR_TRUSTED_DIAGNOSTICS="$UPGRADE_TRUSTED_DIAGNOSTICS" \
   -e OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_SERVER_SCRIPT=/tmp/openclaw-release-harness/scripts/e2e/lib/plugins/npm-registry-server.mjs \
   ${UPGRADE_COMPAT_ENV_ARGS[@]+"${UPGRADE_COMPAT_ENV_ARGS[@]}"} \
   "${PROBE_ENV_ARGS[@]}" \
@@ -442,6 +448,8 @@ export npm_config_fund=false
 export npm_config_audit=false
 export OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT="${OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT:-/tmp/openclaw-upgrade-survivor-artifacts}"
 export OPENCLAW_UPGRADE_SURVIVOR_RUNTIME_ROOT="${OPENCLAW_UPGRADE_SURVIVOR_RUNTIME_ROOT:-/tmp/openclaw-upgrade-survivor-runtime}"
+TRUSTED_ASSERTIONS="${OPENCLAW_UPGRADE_SURVIVOR_TRUSTED_ASSERTIONS:-scripts/e2e/lib/upgrade-survivor/assertions.mjs}"
+TRUSTED_DIAGNOSTICS="${OPENCLAW_UPGRADE_SURVIVOR_TRUSTED_DIAGNOSTICS:-$PWD/scripts/e2e/lib/upgrade-survivor/diagnostics.mjs}"
 mkdir -p "$OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT"
 export TMPDIR="${OPENCLAW_UPGRADE_SURVIVOR_TMPDIR:-$OPENCLAW_UPGRADE_SURVIVOR_RUNTIME_ROOT/tmp}"
 export OPENCLAW_TEST_STATE_TMPDIR="${OPENCLAW_UPGRADE_SURVIVOR_TEST_STATE_TMPDIR:-$OPENCLAW_UPGRADE_SURVIVOR_RUNTIME_ROOT/state-tmp}"
@@ -513,7 +521,7 @@ on_exit() {
     result=1
   fi
   if [ "$result" -ne 0 ]; then
-    node scripts/e2e/lib/upgrade-survivor/diagnostics.mjs capture \
+    node "$TRUSTED_DIAGNOSTICS" capture \
       "$OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT" "$CURRENT_PHASE" "$result" ||
       echo "Upgrade survivor diagnostics missing; preserving original phase failure." >&2
   fi
@@ -627,6 +635,7 @@ NODE
 
 install_companion_plugins() {
   local authored_config="$OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT/companion-install-authored.json"
+  local trusted_assertions="${OPENCLAW_UPGRADE_SURVIVOR_TRUSTED_ASSERTIONS:-scripts/e2e/lib/upgrade-survivor/assertions.mjs}"
   local install_status=0
   local restore_status=0
   node "$OPENCLAW_UPGRADE_SURVIVOR_CONFIG_PARKING_HELPER" \
@@ -654,7 +663,7 @@ install_companion_plugins() {
   if [ "$install_status" -eq 0 ]; then
     # Inspection validates config too; keep the legacy migration specimen parked
     # until companion installation and its provenance checks have both finished.
-    node scripts/e2e/lib/upgrade-survivor/assertions.mjs \
+    node "$trusted_assertions" \
       assert-companion-installs "$package_version" \
       "${OPENCLAW_E2E_LAST_FIXTURE_PLUGIN_CAPABILITY_CONSENT_SUPPORTED:?missing candidate capability-consent support}"
     install_status=$?
@@ -715,13 +724,14 @@ if [ "$UPDATE_RESTART_MODE" = "auto-auth" ]; then
 fi
 
 echo "Running package update against the mounted tarball..."
+TRUSTED_DIAGNOSTICS="${OPENCLAW_UPGRADE_SURVIVOR_TRUSTED_DIAGNOSTICS:-$PWD/scripts/e2e/lib/upgrade-survivor/diagnostics.mjs}"
 CURRENT_PHASE="update-candidate"
 update_args=(update --tag "${OPENCLAW_CURRENT_PACKAGE_TGZ:?missing OPENCLAW_CURRENT_PACKAGE_TGZ}" --yes --json)
 if [ "$UPDATE_RESTART_MODE" != "auto-auth" ]; then
   update_args+=(--no-restart)
 fi
 set +e
-openclaw_e2e_maybe_timeout "$command_timeout" env -u OPENCLAW_GATEWAY_TOKEN -u OPENCLAW_GATEWAY_PASSWORD OPENCLAW_ALLOW_ROOT=1 NODE_OPTIONS="${NODE_OPTIONS:+$NODE_OPTIONS }--import=$PWD/scripts/e2e/lib/upgrade-survivor/diagnostics.mjs" openclaw "${update_args[@]}" >"$OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT/update.json" 2>"$OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT/update.err"
+openclaw_e2e_maybe_timeout "$command_timeout" env -u OPENCLAW_GATEWAY_TOKEN -u OPENCLAW_GATEWAY_PASSWORD OPENCLAW_ALLOW_ROOT=1 NODE_OPTIONS="${NODE_OPTIONS:+$NODE_OPTIONS }--import=$TRUSTED_DIAGNOSTICS" openclaw "${update_args[@]}" >"$OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT/update.json" 2>"$OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT/update.err"
 update_status=$?
 set -e
 if [ "$update_status" -ne 0 ]; then

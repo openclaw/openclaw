@@ -1153,6 +1153,7 @@
     {"id":"native.android.2faa88096a79b17a","source":"Reject proposal?","surface":"android","sites":[{"kind":"ui-call","path":"apps/android/app/src/main/java/ai/openclaw/app/ui/SkillWorkshopSettingsScreen.kt"}]},
     {"id":"native.android.f58e55c8d9c85e29","source":"Reject the pairing request from this device?","surface":"android","sites":[{"kind":"ui-call","path":"apps/android/app/src/main/java/ai/openclaw/app/ui/NodesDevicesSettingsScreen.kt"}]},
     {"id":"native.android.b7d8a4c3e34cc092","source":"Rejected","surface":"android","sites":[{"kind":"ui-call","path":"apps/android/app/src/main/java/ai/openclaw/app/ui/SkillWorkshopSettingsScreen.kt"}]},
+    {"id":"native.android.38661fce5fca374f","source":"Release plan ${(branchLeaves.indexOf(leaf) + 1).toString().padStart(2, '0')}","surface":"android","sites":[{"kind":"conditional-branch","path":"apps/android/app/src/main/java/ai/openclaw/app/AndroidScreenshotFixture.kt"}]},
     {"id":"native.android.4a6af396f00e266a","source":"Reload","surface":"android","sites":[{"kind":"ui-call","path":"apps/android/app/src/main/java/ai/openclaw/app/ui/CronJobManagementPanel.kt"}]},
     {"id":"native.android.761df98341152181","source":"Remote IP","surface":"android","sites":[{"kind":"ui-call","path":"apps/android/app/src/main/java/ai/openclaw/app/ui/NodesDevicesSettingsScreen.kt"}]},
     {"id":"native.android.8bf85545daee2012","source":"Remove","surface":"android","sites":[{"kind":"ui-call","path":"apps/android/app/src/main/java/ai/openclaw/app/ui/NodesDevicesSettingsScreen.kt"}]},

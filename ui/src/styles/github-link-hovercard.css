@@ -83,7 +83,6 @@
   min-width: 0;
   color: inherit;
   overflow: hidden;
-  text-decoration: none;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -93,7 +92,6 @@
 .github-link-hovercard__author:hover,
 .github-link-hovercard__author:focus-visible {
   color: var(--text-strong);
-  text-decoration: none;
 }
 
 .github-link-hovercard__time {
@@ -111,7 +109,6 @@
   letter-spacing: -0.012em;
   line-height: 1.35;
   overflow-wrap: anywhere;
-  text-decoration: none;
 }
 
 .github-link-hovercard__title:hover,
@@ -160,7 +157,6 @@
   color: var(--muted);
   font-size: var(--control-ui-text-md);
   overflow: hidden;
-  text-decoration: none;
   text-overflow: ellipsis;
   white-space: nowrap;
 }

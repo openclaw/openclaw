@@ -829,6 +829,11 @@ suite.define(() => {
           model: "gpt-5.6-luna",
           modelProvider: "openai",
           agentRuntime: { id: "codex", source: "session-key" },
+          thinkingLevels: [
+            { id: "low", label: "Low" },
+            { id: "high", label: "High" },
+          ],
+          thinkingDefault: "high",
           updatedAt: 1,
         },
       ],
@@ -847,7 +852,7 @@ suite.define(() => {
         thinkingSlider,
       );
 
-      expect(await thinkingSlider.getAttribute("data-chat-thinking-values")).not.toContain("ultra");
+      expect(await thinkingSlider.getAttribute("data-chat-thinking-values")).toBe("low,high");
       expect(await effortSelect.getAttribute("data-chat-thinking-value")).not.toBe("ultra");
     } finally {
       await suite.closeBrowserContext(context);

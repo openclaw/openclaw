@@ -22,6 +22,10 @@ import {
   withoutSessionPlacementForcedTerminalSettlement,
 } from "./session-placement-forced-terminal-settlement.js";
 import { settleRequesterAfterSessionSpawns } from "./subagents/registry/subagent-registry.js";
+import {
+  getGatewayToolCallerIdentity,
+  withoutGatewayToolCallerIdentity,
+} from "./tools/gateway-caller-context.js";
 
 export type LocalTurnPlacementClaim = {
   sessionId: string;
@@ -91,6 +95,21 @@ export function captureSessionPlacementCompactionSuccessorAssertion(): SessionPl
   };
 }
 
+// Placement can register a cancellation proxy before runtime/tool preparation.
+// Only an exact continuation retains caller fences; independently admitted work
+// must enter its own runtime scope instead of borrowing its launching tool's.
+function withPlacementTurnCallerScope<T>(
+  params: Pick<RunEmbeddedAgentParams, "admittedRunContext" | "preparedRunAdmission">,
+  task: () => T,
+): T {
+  const instance =
+    params.admittedRunContext?.operationalRunInstance ??
+    params.preparedRunAdmission?.operationalRunInstance;
+  return instance && getGatewayToolCallerIdentity()?.operationalRunInstance === instance
+    ? task()
+    : withoutGatewayToolCallerIdentity(task);
+}
+
 export async function withSessionPlacementTurnAdmission(
   claim: LocalTurnPlacementClaim,
   params: SessionPlacementTurnParams,
@@ -128,10 +147,12 @@ export async function withSessionPlacementTurnAdmission(
     return result;
   };
   const provider = state.provider;
-  const result = await withoutSessionPlacementForcedTerminalSettlement(() =>
-    provider
-      ? provider.executeTurn(claim, params, runAdmittedLocalTurn, admitTurn)
-      : runAdmittedLocalTurn(),
+  const result = await withPlacementTurnCallerScope(params, () =>
+    withoutSessionPlacementForcedTerminalSettlement(() =>
+      provider
+        ? provider.executeTurn(claim, params, runAdmittedLocalTurn, admitTurn)
+        : runAdmittedLocalTurn(),
+    ),
   );
   if (result.meta.executionTrace?.runner === "cli") {
     settleYieldedRequesterAfterPlacementRelease(claim, result);
@@ -145,7 +166,12 @@ export async function withLocalSessionPlacementTurnSettlement(
   task: (assertSettlementCurrent: () => void) => Promise<EmbeddedAgentRunResult>,
   options: Pick<
     RunEmbeddedAgentParams,
-    "abortSignal" | "lifecycleGeneration" | "trigger" | "inputProvenance"
+    | "abortSignal"
+    | "lifecycleGeneration"
+    | "trigger"
+    | "inputProvenance"
+    | "admittedRunContext"
+    | "preparedRunAdmission"
   > = {},
 ): Promise<EmbeddedAgentRunResult> {
   const provider = state.provider;
@@ -201,8 +227,10 @@ export async function withLocalSessionPlacementTurnSettlement(
             open = false;
           }
         };
-        const result = await withoutSessionPlacementForcedTerminalSettlement(() =>
-          provider ? provider.executeLocalTurn(claim, runLocal) : runLocal(),
+        const result = await withPlacementTurnCallerScope(options, () =>
+          withoutSessionPlacementForcedTerminalSettlement(() =>
+            provider ? provider.executeLocalTurn(claim, runLocal) : runLocal(),
+          ),
         );
         settleYieldedRequesterAfterPlacementRelease(claim, result);
         return result;

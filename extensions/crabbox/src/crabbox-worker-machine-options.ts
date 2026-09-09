@@ -2,6 +2,10 @@ import type { WorkerProfile, WorkerProvider } from "openclaw/plugin-sdk/plugin-e
 import { asPositiveSafeInteger, isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { CrabboxCommandRunner } from "./crabbox-worker-command.js";
 import {
+  type createCrabboxVersionResolver,
+  supportsCrabboxWsl2,
+} from "./crabbox-worker-doctor-runtime.js";
+import {
   type CrabboxMachineShape,
   type CrabboxOperatingSystem,
   CRABBOX_ENROLLABLE_TARGETS,
@@ -21,6 +25,7 @@ type CrabboxMachineShapes = ReadonlyMap<string, CrabboxCatalog>;
 type CrabboxMachineOptionsResolverDependencies = {
   resolveBinary: (explicit?: string) => string;
   runCommand: CrabboxCommandRunner;
+  resolveVersion: ReturnType<typeof createCrabboxVersionResolver>;
   warn: (message: string) => void;
 };
 
@@ -114,7 +119,20 @@ export function createCrabboxMachineOptionsResolver(
       });
       machineShapesByBinary.set(binary, shapes);
     }
-    return { parsed, catalog: (await shapes).get(parsed.provider) };
+    const catalog = (await shapes).get(parsed.provider);
+    if (catalog?.operatingSystems.includes("windows/wsl2")) {
+      const version = await dependencies.resolveVersion(binary);
+      if (version.status === "indeterminate" || !supportsCrabboxWsl2(version.version)) {
+        return {
+          parsed,
+          catalog: {
+            operatingSystems: catalog.operatingSystems.filter((os) => os !== "windows/wsl2"),
+            machines: catalog.machines.filter((machine) => machine.os !== "windows/wsl2"),
+          },
+        };
+      }
+    }
+    return { parsed, catalog };
   };
   return {
     async listMachineOptions(profile) {

@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { gunzipSync } from "node:zlib";
@@ -20,6 +19,7 @@ import {
   preflightOpenClawStateDatabasePath,
   preflightOpenClawDatabaseSchemas,
 } from "./openclaw-database-preflight.js";
+import { snapshotPreflightSourceManifest } from "./openclaw-database-preflight.test-support.js";
 import { repairAuditEventsSchema } from "./openclaw-state-db-audit-migration.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import { OpenClawStateDatabaseSchemaMigrationRequiredError } from "./openclaw-state-db-schema-migration-required.js";
@@ -83,21 +83,6 @@ describe("OpenClaw database schema preflight", () => {
     return databasePath;
   }
 
-  function sourceManifest(stateDir: string) {
-    // Coordinator tmp/ files are lifecycle scratch; persistent artifacts must not change.
-    return fs
-      .readdirSync(stateDir, { recursive: true, encoding: "utf8" })
-      .filter((entry) => !entry.startsWith(`tmp${path.sep}`))
-      .filter((entry) => fs.statSync(path.join(stateDir, entry)).isFile())
-      .toSorted()
-      .map((entry) => [
-        entry,
-        createHash("sha256")
-          .update(fs.readFileSync(path.join(stateDir, entry)))
-          .digest("hex"),
-      ]);
-  }
-
   function createReleasedStateDatabase() {
     const stateDir = tempDirs.make("openclaw-startup-database-admission-");
     const env = { OPENCLAW_STATE_DIR: stateDir };
@@ -120,11 +105,11 @@ describe("OpenClaw database schema preflight", () => {
 
   it("refuses released legacy audit state before changing any persistent artifact", async () => {
     const { env, stateDir, statePath } = createReleasedStateDatabase();
-    const before = sourceManifest(stateDir);
+    const before = snapshotPreflightSourceManifest(stateDir);
     await expect(
       assertOpenClawDatabasesReady({ env, operation: "gateway-startup", config: {} }),
     ).rejects.toBeInstanceOf(OpenClawStateDatabaseSchemaMigrationRequiredError);
-    expect(sourceManifest(stateDir)).toEqual(before);
+    expect(snapshotPreflightSourceManifest(stateDir)).toEqual(before);
     await expect(preflightOpenClawStateDatabasePath(statePath)).resolves.toMatchObject({
       foundVersion: 1,
     });
@@ -153,11 +138,11 @@ describe("OpenClaw database schema preflight", () => {
           layout === "configured"
             ? { session: { store: path.join(stateDir, "custom", "sessions.json") } }
             : {};
-        const before = sourceManifest(stateDir);
+        const before = snapshotPreflightSourceManifest(stateDir, agentPath);
         await expect(
           assertOpenClawDatabasesReady({ env, operation: "gateway-startup", config }),
         ).rejects.toBeInstanceOf(OpenClawAgentDatabaseMediaMigrationRequiredError);
-        expect(sourceManifest(stateDir)).toEqual(before);
+        expect(snapshotPreflightSourceManifest(stateDir, agentPath)).toEqual(before);
       } finally {
         writer.close();
       }
@@ -177,7 +162,7 @@ describe("OpenClaw database schema preflight", () => {
     });
     closeOpenClawAgentDatabasesForTest();
     closeOpenClawStateDatabaseForTest();
-    const before = sourceManifest(root);
+    const before = snapshotPreflightSourceManifest(root);
     await expect(
       assertOpenClawDatabasesReady({
         env,
@@ -185,7 +170,7 @@ describe("OpenClaw database schema preflight", () => {
         config: { session: { store } },
       }),
     ).rejects.toThrow("belongs to agent beta; requested agent alpha");
-    expect(sourceManifest(root)).toEqual(before);
+    expect(snapshotPreflightSourceManifest(root)).toEqual(before);
   });
 
   it("admits supported forward state migration after the Doctor-owned audit repair", async () => {
@@ -197,11 +182,11 @@ describe("OpenClaw database schema preflight", () => {
     } finally {
       database.close();
     }
-    const before = sourceManifest(stateDir);
+    const before = snapshotPreflightSourceManifest(stateDir);
     await expect(
       assertOpenClawDatabasesReady({ env, operation: "gateway-startup", config: {} }),
     ).resolves.toBeUndefined();
-    expect(sourceManifest(stateDir)).toEqual(before);
+    expect(snapshotPreflightSourceManifest(stateDir)).toEqual(before);
     const migrated = openOpenClawStateDatabase({ env });
     expect(migrated.db.prepare("PRAGMA user_version").get()).toEqual({
       user_version: OPENCLAW_STATE_SCHEMA_VERSION,

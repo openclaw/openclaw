@@ -1,6 +1,5 @@
 // Shared execution helpers keep the public dispatcher small and reviewable.
 import { tryResolveAmbientOwnerAgentId } from "../agents/agent-scope-config.js";
-import type { AgentExecutionAuthBinding } from "../agents/execution-auth-binding.js";
 import type { ConfigSetOptions } from "../cli/config-set-input.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -614,10 +613,7 @@ export async function executeSetDefaultModel(
               ...(targetAgentId ? { agentId: targetAgentId } : {}),
               ...(opts.onVerifiedInferenceChanged
                 ? {
-                    onVerifiedExecution: (
-                      _auth: AgentExecutionAuthBinding,
-                      binding: SystemAgentVerifiedInferenceBinding,
-                    ) => {
+                    onVerifiedExecution: (binding: SystemAgentVerifiedInferenceBinding) => {
                       latestBinding = binding;
                     },
                   }

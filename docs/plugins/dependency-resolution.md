@@ -258,6 +258,9 @@ node scripts/lib/plugin-npm-runtime-build.mjs --prepare-native-import extensions
 This requires existing root SDK output in `dist/plugin-sdk` and the selected
 package's standalone runtime output. If the package output is missing, build
 it first with `node scripts/lib/plugin-npm-runtime-build.mjs extensions/<package>`.
+The standalone build runs the selected package's asset build command and copies
+its declared `openclaw.build.staticAssets` into `dist`, including for new packages
+that are not yet tracked by Git. Missing declared source files fail the build.
 The preparation command does not rebuild either output or execute plugin code.
 It only links the checkout as `node_modules/openclaw` for a real immediate
 source package that declares `openclaw` in `peerDependencies` or `dependencies`.

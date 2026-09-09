@@ -67,11 +67,14 @@ describe.skipIf(process.platform === "win32")("survivor manager fixture", () => 
     const setup = lane.slice(lane.indexOf("export CI=true"), lane.indexOf("SOURCE_VERSION="));
     const { home, systemctl, unit } = fixture(true, undefined, setup);
     const record = join(home, "target-env.json");
+    const pendingRecord = `${record}.pending`;
     const program = join(home, "target.mjs");
     writeFileSync(
       program,
       `import fs from "node:fs";
-fs.writeFileSync(${JSON.stringify(record)}, JSON.stringify({providers:process.env.OPENCLAW_SKIP_PROVIDERS ?? null, channels:process.env.OPENCLAW_SKIP_CHANNELS ?? null}));
+// The parent treats existence as readiness; publish only the complete JSON record.
+fs.writeFileSync(${JSON.stringify(pendingRecord)}, JSON.stringify({providers:process.env.OPENCLAW_SKIP_PROVIDERS ?? null, channels:process.env.OPENCLAW_SKIP_CHANNELS ?? null}));
+fs.renameSync(${JSON.stringify(pendingRecord)}, ${JSON.stringify(record)});
 process.on("SIGTERM", () => process.exit(0));
 setInterval(() => {}, 1000);
 `,

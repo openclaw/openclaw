@@ -45,6 +45,22 @@ describe("buildEmbeddedAttemptToolRunContext", () => {
     expect(context.runtimeToolAllowlist).toEqual(["memory_search", "memory_get"]);
   });
 
+  it("forwards memory trigger metadata into tool creation so append-only guards activate", () => {
+    const memoryFlushWritePath = "memory/2026-03-24.md";
+    const context = buildEmbeddedAttemptToolRunContext({ trigger: "memory", memoryFlushWritePath });
+    expect(context.trigger).toBe("memory");
+    expect(context.memoryFlushWritePath).toBe(memoryFlushWritePath);
+  });
+
+  it("forwards cron job id into tool creation so self-removal can be scoped", () => {
+    const context = buildEmbeddedAttemptToolRunContext({
+      trigger: "cron",
+      jobId: "job-current",
+    });
+    expect(context.trigger).toBe("cron");
+    expect(context.jobId).toBe("job-current");
+  });
+
   it.each([undefined, false, true])(
     "preserves originating inbound audio %s",
     (currentInboundAudio) => {

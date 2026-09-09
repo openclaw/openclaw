@@ -1087,11 +1087,11 @@ function main() {
     ...(trustedWorkflowHarness.contract === RELEASE_ISOLATION_TOOLING_CONTRACT
       ? {
           trusted_workflow_json: JSON.stringify({
-            ref: args.trustedWorkflowRef,
             fullRef:
               args.trustedWorkflowRef === "main"
                 ? "refs/heads/main"
                 : `refs/tags/${args.trustedWorkflowRef}`,
+            ref: args.trustedWorkflowRef,
             sha: workflowSha,
           }),
         }

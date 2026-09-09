@@ -29,7 +29,7 @@ const preparedVisionCatalog = vi.hoisted(() => [
 
 vi.mock("../../../../src/agents/prepared-model-catalog.js", () => ({
   loadProviderScopedThinkingCatalog: vi.fn(async () => []),
-  loadPreparedModelCatalog: vi.fn(async () => preparedVisionCatalog),
+  readPreparedModelCatalog: vi.fn(async () => preparedVisionCatalog),
 }));
 
 vi.mock("../../../../src/plugins/capability-provider-runtime.js", () => ({

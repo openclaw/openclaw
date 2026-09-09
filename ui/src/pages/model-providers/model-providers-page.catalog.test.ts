@@ -93,6 +93,36 @@ function createCatalogHarness() {
 }
 
 describe("ModelProvidersPage catalog discovery", () => {
+  it.each([false, true])(
+    "shows a catalog refresh failure without changing saved choices (retained rows: %s)",
+    async (hasRows) => {
+      const { context, discover, request, runtimeConfig } = createCatalogHarness();
+      const models = hasRows ? preparedCatalog.models : [];
+      discover.mockResolvedValue({ models, refreshFailed: true });
+      const page = appendPage(context);
+      await waitForFast(() => expect(page.data?.config).toEqual(savedModelConfig));
+      await page.updateComplete;
+
+      await openModelPicker(page);
+      const warning = "More models could not be discovered.";
+      await waitForFast(() =>
+        expect(page.querySelector(".model-providers__catalog-progress")?.textContent).toContain(
+          warning,
+        ),
+      );
+      await drainPageUpdates(page);
+      expect(page.data?.models).toEqual(models);
+      expect(page.textContent).toContain(warning);
+      expect(page.data?.catalogError).toBeNull();
+      expect(page.data?.config).toEqual(savedModelConfig);
+      expect(runtimeConfig.patch).not.toHaveBeenCalled();
+      expect(request.mock.calls.filter(([method]) => method === "models.list")).toEqual([
+        ["models.list", { agentId: "main", view: "configured" }, expect.anything()],
+        ["models.list", { agentId: "main", view: "configured", refresh: true }, expect.anything()],
+      ]);
+    },
+  );
+
   it.each([
     { picker: "primary", index: 0 },
     { picker: "utility", index: 1 },
@@ -188,7 +218,7 @@ describe("ModelProvidersPage catalog discovery", () => {
       expect(page.data?.config).toEqual(savedModelConfig);
       expect(runtimeConfig.patch).not.toHaveBeenCalled();
       expect(discover).toHaveBeenCalledOnce();
-      expect(readPublished).toHaveBeenCalledOnce();
+      expect(readPublished).toHaveBeenCalledTimes(2);
       expect(request.mock.calls.filter(([method]) => method === "models.list")).toHaveLength(3);
     },
   );
@@ -339,7 +369,7 @@ describe("ModelProvidersPage catalog discovery", () => {
       await openModelPicker(page, 1);
       await drainPageUpdates(page);
       expect(discover).toHaveBeenCalledTimes(replacement === "core refresh" ? 3 : 2);
-      expect(readPublished).not.toHaveBeenCalled();
+      expect(readPublished).toHaveBeenCalledOnce();
       expect(page.data?.models).toEqual(newer.models);
     },
   );

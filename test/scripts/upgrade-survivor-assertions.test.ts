@@ -94,6 +94,8 @@ source "$HARNESS_ROOT_DIR/scripts/lib/frozen-target-compat.sh"
 ${policy}
 printf '%s\\n' "\${UPGRADE_SCENARIO_DIR:-$HARNESS_ROOT_DIR/scripts/e2e/lib/upgrade-survivor}/assertions.mjs"
 printf '%s\\n' "$UPGRADE_RUNNER"
+printf '%s\\n' "$UPGRADE_TRUSTED_ASSERTIONS"
+printf '%s\\n' "$UPGRADE_TRUSTED_DIAGNOSTICS"
 printf '%s\\n' \${UPGRADE_SCENARIO_ARGS[@]+"\${UPGRADE_SCENARIO_ARGS[@]}"}
 printf '%s' "$OPENCLAW_FROZEN_UPGRADE_SURVIVOR_CLAWHUB_MODE" > "$MODE_PATH"
 `,
@@ -113,13 +115,18 @@ printf '%s' "$OPENCLAW_FROZEN_UPGRADE_SURVIVOR_CLAWHUB_MODE" > "$MODE_PATH"
       },
     },
   );
-  const [oracle, runner, ...mounts] = result.stdout.trim().split("\n").filter(Boolean);
+  const [oracle, runner, trustedAssertions, trustedDiagnostics, ...mounts] = result.stdout
+    .trim()
+    .split("\n")
+    .filter(Boolean);
   const clawhubMode = existsSync(modePath) ? readFileSync(modePath, "utf8") : undefined;
   const stagedScenario = mounts[0] === "-v" ? mounts[1]?.split(":", 1)[0] : undefined;
   return {
     result,
     oracle,
     runner,
+    trustedAssertions,
+    trustedDiagnostics,
     mounts,
     selectedOracle,
     selectedScenario,
@@ -1036,6 +1043,13 @@ describe("upgrade survivor assertions", () => {
           ),
         );
         if (selected) {
+          expect(proof.trustedAssertions).toBe(
+            "/tmp/openclaw-release-harness/scripts/e2e/lib/upgrade-survivor/assertions.mjs",
+          );
+          expect(proof.trustedDiagnostics).toBe(
+            "/tmp/openclaw-release-harness/scripts/e2e/lib/upgrade-survivor/diagnostics.mjs",
+          );
+          expect(proof.mounts.join("\n")).not.toContain("upgrade-survivor-trusted");
           expect(readFileSync(join(proof.stagedScenario!, "assertions.mjs"), "utf8")).toBe(
             readFileSync(proof.selectedOracle, "utf8"),
           );

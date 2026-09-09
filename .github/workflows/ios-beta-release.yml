@@ -269,6 +269,8 @@ jobs:
           OPENCLAW_MOBILE_RELEASE_INTENT_PATH: ${{ runner.temp }}/mobile-release-intent-ios/intent.json
           OPENCLAW_MOBILE_RELEASE_REF_MODE: intent
           OPENCLAW_MOBILE_RELEASE_TARGET_REF: ${{ needs.authorize.outputs.target_ref }}
+          SCAN_APP_NAME: OpenClaw
+          SCAN_DEPLOYMENT_TARGET_VERSION: "18.0"
           TESTFLIGHT_INTERNAL_GROUP: ${{ vars.TESTFLIGHT_INTERNAL_GROUP }}
         run: |
           set -euo pipefail

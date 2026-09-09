@@ -71,24 +71,51 @@ policy, shared classifier, tests, and workflow validation. GitHub loads tag
 workflows from the tagged commit; an incomplete copy can fail after building or
 move regular aliases. Run focused checks.
 
-Freeze the full branch-tip SHA. Before tagging, run Full Release Validation
-against that SHA; it also prepares and qualifies the exact npm and Docker bytes:
+Freeze the full branch-tip SHA and record the exact trusted-main Tooling SHA.
+Before tagging, run Full Release Validation through its immutable workflow
+transport; it also prepares and qualifies the exact npm and Docker bytes:
 
 ```bash
-RELEASE_SHA="$(git rev-parse HEAD)"
-
-gh workflow run full-release-validation.yml \
-  --ref extended-stable/YYYY.M.33 \
-  -f ref=extended-stable/YYYY.M.33 \
-  -f expected_sha="$RELEASE_SHA" \
-  -f release_profile=stable
+VALIDATION_SHA="<exact-candidate-sha>"
+TOOLING_SHA="<recorded-full-main-ancestor-sha>"
+CONTEXT_REF="extended-stable/YYYY.M.33"
+pnpm ci:full-release \
+  --sha "$VALIDATION_SHA" \
+  --target-ref "$CONTEXT_REF" \
+  --workflow-sha "$TOOLING_SHA" \
+  -f release_profile=stable \
+  -f run_release_soak=true \
+  -f fail_fast=false \
+  -f rerun_group=all \
+  -f reuse_evidence=false \
+  -f dispatch_release_evidence=false
 ```
 
-Run validation on the canonical branch; publish binds its workflow ref,
-head/target SHA, run ID, and attempt. Save the successful run ID and
-`run_attempt`. Use that ID for both npm preflight and full validation evidence
-when the manifest contains `publicationArtifacts.npmPreflight`. Historical
-manifests without it still need a standalone npm preflight for the same SHA.
+The helper dispatches from an immutable `release-ci/*` ref at the Tooling SHA,
+passes the Validation SHA as `ref` and `expected_sha`, and records the canonical
+branch as `target_context_ref`. GitHub workflow dispatch `--ref` must name a
+branch or tag; it cannot be a raw SHA. Save the successful run ID and
+`run_attempt`. When its manifest contains `publicationArtifacts.npmPreflight`,
+use that same Full Release Validation run and attempt for both npm preflight and
+full validation publication evidence.
+
+Extended-stable also requires a separate npm preflight from trusted `main`:
+
+```bash
+gh workflow run openclaw-npm-release.yml \
+  --repo openclaw/openclaw \
+  --ref main \
+  -f tag="$VALIDATION_SHA" \
+  -f preflight_only=true \
+  -f npm_dist_tag=extended-stable \
+  -f release_candidate_branch="$CONTEXT_REF"
+```
+
+This standalone run is a supplemental validation-only preflight. Do not pass
+its run ID as publication `preflight_run_id`: its `main` workflow head is not
+the canonical candidate branch/SHA identity required for standalone
+publication evidence. Publication continues to use the integrated Full Release
+Validation npm artifact and exact run attempt.
 
 Classify failures before editing:
 
@@ -99,7 +126,7 @@ Classify failures before editing:
   the bounded retry path.
 
 Any branch change invalidates both gates. Once they pass, require the tip still
-equals `RELEASE_SHA`, then push signed `vYYYY.M.P`. Later changes need the next
+equals `VALIDATION_SHA`, then push signed `vYYYY.M.P`. Later changes need the next
 patch; never move or delete the tag. Tagging fixes the immutable release
 identity; it does not publish Docker images.
 

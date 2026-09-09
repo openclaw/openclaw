@@ -31,7 +31,6 @@ import { createInstalledPluginOwnershipResolver } from "./installed-plugin-packa
 import {
   type ManagedPluginCatalogEntry,
   type ManagedPluginCatalog,
-  type OfficialCatalogResult,
   getManagedPluginCache,
   withManagedPluginCache,
   prepareCatalogEntry,
@@ -55,6 +54,7 @@ import {
   resolveOfficialExternalPluginId,
   resolveOfficialExternalPluginLabel,
 } from "./official-external-plugin-catalog.js";
+import type { OfficialCatalogResult } from "./official-external-plugin-catalog.types.js";
 import { tracksPluginDependencyStatus } from "./official-external-plugin-repair-hints.js";
 import { createPluginCache, getProcessPluginCache, withPluginCache } from "./plugin-cache.js";
 import {

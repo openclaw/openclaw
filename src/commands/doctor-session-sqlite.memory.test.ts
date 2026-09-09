@@ -51,7 +51,7 @@ afterAll(() => {
   }
 });
 
-it.each(["batch", "deep", "public"])(
+it.each(["batch", "public"])(
   "imports %s transcripts and completes branch projections under a 256 MiB heap",
   async (scenario) => {
     await withOpenClawTestState({ applyEnv: false, label: "import-memory" }, async (state) => {

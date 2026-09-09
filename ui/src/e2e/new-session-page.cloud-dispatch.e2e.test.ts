@@ -8,6 +8,7 @@ import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-
 import { tooltipTitleText } from "./control-ui-e2e-suite.test-support.ts";
 import {
   ONE_PIXEL_PNG_B64,
+  NEW_SESSION_MODEL_CATALOG,
   SESSION_LIST_DEFAULTS,
   TARGET_REPO,
   WORKSPACE,
@@ -125,6 +126,7 @@ suite.define(() => {
     const sessionKey = "agent:cloud:cloud-e2e";
     const gateway = await installMockGateway(page, {
       defaultAgentId: "cloud",
+      models: NEW_SESSION_MODEL_CATALOG,
       operatorScopes: ["operator.admin", "operator.read", "operator.write"],
       deferredMethods: ["sessions.dispatch"],
       featureMethods: [

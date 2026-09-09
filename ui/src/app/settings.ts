@@ -69,21 +69,6 @@ const CSS_WIDTH_IDENTIFIER_RE = /[A-Za-z][A-Za-z0-9-]*/g;
 const CSS_WIDTH_SIMPLE_RE = /^(?:\d+(?:\.\d+)?|\.\d+)(?:px|rem|em|ch|vw|vh|vmin|vmax|%)$/i;
 const CSS_WIDTH_MAX_LENGTH = 96;
 
-function hasBalancedParentheses(value: string): boolean {
-  let depth = 0;
-  for (const char of value) {
-    if (char === "(") {
-      depth++;
-    } else if (char === ")") {
-      depth--;
-      if (depth < 0) {
-        return false;
-      }
-    }
-  }
-  return depth === 0;
-}
-
 function hasAllowedWidthIdentifiers(value: string): boolean {
   for (const match of value.matchAll(CSS_WIDTH_IDENTIFIER_RE)) {
     const identifier = match[0].toLowerCase();
@@ -114,7 +99,7 @@ export function normalizeChatMessageMaxWidth(value: unknown): string | undefined
   }
   if (
     !CSS_WIDTH_ALLOWED_CHARS.test(normalized) ||
-    !hasBalancedParentheses(normalized) ||
+    !CSS.supports("max-width", normalized) ||
     !hasAllowedWidthIdentifiers(normalized)
   ) {
     return undefined;

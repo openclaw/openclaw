@@ -64,6 +64,7 @@ export function createSessionsListResult(
     defaultsThinkingOptions?: string[];
     defaultsThinkingDefault?: string;
     thinkingDefault?: string;
+    thinkingLevels?: GatewaySessionRow["thinkingLevels"];
     omitSessionFromList?: boolean;
   } = {},
 ): SessionsListResult {
@@ -77,6 +78,7 @@ export function createSessionsListResult(
     defaultsThinkingOptions,
     defaultsThinkingDefault,
     thinkingDefault,
+    thinkingLevels,
     omitSessionFromList = false,
   } = params;
 
@@ -100,6 +102,7 @@ export function createSessionsListResult(
             ...(model ? { model } : {}),
             ...(modelOverrideSource === undefined ? {} : { modelOverrideSource }),
             ...(thinkingDefault ? { thinkingDefault } : {}),
+            ...(thinkingLevels === undefined ? {} : { thinkingLevels }),
           }),
         ],
   };

@@ -154,7 +154,10 @@ function assertPluginUninstallConfigState(config, pluginId, label = pluginId) {
 
 function assertPluginRemoved(params) {
   const list = readJson(params.listFile);
-  if ((list.plugins || []).some((entry) => entry.id === params.pluginId)) {
+  if (
+    !params.allowLegacyRetainedListing &&
+    (list.plugins || []).some((entry) => entry.id === params.pluginId)
+  ) {
     throw new Error(`${params.pluginId} still listed after uninstall`);
   }
 
@@ -757,6 +760,10 @@ function assertNpmPluginRetained() {
   assertPluginRemoved({
     pluginId: "demo-plugin-npm",
     listFile: scratchFile("plugins-npm-retained.json"),
+    // Historical --keep-files removed config ownership but retained a
+    // discoverable plugin directory. Its list entry is expected until the
+    // subsequent reinstall; current releases persist an exact disabled marker.
+    allowLegacyRetainedListing: pluginUninstallMode === "legacy",
   });
   if (!fs.existsSync(installPath)) {
     throw new Error(`npm managed package was deleted by --keep-files: ${installPath}`);

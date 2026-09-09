@@ -1,7 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
-import ts from "typescript";
+import type ts from "typescript";
 import { parseReleaseVersion } from "./release-version.mjs";
+import { getTypeScript } from "./ts-guard-utils.mts";
 import {
   isUpdateCompatibilityChunk,
   UPDATE_COMPATIBILITY_CHUNK_HEADER,
@@ -78,10 +79,12 @@ function ownerAt(source: string, offset: number): string | undefined {
 }
 
 function parseModule(file: string, source: string): ts.SourceFile {
+  const ts = getTypeScript();
   return ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
 }
 
 function namedBinding(node: ts.BindingName): string[] {
+  const ts = getTypeScript();
   if (ts.isIdentifier(node)) {
     return [node.text];
   }
@@ -91,6 +94,7 @@ function namedBinding(node: ts.BindingName): string[] {
 }
 
 function inspectModule(file: string, source: string, sourceModule?: string): ModuleInfo {
+  const ts = getTypeScript();
   const info: ModuleInfo = {
     imports: new Map(),
     exports: new Map(),
@@ -281,6 +285,7 @@ class ModuleGraph {
 }
 
 function consumedExports(node: ts.CallExpression): string[] | undefined {
+  const ts = getTypeScript();
   let expression: ts.Node = node;
   let awaited = false;
   while (
@@ -355,6 +360,7 @@ export function recordUpdateCompatibilityRelease(params: {
     ) {
       continue;
     }
+    const ts = getTypeScript();
     const visit = (node: ts.Node) => {
       if (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword) {
         const owner = ownerAt(source, node.getStart());

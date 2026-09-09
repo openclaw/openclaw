@@ -244,7 +244,7 @@ vi.mock("../agents/model-selection.js", () => ({
 }));
 
 vi.mock("../agents/prepared-model-catalog.js", () => ({
-  loadPreparedModelCatalog: (params?: LoadPreparedModelCatalogParams) =>
+  readPreparedModelCatalog: (params?: LoadPreparedModelCatalogParams) =>
     loadPreparedModelCatalogMock(params),
   withPreparedModelCatalogOwner: (...args: Parameters<typeof withPreparedModelCatalogOwnerMock>) =>
     withPreparedModelCatalogOwnerMock(...args),

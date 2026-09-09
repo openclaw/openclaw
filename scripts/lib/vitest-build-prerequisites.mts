@@ -162,8 +162,6 @@ export function resolveVitestPretestBuildMode(
 ): VitestPretestBuildMode | undefined {
   const preparedSelections = selections.map((selection) => {
     const includedFiles = new Set<string>();
-    // Keep each pattern hot in Node's bounded glob cache across the small consumer list.
-    // Consumer-first traversal recompiles large include inventories for every file.
     for (const pattern of selection.includePatterns ?? []) {
       for (const { file } of runtimeConsumers) {
         if (!includedFiles.has(file) && path.matchesGlob(file, pattern)) {
