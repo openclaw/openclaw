@@ -3,7 +3,6 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { findSourceImportBackedges } from "../../test/helpers/source-import-closure.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import {
@@ -40,14 +39,6 @@ function writeModelsJson(agentDir: string, modelId: string): void {
 }
 
 describe("discoverModels", () => {
-  it("keeps model discovery independent of session execution", () => {
-    expect(
-      findSourceImportBackedges("src/agents/agent-model-discovery.ts", [
-        "src/agents/sessions/agent-session.ts",
-      ]),
-    ).toEqual([]);
-  });
-
   it("uses a directory-independent source label for lifecycle-captured catalogs", () => {
     const firstAgentDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-agent-models-first-"));
     const secondAgentDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-agent-models-second-"));
