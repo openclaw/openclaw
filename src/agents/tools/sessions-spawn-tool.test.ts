@@ -1127,6 +1127,9 @@ describe("sessions_spawn tool", () => {
         },
       },
       callGateway: callGateway as never,
+      // The prepared catalog carries no entry for this model, so runtime policy
+      // alone has to clamp the inherited level.
+      loadModelCatalog: (async () => []) as never,
       registerRun: vi.fn(),
       countActiveRuns: () => 0,
     });
@@ -1167,6 +1170,7 @@ describe("sessions_spawn tool", () => {
         },
       },
       callGateway: callGateway as never,
+      loadModelCatalog: (async () => []) as never,
       registerRun: vi.fn(),
       countActiveRuns: () => 0,
     });
@@ -1224,6 +1228,137 @@ describe("sessions_spawn tool", () => {
     ).rejects.toThrow('thinkingLevel "ultra" is not supported for openai/gpt-5.6-luna');
     expect(callGateway).toHaveBeenCalledTimes(1);
     expect(registerRun).not.toHaveBeenCalled();
+  });
+
+  it("clamps inherited thinking with the prepared child catalog's reasoning restriction", async () => {
+    const callGateway = vi.fn(async () => ({
+      key: "agent:main:dashboard:child",
+      runStarted: true,
+      runId: "run-visible",
+    }));
+    // `reasoning: false` is a catalog-only restriction, so a catalog-less lookup
+    // keeps the generic level that `sessions.create` then rejects outright.
+    const loadModelCatalog = vi.fn(async () => [
+      { id: "demo-off", provider: "demo", reasoning: false },
+    ]);
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+      requesterThinkingLevel: "high",
+      config: {
+        agents: {
+          defaults: { model: { primary: "demo/demo-off" } },
+          list: [{ id: "main" }],
+        },
+      },
+      callGateway: callGateway as never,
+      loadModelCatalog: loadModelCatalog as never,
+      registerRun: vi.fn(),
+      countActiveRuns: () => 0,
+    });
+
+    await tool.execute("visible-off-only-thinking", {
+      task: "inspect issue",
+      visible: true,
+    });
+
+    expect(loadModelCatalog).toHaveBeenCalledWith({
+      agentId: "main",
+      getConfig: expect.any(Function),
+    });
+    expect(callGateway).toHaveBeenCalledWith(
+      "sessions.create",
+      expect.objectContaining({
+        agentId: "main",
+        model: "demo/demo-off",
+        thinkingLevel: "off",
+      }),
+    );
+  });
+
+  it("omits inherited thinking when the prepared child catalog cannot be read", async () => {
+    const callGateway = vi.fn(async () => ({
+      key: "agent:main:dashboard:child",
+      runStarted: true,
+      runId: "run-visible",
+    }));
+    const loadModelCatalog = vi.fn(async () => {
+      throw new Error("catalog generation superseded");
+    });
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+      requesterThinkingLevel: "high",
+      config: {
+        agents: {
+          defaults: { model: { primary: "demo/demo-off" } },
+          list: [{ id: "main" }],
+        },
+      },
+      callGateway: callGateway as never,
+      loadModelCatalog: loadModelCatalog as never,
+      registerRun: vi.fn(),
+      countActiveRuns: () => 0,
+    });
+
+    const result = await tool.execute("visible-unverifiable-thinking", {
+      task: "inspect issue",
+      visible: true,
+    });
+
+    // An unverifiable level must not be forwarded: `sessions.create` rejects an
+    // explicit level it cannot support, so creation would fail where the
+    // pre-inheritance spawn (which sent no level at all) succeeded.
+    expect(result.details).toMatchObject({ status: "accepted", runId: "run-visible" });
+    expect(mockCallArg(callGateway, 0, 1, "sessions.create")).not.toHaveProperty("thinkingLevel");
+  });
+
+  it("clamps inherited thinking against the canonical model behind an explicit alias", async () => {
+    const callGateway = vi.fn(async () => ({
+      key: "agent:main:dashboard:child",
+      runStarted: true,
+      runId: "run-visible",
+    }));
+    const loadModelCatalog = vi.fn(async () => [
+      {
+        id: "demo-max",
+        provider: "demo",
+        reasoning: true,
+        thinkingLevelMap: { minimal: "low", xhigh: "xhigh", max: "max" },
+      },
+    ]);
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+      requesterThinkingLevel: "max",
+      config: {
+        agents: {
+          defaults: {
+            model: { primary: "demo/demo-base" },
+            models: { "demo/demo-max": { alias: "demo-fast" } },
+          },
+          list: [{ id: "main" }],
+        },
+      },
+      callGateway: callGateway as never,
+      loadModelCatalog: loadModelCatalog as never,
+      registerRun: vi.fn(),
+      countActiveRuns: () => 0,
+    });
+
+    await tool.execute("visible-alias-thinking", {
+      task: "inspect issue",
+      visible: true,
+      model: "demo-fast@work",
+    });
+
+    // The bare alias carries no provider, so an unresolved lookup grades `max`
+    // against the default provider and reduces it to the generic `high`.
+    expect(callGateway).toHaveBeenCalledWith(
+      "sessions.create",
+      expect.objectContaining({
+        agentId: "main",
+        model: "demo/demo-max@work",
+        thinkingLevel: "max",
+      }),
+    );
   });
 
   it("rejects cross-agent visible transcript forks", async () => {

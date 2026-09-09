@@ -2,6 +2,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { Type } from "typebox";
 import { readMissingScopeErrorDetails } from "../../../packages/gateway-protocol/src/gateway-error-details.js";
+import type { ThinkingCatalogEntry } from "../../auto-reply/thinking.js";
 import {
   DEFAULT_SUBAGENT_MAX_CHILDREN_PER_AGENT,
   DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH,
@@ -13,6 +14,7 @@ import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { ADMIN_SCOPE } from "../../gateway/method-scopes.js";
 import { resolveWorkspacePathContainment } from "../../gateway/server-methods/workspace-path-containment.js";
+import { loadGatewayModelCatalog } from "../../gateway/server-model-catalog.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import { isValidAgentId, normalizeAgentId } from "../../routing/session-key.js";
 import { recordSessionParticipantBestEffort } from "../../sessions/session-participant-recording.js";
@@ -71,6 +73,7 @@ export type VisibleSessionsSpawnDeps = {
   callGateway?: InProcessGatewayCaller;
   registerRun?: typeof registerSubagentRun;
   countActiveRuns?: typeof countActiveRunsForSession;
+  loadModelCatalog?: typeof loadGatewayModelCatalog;
 };
 
 type VisibleSessionsSpawnOptions = VisibleSessionsSpawnDeps &
@@ -93,6 +96,28 @@ type VisibleSessionsSpawnOptions = VisibleSessionsSpawnDeps &
 
 function summarizeSessionsSpawnError(error: unknown): string {
   return error instanceof Error ? error.message : typeof error === "string" ? error : "error";
+}
+
+/**
+ * Reads the same prepared catalog generation `sessions.create` validates against,
+ * so an inherited level is clamped with the child's real capabilities. An
+ * unreadable catalog yields `undefined`: the caller then forwards no explicit
+ * level instead of one it could not authorize.
+ */
+async function loadVisibleChildThinkingCatalog(params: {
+  loadModelCatalog?: typeof loadGatewayModelCatalog;
+  agentId: string;
+  cfg: OpenClawConfig;
+}): Promise<ThinkingCatalogEntry[] | undefined> {
+  try {
+    const catalog = await (params.loadModelCatalog ?? loadGatewayModelCatalog)({
+      agentId: params.agentId,
+      getConfig: () => params.cfg,
+    });
+    return Array.isArray(catalog) ? catalog : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 export async function maybeSpawnVisibleSession(params: {
@@ -242,8 +267,15 @@ export async function maybeSpawnVisibleSession(params: {
   if (!targetPolicy.ok) {
     return { status: "forbidden", error: targetPolicy.error };
   }
-  const resolvedModel =
-    modelOverride ?? resolveSubagentSpawnModelSelection({ cfg, agentId: targetAgentId });
+  // An explicit override may be a configured alias. Resolving it through the
+  // target agent's alias index (the same helper the hidden subagent plan uses)
+  // keeps the auth-profile suffix for creation while giving thinking policy the
+  // canonical child model instead of a bare alias under the default provider.
+  const resolvedModel = resolveSubagentSpawnModelSelection({
+    cfg,
+    agentId: targetAgentId,
+    modelOverride,
+  });
   const thinkingPlan = resolveSubagentThinkingOverride({
     cfg,
     requesterAgentConfig: resolveAgentConfig(cfg, requesterAgentId),
@@ -262,15 +294,31 @@ export async function maybeSpawnVisibleSession(params: {
       : undefined;
   const selectedModel = splitModelRef(splitTrailingAuthProfile(resolvedModel).model);
   const selectedDefaults = resolveDefaultModelForAgent({ cfg, agentId: targetAgentId });
-  const resolvedThinkingLevel = inheritedThinkingLevel
-    ? resolveCandidateThinkingLevel({
-        cfg,
-        provider: selectedModel.provider ?? selectedDefaults.provider,
-        modelId: selectedModel.model ?? selectedDefaults.model,
-        level: inheritedThinkingLevel,
+  // `sessions.create` rejects an explicit thinkingLevel its prepared catalog does
+  // not support, and only clamps silently when the field is absent. Catalog-only
+  // restrictions (`reasoning: false`) are invisible without the catalog, so an
+  // unclamped inherited level would fail a spawn that previously succeeded.
+  const inheritedThinkingCatalog = inheritedThinkingLevel
+    ? await loadVisibleChildThinkingCatalog({
+        loadModelCatalog: params.options?.loadModelCatalog,
         agentId: targetAgentId,
-        sessionKey: `agent:${targetAgentId}:dashboard:pending`,
+        cfg,
       })
+    : undefined;
+  const clampedInheritedThinkingLevel =
+    inheritedThinkingLevel && inheritedThinkingCatalog
+      ? resolveCandidateThinkingLevel({
+          cfg,
+          provider: selectedModel.provider ?? selectedDefaults.provider,
+          modelId: selectedModel.model ?? selectedDefaults.model,
+          level: inheritedThinkingLevel,
+          catalog: inheritedThinkingCatalog,
+          agentId: targetAgentId,
+          sessionKey: `agent:${targetAgentId}:dashboard:pending`,
+        })
+      : undefined;
+  const resolvedThinkingLevel = inheritedThinkingLevel
+    ? clampedInheritedThinkingLevel
     : thinkingPlan.initialSessionPatch.thinkingLevel;
   const runTimeoutSeconds = resolveConfiguredSubagentRunTimeoutSeconds({
     cfg,
