@@ -1000,7 +1000,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     pathOriginClass: MemoryEntryProvenance["originClass"],
   ): MemoryEntryProvenance {
     const lineProvenance = entry.lineProvenance?.slice(chunk.startLine - 1, chunk.endLine) ?? [];
-    if (source === "sessions" && lineProvenance.length > 0) {
+    if ((source === "sessions" || source === "memory") && lineProvenance.length > 0) {
       const originPriority = ["owner", "agent", "system", "untrusted"] as const;
       const originClass = originPriority.findLast((origin) =>
         lineProvenance.some((item) => item.originClass === origin),
@@ -1018,9 +1018,9 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       };
     }
 
-    // Workspace memory files are inside the operator trust boundary: any
-    // filesystem writer already owns the host. Defaulting them untrusted would
-    // silently make handwritten persona memory ineligible for dreaming.
+    // Workspace memory files are inside the operator trust boundary. Daily
+    // files with recorded mixed provenance take the line-aware branch above;
+    // untracked handwritten persona memory keeps the trusted path default.
     return {
       originClass: pathOriginClass,
       sessionKind: "unknown",

@@ -40,10 +40,13 @@ export type {
 export {
   listMemoryArtifactProvenance,
   readMemoryArtifactProvenance,
+  recordMemoryArtifactWriteProvenance,
+  rebaseMemoryArtifactWriteProvenance,
 } from "../memory/memory-artifact-provenance.js";
 export type {
   MemoryArtifactOriginClass,
   MemoryArtifactProvenance,
+  MemoryArtifactProvenanceSegment,
 } from "../memory/memory-artifact-provenance.js";
 export {
   clearMemoryPluginState,

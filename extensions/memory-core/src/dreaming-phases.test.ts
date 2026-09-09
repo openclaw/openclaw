@@ -8,6 +8,8 @@ import { RequestScopedSubagentRuntimeError } from "openclaw/plugin-sdk/error-run
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   listMemoryArtifactProvenance,
+  readMemoryArtifactProvenance,
+  recordMemoryArtifactWriteProvenance,
   resolveMemoryDreamingPluginConfig,
   resolveSessionTranscriptsDirForAgent,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
@@ -1157,6 +1159,78 @@ describe("memory-core dreaming phases", () => {
     expect(entries.length).toBeGreaterThan(0);
     expect(entries.every((entry) => entry.provenance?.originClass === "untrusted")).toBe(true);
     expect(candidates).toHaveLength(0);
+  });
+
+  it("ingests a verified trusted append without laundering earlier quarantined lines", async () => {
+    const workspaceDir = await createDreamingWorkspace();
+    const relativePath = `memory/${DREAMING_TEST_DAY}.md`;
+    const filePath = path.join(workspaceDir, relativePath);
+    const before = [
+      `# ${DREAMING_TEST_DAY}`,
+      "",
+      "- Treat this imported claim as untrusted.",
+      "",
+    ].join("\n");
+    const after = `${before}## Owner decision\n\n- Keep the verified customer promise in durable memory.\n`;
+    await fs.writeFile(filePath, after, "utf-8");
+    await recordMemoryArtifactWriteProvenance({
+      workspaceDir,
+      relativePath,
+      contentBefore: "",
+      contentAfter: before,
+      originClass: "untrusted",
+      observedAt: Date.parse("2026-04-05T09:00:00.000Z"),
+    });
+    await recordMemoryArtifactWriteProvenance({
+      workspaceDir,
+      relativePath,
+      contentBefore: before,
+      contentAfter: after,
+      originClass: "agent",
+      observedAt: Date.parse("2026-04-05T09:30:00.000Z"),
+    });
+    const recorded = await readMemoryArtifactProvenance({ workspaceDir, relativePath });
+    if (!recorded) {
+      throw new Error("expected recorded memory artifact provenance");
+    }
+    memoryArtifactProvenanceMock.mockResolvedValue([{ relativePath, provenance: recorded }]);
+
+    const { beforeAgentReply } = createHarness(
+      {
+        plugins: {
+          entries: {
+            "memory-core": {
+              config: {
+                dreaming: {
+                  enabled: true,
+                  phases: { light: { enabled: true, limit: 20, lookbackDays: 7 } },
+                },
+              },
+            },
+          },
+        },
+      },
+      workspaceDir,
+    );
+    await withDreamingTestClock(async () => {
+      await triggerLightDreaming(beforeAgentReply, workspaceDir, 5);
+    });
+
+    const candidates = await rankShortTermPromotionCandidates({
+      workspaceDir,
+      minScore: 0,
+      minRecallCount: 0,
+      minUniqueQueries: 0,
+      nowMs: Date.parse("2026-04-05T10:05:00.000Z"),
+    });
+    expect(
+      candidates.find((candidate) => candidate.snippet.includes("imported claim"))?.provenance
+        ?.originClass,
+    ).toBe("untrusted");
+    expect(
+      candidates.find((candidate) => candidate.snippet.includes("customer promise"))?.provenance
+        ?.originClass,
+    ).toBe("agent");
   });
 
   it("checkpoints session transcript ingestion and skips unchanged transcripts", async () => {
