@@ -48,12 +48,22 @@ jobs:
             sw_vers
           } >"$DIAGNOSTIC_DIR/runner.txt"
 
+      - name: Checkout trusted Android tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+          sparse-checkout: .github/actions/setup-android-toolchain
+          path: .mobile-release-tooling
+
       - name: Checkout exact target
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.target_sha }}
           fetch-depth: 1
           persist-credentials: false
+          path: candidate
 
       - name: Verify exact target checkout
         shell: bash
@@ -61,11 +71,39 @@ jobs:
           TARGET_SHA: ${{ inputs.target_sha }}
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
-          git status --short --branch >"$DIAGNOSTIC_DIR/checkout-status.txt"
+          test "$(git -C candidate rev-parse HEAD)" = "$TARGET_SHA"
+          git -C candidate status --short --branch >"$DIAGNOSTIC_DIR/checkout-status.txt"
+
+      - name: Verify Android toolchain action parity
+        shell: bash
+        run: |
+          set -euo pipefail
+          action_path=".github/actions/setup-android-toolchain/action.yml"
+          read -r trusted_mode trusted_type trusted_oid trusted_path < <(
+            git -C .mobile-release-tooling ls-tree HEAD -- "$action_path"
+          )
+          read -r candidate_mode candidate_type candidate_oid candidate_path < <(
+            git -C candidate ls-tree HEAD -- "$action_path"
+          )
+          if [[ "$trusted_mode" != "100644" || "$trusted_type" != "blob" || "$trusted_path" != "$action_path" ]]; then
+            echo "::error::Trusted Android toolchain action is not a regular committed file"
+            exit 1
+          fi
+          if [[ "$candidate_mode" != "100644" || "$candidate_type" != "blob" || "$candidate_path" != "$action_path" ]]; then
+            echo "::error::Candidate Android toolchain action is not a regular committed file"
+            exit 1
+          fi
+          trusted_blob="$RUNNER_TEMP/trusted-setup-android-toolchain.yml"
+          candidate_blob="$RUNNER_TEMP/candidate-setup-android-toolchain.yml"
+          git -C .mobile-release-tooling cat-file blob "$trusted_oid" >"$trusted_blob"
+          git -C candidate cat-file blob "$candidate_oid" >"$candidate_blob"
+          if ! cmp -s "$trusted_blob" "$candidate_blob"; then
+            echo "::error::Candidate Android toolchain action differs from trusted workflow tooling"
+            exit 1
+          fi
 
       - name: Setup Android toolchain
-        uses: ./.github/actions/setup-android-toolchain
+        uses: ./.mobile-release-tooling/.github/actions/setup-android-toolchain
         with:
           cache-mode: "off"
           install-screenshot-emulators: "true"

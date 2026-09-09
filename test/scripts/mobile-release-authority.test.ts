@@ -1787,8 +1787,14 @@ describe("mobile release authority", () => {
     const job = workflow.jobs.diagnose;
     const steps = job.steps;
     const validateIndex = steps.findIndex((step) => step.name === "Validate target SHA");
+    const trustedCheckoutIndex = steps.findIndex(
+      (step) => step.name === "Checkout trusted Android tooling",
+    );
     const checkoutIndex = steps.findIndex((step) => step.name === "Checkout exact target");
     const headIndex = steps.findIndex((step) => step.name === "Verify exact target checkout");
+    const parityIndex = steps.findIndex(
+      (step) => step.name === "Verify Android toolchain action parity",
+    );
     const setupIndex = steps.findIndex((step) => step.name === "Setup Android toolchain");
     const diagnosticIndex = steps.findIndex(
       (step) => step.name === "Run phone emulator diagnostic",
@@ -1817,9 +1823,11 @@ describe("mobile release authority", () => {
     });
 
     expect(validateIndex).toBe(0);
-    expect(checkoutIndex).toBe(validateIndex + 1);
+    expect(trustedCheckoutIndex).toBe(validateIndex + 1);
+    expect(checkoutIndex).toBe(trustedCheckoutIndex + 1);
     expect(headIndex).toBe(checkoutIndex + 1);
-    expect(setupIndex).toBeGreaterThan(headIndex);
+    expect(parityIndex).toBe(headIndex + 1);
+    expect(setupIndex).toBe(parityIndex + 1);
     expect(diagnosticIndex).toBe(setupIndex + 1);
     expect(artifactIndex).toBe(diagnosticIndex + 1);
     expect(steps[validateIndex]?.env).toEqual({
@@ -1832,25 +1840,101 @@ describe("mobile release authority", () => {
     expect(steps[validateIndex]?.run).toContain(
       'echo "DIAGNOSTIC_DIR=$DIAGNOSTIC_DIR" >>"$GITHUB_ENV"',
     );
+    expect(steps[trustedCheckoutIndex]).toMatchObject({
+      uses: "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+      with: {
+        ref: "${{ github.workflow_sha }}",
+        "fetch-depth": 1,
+        "persist-credentials": false,
+        "sparse-checkout": ".github/actions/setup-android-toolchain",
+        path: ".mobile-release-tooling",
+      },
+    });
     expect(steps[checkoutIndex]).toMatchObject({
       uses: "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
       with: {
         ref: "${{ inputs.target_sha }}",
         "fetch-depth": 1,
         "persist-credentials": false,
+        path: "candidate",
       },
     });
     expect(steps[headIndex]?.env).toEqual({
       TARGET_SHA: "${{ inputs.target_sha }}",
     });
-    expect(steps[headIndex]?.run).toContain('test "$(git rev-parse HEAD)" = "$TARGET_SHA"');
+    expect(steps[headIndex]?.run).toContain(
+      'test "$(git -C candidate rev-parse HEAD)" = "$TARGET_SHA"',
+    );
     expect(steps[setupIndex]).toMatchObject({
-      uses: "./.github/actions/setup-android-toolchain",
+      uses: "./.mobile-release-tooling/.github/actions/setup-android-toolchain",
       with: {
         "cache-mode": "off",
         "install-screenshot-emulators": "true",
       },
     });
+
+    const parityScript = steps[parityIndex]?.run ?? "";
+    expect(parityScript).toContain("git -C .mobile-release-tooling ls-tree");
+    expect(parityScript).toContain("git -C candidate ls-tree");
+    expect(parityScript).toContain("cat-file blob");
+    expect(parityScript).toContain("cmp -s");
+
+    const actionPath = ".github/actions/setup-android-toolchain/action.yml";
+    const trustedAction = "name: fixture\nruns:\n  using: composite\n  steps: []\n";
+    const runParityGate = (candidate: "matching" | "modified" | "symlink") => {
+      const root = tempRoots.make("openclaw-android-emulator-diagnostic-parity-");
+      const trusted = path.join(root, ".mobile-release-tooling");
+      const target = path.join(root, "candidate");
+      const runnerTemp = path.join(root, "runner-temp");
+      const sentinel = path.join(root, "setup-ran");
+      fs.mkdirSync(runnerTemp);
+      for (const repository of [trusted, target]) {
+        fs.mkdirSync(repository);
+        git(repository, "init", "-q");
+        git(repository, "config", "user.name", "OpenClaw Test");
+        git(repository, "config", "user.email", "test@openclaw.invalid");
+      }
+      writeFile(trusted, actionPath, trustedAction);
+      if (candidate === "symlink") {
+        const candidatePath = path.join(target, actionPath);
+        fs.mkdirSync(path.dirname(candidatePath), { recursive: true });
+        fs.symlinkSync(path.join(trusted, actionPath), candidatePath);
+      } else {
+        writeFile(
+          target,
+          actionPath,
+          candidate === "matching"
+            ? trustedAction
+            : trustedAction.replace("fixture", "substituted"),
+        );
+      }
+      commit(trusted, "trusted action");
+      commit(target, "candidate action");
+
+      const result = spawnSync(
+        "/bin/bash",
+        ["-c", `${parityScript}\nprintf 'setup\\n' >"$SETUP_SENTINEL"\n`],
+        {
+          cwd: root,
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            RUNNER_TEMP: runnerTemp,
+            SETUP_SENTINEL: sentinel,
+          },
+        },
+      );
+      return { result, sentinel };
+    };
+
+    const matching = runParityGate("matching");
+    expect(matching.result.status, matching.result.stderr).toBe(0);
+    expect(fs.readFileSync(matching.sentinel, "utf8")).toBe("setup\n");
+    for (const candidate of ["modified", "symlink"] as const) {
+      const rejected = runParityGate(candidate);
+      expect(rejected.result.status).not.toBe(0);
+      expect(fs.existsSync(rejected.sentinel)).toBe(false);
+    }
 
     const diagnostic = steps[diagnosticIndex]?.run ?? "";
     expect(diagnostic).toContain(
