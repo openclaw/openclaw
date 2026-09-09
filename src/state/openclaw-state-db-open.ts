@@ -6,6 +6,7 @@ import {
   setSqliteBusyTimeout,
   type SqliteLockFailureReporting,
 } from "../infra/sqlite-busy-timeout.js";
+import { createSqliteLifecycleAggregateError } from "../infra/sqlite-coordinator.js";
 import {
   assertSqliteIntegrity,
   isTerminalSqliteIntegrityError,
@@ -17,6 +18,7 @@ import {
   type SqliteWalMaintenance,
 } from "../infra/sqlite-wal.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { openClawStateDatabaseCache } from "./openclaw-state-db-cache.js";
 import {
   OPENCLAW_STATE_SCHEMA_VERSION,
   type OpenClawStateDatabase,
@@ -64,18 +66,18 @@ export function openUnpublishedStateDatabase(params: {
   const { busyTimeoutMs, lockFailureReporting } = params;
   ensureOpenClawStatePermissions(params.pathname, params.env);
   const db = openNodeSqliteDatabase(params.pathname);
-  enableNodeSqliteKyselyStatementCache(db);
-  setSqliteBusyTimeout(db, busyTimeoutMs);
-  const walMaintenance = runWithSqliteBusyTimeout(
-    db,
-    busyTimeoutMs,
-    () => {
-      let maintenance: SqliteWalMaintenance | undefined;
-      try {
+  let walMaintenance: SqliteWalMaintenance | undefined;
+  try {
+    enableNodeSqliteKyselyStatementCache(db);
+    setSqliteBusyTimeout(db, busyTimeoutMs);
+    const maintenance = runWithSqliteBusyTimeout(
+      db,
+      busyTimeoutMs,
+      () => {
         assertSupportedStateSchemaVersion(db, params.pathname);
         assertStateDatabaseIntegrityBeforeMutation(db, params.pathname);
         configureSqlitePreSchemaPragmas(db, { busyTimeoutMs });
-        maintenance = configureSqliteConnectionPragmas(db, {
+        walMaintenance = configureSqliteConnectionPragmas(db, {
           busyTimeoutMs,
           databaseLabel: "openclaw-state",
           databasePath: params.pathname,
@@ -83,21 +85,32 @@ export function openUnpublishedStateDatabase(params: {
           synchronous: "NORMAL",
         });
         params.ensureSchema(db);
-        return maintenance;
-      } catch (error) {
-        maintenance?.close();
-        db.close();
-        if (
-          error instanceof Error &&
-          (isSqliteSchemaVersionError(error) || isTerminalSqliteIntegrityError(error))
-        ) {
-          params.recordOpenFailure(params.pathname, error);
-        }
-        throw error;
-      }
-    },
-    { lockFailureReporting },
-  );
-  ensureOpenClawStatePermissions(params.pathname, params.env);
-  return { db, path: params.pathname, walMaintenance };
+        return walMaintenance;
+      },
+      { lockFailureReporting },
+    );
+    ensureOpenClawStatePermissions(params.pathname, params.env);
+    return { db, path: params.pathname, walMaintenance: maintenance };
+  } catch (error) {
+    // Acquisition owns the native handle until every setup and hardening step returns.
+    const errors = openClawStateDatabaseCache.closeOpenClawStateDatabaseHandle({
+      db,
+      path: params.pathname,
+      walMaintenance,
+    });
+    if (
+      error instanceof Error &&
+      (isSqliteSchemaVersionError(error) || isTerminalSqliteIntegrityError(error))
+    ) {
+      params.recordOpenFailure(params.pathname, error);
+    }
+    if (errors.length > 0) {
+      throw createSqliteLifecycleAggregateError(
+        [error, ...errors],
+        `OpenClaw state database acquisition and cleanup failed for ${params.pathname}.`,
+        error,
+      );
+    }
+    throw error;
+  }
 }
