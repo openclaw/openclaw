@@ -5,6 +5,7 @@ import process from "node:process";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { Command as CommanderCommand, Option as CommanderOption } from "commander";
+import { isSupportedOpenClawNodeVersion } from "../../node-version.mjs";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import {
   createInvalidConfigError,
@@ -1110,7 +1111,7 @@ async function runCliWithPreparedOutputMode(
 
   // Enforce the minimum supported runtime before gateway selection can read or recover config.
   const { assertSupportedRuntime } = await import("../infra/runtime-guard.js");
-  await assertSupportedRuntime();
+  await assertSupportedRuntime(undefined, undefined, normalizedArgv);
 
   if (
     !isHelpOrVersionInvocation &&
@@ -1192,6 +1193,7 @@ async function runCliWithPreparedOutputMode(
     env: process.env,
   });
   const useSourceOnlyBestEffortConfig =
+    (!process.versions.bun && !isSupportedOpenClawNodeVersion(process.versions.node)) ||
     normalizedInvocation.primary === "update" ||
     (normalizedInvocation.primary === "doctor" && hasFlag(normalizedArgv, "--lint"));
   const readBestEffortCliConfig = async (): Promise<OpenClawConfig> => {

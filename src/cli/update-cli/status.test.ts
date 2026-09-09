@@ -17,6 +17,22 @@ const runtime = vi.hoisted(() => ({
   exit: vi.fn(),
 }));
 
+const service = vi.hoisted(() => ({
+  readCommand: vi.fn(),
+  resolveNodeRuntimeInfo: vi.fn(),
+}));
+
+vi.mock("../../daemon/service.js", () => ({
+  resolveGatewayService: () => ({ readCommand: service.readCommand }),
+}));
+vi.mock("../../daemon/runtime-paths.js", () => ({
+  resolveNodeRuntimeInfo: service.resolveNodeRuntimeInfo,
+}));
+vi.mock("../../config/paths.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../config/paths.js")>()),
+  isDefaultInstallIdentity: () => true,
+}));
+
 vi.mock("../../runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../runtime.js")>()),
   defaultRuntime: runtime,
@@ -42,13 +58,78 @@ const tempDirs = createTempDirTracker();
 
 beforeEach(() => {
   vi.clearAllMocks();
+  service.readCommand.mockResolvedValue(null);
   vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-update-status-"));
+});
+
+describe("update status Node runtime findings", () => {
+  it.each([
+    { version: "22.23.2", source: "cli" },
+    { version: "26.0.0", source: "cli" },
+    { version: "22.23.2", source: "gateway-service" },
+    { version: "26.0.0", source: "gateway-service" },
+  ])(
+    "reports unsupported $source Node $version with recovery instructions",
+    async ({ version, source }) => {
+      vi.stubGlobal("process", {
+        ...process,
+        versions: { ...process.versions, node: source === "cli" ? version : "26.8.1" },
+      });
+      if (source === "gateway-service") {
+        service.readCommand.mockResolvedValue({
+          programArguments: ["/fixture/node", "openclaw.mjs", "gateway"],
+        });
+        service.resolveNodeRuntimeInfo.mockResolvedValue({
+          status: "unsupported",
+          version,
+          sqliteVersion: "3.50.2",
+          nodeSharedSqlite: false,
+        });
+      }
+
+      await updateStatusCommand({ json: true });
+
+      expect(runtime.writeJson).toHaveBeenCalledWith(
+        expect.objectContaining({
+          runtimeFindings: [
+            expect.objectContaining({
+              source,
+              message: expect.stringContaining(version),
+              requirement: expect.stringContaining(">=24.16.0 <25, or >=26.1.0"),
+              fixHint: expect.stringContaining("https://openclaw.ai/install.sh"),
+            }),
+          ],
+        }),
+      );
+      await updateStatusCommand({});
+      const output = runtime.log.mock.calls.map(([line]) => String(line)).join("\n");
+      expect(output).toContain(version);
+      expect(output).toContain("npm");
+      expect(output).toContain("nvm install 26");
+    },
+  );
+
+  it("does not report a supported CLI or recorded service Node", async () => {
+    vi.stubGlobal("process", { ...process, versions: { ...process.versions, node: "26.8.1" } });
+    service.readCommand.mockResolvedValue({
+      programArguments: ["/fixture/node", "openclaw.mjs", "gateway"],
+    });
+    service.resolveNodeRuntimeInfo.mockResolvedValue({
+      status: "supported",
+      version: "26.8.1",
+      sqliteVersion: "3.53.0",
+      nodeSharedSqlite: false,
+    });
+    await updateStatusCommand({ json: true });
+    expect(runtime.writeJson.mock.lastCall?.[0].runtimeFindings ?? []).toEqual([]);
+  });
 });
 
 afterEach(() => {
   closeOpenClawStateDatabaseForTest();
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
+  vi.unstubAllGlobals();
   tempDirs.cleanup();
 });
 

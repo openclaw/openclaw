@@ -57,6 +57,18 @@ export function resolveInitialDoctorHealthContributions(params: {
 }): DoctorHealthContribution[] {
   return [
     createDoctorHealthContribution({
+      id: "doctor:node-runtime",
+      label: "Node runtime",
+      healthChecks: {
+        description: "The CLI and recorded Gateway service use supported Node runtimes.",
+        async detect(ctx) {
+          const { collectNodeRuntimeFindings } =
+            await import("../commands/node-runtime-diagnostics.js");
+          return collectNodeRuntimeFindings(ctx.env);
+        },
+      },
+    }),
+    createDoctorHealthContribution({
       id: "doctor:write-config-migrations",
       label: "Write config migrations",
       required: true,

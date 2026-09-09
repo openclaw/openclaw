@@ -73,6 +73,71 @@ describe("runtime-guard", () => {
     }
   });
 
+  it.each([
+    ["--version"],
+    ["-V"],
+    ["--help"],
+    ["gateway", "status"],
+    ["gateway", "status", "--deep"],
+    ["doctor"],
+    ["doctor", "--lint"],
+    ["doctor", "--lint", "--json"],
+    ["update", "status"],
+    ["update"],
+    ["triage", "--json"],
+    ["triage", "--non-interactive"],
+    ["--profile", "fixture", "gateway", "status", "--deep"],
+  ])("allows unsupported Node diagnostics: %j", async (...args) => {
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+    await assertSupportedRuntime(
+      runtime,
+      {
+        kind: "node",
+        version: "22.23.2",
+        execPath: "/usr/bin/node",
+        pathEnv: "/usr/bin",
+        hasNodeSqlite: true,
+        sqliteVersion: null,
+      },
+      ["node", "openclaw", ...args],
+    );
+    expect(runtime.exit).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [],
+    ["gateway"],
+    ["gateway", "start"],
+    ["gateway", "run"],
+    ["status"],
+    ["doctor", "--fix"],
+    ["doctor", "--lint", "--repair"],
+    ["doctor", "--yes"],
+    ["doctor", "--state-sqlite", "compact"],
+    ["triage"],
+    ["triage", "--json", "--run"],
+    ["triage", "--non-interactive", "--agent", "codex"],
+    ["update", "repair"],
+    ["database", "vacuum"],
+    ["--profile", "--help", "gateway", "start"],
+    ["agent", "--message", "--help"],
+  ])("refuses unsupported Node mutation: %j", async (...args) => {
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+    await assertSupportedRuntime(
+      runtime,
+      {
+        kind: "node",
+        version: "26.0.0",
+        execPath: "/usr/bin/node",
+        pathEnv: "/usr/bin",
+        hasNodeSqlite: true,
+        sqliteVersion: null,
+      },
+      ["node", "openclaw", ...args],
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+  });
+
   it("keeps healthy runtime checks independent of diagnostic formatting", async () => {
     await assertSupportedRuntime();
     expect(state.diagnosticLoads).toBe(0);

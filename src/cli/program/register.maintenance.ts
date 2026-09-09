@@ -1,5 +1,6 @@
 // Maintenance command registration: doctor, triage, dashboard, reset, and uninstall.
 import type { Command } from "commander";
+import { isSupportedOpenClawNodeVersion } from "../../../node-version.mjs";
 import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -132,7 +133,10 @@ export function registerMaintenanceCommands(program: Command) {
         opts.postUpgrade !== true &&
         typeof opts.stateSqlite !== "string" &&
         typeof opts.sessionSqlite !== "string";
-      const lintMode = opts.lint === true ? "--lint" : jsonImpliesLint ? "--json" : undefined;
+      const unsupportedNode =
+        !process.versions.bun && !isSupportedOpenClawNodeVersion(process.versions.node);
+      const lintMode =
+        opts.lint === true || unsupportedNode ? "--lint" : jsonImpliesLint ? "--json" : undefined;
       const mutationOption =
         opts.repair === true || opts.fix === true || opts.force === true
           ? "--repair, --fix, or --force"

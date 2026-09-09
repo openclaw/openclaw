@@ -7,6 +7,11 @@ import module from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  classifyUnsupportedNodeCommand,
+  formatUnsupportedNodeDiagnosticWarning,
+  isSupportedOpenClawNodeVersion,
+} from "./node-version.mjs";
 
 const isSourceCheckoutLauncher = () =>
   existsSync(new URL("./.git", import.meta.url)) ||
@@ -47,6 +52,10 @@ const ensureSupportedRuntimeVersion = async () => {
     }
     return false;
   }
+  const unsupportedCommand = classifyUnsupportedNodeCommand(process.argv);
+  if (unsupportedCommand === "diagnostic") {
+    return;
+  }
 
   process.stderr.write(`openclaw: ${failure}\n`);
   // These invocations have an exact-PID contract and cannot acquire a wrapper process.
@@ -76,6 +85,9 @@ const ensureSupportedRuntimeVersion = async () => {
       `  nvm use ${RECOMMENDED_NODE_MAJOR}\n` +
       `  nvm alias default ${RECOMMENDED_NODE_MAJOR}\n`,
   );
+  if (unsupportedCommand === "update") {
+    return;
+  }
   return process.exit(1);
 };
 
@@ -787,7 +799,9 @@ const tryOutputPrecomputedCommandHelp = () => {
 const waitingForNodeUpdateRespawn = await ensureSupportedRuntimeVersion();
 
 if (!waitingForNodeUpdateRespawn) {
+  // Diagnostics must not replay package lifecycle scripts under an unsupported Node.
   if (
+    (process.versions.bun || isSupportedOpenClawNodeVersion(process.versions.node)) &&
     !isSourceCheckoutLauncher() &&
     (existsSync(new URL("./.openclaw-lifecycle-pending", import.meta.url)) ||
       existsSync(new URL("./dist/openclaw-install-guard", import.meta.url)))
@@ -805,6 +819,9 @@ if (!waitingForNodeUpdateRespawn) {
     }
   }
   if (tryOutputLauncherVersion(process.argv)) {
+    if (!process.versions.bun && !isSupportedOpenClawNodeVersion(process.versions.node)) {
+      process.stderr.write(`${formatUnsupportedNodeDiagnosticWarning(process.versions.node)}\n`);
+    }
     process.exit(0);
   }
 }
@@ -833,7 +850,9 @@ if (
 
 if (!waitingForCompileCacheRespawn) {
   if (!isHelpFastPathDisabled() && (await tryOutputBareRootHelp())) {
-    // OK
+    if (!process.versions.bun && !isSupportedOpenClawNodeVersion(process.versions.node)) {
+      process.stderr.write(`${formatUnsupportedNodeDiagnosticWarning(process.versions.node)}\n`);
+    }
   } else if (!isHelpFastPathDisabled() && tryOutputPrecomputedCommandHelp()) {
     // OK
   } else {

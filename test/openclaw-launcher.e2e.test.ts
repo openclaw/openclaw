@@ -373,6 +373,45 @@ describe("openclaw launcher", () => {
     });
   });
 
+  it.each([
+    ["--version"],
+    ["-V"],
+    ["--help"],
+    ["gateway", "status", "--deep"],
+    ["doctor", "--lint"],
+    ["doctor"],
+    ["update", "status"],
+    ["update"],
+    ["triage", "--json"],
+    ["triage", "--non-interactive"],
+  ])("admits packaged diagnostics on unsupported Node: %j", async (...args) => {
+    const root = await makeLauncherFixture(fixtureRoots);
+    await fs.writeFile(
+      path.join(root, "package.json"),
+      JSON.stringify({ name: "openclaw", version: "2026.9.3" }),
+    );
+    await fs.writeFile(
+      path.join(root, "dist", "entry.js"),
+      'process.stdout.write("diagnostic-entry\\n");',
+    );
+    const preload = path.join(root, "unsupported.mjs");
+    await fs.writeFile(
+      preload,
+      'Object.defineProperty(process.versions, "node", { value: "22.23.2" });',
+    );
+    const result = spawnSync(
+      process.execPath,
+      ["--import", pathToFileURL(preload).href, path.join(root, "openclaw.mjs"), ...args],
+      {
+        cwd: root,
+        env: launcherEnv({ NODE_DISABLE_COMPILE_CACHE: "1" }),
+        encoding: "utf8",
+      },
+    );
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toMatch(/OpenClaw 2026\.9\.3|diagnostic-entry/);
+  });
+
   it("admits lossless Node builds outside the support table while retaining the major floor", async () => {
     const fixtureRoot = await makeLauncherFixture(fixtureRoots);
     await fs.writeFile(
@@ -399,7 +438,8 @@ describe("openclaw launcher", () => {
           "--import",
           pathToFileURL(mockNodeVersionPath).href,
           path.join(fixtureRoot, "openclaw.mjs"),
-          "--help",
+          "gateway",
+          "start",
         ],
         {
           cwd: fixtureRoot,
