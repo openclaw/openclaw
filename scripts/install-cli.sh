@@ -695,7 +695,6 @@ parse_node_release_version() {
   local major minor patch
 
   NODE_RELEASE_VERSION_CORE=""
-  NODE_RELEASE_VERSION_MAJOR=""
   while [[ "$version" == [[:space:]]* ]]; do version="${version#?}"; done
   while [[ "$version" == *[[:space:]] ]]; do version="${version%?}"; done
   if [[ ! "$version" =~ ^v?(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]]; then
@@ -711,7 +710,6 @@ parse_node_release_version() {
   done
 
   NODE_RELEASE_VERSION_CORE="${major}.${minor}.${patch}"
-  NODE_RELEASE_VERSION_MAJOR="$major"
 }
 
 node_release_version_is_supported() {
