@@ -12,6 +12,8 @@ import {
 import { createCopilotAgentHarness, type CopilotSessionBinding } from "./harness.js";
 import { createCopilotClientPool, type CopilotClientPool } from "./src/runtime.js";
 
+export type CopilotSessionBindingForTest = CopilotSessionBinding;
+
 type CopilotSessionConfigProbe = {
   availableTools: readonly string[] | undefined;
   toolNames: readonly string[];
@@ -247,16 +249,17 @@ function createNativePolicyPool(requests: NativeModelRequestProbe[]): CopilotCli
         useLoggedInUser: false,
       });
       activeClients.add(client);
+      const pooledClient: CopilotClient = Object.assign(Object.create(CopilotClient.prototype), {
+        createSession: (config: SessionConfig) =>
+          client.createSession(withNativeFixtureProvider(config)),
+        deleteSession: (sessionId: string) => client.deleteSession(sessionId),
+        resumeSession: (sessionId: string, config: ResumeSessionConfig) =>
+          client.resumeSession(sessionId, withNativeFixtureProvider(config)),
+        stop: () => client.stop(),
+      });
       return {
         key,
-        client: {
-          createSession: (config: SessionConfig) =>
-            client.createSession(withNativeFixtureProvider(config)),
-          resumeSession: (sessionId: string, config: ResumeSessionConfig) =>
-            client.resumeSession(sessionId, withNativeFixtureProvider(config)),
-          stop: () => client.stop(),
-          // SAFETY: the wrapper delegates every harness-used client operation to the real SDK client.
-        } as unknown as CopilotClient,
+        client: pooledClient,
       };
     },
     async dispose() {

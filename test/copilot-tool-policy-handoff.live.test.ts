@@ -5,8 +5,10 @@ import type {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { isLiveTestEnabled } from "openclaw/plugin-sdk/test-live";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { CopilotSessionBinding } from "../extensions/copilot/harness.js";
-import { createNativeCopilotPolicyHarnessFixtureForTest } from "../extensions/copilot/test-api.js";
+import {
+  createNativeCopilotPolicyHarnessFixtureForTest,
+  type CopilotSessionBindingForTest,
+} from "../extensions/copilot/test-api.js";
 import {
   createOperationalRunInstanceRef,
   prepareAgentRunAdmission,
@@ -201,7 +203,7 @@ describeLive("Copilot tool policy live handoff", () => {
     const sessionId = "copilot-policy-live-session";
     const sessionKey = `agent:copilot-policy-live-proof:${sessionId}`;
     const toolAuthorityFingerprint = "copilot-policy-live-authority";
-    const bindings = new Map<string, CopilotSessionBinding>();
+    const bindings = new Map<string, CopilotSessionBindingForTest>();
     const sessionStore = {
       delete(key: string) {
         return bindings.delete(key);
@@ -209,7 +211,7 @@ describeLive("Copilot tool policy live handoff", () => {
       lookup(key: string) {
         return bindings.get(key);
       },
-      register(key: string, value: CopilotSessionBinding) {
+      register(key: string, value: CopilotSessionBindingForTest) {
         bindings.set(key, value);
       },
     };
