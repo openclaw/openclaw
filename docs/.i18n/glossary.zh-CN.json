@@ -3036,6 +3036,62 @@
     "target": "频道提及策略"
   },
   {
+    "source": "Node pairing and status",
+    "target": "节点配对与状态"
+  },
+  {
+    "source": "Run a node host",
+    "target": "运行节点主机"
+  },
+  {
+    "source": "Run commands on a node",
+    "target": "在节点上运行命令"
+  },
+  {
+    "source": "Node-hosted MCP servers and skills",
+    "target": "节点托管的 MCP 服务器与技能"
+  },
+  {
+    "source": "Host OpenClaw sessions on a node",
+    "target": "在节点上托管 OpenClaw 会话"
+  },
+  {
+    "source": "Node session catalogs",
+    "target": "节点会话目录"
+  },
+  {
+    "source": "Node file transfers",
+    "target": "节点文件传输"
+  },
+  {
+    "source": "Node command policy",
+    "target": "节点命令策略"
+  },
+  {
+    "source": "Node device commands",
+    "target": "节点设备命令"
+  },
+  {
+    "source": "Node host CLI",
+    "target": "节点主机 CLI"
+  },
+  {
+    "source": "Active computer presence",
+    "target": "活动计算机在线状态"
+  },
+  {
+    "source": "Camera capture",
+    "target": "相机拍摄"
+  },
+  {
+    "source": "Location command",
+    "target": "位置命令"
+  },
+  {
+    "source": "Voice wake",
+    "target": "语音唤醒"
+  },
+  {
     "source": "Releasing",
     "target": "发布流程"
   },

@@ -91,7 +91,7 @@ For `remote-exec` turns, computer cleanup finishes before workspace reconciliati
 
 You do not have to pick a device. Choosing **Auto** (least-busy device) in the Place picker — or dispatching with `autoDevice: true` — selects a paired session host automatically and retries up to three ranked hosts if provisioning fails before a machine is allocated. OpenClaw `worker-turn` placements rank hosts by most free worker slots, breaking ties by device ID; Codex `remote-exec` placements do not consume worker slots, so eligible hosts are ranked by device ID alone. When no host qualifies, the error says exactly why: no session hosts paired, all disconnected, or all at capacity.
 
-See [Nodes](/nodes#host-openclaw-sessions) for the selection rules and [Control UI](/web/control-ui) for the picker.
+See [Nodes](/nodes/session-hosting#host-openclaw-sessions) for the selection rules and [Control UI](/web/control-ui) for the picker.
 
 ## Sleeping and waking: idle suspension and warm images
 

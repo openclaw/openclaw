@@ -2352,6 +2352,15 @@
                 "group": "Nodes and media",
                 "pages": [
                   "nodes/index",
+                  "nodes/pairing-and-status",
+                  "nodes/node-host",
+                  "nodes/node-exec",
+                  "nodes/mcp-and-skills",
+                  "nodes/session-hosting",
+                  "nodes/session-catalogs",
+                  "nodes/file-transfers",
+                  "nodes/command-policy",
+                  "nodes/device-commands",
                   "nodes/presence",
                   "nodes/troubleshooting",
                   {
