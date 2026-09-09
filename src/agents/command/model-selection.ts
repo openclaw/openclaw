@@ -473,21 +473,6 @@ export async function resolveEmbeddedModelSelection(params: {
       agentId: params.sessionAgentId,
       sessionKey: params.sessionKey,
     });
-    const acceptedAuthProviders = listOpenAIAuthProfileProvidersForAgentRuntime({
-      provider: providerForAuthProfileValidation,
-      harnessRuntime: validationHarnessPolicy.runtime,
-      config: params.cfg,
-    }).map((candidateProvider) =>
-      params.pluginsEnabled
-        ? resolveProviderIdForAuth(candidateProvider, {
-            config: authConfig,
-            workspaceDir: params.workspaceDir,
-            ...(params.manifestMetadataSnapshot
-              ? { metadataSnapshot: params.manifestMetadataSnapshot }
-              : {}),
-          })
-        : candidateProvider,
-    );
     const authAliasLookupParams = params.pluginsEnabled
       ? {
           config: authConfig,
@@ -501,6 +486,15 @@ export async function resolveEmbeddedModelSelection(params: {
           workspaceDir: params.workspaceDir,
           metadataSnapshot: { plugins: [] },
         };
+    const acceptedAuthProviders = listOpenAIAuthProfileProvidersForAgentRuntime({
+      provider: providerForAuthProfileValidation,
+      harnessRuntime: validationHarnessPolicy.runtime,
+      config: params.cfg,
+    }).map((candidateProvider) =>
+      params.pluginsEnabled
+        ? resolveProviderIdForAuth(candidateProvider, authAliasLookupParams)
+        : candidateProvider,
+    );
     const profileMatchesRuntime =
       profile &&
       acceptedAuthProviders.some((candidateProvider) =>
