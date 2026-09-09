@@ -12,31 +12,13 @@ const isSourceCheckoutLauncher = () =>
   existsSync(new URL("./.git", import.meta.url)) ||
   existsSync(new URL("./src/entry.ts", import.meta.url));
 
-if (
-  !isSourceCheckoutLauncher() &&
-  (existsSync(new URL("./.openclaw-lifecycle-pending", import.meta.url)) ||
-    existsSync(new URL("./dist/openclaw-install-guard", import.meta.url)))
-) {
-  try {
-    const { completePendingPackageLifecycle } = await import("./dist/infra/package-lifecycle.js");
-    await completePendingPackageLifecycle({
-      packageRoot: fileURLToPath(new URL("./", import.meta.url)),
-    });
-  } catch (error) {
-    process.stderr.write(
-      `openclaw: package lifecycle is incomplete. Reinstall with package scripts enabled, then retry. ${error instanceof Error ? error.message : String(error)}\n`,
-    );
-    process.exit(1);
-  }
-}
-
 const { isSupportedOpenClawNodeVersion } = await import("./node-version.mjs");
 
 const RECOMMENDED_NODE_MAJOR = 26;
 const SUPPORTED_NODE_RANGE = ">=24.16.0 <25, or >=26.1.0";
 const COMPILE_CACHE_DISABLED_RESPAWNED_ENV = "OPENCLAW_COMPILE_CACHE_DISABLED_RESPAWNED";
 
-const ensureSupportedRuntimeVersion = () => {
+const ensureSupportedRuntimeVersion = async () => {
   if (process.versions.bun) {
     // Bun >=1.4 (Rust rewrite) ships node:sqlite; feature-probe instead of
     // rejecting Bun outright so capable Bun builds can run OpenClaw.
@@ -60,20 +42,37 @@ const ensureSupportedRuntimeVersion = () => {
   }
 
   process.stderr.write(
-    `openclaw: Node.js ${SUPPORTED_NODE_RANGE} is required (current: v${process.versions.node}).\n` +
-      "If you use nvm, run:\n" +
+    `openclaw: Node.js ${SUPPORTED_NODE_RANGE} is required (current: v${process.versions.node}).\n`,
+  );
+  // These invocations have an exact-PID contract and cannot acquire a wrapper process.
+  if (
+    !isForegroundGmailRunInvocation(process.argv) &&
+    !(process.platform !== "win32" && isNativeHookRelayInvocation(process.argv))
+  ) {
+    const { resolveUpdatedNodeRuntime } = await import("./node-runtime-update.mjs");
+    const nodePath = await resolveUpdatedNodeRuntime(resolveLauncherHomeDir());
+    if (nodePath) {
+      const env = { ...process.env, OPENCLAW_NODE_UPDATE_RESPAWNED: "1" };
+      const pathKey =
+        process.platform === "win32"
+          ? (await import("./scripts/windows-cmd-helpers.mjs")).resolvePathEnvKey(env)
+          : "PATH";
+      env[pathKey] = `${path.dirname(nodePath)}${path.delimiter}${env[pathKey] ?? ""}`;
+      return runRespawnedChild(
+        nodePath,
+        [...process.execArgv, process.argv[1], ...process.argv.slice(2)],
+        env,
+      );
+    }
+  }
+  process.stderr.write(
+    "If you use nvm, run:\n" +
       `  nvm install ${RECOMMENDED_NODE_MAJOR}\n` +
       `  nvm use ${RECOMMENDED_NODE_MAJOR}\n` +
       `  nvm alias default ${RECOMMENDED_NODE_MAJOR}\n`,
   );
   process.exit(1);
 };
-
-ensureSupportedRuntimeVersion();
-
-if (tryOutputLauncherVersion(process.argv)) {
-  process.exit(0);
-}
 
 const isNodeCompileCacheDisabled = () => process.env.NODE_DISABLE_COMPILE_CACHE !== undefined;
 const isNodeCompileCacheRequested = () =>
@@ -779,12 +778,39 @@ const tryOutputPrecomputedCommandHelp = () => {
   return true;
 };
 
+// Resolve Node before loading pending package lifecycle code or any built runtime modules.
+const waitingForNodeUpdateRespawn = await ensureSupportedRuntimeVersion();
+
+if (!waitingForNodeUpdateRespawn) {
+  if (
+    !isSourceCheckoutLauncher() &&
+    (existsSync(new URL("./.openclaw-lifecycle-pending", import.meta.url)) ||
+      existsSync(new URL("./dist/openclaw-install-guard", import.meta.url)))
+  ) {
+    try {
+      const { completePendingPackageLifecycle } = await import("./dist/infra/package-lifecycle.js");
+      await completePendingPackageLifecycle({
+        packageRoot: fileURLToPath(new URL("./", import.meta.url)),
+      });
+    } catch (error) {
+      process.stderr.write(
+        `openclaw: package lifecycle is incomplete. Reinstall with package scripts enabled, then retry. ${error instanceof Error ? error.message : String(error)}\n`,
+      );
+      process.exit(1);
+    }
+  }
+  if (tryOutputLauncherVersion(process.argv)) {
+    process.exit(0);
+  }
+}
+
 // Codex owns the relay timeout by PID. Keep the launcher as that exact process
 // so a timeout cannot strand a compile-cache respawn child.
 const waitingForCompileCacheRespawn =
-  !isForegroundGmailRunInvocation(process.argv) &&
-  !(process.platform !== "win32" && isNativeHookRelayInvocation(process.argv)) &&
-  (respawnWithoutCompileCacheIfNeeded() || respawnWithPackagedCompileCacheIfNeeded());
+  waitingForNodeUpdateRespawn ||
+  (!isForegroundGmailRunInvocation(process.argv) &&
+    !(process.platform !== "win32" && isNativeHookRelayInvocation(process.argv)) &&
+    (respawnWithoutCompileCacheIfNeeded() || respawnWithPackagedCompileCacheIfNeeded()));
 
 // https://nodejs.org/api/module.html#module-compile-cache
 if (

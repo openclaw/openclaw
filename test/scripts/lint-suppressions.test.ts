@@ -264,6 +264,8 @@ describe("production lint suppressions", () => {
         // Raw PowerShell errors carry the -EncodedCommand argv; only the sanitized cause may escape.
         "src/secrets/private-plan-file.ts|preserve-caught-error|1",
         "src/state/config-machine-state.ts|typescript/no-unnecessary-type-parameters|2",
+        // Caller assertions retain their original thrown value, including non-Error values.
+        "src/state/openclaw-agent-db-admission.ts|typescript/prefer-promise-reject-errors|1",
         "src/system-agent/setup-inference-activate.ts|no-unsafe-finally|1",
         "src/system-agent/setup-inference-activate.ts|preserve-caught-error|1",
         // Cleanup stays in AggregateError.errors; the initiating failure remains cause for classification and remediation.

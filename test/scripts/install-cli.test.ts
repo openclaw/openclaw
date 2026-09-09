@@ -67,6 +67,35 @@ function writeInstalledOpenClawEntry(nodeDir: string) {
 describe("install-cli.sh", () => {
   const script = readFileSync(SCRIPT_PATH, "utf8");
 
+  it("installs only Node into the requested prefix without entering package or service setup", () => {
+    const result = runInstallCliShell(`
+      source ${SCRIPT_PATH}
+      is_musl_linux() { return 1; }
+      os_detect() { echo linux; }
+      arch_detect() { echo x64; }
+      install_node() { printf 'node:%s:%s:%s\\n' "$1" "$2" "$PREFIX"; }
+      preflight_fresh_git_disk_space() { exit 91; }
+      install_openclaw_from_git() { exit 92; }
+      install_openclaw() { exit 93; }
+      refresh_gateway_service_if_loaded() { exit 94; }
+      main --node-only --prefix '/tmp/private node' --git --onboard
+    `);
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(result.stdout.trim()).toBe("node:linux:x64:/tmp/private node");
+  });
+
+  it("refuses musl Node-only recovery before an installer can invoke system package changes", () => {
+    const result = runInstallCliShell(`
+      source ${SCRIPT_PATH}
+      is_musl_linux() { return 0; }
+      install_node() { echo unexpected-node-install; }
+      main --node-only
+    `);
+    expect(result.status).toBe(1);
+    expect(result.stdout + result.stderr).toContain("unavailable on musl Linux");
+    expect(result.stdout).not.toContain("unexpected-node-install");
+  });
+
   it("re-execs a streamed installer on Darwin Bash 5.3+ without leaving a temp file", (context) => {
     const bash = findDarwinReexecBash();
     if (!bash) {

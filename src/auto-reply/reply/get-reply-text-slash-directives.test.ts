@@ -219,9 +219,14 @@ describe("text slash directive ownership", () => {
         { botUsername: "openclaw" },
       );
 
-      expect(result).toMatchObject({
-        kind: "continue",
-        result: { cleanedBody: task, ...expected },
+      expect(result.kind).toBe("continue");
+      if (result.kind !== "continue") {
+        throw new Error("expected the directive task to continue");
+      }
+      const levels = await result.result.resolveModelLevels();
+      expect({ ...result.result, ...levels }).toMatchObject({
+        cleanedBody: task,
+        ...expected,
       });
       expect(loadExactSessionEntry({ sessionKey, storePath })?.entry).toEqual(storedBefore);
       expect(loadExactSessionEntry({ sessionKey, storePath })?.entry).not.toHaveProperty(field);

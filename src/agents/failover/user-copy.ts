@@ -285,6 +285,19 @@ export function renderSanitizedUserFacingText(
   if (reason === "billing" || reason === "rate_limit" || reason === "overloaded") {
     return renderFailoverBaseCopy(reason, { raw: trimmed }) ?? trimmed;
   }
+  // Reason-level provider copy is surface-independent: the channel reply path renders
+  // it from failover facts, while session transcripts, run status, and the TUI read
+  // this renderer. Facets stay null so the rate-limit/overload branches above keep
+  // provider retry detail; labeled statuses ("unexpected status 401 ...") never carry
+  // a leading code, so the status is re-read from the full error grammar here.
+  const providerRequestCopy = renderProviderRequestFailureCopy({
+    classification: reason ? { kind: "reason", reason } : null,
+    facet: null,
+    status: extractErrorHttpStatus(trimmed)?.code,
+  });
+  if (providerRequestCopy) {
+    return providerRequestCopy;
+  }
   if (isGenericProviderInternalError(trimmed)) {
     return formatRawAssistantErrorForUi(trimmed);
   }

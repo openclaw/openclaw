@@ -1,5 +1,11 @@
 import { expectDefined } from "@openclaw/normalization-core";
+import { Value } from "typebox/value";
 import { afterEach, describe, expect, it } from "vitest";
+import { HelloOkSchema } from "../../packages/gateway-protocol/src/schema/frames.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import type { PluginControlUiDescriptor } from "../plugins/host-hooks.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
@@ -28,7 +34,7 @@ function activateDescriptors(
     auth?: "gateway" | "plugin";
     match?: "exact" | "prefix";
   }> = [],
-): void {
+) {
   const registry = createTestRegistry([]);
   registry.controlUiDescriptors = entries.map((entry) => ({
     ...entry,
@@ -42,13 +48,88 @@ function activateDescriptors(
     handler: async () => true,
   }));
   setActivePluginRegistry(registry);
+  return registry;
 }
 
 describe("listControlUiPluginTabs", () => {
   afterEach(() => {
+    clearRuntimeConfigSnapshot();
     resetPluginRuntimeStateForTest();
     setActivePluginRegistry(createTestRegistry([]));
   });
+
+  it("advertises a tab slug in the hello contract without altering its frame path", () => {
+    activateDescriptors([
+      {
+        pluginId: "reports-fixture",
+        descriptor: tabDescriptor({ slug: "reports", path: "/plugins/reports-fixture" }),
+      },
+    ]);
+    const tabs = listControlUiPluginTabs(["operator.read"]);
+    expect(tabs).toEqual([
+      expect.objectContaining({ slug: "reports", path: "/plugins/reports-fixture" }),
+    ]);
+    expect(Value.Check(HelloOkSchema.properties.controlUiTabs, tabs)).toBe(true);
+  });
+
+  it.each([
+    { basePath: "", path: "/reports", match: "exact" as const, auth: "gateway" as const },
+    { basePath: "", path: "/reports", match: "prefix" as const, auth: "plugin" as const },
+    { basePath: "/team/", path: "/team/reports", match: "exact" as const, auth: "plugin" as const },
+    { basePath: "/team", path: "/team", match: "prefix" as const, auth: "gateway" as const },
+  ])(
+    "drops a slug shadowed by $auth $match route $path under $basePath once",
+    ({ basePath, ...route }) => {
+      setRuntimeConfigSnapshot({ gateway: { controlUi: { basePath } } });
+      const registry = activateDescriptors([
+        {
+          pluginId: "reports-fixture",
+          descriptor: tabDescriptor({ slug: "reports", path: "/plugins/reports-fixture" }),
+        },
+      ]);
+      // HTTP registration after the descriptor must produce the same projection.
+      registry.httpRoutes.push({
+        ...route,
+        pluginId: "other",
+        source: "test:other",
+        handler: async () => true,
+      });
+      for (let connect = 0; connect < 2; connect += 1) {
+        const [tab] = listControlUiPluginTabs(["operator.read"]);
+        expect(tab).toMatchObject({
+          pluginId: "reports-fixture",
+          path: "/plugins/reports-fixture",
+        });
+        expect(tab).not.toHaveProperty("slug");
+      }
+      expect(registry.diagnostics).toEqual([
+        expect.objectContaining({
+          level: "warn",
+          pluginId: "reports-fixture",
+          message: expect.stringContaining("shadowed by plugin HTTP route"),
+        }),
+      ]);
+      expect(registry.controlUiDescriptors[0]?.descriptor.slug).toBe("reports");
+    },
+  );
+
+  it.each([
+    { basePath: "", path: "/report", match: "prefix" as const },
+    { basePath: "", path: "/reports/child", match: "prefix" as const },
+    { basePath: "/team", path: "/reports", match: "exact" as const },
+    { basePath: "/team", path: "/team", match: "exact" as const },
+  ])(
+    "keeps slugs when $match route $path does not shadow mount $basePath",
+    ({ basePath, ...route }) => {
+      setRuntimeConfigSnapshot({ gateway: { controlUi: { basePath } } });
+      const registry = activateDescriptors(
+        [{ pluginId: "reports-fixture", descriptor: tabDescriptor({ slug: "reports" }) }],
+        [{ ...route, pluginId: "other" }],
+      );
+      expect(listControlUiPluginTabs(["operator.read"])[0]?.slug).toBe("reports");
+      expect(registry.diagnostics).toEqual([]);
+    },
+  );
 
   it("projects only tab descriptors", () => {
     activateDescriptors([

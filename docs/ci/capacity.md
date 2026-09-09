@@ -9,7 +9,7 @@ read_when:
 ## Runner registration budget
 
 OpenClaw's current GitHub runner-registration bucket reports 10,000 self-hosted
-runner registrations per 5 minutes in `ghx api rate_limit`. Re-check
+runner registrations per 5 minutes in `gh api rate_limit`. Re-check
 `actions_runner_registration` before each tuning pass because GitHub can change
 this bucket. The limit is shared by all Blacksmith runner registrations in the
 `openclaw` organization, so adding another Blacksmith installation does not add

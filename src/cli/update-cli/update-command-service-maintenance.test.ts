@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -189,6 +190,86 @@ it.each(nativeOfflineCases)(
       expect(service.stage).not.toHaveBeenCalled();
       expect(service.install).not.toHaveBeenCalled();
     }),
+);
+
+it.each([
+  { code: "ETIMEDOUT", failures: 1, proceeds: true },
+  { code: "ETIMEDOUT", failures: 2, proceeds: false },
+  { code: "ETIMEDOUT", failures: 2, proceeds: false, admitted: true },
+  { code: "ENOENT", failures: 1, proceeds: false },
+])("handles Scheduled Task probe failures before update: %j", (scenario) =>
+  withServiceHome(async (home) => {
+    mockProcessPlatform("win32");
+    mocks.taskState = 4;
+    vi.mocked(spawnSync).mockReset();
+    for (let attempt = 0; attempt < scenario.failures; attempt++) {
+      vi.mocked(spawnSync).mockReturnValueOnce({
+        pid: 0,
+        output: [null, "", ""],
+        stdout: "",
+        stderr: "",
+        status: null,
+        signal: null,
+        error: Object.assign(new Error(`spawnSync powershell.exe ${scenario.code}`), {
+          code: scenario.code,
+        }),
+      });
+    }
+    const service = createMockGatewayService({
+      readCommand: vi.fn(async () => ({
+        programArguments: [process.execPath, path.join(process.cwd(), "openclaw.mjs"), "gateway"],
+        environment: { HOME: home },
+      })),
+      readRuntime: readScheduledTaskRuntime,
+      isLoaded: async () => true,
+    });
+    mocks.service.mockReturnValue(service);
+
+    const inspection = maybeStopManagedServiceBeforeMutableUpdate({
+      root: process.cwd(),
+      updateInstallKind: "package",
+      shouldRestart: true,
+      phase: "inspect",
+      jsonMode: true,
+      timeoutMs: 30_000,
+      expectedService: scenario.admitted
+        ? {
+            serviceUpdateVerdict: {
+              kind: "owned",
+              root: process.cwd(),
+              fingerprint: "admitted-definition",
+              refreshDefinition: true,
+            },
+          }
+        : undefined,
+    });
+
+    if (scenario.admitted) {
+      await expect(inspection).rejects.toThrow("Scheduled Task probe timed out after 30000 ms");
+    } else {
+      const inspected = await inspection;
+      if (scenario.proceeds) {
+        expect(inspected.serviceUpdateVerdict?.kind).toBe("owned");
+        expect(inspected.blockMessage).toBeUndefined();
+        expect(inspected.running).toBe(true);
+      } else {
+        expect(inspected.serviceUpdateVerdict?.kind).toBe("unavailable");
+        expect(inspected.blockMessage).toContain("Refusing to mutate code");
+        if (scenario.code === "ETIMEDOUT") {
+          expect(inspected.blockMessage).toContain("Scheduled Task probe timed out after 30000 ms");
+          expect(inspected.blockMessage).toContain("ETIMEDOUT");
+        }
+      }
+    }
+    const attempts = scenario.code === "ETIMEDOUT" ? 2 : 1;
+    expect(spawnSync).toHaveBeenCalledTimes(attempts);
+    expect(service.readCommand).toHaveBeenCalledTimes(attempts);
+    for (const call of vi.mocked(spawnSync).mock.calls) {
+      expect(call[2]?.timeout).toBe(30_000);
+    }
+    expect(service.stop).not.toHaveBeenCalled();
+    expect(service.install).not.toHaveBeenCalled();
+  }),
 );
 
 it

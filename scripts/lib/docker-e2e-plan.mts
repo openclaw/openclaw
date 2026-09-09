@@ -576,7 +576,7 @@ function laneCredentialRequirements(poolLane: DockerE2eLane): string[] {
     credentials.push("codex");
   }
   if (resources.includes("live:claude")) {
-    credentials.push("anthropic");
+    credentials.push(poolLane.name === "live-anthropic-cache" ? "anthropic-api-key" : "anthropic");
   }
   if (resources.includes("live:droid")) {
     credentials.push("factory");

@@ -1,9 +1,60 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import * as processExec from "../../process/exec.js";
+import { withTempDir } from "../../test-utils/temp-dir.js";
 import { resolvePackageRuntimePreflight } from "./update-command-service-plan.js";
 
 describe("package runtime compatibility guidance", () => {
   afterEach(() => vi.unstubAllGlobals());
+  afterEach(() => vi.restoreAllMocks());
 
+  it.each([false, true])(
+    "admits only a compatible explicit replacement (fallback=%s)",
+    async (fallback) => {
+      vi.spyOn(processExec, "runCommandWithTimeout").mockImplementation(async (argv) => ({
+        stdout: argv[0] === "/old/node" ? "v22.23.1" : "v26.8.1",
+        stderr: "",
+        code: 0,
+        signal: null,
+        killed: false,
+        termination: "exit",
+      }));
+      const result = await resolvePackageRuntimePreflight({
+        target: { version: "2027.1.0", nodeEngine: ">=24.16.0 <25 || >=26.1.0" },
+        nodeRunner: "/old/node",
+        fallbackNodeRunner: fallback ? "/new/node" : undefined,
+      });
+      if (fallback) {
+        expect(result).toEqual({
+          ok: true,
+          value: {
+            nodeRunner: "/new/node",
+            replacedNodeRunner: "/old/node",
+            targetVersion: "2027.1.0",
+          },
+        });
+      } else {
+        expect(result).toMatchObject({
+          ok: false,
+          error: expect.stringContaining("Node 22.23.1 at /old/node is incompatible"),
+        });
+      }
+    },
+  );
+
+  it("checks installed package engines when registry target metadata is absent", async () => {
+    await withTempDir("openclaw-runtime-target-", async (root) => {
+      await fs.writeFile(
+        path.join(root, "package.json"),
+        JSON.stringify({ version: "2027.1.0", engines: { node: ">=90.0.0" } }),
+      );
+      expect(await resolvePackageRuntimePreflight({ installedRoot: root })).toMatchObject({
+        ok: false,
+        error: expect.stringContaining("The requested package requires >=90.0.0."),
+      });
+    });
+  });
   it.each(["22.23.2", "24.15.0", "25.9.0", "26.0.0"])(
     "renders the target engine range for unsupported Node %s",
     async (node) => {

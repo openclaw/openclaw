@@ -29,11 +29,9 @@ aligned:
 
 If the resolved package version equals the installed version without changing
 the selected channel or installation method, or the Git target SHA equals
-`HEAD`, the run finishes `skipped` with reason `already-current`. A same-version
+`HEAD`, plugin convergence still runs; if plugins remain unchanged, the run finishes `skipped` with reason `already-current`. A same-version
 explicit `--channel` or installation-method change finishes successfully.
-Neither path stops or restarts the Gateway unless the installation method
-changes. Read-only plugin convergence checks can still report repair needs; use
-`openclaw update repair` to apply them.
+Changed plugins restart a running managed Gateway unless `--no-restart` is set; retained exact pins produce the same advisories as a core update without requiring a restart.
 
 For targets that support candidate validation, the old Gateway keeps serving through `staging` and
 `validating`. The updater uses the candidate entrypoint for Doctor lint
@@ -43,9 +41,11 @@ boots a canary with copied configuration and verified SQLite snapshots in an
 isolated temporary state directory. The copied database registry points to the
 copied agent databases. Installed plugin payloads and their dependencies are also
 copied; the rehearsal install records point to those copies, and their OpenClaw
-host links target the staged candidate. The live plugin files and host links stay
-unchanged. Channels, cron, automatic updates, and other side services are
-suppressed in this canary.
+host links target the staged candidate. Path aliases that resolve to a running
+package's bundled plugin use the staged bundled plugin with the same ID when
+available, preserving bundled trust. External path installs keep their existing
+classification. The live plugin files and host links stay unchanged. Channels,
+cron, automatic updates, and other side services are suppressed in this canary.
 
 Schema checks also use private SQLite copies so inspection does not create or
 modify WAL sidecars beside live databases. Each schema inspection has a
@@ -397,7 +397,7 @@ reclaim these stages. If an interrupted update leaves one behind, confirm that
 no updater is still using it before removing that exact directory. This separation
 does not make simultaneous package swaps safe.
 
-A matching installed version is an `already-current` no-op. Real updates also
+A matching installed version skips core replacement but still converges plugins. Core updates also
 refresh core-command completion; full plugin-command completion rebuilds remain explicit
 `openclaw completion --write-state` runs.
 

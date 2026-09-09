@@ -38,6 +38,14 @@ admission. Publish live session changes and other dependent effects only after
 the durable write succeeds. A future network-backed owner must preserve that
 ordering while awaiting its driver.
 
+Explicit session deletion and lifecycle-artifact cleanup prepare their plans
+inside the session writer queue. When the parent database handle is cold, its
+existing asynchronous admission owner runs the full integrity and foreign-key
+checks in a read-only child, moving those full checks off the main thread while
+retaining that queue position. A supplied caller guard is rechecked before the open
+resumes into index repair, schema work, or registration, and before that caller
+uses the admitted handle. Coalesced callers retain their own guards.
+
 Session reclamation keeps its deletion transaction on a worker connection.
 The worker opens its database under the session writer, then releases that writer
 while full integrity and foreign-key checks run on the same connection. Unrelated

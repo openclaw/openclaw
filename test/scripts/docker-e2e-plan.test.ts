@@ -532,7 +532,7 @@ await import('./scripts/check-docker-e2e-boundaries.mts');`,
       package: true,
       prepublishPluginRegistry: true,
     });
-    expect(plan.credentials).toEqual(["openai"]);
+    expect(plan.credentials).toEqual(["anthropic-api-key", "openai"]);
     expect(plan.lanes.map((lane) => lane.name)).not.toContain("install-e2e-openai");
     expect(plan.lanes.map((lane) => lane.name)).toContain("openai-chat-tools");
     expect(plan.lanes.map((lane) => lane.name)).toContain("live-codex-npm-plugin");
@@ -592,6 +592,26 @@ await import('./scripts/check-docker-e2e-boundaries.mts');`,
     ]);
     expect(core.lanes.map((lane) => lane.name)).not.toContain("gateway-concurrency");
   });
+
+  it.each(["stable", "full"] as const)(
+    "requires packaged live Anthropic cache proof in the %s release core",
+    (releaseProfile) => {
+      const plan = planFor({ profile: RELEASE_PATH_PROFILE, releaseChunk: "core", releaseProfile });
+      const cacheLane = plan.lanes.find((lane) => lane.name === "live-anthropic-cache");
+
+      expect(cacheLane).toMatchObject({
+        imageKind: "functional",
+        live: true,
+        resources: ["docker", "live", "live:claude"],
+        timeoutMs: 900_000,
+      });
+      expect(plan.needs.functionalImage).toBe(true);
+      expect(plan.needs.liveImage).toBe(false);
+      expect(plan.credentials).toContain("anthropic-api-key");
+      const lane = findLaneByName("live-anthropic-cache");
+      expect(lane?.retryPatterns).toEqual([]);
+    },
+  );
 
   it("plans Open WebUI only when release-path coverage requests it", () => {
     const withoutOpenWebUI = planFor({
@@ -1821,6 +1841,7 @@ await import('./scripts/check-docker-e2e-boundaries.mts');`,
     const cases = [
       { credentials: ["anthropic", "gemini"], name: "live-models" },
       { credentials: ["anthropic", "gemini"], name: "live-gateway" },
+      { credentials: ["anthropic-api-key"], name: "live-anthropic-cache" },
       { credentials: ["anthropic"], name: "live-cli-backend-claude" },
       { credentials: ["gemini"], name: "live-cli-backend-gemini" },
       { credentials: ["openai"], name: "live-codex-harness" },

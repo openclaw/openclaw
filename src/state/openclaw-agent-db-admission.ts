@@ -29,6 +29,32 @@ export type OpenClawAgentDatabaseWriteAdmission = <T>(
   run: (assertCurrent: () => void) => T | Promise<T>,
 ) => Promise<T>;
 
+/** Refusal must unwind ownership without entering corruption repair or changing its caller error. */
+function assertAgentDatabaseOpenAuthority(
+  operation: SqliteIntegrityOperation<OpenClawAgentDatabase>,
+  assertCurrent?: () => void,
+): void {
+  try {
+    assertCurrent?.();
+  } catch (error) {
+    const refusal = new Error("Agent database open authority was refused", { cause: error });
+    try {
+      operation.throw(refusal);
+    } catch (cleanupError) {
+      if (cleanupError !== refusal) {
+        throw new AggregateError(
+          [error, cleanupError],
+          `Agent database authority and cleanup failed: ${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`,
+          {
+            cause: cleanupError,
+          },
+        );
+      }
+    }
+    throw error;
+  }
+}
+
 /** Bind both admission drivers to the canonical private database-open generator. */
 export function createOpenClawAgentDatabaseAdmissionOwner(
   openSteps: (
@@ -36,11 +62,19 @@ export function createOpenClawAgentDatabaseAdmissionOwner(
     pending: PendingAgentDatabaseOpen,
   ) => SqliteIntegrityOperation<OpenClawAgentDatabase>,
 ) {
-  /** Retain the verified connection through an async caller's operation; disposal still revokes it. */
+  /** The initiating caller guards its physical open; each coalesced caller guards its own operation. */
   function withOpenClawAgentDatabaseAsync<T>(
     inputOptions: OpenClawAgentDatabaseOptions,
     operation: (database: OpenClawAgentDatabase) => T | Promise<T>,
+    /** Synchronous live authority for the initiating open and this caller's operation. */
+    assertCurrent?: () => void,
   ): Promise<T> {
+    try {
+      assertCurrent?.();
+    } catch (error) {
+      // oxlint-disable-next-line typescript/prefer-promise-reject-errors -- Caller assertions retain their original thrown value.
+      return Promise.reject(error);
+    }
     // Admission retains its original path, registration, and permission inputs across awaits.
     const options = { ...inputOptions, env: { ...(inputOptions.env ?? process.env) } };
     const agentId = normalizeAgentId(options.agentId);
@@ -53,11 +87,12 @@ export function createOpenClawAgentDatabaseAdmissionOwner(
     }
     if (existing?.controller.signal.aborted) {
       return existing.promise.then(
-        () => withOpenClawAgentDatabaseAsync(options, operation),
-        () => withOpenClawAgentDatabaseAsync(options, operation),
+        () => withOpenClawAgentDatabaseAsync(options, operation, assertCurrent),
+        () => withOpenClawAgentDatabaseAsync(options, operation, assertCurrent),
       );
     }
-    const pending = existing ?? startOpenClawAgentDatabaseAdmission(options, agentId, pathname);
+    const pending =
+      existing ?? startOpenClawAgentDatabaseAdmission(options, agentId, pathname, assertCurrent);
     pending.operations += 1;
     return pending.promise
       .then((database) => {
@@ -67,6 +102,7 @@ export function createOpenClawAgentDatabaseAdmissionOwner(
         }
         // Coalesced callers keep their own scope; admission cannot lend its cleanup authority.
         assertAgentDeletionDatabaseCleanupAccess(database, options);
+        assertCurrent?.();
         return operation(database);
       })
       .finally(() => {
@@ -248,13 +284,16 @@ export function createOpenClawAgentDatabaseAdmissionOwner(
     options: OpenClawAgentDatabaseOptions,
     agentId: string,
     pathname: string,
+    assertCurrent?: () => void,
   ): PendingAgentDatabaseOpen {
     const admission = createOpenClawAgentDatabaseAdmission(agentId, pathname);
     const { pending } = admission;
     const operation = openSteps(options, pending);
     void (async () => {
+      assertAgentDatabaseOpenAuthority(operation, assertCurrent);
       let step = operation.next();
       while (!step.done) {
+        const database = step.value.database;
         let failure: unknown;
         let failed = false;
         try {
@@ -267,12 +306,11 @@ export function createOpenClawAgentDatabaseAdmissionOwner(
           failure = error;
           failed = true;
         }
-        try {
-          assertOpenClawAgentDatabaseAdmissionCurrent(options, pending, step.value.database);
-        } catch (error) {
-          failure = error;
-          failed = true;
-        }
+        // Throwing an integrity verdict into the generator can repair indexes too.
+        assertAgentDatabaseOpenAuthority(operation, () => {
+          assertOpenClawAgentDatabaseAdmissionCurrent(options, pending, database);
+          assertCurrent?.();
+        });
         // Resuming, or throwing into, the same owner preserves repair and unwind policy.
         step = failed ? operation.throw(failure) : operation.next();
       }

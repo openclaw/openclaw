@@ -620,6 +620,42 @@ export async function queueEmbeddedAgentMessageWithOutcomeAsync(
   return queueEmbeddedAgentMessageAsync(sessionId, text, options);
 }
 
+/** Answers pending input without making ordinary messages bypass local queue policy. */
+export async function claimPendingEmbeddedAgentQuestionAnswer(
+  sessionId: string,
+  text: string,
+): Promise<{ runId: string } | null> {
+  const handle = ACTIVE_EMBEDDED_RUNS.get(sessionId);
+  if (!handle?.runId?.trim() || handle.messageInjectionV2?.version !== 2) {
+    return null;
+  }
+  const runId = handle.runId;
+  const registration = ACTIVE_EMBEDDED_RUN_REGISTRATIONS.get(handle);
+  const injection = resolveEmbeddedInjection(sessionId, handle);
+  if (!injection?.claimPendingUserInputAnswer) {
+    return null;
+  }
+  try {
+    registration?.toolAuthority?.assertActive();
+  } catch {
+    return null;
+  }
+  if (
+    ACTIVE_EMBEDDED_RUNS.get(sessionId) !== handle ||
+    ACTIVE_EMBEDDED_RUN_REGISTRATIONS.get(handle) !== registration
+  ) {
+    return null;
+  }
+  // V2 carries the captured owner assertion through persistence and final dispatch.
+  // An unconfirmed answer must propagate; queue fallback could replay accepted input.
+  const claimed = await injection.claimPendingUserInputAnswer(text, { isInboundUserMessage: true });
+  if (!claimed) {
+    return null;
+  }
+  logActiveRunMessageAccepted(sessionId);
+  return { runId };
+}
+
 /** Source-bound callers require an explicitly guarded backend, never a V1 fallback. */
 export async function queueGuardedEmbeddedAgentMessageWithOutcomeAsync(
   sessionId: string,

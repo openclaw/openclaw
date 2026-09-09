@@ -45,6 +45,13 @@ stale proposals and leave the legacy directories unchanged. Review history rows
 map to a unique owner agent when possible; otherwise the schema migration discards them as
 cache-class state.
 
+If a database reports schema 16 but still has recognized schema-15 Workshop
+columns, update preflight identifies the pending migration and Doctor runs it
+before rebuilding canonical indexes. Proposal-only legacy columns are handled
+the same way. The repair preserves attributable review rows and unrelated
+indexes; unrecognized column sets or dependencies on retired columns still
+refuse and roll back the transaction.
+
 Skill-only workspace relocation uses the existing `migration_runs` and
 `migration_sources` tables to save pre-move directory identity, file hashes,
 and the workspace attestation timestamp. After relocation, only matching

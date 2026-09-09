@@ -15,10 +15,9 @@ import {
   sidebarMoreRoutes,
   titleForRoute,
 } from "../app-navigation.ts";
-import { pathForRoute } from "../app-route-paths.ts";
+import { pathForRoute, pluginTabLocation } from "../app-route-paths.ts";
 import { t } from "../i18n/index.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
-import { pluginTabSearch } from "../pages/plugin/route.ts";
 import type { ControlUiRegistration } from "../plugins/control-ui-capability.ts";
 import { icons, type IconName } from "./icons.ts";
 import { consumeDropdownKeyboardDismissal, trackDropdownKeyboardDismissal } from "./web-awesome.ts";
@@ -94,15 +93,15 @@ export function renderSidebarPluginTab(params: {
   tab: GatewayControlUiPluginTab;
   basePath: string;
   active: boolean;
-  onNavigate: (search: string) => void;
+  onNavigate: (location: ReturnType<typeof pluginTabLocation>) => void;
 }) {
-  const search = pluginTabSearch({ pluginId: params.tab.pluginId, id: params.tab.id });
+  const location = pluginTabLocation(params.tab, params.basePath);
   const iconName = Object.hasOwn(icons, params.tab.icon!)
     ? (params.tab.icon as IconName)
     : "puzzle";
   return html`
     <a
-      href=${`${pathForRoute("plugin", params.basePath)}${search}`}
+      href=${`${location.pathname}${location.search}`}
       class="nav-item ${params.active ? "nav-item--active" : ""}"
       aria-current=${params.active ? "page" : nothing}
       @click=${(event: MouseEvent) => {
@@ -110,7 +109,7 @@ export function renderSidebarPluginTab(params: {
           return;
         }
         event.preventDefault();
-        params.onNavigate(search);
+        params.onNavigate(location);
       }}
     >
       <span class="nav-item__icon" aria-hidden="true">${icons[iconName]}</span>

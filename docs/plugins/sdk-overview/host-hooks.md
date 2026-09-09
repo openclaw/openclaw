@@ -61,6 +61,14 @@ completed video assets and result metadata. Video assets may contain buffers or
 provider-hosted URLs. Downloads after the call returns belong to the caller;
 registration disposal must not invalidate those completed artifacts.
 
+`api.runtime.tts.textToSpeechTelephony(...)` also owns fresh provider registrations
+through configuration, persona preparation, synthesis, and PCM result metadata.
+It retains managed registrations during the operation and preserves raw host
+ownership. Configured fallback catalogs stay separate from direct preference and
+override lookups. Returned audio buffers outlive registration disposal. The
+separate synchronous speech lookup and request-preparation APIs keep their
+existing caller lifetime; streaming speech is not part of this finite operation.
+
 For `image_generate` and `music_generate` tools prepared from an owned inspection,
 resources remain held through preflight and, once accepted, through generation, media saving, and
 any rollback. A `started` result acknowledges acceptance; it does not mean the
@@ -121,6 +129,24 @@ Bundled plugins whose page already has a matching native Control UI route can se
 plugins or from bundled plugins whose ID does not own that route. The sidebar opens
 the native route while the descriptor is present instead of mounting the generic
 plugin-tab page.
+
+An optional `slug` gives a tab a Control UI address such as `/reports`, prefixed
+by `gateway.controlUi.basePath`. It must be one segment of at most 64 characters
+matching `^[a-z0-9]+(?:-[a-z0-9]+)*$`. Only `surface: "tab"` accepts it, and it
+cannot be combined with `placement: "route:<pluginId>"`. Registration rejects
+duplicate slugs from another active plugin (the first registration wins) and
+Gateway-owned names: `api`, `plugins`, `plugin`, `focus`, `approve`, `ask`, `share`,
+`j`, `v1`, `ui`, `mcp-app-sandbox`, `__openclaw__`, `__openclaw`, `sessions`,
+`agent`, `agents`, and probe names `health`, `healthz`, `ready`, `readyz`, `startup`,
+and `startupz`.
+
+The Control UI ignores slugs matching the first segment of any native route or
+alias. If any plugin's exact or prefix HTTP route would match the mounted slug
+path, the Gateway omits that slug from the hello and logs a diagnostic. In either
+case the tab uses `/plugin?plugin=<pluginId>&id=<tabId>` instead. Generic links to
+a tab with an available slug are replaced once in browser history with its slug
+path, preserving `p.*` parameters and the fragment. A slug changes only the
+Control UI address; it never changes HTTP routing or authentication.
 
 For a gateway-protected external tab, register the descriptor `path` under a
 same-plugin `auth: "gateway"` HTTP route. After authenticated bootstrap, the browser gets a

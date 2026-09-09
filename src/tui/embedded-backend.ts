@@ -1,6 +1,10 @@
 // Implements the embedded backend used by local TUI sessions.
 import { randomUUID } from "node:crypto";
-import type { ErrorShape, SessionsPatchResult } from "../../packages/gateway-protocol/src/index.js";
+import type {
+  ErrorShape,
+  QuestionResolveParams,
+  SessionsPatchResult,
+} from "../../packages/gateway-protocol/src/index.js";
 import { CHAT_HISTORY_MAX_ENTRIES } from "../../packages/gateway-protocol/src/schema/chat-history-constants.js";
 import { agentCommandFromIngress } from "../agents/agent-command.js";
 import { isAgentLifecycleYieldedWaiting } from "../agents/agent-lifecycle-parent-state.js";
@@ -20,7 +24,10 @@ import {
 } from "../agents/agent-scope.js";
 import { ensureContextWindowCacheLoaded } from "../agents/context.js";
 import { resolveActiveEmbeddedRunSessionId } from "../agents/embedded-agent-runner/active-run-projections.js";
-import { queueEmbeddedAgentMessageWithOutcomeAsync } from "../agents/embedded-agent-runner/runs.js";
+import {
+  claimPendingEmbeddedAgentQuestionAnswer,
+  queueEmbeddedAgentMessageWithOutcomeAsync,
+} from "../agents/embedded-agent-runner/runs.js";
 import { QuestionAnswerUnconfirmedError } from "../agents/harness/gateway-question-dispatch.js";
 import { resolveThinkingDefault } from "../agents/model-selection.js";
 import { resolvePublishedModelCatalogOwner } from "../agents/prepared-model-catalog-owner.js";
@@ -93,6 +100,11 @@ import {
   EmbeddedPluginApprovalBroker,
   setEmbeddedPluginApprovalBroker,
 } from "../infra/embedded-plugin-approval-broker.js";
+import {
+  clearEmbeddedQuestionBroker,
+  EmbeddedQuestionBroker,
+  setEmbeddedQuestionBroker,
+} from "../infra/embedded-question-broker.js";
 import { logInfo, logWarn } from "../logger.js";
 import { agentSessionKeysMatchByRequestKey, normalizeAgentId } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
@@ -345,8 +357,10 @@ export class EmbeddedTuiBackend implements TuiBackend {
   private seq = 0;
   private readonly pendingLifecycleErrors = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly pluginApprovalBroker = new EmbeddedPluginApprovalBroker();
+  private readonly questionBroker = new EmbeddedQuestionBroker();
   private readonly preparedModelRuntime = new EmbeddedPreparedModelRuntimeHost();
   private unsubscribePluginApprovals?: () => void;
+  private unsubscribeQuestions?: () => void;
   private unsubscribeConfigWrites?: () => void;
   // Resolves once the one-time session-key migration has run; store methods await it.
   private ready: Promise<void> = Promise.resolve();
@@ -367,6 +381,10 @@ export class EmbeddedTuiBackend implements TuiBackend {
     this.unsubscribe = onAgentEvent((evt) => this.handleAgentEvent(evt));
     setEmbeddedPluginApprovalBroker(this.pluginApprovalBroker);
     this.unsubscribePluginApprovals = this.pluginApprovalBroker.subscribe((event) => {
+      this.emit(event.event, event.payload);
+    });
+    setEmbeddedQuestionBroker(this.questionBroker);
+    this.unsubscribeQuestions = this.questionBroker.subscribe((event) => {
       this.emit(event.event, event.payload);
     });
     const config = getRuntimeConfig();
@@ -395,6 +413,9 @@ export class EmbeddedTuiBackend implements TuiBackend {
     clearEmbeddedPluginApprovalBroker(this.pluginApprovalBroker);
     this.unsubscribePluginApprovals?.();
     this.unsubscribePluginApprovals = undefined;
+    clearEmbeddedQuestionBroker(this.questionBroker);
+    this.unsubscribeQuestions?.();
+    this.unsubscribeQuestions = undefined;
     const maintenancePromises: Promise<void>[] = [];
     for (const [runId, run] of this.runs) {
       if (run.finishing || run.lifecycleEnded) {
@@ -407,6 +428,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
       run.controller.abort();
     }
     this.pluginApprovalBroker.stop();
+    this.questionBroker.stop();
     const maintenanceCompleted = await waitForLocalRunShutdown(maintenancePromises);
     if (!maintenanceCompleted) {
       for (const run of this.runs.values()) {
@@ -460,13 +482,22 @@ export class EmbeddedTuiBackend implements TuiBackend {
     if (queuedAfter) {
       const loadOptions = opts.agentId ? { agentId: opts.agentId } : undefined;
       const { cfg, canonicalKey, entry } = loadSessionEntry(opts.sessionKey, loadOptions);
+      const activeSessionId = resolveActiveEmbeddedRunSessionId(canonicalKey);
+      if (activeSessionId) {
+        const claimed = await claimPendingEmbeddedAgentQuestionAnswer(
+          activeSessionId,
+          opts.message,
+        );
+        if (claimed) {
+          return claimed;
+        }
+      }
       let queueSettings = resolveQueueSettingsCore({
         cfg,
         channel: INTERNAL_MESSAGE_CHANNEL,
         sessionEntry: entry,
       });
       if (queueSettings.mode === "steer") {
-        const activeSessionId = resolveActiveEmbeddedRunSessionId(canonicalKey);
         if (activeSessionId) {
           const outcome = await queueEmbeddedAgentMessageWithOutcomeAsync(
             activeSessionId,
@@ -894,6 +925,18 @@ export class EmbeddedTuiBackend implements TuiBackend {
 
   async listPluginApprovals(): Promise<unknown> {
     return this.pluginApprovalBroker.listPending();
+  }
+
+  async listQuestions() {
+    return this.questionBroker.list();
+  }
+
+  async getQuestion(id: string) {
+    return this.questionBroker.get({ id });
+  }
+
+  async resolveQuestion(params: QuestionResolveParams) {
+    return this.questionBroker.resolve(params);
   }
 
   async resolvePluginApproval(id: string, decision: TuiApprovalDecision) {
