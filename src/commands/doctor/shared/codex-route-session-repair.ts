@@ -142,14 +142,18 @@ function isCodexSessionRoute(entry: SessionEntry): boolean {
   );
 }
 
-function normalizeCodexSessionHarness(entry: SessionEntry, knownCodexRoute: boolean): boolean {
-  if (!knownCodexRoute && !isCodexSessionRoute(entry)) {
+function normalizeCodexSessionHarness(
+  entry: SessionEntry,
+  legacyCodexHarness: boolean,
+  wasCodexRoute: boolean,
+): boolean {
+  if (!legacyCodexHarness && !wasCodexRoute && !isCodexSessionRoute(entry)) {
     return false;
   }
   let changed = false;
   if (
     normalizeRuntimeString(entry.agentHarnessId) === "codex-cli" ||
-    (knownCodexRoute && entry.agentHarnessId === undefined)
+    (legacyCodexHarness && entry.agentHarnessId === undefined)
   ) {
     entry.agentHarnessId = "codex";
     changed = true;
@@ -250,6 +254,7 @@ function repairCodexSessionStoreRoutes(params: {
       continue;
     }
     const legacyCodexHarness = normalizeRuntimeString(entry.agentHarnessId) === "codex-cli";
+    const wasCodexRoute = isCodexSessionRoute(entry);
     const hasSelectedOverride = Boolean(entry.modelOverride?.trim());
     const runtimeWasExplicit =
       entry.agentRuntimeOverride !== undefined &&
@@ -293,7 +298,11 @@ function repairCodexSessionStoreRoutes(params: {
     }
     const changedCodexRuntimeHarness =
       selectedRuntime === "codex" ? clearRepairedCodexSessionHarness(entry) : false;
-    const changedCodexHarness = normalizeCodexSessionHarness(entry, legacyCodexHarness);
+    const changedCodexHarness = normalizeCodexSessionHarness(
+      entry,
+      legacyCodexHarness,
+      wasCodexRoute,
+    );
     // Providerless route repair first needs the legacy profile prefix; only the
     // auth migration owner's exact collision-aware map may rewrite its identity.
     const mappedAuthProfileId =

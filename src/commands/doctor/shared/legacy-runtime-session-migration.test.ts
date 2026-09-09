@@ -24,6 +24,63 @@ afterEach(async () => {
 
 describe("legacy runtime session model migration", () => {
   it.each([
+    { runtime: "codex-cli", expectedRuntime: "codex" },
+    { runtime: "openclaw", expectedRuntime: "openclaw" },
+  ])("repairs a legacy route without inventing a harness for $runtime", async (row) => {
+    const state = await createOpenClawTestState({
+      layout: "state-only",
+      prefix: "runtime-no-harness-",
+    });
+    states.push(state);
+    state.applyEnv();
+    const cfg: OpenClawConfig = {
+      plugins: { enabled: false },
+      agents: { entries: { main: {} }, defaults: { model: "openai/current-model" } },
+    };
+    const scope = {
+      storePath: path.join(state.sessionsDir(), "sessions.json"),
+      sessionKey: "agent:main:retired-runtime",
+      env: state.env,
+    };
+    await replaceSessionEntry(scope, {
+      sessionId: "retired-runtime",
+      updatedAt: 1,
+      modelProvider: "openai-codex",
+      model: "current-model",
+      agentRuntimeOverride: row.runtime,
+      authProfileOverride: "authored:account",
+      authProfileOverrideSource: "user",
+      claudeCliSessionId: "retained-binding",
+    });
+    const before = loadSessionEntry(scope);
+    await maybeRepairCodexSessionRoutes({ cfg, env: state.env, shouldRepair: false });
+    expect(loadSessionEntry(scope)).toEqual(before);
+
+    const repaired = await maybeRepairCodexSessionRoutes({
+      cfg,
+      env: state.env,
+      shouldRepair: true,
+    });
+
+    expect(repaired.repairedSessions).toBe(1);
+    const entry = loadSessionEntry(scope);
+    expect(entry).toMatchObject({
+      modelProvider: "openai",
+      model: "current-model",
+      agentRuntimeOverride: row.expectedRuntime,
+      authProfileOverride: "authored:account",
+      authProfileOverrideSource: "user",
+      claudeCliSessionId: "retained-binding",
+    });
+    expect(entry?.agentHarnessId).toBeUndefined();
+    expect(
+      (await maybeRepairCodexSessionRoutes({ cfg, env: state.env, shouldRepair: true }))
+        .repairedSessions,
+    ).toBe(0);
+    expect(loadSessionEntry(scope)).toEqual(entry);
+  });
+
+  it.each([
     {
       overrideProvider: "google-gemini-cli",
       overrideModel: "assistant-b",

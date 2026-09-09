@@ -1,10 +1,95 @@
 import { describe, expect, it } from "vitest";
+import { resolveModelRuntimePolicy } from "../../../agents/model-runtime-policy.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { resolveModelEntries } from "../../../media-understanding/resolve.js";
 import { normalizeLegacyRuntimeModelRefs } from "./legacy-config-core-normalizers.js";
 import { migrateLegacyConfig } from "./legacy-config-migrate.js";
 
 describe("canonical model-reference migration", () => {
+  it.each(["defaults", "entries", "list"] as const)(
+    "preserves execution-only runtime selections in agents.%s",
+    (scope) => {
+      const agent = {
+        model: "openai/current-model",
+        heartbeat: { model: "claude-cli/heartbeat-only", every: "2h" },
+        subagents: {
+          model: {
+            primary: "google-gemini-cli/subagent-only",
+            fallbacks: ["claude-cli/subagent-fallback"],
+          },
+        },
+      };
+      const config: OpenClawConfig = {
+        agents:
+          scope === "defaults"
+            ? { defaults: agent, entries: { main: {} } }
+            : scope === "entries"
+              ? { entries: { main: agent } }
+              : { list: [{ id: "main", ...agent }] },
+      };
+
+      const result = normalizeLegacyRuntimeModelRefs(config, []);
+      const migrated =
+        scope === "defaults"
+          ? result.agents?.defaults
+          : scope === "entries"
+            ? result.agents?.entries?.main
+            : result.agents?.list?.[0];
+
+      expect(migrated?.heartbeat).toEqual({ model: "anthropic/heartbeat-only", every: "2h" });
+      expect(migrated?.subagents?.model).toEqual({
+        primary: "google/subagent-only",
+        fallbacks: ["anthropic/subagent-fallback"],
+      });
+      expect(migrated?.models).toEqual({
+        "anthropic/heartbeat-only": { agentRuntime: { id: "claude-cli" } },
+        "google/subagent-only": { agentRuntime: { id: "google-gemini-cli" } },
+        "anthropic/subagent-fallback": { agentRuntime: { id: "claude-cli" } },
+      });
+      expect(
+        resolveModelRuntimePolicy({
+          config: result,
+          agentId: "main",
+          provider: "anthropic",
+          modelId: "heartbeat-only",
+        }).policy?.id,
+      ).toBe("claude-cli");
+      expect(
+        resolveModelRuntimePolicy({
+          config: result,
+          agentId: "main",
+          provider: "google",
+          modelId: "subagent-only",
+        }).policy?.id,
+      ).toBe("google-gemini-cli");
+      const repeatedChanges: string[] = [];
+      expect(normalizeLegacyRuntimeModelRefs(result, repeatedChanges)).toEqual(result);
+      expect(repeatedChanges).toEqual([]);
+      expect(agent.heartbeat.model).toBe("claude-cli/heartbeat-only");
+    },
+  );
+
+  it("keeps explicit canonical runtime policies for execution-only selections", () => {
+    const config: OpenClawConfig = {
+      agents: {
+        defaults: {
+          heartbeat: { model: "claude-cli/heartbeat-only" },
+          subagents: { model: "google-gemini-cli/subagent-only" },
+          models: {
+            "anthropic/heartbeat-only": { alias: "Heartbeat", agentRuntime: { id: "openclaw" } },
+            "google/subagent-only": { agentRuntime: { id: "openclaw" } },
+          },
+        },
+      },
+    };
+
+    const result = normalizeLegacyRuntimeModelRefs(config, []);
+
+    expect(result.agents?.defaults?.heartbeat?.model).toBe("anthropic/heartbeat-only");
+    expect(result.agents?.defaults?.subagents?.model).toBe("google/subagent-only");
+    expect(result.agents?.defaults?.models).toEqual(config.agents?.defaults?.models);
+  });
+
   it("preserves provider-local model IDs and their matching media preference", () => {
     const config: OpenClawConfig = {
       tools: {

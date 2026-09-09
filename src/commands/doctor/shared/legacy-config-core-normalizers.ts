@@ -527,6 +527,27 @@ function normalizeLegacyRuntimeAgentContainer(
     }
   }
 
+  for (const key of ["heartbeat", "subagents"]) {
+    const execution = raw[key];
+    if (!isRecord(execution)) {
+      continue;
+    }
+    const selection = normalizeLegacyRuntimeAgentModelConfig(
+      execution.model,
+      blockedModelIdentities,
+    );
+    if (!selection.changed) {
+      continue;
+    }
+    next[key] = { ...execution, model: selection.value };
+    const runtimes = ensureSelectedModelRuntimePolicies(next.models, selection.selectedRefs);
+    if (runtimes.changed) {
+      next.models = runtimes.value;
+    }
+    changed = true;
+    changes.push(`Moved ${path}.${key}.model to canonical refs with model runtime policy.`);
+  }
+
   if (legacyWholeAgentRuntime) {
     const selectedRefs: SelectedRuntimeRef[] = selectedCanonicalModelRefsForRuntimePolicy(
       next.model ?? raw.model,
