@@ -470,6 +470,18 @@ call for advanced Active Memory. Defaults depend on the current memory provider:
 | Built-in memory | `["memory_search", "memory_get"]` |
 | LanceDB         | `["memory_recall"]`               |
 
+`toolsAllow` is a limit, not a permission grant. Before starting recall, Active
+Memory filters these names through the parent agent's finalized tool policy.
+A plugin can register a tool that the parent agent's selected profile excludes.
+Use explicit `tools.alsoAllow` entries to extend a restrictive profile, as in
+the [Lossless Claw example](/concepts/active-memory#lossless-claw). These grants also give the parent
+agent access to the named tools; they are not recall-only permissions. Explicit
+denies and provider, agent, and sandbox restrictions still apply, and recall
+cannot continue after the parent turn's tool authority expires.
+If only some configured tools are allowed, recall can still run with that
+smaller set. For example, `memory_search` may remain available even when the
+Lossless Claw tools are excluded.
+
 If none of the configured tools are available, or the sub-agent run fails,
 active memory skips recall for that turn and the main reply continues
 without memory context. For custom recall tools, non-empty model-visible
@@ -532,10 +544,28 @@ configuration above when LanceDB is the active memory provider.
 external context-engine plugin (`openclaw plugins install
 @martian-engineering/lossless-claw`) with its own recall tools. Set it up as
 a context engine first; see [Context engine](/concepts/context-engine). Then
-point active memory at its tools:
+grant its recall tools to the parent agent and point Active Memory at them.
+This example keeps the `main` agent on the restrictive `coding` profile and
+adds only the three named Lossless Claw tools through
+`agents.entries.main.tools.alsoAllow`. Merge these entries into that agent's
+existing tool configuration. Keep your selected profile and any other required
+grants and denies. This example assumes that agent scope does not also define
+`tools.allow`: `allow` and `alsoAllow` cannot be combined in the same scope.
+A later allowlist cannot restore tools excluded by a profile. See
+[Tool policy](/gateway/config-tools) before adapting an existing layered allowlist:
 
 ```json5
 {
+  agents: {
+    entries: {
+      main: {
+        tools: {
+          profile: "coding",
+          alsoAllow: ["lcm_grep", "lcm_describe", "lcm_expand_query"],
+        },
+      },
+    },
+  },
   plugins: {
     slots: {
       contextEngine: "lossless-claw",
@@ -794,6 +824,27 @@ provider must support OpenClaw's protected same-agent/private-session recall
 path.
 
 <AccordionGroup>
+  <Accordion title="Registered recall tools return `status=policy-disabled`">
+    This status means none of the configured recall tools remain in the parent
+    agent's authorized tool surface. Active Memory skips the blocking sub-agent
+    and the main reply continues without recalled context.
+
+    - Check the selected agent's profile and explicit `tools.alsoAllow` grants.
+      Under a restrictive profile, listing plugin tools in `config.toolsAllow`
+      alone does not authorize them. Use the scoped [Lossless Claw example](/concepts/active-memory#lossless-claw).
+    - Check explicit denies and provider, agent, and sandbox tool policies.
+      `alsoAllow` extends the profile; it does not override those restrictions.
+      Provider-specific profiles have their own `alsoAllow` configuration.
+    - Confirm that `config.toolsAllow` contains the intended concrete recall
+      names. Active Memory can use only the intersection of this list and the
+      parent agent's effective tools. Keep `memory_search` when using Remember
+      across conversations.
+    - Use `openclaw plugins inspect lossless-claw --runtime --json` to check
+      registration. A tool listed there is registered, but that output does not
+      prove the parent agent or Active Memory is authorized to call it.
+
+  </Accordion>
+
   <Accordion title="Embedding provider switched or stopped working">
     If `memory.search.provider` is unset, OpenClaw uses OpenAI embeddings. Set
     `memory.search.provider` explicitly for Bedrock, DeepInfra, Gemini, GitHub
