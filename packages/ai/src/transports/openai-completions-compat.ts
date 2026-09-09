@@ -8,6 +8,10 @@ import type { Model, OpenAICompletionsCompat } from "@openclaw/llm-core";
 import type { AiProviderRequestCapabilities, AiProviderRequestPolicyInput } from "../host.js";
 import { isKnownOpenAIJsonSchemaModelId } from "../providers/openai-response-format.js";
 import { resolveProviderRequestCapabilities as resolveModelProviderRequestCapabilities } from "./host-policy.js";
+import {
+  isAzureFoundryMultiModelHostname,
+  isDedicatedAzureOpenAIHostname,
+} from "./azure-openai-hostnames-internal.js";
 
 type ProviderEndpointClass = string;
 type ProviderRequestCapabilities = AiProviderRequestCapabilities;
@@ -121,10 +125,45 @@ export function usesNativeOpenAICodexResponsesBackend(model: {
   return isOpenAICodexResponsesModel(model) && isNativeOpenAICodexResponsesBaseUrl(model.baseUrl);
 }
 
+export function isOpenAIFamilyFoundryDeployment(
+  modelId: string | undefined,
+  modelName: string | undefined,
+): boolean {
+  const token = modelName?.trim() || modelId?.slice(modelId.lastIndexOf("/") + 1);
+  const normalized = token?.toLowerCase();
+  if (!normalized || normalized.startsWith("gpt-oss")) {
+    return false;
+  }
+  return (
+    normalized.startsWith("gpt-") ||
+    normalized.startsWith("chatgpt-") ||
+    /^codex(?:[-\s(]|$)/.test(normalized) ||
+    /^o\d+(?:[-.\s(]|$)/.test(normalized)
+  );
+}
+
+function normalizeBaseUrlHostname(baseUrl: string | undefined): string | undefined {
+  const trimmed = baseUrl?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  try {
+    return new URL(trimmed).hostname.toLowerCase();
+  } catch {
+    try {
+      return new URL(`https://${trimmed}`).hostname.toLowerCase();
+    } catch {
+      return undefined;
+    }
+  }
+}
+
 export function resolveOpenAIPromptCacheKeySupport(model: {
   api?: string;
   provider?: string;
   baseUrl?: string;
+  id?: string;
+  name?: string;
   compat?: Pick<
     OpenAICompletionsCompat,
     "supportsPromptCacheKey" | "supportsLongCacheRetention"
@@ -132,7 +171,19 @@ export function resolveOpenAIPromptCacheKeySupport(model: {
 }): boolean {
   return (
     model.compat?.supportsPromptCacheKey ??
-    (isNativeOpenAIEndpoint(model) || usesNativeOpenAICodexResponsesBackend(model))
+    (
+      isNativeOpenAIEndpoint(model) ||
+      usesNativeOpenAICodexResponsesBackend(model) ||
+      (() => {
+        const hostname = normalizeBaseUrlHostname(model.baseUrl);
+        return (
+          hostname !== undefined &&
+          (isDedicatedAzureOpenAIHostname(hostname) ||
+            (isAzureFoundryMultiModelHostname(hostname) &&
+              isOpenAIFamilyFoundryDeployment(model.id, model.name)))
+        );
+      })()
+    )
   );
 }
 
@@ -323,7 +374,7 @@ function resolveSessionAffinity(
 
 /** Applies explicit model overrides once on top of the canonical transport defaults. */
 export function resolveOpenAICompletionsCompat(
-  model: Pick<Model<"openai-completions">, "id" | "provider" | "baseUrl" | "compat">,
+  model: Pick<Model<"openai-completions">, "id" | "provider" | "baseUrl" | "compat" | "name">,
   resolveCapabilities?: (input: AiProviderRequestPolicyInput) => ProviderRequestCapabilities,
 ): ResolvedOpenAICompletionsCompat {
   const { defaults } = detectOpenAICompletionsCompat(model, resolveCapabilities);
