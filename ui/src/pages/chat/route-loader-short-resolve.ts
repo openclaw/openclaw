@@ -38,22 +38,26 @@ export async function resolveShortSessionReference(
   if (startup) {
     const handoff = prepareChatRouteStartup(context, signal);
     const deadline = Date.now() + CHAT_HISTORY_STARTUP_RETRY_TIMEOUT_MS;
-    const sourceCanonicalListRevision = context.sessions.canonicalListRevision;
+    const sessions = context.sessions;
     const { hello } = context.gateway.snapshot;
     const isCurrent = () =>
       !signal.aborted &&
+      context.sessions === sessions &&
       context.gateway.snapshot.client === client &&
       context.gateway.snapshot.hello === hello;
     try {
-      const response = await requestChatHistory<
-        ChatHistoryResult & { resolution: SessionsResolveResult }
-      >(
-        client,
+      const response = await requestChatHistory(
         "chat.startup",
-        {
-          ...selector,
-          limit: CHAT_HISTORY_REQUEST_LIMIT,
-          maxBytes: CHAT_HISTORY_REQUEST_MAX_BYTES,
+        async () => {
+          const observation = { owner: sessions, reconcile: sessions.captureReconcile() };
+          const startupResponse = await client.request<
+            ChatHistoryResult & { resolution: SessionsResolveResult }
+          >("chat.startup", {
+            ...selector,
+            limit: CHAT_HISTORY_REQUEST_LIMIT,
+            maxBytes: CHAT_HISTORY_REQUEST_MAX_BYTES,
+          });
+          return { ...startupResponse, observation };
         },
         isCurrent,
         () => Date.now() < deadline,
@@ -61,7 +65,7 @@ export async function resolveShortSessionReference(
       signal.throwIfAborted();
       result = response.resolution;
       if (result.ok) {
-        handoff.store(result.key, { ...response, sourceCanonicalListRevision });
+        handoff.store(result.key, response);
       } else {
         handoff.dispose();
       }

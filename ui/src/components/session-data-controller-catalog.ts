@@ -34,6 +34,8 @@ import {
 export interface SessionDataControllerHost extends ReactiveControllerHost {
   readonly isConnected: boolean;
   readonly connected: boolean;
+  readonly activeRouteId?: string;
+  getRouteSessionKey(): string;
   readonly sessionDataContext: ApplicationContext<RouteId> | undefined;
   dismissTransientMenus(): boolean;
   expandedAgentId(): string;

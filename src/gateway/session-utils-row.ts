@@ -29,6 +29,7 @@ import { isPinnableSessionEntry } from "../config/sessions/session-pin-policy.js
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { projectPluginSessionExtensionsSync } from "../plugins/host-hook-state.js";
 import { resolveActiveSessionAgentStatus } from "../sessions/session-agent-status.js";
+import { deriveSessionUnread } from "../shared/session-unread.js";
 import { getSessionRepositoryWorkspaceStore } from "../state/session-repository-workspaces.js";
 import { resolveActiveFallbackState } from "../status/fallback-notice-state.js";
 import { projectSessionDeliveryFields } from "../utils/delivery-context.shared.js";
@@ -54,7 +55,6 @@ import type {
 import {
   buildCompactionCheckpointPreview,
   deriveSessionTitle,
-  deriveSessionUnread,
   resolveEstimatedSessionCostUsd,
   resolveLatestCompactionCheckpoint,
   resolvePositiveNumber,

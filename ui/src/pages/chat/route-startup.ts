@@ -1,9 +1,11 @@
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
+import type { ObservedChatHistoryResult } from "./chat-history-snapshot.ts";
+import type { ChatHistorySessions } from "./chat-state-contract.ts";
 import type { SessionRouteContext } from "./route-loader-context.ts";
 
 type StartupHandoff = {
-  result?: ChatHistoryResult;
+  sessions: ChatHistorySessions;
+  result?: ObservedChatHistoryResult;
   sessionKey?: string;
   isCurrent: () => boolean;
   dispose: () => void;
@@ -12,13 +14,10 @@ type StartupHandoff = {
 const startupHandoffs = new WeakMap<GatewayBrowserClient, StartupHandoff>();
 
 export function prepareChatRouteStartup(
-  {
-    gateway,
-    router,
-    lifecycleAbortSignal,
-  }: Pick<SessionRouteContext, "gateway" | "router" | "lifecycleAbortSignal">,
+  context: Pick<SessionRouteContext, "gateway" | "router" | "lifecycleAbortSignal" | "sessions">,
   signal: AbortSignal,
-): { store: (sessionKey: string, result: ChatHistoryResult) => void; dispose: () => void } {
+): { store: (sessionKey: string, result: ObservedChatHistoryResult) => void; dispose: () => void } {
+  const { gateway, router, lifecycleAbortSignal, sessions } = context;
   const { client, hello } = gateway.snapshot;
   if (!client) {
     throw new Error("Chat startup requires a connected Gateway");
@@ -27,11 +26,13 @@ export function prepareChatRouteStartup(
   const cleanups: Array<() => void> = [];
   let disposed = false;
   const handoff: StartupHandoff = {
+    sessions,
     isCurrent: () => {
       const route = router.getState();
       const match = route.pendingMatches[0] ?? route.matches[0];
       return (
         !signal.aborted &&
+        context.sessions === sessions &&
         !lifecycleAbortSignal?.aborted &&
         gateway.snapshot.phase === "connected" &&
         gateway.snapshot.client === client &&
@@ -84,7 +85,11 @@ export function prepareChatRouteStartup(
   return {
     dispose: handoff.dispose,
     store: (sessionKey, result) => {
-      if (startupHandoffs.get(client) === handoff && handoff.isCurrent()) {
+      if (
+        startupHandoffs.get(client) === handoff &&
+        handoff.isCurrent() &&
+        result.observation.owner === sessions
+      ) {
         handoff.sessionKey = sessionKey;
         handoff.result = result;
       } else {
@@ -97,7 +102,8 @@ export function prepareChatRouteStartup(
 export function peekChatRouteStartup(
   client: GatewayBrowserClient,
   sessionKey: string,
-): ChatHistoryResult | undefined {
+  sessions: ChatHistorySessions,
+): ObservedChatHistoryResult | undefined {
   const handoff = startupHandoffs.get(client);
   if (!handoff) {
     return undefined;
@@ -106,7 +112,7 @@ export function peekChatRouteStartup(
     handoff.dispose();
     return undefined;
   }
-  if (handoff.sessionKey !== sessionKey) {
+  if (handoff.sessions !== sessions || handoff.sessionKey !== sessionKey) {
     return undefined;
   }
   return handoff.result;
@@ -115,8 +121,9 @@ export function peekChatRouteStartup(
 export function consumeChatRouteStartup(
   client: GatewayBrowserClient,
   sessionKey: string,
-): ChatHistoryResult | undefined {
-  const result = peekChatRouteStartup(client, sessionKey);
+  sessions: ChatHistorySessions,
+): ObservedChatHistoryResult | undefined {
+  const result = peekChatRouteStartup(client, sessionKey, sessions);
   if (result) {
     startupHandoffs.get(client)?.dispose();
   }

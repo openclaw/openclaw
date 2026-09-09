@@ -66,7 +66,7 @@ const managedScope = {
 };
 
 describe("permission projection across canonical session lists", () => {
-  it("keeps a newer permission without restamping unrelated fields from an older list", async () => {
+  it("keeps a newer managed descriptor and permission after an older event", async () => {
     const existing = sessionRow("agent:main:field-order", { label: "Initial" });
     const pending = createDeferred<SessionsListResult>();
     const response = sessionsResult([{ ...existing, updatedAt: 2, label: "Older list" }], 2);
@@ -91,9 +91,9 @@ describe("permission projection across canonical session lists", () => {
       });
 
       expect(sessions.state.result?.sessions[0]).toMatchObject({
-        label: "Newer event",
+        label: "Initial",
         permissionMode: "workspace",
-        updatedAt: 4,
+        updatedAt: 5,
       });
       expect(sessions.state.loading).toBe(false);
     } finally {
@@ -158,7 +158,10 @@ describe("permission projection across canonical session lists", () => {
         existing.key,
         added.key,
       ]);
-      expect(sessions.state.result?.sessions[0]).toMatchObject({ label: "Listed label" });
+      expect(sessions.state.result?.sessions[0]).toMatchObject({
+        label: "Original",
+        updatedAt: 3,
+      });
       expect(sessions.state.result?.sessions[0]?.permissionMode).toBe(permissionMode);
       if (permissionMode === undefined) {
         expect(sessions.state.result?.sessions[0]).not.toHaveProperty("permissionMode");
