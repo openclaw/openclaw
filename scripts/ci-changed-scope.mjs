@@ -429,7 +429,10 @@ function isControlUiCanonicalMemoryMigration(changedPaths, generatedPaths) {
     const exportName = locale.replaceAll("-", "_");
     return (
       source ===
-      `export { default as ${exportName} } from "virtual:openclaw-control-ui-locale/${locale}";`
+      [
+        `export { default as ${exportName} } from "virtual:openclaw-control-ui-locale/${locale}";`,
+        `export { default as configHints } from "virtual:openclaw-control-ui-locale-config-hints/${locale}";`,
+      ].join("\n")
     );
   });
 }
