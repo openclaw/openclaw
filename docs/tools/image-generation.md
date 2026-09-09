@@ -299,7 +299,7 @@ and ComfyUI support 1.
     PNG/JPEG/WebP output, and transparent backgrounds with PNG or WebP.
     OpenAI accepts up to 5 reference images through OpenClaw.
 
-    Use the [explicit OpenAI API-key route](/providers/openai/image-and-video#gpt-image-25)
+    Use the [explicit OpenAI API-key route](/providers/openai/image-and-video#gpt-image-2.5)
     for direct GPT Image 2.5 requests. Exporting `OPENAI_API_KEY` alone does not
     override an existing OAuth profile. These examples do not establish
     GPT Image 2.5 subscription access.
