@@ -1,5 +1,6 @@
 // Control UI route classifier for base-path and root-mounted SPA serving.
 import { isControlUiFocusPath } from "@openclaw/session-url-contract";
+import { resolvePluginDiscoveryIdentity } from "../plugins/catalog-discovery.js";
 import { acceptsControlUiHtmlResponse, isReadHttpMethod } from "./control-ui-http-utils.js";
 import {
   classifyGatewayProbePath,
@@ -91,13 +92,15 @@ export function classifyControlUiRequest(params: {
     if (classifyNodeWorkspaceTransferPath(pathname) !== "outside") {
       return { kind: "not-control-ui" };
     }
-    // The marketplace owns browser reads of the exact root. Descendants and
-    // non-document requests remain in the plugin HTTP namespace.
-    if (
-      (pathname === "/plugins" && (!isReadHttpMethod(method) || !spaFallback)) ||
-      pathname.startsWith("/plugins/")
-    ) {
-      return { kind: "not-control-ui" };
+    // Marketplace documents own the root and canonical generated catalog IDs.
+    // Other descendants and non-document requests remain plugin HTTP routes.
+    if (pathname === "/plugins" || pathname.startsWith("/plugins/")) {
+      const marketplaceDocument =
+        pathname === "/plugins" ||
+        resolvePluginDiscoveryIdentity(pathname.slice("/plugins/".length)) !== undefined;
+      if (!marketplaceDocument || !isReadHttpMethod(method) || !spaFallback) {
+        return { kind: "not-control-ui" };
+      }
     }
     if (pathname === "/api" || pathname.startsWith("/api/")) {
       return { kind: "not-control-ui" };
