@@ -7,6 +7,8 @@ import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import { expandHomePrefix } from "../infra/home-dir.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import { prepareSqliteReadOnlyLocationSync } from "../infra/sqlite-readonly-location.js";
+import { isArtifactPreservingStateRead } from "../state/openclaw-state-db-readonly.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import {
   openOpenClawStateDatabase,
@@ -245,21 +247,34 @@ export async function loadCronJobsStoreWithConfigJobsReadOnly(
   }
   const resolvedStorePath = path.resolve(storePath);
   const storeKey = cronStoreKey(resolvedStorePath);
-  const db = openNodeSqliteDatabase(statePath, { readOnly: true });
+  // Preserve the caller's source artifacts without changing ordinary cron read admission.
+  const prepared = isArtifactPreservingStateRead()
+    ? prepareSqliteReadOnlyLocationSync(statePath)
+    : undefined;
+  let loaded = emptyLoadedCronStore();
+  let snapshotRemoved = true;
   try {
-    if (!tableExists(db, "cron_jobs")) {
-      return emptyLoadedCronStore();
+    const db = openNodeSqliteDatabase(prepared?.location ?? statePath, { readOnly: true });
+    try {
+      if (tableExists(db, "cron_jobs")) {
+        const rows = loadCronRows(db, storeKey);
+        if (rows.length > 0) {
+          loaded = loadedCronStoreFromRows(rows);
+          loadCronRuntimeAuthorities({ db, storeKey, jobs: loaded.store.jobs });
+        }
+      }
+    } finally {
+      db.close();
     }
-    const rows = loadCronRows(db, storeKey);
-    if (rows.length > 0) {
-      const loaded = loadedCronStoreFromRows(rows);
-      loadCronRuntimeAuthorities({ db, storeKey, jobs: loaded.store.jobs });
-      return loaded;
-    }
-    return emptyLoadedCronStore();
   } finally {
-    db.close();
+    if (prepared) {
+      snapshotRemoved = prepared.cleanup();
+    }
   }
+  if (!snapshotRemoved) {
+    throw new Error("Cron read-only state snapshot cleanup failed.");
+  }
+  return loaded;
 }
 
 /** Loads only the persisted cron job store payload. */

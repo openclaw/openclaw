@@ -141,6 +141,7 @@ jobs:
           set -euo pipefail
           emulator_pid=""
           adb_started=0
+          readiness_failure_latched=0
 
           capture_accel_check() {
             local accel_raw="$DIAGNOSTIC_DIR/emulator-accel-check.raw"
@@ -193,6 +194,176 @@ jobs:
             return 0
           }
 
+          run_bounded_probe() {
+            local output_file="$1"
+            local deadline="$2"
+            shift 2
+            local probe_pid
+            local probe_poll_seconds=1
+
+            probe_status=0
+            probe_timed_out=false
+            if (( SECONDS >= deadline )); then
+              : >"$output_file"
+              probe_status=124
+              probe_timed_out=true
+              return 0
+            fi
+
+            "$@" >"$output_file" 2>&1 &
+            probe_pid=$!
+            while kill -0 "$probe_pid" 2>/dev/null; do
+              if (( SECONDS >= deadline )); then
+                probe_timed_out=true
+                if kill "$probe_pid" 2>/dev/null; then
+                  :
+                fi
+                if kill -0 "$probe_pid" 2>/dev/null && kill -9 "$probe_pid" 2>/dev/null; then
+                  :
+                fi
+                break
+              fi
+              sleep "$probe_poll_seconds"
+            done
+            if wait "$probe_pid"; then
+              probe_status=0
+            else
+              probe_status=$?
+            fi
+            if (( SECONDS >= deadline )); then
+              probe_timed_out=true
+            fi
+            if [[ "$probe_timed_out" == "true" ]]; then
+              probe_status=124
+            fi
+          }
+
+          observe_after_readiness_timeout() {
+            local serial="${1:-}"
+            local post_deadline_observation_seconds=300
+            local post_deadline_poll_seconds=2
+            local observation_deadline=$((SECONDS + post_deadline_observation_seconds))
+            local observation_log="$DIAGNOSTIC_DIR/post-deadline-observations.log"
+            local observation_stop="observation-cap-reached"
+            local late_adb_recorded=false
+            local observed_at
+            local probe_output="$DIAGNOSTIC_DIR/post-deadline-probe.raw"
+            local adb_output
+            local serials
+            local count
+            local avd_name
+            local boot_completed
+            local remaining_seconds
+
+            {
+              printf 'original_deadline_reached_at=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+              printf 'observation_cap_seconds=%s\n' "$post_deadline_observation_seconds"
+              printf 'owned_emulator_pid=%s\n' "$emulator_pid"
+            } >>"$observation_log"
+
+            while (( SECONDS < observation_deadline )); do
+              observed_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+              if ! kill -0 "$emulator_pid" 2>/dev/null; then
+                observation_stop="owned-emulator-exited"
+                printf '[%s] owned_emulator_exited=true\n' "$observed_at" >>"$observation_log"
+                break
+              fi
+
+              run_bounded_probe "$probe_output" "$observation_deadline" adb devices -l
+              adb_output="$(head -c 16384 "$probe_output")"
+              {
+                printf '\n[%s] post-deadline adb_status=%s adb_timed_out=%s\n' \
+                  "$observed_at" "$probe_status" "$probe_timed_out"
+                printf '%s\n' "$adb_output"
+              } >>"$observation_log"
+              if [[ "$probe_timed_out" == "true" ]]; then
+                observation_stop="adb-devices-timeout"
+                break
+              fi
+              if [[ "$probe_status" -ne 0 ]]; then
+                observation_stop="adb-devices-failed"
+                break
+              fi
+
+              serials="$(printf '%s\n' "$adb_output" | awk 'NR > 1 && $2 == "device" { print $1 }')"
+              count="$(printf '%s\n' "$serials" | sed '/^$/d' | wc -l | tr -d ' ')"
+              if [[ "$count" -gt 1 ]]; then
+                observation_stop="unexpected-multiple-devices"
+                break
+              fi
+              if [[ "$count" == "1" ]]; then
+                if [[ -n "$serial" && "$serial" != "$serials" ]]; then
+                  observation_stop="unexpected-device-change"
+                  break
+                fi
+                if [[ -z "$serial" ]]; then
+                  serial="$serials"
+                fi
+                run_bounded_probe "$probe_output" "$observation_deadline" \
+                  adb -s "$serial" emu avd name
+                avd_name="$(head -c 4096 "$probe_output" | tr -d '\r' | sed -n '1p')"
+                printf '[%s] serial=%s avd_status=%s avd_name=%s\n' \
+                  "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$serial" "$probe_status" \
+                  "${avd_name:-unset}" >>"$observation_log"
+                if [[ "$probe_timed_out" == "true" ]]; then
+                  observation_stop="avd-identity-timeout"
+                  break
+                fi
+                if [[ "$probe_status" -ne 0 || "$avd_name" != "$AVD_NAME" ]]; then
+                  observation_stop="unexpected-avd"
+                  break
+                fi
+                if [[ "$late_adb_recorded" == "false" ]]; then
+                  printf 'late_adb_online_at=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+                    >>"$observation_log"
+                  late_adb_recorded=true
+                fi
+
+                run_bounded_probe "$probe_output" "$observation_deadline" \
+                  adb -s "$serial" shell getprop sys.boot_completed
+                boot_completed="$(tr -d '\r' <"$probe_output")"
+                printf '[%s] serial=%s boot_status=%s boot_completed=%s\n' \
+                  "$observed_at" "$serial" "$probe_status" "${boot_completed:-unset}" \
+                  >>"$observation_log"
+                if [[ "$probe_timed_out" == "true" ]]; then
+                  observation_stop="boot-query-timeout"
+                  break
+                fi
+                if [[ "$probe_status" == "0" && "$boot_completed" == "1" ]]; then
+                  printf 'late_boot_completed_at=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+                    >>"$observation_log"
+                  observation_stop="late-boot-completed"
+                  break
+                fi
+              fi
+
+              sample_owned_qemu
+              remaining_seconds=$((observation_deadline - SECONDS))
+              if (( remaining_seconds <= 0 )); then
+                break
+              fi
+              if (( remaining_seconds < post_deadline_poll_seconds )); then
+                sleep "$remaining_seconds"
+              else
+                sleep "$post_deadline_poll_seconds"
+              fi
+            done
+
+            printf 'observation_finished_at=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+              >>"$observation_log"
+            printf 'observation_stop=%s\n' "$observation_stop" >>"$observation_log"
+          }
+
+          fail_after_readiness_timeout() {
+            local failure_message="$1"
+            local serial="${2:-}"
+
+            readiness_failure_latched=1
+            observe_after_readiness_timeout "$serial"
+            printf '::error::%s\n' "$failure_message" >&2
+            return 1
+          }
+
           cleanup() {
             status=$?
             set +e
@@ -202,7 +373,11 @@ jobs:
               if [[ -n "$emulator_pid" ]]; then
                 ps -p "$emulator_pid" -o pid=,ppid=,stat=,etime=,command=
               fi
-              adb devices -l
+              if [[ "$readiness_failure_latched" == "1" ]]; then
+                printf 'adb_devices_skipped_after_latched_timeout=true\n'
+              else
+                adb devices -l
+              fi
             } >>"$DIAGNOSTIC_DIR/process-status.log" 2>&1
             if [[ -n "$emulator_pid" ]] && kill -0 "$emulator_pid" 2>/dev/null; then
               kill "$emulator_pid"
@@ -215,8 +390,11 @@ jobs:
               fi
               wait "$emulator_pid" 2>/dev/null
             fi
-            if [[ "$adb_started" == "1" ]]; then
+            if [[ "$adb_started" == "1" && "$readiness_failure_latched" != "1" ]]; then
               adb kill-server
+            elif [[ "$adb_started" == "1" ]]; then
+              printf 'adb_kill_server_skipped_after_latched_timeout=true\n' \
+                >>"$DIAGNOSTIC_DIR/cleanup.log"
             fi
             avdmanager delete avd --name "$AVD_NAME" \
               >>"$DIAGNOSTIC_DIR/cleanup.log" 2>&1
@@ -273,8 +451,8 @@ jobs:
             sleep 2
           done
           if [[ -z "$serial" ]]; then
-            echo "::error::Timed out waiting for exactly one Android emulator device"
-            exit 1
+            fail_after_readiness_timeout \
+              "Timed out waiting for exactly one Android emulator device" ""
           fi
 
           adb -s "$serial" wait-for-device
@@ -301,8 +479,8 @@ jobs:
             sleep 2
           done
 
-          echo "::error::Timed out waiting for Android emulator boot completion"
-          exit 1
+          fail_after_readiness_timeout \
+            "Timed out waiting for Android emulator boot completion" "$serial"
 
       - name: Upload Android emulator diagnostic
         if: always()

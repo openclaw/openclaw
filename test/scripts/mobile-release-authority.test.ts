@@ -2023,7 +2023,7 @@ describe("mobile release authority", () => {
       'ps -p "$emulator_pid" -o pid=,ppid=,%cpu=,rss=,stat=,etime=,command=',
     );
     expect(diagnostic).toContain('>>"$DIAGNOSTIC_DIR/owned-qemu-samples.log" 2>&1');
-    expect(diagnostic.match(/\bsample_owned_qemu\b/gu)).toHaveLength(4);
+    expect(diagnostic.match(/\bsample_owned_qemu\b/gu)).toHaveLength(5);
 
     const accelFunctionStart = diagnostic.indexOf("capture_accel_check() {");
     const accelFunctionEnd = diagnostic.indexOf("\n\nsample_owned_qemu()", accelFunctionStart);
@@ -2068,6 +2068,220 @@ describe("mobile release authority", () => {
     expect(timedOutAccel.result.status, timedOutAccel.result.stderr).toBe(0);
     expect(timedOutAccel.output).toContain("exit_status=124");
     expect(timedOutAccel.output).toContain("timed_out=true");
+
+    expect(diagnostic).toContain("observe_after_readiness_timeout() {");
+    expect(diagnostic).toContain("post_deadline_observation_seconds=300");
+    expect(diagnostic).toContain("fail_after_readiness_timeout() {");
+    const observationFunctionStart = diagnostic.indexOf("run_bounded_probe() {");
+    const observationFunctionEnd = diagnostic.indexOf(
+      "\n\nfail_after_readiness_timeout()",
+      observationFunctionStart,
+    );
+    const failureFunctionEnd = diagnostic.indexOf("\n\ncleanup()", observationFunctionEnd);
+    expect(observationFunctionStart).toBeGreaterThanOrEqual(0);
+    expect(observationFunctionEnd).toBeGreaterThan(observationFunctionStart);
+    expect(failureFunctionEnd).toBeGreaterThan(observationFunctionEnd);
+    const observationFunctions = diagnostic
+      .slice(observationFunctionStart, failureFunctionEnd)
+      .replace("probe_poll_seconds=1", "probe_poll_seconds=0.05")
+      .replace("post_deadline_observation_seconds=300", "post_deadline_observation_seconds=3")
+      .replace("post_deadline_poll_seconds=2", "post_deadline_poll_seconds=1");
+    const runPostDeadlineObservation = (adbSource: string, functions = observationFunctions) => {
+      const root = tempRoots.make("openclaw-android-emulator-post-deadline-");
+      const bin = path.join(root, "bin");
+      const diagnosticDir = path.join(root, "diagnostic");
+      fs.mkdirSync(bin);
+      fs.mkdirSync(diagnosticDir);
+      fs.writeFileSync(path.join(bin, "adb"), adbSource, { mode: 0o755 });
+      const result = spawnSync(
+        "/bin/bash",
+        [
+          "-c",
+          [
+            "set -euo pipefail",
+            "sample_owned_qemu() { :; }",
+            functions,
+            "readiness_failure_latched=0",
+            "emulator_pid=$$",
+            'export AVD_NAME="OpenClaw_Screenshots_API36"',
+            'fail_after_readiness_timeout "latched readiness failure" ""',
+          ].join("\n"),
+        ],
+        {
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            DIAGNOSTIC_DIR: diagnosticDir,
+            PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}`,
+          },
+          timeout: 5_000,
+        },
+      );
+      return {
+        observations: fs.readFileSync(
+          path.join(diagnosticDir, "post-deadline-observations.log"),
+          "utf8",
+        ),
+        result,
+      };
+    };
+
+    const lateReady = runPostDeadlineObservation(`#!/bin/bash
+set -euo pipefail
+if [[ "\${1:-}" == "devices" ]]; then
+  printf 'List of devices attached\\nemulator-5554\\tdevice product:sdk model:sdk\\n'
+elif [[ "\${1:-}" == "-s" && "\${3:-}" == "shell" ]]; then
+  printf '1\\n'
+elif [[ "\${1:-}" == "-s" && "\${3:-}" == "emu" ]]; then
+  printf '%s\\nOK\\n' "\${AVD_NAME:?}"
+fi
+`);
+    expect(lateReady.result.status).toBe(1);
+    expect(lateReady.result.stderr).toContain("::error::latched readiness failure");
+    expect(lateReady.observations).toContain("late_adb_online_at=");
+    expect(lateReady.observations).toContain("late_boot_completed_at=");
+    expect(lateReady.observations).toContain("observation_stop=late-boot-completed");
+
+    const unrelatedDevice = runPostDeadlineObservation(`#!/bin/bash
+set -euo pipefail
+if [[ "\${1:-}" == "devices" ]]; then
+  printf 'List of devices attached\\nemulator-5554\\tdevice product:sdk model:sdk\\n'
+elif [[ "\${1:-}" == "-s" && "\${3:-}" == "emu" ]]; then
+  printf 'Another_AVD\\nOK\\n'
+elif [[ "\${1:-}" == "-s" && "\${3:-}" == "shell" ]]; then
+  printf '1\\n'
+fi
+`);
+    expect(unrelatedDevice.result.status).toBe(1);
+    expect(unrelatedDevice.observations).toContain("observation_stop=unexpected-avd");
+    expect(unrelatedDevice.observations).not.toContain("late_adb_online_at=");
+    expect(unrelatedDevice.observations).not.toContain("late_boot_completed_at=");
+
+    const cappedObservationFunctions = observationFunctions.replace(
+      "post_deadline_observation_seconds=3",
+      "post_deadline_observation_seconds=1",
+    );
+    const capped = runPostDeadlineObservation(
+      `#!/bin/bash
+set -euo pipefail
+if [[ "\${1:-}" == "devices" ]]; then
+  printf 'List of devices attached\\n\\n'
+fi
+`,
+      cappedObservationFunctions,
+    );
+    expect(capped.result.status).toBe(1);
+    expect(capped.result.stderr).toContain("::error::latched readiness failure");
+    expect(capped.observations).toContain("observation_cap_seconds=1");
+    expect(capped.observations).toContain("observation_stop=observation-cap-reached");
+
+    const probeFunctionEnd = observationFunctions.indexOf("\n\nobserve_after_readiness_timeout()");
+    expect(probeFunctionEnd).toBeGreaterThan(0);
+    const probeFunction = observationFunctions.slice(0, probeFunctionEnd);
+    const completionRace = spawnSync(
+      "/bin/bash",
+      [
+        "-c",
+        [
+          "set -euo pipefail",
+          "kill() {",
+          '  if [[ "${1:-}" == "-0" ]]; then',
+          "    sleep 1",
+          "    return 1",
+          "  fi",
+          '  command kill "$@"',
+          "}",
+          probeFunction,
+          'run_bounded_probe "$PROBE_OUTPUT" "$((SECONDS + 1))" /usr/bin/true',
+          'printf "status=%s timed_out=%s\\n" "$probe_status" "$probe_timed_out"',
+        ].join("\n"),
+      ],
+      {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          PROBE_OUTPUT: path.join(tempRoots.make("openclaw-android-probe-race-"), "probe.txt"),
+        },
+        timeout: 5_000,
+      },
+    );
+    expect(completionRace.status, completionRace.stderr).toBe(0);
+    expect(completionRace.stdout).toBe("status=124 timed_out=true\n");
+
+    const cleanupFunctionStart = diagnostic.indexOf("cleanup() {");
+    const cleanupFunctionEnd = diagnostic.indexOf("\ntrap cleanup EXIT", cleanupFunctionStart);
+    expect(cleanupFunctionStart).toBeGreaterThan(failureFunctionEnd);
+    expect(cleanupFunctionEnd).toBeGreaterThan(cleanupFunctionStart);
+    const cleanupFunction = diagnostic.slice(cleanupFunctionStart, cleanupFunctionEnd);
+    const hangingRoot = tempRoots.make("openclaw-android-emulator-hanging-adb-");
+    const hangingBin = path.join(hangingRoot, "bin");
+    const hangingDiagnosticDir = path.join(hangingRoot, "diagnostic");
+    const adbPidFile = path.join(hangingRoot, "adb.pid");
+    const emulatorPidFile = path.join(hangingRoot, "emulator.pid");
+    fs.mkdirSync(hangingBin);
+    fs.mkdirSync(hangingDiagnosticDir);
+    fs.writeFileSync(
+      path.join(hangingBin, "adb"),
+      '#!/bin/bash\nset -euo pipefail\nprintf \'%s\\n\' "$$" >"$ADB_PID_FILE"\nexec sleep 30\n',
+      { mode: 0o755 },
+    );
+    fs.writeFileSync(
+      path.join(hangingBin, "avdmanager"),
+      "#!/bin/bash\nset -euo pipefail\nprintf 'cleanup\\n' >>\"$CLEANUP_TRACE\"\n",
+      { mode: 0o755 },
+    );
+    fs.writeFileSync(path.join(hangingBin, "ps"), "#!/bin/bash\nexit 0\n", { mode: 0o755 });
+    const hangingObservationFunctions = observationFunctions.replace(
+      "post_deadline_observation_seconds=3",
+      "post_deadline_observation_seconds=2",
+    );
+    const hangingResult = spawnSync(
+      "/bin/bash",
+      [
+        "-c",
+        [
+          "set -euo pipefail",
+          "sample_owned_qemu() { :; }",
+          hangingObservationFunctions,
+          cleanupFunction,
+          "readiness_failure_latched=0",
+          "adb_started=1",
+          'export AVD_NAME="OpenClaw_Screenshots_API36"',
+          "sleep 30 &",
+          "emulator_pid=$!",
+          'printf "%s\\n" "$emulator_pid" >"$EMULATOR_PID_FILE"',
+          "trap cleanup EXIT",
+          'fail_after_readiness_timeout "latched readiness failure" ""',
+        ].join("\n"),
+      ],
+      {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          ADB_PID_FILE: adbPidFile,
+          CLEANUP_TRACE: path.join(hangingRoot, "cleanup.trace"),
+          DIAGNOSTIC_DIR: hangingDiagnosticDir,
+          EMULATOR_PID_FILE: emulatorPidFile,
+          PATH: `${hangingBin}${path.delimiter}${process.env.PATH ?? ""}`,
+        },
+        timeout: 5_000,
+      },
+    );
+    expect(hangingResult.status, hangingResult.stderr).toBe(1);
+    const hangingObservations = fs.readFileSync(
+      path.join(hangingDiagnosticDir, "post-deadline-observations.log"),
+      "utf8",
+    );
+    expect(hangingObservations).toContain("adb_timed_out=true");
+    expect(hangingObservations).toContain("observation_stop=adb-devices-timeout");
+    expect(fs.readFileSync(path.join(hangingRoot, "cleanup.trace"), "utf8")).toBe("cleanup\n");
+    expect(fs.readFileSync(path.join(hangingDiagnosticDir, "cleanup.log"), "utf8")).toContain(
+      "adb_kill_server_skipped_after_latched_timeout=true",
+    );
+    for (const pidFile of [adbPidFile, emulatorPidFile]) {
+      const pid = Number.parseInt(fs.readFileSync(pidFile, "utf8").trim(), 10);
+      expect(() => process.kill(pid, 0)).toThrow();
+    }
     expect(diagnostic).toContain(
       "device_deadline=$((SECONDS + ANDROID_SCREENSHOT_EMULATOR_TIMEOUT_SECONDS))",
     );
@@ -2080,6 +2294,13 @@ describe("mobile release authority", () => {
     expect(diagnostic).toContain('ps -p "$emulator_pid"');
     expect(diagnostic).toContain('kill "$emulator_pid"');
     expect(diagnostic).toContain("adb kill-server");
+    expect(diagnostic).toContain("trap cleanup EXIT");
+    expect(diagnostic).toMatch(
+      /fail_after_readiness_timeout \\\n\s+"Timed out waiting for exactly one Android emulator device" ""/u,
+    );
+    expect(diagnostic).toMatch(
+      /fail_after_readiness_timeout \\\n\s+"Timed out waiting for Android emulator boot completion" "\$serial"/u,
+    );
     expect(steps[artifactIndex]).toMatchObject({
       if: "always()",
       uses: "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",

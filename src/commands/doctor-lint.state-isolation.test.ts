@@ -18,16 +18,18 @@ import { createMcpOAuthClientProvider } from "../agents/mcp-oauth-provider.js";
 import { resolveMcpOAuthAccessToken } from "../agents/mcp-oauth.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { clearHealthChecksForTest } from "../flows/health-check-registry.js";
+import type { HealthCheckContext } from "../flows/health-checks.js";
 import { requestDevicePairing } from "../infra/device-pairing.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import { readConfigMachineState } from "../state/config-machine-state.js";
+import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
 import {
   closeOpenClawStateDatabaseByPath,
   closeOpenClawStateDatabaseForTest,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { runDoctorLintCli } from "./doctor-lint.js";
+import { collectDoctorFindings, runDoctorLintCli } from "./doctor-lint.js";
 
 const mocks = vi.hoisted(() => ({
   resolveDoctorContributionHealthChecks: vi.fn(),
@@ -323,6 +325,7 @@ describe("doctor lint state isolation", () => {
       extraIds: ["memory-core/managed-local-embedding-setup"],
     },
     { privateCheckId: "core/doctor/project-clone-shape", extraIds: [] },
+    { privateCheckId: "core/doctor/skills-readiness", extraIds: [] },
   ])(
     "restores the private view for $privateCheckId after an auth detector throws",
     async ({ privateCheckId, extraIds }) => {
@@ -386,15 +389,21 @@ describe("doctor lint state isolation", () => {
             gateway: { mode: "local" },
             channels: { telegram: { dmPolicy: "pairing" } },
           });
+          fs.chmodSync(state.stateDir, 0o700);
+          fs.chmodSync(state.configPath, 0o600);
           const credentials = path.join(state.stateDir, "credentials");
-          if (exists) fs.mkdirSync(credentials, { recursive: true, mode: 0o700 });
+          if (exists) {
+            fs.mkdirSync(credentials, { recursive: true, mode: 0o700 });
+          }
           const actual = await vi.importActual<
             typeof import("../flows/doctor-health-contributions.js")
           >("../flows/doctor-health-contributions.js");
           const check = (await actual.resolveDoctorContributionHealthChecks()).find(
             (entry) => entry.id === "core/doctor/state-integrity",
           );
-          if (!check) throw new Error("state-integrity contribution is missing");
+          if (!check) {
+            throw new Error("state-integrity contribution is missing");
+          }
           let isolated = false;
           mocks.resolveDoctorContributionHealthChecks.mockResolvedValue([
             check,
@@ -402,8 +411,36 @@ describe("doctor lint state isolation", () => {
               id: "core/doctor/runtime-tool-schemas",
               kind: "core",
               description: "verifies snapshot isolation",
-              async detect() {
+              async detect(ctx) {
                 isolated = process.env.OPENCLAW_STATE_DIR !== state.stateDir;
+                if (!check.repair) {
+                  throw new Error("state-integrity repair is missing");
+                }
+                const effects = exists
+                  ? []
+                  : [
+                      {
+                        kind: "state",
+                        action: "would-create-runtime-state-dir",
+                        target: credentials,
+                        dryRunSafe: false,
+                      },
+                    ];
+                await expect(
+                  check.repair({ ...ctx, mode: "fix", dryRun: true }, []),
+                ).resolves.toEqual({
+                  status: "repaired",
+                  changes: [],
+                  effects,
+                });
+                await expect(
+                  check.repair({ ...ctx, mode: "fix", dryRun: false }, []),
+                ).resolves.toEqual({
+                  status: "skipped",
+                  reason: "legacy doctor state integrity contribution owns state repairs",
+                  changes: [],
+                  effects,
+                });
                 return [];
               },
             },
@@ -412,11 +449,8 @@ describe("doctor lint state isolation", () => {
           try {
             await runDoctorLintCli(runtime, { json: true, includeAllChecks: true });
             const findings = JSON.parse(String(stdout.mock.calls.at(-1)?.[0])).findings;
-            const oauth = findings.filter((finding: { message: string }) =>
-              finding.message.includes("OAuth dir"),
-            );
             expect(isolated).toBe(true);
-            expect(oauth).toEqual(
+            expect(findings).toEqual(
               exists ? [] : [expect.objectContaining({ severity: "error", path: credentials })],
             );
             expect(fs.existsSync(credentials)).toBe(exists);
@@ -425,6 +459,50 @@ describe("doctor lint state isolation", () => {
           }
         },
       );
+    },
+  );
+
+  it.each(["lint", "advisory"])(
+    "preserves source WAL artifacts during %s source reads",
+    async (entrypoint) => {
+      await withOpenClawTestState({ prefix: "openclaw-doctor-lint-source-wal-" }, async (state) => {
+        await state.writeConfig({ memory: { search: { enabled: false } } });
+        const databasePath = resolveOpenClawStateSqlitePath(state.env);
+        fs.mkdirSync(path.dirname(databasePath), { recursive: true });
+        const writer = new DatabaseSync(databasePath);
+        writer.exec(
+          "PRAGMA journal_mode = WAL; CREATE TABLE marker(value TEXT); INSERT INTO marker VALUES ('committed');",
+        );
+        const before = snapshotSqliteFamily(databasePath);
+        let observed: unknown;
+        mocks.resolveDoctorContributionHealthChecks.mockResolvedValue([
+          {
+            id: "core/doctor/source-state-read",
+            kind: "core",
+            description: "reads source state through the shared read-only owner",
+            async detect(ctx: HealthCheckContext) {
+              observed = withExistingOpenClawStateDatabaseReadOnly(
+                ({ db }) => db.prepare("SELECT value FROM marker").all(),
+                { env: ctx.env },
+              );
+              return [];
+            },
+          },
+        ]);
+        const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+        try {
+          if (entrypoint === "lint") {
+            await runDoctorLintCli(runtime, { json: true, includeAllChecks: true });
+          } else {
+            await collectDoctorFindings(runtime);
+          }
+          expect(observed).toEqual([{ value: "committed" }]);
+          expect(snapshotSqliteFamily(databasePath)).toEqual(before);
+        } finally {
+          stdout.mockRestore();
+          writer.close();
+        }
+      });
     },
   );
 

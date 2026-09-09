@@ -1183,7 +1183,7 @@
 }
 
 /* renderBody is shared by normal bubbles and expanded tool output. */
-:is(.chat-bubble, .chat-tool-msg-body) {
+:is(.chat-bubble, .chat-tool-msg-body, .chat-message-avatar-anchor) {
   > :is(
     .chat-message-images,
     .chat-assistant-attachments,
@@ -1194,6 +1194,7 @@
     .chat-text,
     .chat-json-collapse,
     .chat-message-disclosure,
+    .chat-message-avatar-anchor,
     .chat-tools-inline
   ) {
     margin-block: 0;
@@ -1208,11 +1209,17 @@
       .chat-text,
       .chat-json-collapse,
       .chat-message-disclosure,
+      .chat-message-avatar-anchor,
       .chat-tools-inline
     ) {
       margin-block-start: var(--chat-block-gap);
     }
   }
+}
+
+/* A display-contents anchor transfers its block gap to the first rendered box. */
+.chat-bubble:not(.chat-bubble--with-images) > .chat-message-avatar-anchor > :first-child {
+  margin-block-start: inherit;
 }
 
 .chat-text > * + *,

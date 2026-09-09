@@ -1048,6 +1048,28 @@ img.chat-avatar.chat-avatar--logo {
   color: hsl(var(--chat-sender-hue) 60% 36%);
 }
 
+.chat-message-avatar-anchor {
+  display: contents;
+}
+
+.chat-message-avatar-anchor > :is(.chat-avatar, .chat-avatar-slot) {
+  position: absolute;
+  inset-block-start: 0;
+  inset-inline-start: calc(100% + var(--chat-avatar-gap));
+}
+
+.chat-group--peer .chat-message-avatar-anchor > :is(.chat-avatar, .chat-avatar-slot) {
+  inset-inline-start: auto;
+  inset-inline-end: calc(100% + var(--chat-avatar-gap));
+}
+
+.chat-group.user .chat-bubble--with-images > .chat-message-avatar-anchor {
+  position: relative;
+  display: block;
+  width: fit-content;
+  max-width: 100%;
+}
+
 /* Match the sender tint's specificity so media stays outside the painted text
    surface on either participant's side. */
 .chat-group.user .chat-bubble.chat-bubble--with-images {
@@ -1061,7 +1083,7 @@ img.chat-avatar.chat-avatar--logo {
 }
 
 .chat-group.user
-  .chat-bubble--with-images
+  :is(.chat-bubble--with-images, .chat-bubble--with-images > .chat-message-avatar-anchor)
   > :is(.chat-text, .chat-message-disclosure, .chat-json-collapse) {
   width: fit-content;
   max-width: 100%;
@@ -1072,7 +1094,7 @@ img.chat-avatar.chat-avatar--logo {
 
 :where(:root[data-theme-mode="light"])
   .chat-group.user
-  .chat-bubble--with-images
+  :is(.chat-bubble--with-images, .chat-bubble--with-images > .chat-message-avatar-anchor)
   > :is(.chat-text, .chat-message-disclosure, .chat-json-collapse) {
   color: var(--text-strong);
 }
@@ -1276,7 +1298,7 @@ img.chat-avatar.chat-avatar--logo {
     margin-inline: 0;
   }
 
-  .chat-group > :is(.chat-avatar, .chat-avatar-slot) {
+  .chat-group :is(.chat-avatar, .chat-avatar-slot) {
     display: none;
   }
 

@@ -432,6 +432,25 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
     normalizedRole === "assistant" ? formatSenderLabel(group.replyToSender) : null;
   const replyToTitle = replyToLabel ? t("chat.messages.replyingTo", { name: replyToLabel }) : null;
 
+  const inlineUserAvatar =
+    normalizedRole === "user" &&
+    avatarPlacement === "gutter" &&
+    Boolean(preparedMessages[lastMessageIndex]?.source.displayMarkdown);
+  const avatar =
+    normalizedRole !== "tool" &&
+    avatarPlacement === "gutter" &&
+    (isForwarded || normalizedRole !== "assistant" || opts.showAssistantAvatar !== false)
+      ? isForwarded
+        ? renderForwardedAvatar(group.senderSession?.agentId, opts)
+        : renderChatAvatar(
+            group.role,
+            { name: assistantName, avatar: opts.assistantAvatar ?? null },
+            { name: opts.userName ?? null, avatar: opts.userAvatar ?? null },
+            opts.resourceBasePath,
+            group.sender,
+          )
+      : nothing;
+
   return html`
     <div
       class="chat-group ${roleClass} chat-group--with-footer${
@@ -442,21 +461,7 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
       style=${senderHue === null ? nothing : `--chat-sender-hue: ${senderHue}`}
       data-chat-row-key=${group.key}
     >
-      ${
-        normalizedRole !== "tool" &&
-        avatarPlacement === "gutter" &&
-        (isForwarded || normalizedRole !== "assistant" || opts.showAssistantAvatar !== false)
-          ? isForwarded
-            ? renderForwardedAvatar(group.senderSession?.agentId, opts)
-            : renderChatAvatar(
-                group.role,
-                { name: assistantName, avatar: opts.assistantAvatar ?? null },
-                { name: opts.userName ?? null, avatar: opts.userAvatar ?? null },
-                opts.resourceBasePath,
-                group.sender,
-              )
-          : nothing
-      }
+      ${inlineUserAvatar ? nothing : avatar}
       <div class="chat-group-messages">
         ${isForwarded ? renderForwardedAttribution(group, opts) : nothing}
         ${
@@ -480,7 +485,15 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
           preparedMessages.map((prepared, index) => {
             const { item, actions: actionDetails } = prepared;
             return html`
-              ${renderPreparedGroupMessage(group, index, opts, prepared)}
+              ${renderPreparedGroupMessage(
+                group,
+                index,
+                {
+                  ...opts,
+                  avatar: inlineUserAvatar && index === lastMessageIndex ? avatar : undefined,
+                },
+                prepared,
+              )}
               ${
                 actionDetails && index < lastMessageIndex && !ownsRunFrame
                   ? html`

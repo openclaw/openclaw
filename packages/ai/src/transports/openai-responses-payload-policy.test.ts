@@ -29,6 +29,30 @@ describe("OpenAI Responses compact threshold", () => {
       model: {},
       expected: 80_000,
     },
+    {
+      name: "floors a positive numeric threshold",
+      model: {},
+      extraParams: { responsesCompactThreshold: 123_456.9 },
+      expected: 123_456,
+    },
+    {
+      name: "accepts a strict positive integer string threshold",
+      model: {},
+      extraParams: { responsesCompactThreshold: "123456" },
+      expected: 123_456,
+    },
+    {
+      name: "rejects a fractional string threshold",
+      model: {},
+      extraParams: { responsesCompactThreshold: "123456.9" },
+      expected: 80_000,
+    },
+    {
+      name: "rejects a nonfinite threshold",
+      model: {},
+      extraParams: { responsesCompactThreshold: Number.POSITIVE_INFINITY },
+      expected: 80_000,
+    },
   ])("$name", ({ model, extraParams, expected }) => {
     expect(
       resolveOpenAIResponsesServerCompactionPlan(
