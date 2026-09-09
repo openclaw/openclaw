@@ -1,5 +1,6 @@
 import { render } from "lit";
 import { describe, expect, it } from "vitest";
+import { updatePickers } from "../../test-helpers/select-picker.ts";
 import {
   buildSessionObserverTogglePatch,
   buildSessionObserverUtilityModelPatch,
@@ -30,7 +31,7 @@ describe("session observer settings patches", () => {
     });
   });
 
-  it("keeps auto and disabled selectable when explicit models are unavailable", () => {
+  it("keeps auto and disabled selectable when explicit models are unavailable", async () => {
     const container = document.createElement("div");
     render(
       renderSessionObserverSettings({
@@ -46,14 +47,15 @@ describe("session observer settings patches", () => {
       container,
     );
 
-    const select = container.querySelector<HTMLSelectElement>("select");
-    const options = [...(select?.options ?? [])];
-    expect(select?.disabled).toBe(false);
-    expect(options.find((option) => option.text === "Auto (provider default)")?.disabled).toBe(
-      false,
-    );
-    expect(options.find((option) => option.text === "Disabled")?.disabled).toBe(false);
-    expect(options.find((option) => option.text === "GPT Mini")?.disabled).toBe(true);
+    await updatePickers(container);
+    const select = container.querySelector("openclaw-select-picker.model-picker__select");
+    const options = [...(select?.querySelectorAll('[role="option"]') ?? [])];
+    const option = (label: string) =>
+      options.find((candidate) => candidate.textContent?.trim() === label);
+    expect(select?.querySelector<HTMLButtonElement>("button")?.disabled).toBe(false);
+    expect(option("Auto (provider default)")?.getAttribute("aria-disabled")).toBe("false");
+    expect(option("Disabled")?.getAttribute("aria-disabled")).toBe("false");
+    expect(option("GPT Mini")?.getAttribute("aria-disabled") === "true").toBe(true);
     expect(container.textContent).toContain("Explicit model catalog unavailable");
   });
 });

@@ -13,7 +13,7 @@ import {
   resolveTargets,
   sanitizeSshTarget,
 } from "./helpers.js";
-import { createSecretRefGatewayConfig } from "./test-support.js";
+import { createUnreachableGatewayProbe, createSecretRefGatewayConfig } from "./test-support.js";
 
 describe("extractConfigSummary", () => {
   it("marks SecretRef-backed gateway auth credentials as configured", () => {
@@ -163,28 +163,33 @@ describe("resolveAuthForTarget", () => {
   });
 
   it("does not force remote auth type from local auth mode", async () => {
-    const auth = await resolveAuthForTarget(
-      {
-        gateway: {
-          auth: {
-            mode: "password",
+    await withEnvAsync(
+      { OPENCLAW_GATEWAY_PASSWORD: "ambient-password" }, // pragma: allowlist secret
+      async () => {
+        const auth = await resolveAuthForTarget(
+          {
+            gateway: {
+              auth: {
+                mode: "password",
+              },
+              remote: {
+                token: "remote-token",
+                password: "remote-password", // pragma: allowlist secret
+              },
+            },
           },
-          remote: {
-            token: "remote-token",
-            password: "remote-password", // pragma: allowlist secret
+          {
+            id: "configRemote",
+            kind: "configRemote",
+            url: "wss://remote.example:18789",
+            active: true,
           },
-        },
-      },
-      {
-        id: "configRemote",
-        kind: "configRemote",
-        url: "wss://remote.example:18789",
-        active: true,
-      },
-      {},
-    );
+          {},
+        );
 
-    expect(auth).toEqual({ token: "remote-token", password: undefined });
+        expect(auth).toEqual({ token: "remote-token", password: undefined });
+      },
+    );
   });
 
   it("redacts resolver internals from unresolved SecretRef diagnostics", async () => {
@@ -232,6 +237,7 @@ describe("probe reachability classification", () => {
       ok: false,
       url: "ws://127.0.0.1:18789",
       connectLatencyMs: 51,
+      gatewayReached: true as const,
       error: "missing scope: operator.read",
       close: null,
       auth: {
@@ -257,6 +263,7 @@ describe("probe reachability classification", () => {
       ok: false,
       url: "ws://127.0.0.1:18789",
       connectLatencyMs: 51,
+      gatewayReached: true as const,
       error: "permission denied",
       missingScopeErrorDetails: {
         code: "MISSING_SCOPE" as const,
@@ -283,6 +290,7 @@ describe("probe reachability classification", () => {
       ok: false,
       url: "ws://127.0.0.1:18789",
       connectLatencyMs: 43,
+      gatewayReached: true as const,
       error: "unknown method: status",
       close: null,
       auth: {
@@ -305,22 +313,7 @@ describe("probe reachability classification", () => {
   });
 
   it("keeps failed-before-connect probes unreachable", () => {
-    const probe = {
-      ok: false,
-      url: "ws://127.0.0.1:18789",
-      connectLatencyMs: null,
-      error: "timeout",
-      close: null,
-      auth: {
-        role: null,
-        scopes: [],
-        capability: "unknown" as const,
-      },
-      health: null,
-      status: null,
-      presence: null,
-      configSnapshot: null,
-    };
+    const probe = createUnreachableGatewayProbe("ws://127.0.0.1:18789", "timeout");
 
     expect(isPostConnectProbeFailure(probe)).toBe(false);
     expect(isProbeReachable(probe)).toBe(false);

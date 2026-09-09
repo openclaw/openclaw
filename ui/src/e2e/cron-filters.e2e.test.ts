@@ -1,4 +1,5 @@
 // Control UI tests cover cron filters behavior.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import {
@@ -6,7 +7,11 @@ import {
   type MockGatewayControls,
   type MockGatewayRequest,
 } from "../test-helpers/control-ui-e2e.ts";
-import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { openPicker } from "../test-helpers/select-picker-e2e.ts";
+import {
+  createControlUiE2eContextOptions,
+  createControlUiE2eSuite,
+} from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI cron mocked Gateway E2E",
@@ -18,6 +23,7 @@ const suite = createControlUiE2eSuite({
 function cronJob(id: string, name: string, schedule: Record<string, unknown>, state = {}) {
   return {
     id,
+    configRevision: `config-revision-${id}`,
     name,
     enabled: true,
     createdAtMs: Date.parse("2026-05-29T08:00:00.000Z"),
@@ -53,12 +59,7 @@ function cronRunsResponse(entries: unknown[], total = entries.length) {
   };
 }
 
-function requireRecord(value: unknown): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error("Expected object value");
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("record", "expected-object-value");
 
 function requestParams(request: MockGatewayRequest): Record<string, unknown> {
   return requireRecord(request.params);
@@ -192,105 +193,83 @@ suite.define(() => {
       {},
     );
 
-    await suite.withPage(
-      {
-        locale: "en-US",
-        serviceWorkers: "block",
-        viewport: { height: 900, width: 1280 },
-      },
-      async ({ page }) => {
-        const pageErrors: string[] = [];
-        const consoleMessages: string[] = [];
-        page.on("pageerror", (err) => pageErrors.push(String(err)));
-        page.on("console", (msg) => consoleMessages.push(`${msg.type()}: ${msg.text()}`));
-        const gateway = await installMockGateway(page, {
-          methodResponses: {
-            "cron.list": {
-              cases: [
-                {
-                  match: { scheduleKind: "cron", lastRunStatus: "unknown" },
-                  response: cronListResponse([cronUnknown]),
-                },
-                {
-                  match: {},
-                  response: cronListResponse([everyOk, cronUnknown], 2),
-                },
-              ],
-            },
-            "cron.runs": {
-              entries: [],
-              total: 0,
-              offset: 0,
-              limit: 50,
-              hasMore: false,
-              nextOffset: null,
-            },
-            "cron.status": {
-              enabled: true,
-              jobs: 2,
-              nextWakeAtMs: Date.parse("2026-05-29T09:00:00.000Z"),
-              storePath: "/tmp/openclaw-e2e/cron/jobs.json",
-            },
+    await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+      const pageErrors: string[] = [];
+      const consoleMessages: string[] = [];
+      page.on("pageerror", (err) => pageErrors.push(String(err)));
+      page.on("console", (msg) => consoleMessages.push(`${msg.type()}: ${msg.text()}`));
+      const gateway = await installMockGateway(page, {
+        methodResponses: {
+          "cron.list": {
+            cases: [
+              {
+                match: { scheduleKind: "cron", lastRunStatus: "unknown" },
+                response: cronListResponse([cronUnknown]),
+              },
+              {
+                match: {},
+                response: cronListResponse([everyOk, cronUnknown], 2),
+              },
+            ],
           },
-        });
+          "cron.runs": {
+            entries: [],
+            total: 0,
+            offset: 0,
+            limit: 50,
+            hasMore: false,
+            nextOffset: null,
+          },
+          "cron.status": {
+            enabled: true,
+            jobs: 2,
+            nextWakeAtMs: Date.parse("2026-05-29T09:00:00.000Z"),
+            storePath: "/tmp/openclaw-e2e/cron/jobs.json",
+          },
+        },
+      });
 
-        const response = await page.goto(`${suite.server.baseUrl}cron`);
-        expect(response?.status()).toBe(200);
-        await waitForJobTitle(
-          page,
-          gateway,
-          { consoleMessages, pageErrors },
-          "Digest every minute",
-        );
-        await waitForJobTitle(
-          page,
-          gateway,
-          { consoleMessages, pageErrors },
-          "Nightly cron pending",
-        );
+      const response = await page.goto(`${suite.server.baseUrl}cron`);
+      expect(response?.status()).toBe(200);
+      await waitForJobTitle(page, gateway, { consoleMessages, pageErrors }, "Digest every minute");
+      await waitForJobTitle(page, gateway, { consoleMessages, pageErrors }, "Nightly cron pending");
 
-        const initialRequest = await waitForCronListRequest(
-          gateway,
-          (params) => params.limit === 50 && params.scheduleKind === "all",
-        );
-        expect(requestParams(initialRequest)).toMatchObject({
-          enabled: "all",
-          includeDisabled: true,
-          lastRunStatus: "all",
-          limit: 50,
-          offset: 0,
-          scheduleKind: "all",
-          sortBy: "nextRunAtMs",
-          sortDir: "asc",
-        });
+      const initialRequest = await waitForCronListRequest(
+        gateway,
+        (params) => params.limit === 50 && params.scheduleKind === "all",
+      );
+      expect(requestParams(initialRequest)).toMatchObject({
+        enabled: "all",
+        includeDisabled: true,
+        lastRunStatus: "all",
+        limit: 50,
+        offset: 0,
+        scheduleKind: "all",
+        sortBy: "nextRunAtMs",
+        sortDir: "asc",
+      });
 
-        await page.locator(".cron-filter-popover__trigger").click();
-        await page.locator('[data-test-id="cron-jobs-schedule-filter"]').selectOption("cron");
-        await page.locator('[data-test-id="cron-jobs-last-status-filter"]').selectOption("unknown");
+      await page.locator(".cron-filter-popover__trigger").click();
+      await page.locator('[data-test-id="cron-jobs-schedule-filter"]').selectOption("cron");
+      await page.locator('[data-test-id="cron-jobs-last-status-filter"]').selectOption("unknown");
 
-        const filteredRequest = await waitForCronListRequest(
-          gateway,
-          (params) => params.scheduleKind === "cron" && params.lastRunStatus === "unknown",
-        );
-        expect(requestParams(filteredRequest)).toMatchObject({
-          enabled: "all",
-          includeDisabled: true,
-          lastRunStatus: "unknown",
-          limit: 50,
-          offset: 0,
-          scheduleKind: "cron",
-          sortBy: "nextRunAtMs",
-          sortDir: "asc",
-        });
-        await waitForJobTitle(
-          page,
-          gateway,
-          { consoleMessages, pageErrors },
-          "Nightly cron pending",
-        );
-        await expect.poll(async () => jobTitle(page, "Digest every minute").count()).toBe(0);
-      },
-    );
+      const filteredRequest = await waitForCronListRequest(
+        gateway,
+        (params) => params.scheduleKind === "cron" && params.lastRunStatus === "unknown",
+      );
+      expect(requestParams(filteredRequest)).toMatchObject({
+        enabled: "all",
+        includeDisabled: true,
+        lastRunStatus: "unknown",
+        limit: 50,
+        offset: 0,
+        scheduleKind: "cron",
+        sortBy: "nextRunAtMs",
+        sortDir: "asc",
+      });
+      await waitForJobTitle(page, gateway, { consoleMessages, pageErrors }, "Nightly cron pending");
+      await expect.poll(async () => jobTitle(page, "Digest every minute").count()).toBe(0);
+    });
   });
 
   it("creates a cron-scheduled task and renders the refreshed row", async () => {
@@ -793,59 +772,54 @@ suite.define(() => {
       wakeMode: "now",
       payload: { kind: "agentTurn", message: "Use the configured model", model: configuredModel },
     };
-    await suite.withPage(
-      {
-        locale: "en-US",
-        serviceWorkers: "block",
-        viewport: { height: 900, width: 1280 },
-      },
-      async ({ page }) => {
-        const gateway = await installMockGateway(page, {
-          methodResponses: {
-            "cron.add": { id: "quick-created-model-job" },
-            "cron.list": cronListResponse([existingJob]),
-            "cron.runs": { entries: [], total: 0, offset: 0, limit: 50, hasMore: false },
-            "cron.status": { enabled: true, jobs: 1, nextWakeAtMs: null },
-          },
-        });
+    await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+      const gateway = await installMockGateway(page, {
+        methodResponses: {
+          "cron.add": { id: "quick-created-model-job" },
+          "cron.list": cronListResponse([existingJob]),
+          "cron.runs": { entries: [], total: 0, offset: 0, limit: 50, hasMore: false },
+          "cron.status": { enabled: true, jobs: 1, nextWakeAtMs: null },
+        },
+      });
 
-        await page.goto(`${suite.server.baseUrl}cron`);
-        await jobTitle(page, existingJob.name).waitFor({ timeout: 10_000 });
+      await page.goto(`${suite.server.baseUrl}cron`);
+      await jobTitle(page, existingJob.name).waitFor({ timeout: 10_000 });
 
-        // Selecting the task opens the detail view with its stored model override.
-        await jobTitle(page, existingJob.name).click();
-        await expect
-          .poll(async () => page.locator("#cron-payload-model").inputValue())
-          .toBe(configuredModel);
+      // Selecting the task opens the detail view with its stored model override.
+      await jobTitle(page, existingJob.name).click();
+      await expect
+        .poll(async () => page.locator("#cron-payload-model").inputValue())
+        .toBe(configuredModel);
 
-        // The create button lives on the list view; navigate back first.
-        await page.locator('[data-test-id="cron-back"]').click();
-        await page.locator('[data-test-id="cron-new-task"]').click();
-        await page.locator("#cron-payload-text").fill("Run with a selected model");
-        await page.locator("#cron-name").fill("Model override task");
+      // The create button lives on the list view; navigate back first.
+      await page.locator('[data-test-id="cron-back"]').click();
+      await page.locator('[data-test-id="cron-new-task"]').click();
+      await page.locator("#cron-payload-text").fill("Run with a selected model");
+      await page.locator("#cron-name").fill("Model override task");
 
-        const modelInput = page.locator("#cron-payload-model");
-        await modelInput.fill("openai/gpt-5.5");
-        expect(await modelInput.getAttribute("list")).toBe("cron-model-suggestions");
-        expect(
-          await page
-            .locator("#cron-model-suggestions option")
-            .evaluateAll((options) => options.map((option) => option.getAttribute("value"))),
-        ).toContain(configuredModel);
+      const modelInput = page.locator("#cron-payload-model");
+      const modelPicker = page.locator("openclaw-select-picker:has(#cron-payload-model-picker)");
+      await openPicker(modelPicker);
+      await modelPicker.getByRole("option", { name: "Custom model…", exact: true }).click();
+      await modelInput.fill("openai/gpt-5.5");
+      expect(
+        await modelPicker
+          .locator('[role="option"]')
+          .evaluateAll((options) => options.map((option) => option.getAttribute("data-value"))),
+      ).toContain(configuredModel);
 
-        await page.locator('[data-test-id="cron-submit"]').click();
-        const addRequest = await gateway.waitForRequest("cron.add");
-        expect(requestParams(addRequest)).toMatchObject({
-          name: "Model override task",
-          payload: {
-            kind: "agentTurn",
-            message: "Run with a selected model",
-            model: "openai/gpt-5.5",
-          },
-        });
-        expect(requireRecord(requestParams(addRequest).delivery).accountId).toBeUndefined();
-      },
-    );
+      await page.locator('[data-test-id="cron-submit"]').click();
+      const addRequest = await gateway.waitForRequest("cron.add");
+      expect(requestParams(addRequest)).toMatchObject({
+        name: "Model override task",
+        payload: {
+          kind: "agentTurn",
+          message: "Run with a selected model",
+          model: "openai/gpt-5.5",
+        },
+      });
+      expect(requireRecord(requestParams(addRequest).delivery).accountId).toBeUndefined();
+    });
   });
 
   it("creates and edits agent-turn jobs with an explicit zero timeout", async () => {
@@ -909,6 +883,7 @@ suite.define(() => {
         const updateRequest = await gateway.waitForRequest("cron.update");
         expect(requestParams(updateRequest)).toMatchObject({
           id: existingJob.id,
+          expectedConfigRevision: existingJob.configRevision,
           patch: {
             payload: {
               kind: "agentTurn",
@@ -967,6 +942,7 @@ suite.define(() => {
         const request = await gateway.waitForRequest("cron.update");
         const params = requestParams(request);
         expect(params.id).toBe(existingJob.id);
+        expect(params.expectedConfigRevision).toBe(existingJob.configRevision);
         expect(requireRecord(params.patch)).toMatchObject({
           deleteAfterRun: true,
           schedule: { kind: "at", at: expectedAt },
@@ -1037,7 +1013,7 @@ suite.define(() => {
         });
 
         await page.goto(`${suite.server.baseUrl}cron`);
-        await page.locator('[data-test-id="cron-list-tab-tasks"]').waitFor();
+        await page.locator('[data-test-id="cron-tab-all"]').waitFor();
 
         await page.keyboard.press("Tab");
         await expect
@@ -1048,9 +1024,11 @@ suite.define(() => {
           .poll(() => page.evaluate(() => document.activeElement?.id))
           .toBe("control-ui-main");
 
-        const tasksTab = page.getByRole("tab", { name: "Automations", exact: true });
+        const tasksTab = page.getByRole("tab", { name: "All", exact: true });
         const activityTab = page.getByRole("tab", { name: "Run history", exact: true });
         await tasksTab.focus();
+        await page.keyboard.press("ArrowRight");
+        await page.keyboard.press("ArrowRight");
         await page.keyboard.press("ArrowRight");
         await expect
           .poll(() => activityTab.evaluate((element) => element === document.activeElement))

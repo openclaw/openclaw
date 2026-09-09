@@ -30,15 +30,16 @@ describe("pending final delivery restart proof", () => {
   });
 
   async function writePendingFinal(
-    beforeAgentReplyState: "continue" | "handled-reply",
+    beforeAgentReplyState: "handled-reply" | undefined,
     state: "prepared" | "delivered" = "delivered",
+    updatedAt = Date.now(),
   ): Promise<void> {
     const entry: SessionEntry = {
       sessionId: "session",
       status: "running",
       startedAt: 10,
       lifecycleRunId: "active-run",
-      updatedAt: Date.now(),
+      updatedAt,
       pendingFinalDelivery: {
         kind: "replayable",
         text: "hook reply",
@@ -67,7 +68,7 @@ describe("pending final delivery restart proof", () => {
     return payload;
   }
 
-  it.each(["continue", "handled-reply"] as const)(
+  it.each([undefined, "handled-reply"] as const)(
     "clears %s provenance only after the exact pending intent succeeds",
     async (beforeAgentReplyState) => {
       await writePendingFinal(beforeAgentReplyState);
@@ -92,6 +93,29 @@ describe("pending final delivery restart proof", () => {
     },
   );
 
+  it.each(["clear", "suppress"] as const)(
+    "preserves user activity when background delivery owners %s an exact intent",
+    async (action) => {
+      const updatedAt = Date.now() - 60_000;
+      await writePendingFinal(undefined, action === "clear" ? "delivered" : "prepared", updatedAt);
+      expect(loadSessionEntry({ sessionKey, storePath })?.updatedAt).toBe(updatedAt);
+      const payload = pendingFinalPayload();
+
+      if (action === "clear") {
+        await clearPendingFinalDeliveryAfterSuccess(
+          getReplyPayloadMetadata(payload)?.pendingFinalDeliveryCompletion,
+          { preserveActivity: true },
+        );
+      } else {
+        await suppressPendingFinalDelivery(payload, { preserveActivity: true });
+      }
+
+      const entry = loadSessionEntry({ sessionKey, storePath }) as SessionEntry | undefined;
+      expect(entry?.pendingFinalDelivery).toBeUndefined();
+      expect(entry?.updatedAt).toBe(updatedAt);
+    },
+  );
+
   it("finalizes a media-only hook turn after its exact transport intent succeeds", async () => {
     const entry: SessionEntry = {
       sessionId: "session",
@@ -105,7 +129,7 @@ describe("pending final delivery restart proof", () => {
         intentId: "intent-media",
         deliveries: [{ id: "delivery-media", state: "delivered" }],
       },
-      restartRecoveryBeforeAgentReplyState: "handled-unrecoverable",
+      restartRecoveryBeforeAgentReplyState: "handled-reply",
       restartRecoverySourceIngress: "channel",
     };
     await replaceSessionEntry({ storePath, sessionKey }, entry);
@@ -133,7 +157,7 @@ describe("pending final delivery restart proof", () => {
   });
 
   it("clears a skipped turn only after every sendable final is suppressed", async () => {
-    await writePendingFinal("continue", "prepared");
+    await writePendingFinal(undefined, "prepared");
     await replaceSessionEntry(
       { storePath, sessionKey },
       {

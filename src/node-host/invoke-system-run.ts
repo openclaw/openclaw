@@ -1,7 +1,6 @@
 /** Policy and execution pipeline for approved node-host system.run requests. */
 import crypto from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { resolveAgentConfig } from "../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   describeInterpreterInlineEval,
@@ -10,6 +9,7 @@ import {
 import { detectPolicyInlineEval } from "../infra/command-analysis/policy.js";
 import { createDedupeCache } from "../infra/dedupe.js";
 import {
+  analyzeArgvCommand,
   commitExecAuthorizationLocked,
   commandRequiresSecurityAuditSuppressionApproval,
   createExecApprovalPolicySnapshot,
@@ -21,7 +21,6 @@ import {
   resolveAllowAlwaysPersistenceDecision,
   resolveDurableExecApprovalRequirement,
   resolveExecApprovalsLocked,
-  resolveExecModePolicy,
   type ExecAllowlistEntry,
   type ExecApprovalUsageAuthorization,
   type ExecApprovalPolicySnapshot,
@@ -32,13 +31,23 @@ import {
   type ExecSecurity,
   type SkillBinTrustEntry,
 } from "../infra/exec-approvals.js";
-import type { ExecAuthorizationPlan } from "../infra/exec-authorization-plan.js";
-import { resolveExecAutoReviewDecision, type ExecAutoReviewer } from "../infra/exec-auto-review.js";
+import {
+  planExecAuthorization,
+  type ExecAuthorizationPlan,
+} from "../infra/exec-authorization-plan.js";
+import { resolveUnpinnedAutoApprovalEligibility } from "../infra/exec-auto-approval-eligibility.js";
+import {
+  EXEC_AUTO_REVIEW_DENIAL_GUIDANCE,
+  EXEC_AUTO_REVIEW_SHELL_STARTUP_WARNING,
+  formatExecAutoReviewAssessment,
+  resolveExecAutoReviewDecision,
+  type ExecAutoReviewer,
+} from "../infra/exec-auto-review.js";
 import type { ExecHostRequest, ExecHostResponse, ExecHostRunResult } from "../infra/exec-host.js";
-import { applyExecPolicyLayer } from "../infra/exec-policy.js";
 import { resolveExecSafeBinRuntimePolicy } from "../infra/exec-safe-bin-runtime-policy.js";
 import {
   extractEnvAssignmentKeysFromDispatchWrappers,
+  hasPosixShellStartupBeforeInlineCommand,
   isBlockedShellWrapperCommand,
   isShellWrapperInvocation,
   resolveShellWrapperTransportArgv,
@@ -47,24 +56,36 @@ import {
   inspectHostExecEnvOverrides,
   sanitizeSystemRunEnvOverrides,
 } from "../infra/host-env-security.js";
-import { normalizeSystemRunApprovalPlan } from "../infra/system-run-approval-binding.js";
+import {
+  APPROVAL_SCRIPT_OPERAND_DRIFT_DENIED_MESSAGE,
+  prepareSystemRunExecutableIdentityBinding,
+  revalidateSystemRunMutableFileBinding,
+  resolveMutableFileOperandSnapshotSync,
+  type SystemRunMutableFileBinding,
+} from "../infra/system-run-approval-binding.js";
+import { normalizeSystemRunApprovalPlan } from "../infra/system-run-approval-plan.js";
 import { formatExecCommand, resolveSystemRunCommandRequest } from "../infra/system-run-command.js";
+import {
+  APPROVAL_CWD_DRIFT_DENIED_MESSAGE,
+  type ApprovedCwdSnapshot,
+  captureApprovedCwdSnapshotSync,
+  revalidateApprovedCwdSnapshot,
+} from "../infra/system-run-cwd-binding.js";
+import { revalidateApprovedMutableFileOperand } from "../infra/system-run-file-snapshot.js";
 import { logWarn } from "../logger.js";
 import type { NodeHostClient } from "./client.js";
-import { evaluateSystemRunPolicy, resolveExecApprovalDecision } from "./exec-policy.js";
+import {
+  evaluateSystemRunPolicy,
+  resolveExecApprovalDecision,
+  resolveNodeExecConfigPolicy,
+} from "./exec-policy.js";
 import {
   applyOutputTruncation,
   evaluateSystemRunAllowlist,
   resolvePlannedAllowlistArgv,
   resolveSystemRunExecArgv,
 } from "./invoke-system-run-allowlist.js";
-import {
-  hardenApprovedExecutionPaths,
-  revalidateApprovedCwdSnapshot,
-  revalidateApprovedMutableFileOperand,
-  resolveMutableFileOperandSnapshotSync,
-  type ApprovedCwdSnapshot,
-} from "./invoke-system-run-plan.js";
+import { hardenApprovedExecutionPaths } from "./invoke-system-run-plan.js";
 import type {
   ExecEventPayload,
   ExecFinishedResult,
@@ -83,10 +104,12 @@ type SystemRunInvokeResult = {
 type SystemRunDeniedReason =
   | "security=deny"
   | "approval-required"
+  | "auto-review-denied"
   | "approval-state-write-failed"
   | "allowlist-miss"
   | "execution-plan-miss"
   | "companion-unavailable"
+  | "cwd-unavailable"
   | "permission:screenRecording";
 
 type SystemRunExecutionContext = {
@@ -116,7 +139,6 @@ type SystemRunParsePhase = {
   timeoutMs: number | undefined;
   needsScreenRecording: boolean;
   approved: boolean;
-  suppressNotifyOnExit: boolean;
 };
 
 type SystemRunPolicyPhase = SystemRunParsePhase & {
@@ -145,18 +167,15 @@ type SystemRunPolicyPhase = SystemRunParsePhase & {
   plannedAllowlistArgv: string[] | undefined;
   isWindows: boolean;
   approvedCwdSnapshot: ApprovedCwdSnapshot | undefined;
+  executableBinding: SystemRunMutableFileBinding | undefined;
 };
 
 const safeBinTrustedDirWarningCache = createDedupeCache({
   ttlMs: 0,
   maxSize: 4096,
 });
-const APPROVAL_CWD_DRIFT_DENIED_MESSAGE =
-  "SYSTEM_RUN_DENIED: approval cwd changed before execution";
 const APPROVAL_SCRIPT_OPERAND_BINDING_DENIED_MESSAGE =
   "SYSTEM_RUN_DENIED: approval missing script operand binding";
-const APPROVAL_SCRIPT_OPERAND_DRIFT_DENIED_MESSAGE =
-  "SYSTEM_RUN_DENIED: approval script operand changed before execution";
 const APPROVAL_STATE_WRITE_FAILED_MESSAGE =
   "SYSTEM_RUN_DENIED: approval state could not be persisted";
 type ExecToolConfig = NonNullable<NonNullable<OpenClawConfig["tools"]>["exec"]>;
@@ -184,21 +203,12 @@ function normalizeDeniedReason(reason: string | null | undefined): SystemRunDeni
     case "allowlist-miss":
     case "execution-plan-miss":
     case "companion-unavailable":
+    case "cwd-unavailable":
     case "permission:screenRecording":
       return reason;
     default:
       return "approval-required";
   }
-}
-
-function resolveAgentExecConfig(
-  cfg: OpenClawConfig,
-  agentId: string | undefined,
-): ExecToolConfig | undefined {
-  if (!agentId) {
-    return undefined;
-  }
-  return resolveAgentConfig(cfg, agentId)?.tools?.exec;
 }
 
 /** Resolves the effective exec security/ask policy for one system.run request. */
@@ -209,23 +219,8 @@ export async function resolveEffectiveSystemRunExecPolicy(params: {
   defaultAsk: ExecAsk;
   requireSocket: boolean;
 }): Promise<EffectiveSystemRunExecPolicy> {
-  const agentExec = resolveAgentExecConfig(params.cfg, params.agentId);
-  const globalExec = params.cfg.tools?.exec;
-  const layeredPolicy = applyExecPolicyLayer(
-    applyExecPolicyLayer(
-      {
-        security: params.defaultSecurity,
-        ask: params.defaultAsk,
-      },
-      globalExec,
-    ),
-    agentExec,
-  );
-  const modePolicy = resolveExecModePolicy({
-    mode: layeredPolicy.mode,
-    security: layeredPolicy.security,
-    ask: layeredPolicy.ask,
-  });
+  const modePolicy = resolveNodeExecConfigPolicy(params);
+  const { agentExec, globalExec } = modePolicy;
   const approvals = await resolveExecApprovalsLocked(params.agentId, {
     security: modePolicy.security,
     ask: modePolicy.ask,
@@ -280,6 +275,7 @@ type HandleSystemRunInvokeOptions = {
   runViaMacAppExecHost: (params: {
     approvals: ExecApprovalsResolved;
     request: ExecHostRequest;
+    signal?: AbortSignal;
   }) => Promise<ExecHostResponse | null>;
   sendNodeEvent: (client: NodeHostClient, event: string, payload: unknown) => Promise<void>;
   buildExecEventPayload: (payload: ExecEventPayload) => ExecEventPayload;
@@ -324,7 +320,11 @@ async function sendSystemRunDenied(
   );
   await opts.sendInvokeResult({
     ok: false,
-    error: { code: "UNAVAILABLE", message: params.message },
+    // A missing companion reply can follow execution; it is not a policy denial.
+    error: {
+      code: params.reason === "companion-unavailable" ? "UNAVAILABLE" : "SYSTEM_RUN_DENIED",
+      message: params.message,
+    },
   });
 }
 
@@ -536,7 +536,6 @@ async function parseSystemRunPhase(
     timeoutMs: opts.params.timeoutMs ?? undefined,
     needsScreenRecording: opts.params.needsScreenRecording === true,
     approved,
-    suppressNotifyOnExit,
   };
 }
 
@@ -690,7 +689,50 @@ async function evaluateSystemRunPolicyPhase(
     return null;
   }
 
+  let executableBinding: SystemRunMutableFileBinding | undefined;
+  if (
+    security !== "deny" &&
+    (policy.approvedByAsk ||
+      fallbackRequest ||
+      security === "allowlist" ||
+      effectivePolicy.autoReview)
+  ) {
+    const prepared = prepareSystemRunExecutableIdentityBinding({
+      segments,
+      cwd: parsed.cwd,
+      env: parsed.env,
+      shellCommand: parsed.shellPayload !== null,
+    });
+    if (!prepared.ok) {
+      await sendSystemRunDenied(opts, parsed.execution, {
+        reason: "approval-required",
+        message: prepared.message,
+      });
+      return null;
+    }
+    executableBinding = prepared.binding;
+  }
+
   if (!policy.allowed) {
+    const autoReviewBlockedByShellStartup = segments.some((segment) =>
+      hasPosixShellStartupBeforeInlineCommand(segment.argv),
+    );
+    const autoReviewEligibility = resolveUnpinnedAutoApprovalEligibility({
+      authorizationPlan: await planExecAuthorization({
+        analysis: analyzeArgvCommand({ argv: parsed.argv, cwd: parsed.cwd, env: parsed.env }),
+        command: parsed.commandText,
+        cwd: parsed.cwd,
+        env: parsed.env,
+      }),
+      binding: executableBinding,
+    });
+    if (effectivePolicy.autoReview && ask !== "always") {
+      if (autoReviewBlockedByShellStartup) {
+        autoReviewDeferredMessage = `${policy.errorMessage} (${EXEC_AUTO_REVIEW_SHELL_STARTUP_WARNING})`;
+      } else if (!autoReviewEligibility.eligible) {
+        autoReviewDeferredMessage = `${policy.errorMessage} (${autoReviewEligibility.reason})`;
+      }
+    }
     const [autoReviewSegment] = segments;
     const directAutoReviewArgvMatchesRequest =
       parsed.shellPayload !== null || argvArraysMatch(autoReviewSegment?.argv, parsed.argv);
@@ -714,6 +756,8 @@ async function evaluateSystemRunPolicyPhase(
       autoReviewArgv !== undefined &&
       parsed.approvalPlan !== null &&
       inlineEvalHit === null &&
+      !autoReviewBlockedByShellStartup &&
+      autoReviewEligibility.eligible &&
       !requiresSecurityAuditSuppressionApproval &&
       policy.eventReason !== "security=deny";
     if (canAutoReviewApprovalMiss) {
@@ -743,22 +787,41 @@ async function evaluateSystemRunPolicyPhase(
           sessionKey: parsed.sessionKey,
         },
       });
-      if (decision.decision === "allow-once" && decision.risk === "low") {
-        approvalDecision = "allow-once";
-        approvalGrantSource = "auto-review";
-        policy = evaluateSystemRunPolicy({
-          security,
-          ask,
-          analysisOk,
-          allowlistSatisfied,
-          durableApprovalSatisfied: durableApprovalSatisfied || inlineEvalExecutableTrusted,
-          approvalDecision,
-          approved: true,
-          isWindows,
-          cmdInvocation,
-          shellWrapperInvocation: parsed.shellPayload !== null,
-        });
-      } else {
+      switch (decision.decision) {
+        case "deny":
+          await sendSystemRunDenied(opts, parsed.execution, {
+            reason: "auto-review-denied",
+            message: `SYSTEM_RUN_DENIED: auto-review denied (${formatExecAutoReviewAssessment(decision)}): ${decision.rationale}\n${EXEC_AUTO_REVIEW_DENIAL_GUIDANCE}`,
+          });
+          return null;
+        case "ask":
+          break;
+        case "allow-once": {
+          if (decision.risk !== "low" && decision.risk !== "medium") {
+            break;
+          }
+          approvalDecision = "allow-once";
+          approvalGrantSource = "auto-review";
+          policy = evaluateSystemRunPolicy({
+            security,
+            ask,
+            analysisOk,
+            allowlistSatisfied,
+            durableApprovalSatisfied: durableApprovalSatisfied || inlineEvalExecutableTrusted,
+            approvalDecision,
+            approved: true,
+            isWindows,
+            cmdInvocation,
+            shellWrapperInvocation: parsed.shellPayload !== null,
+          });
+          break;
+        }
+        default:
+          throw new Error("Unsupported exec auto-review decision", {
+            cause: decision satisfies never,
+          });
+      }
+      if (!policy.allowed) {
         autoReviewDeferredMessage = `${policy.errorMessage} (exec auto-review deferred to human approval: ${decision.rationale})`;
       }
     }
@@ -807,8 +870,21 @@ async function evaluateSystemRunPolicyPhase(
     });
     return null;
   }
-  const approvedCwdSnapshot = approvalContextBound ? hardenedPaths.approvedCwdSnapshot : undefined;
-  if (approvalContextBound && hardenedPaths.cwd && !approvedCwdSnapshot) {
+  let executionCwd = hardenedPaths.cwd;
+  let approvedCwdSnapshot = approvalContextBound ? hardenedPaths.approvedCwdSnapshot : undefined;
+  if (security === "allowlist" && !approvedCwdSnapshot) {
+    const capturedCwd = captureApprovedCwdSnapshotSync(executionCwd ?? process.cwd());
+    if (!capturedCwd.ok) {
+      await sendSystemRunDenied(opts, parsed.execution, {
+        reason: "approval-required",
+        message: capturedCwd.message,
+      });
+      return null;
+    }
+    executionCwd = capturedCwd.snapshot.cwd;
+    approvedCwdSnapshot = capturedCwd.snapshot;
+  }
+  if ((approvalContextBound || security === "allowlist") && !approvedCwdSnapshot) {
     await sendSystemRunDenied(opts, parsed.execution, {
       reason: "approval-required",
       message: APPROVAL_CWD_DRIFT_DENIED_MESSAGE,
@@ -831,9 +907,9 @@ async function evaluateSystemRunPolicyPhase(
   }
   return {
     ...parsed,
+    cwd: executionCwd,
     approvalDecision,
     argv: hardenedPaths.argv,
-    cwd: hardenedPaths.cwd,
     approvals,
     evaluationPolicySnapshot,
     security,
@@ -859,6 +935,7 @@ async function evaluateSystemRunPolicyPhase(
     plannedAllowlistArgv: plannedAllowlistArgv ?? undefined,
     isWindows,
     approvedCwdSnapshot,
+    executableBinding,
   };
 }
 
@@ -866,10 +943,7 @@ async function revalidateSystemRunApprovedPathBindings(
   opts: HandleSystemRunInvokeOptions,
   phase: SystemRunPolicyPhase,
 ): Promise<boolean> {
-  if (
-    phase.approvedCwdSnapshot &&
-    !revalidateApprovedCwdSnapshot({ snapshot: phase.approvedCwdSnapshot })
-  ) {
+  if (phase.approvedCwdSnapshot && !revalidateApprovedCwdSnapshot(phase.approvedCwdSnapshot)) {
     logWarn(`security: system.run approval cwd drift blocked (runId=${phase.runId})`);
     await sendSystemRunDenied(opts, phase.execution, {
       reason: "approval-required",
@@ -892,6 +966,20 @@ async function revalidateSystemRunApprovedPathBindings(
     });
     return false;
   }
+  if (phase.executableBinding) {
+    const revalidated = await revalidateSystemRunMutableFileBinding({
+      binding: phase.executableBinding,
+      cwd: phase.cwd,
+    });
+    if (!revalidated.ok) {
+      logWarn(`security: system.run approval executable drift blocked (runId=${phase.runId})`);
+      await sendSystemRunDenied(opts, phase.execution, {
+        reason: "approval-required",
+        message: revalidated.message,
+      });
+      return false;
+    }
+  }
   return true;
 }
 
@@ -902,13 +990,17 @@ async function executeSystemRunPhase(
   if (!(await revalidateSystemRunApprovedPathBindings(opts, phase))) {
     return;
   }
-  const expectedMutableFileOperand = phase.approvalPlan
-    ? resolveMutableFileOperandSnapshotSync({
-        argv: phase.argv,
-        cwd: phase.cwd,
-        shellCommand: phase.shellPayload,
-      })
-    : null;
+  const expectedMutableFileOperand =
+    phase.approvalPlan &&
+    (phase.policy.approvedByAsk ||
+      phase.approvalSource !== undefined ||
+      phase.security === "allowlist")
+      ? resolveMutableFileOperandSnapshotSync({
+          argv: phase.argv,
+          cwd: phase.cwd,
+          shellCommand: phase.shellPayload,
+        })
+      : null;
   if (expectedMutableFileOperand && !expectedMutableFileOperand.ok) {
     logWarn(`security: system.run approval script binding blocked (runId=${phase.runId})`);
     await sendSystemRunDenied(opts, phase.execution, {
@@ -952,8 +1044,7 @@ async function executeSystemRunPhase(
     return;
   }
 
-  const useMacAppExec = opts.preferMacAppExecHost;
-  if (useMacAppExec) {
+  if (opts.preferMacAppExecHost) {
     const macApprovalSource =
       phase.approvalSource ??
       (phase.approvalGrantSource === "auto-review" ? "auto-review" : undefined);
@@ -980,6 +1071,7 @@ async function executeSystemRunPhase(
     const response = await opts.runViaMacAppExecHost({
       approvals: phase.approvals,
       request: execRequest,
+      signal: opts.signal,
     });
     if (opts.signal?.aborted) {
       return;
@@ -1067,7 +1159,7 @@ async function executeSystemRunPhase(
   }
 
   // Policy commit can yield to another invocation or process. Recheck the
-  // approval-bound cwd and mutable operand immediately before local spawn.
+  // approval-bound cwd, executable identities, and mutable operands before local spawn.
   if (!(await revalidateSystemRunApprovedPathBindings(opts, phase))) {
     return;
   }

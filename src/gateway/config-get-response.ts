@@ -4,11 +4,13 @@ import { getRuntimeConfigAppliedHash, hashRuntimeConfigValue } from "../config/r
 import type { ConfigFileSnapshot } from "../config/types.openclaw.js";
 import { getActivePluginRegistryVersion } from "../plugins/runtime.js";
 import type { GatewayHotReloadStatus } from "./config-reload-status.types.js";
+import type { GatewayConfigRevisionProjector } from "./config-revision-token.js";
 
 type ConfigGetResponse = ReturnType<typeof createConfigGetResponse>;
 let configGetResponseCache:
   | {
       getHotReloadStatus: () => GatewayHotReloadStatus | undefined;
+      revisionProjector: GatewayConfigRevisionProjector;
       appliedConfigHash: string | null;
       pluginRegistryVersion: number;
       promise: Promise<ConfigGetResponse>;
@@ -18,11 +20,19 @@ let configGetResponseCache:
 function createConfigGetResponse(
   snapshot: ConfigFileSnapshot,
   uiHints: Parameters<typeof redactConfigSnapshot>[1],
+  revisionProjector: GatewayConfigRevisionProjector,
 ) {
+  const redacted = redactConfigSnapshot(snapshot, uiHints);
+  const appliedConfigHash = getRuntimeConfigAppliedHash();
   return {
-    ...redactConfigSnapshot(snapshot, uiHints),
-    configRevisionHash: hashRuntimeConfigValue(snapshot.sourceConfig),
-    appliedConfigHash: getRuntimeConfigAppliedHash(),
+    ...redacted,
+    hash: redacted.hash ? revisionProjector.projectRawHash(redacted.hash) : redacted.hash,
+    configRevisionHash: revisionProjector.projectResolvedHash(
+      hashRuntimeConfigValue(snapshot.sourceConfig),
+    ),
+    appliedConfigHash: appliedConfigHash
+      ? revisionProjector.projectResolvedHash(appliedConfigHash)
+      : null,
   };
 }
 
@@ -30,17 +40,23 @@ function createConfigGetResponse(
 export async function readConfigGetResponse(params: {
   getHotReloadStatus?: () => GatewayHotReloadStatus | undefined;
   loadUiHints: () => Parameters<typeof redactConfigSnapshot>[1];
+  revisionProjector: GatewayConfigRevisionProjector;
 }): Promise<ConfigGetResponse> {
   const getHotReloadStatus = params.getHotReloadStatus;
   if (!getHotReloadStatus || getHotReloadStatus() !== "active") {
-    return createConfigGetResponse(await readConfigFileSnapshot(), params.loadUiHints());
+    return createConfigGetResponse(
+      await readConfigFileSnapshot(),
+      params.loadUiHints(),
+      params.revisionProjector,
+    );
   }
   const appliedConfigHash = getRuntimeConfigAppliedHash();
   const pluginRegistryVersion = getActivePluginRegistryVersion();
-  // With an active watcher, cache hits never re-read the file. External edits
-  // become visible after its successful commit; the write path invalidates early.
+  // With an active watcher, cache hits never re-read the file. Candidate
+  // observation invalidates persisted bytes before runtime acceptance.
   if (
     configGetResponseCache?.getHotReloadStatus === getHotReloadStatus &&
+    configGetResponseCache.revisionProjector === params.revisionProjector &&
     configGetResponseCache.appliedConfigHash === appliedConfigHash &&
     configGetResponseCache.pluginRegistryVersion === pluginRegistryVersion
   ) {
@@ -48,9 +64,14 @@ export async function readConfigGetResponse(params: {
   }
 
   const promise = (async () =>
-    createConfigGetResponse(await readConfigFileSnapshot(), params.loadUiHints()))();
+    createConfigGetResponse(
+      await readConfigFileSnapshot(),
+      params.loadUiHints(),
+      params.revisionProjector,
+    ))();
   configGetResponseCache = {
     getHotReloadStatus,
+    revisionProjector: params.revisionProjector,
     appliedConfigHash,
     // Metadata notification precedes registry activation; this version changes at handoff.
     pluginRegistryVersion,
@@ -66,7 +87,7 @@ export async function readConfigGetResponse(params: {
   }
 }
 
-/** Invalidates cached config.get work after the watcher accepts a config candidate. */
+/** Invalidates cached config.get work when the watcher observes or accepts a candidate. */
 export function invalidateConfigGetResponseCache(): void {
   configGetResponseCache = undefined;
 }

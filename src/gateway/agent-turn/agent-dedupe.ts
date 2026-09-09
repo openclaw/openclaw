@@ -1,6 +1,9 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { GatewayRequestContext } from "../server-methods/types.js";
 import { setGatewayDedupeEntry } from "./agent-job.js";
+import type { AgentTurnIo } from "./types.js";
 
 export function resolveAgentDedupeKeys(params: {
   idempotencyKey: string;
@@ -36,6 +39,7 @@ export function isAcceptedAgentDedupePayload(payload: unknown): payload is {
   ownerDeviceId?: unknown;
   reservationId?: unknown;
   runId?: unknown;
+  runtime?: unknown;
   sessionKey?: unknown;
   status: "accepted";
 } {
@@ -67,6 +71,7 @@ export function isPreRegistrationAbortedAgentDedupeEntryForSession(params: {
   runId: string;
   sessionKey?: string;
   alternateSessionKeys?: Array<string | undefined>;
+  agentId?: string;
 }): boolean {
   if (!params.entry?.ok || !isPreRegistrationAbortedAgentDedupePayload(params.entry.payload)) {
     return false;
@@ -80,6 +85,13 @@ export function isPreRegistrationAbortedAgentDedupeEntryForSession(params: {
     typeof payload.sessionKey === "string" && payload.sessionKey.trim()
       ? payload.sessionKey.trim()
       : undefined;
+  const payloadAgentId =
+    typeof payload.agentId === "string" && payload.agentId.trim()
+      ? payload.agentId.trim()
+      : undefined;
+  if (params.agentId && payloadAgentId !== params.agentId) {
+    return false;
+  }
   const expectedSessionKeys = new Set(
     [params.sessionKey, ...(params.alternateSessionKeys ?? [])].filter((value): value is string =>
       Boolean(value?.trim()),
@@ -132,4 +144,44 @@ export function setAbortedAgentDedupeEntries(params: {
       },
     },
   });
+}
+
+export function replayAgentTurnIfCached(params: {
+  preflight: { agentDedupeKeys: readonly string[]; runId: string };
+  context: GatewayRequestContext;
+  io: AgentTurnIo;
+}): boolean {
+  const { agentDedupeKeys, runId } = params.preflight;
+  const cached = readGatewayDedupeEntry({
+    dedupe: params.context.dedupe,
+    keys: agentDedupeKeys,
+  });
+  if (!cached) {
+    return false;
+  }
+  if (cached.ok && isAcceptedAgentDedupePayload(cached.payload)) {
+    const cachedRunId = normalizeOptionalString(cached.payload.runId) ?? runId;
+    const cachedSessionKey = normalizeOptionalString(cached.payload.sessionKey);
+    const cachedAgentId = normalizeOptionalString(cached.payload.agentId);
+    const cachedRuntime = asOptionalRecord(cached.payload.runtime);
+    const admissionPending = typeof cached.payload.reservationId === "string";
+    params.io.emitAcceptance(
+      [
+        true,
+        {
+          runId: cachedRunId,
+          status: "in_flight" as const,
+          ...(cachedSessionKey ? { sessionKey: cachedSessionKey } : {}),
+          ...(cachedAgentId ? { agentId: cachedAgentId } : {}),
+          ...(cachedRuntime ? { runtime: cachedRuntime } : {}),
+          ...(admissionPending ? { admissionPending: true } : {}),
+        },
+        undefined,
+      ],
+      { cached: true, runId: cachedRunId },
+    );
+  } else {
+    params.io.emitAcceptance([cached.ok, cached.payload, cached.error], { cached: true });
+  }
+  return true;
 }

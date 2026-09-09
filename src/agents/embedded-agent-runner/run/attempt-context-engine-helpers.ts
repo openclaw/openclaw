@@ -1,3 +1,4 @@
+import { parseDateFirstTimestampMs } from "@openclaw/normalization-core/number-coercion";
 /**
  * Bridges attempt bootstrap/history data to context-engine prompt-cache helpers.
  */
@@ -12,12 +13,6 @@ import type { AgentMessage } from "../../runtime/index.js";
 import { hasNonzeroUsage, normalizeUsage, type NormalizedUsage } from "../../usage.js";
 import type { PromptCacheChange } from "../prompt-cache-observability.js";
 import type { EmbeddedRunAttemptResult } from "./types.js";
-export {
-  assembleHarnessContextEngine as assembleAttemptContextEngine,
-  bootstrapHarnessContextEngine as runAttemptContextEngineBootstrap,
-  finalizeHarnessContextEngineTurn as finalizeAttemptContextEngineTurn,
-} from "../../harness/context-engine-lifecycle.js";
-
 export type AttemptContextEngine = ContextEngine;
 
 type AttemptBootstrapContext<TBootstrapFile = unknown, TContextFile = unknown> = {
@@ -132,10 +127,14 @@ export function findCurrentAttemptAssistantMessage(params: {
   messagesSnapshot: AgentMessage[];
   prePromptMessageCount: number;
 }): AssistantMessage | undefined {
-  return params.messagesSnapshot
-    .slice(Math.max(0, params.prePromptMessageCount))
-    .toReversed()
-    .find((message): message is AssistantMessage => message.role === "assistant");
+  const firstAttemptIndex = Math.max(0, params.prePromptMessageCount);
+  for (let i = params.messagesSnapshot.length - 1; i >= firstAttemptIndex; i--) {
+    const message = params.messagesSnapshot[i];
+    if (message?.role === "assistant") {
+      return message;
+    }
+  }
+  return undefined;
 }
 
 /** Finds the newest usable per-call usage without letting a zero-usage abort erase it. */
@@ -143,10 +142,10 @@ function findLatestCurrentAttemptUsageSnapshot(params: {
   messagesSnapshot: AgentMessage[];
   prePromptMessageCount: number;
 }): { assistant: AssistantMessage; usage: NormalizedUsage } | undefined {
-  for (const message of params.messagesSnapshot
-    .slice(Math.max(0, params.prePromptMessageCount))
-    .toReversed()) {
-    if (message.role !== "assistant") {
+  const firstAttemptIndex = Math.max(0, params.prePromptMessageCount);
+  for (let i = params.messagesSnapshot.length - 1; i >= firstAttemptIndex; i--) {
+    const message = params.messagesSnapshot[i];
+    if (message?.role !== "assistant") {
       continue;
     }
     const usage = normalizeUsage(message.usage);
@@ -170,16 +169,7 @@ export function findLatestUncompactedAttemptUsageSnapshot(params: {
 }
 
 function parsePromptCacheTouchTimestamp(value: unknown): number | null {
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return value;
-  }
-  if (typeof value === "string") {
-    const parsed = Date.parse(value);
-    if (Number.isFinite(parsed)) {
-      return parsed;
-    }
-  }
-  return null;
+  return parseDateFirstTimestampMs(value) ?? null;
 }
 
 /**

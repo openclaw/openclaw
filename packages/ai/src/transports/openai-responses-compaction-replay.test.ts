@@ -6,18 +6,20 @@ import type {
   ProviderReplayState,
 } from "@openclaw/llm-core";
 import { describe, expect, it } from "vitest";
+import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
 import { convertResponsesMessages as convertProviderResponsesMessages } from "../providers/openai-responses-shared.js";
+import { createZeroUsage } from "../usage.test-support.js";
 import {
   buildOpenAIResponsesReasoningReplayMetadata,
   suppressOpenAIResponsesCompaction,
 } from "./openai-responses-compaction-replay.js";
 import { stringifyRedactedEvent, stringifyRedactedPayload } from "./openai-responses-debug.js";
 import { convertResponsesMessages } from "./openai-responses-replay-internal.js";
-import { stripOpenAIResponsesCompactionReplayCheckpoint } from "./openai-responses-replay.js";
 import {
   processResponsesStream,
   type OpenAIResponsesStreamEvent,
 } from "./openai-responses-stream-internal.js";
+import { stripCompactionReplayCheckpoint } from "./provider-compaction-replay.js";
 
 const model = {
   id: "gpt-5.6-luna",
@@ -40,14 +42,7 @@ function createOutput(): AssistantMessage {
     api: model.api,
     provider: model.provider,
     model: model.id,
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
+    usage: createZeroUsage(),
     stopReason: "stop",
     timestamp: 0,
   };
@@ -137,15 +132,39 @@ function responseMessage(id: string, text: string) {
 }
 
 describe("OpenAI Responses compaction replay", () => {
+  it.each(responseConverters)("$name skips invalid reasoning signatures", ({ convert }) => {
+    const invalidSignatures = [
+      ["truncated JSON", '{"type":"reasoning"'],
+      ["null", "null"],
+      ["array", "[]"],
+      ["wrong item type", '{"type":"message"}'],
+    ] as const;
+
+    for (const [caseName, thinkingSignature] of invalidSignatures) {
+      const input = convert({
+        messages: [
+          createAssistant([
+            { type: "thinking", thinking: "invalid", thinkingSignature },
+            { type: "text", text: "session continues" },
+          ]),
+        ],
+      });
+
+      expect(input, caseName).toEqual([
+        expect.objectContaining({ type: "message", role: "assistant" }),
+      ]);
+    }
+  });
+
   it("strips only exact compaction checkpoints with structural sharing", () => {
     const unchanged = createOutput();
-    expect(stripOpenAIResponsesCompactionReplayCheckpoint(unchanged)).toBe(unchanged);
+    expect(stripCompactionReplayCheckpoint(unchanged)).toBe(unchanged);
 
     const checkpoint = createAssistant(
       [{ type: "text", text: "checkpoint owner" }],
       compactionState(),
     );
-    const stripped = stripOpenAIResponsesCompactionReplayCheckpoint(checkpoint);
+    const stripped = stripCompactionReplayCheckpoint(checkpoint);
     expect(stripped).not.toBe(checkpoint);
     expect(stripped.content).toBe(checkpoint.content);
     expect(stripped).not.toHaveProperty("providerReplay");
@@ -153,10 +172,10 @@ describe("OpenAI Responses compaction replay", () => {
 
     const suppression = createOutput();
     suppressOpenAIResponsesCompaction(suppression, model, replayIdentity);
-    expect(stripOpenAIResponsesCompactionReplayCheckpoint(suppression)).toBe(suppression);
+    expect(stripCompactionReplayCheckpoint(suppression)).toBe(suppression);
 
     const unrelated = createAssistant([], compactionState(model, { type: "future-replay" }));
-    expect(stripOpenAIResponsesCompactionReplayCheckpoint(unrelated)).toBe(unrelated);
+    expect(stripCompactionReplayCheckpoint(unrelated)).toBe(unrelated);
   });
 
   it("persists a streamed compaction output item as opaque provider replay state", async () => {
@@ -737,23 +756,9 @@ describe("OpenAI Responses compaction replay", () => {
           { role: "user", content: "prefix user", timestamp: 1 },
           createAssistant([{ type: "text", text: "prefix assistant" }]),
           prefixCall,
-          {
-            role: "toolResult",
-            toolCallId: "call_prefix|fc_prefix",
-            toolName: "lookup",
-            content: [{ type: "text", text: "prefix tool result" }],
-            isError: false,
-            timestamp: 2,
-          },
+          makeTextToolResult("call_prefix|fc_prefix", "lookup", "prefix tool result", false, 2),
           owner,
-          {
-            role: "toolResult",
-            toolCallId: "call_after|fc_after",
-            toolName: "lookup",
-            content: [{ type: "text", text: "after tool result" }],
-            isError: false,
-            timestamp: 3,
-          },
+          makeTextToolResult("call_after|fc_after", "lookup", "after tool result", false, 3),
           { role: "user", content: "later user", timestamp: 4 },
           laterAssistant,
           { role: "user", content: "active current user prompt", timestamp: 5 },
@@ -804,14 +809,7 @@ describe("OpenAI Responses compaction replay", () => {
       const input = convert({
         messages: [
           owner,
-          {
-            role: "toolResult",
-            toolCallId: "call_before|fc_before",
-            toolName: "lookup",
-            content: [{ type: "text", text: "before output" }],
-            isError: false,
-            timestamp: 1,
-          },
+          makeTextToolResult("call_before|fc_before", "lookup", "before output", false, 1),
         ],
       });
 
@@ -928,19 +926,15 @@ describe("OpenAI Responses compaction replay", () => {
     expect(input.map((item) => item.type)).toEqual(["compaction", "message"]);
   });
 
-  it("replays when session and auth identities match", () => {
-    const assistant = createOutput();
-    assistant.providerReplay = compactionState(model, { replayIndex: 0 });
+  it.each(responseConverters)(
+    "$name replays an empty checkpoint owner when request identities match",
+    ({ convert }) => {
+      const assistant = createOutput();
+      assistant.providerReplay = compactionState(model, { replayIndex: 0 });
 
-    const input = convertResponsesMessages(
-      model,
-      { messages: [assistant] },
-      new Set(["openai"]),
-      replayIdentity,
-    );
-
-    expect(input.some((item) => item.type === "compaction")).toBe(true);
-  });
+      expect(convert({ messages: [assistant] }).map((item) => item.type)).toEqual(["compaction"]);
+    },
+  );
 
   it.each(responseConverters)(
     "$name does not replay or prune across a different or missing request identity",

@@ -1,23 +1,18 @@
 /** Lazy runtime facade for isolated cron agent execution dependencies. */
+import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 export {
   resolveEffectiveModelFallbacks,
   resolveSubagentModelFallbacksOverride,
 } from "../../agents/agent-scope.js";
 export { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
+export { resolveFastModeState } from "../../agents/fast-mode.js";
 export { resolveCronAgentLane } from "../../agents/lanes.js";
-export { ensureSelectedAgentHarnessPlugin } from "../../agents/harness/runtime-plugin.js";
 export { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
-export { runWithModelFallback } from "../../agents/model-fallback-runner.js";
 export { resolveCandidateThinkingLevel } from "../../agents/thinking-runtime.js";
-export {
-  classifyEmbeddedAgentRunResultForModelFallback,
-  mergeEmbeddedAgentRunResultForModelFallbackExhaustion,
-} from "../../agents/embedded-agent-runner/result-fallback-classifier.js";
 export { isCliProvider } from "../../agents/model-selection-cli.js";
 export { normalizeVerboseLevel } from "../../auto-reply/thinking.shared.js";
 export { registerAgentRunContext } from "../../infra/agent-run-registry.js";
 export { logWarn } from "../../logger.js";
-import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 
 const cronExecutionCliRuntimeLoader = createLazyImportLoader(
   () => import("./run-execution-cli.runtime.js"),

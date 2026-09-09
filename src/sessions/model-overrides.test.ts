@@ -96,6 +96,7 @@ describe("applyModelOverrideToSessionEntry", () => {
       providerOverride: "anthropic",
       modelOverride: "claude-sonnet-4-6",
       contextTokens: 160_000,
+      contextTokensSource: "runtime",
       contextBudgetStatus: contextBudgetStatus({
         updatedAt: before,
         provider: "anthropic",
@@ -115,6 +116,7 @@ describe("applyModelOverrideToSessionEntry", () => {
     expect(result.updated).toBe(true);
     expectRuntimeModelFieldsCleared(entry, before);
     expect(entry.contextTokens).toBeUndefined();
+    expect(entry.contextTokensSource).toBeUndefined();
     expect(entry.contextBudgetStatus).toBeUndefined();
     expect(entry.fallbackNotice).toBeUndefined();
     expect(entry.modelOverrideSource).toBe("user");
@@ -157,6 +159,7 @@ describe("applyModelOverrideToSessionEntry", () => {
       providerOverride: "openai",
       modelOverride: "gpt-5.4",
       contextTokens: 200_000,
+      contextTokensSource: "runtime",
       contextBudgetStatus: contextBudgetStatus({
         updatedAt: before,
         provider: "openai",
@@ -178,6 +181,7 @@ describe("applyModelOverrideToSessionEntry", () => {
     expect(entry.model).toBe("gpt-5.4");
     expect(entry.modelOverrideSource).toBe("user");
     expect(entry.contextTokens).toBe(200_000);
+    expect(entry.contextTokensSource).toBe("runtime");
     expect(entry.contextBudgetStatus?.contextTokenBudget).toBe(200_000);
     expect((entry.updatedAt ?? 0) >= before).toBe(true);
   });
@@ -216,6 +220,45 @@ describe("applyModelOverrideToSessionEntry", () => {
     expect(entry.contextTokens).toBeUndefined();
     expect(entry.contextBudgetStatus).toBeUndefined();
     expect((entry.updatedAt ?? 0) > before).toBe(true);
+  });
+
+  it("persists an explicit default selection and clears it on a user pin", () => {
+    const entry: SessionEntry = {
+      sessionId: "explicit-default",
+      updatedAt: 1,
+      providerOverride: "anthropic",
+      modelOverride: "claude-sonnet-4-6",
+      modelOverrideSource: "user",
+    };
+
+    applyModelOverrideToSessionEntry({
+      entry,
+      selection: { provider: "openai", model: "gpt-5.4", isDefault: true },
+      explicitDefaultSelection: true,
+    });
+    expect(entry.modelOverrideSource).toBe("default");
+
+    applyModelOverrideToSessionEntry({
+      entry,
+      selection: { provider: "anthropic", model: "claude-sonnet-4-6" },
+    });
+    expect(entry.modelOverrideSource).toBe("user");
+  });
+
+  it("replaces explicit default intent with an automatic fallback source", () => {
+    const entry: SessionEntry = {
+      sessionId: "explicit-default-fallback",
+      updatedAt: 1,
+      modelOverrideSource: "default",
+    };
+
+    applyModelOverrideToSessionEntry({
+      entry,
+      selection: { provider: "anthropic", model: "claude-sonnet-4-6" },
+      selectionSource: "auto",
+    });
+
+    expect(entry.modelOverrideSource).toBe("auto");
   });
 
   it("sets liveModelSwitchPending when switching to default with runtime-only fields", () => {

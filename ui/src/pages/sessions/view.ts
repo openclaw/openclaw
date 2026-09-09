@@ -1,16 +1,20 @@
-// Control UI view renders sessions screen content.
+import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import { html, nothing } from "lit";
 import type { SessionsSearchHit } from "../../../../packages/gateway-protocol/src/index.js";
 import type {
   AgentIdentityResult,
   GatewaySessionRow,
   SessionRunStatus,
-  GatewayThinkingLevelOption,
   FastMode,
   SessionCompactionCheckpoint,
   SessionsListResult,
 } from "../../api/types.ts";
 import "../../styles/sessions.css";
+import { renderCapacityMeter } from "../../components/capacity-meter.ts";
 import { icons } from "../../components/icons.ts";
 import {
   renderSettingsPage,
@@ -19,26 +23,29 @@ import {
   renderSettingsStatus,
 } from "../../components/settings-ui.ts";
 import "../../components/tooltip.ts";
+import "../../components/web-awesome.ts";
+import "../../components/web-awesome-popover.ts";
 import { t } from "../../i18n/index.ts";
-import { resolveAgentRuntimeLabel } from "../../lib/agents/display.ts";
+import { formatAgentRuntimeLabel } from "../../lib/agents/display.ts";
 import {
-  formatInheritedThinkingLabel,
   formatThinkingOverrideLabel,
   normalizeThinkingOptionValue,
+  resolveChatThinkingSelectState,
 } from "../../lib/chat/thinking.ts";
 import {
   formatDurationCompact,
   formatMs,
   formatRelativeTimestamp,
-  formatTokens,
+  formatCompactTokenCount,
 } from "../../lib/format.ts";
 import { handleContextMenuEvent } from "../../lib/keyboard-shortcuts.ts";
 import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
+import { presenceViewerLabel } from "../../lib/presence-users.ts";
 import { formatSessionTokens } from "../../lib/presenter.ts";
-import { isCronSessionKey } from "../../lib/session-display.ts";
+import { resolveSessionDisplayKind } from "../../lib/session-display.ts";
 import { formatGoalDetail, formatGoalSummary } from "../../lib/session-goal.ts";
-import { sessionModelMatchesDefaults } from "../../lib/session-model-defaults.ts";
 import { isSessionRunActive } from "../../lib/session-run-state.ts";
+import { resolveSessionContextLimit } from "../../lib/sessions/context-budget.ts";
 import { SESSION_DRAG_MIME } from "../../lib/sessions/drag.ts";
 import {
   groupSessionRows,
@@ -52,14 +59,11 @@ import {
   resolveSessionPreferredFace,
   sessionNavigationTarget,
 } from "../../lib/sessions/route-navigation.ts";
+import { formatSessionArchiveReason } from "../../lib/sessions/session-archive-reason.ts";
 import { parseSessionKeyParts } from "../../lib/sessions/session-key.ts";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "../../lib/string-coerce.ts";
-import { parseFilterInteger } from "./page-state.ts";
+import { SESSIONS_PAGE_DEFAULT_LIMIT } from "../../lib/sessions/session-requests.ts";
 
-export type TranscriptSearchState =
+type TranscriptSearchState =
   | { status: "idle" }
   | { status: "loading" }
   | { status: "error"; message: string }
@@ -90,6 +94,8 @@ export type SessionsProps = {
   sortColumn: "key" | "kind" | "updated" | "tokens";
   sortDir: "asc" | "desc";
   groupBy: SessionsGroupBy;
+  /** Multi-identity gateways only; hides the Person mode elsewhere. */
+  personGroupingAvailable: boolean;
   knownCategories: string[];
   page: number;
   pageSize: number;
@@ -122,6 +128,7 @@ export type SessionsProps = {
   onGroupByChange: (mode: SessionsGroupBy) => void;
   onAssignCategory: (key: string, category: string | null) => void;
   onRequestNewCategory: (sessionKey?: string) => void;
+  onLoadMore: () => void;
   onPageChange: (page: number) => void;
   onPageSizeChange: (size: number) => void;
   onRefresh: () => void;
@@ -131,6 +138,8 @@ export type SessionsProps = {
     key: string,
     patch: {
       label?: string | null;
+      icon?: string | null;
+      color?: string | null;
       category?: string | null;
       archived?: boolean;
       pinned?: boolean;
@@ -157,7 +166,6 @@ export type SessionsProps = {
   onRestoreCheckpoint: (sessionKey: string, checkpointId: string) => void | Promise<void>;
 };
 
-const DEFAULT_THINK_LEVELS = ["off", "minimal", "low", "medium", "high"] as const;
 const VERBOSE_LEVEL_VALUES = ["", "off", "on", "full"] as const;
 const FAST_LEVEL_VALUES = ["", "auto", "on", "off"] as const;
 const REASONING_LEVELS = ["", "off", "on", "stream"] as const;
@@ -174,34 +182,14 @@ function resolveThinkLevelOptions(
   row: GatewaySessionRow,
   defaults?: SessionsListResult["defaults"],
 ): readonly { value: string; label: string }[] {
-  const modelMatchesDefaults = sessionModelMatchesDefaults(row, defaults);
-  const defaultLabel = formatInheritedThinkingLabel(
-    row.thinkingDefault ?? (modelMatchesDefaults ? defaults?.thinkingDefault : undefined),
-  );
-  const options: readonly GatewayThinkingLevelOption[] = row.thinkingLevels?.length
-    ? row.thinkingLevels
-    : modelMatchesDefaults && defaults?.thinkingLevels?.length
-      ? defaults.thinkingLevels
-      : (row.thinkingOptions?.length
-          ? row.thinkingOptions
-          : modelMatchesDefaults && defaults?.thinkingOptions?.length
-            ? defaults.thinkingOptions
-            : DEFAULT_THINK_LEVELS
-        ).map((label) => ({
-          id: normalizeThinkingOptionValue(label),
-          label,
-        }));
-  return [
-    { value: "", label: defaultLabel },
-    ...options.map((option) => ({
-      value: normalizeThinkingOptionValue(option.id),
-      label: formatThinkingOverrideLabel(option.id, option.label),
-    })),
-  ];
-}
-
-function withCurrentOption(options: readonly string[], current: string): string[] {
-  return !current || options.includes(current) ? [...options] : [...options, current];
+  const state = resolveChatThinkingSelectState({
+    catalog: [],
+    session: row,
+    defaults,
+    sessionKey: row.key,
+    sessionsResult: null,
+  });
+  return [{ value: "", label: state.inherited.displayLabel }, ...state.options];
 }
 
 function withCurrentLabeledOption(
@@ -229,6 +217,7 @@ function buildSessionLevelOptions(
 }
 
 const SESSION_RUN_STATUS_LABELS = {
+  queued: "sessionsView.statusQueued",
   running: "sessionsView.statusRunning",
   done: "sessionsView.statusDone",
   failed: "sessionsView.statusFailed",
@@ -243,14 +232,24 @@ function formatSessionRunStatus(status: SessionRunStatus): string {
 function renderSessionStatusBadge(row: GatewaySessionRow) {
   const active = isSessionRunActive(row);
   const idle = row.hasActiveRun === false && (!row.status || row.status === "running");
-  const label = active
-    ? t("sessionsView.statusLive")
-    : idle
-      ? t("sessionsView.statusIdle")
-      : row.status
-        ? formatSessionRunStatus(row.status)
-        : t("sessionsView.statusUnknown");
-  const kind = active || row.status === "done" ? "ok" : idle || !row.status ? "muted" : "danger";
+  const label =
+    row.status === "queued"
+      ? t("sessionsView.statusQueued")
+      : active
+        ? t("sessionsView.statusLive")
+        : idle
+          ? t("sessionsView.statusIdle")
+          : row.status
+            ? formatSessionRunStatus(row.status)
+            : t("sessionsView.statusUnknown");
+  const kind =
+    row.status === "queued"
+      ? "warn"
+      : active || row.status === "done"
+        ? "ok"
+        : idle || !row.status
+          ? "muted"
+          : "danger";
   const title = `${t("sessionsView.status")}: ${label}`;
   return html`
     <openclaw-tooltip .content=${title}>
@@ -267,12 +266,6 @@ const SESSION_KIND_ICONS = {
   unknown: icons.circle,
 } satisfies Record<GatewaySessionRow["kind"] | "cron", unknown>;
 
-// The server row kind never carries "cron" — cron is a key-shape fact, so the
-// display kind derives it from the key for the avatar, badge class, and label.
-function resolveSessionDisplayKind(row: GatewaySessionRow): GatewaySessionRow["kind"] | "cron" {
-  return isCronSessionKey(row.key) ? "cron" : row.kind;
-}
-
 // Kind glyph anchors each row; the dot mirrors isSessionRunActive so run
 // state also reads at the identity anchor while scanning the key column.
 function renderSessionAvatar(row: GatewaySessionRow) {
@@ -288,10 +281,6 @@ function renderSessionAvatar(row: GatewaySessionRow) {
 const CONTEXT_METER_WARN_PERCENT = 65;
 const CONTEXT_METER_DANGER_PERCENT = 85;
 
-function hasKnownTokenTotal(row: GatewaySessionRow): boolean {
-  return typeof row.totalTokens === "number" && Number.isFinite(row.totalTokens);
-}
-
 function renderTokensCell(row: GatewaySessionRow) {
   const total = row.totalTokens;
   if (typeof total !== "number" || !Number.isFinite(total)) {
@@ -301,9 +290,9 @@ function renderTokensCell(row: GatewaySessionRow) {
   // as "~" orientation but must not drive warn/danger tones; mirrors the chat
   // composer's context-usage convention.
   const fresh = row.totalTokensFresh !== false;
-  const totalLabel = `${fresh ? "" : "~"}${formatTokens(total)}`;
-  const context =
-    typeof row.contextTokens === "number" && row.contextTokens > 0 ? row.contextTokens : null;
+  const totalLabel = `${fresh ? "" : "~"}${formatCompactTokenCount(total)}`;
+  const limit = resolveSessionContextLimit(row);
+  const context = limit.tokens > 0 ? limit.tokens : null;
   if (!context) {
     return html`<span class="session-tokens__value">${totalLabel}</span>`;
   }
@@ -315,84 +304,67 @@ function renderTokensCell(row: GatewaySessionRow) {
       : percent >= CONTEXT_METER_WARN_PERCENT
         ? "warn"
         : "ok";
-  const title = t(fresh ? "sessionsView.contextUsage" : "sessionsView.contextUsageApprox", {
-    percent: String(percent),
-    used: total.toLocaleString(),
-    context: context.toLocaleString(),
-  });
+  const title = t(
+    limit.fromLastPrompt
+      ? fresh
+        ? "sessionsView.promptBudgetUsage"
+        : "sessionsView.promptBudgetUsageApprox"
+      : fresh
+        ? "sessionsView.contextUsage"
+        : "sessionsView.contextUsageApprox",
+    {
+      percent: String(percent),
+      used: total.toLocaleString(),
+      context: context.toLocaleString(),
+    },
+  );
   return html`
     <openclaw-tooltip .content=${title}>
       <div class="session-tokens">
-        <span class="session-tokens__value">${totalLabel} / ${formatTokens(context)}</span>
-        <span
-          class="session-context-meter session-context-meter--${tone}"
-          role="img"
-          aria-label=${title}
+        <span class="session-tokens__value"
+          >${totalLabel} / ${formatCompactTokenCount(context)}</span
         >
-          <span class="session-context-meter__fill" style=${`width: ${percent}%`}></span>
-        </span>
+        ${renderCapacityMeter({ mode: "continuous", percent, tone, label: title })}
       </div>
     </openclaw-tooltip>
   `;
 }
 
-function renderSessionsOverview(
+function renderSessionsHeadingFacts(
   rows: GatewaySessionRow[],
   liveCount: number,
   statusFilter: SessionArchivedFilter,
 ) {
   const unreadCount = rows.filter((row) => row.unread === true && row.archived !== true).length;
   const archivedCount = rows.filter((row) => row.archived === true).length;
-  // Sum only known token totals; "~" marks the sum as partial/approximate when
-  // rows lack a snapshot or carry a stale one, and no snapshot at all is n/a
-  // rather than a fabricated 0.
-  const rowsWithTokens = rows.filter(hasKnownTokenTotal);
-  const totalTokens = rowsWithTokens.reduce((sum, row) => sum + (row.totalTokens ?? 0), 0);
-  const tokensApproximate =
-    rowsWithTokens.length < rows.length ||
-    rowsWithTokens.some((row) => row.totalTokensFresh === false);
-  const tokensValue =
-    rowsWithTokens.length === 0
-      ? t("common.na")
-      : `${tokensApproximate ? "~" : ""}${formatTokens(totalTokens)}`;
-  const tiles: Array<
-    readonly [string, (typeof icons)[keyof typeof icons], string, string, boolean]
-  > = [
-    ["sessions", icons.messageSquare, t("sessionsView.title"), String(rows.length), false],
-    ["live", icons.zap, t("sessionsView.statusLive"), String(liveCount), liveCount > 0],
-    ["unread", icons.eye, t("sessionsView.unread"), String(unreadCount), unreadCount > 0],
-    ["tokens", icons.barChart, t("sessionsView.tokens"), tokensValue, false],
+  const facts: Array<readonly [string, string, boolean]> = [
+    [String(liveCount), t("sessionsView.statusLive"), liveCount > 0],
+    [String(unreadCount), t("sessionsView.unread"), unreadCount > 0],
   ];
   if (statusFilter !== "active") {
-    tiles.push([
-      "archived",
-      icons.archive,
-      t("sessionsView.archived"),
-      String(archivedCount),
-      false,
-    ]);
+    facts.push([String(archivedCount), t("sessionsView.archived"), false]);
   }
   return html`
-    <div class="sessions-overview">
-      ${tiles.map(([id, icon, label, value, active]) => {
-        const tileClass = [
-          "sessions-overview__tile",
-          `sessions-overview__tile--${id}`,
-          active ? "sessions-overview__tile--active" : "",
-        ]
-          .filter(Boolean)
-          .join(" ");
-        return html`
-          <div class=${tileClass}>
-            <span class="sessions-overview__icon" aria-hidden="true">${icon}</span>
-            <span class="sessions-overview__meta">
-              <span class="sessions-overview__value">${value}</span>
-              <span class="sessions-overview__label">${label}</span>
-            </span>
-          </div>
-        `;
-      })}
-    </div>
+    <span class="sessions-heading-facts">
+      ${facts.map(
+        ([value, label, active], index) => html`
+          ${
+            index > 0
+              ? html`<span class="sessions-heading-fact__separator" aria-hidden="true">·</span>`
+              : nothing
+          }
+          <span
+            class=${
+              active
+                ? "sessions-heading-fact sessions-heading-fact--active"
+                : "sessions-heading-fact"
+            }
+          >
+            <strong>${value}</strong> ${label}
+          </span>
+        `,
+      )}
+    </span>
   `;
 }
 
@@ -443,106 +415,127 @@ function renderTranscriptSearch(props: SessionsProps, rows: GatewaySessionRow[])
           type="submit"
           ?disabled=${!props.transcriptSearchAvailable || !hasQuery || loading}
         >
-          ${loading
-            ? t("sessionsView.transcriptSearchSearching")
-            : t("sessionsView.transcriptSearchAction")}
+          ${
+            loading
+              ? t("sessionsView.transcriptSearchSearching")
+              : t("sessionsView.transcriptSearchAction")
+          }
         </button>
-        ${hasQuery
-          ? html`
-              <button class="btn" type="button" @click=${props.onClearTranscriptSearch}>
-                ${t("sessionsView.transcriptSearchClear")}
-              </button>
-            `
-          : nothing}
+        ${
+          hasQuery
+            ? html`
+                <button class="btn" type="button" @click=${props.onClearTranscriptSearch}>
+                  ${t("sessionsView.transcriptSearchClear")}
+                </button>
+              `
+            : nothing
+        }
       </form>
-      ${!props.transcriptSearchAvailable
-        ? html`
-            <div class="muted" role="status">${t("sessionsView.transcriptSearchUnavailable")}</div>
-          `
-        : nothing}
+      ${
+        !props.transcriptSearchAvailable
+          ? html`
+              <div class="muted" role="status">
+                ${t("sessionsView.transcriptSearchUnavailable")}
+              </div>
+            `
+          : nothing
+      }
       <div
         class="sessions-transcript-search__status"
         aria-live="polite"
         aria-busy=${loading ? "true" : "false"}
       >
-        ${loading
-          ? html`<span class="muted">${t("sessionsView.transcriptSearchSearching")}</span>`
-          : nothing}
-        ${state.status === "error"
-          ? html`
-              <div
-                class="sessions-transcript-search__notice sessions-transcript-search__notice--danger"
-              >
-                <span>${t("sessionsView.transcriptSearchError")}: ${state.message}</span>
-                <button class="btn btn--sm" type="button" @click=${props.onTranscriptSearch}>
-                  ${t("sessionsView.transcriptSearchRetry")}
-                </button>
-              </div>
-            `
-          : nothing}
-        ${state.status === "results" && state.indexing
-          ? html`
-              <div class="sessions-transcript-search__notice">
-                <span>${t("sessionsView.transcriptSearchIndexing")}</span>
-                <button
-                  class="btn btn--sm"
-                  type="button"
-                  ?disabled=${loading}
-                  @click=${props.onTranscriptSearch}
+        ${
+          loading
+            ? html`<span class="muted">${t("sessionsView.transcriptSearchSearching")}</span>`
+            : nothing
+        }
+        ${
+          state.status === "error"
+            ? html`
+                <div
+                  class="sessions-transcript-search__notice sessions-transcript-search__notice--danger"
                 >
-                  ${t("sessionsView.transcriptSearchRetry")}
-                </button>
-              </div>
-            `
-          : nothing}
-        ${state.status === "results" && results.length === 0 && !state.indexing
-          ? html`
-              <div class="sessions-transcript-search__empty" role="status">
-                ${t("sessionsView.transcriptSearchEmpty")}
-              </div>
-            `
-          : nothing}
-        ${results.length > 0
-          ? html`
-              <div class="sessions-transcript-search__results">
-                <div class="sessions-transcript-search__summary">
-                  <strong
-                    >${t("sessionsView.transcriptSearchMatches", {
-                      count: String(results.length),
-                    })}</strong
+                  <span>${t("sessionsView.transcriptSearchError")}: ${state.message}</span>
+                  <button class="btn btn--sm" type="button" @click=${props.onTranscriptSearch}>
+                    ${t("sessionsView.transcriptSearchRetry")}
+                  </button>
+                </div>
+              `
+            : nothing
+        }
+        ${
+          state.status === "results" && state.indexing
+            ? html`
+                <div class="sessions-transcript-search__notice">
+                  <span>${t("sessionsView.transcriptSearchIndexing")}</span>
+                  <button
+                    class="btn btn--sm"
+                    type="button"
+                    ?disabled=${loading}
+                    @click=${props.onTranscriptSearch}
                   >
-                  ${state.status === "results" && state.truncated
-                    ? html`<span class="muted"
-                        >${t("sessionsView.transcriptSearchTruncated")}</span
-                      >`
-                    : nothing}
+                    ${t("sessionsView.transcriptSearchRetry")}
+                  </button>
                 </div>
-                <div class="sessions-transcript-search__list">
-                  ${results.map((hit) => {
-                    const timestamp =
-                      hit.timestamp > 0 ? formatRelativeTimestamp(hit.timestamp) : t("common.na");
-                    const timestampTitle = hit.timestamp > 0 ? formatMs(hit.timestamp) : timestamp;
-                    return html`
-                      <button
-                        class="sessions-transcript-search__result"
-                        type="button"
-                        @click=${() => props.onNavigateToChat?.(hit.sessionKey)}
-                      >
-                        <span class="sessions-transcript-search__result-header">
-                          <strong>${transcriptSearchSessionLabel(hit, rows)}</strong>
-                          <span class="muted" title=${timestampTitle}>
-                            ${t(`sessionsView.${hit.role}`)} · ${timestamp}
+              `
+            : nothing
+        }
+        ${
+          state.status === "results" && results.length === 0 && !state.indexing
+            ? html`
+                <div class="sessions-transcript-search__empty" role="status">
+                  ${t("sessionsView.transcriptSearchEmpty")}
+                </div>
+              `
+            : nothing
+        }
+        ${
+          results.length > 0
+            ? html`
+                <div class="sessions-transcript-search__results">
+                  <div class="sessions-transcript-search__summary">
+                    <strong
+                      >${t("sessionsView.transcriptSearchMatches", {
+                        count: String(results.length),
+                      })}</strong
+                    >
+                    ${
+                      state.status === "results" && state.truncated
+                        ? html`<span class="muted"
+                            >${t("sessionsView.transcriptSearchTruncated")}</span
+                          >`
+                        : nothing
+                    }
+                  </div>
+                  <div class="sessions-transcript-search__list">
+                    ${results.map((hit) => {
+                      const timestamp =
+                        hit.timestamp > 0 ? formatRelativeTimestamp(hit.timestamp) : t("common.na");
+                      const timestampTitle =
+                        hit.timestamp > 0 ? formatMs(hit.timestamp) : timestamp;
+                      return html`
+                        <button
+                          class="sessions-transcript-search__result"
+                          type="button"
+                          @click=${() => props.onNavigateToChat?.(hit.sessionKey)}
+                        >
+                          <span class="sessions-transcript-search__result-header">
+                            <strong>${transcriptSearchSessionLabel(hit, rows)}</strong>
+                            <span class="muted" title=${timestampTitle}>
+                              ${t(`sessionsView.${hit.role}`)} · ${timestamp}
+                            </span>
                           </span>
-                        </span>
-                        <span class="sessions-transcript-search__snippet">${hit.snippet}</span>
-                        <span class="sessions-transcript-search__key">${hit.sessionKey}</span>
-                      </button>
-                    `;
-                  })}
+                          <span class="sessions-transcript-search__snippet">${hit.snippet}</span>
+                          <span class="sessions-transcript-search__key">${hit.sessionKey}</span>
+                        </button>
+                      `;
+                    })}
+                  </div>
                 </div>
-              </div>
-            `
-          : nothing}
+              `
+            : nothing
+        }
       </div>
     </section>
   `;
@@ -572,64 +565,6 @@ function renderSkeletonRows(columnCount: number) {
   );
 }
 
-function filterRows(
-  rows: GatewaySessionRow[],
-  query: string,
-  agentIdentityById: Record<string, AgentIdentityResult>,
-): GatewaySessionRow[] {
-  const q = normalizeLowercaseStringOrEmpty(query);
-  if (!q) {
-    return rows;
-  }
-  return rows.filter((row) => {
-    const fields = [
-      row.key,
-      row.label,
-      row.category,
-      row.kind,
-      row.displayName,
-      resolveAgentRuntimeLabel(row.agentRuntime),
-      row.status,
-      row.goal
-        ? `${row.goal.objective} ${row.goal.status} ${formatGoalSummary(row.goal)} ${
-            row.goal.lastStatusNote ?? ""
-          }`
-        : "",
-      isSessionRunActive(row) ? "live running" : row.hasActiveRun === false ? "idle" : "",
-    ];
-    if (fields.some((value) => normalizeLowercaseStringOrEmpty(value).includes(q))) {
-      return true;
-    }
-    const keyParts = parseSessionKeyParts(row.key);
-    const identityName = keyParts
-      ? normalizeLowercaseStringOrEmpty(getAgentIdentity(agentIdentityById, keyParts.agentId)?.name)
-      : "";
-    return identityName.includes(q);
-  });
-}
-
-function sortRows(
-  rows: GatewaySessionRow[],
-  column: "key" | "kind" | "updated" | "tokens",
-  dir: "asc" | "desc",
-): GatewaySessionRow[] {
-  const cmp = dir === "asc" ? 1 : -1;
-  return [...rows].toSorted((a, b) => {
-    const pinnedDiff = (b.pinnedAt ?? 0) - (a.pinnedAt ?? 0);
-    if (pinnedDiff !== 0) {
-      return pinnedDiff;
-    }
-    const diff =
-      column === "key" || column === "kind"
-        ? (a[column] ?? "").localeCompare(b[column] ?? "")
-        : column === "updated"
-          ? (a.updatedAt ?? 0) - (b.updatedAt ?? 0)
-          : (a.totalTokens ?? a.inputTokens ?? a.outputTokens ?? 0) -
-            (b.totalTokens ?? b.inputTokens ?? b.outputTokens ?? 0);
-    return diff * cmp;
-  });
-}
-
 function paginateRows<T>(rows: T[], page: number, pageSize: number): T[] {
   const start = page * pageSize;
   return rows.slice(start, start + pageSize);
@@ -638,7 +573,7 @@ function paginateRows<T>(rows: T[], page: number, pageSize: number): T[] {
 function hasActiveFilters(props: SessionsProps): boolean {
   return (
     normalizeLowercaseStringOrEmpty(props.searchQuery).length > 0 ||
-    parseFilterInteger(props.activeMinutes) !== undefined ||
+    parseStrictPositiveInteger(props.activeMinutes) !== undefined ||
     !props.includeGlobal
   );
 }
@@ -721,7 +656,7 @@ function sessionDetailItems(params: {
   const { row, updated, checkpointCount } = params;
   const details: Array<{ label: string; value: string }> = [
     { label: t("sessionsView.key"), value: row.key },
-    { label: t("sessionsView.kind"), value: row.kind },
+    { label: t("sessionsView.kind"), value: resolveSessionDisplayKind(row) },
     { label: t("sessionsView.updated"), value: updated },
     { label: t("sessionsView.tokens"), value: formatSessionTokens(row) },
     { label: t("sessionsView.compaction"), value: formatCheckpointCount(checkpointCount) },
@@ -742,13 +677,19 @@ function sessionDetailItems(params: {
   add(t("sessionsView.provider"), row.modelProvider);
   // The roster dropped its Runtime column; the drawer is where agent runtime
   // and run duration live now.
-  add(t("sessionsView.runtime"), resolveAgentRuntimeLabel(row.agentRuntime));
+  add(t("sessionsView.runtime"), formatAgentRuntimeLabel(row.agentRuntime));
   add(t("sessionsView.runDuration"), formatRuntimeMs(row.runtimeMs));
   add(t("sessionsView.surface"), row.surface);
   add(t("sessionsView.subject"), row.subject);
   add(t("sessionsView.room"), row.room);
   add(t("sessionsView.space"), row.space);
   add(t("sessionsView.sessionId"), row.sessionId);
+  if (row.archiveReason) {
+    details.push({
+      label: t("sessionsView.archiveReason"),
+      value: formatSessionArchiveReason(row.archiveReason),
+    });
+  }
   for (const [label, value] of [
     [t("sessionsView.activeRun"), row.hasActiveRun],
     [t("sessionsView.archived"), row.archived],
@@ -770,6 +711,7 @@ function sessionsTableColumnCount(props: SessionsProps): number {
 const SESSION_GROUP_MODE_LABELS = {
   none: "sessionsView.groupByNone",
   category: "sessionsView.groupByCategory",
+  person: "sessionsView.groupByPerson",
   channel: "sessionsView.groupByChannel",
   kind: "sessionsView.groupByKind",
   agent: "sessionsView.groupByAgent",
@@ -780,7 +722,8 @@ function groupModeLabel(mode: SessionsGroupBy): string {
   return t(SESSION_GROUP_MODE_LABELS[mode] ?? SESSION_GROUP_MODE_LABELS.none);
 }
 
-function sessionGroupLabel(id: string, props: SessionsProps): string {
+function sessionGroupLabel(group: SessionRowGroup, props: SessionsProps): string {
+  const { id } = group;
   if (props.groupBy === "date") {
     const labels: Record<string, string> = {
       today: "sessionsView.dateToday",
@@ -800,6 +743,12 @@ function sessionGroupLabel(id: string, props: SessionsProps): string {
       const emoji = normalizeOptionalString(identity?.emoji);
       return emoji ? `${emoji} ${name}` : name;
     }
+  }
+  if (props.groupBy === "person") {
+    const actor = group.rows[0]?.owner?.actor;
+    return actor?.identity?.type === "profile"
+      ? presenceViewerLabel({ id: actor.identity.id, name: actor.label?.trim() || id })
+      : actor?.label?.trim() || id;
   }
   return id;
 }
@@ -846,7 +795,7 @@ function categoryDropHandlers(props: SessionsProps, category: string | null) {
 }
 
 function renderGroupHeaderRow(group: SessionRowGroup, props: SessionsProps) {
-  const label = sessionGroupLabel(group.id, props);
+  const label = sessionGroupLabel(group, props);
   const count =
     group.rows.length === 1
       ? t("sessionsView.groupRowCountOne", { count: "1" })
@@ -977,23 +926,37 @@ function renderOverrideSelect(params: {
 
 export function renderSessions(props: SessionsProps) {
   const rawRows = props.result?.sessions ?? [];
-  const filtered = filterRows(rawRows, props.searchQuery, props.agentIdentityById);
-  const sorted = sortRows(filtered, props.sortColumn, props.sortDir);
+  const direction = props.sortDir === "asc" ? 1 : -1;
+  const sorted = rawRows.toSorted((a, b) => {
+    const pinnedDiff = (b.pinnedAt ?? 0) - (a.pinnedAt ?? 0);
+    if (pinnedDiff !== 0) {
+      return pinnedDiff;
+    }
+    const diff =
+      props.sortColumn === "kind"
+        ? resolveSessionDisplayKind(a).localeCompare(resolveSessionDisplayKind(b))
+        : props.sortColumn === "key"
+          ? a.key.localeCompare(b.key)
+          : props.sortColumn === "updated"
+            ? (a.updatedAt ?? 0) - (b.updatedAt ?? 0)
+            : (a.totalTokens ?? a.inputTokens ?? a.outputTokens ?? 0) -
+              (b.totalTokens ?? b.inputTokens ?? b.outputTokens ?? 0);
+    return diff * direction;
+  });
   const totalRows = sorted.length;
   const totalPages = Math.max(1, Math.ceil(totalRows / props.pageSize));
   const page = Math.min(props.page, totalPages - 1);
-  // Grouping shows all rows in their sections; pagination would split groups confusingly.
-  const groupingActive = props.groupBy !== "none";
-  const groups = groupingActive
-    ? groupSessionRows({
-        rows: sorted,
-        mode: props.groupBy,
-        knownCategories: props.knownCategories,
-      })
-    : null;
-  const paginated = groupingActive ? sorted : paginateRows(sorted, page, props.pageSize);
-  const emptyBecauseFiltered =
-    rawRows.length === 0 ? hasActiveFilters(props) : filtered.length === 0;
+  const groups =
+    props.groupBy !== "none"
+      ? groupSessionRows({
+          rows: sorted,
+          mode: props.groupBy,
+          knownCategories: props.knownCategories,
+        })
+      : null;
+  const displayRows = groups ? groups.flatMap((group) => group.rows) : sorted;
+  const paginated = paginateRows(displayRows, page, props.pageSize);
+  const emptyBecauseFiltered = rawRows.length === 0 && hasActiveFilters(props);
   const liveCount = rawRows.filter((row) => isSessionRunActive(row)).length;
   const archivedCount = rawRows.filter((row) => row.archived === true).length;
   const emptyMessage =
@@ -1028,57 +991,56 @@ export function renderSessions(props: SessionsProps) {
 
   const sessionsTitle = html`
     ${t("sessionsView.title")}
-    ${props.result
-      ? html`
-          <openclaw-tooltip .content=${t("sessionsView.store", { path: props.result.path })}>
-            <span class="settings-count">${rawRows.length}</span>
-          </openclaw-tooltip>
-        `
-      : nothing}
+    ${
+      props.result
+        ? html`
+            <openclaw-tooltip .content=${t("sessionsView.store", { path: props.result.path })}>
+              <span class="settings-count">${rawRows.length}</span>
+            </openclaw-tooltip>
+          `
+        : nothing
+    }
+    ${props.result ? renderSessionsHeadingFacts(rawRows, liveCount, props.statusFilter) : nothing}
   `;
   const refreshAction = html`
-    ${props.statusFilter === "archived"
-      ? html`
-          <button
-            class="btn danger"
-            ?disabled=${props.loading ||
-            archivedCount === 0 ||
-            Boolean(props.deleteArchivedDisabledReason)}
-            title=${props.deleteArchivedDisabledReason ?? nothing}
-            @click=${props.onDeleteAllArchived}
-          >
-            ${icons.trash} ${t("sessionsView.deleteAllArchived")}
-          </button>
-        `
-      : nothing}
+    ${
+      props.statusFilter === "archived"
+        ? html`
+            <button
+              class="btn danger"
+              ?disabled=${
+                props.loading || archivedCount === 0 || Boolean(props.deleteArchivedDisabledReason)
+              }
+              title=${props.deleteArchivedDisabledReason ?? nothing}
+              @click=${props.onDeleteAllArchived}
+            >
+              ${icons.trash} ${t("sessionsView.deleteAllArchived")}
+            </button>
+          `
+        : nothing
+    }
     <button class="btn" ?disabled=${props.loading} @click=${props.onRefresh}>
       ${props.loading ? t("common.loading") : t("common.refresh")}
     </button>
   `;
   const children = [
     props.error ? html`<div class="sessions-error" role="alert">${props.error}</div>` : nothing,
-    props.result
-      ? renderSettingsSection({}, renderSessionsOverview(rawRows, liveCount, props.statusFilter))
-      : nothing,
     // When the gateway lacks sessions.search the section still renders: the
     // form disables itself and shows the unavailable notice (shipped behavior).
     renderSettingsSection(
       {
         title: t("sessionsView.transcriptSearchTitle"),
-        description: t("sessionsView.transcriptSearchDescription"),
       },
       renderTranscriptSearch(props, rawRows),
     ),
     renderSettingsSection(
       {
         title: sessionsTitle,
-        description: t("sessionsView.subtitle"),
         actions: refreshAction,
       },
       renderSessionsTable(props, {
         paginated,
         groups,
-        groupingActive,
         emptyBecauseFiltered,
         emptyMessage,
         totalRows,
@@ -1094,7 +1056,6 @@ export function renderSessions(props: SessionsProps) {
 type SessionsTableContext = {
   paginated: GatewaySessionRow[];
   groups: SessionRowGroup[] | null;
-  groupingActive: boolean;
   emptyBecauseFiltered: boolean;
   emptyMessage: string;
   totalRows: number;
@@ -1107,21 +1068,13 @@ type SessionsTableContext = {
   ) => unknown;
 };
 
-function renderSessionsTable(props: SessionsProps, ctx: SessionsTableContext) {
-  const {
-    paginated,
-    groups,
-    groupingActive,
-    emptyBecauseFiltered,
-    emptyMessage,
-    totalRows,
-    totalPages,
-    page,
-  } = ctx;
-  const sortHeader = ctx.sortHeader;
-  const emptyStateMessage = emptyBecauseFiltered
-    ? t("sessionsView.noSessionsMatchFilters")
-    : emptyMessage;
+function setPreviousSiblingExpanded(event: Event, expanded: boolean) {
+  if (event.currentTarget instanceof Element) {
+    event.currentTarget.previousElementSibling?.setAttribute("aria-expanded", String(expanded));
+  }
+}
+
+function renderSessionsAdvancedFilters(props: SessionsProps) {
   // Archived timestamps are intentionally stale, so recency only applies to the active view.
   const filterInputs = [
     [
@@ -1143,6 +1096,112 @@ function renderSessionsTable(props: SessionsProps, ctx: SessionsTableContext) {
     key: keyof Parameters<SessionsProps["onFiltersChange"]>[0],
     value: string | boolean,
   ) => props.onFiltersChange({ activeMinutes, limit, includeGlobal, includeUnknown, [key]: value });
+  const active =
+    activeMinutes.trim() !== "" ||
+    limit.trim() !== String(SESSIONS_PAGE_DEFAULT_LIMIT) ||
+    !includeGlobal ||
+    includeUnknown ||
+    props.groupBy !== "none";
+  return html`
+    <button
+      id="sessions-filter-popover-trigger"
+      type="button"
+      class="btn btn--sm sessions-filter-popover__trigger ${active ? "active" : ""}"
+      title=${t("sessionsView.filters")}
+      aria-label=${t("sessionsView.filters")}
+      aria-haspopup="dialog"
+      aria-expanded="false"
+    >
+      ${icons.listFilter}
+    </button>
+    <wa-popover
+      class="sessions-filter-popover"
+      for="sessions-filter-popover-trigger"
+      placement="bottom-end"
+      without-arrow
+      @wa-show=${(event: Event) => setPreviousSiblingExpanded(event, true)}
+      @wa-hide=${(event: Event) => setPreviousSiblingExpanded(event, false)}
+    >
+      <div class="sessions-filter-popover__panel">
+        <div class="sessions-filter-popover__fields">
+          ${filterInputs.map(
+            ([key, suffix, label, tooltip, placeholder, disabled]) => html`
+              <openclaw-tooltip .content=${tooltip}>
+                <label class="session-filter-field">
+                  <span class="session-filter-label">${label}</span>
+                  <input
+                    class="session-filter-input session-filter-input--${suffix}"
+                    placeholder=${placeholder}
+                    .value=${props[key]}
+                    ?disabled=${disabled}
+                    @input=${(event: Event) =>
+                      updateFilter(key, (event.target as HTMLInputElement).value)}
+                  />
+                </label>
+              </openclaw-tooltip>
+            `,
+          )}
+        </div>
+        <div
+          class="session-filter-toggle-group"
+          role="group"
+          aria-label=${t("sessionsView.sourceFilters")}
+        >
+          ${sourceFilters.map(([key, label, tooltip]) =>
+            renderFilterToggle({
+              name: key,
+              checked: props[key],
+              label,
+              title: tooltip,
+              onChange: (checked) => updateFilter(key, checked),
+            }),
+          )}
+        </div>
+        <label class="session-groupby">
+          <span class="session-groupby__label">${t("sessionsView.groupBy")}</span>
+          <select
+            class="session-groupby__select"
+            @change=${(event: Event) =>
+              props.onGroupByChange((event.target as HTMLSelectElement).value as SessionsGroupBy)}
+          >
+            ${SESSION_GROUP_MODES.filter(
+              (mode) => mode !== "person" || props.personGroupingAvailable,
+            ).map(
+              (mode) => html`
+                <option value=${mode} ?selected=${props.groupBy === mode}>
+                  ${groupModeLabel(mode)}
+                </option>
+              `,
+            )}
+          </select>
+        </label>
+        ${
+          props.groupBy === "category"
+            ? html`
+                <button
+                  class="btn btn--sm"
+                  ?disabled=${Boolean(props.groupWriteDisabledReason)}
+                  title=${props.groupWriteDisabledReason ?? nothing}
+                  @click=${() => props.onRequestNewCategory()}
+                >
+                  ${icons.plus} ${t("sessionsView.newGroup")}
+                </button>
+              `
+            : nothing
+        }
+      </div>
+    </wa-popover>
+  `;
+}
+
+function renderSessionsTable(props: SessionsProps, ctx: SessionsTableContext) {
+  const { paginated, groups, emptyBecauseFiltered, emptyMessage, totalRows, totalPages, page } =
+    ctx;
+  const sortHeader = ctx.sortHeader;
+  const emptyStateMessage = emptyBecauseFiltered
+    ? t("sessionsView.noSessionsMatchFilters")
+    : emptyMessage;
+  const paginatedKeys = groups ? new Set(paginated.map((row) => row.key)) : null;
   return html`
     <div
       class="sessions-toolbar sessions-filter-bar"
@@ -1157,127 +1216,74 @@ function renderSessionsTable(props: SessionsProps, ctx: SessionsTableContext) {
           @input=${(e: Event) => props.onSearchChange((e.target as HTMLInputElement).value)}
         />
       </div>
-      <div class="session-filter-primary-row">
-        ${filterInputs.map(
-          ([key, suffix, label, tooltip, placeholder, disabled]) => html`
-            <openclaw-tooltip .content=${tooltip}>
-              <label class="session-filter-field">
-                <span class="session-filter-label">${label}</span>
-                <input
-                  class="session-filter-input session-filter-input--${suffix}"
-                  placeholder=${placeholder}
-                  .value=${props[key]}
-                  ?disabled=${disabled}
-                  @input=${(event: Event) =>
-                    updateFilter(key, (event.target as HTMLInputElement).value)}
-                />
-              </label>
-            </openclaw-tooltip>
-          `,
-        )}
-      </div>
-      <div
-        class="session-filter-toggle-group"
-        role="group"
-        aria-label=${t("sessionsView.sourceFilters")}
-      >
-        ${sourceFilters.map(([key, label, tooltip]) =>
-          renderFilterToggle({
-            name: key,
-            checked: props[key],
-            label,
-            title: tooltip,
-            onChange: (checked) => updateFilter(key, checked),
-          }),
-        )}
-        ${renderSettingsSegmented<SessionArchivedFilter>({
-          value: props.statusFilter,
-          ariaLabel: t("sessionsView.sessionState"),
-          className: "sessions-view-segment",
-          options: [
-            { value: "active", label: t("common.active") },
-            {
-              value: "archived",
-              label: t("sessionsView.archived"),
-              title: t("sessionsView.archivedOnlyTooltip"),
-            },
-            { value: "all", label: t("sessionsView.all") },
-          ],
-          onChange: (value) => props.onStatusFilterChange(value),
-        })}
-      </div>
-      <span class="sessions-toolbar__divider" aria-hidden="true"></span>
-      <label class="session-groupby">
-        <span class="session-groupby__label">${t("sessionsView.groupBy")}</span>
-        <select
-          class="session-groupby__select"
-          @change=${(e: Event) =>
-            props.onGroupByChange((e.target as HTMLSelectElement).value as SessionsGroupBy)}
-        >
-          ${SESSION_GROUP_MODES.map(
-            (mode) =>
-              html`<option value=${mode} ?selected=${props.groupBy === mode}>
-                ${groupModeLabel(mode)}
-              </option>`,
-          )}
-        </select>
-      </label>
-      ${props.groupBy === "category"
-        ? html`
-            <button
-              class="btn btn--sm"
-              ?disabled=${Boolean(props.groupWriteDisabledReason)}
-              title=${props.groupWriteDisabledReason ?? nothing}
-              @click=${() => props.onRequestNewCategory()}
-            >
-              ${icons.plus} ${t("sessionsView.newGroup")}
-            </button>
-          `
-        : nothing}
+      ${renderSettingsSegmented<SessionArchivedFilter>({
+        value: props.statusFilter,
+        ariaLabel: t("sessionsView.sessionState"),
+        className: "sessions-view-segment",
+        options: [
+          { value: "active", label: t("common.active") },
+          {
+            value: "archived",
+            label: t("sessionsView.archived"),
+            title: t("sessionsView.archivedOnlyTooltip"),
+          },
+          { value: "all", label: t("sessionsView.all") },
+        ],
+        onChange: (value) => props.onStatusFilterChange(value),
+      })}
+      ${renderSessionsAdvancedFilters(props)}
     </div>
 
-    ${props.selectedKeys.size > 0
-      ? html`
-          <div class="data-table-bulk-bar">
-            <span>${t("sessionsView.selected", { count: String(props.selectedKeys.size) })}</span>
-            <button class="btn btn--sm" @click=${props.onDeselectAll}>
-              ${t("common.unselect")}
-            </button>
-            <button
-              class="btn btn--sm danger"
-              ?disabled=${props.loading || Boolean(props.deleteSelectedDisabledReason)}
-              title=${props.deleteSelectedDisabledReason ?? nothing}
-              @click=${props.onDeleteSelected}
-            >
-              ${icons.trash} ${t("sessionsView.deleteSelected")}
-            </button>
-          </div>
-        `
-      : nothing}
+    ${
+      props.selectedKeys.size > 0
+        ? html`
+            <div class="data-table-bulk-bar">
+              <span>${t("sessionsView.selected", { count: String(props.selectedKeys.size) })}</span>
+              <button class="btn btn--sm" @click=${props.onDeselectAll}>
+                ${t("common.unselect")}
+              </button>
+              <button
+                class="btn btn--sm danger"
+                ?disabled=${props.loading || Boolean(props.deleteSelectedDisabledReason)}
+                title=${props.deleteSelectedDisabledReason ?? nothing}
+                @click=${props.onDeleteSelected}
+              >
+                ${icons.trash} ${t("sessionsView.deleteSelected")}
+              </button>
+            </div>
+          `
+        : nothing
+    }
 
     <div class="data-table-container">
       <table class="data-table sessions-table">
         <thead>
           <tr>
             <th class="data-table-checkbox-col">
-              ${paginated.length > 0
-                ? html`<input
-                    type="checkbox"
-                    .checked=${paginated.length > 0 &&
-                    paginated.every((r) => props.selectedKeys.has(r.key))}
-                    .indeterminate=${paginated.some((r) => props.selectedKeys.has(r.key)) &&
-                    !paginated.every((r) => props.selectedKeys.has(r.key))}
-                    @change=${() => {
-                      const allSelected = paginated.every((r) => props.selectedKeys.has(r.key));
-                      if (allSelected) {
-                        props.onDeselectPage(paginated.map((r) => r.key));
-                      } else {
-                        props.onSelectPage(paginated.map((r) => r.key));
+              ${
+                paginated.length > 0
+                  ? html`<input
+                      type="checkbox"
+                      .checked=${
+                        paginated.length > 0 &&
+                        paginated.every((r) => props.selectedKeys.has(r.key))
                       }
-                    }}
-                    aria-label=${t("sessionsView.selectAllOnPage")}
-                  />`
-                : nothing}
+                      .indeterminate=${
+                        paginated.some((r) => props.selectedKeys.has(r.key)) &&
+                        !paginated.every((r) => props.selectedKeys.has(r.key))
+                      }
+                      @change=${() => {
+                        const allSelected = paginated.every((r) => props.selectedKeys.has(r.key));
+                        if (allSelected) {
+                          props.onDeselectPage(paginated.map((r) => r.key));
+                        } else {
+                          props.onSelectPage(paginated.map((r) => r.key));
+                        }
+                      }}
+                      aria-label=${t("sessionsView.selectAllOnPage")}
+                    />`
+                  : nothing
+              }
             </th>
             ${sortHeader("key", t("sessionsView.key"), "data-table-key-col")}
             ${props.groupBy === "category" ? html`<th>${t("sessionsView.group")}</th>` : nothing}
@@ -1286,84 +1292,106 @@ function renderSessionsTable(props: SessionsProps, ctx: SessionsTableContext) {
             ${sortHeader("updated", t("sessionsView.updated"))}
             ${sortHeader("tokens", t("sessionsView.tokens"))}
             <th class="session-actions-col">
-              <span class="sessions-sr-only">${t("sessionsView.actions")}</span>
+              <span class="sr-only">${t("sessionsView.actions")}</span>
             </th>
           </tr>
         </thead>
         <tbody>
-          ${props.loading && !props.result
-            ? renderSkeletonRows(sessionsTableColumnCount(props))
-            : paginated.length === 0
-              ? html`
-                  <tr>
-                    <td colspan=${sessionsTableColumnCount(props)} class="data-table-empty-cell">
-                      <div class="data-table-empty-state" role="status" aria-live="polite">
-                        <div class="data-table-empty-state__message">
-                          ${emptyBecauseFiltered ? icons.search : icons.messageSquare}
-                          <span>${emptyStateMessage}</span>
-                        </div>
-                        ${emptyBecauseFiltered
-                          ? html`
-                              <button class="btn btn--sm" @click=${props.onClearFilters}>
-                                ${t("sessionsView.showAll")}
-                              </button>
-                            `
-                          : nothing}
-                      </div>
-                    </td>
-                  </tr>
-                `
-              : groups
-                ? groups.flatMap((group) => {
-                    const section = group.rows.flatMap((row) => renderRows(row, props));
-                    section.unshift(renderGroupHeaderRow(group, props));
-                    return section;
-                  })
-                : paginated.flatMap((row) => renderRows(row, props))}
+          ${
+            props.loading && !props.result
+              ? renderSkeletonRows(sessionsTableColumnCount(props))
+              : paginated.length === 0 && (props.loading || props.error || !props.result)
+                ? nothing
+                : paginated.length === 0
+                  ? html`
+                      <tr>
+                        <td
+                          colspan=${sessionsTableColumnCount(props)}
+                          class="data-table-empty-cell"
+                        >
+                          <div class="data-table-empty-state" role="status" aria-live="polite">
+                            <div class="data-table-empty-state__message">
+                              ${emptyBecauseFiltered ? icons.search : icons.messageSquare}
+                              <span>${emptyStateMessage}</span>
+                            </div>
+                            ${
+                              emptyBecauseFiltered
+                                ? html`
+                                    <button class="btn btn--sm" @click=${props.onClearFilters}>
+                                      ${t("sessionsView.showAll")}
+                                    </button>
+                                  `
+                                : nothing
+                            }
+                          </div>
+                        </td>
+                      </tr>
+                    `
+                  : groups
+                    ? groups.flatMap((group) => {
+                        const visibleRows = group.rows.filter((row) => paginatedKeys?.has(row.key));
+                        if (visibleRows.length === 0 && group.rows.length > 0) {
+                          return [];
+                        }
+                        const section = visibleRows.flatMap((row) => renderRows(row, props));
+                        section.unshift(renderGroupHeaderRow(group, props));
+                        return section;
+                      })
+                    : paginated.flatMap((row) => renderRows(row, props))
+          }
         </tbody>
       </table>
     </div>
 
-    ${totalRows > 0 && !groupingActive
-      ? html`
-          <div class="data-table-pagination">
-            <div class="data-table-pagination__info">
-              ${t("sessionsView.pagination", {
-                start: String(page * props.pageSize + 1),
-                end: String(Math.min((page + 1) * props.pageSize, totalRows)),
-                total: String(totalRows),
-              })}
+    ${
+      totalRows > 0
+        ? html`
+            <div class="data-table-pagination">
+              <div class="data-table-pagination__info">
+                ${t("sessionsView.pagination", {
+                  start: String(page * props.pageSize + 1),
+                  end: String(Math.min((page + 1) * props.pageSize, totalRows)),
+                  total: String(totalRows),
+                })}
+              </div>
+              <div class="data-table-pagination__controls">
+                <select
+                  class="data-table-pagination__size"
+                  aria-label=${t("sessionsView.pageSize")}
+                  .value=${String(props.pageSize)}
+                  @change=${(e: Event) =>
+                    props.onPageSizeChange(Number((e.target as HTMLSelectElement).value))}
+                >
+                  ${PAGE_SIZES.map(
+                    // The matching option owns initial selection because the select's value
+                    // property binds before these dynamic children exist on first render.
+                    (s) =>
+                      html`<option value=${s} ?selected=${s === props.pageSize}>
+                        ${t("sessionsView.rowsPerPage", { count: String(s) })}
+                      </option>`,
+                  )}
+                </select>
+                ${
+                  props.result?.hasMore && props.result.nextOffset != null
+                    ? html` <button ?disabled=${props.loading} @click=${props.onLoadMore}>
+                        ${t("chat.selectors.loadMoreRosterSessions")}
+                      </button>`
+                    : nothing
+                }
+                <button ?disabled=${page <= 0} @click=${() => props.onPageChange(page - 1)}>
+                  ${t("common.previous")}
+                </button>
+                <button
+                  ?disabled=${page >= totalPages - 1}
+                  @click=${() => props.onPageChange(page + 1)}
+                >
+                  ${t("common.next")}
+                </button>
+              </div>
             </div>
-            <div class="data-table-pagination__controls">
-              <select
-                class="data-table-pagination__size"
-                aria-label=${t("sessionsView.pageSize")}
-                .value=${String(props.pageSize)}
-                @change=${(e: Event) =>
-                  props.onPageSizeChange(Number((e.target as HTMLSelectElement).value))}
-              >
-                ${PAGE_SIZES.map(
-                  // The matching option owns initial selection because the select's value
-                  // property binds before these dynamic children exist on first render.
-                  (s) =>
-                    html`<option value=${s} ?selected=${s === props.pageSize}>
-                      ${t("sessionsView.rowsPerPage", { count: String(s) })}
-                    </option>`,
-                )}
-              </select>
-              <button ?disabled=${page <= 0} @click=${() => props.onPageChange(page - 1)}>
-                ${t("common.previous")}
-              </button>
-              <button
-                ?disabled=${page >= totalPages - 1}
-                @click=${() => props.onPageChange(page + 1)}
-              >
-                ${t("common.next")}
-              </button>
-            </div>
-          </div>
-        `
-      : nothing}
+          `
+        : nothing
+    }
   `;
 }
 
@@ -1438,14 +1466,16 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
       aria-controls=${detailsId}
       draggable=${categoryMode ? "true" : nothing}
       aria-description=${categoryMode ? t("sessionsView.dragSessionHint") : nothing}
-      @dragstart=${categoryMode
-        ? (e: DragEvent) => {
-            e.dataTransfer?.setData(SESSION_DRAG_MIME, row.key);
-            if (e.dataTransfer) {
-              e.dataTransfer.effectAllowed = "move";
+      @dragstart=${
+        categoryMode
+          ? (e: DragEvent) => {
+              e.dataTransfer?.setData(SESSION_DRAG_MIME, row.key);
+              if (e.dataTransfer) {
+                e.dataTransfer.effectAllowed = "move";
+              }
             }
-          }
-        : nothing}
+          : nothing
+      }
       @dragover=${rowDrop.dragover}
       @dragleave=${rowDrop.dragleave}
       @drop=${rowDrop.drop}
@@ -1457,7 +1487,8 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
         props.onToggleDetails(row.key);
       }}
       @keydown=${(e: KeyboardEvent) => {
-        if (openMenuFromEvent(e)) {
+        openMenuFromEvent(e);
+        if (e.defaultPrevented) {
           return;
         }
         if (isRowControlTarget(e.target)) {
@@ -1483,52 +1514,62 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
             ${renderSessionAvatar(row)}
             <div class="session-key-cell__text">
               <span class="session-key-cell__primary">
-                ${row.unread === true
-                  ? html`<span
-                      class="session-unread-dot"
-                      role="img"
-                      aria-label=${t("sessionsView.unread")}
-                    ></span>`
-                  : nothing}
-                ${canLink
-                  ? html`<a
-                      href=${chatUrl}
-                      class="session-link"
-                      @click=${(e: MouseEvent) => {
-                        if (!shouldHandleNavigationClick(e)) {
-                          return;
-                        }
-                        if (props.onNavigateToChat) {
-                          e.preventDefault();
-                          props.onNavigateToChat(row.key);
-                        }
-                      }}
-                      >${friendlyKeyLabel ?? row.key}</a
-                    >`
-                  : html`<span>${friendlyKeyLabel ?? row.key}</span>`}
-                ${trimmedLabel
-                  ? html`<span class="session-label-chip" title=${trimmedLabel}
-                      >${trimmedLabel}</span
-                    >`
-                  : nothing}
+                ${
+                  row.unread === true
+                    ? html`<span
+                        class="session-unread-dot"
+                        role="img"
+                        aria-label=${t("sessionsView.unread")}
+                      ></span>`
+                    : nothing
+                }
+                ${
+                  canLink
+                    ? html`<a
+                        href=${chatUrl}
+                        class="session-link"
+                        @click=${(e: MouseEvent) => {
+                          if (!shouldHandleNavigationClick(e)) {
+                            return;
+                          }
+                          if (props.onNavigateToChat) {
+                            e.preventDefault();
+                            props.onNavigateToChat(row.key);
+                          }
+                        }}
+                        >${friendlyKeyLabel ?? row.key}</a
+                      >`
+                    : html`<span>${friendlyKeyLabel ?? row.key}</span>`
+                }
+                ${
+                  trimmedLabel
+                    ? html`<span class="session-label-chip" title=${trimmedLabel}
+                        >${trimmedLabel}</span
+                      >`
+                    : nothing
+                }
               </span>
-              ${showDisplayName
-                ? html`<span class="muted session-key-display-name">${displayName}</span>`
-                : nothing}
+              ${
+                showDisplayName
+                  ? html`<span class="muted session-key-display-name">${displayName}</span>`
+                  : nothing
+              }
             </div>
           </div>
         </openclaw-tooltip>
       </td>
       ${categoryMode ? renderCategoryCell(row, props) : nothing}
       <td>
-        <span class=${kindClass}>${resolveSessionDisplayKind(row)}</span>
+        <span class=${kindClass}>${displayKind}</span>
       </td>
       <td class="session-status-col">
         <div class="session-status-stack">
           ${renderSessionStatusBadge(row)} ${renderSessionGoalStatus(row.goal)}
-          ${props.statusFilter === "all" && row.archived === true
-            ? renderSettingsStatus({ kind: "muted", label: t("sessionsView.archived") })
-            : nothing}
+          ${
+            props.statusFilter === "all" && row.archived === true
+              ? renderSettingsStatus({ kind: "muted", label: t("sessionsView.archived") })
+              : nothing
+          }
         </div>
       </td>
       <td>${updated}</td>
@@ -1546,11 +1587,13 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
               props.onToggleDetails(row.key);
             }}
           >
-            ${visibleCheckpointCount > 0
-              ? html`<span class="settings-count session-compaction-count"
-                  >${visibleCheckpointCount}</span
-                >`
-              : nothing}
+            ${
+              visibleCheckpointCount > 0
+                ? html`<span class="settings-count session-compaction-count"
+                    >${visibleCheckpointCount}</span
+                  >`
+                : nothing
+            }
             ${icons.chevronDown}
           </button>
           <button
@@ -1639,7 +1682,10 @@ function renderSessionDetailsRow(params: {
     verbose,
   );
   const reasoning = row.reasoningLevel ?? "";
-  const reasoningLevels = withCurrentOption(REASONING_LEVELS, reasoning);
+  const reasoningLevels = withCurrentLabeledOption(
+    buildSessionLevelOptions(REASONING_LEVELS),
+    reasoning,
+  );
   const checkpointItems = props.checkpointItemsByKey[row.key] ?? [];
   const checkpointError = props.checkpointErrorByKey[row.key];
   const checkpointLabel = formatCheckpointCount(visibleCheckpointCount);
@@ -1656,9 +1702,11 @@ function renderSessionDetailsRow(params: {
           <div>
             <div class="session-details-panel__eyebrow">${t("sessionsView.sessionDetails")}</div>
             <div class="session-details-panel__title">${friendlyKeyLabel ?? row.key}</div>
-            ${showDisplayName
-              ? html`<div class="muted session-details-panel__subtitle">${displayName}</div>`
-              : nothing}
+            ${
+              showDisplayName
+                ? html`<div class="muted session-details-panel__subtitle">${displayName}</div>`
+                : nothing
+            }
           </div>
           <div class="session-details-panel__badges">
             ${renderSessionStatusBadge(row)} ${renderSessionGoalStatus(row.goal)}
@@ -1715,10 +1763,7 @@ function renderSessionDetailsRow(params: {
               label: t("sessionsView.reasoning"),
               disabled: props.loading || Boolean(props.patchAdminDisabledReason),
               disabledReason: props.patchAdminDisabledReason,
-              options: reasoningLevels.map((level) => ({
-                value: level,
-                label: level || t("sessionsView.inherit"),
-              })),
+              options: reasoningLevels,
               current: reasoning,
               onChange: (value) => props.onPatch(row.key, { reasoningLevel: value || null }),
             })}
@@ -1747,62 +1792,70 @@ function renderSessionDetailsRow(params: {
               <div class="session-details-section__title">${checkpointLabel}</div>
             </div>
           </div>
-          ${props.checkpointLoadingKey === row.key
-            ? html`<div class="muted session-details-empty">
-                ${t("sessionsView.loadingCheckpoints")}
-              </div>`
-            : checkpointError
-              ? html`<div class="callout danger" role="alert">${checkpointError}</div>`
-              : !hasCheckpoints || checkpointItems.length === 0
-                ? html`<div class="muted session-details-empty">
-                    ${t("sessionsView.noCheckpoints")}
-                  </div>`
-                : html`
-                    <div class="session-checkpoint-list">
-                      ${checkpointItems.map(
-                        (checkpoint) => html`
-                          <div class="session-checkpoint-card">
-                            <div class="session-checkpoint-card__header">
-                              <strong>
-                                ${formatCheckpointReason(checkpoint.reason)} ·
-                                ${formatRelativeTimestamp(checkpoint.createdAt)}
-                              </strong>
-                              <span class="muted session-checkpoint-card__delta">
-                                ${formatCheckpointDelta(checkpoint)}
-                              </span>
+          ${
+            props.checkpointLoadingKey === row.key
+              ? html`<div class="muted session-details-empty">
+                  ${t("sessionsView.loadingCheckpoints")}
+                </div>`
+              : checkpointError
+                ? html`<div class="callout danger" role="alert">${checkpointError}</div>`
+                : !hasCheckpoints || checkpointItems.length === 0
+                  ? html`<div class="muted session-details-empty">
+                      ${t("sessionsView.noCheckpoints")}
+                    </div>`
+                  : html`
+                      <div class="session-checkpoint-list">
+                        ${checkpointItems.map(
+                          (checkpoint) => html`
+                            <div class="session-checkpoint-card">
+                              <div class="session-checkpoint-card__header">
+                                <strong>
+                                  ${formatCheckpointReason(checkpoint.reason)} ·
+                                  ${formatRelativeTimestamp(checkpoint.createdAt)}
+                                </strong>
+                                <span class="muted session-checkpoint-card__delta">
+                                  ${formatCheckpointDelta(checkpoint)}
+                                </span>
+                              </div>
+                              ${
+                                checkpoint.summary
+                                  ? html`<div class="session-checkpoint-card__summary">
+                                      ${checkpoint.summary}
+                                    </div>`
+                                  : html`<div class="muted">${t("sessionsView.noSummary")}</div>`
+                              }
+                              <div class="session-checkpoint-card__actions">
+                                <button
+                                  class="btn btn--sm"
+                                  ?disabled=${
+                                    props.checkpointBusyKey === checkpoint.checkpointId ||
+                                    Boolean(props.checkpointBranchDisabledReason)
+                                  }
+                                  title=${props.checkpointBranchDisabledReason ?? nothing}
+                                  @click=${() =>
+                                    props.onBranchFromCheckpoint(row.key, checkpoint.checkpointId)}
+                                >
+                                  ${t("sessionsView.branchFromCheckpoint")}
+                                </button>
+                                <button
+                                  class="btn btn--sm"
+                                  ?disabled=${
+                                    props.checkpointBusyKey === checkpoint.checkpointId ||
+                                    Boolean(props.checkpointRestoreDisabledReason)
+                                  }
+                                  title=${props.checkpointRestoreDisabledReason ?? nothing}
+                                  @click=${() =>
+                                    props.onRestoreCheckpoint(row.key, checkpoint.checkpointId)}
+                                >
+                                  ${t("sessionsView.restoreCheckpoint")}
+                                </button>
+                              </div>
                             </div>
-                            ${checkpoint.summary
-                              ? html`<div class="session-checkpoint-card__summary">
-                                  ${checkpoint.summary}
-                                </div>`
-                              : html`<div class="muted">${t("sessionsView.noSummary")}</div>`}
-                            <div class="session-checkpoint-card__actions">
-                              <button
-                                class="btn btn--sm"
-                                ?disabled=${props.checkpointBusyKey === checkpoint.checkpointId ||
-                                Boolean(props.checkpointBranchDisabledReason)}
-                                title=${props.checkpointBranchDisabledReason ?? nothing}
-                                @click=${() =>
-                                  props.onBranchFromCheckpoint(row.key, checkpoint.checkpointId)}
-                              >
-                                ${t("sessionsView.branchFromCheckpoint")}
-                              </button>
-                              <button
-                                class="btn btn--sm"
-                                ?disabled=${props.checkpointBusyKey === checkpoint.checkpointId ||
-                                Boolean(props.checkpointRestoreDisabledReason)}
-                                title=${props.checkpointRestoreDisabledReason ?? nothing}
-                                @click=${() =>
-                                  props.onRestoreCheckpoint(row.key, checkpoint.checkpointId)}
-                              >
-                                ${t("sessionsView.restoreCheckpoint")}
-                              </button>
-                            </div>
-                          </div>
-                        `,
-                      )}
-                    </div>
-                  `}
+                          `,
+                        )}
+                      </div>
+                    `
+          }
         </div>
       </div>
     </td>

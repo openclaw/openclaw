@@ -2,11 +2,11 @@
 import { collectConfiguredModelRefs } from "@openclaw/model-catalog-core/configured-model-refs";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
-import { listAgentEntries } from "../agents/agent-scope-config.js";
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import {
   listExplicitlyDisabledChannelIdsForConfig,
   listPotentialConfiguredChannelIds,
+  listPotentialConfiguredChannelPresenceSignals,
   type AmbientEnvTriggerPolicy,
 } from "../channels/config-presence.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -19,7 +19,7 @@ import {
 import { readBundledDiscoveryMode } from "./bundled-discovery-state.js";
 import { listExplicitConfiguredChannelIdsForConfig } from "./channel-presence-policy.js";
 import { collectPluginConfigContractMatches } from "./config-contracts.js";
-import { normalizePluginsConfigWithResolver } from "./config-normalization-shared.js";
+import { normalizePluginsConfigWithResolverCore } from "./config-normalization-shared.js";
 import {
   resolveEffectivePluginActivationState,
   resolveSelectedContextEnginePluginIdFromConfig,
@@ -37,8 +37,11 @@ import {
   collectConfiguredWebSearchProviderIds,
 } from "./gateway-startup-plugin-providers.js";
 import { collectConfiguredSpeechProviderIds } from "./gateway-startup-speech-providers.js";
-import type { InstalledPluginIndexScopeLookup } from "./installed-plugin-index-scope-lookup.js";
-import type { InstalledPluginIndex, InstalledPluginIndexRecord } from "./installed-plugin-index.js";
+import type {
+  InstalledPluginIndex,
+  InstalledPluginIndexRecord,
+  InstalledPluginIndexScopeLookup,
+} from "./installed-plugin-index-types.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.js";
 import { normalizePluginsConfigWithRegistry } from "./plugin-registry-contributions.js";
 
@@ -63,7 +66,7 @@ export function normalizePluginsConfigForInstalledIndex(
   config: OpenClawConfig["plugins"] | undefined,
   lookup: InstalledPluginIndexScopeLookup,
 ) {
-  return normalizePluginsConfigWithResolver(config, lookup.normalizePluginId);
+  return normalizePluginsConfigWithResolverCore(config, lookup.normalizePluginId);
 }
 
 function isConfigActivationValueEnabled(value: unknown): boolean {
@@ -76,21 +79,36 @@ function isConfigActivationValueEnabled(value: unknown): boolean {
   return true;
 }
 
-export function listPotentialEnabledChannelIds(
+function listPotentialEnabledChannelIds(
   config: OpenClawConfig,
   env: NodeJS.ProcessEnv,
-  ambientEnvTriggers: AmbientEnvTriggerPolicy = "allow",
+  options: {
+    ambientEnvTriggers?: AmbientEnvTriggerPolicy;
+    includePersistedAuthState?: boolean;
+  } = {},
 ): string[] {
   const disabled = new Set(listExplicitlyDisabledChannelIdsForConfig(config));
-  return sortUniquePluginIds([
+  const enabledSignals = [
     ...listPotentialConfiguredChannelIds(config, env, {
       includePersistedAuthState: false,
-      ambientEnvTriggers,
+      ambientEnvTriggers: options.ambientEnvTriggers,
     }),
     ...listExplicitConfiguredChannelIdsForConfig(config),
-  ])
+  ]
     .map((id) => normalizeOptionalLowercaseString(id) ?? "")
     .filter((id) => id && !disabled.has(id));
+  if (options.includePersistedAuthState !== true) {
+    return sortUniquePluginIds(enabledSignals);
+  }
+  const persistedSignals = listPotentialConfiguredChannelPresenceSignals(config, env, {
+    includePersistedAuthState: true,
+    ambientEnvTriggers: options.ambientEnvTriggers,
+  })
+    .filter((signal) => signal.source === "persisted-auth")
+    .map((signal) => normalizeOptionalLowercaseString(signal.channelId) ?? "")
+    .filter(Boolean);
+  // Only persisted-auth evidence bypasses disabled activation during migration.
+  return sortUniquePluginIds([...enabledSignals, ...persistedSignals]);
 }
 
 function isGatewayStartupMemoryPlugin(plugin: InstalledPluginIndexRecord): boolean {
@@ -170,6 +188,7 @@ export function resolveAuthorizedGatewayStartupDreamingPluginIds(params: {
   const activationState = resolveEffectivePluginActivationState({
     id: selectedPlugin.pluginId,
     origin: selectedPlugin.origin,
+    channelIds: selectedPlugin.contributions?.channels,
     config: params.pluginsConfig,
     rootConfig: params.config,
     enabledByDefault: isPluginEnabledByDefaultForPlatform(selectedPlugin, params.platform),
@@ -358,65 +377,19 @@ export function addConfiguredSlotPluginIds(
 }
 
 export function collectConfiguredStartupChannelIds(params: {
-  activationSourceConfig: OpenClawConfig;
-  config: OpenClawConfig;
+  configs: readonly OpenClawConfig[];
   env: NodeJS.ProcessEnv;
   ambientEnvTriggers?: AmbientEnvTriggerPolicy;
+  includePersistedAuthState?: boolean;
 }): string[] {
-  return sortUniquePluginIds([
-    ...listPotentialEnabledChannelIds(params.config, params.env, params.ambientEnvTriggers),
-    ...listPotentialEnabledChannelIds(
-      params.activationSourceConfig,
-      params.env,
-      params.ambientEnvTriggers,
+  return sortUniquePluginIds(
+    params.configs.flatMap((config) =>
+      listPotentialEnabledChannelIds(config, params.env, {
+        ambientEnvTriggers: params.ambientEnvTriggers,
+        includePersistedAuthState: params.includePersistedAuthState,
+      }),
     ),
-  ]);
-}
-
-function collectValidationHeartbeatTargetChannelIds(config: OpenClawConfig): string[] {
-  const channelIds: string[] = [];
-  const pushTarget = (target: unknown) => {
-    if (typeof target !== "string") {
-      return;
-    }
-    const normalized = normalizeOptionalLowercaseString(target);
-    if (!normalized || normalized === "last" || normalized === "none") {
-      return;
-    }
-    channelIds.push(normalized);
-  };
-  pushTarget(config.agents?.defaults?.heartbeat?.target);
-  for (const agent of listAgentEntries(config)) {
-    pushTarget(agent?.heartbeat?.target);
-  }
-  return sortUniquePluginIds(channelIds);
-}
-
-function collectValidationChannelConfigIds(config: OpenClawConfig): string[] {
-  const channels = isRecord(config.channels) ? config.channels : null;
-  if (!channels) {
-    return [];
-  }
-  return Object.keys(channels)
-    .filter((channelId) => channelId !== "defaults" && channelId !== "modelByChannel")
-    .map((channelId) => normalizeOptionalLowercaseString(channelId) ?? "")
-    .filter(Boolean)
-    .toSorted((left, right) => left.localeCompare(right));
-}
-
-export function collectConfigValidationChannelIds(params: {
-  config: OpenClawConfig;
-  env: NodeJS.ProcessEnv;
-}): string[] {
-  return sortUniquePluginIds([
-    ...collectValidationChannelConfigIds(params.config),
-    ...collectConfiguredStartupChannelIds({
-      config: params.config,
-      activationSourceConfig: params.config,
-      env: params.env,
-    }),
-    ...collectValidationHeartbeatTargetChannelIds(params.config),
-  ]);
+  );
 }
 
 export function collectConfiguredProviderIds(config: OpenClawConfig): string[] {
@@ -436,7 +409,7 @@ export function collectConfiguredProviderIds(config: OpenClawConfig): string[] {
   ]);
 }
 
-export function collectValidationConfiguredProviderIds(config: OpenClawConfig): string[] {
+export function collectValidationConfiguredRefs(config: OpenClawConfig) {
   const providerIds: string[] = [];
   const pushProviderId = (value: unknown) => {
     if (typeof value !== "string") {
@@ -461,23 +434,24 @@ export function collectValidationConfiguredProviderIds(config: OpenClawConfig): 
       pushProviderId(providerId);
     }
   }
+  const shorthandModelRefs: string[] = [];
   for (const ref of collectConfiguredModelRefs(config)) {
     const slashIndex = ref.value.indexOf("/");
     if (slashIndex > 0) {
       pushProviderId(ref.value.slice(0, slashIndex));
+    } else if (slashIndex < 0) {
+      shorthandModelRefs.push(ref.value);
     }
   }
   pushProviderId(config.tools?.web?.search?.provider);
   pushProviderId(config.tools?.web?.fetch?.provider);
-  return sortUniquePluginIds(providerIds);
+  return { providerIds: sortUniquePluginIds(providerIds), shorthandModelRefs };
 }
 
-export function collectValidationConfiguredShorthandModelIds(config: OpenClawConfig): string[] {
+export function collectValidationConfiguredShorthandModelIds(
+  modelRefs: readonly string[],
+): string[] {
   return sortUniquePluginIds(
-    collectConfiguredModelRefs(config)
-      .map((ref) => ref.value)
-      .filter((ref) => !ref.includes("/"))
-      .map((ref) => splitTrailingAuthProfile(ref).model.trim())
-      .filter(Boolean),
+    modelRefs.map((ref) => splitTrailingAuthProfile(ref).model.trim()).filter(Boolean),
   );
 }

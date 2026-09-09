@@ -30,12 +30,17 @@ vi.mock("../state/openclaw-state-db.js", async (importOriginal) => {
   };
 });
 
+vi.mock("../version.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../version.js")>();
+  return { ...actual, resolveRuntimeServiceCommit: () => "aaaaaaa" };
+});
+
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
-import { withTempDir } from "../test-helpers/temp-dir.js";
+import { withTestDir } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
   executeSqliteQuerySync,
@@ -57,12 +62,6 @@ import {
   trimLogTail,
   writeRestartSentinel,
 } from "./restart-sentinel.js";
-import {
-  CONTROL_PLANE_UPDATE_RESTART_HEALTH_PENDING_REASON,
-  buildControlPlaneUpdateRestartHealthPendingResult,
-  isPendingControlPlaneUpdateRestartSentinel,
-} from "./update-control-plane-sentinel.js";
-import { buildUpdateRestartSentinelPayload } from "./update-restart-sentinel-payload.js";
 
 beforeEach(() => {
   mockWarn.mockClear();
@@ -71,7 +70,7 @@ beforeEach(() => {
 });
 
 async function withRestartSentinelStateDir(run: () => Promise<void>): Promise<void> {
-  await withTempDir({ prefix: "openclaw-sentinel-" }, async (tempDir) => {
+  await withTestDir({ prefix: "openclaw-sentinel-" }, async (tempDir) => {
     try {
       await withEnvAsync({ OPENCLAW_STATE_DIR: tempDir }, run);
     } finally {
@@ -212,7 +211,33 @@ describe("restart sentinel", () => {
     });
   });
 
-  it("reconstructs typed columns when payload_json is corrupt", async () => {
+  it.each([
+    { name: "the shadow payload is corrupt", columns: { payload_json: "not-json" } },
+    {
+      name: "recovery has an unknown reason and extra field",
+      columns: {
+        stats_json: JSON.stringify({
+          mode: "npm",
+          reason: "pending",
+          recovery: { serviceRestartSafe: false, reason: "future-recovery-reason", detail: "new" },
+        }),
+      },
+    },
+    {
+      name: "recovery has a known reason and extra field",
+      columns: {
+        stats_json: JSON.stringify({
+          mode: "npm",
+          reason: "pending",
+          recovery: {
+            serviceRestartSafe: false,
+            reason: "runtime-verification-failed",
+            detail: "new",
+          },
+        }),
+      },
+    },
+  ])("keeps notices readable and consumable when $name", async ({ columns }) => {
     await withRestartSentinelStateDir(async () => {
       const payload = {
         kind: "update" as const,
@@ -227,9 +252,13 @@ describe("restart sentinel", () => {
         stats: { mode: "npm", reason: "pending" },
       };
       const written = await writeRestartSentinel(payload);
-      updateSentinelRow({ payload_json: "not-json" });
+      updateSentinelRow(columns);
 
-      await expect(readRestartSentinel()).resolves.toEqual(written);
+      const read = await readRestartSentinel();
+      expect(read).toEqual(written);
+      expect(formatRestartSentinelMessage(read!.payload)).toContain(payload.message);
+      await expect(clearRestartSentinelIfRevision(read!.revision)).resolves.toBe(true);
+      await expect(readRestartSentinel()).resolves.toBeNull();
     });
   });
 
@@ -510,6 +539,27 @@ describe("restart sentinel", () => {
     });
   });
 
+  it("uses the loaded build commit when finalizing an update", async () => {
+    await withRestartSentinelStateDir(async () => {
+      await writeRestartSentinel({
+        kind: "update",
+        status: "ok",
+        ts: Date.now(),
+        stats: {
+          mode: "git",
+          root: process.cwd(),
+          after: { sha: "aaaaaaa", version: "actual-version" },
+        },
+      });
+
+      await finalizeUpdateRestartSentinelRunningVersion("actual-version");
+
+      await expect(readRestartSentinel()).resolves.toMatchObject({
+        payload: { status: "ok" },
+      });
+    });
+  });
+
   it("does not rewrite update sentinels when the running version is already current", async () => {
     await withRestartSentinelStateDir(async () => {
       const ts = Date.now();
@@ -550,7 +600,7 @@ describe("restart sentinel", () => {
     },
   ] as const)("persists the verified Git install receipt after a $name", async (testCase) => {
     await withRestartSentinelStateDir(async () => {
-      await withTempDir({ prefix: "openclaw-install-root-" }, async (tempDir) => {
+      await withTestDir({ prefix: "openclaw-install-root-" }, async (tempDir) => {
         const installRoot = path.join(tempDir, "checkout");
         const installAlias = path.join(tempDir, "checkout-alias");
         await fs.mkdir(installRoot);
@@ -665,7 +715,7 @@ describe("restart sentinel", () => {
 
   it("rejects the same Git revision when the restarted checkout root differs", async () => {
     await withRestartSentinelStateDir(async () => {
-      await withTempDir({ prefix: "openclaw-install-root-mismatch-" }, async (tempDir) => {
+      await withTestDir({ prefix: "openclaw-install-root-mismatch-" }, async (tempDir) => {
         const expectedRoot = path.join(tempDir, "expected");
         const runningRoot = path.join(tempDir, "running");
         await fs.mkdir(expectedRoot);
@@ -791,68 +841,6 @@ describe("restart success continuation", () => {
 
   it("stays silent without session context", () => {
     expect(buildRestartSuccessContinuation({})).toBeNull();
-  });
-});
-
-describe("control-plane update restart sentinel", () => {
-  it("reports a successful same-revision Git run as already current", () => {
-    const payload = buildUpdateRestartSentinelPayload({
-      result: {
-        status: "ok",
-        mode: "git",
-        before: { sha: "aaaaaaaa" },
-        after: { sha: "aaaaaaaa" },
-        steps: [],
-        durationMs: 42,
-      },
-      meta: {},
-      nowMs: 1,
-    });
-
-    expect(payload.status).toBe("skipped");
-    expect(payload.stats?.reason).toBe("already-current");
-    expect(payload.continuation).toBeUndefined();
-  });
-
-  it("keeps restart-health-pending sentinels continuation-free until final success", () => {
-    const result = {
-      status: "ok" as const,
-      mode: "npm" as const,
-      root: "/tmp/openclaw",
-      before: { version: "2026.4.23" },
-      after: { version: "2026.4.24" },
-      steps: [],
-      durationMs: 42,
-    };
-    const meta = {
-      sessionKey: "agent:main:webchat:dm:user-123",
-      continuationMessage: "Check the running version and finish the update report.",
-    };
-
-    const pendingResult = buildControlPlaneUpdateRestartHealthPendingResult(result);
-    const pendingPayload = buildUpdateRestartSentinelPayload({
-      result: pendingResult,
-      meta,
-      nowMs: 1,
-    });
-
-    expect(pendingPayload.status).toBe("skipped");
-    expect(pendingPayload.stats?.reason).toBe(CONTROL_PLANE_UPDATE_RESTART_HEALTH_PENDING_REASON);
-    expect(pendingPayload.continuation).toBeUndefined();
-    expect(isPendingControlPlaneUpdateRestartSentinel(pendingPayload)).toBe(true);
-
-    const finalPayload = buildUpdateRestartSentinelPayload({
-      result,
-      meta,
-      nowMs: 2,
-    });
-
-    expect(finalPayload.status).toBe("ok");
-    expect(finalPayload.continuation).toEqual({
-      kind: "agentTurn",
-      message: "Check the running version and finish the update report.",
-    });
-    expect(isPendingControlPlaneUpdateRestartSentinel(finalPayload)).toBe(false);
   });
 });
 

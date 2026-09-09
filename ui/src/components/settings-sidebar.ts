@@ -1,61 +1,81 @@
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 // Dedicated sidebar for the full-page settings takeover (see app-host.ts).
 import { html, nothing } from "lit";
 import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
 import {
   cancelRoutePreload,
+  isSettingsNavigationRouteVisible,
   navigationIconForRoute,
   scheduleRoutePreload,
-  SETTINGS_NAVIGATION_GROUPS,
   SETTINGS_SEARCHABLE_SUBPAGE_ROUTES,
   settingsNavigationLabelForRoute,
   settingsNavigationOwnerRoute,
   settingsSearchTextMatches,
   subtitleForRoute,
   titleForRoute,
+  visibleSettingsNavigationGroups,
   type SettingsSearchBlock,
 } from "../app-navigation.ts";
 import { pathForRoute, type RouteId } from "../app-route-paths.ts";
 import type { ApplicationNavigationOptions } from "../app/context.ts";
+import type { ApplicationGatewaySnapshot } from "../app/gateway.ts";
+import type { NativeDeviceSettingsCapability } from "../app/native-device-settings.ts";
+import type { UpdateProgress } from "../app/update-confirmation.ts";
+import type { ApplicationStatusBanner } from "../app/update-overlay-helpers.ts";
 import { t } from "../i18n/index.ts";
+import { redactLoginFailureError } from "../lib/connection-hints.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
-import { normalizeLowercaseStringOrEmpty } from "../lib/string-coerce.ts";
+import { findSettingsSearchBlocks } from "../pages/config/settings-search.ts";
 import { icons } from "./icons.ts";
-import { redactLoginFailureError } from "./login-gate.ts";
-import { renderOfflineSidebarStatus } from "./session-row-badges.ts";
+import {
+  renderSidebarConnectionStatus,
+  resolveSidebarConnectionStatus,
+} from "./session-row-badges.ts";
 import type { SettingsSaveIndicatorProps } from "./settings-save-indicator.ts";
 import "./settings-save-indicator.ts";
+import "../styles/settings.css";
 import "./sidebar-build-chip.ts";
-import "./sidebar-update-card.ts";
 
 type SettingsSidebarProps = {
+  presentation?: "sidebar" | "embed-list" | "embed-page";
   basePath: string;
   activeRouteId: RouteId;
   activePathname?: string;
   activeSearch?: string;
   activeHash?: string;
   offline: boolean;
+  phase?: ApplicationGatewaySnapshot["phase"];
+  restartPending?: boolean;
+  suspensionPhase?: ApplicationGatewaySnapshot["suspensionPhase"];
   queuedOutboxCount?: number;
   lastError: string | null;
   gatewayVersion: string;
   updateAvailable: UpdateAvailable | null;
   updateSchedule?: UpdateScheduleState | null;
   heldUpdateCampaignId?: string | null;
-  updateRunning: boolean;
+  updateBusy: boolean;
+  updateStatusBanner?: ApplicationStatusBanner | null;
+  watchUpdateProgress?: (listener: (progress: UpdateProgress) => void) => () => void;
   canUpdate?: boolean;
   canHoldUpdate?: boolean;
   onUpdate: () => void;
   refreshRequired: boolean;
-  onRefresh: () => void;
+  onRefresh: () => Promise<boolean>;
   onHoldUpdate?: () => Promise<boolean>;
+  onReviewUpdate?: () => void;
   searchQuery: string;
   searchBlockMatches?: readonly SettingsSearchBlock[];
+  searchParams?: Parameters<typeof findSettingsSearchBlocks>[0];
   onExit: () => void;
   onRetryConnect: () => void;
   onNavigate: (routeId: RouteId, options?: ApplicationNavigationOptions) => void;
+  onOpenApprovals?: () => void;
   onPreload?: (routeId: RouteId) => Promise<void> | void;
   onSearchQueryChange: (query: string) => void;
   preloadTimers: Map<EventTarget, ReturnType<typeof globalThis.setTimeout>>;
   saveIndicator: SettingsSaveIndicatorProps;
+  canAdmin?: boolean;
+  nativeDeviceSettings?: NativeDeviceSettingsCapability | null;
 };
 
 type SettingsNavigationGroupView = {
@@ -81,20 +101,28 @@ function isRedundantRouteBlock(routeId: RouteId, block: SettingsSearchBlock): bo
 function filterSettingsNavigationGroups(
   searchQuery: string,
   blockMatches: readonly SettingsSearchBlock[],
+  canAdmin: boolean,
+  nativeDeviceSettings: NativeDeviceSettingsCapability | null,
 ): readonly SettingsNavigationGroupView[] {
+  const navigationGroups = visibleSettingsNavigationGroups(canAdmin, nativeDeviceSettings);
+  const visibleBlockMatches = blockMatches.filter((block) =>
+    isSettingsNavigationRouteVisible(block.routeId, canAdmin, nativeDeviceSettings),
+  );
   const query = normalizeLowercaseStringOrEmpty(searchQuery);
   if (!query) {
-    return SETTINGS_NAVIGATION_GROUPS.map((group) => ({
+    return navigationGroups.map((group) => ({
       labelKey: group.labelKey,
       items: group.routes.map((routeId) => ({ routeId, blocks: [] })),
     }));
   }
-  const sidebarRoutes = SETTINGS_NAVIGATION_GROUPS.flatMap((group) => group.routes);
+  const sidebarRoutes = navigationGroups.flatMap((group) => group.routes);
   const searchableRoutes = [
     ...new Set([
       ...sidebarRoutes,
-      ...SETTINGS_SEARCHABLE_SUBPAGE_ROUTES,
-      ...blockMatches.map((block) => block.routeId),
+      ...SETTINGS_SEARCHABLE_SUBPAGE_ROUTES.filter((routeId) =>
+        isSettingsNavigationRouteVisible(routeId, canAdmin, nativeDeviceSettings),
+      ),
+      ...visibleBlockMatches.map((block) => block.routeId),
     ]),
   ];
   const directRoutes = searchableRoutes.filter((routeId) =>
@@ -105,7 +133,7 @@ function filterSettingsNavigationGroups(
     ].some((value) => settingsSearchTextMatches(value, query)),
   );
   const includedRoutes = new Set<RouteId>(directRoutes);
-  const groupRoutes = SETTINGS_NAVIGATION_GROUPS.flatMap((group) => {
+  const groupRoutes = navigationGroups.flatMap((group) => {
     const groupMatches = group.labelKey && settingsSearchTextMatches(t(group.labelKey), query);
     if (!groupMatches) {
       return [];
@@ -120,7 +148,7 @@ function filterSettingsNavigationGroups(
   });
   const blocksByRoute = new Map<RouteId, SettingsSearchBlock[]>();
   const seenBlocks = new Set<string>();
-  for (const block of blockMatches) {
+  for (const block of visibleBlockMatches) {
     const blockKey = `${block.routeId}\u0000${block.pathname ?? ""}\u0000${block.search ?? ""}\u0000${block.hash}`;
     if (seenBlocks.has(blockKey)) {
       continue;
@@ -155,8 +183,7 @@ function filterSettingsNavigationGroups(
 }
 
 function renderItem(props: SettingsSidebarProps, routeId: RouteId, label?: string) {
-  const active =
-    !props.searchQuery && settingsNavigationOwnerRoute(props.activeRouteId) === routeId;
+  const active = settingsNavigationOwnerRoute(props.activeRouteId) === routeId;
   return html`
     <a
       href=${pathForRoute(routeId, props.basePath)}
@@ -182,8 +209,9 @@ function renderItem(props: SettingsSidebarProps, routeId: RouteId, label?: strin
         >${icons[navigationIconForRoute(routeId)]}</span
       >
       <span class="settings-sidebar__item-label"
-        >${label ?? settingsNavigationLabelForRoute(routeId)}</span
+        >${label ?? settingsNavigationLabelForRoute(routeId, props.nativeDeviceSettings?.snapshot)}</span
       >
+      ${props.presentation === "embed-list" ? html`<span class="settings-row__chevron" aria-hidden="true">${icons.chevronRight}</span>` : nothing}
     </a>
   `;
 }
@@ -227,12 +255,90 @@ function syncSettingsSearchScrollShadow(nav: HTMLElement) {
     ?.classList.toggle("settings-sidebar__search--scrolled", nav.scrollTop > 0);
 }
 
+function renderEmbeddedSettingsHeader(props: SettingsSidebarProps) {
+  const connectionStatus = resolveSidebarConnectionStatus(props);
+  return html`<header class="native-embed-header">
+    ${
+      props.presentation === "embed-page"
+        ? html`<button
+            class="native-embed-header__back btn btn--ghost"
+            type="button"
+            aria-label=${t("common.back")}
+            @click=${props.onExit}
+          >
+            <span aria-hidden="true">${icons.chevronLeft}</span>${t("common.back")}
+          </button>`
+        : nothing
+    }
+    <h1 class="page-title">
+      ${props.presentation === "embed-list" ? t("nav.settings") : settingsNavigationLabelForRoute(props.activeRouteId, props.nativeDeviceSettings?.snapshot)}
+    </h1>
+    ${
+      connectionStatus
+        ? renderSidebarConnectionStatus({
+            kind: connectionStatus,
+            queuedOutboxCount: props.queuedOutboxCount ?? 0,
+            title: props.lastError
+              ? redactLoginFailureError(props.lastError)
+              : t("connection.reconnecting"),
+            onRetry: props.onRetryConnect,
+          })
+        : html`<openclaw-settings-save-indicator
+            .props=${props.saveIndicator}
+          ></openclaw-settings-save-indicator>`
+    }
+  </header>`;
+}
+
 export function renderSettingsSidebar(props: SettingsSidebarProps) {
+  if (props.presentation === "embed-page") {
+    return renderEmbeddedSettingsHeader(props);
+  }
+  const connectionStatus = resolveSidebarConnectionStatus(props);
   const reconnecting = t("connection.reconnecting");
+  const searchBlockMatches =
+    props.searchBlockMatches ??
+    (props.searchParams ? findSettingsSearchBlocks(props.searchParams) : []);
   const navigationGroups = filterSettingsNavigationGroups(
     props.searchQuery,
-    props.searchBlockMatches ?? [],
+    searchBlockMatches,
+    props.canAdmin !== false,
+    props.nativeDeviceSettings ?? null,
   );
+  const navigation = html` <nav
+    class="settings-sidebar__nav"
+    aria-label=${t("common.settingsSections")}
+    @scroll=${(event: Event) => syncSettingsSearchScrollShadow(event.currentTarget as HTMLElement)}
+  >
+    ${
+      navigationGroups.length === 0
+        ? html`<p class="settings-sidebar__empty" role="status">
+            ${t("nav.settingsSearchNoResults")}
+          </p>`
+        : navigationGroups.map(
+            (group) => html`
+              <div class="settings-sidebar__group">
+                ${
+                  group.labelKey
+                    ? html`<div class="settings-sidebar__group-label">${t(group.labelKey)}</div>`
+                    : nothing
+                }
+                ${group.items.map(
+                  (item) => html`
+                    ${renderItem(props, item.routeId)}
+                    ${item.blocks.map((block) => renderBlockItem(props, block))}
+                  `,
+                )}
+              </div>
+            `,
+          )
+    }
+  </nav>`;
+  if (props.presentation === "embed-list") {
+    return html`<section class="settings-embed-list">
+      ${renderEmbeddedSettingsHeader(props)} ${navigation}
+    </section>`;
+  }
   return html`
     <aside class="settings-sidebar">
       <header class="settings-sidebar__header">
@@ -256,81 +362,52 @@ export function renderSettingsSidebar(props: SettingsSidebarProps) {
           @input=${(event: Event) =>
             props.onSearchQueryChange((event.currentTarget as HTMLInputElement).value)}
           @keydown=${(event: KeyboardEvent) => {
-            if (event.key !== "Escape" || !props.searchQuery) {
+            if (event.key !== "Escape") {
               return;
             }
             event.preventDefault();
-            props.onSearchQueryChange("");
+            if (props.searchQuery) {
+              props.onSearchQueryChange("");
+              return;
+            }
+            props.onExit();
           }}
         />
-        ${props.searchQuery
-          ? html`
-              <button
-                type="button"
-                class="settings-sidebar__search-clear"
-                aria-label=${t("nav.settingsSearchClear")}
-                @click=${(event: MouseEvent) => {
-                  const searchInput = (
-                    event.currentTarget as HTMLElement
-                  ).parentElement?.querySelector<HTMLInputElement>("input");
-                  props.onSearchQueryChange("");
-                  searchInput?.focus();
-                }}
-              >
-                ${icons.x}
-              </button>
-            `
-          : nothing}
+        ${
+          props.searchQuery
+            ? html`
+                <button
+                  type="button"
+                  class="settings-sidebar__search-clear"
+                  aria-label=${t("nav.settingsSearchClear")}
+                  @click=${(event: MouseEvent) => {
+                    const searchInput = (
+                      event.currentTarget as HTMLElement
+                    ).parentElement?.querySelector<HTMLInputElement>("input");
+                    props.onSearchQueryChange("");
+                    searchInput?.focus();
+                  }}
+                >
+                  ${icons.x}
+                </button>
+              `
+            : nothing
+        }
       </div>
-      <nav
-        class="settings-sidebar__nav"
-        aria-label=${t("common.settingsSections")}
-        @scroll=${(event: Event) =>
-          syncSettingsSearchScrollShadow(event.currentTarget as HTMLElement)}
-      >
-        ${navigationGroups.length === 0
-          ? html`<p class="settings-sidebar__empty" role="status">
-              ${t("nav.settingsSearchNoResults")}
-            </p>`
-          : navigationGroups.map(
-              (group) => html`
-                <div class="settings-sidebar__group">
-                  ${group.labelKey
-                    ? html`<div class="settings-sidebar__group-label">${t(group.labelKey)}</div>`
-                    : nothing}
-                  ${group.items.map(
-                    (item) => html`
-                      ${renderItem(props, item.routeId)}
-                      ${item.blocks.map((block) => renderBlockItem(props, block))}
-                    `,
-                  )}
-                </div>
-              `,
-            )}
-      </nav>
-      <openclaw-sidebar-update-card
-        .updateAvailable=${props.updateAvailable}
-        .updateSchedule=${props.updateSchedule ?? null}
-        .heldUpdateCampaignId=${props.heldUpdateCampaignId ?? null}
-        .updateRunning=${props.updateRunning}
-        .canUpdate=${props.canUpdate ?? false}
-        .canHoldUpdate=${props.canHoldUpdate ?? false}
-        .onUpdate=${props.onUpdate}
-        .refreshRequired=${props.refreshRequired}
-        .onRefresh=${props.onRefresh}
-        .onHoldUpdate=${props.onHoldUpdate ?? (async () => false)}
-      ></openclaw-sidebar-update-card>
+      ${navigation}
       <footer class="settings-sidebar__footer">
-        ${props.offline
-          ? renderOfflineSidebarStatus({
-              queuedOutboxCount: props.queuedOutboxCount ?? 0,
-              reconnecting,
-              title: props.lastError ? redactLoginFailureError(props.lastError) : reconnecting,
-              onRetry: props.onRetryConnect,
-            })
-          : html`<openclaw-settings-save-indicator
-              .props=${props.saveIndicator}
-            ></openclaw-settings-save-indicator>`}
+        ${
+          connectionStatus
+            ? renderSidebarConnectionStatus({
+                kind: connectionStatus,
+                queuedOutboxCount: props.queuedOutboxCount ?? 0,
+                title: props.lastError ? redactLoginFailureError(props.lastError) : reconnecting,
+                onRetry: props.onRetryConnect,
+              })
+            : html`<openclaw-settings-save-indicator
+                .props=${props.saveIndicator}
+              ></openclaw-settings-save-indicator>`
+        }
         <openclaw-sidebar-build-chip
           .basePath=${props.basePath}
           .gatewayVersion=${props.gatewayVersion || null}

@@ -2,12 +2,14 @@ import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   evaluateContextEngineHostSupport,
+  supportsContextEngineDurableTurnAdvancement,
   type ContextEngineHostSupport,
 } from "../../context-engine/host-compat.js";
 import { ensureContextEnginesInitialized } from "../../context-engine/init.js";
 import { resolveLogicalTurnContextEngines } from "../../context-engine/registry.js";
 import type { ContextEngine, ContextEngineOperation } from "../../context-engine/types.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
+import { runAgentCleanupStep } from "../run-cleanup-timeout.js";
 
 type LogicalTurnSelectionState = "unselected" | "selected" | "started" | "disposed";
 
@@ -62,11 +64,13 @@ export function selectContextEngineForTranscriptHost(params: {
 }
 
 export async function createContextEngineLogicalTurnLease(params: {
+  identity: { runId: string; sessionId: string };
   config?: OpenClawConfig;
   agentDir?: string;
   workspaceDir?: string;
   warn?: (message: string) => void;
 }): Promise<ContextEngineLogicalTurnLease> {
+  const { runId, sessionId } = params.identity;
   ensureContextEnginesInitialized();
   const resolution = await resolveLogicalTurnContextEngines(params.config, {
     agentDir: params.agentDir,
@@ -149,9 +153,7 @@ export async function createContextEngineLogicalTurnLease(params: {
     }
     if (
       selection.requiresDurableCommit &&
-      (effective.engine.info.transcriptSemantics?.turnAdvancementIdempotency !==
-        "atomic-idempotent-v1" ||
-        typeof effective.engine.commitTurn !== "function")
+      !supportsContextEngineDurableTurnAdvancement(effective.engine)
     ) {
       return "atomic idempotent turn advancement is not declared";
     }
@@ -226,8 +228,22 @@ export async function createContextEngineLogicalTurnLease(params: {
         resolution.configured.engine,
         resolution.fallback.engine,
       ]);
+      // Dispose instances in parallel so their deadlines do not stack. The
+      // shared helper records each failure before one-shot cleanup checks ownership.
       const disposeEngines = async () => {
-        await Promise.allSettled([...engines].map(async (engine) => await engine.dispose?.()));
+        await Promise.allSettled(
+          [...engines].map((engine) =>
+            runAgentCleanupStep({
+              runId,
+              sessionId,
+              step: "context-engine-dispose",
+              log: { warn: params.warn ?? console.warn },
+              cleanup: async () => {
+                await engine.dispose?.();
+              },
+            }),
+          ),
+        );
       };
       if (disposalHolds.size > 0) {
         void Promise.allSettled(disposalHolds).then(disposeEngines);

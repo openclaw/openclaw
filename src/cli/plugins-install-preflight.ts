@@ -13,8 +13,11 @@ import { resolvePluginInstallSourcePlan } from "./plugin-install-plan.js";
 
 export type RunPluginInstallCommandParams = {
   raw: string;
+  allowInstallPolicyWarningPrompt: boolean;
   opts: InstallSafetyOverrides & {
-    acknowledgeClawHubRisk?: boolean;
+    acceptCapabilities?: boolean;
+    acknowledgeInstallPolicyWarning?: boolean;
+    dangerouslyForceUnsafeInstall?: boolean;
     expectedIntegrity?: string;
     expectedPluginId?: string;
     force?: boolean;
@@ -25,6 +28,8 @@ export type RunPluginInstallCommandParams = {
   invalidateRuntimeCache?: boolean;
   clawManaged?: boolean;
   runtime?: RuntimeEnv;
+  /** Synchronous authority guard at the final plugin/config mutation. */
+  beforePersistentApply?: () => void;
 };
 
 type ResolvedPluginInstallSourcePlan = Extract<

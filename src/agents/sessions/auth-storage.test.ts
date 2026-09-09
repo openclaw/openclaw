@@ -2,6 +2,10 @@
 import fs from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import {
+  AuthStorage as PublicAuthStorage,
+  ModelRegistry as PublicModelRegistry,
+} from "openclaw/plugin-sdk/agent-sessions";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const providerOAuthMocks = vi.hoisted(() => ({
@@ -246,11 +250,70 @@ describe("SQLite auth storage", () => {
       },
     });
 
-    await expect(storage.getApiKey("test-oauth")).rejects.toThrow(
-      "requires legacy credential migration",
+    // The store already owns this profile, so a retired file appearing mid-call is
+    // leftover bytes: discarding a completed refresh over it would strand the agent
+    // on an expired token. Doctor never overwrites a usable stored credential.
+    await expect(storage.getApiKey("test-oauth")).resolves.toBe("not-a-real");
+    expect(
+      loadPersistedAuthProfileStore(agentDir)?.profiles["test-oauth:default"],
+    ).not.toMatchObject({ expires: 1 });
+  });
+
+  it("keeps stored OAuth identity fields through the published agent sessions SDK", async () => {
+    const agentDir = makeAgentDir();
+    writePersistedAuthProfileStoreRaw(
+      {
+        version: 1,
+        profiles: {
+          "test-oauth:default": {
+            type: "oauth",
+            provider: "test-oauth",
+            access: "fake-expired-access",
+            refresh: "fake-refresh",
+            expires: 1,
+            accountId: "fake-account-id",
+            email: "fake-user@example.com",
+            subscriptionType: "max",
+            rateLimitTier: "default_max_20x",
+          },
+        },
+      },
+      agentDir,
     );
+    const storage = PublicAuthStorage.forAgent(agentDir);
+    PublicModelRegistry.inMemory(storage).registerProvider("test-oauth", {
+      oauth: {
+        name: "Test OAuth",
+        async login() {
+          throw new Error("not used");
+        },
+        async refreshToken() {
+          return {
+            access: "fake-fresh-access",
+            refresh: "fake-rotated-refresh",
+            expires: Date.now() + 60_000,
+          };
+        },
+        getApiKey(credentials: { access: string }) {
+          return credentials.access;
+        },
+      },
+    });
+
+    await expect(storage.getApiKey("test-oauth")).resolves.toBe("fake-fresh-access");
     expect(loadPersistedAuthProfileStore(agentDir)?.profiles["test-oauth:default"]).toMatchObject({
-      expires: 1,
+      type: "oauth",
+      provider: "test-oauth",
+      access: "fake-fresh-access",
+      refresh: "fake-rotated-refresh",
+      accountId: "fake-account-id",
+      email: "fake-user@example.com",
+      subscriptionType: "max",
+      rateLimitTier: "default_max_20x",
+    });
+    expect(storage.get("test-oauth")).toMatchObject({
+      accountId: "fake-account-id",
+      email: "fake-user@example.com",
     });
   });
 
@@ -291,9 +354,9 @@ describe("SQLite auth storage", () => {
     });
     expect(fs.existsSync(legacyPath)).toBe(false);
     fs.writeFileSync(legacyPath, '{"openai":{"key":"fake-late"}}\n');
-    await expect(storage.getApiKey("openai")).rejects.toThrow(
-      "requires legacy credential migration",
-    );
+    // Never read the retired file, but keep serving the migrated store beside it.
+    await expect(storage.getApiKey("openai")).resolves.toBe("fake-openai-key");
+    expect(fs.existsSync(legacyPath)).toBe(true);
   });
 
   it("blocks ambient fallback when the compatibility backend cannot materialize SQLite refs", async () => {
@@ -557,7 +620,7 @@ describe("SQLite auth storage", () => {
     );
   });
 
-  it("serializes asynchronous OAuth refreshes across SQLite-backed instances", async () => {
+  it("fails closed for an identityless SQLite peer until the owner commits its rotation", async () => {
     const agentDir = makeAgentDir();
     writePersistedAuthProfileStoreRaw(
       {
@@ -608,9 +671,10 @@ describe("SQLite auth storage", () => {
 
     await expect(
       Promise.all([left.getApiKey("test-oauth"), right.getApiKey("test-oauth")]),
-    ).resolves.toEqual(["fake-fresh-access", "fake-fresh-access"]);
+    ).resolves.toEqual(["fake-fresh-access", undefined]);
     expect(refreshCalls).toBe(1);
     expect(maxActiveRefreshes).toBe(1);
+    await expect(right.getApiKey("test-oauth")).resolves.toBe("fake-fresh-access");
   });
 
   it("falls back to environment auth when a stored token is expired", async () => {

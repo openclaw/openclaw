@@ -2,18 +2,20 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it, vi } from "vitest";
 import { FAILOVER_REASONS } from "../../packages/gateway-protocol/src/failover-reasons.js";
-import { saveTaskRegistryStateToSqlite } from "../tasks/task-registry.store.sqlite.js";
 import type { TaskRecord } from "../tasks/task-registry.types.js";
 import { resetTaskRegistryForTests } from "../tasks/task-runtime.test-helpers.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { seedTaskRegistryRowsForTests } from "../test-utils/task-registry-sqlite.js";
 import type { CronRunLogEntry } from "./run-log-types.js";
 import { CronService } from "./service.js";
 import { createNoopLogger } from "./service.test-harness.js";
 import { cronStoreKey } from "./store/key.js";
 import {
+  cronQuietTriggerTaskDetail,
   cronRunLogEntryToTaskDetail,
   cronRunStatusToTaskStatus,
   cronTaskRecordToRunLogEntry,
+  cronTaskRecordToTriggerEval,
   parseCronRunLogEntryObject,
 } from "./task-run-detail.js";
 import { cronRunLogEntryFromEvent } from "./task-run-event-codec.js";
@@ -96,6 +98,25 @@ describe("cron task run history", () => {
       }),
     ).toBe("failed");
   });
+
+  it.each([
+    { completionStatus: "succeeded" as const, expected: "succeeded" },
+    { completionStatus: "failed" as const, expected: "failed" },
+    { completionStatus: "unknown" as const, expected: "failed" },
+  ])(
+    "maps execution ok with completion $completionStatus to task status $expected",
+    ({ completionStatus, expected }) => {
+      expect(
+        cronRunStatusToTaskStatus({
+          ts: 100,
+          jobId: JOB_ID,
+          action: "finished",
+          status: "ok",
+          completionStatus,
+        }),
+      ).toBe(expected);
+    },
+  );
 
   it("reads executions produced by the cron service from the ledger", async () => {
     await withOpenClawTestState(
@@ -209,6 +230,7 @@ describe("cron task run history", () => {
             jobId: JOB_ID,
             action: "finished",
             status: "ok",
+            completionStatus: "succeeded",
             summary: "delivered\n  needle",
             diagnostics: {
               summary: "healthy",
@@ -252,6 +274,7 @@ describe("cron task run history", () => {
             jobId: JOB_ID,
             action: "finished",
             status: "error",
+            completionStatus: "failed",
             error: "provider overloaded",
             errorReason: "overloaded",
             deliveryStatus: "not-delivered",
@@ -267,6 +290,7 @@ describe("cron task run history", () => {
             jobId: JOB_ID,
             action: "finished",
             status: "error",
+            completionStatus: "failed",
             error: "cron: job execution timed out",
             errorReason: "timeout",
             runId: "manual:history:timeout",
@@ -279,6 +303,7 @@ describe("cron task run history", () => {
             jobId: JOB_ID,
             action: "finished",
             status: "skipped",
+            completionStatus: "failed",
             error: "trigger condition not met",
             summary: "",
             runId: "manual:history:skipped",
@@ -287,12 +312,11 @@ describe("cron task run history", () => {
             nextRunAtMs: 5_000,
           },
         ];
-        saveTaskRegistryStateToSqlite({
-          tasks: new Map(
+        seedTaskRegistryRowsForTests(
+          new Map(
             entries.map((entry, index) => [`task-${index}`, taskFromEntry(entry, index, storeKey)]),
-          ),
-          deliveryStates: new Map(),
-        });
+          ).values(),
+        );
         const ledger = readCronTaskRunHistoryPage({ storeKey, jobId: JOB_ID, limit: 50 });
         const expected = entries
           .map((entry, index) => cronTaskRecordToRunLogEntry(taskFromEntry(entry, index, storeKey)))
@@ -303,6 +327,12 @@ describe("cron task run history", () => {
           "error",
           "error",
           "ok",
+        ]);
+        expect(ledger.entries.map((entry) => entry.completionStatus)).toEqual([
+          "failed",
+          "failed",
+          "failed",
+          "succeeded",
         ]);
       },
     );
@@ -342,8 +372,8 @@ describe("cron task run history", () => {
             durationMs: 0,
           },
         ];
-        saveTaskRegistryStateToSqlite({
-          tasks: new Map([
+        seedTaskRegistryRowsForTests(
+          new Map([
             ...entries.map(
               (entry, index) => [`task-${index}`, taskFromEntry(entry, index, storeKey)] as const,
             ),
@@ -373,9 +403,8 @@ describe("cron task run history", () => {
                 detail: { kind: "cron-run", status: "ok" },
               },
             ] as const,
-          ]),
-          deliveryStates: new Map(),
-        });
+          ]).values(),
+        );
 
         expect(
           readCronTaskRunHistoryPage({ storeKey, jobId: JOB_ID, limit: 1, offset: 1 }),
@@ -420,13 +449,12 @@ describe("cron task run history", () => {
           status: "error",
           error: "store b",
         };
-        saveTaskRegistryStateToSqlite({
-          tasks: new Map([
+        seedTaskRegistryRowsForTests(
+          new Map([
             ["store-a", { ...taskFromEntry(entryA, 1, storeA), taskId: "store-a" }],
             ["store-b", { ...taskFromEntry(entryB, 2, storeB), taskId: "store-b" }],
-          ]),
-          deliveryStates: new Map(),
-        });
+          ]).values(),
+        );
 
         expect(readCronTaskRunHistoryPage({ storeKey: storeA, jobId: JOB_ID })).toMatchObject({
           entries: [expect.objectContaining({ summary: "store a" })],
@@ -442,27 +470,102 @@ describe("cron task run history", () => {
     );
   });
 
-  it("allowlists the legacy wire record", () => {
+  it.each([
+    { status: "ok", expectedStatus: "ok" },
+    { status: "error", expectedStatus: "error" },
+    { status: "skipped", expectedStatus: "skipped" },
+    { status: "invalid", expectedStatus: undefined },
+    { status: null, expectedStatus: undefined },
+    { status: undefined, expectedStatus: undefined },
+  ])("allowlists the legacy wire record with status $status", ({ status, expectedStatus }) => {
     const storeKey = "/internal/cron/store";
     const task = taskFromEntry(
       { ts: 100, jobId: JOB_ID, action: "finished", status: "ok" },
       1,
       storeKey,
     );
+    task.error = "legacy error";
+    task.terminalSummary = "legacy summary";
     task.detail = {
-      ...(task.detail as Record<string, TaskRecord["detail"]>),
+      kind: "cron-run",
+      ...(status === undefined ? {} : { status }),
+      storeKey,
       internalFutureField: "secret",
       triggerState: { secret: true },
       delivery: "malformed",
       failureNotificationDelivery: { status: "invalid", internal: "secret" },
     };
+    Object.freeze(task.detail);
+    Object.freeze(task);
     const entry = cronTaskRecordToRunLogEntry(task);
     expect(entry).not.toBeNull();
+    expect(entry?.status).toBe(expectedStatus);
+    for (const key of ["delivered", "deliveryStatus", "deliveryError", "sessionId", "sessionKey"]) {
+      expect(Object.hasOwn(entry ?? {}, key)).toBe(true);
+    }
     expect(Object.hasOwn(entry ?? {}, "storeKey")).toBe(false);
     expect(Object.hasOwn(entry ?? {}, "internalFutureField")).toBe(false);
     expect(Object.hasOwn(entry ?? {}, "triggerState")).toBe(false);
+    expect(entry).toMatchObject({ error: "legacy error", summary: "legacy summary" });
     expect(entry?.delivery).toBeUndefined();
     expect(entry?.failureNotificationDelivery).toBeUndefined();
+  });
+
+  it.each([
+    { status: "error", delivered: undefined, deliveryStatus: undefined, expected: "failed" },
+    { status: "ok", delivered: undefined, deliveryStatus: "delivered", expected: "succeeded" },
+    { status: "ok", delivered: true, deliveryStatus: undefined, expected: "succeeded" },
+    { status: "ok", delivered: undefined, deliveryStatus: "not-requested", expected: "succeeded" },
+    { status: "ok", delivered: undefined, deliveryStatus: "not-delivered", expected: "unknown" },
+    { status: "ok", delivered: undefined, deliveryStatus: "unknown", expected: "unknown" },
+    { status: "ok", delivered: undefined, deliveryStatus: undefined, expected: "unknown" },
+  ] as const)(
+    "derives legacy $status/$deliveryStatus completion as $expected",
+    ({ status, delivered, deliveryStatus, expected }) => {
+      expect(
+        parseCronRunLogEntryObject({
+          ts: 100,
+          jobId: JOB_ID,
+          action: "finished",
+          status,
+          ...(delivered === undefined ? {} : { delivered }),
+          ...(deliveryStatus === undefined ? {} : { deliveryStatus }),
+        })?.completionStatus,
+      ).toBe(expected);
+    },
+  );
+
+  it("normalizes invalid completion status from immutable stored facts", () => {
+    expect(
+      parseCronRunLogEntryObject({
+        ts: 100,
+        jobId: JOB_ID,
+        action: "finished",
+        status: "ok",
+        deliveryStatus: "not-delivered",
+        completionStatus: "partial",
+      })?.completionStatus,
+    ).toBe("unknown");
+  });
+
+  it("keeps quiet-trigger recovery detail out of run history", () => {
+    const task = taskFromEntry(
+      { ts: 100, jobId: JOB_ID, action: "finished", status: "ok" },
+      1,
+      "/internal/cron/store",
+    );
+    task.detail = cronQuietTriggerTaskDetail("/internal/cron/store", {
+      fired: false,
+      stateChanged: true,
+      state: { ready: false },
+    });
+
+    expect(cronTaskRecordToTriggerEval(task)).toEqual({
+      fired: false,
+      stateChanged: true,
+      state: { ready: false },
+    });
+    expect(cronTaskRecordToRunLogEntry(task)).toBeNull();
   });
 
   it("locks the serialized detail shape: kind first, status second", () => {
@@ -522,6 +625,7 @@ describe("cron task run history", () => {
     ).toEqual({
       ...base,
       status: undefined,
+      completionStatus: "unknown",
       error: undefined,
       errorReason: undefined,
       summary: undefined,
@@ -536,13 +640,18 @@ describe("cron task run history", () => {
       usage: undefined,
     });
     expect(parseCronRunLogEntryObject({ ...base, usage: [] })?.usage).toBeUndefined();
-    expect(parseCronRunLogEntryObject({ ...base, usage: { input_tokens: 0 } })?.usage).toEqual({
+    expect(
+      parseCronRunLogEntryObject({ ...base, usage: { input_tokens: 0, future_tokens: 1 } })?.usage,
+    ).toEqual({
       input_tokens: 0,
       output_tokens: undefined,
       total_tokens: undefined,
       cache_read_tokens: undefined,
       cache_write_tokens: undefined,
     });
+    expect(
+      parseCronRunLogEntryObject({ ...base, usage: { future_tokens: 1 } })?.usage,
+    ).toBeUndefined();
     expect(parseCronRunLogEntryObject({ ...base, ts: MAX_DATE_TIMESTAMP_MS })).not.toBeNull();
     expect(parseCronRunLogEntryObject({ ...base, ts: MAX_DATE_TIMESTAMP_MS + 1 })).toBeNull();
   });

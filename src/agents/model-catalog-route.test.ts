@@ -1,13 +1,19 @@
-import { describe, expect, it } from "vitest";
+import { expectDefined } from "@openclaw/normalization-core";
+import { describe, expect, it, vi } from "vitest";
+import { resolveThinkingProfile } from "../auto-reply/thinking.js";
+import type { ModelDefinitionConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProviderModelRouteCandidate } from "../plugin-sdk/provider-model-types.js";
+import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
+import * as activeThinkingPolicy from "../plugins/provider-thinking-active.js";
+import { prepareModelCatalogThinkingPolicies } from "../plugins/provider-thinking.js";
+import type { ProviderDefaultThinkingPolicyContext } from "../plugins/provider-thinking.types.js";
 import {
-  findModelCatalogRouteDonor,
   type ModelCatalogRoutePolicy,
   projectModelCatalogEntryForRoute,
   resolveConfiguredModelCatalogOverrides,
 } from "./model-catalog-route.js";
-import type { ModelCatalogEntry } from "./model-catalog.types.js";
+import type { ModelCatalogEntry, ModelCatalogSnapshot } from "./model-catalog.types.js";
 
 const matchesRoute = (entry: ModelCatalogEntry, route: ProviderModelRouteCandidate) =>
   entry.api === route.api && entry.baseUrl === route.baseUrl;
@@ -39,6 +45,7 @@ const platformEntry: ModelCatalogEntry = {
   contextWindow: 1_000_000,
   contextTokens: 272_000,
   reasoning: true,
+  thinkingLevelMap: { off: "none", xhigh: "xhigh", max: "max" },
   input: ["text", "image"],
   params: { platformOnly: true },
   compat: { supportsTools: false },
@@ -53,38 +60,31 @@ const chatGPTEntry: ModelCatalogEntry = {
   contextWindow: 400_000,
   contextTokens: 300_000,
   reasoning: true,
+  thinkingLevelMap: { off: null, xhigh: null, max: "max" },
   input: ["text"],
   params: { chatGPTOnly: true },
   compat: { supportsTools: true },
 };
 
 describe("projectModelCatalogEntryForRoute", () => {
-  it("finds the exact selected-route donor regardless of catalog order", () => {
-    expect(
-      findModelCatalogRouteDonor({
-        entry: platformEntry,
-        route: chatGPTRoute,
-        policy: routePolicy,
-        catalog: [platformEntry, chatGPTEntry],
-      }),
-    ).toBe(chatGPTEntry);
-  });
-
-  it("prefers the physical route donor over a matching merged logical row", () => {
-    const logicalEntry: ModelCatalogEntry = {
+  it.each([
+    platformEntry,
+    {
       ...chatGPTEntry,
       compat: { supportsTools: false },
       params: { logicalOnly: true },
-    };
-
-    expect(
-      findModelCatalogRouteDonor({
-        entry: logicalEntry,
-        route: chatGPTRoute,
-        policy: routePolicy,
-        catalog: [platformEntry, chatGPTEntry],
-      }),
-    ).toBe(chatGPTEntry);
+    },
+  ])("prefers the exact physical donor over the $api row", (entry) => {
+    const { entry: publicEntry, runtimeEntry } = projectModelCatalogEntryForRoute({
+      entry,
+      projection: { kind: "selected", route: chatGPTRoute, policy: routePolicy },
+      catalog: [platformEntry, chatGPTEntry],
+    });
+    expect(runtimeEntry.params).toEqual({ chatGPTOnly: true });
+    expect(runtimeEntry.compat).toEqual({ supportsTools: true });
+    expect(runtimeEntry.contextWindow).toBe(400_000);
+    expect(publicEntry).not.toHaveProperty("params");
+    expect(publicEntry).not.toHaveProperty("compat");
   });
 
   it("projects one physical row onto the selected route capabilities", () => {
@@ -93,7 +93,7 @@ describe("projectModelCatalogEntryForRoute", () => {
         entry: platformEntry,
         projection: { kind: "selected", route: platformRoute, policy: routePolicy },
         catalog: [platformEntry, chatGPTEntry],
-      }),
+      }).entry,
     ).toEqual({
       provider: "openai",
       id: "gpt-5.5",
@@ -103,6 +103,7 @@ describe("projectModelCatalogEntryForRoute", () => {
       contextWindow: 1_000_000,
       contextTokens: 272_000,
       reasoning: true,
+      thinkingLevelMap: { off: "none", xhigh: "xhigh", max: "max" },
       input: ["text", "image"],
     });
 
@@ -111,7 +112,7 @@ describe("projectModelCatalogEntryForRoute", () => {
         entry: platformEntry,
         projection: { kind: "selected", route: chatGPTRoute, policy: routePolicy },
         catalog: [platformEntry, chatGPTEntry],
-      }),
+      }).entry,
     ).toEqual({
       provider: "openai",
       id: "gpt-5.5",
@@ -121,6 +122,7 @@ describe("projectModelCatalogEntryForRoute", () => {
       contextWindow: 400_000,
       contextTokens: 300_000,
       reasoning: true,
+      thinkingLevelMap: { off: null, xhigh: null, max: "max" },
       input: ["text"],
     });
   });
@@ -131,7 +133,7 @@ describe("projectModelCatalogEntryForRoute", () => {
         entry: platformEntry,
         projection: { kind: "selected", route: chatGPTRoute, policy: routePolicy },
         catalog: [platformEntry],
-      }),
+      }).entry,
     ).toEqual({
       provider: "openai",
       id: "gpt-5.5",
@@ -141,12 +143,89 @@ describe("projectModelCatalogEntryForRoute", () => {
     });
   });
 
+  it.each([
+    {
+      name: "platform",
+      route: platformRoute,
+      donor: true,
+      expected: "high",
+      owner: "fixture-platform",
+    },
+    {
+      name: "subscription",
+      route: chatGPTRoute,
+      donor: true,
+      expected: "ultra",
+      owner: "fixture-subscription",
+    },
+    { name: "missing donor", route: chatGPTRoute, donor: false, expected: "off", owner: undefined },
+    { name: "unresolved", route: undefined, donor: true, expected: "off", owner: undefined },
+  ])(
+    "retains only the $name route's prepared thinking owner",
+    ({ route, donor, expected, owner }) => {
+      const resolvePolicy = vi.fn((context: ProviderDefaultThinkingPolicyContext) =>
+        context.provider === "fixture-platform"
+          ? ({ levels: [{ id: "off" }, { id: "high" }], defaultLevel: "high" } as const)
+          : ({
+              levels: [{ id: "off" }, { id: "max" }, { id: "ultra" }],
+              defaultLevel: "ultra",
+            } as const),
+      );
+      const entry = { ...platformEntry, thinkingPolicyProvider: "fixture-platform" };
+      const catalog: ModelCatalogSnapshot = {
+        entries: [entry],
+        routeVariants: [
+          entry,
+          ...(donor ? [{ ...chatGPTEntry, thinkingPolicyProvider: "fixture-subscription" }] : []),
+        ],
+      };
+      prepareModelCatalogThinkingPolicies({
+        catalog,
+        metadataSnapshot: createPluginMetadataSnapshotFixture(),
+        providers: ["fixture-platform", "fixture-subscription"].map((id) => ({
+          provider: { id, resolveThinkingProfile: resolvePolicy },
+        })),
+      });
+      const ambient = vi
+        .spyOn(activeThinkingPolicy, "resolveActiveProviderThinkingProfile")
+        .mockReturnValue({ levels: [{ id: "off" }], defaultLevel: "off" });
+      try {
+        const { entry: projected } = projectModelCatalogEntryForRoute({
+          entry: expectDefined(catalog.entries[0], "prepared route test entry"),
+          projection: route
+            ? { kind: "selected", route, policy: routePolicy }
+            : { kind: "unresolved", policy: routePolicy },
+          catalog: catalog.routeVariants,
+        });
+        expect(
+          resolveThinkingProfile({
+            provider: projected.provider,
+            model: projected.id,
+            catalog: [projected],
+            agentRuntime: "codex",
+            providerPolicySource: "active",
+          }).defaultLevel,
+        ).toBe(expected);
+        if (owner) {
+          expect(resolvePolicy).toHaveBeenCalledWith(expect.objectContaining({ provider: owner }));
+          expect(ambient).not.toHaveBeenCalled();
+        } else {
+          expect(resolvePolicy).not.toHaveBeenCalled();
+          expect(projected).not.toHaveProperty("thinkingPolicyProvider");
+          expect(ambient).toHaveBeenCalledOnce();
+        }
+      } finally {
+        ambient.mockRestore();
+      }
+    },
+  );
+
   it("returns the physical row unchanged for unmanaged models", () => {
     expect(
       projectModelCatalogEntryForRoute({
         entry: platformEntry,
         projection: { kind: "unmanaged" },
-      }),
+      }).entry,
     ).toBe(platformEntry);
   });
 
@@ -155,12 +234,12 @@ describe("projectModelCatalogEntryForRoute", () => {
       projectModelCatalogEntryForRoute({
         entry: platformEntry,
         projection: { kind: "unresolved", policy: routePolicy },
-      }),
+      }).entry,
     ).toEqual({ provider: "openai", id: "gpt-5.5", name: "GPT-5.5" });
   });
 
   it("does not copy private route policy facts into the catalog row", () => {
-    const projected = projectModelCatalogEntryForRoute({
+    const { entry: projected } = projectModelCatalogEntryForRoute({
       entry: platformEntry,
       projection: { kind: "selected", route: chatGPTRoute, policy: routePolicy },
       catalog: [chatGPTEntry],
@@ -177,7 +256,13 @@ describe("projectModelCatalogEntryForRoute", () => {
         providers: {
           openai: {
             baseUrl: "https://api.openai.com/v1",
-            models: [{ id: "gpt-5.5", contextTokens: 160_000 }],
+            models: [
+              {
+                id: "gpt-5.5",
+                contextTokens: 160_000,
+                thinkingLevelMap: { off: "none", max: null },
+              },
+            ],
           },
         },
       },
@@ -190,7 +275,7 @@ describe("projectModelCatalogEntryForRoute", () => {
         projection: { kind: "selected", route: chatGPTRoute, policy: routePolicy },
         catalog: [platformEntry],
         ...(overrides ? { overrides } : {}),
-      }),
+      }).entry,
     ).toEqual({
       provider: "openai",
       id: "gpt-5.5",
@@ -198,6 +283,48 @@ describe("projectModelCatalogEntryForRoute", () => {
       api: "openai-chatgpt-responses",
       baseUrl: "https://chatgpt.com/backend-api/codex",
       contextTokens: 160_000,
+      thinkingLevelMap: { off: "none", max: null },
+    });
+  });
+
+  it.each([
+    ["gpt-5.5", false],
+    ["CaseModel", true],
+    ["casemodel", false],
+    ["casemodel@variant", true],
+  ] as const)("keeps exact configured overrides authoritative for %s", (id, reasoning) => {
+    const cfg: OpenClawConfig = {
+      models: {
+        providers: {
+          openai: {
+            baseUrl: platformRoute.baseUrl,
+            models: [
+              "gpt-5.5",
+              "CaseModel",
+              "casemodel",
+              "casemodel@variant",
+            ].map<ModelDefinitionConfig>((modelId, index) => ({
+              id: modelId,
+              name: modelId,
+              reasoning: index % 2 === 1,
+              contextWindow: 32_000,
+              maxTokens: 4096,
+              input: ["text"],
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            })),
+          },
+        },
+      },
+    };
+
+    expect(
+      resolveConfiguredModelCatalogOverrides({ cfg, entry: { ...platformEntry, id } }),
+    ).toEqual({
+      name: id,
+      contextWindow: 32_000,
+      reasoning,
+      configuredReasoning: reasoning,
+      input: ["text"],
     });
   });
 

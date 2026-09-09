@@ -16,7 +16,8 @@ import {
   type MainSessionRecoveryTransitionResult,
 } from "./main-session-recovery-state.js";
 
-type MainSessionRecoveryStoreTarget = {
+export type MainSessionRecoveryStoreTarget = {
+  agentId?: string;
   sessionKey: string;
   storePath: string;
 };
@@ -79,6 +80,7 @@ export async function commitMainSessionRecovery(params: {
     params.scanAliases || reservationCleanup || recoveryAdmission || exactOwnerClaim,
   );
   return await applySessionEntryReplacements<MainSessionRecoveryStoreResult>({
+    agentId: params.target.agentId,
     requireWriteSuccess: params.requireWriteSuccess,
     ...(scansAliases ? {} : { sessionKeys: [params.target.sessionKey] }),
     storePath: params.target.storePath,
@@ -237,7 +239,7 @@ export async function claimMainSessionRecoveryOwner(params: {
     }
     return {
       kind: "claimed",
-      lease: { ...claim.transition.claim, storePath: params.target.storePath },
+      lease: { ...params.target, ...claim.transition.claim },
       entry: claim.entry,
       sessionKey: claim.sessionKey,
     } as const;
@@ -337,38 +339,16 @@ async function releaseMainSessionRecoveryOwnerWithRetries(
   ) {
     return undefined;
   }
-  return { sessionId: entry.sessionId, sessionKey, storePath: lease.storePath };
-}
-
-function scheduleMainSessionRecoveryOwnerRelease(
-  lease: MainSessionRecoveryOwnerLease,
-  onDeferredSuccess?: (
-    pending: MainSessionRecoveryPendingTarget | undefined,
-  ) => void | Promise<void>,
-): void {
-  // A token is process-owned but durably blocks recovery. Keep exact-token
-  // cleanup alive through transient writer outages until release or restart.
-  scheduleMainSessionRecoveryMutation({
-    mutation: () => releaseMainSessionRecoveryOwnerWithRetries(lease),
-    onSuccess:
-      onDeferredSuccess ??
-      (async (pending) => {
-        if (pending) {
-          const { scheduleMainSessionRecoveryPendingTarget } =
-            await import("./main-session-recovery-owner-release.js");
-          scheduleMainSessionRecoveryPendingTarget(pending);
-        }
-      }),
-  });
+  return {
+    agentId: lease.agentId,
+    sessionId: entry.sessionId,
+    sessionKey,
+    storePath: lease.storePath,
+  };
 }
 
 export async function releaseMainSessionRecoveryOwner(
   lease: MainSessionRecoveryOwnerLease | undefined,
-  options?: {
-    onDeferredSuccess?: (
-      pending: MainSessionRecoveryPendingTarget | undefined,
-    ) => void | Promise<void>;
-  },
 ): Promise<MainSessionRecoveryPendingTarget | undefined> {
   if (!lease) {
     return undefined;
@@ -376,7 +356,17 @@ export async function releaseMainSessionRecoveryOwner(
   try {
     return await releaseMainSessionRecoveryOwnerWithRetries(lease);
   } catch (error) {
-    scheduleMainSessionRecoveryOwnerRelease(lease, options?.onDeferredSuccess);
+    // Exact-token cleanup survives transient writer outages without blocking its caller.
+    scheduleMainSessionRecoveryMutation({
+      mutation: () => releaseMainSessionRecoveryOwnerWithRetries(lease),
+      onSuccess: async (pending) => {
+        if (pending) {
+          const { scheduleMainSessionRecoveryPendingTarget } =
+            await import("./main-session-recovery-owner-release.js");
+          scheduleMainSessionRecoveryPendingTarget(pending);
+        }
+      },
+    });
     throw error;
   }
 }

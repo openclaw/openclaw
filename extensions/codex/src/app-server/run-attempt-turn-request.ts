@@ -7,7 +7,12 @@ import {
   createCodexModelCallDiagnosticEmitter,
   utf8JsonByteLength,
 } from "./attempt-diagnostics.js";
+import { assertCodexSessionRuntimeOwnership } from "./binding-connection.js";
+import { prepareCodexWorkspaceReferences } from "./client-runtime.js";
 import { isCodexAppServerIndeterminateRequestCancellationError } from "./client.js";
+import { resolveCodexExplicitSkillInputs } from "./explicit-skill-input.js";
+import { CODEX_INFERENCE_GENERATION_KEY } from "./inference-context.js";
+import { getCodexInferenceThread } from "./inference-routing.js";
 import { assertCodexTurnStartResponse } from "./protocol-validators.js";
 import type { CodexTurnStartResponse } from "./protocol.js";
 import { readCodexRateLimitsRevision } from "./rate-limit-cache.js";
@@ -16,9 +21,12 @@ import {
   withCodexAppServerFastModeServiceTier,
 } from "./run-attempt-lifecycle.js";
 import type { CodexAttemptResources } from "./run-attempt-resources.js";
+import { joinPresentSections } from "./run-attempt-state.js";
 import type { CodexAttemptTurnState } from "./run-attempt-turn-state.js";
 import { buildTurnStartParams } from "./thread-lifecycle.js";
+import { recordCodexTrajectoryContext } from "./trajectory.js";
 import { buildCodexUserPromptMessage } from "./transcript-mirror.js";
+import { buildCodexParentLocalInstructions } from "./turn-params.js";
 
 export async function prepareCodexAttemptTurnRequest(
   resources: CodexAttemptResources,
@@ -31,7 +39,7 @@ export async function prepareCodexAttemptTurnRequest(
   const { runtime, attemptTools, hookContextWindowFields, workspaceBootstrapContext } = context;
   const { connection, runtimeParams, effectiveRuntimeProviderId, effectiveRuntimeModelId } =
     runtime;
-  const { tools } = attemptTools;
+  const { tools, toolBridge } = attemptTools;
   const {
     params,
     usesSupervisionConnection,
@@ -42,6 +50,12 @@ export async function prepareCodexAttemptTurnRequest(
     runAbortController,
   } = connection;
   const { state } = turnRuntime;
+  const explicitSkillInputs = await resolveCodexExplicitSkillInputs({
+    client: resourceState.client,
+    cwd: resourceState.codexExecutionCwd,
+    selections: runtimeParams.explicitSkillSelections,
+    signal: runAbortController.signal,
+  });
   const buildCodexModelInputMessages = () => [
     ...prompt.codexModelInputHistoryMessages,
     buildCodexUserPromptMessage({ ...runtimeParams, prompt: turnState.codexTurnPromptText }),
@@ -90,33 +104,131 @@ export async function prepareCodexAttemptTurnRequest(
     error.name = "AbortError";
     throw error;
   };
+  const prepareWorkspaceReferences = () => {
+    const references = prepareCodexWorkspaceReferences(
+      resourceState.client,
+      resourceState.thread.threadId,
+      workspaceBootstrapContext.promptContext,
+    );
+    prompt.refreshWorkspaceReferences(references.include);
+    return references;
+  };
   const startCodexTurn = async (): Promise<CodexTurnStartResponse> => {
     const activeTurnRoute = (await ensureCurrentThreadRoute()) as {
       armTurn(): void;
       cancelTurn(): Promise<void>;
     };
+    // Resume may observe a newer native tuple after host auth was prepared. Keep
+    // that truthful binding, but never infer with credentials selected for the old tuple.
+    assertCodexSessionRuntimeOwnership(
+      resourceState.thread,
+      params.expectedSessionRuntimeOwnership,
+    );
     const turnAppServer = withCodexAppServerFastModeServiceTier(
       connection.mutable.pluginAppServer,
       runtimeParams,
     );
     connection.mutable.pluginAppServer = turnAppServer;
-    const turnStartParams = buildTurnStartParams(runtimeParams, {
-      threadId: resourceState.thread.threadId,
-      cwd: resourceState.codexExecutionCwd,
-      appServer: turnAppServer,
-      promptText: turnState.codexTurnPromptText,
-      sandboxPolicy: resourceState.codexSandboxPolicy,
-      environmentSelection: resourceState.codexEnvironmentSelection,
-      clearInheritedServiceTier: resourceState.thread.clearInheritedServiceTier,
-      ...(usesSupervisionConnection
-        ? {}
-        : { model: resourceState.thread.model, modelProvider: resourceState.thread.modelProvider }),
-      turnScopedDeveloperInstructions: workspaceBootstrapContext.turnScopedDeveloperInstructions,
-      skillsCollaborationInstructions: context.skillsCollaborationInstructions,
-      memoryCollaborationInstructions: workspaceBootstrapContext.memoryCollaborationInstructions,
-      preserveNativeTurnSettings: usesSupervisionConnection,
-    });
+    const references = prepareWorkspaceReferences();
+    const referencesRetained = turnState.codexTurnPromptText.includes(
+      workspaceBootstrapContext.promptContext ?? "",
+    );
+    const inferenceRoute = usesSupervisionConnection
+      ? undefined
+      : getCodexInferenceThread(resourceState.client, resourceState.thread.threadId);
+    const turnStartParams = buildTurnStartParams(
+      {
+        ...runtimeParams,
+        images: [...prompt.contextImages, ...(runtimeParams.images ?? [])],
+      },
+      {
+        threadId: resourceState.thread.threadId,
+        cwd: resourceState.codexExecutionCwd,
+        appServer: turnAppServer,
+        promptText: turnState.codexTurnPromptText,
+        explicitSkillInputs,
+        sandboxPolicy: resourceState.codexSandboxPolicy,
+        environmentSelection: resourceState.codexEnvironmentSelection,
+        clearInheritedServiceTier: resourceState.thread.clearInheritedServiceTier,
+        ...(usesSupervisionConnection
+          ? {}
+          : {
+              model: resourceState.thread.model,
+              modelProvider: resourceState.thread.modelProvider,
+            }),
+        turnScopedDeveloperInstructions: workspaceBootstrapContext.turnScopedDeveloperInstructions,
+        skillsCollaborationInstructions: context.skillsCollaborationInstructions,
+        memoryCollaborationInstructions: workspaceBootstrapContext.memoryCollaborationInstructions,
+        preserveNativeTurnSettings: usesSupervisionConnection,
+        parentLocalEgress: inferenceRoute !== undefined,
+        messageToolAvailable: toolBridge.availableTools.some((tool) => tool.name === "message"),
+        requireExplicitMessageTarget: attemptTools.requireExplicitMessageTarget,
+        sessionStatusAvailable: toolBridge.availableTools.some(
+          (tool) => tool.name === "session_status",
+        ),
+      },
+    );
+    if (inferenceRoute) {
+      prompt.setParentLocalEgress();
+      resourceState.releaseInferenceContext?.();
+      const inferenceThread = resourceState.thread;
+      const registration = inferenceRoute.context.register({
+        threadId: resourceState.thread.threadId,
+        text:
+          buildCodexParentLocalInstructions(runtimeParams, {
+            turnScopedDeveloperInstructions:
+              workspaceBootstrapContext.turnScopedDeveloperInstructions,
+            skillsCollaborationInstructions: context.skillsCollaborationInstructions,
+            memoryCollaborationInstructions:
+              workspaceBootstrapContext.memoryCollaborationInstructions,
+          }) ?? "",
+        signal: runAbortController.signal,
+        assertCurrent: () => {
+          params.hostCapabilities.assertActive();
+          connection.assertCurrent();
+          if (
+            resourceState.thread !== inferenceThread ||
+            getCodexInferenceThread(resourceState.client, inferenceThread.threadId) !==
+              inferenceRoute
+          ) {
+            throw new Error("Codex inference thread ownership changed");
+          }
+          inferenceThread.liveThreadOwnership?.assertCurrent();
+        },
+      });
+      resourceState.releaseInferenceContext = registration.release;
+      turnStartParams.responsesapiClientMetadata = {
+        ...turnStartParams.responsesapiClientMetadata,
+        [CODEX_INFERENCE_GENERATION_KEY]: registration.generation,
+      };
+    } else if (!usesSupervisionConnection) {
+      embeddedAgentLog.warn(
+        "Codex parent-local egress workaround is unavailable for this connection or native network profile; legacy collaboration delivery is not guaranteed.",
+      );
+      prompt.systemPromptReport.source = "estimate";
+      prompt.systemPromptReport.injectedWorkspaceFiles =
+        prompt.systemPromptReport.injectedWorkspaceFiles.map((file) =>
+          ["SOUL.MD", "IDENTITY.MD", "USER.MD"].includes(file.name.toUpperCase())
+            ? {
+                ...file,
+                injectionStatus: "native_unverified",
+                injectedChars: null,
+                truncated: null,
+              }
+            : file,
+        );
+    }
     codexModelCallDiagnostics.setRequestPayloadBytes(utf8JsonByteLength(turnStartParams));
+    recordCodexTrajectoryContext(resources.trajectoryRecorder, {
+      attempt: params,
+      cwd: connection.effectiveCwd,
+      developerInstructions: joinPresentSections(
+        buildRenderedCodexDeveloperInstructions(),
+        attemptTools.configuredMcp?.diagnosticNotice,
+      ),
+      prompt: turnState.codexTurnPromptText,
+      tools: toolBridge.availableSpecs,
+    });
     state.latestStartupErrorNotification = undefined;
     state.rateLimitsRevisionBeforeLastTurnStart = readCodexRateLimitsRevision(resourceState.client);
     activeTurnRoute.armTurn();
@@ -125,7 +237,7 @@ export async function prepareCodexAttemptTurnRequest(
       data: {
         phase: "turn_starting",
         threadId: resourceState.thread.threadId,
-        model: turnStartParams.model,
+        model: params.modelId,
         effort: turnStartParams.effort,
         collaborationEffort: turnStartParams.collaborationMode?.settings.reasoning_effort,
         serviceTier: turnStartParams.serviceTier,
@@ -137,9 +249,15 @@ export async function prepareCodexAttemptTurnRequest(
         await resourceState.client.request("turn/start", turnStartParams, {
           timeoutMs: params.timeoutMs,
           signal: runAbortController.signal,
+          assertCurrent: connection.assertCurrent,
         }),
       );
       acceptedTurnId = startedTurn.turn.id;
+      connection.assertCurrent();
+      // Fitting may drop or truncate references; only acknowledge the complete block.
+      if (referencesRetained) {
+        references.accepted();
+      }
       throwIfTurnStartAcceptedAfterAbort();
       return startedTurn;
     } catch (error) {
@@ -188,6 +306,7 @@ export async function prepareCodexAttemptTurnRequest(
       );
     }
   }
+  prepareWorkspaceReferences();
   const buildLlmInputEvent = () => ({
     runId: params.runId,
     sessionId: params.sessionId,
@@ -200,7 +319,7 @@ export async function prepareCodexAttemptTurnRequest(
     systemPrompt: buildRenderedCodexDeveloperInstructions(),
     prompt: turnState.codexTurnPromptText,
     historyMessages: prompt.codexModelInputHistoryMessages,
-    imagesCount: params.images?.length ?? 0,
+    imagesCount: prompt.contextImages.length + (params.images?.length ?? 0),
     tools,
   });
   return { codexModelCallDiagnostics, startCodexTurn, buildLlmInputEvent };

@@ -2,12 +2,12 @@
  * Thin ClickClack REST/websocket client used by gateway, resolver, and outbound
  * delivery code.
  */
+import { bufferToBlobPart } from "openclaw/plugin-sdk/blob-runtime";
 import { redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
 import {
   readProviderJsonResponse,
   readResponseTextLimited,
 } from "openclaw/plugin-sdk/provider-http";
-import { WebSocket } from "ws";
 import type {
   ClickClackBotCommand,
   ClickClackChannel,
@@ -17,6 +17,7 @@ import type {
   ClickClackUser,
   ClickClackWorkspace,
 } from "./types.js";
+import { WebSocket } from "./ws-runtime.js";
 
 type ClickClackUpload = {
   id: string;
@@ -474,7 +475,7 @@ export function createClickClackClient(options: ClientOptions) {
       nonce?: string;
     }): Promise<ClickClackUpload> => {
       const form = new FormData();
-      const bytes = new Uint8Array(params.buffer);
+      const bytes = bufferToBlobPart(params.buffer);
       form.append("file", new Blob([bytes], { type: params.contentType }), params.filename);
       const query = new URLSearchParams({ workspace_id: params.workspaceId });
       if (params.nonce) {

@@ -40,7 +40,7 @@ openclaw onboard --auth-choice baseten-api-key
 ```
 
 ```bash Direct flag
-openclaw onboard --non-interactive \
+openclaw onboard --non-interactive --accept-risk --skip-health \
   --auth-choice baseten-api-key \
   --baseten-api-key "$BASETEN_API_KEY"
 ```
@@ -50,6 +50,8 @@ export BASETEN_API_KEY=...
 ```
 
     </CodeGroup>
+
+    Onboarding saves the connection settings without copying the generated catalog into your config. Existing model rows stay unchanged. If you use `models.mode: "replace"`, onboarding also adds the bundled catalog because that mode disables implicit discovery.
 
   </Step>
   <Step title="Verify the live catalog">

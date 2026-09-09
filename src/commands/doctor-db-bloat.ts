@@ -3,8 +3,8 @@
 // (multi-hundred-MB stores, blocking vacuums) surfaced only after user harm.
 import fs from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { note } from "../../packages/terminal-core/src/note.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { listOpenClawRegisteredAgentDatabases } from "../state/openclaw-agent-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
@@ -58,8 +58,7 @@ function readPragmaNumber(
   pragma: string,
 ): number | null {
   const row = db.prepare(`PRAGMA ${pragma}`).get() as Record<string, unknown> | undefined;
-  const value = row?.[pragma];
-  return typeof value === "number" && Number.isFinite(value) ? value : null;
+  return asFiniteNumber(row?.[pragma]) ?? null;
 }
 
 function describeBloat(label: string, stats: SqliteBloatStats): string | null {
@@ -104,10 +103,7 @@ function collectSqliteBloatWarnings(deps?: { env?: NodeJS.ProcessEnv }): string[
   return warnings;
 }
 
-export function noteSqliteDatabaseBloat(
-  _cfg: OpenClawConfig, // reserved for API consistency with other Doctor contributions
-  deps?: { env?: NodeJS.ProcessEnv },
-): void {
+export function noteSqliteDatabaseBloat(deps?: { env?: NodeJS.ProcessEnv }): void {
   const warnings = collectSqliteBloatWarnings(deps);
   if (warnings.length === 0) {
     return;

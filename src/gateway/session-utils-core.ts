@@ -1,8 +1,11 @@
+import {
+  asNonNegativeFiniteNumber,
+  asPositiveFiniteNumber,
+} from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   countActiveDescendantRuns,
   getSessionDisplaySubagentRunByChildSessionKey,
-  listSubagentRunsForController,
 } from "../agents/subagents/registry/subagent-registry-read.js";
 import {
   RECENT_ENDED_SUBAGENT_CHILD_SESSION_MS,
@@ -11,11 +14,9 @@ import {
 import { stripInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
 import { isTerminalSessionStatus, type SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { pruneMapToMaxSize } from "../infra/map-size.js";
-import { resolveNonNegativeNumber } from "../shared/number-coercion.js";
 import { truncateUtf16Safe } from "../utils.js";
 import {
-  estimateUsageCost,
+  estimateAggregateUsageCost,
   type ModelCostConfig,
   resolveModelCostConfig,
 } from "../utils/usage-format.js";
@@ -79,19 +80,22 @@ export function deriveSessionTitle(
 }
 
 export function resolvePositiveNumber(value: number | null | undefined): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
+  return asPositiveFiniteNumber(value);
 }
 
 export function deriveSessionUnread(
   entry?: Pick<
     SessionEntry,
-    "lastReadAt" | "markedUnreadAt" | "lastInteractionAt" | "lastActivityAt"
+    "createdAt" | "lastReadAt" | "markedUnreadAt" | "lastInteractionAt" | "lastActivityAt"
   >,
 ): boolean {
+  // Creation starts unread tracking for modern rows without lighting up legacy
+  // rows that predate durable creation provenance.
+  const unreadBaselineAt = entry?.lastReadAt ?? entry?.createdAt;
   return (
     entry?.markedUnreadAt !== undefined ||
-    (entry?.lastReadAt !== undefined &&
-      Math.max(entry.lastInteractionAt ?? 0, entry.lastActivityAt ?? 0) > entry.lastReadAt)
+    (unreadBaselineAt !== undefined &&
+      Math.max(entry?.lastInteractionAt ?? 0, entry?.lastActivityAt ?? 0) > unreadBaselineAt)
   );
 }
 
@@ -195,7 +199,7 @@ export function resolveEstimatedSessionCostUsd(params: {
   explicitCostUsd?: number;
   rowContext?: SessionListRowContext;
 }): number | undefined {
-  const explicitCostUsd = resolveNonNegativeNumber(
+  const explicitCostUsd = asNonNegativeFiniteNumber(
     params.explicitCostUsd ?? params.entry?.estimatedCostUsd,
   );
   if (explicitCostUsd !== undefined) {
@@ -222,7 +226,7 @@ export function resolveEstimatedSessionCostUsd(params: {
   if (!cost) {
     return undefined;
   }
-  const estimated = estimateUsageCost({
+  const estimated = estimateAggregateUsageCost({
     usage: {
       ...(input !== undefined ? { input } : {}),
       ...(output !== undefined ? { output } : {}),
@@ -231,18 +235,16 @@ export function resolveEstimatedSessionCostUsd(params: {
     },
     cost,
   });
-  return resolveNonNegativeNumber(estimated);
+  return asNonNegativeFiniteNumber(estimated);
 }
 
 const STALE_STORE_ONLY_CHILD_LINK_MS = 60 * 60 * 1_000;
-
-const SINGLE_ROW_CONTEXT_CACHE_MAX_ENTRIES = 64;
 
 export function isFinitePositiveTimestamp(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value) && value > 0;
 }
 
-export function shouldKeepStoreOnlyChildLink(entry: SessionEntry, now: number): boolean {
+function shouldKeepStoreOnlyChildLink(entry: SessionEntry, now: number): boolean {
   if (isTerminalSessionStatus(entry.status) || isFinitePositiveTimestamp(entry.endedAt)) {
     const endedAt = isFinitePositiveTimestamp(entry.endedAt) ? entry.endedAt : entry.updatedAt;
     return (
@@ -260,248 +262,63 @@ export function shouldKeepStoreOnlyChildLink(entry: SessionEntry, now: number): 
   );
 }
 
-type SingleRowChildSessionCandidateCacheEntry = {
-  entriesByKey: Map<string, SessionEntry>;
-  childSessionCandidatesByParentKey: Map<string, string[]>;
-};
-
-const singleRowChildSessionCandidateCache = new Map<
-  string,
-  SingleRowChildSessionCandidateCacheEntry
->();
-
-function rememberSingleRowChildSessionCandidateCacheEntry(
-  storePath: string,
-  entry: SingleRowChildSessionCandidateCacheEntry,
-) {
-  if (singleRowChildSessionCandidateCache.has(storePath)) {
-    singleRowChildSessionCandidateCache.delete(storePath);
-  }
-  singleRowChildSessionCandidateCache.set(storePath, entry);
-  pruneMapToMaxSize(singleRowChildSessionCandidateCache, SINGLE_ROW_CONTEXT_CACHE_MAX_ENTRIES);
-}
-
-function buildStoreChildSessionCandidateIndex(
-  store: Record<string, SessionEntry> | null | undefined,
-): Map<string, string[]> {
-  const childSessionsByKey = new Map<string, string[]>();
-  if (!store) {
-    return childSessionsByKey;
-  }
-  for (const [key, entry] of Object.entries(store)) {
-    if (!entry) {
-      continue;
-    }
-    const parentKeys = [
-      normalizeOptionalString(entry.spawnedBy),
-      normalizeOptionalString(entry.parentSessionKey),
-    ].filter((value): value is string => Boolean(value) && value !== key);
-    for (const parentKey of parentKeys) {
-      addChildSessionKey(childSessionsByKey, parentKey, key);
-    }
-  }
-  return childSessionsByKey;
-}
-
-function singleRowChildSessionCacheMatches(
-  cached: SingleRowChildSessionCandidateCacheEntry,
-  store: Record<string, SessionEntry>,
-): boolean {
-  const entries = Object.entries(store);
-  return (
-    entries.length === cached.entriesByKey.size &&
-    entries.every(([key, entry]) => cached.entriesByKey.get(key) === entry)
-  );
-}
-
-export function getSingleRowChildSessionCandidates(params: {
-  storePath: string;
-  store: Record<string, SessionEntry> | null | undefined;
-}): Map<string, string[]> {
-  if (!params.store) {
-    return new Map();
-  }
-  const cached = singleRowChildSessionCandidateCache.get(params.storePath);
-  if (cached && singleRowChildSessionCacheMatches(cached, params.store)) {
-    return cached.childSessionCandidatesByParentKey;
-  }
-  const childSessionCandidatesByParentKey = buildStoreChildSessionCandidateIndex(params.store);
-  rememberSingleRowChildSessionCandidateCacheEntry(params.storePath, {
-    // Exact read-only lookups rebuild a sparse record but borrow stable entry objects
-    // from the SQLite snapshot. Compare those identities so the derived index survives.
-    entriesByKey: new Map(Object.entries(params.store)),
-    childSessionCandidatesByParentKey,
-  });
-  return childSessionCandidatesByParentKey;
-}
-
-export function resolveRuntimeChildSessionKeys(
-  controllerSessionKey: string,
-  now = Date.now(),
-  subagentRuns?: SessionListRowContext["subagentRuns"],
-): string[] | undefined {
-  const childSessionKeys = new Set<string>();
-  const controllerKey = controllerSessionKey.trim();
-  const runs = subagentRuns
-    ? (subagentRuns.runsByControllerSessionKey.get(controllerKey) ?? [])
-    : listSubagentRunsForController(controllerSessionKey);
-  for (const entry of runs) {
-    const childSessionKey = normalizeOptionalString(entry.childSessionKey);
-    if (!childSessionKey) {
-      continue;
-    }
-    const latest = subagentRuns
-      ? subagentRuns.getDisplaySubagentRun(childSessionKey)
-      : getSessionDisplaySubagentRunByChildSessionKey(childSessionKey);
-    if (!latest) {
-      continue;
-    }
-    const latestControllerSessionKey =
-      normalizeOptionalString(latest?.controllerSessionKey) ||
-      normalizeOptionalString(latest?.requesterSessionKey);
-    if (latestControllerSessionKey !== controllerSessionKey) {
-      continue;
-    }
-    if (
-      !shouldKeepSubagentRunChildLink(latest, {
+/** Resolve navigation owners from canonical existence and current run liveness. */
+export function resolveSessionChildOwners(params: {
+  key: string;
+  entry: SessionEntry;
+  now: number;
+  subagentRuns?: SessionListRowContext["subagentRuns"];
+}): string[] {
+  const { key, entry, now, subagentRuns } = params;
+  const latest = subagentRuns
+    ? subagentRuns.getDisplaySubagentRun(key)
+    : getSessionDisplaySubagentRunByChildSessionKey(key);
+  const keep = latest
+    ? shouldKeepSubagentRunChildLink(latest, {
         activeDescendants: subagentRuns
-          ? subagentRuns.countActiveDescendantRuns(childSessionKey)
-          : countActiveDescendantRuns(childSessionKey),
+          ? subagentRuns.countActiveDescendantRuns(key)
+          : countActiveDescendantRuns(key),
         now,
       })
-    ) {
-      continue;
-    }
-    childSessionKeys.add(childSessionKey);
+    : shouldKeepStoreOnlyChildLink(entry, now);
+  if (!keep) {
+    return [];
   }
-  const childSessions = Array.from(childSessionKeys);
-  return childSessions.length > 0 ? childSessions : undefined;
-}
-
-function addChildSessionKey(
-  childSessionsByKey: Map<string, string[]>,
-  parentKey: string,
-  childKey: string,
-) {
-  const current = childSessionsByKey.get(parentKey);
-  if (current) {
-    if (!current.includes(childKey)) {
-      current.push(childKey);
-    }
-    return;
-  }
-  childSessionsByKey.set(parentKey, [childKey]);
-}
-
-export function isCurrentSessionChildOwner(params: {
-  entry: Pick<SessionEntry, "parentSessionKey">;
-  ownerSessionKey: string;
-  controllerSessionKey: string | undefined;
-}): boolean {
-  // Live control supersedes stale spawnedBy, but explicit navigation lineage
-  // remains authoritative so dashboard parents can discover controlled children.
-  return (
-    params.controllerSessionKey === params.ownerSessionKey ||
-    normalizeOptionalString(params.entry.parentSessionKey) === params.ownerSessionKey
+  // Runtime control replaces spawnedBy, but explicit navigation lineage survives moves.
+  const controller = latest
+    ? normalizeOptionalString(latest.controllerSessionKey) ||
+      normalizeOptionalString(latest.requesterSessionKey)
+    : normalizeOptionalString(entry.spawnedBy);
+  return [...new Set([controller, normalizeOptionalString(entry.parentSessionKey)])].filter(
+    (owner): owner is string => Boolean(owner) && owner !== key,
   );
 }
 
-export function buildStoreChildSessionIndex(
-  store: Record<string, SessionEntry>,
-  now = Date.now(),
-  subagentRuns?: SessionListRowContext["subagentRuns"],
-): Map<string, string[]> {
-  const childSessionsByKey = new Map<string, string[]>();
-  for (const [key, entry] of Object.entries(store)) {
-    if (!entry) {
-      continue;
-    }
-    const parentKeys = [
-      normalizeOptionalString(entry.spawnedBy),
-      normalizeOptionalString(entry.parentSessionKey),
-    ].filter((value): value is string => Boolean(value) && value !== key);
-    if (parentKeys.length === 0) {
-      continue;
-    }
-    const latest = subagentRuns
-      ? subagentRuns.getDisplaySubagentRun(key)
-      : getSessionDisplaySubagentRunByChildSessionKey(key);
-    let latestControllerSessionKey: string | undefined;
-    if (latest) {
-      latestControllerSessionKey =
-        normalizeOptionalString(latest.controllerSessionKey) ||
-        normalizeOptionalString(latest.requesterSessionKey);
-      if (
-        !shouldKeepSubagentRunChildLink(latest, {
-          activeDescendants: subagentRuns
-            ? subagentRuns.countActiveDescendantRuns(key)
-            : countActiveDescendantRuns(key),
-          now,
-        })
-      ) {
-        continue;
-      }
-    } else if (!shouldKeepStoreOnlyChildLink(entry, now)) {
-      continue;
-    }
-    for (const parentKey of parentKeys) {
-      if (
-        latestControllerSessionKey &&
-        !isCurrentSessionChildOwner({
-          entry,
-          ownerSessionKey: parentKey,
-          controllerSessionKey: latestControllerSessionKey,
-        })
-      ) {
-        continue;
-      }
-      addChildSessionKey(childSessionsByKey, parentKey, key);
-    }
-  }
-  return childSessionsByKey;
-}
-
-export function resolveStoreChildSessionKeysFromCandidates(params: {
+/** Index only canonical children; retained run results cannot create session links. */
+export function buildStoreChildSessionIndex(params: {
   store: Record<string, SessionEntry>;
-  key: string;
+  keys: readonly string[];
   now: number;
-  candidates: ReadonlyMap<string, readonly string[]>;
-}): string[] | undefined {
-  const childSessionKeys: string[] = [];
-  for (const childKey of params.candidates.get(params.key) ?? []) {
-    const entry = params.store[childKey];
-    if (!entry) {
-      continue;
-    }
-    const latest = getSessionDisplaySubagentRunByChildSessionKey(childKey);
-    if (latest) {
-      const latestControllerSessionKey =
-        normalizeOptionalString(latest.controllerSessionKey) ||
-        normalizeOptionalString(latest.requesterSessionKey);
-      if (
-        !isCurrentSessionChildOwner({
-          entry,
-          ownerSessionKey: params.key,
-          controllerSessionKey: latestControllerSessionKey,
-        })
-      ) {
-        continue;
-      }
-      if (
-        !shouldKeepSubagentRunChildLink(latest, {
-          activeDescendants: countActiveDescendantRuns(childKey),
-          now: params.now,
-        })
-      ) {
-        continue;
-      }
-      childSessionKeys.push(childKey);
-      continue;
-    }
-    if (!shouldKeepStoreOnlyChildLink(entry, params.now)) {
-      continue;
-    }
-    childSessionKeys.push(childKey);
+  subagentRuns?: SessionListRowContext["subagentRuns"];
+  excludedChildKeys?: ReadonlySet<string>;
+}): Map<string, string[]> {
+  const children = new Map<string, string[]>();
+  if (params.keys.length === 0) {
+    return children;
   }
-  return childSessionKeys.length > 0 ? childSessionKeys : undefined;
+  const parents = new Set(params.keys);
+  // One store pass discovers both persisted navigation and runtime-only controller links.
+  for (const [key, entry] of Object.entries(params.store)) {
+    if (!entry || params.excludedChildKeys?.has(key)) {
+      continue;
+    }
+    for (const owner of resolveSessionChildOwners({ ...params, key, entry })) {
+      if (parents.has(owner)) {
+        const siblings = children.get(owner) ?? [];
+        siblings.push(key);
+        children.set(owner, siblings);
+      }
+    }
+  }
+  return children;
 }

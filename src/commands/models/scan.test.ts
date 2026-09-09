@@ -6,7 +6,7 @@ import { withEnvAsync } from "../../test-utils/env.js";
 
 const mocks = vi.hoisted(() => ({
   loadModelsConfig: vi.fn(),
-  resolveApiKeyForProvider: vi.fn(),
+  resolveApiKeyForProviderCore: vi.fn(),
   scanOpenRouterModels: vi.fn(),
 }));
 
@@ -15,7 +15,7 @@ vi.mock("./load-config.js", () => ({
 }));
 
 vi.mock("../../agents/model-auth.js", () => ({
-  resolveApiKeyForProvider: mocks.resolveApiKeyForProvider,
+  resolveApiKeyForProviderCore: mocks.resolveApiKeyForProviderCore,
 }));
 
 vi.mock("../../agents/model-scan.js", () => ({
@@ -81,7 +81,7 @@ describe("models scan command", () => {
     await modelsScanCommand({ probe: false }, runtime);
 
     expect(mocks.loadModelsConfig).not.toHaveBeenCalled();
-    expect(mocks.resolveApiKeyForProvider).not.toHaveBeenCalled();
+    expect(mocks.resolveApiKeyForProviderCore).not.toHaveBeenCalled();
     expect(mocks.scanOpenRouterModels).toHaveBeenCalledTimes(1);
     expect(firstScanRequest().probe).toBe(false);
     expect(runtime.lines.join("\n")).toContain("metadata only");
@@ -119,7 +119,7 @@ describe("models scan command", () => {
       "openrouter/zeta/free:free",
     ]);
     expect(mocks.loadModelsConfig).not.toHaveBeenCalled();
-    expect(mocks.resolveApiKeyForProvider).not.toHaveBeenCalled();
+    expect(mocks.resolveApiKeyForProviderCore).not.toHaveBeenCalled();
   });
 
   it("sanitizes provider-controlled model refs and modality in scan tables", async () => {
@@ -148,13 +148,13 @@ describe("models scan command", () => {
     await withOpenRouterApiKey(undefined, async () => {
       const runtime = createRuntime();
       mocks.loadModelsConfig.mockResolvedValue({});
-      mocks.resolveApiKeyForProvider.mockResolvedValue({ apiKey: "" });
+      mocks.resolveApiKeyForProviderCore.mockResolvedValue({ apiKey: "" });
       mocks.scanOpenRouterModels.mockResolvedValue([scanResult()]);
 
       await modelsScanCommand({}, runtime);
 
       expect(mocks.loadModelsConfig).toHaveBeenCalledTimes(1);
-      expect(mocks.resolveApiKeyForProvider).toHaveBeenCalledWith({
+      expect(mocks.resolveApiKeyForProviderCore).toHaveBeenCalledWith({
         provider: "openrouter",
         cfg: {},
       });
@@ -176,7 +176,7 @@ describe("models scan command", () => {
       );
 
       expect(mocks.loadModelsConfig).not.toHaveBeenCalled();
-      expect(mocks.resolveApiKeyForProvider).not.toHaveBeenCalled();
+      expect(mocks.resolveApiKeyForProviderCore).not.toHaveBeenCalled();
       expect(mocks.scanOpenRouterModels).toHaveBeenCalledTimes(1);
       const scanRequest = firstScanRequest();
       expect(scanRequest?.apiKey).toBe("sk-or-test");
@@ -196,25 +196,31 @@ describe("models scan command", () => {
     });
   });
 
-  it.each([
-    [{ minParams: "7b" }, "--min-params"],
-    [{ maxAgeDays: "30d" }, "--max-age-days"],
-    [{ maxCandidates: "2.5" }, "--max-candidates"],
-    [{ timeout: "1000ms" }, "--timeout"],
-    [{ concurrency: "2x" }, "--concurrency"],
-  ])("rejects partial numeric option %s", async (opts, label) => {
-    const runtime = createRuntime();
+  describe.each([
+    ["minParams", "--min-params", "7b"],
+    ["maxAgeDays", "--max-age-days", "30d"],
+    ["maxCandidates", "--max-candidates", "2.5"],
+    ["timeout", "--timeout", "1000ms"],
+    ["concurrency", "--concurrency", "2x"],
+  ] as const)("%s numeric value", (key, label, partial) => {
+    it.each(["", "   ", partial])("rejects %j before scanning", async (raw) => {
+      const runtime = createRuntime();
 
-    await expect(modelsScanCommand(opts, runtime)).rejects.toThrow(label);
+      await expect(
+        modelsScanCommand({ [key]: raw, probe: false, setDefault: true }, runtime),
+      ).rejects.toThrow(label);
 
-    expect(mocks.scanOpenRouterModels).not.toHaveBeenCalled();
+      expect(mocks.loadModelsConfig).not.toHaveBeenCalled();
+      expect(mocks.resolveApiKeyForProviderCore).not.toHaveBeenCalled();
+      expect(mocks.scanOpenRouterModels).not.toHaveBeenCalled();
+    });
   });
 
   it("rejects applying auto-downgraded metadata-only scan results before scanning", async () => {
     await withOpenRouterApiKey(undefined, async () => {
       const runtime = createRuntime();
       mocks.loadModelsConfig.mockResolvedValue({});
-      mocks.resolveApiKeyForProvider.mockResolvedValue({ apiKey: "" });
+      mocks.resolveApiKeyForProviderCore.mockResolvedValue({ apiKey: "" });
 
       await expect(modelsScanCommand({ setDefault: true }, runtime)).rejects.toThrow(
         /Cannot apply metadata-only OpenRouter scan results/,

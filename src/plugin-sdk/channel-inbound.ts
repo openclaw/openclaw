@@ -41,6 +41,11 @@ import type {
 } from "../channels/turn/types.js";
 
 export {
+  readAgentRunTerminalOutcome,
+  type AgentRunTerminalOutcome,
+} from "../channels/turn/agent-run-terminal-outcome.js";
+
+export {
   createInboundDebouncer,
   resolveInboundDebounceMs,
 } from "../auto-reply/inbound-debounce.js";
@@ -269,6 +274,7 @@ export {
   resolveChannelTurnDispatchCounts as resolveInboundReplyDispatchCounts,
 };
 export {
+  createAcceptedChannelDeliveryResult,
   createChannelPartialDeliveryError,
   isChannelPartialDeliveryError,
   type ChannelPartialDeliveryError,
@@ -282,8 +288,6 @@ export {
   buildChannelInboundMediaPayload,
   formatMediaPlaceholderText,
   formatInboundMediaUnavailableText,
-  /** @deprecated Pass ordered facts as the context's `media` field. */
-  buildChannelInboundMediaPayload as buildChannelTurnMediaPayload,
 } from "../channels/inbound-event/media.js";
 export type {
   ChannelInboundMediaInput,

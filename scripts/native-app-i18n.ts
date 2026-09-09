@@ -4,6 +4,9 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import pMap from "p-map";
 import { expectDefined } from "../packages/normalization-core/src/expect.js";
+import { isRecord } from "../packages/normalization-core/src/record-coerce.js";
+import { sliceUtf16Safe } from "../packages/normalization-core/src/utf16-slice.ts";
+import { selectDeterministicTranslation } from "./android-app-i18n.ts";
 import { translateNativeEntries } from "./control-ui-i18n.ts";
 import { NATIVE_I18N_LOCALES } from "./native-i18n-locales.ts";
 
@@ -13,19 +16,41 @@ export { NATIVE_I18N_LOCALES };
 
 export type NativeI18nEntry = {
   id: string;
-  kind: string;
-  line: number;
-  path: string;
   source: string;
   surface: NativeI18nSurface;
+  sites: NativeI18nSite[];
+  /** Request-only owner excerpt; never persisted in the source inventory. */
+  sourceContext?: string;
 };
 
-type Candidate = Omit<NativeI18nEntry, "id">;
-type NativeTranslationArtifact = {
+export type NativeI18nSite = {
+  kind: string;
+  path: string;
+};
+
+type NativeInterpolation = {
+  start: number;
+  end: number;
+  value: string;
+};
+
+type Candidate = NativeI18nSite & {
+  line: number;
+  source: string;
+  surface: NativeI18nSurface;
+  sourceContext?: string;
+};
+type NativeTranslationArtifactV1 = {
   entries: Array<{ id: string; source: string; translated: string }>;
   glossaryHash: string;
   locale: string;
   version: 1;
+};
+type NativeTranslationArtifact = {
+  glossaryHash: string;
+  locale: string;
+  translations: Record<string, string>;
+  version: 2;
 };
 export type NativeI18nQualityFinding = {
   code:
@@ -42,12 +67,16 @@ export type NativeI18nQualityFinding = {
 };
 type NativeTranslator = typeof translateNativeEntries;
 type NativeLocaleSyncOptions = {
+  force?: boolean;
+  refreshIds?: string[];
   glossary?: Array<{ source: string; target: string }>;
   translate?: NativeTranslator;
   translationsDir?: string;
 };
 type NativeI18nCommand = {
   command: "baseline" | "check" | "sync" | "verify";
+  force?: boolean;
+  refreshIds?: string[];
   locale?: string;
   write: boolean;
 };
@@ -74,6 +103,7 @@ const ANDROID_EXTENSIONS = new Set([".kt", ".kts"]);
 const APPLE_EXTENSIONS = new Set([".swift", ".plist"]);
 const NATIVE_FORMAT_RE = /%(?:%|(?:\d+\$)?[@a-z])/giu;
 const NATIVE_SOURCE_READ_CONCURRENCY = 32;
+const NATIVE_SOURCE_CONTEXT_MAX_CHARS = 1200;
 const APPLE_UI_MULTILINE_CALLS =
   /(?:Text|Label|Button|TextField|SecureField|Picker|Section|LabeledContent|Toggle|Menu|ShareLink|Link|TextEditor|ProgressView|Gauge|DisclosureGroup|ControlGroup|DatePicker|Stepper)\s*\(\s*"""([\s\S]*?)"""/gu;
 const APPLE_LOCALIZED_STRING_CALLS =
@@ -162,6 +192,7 @@ const APPLE_BUILTIN_UI_CALLS = new Set([
   "SecureField",
   "ShareLink",
   "Stepper",
+  "Tab",
   "Text",
   "TextEditor",
   "TextField",
@@ -265,7 +296,7 @@ export function isConditionalBranchIdentifier(source: string): boolean {
   return true;
 }
 
-function isTranslatableCandidate(source: string, kind: string): boolean {
+function isTranslatableCandidate(source: string, kind: string, literalSource: string): boolean {
   if (BUILD_SETTING_RE.test(source)) {
     BUILD_SETTING_RE.lastIndex = 0;
     return false;
@@ -275,7 +306,13 @@ function isTranslatableCandidate(source: string, kind: string): boolean {
     return false;
   }
   const isDirectUiText = kind.startsWith("ui-") || kind.startsWith("resource-");
-  if (!isDirectUiText && (/^[a-z0-9_.:/$-]+$/u.test(source) || /^[A-Z0-9_.:/$-]+$/u.test(source))) {
+  // Interpolation variables are not copy. Require a literal identifier separator
+  // before filtering their surroundings so compact prose such as "\(hours)h" remains.
+  const identifierSource = /[.:/_-]/u.test(literalSource) ? literalSource : source;
+  if (
+    !isDirectUiText &&
+    (/^[a-z0-9_.:/$-]+$/u.test(identifierSource) || /^[A-Z0-9_.:/$-]+$/u.test(identifierSource))
+  ) {
     return false;
   }
   if (kind === "conditional-branch" && isConditionalBranchIdentifier(source)) {
@@ -290,7 +327,7 @@ function isTranslatableCandidate(source: string, kind: string): boolean {
 function hasQuotedConditionalSwiftInterpolation(source: string): boolean {
   return (
     extractSwiftInterpolations(source)?.some(
-      (interpolation) =>
+      ({ value: interpolation }) =>
         /\?\s*"((?:\\.|[^"\\])*)"\s*:\s*"((?:\\.|[^"\\])*)"/u.test(interpolation) ||
         /\bif\b[\s\S]*"((?:\\.|[^"\\])*)"[\s\S]*\belse\b[\s\S]*"((?:\\.|[^"\\])*)"/u.test(
           interpolation,
@@ -299,8 +336,8 @@ function hasQuotedConditionalSwiftInterpolation(source: string): boolean {
   );
 }
 
-function extractSwiftInterpolations(source: string): string[] | null {
-  const values: string[] = [];
+function extractSwiftInterpolations(source: string): NativeInterpolation[] | null {
+  const values: NativeInterpolation[] = [];
   for (let index = 0; index < source.length; index += 1) {
     if (source[index] !== "\\" || source[index + 1] !== "(") {
       continue;
@@ -322,7 +359,7 @@ function extractSwiftInterpolations(source: string): string[] | null {
       } else if (!quoted && character === ")") {
         depth -= 1;
         if (depth === 0) {
-          values.push(source.slice(start, index + 1));
+          values.push({ start, end: index + 1, value: source.slice(start, index + 1) });
           break;
         }
       }
@@ -334,8 +371,12 @@ function extractSwiftInterpolations(source: string): string[] | null {
   return values;
 }
 
-function extractKotlinInterpolations(source: string): string[] | null {
-  const values = [...source.matchAll(/\$[A-Za-z_][A-Za-z0-9_]*/gu)].map((match) => match[0]);
+function extractKotlinInterpolations(source: string): NativeInterpolation[] | null {
+  const values = [...source.matchAll(/\$[A-Za-z_][A-Za-z0-9_]*/gu)].map((match) => ({
+    start: match.index,
+    end: match.index + match[0].length,
+    value: match[0],
+  }));
   for (let index = 0; index < source.length; index += 1) {
     if (source[index] !== "$" || source[index + 1] !== "{") {
       continue;
@@ -348,7 +389,7 @@ function extractKotlinInterpolations(source: string): string[] | null {
       } else if (source[index] === "}") {
         depth -= 1;
         if (depth === 0) {
-          values.push(source.slice(start, index + 1));
+          values.push({ start, end: index + 1, value: source.slice(start, index + 1) });
           break;
         }
       }
@@ -696,12 +737,31 @@ function enclosingCallName(source: string, offset: number): string | null {
 }
 
 function structuralTokenSignature(source: string): string {
-  const swift = extractSwiftInterpolations(source)?.toSorted();
-  const kotlin = extractKotlinInterpolations(source)?.toSorted();
+  const swift = extractSwiftInterpolations(source)
+    ?.map(({ value }) => value)
+    .toSorted();
+  const kotlin = extractKotlinInterpolations(source)
+    ?.map(({ value }) => value)
+    .toSorted();
   const nativeFormat = [...source.matchAll(NATIVE_FORMAT_RE)].map((match) => match[0]).toSorted();
   const buildSettings = (source.match(BUILD_SETTING_RE) ?? []).toSorted();
   const lineBreaks = (source.match(/\n/gu) ?? []).length;
   return JSON.stringify({ swift, kotlin, nativeFormat, buildSettings, lineBreaks });
+}
+
+function formatNativeTranslationStructureError(locale: string, id: string): string {
+  return `native translation changed placeholders or line breaks for ${locale}:${id}`;
+}
+
+function validateNativeTranslationStructure(
+  source: string,
+  translated: string,
+  id: string,
+  locale: string,
+): void {
+  if (structuralTokenSignature(source) !== structuralTokenSignature(translated)) {
+    throw new Error(formatNativeTranslationStructureError(locale, id));
+  }
 }
 
 function addCandidate(
@@ -713,17 +773,19 @@ function addCandidate(
   line: number,
 ) {
   const normalized = normalizeSource(decodeLiteral(source, kind));
-  if (!normalized.trim() || !/\p{L}/u.test(normalized)) {
+  if (normalized.length > 500 || !normalized.trim() || !/\p{L}/u.test(normalized)) {
     return;
   }
-  if (!isTranslatableCandidate(normalized, kind)) {
+  const swift = extractSwiftInterpolations(normalized);
+  const kotlin = extractKotlinInterpolations(normalized);
+  if (swift === null || kotlin === null) {
     return;
   }
-  if (
-    normalized.length > 500 ||
-    extractSwiftInterpolations(normalized) === null ||
-    extractKotlinInterpolations(normalized) === null
-  ) {
+  const literalSource = normalized.split("");
+  for (const { start, end } of surface === "apple" ? swift : kotlin) {
+    literalSource.fill("$", start, end);
+  }
+  if (!isTranslatableCandidate(normalized, kind, literalSource.join(""))) {
     return;
   }
   entries.push({ kind, line, path: repoPath, source: normalized, surface });
@@ -1123,11 +1185,28 @@ export function extractNativeI18nCandidates(
       }
     }
   }
-  return [
+  const unique = [
     ...new Map(
-      entries.map((entry) => [[entry.surface, entry.path, entry.source].join("\u0000"), entry]),
+      entries.map((entry) => [
+        [entry.surface, entry.path, entry.kind, entry.source].join("\u0000"),
+        entry,
+      ]),
     ).values(),
   ];
+  const lines = source.split(/\r?\n/u);
+  const beforeBudget = Math.floor(NATIVE_SOURCE_CONTEXT_MAX_CHARS / 3);
+  for (const entry of unique) {
+    const index = entry.line - 1;
+    const before = lines.slice(Math.max(0, index - 8), index).join("\n");
+    const after = lines.slice(index, index + 9).join("\n");
+    entry.sourceContext = [
+      sliceUtf16Safe(before, -beforeBudget),
+      sliceUtf16Safe(after, 0, NATIVE_SOURCE_CONTEXT_MAX_CHARS - beforeBudget - 1),
+    ]
+      .join("\n")
+      .trim();
+  }
+  return unique;
 }
 
 async function walkFiles(root: string, surface: NativeI18nSurface): Promise<string[]> {
@@ -1159,77 +1238,71 @@ async function walkFiles(root: string, surface: NativeI18nSurface): Promise<stri
   return nested.flat();
 }
 
-function nativeEntryIdentity(entry: Pick<NativeI18nEntry, "path" | "source" | "surface">): string {
-  return [entry.surface, entry.path, entry.source].join("\u0000");
+function nativeEntryIdentity(entry: Pick<NativeI18nEntry, "source" | "surface">): string {
+  return `${entry.surface} ${entry.source}`;
 }
 
-export function assignNativeI18nIds(
-  entries: readonly Candidate[],
-  previousEntries: readonly NativeI18nEntry[] = [],
-): NativeI18nEntry[] {
-  const seen = new Set<string>();
-  const previousIds = new Map(
-    previousEntries.map((entry) => [nativeEntryIdentity(entry), entry.id]),
-  );
-  const unique = [...new Map(entries.map((entry) => [nativeEntryIdentity(entry), entry])).values()];
-  return unique
+export function assignNativeI18nIds(entries: readonly Candidate[]): NativeI18nEntry[] {
+  const sitesByIdentity = new Map<string, Map<string, Candidate>>();
+  const entryByIdentity = new Map<string, Pick<NativeI18nEntry, "source" | "surface">>();
+  for (const candidate of entries) {
+    const identity = nativeEntryIdentity(candidate);
+    entryByIdentity.set(identity, { source: candidate.source, surface: candidate.surface });
+    const sites = sitesByIdentity.get(identity) ?? new Map<string, Candidate>();
+    sites.set(`${candidate.path}\u0000${candidate.kind}`, candidate);
+    sitesByIdentity.set(identity, sites);
+  }
+  return [...entryByIdentity]
+    .map(([identity, entry]) => {
+      const sites = [
+        ...expectDefined(
+          sitesByIdentity.get(identity),
+          `native i18n sites for ${identity}`,
+        ).values(),
+      ].toSorted(
+        (left, right) =>
+          compareCodePoints(left.path, right.path) || compareCodePoints(left.kind, right.kind),
+      );
+      const sourceContext = sites[0]?.sourceContext;
+      return {
+        id: `native.${entry.surface}.${createHash("sha256").update(identity).digest("hex").slice(0, 16)}`,
+        source: entry.source,
+        surface: entry.surface,
+        sites: sites.map(({ kind, path: sitePath }) => ({ kind, path: sitePath })),
+        sourceContext,
+      };
+    })
     .toSorted(
       (left, right) =>
         compareCodePoints(left.surface, right.surface) ||
-        compareCodePoints(left.path, right.path) ||
-        left.line - right.line ||
-        compareCodePoints(left.kind, right.kind) ||
         compareCodePoints(left.source, right.source),
-    )
-    .map((entry) => {
-      const identity = nativeEntryIdentity(entry);
-      const previousId = previousIds.get(identity);
-      const digest = createHash("sha256").update(identity).digest("hex").slice(0, 16);
-      const baseId = `native.${entry.surface}.${digest}`;
-      let id = previousId && !seen.has(previousId) ? previousId : baseId;
-      for (let suffix = 2; seen.has(id); suffix += 1) {
-        id = `${baseId}.${suffix}`;
-      }
-      seen.add(id);
-      return Object.assign(entry, { id });
-    });
-}
-
-function hasErrorCode(error: unknown, code: string): boolean {
-  return Boolean(error && typeof error === "object" && "code" in error && error.code === code);
+    );
 }
 
 async function readNativeI18nInventory(): Promise<{
-  entries: NativeI18nEntry[];
   raw: string;
 }> {
   let raw: string;
   try {
     raw = await readFile(OUTPUT_PATH, "utf8");
   } catch (error) {
-    if (hasErrorCode(error, "ENOENT")) {
-      return { entries: [], raw: "" };
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return { raw: "" };
     }
     throw error;
   }
 
   const parsed: unknown = JSON.parse(raw);
-  if (!parsed || typeof parsed !== "object") {
+  if (!isRecord(parsed)) {
     throw new Error(`invalid native app i18n inventory: ${OUTPUT_PATH}`);
   }
-  const inventory = parsed as { entries?: unknown; version?: unknown };
-  if (inventory.version !== 1 || !Array.isArray(inventory.entries)) {
+  if ((parsed.version !== 1 && parsed.version !== 2) || !Array.isArray(parsed.entries)) {
     throw new Error(`invalid native app i18n inventory: ${OUTPUT_PATH}`);
   }
-  return { entries: inventory.entries as NativeI18nEntry[], raw };
+  return { raw };
 }
 
-export async function collectNativeI18nEntries(
-  previousEntries?: readonly NativeI18nEntry[],
-): Promise<NativeI18nEntry[]> {
-  // The checked-in inventory is the stable-ID registry. Reusing IDs for the same
-  // surface/path/source keeps extractor reclassification from orphaning translations.
-  const stableEntries = previousEntries ?? (await readNativeI18nInventory()).entries;
+export async function collectNativeI18nEntries(): Promise<NativeI18nEntry[]> {
   const roots = (["android", "apple"] as const).flatMap((surface) =>
     SOURCE_ROOTS[surface].map((sourceRoot) => ({ sourceRoot, surface })),
   );
@@ -1277,11 +1350,22 @@ export async function collectNativeI18nEntries(
   const entries = typedSources.flatMap(({ repoPath, source, surface }) =>
     extractNativeI18nCandidates(surface, repoPath, source, uiCallNames),
   );
-  return assignNativeI18nIds(entries, stableEntries);
+  return assignNativeI18nIds(entries);
 }
 
-function render(entries: NativeI18nEntry[]): string {
-  return `${JSON.stringify({ version: 1, entries }, null, 2)}\n`;
+export function serializeNativeI18nInventory(entries: readonly NativeI18nEntry[]): string {
+  return [
+    "{",
+    '  "version": 2,',
+    '  "entries": [',
+    ...entries.map(
+      ({ id, source, surface, sites }, index) =>
+        `    ${JSON.stringify({ id, source, surface, sites })}${index === entries.length - 1 ? "" : ","}`,
+    ),
+    "  ]",
+    "}",
+    "",
+  ].join("\n");
 }
 
 async function syncNativeI18n(options: {
@@ -1290,21 +1374,21 @@ async function syncNativeI18n(options: {
   write: boolean;
 }): Promise<NativeI18nEntry[]> {
   const currentInventory = await readNativeI18nInventory();
-  const entries = await collectNativeI18nEntries(currentInventory.entries);
-  const expected = render(entries);
+  const entries = await collectNativeI18nEntries();
+  const expected = serializeNativeI18nInventory(entries);
   const current = currentInventory.raw;
+  if (options.checkInventory && current !== expected) {
+    throw new Error(
+      "native app i18n inventory drift detected. Run `pnpm native:i18n:baseline` and commit apps/.i18n/native-source.json.",
+    );
+  }
   if (options.checkLocales) {
-    const findings = await checkNativeLocaleArtifacts(currentInventory.entries);
+    const findings = await checkNativeLocaleArtifacts(entries);
     for (const finding of findings) {
       process.stdout.write(`native-app-i18n: advisory=${JSON.stringify(finding)}\n`);
     }
     process.stdout.write(
       `native-app-i18n: locale-artifacts=${NATIVE_I18N_LOCALES.length} advisories=${findings.length}\n`,
-    );
-  }
-  if (options.checkInventory && current !== expected) {
-    throw new Error(
-      "native app i18n inventory drift detected. Run `pnpm native:i18n:baseline` and commit apps/.i18n/native-source.json.",
     );
   }
   if (current !== expected && options.write) {
@@ -1354,23 +1438,37 @@ function adjacentDuplicateWords(value: string, locale: string): string[] {
 function collectNativeI18nQualityFindings(
   locale: string,
   inventory: readonly NativeI18nEntry[],
-  entries: readonly { id: string; source: string; translated: string }[],
+  translations: Readonly<Record<string, string>>,
 ): NativeI18nQualityFinding[] {
-  const inventoryById = new Map(inventory.map((entry) => [entry.id, entry]));
-  const translatedBySource = new Map<string, Array<{ id: string; translated: string }>>();
-  for (const entry of entries) {
+  const translatedBySource = new Map<
+    string,
+    Array<{ id: string; surface: NativeI18nSurface; translated: string }>
+  >();
+  for (const entry of inventory) {
     const existing = translatedBySource.get(entry.source) ?? [];
-    existing.push({ id: entry.id, translated: entry.translated });
+    existing.push({
+      id: entry.id,
+      surface: entry.surface,
+      translated: translations[entry.id] ?? entry.source,
+    });
     translatedBySource.set(entry.source, existing);
   }
 
   const findings: NativeI18nQualityFinding[] = [];
-  for (const entry of entries) {
+  for (const inventoryEntry of inventory) {
+    const entry = {
+      id: inventoryEntry.id,
+      source: inventoryEntry.source,
+      translated: translations[inventoryEntry.id] ?? inventoryEntry.source,
+    };
     const sourceEqual = entry.translated === entry.source;
     if (sourceEqual) {
       findings.push({ code: "source-equal", locale, ...entry });
       const relatedIds = (translatedBySource.get(entry.source) ?? [])
-        .filter((candidate) => candidate.id !== entry.id && candidate.translated !== entry.source)
+        .filter(
+          (candidate) =>
+            candidate.surface !== inventoryEntry.surface && candidate.translated !== entry.source,
+        )
         .map((candidate) => candidate.id)
         .toSorted(compareCodePoints);
       if (relatedIds.length > 0) {
@@ -1381,10 +1479,9 @@ function collectNativeI18nQualityFindings(
           relatedIds,
         });
       }
-      const inventoryEntry = inventoryById.get(entry.id);
       if (
-        inventoryEntry?.surface === "android" &&
-        inventoryEntry.path === ANDROID_LANGUAGE_PICKER_PATH &&
+        inventoryEntry.surface === "android" &&
+        inventoryEntry.sites.some((site) => site.path === ANDROID_LANGUAGE_PICKER_PATH) &&
         ANDROID_LANGUAGE_PICKER_SOURCES.has(entry.source)
       ) {
         findings.push({
@@ -1413,10 +1510,6 @@ function collectNativeI18nQualityFindings(
   );
 }
 
-function describeArtifactValue(value: unknown): string {
-  return typeof value === "string" ? JSON.stringify(value) : String(value);
-}
-
 export function validateNativeLocaleArtifact(
   locale: string,
   inventory: readonly NativeI18nEntry[],
@@ -1428,79 +1521,55 @@ export function validateNativeLocaleArtifact(
     throw new Error(`invalid native locale artifact ${locale}: expected an object`);
   }
   const artifact = artifactValue as {
-    entries?: unknown;
     glossaryHash?: unknown;
     locale?: unknown;
+    translations?: unknown;
     version?: unknown;
   };
-  if (artifact.version !== 1) {
-    errors.push(`version must be 1, got ${describeArtifactValue(artifact.version)}`);
+  if (artifact.version !== 2) {
+    errors.push(`version must be 2, got ${JSON.stringify(artifact.version)}`);
   }
   if (artifact.locale !== locale) {
-    errors.push(
-      `locale must be ${JSON.stringify(locale)}, got ${describeArtifactValue(artifact.locale)}`,
-    );
+    errors.push(`locale must be ${JSON.stringify(locale)}, got ${JSON.stringify(artifact.locale)}`);
   }
   const expectedGlossaryHash = glossaryHash(glossary);
   if (artifact.glossaryHash !== expectedGlossaryHash) {
     errors.push(
-      `glossaryHash must be ${expectedGlossaryHash}, got ${describeArtifactValue(artifact.glossaryHash)}`,
+      `glossaryHash must be ${expectedGlossaryHash}, got ${JSON.stringify(artifact.glossaryHash)}`,
     );
   }
-  if (!Array.isArray(artifact.entries)) {
-    errors.push("entries must be an array");
+  if (!isRecord(artifact.translations)) {
+    errors.push("translations must be a plain object");
   }
 
-  const rawEntries = Array.isArray(artifact.entries) ? artifact.entries : [];
-  const entries: Array<{ id: string; source: string; translated: string }> = [];
-  const seenIds = new Set<string>();
-  for (const [index, value] of rawEntries.entries()) {
-    if (!value || typeof value !== "object" || Array.isArray(value)) {
-      errors.push(`entries[${index}] must be an object`);
-      continue;
+  const translations = isRecord(artifact.translations) ? artifact.translations : {};
+  const inventoryById = new Map(inventory.map((entry) => [entry.id, entry]));
+  for (const id of Object.keys(translations)) {
+    if (!inventoryById.has(id)) {
+      errors.push(`unknown translation id ${JSON.stringify(id)}`);
     }
-    const entry = value as { id?: unknown; source?: unknown; translated?: unknown };
-    if (
-      typeof entry.id !== "string" ||
-      typeof entry.source !== "string" ||
-      typeof entry.translated !== "string"
-    ) {
-      errors.push(`entries[${index}] must contain string id, source, and translated fields`);
-      continue;
+    if (typeof translations[id] !== "string") {
+      errors.push(`translation must be a string for ${id}`);
     }
-    if (seenIds.has(entry.id)) {
-      errors.push(`duplicate id ${JSON.stringify(entry.id)}`);
-    }
-    seenIds.add(entry.id);
-    entries.push({ id: entry.id, source: entry.source, translated: entry.translated });
   }
-
-  if (rawEntries.length !== inventory.length) {
-    errors.push(`entry count must be ${inventory.length}, got ${rawEntries.length}`);
-  }
-  for (let index = 0; index < Math.min(entries.length, inventory.length); index += 1) {
-    const actual = expectDefined(entries[index], `native locale entry at index ${index}`);
-    const expected = expectDefined(inventory[index], `native inventory entry at index ${index}`);
-    if (actual.id !== expected.id) {
-      errors.push(
-        `entries[${index}].id must be ${JSON.stringify(expected.id)}, got ${JSON.stringify(actual.id)}`,
-      );
-    }
-    if (actual.source !== expected.source) {
-      errors.push(`entries[${index}].source does not match inventory id ${expected.id}`);
-    }
-    if (!actual.translated.trim()) {
-      errors.push(`entries[${index}].translated must be nonempty for ${actual.id}`);
-    } else if (
-      structuralTokenSignature(actual.source) !== structuralTokenSignature(actual.translated)
-    ) {
-      errors.push(`translation changed structural tokens or line breaks for ${actual.id}`);
+  for (const entry of inventory) {
+    const translated = translations[entry.id];
+    if (typeof translated !== "string") {
+      errors.push(`missing translation for ${entry.id}`);
+    } else if (!translated.trim()) {
+      errors.push(`translation must be nonempty for ${entry.id}`);
+    } else if (structuralTokenSignature(entry.source) !== structuralTokenSignature(translated)) {
+      errors.push(formatNativeTranslationStructureError(locale, entry.id));
     }
   }
   if (errors.length > 0) {
     throw new Error(`invalid native locale artifact ${locale}:\n- ${errors.join("\n- ")}`);
   }
-  return collectNativeI18nQualityFindings(locale, inventory, entries);
+  return collectNativeI18nQualityFindings(
+    locale,
+    inventory,
+    translations as Record<string, string>,
+  );
 }
 
 export async function checkNativeLocaleArtifacts(
@@ -1544,99 +1613,161 @@ export async function checkNativeLocaleArtifacts(
   );
 }
 
+function normalizeNativeRefreshIds(ids: readonly string[], force = false): string[] {
+  const distinct = [...new Set(ids)].toSorted(compareCodePoints);
+  if (distinct.length > 64) {
+    throw new Error("native refresh accepts at most 64 distinct `--refresh-id` values");
+  }
+  if (distinct.length > 0 && force) {
+    throw new Error("native refresh cannot combine `--refresh-id` with `--force`");
+  }
+  return distinct;
+}
+
 export async function syncNativeLocale(
   locale: string,
   entries: NativeI18nEntry[],
   options: NativeLocaleSyncOptions = {},
 ) {
+  const refreshIds = new Set(normalizeNativeRefreshIds(options.refreshIds ?? [], options.force));
+  const inventoryIds = new Set(entries.map((entry) => entry.id));
+  for (const id of refreshIds) {
+    if (!inventoryIds.has(id)) {
+      throw new Error(`unknown native refresh ID: ${id}`);
+    }
+  }
   // Native runtime resources are owned by the Android and Apple slices; these
   // artifacts keep the shared translation-memory handoff current between them.
   const artifactPath = path.join(options.translationsDir ?? TRANSLATIONS_DIR, `${locale}.json`);
   const glossary = options.glossary ?? (await loadGlossary(locale));
   const currentGlossaryHash = glossaryHash(glossary);
   let previousRaw = "";
-  let previous: NativeTranslationArtifact = {
-    entries: [],
-    glossaryHash: "",
-    locale,
-    version: 1,
-  };
+  let previous: NativeTranslationArtifact | NativeTranslationArtifactV1 | undefined;
   try {
     previousRaw = await readFile(artifactPath, "utf8");
-    previous = JSON.parse(previousRaw) as NativeTranslationArtifact;
+    previous = JSON.parse(previousRaw) as NativeTranslationArtifact | NativeTranslationArtifactV1;
   } catch {
     // The first refresh creates the locale artifact.
   }
-  const previousById = new Map(previous.entries.map((entry) => [entry.id, entry]));
-  const reusableById = new Map(
-    entries.map((entry) => {
-      const exact = previousById.get(entry.id);
-      const translated =
-        exact?.source === entry.source && exact.translated.trim() ? exact.translated : undefined;
-      return [entry.id, translated] as const;
-    }),
-  );
-  const glossaryChanged = previous.glossaryHash !== currentGlossaryHash;
+  const migratingV1 = previous?.version === 1;
+  const reusableById = new Map<string, string>();
+  if (previous?.version === 2 && isRecord(previous.translations)) {
+    for (const entry of entries) {
+      const translated = previous.translations[entry.id];
+      if (typeof translated === "string" && translated.trim()) {
+        reusableById.set(entry.id, translated);
+      }
+    }
+  } else if (previous?.version === 1 && Array.isArray(previous.entries)) {
+    const translationsByIdentity = new Map<string, string[]>();
+    for (const legacy of previous.entries) {
+      const surface = /^native\.(android|apple)\./u.exec(legacy.id)?.[1];
+      if ((surface !== "android" && surface !== "apple") || !legacy.translated.trim()) {
+        continue;
+      }
+      const identity = nativeEntryIdentity({ surface, source: legacy.source });
+      const values = translationsByIdentity.get(identity) ?? [];
+      values.push(legacy.translated);
+      translationsByIdentity.set(identity, values);
+    }
+    for (const entry of entries) {
+      const values = translationsByIdentity.get(nativeEntryIdentity(entry)) ?? [];
+      const translated = selectDeterministicTranslation(entry.source, values);
+      if (translated) {
+        reusableById.set(entry.id, translated);
+      }
+    }
+  }
+  const glossaryChanged =
+    (previous?.version === 2 || (migratingV1 && refreshIds.size > 0)) &&
+    previous?.glossaryHash !== currentGlossaryHash;
   const pending = entries
-    .filter((entry) => glossaryChanged || !reusableById.get(entry.id))
+    .filter(
+      (entry) =>
+        options.force || refreshIds.has(entry.id) || glossaryChanged || !reusableById.get(entry.id),
+    )
     .map((entry) => ({
       id: entry.id,
       source: entry.source,
-      sourcePath: entry.path,
+      sourcePath: entry.sites[0]?.path ?? "apps/.i18n/native-source.json",
+      sourceContext: entry.sourceContext,
     }));
-  const translated = pending.length
-    ? await (options.translate ?? translateNativeEntries)(pending, locale, glossary)
-    : new Map<string, string>();
+  // Default v1 migration is provider-free; an explicit refresh also completes
+  // its ordinary pending work instead of silently carrying selected translations.
+  const translatePending = !migratingV1 || options.force || refreshIds.size > 0;
+  const translated =
+    pending.length && translatePending
+      ? await (options.translate ?? translateNativeEntries)(
+          pending,
+          locale,
+          glossary,
+          validateNativeTranslationStructure,
+        )
+      : new Map<string, string>();
+  const translations = Object.fromEntries(
+    entries
+      .map(
+        (entry) =>
+          [
+            entry.id,
+            translated.get(entry.id) ?? reusableById.get(entry.id) ?? entry.source,
+          ] as const,
+      )
+      .toSorted(([left], [right]) => compareCodePoints(left, right)),
+  );
   const artifact: NativeTranslationArtifact = {
-    version: 1,
+    version: 2,
     locale,
     glossaryHash: currentGlossaryHash,
-    entries: entries.map((entry) => ({
-      id: entry.id,
-      source: entry.source,
-      translated: translated.get(entry.id) ?? reusableById.get(entry.id) ?? entry.source,
-    })),
+    translations,
   };
-  try {
-    validateNativeLocaleArtifact(locale, entries, artifact, glossary);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    const structural = message.match(
-      /translation changed structural tokens or line breaks for ([^\s]+)/u,
-    );
-    if (structural?.[1]) {
-      throw new Error(
-        `native translation changed placeholders or line breaks for ${locale}:${structural[1]}`,
-        { cause: error },
-      );
-    }
-    throw error;
-  }
+  validateNativeLocaleArtifact(locale, entries, artifact, glossary);
   const rendered = `${JSON.stringify(artifact, null, 2)}\n`;
   const changed = previousRaw !== rendered;
   if (changed) {
     await mkdir(path.dirname(artifactPath), { recursive: true });
     await writeFile(artifactPath, rendered, "utf8");
   }
+  const fallback = entries.filter((entry) => translations[entry.id] === entry.source).length;
   process.stdout.write(
-    `native-app-i18n: locale=${locale} entries=${entries.length} translated=${translated.size} changed=${changed}\n`,
+    `native-app-i18n: locale=${locale} entries=${entries.length} carried=${reusableById.size} translated=${translated.size} sourceFallback=${fallback} changed=${changed}\n`,
   );
-  return { changed, translated: translated.size };
+  if (migratingV1 && !translatePending && pending.length > 0) {
+    process.stdout.write(
+      `native-app-i18n: locale=${locale} migration-source-fallback=${pending.length} ids=${pending.map((entry) => entry.id).join(",")}\n`,
+    );
+  }
+  return { carried: reusableById.size, changed, fallback, translated: translated.size };
 }
 
 export function parseNativeI18nCommand(argv: string[]): NativeI18nCommand {
   const [command, ...args] = argv;
   if (command !== "baseline" && command !== "check" && command !== "sync" && command !== "verify") {
     throw new Error(
-      "usage: node --import tsx scripts/native-app-i18n.ts baseline --write|check|sync [--write] [--locale <code>]|verify",
+      "usage: node --import tsx scripts/native-app-i18n.ts baseline --write|check|sync [--write] [--locale <code>] [--force | --refresh-id <native-id> ...]|verify",
     );
   }
   let locale: string | undefined;
+  const requestedRefreshIds: string[] = [];
+  let force = false;
   let write = false;
   for (let index = 0; index < args.length; index += 1) {
     const argument = args[index];
+    if (argument === "--force") {
+      force = true;
+      continue;
+    }
     if (argument === "--write") {
       write = true;
+      continue;
+    }
+    if (argument === "--refresh-id") {
+      const value = args[index + 1];
+      if (!value || value.startsWith("-")) {
+        throw new Error("native refresh requires an ID after `--refresh-id`");
+      }
+      requestedRefreshIds.push(value);
+      index += 1;
       continue;
     }
     if (argument === "--locale") {
@@ -1652,6 +1783,12 @@ export function parseNativeI18nCommand(argv: string[]): NativeI18nCommand {
       continue;
     }
     throw new Error(`unsupported native i18n argument: ${argument}`);
+  }
+  const refreshIds = normalizeNativeRefreshIds(requestedRefreshIds, force);
+  if (refreshIds.length > 0 && (command !== "sync" || !write || !locale)) {
+    throw new Error(
+      "native selected refresh requires `sync --write --locale <code> --refresh-id <native-id>`",
+    );
   }
   if (locale) {
     if (command !== "sync" || !write) {
@@ -1669,7 +1806,16 @@ export function parseNativeI18nCommand(argv: string[]): NativeI18nCommand {
   if (command === "baseline" && !write) {
     throw new Error("native i18n baseline requires `--write`");
   }
-  return { command, locale, write };
+  if (force && (command !== "sync" || !write || !locale)) {
+    throw new Error("native full refresh requires `sync --write --locale <code> --force`");
+  }
+  return {
+    command,
+    locale,
+    write,
+    ...(force ? { force } : {}),
+    ...(refreshIds.length > 0 ? { refreshIds } : {}),
+  };
 }
 
 async function main() {
@@ -1684,7 +1830,10 @@ async function main() {
       parsed.locale === undefined,
   });
   if (parsed.locale) {
-    await syncNativeLocale(parsed.locale, entries);
+    await syncNativeLocale(parsed.locale, entries, {
+      force: parsed.force,
+      refreshIds: parsed.refreshIds,
+    });
   }
   if (parsed.command === "verify" || parsed.command === "check") {
     const android = await import("./android-app-i18n.ts");

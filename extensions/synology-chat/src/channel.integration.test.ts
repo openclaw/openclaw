@@ -11,6 +11,7 @@ import {
   setSynologyRuntimeConfigForTest,
   synologyIngressStartMock,
   synologyIngressStopMock,
+  tryHandleSynologyHostedMediaRequestMock,
 } from "./channel.test-mocks.js";
 import { makeFormBody, makeReq, makeRes } from "./test-http-utils.js";
 
@@ -54,7 +55,48 @@ describe("Synology channel wiring integration", () => {
     resolveAgentRouteMock.mockClear();
     synologyIngressStartMock.mockClear();
     synologyIngressStopMock.mockClear();
+    tryHandleSynologyHostedMediaRequestMock.mockClear();
+    tryHandleSynologyHostedMediaRequestMock.mockResolvedValue(false);
     setSynologyRuntimeConfigForTest({});
+  });
+
+  it("re-enables a configured named account without replacing root or sibling credentials", async () => {
+    const { synologyChatSetupAdapter } = await import("./setup-surface.js");
+    const input = { token: "replacement", url: "https://nas.example.com/alerts" };
+    const configured = synologyChatSetupAdapter.applyAccountConfig({
+      cfg: {
+        channels: {
+          "synology-chat": {
+            enabled: false,
+            token: "root-token",
+            accounts: {
+              alerts: { enabled: false, token: "old-alerts", webhookPath: "/alerts" },
+              sibling: { enabled: false, token: "sibling-token" },
+            },
+          },
+        },
+      },
+      accountId: "alerts",
+      input,
+    });
+
+    expect(configured).toEqual({
+      channels: {
+        "synology-chat": {
+          enabled: true,
+          token: "root-token",
+          accounts: {
+            alerts: {
+              enabled: true,
+              token: "replacement",
+              webhookPath: "/alerts",
+              incomingUrl: "https://nas.example.com/alerts",
+            },
+            sibling: { enabled: false, token: "sibling-token" },
+          },
+        },
+      },
+    });
   });
 
   it("registers real webhook handler with resolved account config and enforces allowlist", async () => {
@@ -107,6 +149,46 @@ describe("Synology channel wiring integration", () => {
 
     expect(res.status).toBe(403);
     expect(res.body).toContain("not authorized");
+    expect(dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
+    abortController.abort();
+    await started;
+  });
+
+  it("dispatches hosted GET and HEAD capabilities before the inbound webhook parser", async () => {
+    const abortController = new AbortController();
+    const cfg = {
+      channels: {
+        "synology-chat": {
+          enabled: true,
+          token: "valid-token",
+          incomingUrl: "https://nas.example.com/incoming",
+          webhookUrl: "https://gateway.example.com/webhook/synology",
+          webhookPath: "/webhook/synology",
+          dmPolicy: "allowlist",
+          allowedUserIds: ["123"],
+        },
+      },
+    };
+    const started = synologyChatPlugin.gateway.startAccount(
+      makeStartContext(cfg, "default", abortController.signal),
+    );
+    const [registered] = requireMockCall(
+      registerPluginHttpRouteMock,
+      0,
+      "Synology hosted media route",
+    );
+    tryHandleSynologyHostedMediaRequestMock.mockResolvedValue(true);
+
+    for (const method of ["GET", "HEAD"]) {
+      await registered.handler(
+        makeReq(method, "", {
+          url: "/webhook/synology?__openclaw_synology_media_token_id=token",
+        }),
+        makeRes(),
+      );
+    }
+
+    expect(tryHandleSynologyHostedMediaRequestMock).toHaveBeenCalledTimes(2);
     expect(dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
     abortController.abort();
     await started;

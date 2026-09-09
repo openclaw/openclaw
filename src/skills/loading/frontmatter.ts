@@ -22,13 +22,15 @@ import type {
 } from "../types.js";
 import type { Skill } from "./skill-contract.js";
 
-export function parseFrontmatter(content: string): ParsedSkillFrontmatter {
+export function parseSkillFrontmatter(content: string): ParsedSkillFrontmatter {
   const parsed = parseFrontmatterBlockResult(content);
   const issue = parsed.issues[0];
   if (issue) {
     throw new Error(`invalid frontmatter: ${issue.code}: ${issue.message}`);
   }
-  return parsed.frontmatter;
+  // Cached metadata must not retain the discarded SKILL.md through parser slices.
+  // The normalized record contains only strings; copy its keys and values together.
+  return structuredClone(parsed.frontmatter);
 }
 
 const BREW_FORMULA_PATTERN = /^[A-Za-z0-9][A-Za-z0-9@+._/-]*$/;
@@ -63,37 +65,18 @@ function normalizeSafeNpmSpec(raw: unknown): string | undefined {
   return spec;
 }
 
-function normalizeSafeGoModule(raw: unknown): string | undefined {
+function normalizeSafePackageSpec(raw: unknown, pattern: RegExp): string | undefined {
   if (typeof raw !== "string") {
     return undefined;
   }
-  const moduleSpec = raw.trim();
-  if (
-    !moduleSpec ||
-    moduleSpec.startsWith("-") ||
-    moduleSpec.includes("\\") ||
-    moduleSpec.includes("://")
-  ) {
+  const value = raw.trim();
+  if (!value || value.startsWith("-") || value.includes("\\") || value.includes("://")) {
     return undefined;
   }
-  if (!GO_MODULE_PATTERN.test(moduleSpec)) {
+  if (!pattern.test(value)) {
     return undefined;
   }
-  return moduleSpec;
-}
-
-function normalizeSafeUvPackage(raw: unknown): string | undefined {
-  if (typeof raw !== "string") {
-    return undefined;
-  }
-  const pkg = raw.trim();
-  if (!pkg || pkg.startsWith("-") || pkg.includes("\\") || pkg.includes("://")) {
-    return undefined;
-  }
-  if (!UV_PACKAGE_PATTERN.test(pkg)) {
-    return undefined;
-  }
-  return pkg;
+  return value;
 }
 
 function normalizeSafeDownloadUrl(raw: unknown): string | undefined {
@@ -145,18 +128,28 @@ function parseInstallSpec(input: unknown): SkillInstallSpec | undefined {
       spec.package = pkg;
     }
   } else if (spec.kind === "uv") {
-    const pkg = normalizeSafeUvPackage(raw.package);
+    const pkg = normalizeSafePackageSpec(raw.package, UV_PACKAGE_PATTERN);
     if (pkg) {
       spec.package = pkg;
     }
   }
-  const moduleSpec = normalizeSafeGoModule(raw.module);
+  const moduleSpec = normalizeSafePackageSpec(raw.module, GO_MODULE_PATTERN);
   if (moduleSpec) {
     spec.module = moduleSpec;
   }
   const downloadUrl = normalizeSafeDownloadUrl(raw.url);
   if (downloadUrl) {
     spec.url = downloadUrl;
+  }
+  if (spec.kind === "download" && raw.sha256 !== undefined) {
+    if (typeof raw.sha256 !== "string") {
+      return undefined;
+    }
+    const sha256 = raw.sha256.trim().toLowerCase();
+    if (!/^[a-f0-9]{64}$/u.test(sha256)) {
+      return undefined;
+    }
+    spec.sha256 = sha256;
   }
   if (typeof raw.archive === "string") {
     spec.archive = raw.archive;
@@ -190,7 +183,7 @@ function parseInstallSpec(input: unknown): SkillInstallSpec | undefined {
   return spec;
 }
 
-export function resolveOpenClawMetadata(
+export function resolveSkillManifestMetadata(
   frontmatter: ParsedSkillFrontmatter,
 ): OpenClawSkillMetadata | undefined {
   const metadataObj = resolveOpenClawManifestBlock({ frontmatter });

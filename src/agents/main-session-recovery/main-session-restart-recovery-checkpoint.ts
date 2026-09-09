@@ -7,6 +7,7 @@ import {
   type SessionTranscriptTurnLifecyclePatch,
   updateSessionEntry,
 } from "../../config/sessions/session-accessor.js";
+import { buildRestartRecoveryExpectedState } from "../../config/sessions/session-transcript-turn-state.js";
 import {
   hasInterSessionUserProvenance,
   isCompletionReportInputProvenance,
@@ -19,8 +20,12 @@ import {
   readTerminalSourceReplyDeliveryMirror,
 } from "../embedded-agent-runner/message-visibility.js";
 import { buildMainSessionRecoveryClearPatch } from "./main-session-recovery-clear.js";
+import type { MainSessionRecoveryStoreTarget } from "./main-session-recovery-store.js";
 import { isRestartAbortTailArtifact } from "./main-session-restart-recovery-resume-policy.js";
-import { buildRestartRecoveryExpectedState, log } from "./main-session-restart-recovery-shared.js";
+import {
+  mainSessionRecoveryLog,
+  resolveRestartRecoveryTerminalClientRunId,
+} from "./main-session-restart-recovery-shared.js";
 
 export function hasOnlyAnnounceRecoveryRuns(entry: SessionEntry): boolean {
   const runs = entry.restartRecoveryRuns;
@@ -39,15 +44,15 @@ export function hasCompletionReportUserTail(messages: readonly unknown[]): boole
   );
 }
 
-export async function reconcileInterruptedCompletionReport(params: {
-  entry: SessionEntry;
-  source: "announce_runs" | "transcript";
-  storePath: string;
-  sessionKey: string;
-}): Promise<{ outcome: "reconciled" } | { outcome: "changed"; entry: SessionEntry | null }> {
+export async function reconcileInterruptedCompletionReport(
+  params: MainSessionRecoveryStoreTarget & {
+    entry: SessionEntry;
+    source: "announce_runs" | "transcript";
+  },
+): Promise<{ outcome: "reconciled" } | { outcome: "changed"; entry: SessionEntry | null }> {
   let didReconcile = false;
   const current = await updateSessionEntry(
-    { sessionKey: params.sessionKey, storePath: params.storePath },
+    params,
     (entry) => {
       const hasRecoveryRuns = Boolean(entry.restartRecoveryRuns?.length);
       const stillMatchesSource =
@@ -67,6 +72,7 @@ export async function reconcileInterruptedCompletionReport(params: {
         ...buildMainSessionRecoveryClearPatch(entry),
         status: "killed",
         lifecycleRunId: undefined,
+        lastRunId: resolveRestartRecoveryTerminalClientRunId(entry),
         abortedLastRun: false,
         endedAt,
         lastRunError: undefined,
@@ -78,7 +84,9 @@ export async function reconcileInterruptedCompletionReport(params: {
     { requireWriteSuccess: true },
   );
   if (didReconcile) {
-    log.info(`reconciled interrupted completion report to non-running: ${params.sessionKey}`);
+    mainSessionRecoveryLog.info(
+      `reconciled interrupted completion report to non-running: ${params.sessionKey}`,
+    );
     return { outcome: "reconciled" };
   }
   return { outcome: "changed", entry: current };
@@ -318,6 +326,7 @@ export async function markSessionCompletedAfterRecoveryCheckpoint(params: {
     }),
     abortedLastRun: false,
     lifecycleRunId: undefined,
+    lastRunId: resolveRestartRecoveryTerminalClientRunId(params.entry),
     endedAt,
     pendingFinalDelivery: undefined,
     restartRecoveryForceSafeTools: undefined,
@@ -460,11 +469,14 @@ export async function markSessionCompletedAfterRecoveryCheckpoint(params: {
     );
     const completed = persisted.sessionEntry?.status === "done";
     if (completed) {
-      log.info(`reconciled delivered terminal reply after restart: ${params.sessionKey}`);
+      mainSessionRecoveryLog.info(
+        `reconciled delivered terminal reply after restart: ${params.sessionKey}`,
+      );
     }
     return { outcome: completed ? "completed" : "changed" };
   }
   const marked = await applySessionEntryReplacements({
+    agentId: params.agentId,
     sessionKeys: [params.sessionKey],
     storePath: params.storePath,
     update: (entries) => {
@@ -491,7 +503,7 @@ export async function markSessionCompletedAfterRecoveryCheckpoint(params: {
     },
   });
   if (marked) {
-    log.info(
+    mainSessionRecoveryLog.info(
       params.reason === "delivered-terminal" || params.reason === "delivered-terminal-receipt"
         ? `reconciled delivered terminal reply after restart: ${params.sessionKey}`
         : `reconciled handled silent reply after restart: ${params.sessionKey}`,

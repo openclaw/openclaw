@@ -21,7 +21,8 @@ import {
   type AgentComponentContext,
   type AgentComponentMessageInteraction,
 } from "./agent-components-helpers.js";
-import { enqueueSystemEvent } from "./agent-components.deps.runtime.js";
+import { resolveAgentComponentPolicyContext } from "./agent-components-live-policy.js";
+import { enqueueRoutedSystemEvent } from "./agent-components.deps.runtime.js";
 
 type AgentSystemControlParams = {
   ctx: AgentComponentContext;
@@ -45,8 +46,12 @@ async function runAgentSystemControlInteraction(params: AgentSystemControlParams
   }
 
   const { componentId } = parsed;
+  const ctx = await resolveAgentComponentPolicyContext(params);
+  if (!ctx) {
+    return;
+  }
   const interactionCtx = await resolveInteractionContextWithDmAuth({
-    ctx: params.ctx,
+    ctx,
     interaction: params.interaction,
     label: params.label,
     componentLabel: params.interactionComponentLabel,
@@ -68,7 +73,7 @@ async function runAgentSystemControlInteraction(params: AgentSystemControlParams
   } = interactionCtx;
 
   const allowed = await ensureAgentComponentInteractionAllowed({
-    ctx: params.ctx,
+    ctx,
     interaction: params.interaction,
     channelId,
     rawGuildId,
@@ -83,7 +88,7 @@ async function runAgentSystemControlInteraction(params: AgentSystemControlParams
   }
 
   const route = resolveAgentComponentRoute({
-    ctx: params.ctx,
+    ctx,
     rawGuildId,
     memberRoleIds,
     isDirectMessage,
@@ -96,8 +101,7 @@ async function runAgentSystemControlInteraction(params: AgentSystemControlParams
   const eventText = params.formatEventText({ componentId, username, userId });
   logDebug(`${params.label}: enqueuing event for channel ${channelId}: ${eventText}`);
 
-  enqueueSystemEvent(eventText, {
-    sessionKey: route.sessionKey,
+  enqueueRoutedSystemEvent(eventText, route, {
     // The immutable interaction ID identifies one occurrence, preserving repeat clicks while
     // deduplicating gateway replays of that same occurrence.
     contextKey: `${params.contextKeyPrefix}:${channelId}:${componentId}:${userId}:${params.interaction.id}`,

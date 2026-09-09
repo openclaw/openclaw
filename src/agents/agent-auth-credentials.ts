@@ -4,6 +4,8 @@ import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion"
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { coerceSecretRef } from "../config/types.secrets.js";
+import type { PreparedAgentCredentialModes } from "./agent-auth-credential-modes.js";
+import { isOAuthRefreshFence } from "./auth-profiles/oauth-refresh-marker.js";
 import { resolveAuthProfileOrder } from "./auth-profiles/order.js";
 import type { AuthProfileCredential, AuthProfileStore } from "./auth-profiles/types.js";
 import type { AuthStorageData } from "./sessions/auth-storage.js";
@@ -22,7 +24,6 @@ type AgentOAuthCredential = {
 /** Credential value shape consumed by agent runtimes after auth-profile normalization. */
 type AgentCredential = AgentApiKeyCredential | AgentOAuthCredential;
 export type AgentCredentialMap = Record<string, AgentCredential>;
-export type PreparedAgentCredentialModes = Readonly<Record<string, "api_key" | "oauth" | "token">>;
 
 type ResolveAgentCredentialMapOptions = {
   includeSecretRefPlaceholders?: boolean;
@@ -55,6 +56,7 @@ export function resolveUsableAgentCredentialModes(
       modes[provider] = "token";
     } else if (
       credential.type === "oauth" &&
+      !isOAuthRefreshFence(credential) &&
       credential.access &&
       credential.refresh &&
       credential.expires > 0
@@ -107,6 +109,9 @@ function convertAuthProfileCredentialToAgent(
   }
 
   if (cred.type === "oauth") {
+    if (isOAuthRefreshFence(cred)) {
+      return null;
+    }
     const access = normalizeOptionalString(cred.access) ?? "";
     const refresh = normalizeOptionalString(cred.refresh) ?? "";
     const expires = asDateTimestampMs(cred.expires);

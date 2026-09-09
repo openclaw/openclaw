@@ -3,7 +3,11 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { listRegisteredPluginAgentPromptGuidance } from "./command-registry-state.js";
-import { getPluginCommandSpecs, listProviderPluginCommandSpecs } from "./command-specs.js";
+import {
+  getPluginCommandEntrySpecs,
+  getPluginCommandSpecs,
+  listProviderPluginCommandSpecs,
+} from "./command-specs.js";
 import {
   clearPluginCommands,
   executePluginCommand,
@@ -19,13 +23,16 @@ import type { PluginRuntime } from "./runtime/types.js";
 import { createBundledPluginRecord } from "./status.test-fixtures.js";
 
 const completionMocks = vi.hoisted(() => ({
-  prepareSimpleCompletionModelForAgent: vi.fn(),
+  acquireSimpleCompletionModelForAgent:
+    vi.fn<
+      typeof import("../agents/simple-completion-runtime.js").acquireSimpleCompletionModelForAgent
+    >(),
   completeWithPreparedSimpleCompletionModel: vi.fn(),
   resolveSimpleCompletionSelectionForAgent: vi.fn(),
 }));
 
 vi.mock("../agents/simple-completion-runtime.js", () => ({
-  prepareSimpleCompletionModelForAgent: completionMocks.prepareSimpleCompletionModelForAgent,
+  acquireSimpleCompletionModelForAgent: completionMocks.acquireSimpleCompletionModelForAgent,
   completeWithPreparedSimpleCompletionModel:
     completionMocks.completeWithPreparedSimpleCompletionModel,
   resolveSimpleCompletionSelectionForAgent:
@@ -128,8 +135,9 @@ function expectUnsupportedBindingApiResult(result: { text?: string }) {
 }
 
 beforeEach(() => {
-  completionMocks.prepareSimpleCompletionModelForAgent.mockReset();
-  completionMocks.prepareSimpleCompletionModelForAgent.mockResolvedValue({
+  completionMocks.acquireSimpleCompletionModelForAgent.mockReset();
+  completionMocks.acquireSimpleCompletionModelForAgent.mockResolvedValue({
+    release: vi.fn(),
     selection: {
       provider: "openai",
       modelId: "gpt-5.5",
@@ -140,6 +148,7 @@ beforeEach(() => {
       id: "gpt-5.5",
       name: "GPT-5.5",
       api: "openai",
+      baseUrl: "https://fixture.invalid/v1",
       input: ["text"],
       reasoning: false,
       contextWindow: 128_000,
@@ -394,6 +403,68 @@ describe("registerPluginCommand", () => {
         error: "Command nativeNames must be an object",
       },
     },
+    {
+      name: "rejects primitive client presentation metadata",
+      command: {
+        name: "demo",
+        description: "Demo",
+        clientPresentation: "device-pairing",
+        handler: async () => ({ text: "ok" }),
+      },
+      expected: {
+        ok: false,
+        error: "Command clientPresentation must be an object",
+      },
+    },
+    {
+      name: "rejects unknown client presentation actions",
+      command: {
+        name: "demo",
+        description: "Demo",
+        clientPresentation: {
+          when: "no-arguments",
+          action: { kind: "open-route" },
+        },
+        handler: async () => ({ text: "ok" }),
+      },
+      expected: {
+        ok: false,
+        error: "Command clientPresentation action kind is not supported",
+      },
+    },
+    {
+      name: "rejects additional client presentation fields",
+      command: {
+        name: "demo",
+        description: "Demo",
+        clientPresentation: {
+          when: "no-arguments",
+          action: { kind: "device-pairing" },
+          route: "/settings/devices",
+        },
+        handler: async () => ({ text: "ok" }),
+      },
+      expected: {
+        ok: false,
+        error: "Command clientPresentation must contain only when and action",
+      },
+    },
+    {
+      name: "rejects additional client presentation action fields",
+      command: {
+        name: "demo",
+        description: "Demo",
+        clientPresentation: {
+          when: "no-arguments",
+          action: { kind: "device-pairing", callback: "run" },
+        },
+        handler: async () => ({ text: "ok" }),
+      },
+      expected: {
+        ok: false,
+        error: "Command clientPresentation action must contain only kind",
+      },
+    },
   ] as const)("$name", ({ command, expected }) => {
     expect(registerPluginCommand("demo-plugin", command as never)).toEqual(expected);
   });
@@ -403,6 +474,10 @@ describe("registerPluginCommand", () => {
       name: "  demo_cmd  ",
       description: "  Demo command  ",
       agentPromptGuidance: ["  Use /demo_cmd for demo routing.  "],
+      clientPresentation: {
+        when: "no-arguments",
+        action: { kind: "device-pairing" },
+      },
       handler: async () => ({ text: "ok" }),
     });
     expect(result).toEqual({ ok: true });
@@ -419,6 +494,18 @@ describe("registerPluginCommand", () => {
         name: "demo_cmd",
         description: "Demo command",
         acceptsArgs: false,
+      },
+    ]);
+    expect(getPluginCommandEntrySpecs()).toEqual([
+      {
+        name: "demo_cmd",
+        nativeName: "demo_cmd",
+        description: "Demo command",
+        acceptsArgs: false,
+        clientPresentation: {
+          when: "no-arguments",
+          action: { kind: "device-pairing" },
+        },
       },
     ]);
     expect(listRegisteredPluginAgentPromptGuidance()).toEqual(["Use /demo_cmd for demo routing."]);
@@ -550,6 +637,28 @@ describe("registerPluginCommand", () => {
       args: "status",
     });
   });
+
+  it.each(["active_memory", "active-memory"])(
+    "prefers exact spelling %s even when its command rejects arguments",
+    (name) => {
+      const alternate = name.replace(/[_-]/g, name.includes("_") ? "-" : "_");
+      for (const [commandName, acceptsArgs] of [
+        [alternate, true],
+        [name, false],
+      ] as const) {
+        expect(
+          registerPluginCommand(commandName, {
+            name: commandName,
+            description: "Exact spelling selection",
+            acceptsArgs,
+            handler: async () => ({ text: "ok" }),
+          }),
+        ).toEqual({ ok: true });
+      }
+      expect(matchPluginCommand(`/${name}`)?.command.name).toBe(name);
+      expect(matchPluginCommand(`/${name} status`)).toBeNull();
+    },
+  );
 
   it("matches plugin slash commands when users insert whitespace after the slash", () => {
     registerPluginCommand("device-pair", {
@@ -1139,14 +1248,13 @@ describe("registerPluginCommand", () => {
     second.clearPluginCommands();
   });
 
-  it.each(["/talkvoice now", "/discordvoice now"] as const)(
-    "matches provider-specific native alias %s back to the canonical command",
-    (commandBody) => {
+  it.each(["default", "discord"] as const)(
+    "matches live %s aliases back to the canonical command",
+    (provider) => {
+      const nativeNames = { default: "talkvoice", discord: "discordvoice" };
+      const commandBody = `/${nativeNames[provider]} now`;
       const result = registerVoiceCommandForTest({
-        nativeNames: {
-          default: "talkvoice",
-          discord: "discordvoice",
-        },
+        nativeNames,
         description: "Demo command",
         acceptsArgs: true,
       });
@@ -1156,6 +1264,13 @@ describe("registerPluginCommand", () => {
         name: "voice",
         pluginId: "demo-plugin",
         args: "now",
+      });
+      nativeNames[provider] = "renamedvoice";
+      expect(matchPluginCommand(commandBody)).toBeNull();
+      expectCommandMatch("/renamedvoice later", {
+        name: "voice",
+        pluginId: "demo-plugin",
+        args: "later",
       });
     },
   );
@@ -1410,7 +1525,7 @@ describe("registerPluginCommand", () => {
       } as never,
     });
 
-    expect(completionMocks.prepareSimpleCompletionModelForAgent).toHaveBeenCalledWith(
+    expect(completionMocks.acquireSimpleCompletionModelForAgent).toHaveBeenCalledWith(
       expect.objectContaining({
         agentId: "ops",
       }),
@@ -1451,7 +1566,7 @@ describe("registerPluginCommand", () => {
       config: {} as never,
     });
 
-    expect(completionMocks.prepareSimpleCompletionModelForAgent).toHaveBeenCalledWith(
+    expect(completionMocks.acquireSimpleCompletionModelForAgent).toHaveBeenCalledWith(
       expect.objectContaining({
         agentId: "codex",
         preferredProfile: "openai:owner@example.com",

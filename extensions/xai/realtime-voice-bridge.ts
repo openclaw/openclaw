@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { toStringifiedError } from "openclaw/plugin-sdk/error-runtime";
 import {
   captureWsEvent,
   createDebugProxyWebSocketAgent,
@@ -9,9 +10,8 @@ import type {
   RealtimeVoiceSessionConnection,
   RealtimeVoiceToolResultOptions,
 } from "openclaw/plugin-sdk/realtime-voice";
-import { RealtimeVoiceSessionLifecycle } from "openclaw/plugin-sdk/realtime-voice";
+import { RealtimeVoiceSessionLifecycle } from "openclaw/plugin-sdk/realtime-voice-provider";
 import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
-import WebSocket from "ws";
 import { resolveXaiRealtimeApiKey } from "./realtime-voice-auth.runtime.js";
 import {
   XAI_REALTIME_BASE_RECONNECT_DELAY_MS,
@@ -29,6 +29,7 @@ import {
 import { XaiRealtimeMalformedAudioError, XaiRealtimeVoiceEvents } from "./realtime-voice-events.js";
 import { XaiRealtimePlaybackMarkOverflowError } from "./realtime-voice-protocol.js";
 import { xaiUserAgentHeaderFor } from "./src/xai-user-agent.js";
+import { WebSocket } from "./ws-runtime.js";
 
 export class XaiRealtimeVoiceBridge extends XaiRealtimeVoiceEvents implements RealtimeVoiceBridge {
   readonly supportsToolResultContinuation = false;
@@ -272,10 +273,10 @@ export class XaiRealtimeVoiceBridge extends XaiRealtimeVoiceEvents implements Re
           meta: { provider: "xai", capability: "realtime-voice" },
         });
         if (!attempt.ready) {
-          rejectStartup(error instanceof Error ? error : new Error(String(error)));
+          rejectStartup(toStringifiedError(error));
           return;
         }
-        this.config.onError?.(error instanceof Error ? error : new Error(String(error)));
+        this.config.onError?.(toStringifiedError(error));
       });
 
       ws.on("close", (code, reasonBuffer) => {
@@ -330,7 +331,7 @@ export class XaiRealtimeVoiceBridge extends XaiRealtimeVoiceEvents implements Re
           attempt.resolve();
           return;
         }
-        attempt.reject(error instanceof Error ? error : new Error(String(error)));
+        attempt.reject(toStringifiedError(error));
       });
     await attempt.promise;
   }
@@ -341,7 +342,7 @@ export class XaiRealtimeVoiceBridge extends XaiRealtimeVoiceEvents implements Re
   }> {
     const apiKey = this.config.resolveApiKey
       ? await this.config.resolveApiKey()
-      : await resolveXaiRealtimeApiKey(this.config.apiKey, this.config.cfg);
+      : await resolveXaiRealtimeApiKey(this.config.apiKey, this.config.cfg, this.config.agentId);
     const model = this.config.model ?? XAI_REALTIME_DEFAULT_MODEL;
     const url = toXaiRealtimeWsUrl(
       this.config.baseUrl,
@@ -418,7 +419,7 @@ export class XaiRealtimeVoiceBridge extends XaiRealtimeVoiceEvents implements Re
       ) {
         return;
       }
-      this.config.onError?.(error instanceof Error ? error : new Error(String(error)));
+      this.config.onError?.(toStringifiedError(error));
       await this.attemptReconnect(reason, nextConnection);
     }
   }
@@ -470,7 +471,6 @@ export class XaiRealtimeVoiceBridge extends XaiRealtimeVoiceEvents implements Re
       event && typeof event === "object" && typeof (event as { type?: unknown }).type === "string"
         ? (event as { type: string }).type
         : "unknown";
-    this.config.onEvent?.({ direction: "client", type, ...(detail ? { detail } : {}) });
     const payload = JSON.stringify(event);
     captureWsEvent({
       url: this.connectionUrl,
@@ -481,6 +481,8 @@ export class XaiRealtimeVoiceBridge extends XaiRealtimeVoiceEvents implements Re
       meta: { provider: "xai", capability: "realtime-voice" },
     });
     ws.send(payload);
+    // Observers report a sent frame, so nested control cannot overtake it.
+    this.config.onEvent?.({ direction: "client", type, ...(detail ? { detail } : {}) });
   }
 
   private canSubmitInput(): boolean {

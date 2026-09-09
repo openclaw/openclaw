@@ -1,7 +1,10 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
+import {
+  hasOutboundReplyContent,
+  resolveSendableOutboundReplyParts,
+} from "openclaw/plugin-sdk/reply-payload";
 import type { InboundEventKind } from "../../channels/inbound-event/kind.js";
 import { RUN_STALE_TAKEOVER_MS } from "../../logging/diagnostic-run-activity.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
@@ -12,13 +15,23 @@ import {
   isReplyPayloadStatusNotice,
   type ReplyPayload,
 } from "../reply-payload.js";
+import { prepareReplyPayloadForDispatcher } from "./reply-dispatcher.js";
+import type { ReplyDispatchKind, ReplyDispatcher } from "./reply-dispatcher.types.js";
 import { beginReplyOperationFinalizationWork } from "./reply-run-finalization-lease.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
 
 const ttsRuntimeLoader = createLazyImportLoader(() => import("../../tts/tts.runtime.js"));
 
-export const NO_VISIBLE_REPLY_FALLBACK_TEXT =
-  "No reply was generated for this message. This is usually a temporary model failure - please try again.";
+const NO_VISIBLE_REPLY_FALLBACK_TEXT =
+  "⚠️ OpenClaw couldn't produce or deliver a reply. Please try again. If this keeps happening, ask the operator to check the gateway logs.";
+
+export function buildNoVisibleReplyFallbackText(runId?: string): string {
+  const reference = normalizeOptionalString(runId);
+  // Caller-supplied IDs must not inject markup, mentions, or unbounded text into a channel.
+  return reference && /^[a-z0-9][a-z0-9_-]{0,127}$/iu.test(reference)
+    ? `${NO_VISIBLE_REPLY_FALLBACK_TEXT} Reference: ${reference}.`
+    : NO_VISIBLE_REPLY_FALLBACK_TEXT;
+}
 
 export const QUEUE_CAP_REJECTION_TEXT =
   "This message was not queued because the session queue is full. Please try again after the current response finishes.";
@@ -42,17 +55,12 @@ export function shouldDeliverDespiteSourceReplySuppression(
   );
 }
 
-export function readAskUserQuestionId(payload: ReplyPayload): string | undefined {
-  const askUser = payload.channelData?.askUser;
-  if (!isRecord(askUser)) {
-    return undefined;
-  }
-  const questionId = askUser.questionId;
-  return typeof questionId === "string" ? questionId : undefined;
-}
-
 export function hasExecApprovalPayload(payload: ReplyPayload): boolean {
   return isRecord(payload.channelData?.execApproval);
+}
+
+export function hasExecApprovalUnavailablePayload(payload: ReplyPayload): boolean {
+  return isRecord(payload.channelData?.execApprovalUnavailable);
 }
 
 export function hasAskUserPayload(payload: ReplyPayload): boolean {
@@ -63,6 +71,7 @@ export function requiresDurableToolResultDelivery(payload: ReplyPayload): boolea
   return (
     resolveSendableOutboundReplyParts(payload).hasMedia ||
     hasExecApprovalPayload(payload) ||
+    hasExecApprovalUnavailablePayload(payload) ||
     hasAskUserPayload(payload)
   );
 }
@@ -85,6 +94,8 @@ export function createFinalDispatchPayloadDedupeKey(payload: ReplyPayload): stri
       replyToTag: payload.replyToTag,
       replyToCurrent: payload.replyToCurrent,
       audioAsVoice: payload.audioAsVoice,
+      videoAsNote: payload.videoAsNote === true,
+      location: payload.location,
       spokenText: payload.spokenText,
       ttsSupplement: payload.ttsSupplement,
       isError: payload.isError,
@@ -179,4 +190,31 @@ export function createFinalizationAwareTtsPayloadApplier(params: {
       replyOperation?.recordActivity();
     }
   };
+}
+
+/** Applies dispatcher normalization before TTS or transcript-visible side effects. */
+export function prepareReplyPayloadForSideEffects(
+  dispatcher: ReplyDispatcher,
+  kind: ReplyDispatchKind,
+  payload: ReplyPayload | null | undefined,
+  state: { acceptedReplyPayload: boolean; channelTransformSuppressed: boolean },
+  onVisibleAccepted?: () => void,
+): ReplyPayload | null {
+  if (!payload) {
+    return null;
+  }
+  const outcome = prepareReplyPayloadForDispatcher(dispatcher, kind, payload);
+  if (outcome.kind === "deliver") {
+    state.acceptedReplyPayload = true;
+    if (
+      outcome.payload.isReasoning !== true &&
+      outcome.payload.isCommentary !== true &&
+      hasOutboundReplyContent(outcome.payload, { trimText: true })
+    ) {
+      onVisibleAccepted?.();
+    }
+    return outcome.payload;
+  }
+  state.channelTransformSuppressed ||= outcome.reason === "channel_transform";
+  return null;
 }

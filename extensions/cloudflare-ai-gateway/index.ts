@@ -17,14 +17,17 @@ import { upsertAuthProfileWithLockOrThrow } from "openclaw/plugin-sdk/provider-a
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { buildCloudflareAiGatewayCatalogProvider } from "./catalog-provider.js";
 import { CLOUDFLARE_AI_GATEWAY_DEFAULT_MODEL_REF } from "./models.js";
-import { applyCloudflareAiGatewayConfig, buildCloudflareAiGatewayConfigPatch } from "./onboard.js";
+import {
+  applyCloudflareAiGatewayConnectionConfig,
+  applyCloudflareAiGatewayProviderConnectionConfig,
+} from "./onboard.js";
 import { wrapCloudflareAiGatewayProviderStream } from "./stream-wrappers.js";
 
 const PROVIDER_ID = "cloudflare-ai-gateway";
 const PROVIDER_ENV_VAR = "CLOUDFLARE_AI_GATEWAY_API_KEY";
 const PROFILE_ID = "cloudflare-ai-gateway:default";
 function readRequiredTextInput(value: unknown): string {
-  return typeof value === "string" ? value.trim() : "";
+  return normalizeOptionalString(value) ?? "";
 }
 
 async function resolveCloudflareGatewayMetadataInteractive(ctx: {
@@ -99,6 +102,7 @@ export default definePluginEntry({
                   ? (ctx.secretInputMode ?? "plaintext")
                   : ctx.secretInputMode,
               config: ctx.config,
+              workspaceDir: ctx.workspaceDir,
               expectedProviders: [PROVIDER_ID],
               provider: PROVIDER_ID,
               envLabel: PROVIDER_ENV_VAR,
@@ -131,7 +135,7 @@ export default definePluginEntry({
                   ),
                 },
               ],
-              configPatch: buildCloudflareAiGatewayConfigPatch(metadata),
+              configPatch: applyCloudflareAiGatewayProviderConnectionConfig(ctx.config, metadata),
               defaultModel: CLOUDFLARE_AI_GATEWAY_DEFAULT_MODEL_REF,
             };
           },
@@ -194,7 +198,7 @@ export default definePluginEntry({
               provider: PROVIDER_ID,
               mode: "api_key",
             });
-            return applyCloudflareAiGatewayConfig(next, { accountId, gatewayId });
+            return applyCloudflareAiGatewayConnectionConfig(next, { accountId, gatewayId });
           },
         },
       ],

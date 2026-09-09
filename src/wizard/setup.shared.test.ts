@@ -1,5 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
+import { createTestConfigFileStore } from "../commands/test-runtime-config-helpers.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
+import type { WizardPrompter } from "./prompts.js";
+
+const configFiles = createTestConfigFileStore();
 
 const mocks = vi.hoisted(() => ({
   currentConfig: {} as OpenClawConfig,
@@ -11,7 +16,50 @@ vi.mock("../plugins/install-record-commit.js", async (importOriginal) => ({
   transformConfigWithPendingPluginInstalls: mocks.transformConfigWithPendingPluginInstalls,
 }));
 
-import { resolveQuickstartGatewayDefaults, writeWizardConfigFile } from "./setup.shared.js";
+import {
+  formatQuickstartGatewaySummary,
+  requestTelemetryConsent,
+  resolveQuickstartGatewayDefaults,
+  writeWizardConfigFile,
+} from "./setup.shared.js";
+
+describe("requestTelemetryConsent", () => {
+  it.each([false, true])("records the interactive operator's %s choice once", async (enabled) => {
+    const select = vi.fn(async () => enabled) as unknown as WizardPrompter["select"];
+    const prompter = createWizardPrompter({ select });
+
+    const config = await requestTelemetryConsent({ opts: {}, prompter, config: {} });
+
+    expect(config.telemetry).toEqual({ enabled, consentedAt: expect.any(String) });
+    expect(prompter.note).toHaveBeenCalledWith(
+      expect.stringContaining("Never messages, never identifiers"),
+      "Help make OpenClaw better?",
+    );
+    expect(select).toHaveBeenCalledWith({
+      message: "Help make OpenClaw better?",
+      options: [
+        { value: false, label: "No thanks" },
+        { value: true, label: "Yes, share feature stats" },
+      ],
+      initialValue: false,
+    });
+
+    await expect(requestTelemetryConsent({ opts: {}, prompter, config })).resolves.toBe(config);
+    expect(select).toHaveBeenCalledOnce();
+  });
+
+  it("leaves telemetry unset without prompting during non-interactive onboarding", async () => {
+    const prompter = createWizardPrompter();
+    const config: OpenClawConfig = {};
+
+    await expect(
+      requestTelemetryConsent({ opts: { nonInteractive: true }, prompter, config }),
+    ).resolves.toBe(config);
+    expect(config.telemetry).toBeUndefined();
+    expect(prompter.note).not.toHaveBeenCalled();
+    expect(prompter.select).not.toHaveBeenCalled();
+  });
+});
 
 describe("resolveQuickstartGatewayDefaults", () => {
   const storedConfig: OpenClawConfig = {
@@ -26,10 +74,25 @@ describe("resolveQuickstartGatewayDefaults", () => {
       },
       tailscale: {
         mode: "serve",
-        resetOnExit: true,
       },
     },
   };
+
+  it.each([
+    { config: {}, expected: "Gateway secret (generated)", mode: "token" },
+    {
+      config: { gateway: { auth: { mode: "password" as const, password: "saved-password" } } },
+      expected: "Password",
+      mode: "password",
+    },
+  ])(
+    "summarizes the resolved $mode secret without offering an auth choice",
+    ({ config, expected, mode }) => {
+      const defaults = resolveQuickstartGatewayDefaults(config);
+      expect(defaults.authMode).toBe(mode);
+      expect(formatQuickstartGatewaySummary(defaults, defaults.hasExisting)).toContain(expected);
+    },
+  );
 
   it("overlays every explicitly supplied classic quickstart gateway option", () => {
     const result = resolveQuickstartGatewayDefaults(storedConfig, {
@@ -39,7 +102,6 @@ describe("resolveQuickstartGatewayDefaults", () => {
       gatewayToken: "explicit-token",
       gatewayPassword: "explicit-password",
       tailscale: "off",
-      tailscaleResetOnExit: false,
     });
 
     expect(result).toEqual({
@@ -51,7 +113,6 @@ describe("resolveQuickstartGatewayDefaults", () => {
       token: "explicit-token",
       password: "explicit-password",
       customBindHost: "192.0.2.10",
-      tailscaleResetOnExit: false,
     });
   });
 
@@ -65,7 +126,6 @@ describe("resolveQuickstartGatewayDefaults", () => {
       token: "stored-token",
       password: "stored-password",
       customBindHost: "192.0.2.10",
-      tailscaleResetOnExit: true,
     });
   });
 
@@ -116,9 +176,8 @@ describe("writeWizardConfigFile", () => {
     vi.clearAllMocks();
     mocks.currentConfig = {};
     mocks.transformConfigWithPendingPluginInstalls.mockImplementation(
-      async (params: {
-        transform: (current: OpenClawConfig) => { nextConfig: OpenClawConfig };
-      }) => ({ nextConfig: params.transform(mocks.currentConfig).nextConfig }),
+      async (params: { transform: (current: OpenClawConfig) => { nextConfig: OpenClawConfig } }) =>
+        configFiles.write(params.transform(mocks.currentConfig).nextConfig),
     );
   });
 
@@ -149,7 +208,10 @@ describe("writeWizardConfigFile", () => {
     };
     mocks.currentConfig = { gateway: { port: 19001 } };
 
-    await expect(writeWizardConfigFile(config)).resolves.toEqual(config);
+    await expect(writeWizardConfigFile(config)).resolves.toMatchObject({
+      nextConfig: config,
+      path: "/tmp/openclaw.json",
+    });
   });
 
   it("applies only the wizard delta to a fresh concurrent config", async () => {
@@ -167,10 +229,13 @@ describe("writeWizardConfigFile", () => {
       plugins: { entries: { demo: { enabled: true } } },
     };
 
-    await expect(writeWizardConfigFile(next, { mergeBase: base })).resolves.toEqual({
-      agents: { defaults: { workspace: "/concurrent" } },
-      gateway: { port: 19001 },
-      plugins: { entries: { demo: { enabled: true } } },
+    await expect(writeWizardConfigFile(next, { mergeBase: base })).resolves.toMatchObject({
+      path: "/tmp/openclaw.json",
+      nextConfig: {
+        agents: { defaults: { workspace: "/concurrent" } },
+        gateway: { port: 19001 },
+        plugins: { entries: { demo: { enabled: true } } },
+      },
     });
   });
 });

@@ -4,7 +4,8 @@ import { uniqueStrings } from "@openclaw/normalization-core/string-normalization
 import { normalizeEmbeddedAgentRuntime } from "../../../agents/agent-runtime-id.js";
 import {
   listAgentEntriesWithSource,
-  resolveDefaultAgentDir,
+  resolveAgentDir,
+  resolveAmbientOwnerAgentId,
 } from "../../../agents/agent-scope-config.js";
 import { resolveCliBackendConfig } from "../../../agents/cli-backends.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../../agents/defaults.js";
@@ -24,7 +25,7 @@ import {
   resolveContextEngine,
 } from "../../../context-engine/registry.js";
 import type { ContextEngineInfo } from "../../../context-engine/types.js";
-import { loadPluginRegistryHandle } from "../../../plugins/loader.js";
+import { acquirePluginRegistryForInspection } from "../../../plugins/loader.js";
 import type { PluginRegistry } from "../../../plugins/registry-types.js";
 import { withPluginRuntimeRegistryScope } from "../../../plugins/runtime/gateway-request-scope.js";
 import { defaultSlotIdForKey } from "../../../plugins/slots.js";
@@ -251,42 +252,58 @@ async function resolveSelectedContextEngineInfo(params: {
 
   ensureContextEnginesInitialized();
   let pluginRegistry: PluginRegistry | undefined;
-  if (getContextEngineRegistration(engineId)?.lifecycle !== "runtime") {
-    try {
-      pluginRegistry = loadPluginRegistryHandle({
-        config: params.cfg,
-        env: params.env,
-        onlyPluginIds: [engineId],
-      });
-    } catch (error) {
-      if (pluginRegistry?.contextEngines.get(engineId)?.lifecycle !== "runtime") {
-        const message = error instanceof Error ? error.message : String(error);
-        return {
-          warnings: [
-            `- plugins.slots.contextEngine: could not inspect context engine "${engineId}" host requirements because its plugin failed to load: ${message}`,
-          ],
-        };
-      }
-    }
-    if (pluginRegistry?.contextEngines.get(engineId)?.lifecycle !== "runtime") {
-      return {
-        warnings: [
-          `- plugins.slots.contextEngine: could not inspect context engine "${engineId}" host requirements because it is not registered.`,
-        ],
-      };
-    }
-  }
-
+  let inspection: Awaited<ReturnType<typeof acquirePluginRegistryForInspection>> | undefined;
   try {
-    const resolve = () =>
-      resolveContextEngine(params.cfg, {
-        agentDir: resolveDefaultAgentDir(params.cfg, params.env),
-        workspaceDir: params.cfg.agents?.defaults?.workspace
-          ? resolveUserPath(params.cfg.agents.defaults.workspace, params.env)
-          : undefined,
+    try {
+      if (getContextEngineRegistration(engineId)?.lifecycle !== "runtime") {
+        try {
+          inspection = await acquirePluginRegistryForInspection({
+            config: params.cfg,
+            env: params.env,
+            onlyPluginIds: [engineId],
+          });
+          pluginRegistry = inspection.registry;
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          return {
+            warnings: [
+              `- plugins.slots.contextEngine: could not inspect context engine "${engineId}" host requirements because its plugin failed to load: ${message}`,
+            ],
+          };
+        }
+        const registration = pluginRegistry.contextEngines.get(engineId);
+        if (registration?.lifecycle === "readOnlyDiscovery") {
+          return {
+            warnings: [
+              `- plugins.slots.contextEngine: context engine "${engineId}" is registered for read-only discovery; offline host compatibility inspection is unavailable. This does not indicate a missing runtime registration in the Gateway.`,
+            ],
+          };
+        }
+        if (registration?.lifecycle !== "runtime") {
+          return {
+            warnings: [
+              `- plugins.slots.contextEngine: could not inspect context engine "${engineId}" host requirements because it is not registered.`,
+            ],
+          };
+        }
+      }
+
+      const agentId = resolveAmbientOwnerAgentId(params.cfg, undefined, {
+        surface: "context-engine Doctor checks",
+        hint: "Set agents.defaults.systemAgent.agentId before running Doctor.",
       });
-    const engine = await withPluginRuntimeRegistryScope(pluginRegistry, resolve);
-    return { info: engine.info, warnings: [] };
+      const resolve = () =>
+        resolveContextEngine(params.cfg, {
+          agentDir: resolveAgentDir(params.cfg, agentId, params.env),
+          workspaceDir: params.cfg.agents?.defaults?.workspace
+            ? resolveUserPath(params.cfg.agents.defaults.workspace, params.env)
+            : undefined,
+        });
+      const engine = await withPluginRuntimeRegistryScope(pluginRegistry, resolve);
+      return { info: engine.info, warnings: [] };
+    } finally {
+      await inspection?.release();
+    }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     return {
@@ -354,7 +371,7 @@ function formatCompatibilityWarnings(params: {
   const incompatibleAllHosts = params.issues.length === params.hostCount;
   lines.push(
     incompatibleAllHosts
-      ? `- Run "${params.doctorFixCommand}" to switch plugins.slots.contextEngine to "legacy", or configure a compatible runtime/harness for agent runs.`
+      ? `- Run "${params.doctorFixCommand}" to remove the plugins.slots.contextEngine override and restore the default "legacy", or configure a compatible runtime/harness for agent runs.`
       : `- Some configured runtimes support context engine "${params.info.id}" and others do not; doctor will not rewrite the global contextEngine slot automatically. Configure unsupported models to use a compatible runtime/harness or set plugins.slots.contextEngine to "legacy".`,
   );
   return [lines.join("\n")];
@@ -411,13 +428,17 @@ export async function maybeRepairContextEngineHostCompatibility(params: {
   }
 
   const next = structuredClone(params.cfg);
-  next.plugins ??= {};
-  next.plugins.slots ??= {};
-  next.plugins.slots.contextEngine = defaultSlotIdForKey("contextEngine");
+  const slots = next.plugins?.slots;
+  if (slots) {
+    delete slots.contextEngine;
+    if (Object.keys(slots).length === 0) {
+      delete next.plugins?.slots;
+    }
+  }
   return {
     config: next,
     changes: [
-      `Set plugins.slots.contextEngine to "legacy" because context engine "${resolved.info.id}" is incompatible with every configured agent-run host.`,
+      `Reset plugins.slots.contextEngine to the default "legacy" because context engine "${resolved.info.id}" is incompatible with every configured agent-run host.`,
     ],
     warnings: resolved.warnings,
   };

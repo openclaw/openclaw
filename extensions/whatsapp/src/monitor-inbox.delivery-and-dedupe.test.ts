@@ -1,12 +1,16 @@
 // WhatsApp monitor inbox behavior split by ownership.
-import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  clearWhatsAppApprovalReactionTargetsForTest,
+  registerWhatsAppApprovalReactionTarget,
+} from "./approval-reactions.js";
 import { createWhatsAppDurableInboundQueue } from "./inbound/durable-receive.js";
 import { resolveWhatsAppIngressLifecycle } from "./inbound/ingress-lifecycle.js";
 import type { WebInboundMessage } from "./inbound/types.js";
 import {
   nextMessageId,
   inboundMessage,
-  expectDeprecatedAdmissionAliases,
   installStreamsInboundMessageHooks,
 } from "./monitor-inbox.streams-inbound-messages.test-support.js";
 import {
@@ -16,17 +20,97 @@ import {
   settleInboundWork,
   startInboxMonitor,
   waitForMessageCalls,
+  waitForInboundWorkDrained,
   type InboxOnMessage,
 } from "./monitor-inbox.test-harness.js";
 
+const approvalResolver = vi.hoisted(() => vi.fn());
+vi.mock("openclaw/plugin-sdk/approval-gateway-runtime", () => ({
+  resolveApprovalOverGateway: approvalResolver,
+}));
+
 describe("web monitor inbox delivery and dedupe", () => {
   installStreamsInboundMessageHooks();
+  beforeEach(() => {
+    clearWhatsAppApprovalReactionTargetsForTest();
+    approvalResolver.mockReset();
+  });
+
+  it("replays approval reactions after Gateway loss without losing batch siblings", async () => {
+    registerWhatsAppApprovalReactionTarget({
+      accountId: DEFAULT_ACCOUNT_ID,
+      remoteJid: "15551230000@s.whatsapp.net",
+      messageId: "approval-message",
+      approvalId: "exec-replay",
+      approvalKind: "exec",
+      allowedDecisions: ["allow-once", "deny"],
+    });
+    const replayStarted = createDeferred<void>();
+    const finishReplay = createDeferred<void>();
+    approvalResolver
+      .mockRejectedValueOnce(new Error("gateway 503"))
+      .mockRejectedValueOnce(new Error("gateway still unavailable"))
+      .mockImplementationOnce(async () => {
+        replayStarted.resolve();
+        await finishReplay.promise;
+        return { applied: true, approval: { status: "allowed", decision: "allow-once" } };
+      });
+    const onMessage = vi.fn();
+    const queue = createWhatsAppDurableInboundQueue(DEFAULT_ACCOUNT_ID);
+    const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage, {
+      durableInboundQueue: queue,
+    });
+    try {
+      sock.ev.emit("messages.upsert", {
+        type: "notify",
+        messages: [
+          {
+            key: { id: "reaction-replay", remoteJid: "15551230000@s.whatsapp.net", fromMe: false },
+            message: {
+              reactionMessage: {
+                text: "👍",
+                key: { id: "approval-message", remoteJid: "15551230000@s.whatsapp.net" },
+              },
+            },
+            messageTimestamp: 1_700_000_000,
+          },
+          ...buildNotifyMessageUpsert({
+            id: "batch-survivor",
+            remoteJid: "999@s.whatsapp.net",
+            text: "batch survivor",
+            timestamp: 1_700_000_001,
+          }).messages,
+        ],
+      });
+      await replayStarted.promise;
+      const claim = (await queue.listClaims()).find((entry) => entry.attempts === 1);
+      expect(claim).toBeDefined();
+      if (!claim) {
+        throw new Error("expected the replayed approval claim");
+      }
+      finishReplay.resolve();
+      await waitForInboundWorkDrained();
+      expect(approvalResolver).toHaveBeenCalledTimes(3);
+      expect(approvalResolver.mock.calls[1]).toEqual(approvalResolver.mock.calls[0]);
+      expect(approvalResolver.mock.calls[2]).toEqual(approvalResolver.mock.calls[0]);
+      expect(onMessage).toHaveBeenCalledTimes(1);
+      expect(inboundMessage(onMessage).payload.body).toBe("batch survivor");
+      expect(await queue.listClaims()).toEqual([]);
+      expect(await queue.listPending({ limit: "all" })).toEqual([]);
+      await expect(
+        queue.enqueue(claim.id, claim.payload, { laneKey: claim.laneKey }),
+      ).resolves.toMatchObject({ kind: "completed" });
+    } finally {
+      finishReplay.resolve();
+      await listener.close();
+    }
+  });
 
   it("delivery coordinator streams inbound messages", async () => {
     const onMessage = vi.fn(async (msg) => {
       await msg.platform.sendComposing();
-      await msg.reply("flat reply works");
-      await msg.sendMedia({ text: "flat media works" });
+      await msg.platform.reply("nested reply works");
+      await msg.platform.sendMedia({ text: "nested media works" });
     });
 
     const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
@@ -60,7 +144,6 @@ describe("web monitor inbox delivery and dedupe", () => {
         decision: "allow",
       },
     });
-    expectDeprecatedAdmissionAliases(inbound);
     expect(sock.readMessages).toHaveBeenCalledWith([
       {
         remoteJid: "999@s.whatsapp.net",
@@ -72,10 +155,10 @@ describe("web monitor inbox delivery and dedupe", () => {
     expect(sock.sendPresenceUpdate).toHaveBeenCalledWith("available");
     expect(sock.sendPresenceUpdate).toHaveBeenCalledWith("composing", "999@s.whatsapp.net");
     expect(sock.sendMessage).toHaveBeenNthCalledWith(1, "999@s.whatsapp.net", {
-      text: "flat reply works",
+      text: "nested reply works",
     });
     expect(sock.sendMessage).toHaveBeenNthCalledWith(2, "999@s.whatsapp.net", {
-      text: "flat media works",
+      text: "nested media works",
     });
 
     await listener.close();
@@ -585,7 +668,29 @@ describe("web monitor inbox delivery and dedupe", () => {
     await listener.close();
   });
 
-  it("delivery coordinator retries redelivery after an explicit retryable failure", async () => {
+  it("delivery coordinator dispatches same-content messages with distinct ids in order", async () => {
+    const onMessage = vi.fn(async (_message: WebInboundMessage) => {});
+    const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
+
+    for (const [index, id] of ["in-2", "in-3"].entries()) {
+      sock.ev.emit(
+        "messages.upsert",
+        buildNotifyMessageUpsert({
+          id,
+          remoteJid: "999@s.whatsapp.net",
+          text: "Done.",
+          timestamp: 1_700_000_000 + index,
+          pushName: "Tester",
+        }),
+      );
+      await waitForMessageCalls(onMessage, index + 1);
+    }
+
+    expect(onMessage.mock.calls.map(([message]) => message.event.id)).toEqual(["in-2", "in-3"]);
+    await listener.close();
+  });
+
+  it("delivery coordinator automatically retries after an explicit retryable failure", async () => {
     let attempts = 0;
     const onMessage = vi.fn(async () => {
       attempts += 1;
@@ -605,10 +710,6 @@ describe("web monitor inbox delivery and dedupe", () => {
     });
 
     sock.ev.emit("messages.upsert", upsert);
-    await waitForMessageCalls(onMessage, 1);
-    expect(sock.readMessages).not.toHaveBeenCalled();
-
-    sock.ev.emit("messages.upsert", upsert);
     await waitForMessageCalls(onMessage, 2);
     await vi.waitFor(() => {
       expect(sock.readMessages).toHaveBeenCalledTimes(1);
@@ -617,7 +718,7 @@ describe("web monitor inbox delivery and dedupe", () => {
     await listener.close();
   });
 
-  it("delivery coordinator retries redelivery after reply session conflicts", async () => {
+  it("delivery coordinator automatically retries after reply session conflicts", async () => {
     let attempts = 0;
     const onMessage = vi.fn(async () => {
       attempts += 1;
@@ -636,10 +737,6 @@ describe("web monitor inbox delivery and dedupe", () => {
       timestamp: 1_700_000_000,
       pushName: "Tester",
     });
-
-    sock.ev.emit("messages.upsert", upsert);
-    await waitForMessageCalls(onMessage, 1);
-    expect(sock.readMessages).not.toHaveBeenCalled();
 
     sock.ev.emit("messages.upsert", upsert);
     await waitForMessageCalls(onMessage, 2);

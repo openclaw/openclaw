@@ -4,10 +4,10 @@
  * new public access-profile config surface.
  */
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import type { ChatType } from "../channels/chat-type.js";
 import { normalizeChatType } from "../channels/chat-type.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GroupToolPolicyConfig } from "../config/types.tools.js";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import type { RuntimePluginToolGrant } from "../plugins/runtime/tool-grant.js";
 import type { InputProvenance } from "../sessions/input-provenance.js";
 import type { SkillSnapshot } from "../skills/types.js";
@@ -18,24 +18,38 @@ import {
   resolveTrustedGroupId,
   sessionKeyNamesGroupConversation,
 } from "./agent-tools.policy.js";
-import {
-  resolveRequesterToolPolicies,
-  type RequesterToolPolicySource,
-} from "./requester-tool-policy.js";
+import { resolveRequesterToolPolicies } from "./requester-tool-policy.js";
 import { pickSandboxToolPolicy } from "./sandbox-tool-policy.js";
 import type { SandboxToolPolicy } from "./sandbox/types.js";
 import type { ScheduledToolPolicyContext } from "./scheduled-tool-policy.js";
+import { resolveSessionPlacementSandboxToolPolicy } from "./session-placement-computer.js";
 import type { TrustedSubagentCompletionHandoff } from "./subagents/announce/subagent-announce-handoff.js";
 import type { PromptMode } from "./system-prompt.types.js";
 import {
   collectExplicitAllowlist,
   collectExplicitDenylist,
+  mergeAlsoAllowPolicy,
   resolveToolProfilePolicy,
-  type ToolPolicyLike,
 } from "./tool-policy.js";
 import { resolveWorkspaceRoot } from "./workspace-dir.js";
 
 type ConversationCapabilityScope = "direct" | "shared" | "unknown";
+
+function resolveManifestToolProfileNames(
+  snapshot: Pick<PluginMetadataSnapshot, "plugins"> | undefined,
+  profile: string | undefined,
+): string[] {
+  if (!profile) {
+    return [];
+  }
+  return uniqueStrings(
+    (snapshot?.plugins ?? []).flatMap((plugin) =>
+      (plugin.contracts?.tools ?? []).filter((toolName) =>
+        plugin.toolMetadata?.[toolName]?.profiles?.some((candidate) => candidate === profile),
+      ),
+    ),
+  );
+}
 
 export type ConversationCapabilityProfileParams = {
   config?: OpenClawConfig;
@@ -85,6 +99,7 @@ export type ConversationCapabilityProfileParams = {
   /** Persist the runtime allowlist as real parent authority on spawned children. */
   inheritRuntimeToolAllowlist?: boolean;
   runtimePluginToolGrant?: RuntimePluginToolGrant;
+  pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "plugins">;
   inputProvenance?: InputProvenance;
   /** Consumed in-process completion capability; public callers cannot set this fact. */
   trustedInternalHandoff?: TrustedSubagentCompletionHandoff;
@@ -92,107 +107,7 @@ export type ConversationCapabilityProfileParams = {
   scheduledToolPolicy?: ScheduledToolPolicyContext;
 };
 
-export type ResolvedConversationCapabilityProfile = {
-  agentId?: string;
-  serviceIdentity: {
-    agentId?: string;
-    agentDir?: string;
-    accountId?: string | null;
-    runId?: string;
-    sessionId?: string;
-  };
-  model: {
-    provider?: string;
-    id?: string;
-    api?: string;
-    contextWindowTokens?: number;
-    hasVision?: boolean;
-  };
-  conversation: {
-    scope: ConversationCapabilityScope;
-    chatType?: ChatType;
-    sessionKey?: string;
-    policySessionKey?: string;
-    runSessionKey?: string;
-    sessionId?: string;
-    messageProvider?: string | null;
-    messageChannel?: string | null;
-    messageTo?: string | null;
-    messageThreadId?: string | number | null;
-    currentChannelId?: string | null;
-    currentMessagingTarget?: string | null;
-    currentThreadTs?: string | null;
-    currentMessageId?: string | number | null;
-    groupId?: string | null;
-    groupChannel?: string | null;
-    groupSpace?: string | null;
-    memberRoleIds?: readonly string[];
-    spawnedBy?: string | null;
-  };
-  sender: {
-    id?: string | null;
-    name?: string | null;
-    username?: string | null;
-    e164?: string | null;
-    isOwner?: boolean;
-  };
-  workspace: {
-    workspaceDir?: string;
-    cwd?: string;
-    spawnWorkspaceDir?: string;
-    workspaceRoot: string;
-    runtimeRoot: string;
-    spawnWorkspaceRoot?: string;
-    instructionRoot?: string;
-    isCanonicalWorkspace?: boolean;
-  };
-  instructions: {
-    agentDir?: string;
-    workspaceDir?: string;
-    promptMode?: PromptMode;
-    isCanonicalWorkspace?: boolean;
-  };
-  skills: {
-    snapshot?: SkillSnapshot;
-  };
-  policy: {
-    agentId?: string;
-    sessionKey?: string;
-    subagentSessionKey?: string;
-    trustedGroup: {
-      groupId: string | null | undefined;
-      dropped: boolean;
-    };
-    profile?: string;
-    providerProfile?: string;
-    profilePolicy?: ToolPolicyLike;
-    providerProfilePolicy?: ToolPolicyLike;
-    profileAlsoAllow?: string[];
-    providerProfileAlsoAllow?: string[];
-    globalPolicy?: SandboxToolPolicy;
-    globalProviderPolicy?: SandboxToolPolicy;
-    agentPolicy?: SandboxToolPolicy;
-    agentProviderPolicy?: SandboxToolPolicy;
-    groupPolicy?: SandboxToolPolicy;
-    senderPolicy?: SandboxToolPolicy;
-    sandboxPolicy?: SandboxToolPolicy;
-    subagentPolicy?: SandboxToolPolicy;
-    inheritedToolPolicy?: SandboxToolPolicy;
-    delegated: boolean;
-    requesterPolicySource: RequesterToolPolicySource;
-    runtimeToolPolicyForInheritance?: ToolPolicyLike;
-    inheritancePolicies: Array<ToolPolicyLike | undefined>;
-    explicitToolAllowlist: string[];
-    /** Explicit config/runtime grants only; excludes built-in profile expansion. */
-    explicitToolOverrideAllowlist: string[];
-    explicitToolDenylist: string[];
-    runtimePluginToolGrant?: RuntimePluginToolGrant;
-  };
-};
-
-export function resolveConversationCapabilityProfile(
-  params: ConversationCapabilityProfileParams,
-): ResolvedConversationCapabilityProfile {
+export function resolveConversationCapabilityProfile(params: ConversationCapabilityProfileParams) {
   const messageProvider = params.messageProvider;
   const effective = resolveEffectiveToolPolicy({
     config: params.config,
@@ -200,6 +115,10 @@ export function resolveConversationCapabilityProfile(
     agentId: params.agentId,
     modelProvider: params.modelProvider,
     modelId: params.modelId,
+  });
+  const sandboxToolPolicy = resolveSessionPlacementSandboxToolPolicy(params.sandboxToolPolicy, {
+    runId: params.runId,
+    agentId: effective.agentId,
   });
   const trustedGroup = resolveTrustedGroupId({
     sessionKey: params.sessionKey,
@@ -242,8 +161,14 @@ export function resolveConversationCapabilityProfile(
     conversationPolicy: pickSandboxToolPolicy(params.conversationToolPolicy),
   });
   const { groupPolicy, senderPolicy, subagentPolicy, inheritedToolPolicy } = requesterPolicies;
-  const profilePolicy = resolveToolProfilePolicy(effective.profile);
-  const providerProfilePolicy = resolveToolProfilePolicy(effective.providerProfile);
+  const profilePolicy = mergeAlsoAllowPolicy(
+    resolveToolProfilePolicy(effective.profile),
+    resolveManifestToolProfileNames(params.pluginMetadataSnapshot, effective.profile),
+  );
+  const providerProfilePolicy = mergeAlsoAllowPolicy(
+    resolveToolProfilePolicy(effective.providerProfile),
+    resolveManifestToolProfileNames(params.pluginMetadataSnapshot, effective.providerProfile),
+  );
   const configuredOverridePolicies = [
     effective.globalPolicy,
     effective.globalProviderPolicy,
@@ -251,7 +176,7 @@ export function resolveConversationCapabilityProfile(
     effective.agentProviderPolicy,
     groupPolicy,
     senderPolicy,
-    params.sandboxToolPolicy,
+    sandboxToolPolicy,
     subagentPolicy,
   ];
   const runtimeToolPolicy = params.runtimeToolAllowlist
@@ -371,7 +296,7 @@ export function resolveConversationCapabilityProfile(
       agentProviderPolicy: effective.agentProviderPolicy,
       groupPolicy,
       senderPolicy,
-      sandboxPolicy: params.sandboxToolPolicy,
+      sandboxPolicy: sandboxToolPolicy,
       subagentPolicy,
       inheritedToolPolicy,
       delegated: requesterPolicies.delegated,
@@ -385,6 +310,10 @@ export function resolveConversationCapabilityProfile(
     },
   };
 }
+
+export type ResolvedConversationCapabilityProfile = ReturnType<
+  typeof resolveConversationCapabilityProfile
+>;
 
 function resolveConversationScope(params: {
   chatType?: string;

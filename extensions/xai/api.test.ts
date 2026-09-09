@@ -1,13 +1,18 @@
 // Xai tests cover api plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
-  isXaiModelHint,
+  normalizeXaiModelId,
   resolveXaiForwardCompatModel,
   resolveXaiTransport,
   XAI_BASE_URL,
 } from "./api.js";
+import { normalizeXaiModelId as normalizeXaiModelIdDirect } from "./model-id.js";
 
 describe("xai api helpers", () => {
+  it("re-exports the model normalizer", () => {
+    expect(normalizeXaiModelId).toBe(normalizeXaiModelIdDirect);
+  });
+
   it("uses shared endpoint classification for native xAI transports", () => {
     expect(
       resolveXaiTransport({
@@ -51,14 +56,30 @@ describe("xai api helpers", () => {
     },
   );
 
-  it.each(["xai", "x-ai"])(
-    "restores the native endpoint for materialized %s overlays",
-    (provider) => {
+  it.each([
+    {
+      provider: "xai",
+      modelId: "grok-4.5",
+      cost: { input: 2, output: 6, cacheRead: 0.3, cacheWrite: 0 },
+    },
+    {
+      provider: "x-ai",
+      modelId: "grok-4.5",
+      cost: { input: 2, output: 6, cacheRead: 0.3, cacheWrite: 0 },
+    },
+    {
+      provider: "xai",
+      modelId: "grok-fixture-next",
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    },
+  ])(
+    "resolves materialized $provider/$modelId with its own known or unknown pricing",
+    ({ provider, modelId, cost }) => {
       const model = resolveXaiForwardCompatModel({
         providerId: "xai",
         ctx: {
           provider,
-          modelId: "grok-4.5",
+          modelId,
           modelRegistry: { find: () => null } as never,
           providerConfig: { baseUrl: "", models: [] },
         },
@@ -66,10 +87,7 @@ describe("xai api helpers", () => {
 
       expect(model?.baseUrl).toBe(XAI_BASE_URL);
       expect(model?.reasoning).toBe(true);
+      expect(model?.cost).toEqual(cost);
     },
   );
-
-  it("detects xAI model hints", () => {
-    expect(isXaiModelHint("x-ai/grok-4")).toBe(true);
-  });
 });

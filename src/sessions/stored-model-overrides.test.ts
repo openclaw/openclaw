@@ -1,0 +1,176 @@
+import { describe, expect, it, vi } from "vitest";
+import {
+  resolveDirectStoredModelOverride,
+  resolveStoredModelOverride,
+} from "./stored-model-overrides.js";
+
+describe("resolveStoredModelOverride", () => {
+  it("recovers resolved provenance for legacy auto-fallback overrides", () => {
+    expect(
+      resolveStoredModelOverride({
+        defaultProvider: "openai",
+        sessionEntry: {
+          sessionId: "legacy-fallback",
+          updatedAt: 1,
+          providerOverride: "cloudflare-ai-gateway",
+          modelOverride: "gemini-2.5-flash-lite",
+          modelOverrideSource: "auto",
+          modelOverrideFallbackOriginProvider: "anthropic",
+          modelOverrideFallbackOriginModel: "claude-sonnet-4-6",
+        },
+      }),
+    ).toMatchObject({ routeResolution: "resolved" });
+  });
+
+  it("loads parent overrides without requiring a whole session store", () => {
+    const loadSessionEntry = vi.fn((sessionKey: string) =>
+      sessionKey === "agent:main:telegram:dm:parent"
+        ? {
+            sessionId: "parent-session",
+            updatedAt: 1782259200000,
+            providerOverride: "anthropic",
+            modelOverride: "claude-sonnet-4-7",
+          }
+        : undefined,
+    );
+
+    expect(
+      resolveStoredModelOverride({
+        defaultProvider: "openai",
+        loadSessionEntry,
+        sessionKey: "agent:main:telegram:dm:parent:thread:child",
+      }),
+    ).toEqual({
+      provider: "anthropic",
+      model: "claude-sonnet-4-7",
+      source: "parent",
+      routeResolution: "raw",
+    });
+    expect(loadSessionEntry).toHaveBeenCalledWith("agent:main:telegram:dm:parent");
+  });
+
+  it("does not inherit active automatic fallback overrides from parent sessions", () => {
+    expect(
+      resolveStoredModelOverride({
+        defaultProvider: "openai",
+        sessionKey: "agent:main:discord:channel:root:thread:child",
+        sessionStore: {
+          "agent:main:discord:channel:root": {
+            sessionId: "parent-session",
+            updatedAt: 1,
+            providerOverride: "google-vertex",
+            modelOverride: "gemini-fallback",
+            modelOverrideSource: "auto",
+            modelOverrideFallbackOriginProvider: "openai",
+            modelOverrideFallbackOriginModel: "gpt-primary",
+          },
+        },
+      }),
+    ).toBeNull();
+  });
+
+  it("inherits configured automatic selections without fallback provenance", () => {
+    expect(
+      resolveStoredModelOverride({
+        defaultProvider: "openai",
+        sessionKey: "agent:main:discord:channel:root:thread:child",
+        sessionStore: {
+          "agent:main:discord:channel:root": {
+            sessionId: "legacy-parent-session",
+            updatedAt: 1,
+            providerOverride: "google-vertex",
+            modelOverride: "gemini-fallback",
+            modelOverrideSource: "auto",
+          },
+        },
+      }),
+    ).toEqual({
+      provider: "google-vertex",
+      model: "gemini-fallback",
+      source: "parent",
+      routeResolution: "raw",
+    });
+  });
+
+  it("continues to inherit deliberate parent model pins", () => {
+    expect(
+      resolveStoredModelOverride({
+        defaultProvider: "openai",
+        sessionKey: "agent:main:discord:channel:root:thread:child",
+        sessionStore: {
+          "agent:main:discord:channel:root": {
+            sessionId: "parent-session",
+            updatedAt: 1,
+            providerOverride: "anthropic",
+            modelOverride: "claude-sonnet-4-6",
+            modelOverrideSource: "user",
+          },
+        },
+      }),
+    ).toEqual({
+      provider: "anthropic",
+      model: "claude-sonnet-4-6",
+      source: "parent",
+      routeResolution: "raw",
+    });
+  });
+
+  it("rejects stale direct fields behind an explicit Default marker", () => {
+    expect(
+      resolveDirectStoredModelOverride({
+        defaultProvider: "openai",
+        sessionEntry: {
+          sessionId: "default-session",
+          updatedAt: 1,
+          modelOverrideSource: "default",
+          providerOverride: "anthropic",
+          modelOverride: "stale-model",
+        },
+      }),
+    ).toBeNull();
+  });
+
+  it("does not inherit stale fields from a parent that explicitly selected Default", () => {
+    expect(
+      resolveStoredModelOverride({
+        defaultProvider: "openai",
+        sessionKey: "agent:main:dashboard:parent:thread:child",
+        sessionStore: {
+          "agent:main:dashboard:parent": {
+            sessionId: "parent-session",
+            updatedAt: 1,
+            modelOverrideSource: "default",
+            providerOverride: "anthropic",
+            modelOverride: "stale-model",
+          },
+        },
+      }),
+    ).toBeNull();
+  });
+
+  it("does not inherit a parent pin after the child explicitly selects default", () => {
+    expect(
+      resolveStoredModelOverride({
+        defaultProvider: "openai",
+        sessionEntry: {
+          sessionId: "child-session",
+          updatedAt: 2,
+          modelOverrideSource: "default",
+          providerOverride: "google-vertex",
+          modelOverride: "stale-model",
+        },
+        sessionKey: "agent:main:dashboard:child",
+        parentSessionKey: "agent:main:dashboard:parent",
+        sessionStore: {
+          "agent:main:dashboard:parent": {
+            sessionId: "parent-session",
+            updatedAt: 1,
+            providerOverride: "anthropic",
+            modelOverride: "claude-sonnet-4-6",
+            modelOverrideSource: "user",
+          },
+        },
+      }),
+    ).toBeNull();
+  });
+});

@@ -6,7 +6,8 @@ import {
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import { clearPaneSessionHandoff, clearPaneSessionHandoffs } from "./chat-pane-shared.ts";
 import type { ChatPaneElement } from "./route-draft-focus-handoff.ts";
-import { findPane, type ChatSplitLayout, type ChatSplitPane } from "./split-layout.ts";
+import type { ChatSplitLayout, ChatSplitPane } from "./split-layout-types.ts";
+import { findPane } from "./split-layout.ts";
 
 const RETAINED_SESSIONS_PER_PANE = 3;
 const SESSION_NAVIGATION_PREVIEW_TIMEOUT_MS = 5_000;
@@ -14,7 +15,7 @@ const SESSION_NAVIGATION_PREVIEW_TIMEOUT_MS = 5_000;
 type RetentionHost = HTMLElement & { requestUpdate(): unknown };
 type RetentionBindings = {
   context: () => ApplicationContext | undefined;
-  face: () => SessionNavigationIntent["face"];
+  presented: () => boolean;
   layout: () => ChatSplitLayout;
   selectReplacement: (paneId: string, sourceSessionKey: string, sessionKey: string) => void;
 };
@@ -41,6 +42,10 @@ export class ChatPageRetainedSessions {
     this.sessionsByPane.clear();
     window.removeEventListener("popstate", this.cancelPreview);
     window.removeEventListener(SESSION_NAVIGATION_INTENT_EVENT, this.handleNavigationIntent);
+    this.cancelPreview();
+  }
+
+  suspend(): void {
     this.cancelPreview();
   }
 
@@ -97,16 +102,19 @@ export class ChatPageRetainedSessions {
     paneId: string,
     sessionKey: string,
     replacementSessionKey: string,
+    preserveDraft = false,
   ): void => {
     const deletedPane = this.findPane(paneId, sessionKey);
-    deletedPane?.discardStagedAttachments?.();
+    if (!preserveDraft) {
+      deletedPane?.discardStagedAttachments?.();
+    }
     const retained = this.sessionsByPane.get(paneId);
     const retainedIndex = retained?.findIndex((key) => areUiSessionKeysEquivalent(key, sessionKey));
     if (retained && retainedIndex !== undefined && retainedIndex >= 0) {
       retained.splice(retainedIndex, 1);
     }
     const context = this.bindings.context();
-    if (context) {
+    if (context && !preserveDraft) {
       clearPaneSessionHandoff(context, paneId, sessionKey);
     }
     if (
@@ -131,14 +139,11 @@ export class ChatPageRetainedSessions {
   }
 
   private readonly handleNavigationIntent = (event: Event) => {
-    if (!(event instanceof CustomEvent)) {
+    if (!this.bindings.presented() || !(event instanceof CustomEvent)) {
       return;
     }
     this.cancelPreview();
     const intent = event.detail as SessionNavigationIntent;
-    if (intent.face !== this.bindings.face()) {
-      return;
-    }
     const layout = this.bindings.layout();
     const activePane = findPane(layout, layout.activePaneId)?.pane;
     const retainedKey = this.sessionsByPane
@@ -147,6 +152,7 @@ export class ChatPageRetainedSessions {
     if (
       !activePane ||
       !retainedKey ||
+      this.findPane(activePane.id, retainedKey)?.routeFace !== intent.face ||
       areUiSessionKeysEquivalent(activePane.sessionKey, retainedKey)
     ) {
       return;
@@ -187,8 +193,10 @@ export class ChatPageRetainedSessions {
       if (pane.paneId !== paneId) {
         continue;
       }
-      const presented = areUiSessionKeysEquivalent(pane.sessionKey ?? "", sessionKey);
-      pane.classList.toggle("chat-pane-cache__pane--visible", presented);
+      const selected = areUiSessionKeysEquivalent(pane.sessionKey ?? "", sessionKey);
+      const presented = this.bindings.presented() && selected;
+      pane.classList.toggle("chat-pane-cache__pane--visible", selected);
+      pane.visuallyPresented = presented;
       if (preview) {
         pane.toggleAttribute("inert", true);
         continue;

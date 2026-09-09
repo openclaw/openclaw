@@ -1,6 +1,17 @@
 import type { JsonObject, JsonValue } from "./protocol-json.js";
 
 /** Current Codex marketplace, app, skill, hook, and config wire contracts. */
+export type CodexExperimentalFeatureListParams = {
+  cursor?: string | null;
+  limit?: number | null;
+  threadId?: string | null;
+};
+
+export type CodexExperimentalFeatureListResponse = {
+  data: Array<{ name: string; enabled: boolean }>;
+  nextCursor?: string | null;
+};
+
 export type CodexPluginSummary = {
   id: string;
   remotePluginId?: string | null;
@@ -9,6 +20,7 @@ export type CodexPluginSummary = {
   installed: boolean;
   enabled: boolean;
   installPolicy?: string;
+  mustShowInstallationInterstitial?: boolean | null;
   authPolicy?: string;
   availability?: string;
   interface?: JsonValue;
@@ -105,6 +117,8 @@ export type CodexAppInfo = {
   isAccessible: boolean;
   isEnabled: boolean;
   pluginDisplayNames: string[];
+  /** Present when app/read was requested with includeTools. */
+  toolSummaries?: CodexAppToolSummary[];
 };
 
 export type CodexAppsListParams = {
@@ -158,6 +172,7 @@ type CodexConnectorMetadata = {
 
 export type CodexAppsReadParams = {
   appIds: string[];
+  threadId?: string | null;
   includeTools?: boolean;
 };
 
@@ -210,12 +225,18 @@ export type CodexHooksListResponse = {
 
 export type CodexConfigReadResponse = {
   config: JsonObject;
+  origins: Record<string, CodexConfigLayerMetadata | undefined>;
   layers?: JsonValue[] | null;
+};
+
+export type CodexConfigReadParams = {
+  includeLayers?: boolean;
+  cwd?: string | null;
 };
 
 type CodexConfigMergeStrategy = "replace" | "upsert";
 
-export type CodexConfigEdit = {
+type CodexConfigEdit = {
   keyPath: string;
   value: JsonValue;
   mergeStrategy: CodexConfigMergeStrategy;
@@ -234,6 +255,7 @@ export type CodexConfigBatchWriteParams = {
 };
 
 type CodexConfigLayerSource =
+  | { type: "packagedDefaults"; file: string }
   | { type: "mdm"; domain: string; key: string }
   | { type: "system"; file: string }
   | { type: "enterpriseManaged"; id: string; name: string }

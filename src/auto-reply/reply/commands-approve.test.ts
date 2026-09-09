@@ -6,6 +6,7 @@ import type {
   ChannelPlugin,
 } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import type { ChannelApprovalKind } from "../../infra/approval-types.js";
 import { markImplicitSameChatApprovalAuthorization } from "../../plugin-sdk/approval-auth-runtime.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
@@ -54,9 +55,11 @@ function expectApprovalResolverCall(params: {
   expect(request.clientDisplayName).toMatch(/^Chat approval \(.+\)$/);
 }
 
-type ApprovalKind = "exec" | "plugin";
 type ApprovalTestPolicy = Partial<
-  Record<ApprovalKind, { authorizedSenders: readonly string[]; accountId?: string; reply?: string }>
+  Record<
+    ChannelApprovalKind,
+    { authorizedSenders: readonly string[]; accountId?: string; reply?: string }
+  >
 >;
 
 const approvalPolicies = new WeakMap<OpenClawConfig, ApprovalTestPolicy>();
@@ -218,6 +221,36 @@ describe("handleApproveCommand", () => {
     );
     expect(result?.shouldContinue).toBe(false);
     expect(result?.reply?.text).toContain("Usage: /approve");
+  });
+
+  it.each(["constructor", "__proto__", "toString", "valueOf"])(
+    "rejects Object.prototype decision %s instead of treating it as an approval decision",
+    async (decision) => {
+      const result = await handleApproveCommand(
+        buildApproveParams(`/approve abc ${decision}`, {
+          commands: { text: true },
+          channels: { whatsapp: { allowFrom: ["*"] } },
+        } as OpenClawConfig),
+        true,
+      );
+      expect(result?.shouldContinue).toBe(false);
+      expect(result?.reply?.text).toContain("Usage: /approve");
+      expect(resolveApprovalOverGatewayMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it("still accepts a real own-key decision after prototype names are rejected", async () => {
+    resolveApprovalOverGatewayMock.mockResolvedValue(undefined);
+    const result = await handleApproveCommand(
+      buildApproveParams("/approve abc deny", {
+        commands: { text: true },
+        channels: { whatsapp: { allowFrom: ["*"] } },
+      } as OpenClawConfig),
+      true,
+    );
+    expect(result?.shouldContinue).toBe(false);
+    expect(result?.reply?.text).toContain("Approval deny submitted");
+    expectApprovalResolverCall({ method: "exec.approval.resolve", id: "abc", decision: "deny" });
   });
 
   it.each([
@@ -544,7 +577,7 @@ describe("handleApproveCommand", () => {
           plugin: {
             ...createChannelTestPluginBase({ id: "matrix", label: "Matrix" }),
             approvalCapability: {
-              authorizeActorAction: ({ approvalKind }: { approvalKind: "exec" | "plugin" }) =>
+              authorizeActorAction: ({ approvalKind }: { approvalKind: ChannelApprovalKind }) =>
                 approvalKind === "plugin"
                   ? { authorized: true }
                   : {

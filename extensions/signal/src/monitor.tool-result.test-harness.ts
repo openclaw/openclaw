@@ -1,18 +1,18 @@
-// Signal plugin module implements monitor.tool result harness behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { PluginRuntime } from "openclaw/plugin-sdk/core";
 import {
   closeOpenClawStateDatabaseForTest,
   createChannelIngressQueueForTests,
-} from "openclaw/plugin-sdk/plugin-state-test-runtime";
+} from "openclaw/plugin-sdk/channel-ingress-test-runtime";
+import type { PluginRuntime } from "openclaw/plugin-sdk/core";
 import type { MockFn } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { closeOpenClawAgentDatabasesForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, vi } from "vitest";
 import type { SignalDaemonHandle } from "./daemon.js";
 import { setSignalRuntime } from "./runtime.js";
 import { clearSignalRuntimeForTest } from "./runtime.test-support.js";
+import type { SignalIngressMonitor } from "./signal-ingress.js";
 
 type SignalDaemonExitEvent = Awaited<SignalDaemonHandle["exited"]>;
 
@@ -27,6 +27,7 @@ type SignalToolResultTestMocks = {
   streamMock: MockFn;
   signalCheckMock: MockFn;
   signalRpcRequestMock: MockFn;
+  assertSignalDaemonEndpointAvailableMock: MockFn;
   spawnSignalDaemonMock: MockFn;
 };
 
@@ -40,8 +41,12 @@ const upsertPairingRequestMock = vi.hoisted(() => vi.fn()) as unknown as MockFn;
 const streamMock = vi.hoisted(() => vi.fn()) as unknown as MockFn;
 const signalCheckMock = vi.hoisted(() => vi.fn()) as unknown as MockFn;
 const signalRpcRequestMock = vi.hoisted(() => vi.fn()) as unknown as MockFn;
+const assertSignalDaemonEndpointAvailableMock = vi.hoisted(() => vi.fn()) as unknown as MockFn;
 const spawnSignalDaemonMock = vi.hoisted(() => vi.fn()) as unknown as MockFn;
 const signalToolResultSessionStore = vi.hoisted(() => ({ path: "" }));
+const signalToolResultIngressMonitor = vi.hoisted(() => ({
+  current: undefined as SignalIngressMonitor | undefined,
+}));
 let signalToolResultStateDir: string | undefined;
 let signalToolResultIngressQueue: ReturnType<typeof createChannelIngressQueueForTests> | undefined;
 
@@ -51,13 +56,15 @@ export function toSignalToolResultTestError(value: unknown, fallbackMessage: str
 
 export async function waitForSignalToolResultIngressIdle() {
   const queue = signalToolResultIngressQueue;
-  if (!queue) {
-    throw new Error("Signal tool-result ingress queue is not initialized");
+  const monitor = signalToolResultIngressMonitor.current;
+  if (!queue || !monitor) {
+    throw new Error("Signal tool-result ingress monitor is not initialized");
   }
+  await monitor.waitForIdle();
+  // Canonical idle owns active delivery synchronization. Deferred debounce claims
+  // settle later at turn adoption, so retain a bounded queue drain assertion.
   await vi.waitFor(
     async () => {
-      // Pending must be read before claims so a pending→claimed transition cannot
-      // disappear between two concurrent snapshots and produce a false idle.
       const pending = await queue.listPending({ limit: "all" });
       const claims = await queue.listClaims();
       if (pending.length > 0 || claims.length > 0) {
@@ -82,6 +89,7 @@ export function getSignalToolResultTestMocks(): SignalToolResultTestMocks {
     streamMock,
     signalCheckMock,
     signalRpcRequestMock,
+    assertSignalDaemonEndpointAvailableMock,
     spawnSignalDaemonMock,
   };
 }
@@ -243,11 +251,15 @@ vi.mock("openclaw/plugin-sdk/security-runtime", async () => {
   };
 });
 
-vi.mock("./client.js", () => ({
-  streamSignalEvents: (...args: unknown[]) => streamMock(...args),
-  signalCheck: (...args: unknown[]) => signalCheckMock(...args),
-  signalRpcRequest: (...args: unknown[]) => signalRpcRequestMock(...args),
-}));
+vi.mock("./client.js", async () => {
+  const actual = await vi.importActual<typeof import("./client.js")>("./client.js");
+  return {
+    ...actual,
+    streamSignalEvents: (...args: unknown[]) => streamMock(...args),
+    signalCheck: (...args: unknown[]) => signalCheckMock(...args),
+    signalRpcRequest: (...args: unknown[]) => signalRpcRequestMock(...args),
+  };
+});
 
 vi.mock("./client-adapter.js", () => ({
   streamSignalEvents: (...args: unknown[]) => streamMock(...args),
@@ -259,6 +271,8 @@ vi.mock("./daemon.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./daemon.js")>();
   return {
     ...actual,
+    assertSignalDaemonEndpointAvailable: (...args: unknown[]) =>
+      assertSignalDaemonEndpointAvailableMock(...args),
     spawnSignalDaemon: (...args: unknown[]) => spawnSignalDaemonMock(...args),
   };
 });
@@ -280,6 +294,20 @@ vi.mock("openclaw/plugin-sdk/transport-ready-runtime", () => ({
   waitForTransportReady: (...args: unknown[]) => waitForTransportReadyMock(...args),
 }));
 
+vi.mock("./signal-ingress.js", async () => {
+  const actual = await vi.importActual<typeof import("./signal-ingress.js")>("./signal-ingress.js");
+  return {
+    ...actual,
+    startSignalIngressMonitor: async (
+      ...args: Parameters<typeof actual.startSignalIngressMonitor>
+    ) => {
+      const monitor = await actual.startSignalIngressMonitor(...args);
+      signalToolResultIngressMonitor.current = monitor;
+      return monitor;
+    },
+  };
+});
+
 export function installSignalToolResultTestHooks() {
   beforeEach(async () => {
     const [{ resetInboundDedupe }, { resetSystemEventsForTest }] = await Promise.all([
@@ -293,6 +321,7 @@ export function installSignalToolResultTestHooks() {
     const stateDir = await fs.realpath(createdStateDir);
     signalToolResultStateDir = stateDir;
     signalToolResultSessionStore.path = path.join(stateDir, "sessions.json");
+    signalToolResultIngressMonitor.current = undefined;
     signalToolResultIngressQueue = undefined;
     setSignalRuntime({
       logging: {
@@ -322,7 +351,8 @@ export function installSignalToolResultTestHooks() {
       },
     } as unknown as PluginRuntime);
     config = {
-      messages: { responsePrefix: "PFX" },
+      // Mocked final replies exercise transport behavior independently of harness defaults.
+      messages: { responsePrefix: "PFX", visibleReplies: "automatic" },
       session: { store: signalToolResultSessionStore.path },
       channels: {
         signal: {
@@ -339,6 +369,7 @@ export function installSignalToolResultTestHooks() {
     streamMock.mockReset();
     signalCheckMock.mockReset().mockResolvedValue({ ok: true });
     signalRpcRequestMock.mockReset().mockResolvedValue({});
+    assertSignalDaemonEndpointAvailableMock.mockReset().mockResolvedValue(undefined);
     spawnSignalDaemonMock.mockReset().mockReturnValue(createMockSignalDaemonHandle());
     readAllowFromStoreMock.mockReset().mockResolvedValue([]);
     upsertPairingRequestMock.mockReset().mockResolvedValue({ code: "PAIRCODE", created: true });
@@ -350,6 +381,7 @@ export function installSignalToolResultTestHooks() {
 
   afterEach(async () => {
     clearSignalRuntimeForTest();
+    signalToolResultIngressMonitor.current = undefined;
     signalToolResultIngressQueue = undefined;
     closeOpenClawAgentDatabasesForTest();
     closeOpenClawStateDatabaseForTest();

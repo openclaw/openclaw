@@ -24,6 +24,13 @@ type ResolveInboundConversationParams = Parameters<
   NonNullable<ChannelMessagingAdapter["resolveInboundConversation"]>
 >[0];
 
+interface MinimalInboundHookContext {
+  from: string;
+  content: string;
+  channelId: string;
+  isGroup: boolean;
+}
+
 function makeInboundCtx(overrides: Partial<FinalizedMsgContext> = {}): FinalizedMsgContext {
   return {
     From: "demo-chat:user:123",
@@ -118,6 +125,26 @@ describe("message hook mappers", () => {
         },
       ]),
     );
+  });
+
+  it("preserves producer enrichment and minimal mapper input compatibility", () => {
+    const derived = deriveInboundMessageHookContext(makeInboundCtx());
+    derived.runId = "run-1";
+    derived.trace = {
+      traceId: "11111111111111111111111111111111",
+      spanId: "2222222222222222",
+    };
+    derived.callDepth = 2;
+    derived.mediaStagingPending = true;
+    derived.originalMedia = [];
+
+    const minimal: MinimalInboundHookContext = {
+      from: "sender",
+      content: "hello",
+      channelId: "demo-chat",
+      isGroup: false,
+    };
+    expect(toPluginMessageContext(minimal)).toMatchObject({ channelId: "demo-chat" });
   });
 
   it("derives canonical inbound context with body precedence and group metadata", () => {
@@ -818,6 +845,44 @@ describe("message hook mappers", () => {
       messageId: "out-1",
       isGroup: true,
       groupId: "demo-chat:chat:456",
+    });
+  });
+
+  it("projects normalized location and stable provider update identity", () => {
+    const canonical = deriveInboundMessageHookContext(
+      makeInboundCtx({
+        LocationLat: 43.8376,
+        LocationLon: 18.4534,
+        LocationAccuracy: 12,
+        LocationSource: "live",
+        LocationIsLive: true,
+        LocationLivePeriodSeconds: 900,
+        ProviderUpdateId: "9002",
+        ProviderUpdateKind: "edited_message",
+        ProviderMessageTimestamp: 1_786_094_460_000,
+        ProviderEditTimestamp: 1_786_094_520_000,
+      }),
+    );
+
+    const { event } = toPluginInboundClaimPair(canonical);
+    expect(event.location).toEqual({
+      latitude: 43.8376,
+      longitude: 18.4534,
+      accuracy: 12,
+      source: "live",
+      isLive: true,
+      livePeriodSeconds: 900,
+    });
+    expect(event.providerUpdate).toEqual({
+      id: "9002",
+      kind: "edited_message",
+      messageId: "msg-1",
+      messageTimestamp: 1_786_094_460_000,
+      editedTimestamp: 1_786_094_520_000,
+    });
+    expect(toPluginMessageReceivedEvent(canonical)).toMatchObject({
+      location: event.location,
+      providerUpdate: event.providerUpdate,
     });
   });
 });

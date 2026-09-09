@@ -181,7 +181,42 @@ describeTelegramDispatch("dispatchTelegramMessage reasoning-room-events", () => 
 
     await dispatchWithContext({ context: createReasoningStreamContext() });
 
-    expect(reasoningDraftStream.update).toHaveBeenCalledWith("🧠 _hidden_");
+    expect(reasoningDraftStream.update).toHaveBeenCalledWith(
+      "🧠 _hidden_",
+      expect.objectContaining({ onPlatformSendDispatch: expect.any(Function) }),
+    );
+    expect(deliverReplies).not.toHaveBeenCalled();
+  });
+
+  it("suppresses whitespace-form internal prefixes until one visible final", async () => {
+    const { answerDraftStream, reasoningDraftStream } = setupDraftStreams({
+      answerMessageId: 2001,
+      reasoningMessageId: 3001,
+    });
+    mockTurn(async ({ dispatcherOptions }) => {
+      for (const text of [
+        "< internal",
+        "<  internal",
+        "</ internal",
+        "< /internal",
+        "< / internal",
+        "<\u00a0internal",
+      ]) {
+        await dispatcherOptions.deliver({ text, isReasoning: true }, { kind: "block" });
+      }
+      expect(reasoningDraftStream.update).not.toHaveBeenCalled();
+      expect(deliverReplies).not.toHaveBeenCalled();
+      await dispatcherOptions.deliver({ text: "VISIBLE" }, { kind: "final" });
+    });
+
+    await dispatchWithContext({ context: createReasoningStreamContext() });
+
+    expect(reasoningDraftStream.update).not.toHaveBeenCalled();
+    expect(answerDraftStream.update).toHaveBeenCalledTimes(1);
+    expect(answerDraftStream.update).toHaveBeenCalledWith(
+      "VISIBLE",
+      expect.objectContaining({ onPlatformSendDispatch: expect.any(Function) }),
+    );
     expect(deliverReplies).not.toHaveBeenCalled();
   });
 
@@ -238,7 +273,10 @@ describeTelegramDispatch("dispatchTelegramMessage reasoning-room-events", () => 
 
     await dispatchWithContext({ context: createContext() });
 
-    expect(answerDraftStream.update).toHaveBeenCalledWith("Before <think>literal tag text after");
+    expect(answerDraftStream.update).toHaveBeenCalledWith(
+      "Before <think>literal tag text after",
+      expect.objectContaining({ onPlatformSendDispatch: expect.any(Function) }),
+    );
     expect(deliverReplies).not.toHaveBeenCalled();
   });
 

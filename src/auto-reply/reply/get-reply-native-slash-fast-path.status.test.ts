@@ -55,7 +55,7 @@ describe("native /status channel model routing", () => {
     vi.stubEnv("OPENCLAW_TEST_FAST", "1");
     resetPluginRuntimeStateForTest();
     setActivePluginRegistry(createSessionConversationTestRegistry());
-    vi.spyOn(preparedModelCatalog, "loadPreparedModelCatalog").mockResolvedValue([
+    vi.spyOn(preparedModelCatalog, "readPreparedModelCatalog").mockResolvedValue([
       {
         id: "gpt-5.5",
         name: "GPT",
@@ -274,6 +274,15 @@ describe("native /status channel model routing", () => {
 
       const statusCall = buildStatusReplyMock.mock.calls[0]?.[0];
       expect(statusCall).toMatchObject({ provider: expectedProvider, model: expectedModel });
+      expect(statusCall.thinkingCatalog).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            provider: "anthropic",
+            id: "claude-fable-5",
+            contextWindow: 1_000_000,
+          }),
+        ]),
+      );
       if (expectedProvider === "anthropic") {
         await expect(statusCall.resolveDefaultThinkingLevel()).resolves.toBe("high");
       }

@@ -4,6 +4,7 @@ import type { SessionCapability } from "../lib/sessions/index.ts";
 import { preserveRosterPresentationMetadata } from "../lib/sessions/reconcile.ts";
 import {
   areUiSessionKeysEquivalent,
+  normalizeDefaultMainSessionAliasForUi,
   resolveUiSessionNavigationParentKey,
 } from "../lib/sessions/session-key.ts";
 export { fetchChildSessionRows } from "../lib/sessions/child-session-data.ts";
@@ -14,13 +15,13 @@ export function collectKnownSessionRows(
   rootRows: readonly GatewaySessionRow[],
   childRowsByParent: Readonly<Record<string, readonly GatewaySessionRow[]>>,
 ): Map<string, GatewaySessionRow> {
-  const rows = new Map(rootRows.map((row) => [row.key, row]));
-  for (const childRows of Object.values(childRowsByParent)) {
-    for (const row of childRows) {
-      rows.set(row.key, row);
-    }
+  const rows = new Map<string, GatewaySessionRow>();
+  for (const row of [...Object.values(childRowsByParent).flat(), ...rootRows]) {
+    const key = normalizeDefaultMainSessionAliasForUi(row.key) || row.key;
+    rows.delete(key);
+    rows.set(key, row);
   }
-  return rows;
+  return new Map([...rows.values()].map((row) => [row.key, row]));
 }
 
 export async function fetchSessionLineage(params: {
@@ -43,7 +44,11 @@ export async function fetchSessionLineage(params: {
     // malformed cycle cannot leave direct child routes spinning forever.
     for (let depth = 0; depth < MAX_SESSION_LINEAGE_DEPTH && !visited.has(currentKey); depth += 1) {
       visited.add(currentKey);
-      let row = params.knownRows.get(currentKey);
+      let row =
+        params.knownRows.get(currentKey) ??
+        [...params.knownRows.values()].find((candidate) =>
+          areUiSessionKeysEquivalent(candidate.key, currentKey),
+        );
       if (!row) {
         const described = await params.client.request<{ session?: GatewaySessionRow | null }>(
           "sessions.describe",
@@ -94,8 +99,8 @@ function mergeChildSessionRows(
   return merged;
 }
 
-/** Retain only the routed ancestry while a canonical refresh invalidates other child snapshots. */
-export function preserveActiveSessionLineageRows(
+/** Retain only the routed ancestry when a refreshed child list omits it (archived or filtered). */
+function preserveActiveSessionLineageRows(
   sessionKey: string | null,
   rowsByParent: Readonly<Record<string, readonly GatewaySessionRow[]>>,
 ): Readonly<Record<string, readonly GatewaySessionRow[]>> {
@@ -110,10 +115,63 @@ export function preserveActiveSessionLineageRows(
     if (!parent) {
       break;
     }
-    preserved[parent[0]] = parent[1];
+    preserved[parent[0]] = parent[1].filter((row) => areUiSessionKeysEquivalent(row.key, childKey));
     childKey = parent[0];
   }
   return preserved;
+}
+
+export function mergeRefreshedChildSessionRows(
+  sessionKey: string | null,
+  rowsByParent: Readonly<Record<string, readonly GatewaySessionRow[]>>,
+  parentKey: string,
+  rows: GatewaySessionRow[],
+): Readonly<Record<string, readonly GatewaySessionRow[]>> {
+  const lineage = preserveActiveSessionLineageRows(sessionKey, rowsByParent)[parentKey] ?? [];
+  return {
+    ...rowsByParent,
+    ...mergeChildSessionRows({ [parentKey]: rows }, { [parentKey]: lineage }),
+  };
+}
+
+export function retireStaleChildSessionRows(
+  owner: {
+    childSessionRowsByParent: Readonly<Record<string, readonly GatewaySessionRow[]>>;
+    loadedChildSessionKeys: ReadonlySet<string>;
+    loadingChildSessionKeys: ReadonlySet<string>;
+    childSessionErrorsByParent: ReadonlyMap<string, string>;
+    requestSessionDataUpdate(): void;
+  },
+  sessionKey: string | null,
+  revalidating: ReadonlySet<string>,
+): void {
+  const lineage = preserveActiveSessionLineageRows(sessionKey, owner.childSessionRowsByParent);
+  const next = { ...owner.childSessionRowsByParent };
+  let changed = false;
+  for (const [parentKey, rows] of Object.entries(next)) {
+    if (
+      owner.loadedChildSessionKeys.has(parentKey) ||
+      owner.loadingChildSessionKeys.has(parentKey) ||
+      owner.childSessionErrorsByParent.has(parentKey) ||
+      revalidating.has(parentKey)
+    ) {
+      continue;
+    }
+    const retained = lineage[parentKey];
+    if (retained?.length === rows.length) {
+      continue;
+    }
+    if (retained) {
+      next[parentKey] = retained;
+    } else {
+      delete next[parentKey];
+    }
+    changed = true;
+  }
+  if (changed) {
+    owner.childSessionRowsByParent = next;
+    owner.requestSessionDataUpdate();
+  }
 }
 
 export function publishActiveSessionLineage(
@@ -129,6 +187,7 @@ export function publishActiveSessionLineage(
   },
   sessionKey: string,
   lineage: NonNullable<Awaited<ReturnType<typeof fetchSessionLineage>>>,
+  sourceCanonicalListRevision: number,
 ): void {
   const previousRoot = owner.activeSessionLineageRoot;
   const previousSelectedRow = owner.activeSessionLineageSelectedRow;
@@ -138,7 +197,11 @@ export function publishActiveSessionLineage(
       : previousRoot && areUiSessionKeysEquivalent(row.key, previousRoot.key)
         ? previousRoot
         : null;
-    return preserveRosterPresentationMetadata(row, previous ?? undefined);
+    // Canonical rows own process-current state; cached lineage only donates presentation.
+    const canonical = owner.sessionsResult?.sessions.find((candidate) =>
+      areUiSessionKeysEquivalent(candidate.key, row.key),
+    );
+    return preserveRosterPresentationMetadata(canonical ?? row, previous ?? undefined);
   };
   const topmostRow = lineage.topmostRow ? preserveLineageRow(lineage.topmostRow) : null;
   const rowsByParent = Object.fromEntries(
@@ -176,6 +239,7 @@ export function publishActiveSessionLineage(
     // descriptor so the chat pane and header share the sidebar's cold-load truth.
     owner.context?.sessions.reconcile(selectedRow, owner.sessionsResult?.defaults, {
       archivedFilter: "all",
+      sourceCanonicalListRevision,
     });
   }
 }
@@ -205,6 +269,14 @@ export function evictArchivedSessionLineage(
         row != null && areUiSessionKeysEquivalent(row.key, sessionKey),
     );
   if (selectedRow?.archived === true) {
+    // Navigation has ended the archived row's temporary presentation lease.
+    // Remove it from the child cache before the next canonical list refresh.
+    owner.childSessionRowsByParent = Object.fromEntries(
+      Object.entries(owner.childSessionRowsByParent).map(([parentKey, rows]) => [
+        parentKey,
+        rows.filter((row) => !areUiSessionKeysEquivalent(row.key, sessionKey)),
+      ]),
+    );
     owner.context?.sessions.reconcile(selectedRow, owner.sessionsResult?.defaults, {
       archivedFilter: "active",
     });

@@ -12,9 +12,8 @@ import { redactToolDetail } from "../logging/redact.js";
 import { shortenHomeInString } from "../utils.js";
 import {
   defaultTitle,
-  formatToolDetailText,
   formatDetailKey,
-  normalizeToolName,
+  normalizeToolDisplayName,
   resolveToolVerbAndDetailForArgs,
 } from "./tool-display-common.js";
 import { TOOL_DISPLAY_CONFIG } from "./tool-display-config.js";
@@ -58,7 +57,7 @@ export function resolveToolDisplay(params: {
   meta?: string;
   detailMode?: ToolDetailMode;
 }): ToolDisplay {
-  const name = normalizeToolName(params.name);
+  const name = normalizeToolDisplayName(params.name);
   const key = normalizeLowercaseStringOrEmpty(name);
   const spec = TOOL_MAP[key];
   const emoji = spec?.emoji ?? FALLBACK.emoji ?? "🧩";
@@ -94,8 +93,18 @@ export function resolveToolDisplay(params: {
 
 /** Formats and redacts detail text for display. */
 export function formatToolDetail(display: ToolDisplay): string | undefined {
-  const detailRaw = display.detail ? redactToolDetail(display.detail) : undefined;
-  return formatToolDetailText(detailRaw);
+  return display.detail ? redactToolDetail(display.detail) : undefined;
+}
+
+/** Infers compact display metadata for a tool invocation from its arguments. */
+export function inferToolMetaFromArgsCore(
+  toolName: string,
+  args: unknown,
+  options?: { detailMode?: ToolDetailMode },
+): string | undefined {
+  return formatToolDetail(
+    resolveToolDisplay({ name: toolName, args, detailMode: options?.detailMode }),
+  );
 }
 
 /**

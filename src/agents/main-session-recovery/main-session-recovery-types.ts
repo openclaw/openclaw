@@ -1,8 +1,4 @@
-import type {
-  InternalSessionEntry as SessionEntry,
-  MainRestartRecoveryState,
-  RestartRecoveryRun,
-} from "../../config/sessions.js";
+import type { MainRestartRecoveryState, RestartRecoveryRun } from "../../config/sessions.js";
 
 type MainSessionRecoveryExecutionIdentity = NonNullable<
   MainRestartRecoveryState["executionIdentity"]
@@ -103,6 +99,11 @@ export type MainSessionRecoveryCommand =
       cycleId: string;
       token: MainSessionRecoveryExecutionIdentity;
     } & RecoveryRunOwner)
+  | ({
+      kind: "register_recovery_turn";
+      attempt: number;
+      cycleId: string;
+    } & RecoveryRunOwner)
   | {
       kind: "cancel_reservation" | "abandon_reservation";
       reservation: MainSessionRecoveryReservation;
@@ -130,11 +131,6 @@ export type MainSessionRecoveryCommand =
       observation: MainSessionRecoveryObservation;
       reason: string;
     }
-  | {
-      kind: "fail_recovery";
-      now: number;
-      observation: MainSessionRecoveryObservation;
-    }
   | { kind: "doctor_repair"; now: number }
   | { kind: "clear" };
 
@@ -149,7 +145,6 @@ export type MainSessionRecoveryTransitionResult =
         | "recovery_validated"
         | "tombstoned";
     }
-  | { kind: "failed"; noticeEntry: SessionEntry }
   | { kind: "foreground_claimed"; claim: MainSessionRecoveryOwnerClaim }
   | { kind: "observed"; view: MainSessionRecoveryView }
   | { kind: "rejected"; reason: MainSessionRecoveryConflict }

@@ -1,5 +1,5 @@
 // Collects configured model references from OpenClaw config-shaped objects.
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { asNonArrayRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 
 /** One configured model reference plus its config path. */
 export type ConfiguredModelRef = {
@@ -16,25 +16,35 @@ export const AGENT_MODEL_CONFIG_KEYS = [
   "pdfModel",
 ] as const;
 
-/** List raw refs from one string or primary/fallback model selector. */
-export function listModelRefsFromConfigValue(value: unknown): string[] {
+/** Visit raw selector refs without changing values, order, or fallback indices. */
+export function visitModelSelectorRefs(
+  value: unknown,
+  path: string,
+  visit: (path: string, value: string, role: "primary" | "fallback") => void,
+): void {
   if (typeof value === "string") {
-    return [value];
+    visit(path, value, "primary");
+    return;
   }
   if (!isRecord(value)) {
-    return [];
+    return;
   }
-  const refs: string[] = [];
   if (typeof value.primary === "string") {
-    refs.push(value.primary);
+    visit(`${path}.primary`, value.primary, "primary");
   }
   if (Array.isArray(value.fallbacks)) {
-    for (const fallback of value.fallbacks) {
+    for (const [index, fallback] of value.fallbacks.entries()) {
       if (typeof fallback === "string") {
-        refs.push(fallback);
+        visit(`${path}.fallbacks.${index}`, fallback, "fallback");
       }
     }
   }
+}
+
+/** List raw refs from one string or primary/fallback model selector. */
+export function listModelRefsFromConfigValue(value: unknown): string[] {
+  const refs: string[] = [];
+  visitModelSelectorRefs(value, "", (_path, ref) => refs.push(ref));
   return refs;
 }
 
@@ -49,21 +59,8 @@ export function collectConfiguredModelRefs(
       refs.push({ path, value: value.trim() });
     }
   };
-  const collectModelConfig = (path: string, value: unknown) => {
-    if (typeof value === "string") {
-      pushModelRef(path, value);
-      return;
-    }
-    if (!isRecord(value)) {
-      return;
-    }
-    pushModelRef(`${path}.primary`, value.primary);
-    if (Array.isArray(value.fallbacks)) {
-      for (const [index, entry] of value.fallbacks.entries()) {
-        pushModelRef(`${path}.fallbacks.${index}`, entry);
-      }
-    }
-  };
+  const collectModelConfig = (path: string, value: unknown) =>
+    visitModelSelectorRefs(value, path, pushModelRef);
   const collectFromAgent = (path: string, agent: unknown, includeEntrySelectors = false) => {
     if (!isRecord(agent)) {
       return;
@@ -71,7 +68,7 @@ export function collectConfiguredModelRefs(
     for (const key of AGENT_MODEL_CONFIG_KEYS) {
       collectModelConfig(`${path}.${key}`, agent[key]);
     }
-    const mediaModels = isRecord(agent.mediaModels) ? agent.mediaModels : {};
+    const mediaModels = asNonArrayRecord(agent.mediaModels);
     for (const capability of ["image", "video", "music"] as const) {
       collectModelConfig(`${path}.mediaModels.${capability}`, mediaModels[capability]);
     }
@@ -96,8 +93,8 @@ export function collectConfiguredModelRefs(
       }
     }
     if (includeEntrySelectors) {
-      const tools = isRecord(agent.tools) ? agent.tools : {};
-      const exec = isRecord(tools.exec) ? tools.exec : {};
+      const tools = asNonArrayRecord(agent.tools);
+      const exec = asNonArrayRecord(tools.exec);
       collectModelConfig(
         `${path}.tools.exec.reviewer.model`,
         isRecord(exec.reviewer) ? exec.reviewer.model : undefined,
@@ -109,21 +106,21 @@ export function collectConfiguredModelRefs(
     }
   };
 
-  const root = isRecord(config) ? config : {};
-  const tools = isRecord(root.tools) ? root.tools : {};
-  const exec = isRecord(tools.exec) ? tools.exec : {};
+  const root = asNonArrayRecord(config);
+  const tools = asNonArrayRecord(root.tools);
+  const exec = asNonArrayRecord(tools.exec);
   collectModelConfig(
     "tools.exec.reviewer.model",
     isRecord(exec.reviewer) ? exec.reviewer.model : undefined,
   );
-  const media = isRecord(tools.media) ? tools.media : {};
+  const media = asNonArrayRecord(tools.media);
   for (const capability of ["image", "audio", "video"] as const) {
     pushModelRef(
       `tools.media.${capability}.preferredModel`,
       isRecord(media[capability]) ? media[capability].preferredModel : undefined,
     );
   }
-  const agents = isRecord(root.agents) ? root.agents : {};
+  const agents = asNonArrayRecord(root.agents);
   collectFromAgent("agents.defaults", agents.defaults);
   if (Object.hasOwn(agents, "entries")) {
     if (isRecord(agents.entries)) {
@@ -137,8 +134,8 @@ export function collectConfiguredModelRefs(
     }
   }
   if (options.includeChannelModelOverrides !== false) {
-    const channels = isRecord(root.channels) ? root.channels : {};
-    const modelByChannel = isRecord(channels.modelByChannel) ? channels.modelByChannel : {};
+    const channels = asNonArrayRecord(root.channels);
+    const modelByChannel = asNonArrayRecord(channels.modelByChannel);
     for (const [channelId, channelMap] of Object.entries(modelByChannel)) {
       if (!isRecord(channelMap)) {
         continue;
@@ -148,7 +145,7 @@ export function collectConfiguredModelRefs(
       }
     }
   }
-  const hooks = isRecord(root.hooks) ? root.hooks : {};
+  const hooks = asNonArrayRecord(root.hooks);
   if (Array.isArray(hooks.mappings)) {
     for (const [index, mapping] of hooks.mappings.entries()) {
       pushModelRef(`hooks.mappings.${index}.model`, isRecord(mapping) ? mapping.model : undefined);
@@ -156,10 +153,9 @@ export function collectConfiguredModelRefs(
   }
   pushModelRef("hooks.gmail.model", isRecord(hooks.gmail) ? hooks.gmail.model : undefined);
   pushModelRef("tts.summaryModel", isRecord(root.tts) ? root.tts.summaryModel : undefined);
-  const discord =
-    isRecord(root.channels) && isRecord(root.channels.discord) ? root.channels.discord : {};
+  const discord = asNonArrayRecord(asNonArrayRecord(root.channels).discord);
   const collectDiscordVoice = (path: string, value: unknown) => {
-    const voice = isRecord(value) ? value : {};
+    const voice = asNonArrayRecord(value);
     pushModelRef(`${path}.model`, voice.model);
     pushModelRef(
       `${path}.tts.summaryModel`,

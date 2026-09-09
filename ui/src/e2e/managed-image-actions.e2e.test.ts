@@ -1,17 +1,28 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import { expect, it } from "vitest";
-import { createChatFlowE2eSuite, installMockGateway } from "./chat-flow.test-support.ts";
+import { beforeEach, expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import {
+  captureUiProofEnabled,
+  createChatFlowE2eSuite,
+  installMockGateway,
+} from "./chat-flow.test-support.ts";
+import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
+const controlUiBasePath = "/rosita";
+let proofDir: string;
+beforeEach(() => {
+  if (captureUiProofEnabled) {
+    proofDir = createControlUiE2eArtifactDir("managed-image-actions");
+  }
+});
 
 suite.define(() => {
-  it("previews, downloads, copies, and opens a ticketed generated image", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+  it("previews, downloads, and opens a ticketed generated image", async () => {
+    const filenamePrefix = "a".repeat(119);
+    const imageTitle = `${filenamePrefix}📊`;
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const attachmentId = crypto.randomUUID();
     const artifactId = `artifact_managed_image_${attachmentId}`;
@@ -21,31 +32,18 @@ suite.define(() => {
       path.join(process.cwd(), "docs/assets/openclaw-banner-dark.png"),
     );
     const requestedVariants: string[] = [];
-    await page.addInitScript(() => {
-      Object.defineProperty(globalThis, "copiedImage", { configurable: true, writable: true });
-      Object.defineProperty(navigator, "clipboard", {
-        configurable: true,
-        value: {
-          write: async (items: ClipboardItem[]) => {
-            const blob = await items[0]?.getType("image/png");
-            Object.defineProperty(globalThis, "copiedImage", {
-              configurable: true,
-              value: blob ? { size: blob.size, type: blob.type } : null,
-              writable: true,
-            });
-          },
-        },
-      });
-    });
-    await page.route("**/api/chat/media/outgoing/**", async (route) => {
+    await page.route(`**${controlUiBasePath}/api/chat/media/outgoing/**`, async (route) => {
       const request = route.request();
       const url = new URL(request.url());
+      expect(url.pathname).toMatch(/^\/rosita\/api\/chat\/media\/outgoing\//u);
       expect(url.searchParams.get("mediaTicket")).toBe("ticket-e2e");
       expect(request.headers().authorization).toBeUndefined();
+      expect(request.headers()["x-openclaw-requester-session-key"]).toBeUndefined();
       requestedVariants.push(url.pathname.split("/").at(-1) ?? "");
       await route.fulfill({ body: imageBytes, contentType: "image/png" });
     });
     const gateway = await installMockGateway(page, {
+      basePath: controlUiBasePath,
       historyMessages: [
         {
           role: "assistant",
@@ -54,7 +52,7 @@ suite.define(() => {
               type: "image",
               artifactId,
               url: imageUrl,
-              alt: "Ticketed generated image",
+              alt: imageTitle,
               mimeType: "image/png",
               width: 1280,
               height: 358,
@@ -68,7 +66,7 @@ suite.define(() => {
           artifact: {
             id: artifactId,
             type: "image",
-            title: "Ticketed generated image",
+            title: imageTitle,
             mimeType: "image/png",
             download: { mode: "url" },
           },
@@ -79,8 +77,8 @@ suite.define(() => {
     });
 
     try {
-      await page.goto(`${suite.server.baseUrl}chat`);
-      const image = page.getByAltText("Ticketed generated image");
+      await page.goto(`${suite.server.baseUrl}${controlUiBasePath.slice(1)}/chat`);
+      const image = page.getByAltText(imageTitle);
       await image.waitFor({ state: "visible", timeout: 10_000 });
       await expect
         .poll(() =>
@@ -90,9 +88,21 @@ suite.define(() => {
         )
         .toBe(1280);
       expect(requestedVariants).toEqual(["thumbnail"]);
+      if (captureUiProofEnabled) {
+        await page.screenshot({
+          fullPage: true,
+          path: path.join(proofDir, "ticketed-generated-image-subpath.png"),
+        });
+      }
 
-      await page.locator(".chat-image-frame").hover();
-      const downloadButton = page.getByRole("button", { name: "Download image" });
+      const imageFrame = page.locator(".chat-image-frame--managed").filter({ has: image });
+      await imageFrame.hover();
+      const imageActions = imageFrame.locator(".chat-image-actions");
+      await expect.poll(() => imageActions.getByRole("button").count()).toBe(2);
+      await expect
+        .poll(() => imageActions.getByRole("button", { name: `Open image ${imageTitle}` }).count())
+        .toBe(0);
+      const downloadButton = imageActions.getByRole("button", { name: "Download image" });
       await expect
         .poll(() =>
           downloadButton.evaluate((button) => {
@@ -114,24 +124,11 @@ suite.define(() => {
         .toMatchObject({ hit: true, pointerEvents: "auto" });
       const download = page.waitForEvent("download");
       await downloadButton.click();
-      expect((await download).suggestedFilename()).toBe("Ticketed generated image.png");
+      expect((await download).suggestedFilename()).toBe(`${filenamePrefix}.png`);
 
-      await page.getByRole("button", { name: "Copy image" }).click();
-      await expect
-        .poll(() =>
-          page.evaluate(
-            () =>
-              (globalThis as { copiedImage?: { size: number; type: string } }).copiedImage ?? null,
-          ),
-        )
-        .toEqual({ size: imageBytes.byteLength, type: "image/png" });
-      await expect
-        .poll(() => page.locator("openclaw-toast-host").textContent())
-        .toContain("Copied!");
-
-      await page.locator('.chat-image-action[title="Open original"]').click();
+      await page.getByRole("button", { name: `Open image ${imageTitle}` }).click();
       await page
-        .getByRole("dialog", { name: "Image preview: Ticketed generated image" })
+        .getByRole("dialog", { name: `Image preview: ${imageTitle}` })
         .waitFor({ state: "visible" });
       expect(requestedVariants).toEqual(["thumbnail", "full"]);
       expect(await gateway.getRequests("artifacts.download")).toHaveLength(2);
