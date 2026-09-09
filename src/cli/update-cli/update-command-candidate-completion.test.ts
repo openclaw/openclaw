@@ -1,3 +1,4 @@
+import { once } from "node:events";
 import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import * as os from "node:os";
@@ -51,7 +52,10 @@ import {
   createNativeRestartCounterFixture,
 } from "./update-command-native-generation.test-support.js";
 import { withUpdateCommandNativePreparation } from "./update-command-native-preparation.js";
-import { interruptNativeSuppressionReplay } from "./update-command-native-suppression.test-support.js";
+import {
+  interruptNativeSuppressionReplay,
+  nativeSuppressionRefusals,
+} from "./update-command-native-suppression.test-support.js";
 import {
   interruptPackageGapReplay,
   packageGapReplayModes,
@@ -77,31 +81,38 @@ afterEach(() => {
   closeOpenClawStateDatabaseForTest();
   vi.restoreAllMocks();
 });
-it.each([
-  "replay-displaced",
-  ...packageGapReplayModes,
-  "replay-conflict",
-  "replay-shadowed",
-  "rollback",
-  "rollback-worker-gap",
-  "rollback-old",
-  "rollback-interrupted",
-  "rollback-interference",
-  "success",
-  "status-only",
-  "windows-disabled",
-  "launchd-disabled",
-  "health-rollback",
-  "start-rollback",
-  "unapplied-start-rollback",
-  ...nativeAutoRestartModes,
-  "readiness-rollback",
-  "readiness-failed",
-  "boot-switched",
-  "close-during-package-read",
-])(
-  "completes a real package transaction only under current serving authority (%s)",
-  async (mode) => {
+it.each(
+  [
+    "replay-displaced",
+    ...packageGapReplayModes,
+    "replay-conflict",
+    "replay-shadowed",
+    "rollback",
+    "rollback-worker-gap",
+    "rollback-old",
+    "rollback-interrupted",
+    "rollback-interference",
+    "success",
+    "status-only",
+    "windows-disabled",
+    "launchd-disabled",
+    "health-rollback",
+    "start-rollback",
+    "unapplied-start-rollback",
+    ...nativeAutoRestartModes,
+    "readiness-rollback",
+    "readiness-failed",
+    "boot-switched",
+    "close-during-package-read",
+  ].flatMap<readonly [string, (typeof nativeSuppressionRefusals)[number] | undefined]>((mode) =>
+    // Each refusal gets a fresh retained run and the unchanged per-case deadline.
+    mode === "auto-restart-collected-retained-rollback"
+      ? nativeSuppressionRefusals.map((refusal) => [mode, refusal] as const)
+      : [[mode, undefined] as const],
+  ),
+)(
+  "completes a real package transaction only under current serving authority (%s, refusal=%s)",
+  async (mode, refusal) => {
     vi.mocked(os.platform).mockReturnValue(process.platform);
     const home = await fs.realpath(dirs.make("owned-native-restore-"));
     const control = path.join(home, "control");
@@ -173,9 +184,7 @@ it.each([
     let servingVersion = rollback ? "1.0.0" : "2.0.0";
     let servingBoot = rollback ? "previous-boot" : "candidate-boot";
     const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
-    await new Promise<void>((resolve) => {
-      server.once("listening", resolve);
-    });
+    await once(server, "listening");
     const address = server.address();
     if (!address || typeof address === "string") {
       throw new Error("Missing fixture port");
@@ -799,7 +808,7 @@ it.each([
                   inspectionUnavailable = false;
                 },
                 collectedRetained ? "stop" : "suppress",
-                { verifyRefusals: !nativeEntry },
+                { verifyRefusals: !nativeEntry, refusal },
               );
               expect(events).toEqual(
                 collectedRetained

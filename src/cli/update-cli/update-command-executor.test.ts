@@ -283,6 +283,8 @@ describe("candidate executor delegation", () => {
   const moduleUrl = new URL("./update-command-executor.ts", import.meta.url).href;
   const program = `
     import fs from "node:fs";
+    import {spawn} from "node:child_process";
+    import {once} from "node:events";
     import {setTimeout} from "node:timers/promises";
     import {withDelegatedUpdateCommandExecutor} from ${JSON.stringify(moduleUrl)};
     const input=JSON.parse(fs.readFileSync(0,"utf8"));
@@ -291,6 +293,12 @@ describe("candidate executor delegation", () => {
       while(!fs.existsSync(input.proceed)) await setTimeout(10);
       fence.assertCurrent();
       fs.writeFileSync(input.output,"owned");
+      const helper=spawn(process.execPath,['-e',"process.send('ready');setTimeout(()=>{},2000)"],{
+        stdio:['ignore','ignore','ignore','ipc']
+      });
+      await once(helper,'message');
+      helper.disconnect();
+      helper.unref();
     });
   `;
   it.each([false, true])(
@@ -316,6 +324,8 @@ describe("candidate executor delegation", () => {
               beforeInput,
               timeoutMs: 15_000,
               killProcessTree: true,
+              // Match production candidate transport: join source-loader helpers too.
+              requireProcessTreeExtinction: true,
               onOutputChunk: (chunk) => {
                 if (chunk.toString().includes("admitted")) {
                   ready.resolve();

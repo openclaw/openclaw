@@ -18,13 +18,26 @@ import type { FinishUpdateParams } from "./update-command-post-update.js";
 import { UpdateCommandFinalizedRecoveryFailure } from "./update-command-result.js";
 import { updateCommand } from "./update-command.js";
 
+export const nativeSuppressionRefusals = [
+  "profile",
+  "command",
+  "manager",
+  "running",
+  "enabled",
+  "late-running",
+  "checkpoint",
+] as const;
+
 /** Leave the first real executor after disable/stop applied but readback was interrupted.
  * Only a new owner may reconcile the same pending operation and fresh native stop. */
 export async function interruptNativeSuppressionReplay(
   params: FinishUpdateParams,
   releaseInspection: () => void,
   action: "stop" | "suppress" = "suppress",
-  fixtureOptions: { verifyRefusals?: boolean } = {},
+  fixtureOptions: {
+    verifyRefusals?: boolean;
+    refusal?: (typeof nativeSuppressionRefusals)[number];
+  } = {},
 ): Promise<() => Promise<void>> {
   const recovery = params.opts.recovery!;
   const env = params.opts.run!.env;
@@ -91,15 +104,9 @@ export async function interruptNativeSuppressionReplay(
       const launcherBytes = await fs.readFile(launcherPath);
       const calls = vi.mocked(service.start).mock.calls.length;
       const stop = vi.spyOn(service, "stop");
-      for (const fault of [
-        "profile",
-        "command",
-        "manager",
-        "running",
-        "enabled",
-        "late-running",
-        "checkpoint",
-      ] as const) {
+      for (const fault of fixtureOptions.refusal
+        ? [fixtureOptions.refusal]
+        : nativeSuppressionRefusals) {
         let undo: (() => void | Promise<void>) | undefined;
         if (fault === "checkpoint") {
           const manifest = pending.checkpoint!.ref.manifestPath;
