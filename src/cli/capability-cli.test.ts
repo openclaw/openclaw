@@ -2493,30 +2493,33 @@ describe("capability cli", () => {
     expect(generationCall?.providerOptions).toBeUndefined();
   });
 
-  it("passes image quality and OpenAI moderation hints through to generation runtime", async () => {
-    primeGeneratedImage("gpt-image-2", "draft.png");
+  it.each(["low", "xhigh", "max"])(
+    "passes %s image quality and OpenAI moderation through to runtime",
+    async (quality) => {
+      primeGeneratedImage("gpt-image-2", "draft.png");
 
-    await runCapability(
-      "image",
-      "generate",
-      "--prompt",
-      "low-cost draft",
-      "--quality",
-      "low",
-      "--openai-moderation",
-      "low",
-      "--json",
-    );
+      await runCapability(
+        "image",
+        "generate",
+        "--prompt",
+        "low-cost draft",
+        "--quality",
+        quality,
+        "--openai-moderation",
+        "low",
+        "--json",
+      );
 
-    const generationCall = firstImageGenerationCall();
-    expect(generationCall?.prompt).toBe("low-cost draft");
-    expect(generationCall?.quality).toBe("low");
-    expect(generationCall?.providerOptions).toEqual({
-      openai: {
-        moderation: "low",
-      },
-    });
-  });
+      const generationCall = firstImageGenerationCall();
+      expect(generationCall?.prompt).toBe("low-cost draft");
+      expect(generationCall?.quality).toBe(quality);
+      expect(generationCall?.providerOptions).toEqual({
+        openai: {
+          moderation: "low",
+        },
+      });
+    },
+  );
 
   it("passes image output format, quality, and OpenAI hints through to edit runtime", async () => {
     primeGeneratedImage("gpt-image-1.5", "transparent-edit.png");
@@ -2644,7 +2647,7 @@ describe("capability cli", () => {
       ),
     ).rejects.toThrow("exit 1");
     expect(mocks.runtime.error).toHaveBeenCalledWith(
-      "--quality must be one of low, medium, high, or auto",
+      "--quality must be one of low, medium, high, xhigh, max, or auto",
     );
 
     mocks.runtime.error.mockClear();
