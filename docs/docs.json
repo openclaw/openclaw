@@ -2451,6 +2451,18 @@
                     "group": "Diagnostics and security",
                     "pages": [
                       "cli/doctor",
+                      {
+                        "group": "Doctor",
+                        "pages": [
+                          "cli/doctor/running",
+                          "cli/doctor/recovery",
+                          "cli/doctor/lint",
+                          "cli/doctor/health-contract",
+                          "cli/doctor/state-migrations",
+                          "cli/doctor/sqlite-maintenance",
+                          "cli/doctor/checks"
+                        ]
+                      },
                       "cli/secrets",
                       "cli/security",
                       "cli/triage"
