@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 // Reproduces memory-search file descriptor retention with a synthetic workspace.
-import { spawn, spawnSync } from "node:child_process";
+import { spawnSync, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import net from "node:net";
 import os from "node:os";
@@ -14,6 +14,8 @@ import { asNullableRecord as asRecord } from "../packages/normalization-core/src
 import { readNonBlankString } from "../packages/normalization-core/src/string-coerce.ts";
 import { stripLeadingPackageManagerSeparator } from "./lib/arg-utils.mts";
 import { readBoundedResponseText } from "./lib/bounded-response.mjs";
+import { formatErrorMessage } from "./lib/error-format.mts";
+import { hasUnjoinedWork, runManagedCommand } from "./lib/managed-child-process.mts";
 import { parseStrictNonNegativeDecimal as parseNonNegativeInteger } from "./lib/numeric-options.mjs";
 
 const ISSUE_FILE_COUNTS = [
@@ -30,16 +32,7 @@ const ISSUE_FILE_COUNTS = [
 ] satisfies Array<[string, number]>;
 
 type ChildExitState = { exitCode: number | null; signalCode: string | null };
-type GatewaySignal = "SIGINT" | "SIGKILL" | "SIGTERM";
-type GatewayOutputStream = {
-  on(event: "data", listener: (chunk: Uint8Array | string) => void): unknown;
-};
-type GatewayReadyChild = ChildExitState & {
-  stderr: GatewayOutputStream;
-  stdout: GatewayOutputStream;
-};
-type StoppableGatewayChild = ChildExitState & { kill(signal: GatewaySignal): unknown };
-type GatewayChild = GatewayReadyChild & StoppableGatewayChild;
+type GatewayReadyChild = ChildExitState & { pid?: number };
 type GatewayReadyOutputState = { tail?: string; readySeen?: boolean };
 type ConfigOptions = { homeDir: string; workspaceDir: string; port: number; token: string };
 type FdSampleOptions = { label: string; pid: number; workspaceRealPath: string };
@@ -48,8 +41,9 @@ type GatewayReadyOptions = {
   port: number;
   logPath: string;
   timeoutMs: number;
+  outputState?: GatewayReadyOutputState;
 };
-type InvokeOptions = { port: number; token: string; timeoutMs: number };
+type InvokeOptions = { port: number; token: string; timeoutMs: number; signal?: AbortSignal };
 type InvokeResponseOptions = { httpOk: boolean; status: number; bodyText: string };
 
 const ISSUE_MEMORY_FILE_COUNT = ISSUE_FILE_COUNTS.reduce((sum, [, count]) => sum + count, 0);
@@ -89,7 +83,7 @@ Usage: node --import tsx scripts/check-memory-fd-repro.mts [options]
 Options:
   --full                         Use the issue-sized 12,391-file memory tree.
   --files <count>                Number of memory/**/*.md files to generate. Default: ${DEFAULT_FILE_COUNT}.
-  --mode <fixed|leak|report>     fixed fails on FD fan-out; leak expects it; report never fails. Default: fixed.
+  --mode <fixed|leak|report>     fixed fails on FD fan-out; leak expects it; report skips threshold checks. Default: fixed.
   --max-workspace-reg-fds <n>    Fixed-mode maximum retained workspace Markdown REG FDs. Default: ${DEFAULT_MAX_WORKSPACE_REG_FDS}.
   --min-leaked-fds <n>           Leak-mode minimum retained workspace Markdown REG FDs. Default: min(files, 64).
   --invoke-timeout-ms <n>        Abort the memory_search HTTP call after this long. Default: 30000.
@@ -424,6 +418,9 @@ function runLsofForPid(pid: number) {
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
   });
+  if (result.error) {
+    throw result.error;
+  }
   if (result.status !== 0) {
     throw new Error(`lsof failed: ${result.stderr || result.stdout}`);
   }
@@ -435,8 +432,14 @@ function findGatewayPid(port: number) {
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
   });
-  if (result.status !== 0 && result.stdout.trim() === "") {
-    return null;
+  if (result.error) {
+    throw result.error;
+  }
+  if (result.status !== 0) {
+    if (result.status === 1 && result.stdout.trim() === "" && result.stderr.trim() === "") {
+      return null;
+    }
+    throw new Error(`lsof listener query failed: ${result.stderr || result.stdout}`);
   }
   const pid = Number(result.stdout.trim().split(/\s+/)[0]);
   return Number.isFinite(pid) && pid > 0 ? pid : null;
@@ -492,112 +495,43 @@ function hasChildExited(child: ChildExitState) {
   return child.exitCode !== null || child.signalCode !== null;
 }
 
+function assertGatewayRunning(child: GatewayReadyChild, tail = "") {
+  if (hasChildExited(child)) {
+    throw new Error(
+      `gateway exited before ready or measurement completed (${child.signalCode ?? child.exitCode})\n${formatTail(tail)}`,
+    );
+  }
+  if (!child.pid) {
+    throw new Error("gateway did not acquire a process ID");
+  }
+  return child.pid;
+}
+
 /**
- * Waits until gateway output and listener state both indicate readiness.
+ * Readiness corroborates the launched PID; a port never selects a process owner.
  */
 export async function waitForGatewayReady({
   child,
   port,
   logPath,
   timeoutMs,
+  outputState = {},
 }: GatewayReadyOptions) {
   const startedAt = Date.now();
-  let outputState = { tail: "", readySeen: false };
-  const append = (chunk: Uint8Array | string) => {
-    const text = chunk.toString();
-    outputState = updateGatewayReadyOutputState(outputState, text);
-    fs.appendFileSync(logPath, text);
-  };
-  child.stdout.on("data", append);
-  child.stderr.on("data", append);
-
   while (Date.now() - startedAt < timeoutMs) {
-    if (outputState.readySeen && findGatewayPid(port)) {
-      return;
-    }
-    if (hasChildExited(child)) {
-      throw new Error(`gateway exited before ready; see ${logPath}`);
+    const pid = assertGatewayRunning(child, outputState.tail);
+    if (outputState.readySeen) {
+      const listener = findGatewayPid(port);
+      if (listener === pid) {
+        return pid;
+      }
+      if (listener !== null) {
+        throw new Error("gateway listener does not belong to the launched process");
+      }
     }
     await sleep(100);
   }
   throw new Error(`gateway did not become ready within ${timeoutMs}ms; see ${logPath}`);
-}
-
-/**
- * Stops the gateway child using the default process/runtime hooks.
- */
-export async function stopGateway({ child, port }: { child: StoppableGatewayChild; port: number }) {
-  return stopGatewayWithRuntime({
-    child,
-    port,
-    findGatewayPidFn: findGatewayPid,
-    killProcess: (pid, signal) => process.kill(pid, signal),
-  });
-}
-
-/**
- * Stops the gateway child and any remaining listener process.
- */
-export async function stopGatewayWithRuntime({
-  child,
-  childExitPollIntervalMs = 100,
-  childExitPolls = 50,
-  port,
-  findGatewayPidFn,
-  killProcess,
-  listenerSettleDelayMs = 500,
-}: {
-  child: StoppableGatewayChild;
-  childExitPollIntervalMs?: number;
-  childExitPolls?: number;
-  port: number;
-  findGatewayPidFn: (port: number) => number | null;
-  killProcess: (pid: number, signal: GatewaySignal) => unknown;
-  listenerSettleDelayMs?: number;
-}) {
-  if (!hasChildExited(child)) {
-    signalChild(child, "SIGINT");
-    await waitForChildExit(child, { intervalMs: childExitPollIntervalMs, polls: childExitPolls });
-  }
-  const listenerPid = findGatewayPidFn(port);
-  if (listenerPid) {
-    try {
-      killProcess(listenerPid, "SIGTERM");
-    } catch {}
-    await sleep(listenerSettleDelayMs);
-    const stillListening = findGatewayPidFn(port);
-    if (stillListening) {
-      try {
-        killProcess(stillListening, "SIGKILL");
-      } catch {}
-    }
-  }
-  if (!hasChildExited(child)) {
-    signalChild(child, "SIGKILL");
-    await waitForChildExit(child, { intervalMs: childExitPollIntervalMs, polls: childExitPolls });
-  }
-}
-
-/**
- * Reads an HTTP response body up to a configured byte limit.
- */
-function signalChild(child: StoppableGatewayChild, signal: GatewaySignal) {
-  try {
-    child.kill(signal);
-  } catch {}
-}
-
-async function waitForChildExit(
-  child: ChildExitState,
-  { intervalMs, polls }: { intervalMs: number; polls: number },
-) {
-  for (let i = 0; i < polls; i += 1) {
-    if (hasChildExited(child)) {
-      return true;
-    }
-    await sleep(intervalMs);
-  }
-  return hasChildExited(child);
 }
 
 function parseToolTextContent(result: Record<string, unknown> | null) {
@@ -707,9 +641,14 @@ export function classifyMemorySearchInvokeResponse({
   };
 }
 
-export async function invokeMemorySearch({ port, token, timeoutMs }: InvokeOptions) {
+export async function invokeMemorySearch({ port, token, timeoutMs, signal }: InvokeOptions) {
   const resolvedTimeoutMs = resolveTimerTimeoutMs(timeoutMs, 1);
   const controller = new AbortController();
+  const abort = () => controller.abort();
+  signal?.addEventListener("abort", abort, { once: true });
+  if (signal?.aborted) {
+    abort();
+  }
   const timer = setTimeout(() => controller.abort(), resolvedTimeoutMs);
   const startedAt = Date.now();
   try {
@@ -734,6 +673,7 @@ export async function invokeMemorySearch({ port, token, timeoutMs }: InvokeOptio
       res,
       "memory_search",
       MEMORY_SEARCH_RESPONSE_MAX_BYTES,
+      { signal: controller.signal },
     );
     const result = classifyMemorySearchInvokeResponse({
       httpOk: res.ok,
@@ -754,6 +694,7 @@ export async function invokeMemorySearch({ port, token, timeoutMs }: InvokeOptio
     };
   } finally {
     clearTimeout(timer);
+    signal?.removeEventListener("abort", abort);
   }
 }
 
@@ -776,6 +717,18 @@ function formatFailure({ invokePassed, options, peak }: FailureOptions) {
   return "";
 }
 
+function formatErrors(errors: unknown[]) {
+  return [
+    ...new Set(
+      errors
+        .flatMap((error) =>
+          error instanceof AggregateError ? [error].concat(error.errors) : [error],
+        )
+        .map((error) => formatErrorMessage(error).slice(0, 8192)),
+    ),
+  ].join("\n");
+}
+
 async function main() {
   const options = parseArgs(process.argv.slice(2));
   if (process.platform !== "darwin" && !options.allowNonDarwin) {
@@ -793,32 +746,46 @@ async function main() {
   const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-memory-fd-repro-"));
   const homeDir = path.join(rootDir, "home");
   const workspaceDir = path.join(rootDir, "workspace");
-  fs.mkdirSync(options.outputDir, { recursive: true });
-
-  const port = await getFreePort();
-  const token = `memory-fd-repro-${process.pid}`;
-  writeSyntheticWorkspace(workspaceDir, options.fileCount);
-  const configPath = writeConfig({ homeDir, workspaceDir, port, token });
-  const workspaceRealPath = fs.realpathSync.native(workspaceDir);
   const logPath = path.join(options.outputDir, "gateway.log");
-
-  const env = {
-    ...process.env,
-    ...SKIP_GATEWAY_ENV,
-    HOME: homeDir,
-    OPENCLAW_STATE_DIR: path.join(homeDir, ".openclaw"),
-    OPENCLAW_CONFIG_PATH: configPath,
-    OPENCLAW_GATEWAY_TOKEN: token,
-  };
-  let child: GatewayChild | undefined;
   const generatedAt = new Date().toISOString();
-
+  const stop = new AbortController();
+  const invokeStop = new AbortController();
+  const outputState: GatewayReadyOutputState = {};
+  const errors: unknown[] = [];
+  const outputErrors: unknown[] = [];
+  let child: ChildProcess | undefined;
+  let completion: Promise<{ code: number } | { error: unknown }> | undefined;
+  let pendingInvoke: ReturnType<typeof invokeMemorySearch> | undefined;
+  let measurement:
+    | {
+        pid: number;
+        samples: ReturnType<typeof sampleFds>[];
+        invoke: Awaited<ReturnType<typeof invokeMemorySearch>>;
+      }
+    | undefined;
   try {
+    fs.mkdirSync(options.outputDir, { recursive: true });
+    const port = await getFreePort();
+    const token = `memory-fd-repro-${process.pid}`;
+    writeSyntheticWorkspace(workspaceDir, options.fileCount);
+    const configPath = writeConfig({ homeDir, workspaceDir, port, token });
+    const workspaceRealPath = fs.realpathSync.native(workspaceDir);
+    const env: NodeJS.ProcessEnv = {
+      ...process.env,
+      ...SKIP_GATEWAY_ENV,
+      HOME: homeDir,
+      OPENCLAW_STATE_DIR: path.join(homeDir, ".openclaw"),
+      OPENCLAW_CONFIG_PATH: configPath,
+      OPENCLAW_GATEWAY_TOKEN: token,
+      // The measured PID must not respawn for compile-cache activation.
+      NODE_DISABLE_COMPILE_CACHE: "1",
+    };
+    env.OPENCLAW_DEV_SOURCE_ROOT ??= process.cwd();
     preindexSyntheticMemory(env);
-    child = spawn(
-      process.execPath,
-      [
-        "scripts/run-node.mjs",
+    completion = runManagedCommand({
+      bin: process.execPath,
+      args: [
+        path.resolve("openclaw.mjs"),
         "gateway",
         "run",
         "--port",
@@ -831,32 +798,127 @@ async function main() {
         "loopback",
         "--allow-unconfigured",
       ],
-      { cwd: process.cwd(), env, stdio: ["ignore", "pipe", "pipe"] },
+      cwd: process.cwd(),
+      env,
+      shell: false,
+      stdio: ["ignore", "pipe", "pipe"],
+      signal: stop.signal,
+      // The shared owner adds its separate 5s output/group drainage allowance.
+      abortKillGraceMs: 5_000,
+      requireProcessTreeExit: process.platform !== "win32",
+      onReady(launched) {
+        child = launched;
+        launched.once("exit", () => invokeStop.abort());
+        const append = (chunk: Uint8Array | string) => {
+          const text = chunk.toString();
+          Object.assign(outputState, updateGatewayReadyOutputState(outputState, text));
+          try {
+            fs.appendFileSync(logPath, text);
+          } catch (error) {
+            if (outputErrors.length === 0) {
+              outputErrors.push(error);
+            }
+            stop.abort();
+          }
+        };
+        launched.stdout!.on("data", append);
+        launched.stderr!.on("data", append);
+      },
+    }).then(
+      (code) => ({ code }),
+      (error: unknown) => ({ error }),
     );
+    // onReady is synchronous. Observe completion immediately, then measure
+    // outside that callback so setup, measurement and teardown share one owner.
+    if (!child) {
+      const result = await completion;
+      throw "error" in result ? result.error : new Error("gateway failed to launch");
+    }
+    const ownedChild = child;
     logStep(`workspace=${workspaceDir}`);
     logStep(`files=${options.fileCount} mode=${options.mode} port=${port}`);
-    await waitForGatewayReady({ child, port, logPath, timeoutMs: 60_000 });
-    const pid = findGatewayPid(port);
-    if (!pid) {
-      throw new Error("gateway listener pid not found after ready");
-    }
-    const samples = [sampleFds({ label: "baseline", pid, workspaceRealPath })];
-
-    const invokePromise = invokeMemorySearch({ port, token, timeoutMs: options.invokeTimeoutMs });
+    const pid = await waitForGatewayReady({
+      child: ownedChild,
+      port,
+      logPath,
+      timeoutMs: 60_000,
+      outputState,
+    });
+    const sample = (label: string) => {
+      assertGatewayRunning(ownedChild, outputState.tail);
+      if (findGatewayPid(port) !== pid) {
+        throw new Error("gateway listener no longer belongs to the launched process");
+      }
+      return sampleFds({ label, pid, workspaceRealPath });
+    };
+    const samples = [sample("baseline")];
+    pendingInvoke = invokeMemorySearch({
+      port,
+      token,
+      timeoutMs: options.invokeTimeoutMs,
+      signal: invokeStop.signal,
+    });
     await sleep(options.sampleDelayMs);
-    samples.push(sampleFds({ label: "during", pid, workspaceRealPath }));
-    const invoke = await invokePromise;
+    samples.push(sample("during"));
+    const invoke = await pendingInvoke;
     logStep(`invoke=${JSON.stringify(invoke)}`);
     await sleep(options.settleDelayMs);
-    samples.push(sampleFds({ label: "settled", pid, workspaceRealPath }));
-
+    samples.push(sample("settled"));
+    measurement = { pid, samples, invoke };
+  } catch (error) {
+    errors.push(error);
+  } finally {
+    // A sampling failure must also retire the request it started, before
+    // releasing either the Gateway's inputs or the measurement owner.
+    invokeStop.abort();
+    await pendingInvoke;
+    if (completion) {
+      if (child && !hasChildExited(child)) {
+        stop.abort();
+      }
+      const result = await completion;
+      if ("error" in result) {
+        // Only this owner's abort, after the helper verified cleanup, is expected.
+        if (
+          !stop.signal.aborted ||
+          !(result.error instanceof Error) ||
+          !("code" in result.error) ||
+          result.error.code !== "ABORT_ERR"
+        ) {
+          errors.push(result.error);
+        }
+      } else if (result.code !== 0) {
+        errors.push(
+          new Error(
+            `gateway exited with code ${result.code}\n${formatTail(outputState.tail ?? "")}`,
+          ),
+        );
+      }
+    }
+    errors.push(...outputErrors);
+    if (!options.keep && !errors.some(hasUnjoinedWork)) {
+      try {
+        fs.rmSync(rootDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+      } catch (error) {
+        errors.push(error);
+      }
+    } else {
+      logStep(`kept synthetic root=${rootDir}`);
+    }
+  }
+  if (measurement) {
+    const { pid, samples, invoke } = measurement;
     const peak = Math.max(...samples.map((sample) => sample.uniqueWorkspaceMarkdownRegFds));
     const invokePassed = invoke.ok;
-    const passed =
+    const measurementPassed =
       options.mode === "report" ||
       (options.mode === "fixed" && invokePassed && peak <= options.maxWorkspaceRegFds) ||
       (options.mode === "leak" && peak >= options.minLeakedFds);
-    const failure = passed ? undefined : formatFailure({ invokePassed, options, peak });
+    if (!measurementPassed) {
+      errors.unshift(new Error(formatFailure({ invokePassed, options, peak })));
+    }
+    // Retain completed measurements after settlement, even when cleanup failed.
+    // Report-only exempts thresholds, never ownership or cleanup.
     const summary = {
       generatedAt,
       platform: process.platform,
@@ -873,27 +935,23 @@ async function main() {
       invoke,
       gatewayPid: pid,
       peakUniqueWorkspaceMarkdownRegFds: peak,
-      passed,
-      failure,
+      passed: errors.length === 0,
+      failure: errors.length > 0 ? formatErrors(errors) : undefined,
     };
-
-    fs.writeFileSync(
-      path.join(options.outputDir, "summary.json"),
-      `${JSON.stringify(summary, null, 2)}\n`,
-    );
-    logStep(`summary=${path.join(options.outputDir, "summary.json")}`);
-    if (!passed) {
-      throw new Error(failure);
+    try {
+      fs.writeFileSync(
+        path.join(options.outputDir, "summary.json"),
+        `${JSON.stringify(summary, null, 2)}\n`,
+      );
+      logStep(`summary=${path.join(options.outputDir, "summary.json")}`);
+    } catch (error) {
+      errors.push(error);
     }
-  } finally {
-    if (child) {
-      await stopGateway({ child, port });
-    }
-    if (!options.keep) {
-      fs.rmSync(rootDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
-    } else {
-      logStep(`kept synthetic root=${rootDir}`);
-    }
+  } else if (errors.length === 0) {
+    errors.push(new Error("gateway measurement did not complete"));
+  }
+  if (errors.length > 0) {
+    throw new AggregateError(errors, formatErrors(errors));
   }
 }
 
