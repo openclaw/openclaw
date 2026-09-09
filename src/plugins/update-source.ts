@@ -9,7 +9,7 @@ import {
 import { parseClawHubPluginSpec } from "../infra/clawhub-spec.js";
 import { unscopedPackageName } from "../infra/install-safe-path.js";
 import type { NpmSpecResolution } from "../infra/install-source-utils.js";
-import { createNpmMetadataEnv, resolveNpmSpecMetadata } from "../infra/install-source-utils.js";
+import { loadNpmPackageVersions, resolveNpmSpecMetadata } from "../infra/install-source-utils.js";
 import {
   isExactSemverVersion,
   isPrereleaseResolutionAllowed,
@@ -21,7 +21,6 @@ import {
   expectedIntegrityForUpdate,
 } from "../infra/package-update-utils.js";
 import type { UpdateChannel } from "../infra/update-channels.js";
-import { runCommandWithTimeout } from "../process/exec.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
 import { isUnavailableClawHubTarget } from "./clawhub-error-codes.js";
 import type { ExternalizedBundledPluginBridge } from "./externalized-bundled-plugins.js";
@@ -29,7 +28,6 @@ import {
   resolveClawHubInstallSpecsForUpdateChannel,
   resolveNpmInstallSpecsForUpdateChannel,
 } from "./install-channel-specs.js";
-import { isUnavailableNpmTarget } from "./install-types.js";
 import { checkMinHostVersion } from "./min-host-version.js";
 import * as officialInstallRecords from "./official-external-install-records.js";
 import {
@@ -244,16 +242,20 @@ export async function resolveNewerExactPinnedNpmDefaultLine(params: {
     return undefined;
   }
 
-  const resolveMetadata = async (spec: string) =>
-    await resolveNpmSpecMetadata({ spec, timeoutMs: params.timeoutMs }).catch(() => undefined);
-  let registryLine: "beta" | "latest" = params.updateChannel === "beta" ? "beta" : "latest";
-  let metadataResult = await resolveMetadata(
-    registryLine === "beta" ? `${packageName}@beta` : packageName,
-  );
-  if (registryLine === "beta" && !metadataResult?.ok) {
-    registryLine = "latest";
-    metadataResult = await resolveMetadata(packageName);
+  const specs = await resolveNpmInstallSpecsForUpdateChannel({
+    spec: packageName,
+    updateChannel: params.updateChannel,
+    timeoutMs: params.timeoutMs,
+  }).catch(() => undefined);
+  if (!specs) {
+    return undefined;
   }
+  const registryLine = specs.channelTag ?? "latest";
+  const metadataResult = specs.npmResolution
+    ? { ok: true as const, metadata: specs.npmResolution }
+    : await resolveNpmSpecMetadata({ spec: specs.installSpec, timeoutMs: params.timeoutMs }).catch(
+        () => undefined,
+      );
   if (
     !metadataResult?.ok ||
     metadataResult.metadata.name !== packageName ||
@@ -282,6 +284,7 @@ export async function resolveNewerExactPinnedClawHubDefaultLine(params: {
   const probeClawHubVersion = normalizeExactSemverVersion(params.probeClawHubVersion);
   if (
     !parsed?.name ||
+    !parsed.version ||
     !exactVersion ||
     !probeClawHubVersion ||
     probeClawHubVersion !== exactVersion
@@ -297,6 +300,9 @@ export async function resolveNewerExactPinnedClawHubDefaultLine(params: {
   if (!detail?.package || detail.package.name !== parsed.name) {
     return undefined;
   }
+  if (detail.package.tags?.[parsed.version] != null) {
+    return undefined;
+  }
   const betaVersion = detail.package.tags?.beta;
   const registryLine = params.updateChannel === "beta" && betaVersion ? "beta" : "latest";
   const version = registryLine === "beta" ? betaVersion : resolveLatestVersionFromPackage(detail);
@@ -304,32 +310,6 @@ export async function resolveNewerExactPinnedClawHubDefaultLine(params: {
     return undefined;
   }
   return { packageName: parsed.name, registryLine, version };
-}
-
-async function loadNpmPackageVersionsForUpdate(params: {
-  packageName: string;
-  timeoutMs?: number;
-}): Promise<string[] | null> {
-  const versions = await runCommandWithTimeout(
-    ["npm", "view", params.packageName, "versions", "--json"],
-    {
-      timeoutMs: Math.max(params.timeoutMs ?? 0, 60_000),
-      env: createNpmMetadataEnv(),
-    },
-  );
-  if (!versions || versions.code !== 0) {
-    return null;
-  }
-
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(versions.stdout.trim());
-  } catch {
-    return null;
-  }
-  return (Array.isArray(parsed) ? parsed : [parsed]).filter(
-    (value): value is string => typeof value === "string" && isExactSemverVersion(value),
-  );
 }
 
 export async function resolveTrustedOfficialPrereleaseFallbackMetadataForUpdate(params: {
@@ -355,7 +335,7 @@ export async function resolveTrustedOfficialPrereleaseFallbackMetadataForUpdate(
   ) {
     return undefined;
   }
-  const versions = await loadNpmPackageVersionsForUpdate({
+  const versions = await loadNpmPackageVersions({
     packageName: parsedSpec.name,
     timeoutMs: params.timeoutMs,
   });
@@ -390,48 +370,6 @@ export async function resolveTrustedOfficialPrereleaseFallbackMetadataForUpdate(
     : undefined;
 }
 
-export async function expectedIntegrityForNpmFallback(params: {
-  fallbackSpec: string | undefined;
-  record: PluginInstallRecord;
-  timeoutMs?: number;
-  trustedSourceLinkedOfficialInstall: boolean;
-}): Promise<string | undefined> {
-  if (params.record.source !== "npm" || !params.fallbackSpec) {
-    return undefined;
-  }
-  if (params.fallbackSpec === params.record.spec) {
-    return expectedIntegrityForUpdate(params.record.spec, params.record.integrity);
-  }
-  if (!params.trustedSourceLinkedOfficialInstall) {
-    return undefined;
-  }
-  const fallbackMetadata = await resolveNpmSpecMetadata({
-    spec: params.fallbackSpec,
-    timeoutMs: params.timeoutMs,
-  });
-  if (!fallbackMetadata.ok) {
-    return undefined;
-  }
-  const trustedPrereleaseFallback = await resolveTrustedOfficialPrereleaseFallbackMetadataForUpdate(
-    {
-      metadata: fallbackMetadata.metadata,
-      spec: params.fallbackSpec,
-      timeoutMs: params.timeoutMs,
-    },
-  );
-  const expectedIntegrityMetadata =
-    trustedPrereleaseFallback?.metadata ?? fallbackMetadata.metadata;
-  if (!isNpmMetadataCompatibleWithCurrentHost(expectedIntegrityMetadata)) {
-    return undefined;
-  }
-  return expectedIntegrityForNpmUpdate({
-    effectiveSpec: params.fallbackSpec,
-    metadata: expectedIntegrityMetadata,
-    record: params.record,
-    trustedSourceLinkedOfficialInstall: true,
-  });
-}
-
 export function isNpmMetadataCompatibleWithCurrentHost(metadata: NpmSpecResolution): boolean {
   const hostVersion = resolveCompatibilityHostVersion();
   const installMetadata = metadata.packageOpenClaw?.install;
@@ -457,60 +395,8 @@ export function isBundledVersionNewer(bundledVersion: string, installedVersion: 
   return comparePackageUpdateVersions(bundledVersion, installedVersion) > 0;
 }
 
-function shouldFallbackClawHubToDefault(result: { ok: false; code?: string }): boolean {
-  return isUnavailableClawHubTarget(result);
-}
-
 export function shouldFallbackBetaClawHubUpdate(result: { ok: false; code?: string }): boolean {
-  return shouldFallbackClawHubToDefault(result);
-}
-
-export function describeBetaNpmFallback(params: {
-  pluginId: string;
-  betaSpec: string | undefined;
-  fallbackSpec: string;
-  result: { ok: false; code?: string; error: string };
-}): string {
-  const betaSpec = params.betaSpec ?? "the beta npm release";
-  const missingBeta = isUnavailableNpmTarget(params.result);
-  const reason = missingBeta ? "has no beta npm release" : "failed beta npm update";
-  return `Plugin "${params.pluginId}" ${reason} for ${betaSpec}; using ${params.fallbackSpec} instead. Core update can still complete.`;
-}
-
-function formatNpmSpecSelectorLabel(spec: string | undefined): string {
-  const parsed = spec ? parseRegistryNpmSpec(spec) : undefined;
-  if (!parsed) {
-    return spec ?? "unknown";
-  }
-  if (parsed.selectorKind === "none") {
-    return "@latest";
-  }
-  return `@${parsed.selector}`;
-}
-
-export function describeNpmChannelFallback(params: {
-  pluginId: string;
-  requestedSpec: string | undefined;
-  usedSpec: string;
-  result: { ok: false; code?: string; error: string };
-  verb: "used" | "would use";
-}): PluginUpdateChannelFallback {
-  const requestedSpec = params.requestedSpec ?? "unknown";
-  const requestedLabel = formatNpmSpecSelectorLabel(params.requestedSpec);
-  const usedLabel = formatNpmSpecSelectorLabel(params.usedSpec);
-  const reason = isUnavailableNpmTarget(params.result) ? "unavailable" : "failed";
-  const message =
-    reason === "unavailable"
-      ? `plugin channel fallback: ${params.pluginId} ${params.verb} ${usedLabel} because ${requestedLabel} was unavailable`
-      : `plugin channel fallback: ${params.pluginId} ${params.verb} ${usedLabel} after ${requestedLabel} failed`;
-  return {
-    requestedSpec,
-    usedSpec: params.usedSpec,
-    requestedLabel,
-    usedLabel,
-    reason,
-    message,
-  };
+  return isUnavailableClawHubTarget(result);
 }
 
 export function formatBetaChannelFallbackOutcomeSuffix(params: {
@@ -523,17 +409,6 @@ export function formatBetaChannelFallbackOutcomeSuffix(params: {
   }
   const betaTarget = params.fallbackLabel ?? "beta target";
   return ` (warning: beta channel fallback ${params.verb} ${params.fallbackSpec} because ${betaTarget} could not be used).`;
-}
-
-export function npmUpdateFailureSpec(params: {
-  effectiveSpec: string | undefined;
-  fallbackSpec: string | undefined;
-  usedFallback: boolean;
-}): string {
-  if (params.usedFallback && params.fallbackSpec) {
-    return params.fallbackSpec;
-  }
-  return params.effectiveSpec ?? params.fallbackSpec ?? "unknown";
 }
 
 export function resolveNpmSpecPackageName(spec: string | undefined): string | undefined {
@@ -590,29 +465,40 @@ export function isTrustedSourceLinkedOfficialBridgeNpmInstall(params: {
   return Boolean(officialPackageName && requestedPackageName === officialPackageName);
 }
 
-export function resolveNpmUpdateSpecs(params: {
+/** Shares recorded target and catalog replacement precedence with update admission. */
+export function resolveNpmUpdateTarget(params: {
   record: PluginInstallRecord;
+  trustedOfficialInstall?: ReturnType<
+    typeof officialInstallRecords.resolveTrustedSourceLinkedOfficialNpmInstall
+  >;
   specOverride?: string;
-  officialSpecOverride?: string;
+  syncOfficialPluginInstalls?: boolean;
   updateChannel?: UpdateChannel;
-  officialPackageName?: string;
   coreVersion?: string;
-}): {
-  installSpec?: string;
-  recordSpec?: string;
-  fallbackSpec?: string;
-  fallbackLabel?: string;
-} {
-  const recordSpec = params.specOverride ?? params.record.spec ?? params.officialSpecOverride;
-  if (!recordSpec) {
-    return {};
-  }
-  return resolveNpmInstallSpecsForUpdateChannel({
-    spec: recordSpec,
-    updateChannel: params.updateChannel,
-    officialPackageName: params.officialPackageName,
-    coreVersion: params.coreVersion,
-  });
+  versionBoundToCore?: boolean;
+  timeoutMs?: number;
+}) {
+  const official = params.trustedOfficialInstall;
+  const specOverride =
+    params.specOverride ??
+    (official?.replacementPluginId || official?.replaceNpmPackage ? official.npmSpec : undefined);
+  const spec =
+    specOverride ??
+    params.record.spec ??
+    (params.syncOfficialPluginInstalls ? official?.npmSpec : undefined);
+  return {
+    specOverride,
+    target: spec
+      ? {
+          spec,
+          updateChannel: params.updateChannel,
+          officialPackageName: resolveNpmSpecPackageName(official?.npmSpec),
+          coreVersion: params.coreVersion,
+          versionBoundToCore: params.versionBoundToCore,
+          timeoutMs: params.timeoutMs,
+        }
+      : undefined,
+  };
 }
 
 export function resolveClawHubUpdateSpecs(params: {
@@ -621,6 +507,7 @@ export function resolveClawHubUpdateSpecs(params: {
   updateChannel?: UpdateChannel;
   officialPackageName?: string;
   coreVersion?: string;
+  versionBoundToCore?: boolean;
 }): {
   installSpec?: string;
   recordSpec?: string;
@@ -644,6 +531,7 @@ export function resolveClawHubUpdateSpecs(params: {
     updateChannel: params.updateChannel,
     officialPackageName: params.officialPackageName,
     coreVersion: params.coreVersion,
+    versionBoundToCore: params.versionBoundToCore,
   });
 }
 

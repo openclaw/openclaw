@@ -60,10 +60,12 @@ const pluginMetadataSnapshot = vi.hoisted((): PluginMetadataSnapshot => {
     registryIndex: index,
     registryDiagnostics: [],
     manifestRegistry: pluginManifestRegistry,
+    bundledManifestRegistry: pluginManifestRegistry,
     plugins: [],
     diagnostics: [],
     byPluginId: new Map(),
     normalizePluginId: (pluginId) => pluginId,
+    declaredProviderOwners: new Map(),
     owners: {
       channels: new Map(),
       channelConfigs: new Map(),
@@ -97,6 +99,7 @@ const pluginLookUpTableMetrics = vi.hoisted(() => ({
 }));
 const loadPluginLookUpTable = vi.hoisted(() =>
   vi.fn((_params: unknown) => ({
+    ...pluginMetadataSnapshot,
     manifestRegistry: pluginManifestRegistry,
     startup: {
       pluginIds: ["telegram"] as string[],
@@ -314,6 +317,7 @@ describe("prepareGatewayPluginBootstrap startup plugins", () => {
     loadGatewayStartupPlugins.mockClear();
     listAmbientOnlyConfiguredChannelIds.mockClear().mockReturnValue([]);
     loadPluginLookUpTable.mockClear().mockReturnValue({
+      ...pluginMetadataSnapshot,
       manifestRegistry: pluginManifestRegistry,
       startup: {
         pluginIds: ["telegram"] as string[],
@@ -482,7 +486,9 @@ describe("prepareGatewayPluginBootstrap startup plugins", () => {
   it("preserves an explicitly empty manifest snapshot for ambient channel planning", async () => {
     const emptyManifestRegistry: PluginManifestRegistry = { plugins: [], diagnostics: [] };
     loadPluginLookUpTable.mockReturnValueOnce({
+      ...pluginMetadataSnapshot,
       manifestRegistry: emptyManifestRegistry,
+      bundledManifestRegistry: emptyManifestRegistry,
       startup: {
         pluginIds: [],
         channelPluginIds: [],

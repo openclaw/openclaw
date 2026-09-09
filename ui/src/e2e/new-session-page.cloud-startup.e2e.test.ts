@@ -5,7 +5,9 @@ import {
   SESSION_LIST_DEFAULTS,
   WORKSPACE,
   controlUiSessionPath,
+  createCloudAgentsListResponse,
   createNewSessionPageE2eSuite,
+  expectPastedPngImage,
   installMockGateway,
   pastePng,
   pollLocatorText,
@@ -112,20 +114,7 @@ suite.define(() => {
     const gateway = await installMockGateway(page, {
       workspaceGit: true,
       methodResponses: {
-        "agents.list": {
-          agents: [
-            {
-              id: "cloud",
-              identity: { name: "Cloud" },
-              name: "Cloud",
-              workspace: WORKSPACE,
-              workspaceGit: true,
-            },
-          ],
-          defaultId: "cloud",
-          mainKey: "main",
-          scope: "agent",
-        },
+        "agents.list": createCloudAgentsListResponse(),
         "environments.list": {
           environments: [],
           profiles: [{ id: "aws", providerId: "crabbox" }],
@@ -268,9 +257,7 @@ suite.define(() => {
       const retainedTurn = page.locator(".chat-group.user", { hasText: message });
       const checkDelivery = page.getByRole("button", { name: "Check delivery", exact: true });
       await checkDelivery.waitFor({ state: "visible" });
-      await retainedTurn
-        .locator(`img[src="data:image/png;base64,${ONE_PIXEL_PNG_B64}"]`)
-        .waitFor({ state: "visible" });
+      await expectPastedPngImage(retainedTurn.locator("img.chat-message-image"));
       await expect
         .poll(() => page.locator(".agent-chat__composer-combobox textarea").isDisabled())
         .toBe(true);
@@ -286,9 +273,7 @@ suite.define(() => {
           }),
         );
       await pollLocatorText(page.getByRole("alert")).toContain("No matching user message");
-      await retainedTurn
-        .locator(`img[src="data:image/png;base64,${ONE_PIXEL_PNG_B64}"]`)
-        .waitFor({ state: "visible" });
+      await expectPastedPngImage(retainedTurn.locator("img.chat-message-image"));
 
       // Gateway user-turn recording uses the admitted client key plus :user.
       await gateway.setHistoryMessages([
@@ -323,20 +308,7 @@ suite.define(() => {
     const gateway = await installMockGateway(page, {
       workspaceGit: true,
       methodResponses: {
-        "agents.list": {
-          agents: [
-            {
-              id: "cloud",
-              identity: { name: "Cloud" },
-              name: "Cloud",
-              workspace: WORKSPACE,
-              workspaceGit: true,
-            },
-          ],
-          defaultId: "cloud",
-          mainKey: "main",
-          scope: "agent",
-        },
+        "agents.list": createCloudAgentsListResponse(),
         "environments.list": {
           environments: [],
           profiles: [{ id: "aws", providerId: "crabbox" }],

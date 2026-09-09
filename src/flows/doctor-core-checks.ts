@@ -37,6 +37,7 @@ import type { CronJob } from "../cron/types.js";
 import { hasAmbiguousGatewayAuthModeConfig } from "../gateway/auth-mode-policy.js";
 import { resolveGatewayAuthToken } from "../gateway/auth-token-resolution.js";
 import { resolveGatewayAuth } from "../gateway/auth.js";
+import { isInvalidGatewaySecret } from "../gateway/known-weak-gateway-secrets.js";
 import type { PluginMetadataSnapshotScopeRunner } from "../plugins/current-plugin-metadata-snapshot.js";
 import { getSkippedExecRefStaticError } from "../secrets/exec-resolution-policy.js";
 import type { SecurityAuditFinding } from "../security/audit.types.js";
@@ -46,11 +47,8 @@ import { detectSkillWorkshopToolPolicyDiagnostic } from "../skills/workshop/tool
 import { hasActiveGatewayExecCredential } from "./doctor-gateway-exec-credential.js";
 import { removedWorkspacesStateCheck } from "./doctor-removed-workspaces-state-check.js";
 import { resolveDoctorWorkspaceSuggestionScopes } from "./doctor-workspace-suggestion-scopes.js";
-import { defineSplitHealthCheckInput } from "./health-check-adapter.js";
-import type {
-  SplitHealthCheckDefinition,
-  SplitHealthCheckInput,
-} from "./health-check-runner-types.js";
+import { copyHealthCheck } from "./health-check-adapter.js";
+import type { DoctorHealthCheck } from "./health-check-runner-types.js";
 import type {
   HealthCheck,
   HealthCheckContext,
@@ -67,6 +65,7 @@ const GATEWAY_SERVICES_EXTRA_CHECK_ID = "core/doctor/gateway-services/extra";
 const TELEGRAM_GENERAL_TOPIC_CONVERSATIONS_CHECK_ID =
   "core/doctor/telegram-general-topic-conversations";
 const SKILL_WORKSHOP_TOOL_POLICY_CHECK_ID = "core/doctor/skill-workshop-tool-policy";
+const SKILL_WORKSHOP_RELOCATION_CHECK_ID = "core/doctor/skill-workshop-relocation";
 type CoreHealthCheckContext = HealthCheckContext & {
   readonly deep?: boolean;
 };
@@ -350,11 +349,58 @@ const skillWorkshopToolPolicyCheck: HealthCheck = {
   },
 };
 
+const skillWorkshopRelocationCheck: HealthCheck = {
+  id: SKILL_WORKSHOP_RELOCATION_CHECK_ID,
+  kind: "core",
+  description: "Skill Workshop files and proposals use each agent's Workshop directory.",
+  source: "doctor",
+  async detect(ctx) {
+    const { inspectLegacySkillWorkshopMigration } =
+      await import("../commands/doctor-skill-workshop-sqlite.js");
+    const inspection = await inspectLegacySkillWorkshopMigration({
+      config: ctx.cfg,
+      env: process.env,
+    });
+    if (inspection.externalProposalCount === 0 && inspection.legacyBackupRootCount === 0) {
+      return [];
+    }
+    const fixHints: string[] = [];
+    if (
+      inspection.externalProposalCount > 0 ||
+      inspection.legacyBackupRootCount > inspection.preservedLegacyBackupRootCount
+    ) {
+      fixHints.push(
+        "Run `openclaw doctor --fix` to process eligible Workshop relocations and legacy collection backups.",
+      );
+    }
+    if (inspection.preservedLegacyBackupRootCount > 0) {
+      fixHints.push(
+        "Preserved roots need manual review of workspace ownership, backup manifests, and workspace migration blockers; Doctor leaves them untouched until resolved. Do not delete backups to clear this warning.",
+      );
+    }
+    return [
+      {
+        checkId: SKILL_WORKSHOP_RELOCATION_CHECK_ID,
+        severity: "warning",
+        message: `Skill Workshop has ${inspection.externalProposalCount} proposal target${inspection.externalProposalCount === 1 ? "" : "s"} outside agent directories (${Object.entries(
+          inspection.externalProposalCountsByAgent,
+        )
+          .map(([agentId, count]) => `${agentId}: ${count}`)
+          .join(
+            ", ",
+          )}) and ${inspection.legacyBackupRootCount} legacy collection backup root${inspection.legacyBackupRootCount === 1 ? "" : "s"} (${inspection.preservedLegacyBackupRootCount} preserved for review).`,
+        path: "skills.workshop",
+        fixHint: fixHints.join(" "),
+      },
+    ];
+  },
+};
+
 function resolveDoctorMode(cfg: OpenClawConfig): "local" | "remote" {
   return cfg.gateway?.mode === "remote" ? "remote" : "local";
 }
 
-export function buildGatewayTokenSecretRefUnavailableMessage(params: {
+function buildGatewayTokenSecretRefUnavailableMessage(params: {
   cfg: OpenClawConfig;
   ref: SecretRef;
   unresolvedRefReason?: string;
@@ -372,11 +418,80 @@ export function buildGatewayTokenSecretRefUnavailableMessage(params: {
   return "Gateway token is managed via SecretRef and is currently unavailable.";
 }
 
-export function buildGatewayTokenSecretRefFixHint(ref: SecretRef): string {
+function buildGatewayTokenSecretRefFixHint(ref: SecretRef): string {
   if (ref.source === "exec") {
     return "Run `openclaw doctor --allow-exec` to verify exec SecretRefs during doctor, or `openclaw secrets audit --allow-exec` to audit all exec SecretRefs.";
   }
   return "Resolve or rotate the external secret source, then rerun doctor.";
+}
+
+/** Shared auth diagnostics keep doctor's read-only and repair paths on the same policy. */
+export async function detectGatewayAuthHealth(
+  ctx: Pick<HealthCheckContext, "cfg" | "env" | "allowExecSecretRefs">,
+): Promise<HealthFinding[]> {
+  if (resolveDoctorMode(ctx.cfg) !== "local") {
+    return [];
+  }
+  const auth = resolveGatewayAuth({
+    authConfig: ctx.cfg.gateway?.auth,
+    tailscaleMode: ctx.cfg.gateway?.tailscale?.mode ?? "off",
+    env: ctx.env,
+  });
+  if (auth.mode !== "token") {
+    return [];
+  }
+  const gatewayTokenRef = resolveSecretInputRef({
+    value: ctx.cfg.gateway?.auth?.token,
+    defaults: ctx.cfg.secrets?.defaults,
+  }).ref;
+  const invalidExecRef =
+    gatewayTokenRef?.source === "exec" &&
+    getSkippedExecRefStaticError({ ref: gatewayTokenRef, config: ctx.cfg });
+  if (gatewayTokenRef?.source === "exec" && ctx.allowExecSecretRefs !== true && !invalidExecRef) {
+    return [];
+  }
+  const resolved: Awaited<ReturnType<typeof resolveGatewayAuthToken>> = invalidExecRef
+    ? { secretRefConfigured: true }
+    : await resolveGatewayAuthToken({
+        cfg: ctx.cfg,
+        env: ctx.env ?? process.env,
+        unresolvedReasonStyle: "detailed",
+        ...(gatewayTokenRef ? { envFallback: "never" as const } : {}),
+      });
+  if (resolved.token && !isInvalidGatewaySecret(resolved.token)) {
+    return [];
+  }
+  if (gatewayTokenRef) {
+    return [
+      {
+        checkId: "core/doctor/gateway-auth",
+        severity: "warning",
+        message: buildGatewayTokenSecretRefUnavailableMessage({
+          cfg: ctx.cfg,
+          ref: gatewayTokenRef,
+          unresolvedRefReason: isInvalidGatewaySecret(resolved.token)
+            ? "the resolved token is blank or the literal string undefined/null"
+            : resolved.unresolvedRefReason,
+        }),
+        path: "gateway.auth.token",
+        fixHint: buildGatewayTokenSecretRefFixHint(gatewayTokenRef),
+      },
+    ];
+  }
+  const invalid =
+    isInvalidGatewaySecret(resolved.token) || isInvalidGatewaySecret(ctx.cfg.gateway?.auth?.token);
+  return [
+    {
+      checkId: "core/doctor/gateway-auth",
+      severity: invalid ? "error" : "warning",
+      message: invalid
+        ? "Gateway token is blank or the literal string undefined/null, not a usable secret."
+        : "Gateway auth is off or missing a token.",
+      path: "gateway.auth.token",
+      fixHint:
+        "Run `openclaw doctor --fix --generate-gateway-token` to generate a token, then restart the Gateway.",
+    },
+  ];
 }
 
 const gatewayAuthCheck: HealthCheck = {
@@ -384,82 +499,7 @@ const gatewayAuthCheck: HealthCheck = {
   kind: "core",
   description: "Local Gateway auth mode has a usable token or another explicit auth mode.",
   source: "doctor",
-  async detect(ctx) {
-    if (resolveDoctorMode(ctx.cfg) !== "local") {
-      return [];
-    }
-    const gatewayTokenRef = resolveSecretInputRef({
-      value: ctx.cfg.gateway?.auth?.token,
-      defaults: ctx.cfg.secrets?.defaults,
-    }).ref;
-    const auth = resolveGatewayAuth({
-      authConfig: ctx.cfg.gateway?.auth,
-      tailscaleMode: ctx.cfg.gateway?.tailscale?.mode ?? "off",
-    });
-    const hasInlineToken = typeof auth.token === "string" && auth.token.trim() !== "";
-    const needsToken =
-      auth.mode !== "password" &&
-      auth.mode !== "none" &&
-      auth.mode !== "trusted-proxy" &&
-      (auth.mode !== "token" || !hasInlineToken || Boolean(gatewayTokenRef));
-    if (!needsToken) {
-      return [];
-    }
-    let unresolvedRefReason: string | undefined;
-    if (gatewayTokenRef && gatewayTokenRef.source === "exec") {
-      const staticError = getSkippedExecRefStaticError({ ref: gatewayTokenRef, config: ctx.cfg });
-      if (staticError) {
-        unresolvedRefReason = undefined;
-      } else if (ctx.allowExecSecretRefs !== true) {
-        return [];
-      } else {
-        const resolvedToken = await resolveGatewayAuthToken({
-          cfg: ctx.cfg,
-          env: process.env,
-          unresolvedReasonStyle: "detailed",
-          envFallback: "never",
-        });
-        if (resolvedToken.source === "secretRef") {
-          return [];
-        }
-        unresolvedRefReason = resolvedToken.unresolvedRefReason;
-      }
-    } else {
-      const resolvedToken = await resolveGatewayAuthToken({
-        cfg: ctx.cfg,
-        env: process.env,
-        unresolvedReasonStyle: "detailed",
-      });
-      if (gatewayTokenRef ? resolvedToken.source === "secretRef" : resolvedToken.token) {
-        return [];
-      }
-      unresolvedRefReason = resolvedToken.unresolvedRefReason;
-    }
-    if (gatewayTokenRef) {
-      return [
-        {
-          checkId: "core/doctor/gateway-auth",
-          severity: "warning",
-          message: buildGatewayTokenSecretRefUnavailableMessage({
-            cfg: ctx.cfg,
-            ref: gatewayTokenRef,
-            unresolvedRefReason,
-          }),
-          path: "gateway.auth.token",
-          fixHint: buildGatewayTokenSecretRefFixHint(gatewayTokenRef),
-        },
-      ];
-    }
-    return [
-      {
-        checkId: "core/doctor/gateway-auth",
-        severity: "warning",
-        message: "Gateway auth is off or missing a token.",
-        path: "gateway.auth",
-        fixHint: "Run `openclaw doctor --fix --generate-gateway-token` to generate a token.",
-      },
-    ];
-  },
+  detect: detectGatewayAuthHealth,
 };
 
 const hooksModelCheck: HealthCheck = {
@@ -472,7 +512,7 @@ const hooksModelCheck: HealthCheck = {
       return [];
     }
     const { DEFAULT_MODEL, DEFAULT_PROVIDER } = await import("../agents/defaults.js");
-    const { loadPreparedModelCatalog } = await import("../agents/prepared-model-catalog.js");
+    const { readPreparedModelCatalog } = await import("../agents/prepared-model-catalog.js");
     const { getModelRefStatus, resolveConfiguredModelRef, resolveHooksGmailModel } =
       await import("../agents/model-selection.js");
     const hooksModelRef = resolveHooksGmailModel({
@@ -494,7 +534,7 @@ const hooksModelCheck: HealthCheck = {
       defaultProvider: DEFAULT_PROVIDER,
       defaultModel: DEFAULT_MODEL,
     });
-    const catalog = await loadPreparedModelCatalog({
+    const catalog = await readPreparedModelCatalog({
       config: ctx.cfg,
       readOnly: true,
       providerDiscoveryProviderIds: [],
@@ -575,16 +615,16 @@ const bootstrapSizeCheck: HealthCheck = {
     }
     const { buildBootstrapInjectionStats, analyzeBootstrapBudget } =
       await import("../agents/bootstrap-budget.js");
-    const { resolveBootstrapContextForRun } = await import("../agents/bootstrap-files.js");
+    const { resolveBootstrapContextForDiagnostics } =
+      await import("../agents/bootstrap-files-diagnostics.js");
     const { resolveBootstrapMaxChars, resolveBootstrapTotalMaxChars } =
       await import("../agents/embedded-agent-helpers.js");
     const defaultAgentId = tryResolveSoleAgentId(ctx.cfg);
     const workspaceDir = ctx.cwd;
-    const { bootstrapFiles, contextFiles } = await resolveBootstrapContextForRun({
+    const { bootstrapFiles, contextFiles } = await resolveBootstrapContextForDiagnostics({
       workspaceDir,
       config: ctx.cfg,
       agentId: defaultAgentId,
-      readOnlyState: true,
     });
     const analysis = analyzeBootstrapBudget({
       files: buildBootstrapInjectionStats({
@@ -898,7 +938,7 @@ const legacyWhatsAppCrontabCheck: HealthCheck & { readonly defaultEnabled: false
   },
 };
 
-const legacyCronStoreCheck: SplitHealthCheckDefinition = {
+const legacyCronStoreCheck: DoctorHealthCheck = {
   id: "core/doctor/legacy-cron-store",
   kind: "core",
   description: "Legacy cron store, run-log, and payload state is normalized.",
@@ -1052,7 +1092,7 @@ const gatewayPlatformNotesCheck: HealthCheck = {
   },
 };
 
-function createGatewayHealthCheck(deps: CoreHealthCheckDeps): SplitHealthCheckDefinition {
+function createGatewayHealthCheck(deps: CoreHealthCheckDeps): DoctorHealthCheck {
   return {
     id: GATEWAY_HEALTH_CHECK_ID,
     kind: "core",
@@ -1065,7 +1105,7 @@ function createGatewayHealthCheck(deps: CoreHealthCheckDeps): SplitHealthCheckDe
   };
 }
 
-function createGatewayDaemonCheck(deps: CoreHealthCheckDeps): SplitHealthCheckDefinition {
+function createGatewayDaemonCheck(deps: CoreHealthCheckDeps): DoctorHealthCheck {
   return {
     id: GATEWAY_DAEMON_CHECK_ID,
     kind: "core",
@@ -1098,9 +1138,11 @@ const browserCheck: HealthCheck = {
     }
     const result = await maybeRepairOwnedChromeExtensionNativeHosts();
     return {
-      ...(result.changes.length === 0 && result.warnings.length > 0
-        ? { status: "failed" as const, reason: result.warnings.join("; ") }
-        : {}),
+      ...(result.status
+        ? { status: result.status, reason: result.reason }
+        : result.changes.length === 0 && result.warnings.length > 0
+          ? { status: "failed" as const, reason: result.warnings.join("; ") }
+          : {}),
       changes: result.changes,
       warnings: result.warnings,
     };
@@ -1374,9 +1416,7 @@ function createWorkspaceSuggestionsCheck(
   };
 }
 
-function createConvertedWorkflowChecks(
-  deps: CoreHealthCheckDeps,
-): readonly SplitHealthCheckDefinition[] {
+function createConvertedWorkflowChecks(deps: CoreHealthCheckDeps): readonly DoctorHealthCheck[] {
   return [
     claudeCliCheck,
     gatewayAuthCheck,
@@ -1411,6 +1451,7 @@ function createConvertedWorkflowChecks(
     createRuntimeToolSchemaCheck(deps),
     createWorkspaceSuggestionsCheck(deps),
     skillWorkshopToolPolicyCheck,
+    skillWorkshopRelocationCheck,
     ...(isExperimentalClawsEnabled()
       ? [
           {
@@ -1442,8 +1483,8 @@ function createConvertedWorkflowChecks(
 
 export function createCoreHealthChecks(
   deps: CoreHealthCheckDeps = defaultCoreHealthCheckDeps,
-): readonly SplitHealthCheckInput[] {
-  const checks: readonly SplitHealthCheckDefinition[] = [
+): readonly DoctorHealthCheck[] {
+  const checks: readonly DoctorHealthCheck[] = [
     gatewayConfigCheck,
     ...createConvertedWorkflowChecks(deps),
     commandOwnerCheck,
@@ -1451,8 +1492,8 @@ export function createCoreHealthChecks(
     browserClawdProfileResidueCheck,
     finalConfigValidationCheck,
   ];
-  return checks.map(defineSplitHealthCheckInput);
+  return checks.map(copyHealthCheck);
 }
 
-export const CORE_HEALTH_CHECKS: readonly SplitHealthCheckInput[] = createCoreHealthChecks();
+export const CORE_HEALTH_CHECKS: readonly DoctorHealthCheck[] = createCoreHealthChecks();
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

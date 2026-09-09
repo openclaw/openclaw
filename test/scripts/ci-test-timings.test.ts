@@ -18,6 +18,7 @@ import {
   ciTestTimingsSchema,
   type CiTestTimings,
 } from "../../scripts/lib/ci-test-timings-schema.mts";
+import { createCompactSplitTimingGeneration } from "../../scripts/lib/vitest-shard-metadata.mts";
 
 function uiLog(files: Record<string, number>, overhead = 0.6) {
   const body = Object.values(files).reduce((sum, value) => sum + value, 0);
@@ -210,6 +211,13 @@ it.todo("retains todo coverage");
       serialProject: "ui-e2e-serial-standalone",
       mixed: true,
     },
+    ...["ui-e2e-real-gateway", "ui-e2e-real-gateway-standalone"].flatMap((parallelProject) =>
+      [false, true].map((mixed) => ({
+        parallelProject,
+        serialProject: "ui-e2e-serial-standalone",
+        mixed,
+      })),
+    ),
   ])(
     "keeps $parallelProject weights without refitting $serialProject overhead (mixed: $mixed)",
     ({ parallelProject, serialProject, mixed }) => {
@@ -221,14 +229,16 @@ it.todo("retains todo coverage");
         `✓ |${parallelProject}| ${first} (1 test) 4000ms`,
         `✓ ${parallelProject} ${second} (1 test) 4000ms`,
         ...(mixed ? [serialLine] : []),
-        `Duration ${mixed ? 7 : 5}s (transform 1s, setup 0ms, tests ${mixed ? 10 : 8}s, environment 0ms)`,
+        mixed
+          ? "Duration 7s (transform 10%, setup 0%, tests 90%, environment 0%)"
+          : "Duration 5s (transform 1s, setup 0ms, tests 8s, environment 0ms)",
       ].join("\n");
       const runs = [1, 2].map((id) => timingRun(id, [{ kind: "uiE2e", text: parallel }]));
       const parallelOnly = refitTestTimings(runs, baseline).timings.uiE2e;
       expect(parallelOnly.fileSeconds).toMatchObject({ [first]: 4, [second]: 4 });
       expect(parallelOnly.perFileOverheadSeconds).toBe(0.6);
 
-      const serial = `${serialLine}\nDuration 3s (transform 1s, setup 0ms, tests 2s, environment 0ms)`;
+      const serial = `${serialLine}\nDuration 3s (transform 10%, setup 0%, tests 90%, environment 0%)`;
       const runsWithSerial = [1, 2].map((id) =>
         timingRun(id, [{ kind: "uiE2e", text: `${parallel}\n${serial}` }]),
       );
@@ -300,6 +310,146 @@ it.todo("retains todo coverage");
       github: { "core-unit-src-security-2": 50 },
     });
   });
+
+  it("retains measured parent costs across split inventory changes without double-counting retries", () => {
+    const parentShardName = "agentic-control-plane-agent-chat";
+    const generations = [0, 1, 2].map((index) =>
+      createCompactSplitTimingGeneration({
+        parentShardName,
+        configs: ["test/vitest/vitest.gateway-server.config.ts"],
+        stripes: [["a.test.ts"], [`added-${index}.test.ts`]],
+      }),
+    );
+    const runs = generations.map((generation, index) =>
+      timingRun(
+        index + 1,
+        generation.timingKeys.flatMap((key, part) => [
+          {
+            kind: "compact" as const,
+            labels: ["blacksmith-32vcpu-ubuntu-2404"],
+            text: compactLog(100 + part * 100 + index * 10, key),
+          },
+          {
+            kind: "compact" as const,
+            labels: ["blacksmith-32vcpu-ubuntu-2404"],
+            text: compactLog(100 + part * 100 + index * 10, key),
+          },
+          {
+            kind: "compact" as const,
+            labels: ["ubuntu-24.04"],
+            text: compactLog(300 + part * 100, key),
+          },
+        ]),
+      ),
+    );
+    const previous = {
+      ...baseline,
+      compactGroupSeconds: { blacksmith: { [parentShardName]: 167 }, github: {} },
+    };
+    // No child key has two independent run samples, but every run covers its
+    // complete parent. Inventory growth must not erase that measured baseline.
+    expect(refitTestTimings(runs, previous).timings.compactGroupSeconds).toEqual({
+      blacksmith: { [parentShardName]: 320 },
+      github: { [parentShardName]: 700 },
+    });
+    expect(refitTestTimings([runs[0]!]).timings.compactGroupSeconds).toEqual({
+      blacksmith: {},
+      github: {},
+    });
+  });
+
+  it.each(["missing part", "different generation", "different profile", "different run"])(
+    "does not invent a complete parent measurement from %s",
+    (condition) => {
+      const common = {
+        parentShardName: "agentic-control-plane-agent-chat",
+        configs: ["test/vitest/vitest.gateway-server.config.ts"],
+      };
+      const first = createCompactSplitTimingGeneration({
+        ...common,
+        stripes: [["a.test.ts"], ["b.test.ts"]],
+      });
+      const second = createCompactSplitTimingGeneration({
+        ...common,
+        stripes: [["b.test.ts"], ["a.test.ts"]],
+      });
+      const runs = [1, 2, 3].map((id) => {
+        const logs: CiTimingRun["logs"] = [
+          {
+            kind: "compact",
+            labels: ["blacksmith-32vcpu-ubuntu-2404"],
+            text: compactLog(
+              100,
+              first.timingKeys[condition === "different run" ? (id - 1) % 2 : 0]!,
+            ),
+          },
+        ];
+        if (condition === "different generation" || condition === "different profile") {
+          logs.push({
+            kind: "compact",
+            labels: [
+              condition === "different profile" ? "ubuntu-24.04" : "blacksmith-32vcpu-ubuntu-2404",
+            ],
+            text: compactLog(
+              200,
+              (condition === "different generation" ? second : first).timingKeys[1]!,
+            ),
+          });
+        }
+        return timingRun(id, logs);
+      });
+      const result = refitTestTimings(runs).timings.compactGroupSeconds;
+      expect(result.blacksmith).not.toHaveProperty(common.parentShardName);
+      expect(result.github).not.toHaveProperty(common.parentShardName);
+      const previous = {
+        ...baseline,
+        compactGroupSeconds: { blacksmith: { [common.parentShardName]: 500 }, github: {} },
+      };
+      expect(
+        refitTestTimings(runs, previous).timings.compactGroupSeconds.blacksmith[
+          common.parentShardName
+        ],
+      ).toBe(500);
+    },
+  );
+
+  it.each([undefined, 900])(
+    "counts complete repartitions as one parent sample alongside direct cost %s",
+    (directSeconds) => {
+      const parentShardName = "agentic-control-plane-agent-chat";
+      const generations = [
+        [["a.test.ts"], ["b.test.ts"]],
+        [["b.test.ts"], ["a.test.ts"]],
+      ].map((stripes) =>
+        createCompactSplitTimingGeneration({
+          parentShardName,
+          configs: ["test/vitest/vitest.gateway-server.config.ts"],
+          stripes,
+        }),
+      );
+      const logs: CiTimingRun["logs"] = generations.flatMap((generation, index) =>
+        generation.timingKeys.map((key) => ({
+          kind: "compact" as const,
+          labels: ["blacksmith-32vcpu-ubuntu-2404"],
+          text: compactLog(index === 0 ? 150 : 350, key),
+        })),
+      );
+      if (directSeconds !== undefined) {
+        logs.push({
+          kind: "compact",
+          labels: ["blacksmith-32vcpu-ubuntu-2404"],
+          text: compactLog(directSeconds, parentShardName),
+        });
+      }
+      const runs = [timingRun(1, logs), timingRun(2, logs)];
+      expect(refitTestTimings(runs).timings.compactGroupSeconds.blacksmith[parentShardName]).toBe(
+        directSeconds ?? 700,
+      );
+      expect(
+        refitTestTimings([runs[0]!]).timings.compactGroupSeconds.blacksmith,
+      ).not.toHaveProperty(parentShardName);
+    },
+  );
 
   it.each([0, 1, 2, 3])(
     "prunes absent keys only after at least three contributing runs per profile (%s)",

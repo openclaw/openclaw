@@ -1,7 +1,11 @@
-import { html, type TemplateResult } from "lit";
+import { html, nothing, type TemplateResult } from "lit";
 import { isKernelOwnedChannelConfigKey } from "../../../../src/config/channel-config-keys.js";
 import type { ConfigUiHints } from "../../api/types.ts";
-import { hintForPath, humanize, type JsonSchema } from "../../components/config-form.shared.ts";
+import {
+  humanize,
+  localizedHintForPath,
+  type JsonSchema,
+} from "../../components/config-form.shared.ts";
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
 import type { ConfigProps } from "./view-types.ts";
@@ -12,7 +16,7 @@ export function getChannelConfigGroups(schema: JsonSchema, hints: ConfigUiHints)
     .filter(([key]) => !isKernelOwnedChannelConfigKey(key))
     .map(([key, node]) => ({
       key,
-      label: hintForPath(["channels", key], hints)?.label ?? node.title ?? humanize(key),
+      label: localizedHintForPath(["channels", key], hints)?.label ?? node.title ?? humanize(key),
       keys: [key],
     }))
     .toSorted((a, b) => a.label.localeCompare(b.label) || a.key.localeCompare(b.key));
@@ -49,6 +53,7 @@ const sidebarIcons: Record<string, TemplateResult> = {
   bindings: icons.server,
   broadcast: icons.radio,
   tts: icons.music,
+  transcripts: icons.book,
   session: icons.users,
   cron: icons.clock,
   discovery: icons.search,
@@ -92,7 +97,15 @@ export const SECTION_CATEGORIES: SectionCategoryDefinition[] = [
   { id: "ai", sections: ["agents", "models", "skills", "tools", "memory", "session"] },
   {
     id: "communication",
-    sections: ["channels", "messages", "broadcast", "__notifications__", "talk", "tts"],
+    sections: [
+      "channels",
+      "messages",
+      "broadcast",
+      "__notifications__",
+      "talk",
+      "tts",
+      "transcripts",
+    ],
   },
   { id: "security", sections: ["security", "approvals"] },
   { id: "automation", sections: ["commands", "hooks", "bindings", "cron", "plugins"] },
@@ -161,6 +174,7 @@ export function renderConfigAccordionNav(
                       ? "config-accordion-group__item--active"
                       : ""
                   }"
+                  aria-current=${props.activeSection === section.key ? "true" : nothing}
                   @click=${(event: Event) => {
                     props.onSectionChange(section.key);
                     resetContentScroll(event.currentTarget);

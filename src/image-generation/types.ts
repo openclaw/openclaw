@@ -15,7 +15,7 @@ export type GeneratedImageAsset = {
 
 export type ImageGenerationResolution = "1K" | "2K" | "4K";
 
-export type ImageGenerationQuality = "low" | "medium" | "high" | "auto";
+export type ImageGenerationQuality = "low" | "medium" | "high" | "xhigh" | "max" | "auto";
 
 export type ImageGenerationOutputFormat = "png" | "jpeg" | "webp";
 
@@ -113,6 +113,7 @@ type ImageGenerationGeometryCapabilities = {
 
 type ImageGenerationOutputCapabilities = {
   qualities?: ImageGenerationQuality[];
+  qualitiesByModel?: Record<string, ImageGenerationQuality[]>;
   formats?: ImageGenerationOutputFormat[];
   backgrounds?: ImageGenerationBackground[];
 };

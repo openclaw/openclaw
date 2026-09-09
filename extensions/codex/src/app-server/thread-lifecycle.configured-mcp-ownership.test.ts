@@ -73,6 +73,9 @@ describe("startOrResumeThread — configured MCP ownership", () => {
       ...binding,
     });
     const request = vi.fn(async (method: string) => {
+      if (method === "config/read") {
+        return { config: {}, origins: {}, layers: [] };
+      }
       if (method === "thread/start") {
         // The successor is not authoritative until its exact-predecessor CAS commits.
         await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
@@ -95,7 +98,7 @@ describe("startOrResumeThread — configured MCP ownership", () => {
       userMcpServersEnabled: false,
     });
 
-    expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/start"]);
+    expect(request.mock.calls.map(([method]) => method)).toEqual(["config/read", "thread/start"]);
     expect(await readCodexAppServerBinding(sessionFile)).toMatchObject({
       threadId: "thread-scheduled-v1",
       configuredMcpOwnershipVersion: 1,
@@ -115,6 +118,9 @@ describe("startOrResumeThread — configured MCP ownership", () => {
       mcpServersFingerprint: "mcp-v1",
     });
     const request = vi.fn(async (method: string) => {
+      if (method === "config/read") {
+        return { config: {}, origins: {}, layers: [] };
+      }
       if (method !== "thread/start") {
         throw new Error(`unexpected method: ${method}`);
       }
@@ -138,7 +144,7 @@ describe("startOrResumeThread — configured MCP ownership", () => {
       userMcpServersEnabled: false,
     });
 
-    expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/start"]);
+    expect(request.mock.calls.map(([method]) => method)).toEqual(["config/read", "thread/start"]);
     expect(await readCodexAppServerBinding(sessionFile)).toMatchObject({
       threadId: "thread-main-scheduled",
       configuredMcpOwnershipVersion: 1,
@@ -181,6 +187,9 @@ describe("startOrResumeThread — configured MCP ownership", () => {
 
     const successorIds = ["thread-scheduled-v1", "thread-ordinary-new", "thread-scheduled-v2"];
     const currentRequest = vi.fn(async (method: string, requestParams?: { threadId?: string }) => {
+      if (method === "config/read") {
+        return { config: {}, origins: {}, layers: [] };
+      }
       if (method === "thread/start") {
         await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
           threadId:
@@ -298,6 +307,9 @@ describe("startOrResumeThread — configured MCP ownership", () => {
       dynamicToolsFingerprint: "[]",
     });
     const request = vi.fn(async (method: string) => {
+      if (method === "config/read") {
+        return { config: {}, origins: {}, layers: [] };
+      }
       if (method === "thread/start") {
         throw new Error("successor start failed");
       }
@@ -352,6 +364,9 @@ describe("startOrResumeThread — configured MCP ownership", () => {
         dynamicToolsFingerprint: "[]",
       });
       const request = vi.fn(async (method: string) => {
+        if (method === "config/read") {
+          return { config: {}, origins: {}, layers: [] };
+        }
         if (method === "thread/start") {
           return threadStartResult("thread-uncommitted");
         }
@@ -400,6 +415,7 @@ describe("startOrResumeThread — configured MCP ownership", () => {
         caseName === "error" ? "lost replacement lease" : "Codex thread binding changed",
       );
       expect(request.mock.calls.map(([method]) => method)).toEqual([
+        "config/read",
         "thread/start",
         "thread/delete",
       ]);
@@ -428,6 +444,9 @@ describe("startOrResumeThread — configured MCP ownership", () => {
     });
     const controller = new AbortController();
     const request = vi.fn(async (method: string) => {
+      if (method === "config/read") {
+        return { config: {}, origins: {}, layers: [] };
+      }
       if (method === "thread/start") {
         controller.abort("test abort");
         return threadStartResult("thread-uncommitted");
@@ -462,7 +481,11 @@ describe("startOrResumeThread — configured MCP ownership", () => {
         signal: controller.signal,
       }),
     ).rejects.toThrow();
-    expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/start", "thread/delete"]);
+    expect(request.mock.calls.map(([method]) => method)).toEqual([
+      "config/read",
+      "thread/start",
+      "thread/delete",
+    ]);
     await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
       threadId: "thread-legacy",
     });

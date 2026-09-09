@@ -24,6 +24,7 @@ import {
 } from "./embedded-agent-runner.sanitize-session-history.test-harness.js";
 import { validateReplayTurns } from "./embedded-agent-runner/replay-history.js";
 import { castAgentMessage, castAgentMessages } from "./test-helpers/agent-message-fixtures.js";
+import { textToolResult, textAssistant } from "./test-helpers/sparse-transcript.test-support.js";
 import { extractToolCallsFromAssistant } from "./tool-call-id.js";
 import type { TranscriptPolicy } from "./transcript-policy.js";
 import { makeZeroUsageSnapshot } from "./usage.js";
@@ -403,12 +404,7 @@ describe("sanitizeSessionHistory", () => {
     const sessionManager = makeInMemorySessionManager(sessionEntries);
 
     const result = await sanitizeSessionHistory({
-      messages: castAgentMessages([
-        {
-          role: "assistant",
-          content: [{ type: "text", text: "hello from previous turn" }],
-        },
-      ]),
+      messages: castAgentMessages([textAssistant("hello from previous turn")]),
       modelApi: "google-generative-ai",
       provider: "google-vertex",
       sessionManager,
@@ -484,12 +480,7 @@ describe("sanitizeSessionHistory", () => {
   it("prepends a bootstrap user turn for strict OpenAI-compatible assistant-first history", async () => {
     const sessionEntries: Array<{ type: string; customType: string; data: unknown }> = [];
     const sessionManager = makeInMemorySessionManager(sessionEntries);
-    const messages = castAgentMessages([
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "hello from previous turn" }],
-      },
-    ]);
+    const messages = castAgentMessages([textAssistant("hello from previous turn")]);
 
     const result = await sanitizeSessionHistory({
       messages,
@@ -582,10 +573,7 @@ describe("sanitizeSessionHistory", () => {
     const assistant = await getSingleAssistantUsage(
       castAgentMessages([
         { role: "user", content: "question" },
-        {
-          role: "assistant",
-          content: [{ type: "text", text: "answer without usage" }],
-        },
+        textAssistant("answer without usage"),
       ]),
     );
 
@@ -844,13 +832,12 @@ describe("sanitizeSessionHistory", () => {
         ],
         { stopReason: "toolUse" },
       ),
-      {
-        role: "toolResult",
-        toolCallId: "callmockimagegenerate0b27d8fa84",
-        toolName: "image_generate",
-        content: [{ type: "text", text: "Background task started for image generation." }],
-        isError: false,
-      },
+      textToolResult(
+        "callmockimagegenerate0b27d8fa84",
+        "image_generate",
+        "Background task started for image generation.",
+        { isError: false },
+      ),
       {
         role: "custom",
         content: "Image generation started; wait for completion.",
@@ -1041,13 +1028,7 @@ describe("sanitizeSessionHistory", () => {
         { stopReason: "toolUse" },
       ),
       makeUserMessage("continue"),
-      castAgentMessage({
-        role: "toolResult",
-        toolCallId: "call_2",
-        toolName: "exec",
-        content: [{ type: "text", text: "ok" }],
-        isError: false,
-      }),
+      castAgentMessage(textToolResult("call_2", "exec", "ok", { isError: false })),
     ];
 
     const result = await sanitizeOpenAIHistory(messages);
@@ -1108,30 +1089,12 @@ describe("sanitizeSessionHistory", () => {
 
   it("drops duplicate and orphan OpenAI outputs while preserving the first real result", async () => {
     const messages: AgentMessage[] = [
-      castAgentMessage({
-        role: "toolResult",
-        toolCallId: "call_orphan",
-        toolName: "read",
-        content: [{ type: "text", text: "orphan" }],
-        isError: false,
-      }),
+      castAgentMessage(textToolResult("call_orphan", "read", "orphan", { isError: false })),
       makeAssistantMessage([{ type: "toolCall", id: "call_keep", name: "read", arguments: {} }], {
         stopReason: "toolUse",
       }),
-      castAgentMessage({
-        role: "toolResult",
-        toolCallId: "call_keep",
-        toolName: "read",
-        content: [{ type: "text", text: "first" }],
-        isError: false,
-      }),
-      castAgentMessage({
-        role: "toolResult",
-        toolCallId: "call_keep",
-        toolName: "read",
-        content: [{ type: "text", text: "duplicate" }],
-        isError: false,
-      }),
+      castAgentMessage(textToolResult("call_keep", "read", "first", { isError: false })),
+      castAgentMessage(textToolResult("call_keep", "read", "duplicate", { isError: false })),
       makeUserMessage("continue"),
     ];
 
@@ -1201,22 +1164,6 @@ describe("sanitizeSessionHistory", () => {
     const result = await sanitizeOpenAIHistory(messages, {
       allowedToolNames: ["read"],
     });
-
-    expect(result).toStrictEqual([]);
-  });
-
-  it("downgrades orphaned openai reasoning even when the model has not changed", async () => {
-    const sessionEntries = [
-      makeModelSnapshotEntry({
-        provider: "openai",
-        modelApi: "openai-responses",
-        modelId: "gpt-5.4",
-      }),
-    ];
-    const sessionManager = makeInMemorySessionManager(sessionEntries);
-    const messages = makeReasoningAssistantMessages({ thinkingSignature: "json" });
-
-    const result = await sanitizeOpenAIHistory(messages, { modelId: "gpt-5.4", sessionManager });
 
     expect(result).toStrictEqual([]);
   });
@@ -2005,13 +1952,7 @@ describe("sanitizeSessionHistory", () => {
           } as unknown as ThinkingContent,
           { type: "toolCall", id: "call_1", name: "lookup", arguments: {} },
         ]),
-        castAgentMessage({
-          role: "toolResult",
-          toolCallId: "call_1",
-          toolName: "lookup",
-          content: [{ type: "text", text: "42" }],
-          isError: false,
-        }),
+        castAgentMessage(textToolResult("call_1", "lookup", "42", { isError: false })),
       ]);
 
       const result = await sanitizeAnthropicHistory({
@@ -2202,13 +2143,7 @@ describe("sanitizeSessionHistory", () => {
           },
           { type: "toolCall", id: "call_1", name: "read", arguments: {} },
         ] as unknown as AssistantMessage["content"]),
-        castAgentMessage({
-          role: "toolResult",
-          toolCallId: "call_1",
-          toolName: "read",
-          content: [{ type: "text", text: "ok" }],
-          isError: false,
-        }),
+        castAgentMessage(textToolResult("call_1", "read", "ok", { isError: false })),
       ]);
 
       const result = await sanitizeAnthropicHistory({
@@ -2244,13 +2179,7 @@ describe("sanitizeSessionHistory", () => {
           },
           { type: "toolCall", id: "call_1", name: "read", arguments: {} },
         ] as unknown as AssistantMessage["content"]),
-        castAgentMessage({
-          role: "toolResult",
-          toolCallId: "call_1",
-          toolName: "read",
-          content: [{ type: "text", text: "ok" }],
-          isError: false,
-        }),
+        castAgentMessage(textToolResult("call_1", "read", "ok", { isError: false })),
       ]);
 
       const result = await sanitizeAnthropicHistory({
@@ -2291,13 +2220,7 @@ describe("sanitizeSessionHistory", () => {
     const messages = castAgentMessages([
       makeUserMessage("first"),
       makeAssistantMessage([{ type: "toolCall", id: "call_1", name: "read", arguments: {} }]),
-      castAgentMessage({
-        role: "toolResult",
-        toolCallId: "call_1",
-        toolName: "read",
-        content: [{ type: "text", text: "first result" }],
-        isError: false,
-      }),
+      castAgentMessage(textToolResult("call_1", "read", "first result", { isError: false })),
       makeUserMessage("second"),
       makeAssistantMessage(
         [
@@ -2306,13 +2229,7 @@ describe("sanitizeSessionHistory", () => {
         ] as unknown as AssistantMessage["content"],
         { stopReason: "toolUse" },
       ),
-      castAgentMessage({
-        role: "toolResult",
-        toolCallId: "call1",
-        toolName: "read",
-        content: [{ type: "text", text: "second result" }],
-        isError: false,
-      }),
+      castAgentMessage(textToolResult("call1", "read", "second result", { isError: false })),
       makeUserMessage("retry"),
     ]);
 
@@ -2387,13 +2304,7 @@ describe("sanitizeSessionHistory", () => {
         ] as unknown as AssistantMessage["content"],
         { stopReason: "toolUse" },
       ),
-      castAgentMessage({
-        role: "toolResult",
-        toolCallId: "call1",
-        toolName: "read",
-        content: [{ type: "text", text: "first result" }],
-        isError: false,
-      }),
+      castAgentMessage(textToolResult("call1", "read", "first result", { isError: false })),
       makeUserMessage("second"),
       makeAssistantMessage(
         [
@@ -2402,13 +2313,7 @@ describe("sanitizeSessionHistory", () => {
         ] as unknown as AssistantMessage["content"],
         { stopReason: "toolUse" },
       ),
-      castAgentMessage({
-        role: "toolResult",
-        toolCallId: "call1",
-        toolName: "read",
-        content: [{ type: "text", text: "second result" }],
-        isError: false,
-      }),
+      castAgentMessage(textToolResult("call1", "read", "second result", { isError: false })),
       makeUserMessage("retry"),
     ]);
 

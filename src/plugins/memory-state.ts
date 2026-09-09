@@ -21,6 +21,7 @@ import type {
 } from "./registry-contribution-types.js";
 import type { PluginRegistry } from "./registry-types.js";
 import {
+  getPluginRegistryForContext,
   getPluginRegistrationContext,
   requireActivePluginRegistry,
   resolveDirectPluginRegistrationOwner,
@@ -87,8 +88,9 @@ export function resolveMemoryCapabilityRegistration(
   return effective;
 }
 
+// Cleanup reads must not recreate the process registry after its owner has cleared it.
 const getMemoryCapability = () =>
-  resolveMemoryCapabilityRegistration(requireActivePluginRegistry().memoryCapabilities);
+  resolveMemoryCapabilityRegistration(getPluginRegistryForContext()?.memoryCapabilities ?? []);
 
 const preparedMemoryPromptSections = new WeakSet<PreparedMemoryPromptSection>();
 const activePreparedMemoryPromptSection = new AsyncLocalStorage<PreparedMemoryPromptSection>();
@@ -274,14 +276,14 @@ function preparedMemoryPromptContextMatches(
   prepared: PreparedMemoryPromptSection,
   params: MemoryPromptSectionParams,
 ): boolean {
-  const current = snapshotMemoryPromptContext(params);
+  // The snapshot comes from a Set, so equal size and membership ignore insertion order.
   return (
-    prepared.context.citationsMode === current.citationsMode &&
-    prepared.context.agentId === current.agentId &&
-    prepared.context.agentSessionKey === current.agentSessionKey &&
-    prepared.context.sandboxed === current.sandboxed &&
-    prepared.context.availableTools.length === current.availableTools.length &&
-    prepared.context.availableTools.every((tool, index) => tool === current.availableTools[index])
+    prepared.context.citationsMode === params.citationsMode &&
+    prepared.context.agentId === params.agentId &&
+    prepared.context.agentSessionKey === params.agentSessionKey &&
+    prepared.context.sandboxed === (params.sandboxed === true) &&
+    prepared.context.availableTools.length === params.availableTools.size &&
+    prepared.context.availableTools.every((tool) => params.availableTools.has(tool))
   );
 }
 

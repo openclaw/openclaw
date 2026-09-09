@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   createSessionProjection,
   readSessionMessageIdentity,
+  readSessionProjectionFinalMessageIdentity,
   reduceSessionProjection,
   type SessionProjectionEvent,
   type SessionProjectionScope,
@@ -52,6 +53,35 @@ function replayInBothClients(
 }
 
 describe("cross-client session projection conformance", () => {
+  it.each([
+    { role: "user", rawSeq: 0 },
+    { role: "assistant", rawSeq: 9 },
+  ] as const)("keeps a canonical $role row stable through CLI enrichment", ({ role, rawSeq }) => {
+    const metadata = {
+      id: "native-row",
+      seq: 1,
+      transcriptPosition: { source: "canonical-transcript", rawSeq },
+    };
+    const native = { role, content: "Persisted message", __openclaw: metadata };
+    const enriched = {
+      ...native,
+      __openclaw: {
+        ...metadata,
+        importedFrom: "claude-cli",
+        cliSessionId: "external-session",
+        externalId: "provider-row",
+      },
+    };
+    let state = createSessionProjection(sharedScope, [enriched]);
+    state = reduceSessionProjection(state, { type: "messagePersisted", message: native });
+    state = reduceSessionProjection(state, { type: "snapshotLoaded", messages: [enriched] });
+
+    expect(state.messages).toEqual([enriched]);
+    expect(readSessionProjectionFinalMessageIdentity(enriched)).toBe(
+      readSessionProjectionFinalMessageIdentity(native),
+    );
+  });
+
   it.each([
     {
       name: "persisted identity wins over conflicting Gateway envelope",

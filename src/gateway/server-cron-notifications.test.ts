@@ -2,6 +2,7 @@
 // including URL redaction for invalid webhook destinations.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred as createVoidDeferred } from "../../test/helpers/promise.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import type { CronJob } from "../cron/types.js";
 import {
@@ -71,14 +72,6 @@ function webhookRequestBody() {
     throw new Error("expected webhook request body");
   }
   return JSON.parse(init.body);
-}
-
-function createVoidDeferred(): { promise: Promise<void>; resolve: () => void } {
-  let resolve = () => {};
-  const promise = new Promise<void>((resolvePromise) => {
-    resolve = resolvePromise;
-  });
-  return { promise, resolve };
 }
 
 function createWebhookJob(delivery: NonNullable<CronJob["delivery"]>): CronJob {

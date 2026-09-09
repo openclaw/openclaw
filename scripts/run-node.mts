@@ -176,7 +176,8 @@ const resolvePrivateQaRequiredDistEntries = (distRoot: string) => [
 ];
 const isExcludedSource = (filePath: string, sourceRoot: string, sourceRootName: string) => {
   const relativePath = normalizePath(path.relative(sourceRoot, filePath));
-  if (relativePath.startsWith("..")) {
+  // A basename starting with ".." still belongs to the source root.
+  if (relativePath === ".." || relativePath.startsWith("../")) {
     return false;
   }
   return !isBuildRelevantRunNodePath(path.posix.join(sourceRootName, relativePath));
@@ -228,7 +229,16 @@ const readGitStatus = (deps: RunNodeRequirementDeps, paths: string[] = runNodeWa
   try {
     const result = deps.spawnSync(
       "git",
-      ["status", "--porcelain", "--untracked-files=normal", "--", ...paths],
+      // NUL framing preserves filenames; separate delete/add records keep both rename sides.
+      [
+        "status",
+        "--porcelain=v1",
+        "-z",
+        "--no-renames",
+        "--untracked-files=normal",
+        "--",
+        ...paths,
+      ],
       {
         cwd: deps.cwd,
         encoding: "utf8",
@@ -246,9 +256,8 @@ const readGitStatus = (deps: RunNodeRequirementDeps, paths: string[] = runNodeWa
 
 const parseGitStatusPaths = (output: string) =>
   output
-    .split("\n")
-    .flatMap((line) => line.slice(3).split(" -> "))
-    .map((entry) => normalizePath(entry.trim()))
+    .split("\0")
+    .map((entry) => entry.slice(3))
     .filter(Boolean);
 
 const hasDirtySourceTree = (deps: RunNodeRequirementDeps) => {
@@ -256,17 +265,15 @@ const hasDirtySourceTree = (deps: RunNodeRequirementDeps) => {
   if (output === null) {
     return null;
   }
-  return parseGitStatusPaths(output).some((repoPath) => {
-    const normalizedPath = normalizePath(repoPath).replace(/^\.\/+/, "");
-    return (
-      isBuildRelevantRunNodePath(normalizedPath) ||
-      isDirtyBundledPluginPackageEntryChangeWithoutBuiltOutputs(normalizedPath, deps)
-    );
-  });
+  return parseGitStatusPaths(output).some(
+    (repoPath) =>
+      isBuildRelevantRunNodePath(repoPath) ||
+      isDirtyBundledPluginPackageEntryChangeWithoutBuiltOutputs(repoPath, deps),
+  );
 };
 
 const isRuntimePostBuildRelevantPath = (repoPath: string) => {
-  const normalizedPath = normalizePath(repoPath).replace(/^\.\/+/, "");
+  const normalizedPath = normalizePath(repoPath);
   if (runtimePostBuildStaticAssetPaths.has(normalizedPath)) {
     return true;
   }
@@ -796,9 +803,11 @@ const refuseImmutableDeploymentMutation = async (
 };
 
 const SIGNAL_EXIT_CODES = {
+  SIGHUP: 129,
   SIGINT: 130,
   SIGTERM: 143,
 };
+const FORWARDED_SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
 
 const isSignalKey = (signal: NodeJS.Signals): signal is keyof typeof SIGNAL_EXIT_CODES =>
   Object.hasOwn(SIGNAL_EXIT_CODES, signal);
@@ -1126,11 +1135,8 @@ const waitForSpawnedProcess = async (childProcess: RunNodeChild, deps: RunNodeDe
     if (forceKillTimer) {
       clearTimeout(forceKillTimer);
     }
-    if (onSigInt) {
-      deps.process.off("SIGINT", onSigInt);
-    }
-    if (onSigTerm) {
-      deps.process.off("SIGTERM", onSigTerm);
+    for (const [signal, handler] of signalHandlers) {
+      deps.process.off(signal, handler);
     }
   };
 
@@ -1146,15 +1152,12 @@ const waitForSpawnedProcess = async (childProcess: RunNodeChild, deps: RunNodeDe
     }, RUN_NODE_SIGNAL_FORCE_KILL_AFTER_MS);
   };
 
-  const onSigInt = () => {
-    forwardSignal("SIGINT");
-  };
-  const onSigTerm = () => {
-    forwardSignal("SIGTERM");
-  };
-
-  deps.process.on("SIGINT", onSigInt);
-  deps.process.on("SIGTERM", onSigTerm);
+  const signalHandlers = FORWARDED_SIGNALS.map(
+    (signal) => [signal, () => forwardSignal(signal)] as const,
+  );
+  for (const [signal, handler] of signalHandlers) {
+    deps.process.on(signal, handler);
+  }
 
   try {
     return await new Promise<SpawnedProcessResult>((resolve) => {
@@ -1420,12 +1423,14 @@ export const acquireRunNodeBuildLock = async (deps: RunNodeLockDeps): Promise<()
       };
       const onSignal = () => removeLockDir();
       const onExit = () => removeLockDir();
-      deps.process.on("SIGINT", onSignal);
-      deps.process.on("SIGTERM", onSignal);
+      for (const signal of FORWARDED_SIGNALS) {
+        deps.process.on(signal, onSignal);
+      }
       deps.process.on("exit", onExit);
       return () => {
-        deps.process.off("SIGINT", onSignal);
-        deps.process.off("SIGTERM", onSignal);
+        for (const signal of FORWARDED_SIGNALS) {
+          deps.process.off(signal, onSignal);
+        }
         deps.process.off("exit", onExit);
         removeLockDir();
       };

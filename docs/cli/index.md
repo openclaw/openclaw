@@ -48,9 +48,15 @@ Setup commands by intent:
 | `--update`              | Shorthand for [`openclaw update`](/cli/update); works for both source checkouts and package installs    |
 | `-V`, `--version`, `-v` | Print version and exit                                                                                  |
 
+Place command-specific options after their command name, for example `openclaw status --json`. Global options such as `--profile` can precede the command.
+
 A named `--profile` replaces canonical state and config paths inherited from
 another profile, including a running Gateway service. Explicitly customized
 state directories and config paths remain unchanged.
+
+Use `--` to stop option parsing. Command words still dispatch after it: for example,
+`openclaw -- config get gateway.port` reads the configured port. A token such as
+`--help` after `--` is a positional argument.
 
 ## Output modes
 
@@ -82,8 +88,11 @@ envelope:
 ```
 
 A command may add domain-specific fields, such as per-item results, beside this
-envelope. Failure messages are sanitized. Human-readable diagnostics may also be
-written to stderr, so scripts should parse stdout and still check the exit status.
+envelope. Gateway-backed agent turns that fail after the Gateway accepted the run
+also record the accepted `runId` and `origin: "gateway"` beside the envelope, so
+scripts can report the in-flight run. Failure messages are sanitized. Human-readable
+diagnostics may also be written to stderr, so scripts should parse stdout and still
+check the exit status.
 
 ## Color palette
 
@@ -158,6 +167,7 @@ openclaw [--dev] [--profile <name>] <command>
     audit
   secrets
     reload
+    store
     audit
     configure
     apply
@@ -203,6 +213,7 @@ openclaw [--dev] [--profile <name>] <command>
     doctor
     build
     validate
+    pack
     init
     registry
     marketplace list|entries|refresh

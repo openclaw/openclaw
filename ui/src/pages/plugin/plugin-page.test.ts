@@ -1,10 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { PluginControlUiDiagnostic } from "../../../../packages/gateway-protocol/src/schema/plugins.js";
 import { CONTROL_UI_PLUGIN_AUTH_GRANT_TTL_MS } from "../../../../src/gateway/control-ui-plugin-frame-contract.js";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import type { GatewayBrowserClient, GatewayHelloOk } from "../../api/gateway.ts";
 import type { RouteId } from "../../app-route-paths.ts";
 import type { ApplicationConfigCapability } from "../../app/config.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
+import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { getLogbookState, stopLogbookPolling } from "./logbook-controller.ts";
 import { renderLogbook } from "./logbook-view.ts";
@@ -89,12 +91,12 @@ function externalPluginConfig(
     serverVersion: null,
     devGitBranch: null,
     environment: null,
-    localMediaPreviewRoots: [],
     embedSandboxMode: "scripts",
     allowExternalEmbedUrls: false,
     automaticallyFetchFavicons: false,
     communityInvite: false,
     terminalEnabled: false,
+    pluginAssetsRequireAuth: true,
     pluginFrameGrants,
   };
 }
@@ -154,6 +156,63 @@ describe("PluginPage", () => {
     vi.unstubAllGlobals();
   });
 
+  it("offers Labs after a custom plugin is blocked, without mistaking a failure for disablement", async () => {
+    const pluginId = "custom-review";
+    let loading = true;
+    const listeners = new Set<() => void>();
+    const diagnostics: PluginControlUiDiagnostic[] = [
+      { pluginId, message: "Custom plugin UI is off", code: "custom-plugin-ui-disabled" },
+    ];
+    const plugins = {
+      errors: diagnostics,
+      registrations: () => [],
+      isLoading: () => loading,
+      subscribe: (listener: () => void) => {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
+    };
+    const navigate = vi.fn();
+    const context = {
+      basePath: "/console",
+      navigate,
+      plugins,
+      gateway: { snapshot: { phase: "connected" }, subscribe: () => () => undefined },
+    } as unknown as ApplicationContext;
+    const provider = createApplicationContextProvider(context);
+    const page = document.createElement("openclaw-plugin-page") as PluginPage;
+    page.pluginId = pluginId;
+    page.tabId = "notes";
+    page.params = { document: "saved-draft" };
+    provider.append(page);
+    document.body.append(provider);
+    try {
+      await page.updateComplete;
+      expect(page.querySelector('[aria-label="Loading…"]')).not.toBeNull();
+      expect(page.textContent).not.toContain("Open Labs");
+
+      loading = false;
+      listeners.forEach((listener) => listener());
+      await page.updateComplete;
+      expect(page.textContent).toContain("Custom plugin UI is off");
+      expect(page.textContent).toContain("restart the Gateway and reload this browser tab");
+      expect(page.params).toEqual({ document: "saved-draft" });
+      const link = page.querySelector<HTMLAnchorElement>('a[href="/console/settings/labs"]');
+      expect(link?.textContent?.trim()).toBe("Open Labs");
+      link?.click();
+      expect(navigate).toHaveBeenCalledExactlyOnceWith("labs");
+
+      plugins.errors = [{ pluginId, message: "Custom plugin UI is off" }];
+      listeners.forEach((listener) => listener());
+      await page.updateComplete;
+      expect(page.textContent).toContain("Plugin panel unavailable");
+      expect(page.textContent).toContain("Custom plugin UI is off");
+      expect(page.textContent).not.toContain("Open Labs");
+    } finally {
+      provider.remove();
+    }
+  });
+
   it("refreshes parent auth before mounting an external plugin frame", async () => {
     const pendingRefresh = createDeferred<ApplicationConfig | null>();
     const pendingProbe = createDeferred<boolean>();
@@ -178,6 +237,35 @@ describe("PluginPage", () => {
       page.remove();
     }
   });
+
+  it.each(["", "/openclaw"])(
+    "uses the development transport for a plugin frame and its auth probe at base %s",
+    async (basePath) => {
+      const gatewayUrl = `ws://gateway.example${basePath}`;
+      const proxyPath = `/__openclaw_dev_gateway__/${encodeURIComponent(gatewayUrl)}`;
+      vi.stubGlobal("OPENCLAW_UI_DEV_GATEWAY", { gatewayUrl, proxyPath });
+      const path = `${basePath}/plugins/external/panel?view=activity#settings`;
+      const refresh = vi.fn(async () =>
+        externalPluginConfig([
+          {
+            pluginId: "external-plugin",
+            path: `${proxyPath}${basePath}/plugins/external`,
+            match: "prefix",
+          },
+        ]),
+      );
+      const page = createExternalPluginPage(refresh, true, path);
+      document.body.append(page);
+      try {
+        await waitForFast(() =>
+          expect(page.querySelector("iframe")?.getAttribute("src")).toBe(`${proxyPath}${path}`),
+        );
+        expect(page.probeCalls).toEqual([`${proxyPath}${path}`]);
+      } finally {
+        page.remove();
+      }
+    },
+  );
 
   it("keeps the frame unmounted when browser policy blocks the sandbox cookie", async () => {
     const refresh = vi.fn(async () => externalPluginConfig());

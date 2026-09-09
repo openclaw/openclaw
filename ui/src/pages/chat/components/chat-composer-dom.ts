@@ -17,7 +17,8 @@ const COMPOSER_CHROME_INTERACTIVE_SELECTOR = [
 type ComposerTextareaResizeObserverState = {
   observer: ResizeObserver | null;
   adjustmentFrame: number | null;
-  onScroll: () => void;
+  editing: boolean;
+  events: AbortController;
 };
 
 type ComposerPopoverAnchorObserverState = {
@@ -128,7 +129,8 @@ function updateTextareaOverflow(el: HTMLTextAreaElement) {
   const scrollable = el.scrollHeight > el.clientHeight + 1;
   // Two 16px fades need enough vertical runway not to overlap into a narrow
   // opaque strip on short drafts. Small overflows still scroll, just unfaded.
-  const canFade = scrollable && el.clientHeight >= 64;
+  const canFade =
+    scrollable && el.clientHeight >= 64 && !composerTextareaResizeObservers.get(el)?.editing;
   const fadeTop = canFade && el.scrollTop > 1;
   const fadeBottom = canFade && el.scrollTop + el.clientHeight < el.scrollHeight - 1;
   el.style.overflowY = scrollable ? "auto" : "hidden";
@@ -174,16 +176,24 @@ export function observeTextareaOverflow(el: HTMLTextAreaElement) {
   if (composerTextareaResizeObservers.has(el)) {
     return;
   }
+  const state: ComposerTextareaResizeObserverState = {
+    observer: null,
+    adjustmentFrame: null,
+    editing: false,
+    events: new AbortController(),
+  };
   let width = el.getBoundingClientRect().width;
   const onScroll = () => updateTextareaOverflow(el);
-  const observer =
+  state.observer =
     typeof ResizeObserver === "function"
       ? new ResizeObserver(() => {
           const nextWidth = el.getBoundingClientRect().width;
           if (nextWidth !== width) {
             width = nextWidth;
-            const state = composerTextareaResizeObservers.get(el);
-            if (state && state.adjustmentFrame === null) {
+            if (
+              composerTextareaResizeObservers.get(el) === state &&
+              state.adjustmentFrame === null
+            ) {
               state.adjustmentFrame = requestAnimationFrame(() => {
                 state.adjustmentFrame = null;
                 if (composerTextareaResizeObservers.get(el) === state) {
@@ -196,9 +206,35 @@ export function observeTextareaOverflow(el: HTMLTextAreaElement) {
           updateTextareaOverflow(el);
         })
       : null;
-  el.addEventListener("scroll", onScroll, { passive: true });
-  observer?.observe(el);
-  composerTextareaResizeObservers.set(el, { observer, adjustmentFrame: null, onScroll });
+  // Native caret scrolling can leave the active line inside the fade. Keep
+  // editing unfaded until explicit navigation; a scroll event alone cannot
+  // distinguish the browser following the caret from the user browsing text.
+  const onInteraction = (event: Event) => {
+    if (
+      event instanceof KeyboardEvent &&
+      (event.isComposing ||
+        !/^(ArrowUp|ArrowDown|ArrowLeft|ArrowRight|PageUp|PageDown|Home|End)$/u.test(event.key))
+    ) {
+      return;
+    }
+    state.editing = ["beforeinput", "input", "compositionstart"].includes(event.type);
+    updateTextareaOverflow(el);
+  };
+  const eventOptions = { passive: true, signal: state.events.signal };
+  for (const type of [
+    "beforeinput",
+    "input",
+    "compositionstart",
+    "wheel",
+    "pointerdown",
+    "keydown",
+    "blur",
+  ]) {
+    el.addEventListener(type, onInteraction, eventOptions);
+  }
+  el.addEventListener("scroll", onScroll, eventOptions);
+  composerTextareaResizeObservers.set(el, state);
+  state.observer?.observe(el);
   updateTextareaOverflow(el);
 }
 
@@ -209,7 +245,7 @@ export function disconnectTextareaOverflowObserver(el: HTMLTextAreaElement) {
     return;
   }
   state.observer?.disconnect();
-  el.removeEventListener("scroll", state.onScroll);
+  state.events.abort();
   if (state.adjustmentFrame !== null) {
     cancelAnimationFrame(state.adjustmentFrame);
   }
@@ -275,46 +311,6 @@ export function restoreHistoryCaret(target: HTMLTextAreaElement, direction: "up"
     target.selectionStart = caret;
     target.selectionEnd = caret;
   });
-}
-
-// Shared by the slash and skill composer menus, which resolve their own
-// active-option id but scroll the same ".slash-menu__scroll" viewport shape.
-export function scrollActiveMenuOptionIntoView(activeId: string | null): void {
-  if (!activeId) {
-    return;
-  }
-  requestAnimationFrame(() => {
-    const activeOption = document.getElementById(activeId);
-    const scrollRegion = activeOption?.closest<HTMLElement>(".slash-menu__scroll");
-    if (!activeOption || !scrollRegion) {
-      return;
-    }
-    const menuBounds = scrollRegion.getBoundingClientRect();
-    const optionBounds = activeOption.getBoundingClientRect();
-    // scrollIntoView also moves the short-landscape composer and page. Keep
-    // keyboard navigation owned by the menu so textarea focus stays stable.
-    if (optionBounds.top < menuBounds.top) {
-      scrollRegion.scrollTop -= menuBounds.top - optionBounds.top;
-    } else if (optionBounds.bottom > menuBounds.bottom) {
-      scrollRegion.scrollTop += optionBounds.bottom - menuBounds.bottom;
-    }
-  });
-}
-
-export function syncComposerMenuScroll(element: Element | undefined): void {
-  if (!(element instanceof HTMLElement)) {
-    return;
-  }
-  const sync = () => {
-    const scrollable = element.scrollHeight > element.clientHeight + 1;
-    element.dataset.scrollable = String(scrollable);
-    element.dataset.atStart = String(!scrollable || element.scrollTop <= 1);
-    element.dataset.atEnd = String(
-      !scrollable || element.scrollTop + element.clientHeight >= element.scrollHeight - 1,
-    );
-  };
-  sync();
-  requestAnimationFrame(sync);
 }
 
 export function paneDomId(paneId: string, suffix: string): string {

@@ -7,6 +7,10 @@ import { brotliDecompressSync, gunzipSync } from "node:zlib";
 import { describe, expect, it, vi } from "vitest";
 import {
   hashControlUiTranslationText,
+  loadControlUiTranslationMemory,
+  materializeControlUiLocaleCatalog,
+} from "../../../scripts/lib/control-ui-i18n-catalog-values.ts";
+import {
   loadControlUiSourceCatalog,
   readControlUiSourceCatalog,
 } from "../../../scripts/lib/control-ui-i18n-catalog.ts";
@@ -20,6 +24,7 @@ import {
   resolveSourcePackageAliasesForVite,
   resolveTsconfigPathAliasesForVite,
 } from "../../vite.config.ts";
+import { configHintTranslationKey } from "../i18n/lib/config-hint-translation.ts";
 import { en } from "../i18n/locales/en.ts";
 
 const childProcessMocks = vi.hoisted(() => ({ execFileSync: vi.fn() }));
@@ -399,6 +404,9 @@ describe("Control UI Vite config", () => {
     const resultAliasIndex = aliases.findIndex(
       (alias) => alias.find === "@openclaw/normalization-core/result",
     );
+    const stableStringifyAliasIndex = aliases.findIndex(
+      (alias) => alias.find === "@openclaw/normalization-core/stable-stringify",
+    );
     const rootAliasIndex = aliases.findIndex(
       (alias) => alias.find === "@openclaw/normalization-core",
     );
@@ -406,8 +414,13 @@ describe("Control UI Vite config", () => {
       find: "@openclaw/normalization-core/result",
       replacement: path.join(repoRoot, "packages/normalization-core/src/result.ts"),
     });
+    expect(aliases[stableStringifyAliasIndex]).toEqual({
+      find: "@openclaw/normalization-core/stable-stringify",
+      replacement: path.join(repoRoot, "packages/normalization-core/src/stable-stringify.ts"),
+    });
     expect(resultAliasIndex).toBeGreaterThanOrEqual(0);
-    expect(rootAliasIndex).toBeGreaterThan(resultAliasIndex);
+    expect(stableStringifyAliasIndex).toBeGreaterThanOrEqual(0);
+    expect(rootAliasIndex).toBeGreaterThan(stableStringifyAliasIndex);
   });
 
   it("uses Node package resolution for external packages inherited by worktrees", () => {
@@ -481,6 +494,7 @@ describe("Control UI Vite config", () => {
     expect(source.configView).not.toBe(en.configView);
     expect(flat.get("activity.title")).toBe("Activity");
     expect(flat.get("memoryImport.title")).toBe("Import assistant memory");
+    expect(flat.get("login.failure.authRequired.title")).toBe("This Gateway expects its token");
     expect(flat.get("sessionsView.runsOnDevice")).toBe("Runs on device");
     expect(flat.get("pluginConsent.widenedTitle")).toBe("What changed");
     expect(flat.get("configPage.themeImported")).toBe("Imported {name}.");
@@ -488,6 +502,64 @@ describe("Control UI Vite config", () => {
     expect(flat.get("updates.page.intro")).toBe(
       "Manage the connected Gateway's release channel and update policy.",
     );
+  });
+
+  it("materializes translated config hints from the current source catalog", () => {
+    const text = "Gateway Token";
+    const key = configHintTranslationKey("gateway.auth.token", "label", text);
+    const translated = materializeControlUiLocaleCatalog(
+      flattenTranslations(loadControlUiSourceCatalog()),
+      new Map([
+        [
+          "config-hint",
+          {
+            cache_key: "config-hint",
+            model: "test",
+            provider: "test",
+            segment_id: key,
+            source_path: "test",
+            src_lang: "en",
+            text,
+            text_hash: hashControlUiTranslationText(text),
+            tgt_lang: "tr",
+            translated: "Ağ geçidi belirteci",
+            updated_at: "2026-09-03T00:00:00.000Z",
+          },
+        ],
+      ]),
+    );
+
+    expect(flattenTranslations(translated).get(key)).toBe("Ağ geçidi belirteci");
+  });
+
+  it("cannot serve a stale config-hint translation under the current content-addressed key", () => {
+    const oldText = "Old Gateway Token";
+    const oldKey = configHintTranslationKey("gateway.auth.token", "label", oldText);
+    const currentKey = configHintTranslationKey("gateway.auth.token", "label", "Gateway Token");
+    const translated = materializeControlUiLocaleCatalog(
+      flattenTranslations(loadControlUiSourceCatalog()),
+      new Map([
+        [
+          "stale-config-hint",
+          {
+            cache_key: "stale-config-hint",
+            model: "test",
+            provider: "test",
+            segment_id: oldKey,
+            source_path: "test",
+            src_lang: "en",
+            text: oldText,
+            text_hash: hashControlUiTranslationText(oldText),
+            tgt_lang: "tr",
+            translated: "Eski ağ geçidi belirteci",
+            updated_at: "2026-09-03T00:00:00.000Z",
+          },
+        ],
+      ]),
+    );
+
+    expect(flattenTranslations(translated).get(oldKey)).toBeUndefined();
+    expect(flattenTranslations(translated).get(currentKey)).toBeUndefined();
   });
 
   it("includes every English dependency in the raw source-hash input", async () => {
@@ -524,9 +596,21 @@ describe("Control UI Vite config", () => {
       throw new Error("Expected locale module loader to return generated source");
     }
     const catalog = JSON.parse(result.replace(/^export default /, "").replace(/;$/, ""));
-    expect(catalog.common.health).toBe("Santé");
+    const memoryPath = path.join(repoRoot, "ui/src/i18n/.i18n/fr.tm.jsonl");
+    const healthText = flattenTranslations(en).get("common.health");
+    if (typeof healthText !== "string") {
+      throw new Error("Expected English health source");
+    }
+    const healthEntry = [...loadControlUiTranslationMemory(memoryPath).values()].find(
+      (entry) =>
+        (entry.segment_id === "common.health" || entry.segment_ids?.includes("common.health")) &&
+        entry.text_hash === hashControlUiTranslationText(healthText),
+    );
+    expect(healthEntry).toBeDefined();
+    expect(catalog.common.health).toBe(healthEntry?.translated);
     expect(catalog.activity.title).toBeTypeOf("string");
-    expect(addWatchFile).toHaveBeenCalledWith(path.join(repoRoot, "ui/src/i18n/.i18n/fr.tm.jsonl"));
+    expect(addWatchFile).toHaveBeenCalledWith(memoryPath);
+    expect(addWatchFile).toHaveBeenCalledWith(path.join(repoRoot, "src/config/schema.hints.ts"));
   });
 
   it("bootstraps only an absent locale memory from the English catalog", async () => {
@@ -549,14 +633,16 @@ describe("Control UI Vite config", () => {
         expect([...flattenTranslations(catalog)]).toEqual([
           ...flattenTranslations(loadControlUiSourceCatalog()),
         ]);
-        expect(addWatchFile).not.toHaveBeenCalled();
+        expect(addWatchFile).toHaveBeenCalledWith(
+          path.join(repoRoot, "src/config/schema.hints.ts"),
+        );
       },
     );
 
     await fsMocks.readFileSync.withImplementation(
       () => "",
       async () => {
-        expect(() => load.call({ addWatchFile } as never, id, {} as never)).toThrow(
+        await expect(load.call({ addWatchFile } as never, id, {} as never)).rejects.toThrow(
           "Control UI fr translation memory is missing or empty",
         );
       },
@@ -564,17 +650,23 @@ describe("Control UI Vite config", () => {
     await fsMocks.readFileSync.withImplementation(
       () => "{",
       async () => {
-        expect(() => load.call({ addWatchFile } as never, id, {} as never)).toThrow(SyntaxError);
+        await expect(load.call({ addWatchFile } as never, id, {} as never)).rejects.toThrow(
+          SyntaxError,
+        );
       },
     );
   });
 
-  it("omits stale and missing Settings translations so runtime English can resolve them", async () => {
+  it("omits stale config and Settings translations so runtime English can resolve them", async () => {
     const loadHook = controlUiLocaleModulesPlugin().load;
     const load = typeof loadHook === "function" ? loadHook : loadHook?.handler;
     if (!load) {
       throw new Error("Expected locale module loader");
     }
+    const currentHintText = "Gateway Token";
+    const currentHintKey = configHintTranslationKey("gateway.auth.token", "label", currentHintText);
+    const staleHintText = "Old Gateway Token";
+    const staleHintKey = configHintTranslationKey("gateway.auth.token", "label", staleHintText);
     const memory = [
       {
         cache_key: "current",
@@ -587,6 +679,20 @@ describe("Control UI Vite config", () => {
         segment_id: "updates.page.intro",
         text_hash: hashControlUiTranslationText("Retired update introduction"),
         translated: "Obsolete",
+      },
+      {
+        cache_key: "current-hint",
+        segment_id: currentHintKey,
+        text: currentHintText,
+        text_hash: hashControlUiTranslationText(currentHintText),
+        translated: "Ağ geçidi belirteci",
+      },
+      {
+        cache_key: "stale-hint",
+        segment_id: staleHintKey,
+        text: staleHintText,
+        text_hash: hashControlUiTranslationText(staleHintText),
+        translated: "Eski ağ geçidi belirteci",
       },
     ]
       .map((entry) => JSON.stringify(entry))
@@ -606,9 +712,12 @@ describe("Control UI Vite config", () => {
             if (typeof result !== "string") {
               throw new Error("Expected locale module loader to return generated source");
             }
-            expect(JSON.parse(result.replace(/^export default /, "").replace(/;$/, ""))).toEqual({
-              configView: { chatPrefs: { title: "Discussion" } },
-            });
+            const catalog = JSON.parse(result.replace(/^export default /, "").replace(/;$/, ""));
+            const flat = flattenTranslations(catalog);
+            expect(flat.get("configView.chatPrefs.title")).toBe("Discussion");
+            expect(flat.get(currentHintKey)).toBe("Ağ geçidi belirteci");
+            expect(flat.has("updates.page.intro")).toBe(false);
+            expect(flat.has(staleHintKey)).toBe(false);
           },
         );
       },

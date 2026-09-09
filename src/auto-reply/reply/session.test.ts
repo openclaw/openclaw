@@ -5,8 +5,8 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { getOrCreateSessionMcpRuntime } from "../../agents/agent-bundle-mcp-manager.test-support.js";
 import { testing as sessionMcpTesting } from "../../agents/agent-bundle-mcp-runtime.js";
-import { getOrCreateSessionMcpRuntime } from "../../agents/agent-bundle-mcp-tools.js";
 import * as bootstrapCache from "../../agents/bootstrap-cache.js";
 import {
   clearEmbeddedSessionPromptStates,
@@ -32,6 +32,7 @@ import {
 } from "../../infra/outbound/session-binding-service.js";
 import {
   enqueueSystemEvent,
+  enqueueSystemEventEntry,
   peekSystemEvents,
   resetSystemEventsForTest,
 } from "../../infra/system-events.js";
@@ -134,7 +135,7 @@ vi.mock("../../infra/channel-summary.js", () => ({
 
 vi.mock("../../agents/prepared-model-catalog.js", () => ({
   loadProviderScopedThinkingCatalog: vi.fn(async () => []),
-  loadPreparedModelCatalog: vi.fn(async () => [
+  readPreparedModelCatalog: vi.fn(async () => [
     { provider: "minimax", id: "m2.7", name: "M2.7" },
     { provider: "openai", id: "gpt-4o-mini", name: "GPT-4o mini" },
   ]),
@@ -2196,6 +2197,13 @@ describe("initSessionState RawBody", () => {
       expected: { responseUsage: "full" },
     },
     {
+      name: "preserves explicit configured-default selection across daily rollover",
+      slug: "explicit-default",
+      entry: { modelOverrideSource: "default" as const },
+      expected: { modelOverrideSource: "default" },
+      persisted: true,
+    },
+    {
       name: "preserves user labels across dashboard session stale rollover (#101451)",
       slug: "label",
       sessionKey: "agent:main:dashboard:8c0b2b68-05e1-4b25-a8c2-ef6f43a01f77",
@@ -3794,9 +3802,10 @@ describe("initSessionState reset authorization", () => {
         }
         expect.soft(acknowledgement?.shouldContinue).toBe(false);
         if (allowed) {
-          expect
-            .soft(acknowledgement?.reply?.text)
-            .toBe(body === "/new" ? "✅ New session started." : "✅ Session reset.");
+          expect.soft(acknowledgement?.reply).toEqual({
+            text: body === "/new" ? "✅ New session started." : "✅ Session reset.",
+            isStatusNotice: true,
+          });
         } else if (scopes) {
           expect.soft(acknowledgement?.reply?.text).toMatch(/not authorized/i);
           expect.soft(acknowledgement?.reply?.text).toContain("operator.admin");
@@ -5461,7 +5470,10 @@ describe("drainFormattedSystemEvents", () => {
         sessionKey: "agent:main:main",
         contextKey: "cron:rotate-keys",
       });
-      enqueueSystemEvent("Model switched.", { sessionKey: "agent:main:main" });
+      const generic = expectDefined(
+        enqueueSystemEventEntry("Model switched.", { sessionKey: "agent:main:main" }),
+        "queued generic event",
+      );
 
       const result = await drainFormattedSystemEvents({
         cfg: {} as OpenClawConfig,
@@ -5469,7 +5481,7 @@ describe("drainFormattedSystemEvents", () => {
         sessionKey: "agent:main:main",
         isMainSession: true,
         isNewSession: false,
-        suppressHeartbeatOwnedEvents: true,
+        events: [generic],
       });
 
       expect(result).toContain("Model switched.");

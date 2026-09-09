@@ -116,8 +116,6 @@ export function createBlockReplyPipeline(params: {
   const sentMediaUrls = new Set<string>();
   const pendingKeys = new Set<string>();
   const seenKeys = new Set<string>();
-  const bufferedKeys = new Set<string>();
-  const bufferedPayloadKeys = new Set<string>();
   const bufferedPayloads: ReplyPayload[] = [];
   const streamedTextFragmentsByMessage = new Map<number | undefined, string[]>();
   let bufferedAssistantMessageIndex: number | undefined;
@@ -225,7 +223,6 @@ export function createBlockReplyPipeline(params: {
         shouldAbort: () => aborted,
         onFlush: (payload) => {
           bufferedAssistantMessageIndex = undefined;
-          bufferedKeys.clear();
           sendPayload(payload, /* bypassSeenCheck */ true);
         },
       })
@@ -237,11 +234,10 @@ export function createBlockReplyPipeline(params: {
       return false;
     }
     const payloadKey = createBlockReplyPayloadKey(payload);
-    if (hasSeenOrQueuedPayloadKey(payloadKey) || bufferedPayloadKeys.has(payloadKey)) {
+    if (hasSeenOrQueuedPayloadKey(payloadKey)) {
       return true;
     }
     seenKeys.add(payloadKey);
-    bufferedPayloadKeys.add(payloadKey);
     bufferedPayloads.push(payload);
     return true;
   };
@@ -255,7 +251,6 @@ export function createBlockReplyPipeline(params: {
       sendPayload(finalPayload, /* bypassSeenCheck */ true);
     }
     bufferedPayloads.length = 0;
-    bufferedPayloadKeys.clear();
   };
 
   const enqueueCoalescedPayload = (payload: ReplyPayload) => {
@@ -275,11 +270,10 @@ export function createBlockReplyPipeline(params: {
       flushBufferedAssistantBlock();
     }
     const payloadKey = createBlockReplyPayloadKey(payload);
-    if (hasSeenOrQueuedPayloadKey(payloadKey) || bufferedKeys.has(payloadKey)) {
+    if (hasSeenOrQueuedPayloadKey(payloadKey)) {
       return;
     }
     seenKeys.add(payloadKey);
-    bufferedKeys.add(payloadKey);
     bufferedAssistantMessageIndex = assistantMessageIndex;
     coalescer.enqueue(payload);
   };

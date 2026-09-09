@@ -161,11 +161,21 @@ Each authenticated peer and A2A `contextId` pair gets its own agent session. A2A
 isolated direct-message scope rather than inheriting `session.dmScope`, so remote peer content never
 joins the operator's main session and one peer cannot read another peer's conversation history.
 
+For agent bindings, use the configured peer name as the canonical direct-peer ID, such as
+`hermes`. A context-specific `hermes:<contextId>` binding takes precedence over that stable peer
+binding, and the stable peer binding takes precedence over broader A2A account or channel routes.
+
 ## Security
 
 Agent Card discovery is intentionally public: anyone who can reach the gateway can read the instance description and exposed agent IDs. Use `exposeAgents` to limit disclosure, and expose the gateway through HTTPS when it is reachable over an untrusted network.
 
 Every JSON-RPC request requires a configured peer bearer token; there is no unauthenticated mode. Each authenticated peer is also the sender identity used for normal OpenClaw channel ingress policy. Use different high-entropy tokens for each peer, keep tokens out of source control, and rotate tokens by updating the gateway environment and restarting.
+
+A2A peers send tasks, not user commands. Messages beginning with `/` are rejected with `TASK_STATE_REJECTED` and an explanation. Command-like text inside an ordinary task stays literal; it cannot change session settings or resolve approvals. This also applies when the peer sets the protocol message role to `ROLE_USER`: that field does not authenticate a human user.
+
+Ordinary tasks retain the tools and permissions of their routed agent. Work requiring approval still needs an authorized operator's decision through a supported user channel or the Control UI. Existing integrations that sent slash commands over A2A must use plain-text tasks for agent work and an authorized user surface for commands; there is no peer command opt-in.
+
+While an exec approval is pending, the original task stays working. After the operator decides, that same agent run receives the result and completes the task through its original reply path. An inbound peer does not need an outbound `url` to receive that completion through `GetTask`.
 
 Requests are limited to 1 MiB, JSON-RPC batches to 30 entries, and serialized JSON-RPC responses to 1 MiB. Extracted message text is capped at 64 KiB and includes an explicit truncation marker when shortened. The default sliding-window limit is 30 requests per minute for each peer; schema-invalid requests count toward that limit. Set `rateLimitPerMinute` to `0` only on a separately protected network. Rate-limited requests return a JSON-RPC error while keeping HTTP status 200.
 

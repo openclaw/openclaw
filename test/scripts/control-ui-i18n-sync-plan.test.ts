@@ -3,11 +3,10 @@ import {
   hashControlUiTranslationText,
   materializeControlUiLocaleCatalog,
   mergeControlUiTranslationMaps,
-} from "../../scripts/lib/control-ui-i18n-catalog.ts";
+} from "../../scripts/lib/control-ui-i18n-catalog-values.ts";
 import {
   createControlUiLocaleSyncPlan,
   flattenTranslations,
-  resolveLocaleMetaProvenance,
   type LocaleEntry,
   type LocaleMeta,
   type TranslationMemoryEntry,
@@ -26,8 +25,6 @@ const cacheKeyFor = (key: string, textHash: string) => `cache:${key}:${textHash}
 function memoryEntry(overrides: Partial<TranslationMemoryEntry> = {}): TranslationMemoryEntry {
   return {
     cache_key: "legacy-cache",
-    model: "legacy-model",
-    provider: "legacy-provider",
     segment_id: "legacy.segment",
     source_path: "ui/src/i18n/locales/fr.ts",
     src_lang: "en",
@@ -45,8 +42,6 @@ function localeMeta(overrides: Partial<LocaleMeta> = {}): LocaleMeta {
     fallbackKeys: [],
     generatedAt: "2026-01-01T00:00:00.000Z",
     locale: "fr",
-    model: "legacy-model",
-    provider: "legacy-provider",
     sourceHash: "old-source",
     totalKeys: 0,
     translatedKeys: 0,
@@ -56,6 +51,133 @@ function localeMeta(overrides: Partial<LocaleMeta> = {}): LocaleMeta {
 }
 
 describe("createControlUiLocaleSyncPlan", () => {
+  it("refreshes selected keys without replaying cached aliases or dropping normal pending work", () => {
+    const catalogHashText = hashControlUiTranslationText;
+    const sourceFlat = new Map([
+      ["refresh", "Shared"],
+      ["alias", "Shared"],
+      ["keep", "Keep"],
+      ["missing", "New"],
+      ["changed", "Changed {new}"],
+      ["otherGroup", "Shared"],
+      ["otherAlias", "Shared"],
+    ]);
+    const cached = memoryEntry({
+      cache_key: cacheKeyFor("refresh", catalogHashText("Shared")),
+      segment_id: "refresh",
+      segment_ids: ["alias"],
+      text_hash: catalogHashText("Shared"),
+    });
+    const kept = memoryEntry({
+      cache_key: cacheKeyFor("keep", catalogHashText("Keep")),
+      segment_id: "keep",
+      text: "Keep",
+      text_hash: catalogHashText("Keep"),
+      translated: "Conserver",
+    });
+    const independent = memoryEntry({
+      cache_key: cacheKeyFor("otherGroup", catalogHashText("Shared")),
+      segment_id: "otherGroup",
+      segment_ids: ["otherAlias"],
+      text_hash: catalogHashText("Shared"),
+      translated: "Autre",
+    });
+    const plan = createControlUiLocaleSyncPlan({
+      allowTranslate: true,
+      cacheKeyFor,
+      entry,
+      existingFlat: new Map([
+        ["refresh", "Partage"],
+        ["alias", "Partage"],
+        ["keep", "Conserver"],
+        ["otherGroup", "Autre"],
+        ["otherAlias", "Autre"],
+      ]),
+      force: false,
+      refreshKeys: new Set(["refresh"]),
+      hashText: catalogHashText,
+      previousMeta: localeMeta(),
+      sourceFlat,
+      sourceHash: "source",
+      translationMemory: new Map([
+        [cached.cache_key, cached],
+        [kept.cache_key, kept],
+        [independent.cache_key, independent],
+        [
+          "old",
+          memoryEntry({
+            cache_key: "old",
+            segment_id: "changed",
+            text: "Changed {old}",
+            text_hash: catalogHashText("Changed {old}"),
+          }),
+        ],
+      ]),
+    });
+    expect(plan.pending.map((item) => item.key)).toEqual(["refresh", "missing", "changed"]);
+    plan.recordTranslations(
+      plan.pending,
+      new Map([
+        ["refresh", "Corrigé"],
+        ["missing", "Nouveau"],
+        ["changed", "Modifié {new}"],
+      ]),
+      { sourceLocale: "en", updatedAt: () => "2026-09-06T00:00:00.000Z" },
+    );
+    const rendered = plan.render({
+      defaultGlossary: [],
+      glossary: [],
+      generatedAt: "2026-09-06T00:00:00.000Z",
+      workflow: 1,
+    });
+    expect(Object.fromEntries(rendered.nextFlat)).toEqual({
+      refresh: "Corrigé",
+      alias: "Partage",
+      keep: "Conserver",
+      missing: "Nouveau",
+      changed: "Modifié {new}",
+      otherGroup: "Autre",
+      otherAlias: "Autre",
+    });
+    expect(rendered.fallbackCount).toBe(0);
+    const writtenMemory = new Map(
+      rendered.translationMemory
+        .trim()
+        .split("\n")
+        .map((line) => {
+          const item = JSON.parse(line) as TranslationMemoryEntry;
+          return [item.cache_key, item];
+        }),
+    );
+    expect(materializeControlUiLocaleCatalog(sourceFlat, writtenMemory)).toEqual(
+      Object.fromEntries(rendered.nextFlat),
+    );
+  });
+
+  it("retranslates cached and existing strings on a full refresh", () => {
+    const cached = memoryEntry({ segment_id: "cached" });
+    const plan = createControlUiLocaleSyncPlan({
+      allowTranslate: true,
+      cacheKeyFor,
+      entry,
+      existingFlat: new Map([
+        ["cached", "Partage"],
+        ["existing", "Existant"],
+      ]),
+      force: true,
+      hashText,
+      previousMeta: localeMeta(),
+      sourceFlat: new Map([
+        ["cached", "Shared"],
+        ["alias", "Shared"],
+        ["existing", "Existing"],
+      ]),
+      sourceHash: "source",
+      translationMemory: new Map([[cached.cache_key, cached]]),
+    });
+    expect(plan.pending.map((item) => item.key)).toEqual(["cached", "alias", "existing"]);
+  });
+
   it("fills lazy anchors in source order without mutating source or losing siblings", () => {
     const startup = {
       updates: { before: "Before", page: {}, after: "After" },
@@ -81,27 +203,6 @@ describe("createControlUiLocaleSyncPlan", () => {
     expect(merged.settings).not.toBe(fragment.settings);
   });
 
-  it("preserves provenance when a configured provider performs no translation", () => {
-    const previousMeta = localeMeta();
-
-    expect(
-      resolveLocaleMetaProvenance({
-        didTranslate: false,
-        model: "next-model",
-        previousMeta,
-        provider: "next-provider",
-      }),
-    ).toEqual({ model: previousMeta.model, provider: previousMeta.provider });
-    expect(
-      resolveLocaleMetaProvenance({
-        didTranslate: true,
-        model: "next-model",
-        previousMeta,
-        provider: "next-provider",
-      }),
-    ).toEqual({ model: "next-model", provider: "next-provider" });
-  });
-
   it("plans reuse and renders deterministic locale artifacts", () => {
     const sourceFlat = flattenTranslations({
       group: {
@@ -119,7 +220,10 @@ describe("createControlUiLocaleSyncPlan", () => {
       text_hash: hashText("Cached source"),
       translated: "En cache",
     });
-    const sharedCache = memoryEntry();
+    const sharedCache = Object.assign(memoryEntry(), {
+      model: "private-model-fixture",
+      provider: "private-provider-fixture",
+    });
     const plan = createControlUiLocaleSyncPlan({
       allowTranslate: false,
       cacheKeyFor,
@@ -146,8 +250,6 @@ describe("createControlUiLocaleSyncPlan", () => {
       defaultGlossary: [{ source: "OpenClaw", target: "OpenClaw" }],
       generatedAt: "2026-02-02T00:00:00.000Z",
       glossary: [],
-      model: "legacy-model",
-      provider: "legacy-provider",
       workflow: 1,
     });
 
@@ -157,8 +259,6 @@ describe("createControlUiLocaleSyncPlan", () => {
           fallbackKeys: ["group.cached", "group.pending"],
           generatedAt: "2026-02-02T00:00:00.000Z",
           locale: "fr",
-          model: "legacy-model",
-          provider: "legacy-provider",
           sourceHash: "next-source",
           totalKeys: 4,
           translatedKeys: 2,
@@ -172,7 +272,7 @@ describe("createControlUiLocaleSyncPlan", () => {
       `${JSON.stringify([{ source: "OpenClaw", target: "OpenClaw" }], null, 2)}\n`,
     );
     const reusedCache = {
-      ...sharedCache,
+      ...memoryEntry(),
       cache_key: cacheKeyFor("group.reused", hashText("Shared")),
       segment_id: "group.reused",
     };
@@ -182,6 +282,7 @@ describe("createControlUiLocaleSyncPlan", () => {
         .map((value) => JSON.stringify(value))
         .join("\n")}\n`,
     );
+    expect(artifacts.translationMemory + artifacts.meta).not.toContain("private-");
   });
 
   it("reuses grouped segment aliases only while their source text still matches", () => {
@@ -250,8 +351,6 @@ describe("createControlUiLocaleSyncPlan", () => {
 
     expect(plan.newFallbackCount).toBe(0);
     plan.recordTranslations(plan.pending, new Map([["title", "Nouveau"]]), {
-      model: "next-model",
-      provider: "next-provider",
       sourceLocale: "en",
       updatedAt: () => "2026-02-02T00:00:00.000Z",
     });
@@ -260,8 +359,6 @@ describe("createControlUiLocaleSyncPlan", () => {
       defaultGlossary: [],
       generatedAt: "2026-03-03T00:00:00.000Z",
       glossary: [],
-      model: "next-model",
-      provider: "next-provider",
       workflow: 1,
     });
 
@@ -276,8 +373,6 @@ describe("createControlUiLocaleSyncPlan", () => {
       `${JSON.stringify(
         memoryEntry({
           cache_key: cacheKeyFor("title", hashText("New English")),
-          model: "next-model",
-          provider: "next-provider",
           segment_id: "title",
           text: "New English",
           text_hash: hashText("New English"),
@@ -307,8 +402,6 @@ describe("createControlUiLocaleSyncPlan", () => {
       defaultGlossary: [],
       generatedAt: "2026-03-03T00:00:00.000Z",
       glossary: [],
-      model: "legacy-model",
-      provider: "legacy-provider",
       workflow: 1,
     });
     expect(artifacts.nextFlat.get("title")).toBe("New English");
@@ -339,8 +432,6 @@ describe("createControlUiLocaleSyncPlan", () => {
       defaultGlossary: [],
       generatedAt: "2026-03-03T00:00:00.000Z",
       glossary: [],
-      model: "legacy-model",
-      provider: "legacy-provider",
       workflow: 1,
     });
 

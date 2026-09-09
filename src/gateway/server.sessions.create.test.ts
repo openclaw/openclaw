@@ -10,6 +10,7 @@ import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
+import { closeGatewayTestWebSocket } from "../../test/helpers/gateway-websocket.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { getContextWindowCaches } from "../agents/context-cache.js";
 import {
@@ -31,6 +32,7 @@ import {
   loadTranscriptEvents,
   onSessionIdentityMutation,
   replaceSessionEntrySync,
+  resolveSessionEntryAccessTarget,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import {
@@ -182,6 +184,61 @@ const { createSessionStoreDir, createSelectedGlobalSessionStore, openClient } =
 const execFileAsync = promisify(execFile);
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const directoryLinkType = process.platform === "win32" ? "junction" : "dir";
+
+async function withFixedOwnerSessionStore(
+  scope: "global" | "per-sender",
+  run: (fixture: { storePath: string; cfg: ReturnType<typeof getRuntimeConfig> }) => Promise<void>,
+) {
+  const config = await getGatewayConfigModule();
+  const runtime = config.getRuntimeConfigSnapshot();
+  const source = config.getRuntimeConfigSourceSnapshot();
+  const previous = {
+    agentsConfig: testState.agentsConfig,
+    agentConfig: testState.agentConfig,
+    sessionConfig: testState.sessionConfig,
+    sessionStorePath: testState.sessionStorePath,
+  };
+  const configPaths = new Set([config.CONFIG_PATH]);
+  if (process.env.OPENCLAW_CONFIG_PATH) {
+    configPaths.add(process.env.OPENCLAW_CONFIG_PATH);
+  }
+  if (process.env.OPENCLAW_STATE_DIR) {
+    configPaths.add(path.join(process.env.OPENCLAW_STATE_DIR, "openclaw.json"));
+  }
+  const files = new Map<string, Buffer | undefined>();
+  for (const configPath of configPaths) {
+    try {
+      files.set(configPath, await fs.readFile(configPath));
+    } catch (error) {
+      if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) {
+        throw error;
+      }
+      files.set(configPath, undefined);
+    }
+  }
+  try {
+    const { storePath } = await createSessionStoreDir();
+    testState.agentsConfig = { ownership: "explicit", entries: { main: {}, ops: {} } };
+    testState.agentConfig = { sessionStore: { agentId: "main" } };
+    testState.sessionConfig = { scope };
+    await run({ storePath, cfg: config.getRuntimeConfig() });
+  } finally {
+    Object.assign(testState, previous);
+    // Opening a wire client persists fixture config; restore it before the next case.
+    for (const [configPath, contents] of files) {
+      if (contents === undefined) {
+        await fs.rm(configPath, { force: true });
+      } else {
+        await fs.writeFile(configPath, contents);
+      }
+    }
+    if (runtime) {
+      config.setRuntimeConfigSnapshot(runtime, source ?? undefined);
+    } else {
+      config.clearRuntimeConfigSnapshot();
+    }
+  }
+}
 
 async function waitForCreatedSessionRun(
   context: { chatAbortControllers: Map<string, ChatAbortControllerEntry> },
@@ -464,6 +521,266 @@ test("sessions.create commits the personal default before dispatching its initia
     }
   });
 });
+
+test.each([
+  {
+    endpoint: "direct model override",
+    modelId: "trinity-large-thinking",
+    baseUrl: "https://api.arcee.ai/api/v1",
+    expectedPin: "arcee:work",
+    expectedSource: "user-link",
+  },
+  {
+    endpoint: "inherited OpenRouter endpoint",
+    modelId: "trinity-large-preview",
+    baseUrl: "https://openrouter.ai/api/v1",
+    expectedPin: undefined,
+    expectedSource: undefined,
+  },
+] as const)(
+  "sessions.create applies an admin-linked Arcee default only for the $endpoint",
+  async ({ modelId, baseUrl, expectedPin, expectedSource }) => {
+    await withOpenClawTestState(
+      { layout: "state-only", prefix: "session-arcee-linked-default-" },
+      async (state) => {
+        const { OpenClawSchema } = await import("../config/zod-schema.js");
+        const { ensureAuthProfileStoreWithoutExternalProfiles } =
+          await import("../agents/auth-profiles/store-runtime.js");
+        const { resolveModelWithRegistry } =
+          await import("../agents/embedded-agent-runner/model.registry-resolution.js");
+        const { AuthStorage } = await import("../agents/sessions/auth-storage.js");
+        const { ModelRegistry } = await import("../agents/sessions/model-registry.js");
+        const { createModelAccountConnectService } = await import("./model-account-connect.js");
+        const { storePath } = await createSessionStoreDir();
+        const inputConfig: import("../config/types.openclaw.js").OpenClawConfig = {
+          plugins: { allow: ["arcee"] },
+          agents: { defaults: { workspace: state.workspaceDir }, entries: { main: {} } },
+          session: { store: storePath },
+          auth: { profiles: { "arcee:work": { provider: "arcee", mode: "api_key" } } },
+          models: {
+            providers: {
+              arcee: {
+                baseUrl: "https://openrouter.ai/api/v1",
+                api: "openai-completions",
+                models: [
+                  {
+                    id: "trinity-large-thinking",
+                    name: "Direct Arcee model",
+                    api: "openai-completions",
+                    baseUrl: "https://api.arcee.ai/api/v1",
+                    reasoning: true,
+                    input: ["text"],
+                    contextWindow: 32768,
+                    maxTokens: 2048,
+                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  },
+                  {
+                    id: "trinity-large-preview",
+                    name: "Arcee model through OpenRouter",
+                    api: "openai-completions",
+                    reasoning: true,
+                    input: ["text"],
+                    contextWindow: 32768,
+                    maxTokens: 2048,
+                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  },
+                ],
+              },
+            },
+          },
+        };
+        const parsedConfig = OpenClawSchema.safeParse(inputConfig);
+        expect(parsedConfig.success, JSON.stringify(parsedConfig.error?.issues)).toBe(true);
+        await state.writeConfig(inputConfig);
+        const credential = {
+          type: "api_key",
+          provider: "arcee",
+          key: "synthetic-direct-arcee-key",
+        } as const;
+        await state.writeAuthProfiles({
+          version: 1,
+          profiles: { "arcee:work": credential },
+        });
+        const gatewayConfig = await getGatewayConfigModule();
+        // The Gateway fixture reads its own config root; bind this case through the real snapshot.
+        gatewayConfig.setRuntimeConfigSnapshot(inputConfig);
+        const cfg = gatewayConfig.getRuntimeConfig();
+        const { loadPluginMetadataSnapshot } =
+          await import("../plugins/plugin-metadata-snapshot.js");
+        const { getCurrentPluginMetadataSnapshot, withPluginMetadataSnapshotScope } =
+          await import("../plugins/current-plugin-metadata-snapshot.js");
+        const { resolveProviderIdForAuth } = await import("../agents/provider-auth-aliases.js");
+        const { resolveSessionModelRef } = await import("../agents/session-model-ref.js");
+        const bundledRoot = path.resolve(import.meta.dirname, "../../extensions");
+        const metadata = loadPluginMetadataSnapshot({
+          config: cfg,
+          workspaceDir: state.workspaceDir,
+          env: {
+            ...process.env,
+            OPENCLAW_DISABLE_BUNDLED_PLUGINS: "0",
+            OPENCLAW_BUNDLED_PLUGINS_DIR: bundledRoot,
+          },
+          allowCurrent: false,
+          preferPersisted: false,
+        });
+        await withPluginMetadataSnapshotScope(
+          metadata,
+          async () => {
+            const manifest = metadata.byPluginId.get("arcee");
+            const manifestPath = path.join(bundledRoot, "arcee", "openclaw.plugin.json");
+            const declaredManifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+            expect(manifest?.manifestPath).toBe(manifestPath);
+            expect(manifest?.origin).toBe("bundled");
+            expect(manifest?.providerAuthAliases).toEqual(declaredManifest.providerAuthAliases);
+            expect(
+              getCurrentPluginMetadataSnapshot({
+                config: cfg,
+                allowWorkspaceScopedSnapshot: true,
+              }) === metadata,
+            ).toBe(true);
+            const providerDefaultAuth = resolveProviderIdForAuth("arcee", { config: cfg });
+            expect(providerDefaultAuth).toBe("openrouter");
+            expect(resolveProviderIdForAuth("arcee", { config: cfg, storedCredential: true })).toBe(
+              "arcee",
+            );
+            const model = resolveModelWithRegistry({
+              cfg,
+              provider: "arcee",
+              modelId,
+              agentDir: state.agentDir(),
+              modelRegistry: ModelRegistry.inMemory(AuthStorage.inMemory()),
+            });
+            expect(model?.baseUrl).toBe(baseUrl);
+
+            const owner = ensureProfileForEmail("arcee-session-owner@example.test");
+            const administrator = ensureProfileForEmail("arcee-link-admin@example.test");
+            const client = {
+              ...identifiedClient(owner.id, owner.displayName),
+              connId: "arcee-session-owner-connection",
+            };
+            const adminClient = {
+              ...identifiedClient(administrator.id, administrator.displayName),
+              connId: "arcee-link-admin-connection",
+            };
+            adminClient.connect.scopes = ["operator.admin"];
+            const clients = new Set([client, adminClient]);
+            const service = createModelAccountConnectService({ getConfig: () => cfg });
+            const context = {
+              getRuntimeConfig: () => cfg,
+              modelAccountConnectService: service,
+              loadGatewayModelCatalog: async () => [
+                { id: "trinity-large-thinking", name: "Direct Arcee model", provider: "arcee" },
+                {
+                  id: "trinity-large-preview",
+                  name: "Arcee model through OpenRouter",
+                  provider: "arcee",
+                },
+              ],
+              getClientConnIds: (filter?: (current: GatewayClient) => boolean) =>
+                new Set(
+                  [...clients]
+                    .filter((current) => !filter || filter(current))
+                    .map(({ connId }) => connId),
+                ),
+            };
+            try {
+              const linked = await directSessionReq(
+                "users.linkAuthProfile",
+                { profileId: owner.id, authProfileId: "arcee:work" },
+                { client: adminClient, context },
+              );
+              expect(linked.ok, JSON.stringify(linked.error)).toBe(true);
+              const linksBefore = await directSessionReq(
+                "users.listAuthLinks",
+                { profileId: owner.id },
+                { client, context },
+              );
+              expect(linksBefore.ok, JSON.stringify(linksBefore.error)).toBe(true);
+              expect(linksBefore.payload).toMatchObject({
+                links: [{ provider: "arcee", authProfileId: "arcee:work" }],
+              });
+
+              const key = `agent:main:dashboard:arcee-linked-${modelId}`;
+              expect(loadSessionEntry({ sessionKey: key, storePath })).toBeUndefined();
+              const observedSelections: Array<{
+                provider: string | undefined;
+                model: string | undefined;
+                profile: string | undefined;
+                source: string | undefined;
+              }> = [];
+              const { chatHandlers } = await import("./server-methods/chat.js");
+              const chatSend = vi
+                .spyOn(chatHandlers, "chat.send")
+                .mockImplementation(({ respond }) => {
+                  const entry = loadSessionEntry({
+                    sessionKey: key,
+                    storePath,
+                    readConsistency: "latest",
+                  });
+                  observedSelections.push({
+                    ...resolveSessionModelRef(cfg, entry, "main"),
+                    profile: entry?.authProfileOverride,
+                    source: entry?.authProfileOverrideSource,
+                  });
+                  respond(true, { runId: "arcee-linked-default-first-turn", status: "started" });
+                });
+              try {
+                const created = await directSessionReq<{ runStarted: boolean }>(
+                  "sessions.create",
+                  { key, model: `arcee/${modelId}`, message: "Start the first turn" },
+                  { client, context },
+                );
+
+                expect(created.ok, JSON.stringify(created.error)).toBe(true);
+                expect(created.payload?.runStarted).toBe(true);
+                expect.soft(observedSelections).toEqual([
+                  {
+                    provider: "arcee",
+                    model: modelId,
+                    profile: expectedPin,
+                    source: expectedSource,
+                  },
+                ]);
+                const saved = loadSessionEntry({
+                  sessionKey: key,
+                  storePath,
+                  readConsistency: "latest",
+                });
+                expect
+                  .soft(resolveSessionModelRef(cfg, saved, "main"))
+                  .toEqual({ provider: "arcee", model: modelId });
+                expect.soft(saved?.authProfileOverride).toBe(expectedPin);
+                expect.soft(saved?.authProfileOverrideSource).toBe(expectedSource);
+                expect(
+                  ensureAuthProfileStoreWithoutExternalProfiles(state.agentDir(), {
+                    readOnly: true,
+                  }).profiles["arcee:work"],
+                ).toEqual(credential);
+                const linksAfter = await directSessionReq(
+                  "users.listAuthLinks",
+                  { profileId: owner.id },
+                  { client, context },
+                );
+                expect(linksAfter.ok, JSON.stringify(linksAfter.error)).toBe(true);
+                expect(linksAfter.payload).toEqual(linksBefore.payload);
+                expect(JSON.parse(await fs.readFile(state.configPath, "utf8"))).toEqual(
+                  inputConfig,
+                );
+              } finally {
+                chatSend.mockRestore();
+              }
+            } finally {
+              clients.clear();
+              await service.stop();
+              gatewayConfig.clearRuntimeConfigSnapshot();
+            }
+          },
+          { config: cfg, env: process.env, workspaceDir: state.workspaceDir },
+        );
+      },
+    );
+  },
+);
 
 test("sessions.create does not donate a personal default to an unpinned adoption or fork", async () => {
   await withOpenClawTestState({ layout: "state-only" }, async () => {
@@ -1000,7 +1317,15 @@ test("sessions.create keeps incognito rows process-local through list, spawn, re
   const { storePath } = await createSessionStoreDir();
   try {
     const durableParentKey = "main";
-    await writeSessionStore({ entries: { main: sessionStoreEntry("durable-parent") } });
+    const savedPrompt = "unrelated durable prompt for incognito existence checks";
+    await writeSessionStore({
+      entries: {
+        main: {
+          ...sessionStoreEntry("durable-parent"),
+          skillsSnapshot: { prompt: savedPrompt, skills: [] },
+        },
+      },
+    });
     const created = await directSessionReq<{
       key: string;
       entry: {
@@ -1211,18 +1536,24 @@ test("sessions.create keeps incognito rows process-local through list, spawn, re
         "INSERT INTO session_windows (session_id, session_key, session_scope, created_at, updated_at) VALUES ('durable-collision', ?, 'conversation', ?, ?)",
       )
       .run(durableCollisionKey, durableCollisionUpdatedAt, durableCollisionUpdatedAt);
-    const rejectedExplicitDashboard = await directSessionReq("sessions.create", {
-      agentId: "main",
-      key: durableCollisionKey,
-      incognito: true,
-    });
-    expect(rejectedExplicitDashboard).toMatchObject({
-      ok: false,
-      error: {
-        code: "INVALID_REQUEST",
-        message: "incognito is immutable and requires a new session key",
-      },
-    });
+    const parse = vi.spyOn(JSON, "parse");
+    try {
+      const rejectedExplicitDashboard = await directSessionReq("sessions.create", {
+        agentId: "main",
+        key: durableCollisionKey,
+        incognito: true,
+      });
+      expect(parse.mock.calls.some(([json]) => json.includes(savedPrompt))).toBe(false);
+      expect(rejectedExplicitDashboard).toMatchObject({
+        ok: false,
+        error: {
+          code: "INVALID_REQUEST",
+          message: "incognito is immutable and requires a new session key",
+        },
+      });
+    } finally {
+      parse.mockRestore();
+    }
   } finally {
     closeOpenClawAgentDatabasesForTest();
   }
@@ -1303,6 +1634,40 @@ test("createGatewaySession rejects explicit and key-derived unconfigured creatio
 
   expect(prepareLifecycle).not.toHaveBeenCalled();
 });
+
+test.each(["rpc", "service"] as const)(
+  "creates a fresh selected-agent child outside fixed global ownership through %s",
+  (entrypoint) =>
+    withFixedOwnerSessionStore("global", async ({ storePath, cfg }) => {
+      let connection: Awaited<ReturnType<typeof openClient>> | undefined;
+      try {
+        await upsertSessionEntryCore(
+          { agentId: "main", sessionKey: "global", storePath },
+          { sessionId: "fixed-global-owner", updatedAt: 1 },
+        );
+        const { createGatewaySession } = await import("./session-create-service.js");
+        if (entrypoint === "rpc") {
+          connection = await openClient();
+        }
+        const created = connection
+          ? await rpcReq<{ key: string }>(connection.ws, "sessions.create", {
+              agentId: "ops",
+            }).then((result) => ({ ok: result.ok, key: result.payload?.key, error: result.error }))
+          : await createGatewaySession({ cfg, agentId: "ops", commandSource: "test" });
+        expect(created.ok, JSON.stringify(created)).toBe(true);
+        const key = requireNonEmptyString(created.ok ? created.key : undefined, "fresh child key");
+        expect(key).toMatch(/^agent:ops:dashboard:/);
+        expect(loadSessionEntry({ agentId: "ops", sessionKey: key, storePath })).toBeDefined();
+        expect(
+          loadSessionEntry({ agentId: "main", sessionKey: "global", storePath })?.sessionId,
+        ).toBe("fixed-global-owner");
+      } finally {
+        if (connection) {
+          await closeGatewayTestWebSocket(connection.ws);
+        }
+      }
+    }),
+);
 
 test("createGatewaySession rechecks admin scope after incognito inheritance resolves", async () => {
   await createSessionStoreDir();
@@ -1388,15 +1753,9 @@ test("chat.send fences dashboard title persistence from concurrent session delet
     });
     scheduleTitle(params);
   });
-  let finishDispatch: (() => void) | undefined;
-  const dispatchFinished = new Promise<void>((resolve) => {
-    finishDispatch = resolve;
-  });
+  const { promise: dispatchFinished, resolve: finishDispatch } = createDeferredCore();
   let finishTitle: (() => void) | undefined;
-  let markTitleStarted = () => {};
-  const titleStarted = new Promise<void>((resolve) => {
-    markTitleStarted = resolve;
-  });
+  const { promise: titleStarted, resolve: markTitleStarted } = createDeferredCore();
   dashboardTitleGenerationMocks.generate.mockImplementationOnce(async () => {
     markTitleStarted();
     await new Promise<void>((resolve) => {
@@ -1486,11 +1845,8 @@ test("chat.send fences dashboard title persistence from concurrent session delet
 test("chat.send persists a dashboard title while the first turn is still running", async () => {
   const { storePath } = await createSessionStoreDir();
   const { ws } = await openClient();
-  let finishDispatch: (() => void) | undefined;
   let dispatchFinished = false;
-  const dispatchPending = new Promise<void>((resolve) => {
-    finishDispatch = resolve;
-  });
+  const { promise: dispatchPending, resolve: finishDispatch } = createDeferredCore();
   dispatchInboundMessageMock.mockImplementationOnce(async () => {
     await dispatchPending;
     dispatchFinished = true;
@@ -2003,14 +2359,8 @@ test("sessions.create rolls back failed provisioning before a same-key creator p
   const originalRemove = managedWorktrees.remove.bind(managedWorktrees);
   let failedWorktreeId: string | undefined;
   let successorWorktreeId: string | undefined;
-  let releaseRollback = () => {};
-  const rollbackGate = new Promise<void>((resolve) => {
-    releaseRollback = resolve;
-  });
-  let markRollbackStarted = () => {};
-  const rollbackStarted = new Promise<void>((resolve) => {
-    markRollbackStarted = resolve;
-  });
+  const { promise: rollbackGate, resolve: releaseRollback } = createDeferredCore();
+  const { promise: rollbackStarted, resolve: markRollbackStarted } = createDeferredCore();
   const removeSpy = vi.spyOn(managedWorktrees, "remove").mockImplementation(async (params) => {
     if (params.reason === "session-create-failed") {
       failedWorktreeId = params.id;
@@ -2031,7 +2381,12 @@ test("sessions.create rolls back failed provisioning before a same-key creator p
       },
       { client: adminClient },
     );
-    await rollbackStarted;
+    await Promise.race([
+      rollbackStarted,
+      failedPromise.then((result) => {
+        throw new Error(`Creation returned before rollback started: ${JSON.stringify(result)}`);
+      }),
+    ]);
     let successorSettled = false;
     const successorPromise = directSessionReq<{
       entry: {
@@ -2070,7 +2425,7 @@ test("sessions.create rolls back failed provisioning before a same-key creator p
     const successorWorktree = successor.payload!.worktree;
     successorWorktreeId = successorWorktree.id;
     expect(successorWorktree.id).not.toBe(failedWorktreeId);
-    await expect(fs.access(successorWorktree.path)).resolves.toBeUndefined();
+    await fs.access(successorWorktree.path);
     expect(loadSessionEntry({ sessionKey: key, storePath })?.worktree).toEqual({
       id: successorWorktree.id,
       branch: successorWorktree.branch,
@@ -2121,6 +2476,7 @@ test("sessions.create provisions and reuses a session worktree for later runs", 
   });
   const root = openClawState.root;
   const workspace = await initializeGitWorkspace(root);
+  await execFileAsync("git", ["-C", workspace, "branch", "selected-base"]);
   closeOpenClawStateDatabaseForTest();
   testState.agentConfig = { workspace };
   const { storePath } = await createSessionStoreDir();
@@ -2141,7 +2497,12 @@ test("sessions.create provisions and reuses a session worktree for later runs", 
       worktree: { id: string; path: string; branch: string };
     }>(
       "sessions.create",
-      { agentId: "main", label: "Release planning", worktree: true },
+      {
+        agentId: "main",
+        label: "Release planning",
+        worktree: true,
+        worktreeBaseRef: "selected-base",
+      },
       { client: { connect: { scopes: ["operator.admin"] } } as never },
     );
 
@@ -2166,12 +2527,13 @@ test("sessions.create provisions and reuses a session worktree for later runs", 
     const originalHead = (await execFileAsync("git", ["-C", worktree!.path, "rev-parse", "HEAD"]))
       .stdout;
 
+    await execFileAsync("git", ["-C", workspace, "branch", "-D", "selected-base"]);
     const recreated = await directSessionReq<{
       entry: { spawnedCwd?: string };
       worktree: { id: string; path: string; branch: string };
     }>(
       "sessions.create",
-      { key, agentId: "main", worktree: true },
+      { key, agentId: "main", worktree: true, worktreeBaseRef: "selected-base" },
       { client: { connect: { scopes: ["operator.admin"] } } as never },
     );
     expect(recreated.ok).toBe(true);
@@ -2848,6 +3210,7 @@ test("sessions.create maps worktree options and preserves a nested workspace cwd
   const workspace = path.join(repoRoot, "packages", "app");
   const worktreePath = path.join(openClawState.root, "managed-worktree");
   const key = "agent:main:dashboard:worktree-options";
+  await execFileAsync("git", ["-C", repoRoot, "branch", "base-branch"]);
   await Promise.all([
     fs.mkdir(workspace, { recursive: true }),
     fs.mkdir(worktreePath, { recursive: true }),
@@ -3658,7 +4021,7 @@ test.each([
         expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("retained-dirty"));
       } else if (outcome === "failed") {
         expect(getRegistryWorktree(process.env, worktree.id)?.removedAt).toBeUndefined();
-        await expect(fs.access(worktree.path)).resolves.toBeUndefined();
+        await fs.access(worktree.path);
         expect(warnSpy).toHaveBeenCalledExactlyOnceWith(
           "failed to finalize session worktree lifecycle: simulated cleanup failure",
         );
@@ -3747,10 +4110,7 @@ test("sessions.create reset-in-place detaches the prior worktree permission boun
     const removalGate = new Promise<void>((resolve) => {
       releaseWorktreeRemoval = resolve;
     });
-    let markRemovalStarted = () => {};
-    const removalStarted = new Promise<void>((resolve) => {
-      markRemovalStarted = resolve;
-    });
+    const { promise: removalStarted, resolve: markRemovalStarted } = createDeferredCore();
     const removeIfLosslessSpy = vi
       .spyOn(managedWorktrees, "removeIfLossless")
       .mockImplementation(async (id) => {
@@ -3810,7 +4170,7 @@ test("sessions.create reset-in-place detaches the prior worktree permission boun
     const successorWorktree = successor.payload!.worktree;
     expect(successorWorktree.id).not.toBe(worktree?.id);
     worktreeId = successorWorktree.id;
-    await expect(fs.access(successorWorktree.path)).resolves.toBeUndefined();
+    await fs.access(successorWorktree.path);
     expect(loadSessionEntry({ sessionKey: "agent:main:main", storePath })).toMatchObject({
       spawnedCwd: successorWorktree.path,
       worktree: {
@@ -3852,8 +4212,9 @@ test("sessions.create rejects worktrees for agent workspaces without a commit", 
     expect(created.ok).toBe(false);
     expect(created.error).toMatchObject({
       code: "INVALID_REQUEST",
-      message: "agent workspace is not a git checkout",
+      message: expect.stringContaining("git checkout has no commits"),
     });
+    expect(created.error?.message).toContain("Create an initial commit, then retry.");
   } finally {
     testState.agentConfig = undefined;
   }
@@ -3940,9 +4301,9 @@ test.each([undefined, "main"])(
     expect(created.ok, JSON.stringify(created.error)).toBe(true);
     expect(created.payload?.key).toMatch(/^agent:main:dashboard:/);
     expect(created.payload?.entry?.parentSessionKey).toBe("agent:main:main");
-    // Auto-parented operator sessions must stay spawn-capable roots: without the
-    // explicit depth, spawn admission derives depth 1 from parentSessionKey and
-    // rejects all sessions_spawn calls at the default maxSpawnDepth of 1.
+    // Auto-parented operator sessions must stay depth-zero roots. This preserves
+    // their operator identity and makes explicit finite spawn-depth caps apply
+    // from the correct origin.
     expect(created.payload?.entry?.spawnDepth).toBe(0);
   },
 );
@@ -6021,6 +6382,59 @@ test("sessions.get reads selected global messages from the requested agent store
   }
 });
 
+test("sessions.create checks selected global initialization in the requested agent store", async () => {
+  const { mainStorePath, workStorePath } = await createSelectedGlobalSessionStore();
+  try {
+    await writeSessionStore({
+      storePath: mainStorePath,
+      entries: {
+        global: sessionStoreEntry("sess-main-initializing", { initializationPending: true }),
+      },
+    });
+
+    const created = await directSessionReq<{ key?: string }>("sessions.create", {
+      key: "global",
+      agentId: "work",
+    });
+
+    expect(created.ok, JSON.stringify(created)).toBe(true);
+    expect(created.payload).toMatchObject({ key: "global" });
+    expect(
+      loadSessionEntry({ agentId: "work", sessionKey: "global", storePath: workStorePath }),
+    ).toBeDefined();
+    expect(
+      loadSessionEntry({ agentId: "main", sessionKey: "global", storePath: mainStorePath }),
+    ).toMatchObject({ sessionId: "sess-main-initializing", initializationPending: true });
+
+    await writeSessionStore({
+      storePath: workStorePath,
+      agentId: "work",
+      entries: {
+        global: sessionStoreEntry("sess-work-initializing", { initializationPending: true }),
+      },
+    });
+    expect(
+      resolveSessionEntryAccessTarget({
+        cfg: getRuntimeConfig(),
+        sessionKey: "global",
+        agentId: "work",
+      }).entry,
+    ).toMatchObject({ sessionId: "sess-work-initializing", initializationPending: true });
+    const blocked = await directSessionReq("sessions.create", { key: "global", agentId: "work" });
+    expect(blocked).toMatchObject({
+      ok: false,
+      error: {
+        code: "UNAVAILABLE",
+        message: "Session global is still initializing; retry creation later.",
+      },
+    });
+  } finally {
+    testState.sessionStorePath = undefined;
+    testState.sessionConfig = undefined;
+    testState.agentsConfig = undefined;
+  }
+});
+
 test("sessions.create sends selected global initial tasks to the requested agent", async () => {
   const { mainStorePath, workStorePath } = await createSelectedGlobalSessionStore();
   const { ws } = await openClient();
@@ -6833,76 +7247,96 @@ test("sessions.create can start the first agent turn from an initial task", asyn
   ws.close();
 });
 
-test("sessions.create commits its selected first-message mentions to the recipient Inbox", async () => {
-  const { storePath } = await createSessionStoreDir();
-  testState.agentsConfig = { list: [{ id: "main", default: true }] };
-  const alice = ensureProfileForEmail("alice@create-mentions.example.test");
-  const bob = ensureProfileForEmail("bob@create-mentions.example.test");
-  const sender = { ...identifiedClient(alice.id, "Alice"), connId: "alice-create" };
-  const recipient = { ...identifiedClient(bob.id, "Bob"), connId: "bob-create" };
-  const inbox = createMentionInbox({
-    gatewayInstanceId: "first-message-mentions",
-    getRuntimeConfig,
-    getClients: () => [sender, recipient],
-    broadcastToConnIds: vi.fn(),
-  });
-  const context = {
-    mentionInbox: inbox,
-    chatAbortControllers: new Map<string, ChatAbortControllerEntry>(),
-    getClientConnIds: (filter?: (client: GatewayClient) => boolean) =>
-      new Set(
-        [sender, recipient]
-          .filter((client) => !filter || filter(client))
-          .map(({ connId }) => connId),
-      ),
-  };
-  let key: string | undefined;
-  try {
-    const created = await directSessionReq<{ key: string; sessionId: string; runStarted: boolean }>(
-      "sessions.create",
-      {
-        agentId: "main",
-        message: "@Bob review this",
-        mentions: [{ profileId: bob.id, start: 0, end: 4 }],
-      },
-      { client: sender, context, isWebchatConnect: () => true },
-    );
-    expect(created.ok, JSON.stringify(created.error)).toBe(true);
-    expect(created.payload?.runStarted).toBe(true);
-    key = created.payload?.key;
-    expect(inbox.list(recipient)).toMatchObject({
-      ok: true,
-      value: {
-        items: [{ senderProfileId: alice.id, sessionKey: key, excerpt: "@Bob review this" }],
-      },
-    });
-    expect(inbox.list(sender)).toMatchObject({ ok: true, value: { items: [] } });
-  } finally {
-    await waitForCreatedSessionRun(context, storePath, key);
-    inbox.dispose();
-  }
-});
+const mentionCreationOwners = [
+  ["main", "per-sender"],
+  ["ops", "per-sender"],
+  ["main", "global"],
+  ["ops", "global"],
+] as const;
 
-test("sessions.create rejects stale mention spans before creating a session", async () => {
-  await createSessionStoreDir();
-  testState.agentsConfig = { list: [{ id: "main", default: true }] };
-  const sender = identifiedClient(ensureProfileForEmail("alice@invalid-mentions.example.test").id);
-  const created = await directSessionReq(
-    "sessions.create",
-    {
-      agentId: "main",
-      message: "token was removed",
-      mentions: [{ profileId: "bob", start: 0, end: 4 }],
-    },
-    { client: sender },
-  );
-  expect(created).toMatchObject({
-    ok: false,
-    error: { message: expect.stringContaining("Select the people again") },
-  });
-  const listed = await directSessionReq<{ sessions: unknown[] }>("sessions.list", {});
-  expect(listed.payload?.sessions).toEqual([]);
-});
+test.each(mentionCreationOwners)(
+  "sessions.create commits its selected first-message mentions to the recipient Inbox for %s under %s scope",
+  (agentId, scope) =>
+    withFixedOwnerSessionStore(scope, async ({ storePath }) => {
+      const alice = ensureProfileForEmail("alice@create-mentions.example.test");
+      const bob = ensureProfileForEmail("bob@create-mentions.example.test");
+      const sender = { ...identifiedClient(alice.id, "Alice"), connId: "alice-create" };
+      const recipient = { ...identifiedClient(bob.id, "Bob"), connId: "bob-create" };
+      const inbox = createMentionInbox({
+        gatewayInstanceId: "first-message-mentions",
+        getRuntimeConfig,
+        getClients: () => [sender, recipient],
+        broadcastToConnIds: vi.fn(),
+      });
+      const context = {
+        mentionInbox: inbox,
+        chatAbortControllers: new Map<string, ChatAbortControllerEntry>(),
+        getClientConnIds: (filter?: (client: GatewayClient) => boolean) =>
+          new Set(
+            [sender, recipient]
+              .filter((client) => !filter || filter(client))
+              .map(({ connId }) => connId),
+          ),
+      };
+      let key: string | undefined;
+      try {
+        const created = await directSessionReq<{
+          key: string;
+          sessionId: string;
+          runStarted: boolean;
+        }>(
+          "sessions.create",
+          {
+            agentId,
+            message: "@Bob review this",
+            mentions: [{ profileId: bob.id, start: 0, end: 4 }],
+          },
+          { client: sender, context, isWebchatConnect: () => true },
+        );
+        expect(created.ok, JSON.stringify(created.error)).toBe(true);
+        expect(created.payload?.runStarted).toBe(true);
+        key = created.payload?.key;
+        expect(key).toMatch(new RegExp(`^agent:${agentId}:dashboard:`));
+        expect(inbox.list(recipient)).toMatchObject({
+          ok: true,
+          value: {
+            items: [
+              { senderProfileId: alice.id, sessionKey: key, agentId, excerpt: "@Bob review this" },
+            ],
+          },
+        });
+        expect(inbox.list(sender)).toMatchObject({ ok: true, value: { items: [] } });
+      } finally {
+        await waitForCreatedSessionRun(context, storePath, key);
+        inbox.dispose();
+      }
+    }),
+);
+
+test.each(mentionCreationOwners)(
+  "sessions.create rejects stale mention spans before creating a session for %s under %s scope",
+  (agentId, scope) =>
+    withFixedOwnerSessionStore(scope, async () => {
+      const sender = identifiedClient(
+        ensureProfileForEmail("alice@invalid-mentions.example.test").id,
+      );
+      const created = await directSessionReq(
+        "sessions.create",
+        {
+          agentId,
+          message: "token was removed",
+          mentions: [{ profileId: "bob", start: 0, end: 4 }],
+        },
+        { client: sender },
+      );
+      expect(created).toMatchObject({
+        ok: false,
+        error: { message: expect.stringContaining("Select the people again") },
+      });
+      const listed = await directSessionReq<{ sessions: unknown[] }>("sessions.list", {});
+      expect(listed.payload?.sessions).toEqual([]);
+    }),
+);
 
 test("sessions.create forwards an attachment-only first turn", async () => {
   await createSessionStoreDir();

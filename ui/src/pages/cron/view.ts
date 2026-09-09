@@ -8,7 +8,7 @@ import { repeat } from "lit/directives/repeat.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 // Control UI view renders the Automations (cron) screen: a full-width list (stats, task table,
 // starter ideas) and a full-page detail view for creating or editing a single automation.
-import { isSystemOwnedCronPayloadKind } from "../../../../src/cron/types.js";
+import { isSystemMonitorDeclaration } from "../../../../src/cron/system-owned-declaration.js";
 import "../../styles/chat/text.css";
 import "../../styles/cron.css";
 import type {
@@ -815,9 +815,14 @@ function renderJobsTable(props: CronProps, hasAnyJobsFilters: boolean) {
   `;
 }
 
+function isSystemOwnedCronJob(job: CronJob | null | undefined): boolean {
+  return isSystemMonitorDeclaration(job?.declarationKey);
+}
+
 function renderJobRow(job: CronJob, props: CronProps) {
+  const displayName = job.displayName ?? job.name;
   const description = job.description?.trim();
-  const systemOwned = isSystemOwnedCronPayloadKind(job.payload.kind);
+  const systemOwned = isSystemOwnedCronJob(job);
   const nextRunAtMs = job.state?.nextRunAtMs;
   const hasNextRun = typeof nextRunAtMs === "number" && Number.isFinite(nextRunAtMs);
   const nextRun = isCronJobRunning(job)
@@ -835,7 +840,7 @@ function renderJobRow(job: CronJob, props: CronProps) {
         ${renderJobStateIndicator(job)}
         <span class="cron-table__name-copy">
           <span class="cron-table__name-line">
-            <span class="cron-table__name-text">${job.name}</span>
+            <span class="cron-table__name-text">${displayName}</span>
             ${job.trigger ? renderTriggerIndicator() : nothing}
           </span>
           ${
@@ -877,8 +882,8 @@ function renderJobRow(job: CronJob, props: CronProps) {
                   type="button"
                   class="btn btn--sm btn--ghost cron-row-run"
                   data-test-id=${`cron-row-run-${job.id}`}
-                  title=${t("cron.actions.runNowJob", { name: job.name })}
-                  aria-label=${t("cron.actions.runNowJob", { name: job.name })}
+                  title=${t("cron.actions.runNowJob", { name: displayName })}
+                  aria-label=${t("cron.actions.runNowJob", { name: displayName })}
                   ?disabled=${props.busy}
                   @click=${() => props.onRun(job, "force")}
                 >
@@ -1021,7 +1026,8 @@ function renderJobMenu(props: CronProps, job: CronJob) {
   if (!props.canManage) {
     return nothing;
   }
-  const systemOwned = isSystemOwnedCronPayloadKind(job.payload.kind);
+  const systemOwned = isSystemOwnedCronJob(job);
+  const displayName = job.displayName ?? job.name;
   return html`
     <wa-dropdown
       class="cron-job-menu"
@@ -1053,8 +1059,8 @@ function renderJobMenu(props: CronProps, job: CronJob) {
         slot="trigger"
         type="button"
         class="btn btn--sm btn--ghost cron-job-menu__trigger"
-        aria-label=${t("cron.actions.moreJob", { name: job.name })}
-        title=${t("cron.actions.moreJob", { name: job.name })}
+        aria-label=${t("cron.actions.moreJob", { name: displayName })}
+        title=${t("cron.actions.moreJob", { name: displayName })}
       >
         ${icon("moreHorizontal")}
       </button>
@@ -1156,9 +1162,12 @@ function renderDetailView(props: CronProps, mode: CronPanelMode) {
 }
 
 function renderDetailHeader(props: CronProps, mode: CronPanelMode, selectedJob?: CronJob) {
-  const title = mode === "job" ? (selectedJob?.name ?? props.form.name) : t("cron.detail.newTitle");
+  const title =
+    mode === "job"
+      ? (selectedJob?.displayName ?? selectedJob?.name ?? props.form.name)
+      : t("cron.detail.newTitle");
   const description = mode === "job" ? selectedJob?.description?.trim() : undefined;
-  const systemOwned = isSystemOwnedCronPayloadKind(selectedJob?.payload.kind);
+  const systemOwned = isSystemOwnedCronJob(selectedJob);
   // Header describes the SAVED job (schedule + next run); the form's live
   // summary describes unsaved edits, so the two never contradict each other.
   const nextRunAtMs = selectedJob?.state?.nextRunAtMs;
@@ -1221,7 +1230,7 @@ function renderEnabledSwitch(
 ) {
   const stateLabel = job.enabled ? t("cron.detail.active") : t("cron.detail.paused");
   const actionLabel = t(job.enabled ? "cron.actions.pauseJob" : "cron.actions.resumeJob", {
-    name: job.name,
+    name: job.displayName ?? job.name,
   });
   return html`
     <span
@@ -1263,8 +1272,7 @@ function renderDetailTabs(props: CronProps) {
 
 function renderEditor(props: CronProps, mode: CronPanelMode) {
   const payloadLocked = props.form.payloadLocked;
-  const systemOwned =
-    mode === "job" && isSystemOwnedCronPayloadKind(props.editingJob?.payload.kind);
+  const systemOwned = mode === "job" && isSystemOwnedCronJob(props.editingJob);
   const isAgentTurn = !payloadLocked && props.form.payloadKind === "agentTurn";
   const supportsAnnounce =
     props.form.sessionTarget !== "main" &&
@@ -1394,7 +1402,6 @@ const CRON_PAYLOAD_CODE_LANGUAGES: Record<CronFormState["payloadKind"], string> 
   script: "javascript",
   command: "bash",
   heartbeat: "",
-  skillCollectionReview: "",
   systemEvent: "",
   agentTurn: "",
 };
@@ -1408,8 +1415,8 @@ function renderPromptSection(
       ? t("cron.form.script")
       : props.form.payloadKind === "heartbeat"
         ? "Heartbeat monitor"
-        : props.form.payloadKind === "skillCollectionReview"
-          ? "Skill collection review"
+        : props.form.payloadKind === "agentTurn"
+          ? t("cron.form.assistantTaskPrompt")
           : t("cron.form.command");
   const promptLabel = ctx.payloadLocked
     ? lockedPayloadLabel

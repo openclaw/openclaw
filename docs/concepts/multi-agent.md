@@ -82,6 +82,12 @@ Add `bindings` to route inbound messages (the wizard offers to do this for you),
 openclaw agents list --bindings
 ```
 
+In the Control UI, **Settings → Agents** updates model choices when the Gateway
+publishes a new catalog. Refreshing choices preserves your selected model,
+fallbacks, and identity draft. If the read fails, the editor shows an error and
+keeps the previous choices until a later update succeeds. Model and fallback
+edits keep their normal automatic save behavior.
+
 ### Agent provenance
 
 OpenClaw records how each configured agent was created: `operator` for CLI,
@@ -180,7 +186,8 @@ filtering, migration, and trust-boundary details.
 
 ## Cross-agent memory search
 
-The QMD cross-agent search path was removed. Builtin memory does not search
+The QMD cross-agent search path was removed in v2026.8.1 along with the rest
+of the QMD backend. Builtin memory does not search
 another agent's transcript corpus; each agent searches only its own configured
 memory and eligible same-agent session sources. Put intentionally shared
 Markdown in an explicit shared `memory.search.extraPaths` directory when the

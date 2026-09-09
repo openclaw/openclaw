@@ -1,6 +1,5 @@
 // Shared execution helpers keep the public dispatcher small and reviewable.
 import { tryResolveAmbientOwnerAgentId } from "../agents/agent-scope-config.js";
-import type { AgentExecutionAuthBinding } from "../agents/execution-auth-binding.js";
 import type { ConfigSetOptions } from "../cli/config-set-input.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -75,13 +74,7 @@ export function formatGatewayStatusLine(overview: SystemAgentOverview): string {
 
 export async function runGatewayLifecycle(
   operation: "start" | "stop" | "restart",
-  surface?: "cli" | "gateway",
 ): Promise<void | boolean> {
-  if (operation === "restart" && surface === "gateway") {
-    const { scheduleSafeGatewayRestart } = await import("../infra/restart-coordinator.js");
-    // In-process ownership prevents remote URL/config overrides from restarting another Gateway.
-    return scheduleSafeGatewayRestart({ reason: "gateway.restart.safe", delayMs: 0 }).ok;
-  }
   const lifecycle = await import("../cli/daemon-cli/lifecycle.js");
   if (operation === "start") {
     await lifecycle.runDaemonStart();
@@ -620,10 +613,7 @@ export async function executeSetDefaultModel(
               ...(targetAgentId ? { agentId: targetAgentId } : {}),
               ...(opts.onVerifiedInferenceChanged
                 ? {
-                    onVerifiedExecution: (
-                      _auth: AgentExecutionAuthBinding,
-                      binding: SystemAgentVerifiedInferenceBinding,
-                    ) => {
+                    onVerifiedExecution: (binding: SystemAgentVerifiedInferenceBinding) => {
                       latestBinding = binding;
                     },
                   }

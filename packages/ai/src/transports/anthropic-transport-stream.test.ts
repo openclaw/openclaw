@@ -6,11 +6,13 @@ import type { AssistantMessage, Model } from "@openclaw/llm-core";
  */
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { makeUserMessage } from "../../../../test/helpers/user-message.js";
 import {
   configureAiTransportHost,
   getAiTransportHost,
   type AiInlineContentBlock,
 } from "../host.js";
+import { createZeroUsage } from "../usage.test-support.js";
 import { onLlmRequestActivity } from "../utils/llm-request-activity.js";
 import { createCompactionCapture } from "./anthropic-compaction-replay.js";
 import { resolveCompactionReplayPressure } from "./provider-compaction-replay.js";
@@ -313,14 +315,7 @@ function makeSonnet5PrefillContext(): AnthropicStreamContext {
         api: "anthropic-messages",
         provider: "anthropic",
         model: "claude-sonnet-5",
-        usage: {
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: 0,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-        },
+        usage: createZeroUsage(),
         stopReason: "stop",
         timestamp: 1,
       },
@@ -692,14 +687,7 @@ describe("anthropic transport stream", () => {
       api: "anthropic-messages",
       provider: "anthropic",
       model: model.id,
-      usage: {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 0,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-      },
+      usage: createZeroUsage(),
       stopReason: "stop",
       timestamp: 1,
     };
@@ -2002,8 +1990,77 @@ describe("anthropic transport stream", () => {
     expect(result.stopReason).toBe("error");
     expect(result.errorMessage).toBe("Provider completed tool call with malformed JSON arguments");
     expect(result.errorMessage).not.toContain("SECRET.md");
+    // Bounded diagnostics survive projection onto the terminal message without the content.
+    expect(result.errorCode).toBe("malformed_tool_call_arguments");
+    expect(JSON.parse(result.errorBody ?? "{}")).toEqual({
+      code: "malformed_tool_call_arguments",
+      argumentChars: '{"path":"SECRET.md"'.length,
+      argumentHash: expect.stringMatching(/^[0-9a-z]+$/),
+      repairAttempted: true,
+    });
+    expect(result.errorBody).not.toContain("SECRET.md");
     expect(eventTypes).not.toContain("toolcall_end");
     expect(eventTypes).not.toContain("done");
+  });
+
+  it("repairs complete terminal tool JSON with raw control characters instead of failing the turn", async () => {
+    guardedFetchMock.mockResolvedValueOnce(
+      createSseResponse([
+        anthropicMessageStart({
+          id: "msg_repairable_tools",
+          usage: { input_tokens: 2, output_tokens: 0 },
+        }),
+        anthropicContentBlockStart(0, {
+          type: "tool_use",
+          id: "call_valid",
+          name: "read",
+          input: {},
+        }),
+        anthropicContentBlockDelta(0, {
+          type: "input_json_delta",
+          partial_json: '{"path":"README.md"}',
+        }),
+        { type: "content_block_stop", index: 0 },
+        anthropicContentBlockStart(1, {
+          type: "tool_use",
+          id: "call_repairable",
+          name: "edit",
+          input: {},
+        }),
+        // Fine-grained tool streaming skips server-side JSON validation, so a finished
+        // block can carry a literal newline inside a string value. The sibling oldText
+        // holds a valid \n escape after a "C:" prefix that the repair must leave intact.
+        anthropicContentBlockDelta(1, {
+          type: "input_json_delta",
+          partial_json: '{"path":"a.py","oldText":"C:\\nnext","newText":"x = 1\ny = 2"}',
+        }),
+        { type: "content_block_stop", index: 1 },
+        anthropicMessageDelta({ stop_reason: "tool_use" }, { input_tokens: 2, output_tokens: 2 }),
+        { type: "message_stop" },
+      ]),
+    );
+    const streamFn = createAnthropicMessagesTransportStreamFn();
+    const stream = await Promise.resolve(
+      streamFn(
+        makeAnthropicTransportModel(),
+        { messages: [{ role: "user", content: "edit" }] } as AnthropicStreamContext,
+        { apiKey: "sk-ant-api" } as AnthropicStreamOptions,
+      ),
+    );
+    const toolCallEnds: unknown[] = [];
+    for await (const event of stream) {
+      if (event.type === "toolcall_end") {
+        toolCallEnds.push(event.toolCall.arguments);
+      }
+    }
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("toolUse");
+    expect(result.errorMessage).toBeUndefined();
+    expect(toolCallEnds).toEqual([
+      { path: "README.md" },
+      { path: "a.py", oldText: "C:\nnext", newText: "x = 1\ny = 2" },
+    ]);
   });
 
   it("rejects an active tool call that never receives content_block_stop", async () => {
@@ -2831,9 +2888,11 @@ describe("anthropic transport stream", () => {
             parameters: {
               type: "object",
               properties: {
-                query: { type: "string" },
+                query: { $ref: "#/$defs/Query" },
               },
+              $defs: { Query: { type: "string", minLength: 1 } },
               required: ["query"],
+              additionalProperties: false,
             },
           },
         ],
@@ -2847,8 +2906,12 @@ describe("anthropic transport stream", () => {
     expect(tools).toHaveLength(1);
     const tool = requireRecord(tools[0], "tool");
     expect(tool.name).toBe("good_plugin_tool");
-    expect(requireRecord(tool.input_schema, "input schema").properties).toEqual({
-      query: { type: "string" },
+    expect(tool.input_schema).toEqual({
+      type: "object",
+      properties: { query: { $ref: "#/$defs/Query" } },
+      $defs: { Query: { type: "string", minLength: 1 } },
+      required: ["query"],
+      additionalProperties: false,
     });
   });
 
@@ -3277,13 +3340,7 @@ describe("anthropic transport stream", () => {
     {
       name: "blank user content",
       context: {
-        messages: [
-          {
-            role: "user",
-            content: " \n\t ",
-            timestamp: 0,
-          },
-        ],
+        messages: [makeUserMessage(" \n\t ", 0)],
       } as AnthropicStreamContext,
     },
   ])(
@@ -3523,14 +3580,7 @@ describe("anthropic transport stream", () => {
             model: "claude-sonnet-4-6",
             stopReason: "toolUse",
             timestamp: 0,
-            usage: {
-              input: 0,
-              output: 0,
-              cacheRead: 0,
-              cacheWrite: 0,
-              totalTokens: 0,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-            },
+            usage: createZeroUsage(),
             content: [{ type: "toolCall", id: "tool_1", name: "screenshot", arguments: {} }],
           },
           {

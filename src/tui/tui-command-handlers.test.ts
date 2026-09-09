@@ -432,6 +432,36 @@ describe("tui command handlers", () => {
   });
 
   it.each([
+    { command: "/models", value: "fixture/model" },
+    { command: "/sessions", value: "agent:main:other" },
+    { command: "/agents", value: "other" },
+  ])(
+    "consumes $command selection before its asynchronous action finishes",
+    async ({ command, value }) => {
+      const pending = createDeferred();
+      const action = vi.fn(() => pending.promise);
+      const harness = createHarness({
+        listModels: vi.fn().mockResolvedValue([{ provider: "fixture", id: "model" }]),
+        listSessions: vi.fn().mockResolvedValue({ sessions: [{ key: "agent:main:other" }] }),
+        agents: [{ id: "main" }, { id: "other" }],
+        patchSession: action,
+        setSession: action,
+      });
+      await harness.handleCommand(command);
+      const selector = firstMockArg(harness.openOverlay, "openOverlay") as SelectableOverlay;
+
+      selector.onSelect?.({ value });
+      expect(harness.closeOverlay).toHaveBeenCalledExactlyOnceWith(harness.overlayHandle);
+      selector.onSelect?.({ value });
+      expect(action).toHaveBeenCalledOnce();
+
+      pending.resolve();
+      await flushAsyncSelect();
+      expect(harness.closeOverlay).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each([
     {
       name: "model",
       command: "/models",
@@ -1114,6 +1144,7 @@ describe("tui command handlers", () => {
     const { handleCommand, getGatewayStatus, addSystem, addUser, sendChat } = createHarness({
       getGatewayStatus: vi.fn().mockResolvedValue({
         runtimeVersion: "1.2.3",
+        channelSummary: ["Telegram: not configured"],
         sessions: { count: 2, defaults: { model: "gpt-5.4", contextTokens: 200000 } },
       }),
     });
@@ -1125,6 +1156,7 @@ describe("tui command handlers", () => {
     expect(sendChat).not.toHaveBeenCalled();
     expect(addSystem).toHaveBeenCalledWith("Gateway status");
     expect(addSystem).toHaveBeenCalledWith("Version: 1.2.3");
+    expect(addSystem).toHaveBeenCalledWith("  Telegram: not configured");
   });
 
   it("returns to OpenClaw with an optional request", async () => {
@@ -3265,6 +3297,68 @@ describe("tui command handlers", () => {
     await handleCommand("/fast status");
     expect(addSystem).toHaveBeenCalledWith("fast mode: auto");
   });
+
+  it.each([
+    { reason: "missing-auth", guidance: "Run openclaw models auth login or choose another model." },
+    { reason: "auth-failed", guidance: "Run openclaw models auth login or choose another model." },
+    { reason: "cooldown", guidance: "Wait and retry, or choose another model." },
+    { reason: undefined, guidance: "Run openclaw models auth login or choose another model." },
+  ])(
+    "keeps unavailable model availability $reason visible without applying it",
+    async ({ reason, guidance }) => {
+      const harness = createHarness({
+        listModels: vi.fn().mockResolvedValue([
+          {
+            provider: "fixture",
+            id: "waiting",
+            name: "Waiting model",
+            available: false,
+            unavailableReason: reason,
+          },
+          { provider: "fixture", id: "ready", name: "Ready model", available: true },
+        ]),
+      });
+
+      await harness.handleCommand("/model");
+
+      const selector = firstMockArg(harness.openOverlay, "openOverlay") as SelectableOverlay;
+      const unavailable = expectDefined(
+        selector.items?.find((item) => item.value === "fixture/waiting"),
+        "unavailable model option",
+      );
+      selector.onSelect?.(unavailable);
+      await flushAsyncSelect();
+
+      expect(harness.patchSession).not.toHaveBeenCalled();
+      expect(unavailable.description).toContain(reason ?? "unavailable");
+      expect(harness.addSystem).toHaveBeenCalledWith(
+        `model unavailable: ${reason ?? "unavailable"}. ${guidance}`,
+      );
+    },
+  );
+
+  it.each([true, undefined])(
+    "applies model availability %s without changing its reference",
+    async (available) => {
+      const harness = createHarness({
+        listModels: vi
+          .fn()
+          .mockResolvedValue([
+            { provider: "fixture", id: "ready", name: "Ready model", available },
+          ]),
+      });
+
+      await harness.handleCommand("/model");
+      const selector = firstMockArg(harness.openOverlay, "openOverlay") as SelectableOverlay;
+      selector.onSelect?.(expectDefined(selector.items?.[0], "model option"));
+      await flushAsyncSelect();
+
+      expect(harness.patchSession).toHaveBeenCalledExactlyOnceWith({
+        key: "agent:main:main",
+        model: "fixture/ready",
+      });
+    },
+  );
 
   it("uses canonical model refs in the model selector", async () => {
     const listModels = vi.fn().mockResolvedValue([

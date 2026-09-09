@@ -8,6 +8,7 @@ import type { ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
 import { showToast } from "../../lib/toast.ts";
 import { createGatewayRequestMock } from "../../test-helpers/gateway-client.ts";
+import { settleLitElement } from "../../test-helpers/lit-settle.ts";
 import {
   installDialogPolyfill,
   submitInputDialog,
@@ -112,11 +113,11 @@ describe("chat pane retained presentation", () => {
     const lifecycle = pane as TestChatPane & { hasUpdated: boolean; render: () => unknown };
     lifecycle.render = () => null;
     ChatPaneBase.prototype.connectedCallback.call(lifecycle);
-    await lifecycle.updateComplete;
+    await settleLitElement(lifecycle);
     const performUpdate = vi.spyOn(lifecycle, "performUpdate");
 
     lifecycle.onPaneSessionChange = () => undefined;
-    await lifecycle.updateComplete;
+    await settleLitElement(lifecycle);
 
     expect(performUpdate).not.toHaveBeenCalled();
     ChatPaneBase.prototype.disconnectedCallback.call(lifecycle);
@@ -161,7 +162,7 @@ describe("chat pane header state", () => {
       const deleteOne = vi.fn(async () => ({ deleted: true }));
       const sessions = createSessionCapabilityFixture({
         delete: deleteOne,
-        refreshReplacement: vi.fn(async () => undefined),
+        refreshReplacement: vi.fn(async () => null),
       });
       const client = createGatewayBrowserClientFixture();
       const { pane } = createTestChatPane({ client, sessions });
@@ -712,6 +713,7 @@ describe("chat pane initialization", () => {
     const authStatus = { ts: 1, providers: [] };
     const request = createGatewayRequestMock(async (method) => {
       switch (method) {
+        case "models.list":
         case "chat.metadata":
           return { commands: [], models, swarmEnabled: false };
         case "models.authStatus":
@@ -848,6 +850,9 @@ describe("chat pane keyboard shortcuts", () => {
     expect(state.sidebarLayout.columns[0]?.panels.map((panel) => panel.slot)).toEqual(["terminal"]);
     expect(press().defaultPrevented).toBe(true);
     expect(state.sidebarLayout.columns[0]?.panels).toEqual([]);
+    expect(state.sidebarLayout.open).toBe(false);
+    state.terminalAvailable = false;
+    expect(press().defaultPrevented).toBe(false);
     expect(state.sidebarLayout.open).toBe(false);
   });
 });

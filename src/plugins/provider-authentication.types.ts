@@ -170,6 +170,12 @@ export type ProviderAuthMethod = {
   kind: ProviderAuthKind;
   /** Provider-owned model used to validate app-guided secret setup. */
   starterModel?: string;
+  /** One-time import attempted only after the user starts this login method. */
+  credentialImport?: {
+    migrationProviderId: string;
+    itemId: string;
+    credentialKind: "oauth" | "api_key" | "token";
+  };
   /**
    * Optional wizard/onboarding metadata for this specific auth method.
    *

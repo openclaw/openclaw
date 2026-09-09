@@ -35,7 +35,7 @@ export type ApiKeyCredential = {
 };
 
 /** Static token credential that OpenClaw does not refresh. */
-export type TokenCredential = {
+type TokenCredential = {
   /**
    * Static bearer-style token (often OAuth access token / PAT).
    * Not refreshable by OpenClaw (unlike `type: "oauth"`).
@@ -153,6 +153,8 @@ export type RuntimeAuthProfileStore = AuthProfileStore & {
   /** Runtime-only built-in CLI winners; internal provenance, never exposed or persisted. */
   runtimeExternalCliProfileIds?: string[];
   runtimeLocalProfileIds?: string[];
+  /** Provider orders stored by this owner; [] means no local override, even with inherited priority. */
+  runtimeLocalOrderProviderIds?: string[];
   runtimeInheritsMainState?: boolean;
 };
 

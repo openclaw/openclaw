@@ -7,6 +7,7 @@ import { getRuntimeConfig, type OpenClawConfig } from "../../config/config.js";
 import { resolveStateDir } from "../../config/paths.js";
 import { isMissingPathError, formatErrorMessage } from "../../infra/errors.js";
 import { root as fsRoot } from "../../infra/fs-safe.js";
+import { normalizeGitPathForFilesystem, requireGitCommandOutput } from "../../infra/git-exec.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
@@ -33,6 +34,7 @@ import {
   requireGit,
   requireGitBuffer,
   runGit,
+  WORKTREE_CHECKOUT_TIMEOUT_MS,
   type GitResult,
 } from "./git.js";
 import { worktreeOwnerMatches } from "./owner.js";
@@ -79,13 +81,12 @@ import type {
 export const IDLE_GC_MS = 7 * 24 * 60 * 60 * 1000; // Idle worktrees remain restorable after automatic cleanup.
 export const SNAPSHOT_RETENTION_MS = 30 * 24 * 60 * 60 * 1000; // Snapshot refs expire with their registry affordance.
 export const WORKTREE_GC_INTERVAL_MS = 60 * 60 * 1000;
+const BRANCH_INVENTORY_MAX_OUTPUT_BYTES = 256 * 1024;
 
 const NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/;
 const WORKTREE_CREATE_LEASE_SCOPE = "core:managed-worktrees:create";
 const WORKTREE_CREATE_LEASE_MS = 60_000;
 const WORKTREE_CREATE_LEASE_WAIT_MS = 5 * 60_000;
-// Materializing a checkout gets extra time without extending other Git commands or setup.
-const WORKTREE_CHECKOUT_TIMEOUT_MS = 300_000;
 
 /** Removal aborted because snapshot loss was not permitted. */
 export class WorktreeSnapshotError extends Error {
@@ -94,6 +95,18 @@ export class WorktreeSnapshotError extends Error {
     super(`worktree snapshot failed; removal aborted: ${snapshotError}`, options);
     this.snapshotError = snapshotError;
   }
+}
+
+function branchInventoryError(command: string, result: GitResult): Error {
+  if (result.outputLimitExceeded) {
+    return new Error(
+      "Repository has too many branches to list safely. Remove obsolete branches and retry.",
+      { cause: commandError(command, result) },
+    );
+  }
+  return new Error("Git could not list repository branches. Check the repository and retry.", {
+    cause: commandError(command, result),
+  });
 }
 
 export type WorktreeRemovalFailureReason =
@@ -261,12 +274,16 @@ async function resolveRepositoryFromRealPath(
     }
     throw new WorktreeRepositoryError(`not a git checkout: ${requestedLabel}`);
   }
-  const sourceRoot = await fs.realpath(rootResult.stdout.trim());
+  const sourceRoot = await fs.realpath(normalizeGitPathForFilesystem(rootResult.stdout.trim()));
   const headResult = await runGit(sourceRoot, ["rev-parse", "--verify", "HEAD^{commit}"]);
   if (headResult.code !== 0) {
-    throw new WorktreeRepositoryError(`git checkout has no commits: ${requestedLabel}`);
+    throw new WorktreeRepositoryError(
+      `git checkout has no commits: ${requestedLabel}. Create an initial commit, then retry.`,
+    );
   }
-  const commonRaw = await requireGit(sourceRoot, ["rev-parse", "--git-common-dir"]);
+  const commonRaw = normalizeGitPathForFilesystem(
+    await requireGit(sourceRoot, ["rev-parse", "--git-common-dir"]),
+  );
   const commonDir = await fs.realpath(
     path.isAbsolute(commonRaw) ? commonRaw : path.resolve(sourceRoot, commonRaw),
   );
@@ -457,7 +474,7 @@ async function containsSnapshotGitMarker(
   checkoutRoot: string,
   snapshotPaths?: Iterable<Buffer>,
 ): Promise<boolean> {
-  const visiblePaths = snapshotPaths ? [...snapshotPaths] : [];
+  let visiblePaths = snapshotPaths ? [...snapshotPaths] : [];
   if (!snapshotPaths) {
     const indexEntries = splitNullBuffer(
       await requireGitBuffer(checkoutRoot, ["ls-files", "--stage", "-z"]),
@@ -466,7 +483,8 @@ async function containsSnapshotGitMarker(
       return true;
     }
     const visibleGitPaths = ["ls-files", "-z", "--cached", "--others", "--exclude-standard"];
-    visiblePaths.push(...splitNullBuffer(await requireGitBuffer(checkoutRoot, visibleGitPaths)));
+    // Large checkouts exceed V8's argument limit when paths are spread into push().
+    visiblePaths = splitNullBuffer(await requireGitBuffer(checkoutRoot, visibleGitPaths));
   }
   const checked = new Set<string>();
   const ignoredPaths = splitNullBuffer(
@@ -725,7 +743,9 @@ async function prepareSnapshotIndex(
       }
     }
   }
-  const commonDir = await requireGit(record.repoRoot, ["rev-parse", "--git-common-dir"]);
+  const commonDir = normalizeGitPathForFilesystem(
+    await requireGit(record.repoRoot, ["rev-parse", "--git-common-dir"]),
+  );
   requireWorktreeDiskSpace(
     [
       { path: path.resolve(record.repoRoot, commonDir), bytes: 2 * gitBytes + metadataBytes },
@@ -899,7 +919,16 @@ export class ManagedWorktreeService {
     params.commitGuard?.();
     this.requireAllocationSpace(worktreePath, repository);
     params.commitGuard?.();
-    const base = await resolveWorktreeBase(repository.repoRoot, params.baseRef, params.signal);
+    if (params.checkoutCommit && !/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/u.test(params.checkoutCommit)) {
+      throw new Error("Worktree checkout commit is invalid");
+    }
+    const base = params.checkoutCommit
+      ? {
+          gitOperand: params.checkoutCommit,
+          recordRef: params.baseRef ?? params.checkoutCommit,
+          remote: false,
+        }
+      : await resolveWorktreeBase(repository.repoRoot, params.baseRef, params.signal);
     const gitBytes = Math.max(
       await estimateWorktreeGitBytes(repository.repoRoot, base.gitOperand),
       base.remote ? await estimateWorktreeGitBytes(repository.repoRoot, "HEAD") : 0,
@@ -1078,41 +1107,47 @@ export class ManagedWorktreeService {
     // ref, so remote-only branches keep their remote-qualified form
     // (origin/feature-a) instead of a bare name git cannot resolve.
     const branches = new Map<string, ManagedWorktreeBranch>();
-    const remoteRaw = await runGit(repository.repoRoot, [
-      "for-each-ref",
-      "--format=%(refname)",
-      "refs/remotes",
-    ]);
-    if (remoteRaw.code === 0) {
-      for (const refname of remoteRaw.stdout.split("\n")) {
-        const trimmed = refname.trim();
-        if (!trimmed.startsWith("refs/remotes/")) {
-          continue;
-        }
-        const withoutPrefix = trimmed.slice("refs/remotes/".length);
-        const slash = withoutPrefix.indexOf("/");
-        if (slash <= 0) {
-          continue;
-        }
-        const shortName = withoutPrefix.slice(slash + 1);
-        // remote HEAD symrefs are pointers, not selectable branches.
-        if (!shortName || shortName === "HEAD") {
-          continue;
-        }
-        branches.set(shortName, { name: withoutPrefix, kind: "remote" });
+    const remoteRaw = await runGit(
+      repository.repoRoot,
+      ["for-each-ref", "--format=%(refname)", "refs/remotes"],
+      { maxOutputBytes: BRANCH_INVENTORY_MAX_OUTPUT_BYTES },
+    );
+    const remoteOutput = requireGitCommandOutput(
+      "git for-each-ref refs/remotes",
+      remoteRaw,
+      branchInventoryError,
+    );
+    for (const refname of remoteOutput.split("\n")) {
+      const trimmed = refname.trim();
+      if (!trimmed.startsWith("refs/remotes/")) {
+        continue;
       }
+      const withoutPrefix = trimmed.slice("refs/remotes/".length);
+      const slash = withoutPrefix.indexOf("/");
+      if (slash <= 0) {
+        continue;
+      }
+      const shortName = withoutPrefix.slice(slash + 1);
+      // remote HEAD symrefs are pointers, not selectable branches.
+      if (!shortName || shortName === "HEAD") {
+        continue;
+      }
+      branches.set(shortName, { name: withoutPrefix, kind: "remote" });
     }
-    const localRaw = await runGit(repository.repoRoot, [
-      "for-each-ref",
-      "--format=%(refname:short)",
-      "refs/heads",
-    ]);
-    if (localRaw.code === 0) {
-      for (const line of localRaw.stdout.split("\n")) {
-        const name = line.trim();
-        if (name) {
-          branches.set(name, { name, kind: "local" });
-        }
+    const localRaw = await runGit(
+      repository.repoRoot,
+      ["for-each-ref", "--format=%(refname:short)", "refs/heads"],
+      { maxOutputBytes: BRANCH_INVENTORY_MAX_OUTPUT_BYTES },
+    );
+    const localOutput = requireGitCommandOutput(
+      "git for-each-ref refs/heads",
+      localRaw,
+      branchInventoryError,
+    );
+    for (const line of localOutput.split("\n")) {
+      const name = line.trim();
+      if (name) {
+        branches.set(name, { name, kind: "local" });
       }
     }
     const remoteHead = await runGit(repository.repoRoot, [
@@ -1302,7 +1337,28 @@ export class ManagedWorktreeService {
     );
     const gitBytes = await estimateWorktreeGitBytes(record.repoRoot, record.snapshotRef);
     this.requireAllocationSpace(record.path, repository, 2 * (gitBytes + provisionedBytes));
-    const parent = await requireGit(record.repoRoot, ["rev-parse", `${record.snapshotRef}^`]);
+    let parent: string;
+    try {
+      parent = await requireGit(record.repoRoot, ["rev-parse", `${record.snapshotRef}^`]);
+    } catch (error) {
+      const shallow = await runGit(record.repoRoot, ["rev-parse", "--is-shallow-repository"]);
+      if (shallow.code !== 0 || shallow.stdout.trim() !== "true") {
+        throw error;
+      }
+      const snapshot = await runGit(record.repoRoot, [
+        "rev-parse",
+        "--verify",
+        `${record.snapshotRef}^{commit}`,
+      ]);
+      if (snapshot.code !== 0) {
+        throw error;
+      }
+      // Origin cannot deepen a local-only snapshot that a later fetch made shallow.
+      throw new Error(
+        `Cannot restore snapshot ${snapshot.stdout.trim()} in ${record.repoRoot}: shallow clone boundary; run \`git fetch --unshallow\` in ${record.repoRoot}. If the snapshot remains shallow, recover its parent from the original repository before retrying.`,
+        { cause: error },
+      );
+    }
     params.commitGuard?.();
     await fs.mkdir(path.dirname(record.path), { recursive: true });
     params.commitGuard?.();
@@ -1483,7 +1539,7 @@ export class ManagedWorktreeService {
 
   async gc(params: ManagedWorktreeGcParams = {}): Promise<ManagedWorktreeGcResult> {
     const now = this.now();
-    const removed: string[] = [];
+    let removed: string[] = [];
     const records = listRegistryWorktrees(this.env);
     for (const record of records) {
       try {
@@ -1515,7 +1571,7 @@ export class ManagedWorktreeService {
         log.warn(`idle cleanup failed for ${record.id}: ${String(error)}`);
       }
     }
-    removed.push(...(await this.enforceCleanupLimits(params)));
+    removed = removed.concat(await this.enforceCleanupLimits(params));
     const orphansDeleted = await this.reconcileOrphans(records);
     let snapshotsPruned = 0;
     for (const record of listRegistryWorktrees(this.env)) {

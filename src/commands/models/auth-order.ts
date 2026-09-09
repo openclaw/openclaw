@@ -113,7 +113,7 @@ export async function modelsAuthOrderClearCommand(
   runtime.log(`Agent: ${agentId}`);
   runtime.log(`Provider: ${provider}`);
   runtime.log(`Auth profile order override cleared; ${describeOrderFallback(cfg, provider)}.`);
-  await refreshRunningGatewayAuthState(agentId);
+  await refreshRunningGatewayAuthState(agentId, runtime);
 }
 
 /** Sets the provider auth profile priority order after validating each profile id. */
@@ -142,7 +142,10 @@ export async function modelsAuthOrderSetCommand(
         `Auth profile "${profileId}" not found in ${shortenHomePath(agentDir)}. Run ${formatCliCommand("openclaw models auth list --provider " + provider)} to see saved profiles.`,
       );
     }
-    if (resolveProviderIdForAuth(cred.provider, { config: cfg }) !== providerKey) {
+    if (
+      resolveProviderIdForAuth(cred.provider, { config: cfg, storedCredential: true }) !==
+      providerKey
+    ) {
       throw new Error(`Auth profile "${profileId}" is for ${cred.provider}, not ${provider}.`);
     }
   }
@@ -161,5 +164,5 @@ export async function modelsAuthOrderSetCommand(
   runtime.log(`Agent: ${agentId}`);
   runtime.log(`Provider: ${provider}`);
   runtime.log(`Auth profile order override: ${describeOrder(updated, provider, cfg).join(", ")}`);
-  await refreshRunningGatewayAuthState(agentId);
+  await refreshRunningGatewayAuthState(agentId, runtime);
 }

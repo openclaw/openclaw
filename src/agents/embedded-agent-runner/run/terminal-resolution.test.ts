@@ -691,6 +691,49 @@ describe("terminal resolution", () => {
     });
   });
 
+  it("settles a heartbeat reasoning-only stop from the prepared silence contract", async () => {
+    const assistant = buildEmbeddedRunnerAssistant({
+      content: [
+        {
+          type: "thinking",
+          thinking: "internal reasoning",
+          thinkingSignature: JSON.stringify({ id: "rs_heartbeat", type: "reasoning" }),
+        },
+      ],
+    });
+    const attempt = makeEmbeddedRunnerAttempt({
+      assistantTexts: [],
+      lastAssistant: assistant,
+      currentAttemptAssistant: assistant,
+      currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
+    });
+
+    const prepared = makeTerminalInput({
+      attempt,
+      attemptAssistant: assistant,
+      runParams: {
+        trigger: "heartbeat",
+        allowEmptyAssistantReplyAsSilent: true,
+        terminalReplyExpectation: "optional",
+      },
+    });
+    const settled = await resolveEmbeddedRunTerminal(prepared);
+    expect(settled).toMatchObject({
+      action: "complete",
+      result: { payloads: [{ text: SILENT_REPLY_TOKEN }] },
+    });
+    if (settled.action === "complete") {
+      expect(settled.result.meta.error).toBeUndefined();
+    }
+
+    const undeclared = makeTerminalInput({
+      attempt,
+      attemptAssistant: assistant,
+      runParams: { trigger: "heartbeat", allowEmptyAssistantReplyAsSilent: false },
+    });
+    await expect(resolveEmbeddedRunTerminal(undeclared)).resolves.toEqual({ action: "retry" });
+  });
+
   it("does not surface a read-only presentation after a sibling side effect", async () => {
     const assistant = buildEmbeddedRunnerAssistant({
       stopReason: "toolUse",
@@ -755,6 +798,40 @@ describe("terminal resolution", () => {
       expect(activateInternalPrompt).not.toHaveBeenCalled();
     },
   );
+
+  it("activates the prompt owner for an OpenAI Responses compaction checkpoint", async () => {
+    const assistant = buildEmbeddedRunnerAssistant({
+      stopReason: "length",
+      providerReplay: {
+        v: 1,
+        type: "openai-responses-compaction",
+        id: "cmp-terminal-retry",
+        data: "opaque-compaction",
+        provider: "openai",
+        api: "openai-responses",
+        model: "gpt-5.6-luna",
+        baseUrlHash: "base-url-hash",
+      },
+    });
+    const attempt = makeEmbeddedRunnerAttempt({
+      assistantTexts: [],
+      lastAssistant: assistant,
+      currentAttemptAssistant: assistant,
+      currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
+    });
+    const activateCompactionContinuation = vi.fn();
+    const input = makeTerminalInput({
+      attempt,
+      attemptAssistant: assistant,
+      activateCompactionContinuation,
+    });
+
+    await expect(resolveEmbeddedRunTerminal(input)).resolves.toEqual({ action: "retry" });
+    expect(activateCompactionContinuation).toHaveBeenCalledWith(
+      expect.stringContaining("Continue from the compacted transcript"),
+    );
+    expect(input.armPostCompactionGuard).toHaveBeenCalledOnce();
+  });
 
   it.each([
     { expectation: "required" as const, expectedError: true },

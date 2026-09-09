@@ -193,15 +193,16 @@ export async function repairLoadedGatewayServiceForStart(
   if (runtimeInfo?.status === "probe-failed") {
     throw runtimeInfo.error;
   }
+  // An invalid OPENCLAW_SQLITE_LIBRARY is operator state to fix, not grounds to rewrite the service to Node.
+  if (runtimeInfo?.status === "unsupported" && runtimeInfo.sqliteSelectionError) {
+    throw new Error(runtimeInfo.sqliteSelectionError);
+  }
   const runtime = runtimeInfo?.status === "supported" ? "bun" : "node";
 
   const tokenResolution = await resolveGatewayInstallToken({
     config: cfg,
-    configSnapshot,
-    configWriteOptions,
     env: installEnv,
-    autoGenerateWhenMissing: true,
-    persistGeneratedToken: true,
+    generateIfMissing: { snapshot: configSnapshot, writeOptions: configWriteOptions },
   });
   if (tokenResolution.unavailableReason) {
     throw new Error(tokenResolution.unavailableReason);
@@ -247,11 +248,9 @@ export async function repairLoadedGatewayServiceForStart(
     environmentValueSources,
   });
 
-  let loaded;
-  try {
-    loaded = await params.service.isLoaded({ env: installEnv });
-  } catch {
-    loaded = true;
+  const loaded = await params.service.isLoaded({ env: installEnv });
+  if (!loaded) {
+    throw new Error("Gateway service is not loaded after repair.");
   }
 
   return {

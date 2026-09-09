@@ -1,10 +1,12 @@
 // Control UI tests cover config behavior.
 import { render } from "lit";
 import { beforeAll, describe, expect, it, vi } from "vitest";
-import "../../styles.css";
 import type { ThemeMode, ThemeName } from "../../app/theme.ts";
 import { renderConfigForm } from "../../components/config-form.ts";
+import "../../styles.css";
+import type { SelectPicker } from "../../components/select-picker.ts";
 import { warmJson5 } from "../../lib/json5-runtime.ts";
+import { updatePickers, choosePickerValue } from "../../test-helpers/select-picker.ts";
 import { renderBrowserLinkPreferencesRow } from "./browser-link-preferences.ts";
 import { createConfigViewState, renderConfig, type ConfigProps } from "./view.ts";
 
@@ -146,7 +148,6 @@ describe("config view", () => {
       lastRunCommit: "abc1234",
       lastRunCommand: "onboard",
       lastRunMode: "local",
-      localModelLeanAutoModel: "internal/model",
       securityAcknowledgedAt: "2026-08-29T12:00:00Z",
     };
     const schema = {
@@ -177,7 +178,6 @@ describe("config view", () => {
     expect(setup.open).toBe(false);
     setup.open = true;
     expect(setup.textContent).toContain(wizard.lastRunVersion);
-    expect(setup.textContent).not.toContain(wizard.localModelLeanAutoModel);
     expect(setup.textContent).not.toContain(wizard.securityAcknowledgedAt);
     expect(setup.querySelectorAll("input, textarea, select")).toHaveLength(0);
     expect(onFormPatch).not.toHaveBeenCalled();
@@ -303,7 +303,7 @@ describe("config view", () => {
     return container.textContent?.replace(/\s+/g, " ").trim() ?? "";
   }
 
-  it("names the theme's chat face and maps typography sentinels back to unset overrides", () => {
+  it("names the theme's chat face and maps typography sentinels back to unset overrides", async () => {
     const { container, props } = renderConfigView({
       theme: "dash",
       fontUi: "geist",
@@ -312,27 +312,27 @@ describe("config view", () => {
       activeSection: "__appearance__",
       includeSections: ["__appearance__"],
     });
-    const ui = queryRequired(container, "#settings-font-ui", HTMLElement) as HTMLElement & {
-      value: string;
-    };
-    const chat = queryRequired(container, "#settings-font-chat", HTMLElement) as HTMLElement & {
-      value: string;
-    };
-    expect(ui.querySelector('wa-option[value="theme"]')?.textContent).toContain("Dash · DM Sans");
-    expect(chat.querySelector('wa-option[value="theme"]')?.textContent).toContain(
+    await updatePickers(container);
+    const ui = queryRequired(container, "#settings-font-ui", HTMLElement).closest<SelectPicker>(
+      "openclaw-select-picker",
+    )!;
+    const chat = queryRequired(container, "#settings-font-chat", HTMLElement).closest<SelectPicker>(
+      "openclaw-select-picker",
+    )!;
+    expect(ui.querySelector('[role="option"][data-value="theme"]')?.textContent).toContain(
+      "Dash · DM Sans",
+    );
+    expect(chat.querySelector('[role="option"][data-value="theme"]')?.textContent).toContain(
       "Dash · Fraunces",
     );
     expect(ui.closest(".settings-row")?.textContent).toContain("Saved to your profile");
-    expect(ui.querySelectorAll("wa-option")).toHaveLength(11);
-    expect(chat.querySelectorAll("wa-option")).toHaveLength(11);
-    Object.defineProperty(ui, "value", { configurable: true, value: "lora" });
-    ui.dispatchEvent(new Event("change"));
+    expect(ui.querySelectorAll('[role="option"]')).toHaveLength(11);
+    expect(chat.querySelectorAll('[role="option"]')).toHaveLength(11);
+    await choosePickerValue(ui, "lora");
     expect(props.setFontUi).toHaveBeenLastCalledWith("lora");
-    Object.defineProperty(ui, "value", { configurable: true, value: "theme" });
-    ui.dispatchEvent(new Event("change"));
+    await choosePickerValue(ui, "theme");
     expect(props.setFontUi).toHaveBeenLastCalledWith(undefined);
-    Object.defineProperty(chat, "value", { configurable: true, value: "theme" });
-    chat.dispatchEvent(new Event("change"));
+    await choosePickerValue(chat, "theme");
     expect(props.setFontChat).toHaveBeenLastCalledWith(undefined);
   });
 
@@ -765,7 +765,11 @@ describe("config view", () => {
     // The capability refuses form submissions until the raw draft is saved or
     // discarded, so the raw actions stay on screen and Form remains gated.
     expect(container.querySelector(".config-raw-actions")).not.toBeNull();
-    expect(findButtonByText(container, "Form").disabled).toBe(true);
+    const formButton = findButtonByText(container, "Form");
+    const rawButton = findButtonByText(container, "Raw");
+    expect(formButton.disabled).toBe(true);
+    expect(formButton.getAttribute("aria-pressed")).toBe("false");
+    expect(rawButton.getAttribute("aria-pressed")).toBe("true");
   });
 
   it("disables raw save/discard without changes and locks the editor while busy", () => {
@@ -875,7 +879,8 @@ describe("config view", () => {
 
     const formButton = findButtonByText(container, "Form");
     const rawButton = findButtonByText(container, "Raw");
-    expect([...formButton.classList]).toEqual(["config-mode-toggle__btn", "active"]);
+    expect(formButton.getAttribute("aria-pressed")).toBe("true");
+    expect(rawButton.getAttribute("aria-pressed")).toBe("false");
     expect(rawButton.disabled).toBe(true);
     expect(rawButton.getAttribute("title")).toBe("Raw mode unavailable for this snapshot");
     expect(container.querySelector(".config-raw-field")).toBeNull();
@@ -979,6 +984,43 @@ describe("config view", () => {
     expect(queryRequired(expanded.container, `#${controlledPanelId}`, HTMLDivElement).hidden).toBe(
       false,
     );
+    expect(
+      queryRequired(
+        expanded.container,
+        ".config-accordion-group__item--active",
+        HTMLButtonElement,
+      ).getAttribute("aria-current"),
+    ).toBe("true");
+    expect(
+      collapsed.container
+        .querySelector(".config-accordion-group__item")
+        ?.hasAttribute("aria-current"),
+    ).toBe(false);
+  });
+
+  it("exposes the selected Form/Raw mode through aria-pressed", () => {
+    const base = {
+      schema: {
+        type: "object",
+        properties: {
+          gateway: { type: "object", properties: { mode: { type: "string" } } },
+        },
+      },
+      formValue: { gateway: { mode: "local" } },
+      originalValue: { gateway: { mode: "local" } },
+    } as const;
+    const formMode = renderConfigView({ ...base, formMode: "form" });
+    expect(findButtonByText(formMode.container, "Form").getAttribute("aria-pressed")).toBe("true");
+    expect(findButtonByText(formMode.container, "Raw").getAttribute("aria-pressed")).toBe("false");
+
+    const rawMode = renderConfigView({
+      ...base,
+      formMode: "raw",
+      raw: "{}\n",
+      originalRaw: "{}\n",
+    });
+    expect(findButtonByText(rawMode.container, "Form").getAttribute("aria-pressed")).toBe("false");
+    expect(findButtonByText(rawMode.container, "Raw").getAttribute("aria-pressed")).toBe("true");
   });
 
   it("renders the virtual Notifications tab on Notifications settings", () => {

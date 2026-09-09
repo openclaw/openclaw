@@ -647,3 +647,4 @@ If you use tool profiles or allowlists, add `web_search`, `x_search`, or `group:
 - [Web Browser](/tools/browser) -- full browser automation for JS-heavy sites
 - [Grok Search](/tools/grok-search) -- Grok as the `web_search` provider
 - [Ollama Web Search](/tools/ollama-search) -- key-free web search through your Ollama host
+- [Moonshot AI](/providers/moonshot) -- Kimi as the `web_search` provider
