@@ -241,41 +241,181 @@ function* projectMessage(message: AgentMessage): Generator<ProjectedResponseItem
   }
 }
 
-/** Consumes complete evidence or rejects at the existing limits, never truncating its history. */
-export function projectSettledCodexMessages(messages: Iterable<AgentMessage>): JsonValue[] {
-  const items: JsonValue[] = [];
-  const calls = new Map<string, string>();
-  const results = new Set<string>();
-  let bytes = 0;
-  for (const message of messages) {
+class HistoryProjection {
+  readonly items: JsonValue[] = [];
+  readonly calls = new Map<string, string>();
+  readonly results = new Set<string>();
+  bytes = 0;
+
+  append(message: AgentMessage): void {
     for (const { item, call, result } of projectMessage(message)) {
       if (call) {
-        if (calls.has(call.id)) {
+        if (this.calls.has(call.id)) {
           throw new CodexHistoryRejection("invalid_pairing");
         }
-        calls.set(call.id, call.name);
+        this.calls.set(call.id, call.name);
       }
       if (result) {
-        if (calls.get(result.id) !== result.name || results.has(result.id)) {
+        if (this.calls.get(result.id) !== result.name || this.results.has(result.id)) {
           throw new CodexHistoryRejection("invalid_pairing");
         }
-        results.add(result.id);
+        this.results.add(result.id);
       }
-      if (items.length === MAX_RESPONSE_ITEMS) {
+      if (this.items.length === MAX_RESPONSE_ITEMS) {
         throw new CodexHistoryRejection("item_limit");
       }
-      bytes += responseItemBytes(item);
-      if (bytes > MAX_PROJECTION_BYTES) {
+      this.bytes += responseItemBytes(item);
+      if (this.bytes > MAX_PROJECTION_BYTES) {
         throw new CodexHistoryRejection("byte_limit");
       }
-      items.push(item);
+      this.items.push(item);
     }
   }
-  if (calls.size !== results.size) {
+
+  finish(): void {
+    if (this.calls.size !== this.results.size) {
+      throw new CodexHistoryRejection("incomplete_pairing");
+    }
+  }
+}
+
+/** Current-turn evidence must be complete; it is never trimmed to fit a budget. */
+export function projectSettledCodexMessages(messages: Iterable<AgentMessage>): JsonValue[] {
+  const projection = new HistoryProjection();
+  for (const message of messages) {
+    projection.append(message);
+  }
+  projection.finish();
+  if (projection.results.size === 0) {
     throw new CodexHistoryRejection("incomplete_pairing");
   }
-  if (results.size === 0) {
-    throw new CodexHistoryRejection("incomplete_pairing");
+  return projection.items;
+}
+
+const OMITTED_HISTORY: JsonValue = {
+  type: "message",
+  role: "user",
+  content: [
+    {
+      type: "input_text",
+      text:
+        "[Earlier conversation was omitted from this bounded recovery context. " +
+        "The current turn's evidence is complete. Do not infer missing earlier facts; " +
+        "state uncertainty when the available context is insufficient.]",
+    },
+  ],
+};
+
+/** Keep the nearest whole prior turns, reserving the budget for current evidence. */
+export class SettledTurnPriorContext {
+  private groups: HistoryProjection[] = [];
+  private active: HistoryProjection | undefined = new HistoryProjection();
+  private omitted = false;
+  private pending = new Map<string, string>();
+  private count = 0;
+  private bytes = 0;
+
+  append(message: AgentMessage): void {
+    if (message.role === "user" && this.pending.size === 0) {
+      this.finishGroup();
+      this.active = new HistoryProjection();
+    }
+    // Steering can introduce a user record while a tool is in flight. Track
+    // pairing even when an oversized group's payload is no longer retained.
+    if (message.role === "assistant" && Array.isArray(message.content)) {
+      for (const value of message.content) {
+        if (isRecord(value) && value.type === "toolCall") {
+          const id = requireCallId(value.id ?? value.toolCallId);
+          if (this.pending.has(id)) {
+            throw new CodexHistoryRejection("invalid_pairing");
+          }
+          this.pending.set(id, requireToolName(value.name ?? value.toolName));
+        }
+      }
+    } else if (message.role === "toolResult") {
+      const id = requireCallId(message.toolCallId);
+      if (this.pending.get(id) !== requireToolName(message.toolName)) {
+        throw new CodexHistoryRejection("invalid_pairing");
+      }
+      this.pending.delete(id);
+    }
+    if (!this.active) {
+      return;
+    }
+    try {
+      this.active.append(message);
+    } catch (error) {
+      if (
+        !(error instanceof CodexHistoryRejection) ||
+        !["item_limit", "byte_limit", "field_limit"].includes(error.reason)
+      ) {
+        throw error;
+      }
+      // An oversized prior turn is omitted as a whole, not replayed as a partial
+      // tool exchange. Older groups are no longer a contiguous context suffix.
+      this.groups = [];
+      this.count = 0;
+      this.bytes = 0;
+      this.active = undefined;
+      this.omitted = true;
+    }
   }
-  return items;
+
+  private finishGroup(): void {
+    if (!this.active) {
+      return;
+    }
+    this.active.finish();
+    if (this.active.items.length) {
+      this.groups.push(this.active);
+      this.count += this.active.items.length;
+      this.bytes += this.active.bytes;
+      this.trim(0, 0);
+    }
+    this.active = undefined;
+  }
+
+  private trim(currentCount: number, currentBytes: number): void {
+    while (
+      this.count + currentCount + (this.omitted ? 1 : 0) > MAX_RESPONSE_ITEMS ||
+      this.bytes + currentBytes + (this.omitted ? responseItemBytes(OMITTED_HISTORY) : 0) >
+        MAX_PROJECTION_BYTES
+    ) {
+      const oldest = this.groups.shift();
+      if (!oldest) {
+        throw new CodexHistoryRejection(
+          currentCount + 1 > MAX_RESPONSE_ITEMS ? "item_limit" : "byte_limit",
+        );
+      }
+      this.count -= oldest.items.length;
+      this.bytes -= oldest.bytes;
+      this.omitted = true;
+    }
+  }
+
+  prependTo(current: JsonValue[]): JsonValue[] {
+    if (this.pending.size) {
+      throw new CodexHistoryRejection("incomplete_pairing");
+    }
+    this.finishGroup();
+    this.trim(
+      current.length,
+      current.reduce<number>((bytes, item) => bytes + responseItemBytes(item), 0),
+    );
+    // Preserve the existing cross-turn call-id uniqueness check for retained context.
+    const calls = new Set<string>();
+    for (const item of [...this.groups.flatMap((group) => group.items), ...current]) {
+      if (isRecord(item) && item.type === "function_call" && typeof item.call_id === "string") {
+        if (calls.has(item.call_id)) {
+          throw new CodexHistoryRejection("invalid_pairing");
+        }
+        calls.add(item.call_id);
+      }
+    }
+    return [
+      ...(this.omitted ? [OMITTED_HISTORY] : []),
+      ...this.groups.flatMap((group) => group.items),
+      ...current,
+    ];
+  }
 }
