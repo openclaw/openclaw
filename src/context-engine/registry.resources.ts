@@ -13,7 +13,6 @@ import {
 } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import type { ResolvedContextEngineRef } from "./registry.js";
 import type { ContextEngine } from "./types.js";
 
 // Adoption copies entries by identity; the copied view's primary source is not their owner.
@@ -180,11 +179,11 @@ export function retainLogicalTurnContextEngineSources(
   }
 }
 
-export async function resolveContextEngineFactory(
+export async function resolveContextEngineFactory<T extends { engine: ContextEngine }>(
   source: ContextEngineFactoryResources | undefined,
   owners: Map<ContextEngine, ContextEngineFactoryResources[]>,
-  create: () => Promise<ResolvedContextEngineRef>,
-): Promise<ResolvedContextEngineRef> {
+  create: () => Promise<T>,
+): Promise<T> {
   const ref = await (source ? source.run(create) : create());
   if (source) {
     const retained = owners.get(ref.engine) ?? [];
