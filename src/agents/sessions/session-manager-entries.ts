@@ -186,6 +186,13 @@ export class SessionManagerEntries extends SessionManagerPersistence {
         this.logicalParentsById.set(canonicalEntry.id, this.leafId);
       }
       this.fileEntries.push(canonicalEntry);
+      // Reloaded views already include the committed boundary; count only local adoption.
+      if (
+        this.persistedBoundaryCount !== undefined &&
+        (canonicalEntry.type === "compaction" || canonicalEntry.type === "reset")
+      ) {
+        this.persistedBoundaryCount += 1;
+      }
       this.byId.set(canonicalEntry.id, canonicalEntry);
       this.appendParentId = canonicalEntry.id;
       if (isSessionTranscriptSideAppendEntry(canonicalEntry)) {
@@ -352,9 +359,6 @@ export class SessionManagerEntries extends SessionManagerPersistence {
     this.appendEntry(entry, {
       invalidateSerializedPrefixCache: fromHook === true || details !== undefined,
     });
-    if (this.persistedBoundaryCount !== undefined) {
-      this.persistedBoundaryCount += 1;
-    }
     return entry.id;
   }
 
@@ -368,9 +372,6 @@ export class SessionManagerEntries extends SessionManagerPersistence {
       ...(firstKeptEntryId ? { firstKeptEntryId } : {}),
     };
     this.appendEntry(entry);
-    if (this.persistedBoundaryCount !== undefined) {
-      this.persistedBoundaryCount += 1;
-    }
     return entry.id;
   }
 

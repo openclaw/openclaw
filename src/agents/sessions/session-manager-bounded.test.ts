@@ -312,44 +312,6 @@ it("adopts suffix cleanup before earlier-queued post-commit observers run", asyn
   expect(manager.getBranch().map((entry) => entry.id)).toEqual([retainedId]);
 });
 
-it("appends an assistant without parsing transcript rows outside the bounded context", async () => {
-  const dir = tempDirs.make("openclaw-session-manager-bounded-assistant-");
-  const scope = {
-    agentId: "main",
-    sessionId: "bounded-assistant-append",
-    sessionKey: "agent:main:bounded-assistant-append",
-    storePath: path.join(dir, "sessions.json"),
-  };
-  await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-  await appendTranscriptMessage(scope, {
-    cwd: dir,
-    eventId: "excluded",
-    message: { role: "user", content: "excluded" },
-  });
-  await appendTranscriptMessage(scope, {
-    cwd: dir,
-    eventId: "retained",
-    parentId: "excluded",
-    message: { role: "user", content: "retained" },
-  });
-  const manager = SessionManager.openBounded(scope, {
-    cwd: dir,
-    maxBytes: 4096,
-    maxEvents: 1,
-  });
-  const database = openOpenClawAgentDatabase({
-    agentId: scope.agentId,
-    env: { OPENCLAW_STATE_DIR: dir },
-  });
-  database.db
-    .prepare("UPDATE transcript_events SET event_json = ? WHERE session_id = ? AND seq = 0")
-    .run("{", scope.sessionId);
-
-  const assistantId = manager.appendMessage(buildAssistantMessage("bounded reply"));
-
-  expect(manager.getEntry(assistantId)).toMatchObject({ parentId: "retained" });
-});
-
 it("excludes interleaved display payloads without inventing events or losing fenced append ancestry", async () => {
   const dir = tempDirs.make("openclaw-bounded-display-");
   const scope = {

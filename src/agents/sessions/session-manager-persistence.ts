@@ -4,6 +4,7 @@ import {
   loadTranscriptSuffixEventsBoundedSync,
   readPreviousIndexedTranscriptEventSync,
   readTranscriptIdentityByEventId,
+  readTranscriptMutationAtSync,
   replaceTranscriptSuffixEventsSync,
   type TranscriptEntryAnchor,
 } from "../../config/sessions/session-accessor.js";
@@ -11,7 +12,6 @@ import {
   resolveSqliteTranscriptReadScope,
   toDatabaseOptions,
 } from "../../config/sessions/session-accessor.sqlite-scope.js";
-import { readTranscriptMutationStateInTransaction } from "../../config/sessions/session-accessor.sqlite-transcript-state.js";
 import {
   appendTranscriptEventSnapshotSync,
   appendTranscriptMessageSnapshotSync,
@@ -138,14 +138,9 @@ export class SessionManagerPersistence extends SessionManagerCore {
     // Fence only an actual mutation. Defensive cleanup remains a no-op when its target is absent,
     // even if another writer advanced the durable transcript after this manager was opened.
     if (this.persistenceTarget && this.transcriptMutationAt !== undefined) {
-      const resolved = resolveSqliteTranscriptReadScope(this.persistenceTarget);
-      const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
-      if (
-        readTranscriptMutationStateInTransaction(database, resolved.sessionId).updatedAt !==
-        this.transcriptMutationAt
-      ) {
+      if (readTranscriptMutationAtSync(this.persistenceTarget) !== this.transcriptMutationAt) {
         throw new Error(
-          `SQLite transcript changed while preparing suffix removal for ${resolved.sessionId}`,
+          `SQLite transcript changed while preparing suffix removal for ${this.persistenceTarget.sessionId}`,
         );
       }
     }
@@ -263,15 +258,6 @@ export class SessionManagerPersistence extends SessionManagerCore {
     prepared.leafId = this.leafId;
     prepared.appendParentId = this.appendParentId;
     prepared.appendMode = this.appendMode;
-    let preservedStart = prepared.fileEntries.length;
-    while (preservedStart > 1) {
-      const entry = prepared.fileEntries[preservedStart - 1];
-      if (!isIndexedSessionEntry(entry) || !options?.preserveTrailing?.(entry)) {
-        break;
-      }
-      preservedStart -= 1;
-    }
-
     const removableIndexes: number[] = [];
     for (let index = 1; index < prepared.fileEntries.length; index += 1) {
       const entry = prepared.fileEntries[index];
@@ -490,21 +476,19 @@ export class SessionManagerPersistence extends SessionManagerCore {
       if (!header || header.type !== "session") {
         throw new Error("Session transcript header was not persisted");
       }
-      let committedMutationAt: number | null | undefined;
       this.transcriptVersion = requireTranscriptEventAppend(
-        appendTranscriptEventSnapshotSync(scope, header, {
-          ...(options?.expectedMutationAt !== undefined
+        appendTranscriptEventSnapshotSync(
+          scope,
+          header,
+          options?.expectedMutationAt !== undefined
             ? { expectedMutationAt: options.expectedMutationAt }
             : this.transcriptMutationAt !== undefined
               ? { expectedMutationAt: this.transcriptMutationAt }
-              : {}),
-          captureMutationAtInTransaction: (mutationAt) => {
-            committedMutationAt = mutationAt;
-          },
-        }),
+              : {},
+        ),
         "Session transcript header was not persisted",
       );
-      this.transcriptMutationAt = committedMutationAt;
+      this.transcriptMutationAt = this.transcriptVersion.updatedAt;
       this.persistenceHeaderPending = false;
     }
     const expectedMutationAt = persistedHeader
@@ -514,24 +498,21 @@ export class SessionManagerPersistence extends SessionManagerCore {
         : this.transcriptMutationAt;
     const leafEntry = parseOpaqueLeafEntry(entry);
     if (leafEntry) {
-      let committedMutationAt: number | null | undefined;
       this.transcriptVersion = requireTranscriptEventAppend(
-        appendTranscriptEventSnapshotSync(scope, entry, {
-          ...(expectedMutationAt !== undefined ? { expectedMutationAt } : {}),
-          captureMutationAtInTransaction: (mutationAt) => {
-            committedMutationAt = mutationAt;
-          },
-        }),
+        appendTranscriptEventSnapshotSync(
+          scope,
+          entry,
+          expectedMutationAt !== undefined ? { expectedMutationAt } : {},
+        ),
         `Session transcript leaf control was not persisted: ${leafEntry.id}`,
       );
-      this.transcriptMutationAt = committedMutationAt;
+      this.transcriptMutationAt = this.transcriptVersion.updatedAt;
       return undefined;
     }
     if (!isIndexedSessionEntry(entry)) {
       return undefined;
     }
     if (entry.type !== "message") {
-      let committedMutationAt: number | null | undefined;
       let effectiveParentId = entry.parentId;
       const loadedVersion = this.transcriptVersion;
       const outcome = appendTranscriptEventSnapshotSync(scope, entry, {
@@ -539,9 +520,6 @@ export class SessionManagerPersistence extends SessionManagerCore {
           ? { appendIntent: options.appendIntent }
           : {}),
         ...(expectedMutationAt !== undefined ? { expectedMutationAt } : {}),
-        captureMutationAtInTransaction: (mutationAt) => {
-          committedMutationAt = mutationAt;
-        },
         captureEffectiveParentIdInTransaction: (parentId) => {
           effectiveParentId = parentId;
         },
@@ -550,7 +528,7 @@ export class SessionManagerPersistence extends SessionManagerCore {
         outcome,
         `Session transcript entry was not persisted: ${entry.id}`,
       );
-      this.transcriptMutationAt = committedMutationAt;
+      this.transcriptMutationAt = this.transcriptVersion.updatedAt;
       const before = outcome.ok ? outcome.value.before : undefined;
       const reloadAfterAppend =
         loadedVersion !== undefined &&

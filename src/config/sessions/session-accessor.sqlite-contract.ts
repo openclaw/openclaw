@@ -54,8 +54,6 @@ export type TranscriptEventAppendOptions = {
   beforeCommitInTransaction?: () => void;
   /** Reject the append when the transcript changed since the caller loaded it. */
   expectedMutationAt?: number | null;
-  /** Captures the mutation fence produced by a successful synchronous append. */
-  captureMutationAtInTransaction?: (mutationAt: number | null) => void;
   /** Captures the parent selected by an active-branch event append. */
   captureEffectiveParentIdInTransaction?: (parentId: string | null) => void;
 };

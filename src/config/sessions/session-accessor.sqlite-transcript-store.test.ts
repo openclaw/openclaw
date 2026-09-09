@@ -111,7 +111,6 @@ async function withRewriteFixture(
     rewrite: (event: unknown, seq?: number) => void;
     scope: { agentId: string; sessionId: string; sessionKey: string; env: NodeJS.ProcessEnv };
   }) => void | Promise<void>,
-  events: readonly unknown[] = rewriteEvents,
 ) {
   await withOpenClawTestState({ label: "exact-rewrite" }, async (state) => {
     const scope = {
@@ -123,7 +122,7 @@ async function withRewriteFixture(
     const owner = openOpenClawAgentDatabase(scope);
     const { db } = owner;
     runOpenClawAgentWriteTransaction((database) => {
-      appendTranscriptEventsInTransaction(database, scope, events);
+      appendTranscriptEventsInTransaction(database, scope, rewriteEvents);
     }, scope);
     const snapshot = () => ({
       raw: db

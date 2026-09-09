@@ -90,7 +90,7 @@ describe("sessions_yield transcript handoff", () => {
           });
           // Reopen exactly as the next queued attempt does, with no unrelated await.
           const reopened = SessionManager.open(target, state.workspaceDir, {
-            maxBytes: 8 * 1024 * 1024,
+            maxBytes: retainedBytes > 0 ? 8 * 1024 * 1024 : 4096,
             maxEvents: 20,
           });
           const messages = reopened.buildSessionContext().messages;

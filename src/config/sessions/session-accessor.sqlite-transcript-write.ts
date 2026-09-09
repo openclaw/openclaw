@@ -34,7 +34,7 @@ import {
   resolveSqliteTranscriptScope,
   runExclusiveSqliteSessionWrite,
   toDatabaseOptions,
-  type ResolvedTranscriptScope,
+  transcriptWriteScopeIsCurrent,
 } from "./session-accessor.sqlite-scope.js";
 import { appendTranscriptMessageInTransaction } from "./session-accessor.sqlite-transcript-message-append.js";
 import { readTranscriptMirrorFacts } from "./session-accessor.sqlite-transcript-mirror.js";
@@ -110,25 +110,6 @@ type SqliteTranscriptWriteLockContext = {
 type SqliteTranscriptSnapshotState =
   | { kind: "current"; rows: SqliteTranscriptSnapshotRow[] }
   | { kind: "stale" };
-
-// Verify that a synchronous transcript mutation still owns the current session lifecycle.
-function transcriptWriteScopeIsCurrent(
-  fresh: ReturnType<typeof readSessionEntryRow>,
-  resolved: ResolvedTranscriptScope,
-  scope: SessionTranscriptWriteScope,
-): boolean {
-  if (!fresh || fresh.entry.sessionId !== resolved.sessionId) {
-    return false;
-  }
-  // SAFETY: InternalSessionEntry is the persisted superset that owns activeWriterRunId.
-  const entry = fresh.entry as InternalSessionEntry;
-  return !(
-    (scope.expectedLifecycleRevision !== undefined &&
-      entry.lifecycleRevision !== scope.expectedLifecycleRevision) ||
-    (scope.expectedWriterRunId !== undefined &&
-      entry.activeWriterRunId !== scope.expectedWriterRunId)
-  );
-}
 
 export async function replaceTranscriptEvents(
   scope: SessionTranscriptAccessScope,
@@ -253,7 +234,7 @@ export function replaceTranscriptEventsSync(
   runOpenClawAgentWriteTransaction((database) => {
     assertOwnedTranscriptWriteCommit(fencedScope);
     const fresh = readSessionEntryRow(database, resolved.sessionKey);
-    if (!transcriptWriteScopeIsCurrent(fresh, resolved, fencedScope)) {
+    if (!transcriptWriteScopeIsCurrent(fresh?.entry, resolved.sessionId, fencedScope)) {
       return;
     }
     replaceSqliteTranscriptEventsInTransaction(database, resolved, events);
@@ -369,7 +350,7 @@ export function appendTranscriptEventSnapshotSync(
   options: TranscriptEventAppendOptions = {},
 ): Result<TranscriptWriteSnapshot<boolean>, TranscriptAppendRefusal> {
   assertNonMessageTranscriptEvent(event);
-  const snapshot = runTranscriptWriteSnapshotSync(
+  return runTranscriptWriteSnapshotSync(
     scope,
     (database, resolved) => {
       const resolvedEvent = resolveTranscriptEventAppendParent(
@@ -395,10 +376,6 @@ export function appendTranscriptEventSnapshotSync(
     options.beforeCommitInTransaction,
     options.expectedMutationAt,
   );
-  if (snapshot.ok && snapshot.value.result) {
-    options.captureMutationAtInTransaction?.(snapshot.value.after.updatedAt);
-  }
-  return snapshot;
 }
 
 function runTranscriptWriteSnapshotSync<T>(
@@ -545,13 +522,7 @@ export function appendTranscriptMessageSync<TMessage>(
   options: TranscriptMessageAppendOptions<TMessage>,
 ): Result<TranscriptMessageAppendResult<TMessage> | undefined, TranscriptAppendRefusal> {
   const snapshot = appendTranscriptMessageSnapshotSync(scope, options);
-  if (!snapshot.ok) {
-    return snapshot;
-  }
-  const value = snapshot.value.result;
-  return ok(
-    value?.appended ? { ...value, transcriptMutationAt: snapshot.value.after.updatedAt } : value,
-  );
+  return snapshot.ok ? ok(snapshot.value.result) : snapshot;
 }
 
 export function appendTranscriptMessageSnapshotSync<TMessage>(

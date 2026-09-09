@@ -134,31 +134,6 @@ export function inspectTranscriptEventsSync(scope: SessionTranscriptReadScope): 
   );
 }
 
-/** Reads the runtime-visible transcript and mutation snapshot under the current admission fence. */
-export function inspectRuntimeTranscriptEventsSync(scope: SessionTranscriptReadScope): {
-  events: TranscriptEvent[];
-  snapshot: SessionStateDeleteSnapshot;
-} {
-  const resolved = resolveSqliteTranscriptReadScope(scope);
-  const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
-  return runSqliteDeferredTransactionSync(
-    database.db,
-    () => {
-      const fence = resolveSqliteSessionTranscriptReadFence({ database, ...resolved });
-      return {
-        events: loadTranscriptEventsFromDatabase(database, resolved.sessionId, {
-          beforeEventSeq: fence?.beforeRawSeq,
-        }),
-        snapshot: readSessionStateDeleteSnapshot(database.db, resolved.sessionId),
-      };
-    },
-    {
-      databaseLabel: database.path,
-      operationLabel: "session transcript runtime inspection",
-    },
-  );
-}
-
 /** Reads only the current transcript mutation fence without parsing transcript rows. */
 export function readTranscriptMutationAtSync(scope: SessionTranscriptReadScope): number | null {
   const resolved = resolveSqliteTranscriptReadScope(scope);

@@ -406,27 +406,6 @@ export function replaceSessionTranscriptIndexSuffixInTransaction(
 ): void {
   const kysely = getIndexKysely(db);
   const incremental = params.retainedActiveCount !== undefined;
-  const currentRows = executeSqliteQuerySync(
-    db,
-    kysely
-      .selectFrom("session_transcript_active_events")
-      .select(["active_position", "context_eligible", "event_seq", "message_position"])
-      .where("session_id", "=", sessionId)
-      .$if(incremental, (query) =>
-        query.where("active_position", ">=", params.retainedActiveCount!),
-      )
-      .$if(!incremental, (query) => query.where("event_seq", "<", params.unchangedBeforeSeq))
-      .orderBy("active_position", "asc"),
-  ).rows;
-  const sameRow = (
-    current: (typeof currentRows)[number] | undefined,
-    expected: SessionTranscriptIndexProjectionRow | undefined,
-  ): boolean =>
-    current?.active_position === expected?.activePosition &&
-    current?.context_eligible === expected?.contextEligible &&
-    current?.event_seq === expected?.eventSeq &&
-    current?.message_position === expected?.messagePosition;
-
   let retainedCount: number;
   if (incremental) {
     retainedCount = params.retainedActiveCount!;
@@ -435,6 +414,23 @@ export function replaceSessionTranscriptIndexSuffixInTransaction(
     if (!previous) {
       throw new Error(`Missing previous transcript projection: ${sessionId}`);
     }
+    const currentRows = executeSqliteQuerySync(
+      db,
+      kysely
+        .selectFrom("session_transcript_active_events")
+        .select(["active_position", "context_eligible", "event_seq", "message_position"])
+        .where("session_id", "=", sessionId)
+        .where("event_seq", "<", params.unchangedBeforeSeq)
+        .orderBy("active_position", "asc"),
+    ).rows;
+    const sameRow = (
+      current: (typeof currentRows)[number] | undefined,
+      expected: SessionTranscriptIndexProjectionRow | undefined,
+    ): boolean =>
+      current?.active_position === expected?.activePosition &&
+      current?.context_eligible === expected?.contextEligible &&
+      current?.event_seq === expected?.eventSeq &&
+      current?.message_position === expected?.messagePosition;
     const expectedCurrentRows = previous.activeRows.filter(
       (row) => row.eventSeq < params.unchangedBeforeSeq,
     );

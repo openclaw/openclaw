@@ -1,6 +1,7 @@
 // Focused persistence compatibility tests kept separate from the session tree suite.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { openFileBackedSessionManagerForTest } from "../../../test/helpers/session-manager-file-fixture.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
@@ -12,6 +13,7 @@ import {
 import {
   appendTranscriptMessage,
   loadTranscriptEvents,
+  loadTranscriptEventsSync,
   readSessionTranscriptWatermark,
   replaceTranscriptEventsSync,
   resolveSessionTranscriptDatabasePath,
@@ -22,6 +24,7 @@ import { waitForSessionTranscriptIndexReconcile } from "../../config/sessions/se
 import { withOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
+import { parseOpaqueLeafEntry } from "./session-manager-codec.js";
 import { CURRENT_SESSION_VERSION, SessionManager } from "./session-manager.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -605,11 +608,16 @@ describe("SessionManager persistence compatibility", () => {
       };
       await upsertSessionEntryCore(scope, initialEntry);
       const seed = SessionManager.open(scope, dir);
-      seed.appendMessage({ role: "user", content: "earlier history", timestamp: 1 });
-      seed.appendMessage({ role: "user", content: "question", timestamp: 2 });
+      const earlierId = seed.appendMessage({
+        role: "user",
+        content: "earlier history",
+        timestamp: 1,
+      });
+      const questionId = seed.appendMessage({ role: "user", content: "question", timestamp: 2 });
       const temporaryId = seed.appendMessage(buildAssistantMessage("temporary error"));
-      seed.appendCustomEntry("preserved-state", { retained: true });
-      seed.appendLabelChange(temporaryId, "temporary label");
+      const metadataId = seed.appendCustomEntry("preserved-state", { retained: true });
+      const labelId = seed.appendLabelChange(temporaryId, "temporary label");
+      const originalEvents = loadTranscriptEventsSync(scope);
       const manager = SessionManager.open(
         scope,
         dir,
@@ -680,21 +688,46 @@ describe("SessionManager persistence compatibility", () => {
       await expect(rewrite()).resolves.toBe(1);
       expect(manager.getEntry(temporaryId)).toBeUndefined();
       expect(manager.getLabel(temporaryId)).toBeUndefined();
-      if (failure === "bounded-sqlite") {
-        await waitForSessionTranscriptIndexReconcile({
-          agentId: scope.agentId,
-          path: resolveSessionTranscriptDatabasePath(scope),
-        });
-      }
+      // The next reader must work immediately, without waiting for a projection rebuild.
       const reopened =
         failure === "bounded-sqlite"
           ? SessionManager.open(scope, dir, { maxEvents: 3, maxBytes: 4096 })
           : SessionManager.open(scope, dir);
       if (failure === "bounded-sqlite") {
-        expect(reopened.getEntry(temporaryId)).toBeUndefined();
-        expect(reopened.getLabel(temporaryId)).toBeUndefined();
-        expect(manager.getEntry(temporaryId)).toBeUndefined();
-        expect(manager.getLabel(temporaryId)).toBeUndefined();
+        const expectedRetained = structuredClone(
+          originalEvents.filter(
+            (event) => !isRecord(event) || (event.id !== temporaryId && event.id !== labelId),
+          ),
+        );
+        for (const event of expectedRetained) {
+          if (isRecord(event) && event.id === metadataId) {
+            event.parentId = questionId;
+          }
+        }
+        const durable = loadTranscriptEventsSync(scope);
+        const controls = durable.filter((event) => parseOpaqueLeafEntry(event));
+        expect(controls).toHaveLength(1);
+        const control = parseOpaqueLeafEntry(controls[0]);
+        expect(control).toMatchObject({ parentId: metadataId, targetId: questionId });
+        expect(control?.appendParentId ?? control?.targetId).toBe(questionId);
+        expect(durable.filter((event) => !parseOpaqueLeafEntry(event))).toEqual(expectedRetained);
+        const full = SessionManager.open(scope, dir);
+        expect(full.getBranch().map((entry) => entry.id)).toEqual([earlierId, questionId]);
+        expect(reopened.getBranch()).toEqual(full.getBranch());
+        expect(reopened.buildSessionContext()).toEqual(full.buildSessionContext());
+        // The bounded public view normalizes an omitted parent; storage must retain its real ID.
+        expect(manager.getEntries()).toEqual(
+          expectedRetained.flatMap((event) =>
+            isRecord(event) && event.id === metadataId ? [{ ...event, parentId: null }] : [],
+          ),
+        );
+        expect(
+          manager
+            .getPersistedEntries()
+            .filter((event) => isRecord(event) && event.id === metadataId),
+        ).toEqual(expectedRetained.filter((event) => isRecord(event) && event.id === metadataId));
+        expect(manager.getLeafId()).toBe(questionId);
+        expect(manager.getAppendParentId()).toBe(questionId);
       } else {
         expect(reopened.getPersistedEntries()).toEqual(manager.getPersistedEntries());
       }

@@ -35,7 +35,6 @@ import {
   SYNC_REBUILD_MAX_ROWS,
   type SessionTranscriptIndexProjection,
 } from "./session-transcript-index.js";
-import { hasTranscriptMessage } from "./session-transcript-projection-rebuild.js";
 import {
   projectTranscriptRetainedDataSql,
   stageRetainedTranscriptData,
@@ -297,7 +296,7 @@ function prepareIncrementalTranscriptSuffixMutation(
       startSeq,
     });
   }
-  const retainedActiveCount = anchor ? anchor.active_position + 1 : 0;
+  const retainedActiveCount = anchor.active_position + 1;
   const activeSuffixRows = executeSqliteQuerySync(
     database.db,
     db
@@ -335,18 +334,15 @@ function prepareIncrementalTranscriptSuffixMutation(
     retainedMessagePosition === null || retainedMessagePosition === undefined
       ? 0
       : retainedMessagePosition + 1;
-  const syntheticAnchor = anchorId ? { type: "custom", id: anchorId, parentId: null } : undefined;
-  const projectionEvents = syntheticAnchor ? [syntheticAnchor, ...next] : [...next];
-  const projectionSeqs = projectionEvents.map((_event, index) =>
-    syntheticAnchor && index === 0 ? startSeq - 1 : startSeq + index - (syntheticAnchor ? 1 : 0),
-  );
-  const projectionCreatedAt = syntheticAnchor ? [Date.now(), ...nextCreatedAt] : nextCreatedAt;
+  const syntheticAnchor = { type: "custom", id: anchorId, parentId: null };
+  const projectionEvents = [syntheticAnchor, ...next];
+  const projectionSeqs = projectionEvents.map((_event, index) => startSeq + index - 1);
+  const projectionCreatedAt = [Date.now(), ...nextCreatedAt];
   const relativeProjection = prepareTranscriptIndexProjection(
     projectionEvents,
     projectionSeqs,
     projectionCreatedAt,
   );
-  const syntheticMessageOffset = syntheticAnchor && hasTranscriptMessage(syntheticAnchor) ? 1 : 0;
   const activeRows: SessionTranscriptIndexProjection["activeRows"] = [];
   for (const row of relativeProjection.activeRows) {
     if (row.eventSeq < startSeq) {
@@ -356,9 +352,7 @@ function prepareIncrementalTranscriptSuffixMutation(
       ...row,
       activePosition: retainedActiveCount + activeRows.length,
       messagePosition:
-        row.messagePosition === null
-          ? null
-          : retainedMessageCount + row.messagePosition - syntheticMessageOffset,
+        row.messagePosition === null ? null : retainedMessageCount + row.messagePosition,
     });
   }
   const addedMessages = activeRows.filter((row) => row.messagePosition !== null).length;

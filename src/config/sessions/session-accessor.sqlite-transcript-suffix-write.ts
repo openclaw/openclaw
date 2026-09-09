@@ -11,8 +11,8 @@ import { readSessionEntryRow } from "./session-accessor.sqlite-entry-store.js";
 import {
   resolveSqliteTranscriptScope,
   toDatabaseOptions,
+  transcriptWriteScopeIsCurrent,
 } from "./session-accessor.sqlite-scope.js";
-import type { ResolvedTranscriptScope } from "./session-accessor.sqlite-scope.js";
 import {
   readTranscriptContextVersionInTransaction,
   type SessionTranscriptContextVersion,
@@ -26,25 +26,6 @@ import {
   SessionTranscriptWriterClaimReboundError,
   withOwnedSessionTranscriptWriterFence,
 } from "./transcript-write-context.js";
-import type { InternalSessionEntry } from "./types.js";
-
-function transcriptWriteScopeIsCurrent(
-  fresh: ReturnType<typeof readSessionEntryRow>,
-  resolved: ResolvedTranscriptScope,
-  scope: SessionTranscriptWriteScope,
-): boolean {
-  if (!fresh || fresh.entry.sessionId !== resolved.sessionId) {
-    return false;
-  }
-  // SAFETY: InternalSessionEntry is the persisted superset that owns activeWriterRunId.
-  const entry = fresh.entry as InternalSessionEntry;
-  return !(
-    (scope.expectedLifecycleRevision !== undefined &&
-      entry.lifecycleRevision !== scope.expectedLifecycleRevision) ||
-    (scope.expectedWriterRunId !== undefined &&
-      entry.activeWriterRunId !== scope.expectedWriterRunId)
-  );
-}
 
 /** Replaces an exact transcript suffix synchronously and rotates its cursor generation. */
 export function replaceTranscriptSuffixEventsSync(
@@ -74,7 +55,7 @@ export function replaceTranscriptSuffixEventsSync(
   runOpenClawAgentWriteTransaction((database) => {
     assertOwnedTranscriptWriteCommit(fencedScope);
     const fresh = readSessionEntryRow(database, resolved.sessionKey);
-    if (!transcriptWriteScopeIsCurrent(fresh, resolved, fencedScope)) {
+    if (!transcriptWriteScopeIsCurrent(fresh?.entry, resolved.sessionId, fencedScope)) {
       return;
     }
     replaceSqliteTranscriptSuffixInTransaction(database, resolved, plan);

@@ -6,8 +6,8 @@ import {
   readSessionTranscriptBoundedActiveContextCore,
   type SessionTranscriptBoundedActiveContext,
 } from "../../config/sessions/session-accessor.sqlite-active-context.js";
-import type { SessionTranscriptContextVersion } from "../../config/sessions/session-accessor.sqlite-model-context.js";
 import { loadTranscriptReadSnapshotSync } from "../../config/sessions/session-accessor.sqlite-read.js";
+import type { SessionTranscriptContextVersion } from "../../config/sessions/session-accessor.sqlite-transcript-state.js";
 import { assertCurrentSessionTranscriptHeader } from "../../config/sessions/session-entry-codec.js";
 import { SessionEntryNavigation } from "../../config/sessions/session-entry-navigation.js";
 import { CURRENT_SESSION_VERSION } from "../../config/sessions/version.js";

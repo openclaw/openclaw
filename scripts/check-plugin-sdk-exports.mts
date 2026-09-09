@@ -89,6 +89,15 @@ import { createPluginRuntimeStore, type PluginRuntime } from "openclaw/plugin-sd
 import type { buildModelsProviderData, buildPreparedModelsProviderData, ModelsProviderData } from "openclaw/plugin-sdk/models-provider-runtime";
 import type { buildModelsProviderData as buildCommandAuthModelsProviderData } from "openclaw/plugin-sdk/command-auth";
 import { z } from "zod";
+import { SessionManager, type SessionEntry } from "openclaw/plugin-sdk/agent-sessions";
+
+// Released v2026.9.3 plugins can persist entries through the public session manager.
+declare const sessionManager: SessionManager;
+declare const sessionEntry: SessionEntry;
+sessionManager.persist(sessionEntry);
+sessionManager.persist(sessionEntry, {});
+// @ts-expect-error Persist still requires a complete session entry.
+sessionManager.persist({});
 
 // Stable v2026.7.1-2 consumers construct these results and supply typed adapters.
 const legacyModelsData = {

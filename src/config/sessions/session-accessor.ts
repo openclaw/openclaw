@@ -248,7 +248,6 @@ export {
   appendTranscriptMessageSync,
   findTranscriptEvent,
   hasSessionTranscriptMessage,
-  inspectRuntimeTranscriptEventsSync,
   inspectTranscriptEventsSync,
   loadTranscriptEventRowsAfterSeqSync,
   loadTranscriptEvents,
