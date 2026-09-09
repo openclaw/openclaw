@@ -78,6 +78,7 @@ import {
   updateStoredChatComposerQueueItem,
 } from "./composer-persistence.ts";
 import {
+  getChatRunOwner,
   getChatSessionProjection,
   publishChatSessionProjection,
   reduceChatSessionProjection,
@@ -5993,6 +5994,7 @@ describe("handleSendChat", () => {
     "branch-switch",
     "same-scope-snapshot",
     "same-active-run-leaf",
+    "first-terminal-before-active-history",
     "reset-before-active-history",
     "physical-session-before-active-history",
     "topology-before-active-history",
@@ -6000,12 +6002,15 @@ describe("handleSendChat", () => {
     const { attachments, dataUrls } = createDeliveryAttachmentBatch();
     const sessionKey = "agent:main:visible";
     const physicalSessionId = "attachment-history-session";
+    const firstTerminalBeforeHistory = handoff === "first-terminal-before-active-history";
     const historyAdvances =
       handoff === "same-active-run-leaf" ||
+      firstTerminalBeforeHistory ||
       handoff === "reset-before-active-history" ||
       handoff === "physical-session-before-active-history" ||
       handoff === "topology-before-active-history";
-    const historyReplacesLifetime = historyAdvances && handoff !== "same-active-run-leaf";
+    const historyReplacesLifetime =
+      historyAdvances && handoff !== "same-active-run-leaf" && !firstTerminalBeforeHistory;
     const history = createDeferred<unknown>();
     let holdHistory = false;
     let consumedRunId: string | undefined;
@@ -6108,17 +6113,22 @@ describe("handleSendChat", () => {
         if (historyAdvances) {
           visible.currentSessionId = physicalSessionId;
         }
-        visible.chatDisplayedLeafEntryId = "leaf-before";
+        visible.chatDisplayedLeafEntryId = firstTerminalBeforeHistory ? null : "leaf-before";
         reduceChatSessionProjection(visible, {
           type: "snapshotLoaded",
           messages: visible.chatMessages,
         });
-        adoptStartedChatRun(
-          visible,
-          expectDefined(item.sendRunId, "terminal attachment run"),
-          Date.now(),
-        );
-        expect(visible.chatRunId).toBe(item.sendRunId);
+        if (firstTerminalBeforeHistory) {
+          expect(visible.chatRunId).toBeNull();
+          expect(getChatRunOwner(visible)).toBeUndefined();
+        } else {
+          adoptStartedChatRun(
+            visible,
+            expectDefined(item.sendRunId, "terminal attachment run"),
+            Date.now(),
+          );
+          expect(visible.chatRunId).toBe(item.sendRunId);
+        }
       }
       const removePayloads = outboxPayloadStore.removeOutboxPayloads;
       const cleanup = vi

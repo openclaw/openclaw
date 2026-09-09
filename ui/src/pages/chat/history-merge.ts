@@ -51,26 +51,23 @@ function readChatProjectionOwner(owner: object): ChatProjectionOwner {
 
 export function captureChatProjectionScope(owner: object, runId?: string): () => boolean {
   const captured = readChatProjectionOwner(owner);
+  const scope = captured.scope;
+  const lifetime = captured.lifetime;
   const sessionId = captured.projection?.scope.sessionId;
-  const ownedRunId =
-    runId &&
-    captured.runId === runId &&
-    Object.hasOwn(captured.runs, runId) &&
-    captured.runs[runId]?.scope === captured.scope
-      ? runId
-      : undefined;
+  // History can establish the recovered run's display ownership while its input loads.
+  const candidateRunId = runId && !chatRunBelongsToRetiredScope(owner, runId) ? runId : undefined;
   return () => {
     const current = readChatProjectionOwner(owner);
     return (
-      current.scope === captured.scope ||
+      current.scope === scope ||
       Boolean(
-        ownedRunId &&
+        candidateRunId &&
         sessionId &&
         current.projection?.scope.sessionId === sessionId &&
-        current.lifetime === captured.lifetime &&
-        current.runId === ownedRunId &&
-        Object.hasOwn(current.runs, ownedRunId) &&
-        current.runs[ownedRunId]?.scope === current.scope,
+        current.lifetime === lifetime &&
+        current.runId === candidateRunId &&
+        Object.hasOwn(current.runs, candidateRunId) &&
+        current.runs[candidateRunId]?.scope === current.scope,
       )
     );
   };
