@@ -4,6 +4,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AuthProfileCredential } from "../../agents/auth-profiles/types.js";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
+import { resolveCliExecutionAuthProfileId } from "../../agents/cli-execution-auth.js";
+import { resolveRunAuthProfile } from "./agent-runner-auth-profile.js";
 import type { FollowupRun } from "./queue.js";
 
 const mocks = vi.hoisted(() => ({
@@ -18,11 +20,6 @@ vi.mock("../../agents/auth-profiles/store-runtime.js", () => ({
 vi.mock("../../agents/auth-profiles/order.js", () => ({
   resolveAuthProfileOrder: () => mocks.order,
 }));
-
-import {
-  resolveCliExecutionForwardedAuthProfileId,
-  resolveRunAuthProfile,
-} from "./agent-runner-auth-profile.js";
 
 const sessionPinRun = {
   provider: "anthropic",
@@ -71,7 +68,7 @@ describe("reply CLI dispatch auth identity", () => {
     });
 
     expect(
-      resolveCliExecutionForwardedAuthProfileId({
+      resolveCliExecutionAuthProfileId({
         cliExecutionProvider: "claude-cli",
         authProfileProvider: "anthropic",
         config: {},
@@ -90,7 +87,7 @@ describe("reply CLI dispatch auth identity", () => {
     };
 
     expect(
-      resolveCliExecutionForwardedAuthProfileId({
+      resolveCliExecutionAuthProfileId({
         cliExecutionProvider: "claude-cli",
         authProfileProvider: "anthropic",
         config: {},
@@ -100,7 +97,7 @@ describe("reply CLI dispatch auth identity", () => {
     ).toBe("claude-cli:work");
 
     expect(
-      resolveCliExecutionForwardedAuthProfileId({
+      resolveCliExecutionAuthProfileId({
         cliExecutionProvider: "claude-cli",
         authProfileProvider: "anthropic",
         config: {},

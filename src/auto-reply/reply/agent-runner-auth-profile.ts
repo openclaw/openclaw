@@ -1,11 +1,9 @@
 // Resolves auth profile settings that agent runner forwards to providers.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
-import { resolveCliExecutionAuthProfileId } from "../../agents/cli-execution-auth.js";
 import {
   resolveProviderIdForAuth,
   type ProviderAuthAliasLookupParams,
 } from "../../agents/provider-auth-aliases.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { FollowupRun } from "./queue.js";
 
 /** Keeps an auth profile only when the current provider shares the primary auth scope. */
@@ -44,29 +42,6 @@ export function resolveRunAuthProfile(
     authProfileIdSource: run.authProfileIdSource,
     config: params?.config ?? run.config,
     workspaceDir: run.workspaceDir,
-  });
-}
-
-/**
- * Converts the session-layer profile selection into the CLI execution identity
- * at the dispatch boundary. A session pin resolved for the model provider (for
- * example "anthropic:default") must not reach a claude-cli child as a forwarded
- * API key when auth.order names the backend's native login; the gateway command
- * path applies the same filter before preparing its runs.
- */
-export function resolveCliExecutionForwardedAuthProfileId(params: {
-  cliExecutionProvider: string;
-  authProfileProvider: string;
-  config: OpenClawConfig;
-  agentDir: string;
-  selected: { authProfileId?: string; authProfileIdSource?: "auto" | "user" };
-}): string | undefined {
-  return resolveCliExecutionAuthProfileId({
-    cliExecutionProvider: params.cliExecutionProvider,
-    authProfileProvider: params.authProfileProvider,
-    config: params.config,
-    agentDir: params.agentDir,
-    selected: params.selected,
   });
 }
 
