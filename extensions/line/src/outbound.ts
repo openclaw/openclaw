@@ -52,11 +52,7 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
     const lineRuntime = runtime.channel.line;
     const location = lineData.location;
     const locationMessage = location ? outboundRuntime.createLocationMessage(location) : null;
-    const sendText = lineRuntime?.pushMessageLine ?? outboundRuntime.pushMessageLine;
     const sendBatch = lineRuntime?.pushMessagesLine ?? outboundRuntime.pushMessagesLine;
-    const sendFlex = lineRuntime?.pushFlexMessage ?? outboundRuntime.pushFlexMessage;
-    const sendTemplate = lineRuntime?.pushTemplateMessage ?? outboundRuntime.pushTemplateMessage;
-    const sendLocation = lineRuntime?.pushLocationMessage ?? outboundRuntime.pushLocationMessage;
     const sendQuickReplies =
       lineRuntime?.pushTextMessageWithQuickReplies ??
       outboundRuntime.pushTextMessageWithQuickReplies;
@@ -123,6 +119,19 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
       }
     };
 
+    const batchedMessages: Array<Record<string, unknown>> = [];
+    const buildMediaBatch = async () => {
+      const mediaBatch: Array<Record<string, unknown>> = [];
+      for (const url of mediaUrls) {
+        const trimmed = url?.trim();
+        if (!trimmed) {
+          continue;
+        }
+        mediaBatch.push(await buildLineMediaMessage(trimmed, mediaOptions, to));
+      }
+      return mediaBatch;
+    };
+
     const sendTextWithQuickReply = async (text: string) => {
       if (quickReplyItems.length > 0 && quickReply) {
         await sendMessageBatch([{ type: "text", text, quickReply }]);
@@ -162,76 +171,70 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
       trackingId: lineData.trackingId,
     };
     const shouldSendQuickRepliesInline = chunks.length === 0 && hasQuickReplies;
-    const sendMediaMessages = async () => {
-      for (const url of mediaUrls) {
-        const trimmed = url?.trim();
-        if (!trimmed) {
-          continue;
-        }
-        await recordResult(
-          (lineRuntime?.sendMessageLine ?? outboundRuntime.sendMessageLine)(to, "", {
-            ...sendOptions,
-            ...mediaOptions,
-            mediaUrl: trimmed,
-          }),
-        );
-      }
-    };
 
     if (!shouldSendQuickRepliesInline) {
+      // LINE bills one message per request per recipient no matter how many
+      // message objects a request carries, so the reply's parts (card, its
+      // caption, images, ...) are batched into as few push requests as
+      // possible — 5 objects per request — instead of one request per part
+      // (issue #142734). Quick replies stay attached to the final message.
       if (lineData.flexMessage) {
-        const flexContents = lineData.flexMessage.contents as Parameters<typeof sendFlex>[2];
-        await recordResult(sendFlex(to, lineData.flexMessage.altText, flexContents, sendOptions));
+        batchedMessages.push(
+          outboundRuntime.createFlexMessage(
+            lineData.flexMessage.altText,
+            lineData.flexMessage.contents as Parameters<
+              typeof outboundRuntime.createFlexMessage
+            >[1],
+          ),
+        );
       }
 
       if (lineData.templateMessage) {
         const template = buildTemplate(lineData.templateMessage);
         if (template) {
-          await recordResult(sendTemplate(to, template, sendOptions));
+          batchedMessages.push(template);
         }
       }
 
-      if (location) {
-        await recordResult(sendLocation(to, location, sendOptions));
+      if (locationMessage) {
+        batchedMessages.push(locationMessage);
       }
 
       if (!orderedMessages) {
         for (const flexMsg of processed.flexMessages) {
-          await recordResult(sendFlex(to, flexMsg.altText, flexMsg.contents, sendOptions));
+          batchedMessages.push(
+            outboundRuntime.createFlexMessage(flexMsg.altText, flexMsg.contents),
+          );
         }
       }
-    }
 
-    const sendMediaAfterText = !(hasQuickReplies && chunks.length > 0);
-    if (mediaUrls.length > 0 && !shouldSendQuickRepliesInline && !sendMediaAfterText) {
-      await sendMediaMessages();
-    }
+      const sendMediaAfterText = !(hasQuickReplies && chunks.length > 0);
+      if (!sendMediaAfterText) {
+        batchedMessages.push(...(await buildMediaBatch()));
+      }
 
-    if (orderedMessages && !shouldSendQuickRepliesInline) {
-      for (const [index, message] of orderedMessages.entries()) {
-        const isLast = index === orderedMessages.length - 1;
-        if (message.type === "flex") {
-          if (isLast && quickReply) {
-            await sendMessageBatch([{ ...message, quickReply }]);
-          } else {
-            await recordResult(sendFlex(to, message.altText, message.contents, sendOptions));
-          }
-        } else if (isLast && hasQuickReplies) {
-          await sendTextWithQuickReply(message.text);
-        } else {
-          await recordResult(sendText(to, message.text, sendOptions));
+      if (orderedMessages) {
+        batchedMessages.push(...orderedMessages);
+      } else {
+        for (const chunk of chunks) {
+          batchedMessages.push({ type: "text", text: chunk });
         }
       }
-    } else if (chunks.length > 0) {
-      for (const [i, chunk] of chunks.entries()) {
-        const isLast = i === chunks.length - 1;
-        if (isLast && hasQuickReplies) {
-          await sendTextWithQuickReply(chunk);
-        } else {
-          await recordResult(sendText(to, chunk, sendOptions));
-        }
+
+      if (sendMediaAfterText) {
+        batchedMessages.push(...(await buildMediaBatch()));
       }
-    } else if (shouldSendQuickRepliesInline) {
+
+      if (batchedMessages.length > 0 && quickReply) {
+        const lastIndex = batchedMessages.length - 1;
+        batchedMessages[lastIndex] = {
+          ...batchedMessages[lastIndex],
+          quickReply,
+        };
+      }
+
+      await sendMessageBatch(batchedMessages);
+    } else {
       const quickReplyMessages: Array<Record<string, unknown>> = [];
       if (lineData.flexMessage) {
         quickReplyMessages.push(
@@ -274,10 +277,6 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
       } else if (quickReply) {
         await sendTextWithQuickReply(buildLineQuickReplyFallbackText(quickReplyLabels));
       }
-    }
-
-    if (mediaUrls.length > 0 && !shouldSendQuickRepliesInline && sendMediaAfterText) {
-      await sendMediaMessages();
     }
 
     const completedResult = lastResult as LineSendResult | null;
