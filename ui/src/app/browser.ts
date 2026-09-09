@@ -25,7 +25,7 @@ function readControlUiResourceBasePath(): string | null {
 
 export function resolveControlUiPaths(pathname: string) {
   const resourceBasePath = readControlUiResourceBasePath();
-  const basePath = resourceBasePath || inferBasePathFromPathname(pathname);
+  const basePath = resourceBasePath ?? inferBasePathFromPathname(pathname);
   return [basePath, uiDevGatewayResourceBasePath() ?? resourceBasePath ?? basePath] as const;
 }
 

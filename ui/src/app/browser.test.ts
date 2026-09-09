@@ -16,4 +16,10 @@ describe("Control UI route and resource bases", () => {
   it("retains pathname inference when no Gateway mount is declared", () => {
     expect(resolveControlUiPaths("/portable/new")).toEqual(["/portable", "/portable"]);
   });
+
+  it("keeps an explicit root mount for a cold trailing-slash plugin link", () => {
+    document.documentElement.setAttribute(CONTROL_UI_BASE_PATH_ATTRIBUTE, "");
+
+    expect(resolveControlUiPaths("/reports/")).toEqual(["", ""]);
+  });
 });

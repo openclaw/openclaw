@@ -26,14 +26,14 @@ async function installReports(page: Page, holdHello = false) {
   });
 }
 
-async function expectReports(page: Page) {
+async function expectReports(page: Page, pathname = "/reports") {
   await page
     .frameLocator("openclaw-plugin-page iframe")
     .getByRole("heading", {
       name: "Synthetic reports",
     })
     .waitFor();
-  expect(new URL(page.url()).pathname).toBe("/reports");
+  expect(new URL(page.url()).pathname).toBe(pathname);
   expect(
     await page.locator("openclaw-plugin-page").evaluate((element: PluginPage) => ({
       pluginId: element.pluginId,
@@ -59,24 +59,27 @@ suite.define(() => {
     });
   });
 
-  it("keeps a cold slug deep link until hello resolves the tab", async () => {
-    await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
-      const gateway = await installReports(page, true);
-      const paths: string[] = [];
-      page.on("framenavigated", (frame) => {
-        if (frame === page.mainFrame()) {
-          paths.push(new URL(frame.url()).pathname);
-        }
+  it.each(["reports", "reports/"])(
+    "keeps a cold %s deep link until hello resolves the tab",
+    async (path) => {
+      await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+        const gateway = await installReports(page, true);
+        const paths: string[] = [];
+        page.on("framenavigated", (frame) => {
+          if (frame === page.mainFrame()) {
+            paths.push(new URL(frame.url()).pathname);
+          }
+        });
+        await page.goto(`${suite.server.baseUrl}${path}`);
+        await gateway.waitForRequest("connect");
+        expect(new URL(page.url()).pathname).toBe(`/${path}`);
+        expect(await page.locator("openclaw-plugin-page").count()).toBe(0);
+        await gateway.resolveDeferred("connect");
+        await expectReports(page, `/${path}`);
+        expect(paths).not.toContain("/chat");
       });
-      await page.goto(`${suite.server.baseUrl}reports`);
-      await gateway.waitForRequest("connect");
-      expect(new URL(page.url()).pathname).toBe("/reports");
-      expect(await page.locator("openclaw-plugin-page").count()).toBe(0);
-      await gateway.resolveDeferred("connect");
-      await expectReports(page);
-      expect(paths).not.toContain("/chat");
-    });
-  });
+    },
+  );
 
   it("recovers an unknown slug to chat only after hello", async () => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
