@@ -644,8 +644,17 @@ describe.each(["sticker", "poll"] as const)("Discord structured %s content", (ki
 
     expect(writes()).toHaveLength(1);
     expect(writes()[0]?.body.content).toBe(
-      "**Important** <@523456789012345678>\n\n```\n| A | B |\n| --- | --- |\n| x | y |\n```",
+      "**Important** <@523456789012345678>\n\n```\n| A   | B   |\n| --- | --- |\n| x   | y   |\n```",
     );
+    const rendered = writes()[0]?.body.content;
+    console.info("discord structured caption proof", {
+      kind,
+      requestCount: writes().length,
+      markdownNormalized: typeof rendered === "string" && rendered.startsWith("**Important**"),
+      mentionAliasResolved:
+        typeof rendered === "string" && rendered.includes("<@523456789012345678>"),
+      tableRenderedAsCode: typeof rendered === "string" && rendered.includes("```\n| A   | B   |"),
+    });
   });
 
   it("chunks captions that formatting expands past Discord's limit", async () => {
@@ -730,6 +739,21 @@ describe.each(["sticker", "poll"] as const)("Discord structured %s content", (ki
         }),
       }),
     );
+    const [structuredWrite, continuationWrite] = writes();
+    console.info("discord structured partial-delivery proof", {
+      kind,
+      requestCount: writes().length,
+      deliveryCallbackCount: onDeliveryResult.mock.calls.length,
+      structuredPayloadSent:
+        kind === "sticker"
+          ? Boolean(structuredWrite?.body.sticker_ids)
+          : Boolean(structuredWrite?.body.poll),
+      continuationWasTextOnly:
+        continuationWrite !== undefined &&
+        !("sticker_ids" in continuationWrite.body) &&
+        !("poll" in continuationWrite.body),
+      continuationRejected: true,
+    });
   });
 });
 
