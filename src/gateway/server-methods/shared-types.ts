@@ -427,9 +427,9 @@ export type GatewayRequestHandlerOptions = {
 export type GatewayRequestHandler = (opts: GatewayRequestHandlerOptions) => Promise<void> | void;
 
 /** Plugin-facing handler; the registration adapter turns returned values into responses. */
-export type PluginGatewayRequestHandler = (
-  opts: GatewayRequestHandlerOptions,
-) => Promise<unknown> | void;
+export type PluginGatewayRequestHandler =
+  | GatewayRequestHandler
+  | ((opts: GatewayRequestHandlerOptions) => Promise<unknown>);
 
 /** Registry fragment keyed by gateway protocol method name. */
 export type GatewayRequestHandlers = Record<string, GatewayRequestHandler>;
