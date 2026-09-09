@@ -22,6 +22,6 @@ export type SkillWorkshopRenderContext = {
   onSelfLearningToggle: (enabled: boolean) => void;
   learningBusy: boolean;
   learningError: string | null;
-  onLearn: () => void;
+  onLearn: () => Promise<void>;
   onRetry: () => void;
 };

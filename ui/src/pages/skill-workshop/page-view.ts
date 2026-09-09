@@ -1,6 +1,7 @@
 import { html, nothing } from "lit";
 import { pathForRoute } from "../../app-route-paths.ts";
 import { renderAgentScopeControl } from "../../components/agent-scope-control.ts";
+import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
 import {
@@ -90,11 +91,12 @@ export function renderSkillWorkshopPage(
           })}
           <button
             type="button"
-            class="sw-btn sw-btn--primary"
+            class="btn sw-learn-button"
             ?disabled=${learningBusy || !learningAccess.allowed}
             title=${learningAccess.allowed ? t("skillWorkshop.learning.description") : learningAccess.reason}
             @click=${onLearn}
           >
+            <span aria-hidden="true">${icons.wandSparkles}</span>
             ${learningBusy ? t("skillWorkshop.learning.starting") : t("skillWorkshop.learning.start")}
           </button>
         </div>
