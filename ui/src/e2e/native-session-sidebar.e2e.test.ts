@@ -121,23 +121,27 @@ suite.define(() => {
     }
   });
 
-  it("routes adopted session menu buttons and context menus through the catalog menu", async () => {
+  it("preserves native actions across adopted session menu entry points", async () => {
     const adoptedKey = "agent:main:adopted-native-menu";
     const proofRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
     const proofDir = proofRoot
       ? createControlUiE2eArtifactDir("adopted-session-menu", proofRoot)
       : undefined;
-    const page = await suite.browser.newPage({
+    const context = await suite.newBrowserContext({
       deviceScaleFactor: 2,
+      locale: "en-US",
+      serviceWorkers: "block",
       viewport: { height: 1100, width: 1440 },
     });
+    const page = await context.newPage();
     await installMockGateway(page, {
       sessionKey: "agent:main:main",
+      terminalEnabled: true,
       sessions: [
         { key: "agent:main:main", kind: "direct", label: "Main session", updatedAt: 2 },
         { key: adoptedKey, kind: "direct", label: "Adopted native session", updatedAt: 1 },
       ],
-      featureMethods: ["chat.metadata", "chat.startup", "sessions.catalog.list"],
+      featureMethods: ["chat.metadata", "chat.startup", "sessions.catalog.list", "terminal.open"],
       methodResponses: {
         "sessions.catalog.list": {
           catalogs: [
@@ -156,6 +160,7 @@ suite.define(() => {
                       threadId: "adopted-thread",
                       name: "Adopted native session",
                       status: "stored",
+                      archived: false,
                       sessionKey: adoptedKey,
                       canContinue: true,
                       canOpenTerminal: true,
@@ -187,6 +192,9 @@ suite.define(() => {
       const assertCatalogMenu = async (entryPoint: string) => {
         await expect.poll(() => catalogMenu().count()).toBe(1);
         await expect.poll(menuValues).toEqual(["viewer", "terminal"]);
+        await expect
+          .poll(() => catalogMenu().locator('[value="terminal"]').getAttribute("disabled"))
+          .toBeNull();
         console.info(`[catalog-menu-proof] ${entryPoint} values=${(await menuValues()).join(",")}`);
         if (proofDir) {
           await writeFile(
@@ -210,8 +218,16 @@ suite.define(() => {
       await assertCatalogMenu("02-context");
       await page.keyboard.press("Escape");
       await expect.poll(() => catalogMenu().count()).toBe(0);
+
+      for (const key of ["ContextMenu", "Shift+F10"]) {
+        await menuButton.focus();
+        await page.keyboard.press(key);
+        await assertCatalogMenu(key);
+        await page.keyboard.press("Escape");
+        await expect.poll(() => catalogMenu().count()).toBe(0);
+      }
     } finally {
-      await page.close();
+      await suite.closeBrowserContext(context);
     }
   });
 });

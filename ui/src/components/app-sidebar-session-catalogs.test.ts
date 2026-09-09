@@ -1,18 +1,14 @@
-// @vitest-environment jsdom
-import { html, render } from "lit";
+// @vitest-environment node
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   SessionCatalog,
   SessionCatalogHost,
 } from "../../../packages/gateway-protocol/src/index.ts";
 import { i18n } from "../i18n/index.ts";
-import { renderSessionCatalogGroups } from "./app-sidebar-session-catalog-render.ts";
 import {
-  buildCatalogSessionMenuRequest,
   findCatalogSessionHovercardRow,
   formatSidebarTimestamp,
   visibleCatalogHosts,
-  type CatalogBackingSessionDisplay,
 } from "./app-sidebar-session-catalogs.ts";
 
 describe("formatSidebarTimestamp", () => {
@@ -135,116 +131,6 @@ describe("findCatalogSessionHovercardRow", () => {
         sessionKey: "catalog:codex:gateway%3Acodex:pull-request",
       })?.workContext,
     ).toEqual({ kind: "project", name: "pull-request", path: "/work/pull-request" });
-  });
-});
-
-describe("buildCatalogSessionMenuRequest", () => {
-  it("preserves native lifecycle capabilities for adopted catalog rows", () => {
-    const session = {
-      threadId: "thread-1",
-      name: "Native session",
-      status: "idle" as const,
-      archived: false,
-      canContinue: true,
-      canArchive: false,
-      canOpenTerminal: true,
-    };
-    const request = buildCatalogSessionMenuRequest({
-      catalog: { capabilities: { continueSession: true, archive: true } },
-      session,
-      key: { catalogId: "codex", hostId: "gateway:local", threadId: session.threadId },
-      agentId: "main",
-      routeId: "chat",
-      navigation: {},
-      meta: "now",
-    });
-
-    expect(request).toMatchObject({
-      canOpenTerminal: true,
-      canDelete: false,
-      name: "Native session",
-      meta: "now",
-    });
-  });
-});
-
-describe("renderSessionCatalogGroups", () => {
-  it("routes adopted rows through the native catalog menu", () => {
-    const displays: CatalogBackingSessionDisplay[] = [];
-    const sessionKey = "agent:main:adopted";
-    const container = document.createElement("div");
-    render(
-      html`${renderSessionCatalogGroups({
-        catalogs: [
-          {
-            id: "codex",
-            label: "Codex",
-            capabilities: { continueSession: true, archive: true },
-            hosts: [
-              {
-                hostId: "gateway:local",
-                label: "Local Codex",
-                kind: "gateway",
-                connected: true,
-                sessions: [
-                  {
-                    threadId: "thread-1",
-                    sessionKey,
-                    name: "Native session",
-                    status: "idle",
-                    archived: false,
-                    canContinue: true,
-                    canArchive: false,
-                    canOpenTerminal: true,
-                  },
-                ],
-              },
-            ],
-          },
-        ],
-        connected: true,
-        basePath: "",
-        routeSessionKey: "",
-        newSessionAgentId: "main",
-        mainKey: "agent:main:main",
-        collapsedSections: new Set(),
-        loadingMoreCatalogIds: new Set(),
-        visibleSessionLimits: new Map(),
-        projectGrouping: "none",
-        liveRows: [
-          { key: sessionKey, label: "OpenClaw row", hasAutomation: false, hasActiveRun: false },
-        ],
-        renderLiveRow: (_row: unknown, display: CatalogBackingSessionDisplay) => {
-          displays.push(display);
-          return null;
-        },
-        onToggleSection: () => {},
-        draggingSectionId: null,
-        sectionDropTarget: null,
-        onSectionDragOver: () => {},
-        onSectionDragLeave: () => {},
-        onSectionDrop: () => {},
-        onStartSectionDrag: () => {},
-        onFinishSectionDrag: () => {},
-        viewMenuOpenCatalogId: null,
-        ownerFilterActive: false,
-        onOpenViewMenu: () => {},
-        onLoadMore: () => {},
-        onSetVisibleSessionLimit: () => {},
-        catalogOpenTarget: "viewer",
-        terminalAvailable: true,
-        onOpenTerminal: () => {},
-        onOpenMenu: () => {},
-        onCatalogMenuTriggerRendered: () => {},
-        isMenuOpen: () => false,
-      } as never)}`,
-      container,
-    );
-
-    expect(displays[0]?.catalogMenu).toMatchObject({
-      canOpenTerminal: true,
-      canDelete: false,
-    });
   });
 });
 

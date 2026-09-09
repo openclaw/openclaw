@@ -145,7 +145,7 @@ export function visibleCatalogHosts(
 export type CatalogBackingSessionDisplay = {
   catalogIdentityKey: string;
   catalogMenuOpen: boolean;
-  catalogMenu?: CatalogSessionMenuRequest;
+  catalogMenu: CatalogSessionMenuRequest;
   rowRef?: (element: Element | undefined) => void;
   subtitle?: string;
   pullRequest?: SessionCatalogSession["pullRequest"];
@@ -161,27 +161,6 @@ export type CatalogSessionMenuRequest = {
   name: string;
   meta: string;
 };
-
-export function buildCatalogSessionMenuRequest(params: {
-  catalog: Pick<SessionCatalog, "capabilities">;
-  session: SessionCatalogSession;
-  key: CatalogSessionKey;
-  agentId: string;
-  routeId: CatalogSessionMenuRequest["routeId"];
-  navigation: ApplicationNavigationOptions;
-  meta: string;
-}): CatalogSessionMenuRequest {
-  return {
-    key: params.key,
-    agentId: params.agentId,
-    routeId: params.routeId,
-    navigation: params.navigation,
-    canOpenTerminal: params.session.canOpenTerminal === true,
-    canDelete: params.session.canArchive && params.catalog.capabilities.archive,
-    name: params.session.name ?? params.session.threadId,
-    meta: params.meta,
-  };
-}
 
 /** Stamps a freshly adopted session key onto its catalog row so the sidebar
     binds it before the next catalog poll confirms the adoption. */

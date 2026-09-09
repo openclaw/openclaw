@@ -102,57 +102,82 @@ describe("AppSidebar catalog row lifecycle", () => {
     expect(document.activeElement).toBe(adoptedMenu);
   });
 
-  it("routes adopted row buttons and context menus through the catalog menu", async () => {
-    const adoptedKey = "agent:main:adopted-menu-triggers";
-    const { sidebar } = await mountSidebar(
-      createGateway({} as GatewayBrowserClient),
-      createSessions("main", ["agent:main:main", adoptedKey]),
-    );
-    const catalogs = catalogPage([
-      {
-        threadId: "thread-adopted-menu-triggers",
-        name: "Adopted menu",
-        sessionKey: adoptedKey,
-      },
-    ]).catalogs;
-    catalogs[0]!.hosts[0]!.sessions[0]!.canArchive = false;
-    sidebar.sessionData.sessionCatalogs = catalogs;
-    sidebar.sessionData.requestSessionDataUpdate();
-    await sidebar.updateComplete;
+  it.each([
+    { catalogArchive: false, sessionArchive: true, canDelete: false },
+    { catalogArchive: true, sessionArchive: false, canDelete: false },
+    { catalogArchive: true, sessionArchive: true, canDelete: true },
+  ])(
+    "preserves native menus when catalog archive=$catalogArchive and session archive=$sessionArchive",
+    async ({ catalogArchive, sessionArchive, canDelete }) => {
+      const adoptedKey = "agent:main:adopted-menu-triggers";
+      const { sidebar } = await mountSidebar(
+        createGateway({} as GatewayBrowserClient),
+        createSessions("main", ["agent:main:main", adoptedKey]),
+      );
+      const catalogs = catalogPage([
+        {
+          threadId: "thread-adopted-menu-triggers",
+          name: "Adopted menu",
+          sessionKey: adoptedKey,
+        },
+      ]).catalogs;
+      catalogs[0]!.capabilities.archive = catalogArchive;
+      const catalogSession = catalogs[0]!.hosts[0]!.sessions[0]!;
+      catalogSession.canArchive = sessionArchive;
+      catalogSession.canOpenTerminal = true;
+      sidebar.terminalAvailable = true;
+      sidebar.sessionData.sessionCatalogs = catalogs;
+      sidebar.sessionData.requestSessionDataUpdate();
+      await sidebar.updateComplete;
 
-    const row = sidebar.querySelector<HTMLElement>(`[data-session-key="${adoptedKey}"]`);
-    const menuButton = row?.querySelector<HTMLButtonElement>('[data-session-menu="true"]');
-    if (!row || !menuButton) {
-      throw new Error("expected adopted row menu button");
-    }
-    menuButton.getBoundingClientRect = () => ({ right: 200, bottom: 100 }) as DOMRect;
+      const row = sidebar.querySelector<HTMLElement>(`[data-session-key="${adoptedKey}"]`);
+      const menuButton = row?.querySelector<HTMLButtonElement>('[data-session-menu="true"]');
+      if (!row || !menuButton) {
+        throw new Error("expected adopted row menu button");
+      }
+      const expectCatalogMenu = () => {
+        const menu = sidebar.querySelector("openclaw-catalog-session-menu");
+        expect(menu).not.toBeNull();
+        expect(menu?.querySelector('wa-dropdown-item[value="viewer"]')).not.toBeNull();
+        expect(menu?.querySelector('wa-dropdown-item[value="terminal"]')).not.toBeNull();
+        expect(
+          menu?.querySelector('wa-dropdown-item[value="terminal"]')?.hasAttribute("disabled"),
+        ).toBe(false);
+        expect(menu?.querySelector('wa-dropdown-item[value="delete"]') !== null).toBe(canDelete);
+      };
 
-    const expectCatalogMenu = () => {
-      const menu = sidebar.querySelector("openclaw-catalog-session-menu");
-      expect(menu).not.toBeNull();
-      expect(menu?.querySelector('wa-dropdown-item[value="viewer"]')).not.toBeNull();
-      expect(menu?.querySelector('wa-dropdown-item[value="delete"]')).toBeNull();
-    };
+      menuButton.click();
+      await sidebar.updateComplete;
+      expectCatalogMenu();
 
-    menuButton.click();
-    await sidebar.updateComplete;
-    expectCatalogMenu();
+      menuButton.click();
+      await sidebar.updateComplete;
+      expect(sidebar.querySelector("openclaw-catalog-session-menu")).toBeNull();
 
-    menuButton.click();
-    await sidebar.updateComplete;
-    expect(sidebar.querySelector("openclaw-catalog-session-menu")).toBeNull();
-
-    row.dispatchEvent(
-      new MouseEvent("contextmenu", {
-        bubbles: true,
-        cancelable: true,
-        clientX: 20,
-        clientY: 30,
-      }),
-    );
-    await sidebar.updateComplete;
-    expectCatalogMenu();
-  });
+      for (const event of [
+        new MouseEvent("contextmenu", {
+          bubbles: true,
+          cancelable: true,
+          clientX: 20,
+          clientY: 30,
+        }),
+        new KeyboardEvent("keydown", { key: "ContextMenu", bubbles: true, cancelable: true }),
+        new KeyboardEvent("keydown", {
+          key: "F10",
+          shiftKey: true,
+          bubbles: true,
+          cancelable: true,
+        }),
+      ]) {
+        row.dispatchEvent(event);
+        await sidebar.updateComplete;
+        expectCatalogMenu();
+        document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+        await sidebar.updateComplete;
+        expect(sidebar.querySelector("openclaw-catalog-session-menu")).toBeNull();
+      }
+    },
+  );
 
   it("clears marquee state when a catalog label changes", async () => {
     const gateway = createGateway({} as GatewayBrowserClient);

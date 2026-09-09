@@ -32,7 +32,6 @@ import {
 import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
 import type { NewSessionTarget } from "../pages/new-session/location.ts";
 import {
-  buildCatalogSessionMenuRequest,
   formatSidebarTimestamp,
   normalizeCatalogTimestamp,
   type CatalogBackingSessionDisplay,
@@ -554,15 +553,16 @@ function renderCatalogSessionRow(
     mainKey: params.mainKey,
   });
   const { href, options: navigation } = target;
-  const catalogMenu = buildCatalogSessionMenuRequest({
-    catalog,
-    session,
+  const catalogMenu: CatalogSessionMenuRequest = {
     key: catalogKey,
     agentId: params.newSessionAgentId,
     routeId,
     navigation,
+    canOpenTerminal: session.canOpenTerminal === true,
+    canDelete: session.canArchive && catalog.capabilities.archive,
+    name: session.name ?? session.threadId,
     meta,
-  });
+  };
   const menuOpen = params.isMenuOpen(catalogKey);
   const rowRef = catalogRowRef(identityKey, key, catalogKey, menuOpen, params);
   const adoptedRow = session.sessionKey ? liveRowsByKey.get(session.sessionKey) : undefined;
