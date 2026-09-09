@@ -274,7 +274,24 @@ describe("structured state integrity findings", () => {
         }
         return accessSync(target, mode);
       });
+      const readFileSync = fs.readFileSync;
+      const mountInfo = vi.spyOn(fs, "readFileSync");
       try {
+        // Source isolation is independent of the temporary directory's backing filesystem.
+        mountInfo.mockImplementation(
+          (target, options?: fs.ReadFileSyncOptions | BufferEncoding | null) => {
+            if (typeof options === "string") {
+              if (target === "/proc/self/mountinfo" && options === "utf8") {
+                return "22 1 0:21 / / rw,relatime - ext4 /dev/sda1 rw";
+              }
+              return readFileSync(target, options);
+            }
+            if (options == null) {
+              return readFileSync(target, options);
+            }
+            return readFileSync(target, options);
+          },
+        );
         const issues = detectStateIntegrityHealthIssues(
           withMainAgentRoster({ session: { store } }),
           { env: { HOME: sourceHome, OPENCLAW_STATE_DIR: sourceState } },
@@ -287,6 +304,7 @@ describe("structured state integrity findings", () => {
           }),
         ]);
       } finally {
+        mountInfo.mockRestore();
         accessSpy.mockRestore();
       }
     },
