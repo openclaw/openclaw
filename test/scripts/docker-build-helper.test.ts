@@ -7789,9 +7789,11 @@ done
     const { readSystemdServiceExecStart } =
       await import("../../src/daemon/systemd-service-files.js");
     expect(
+      // The production 5s deadline budgets for native busctl; the Node shim's cold
+      // spawn can exceed its per-call slice under load, so widen it here.
       await readSystemdServiceExecStart(
         { HOME: home, PATH: `${binDir}:${process.env.PATH}`, OPENCLAW_SYSTEMD_UNIT: serviceName },
-        { requireEffective: true },
+        { requireEffective: true, timeoutMs: 30_000 },
       ),
     ).toMatchObject({
       programArguments,
@@ -7833,7 +7835,9 @@ done
     };
     const { readSystemdServiceExecStart } =
       await import("../../src/daemon/systemd-service-files.js");
-    expect(await readSystemdServiceExecStart(env, { requireEffective: true })).toBeNull();
+    expect(
+      await readSystemdServiceExecStart(env, { requireEffective: true, timeoutMs: 30_000 }),
+    ).toBeNull();
     const loadArgs = [
       "--user",
       "--json=short",
@@ -7865,7 +7869,10 @@ done
       unitPath,
       "[Service]\nExecStart=/usr/bin/node /opt/profile/openclaw.mjs gateway\nEnvironment=OLD=stale\nEnvironment=\nEnvironment=KEEP=current REMOVE=value\nUnsetEnvironment=KEEP\nUnsetEnvironment=\nUnsetEnvironment=REMOVE\nEnvironmentFile=/missing/required.env\nEnvironmentFile=\n",
     );
-    const command = await readSystemdServiceExecStart(env, { requireEffective: true });
+    const command = await readSystemdServiceExecStart(env, {
+      requireEffective: true,
+      timeoutMs: 30_000,
+    });
     expect(command?.sourcePath).toBe(unitPath);
     expect(command?.environment).toEqual({ KEEP: "current" });
     rmSync(unitPath);
