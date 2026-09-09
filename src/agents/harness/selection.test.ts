@@ -80,7 +80,9 @@ import { ensureSelectedAgentHarnessPlugin } from "./runtime-plugin.js";
 import {
   agentHarnessBuildsOpenClawTools,
   agentHarnessExposesOpenClawTools,
+  resolveAgentHarnessNativeToolPolicyRestricted,
   resolveAvailableAgentHarnessPolicy,
+  resolvePluginHarnessToolPolicies,
   resolvePluginHarnessPolicyToolsAllow,
   runAgentHarnessAttempt,
   runAgentHarnessSettledTurnFinalization,
@@ -1868,6 +1870,105 @@ describe("runAgentHarnessAttempt", () => {
       true,
     ]);
     expect(received[0]?.safeDeniedTools).toEqual(["image_generate"]);
+  });
+
+  it("keeps declared native coding tools available while preserving ambient isolation", () => {
+    const declaredNativeTools = ["exec", "process", "read", "write", "edit", "apply_patch"];
+    const harness = {
+      id: "codex",
+      label: "Codex",
+      conversationToolPolicySupport: "exact",
+      conversationToolPolicyNativeCodeToolNames: declaredNativeTools,
+      supports: () => ({ supported: true, priority: 100 }),
+      runAttempt: async () => createAttemptResult("codex"),
+    } as AgentHarness;
+    const params = createAttemptParams({
+      agents: { defaults: { sandbox: { mode: "all" } } },
+      tools: { sandbox: { tools: { allow: declaredNativeTools, deny: [] } } },
+    } as OpenClawConfig);
+    params.sessionKey = "agent:main:session-1";
+
+    expect(resolveAgentHarnessNativeToolPolicyRestricted(params, harness)).toBe(true);
+    expect(
+      resolvePluginHarnessToolPolicies(
+        params,
+        harness.conversationToolPolicySafeDenyTools,
+        harness.conversationToolPolicyNativeCodeToolNames,
+      ).nativeCodeToolPolicyRestricted,
+    ).toBe(false);
+  });
+
+  it("fails closed for incomplete sandbox policy or malformed native tool declarations", () => {
+    const declaredNativeTools = ["exec", "process", "read", "write", "edit", "apply_patch"];
+    const resolveRestricted = (options: {
+      nativeToolNames?: unknown;
+      allow?: string[];
+      deny?: string[];
+      toolsAllow?: string[];
+      swarmCollector?: boolean;
+    }) => {
+      const harness = {
+        id: "codex",
+        label: "Codex",
+        conversationToolPolicySupport: "exact",
+        conversationToolPolicyNativeCodeToolNames: options.nativeToolNames,
+        supports: () => ({ supported: true, priority: 100 }),
+        runAttempt: async () => createAttemptResult("codex"),
+      } as AgentHarness;
+      const params = createAttemptParams({
+        agents: { defaults: { sandbox: { mode: "all" } } },
+        tools: {
+          sandbox: {
+            tools: {
+              allow: options.allow ?? declaredNativeTools,
+              deny: options.deny ?? [],
+            },
+          },
+        },
+      } as OpenClawConfig);
+      params.sessionKey = "agent:main:session-1";
+      params.toolsAllow = options.toolsAllow;
+      params.swarmCollector = options.swarmCollector;
+      return {
+        ambient: resolveAgentHarnessNativeToolPolicyRestricted(params, harness),
+        nativeCode: resolvePluginHarnessToolPolicies(
+          params,
+          harness.conversationToolPolicySafeDenyTools,
+          harness.conversationToolPolicyNativeCodeToolNames,
+        ).nativeCodeToolPolicyRestricted,
+      };
+    };
+
+    const malformedDeclarations: unknown[] = [
+      undefined,
+      [],
+      [...declaredNativeTools, 7],
+      [...declaredNativeTools, "exec"],
+      [...declaredNativeTools, "not_a_core_tool"],
+      ["*"],
+    ];
+    expect(
+      malformedDeclarations.map((nativeToolNames) => resolveRestricted({ nativeToolNames })),
+    ).toEqual(malformedDeclarations.map(() => ({ ambient: true, nativeCode: true })));
+    expect(
+      declaredNativeTools.map((omitted) =>
+        resolveRestricted({
+          nativeToolNames: declaredNativeTools,
+          allow: declaredNativeTools.filter((name) => name !== omitted),
+        }),
+      ),
+    ).toEqual(declaredNativeTools.map(() => ({ ambient: true, nativeCode: true })));
+    expect(
+      declaredNativeTools.map((denied) =>
+        resolveRestricted({ nativeToolNames: declaredNativeTools, deny: [denied] }),
+      ),
+    ).toEqual(declaredNativeTools.map(() => ({ ambient: true, nativeCode: true })));
+    expect(
+      resolveRestricted({ nativeToolNames: declaredNativeTools, toolsAllow: ["read"] }),
+    ).toEqual({ ambient: true, nativeCode: true });
+    expect(
+      resolveRestricted({ nativeToolNames: declaredNativeTools, swarmCollector: true }),
+    ).toEqual({ ambient: true, nativeCode: true });
   });
 
   it("isolates collector runs and explicit restrictive policy layers for plugin harnesses", async () => {

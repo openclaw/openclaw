@@ -146,9 +146,6 @@ export async function prepareCodexThreadLifecyclePreflight(params: CodexStartOrR
     params.params.scheduledRuntimeAuthority === undefined;
   const imageGenerationDenied =
     params.params.pluginHarnessToolPolicySafeDeniedTools?.includes("image_generate") === true;
-  if (restrictedToolSurface && params.nativeCodeModeEnabled !== false) {
-    throw new Error("Codex restricted tool surfaces require native code mode to be disabled");
-  }
   if (!effectiveConfig) {
     effectiveConfig = await lifecycleTiming.measure("effective-config-read", () =>
       readCodexEffectiveConfig(params.client, params.cwd, { signal: params.signal }),
@@ -167,6 +164,7 @@ export async function prepareCodexThreadLifecyclePreflight(params: CodexStartOrR
         {
           restrictedToolSurface,
           requiredNativeShell: params.nativeCodeModeEnabled !== false,
+          nativeCodeModeEnabled: params.nativeCodeModeEnabled !== false,
           additionalDeniedFeatures: imageGenerationDenied ? ["image_generation"] : undefined,
           allowedManagedRequirementsFingerprint:
             readScheduledCodexAppManagedRequirementsFingerprint(

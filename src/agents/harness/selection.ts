@@ -34,6 +34,7 @@ import {
   unwrapSecretSentinelsForProviderEgress,
 } from "../provider-secret-egress.js";
 import { resolveSandboxRuntimeStatus } from "../sandbox/runtime-status.js";
+import { isToolAllowed } from "../sandbox/tool-policy.js";
 import { isKnownCoreToolId } from "../tool-catalog.js";
 import {
   expandToolGroups,
@@ -170,6 +171,7 @@ type ResolvedPluginHarnessToolPolicies = {
   runtimePolicies: Array<PluginHarnessToolPolicy | undefined>;
   safeDeniedToolNames: string[];
   toolPolicyRestricted: boolean;
+  nativeCodeToolPolicyRestricted: boolean;
 };
 
 function listPluginAgentHarnesses(): AgentHarness[] {
@@ -509,7 +511,11 @@ export async function runAgentHarnessAttempt(
           : preparePluginHarnessParams(pluginAttempt.params, harness);
         const effectiveAttemptParams =
           hostOpenClawAuthority && preparedParams.pluginHarnessToolPolicyRestricted
-            ? { ...preparedParams, pluginHarnessToolPolicyRestricted: false }
+            ? {
+                ...preparedParams,
+                pluginHarnessToolPolicyRestricted: false,
+                pluginHarnessNativeCodeToolPolicyRestricted: false,
+              }
             : preparedParams;
         assertPluginHarnessConversationToolPolicySupport(
           harness,
@@ -760,11 +766,11 @@ function preparePluginHarnessParams(
     model === params.model && resolvedApiKey === params.resolvedApiKey
       ? params
       : { ...params, model, resolvedApiKey };
+  const exactPolicySupport = harness.conversationToolPolicySupport === "exact";
   const policies = resolvePluginHarnessToolPolicies(
     preparedParams,
-    harness.conversationToolPolicySupport === "exact"
-      ? harness.conversationToolPolicySafeDenyTools
-      : undefined,
+    exactPolicySupport ? harness.conversationToolPolicySafeDenyTools : undefined,
+    exactPolicySupport ? harness.conversationToolPolicyNativeCodeToolNames : undefined,
   );
   return applyPluginHarnessDenyAllToolPolicy(
     {
@@ -772,6 +778,7 @@ function preparePluginHarnessParams(
       pluginHarnessToolPolicySafeDeniedTools:
         policies.safeDeniedToolNames.length > 0 ? policies.safeDeniedToolNames : undefined,
       pluginHarnessToolPolicyRestricted: policies.toolPolicyRestricted,
+      pluginHarnessNativeCodeToolPolicyRestricted: policies.nativeCodeToolPolicyRestricted,
     },
     policies,
   );
@@ -831,11 +838,11 @@ export function resolveAgentHarnessNativeToolPolicyRestricted(
   params: PluginHarnessToolPolicyContext,
   harness: AgentHarness,
 ): boolean {
+  const exactPolicySupport = harness.conversationToolPolicySupport === "exact";
   return resolvePluginHarnessToolPolicies(
     params,
-    harness.conversationToolPolicySupport === "exact"
-      ? harness.conversationToolPolicySafeDenyTools
-      : undefined,
+    exactPolicySupport ? harness.conversationToolPolicySafeDenyTools : undefined,
+    exactPolicySupport ? harness.conversationToolPolicyNativeCodeToolNames : undefined,
   ).toolPolicyRestricted;
 }
 
@@ -859,6 +866,7 @@ function resolvePluginHarnessDenyAllToolPolicyPrompt(
 export function resolvePluginHarnessToolPolicies(
   params: PluginHarnessToolPolicyContext,
   safeDenyToolNames?: readonly string[],
+  nativeToolNames?: readonly string[],
 ): ResolvedPluginHarnessToolPolicies {
   const messageProvider = params.messageProvider ?? params.messageChannel;
   const sandboxSessionKey = params.sandboxSessionKey ?? params.sessionKey;
@@ -923,22 +931,26 @@ export function resolvePluginHarnessToolPolicies(
       : params.toolsAllow
         ? { allow: params.toolsAllow }
         : undefined;
-  const explicitPolicies = [
+  const nonSandboxExplicitPolicies = [
     policy.globalPolicy,
     policy.globalProviderPolicy,
     policy.agentPolicy,
     policy.agentProviderPolicy,
     policy.groupPolicy,
     policy.senderPolicy,
-    policy.sandboxPolicy,
     policy.subagentPolicy,
     policy.inheritedToolPolicy,
     policy.runtimeToolPolicyForInheritance,
     requestedToolPolicy,
   ];
+  const explicitPolicies = [...nonSandboxExplicitPolicies, policy.sandboxPolicy];
   const safeDenyToolNameSet = safeDenyToolNames
     ? new Set(safeDenyToolNames.map(normalizeToolPolicyName))
     : undefined;
+  const sandboxNativeCodePolicyRestricted = sandboxPolicyRestrictsHarnessNativeTools(
+    policy.sandboxPolicy,
+    nativeToolNames,
+  );
   return {
     senderPolicy: policy.senderPolicy,
     senderScopedGroupPolicy: resolveSenderScopedGroupToolPolicy(
@@ -960,14 +972,62 @@ export function resolvePluginHarnessToolPolicies(
       requestedToolPolicy,
     ],
     safeDeniedToolNames: collectHarnessSafeDeniedToolNames(explicitPolicies, safeDenyToolNameSet),
-    // Native tools bypass the collector's noninteractive OpenClaw wrappers.
-    // Keep policy-allowed host replacements, without ambient input or approval surfaces.
+    // Preserve ambient native isolation whenever any effective policy restricts tools.
+    // A separate, narrower fact allows only the declared native coding surface through
+    // a sandbox policy that permits every one of those tools.
     toolPolicyRestricted:
       params.swarmCollector === true ||
       explicitPolicies.some((explicitPolicy) =>
         toolPolicyRestrictsHarnessNativeTools(explicitPolicy, safeDenyToolNameSet),
       ),
+    nativeCodeToolPolicyRestricted:
+      params.swarmCollector === true ||
+      nonSandboxExplicitPolicies.some((explicitPolicy) =>
+        toolPolicyRestrictsHarnessNativeTools(explicitPolicy, safeDenyToolNameSet),
+      ) ||
+      sandboxNativeCodePolicyRestricted,
   };
+}
+
+function normalizeHarnessNativeToolNames(
+  nativeToolNames: readonly string[] | undefined,
+): string[] | undefined {
+  if (!Array.isArray(nativeToolNames) || nativeToolNames.length === 0) {
+    return undefined;
+  }
+  const normalizedNames: string[] = [];
+  const seen = new Set<string>();
+  for (const nativeToolName of nativeToolNames) {
+    if (typeof nativeToolName !== "string") {
+      return undefined;
+    }
+    const normalizedName = normalizeToolPolicyName(nativeToolName);
+    if (
+      !normalizedName ||
+      normalizedName === "*" ||
+      !isKnownCoreToolId(normalizedName) ||
+      seen.has(normalizedName)
+    ) {
+      return undefined;
+    }
+    seen.add(normalizedName);
+    normalizedNames.push(normalizedName);
+  }
+  return normalizedNames;
+}
+
+function sandboxPolicyRestrictsHarnessNativeTools(
+  policy: PluginHarnessToolPolicy | undefined,
+  nativeToolNames: readonly string[] | undefined,
+): boolean {
+  if (!policy) {
+    return false;
+  }
+  const normalizedNames = normalizeHarnessNativeToolNames(nativeToolNames);
+  if (!normalizedNames) {
+    return true;
+  }
+  return normalizedNames.some((nativeToolName) => !isToolAllowed(policy, nativeToolName));
 }
 
 function collectHarnessSafeDeniedToolNames(

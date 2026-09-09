@@ -55,6 +55,14 @@ unless you opt into the experimental sandbox exec-server path. Node-backed
 `remote-exec` on a paired device or cloud worker instead uses its
 placement-owned environment without that experimental flag.
 
+The Codex harness declares its native coding surface as the six canonical
+OpenClaw operations `exec`, `process`, `read`, `write`, `edit`, and
+`apply_patch`. A sandbox policy can retain that surface only when it allows all
+six operations. This coding-only declaration does not enable other Codex native
+capabilities: restricted turns continue to disable native image inspection,
+apps, plugins, hooks, and inherited MCP servers. If managed Codex policy disables
+native shell, OpenClaw falls back to its policy-filtered coding tools.
+
 Eligible native-shell turns also retain `gateway_exec` and `gateway_process`
 as a distinct OpenClaw execution path. Use `gateway_exec` only when a command
 needs OpenClaw-managed Gateway environment access, including Secret Store

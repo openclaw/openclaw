@@ -18,6 +18,7 @@ import {
   resolveCodexAppServerHookChannelId,
   shouldEnableCodexAppServerNativeToolSurface,
 } from "./dynamic-tool-build.js";
+import { resolveCodexManagedNativeShellDenied } from "./managed-native-tool-policy.js";
 import { resolveCodexProviderWebSearchSupport } from "./provider-capabilities.js";
 import { prewarmCodexAttemptClient } from "./run-attempt-client-prewarm.js";
 import type { CodexAttemptConnection } from "./run-attempt-connection.js";
@@ -223,11 +224,27 @@ export async function prepareCodexAttemptRuntime(connection: CodexAttemptConnect
     });
   preDynamicStartupStages.mark("bundle-mcp");
   const sandboxExecServerEnabled = isCodexSandboxExecServerEnabled(pluginConfig, sandbox);
-  const nativeToolSurfaceEnabled = shouldEnableCodexAppServerNativeToolSurface(
+  const policyAllowsNativeToolSurface = shouldEnableCodexAppServerNativeToolSurface(
     runtimeParams,
     sandbox,
     { agentId: policyAgentId, runtimeSessionKey: sandboxSessionKey, sandboxExecServerEnabled },
   );
+  const managedNativeShellDenied =
+    policyAllowsNativeToolSurface &&
+    runtimeParams.pluginHarnessToolPolicyRestricted === true &&
+    runtimeParams.pluginHarnessNativeCodeToolPolicyRestricted === false
+      ? await resolveCodexManagedNativeShellDenied({
+          clientFactory: attemptClientFactory,
+          appServer,
+          authProfileId: startupClientAuthProfileId,
+          preparedAuth: startupPreparedAuth,
+          agentDir,
+          config: params.config,
+          cwd: effectiveWorkspace,
+          signal: runAbortController.signal,
+        })
+      : false;
+  const nativeToolSurfaceEnabled = policyAllowsNativeToolSurface && !managedNativeShellDenied;
   const configuredMcpSurface = scheduledConfiguredMcpSurface
     ? "scheduled"
     : !nativeToolSurfaceEnabled && bundleMcpThreadConfig.staticServerNames.length > 0

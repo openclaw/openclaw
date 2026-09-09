@@ -67,6 +67,17 @@ describe("Codex agent harness supports()", () => {
     );
   });
 
+  it("declares the complete native coding tool surface", () => {
+    expect(harness.conversationToolPolicyNativeCodeToolNames).toEqual([
+      "exec",
+      "process",
+      "read",
+      "write",
+      "edit",
+      "apply_patch",
+    ]);
+  });
+
   const harness = createCodexAppServerAgentHarness({
     bindingStore: testCodexAppServerBindingStore,
   });

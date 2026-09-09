@@ -2700,6 +2700,52 @@ describe("runCodexAppServerAttempt", () => {
     expect(harness.requests.map((request) => request.method)).not.toContain("thread/start");
   });
 
+  it("falls back to filtered OpenClaw coding tools when managed policy disables native shell", async () => {
+    const codingTools = ["exec", "process", "read", "write", "edit", "apply_patch"];
+    testing.setOpenClawCodingToolsFactoryForTests((options) =>
+      createOpenClawCodingTools(options).filter((tool) => codingTools.includes(tool.name)),
+    );
+    const params = createRunParams();
+    params.disableTools = false;
+    params.pluginHarnessToolPolicyRestricted = true;
+    params.pluginHarnessNativeCodeToolPolicyRestricted = false;
+    setCodexTestModelSupportsTools(params, true);
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    const harness = createStartedThreadHarness(async (method) => {
+      if (method === "configRequirements/read") {
+        return { requirements: { featureRequirements: { shell_tool: false } } };
+      }
+      if (method === "config/read") {
+        return { config: {}, layers: [] };
+      }
+      if (method === "mcpServerStatus/list") {
+        return { data: [], nextCursor: null };
+      }
+      return undefined;
+    });
+
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+    const startParams = harness.requests.find((request) => request.method === "thread/start")
+      ?.params as
+      | { dynamicTools?: CodexDynamicToolSpec[]; environments?: unknown[]; config?: JsonObject }
+      | undefined;
+    expect(startParams?.environments).toEqual([]);
+    expect(
+      flattenSpecsWithNamespace(startParams?.dynamicTools ?? [])
+        .map((tool) => tool.name)
+        .toSorted(),
+    ).toEqual(codingTools.toSorted());
+    expect(startParams?.config).toMatchObject({
+      "features.code_mode": false,
+      "features.code_mode_only": false,
+      "features.shell_tool": false,
+      "features.unified_exec": false,
+    });
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await expect(run).resolves.toBeDefined();
+  });
+
   it("overrides a user-level shell disable when native code mode is enabled", async () => {
     const params = createRunParams();
     params.disableTools = false;

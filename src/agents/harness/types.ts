@@ -400,6 +400,12 @@ type AgentHarnessRunCapability<
    * against native equivalents. Every other deny remains fail-closed.
    */
   conversationToolPolicySafeDenyTools?: readonly string[];
+  /**
+   * Complete canonical OpenClaw tool names equivalent to the harness's native coding surface.
+   * Sandbox policy disables that surface unless every declared coding tool is allowed. Other
+   * native capabilities remain governed by pluginHarnessToolPolicyRestricted.
+   */
+  conversationToolPolicyNativeCodeToolNames?: readonly string[];
   supports(ctx: AgentHarnessSupportContext): AgentHarnessSupport;
   /** Synchronous private ownership read; no discovery, auth loading, or native connection setup. */
   resolveSessionRuntimeOwnership?(params: {
