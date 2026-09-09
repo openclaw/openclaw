@@ -269,6 +269,9 @@ async function downloadWorkspace(params: {
           prepared: params.prepared,
           manifest,
           manifestRef: params.transfer.manifestRef,
+          // Only initial Gateway project sync carries a seed. Accepted publication and
+          // explicit checkpoints restore exact snapshots, including setup-output deletions.
+          sourceOverlay: Boolean(params.transfer.seedKey) && !checkpointBase,
           hashMemo: params.hashMemo,
           signal: params.signal,
         })

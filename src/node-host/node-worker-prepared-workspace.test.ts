@@ -64,6 +64,8 @@ async function fixture(setupWrites = false) {
   await git("init", "--quiet");
   await fsp.writeFile(path.join(workspaceDir, ".gitignore"), ".venv/\n");
   await fsp.writeFile(path.join(workspaceDir, "source.txt"), "prepared source\n");
+  await fsp.mkdir(path.join(workspaceDir, "tracked-dir"));
+  await fsp.writeFile(path.join(workspaceDir, "tracked-dir", "input.txt"), "pristine child\n");
   await git("add", ".");
   await git(
     "-c",
@@ -172,64 +174,83 @@ describe("prepared node workspace ownership", () => {
     );
   });
 
-  it("restores a checkpoint reverting setup writes from local Git without requesting baseline blobs", async () => {
-    const f = await fixture(true);
-    await f.runtime.prepare(f.registration);
-    await f.runtime.prepare(binding);
-    const raw = await fsp.readFile(
-      path.join(
-        f.homeDir,
-        ".openclaw-worker",
-        "manifests",
-        `${f.registration.sourceManifestRef.slice(7)}.json`,
-      ),
-    );
-    const requests: string[] = [];
-    const server = createServer((req, res) => {
-      requests.push(req.url ?? "");
-      if (req.url?.endsWith("/manifest")) {
-        res.writeHead(200).end(raw);
-      } else {
-        res.writeHead(404).end();
-      }
-    });
-    const url = await listen(server);
-    try {
-      const result = await f.runtime.exec(
-        {
-          ...f.command,
-          argv: ["openclaw-internal-workspace-transfer"],
-          transfer: {
-            direction: "download",
-            token: "checkpoint-revert",
-            manifestRef: f.registration.sourceManifestRef,
-            checkpointBaseManifestRef: f.registration.sourceManifestRef,
+  it.each(["overlay", "checkpoint", "accepted"] as const)(
+    "%s transfer preserves setup only for an initial project",
+    async (mode) => {
+      const f = await fixture(true);
+      await f.runtime.prepare(f.registration);
+      await f.runtime.prepare(binding);
+      const raw = await fsp.readFile(
+        path.join(
+          f.homeDir,
+          ".openclaw-worker",
+          "manifests",
+          `${f.registration.sourceManifestRef.slice(7)}.json`,
+        ),
+      );
+      const requests: string[] = [];
+      const server = createServer((req, res) => {
+        requests.push(req.url ?? "");
+        if (req.url?.endsWith("/manifest")) {
+          res.writeHead(200).end(raw);
+        } else if (
+          req.url?.endsWith(createHash("sha256").update("prepared source\n").digest("hex"))
+        ) {
+          res.writeHead(200).end("prepared source\n");
+        } else {
+          res.writeHead(404).end();
+        }
+      });
+      const url = await listen(server);
+      try {
+        const result = await f.runtime.exec(
+          {
+            ...f.command,
+            argv: ["openclaw-internal-workspace-transfer"],
+            transfer: {
+              direction: "download",
+              token: "checkpoint-revert",
+              manifestRef: f.registration.sourceManifestRef,
+              ...(mode === "checkpoint"
+                ? { checkpointBaseManifestRef: f.registration.sourceManifestRef }
+                : mode === "overlay"
+                  ? { seedKey: "d".repeat(64) }
+                  : {}),
+            },
           },
-        },
-        undefined,
-        { url },
-      );
-      expect(result.stdout.trim()).toBe(f.registration.sourceManifestRef);
-      expect(await fsp.readFile(path.join(f.workspaceDir, "source.txt"), "utf8")).toBe(
-        "prepared source\n",
-      );
-      await expect(fsp.stat(path.join(f.workspaceDir, "setup-output.txt"))).rejects.toMatchObject({
-        code: "ENOENT",
-      });
-      expect(await fsp.readFile(path.join(f.workspaceDir, ".venv", "absolute-path"), "utf8")).toBe(
-        `${f.workspaceDir}\n${f.homeDir}`,
-      );
-      expect(requests).toHaveLength(1);
-      expect(requests[0]).toMatch(/\/manifest$/);
-      expect(
-        new NodeWorkerPreparedWorkspaceStore({ env: f.env }).find(binding.environmentId)?.state,
-      ).toBe("bound");
-    } finally {
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
-    }
-  });
+          undefined,
+          { url },
+        );
+        expect(result.stdout.trim()).toBe(f.registration.sourceManifestRef);
+        if (mode === "overlay") {
+          expect(await fsp.readFile(path.join(f.workspaceDir, "setup-output.txt"), "utf8")).toBe(
+            "eligible setup output\n",
+          );
+        } else {
+          await expect(
+            fsp.stat(path.join(f.workspaceDir, "setup-output.txt")),
+          ).rejects.toMatchObject({
+            code: "ENOENT",
+          });
+        }
+        expect(await fsp.readFile(path.join(f.workspaceDir, "source.txt"), "utf8")).toBe(
+          mode === "overlay" ? "setup changed source\n" : "prepared source\n",
+        );
+        expect(
+          await fsp.readFile(path.join(f.workspaceDir, ".venv", "absolute-path"), "utf8"),
+        ).toBe(`${f.workspaceDir}\n${f.homeDir}`);
+        expect(requests).toHaveLength(mode === "accepted" ? 2 : 1);
+        expect(requests[0]).toMatch(/\/manifest$/);
+        expect(
+          new NodeWorkerPreparedWorkspaceStore({ env: f.env }).find(binding.environmentId)?.state,
+        ).toBe("bound");
+      } finally {
+        await new Promise<void>((resolve, reject) => {
+          server.close((error) => (error ? reject(error) : resolve()));
+        });
+      }
+    },
+  );
 
   it.each([false, true])("serializes bind behind registration (aborted: %s)", async (aborted) => {
     const f = await fixture();
@@ -504,6 +525,137 @@ describe("prepared node workspace ownership", () => {
       state: "retiring",
       session_id: binding.sessionId,
     });
+  });
+
+  it.each([
+    "tracked edit",
+    "tracked deletion",
+    "file replaces prepared directory",
+    "symlink replaces prepared directory",
+    "caller child replaces prepared file",
+    "caller replaces generated file",
+    "source directory removal retains generated sibling",
+  ] as const)("preserves unrelated setup output for %s", async (change) => {
+    const f = await fixture(true);
+    const gatewayRoot = path.join(f.root, "gateway");
+    await runExec("git", ["clone", "--quiet", "--no-local", f.workspaceDir, gatewayRoot], {
+      timeoutMs: 10_000,
+    });
+    const sourceFile = path.join(gatewayRoot, "source.txt");
+    if (change === "tracked edit" || change === "file replaces prepared directory") {
+      await fsp.writeFile(sourceFile, "caller edit\n");
+    } else if (change === "tracked deletion") {
+      await fsp.unlink(sourceFile);
+    } else if (change === "symlink replaces prepared directory") {
+      await fsp.unlink(sourceFile);
+      await fsp.symlink("tracked-dir/input.txt", sourceFile);
+    } else if (change === "caller child replaces prepared file") {
+      await fsp.unlink(sourceFile);
+      await fsp.mkdir(sourceFile);
+      await fsp.writeFile(path.join(sourceFile, "child.txt"), "caller child\n");
+    } else if (change === "caller replaces generated file") {
+      await fsp.writeFile(path.join(gatewayRoot, "setup-output.txt"), "caller output\n");
+    } else {
+      await fsp.rm(path.join(gatewayRoot, "tracked-dir"), { recursive: true });
+      await fsp.writeFile(
+        path.join(f.workspaceDir, "tracked-dir", "generated.txt"),
+        "setup sibling\n",
+      );
+    }
+    if (
+      change === "file replaces prepared directory" ||
+      change === "symlink replaces prepared directory"
+    ) {
+      const preparedSource = path.join(f.workspaceDir, "source.txt");
+      await fsp.unlink(preparedSource);
+      await fsp.mkdir(preparedSource);
+      await fsp.writeFile(path.join(preparedSource, "generated.txt"), "replaced setup child\n");
+    }
+    const prepared = await readActualWorkspaceManifest({
+      root: f.workspaceDir,
+      baseCommit: f.baseCommit,
+    });
+    f.registration.preparedManifestRef = prepared.manifestRef;
+    await fsp.writeFile(
+      path.join(
+        f.homeDir,
+        ".openclaw-worker",
+        "manifests",
+        `${prepared.manifestRef.slice(7)}.json`,
+      ),
+      serializeWorkerWorkspaceManifest(prepared.manifest),
+    );
+    await f.runtime.prepare(f.registration);
+    await f.runtime.prepare(binding);
+    const incoming = await readActualWorkspaceManifest({
+      root: gatewayRoot,
+      baseCommit: f.baseCommit,
+    });
+    const blobs = new Map<string, Buffer>();
+    for (const entry of incoming.manifest.entries) {
+      if (entry.type === "file") {
+        blobs.set(entry.sha256, await fsp.readFile(path.join(gatewayRoot, entry.path)));
+      }
+    }
+    const server = createServer((req, res) => {
+      if (req.url?.endsWith("/manifest")) {
+        res.writeHead(200).end(serializeWorkerWorkspaceManifest(incoming.manifest));
+      } else {
+        const blob = blobs.get(req.url?.split("/").at(-1) ?? "");
+        res.writeHead(blob ? 200 : 404).end(blob);
+      }
+    });
+    const url = await listen(server);
+    try {
+      const result = await f.runtime.exec(
+        {
+          ...f.command,
+          argv: ["openclaw-internal-workspace-transfer"],
+          transfer: {
+            direction: "download",
+            token: "initial-project-overlay",
+            manifestRef: incoming.manifestRef,
+            seedKey: "d".repeat(64),
+          },
+        },
+        undefined,
+        { url },
+      );
+      expect(result.stdout.trim()).toBe(incoming.manifestRef);
+      expect(await fsp.readFile(path.join(f.workspaceDir, "setup-output.txt"), "utf8")).toBe(
+        change === "caller replaces generated file" ? "caller output\n" : "eligible setup output\n",
+      );
+      const actualSource = path.join(f.workspaceDir, "source.txt");
+      if (change === "tracked edit" || change === "file replaces prepared directory") {
+        expect(await fsp.readFile(actualSource, "utf8")).toBe("caller edit\n");
+      } else if (change === "tracked deletion") {
+        await expect(fsp.lstat(actualSource)).rejects.toMatchObject({ code: "ENOENT" });
+      } else if (change === "symlink replaces prepared directory") {
+        expect(await fsp.readlink(actualSource)).toBe("tracked-dir/input.txt");
+      } else if (change === "caller child replaces prepared file") {
+        expect(await fsp.readFile(path.join(actualSource, "child.txt"), "utf8")).toBe(
+          "caller child\n",
+        );
+      } else {
+        expect(await fsp.readFile(actualSource, "utf8")).toBe("setup changed source\n");
+      }
+      if (change === "source directory removal retains generated sibling") {
+        await expect(
+          fsp.lstat(path.join(f.workspaceDir, "tracked-dir", "input.txt")),
+        ).rejects.toMatchObject({ code: "ENOENT" });
+        expect(
+          await fsp.readFile(path.join(f.workspaceDir, "tracked-dir", "generated.txt"), "utf8"),
+        ).toBe("setup sibling\n");
+      }
+      expect(await fsp.readFile(path.join(f.workspaceDir, ".venv", "absolute-path"), "utf8")).toBe(
+        `${f.workspaceDir}\n${f.homeDir}`,
+      );
+    } finally {
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
+    }
   });
 
   it.each([
