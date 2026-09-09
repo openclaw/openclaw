@@ -1749,6 +1749,143 @@ describe("mobile release authority", () => {
     expect(source).not.toContain("extraheader");
   });
 
+  it("keeps the Android emulator diagnostic manual, exact-SHA-bound, and secretless", () => {
+    const file = ".github/workflows/android-emulator-diagnostic.yml";
+    const source = fs.readFileSync(file, "utf8");
+    const workflow = parse(source) as {
+      jobs: {
+        diagnose: {
+          env: Record<string, string>;
+          permissions: Record<string, string>;
+          "runs-on": string;
+          steps: Array<{
+            env?: Record<string, string>;
+            if?: string;
+            name: string;
+            run?: string;
+            uses?: string;
+            with?: Record<string, unknown>;
+          }>;
+          "timeout-minutes": number;
+        };
+      };
+      name: string;
+      on: {
+        workflow_dispatch: {
+          inputs: {
+            target_sha: {
+              default?: unknown;
+              description: string;
+              required: boolean;
+              type: string;
+            };
+          };
+        };
+      };
+      permissions: Record<string, string>;
+    };
+    const job = workflow.jobs.diagnose;
+    const steps = job.steps;
+    const validateIndex = steps.findIndex((step) => step.name === "Validate target SHA");
+    const checkoutIndex = steps.findIndex((step) => step.name === "Checkout exact target");
+    const headIndex = steps.findIndex((step) => step.name === "Verify exact target checkout");
+    const setupIndex = steps.findIndex((step) => step.name === "Setup Android toolchain");
+    const diagnosticIndex = steps.findIndex(
+      (step) => step.name === "Run phone emulator diagnostic",
+    );
+    const artifactIndex = steps.findIndex(
+      (step) => step.name === "Upload Android emulator diagnostic",
+    );
+
+    expect(workflow.name).toBe("Android Emulator Diagnostic");
+    expect(Object.keys(workflow.on)).toEqual(["workflow_dispatch"]);
+    expect(workflow.on.workflow_dispatch.inputs.target_sha).toEqual({
+      description: "Exact lowercase 40-character commit SHA to diagnose",
+      required: true,
+      type: "string",
+    });
+    expect(workflow.permissions).toEqual({ contents: "read" });
+    expect(Object.keys(workflow.jobs)).toEqual(["diagnose"]);
+    expect(job.permissions).toEqual({ contents: "read" });
+    expect(job["runs-on"]).toBe("macos-26-intel");
+    expect(job["timeout-minutes"]).toBe(25);
+    expect(job.env).toEqual({
+      ANDROID_SCREENSHOT_EMULATOR_TIMEOUT_SECONDS: "180",
+      AVD_NAME: "OpenClaw_Screenshots_API36",
+      DEVICE_PROFILE: "pixel_2",
+      SYSTEM_IMAGE: "system-images;android-36;google_apis;x86_64",
+    });
+
+    expect(validateIndex).toBe(0);
+    expect(checkoutIndex).toBe(validateIndex + 1);
+    expect(headIndex).toBe(checkoutIndex + 1);
+    expect(setupIndex).toBeGreaterThan(headIndex);
+    expect(diagnosticIndex).toBe(setupIndex + 1);
+    expect(artifactIndex).toBe(diagnosticIndex + 1);
+    expect(steps[validateIndex]?.env).toEqual({
+      TARGET_SHA: "${{ inputs.target_sha }}",
+    });
+    expect(steps[validateIndex]?.run).toContain('[[ ! "$TARGET_SHA" =~ ^[0-9a-f]{40}$ ]]');
+    expect(steps[validateIndex]?.run).toContain(
+      'DIAGNOSTIC_DIR="$RUNNER_TEMP/android-emulator-diagnostic"',
+    );
+    expect(steps[validateIndex]?.run).toContain(
+      'echo "DIAGNOSTIC_DIR=$DIAGNOSTIC_DIR" >>"$GITHUB_ENV"',
+    );
+    expect(steps[checkoutIndex]).toMatchObject({
+      uses: "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+      with: {
+        ref: "${{ inputs.target_sha }}",
+        "fetch-depth": 1,
+        "persist-credentials": false,
+      },
+    });
+    expect(steps[headIndex]?.env).toEqual({
+      TARGET_SHA: "${{ inputs.target_sha }}",
+    });
+    expect(steps[headIndex]?.run).toContain('test "$(git rev-parse HEAD)" = "$TARGET_SHA"');
+    expect(steps[setupIndex]).toMatchObject({
+      uses: "./.github/actions/setup-android-toolchain",
+      with: {
+        "cache-mode": "off",
+        "install-screenshot-emulators": "true",
+      },
+    });
+
+    const diagnostic = steps[diagnosticIndex]?.run ?? "";
+    expect(diagnostic).toContain(
+      'printf \'no\\n\' | avdmanager create avd --force --name "$AVD_NAME" --package "$SYSTEM_IMAGE" --device "$DEVICE_PROFILE"',
+    );
+    expect(diagnostic).toContain(
+      'emulator_args=(-avd "$AVD_NAME" -no-window -no-audio -no-boot-anim)',
+    );
+    expect(diagnostic).toContain(
+      "device_deadline=$((SECONDS + ANDROID_SCREENSHOT_EMULATOR_TIMEOUT_SECONDS))",
+    );
+    expect(diagnostic).toContain(
+      "boot_deadline=$((SECONDS + ANDROID_SCREENSHOT_EMULATOR_TIMEOUT_SECONDS))",
+    );
+    expect(diagnostic).toContain('>"$DIAGNOSTIC_DIR/emulator.log" 2>&1 &');
+    expect(diagnostic).toContain("adb devices -l");
+    expect(diagnostic).toContain('>>"$DIAGNOSTIC_DIR/adb-observations.log" 2>&1');
+    expect(diagnostic).toContain('ps -p "$emulator_pid"');
+    expect(diagnostic).toContain('kill "$emulator_pid"');
+    expect(diagnostic).toContain("adb kill-server");
+    expect(steps[artifactIndex]).toMatchObject({
+      if: "always()",
+      uses: "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+      with: {
+        name: "android-emulator-diagnostic-${{ github.run_id }}-${{ github.run_attempt }}",
+        path: "${{ runner.temp }}/android-emulator-diagnostic",
+        "retention-days": 7,
+      },
+    });
+    expect(source).not.toMatch(/\$\{\{\s*secrets\./u);
+    expect(source).not.toContain("environment:");
+    expect(source).not.toMatch(/\b(?:pnpm|gradle|fastlane)\b/iu);
+    expect(source).not.toMatch(/apps-signing|MATCH_PASSWORD|GOOGLE_PLAY|upload-and-record/iu);
+  });
+
   it("keeps upload and recovery credentials inside one protected platform boundary", () => {
     const workflows = [
       {
