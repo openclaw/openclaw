@@ -220,6 +220,32 @@ async function closeMemoryIndexManagersForScope(params: {
   }
 }
 
+/**
+ * Resolve the context-service seam abort timeout (milliseconds).
+ *
+ * The seam ({@link MemoryIndexManager.__fredContextServiceSearch}) is bounded by
+ * an abort timeout so a slow or cold context-service call can never stall a
+ * turn. The prior hard-coded 800ms was too tight for a cold embedding
+ * round-trip (query-embedding warm-up measured ~700-760ms), so a legitimate
+ * cold call was aborted and silently fell through to the dead native path
+ * (reported as provider:none / backend:builtin / 0 hits). The default is raised
+ * to 2500ms and made configurable via FRED_CONTEXT_SERVICE_TIMEOUT_MS. The
+ * value is clamped to [100, 30000]ms; missing or invalid input uses the default.
+ */
+export function resolveContextServiceTimeoutMs(raw: string | undefined): number {
+  const DEFAULT_MS = 2500;
+  const MIN_MS = 100;
+  const MAX_MS = 30000;
+  if (raw === undefined || raw.trim() === "") {
+    return DEFAULT_MS;
+  }
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return DEFAULT_MS;
+  }
+  return Math.min(MAX_MS, Math.max(MIN_MS, Math.round(parsed)));
+}
+
 export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements MemorySearchManager {
   private readonly cacheKey: string;
   private readonly purpose: MemoryIndexManagerPurpose;
@@ -628,7 +654,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ query, k, mode: "hybrid" }),
-        signal: AbortSignal.timeout(800),
+        signal: AbortSignal.timeout(resolveContextServiceTimeoutMs(process.env.FRED_CONTEXT_SERVICE_TIMEOUT_MS)),
       });
       if (!res || !res.ok) {
         return undefined;
