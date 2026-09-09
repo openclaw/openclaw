@@ -311,12 +311,7 @@ export function formatCodexPluginReadiness(
     `Bundle: ${summary ? (summary.installed ? "installed" : "not installed") : "unknown"}`,
     `Codex plugin: ${summary ? (summary.enabled ? "enabled" : "disabled") : "unknown"}`,
     `OpenClaw app access: ${readiness.openClawEnabled ? "enabled for new conversations" : "disabled for new conversations"} (shared Codex plugin configuration).`,
-    ...(hasApps
-      ? [
-          describeCodexHostedAppsSupport(readiness.hostedSupport),
-          "Connection: unknown. Codex does not report live account-link status in these reads.",
-        ]
-      : []),
+    ...(hasApps ? [describeCodexHostedAppsSupport(readiness.hostedSupport)] : []),
   ];
   if (catalog === "blocked") {
     lines.push(
@@ -368,17 +363,14 @@ export function formatCodexPluginReadiness(
           ? "No hosted apps declared. Skills and other plugin capabilities are not assessed here."
           : [
               `Apps (page ${page}/${pageCount}):`,
+              `Runtime scope: ${readiness.threadId ? "current Codex thread" : "account (no bound Codex thread)"}.`,
               ...visible.map((app) => {
                 const runtime = runtimeById.get(app.id);
-                const state = !runtime
-                  ? "unknown: absent or unavailable runtime snapshot"
-                  : !runtime.enabled
-                    ? "disabled by effective Codex app policy"
-                    : !runtime.callable
-                      ? "not callable in the runtime snapshot"
-                      : readiness.threadId
-                        ? "callable in this thread's runtime snapshot"
-                        : "available in account runtime snapshot; current-thread callability unknown";
+                const state = runtime
+                  ? `enabled: ${runtime.enabled}; callable: ${runtime.callable}`
+                  : readiness.runtime.status === "known"
+                    ? "not reported by app/installed"
+                    : "runtime flags unavailable";
                 return `- ${display(app.name)}: ${state}.`;
               }),
             ].join("\n"),
@@ -407,7 +399,7 @@ export function formatCodexPluginReadiness(
       }
       blocks.push({
         type: "text",
-        text: "Snapshot freshness is unknown; this read does not refresh hosted tools or verify a live call. Browser setup does not change OpenClaw app access. Use /new or /reset after setup or local permission changes; existing conversations keep their admitted app policy.",
+        text: "Flags reflect Codex's runtime snapshot; status does not refresh hosted tools. Browser setup does not change OpenClaw app access. Use /new or /reset after setup or local permission changes; existing conversations keep their admitted app policy.",
       });
     }
   }

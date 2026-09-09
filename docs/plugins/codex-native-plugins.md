@@ -252,17 +252,19 @@ are shown when available. ChatGPT workspace identity remains unknown when
 Codex does not report it; use the same account and workspace in the browser
 when opening an eligible hosted app page.
 
-Status reads existing Codex snapshots without forcing a hosted-tool refresh,
-changing configuration, or replacing a conversation. Only a read against the
-bound thread can report that an app is callable in that thread's runtime
-snapshot. An absent snapshot is unknown; it does not prove that an app is
-disconnected or needs a new connection. Snapshot freshness and live connection
-status remain unknown; installation and metadata alone do not prove a successful
-tool call. After completing hosted setup, recheck in Codex, then use `/new` or
-`/reset` and inspect status again. Existing conversations keep their admitted app
-policy after browser setup or OpenClaw app-access changes. Unsupported methods,
-restrictions, and failed reads show a recovery action instead of reporting
-readiness.
+Status uses `app/read` for app metadata and displays the `enabled` and `callable`
+flags returned by `app/installed`. The runtime scope is the bound Codex thread
+when available, or the account otherwise. These flags reflect effective Codex
+configuration and the current runtime tool snapshot; they are separate from
+OpenClaw app access. Status does not infer a separate connection state. Missing
+app records and failed reads are reported explicitly instead of becoming false
+flags.
+
+Status does not force a hosted-tool refresh, change configuration, or replace a
+conversation. After completing hosted setup, refresh in Codex, then use `/new`
+or `/reset` and inspect status again. Existing conversations keep their admitted
+app policy after browser setup or OpenClaw app-access changes. Unsupported
+methods, restrictions, and failed reads show a recovery action.
 
 `install`, `enable`, and `disable` require the owner or a gateway client with
 the `operator.admin` scope. OpenClaw's reserved `/codex` command is dispatched

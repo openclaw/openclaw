@@ -199,7 +199,7 @@ describe("Codex plugin status command", () => {
   });
 
   it("keeps hosted management separate from local permission and callable tools", async () => {
-    const test = fixture({ disabled: true, runtime: [] });
+    const test = fixture({ disabled: true });
     const result = await handleCodexPluginsSubcommand(
       ctx,
       ["status", "notes"],
@@ -207,8 +207,8 @@ describe("Codex plugin status command", () => {
       test.runtime,
     );
     expect(result.text).toContain("disabled for new conversations");
+    expect(result.text).toContain("enabled: true; callable: true");
     expect(result.text).toContain("https://chatgpt.com/apps/app-0");
-    expect(result.text).toContain("Connection: unknown");
     expect(test.io.mutate).not.toHaveBeenCalled();
   });
 
@@ -239,7 +239,7 @@ describe("Codex plugin status command", () => {
       test.io,
       test.runtime,
     );
-    expect(result.text).toContain("callable in this thread's runtime snapshot");
+    expect(result.text).toContain("enabled: true; callable: true");
     expect(test.request).toHaveBeenCalledWith("plugin/read", {
       remoteMarketplaceName: catalog.marketplace,
       pluginName: "plugins~Plugin_test_notes",
@@ -259,7 +259,7 @@ describe("Codex plugin status command", () => {
     expect(result.text).not.toContain("private upstream response");
   });
 
-  it("reports exact-thread runtime callability while preserving unknown connection and freshness", async () => {
+  it("reports Codex runtime flags and scope without inferring connection state or refreshing", async () => {
     const test = fixture();
     const result = await handleCodexPluginsSubcommand(
       ctx,
@@ -267,9 +267,9 @@ describe("Codex plugin status command", () => {
       test.io,
       test.runtime,
     );
-    expect(result.text).toContain("callable in this thread's runtime snapshot");
-    expect(result.text).toContain("Connection: unknown");
-    expect(result.text).toContain("Snapshot freshness is unknown");
+    expect(result.text).toContain("Runtime scope: current Codex thread");
+    expect(result.text).toContain("- App 0: enabled: true; callable: true.");
+    expect(result.text).not.toContain("Connection:");
     expect(result.text).toContain("Profile: openai:work");
     expect(result.text).toContain("operator@example.test");
     expect(result.text).toContain("https://chatgpt.com/apps/app-0");
@@ -291,21 +291,21 @@ describe("Codex plugin status command", () => {
   });
 
   it.each([
-    { options: { threadId: null }, expected: "current-thread callability unknown" },
-    { options: { runtime: [] }, expected: "unknown: absent or unavailable runtime snapshot" },
+    { options: { threadId: null }, expected: "Runtime scope: account (no bound Codex thread)" },
+    { options: { runtime: [] }, expected: "not reported by app/installed" },
     {
       options: { failMethod: "app/installed" },
-      expected: "unknown: absent or unavailable runtime snapshot",
+      expected: "runtime flags unavailable",
     },
     {
       options: {
         runtime: [{ id: "app-0", runtimeName: "App 0", enabled: false, callable: false }],
       },
-      expected: "disabled by effective Codex app policy",
+      expected: "enabled: false; callable: false",
     },
     {
       options: { runtime: [{ id: "app-0", runtimeName: "App 0", enabled: true, callable: false }] },
-      expected: "not callable in the runtime snapshot",
+      expected: "enabled: true; callable: false",
     },
   ])("keeps $expected distinct from installation", async ({ options, expected }) => {
     const test = fixture(options);
@@ -317,6 +317,10 @@ describe("Codex plugin status command", () => {
     );
     expect(result.text).toContain(expected);
     expect(result.text).toContain("Bundle: installed");
+    if (options.runtime?.length === 0 || options.failMethod) {
+      expect(result.text).not.toContain("enabled: false");
+      expect(result.text).not.toContain("callable: false");
+    }
     expect(result.text).not.toContain("private upstream response");
   });
 
