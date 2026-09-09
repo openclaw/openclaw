@@ -250,7 +250,6 @@ function readAnthropicSseChunk(
       }
       settled = true;
       signal.removeEventListener("abort", onAbort);
-      reader.cancel(signal.reason).catch(() => undefined);
       reject(createAbortError(signal));
     };
 
@@ -349,7 +348,13 @@ async function* parseAnthropicSseBody(
     }
   } finally {
     if (!completed) {
-      await reader.cancel(signal?.reason).catch(() => undefined);
+      const cancellation = reader.cancel(signal?.reason).catch(() => undefined);
+      if (signal?.aborted) {
+        // The read continuation retains the original owner even when abort fires elsewhere.
+        getAiTransportHost().observePendingProviderWork?.(cancellation);
+      } else {
+        await cancellation;
+      }
     }
     reader.releaseLock();
   }

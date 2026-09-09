@@ -26,7 +26,7 @@ import {
   extractAssistantText,
   prepareSimpleCompletionModelForAgent,
 } from "../../plugin-sdk/simple-completion-runtime.js";
-import { AsyncWorkScope } from "../../shared/async-work-scope.js";
+import { AsyncWorkScope, getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { LegacyPluginSdkResourceHost } from "../legacy-sdk-resource-host.js";
 import { resetPluginLoaderTestStateForTest } from "../loader.test-fixtures.js";
@@ -59,9 +59,11 @@ it.each([
   "sdk-nested-prepare",
   "sdk-callback-drain",
   "sdk-cancel-drain",
+  "anthropic-read-cancel",
 ] as const)("keeps completion ownership coherent: %s", async (testCase) => {
   const sdk = testCase.startsWith("sdk-");
   const mode = testCase.replace(/^sdk-/, "");
+  const anthropicReadCancel = mode === "anthropic-read-cancel";
   const roots = createSyncSuiteTempRootTracker("runtime-llm-prepared-owner");
   const root = fs.realpathSync(roots.makeTempDir());
   fs.mkdirSync(path.join(root, "provider"));
@@ -87,7 +89,41 @@ it.each([
     if (response.writableEnded || response.destroyed) {
       return;
     }
-    response.writeHead(200, { "content-type": "text/event-stream" });
+    if (!response.headersSent) {
+      response.writeHead(200, { "content-type": "text/event-stream" });
+    }
+    if (anthropicReadCancel) {
+      const events = [
+        {
+          type: "message_start",
+          message: {
+            id: "lease-response",
+            role: "assistant",
+            model: "lease-model",
+            content: [],
+            usage: { input_tokens: 1, output_tokens: 0 },
+          },
+        },
+        { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+        {
+          type: "content_block_delta",
+          index: 0,
+          delta: {
+            type: "text_delta",
+            text: `result-${index}|${requestFacts[index]?.url}|${requestFacts[index]?.authorization}`,
+          },
+        },
+        { type: "content_block_stop", index: 0 },
+        { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 1 } },
+        { type: "message_stop" },
+      ];
+      if (index === 0 && !finishing) {
+        response.write(`data: ${JSON.stringify(events[0])}\n\n`);
+      } else {
+        response.end(events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(""));
+      }
+      return;
+    }
     response.end(
       `data: ${JSON.stringify({
         id: "completion-lease-response",
@@ -108,7 +144,12 @@ it.each([
   const server = createServer((request, response) => {
     request.resume();
     const index = requests.push(response) - 1;
-    requestFacts.push({ url: request.url ?? "/", authorization: request.headers.authorization });
+    const apiKey = request.headers["x-api-key"];
+    requestFacts.push({
+      url: request.url ?? "/",
+      authorization:
+        request.headers.authorization ?? (typeof apiKey === "string" ? apiKey : undefined),
+    });
     arrivals[index]?.resolve();
     if (finishing) {
       finish(response, index);
@@ -137,7 +178,8 @@ it.each([
       models: {
         providers: {
           [fixture.providerId]: {
-            api: "openai-completions",
+            api: anthropicReadCancel ? "anthropic-messages" : "openai-completions",
+            ...(anthropicReadCancel ? { request: { tls: { insecureSkipVerify: false } } } : {}),
             ...(mode === "auth" ? {} : { apiKey: "fixture-auth-A" }),
             baseUrl: `http://127.0.0.1:${address.port}/A/v1`,
             models: [
@@ -172,7 +214,10 @@ it.each([
       const setRuntimeKey = vi.spyOn(AuthStorage.prototype, "setRuntimeApiKey");
       const resolveModel = modelResolution.resolveModelAsync;
       const resolver = vi.spyOn(modelResolution, "resolveModelAsync");
-      const drainMode = mode === "callback-drain" || mode === "cancel-drain";
+      const drainMode = mode === "callback-drain" || mode === "cancel-drain" || anthropicReadCancel;
+      const bodyReadStarted = createDeferred();
+      const foreignWork = new AsyncWorkScope();
+      let cancelledInOrigin = false;
       const workStarted = createDeferred();
       let acceptedWorkStarted = false;
       let nestedPreparationCompleted = false;
@@ -208,7 +253,7 @@ it.each([
                 ...options,
                 onResponse: async (response, responseModel) => {
                   await options?.onResponse?.(response, responseModel);
-                  if (++responses !== 1) {
+                  if (++responses !== 1 || anthropicReadCancel) {
                     return;
                   }
                   if (mode === "nested-prepare") {
@@ -240,11 +285,12 @@ it.each([
               });
           }),
         );
-        if (mode === "cancel-drain") {
+        if (mode === "cancel-drain" || anthropicReadCancel) {
           const realFetch = globalThis.fetch;
           let wrappedResponse = false;
           transportSpies.push(
             vi.spyOn(globalThis, "fetch").mockImplementation(async (...args) => {
+              const origin = getAsyncWorkSignal();
               const response = await realFetch(...args);
               if (
                 wrappedResponse ||
@@ -257,9 +303,13 @@ it.each([
               if (!reader) {
                 throw new Error("Fixture provider response has no body");
               }
+              let reads = 0;
               return new Response(
                 new ReadableStream<Uint8Array>({
                   async pull(controller) {
+                    if (++reads === 2) {
+                      bodyReadStarted.resolve();
+                    }
                     const { value, done } = await reader.read();
                     if (done) {
                       controller.close();
@@ -268,6 +318,7 @@ it.each([
                     }
                   },
                   async cancel(reason) {
+                    cancelledInOrigin = getAsyncWorkSignal() === origin;
                     acceptedWorkStarted = true;
                     workStarted.resolve();
                     try {
@@ -600,7 +651,9 @@ it.each([
           return;
         }
         const abortController =
-          mode === "abort" || mode === "callback-drain" ? new AbortController() : undefined;
+          mode === "abort" || mode === "callback-drain" || anthropicReadCancel
+            ? new AbortController()
+            : undefined;
         const firstStarted = performance.now();
         const first = drainMode
           ? parentWork.track(() => start(0, abortController?.signal))
@@ -611,6 +664,13 @@ it.each([
         expect(firstBuilds).toBeGreaterThan(0);
         if (drainMode) {
           finish(requests[0]!, 0);
+          if (anthropicReadCancel) {
+            await bodyReadStarted.promise;
+            await new Promise<void>((resolve) => {
+              setImmediate(resolve);
+            });
+            foreignWork.run(() => abortController?.abort(new Error("foreign cancellation")));
+          }
           await Promise.race([
             workStarted.promise,
             first.then(() => {
@@ -625,6 +685,10 @@ it.each([
           const second = start(1);
           await waitForRequest(1, second);
           expect.soft(parentDrained).toBe(false);
+          if (anthropicReadCancel) {
+            expect.soft(cancelledInOrigin).toBe(true);
+            await foreignWork.drain();
+          }
           expect.soft(create.mock.calls.length).toBe(firstBuilds);
           expect(fork.mock.calls).toHaveLength(2);
           expect(fork.mock.calls[0]![0]).not.toBe(fork.mock.calls[1]![0]);
@@ -634,7 +698,9 @@ it.each([
           expect(parentDrained).toBe(true);
           finish(requests[1]!, 1);
           await expect(second).resolves.toMatchObject({
-            text: "result-1|/A/v1/chat/completions|Bearer fixture-auth-A",
+            text: anthropicReadCancel
+              ? "result-1|/A/v1/messages|fixture-auth-A"
+              : "result-1|/A/v1/chat/completions|Bearer fixture-auth-A",
           });
           const buildsAfterSecond = create.mock.calls.length;
           const third = start(2);
@@ -642,7 +708,9 @@ it.each([
           expect(create.mock.calls.length).toBe(buildsAfterSecond + 1);
           finish(requests[2]!, 2);
           await expect(third).resolves.toMatchObject({
-            text: "result-2|/A/v1/chat/completions|Bearer fixture-auth-A",
+            text: anthropicReadCancel
+              ? "result-2|/A/v1/messages|fixture-auth-A"
+              : "result-2|/A/v1/chat/completions|Bearer fixture-auth-A",
           });
           return;
         }
@@ -745,6 +813,7 @@ it.each([
         await parentDrain;
         await parentWork.drain();
         await Promise.all(sdkHosts.map((host) => host.close()));
+        await foreignWork.drain();
         for (const spy of transportSpies) {
           spy.mockRestore();
         }
