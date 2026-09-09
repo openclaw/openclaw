@@ -193,6 +193,24 @@ describe("prepareEmbeddedAttemptTimeout", () => {
     harness.timeout.clearTimers();
   });
 
+  it("preserves the remaining budget when the wall clock jumps during approval", async () => {
+    const harness = createTimeoutHarness();
+
+    await vi.advanceTimersByTimeAsync(30);
+    emitApproval("waiting-approval", "clock-step");
+    vi.setSystemTime(60_000);
+    emitApproval("approval-resolved", "clock-step");
+
+    expect(harness.timeout.getRunAbortDeadlineAtMs()).toBe(60_070);
+    await vi.advanceTimersByTimeAsync(69);
+    expect(harness.abortRun).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(harness.markTimedOutByRunBudget).toHaveBeenCalledOnce();
+    expect(harness.abortRun).toHaveBeenCalledWith(true);
+    harness.timeout.clearTimers();
+  });
+
   it("pauses only the unused compaction grace budget during inline approval", async () => {
     const harness = createTimeoutHarness({ pendingCompaction: true });
     await vi.advanceTimersByTimeAsync(120);
