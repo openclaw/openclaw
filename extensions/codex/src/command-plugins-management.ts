@@ -111,38 +111,17 @@ export async function handleCodexPluginsSubcommand(
   }
 
   if (normalized === "status") {
-    if (args.length === 0) {
-      if (!canMutateCodexHost(ctx)) {
-        return {
-          text: "Only an owner or operator.admin gateway client can inspect Codex plugin status.",
-        };
-      }
-      const current = await io.readConfig();
-      const names = Object.keys(current.plugins ?? {}).toSorted();
-      const presentation = buildCodexCommandPickerPresentation(
-        "Configured Codex plugins",
-        names.length === 0
-          ? "No Codex plugins are explicitly configured. Discover a plugin before checking its app access."
-          : "Choose a configured plugin to inspect its app pages and readiness. For additional plugins, use /codex plugins list and /codex plugins status <configured-plugin>.",
-        [
-          ...names.slice(0, 5).map((name) => ({
-            label: formatCodexDisplayText(name.slice(0, 80)),
-            command: `/codex plugins status '${name.replaceAll("'", "'\\''")}'`,
-          })),
-          { label: "Available Codex plugins", command: "/codex plugins available" },
-        ],
-      );
-      return {
-        text: renderMessagePresentationFallbackText({ presentation }),
-        presentation,
-        presentationTextMode: "fallback",
-      };
-    }
     const requestedPlugin = args[0];
     const page = args[1] === undefined ? 1 : Number(args[1]);
-    if (!requestedPlugin || args.length > 2 || !Number.isSafeInteger(page) || page < 1) {
+    if (
+      !requestedPlugin ||
+      !parseCodexPluginMarketplaceId(requestedPlugin) ||
+      args.length > 2 ||
+      !Number.isSafeInteger(page) ||
+      page < 1
+    ) {
       return {
-        text: "Usage: /codex plugins status <configured-plugin> [page]. Use /codex plugins list to find a configured plugin.",
+        text: "Usage: /codex plugins status <name>@<marketplace> [page]. Use /codex plugins list to find a configured plugin.",
       };
     }
     if (!canMutateCodexHost(ctx)) {
@@ -247,7 +226,6 @@ function buildPluginsMenuReply(): PluginCommandResult {
   const buttons: CodexCommandPickerButton[] = [
     { label: "list", command: "/codex plugins list" },
     { label: "available", command: "/codex plugins available" },
-    { label: "status", command: "/codex plugins status" },
     { label: "enable", command: "/codex plugins enable" },
     { label: "disable", command: "/codex plugins disable" },
     { label: "help", command: "/codex plugins help" },
@@ -258,7 +236,7 @@ function buildPluginsMenuReply(): PluginCommandResult {
     "",
     "  1. /codex plugins list",
     "  2. /codex plugins available",
-    "  3. /codex plugins status <configured-plugin>",
+    "  3. /codex plugins status <name>@<marketplace>",
     "  4. /codex plugins enable",
     "  5. /codex plugins disable",
     "  6. /codex plugins help",
@@ -342,7 +320,7 @@ function buildPluginsHelp(): string {
     "- /codex plugins                            (alias for list)",
     "- /codex plugins list                       show explicitly configured plugins",
     "- /codex plugins available                  list discoverable Codex marketplaces",
-    "- /codex plugins status <configured-plugin> [page]  inspect app readiness without refreshing",
+    "- /codex plugins status <name>@<marketplace> [page]  inspect app readiness without refreshing",
     "- /codex plugins install <name>@<marketplace>  install and authorize one plugin",
     "- /codex plugins enable <name>              enable a configured plugin",
     "- /codex plugins disable <name>             disable a configured plugin",
@@ -624,6 +602,7 @@ function formatPluginList(
     ...(globalEnabled
       ? []
       : ["Global codexPlugins.enabled is off; configured sub-plugins are inactive.", ""]),
+    "Inspect one configured plugin: /codex plugins status <name>@<marketplace> [page].",
     POLICY_REFRESH_HINT,
   ].join("\n");
 }

@@ -114,7 +114,7 @@ function fixture(stableAccount = true) {
     channel: "test",
     isAuthorizedSender: true,
     senderIsOwner: true,
-    commandBody: "/codex plugins status notes",
+    commandBody: "/codex plugins status notes@company-tools",
     getCurrentConversationBinding: async () => null,
     requestConversationBinding: async () => ({ status: "error", message: "unused" }),
     detachConversationBinding: async () => ({ removed: false }),

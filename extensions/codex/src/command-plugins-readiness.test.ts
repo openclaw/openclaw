@@ -11,7 +11,7 @@ const ctx: PluginCommandContext = {
   channel: "test",
   isAuthorizedSender: true,
   senderIsOwner: true,
-  commandBody: "/codex plugins status notes",
+  commandBody: "/codex plugins status notes@company-tools",
   args: "",
   getCurrentConversationBinding: async () => null,
   requestConversationBinding: async () => ({ status: "error", message: "unused" }),
@@ -172,6 +172,33 @@ function fixture(
 }
 
 describe("Codex plugin status command", () => {
+  it.each(
+    [
+      [],
+      ["notes"],
+      ["notes@"],
+      ["notes@company-tools", "0"],
+      ["notes@company-tools", "1", "extra"],
+    ].map((args) => ({ args })),
+  )(
+    "requires one qualified plugin identity and an optional valid page: $args",
+    async ({ args }) => {
+      const test = fixture();
+      const result = await handleCodexPluginsSubcommand(
+        ctx,
+        ["status", ...args],
+        test.io,
+        test.runtime,
+      );
+      expect(result.text).toContain("Usage: /codex plugins status <name>@<marketplace> [page]");
+      expect(result.text).toContain("/codex plugins list");
+      expect(result.presentation).toBeUndefined();
+      expect(test.io.readConfig).not.toHaveBeenCalled();
+      expect(test.request).not.toHaveBeenCalled();
+      expect(test.io.mutate).not.toHaveBeenCalled();
+    },
+  );
+
   it.each([
     { options: { accountType: "apiKey" as const }, reason: "ChatGPT sign-in" },
     { options: { appsFeature: false }, reason: "disabled in this Codex runtime" },
@@ -188,7 +215,7 @@ describe("Codex plugin status command", () => {
     const test = fixture(options);
     const result = await handleCodexPluginsSubcommand(
       ctx,
-      ["status", "notes"],
+      ["status", "notes@company-tools"],
       test.io,
       test.runtime,
     );
@@ -202,7 +229,7 @@ describe("Codex plugin status command", () => {
     const test = fixture({ disabled: true });
     const result = await handleCodexPluginsSubcommand(
       ctx,
-      ["status", "notes"],
+      ["status", "notes@company-tools"],
       test.io,
       test.runtime,
     );
@@ -216,7 +243,7 @@ describe("Codex plugin status command", () => {
     const test = fixture({ appCount: 0 });
     const result = await handleCodexPluginsSubcommand(
       ctx,
-      ["status", "notes"],
+      ["status", "notes@company-tools"],
       test.io,
       test.runtime,
     );
@@ -235,7 +262,7 @@ describe("Codex plugin status command", () => {
     const test = fixture({ catalog });
     const result = await handleCodexPluginsSubcommand(
       ctx,
-      ["status", "notes"],
+      ["status", `notes@${catalog.marketplace}`],
       test.io,
       test.runtime,
     );
@@ -250,7 +277,7 @@ describe("Codex plugin status command", () => {
     const test = fixture({ failMethod: "app/installed", unsupported: true });
     const result = await handleCodexPluginsSubcommand(
       ctx,
-      ["status", "notes"],
+      ["status", "notes@company-tools"],
       test.io,
       test.runtime,
     );
@@ -263,7 +290,7 @@ describe("Codex plugin status command", () => {
     const test = fixture();
     const result = await handleCodexPluginsSubcommand(
       ctx,
-      ["status", "notes"],
+      ["status", "notes@company-tools"],
       test.io,
       test.runtime,
     );
@@ -311,7 +338,7 @@ describe("Codex plugin status command", () => {
     const test = fixture(options);
     const result = await handleCodexPluginsSubcommand(
       ctx,
-      ["status", "notes"],
+      ["status", "notes@company-tools"],
       test.io,
       test.runtime,
     );
@@ -339,7 +366,7 @@ describe("Codex plugin status command", () => {
     const test = fixture(options);
     const result = await handleCodexPluginsSubcommand(
       ctx,
-      ["status", "notes"],
+      ["status", "notes@company-tools"],
       test.io,
       test.runtime,
     );
@@ -357,7 +384,7 @@ describe("Codex plugin status command", () => {
     });
     const first = await handleCodexPluginsSubcommand(
       ctx,
-      ["status", "notes"],
+      ["status", "notes@company-tools"],
       test.io,
       test.runtime,
     );
@@ -400,7 +427,7 @@ describe("Codex plugin status command", () => {
       }
       const first = await handleCodexPluginsSubcommand(
         ctx,
-        ["status", "notes"],
+        ["status", `${pluginName}@${marketplace}`],
         test.io,
         test.runtime,
       );
@@ -426,7 +453,7 @@ describe("Codex plugin status command", () => {
     const test = fixture();
     const result = await handleCodexPluginsSubcommand(
       { ...ctx, senderIsOwner: false },
-      ["status", "notes"],
+      ["status", "notes@company-tools"],
       test.io,
       test.runtime,
     );

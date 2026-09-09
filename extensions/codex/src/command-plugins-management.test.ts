@@ -24,6 +24,7 @@ describe("Codex /codex plugins subcommand", () => {
     const result = await handleCodexPluginsSubcommand(fakeCtx, ["list"], io);
     expect(result.text).toContain("ON   google-calendar");
     expect(result.text).toContain("openclaw.json");
+    expect(result.text).toContain("/codex plugins status <name>@<marketplace>");
   });
 
   it("lists effective disabled status when the global plugin switch is off", async () => {
@@ -52,7 +53,6 @@ describe("Codex /codex plugins subcommand", () => {
     expect(buttonCommands(result)).toEqual([
       "/codex plugins list",
       "/codex plugins available",
-      "/codex plugins status",
       "/codex plugins enable",
       "/codex plugins disable",
       "/codex plugins help",

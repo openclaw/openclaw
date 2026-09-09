@@ -229,12 +229,11 @@ can discover repository-local plugins without enabling them. The owner-scoped
 `codex_plugins` model tool is also read-only: it can recommend an exact install
 command but cannot install, enable, or add a marketplace.
 
-`status` without a target opens a picker of explicitly configured plugins for
-an owner or `operator.admin`. The picker reads local OpenClaw configuration
-only and offers discovery when no plugins are configured.
+`status <name>@<marketplace> [page]` inspects exactly one configured plugin and
+requires an owner or `operator.admin`. The qualified identity is required;
+bare `status` or an unqualified name returns usage guidance pointing to `list`.
 
-`status <configured-plugin> [page]` requires the same authority. It
-shows bundle installation, marketplace restrictions, Codex enablement, and
+Status shows bundle installation, marketplace restrictions, Codex enablement, and
 shared OpenClaw app access separately. The OpenClaw setting controls app access
 for new conversations; it does not install or enable the Codex bundle.
 
