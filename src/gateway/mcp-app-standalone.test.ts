@@ -68,6 +68,7 @@ describe("MCP App standalone host", () => {
         createMcpAppStandaloneTicket({
           sessionKey: `agent:${index}`,
           view: { ...view, viewId: `mcp-app-${index}` },
+          toolOperationsAuthorized: true,
           nowMs,
           secret,
         }),
@@ -77,10 +78,49 @@ describe("MCP App standalone host", () => {
       createMcpAppStandaloneTicket({
         sessionKey: "agent:overflow",
         view: { ...view, viewId: "mcp-app-overflow" },
+        toolOperationsAuthorized: true,
         nowMs,
         secret,
       }),
     ).toBeUndefined();
+  });
+
+  it("binds tool authority and never reuses a stronger ticket for a read-only issuer", async () => {
+    const stronger = issueTicket({ sessionKey: "agent:main:main", view, nowMs, secret });
+    const readOnly = issueTicket({
+      sessionKey: "agent:main:main",
+      view,
+      toolOperationsAuthorized: false,
+      nowMs: nowMs + 1,
+      secret,
+    });
+
+    expect(readOnly.ticket).not.toBe(stronger.ticket);
+    const payload = await request({
+      url: "/__openclaw__/mcp-app/view",
+      authorization: `MCP-App ${readOnly.ticket}`,
+    });
+    expect(JSON.parse(String(payload.end.mock.calls[0]?.[0]))).toMatchObject({
+      serverTools: false,
+    });
+
+    const denied = await request({
+      url: "/__openclaw__/mcp-app/view",
+      method: "POST",
+      authorization: `MCP-App ${readOnly.ticket}`,
+      body: { method: "tools/call", params: { name: "app-only", arguments: {} } },
+    });
+    expect(denied.res.statusCode).toBe(403);
+    expect(runtime.callTool).not.toHaveBeenCalled();
+
+    const allowed = await request({
+      url: "/__openclaw__/mcp-app/view",
+      method: "POST",
+      authorization: `MCP-App ${stronger.ticket}`,
+      body: { method: "tools/call", params: { name: "app-only", arguments: {} } },
+    });
+    expect(allowed.res.statusCode).toBe(200);
+    expect(runtime.callTool).toHaveBeenCalledOnce();
   });
 
   it("serves a hash-protected static shell without per-view data", async () => {

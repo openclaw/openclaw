@@ -174,15 +174,21 @@ requested reset or run its follow-up text; normal idle/daily rollover still
 applies. Ask your Gateway administrator to reset the session, or send your
 message without the command.
 
+Standalone `/new` and `/reset` acknowledgements do not start a model turn or
+look up model-derived thinking and reasoning defaults. Follow-up text still
+runs through the configured model and reasoning settings.
+
 ## Command list
 
 Commands come from three sources:
 
 - **Core built-ins:** `src/auto-reply/commands-registry.shared.ts`
 - **Plugin commands:** plugin `registerCommand()` calls
+- **Skill commands:** commands exported by installed skills, assembled in
+  `src/auto-reply/commands-registry-list.ts`
 
-Availability depends on config flags, channel surface, and installed/enabled
-plugins.
+Availability depends on config flags, channel surface, installed/enabled
+plugins, and installed skills.
 
 ### Core commands
 

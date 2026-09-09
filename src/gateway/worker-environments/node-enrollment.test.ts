@@ -117,6 +117,11 @@ describe("worker node enrollment", () => {
       ),
       fs.writeFile(path.join(packageRoot, "openclaw.mjs"), 'import "./dist/entry.js";'),
       fs.writeFile(path.join(packageRoot, "node-version.mjs"), "export const supported = true;"),
+      fs.writeFile(path.join(packageRoot, "node-sqlite.mjs"), "export const probe = true;"),
+      fs.writeFile(
+        path.join(packageRoot, "node-runtime-update.mjs"),
+        "export const update = true;",
+      ),
       fs.writeFile(path.join(packageRoot, "dist/entry.js"), "export const ready = true;"),
       fs.writeFile(
         path.join(packageRoot, "dist/build-info.json"),

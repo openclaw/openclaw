@@ -1,4 +1,5 @@
 import type { TriageUpdateFailure } from "../commands/triage-update.js";
+import { buildRestartSentinelRow, parseRestartSentinelEnvelope } from "./restart-sentinel-store.js";
 import { managedServiceStateUpdateScript } from "./update-managed-service-handoff-state.test-support.js";
 import { buildUpdateRestartSentinelPayload } from "./update-restart-sentinel-payload.js";
 import type { UpdateRunRecord } from "./update-run-record.js";
@@ -385,6 +386,16 @@ export function createManagedServiceUpdaterFixtureScript(params: {
           meta: { root, handoffId: `${kind}-boundary` },
         })
       : null;
+  // Use the canonical row shape without moving publication ahead of the child.
+  const notificationEnvelope = notification
+    ? parseRestartSentinelEnvelope({ version: 1, payload: notification })
+    : null;
+  if (notification && !notificationEnvelope) {
+    throw new Error("Expected a valid updater notification fixture");
+  }
+  const notificationRow = notificationEnvelope
+    ? buildRestartSentinelRow(notificationEnvelope.payload, notificationEnvelope.payload.ts)
+    : null;
   return [
     `void (async () => {`,
     `const fs = require("node:fs");`,
@@ -395,11 +406,12 @@ export function createManagedServiceUpdaterFixtureScript(params: {
         ]
       : []),
     `fs.writeFileSync(${JSON.stringify(updaterPath)}, "ran");`,
-    ...(notification
+    ...(notificationEnvelope && notificationRow
       ? [
-          `const notification = ${JSON.stringify(notification)};`,
+          `const notification = ${JSON.stringify(notificationEnvelope.payload)};`,
+          `const row = ${JSON.stringify(notificationRow)};`,
           `const db = new (require("node:sqlite").DatabaseSync)(${JSON.stringify(stateDatabasePath)});`,
-          `db.prepare("INSERT INTO gateway_restart_sentinel (sentinel_key, version, kind, status, ts, stats_json, payload_json, updated_at_ms) VALUES ('current', 1, ?, ?, ?, ?, ?, ?)").run(notification.kind, notification.status, notification.ts, JSON.stringify(notification.stats), JSON.stringify(notification), notification.ts); db.close();`,
+          `db.prepare("INSERT INTO gateway_restart_sentinel (" + Object.keys(row).join(", ") + ") VALUES (" + Object.keys(row).map(() => "?").join(", ") + ")").run(...Object.values(row)); db.close();`,
           `${managedServiceStateUpdateScript(statePath, "state.publishedSentinel = { version: 1, payload: notification, revision: notification.ts }")};`,
           ...(options?.updaterNotification === "consumed" &&
           (updaterResult?.status === "ok" ||

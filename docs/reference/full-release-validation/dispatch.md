@@ -41,6 +41,52 @@ them for later Code-SHA, Release-SHA, and focused reruns. Main lineage
 authorizes the initial Tooling SHA selection; it does not authorize refreshing
 the tooling from moving `main`.
 
+## Retain and reconcile the root request
+
+Before creating remote refs, the helper writes a private operator artifact at
+`.artifacts/full-release-validation/<request-id>.json` and prints its path.
+Use `--request-file <path>` to choose the artifact location. It retains the
+repository, workflow, frozen target/tooling identities, transport refs, complete
+typed/defaulted inputs, effective soak, and the first observed run and attempt.
+The helper records attempted intent before its single workflow dispatch POST.
+
+After a lost response or interruption, reuse that exact artifact:
+
+```bash
+node scripts/full-release-validation-at-sha.mjs \
+  --reconcile-request .artifacts/full-release-validation/<request-id>.json
+```
+
+An existing `--request-file` also enters read-only reconciliation; conflicting
+target, tooling, or input arguments are rejected. Recovery performs no ref
+creation/deletion, dispatch, rerun, cancellation, Git fetch, or request rewrite.
+`dispatch=observed` reports the exact run URL and attempt, not successful
+validation. A newer attempt cannot replace the retained attempt.
+
+Missing or ambiguous runs, incomplete pagination, unavailable or mismatched input
+witnesses, and exhausted discovery remain `dispatch=unknown`. A complete HTTP
+rejection is retained as `dispatch=rejected`; neither state permits redispatch.
+Keep the artifact and printed refs for investigation. There is no automatic
+retention expiry or cleanup for the local artifact; remove it only through
+deliberate operator cleanup. Losing or deleting it never proves non-execution.
+Independent requests and copies on other hosts are not globally deduplicated.
+
+New requests require `FULL_RELEASE_DISPATCH_WITNESS_CONTRACT=1` in the pinned
+workflow. Older frozen tooling fails before remote creation instead of starting
+work whose inputs cannot be proven. The helper never upgrades the Tooling SHA.
+Use `frv status` for already-running frozen validations; choosing different
+tooling for a new validation requires the release owner's explicit decision.
+The workflow's separate input witness is attempt-bound and retained for seven
+days. It reads the event file directly, without interpolating inputs into step
+environment variables or logs. Only safe GitHub context and a SHA-256 digest are
+uploaded: input keys sorted lexicographically, primitive values normalized to
+wire strings, then JSON serialization. The immutable workflow SHA binds the
+input types; the complete typed and wire maps remain in the private local
+artifact. Runner or artifact-service failure can leave the witness unavailable;
+it is never a release receipt or publication authority.
+
+## Select coverage
+
 `provider` also accepts `anthropic` or `minimax` for cross-OS onboarding and the
 end-to-end agent turn. Regular `release/*` targets accept the branch's final
 package version or a matching beta prerelease. For a correction, use

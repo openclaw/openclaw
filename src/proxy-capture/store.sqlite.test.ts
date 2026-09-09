@@ -169,8 +169,8 @@ describe("DebugProxyCaptureStore", () => {
       sourceProcess: "cli",
     });
 
-    // Exit-time hook closes the shared handle out from under the cached store;
-    // finalizeDebugProxyCapture then re-fetches and must not get a dead handle.
+    // Explicit acquisition after shared-handle retirement must rebind; retained
+    // capture finalizers instead keep their exact owner and must not reopen it.
     closeOpenClawStateDatabaseForTest();
     expect(stale.isClosed).toBe(true);
 

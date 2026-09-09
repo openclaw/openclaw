@@ -93,6 +93,7 @@ type CommandHandlerContext = {
   consumeCompletedRunForPendingSend?: (runId: string) => boolean;
   isRunObserved?: (runId: string) => boolean;
   flushPendingHistoryRefreshIfIdle?: () => void;
+  reopenQuestion?: () => void | Promise<void>;
   runAuthFlow?: (params: { provider?: string }) => Promise<{
     exitCode: number | null;
     signal: NodeJS.Signals | null;
@@ -865,6 +866,13 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       await abortActive({ preferActive: true });
     },
     settings: () => openSettings(),
+    question: async () => {
+      if (context.reopenQuestion) {
+        await context.reopenQuestion();
+      } else {
+        chatLog.addSystem("no pending question");
+      }
+    },
     exit: () => requestExit(),
   } satisfies Record<TuiCommandHandlerName, CommandHandler>;
 

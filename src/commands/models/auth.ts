@@ -60,6 +60,7 @@ import type { WizardPrompter } from "../../wizard/prompts.js";
 import { validateAnthropicSetupToken } from "../auth-token.js";
 import { repairCodexRuntimePluginInstallForModelSelection } from "../codex-runtime-plugin-install.js";
 import { repairCopilotRuntimePluginInstallForModelSelection } from "../copilot-runtime-plugin-install.js";
+import { tryImportProviderCredential } from "./auth-credential-import.js";
 import { refreshRunningGatewayAuthState } from "./auth-refresh.js";
 import { loadValidConfigOrThrow, resolveModelsTargetAgent, updateConfig } from "./shared.js";
 
@@ -426,23 +427,13 @@ async function persistProviderAuthResult(params: {
       ...(params.env?.OPENCLAW_STATE_DIR ? { stateDir: params.env.OPENCLAW_STATE_DIR } : {}),
     });
     const profile = expectDefined(persisted[0], "persisted auth profile");
-    const configuredSelection = resolveConfiguredAuthSelectionForProvider(
-      params.config,
-      profile.credential.provider,
-    );
     persistedProfiles.push(profile);
-    const promotion = await promoteAuthProfileInOrder({
+    await promotePersistedAuthProfile({
+      config: params.config,
       agentDir: params.agentDir,
       provider: profile.credential.provider,
       profileId: profile.profileId,
-      createIfMissing: configuredSelection.createIfMissing,
-      ...(configuredSelection.order ? { createFromOrder: configuredSelection.order } : {}),
     });
-    if (!promotion.ok) {
-      throw new Error(
-        "The auth profile was saved, but its order could not be updated because the auth store is busy. Wait a moment, then retry the login.",
-      );
-    }
   }
 
   // Auth login owns the credential store. Keep openclaw.json untouched unless
@@ -519,12 +510,34 @@ function resolveConfiguredAuthSelectionForProvider(
   const profileIds = Object.entries(cfg.auth?.profiles ?? {})
     .filter(
       ([, profile]) =>
-        resolveProviderIdForAuth(profile.provider, { config: cfg }) === providerAuthKey,
+        resolveProviderIdForAuth(profile.provider, { config: cfg, storedCredential: true }) ===
+        providerAuthKey,
     )
     .map(([profileId]) => profileId);
   return profileIds.length > 0
     ? { createIfMissing: true, order: profileIds }
     : { createIfMissing: false };
+}
+
+async function promotePersistedAuthProfile(params: {
+  config: OpenClawConfig;
+  agentDir: string;
+  provider: string;
+  profileId: string;
+}): Promise<void> {
+  const selection = resolveConfiguredAuthSelectionForProvider(params.config, params.provider);
+  const promotion = await promoteAuthProfileInOrder({
+    agentDir: params.agentDir,
+    provider: params.provider,
+    profileId: params.profileId,
+    createIfMissing: selection.createIfMissing,
+    ...(selection.order ? { createFromOrder: selection.order } : {}),
+  });
+  if (!promotion.ok) {
+    throw new Error(
+      "The auth profile was saved, but its order could not be updated because the auth store is busy. Wait a moment, then retry the login.",
+    );
+  }
 }
 
 async function runProviderAuthMethod(params: {
@@ -893,6 +906,7 @@ export type ModelsAuthLoginFlowResult = {
   providerId: string;
   methodId: string;
   defaultModel?: string;
+  imported?: boolean;
   profiles: Array<{
     profileId: string;
     provider: string;
@@ -908,6 +922,7 @@ export type ModelsAuthLoginFlowOptions = LoginOptions & {
   isRemote?: boolean;
   signal?: AbortSignal;
   openUrl?: (url: string) => Promise<void>;
+  beforePersistentEffect?: () => void | Promise<void>;
 };
 
 /** Resolves a requested login provider or throws with available provider details. */
@@ -1035,6 +1050,44 @@ export async function runModelsAuthLoginFlowCore(
     throw new Error(
       `Unknown auth method. Run ${formatCliCommand("openclaw models auth login --provider " + selectedProvider.id)} without --method to choose interactively.`,
     );
+  }
+
+  const imported =
+    !opts.force && !opts.profileId && !opts.setDefault
+      ? await tryImportProviderCredential({
+          method: chosenMethod,
+          providerId: selectedProvider.id,
+          config: context.config,
+          agentId: context.agentId,
+          runtime: opts.runtime,
+          signal: opts.signal,
+          beforePersistentEffect: opts.beforePersistentEffect,
+        })
+      : undefined;
+  if (imported && "unavailableReason" in imported) {
+    await prompter.note(imported.unavailableReason, "Existing CLI sign-in");
+  } else if (imported) {
+    await promotePersistedAuthProfile({
+      config: context.config,
+      agentDir: context.agentDir,
+      provider: imported.provider,
+      profileId: imported.profileId,
+    });
+    await refreshRunningGatewayAuthState(context.agentId, opts.runtime);
+    if (imported.configUpdated) {
+      logConfigUpdated(opts.runtime);
+    }
+    opts.runtime.log(
+      `Auth profile: ${imported.profileId} (${imported.provider}/${imported.mode}, imported)`,
+    );
+    return {
+      providerId: selectedProvider.id,
+      methodId: chosenMethod.id,
+      imported: true,
+      profiles: [
+        { profileId: imported.profileId, provider: imported.provider, mode: imported.mode },
+      ],
+    };
   }
 
   if (opts.force) {

@@ -82,7 +82,7 @@ export function resolveConversationBindingContextFromMessage(params: {
 }
 
 export function resolveConversationBindingContextFromAcpCommand(
-  params: HandleCommandsParams,
+  params: Pick<HandleCommandsParams, "cfg" | "ctx" | "command" | "sessionKey">,
 ): ReturnType<typeof resolveCommandConversationResolution> {
   return resolveConversationBindingContextFromMessage({
     cfg: params.cfg,

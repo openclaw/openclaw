@@ -80,13 +80,15 @@ function twoStartsThenResumeMethods(): string[] {
 
 function createSequentialLifecycleHarness(
   resume: (requestParams?: unknown) => ReturnType<typeof threadStartResult>,
+  effectiveConfig: JsonObject = {},
+  origins: Record<string, JsonObject> = {},
 ) {
   let starts = 0;
   return createLeasedCodexLifecycleHarness({
     agentDir: path.join(tempDir, "agent"),
     respond: async (method: string, requestParams?: unknown) => {
       if (method === "config/read") {
-        return { config: {}, origins: {}, layers: [] };
+        return { config: effectiveConfig, origins, layers: [] };
       }
       if (method === "configRequirements/read") {
         return { requirements: null };
@@ -650,6 +652,55 @@ async function createLeasedLifecycleWireClient(
 }
 
 describe("Codex app-server thread lifecycle bindings", () => {
+  it("inherits the effective native project-document budget", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const fixture = await createSequentialLifecycleHarness(
+      () => threadStartResult("thread-1"),
+      {
+        project_doc_max_bytes: 200_000,
+      },
+      {
+        project_doc_max_bytes: {
+          name: { type: "user", file: "/codex/config.toml", profile: null },
+          version: "sha256:authored-budget",
+        },
+      },
+    );
+
+    await startOrResumeThread({
+      client: fixture.client,
+      params: createParams(sessionFile, workspaceDir),
+      cwd: workspaceDir,
+      dynamicTools: [],
+      appServer: createThreadLifecycleAppServerOptions(),
+    });
+
+    expect(
+      fixture.request.mock.calls.find(([method]) => method === "thread/start")?.[1],
+    ).toMatchObject({ config: { project_doc_max_bytes: 200_000 } });
+  });
+
+  it("preserves the OpenClaw project-document budget for Codex's unauthored default", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const fixture = await createSequentialLifecycleHarness(() => threadStartResult("thread-1"), {
+      project_doc_max_bytes: 32_768,
+    });
+
+    await startOrResumeThread({
+      client: fixture.client,
+      params: createParams(sessionFile, workspaceDir),
+      cwd: workspaceDir,
+      dynamicTools: [],
+      appServer: createThreadLifecycleAppServerOptions(),
+    });
+
+    expect(
+      fixture.request.mock.calls.find(([method]) => method === "thread/start")?.[1],
+    ).toMatchObject({ config: { project_doc_max_bytes: 131_072 } });
+  });
+
   it("rejects a host-only rotation after recovering the predecessor before the lifecycle lease", async () => {
     const workspaceDir = path.join(tempDir, "recovered-workspace");
     const params = createParams(path.join(tempDir, "recovered.jsonl"), workspaceDir);
@@ -4984,8 +5035,10 @@ describe("Codex app-server thread lifecycle bindings", () => {
       "configRequirements/read",
       "thread/start",
       "thread/unsubscribe",
+      "config/read",
       "thread/start",
       "thread/unsubscribe",
+      "config/read",
       "thread/read",
       "thread/resume",
       "thread/inject_items",
@@ -5786,6 +5839,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
     expect(buildDenyAllPluginThreadConfig).toHaveBeenCalledTimes(1);
     const requestCalls = request.mock.calls;
     expect(requestCalls.map(([method]) => method)).toEqual([
+      "config/read",
       "thread/start",
       "thread/unsubscribe",
       "config/read",

@@ -370,7 +370,9 @@ const skillWorkshopRelocationCheck: HealthCheck = {
       inspection.legacyBackupRootCount > inspection.preservedLegacyBackupRootCount
     ) {
       fixHints.push(
-        "Run `openclaw doctor --fix` to process eligible Workshop relocations and legacy collection backups.",
+        ctx.mode === "doctor"
+          ? "Review the remaining targets and migration warnings above. Resolve their ownership or recovery blockers before retrying Doctor; repeating the same repair alone will not resolve them."
+          : "Run `openclaw doctor --fix` to process eligible Workshop relocations and legacy collection backups.",
       );
     }
     if (inspection.preservedLegacyBackupRootCount > 0) {
@@ -388,7 +390,7 @@ const skillWorkshopRelocationCheck: HealthCheck = {
           .map(([agentId, count]) => `${agentId}: ${count}`)
           .join(
             ", ",
-          )}) and ${inspection.legacyBackupRootCount} legacy collection backup root${inspection.legacyBackupRootCount === 1 ? "" : "s"} (${inspection.preservedLegacyBackupRootCount} preserved for review).`,
+          )}) and ${inspection.legacyBackupRootCount} legacy collection backup root${inspection.legacyBackupRootCount === 1 ? "" : "s"} (${inspection.preservedLegacyBackupRootCount} preserved for review).${inspection.externalProposalDetails?.length ? `\nRemaining proposal targets (showing ${inspection.externalProposalDetails.length} of ${inspection.externalProposalCount}):\n${inspection.externalProposalDetails.join("\n")}` : ""}`,
         path: "skills.workshop",
         fixHint: fixHints.join(" "),
       },
@@ -1118,6 +1120,18 @@ function createGatewayDaemonCheck(deps: CoreHealthCheckDeps): DoctorHealthCheck 
   };
 }
 
+const nodeRuntimeCheck: HealthCheck = {
+  id: "core/doctor/node-runtime",
+  kind: "core",
+  description:
+    "Node SQLite capabilities and version support are represented as structured findings.",
+  source: "doctor",
+  async detect() {
+    const runtime = await loadDoctorCoreChecksRuntimeModule();
+    return runtime.collectNodeRuntimeFindings();
+  },
+};
+
 const browserCheck: HealthCheck = {
   id: "core/doctor/browser",
   kind: "core",
@@ -1432,6 +1446,7 @@ function createConvertedWorkflowChecks(deps: CoreHealthCheckDeps): readonly Doct
     gatewayPlatformNotesCheck,
     createGatewayHealthCheck(deps),
     createGatewayDaemonCheck(deps),
+    nodeRuntimeCheck,
     createSecurityCheck(deps),
     browserCheck,
     openAIOAuthTlsCheck,

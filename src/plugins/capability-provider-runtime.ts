@@ -13,6 +13,7 @@ import { isBundledProviderCompatContract } from "./bundled-provider-compat.js";
 import type { PluginCapabilityCatalog } from "./capability-catalog.types.js";
 import { normalizePluginsConfig, type NormalizedPluginsConfig } from "./config-state.js";
 import { getCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
+import { createInstalledPluginEnabledPredicate } from "./installed-plugin-index.js";
 import { resolvePluginCapabilityCatalogContext } from "./loader-runtime-load.js";
 import { resolveRuntimePluginRegistry, type PluginLoadOptions } from "./loader.js";
 import {
@@ -89,6 +90,7 @@ function resolveCapabilityPluginIds(params: {
   pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "index" | "plugins">;
 }): CapabilityPluginResolution {
   const snapshot = loadCapabilityManifestSnapshot(params);
+  const isEnabled = createInstalledPluginEnabledPredicate(snapshot.index.plugins, params.cfg);
   let normalizedConfig: NormalizedPluginsConfig | undefined;
   const providerIds = params.providerIds;
   const matchedProviderIds = providerIds ? new Set<string>() : undefined;
@@ -104,6 +106,7 @@ function resolveCapabilityPluginIds(params: {
         snapshot,
         plugin,
         config: params.cfg,
+        isInstalledPluginEnabled: isEnabled,
         normalizedConfig:
           params.cfg?.plugins && (normalizedConfig ??= normalizePluginsConfig(params.cfg.plugins)),
         // Legacy TTS remains available when the operator disables plugins globally.
@@ -484,12 +487,21 @@ export function resolvePluginCapabilityProvider<K extends CapabilityProviderRegi
   providerId: string;
   cfg?: OpenClawConfig;
 }): CapabilityProviderFor<K> | undefined {
+  const resolution = preparePluginCapabilityProviderLookup(params);
+  return resolution.resolve(resolution.load ? loadCapabilityProviderEntries(resolution.load) : []);
+}
+
+export function preparePluginCapabilityProviderLookup<K extends CapabilityProviderRegistryKey>(
+  params: { key: K; providerId: string; cfg?: OpenClawConfig },
+  onSelectedRegistry?: (registry: PluginRegistry | undefined) => void,
+) {
   if (shouldSkipCapabilityResolution(params)) {
-    return undefined;
+    return { load: undefined, resolve: (_entries: PluginRegistry[K]) => undefined };
   }
 
   const activeRegistry =
     getPluginRuntimeGatewayRequestScope()?.pluginRegistry ?? getLoadedRuntimePluginRegistry();
+  onSelectedRegistry?.(activeRegistry);
   const activeProviders = filterPolicyAllowedCapabilityProviders({
     entries: activeRegistry?.[params.key] ?? [],
     registry: activeRegistry,
@@ -498,7 +510,7 @@ export function resolvePluginCapabilityProvider<K extends CapabilityProviderRegi
   });
   const activeProvider = findProviderById(activeProviders, params.providerId);
   if (activeProvider) {
-    return activeProvider;
+    return { load: undefined, resolve: (_entries: PluginRegistry[K]) => activeProvider };
   }
 
   const loadContext = resolveCapabilityLoadContext(activeRegistry, params.cfg);
@@ -522,7 +534,7 @@ export function resolvePluginCapabilityProvider<K extends CapabilityProviderRegi
       pluginMetadataSnapshot,
     });
     if (pluginIds.runtimePluginIds.length === 0) {
-      return undefined;
+      return { load: undefined, resolve: (_entries: PluginRegistry[K]) => undefined };
     }
   }
 
@@ -531,13 +543,17 @@ export function resolvePluginCapabilityProvider<K extends CapabilityProviderRegi
     resolution: pluginIds,
     loadContext,
   });
-  const loadedProviders = loadCapabilityProviderEntries({
+  const load = {
     key: params.key,
     bundledCompatPluginIds: pluginIds.bundledCompatPluginIds,
     loadOptions,
     requested: new Set([params.providerId.toLowerCase()]),
-  });
-  return findProviderById(loadedProviders, params.providerId);
+  };
+  return {
+    load,
+    prepareLoad: () => prepareCapabilityProviderLoad(load, onSelectedRegistry),
+    resolve: (entries: PluginRegistry[K]) => findProviderById(entries, params.providerId),
+  };
 }
 
 export function preparePluginCapabilityProviderResolution<K extends CapabilityProviderRegistryKey>(

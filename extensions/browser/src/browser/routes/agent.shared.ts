@@ -172,6 +172,7 @@ export async function withRouteTabContext<T>(
         if (params.enforceCurrentUrlAllowed) {
           await assertBrowserNavigationResultAllowed({
             url: tab.url,
+            signal,
             ...browserNavigationPolicyForProfile(params.ctx, profileCtx),
           });
         }
@@ -228,10 +229,12 @@ export async function resolveSafeRouteTabUrl(params: {
   try {
     await assertBrowserNavigationResultAllowed({
       url: candidateUrl,
+      signal: params.signal,
       ...browserNavigationPolicyForProfile(params.ctx, params.profileCtx),
     });
     return candidateUrl;
   } catch {
+    params.signal?.throwIfAborted();
     return undefined;
   }
 }

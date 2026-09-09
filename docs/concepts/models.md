@@ -66,7 +66,7 @@ Related model-config surfaces:
 
 Full key reference, defaults, and JSON5 examples: [Configuration reference](/gateway/config-agents#agent-defaults).
 
-For directly authored legacy model maps, `openclaw doctor --fix` copies the complete restriction into `modelPolicy.allow` when every ref is valid. If any ref needs provider qualification, Doctor preserves the entire legacy restriction and reports how to set an explicit policy. Until then, model-map edits still change the legacy restriction; no keys are silently dropped and no empty policy is substituted. Include-owned migrations retain the existing edit-owning-file requirement.
+Explicit `modelPolicy.allow` restrictions were introduced in v2026.8.1. For directly authored legacy model maps, `openclaw doctor --fix` copies the complete restriction into `modelPolicy.allow` when every ref is valid. If any ref needs provider qualification, Doctor preserves the entire legacy restriction and reports how to set an explicit policy. Until then, model-map edits still change the legacy restriction; no keys are silently dropped and no empty policy is substituted. Include-owned migrations retain the existing edit-owning-file requirement.
 
 ## Selection source and fallback strictness
 
@@ -93,8 +93,9 @@ catalog is not ready. Retry after startup or an in-progress refresh finishes.
 Use an explicit Refresh action or `openclaw models list --refresh` to acquire
 provider inventory. Model selection, subagent capability checks, and hook-model
 validation also use the published inventory. Missing capability facts do not
-start another provider discovery. Native runtime observations keep their separate
-owner and authentication requirements.
+start another provider discovery. Without a published owner, turn-path thinking
+and input checks leave catalog facts absent instead of loading provider plugins.
+Native runtime observations keep their separate owner and authentication requirements.
 
 Internal catalog loads default to passive reads. Without a published owner they
 use existing read-only facts. The public SDK's `loadPreparedModelCatalog` and legacy

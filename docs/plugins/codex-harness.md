@@ -304,6 +304,7 @@ nine child pages below. The anchors from the single-page version still resolve h
 - [OpenAI provider](/providers/openai)
 - [OpenAI Codex help](https://help.openai.com/en/collections/14937394-codex)
 - [Agent harness plugins](/plugins/sdk-agent-harness)
+- [Copilot SDK harness](/plugins/copilot)
 - [Plugin hooks](/plugins/hooks)
 - [Diagnostics export](/gateway/diagnostics)
 - [Status](/cli/status)

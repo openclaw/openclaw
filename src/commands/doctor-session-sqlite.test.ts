@@ -5319,6 +5319,54 @@ describe("runDoctorSessionSqlite", () => {
     expect(fs.existsSync(store.transcriptPath)).toBe(true);
   });
 
+  it("explains hard-linked legacy index refusal and supports an independent copy before retry", async () => {
+    const store = createLegacyStore();
+    const snapshotPath = path.join(store.tempDir, "snapshot-sessions.json");
+    const originalBytes = fs.readFileSync(store.storePath);
+    fs.linkSync(store.storePath, snapshotPath);
+
+    const refused = importLegacyStore(store);
+    await expect(refused).rejects.toThrow(store.storePath);
+    await expect(refused).rejects.toThrow("nlink=2");
+    await expect(refused).rejects.toThrow("another hard link references this inode");
+    await expect(refused).rejects.toThrow("backup");
+    await expect(refused).rejects.toThrow("#hard-linked-legacy-artifacts");
+    expect(fs.lstatSync(store.storePath).nlink).toBe(2);
+    expect(fs.readFileSync(store.storePath)).toEqual(originalBytes);
+    expect(fs.readFileSync(snapshotPath)).toEqual(originalBytes);
+    expect(fs.existsSync(store.transcriptPath)).toBe(true);
+
+    const copyPath = path.join(store.sessionDir, "sessions-copy.tmp");
+    fs.copyFileSync(store.storePath, copyPath, fs.constants.COPYFILE_EXCL);
+    expect(fs.readFileSync(copyPath)).toEqual(originalBytes);
+    fs.renameSync(copyPath, store.storePath);
+    expect(fs.lstatSync(store.storePath).nlink).toBe(1);
+    expect((await importLegacyStore(store)).totals.issues).toBe(0);
+    expect(fs.readFileSync(snapshotPath)).toEqual(originalBytes);
+  });
+
+  it("explains hard-linked transcript archive refusal without changing either link", async () => {
+    const store = createLegacyStore();
+    const snapshotPath = path.join(store.tempDir, "snapshot-transcript.jsonl");
+    const originalBytes = fs.readFileSync(store.transcriptPath);
+    fs.linkSync(store.transcriptPath, snapshotPath);
+
+    const report = await importLegacyStore(store);
+    const issue = expectDefined(
+      report.targets[0]?.issues.find((entry) => entry.code === "transcript_archive_failed"),
+      "hard-linked transcript archive refusal",
+    );
+    expect(issue.message).toContain(store.transcriptPath);
+    expect(issue.message).toContain("nlink=2");
+    expect(issue.message).toContain("another hard link references this inode");
+    expect(issue.message).toContain("backup");
+    expect(issue.message).toContain("#hard-linked-legacy-artifacts");
+    expect(fs.lstatSync(store.transcriptPath).nlink).toBe(2);
+    expect(fs.readFileSync(store.transcriptPath)).toEqual(originalBytes);
+    expect(fs.readFileSync(snapshotPath)).toEqual(originalBytes);
+    expect(fs.existsSync(store.storePath)).toBe(true);
+  });
+
   it.skipIf(process.platform === "win32")(
     "rejects symlink-backed legacy stores before migration",
     async () => {

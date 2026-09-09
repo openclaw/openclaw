@@ -2,7 +2,7 @@
 import { DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS } from "@openclaw/gateway-client/browser";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import type { SessionsListResult } from "../../api/types.ts";
+import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { selectApplicationSession } from "../../app/agent-selection.ts";
 import {
   createSubscriptionHydrationHarness,
@@ -11,6 +11,106 @@ import {
 } from "./session-capability.test-support.ts";
 
 describe("session selection hydration", () => {
+  it.each([
+    {
+      name: "different owners with the same SID",
+      agentId: "writer",
+      sameSid: true,
+      preview: undefined,
+    },
+    { name: "the same owner and SID", agentId: "main", sameSid: true, preview: undefined },
+    { name: "different owners and SIDs", agentId: "writer", sameSid: false, preview: undefined },
+    { name: "a present Work preview", agentId: "writer", sameSid: true, preview: "Work preview" },
+  ])("keeps presentation with its owner across $name", async ({ agentId, sameSid, preview }) => {
+    vi.useFakeTimers();
+    const sharedSid = "00000000-0000-4000-8000-000000000101";
+    const main: GatewaySessionRow = {
+      key: "global",
+      agentId: "main",
+      sessionId: sharedSid,
+      kind: "global",
+      derivedTitle: "Main conversation",
+      lastMessagePreview: "Main preview",
+      updatedAt: 10,
+    };
+    const mainWithoutPreview: GatewaySessionRow = {
+      key: main.key,
+      agentId: main.agentId,
+      sessionId: main.sessionId,
+      kind: main.kind,
+      derivedTitle: main.derivedTitle,
+      updatedAt: 20,
+    };
+    const incoming: GatewaySessionRow = {
+      key: "global",
+      agentId,
+      sessionId: sameSid ? sharedSid : "00000000-0000-4000-8000-000000000102",
+      kind: "global",
+      derivedTitle: agentId === "main" ? "Main current title" : "Work current title",
+      ...(preview === undefined ? {} : { lastMessagePreview: preview }),
+      updatedAt: 30,
+    };
+    const replacement = createDeferred<SessionsListResult>();
+    let replacing = false;
+    const request = vi.fn(async (method: string, params?: Record<string, unknown>) => {
+      if (method === "sessions.subscribe") {
+        expect(params?.agentId).toBe("main");
+        return { subscribed: true, list: sessionsResult([main], 10) };
+      }
+      if (method === "sessions.list") {
+        expect(params?.includeLastMessage).toBeUndefined();
+        expect(params?.agentId).toBe(replacing ? agentId : "main");
+        return replacing ? replacement.promise : sessionsResult([mainWithoutPreview], 20);
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const { gateway, selection, sessions, connect } = createSubscriptionHydrationHarness(request);
+    let sameOwnerRefresh: ReturnType<typeof sessions.refreshReplacement> | undefined;
+    try {
+      connect();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(sessions.state.result?.sessions[0]?.lastMessagePreview).toBe(main.lastMessagePreview);
+
+      // The normal chat query omits preview enrichment; replacements keep that query.
+      await sessions.refresh({ agentId: "main", force: true });
+      expect(sessions.state.result?.sessions[0]?.lastMessagePreview).toBe(main.lastMessagePreview);
+      const heldMain = sessions.state.result;
+      replacing = true;
+      if (agentId === "main") {
+        sameOwnerRefresh = sessions.refreshReplacement();
+      } else {
+        selectApplicationSession({ selection, gateway, sessionKey: `agent:${agentId}:main` });
+      }
+      await vi.advanceTimersByTimeAsync(0);
+      expect(selection.state.selectedId).toBe(agentId);
+      expect(sessions.state.loading).toBe(true);
+      expect(sessions.state.result).toBe(heldMain);
+      expect(sessions.state.agentId).toBe("main");
+      expect(request).toHaveBeenLastCalledWith(
+        "sessions.list",
+        expect.objectContaining({ agentId, includeGlobal: true, includeDerivedTitles: true }),
+      );
+
+      replacement.resolve(sessionsResult([incoming], 30));
+      await vi.advanceTimersByTimeAsync(0);
+      await sameOwnerRefresh;
+      expect(sessions.state.agentId).toBe(agentId);
+      expect(sessions.state.loading).toBe(false);
+      expect(sessions.state.result).toMatchObject({ ts: 30, count: 1, sessions: [incoming] });
+      const current = sessions.state.result?.sessions[0];
+      expect(current?.derivedTitle).toBe(incoming.derivedTitle);
+      expect(current?.lastMessagePreview).toBe(
+        preview ?? (agentId === "main" ? main.lastMessagePreview : undefined),
+      );
+    } finally {
+      sessions.dispose();
+      replacement.resolve(sessionsResult([incoming], 30));
+      await vi.advanceTimersByTimeAsync(0);
+      await sameOwnerRefresh;
+      vi.useRealTimers();
+    }
+  });
+
   it("discards a delayed default-agent bootstrap after the route selects another agent", async () => {
     vi.useFakeTimers();
     const bootstrap = createDeferred<{ subscribed: true; list: SessionsListResult }>();

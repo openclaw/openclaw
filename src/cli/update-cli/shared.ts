@@ -482,3 +482,46 @@ export async function tryWriteCompletionCache(
   }
   return "failed";
 }
+
+export async function confirmUpdateDowngrade(params: {
+  opts: UpdateCommandOptions;
+  currentVersion: string | null;
+  targetVersion: string | null;
+  tag: string;
+}): Promise<boolean> {
+  const { confirm, isCancel } = await import("@clack/prompts");
+  const { finishUpdateRun } = await import("../../infra/update-run-ledger.js");
+  const { stylePromptMessage } =
+    await import("../../../packages/terminal-core/src/prompt-style.js");
+  const { opts, currentVersion, targetVersion, tag } = params;
+  const run = opts.run!;
+  if (!process.stdin.isTTY || opts.json) {
+    finishUpdateRun(
+      run.runId,
+      { status: "skipped", reason: "downgrade-confirmation-required" },
+      { env: run.env },
+    );
+    defaultRuntime.error(
+      "Downgrade confirmation required.\nDowngrading can break configuration. Re-run in a TTY to confirm.",
+    );
+    defaultRuntime.exit(1);
+    return false;
+  }
+
+  const targetLabel = targetVersion ?? `${tag} (unknown)`;
+  const message = `Downgrading from ${currentVersion} to ${targetLabel} can break configuration. Continue?`;
+  const ok = await confirm({
+    message: stylePromptMessage(message),
+    initialValue: false,
+  });
+  if (isCancel(ok) || !ok) {
+    finishUpdateRun(run.runId, { status: "skipped", reason: "cancelled" }, { env: run.env });
+    if (!opts.json) {
+      defaultRuntime.log(theme.muted("Update cancelled."));
+    }
+    defaultRuntime.exit(0);
+    return false;
+  }
+
+  return true;
+}

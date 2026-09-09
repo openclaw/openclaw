@@ -78,10 +78,12 @@ export function resolveGatewaySessionDisplayName(key: string, entry?: SessionEnt
   // channel-derived display names or renames silently vanish on refresh.
   // Group sessions prefer the human chat title (subject/#channel) over the
   // stored compact token displayName (e.g. "slack:g-general").
+  const explicitLabel = normalizeOptionalString(entry?.label);
   const displayName =
-    entry?.label ??
+    explicitLabel ??
     groupTitle ??
     storedDisplayName ??
+    entry?.autoLabel ??
     (channel === "imessage" ? undefined : compactGroupFallback) ??
     // Dashboard origin labels identify the authenticated sender. Using them as
     // titles leaks account names into the sidebar while the generated title is pending.

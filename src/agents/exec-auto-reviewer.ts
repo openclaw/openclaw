@@ -16,6 +16,8 @@ import {
   type ExecAutoReviewDecision,
   type ExecAutoReviewInput,
 } from "../infra/exec-auto-review.js";
+import { AsyncWorkScope, captureAsyncWorkTracker } from "../shared/async-work-scope.js";
+import { createDeferredCore, type Deferred } from "../shared/deferred.js";
 import { resolveAmbientOwnerAgentId } from "./agent-scope-config.js";
 import { abortable } from "./embedded-agent-runner/run/abortable.js";
 import {
@@ -23,8 +25,8 @@ import {
   DEFAULT_WIDGET_REVIEWER_SYSTEM_PROMPT,
 } from "./exec-auto-reviewer.prompt.js";
 import {
+  acquireSimpleCompletionModelForAgent,
   completeWithPreparedSimpleCompletionModel,
-  prepareSimpleCompletionModelForAgent,
 } from "./simple-completion-runtime.js";
 import { coerceToolModelConfig } from "./tools/model-config.helpers.js";
 
@@ -49,7 +51,7 @@ export type ExecReviewerConfig = {
 };
 
 type ExecReviewerDeps = {
-  prepareSimpleCompletionModelForAgent?: typeof prepareSimpleCompletionModelForAgent;
+  acquireSimpleCompletionModelForAgent?: typeof acquireSimpleCompletionModelForAgent;
   completeWithPreparedSimpleCompletionModel?: typeof completeWithPreparedSimpleCompletionModel;
 };
 
@@ -396,7 +398,7 @@ export function createModelExecAutoReviewer(params: {
   }
   const agentId = params.agentId ?? resolveAmbientOwnerAgentId(cfg);
   const prepareModel =
-    params.deps?.prepareSimpleCompletionModelForAgent ?? prepareSimpleCompletionModelForAgent;
+    params.deps?.acquireSimpleCompletionModelForAgent ?? acquireSimpleCompletionModelForAgent;
   const complete =
     params.deps?.completeWithPreparedSimpleCompletionModel ??
     completeWithPreparedSimpleCompletionModel;
@@ -404,6 +406,7 @@ export function createModelExecAutoReviewer(params: {
   const timeoutMs = resolveExecReviewerTimeoutMs(params.reviewer);
   return async (input) => {
     let completionController: AbortController | undefined;
+    let callerFinished: Deferred | undefined;
     try {
       params.signal?.throwIfAborted();
       const serializedInput = stringifyInput(input);
@@ -429,15 +432,38 @@ export function createModelExecAutoReviewer(params: {
                 "exec reviewer denied the command because it contains reviewer-directed text",
             };
       }
-      const prepared = await raceWithReviewerTimeout(
-        prepareModel({
-          cfg,
-          agentId,
-          modelRef,
-          allowMissingApiKeyModes: ["aws-sdk"],
-        }),
-        { timeoutMs, signal: params.signal },
-      );
+      const preparedResult = createDeferredCore<Awaited<ReturnType<typeof prepareModel>>>();
+      const finished = createDeferredCore();
+      callerFinished = finished;
+      const work = new AsyncWorkScope();
+      const trackOwner = captureAsyncWorkTracker();
+      // The parent retains late preparation and transport tails after a caller timeout.
+      void trackOwner(async () => {
+        let acquired: Awaited<ReturnType<typeof prepareModel>> | undefined;
+        try {
+          acquired = await work.track(() =>
+            prepareModel({
+              cfg,
+              agentId,
+              modelRef,
+              allowMissingApiKeyModes: ["aws-sdk"],
+            }),
+          );
+          preparedResult.resolve(acquired);
+          await finished.promise;
+        } catch (error) {
+          preparedResult.reject(error);
+        } finally {
+          await work.drain();
+          if (acquired && !("error" in acquired)) {
+            acquired.release();
+          }
+        }
+      }).catch((error: unknown) => preparedResult.reject(error));
+      const prepared = await raceWithReviewerTimeout(preparedResult.promise, {
+        timeoutMs,
+        signal: params.signal,
+      });
       if (prepared === EXEC_REVIEWER_TIMEOUT) {
         return buildReviewerTimeoutDecision(timeoutMs);
       }
@@ -448,33 +474,36 @@ export function createModelExecAutoReviewer(params: {
         );
       }
 
-      completionController = new AbortController();
+      const controller = new AbortController();
+      completionController = controller;
       const result = await raceWithReviewerTimeout(
-        complete({
-          model: prepared.model,
-          auth: prepared.auth,
-          cfg,
-          context: {
-            systemPrompt:
-              "kind" in input
-                ? DEFAULT_WIDGET_REVIEWER_SYSTEM_PROMPT
-                : DEFAULT_EXEC_REVIEWER_SYSTEM_PROMPT,
-            messages: [
-              {
-                role: "user",
-                content: buildReviewerUserPrompt(input, serializedInput),
-                timestamp: Date.now(),
-              },
-            ],
-          },
-          options: {
-            maxTokens: EXEC_REVIEWER_MAX_TOKENS,
-            temperature: 0,
-            signal: params.signal
-              ? AbortSignal.any([completionController.signal, params.signal])
-              : completionController.signal,
-          },
-        }),
+        work.track(() =>
+          complete({
+            model: prepared.model,
+            auth: prepared.auth,
+            cfg,
+            context: {
+              systemPrompt:
+                "kind" in input
+                  ? DEFAULT_WIDGET_REVIEWER_SYSTEM_PROMPT
+                  : DEFAULT_EXEC_REVIEWER_SYSTEM_PROMPT,
+              messages: [
+                {
+                  role: "user",
+                  content: buildReviewerUserPrompt(input, serializedInput),
+                  timestamp: Date.now(),
+                },
+              ],
+            },
+            options: {
+              maxTokens: EXEC_REVIEWER_MAX_TOKENS,
+              temperature: 0,
+              signal: params.signal
+                ? AbortSignal.any([controller.signal, params.signal])
+                : controller.signal,
+            },
+          }),
+        ),
         {
           timeoutMs,
           signal: params.signal,
@@ -499,6 +528,8 @@ export function createModelExecAutoReviewer(params: {
         return buildReviewerTimeoutDecision(timeoutMs);
       }
       return buildExecAutoReviewFailureDecision("exec reviewer failed", err);
+    } finally {
+      callerFinished?.resolve();
     }
   };
 }

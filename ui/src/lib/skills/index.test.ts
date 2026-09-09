@@ -857,7 +857,6 @@ describe("skill mutations", () => {
           name: "GitHub",
           installId: "install-123",
           dangerouslyForceUnsafeInstall: true,
-          timeoutMs: 120000,
         },
       ],
       expectedMessage: "Installed from registry",
@@ -1230,7 +1229,6 @@ describe("skill mutations", () => {
       name: "GitHub",
       installId: "install-123",
       dangerouslyForceUnsafeInstall: true,
-      timeoutMs: 120000,
     });
   });
 
@@ -1311,7 +1309,6 @@ describe("skill mutations", () => {
         name: "GitHub",
         installId: "install-123",
         dangerouslyForceUnsafeInstall: false,
-        timeoutMs: 120000,
       },
     },
     {

@@ -159,11 +159,21 @@ describe("legacy ambient owner migration", () => {
   });
 
   it.each([
-    {},
     { agents: { entries: { ops: {}, worker: {} } } },
+    { agents: { entries: { main: {}, ops: {} }, defaults: { systemAgent: { agentId: "ops" } } } },
+  ])("stamps explicit roster ownership without changing ambient owners: %j", (raw) => {
+    const result = applyLegacyDoctorMigrations(raw);
+    expect(result).toEqual({
+      next: { agents: { ...raw.agents, ownership: "explicit" } },
+      changes: ["Stamped the multi-agent roster for explicit per-surface ownership."],
+    });
+    expect(applyLegacyDoctorMigrations(result.next)).toEqual({ next: null, changes: [] });
+  });
+
+  it.each([
+    {},
     { agents: { entries: { main: { default: true }, ops: { default: true } } } },
     { agents: { entries: { main: {} }, defaults: { systemAgent: null } } },
-    { agents: { entries: { main: {}, ops: {} }, defaults: { systemAgent: { agentId: "ops" } } } },
   ])("leaves absent defaults and explicit owners alone: %j", (raw) => {
     expect(applyLegacyDoctorMigrations(raw)).toEqual({ next: null, changes: [] });
   });

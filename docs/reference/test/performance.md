@@ -50,6 +50,7 @@ pnpm test:startup:bench:check
 pnpm tsx scripts/bench-cli-startup.ts --runs 12
 pnpm tsx scripts/bench-cli-startup.ts --preset real --case status --case gatewayStatus --runs 3
 pnpm tsx scripts/bench-cli-startup.ts --entry openclaw.mjs --entry-secondary dist/entry.js --preset all
+pnpm tsx scripts/bench-cli-startup.ts --runtime-rss --case status --runs 3
 ```
 
 Presets:
@@ -58,7 +59,15 @@ Presets:
 - `real`: `health`, `status`, `status --json`, `sessions`, `sessions --json`, `tasks --json`, `tasks list --json`, `tasks audit --json`, `agents list --json`, `gateway status`, `gateway status --json`, `gateway health --json`, `config get gateway.port`
 - `all`: both presets combined
 
-Output includes `sampleCount`, avg, p50, p95, min/max, exit-code/signal distribution, and max RSS per command. `--cpu-prof-dir` / `--heap-prof-dir` write V8 profiles per run.
+Output includes `sampleCount`, avg, p50, p95, min/max, exit-code/signal distribution, and RSS per command. The `maxRssMb` fields use MiB. By default, RSS uses the last preload marker received on stderr, preserving the historical fixture's attribution. A respawning launcher can supply that last marker. Default reports omit `memoryMetric` and sample `memory`; no runtime identity or temporary observation files are required. For a silent command, the exit marker can count as first output.
+
+Pass `--runtime-rss` to opt into runtime-process attribution. `primary.memoryMetric` identifies `cli-runtime-max-rss-v1`, and each sample's `memory` records PID, parent PID, role, and high-water RSS in bytes. The runtime is the terminal process in a unique matching CLI invocation chain; launcher and auxiliary observations are not added to it. This is not simultaneous process-tree memory.
+
+High-water RSS is observed when the preload's `exit` listener runs. Allocations in later application exit handlers are outside this observation; this is not a full-lifetime OS measurement.
+
+With `--runtime-rss`, the preload records observations in temporary files, separate from stdout/stderr and first-output timing. Runtime identity does not depend on command output; a silent entry has `firstOutputMs: null`. Missing or ambiguous runtime identity fails the sample only in this opt-in mode. Both modes are instrumented launches, separate from the no-preload, no-respawn `scripts/check-cli-startup-memory.mjs` diagnostic. `--cpu-prof-dir` / `--heap-prof-dir` write V8 profiles per run.
+
+Saved-report comparison uses report metadata, not `--runtime-rss`. Comparison, enforced fixture budgets, and source-summary memory trends reject mixed legacy/runtime metrics rather than silently comparing different processes. Historical fixtures cannot be relabeled; any replacement baseline needs separate validation and approval.
 
 Saved output: `pnpm test:startup:bench:smoke` writes `.artifacts/cli-startup-bench-smoke.json`; `pnpm test:startup:bench:save` writes `.artifacts/cli-startup-bench-all.json` (`runs=5 warmup=1`). Checked-in fixture: `test/fixtures/cli-startup-bench.json`, refreshed by `pnpm test:startup:bench:update`, compared by `pnpm test:startup:bench:check`.
 

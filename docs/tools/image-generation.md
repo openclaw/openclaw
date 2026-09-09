@@ -75,25 +75,27 @@ internal image endpoints remain blocked by default.
 
 ## Common routes
 
-| Goal                                                 | Model ref                                          | Auth                                   |
-| ---------------------------------------------------- | -------------------------------------------------- | -------------------------------------- |
-| OpenAI image generation with API billing             | `openai/gpt-image-2`                               | `OPENAI_API_KEY`                       |
-| OpenAI image generation with Codex subscription auth | `openai/gpt-image-2`                               | OpenAI ChatGPT/Codex OAuth             |
-| OpenAI transparent-background PNG/WebP               | `openai/gpt-image-1.5`                             | `OPENAI_API_KEY` or OpenAI Codex OAuth |
-| DeepInfra image generation                           | `deepinfra/black-forest-labs/FLUX-1-schnell`       | `DEEPINFRA_API_KEY`                    |
-| fal Krea 2 expressive/style-directed generation      | `fal/krea/v2/medium/text-to-image`                 | `FAL_KEY`                              |
-| OpenRouter image generation                          | `openrouter/google/gemini-3.1-flash-image-preview` | `OPENROUTER_API_KEY`                   |
-| LiteLLM image generation                             | `litellm/gpt-image-2`                              | `LITELLM_API_KEY`                      |
-| Microsoft Foundry MAI image generation               | `microsoft-foundry/<deployment-name>`              | `AZURE_OPENAI_API_KEY` or Entra ID     |
-| Google Gemini image generation                       | `google/gemini-3.1-flash-image`                    | `GEMINI_API_KEY` or `GOOGLE_API_KEY`   |
+| Goal                                                 | Model ref                                                                                           | Auth                                   |
+| ---------------------------------------------------- | --------------------------------------------------------------------------------------------------- | -------------------------------------- |
+| OpenAI image generation with API billing             | `openai/gpt-image-2`                                                                                | `OPENAI_API_KEY`                       |
+| OpenAI GPT Image 2.5                                 | `openai/gpt-image-2.5-flare` or `openai/gpt-image-2.5-sunburst`                                     | Explicit OpenAI API-key route          |
+| OpenAI image generation with Codex subscription auth | `openai/gpt-image-2`                                                                                | OpenAI ChatGPT/Codex OAuth             |
+| OpenAI transparent-background PNG/WebP               | `openai/gpt-image-1.5`                                                                              | `OPENAI_API_KEY` or OpenAI Codex OAuth |
+| DeepInfra image generation                           | `deepinfra/black-forest-labs/FLUX-1-schnell`                                                        | `DEEPINFRA_API_KEY`                    |
+| fal Krea 2 expressive/style-directed generation      | `fal/krea/v2/medium/text-to-image`                                                                  | `FAL_KEY`                              |
+| fal GPT Image 2.5                                    | `fal/openai/gpt-image-2.5/flare/text-to-image` or `fal/openai/gpt-image-2.5/sunburst/text-to-image` | `FAL_KEY`                              |
+| OpenRouter image generation                          | `openrouter/google/gemini-3.1-flash-image-preview`                                                  | `OPENROUTER_API_KEY`                   |
+| LiteLLM image generation                             | `litellm/gpt-image-2`                                                                               | `LITELLM_API_KEY`                      |
+| Microsoft Foundry MAI image generation               | `microsoft-foundry/<deployment-name>`                                                               | `AZURE_OPENAI_API_KEY` or Entra ID     |
+| Google Gemini image generation                       | `google/gemini-3.1-flash-image`                                                                     | `GEMINI_API_KEY` or `GOOGLE_API_KEY`   |
 
 The same tool handles text-to-image and reference-image editing. Use `image`
 for one reference or `images` for multiple. For Krea 2 models on fal, those
 references are sent as style references instead of edit inputs.
 Provider-supported output hints such as `quality`, `outputFormat`, and
 `background` are forwarded when available and reported as ignored when a
-provider does not declare support. Bundled transparent-background support is
-OpenAI-specific; other providers may still preserve PNG alpha if their
+provider does not declare support. OpenAI and fal GPT Image 2.5 declare
+transparent-background support. Other providers may still preserve PNG alpha if their
 backend emits it.
 
 OpenAI supports `low` and `auto` moderation for both text-to-image generation
@@ -132,13 +134,13 @@ current session:
 
 ## Provider capabilities
 
-| Capability            | ComfyUI            | DeepInfra | fal                                            | Google         | Microsoft Foundry | MiniMax               | OpenAI         | Vydra | xAI            |
-| --------------------- | ------------------ | --------- | ---------------------------------------------- | -------------- | ----------------- | --------------------- | -------------- | ----- | -------------- |
-| Generate (max count)  | 1                  | 4         | 4                                              | 4              | 1                 | 9                     | 4              | 1     | 4              |
-| Edit / reference      | 1 image (workflow) | 1 image   | Flux: 1; GPT: 10; Krea style refs: 10; NB2: 14 | Up to 5 images | 1 image           | 1 image (subject ref) | Up to 5 images | -     | Up to 3 images |
-| Size control          | -                  | ✓         | ✓                                              | ✓              | ✓                 | -                     | Up to 4K       | -     | -              |
-| Aspect ratio          | -                  | -         | ✓                                              | ✓              | -                 | ✓                     | -              | -     | ✓              |
-| Resolution (1K/2K/4K) | -                  | -         | ✓                                              | ✓              | -                 | -                     | -              | -     | 1K, 2K         |
+| Capability            | ComfyUI            | DeepInfra | fal                                                         | Google         | Microsoft Foundry | MiniMax               | OpenAI         | Vydra | xAI            |
+| --------------------- | ------------------ | --------- | ----------------------------------------------------------- | -------------- | ----------------- | --------------------- | -------------- | ----- | -------------- |
+| Generate (max count)  | 1                  | 4         | 4                                                           | 4              | 1                 | 9                     | 4              | 1     | 4              |
+| Edit / reference      | 1 image (workflow) | 1 image   | Flux: 1; GPT: 10; GPT 2.5: 16; Krea style refs: 10; NB2: 14 | Up to 5 images | 1 image           | 1 image (subject ref) | Up to 5 images | -     | Up to 3 images |
+| Size control          | -                  | ✓         | ✓                                                           | ✓              | ✓                 | -                     | Up to 4K       | -     | -              |
+| Aspect ratio          | -                  | -         | ✓                                                           | ✓              | -                 | ✓                     | -              | -     | ✓              |
+| Resolution (1K/2K/4K) | -                  | -         | ✓                                                           | ✓              | -                 | -                     | -              | -     | 1K, 2K         |
 
 ## Tool parameters
 
@@ -157,7 +159,7 @@ current session:
   Single reference image path or URL for edit mode.
 </ParamField>
 <ParamField path="images" type="string[]">
-  Multiple reference images for edit mode or style-reference models (up to 14
+  Multiple reference images for edit mode or style-reference models (up to 16
   through the shared tool; provider-specific limits still apply).
 </ParamField>
 <ParamField path="size" type="string">
@@ -169,8 +171,9 @@ current session:
   `1:4`, `8:1`, `1:8`. Providers validate their model-specific subset.
 </ParamField>
 <ParamField path="resolution" type='"1K" | "2K" | "4K"'>Resolution hint.</ParamField>
-<ParamField path="quality" type='"low" | "medium" | "high" | "auto"'>
-  Quality hint when the provider supports it.
+<ParamField path="quality" type='"low" | "medium" | "high" | "xhigh" | "max" | "auto"'>
+  Quality hint when the model supports it. GPT Image 2.5 supports `xhigh`
+  and `max` through OpenAI and fal.
 </ParamField>
 <ParamField path="outputFormat" type='"png" | "jpeg" | "webp"'>
   Output format hint when the provider supports it.
@@ -282,13 +285,39 @@ inputs. Pass a reference image path or URL:
 
 OpenAI, OpenRouter, and Google support up to 5 reference images via the
 `images` parameter; xAI supports up to 3. fal supports 1 reference image for
-Flux image-to-image, up to 10 for GPT Image 2 edits, up to 10 style references
+Flux image-to-image, up to 16 for GPT Image 2.5 edits, up to 10 for older GPT Image edits, up to 10 style references
 for Krea 2, and up to 14 for Nano Banana 2 edits. Microsoft Foundry, MiniMax,
 and ComfyUI support 1.
 
 ## Provider deep dives
 
 <AccordionGroup>
+  <Accordion title="GPT Image 2.5 through OpenAI or fal">
+    Select either variant explicitly. Existing provider defaults do not change:
+
+    - OpenAI: `openai/gpt-image-2.5-flare` or `openai/gpt-image-2.5-sunburst`
+    - fal: `fal/openai/gpt-image-2.5/flare/text-to-image` or
+      `fal/openai/gpt-image-2.5/sunburst/text-to-image`
+
+    Both variants support generation, edits, `xhigh` and `max` quality,
+    PNG/JPEG/WebP output, and transparent backgrounds with PNG or WebP.
+    OpenAI accepts up to 5 reference images through OpenClaw. fal accepts 16.
+    With reference images, fal replaces `/text-to-image` with `/edit`.
+    Explicit fal `/edit` paths remain unchanged.
+
+    Use the [explicit OpenAI API-key route](/providers/openai/image-and-video#gpt-image-2.5)
+    for direct GPT Image 2.5 requests. Exporting `OPENAI_API_KEY` alone does not
+    override an existing OAuth profile. These examples do not establish
+    GPT Image 2.5 subscription access.
+
+    Use `size: "auto"` or valid `WIDTHxHEIGHT` dimensions. Both dimensions
+    must be divisible by 16, with no edge above 3840 pixels.
+    Total pixels must be 655,360-8,294,400, with an aspect ratio from 1:3 to 3:1.
+    fal converts aspect-ratio hints to valid dimensions, such as `3:2` to
+    `1536x1024`. Invalid explicit sizes fail with a size error. fal does not accept
+    `resolution` overrides for these models or infer resolution from edit inputs.
+
+  </Accordion>
   <Accordion title="OpenAI gpt-image-2 (and gpt-image-1.5)">
     OpenAI image generation defaults to `openai/gpt-image-2`. If an
     `openai` OAuth profile is configured, OpenClaw reuses the same
@@ -345,7 +374,7 @@ and ComfyUI support 1.
     `openai.outputCompression` applies to JPEG/WebP outputs and is ignored
     for PNG outputs.
 
-    The top-level `background` hint is provider-neutral and currently maps
+    The top-level `background` hint is provider-neutral and maps
     to the same OpenAI `background` request field when the OpenAI provider
     is selected. Providers that do not declare background support return
     it in `ignoredOverrides` instead of receiving the unsupported parameter.
@@ -452,7 +481,7 @@ and ComfyUI support 1.
     }
     ```
 
-    Krea 2 currently returns one image per request. Prefer `aspectRatio` for
+    Krea 2 returns one image per request. Prefer `aspectRatio` for
     Krea; OpenClaw maps `size` to the closest supported Krea aspect ratio and
     rejects `resolution` for Krea rather than dropping it. Use `fal.creativity`
     when you want a native Krea creativity level:
@@ -565,9 +594,8 @@ on `openclaw infer image edit`; `--openai-background` remains as an
 OpenAI-specific alias. Use `--openai-moderation low|auto` with both OpenAI image
 generation and reference-image edits. The direct OpenAI Images API and the
 ChatGPT/Codex OAuth Responses backend both support the moderation hint.
-Bundled providers other than OpenAI do not declare
-explicit background control today, so `background: "transparent"` is reported
-as ignored for them.
+OpenAI and fal GPT Image 2.5 models support explicit background control.
+Other bundled providers report `background: "transparent"` as ignored.
 
 ## Related
 

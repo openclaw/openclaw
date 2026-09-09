@@ -29,11 +29,9 @@ aligned:
 
 If the resolved package version equals the installed version without changing
 the selected channel or installation method, or the Git target SHA equals
-`HEAD`, the run finishes `skipped` with reason `already-current`. A same-version
+`HEAD`, plugin convergence still runs; if plugins remain unchanged, the run finishes `skipped` with reason `already-current`. A same-version
 explicit `--channel` or installation-method change finishes successfully.
-Neither path stops or restarts the Gateway unless the installation method
-changes. Read-only plugin convergence checks can still report repair needs; use
-`openclaw update repair` to apply them.
+Changed plugins restart a running managed Gateway unless `--no-restart` is set; retained exact pins produce the same advisories as a core update without requiring a restart.
 
 For targets that support candidate validation, the old Gateway keeps serving through `staging` and
 `validating`. The updater uses the candidate entrypoint for Doctor lint
@@ -43,9 +41,11 @@ boots a canary with copied configuration and verified SQLite snapshots in an
 isolated temporary state directory. The copied database registry points to the
 copied agent databases. Installed plugin payloads and their dependencies are also
 copied; the rehearsal install records point to those copies, and their OpenClaw
-host links target the staged candidate. The live plugin files and host links stay
-unchanged. Channels, cron, automatic updates, and other side services are
-suppressed in this canary.
+host links target the staged candidate. Path aliases that resolve to a running
+package's bundled plugin use the staged bundled plugin with the same ID when
+available, preserving bundled trust. External path installs keep their existing
+classification. The live plugin files and host links stay unchanged. Channels,
+cron, automatic updates, and other side services are suppressed in this canary.
 
 Schema checks also use private SQLite copies so inspection does not create or
 modify WAL sidecars beside live databases. Each schema inspection has a
@@ -150,6 +150,11 @@ can terminate the surrounding exec shell (SIGTERM or exit 143), including comman
 chained after the update. After a handoff result, use the printed follow-up commands
 for the final outcome. Plain terminal updates remain synchronous, and `--no-restart`
 does not authorize stopping the agent's Gateway.
+
+Post-core steps follow the verified replacement package, including pnpm updates
+that change the target of the global package link. The helper retains the
+original installation identity for recovery; a child running from a different
+installation is still rejected.
 
 The Gateway core auto-updater requires a managed service restart path. It hands
 the CLI update to a detached helper before activation. A foreground
@@ -298,7 +303,7 @@ the sentinel.
 
     Dev can walk back up to 10 commits to find the newest buildable candidate. Confirmed ENOSPC storage failures stop immediately with `preflight-insufficient-space`; free space on the preflight staging and package-manager store filesystems before retrying. Shared package-manager stores are not deleted. Update builds skip TypeScript declaration generation by default. Set `OPENCLAW_RUN_NODE_SKIP_DTS_BUILD=0` to explicitly request declarations. Set `OPENCLAW_UPDATE_PREFLIGHT_LINT=1` to also run source lint during this preflight; lint runs in constrained serial mode because user update hosts are often smaller than CI runners.
 
-    The updater already running owns staging. Updating to a commit with this repair cannot change an older published updater's first hop; that default path requires a published baseline containing the repair.
+    The updater already running owns staging. Artifact-area staging first shipped in 2026.8.1; updating to a commit that contains it cannot change an older published updater's first hop, which still stages under the system temporary directory.
 
     Uses the repo package manager. For pnpm checkouts, the updater bootstraps `pnpm` on demand (via `corepack` first, then a temporary npm installation of the target checkout’s exact pnpm version) instead of running `npm run build` inside a pnpm workspace. If pnpm bootstrap still fails, the updater stops early with a package-manager-specific error instead of trying `npm run build` in the checkout.
 
@@ -392,7 +397,7 @@ reclaim these stages. If an interrupted update leaves one behind, confirm that
 no updater is still using it before removing that exact directory. This separation
 does not make simultaneous package swaps safe.
 
-A matching installed version is an `already-current` no-op. Real updates also
+A matching installed version skips core replacement but still converges plugins. Core updates also
 refresh core-command completion; full plugin-command completion rebuilds remain explicit
 `openclaw completion --write-state` runs.
 

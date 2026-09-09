@@ -13,7 +13,7 @@
     "type": "object",
     "properties": {
       "basePath": {
-        "default": "/reports",
+        "default": "/plugins/team-reports",
         "type": "string",
         "pattern": "^\\/(?!api\\/channels(?:\\/|$))(?!\\.{1,2}(?:\\/|$))(?!.*\\/\\.{1,2}(?:\\/|$))[A-Za-z0-9._-]+(?:\\/[A-Za-z0-9._-]+)*\\/*$"
       },

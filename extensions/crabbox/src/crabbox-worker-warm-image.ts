@@ -10,12 +10,14 @@ import {
   type resolveCrabboxProvisionProfile,
 } from "./crabbox-worker-profile.js";
 import {
-  checkpointCaptureTimeoutMs,
-  WARM_IMAGE_CAPTURE_TIMEOUT_MS,
+  resolveCrabboxCheckpointCaptureTimeoutMs,
+  WARM_IMAGE_COMMAND_ROUND_TRIP_TIMEOUT_MS,
   WARM_IMAGE_COMMAND_TIMEOUT_MS,
+  WARM_IMAGE_NATIVE_WAIT_TIMEOUT_MS,
 } from "./crabbox-worker-timeouts.js";
 import {
   createCheckpointCommands,
+  CrabboxCheckpointCreateError,
   parseCheckpointAvailability,
   parseForkedCheckpoint,
   parseCreatedCheckpoint,
@@ -27,8 +29,9 @@ import {
   assertCrabboxWarmImageMigrationReady,
   crabboxWarmImageCaptureStatus,
   crabboxWarmImageRecoveryHint,
+  CRABBOX_WARM_IMAGE_WAIT_HINT,
   clearCrabboxWarmImageCapture,
-  isCrabboxWarmImageCapturePaused,
+  isCrabboxWarmImageCaptureUncertain,
   openCrabboxWarmImageStore,
   WARM_IMAGE_MAX_ENTRIES,
   WARM_IMAGE_MAX_ALLOCATIONS,
@@ -68,8 +71,8 @@ export function createCrabboxWarmImageManager(dependencies: {
     context.assertCurrent?.();
     context.signal?.throwIfAborted();
   };
-  const warnOnce = (action: string, error: unknown) => {
-    const message = `Crabbox warm image ${action} failed: ${coerceErrorMessage(error)}`;
+  const warnOnce = (action: string, error: unknown, failed = true) => {
+    const message = `Crabbox warm image ${action}${failed ? " failed" : ""}: ${coerceErrorMessage(error)}`;
     if (!warned.has(message)) {
       // Periodic failures can carry changing request IDs; never retain an unbounded log cache.
       if (warned.size >= WARM_IMAGE_MAX_ENTRIES) {
@@ -187,8 +190,14 @@ export function createCrabboxWarmImageManager(dependencies: {
       assertCurrent(context);
       const capture = crabboxWarmImageCaptureStatus(key, value);
       if (capture) {
-        if (isCrabboxWarmImageCapturePaused(capture)) {
+        if (isCrabboxWarmImageCaptureUncertain(capture)) {
           warnOnce("capture paused", crabboxWarmImageRecoveryHint(capture.selector));
+        } else if (capture.stale) {
+          warnOnce(
+            `capture ${capture.selector} still pending`,
+            CRABBOX_WARM_IMAGE_WAIT_HINT,
+            false,
+          );
         }
         continue;
       }
@@ -529,7 +538,7 @@ export function createCrabboxWarmImageManager(dependencies: {
             context,
             "scrub",
             dependencies.runArgs(context),
-            WARM_IMAGE_CAPTURE_TIMEOUT_MS,
+            WARM_IMAGE_COMMAND_ROUND_TRIP_TIMEOUT_MS,
             SCRUB_WORKER_STATE,
           );
           // A stopped allocation or manual recovery must not start another paid operation.
@@ -561,14 +570,16 @@ export function createCrabboxWarmImageManager(dependencies: {
                 "--mode",
                 "native",
                 // Crabbox owns pending capture recovery; wait for the exact checkpoint
-                // before enrollment. The command deadline still bounds the whole operation.
+                // before enrollment. Reserve command overhead and separate source recovery too.
                 "--wait",
+                "--wait-timeout",
+                `${WARM_IMAGE_NATIVE_WAIT_TIMEOUT_MS}ms`,
                 "--json",
                 // Daytona requires explicit permission to stop the scrubbed source for capture.
                 ...(context.provider === "daytona" ? ["--no-reboot=false"] : []),
                 ...(context.provider === "machine0" ? ["--strategy", "image"] : []),
               ],
-              checkpointCaptureTimeoutMs(context.provider),
+              resolveCrabboxCheckpointCaptureTimeoutMs(context.provider),
             ),
             context.id,
           );
@@ -611,9 +622,12 @@ export function createCrabboxWarmImageManager(dependencies: {
             await retireImage(context, key, replacement);
           }
         } catch (error) {
+          const notSubmitted =
+            creating && CrabboxCheckpointCreateError.wasNotSubmitted(error, context);
+          let recoveryRequired = creating;
           if (claimed && key) {
             try {
-              if (creating) {
+              if (creating && !notSubmitted) {
                 openStore().update(key, (current) =>
                   current?.operation?.type === "capture" && current.operation.id === captureId
                     ? { ...current, operation: { ...current.operation, phase: "uncertain" } }
@@ -621,17 +635,20 @@ export function createCrabboxWarmImageManager(dependencies: {
                 );
               } else {
                 clearCrabboxWarmImageCapture(key, captureId);
+                recoveryRequired = false;
               }
             } catch {
               // Keep persisted ownership recoverable; physical lease cleanup still belongs to stop.
             }
           }
-          if (preparing) {
+          // Required project captures must fail before enrollment. Optional teardown
+          // captures can warn and let source deletion complete.
+          if (preparing || (notSubmitted && owner?.projectKey)) {
             throw error;
           }
           warnOnce(
             "capture",
-            creating
+            recoveryRequired
               ? `${coerceErrorMessage(error)}. ${crabboxWarmImageRecoveryHint(captureId)}`
               : error,
           );

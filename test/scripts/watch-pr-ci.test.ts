@@ -634,6 +634,14 @@ esac
         exitCode: 0,
         output: "GREEN",
       },
+      {
+        label: "pending ci-run completion policy",
+        status: "in_progress",
+        conclusion: null,
+        completion: "ci-run",
+        exitCode: 16,
+        output: "TIMEOUT completion=ci-run",
+      },
     ])(
       "preserves replacement ownership for $label",
       async ({
@@ -861,7 +869,9 @@ console.log(JSON.stringify(value));
         }
         const result = await replayPlaceholder(fixture, { watchTimeout: 5 });
         expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
-        expect(result.stdout).toContain(`pending=0 superseded=${observed}`);
+        expect(result.stdout).toContain(
+          `STATUS rollup=green github_rollup=${state} pending=0 superseded=${observed}`,
+        );
         expect(result.stdout).toContain("GREEN");
         // Cost and ordering matter: direct proof precedes run revalidation and
         // a fresh PR snapshot, followed by the ordinary final CI-run check.
@@ -1072,6 +1082,7 @@ console.log(JSON.stringify(value));
         watchTimeout: 5,
       });
       expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(16);
+      expect(result.stdout).toContain("STATUS rollup=green github_rollup=FAILURE pending=0");
       expect(result.stdout).not.toContain("GREEN");
     });
 
@@ -1268,8 +1279,12 @@ console.log(JSON.stringify(value));
       const result = await replayPlaceholder(fixture, { watchTimeout: 5 });
       expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(exitCode);
       expect(result.stdout).not.toContain("GREEN");
+      expect(result.stdout).toContain(
+        `STATUS rollup=${exitCode === 16 ? "pending" : "failing"} github_rollup=FAILURE`,
+      );
       if (exitCode === 16) {
         expect(result.stdout).toContain("superseded=1");
+        expect(result.stdout).toContain("TIMEOUT github_rollup=FAILURE");
       }
     });
 

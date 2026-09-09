@@ -116,7 +116,7 @@ Direct hosted Ollama Web Search (no local Ollama):
     providers: {
       ollama: {
         baseUrl: "https://ollama.com",
-        apiKey: "OLLAMA_API_KEY",
+        apiKey: { source: "env", provider: "default", id: "OLLAMA_API_KEY" },
       },
     },
   },
@@ -129,6 +129,10 @@ Direct hosted Ollama Web Search (no local Ollama):
   },
 }
 ```
+
+`models.providers.ollama.apiKey` takes either a literal key string or a
+SecretRef object. A bare `"OLLAMA_API_KEY"` string would be sent as the key
+itself, not read from the environment.
 
 ## Auth and request routing
 

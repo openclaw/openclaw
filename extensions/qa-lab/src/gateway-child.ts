@@ -248,6 +248,11 @@ async function startOwnedGatewayChild(
     tempRoot,
     configPath,
     runtimeEnv: runningEnv,
+    // Verified launchers implement a Gateway-only process boundary, not a direct CLI.
+    cliCommand:
+      params.command && !params.command.processBoundary
+        ? { executablePath: nodeExecPath, argsPrefix: [...cliArgsPrefix], cwd: gatewayCwd }
+        : undefined,
     logs,
     ...createQaGatewayChildLogAccess(output),
     runCli(args: readonly string[]) {

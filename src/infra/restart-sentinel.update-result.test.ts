@@ -21,6 +21,20 @@ async function withRestartSentinelStateDir(run: () => Promise<void>): Promise<vo
 }
 
 describe("control-plane update restart sentinel", () => {
+  it.each([undefined, "agent:main:main"])(
+    "does not infer a continuation from an update's session route (%s)",
+    (sessionKey) => {
+      const payload = buildUpdateRestartSentinelPayload({
+        result: { status: "ok", mode: "npm", steps: [], durationMs: 1 },
+        meta: sessionKey ? { sessionKey } : {},
+        nowMs: 1,
+      });
+
+      expect(payload.sessionKey).toBe(sessionKey);
+      expect(payload.continuation).toBeUndefined();
+    },
+  );
+
   it("preserves advisory step classification through the typed sentinel round trip", async () => {
     await withRestartSentinelStateDir(async () => {
       await writeRestartSentinel(
@@ -156,7 +170,7 @@ describe("control-plane update restart sentinel", () => {
     const meta = {
       target: "version 2026.4.24",
       sessionKey: "agent:main:webchat:dm:user-123",
-      continuationMessage: "Check the running version and finish the update report.",
+      continuationMessage: "  Check the running version and finish the update report.\n",
     };
 
     const pendingResult = buildControlPlaneUpdateRestartHealthPendingResult(result);

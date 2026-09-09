@@ -30,7 +30,10 @@ import type {
   PreparedConfiguredRuntimeModel,
   PreparedRuntimeCapabilityModel,
 } from "./prepared-model-runtime.configured.js";
-import { buildPreparedPluginModelCatalog } from "./prepared-model-runtime.plugin-generation.js";
+import {
+  acquirePreparedMediaCapabilityProviders,
+  buildPreparedPluginModelCatalog,
+} from "./prepared-model-runtime.plugin-generation.js";
 import type {
   PreparedModelCatalogInventory,
   PreparedModelRuntimeCatalogMode,
@@ -307,8 +310,13 @@ export function createPreparedModelRuntimeSnapshot(
   catalogAccess: PreparedModelRuntimeCatalogAccess,
 ): PreparedModelRuntimeSnapshot {
   const { credentials, input } = agentFacts;
-  const { mediaCapabilityProviders, messageToolCatalog, pluginMetadataSnapshot, pluginRegistry } =
-    pluginGeneration;
+  const {
+    mediaCapabilityProviders,
+    mediaCapabilityProviderSource,
+    messageToolCatalog,
+    pluginMetadataSnapshot,
+    pluginRegistry,
+  } = pluginGeneration;
   const { configuredRuntimeModels, inlineProviderModels, templateModelRegistry } = catalogFacts;
   const modelCatalog = materializePreparedModelCatalog(
     catalogFacts.modelCatalog,
@@ -342,6 +350,15 @@ export function createPreparedModelRuntimeSnapshot(
     ...(pluginRegistry ? { pluginRegistry } : {}),
     ...(messageToolCatalog ? { messageToolCatalog } : {}),
     ...(mediaCapabilityProviders ? { mediaCapabilityProviders } : {}),
+    ...(mediaCapabilityProviderSource && mediaCapabilityProviders
+      ? {
+          acquireMediaCapabilityProviders: () =>
+            acquirePreparedMediaCapabilityProviders(
+              mediaCapabilityProviderSource,
+              mediaCapabilityProviders,
+            ),
+        }
+      : {}),
     modelCatalog: catalogAccess.withRefreshStatus(modelCatalog),
     readFullModelCatalog: catalogAccess.readFullModelCatalog,
     loadFullModelCatalog: catalogAccess.loadFullModelCatalog,

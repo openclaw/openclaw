@@ -19,6 +19,20 @@ node -v
 
 Upgrade Node before updating OpenClaw to avoid SQLite TEXT truncation. See [Node.js compatibility](/install/node-compatibility) for the SQLite safety floors and macOS/ARMv7 support limits.
 
+### Update from the CLI
+
+If you run `openclaw` with an incompatible Node.js in an interactive terminal, the CLI offers:
+
+```text
+Update NodeJS: Y/N [N]:
+```
+
+Enter **Y** to download a compatible Node.js for OpenClaw and retry the same command. The download is checksum-verified and stored under `~/.openclaw/tools/cli-node` (or the home selected by `OPENCLAW_HOME`). The Node.js installation does not replace system Node.js, change shell settings, reinstall OpenClaw, or repair/restart Gateway services. The retried command keeps its normal behavior.
+
+Later CLI invocations reuse that runtime when the active Node.js is incompatible. A supported active Node.js still takes precedence. Enter **N**, press Enter, or cancel to leave your installation unchanged and see manual upgrade instructions.
+
+Automatic installation supports macOS, Windows, and glibc-based Linux on x64/ARM64. Alpine/musl and other architectures need manual installation. Non-interactive, CI, JSON, and `--yes` invocations never prompt or install Node.js. Commands that require an exact process identity, such as `hooks relay` and `webhooks gmail run`, also require a compatible Node.js on their existing execution path.
+
 ## Install Node
 
 <Tabs>

@@ -4,6 +4,7 @@ import ai.openclaw.app.gateway.GatewayRequestNotEnqueued
 import ai.openclaw.app.gateway.GatewayRequestOutcomeUnknown
 import ai.openclaw.app.gateway.GatewayRequestRejected
 import ai.openclaw.app.gateway.GatewaySession
+import ai.openclaw.app.ui.sessionPresentationTitle
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
@@ -15,6 +16,8 @@ import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertEquals
@@ -127,27 +130,52 @@ class ChatControllerReconnectRestoreTest {
       assertEquals(sessionKey, controller.sessionKey.value)
       val patchParams = json.parseToJsonElement(gateway.calls[patchIndex].paramsJson.orEmpty()).jsonObject
       assertEquals(sessionKey, patchParams["key"]?.jsonPrimitive?.content)
-      assertEquals("OpenClaw App · Pixel · device", patchParams["label"]?.jsonPrimitive?.content)
+      assertEquals("OpenClaw App · Pixel · device", patchParams["autoLabel"]?.jsonPrimitive?.content)
+      assertFalse("label" in patchParams)
     }
 
   @Test
-  fun connectedRefreshContinuesWhenSessionAdoptionFails() =
+  fun connectedRefreshContinuesWhenGatewayRejectsAutoLabelWithoutWritingManualLabel() =
     runTest {
       val sessionKey = "agent:main:node-device"
+      val deviceTitle = "OpenClaw App · Pixel · device"
       val gateway = ScriptedGateway(json)
       gateway.respondWith("sessions.describe", """{"session":null}""")
-      gateway.respond("sessions.patch") { error("patch unavailable") }
+      gateway.respond("sessions.patch") {
+        throw GatewayRequestRejected(
+          GatewaySession.ErrorShape("INVALID_REQUEST", "unexpected property autoLabel"),
+        )
+      }
       gateway.respondWith("chat.history", history(emptyList()))
+      gateway.respondWith(
+        "sessions.list",
+        """{"sessions":[{"key":"$sessionKey"},{"key":"agent:main:node-other"},{"key":"agent:other:node-device"}]}""",
+      )
       val controller = newScopedController(gateway)
 
       controller.prepareMainSessionKey(sessionKey)
-      controller.onGatewayConnected(MainSessionBinding(sessionKey, "OpenClaw App · Pixel · device"))
+      controller.onGatewayConnected(MainSessionBinding(sessionKey, deviceTitle))
+      runCurrent()
+      controller.refreshSessions()
       runCurrent()
 
       assertEquals(1, gateway.callCount("sessions.patch"))
+      val patchCall = gateway.calls.single { it.method == "sessions.patch" }
+      val patchParams = json.parseToJsonElement(patchCall.paramsJson.orEmpty()).jsonObject
+      assertEquals(deviceTitle, patchParams["autoLabel"]?.jsonPrimitive?.content)
+      assertFalse("label" in patchParams)
       assertEquals(1, gateway.callCount("chat.history"))
       assertEquals(sessionKey, controller.sessionKey.value)
       assertNull(controller.errorText.value)
+
+      val ownSession = controller.sessions.value.single { it.key == sessionKey }
+      assertNull(ownSession.label)
+      assertNull(ownSession.displayName)
+      assertNull(ownSession.autoLabel)
+      assertEquals(deviceTitle, sessionPresentationTitle(ownSession) { "Unnamed" })
+      controller.sessions.value.filter { it.key != sessionKey }.forEach {
+        assertEquals("Unnamed", sessionPresentationTitle(it) { "Unnamed" })
+      }
     }
 
   @Test
@@ -171,7 +199,8 @@ class ChatControllerReconnectRestoreTest {
       assertTrue(historyIndex > patchIndex)
       val patchParams = json.parseToJsonElement(gateway.calls[patchIndex].paramsJson.orEmpty()).jsonObject
       assertEquals(sessionKey, patchParams["key"]?.jsonPrimitive?.content)
-      assertEquals("OpenClaw App · Pixel · device", patchParams["label"]?.jsonPrimitive?.content)
+      assertEquals("OpenClaw App · Pixel · device", patchParams["autoLabel"]?.jsonPrimitive?.content)
+      assertFalse("label" in patchParams)
       assertEquals(listOf("keep working"), controller.messages.value.map { it.content.first().text })
     }
 
@@ -182,7 +211,7 @@ class ChatControllerReconnectRestoreTest {
       val gateway = ScriptedGateway(json)
       gateway.respondWith(
         "sessions.describe",
-        """{"session":{"key":"$sessionKey","label":"OpenClaw App · Pixel · device"}}""",
+        """{"session":{"key":"$sessionKey","autoLabel":"OpenClaw App · Pixel · device"}}""",
       )
       gateway.respondWith("sessions.patch", """{"ok":true,"key":"$sessionKey"}""")
       gateway.respondWith("chat.history", history(emptyList()))
@@ -211,17 +240,27 @@ class ChatControllerReconnectRestoreTest {
       val sessionKey = "agent:main:node-device"
       val gateway = ScriptedGateway(json)
       var storedLabel: String? = null
+      var storedAutoLabel: String? = null
       gateway.respond("sessions.describe") {
-        storedLabel?.let { """{"session":{"key":"$sessionKey","label":"$it"}}""" }
-          ?: """{"session":null}"""
+        if (storedLabel == null && storedAutoLabel == null) {
+          """{"session":null}"""
+        } else {
+          buildJsonObject {
+            put(
+              "session",
+              buildJsonObject {
+                put("key", JsonPrimitive(sessionKey))
+                storedLabel?.let { put("label", JsonPrimitive(it)) }
+                storedAutoLabel?.let { put("autoLabel", JsonPrimitive(it)) }
+              },
+            )
+          }.toString()
+        }
       }
       gateway.respond("sessions.patch") { paramsJson ->
-        storedLabel =
-          json
-            .parseToJsonElement(paramsJson.orEmpty())
-            .jsonObject["label"]
-            ?.jsonPrimitive
-            ?.content
+        val patchParams = json.parseToJsonElement(paramsJson.orEmpty()).jsonObject
+        assertFalse("label" in patchParams)
+        storedAutoLabel = patchParams["autoLabel"]?.jsonPrimitive?.content
         """{"ok":true,"key":"$sessionKey"}"""
       }
       gateway.respondWith("chat.history", history(emptyList()))
@@ -238,15 +277,23 @@ class ChatControllerReconnectRestoreTest {
       assertEquals(1, gateway.callCount("sessions.patch"))
       assertEquals(2, gateway.callCount("sessions.describe"))
       assertEquals(2, gateway.callCount("chat.history"))
+      assertEquals("OpenClaw App · Pixel · device", storedAutoLabel)
+      assertNull(storedLabel)
 
-      storedLabel = "My Android session"
-      controller.onGatewayConnected(binding.copy(label = "OpenClaw App · Renamed · device"))
+      storedLabel = "OpenClaw App · Release planning · device"
+      val renamedBinding = binding.copy(autoLabel = "OpenClaw App · Renamed · device")
+      controller.onGatewayConnected(renamedBinding)
       runCurrent()
 
-      assertEquals(1, gateway.callCount("sessions.patch"))
+      assertEquals(2, gateway.callCount("sessions.patch"))
       assertEquals(3, gateway.callCount("sessions.describe"))
       assertEquals(3, gateway.callCount("chat.history"))
-      assertEquals("My Android session", storedLabel)
+      assertEquals("OpenClaw App · Release planning · device", storedLabel)
+      assertEquals("OpenClaw App · Renamed · device", storedAutoLabel)
+
+      controller.onGatewayConnected(renamedBinding)
+      runCurrent()
+      assertEquals(2, gateway.callCount("sessions.patch"))
     }
 
   @Test
@@ -322,7 +369,7 @@ class ChatControllerReconnectRestoreTest {
         if (reconnecting) {
           reconnectDescribe.await()
         } else {
-          """{"session":{"key":"$sessionKey","label":"OpenClaw App · Pixel · device"}}"""
+          """{"session":{"key":"$sessionKey","autoLabel":"OpenClaw App · Pixel · device"}}"""
         }
       }
       gateway.respondWith("chat.history", history(emptyList()))
@@ -341,7 +388,7 @@ class ChatControllerReconnectRestoreTest {
 
       assertEquals(historyCallsBeforeReconnect, gateway.callCount("chat.history"))
       reconnectDescribe.complete(
-        """{"session":{"key":"$sessionKey","label":"OpenClaw App · Pixel · device"}}""",
+        """{"session":{"key":"$sessionKey","autoLabel":"OpenClaw App · Pixel · device"}}""",
       )
       runCurrent()
       assertTrue(gateway.callCount("chat.history") > historyCallsBeforeReconnect)
@@ -359,7 +406,7 @@ class ChatControllerReconnectRestoreTest {
         if (describeCalls == 1) {
           staleDescribe.await()
         } else {
-          """{"session":{"key":"$sessionKey","label":"OpenClaw App · Pixel · device"}}"""
+          """{"session":{"key":"$sessionKey","autoLabel":"OpenClaw App · Pixel · device"}}"""
         }
       }
       gateway.respondWith("chat.history", history(emptyList()))
@@ -388,7 +435,7 @@ class ChatControllerReconnectRestoreTest {
       var sessionExists = false
       gateway.respond("sessions.describe") {
         if (sessionExists) {
-          """{"session":{"key":"$sessionKey","label":"OpenClaw App · Pixel · device"}}"""
+          """{"session":{"key":"$sessionKey","autoLabel":"OpenClaw App · Pixel · device"}}"""
         } else {
           """{"session":null}"""
         }

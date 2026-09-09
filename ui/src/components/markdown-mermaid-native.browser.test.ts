@@ -1,5 +1,6 @@
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.ts";
 import "../../../packages/mermaid-renderer/src/native.ts";
 
 type NativeReply = {
@@ -38,6 +39,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.useRealTimers();
   window.dispatchEvent(new PageTransitionEvent("pagehide"));
   delete window.ChatMermaidBridge;
   diagram.remove();
@@ -99,11 +101,15 @@ describe("native Mermaid document", () => {
     "reports %s timeouts as retryable and recovers on the next request",
     async (boundary) => {
       const source = "flowchart LR\nA[Waiting] --> B[Ready]";
+      const deadline = boundary === "image decode" ? 5_000 : 15_000;
+      const stalled = createDeferred();
+      const decoding = createDeferred();
       if (boundary === "engine load") {
         const descriptor = Object.getOwnPropertyDescriptor(HTMLIFrameElement.prototype, "srcdoc")!;
         vi.spyOn(HTMLIFrameElement.prototype, "srcdoc", "set").mockImplementation(
           function (this: HTMLIFrameElement) {
             descriptor.set!.call(this, "<!doctype html><html></html>");
+            stalled.resolve();
           },
         );
       } else if (boundary === "engine render") {
@@ -113,20 +119,56 @@ describe("native Mermaid document", () => {
           this: MessagePort,
           ...args
         ) {
-          if (asRecord(args[0]).source !== source) {
+          if (asRecord(args[0]).source === source) {
+            stalled.resolve();
+          } else {
             Reflect.apply(postMessage, this, args);
           }
         });
       } else {
-        vi.spyOn(HTMLImageElement.prototype, "decode").mockImplementationOnce(
-          () => new Promise(() => {}),
-        );
+        vi.spyOn(HTMLImageElement.prototype, "decode").mockImplementationOnce(() => {
+          stalled.resolve();
+          return decoding.promise;
+        });
       }
 
-      await window.renderMermaid({ id: "timeout", source, widthCssPx: 320, theme });
-      expect(replies[0]).toMatchObject({ id: "timeout", success: false, retryable: true });
-      expect(diagram.querySelector("img")).toBeNull();
-      vi.restoreAllMocks();
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      const schedule = vi.spyOn(window, "setTimeout");
+      let pending: Promise<void> | undefined;
+      let settled = false;
+      try {
+        pending = window
+          .renderMermaid({ id: "timeout", source, widthCssPx: 320, theme })
+          .finally(() => {
+            settled = true;
+          });
+        // Load/decode arm their watchdog after the intercepted call returns.
+        // Awaiting the stall lets that synchronous registration finish.
+        await stalled.promise;
+        expect(schedule).toHaveBeenLastCalledWith(expect.any(Function), deadline);
+        expect(vi.getTimerCount()).toBe(1);
+        await vi.advanceTimersByTimeAsync(deadline - 1);
+        expect(settled).toBe(false);
+        expect(replies).toEqual([]);
+        expect(diagram.querySelector("img")).toBeNull();
+        await vi.advanceTimersByTimeAsync(1);
+        expect(settled).toBe(true);
+        await pending;
+        expect(replies[0]).toMatchObject({ id: "timeout", success: false, retryable: true });
+        expect(diagram.querySelector("img")).toBeNull();
+      } finally {
+        try {
+          // A failed assertion must not strand the serialized native decode queue.
+          decoding.resolve();
+          if (pending && !settled) {
+            window.dispatchEvent(new PageTransitionEvent("pagehide"));
+            await pending;
+          }
+        } finally {
+          vi.restoreAllMocks();
+          vi.useRealTimers();
+        }
+      }
       await window.renderMermaid({ id: "recovered", source, widthCssPx: 320, theme });
       expect(replies[1]).toMatchObject({ id: "recovered", success: true });
       expect(diagram.querySelector("img")?.complete).toBe(true);

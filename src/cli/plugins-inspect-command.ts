@@ -187,12 +187,11 @@ export async function runPluginsInspectCommand(
         ...loggerParams,
         report,
       });
-      const inspectAllWithInstall = inspectAll.map((inspect) => ({
-        ...inspect,
-        install: resolveInstallRecord(inspect.plugin.id),
-      }));
-
       if (opts.json) {
+        const inspectAllWithInstall = inspectAll.map((inspect) => ({
+          ...inspect,
+          install: resolveInstallRecord(inspect.plugin.id),
+        }));
         return JSON.stringify(inspectAllWithInstall, null, 2);
       }
       const tableWidth = getTerminalTableWidth();

@@ -170,3 +170,4 @@ The anchors from the single-page version still resolve here.
 - [Provider Plugins](/plugins/sdk-provider-plugins) - building provider plugins
 - [Plugin Internals](/plugins/architecture) - architecture deep dive
 - [Plugin Manifest](/plugins/manifest) - manifest schema reference
+- [Plugin hooks](/plugins/hooks) - typed and custom hook surfaces

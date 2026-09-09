@@ -6,19 +6,13 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
-import { SUPPORTED_NODE_VERSIONS } from "../../node-version.mjs";
 import { resolveInlineCommandMatch } from "../infra/shell-inline-command.js";
 import { POSIX_SHELL_WRAPPERS } from "../infra/shell-wrapper-resolution.js";
 import { parseTcpPort } from "../infra/tcp-port.js";
 import { resolveLaunchAgentPlistPath } from "./launchd.js";
-import { isBunRuntime, isNodeRuntime } from "./runtime-binary.js";
 import { parseKeyValueOutput } from "./runtime-parse.js";
-import {
-  isSystemNodePath,
-  isVersionManagedNodePath,
-  resolveBunRuntimeInfo,
-  resolveSystemNodePath,
-} from "./runtime-paths.js";
+import { auditGatewayRuntime, SERVICE_RUNTIME_AUDIT_CODES } from "./service-audit-runtime.js";
+import type { GatewayServiceCommand, ServiceConfigIssue } from "./service-audit-types.js";
 import { getMinimalServicePathPartsFromEnv, SERVICE_PROXY_ENV_KEYS } from "./service-env.js";
 import {
   collectInlineManagedServiceEnvKeys,
@@ -28,31 +22,17 @@ import {
   readEnvironmentValueSource,
 } from "./service-managed-env.js";
 import { isNonMinimalServicePathEntry, normalizeServicePathEntry } from "./service-path-policy.js";
-import type { GatewayServiceEnvironmentValueSource } from "./service-types.js";
 import { execSystemctlUser } from "./systemd-exec.js";
 import { resolveSystemdServiceName, resolveSystemdUnitPath } from "./systemd-service-files.js";
 import { parseSystemdEnvAssignments, splitSystemdLogicalLines } from "./systemd-unit.js";
 
-export type GatewayServiceCommand = {
-  programArguments: string[];
-  workingDirectory?: string;
-  environment?: Record<string, string>;
-  environmentValueSources?: Record<string, GatewayServiceEnvironmentValueSource>;
-  sourcePath?: string;
-} | null;
-
-export type ServiceConfigIssue = {
-  code: string;
-  message: string;
-  detail?: string;
-  environmentKeys?: string[];
-  level?: "recommended" | "aggressive";
-};
+export type { GatewayServiceCommand, ServiceConfigIssue } from "./service-audit-types.js";
 
 export type ServiceConfigAudit =
-  | { ok: true; issues: ServiceConfigIssue[] }
-  | { ok: false; issues: ServiceConfigIssue[] };
+  | { ok: true; issues: ServiceConfigIssue[]; runtimeNote?: string }
+  | { ok: false; issues: ServiceConfigIssue[]; runtimeNote?: string };
 export const SERVICE_AUDIT_CODES = {
+  ...SERVICE_RUNTIME_AUDIT_CODES,
   gatewayCommandMissing: "gateway-command-missing",
   gatewayEntrypointMismatch: "gateway-entrypoint-mismatch",
   gatewayPathMissing: "gateway-path-missing",
@@ -64,10 +44,6 @@ export const SERVICE_AUDIT_CODES = {
   gatewayPortMismatch: "gateway-port-mismatch",
   gatewayProxyEnvEmbedded: "gateway-proxy-env-embedded",
   gatewayTokenMismatch: "gateway-token-mismatch",
-  gatewayRuntimeBun: "gateway-runtime-bun",
-  gatewayRuntimeProbeFailed: "gateway-runtime-probe-failed",
-  gatewayRuntimeNodeVersionManager: "gateway-runtime-node-version-manager",
-  gatewayRuntimeNodeSystemMissing: "gateway-runtime-node-system-missing",
   gatewayTokenDrift: "gateway-token-drift",
   launchdKeepAlive: "launchd-keep-alive",
   launchdRunAtLoad: "launchd-run-at-load",
@@ -84,6 +60,7 @@ export function needsNodeRuntimeMigration(issues: ServiceConfigIssue[]): boolean
   return issues.some(
     (issue) =>
       issue.code === SERVICE_AUDIT_CODES.gatewayRuntimeBun ||
+      issue.code === SERVICE_AUDIT_CODES.gatewayRuntimeNode ||
       issue.code === SERVICE_AUDIT_CODES.gatewayRuntimeNodeVersionManager,
   );
 }
@@ -621,65 +598,6 @@ function auditGatewayServicePath(
   }
 }
 
-async function auditGatewayRuntime(
-  env: Record<string, string | undefined>,
-  command: GatewayServiceCommand,
-  issues: ServiceConfigIssue[],
-  platform: NodeJS.Platform,
-) {
-  const execPath = command?.programArguments?.[0];
-  if (!execPath) {
-    return;
-  }
-
-  if (isBunRuntime(execPath)) {
-    const runtime = await resolveBunRuntimeInfo(execPath);
-    if (runtime.status !== "supported") {
-      issues.push({
-        code:
-          runtime.status === "probe-failed"
-            ? SERVICE_AUDIT_CODES.gatewayRuntimeProbeFailed
-            : SERVICE_AUDIT_CODES.gatewayRuntimeBun,
-        message:
-          runtime.status === "probe-failed"
-            ? "Gateway service Bun runtime probe failed."
-            : "Gateway service uses an unsupported Bun runtime; Bun 1.4+ with WAL-reset-safe node:sqlite is required.",
-        detail:
-          runtime.status === "probe-failed"
-            ? runtime.error.message
-            : runtime.sqliteSelectionError
-              ? `${execPath}: ${runtime.sqliteSelectionError}`
-              : execPath,
-        level: "recommended",
-      });
-    }
-    return;
-  }
-
-  if (!isNodeRuntime(execPath)) {
-    return;
-  }
-
-  if (isVersionManagedNodePath(execPath, platform)) {
-    issues.push({
-      code: SERVICE_AUDIT_CODES.gatewayRuntimeNodeVersionManager,
-      message: "Gateway service uses Node from a version manager; it can break after upgrades.",
-      detail: execPath,
-      level: "recommended",
-    });
-    if (!isSystemNodePath(execPath, env, platform)) {
-      const systemNode = await resolveSystemNodePath(env, platform);
-      if (!systemNode) {
-        issues.push({
-          code: SERVICE_AUDIT_CODES.gatewayRuntimeNodeSystemMissing,
-          message: `System Node ${SUPPORTED_NODE_VERSIONS} not found; install it before migrating away from version managers.`,
-          level: "recommended",
-        });
-      }
-    }
-  }
-}
-
 /**
  * Check if the service's embedded token differs from the config file token.
  * Returns an issue if drift is detected (service will use old token after restart).
@@ -733,7 +651,13 @@ export async function auditGatewayServiceConfig(params: {
   auditGatewayToken(params.command, issues, params.expectedGatewayToken);
   auditGatewayPassword(params.command, issues);
   auditGatewayServicePath(params.command, issues, params.env, platform, params.expectedServicePath);
-  await auditGatewayRuntime(params.env, params.command, issues, platform);
+  const runtimeNote = await auditGatewayRuntime(
+    params.env,
+    params.command,
+    issues,
+    platform,
+    params.timeoutMs,
+  );
 
   if (platform === "linux") {
     await auditSystemdUnit(params.env, issues, params.timeoutMs);
@@ -741,5 +665,6 @@ export async function auditGatewayServiceConfig(params: {
     await auditLaunchdPlist(params.env, issues);
   }
 
-  return issues.length === 0 ? { ok: true, issues } : { ok: false, issues };
+  const notes = runtimeNote ? { runtimeNote } : {};
+  return issues.length === 0 ? { ok: true, issues, ...notes } : { ok: false, issues, ...notes };
 }

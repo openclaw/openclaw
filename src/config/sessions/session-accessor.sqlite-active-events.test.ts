@@ -8,8 +8,13 @@ import {
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
-import { appendTranscriptEvent, persistSessionTranscriptTurn } from "./session-accessor.js";
 import {
+  appendTranscriptEvent,
+  persistSessionTranscriptTurn,
+  readActiveTranscriptEntryAnchor,
+} from "./session-accessor.js";
+import {
+  readLatestSessionTranscriptMessageEvent,
   readRecentSessionTranscriptMessageEvents,
   readSessionTranscriptActivePathEntryRelation,
   readSessionTranscriptActiveStats,
@@ -23,6 +28,7 @@ import {
 } from "./session-accessor.sqlite-history-events.js";
 import { runExclusiveSqliteSessionWrite } from "./session-accessor.sqlite-scope.js";
 import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
+import { runWithSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
 import {
   reconcileSessionTranscriptIndexes,
   startSessionTranscriptIndexReconcile,
@@ -109,6 +115,9 @@ describe("SQLite active transcript event projection", () => {
     expect(() => readSessionTranscriptMessageEventCount(scope)).toThrow(
       SessionTranscriptProjectionUnavailableError,
     );
+    expect(() => readLatestSessionTranscriptMessageEvent(scope)).toThrow(
+      SessionTranscriptProjectionUnavailableError,
+    );
     await waitForSessionTranscriptIndexReconcile({ agentId: scope.agentId, env: scope.env });
 
     const page = readSessionTranscriptMessageEventPage(scope, { maxMessages: 10, offset: 0 });
@@ -118,6 +127,7 @@ describe("SQLite active transcript event projection", () => {
       "active",
     ]);
     expect(readSessionTranscriptActivePathEntryRelation(scope, "active")).toBe("exact");
+    expect(readLatestSessionTranscriptMessageEvent(scope)?.event).toMatchObject({ id: "active" });
     expect(readSessionTranscriptActivePathEntryRelation(scope, "root")).toBe("ancestor");
     expect(page.events.map((entry) => entry.seq)).toEqual([1, 2]);
     expect(page.totalMessages).toBe(2);
@@ -189,6 +199,46 @@ describe("SQLite active transcript event projection", () => {
 
     expect(readSessionTranscriptActiveStats(scope)).toMatchObject({ eventCount: 1 });
     expect(readSessionTranscriptActiveStats(scope).sizeBytes).toBeLessThan(1_000);
+    expect(readLatestSessionTranscriptMessageEvent(scope)?.event).toMatchObject({
+      id: "post-reset",
+    });
+  });
+
+  it("reads the latest message before an admission fence and follows a selected older leaf", async () => {
+    expect(readLatestSessionTranscriptMessageEvent(scope)).toBeUndefined();
+    await persistSessionTranscriptTurn(scope, {
+      messages: ["prior", "admitted", "later"].map((eventId, index) => ({
+        eventId,
+        parentId: index === 0 ? null : index === 1 ? "prior" : "admitted",
+        message: { role: "user", content: eventId },
+      })),
+      touchSessionEntry: false,
+    });
+    const database = openOpenClawAgentDatabase({ agentId: scope.agentId, env: scope.env });
+    const anchor = readActiveTranscriptEntryAnchor({
+      ...scope,
+      storePath: database.path,
+      entryId: "admitted",
+    });
+    if (!anchor) {
+      throw new Error("expected admitted message anchor");
+    }
+    expect(readLatestSessionTranscriptMessageEvent(scope)?.event).toMatchObject({ id: "later" });
+    expect(
+      runWithSessionTranscriptReadFence(
+        { ...anchor, logicalTurnId: "fenced-turn", role: "user" },
+        () => readLatestSessionTranscriptMessageEvent(scope),
+      )?.event,
+    ).toMatchObject({ id: "prior" });
+
+    await appendTranscriptEvent(scope, {
+      type: "leaf",
+      id: "selected-leaf",
+      parentId: "later",
+      targetId: "prior",
+    });
+    await waitForSessionTranscriptIndexReconcile({ agentId: scope.agentId, env: scope.env });
+    expect(readLatestSessionTranscriptMessageEvent(scope)?.event).toMatchObject({ id: "prior" });
   });
 
   it("keeps counting genuinely oversized post-reset events", async () => {

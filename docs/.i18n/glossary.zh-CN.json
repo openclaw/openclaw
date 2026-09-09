@@ -140,6 +140,22 @@
     "target": "Talk 模式"
   },
   {
+    "source": "Talk realtime sessions and delegation",
+    "target": "Talk 实时会话与委派"
+  },
+  {
+    "source": "Talk session ownership",
+    "target": "Talk 会话归属"
+  },
+  {
+    "source": "Talk on macOS and the Gateway relay",
+    "target": "macOS 上的 Talk 与 Gateway 中继"
+  },
+  {
+    "source": "Talk client UI",
+    "target": "Talk 客户端界面"
+  },
+  {
     "source": "Azure Speech",
     "target": "Azure Speech"
   },
@@ -292,6 +308,38 @@
     "target": "自我学习"
   },
   {
+    "source": "Personal library authoring",
+    "target": "个人技能库创作"
+  },
+  {
+    "source": "How Skill Workshop works",
+    "target": "Skill Workshop 工作原理"
+  },
+  {
+    "source": "Collection review",
+    "target": "集合审查"
+  },
+  {
+    "source": "Chat and CLI authoring",
+    "target": "聊天与 CLI 创作"
+  },
+  {
+    "source": "Proposal content, support files, and the agent tool",
+    "target": "提案内容、支持文件与代理工具"
+  },
+  {
+    "source": "Self-learning and approval settings",
+    "target": "自我学习与审批设置"
+  },
+  {
+    "source": "Gateway methods, storage, and limits",
+    "target": "Gateway 方法、存储与限制"
+  },
+  {
+    "source": "Skill Workshop troubleshooting",
+    "target": "Skill Workshop 故障排查"
+  },
+  {
     "source": "local loopback",
     "target": "local loopback"
   },
@@ -330,6 +378,34 @@
   {
     "source": "Feishu",
     "target": "Feishu"
+  },
+  {
+    "source": "Feishu setup",
+    "target": "Feishu 设置"
+  },
+  {
+    "source": "Feishu access control",
+    "target": "Feishu 访问控制"
+  },
+  {
+    "source": "Feishu advanced configuration",
+    "target": "Feishu 高级配置"
+  },
+  {
+    "source": "Feishu dynamic agents",
+    "target": "Feishu 动态智能体"
+  },
+  {
+    "source": "Feishu message types",
+    "target": "Feishu 消息类型"
+  },
+  {
+    "source": "Feishu configuration reference",
+    "target": "Feishu 配置参考"
+  },
+  {
+    "source": "Feishu troubleshooting",
+    "target": "Feishu 故障排查"
   },
   {
     "source": "ClickClack",
@@ -432,6 +508,22 @@
     "target": "模型提供商"
   },
   {
+    "source": "Quick rules",
+    "target": "快速规则"
+  },
+  {
+    "source": "Control UI and API keys",
+    "target": "Control UI 与 API 密钥"
+  },
+  {
+    "source": "Official provider plugins",
+    "target": "官方提供商插件"
+  },
+  {
+    "source": "Custom providers and local runtimes",
+    "target": "自定义提供商与本地运行时"
+  },
+  {
     "source": "Model Providers",
     "target": "模型提供商"
   },
@@ -478,6 +570,18 @@
   {
     "source": "VPS hosting",
     "target": "VPS 托管"
+  },
+  {
+    "source": "Fly.io",
+    "target": "Fly.io"
+  },
+  {
+    "source": "Hetzner",
+    "target": "Hetzner"
+  },
+  {
+    "source": "exe.dev",
+    "target": "exe.dev"
   },
   {
     "source": "Linux server",
@@ -700,6 +804,38 @@
     "target": "主动记忆"
   },
   {
+    "source": "Enabling active memory",
+    "target": "启用主动记忆"
+  },
+  {
+    "source": "How active memory works",
+    "target": "主动记忆的工作原理"
+  },
+  {
+    "source": "Session controls",
+    "target": "会话控制"
+  },
+  {
+    "source": "Query modes, prompts, and models",
+    "target": "查询模式、提示词与模型"
+  },
+  {
+    "source": "Memory tools",
+    "target": "记忆工具"
+  },
+  {
+    "source": "Advanced overrides and transcripts",
+    "target": "高级覆盖与转录"
+  },
+  {
+    "source": "Recommended setup",
+    "target": "推荐设置"
+  },
+  {
+    "source": "Troubleshooting active memory",
+    "target": "主动记忆故障排查"
+  },
+  {
     "source": "Commitments",
     "target": "跟进承诺"
   },
@@ -896,6 +1032,58 @@
     "target": "常见问题"
   },
   {
+    "source": "What is OpenClaw?",
+    "target": "什么是 OpenClaw？"
+  },
+  {
+    "source": "Skills and automation",
+    "target": "Skills 与自动化"
+  },
+  {
+    "source": "Sandboxing and memory",
+    "target": "沙箱与记忆"
+  },
+  {
+    "source": "Where things live on disk",
+    "target": "磁盘上的文件位置"
+  },
+  {
+    "source": "Config basics",
+    "target": "配置基础"
+  },
+  {
+    "source": "Remote gateways and nodes",
+    "target": "远程 Gateway 与节点"
+  },
+  {
+    "source": "Env vars and .env loading",
+    "target": "环境变量与 .env 加载"
+  },
+  {
+    "source": "Sessions and multiple chats",
+    "target": "会话与多个聊天"
+  },
+  {
+    "source": "Gateway ports, already running, and remote mode",
+    "target": "Gateway 端口、已在运行与远程模式"
+  },
+  {
+    "source": "Logging and debugging",
+    "target": "日志与调试"
+  },
+  {
+    "source": "Media and attachments",
+    "target": "媒体与附件"
+  },
+  {
+    "source": "Security and access control",
+    "target": "安全与访问控制"
+  },
+  {
+    "source": "Chat commands, aborting tasks, and stopping a run",
+    "target": "聊天命令、中止任务与停止运行"
+  },
+  {
     "source": "Ollama Web Search",
     "target": "Ollama Web 搜索"
   },
@@ -982,6 +1170,26 @@
   {
     "source": "Voice call plugin",
     "target": "语音通话插件"
+  },
+  {
+    "source": "Voice call configuration",
+    "target": "语音通话配置"
+  },
+  {
+    "source": "Voice call realtime and streaming",
+    "target": "语音通话实时语音与流式转写"
+  },
+  {
+    "source": "Voice call TTS and inbound calls",
+    "target": "语音通话 TTS 与来电"
+  },
+  {
+    "source": "Voice call security and interfaces",
+    "target": "语音通话安全与接口"
+  },
+  {
+    "source": "Voice call troubleshooting",
+    "target": "语音通话故障排查"
   },
   {
     "source": "Browser control",
@@ -1122,6 +1330,38 @@
   {
     "source": "Plugin entry points",
     "target": "插件入口点"
+  },
+  {
+    "source": "Plugin SDK tool policy and sandbox helpers",
+    "target": "插件 SDK 工具策略与沙箱辅助方法"
+  },
+  {
+    "source": "Plugin SDK package entries",
+    "target": "插件 SDK 包入口"
+  },
+  {
+    "source": "Plugin SDK defineToolPlugin helper",
+    "target": "插件 SDK defineToolPlugin 辅助方法"
+  },
+  {
+    "source": "Plugin SDK definePluginEntry helper",
+    "target": "插件 SDK definePluginEntry 辅助方法"
+  },
+  {
+    "source": "Plugin SDK native provider factories",
+    "target": "插件 SDK 原生提供方工厂"
+  },
+  {
+    "source": "Plugin SDK defineChannelPluginEntry helper",
+    "target": "插件 SDK defineChannelPluginEntry 辅助方法"
+  },
+  {
+    "source": "Plugin SDK defineSetupPluginEntry helper",
+    "target": "插件 SDK defineSetupPluginEntry 辅助方法"
+  },
+  {
+    "source": "Plugin SDK registration mode",
+    "target": "插件 SDK 注册模式"
   },
   {
     "source": "Plugin hooks",
@@ -1588,6 +1828,26 @@
     "target": "Hooks"
   },
   {
+    "source": "Writing hooks",
+    "target": "编写 Hook"
+  },
+  {
+    "source": "Hook configuration and discovery",
+    "target": "Hook 配置与发现"
+  },
+  {
+    "source": "Bundled hooks",
+    "target": "内置 Hook"
+  },
+  {
+    "source": "Hook event types and context",
+    "target": "Hook 事件类型与上下文"
+  },
+  {
+    "source": "Hook troubleshooting",
+    "target": "Hook 故障排查"
+  },
+  {
     "source": "Incident response",
     "target": "事件响应"
   },
@@ -1626,6 +1886,34 @@
   {
     "source": "Text to speech",
     "target": "文本转语音"
+  },
+  {
+    "source": "Text-to-speech quickstart",
+    "target": "文本转语音快速上手"
+  },
+  {
+    "source": "Text-to-speech configuration",
+    "target": "文本转语音配置"
+  },
+  {
+    "source": "Text-to-speech personas",
+    "target": "文本转语音人设"
+  },
+  {
+    "source": "Text-to-speech commands and directives",
+    "target": "文本转语音命令与指令"
+  },
+  {
+    "source": "Text-to-speech output and Auto-TTS behavior",
+    "target": "文本转语音输出与自动 TTS 行为"
+  },
+  {
+    "source": "Text-to-speech field reference",
+    "target": "文本转语音字段参考"
+  },
+  {
+    "source": "Text-to-speech agent tool and Gateway RPC",
+    "target": "文本转语音代理工具与 Gateway RPC"
   },
   {
     "source": "Linux app",
@@ -1716,6 +2004,90 @@
     "target": "故障排查"
   },
   {
+    "source": "Updates and rollbacks",
+    "target": "更新与回滚"
+  },
+  {
+    "source": "Skills and model providers",
+    "target": "Skills 与模型提供商"
+  },
+  {
+    "source": "Agent replies and Control UI",
+    "target": "智能体回复与 Control UI"
+  },
+  {
+    "source": "Gateway service and process",
+    "target": "Gateway 网关服务与进程"
+  },
+  {
+    "source": "Config validation and probes",
+    "target": "配置校验与探针"
+  },
+  {
+    "source": "Channel delivery and tools",
+    "target": "渠道投递与工具"
+  },
+  {
+    "source": "Configuration",
+    "target": "配置"
+  },
+  {
+    "source": "Configuration examples",
+    "target": "配置示例"
+  },
+  {
+    "source": "Configuration: hot reload",
+    "target": "配置：热重载"
+  },
+  {
+    "source": "Configuration: strict validation",
+    "target": "配置：严格校验"
+  },
+  {
+    "source": "Remote access",
+    "target": "远程访问"
+  },
+  {
+    "source": "Multiple gateways on the same host",
+    "target": "同一主机上的多个 Gateway 网关"
+  },
+  {
+    "source": "Background exec and process tool",
+    "target": "后台执行与进程工具"
+  },
+  {
+    "source": "Scheduled tasks: troubleshooting",
+    "target": "定时任务：故障排查"
+  },
+  {
+    "source": "Browser (OpenClaw-managed)",
+    "target": "浏览器（OpenClaw 托管）"
+  },
+  {
+    "source": "Anthropic",
+    "target": "Anthropic"
+  },
+  {
+    "source": "Token use and costs",
+    "target": "Token 用量与成本"
+  },
+  {
+    "source": "OpenAI-compatible endpoints",
+    "target": "OpenAI 兼容端点"
+  },
+  {
+    "source": "Provider configuration",
+    "target": "提供商配置"
+  },
+  {
+    "source": "Local models",
+    "target": "本地模型"
+  },
+  {
+    "source": "Logs",
+    "target": "日志"
+  },
+  {
     "source": "Update troubleshooting",
     "target": "更新故障排查"
   },
@@ -1774,6 +2146,102 @@
   {
     "source": "Cloud workers plan",
     "target": "云端工作节点计划"
+  },
+  {
+    "source": "Cloud worker warm images",
+    "target": "云工作机预热镜像"
+  },
+  {
+    "source": "Per-project default profiles",
+    "target": "按项目的默认配置档"
+  },
+  {
+    "source": "Worker setup and bundle installation",
+    "target": "工作机初始化与套件安装"
+  },
+  {
+    "source": "Verify a cloud worker profile",
+    "target": "验证云工作机配置档"
+  },
+  {
+    "source": "Dispatching a cloud session",
+    "target": "派发云会话"
+  },
+  {
+    "source": "Placement and machine selection",
+    "target": "放置位置与机器选择"
+  },
+  {
+    "source": "Cloud session lifecycle and durability",
+    "target": "云会话生命周期与持久性"
+  },
+  {
+    "source": "Cloud Worker Desktop",
+    "target": "云工作机桌面"
+  },
+  {
+    "source": "Cloud worker security model",
+    "target": "云工作机安全模型"
+  },
+  {
+    "source": "Cloud worker troubleshooting",
+    "target": "云工作机故障排查"
+  },
+  {
+    "source": "Warm images",
+    "target": "预热镜像"
+  },
+  {
+    "source": "Recover a paused capture",
+    "target": "恢复暂停的捕获"
+  },
+  {
+    "source": "Upgrade warm-image state",
+    "target": "升级预热镜像状态"
+  },
+  {
+    "source": "The setup command",
+    "target": "初始化命令"
+  },
+  {
+    "source": "Bundle installation",
+    "target": "套件安装"
+  },
+  {
+    "source": "Build a complete custom node package",
+    "target": "构建完整的自定义节点包"
+  },
+  {
+    "source": "Verify the profile",
+    "target": "验证配置档"
+  },
+  {
+    "source": "Dispatching a session",
+    "target": "派发会话"
+  },
+  {
+    "source": "Cloud child sessions",
+    "target": "云子会话"
+  },
+  {
+    "source": "Runtime support",
+    "target": "运行时支持"
+  },
+  {
+    "source": "Codex on a paired device",
+    "target": "在已配对设备上运行 Codex"
+  },
+  {
+    "source": "Choose a machine class per session",
+    "target": "为每个会话选择机器规格"
+  },
+  {
+    "source": "What survives a dead machine",
+    "target": "机器失效后仍然保留的内容"
+  },
+  {
+    "source": "Desktop (interactive)",
+    "target": "桌面（交互式）"
   },
   {
     "source": "Crabbox plugin",
@@ -1930,6 +2398,30 @@
   {
     "source": "Docker VM Runtime",
     "target": "Docker VM 运行时"
+  },
+  {
+    "source": "Docker environment variables",
+    "target": "Docker 环境变量"
+  },
+  {
+    "source": "Docker networking, providers, and storage",
+    "target": "Docker 网络、提供商与存储"
+  },
+  {
+    "source": "Docker Compose operations and image maintenance",
+    "target": "Docker Compose 运维与镜像维护"
+  },
+  {
+    "source": "Docker agent sandbox and troubleshooting",
+    "target": "Docker 智能体沙箱与故障排查"
+  },
+  {
+    "source": "OpenShell",
+    "target": "OpenShell"
+  },
+  {
+    "source": "Multi-Agent Sandbox and Tools",
+    "target": "多智能体沙箱与工具"
   },
   {
     "source": "Updating",
@@ -2264,6 +2756,22 @@
     "target": "CI 范围与路由"
   },
   {
+    "source": "Scope selection",
+    "target": "范围选择"
+  },
+  {
+    "source": "Node test lanes",
+    "target": "Node 测试通道"
+  },
+  {
+    "source": "Job budgets and platform lanes",
+    "target": "作业预算与平台通道"
+  },
+  {
+    "source": "Manual dispatches",
+    "target": "手动触发"
+  },
+  {
     "source": "CI runner classes",
     "target": "CI 运行器类型"
   },
@@ -2274,6 +2782,26 @@
   {
     "source": "Release validation workflows",
     "target": "发布验证工作流"
+  },
+  {
+    "source": "Full Release Validation",
+    "target": "完整发布验证"
+  },
+  {
+    "source": "Live and E2E shards",
+    "target": "实时与端到端分片"
+  },
+  {
+    "source": "Package Acceptance",
+    "target": "软件包验收"
+  },
+  {
+    "source": "Install smoke and Docker E2E",
+    "target": "安装冒烟与 Docker 端到端测试"
+  },
+  {
+    "source": "Plugin Prerelease",
+    "target": "插件预发布"
   },
   {
     "source": "Scheduled and maintenance workflows",
@@ -2596,6 +3124,30 @@
     "target": "编写与添加测试"
   },
   {
+    "source": "Quick live smokes and the Android node sweep",
+    "target": "快速 Live 冒烟测试与 Android 节点扫描"
+  },
+  {
+    "source": "Live model smoke (profile keys)",
+    "target": "Live 模型冒烟测试（配置文件密钥）"
+  },
+  {
+    "source": "CLI backend and APNs lanes",
+    "target": "CLI 后端与 APNs 通道"
+  },
+  {
+    "source": "ACP bind and Codex app-server lanes",
+    "target": "ACP 绑定与 Codex app-server 通道"
+  },
+  {
+    "source": "OpenAI long context and the live model matrix",
+    "target": "OpenAI 长上下文与 Live 模型矩阵"
+  },
+  {
+    "source": "Media provider live lanes",
+    "target": "媒体提供商 Live 通道"
+  },
+  {
     "source": "Provider model catalogs",
     "target": "提供商模型目录"
   },
@@ -2798,6 +3350,42 @@
   {
     "source": "Browser control risks",
     "target": "浏览器控制风险"
+  },
+  {
+    "source": "Browser setup",
+    "target": "浏览器设置"
+  },
+  {
+    "source": "Browser profiles",
+    "target": "浏览器配置文件"
+  },
+  {
+    "source": "Browser configuration",
+    "target": "浏览器配置"
+  },
+  {
+    "source": "Remote and hosted browsers",
+    "target": "远程与托管浏览器"
+  },
+  {
+    "source": "Browser security",
+    "target": "浏览器安全"
+  },
+  {
+    "source": "Multi-profile and existing-session attach",
+    "target": "多配置文件与现有会话接入"
+  },
+  {
+    "source": "Isolation and browser selection",
+    "target": "隔离与浏览器选择"
+  },
+  {
+    "source": "Browser troubleshooting",
+    "target": "浏览器故障排查"
+  },
+  {
+    "source": "Browser agent tools",
+    "target": "浏览器代理工具"
   },
   {
     "source": "Network exposure",
@@ -3184,6 +3772,34 @@
     "target": "SQLite 维护与会话迁移"
   },
   {
+    "source": "Database layout",
+    "target": "数据库布局"
+  },
+  {
+    "source": "Versioning contract",
+    "target": "版本契约"
+  },
+  {
+    "source": "Per-person and companion storage",
+    "target": "个人与配套设备存储"
+  },
+  {
+    "source": "Storage changes and release preflight",
+    "target": "存储变更与发布预检"
+  },
+  {
+    "source": "Agent schema history",
+    "target": "Agent 数据库 schema 历史"
+  },
+  {
+    "source": "State schema history",
+    "target": "状态数据库 schema 历史"
+  },
+  {
+    "source": "Integrity, troubleshooting, and recovery",
+    "target": "完整性、故障排查与恢复"
+  },
+  {
     "source": "Other checks and repairs",
     "target": "其他检查与修复"
   },
@@ -3230,5 +3846,517 @@
   {
     "source": "How an update runs",
     "target": "更新的运行方式"
+  },
+  {
+    "source": "Configuration — shared channel policies",
+    "target": "配置 — 共享渠道策略"
+  },
+  {
+    "source": "Configuration — personal messaging channels",
+    "target": "配置 — 个人消息渠道"
+  },
+  {
+    "source": "Configuration — workplace chat channels",
+    "target": "配置 — 办公聊天渠道"
+  },
+  {
+    "source": "Configuration — community chat channels",
+    "target": "配置 — 社区聊天渠道"
+  },
+  {
+    "source": "Configuration — group mention gating and history",
+    "target": "配置 — 群组提及门控和历史记录"
+  },
+  {
+    "source": "Configuration — chat commands",
+    "target": "配置 — 聊天命令"
+  },
+  {
+    "source": "Ollama setup",
+    "target": "Ollama 设置"
+  },
+  {
+    "source": "Ollama model discovery",
+    "target": "Ollama 模型发现"
+  },
+  {
+    "source": "Ollama node-local inference",
+    "target": "Ollama 节点本地推理"
+  },
+  {
+    "source": "Ollama vision and image description",
+    "target": "Ollama 视觉与图像描述"
+  },
+  {
+    "source": "Ollama configuration",
+    "target": "Ollama 配置"
+  },
+  {
+    "source": "Ollama config recipes",
+    "target": "Ollama 配置示例"
+  },
+  {
+    "source": "Ollama advanced configuration",
+    "target": "Ollama 高级配置"
+  },
+  {
+    "source": "Ollama troubleshooting",
+    "target": "Ollama 故障排查"
+  },
+  {
+    "source": "ACP agents quickstart",
+    "target": "ACP 智能体快速上手"
+  },
+  {
+    "source": "ACP agents operator runbook",
+    "target": "ACP 智能体运维手册"
+  },
+  {
+    "source": "ACP agents bindings",
+    "target": "ACP 智能体绑定"
+  },
+  {
+    "source": "ACP agents sessions",
+    "target": "ACP 智能体会话"
+  },
+  {
+    "source": "ACP agents delivery model",
+    "target": "ACP 智能体投递模型"
+  },
+  {
+    "source": "ACP agents controls",
+    "target": "ACP 智能体控制"
+  },
+  {
+    "source": "ACP agents troubleshooting",
+    "target": "ACP 智能体故障排查"
+  },
+  {
+    "source": "Set up OpenTelemetry export",
+    "target": "设置 OpenTelemetry 导出"
+  },
+  {
+    "source": "OpenTelemetry configuration",
+    "target": "OpenTelemetry 配置"
+  },
+  {
+    "source": "Privacy and trace context",
+    "target": "隐私和追踪上下文"
+  },
+  {
+    "source": "Model calls and exported metrics",
+    "target": "模型调用和导出指标"
+  },
+  {
+    "source": "Exported spans and diagnostic events",
+    "target": "导出的 Span 和诊断事件"
+  },
+  {
+    "source": "Configuration — tool policy",
+    "target": "配置 — 工具策略"
+  },
+  {
+    "source": "Configuration — GitHub identity for agent tools",
+    "target": "配置 — 智能体工具的 GitHub 身份"
+  },
+  {
+    "source": "Configuration — built-in tool settings",
+    "target": "配置 — 内置工具设置"
+  },
+  {
+    "source": "Configuration — cross-agent, session, and subagent tools",
+    "target": "配置 — 跨智能体、会话和子智能体工具"
+  },
+  {
+    "source": "Configuration — custom providers and base URLs",
+    "target": "配置 — 自定义提供商和基础 URL"
+  },
+  {
+    "source": "Configuration — provider examples",
+    "target": "配置 — 提供商示例"
+  },
+  {
+    "source": "Author plugins",
+    "target": "编写插件"
+  },
+  {
+    "source": "Install plugins",
+    "target": "安装插件"
+  },
+  {
+    "source": "List installed plugins",
+    "target": "列出已安装插件"
+  },
+  {
+    "source": "Uninstall and update plugins",
+    "target": "卸载与更新插件"
+  },
+  {
+    "source": "Inspect and diagnose plugins",
+    "target": "检查与诊断插件"
+  },
+  {
+    "source": "Marketplace feeds",
+    "target": "市场订阅源"
+  },
+  {
+    "source": "Author a policy file",
+    "target": "编写策略文件"
+  },
+  {
+    "source": "Policy rule reference",
+    "target": "策略规则参考"
+  },
+  {
+    "source": "Scoped policy overlays",
+    "target": "作用域策略覆盖"
+  },
+  {
+    "source": "Run and configure policy checks",
+    "target": "运行与配置策略检查"
+  },
+  {
+    "source": "Run OpenClaw as an MCP server",
+    "target": "将 OpenClaw 作为 MCP 服务器运行"
+  },
+  {
+    "source": "Manage saved MCP servers",
+    "target": "管理已保存的 MCP 服务器"
+  },
+  {
+    "source": "JSON output shapes",
+    "target": "JSON 输出结构"
+  },
+  {
+    "source": "Transports and OAuth",
+    "target": "传输方式与 OAuth"
+  },
+  {
+    "source": "MCP in the Control UI",
+    "target": "Control UI 中的 MCP"
+  },
+  {
+    "source": "MCP Apps",
+    "target": "MCP Apps"
+  },
+  {
+    "source": "Accept and watch policy state",
+    "target": "接受并监视策略状态"
+  },
+  {
+    "source": "Policy findings, repair, and exit codes",
+    "target": "策略发现项、修复与退出码"
+  },
+  {
+    "source": "Telegram setup",
+    "target": "Telegram 设置"
+  },
+  {
+    "source": "Telegram access control",
+    "target": "Telegram 访问控制"
+  },
+  {
+    "source": "Telegram message behavior",
+    "target": "Telegram 消息行为"
+  },
+  {
+    "source": "Telegram threads and sessions",
+    "target": "Telegram 话题与会话"
+  },
+  {
+    "source": "Telegram rich messages and approvals",
+    "target": "Telegram 富文本消息与审批"
+  },
+  {
+    "source": "Telegram media and attachments",
+    "target": "Telegram 媒体与附件"
+  },
+  {
+    "source": "Telegram events and operations",
+    "target": "Telegram 事件与运维"
+  },
+  {
+    "source": "Telegram transports",
+    "target": "Telegram 传输方式"
+  },
+  {
+    "source": "Telegram Dashboard Mini App",
+    "target": "Telegram 仪表盘小程序"
+  },
+  {
+    "source": "Telegram troubleshooting",
+    "target": "Telegram 故障排查"
+  },
+  {
+    "source": "iMessage setup",
+    "target": "iMessage 设置"
+  },
+  {
+    "source": "Enabling the imsg private API",
+    "target": "启用 imsg 私有 API"
+  },
+  {
+    "source": "iMessage access control and routing",
+    "target": "iMessage 访问控制与路由"
+  },
+  {
+    "source": "iMessage deployment patterns",
+    "target": "iMessage 部署模式"
+  },
+  {
+    "source": "iMessage media and attachments",
+    "target": "iMessage 媒体与附件"
+  },
+  {
+    "source": "iMessage private API actions",
+    "target": "iMessage 私有 API 操作"
+  },
+  {
+    "source": "iMessage message behavior",
+    "target": "iMessage 消息行为"
+  },
+  {
+    "source": "iMessage troubleshooting",
+    "target": "iMessage 故障排查"
+  },
+  {
+    "source": "Microsoft Teams setup",
+    "target": "Microsoft Teams 设置"
+  },
+  {
+    "source": "Microsoft Teams access control",
+    "target": "Microsoft Teams 访问控制"
+  },
+  {
+    "source": "Microsoft Teams authentication",
+    "target": "Microsoft Teams 身份验证"
+  },
+  {
+    "source": "Microsoft Teams manifest and permissions",
+    "target": "Microsoft Teams 清单与权限"
+  },
+  {
+    "source": "Microsoft Teams configuration",
+    "target": "Microsoft Teams 配置"
+  },
+  {
+    "source": "Microsoft Teams message behavior",
+    "target": "Microsoft Teams 消息行为"
+  },
+  {
+    "source": "Microsoft Teams cards and actions",
+    "target": "Microsoft Teams 卡片与操作"
+  },
+  {
+    "source": "Microsoft Teams troubleshooting",
+    "target": "Microsoft Teams 故障排查"
+  },
+  {
+    "source": "Groups",
+    "target": "群组"
+  },
+  {
+    "source": "Security",
+    "target": "安全"
+  },
+  {
+    "source": "Run the Gateway",
+    "target": "运行 Gateway 网关"
+  },
+  {
+    "source": "Restart and supervision",
+    "target": "重启与进程监管"
+  },
+  {
+    "source": "Query a running Gateway",
+    "target": "查询运行中的 Gateway 网关"
+  },
+  {
+    "source": "Manage the Gateway service",
+    "target": "管理 Gateway 网关服务"
+  },
+  {
+    "source": "Discover gateways (Bonjour)",
+    "target": "发现 Gateway 网关（Bonjour）"
+  },
+  {
+    "source": "Sub-agent slash command",
+    "target": "子智能体斜杠命令"
+  },
+  {
+    "source": "Sub-agent tool reference",
+    "target": "子智能体工具参考"
+  },
+  {
+    "source": "Thread-bound sub-agent sessions",
+    "target": "线程绑定的子智能体会话"
+  },
+  {
+    "source": "Nested sub-agents and authentication",
+    "target": "嵌套子智能体与鉴权"
+  },
+  {
+    "source": "Sub-agent announce",
+    "target": "子智能体通报"
+  },
+  {
+    "source": "Sub-agent tool policy",
+    "target": "子智能体工具策略"
+  },
+  {
+    "source": "Sub-agent concurrency, recovery, and stopping",
+    "target": "子智能体并发、恢复与停止"
+  },
+  {
+    "source": "Swarm collectors",
+    "target": "Swarm 收集器"
+  },
+  {
+    "source": "The trust boundary",
+    "target": "信任边界"
+  },
+  {
+    "source": "Policy as code",
+    "target": "策略即代码"
+  },
+  {
+    "source": "Identity and roles",
+    "target": "身份与角色"
+  },
+  {
+    "source": "Secrets",
+    "target": "密钥"
+  },
+  {
+    "source": "Versioned state, guarded upgrades",
+    "target": "版本化状态与受保护的升级"
+  },
+  {
+    "source": "Provenance",
+    "target": "溯源"
+  },
+  {
+    "source": "OpenClaw and Hermes Agent",
+    "target": "OpenClaw 与 Hermes Agent"
+  },
+  {
+    "source": "Matrix setup",
+    "target": "Matrix 设置"
+  },
+  {
+    "source": "Matrix access control",
+    "target": "Matrix 访问控制"
+  },
+  {
+    "source": "Matrix message behavior",
+    "target": "Matrix 消息行为"
+  },
+  {
+    "source": "Matrix rich messages and approvals",
+    "target": "Matrix 富消息与审批"
+  },
+  {
+    "source": "Matrix encryption and verification",
+    "target": "Matrix 加密与验证"
+  },
+  {
+    "source": "Matrix threads and sessions",
+    "target": "Matrix 话题与会话"
+  },
+  {
+    "source": "Matrix accounts and homeservers",
+    "target": "Matrix 账户与家庭服务器"
+  },
+  {
+    "source": "Other update methods",
+    "target": "其他更新方式"
+  },
+  {
+    "source": "Update methods",
+    "target": "更新方式"
+  },
+  {
+    "source": "Automatic updates",
+    "target": "自动更新"
+  },
+  {
+    "source": "Rollback and recovery",
+    "target": "回滚与恢复"
+  },
+  {
+    "source": "Standing orders",
+    "target": "常设指令"
+  },
+  {
+    "source": "Standing intents",
+    "target": "常设意图"
+  },
+  {
+    "source": "Multi-agent routing",
+    "target": "多智能体路由"
+  },
+  {
+    "source": "Agent bindings",
+    "target": "智能体绑定"
+  },
+  {
+    "source": "System prompt",
+    "target": "系统提示词"
+  },
+  {
+    "source": "Usage tracking",
+    "target": "用量追踪"
+  },
+  {
+    "source": "Honcho memory",
+    "target": "Honcho 记忆"
+  },
+  {
+    "source": "Managed worktrees",
+    "target": "托管工作树"
+  },
+  {
+    "source": "Typing indicators",
+    "target": "正在输入指示器"
+  },
+  {
+    "source": "Session management deep dive",
+    "target": "会话管理深入解析"
+  },
+  {
+    "source": "Session state on disk",
+    "target": "磁盘上的会话状态"
+  },
+  {
+    "source": "Store maintenance and retention",
+    "target": "存储维护与保留"
+  },
+  {
+    "source": "Session keys, ids, and transcript events",
+    "target": "会话键、会话 ID 与转录事件"
+  },
+  {
+    "source": "Compaction behavior and settings",
+    "target": "压缩行为与设置"
+  },
+  {
+    "source": "Silent turns and the memory flush",
+    "target": "静默轮次与记忆刷写"
+  },
+  {
+    "source": "Personal agent benchmark pack",
+    "target": "个人智能体基准包"
+  },
+  {
+    "source": "Docker",
+    "target": "Docker"
+  },
+  {
+    "source": "FAQ: quick start and first-run setup",
+    "target": "常见问题：快速开始与首次运行设置"
+  },
+  {
+    "source": "FAQ: providers, hardware, and hosting",
+    "target": "常见问题：服务商、硬件与托管"
   }
 ]

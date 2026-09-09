@@ -7,7 +7,11 @@ import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gatewa
 import type { PresenceEntry } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
-import { createInitialDevicesState, loadDevices, loadNodes } from "../../lib/nodes/index.ts";
+import {
+  createInitialDevicesState,
+  loadDevices,
+  loadNodes,
+} from "../../lib/nodes/page-operations.ts";
 import {
   deviceSystemInfo,
   deviceDesktopEnvironments,

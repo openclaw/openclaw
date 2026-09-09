@@ -39,6 +39,14 @@ own trust.
 
 ## CLI registration metadata
 
+The executable CLI also owns provider callbacks borrowed through
+`openclaw/plugin-sdk/provider-catalog-runtime` during registration, actions, or
+cleanup. It releases those SDK claims after the invocation's actual work
+settles, even when a cleanup warning has already reported a timeout. Forced
+process exit can still interrupt asynchronous disposal. Caller-owned programs
+and Gateway startup do not become executable CLI owners merely by calling a CLI
+helper; see [retained SDK contracts](/plugins/sdk-migration/compatibility-policy#retained-helper-contracts).
+
 `api.registerCli(registrar, opts?)` accepts two kinds of command metadata:
 
 - `commands`: explicit command names owned by the registrar

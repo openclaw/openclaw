@@ -31,21 +31,30 @@ export const CRABBOX_HEARTBEAT_TIMEOUT_MS = 150_000;
 // Failed reads leave machine overrides unavailable until a later discovery request succeeds.
 export const CRABBOX_MACHINE_CATALOG_TIMEOUT_MS = 5_000;
 export const WARM_IMAGE_COMMAND_TIMEOUT_MS = 60_000;
-// Scrub and create include the SSH, workspace-owner, and coordinator round trips.
-// AWS measurements require more than the ordinary command timeout.
-export const WARM_IMAGE_CAPTURE_TIMEOUT_MS = 180_000;
-// Machine0 image save stops the source and waits for image availability even with --wait=false.
-const WARM_IMAGE_MACHINE0_CAPTURE_TIMEOUT_MS = 600_000;
+// Keep the existing three-minute envelope for scrub and checkpoint command overhead.
+export const WARM_IMAGE_COMMAND_ROUND_TRIP_TIMEOUT_MS = 180_000;
+// Match Crabbox's native-capture timeout; Daytona includes source preparation and stop.
+export const WARM_IMAGE_NATIVE_WAIT_TIMEOUT_MS = 45 * 60_000;
 
-export const checkpointCaptureTimeoutMs = (provider: string) =>
-  provider === "machine0" ? WARM_IMAGE_MACHINE0_CAPTURE_TIMEOUT_MS : WARM_IMAGE_CAPTURE_TIMEOUT_MS;
+export function resolveCrabboxCheckpointCaptureTimeoutMs(provider: string): number {
+  // Machine0 stops/restores with separate default 15m windows. Daytona grants
+  // 3m for source recovery after its native-capture budget.
+  const sourceLifecycleMs =
+    provider === "machine0" ? 30 * 60_000 : provider === "daytona" ? 180_000 : 0;
+  return (
+    WARM_IMAGE_COMMAND_ROUND_TRIP_TIMEOUT_MS + WARM_IMAGE_NATIVE_WAIT_TIMEOUT_MS + sourceLifecycleMs
+  );
+}
 
 export function resolveCrabboxWarmImageCaptureTimeoutMs(provider: string): number {
-  // Include verification, reclamation, and retirement so core awaits the capture owner.
+  // Include collection, verification, missing-image deletion, capacity reclamation,
+  // and predecessor retirement as well as scrub/create; core must await the owner.
   return (
     5 * WARM_IMAGE_COMMAND_TIMEOUT_MS +
-    WARM_IMAGE_CAPTURE_TIMEOUT_MS +
-    checkpointCaptureTimeoutMs(provider)
+    WARM_IMAGE_COMMAND_ROUND_TRIP_TIMEOUT_MS +
+    resolveCrabboxCheckpointCaptureTimeoutMs(provider) +
+    // Each timed-out command must join its child/tree before core closes the owner.
+    7 * CRABBOX_COMMAND_SETTLEMENT_TIMEOUT_MS
   );
 }
 

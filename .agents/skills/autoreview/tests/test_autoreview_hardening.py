@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import contextlib
 import copy
 import io
@@ -18,6 +19,7 @@ import tempfile
 import threading
 import time
 import unittest
+import urllib.parse
 from unittest import mock
 from pathlib import Path, PureWindowsPath
 
@@ -265,18 +267,6 @@ def installed_java() -> str | None:
     except OSError:
         return None
     return java if probe.returncode == 0 else None
-
-
-def add_fake_trufflehog(
-    helper: dict[str, object],
-    root: Path,
-    env: dict[str, str],
-) -> None:
-    write_executable(
-        root / "trufflehog",
-        "#!/usr/bin/env python3\nraise SystemExit(0)\n",
-    )
-    env["PATH"] = f"{root}{os.pathsep}{env.get('PATH', '')}"
 
 
 def path_excluding_command(name: str) -> str:
@@ -700,7 +690,7 @@ class AutoreviewMixedTargetTests(unittest.TestCase):
                     path.unlink()
                 provider = mock.Mock()
                 with mock.patch.dict(self.helper["run_reviewer"].__globals__, {
-                    "scan_outgoing_review_pack": lambda *_: None, "run_engine": provider,
+                    "run_engine": provider,
                 }), contextlib.redirect_stderr(io.StringIO()):
                     refusal = "unsafe mixed source mode" if mutation.startswith("index ") else "mixed source changed|symlinked mixed source"
                     with self.assertRaisesRegex(SystemExit, refusal):
@@ -708,16 +698,14 @@ class AutoreviewMixedTargetTests(unittest.TestCase):
                                                      repo, passes[0], captured, [])
                 provider.assert_not_called()
 
-    def test_complete_and_per_pass_scans_include_new_authoritative_context(self):
+    def test_every_pass_sends_complete_authoritative_context(self):
         with self.migration(scan_sentinel=True) as (repo, *_):
-            # This unchanged line is outside every diff hunk, but now sent as
-            # authoritative source and therefore part of the frozen-input scan.
+            # Unchanged authoritative source outside diff hunks reaches the reviewer.
             captured = self.helper["local_bundle"](repo)
             self.assertNotIn("SOURCE_ONLY_SCAN_SENTINEL", captured.text)
             evidence = [self.helper["ReviewDataset"]("evidence.txt", "evidence\n" * 6000)]
-            scans, sends = [], []
+            sends = []
             with mock.patch.dict(self.helper["prepare_review_prompts"].__globals__, {
-                "scan_outgoing_review_pack": lambda _repo, prompt: scans.append(prompt),
                 "run_engine": lambda _args, _repo, prompt: sends.append(prompt) or json.dumps({
                     "findings": [], "overall_correctness": "patch is correct",
                     "overall_explanation": "Synthetic clean.", "overall_confidence": 0.9,
@@ -725,24 +713,21 @@ class AutoreviewMixedTargetTests(unittest.TestCase):
             }), contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
                 passes = self.helper["prepare_review_prompts"](repo, "local", None, captured, "", evidence, 30_000)
                 self.assertGreater(len(passes), 1)
-                self.assertEqual(len(scans), 1)
-                self.assertIn("SOURCE_ONLY_SCAN_SENTINEL\nMULTILINE_SCAN_CONTINUATION\n", scans[0])
-                self.assertIn(evidence[0].content, scans[0])
                 args = argparse.Namespace(engine="codex", max_priority="P0")
                 self.helper["run_review_passes"](args, [args], repo, passes, captured)
-            self.assertEqual(scans[1:], sends)
-            for item, scanned in zip(passes, scans[1:]):
-                self.assertEqual(item.prompt, scanned)
+            self.assertEqual(len(passes), len(sends))
+            for item, sent in zip(passes, sends):
+                self.assertEqual(item.prompt, sent)
                 for record in item.chunk.sources:
-                    self.assertIn(record.index.content, scanned)
-                    self.assertIn(record.working_tree.content, scanned)
+                    self.assertIn(record.index.content, sent)
+                    self.assertIn(record.working_tree.content, sent)
 
     def test_honest_capacity_refusal_and_no_legacy_metadata_bypass(self):
         with self.migration() as (repo, *_):
             captured = self.helper["local_bundle"](repo)
-            scan, provider = mock.Mock(), mock.Mock()
+            provider = mock.Mock()
             with mock.patch.dict(self.helper["prepare_review_prompts"].__globals__, {
-                "scan_outgoing_review_pack": scan, "run_engine": provider,
+                "run_engine": provider,
             }):
                 with self.assertRaisesRegex(SystemExit, r"mixed source src/migrate-0.py .*index=.*working_tree=.*prompt limit 1000"):
                     self.helper["prepare_review_prompts"](repo, "local", None, captured, "", [], 1000)
@@ -755,7 +740,6 @@ class AutoreviewMixedTargetTests(unittest.TestCase):
                 datasets = [self.helper["ReviewDataset"]("e" * 4000 + ".txt", "evidence")]
                 with self.assertRaisesRegex(SystemExit, r"mixed source src/migrate-\d.py .*prompt limit"):
                     self.helper["prepare_review_prompts"](repo, "local", None, captured, "", datasets, budget)
-            scan.assert_not_called()
             provider.assert_not_called()
 
 
@@ -802,7 +786,6 @@ class AutoreviewMixedTargetTests(unittest.TestCase):
                         with mock.patch.dict(self.helper["main_impl"].__globals__, {
                             "repo_root": lambda: repo,
                             "prepare_review_prompts": lambda *args: original_prepare(*args) * count,
-                            "scan_outgoing_review_pack": lambda *_: None,
                             "run_engine": lambda *_: json.dumps(provider),
                         }), mock.patch.object(sys, "argv", argv), contextlib.redirect_stdout(text), \
                                 contextlib.redirect_stderr(io.StringIO()):
@@ -923,7 +906,7 @@ class AutoreviewMixedTargetTests(unittest.TestCase):
             self.assertEqual(self.helper["source_tree_snapshot"](repo), before)
             provider = mock.Mock()
             with mock.patch.dict(self.helper["run_reviewer"].__globals__, {
-                "scan_outgoing_review_pack": lambda *_: None, "run_engine": provider,
+                "run_engine": provider,
             }), contextlib.redirect_stderr(io.StringIO()):
                 with self.assertRaisesRegex(SystemExit, "evidence changed"):
                     self.helper["run_reviewer"](argparse.Namespace(engine="codex"), repo, passes[0], captured, [],
@@ -982,7 +965,7 @@ class AutoreviewHardeningTests(unittest.TestCase):
             (repo / "source.md").write_text("after\n")
             (repo / "evidence").mkdir()
             (repo / "evidence/note.md").write_text("frozen evidence\r\n")
-            sends, scans = [], []
+            sends = []
             stdout, stderr = io.StringIO(), io.StringIO()
 
             def engine(_args, _repo, prompt):
@@ -997,16 +980,15 @@ class AutoreviewHardeningTests(unittest.TestCase):
             with mock.patch.dict(self.helper["main_impl"].__globals__, {
                 "repo_root": lambda: repo,
                 "run_engine": engine,
-                "scan_outgoing_review_pack": lambda _repo, prompt: scans.append(prompt),
                 "resolve_engine_binary": lambda *_args: (True, None),
             }), mock.patch.object(sys, "argv", [str(SCRIPT), "--mode", "local", *options]), \
                     contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
-                yield repo, sends, scans, stdout, stderr
+                yield repo, sends, stdout, stderr
 
     def test_preparation_reuses_untracked_capture_and_keeps_three_full_snapshots(self):
         for explicit in (False, True):
             options = ("--dataset", "note.md") if explicit else ()
-            with self.subTest(explicit=explicit), self.preparation_fixture(*options) as (repo, sends, scans, _out, err):
+            with self.subTest(explicit=explicit), self.preparation_fixture(*options) as (repo, sends, _out, err):
                 (repo / "note.md").write_text("untracked evidence\n")
                 read = mock.Mock(wraps=self.helper["file_bundle_snapshot"])
                 fingerprint = mock.Mock(wraps=self.helper["source_file_fingerprint"])
@@ -1014,7 +996,6 @@ class AutoreviewHardeningTests(unittest.TestCase):
                     "file_bundle_snapshot": read, "source_file_fingerprint": fingerprint,
                 }):
                     self.assertEqual(self.helper["main_impl"](), 0)
-                self.assertEqual(scans, sends)
                 # Explicit evidence has its own initial capture and three fresh
                 # checks; finding membership never adds another content read.
                 self.assertEqual(read.call_count, 5 if explicit else 1)
@@ -1040,7 +1021,7 @@ class AutoreviewHardeningTests(unittest.TestCase):
             self.assertFalse(sends)
 
     def test_preparation_progress_precedes_snapshot(self):
-        with self.preparation_fixture() as (_repo, sends, _scans, _out, err):
+        with self.preparation_fixture() as (_repo, sends, _out, err):
             def snapshot(*_args, **_kwargs):
                 self.assertIn("preparation: initial source snapshot", err.getvalue())
                 self.assertFalse(sends)
@@ -1051,20 +1032,19 @@ class AutoreviewHardeningTests(unittest.TestCase):
                     self.helper["main_impl"]()
 
     def test_dry_run_reuses_capture_without_whole_tree_snapshots(self):
-        with self.preparation_fixture("--dry-run", "--dataset", "evidence/note.md") as (_repo, sends, scans, *_):
+        with self.preparation_fixture("--dry-run", "--dataset", "evidence/note.md") as (_repo, sends, *_):
             snapshot = mock.Mock(side_effect=AssertionError("dry run must not sweep the checkout"))
             with mock.patch.dict(self.helper["main_impl"].__globals__, {"source_tree_snapshot": snapshot}):
                 self.assertEqual(self.helper["main_impl"](), 0)
             snapshot.assert_not_called()
-            self.assertTrue(scans)
             self.assertFalse(sends)
 
     def test_evidence_mutations_refuse_stale_publication_and_later_passes(self):
         for tracked in (False, True):
-            for timing in ("construction", "scan", "review", "between passes"):
+            for timing in ("construction", "preparation", "review", "between passes"):
                 with self.subTest(tracked=tracked, timing=timing), self.preparation_fixture(
                     "--prompt-file", "evidence/note.md", "--dataset", "evidence/note.md",
-                ) as (repo, sends, _scans, out, _err):
+                ) as (repo, sends, out, _err):
                     evidence = repo / "evidence/note.md"
                     if tracked:
                         git(repo, "add", "-f", "evidence/note.md")
@@ -1092,8 +1072,13 @@ class AutoreviewHardeningTests(unittest.TestCase):
                         return result
 
                     patches = {"run_engine": engine, "build_bundle": build}
-                    if timing == "scan":
-                        patches["scan_outgoing_review_pack"] = lambda *_args: mutate()
+                    if timing == "preparation":
+                        original_prepare = self.helper["prepare_review_prompts"]
+                        def prepare(*args):
+                            result = original_prepare(*args)
+                            mutate()
+                            return result
+                        patches["prepare_review_prompts"] = prepare
                     if timing == "between passes":
                         original_prepare = self.helper["prepare_review_prompts"]
                         patches["prepare_review_prompts"] = lambda *args: original_prepare(*args) * 2
@@ -1148,7 +1133,7 @@ class AutoreviewHardeningTests(unittest.TestCase):
         with self.preparation_fixture(
             "--prompt-file", "evidence/note.md", "--dataset", "evidence/note.md",
             "--dataset", "evidence/note.md",
-        ) as (repo, sends, scans, *_):
+        ) as (repo, sends, *_):
             evidence = (repo / "evidence/note.md").read_bytes().decode()
             original = self.helper["prepare_review_prompts"]
             with mock.patch.dict(self.helper["main_impl"].__globals__, {
@@ -1156,7 +1141,6 @@ class AutoreviewHardeningTests(unittest.TestCase):
             }):
                 self.assertEqual(self.helper["main_impl"](), 0)
             self.assertEqual(len(sends), 2)
-            self.assertEqual(scans, sends)
             for prompt in sends:
                 self.assertEqual(prompt.count(evidence), 3)
 
@@ -1280,155 +1264,6 @@ class AutoreviewHardeningTests(unittest.TestCase):
                 self.assertEqual(captured.paths, {"task.md"})
                 self.assertIn("+task change", captured.text)
 
-    def test_outgoing_pack_scan_disables_installed_scanner_updates(self) -> None:
-        prompt = "harmless review pack\npreserved CRLF\r\nfinal line\r"
-        with tempfile.TemporaryDirectory() as tempdir:
-            root = Path(tempdir)
-            repo = root / "repo"
-            repo.mkdir()
-            write_executable(
-                root / "trufflehog",
-                r'''#!/usr/bin/env python3
-import json
-from pathlib import Path
-import sys
-
-args = sys.argv[1:]
-if "--no-update" not in args:
-    print("updater: cannot move binary: permission denied", file=sys.stderr)
-    raise SystemExit(1)
-source = args[0]
-assert source in {"filesystem", "stdin"}
-pack = Path(args[1]) if source == "filesystem" else None
-assert set(args[2:] if pack else args[1:]) == {
-    "--json", "--no-color", "--results=verified,unknown",
-    "--fail", "--fail-on-scan-errors", "--no-update",
-}
-payload = pack.read_bytes() if pack else sys.stdin.buffer.read()
-with Path(__file__).with_name("scans.jsonl").open("a", encoding="utf-8") as records:
-    records.write(json.dumps({
-        "source": source,
-        "pack": str(pack) if pack else None,
-        "prompt": payload.decode("utf-8"),
-    }) + "\n")
-''',
-            )
-            with mock.patch.dict(
-                os.environ,
-                {"PATH": f"{root}{os.pathsep}{os.environ.get('PATH', '')}"},
-            ):
-                self.helper["scan_outgoing_review_pack"](repo, prompt)
-
-            records = [json.loads(line) for line in (root / "scans.jsonl").read_text(encoding="utf-8").splitlines()]
-            self.assertEqual([record["source"] for record in records], ["filesystem", "stdin"])
-            self.assertEqual([record["prompt"] for record in records], [prompt, prompt])
-            self.assertFalse(Path(records[0]["pack"]).parent.exists())
-
-    def test_outgoing_pack_scan_reads_exact_prompt_including_deleted_lines(self) -> None:
-        prompt = (
-            "# Change Bundle\n"
-            "diff --git a/config.ts b/config.ts\n"
-            "deleted file mode 100644\n"
-            "--- a/config.ts\n"
-            "+++ /dev/null\n"
-            "@@ -1 +0,0 @@\n"
-            "-const apiKey = \"removed-but-still-sensitive\";\n"
-        )
-        with tempfile.TemporaryDirectory() as tempdir:
-            repo = init_repo(Path(tempdir))
-            sources = []
-
-            def run_scanner(
-                command: list[str],
-                cwd: Path,
-                **kwargs: object,
-            ) -> subprocess.CompletedProcess[str]:
-                sources.append(command[1])
-                if command[1] == "filesystem":
-                    payload = Path(command[2]).read_bytes()
-                else:
-                    self.assertEqual(command[1], "stdin")
-                    payload = kwargs["stdin"].read()
-                self.assertEqual(payload, prompt.encode("utf-8"))
-                self.assertIn("-const apiKey", prompt)
-                return subprocess.CompletedProcess(command, 0, "", "")
-
-            with mock.patch.dict(
-                self.helper["scan_outgoing_review_pack"].__globals__,
-                {
-                    "find_command": lambda _name, _repo: "/trusted/trufflehog",
-                    "run": run_scanner,
-                },
-            ):
-                self.helper["scan_outgoing_review_pack"](repo, prompt)
-            self.assertEqual(sources, ["filesystem", "stdin"])
-
-    def test_deleted_input_scan_refusal_is_redacted_and_blocks_provider(self) -> None:
-        prompt = (
-            "# Change Bundle\n"
-            "diff --git a/config.ts b/config.ts\n"
-            "deleted file mode 100644\n"
-            "--- a/config.ts\n"
-            "+++ /dev/null\n"
-            "@@ -1 +0,0 @@\n"
-            "-const apiKey = \"removed-but-still-sensitive\";\n"
-        )
-        finding = {
-            "SourceMetadata": {
-                "Data": {
-                    "Filesystem": {
-                        "file": "review-pack.txt",
-                        "line": 7,
-                    }
-                }
-            },
-            "Raw": "must-not-be-printed",
-        }
-        with tempfile.TemporaryDirectory() as tempdir:
-            repo = init_repo(Path(tempdir))
-            packs = []
-            provider = mock.Mock()
-
-            def run_scanner(command, cwd, **_kwargs):
-                self.assertEqual(command[1], "filesystem")
-                pack = Path(command[2])
-                self.assertEqual(pack.parent, cwd)
-                self.assertEqual(pack.read_bytes(), prompt.encode("utf-8"))
-                packs.append(pack)
-                return subprocess.CompletedProcess(
-                    command, self.helper["TRUFFLEHOG_FINDINGS_EXIT_CODE"], json.dumps(finding) + "\n", "",
-                )
-
-            with mock.patch.dict(
-                self.helper["run_reviewer"].__globals__,
-                {
-                    "find_command": lambda _name, _repo: "/trusted/trufflehog",
-                    "run": run_scanner,
-                    "run_engine": provider,
-                },
-            ), contextlib.redirect_stderr(io.StringIO()):
-                with self.assertRaisesRegex(SystemExit, "TruffleHog found credentials") as error:
-                    self.helper["run_reviewer"](
-                        argparse.Namespace(engine="codex", max_priority="P0"), repo, prompt, set(), [],
-                    )
-            self.assertEqual(len(packs), 1)
-            self.assertFalse(packs[0].parent.exists())
-            provider.assert_not_called()
-        self.assertEqual(
-            str(error.exception),
-            "refusing to send review pack: TruffleHog found credentials; "
-            "remove credential material from selected changes, prompt files, and datasets, then rerun",
-        )
-
-    def test_outgoing_pack_scan_fails_closed_when_scanner_is_missing(self) -> None:
-        with tempfile.TemporaryDirectory() as tempdir:
-            repo = init_repo(Path(tempdir))
-            with mock.patch.dict(
-                self.helper["scan_outgoing_review_pack"].__globals__,
-                {"find_command": lambda _name, _repo: None},
-            ):
-                with self.assertRaisesRegex(SystemExit, "refusing to send review pack"):
-                    self.helper["scan_outgoing_review_pack"](repo, "prompt")
 
     def test_local_bundle_preserves_boundary_when_sensitive_diff_is_omitted(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
@@ -1517,7 +1352,7 @@ with Path(__file__).with_name("scans.jsonl").open("a", encoding="utf-8") as reco
 
     @contextlib.contextmanager
     def nested_worktree_fixture(self, *, linked_root=False, name="scratch/review branch"):
-        with self.preparation_fixture() as (main, sends, scans, out, err):
+        with self.preparation_fixture() as (main, sends, out, err):
             repo = main
             if linked_root:
                 repo = main.parent / "reviewed checkout"
@@ -1525,15 +1360,15 @@ with Path(__file__).with_name("scans.jsonl").open("a", encoding="utf-8") as reco
                 (repo / "source.md").write_text("outer linked change\n", encoding="utf-8")
             child = repo / name
             git(main, "worktree", "add", "--detach", str(child), "HEAD")
-            yield repo, child, sends, scans, out, err
+            yield repo, child, sends, out, err
 
-    def test_nested_worktree_keeps_neighboring_untracked_files_in_outgoing_scans(self):
+    def test_nested_worktree_keeps_neighboring_untracked_files_in_review(self):
         names = ["scratch/review branch"]
         if os.name != "nt":
             names.append("scratch/review\nbranch")
         for name in names:
             with self.subTest(name=name), self.nested_worktree_fixture(name=name) as (
-                repo, child, sends, scans, _out, _err,
+                repo, child, sends, _out, _err,
             ):
                 ordinary = {
                     ".worktrees/notes.md": "OUTER_WORKTREE_DIRECTORY_NOTE\n",
@@ -1549,9 +1384,7 @@ with Path(__file__).with_name("scans.jsonl").open("a", encoding="utf-8") as reco
                 captured = self.helper["local_bundle"](repo)
                 self.assertEqual(captured.paths, {"source.md", *ordinary})
                 self.assertEqual(self.helper["main_impl"](), 0)
-                self.assertEqual(scans, sends)
-                self.assertTrue(scans)
-                for pack in scans:
+                for pack in sends:
                     for marker in ordinary.values():
                         self.assertIn(marker.strip(), pack)
                     self.assertNotIn("CHILD_SOURCE_NOT_REVIEWED", pack)
@@ -1730,7 +1563,6 @@ with Path(__file__).with_name("scans.jsonl").open("a", encoding="utf-8") as reco
             # Expected patches must use the same protected Git policy.
             staged = self.helper["git"](repo, "diff", *self.helper["SAFE_DIFF_FLAGS"], "--cached", incoming)
             unstaged = self.helper["git"](repo, "diff", *self.helper["SAFE_DIFF_FLAGS"])
-            scanned: list[str] = []
             sent: list[str] = []
             report = {
                 "findings": [{
@@ -1753,7 +1585,6 @@ with Path(__file__).with_name("scans.jsonl").open("a", encoding="utf-8") as reco
             main = self.helper["main_impl"]
             with mock.patch.dict(main.__globals__, {
                 "repo_root": lambda: repo,
-                "scan_outgoing_review_pack": lambda _repo, prompt: scanned.append(prompt),
                 "run_engine": run_engine,
                 "resolve_engine_binary": lambda _reviewer, _repo: (True, None),
             }):
@@ -1765,7 +1596,6 @@ with Path(__file__).with_name("scans.jsonl").open("a", encoding="utf-8") as reco
                         self.assertEqual(main(), 0 if dry_run else 1)
 
             self.assertEqual(len(sent), 1)
-            self.assertEqual(scanned, [sent[0], sent[0]])
             self.assertIn(f"# Staged Diff\nbase: {incoming}", sent[0])
             self.assertIn(staged.rstrip(), sent[0])
             self.assertIn(unstaged.rstrip(), sent[0])
@@ -1893,7 +1723,7 @@ with Path(__file__).with_name("scans.jsonl").open("a", encoding="utf-8") as reco
             for engine in ("codex", "claude", "amp", "pi", "kimi"):
                 for mode, ref, accepted, expected_exit in cases:
                     with self.subTest(engine=engine, mode=mode, ref=bool(ref)):
-                        scans, sends = [], []
+                        sends = []
 
                         def run_engine(_args, _repo, prompt):
                             sends.append(prompt)
@@ -1907,7 +1737,6 @@ with Path(__file__).with_name("scans.jsonl").open("a", encoding="utf-8") as reco
                         output = io.StringIO()
                         with mock.patch.dict(self.helper["main_impl"].__globals__, {
                             "repo_root": lambda: repo, "run_engine": run_engine,
-                            "scan_outgoing_review_pack": lambda _repo, prompt: scans.append(prompt),
                         }), mock.patch.object(sys, "argv", argv), contextlib.redirect_stdout(output), contextlib.redirect_stderr(io.StringIO()):
                             self.assertEqual(self.helper["main_impl"](), expected_exit)
                         result = json.loads((root / "result.json").read_text())
@@ -1922,7 +1751,6 @@ with Path(__file__).with_name("scans.jsonl").open("a", encoding="utf-8") as reco
                         self.assertNotIn("clean:", text)
                         rejected = result.get("scope_rejected_findings", [])
                         self.assertEqual(len(rejected), 2 - len(accepted))
-                        self.assertEqual(scans, sends)
                         self.assertIn("# Dataset: " + str(Path(e2e)), sends[0])
                         self.assertNotIn("OMIT_STAGED_STORE", sends[0])
                         self.assertNotIn("OMIT_UNTRACKED_ENV", sends[0])
@@ -1971,7 +1799,8 @@ with Path(__file__).with_name("scans.jsonl").open("a", encoding="utf-8") as reco
                             "overall_explanation": "Synthetic provider explanation.", "overall_confidence": 0.61,
                         }
                         argv = [str(SCRIPT), "--engine", "codex", "--mode", "local", "--max-priority", priority,
-                                "--output", str(root / "result.txt"), "--json-output", str(root / "result.json")]
+                                "--output", str(root / "result.txt"), "--json-output", str(root / "result.json"),
+                                "--status-output", str(root / "status.json")]
                         for needle in required:
                             argv.extend(["--require-finding", needle])
                         if expect:
@@ -1979,11 +1808,16 @@ with Path(__file__).with_name("scans.jsonl").open("a", encoding="utf-8") as reco
                         with mock.patch.dict(self.helper["main_impl"].__globals__, {
                             "repo_root": lambda: repo,
                             "build_review_prompts": lambda *_args: ["synthetic pack"] * count,
-                            "scan_outgoing_review_pack": lambda *_args: None,
                             "run_engine": lambda *_args: json.dumps(provider),
                         }), mock.patch.object(sys, "argv", argv), contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
                             self.assertEqual(self.helper["main_impl"](), exit_code)
                         result = json.loads((root / "result.json").read_text())
+                        outcome = json.loads((root / "status.json").read_text())
+                        self.assertEqual(outcome, {
+                            "schema_version": 1, "status": expected_status, "exit_code": exit_code,
+                            "engine": "codex", "report_produced": True, "reason": None,
+                            "reviewer_exit_code": None, "timed_out": False,
+                        })
                         text = (root / "result.txt").read_text()
                         self.assertEqual(result["review_status"], expected_status)
                         self.assertEqual(result["overall_correctness"], verdict)
@@ -1997,70 +1831,128 @@ with Path(__file__).with_name("scans.jsonl").open("a", encoding="utf-8") as reco
                         if required and expected_status == "incomplete":
                             self.assertEqual(result["missing_required_findings"], required)
 
-    def test_credential_source_exception_still_scans_every_outgoing_input(self) -> None:
-        source = "Sources/Configuration/CredentialFile.swift"
+    def test_status_unavailable_and_local_refusals_remain_distinct(self) -> None:
+        clean = json.dumps({"findings": [], "overall_correctness": "patch is correct",
+                            "overall_explanation": "Synthetic review.", "overall_confidence": 0.9})
+        unavailable = self.helper["ReviewerUnavailable"]
+        cases = (
+            ("engine", unavailable("DIAGNOSTIC_SENTINEL", result=subprocess.CompletedProcess([], 7, "", "")), "engine_failed"),
+            ("timeout", unavailable("DIAGNOSTIC_SENTINEL", result=self.helper["TimedOutEngineProcess"]([], 124, "", "")), "engine_failed"),
+            ("invalid-json", "not JSON", "invalid_report"),
+            ("invalid-schema", '{"findings": []}', "invalid_report"),
+            ("invalid-field-type", json.dumps({"findings": [], "overall_correctness": [],
+                                               "overall_explanation": "Invalid enum", "overall_confidence": 0.9}), "invalid_report"),
+            ("invalid-event-type", '[{"type":"assistant","message":{"content":null}}]', "invalid_report"),
+            ("isolation", SystemExit("isolation refused"), None),
+            ("spawn", OSError("cannot execute reviewer"), None),
+        )
         with tempfile.TemporaryDirectory() as tempdir:
-            repo = init_repo(Path(tempdir))
-            path = repo / source
-            path.parent.mkdir(parents=True)
-            path.write_text("// DELETED_SCAN_MARKER\n", encoding="utf-8")
-            git(repo, "add", source)
-            git(repo, "commit", "-q", "-m", "base")
-            path.write_text("// STAGED_SCAN_MARKER\n", encoding="utf-8")
-            git(repo, "add", source)
-            untracked = repo / "Runtime/CredentialFile.swift"
-            untracked.parent.mkdir()
-            untracked.write_text("// UNTRACKED_SCAN_MARKER\n", encoding="utf-8")
-            evidence = self.helper["capture_evidence_inputs"](argparse.Namespace(
-                prompt=["PROMPT_SCAN_MARKER"], prompt_file=[source],
-                dataset=[str(untracked.relative_to(repo))],
-            ), repo)
-            extra, datasets = evidence.prompt, evidence.datasets
-            bundle, _paths, _mixed, _spans = self.helper["local_bundle"](repo)
-            pack, = self.helper["build_review_prompts"](repo, "local", None, bundle, extra, datasets)
-            provider = mock.Mock(return_value=json.dumps({
-                "findings": [], "overall_correctness": "patch is correct",
-                "overall_explanation": "Synthetic review.", "overall_confidence": 0.8,
-            }))
-            for marker in (None, "DELETED_SCAN_MARKER", "STAGED_SCAN_MARKER", "UNTRACKED_SCAN_MARKER", "PROMPT_SCAN_MARKER"):
-                events = []
+            root = Path(tempdir)
+            repo = init_repo(root)
+            git(repo, "commit", "-q", "--allow-empty", "-m", "base")
+            (repo / "source.txt").write_text("changed\n")
+            for count in (1, 2):
+                for label, failure, reason in cases:
+                    with self.subTest(count=count, label=label):
+                        sidecar = root / "status.json"
+                        report = root / "result.json"
+                        sidecar.write_text('{"status":"scoped-clean"}')
+                        argv = [str(SCRIPT), "--mode", "local", "--engine", "codex",
+                                "--status-output", str(sidecar), "--json-output", str(report)]
+                        engine = mock.Mock(side_effect=[clean] * (count - 1) + [failure])
+                        with mock.patch.dict(self.helper["main_impl"].__globals__, {
+                            "repo_root": lambda: repo,
+                            "build_review_prompts": lambda *_args: ["synthetic pack"] * count,
+                            "run_engine": engine,
+                        }), mock.patch.object(sys, "argv", argv), contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                            with self.assertRaises((SystemExit, OSError)):
+                                self.helper["main_impl"]()
+                        self.assertFalse(report.exists())
+                        self.assertEqual(sidecar.exists(), reason is not None)
+                        if reason:
+                            text = sidecar.read_text()
+                            outcome = json.loads(text)
+                            self.assertEqual(outcome["status"], "reviewer_unavailable")
+                            self.assertEqual(outcome["reason"], reason)
+                            self.assertFalse(outcome["report_produced"])
+                            self.assertEqual(outcome["timed_out"], label == "timeout")
+                            self.assertEqual(outcome["reviewer_exit_code"], {"engine": 7, "timeout": 124}.get(label))
+                            self.assertNotIn("DIAGNOSTIC_SENTINEL", text)
 
-                def scanner(command, _repo, **kwargs):
-                    source_kind = command[1]
-                    if source_kind == "filesystem":
-                        outgoing = Path(command[2])
-                        payload = outgoing.read_bytes()
-                    else:
-                        self.assertEqual(source_kind, "stdin")
-                        outgoing = Path(kwargs["stdin"].name)
-                        payload = kwargs["stdin"].read()
-                    self.assertEqual(payload, pack.encode("utf-8"))
-                    if os.name != "nt":
-                        self.assertEqual(stat.S_IMODE(outgoing.stat().st_mode), 0o600)
-                    self.assertIn("--results=verified,unknown", command)
-                    self.assertIn("--no-update", command)
-                    for token in ("-// DELETED_SCAN_MARKER", "+// STAGED_SCAN_MARKER", "UNTRACKED_SCAN_MARKER", "PROMPT_SCAN_MARKER", "# Dataset:", "# Prompt file:"):
-                        self.assertIn(token, pack)
-                    events.append(source_kind)
-                    if marker:
-                        line = next(i for i, text in enumerate(pack.splitlines(), 1) if marker in text)
-                        detected = {"SourceMetadata": {"Data": {"Filesystem": {"file": str(outgoing), "line": line}}}}
-                        return subprocess.CompletedProcess(command, self.helper["TRUFFLEHOG_FINDINGS_EXIT_CODE"], json.dumps(detected), "")
-                    return subprocess.CompletedProcess(command, 0, "", "")
+    def test_status_paths_reject_repo_and_aliases_before_removing_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            repo = init_repo(root)
+            existing = root / "status.json"
+            existing.write_text("keep existing output")
+            for first, second in (("result.json", "RESULT.json"), ("caf\u00e9.json", "cafe\u0301.json")):
+                args = argparse.Namespace(status_output=str(root / first), output=None, json_output=str(root / second))
+                with self.assertRaises(SystemExit):
+                    self.helper["reject_repo_output_paths"](args, repo)
+                self.assertFalse((root / first).exists())
+            for value in (str(repo / "result.json"), str(existing)):
+                args = argparse.Namespace(status_output=value, output=None, json_output=str(existing))
+                with self.assertRaises(SystemExit):
+                    self.helper["reject_repo_output_paths"](args, repo)
+                self.assertEqual(existing.read_text(), "keep existing output")
+            if os.name != "nt":
+                alias = root / "alias.json"
+                alias.symlink_to(existing)
+                args.status_output = str(alias)
+                with self.assertRaises(SystemExit):
+                    self.helper["reject_repo_output_paths"](args, repo)
+                alias.unlink()
+                os.link(existing, alias)
+                with self.assertRaises(SystemExit):
+                    self.helper["reject_repo_output_paths"](args, repo)
 
-                provider.reset_mock()
-                with self.subTest(marker=marker), mock.patch.dict(self.helper["run_reviewer"].__globals__, {
-                    "find_command": lambda *_args: "/trusted/trufflehog", "run": scanner, "run_engine": provider,
-                }):
-                    args = argparse.Namespace(engine="codex", max_priority="P2")
-                    if marker:
-                        with self.assertRaisesRegex(SystemExit, "refusing to send review pack"):
-                            self.helper["run_reviewer"](args, repo, pack, {source}, [])
-                        provider.assert_not_called()
-                    else:
-                        self.helper["run_reviewer"](args, repo, pack, {source}, [])
-                        provider.assert_called_once_with(args, repo, pack)
-                    self.assertEqual(events, ["filesystem"] if marker else ["filesystem", "stdin"])
+    @unittest.skipUnless(sys.platform == "darwin", "macOS firmlink alias")
+    def test_status_rejects_absent_outputs_under_same_parent_inode(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir).resolve()
+            alias = Path("/System/Volumes/Data") / root.relative_to("/")
+            if not alias.exists() or not os.path.samefile(root, alias):
+                self.skipTest("temporary directory has no data-volume alias")
+            repo = init_repo(root)
+            args = argparse.Namespace(status_output=str(root / "result.json"),
+                                      json_output=str(alias / "result.json"), output=None)
+            with self.assertRaises(SystemExit):
+                self.helper["reject_repo_output_paths"](args, repo)
+            self.assertFalse((root / "result.json").exists())
+
+    @unittest.skipIf(os.name == "nt", "the executable fixtures are POSIX-only")
+    def test_cli_status_for_launched_codex_and_claude_failures(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            repo = init_repo(root)
+            git(repo, "commit", "-q", "--allow-empty", "-m", "base")
+            (repo / "source.txt").write_text("review me\n")
+            env = os.environ.copy()
+            env.update({"HOME": str(root), "USERPROFILE": str(root)})
+            for engine, source in (("codex", fake_codex_script()), ("claude", fake_claude_script())):
+                for timeout in (False, True):
+                    with self.subTest(engine=engine, timeout=timeout):
+                        # Help/version preflights succeed; only the launched review fails.
+                        injected = "import time; sys.stdin.read(); time.sleep(30)" if timeout else "print('DIAGNOSTIC_SENTINEL\\x1b[31m', file=sys.stderr); raise SystemExit(17)"
+                        executable = write_executable(root / engine, source.replace('record = os.environ["AUTOREVIEW_FAKE_RECORD"]', injected + '\nrecord = os.environ["AUTOREVIEW_FAKE_RECORD"]'))
+                        sidecar = root / "status.json"
+                        report = root / "result.json"
+                        argv = [sys.executable, str(SCRIPT), "--mode", "local", "--engine", engine,
+                                f"--{engine}-bin", str(executable), "--status-output", str(sidecar),
+                                "--json-output", str(report)]
+                        if timeout:
+                            argv += ["--engine-timeout-seconds", "0.2"]
+                        result = subprocess.run(argv, cwd=repo, env=env, text=True, capture_output=True, timeout=30)
+                        self.assertEqual(result.returncode, 1, result.stderr)
+                        outcome = json.loads(sidecar.read_text())
+                        self.assertEqual(outcome["status"], "reviewer_unavailable")
+                        self.assertEqual(outcome["engine"], engine)
+                        self.assertEqual(outcome["reviewer_exit_code"], 124 if timeout else 17)
+                        self.assertEqual(outcome["timed_out"], timeout)
+                        self.assertFalse(report.exists())
+                        self.assertNotIn("DIAGNOSTIC_SENTINEL", sidecar.read_text())
+                        self.assertNotIn("\x1b", result.stderr)
+
 
     def test_tracked_binary_changes_are_blocked_in_all_modes(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
@@ -2821,12 +2713,9 @@ with Path(__file__).with_name("scans.jsonl").open("a", encoding="utf-8") as reco
         with tempfile.TemporaryDirectory() as tempdir:
             repo = init_repo(Path(tempdir))
             bundle = "diff --git a/code.py b/code.py\n" + "+review me\n" * 20_000
-            with mock.patch.dict(self.helper["prepare_review_prompts"].__globals__, {
-                "scan_outgoing_review_pack": mock.Mock(),
-            }):
-                prompts = self.helper["prepare_review_prompts"](
-                    repo, "local", None, bundle, "", [], 120_000
-                )
+            prompts = self.helper["prepare_review_prompts"](
+                repo, "local", None, bundle, "", [], 120_000
+            )
             self.assertGreater(len(prompts), 1)
             for prompt in prompts:
                 self.assertIn(
@@ -2834,38 +2723,6 @@ with Path(__file__).with_name("scans.jsonl").open("a", encoding="utf-8") as reco
                     prompt,
                 )
 
-    def test_partitioned_input_scans_complete_content_before_any_send(self) -> None:
-        with tempfile.TemporaryDirectory() as tempdir:
-            repo = init_repo(Path(tempdir))
-            sentinel = "synthetic scanner boundary " + "x" * 160_000 + " end sentinel"
-            for source in ("diff", "dataset"):
-                with self.subTest(source=source):
-                    bundle = "+" + (sentinel if source == "diff" else "safe") + "\n" * 30_000
-                    datasets = (
-                        [self.helper["ReviewDataset"]("evidence.txt", sentinel)]
-                        if source == "dataset" else []
-                    )
-                    prompts = self.helper["build_review_prompts"](
-                        repo, "local", None, bundle, "", datasets, 120_000
-                    )
-                    self.assertGreater(len(prompts), 1)
-                    self.assertFalse(any(sentinel in prompt for prompt in prompts))
-                    scanned = []
-
-                    def scan(_repo, prompt):
-                        scanned.append(prompt)
-                        if sentinel in prompt:
-                            raise SystemExit("complete input scanner rejection")
-
-                    with mock.patch.dict(
-                        self.helper["prepare_review_prompts"].__globals__,
-                        {"scan_outgoing_review_pack": scan},
-                    ), self.assertRaisesRegex(SystemExit, "complete input scanner rejection"):
-                        self.helper["prepare_review_prompts"](
-                            repo, "local", None, bundle, "", datasets, 120_000
-                        )
-                    self.assertEqual(len(scanned), 1)
-                    self.assertIn(sentinel, scanned[0])
 
     def test_review_prompt_preserves_bundle_ending_whitespace(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
@@ -2899,15 +2756,11 @@ with Path(__file__).with_name("scans.jsonl").open("a", encoding="utf-8") as reco
             "category": "bug",
             "code_location": {"file_path": "source.txt", "line": 1},
         }
-        for failure in (None, "scan", "engine"):
+        for failure in (None, "engine"):
             with self.subTest(failure=failure), tempfile.TemporaryDirectory() as tempdir:
                 repo = init_repo(Path(tempdir))
                 events = []
 
-                def scan(_repo, prompt):
-                    events.append(("scan", prompt))
-                    if failure == "scan" and prompt == prompts[8]:
-                        raise SystemExit("late scan failure")
 
                 def engine(_args, _repo, prompt):
                     events.append(("engine", prompt))
@@ -2927,7 +2780,7 @@ with Path(__file__).with_name("scans.jsonl").open("a", encoding="utf-8") as reco
 
                 with mock.patch.dict(
                     self.helper["run_review_passes"].__globals__,
-                    {"scan_outgoing_review_pack": scan, "run_engine": engine},
+                    {"run_engine": engine},
                 ), contextlib.redirect_stdout(io.StringIO()):
                     if failure:
                         with self.assertRaisesRegex(SystemExit, f"late {failure} failure"):
@@ -2945,10 +2798,10 @@ with Path(__file__).with_name("scans.jsonl").open("a", encoding="utf-8") as reco
                             [item["title"] for item in report["findings"]], [finding["title"]]
                         )
                 expected = [
-                    (stage, prompt) for prompt in prompts for stage in ("scan", "engine")
+                    ("engine", prompt) for prompt in prompts
                 ]
                 if failure:
-                    expected = expected[:17 if failure == "scan" else 18]
+                    expected = expected[:9]
                 self.assertEqual(events, expected)
 
     def test_review_patch_does_not_disclose_controls_in_omitted_paths(self) -> None:
@@ -3298,28 +3151,6 @@ with Path(__file__).with_name("scans.jsonl").open("a", encoding="utf-8") as reco
             patch,
         )
 
-    @unittest.skipUnless(
-        shutil.which("trufflehog"), "TruffleHog binary not installed"
-    )
-    def test_outgoing_pack_scan_accepts_deleted_swift_status_literals(self) -> None:
-        # Live-scanner companion to the regression above: TruffleHog must not
-        # flag the benign "ok-token" status literal in a deleted-file bundle.
-        source = (FIXTURES / "swift-benign-status-literals.swift").read_text(
-            encoding="utf-8"
-        )
-        prompt = (
-            "# Change Bundle\n"
-            "diff --git a/apps/macos/MenuContentView.swift "
-            "b/apps/macos/MenuContentView.swift\n"
-            "deleted file mode 100644\n"
-            "--- a/apps/macos/MenuContentView.swift\n"
-            "+++ /dev/null\n"
-            f"@@ -1,{len(source.splitlines())} +0,0 @@\n"
-            + "".join(f"-{line}\n" for line in source.splitlines())
-        )
-        with tempfile.TemporaryDirectory() as tempdir:
-            repo = init_repo(Path(tempdir))
-            self.helper["scan_outgoing_review_pack"](repo, prompt)
 
     def test_review_bundle_preserves_typescript_config_paths(self) -> None:
         source = (FIXTURES / "typescript-benign-config-path-references.ts").read_text(
@@ -4247,7 +4078,6 @@ with Path(__file__).with_name("scans.jsonl").open("a", encoding="utf-8") as reco
             )
             record_path = root / "record.json"
             env = os.environ.copy()
-            add_fake_trufflehog(self.helper, root, env)
             env.update(
                 {
                     "AUTOREVIEW_FAKE_MUTATE": str(source),
@@ -4380,6 +4210,7 @@ with Path(__file__).with_name("scans.jsonl").open("a", encoding="utf-8") as reco
             "proxy.example.invalid:8080",
             "socks4://proxy.example.invalid",
             "socks4a://proxy.example.invalid",
+            "http://[fe80::1%25en0]:8080",
         ):
             with self.subTest(value=value):
                 self.assertTrue(self.helper["safe_proxy_url"](value))
@@ -4389,20 +4220,20 @@ with Path(__file__).with_name("scans.jsonl").open("a", encoding="utf-8") as reco
             "socks5://review-user:review-password@proxy.example.invalid:1080",
         ):
             with self.subTest(value=value):
-                self.assertFalse(self.helper["safe_proxy_url"](value))
+                self.assertTrue(self.helper["safe_proxy_url"](value))
 
-    def test_safe_engine_env_rejects_credentialed_proxy(self) -> None:
+    def test_safe_engine_env_rejects_malformed_proxy(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir, mock.patch.dict(
             os.environ,
             {
                 "HTTPS_PROXY": (
-                    "http://review-user:review-password@proxy.example.invalid:8080"
+                    "http://review-user:review-password@proxy.example.invalid:bad"
                 )
             },
             clear=False,
         ):
             repo = init_repo(Path(tempdir))
-            with self.assertRaisesRegex(SystemExit, "credentialed or malformed proxy"):
+            with self.assertRaisesRegex(SystemExit, "malformed proxy"):
                 self.helper["safe_engine_env"](repo, engine="codex")
 
     def test_safe_temp_root_rejects_reviewed_repo_parent(self) -> None:
@@ -4449,6 +4280,31 @@ with Path(__file__).with_name("scans.jsonl").open("a", encoding="utf-8") as reco
                 SystemExit,
                 "2.1.170",
             ):
+                self.helper["ensure_claude_isolation_supported"](args, repo)
+
+    @unittest.skipIf(os.name == "nt", "POSIX executable fixture")
+    def test_claude_probe_captures_help_from_pipe_sensitive_cli(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            repo = init_repo(root)
+            cli = write_executable(root / "claude", r'''#!/usr/bin/env python3
+import os
+import stat
+import sys
+
+if "--version" in sys.argv:
+    print("2.1.226 (Claude Code)")
+else:
+    text = "Usage: claude\n" + " " * 16384
+    text += "--safe-mode --setting-sources --strict-mcp-config --disallowedTools --tools\n"
+    if stat.S_ISFIFO(os.fstat(1).st_mode):
+        text = text[:512]
+    sys.stdout.write(text)
+''')
+            args = argparse.Namespace(claude_bin=str(cli), model=None, fallback_model=None)
+            self.helper["ensure_claude_isolation_supported"](args, repo)
+            cli.write_text(cli.read_text().replace("--safe-mode", "--unsafe-mode"))
+            with self.assertRaisesRegex(SystemExit, "missing from --help: --safe-mode"):
                 self.helper["ensure_claude_isolation_supported"](args, repo)
 
     def test_claude_canonical_fable_model_uses_portable_cli_selector(self) -> None:
@@ -5635,7 +5491,6 @@ os.execv(target, [str(target), *sys.argv[1:]])
 ''',
             )
             env = os.environ.copy()
-            add_fake_trufflehog(self.helper, root, env)
             env.update(
                 {
                     "CODEX_HOME": str(source_home),
@@ -5732,7 +5587,6 @@ os.execv(target, [str(target), *sys.argv[1:]])
             invocations = root / "codex-invocations.jsonl"
             record = root / "codex-record.json"
             env = os.environ.copy()
-            add_fake_trufflehog(self.helper, root, env)
             env.update(
                 {
                     "AUTOREVIEW_FAKE_CODEX_INVOCATIONS": str(invocations),
@@ -5844,10 +5698,7 @@ os.execv(target, [str(target), *sys.argv[1:]])
                 root / "codex",
                 fake_codex_script(),
             )
-            # Dry run scans the exact prompt too, so use a deterministic
-            # scanner instead of relying on the host installation.
             env = {**os.environ, "CODEX_HOME": str(root)}
-            add_fake_trufflehog(self.helper, root, env)
 
             result = subprocess.run(
                 [
@@ -5887,7 +5738,6 @@ os.execv(target, [str(target), *sys.argv[1:]])
                 fake_codex_script(),
             )
             env = os.environ.copy()
-            add_fake_trufflehog(self.helper, root, env)
             repo_temp = repo / "tmp"
             repo_temp.mkdir()
             env.update(
@@ -5918,7 +5768,7 @@ os.execv(target, [str(target), *sys.argv[1:]])
             )
 
             self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
-            self.assertIn("prompt: FAILED", result.stdout)
+            self.assertIn("prompt: OK", result.stdout)
             self.assertIn("must be outside the reviewed repository", result.stdout)
             self.assertRegex(
                 result.stdout,
@@ -5926,8 +5776,8 @@ os.execv(target, [str(target), *sys.argv[1:]])
             )
 
     @unittest.skipIf(os.name == "nt", "the fake executable is POSIX-only")
-    def test_dry_run_flag_exits_nonzero_when_trufflehog_missing(self) -> None:
-        # Dry run applies the same exact-pack scan as a real provider call.
+    def test_dry_run_succeeds_without_trufflehog(self) -> None:
+        # Dry run needs only the reviewer CLI, with no external scanner.
         with tempfile.TemporaryDirectory() as tempdir:
             root = Path(tempdir)
             repo = init_repo(root)
@@ -5960,11 +5810,8 @@ os.execv(target, [str(target), *sys.argv[1:]])
                 check=False,
             )
 
-            self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
-            self.assertIn("prompt: FAILED", result.stdout)
-            self.assertIn("TruffleHog is required but was not found", result.stdout)
-            self.assertIn(self.helper["TRUFFLEHOG_INSTALL_URL"], result.stdout)
-            # The engine itself still resolves; only trufflehog should fail.
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn("prompt: OK", result.stdout)
             self.assertRegex(result.stdout, r"engine check: codex[^\n]* OK\b")
 
     def test_dry_run_flag_exits_nonzero_when_codex_no_tools(self) -> None:
@@ -6079,7 +5926,6 @@ os.execv(target, [str(target), *sys.argv[1:]])
                 preflight.__globals__,
                 {
                     "build_review_prompts": capturing,
-                    "scan_outgoing_review_pack": lambda _repo, _prompt: None,
                 },
             ):
                 with contextlib.redirect_stdout(stdout):
@@ -6102,7 +5948,6 @@ os.execv(target, [str(target), *sys.argv[1:]])
                 fake_codex_script(),
             )
             env = {**os.environ, "CODEX_HOME": str(root)}
-            add_fake_trufflehog(self.helper, root, env)
 
             result = subprocess.run(
                 [
@@ -6144,7 +5989,6 @@ os.execv(target, [str(target), *sys.argv[1:]])
                 fake_pi_script(),
             )
             env = os.environ.copy()
-            add_fake_trufflehog(self.helper, root, env)
             env["AUTOREVIEW_FAKE_PI_VERSION"] = "0.50.0"
 
             result = subprocess.run(
@@ -6183,7 +6027,6 @@ os.execv(target, [str(target), *sys.argv[1:]])
                 fake_pi_script(),
             )
             env = os.environ.copy()
-            add_fake_trufflehog(self.helper, root, env)
 
             result = subprocess.run(
                 [
@@ -6222,7 +6065,6 @@ os.execv(target, [str(target), *sys.argv[1:]])
                 fake_kimi_script(),
             )
             env = os.environ.copy()
-            add_fake_trufflehog(self.helper, root, env)
             env["AUTOREVIEW_FAKE_KIMI_VERSION"] = "0.10.0"
 
             result = subprocess.run(
@@ -6261,7 +6103,6 @@ os.execv(target, [str(target), *sys.argv[1:]])
                 fake_kimi_script(),
             )
             env = os.environ.copy()
-            add_fake_trufflehog(self.helper, root, env)
             # Isolate KIMI_CODE_HOME to an empty, hermetic directory instead
             # of leaking the host's real ~/.kimi-code (which may or may not
             # exist) into this test; an empty source share has no
@@ -6309,7 +6150,6 @@ os.execv(target, [str(target), *sys.argv[1:]])
                 fake_kimi_script(),
             )
             env = os.environ.copy()
-            add_fake_trufflehog(self.helper, root, env)
             env["KIMI_CODE_HOME"] = str(repo / ".kimi-code")
 
             result = subprocess.run(
@@ -6364,7 +6204,6 @@ os.execv(target, [str(target), *sys.argv[1:]])
             source_share.mkdir()
             (source_share / "device_id").write_text("not-a-valid-id!!", encoding="utf-8")
             env = os.environ.copy()
-            add_fake_trufflehog(self.helper, root, env)
             env["KIMI_CODE_HOME"] = str(source_share)
 
             result = subprocess.run(
@@ -6417,7 +6256,6 @@ os.execv(target, [str(target), *sys.argv[1:]])
             source_share.mkdir()
             (source_share / "credentials").write_text("not-a-directory", encoding="utf-8")
             env = os.environ.copy()
-            add_fake_trufflehog(self.helper, root, env)
             env["KIMI_CODE_HOME"] = str(source_share)
 
             result = subprocess.run(
@@ -6469,7 +6307,6 @@ os.execv(target, [str(target), *sys.argv[1:]])
             )
             (source_share / "credentials").mkdir()
             env = os.environ.copy()
-            add_fake_trufflehog(self.helper, root, env)
             env["KIMI_CODE_HOME"] = str(source_share)
 
             result = subprocess.run(
@@ -6514,7 +6351,6 @@ os.execv(target, [str(target), *sys.argv[1:]])
                 fake_claude_script(),
             )
             env = os.environ.copy()
-            add_fake_trufflehog(self.helper, root, env)
 
             result = subprocess.run(
                 [
@@ -6557,7 +6393,6 @@ os.execv(target, [str(target), *sys.argv[1:]])
                 fake_kimi_script(),
             )
             env = os.environ.copy()
-            add_fake_trufflehog(self.helper, root, env)
             # Prompt limits must not depend on the host's Kimi configuration.
             env["KIMI_CODE_HOME"] = str(root / "kimi-empty-home")
             (root / "kimi-empty-home").mkdir()
@@ -6615,7 +6450,6 @@ os.execv(target, [str(target), *sys.argv[1:]])
                 fake_codex_script(),
             )
             env = {**os.environ, "CODEX_HOME": str(root)}
-            add_fake_trufflehog(self.helper, root, env)
 
             result = subprocess.run(
                 [
@@ -6660,7 +6494,6 @@ os.execv(target, [str(target), *sys.argv[1:]])
                 fake_codex_script(),
             )
             env = {**os.environ, "CODEX_HOME": str(root)}
-            add_fake_trufflehog(self.helper, root, env)
 
             result = subprocess.run(
                 [
@@ -6701,7 +6534,6 @@ os.execv(target, [str(target), *sys.argv[1:]])
                 fake_codex_script(),
             )
             env = os.environ.copy()
-            add_fake_trufflehog(self.helper, root, env)
 
             result = subprocess.run(
                 [
@@ -6727,6 +6559,331 @@ os.execv(target, [str(target), *sys.argv[1:]])
             self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
             self.assertIn("inputs: FAILED", result.stdout)
             self.assertIn("missing-dataset.json", result.stdout)
+
+PROXY_KEYS = ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy")
+
+
+class AuthenticatedProxyTests(unittest.TestCase):
+    def setUp(self):
+        self.helper = load_helper()
+
+    def test_authenticated_proxy_urls_are_transport_not_openclaw_provenance(self):
+        for value in (
+            "http://user:password@proxy.example.invalid:8080",
+            "https://user:password@[::1]:8443/",
+            "socks5h://u:p%40ss%3Aword@proxy.example.invalid:1080",
+            "user:password@proxy.example.invalid:8080",
+            "http://user@proxy.example.invalid",
+            "http://:password@proxy.example.invalid",
+            "http://proxy.example.invalid:8080",
+            "proxy.example.invalid:8080",
+            "socks4a://proxy.example.invalid",
+        ):
+            with self.subTest(value=value):
+                self.assertTrue(self.helper["safe_proxy_url"](value))
+
+    def test_malformed_proxy_urls_still_fail_closed(self):
+        for value in (
+            "", "http://", "file:///proxy", "http://host:0", "http://host:65536",
+            "http://host:bad", "http://[::1", "http://host/path", "http://host?q=1",
+            "http://host#fragment", " http://host", "http://host\n", "http://ho\tst",
+            "http://user:p%0Ass@host", "http://user:p%00ss@host", "http://user:p%zz@host",
+            "http://user:p@ss@host", "http://user:p\\ass@host", "http://ho st",
+            "http://host%0a.example", "http://host%2f.example",
+        ):
+            with self.subTest(value=value):
+                self.assertFalse(self.helper["safe_proxy_url"](value))
+
+    def test_engine_env_preserves_authenticated_transport_without_marker_or_api_leak(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            repo = root / "repo"
+            repo.mkdir()
+            proxy = "http://fixture:transport-password@127.0.0.1:8080"
+            transport = {key: proxy for key in PROXY_KEYS}
+            transport.update({"NO_PROXY": "localhost", "NODE_USE_ENV_PROXY": "1"})
+            ca_keys = ("NODE_EXTRA_CA_CERTS", "SSL_CERT_FILE", "SSL_CERT_DIR",
+                       "CURL_CA_BUNDLE", "REQUESTS_CA_BUNDLE")
+            transport.update({key: str(root / "trust.pem") for key in ca_keys})
+            inherited = {**transport, "OPENAI_API_KEY": "provider-auth-fixture",
+                         "UNRELATED_SECRET": "not-for-review", "NODE_OPTIONS": "--require hostile"}
+            for engine in self.helper["ENGINES"]:
+                with self.subTest(engine=engine), mock.patch.dict(os.environ, inherited, clear=True):
+                    env = self.helper["safe_engine_env"](repo, engine=engine)
+                    for key, value in transport.items():
+                        # Windows os.environ canonicalizes names to uppercase;
+                        # POSIX must retain each supplied casing independently.
+                        lookup_key = key.upper() if os.name == "nt" else key
+                        self.assertEqual(env.get(lookup_key), value, key)
+                    self.assertNotIn("UNRELATED_SECRET", env)
+                    self.assertNotIn("NODE_OPTIONS", env)
+                    if engine == "codex":
+                        self.assertEqual(env["OPENAI_API_KEY"], "provider-auth-fixture")
+                    elif engine in {"claude", "amp"}:
+                        self.assertNotIn("OPENAI_API_KEY", env)
+
+    def test_repository_ca_paths_are_not_inherited(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = root / "repo"
+            repo.mkdir()
+            certificate = repo / "trust.pem"
+            certificate.touch()
+            external_link = root / "trust-link.pem"
+            external_link.symlink_to(certificate)
+            for engine in self.helper["ENGINES"]:
+                for value in (str(certificate), str(external_link)):
+                    with self.subTest(engine=engine, value=value), mock.patch.dict(os.environ, {
+                        key: value for key in ("NODE_EXTRA_CA_CERTS", "SSL_CERT_FILE", "SSL_CERT_DIR",
+                                              "CURL_CA_BUNDLE", "REQUESTS_CA_BUNDLE")
+                    }, clear=True):
+                        env = self.helper["safe_engine_env"](repo, engine=engine)
+                        for key in ("NODE_EXTRA_CA_CERTS", "SSL_CERT_FILE", "SSL_CERT_DIR",
+                                    "CURL_CA_BUNDLE", "REQUESTS_CA_BUNDLE"):
+                            self.assertNotIn(key, env)
+
+    def proxy_fixture(self):
+        username = "u"
+        password = 'synthetic-p@ss:/+%"\\word'
+        userinfo = f"{username}:{password}"
+        encoded = urllib.parse.quote(password, safe="")
+        proxy = f"http://{username}:{encoded}@127.0.0.1:8080"
+        basic = base64.b64encode(userinfo.encode()).decode()
+        forms = (proxy, userinfo, f"{username}:{encoded}", password, encoded,
+                 "Proxy-Authorization: Basic " + basic)
+        return proxy, forms
+
+    def test_proxy_credentials_are_redacted_in_diagnostics_not_short_user_labels(self):
+        proxy, forms = self.proxy_fixture()
+        with mock.patch.dict(os.environ, {"HTTPS_PROXY": proxy}, clear=True):
+            for form in (*forms, *(json.dumps(form)[1:-1] for form in forms)):
+                with self.subTest(form=form):
+                    rendered = self.helper["display_escape"]("failure: " + form, 4000, multiline=True)
+                    self.assertNotIn(form, rendered)
+                    self.assertIn("[REDACTED]", rendered)
+            self.assertEqual(self.helper["display_escape"]("user u requests an update", 100),
+                             "user u requests an update")
+            for display in (self.helper["CodexStreamDisplay"](), self.helper["ClaudeStreamDisplay"]()):
+                self.assertNotIn(forms[0], display("stderr", "failure: " + forms[0]))
+
+    def test_real_stream_and_buffered_failure_keep_exit_semantics_without_disclosure(self):
+        proxy, forms = self.proxy_fixture()
+        source = "import os,sys; print(os.environ['HTTPS_PROXY']); print(os.environ['HTTPS_PROXY'],file=sys.stderr); sys.exit(7)"
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(os.environ, {"HTTPS_PROXY": proxy}, clear=False):
+            stdout, stderr = io.StringIO(), io.StringIO()
+            with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+                result = self.helper["run_with_heartbeat"](
+                    [sys.executable, "-c", source], Path(tmp), label="proxy-test", stream_output=True,
+                    env={"HTTPS_PROXY": proxy},
+                )
+            self.assertEqual(result.returncode, 7)
+            self.assertNotIn(proxy, stdout.getvalue() + stderr.getvalue())
+            failure = self.helper["ReviewerUnavailable"]("failed (7): " + result.stderr, result=result)
+            with mock.patch.dict(self.helper["sanitized_main"].__globals__, {
+                "main": mock.Mock(side_effect=failure),
+            }):
+                with self.assertRaises(SystemExit) as caught:
+                    self.helper["sanitized_main"]()
+            self.assertNotIn(proxy, str(caught.exception))
+            self.assertIn("failed (7)", str(caught.exception))
+            self.assertEqual(failure.returncode, 7)
+
+    def test_report_files_and_terminal_are_redacted_without_changing_verdict(self):
+        proxy, forms = self.proxy_fixture()
+        report = {"findings": [], "overall_correctness": "patch is incorrect",
+                  "overall_explanation": "provider says " + " | ".join(forms), "overall_confidence": 0.8}
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(os.environ, {"HTTPS_PROXY": proxy}, clear=True):
+            output = Path(tmp) / "report.json"
+            self.helper["atomic_write_text"](output, json.dumps(self.helper["redact_proxy_report"](report)))
+            saved = json.loads(output.read_text())
+            terminal = io.StringIO()
+            with contextlib.redirect_stdout(terminal):
+                self.helper["print_report"](report)
+            for form in forms:
+                self.assertNotIn(form, saved["overall_explanation"])
+                self.assertNotIn(form, terminal.getvalue())
+            self.assertEqual(saved["overall_correctness"], "patch is incorrect")
+            self.assertEqual(saved["findings"], [])
+            self.assertEqual(report["overall_explanation"], "provider says " + " | ".join(forms))
+
+    def test_codex_tools_do_not_inherit_transport_or_authentication(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            flags = self.helper["codex_config_isolation_flags"](root / "repo", root / "runtime")
+            self.assertIn('shell_environment_policy.inherit="core"', flags)
+            self.assertIn("shell_environment_policy.ignore_default_excludes=false", flags)
+            self.assertFalse(set(PROXY_KEYS) & self.helper["codex_tool_git_env"]().keys())
+
+    @unittest.skipIf(os.name == "nt", "POSIX executable fixture")
+    def test_cli_preserves_transport_and_redacts_streams_reports_and_failures(self):
+        proxy, forms = self.proxy_fixture()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            repo = root / "repo"
+            repo.mkdir()
+            def git(*args):
+                subprocess.run(["git", "-C", str(repo), "-c", "user.name=Proxy Test",
+                                "-c", "user.email=proxy@example.invalid", "-c", "commit.gpgsign=false",
+                                *args], check=True, capture_output=True)
+            git("init", "-q")
+            (repo / "source.txt").write_text("before\n")
+            git("add", ".")
+            git("commit", "-qm", "fixture")
+            (repo / "source.txt").write_text("after\n")
+            fake = root / "codex-fixture"
+            fake.write_text(f"#!{sys.executable}\n" + '''import json, os, sys
+from pathlib import Path
+if "--version" in sys.argv:
+    print("codex-cli 0.0.0-test")
+    raise SystemExit(0)
+Path(os.environ["AUTOREVIEW_FAKE_PROXY_RECORD"]).write_text(json.dumps({
+    "proxy": os.environ["HTTPS_PROXY"], "auth": os.environ.get("OPENAI_API_KEY"), "argv": sys.argv,
+}))
+print(os.environ["HTTPS_PROXY"])
+print(os.environ["HTTPS_PROXY"], file=sys.stderr)
+if os.environ.get("AUTOREVIEW_FAKE_PROXY_EXIT"):
+    raise SystemExit(7)
+flag = "--output-last-message" if "--output-last-message" in sys.argv else "-o"
+Path(sys.argv[sys.argv.index(flag) + 1]).write_text(json.dumps({
+    "findings": [], "overall_correctness": "patch is incorrect",
+    "overall_explanation": "transport diagnostics: " + os.environ["HTTPS_PROXY"], "overall_confidence": 0.8,
+}))
+''')
+            fake.chmod(0o755)
+            home = root / "home"
+            home.mkdir()
+            record = root / "record.json"
+            human, report, status = (root / name for name in ("report.txt", "report.json", "status.json"))
+            env = {key: value for key, value in os.environ.items() if key in {"PATH", "TMPDIR", "TEMP", "TMP"}}
+            env.update({"HOME": str(home), "HTTPS_PROXY": proxy, "OPENAI_API_KEY": "opaque-provider-fixture",
+                        "AUTOREVIEW_FAKE_PROXY_RECORD": str(record)})
+            command = [sys.executable, str(SCRIPT), "--mode", "local", "--codex-bin", str(fake),
+                       "--output", str(human), "--json-output", str(report), "--status-output", str(status),
+                       "--stream-engine-output"]
+            result = subprocess.run(command, cwd=repo, env=env, capture_output=True, text=True)
+            self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertTrue(report.exists(), result.stdout + result.stderr)
+            saved = json.loads(report.read_text())
+            self.assertEqual(saved["overall_correctness"], "patch is incorrect")
+            captured = json.loads(record.read_text())
+            self.assertEqual(captured["proxy"], proxy)
+            self.assertEqual(captured["auth"], "opaque-provider-fixture")
+            self.assertIn('shell_environment_policy.inherit="core"', captured["argv"])
+            published = result.stdout + result.stderr + human.read_text() + report.read_text()
+            for form in forms:
+                self.assertNotIn(form, published)
+            self.assertEqual(json.loads(status.read_text())["exit_code"], result.returncode)
+            env["AUTOREVIEW_FAKE_PROXY_EXIT"] = "1"
+            failed = subprocess.run(command, cwd=repo, env=env, capture_output=True, text=True)
+            self.assertNotEqual(failed.returncode, 0)
+            self.assertNotIn(proxy, failed.stdout + failed.stderr)
+            self.assertEqual(json.loads(status.read_text())["reviewer_exit_code"], 7)
+
+    def test_serialized_redaction_does_not_turn_short_passwords_into_json_syntax(self):
+        with mock.patch.dict(os.environ, {"HTTPS_PROXY": "http://u:1@localhost:8080"}, clear=True):
+            report = {"code": 1, "accepted": True, "explanation": "password=1", "u": "user u"}
+            saved = json.loads(json.dumps(self.helper["redact_proxy_report"](report)))
+            self.assertEqual(saved["code"], 1)
+            self.assertIs(saved["accepted"], True)
+            self.assertEqual(saved["explanation"], "[REDACTED]")
+            self.assertEqual(saved["u"], "user u")
+
+    def test_short_password_does_not_corrupt_prose_or_serialized_enums(self):
+        for password in ("a", "incorrect"):
+            with self.subTest(password=password), mock.patch.dict(os.environ, {
+                "HTTPS_PROXY": f"http://u:{password}@localhost:8080",
+            }, clear=True):
+                report = {"overall_correctness": "patch is incorrect", "review_status": "incomplete",
+                          "overall_explanation": "a branch has a bug", "findings": [{
+                              "priority": "P1", "category": "regression", "body": "password=" + password,
+                          }]}
+                saved = self.helper["redact_proxy_report"](report)
+                self.assertEqual(saved["overall_correctness"], "patch is incorrect")
+                self.assertEqual(saved["review_status"], "incomplete")
+                self.assertEqual(saved["overall_explanation"], "a branch has a bug")
+                self.assertEqual(saved["findings"][0]["priority"], "P1")
+                self.assertEqual(saved["findings"][0]["category"], "regression")
+                self.assertNotIn("password=" + password, saved["findings"][0]["body"])
+
+    def test_username_only_and_empty_password_are_hidden_in_url_contexts(self):
+        for suffix in ("", ":"):
+            with self.subTest(suffix=suffix), mock.patch.dict(os.environ, {
+                "HTTPS_PROXY": f"http://u%40name{suffix}@localhost:8080",
+            }, clear=True):
+                diagnostic = f"proxy=http://u@name{suffix}@LOCALHOST:8080/; user u@name is configured"
+                redacted = self.helper["redact_proxy_credentials"](diagnostic)
+                self.assertNotIn(f"u@name{suffix}@", redacted)
+                self.assertIn("user u@name is configured", redacted)
+
+    def test_long_username_only_tokens_are_redacted_outside_url_contexts(self):
+        token = 'synthetic-user-token@/+"\\value'
+        encoded = urllib.parse.quote(token, safe="")
+        forms = (token, encoded, urllib.parse.quote(encoded, safe=""),
+                 json.dumps(token)[1:-1])
+        for suffix in ("", ":"):
+            with self.subTest(suffix=suffix), mock.patch.dict(os.environ, {
+                "HTTPS_PROXY": f"http://{encoded}{suffix}@localhost:8080",
+            }, clear=True):
+                for form in forms:
+                    with self.subTest(form=form):
+                        rendered = self.helper["display_escape"]("rejected credential " + form, 4000)
+                        self.assertNotIn(form, rendered)
+                        self.assertIn("[REDACTED]", rendered)
+                        report = {"overall_correctness": "patch is incorrect",
+                                  "overall_explanation": "rejected credential " + form}
+                        saved = self.helper["redact_proxy_report"](report)
+                        self.assertNotIn(form, saved["overall_explanation"])
+                        self.assertEqual(saved["overall_correctness"], "patch is incorrect")
+
+    def test_username_only_redaction_preserves_short_labels_and_report_enums(self):
+        for username in ("u", "openclaw", "review-bot", "incorrect"):
+            for suffix in ("", ":"):
+                with self.subTest(username=username, suffix=suffix), mock.patch.dict(os.environ, {
+                    "HTTPS_PROXY": f"http://{username}{suffix}@localhost:8080",
+                }, clear=True):
+                    prose = f"user {username} is configured"
+                    self.assertEqual(self.helper["redact_proxy_credentials"](prose), prose)
+                    for label in ("username", "proxy_user", "proxy-username"):
+                        diagnostic = f'{label}="{username}"'
+                        redacted = self.helper["redact_proxy_credentials"](diagnostic)
+                        self.assertNotIn(diagnostic, redacted)
+                        self.assertIn("[REDACTED]", redacted)
+                    report = {"overall_correctness": "patch is incorrect",
+                              "review_status": "incomplete", "overall_explanation": prose,
+                              "findings": [{"priority": "P1", "category": "regression"}]}
+                    self.assertEqual(self.helper["redact_proxy_report"](report), report)
+
+    def test_output_redaction_covers_split_writes_and_final_unterminated_line(self):
+        proxy, _forms = self.proxy_fixture()
+        stream = io.StringIO()
+        with mock.patch.dict(os.environ, {"HTTPS_PROXY": proxy}, clear=True):
+            output = self.helper["ProxyRedactedOutput"](stream)
+            for char in proxy:
+                output.write(char)
+                output.flush()
+            self.assertEqual(stream.getvalue(), "")
+            output.write("\n")
+            self.assertEqual(stream.getvalue(), "[REDACTED]\n")
+            output.write(proxy)
+            output.finish()
+            self.assertEqual(stream.getvalue(), "[REDACTED]\n[REDACTED]")
+
+    def test_redacting_output_bounds_unterminated_lines_and_retains_stream_interface(self):
+        proxy, _forms = self.proxy_fixture()
+        stream = io.StringIO()
+        with mock.patch.dict(os.environ, {"HTTPS_PROXY": proxy}, clear=True):
+            output = self.helper["ProxyRedactedOutput"](stream)
+            output.write("x" * 65_537 + proxy)
+            self.assertLessEqual(len(output.pending), 65_536)
+            output.write("still the suppressed line\nnext line\n")
+            output.finish()
+            self.assertEqual(stream.getvalue(),
+                             "[output line suppressed: exceeds redaction buffer]\nnext line\n")
+            self.assertFalse(output.isatty())
+            self.assertEqual(output.encoding, stream.encoding)
+            with self.assertRaises(io.UnsupportedOperation):
+                output.fileno()
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -3,6 +3,7 @@ import { once } from "node:events";
 import { createReadStream, createWriteStream, type WriteStream } from "node:fs";
 import { Socket } from "node:net";
 import { pipeline, type Readable } from "node:stream";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { GRACEFUL_CANCEL_TIMEOUT_MS } from "./cancellation-policy.js";
 import { hasLiveOwnedProcessGroupMembers } from "./service-child-group-ownership.js";
@@ -65,6 +66,8 @@ export function runServiceChildGroupAnchor(): void {
   const rootExited = createDeferredCore();
   const rootSettledDone = createDeferredCore();
   const startupErrorAcknowledged = createDeferredCore();
+  const retirementReady = createDeferredCore<boolean>();
+  let closingSequence: number | undefined;
 
   const send = async (message: ServiceChildAnchorPayload) => {
     if (!start || !control || control.destroyed) {
@@ -87,6 +90,7 @@ export function runServiceChildGroupAnchor(): void {
   const closeAuthority = async (
     reason: Extract<ServiceChildAnchorMessage, { type: "closing" }>["reason"],
     hardKill: boolean,
+    deadline = Date.now() + GRACEFUL_CANCEL_TIMEOUT_MS,
   ) => {
     if (!start || state === "closed") {
       return;
@@ -98,7 +102,31 @@ export function runServiceChildGroupAnchor(): void {
       process.kill(0, "SIGKILL");
       return;
     }
-    await send({ type: "closing", reason });
+    // Kernel acceptance is not host consumption. Keep the read side alive so a
+    // crossing cancellation cannot destroy the host's unread closing receipt.
+    const requiresAcknowledgement = start.acknowledgeClosing === true;
+    closingSequence = requiresAcknowledgement ? sequence + 1 : undefined;
+    const remainingMs = deadline - Date.now();
+    if (remainingMs > 0) {
+      void send({ type: "closing", reason }).then(
+        () => {
+          // --no-restart can retain an old host across replacement of these workers.
+          // Preserve its prior protocol until restart; new hosts always request ACKs.
+          if (!requiresAcknowledgement) {
+            retirementReady.resolve(true);
+          }
+        },
+        () => retirementReady.resolve(false),
+      );
+    }
+    if (
+      remainingMs <= 0 ||
+      !(await Promise.race([retirementReady.promise, delay(remainingMs).then(() => false)])) ||
+      Date.now() >= deadline
+    ) {
+      process.kill(0, "SIGKILL");
+      return;
+    }
     control?.end(() => process.exit(0));
   };
 
@@ -164,7 +192,7 @@ export function runServiceChildGroupAnchor(): void {
       // This census only schedules retirement or escalation; it cannot certify closure.
       // The outside-group host must observe kernel group disappearance after we exit.
       if (hasLiveOwnedProcessGroupMembers(remainingMs) === false) {
-        await closeAuthority(reason, false);
+        await closeAuthority(reason, false, cleanupDeadline);
         return;
       }
       const nextObservationMs = Math.min(100, cleanupDeadline - Date.now());
@@ -173,16 +201,30 @@ export function runServiceChildGroupAnchor(): void {
       }
       await Promise.race([delay(nextObservationMs), forceCleanupRequested.promise]);
     }
-    await closeAuthority(reason, true);
+    await closeAuthority(reason, true, cleanupDeadline);
   };
 
   const onControlMessage = (message: ServiceChildControlMessage) => {
     if (
       !start ||
       message.generation !== start.generation ||
-      message.sequence <= lastHostSequence ||
-      state === "closed"
+      !Number.isSafeInteger(message.sequence) ||
+      message.sequence <= lastHostSequence
     ) {
+      return;
+    }
+    if (message.type === "closing-ack") {
+      if (
+        state === "closed" &&
+        closingSequence !== undefined &&
+        message.closingSequence === closingSequence
+      ) {
+        lastHostSequence = message.sequence;
+        retirementReady.resolve(true);
+      }
+      return;
+    }
+    if (state === "closed") {
       return;
     }
     lastHostSequence = message.sequence;
@@ -231,7 +273,9 @@ export function runServiceChildGroupAnchor(): void {
       }
     });
     const onControlLoss = () => {
-      if (state !== "closed") {
+      if (state === "closed") {
+        retirementReady.resolve(false);
+      } else {
         void requestCleanup("parent-lost");
       }
     };
@@ -368,6 +412,7 @@ export function runServiceChildGroupAnchor(): void {
     }
   });
   process.once("disconnect", () => {
+    retirementReady.resolve(false);
     if (state !== "closed") {
       void requestCleanup("parent-lost");
     }
@@ -376,6 +421,13 @@ export function runServiceChildGroupAnchor(): void {
     // SAFETY: the spawned relay is the sole sender on this private IPC channel.
     const message = raw as ServiceChildStart | { type: "parent-loss"; generation?: string };
     if (message.type === "start" && state === "starting") {
+      if (
+        isRecord(raw) &&
+        raw.acknowledgeClosing !== undefined &&
+        raw.acknowledgeClosing !== true
+      ) {
+        process.exit(1);
+      }
       void startCommand(message);
     } else if (message.type === "parent-loss" && message.generation === start?.generation) {
       void requestCleanup("parent-lost");

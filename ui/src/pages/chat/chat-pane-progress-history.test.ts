@@ -17,7 +17,6 @@ import { resetChatHistoryProjection } from "./chat-history-state.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import {
   createGatewayBrowserClientFixture,
-  createSessionCapabilityFixture,
   createTestChatPane,
   type TestChatPane,
 } from "./chat-pane.test-support.ts";
@@ -43,12 +42,9 @@ function progressCard(revision = 1): ProgressCard {
   };
 }
 
-function createHistoryProgressPane(
-  request: GatewayRequestHandler,
-  sessions = createSessionCapabilityFixture(),
-) {
+function createHistoryProgressPane(request: GatewayRequestHandler) {
   const client = createGatewayBrowserClientFixture({ request });
-  const { pane, state } = createTestChatPane({ client, sessions });
+  const { pane, state, sessions } = createTestChatPane({ client });
   const hello = gatewayHelloForMethods(["chat.history", "progressCard.get", "progressCard.put"]);
   pane.context.gateway.snapshot.hello = hello;
   state.hello = hello;
@@ -75,7 +71,7 @@ function createHistoryProgressPane(
       payload: { sessionKey: card.sessionKey, revision: card.revision },
     });
   };
-  return { pane, state, progress, emit };
+  return { pane, state, sessions, progress, emit };
 }
 
 describe("retained bare pane progress follows accepted history ownership", () => {
@@ -141,11 +137,11 @@ describe("retained bare pane progress follows accepted history ownership", () =>
           ? { session }
           : { card: null },
     );
-    const sessions = createSessionCapabilityFixture({
-      canonicalListRevision: 1,
-      list: vi.fn(async () => createSessionsListResult({ omitSessionFromList: true })),
-    });
-    const { pane, state } = createHistoryProgressPane(request, sessions);
+    const { pane, state, sessions } = createHistoryProgressPane(request);
+    vi.spyOn(sessions, "canonicalListRevision", "get").mockReturnValue(1);
+    vi.spyOn(sessions, "list").mockResolvedValue(
+      createSessionsListResult({ omitSessionFromList: true }),
+    );
     pane.sessionKey = target.raw;
     state.sessionKey = target.raw;
     state.settings = {
