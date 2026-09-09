@@ -66,8 +66,8 @@ Experience review starts only when all of these conditions hold:
 A later foreground completion in the same session restarts the quiet period.
 It does not replace the saved evidence unless that turn also qualifies for review.
 Pending reviews belong to an agent and session together, so agents using `global`
-retain separate candidates. Experience and history reviews share
-one Workshop slot within the [shared background work budget](/concepts/queue#background-work).
+retain separate candidates. Experience reviews use one Workshop slot within the
+[shared background work budget](/concepts/queue#background-work).
 The foreground answer never waits for the model's review.
 
 OpenClaw records where the completed turn ends, then reads its full model context
@@ -155,7 +155,7 @@ Or edit `~/.openclaw/openclaw.json`:
 ```
 
 Changing the mode does not alter existing proposals or applied skills. Manual
-history review, `/learn`, and explicit Workshop requests remain available in all
+learning sessions, `/learn`, and explicit Workshop requests remain available in all
 three modes.
 
 ## Why auto is safe to default
@@ -226,14 +226,18 @@ agent's configured model and normal cron scheduling. Skill bodies remain review
 material, not active instructions. Completed edits persist; there is no
 collection-wide transaction or automatic rollback.
 
-Manual history scan uses a separate bounded path. It reviews up to 20 substantial
-sessions with at least six model turns, redacts recognized secrets, bounds the
-transcript bundle, and can create or revise at most three pending proposals. It
-stores cursor and coverage metadata in the shared state database without copying
-transcript content into scan state.
+**Learn from past conversations** in Workshop opens a normal agent session with
+the learning instructions. The agent uses its configured model, permitted tools,
+existing skills, and accessible conversation history. It chooses what to read;
+there is no separate scan threshold, transcript bundle, or batch cursor.
+
+The session follows the current Workshop mode: `auto` permits direct skill
+improvements, while `propose` leaves suggestions for approval. You can watch,
+steer, or stop the run in chat. Starting it does not enable automatic learning
+or change settings. Like other sessions, it shares the agent's normal capacity.
 
 <Warning>
-  Experience review and manual history scan can send eligible conversation
+  Experience review and manual learning sessions can send conversation
   content, including tool inputs and results, to the configured model provider.
   Choose a provider and mode that match the workspace privacy and data-handling
   requirements.
@@ -267,9 +271,9 @@ named sources:
 skill. It creates a new pending proposal only when no skill owns the procedure,
 and never auto-applies the result.
 
-To review older work manually, open **Plugins -> Workshop** in Control UI and
-select **Find skill ideas**. Each click reviews one bounded window and leaves any
-result pending regardless of autonomous mode.
+To learn from older work, open **Plugins -> Workshop** and select
+**Learn from past conversations**. The new chat follows your current Workshop
+mode and shows the agent's work and results.
 
 ## Configuration reference
 

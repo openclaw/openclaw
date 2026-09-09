@@ -36,30 +36,12 @@ export type SkillWorkshopPreparedPatch = {
 /** Run-scoped budget shared by every workshop tool instance created across runner retries. */
 export type SkillWorkshopProposalMutationBudget = {
   remaining: number;
-  /** Successful persisted mutation calls, including repeated revisions. */
-  successfulMutations?: number;
-  /** Failed or incompletely checkpointed reservations in the current model run. */
-  failedMutations?: number;
   /** Run-local identity set used to keep idea counts distinct. */
   mutatedProposalIds?: Set<string>;
   /** Content hash per live skill read this run; autonomous updates require a matching receipt. */
   readSkillHashes?: Map<string, string>;
   /** Single-use exact-span patch authority prepared from authoritative live content. */
   preparedSkillPatches?: Map<string, SkillWorkshopPreparedPatch>;
-};
-
-export type SkillWorkshopProposalReviewProgress = {
-  proposalIds: string[];
-  remaining: number;
-  successfulMutations: number;
-};
-
-/** Shared completion latch for proposal-only reviewers that require a durable final checkpoint. */
-export type SkillWorkshopProposalReviewCompletion = {
-  activeMutations?: Set<Promise<void>>;
-  complete: () => Promise<void>;
-  phase: "open" | "completing" | "completed";
-  recordProgress?: (progress: SkillWorkshopProposalReviewProgress) => Promise<void>;
 };
 
 /** Exact proposal revision an operator reviewed before requesting an agent-authored revision. */
@@ -78,7 +60,6 @@ export type SkillWorkshopRunOptions = {
   autonomousCapture?: boolean;
   origin?: SkillProposalOrigin;
   proposalMutationBudget?: SkillWorkshopProposalMutationBudget;
-  proposalReviewCompletion?: SkillWorkshopProposalReviewCompletion;
   proposalRevision?: SkillWorkshopProposalRevisionConstraint;
 };
 
