@@ -12,6 +12,7 @@ import {
   createMissingLocalMemoryEmbeddingProviderError,
   LOCAL_MEMORY_EMBEDDING_PROVIDER_ID,
 } from "./local-embedding-provider.js";
+import { runWithMemorySearchDeadlineSuspended } from "./search-deadline.js";
 
 export type EmbeddingProvider = MemoryEmbeddingProvider;
 export type EmbeddingProviderId = string;
@@ -62,6 +63,14 @@ function resolveAdapterCreateOptions(
   const { outputDimensionality, ...base } = options;
   const createOptions = {
     ...base,
+    ...(options.acquireLocalService
+      ? {
+          // The service owner already enforces readyTimeoutMs. Exclude only that
+          // readiness phase from the whole-search budget; caller abort still flows in.
+          acquireLocalService: (...args: Parameters<MemoryCoreAcquireLocalService>) =>
+            runWithMemorySearchDeadlineSuspended(() => options.acquireLocalService!(...args)),
+        }
+      : {}),
     fallback: "none",
     model: options.model.trim() || adapter.defaultModel || "",
     ...(typeof outputDimensionality === "number" ? { dimensions: outputDimensionality } : {}),

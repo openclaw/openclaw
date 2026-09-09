@@ -1,3 +1,5 @@
+import { AsyncLocalStorage } from "node:async_hooks";
+
 export const DEFAULT_MEMORY_SEARCH_TIMEOUT_MS = 15_000;
 export function resolveMemorySearchAbortError(signal: AbortSignal): Error {
   const { reason } = signal;
@@ -14,6 +16,19 @@ export function resolveMemorySearchAbortError(signal: AbortSignal): Error {
 // this error as `signal.reason` and could copy any marker on it onto a failure
 // of its own.
 const memorySearchDeadlineErrors = new WeakSet<object>();
+
+type MemorySearchDeadlineScope = {
+  suspend: <T>(run: () => Promise<T>) => Promise<T>;
+};
+
+// Search managers are shared across concurrent requests. Async context keeps each
+// request's pausable budget attached to its own provider-acquisition chain.
+const memorySearchDeadlineScope = new AsyncLocalStorage<MemorySearchDeadlineScope>();
+
+export async function runWithMemorySearchDeadlineSuspended<T>(run: () => Promise<T>): Promise<T> {
+  const scope = memorySearchDeadlineScope.getStore();
+  return scope ? await scope.suspend(run) : await run();
+}
 
 export function createMemorySearchDeadlineError(message: string): Error {
   const error = new Error(message);
@@ -45,23 +60,69 @@ export async function runMemorySearchWithDeadline<T>(params: {
   const timeoutOutcome = { type: "timeout" } as const;
   const parentAbortOutcome = { type: "parent-abort" } as const;
   let timer: ReturnType<typeof setTimeout> | undefined;
-  const deadlineStartedAt = Date.now();
+  let activeBudgetStartedAt = Date.now();
+  let remainingMs = params.timeoutMs;
+  let suspendDepth = 0;
+  let deadlineReached = false;
   let removeParentAbort: (() => void) | undefined;
   let resolveTimeout!: (outcome: typeof timeoutOutcome) => void;
   const timeoutPromise = new Promise<typeof timeoutOutcome>((resolve) => {
     resolveTimeout = resolve;
   });
   const reachDefaultDeadline = () => {
+    if (deadlineReached) {
+      return;
+    }
+    deadlineReached = true;
     // Resolve before aborting so abort-aware tasks cannot replace the stable
     // deadline error with a provider-wrapped cancellation error.
     resolveTimeout(timeoutOutcome);
     controller.abort(timeoutError);
   };
-  timer = setTimeout(() => {
+  const startTimer = () => {
+    if (controller.signal.aborted || deadlineReached) {
+      return;
+    }
+    if (remainingMs <= 0) {
+      reachDefaultDeadline();
+      return;
+    }
+    activeBudgetStartedAt = Date.now();
+    timer = setTimeout(() => {
+      timer = undefined;
+      remainingMs = 0;
+      reachDefaultDeadline();
+    }, remainingMs);
+    timer.unref?.();
+  };
+  const pauseTimer = () => {
+    if (timer === undefined) {
+      return;
+    }
+    clearTimeout(timer);
     timer = undefined;
-    reachDefaultDeadline();
-  }, params.timeoutMs);
-  timer.unref?.();
+    remainingMs = Math.max(0, remainingMs - (Date.now() - activeBudgetStartedAt));
+    if (remainingMs <= 0) {
+      reachDefaultDeadline();
+    }
+  };
+  const scope: MemorySearchDeadlineScope = {
+    suspend: async <R>(run: () => Promise<R>): Promise<R> => {
+      if (suspendDepth === 0) {
+        pauseTimer();
+      }
+      suspendDepth += 1;
+      try {
+        return await run();
+      } finally {
+        suspendDepth -= 1;
+        if (suspendDepth === 0) {
+          startTimer();
+        }
+      }
+    },
+  };
+  startTimer();
   const parentSignal = params.parentSignal;
   const parentAbortPromise = parentSignal
     ? new Promise<typeof parentAbortOutcome>((resolve) => {
@@ -73,7 +134,9 @@ export async function runMemorySearchWithDeadline<T>(params: {
         removeParentAbort = () => parentSignal.removeEventListener("abort", onAbort);
       })
     : undefined;
-  const task = Promise.resolve().then(() => params.run(controller.signal));
+  const task = memorySearchDeadlineScope.run(scope, () =>
+    Promise.resolve().then(() => params.run(controller.signal)),
+  );
   task.catch(() => undefined);
 
   try {
@@ -89,7 +152,7 @@ export async function runMemorySearchWithDeadline<T>(params: {
     if (parentSignal?.aborted) {
       throw resolveMemorySearchAbortError(parentSignal);
     }
-    if (timer !== undefined && Date.now() - deadlineStartedAt >= params.timeoutMs) {
+    if (timer !== undefined && Date.now() - activeBudgetStartedAt >= remainingMs) {
       reachDefaultDeadline();
       throw timeoutError;
     }

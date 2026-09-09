@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { isMemorySearchDeadlineError, runMemorySearchWithDeadline } from "./search-deadline.js";
+import {
+  isMemorySearchDeadlineError,
+  runMemorySearchWithDeadline,
+  runWithMemorySearchDeadlineSuspended,
+} from "./search-deadline.js";
 
 describe("runMemorySearchWithDeadline", () => {
   afterEach(() => {
@@ -123,6 +127,58 @@ describe("runMemorySearchWithDeadline", () => {
     await resultAssertion;
     expect(taskSignal?.reason).toBe(reason);
     expect(removeEventListener).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("excludes a suspended owner phase from the search budget", async () => {
+    vi.useFakeTimers();
+    let finishSuspendedPhase: (() => void) | undefined;
+    let markSearchResumed: (() => void) | undefined;
+    const searchResumed = new Promise<void>((resolve) => {
+      markSearchResumed = resolve;
+    });
+    const result = runMemorySearchWithDeadline({
+      timeoutMs: 15_000,
+      run: async () => {
+        await runWithMemorySearchDeadlineSuspended(
+          async () =>
+            await new Promise<void>((resolve) => {
+              finishSuspendedPhase = resolve;
+            }),
+        );
+        markSearchResumed?.();
+        return await new Promise<string>(() => {});
+      },
+    });
+    const resultAssertion = expect(result).rejects.toThrow("memory_search timed out after 15s");
+    await Promise.resolve();
+
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(vi.getTimerCount()).toBe(0);
+    finishSuspendedPhase?.();
+    await searchResumed;
+    expect(vi.getTimerCount()).toBe(1);
+
+    await vi.advanceTimersByTimeAsync(15_000);
+    await resultAssertion;
+  });
+
+  it("preserves caller cancellation during a suspended owner phase", async () => {
+    vi.useFakeTimers();
+    const parent = new AbortController();
+    const reason = new Error("agent run cancelled during service startup");
+    const result = runMemorySearchWithDeadline({
+      timeoutMs: 15_000,
+      parentSignal: parent.signal,
+      run: async () =>
+        await runWithMemorySearchDeadlineSuspended(async () => await new Promise(() => {})),
+    });
+    const resultAssertion = expect(result).rejects.toBe(reason);
+    await Promise.resolve();
+
+    parent.abort(reason);
+
+    await resultAssertion;
     expect(vi.getTimerCount()).toBe(0);
   });
 

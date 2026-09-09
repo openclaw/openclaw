@@ -10,6 +10,7 @@ import {
   resolveEmbeddingProviderFallbackRemote,
   resolveEmbeddingProviderIndexIdentity,
 } from "./embeddings.js";
+import { runMemorySearchWithDeadline } from "./search-deadline.js";
 
 const mockEmbeddingRegistry = vi.hoisted(() => ({
   genericAdapters: [] as EmbeddingProviderAdapter[],
@@ -118,6 +119,7 @@ describe("createEmbeddingProvider", () => {
 
   afterEach(() => {
     clearTestMemoryAdapters();
+    vi.useRealTimers();
   });
 
   it("uses the provider's canonical model for cold identity and creation without inventing a cache key", async () => {
@@ -270,7 +272,7 @@ describe("createEmbeddingProvider", () => {
           remote: sharedRemote,
           config,
           agentDir: primaryOptions.agentDir,
-          acquireLocalService: primaryOptions.acquireLocalService,
+          acquireLocalService: expect.any(Function),
           model: "text-embedding-3-small",
           inputType: "passage",
           queryInputType: "query",
@@ -375,12 +377,8 @@ describe("createEmbeddingProvider", () => {
       id: "openai-compatible",
       create: async (options) => {
         expect(
-          (
-            options as typeof options & {
-              acquireLocalService?: typeof mockEmbeddingRegistry.acquireLocalService;
-            }
-          ).acquireLocalService,
-        ).toBe(mockEmbeddingRegistry.acquireLocalService);
+          (options as typeof options & { acquireLocalService?: unknown }).acquireLocalService,
+        ).toEqual(expect.any(Function));
         return {
           provider: genericProvider,
         };
@@ -427,7 +425,67 @@ describe("createEmbeddingProvider", () => {
       createEmbeddingProvider(createOptions("openai-compatible", secondAcquire)),
     ]);
 
-    expect(observedHooks).toEqual([firstAcquire, secondAcquire]);
+    expect(observedHooks).toHaveLength(2);
+    const [observedFirst, observedSecond] = observedHooks as Array<
+      typeof mockEmbeddingRegistry.acquireLocalService
+    >;
+    await observedFirst?.({ providerId: "first", baseUrl: "http://127.0.0.1:1" });
+    await observedSecond?.({ providerId: "second", baseUrl: "http://127.0.0.1:2" });
+    expect(firstAcquire).toHaveBeenCalledOnce();
+    expect(secondAcquire).toHaveBeenCalledOnce();
+  });
+
+  it("lets managed local-service startup finish before charging the search deadline", async () => {
+    vi.useFakeTimers();
+    let finishStartup: (() => void) | undefined;
+    const acquireLocalService = vi.fn(
+      async () =>
+        await new Promise<{ release: () => void }>((resolve) => {
+          finishStartup = () => resolve({ release: vi.fn() });
+        }),
+    );
+    registerGenericEmbeddingProvider({
+      id: "openai-compatible",
+      create: async (options) => {
+        const acquire = (
+          options as typeof options & { acquireLocalService: typeof acquireLocalService }
+        ).acquireLocalService;
+        return {
+          provider: {
+            id: "generic",
+            model: "generic-model",
+            embed: async (_input, callOptions) => {
+              const lease = await acquire(
+                { providerId: "managed", baseUrl: "http://127.0.0.1:11434" },
+                callOptions?.signal,
+              );
+              lease?.release();
+              return [1];
+            },
+            embedBatch: async (inputs) => inputs.map(() => [1]),
+          },
+        };
+      },
+    });
+    const { provider } = await createEmbeddingProvider(
+      createOptions("openai-compatible", acquireLocalService),
+    );
+    if (!provider) {
+      throw new Error("expected embedding provider");
+    }
+
+    const result = runMemorySearchWithDeadline({
+      timeoutMs: 15_000,
+      run: async (signal) => await provider.embed("hello", { signal }),
+    });
+    const resultAssertion = expect(result).resolves.toEqual([1]);
+    await Promise.resolve();
+
+    await vi.advanceTimersByTimeAsync(30_000);
+    finishStartup?.();
+
+    await resultAssertion;
+    expect(acquireLocalService).toHaveBeenCalledOnce();
   });
 
   it("keeps memory-specific providers authoritative during dual registration", async () => {
