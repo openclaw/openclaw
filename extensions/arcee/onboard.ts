@@ -4,6 +4,7 @@
  */
 import {
   applyProviderConfigWithModelCatalogPreset,
+  applyProviderConnectionConfig,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/provider-onboard";
 import { ARCEE_BASE_URL } from "./models.js";
@@ -51,15 +52,15 @@ export function applyArceeOpenRouterConfig(cfg: OpenClawConfig): OpenClawConfig 
 }
 
 export function applyArceeOnboardConfig(cfg: OpenClawConfig): OpenClawConfig {
-  return applyProviderConfigWithModelCatalogPreset(cfg, {
+  return applyProviderConnectionConfig(cfg, {
     ...ARCEE_PRESET,
-    catalogModels: cfg.models?.mode === "replace" ? buildArceeCatalogModels() : [],
+    catalogModels: buildArceeCatalogModels,
   });
 }
 
 export function applyArceeOpenRouterOnboardConfig(cfg: OpenClawConfig): OpenClawConfig {
-  return applyProviderConfigWithModelCatalogPreset(cfg, {
+  return applyProviderConnectionConfig(cfg, {
     ...ARCEE_OPENROUTER_PRESET,
-    catalogModels: cfg.models?.mode === "replace" ? buildArceeOpenRouterCatalogModels() : [],
+    catalogModels: buildArceeOpenRouterCatalogModels,
   });
 }

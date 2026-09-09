@@ -213,6 +213,23 @@ describe("arcee provider plugin", () => {
       expect(input).toEqual({ models: { mode } });
     });
 
+    it("keeps later replace defaults independent of edits to generated rows", async () => {
+      const first = await onboard({ models: { mode: "replace" } });
+      const generated = first.models?.providers?.arcee?.models?.[0];
+      if (!generated) {
+        throw new Error("Expected a generated Arcee model");
+      }
+      const originalCost = generated.cost.input;
+      onTestFinished(() => {
+        generated.cost.input = originalCost;
+      });
+      generated.cost.input = originalCost + 100;
+
+      const later = await onboard({ models: { mode: "replace" } });
+
+      expect(later.models?.providers?.arcee?.models?.[0]?.cost.input).toBeCloseTo(originalCost);
+    });
+
     it.each([
       { mode: undefined, addedIds: [] },
       { mode: "merge" as const, addedIds: [] },
