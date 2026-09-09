@@ -321,6 +321,68 @@ describe("completion-runtime", () => {
     },
   );
 
+  it("recognizes a portable [[ -f ... ]] home-relative source line as installed and preserves it", async () => {
+    const homeDir = tempDirs.make("openclaw-portable-completion-home-");
+    const stateDir = path.join(homeDir, ".openclaw");
+
+    await withEnvAsync(
+      {
+        HOME: homeDir,
+        USERPROFILE: homeDir,
+        OPENCLAW_STATE_DIR: stateDir,
+        XDG_CONFIG_HOME: undefined,
+        ZDOTDIR: undefined,
+      },
+      async () => {
+        const cachePath = resolveCompletionCachePath("bash", "openclaw");
+        expect(cachePath.startsWith(homeDir)).toBe(true);
+        await fs.mkdir(path.dirname(cachePath), { recursive: true });
+        await fs.writeFile(cachePath, "complete -W 'status' openclaw\n", "utf-8");
+
+        const portablePath = `\${HOME}${cachePath.slice(homeDir.length)}`;
+        const portableLine = `[[ -f "${portablePath}" ]] && source "${portablePath}"`;
+        const before = `# dotfiles-managed\n${portableLine}\n`;
+        const profilePath = path.join(homeDir, ".bashrc");
+        await fs.writeFile(profilePath, before, "utf-8");
+
+        await expect(isCompletionInstalled("bash", "openclaw")).resolves.toBe(true);
+
+        await installCompletion("bash", true, "openclaw");
+
+        await expect(fs.readFile(profilePath, "utf-8")).resolves.toBe(before);
+      },
+    );
+  });
+
+  it("rejects portable source lines that point at a different completion file", async () => {
+    const homeDir = tempDirs.make("openclaw-portable-completion-other-");
+    const stateDir = path.join(homeDir, ".openclaw");
+
+    await withEnvAsync(
+      {
+        HOME: homeDir,
+        USERPROFILE: homeDir,
+        OPENCLAW_STATE_DIR: stateDir,
+        XDG_CONFIG_HOME: undefined,
+        ZDOTDIR: undefined,
+      },
+      async () => {
+        const cachePath = resolveCompletionCachePath("bash", "openclaw");
+        await fs.mkdir(path.dirname(cachePath), { recursive: true });
+        await fs.writeFile(cachePath, "complete -W 'status' openclaw\n", "utf-8");
+
+        const profilePath = path.join(homeDir, ".bashrc");
+        await fs.writeFile(
+          profilePath,
+          '[[ -f "${HOME}/.openclaw/completions/other.bash" ]] && source "${HOME}/.openclaw/completions/other.bash"\n',
+          "utf-8",
+        );
+
+        await expect(isCompletionInstalled("bash", "openclaw")).resolves.toBe(false);
+      },
+    );
+  });
+
   it("prints the same canonical reload hint used by Doctor and onboarding", async () => {
     await withBashCompletionHome(async ({ homeDir }) => {
       const cachePath = resolveCompletionCachePath("zsh", "openclaw");

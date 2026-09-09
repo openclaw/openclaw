@@ -159,6 +159,54 @@ function isCompletionProfileHeader(line: string): boolean {
   return line.trim() === "# OpenClaw Completion";
 }
 
+/**
+ * Expands a leading portable home reference (`~/`, `$HOME/`, `${HOME}/`)
+ * against the given home directory. Anything else is returned unchanged.
+ */
+function expandPortableHomePrefix(value: string, home: string): string {
+  if (value.startsWith("~/")) {
+    return `${home}/${value.slice(2)}`;
+  }
+  if (value.startsWith("$HOME/")) {
+    return `${home}/${value.slice(6)}`;
+  }
+  if (value.startsWith("${HOME}/")) {
+    return `${home}/${value.slice(8)}`;
+  }
+  return value;
+}
+
+const PORTABLE_COMPLETION_SOURCE_PATTERN =
+  /^\[\[\s+-f\s+(?:"([^"]+)"|'([^']+)'|(\S+))\s+\]\]\s*&&\s*source\s+(?:"([^"]+)"|'([^']+)'|(\S+))\s*$/u;
+
+/**
+ * Recognizes a portable, home-relative guarded source line for the exact
+ * cached completion file, e.g.
+ * `[[ -f "${HOME}/.openclaw/completions/openclaw.bash" ]] && source "..."`.
+ * Such lines are user-owned (dotfile managers): detection treats them as
+ * installed, and installation preserves them instead of appending a copy.
+ */
+export function isPortableCompletionSourceLine(
+  line: string,
+  cachePath: string,
+  home: string = process.env.HOME ?? os.homedir(),
+): boolean {
+  const trimmed = line.trim();
+  const match = PORTABLE_COMPLETION_SOURCE_PATTERN.exec(trimmed);
+  if (!match) {
+    return false;
+  }
+  const guardPath = match[1] ?? match[2] ?? match[3] ?? "";
+  const sourcePath = match[4] ?? match[5] ?? match[6] ?? "";
+  if (!guardPath || !sourcePath) {
+    return false;
+  }
+  const expandedGuard = path.normalize(expandPortableHomePrefix(guardPath, home));
+  const expandedSource = path.normalize(expandPortableHomePrefix(sourcePath, home));
+  const normalizedCache = path.normalize(cachePath);
+  return expandedGuard === normalizedCache && expandedSource === normalizedCache;
+}
+
 function isCompletionProfileLine(line: string, binName: string, cachePath: string): boolean {
   if (isSlowDynamicCompletionLine(line, binName)) {
     return true;
@@ -286,6 +334,17 @@ function updateCompletionProfile(
   const lines = content.split("\n");
   const filtered: string[] = [];
   let hadExisting = false;
+
+  // A portable home-relative source line is user-owned (dotfile managers):
+  // recognizing it as configured must preserve it, not replace it with an
+  // absolute-path copy.
+  if (
+    lines.some((line) =>
+      isPortableCompletionSourceLine(line, cachePath, process.env.HOME ?? os.homedir()),
+    )
+  ) {
+    return { next: content, changed: false, hadExisting: true };
+  }
 
   for (let i = 0; i < lines.length; i += 1) {
     const line = lines[i] ?? "";
@@ -422,6 +481,7 @@ export function resolveCompletionProfileHint(shell: CompletionShell): string {
 export async function isCompletionInstalled(
   shell: CompletionShell,
   binName = "openclaw",
+  options: { home?: string } = {},
 ): Promise<boolean> {
   const profilePath = resolveCompletionProfilePath(shell);
 
@@ -431,8 +491,13 @@ export async function isCompletionInstalled(
   const cachePath = resolveCompletionCachePath(shell, binName);
   const { content } = await readCompletionProfile(profilePath, shell);
   const lines = content.split("\n");
+  const home = options.home ?? process.env.HOME ?? os.homedir();
   // A marker does not install completion; retain missing-cache source lines for doctor repair.
-  return lines.some((line) => isCompletionProfileLine(line, binName, cachePath));
+  return lines.some(
+    (line) =>
+      isCompletionProfileLine(line, binName, cachePath) ||
+      isPortableCompletionSourceLine(line, cachePath, home),
+  );
 }
 
 /**
