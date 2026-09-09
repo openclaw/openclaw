@@ -6,10 +6,21 @@ export const MEMORY_INDEX_CHUNKS_TABLE = "memory_index_chunks";
 export const MEMORY_INDEX_FTS_TABLE = "memory_index_chunks_fts";
 export const MEMORY_INDEX_PATHS_FTS_TABLE = "memory_index_paths_fts";
 
-type FtsTableSchemaStatus = "missing" | "matching" | "mismatched" | "not-fts";
+export type FtsTableSchemaStatus = "missing" | "matching" | "mismatched" | "not-fts";
+
+export const MEMORY_INDEX_FTS_COLUMNS = [
+  "text",
+  "id",
+  "path",
+  "source",
+  "model",
+  "start_line",
+  "end_line",
+] as const;
+export const MEMORY_INDEX_PATHS_FTS_COLUMNS = ["path", "source"] as const;
 
 /** Check every persisted FTS column declaration and supported table option. */
-function ftsTableMatchesSchema(params: {
+export function ftsTableMatchesSchema(params: {
   db: DatabaseSync;
   tableName: string;
   expectedColumns: readonly string[];
@@ -166,7 +177,7 @@ export function ensureMemoryChunkFtsSchema(params: {
     dropMismatchedFtsTable({
       db: params.db,
       tableName: params.ftsTable,
-      expectedColumns: ["text", "id", "path", "source", "model", "start_line", "end_line"],
+      expectedColumns: MEMORY_INDEX_FTS_COLUMNS,
       tokenizeClause: params.tokenizeClause,
     });
     params.db.exec(
@@ -241,7 +252,7 @@ export function ensureMemoryPathFtsSchema(params: {
     dropMismatchedFtsTable({
       db: params.db,
       tableName: MEMORY_INDEX_PATHS_FTS_TABLE,
-      expectedColumns: ["path", "source"],
+      expectedColumns: MEMORY_INDEX_PATHS_FTS_COLUMNS,
       tokenizeClause: params.tokenizeClause,
     });
     params.db.exec(`

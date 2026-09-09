@@ -234,6 +234,39 @@ describe("memory runtime handles", () => {
     });
   });
 
+  it.each([
+    { reusable: false, expectedPurpose: "cli" },
+    { reusable: true, expectedPurpose: "search" },
+  ] as const)(
+    "negotiates reusable search purpose without breaking legacy runtimes: $reusable",
+    async ({ reusable, expectedPurpose }) => {
+      const runtime = createRuntime();
+      const reusableSearch = vi.fn(async () => ({ manager: null, error: "no index" }));
+      if (reusable) {
+        Object.assign(runtime, { getReusableMemorySearchManager: reusableSearch });
+      }
+      const { registry } = createRegistry(runtime);
+      mocks.loadPluginRegistryHandle.mockReturnValue(registry);
+
+      await getActiveMemorySearchManagerCore({
+        cfg: memoryConfig,
+        agentId: "main",
+        purpose: "search",
+      });
+
+      if (reusable) {
+        expect(reusableSearch).toHaveBeenCalledWith({ cfg: memoryConfig, agentId: "main" });
+        expect(runtime.getMemorySearchManager).not.toHaveBeenCalled();
+      } else {
+        expect(runtime.getMemorySearchManager).toHaveBeenCalledWith({
+          cfg: memoryConfig,
+          agentId: "main",
+          purpose: expectedPurpose,
+        });
+      }
+    },
+  );
+
   it("tracks standalone managers without activating config-only lookups and rearms reused handles", async () => {
     const { registry, runtime } = createRegistry();
     mocks.loadPluginRegistryHandle.mockReturnValue(registry);

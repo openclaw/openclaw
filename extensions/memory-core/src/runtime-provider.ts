@@ -29,6 +29,14 @@ export function createMemoryRuntime(host: MemoryCoreRuntimeHost = {}) {
         error,
       };
     },
+    async getReusableMemorySearchManager(params) {
+      const { manager, debug, error } = await getMemorySearchManager({
+        ...params,
+        purpose: "search",
+        ...(host.acquireLocalService ? { acquireLocalService: host.acquireLocalService } : {}),
+      });
+      return { manager, debug, error };
+    },
     resolveMemoryBackendConfig,
     async authorizeSearchHits(params) {
       const { filterMemorySearchHitsBySessionVisibility } =

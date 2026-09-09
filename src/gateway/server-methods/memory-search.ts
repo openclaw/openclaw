@@ -66,6 +66,16 @@ function hasUsableAgentIdInput(value: string): boolean {
   return normalizeAgentId(`${value}a`) !== "a";
 }
 
+function isClosedMemorySearchManagerError(error: unknown): boolean {
+  const message = formatErrorMessage(error).toLowerCase();
+  return (
+    message.includes("database is not open") ||
+    message.includes("database connection is not open") ||
+    message.includes("database handle is closed") ||
+    message.includes("memory index manager is closed")
+  );
+}
+
 /** Operator-scoped search over the active agent memory index. */
 export const memorySearchHandlers: GatewayRequestHandlers = {
   "memory.search": async ({ params, respond, context }) => {
@@ -125,12 +135,12 @@ export const memorySearchHandlers: GatewayRequestHandlers = {
     }
     let acquired: Awaited<ReturnType<typeof getActiveMemorySearchManagerCore>>;
     try {
-      // Use the transient CLI lifecycle so request cleanup cannot close a shared manager.
-      // manager.search owns the same lazy/on-search sync behavior as the existing CLI path.
+      // Gateway searches share one query-only reader per agent/config identity.
+      // Memory Core prepares missing or obsolete state through its writer before returning it.
       acquired = await getActiveMemorySearchManagerCore({
         cfg,
         agentId,
-        purpose: "cli",
+        purpose: "search",
       });
     } catch (error) {
       respond(
@@ -143,7 +153,12 @@ export const memorySearchHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const { manager, error: acquireError } = acquired;
+    let { manager } = acquired;
+    const transientManagers = new Set<MemorySearchManager>();
+    if (acquired.transient && manager) {
+      transientManagers.add(manager);
+    }
+    const { error: acquireError } = acquired;
     if (!manager) {
       respond(
         false,
@@ -153,15 +168,44 @@ export const memorySearchHandlers: GatewayRequestHandlers = {
       return;
     }
 
+    const searchOnce = async () => {
+      if (!manager) {
+        throw new Error("memory search unavailable");
+      }
+      return {
+        results: await manager.search(query, searchOptions),
+        status: manager.status(),
+      };
+    };
+
     try {
-      const results = await manager.search(query, searchOptions);
-      const status = manager.status();
+      let searched;
+      try {
+        searched = await searchOnce();
+      } catch (error) {
+        if (!isClosedMemorySearchManagerError(error)) {
+          throw error;
+        }
+        const refreshed = await getActiveMemorySearchManagerCore({
+          cfg,
+          agentId,
+          purpose: "search",
+        });
+        if (!refreshed.manager) {
+          throw new Error(refreshed.error ?? "memory search unavailable", { cause: error });
+        }
+        manager = refreshed.manager;
+        if (refreshed.transient) {
+          transientManagers.add(manager);
+        }
+        searched = await searchOnce();
+      }
       const payload: MemorySearchResponse = {
         agentId,
-        provider: status.provider,
-        searchMode: resolveSearchMode(status),
-        results,
-        ...resolveMemorySearchStaleness(status, agentId),
+        provider: searched.status.provider,
+        searchMode: resolveSearchMode(searched.status),
+        results: searched.results,
+        ...resolveMemorySearchStaleness(searched.status, agentId),
       };
       respond(true, payload, undefined);
     } catch (error) {
@@ -171,7 +215,11 @@ export const memorySearchHandlers: GatewayRequestHandlers = {
         errorShape(ErrorCodes.UNAVAILABLE, `memory search failed: ${formatErrorMessage(error)}`),
       );
     } finally {
-      await manager.close?.().catch(() => {});
+      await Promise.all(
+        Array.from(transientManagers, async (transientManager) => {
+          await transientManager.close?.().catch(() => undefined);
+        }),
+      );
     }
   },
 };

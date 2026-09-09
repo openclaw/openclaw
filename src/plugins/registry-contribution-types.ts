@@ -216,6 +216,16 @@ export type RegisteredMemorySearchManager = Omit<MemorySearchManager, "readFile"
 
 type MemoryRuntimeBackendConfig = { backend: "builtin" };
 
+type MemorySearchManagerAcquisition = {
+  manager: RegisteredMemorySearchManager | null;
+  debug?: {
+    backend?: "builtin";
+    purpose?: "default" | "status" | "cli" | "search";
+    managerMs?: number;
+  };
+  error?: string;
+};
+
 export type MemoryPluginRuntime = {
   getMemorySearchManager(params: {
     cfg: OpenClawConfig;
@@ -223,15 +233,13 @@ export type MemoryPluginRuntime = {
     purpose?: "default" | "status" | "cli";
     /** Request a read-only source freshness scan; runtimes may ignore unsupported diagnostics. */
     inspectSources?: boolean;
-  }): Promise<{
-    manager: RegisteredMemorySearchManager | null;
-    debug?: {
-      backend?: "builtin";
-      purpose?: "default" | "status" | "cli";
-      managerMs?: number;
-    };
-    error?: string;
-  }>;
+  }): Promise<MemorySearchManagerAcquisition>;
+  /** Optional reusable query-only reader; absent runtimes retain transient CLI acquisition. */
+  getReusableMemorySearchManager?(params: {
+    cfg: OpenClawConfig;
+    agentId: string;
+    inspectSources?: boolean;
+  }): Promise<MemorySearchManagerAcquisition>;
   resolveMemoryBackendConfig(params: {
     cfg: OpenClawConfig;
     agentId: string;

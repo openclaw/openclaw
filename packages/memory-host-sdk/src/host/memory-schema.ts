@@ -34,11 +34,15 @@ export {
 export {
   dropMemoryPathFtsTriggers,
   ensureMemoryPathFtsTriggers,
+  ftsTableMatchesSchema,
+  MEMORY_INDEX_FTS_COLUMNS,
   MEMORY_INDEX_CHUNKS_TABLE,
   MEMORY_INDEX_FTS_TABLE,
+  MEMORY_INDEX_PATHS_FTS_COLUMNS,
   MEMORY_INDEX_PATHS_FTS_TABLE,
   MEMORY_INDEX_SOURCES_TABLE,
   MEMORY_PATH_FTS_TRIGGER_DEFINITIONS,
+  type FtsTableSchemaStatus,
 } from "./memory-schema-fts.js";
 export {
   ensureMemoryChunkProvenance,

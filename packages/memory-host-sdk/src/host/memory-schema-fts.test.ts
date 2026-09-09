@@ -1,9 +1,47 @@
 // Memory FTS tests cover canonical and shipped custom index lifecycle.
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
+import { ftsTableMatchesSchema, MEMORY_INDEX_FTS_COLUMNS } from "./memory-schema-fts.js";
 import { ensureMemoryIndexSchema } from "./memory-schema.js";
 
 describe("memory index FTS lifecycle", () => {
+  it.each([
+    { name: "missing", definition: undefined, expected: "missing" },
+    {
+      name: "ordinary",
+      definition: "CREATE TABLE memory_index_chunks_fts(wrong TEXT)",
+      expected: "not-fts",
+    },
+    {
+      name: "wrong",
+      definition: "CREATE VIRTUAL TABLE memory_index_chunks_fts USING fts5(wrong)",
+      expected: "mismatched",
+    },
+    {
+      name: "contentless",
+      definition:
+        "CREATE VIRTUAL TABLE memory_index_chunks_fts USING fts5(text, id UNINDEXED, path UNINDEXED, source UNINDEXED, model UNINDEXED, start_line UNINDEXED, end_line UNINDEXED, content='')",
+      expected: "mismatched",
+    },
+  ] as const)("reports a $name persisted body schema as $expected", ({ definition, expected }) => {
+    const db = new DatabaseSync(":memory:");
+    try {
+      if (definition) {
+        db.exec(definition);
+      }
+      expect(
+        ftsTableMatchesSchema({
+          db,
+          tableName: "memory_index_chunks_fts",
+          expectedColumns: MEMORY_INDEX_FTS_COLUMNS,
+          tokenizeClause: "",
+        }),
+      ).toBe(expected);
+    } finally {
+      db.close();
+    }
+  });
+
   it.each([
     { name: "canonical", ftsTable: undefined },
     { name: "custom", ftsTable: "chunks_fts" },

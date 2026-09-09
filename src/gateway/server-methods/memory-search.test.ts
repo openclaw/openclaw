@@ -111,8 +111,72 @@ describe("memory.search gateway method", () => {
       maxResults: expected,
       minScore: 0.42,
     });
+    expect(manager.close).not.toHaveBeenCalled();
+  });
+
+  it("keeps repeated Gateway searches on the shared reader lifecycle", async () => {
+    const cfg = createConfig(testState.workspaceDir);
+    const manager = createStubManager();
+    getActiveMemorySearchManagerCore.mockResolvedValue({ manager });
+
+    await invokeMemorySearch({ query: "first" }, cfg);
+    await invokeMemorySearch({ query: "second" }, cfg);
+
+    expect(getActiveMemorySearchManagerCore).toHaveBeenCalledTimes(2);
+    expect(getActiveMemorySearchManagerCore).toHaveBeenNthCalledWith(1, {
+      cfg,
+      agentId: "main",
+      purpose: "search",
+    });
+    expect(getActiveMemorySearchManagerCore).toHaveBeenNthCalledWith(2, {
+      cfg,
+      agentId: "main",
+      purpose: "search",
+    });
+    expect(manager.search).toHaveBeenCalledTimes(2);
+    expect(manager.close).not.toHaveBeenCalled();
+  });
+
+  it("closes a legacy runtime's transient CLI manager after the Gateway request", async () => {
+    const cfg = createConfig(testState.workspaceDir);
+    const manager = createStubManager();
+    getActiveMemorySearchManagerCore.mockResolvedValue({ manager, transient: true });
+
+    await invokeMemorySearch({ query: "legacy" }, cfg);
+
+    expect(manager.search).toHaveBeenCalledOnce();
     expect(manager.close).toHaveBeenCalledOnce();
   });
+
+  it.each(["search", "status"] as const)(
+    "reacquires once when reader replacement closes the manager during %s",
+    async (phase) => {
+      const cfg = createConfig(testState.workspaceDir);
+      const retired = createStubManager();
+      const replacement = createStubManager();
+      if (phase === "search") {
+        retired.search.mockRejectedValueOnce(new Error("Memory index manager is closed"));
+      } else {
+        retired.status.mockImplementationOnce(() => {
+          throw new Error("Database handle is closed");
+        });
+      }
+      replacement.search.mockResolvedValueOnce([{ path: "memory/fresh.md" } as MemorySearchResult]);
+      getActiveMemorySearchManagerCore
+        .mockResolvedValueOnce({ manager: retired })
+        .mockResolvedValueOnce({ manager: replacement });
+
+      const respond = await invokeMemorySearch({ query: "lantern" }, cfg);
+
+      expect(getActiveMemorySearchManagerCore).toHaveBeenCalledTimes(2);
+      expect(replacement.search).toHaveBeenCalledOnce();
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({ results: [{ path: "memory/fresh.md" }] }),
+        undefined,
+      );
+    },
+  );
 
   it("rejects an unknown agentId without acquiring a manager", async () => {
     const cfg = createConfig(testState.workspaceDir);
@@ -219,7 +283,7 @@ describe("memory.search gateway method", () => {
     expect(getActiveMemorySearchManagerCore).toHaveBeenCalledWith({
       cfg,
       agentId: configured,
-      purpose: "cli",
+      purpose: "search",
     });
     expect(resolveDefaultAgentId).not.toHaveBeenCalled();
     expect(respond).toHaveBeenCalledWith(

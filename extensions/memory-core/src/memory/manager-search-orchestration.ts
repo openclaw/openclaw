@@ -20,6 +20,7 @@ import {
   type HybridSearchResult,
 } from "./hybrid.js";
 import { applyImportanceMultiplier } from "./importance.js";
+import { assertMemorySearchFtsSchema, readMemoryDatabaseRevision } from "./manager-db.js";
 import { acquireMemoryIndexReadGeneration } from "./manager-index-generation-lease.js";
 import { MemoryKeywordRetrieval, type KeywordSearchHit } from "./manager-keyword-retrieval.js";
 import { runVectorKnnInSubprocess } from "./manager-search-knn-subprocess.js";
@@ -37,6 +38,76 @@ type MemoryIndexSearchOptions = NonNullable<Parameters<MemorySearchManager["sear
 
 export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
   protected abstract sessionWarm: Set<string>;
+
+  protected async prepareSearchReader(): Promise<void> {
+    readMemoryDatabaseRevision(this.db);
+    let keywordOnly = false;
+    const adoptedPublishedFallback = await this.adoptPublishedFallbackProviderIfMatched();
+    if (!adoptedPublishedFallback) {
+      try {
+        await this.ensureProviderInitialized();
+        keywordOnly = this.embeddingBootstrapFailure !== undefined && !this.provider;
+      } catch (err) {
+        if (await this.adoptPublishedFallbackProviderIfMatched()) {
+          keywordOnly = false;
+        } else {
+          if (this.providerRequirement.mode !== "optional") {
+            throw err;
+          }
+          this.markEmbeddingBootstrapFailure(err);
+          keywordOnly = true;
+        }
+      }
+    }
+    if (!keywordOnly) {
+      const initialIdentity = this.refreshIndexIdentityDirty({ providerKeyKnown: true });
+      if (initialIdentity.status !== "valid") {
+        await this.adoptPublishedFallbackProviderIfMatched();
+      }
+    }
+    const identity = keywordOnly
+      ? this.refreshKeywordFallbackIndexIdentity()
+      : this.refreshIndexIdentityDirty({ providerKeyKnown: true });
+    if (identity.status !== "valid") {
+      throw new Error(`Memory search index requires writer preparation: ${identity.reason}`);
+    }
+    if (this.hasPendingSourceRepair()) {
+      throw new Error("Memory search index requires source provenance repair");
+    }
+  }
+
+  private hasPendingSourceRepair(): boolean {
+    const rows = this.db
+      .prepare("SELECT DISTINCT source FROM memory_index_sources WHERE hash = ''")
+      // SAFETY: SQLite source values remain unknown until the literal checks below.
+      .all() as Array<{ source?: unknown }>;
+    return rows.some(
+      (row) =>
+        (row.source === "memory" && this.sources.has("memory")) ||
+        (row.source === "sessions" && this.sources.has("sessions")),
+    );
+  }
+
+  protected async revalidateForReuse(): Promise<boolean> {
+    if (this.closing || this.closed || !this.db.isOpen) {
+      return false;
+    }
+    if (this.purpose !== "search") {
+      return true;
+    }
+    try {
+      if (this.fts.enabled) {
+        assertMemorySearchFtsSchema({
+          db: this.db,
+          tokenizer: this.settings.store.fts.tokenizer,
+        });
+      }
+      await this.prepareSearchReader();
+      return true;
+    } catch {
+      return false;
+    }
+  }
 
   protected claimSessionWarmSync(sessionKey?: string): boolean {
     if (!this.settings.sync.onSessionStart) {
@@ -91,7 +162,7 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
         this.assertRequiredProviderAvailable("search");
       }
       let hasIndexedContent = this.hasIndexedContent();
-      if (!hasIndexedContent) {
+      if (!hasIndexedContent && this.purpose !== "search") {
         try {
           // A fresh process can receive its first search before background watch/session
           // syncs have built the index. Force one synchronous bootstrap so the first
@@ -185,6 +256,7 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
             providerKeyKnown: this.providerInitialized,
           });
       const shouldRepairIdentity =
+        this.purpose !== "search" &&
         hasIndexedContent &&
         (indexIdentity.status === "missing" ||
           (searchSyncEnabled &&

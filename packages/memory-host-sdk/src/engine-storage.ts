@@ -77,17 +77,21 @@ export {
   ensureMemoryIndexSchema,
   ensureMemoryRecallMetadataSchema,
   ensureMemoryPathFtsTriggers,
+  ftsTableMatchesSchema,
   MEMORY_EMBEDDING_CACHE_TABLE,
   MEMORY_INDEX_CHUNKS_TABLE,
+  MEMORY_INDEX_FTS_COLUMNS,
   MEMORY_INDEX_DERIVED_TABLES,
   MEMORY_INDEX_CHUNK_PROVENANCE_TABLE,
   MEMORY_INDEX_CHUNK_RECALL_METADATA_TABLE,
   MEMORY_INDEX_FTS_TABLE,
   MEMORY_INDEX_META_TABLE,
+  MEMORY_INDEX_PATHS_FTS_COLUMNS,
   MEMORY_INDEX_PATHS_FTS_TABLE,
   MEMORY_INDEX_SOURCES_TABLE,
   MEMORY_INDEX_STATE_TABLE,
   MEMORY_INDEX_VECTOR_TABLE,
+  type FtsTableSchemaStatus,
 } from "./host/memory-schema.js";
 export { loadSqliteVecExtension } from "./host/sqlite-vec.js";
 export {
