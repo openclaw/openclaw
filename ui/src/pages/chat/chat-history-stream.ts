@@ -231,6 +231,9 @@ export function applyHistoryRun(params: {
   if (!inFlightRunIsActive || state.chatRunId !== inFlightRunId) {
     return;
   }
+  // History can advance the leaf without replacing the active run. Its accepted
+  // in-flight identity retains terminal display ownership in that projection.
+  setChatRunOwner(state, inFlightRunId);
   const snapshotStartedAt =
     typeof run.startedAt === "number" && Number.isFinite(run.startedAt) ? run.startedAt : null;
   const liveText = sameRunContinued

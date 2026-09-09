@@ -1,7 +1,13 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { handleChatGatewayEvent, type ChatEventPayload } from "./chat-gateway.ts";
+import { resetChatHistoryProjection } from "./chat-history-state.ts";
 import type { ChatState } from "./chat-state-contract.ts";
+import { reduceChatSessionProjection } from "./history-merge.ts";
+import {
+  adoptStartedChatRun,
+  reconcileChatRunAfterSessionStatePublication,
+} from "./run-lifecycle.ts";
 
 type AbortDiagnosticState = ChatState & {
   chatRunStatus?: { phase: string; runId: string | null; sessionKey: string } | null;
@@ -121,6 +127,152 @@ describe("aborted chat diagnostics", () => {
       runId: "run-validation-abort",
     });
     expect(state.chatRunId).toBeNull();
+  });
+
+  it("retains a late error through an identity-incomplete active session publication", () => {
+    const state = createAbortDiagnosticState("run-list");
+    adoptStartedChatRun(state, "run-list", 100);
+    handleChatGatewayEvent(state, {
+      sessionKey: "main",
+      runId: "run-list",
+      state: "aborted",
+      seq: 30,
+    });
+    if (!state.sessionsResult) {
+      throw new Error("Expected the session inventory");
+    }
+    state.sessionsResult.sessions = [
+      {
+        key: "main",
+        kind: "direct",
+        updatedAt: 200,
+        hasActiveRun: true,
+        status: "running",
+        lastRunId: "run-list",
+      },
+    ];
+    reconcileChatRunAfterSessionStatePublication(state);
+    expect(state.lastLocalTerminalReconcile).toBeNull();
+    const diagnostic = {
+      sessionKey: "main",
+      runId: "run-list",
+      state: "error" as const,
+      seq: 1,
+      errorMessage: "Automations listed.\nCount: 2\nRestricted automation inventory.",
+    };
+    handleChatGatewayEvent(state, diagnostic);
+    expect(state.chatRunError).toEqual({
+      runId: "run-list",
+      summary: "Error: Automations listed.\nCount: 2\nRestricted automation inventory.",
+    });
+    state.chatRunError = null;
+    handleChatGatewayEvent(state, diagnostic);
+    expect(state.chatRunError).toBeNull();
+  });
+
+  it.each([
+    { name: "unknown active identities", activeRunIds: undefined, displays: true },
+    {
+      name: "same run with concurrent activity",
+      activeRunIds: ["run-list", "run-other"],
+      displays: true,
+    },
+    { name: "proven replacement run", activeRunIds: ["run-new"], displays: false },
+  ])("handles $name after the active-row tombstone is gone", ({ activeRunIds, displays }) => {
+    const state = createAbortDiagnosticState("run-list");
+    adoptStartedChatRun(state, "run-list", 100);
+    handleChatGatewayEvent(state, { sessionKey: "main", runId: "run-list", state: "aborted" });
+    if (!state.sessionsResult) {
+      throw new Error("Expected the session inventory");
+    }
+    state.sessionsResult.sessions = [
+      { key: "main", kind: "direct", updatedAt: 200, hasActiveRun: true, status: "running" },
+    ];
+    reconcileChatRunAfterSessionStatePublication(state);
+    expect(state.lastLocalTerminalReconcile).toBeNull();
+    state.sessionsResult.sessions = [
+      {
+        key: "main",
+        kind: "direct",
+        updatedAt: 300,
+        hasActiveRun: true,
+        status: "running",
+        activeRunIds,
+      },
+    ];
+    reconcileChatRunAfterSessionStatePublication(state);
+    handleChatGatewayEvent(state, {
+      sessionKey: "main",
+      runId: "run-list",
+      state: "error",
+      errorMessage: "Late diagnostic",
+    });
+    expect(state.chatRunError).toEqual(
+      displays ? { runId: "run-list", summary: "Error: Late diagnostic" } : null,
+    );
+  });
+
+  it.each(["reset", "branch", "durable session"] as const)(
+    "rejects the old run's error after a %s replacement",
+    (replacement) => {
+      const state = createAbortDiagnosticState("run-before-replacement");
+      state.currentSessionId = "session-before";
+      state.chatDisplayedLeafEntryId = "leaf-before";
+      adoptStartedChatRun(state, "run-before-replacement", 100);
+      handleChatGatewayEvent(state, {
+        sessionKey: "main",
+        runId: "run-before-replacement",
+        state: "aborted",
+      });
+      if (replacement === "reset") {
+        resetChatHistoryProjection(state);
+      } else {
+        if (replacement === "branch") {
+          state.chatDisplayedLeafEntryId = "leaf-after";
+        } else {
+          state.currentSessionId = "session-after";
+        }
+        reduceChatSessionProjection(state, { type: "snapshotLoaded", messages: [] });
+      }
+      handleChatGatewayEvent(state, {
+        sessionKey: "main",
+        runId: "run-before-replacement",
+        state: "error",
+        errorMessage: "Obsolete branch diagnostic",
+      });
+      expect(state.chatRunError).toBeNull();
+      expect(state.chatMessages).toEqual([]);
+      expect(state.chatRunId).toBeNull();
+      handleChatGatewayEvent(state, {
+        sessionKey: "main",
+        runId: "unseen-current-run",
+        state: "error",
+        errorMessage: "Current background diagnostic",
+      });
+      expect(state.chatRunError).toEqual({
+        runId: "unseen-current-run",
+        summary: "Error: Current background diagnostic",
+      });
+    },
+  );
+
+  it("retains known old-run provenance across two resets", () => {
+    const state = createAbortDiagnosticState("run-first");
+    for (const runId of ["run-first", "run-second"]) {
+      adoptStartedChatRun(state, runId, 100);
+      handleChatGatewayEvent(state, { sessionKey: "main", runId, state: "aborted" });
+      resetChatHistoryProjection(state);
+    }
+    for (const runId of ["run-first", "run-second"]) {
+      handleChatGatewayEvent(state, {
+        sessionKey: "main",
+        runId,
+        state: "error",
+        errorMessage: "Old reset diagnostic",
+      });
+    }
+    expect(state.chatRunError).toBeNull();
+    expect(state.chatMessages).toEqual([]);
   });
 
   it("does not publish a late aborted diagnostic over a newer active run", () => {

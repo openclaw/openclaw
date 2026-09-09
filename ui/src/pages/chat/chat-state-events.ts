@@ -51,7 +51,9 @@ import {
   retireSessionWorkspaceCheckout,
 } from "./components/chat-session-workspace.ts";
 import {
+  captureChatProjectionScope,
   getChatSessionProjection,
+  publishChatSessionProjection,
   readChatSessionProjectionScope,
   reduceChatSessionProjection,
 } from "./history-merge.ts";
@@ -393,6 +395,9 @@ function handleSessionsChangedEvent(
     reduceChatSessionProjection(state, { type: "sessionReset" }, { scope });
   }
   if (changesBranchTopology) {
+    if (!resetsSelectedSession) {
+      publishChatSessionProjection(state, getChatSessionProjection(state), { resetScope: true });
+    }
     retireChatBranchRequests(state);
     state.chatBranches = [];
     state.chatBranchesSessionKey = null;
@@ -639,6 +644,7 @@ export function handlePageGatewayEvent(
         : terminalPayload.agentId,
     );
     const connectionEpoch = state.connectionEpoch;
+    const projectionScopeIsCurrent = captureChatProjectionScope(state, terminalPayload.runId);
     const queued = readDeliveredQueuedChatSendForRun(state, terminalPayload.runId, scope)?.item;
     const ownerIsCurrent = captureOutboxPayloadOwner(state);
     // Keep the complete user display pinned before applying the terminal, but
@@ -647,7 +653,12 @@ export function handlePageGatewayEvent(
       retainUntilConsumed: Boolean(queued && requiresChatInputConsumption(queued)),
     });
     const finish = (outcome: Awaited<typeof retirement>) => {
-      if (outcome !== "stale" && state.connectionEpoch === connectionEpoch && ownerIsCurrent()) {
+      if (
+        outcome !== "stale" &&
+        state.connectionEpoch === connectionEpoch &&
+        ownerIsCurrent() &&
+        projectionScopeIsCurrent()
+      ) {
         apply();
       }
     };

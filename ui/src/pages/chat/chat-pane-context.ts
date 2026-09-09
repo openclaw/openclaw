@@ -46,6 +46,7 @@ import { requestChatPageUpdate } from "./chat-state-render.ts";
 import { resolveChatAgentId, selectedChatSessionRow } from "./chat-state-route.ts";
 import { releaseChatMediaResourceSubscriber } from "./components/chat-message-media.ts";
 import { retireSessionWorkspaceCheckout } from "./components/chat-session-workspace.ts";
+import { setChatRunOwner } from "./history-merge.ts";
 import {
   reconcileChatRunAfterSessionStatePublication,
   reconcileChatRunLifecycle,
@@ -351,6 +352,8 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       this.sessionParticipationTracker.reset();
       if (state.client !== snapshot.client) {
         this.sessionCompanionThreads.retire();
+        setChatRunOwner(state, undefined);
+        state.chatRunError = null;
         // Local run identities belong to the previous client, even if the new
         // Gateway uses the same session key. Never bind its offline Stop to them.
         reconcileChatRunLifecycle(state, {

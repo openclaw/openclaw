@@ -2,6 +2,7 @@ import {
   createSessionProjection,
   readSessionMessageIdentity,
   reduceSessionProjection,
+  retainSessionProjectionRuns,
   type SessionMessageIdentity,
   type SessionProjectionEvent,
   type SessionMessageEnvelope,
@@ -28,13 +29,58 @@ import {
 import { matchesCompactionOperation } from "./chat-progress.ts";
 import type { CompactionStatus } from "./tool-stream-contract.ts";
 
-const chatSessionProjections = new WeakMap<
-  object,
-  {
-    projection?: SessionProjectionState;
-    runId?: string;
+type ChatRunProvenance = { scope: object; status: string };
+type ChatProjectionOwner = {
+  projection?: SessionProjectionState;
+  runId?: string;
+  scope: object;
+  lifetime: object;
+  runs: Readonly<Record<string, ChatRunProvenance>>;
+};
+
+const chatSessionProjections = new WeakMap<object, ChatProjectionOwner>();
+
+function readChatProjectionOwner(owner: object): ChatProjectionOwner {
+  let current = chatSessionProjections.get(owner);
+  if (!current) {
+    current = { scope: {}, lifetime: {}, runs: {} };
+    chatSessionProjections.set(owner, current);
   }
->();
+  return current;
+}
+
+export function captureChatProjectionScope(owner: object, runId?: string): () => boolean {
+  const captured = readChatProjectionOwner(owner);
+  const sessionId = captured.projection?.scope.sessionId;
+  const ownedRunId =
+    runId &&
+    captured.runId === runId &&
+    Object.hasOwn(captured.runs, runId) &&
+    captured.runs[runId].scope === captured.scope
+      ? runId
+      : undefined;
+  return () => {
+    const current = readChatProjectionOwner(owner);
+    return (
+      current.scope === captured.scope ||
+      Boolean(
+        ownedRunId &&
+        sessionId &&
+        current.projection?.scope.sessionId === sessionId &&
+        current.lifetime === captured.lifetime &&
+        current.runId === ownedRunId &&
+        Object.hasOwn(current.runs, ownedRunId) &&
+        current.runs[ownedRunId].scope === current.scope,
+      )
+    );
+  };
+}
+
+export function chatRunBelongsToRetiredScope(owner: object, runId: string): boolean {
+  const current = readChatProjectionOwner(owner);
+  const run = Object.hasOwn(current.runs, runId) ? current.runs[runId] : undefined;
+  return run !== undefined && run.scope !== current.scope;
+}
 // Display ownership outlives active-state cleanup. It is not the foreground
 // terminal fence: an unowned final cannot suppress authoritative active rows.
 const CHAT_PROJECTION_SCOPE_KEYS = [
@@ -196,28 +242,83 @@ export function getChatRunOwner(owner: object): string | undefined {
 }
 
 export function setChatRunOwner(owner: object, runId: string | undefined): void {
-  chatSessionProjections.set(owner, { ...chatSessionProjections.get(owner), runId });
+  const current = readChatProjectionOwner(owner);
+  chatSessionProjections.set(owner, {
+    ...current,
+    runId,
+    runs: runId
+      ? retainSessionProjectionRuns({
+          ...current.runs,
+          [runId]: {
+            scope: current.scope,
+            // A local ACK can bind display before its run projection arrives.
+            status: current.projection?.runs[runId]?.status ?? "streaming",
+          },
+        })
+      : current.runs,
+  });
 }
 
 /** The only mutation boundary for the reducer and its rendered message array. */
 export function publishChatSessionProjection(
   owner: ChatSessionProjectionOwner,
   projection: SessionProjectionState,
+  options: { resetScope?: boolean } = {},
 ): void {
-  const current = chatSessionProjections.get(owner);
-  const runId = current?.runId;
+  const current = readChatProjectionOwner(owner);
+  const runId = current.runId;
+  const replacesScope = Boolean(
+    options.resetScope ||
+    (current.projection && chatProjectionScopeChanged(current.projection.scope, projection.scope)),
+  );
+  const scope = replacesScope ? {} : current.scope;
+  // Leaf growth can continue the same live run. Reset, topology changes and
+  // physical session replacement must never authorize an older pending callback.
+  const previousScope = current.projection?.scope;
+  const lifetime =
+    options.resetScope ||
+    (previousScope &&
+      CHAT_PROJECTION_SCOPE_KEYS.some(
+        (key) =>
+          key !== "activeLeafEntryId" &&
+          Object.hasOwn(projection.scope, key) &&
+          previousScope[key] !== undefined &&
+          previousScope[key] !== projection.scope[key],
+      ))
+      ? {}
+      : current.lifetime;
+  const runs = new Map<string, ChatRunProvenance>();
+  if (replacesScope) {
+    for (const entry of current.projection?.entries ?? []) {
+      const id = entry.pendingRunId ?? entry.identity?.runId;
+      if (id) {
+        runs.set(id, { scope: current.scope, status: "completed" });
+      }
+    }
+  }
+  // Keep recent live provenance after historical rows in the shared retention budget.
+  for (const [id, run] of Object.entries(current.runs)) {
+    runs.delete(id);
+    runs.set(id, replacesScope ? { scope: run.scope, status: "completed" } : run);
+  }
+  for (const [id, run] of Object.entries(projection.runs)) {
+    const known = runs.get(id);
+    if (!known || known.scope === scope) {
+      runs.set(id, { scope, status: run.status });
+    }
+  }
   if (
-    current?.projection &&
+    current.projection &&
     chatProjectionScopeChanged(current.projection.scope, projection.scope)
   ) {
     const status = owner.compactionStatus;
     const sessionKeys = ["sessionKey", "sessionId", "agentId"] as const;
-    const previousScope = current.projection.scope;
+    const previousSessionScope = current.projection.scope;
     const sessionChanged = sessionKeys.some(
       (key) =>
         Object.hasOwn(projection.scope, key) &&
-        previousScope[key] !== undefined &&
-        previousScope[key] !== projection.scope[key],
+        previousSessionScope[key] !== undefined &&
+        previousSessionScope[key] !== projection.scope[key],
     );
     // Appending the completed marker advances the active leaf. Retain its live
     // identity through that refresh, but never carry it into another session or branch.
@@ -231,17 +332,14 @@ export function publishChatSessionProjection(
   }
   chatSessionProjections.set(owner, {
     projection,
-    runId:
-      runId &&
-      Object.hasOwn(projection.runs, runId) &&
-      (!current.projection ||
-        !chatProjectionScopeChanged(current.projection.scope, projection.scope))
-        ? runId
-        : undefined,
+    scope,
+    lifetime,
+    runs: retainSessionProjectionRuns(Object.fromEntries(runs)),
+    runId: runId && Object.hasOwn(projection.runs, runId) && !replacesScope ? runId : undefined,
   });
   // Run-only transitions share the transcript array. Preserve their ownership
   // updates above without traversing or republishing every displayed row.
-  if (current?.projection?.messages === projection.messages) {
+  if (current.projection?.messages === projection.messages) {
     return;
   }
   if (
@@ -498,7 +596,9 @@ export function reduceChatSessionProjection(
       projection = { ...projection, entries, messages: entries.map((entry) => entry.message) };
     }
   }
-  publishChatSessionProjection(owner, projection);
+  publishChatSessionProjection(owner, projection, {
+    resetScope: event.type === "sessionReset" && projection !== current,
+  });
   if (handoff && !handoff.pending && options.runActive === false) {
     owner.chatSubmissions?.clearInitial(sessionKey);
   }

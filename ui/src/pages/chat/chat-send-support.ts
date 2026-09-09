@@ -23,7 +23,12 @@ import {
 import type { TerminalFailureChatSendAck } from "./chat-send-ack.ts";
 import type { ChatHost } from "./chat-send-contract.ts";
 import type { ChatState } from "./chat-state-contract.ts";
-import { admitChatSubmission, shouldDisplayChatSubmission } from "./history-merge.ts";
+import {
+  admitChatSubmission,
+  captureChatProjectionScope,
+  chatRunBelongsToRetiredScope,
+  shouldDisplayChatSubmission,
+} from "./history-merge.ts";
 import {
   captureOutboxPayloadOwner,
   failOutboxPayload,
@@ -104,13 +109,24 @@ function preserveDeliveredUserTurn(
 
 type DeliveredTurnRetirement = "retired" | "retained" | "stale";
 
-/** Transfer every byte to the transcript/cache before retiring its durable owner. */
+/** Retain complete input before cleanup; confirmed delivery can retire outside its old view. */
 export function retireDeliveredQueuedUserTurn(
   host: ChatHost,
   runId: string | undefined,
   scope: StoredChatOutboxScope,
-  options?: { retainUntilConsumed: boolean },
+  options?: { retainUntilConsumed?: boolean; deliveryConfirmed?: true },
 ): DeliveredTurnRetirement | Promise<DeliveredTurnRetirement> {
+  const projectionScopeIsCurrent = captureChatProjectionScope(host, runId);
+  const canPublish = () =>
+    projectionScopeIsCurrent() &&
+    !(
+      runId &&
+      visibleSessionMatches(host, scope.sessionKey, scope.agentId) &&
+      chatRunBelongsToRetiredScope(host, runId)
+    );
+  if (!options?.deliveryConfirmed && !canPublish()) {
+    return "stale";
+  }
   const client = host.client;
   const owner = client ?? host;
   const submissions = host.chatSubmissions;
@@ -118,7 +134,7 @@ export function retireDeliveredQueuedUserTurn(
   const stored = readDeliveredQueuedChatSendForRun(host, runId, scope)?.item;
   if (!stored) {
     const remembered = submissions.readDelivered(deliveryKey, owner);
-    if (remembered) {
+    if (remembered && canPublish()) {
       preserveDeliveredUserTurn(host, remembered);
     }
     return "retired";
@@ -126,11 +142,34 @@ export function retireDeliveredQueuedUserTurn(
   const connectionEpoch = host.connectionEpoch;
   const connected = host.connected;
   const payloadOwnerIsCurrent = captureOutboxPayloadOwner(host);
+  // Delivery evidence owns custody cleanup; the view lifetime still owns publication.
   const isCurrent = () =>
     host.connected === connected &&
     host.connectionEpoch === connectionEpoch &&
-    payloadOwnerIsCurrent();
+    payloadOwnerIsCurrent() &&
+    (options?.deliveryConfirmed || canPublish());
   const currentItem = () => readDeliveredQueuedChatSendForRun(host, runId, scope)?.item;
+  const completedRetirement = (): DeliveredTurnRetirement => {
+    if (readQueuedMessageById(host, stored.id)) {
+      return "stale";
+    }
+    const remembered = submissions.readDelivered(deliveryKey, owner);
+    if (remembered) {
+      if (canPublish()) {
+        preserveDeliveredUserTurn(host, remembered);
+      }
+      return "retired";
+    }
+    const receipt =
+      canPublish() &&
+      visibleSessionMatches(host, scope.sessionKey, scope.agentId) &&
+      (!stored.sessionId || stored.sessionId === host.currentSessionId)
+        ? findChatSubmissionMessage(host.chatMessages, runId, true)
+        : null;
+    // Accepted history may consume the input and release its Blob while this
+    // read is pending. Only its durable original-user receipt proves completion.
+    return receipt && (receipt.id !== null || receipt.sequence !== null) ? "retired" : "stale";
+  };
   const commit = (
     message: NonNullable<ReturnType<typeof buildLocalUserMessage>>,
   ): DeliveredTurnRetirement => {
@@ -139,12 +178,7 @@ export function retireDeliveredQueuedUserTurn(
     }
     const current = currentItem();
     if (!current) {
-      const remembered = submissions.readDelivered(deliveryKey, owner);
-      if (!remembered) {
-        return "stale";
-      }
-      preserveDeliveredUserTurn(host, remembered);
-      return "retired";
+      return completedRetirement();
     }
     if (!sameQueuedDeliveryVersion(current, stored)) {
       return "stale";
@@ -164,7 +198,9 @@ export function retireDeliveredQueuedUserTurn(
       pendingRunId: stored.sendRunId,
       message,
     });
-    preserveDeliveredUserTurn(host, submission);
+    if (canPublish()) {
+      preserveDeliveredUserTurn(host, submission);
+    }
     const beforeRemoval = currentItem();
     if (!isCurrent() || !beforeRemoval || !sameQueuedDeliveryVersion(beforeRemoval, stored)) {
       return "stale";
@@ -208,7 +244,10 @@ export function retireDeliveredQueuedUserTurn(
       }
     }
     const current = currentItem();
-    if (!current || !sameQueuedDeliveryVersion(current, stored)) {
+    if (!current) {
+      return completedRetirement();
+    }
+    if (!sameQueuedDeliveryVersion(current, stored)) {
       return "stale";
     }
     const reason = result.status === "failed" ? result.reason : "missing";

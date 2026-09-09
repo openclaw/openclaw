@@ -23,6 +23,7 @@ import type { ChatRunStartupState } from "./chat-run-startup.ts";
 import { readChatSessionActionAccess } from "./chat-session-action-access.ts";
 import { formatConnectError } from "./connect-error.ts";
 import {
+  getChatRunOwner,
   getChatSessionProjection,
   reduceChatSessionProjection,
   setChatRunOwner,
@@ -561,6 +562,7 @@ export function reconcileChatRunLifecycle(host: RunLifecycleHost, options: Recon
     };
     reconcileSessionRows(host, options, occurredAt);
     if (options.armLocalTerminalReconcile) {
+      setChatRunOwner(host, runId ?? undefined);
       host.lastLocalTerminalReconcile = {
         sessionKey,
         runId,
@@ -655,8 +657,20 @@ export function reconcileChatRunFromCurrentSessionRow(
 }
 
 export function reconcileChatRunAfterSessionStatePublication(host: RunLifecycleHost): boolean {
+  const row = currentSessionRow(host);
+  const displayOwner = getChatRunOwner(host);
+  const activeRunIds = row?.activeRunIds;
+  if (
+    !host.chatRunId &&
+    displayOwner &&
+    row &&
+    isSessionRunActive(row) &&
+    activeRunIds?.length &&
+    !activeRunIds.includes(displayOwner)
+  ) {
+    setChatRunOwner(host, undefined);
+  }
   if (host.chatRunId) {
-    const row = currentSessionRow(host);
     if (row?.lastRunId === host.chatRunId) {
       return reconcileChatRunFromSessionRow(host, row, { publishRunStatus: false });
     }

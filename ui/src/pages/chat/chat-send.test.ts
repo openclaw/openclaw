@@ -50,7 +50,7 @@ import * as chatCommandExecutor from "./chat-command-executor.ts";
 import type { executeSlashCommand } from "./chat-command-executor.ts";
 import { handleChatGatewayEvent } from "./chat-gateway.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
-import { getChatHistoryLoadState } from "./chat-history-state.ts";
+import { getChatHistoryLoadState, resetChatHistoryProjection } from "./chat-history-state.ts";
 import { makeChatHost, makeRequestMock } from "./chat-host.test-support.ts";
 import { chatOutboxOwner } from "./chat-outbox-owner.ts";
 import { renderChatPaneComposerControls } from "./chat-pane-session-controls.ts";
@@ -77,7 +77,11 @@ import {
   storedChatOutboxScopeKey,
   updateStoredChatComposerQueueItem,
 } from "./composer-persistence.ts";
-import { getChatSessionProjection, publishChatSessionProjection } from "./history-merge.ts";
+import {
+  getChatSessionProjection,
+  publishChatSessionProjection,
+  reduceChatSessionProjection,
+} from "./history-merge.ts";
 import { handleChatInputHistoryKey } from "./input-history.ts";
 import { installOutboxBrowserStorage } from "./outbox-browser.test-support.ts";
 import { prepareOutboxPayload } from "./outbox-payloads.ts";
@@ -90,6 +94,7 @@ import {
 } from "./session-message-cache.ts";
 import { buildToolStreamIdentity } from "./tool-stream-identity.ts";
 import { handleAgentEvent } from "./tool-stream.ts";
+import { buildLocalUserMessage } from "./user-message-content.ts";
 
 type ExecuteSlashCommand = typeof executeSlashCommand;
 type TestChatHost = ReturnType<typeof makeChatHost>;
@@ -252,6 +257,7 @@ let handleSendChat: typeof import("./chat-send-submit.ts").handleSendChat;
 let steerQueuedChatMessage: typeof import("./chat-send-actions.ts").steerQueuedChatMessage;
 let handleAbortChat: typeof import("./run-lifecycle.ts").handleAbortChat;
 let adoptStartedChatRun: typeof import("./run-lifecycle.ts").adoptStartedChatRun;
+let reconcileChatRunLifecycle: typeof import("./run-lifecycle.ts").reconcileChatRunLifecycle;
 let hasAbortableSessionRun: typeof import("./run-lifecycle.ts").hasAbortableSessionRun;
 let handlePageGatewayEvent: typeof import("./chat-state-events.ts").handlePageGatewayEvent;
 let loadChatBranches: typeof import("./chat-history-branches.ts").loadChatBranches;
@@ -286,7 +292,7 @@ async function loadChatHelpers(): Promise<void> {
   ({ refreshPageChat } = await import("./chat-state-refresh.ts"));
   ({ loadChatBranches } = await import("./chat-history-branches.ts"));
   ({ loadChatHistory } = await import("./chat-history.ts"));
-  ({ handleAbortChat, hasAbortableSessionRun, adoptStartedChatRun } =
+  ({ handleAbortChat, hasAbortableSessionRun, adoptStartedChatRun, reconcileChatRunLifecycle } =
     await import("./run-lifecycle.ts"));
   ({
     admitQueuedMessageForSession,
@@ -5977,219 +5983,409 @@ describe("handleSendChat", () => {
     expect(listStoredChatOutboxes(visible)).toStrictEqual([]);
   });
 
-  it.each(["live", "cold", "new-credentials", "new-attempt", "new-run"])(
-    "pins terminal attachment turns to durable data across split panes (%s)",
-    async (handoff) => {
-      const { attachments, dataUrls } = createDeliveryAttachmentBatch();
-      const sessionKey = "agent:main:visible";
-      const history = createDeferred<unknown>();
-      let holdHistory = false;
-      let consumedRunId: string | undefined;
-      const consumedHistory = () => ({
-        messages: [],
-        inputReceipts: consumedRunId
-          ? [{ runId: consumedRunId, state: "consumed", consumedByEventId: "attachment-user" }]
-          : [],
-      });
-      const request = makeRequestMock({
-        "chat.history": () =>
-          consumedRunId
-            ? consumedHistory()
-            : holdHistory
-              ? history.promise
-              : idleChatHistory(sessionKey),
-        "chat.send": (params: unknown) => ({
-          runId: requireRecord(params, "terminal attachment send").idempotencyKey,
-          status: "started",
-        }),
-      });
-      const presentedAttachments =
+  it.each([
+    "live",
+    "cold",
+    "new-credentials",
+    "new-attempt",
+    "new-run",
+    "same-key-reset",
+    "branch-switch",
+    "same-scope-snapshot",
+    "same-active-run-leaf",
+    "reset-before-active-history",
+    "physical-session-before-active-history",
+    "topology-before-active-history",
+  ])("pins terminal attachment turns to durable data across split panes (%s)", async (handoff) => {
+    const { attachments, dataUrls } = createDeliveryAttachmentBatch();
+    const sessionKey = "agent:main:visible";
+    const physicalSessionId = "attachment-history-session";
+    const historyAdvances =
+      handoff === "same-active-run-leaf" ||
+      handoff === "reset-before-active-history" ||
+      handoff === "physical-session-before-active-history" ||
+      handoff === "topology-before-active-history";
+    const historyReplacesLifetime = historyAdvances && handoff !== "same-active-run-leaf";
+    const history = createDeferred<unknown>();
+    let holdHistory = false;
+    let consumedRunId: string | undefined;
+    let liveHistory: ChatHistoryResult | undefined;
+    const consumedHistory = () => ({
+      messages: [],
+      inputReceipts: consumedRunId
+        ? [{ runId: consumedRunId, state: "consumed", consumedByEventId: "attachment-user" }]
+        : [],
+    });
+    const request = makeRequestMock({
+      "chat.history": () => {
+        if (liveHistory) {
+          const response = liveHistory;
+          liveHistory = undefined;
+          return response;
+        }
+        return consumedRunId
+          ? consumedHistory()
+          : holdHistory
+            ? history.promise
+            : idleChatHistory(sessionKey);
+      },
+      "chat.send": (params: unknown) => ({
+        runId: requireRecord(params, "terminal attachment send").idempotencyKey,
+        status: "started",
+      }),
+    });
+    const presentedAttachments =
+      handoff === "live"
+        ? attachments.map((attachment, index) => ({ ...attachment, dataUrl: dataUrls[index] }))
+        : attachments;
+    const source = makeChatHost({
+      client: clientWithRequest(request),
+      sessionKey,
+      chatMessage: "summarize",
+      chatAttachments: presentedAttachments,
+    });
+    sessionStorage.setItem("openclaw.control.outboxTab.v1", "test-outbox-tab");
+    const stopSource = subscribeChatOutboxProjection(source);
+    let stopVisible = () => {};
+    let stopInactive = () => {};
+    const hydration = createDeferred();
+    const pendingReads: Array<ReturnType<typeof outboxPayloadStore.readOutboxPayload>> = [];
+    const pendingRetirements: Promise<DeliveredTurnRetirement>[] = [];
+    try {
+      await handleSendChat(source);
+      holdHistory = true;
+      const item = expectDefined(
+        loadChatComposerSnapshot(source, sessionKey)?.queue[0],
+        "Blob-backed terminal send",
+      );
+      expect(item.attachmentPayload).toBeDefined();
+      expect(item.attachments?.map(getChatAttachmentDataUrl)).toEqual([null, null]);
+      if (handoff !== "live") {
+        stopSource();
+        reloadChatDocumentStorage(attachments);
+      }
+      const client =
         handoff === "live"
-          ? attachments.map((attachment, index) => ({ ...attachment, dataUrl: dataUrls[index] }))
-          : attachments;
-      const source = makeChatHost({
-        client: clientWithRequest(request),
-        sessionKey,
-        chatMessage: "summarize",
-        chatAttachments: presentedAttachments,
+          ? expectDefined(source.client, "live client")
+          : clientWithRequest(request);
+      const visible = handoff === "live" ? source : makeChatHost({ client, sessionKey });
+      const inactive = makeChatHost({
+        client,
+        chatSubmissions: visible.chatSubmissions,
+        sessionKey: "agent:main:inactive",
       });
-      sessionStorage.setItem("openclaw.control.outboxTab.v1", "test-outbox-tab");
-      const stopSource = subscribeChatOutboxProjection(source);
-      let stopVisible = () => {};
-      let stopInactive = () => {};
-      const hydration = createDeferred();
-      const pendingReads: Array<ReturnType<typeof outboxPayloadStore.readOutboxPayload>> = [];
-      const pendingRetirements: Promise<DeliveredTurnRetirement>[] = [];
-      try {
-        await handleSendChat(source);
-        holdHistory = true;
-        const item = expectDefined(
-          loadChatComposerSnapshot(source, sessionKey)?.queue[0],
-          "Blob-backed terminal send",
-        );
-        expect(item.attachmentPayload).toBeDefined();
-        expect(item.attachments?.map(getChatAttachmentDataUrl)).toEqual([null, null]);
-        if (handoff !== "live") {
-          stopSource();
-          reloadChatDocumentStorage(attachments);
-        }
-        const client =
-          handoff === "live"
-            ? expectDefined(source.client, "live client")
-            : clientWithRequest(request);
-        const visible = handoff === "live" ? source : makeChatHost({ client, sessionKey });
-        const inactive = makeChatHost({
-          client,
-          chatSubmissions: visible.chatSubmissions,
-          sessionKey: "agent:main:inactive",
+      for (const host of [visible, inactive]) {
+        Object.assign(host, {
+          chatMessagesBySession: new Map(),
+          connectionEpoch: 1,
+          pendingSessionMessageReloadSessionKey: null,
+          requestUpdate: vi.fn(),
         });
-        for (const host of [visible, inactive]) {
-          Object.assign(host, {
-            chatMessagesBySession: new Map(),
-            connectionEpoch: 1,
-            pendingSessionMessageReloadSessionKey: null,
-            requestUpdate: vi.fn(),
-          });
+      }
+      cacheEmptyChatSnapshot(inactive, sessionKey);
+      const readPayload = outboxPayloadStore.readOutboxPayload;
+      const read = vi
+        .spyOn(outboxPayloadStore, "readOutboxPayload")
+        .mockImplementation((...args) => {
+          const pending = hydration.promise.then(() => readPayload(...args));
+          pendingReads.push(pending);
+          return pending;
+        });
+      if (handoff !== "live") {
+        stopVisible = subscribeChatOutboxProjection(visible);
+        expect(visible.chatQueue[0]?.attachments?.map(getChatAttachmentDataUrl)).toEqual([
+          null,
+          null,
+        ]);
+      }
+      stopInactive = subscribeChatOutboxProjection(inactive);
+      if (
+        handoff === "same-key-reset" ||
+        handoff === "branch-switch" ||
+        handoff === "same-scope-snapshot" ||
+        historyAdvances
+      ) {
+        if (historyAdvances) {
+          visible.currentSessionId = physicalSessionId;
         }
-        cacheEmptyChatSnapshot(inactive, sessionKey);
-        const readPayload = outboxPayloadStore.readOutboxPayload;
-        const read = vi
-          .spyOn(outboxPayloadStore, "readOutboxPayload")
-          .mockImplementation((...args) => {
-            const pending = hydration.promise.then(() => readPayload(...args));
-            pendingReads.push(pending);
-            return pending;
-          });
-        if (handoff !== "live") {
-          stopVisible = subscribeChatOutboxProjection(visible);
-          expect(visible.chatQueue[0]?.attachments?.map(getChatAttachmentDataUrl)).toEqual([
-            null,
-            null,
-          ]);
-        }
-        stopInactive = subscribeChatOutboxProjection(inactive);
-        const removePayloads = outboxPayloadStore.removeOutboxPayloads;
-        const cleanup = vi
-          .spyOn(outboxPayloadStore, "removeOutboxPayloads")
-          .mockImplementation(async (refs) => {
-            const cached = readChatMessagesFromCache(
-              inactive.chatMessagesBySession ?? new Map(),
-              inactive,
-              { sessionKey },
-            );
-            expect(deliveredAttachmentUrls(cached[0])).toEqual(dataUrls);
-            await removePayloads(refs);
-          });
-        const event = {
-          event: "chat",
-          payload: {
-            state: "final",
-            runId: item.sendRunId,
-            sessionKey,
-            message: {
-              role: "assistant",
-              content: [{ type: "text", text: "terminal reply" }],
-              timestamp: Date.now(),
-            },
-          },
-        } as Parameters<typeof handlePageGatewayEvent>[1];
-        const retirementOwner = vi.spyOn(chatSendSupport, "retireDeliveredQueuedUserTurn");
-        expect(handlePageGatewayEvent(asChatPageHost(inactive), event)).toBeUndefined();
-        expect(handlePageGatewayEvent(asChatPageHost(visible), event)).toBeUndefined();
-        expect(retirementOwner).toHaveBeenCalledTimes(2);
-        // Dispatch registers its finish callback before this test observes owner completion.
-        for (const result of retirementOwner.mock.results) {
-          if (result.type !== "return") {
-            throw new Error("Expected the real retirement owner to return normally");
-          }
-          pendingRetirements.push(Promise.resolve(result.value));
-        }
-        if (handoff === "live") {
-          // Both panes pin display bytes; the durable payload still awaits consumption.
-          expect(retirementOwner).toHaveNthReturnedWith(1, "retained");
-          expect(retirementOwner).toHaveNthReturnedWith(2, "retained");
-          expect(read).not.toHaveBeenCalled();
-        } else {
-          await waitForFast(() => expect(read).toHaveBeenCalled());
-          expect(listStoredChatOutboxes(visible)[0]?.queue[0]?.id).toBe(item.id);
-          expect(cleanup).not.toHaveBeenCalled();
-        }
-        const credential =
-          handoff === "new-credentials"
-            ? vi.spyOn(client, "recoveryScope", "get").mockReturnValue("different-credential")
-            : null;
-        if (handoff === "new-attempt") {
-          expect(
-            updateStoredChatComposerQueueItem(
-              visible,
-              sessionKey,
-              item,
-              {
-                ...item,
-                sendRunId: "replacement-attempt",
-                sendAttempts: 2,
-              },
-              item.agentId,
-            ),
-          ).toBe(true);
-        }
-        if (handoff === "new-run") {
-          adoptStartedChatRun(visible, "newer-run", Date.now());
-          visible.chatStream = "newer run is still streaming";
-        }
-        hydration.resolve();
-        await Promise.all(pendingRetirements);
-        credential?.mockRestore();
-        if (handoff === "new-credentials" || handoff === "new-attempt") {
-          expect(cleanup).not.toHaveBeenCalled();
-          expect(loadChatComposerSnapshot(visible, sessionKey)?.queue[0]).toMatchObject({
-            id: item.id,
-            attachmentPayload: item.attachmentPayload,
-            sendRunId: handoff === "new-attempt" ? "replacement-attempt" : item.sendRunId,
-          });
-          expect(visible.chatMessages).toEqual([]);
-          expect(request.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(1);
-          return;
-        }
-
-        expect(
-          visible.chatMessages.map((message) => requireRecord(message, "terminal transcript").role),
-        ).toEqual(["user", "assistant"]);
-        expect(deliveredAttachmentUrls(visible.chatMessages[0])).toEqual(dataUrls);
-        if (handoff === "new-run") {
-          expect(visible.chatRunId).toBe("newer-run");
-          expect(visible.chatStream).toBe("newer run is still streaming");
-        }
-        const inactiveCached = readChatMessagesFromCache(
-          inactive.chatMessagesBySession ?? new Map(),
-          inactive,
-          { sessionKey },
+        visible.chatDisplayedLeafEntryId = "leaf-before";
+        reduceChatSessionProjection(visible, {
+          type: "snapshotLoaded",
+          messages: visible.chatMessages,
+        });
+        adoptStartedChatRun(
+          visible,
+          expectDefined(item.sendRunId, "terminal attachment run"),
+          Date.now(),
         );
-        expect(deliveredAttachmentUrls(inactiveCached[0])).toEqual(dataUrls);
-        expect(listStoredChatOutboxes(visible)[0]?.queue[0]).toMatchObject({
+        expect(visible.chatRunId).toBe(item.sendRunId);
+      }
+      const removePayloads = outboxPayloadStore.removeOutboxPayloads;
+      const cleanup = vi
+        .spyOn(outboxPayloadStore, "removeOutboxPayloads")
+        .mockImplementation(async (refs) => {
+          const retainedMessages = historyAdvances
+            ? visible.chatMessages
+            : readChatMessagesFromCache(inactive.chatMessagesBySession ?? new Map(), inactive, {
+                sessionKey,
+              });
+          expect(deliveredAttachmentUrls(retainedMessages[0])).toEqual(dataUrls);
+          await removePayloads(refs);
+        });
+      const event = {
+        event: "chat",
+        payload: {
+          state: "final",
+          runId: item.sendRunId,
+          sessionKey,
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "terminal reply" }],
+            timestamp: Date.now(),
+          },
+        },
+      } as Parameters<typeof handlePageGatewayEvent>[1];
+      const retirementOwner = vi.spyOn(chatSendSupport, "retireDeliveredQueuedUserTurn");
+      expect(handlePageGatewayEvent(asChatPageHost(inactive), event)).toBeUndefined();
+      expect(handlePageGatewayEvent(asChatPageHost(visible), event)).toBeUndefined();
+      expect(retirementOwner).toHaveBeenCalledTimes(2);
+      // Dispatch registers its finish callback before this test observes owner completion.
+      for (const result of retirementOwner.mock.results) {
+        if (result.type !== "return") {
+          throw new Error("Expected the real retirement owner to return normally");
+        }
+        pendingRetirements.push(Promise.resolve(result.value));
+      }
+      if (handoff === "live") {
+        // Both panes pin display bytes; the durable payload still awaits consumption.
+        expect(retirementOwner).toHaveNthReturnedWith(1, "retained");
+        expect(retirementOwner).toHaveNthReturnedWith(2, "retained");
+        expect(read).not.toHaveBeenCalled();
+      } else {
+        await waitForFast(() => expect(read).toHaveBeenCalled());
+        expect(listStoredChatOutboxes(visible)[0]?.queue[0]?.id).toBe(item.id);
+        expect(cleanup).not.toHaveBeenCalled();
+      }
+      const credential =
+        handoff === "new-credentials"
+          ? vi.spyOn(client, "recoveryScope", "get").mockReturnValue("different-credential")
+          : null;
+      if (handoff === "new-attempt") {
+        expect(
+          updateStoredChatComposerQueueItem(
+            visible,
+            sessionKey,
+            item,
+            {
+              ...item,
+              sendRunId: "replacement-attempt",
+              sendAttempts: 2,
+            },
+            item.agentId,
+          ),
+        ).toBe(true);
+      }
+      if (handoff === "new-run") {
+        adoptStartedChatRun(visible, "newer-run", Date.now());
+        visible.chatStream = "newer run is still streaming";
+      }
+      if (historyAdvances) {
+        const runId = expectDefined(item.sendRunId, "live history run");
+        const acceptedSessionId =
+          handoff === "physical-session-before-active-history"
+            ? "replacement-history-session"
+            : physicalSessionId;
+        if (handoff === "reset-before-active-history") {
+          resetChatHistoryProjection(asChatPageHost(visible));
+          reconcileChatRunLifecycle(visible, {
+            clearLocalRun: true,
+            clearChatStream: true,
+            clearToolStream: true,
+            clearRunStatus: true,
+          });
+        }
+        if (handoff === "topology-before-active-history") {
+          handlePageGatewayEvent(
+            asChatPageHost(visible),
+            {
+              type: "event",
+              event: "sessions.changed",
+              payload: { sessionKey, agentId: "main", reason: "branch-switch" },
+            },
+            () => false,
+          );
+        }
+        const userMessage = expectDefined(
+          buildLocalUserMessage(
+            {
+              ...item,
+              runId,
+              attachments: attachments.map(({ id, mimeType, fileName, sizeBytes }, index) => ({
+                id,
+                mimeType,
+                fileName,
+                sizeBytes,
+                dataUrl: dataUrls[index],
+              })),
+            },
+            "complete",
+          ),
+          "live history user turn",
+        );
+        liveHistory = {
+          sessionId: acceptedSessionId,
+          messages: [
+            {
+              ...userMessage,
+              __openclaw: { id: "leaf-after", seq: 1, idempotencyKey: `${runId}:user` },
+            },
+          ],
+          sessionInfo: {
+            key: sessionKey,
+            sessionId: acceptedSessionId,
+            kind: "direct",
+            updatedAt: Date.now(),
+            status: "running",
+            hasActiveRun: true,
+            activeRunIds: [runId],
+            activeLeafEntryId: "leaf-after",
+          },
+          inFlightRun: { runId, text: "", startedAt: Date.now() },
+        };
+        await loadChatHistory(visible, { deferBranches: true });
+        expect(visible.currentSessionId).toBe(acceptedSessionId);
+        expect(visible.chatDisplayedLeafEntryId).toBe("leaf-after");
+        expect(visible.chatRunId).toBe(runId);
+      }
+      if (handoff === "same-key-reset") {
+        resetChatHistoryProjection(asChatPageHost(visible));
+      } else if (handoff === "branch-switch" || handoff === "same-scope-snapshot") {
+        if (handoff === "branch-switch") {
+          visible.chatDisplayedLeafEntryId = "leaf-after";
+        }
+        reduceChatSessionProjection(visible, { type: "snapshotLoaded", messages: [] });
+      }
+      const scopeReplaced = handoff === "same-key-reset" || handoff === "branch-switch";
+      const transcriptPublications: unknown[][] = [];
+      if (scopeReplaced) {
+        reconcileChatRunLifecycle(visible, {
+          clearLocalRun: true,
+          clearChatStream: true,
+          clearToolStream: true,
+          clearRunStatus: true,
+        });
+        visible.requestUpdate = vi.fn(() => {
+          transcriptPublications.push([...visible.chatMessages]);
+        });
+      }
+      hydration.resolve();
+      await Promise.all(pendingRetirements);
+      credential?.mockRestore();
+      if (scopeReplaced) {
+        expect(visible.chatMessages).toEqual([]);
+        expect(loadChatComposerSnapshot(visible, sessionKey)?.queue[0]).toMatchObject({
+          id: item.id,
+          text: item.text,
+          attachmentPayload: item.attachmentPayload,
+          sendRunId: item.sendRunId,
+          sendAttempts: item.sendAttempts,
+        });
+        const stored = await readPayload(...expectDefined(read.mock.calls[0], "payload read"));
+        const storedAttachments = expectDefined(
+          stored.status === "ready" ? stored.value : undefined,
+          "original terminal payload bytes",
+        );
+        expect(
+          await Promise.all(
+            storedAttachments.map(async (attachment) =>
+              Buffer.from(await attachment.blob.arrayBuffer()).toString("base64"),
+            ),
+          ),
+        ).toEqual(dataUrls.map((url) => url.split(",")[1]));
+        expect(cleanup).not.toHaveBeenCalled();
+        expect(request.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(1);
+      }
+      if (handoff === "new-credentials" || handoff === "new-attempt") {
+        expect(cleanup).not.toHaveBeenCalled();
+        expect(loadChatComposerSnapshot(visible, sessionKey)?.queue[0]).toMatchObject({
           id: item.id,
           attachmentPayload: item.attachmentPayload,
+          sendRunId: handoff === "new-attempt" ? "replacement-attempt" : item.sendRunId,
         });
-        expect(cleanup).not.toHaveBeenCalled();
+        expect(visible.chatMessages).toEqual([]);
+        expect(request.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(1);
+        return;
+      }
 
-        consumedRunId = item.sendRunId;
-        history.resolve(consumedHistory());
-        await retryReconnectableQueuedChatSends(visible);
-
+      if (!scopeReplaced) {
+        expect(
+          visible.chatMessages.map((message) => requireRecord(message, "terminal transcript").role),
+        ).toEqual(historyReplacesLifetime ? ["user"] : ["user", "assistant"]);
+        expect(deliveredAttachmentUrls(visible.chatMessages[0])).toEqual(dataUrls);
+      }
+      if (historyAdvances) {
         expect(listStoredChatOutboxes(visible)).toStrictEqual([]);
         expect(cleanup).toHaveBeenCalledWith([item.attachmentPayload]);
         expect(request.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(1);
-      } finally {
-        hydration.resolve();
-        history.resolve(idleChatHistory(sessionKey));
-        await Promise.all(pendingRetirements);
-        await Promise.all(pendingReads);
-        stopInactive();
-        stopVisible();
-        stopSource();
+        expect(visible.chatRunId).toBe(historyReplacesLifetime ? item.sendRunId : null);
+        return;
       }
-    },
-  );
+      if (handoff === "new-run") {
+        expect(visible.chatRunId).toBe("newer-run");
+        expect(visible.chatStream).toBe("newer run is still streaming");
+      }
+      const inactiveCached = readChatMessagesFromCache(
+        inactive.chatMessagesBySession ?? new Map(),
+        inactive,
+        { sessionKey },
+      );
+      expect(deliveredAttachmentUrls(inactiveCached[0])).toEqual(dataUrls);
+      expect(listStoredChatOutboxes(visible)[0]?.queue[0]).toMatchObject({
+        id: item.id,
+        attachmentPayload: item.attachmentPayload,
+      });
+      expect(cleanup).not.toHaveBeenCalled();
+
+      if (scopeReplaced) {
+        stopInactive();
+        // Join the sibling's captured history read before the visible pane receives a receipt.
+        history.resolve(idleChatHistory(sessionKey));
+        await retryReconnectableQueuedChatSends(visible);
+        expect(listStoredChatOutboxes(visible)[0]?.queue[0]?.sendRunId).toBe(item.sendRunId);
+        expect(cleanup).not.toHaveBeenCalled();
+      }
+      const receiptRetirementStart = retirementOwner.mock.calls.length;
+      consumedRunId = item.sendRunId;
+      if (!scopeReplaced) {
+        history.resolve(consumedHistory());
+      }
+      await retryReconnectableQueuedChatSends(visible);
+
+      expect(listStoredChatOutboxes(visible)).toStrictEqual([]);
+      expect(cleanup).toHaveBeenCalledWith([item.attachmentPayload]);
+      expect(request.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(1);
+      if (scopeReplaced) {
+        expect(
+          retirementOwner.mock.calls
+            .slice(receiptRetirementStart)
+            .map(([host, runId]) => [host, runId]),
+        ).toContainEqual([visible, item.sendRunId]);
+        expect(visible.chatMessages).toEqual([]);
+        expect(transcriptPublications.length).toBeGreaterThan(0);
+        for (const messages of transcriptPublications) {
+          expect(messages).toEqual([]);
+        }
+      }
+    } finally {
+      hydration.resolve();
+      history.resolve(idleChatHistory(sessionKey));
+      await Promise.all(pendingRetirements);
+      await Promise.all(pendingReads);
+      stopInactive();
+      stopVisible();
+      stopSource();
+    }
+  });
 
   it("drains a queued reset without awaiting its own active outbox lane", async () => {
     executeSlashCommandMock.mockResolvedValue({ content: "Thinking level set." });

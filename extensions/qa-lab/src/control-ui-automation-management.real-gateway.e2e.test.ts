@@ -11,7 +11,9 @@ import { createQaGatewayChild } from "./gateway-child.ts";
 import { buildAssistantEvents } from "./providers/mock-openai/mock-openai-events.ts";
 import {
   extractLastUserText,
+  extractLastMatchingUserTurn,
   extractToolOutput,
+  extractToolOutputCallId,
   hasToolOutput,
 } from "./providers/mock-openai/mock-openai-input.ts";
 import { buildToolCallEventsWithArgs } from "./providers/mock-openai/mock-openai-tooling.ts";
@@ -39,6 +41,9 @@ function readResult(text: string): Record<string, unknown> {
 async function startAutomationProvider() {
   const requests = new Map<string, Record<string, unknown>>();
   const results = new Map<string, string>();
+  const terminalReplies = new Set<string>();
+  const issuedCalls = new Map<string, string>();
+  const exchanges: Array<{ marker?: string; request: unknown; events: unknown[] }> = [];
   const server = createServer((request, response) => {
     void (async () => {
       const chunks: Buffer[] = [];
@@ -54,16 +59,42 @@ async function startAutomationProvider() {
         throw new Error("Expected a Responses request");
       }
       const input = body.input.filter(isRecord);
-      const marker = /\[automation-proof:([a-z-]+)\]/u.exec(extractLastUserText(input))?.[1];
+      const taggedTurn = extractLastMatchingUserTurn(input, /\[automation-proof:/u);
+      const marker = /\[automation-proof:([a-z-]+)\]/u.exec(
+        taggedTurn?.text ?? extractLastUserText(input),
+      )?.[1];
       const args = marker ? requests.get(marker) : undefined;
       const output = extractToolOutput(input);
-      if (marker && args && hasToolOutput(input)) {
+      if (
+        marker &&
+        args &&
+        hasToolOutput(input) &&
+        extractToolOutputCallId(input) === issuedCalls.get(marker)
+      ) {
         results.set(marker, output);
       }
       const events =
-        args && !hasToolOutput(input)
+        args && !hasToolOutput(input) && !(marker && issuedCalls.has(marker))
           ? buildToolCallEventsWithArgs("automations", args)
-          : buildAssistantEvents(marker && args ? `${marker}: ${output}` : scheduledReply);
+          : buildAssistantEvents(
+              marker && terminalReplies.has(marker)
+                ? []
+                : marker && args
+                  ? `${marker}: ${output}`
+                  : scheduledReply,
+            );
+      for (const event of events) {
+        if (
+          marker &&
+          event.type === "response.output_item.added" &&
+          isRecord(event.item) &&
+          event.item.type === "function_call" &&
+          typeof event.item.call_id === "string"
+        ) {
+          issuedCalls.set(marker, event.item.call_id);
+        }
+      }
+      exchanges.push({ marker, request: body, events });
       if (body.stream === true) {
         response.writeHead(200, { "content-type": "text/event-stream" });
         response.end(events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(""));
@@ -88,6 +119,8 @@ async function startAutomationProvider() {
     baseUrl: `http://127.0.0.1:${address.port}/v1`,
     requests,
     results,
+    terminalReplies,
+    exchanges,
     async stop() {
       server.closeAllConnections();
       await new Promise<void>((resolve) => {
@@ -114,6 +147,416 @@ function managementArgs(action: AutomationAction, jobId: string) {
 }
 
 suite.define(() => {
+  it(
+    "keeps restricted inventory scope in the public terminal fallback",
+    { timeout: 240_000 },
+    async () => {
+      const proofDir = suite.artifactDir;
+      const provider = await startAutomationProvider();
+      const owner = createQaGatewayChild();
+      const errors: unknown[] = [];
+      try {
+        const repoRoot = process.cwd();
+        const gateway = await owner.start({
+          repoRoot,
+          command: {
+            executablePath: process.execPath,
+            argsPrefix: [path.join(repoRoot, "openclaw.mjs")],
+            cwd: repoRoot,
+            usePackagedPlugins: true,
+          },
+          providerMode: "mock-openai",
+          providerBaseUrl: provider.baseUrl,
+          primaryModel: "mock-openai/gpt-5.6-luna",
+          alternateModel: "mock-openai/gpt-5.6-luna-alt",
+          forcedRuntime: "openclaw",
+          transportBaseUrl: "http://127.0.0.1",
+          controlUiEnabled: false,
+          controlUiAllowedOrigins: [new URL(suite.server.baseUrl).origin],
+          mutateConfig: (cfg) => ({
+            ...cfg,
+            cron: { ...cfg.cron, enabled: false },
+            plugins: { ...cfg.plugins, slots: { ...cfg.plugins?.slots, memory: "none" } },
+            memory: { ...cfg.memory, search: { ...cfg.memory?.search, enabled: false } },
+            tools: { profile: "full", allow: ["automations"], codeMode: false, toolSearch: false },
+            agents: {
+              ...cfg.agents,
+              entries: {
+                ...cfg.agents?.entries,
+                qa: {
+                  ...cfg.agents?.entries?.qa,
+                  tools: { profile: "full", allow: ["automations"] },
+                },
+              },
+            },
+          }),
+        });
+        const initialAdminList = await gateway.call("cron.list", { includeDisabled: true });
+        if (!isRecord(initialAdminList) || typeof initialAdminList.total !== "number") {
+          throw new Error("Expected the initial administrator inventory");
+        }
+        const initialAdminTotal = initialAdminList.total;
+        const visible = await gateway.call("cron.add", {
+          name: "Visible scope control",
+          agentId: "qa",
+          enabled: false,
+          schedule: { kind: "every", everyMs: 3_600_000 },
+          sessionTarget: "main",
+          wakeMode: "next-heartbeat",
+          payload: { kind: "systemEvent", text: "Visible synthetic control." },
+        });
+        const hidden = await gateway.call("cron.add", {
+          name: "Hidden scope control",
+          agentId: "qa",
+          enabled: false,
+          schedule: { kind: "every", everyMs: 3_600_000 },
+          sessionTarget: "isolated",
+          wakeMode: "next-heartbeat",
+          payload: { kind: "agentTurn", message: "Hidden synthetic control." },
+          delivery: { mode: "none" },
+        });
+        if (!isRecord(visible) || !isRecord(hidden)) {
+          throw new Error("Expected created automations");
+        }
+        const adminList = await gateway.call("cron.list", { includeDisabled: true });
+        await writeFile(
+          path.join(proofDir, "seed-and-admin.json"),
+          JSON.stringify({ initialAdminList, visible, hidden, adminList }, null, 2),
+        );
+        expect(adminList).toMatchObject({ total: initialAdminTotal + 2 });
+        if (!isRecord(adminList) || !Array.isArray(adminList.jobs)) {
+          throw new Error("Expected administrator list rows");
+        }
+        const adminIds = adminList.jobs.filter(isRecord).map((job) => job.id);
+        const adminModes: unknown[] = [];
+        for (const options of [
+          { compact: true },
+          { includeDeliveryPreviews: false },
+          { includeDeliveryPreviews: true },
+        ]) {
+          const mode = await gateway.call("cron.list", { includeDisabled: true, ...options });
+          adminModes.push({ options, result: mode });
+          await writeFile(
+            path.join(proofDir, "admin-list-modes.json"),
+            JSON.stringify(adminModes, null, 2),
+          );
+          expect(mode).toMatchObject({
+            total: initialAdminTotal + 2,
+            snapshotRevision: adminList.snapshotRevision,
+          });
+          expect(mode).not.toHaveProperty("scopeHint");
+          if (!isRecord(mode) || !Array.isArray(mode.jobs)) {
+            throw new Error("Expected projected list rows");
+          }
+          expect(mode.jobs.filter(isRecord).map((job) => job.id)).toEqual(adminIds);
+        }
+
+        const observations: Array<{
+          restricted: boolean;
+          scopes: unknown;
+          result: Record<string, unknown>;
+          text: string;
+          visibleText: string | null;
+          frames: unknown[];
+        }> = [];
+        for (const restricted of [true, false]) {
+          const marker = restricted ? "restricted-terminal" : "admin-terminal";
+          const sessionKey = `agent:qa:dashboard:scope-${randomUUID()}`;
+          await gateway.call("sessions.create", {
+            key: sessionKey,
+            label: `Automation scope ${marker}`,
+          });
+          provider.requests.set(marker, { action: "list", includeDisabled: true });
+          provider.terminalReplies.add(marker);
+          await suite.withPage(
+            {
+              locale: "en-US",
+              serviceWorkers: "block",
+            },
+            async ({ page }) => {
+              const frames: unknown[] = [];
+              const sent: unknown[] = [];
+              page.on("websocket", (socket) => {
+                socket.on("framereceived", ({ payload }) =>
+                  frames.push(JSON.parse(payload.toString())),
+                );
+                socket.on("framesent", ({ payload }) => sent.push(JSON.parse(payload.toString())));
+              });
+              await page.addInitScript(
+                ({ gatewayUrl, token, restricted: callerScoped }) => {
+                  window.localStorage.setItem(
+                    "openclaw:control-ui:community-invite",
+                    JSON.stringify({ dismissedAtMs: 1770000000000 }),
+                  );
+                  const client = callerScoped
+                    ? {
+                        id: "webchat-ui",
+                        mode: "webchat",
+                        platform: "web",
+                        deviceFamily: "desktop",
+                        scopes: ["operator.admin", "operator.read", "operator.write"],
+                      }
+                    : undefined;
+                  Object.assign(window, {
+                    __OPENCLAW_NATIVE_CONTROL_AUTH__: { gatewayUrl, token, client },
+                  });
+                },
+                { gatewayUrl: gateway.wsUrl, token: gateway.token, restricted },
+              );
+              await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+              const readHello = () =>
+                frames
+                  .filter(isRecord)
+                  .find((frame) => isRecord(frame.payload) && frame.payload.type === "hello-ok");
+              await expect.poll(readHello, { timeout: 60_000 }).toBeTruthy();
+              const hello = readHello();
+              await writeFile(
+                path.join(proofDir, `${marker}-handshake.json`),
+                JSON.stringify(frames, null, 2),
+              );
+              if (!hello || !isRecord(hello.payload) || !isRecord(hello.payload.auth)) {
+                throw new Error("Missing public handshake scopes");
+              }
+              const scopes = hello.payload.auth.scopes;
+              expect(Array.isArray(scopes)).toBe(true);
+              expect(scopes).toContain("operator.admin");
+              expect(
+                sent.filter(isRecord).find((frame) => frame.method === "connect"),
+              ).toMatchObject({
+                params: { client: { id: restricted ? "webchat-ui" : "openclaw-control-ui" } },
+              });
+              await page
+                .locator(".agent-chat__composer-combobox textarea")
+                .fill(`List all automations. [automation-proof:${marker}]`);
+              await page.getByRole("button", { name: "Send message" }).click();
+              await expect.poll(() => provider.results.has(marker), { timeout: 60_000 }).toBe(true);
+              const result = readResult(provider.results.get(marker) ?? "null");
+              const request = sent
+                .filter(isRecord)
+                .find(
+                  (frame) =>
+                    frame.method === "chat.send" &&
+                    isRecord(frame.params) &&
+                    frame.params.sessionKey === sessionKey,
+                );
+              if (!request) {
+                throw new Error("Missing composer chat.send request");
+              }
+              const ack = frames
+                .filter(isRecord)
+                .find((frame) => frame.type === "res" && frame.id === request.id);
+              if (!ack || !isRecord(ack.payload) || typeof ack.payload.runId !== "string") {
+                throw new Error("Missing matching chat.send ACK");
+              }
+              const runId = ack.payload.runId;
+              const readTerminal = () =>
+                frames
+                  .filter(isRecord)
+                  .filter(
+                    (frame) =>
+                      frame.type === "event" &&
+                      frame.event === "chat" &&
+                      isRecord(frame.payload) &&
+                      frame.payload.sessionKey === sessionKey &&
+                      frame.payload.runId === runId &&
+                      ["final", "aborted", "error"].includes(String(frame.payload.state)),
+                  )
+                  .map((frame) => frame.payload)
+                  .filter(isRecord);
+              await expect
+                .poll(
+                  () =>
+                    readTerminal().some(
+                      (event) => event.state === "error" && typeof event.errorMessage === "string",
+                    ),
+                  { timeout: 60_000 },
+                )
+                .toBe(true);
+              const terminals = readTerminal();
+              const text = terminals
+                .flatMap((event) => {
+                  if (event.state === "error") {
+                    return typeof event.errorMessage === "string" ? [event.errorMessage] : [];
+                  }
+                  if (
+                    !isRecord(event.message) ||
+                    event.message.role !== "assistant" ||
+                    !Array.isArray(event.message.content)
+                  ) {
+                    return [];
+                  }
+                  return event.message.content
+                    .filter(isRecord)
+                    .filter((block) => block.type === "text" && typeof block.text === "string")
+                    .map((block) => String(block.text));
+                })
+                .join("\n");
+              await writeFile(
+                path.join(proofDir, `${marker}-events.json`),
+                JSON.stringify({ request, ack, terminals, frames, result }, null, 2),
+              );
+              await page
+                .locator(".chat-error, .chat-text")
+                .filter({ hasText: "Automations listed." })
+                .first()
+                .waitFor({ timeout: 10_000 });
+              const diagnostics = page.locator(".chat-error details");
+              for (const detail of await diagnostics.all()) {
+                if ((await detail.getAttribute("open")) === null) {
+                  await detail.locator("summary").click();
+                }
+              }
+              const terminalElement = page
+                .locator(".chat-text, .chat-error__diagnostic")
+                .filter({ hasText: "Automations listed." })
+                .last();
+              await terminalElement.waitFor({ state: "visible", timeout: 10_000 });
+              const visibleText = await terminalElement.textContent();
+              await page.screenshot({ path: path.join(proofDir, `${marker}-terminal.png`) });
+              observations.push({ restricted, scopes, result, text, visibleText, frames });
+              await writeFile(
+                path.join(proofDir, `${marker}.json`),
+                JSON.stringify(observations.at(-1), null, 2),
+              );
+              await writeFile(
+                path.join(proofDir, `${marker}-history.json`),
+                JSON.stringify(await gateway.call("chat.history", { sessionKey }), null, 2),
+              );
+              if (restricted) {
+                const queries: Array<{ marker: string; result: Record<string, unknown> }> = [];
+                const queryList = async (queryMarker: string, args: Record<string, unknown>) => {
+                  provider.requests.set(queryMarker, {
+                    action: "list",
+                    includeDisabled: true,
+                    ...args,
+                  });
+                  await page
+                    .locator(".agent-chat__composer-combobox textarea")
+                    .fill(`List automations. [automation-proof:${queryMarker}]`);
+                  await page.getByRole("button", { name: "Send message" }).click();
+                  await expect
+                    .poll(() => provider.results.has(queryMarker), { timeout: 60_000 })
+                    .toBe(true);
+                  await page
+                    .locator(".chat-text")
+                    .filter({ hasText: `${queryMarker}:` })
+                    .last()
+                    .waitFor({ state: "visible", timeout: 60_000 });
+                  expect(await page.locator(".chat-error").count()).toBe(0);
+                  const output = provider.results.get(queryMarker);
+                  if (output === undefined) {
+                    throw new Error("Missing matching tool output");
+                  }
+                  const queryResult = readResult(output);
+                  queries.push({ marker: queryMarker, result: queryResult });
+                  await writeFile(
+                    path.join(proofDir, "caller-list-controls.json"),
+                    JSON.stringify(queries, null, 2),
+                  );
+                  expect(queryResult).toMatchObject({
+                    scope: "caller",
+                    scopeHint: result.scopeHint,
+                  });
+                  expect(JSON.stringify(queryResult)).not.toContain(String(hidden.id));
+                  return queryResult;
+                };
+                const firstPage = await queryList("restricted-page-one", { limit: 1, offset: 0 });
+                const secondPage = await queryList("restricted-page-two", { limit: 1, offset: 1 });
+                expect(firstPage).toMatchObject({
+                  total: result.total,
+                  offset: 0,
+                  nextOffset: 1,
+                  snapshotRevision: result.snapshotRevision,
+                });
+                expect(secondPage).toMatchObject({
+                  total: result.total,
+                  offset: 1,
+                  nextOffset: null,
+                  snapshotRevision: result.snapshotRevision,
+                });
+                if (!Array.isArray(firstPage.jobs) || !Array.isArray(secondPage.jobs)) {
+                  throw new Error("Expected caller pages");
+                }
+                expect([...firstPage.jobs, ...secondPage.jobs]).toEqual(result.jobs);
+                const changedHidden = await gateway.call("cron.update", {
+                  id: hidden.id,
+                  patch: { name: "Changed hidden scope control" },
+                });
+                expect(changedHidden).toMatchObject({
+                  id: hidden.id,
+                  name: "Changed hidden scope control",
+                });
+                const afterHiddenUpdate = await queryList("restricted-after-hidden-update", {});
+                expect(afterHiddenUpdate).toEqual(result);
+                const enabledOnly = await queryList("restricted-enabled", {
+                  includeDisabled: false,
+                });
+                if (!Array.isArray(enabledOnly.jobs)) {
+                  throw new Error("Expected enabled caller rows");
+                }
+                if (!Array.isArray(result.jobs)) {
+                  throw new Error("Expected caller inventory rows");
+                }
+                const enabledRows = result.jobs.filter(
+                  (job) => isRecord(job) && job.enabled === true,
+                );
+                expect(enabledOnly.jobs).toEqual(enabledRows);
+                expect(enabledOnly.total).toBe(enabledRows.length);
+              }
+            },
+          );
+        }
+        await writeFile(
+          path.join(proofDir, "provider-exchanges.json"),
+          JSON.stringify(provider.exchanges, null, 2),
+        );
+        const restricted = observations.find((item) => item.restricted);
+        const admin = observations.find((item) => !item.restricted);
+        if (!restricted || !admin) {
+          throw new Error("Missing terminal observations");
+        }
+        expect(restricted.result).toMatchObject({ scope: "caller" });
+        expect(restricted.result.jobs).toEqual(
+          expect.arrayContaining([expect.objectContaining({ id: visible.id })]),
+        );
+        expect(JSON.stringify(restricted.result)).not.toContain(String(hidden.id));
+        const restrictedTotal = restricted.result.total;
+        const scopeHint = restricted.result.scopeHint;
+        if (typeof restrictedTotal !== "number" || typeof scopeHint !== "string") {
+          throw new Error("Missing canonical restricted result metadata");
+        }
+        expect(restricted.result.jobs).toHaveLength(restrictedTotal);
+        expect(restricted.text).toContain(`Count: ${restrictedTotal}`);
+        expect(scopeHint).toContain("Restricted automation inventory");
+        expect(restricted.text).toContain(scopeHint);
+        expect(admin.result).toMatchObject({ total: initialAdminTotal + 2, scope: "gateway" });
+        expect(admin.result).not.toHaveProperty("scopeHint");
+        expect(admin.text).toContain(`Count: ${initialAdminTotal + 2}`);
+        expect(admin.text).not.toContain("Restricted automation inventory");
+        expect(restricted.visibleText).toContain(`Count: ${restrictedTotal}`);
+        expect(restricted.visibleText).toContain(scopeHint);
+        expect(admin.visibleText).toContain(`Count: ${initialAdminTotal + 2}`);
+        expect(admin.visibleText).not.toContain("Restricted automation inventory");
+      } catch (error) {
+        errors.push(error);
+      }
+      await writeFile(
+        path.join(proofDir, "provider-exchanges.json"),
+        JSON.stringify(provider.exchanges, null, 2),
+      );
+      const stopped = await owner.stop({ preserveToDir: path.join(proofDir, "gateway") });
+      errors.push(...stopped.errors);
+      try {
+        await provider.stop();
+      } catch (error) {
+        errors.push(error);
+      }
+      if (errors.length) {
+        throw new AggregateError(errors, "Automation scope terminal proof failed");
+      }
+    },
+  );
+
   it(
     "admin chat manages a Telegram-created job while another Telegram caller is denied",
     {

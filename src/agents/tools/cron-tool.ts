@@ -144,9 +144,10 @@ function formatCronTerminalPresentation(
           : undefined;
       const count =
         total ?? (Array.isArray(result.details.jobs) ? result.details.jobs.length : undefined);
-      return count === undefined
-        ? { text: "Automations listed." }
-        : { text: `Automations listed.\nCount: ${count}` };
+      const text =
+        count === undefined ? "Automations listed." : `Automations listed.\nCount: ${count}`;
+      const scopeHint = result.details.scopeHint;
+      return { text: typeof scopeHint === "string" ? `${text}\n${scopeHint}` : text };
     }
     case "get":
       return { text: "Automation loaded." };
