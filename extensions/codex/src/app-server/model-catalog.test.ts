@@ -2,11 +2,13 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createCodexAppServerModelCatalog } from "./model-catalog.js";
 import { listAllCodexAppServerModels } from "./models.js";
+import { probeCodexNativeAuth } from "./native-auth.js";
 import { withCodexAppServerJsonClient } from "./request.js";
 
 vi.mock("./models.js", () => ({
   listAllCodexAppServerModels: vi.fn(),
 }));
+vi.mock("./native-auth.js", () => ({ probeCodexNativeAuth: vi.fn() }));
 
 const rpc = vi.hoisted(() => ({ request: vi.fn(), epoch: 0, client: {} }));
 vi.mock("./request.js", () => ({
@@ -40,6 +42,11 @@ const catalogParams = {
 
 describe("Codex app-server model catalog", () => {
   beforeEach(() => {
+    vi.mocked(probeCodexNativeAuth).mockReset().mockResolvedValue({
+      apiKey: "native-presence",
+      source: "native login",
+      mode: "api-key",
+    });
     listModelsMock.mockReset();
     vi.mocked(withCodexAppServerJsonClient).mockClear();
     rpc.epoch += 1;
@@ -167,6 +174,11 @@ describe("Codex app-server model catalog", () => {
     },
     { account: null, mode: undefined },
   ])("preserves account mode $mode without importing credentials", async ({ account, mode }) => {
+    vi.mocked(probeCodexNativeAuth).mockResolvedValue({
+      apiKey: "native-presence",
+      source: "native login",
+      mode: mode === "chatgpt" ? "oauth" : "api-key",
+    });
     listModelsMock.mockResolvedValue({
       models: [
         {

@@ -182,7 +182,14 @@ export async function applySessionModelSelection(
   const prepared = await prepareModelSelectionRuntime({
     cfg: params.cfg,
     agentId: params.agentId,
-    sessionEntry: startingEntry,
+    sessionEntry: request.profileOverride
+      ? {
+          ...startingEntry,
+          modelProvider: request.provider,
+          authProfileOverride: request.profileOverride,
+          authProfileOverrideSource: "user",
+        }
+      : startingEntry,
     provider: request.provider,
     model: request.model,
     catalog: params.thinkingCatalog ?? params.modelCatalog,
@@ -196,7 +203,9 @@ export async function applySessionModelSelection(
   if (prepared.status === "rejected") {
     return prepared;
   }
-  const authProfileError = params.validateAuthProfileSelection?.();
+  const validateSelection = () =>
+    params.validateAuthProfileSelection?.() ?? prepared.validateRuntimeSelection?.();
+  const authProfileError = validateSelection();
   if (authProfileError) {
     return { status: "rejected", reason: "not-allowed", message: authProfileError };
   }
@@ -277,7 +286,7 @@ export async function applySessionModelSelection(
       reassertLiveModelSwitchPending: applied.changed && nextEntry.liveModelSwitchPending === true,
       requireModelSelectionUnlocked: true,
       touchedFields: SESSION_MODEL_OVERRIDE_TRANSACTION_FIELDS,
-      validateCommit: params.validateAuthProfileSelection,
+      validateCommit: validateSelection,
     });
     if (persistence.entry) {
       params.sessionStore[params.sessionKey] = persistence.entry;

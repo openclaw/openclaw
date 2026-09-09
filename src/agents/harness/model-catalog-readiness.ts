@@ -18,6 +18,7 @@ export function createAgentHarnessCatalogEvaluator(
   params: AgentHarnessModelCatalogParams & {
     preferredProfileId?: string;
     pinnedProfileId?: string;
+    profileProvider?: string;
     pluginRegistry?: PluginRegistry;
     isCurrent?: () => boolean;
     observationConfig?: AgentHarnessModelCatalogParams["config"];
@@ -27,27 +28,33 @@ export function createAgentHarnessCatalogEvaluator(
   return (
     entry: ModelCatalogEntry,
     host: ModelAuthAvailabilityEvaluation,
+    runtimeId?: string,
   ): ModelAuthAvailabilityEvaluation => {
-    const runtime = resolveAgentHarnessPolicy({
-      provider: entry.provider,
-      modelId: entry.id,
-      modelApi: entry.api,
-      modelBaseUrl: entry.baseUrl,
-      config: params.config,
-      agentId: params.agentId,
-    }).runtime;
+    const runtime =
+      runtimeId ??
+      host.requestedRuntimeId ??
+      resolveAgentHarnessPolicy({
+        provider: entry.provider,
+        modelId: entry.id,
+        modelApi: entry.api,
+        modelBaseUrl: entry.baseUrl,
+        config: params.config,
+        agentId: params.agentId,
+      }).runtime;
     if (runtime === "auto" || runtime === "openclaw") {
       return host;
     }
     const provider = normalizeProviderId(entry.provider);
+    const sameProvider =
+      !params.profileProvider || normalizeProviderId(params.profileProvider) === provider;
     const configured = resolveMergedModelProviderConfig(params.config, provider);
     const modelKey = (id: string) =>
       stripSelfProviderModelPrefix(provider, splitTrailingAuthProfile(id).model.trim()).trim();
     // Native account evidence cannot satisfy an authored host route, key, profile,
     // or request override. Those keep the existing prepared-route evaluator.
     if (
-      params.preferredProfileId ||
-      params.pinnedProfileId ||
+      (sameProvider && params.preferredProfileId) ||
+      (sameProvider && params.pinnedProfileId) ||
       (host.selectedAuthMode && (host.evidence !== "runtime" || entry.nativeRuntime !== runtime)) ||
       configured?.api ||
       configured?.baseUrl ||
@@ -110,6 +117,11 @@ export function createAgentHarnessCatalogEvaluator(
     } catch {
       // A failed/disposed owner supplies no account observation; do not infer host readiness.
     }
-    return { availability: ready, routeResolution: null };
+    return {
+      ...host,
+      availability: ready,
+      availabilityAuthoritative: true,
+      runtimeAuth: { id: runtime, source: "native" },
+    };
   };
 }

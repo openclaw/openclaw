@@ -162,33 +162,31 @@ export async function handleDirectiveOnly(
   if (modelResolution.errorText) {
     return rejectModelTransaction(modelResolution.errorText);
   }
-  const modelSelection = modelResolution.modelSelection;
-  const profileOverride = modelResolution.profileOverride;
+  const { modelSelection, profileOverride } = modelResolution;
   if (modelSelection && isModelSelectionLocked(sessionEntry)) {
     return rejectModelTransaction(MODEL_SELECTION_LOCKED_MESSAGE);
   }
 
   const resolvedProvider = modelSelection?.provider ?? provider;
   const resolvedModel = modelSelection?.model ?? model;
-  let modelRuntimeResolution: Parameters<typeof applyModelRuntimeDirective>[1] = {
-    kind: "unchanged",
-  };
-  if (modelSelection) {
-    const prepared = await prepareModelSelectionRuntime({
-      cfg: params.cfg,
-      agentId: activeAgentId,
-      provider: resolvedProvider,
-      model: resolvedModel,
-      catalog: thinkingCatalog ?? [],
-      rawRuntime: directives.rawModelRuntime,
-      sessionEntry,
-    });
-    if (prepared.status === "rejected") {
-      return rejectModelTransaction(prepared.message);
-    }
-    thinkingCatalog = prepared.catalog;
-    modelRuntimeResolution = prepared.runtime;
+  const preparedModel = modelSelection
+    ? await prepareModelSelectionRuntime({
+        cfg: params.cfg,
+        agentId: activeAgentId,
+        provider: resolvedProvider,
+        model: resolvedModel,
+        catalog: thinkingCatalog ?? [],
+        rawRuntime: directives.rawModelRuntime,
+        sessionEntry,
+        profileOverride,
+      })
+    : undefined;
+  if (preparedModel?.status === "rejected") {
+    return rejectModelTransaction(preparedModel.message);
   }
+  thinkingCatalog = preparedModel?.catalog ?? thinkingCatalog;
+  const modelRuntimeResolution = preparedModel?.runtime ?? { kind: "unchanged" as const };
+  const validateRuntimeSelection = preparedModel?.validateRuntimeSelection;
   const prospectiveSessionEntry = { ...sessionEntry };
   applyModelRuntimeDirective(prospectiveSessionEntry, modelRuntimeResolution);
   const selectedCatalogEntry = findSelectedCatalogEntry({
@@ -465,7 +463,8 @@ export async function handleDirectiveOnly(
     directives.reasoningLevel !== prevReasoningLevel;
   // Validated, authorized directives have already named every field they can mutate.
   if (touchedSessionFields.length > 0) {
-    const authProfileError = modelResolution.validateAuthProfileSelection?.();
+    const authProfileError =
+      modelResolution.validateAuthProfileSelection?.() ?? validateRuntimeSelection?.();
     if (authProfileError) {
       return rejectModelTransaction(authProfileError);
     }
@@ -508,7 +507,8 @@ export async function handleDirectiveOnly(
         reassertLiveModelSwitchPending:
           modelSelectionUpdated && sessionEntry.liveModelSwitchPending === true,
         touchedFields: touchedSessionFields,
-        validateCommit: modelResolution.validateAuthProfileSelection,
+        validateCommit: () =>
+          modelResolution.validateAuthProfileSelection?.() ?? validateRuntimeSelection?.(),
       });
       if (persistence.status !== "applied") {
         const errorText =

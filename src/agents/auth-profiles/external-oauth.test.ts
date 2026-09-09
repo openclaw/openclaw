@@ -150,55 +150,20 @@ describe("auth external oauth helpers", () => {
     );
     expect(resolveParams.config).toBe(cfg);
     expect(requireRecord(resolveParams.context, "resolve context").config).toBe(cfg);
-    expect(readCodexCliCredentialsCachedMock).toHaveBeenCalledTimes(1);
+    expect(readCodexCliCredentialsCachedMock).not.toHaveBeenCalled();
   });
 
-  it("refreshes and removes a prepared built-in CLI profile authoritatively", () => {
-    const expires = createUsableOAuthExpiry();
-    readCodexCliCredentialsCachedMock.mockReturnValueOnce(
-      createCredential({ access: "startup-access", refresh: "startup-refresh", expires }),
-    );
-    const startup = overlayExternalAuthProfiles(
-      {
-        ...createStore(),
-        order: { openai: ["openai:default"] },
-        lastGood: { openai: "openai:default" },
-        usageStats: { "openai:default": { lastUsed: 1 } },
-      },
-      {
-        externalCliProviderIds: ["openai"],
-      },
-    );
-    expect(getRuntimeExternalCliProfileIds(startup)).toEqual(["openai:default"]);
-
-    const retained = overlayExternalAuthProfiles(startup);
-    expect(retained.profiles["openai:default"]).toMatchObject({
-      access: "startup-access",
-      refresh: "startup-refresh",
-    });
-    expect(getRuntimeExternalCliProfileIds(retained)).toEqual(["openai:default"]);
-
-    readCodexCliCredentialsCachedMock.mockReturnValueOnce(
-      createCredential({ access: "rotated-access", refresh: "rotated-refresh", expires }),
-    );
-    const rotated = overlayExternalAuthProfiles(retained, {
-      externalCliProfileIds: ["openai:default"],
-    });
-    expect(rotated.profiles["openai:default"]).toMatchObject({
-      access: "rotated-access",
-      refresh: "rotated-refresh",
-    });
-    expect(getRuntimeExternalCliProfileIds(rotated)).toEqual(["openai:default"]);
-
-    readCodexCliCredentialsCachedMock.mockReturnValueOnce(null);
-    const loggedOut = overlayExternalAuthProfiles(rotated, {
+  it("never creates a Codex overlay during login refresh or logout", () => {
+    readCodexCliCredentialsCachedMock.mockReturnValue(createCredential());
+    const initial = overlayExternalAuthProfiles(createStore(), {
       externalCliProviderIds: ["openai"],
     });
-    expect(loggedOut.profiles["openai:default"]).toBeUndefined();
-    expect(loggedOut.order).toBeUndefined();
-    expect(loggedOut.lastGood).toBeUndefined();
-    expect(loggedOut.usageStats).toBeUndefined();
-    expect(getRuntimeExternalCliProfileIds(loggedOut)).toEqual([]);
+    expect(initial.profiles).toEqual({});
+    expect(
+      overlayExternalAuthProfiles(initial, { externalCliProfileIds: ["openai:default"] }).profiles,
+    ).toEqual({});
+    expect(getRuntimeExternalCliProfileIds(initial)).toEqual([]);
+    expect(readCodexCliCredentialsCachedMock).not.toHaveBeenCalled();
   });
 
   it("does not reinterpret legacy MiniMax metadata as managed CLI ownership", () => {
@@ -383,33 +348,20 @@ describe("auth external oauth helpers", () => {
     expect(getRuntimeExternalCliProfileIds(refreshed)).toEqual(["claude-cli:default"]);
   });
 
-  it("publishes a usable scoped CLI bootstrap into the runtime auth owner", () => {
-    const agentDir = "/tmp/openclaw-external-oauth-publication";
-    readCodexCliCredentialsCachedMock.mockReturnValue(
-      createCredential({ expires: createUsableOAuthExpiry() }),
-    );
-    const listener = vi.fn();
-    const unregister = registerRuntimeAuthProfileStoreMutationListener(listener);
-    try {
-      const scoped = ensureAuthProfileStore(agentDir, {
-        externalCliProviderIds: ["openai"],
-        allowKeychainPrompt: false,
-        readOnly: true,
-        syncExternalCli: false,
-      });
-
-      expect(scoped.profiles["openai:default"]?.type).toBe("oauth");
-      expect(getRuntimeAuthProfileStoreSnapshot(agentDir)?.profiles["openai:default"]?.type).toBe(
-        "oauth",
-      );
-      expect(listener).toHaveBeenCalledWith({
-        agentDir,
-        affectsInheritedStores: false,
-        profileSetChanged: true,
-      });
-    } finally {
-      unregister();
-    }
+  it("does not publish Codex credentials from an ordinary store read", () => {
+    const agentDir = "/tmp/openclaw-native-no-import";
+    readCodexCliCredentialsCachedMock.mockReturnValue(createCredential());
+    const scoped = ensureAuthProfileStore(agentDir, {
+      externalCliProviderIds: ["openai"],
+      allowKeychainPrompt: false,
+      readOnly: true,
+      syncExternalCli: false,
+    });
+    expect(scoped.profiles["openai:default"]).toBeUndefined();
+    expect(
+      getRuntimeAuthProfileStoreSnapshot(agentDir)?.profiles["openai:default"],
+    ).toBeUndefined();
+    expect(readCodexCliCredentialsCachedMock).not.toHaveBeenCalled();
   });
 
   it("does not replace an explicit unresolved API-key profile with CLI OAuth", () => {
@@ -472,9 +424,9 @@ describe("auth external oauth helpers", () => {
       expect(hydrated.profiles["openai:configured"]).toEqual(
         resolved.profiles["openai:configured"],
       );
-      expect(hydrated.profiles["openai:default"]?.type).toBe("oauth");
+      expect(hydrated.profiles["openai:default"]).toBeUndefined();
       expect(getRuntimeAuthProfileStoreSnapshot(agentDir)?.profiles).toEqual(hydrated.profiles);
-      expect(listener).toHaveBeenCalledOnce();
+      expect(listener).not.toHaveBeenCalled();
     } finally {
       unregister();
     }
@@ -502,13 +454,13 @@ describe("auth external oauth helpers", () => {
       env: { OPENAI_API_KEY: "env-api-key" },
     });
 
-    expect(readCodexCliCredentialsCachedMock).toHaveBeenCalledTimes(1);
+    expect(readCodexCliCredentialsCachedMock).not.toHaveBeenCalled();
     expect(store.profiles["openai:default"]).toBeUndefined();
     expect(ambientOnly.openai).toBeUndefined();
     expect(credentials.openai).toEqual({ type: "api_key", key: "env-api-key" });
   });
 
-  it("keeps explicitly requested external profiles outside the ambient pin", () => {
+  it("requires explicit import even when an old external profile is requested", () => {
     const cfg = {
       models: {
         providers: {
@@ -525,7 +477,7 @@ describe("auth external oauth helpers", () => {
       externalCliProfileIds: ["openai:default"],
     });
 
-    expect(store.profiles["openai:default"]?.type).toBe("oauth");
+    expect(store.profiles["openai:default"]).toBeUndefined();
   });
 
   it("does not bootstrap arbitrary named OpenAI OAuth profiles from the Codex CLI account", () => {
@@ -580,58 +532,23 @@ describe("auth external oauth helpers", () => {
     expect(profile.accountId).toBe("acct-cli");
   });
 
-  it("uses Codex CLI OAuth when the stored Codex profile has no inline token material", () => {
-    const cliCredential = createCredential({
-      access: "fresh-cli-access-token",
-      refresh: "fresh-cli-refresh-token",
-      expires: createUsableOAuthExpiry(),
-      accountId: "acct-cli",
-    });
-    const tokenlessCredential = {
-      type: "oauth",
-      provider: "openai",
-      expires: Date.now() - 60_000,
-      accountId: "acct-cli",
-    } as OAuthCredential;
-    readCodexCliCredentialsCachedMock.mockReturnValue(cliCredential);
-
-    const overlaid = overlayExternalAuthProfiles(
-      createStore({
-        "openai:default": tokenlessCredential,
-      }),
-      {
-        config: {
-          models: {
-            providers: {
-              openai: {
-                auth: "api-key",
-                baseUrl: "https://api.openai.com/v1",
-                models: [],
-              },
-            },
-          },
-        },
-      },
+  it("preserves an empty host profile instead of copying the native account", () => {
+    const tokenlessCredential = createCredential({ access: "", refresh: "", expires: 0 });
+    readCodexCliCredentialsCachedMock.mockReturnValue(
+      createCredential({ access: "native-access", refresh: "native-refresh" }),
     );
-
-    const overlaidProfile = overlaid.profiles["openai:default"];
-    expect(overlaidProfile?.type).toBe("oauth");
-    if (!overlaidProfile || overlaidProfile.type !== "oauth") {
-      throw new Error("expected overlaid OAuth profile");
-    }
-    expect(overlaidProfile.access).toBe("fresh-cli-access-token");
-    expect(overlaidProfile.refresh).toBe("fresh-cli-refresh-token");
-    expect(overlaidProfile.accountId).toBe("acct-cli");
-    const managedCredential = readExternalCliBootstrapCredential({
-      store: createStore({
-        "openai:default": tokenlessCredential,
+    const store = createStore({ "openai:default": tokenlessCredential });
+    expect(overlayExternalAuthProfiles(store).profiles["openai:default"]).toEqual(
+      tokenlessCredential,
+    );
+    expect(
+      readExternalCliBootstrapCredential({
+        store,
+        profileId: "openai:default",
+        credential: tokenlessCredential,
       }),
-      profileId: "openai:default",
-      credential: tokenlessCredential,
-    });
-    expect(managedCredential?.access).toBe("fresh-cli-access-token");
-    expect(managedCredential?.refresh).toBe("fresh-cli-refresh-token");
-    expect(managedCredential?.accountId).toBe("acct-cli");
+    ).toBeNull();
+    expect(readCodexCliCredentialsCachedMock).not.toHaveBeenCalled();
   });
 
   it("never clears a fenced Codex profile from an unordered external snapshot", () => {

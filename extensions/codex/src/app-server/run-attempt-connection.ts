@@ -82,7 +82,16 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
         ? { expected: params.expectedRuntimeArtifact }
         : {}
       : undefined;
-  const pluginConfig = readCodexPluginConfig(options.pluginConfig);
+  const configuredPlugin = readCodexPluginConfig(options.pluginConfig);
+  // The route planner leaves auth with the native owner only after rejecting
+  // host credential substitution. Keep explicit homes and prepared profiles intact.
+  const pluginConfig =
+    params.runtimePlan?.auth.deferredRouteSupport && !configuredPlugin.appServer?.homeScope
+      ? {
+          ...configuredPlugin,
+          appServer: { ...configuredPlugin.appServer, homeScope: "user" as const },
+        }
+      : configuredPlugin;
   const requirementsToml = readCodexRequirementsToml({});
   const computerUseConfig = resolveCodexComputerUseConfig({ pluginConfig });
   const { sessionAgentId } = resolveSessionAgentIdsStrict({

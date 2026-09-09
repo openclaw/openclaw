@@ -1,6 +1,8 @@
 {
   "id": "codex",
   "categories": ["runtime", "tools", "web"],
+  "providers": ["codex"],
+  "syntheticAuthRefs": ["codex"],
   "backupResources": [
     {
       "disposition": "regenerable",

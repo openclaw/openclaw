@@ -530,18 +530,21 @@ export async function modelsStatusCommand(
       );
       const createStatusAuthResolver = (
         authStore: Parameters<typeof createModelAuthAvailabilityResolver>[0]["authStore"],
+        nativeMode?: "api_key" | "oauth" | "token",
       ) =>
         createModelAuthAvailabilityResolver({
           cfg,
+          agentId: workspaceAgentId,
           authStore,
           agentDir,
           workspaceDir,
           env: process.env,
-          // A generic Codex runtime marker proves only that the harness can be
-          // contacted. It is not an OpenAI model credential.
-          syntheticAuthProviderRefs: [...syntheticAuthProviderRefs].filter(
-            (provider) => provider !== "codex",
-          ),
+          // Native mode chooses a harness route without becoming a host credential.
+          syntheticAuthProviderRefs: [...syntheticAuthProviderRefs],
+          preparedRuntimeAuthModes: nativeMode
+            ? { codex: { source: "native", mode: nativeMode } }
+            : {},
+          preparedSyntheticAuthComplete: true,
           metadataSnapshot,
         });
       let authResolver = createStatusAuthResolver(store);
@@ -626,7 +629,9 @@ export async function modelsStatusCommand(
             // must not reinterpret image auth as an OpenAI text transport.
             const rawEvaluation: ModelAuthAvailabilityEvaluation =
               usage.routeScope === "text"
-                ? resolver.evaluateModelAuth(usage.provider, ref)
+                ? usage.allowCodexRuntimeFallback
+                  ? resolver.evaluateRuntimeModelAuth(usage.provider, ref)
+                  : resolver.evaluateModelAuth(usage.provider, ref)
                 : {
                     availability: resolver.resolveProviderAuthAvailability(usage.provider, ref),
                     routeResolution: null,
@@ -765,17 +770,21 @@ export async function modelsStatusCommand(
           .map(([provider, auth]) => [provider, syntheticAuthCredential(provider, auth)] as const)
           .filter((entry): entry is readonly [string, AuthProfileCredential] => Boolean(entry[1])),
       );
-      if (runtimeCredentialsByProvider.size > 0) {
+      const nativeCodexMode = syntheticAuthByProvider.get("codex")?.mode;
+      if (runtimeCredentialsByProvider.size > 0 || nativeCodexMode) {
         const syntheticProfiles = Object.fromEntries(
           Array.from(runtimeCredentialsByProvider.entries()).map(([provider, credential]) => [
             `${provider}:runtime-synthetic`,
             credential,
           ]),
         );
-        authResolver = createStatusAuthResolver({
-          ...store,
-          profiles: { ...store.profiles, ...syntheticProfiles },
-        });
+        authResolver = createStatusAuthResolver(
+          {
+            ...store,
+            profiles: { ...store.profiles, ...syntheticProfiles },
+          },
+          nativeCodexMode === "api-key" ? "api_key" : nativeCodexMode,
+        );
         providerUses = await resolveProviderUses(authResolver);
         codexRuntimeAuthUsages = providerUses.filter((usage) => usage.usesCodexRuntimeAuth);
       }
@@ -847,6 +856,13 @@ export async function modelsStatusCommand(
         }
         if (evaluation?.availability === false) {
           return missingProviderAuthEffective;
+        }
+        if (evaluation.runtimeAuth?.source === "native") {
+          return {
+            kind: "synthetic",
+            detail:
+              syntheticAuthByProvider.get(evaluation.runtimeAuth.id)?.source ?? "native login",
+          };
         }
         const candidates = Array.from(
           new Set([normalizeProviderId(provider), resolveProviderAuthHealthId(provider)]),

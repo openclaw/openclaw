@@ -73,6 +73,7 @@ type ModelSelectionPreparation =
       status: "ready";
       catalog: ModelCatalogEntry[];
       runtime: Exclude<ReturnType<typeof resolveModelRuntimeDirective>, { kind: "invalid" }>;
+      validateRuntimeSelection?: () => string | undefined;
     }
   | { status: "rejected"; reason: "invalid-runtime" | "unknown-provider"; message: string };
 
@@ -84,8 +85,20 @@ export async function prepareModelSelectionRuntime(params: {
   model: string;
   catalog: readonly ModelCatalogEntry[];
   rawRuntime?: string;
-  sessionEntry?: Pick<SessionEntry, "agentRuntimeOverride">;
+  profileOverride?: string;
+  sessionEntry?: Pick<
+    SessionEntry,
+    "agentRuntimeOverride" | "authProfileOverride" | "authProfileOverrideSource" | "modelProvider"
+  >;
 }): Promise<ModelSelectionPreparation> {
+  const sessionEntry = params.profileOverride
+    ? {
+        ...params.sessionEntry,
+        modelProvider: params.provider,
+        authProfileOverride: params.profileOverride,
+        authProfileOverrideSource: "user" as const,
+      }
+    : params.sessionEntry;
   const runtime = resolveModelRuntimeDirective(params);
   if (runtime.kind === "invalid") {
     return { status: "rejected", reason: "invalid-runtime", message: runtime.errorText };
@@ -98,8 +111,69 @@ export async function prepareModelSelectionRuntime(params: {
       message: `Unknown provider "${params.provider}". Use /models to list providers.`,
     };
   }
+  let validateRuntimeSelection: (() => string | undefined) | undefined;
+  if (runtime.kind === "set") {
+    const { getPublishedPreparedModelCatalogOwnerSnapshot, materializePreparedModelCatalogOwner } =
+      await import("../../agents/prepared-model-catalog.js");
+    const { getPreparedModelRuntimeAuthStore } =
+      await import("../../agents/prepared-model-runtime-auth.js");
+    const { createModelCatalogDecisions } = await import("../../agents/model-catalog-decisions.js");
+    const published = getPublishedPreparedModelCatalogOwnerSnapshot({
+      config: params.cfg,
+      agentId: params.agentId,
+    });
+    const unavailable = `Runtime "${runtime.runtime}" is not available for ${params.provider}/${params.model}. Refresh the model catalog and choose again.`;
+    if (!published) {
+      return { status: "rejected", reason: "invalid-runtime", message: unavailable };
+    }
+    const owner = materializePreparedModelCatalogOwner(published);
+    const authStore = getPreparedModelRuntimeAuthStore(owner);
+    if (!authStore) {
+      return { status: "rejected", reason: "invalid-runtime", message: unavailable };
+    }
+    const decisions = createModelCatalogDecisions({
+      cfg: owner.config,
+      agentId: owner.agentId ?? params.agentId,
+      agentDir: owner.agentDir,
+      workspaceDir: owner.workspaceDir,
+      snapshot: owner.modelCatalog,
+      metadataSnapshot: owner.metadataSnapshot,
+      preparedAuthStore: authStore,
+      preparedRuntimeAuthModes: owner.authModes,
+      pluginRegistry: owner.pluginRegistry,
+      observationConfig: owner.observationConfig,
+      isCurrent: owner.isCurrent,
+      preferredProfileId: sessionEntry?.authProfileOverride,
+      pinnedProfileId:
+        sessionEntry?.authProfileOverrideSource === "user"
+          ? sessionEntry.authProfileOverride
+          : undefined,
+      profileProvider: sessionEntry?.modelProvider,
+    });
+    const entry = findSelectedCatalogEntry({ ...params, catalog: decisions.snapshot.entries });
+    if (!entry) {
+      return { status: "rejected", reason: "invalid-runtime", message: unavailable };
+    }
+    const variants = decisions.snapshot.routeVariants.filter(
+      (row) => modelKey(row.provider, row.id) === modelKey(entry.provider, entry.id),
+    );
+    const choices = await decisions.runtimeChoices(entry, variants.length ? variants : [entry]);
+    if (!choices?.includes(runtime.runtime)) {
+      return { status: "rejected", reason: "invalid-runtime", message: unavailable };
+    }
+    const host = await decisions.evaluateEntry(
+      entry,
+      variants.length ? variants : [entry],
+      runtime.runtime,
+    );
+    validateRuntimeSelection = () =>
+      decisions.isCurrent() &&
+      decisions.evaluateNative(entry, host, runtime.runtime).availability === true
+        ? undefined
+        : unavailable;
+  }
   if (selected?.reasoning !== undefined) {
-    return { status: "ready", runtime, catalog: [...params.catalog] };
+    return { status: "ready", runtime, catalog: [...params.catalog], validateRuntimeSelection };
   }
   // The selected route owns its capabilities. A prepared default-provider row cannot
   // supply thinking or context metadata for an explicit cross-provider selection.
@@ -115,6 +189,7 @@ export async function prepareModelSelectionRuntime(params: {
   return {
     status: "ready",
     runtime,
+    validateRuntimeSelection,
     catalog: resolved
       ? [resolved, ...params.catalog.filter((entry) => entry !== selected)]
       : [...params.catalog],

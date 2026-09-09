@@ -4,6 +4,7 @@ import { readCodexPluginConfig } from "./config-parsing.js";
 import { resolveCodexAppServerRuntimeOptions } from "./config-runtime.js";
 import { buildCodexRuntimeModelParams } from "./model-runtime.js";
 import { listAllCodexAppServerModels, type CodexAppServerModel } from "./models.js";
+import { probeCodexNativeAuth } from "./native-auth.js";
 import { isJsonObject, type CodexGetAccountResponse } from "./protocol.js";
 import { withCodexAppServerJsonClient } from "./request.js";
 import { captureSharedCodexAppServerCatalogLifetime } from "./shared-client.js";
@@ -89,11 +90,24 @@ export function createCodexAppServerModelCatalog(runtime: string) {
       const observation: Observation = { pluginConfig };
       // Revoke before any await, including failed/disabled refreshes and superseded reads.
       observations.set(key, observation);
-      const discovery = readCodexPluginConfig(pluginConfig).discovery;
+      const configured = readCodexPluginConfig(pluginConfig);
+      const discovery = configured.discovery;
       if (discovery?.enabled === false) {
         return [];
       }
-      const { start } = resolveCodexAppServerRuntimeOptions({ pluginConfig });
+      const usesNativeHome =
+        configured.appServer?.homeScope !== "agent" &&
+        configured.appServer?.transport !== "websocket";
+      const native = usesNativeHome ? await probeCodexNativeAuth({ pluginConfig }) : undefined;
+      if ((usesNativeHome && !native) || disposed || observations.get(key) !== observation) {
+        return [];
+      }
+      const { start } = resolveCodexAppServerRuntimeOptions({
+        pluginConfig: {
+          ...configured,
+          appServer: { ...configured.appServer, ...(usesNativeHome ? { homeScope: "user" } : {}) },
+        },
+      });
       const timeoutMs = discovery?.timeoutMs ?? DEFAULT_MODEL_DISCOVERY_TIMEOUT_MS;
       const result = await withCodexAppServerJsonClient(
         { startOptions: start, config: params.config, agentDir: params.agentDir, timeoutMs },
@@ -130,7 +144,12 @@ export function createCodexAppServerModelCatalog(runtime: string) {
         return [];
       }
       observation.models = new Set(result.models.map((model) => model.id));
-      observation.accountType = result.accountType;
+      observation.accountType =
+        !usesNativeHome ||
+        (native?.mode === "api-key" && result.accountType === "apiKey") ||
+        ((native?.mode === "oauth" || native?.mode === "token") && result.accountType === "chatgpt")
+          ? result.accountType
+          : undefined;
       observation.isCurrent = result.isCurrent;
       return codexAppServerModelsToCatalogEntries(result.models, runtime);
     },

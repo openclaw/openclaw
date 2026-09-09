@@ -69,12 +69,20 @@ account-based. OpenClaw selects auth in this order:
 1. Ordered OpenAI auth profiles for the agent, preferably under
    `auth.order.openai`. Run `openclaw doctor --fix` to migrate older legacy
    Codex auth profile ids and auth order.
-2. The app-server's existing account, such as a local Codex CLI ChatGPT
-   sign-in. For the default isolated agent home, OpenClaw bridges that native
-   CLI account into the app-server through its login RPC; it does not share the
-   CLI's config, plugins, or thread store.
+2. The native Codex account, when no host credential or account selection owns
+   the route. This path uses the user Codex home. An explicit
+   `appServer.homeScope: "agent"` keeps the isolated home and does not borrow the
+   user login. Prepared OpenClaw credentials stay in the agent home; OpenClaw
+   never logs them into the native user home.
 3. For local stdio app-server launches only, and only when the app-server
    reports no account: `CODEX_API_KEY`, then `OPENAI_API_KEY`.
+
+Status and catalog reads ask Codex about its native login without importing
+credentials into an OpenClaw profile. A fresh auth refresh observes native login
+and logout. Native API-key and subscription accounts select their matching
+routes. Model runtime choices use the same route and account as thinking
+metadata; an unavailable runtime cannot be selected. Explicit auth import
+remains available when you want an OpenClaw-owned profile.
 
 The default per-agent `codex-home/auth.json` is not a runtime auth store. If
 you copied or mounted Codex CLI credentials there, import them into the agent's

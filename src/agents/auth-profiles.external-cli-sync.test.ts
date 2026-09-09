@@ -41,24 +41,6 @@ function makeStore(profileId?: string, credential?: OAuthCredential): AuthProfil
   };
 }
 
-function expectSingleProfileCredential(
-  profiles: ReturnType<typeof resolveExternalCliAuthProfiles>,
-  profileId: string,
-) {
-  expect(profiles).toStrictEqual([
-    {
-      credential: expect.any(Object),
-      persistence: profileId === OPENAI_CODEX_DEFAULT_PROFILE_ID ? "runtime-only" : "persisted",
-      profileId,
-    },
-  ]);
-  const credential = profiles[0]?.credential;
-  if (!credential) {
-    throw new Error(`Expected credential for profile ${profileId}`);
-  }
-  return credential as Record<string, unknown>;
-}
-
 function expectCredentialFields(
   credential: Record<string, unknown> | undefined,
   expected: Record<string, unknown>,
@@ -69,17 +51,6 @@ function expectCredentialFields(
   for (const [key, value] of Object.entries(expected)) {
     expect(credential[key]).toBe(value);
   }
-}
-
-function expectReaderPolicyCall(mock: { mock: { calls: unknown[][] } }) {
-  expect(mock.mock.calls).toStrictEqual([
-    [
-      {
-        allowKeychainPrompt: false,
-        ttlMs: 15 * 60 * 1000,
-      },
-    ],
-  ]);
 }
 
 describe("external cli oauth resolution", () => {
@@ -204,30 +175,12 @@ describe("external cli oauth resolution", () => {
     expect(credential).toBeNull();
   });
 
-  it("bootstraps the default codex profile from Codex CLI credentials when in scope", () => {
+  it("does not import a native Codex login during scoped discovery", () => {
     mocks.readCodexCliCredentialsCached.mockReturnValue(
-      makeOAuthCredential({
-        provider: "openai",
-        access: "codex-cli-access",
-        refresh: "codex-cli-refresh",
-        expires: Date.now() + 5 * 24 * 60 * 60_000,
-        accountId: "acct-codex",
-      }),
+      makeOAuthCredential({ provider: "openai" }),
     );
-
-    const profiles = resolveExternalCliAuthProfiles(makeStore(), {
-      providerIds: ["openai"],
-    });
-
-    expectCredentialFields(
-      expectSingleProfileCredential(profiles, OPENAI_CODEX_DEFAULT_PROFILE_ID),
-      {
-        provider: "openai",
-        access: "codex-cli-access",
-        refresh: "codex-cli-refresh",
-        accountId: "acct-codex",
-      },
-    );
+    expect(resolveExternalCliAuthProfiles(makeStore(), { providerIds: ["openai"] })).toEqual([]);
+    expect(mocks.readCodexCliCredentialsCached).not.toHaveBeenCalled();
   });
 
   it("does not add Codex CLI as a sibling to a named managed OpenAI profile", () => {
@@ -352,29 +305,14 @@ describe("external cli oauth resolution", () => {
     expect(mocks.readMiniMaxCliCredentialsCached).not.toHaveBeenCalled();
   });
 
-  it("passes non-prompting keychain policy to scoped Codex CLI credential reads", () => {
-    mocks.readCodexCliCredentialsCached.mockReturnValue(
-      makeOAuthCredential({
-        provider: "openai",
-        access: "codex-cli-access",
-        refresh: "codex-cli-refresh",
+  it("does not open Codex storage for an old runtime alias", () => {
+    expect(
+      resolveExternalCliAuthProfiles(makeStore(), {
+        providerIds: ["codex-app-server"],
+        allowKeychainPrompt: false,
       }),
-    );
-
-    const profiles = resolveExternalCliAuthProfiles(makeStore(), {
-      providerIds: ["codex-app-server"],
-      allowKeychainPrompt: false,
-    });
-
-    expectCredentialFields(
-      expectSingleProfileCredential(profiles, OPENAI_CODEX_DEFAULT_PROFILE_ID),
-      {
-        type: "oauth",
-        provider: "openai",
-      },
-    );
-    expectReaderPolicyCall(mocks.readCodexCliCredentialsCached);
-    expect(mocks.readMiniMaxCliCredentialsCached).not.toHaveBeenCalled();
+    ).toEqual([]);
+    expect(mocks.readCodexCliCredentialsCached).not.toHaveBeenCalled();
   });
 
   it("resolves fresher minimax external oauth profiles as runtime overlays", () => {

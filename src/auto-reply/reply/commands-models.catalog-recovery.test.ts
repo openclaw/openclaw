@@ -3,8 +3,8 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import type { PreparedAgentCredentialModes } from "../../agents/agent-auth-credential-modes.js";
 import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
+import * as modelDecisions from "../../agents/model-catalog-decisions.js";
 import type { ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
-import * as providerAuth from "../../agents/model-provider-auth.js";
 import * as preparedCatalog from "../../agents/prepared-model-catalog.js";
 import {
   getPreparedModelRuntimeAuthStore,
@@ -106,9 +106,11 @@ describe("/models browse catalog recovery", () => {
         await resume.promise;
         return { availability: true, routeResolution: null };
       });
-      vi.spyOn(providerAuth, "createProviderAuthChecker").mockReturnValue(
-        Object.assign(async () => true, { evaluateModelAuth }),
-      );
+      const createDecisions = modelDecisions.createModelCatalogDecisions;
+      vi.spyOn(modelDecisions, "createModelCatalogDecisions").mockImplementation((params) => ({
+        ...createDecisions(params),
+        evaluateEntry: evaluateModelAuth,
+      }));
       catalogMocks.readSnapshot.mockReturnValueOnce({
         entries: [{ provider: "anthropic", id: "claude-opus-4-5", name: "Retired model" }],
         routeVariants: [],

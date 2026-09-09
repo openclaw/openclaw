@@ -87,14 +87,22 @@ export async function prepareChatMetadataModelProjection(params: {
 export function resolveSessionCatalogProfiles(sessionEntry: ChatMetadataSessionEntry | undefined): {
   preferredProfileId?: string;
   pinnedProfileId?: string;
+  profileProvider?: string;
+  runtimeOverride?: string;
 } {
   const profileId = sessionEntry?.authProfileOverride?.trim();
+  const runtime = sessionEntry?.agentRuntimeOverride?.trim();
+  const context = {
+    ...(sessionEntry?.modelProvider ? { profileProvider: sessionEntry.modelProvider } : {}),
+    ...(runtime ? { runtimeOverride: runtime } : {}),
+  };
   if (!profileId) {
-    return {};
+    return context;
   }
   const profileSource = resolveCollapsedSessionAuthPinSource(sessionEntry);
   return {
     preferredProfileId: profileId,
+    ...context,
     ...(profileSource === "user" ? { pinnedProfileId: profileId } : {}),
   };
 }
