@@ -19,19 +19,22 @@ import {
   resolveOpenAICodexAuthIdentity,
   resolveOpenAICodexImportProfileName,
   updateAuthProfileStoreWithLock,
-  type AuthProfileStore,
-  type OAuthCredential,
   type OpenClawConfig,
   type ProviderAuthResult,
 } from "openclaw/plugin-sdk/provider-auth";
-import { decodeOpenAICodexJwtPayload } from "openclaw/plugin-sdk/provider-oauth-runtime";
 import {
   isRecord,
   normalizeOptionalString as readString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  findMatchingApiKeyProfile,
+  findMatchingOAuthProfile,
+  itemProfileTarget,
+  LEGACY_CODEX_PROFILE_ID,
+} from "./auth-profile-target.js";
 import { readCodexCliActiveApiKeyAsync, readCodexCliCredentialsAsync } from "./cli-credentials.js";
 import { readJsonObject } from "./helpers.js";
-import type { CodexSource } from "./source.js";
+import { defaultCodexHome, type CodexSource } from "./source.js";
 import type { resolveCodexMigrationTargets } from "./targets.js";
 
 const OPENAI_PROVIDER_ID = "openai";
@@ -51,7 +54,7 @@ type CodexConfigPatchMode = "apply" | "none" | "return";
 type CodexMigrationTargets = ReturnType<typeof resolveCodexMigrationTargets>;
 export type CodexAuthSource = Pick<CodexSource, "codexHome" | "authPath" | "modelsCachePath">;
 
-type CodexAuthCredential =
+export type CodexAuthCredential =
   | {
       kind: "oauth";
       provider: typeof OPENAI_PROVIDER_ID;
@@ -213,65 +216,6 @@ async function readCodexAuthCredentials(
       ? null
       : await buildCodexApiKeyCredential(source, options.allowKeychainPrompt, options.signal);
   return [oauth, apiKey].filter((entry): entry is CodexAuthCredential => entry !== null);
-}
-
-function findMatchingOAuthProfile(
-  store: AuthProfileStore,
-  credential: OAuthCredential,
-): string | undefined {
-  const subject = oauthSubject(credential);
-  if (!subject) {
-    return undefined;
-  }
-  for (const [profileId, existing] of Object.entries(store.profiles)) {
-    if (existing.type !== "oauth" || existing.provider !== credential.provider) {
-      continue;
-    }
-    const previous = oauthSubject(existing);
-    if (previous?.accountId === subject.accountId && previous.userId === subject.userId) {
-      return profileId;
-    }
-  }
-  return undefined;
-}
-
-function oauthSubject(credential: OAuthCredential) {
-  const claims = decodeOpenAICodexJwtPayload(credential.access)?.["https://api.openai.com/auth"];
-  if (!isRecord(claims)) {
-    return undefined;
-  }
-  const accountId = readString(claims.chatgpt_account_id);
-  const userId = readString(claims.chatgpt_user_id) ?? readString(claims.user_id);
-  return accountId && userId ? { accountId, userId } : undefined;
-}
-
-function findMatchingApiKeyProfile(
-  store: AuthProfileStore,
-  provider: string,
-  key: string,
-): string | undefined {
-  for (const [profileId, existing] of Object.entries(store.profiles)) {
-    if (existing.type === "api_key" && existing.provider === provider && existing.key === key) {
-      return profileId;
-    }
-  }
-  return undefined;
-}
-
-function itemProfileTarget(
-  credential: CodexAuthCredential,
-  store: AuthProfileStore,
-): { profileId: string; matchedExisting: boolean } {
-  if (credential.kind === "oauth") {
-    const profile = credential.result.profiles[0];
-    const matched =
-      profile?.credential.type === "oauth"
-        ? findMatchingOAuthProfile(store, profile.credential)
-        : undefined;
-    return { profileId: matched ?? credential.profileId, matchedExisting: Boolean(matched) };
-  }
-  const matched = findMatchingApiKeyProfile(store, credential.provider, credential.key);
-  return { profileId: matched ?? credential.profileId, matchedExisting: Boolean(matched) };
 }
 
 function replaceConfigDraft(draft: OpenClawConfig, next: OpenClawConfig): void {
@@ -517,7 +461,12 @@ export async function buildCodexAuthItems(params: {
   const store = loadAuthProfileStoreWithoutExternalProfiles(params.targets.agentDir);
   const skipped = !params.ctx.includeSecrets;
   return credentials.map((credential) => {
-    const { profileId, matchedExisting } = itemProfileTarget(credential, store);
+    const { profileId, matchedExisting } = itemProfileTarget(
+      credential,
+      store,
+      params.ctx,
+      params.source,
+    );
     const existing = store.profiles[profileId];
     const configProfile = authProfileConfigForCredential(credential, profileId);
     const configConflict = configProfile
@@ -565,6 +514,9 @@ export async function buildCodexAuthItems(params: {
         sourceProfileId: credential.profileId,
         sourceCredentialFingerprint: sourceCredentialFingerprint(credential),
         sourceKind: "codex-native-selected-storage",
+        ...(profileId === LEGACY_CODEX_PROFILE_ID && !matchedExisting
+          ? { legacyNativeHome: params.source.codexHome }
+          : {}),
         credentialKind: credential.kind,
         credentialImportUnavailable: unavailable,
       },
@@ -612,6 +564,12 @@ export async function applyCodexAuthItems(params: {
   if (item.details?.sourceCredentialFingerprint !== sourceCredentialFingerprint(credential)) {
     return [markMigrationItemSkipped(item, CODEX_REASON_AUTH_NO_LONGER_PRESENT)];
   }
+  if (
+    item.details?.legacyNativeHome !== undefined &&
+    (item.details.legacyNativeHome !== source.codexHome || source.codexHome !== defaultCodexHome())
+  ) {
+    return [markMigrationItemSkipped(item, CODEX_REASON_AUTH_NO_LONGER_PRESENT)];
+  }
   ctx.signal?.throwIfAborted();
   const oauthProfile = credential.kind === "oauth" ? credential.result.profiles[0] : undefined;
   const oauthCredential =
@@ -634,6 +592,13 @@ export async function applyCodexAuthItems(params: {
     stateDir: ctx.stateDir,
     updater: (freshStore) => {
       ctx.signal?.throwIfAborted();
+      if (
+        item.details?.legacyNativeHome !== undefined &&
+        itemProfileTarget(credential, freshStore, ctx, source).profileId !== profileId
+      ) {
+        conflicted = true;
+        return false;
+      }
       const existing = freshStore.profiles[profileId];
       if (!ctx.overwrite && existing) {
         const matchedProfileId =
