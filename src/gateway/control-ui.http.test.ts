@@ -22,6 +22,8 @@ import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { AVATAR_MAX_DATA_URL_CHARS } from "../shared/avatar-limits.js";
 import { AVATAR_MAX_BYTES } from "../shared/avatar-policy.js";
+import { closeOpenClawStateDatabaseByPath } from "../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { buildAssistantMediaContentDisposition } from "./assistant-media-content-disposition.js";
 import {
@@ -474,59 +476,70 @@ describe("handleControlUiHttpRequest", () => {
     }
   }
 
+  async function withPairedDeviceHome<T>(prefix: string, fn: () => Promise<T>): Promise<T> {
+    const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
+    let databasePath: string | undefined;
+    try {
+      return await withEnvAsync({ OPENCLAW_HOME: tempHome }, async () => {
+        databasePath = resolveOpenClawStateSqlitePath();
+        return await fn();
+      });
+    } finally {
+      // A failed database close must leave its files intact.
+      if (databasePath) {
+        closeOpenClawStateDatabaseByPath(databasePath);
+      }
+      await fs.rm(tempHome, { recursive: true, force: true });
+    }
+  }
+
   async function withPairedOperatorDeviceToken<T>(params: {
     issuerGeneration?: string;
     browserMetadata?: boolean;
     fn: (token: string) => Promise<T>;
   }) {
-    const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-ui-device-token-"));
-    try {
-      return await withEnvAsync({ OPENCLAW_HOME: tempHome }, async () => {
-        const deviceId = "control-ui-device";
-        const requested = await requestDevicePairing({
+    return await withPairedDeviceHome("openclaw-ui-device-token-", async () => {
+      const deviceId = "control-ui-device";
+      const requested = await requestDevicePairing({
+        deviceId,
+        publicKey: "test-public-key",
+        role: "operator",
+        scopes: ["operator.read"],
+        ...(params.browserMetadata
+          ? {
+              clientId: "openclaw-control-ui",
+              clientMode: "webchat",
+            }
+          : {}),
+      });
+      const approved = await approveDevicePairing(requested.request.requestId, {
+        callerScopes: ["operator.read"],
+      });
+      expect(approved?.status).toBe("approved");
+      let operatorToken =
+        approved?.status === "approved" ? approved.device.tokens?.operator?.token : undefined;
+      if (params.issuerGeneration) {
+        const issued = await ensureDeviceToken({
           deviceId,
-          publicKey: "test-public-key",
           role: "operator",
           scopes: ["operator.read"],
-          ...(params.browserMetadata
-            ? {
-                clientId: "openclaw-control-ui",
-                clientMode: "webchat",
-              }
-            : {}),
+          issuer: {
+            kind: "shared-gateway-auth",
+            generation: params.issuerGeneration,
+          },
         });
-        const approved = await approveDevicePairing(requested.request.requestId, {
-          callerScopes: ["operator.read"],
-        });
-        expect(approved?.status).toBe("approved");
-        let operatorToken =
-          approved?.status === "approved" ? approved.device.tokens?.operator?.token : undefined;
-        if (params.issuerGeneration) {
-          const issued = await ensureDeviceToken({
-            deviceId,
-            role: "operator",
-            scopes: ["operator.read"],
-            issuer: {
-              kind: "shared-gateway-auth",
-              generation: params.issuerGeneration,
-            },
-          });
-          operatorToken = issued?.token;
-        }
-        expect(typeof operatorToken).toBe("string");
-        return await params.fn(operatorToken ?? "");
-      });
-    } finally {
-      await fs.rm(tempHome, { recursive: true, force: true });
-    }
+        operatorToken = issued?.token;
+      }
+      expect(typeof operatorToken).toBe("string");
+      return await params.fn(operatorToken ?? "");
+    });
   }
 
   async function withScopedPairedOperatorDevice<T>(params: {
     scopes: string[];
     fn: (bearer: string) => Promise<T>;
   }) {
-    const tempHome = testTempDirs.make("openclaw-ui-scoped-device-");
-    return await withEnvAsync({ OPENCLAW_HOME: tempHome }, async () => {
+    return await withPairedDeviceHome("openclaw-ui-scoped-device-", async () => {
       const deviceId = `control-ui-device-${randomUUID()}`;
       const requested = await requestDevicePairing({
         deviceId,
