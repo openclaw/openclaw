@@ -281,6 +281,72 @@ describe("browser panel route handoff", () => {
     expect(paths()).not.toContain("/tabs/focus");
   });
 
+  it.each([false, true])(
+    "rejects a missing historical tab before capture and preserves the prior view (prior=%s)",
+    async (hasPriorView) => {
+      const missingTarget = "missing-history-target";
+      const gateway = createBrowserClient(
+        async (request) => {
+          if (request.path === "/tabs") {
+            return {
+              running: true,
+              tabs: [createBrowserPanelTestTab("t1", "https://managed.example/", "managed")],
+            };
+          }
+          if (request.body?.targetId === missingTarget) {
+            throw new GatewayRequestError({
+              code: "INVALID_REQUEST",
+              message: "tab not found",
+            });
+          }
+          if (request.path === "/screencast") {
+            throw new GatewayRequestError({
+              code: "INVALID_REQUEST",
+              message: "Screencast unavailable",
+              details: { code: "SCREENCAST_UNSUPPORTED", reason: "node" },
+            });
+          }
+          if (request.path === "/screenshot") {
+            return { path: "/fresh.png", targetId: "raw-t1", url: "https://managed.example/" };
+          }
+          if (request.path === "/act") {
+            return createBrowserPanelTestMetrics("https://managed.example/", "managed");
+          }
+          return { ok: true };
+        },
+        { screencast: true },
+      );
+      const panel = await mountPanel(gateway.client, hasPriorView);
+      if (hasPriorView) {
+        await waitForFast(() => expect(pageTitle(panel)).toBe("managed"));
+      }
+      const controller = controllerFor(panel);
+      const previousView = controller.view;
+      vi.useFakeTimers();
+      panel.preferredTab = {
+        tab: { ...hostTab, targetId: missingTarget },
+        revision: "missing-history",
+      };
+      panel.presented = true;
+      await waitForFast(() => expect(controller.errorText).toBeTruthy());
+
+      const missingCaptures = () =>
+        gateway.request.mock.calls
+          .map(([, value]) => value as BrowserRequestEnvelope)
+          .filter(
+            (request) =>
+              request.body?.targetId === missingTarget &&
+              (request.path === "/screencast" || request.path === "/screenshot"),
+          );
+      expect.soft(controller.activeTargetId).toBe(hasPriorView ? "t1" : null);
+      expect.soft(controller.view).toBe(previousView);
+      expect.soft(controller.loading).toBe(false);
+      expect.soft(missingCaptures()).toEqual([]);
+      await vi.advanceTimersByTimeAsync(21_000);
+      expect(missingCaptures()).toEqual([]);
+    },
+  );
+
   it("keeps a raw target selection when its stable tab alias is not the first tab", async () => {
     const gateway = browserGateway();
     const panel = await mountPanel(gateway.client, false);
