@@ -22,6 +22,69 @@ function request(threadId: string, generation?: string, extra: JsonObject = {}):
 }
 
 describe("parent-local inference context", () => {
+  it("refreshes and removes overlays for native input-only requests without changing history", () => {
+    const context = createCodexInferenceContext(() => {});
+    const register = (text: string) =>
+      context.register({
+        threadId: "root",
+        text,
+        signal: new AbortController().signal,
+        assertCurrent: () => {},
+      });
+    const inputOnly = (generation: string) => {
+      const source = request("root", generation);
+      delete source.instructions;
+      source.input = [
+        { id: "at_native_tools", type: "additional_tools", role: "developer", tools: [] },
+        {
+          id: "msg_native_base",
+          type: "message",
+          role: "developer",
+          content: [{ type: "input_text", text: "native base" }],
+        },
+      ];
+      return source;
+    };
+    const first = register("persona A");
+    const source = inputOnly(first.generation);
+    const prepared = context.prepare(source);
+    expect(prepared.body).toEqual({ ...source, instructions: "persona A" });
+    expect(prepared.body.input).toBe(source.input);
+    expect(source).not.toHaveProperty("instructions");
+    const second = register("persona B");
+    expect(prepared.signal?.aborted).toBe(true);
+    expect(() => context.prepare(source)).toThrow("current admitted");
+    const continuation = {
+      ...inputOnly(second.generation),
+      input: [],
+      previous_response_id: "previous",
+    };
+    expect(context.prepare(continuation).body).toEqual({
+      ...continuation,
+      instructions: "persona B",
+    });
+    const removed = inputOnly(register("").generation);
+    expect(context.prepare(removed).body).toBe(removed);
+    context.close();
+  });
+
+  it.each([null, 42, false, [], {}].map((instructions) => ({ instructions })))(
+    "rejects explicit non-string instructions: $instructions",
+    ({ instructions }) => {
+      const context = createCodexInferenceContext(() => {});
+      const registration = context.register({
+        threadId: "root",
+        text: "persona",
+        signal: new AbortController().signal,
+        assertCurrent: () => {},
+      });
+      expect(() =>
+        context.prepare({ ...request("root", registration.generation), instructions }),
+      ).toThrow("instructions");
+      context.close();
+    },
+  );
+
   it("refreshes and removes parent instructions without rewriting native history or affecting children", () => {
     const context = createCodexInferenceContext(() => {});
     const register = (text: string) =>

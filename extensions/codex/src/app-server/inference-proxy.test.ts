@@ -91,7 +91,7 @@ async function post(
   );
 }
 
-async function fixture() {
+async function fixture(withInstructions = true) {
   const proxy = await createCodexInferenceProxy({
     upstream: new URL("https://api.openai.com/v1"),
     assertCurrent: () => {},
@@ -105,7 +105,7 @@ async function fixture() {
     assertCurrent: () => {},
   });
   const body = {
-    instructions: "native base",
+    ...(withInstructions ? { instructions: "native base" } : {}),
     input: [{ role: "developer", content: "catalog" }],
     client_metadata: {
       thread_id: "root",
@@ -120,10 +120,15 @@ async function fixture() {
 }
 
 describe("private inference HTTP relay", () => {
-  it.each([false, true])(
-    "preserves auth and native input while adding only top-level instructions (zstd=%s)",
-    async (zstd) => {
-      const { proxy, body } = await fixture();
+  it.each([
+    { zstd: false, withInstructions: true },
+    { zstd: true, withInstructions: true },
+    { zstd: false, withInstructions: false },
+    { zstd: true, withInstructions: false },
+  ])(
+    "preserves auth and native input (zstd=$zstd, top-level instructions=$withInstructions)",
+    async ({ zstd, withInstructions }) => {
+      const { proxy, body } = await fixture(withInstructions);
       let forwarded: unknown;
       transport.fetch.mockImplementation(async (args) => {
         args.beforeRequest();
@@ -154,7 +159,10 @@ describe("private inference HTTP relay", () => {
       await transport.fetch.mock.results[0]?.value;
       expect(response.status).toBe(200);
       expect(await response.text()).toBe("data: synthetic\n\n");
-      expect(forwarded).toEqual({ ...body, instructions: "native base\n\nsynthetic persona" });
+      expect(forwarded).toEqual({
+        ...body,
+        instructions: withInstructions ? "native base\n\nsynthetic persona" : "synthetic persona",
+      });
     },
   );
 
@@ -262,12 +270,14 @@ describe("private inference WebSocket relay", () => {
   );
 
   it.each([
-    { proxied: false, localDnsUnavailable: false },
-    { proxied: true, localDnsUnavailable: false },
-    { proxied: true, localDnsUnavailable: true },
+    { proxied: false, localDnsUnavailable: false, withInstructions: true },
+    { proxied: true, localDnsUnavailable: false, withInstructions: true },
+    { proxied: true, localDnsUnavailable: true, withInstructions: true },
+    { proxied: false, localDnsUnavailable: false, withInstructions: false },
+    { proxied: true, localDnsUnavailable: true, withInstructions: false },
   ])(
-    "preserves WS deltas and replies (proxy=$proxied, local DNS unavailable=$localDnsUnavailable)",
-    async ({ proxied, localDnsUnavailable }) => {
+    "preserves WS deltas (proxy=$proxied, local DNS unavailable=$localDnsUnavailable, instructions=$withInstructions)",
+    async ({ proxied, localDnsUnavailable, withInstructions }) => {
       const agent = new Agent();
       const destroy = vi.spyOn(agent, "destroy");
       transport.proxyAgent.mockReturnValue(proxied ? agent : undefined);
@@ -303,7 +313,7 @@ describe("private inference WebSocket relay", () => {
         throw new Error("fixture did not listen");
       }
       transport.upstream = "ws://127.0.0.1:" + address.port;
-      const { proxy, registration, body } = await fixture();
+      const { proxy, registration, body } = await fixture(withInstructions);
       const socket = new WebSocket(proxy.baseUrl.replace("http:", "ws:") + "/responses");
       let responseHeaders: IncomingHttpHeaders | undefined;
       socket.on("upgrade", (response) => {
@@ -317,7 +327,12 @@ describe("private inference WebSocket relay", () => {
           "openai-model": "fixture-model",
         });
         for (const input of [body.input, []]) {
-          const response = once(socket, "message");
+          const response = Promise.race([
+            once(socket, "message"),
+            once(socket, "close").then(() => {
+              throw new Error("inference relay closed before its response");
+            }),
+          ]);
           socket.send(
             JSON.stringify({
               ...body,
@@ -332,7 +347,7 @@ describe("private inference WebSocket relay", () => {
         }
         const expected = {
           ...body,
-          instructions: "native base\n\nsynthetic persona",
+          instructions: withInstructions ? "native base\n\nsynthetic persona" : "synthetic persona",
           type: "response.create",
           previous_response_id: "previous",
         };
