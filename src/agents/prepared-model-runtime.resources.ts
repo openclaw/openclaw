@@ -79,8 +79,6 @@ class PreparedRegistryResources {
     }
     if (this.claims === 0 && !this.finishing) {
       this.finishing = true;
-      // Copied donor callbacks keep their existing physical claim until actual work ends.
-      this.trackRelease(this.acquired.releaseBorrowedSources);
       void (async () => {
         while (this.releases.size > 0) {
           await Promise.all(this.releases);
