@@ -250,27 +250,33 @@ describe("renderSessionProgressCard", () => {
     },
   );
 
-  it("pauses timestamped progress while a later active run is still queued", () => {
-    const container = document.createElement("div");
-    render(
-      renderSessionProgressCard(
-        { ...progressCard, updatedAt: RUN_STARTED_MS - 1 },
-        "composer",
-        undefined,
-        "queued",
-        undefined,
-        undefined,
-        true,
-      ),
-      container,
-    );
+  it.each([
+    ["fresh", undefined, undefined],
+    ["reused", RUN_STARTED_MS - 1_000, RUN_STARTED_MS],
+  ] as const)(
+    "pauses timestamped progress while a %s session run is queued",
+    (_name, startedAt, endedAt) => {
+      const container = document.createElement("div");
+      render(
+        renderSessionProgressCard(
+          { ...progressCard, updatedAt: RUN_STARTED_MS - 1 },
+          "composer",
+          undefined,
+          "queued",
+          startedAt,
+          endedAt,
+          true,
+        ),
+        container,
+      );
 
-    expect(
-      container.querySelector('.session-progress-card__current-marker[data-status="paused"]'),
-    ).not.toBeNull();
-    expect(container.querySelector(".session-progress-card__step--paused")).not.toBeNull();
-    expect(container.querySelector(".session-run-spinner")).toBeNull();
-  });
+      expect(
+        container.querySelector('.session-progress-card__current-marker[data-status="paused"]'),
+      ).not.toBeNull();
+      expect(container.querySelector(".session-progress-card__step--paused")).not.toBeNull();
+      expect(container.querySelector(".session-run-spinner")).toBeNull();
+    },
+  );
 
   it.each([
     ["stale", RUN_STARTED_MS - 1, "paused", false],

@@ -358,14 +358,13 @@ export function renderSessionProgressCard(
     validUpdatedAt !== undefined &&
     validUpdatedAt >= validStartedAt;
   // A later run does not own durable progress last updated before it starts.
-  // A queued run has no start timestamp, so prior progress remains paused.
+  // Queued runs can retain the previous run's timestamps, but do not own its progress.
   const hasCurrentRunActivity =
     hasActiveRun &&
     !isProgressCardStaleForRun(card, startedAt) &&
     (validUpdatedAt === undefined ||
-      (validStartedAt === undefined
-        ? sessionStatus === undefined
-        : validUpdatedAt >= validStartedAt));
+      (sessionStatus !== "queued" &&
+        (validStartedAt !== undefined || sessionStatus === undefined)));
   const terminalTimestamp =
     sessionStatus && TERMINAL_OUTCOME_LABEL_KEYS[sessionStatus] && hasValidRunWindow
       ? validEndedAt
