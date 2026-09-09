@@ -19,7 +19,10 @@ describe("plugin Gateway returned values", () => {
       fs.mkdir(workspaceDir, { recursive: true }),
       fs.mkdir(pluginDir, { recursive: true }),
     ]);
-    await fs.writeFile(path.join(pluginDir, "package.json"), '{"type":"module"}\n');
+    await fs.writeFile(
+      path.join(pluginDir, "package.json"),
+      '{"type":"module","main":"index.ts"}\n',
+    );
     await fs.writeFile(
       path.join(pluginDir, "openclaw.plugin.json"),
       JSON.stringify({ id: "ts-gateway-return", configSchema: { type: "object" } }),
