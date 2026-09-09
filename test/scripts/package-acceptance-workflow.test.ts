@@ -11896,6 +11896,9 @@ promote_windows_release_assets
       ]);
     }
 
+    const npmPublish = workflowJob(PLUGIN_NPM_RELEASE_WORKFLOW, "publish_plugins_npm");
+    expect(npmPublish.if).toContain("always() && !cancelled()");
+
     for (const workflowPath of [PLUGIN_NPM_RELEASE_WORKFLOW, OPENCLAW_NPM_RELEASE_WORKFLOW]) {
       const authorization = workflowStep(
         workflowJob(

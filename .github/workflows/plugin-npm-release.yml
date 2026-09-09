@@ -1402,7 +1402,7 @@ jobs:
         verify_plugin_npm_preflight,
         validate_release_publish_approval,
       ]
-    if: ${{ always() && github.event_name == 'workflow_dispatch' && !inputs.preflight_only && needs.preview_plugins_npm.result == 'success' && needs.validate_release_publish_approval.result == 'success' && needs.preview_plugins_npm.outputs.has_candidates == 'true' && (inputs.prepared_artifact != '' || (needs.preview_plugin_pack.result == 'success' && needs.verify_plugin_npm_preflight.result == 'success')) }}
+    if: ${{ always() && !cancelled() && github.event_name == 'workflow_dispatch' && !inputs.preflight_only && needs.preview_plugins_npm.result == 'success' && needs.validate_release_publish_approval.result == 'success' && needs.preview_plugins_npm.outputs.has_candidates == 'true' && (inputs.prepared_artifact != '' || (needs.preview_plugin_pack.result == 'success' && needs.verify_plugin_npm_preflight.result == 'success')) }}
     runs-on: ubuntu-latest
     environment: npm-release
     permissions:
