@@ -3230,5 +3230,29 @@
   {
     "source": "How an update runs",
     "target": "更新的运行方式"
+  },
+  {
+    "source": "Configuration — shared channel policies",
+    "target": "配置 — 共享渠道策略"
+  },
+  {
+    "source": "Configuration — personal messaging channels",
+    "target": "配置 — 个人消息渠道"
+  },
+  {
+    "source": "Configuration — workplace chat channels",
+    "target": "配置 — 办公聊天渠道"
+  },
+  {
+    "source": "Configuration — community chat channels",
+    "target": "配置 — 社区聊天渠道"
+  },
+  {
+    "source": "Configuration — group mention gating and history",
+    "target": "配置 — 群组提及门控和历史记录"
+  },
+  {
+    "source": "Configuration — chat commands",
+    "target": "配置 — 聊天命令"
   }
 ]
