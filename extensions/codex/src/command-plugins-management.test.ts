@@ -1029,7 +1029,6 @@ describe("Codex /codex plugins subcommand", () => {
     const buttons = result.presentation?.blocks.flatMap((block) =>
       block.type === "buttons" ? block.buttons : [],
     );
-    expect(buttons).toHaveLength(5);
     expect(buttons?.map((button) => button.label)).toEqual([
       "Open App 0 in ChatGPT",
       "Open App 1 in ChatGPT",
