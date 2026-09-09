@@ -8,10 +8,9 @@ import { RequestScopedSubagentRuntimeError } from "openclaw/plugin-sdk/error-run
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   listMemoryArtifactProvenance,
-  readMemoryArtifactProvenance,
-  recordMemoryArtifactWriteProvenance,
   resolveMemoryDreamingPluginConfig,
   resolveSessionTranscriptsDirForAgent,
+  type MemoryArtifactProvenance,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { clearRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
@@ -1173,26 +1172,30 @@ describe("memory-core dreaming phases", () => {
     ].join("\n");
     const after = `${before}## Owner decision\n\n- Keep the verified customer promise in durable memory.\n`;
     await fs.writeFile(filePath, after, "utf-8");
-    await recordMemoryArtifactWriteProvenance({
-      workspaceDir,
-      relativePath,
-      contentBefore: "",
-      contentAfter: before,
+    const trustedAppend = after.slice(before.length);
+    const untrustedObservedAt = Date.parse("2026-04-05T09:00:00.000Z");
+    const trustedObservedAt = Date.parse("2026-04-05T09:30:00.000Z");
+    const recorded: MemoryArtifactProvenance = {
+      fileHash: createHash("sha256").update(after).digest("hex"),
       originClass: "untrusted",
-      observedAt: Date.parse("2026-04-05T09:00:00.000Z"),
-    });
-    await recordMemoryArtifactWriteProvenance({
-      workspaceDir,
-      relativePath,
-      contentBefore: before,
-      contentAfter: after,
-      originClass: "agent",
-      observedAt: Date.parse("2026-04-05T09:30:00.000Z"),
-    });
-    const recorded = await readMemoryArtifactProvenance({ workspaceDir, relativePath });
-    if (!recorded) {
-      throw new Error("expected recorded memory artifact provenance");
-    }
+      observedAt: trustedObservedAt,
+      segments: [
+        {
+          startOffset: 0,
+          endOffset: before.length,
+          contentHash: createHash("sha256").update(before).digest("hex"),
+          originClass: "untrusted",
+          observedAt: untrustedObservedAt,
+        },
+        {
+          startOffset: before.length,
+          endOffset: after.length,
+          contentHash: createHash("sha256").update(trustedAppend).digest("hex"),
+          originClass: "agent",
+          observedAt: trustedObservedAt,
+        },
+      ],
+    };
     memoryArtifactProvenanceMock.mockResolvedValue([{ relativePath, provenance: recorded }]);
 
     const { beforeAgentReply } = createHarness(
@@ -1223,10 +1226,14 @@ describe("memory-core dreaming phases", () => {
       minUniqueQueries: 0,
       nowMs: Date.parse("2026-04-05T10:05:00.000Z"),
     });
+    const store = await shortTermTesting.readRecallStore(workspaceDir, "2026-04-05T10:05:00.000Z");
+    const entries = Object.values(store.entries).filter((entry) => entry.path === relativePath);
     expect(
-      candidates.find((candidate) => candidate.snippet.includes("imported claim"))?.provenance
-        ?.originClass,
+      entries.find((entry) => entry.snippet.includes("imported claim"))?.provenance?.originClass,
     ).toBe("untrusted");
+    expect(candidates.some((candidate) => candidate.snippet.includes("imported claim"))).toBe(
+      false,
+    );
     expect(
       candidates.find((candidate) => candidate.snippet.includes("customer promise"))?.provenance
         ?.originClass,

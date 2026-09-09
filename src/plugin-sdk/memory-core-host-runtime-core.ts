@@ -40,7 +40,6 @@ export type {
 export {
   listMemoryArtifactProvenance,
   readMemoryArtifactProvenance,
-  recordMemoryArtifactWriteProvenance,
   rebaseMemoryArtifactWriteProvenance,
 } from "../memory/memory-artifact-provenance.js";
 export type {

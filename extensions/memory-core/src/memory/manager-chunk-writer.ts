@@ -8,6 +8,7 @@ import {
   compileSqliteQueryBindings,
   getNodeSqliteKysely,
 } from "openclaw/plugin-sdk/sqlite-runtime";
+import { normalizeMemoryObservedAt } from "../daily-provenance.js";
 
 export type IndexedMemoryChunk = MemoryChunk & {
   importance: number | null;
@@ -101,7 +102,9 @@ export function createMemoryChunkWriter(
         chunk_id: parameter((row) => row.id),
         origin_class: parameter((row) => row.provenance.originClass),
         session_kind: parameter((row) => row.provenance.sessionKind),
-        observed_at: parameter((row) => row.provenance.observedAt),
+        observed_at: parameter((row) =>
+          normalizeMemoryObservedAt(row.provenance.observedAt, context.now),
+        ),
         supersedes_key: parameter((row) => row.provenance.supersedesKey ?? null),
       })
       .onConflict((conflict) =>

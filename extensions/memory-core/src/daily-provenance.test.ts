@@ -1,40 +1,85 @@
 import { describe, expect, it } from "vitest";
 import {
-  buildDailyProvenanceRecord,
   hashDailyMemoryContent,
-  rebaseDailyProvenanceRecord,
+  normalizeMemoryObservedAt,
   resolveDailyLineProvenance,
   resolveDailyRangeProvenance,
   type DailyProvenanceRecord,
 } from "./daily-provenance.js";
 
-describe("daily memory provenance", () => {
-  it("keeps trusted lines promotable after a legacy quarantined file", () => {
-    const before = "untrusted line\n";
-    const after = `${before}trusted line\n`;
-    const legacy: DailyProvenanceRecord = {
-      fileHash: hashDailyMemoryContent(before),
-      originClass: "untrusted",
-      observedAt: 1,
+type SegmentSpec = {
+  text: string;
+  originClass: "agent" | "untrusted";
+  observedAt: number;
+};
+
+function recordFromSegments(specs: SegmentSpec[]): {
+  content: string;
+  record: DailyProvenanceRecord;
+} {
+  const content = specs.map((spec) => spec.text).join("");
+  let startOffset = 0;
+  const segments = specs.map((spec) => {
+    const segment = {
+      startOffset,
+      endOffset: startOffset + spec.text.length,
+      contentHash: hashDailyMemoryContent(spec.text),
+      originClass: spec.originClass,
+      observedAt: spec.observedAt,
     };
-    const record = buildDailyProvenanceRecord({
-      existing: legacy,
-      contentBefore: before,
-      contentAfter: after,
+    startOffset = segment.endOffset;
+    return segment;
+  });
+  return {
+    content,
+    record: {
+      fileHash: hashDailyMemoryContent(content),
+      originClass: segments.some((segment) => segment.originClass === "untrusted")
+        ? "untrusted"
+        : "agent",
+      observedAt: Math.max(0, ...segments.map((segment) => segment.observedAt)),
+      segments,
+    },
+  };
+}
+
+describe("daily memory provenance", () => {
+  it("normalizes filesystem timestamps before STRICT SQLite storage", () => {
+    const content = "trusted line\n";
+    const staleRecord: DailyProvenanceRecord = {
+      fileHash: hashDailyMemoryContent(content),
       originClass: "agent",
-      observedAt: 2,
+      observedAt: 1,
+      segments: [],
+    };
+
+    const lines = resolveDailyLineProvenance({
+      content,
+      record: staleRecord,
+      defaultObservedAt: 1_234.75,
     });
+
+    expect(lines.every((line) => Number.isSafeInteger(line.observedAt))).toBe(true);
+    expect(lines).toMatchObject([{ observedAt: 1_234 }, { observedAt: 1_234 }]);
+    expect(normalizeMemoryObservedAt(Number.NaN, 5_678.9)).toBe(5_678);
+  });
+
+  it("keeps trusted lines promotable after a legacy quarantined file", () => {
+    const { content, record } = recordFromSegments([
+      { text: "untrusted line\n", originClass: "untrusted", observedAt: 1 },
+      { text: "trusted line\n", originClass: "agent", observedAt: 2 },
+    ]);
 
     expect(record.originClass).toBe("untrusted");
     expect(
-      resolveDailyLineProvenance({ content: after, record, defaultObservedAt: 3 }).slice(0, 2),
+      resolveDailyLineProvenance({ content, record, defaultObservedAt: 3 }).slice(0, 2),
     ).toMatchObject([
       { originClass: "untrusted", observedAt: 1 },
       { originClass: "agent", observedAt: 2 },
     ]);
     expect(
       resolveDailyRangeProvenance({
-        content: after,
+        content,
         record,
         startLine: 2,
         endLine: 2,
@@ -44,66 +89,36 @@ describe("daily memory provenance", () => {
   });
 
   it("does not let an untrusted append taint earlier trusted lines", () => {
-    const before = "trusted line\n";
-    const first = buildDailyProvenanceRecord({
-      contentBefore: "",
-      contentAfter: before,
-      originClass: "agent",
-      observedAt: 1,
-    });
-    const after = `${before}untrusted line\n`;
-    const record = buildDailyProvenanceRecord({
-      existing: first,
-      contentBefore: before,
-      contentAfter: after,
-      originClass: "untrusted",
-      observedAt: 2,
-    });
+    const { content, record } = recordFromSegments([
+      { text: "trusted line\n", originClass: "agent", observedAt: 1 },
+      { text: "untrusted line\n", originClass: "untrusted", observedAt: 2 },
+    ]);
 
     expect(
-      resolveDailyLineProvenance({ content: after, record, defaultObservedAt: 3 }).slice(0, 2),
+      resolveDailyLineProvenance({ content, record, defaultObservedAt: 3 }).slice(0, 2),
     ).toMatchObject([{ originClass: "agent" }, { originClass: "untrusted" }]);
   });
 
   it("keeps a stale baseline quarantined while trusting the exact append", () => {
-    const recordedContent = "recorded line\n";
-    const record = buildDailyProvenanceRecord({
-      contentBefore: "",
-      contentAfter: recordedContent,
-      originClass: "untrusted",
-      observedAt: 1,
-    });
-    const contentBefore = "tampered line\n";
-    const contentAfter = `${contentBefore}trusted append\n`;
-    const next = buildDailyProvenanceRecord({
-      existing: record,
-      contentBefore,
-      contentAfter,
-      originClass: "agent",
-      observedAt: 2,
-    });
+    const { content, record } = recordFromSegments([
+      { text: "tampered line\n", originClass: "untrusted", observedAt: 1 },
+      { text: "trusted append\n", originClass: "agent", observedAt: 2 },
+    ]);
 
     expect(
-      resolveDailyLineProvenance({
-        content: contentAfter,
-        record: next,
-        defaultObservedAt: 3,
-      }).slice(0, 2),
+      resolveDailyLineProvenance({ content, record, defaultObservedAt: 3 }).slice(0, 2),
     ).toMatchObject([{ originClass: "untrusted" }, { originClass: "agent" }]);
   });
 
   it("fails closed for a non-append rewrite", () => {
-    const record = buildDailyProvenanceRecord({
-      contentBefore: "trusted line\n",
-      contentAfter: "replacement line\n",
-      originClass: "agent",
-      observedAt: 2,
-    });
+    const { content, record } = recordFromSegments([
+      { text: "replacement line\n", originClass: "untrusted", observedAt: 2 },
+    ]);
 
     expect(record.originClass).toBe("untrusted");
     expect(
       resolveDailyRangeProvenance({
-        content: "replacement line\n",
+        content,
         record,
         startLine: 1,
         endLine: 1,
@@ -113,25 +128,14 @@ describe("daily memory provenance", () => {
   });
 
   it("quarantines a line when trust changes in the middle of it", () => {
-    const before = "trusted";
-    const first = buildDailyProvenanceRecord({
-      contentBefore: "",
-      contentAfter: before,
-      originClass: "agent",
-      observedAt: 1,
-    });
-    const after = `${before} untrusted\n`;
-    const record = buildDailyProvenanceRecord({
-      existing: first,
-      contentBefore: before,
-      contentAfter: after,
-      originClass: "untrusted",
-      observedAt: 2,
-    });
+    const { content, record } = recordFromSegments([
+      { text: "trusted", originClass: "agent", observedAt: 1 },
+      { text: " untrusted\n", originClass: "untrusted", observedAt: 2 },
+    ]);
 
     expect(
       resolveDailyRangeProvenance({
-        content: after,
+        content,
         record,
         startLine: 1,
         endLine: 1,
@@ -141,33 +145,14 @@ describe("daily memory provenance", () => {
   });
 
   it("preserves existing line trust across a managed block replacement", () => {
-    const before = "trusted line\nquarantined line\n";
-    const base = buildDailyProvenanceRecord({
-      contentBefore: "",
-      contentAfter: "trusted line\n",
-      originClass: "agent",
-      observedAt: 1,
-    });
-    const mixed = buildDailyProvenanceRecord({
-      existing: base,
-      contentBefore: "trusted line\n",
-      contentAfter: before,
-      originClass: "untrusted",
-      observedAt: 2,
-    });
-    const after = "trusted line\nmanaged block\nquarantined line\n";
-    const rebased = rebaseDailyProvenanceRecord({
-      existing: mixed,
-      contentBefore: before,
-      contentAfter: after,
-      observedAt: 3,
-    });
+    const { content, record } = recordFromSegments([
+      { text: "trusted line\n", originClass: "agent", observedAt: 1 },
+      { text: "managed block\n", originClass: "untrusted", observedAt: 3 },
+      { text: "quarantined line\n", originClass: "untrusted", observedAt: 2 },
+    ]);
 
     expect(
-      resolveDailyLineProvenance({ content: after, record: rebased, defaultObservedAt: 4 }).slice(
-        0,
-        3,
-      ),
+      resolveDailyLineProvenance({ content, record, defaultObservedAt: 4 }).slice(0, 3),
     ).toMatchObject([
       { originClass: "agent" },
       { originClass: "untrusted" },
