@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
@@ -8,8 +8,12 @@ import {
   platformRoute,
   routeResolverFactory,
 } from "./model-auth-availability.test-support.js";
-import { createModelCatalogDecisions } from "./model-catalog-decisions.js";
+import {
+  createModelCatalogDecisions,
+  resolveCatalogDecisionRuntime,
+} from "./model-catalog-decisions.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
+import * as openaiRoutes from "./openai-model-routes.js";
 
 const entry: ModelCatalogEntry = { provider: "openai", id: "gpt-5.4", name: "GPT" };
 const config: OpenClawConfig = {
@@ -19,7 +23,7 @@ const config: OpenClawConfig = {
 const metadata = createPluginMetadataSnapshotFixture({
   plugins: [{ id: "codex", providers: ["codex"], syntheticAuthRefs: ["codex"] }],
 });
-function nativeOwner(complete: boolean, loggedIn: boolean, isCurrent = () => true) {
+function nativeOwner(complete: boolean, loggedIn: boolean, isCurrent = () => true, cfg = config) {
   const registry = createEmptyPluginRegistry();
   registry.agentHarnesses.push({
     pluginId: "codex",
@@ -34,7 +38,7 @@ function nativeOwner(complete: boolean, loggedIn: boolean, isCurrent = () => tru
     },
   });
   return createModelCatalogDecisions({
-    cfg: config,
+    cfg,
     agentId: "main",
     agentDir: "/tmp/catalog-agent",
     workspaceDir: "/tmp/catalog-workspace",
@@ -50,6 +54,97 @@ function nativeOwner(complete: boolean, loggedIn: boolean, isCurrent = () => tru
 }
 
 describe("captured model decisions", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it.each([undefined, "auto"])(
+    "keeps native availability and runtime together under %s policy",
+    async (runtime) => {
+      vi.spyOn(openaiRoutes, "resolveOpenAIModelRoutes").mockImplementation(({ api }) => ({
+        ...dualRoutes,
+        defaultRuntimeId: api ? "openclaw" : "codex",
+      }));
+      const cfg: OpenClawConfig = {
+        plugins: config.plugins,
+        ...(runtime
+          ? {
+              agents: {
+                defaults: { models: { "openai/gpt-5.4": { agentRuntime: { id: runtime } } } },
+              },
+            }
+          : {}),
+      };
+      const owner = nativeOwner(true, true, () => true, cfg);
+      const evaluation = await owner.evaluateEntry(entry);
+      expect(evaluation).toMatchObject({
+        availability: true,
+        runtimeAuth: { id: "codex", source: "native" },
+      });
+      expect(
+        resolveCatalogDecisionRuntime({
+          cfg,
+          agentId: "main",
+          entry,
+          evaluation,
+          pluginRegistry: owner.pluginRegistry,
+        }),
+      ).toEqual({ id: "codex", source: "implicit" });
+      expect(resolveCatalogDecisionRuntime({ cfg, agentId: "main", entry, evaluation })).toEqual({
+        id: "codex",
+        source: "implicit",
+      });
+    },
+  );
+
+  it("keeps an explicit host runtime from borrowing native authentication", async () => {
+    const cfg: OpenClawConfig = {
+      plugins: config.plugins,
+      agents: {
+        defaults: { models: { "openai/gpt-5.4": { agentRuntime: { id: "openclaw" } } } },
+      },
+    };
+    const owner = nativeOwner(true, true, () => true, cfg);
+    const evaluation = await owner.evaluateEntry(entry);
+    expect(evaluation.availability).not.toBe(true);
+    expect(evaluation.runtimeAuth).toBeUndefined();
+    expect(
+      resolveCatalogDecisionRuntime({
+        cfg,
+        agentId: "main",
+        entry,
+        evaluation,
+        pluginRegistry: owner.pluginRegistry,
+      }),
+    ).toEqual({ id: "openclaw", source: "model" });
+  });
+
+  it("keeps ordinary host authentication on its selected host route", async () => {
+    const cfg: OpenClawConfig = {
+      models: {
+        providers: {
+          openai: {
+            api: "openai-responses",
+            baseUrl: "https://api.openai.com/v1",
+            apiKey: "synthetic-host-key",
+            models: [],
+          },
+        },
+      },
+    };
+    const owner = nativeOwner(true, false, () => true, cfg);
+    const evaluation = await owner.evaluateEntry(entry);
+    expect(evaluation.availability).toBe(true);
+    expect(evaluation.runtimeAuth).toBeUndefined();
+    expect(
+      resolveCatalogDecisionRuntime({
+        cfg,
+        agentId: "main",
+        entry,
+        evaluation,
+        pluginRegistry: owner.pluginRegistry,
+      }),
+    ).toEqual({ id: "openclaw", source: "implicit" });
+  });
+
   it("offers only the native runtime when no host credential exists", async () => {
     expect(await nativeOwner(true, true).runtimeChoices(entry)).toEqual(["codex"]);
   });

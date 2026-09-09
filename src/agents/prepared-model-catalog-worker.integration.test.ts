@@ -821,15 +821,6 @@ describe("prepared model catalog worker boundary", () => {
             },
           ],
         },
-        plugins: {
-          ...fixture.config.plugins,
-          entries: {
-            ...fixture.config.plugins?.entries,
-            // Only the declared native auth owner can publish this login.
-            // Disable model discovery so the transition exercises auth refresh.
-            codex: { enabled: nativeOwner, config: { discovery: { enabled: false } } },
-          },
-        },
       } satisfies OpenClawConfig;
       const owner = Object.freeze({
         ...fixture.snapshot,
@@ -837,6 +828,11 @@ describe("prepared model catalog worker boundary", () => {
         authStore: getPreparedModelRuntimeAuthStore(fixture.snapshot),
         modelCatalog: { entries: [route], routeVariants: [route] },
       });
+      const loadOwner = async () => {
+        // This fixture has one generation. Retirement cannot be satisfied by reacquiring it.
+        expect(fixture.isCurrent(), "The fixture catalog owner has retired").toBe(true);
+        return owner;
+      };
       setPreparedModelRuntimeAuthLoader(owner, async (providerIds) => {
         const refreshed = await loadPreparedModelRuntimeAuth(fixture.snapshot, providerIds);
         if (!refreshed) {
@@ -857,7 +853,7 @@ describe("prepared model catalog worker boundary", () => {
           await loadGatewayModelCatalogSnapshot({
             ...loadParams,
             getConfig: () => config,
-            loadPublishedPreparedModelCatalogOwnerSnapshot: async () => owner,
+            loadPublishedPreparedModelCatalogOwnerSnapshot: loadOwner,
           });
         let published:
           | Awaited<ReturnType<typeof loadPreparedGatewayModelCatalogSnapshot>>
@@ -867,7 +863,7 @@ describe("prepared model catalog worker boundary", () => {
             (published = await loadPreparedGatewayModelCatalogSnapshot({
               ...loadParams,
               getConfig: () => config,
-              loadPublishedPreparedModelCatalogOwnerSnapshot: async () => owner,
+              loadPublishedPreparedModelCatalogOwnerSnapshot: loadOwner,
               refreshAuth: true,
             })),
           readPrepared: async () => published,

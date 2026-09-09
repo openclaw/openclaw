@@ -9,6 +9,7 @@ import type { GatewayAgentRuntime } from "../shared/session-types.js";
 import { isUserModelAuthProfileId } from "../state/user-model-account-id.js";
 import { listUserProfileAuthLinks } from "../state/user-model-accounts.js";
 import type { PreparedAgentCredentialModes } from "./agent-auth-credential-modes.js";
+import { isDefaultAgentRuntimeId } from "./agent-runtime-id.js";
 import { resolveAgentDir, resolveAgentWorkspaceDir } from "./agent-scope.js";
 import { resolveExternalCliAuthScopeFromConfig } from "./auth-profiles/external-cli-scope.js";
 import { materializePersonalAuthProfile } from "./auth-profiles/personal-profiles.js";
@@ -503,15 +504,23 @@ export function resolveCatalogDecisionRuntime(params: {
             (policy.runtime === "auto" ? "openclaw" : policy.runtime),
         };
       })();
+  // Route projection must retain the native owner that supplied availability. Recomputing
+  // implicit policy from its API-key route alone would relabel that owner as OpenClaw.
+  const runtime =
+    selected.policy.runtimeSource === "implicit" &&
+    !selected.policy.forcedByEnvironment &&
+    isDefaultAgentRuntimeId(params.evaluation.requestedRuntimeId)
+      ? (params.evaluation.runtimeAuth?.id ?? selected.runtime)
+      : selected.runtime;
   if (
     selected.policy.runtime === "auto" &&
-    selected.runtime === "openclaw" &&
+    runtime === "openclaw" &&
     !params.evaluation.requestedRuntimeId
   ) {
     return undefined;
   }
   return {
-    id: selected.runtime,
+    id: runtime,
     source: selected.policy.runtimeSource ?? "implicit",
   };
 }

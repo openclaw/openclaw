@@ -390,6 +390,7 @@ vi.mock("../../agents/prepared-model-catalog.js", async () => {
   >("../../agents/prepared-model-runtime-auth.js");
   const { createPluginMetadataSnapshotFixture } =
     await import("../../plugins/plugin-metadata.test-support.js");
+  const { loadPluginMetadataSnapshot } = await import("../../plugins/plugin-metadata-snapshot.js");
   const entries = [
     { provider: "anthropic", id: "claude-opus-4-6", name: "Claude Opus" },
     { provider: "localai", id: "ultra-chat", name: "Ultra Chat" },
@@ -412,7 +413,14 @@ vi.mock("../../agents/prepared-model-catalog.js", async () => {
         workspaceDir: params.workspaceDir ?? "/tmp",
         modelCatalog: { entries, routeVariants: entries },
         authModes: {},
-        metadataSnapshot: createPluginMetadataSnapshotFixture(),
+        metadataSnapshot: params.workspaceDir
+          ? loadPluginMetadataSnapshot({
+              config: params.config,
+              workspaceDir: params.workspaceDir,
+              allowCurrent: false,
+              preferPersisted: false,
+            })
+          : createPluginMetadataSnapshotFixture(),
         isCurrent: () => true,
       };
       setPreparedModelRuntimeAuthStore(owner, {
