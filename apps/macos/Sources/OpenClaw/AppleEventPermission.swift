@@ -12,13 +12,113 @@ enum AppleEventPermissionState: Equatable, Sendable {
     case failed(OSStatus)
 }
 
+/// Runs the blocking Apple Event permission check off the Swift cooperative
+/// thread pool and coalesces concurrent callers onto one in-flight probe.
+///
+/// `AEDeterminePermissionToAutomateTarget` blocks the calling thread until the
+/// target app answers (and, when asking, until the user answers tccd). Running
+/// it from `Task.detached` pins a cooperative-pool thread for that whole time.
+/// Node refreshes fire from several notifications, so a slow target under load
+/// stacked enough blocked probes to exhaust the pool; every other async task in
+/// the app (gateway websocket receive, status item, node commands) then stalled
+/// until the process was killed. Dispatching to a dedicated serial queue keeps
+/// the pool free, single-flighting bounds the number of blocked threads to one,
+/// and a timeout on passive checks turns a hung probe into `.failed` instead of
+/// a wedge.
+actor AppleEventPermissionProbeCoordinator {
+    typealias DeterminePermission = AppleEventPermissionProbe.DeterminePermission
+
+    static let shared = AppleEventPermissionProbeCoordinator()
+
+    private let queue = DispatchQueue(
+        label: "ai.openclaw.apple-event-permission",
+        qos: .userInitiated)
+    private var inFlight: [Bool: Task<OSStatus, Never>] = [:]
+
+    init() {}
+
+    func status(
+        askUserIfNeeded: Bool,
+        timeout: Duration?,
+        determinePermission: @escaping DeterminePermission) async -> OSStatus
+    {
+        if let pending = self.inFlight[askUserIfNeeded] {
+            return await pending.value
+        }
+        let queue = self.queue
+        let task = Task<OSStatus, Never> {
+            await Self.determine(
+                askUserIfNeeded: askUserIfNeeded,
+                timeout: timeout,
+                on: queue,
+                determinePermission: determinePermission)
+        }
+        self.inFlight[askUserIfNeeded] = task
+        let status = await task.value
+        if self.inFlight[askUserIfNeeded] == task {
+            self.inFlight[askUserIfNeeded] = nil
+        }
+        return status
+    }
+
+    private static func determine(
+        askUserIfNeeded: Bool,
+        timeout: Duration?,
+        on queue: DispatchQueue,
+        determinePermission: @escaping DeterminePermission) async -> OSStatus
+    {
+        let box = ResumeOnce()
+        return await withCheckedContinuation { (continuation: CheckedContinuation<OSStatus, Never>) in
+            box.attach(continuation)
+            queue.async {
+                box.resume(with: determinePermission(askUserIfNeeded))
+            }
+            guard let timeout else { return }
+            DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + timeout.dispatchInterval) {
+                box.resume(with: AppleEventPermissionProbe.timedOutStatus)
+            }
+        }
+    }
+
+    private final class ResumeOnce: @unchecked Sendable {
+        private let lock = NSLock()
+        private var continuation: CheckedContinuation<OSStatus, Never>?
+
+        func attach(_ continuation: CheckedContinuation<OSStatus, Never>) {
+            self.lock.withLock { self.continuation = continuation }
+        }
+
+        func resume(with status: OSStatus) {
+            let continuation = self.lock.withLock {
+                defer { self.continuation = nil }
+                return self.continuation
+            }
+            continuation?.resume(returning: status)
+        }
+    }
+}
+
 struct AppleEventPermissionProbe: Sendable {
     typealias DeterminePermission = @Sendable (_ askUserIfNeeded: Bool) -> OSStatus
 
-    private let determinePermission: DeterminePermission
+    /// Passive (non-prompting) checks should answer well within this; a target
+    /// app that does not service Apple Events for longer is reported as
+    /// `.failed(errAETimeout)`, which the capability layer maps to `.unknown`.
+    static let defaultPassiveTimeout: Duration = .seconds(10)
+    static let timedOutStatus = OSStatus(errAETimeout)
 
-    init(determinePermission: @escaping DeterminePermission) {
+    private let determinePermission: DeterminePermission
+    private let passiveTimeout: Duration?
+    private let coordinator: AppleEventPermissionProbeCoordinator
+
+    init(
+        determinePermission: @escaping DeterminePermission,
+        passiveTimeout: Duration? = Self.defaultPassiveTimeout,
+        coordinator: AppleEventPermissionProbeCoordinator = .shared)
+    {
         self.determinePermission = determinePermission
+        self.passiveTimeout = passiveTimeout
+        self.coordinator = coordinator
     }
 
     static var live: Self {
@@ -28,10 +128,11 @@ struct AppleEventPermissionProbe: Sendable {
     }
 
     func state(askUserIfNeeded: Bool) async -> AppleEventPermissionState {
-        let determinePermission = self.determinePermission
-        let status = await Task.detached(priority: .userInitiated) {
-            determinePermission(askUserIfNeeded)
-        }.value
+        // Prompting waits on the user; only passive checks are bounded.
+        let status = await self.coordinator.status(
+            askUserIfNeeded: askUserIfNeeded,
+            timeout: askUserIfNeeded ? nil : self.passiveTimeout,
+            determinePermission: self.determinePermission)
         return Self.state(for: status)
     }
 
@@ -159,5 +260,13 @@ enum TerminalAutomationPermission {
     @MainActor
     private static func openAutomationSettings() {
         SystemSettingsURLSupport.openFirst(SystemSettingsURLSupport.settingsCandidates(for: .appleScript))
+    }
+}
+
+extension Duration {
+    fileprivate var dispatchInterval: DispatchTimeInterval {
+        let (seconds, attoseconds) = self.components
+        let nanoseconds = seconds * 1_000_000_000 + attoseconds / 1_000_000_000
+        return .nanoseconds(Int(clamping: nanoseconds))
     }
 }
