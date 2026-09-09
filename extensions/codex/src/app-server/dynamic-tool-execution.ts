@@ -18,6 +18,7 @@ import {
   parseStrictNonNegativeInteger,
 } from "openclaw/plugin-sdk/number-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import type { CodexAppServerClient } from "./client.js";
 import {
   createFailedDynamicToolResponse,
   type CodexDynamicToolRuntimeResponse,
@@ -151,6 +152,7 @@ export async function handleDynamicToolCallWithTimeout(params: {
     Partial<Pick<CodexDynamicToolBridge, "sideEffectOwnerKeyForTool">>;
   signal: AbortSignal;
   timeoutMs: number;
+  runtimeClient?: CodexAppServerClient;
   toolMeta?: string;
   toolCallOrdinal?: number;
   onAgentToolResult?: EmbeddedRunAttemptParams["onAgentToolResult"];
@@ -283,6 +285,7 @@ export async function handleDynamicToolCallWithTimeout(params: {
     const response = await Promise.race([
       params.toolBridge.handleToolCall(params.call, {
         signal: controller.signal,
+        ...(params.runtimeClient ? { runtimeClient: params.runtimeClient } : {}),
         onAgentToolResult: notifyAgentToolResult,
         toolCallOrdinal: params.toolCallOrdinal,
         retainExecutionSnapshot: true,

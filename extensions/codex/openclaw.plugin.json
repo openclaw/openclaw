@@ -76,6 +76,7 @@
     "onCommands": ["codex"],
     "onConfigPaths": [
       "plugins.entries.codex.config.appServer.transport",
+      "plugins.entries.codex.config.capabilityDispatch.enabled",
       "plugins.entries.codex.config.sessionCatalog.enabled",
       "plugins.entries.codex.config.sessionCatalog.homes",
       "plugins.entries.codex.config.supervision.enabled"
@@ -115,6 +116,11 @@
         "type": "array",
         "items": { "type": "string" },
         "default": []
+      },
+      "capabilityDispatch": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": { "enabled": { "type": "boolean", "default": false } }
       },
       "sessionCatalog": {
         "type": "object",

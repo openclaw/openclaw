@@ -66,6 +66,11 @@ import {
   sliceToolResultTextToBudget,
   sliceUtf16Safe,
 } from "openclaw/plugin-sdk/text-utility-runtime";
+import {
+  CODEX_CAPABILITY_DISPATCH_TOOL_NAME,
+  dispatchCodexCapability,
+} from "./capability-dispatch.js";
+import type { CodexAppServerClient } from "./client.js";
 import type { CodexDynamicToolsLoading } from "./config.js";
 import { createCodexAutomationsToolsAllowResolver } from "./dynamic-tool-automations-allowlist.js";
 import { finalizeCodexToolAvailability } from "./dynamic-tool-availability.js";
@@ -416,6 +421,7 @@ export type CodexDynamicToolBridge = {
     params: CodexDynamicToolCallParams,
     options?: {
       signal?: AbortSignal;
+      runtimeClient?: CodexAppServerClient;
       onAgentToolResult?: EmbeddedRunAttemptParams["onAgentToolResult"];
       toolCallOrdinal?: number;
       retainExecutionSnapshot?: boolean;
@@ -744,7 +750,16 @@ export function createCodexDynamicToolBridge(params: {
             }),
           );
         }
-        const rawResult = await Reflect.apply(tool.execute, tool, executionArgs);
+        const rawResult =
+          toolName === CODEX_CAPABILITY_DISPATCH_TOOL_NAME
+            ? options?.runtimeClient
+              ? await dispatchCodexCapability({
+                  client: options.runtimeClient,
+                  threadId: call.threadId,
+                  input: preparedArgs,
+                })
+              : failedToolResult("unavailable: active Codex runtime context is required", "failed")
+            : await Reflect.apply(tool.execute, tool, executionArgs);
         captureExecutionBoundary();
         // Delivery is committed before result middleware; presentation changes
         // cannot erase the source owner's confirmation or infer a new one.

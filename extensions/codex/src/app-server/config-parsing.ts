@@ -137,6 +137,7 @@ const codexPluginConfigSchema = z
   .object({
     codexDynamicToolsLoading: codexDynamicToolsLoadingSchema.optional(),
     codexDynamicToolsExclude: z.array(z.string()).optional(),
+    capabilityDispatch: z.object({ enabled: z.boolean().optional() }).strict().optional(),
     sessionCatalog: codexSessionCatalogConfigSchema.optional(),
     discovery: codexDiscoveryConfigSchema.optional(),
     computerUse: z

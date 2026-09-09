@@ -232,6 +232,7 @@ export function createCodexAttemptServerRequestController(
             toolBridge,
             signal,
             timeoutMs: dynamicToolTimeoutMs,
+            runtimeClient: resourceState.client,
             toolMeta,
             toolCallOrdinal,
             onAgentToolResult: params.onAgentToolResult,

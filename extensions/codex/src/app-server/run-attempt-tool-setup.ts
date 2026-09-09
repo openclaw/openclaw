@@ -11,6 +11,10 @@ import {
   formatMcpCodexApprovalRemedy,
   materializeStaticMcpToolsForHarnessRun,
 } from "openclaw/plugin-sdk/codex-mcp-projection";
+import {
+  createCodexCapabilityDispatchSpec,
+  createCodexCapabilityDispatchTool,
+} from "./capability-dispatch.js";
 import { resolveCodexPluginsPolicy, shouldAutoApproveCodexAppServerApprovals } from "./config.js";
 import {
   buildDynamicTools,
@@ -322,6 +326,13 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
         ignoreDisableMessageTool: true,
         ignoreRuntimePlan: true,
       });
+  const capabilityDispatchTool =
+    pluginConfig.capabilityDispatch?.enabled === true
+      ? createCodexCapabilityDispatchTool()
+      : undefined;
+  if (capabilityDispatchTool) {
+    nativeSpecs = [...(nativeSpecs ?? []), createCodexCapabilityDispatchSpec()];
+  }
   const policyContext = {
     config: params.config,
     sessionKey: sandboxSessionKey,
@@ -475,10 +486,16 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
       [...(configuredMcp?.tools ?? []), ...(scopedMcpTools?.advertisedTools ?? [])],
       pluginConfig,
     );
-    const toolsWithScopedMcp =
-      scopedExecutable.length > 0 ? [...tools, ...scopedExecutable] : tools;
-    const registeredWithScopedMcp =
-      scopedAdvertised.length > 0 ? [...registeredTools, ...scopedAdvertised] : registeredTools;
+    const toolsWithScopedMcp = [
+      ...tools,
+      ...scopedExecutable,
+      ...(capabilityDispatchTool ? [capabilityDispatchTool] : []),
+    ];
+    const registeredWithScopedMcp = [
+      ...registeredTools,
+      ...scopedAdvertised,
+      ...(capabilityDispatchTool ? [capabilityDispatchTool] : []),
+    ];
     const hookContext = {
       agentId: sessionAgentId,
       config: params.config,
